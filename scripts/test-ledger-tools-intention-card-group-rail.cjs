@@ -275,13 +275,19 @@ test("weeks: 2026-W30 mid-quarter and 2026-W47 crossing into 2027", () => {
   const row = w30.rail.querySelector(".bob-property-card-group-row");
   assert.equal(row.getAttribute("aria-label"), "Quarter groups");
   assert.equal(armText(arm(w30.element, "prev"), "label"), "Q2");
-  assert.equal(armText(arm(w30.element, "prev"), "landing"), "W14");
+  assert.equal(armText(arm(w30.element, "prev"), "landing"), null, "the landing is not painted");
+  assert.equal(arm(w30.element, "prev").getAttribute("title"), "[N · previous quarter: Q2 → 2026-W14", "the tooltip names it");
+  assert.equal(arm(w30.element, "prev").getAttribute("aria-label"), "Previous quarter group: Q2, opens 2026-W14");
+  assert.equal(arm(w30.element, "prev").querySelector(".bob-property-card-group-glyph").getAttribute("data-icon"), "skip-back");
+  assert.equal(arm(w30.element, "next").querySelector(".bob-property-card-group-glyph").getAttribute("data-icon"), "skip-forward");
+  assert.ok(!/[«»]/.test(text(row)), "no « / » on the row");
   assert.equal(arm(w30.element, "prev").getAttribute("href"), "2026/2026-W14");
   assert.equal(armText(arm(w30.element, "next"), "label"), "Q4");
   assert.equal(arm(w30.element, "next").getAttribute("href"), "2026/2026-W40");
-  assert.equal(text(row.querySelector(".bob-property-card-group-position-wide")), "week 4 of 13");
-  assert.equal(text(row.querySelector(".bob-property-card-group-position-narrow")), "4/13");
+  assert.equal(row.querySelector(".bob-property-card-group-position-wide"), null, "no visible position text");
+  assert.equal(row.querySelector(".bob-property-card-group-position-narrow"), null);
   assert.equal(text(row.querySelector(".bob-property-card-group-position-label")), "Week 4 of 13 in quarter Q3");
+  assert.equal(row.querySelector(".bob-property-card-group-center").getAttribute("title"), "Week 4 of 13 in quarter Q3");
   const ticks = row.querySelectorAll(".bob-property-card-group-tick");
   assert.equal(ticks.length, 13);
   assert.equal(ticks[3].getAttribute("data-state"), "current");
@@ -293,7 +299,7 @@ test("weeks: 2026-W30 mid-quarter and 2026-W47 crossing into 2027", () => {
   assert.equal(prev.getAttribute("aria-label"), "Previous quarter group: Q3, opens 2026-W27");
   assert.equal(prev.getAttribute("title"), "[N · previous quarter: Q3 → 2026-W27");
   assert.equal(armText(next, "label"), "2027-Q1");
-  assert.equal(armText(next, "landing"), "W01");
+  assert.equal(armText(next, "landing"), null);
   assert.equal(next.getAttribute("data-state"), "exists");
   assert.equal(next.getAttribute("title"), "]N · next quarter: 2027-Q1 → 2027-W01");
   assert.equal(next.getAttribute("aria-label"), "Next quarter group: 2027-Q1, opens 2027-W01");
@@ -311,7 +317,7 @@ test("2026-W01 and 2026-Q4 show pre-adoption ghost arms that never link", () => 
   assert.equal(ghost.getAttribute("aria-disabled"), "true");
   assert.equal(armText(ghost, "label"), "2025-Q4");
   assert.equal(armText(ghost, "note"), "· not in vault");
-  assert.equal(ghost.getAttribute("aria-label"), "Previous quarter group: 2025-Q4, not in vault");
+  assert.equal(ghost.getAttribute("aria-label"), "Previous quarter group: 2025-Q4, 2025-W40 not in vault");
   assert.equal(ghost.getAttribute("title"), "2025-W40 is before Bob's period notes began — navigation never creates it");
   assert.equal(arm(w01.element, "next").getAttribute("href"), "2026/2026-W14");
 
@@ -319,10 +325,10 @@ test("2026-W01 and 2026-Q4 show pre-adoption ghost arms that never link", () => 
   assert.equal(q4.model.navRail.unit, "year");
   const q4Ghost = arm(q4.element, "prev");
   assert.equal(q4Ghost.getAttribute("data-state"), "ghost");
-  assert.equal(q4Ghost.getAttribute("aria-label"), "Previous year group: 2025, not in vault");
+  assert.equal(q4Ghost.getAttribute("aria-label"), "Previous year group: 2025, 2025-Q1 not in vault");
   assert.equal(q4Ghost.getAttribute("title"), "2025-Q1 is before Bob's period notes began — navigation never creates it");
   assert.equal(arm(q4.element, "next").getAttribute("title"), "]N · next year: 2027 → 2027-Q1");
-  assert.equal(text(q4.rail.querySelector(".bob-property-card-group-position-wide")), "quarter 4 of 4");
+  assert.equal(q4.rail.querySelector(".bob-property-card-group-center").getAttribute("title"), "Quarter 4 of 4 in year 2026");
 });
 
 test("dailies: Saturday's creatable next Monday, a Thursday in 2026-W53, and 20251229 in 2026-W01", () => {
@@ -332,12 +338,13 @@ test("dailies: Saturday's creatable next Monday, a Thursday in 2026-W53, and 202
   const next = arm(sat.element, "next");
   assert.equal(next.getAttribute("data-state"), "creatable");
   assert.equal(armText(next, "label"), "W48");
-  assert.equal(armText(next, "landing"), "Mon Nov 23");
+  assert.equal(armText(next, "landing"), null);
   assert.equal(armText(next, "plus"), "+");
   assert.equal(next.getAttribute("title"), "Mon Nov 23 isn't created yet — ]N creates it from the daily template");
-  assert.equal(next.getAttribute("aria-label"), "Next week group: W48, not created yet — activating creates it");
+  assert.equal(next.getAttribute("aria-label"), "Next week group: W48, not created yet — activating creates Mon Nov 23");
   assert.equal(arm(sat.element, "prev").getAttribute("aria-label"), "Previous week group: W46, opens Mon Nov 9");
-  assert.equal(text(sat.rail.querySelector(".bob-property-card-group-position-wide")), "day 6 of 7");
+  assert.equal(sat.rail.querySelector(".bob-property-card-group-center").getAttribute("title"), "Day 6 of 7 in week W47");
+  assert.equal(text(sat.rail.querySelector(".bob-property-card-group-position-label")), "Day 6 of 7 in week W47");
   const states = sat.rail.querySelectorAll(".bob-property-card-group-tick").map((tick) => tick.getAttribute("data-state"));
   assert.deepEqual(states, ["missing", "missing", "missing", "missing", "exists", "current", "missing"]);
 
@@ -345,14 +352,14 @@ test("dailies: Saturday's creatable next Monday, a Thursday in 2026-W53, and 202
   assert.equal(arm(thu.element, "prev").getAttribute("href"), "2026/20261221");
   assert.equal(arm(thu.element, "next").getAttribute("href"), "2027/20270104");
   assert.equal(thu.model.navRail.group.label, "W53");
-  assert.equal(text(thu.rail.querySelector(".bob-property-card-group-position-wide")), "day 4 of 7");
+  assert.equal(thu.rail.querySelector(".bob-property-card-group-center").getAttribute("title"), "Day 4 of 7 in week W53");
 
   const mon = card(w, "2025/20251229.md");
   const ghost = arm(mon.element, "prev");
   assert.equal(ghost.getAttribute("data-state"), "ghost");
   assert.equal(armText(ghost, "label"), "2025-W52");
   assert.equal(arm(mon.element, "next").getAttribute("href"), "2026/20260105");
-  assert.equal(text(mon.rail.querySelector(".bob-property-card-group-position-wide")), "day 1 of 7");
+  assert.equal(mon.rail.querySelector(".bob-property-card-group-center").getAttribute("title"), "Day 1 of 7 in week W01");
 });
 
 test("years and all_time keep today's rail: no group row", () => {

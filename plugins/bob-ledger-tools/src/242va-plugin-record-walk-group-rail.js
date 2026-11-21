@@ -1,7 +1,8 @@
 // Record walk group rail (bob-cli-oj record-rail): a grouped record walk
 // shows the kit's group row under its step row, in place of the whole-walk
-// thumb track: `« 🛑 Why SASE… · AI Slop   🔮 Future Work · 2 of 3 ▮■▮
-// 🏁 Conclusion · … » ↺`. One answer decides the arms: Bob Navigation
+// thumb track: `⏮ 🛑 Why SASE…   ▮■▮   🏁 Conclusion ⏭ ↺` (each head title
+// rides the arm's tooltip and accessible name; the centre's title names the
+// group and position). One answer decides the arms: Bob Navigation
 // Hotkeys' walkMode.links v7 when it is there (so an authored «/» link wins
 // per role, exactly as for `[N` / `]N`), else Ledger's own navGroups resolver
 // (derived stops only). Record targets are never created: a missing group
@@ -136,7 +137,7 @@ function recordWalkGroupRailSignature(rail) {
 }
 
 // The kit arm: tooltip names the key and destination; the accessible name
-// spells the role and state.
+// spells the role, the state, and the head title the arm no longer shows.
 function recordWalkGroupArmSpec(rail, direction) {
   const stop = rail && rail[direction];
   if (!stop) return null;
@@ -151,10 +152,10 @@ function recordWalkGroupArmSpec(rail, direction) {
   let ariaLabel;
   if (stop.state === "ghost") {
     tooltip = `${stop.ghostReason || `${landing || stop.groupLabel} is not in the vault`}${wrapTip}`;
-    ariaLabel = `${side} ${unit} group: ${stop.groupLabel}, not in vault`;
+    ariaLabel = `${side} ${unit} group: ${stop.groupLabel}, ${landing ? `${landing} ` : ""}not in vault`;
   } else if (stop.state === "creatable") {
     tooltip = `${landing || stop.groupLabel} isn't created yet — ${key} creates it${wrapTip}`;
-    ariaLabel = `${side} ${unit} group: ${stop.groupLabel}, not created yet — activating creates it`;
+    ariaLabel = `${side} ${unit} group: ${stop.groupLabel}, not created yet — activating creates ${landing || "it"}`;
   } else {
     tooltip = `${key} · ${previous ? "previous" : "next"} ${unit}: ${stop.groupLabel}${landing ? ` → ${landing}` : ""}${wrapTip}`;
     ariaLabel = `${side} ${unit} group: ${stop.groupLabel}${landing ? `, opens ${landing}` : ""}`;
@@ -173,8 +174,10 @@ function recordWalkGroupRowSpec(rail, onActivate) {
     text: `${group.position} of ${group.size}`,
     shortText: `${group.position}/${group.size}`,
     ariaLabel: `${group.position} of ${group.size} in this ${unit}`,
-    tooltip: Number.isInteger(group.index) && Number.isInteger(group.count)
-      ? `${rail.fieldLabel} ${group.index} of ${group.count}: ${group.label}` : group.label,
+    // The row paints only the track, so the title carries the group and the
+    // position: `Section 2 of 3: 🔮 Future Work · 2 of 3`.
+    tooltip: `${Number.isInteger(group.index) && Number.isInteger(group.count)
+      ? `${rail.fieldLabel} ${group.index} of ${group.count}: ${group.label}` : group.label} · ${group.position} of ${group.size}`,
     position: group.position,
     size: group.size,
     members: group.members ? group.members.map((member) => ({ label: member.label, state: member.state })) : null,

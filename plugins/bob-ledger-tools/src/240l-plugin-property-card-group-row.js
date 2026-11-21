@@ -1,9 +1,12 @@
 // Property-card group row (bob-cli-oj group-rail): the quieter second rail
-// row that jumps between groups (`« Q3 · W27   week 8 of 14 ▮▮■▯   2027-Q1 ·
-// W01 »`), plus the missing-target states every rail surface shares. One
-// visual rule: dashed with a `+` means "not created yet" (creatable); dotted,
-// faint, and `· not in vault` means "won't be created from here" (ghost).
-// Never error red, never Obsidian's unresolved-link look.
+// row that jumps between groups (`⏮ Q2   ▮▮■▮▮▮▮   Q4 ⏭`), plus the
+// missing-target states every rail surface shares. Arms show a skip mark and
+// the group name only; the landing note lives in the tooltip and accessible
+// name, and the centre is just the member track (hidden for a one-member
+// group). One visual rule: a dashed underline with a `+` means "not created
+// yet" (creatable); dotted, faint, and `· not in vault` means "won't be
+// created from here" (ghost). Rail items and chips draw the same states as
+// boxes. Never error red, never Obsidian's unresolved-link look.
 //
 // The kit never decides activation. Step items and chips reach the rail's
 // onNavigate, and group arms reach the row's onActivate, with the item and
@@ -17,6 +20,19 @@ const PROPERTY_CARD_GROUP_TICK_STATES = Object.freeze(["current", "exists", "mis
 // Larger groups show a continuous bar with a thumb instead of one tick each.
 const PROPERTY_CARD_GROUP_TICK_LIMIT = 21;
 const PROPERTY_CARD_GHOST_NOTE = "· not in vault";
+// Lucide skip-back / skip-forward, drawn inline so Obsidian, the links
+// footer, and the preview matrix paint the same mark without setIcon.
+const PROPERTY_CARD_SVG_NS = "http://www.w3.org/2000/svg";
+const PROPERTY_CARD_GROUP_MARKS = Object.freeze({
+  prev: Object.freeze({ icon: "skip-back", shapes: Object.freeze([
+    ["polygon", { points: "19 20 9 12 19 4 19 20" }],
+    ["line", { x1: "5", x2: "5", y1: "19", y2: "5" }],
+  ]) }),
+  next: Object.freeze({ icon: "skip-forward", shapes: Object.freeze([
+    ["polygon", { points: "5 4 15 12 5 20 5 4" }],
+    ["line", { x1: "19", x2: "19", y1: "5", y2: "19" }],
+  ]) }),
+});
 
 // An explicit known state wins; the legacy `unresolved: true` means
 // creatable; neither means exists.
@@ -88,15 +104,42 @@ function propertyCardKitStateMarks(doc, node, item, state, chip) {
   return chip ? [] : [propertyCardKitSpan(doc, "bob-property-card-rail-note", PROPERTY_CARD_GHOST_NOTE)];
 }
 
+// span.bob-property-card-group-glyph[aria-hidden][data-icon]: the group
+// jump mark. Documents without createElementNS (fake test DOMs) get the
+// empty span, so tests read data-icon. Never throws.
+function propertyCardGroupMark(doc, direction) {
+  const mark = PROPERTY_CARD_GROUP_MARKS[direction === "prev" ? "prev" : "next"];
+  const span = propertyCardKitHidden(propertyCardKitEl(doc, "span", "bob-property-card-group-glyph"));
+  span.setAttribute("data-icon", mark.icon);
+  if (typeof doc?.createElementNS !== "function") return span;
+  try {
+    const svg = doc.createElementNS(PROPERTY_CARD_SVG_NS, "svg");
+    for (const [name, value] of [
+      ["class", "bob-property-card-group-mark"], ["viewBox", "0 0 24 24"], ["width", "1em"], ["height", "1em"],
+      ["fill", "none"], ["stroke", "currentColor"], ["stroke-width", "2"], ["stroke-linecap", "round"],
+      ["stroke-linejoin", "round"], ["focusable", "false"], ["aria-hidden", "true"],
+    ]) svg.setAttribute(name, value);
+    for (const [tag, attrs] of mark.shapes) {
+      const shape = doc.createElementNS(PROPERTY_CARD_SVG_NS, tag);
+      for (const [name, value] of Object.entries(attrs)) shape.setAttribute(name, value);
+      svg.appendChild(shape);
+    }
+    span.appendChild(svg);
+  } catch (_) {}
+  return span;
+}
+
 function propertyCardGroupArmOk(arm) {
   if (!arm || typeof arm !== "object") return false;
   if (!propertyCardKitText(arm.groupLabel).trim()) return false;
   return propertyCardTargetState(arm) === "ghost" || Boolean(propertyCardKitText(arm.target).trim());
 }
 
-// a.bob-property-card-group-arm[data-group][data-state]. Reading order: the
-// prev arm reads `« Q3 · W27`, the next arm `2027-Q1 · W01 »`; the `«`/`»`
-// glyph, separator, `+`, and `↺` are aria-hidden.
+// a.bob-property-card-group-arm[data-group][data-state]. The prev arm reads
+// `⏮ Q2`, the next arm `Q4 + ⏭`: the mark (aria-hidden), the group label
+// (wide and narrow), `+` on creatable arms, `· not in vault` on ghosts, and
+// `↺` when the jump wraps. The landing (spec.landingLabel) is accepted but
+// never painted; the tooltip and accessible name carry it.
 function propertyCardGroupArm(doc, direction, arm, onActivate) {
   const state = propertyCardTargetState(arm);
   const stated = propertyCardKitStatedItem(arm, state);
@@ -121,14 +164,9 @@ function propertyCardGroupArm(doc, direction, arm, onActivate) {
     propertyCardKitHidden(propertyCardKitSpan(doc, "bob-property-card-group-label-narrow",
       propertyCardKitText(arm.shortLabel).trim() || groupLabel)),
   ];
-  const landing = propertyCardKitText(arm.landingLabel).trim();
-  if (landing) {
-    parts.push(propertyCardKitHidden(propertyCardKitSpan(doc, "bob-property-card-group-sep", "·")));
-    parts.push(propertyCardKitSpan(doc, "bob-property-card-group-landing", landing));
-  }
   if (state === "creatable") parts.push(propertyCardKitHidden(propertyCardKitSpan(doc, "bob-property-card-group-plus", "+")));
   if (state === "ghost") parts.push(propertyCardKitSpan(doc, "bob-property-card-group-note", PROPERTY_CARD_GHOST_NOTE));
-  const glyph = propertyCardKitHidden(propertyCardKitSpan(doc, "bob-property-card-group-glyph", direction === "prev" ? "«" : "»"));
+  const glyph = propertyCardGroupMark(doc, direction);
   const ordered = direction === "prev" ? [glyph, ...parts] : [...parts, glyph];
   if (arm.wraps === true) ordered.push(propertyCardKitHidden(propertyCardKitSpan(doc, "bob-property-card-group-wrap", "↺")));
   for (const node of ordered) link.appendChild(node);
@@ -174,27 +212,17 @@ function propertyCardGroupTrack(doc, center) {
   return track;
 }
 
-// div.bob-property-card-group-center: optional group name, the position
-// (wide and narrow spans plus a visually hidden label that carries the
-// meaning), and the track. Null without position text.
+// div.bob-property-card-group-center[title]: the member track and a visually
+// hidden position label that carries the meaning; no visible text (the card
+// already names the group). The title spells the full position (tooltip,
+// else the label, else the text). Null without position text.
 function propertyCardGroupCenter(doc, center) {
   const text = propertyCardKitText(center?.text).trim();
   if (!text) return null;
   const element = propertyCardKitEl(doc, "div", "bob-property-card-group-center");
-  const tooltip = propertyCardKitText(center.tooltip).trim();
-  if (tooltip) element.setAttribute("title", tooltip);
-  const name = propertyCardKitText(center.name).trim();
-  if (name) {
-    element.appendChild(propertyCardKitSpan(doc, "bob-property-card-group-name", name));
-    element.appendChild(propertyCardKitHidden(propertyCardKitSpan(doc, "bob-property-card-group-name-sep", "·")));
-  }
-  const position = propertyCardKitEl(doc, "span", "bob-property-card-group-position");
-  position.appendChild(propertyCardKitSpan(doc, "bob-property-card-group-position-label",
-    propertyCardKitText(center.ariaLabel).trim() || text));
-  position.appendChild(propertyCardKitHidden(propertyCardKitSpan(doc, "bob-property-card-group-position-wide", text)));
-  position.appendChild(propertyCardKitHidden(propertyCardKitSpan(doc, "bob-property-card-group-position-narrow",
-    propertyCardKitText(center.shortText).trim() || text)));
-  element.appendChild(position);
+  const label = propertyCardKitText(center.ariaLabel).trim() || text;
+  element.setAttribute("title", propertyCardKitText(center.tooltip).trim() || label);
+  element.appendChild(propertyCardKitSpan(doc, "bob-property-card-group-position-label", label));
   const track = propertyCardGroupTrack(doc, center);
   if (track) element.appendChild(track);
   return { element, track };
@@ -204,14 +232,16 @@ function propertyCardGroupCenter(doc, center) {
 // arm and no center. spec: { label?, prev?, next?, center?, onActivate? }
 // where an arm is { groupLabel, landingLabel?, shortLabel?, target, state,
 // ghostReason?, wraps?, tooltip?, ariaLabel? } and center is { name?, text,
-// shortText?, ariaLabel?, tooltip?, position, size, members? }. Missing
-// cells keep their grid column with an empty gap span.
+// shortText?, ariaLabel?, tooltip?, position, size, members? } (name,
+// shortText, and landingLabel are accepted and not painted). A centre for a
+// one-member group (size <= 1) is absent. Missing cells keep their grid
+// column with an empty gap span.
 function propertyCardBuildGroupRow(doc, spec = {}) {
   try {
     if (!propertyCardKitDocOk(doc)) return null;
     const options = spec && typeof spec === "object" ? spec : {};
     const present = PROPERTY_CARD_GROUP_DIRECTIONS.filter((direction) => propertyCardGroupArmOk(options[direction]));
-    const center = options.center && typeof options.center === "object"
+    const center = options.center && typeof options.center === "object" && !(Number(options.center.size) <= 1)
       ? propertyCardGroupCenter(doc, options.center)
       : null;
     if (!present.length && !center) return null;

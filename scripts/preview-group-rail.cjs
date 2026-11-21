@@ -11,6 +11,9 @@
 // 375px content width and wide, plus grayscale and real `forced-colors:
 // active` emulation, for every fixture. Writes PNGs, manifest.json,
 // contrast.json, contrast.md, and index.html. Run under xvfb-run -a.
+// The group row is the decluttered one (bob-cli-oj.5.1 landing): skip-mark
+// arms with the group name only, a track-only centre (none for a
+// one-member group), and underlined (not boxed) creatable and ghost arms.
 
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -66,6 +69,14 @@ function parseArgs(argv) {
 
 function harness() {
   return require("./ledger-tools-harness.cjs");
+}
+
+// The shared preview document plus createElementNS, so the kit's inline SVG
+// skip mark serializes into the page exactly as Obsidian draws it.
+function groupRailDocument() {
+  const doc = previewDocument();
+  doc.createElementNS = function createElementNS(_namespace, tag) { return this.createElement(tag); };
+  return doc;
 }
 
 // ---- Calendar world ---------------------------------------------------------
@@ -243,13 +254,13 @@ const ZETTEL = [
   { path: "z/zed.md", title: "Untriaged Thought" },
 ];
 
-function zettelAlbum(records, walkBy) {
+function zettelAlbum(records, walkBy, choices = SECTION_CHOICES) {
   return {
     path: "z.md", stem: "z", title: "SASE Blog Zettel", emoji: "🗂", noun: "zettel",
     singular: "zettel", plural: "zettels", label: "Zettel", records: records.length,
     parent: "writing", owner: "writing", root: "writing", issues: [], legacy: [], index: { state: "current" }, walk: { state: "current" },
     schema_fingerprint: "sha256:group-rail-preview",
-    fields: [{ key: "section", label: "Section", kind: "choices", required: false, list: false, choices: SECTION_CHOICES }],
+    fields: [{ key: "section", label: "Section", kind: "choices", required: false, list: false, choices }],
     ...(walkBy ? { walk_by: walkBy } : {}),
   };
 }
@@ -268,7 +279,7 @@ function recordWorld(options = {}) {
   }
   const files = new Map([...frontmatter.keys()].map((p) => [p, { path: p, extension: "md" }]));
   const hidden = new Set(options.hidden || []);
-  const album = zettelAlbum(records, walkBy);
+  const album = zettelAlbum(records, walkBy, options.choices || SECTION_CHOICES);
   const report = H.albumIndexReport({ schema_version: 1, ok: true, albums: [album], catalogs: [], counts: {},
     capabilities: ["record_values_v1", "record_walk_v1", "record_walk_groups_v1"] });
   const sources = new Map();
@@ -338,13 +349,32 @@ function bigGroupRecords() {
   return [...intro, ...body, ...outro];
 }
 
+// Bryan's 2026-11-21 screenshot (bob-cli-oj note #2): the current section
+// holds one record and so does the previous one, so the step arms land on
+// the neighbouring sections' heads and the old group row repeated them.
+const SCREENSHOT_CHOICES = [
+  { value: "what", label: "🪨 What is SASE?" },
+  { value: "prompt", label: "📜 Prompt language (macros)" },
+  { value: "agents", label: "🤖 Agent CLIs" },
+];
+const SCREENSHOT_RECORDS = [
+  { path: "z/sase-is-many-abstractions.md", title: "sase is many abstractions", section: "what" },
+  { path: "z/layers-of-prompt-management.md", title: "Layers of Prompt Management", section: "prompt" },
+  { path: "z/memory.md", title: "Memory", section: "agents" },
+  { path: "z/models-and-harnesses.md", title: "Models and Harnesses", section: "agents" },
+];
+
 const RECORD_FIXTURES = [
   { name: "record-first-wraps-prev", record: "z/alpha.md", world: {},
-    expect: { groupRow: true, prev: "exists", next: "exists", prevWraps: true, track: "ticks" } },
+    expect: { groupRow: true, prev: "exists", next: "exists", prevWraps: true, track: "none" } },
   { name: "record-middle", record: "z/delta.md", world: {},
     expect: { groupRow: true, prev: "exists", next: "exists", track: "ticks" } },
   { name: "record-last-wraps-next", record: "z/zed.md", world: {},
-    expect: { groupRow: true, prev: "exists", next: "exists", nextWraps: true, track: "ticks" } },
+    expect: { groupRow: true, prev: "exists", next: "exists", nextWraps: true, track: "none" } },
+  { name: "record-screenshot-single-member", record: "z/layers-of-prompt-management.md",
+    world: { records: SCREENSHOT_RECORDS, choices: SCREENSHOT_CHOICES },
+    expect: { groupRow: true, prev: "exists", next: "exists", track: "none",
+      prevLabel: "🪨 What is SASE?", nextLabel: "🤖 Agent CLIs" } },
   { name: "record-ghost-head", record: "z/delta.md", world: { hidden: ["z/omega.md"] },
     expect: { groupRow: true, prev: "exists", next: "ghost", track: "ticks" } },
   { name: "record-large-group-bar", record: "z/body-12.md", world: { records: bigGroupRecords() },
@@ -402,11 +432,29 @@ function offlineCheck(fixture, card) {
       const wraps = findAll(arm, (n) => hasClass(n, "bob-property-card-group-wrap")).length > 0;
       const wantWrap = expect[`${direction}Wraps`] === true;
       if (wraps !== wantWrap) problems.push(`${direction} arm wrap glyph ${wraps ? "present" : "absent"}`);
+      // The declutter: the mark and the group name, no landing, no « / ».
+      const mark = findAll(arm, (n) => hasClass(n, "bob-property-card-group-glyph"))[0];
+      const icon = direction === "prev" ? "skip-back" : "skip-forward";
+      if (!mark || mark.getAttribute("data-icon") !== icon || mark.getAttribute("aria-hidden") !== "true") problems.push(`${direction} arm lacks the ${icon} mark`);
+      else if (!findAll(mark, (n) => String(n.tagName).toLowerCase() === "svg").length) problems.push(`${direction} arm mark has no inline SVG`);
+      if (findAll(arm, (n) => hasClass(n, "bob-property-card-group-landing") || hasClass(n, "bob-property-card-group-sep")).length) problems.push(`${direction} arm paints its landing`);
+      if (/[«»]/.test(arm.textContent)) problems.push(`${direction} arm still shows « / »`);
+      const label = findAll(arm, (n) => hasClass(n, "bob-property-card-group-label"))[0];
+      const wantLabel = expect[`${direction}Label`];
+      if (wantLabel && label?.textContent !== wantLabel) problems.push(`${direction} arm reads ${JSON.stringify(label?.textContent)}, expected ${JSON.stringify(wantLabel)}`);
+      if (!/→|isn't created yet|not in the vault|before Bob/.test(arm.getAttribute("title") || "")) problems.push(`${direction} arm tooltip does not name its landing`);
     }
     const ticks = findAll(row, (n) => hasClass(n, "bob-property-card-group-tick"));
     const thumbs = findAll(row, (n) => hasClass(n, "bob-property-card-group-thumb"));
+    const center = findAll(row, (n) => hasClass(n, "bob-property-card-group-center"))[0];
     if (expect.track === "ticks" && !ticks.length) problems.push("expected member ticks");
     if (expect.track === "bar" && (ticks.length || thumbs.length !== 1)) problems.push(`expected a bar and one thumb, saw ${ticks.length} ticks and ${thumbs.length} thumbs`);
+    if (expect.track === "none" && (center || ticks.length || thumbs.length)) problems.push("a one-member group still draws a centre or track");
+    if (center) {
+      if (findAll(center, (n) => /group-(?:name|position-wide|position-narrow)/.test(n.getAttribute?.("class") || "")).length) problems.push("centre paints visible text");
+      if (!center.getAttribute("title")) problems.push("centre has no title");
+      if (!findAll(center, (n) => hasClass(n, "bob-property-card-group-position-label")).length) problems.push("centre lost its hidden position label");
+    }
   }
   const stepRows = findAll(card, (n) => hasClass(n, "bob-property-card-rail-row"));
   for (const [key, role] of [["stepPrev", "prev"], ["stepNext", "next"]]) {
@@ -441,7 +489,7 @@ function buildFixtures(only = []) {
     throw new Error(`Unknown fixture(s): ${only.filter((name) => !known.has(name)).join(", ")}`);
   }
   return selected.map((fixture) => {
-    const { card } = fixture.build(previewDocument());
+    const { card } = fixture.build(groupRailDocument());
     const problems = offlineCheck(fixture, card);
     return { ...fixture, html: serialize(card), problems };
   });
@@ -621,22 +669,44 @@ const MEASURE = `(() => {
       for (const cls of ["glyph", "label", "label-narrow", "sep", "landing", "plus", "note", "wrap"]) {
         const span = arm.querySelector(".bob-property-card-group-" + cls);
         spans[cls] = span ? { visible: visible(span), text: span.textContent, truncated: span.scrollWidth > span.clientWidth + 1 } : null;
-        if (span && visible(span) && ["label", "label-narrow", "landing", "plus", "note"].includes(cls)) out.texts.push(textMeasure(span, "arm-" + cls, owner));
+        if (span && visible(span) && ["label", "label-narrow", "plus", "note"].includes(cls)) out.texts.push(textMeasure(span, "arm-" + cls, owner));
+      }
+      // The skip mark is a graphic: its stroke ink needs 3:1.
+      const glyph = arm.querySelector(".bob-property-card-group-glyph");
+      const svg = glyph && glyph.querySelector("svg");
+      let mark = null;
+      if (svg && visible(glyph)) {
+        const g = svg.getBoundingClientRect();
+        const bg = effectiveBg(glyph);
+        const ink = over(parse(getComputedStyle(glyph).color), bg);
+        mark = { width: Math.round(g.width * 10) / 10, height: Math.round(g.height * 10) / 10, icon: glyph.getAttribute("data-icon") };
+        out.borders.push({ kind: "arm-mark", owner, fg: hex(ink), bg: hex(bg), ratio: ratio(ink, bg), min: 3 });
+      }
+      // State underlines under the visible label: style and 3:1 ink.
+      const shown = [arm.querySelector(".bob-property-card-group-label"), arm.querySelector(".bob-property-card-group-label-narrow")].find(visible);
+      let underline = null;
+      if (shown) {
+        const ls = getComputedStyle(shown);
+        if (ls.textDecorationLine.includes("underline")) {
+          const bg = effectiveBg(shown);
+          const ink = over(parse(ls.textDecorationColor), bg);
+          underline = { style: ls.textDecorationStyle, color: ls.textDecorationColor, ratio: ratio(ink, bg) };
+          out.borders.push({ kind: "arm-underline", owner, style: ls.textDecorationStyle, fg: hex(ink), bg: hex(bg), ratio: underline.ratio, min: 3 });
+        }
       }
       const s = getComputedStyle(arm);
-      const edge = borderMeasure(arm, "arm-edge", owner);
-      if (stateOf(arm) !== "exists") out.borders.push(edge);
       out.arms.push({ owner, width: Math.round(a.width * 10) / 10, height: Math.round(a.height * 10) / 10,
         right: Math.round(a.right - cardRect.right), left: Math.round(a.left - cardRect.left),
-        borderStyle: s.borderTopStyle, borderColor: s.borderTopColor, edgeRatio: edge.ratio, wrapsLines: a.height > 34, spans,
-        href: arm.getAttribute("href"), ariaDisabled: arm.getAttribute("aria-disabled"), title: arm.getAttribute("title") });
+        borderStyle: s.borderTopStyle, borderWidth: s.borderTopWidth, borderColor: s.borderTopColor, wrapsLines: a.height > 34, spans,
+        mark, underline, visibleText: (arm.innerText || "").replace(/\s+/g, " ").trim(),
+        href: arm.getAttribute("href"), ariaDisabled: arm.getAttribute("aria-disabled"), title: arm.getAttribute("title"), ariaLabel: arm.getAttribute("aria-label") });
     }
     const center = row.querySelector(".bob-property-card-group-center");
+    // Visible text only: the clipped screen-reader label is not on screen.
+    const centerText = center ? [...center.children].filter((n) => !n.classList.contains("bob-property-card-group-position-label") && visible(n))
+      .map((n) => (n.innerText || "").trim()).join("").trim() : "";
+    out.row.center = center ? { title: center.getAttribute("title"), visibleText: centerText } : null;
     if (center) {
-      for (const cls of ["name", "position-wide", "position-narrow"]) {
-        const span = center.querySelector(".bob-property-card-group-" + cls);
-        if (span && visible(span)) out.texts.push(textMeasure(span, "center-" + cls, "center"));
-      }
       const track = center.querySelector(".bob-property-card-group-track");
       out.row.track = track ? { visible: visible(track), mode: track.getAttribute("data-track") || "ticks" } : null;
       for (const tick of center.querySelectorAll(".bob-property-card-group-tick")) {
@@ -684,18 +754,27 @@ function checkMetrics(fixture, pass, width, metrics) {
   for (const arm of metrics.arms || []) {
     if (arm.width < 32) failures.push(`${arm.owner} is ${arm.width}px wide (< 32px)`);
     if (arm.wrapsLines) failures.push(`${arm.owner} wraps (${arm.height}px tall)`);
+    if (arm.spans.landing || arm.spans.sep) failures.push(`${arm.owner} paints its landing`);
+    if (/[«»]/.test(arm.visibleText || "")) failures.push(`${arm.owner} shows « / »`);
     if (width === NARROW) {
-      if (arm.spans.landing?.visible) failures.push(`${arm.owner} shows its landing at narrow width`);
+      if (arm.spans.label?.visible) failures.push(`${arm.owner} shows its wide label at narrow width`);
       if (!arm.spans["label-narrow"]?.visible) failures.push(`${arm.owner} hides its narrow label`);
     } else if (!arm.spans.label?.visible) failures.push(`${arm.owner} hides its group label at wide width`);
+    if (!arm.mark) failures.push(`${arm.owner} draws no skip mark`);
+    else if (arm.mark.width < 8 || arm.mark.width > 24) failures.push(`${arm.owner} mark is ${arm.mark.width}px wide`);
     if (arm.owner.startsWith("arm:ghost") && (arm.href || arm.ariaDisabled !== "true")) failures.push(`${arm.owner} is linkable`);
-    if (arm.owner.startsWith("arm:creatable") && arm.borderStyle !== "dashed") failures.push(`${arm.owner} border is ${arm.borderStyle}`);
-    if (arm.owner.startsWith("arm:ghost") && arm.borderStyle !== "dotted") failures.push(`${arm.owner} border is ${arm.borderStyle}`);
-    if (forced && arm.owner.startsWith("arm:exists") && arm.borderStyle !== "none" && arm.edgeRatio > 1.1) {
-      const box = (metrics.forcedExistsBoxes = metrics.forcedExistsBoxes || []);
+    const boxed = arm.borderStyle !== "none" && parseFloat(arm.borderWidth || "0") > 0;
+    if (boxed) {
+      const box = (metrics.armBoxes = metrics.armBoxes || []);
       box.push(arm.owner);
     }
+    if (arm.owner.startsWith("arm:creatable") && arm.underline?.style !== "dashed") failures.push(`${arm.owner} underline is ${arm.underline?.style || "missing"}`);
+    if (arm.owner.startsWith("arm:ghost") && arm.underline?.style !== "dotted") failures.push(`${arm.owner} underline is ${arm.underline?.style || "missing"}`);
+    if (arm.owner.startsWith("arm:exists") && arm.underline) failures.push(`${arm.owner} is underlined`);
   }
+  if (metrics.row?.center?.visibleText) failures.push(`group centre shows text ${JSON.stringify(metrics.row.center.visibleText)}`);
+  if (metrics.row?.center && !metrics.row.center.title) failures.push("group centre has no title");
+  if (fixture.expect.track === "none" && metrics.row?.center) failures.push("one-member group draws a centre");
   for (const item of metrics.items || []) {
     if (item.decoration && item.decoration !== "none") failures.push(`${item.owner} keeps a ${item.decoration} decoration`);
     if (Number(item.opacity) < 1) failures.push(`${item.owner} is faded (opacity ${item.opacity})`);
@@ -709,7 +788,7 @@ function checkMetrics(fixture, pass, width, metrics) {
     for (const b of metrics.borders || []) if (b.ratio < b.min) failures.push(`${b.owner} ${b.kind} contrast ${b.ratio}:1 < ${b.min}:1 (${b.fg} on ${b.bg})`);
     for (const f of metrics.fills || []) if (f.min && f.ratio < f.min) failures.push(`${f.owner} ${f.kind} contrast ${f.ratio}:1 < ${f.min}:1 (${f.fg} on ${f.bg})`);
   }
-  if (forced && metrics.forcedExistsBoxes?.length) failures.push(`forced-colors draws a box around existing arms: ${metrics.forcedExistsBoxes.join(", ")}`);
+  if (metrics.armBoxes?.length) failures.push(`${forced ? "forced-colors " : ""}draws a box around group arms: ${metrics.armBoxes.join(", ")}`);
   return failures;
 }
 

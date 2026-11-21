@@ -59,20 +59,22 @@ step row from the same calendar answer behind `[n` and `]n`, unless the body
 already holds a written `prev`/`next` (or `‹`/`›`) link.
 
 Day, week, and quarter cards add a quieter group row below the step row,
-from the same resolver as `[N` and `]N`:
-`« Q3 · W27   week 8 of 14   2027-Q1 · W01 »`. Each arm names the group, then
-the note it lands on (Monday of the next week, the first week of the next
-quarter, or Q1 of the next year). The center shows the position and one tick
-per member: accent for this note, filled for existing notes, hollow for
-missing ones. Narrow panes keep `« Q3 · 8/14 · 2027-Q1 »`. Year cards have no
-group row, and a role with two conflicting `«` or `»` links has no arm.
+from the same resolver as `[N` and `]N`: `⏮ Q3   ▮▮▮▮▮▮▮■▯▯   2027-Q1 ⏭`.
+Each arm shows a skip mark and the group's name; its tooltip and accessible
+name add the note it lands on (Monday of the next week, the first week of the
+next quarter, or Q1 of the next year). The center is one tick per member:
+accent for this note, filled for existing notes, hollow for missing ones. Its
+tooltip spells the position (`Week 8 of 14 in quarter Q4`), and a one-member
+group shows no ticks. Narrow panes keep `⏮ Q3 … 2027-Q1 ⏭`. Year cards have
+no group row, and a role with two conflicting `«` or `»` links has no arm.
 
 Every missing target uses one look. Dashed with `+` means not created yet:
 activating it creates the note (dailies from the daily template, periods with
 `bob periods ensure`) and opens it. Dotted and faint with `· not in vault`
 means navigation never creates it, such as a target before Bob's period notes
-began; it only shows its reason. Tooltips name the key and destination
-(`]N · next quarter: 2027-Q1 → 2027-W01`).
+began; it only shows its reason. Rail items and chips draw the state as a
+box; group arms underline the name instead. Tooltips name the key and
+destination (`]N · next quarter: 2027-Q1 → 2027-W01`).
 
 Kicker, rail, and chip links open like the Markdown links they mirror: Mod
 opens a tab or split, and a middle click opens a tab. With Bob Navigation

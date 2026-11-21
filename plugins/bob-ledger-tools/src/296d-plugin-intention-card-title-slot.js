@@ -609,10 +609,13 @@ class BobLedgerToolsIntentionCardTitleSlotMixin {
   // Rail prev and next run bob-navigation-hotkeys' open-prev-link /
   // open-next-link in the card's own pane, so jump history matches [n / ]n
   // (as the record walk rail does). Those commands follow the note's first
-  // rendered link labelled `prev`/`next` (daily) or `‹ …`/`… ›` (period); the
-  // rail exists only for a recognized nav line at the top of the body, so the
-  // command and the rail always pick the same link. Everything else, and any
-  // modified click, opens like the Markdown link.
+  // rendered link labelled `prev`/`next` (daily) or `‹ …`/`… ›` (period),
+  // and fall back to the derived calendar stops when the note has none. The
+  // rail paints its step row from a recognized nav line at the top of the
+  // body, or, when no nav line exists, a derived step row from the same
+  // walkMode.links calendar stops, so the command and the rail still pick
+  // the same stop. Everything else, and any modified click, opens like the
+  // Markdown link.
   async intentionCardRailNavigate(direction, item, sourcePath, event) {
     if ((direction === "prev" || direction === "next") && !intentionCardLinkModified(event)) {
       const commandId = `bob-navigation-hotkeys:open-${direction}-link`;

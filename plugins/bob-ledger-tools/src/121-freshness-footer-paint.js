@@ -477,8 +477,10 @@ function freshnessFooterPaintHint(node, view) {
 
 // Shed groups from the end, shorten stage detail, then hide detail,
 // shortcut hint, and upkeep meter. Links sheds meter, hint, context,
-// group-arm labels, group arms, then step arms. With an answer chip the
-// meter sheds before the hint, so the chip outlasts it.
+// group-arm labels, group arms, then step arms; a boundary hint the group
+// arm already said (view.boundaryHintText) returns once that arm is shed,
+// if it fits. With an answer chip the meter sheds before the hint, so the
+// chip outlasts it.
 function freshnessFooterFit(el, parts, view) {
   const groupContainer = parts && parts.groups;
   const nodes = groupContainer && Array.isArray(groupContainer._bobFreshnessGroupNodes)
@@ -512,14 +514,15 @@ function freshnessFooterFit(el, parts, view) {
   );
   let groupCompact = false;
   let stepArms = Boolean(linksPanel && (view.linkPrev || view.linkNext));
+  const shedHint = linksPanel && view.boundaryHintText ? String(view.boundaryHintText) : "";
+  let hintSwap = false;
   const applyGroupArm = (button, arm) => {
     if (!button) {
       return;
     }
     freshnessFooterSetOmitted(button, !groupArms || !arm);
     if (arm) {
-      const label = groupCompact && arm.compactText ? arm.compactText : arm.text;
-      freshnessFooterSetText(button, label);
+      freshnessFooterPaintGroupLabel(button, arm, groupCompact);
     }
   };
   const apply = () => {
@@ -553,6 +556,9 @@ function freshnessFooterFit(el, parts, view) {
       );
     }
     if (linksPanel) {
+      if (shedHint) {
+        freshnessFooterSetText(parts.hint, hintSwap ? shedHint : view.hintText);
+      }
       freshnessFooterSetOmitted(parts.context, !context);
       applyGroupArm(parts.linkGroupPrev, view.linkGroupPrev);
       applyGroupArm(parts.linkGroupNext, view.linkGroupNext);
@@ -646,6 +652,15 @@ function freshnessFooterFit(el, parts, view) {
     if (overflows() && groupArms) {
       groupArms = false;
       apply();
+      if (shedHint) {
+        hintSwap = true;
+        hint = true;
+        apply();
+        if (overflows()) {
+          hint = false;
+          apply();
+        }
+      }
     }
     if (overflows() && stepArms) {
       stepArms = false;
@@ -828,10 +843,52 @@ function freshnessFooterPaint(el, view) {
   return parts;
 }
 
+// Group arms paint the kit's skip mark (propertyCardGroupMark) before a
+// prev label and after a next label, then any ↺, so the footer reads like
+// the card's group row. Without a document the label paints alone.
+function freshnessFooterPaintGroupLabel(button, arm, compact) {
+  if (!button) {
+    return;
+  }
+  freshnessFooterSetText(button, "");
+  if (!arm) {
+    return;
+  }
+  const label = compact && typeof arm.compactLabel === "string"
+    ? arm.compactLabel
+    : typeof arm.label === "string" ? arm.label : String(arm.text || "");
+  let mark = null;
+  try {
+    const doc = button.ownerDocument || (typeof document !== "undefined" ? document : null);
+    mark = doc && typeof propertyCardGroupMark === "function"
+      ? propertyCardGroupMark(doc, arm.direction)
+      : null;
+  } catch (error) {
+    mark = null;
+  }
+  const appendMark = () => {
+    try {
+      if (mark && typeof button.appendChild === "function") button.appendChild(mark);
+    } catch (error) {
+      // The label still reads without the mark.
+    }
+  };
+  if (arm.direction === "prev") appendMark();
+  freshnessFooterSetText(freshnessFooterCreateChild(button, "span", "bob-freshness-link-group-label"), label);
+  if (arm.direction !== "prev") appendMark();
+  if (arm.wrapText) {
+    freshnessFooterSetText(freshnessFooterCreateChild(button, "span", "bob-freshness-link-group-wrap"), arm.wrapText);
+  }
+}
+
 function freshnessFooterPaintArm(button, arm, options = {}) {
   const group = options.group === true;
   freshnessFooterSetOmitted(button, !arm);
-  freshnessFooterSetText(button, arm ? arm.text : "");
+  if (group) {
+    freshnessFooterPaintGroupLabel(button, arm, false);
+  } else {
+    freshnessFooterSetText(button, arm ? arm.text : "");
+  }
   freshnessFooterSetAttr(button, "title", arm ? arm.tooltip : "");
   const aria = arm
     ? (arm.ariaLabel ||

@@ -10331,8 +10331,10 @@ function freshnessFooterPaintHint(node, view) {
 
 // Shed groups from the end, shorten stage detail, then hide detail,
 // shortcut hint, and upkeep meter. Links sheds meter, hint, context,
-// group-arm labels, group arms, then step arms. With an answer chip the
-// meter sheds before the hint, so the chip outlasts it.
+// group-arm labels, group arms, then step arms; a boundary hint the group
+// arm already said (view.boundaryHintText) returns once that arm is shed,
+// if it fits. With an answer chip the meter sheds before the hint, so the
+// chip outlasts it.
 function freshnessFooterFit(el, parts, view) {
   const groupContainer = parts && parts.groups;
   const nodes = groupContainer && Array.isArray(groupContainer._bobFreshnessGroupNodes)
@@ -10366,14 +10368,15 @@ function freshnessFooterFit(el, parts, view) {
   );
   let groupCompact = false;
   let stepArms = Boolean(linksPanel && (view.linkPrev || view.linkNext));
+  const shedHint = linksPanel && view.boundaryHintText ? String(view.boundaryHintText) : "";
+  let hintSwap = false;
   const applyGroupArm = (button, arm) => {
     if (!button) {
       return;
     }
     freshnessFooterSetOmitted(button, !groupArms || !arm);
     if (arm) {
-      const label = groupCompact && arm.compactText ? arm.compactText : arm.text;
-      freshnessFooterSetText(button, label);
+      freshnessFooterPaintGroupLabel(button, arm, groupCompact);
     }
   };
   const apply = () => {
@@ -10407,6 +10410,9 @@ function freshnessFooterFit(el, parts, view) {
       );
     }
     if (linksPanel) {
+      if (shedHint) {
+        freshnessFooterSetText(parts.hint, hintSwap ? shedHint : view.hintText);
+      }
       freshnessFooterSetOmitted(parts.context, !context);
       applyGroupArm(parts.linkGroupPrev, view.linkGroupPrev);
       applyGroupArm(parts.linkGroupNext, view.linkGroupNext);
@@ -10500,6 +10506,15 @@ function freshnessFooterFit(el, parts, view) {
     if (overflows() && groupArms) {
       groupArms = false;
       apply();
+      if (shedHint) {
+        hintSwap = true;
+        hint = true;
+        apply();
+        if (overflows()) {
+          hint = false;
+          apply();
+        }
+      }
     }
     if (overflows() && stepArms) {
       stepArms = false;
@@ -10682,10 +10697,52 @@ function freshnessFooterPaint(el, view) {
   return parts;
 }
 
+// Group arms paint the kit's skip mark (propertyCardGroupMark) before a
+// prev label and after a next label, then any ↺, so the footer reads like
+// the card's group row. Without a document the label paints alone.
+function freshnessFooterPaintGroupLabel(button, arm, compact) {
+  if (!button) {
+    return;
+  }
+  freshnessFooterSetText(button, "");
+  if (!arm) {
+    return;
+  }
+  const label = compact && typeof arm.compactLabel === "string"
+    ? arm.compactLabel
+    : typeof arm.label === "string" ? arm.label : String(arm.text || "");
+  let mark = null;
+  try {
+    const doc = button.ownerDocument || (typeof document !== "undefined" ? document : null);
+    mark = doc && typeof propertyCardGroupMark === "function"
+      ? propertyCardGroupMark(doc, arm.direction)
+      : null;
+  } catch (error) {
+    mark = null;
+  }
+  const appendMark = () => {
+    try {
+      if (mark && typeof button.appendChild === "function") button.appendChild(mark);
+    } catch (error) {
+      // The label still reads without the mark.
+    }
+  };
+  if (arm.direction === "prev") appendMark();
+  freshnessFooterSetText(freshnessFooterCreateChild(button, "span", "bob-freshness-link-group-label"), label);
+  if (arm.direction !== "prev") appendMark();
+  if (arm.wrapText) {
+    freshnessFooterSetText(freshnessFooterCreateChild(button, "span", "bob-freshness-link-group-wrap"), arm.wrapText);
+  }
+}
+
 function freshnessFooterPaintArm(button, arm, options = {}) {
   const group = options.group === true;
   freshnessFooterSetOmitted(button, !arm);
-  freshnessFooterSetText(button, arm ? arm.text : "");
+  if (group) {
+    freshnessFooterPaintGroupLabel(button, arm, false);
+  } else {
+    freshnessFooterSetText(button, arm ? arm.text : "");
+  }
   freshnessFooterSetAttr(button, "title", arm ? arm.tooltip : "");
   const aria = arm
     ? (arm.ariaLabel ||
@@ -11660,16 +11717,14 @@ function linksWalkerFooterGroupArm(link, direction) {
   const ghost = !exists && !createEligible;
   const wraps = link.wraps === true;
   const plus = createEligible ? "+" : "";
-  const wrapMark = wraps ? " ↺" : "";
-  const compactText = direction === "prev"
-    ? `« ${name}${plus}`
-    : `${name}${plus} »${wrapMark}`;
+  // The footer paints the kit's skip mark beside the label (before a prev
+  // label; after a next one, then ↺), so the text carries no « / ».
+  const wrapText = wraps && direction === "next" ? " ↺" : "";
+  const compactLabel = `${name}${plus}`;
   const groupLabel = linksWalkerFooterStripNavGlyphs(link && link.groupLabel);
-  const text = groupLabel && groupLabel !== name
-    ? (direction === "prev"
-      ? `« ${groupLabel}${plus}`
-      : `${groupLabel}${plus} »${wrapMark}`)
-    : compactText;
+  const label = groupLabel && groupLabel !== name ? `${groupLabel}${plus}` : compactLabel;
+  const compactText = `${compactLabel}${wrapText}`;
+  const text = `${label}${wrapText}`;
   const landing = linksWalkerFooterGroupLanding(link);
   const tooltip = ghost
     ? (link.ghostReason || `${name} is not in the vault`)
@@ -11687,6 +11742,10 @@ function linksWalkerFooterGroupArm(link, direction) {
     direction,
     group: true,
     name,
+    groupLabel: groupLabel || name,
+    label,
+    compactLabel,
+    wrapText,
     text,
     compactText,
     tooltip,
@@ -11716,6 +11775,7 @@ function linksWalkerFooterHintNoun(group, groupNone) {
   return "group";
 }
 
+// `W47 6/7`; a one-member group is just its label (no `1/1`).
 function linksWalkerFooterContextText(group) {
   if (!group || !Number.isInteger(group.position) || !Number.isInteger(group.size) || group.size <= 0) {
     return "";
@@ -11724,7 +11784,14 @@ function linksWalkerFooterContextText(group) {
   if (!label) {
     return "";
   }
-  return `${label} ${group.position}/${group.size}`;
+  return group.size === 1 ? label : `${label} ${group.position}/${group.size}`;
+}
+
+// True when a painted group arm already names the group a boundary hint
+// would announce.
+function linksWalkerFooterArmNames(arm, groupName) {
+  const wanted = linksWalkerFooterStripNavGlyphs(groupName);
+  return Boolean(arm && wanted && (arm.name === wanted || arm.groupLabel === wanted));
 }
 
 function linksWalkerFooterStatusView(linkState, statusText, tooltip, ariaLabel) {
@@ -11828,11 +11895,16 @@ function linksWalkerFooterView(preview, options = {}) {
       : null;
     let hintText = hintNoun ? `]} next ${hintNoun}` : "";
     let boundaryHint = "";
+    // When the next group arm already names the group `]n` enters, the
+    // boundary hint leaves the bar for the tooltip; the footer fit brings
+    // it back only if that arm is shed.
+    let boundaryHintText = "";
     if (group && group.atEnd === true && group.enteringNext) {
       boundaryHint = (groupNext && groupNext.wraps)
         ? `]n wraps to ${group.enteringNext}`
         : `]n enters ${group.enteringNext}`;
-      hintText = boundaryHint;
+      if (linksWalkerFooterArmNames(groupNext, group.enteringNext)) boundaryHintText = boundaryHint;
+      else hintText = boundaryHint;
     }
     let startHint = "";
     if (group && group.atStart === true && group.enteringPrev) {
@@ -11843,7 +11915,7 @@ function linksWalkerFooterView(preview, options = {}) {
     const arms = [groupPrev, prev, next, groupNext].filter(Boolean);
     const summary = arms.map((arm) => arm.text).join(" · ");
     const noneMessage = groupNone && groupNone.message ? groupNone.message : "";
-    const extraTips = [statusText, startHint, noneMessage].filter(Boolean);
+    const extraTips = [statusText, boundaryHintText, startHint, noneMessage].filter(Boolean);
     const armsTooltip = arms
       .map((arm) => `${arm.text}\n${arm.tooltip}`)
       .concat(extraTips)
@@ -11869,6 +11941,7 @@ function linksWalkerFooterView(preview, options = {}) {
       linkGroupNext: groupNext,
       detailText: "",
       hintText,
+      boundaryHintText,
       groups: [],
       groupsText: "",
       meterText: "",
@@ -11939,6 +12012,7 @@ function linksWalkerFooterPaint(plugin, view, source, preview, generation) {
       view.dueText,
       view.contextText,
       view.hintText,
+      view.boundaryHintText,
       view.linkStatusText,
       view.linkPrev && view.linkPrev.text,
       view.linkPrev && view.linkPrev.tooltip,
@@ -83367,11 +83441,14 @@ function propertyCardLiveCurrentPath(view) {
 }
 // ---- src/240l-plugin-property-card-group-row.js ----
 // Property-card group row (bob-cli-oj group-rail): the quieter second rail
-// row that jumps between groups (`« Q3 · W27   week 8 of 14 ▮▮■▯   2027-Q1 ·
-// W01 »`), plus the missing-target states every rail surface shares. One
-// visual rule: dashed with a `+` means "not created yet" (creatable); dotted,
-// faint, and `· not in vault` means "won't be created from here" (ghost).
-// Never error red, never Obsidian's unresolved-link look.
+// row that jumps between groups (`⏮ Q2   ▮▮■▮▮▮▮   Q4 ⏭`), plus the
+// missing-target states every rail surface shares. Arms show a skip mark and
+// the group name only; the landing note lives in the tooltip and accessible
+// name, and the centre is just the member track (hidden for a one-member
+// group). One visual rule: a dashed underline with a `+` means "not created
+// yet" (creatable); dotted, faint, and `· not in vault` means "won't be
+// created from here" (ghost). Rail items and chips draw the same states as
+// boxes. Never error red, never Obsidian's unresolved-link look.
 //
 // The kit never decides activation. Step items and chips reach the rail's
 // onNavigate, and group arms reach the row's onActivate, with the item and
@@ -83385,6 +83462,19 @@ const PROPERTY_CARD_GROUP_TICK_STATES = Object.freeze(["current", "exists", "mis
 // Larger groups show a continuous bar with a thumb instead of one tick each.
 const PROPERTY_CARD_GROUP_TICK_LIMIT = 21;
 const PROPERTY_CARD_GHOST_NOTE = "· not in vault";
+// Lucide skip-back / skip-forward, drawn inline so Obsidian, the links
+// footer, and the preview matrix paint the same mark without setIcon.
+const PROPERTY_CARD_SVG_NS = "http://www.w3.org/2000/svg";
+const PROPERTY_CARD_GROUP_MARKS = Object.freeze({
+  prev: Object.freeze({ icon: "skip-back", shapes: Object.freeze([
+    ["polygon", { points: "19 20 9 12 19 4 19 20" }],
+    ["line", { x1: "5", x2: "5", y1: "19", y2: "5" }],
+  ]) }),
+  next: Object.freeze({ icon: "skip-forward", shapes: Object.freeze([
+    ["polygon", { points: "5 4 15 12 5 20 5 4" }],
+    ["line", { x1: "19", x2: "19", y1: "5", y2: "19" }],
+  ]) }),
+});
 
 // An explicit known state wins; the legacy `unresolved: true` means
 // creatable; neither means exists.
@@ -83456,15 +83546,42 @@ function propertyCardKitStateMarks(doc, node, item, state, chip) {
   return chip ? [] : [propertyCardKitSpan(doc, "bob-property-card-rail-note", PROPERTY_CARD_GHOST_NOTE)];
 }
 
+// span.bob-property-card-group-glyph[aria-hidden][data-icon]: the group
+// jump mark. Documents without createElementNS (fake test DOMs) get the
+// empty span, so tests read data-icon. Never throws.
+function propertyCardGroupMark(doc, direction) {
+  const mark = PROPERTY_CARD_GROUP_MARKS[direction === "prev" ? "prev" : "next"];
+  const span = propertyCardKitHidden(propertyCardKitEl(doc, "span", "bob-property-card-group-glyph"));
+  span.setAttribute("data-icon", mark.icon);
+  if (typeof doc?.createElementNS !== "function") return span;
+  try {
+    const svg = doc.createElementNS(PROPERTY_CARD_SVG_NS, "svg");
+    for (const [name, value] of [
+      ["class", "bob-property-card-group-mark"], ["viewBox", "0 0 24 24"], ["width", "1em"], ["height", "1em"],
+      ["fill", "none"], ["stroke", "currentColor"], ["stroke-width", "2"], ["stroke-linecap", "round"],
+      ["stroke-linejoin", "round"], ["focusable", "false"], ["aria-hidden", "true"],
+    ]) svg.setAttribute(name, value);
+    for (const [tag, attrs] of mark.shapes) {
+      const shape = doc.createElementNS(PROPERTY_CARD_SVG_NS, tag);
+      for (const [name, value] of Object.entries(attrs)) shape.setAttribute(name, value);
+      svg.appendChild(shape);
+    }
+    span.appendChild(svg);
+  } catch (_) {}
+  return span;
+}
+
 function propertyCardGroupArmOk(arm) {
   if (!arm || typeof arm !== "object") return false;
   if (!propertyCardKitText(arm.groupLabel).trim()) return false;
   return propertyCardTargetState(arm) === "ghost" || Boolean(propertyCardKitText(arm.target).trim());
 }
 
-// a.bob-property-card-group-arm[data-group][data-state]. Reading order: the
-// prev arm reads `« Q3 · W27`, the next arm `2027-Q1 · W01 »`; the `«`/`»`
-// glyph, separator, `+`, and `↺` are aria-hidden.
+// a.bob-property-card-group-arm[data-group][data-state]. The prev arm reads
+// `⏮ Q2`, the next arm `Q4 + ⏭`: the mark (aria-hidden), the group label
+// (wide and narrow), `+` on creatable arms, `· not in vault` on ghosts, and
+// `↺` when the jump wraps. The landing (spec.landingLabel) is accepted but
+// never painted; the tooltip and accessible name carry it.
 function propertyCardGroupArm(doc, direction, arm, onActivate) {
   const state = propertyCardTargetState(arm);
   const stated = propertyCardKitStatedItem(arm, state);
@@ -83489,14 +83606,9 @@ function propertyCardGroupArm(doc, direction, arm, onActivate) {
     propertyCardKitHidden(propertyCardKitSpan(doc, "bob-property-card-group-label-narrow",
       propertyCardKitText(arm.shortLabel).trim() || groupLabel)),
   ];
-  const landing = propertyCardKitText(arm.landingLabel).trim();
-  if (landing) {
-    parts.push(propertyCardKitHidden(propertyCardKitSpan(doc, "bob-property-card-group-sep", "·")));
-    parts.push(propertyCardKitSpan(doc, "bob-property-card-group-landing", landing));
-  }
   if (state === "creatable") parts.push(propertyCardKitHidden(propertyCardKitSpan(doc, "bob-property-card-group-plus", "+")));
   if (state === "ghost") parts.push(propertyCardKitSpan(doc, "bob-property-card-group-note", PROPERTY_CARD_GHOST_NOTE));
-  const glyph = propertyCardKitHidden(propertyCardKitSpan(doc, "bob-property-card-group-glyph", direction === "prev" ? "«" : "»"));
+  const glyph = propertyCardGroupMark(doc, direction);
   const ordered = direction === "prev" ? [glyph, ...parts] : [...parts, glyph];
   if (arm.wraps === true) ordered.push(propertyCardKitHidden(propertyCardKitSpan(doc, "bob-property-card-group-wrap", "↺")));
   for (const node of ordered) link.appendChild(node);
@@ -83542,27 +83654,17 @@ function propertyCardGroupTrack(doc, center) {
   return track;
 }
 
-// div.bob-property-card-group-center: optional group name, the position
-// (wide and narrow spans plus a visually hidden label that carries the
-// meaning), and the track. Null without position text.
+// div.bob-property-card-group-center[title]: the member track and a visually
+// hidden position label that carries the meaning; no visible text (the card
+// already names the group). The title spells the full position (tooltip,
+// else the label, else the text). Null without position text.
 function propertyCardGroupCenter(doc, center) {
   const text = propertyCardKitText(center?.text).trim();
   if (!text) return null;
   const element = propertyCardKitEl(doc, "div", "bob-property-card-group-center");
-  const tooltip = propertyCardKitText(center.tooltip).trim();
-  if (tooltip) element.setAttribute("title", tooltip);
-  const name = propertyCardKitText(center.name).trim();
-  if (name) {
-    element.appendChild(propertyCardKitSpan(doc, "bob-property-card-group-name", name));
-    element.appendChild(propertyCardKitHidden(propertyCardKitSpan(doc, "bob-property-card-group-name-sep", "·")));
-  }
-  const position = propertyCardKitEl(doc, "span", "bob-property-card-group-position");
-  position.appendChild(propertyCardKitSpan(doc, "bob-property-card-group-position-label",
-    propertyCardKitText(center.ariaLabel).trim() || text));
-  position.appendChild(propertyCardKitHidden(propertyCardKitSpan(doc, "bob-property-card-group-position-wide", text)));
-  position.appendChild(propertyCardKitHidden(propertyCardKitSpan(doc, "bob-property-card-group-position-narrow",
-    propertyCardKitText(center.shortText).trim() || text)));
-  element.appendChild(position);
+  const label = propertyCardKitText(center.ariaLabel).trim() || text;
+  element.setAttribute("title", propertyCardKitText(center.tooltip).trim() || label);
+  element.appendChild(propertyCardKitSpan(doc, "bob-property-card-group-position-label", label));
   const track = propertyCardGroupTrack(doc, center);
   if (track) element.appendChild(track);
   return { element, track };
@@ -83572,14 +83674,16 @@ function propertyCardGroupCenter(doc, center) {
 // arm and no center. spec: { label?, prev?, next?, center?, onActivate? }
 // where an arm is { groupLabel, landingLabel?, shortLabel?, target, state,
 // ghostReason?, wraps?, tooltip?, ariaLabel? } and center is { name?, text,
-// shortText?, ariaLabel?, tooltip?, position, size, members? }. Missing
-// cells keep their grid column with an empty gap span.
+// shortText?, ariaLabel?, tooltip?, position, size, members? } (name,
+// shortText, and landingLabel are accepted and not painted). A centre for a
+// one-member group (size <= 1) is absent. Missing cells keep their grid
+// column with an empty gap span.
 function propertyCardBuildGroupRow(doc, spec = {}) {
   try {
     if (!propertyCardKitDocOk(doc)) return null;
     const options = spec && typeof spec === "object" ? spec : {};
     const present = PROPERTY_CARD_GROUP_DIRECTIONS.filter((direction) => propertyCardGroupArmOk(options[direction]));
-    const center = options.center && typeof options.center === "object"
+    const center = options.center && typeof options.center === "object" && !(Number(options.center.size) <= 1)
       ? propertyCardGroupCenter(doc, options.center)
       : null;
     if (!present.length && !center) return null;
@@ -106058,8 +106162,9 @@ class BobLedgerToolsRecordWalkRailMixin {
 // ---- src/242va-plugin-record-walk-group-rail.js ----
 // Record walk group rail (bob-cli-oj record-rail): a grouped record walk
 // shows the kit's group row under its step row, in place of the whole-walk
-// thumb track: `« 🛑 Why SASE… · AI Slop   🔮 Future Work · 2 of 3 ▮■▮
-// 🏁 Conclusion · … » ↺`. One answer decides the arms: Bob Navigation
+// thumb track: `⏮ 🛑 Why SASE…   ▮■▮   🏁 Conclusion ⏭ ↺` (each head title
+// rides the arm's tooltip and accessible name; the centre's title names the
+// group and position). One answer decides the arms: Bob Navigation
 // Hotkeys' walkMode.links v7 when it is there (so an authored «/» link wins
 // per role, exactly as for `[N` / `]N`), else Ledger's own navGroups resolver
 // (derived stops only). Record targets are never created: a missing group
@@ -106194,7 +106299,7 @@ function recordWalkGroupRailSignature(rail) {
 }
 
 // The kit arm: tooltip names the key and destination; the accessible name
-// spells the role and state.
+// spells the role, the state, and the head title the arm no longer shows.
 function recordWalkGroupArmSpec(rail, direction) {
   const stop = rail && rail[direction];
   if (!stop) return null;
@@ -106209,10 +106314,10 @@ function recordWalkGroupArmSpec(rail, direction) {
   let ariaLabel;
   if (stop.state === "ghost") {
     tooltip = `${stop.ghostReason || `${landing || stop.groupLabel} is not in the vault`}${wrapTip}`;
-    ariaLabel = `${side} ${unit} group: ${stop.groupLabel}, not in vault`;
+    ariaLabel = `${side} ${unit} group: ${stop.groupLabel}, ${landing ? `${landing} ` : ""}not in vault`;
   } else if (stop.state === "creatable") {
     tooltip = `${landing || stop.groupLabel} isn't created yet — ${key} creates it${wrapTip}`;
-    ariaLabel = `${side} ${unit} group: ${stop.groupLabel}, not created yet — activating creates it`;
+    ariaLabel = `${side} ${unit} group: ${stop.groupLabel}, not created yet — activating creates ${landing || "it"}`;
   } else {
     tooltip = `${key} · ${previous ? "previous" : "next"} ${unit}: ${stop.groupLabel}${landing ? ` → ${landing}` : ""}${wrapTip}`;
     ariaLabel = `${side} ${unit} group: ${stop.groupLabel}${landing ? `, opens ${landing}` : ""}`;
@@ -106231,8 +106336,10 @@ function recordWalkGroupRowSpec(rail, onActivate) {
     text: `${group.position} of ${group.size}`,
     shortText: `${group.position}/${group.size}`,
     ariaLabel: `${group.position} of ${group.size} in this ${unit}`,
-    tooltip: Number.isInteger(group.index) && Number.isInteger(group.count)
-      ? `${rail.fieldLabel} ${group.index} of ${group.count}: ${group.label}` : group.label,
+    // The row paints only the track, so the title carries the group and the
+    // position: `Section 2 of 3: 🔮 Future Work · 2 of 3`.
+    tooltip: `${Number.isInteger(group.index) && Number.isInteger(group.count)
+      ? `${rail.fieldLabel} ${group.index} of ${group.count}: ${group.label}` : group.label} · ${group.position} of ${group.size}`,
     position: group.position,
     size: group.size,
     members: group.members ? group.members.map((member) => ({ label: member.label, state: member.state })) : null,
@@ -157019,8 +157126,9 @@ class BobLedgerToolsIntentionCardMixin {
 // Day and period card group rail (bob-cli-oj group-rail): one nav answer per
 // card from Bob Navigation Hotkeys' walkMode.links v7 (else this plugin's
 // api.navGroups), reduced to plain data on the model as `navRail`. The card
-// shows the kit group row (`« Q3 · W27   week 8 of 14   2027-Q1 · W01 »`)
-// on day, week, and quarter cards, a derived step row on notes with no
+// shows the kit group row (`⏮ Q3   ▮▮▮■▮▯   2027-Q1 ⏭`; the landing note
+// lives in each arm's tooltip and accessible name) on day, week, and
+// quarter cards, a derived step row on notes with no
 // recognized nav line, and the shared exists / creatable / ghost states on
 // every rail item, chip, and arm. Group arms re-validate the stop and then
 // run Navigation Hotkeys' group commands in the card's own pane.
@@ -157217,6 +157325,8 @@ function intentionCardDerivedRailItems(navRail, subject) {
   }
 }
 
+// The arm shows only the group label, so the tooltip and the accessible
+// name both name the landing note in every state.
 function intentionCardGroupArm(direction, stop, unit) {
   if (!stop) return null;
   const word = direction === "prev" ? "Previous" : "Next";
@@ -157225,8 +157335,8 @@ function intentionCardGroupArm(direction, stop, unit) {
   let tooltip = "";
   let ariaLabel = `${word} ${unit} group: ${stop.groupLabel}`;
   if (stop.state === "ghost") {
-    tooltip = stop.ghostReason || INTENTION_CARD_NOT_IN_VAULT;
-    ariaLabel += ", not in vault";
+    tooltip = stop.ghostReason || (landing ? `${landing} is not in the vault` : INTENTION_CARD_NOT_IN_VAULT);
+    ariaLabel += landing ? `, ${landing} not in vault` : ", not in vault";
   } else if (stop.state === "creatable") {
     const kind = intentionCardNavCreateKind(stop.path || stop.target);
     tooltip = kind === "daily"
@@ -157234,7 +157344,7 @@ function intentionCardGroupArm(direction, stop, unit) {
       : kind === "period"
         ? `${landing} isn't created yet — ${key} creates it with bob periods ensure`
         : `${landing} isn't created yet — ${key} creates it`;
-    ariaLabel += ", not created yet — activating creates it";
+    ariaLabel += `, not created yet — activating creates ${landing || "it"}`;
   } else {
     tooltip = `${key} · ${word.toLowerCase()} ${unit}: ${stop.groupLabel} → ${landing}`;
     ariaLabel += `, opens ${landing}`;
@@ -157258,9 +157368,12 @@ function intentionCardGroupRowSpec(navRail, options = {}) {
     if (group) {
       const noun = group.noun || INTENTION_CARD_PERIOD_WORDS[navRail.kind] || "note";
       const text = `${noun} ${group.position} of ${group.size}`;
+      const full = `${text.charAt(0).toUpperCase()}${text.slice(1)}${group.label ? ` in ${unit} ${group.label}` : ""}`;
       center = {
         text, shortText: `${group.position}/${group.size}`,
-        ariaLabel: group.label ? `${text.charAt(0).toUpperCase()}${text.slice(1)} in ${unit} ${group.label}` : text,
+        // The row paints only the track: the title and hidden label carry
+        // `Day 3 of 7 in week W47`.
+        ariaLabel: group.label ? full : text, tooltip: full,
         position: group.position, size: group.size,
         members: group.members ? group.members.map((member) => ({ label: member.label, state: member.state })) : null,
       };
@@ -158187,10 +158300,13 @@ class BobLedgerToolsIntentionCardTitleSlotMixin {
   // Rail prev and next run bob-navigation-hotkeys' open-prev-link /
   // open-next-link in the card's own pane, so jump history matches [n / ]n
   // (as the record walk rail does). Those commands follow the note's first
-  // rendered link labelled `prev`/`next` (daily) or `‹ …`/`… ›` (period); the
-  // rail exists only for a recognized nav line at the top of the body, so the
-  // command and the rail always pick the same link. Everything else, and any
-  // modified click, opens like the Markdown link.
+  // rendered link labelled `prev`/`next` (daily) or `‹ …`/`… ›` (period),
+  // and fall back to the derived calendar stops when the note has none. The
+  // rail paints its step row from a recognized nav line at the top of the
+  // body, or, when no nav line exists, a derived step row from the same
+  // walkMode.links calendar stops, so the command and the rail still pick
+  // the same stop. Everything else, and any modified click, opens like the
+  // Markdown link.
   async intentionCardRailNavigate(direction, item, sourcePath, event) {
     if ((direction === "prev" || direction === "next") && !intentionCardLinkModified(event)) {
       const commandId = `bob-navigation-hotkeys:open-${direction}-link`;
@@ -168662,7 +168778,9 @@ try {
       PROPERTY_CARD_TARGET_STATES,
       PROPERTY_CARD_GROUP_TICK_LIMIT,
       PROPERTY_CARD_GHOST_NOTE,
+      PROPERTY_CARD_GROUP_MARKS,
       propertyCardTargetState,
+      propertyCardGroupMark,
       propertyCardBuildGroupRow,
     });
   }

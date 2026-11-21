@@ -94,11 +94,19 @@ class FakeNode {
   querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
 }
 
-function makeDoc() {
-  return {
+function makeDoc(options = {}) {
+  const doc = {
     createElement(tag) { return new FakeNode(tag, this); },
     createTextNode(text) { return new FakeText(text, this); },
   };
+  if (options.svg) {
+    doc.createElementNS = function createElementNS(ns, tag) {
+      const node = new FakeNode(tag, this);
+      node.namespaceURI = ns;
+      return node;
+    };
+  }
+  return doc;
 }
 
 const classes = (node) => node.className.split(/\s+/).filter(Boolean);
@@ -165,7 +173,7 @@ test("group row: null without an arm or a centre, and never throws", () => {
   assert.ok(ghostOnly?.arms.prev, "a ghost arm needs no target");
 });
 
-test("group row: three grid cells, arm reading order, aria-hidden glyphs, tooltips, and names", () => {
+test("group row: three grid cells, arm reading order, aria-hidden marks, tooltips, and names", () => {
   const doc = makeDoc();
   const row = H.propertyCardBuildGroupRow(doc, { label: "Week groups", prev: ARMS.prev, next: ARMS.next, center: weekCenter() });
   assert.deepEqual(Object.keys(row).sort(), ["arms", "center", "element", "track"]);
@@ -187,31 +195,68 @@ test("group row: three grid cells, arm reading order, aria-hidden glyphs, toolti
   assert.equal(prev.getAttribute("data-state"), "exists");
   assert.equal(prev.getAttribute("href"), "2026/2026-W27");
   assert.equal(prev.getAttribute("data-href"), "2026/2026-W27");
-  assert.equal(prev.getAttribute("title"), "[N · previous quarter: Q3 → 2026-W27");
-  assert.equal(prev.getAttribute("aria-label"), "Previous quarter group: Q3, opens 2026-W27");
+  assert.equal(prev.getAttribute("title"), "[N · previous quarter: Q3 → 2026-W27", "the tooltip still names the landing");
+  assert.equal(prev.getAttribute("aria-label"), "Previous quarter group: Q3, opens 2026-W27", "so does the accessible name");
   assert.equal(prev.getAttribute("aria-disabled"), null);
   assert.equal(prev.getAttribute("tabindex"), null);
   assert.ok(!prev.classList.contains("internal-link"));
   assert.deepEqual(childClasses(prev), [
     "bob-property-card-group-glyph", "bob-property-card-group-label", "bob-property-card-group-label-narrow",
-    "bob-property-card-group-sep", "bob-property-card-group-landing",
-  ]);
-  const visible = (arm) => arm.children.filter((node) => !classes(node)[0].endsWith("-narrow")).map((node) => node.textContent).join(" ");
-  assert.equal(visible(prev), "« Q3 · W27");
-  for (const name of ["glyph", "sep", "label-narrow"]) {
-    assert.equal(prev.querySelector(`.bob-property-card-group-${name}`).getAttribute("aria-hidden"), "true", name);
-  }
+  ], "the mark and the group name only: no separator, no landing");
+  assert.equal(prev.querySelector(".bob-property-card-group-landing"), null);
+  assert.equal(prev.querySelector(".bob-property-card-group-sep"), null);
+  assert.ok(!prev.textContent.includes("W27"), "the landing is never painted");
+  assert.ok(!/[«»]/.test(prev.textContent), "no quotation-mark glyphs");
+  const glyph = prev.querySelector(".bob-property-card-group-glyph");
+  assert.equal(glyph.getAttribute("aria-hidden"), "true");
+  assert.equal(glyph.getAttribute("data-icon"), "skip-back");
+  assert.equal(glyph.children.length, 0, "a document without createElementNS leaves the mark empty");
+  assert.equal(glyph.textContent, "");
+  const visible = (arm) => arm.children.filter((node) => !classes(node)[0].endsWith("-narrow")).map((node) => node.textContent).filter(Boolean).join(" ");
+  assert.equal(visible(prev), "Q3");
+  assert.equal(prev.querySelector(".bob-property-card-group-label-narrow").getAttribute("aria-hidden"), "true");
   assert.equal(prev.querySelector(".bob-property-card-group-label").getAttribute("aria-hidden"), null);
-  assert.equal(prev.querySelector(".bob-property-card-group-landing").getAttribute("aria-hidden"), null);
 
   const next = row.arms.next;
   assert.equal(next.getAttribute("data-group"), "next");
   assert.deepEqual(childClasses(next), [
-    "bob-property-card-group-label", "bob-property-card-group-label-narrow", "bob-property-card-group-sep",
-    "bob-property-card-group-landing", "bob-property-card-group-plus", "bob-property-card-group-glyph",
+    "bob-property-card-group-label", "bob-property-card-group-label-narrow", "bob-property-card-group-plus",
+    "bob-property-card-group-glyph",
   ]);
-  assert.equal(visible(next), "2027-Q1 · W01 + »");
+  assert.equal(next.querySelector(".bob-property-card-group-glyph").getAttribute("data-icon"), "skip-forward");
+  assert.equal(visible(next), "2027-Q1 +");
+  assert.equal(next.getAttribute("title"), "2027-W01 isn't created yet — ]N creates it with bob periods ensure");
   assert.equal(next.getAttribute("aria-label"), "Next quarter group: 2027-Q1, not created yet — activating creates it");
+});
+
+test("group mark: Lucide skip-back / skip-forward drawn inline with createElementNS", () => {
+  assert.deepEqual(Object.keys(H.PROPERTY_CARD_GROUP_MARKS), ["prev", "next"]);
+  assert.ok(Object.isFrozen(H.PROPERTY_CARD_GROUP_MARKS));
+  const doc = makeDoc({ svg: true });
+  const back = H.propertyCardGroupMark(doc, "prev");
+  assert.deepEqual(classes(back), ["bob-property-card-group-glyph"]);
+  assert.equal(back.getAttribute("aria-hidden"), "true");
+  assert.equal(back.getAttribute("data-icon"), "skip-back");
+  const svg = back.children[0];
+  assert.equal(svg.tagName, "SVG");
+  assert.equal(svg.namespaceURI, "http://www.w3.org/2000/svg");
+  for (const [name, value] of [
+    ["viewBox", "0 0 24 24"], ["fill", "none"], ["stroke", "currentColor"], ["stroke-width", "2"],
+    ["stroke-linecap", "round"], ["stroke-linejoin", "round"], ["width", "1em"], ["height", "1em"], ["aria-hidden", "true"],
+  ]) assert.equal(svg.getAttribute(name), value, name);
+  assert.deepEqual(svg.children.map((shape) => [shape.tagName, shape.namespaceURI === svg.namespaceURI]), [["POLYGON", true], ["LINE", true]]);
+  assert.equal(svg.children[0].getAttribute("points"), "19 20 9 12 19 4 19 20");
+  assert.deepEqual(["x1", "x2", "y1", "y2"].map((name) => svg.children[1].getAttribute(name)), ["5", "5", "19", "5"]);
+  const forward = H.propertyCardGroupMark(doc, "next");
+  assert.equal(forward.getAttribute("data-icon"), "skip-forward");
+  assert.equal(forward.children[0].children[0].getAttribute("points"), "5 4 15 12 5 20 5 4");
+  assert.deepEqual(["x1", "x2", "y1", "y2"].map((name) => forward.children[0].children[1].getAttribute(name)), ["19", "19", "5", "19"]);
+  const throwing = { ...makeDoc(), createElementNS() { throw new Error("boom"); } };
+  const fallback = H.propertyCardGroupMark(throwing, "prev");
+  assert.equal(fallback.getAttribute("data-icon"), "skip-back", "a failing SVG build keeps the empty span");
+  assert.equal(fallback.children.length, 0);
+  const row = H.propertyCardBuildGroupRow(doc, { prev: ARMS.prev });
+  assert.equal(row.arms.prev.children[0].children[0].tagName, "SVG", "the row builds the same mark");
 });
 
 test("group row: a missing arm or centre keeps its column with a gap span", () => {
@@ -299,7 +344,7 @@ test("group row states: creatable plus, ghost note, no href, aria-disabled, and 
   assert.doesNotThrow(() => bare.arms.next.fire("click"), "no handler is fine");
 });
 
-test("group row: wrap glyph, narrow spans, and landing-less arms", () => {
+test("group row: wrap glyph, narrow spans, and arms that never paint a landing", () => {
   const doc = makeDoc();
   const row = H.propertyCardBuildGroupRow(doc, {
     prev: { groupLabel: "🛑 Why SASE is still NOT ready?", shortLabel: "🛑", landingLabel: "AI Slop", target: "zettel/ai-slop", state: "exists", wraps: true },
@@ -310,32 +355,33 @@ test("group row: wrap glyph, narrow spans, and landing-less arms", () => {
   assert.equal(prev.querySelector(".bob-property-card-group-wrap").textContent, "↺");
   assert.equal(prev.querySelector(".bob-property-card-group-wrap").getAttribute("aria-hidden"), "true");
   assert.equal(prev.querySelector(".bob-property-card-group-label-narrow").textContent, "🛑");
+  assert.ok(!prev.textContent.includes("AI Slop"));
   const next = row.arms.next;
   assert.deepEqual(childClasses(next).slice(-2), ["bob-property-card-group-glyph", "bob-property-card-group-wrap"]);
   assert.equal(next.querySelector(".bob-property-card-group-label-narrow").textContent, "🏁 Conclusion", "narrow falls back to the label");
+  assert.ok(!next.textContent.includes("Wrap-up"));
 
   const plain = H.propertyCardBuildGroupRow(doc, { prev: { groupLabel: "2025", target: "2025", state: "exists", wraps: "yes" } });
   assert.equal(plain.arms.prev.querySelector(".bob-property-card-group-wrap"), null, "only a literal true wraps");
-  assert.equal(plain.arms.prev.querySelector(".bob-property-card-group-sep"), null, "no landing, no separator");
+  assert.equal(plain.arms.prev.querySelector(".bob-property-card-group-sep"), null);
   assert.equal(plain.arms.prev.querySelector(".bob-property-card-group-landing"), null);
 });
 
-test("group row centre: position spans, name, ticks per member state", () => {
+test("group row centre: only the track, a hidden position label, a title, and ticks per member state", () => {
   const doc = makeDoc();
-  const row = H.propertyCardBuildGroupRow(doc, { center: weekCenter({ ariaLabel: "Week 8 of 14 in 2026-Q3", tooltip: "2026-Q3" }) });
+  const row = H.propertyCardBuildGroupRow(doc, { center: weekCenter({ ariaLabel: "Week 8 of 14 in quarter Q3", tooltip: "Week 8 of 14 in quarter Q3" }) });
   const center = row.center;
-  assert.equal(center.getAttribute("title"), "2026-Q3");
-  assert.deepEqual(childClasses(center), ["bob-property-card-group-position", "bob-property-card-group-track"]);
-  const position = center.querySelector(".bob-property-card-group-position");
-  assert.deepEqual(childClasses(position), [
-    "bob-property-card-group-position-label", "bob-property-card-group-position-wide", "bob-property-card-group-position-narrow",
-  ]);
-  assert.equal(position.querySelector(".bob-property-card-group-position-label").textContent, "Week 8 of 14 in 2026-Q3");
-  assert.equal(position.querySelector(".bob-property-card-group-position-label").getAttribute("aria-hidden"), null);
-  assert.equal(position.querySelector(".bob-property-card-group-position-wide").textContent, "week 8 of 14");
-  assert.equal(position.querySelector(".bob-property-card-group-position-wide").getAttribute("aria-hidden"), "true");
-  assert.equal(position.querySelector(".bob-property-card-group-position-narrow").textContent, "8/14");
-  assert.equal(position.querySelector(".bob-property-card-group-position-narrow").getAttribute("aria-hidden"), "true");
+  assert.equal(center.getAttribute("title"), "Week 8 of 14 in quarter Q3");
+  assert.deepEqual(childClasses(center), ["bob-property-card-group-position-label", "bob-property-card-group-track"],
+    "no visible group name or position text");
+  const label = center.querySelector(".bob-property-card-group-position-label");
+  assert.equal(label.textContent, "Week 8 of 14 in quarter Q3");
+  assert.equal(label.getAttribute("aria-hidden"), null, "screen readers read the hidden label");
+  for (const gone of ["name", "name-sep", "position", "position-wide", "position-narrow"]) {
+    assert.equal(center.querySelector(`.bob-property-card-group-${gone}`), null, gone);
+  }
+  assert.ok(!center.textContent.includes("week 8 of 14"));
+  assert.ok(!center.textContent.includes("8/14"));
 
   const track = row.track;
   assert.equal(track, center.querySelector(".bob-property-card-group-track"));
@@ -352,17 +398,34 @@ test("group row centre: position spans, name, ticks per member state", () => {
     center: { name: "🔮 Future Work", text: "2 of 3", shortText: "2/3", position: 2, size: 3,
       members: [{ label: "a", state: "exists" }, { label: "b", state: "current" }, { state: "weird" }, null] },
   });
-  assert.deepEqual(childClasses(record.center), [
-    "bob-property-card-group-name", "bob-property-card-group-name-sep", "bob-property-card-group-position", "bob-property-card-group-track",
-  ]);
-  assert.equal(record.center.querySelector(".bob-property-card-group-name").textContent, "🔮 Future Work");
-  assert.equal(record.center.querySelector(".bob-property-card-group-name-sep").getAttribute("aria-hidden"), "true");
+  assert.deepEqual(childClasses(record.center), ["bob-property-card-group-position-label", "bob-property-card-group-track"]);
+  assert.equal(record.center.querySelector(".bob-property-card-group-name"), null, "the name is accepted, never painted");
+  assert.ok(!record.center.textContent.includes("Future Work"));
   assert.equal(record.center.querySelector(".bob-property-card-group-position-label").textContent, "2 of 3", "the label falls back to the text");
+  assert.equal(record.center.getAttribute("title"), "2 of 3", "the title falls back to the label");
   assert.deepEqual(record.track.querySelectorAll(".bob-property-card-group-tick").map((tick) => tick.getAttribute("data-state")),
     ["exists", "current", "exists"], "unknown member states read as exists; non-objects are skipped");
   assert.equal(record.track.querySelectorAll(".bob-property-card-group-tick")[2].getAttribute("title"), null);
-  const narrowFallback = H.propertyCardBuildGroupRow(doc, { center: { text: "day 6 of 7", position: 6, size: 7 } });
-  assert.equal(narrowFallback.center.querySelector(".bob-property-card-group-position-narrow").textContent, "day 6 of 7");
+  const labelled = H.propertyCardBuildGroupRow(doc, { center: { text: "day 6 of 7", ariaLabel: "Day 6 of 7 in week W47", position: 6, size: 7 } });
+  assert.equal(labelled.center.getAttribute("title"), "Day 6 of 7 in week W47");
+});
+
+test("group row centre: a one-member group has no centre and no track", () => {
+  const doc = makeDoc();
+  const single = { name: "📜 Prompt language (macros)", text: "1 of 1", shortText: "1/1", position: 1, size: 1,
+    members: [{ label: "Layers of Prompt Management", state: "current" }] };
+  const row = H.propertyCardBuildGroupRow(doc, { prev: ARMS.prev, next: ARMS.next, center: single });
+  assert.equal(row.center, null);
+  assert.equal(row.track, null);
+  assert.deepEqual(row.element.children.map((node) => [classes(node)[0], node.getAttribute("data-group")]), [
+    ["bob-property-card-group-arm", "prev"],
+    ["bob-property-card-group-gap", "center"],
+    ["bob-property-card-group-arm", "next"],
+  ], "the gap cell keeps the grid");
+  assert.equal(row.element.querySelectorAll(".bob-property-card-group-tick").length, 0);
+  assert.equal(H.propertyCardBuildGroupRow(doc, { center: single }), null, "a lone one-member centre builds no row");
+  assert.equal(H.propertyCardBuildGroupRow(doc, { center: { ...single, size: 0, position: 0 } }), null);
+  assert.ok(H.propertyCardBuildGroupRow(doc, { center: { ...single, size: 2, members: null } }).center, "two members keep the centre");
 });
 
 test("group row track: groups larger than 21 or without members use a bar and thumb", () => {
@@ -381,11 +444,12 @@ test("group row track: groups larger than 21 or without members use a bar and th
   const exactly21 = H.propertyCardBuildGroupRow(doc, { center: { text: "1 of 21", position: 1, size: 21, members: members.slice(0, 21) } });
   assert.equal(exactly21.track.getAttribute("data-track"), "ticks");
   assert.equal(exactly21.track.children.length, 21);
-  for (const [position, size] of [[0, 4], [5, 4], [1.5, 4], ["x", 4], [1, 0], [undefined, undefined]]) {
+  for (const [position, size] of [[0, 4], [5, 4], [1.5, 4], ["x", 4], [undefined, undefined]]) {
     const row = H.propertyCardBuildGroupRow(doc, { center: { text: "?", position, size } });
     assert.equal(row.track, null, `${position}/${size}`);
     assert.equal(row.center.querySelector(".bob-property-card-group-track"), null);
   }
+  assert.equal(H.propertyCardBuildGroupRow(doc, { center: { text: "?", position: 1, size: 0 } }), null, "size 0 is no centre");
 });
 
 test("group row writes text only through text nodes", () => {
@@ -395,11 +459,12 @@ test("group row writes text only through text nodes", () => {
     prev: { groupLabel: hostile, landingLabel: hostile, target: "x", state: "exists" },
     center: { name: hostile, text: hostile, position: 1, size: 2 },
   });
+  assert.equal(row.center.getAttribute("title"), hostile, "attributes take the raw text");
+  assert.equal(row.arms.prev.querySelector(".bob-property-card-group-landing"), null);
+  assert.equal(row.center.querySelector(".bob-property-card-group-name"), null);
   for (const node of [
     row.arms.prev.querySelector(".bob-property-card-group-label"),
-    row.arms.prev.querySelector(".bob-property-card-group-landing"),
-    row.center.querySelector(".bob-property-card-group-name"),
-    row.center.querySelector(".bob-property-card-group-position-wide"),
+    row.center.querySelector(".bob-property-card-group-position-label"),
   ]) {
     assert.equal(node.children.length, 0);
     assert.equal(node.textContent, hostile);
@@ -566,8 +631,13 @@ test("styles: the group-row block follows the kit block with states, narrow, for
   for (const needle of [
     '.bob-property-card-rail-item[data-state]',
     '.bob-property-card-rail-chip[data-state="ghost"]',
-    '.bob-property-card-group-arm[data-state="creatable"]',
-    '.bob-property-card-group-arm[data-state="ghost"]',
+    '.bob-property-card-group-arm[data-state="creatable"] .bob-property-card-group-label',
+    '.bob-property-card-group-arm[data-state="creatable"] .bob-property-card-group-plus',
+    '.bob-property-card-group-arm[data-state="ghost"] .bob-property-card-group-label',
+    "text-decoration-style: dashed",
+    "text-decoration-style: dotted",
+    ".bob-property-card-group-mark",
+    ".bob-freshness-link-group .bob-property-card-group-glyph",
     "border: 1px dashed",
     "border-style: dotted",
     '.bob-property-card-group-tick[data-state="current"]',
@@ -584,4 +654,12 @@ test("styles: the group-row block follows the kit block with states, narrow, for
   assert.ok(!/--text-error|text-decoration-style:\s*var\(--link-unresolved/.test(block), "never error red or unresolved-link styling");
   // Stated items drop the kit's is-unresolved underline and opacity.
   assert.match(block, /\.bob-property-card-rail-chip\[data-state\]\s*\{[^}]*opacity: 1;[^}]*text-decoration: none;/);
+  // Group arms draw their states as underlines, never a box, and the spans
+  // that no longer render have no rules.
+  assert.match(block, /\.bob-property-card-group-arm \{[^}]*border: 0;/);
+  assert.ok(!/\.bob-property-card-group-arm\[data-state="(?:creatable|ghost)"\]\s*(?:,[^{]*)?\{[^}]*border/.test(block), "no arm border box");
+  for (const gone of ["group-landing", "group-sep", "group-name", "group-position-wide", "group-position-narrow"]) {
+    assert.ok(!block.includes(`.bob-property-card-${gone}`), gone);
+  }
+  assert.match(block, /@media \(forced-colors: active\)[\s\S]*text-decoration-color: CanvasText/);
 });

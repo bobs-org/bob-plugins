@@ -212,16 +212,14 @@ function linksWalkerFooterGroupArm(link, direction) {
   const ghost = !exists && !createEligible;
   const wraps = link.wraps === true;
   const plus = createEligible ? "+" : "";
-  const wrapMark = wraps ? " ↺" : "";
-  const compactText = direction === "prev"
-    ? `« ${name}${plus}`
-    : `${name}${plus} »${wrapMark}`;
+  // The footer paints the kit's skip mark beside the label (before a prev
+  // label; after a next one, then ↺), so the text carries no « / ».
+  const wrapText = wraps && direction === "next" ? " ↺" : "";
+  const compactLabel = `${name}${plus}`;
   const groupLabel = linksWalkerFooterStripNavGlyphs(link && link.groupLabel);
-  const text = groupLabel && groupLabel !== name
-    ? (direction === "prev"
-      ? `« ${groupLabel}${plus}`
-      : `${groupLabel}${plus} »${wrapMark}`)
-    : compactText;
+  const label = groupLabel && groupLabel !== name ? `${groupLabel}${plus}` : compactLabel;
+  const compactText = `${compactLabel}${wrapText}`;
+  const text = `${label}${wrapText}`;
   const landing = linksWalkerFooterGroupLanding(link);
   const tooltip = ghost
     ? (link.ghostReason || `${name} is not in the vault`)
@@ -239,6 +237,10 @@ function linksWalkerFooterGroupArm(link, direction) {
     direction,
     group: true,
     name,
+    groupLabel: groupLabel || name,
+    label,
+    compactLabel,
+    wrapText,
     text,
     compactText,
     tooltip,
@@ -268,6 +270,7 @@ function linksWalkerFooterHintNoun(group, groupNone) {
   return "group";
 }
 
+// `W47 6/7`; a one-member group is just its label (no `1/1`).
 function linksWalkerFooterContextText(group) {
   if (!group || !Number.isInteger(group.position) || !Number.isInteger(group.size) || group.size <= 0) {
     return "";
@@ -276,7 +279,14 @@ function linksWalkerFooterContextText(group) {
   if (!label) {
     return "";
   }
-  return `${label} ${group.position}/${group.size}`;
+  return group.size === 1 ? label : `${label} ${group.position}/${group.size}`;
+}
+
+// True when a painted group arm already names the group a boundary hint
+// would announce.
+function linksWalkerFooterArmNames(arm, groupName) {
+  const wanted = linksWalkerFooterStripNavGlyphs(groupName);
+  return Boolean(arm && wanted && (arm.name === wanted || arm.groupLabel === wanted));
 }
 
 function linksWalkerFooterStatusView(linkState, statusText, tooltip, ariaLabel) {
@@ -380,11 +390,16 @@ function linksWalkerFooterView(preview, options = {}) {
       : null;
     let hintText = hintNoun ? `]} next ${hintNoun}` : "";
     let boundaryHint = "";
+    // When the next group arm already names the group `]n` enters, the
+    // boundary hint leaves the bar for the tooltip; the footer fit brings
+    // it back only if that arm is shed.
+    let boundaryHintText = "";
     if (group && group.atEnd === true && group.enteringNext) {
       boundaryHint = (groupNext && groupNext.wraps)
         ? `]n wraps to ${group.enteringNext}`
         : `]n enters ${group.enteringNext}`;
-      hintText = boundaryHint;
+      if (linksWalkerFooterArmNames(groupNext, group.enteringNext)) boundaryHintText = boundaryHint;
+      else hintText = boundaryHint;
     }
     let startHint = "";
     if (group && group.atStart === true && group.enteringPrev) {
@@ -395,7 +410,7 @@ function linksWalkerFooterView(preview, options = {}) {
     const arms = [groupPrev, prev, next, groupNext].filter(Boolean);
     const summary = arms.map((arm) => arm.text).join(" · ");
     const noneMessage = groupNone && groupNone.message ? groupNone.message : "";
-    const extraTips = [statusText, startHint, noneMessage].filter(Boolean);
+    const extraTips = [statusText, boundaryHintText, startHint, noneMessage].filter(Boolean);
     const armsTooltip = arms
       .map((arm) => `${arm.text}\n${arm.tooltip}`)
       .concat(extraTips)
@@ -421,6 +436,7 @@ function linksWalkerFooterView(preview, options = {}) {
       linkGroupNext: groupNext,
       detailText: "",
       hintText,
+      boundaryHintText,
       groups: [],
       groupsText: "",
       meterText: "",
@@ -491,6 +507,7 @@ function linksWalkerFooterPaint(plugin, view, source, preview, generation) {
       view.dueText,
       view.contextText,
       view.hintText,
+      view.boundaryHintText,
       view.linkStatusText,
       view.linkPrev && view.linkPrev.text,
       view.linkPrev && view.linkPrev.tooltip,

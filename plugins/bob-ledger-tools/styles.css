@@ -12343,17 +12343,18 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
    One missing-target language for the step row's items, the children chips,
    and the group arms: dashed with a `+` is "not created yet" (creatable);
    dotted, faint, and `· not in vault` is "won't be created from here"
-   (ghost). Never error red, never the unresolved-link underline: stated
-   items keep is-unresolved only as a compatibility marker. Then the quieter
-   group row between the step row and the children strip: `« Q3 · W27`, the
-   position and its tick track, and `2027-Q1 · W01 »`.
+   (ghost). Items and chips draw it as a box; group arms draw it as an
+   underline under the group name, never a box. Never error red, never the
+   unresolved-link underline: stated items keep is-unresolved only as a
+   compatibility marker. Then the quieter group row between the step row and
+   the children strip: `⏮ Q2`, the member track, and `Q4 ⏭`.
    Ink tokens hold in light and dark on the tinted cards: the muted ink is
    --text-muted pulled 15% toward --text-normal, and the faint ink is
    --text-faint pulled halfway toward it, so text stays at or above 4.5:1
    where the raw tokens fall short. Measured with Obsidian's own palette in
    scripts/preview-group-rail.cjs, the faint ink's worst case is the light
-   aqua quarter tint (a 45% pull read 4.47:1 there). Edges reuse the ink, so
-   dashed and dotted borders clear 3:1. */
+   aqua quarter tint (a 45% pull read 4.47:1 there). Edges and underlines
+   reuse the ink, so they clear 3:1. */
 .bob-property-card-rail,
 .bob-property-card-group-row {
   --bob-property-card-muted-ink: color-mix(in srgb, var(--text-muted) 85%, var(--text-normal));
@@ -12401,6 +12402,7 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
 }
 .bob-property-card-rail-row + .bob-property-card-group-row { padding-block-start: 0.1em; }
 .bob-property-card-group-gap { min-width: 0; }
+/* Arms: the skip mark and the group name; no box in any state. */
 .bob-property-card-group-arm {
   display: inline-flex;
   align-items: center;
@@ -12411,7 +12413,7 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
   min-height: 26px;
   padding: 0 0.4em;
   overflow: hidden;
-  border: 1px solid transparent;
+  border: 0;
   border-radius: 4px;
   color: var(--bob-property-card-muted-ink);
   text-decoration: none;
@@ -12425,63 +12427,64 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
   outline: 2px solid var(--interactive-accent);
   outline-offset: 2px;
 }
-.bob-property-card-group-glyph,
-.bob-property-card-group-sep,
+/* The skip mark (Lucide skip-back / skip-forward, inline SVG): about 1em in
+   the muted ink. The links footer's group arms paint the same span. */
+.bob-property-card-group-glyph {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  color: var(--bob-property-card-muted-ink, var(--text-muted));
+}
+.bob-property-card-group-mark { display: block; inline-size: 1em; block-size: 1em; }
 .bob-property-card-group-wrap { flex: none; color: var(--bob-property-card-faint-ink); }
+/* Block padding leaves room for the state underline inside the clip. */
 .bob-property-card-group-label,
-.bob-property-card-group-label-narrow,
-.bob-property-card-group-landing {
+.bob-property-card-group-label-narrow {
+  flex: 0 1 auto;
   min-width: 0;
+  padding-block: 0.15em;
   overflow: hidden;
   text-overflow: ellipsis;
+  font-weight: var(--font-medium, 500);
 }
-.bob-property-card-group-label,
-.bob-property-card-group-label-narrow { flex: 0 1 auto; font-weight: var(--font-medium, 500); }
 .bob-property-card-group-label-narrow { display: none; }
-/* The landing gives way first when the arm runs out of room. */
-.bob-property-card-group-landing { flex: 0 8 auto; color: var(--bob-property-card-faint-ink); }
-.bob-property-card-group-arm:hover .bob-property-card-group-landing { color: var(--bob-property-card-muted-ink); }
-.bob-property-card-group-plus { flex: none; font-weight: 600; color: var(--bob-property-card-muted-ink); }
+.bob-property-card-group-plus { flex: none; padding-block: 0.15em; font-weight: 600; color: var(--bob-property-card-muted-ink); }
 .bob-property-card-group-note { flex: none; color: var(--bob-property-card-faint-ink); }
-.bob-property-card-group-arm[data-state="creatable"] {
-  border-style: dashed;
-  border-color: var(--bob-property-card-muted-ink);
+/* Arm states underline the name: dashed under the name and its `+` for
+   creatable, dotted and faint for ghost. */
+.bob-property-card-group-arm[data-state="creatable"] .bob-property-card-group-label,
+.bob-property-card-group-arm[data-state="creatable"] .bob-property-card-group-label-narrow,
+.bob-property-card-group-arm[data-state="creatable"] .bob-property-card-group-plus,
+.bob-property-card-group-arm[data-state="ghost"] .bob-property-card-group-label,
+.bob-property-card-group-arm[data-state="ghost"] .bob-property-card-group-label-narrow {
+  text-decoration-line: underline;
+  text-decoration-style: dashed;
+  text-decoration-color: var(--bob-property-card-muted-ink);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.2em;
+}
+.bob-property-card-group-arm[data-state="ghost"] .bob-property-card-group-label,
+.bob-property-card-group-arm[data-state="ghost"] .bob-property-card-group-label-narrow {
+  text-decoration-style: dotted;
+  text-decoration-color: var(--bob-property-card-faint-ink);
 }
 .bob-property-card-group-arm[data-state="ghost"],
 .bob-property-card-group-arm[data-state="ghost"]:hover {
-  border-style: dotted;
-  border-color: var(--bob-property-card-faint-ink);
   color: var(--bob-property-card-faint-ink);
   cursor: help;
 }
-.bob-property-card-group-arm[data-state="ghost"] .bob-property-card-group-landing { color: inherit; }
+.bob-property-card-group-arm[data-state="ghost"] .bob-property-card-group-glyph { color: inherit; }
 
-/* Centre: optional group name, the position, then the tick track. */
+/* Centre: the member track only. The visually hidden label carries the
+   position for screen readers; the centre's title spells it out. */
 .bob-property-card-group-center {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 0.45em;
   min-width: 0;
   max-width: 50cqw;
   color: var(--bob-property-card-muted-ink);
 }
-.bob-property-card-group-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: var(--font-medium, 500);
-}
-.bob-property-card-group-name-sep { flex: none; color: var(--bob-property-card-faint-ink); }
-.bob-property-card-group-position {
-  flex: none;
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
-.bob-property-card-group-position-narrow { display: none; }
-/* Screen readers read the position from this label; wide and narrow are
-   the visible forms. */
 .bob-property-card-group-position-label {
   position: absolute;
   width: 1px;
@@ -12536,51 +12539,38 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
   background: var(--bob-property-card-group-accent);
 }
 
-/* Narrow (the card or the record walk below 28rem): `« Q3 · 8/14 ·
-   2027-Q1 »` with no landings, `+`/note text, names, or track; every arm
-   stays at least 32px wide. */
+/* Narrow (the card or the record walk below 28rem): `⏮ Q2 … Q4 ⏭` with
+   short labels and no `+`/note text, wrap glyph, or track; every arm stays
+   at least 32px wide. */
 @container bob-property-card (max-width: 28rem) {
   .bob-property-card-group-label,
-  .bob-property-card-group-sep,
-  .bob-property-card-group-landing,
   .bob-property-card-group-plus,
   .bob-property-card-group-note,
   .bob-property-card-group-wrap,
-  .bob-property-card-group-name,
-  .bob-property-card-group-name-sep,
   .bob-property-card-group-track,
-  .bob-property-card-group-position-wide,
   .bob-property-card-rail-note { display: none; }
-  .bob-property-card-group-label-narrow,
-  .bob-property-card-group-position-narrow { display: inline; }
+  .bob-property-card-group-label-narrow { display: inline; }
   .bob-property-card-group-arm { justify-content: center; }
 }
 @container record-walk (max-width: 28rem) {
   .bob-property-card-group-label,
-  .bob-property-card-group-sep,
-  .bob-property-card-group-landing,
   .bob-property-card-group-plus,
   .bob-property-card-group-note,
   .bob-property-card-group-wrap,
-  .bob-property-card-group-name,
-  .bob-property-card-group-name-sep,
-  .bob-property-card-group-track,
-  .bob-property-card-group-position-wide { display: none; }
-  .bob-property-card-group-label-narrow,
-  .bob-property-card-group-position-narrow { display: inline; }
+  .bob-property-card-group-track { display: none; }
+  .bob-property-card-group-label-narrow { display: inline; }
   .bob-property-card-group-arm { justify-content: center; }
 }
 
-/* No state depends on color: dashed and dotted edges use CanvasText, ghost
-   text uses GrayText, and the current tick and thumb use Highlight. An
-   existing arm keeps no visible edge: forced colors would otherwise paint its
-   transparent 1px border in link ink and box it like a button. */
+/* No state depends on color: item and chip edges and arm underlines use
+   CanvasText, ghost text uses GrayText, and the current tick and thumb use
+   Highlight. */
 @media (forced-colors: active) {
-  .bob-property-card-group-arm:not([data-state="creatable"]):not([data-state="ghost"]) { border-color: Canvas; }
   .bob-property-card-rail-item[data-state],
-  .bob-property-card-rail-chip[data-state],
-  .bob-property-card-group-arm[data-state="creatable"],
-  .bob-property-card-group-arm[data-state="ghost"] { border-color: CanvasText; }
+  .bob-property-card-rail-chip[data-state] { border-color: CanvasText; }
+  .bob-property-card-group-arm[data-state] .bob-property-card-group-label,
+  .bob-property-card-group-arm[data-state] .bob-property-card-group-label-narrow,
+  .bob-property-card-group-arm[data-state] .bob-property-card-group-plus { text-decoration-color: CanvasText; }
   .bob-property-card-rail-item[data-state="ghost"],
   .bob-property-card-rail-item[data-state="ghost"] *,
   .bob-property-card-rail-chip[data-state="ghost"],
@@ -12610,6 +12600,16 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
     animation: none !important;
   }
 }
+
+/* The links footer's group arms (bob-cli-oj links-footer) paint the kit's
+   mark before a prev label and after a next label. */
+.bob-freshness-link-group .bob-property-card-group-glyph {
+  vertical-align: -0.15em;
+  color: var(--text-muted);
+}
+.bob-freshness-link-group-prev .bob-property-card-group-glyph { margin-inline-end: 0.25em; }
+.bob-freshness-link-group-next .bob-property-card-group-glyph { margin-inline-start: 0.25em; }
+.bob-freshness-link-ghost .bob-property-card-group-glyph { color: inherit; }
 /* Property-card group row (bob-cli-oj group-rail): end. */
 /* Record walk group row (bob-cli-oj record-rail): start.
    A grouped record walk puts the kit group row under its step row in place

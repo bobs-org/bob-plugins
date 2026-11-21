@@ -1,8 +1,9 @@
 // Day and period card group rail (bob-cli-oj group-rail): one nav answer per
 // card from Bob Navigation Hotkeys' walkMode.links v7 (else this plugin's
 // api.navGroups), reduced to plain data on the model as `navRail`. The card
-// shows the kit group row (`« Q3 · W27   week 8 of 14   2027-Q1 · W01 »`)
-// on day, week, and quarter cards, a derived step row on notes with no
+// shows the kit group row (`⏮ Q3   ▮▮▮■▮▯   2027-Q1 ⏭`; the landing note
+// lives in each arm's tooltip and accessible name) on day, week, and
+// quarter cards, a derived step row on notes with no
 // recognized nav line, and the shared exists / creatable / ghost states on
 // every rail item, chip, and arm. Group arms re-validate the stop and then
 // run Navigation Hotkeys' group commands in the card's own pane.
@@ -199,6 +200,8 @@ function intentionCardDerivedRailItems(navRail, subject) {
   }
 }
 
+// The arm shows only the group label, so the tooltip and the accessible
+// name both name the landing note in every state.
 function intentionCardGroupArm(direction, stop, unit) {
   if (!stop) return null;
   const word = direction === "prev" ? "Previous" : "Next";
@@ -207,8 +210,8 @@ function intentionCardGroupArm(direction, stop, unit) {
   let tooltip = "";
   let ariaLabel = `${word} ${unit} group: ${stop.groupLabel}`;
   if (stop.state === "ghost") {
-    tooltip = stop.ghostReason || INTENTION_CARD_NOT_IN_VAULT;
-    ariaLabel += ", not in vault";
+    tooltip = stop.ghostReason || (landing ? `${landing} is not in the vault` : INTENTION_CARD_NOT_IN_VAULT);
+    ariaLabel += landing ? `, ${landing} not in vault` : ", not in vault";
   } else if (stop.state === "creatable") {
     const kind = intentionCardNavCreateKind(stop.path || stop.target);
     tooltip = kind === "daily"
@@ -216,7 +219,7 @@ function intentionCardGroupArm(direction, stop, unit) {
       : kind === "period"
         ? `${landing} isn't created yet — ${key} creates it with bob periods ensure`
         : `${landing} isn't created yet — ${key} creates it`;
-    ariaLabel += ", not created yet — activating creates it";
+    ariaLabel += `, not created yet — activating creates ${landing || "it"}`;
   } else {
     tooltip = `${key} · ${word.toLowerCase()} ${unit}: ${stop.groupLabel} → ${landing}`;
     ariaLabel += `, opens ${landing}`;
@@ -240,9 +243,12 @@ function intentionCardGroupRowSpec(navRail, options = {}) {
     if (group) {
       const noun = group.noun || INTENTION_CARD_PERIOD_WORDS[navRail.kind] || "note";
       const text = `${noun} ${group.position} of ${group.size}`;
+      const full = `${text.charAt(0).toUpperCase()}${text.slice(1)}${group.label ? ` in ${unit} ${group.label}` : ""}`;
       center = {
         text, shortText: `${group.position}/${group.size}`,
-        ariaLabel: group.label ? `${text.charAt(0).toUpperCase()}${text.slice(1)} in ${unit} ${group.label}` : text,
+        // The row paints only the track: the title and hidden label carry
+        // `Day 3 of 7 in week W47`.
+        ariaLabel: group.label ? full : text, tooltip: full,
         position: group.position, size: group.size,
         members: group.members ? group.members.map((member) => ({ label: member.label, state: member.state })) : null,
       };

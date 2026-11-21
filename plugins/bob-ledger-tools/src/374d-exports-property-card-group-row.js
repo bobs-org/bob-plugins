@@ -6,7 +6,9 @@ try {
       PROPERTY_CARD_TARGET_STATES,
       PROPERTY_CARD_GROUP_TICK_LIMIT,
       PROPERTY_CARD_GHOST_NOTE,
+      PROPERTY_CARD_GROUP_MARKS,
       propertyCardTargetState,
+      propertyCardGroupMark,
       propertyCardBuildGroupRow,
     });
   }

@@ -688,10 +688,11 @@ test("links panel group arms, context, and hints match the footer table", () => 
     },
   });
   assert.equal(daily.contextText, "W47 6/7");
-  assert.equal(daily.linkGroupPrev.text, "« W46");
+  assert.equal(daily.linkGroupPrev.text, "W46", "the painted skip mark replaces «");
   assert.equal(daily.linkPrev.text, "‹ Fri Nov 20");
   assert.equal(daily.linkNext.text, "Sun Nov 22+ ›");
-  assert.equal(daily.linkGroupNext.text, "W48+ »");
+  assert.equal(daily.linkGroupNext.text, "W48+");
+  assert.equal(daily.linkGroupNext.label, "W48+");
   assert.equal(daily.linkGroupNext.createEligible, true);
   assert.equal(daily.hintText, "]} next week");
 
@@ -714,8 +715,8 @@ test("links panel group arms, context, and hints match the footer table", () => 
     },
   });
   assert.equal(week.contextText, "Q3 4/13");
-  assert.equal(week.linkGroupPrev.text, "« Q2");
-  assert.equal(week.linkGroupNext.text, "Q4 »");
+  assert.equal(week.linkGroupPrev.text, "Q2");
+  assert.equal(week.linkGroupNext.text, "Q4");
   assert.equal(week.hintText, "]} next quarter");
 
   const quarter = linksWalkerFooterView({
@@ -738,8 +739,12 @@ test("links panel group arms, context, and hints match the footer table", () => 
   });
   assert.equal(quarter.contextText, "2026 4/4");
   assert.equal(quarter.linkGroupPrev.ghost, true);
-  assert.equal(quarter.linkGroupPrev.text, "« 2025");
-  assert.equal(quarter.hintText, "]n enters 2027");
+  assert.equal(quarter.linkGroupPrev.text, "2025");
+  // The next group arm already says 2027: the boundary hint moves to the
+  // tooltip and the bar keeps the usual hint.
+  assert.equal(quarter.hintText, "]} next year");
+  assert.equal(quarter.boundaryHintText, "]n enters 2027");
+  assert.match(quarter.tooltip, /\]n enters 2027/);
   assert.match(quarter.linkGroupPrev.tooltip, /before Bob's period notes began/);
 
   const year = linksWalkerFooterView({
@@ -788,8 +793,10 @@ test("links panel group arms, context, and hints match the footer table", () => 
   });
   assert.equal(record.dueText, "Links 8/12");
   assert.equal(record.contextText, "🔮 Future Work 2/3");
-  assert.equal(record.linkGroupPrev.text, "« 🛑 Why SASE is still NOT ready?");
-  assert.equal(record.linkGroupNext.text, "🏁 Conclusion » ↺");
+  assert.equal(record.linkGroupPrev.text, "🛑 Why SASE is still NOT ready?");
+  assert.equal(record.linkGroupNext.text, "🏁 Conclusion ↺");
+  assert.equal(record.linkGroupNext.label, "🏁 Conclusion");
+  assert.equal(record.linkGroupNext.wrapText, " ↺");
   assert.equal(record.hintText, "]} next section");
   assert.match(record.tooltip, /by section, then title · wraps around/);
 
@@ -808,7 +815,80 @@ test("links panel group arms, context, and hints match the footer table", () => 
   });
   assert.equal(authored.contextText, "");
   assert.equal(authored.hintText, "]} next group");
-  assert.equal(authored.linkGroupPrev.text, "« Part 2");
+  assert.equal(authored.linkGroupPrev.text, "Part 2");
+  for (const view of [daily, week, quarter, record, authored]) {
+    for (const arm of [view.linkGroupPrev, view.linkGroupNext].filter(Boolean)) {
+      assert.doesNotMatch(`${arm.text}|${arm.compactText}|${arm.label}|${arm.compactLabel}`, /[«»]|<<|>>/, arm.text);
+    }
+  }
+});
+
+test("links panel context drops 1/1 and the boundary hint shows only when no arm names the group", () => {
+  const screenshot = {
+    ok: true,
+    prev: { text: "‹ sase is many abstractions", target: "z/many", path: "z/many.md", exists: true },
+    next: { text: "Memory ›", target: "z/memory", path: "z/memory.md", exists: true },
+    prevGroup: groupStop({ shortLabel: "🪨 What is SASE?", groupLabel: "🪨 What is SASE?", landingLabel: "What is SASE",
+      target: "z/what", path: "z/what.md", source: "record" }),
+    nextGroup: groupStop({ shortLabel: "🤖 Agent CLIs", groupLabel: "🤖 Agent CLIs", landingLabel: "Memory",
+      target: "z/memory", path: "z/memory.md", source: "record" }),
+    group: { noun: "section", label: "📜 Prompt language (macros)", shortLabel: "📜 Prompt language (macros)",
+      position: 1, size: 1, atStart: true, atEnd: true, enteringNext: "🤖 Agent CLIs", enteringPrev: "🪨 What is SASE?" },
+    recordWalk: { state: "ok", title: "Layers of Prompt Management", position: 3, total: 14, walkBy: "section",
+      album: { title: "SASE Blog Zettel", emoji: "📇" } },
+  };
+  const view = linksWalkerFooterView(screenshot);
+  assert.equal(view.dueText, "Links 3/14");
+  assert.equal(view.contextText, "📜 Prompt language (macros)", "a one-member group shows only its label");
+  assert.equal(view.hintText, "]} next section", "the arm already names 🤖 Agent CLIs");
+  assert.equal(view.boundaryHintText, "]n enters 🤖 Agent CLIs");
+  assert.match(view.tooltip, /\]n enters 🤖 Agent CLIs/, "the tooltip keeps it");
+  assert.match(view.tooltip, /\[n enters 🪨 What is SASE\?/);
+  assert.equal(view.linkGroupPrev.text, "🪨 What is SASE?");
+  assert.equal(view.linkGroupNext.text, "🤖 Agent CLIs");
+
+  const noArm = linksWalkerFooterView({ ...screenshot, nextGroup: null });
+  assert.equal(noArm.hintText, "]n enters 🤖 Agent CLIs", "without the arm the hint stays on the bar");
+  assert.equal(noArm.boundaryHintText, "");
+  const otherName = linksWalkerFooterView({ ...screenshot, nextGroup: groupStop({ shortLabel: "Elsewhere", groupLabel: "Elsewhere",
+    target: "z/else", path: "z/else.md" }) });
+  assert.equal(otherName.hintText, "]n enters 🤖 Agent CLIs", "an arm naming another group keeps the hint");
+  const wraps = linksWalkerFooterView({ ...screenshot,
+    nextGroup: { ...screenshot.nextGroup, wraps: true } });
+  assert.equal(wraps.hintText, "]} next section");
+  assert.equal(wraps.boundaryHintText, "]n wraps to 🤖 Agent CLIs");
+  const two = linksWalkerFooterView({ ...screenshot, group: { ...screenshot.group, position: 2, size: 2, atStart: false } });
+  assert.equal(two.contextText, "📜 Prompt language (macros) 2/2");
+});
+
+test("links panel paints the kit skip mark beside group arm labels", () => {
+  class DocElement extends TestElement {
+    constructor(tag, className) { super(tag, className); this.ownerDocument = FAKE_DOC; }
+    createEl(tag, options = {}) { const child = new DocElement(tag, options.cls || ""); this.children.push(child); return child; }
+    appendChild(child) { this.children.push(child); return child; }
+  }
+  const FAKE_DOC = { createElement: (tag) => new DocElement(tag) };
+  const host = new DocElement("div");
+  const view = linksWalkerFooterView({
+    ok: true,
+    prev: null,
+    next: null,
+    prevGroup: groupStop(),
+    nextGroup: groupStop({ shortLabel: "🏁 Conclusion", groupLabel: "🏁 Conclusion", wraps: true, text: "🏁 Conclusion »" }),
+  });
+  const parts = freshnessFooterPaint(host, view);
+  const shape = (button) => button.children.map((child) => child.attrs.class || [...child.classes].join(" "));
+  assert.deepEqual(shape(parts.linkGroupPrev), ["bob-property-card-group-glyph", "bob-freshness-link-group-label"]);
+  assert.equal(parts.linkGroupPrev.children[0].attrs["data-icon"], "skip-back");
+  assert.equal(parts.linkGroupPrev.children[0].attrs["aria-hidden"], "true");
+  assert.deepEqual(shape(parts.linkGroupNext), [
+    "bob-freshness-link-group-label", "bob-property-card-group-glyph", "bob-freshness-link-group-wrap",
+  ]);
+  assert.equal(parts.linkGroupNext.children[1].attrs["data-icon"], "skip-forward");
+  assert.equal(deepText(parts.linkGroupPrev), "W46");
+  assert.equal(deepText(parts.linkGroupNext), "🏁 Conclusion ↺");
+  assert.doesNotMatch(deepText(host), /[«»]/);
+  assert.match(parts.linkGroupPrev.attrs["aria-label"], /group: W46/);
 });
 
 test("links panel paints ghost and creatable group arms and keeps only-group notes useful", () => {
@@ -835,8 +915,9 @@ test("links panel paints ghost and creatable group arms and keeps only-group not
   assert.equal(parts.linkGroupPrev.attrs["aria-disabled"], "true");
   assert.equal(parts.linkGroupNext.classList.contains("bob-freshness-link-create"), true);
   assert.equal(parts.linkPrev.attrs.hidden, "hidden");
-  assert.match(deepText(host), /« 2025/);
-  assert.match(deepText(host), /W48\+ »/);
+  assert.match(deepText(host), /2025/);
+  assert.match(deepText(host), /W48\+/);
+  assert.doesNotMatch(deepText(host), /[«»]/);
 });
 
 test("links panel reports group-link conflicts without dropping step arms", () => {
@@ -850,7 +931,7 @@ test("links panel reports group-link conflicts without dropping step arms", () =
   });
   assert.match(view.linkStatusText, /Two « links on nav lines — keep one/);
   assert.equal(view.linkGroupPrev, null);
-  assert.equal(view.linkGroupNext.text, "End »");
+  assert.equal(view.linkGroupNext.text, "End");
   assert.equal(view.linkPrev.text, "‹ a");
 });
 
@@ -889,7 +970,7 @@ test("links footer sheds meter, hint, context, then group arms, then step arms",
     if (node.classList.contains("bob-freshness-main")) return 40;
     if (node.classList.contains("bob-freshness-context")) return 28;
     if (node.classList.contains("bob-freshness-link-group")) {
-      return String(node.text).length > 10 ? 40 : 16;
+      return deepText(node).length > 10 ? 40 : 16;
     }
     if (node.classList.contains("bob-freshness-link-arm")) return 20;
     if (node.classList.contains("bob-freshness-link-separator")) return 5;
@@ -937,6 +1018,56 @@ test("links footer sheds meter, hint, context, then group arms, then step arms",
   assert.equal(afterStep.stepArms, false);
 });
 
+test("a boundary hint the group arm already says returns only when that arm is shed", () => {
+  const view = linksWalkerFooterView({
+    ok: true,
+    prev: { text: "Fri", target: "2026/20261120", path: "2026/20261120.md", exists: true },
+    next: { text: "Sun", target: "2026/20261122", path: "2026/20261122.md", exists: true },
+    prevGroup: groupStop({ shortLabel: "W46", groupLabel: "W46" }),
+    nextGroup: groupStop({ shortLabel: "W48", groupLabel: "W48", text: "W48 »" }),
+    group: { noun: "day", label: "W47", shortLabel: "W47", position: 7, size: 7, atStart: false, atEnd: true, enteringNext: "W48" },
+  });
+  assert.equal(view.hintText, "]} next week");
+  assert.equal(view.boundaryHintText, "]n enters W48");
+  const el = new TestElement("div");
+  const omitted = (node) => Boolean(node && node.classList.contains("bob-freshness-omit"));
+  const widthOf = (node) => {
+    if (!node || omitted(node)) return 0;
+    if (node.classList.contains("bob-freshness-main")) return 40;
+    if (node.classList.contains("bob-freshness-context")) return 28;
+    if (node.classList.contains("bob-freshness-link-group")) return 16;
+    if (node.classList.contains("bob-freshness-link-arm")) return 20;
+    if (node.classList.contains("bob-freshness-link-separator")) return 5;
+    if (node.classList.contains("bob-freshness-hint")) return 22;
+    return 0;
+  };
+  Object.defineProperty(el, "scrollWidth", {
+    configurable: true,
+    get() { return this.children.reduce((sum, child) => sum + widthOf(child), 0); },
+  });
+  const parts = freshnessFooterPaint(el, view);
+  el.clientWidth = 1000;
+  const wide = freshnessFooterFit(el, parts, view);
+  assert.equal(wide.hint, true);
+  assert.equal(parts.hint.text, "]} next week", "the arm says W48, so the bar keeps the usual hint");
+  // 40 + 20 + 5 + 20 + 22 = 107: the group arms (32) are shed, and the
+  // boundary hint takes their place because it now fits.
+  el.clientWidth = 110;
+  const shed = freshnessFooterFit(el, parts, view);
+  assert.equal(shed.groupArms, false);
+  assert.equal(shed.stepArms, true);
+  assert.equal(shed.hint, true);
+  assert.equal(parts.hint.text, "]n enters W48");
+  // Too narrow for the hint too: it stays shed.
+  el.clientWidth = 90;
+  const tight = freshnessFooterFit(el, parts, view);
+  assert.equal(tight.groupArms, false);
+  assert.equal(tight.hint, false);
+  el.clientWidth = 1000;
+  freshnessFooterFit(el, parts, view);
+  assert.equal(parts.hint.text, "]} next week", "widening restores the usual hint");
+});
+
 test("group arm activation revalidates the snapshot and refuses a stale target", async () => {
   const { plugin, state, calls } = createLinkFooterHarness();
   plugin.dependencyNavApi = () => ({
@@ -961,7 +1092,7 @@ test("group arm activation revalidates the snapshot and refuses a stale target",
   });
   linksWalkerFooterRequest(plugin);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(plugin.freshnessFooterLastView.linkGroupNext.text, "W48 »");
+  assert.equal(plugin.freshnessFooterLastView.linkGroupNext.text, "W48");
   assert.equal(linksWalkerFooterActivate(plugin, "next", { group: true }), true);
   assert.deepEqual(calls, ["bob-navigation-hotkeys:open-next-group-link"]);
 

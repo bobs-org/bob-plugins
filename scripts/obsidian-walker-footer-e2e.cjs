@@ -621,6 +621,12 @@ async function runE2e(args) {
         const node = footer() && footer().querySelector(selector);
         return node ? String(node.textContent || "") : "";
       };
+      // Group arms paint the kit's inline SVG skip mark, not « / ».
+      const groupArmMark = (selector) => {
+        const node = footer() && footer().querySelector(selector);
+        const glyph = node && node.querySelector(".bob-property-card-group-glyph");
+        return glyph ? (glyph.querySelector("svg") ? glyph.getAttribute("data-icon") : "empty") : "";
+      };
 
       await openPath("2026/2026-W30.md");
       api.select("n");
@@ -629,6 +635,7 @@ async function runE2e(args) {
       const weekPanel = footer() && footer().getAttribute("data-walker-panel");
       const weekGroupPrev = groupArmText(".bob-freshness-link-group-prev");
       const weekGroupNext = groupArmText(".bob-freshness-link-group-next");
+      const weekGroupMarks = [groupArmMark(".bob-freshness-link-group-prev"), groupArmMark(".bob-freshness-link-group-next")];
 
       await openPath("2026/20261121.md");
       api.select("n");
@@ -647,7 +654,7 @@ async function runE2e(args) {
         footerItems: footerItems(),
         rowDispatched, afterRow, dayDispatched, afterDay,
         weekPanel, weekFooter,
-        weekGroupPrev, weekGroupNext,
+        weekGroupPrev, weekGroupNext, weekGroupMarks,
         dailyPanel, dailyFooter,
         dailyGroupPrev, dailyGroupNext,
       };
@@ -677,7 +684,9 @@ async function runE2e(args) {
       && /Q3/.test(String(result.weekFooter || ""))
       && /next quarter/.test(String(result.weekFooter || ""))
       && /Q2/.test(String(result.weekGroupPrev || ""))
-      && /Q4/.test(String(result.weekGroupNext || ""));
+      && /Q4/.test(String(result.weekGroupNext || ""))
+      && !/[«»]/.test(`${result.weekGroupPrev || ""}${result.weekGroupNext || ""}`)
+      && JSON.stringify(result.weekGroupMarks) === JSON.stringify(["skip-back", "skip-forward"]);
     const dailyGroups = result.dailyPanel === "n"
       && /W47/.test(String(result.dailyFooter || ""))
       && /next week/.test(String(result.dailyFooter || ""))

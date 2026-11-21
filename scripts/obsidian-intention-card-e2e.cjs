@@ -247,9 +247,16 @@ function displayProbeSource(notePath) {
       const row = card?.querySelector(".bob-property-card-rail .bob-property-card-group-row");
       return row ? {
         label: row.getAttribute("aria-label"),
-        position: row.querySelector(".bob-property-card-group-position-wide")?.textContent || "",
+        // The decluttered row paints no position text: read the centre's
+        // title and the screen-reader label instead.
+        position: row.querySelector(".bob-property-card-group-position-label")?.textContent || "",
+        centerTitle: row.querySelector(".bob-property-card-group-center")?.getAttribute("title") || "",
         arms: Array.from(row.querySelectorAll(".bob-property-card-group-arm")).map((arm) => ({
-          group: arm.getAttribute("data-group"), state: arm.getAttribute("data-state"), href: arm.getAttribute("href") })),
+          group: arm.getAttribute("data-group"), state: arm.getAttribute("data-state"), href: arm.getAttribute("href"),
+          icon: arm.querySelector(".bob-property-card-group-glyph")?.getAttribute("data-icon") || "",
+          svg: Boolean(arm.querySelector(".bob-property-card-group-glyph svg")),
+          landing: Boolean(arm.querySelector(".bob-property-card-group-landing")),
+          text: (arm.innerText || "").replace(/\s+/g, " ").trim() })),
       } : null;
     })();
     const slotParent = card?.parentElement;
@@ -1021,8 +1028,14 @@ async function displayPhase(ctx) {
         if (item.unresolved !== stated) throw new Error("derived " + direction + " is not stated: " + JSON.stringify(item));
       }
       if (value.card.chips.length) throw new Error("a legacy daily invents children: " + JSON.stringify(value.card.chips));
-      if (value.card.groupRow.label !== "Week groups" || value.card.groupRow.position !== "day 6 of 7") {
-        throw new Error("legacy group row: " + JSON.stringify(value.card.groupRow));
+      const legacyRow = value.card.groupRow;
+      if (legacyRow.label !== "Week groups" || !/^Day 6 of 7 in week W\d\d$/.test(legacyRow.position)
+        || legacyRow.centerTitle !== legacyRow.position) {
+        throw new Error("legacy group row: " + JSON.stringify(legacyRow));
+      }
+      if (!legacyRow.arms.length || legacyRow.arms.some((arm) => !arm.svg || arm.landing || /[«»]/.test(arm.text)
+        || arm.icon !== (arm.group === "prev" ? "skip-back" : "skip-forward"))) {
+        throw new Error("legacy group arms are not the skip-mark arms: " + JSON.stringify(legacyRow.arms));
       }
       if (!value.order.notes?.found || !value.order.notes.after) throw new Error("legacy body line is not below the card: " + JSON.stringify(value.order));
       const bodyLine = await client.evaluate(`(() => {

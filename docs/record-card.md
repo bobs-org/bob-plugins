@@ -60,18 +60,20 @@ When the album sets `walk_by`, the walk follows that field's groups, then
 titles, and the rail adds a quieter group row in place of the location line:
 
 ```text
-« 🛑 Why SASE… · AI Slop      🔮 Future Work · 2 of 3 ▮■▮      🏁 Conclusion · Wrap-up »
+⏮ 🛑 Why SASE is still NOT ready?        ▮■▮        🏁 Conclusion ⏭
 ```
 
-Each arm names the neighboring group and its first record; `↺` marks the
-wrap between the last and first groups. The centre shows the current group,
-your place in it, and one tick per member, and the count tooltip becomes
-`By Section, then title · wraps around`. A plain click re-checks the stop and
-runs the same commands as `[N` / `]N` in the card's pane; Mod-click opens
-the head in a new tab. A head missing from the vault is dotted with
-`· not in vault` and only explains itself; navigation never creates records.
-Below 28rem the row becomes `« 🛑 Intro · 2/3 · 🏁 Conclusion »`. Ungrouped,
-single-group, and syncing walks keep the line.
+Each arm shows a skip mark and the neighboring group's name; its tooltip and
+accessible name add that group's first record, and `↺` marks the wrap between
+the last and first groups. The centre is one tick per member of the current
+group, which the field's chip already names; its tooltip gives the group and
+your place in it, and a one-member group shows no ticks. The count tooltip
+becomes `By Section, then title · wraps around`. A plain click re-checks the
+stop and runs the same commands as `[N` / `]N` in the card's pane; Mod-click
+opens the head in a new tab. A head missing from the vault has a dotted
+underline and `· not in vault` and only explains itself; navigation never
+creates records. Below 28rem the row becomes `⏮ 🛑 Intro … 🏁 Conclusion ⏭`.
+Ungrouped, single-group, and syncing walks keep the line.
 
 Below 28rem the rail becomes `‹ 3/104 ›`, retaining full accessible names
 and at least 32px link targets. Collapsing the card keeps the rail. Links

@@ -223,7 +223,7 @@ function ticks(rail) {
   return rail.querySelectorAll(".bob-property-card-group-tick").map((tick) => tick.getAttribute("data-state"));
 }
 
-test("first member of the first group: wrapping prev arm, next group head, centre, and no thumb track", () => {
+test("first member of a one-member first group: wrapping prev arm, next group head, no centre, and no thumb track", () => {
   const world = zettelWorld();
   const walk = world.walk("z/alpha.md");
   assert.equal(walk.state, "ok");
@@ -240,9 +240,11 @@ test("first member of the first group: wrapping prev arm, next group head, centr
   const prev = groupArm(rail, "prev");
   assert.equal(prev.getAttribute("data-state"), "exists");
   assert.equal(prev.getAttribute("href"), "z/zed");
-  assert.equal(spanText(prev, "bob-property-card-group-glyph"), "«");
+  assert.equal(prev.querySelector(".bob-property-card-group-glyph").getAttribute("data-icon"), "skip-back");
+  assert.equal(prev.querySelector(".bob-property-card-group-glyph").getAttribute("aria-hidden"), "true");
   assert.equal(spanText(prev, "bob-property-card-group-label"), "⚠️ Needs section");
-  assert.equal(spanText(prev, "bob-property-card-group-landing"), "Zed");
+  assert.equal(prev.querySelector(".bob-property-card-group-landing"), null, "the head title is not painted");
+  assert.ok(!/[«»]/.test(prev.textContent));
   assert.equal(spanText(prev, "bob-property-card-group-wrap"), "↺");
   assert.equal(prev.getAttribute("title"), "[N · previous section: ⚠️ Needs section → Zed · wraps around");
   assert.equal(prev.getAttribute("aria-label"), "Previous section group: ⚠️ Needs section, opens Zed, wraps around");
@@ -251,18 +253,18 @@ test("first member of the first group: wrapping prev arm, next group head, centr
   const next = groupArm(rail, "next");
   assert.equal(next.getAttribute("href"), "z/beta");
   assert.equal(spanText(next, "bob-property-card-group-label"), "🔮 Future Work");
-  assert.equal(spanText(next, "bob-property-card-group-landing"), "Beta");
-  assert.equal(spanText(next, "bob-property-card-group-glyph"), "»");
+  assert.equal(next.querySelector(".bob-property-card-group-landing"), null);
+  assert.equal(next.querySelector(".bob-property-card-group-glyph").getAttribute("data-icon"), "skip-forward");
   assert.equal(next.querySelector(".bob-property-card-group-wrap"), null);
   assert.equal(next.getAttribute("title"), "]N · next section: 🔮 Future Work → Beta");
   assert.equal(next.getAttribute("aria-label"), "Next section group: 🔮 Future Work, opens Beta");
 
-  assert.equal(spanText(row, "bob-property-card-group-name"), "🛑 Intro");
-  assert.equal(spanText(row, "bob-property-card-group-position-wide"), "1 of 1");
-  assert.equal(spanText(row, "bob-property-card-group-position-narrow"), "1/1");
-  assert.equal(spanText(row, "bob-property-card-group-position-label"), "1 of 1 in this section");
-  assert.equal(row.querySelector(".bob-property-card-group-center").getAttribute("title"), "Section 1 of 4: 🛑 Intro");
-  assert.deepEqual(ticks(rail), ["current"]);
+  // 🛑 Intro has one member: no centre, no track, and the gap keeps the grid.
+  assert.equal(row.querySelector(".bob-property-card-group-center"), null);
+  assert.equal(row.querySelector(".bob-property-card-group-name"), null);
+  assert.ok(row.children[1].classList.contains("bob-property-card-group-gap"));
+  assert.equal(row.children[1].getAttribute("data-group"), "center");
+  assert.deepEqual(ticks(rail), []);
 
   // The step row keeps the overall position; its tooltip names the order.
   assert.equal(spanText(rail, "bob-record-walk-count-wide"), "1 of 6");
@@ -272,18 +274,19 @@ test("first member of the first group: wrapping prev arm, next group head, centr
 test("a middle member shows its group position and member ticks; the needs group wraps next", () => {
   const world = zettelWorld();
   const middle = helpers.recordWalkRailBuildEl(world.walk("z/delta.md"), {}, world.doc);
-  assert.equal(spanText(groupRow(middle), "bob-property-card-group-name"), "🔮 Future Work");
-  assert.equal(spanText(groupRow(middle), "bob-property-card-group-position-wide"), "2 of 3");
-  assert.equal(spanText(groupRow(middle), "bob-property-card-group-position-narrow"), "2/3");
+  assert.equal(groupRow(middle).querySelector(".bob-property-card-group-name"), null, "the Section chip already names it");
+  assert.equal(groupRow(middle).querySelector(".bob-property-card-group-position-wide"), null);
+  assert.equal(spanText(groupRow(middle), "bob-property-card-group-position-label"), "2 of 3 in this section");
+  assert.equal(groupRow(middle).querySelector(".bob-property-card-group-center").getAttribute("title"),
+    "Section 2 of 4: 🔮 Future Work · 2 of 3");
   assert.deepEqual(ticks(middle), ["exists", "current", "exists"]);
   assert.equal(groupArm(middle, "prev").getAttribute("href"), "z/alpha");
   assert.equal(groupArm(middle, "next").getAttribute("href"), "z/omega");
   assert.equal(groupArm(middle, "next").querySelector(".bob-property-card-group-wrap"), null);
 
   const last = helpers.recordWalkRailBuildEl(world.walk("z/zed.md"), {}, world.doc);
-  assert.equal(spanText(groupRow(last), "bob-property-card-group-name"), "⚠️ Needs section");
-  assert.equal(groupRow(last).querySelector(".bob-property-card-group-center").getAttribute("title"),
-    "Section 4 of 4: ⚠️ Needs section");
+  // ⚠️ Needs section holds only Zed: no centre.
+  assert.equal(groupRow(last).querySelector(".bob-property-card-group-center"), null);
   const wrapping = groupArm(last, "next");
   assert.equal(wrapping.getAttribute("href"), "z/alpha");
   assert.equal(spanText(wrapping, "bob-property-card-group-wrap"), "↺");
@@ -302,7 +305,7 @@ test("a missing group head is a ghost: no href, aria-disabled, its reason, and i
   assert.equal(ghost.getAttribute("aria-disabled"), "true");
   assert.equal(spanText(ghost, "bob-property-card-group-note"), "· not in vault");
   assert.equal(ghost.getAttribute("title"), "Omega is not in the vault — record navigation never creates it");
-  assert.equal(ghost.getAttribute("aria-label"), "Next section group: 🏁 Conclusion, not in vault");
+  assert.equal(ghost.getAttribute("aria-label"), "Next section group: 🏁 Conclusion, Omega not in vault");
   world.leafFor("z/delta.md");
   TestNotice.messages.length = 0;
   ghost.fire("keydown", { key: "Enter" });

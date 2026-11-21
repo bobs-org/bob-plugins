@@ -24729,6 +24729,25 @@ function offerPickerScheduledReasonLinkKey(picker, event) {
   } catch (_error) {}
   return true;
 }
+
+// Real Escape reaches the Task Card through Modal's onEscapeKey before any
+// input listener runs. The focused prose field's band backs out first: the
+// scheduled reason's LINK band, then the review/reason stage handle (LINK,
+// then USED BEFORE). IME composition never backs out.
+function pickerProseEscapeBackOut(picker, event) {
+  if (!picker) return false;
+  if (event && (event.isComposing === true || event.keyCode === 229)) return false;
+  try {
+    const doc = picker.inputEl && picker.inputEl.ownerDocument;
+    const active = doc && doc.activeElement;
+    if (active && picker.modalEl && typeof picker.modalEl.contains === "function" && !picker.modalEl.contains(active)) return false;
+  } catch (_error) {}
+  const links = getPickerScheduledReasonLinks(picker);
+  try {
+    if (links && typeof links.backOut === "function" && links.backOut() === true) return true;
+  } catch (_error) {}
+  return typeof pickerLogRecallBackOut === "function" && pickerLogRecallBackOut(picker);
+}
 // ---- src/186-link-field-model.js ----
 // Prose `[[` link field model (phase bob-cli-om.2 link-engine).
 //
@@ -26274,7 +26293,10 @@ function proseFieldAt(text, caret, options) {
       const link = proseContainingLink(value, cursor);
       const annotated = proseAnnotateField(field, link, value);
       if (!annotated || annotated.linkStart < minOffset) return null;
-      annotated.mode = mode;
+      // A field-mode value that already starts with `[[` is an authored link:
+      // the inline model owns it, so rows replace one component and never wrap
+      // the whole value again (`[[sase#ov` + Overview → `[[sase#Overview]]`).
+      annotated.mode = "inline";
       return annotated;
     }
     return null;
@@ -27107,6 +27129,7 @@ function attachProseField(options) {
   let hintTimer = null;
   let hintMessages = [];
   let scopeHandler = null;
+  let escapeScopeHandler = null;
   let recallHandle = null;
   let recallHost = null;
   let linkHost = null;
@@ -27620,13 +27643,39 @@ function attachProseField(options) {
   }
   bindInput(inputEl);
   if (ownKeys && opts.scope && typeof opts.scope.register === "function") {
+    const focusedElsewhere = () => {
+      try {
+        const doc = proseOwnerDocument(inputEl);
+        if (doc && doc.activeElement && doc.activeElement !== inputEl) return true;
+        if (typeof document !== "undefined" && document.activeElement && document.activeElement !== inputEl) return true;
+      } catch (_error) {}
+      return false;
+    };
+    // Obsidian's Scope runs handlers in registration order, and Modal bound
+    // Escape to onEscapeKey at construction, so the trailing catch-all below
+    // never sees a real Escape. This catch-all goes first and takes only the
+    // escape chords: it returns false once the band or recall backed out, and
+    // undefined otherwise, so the scope falls through to the host's close.
+    try {
+      escapeScopeHandler = opts.scope.register(null, null, (event) => {
+        if (focusedElsewhere()) return undefined;
+        const key = String(event && event.key || "").toLowerCase();
+        const escChord = key === "escape" || (event && event.ctrlKey && !event.altKey && !event.metaKey && key === "[");
+        if (!escChord) return undefined;
+        return captureKeydown(event) ? false : undefined;
+      });
+      const keys = opts.scope.keys;
+      const index = Array.isArray(keys) ? keys.indexOf(escapeScopeHandler) : -1;
+      if (index > 0) {
+        keys.splice(index, 1);
+        keys.unshift(escapeScopeHandler);
+      }
+    } catch (_error) {
+      escapeScopeHandler = null;
+    }
     try {
       scopeHandler = opts.scope.register(null, null, (event) => {
-        try {
-          const doc = proseOwnerDocument(inputEl);
-          if (doc && doc.activeElement && doc.activeElement !== inputEl) return true;
-          if (typeof document !== "undefined" && document.activeElement && document.activeElement !== inputEl) return true;
-        } catch (_error) {}
+        if (focusedElsewhere()) return true;
         return captureKeydown(event) ? false : true;
       });
     } catch (_error) {
@@ -27718,6 +27767,9 @@ function attachProseField(options) {
       try {
         if (scopeHandler && opts.scope && typeof opts.scope.unregister === "function") {
           opts.scope.unregister(scopeHandler);
+        }
+        if (escapeScopeHandler && opts.scope && typeof opts.scope.unregister === "function") {
+          opts.scope.unregister(escapeScopeHandler);
         }
       } catch (_error) {}
       try { if (recallHandle && typeof recallHandle.detach === "function") recallHandle.detach(); } catch (_error) {}
@@ -67276,6 +67328,23 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     }
   }
 
+  // Obsidian binds this scope's Escape to Modal's onEscapeKey at construction,
+  // and its global key handler runs in the capture phase, so the prose-stage
+  // back-out in handleKeydown never sees a real Escape (S7–S11). An open LINK
+  // or USED BEFORE band backs out first, one layer per press; otherwise the
+  // card closes exactly as Modal does.
+  onEscapeKey(event) {
+    if (typeof pickerProseEscapeBackOut === "function" && pickerProseEscapeBackOut(this, event)) {
+      try {
+        if (event && typeof event.preventDefault === "function") event.preventDefault();
+        if (event && typeof event.stopPropagation === "function") event.stopPropagation();
+      } catch (_error) {}
+      return false;
+    }
+    if (typeof super.onEscapeKey === "function") return super.onEscapeKey(event);
+    this.close();
+    return undefined;
+  }
 }
 // ---- src/350-picker-task-card.js ----
 class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {

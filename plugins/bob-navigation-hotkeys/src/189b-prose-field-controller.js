@@ -167,6 +167,7 @@ function attachProseField(options) {
   let hintTimer = null;
   let hintMessages = [];
   let scopeHandler = null;
+  let escapeScopeHandler = null;
   let recallHandle = null;
   let recallHost = null;
   let linkHost = null;
@@ -680,13 +681,39 @@ function attachProseField(options) {
   }
   bindInput(inputEl);
   if (ownKeys && opts.scope && typeof opts.scope.register === "function") {
+    const focusedElsewhere = () => {
+      try {
+        const doc = proseOwnerDocument(inputEl);
+        if (doc && doc.activeElement && doc.activeElement !== inputEl) return true;
+        if (typeof document !== "undefined" && document.activeElement && document.activeElement !== inputEl) return true;
+      } catch (_error) {}
+      return false;
+    };
+    // Obsidian's Scope runs handlers in registration order, and Modal bound
+    // Escape to onEscapeKey at construction, so the trailing catch-all below
+    // never sees a real Escape. This catch-all goes first and takes only the
+    // escape chords: it returns false once the band or recall backed out, and
+    // undefined otherwise, so the scope falls through to the host's close.
+    try {
+      escapeScopeHandler = opts.scope.register(null, null, (event) => {
+        if (focusedElsewhere()) return undefined;
+        const key = String(event && event.key || "").toLowerCase();
+        const escChord = key === "escape" || (event && event.ctrlKey && !event.altKey && !event.metaKey && key === "[");
+        if (!escChord) return undefined;
+        return captureKeydown(event) ? false : undefined;
+      });
+      const keys = opts.scope.keys;
+      const index = Array.isArray(keys) ? keys.indexOf(escapeScopeHandler) : -1;
+      if (index > 0) {
+        keys.splice(index, 1);
+        keys.unshift(escapeScopeHandler);
+      }
+    } catch (_error) {
+      escapeScopeHandler = null;
+    }
     try {
       scopeHandler = opts.scope.register(null, null, (event) => {
-        try {
-          const doc = proseOwnerDocument(inputEl);
-          if (doc && doc.activeElement && doc.activeElement !== inputEl) return true;
-          if (typeof document !== "undefined" && document.activeElement && document.activeElement !== inputEl) return true;
-        } catch (_error) {}
+        if (focusedElsewhere()) return true;
         return captureKeydown(event) ? false : true;
       });
     } catch (_error) {
@@ -778,6 +805,9 @@ function attachProseField(options) {
       try {
         if (scopeHandler && opts.scope && typeof opts.scope.unregister === "function") {
           opts.scope.unregister(scopeHandler);
+        }
+        if (escapeScopeHandler && opts.scope && typeof opts.scope.unregister === "function") {
+          opts.scope.unregister(escapeScopeHandler);
         }
       } catch (_error) {}
       try { if (recallHandle && typeof recallHandle.detach === "function") recallHandle.detach(); } catch (_error) {}

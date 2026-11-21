@@ -59,6 +59,12 @@ non-text input types. Keep the S1–S15 allowlist and creation/wiring paths in
 `scripts/fixtures/prose-fields.json`; `npm test` checks that every control is declared
 and each allowlisted surface remains wired.
 
+Obsidian runs a modal scope's handlers in registration order, and `Modal` binds Escape
+to `onEscapeKey` first, so an input listener never sees a real Escape. A host that
+passes `ownKeys` and its `scope` gets a front catch-all from the controller that backs
+the band out first. A card that routes keys itself backs out in `onEscapeKey` before
+closing.
+
 ## Property-card extension API
 
 Bob Ledger Tools keeps the property-card `==` dispatcher open to registered

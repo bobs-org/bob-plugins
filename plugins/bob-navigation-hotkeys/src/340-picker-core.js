@@ -122,4 +122,21 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     }
   }
 
+  // Obsidian binds this scope's Escape to Modal's onEscapeKey at construction,
+  // and its global key handler runs in the capture phase, so the prose-stage
+  // back-out in handleKeydown never sees a real Escape (S7–S11). An open LINK
+  // or USED BEFORE band backs out first, one layer per press; otherwise the
+  // card closes exactly as Modal does.
+  onEscapeKey(event) {
+    if (typeof pickerProseEscapeBackOut === "function" && pickerProseEscapeBackOut(this, event)) {
+      try {
+        if (event && typeof event.preventDefault === "function") event.preventDefault();
+        if (event && typeof event.stopPropagation === "function") event.stopPropagation();
+      } catch (_error) {}
+      return false;
+    }
+    if (typeof super.onEscapeKey === "function") return super.onEscapeKey(event);
+    this.close();
+    return undefined;
+  }
 }

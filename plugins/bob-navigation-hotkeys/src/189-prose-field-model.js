@@ -145,7 +145,10 @@ function proseFieldAt(text, caret, options) {
       const link = proseContainingLink(value, cursor);
       const annotated = proseAnnotateField(field, link, value);
       if (!annotated || annotated.linkStart < minOffset) return null;
-      annotated.mode = mode;
+      // A field-mode value that already starts with `[[` is an authored link:
+      // the inline model owns it, so rows replace one component and never wrap
+      // the whole value again (`[[sase#ov` + Overview → `[[sase#Overview]]`).
+      annotated.mode = "inline";
       return annotated;
     }
     return null;

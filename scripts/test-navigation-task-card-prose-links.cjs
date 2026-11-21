@@ -423,6 +423,35 @@ test("S11 band owns Shift+Enter, Ctrl+Enter, Esc, and Ctrl+[ while open", async 
   assert.equal(picker.scheduledReasonLinkHandle, null, "close detaches the band");
 });
 
+test("real Escape reaches the Task Card via onEscapeKey: band first, then close", async () => {
+  // Obsidian runs Modal's first-registered Escape → onEscapeKey in the capture
+  // phase, before any input listener, so the card's override must back out.
+  const { app } = appWithProse();
+  const { picker } = await openScheduledStage(app);
+  const handle = picker.scheduledReasonLinkHandle;
+  typeInto(picker.inputEl, "3 see [[ap");
+  assert.equal(handle.isLinkOpen(), true);
+  const esc = key(picker.inputEl, "Escape");
+  assert.equal(picker.onEscapeKey(esc), false);
+  assert.equal(esc.defaultPrevented, true);
+  assert.equal(handle.isLinkOpen(), false);
+  assert.equal(picker.pickerOpen, true, "the first Escape closes only the band");
+  assert.equal(picker.inputEl.value, "3 see [[ap");
+  picker.onEscapeKey(key(picker.inputEl, "Escape"));
+  assert.equal(picker.pickerOpen, false, "with the band closed Escape closes the card");
+
+  const review = openHarness("- [/] #task Pending work ^a", app).picker;
+  await runCardAction(review, "schedule");
+  await review.openItem(review.visibleItems.find((item) => item.kind === "value" && item.value));
+  assert.equal(review.stage, "schedule-review");
+  typeInto(review.scheduleReviewReasonEl, "blocked on [[api");
+  assert.equal(review.logRecallHandle.isLinkOpen(), true);
+  assert.equal(review.onEscapeKey(key(review.scheduleReviewReasonEl, "Escape")), false);
+  assert.equal(review.logRecallHandle.isLinkOpen(), false);
+  assert.equal(review.pickerOpen, true, "S10: the first Escape closes only the band");
+  review.close();
+});
+
 test("S11 with the band closed keeps date rows and detaches on stage change", async () => {
   const { app } = appWithProse();
   const { picker } = await openScheduledStage(app);

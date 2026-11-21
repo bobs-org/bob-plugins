@@ -417,6 +417,19 @@ test("field mode replaces the whole value with a path link", () => {
   handle.detach();
 });
 
+test("field mode hands a bracketed value to the inline model", () => {
+  const drilled = helpers.proseFieldAt("[[sase#ov", 9, { mode: "field", sourcePath: "sase.md" });
+  assert.equal(drilled.mode, "inline");
+  assert.equal(drilled.query, "ov");
+  const { input, handle } = attach({ mode: "field", sourcePath: "sase.md" });
+  typeInput(input, "[[sas", 5);
+  assert.equal(handle.isLinkOpen(), true);
+  handle.handleKeydown(keyEvent("Enter"));
+  assert.match(input.value, /^\[\[[^[\]]+\]\]$/);
+  assert.doesNotMatch(input.value, /\[\[\[\[/);
+  handle.detach();
+});
+
 test("minOffset ignores openers before the gate", () => {
   const { input, handle } = attach({ minOffset: () => 10 });
   typeInput(input, "012345 [[sas", 12);
@@ -460,6 +473,51 @@ test("recall-only attach still paints on the host when links is omitted", () => 
   assert.equal(host.classList.contains("bob-log-recall-band"), true);
   assert.equal(host.querySelector("bob-prose-link-slot"), null);
   recall.detach();
+});
+
+// Obsidian 1.15 Scope.handleKey, verbatim semantics: handlers run in
+// registration order; a catch-all that returns undefined falls through, any
+// other match returns its result.
+class ObsidianScope {
+  constructor() { this.keys = []; }
+  register(modifiers, key, func) {
+    const handler = { scope: this, modifiers: modifiers ? modifiers.join(",") : null, key, func };
+    this.keys.push(handler);
+    return handler;
+  }
+  unregister(handler) { this.keys = this.keys.filter((entry) => entry !== handler); }
+  handleKey(event, ctx) {
+    for (const handler of this.keys) {
+      if (handler.modifiers !== null && handler.modifiers !== ctx.modifiers) continue;
+      if (handler.key !== null && handler.key !== ctx.key) continue;
+      const result = handler.func(event, ctx);
+      if (result !== undefined || handler.key !== null || handler.modifiers !== null) return result;
+    }
+    return undefined;
+  }
+}
+
+test("a real Escape backs the band out before Modal's first-registered close", () => {
+  const scope = new ObsidianScope();
+  let closes = 0;
+  scope.register([], "Escape", () => { closes += 1; return false; });
+  const { input, handle } = attach({ extra: { scope } });
+  typeInput(input, "See [[sas", 9);
+  assert.equal(handle.isLinkOpen(), true);
+  const first = keyEvent("Escape");
+  assert.equal(scope.handleKey(first, { modifiers: "", key: "Escape" }), false);
+  assert.equal(handle.isLinkOpen(), false);
+  assert.equal(closes, 0, "the first Escape closes only the band");
+  assert.equal(first.defaultPrevented, true);
+  scope.handleKey(keyEvent("Escape"), { modifiers: "", key: "Escape" });
+  assert.equal(closes, 1, "with the band closed Escape reaches the modal's close");
+  typeInput(input, "See [[sa", 8);
+  assert.equal(handle.isLinkOpen(), true);
+  const enter = keyEvent("Enter");
+  assert.equal(scope.handleKey(enter, { modifiers: "", key: "Enter" }), false);
+  assert.match(input.value, /^See \[\[[^\]]+\]\]$/);
+  handle.detach();
+  assert.deepEqual(scope.keys.map((entry) => entry.key), ["Escape"], "detach unregisters both scope handlers");
 });
 
 test("captureKeydown reports consumed so a modal scope can swallow Esc", () => {

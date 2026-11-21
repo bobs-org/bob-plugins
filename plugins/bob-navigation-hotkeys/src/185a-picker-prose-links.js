@@ -172,3 +172,22 @@ function offerPickerScheduledReasonLinkKey(picker, event) {
   } catch (_error) {}
   return true;
 }
+
+// Real Escape reaches the Task Card through Modal's onEscapeKey before any
+// input listener runs. The focused prose field's band backs out first: the
+// scheduled reason's LINK band, then the review/reason stage handle (LINK,
+// then USED BEFORE). IME composition never backs out.
+function pickerProseEscapeBackOut(picker, event) {
+  if (!picker) return false;
+  if (event && (event.isComposing === true || event.keyCode === 229)) return false;
+  try {
+    const doc = picker.inputEl && picker.inputEl.ownerDocument;
+    const active = doc && doc.activeElement;
+    if (active && picker.modalEl && typeof picker.modalEl.contains === "function" && !picker.modalEl.contains(active)) return false;
+  } catch (_error) {}
+  const links = getPickerScheduledReasonLinks(picker);
+  try {
+    if (links && typeof links.backOut === "function" && links.backOut() === true) return true;
+  } catch (_error) {}
+  return typeof pickerLogRecallBackOut === "function" && pickerLogRecallBackOut(picker);
+}

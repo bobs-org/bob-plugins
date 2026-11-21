@@ -316,6 +316,21 @@ xvfb-run -a node --experimental-websocket scripts/obsidian-copy-chips-e2e.cjs \
   --out /tmp/copy-chips-e2e
 ```
 
+## Prose-field walkthrough
+
+`scripts/obsidian-prose-field-e2e.cjs` drives `[[` completion through the real
+Work summary (S1), Task Card review and scheduled reason (S10, S11), Intention Card
+reflection (S14), and Record Card text and link stages (S15). It uses trusted CDP keys
+in one owned Obsidian on a scratch Git vault. On each surface it filters, drills `#`,
+accepts with Enter and a held Enter, undoes once with Ctrl+Z, closes the band with
+Escape, submits, and checks the written note text. `BOB_BIN` is the bob the plugins
+spawn. Run it on athena from a fresh `/tmp` copy of the working tree:
+
+```bash
+BOB_BIN=$HOME/.cargo/bin/bob xvfb-run -a node --experimental-websocket \
+  scripts/obsidian-prose-field-e2e.cjs -r /tmp/prose-walk.json -o /tmp/prose-walk-shots
+```
+
 ## Focused suites
 
 Navigation Hotkeys, Task Status Cycler, and Block ID Prompt tests are

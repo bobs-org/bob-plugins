@@ -160,9 +160,9 @@ function bankParseRowTail(tail, base) {
     }
     index += 1;
   }
-  const noteText = noteStart === null
-    ? null
-    : raw.slice(noteStart).replace(/\[\[.*?\]\]/g, "").replace(/\[[A-Za-z][A-Za-z0-9_-]*\s*::[^\]]*\]/g, "").replace(/[⚑!]+/g, "").replace(/^[—\-\s]+/, "").trim();
+  const noteText = noteStart === null ? null : bankCleanNote(raw.slice(noteStart));
+  const contents = bankNoteContents(raw, origin, noteStart);
+  const first = contents[0] || null;
   return {
     category,
     account,
@@ -170,21 +170,182 @@ function bankParseRowTail(tail, base) {
     links,
     flagged,
     flagSpan,
-    note: noteText || null,
-    noteSpan: noteStart === null || !noteText
-      ? null
-      : bankSpan(origin + noteStart, origin + raw.length, raw.slice(noteStart)),
+    note: noteText,
+    noteSpan: first ? first.span : null,
+    noteMarkerSpan: first ? first.marker : null,
+    noteEditable: contents.length === 1,
   };
 }
 
-function bankAmountDollarOffsets(amountSpan) {
-  if (!amountSpan || typeof amountSpan.text !== "string") {
-    return [];
+function bankNoteMarkerWidth(raw, index) {
+  if (index < 0 || index >= raw.length) {
+    return 0;
   }
+  if (raw.startsWith("—", index)) {
+    return "—".length;
+  }
+  if (raw.startsWith("--", index) && raw[index + 2] !== "-") {
+    return 2;
+  }
+  return 0;
+}
+
+function bankStripNoteDecorations(text) {
+  const raw = String(text || "");
+  let out = "";
+  let index = 0;
+  while (index < raw.length) {
+    if (raw.startsWith("[[", index)) {
+      const close = raw.indexOf("]]", index + 2);
+      if (close >= 0) {
+        index = close + 2;
+        continue;
+      }
+    }
+    if (raw[index] === "[") {
+      const field = bankParseInlineField(raw.slice(index));
+      if (field) {
+        index += field.consumed;
+        continue;
+      }
+    }
+    if (raw.startsWith("⚑", index)) {
+      index += "⚑".length;
+      continue;
+    }
+    if (raw.startsWith("!!", index)) {
+      index += 2;
+      continue;
+    }
+    out += raw[index];
+    index += 1;
+  }
+  return out;
+}
+
+function bankCleanNote(text) {
+  const collapsed = bankStripNoteDecorations(text).replace(/\s+/g, " ").trim();
+  let rest = collapsed;
+  if (rest.startsWith("—")) {
+    rest = rest.slice("—".length).trim();
+  } else if (rest.startsWith("--") && rest[2] !== "-") {
+    rest = rest.slice(2).trim();
+  }
+  return rest || null;
+}
+
+function bankNoteProseRuns(raw, fromIndex) {
+  const runs = [];
+  if (!Number.isInteger(fromIndex) || fromIndex < 0 || fromIndex >= raw.length) {
+    return runs;
+  }
+  let index = fromIndex;
+  let runStart = fromIndex;
+  const flush = (end) => {
+    if (end > runStart) {
+      runs.push({ start: runStart, end });
+    }
+  };
+  while (index < raw.length) {
+    if (raw.startsWith("[[", index)) {
+      const close = raw.indexOf("]]", index + 2);
+      if (close >= 0) {
+        flush(index);
+        index = close + 2;
+        runStart = index;
+        continue;
+      }
+    }
+    if (raw[index] === "[") {
+      const field = bankParseInlineField(raw.slice(index));
+      if (field) {
+        flush(index);
+        index += field.consumed;
+        runStart = index;
+        continue;
+      }
+    }
+    if (raw.startsWith("⚑", index)) {
+      flush(index);
+      index += "⚑".length;
+      runStart = index;
+      continue;
+    }
+    if (raw.startsWith("!!", index)) {
+      flush(index);
+      index += 2;
+      runStart = index;
+      continue;
+    }
+    index += 1;
+  }
+  flush(raw.length);
+  return runs;
+}
+
+function bankProseRunContent(raw, origin, start, end) {
+  let from = start;
+  let to = end;
+  while (from < to && /\s/.test(raw[from])) {
+    from += 1;
+  }
+  let marker = null;
+  const markerWidth = bankNoteMarkerWidth(raw, from);
+  if (markerWidth) {
+    marker = bankSpan(origin + from, origin + from + markerWidth, raw.slice(from, from + markerWidth));
+    from += markerWidth;
+    while (from < to && /\s/.test(raw[from])) {
+      from += 1;
+    }
+  }
+  while (to > from && /\s/.test(raw[to - 1])) {
+    to -= 1;
+  }
+  if (from >= to) {
+    return null;
+  }
+  return {
+    span: bankSpan(origin + from, origin + to, raw.slice(from, to)),
+    marker,
+  };
+}
+
+function bankMarkerBeforeNote(raw, origin, spanStart) {
+  let index = spanStart - origin;
+  while (index > 0 && /\s/.test(raw[index - 1])) {
+    index -= 1;
+  }
+  const em = "—".length;
+  if (index >= em && raw.slice(index - em, index) === "—") {
+    return bankSpan(origin + index - em, origin + index, "—");
+  }
+  if (index >= 2 && bankNoteMarkerWidth(raw, index - 2) === 2) {
+    return bankSpan(origin + index - 2, origin + index, "--");
+  }
+  return null;
+}
+
+function bankNoteContents(raw, origin, noteStart) {
+  const contents = [];
+  for (const run of bankNoteProseRuns(raw, noteStart)) {
+    const content = bankProseRunContent(raw, origin, run.start, run.end);
+    if (!content || !content.span) {
+      continue;
+    }
+    contents.push({
+      span: content.span,
+      marker: content.marker || bankMarkerBeforeNote(raw, origin, content.span.start),
+    });
+  }
+  return contents;
+}
+
+function bankLineDollarOffsets(line) {
+  const raw = String(line || "");
   const offsets = [];
-  for (let index = 0; index < amountSpan.text.length; index += 1) {
-    if (amountSpan.text[index] === "$") {
-      offsets.push(amountSpan.start + index);
+  for (let index = 0; index < raw.length; index += 1) {
+    if (raw[index] === "$") {
+      offsets.push(index);
     }
   }
   return offsets;
@@ -221,7 +382,7 @@ function bankTokenizeLine(line) {
     payee,
     checkbox: classified.checkbox,
     amount,
-    dollars: bankAmountDollarOffsets(amount),
+    dollars: bankLineDollarOffsets(line),
     payeeSpan: payee ? bankSpan(payeeStart, payeeStart + payee.length, payee) : null,
     category: tail.category,
     account: tail.account,
@@ -231,6 +392,8 @@ function bankTokenizeLine(line) {
     flagSpan: tail.flagSpan,
     note: tail.note,
     noteSpan: tail.noteSpan,
+    noteMarkerSpan: tail.noteMarkerSpan || null,
+    noteEditable: tail.noteEditable === true,
     bankId: split.bankId,
     bankIdSpan: split.bankId && idAbsStart !== null
       ? bankSpan(idAbsStart, idAbsEnd, idText)
@@ -545,14 +708,25 @@ function bankMathNodeTouchesBankAmount(node, tokens) {
   }
   return tokens.rows.some((row) => {
     const amount = row && row.amount && row.amount.text;
-    if (!amount) {
+    if (amount) {
+      const compact = amount.replace(/\*/g, "");
+      const bare = compact.replace(/^[+\u2212\-]?\$/, "");
+      if (
+        haystack.includes(amount)
+        || haystack.includes(compact)
+        || (bare.length >= 3 && haystack.includes(bare))
+      ) {
+        return true;
+      }
+    }
+    const lineText = row && typeof row.lineText === "string" ? row.lineText : "";
+    if (!lineText) {
       return false;
     }
-    const compact = amount.replace(/\*/g, "");
-    const bare = compact.replace(/^[+\u2212\-]?\$/, "");
-    return haystack.includes(amount)
-      || haystack.includes(compact)
-      || (bare.length >= 3 && haystack.includes(bare));
+    if (original && original.trim() && lineText.includes(original)) {
+      return true;
+    }
+    return Boolean(text && text.includes("$") && lineText.includes(text));
   });
 }
 

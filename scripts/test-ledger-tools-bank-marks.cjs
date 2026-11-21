@@ -363,7 +363,7 @@ test("two nearby bank-row dollars form a math conflict; ordinary math is left al
   const conflicts = H.bankMathConflictSpans("bank/2026-11.md", mathNote);
   assert.ok(conflicts.length >= 1);
   const dollars = H.bankMathDollarRanges("bank/2026-11.md", mathNote);
-  assert.equal(dollars.length, 2);
+  assert.equal(dollars.length, 5);
   const ordinary = "Compute $x^2+y^2$ in the margin.\n";
   assert.equal(H.bankMathConflictSpans("notes.md", ordinary).length, 0);
   assert.equal(H.bankMathDollarRanges("notes.md", ordinary).length, 0);
@@ -694,4 +694,87 @@ test("cursor reveal helper and note bytes stay unchanged after tokenize", () => 
   assert.equal(monthNote, before);
   assert.equal(H.bankLineHasCursor(10, 20, [{ from: 15, to: 15 }]), true);
   assert.equal(H.bankLineHasCursor(10, 20, [{ from: 21, to: 30 }]), false);
+});
+
+function notedMathSource() {
+  return [
+    "---",
+    "month: 2026-11",
+    "---",
+    "",
+    "# 🏦 November 2026",
+    "",
+    "## Thu Nov 12",
+    "",
+    "- [ ] $12.00 Lunch — split $25 w/ Alex, $10 tip ^bank-1a2b3c4d",
+    "",
+  ].join("\n");
+}
+
+test("Live Preview protects every uncovered $ on a noted row in both branches", () => {
+  const plugin = makePlugin();
+  plugin.setupBankMarks();
+  const source = notedMathSource();
+  const view = makeView("bank/2026-11.md", source);
+  const decorated = plugin.buildBankMarkDecorations(view);
+  const line = makeDoc(source).line(9);
+  const noteDollars = [];
+  const rowText = "- [ ] $12.00 Lunch — split $25 w/ Alex, $10 tip ^bank-1a2b3c4d";
+  for (let index = 0; index < rowText.length; index += 1) {
+    if (rowText[index] === "$" && index > 10) noteDollars.push(line.from + index);
+  }
+  for (const from of noteDollars) {
+    const add = (decorated.adds || []).find((entry) => entry.from === from && entry.to === from + 1);
+    assert.ok(add, `decorated branch missing dollar widget at ${from}`);
+    assert.equal(add.value.replace, true);
+  }
+  const revealed = plugin.buildBankMarkDecorations(makeView("bank/2026-11.md", source, {
+    selection: [{ from: line.from + 4, to: line.from + 4 }],
+  }));
+  const allDollars = [];
+  for (let index = 0; index < rowText.length; index += 1) {
+    if (rowText[index] === "$") allDollars.push(line.from + index);
+  }
+  for (const from of allDollars) {
+    const add = (revealed.adds || []).find((entry) => entry.from === from && entry.to === from + 1);
+    assert.ok(add, `undecorated branch missing dollar widget at ${from}`);
+  }
+});
+
+test("RangeSetBuilder input for a noted row stays sorted and non-overlapping", () => {
+  const plugin = makePlugin();
+  plugin.setupBankMarks();
+  const source = notedMathSource();
+  const decorated = plugin.buildBankMarkDecorations(makeView("bank/2026-11.md", source));
+  const adds = (decorated.adds || []).slice().sort((left, right) => left.from - right.from || left.to - right.to);
+  for (let index = 1; index < adds.length; index += 1) {
+    const prev = adds[index - 1];
+    const next = adds[index];
+    assert.ok(prev.from < next.from || (prev.from === next.from && prev.to <= next.to));
+    if (prev.to > prev.from && next.to > next.from) {
+      assert.ok(prev.to <= next.from, `overlap ${prev.from}-${prev.to} vs ${next.from}-${next.to}`);
+    }
+  }
+  const builder = new RangeSetBuilder();
+  for (const add of adds) {
+    builder.add(add.from, add.to, add.value);
+  }
+  assert.equal(builder.finish().adds.length, adds.length);
+});
+
+test("reading-view math unwrap protects a $ that lives in a note", () => {
+  const doc = new Document();
+  const article = doc.createElement("div");
+  const row = doc.createElement("li");
+  const math = doc.createElement("span");
+  math.setAttribute("class", "math math-inline");
+  math.setAttribute("data-original", "$25");
+  math.appendChild(doc.createTextNode("25"));
+  row.appendChild(doc.createTextNode("Lunch — split "));
+  row.appendChild(math);
+  row.appendChild(doc.createTextNode(" w/ Alex"));
+  article.appendChild(row);
+  const changed = H.bankProtectMathInElement(article, "bank/2026-11.md", mathNote);
+  assert.ok(changed >= 1);
+  assert.equal(row.querySelector(".bob-bank-math-protected").getAttribute("class").includes("bob-bank-math-protected"), true);
 });

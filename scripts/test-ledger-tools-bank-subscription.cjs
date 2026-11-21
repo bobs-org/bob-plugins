@@ -241,6 +241,73 @@ test("ghost write plan inserts the wikilink before the bank id as one edit", () 
   assert.deepEqual(exists.edits, []);
 });
 
+function monthSource(line) {
+  return [
+    "---",
+    "month: 2026-11",
+    "---",
+    "",
+    "# 🏦 November 2026",
+    "",
+    "## Thu Nov 12",
+    "",
+    line,
+    "",
+  ].join("\n");
+}
+
+function appliedLine(line, plan) {
+  const fromCh = plan.edits[0].fromCh;
+  const insert = plan.edits[0].insert;
+  return `${line.slice(0, fromCh)}${insert}${line.slice(fromCh)}`;
+}
+
+test("ghost write plan and chip offset land before a flag or note", () => {
+  const flagged = "- [ ] $9.99 Tunely ⚑ — family plan ^bank-abcdef12";
+  const flaggedPlan = h.bankSubscriptionLinkWritePlan({
+    currentPath: "bank/2026-11.md",
+    currentSource: monthSource(flagged),
+    capture: {
+      path: "bank/2026-11.md",
+      line: 9,
+      lineText: flagged,
+      bankId: "abcdef12",
+    },
+    recordPath: "subscriptions/tunely",
+  });
+  assert.equal(flaggedPlan.ok, true);
+  const flaggedLinked = appliedLine(flagged, flaggedPlan);
+  assert.match(flaggedLinked, /\[\[subscriptions\/tunely\|🔁\]\] ⚑ — family plan \^bank-abcdef12$/);
+  const flaggedToken = tokenFrom(flagged);
+  const flaggedChip = h.bankSubscriptionChipModel(flaggedToken, jsonRow({
+    subscription: sub({ source: "match" }),
+  }));
+  assert.equal(flaggedChip.kind, "ghost");
+  assert.equal(flaggedChip.widgetOffset, flaggedToken.flagSpan.start);
+
+  const noted = "- [ ] $9.99 Tunely — family plan";
+  const notedPlan = h.bankSubscriptionLinkWritePlan({
+    currentPath: "bank/2026-11.md",
+    currentSource: monthSource(noted),
+    capture: {
+      path: "bank/2026-11.md",
+      line: 9,
+      lineText: noted,
+    },
+    recordPath: "subscriptions/tunely",
+  });
+  assert.equal(notedPlan.ok, true);
+  const notedLinked = appliedLine(noted, notedPlan);
+  assert.match(notedLinked, /\[\[subscriptions\/tunely\|🔁\]\] — family plan$/);
+  const notedToken = tokenFrom(noted);
+  const notedChip = h.bankSubscriptionChipModel(notedToken, jsonRow({
+    subscription: sub({ source: "match" }),
+    id: null,
+  }));
+  assert.equal(notedChip.kind, "ghost");
+  assert.equal(notedChip.widgetOffset, notedToken.noteMarkerSpan.start);
+});
+
 test("queue helper paints the same chip model as the month-note token", () => {
   const row = jsonRow({
     subscription: sub({ state: "to_cancel" }),

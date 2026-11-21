@@ -351,11 +351,24 @@ class BobLedgerToolsBankMarksMixin {
               });
             }
           }
-        } else if (BankDollarWidget) {
+        }
+        if (BankDollarWidget) {
           for (const offset of row.dollars) {
+            const from = line.from + offset;
+            const to = from + 1;
+            const covered = adds.some((add) => (
+              add
+              && add.spec
+              && add.spec.replace
+              && add.from <= from
+              && add.to >= to
+            ));
+            if (covered) {
+              continue;
+            }
             adds.push({
-              from: line.from + offset,
-              to: line.from + offset + 1,
+              from,
+              to,
               spec: Decoration.replace({ widget: new BankDollarWidget() }),
             });
           }

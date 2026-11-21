@@ -150,11 +150,34 @@ function bankSubscriptionTrimTitle(title) {
   return `${raw.slice(0, BANK_SUBSCRIPTION_TITLE_CHARS).trimEnd()}`;
 }
 
+function bankSubscriptionInsertOffset(token, lineLength) {
+  if (!token) {
+    return Number.isInteger(lineLength) ? lineLength : 0;
+  }
+  const end = Number.isInteger(lineLength)
+    ? lineLength
+    : String(token.lineText || "").length;
+  const candidates = [end];
+  if (token.flagSpan && Number.isInteger(token.flagSpan.start)) {
+    candidates.push(token.flagSpan.start);
+  }
+  if (token.noteMarkerSpan && Number.isInteger(token.noteMarkerSpan.start)) {
+    candidates.push(token.noteMarkerSpan.start);
+  }
+  if (token.noteSpan && Number.isInteger(token.noteSpan.start)) {
+    candidates.push(token.noteSpan.start);
+  }
+  if (token.bankIdSpan && Number.isInteger(token.bankIdSpan.start)) {
+    candidates.push(token.bankIdSpan.start);
+  }
+  if (token.customIdSpan && Number.isInteger(token.customIdSpan.start)) {
+    candidates.push(token.customIdSpan.start);
+  }
+  return Math.min(...candidates);
+}
+
 function bankSubscriptionGhostOffset(token) {
-  if (!token) return 0;
-  if (token.bankIdSpan && Number.isInteger(token.bankIdSpan.start)) return token.bankIdSpan.start;
-  if (token.customIdSpan && Number.isInteger(token.customIdSpan.start)) return token.customIdSpan.start;
-  return String(token.lineText || "").length;
+  return bankSubscriptionInsertOffset(token);
 }
 
 function bankSubscriptionTooltip(sub, rowDate) {
@@ -495,9 +518,7 @@ function bankSubscriptionLinkWritePlan(input = {}) {
   if (bankSubscriptionAlreadyLinked(token, recordPath)) {
     return { ok: true, mode: "link", line, action: "exists", edits: [], tick: false };
   }
-  let fromCh = raw.length;
-  if (token.bankIdSpan && Number.isInteger(token.bankIdSpan.start)) fromCh = token.bankIdSpan.start;
-  else if (token.customIdSpan && Number.isInteger(token.customIdSpan.start)) fromCh = token.customIdSpan.start;
+  const fromCh = bankSubscriptionInsertOffset(token, raw.length);
   let insert = wikilink;
   if (fromCh > 0 && raw[fromCh - 1] !== " ") insert = ` ${insert}`;
   if (fromCh < raw.length && raw[fromCh] !== " ") insert = `${insert} `;

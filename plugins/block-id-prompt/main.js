@@ -20215,6 +20215,940 @@ installBlockIdPromptMixins(BlockIdPromptPlugin, [
   BlockIdPromptRenameWritesMixin,
   BlockIdPromptRenameFollowMixin,
 ]);
+// ---- src/165-task-reqs-lines-twin.js ----
+// --- Task requirements twin (RQ), part 1: lines, managed lines, task scan --
+// Twin of the bob-cli helpers `src/native/task_reqs.rs` reads
+// (`capture::{line_spans, list_item_body, nearest_shallower_list_item_parent}`,
+// `markdown::{fenced_lines, strictly_closed_frontmatter_end}`, the
+// `note_tasks` scan, `collect_done::trailing_block_id_in_line`, and the
+// managed-line and drawer-title predicates). Rust is the authority: the
+// shared RQ vectors in `scripts/fixtures/task_reqs/` are copied byte for byte
+// from bob-cli, and a behavior difference is a twin bug.
+//
+// The RQ twin is two fragments (this one and `task-reqs-twin.js`). Both are
+// plugin-agnostic and copied byte for byte into every plugin that
+// recognizes requirement lines: pure functions and constants only (no
+// `this`, no Obsidian or CodeMirror, no clock, no plugin helpers).
+// Update bob-cli first, then this file, then its copies.
+//
+// Text offsets are UTF-16 code units (the editor's unit); indentation
+// comparisons that Rust makes in UTF-8 bytes use `taskReqUtf8Length` so
+// they agree.
+
+const TASK_REQ_MAX_DEPTH = 16;
+const TASK_REQ_GLOBAL_FILTER = "#task";
+// Rust `char::is_whitespace` (Unicode White_Space); JS `\s` differs on
+// U+0085 and U+FEFF, so the twin never uses `\s` or `String#trim`.
+const TASK_REQ_WHITESPACE_CLASS =
+  "\\t\\n\\u000b\\f\\r \\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000";
+const TASK_REQ_WHITESPACE_RE = new RegExp(`^[${TASK_REQ_WHITESPACE_CLASS}]$`);
+const TASK_REQ_LEADING_WHITESPACE_RE = new RegExp(`^[${TASK_REQ_WHITESPACE_CLASS}]+`);
+const TASK_REQ_TRAILING_WHITESPACE_RE = new RegExp(`[${TASK_REQ_WHITESPACE_CLASS}]+$`);
+const TASK_REQ_WHITESPACE_RUN_RE = new RegExp(`[${TASK_REQ_WHITESPACE_CLASS}]+`);
+const TASK_REQ_NONBLANK_RE = new RegExp(`[^${TASK_REQ_WHITESPACE_CLASS}]`);
+const TASK_REQ_INLINE_FIELD_RE = new RegExp(
+  `\\[[A-Za-z][A-Za-z0-9_-]*::[${TASK_REQ_WHITESPACE_CLASS}]*[^\\]]*\\]`,
+  "g",
+);
+// `task_status_hooks::parse_tasks_settings` defaults; configured statuses
+// are layered on top, unknown symbols read as TODO.
+const TASK_REQ_DEFAULT_STATUS_TYPES = Object.freeze({
+  " ": "TODO",
+  x: "DONE",
+  X: "DONE",
+  "/": "IN_PROGRESS",
+  "*": "ON_HOLD",
+  "-": "CANCELLED",
+});
+const TASK_REQ_DEPENDS_ON_EMOJI = ["⛓️", "⛓", "\u{1f517}"];
+const TASK_REQ_DEPENDS_ON_LABELS = ["DEPENDS ON", "DEPENDENCIES"];
+const TASK_REQ_BLOCKS_EMOJI = ["\u{1f9f1}", "\u{1f6a7}", "⛓️", "⛓"];
+const TASK_REQ_BLOCKS_LABELS = ["BLOCKS", "BLOCKING"];
+const TASK_REQ_RELATION_EMOJI = ["\u{1faa2}", "\u{1f517}"];
+const TASK_REQ_LINKS_LABELS = ["LINKS", "LINKS TO"];
+const TASK_REQ_LINKED_FROM_LABELS = ["LINKED FROM", "BACKLINKS"];
+const TASK_REQ_SCHEDULE_LOG_EMOJI = "\u{1f5d3}️";
+const TASK_REQ_WORK_LOG_EMOJI = "\u{1f6e0}️";
+const TASK_REQ_ROTTEN_LOG_EMOJI = "\u{1f940}";
+const TASK_REQ_MANAGED_LOG_LABELS = [
+  ["SCHEDULE LOG", "schedule"],
+  ["Schedule log", "schedule"],
+  ["WORK LOG", "work"],
+  ["Work log", "work"],
+  ["ROTTEN LOG", "rotten"],
+  ["Rotten log", "rotten"],
+];
+
+// --- Text primitives ------------------------------------------------------
+
+function taskReqIsWhitespaceChar(character) {
+  return typeof character === "string" && TASK_REQ_WHITESPACE_RE.test(character);
+}
+
+function taskReqIsBlank(text) {
+  return !TASK_REQ_NONBLANK_RE.test(String(text));
+}
+
+function taskReqTrimStart(text) {
+  return String(text).replace(TASK_REQ_LEADING_WHITESPACE_RE, "");
+}
+
+function taskReqTrimEnd(text) {
+  return String(text).replace(TASK_REQ_TRAILING_WHITESPACE_RE, "");
+}
+
+function taskReqTrim(text) {
+  return taskReqTrimEnd(taskReqTrimStart(text));
+}
+
+function taskReqSplitWhitespace(text) {
+  const trimmed = taskReqTrim(text);
+  return trimmed === "" ? [] : trimmed.split(TASK_REQ_WHITESPACE_RUN_RE);
+}
+
+// The leading Unicode whitespace of a line (`capture::leading_whitespace`).
+function taskReqLeadingWhitespace(text) {
+  const match = TASK_REQ_LEADING_WHITESPACE_RE.exec(String(text));
+  return match ? match[0] : "";
+}
+
+// UTF-8 byte length, for the indentation comparisons Rust makes in bytes.
+function taskReqUtf8Length(text) {
+  let length = 0;
+  for (const character of String(text)) {
+    const point = character.codePointAt(0);
+    length += point < 0x80 ? 1 : point < 0x800 ? 2 : point < 0x10000 ? 3 : 4;
+  }
+  return length;
+}
+
+// `capture::leading_spaces_or_tabs_len`.
+function taskReqIndentLength(text) {
+  const value = String(text);
+  let index = 0;
+  while (index < value.length && (value[index] === " " || value[index] === "\t")) index += 1;
+  return index;
+}
+
+function taskReqIsAsciiDigit(character) {
+  return typeof character === "string" && character.length === 1 && character >= "0" && character <= "9";
+}
+
+function taskReqIsAsciiWhitespace(character) {
+  return character === " " || character === "\t" || character === "\n" || character === "\f" || character === "\r";
+}
+
+// `capture::line_spans`: physical lines without their `\n` / `\r\n`, each
+// with the offset just past its ending.
+function taskReqLineSpans(contents) {
+  const text = String(contents == null ? "" : contents);
+  const spans = [];
+  let start = 0;
+  while (start < text.length) {
+    const newline = text.indexOf("\n", start);
+    const end = newline === -1 ? text.length : newline + 1;
+    let line = text.slice(start, newline === -1 ? end : newline);
+    if (line.endsWith("\r")) line = line.slice(0, -1);
+    spans.push({ start, end, text: line });
+    start = end;
+  }
+  return spans;
+}
+
+// `capture::list_marker_len`.
+function taskReqListMarkerLength(afterIndent) {
+  const first = afterIndent[0];
+  if (first === "-" || first === "*" || first === "+") return 1;
+  if (!taskReqIsAsciiDigit(first)) return null;
+  let digits = 0;
+  while (taskReqIsAsciiDigit(afterIndent[digits])) digits += 1;
+  const next = afterIndent[digits];
+  return next === "." || next === ")" ? digits + 1 : null;
+}
+
+// `capture::list_item_body` with its position: only list markers followed by
+// spaces or tabs count.
+function taskReqListItem(line) {
+  const text = String(line == null ? "" : line);
+  const indent = taskReqIndentLength(text);
+  const afterIndent = text.slice(indent);
+  const markerLength = taskReqListMarkerLength(afterIndent);
+  if (markerLength === null) return null;
+  const afterMarker = afterIndent.slice(markerLength);
+  const gap = taskReqIndentLength(afterMarker);
+  if (gap === 0) return null;
+  const bodyFrom = indent + markerLength + gap;
+  return { body: text.slice(bodyFrom), bodyFrom, indent };
+}
+
+function taskReqListItemBody(line) {
+  const item = taskReqListItem(line);
+  return item ? item.body : null;
+}
+
+// `task_status_hooks::after_list_marker`: the index just past the marker
+// when an ASCII whitespace byte follows it.
+function taskReqAfterListMarker(line, index) {
+  const character = line[index];
+  if (character === "-" || character === "*" || character === "+") {
+    return taskReqIsAsciiWhitespace(line[index + 1]) ? index + 1 : null;
+  }
+  let digits = 0;
+  while (taskReqIsAsciiDigit(line[index + digits])) digits += 1;
+  if (digits === 0) return null;
+  const after = line[index + digits];
+  if (after !== "." && after !== ")") return null;
+  return taskReqIsAsciiWhitespace(line[index + digits + 1]) ? index + digits + 1 : null;
+}
+
+// `markdown::fence_marker` / `closes_fence` / `fenced_lines`.
+function taskReqFenceMarker(line) {
+  const text = String(line);
+  let indentation = 0;
+  while (text[indentation] === " ") indentation += 1;
+  if (indentation > 3) return null;
+  const rest = text.slice(indentation);
+  const character = rest[0];
+  if (character !== "`" && character !== "~") return null;
+  let length = 0;
+  while (rest[length] === character) length += 1;
+  return length >= 3 ? { character, length } : null;
+}
+
+function taskReqClosesFence(line, open) {
+  const marker = taskReqFenceMarker(line);
+  if (!marker) return false;
+  const trimmed = taskReqTrimStart(line);
+  return marker.character === open.character
+    && marker.length >= open.length
+    && taskReqIsBlank(trimmed.slice(marker.length));
+}
+
+function taskReqFencedLines(lines, start, end) {
+  const fenced = new Set();
+  let open = null;
+  for (let index = start; index < end; index += 1) {
+    const line = lines[index];
+    if (open) {
+      fenced.add(index);
+      if (taskReqClosesFence(line, open)) open = null;
+    } else {
+      const marker = taskReqFenceMarker(line);
+      if (marker) {
+        fenced.add(index);
+        open = marker;
+      }
+    }
+  }
+  return fenced;
+}
+
+function taskReqFrontmatterEnd(lines) {
+  if (!lines.length || taskReqTrimEnd(lines[0]) !== "---") return null;
+  for (let index = 1; index < lines.length; index += 1) {
+    if (taskReqTrimEnd(lines[index]) === "---") return index;
+  }
+  return null;
+}
+
+// `collect_done::trailing_block_id_in_line`.
+function taskReqTrailingBlockId(text) {
+  const trimmed = taskReqTrimEnd(text);
+  const start = trimmed.lastIndexOf("^");
+  if (start === -1) return null;
+  const id = trimmed.slice(start + 1);
+  if (!id || !/^[A-Za-z0-9-]+$/.test(id)) return null;
+  if (start > 0 && !taskReqIsWhitespaceChar(trimmed[start - 1])) return null;
+  return id;
+}
+
+// --- Managed lines and drawer titles ---------------------------------------
+
+// The shared head of the Depends-On, Blocks, and relation parsers: list
+// marker, optional tolerated emoji, `**LABEL**` with an optional colon.
+// Every recognized label is a managed line, malformed or not.
+function taskReqManagedHeader(line, emojis, labels) {
+  const text = String(line);
+  const markerEnd = taskReqAfterListMarker(text, taskReqIndentLength(text));
+  if (markerEnd === null) return null;
+  let rest = taskReqTrimStart(text.slice(markerEnd));
+  for (const emoji of emojis) {
+    if (rest.startsWith(emoji)) {
+      rest = taskReqTrimStart(rest.slice(emoji.length));
+      break;
+    }
+  }
+  if (!rest.startsWith("**")) return null;
+  const body = rest.slice(2);
+  const close = body.indexOf("**");
+  if (close === -1) return null;
+  const raw = body.slice(0, close);
+  const label = raw.endsWith(":") ? raw.slice(0, -1) : raw;
+  if (!labels.includes(label)) return null;
+  let after = body.slice(close + 2);
+  if (after.startsWith(":")) after = after.slice(1);
+  return { label, malformed: after !== "" && after[0] !== " " && after[0] !== "\t" };
+}
+
+function taskReqIsDependencyLine(line) {
+  return taskReqManagedHeader(line, TASK_REQ_DEPENDS_ON_EMOJI, TASK_REQ_DEPENDS_ON_LABELS) !== null;
+}
+
+function taskReqIsBlocksLine(line) {
+  return taskReqManagedHeader(line, TASK_REQ_BLOCKS_EMOJI, TASK_REQ_BLOCKS_LABELS) !== null;
+}
+
+// A malformed relation header reads as both a LINKS and a LINKED FROM line,
+// as `task_relations::parse_header` returns `Err` before the kind check.
+function taskReqRelationHeader(line) {
+  return taskReqManagedHeader(
+    line,
+    TASK_REQ_RELATION_EMOJI,
+    TASK_REQ_LINKS_LABELS.concat(TASK_REQ_LINKED_FROM_LABELS),
+  );
+}
+
+function taskReqIsLinksLine(line) {
+  const header = taskReqRelationHeader(line);
+  return header !== null && (header.malformed || TASK_REQ_LINKS_LABELS.includes(header.label));
+}
+
+function taskReqIsLinkedFromLine(line) {
+  const header = taskReqRelationHeader(line);
+  return header !== null && (header.malformed || TASK_REQ_LINKED_FROM_LABELS.includes(header.label));
+}
+
+// `task_dependencies::is_managed_link_line`.
+function taskReqIsManagedLinkLine(line) {
+  return taskReqIsDependencyLine(line) || taskReqIsBlocksLine(line) || taskReqRelationHeader(line) !== null;
+}
+
+function taskReqIsSubprojectsLine(line) {
+  const text = String(line);
+  const markerEnd = taskReqAfterListMarker(text, taskReqIndentLength(text));
+  if (markerEnd === null) return false;
+  let body = taskReqTrimStart(text.slice(markerEnd));
+  if (body.startsWith("\u{1f9e9}")) body = taskReqTrimStart(body.slice("\u{1f9e9}".length));
+  return body.includes("**Sub-projects:**") || body.includes("**Sub-projects**");
+}
+
+function taskReqIsCancelLog(line) {
+  const text = String(line);
+  const markerEnd = taskReqAfterListMarker(text, taskReqIndentLength(text));
+  if (markerEnd === null) return false;
+  const body = taskReqTrimStart(text.slice(markerEnd));
+  return body.startsWith("❌") && body.includes("CANCEL LOG");
+}
+
+function taskReqManagedLogLabel(rest) {
+  if (!rest.startsWith("**")) return null;
+  const afterOpen = rest.slice(2);
+  for (const [label, kind] of TASK_REQ_MANAGED_LOG_LABELS) {
+    if (!afterOpen.startsWith(label)) continue;
+    let afterLabel = afterOpen.slice(label.length);
+    if (afterLabel.startsWith(":")) afterLabel = afterLabel.slice(1);
+    if (!afterLabel.startsWith("**")) continue;
+    if (/^[ \t]*$/.test(afterLabel.slice(2))) return kind;
+  }
+  return null;
+}
+
+function taskReqStripLogEmoji(rest, emoji, optionalVariation) {
+  if (!rest.startsWith(emoji)) return null;
+  let after = rest.slice(emoji.length);
+  if (optionalVariation && after.startsWith("️")) after = after.slice(1);
+  const gap = taskReqIndentLength(after);
+  return gap > 0 ? after.slice(gap) : null;
+}
+
+// `capture::parse_managed_task_log_marker`: `schedule`, `work`, `rotten`, or
+// null. A present emoji must agree with the label. Cancel Log is separate.
+function taskReqManagedLogKind(line) {
+  const rest = taskReqListItemBody(line);
+  if (rest === null) return null;
+  const pairs = [
+    [TASK_REQ_SCHEDULE_LOG_EMOJI, "schedule", false],
+    [TASK_REQ_WORK_LOG_EMOJI, "work", false],
+    [TASK_REQ_ROTTEN_LOG_EMOJI, "rotten", true],
+  ];
+  for (const [emoji, expected, optionalVariation] of pairs) {
+    const after = taskReqStripLogEmoji(rest, emoji, optionalVariation);
+    if (after !== null) {
+      const kind = taskReqManagedLogLabel(after);
+      return kind === expected ? kind : null;
+    }
+  }
+  return taskReqManagedLogLabel(rest);
+}
+
+function taskReqIsTitleLead(character) {
+  return (character >= "A" && character <= "Z") || taskReqIsAsciiDigit(character);
+}
+
+// `capture_drawers::is_drawer_title`.
+function taskReqIsDrawerTitle(title) {
+  const characters = Array.from(String(title));
+  if (!characters.length || !taskReqIsTitleLead(characters[0])) return false;
+  let hasLetter = characters[0] >= "A" && characters[0] <= "Z";
+  for (let index = 1; index < characters.length; index += 1) {
+    const character = characters[index];
+    const allowed = taskReqIsTitleLead(character)
+      || " \t&'(),./-?!;".includes(character)
+      || (character === ":" && index === characters.length - 1);
+    if (!allowed) return false;
+    if (character >= "A" && character <= "Z") hasLetter = true;
+  }
+  return hasLetter;
+}
+
+// `capture_drawers::drawer_key`: whitespace collapsed, ASCII uppercase.
+function taskReqDrawerKey(title) {
+  return taskReqSplitWhitespace(title).join(" ").replace(/[a-z]+/g, (letters) => letters.toUpperCase());
+}
+
+// Lines that can never be a req or a req parent by shape: drawer titles and
+// managed link/log lines.
+function taskReqIsStructuralContainer(line) {
+  const body = taskReqListItemBody(line);
+  if (body !== null && taskReqIsDrawerTitle(taskReqTrim(body))) return true;
+  return taskReqIsSubprojectsLine(line)
+    || taskReqIsManagedLinkLine(line)
+    || taskReqIsCancelLog(line)
+    || taskReqManagedLogKind(line) !== null;
+}
+
+// --- Note document and task scan --------------------------------------------
+
+function taskReqOptions(options) {
+  const source = options && typeof options === "object" ? options : {};
+  const globalFilter = typeof source.globalFilter === "string" ? source.globalFilter : TASK_REQ_GLOBAL_FILTER;
+  const statusTypes = Object.assign({}, TASK_REQ_DEFAULT_STATUS_TYPES, source.statusTypes || {});
+  return { globalFilter, statusTypes };
+}
+
+function taskReqStatusType(statusSymbol, options) {
+  const type = options.statusTypes[statusSymbol];
+  return typeof type === "string" ? type : "TODO";
+}
+
+function taskReqStatusIsOpen(statusType) {
+  return statusType === "TODO" || statusType === "IN_PROGRESS" || statusType === "ON_HOLD";
+}
+
+// One parsed note: spans plus per-line facts the readers share.
+function taskReqDocument(contents) {
+  const text = String(contents == null ? "" : contents);
+  const spans = taskReqLineSpans(text);
+  const texts = spans.map((span) => span.text);
+  const bodies = texts.map((line) => taskReqListItemBody(line));
+  return {
+    contents: text,
+    spans,
+    texts,
+    bodies,
+    indents: texts.map((line) => taskReqIndentLength(line)),
+    blank: texts.map((line) => taskReqIsBlank(line)),
+    parents: new Array(texts.length),
+    memo: new Map(),
+  };
+}
+
+function taskReqDocMemo(doc, key, build) {
+  if (!doc.memo.has(key)) doc.memo.set(key, build());
+  return doc.memo.get(key);
+}
+
+// `capture::nearest_shallower_list_item_parent`, memoized per document.
+function taskReqDocParent(doc, childIndex) {
+  if (doc.parents[childIndex] !== undefined) return doc.parents[childIndex];
+  let result = null;
+  const childIndent = doc.indents[childIndex];
+  if (childIndex > 0 && childIndent > 0) {
+    for (let index = childIndex - 1; index >= 0; index -= 1) {
+      if (doc.blank[index] || doc.indents[index] >= childIndent) continue;
+      if (doc.bodies[index] !== null) {
+        result = index;
+        break;
+      }
+    }
+  }
+  doc.parents[childIndex] = result;
+  return result;
+}
+
+// Fences over list-item bodies, so a fence nested in a list item counts.
+function taskReqDocListFenced(doc) {
+  return taskReqDocMemo(doc, "list-fenced", () => {
+    const logical = doc.texts.map((line, index) => (doc.bodies[index] !== null ? doc.bodies[index] : line));
+    return taskReqFencedLines(logical, 0, logical.length);
+  });
+}
+
+function taskReqParseTaskLine(line, globalFilter) {
+  const indentation = taskReqLeadingWhitespace(line);
+  const afterIndent = line.slice(indentation.length);
+  if (!afterIndent.startsWith("- [")) return null;
+  const afterOpen = afterIndent.slice(3);
+  const point = afterOpen.codePointAt(0);
+  if (point === undefined) return null;
+  const statusSymbol = String.fromCodePoint(point);
+  const afterStatus = afterOpen.slice(statusSymbol.length);
+  if (!afterStatus.startsWith("] ")) return null;
+  const body = afterStatus.slice(2);
+  if (globalFilter !== "" && !taskReqSplitWhitespace(body).includes(globalFilter)) return null;
+  return { indentation, statusSymbol, body };
+}
+
+// `note_tasks::clean_description`.
+function taskReqCleanDescription(body, globalFilter, blockId) {
+  let withoutBlock = String(body);
+  if (blockId != null) {
+    const trimmed = taskReqTrimEnd(withoutBlock);
+    const suffix = `^${blockId}`;
+    if (trimmed.endsWith(suffix)) withoutBlock = trimmed.slice(0, trimmed.length - suffix.length);
+  }
+  const tokens = taskReqSplitWhitespace(withoutBlock.replace(TASK_REQ_INLINE_FIELD_RE, " "));
+  const out = [];
+  let previousDroppedFilter = false;
+  for (const token of tokens) {
+    if (globalFilter !== "" && token === globalFilter) {
+      previousDroppedFilter = true;
+      continue;
+    }
+    if (previousDroppedFilter && token.replace(/[A-Z]/g, (letter) => letter.toLowerCase()) === "#ref") {
+      previousDroppedFilter = false;
+      continue;
+    }
+    previousDroppedFilter = false;
+    out.push(token);
+  }
+  return out.join(" ");
+}
+
+// `note_tasks::task_block_extent`: indentation compares in UTF-8 bytes.
+function taskReqTaskBlockExtent(doc, taskIndex, taskIndentation) {
+  const indentBytes = (index) => taskReqUtf8Length(taskReqLeadingWhitespace(doc.texts[index]));
+  let index = taskIndex + 1;
+  let lastConsumed = taskIndex;
+  let childCount = 0;
+  while (index < doc.texts.length) {
+    if (doc.blank[index]) {
+      let next = index + 1;
+      while (next < doc.texts.length && doc.blank[next]) next += 1;
+      if (next < doc.texts.length && indentBytes(next) > taskIndentation) {
+        lastConsumed = index;
+        index += 1;
+        continue;
+      }
+      break;
+    }
+    if (indentBytes(index) <= taskIndentation) break;
+    lastConsumed = index;
+    childCount += 1;
+    index += 1;
+  }
+  return { childCount, blockEnd: doc.spans[lastConsumed].end };
+}
+
+// `note_tasks::scan`, reduced to what the requirement and layout readers
+// use. Tasks come back in document order.
+function taskReqScanIn(doc, options) {
+  return taskReqDocMemo(doc, `scan:${options.globalFilter}:${JSON.stringify(options.statusTypes)}`, () => {
+    const frontmatterEnd = taskReqFrontmatterEnd(doc.texts);
+    const scanStart = frontmatterEnd === null ? 0 : frontmatterEnd + 1;
+    const fenced = taskReqFencedLines(doc.texts, scanStart, doc.texts.length);
+    const tasks = [];
+    for (let lineIndex = 0; lineIndex < doc.texts.length; lineIndex += 1) {
+      if ((frontmatterEnd !== null && lineIndex <= frontmatterEnd) || fenced.has(lineIndex)) continue;
+      const line = doc.texts[lineIndex];
+      const parsed = taskReqParseTaskLine(line, options.globalFilter);
+      if (!parsed) continue;
+      const blockId = taskReqTrailingBlockId(line);
+      const extent = taskReqTaskBlockExtent(doc, lineIndex, taskReqUtf8Length(parsed.indentation));
+      const statusType = taskReqStatusType(parsed.statusSymbol, options);
+      tasks.push({
+        lineIndex,
+        indentation: parsed.indentation,
+        statusSymbol: parsed.statusSymbol,
+        statusType,
+        open: taskReqStatusIsOpen(statusType),
+        description: taskReqCleanDescription(parsed.body, options.globalFilter, blockId),
+        blockId,
+        childCount: extent.childCount,
+        blockEnd: extent.blockEnd,
+      });
+    }
+    return tasks;
+  });
+}
+
+function taskReqNoteTasks(contents, options) {
+  return taskReqScanIn(taskReqDocument(contents), taskReqOptions(options));
+}
+// ---- src/166-task-reqs-twin.js ----
+// --- Task requirements twin (RQ), part 2: the recognizer -------------------
+// Twin of bob-cli `src/native/task_reqs.rs` (`docs/task-requirements.md`
+// §1–§2) over the part-1 line helpers (`task-reqs-lines-twin.js`). A req is
+// a checkbox list item without the global filter whose structural parent is
+// a real task or another req, outside fences, quotes, and frontmatter.
+// State is derived, never written. Plugin-agnostic and copied byte for byte;
+// update bob-cli first, then this file, then its copies.
+//
+// Row fields keep bob-ledger-tools' display subset names (`line`,
+// `lineIndex`, `depth`, `parent`, `owner`, `ownerLine`, `ownerText`,
+// `ownerName`, `mark`, `markChar`, `state`, `text`, `anchor`,
+// `depth_exceeded`, `excludedBy`, `excludedBecause`, `markerFrom`,
+// `markerTo`). Fields ending in `Index` / `Indexes` are 0-based; `line`,
+// `parent`, `owner`, `ownerLine`, and `excludedBy` are 1-based.
+
+// --- Requirement recognizer ----------------------------------------------
+
+function taskReqMarkName(markChar) {
+  if (markChar === " ") return "open";
+  if (markChar === "-") return "dropped";
+  if (markChar === ">") return "carried";
+  if (markChar === "x" || markChar === "X") return "legacy-met";
+  return "unknown";
+}
+
+// A req checkbox head: `[` + one mark + `]` + whitespace (or the end).
+// `mark` is the raw mark character (bob-ledger-tools' shape); `markName` is
+// its stable name (`open`, `dropped`, `carried`, `legacy-met`, `unknown`).
+function taskReqParseCheckbox(body) {
+  const text = String(body == null ? "" : body);
+  if (!text.startsWith("[")) return null;
+  const point = text.codePointAt(1);
+  if (point === undefined) return null;
+  const markChar = String.fromCodePoint(point);
+  const afterMark = text.slice(1 + markChar.length);
+  if (!afterMark.startsWith("]")) return null;
+  const afterClose = afterMark.slice(1);
+  const parsed = {
+    mark: markChar,
+    markChar,
+    markName: taskReqMarkName(markChar),
+    rest: "",
+    markerLength: 2 + markChar.length,
+  };
+  if (afterClose === "") return parsed;
+  if (afterClose[0] !== " " && afterClose[0] !== "\t") return null;
+  parsed.rest = afterClose.replace(/^[ \t]+/, "");
+  return parsed;
+}
+
+function taskReqCarriesGlobalFilter(rest, globalFilter) {
+  const filter = globalFilter === undefined ? TASK_REQ_GLOBAL_FILTER : globalFilter;
+  return filter !== "" && taskReqSplitWhitespace(rest).includes(filter);
+}
+
+// Line-shape check: a checkbox list item without the global filter token.
+// Position (parent chain, fences, quotes) is decided by the forest.
+function taskReqHeadMark(line, globalFilter) {
+  const item = taskReqListItem(line);
+  if (!item) return null;
+  const parsed = taskReqParseCheckbox(item.body);
+  if (!parsed || taskReqCarriesGlobalFilter(parsed.rest, globalFilter)) return null;
+  parsed.bodyFrom = item.bodyFrom;
+  return parsed;
+}
+
+// `task_reqs::checkbox_mark_without_filter`: the cheap single-line prefilter
+// (`open`, `dropped`, …) or null. Only such a line can be a req.
+function taskReqCheckboxMarkWithoutFilter(line, globalFilter) {
+  const head = taskReqHeadMark(line, globalFilter);
+  return head ? head.markName : null;
+}
+
+// Clean text: the trailing `^anchor` removed, trailing whitespace trimmed.
+function taskReqCleanText(rest) {
+  const trimmed = taskReqTrimEnd(rest);
+  const anchor = taskReqTrailingBlockId(trimmed);
+  if (anchor === null) return { text: trimmed, anchor: null };
+  const suffix = `^${anchor}`;
+  const without = trimmed.endsWith(suffix) ? trimmed.slice(0, trimmed.length - suffix.length) : trimmed;
+  return { text: taskReqTrimEnd(without), anchor };
+}
+
+function taskReqOwnerStatus(task) {
+  if (task.statusType === "DONE") return "done";
+  if (task.statusType === "CANCELLED") return "cancelled";
+  return "open";
+}
+
+function taskReqBaseState(mark, ownerStatus) {
+  if (mark === "dropped") return "dropped";
+  if (mark === "carried") return "carried";
+  if (mark === "legacy-met") return "met";
+  if (ownerStatus === "done") return "met";
+  if (ownerStatus === "cancelled") return "moot";
+  return "pending";
+}
+
+// `task_reqs::block_last_line` (`block_end` is an offset).
+function taskReqBlockLastLine(doc, task) {
+  for (let index = 0; index < doc.spans.length; index += 1) {
+    if (doc.spans[index].end > task.blockEnd) return Math.max(index - 1, 0);
+  }
+  return Math.max(doc.spans.length - 1, 0);
+}
+
+function taskReqChainReaches(doc, tasksByLine, fenced, lineIndex, target) {
+  let cursor = lineIndex;
+  for (;;) {
+    if (cursor === target) return true;
+    if (tasksByLine.has(cursor) || fenced.has(cursor)) return false;
+    const parent = taskReqDocParent(doc, cursor);
+    if (parent === null) return false;
+    cursor = parent;
+  }
+}
+
+function taskReqChainCrossesContainer(doc, fenced, lineIndex, target) {
+  let cursor = lineIndex;
+  for (;;) {
+    if (cursor === target || fenced.has(cursor)) return false;
+    const parent = taskReqDocParent(doc, cursor);
+    if (parent === null) return false;
+    if (parent !== target && taskReqIsStructuralContainer(doc.texts[parent])) return true;
+    cursor = parent;
+  }
+}
+
+function taskReqContiguousRanges(sorted) {
+  const ranges = [];
+  let start = null;
+  let previous = 0;
+  for (const line of sorted) {
+    if (start === null) {
+      start = line;
+    } else if (line !== previous + 1) {
+      ranges.push([start, previous]);
+      start = line;
+    }
+    previous = line;
+  }
+  if (start !== null) ranges.push([start, previous]);
+  return ranges;
+}
+
+// The req forest for every task in the note, ordered by owner then document
+// position (`task_reqs::forest_for_note`).
+function taskReqForestIn(doc, options) {
+  const lineCount = doc.texts.length;
+  if (lineCount === 0) return [];
+  const fenced = taskReqDocListFenced(doc);
+  const logical = doc.texts.map((line, index) => (doc.bodies[index] !== null ? doc.bodies[index] : line));
+  const frontmatterEnd = taskReqFrontmatterEnd(logical);
+  const tasks = taskReqScanIn(doc, options);
+  const tasksByLine = new Map(tasks.map((task) => [task.lineIndex, task]));
+  const ownerEnds = new Map();
+  const ownerEnd = (ownerLine) => {
+    if (!ownerEnds.has(ownerLine)) {
+      const task = tasksByLine.get(ownerLine);
+      ownerEnds.set(ownerLine, task ? taskReqBlockLastLine(doc, task) : Math.max(lineCount - 1, 0));
+    }
+    return ownerEnds.get(ownerLine);
+  };
+  const nodes = [];
+  const nodeByLine = new Map();
+  // Innermost owners first, so nested subtasks win their own reqs.
+  const owners = tasks.slice().sort((left, right) => right.lineIndex - left.lineIndex || left.blockEnd - right.blockEnd);
+  for (const owner of owners) {
+    const ownerStatus = taskReqOwnerStatus(owner);
+    const end = Math.min(ownerEnd(owner.lineIndex), lineCount - 1);
+    for (let lineIndex = owner.lineIndex + 1; lineIndex <= end; lineIndex += 1) {
+      if ((frontmatterEnd !== null && lineIndex <= frontmatterEnd)
+        || fenced.has(lineIndex)
+        || doc.blank[lineIndex]
+        || doc.bodies[lineIndex] === null
+        || tasksByLine.has(lineIndex)) continue;
+      const line = doc.texts[lineIndex];
+      const head = taskReqHeadMark(line, options.globalFilter);
+      if (!head || taskReqIsStructuralContainer(line)) continue;
+      const parentLine = taskReqDocParent(doc, lineIndex);
+      if (parentLine === null || fenced.has(parentLine) || taskReqIsStructuralContainer(doc.texts[parentLine])) continue;
+      let depth;
+      let parentIndex;
+      if (parentLine === owner.lineIndex) {
+        depth = 1;
+        parentIndex = null;
+      } else if (nodeByLine.has(parentLine)) {
+        const parentNode = nodes[nodeByLine.get(parentLine)];
+        if (parentNode.ownerIndex !== owner.lineIndex) continue;
+        depth = parentNode.depth + 1;
+        parentIndex = parentLine;
+      } else {
+        // Under a note, a drawer entry, a managed line, or any other
+        // non-req bullet: an ordinary checklist, never a req.
+        continue;
+      }
+      const cleaned = taskReqCleanText(head.rest);
+      let state = taskReqBaseState(head.markName, ownerStatus);
+      let excludedByIndex = null;
+      let excludedBecause = null;
+      if (parentIndex !== null && state !== "dropped" && state !== "carried") {
+        const parentNode = nodes[nodeByLine.get(parentIndex)];
+        if (parentNode.state === "dropped" || parentNode.state === "carried") {
+          state = "excluded";
+          excludedByIndex = parentIndex;
+          excludedBecause = parentNode.state;
+        } else if (parentNode.state === "excluded") {
+          state = "excluded";
+          excludedByIndex = parentIndex;
+          excludedBecause = parentNode.excludedBecause;
+        }
+      }
+      nodeByLine.set(lineIndex, nodes.length);
+      nodes.push({
+        line: lineIndex + 1,
+        lineIndex,
+        depth,
+        parent: parentIndex === null ? null : parentIndex + 1,
+        parentIndex,
+        owner: owner.lineIndex + 1,
+        ownerLine: owner.lineIndex + 1,
+        ownerIndex: owner.lineIndex,
+        ownerText: doc.texts[owner.lineIndex],
+        ownerName: owner.description,
+        mark: head.markName,
+        markChar: head.markChar,
+        state,
+        text: cleaned.text,
+        anchor: cleaned.anchor,
+        excludedBy: excludedByIndex === null ? null : excludedByIndex + 1,
+        excludedByIndex,
+        excludedBecause,
+        path: [],
+        subtreeEndIndex: lineIndex,
+        noteRangeIndexes: [],
+        depth_exceeded: depth > TASK_REQ_MAX_DEPTH,
+        markerFrom: head.bodyFrom,
+        markerTo: head.bodyFrom + head.markerLength,
+      });
+    }
+  }
+
+  // Sibling ordinals among reqs sharing one owner and structural parent.
+  const ordinals = new Map();
+  const pathByHead = new Map();
+  const order = nodes.map((_, index) => index)
+    .sort((left, right) => nodes[left].ownerIndex - nodes[right].ownerIndex || nodes[left].lineIndex - nodes[right].lineIndex);
+  for (const index of order) {
+    const node = nodes[index];
+    const key = `${node.ownerIndex}:${node.parentIndex === null ? "root" : node.parentIndex}`;
+    const ordinal = (ordinals.get(key) || 0) + 1;
+    ordinals.set(key, ordinal);
+    const path = (pathByHead.get(key) || []).concat([ordinal]);
+    pathByHead.set(`${node.ownerIndex}:${node.lineIndex}`, path);
+    node.path = path;
+  }
+
+  // Subtree ends and direct note ranges. A line belongs to the nearest req
+  // whose chain reaches it without crossing another req or a nested task.
+  const chains = new Map();
+  for (const node of nodes) {
+    const chain = [node.lineIndex];
+    let cursor = node.parentIndex;
+    while (cursor !== null) {
+      chain.push(cursor);
+      cursor = nodes[nodeByLine.get(cursor)].parentIndex;
+    }
+    chains.set(node.lineIndex, chain);
+  }
+  const allNotes = [];
+  for (const node of nodes) {
+    let end = node.lineIndex;
+    const noteLines = [];
+    const lastLine = ownerEnd(node.ownerIndex);
+    const headIndent = doc.indents[node.lineIndex];
+    let cursor = node.lineIndex + 1;
+    while (cursor <= lastLine && cursor < lineCount) {
+      const text = doc.texts[cursor];
+      const isList = doc.bodies[cursor] !== null;
+      if (isList && doc.indents[cursor] <= headIndent) break;
+      if (tasksByLine.has(cursor)) {
+        cursor = taskReqBlockLastLine(doc, tasksByLine.get(cursor)) + 1;
+        continue;
+      }
+      if (fenced.has(cursor)) {
+        cursor += 1;
+        continue;
+      }
+      if (taskReqChainReaches(doc, tasksByLine, fenced, cursor, node.lineIndex)) {
+        end = cursor;
+        // Managed lines, drawers, and their nested content travel with the
+        // req but are never its notes.
+        if (!nodeByLine.has(cursor)
+          && isList
+          && !taskReqIsStructuralContainer(text)
+          && !taskReqChainCrossesContainer(doc, fenced, cursor, node.lineIndex)
+          && taskReqHeadMark(text, options.globalFilter) === null) {
+          noteLines.push(cursor);
+        }
+      }
+      cursor += 1;
+    }
+    node.subtreeEndIndex = end;
+    allNotes.push(noteLines);
+  }
+  nodes.forEach((node, index) => {
+    const childSubtrees = nodes
+      .filter((other) => other.ownerIndex === node.ownerIndex
+        && other.lineIndex !== node.lineIndex
+        && chains.get(other.lineIndex).includes(node.lineIndex))
+      .map((other) => [other.lineIndex, other.subtreeEndIndex]);
+    const direct = allNotes[index].filter((line) => !childSubtrees.some(([start, stop]) => line >= start && line <= stop));
+    node.noteRangeIndexes = taskReqContiguousRanges(direct);
+  });
+
+  return nodes.sort((left, right) => left.ownerIndex - right.ownerIndex || left.lineIndex - right.lineIndex);
+}
+
+function taskReqForest(contents, options) {
+  return taskReqForestIn(taskReqDocument(contents), taskReqOptions(options));
+}
+
+// The reqs one owner task owns (`task_reqs::req_forest`).
+function taskReqForestForOwner(contents, ownerIndex, options) {
+  return taskReqForest(contents, options).filter((node) => node.ownerIndex === ownerIndex);
+}
+
+function taskReqInfoAtLine(contents, lineIndex, options) {
+  return taskReqForest(contents, options).find((node) => node.lineIndex === lineIndex) || null;
+}
+
+// `task_reqs::owner_of_line`: the 0-based owning task line for a task line
+// or a req, else null.
+function taskReqOwnerOfLine(contents, lineIndex, options) {
+  const doc = taskReqDocument(contents);
+  const resolved = taskReqOptions(options);
+  if (taskReqScanIn(doc, resolved).some((task) => task.lineIndex === lineIndex)) return lineIndex;
+  const node = taskReqForestIn(doc, resolved).find((row) => row.lineIndex === lineIndex);
+  return node ? node.ownerIndex : null;
+}
+
+function taskReqIsReqLine(contents, lineIndex, options) {
+  return taskReqInfoAtLine(contents, lineIndex, options) !== null;
+}
+
+// `task_reqs::req_path`: dotted 1-based sibling ordinals (`2.1.3`).
+function taskReqPathText(row) {
+  return (row && Array.isArray(row.path) ? row.path : []).join(".");
+}
+
+// `task_reqs::req_row_key`. `digest8(text)` returns the first 8 hex digits
+// of the SHA-256 of the UTF-8 text; it is injected to keep this fragment
+// pure and synchronous.
+function taskReqRowKey(ownerKey, row, digest8) {
+  return `${ownerKey}/req/${taskReqPathText(row)}~${String(digest8(row.text)).slice(0, 8)}`;
+}
+
+// `task_reqs::req_run`: the hash run drawn in place of a req's checkbox.
+function taskReqRun(depth) {
+  if (depth <= 1) return "⌗⌗";
+  if (depth === 2) return "⌗⌗⌗";
+  return "⌗⌗⌗⌗";
+}
 // ---- src/170-exports.js ----
 module.exports = BlockIdPromptPlugin;
 
@@ -20422,3 +21356,35 @@ module.exports.helpers = {
   renderTaskWikilinkDetail,
   renderTaskWikilinkFooter,
 };
+// ---- src/171-task-reqs-exports.js ----
+// Task requirement (RQ) twin, byte-identical copies of the cycler's
+// fragments, exported for the shared bob-cli vector tests and the twin
+// drift test.
+Object.assign(module.exports.helpers, {
+  TASK_REQ_MAX_DEPTH,
+  TASK_REQ_GLOBAL_FILTER,
+  TASK_REQ_DEFAULT_STATUS_TYPES,
+  taskReqLineSpans,
+  taskReqListItem,
+  taskReqListItemBody,
+  taskReqParseCheckbox,
+  taskReqCarriesGlobalFilter,
+  taskReqCheckboxMarkWithoutFilter,
+  taskReqIsStructuralContainer,
+  taskReqIsDrawerTitle,
+  taskReqDrawerKey,
+  taskReqManagedLogKind,
+  taskReqIsManagedLinkLine,
+  taskReqIsCancelLog,
+  taskReqTrailingBlockId,
+  taskReqCleanDescription,
+  taskReqNoteTasks,
+  taskReqForest,
+  taskReqForestForOwner,
+  taskReqInfoAtLine,
+  taskReqOwnerOfLine,
+  taskReqIsReqLine,
+  taskReqPathText,
+  taskReqRowKey,
+  taskReqRun,
+});

@@ -119,8 +119,8 @@ test("SV fixture is copied byte-for-byte from bob-cli", () => {
   assert.ok(vectors.cases.length >= 22, "the shared vectors retain their original scenarios");
 });
 
-test("SV1–SV7 and SV17–SV18 use the canonical close, project, and scope copy", () => {
-  for (const id of ["SV1", "SV2", "SV3", "SV4", "SV5", "SV6", "SV7", "SV17", "SV18"]) {
+test("SV1–SV7, SV17–SV18, and SV25 use the canonical close, project, and scope copy", () => {
+  for (const id of ["SV1", "SV2", "SV3", "SV4", "SV5", "SV6", "SV7", "SV17", "SV18", "SV25"]) {
     const vector = vectors.cases.find((entry) => entry.id === id);
     const { descriptor } = descriptorFor(vector);
     assert.ok(descriptor, id);
@@ -147,6 +147,43 @@ test("SV1–SV7 and SV17–SV18 use the canonical close, project, and scope copy
   assert.equal(project.descriptor.scopeNote, "· its 1 open task stays open");
   const plural = descriptorFor(vectors.cases.find((entry) => entry.id === "SV18"));
   assert.equal(plural.descriptor.scopeNote, "· its 2 open subtasks stay open");
+});
+
+test("the scope note counts only real #task subtasks and project tasks, never requirements", () => {
+  const subtasks = [
+    "- [ ] #task Owner ^owner",
+    "\t- [ ] Open req",
+    "\t\t- [ ] Nested req",
+    "\t- [ ] #task Real subtask ^sub",
+    "\t\t- [ ] Subtask req",
+    "\t- [/] #task Started subtask ^started",
+    "\t- [x] #task Done subtask ^done",
+    "\t- NOTES",
+    "\t\t- [ ] pasted checklist",
+    "- [ ] #task Sibling ^sibling",
+    "",
+  ].join("\n");
+  const owner = descriptorFor({ path: "Tasks.md", key: "Tasks.md#^owner", line: 0 }, { source: subtasks });
+  assert.equal(owner.descriptor.scopeNote, "· its 2 open subtasks stay open");
+  // The block ends at the first line back at the task's indentation, as
+  // bob-cli's child_block_end_line does, even when that line is no task.
+  const broken = ["- [ ] #task Owner ^owner", "A paragraph", "\t- [ ] #task Under the paragraph ^p", ""].join("\n");
+  const paragraph = descriptorFor({ path: "Tasks.md", key: "Tasks.md#^owner", line: 0 }, { source: broken });
+  assert.equal("scopeNote" in paragraph.descriptor, false);
+  const project = [
+    "- [ ] #task #prj Ship Alpha ^prj",
+    "\t- [ ] Project req",
+    "- [ ] #task Project resident ^resident",
+    "\t- [ ] Resident req",
+    "\t\t- [ ] #ref Nested reading req",
+    "- [ ] #ref Reading row",
+    "",
+  ].join("\n");
+  const alpha = descriptorFor(
+    { path: "Projects/Alpha.md", key: "Projects/Alpha.md#^prj", line: 0, group: "project_finished" },
+    { source: project },
+  );
+  assert.equal(alpha.descriptor.scopeNote, "· its 2 open tasks stay open");
 });
 
 test("SV9–SV24 simulate each candidate independently with WRITE skips", () => {

@@ -1,0 +1,31 @@
+// Task requirement (RQ) twin, byte-identical copies of the cycler's
+// fragments, exported for the shared bob-cli vector tests and the twin
+// drift test.
+Object.assign(module.exports.helpers, {
+  TASK_REQ_MAX_DEPTH,
+  TASK_REQ_GLOBAL_FILTER,
+  TASK_REQ_DEFAULT_STATUS_TYPES,
+  taskReqLineSpans,
+  taskReqListItem,
+  taskReqListItemBody,
+  taskReqParseCheckbox,
+  taskReqCarriesGlobalFilter,
+  taskReqCheckboxMarkWithoutFilter,
+  taskReqIsStructuralContainer,
+  taskReqIsDrawerTitle,
+  taskReqDrawerKey,
+  taskReqManagedLogKind,
+  taskReqIsManagedLinkLine,
+  taskReqIsCancelLog,
+  taskReqTrailingBlockId,
+  taskReqCleanDescription,
+  taskReqNoteTasks,
+  taskReqForest,
+  taskReqForestForOwner,
+  taskReqInfoAtLine,
+  taskReqOwnerOfLine,
+  taskReqIsReqLine,
+  taskReqPathText,
+  taskReqRowKey,
+  taskReqRun,
+});

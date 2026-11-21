@@ -242,6 +242,11 @@
   "688-plugin-window-prefix-commands.js",
   "689-plugin-window-tab-numbers.js",
   "690-install-plugin-mixins.js",
+  "694-task-reqs-lines-twin.js",
+  "695-task-reqs-twin.js",
+  "696-task-block-layout-twin.js",
+  "697-task-block-tidy-twin.js",
+  "698-task-reqs-writers-twin.js",
   "700-exports.js",
   "701-exports-parent-change.js",
   "702-relation-mention-exports.js",
@@ -269,5 +274,6 @@
   "724-log-recall-exports.js",
   "725-nav-jump-landing-exports.js",
   "726-link-engine-exports.js",
-  "727-prose-field-exports.js"
+  "727-prose-field-exports.js",
+  "728-task-reqs-exports.js"
 ]

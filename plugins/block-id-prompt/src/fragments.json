@@ -39,5 +39,8 @@
   "155-block-rename-writes.js",
   "157-block-rename-follow.js",
   "160-install-methods.js",
-  "170-exports.js"
+  "165-task-reqs-lines-twin.js",
+  "166-task-reqs-twin.js",
+  "170-exports.js",
+  "171-task-reqs-exports.js"
 ]

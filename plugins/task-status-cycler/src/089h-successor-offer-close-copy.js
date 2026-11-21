@@ -1,4 +1,4 @@
-// Shared SV1–SV23 copy for cycler close descriptors.
+// Shared SV1–SV25 copy for cycler close descriptors.
 
 function successorOfferCloseDisplayFromOffer(offer) {
   const text = String(offer && offer.text || "").trim();
@@ -37,6 +37,9 @@ function successorOfferCloseRefusalDescriptor(reason, text, status) {
   return { complete: false, cancel: false, why, unblocks: 0 };
 }
 
+// Open tasks the close leaves open (bob-cli `open_scope_count`). Only real
+// tasks count: requirement lines are met or moot with their owner and are
+// never open subtasks or project tasks (SV25, docs/task-requirements.md).
 function successorOfferCloseOpenScopeCount(path, lineIndex, blockId, noteTexts) {
   const noteText = noteTexts instanceof Map ? noteTexts.get(String(path || "")) : null;
   if (typeof noteText !== "string") return 0;
@@ -44,23 +47,27 @@ function successorOfferCloseOpenScopeCount(path, lineIndex, blockId, noteTexts) 
   if (!Number.isInteger(lineIndex) || lineIndex < 0 || lineIndex >= lines.length) return 0;
   const isOpen = (symbol) => [" ", "/", "*", "?"].includes(symbol);
   if (successorIsProjectTask(blockId)) {
+    const reqLines = new Set(taskReqForest(noteText, { globalFilter: TASKS_GLOBAL_FILTER }).map((row) => row.lineIndex));
     const tasks = [
       ...tasksFromDocuments([{ path, text: noteText }]),
       ...successorKeepMovingReferenceTasks(noteText, path),
     ];
     const unique = new Map(tasks.map((task) => [`${task.path}\0${task.line}`, task]));
     return [...unique.values()].filter((task) =>
-      Number(task.line) !== lineIndex && isOpen(task.status),
+      Number(task.line) !== lineIndex && isOpen(task.status) && !reqLines.has(Number(task.line)),
     ).length;
   }
-  const indent = (line) => (String(line || "").match(/^\s*/) || [""])[0].length;
-  const parentIndent = indent(lines[lineIndex]);
+  // Deeper lines up to the first nonblank line at or above the task's
+  // indentation (`child_block_end_line`), counting parsed tasks only.
+  const parentIndent = taskReqIndentLength(lines[lineIndex]);
   let count = 0;
   for (let line = lineIndex + 1; line < lines.length; line += 1) {
-    const status = getTaskStatusForLine(lines[line], line);
-    if (!status) continue;
-    if (indent(lines[line]) <= parentIndent) break;
-    if (isOpen(status.symbol)) count += 1;
+    const text = lines[line];
+    if (taskReqIsBlank(text)) continue;
+    if (taskReqIndentLength(text) <= parentIndent) break;
+    const status = getTaskStatusForLine(text, line);
+    if (status && isOpen(status.symbol)
+      && taskReqCarriesGlobalFilter(taskReqListItemBody(text) || "", TASKS_GLOBAL_FILTER)) count += 1;
   }
   return count;
 }

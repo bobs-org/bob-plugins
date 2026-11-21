@@ -1,5 +1,5 @@
-// Task requirement (RQ) and task block layout (RL) twin helpers, exported
-// for the shared bob-cli vector tests.
+// Task requirement (RQ), task block layout (RL), and requirement writer (RW)
+// twin helpers, exported for the shared bob-cli vector tests.
 Object.assign(module.exports.helpers, {
   TASK_REQ_MAX_DEPTH,
   TASK_REQ_GLOBAL_FILTER,
@@ -54,4 +54,8 @@ Object.assign(module.exports.helpers, {
   taskBlockScoopLooseNotes,
   taskBlockFileIntoNotes,
   taskBlockPlanTidy,
+  taskReqDrop,
+  taskReqRestore,
+  taskReqToggle,
+  taskReqInsert,
 });

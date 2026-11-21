@@ -253,6 +253,73 @@ test("offerParkedSuccessors lands on the pinned row after its notice", async () 
   assert.deepEqual(fixture.seen[0].jump, { label: "Prepare evaluation prompt" });
 });
 
+test("deferred jump return still shows the receipt on the parked notice", async () => {
+  notices.length = 0;
+  const landings = [];
+  const box = {};
+  const fixture = makeParkedFixture({
+    successorsVersion: 5,
+    noticeVersion: 5,
+    landOnTask: async (target) => {
+      fixture.events.push("land");
+      landings.push(target);
+      return { ok: true };
+    },
+    pickOverride: async (model) => {
+      const row = model.groups.flatMap((group) => group.rows || [])
+        .find((candidate) => candidate && candidate.selectable);
+      assert.ok(row, JSON.stringify(model));
+      return { picks: [{ key: row.key }], jump: { key: row.key } };
+    },
+  });
+  const result = await fixture.plugin.offerParkedSuccessors([fixture.identity], {
+    dailyPath: DAILY_PATH,
+    relationConfig: fixture.config,
+    slot: fixture.slot,
+    successorJumpTarget: "return",
+    successorJumpBox: box,
+  });
+
+  assert.equal(result.offered, 1);
+  assert.equal(result.picked, 1);
+  assert.deepEqual(fixture.events, ["notice"]);
+  assert.equal(landings.length, 0);
+  assert.deepEqual(fixture.seen[0].jump, { label: "Prepare evaluation prompt" });
+  assert.equal(box.jump && box.jump.outcome, "picked");
+});
+
+test("follow receipt omits jump from the parked notice", async () => {
+  notices.length = 0;
+  const box = {};
+  const fixture = makeParkedFixture({
+    successorsVersion: 5,
+    noticeVersion: 5,
+    landOnTask: async () => {
+      fixture.events.push("land");
+      return { ok: true };
+    },
+    pickOverride: async (model) => {
+      const row = model.groups.flatMap((group) => group.rows || [])
+        .find((candidate) => candidate && candidate.selectable);
+      assert.ok(row, JSON.stringify(model));
+      return { picks: [{ key: row.key }], jump: { key: row.key } };
+    },
+  });
+  await fixture.plugin.offerParkedSuccessors([fixture.identity], {
+    dailyPath: DAILY_PATH,
+    relationConfig: fixture.config,
+    slot: fixture.slot,
+    successorJumpTarget: "return",
+    successorJumpBox: box,
+    successorJumpReceipt: "follow",
+  });
+
+  assert.equal(fixture.seen.length, 1);
+  assert.equal(fixture.seen[0].jump, undefined);
+  assert.deepEqual(fixture.events, ["notice"]);
+  assert.equal(box.jump && box.jump.outcome, "picked");
+});
+
 test("parked relation offer combines one pull-in, Done, and reasoned Cancel", async () => {
   notices.length = 0;
   const parked = "- [/] #task Send implementation prompt [id:: agents__implement] ^implement";

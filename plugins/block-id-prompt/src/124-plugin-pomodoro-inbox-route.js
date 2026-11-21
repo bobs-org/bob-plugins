@@ -163,7 +163,7 @@ class BlockIdPromptPomodoroInboxRouteMixin {
       workLogPlan || {},
       status,
     );
-    const offerParkedReturning = () => {
+    const offerParkedReturning = (followOwnsJump = false) => {
       const box = {};
       return this.offerParkedSuccessorsAfterUnlink({
         path: source && source.sourcePath,
@@ -175,6 +175,7 @@ class BlockIdPromptPomodoroInboxRouteMixin {
         slot: parkedSuccessorSlotFromCleanup(cleanupPlan),
         successorJumpTarget: "return",
         successorJumpBox: box,
+        ...(followOwnsJump ? { successorJumpReceipt: "follow" } : {}),
       }).then((jump) => jump || box.jump || null);
     };
     if (!routeGate || routeGate.kind !== "move") {
@@ -199,7 +200,7 @@ class BlockIdPromptPomodoroInboxRouteMixin {
       }
       return true;
     }
-    const parkedJump = await offerParkedReturning();
+    const parkedJump = await offerParkedReturning(!!(source && source.reviewOrigin));
     const existingId = source.task && source.task.existingId;
     const expected = existingId
       ? [{ line: source.line, raw: source.task.rawLine, blockId: existingId }]

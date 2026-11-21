@@ -20706,9 +20706,12 @@ class TaskStatusCyclerSuccessorsMixin {
         if (model.relation_picker_opened === true) delete noticeModel.relation_held;
         delete noticeModel.relation_picker_opened;
       }
-      // Walk returns compose the jump receipt into the follow toast, so the
-      // cycler's own card must not add the ↗ line (no doubled receipt).
-      const jumpForNotice = active.successorJumpTarget === "return" ? "" : (model && model.jump &&
+      // `successorJumpTarget: "return"` only defers landing. Suppress the ↗
+      // line when a follow toast or composing owner will emit it; otherwise
+      // this card is the one receipt.
+      const followOwnsJump = active.successorNoticeTarget === "return" ||
+        active.successorJumpReceipt === "follow";
+      const jumpForNotice = followOwnsJump ? "" : (model && model.jump &&
         String(model.jump.label || model.jump.description || "").trim());
       if (jumpForNotice) {
         noticeModel = { ...noticeModel, jump: { label: jumpForNotice } };

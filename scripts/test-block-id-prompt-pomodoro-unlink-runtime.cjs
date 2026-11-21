@@ -873,6 +873,7 @@ test("inbox-route unlink lands the parked jump only after the move and walk sett
   plugin.offerParkedSuccessorsAfterUnlink = async (_identity, options) => {
     order.push("offer");
     assert.equal(options.successorJumpTarget, "return");
+    assert.equal(options.successorJumpReceipt, "follow");
     assert.ok(options.successorJumpBox && typeof options.successorJumpBox === "object");
     options.successorJumpBox.jump = jump;
     return jump;
@@ -913,6 +914,8 @@ test("inbox-route unlink without a walk origin shows the notice then lands once"
   const jump = { key: "Tasks.md#^next", path: "Tasks.md", blockId: "next", label: "Next" };
   plugin.offerParkedSuccessorsAfterUnlink = async (_identity, options) => {
     order.push("offer");
+    assert.equal(options.successorJumpTarget, "return");
+    assert.ok(options.successorJumpReceipt !== "follow");
     options.successorJumpBox.jump = jump;
     return jump;
   };

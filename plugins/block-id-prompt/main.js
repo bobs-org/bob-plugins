@@ -16676,7 +16676,7 @@ class BlockIdPromptPomodoroInboxRouteMixin {
       workLogPlan || {},
       status,
     );
-    const offerParkedReturning = () => {
+    const offerParkedReturning = (followOwnsJump = false) => {
       const box = {};
       return this.offerParkedSuccessorsAfterUnlink({
         path: source && source.sourcePath,
@@ -16688,6 +16688,7 @@ class BlockIdPromptPomodoroInboxRouteMixin {
         slot: parkedSuccessorSlotFromCleanup(cleanupPlan),
         successorJumpTarget: "return",
         successorJumpBox: box,
+        ...(followOwnsJump ? { successorJumpReceipt: "follow" } : {}),
       }).then((jump) => jump || box.jump || null);
     };
     if (!routeGate || routeGate.kind !== "move") {
@@ -16712,7 +16713,7 @@ class BlockIdPromptPomodoroInboxRouteMixin {
       }
       return true;
     }
-    const parkedJump = await offerParkedReturning();
+    const parkedJump = await offerParkedReturning(!!(source && source.reviewOrigin));
     const existingId = source.task && source.task.existingId;
     const expected = existingId
       ? [{ line: source.line, raw: source.task.rawLine, blockId: existingId }]
@@ -18427,8 +18428,10 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
   // removed. Esc, non-Pending lanes, and older cyclers stay silent. When the
   // caller passes `successorJumpTarget: "return"` with a box, the parked
   // offer returns the jump instead of landing (older cyclers without the
-  // return plumbing keep today's order and land immediately). Resolves to the
-  // boxed jump or null. Never throws.
+  // return plumbing keep today's order and land immediately). Walk follow
+  // toasts pass `successorJumpReceipt: "follow"` so this card keeps showing
+  // and the follow toast owns the ↗ line. Resolves to the boxed jump or
+  // null. Never throws.
   async offerParkedSuccessorsAfterUnlink(identity, options = {}) {
     try {
       if (!identity || !identity.path || !identity.blockId) {
@@ -18452,6 +18455,9 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
         if (options.successorJumpBox && typeof options.successorJumpBox === "object") {
           active.successorJumpBox = options.successorJumpBox;
         }
+      }
+      if (options.successorJumpReceipt === "follow") {
+        active.successorJumpReceipt = "follow";
       }
       await api.offerParkedSuccessors([identity], active);
       if (

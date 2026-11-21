@@ -158,3 +158,25 @@ test("Task Link Unlink of a Pending target offers parked successors", async () =
   assert.equal(calls[0].identities[0].blockId, "ship");
   assert.equal(calls[0].identities[0].path, "Tasks.md");
 });
+
+test("parked unlink forwards follow receipt without using notice-return", async () => {
+  const { plugin } = unlinkPlugin({ dailyContent: OPEN_DAILY });
+  const calls = [];
+  installCyclerStub(plugin, calls);
+  const box = {};
+  await plugin.offerParkedSuccessorsAfterUnlink({
+    path: "Tasks.md",
+    blockId: "ship",
+  }, {
+    status: "/",
+    removedCount: 1,
+    successorJumpTarget: "return",
+    successorJumpBox: box,
+    successorJumpReceipt: "follow",
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].options.successorJumpTarget, "return");
+  assert.equal(calls[0].options.successorJumpReceipt, "follow");
+  assert.equal(calls[0].options.successorJumpBox, box);
+  assert.ok(calls[0].options.successorNoticeTarget !== "return");
+});

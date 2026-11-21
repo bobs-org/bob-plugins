@@ -625,6 +625,10 @@ test("Task Link Ctrl+Enter strikes the link before landing the jump", async () =
     order.push("finalize");
     assert.equal(context.successorJumpTarget, "return");
     assert.ok(context.successorJumpBox && typeof context.successorJumpBox === "object");
+    assert.ok(
+      context.successorJumpReceipt !== "follow",
+      "non-walk Task Link close owns the ↗ receipt",
+    );
     context.successorJumpBox.jump = jump;
     return { successorNotice: "notice", jump };
   };

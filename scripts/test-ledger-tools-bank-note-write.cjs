@@ -46,6 +46,18 @@ test("normalizer applies each visible safety rewrite", () => {
   assert.match(task.refusal, /#task/);
 });
 
+test("normalizer changes name the concrete text they rewrote, once per distinct rewrite", () => {
+  const result = h.bankNoteNormalize("for [[max]] and [[people/kelly|Kelly]] !! !! #gift [cat:: toys]");
+  assert.equal(result.text, "for max and Kelly ‼ ‼ gift (cat: toys)");
+  assert.deepEqual(result.changes.map(({ from, to }) => [from, to]), [
+    ["!!", "‼"],
+    ["[[people/kelly|Kelly]]", "Kelly"],
+    ["[[max]]", "max"],
+    ["[cat:: toys]", "(cat: toys)"],
+    ["#gift", "gift"],
+  ]);
+});
+
 const shapes = [
   { name: "bank ID", line: "- [ ] $5.00 Cafe ^bank-ab12" },
   { name: "ID-less", line: "- [ ] $5.00 Cafe" },

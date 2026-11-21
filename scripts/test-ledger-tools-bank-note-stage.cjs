@@ -391,7 +391,7 @@ test("normalizer changes show as chips before saving and the saved note is the c
   await card.modal.onKeyDown(keyEvent(" "));
   card.modal.setNoteDraft("for [[people/max|Max]] !! #gift");
   const chips = card.content.querySelectorAll(".bob-bank-category-note-change").map((node) => node.textContent);
-  assert.deepEqual(chips, ["!! → ‼", "[[target|alias]] → alias", "+1 more"]);
+  assert.deepEqual(chips, ["!! → ‼", "[[people/max|Max]] → Max", "+1 more"]);
   assert.equal(card.content.querySelectorAll(".bob-bank-category-note-change")[0].getAttribute("title"),
     "!! would flag the row");
   await card.modal.onKeyDown(keyEvent("Enter"));

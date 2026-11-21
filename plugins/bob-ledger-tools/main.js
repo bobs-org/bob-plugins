@@ -84390,21 +84390,26 @@ function bankNoteNormalize(text) {
     value = next;
   }
   const substitutions = [
-    [/!!/g, "‼", "!!", "‼", "!! would flag the row"],
-    [/⚑/g, "⚐", "⚑", "⚐", "⚑ would flag the row"],
-    [/\[\[([^\]|]+)\|([^\]]+)\]\]/g, "$2", "[[target|alias]]", "alias", "links in notes would be learned into future imports"],
-    [/\[\[([^\]]+)\]\]/g, "$1", "[[target]]", "target", "links in notes would be learned into future imports"],
-    [/\[([A-Za-z][A-Za-z0-9_-]*)\s*::\s*([^\]]*)\]/g, "($1: $2)", "[k:: v]", "(k: v)", "fields belong to the row"],
-    [/(^|[\s([{])#([\p{L}_][\p{L}\p{N}_/-]*)/gu, "$1$2", "#tag", "tag", "tags in notes are not supported yet"],
-    [/%%/g, "%", "%%", "%", "%% opens a comment that hides text"],
-    [/<!--/g, "< !--", "<!--", "< !--", "an HTML comment would hide text"],
+    [/!!/g, "‼", "!! would flag the row"],
+    [/⚑/g, "⚐", "⚑ would flag the row"],
+    [/\[\[([^\]|]+)\|([^\]]+)\]\]/g, "$2", "links in notes would be learned into future imports"],
+    [/\[\[([^\]]+)\]\]/g, "$1", "links in notes would be learned into future imports"],
+    [/\[([A-Za-z][A-Za-z0-9_-]*)\s*::\s*([^\]]*)\]/g, "($1: $2)", "fields belong to the row"],
+    [/(^|[\s([{])#([\p{L}_][\p{L}\p{N}_/-]*)/gu, "$1$2", "tags in notes are not supported yet"],
+    [/%%/g, "%", "%% opens a comment that hides text"],
+    [/<!--/g, "< !--", "an HTML comment would hide text"],
   ];
-  for (const [pattern, replacement, from, to, why] of substitutions) {
-    const next = value.replace(pattern, replacement);
-    if (next !== value) {
-      changed(from, to, why);
-      value = next;
-    }
+  // Each chip names the concrete text it rewrote (`[[max]] → max`); a
+  // repeated identical rewrite shows once.
+  for (const [pattern, replacement, why] of substitutions) {
+    const single = new RegExp(pattern.source, pattern.flags.replace("g", ""));
+    value = value.replace(pattern, (match) => {
+      const out = match.replace(single, replacement);
+      const from = match.trim();
+      const to = out.trim();
+      if (!changes.some((change) => change.from === from && change.to === to)) changed(from, to, why);
+      return out;
+    });
   }
   if (/(^|\s)#task(?=$|\s|[.,!?;:)\]}])/i.test(value)) {
     return { ok: false, text: value, changes, refusal: BANK_NOTE_TASK_REFUSAL };
@@ -93777,6 +93782,7 @@ function bankNoteOutcomeText(action) {
     const line = bankCategoryUiAppend(host, "div", "bob-bank-category-note-line");
     bankCategoryUiAppend(line, "span", "bob-bank-category-note-dash", "—", { "aria-hidden": "true" });
     const payee = this.cardRow().payee;
+    // bob-text: literal bank row note; bank fields never complete [[ and bankNoteNormalize folds links to text
     const input = bankCategoryUiAppend(line, "input", "bob-bank-category-note-input", null, {
       type: "text",
       "data-bank-note-input": "true",

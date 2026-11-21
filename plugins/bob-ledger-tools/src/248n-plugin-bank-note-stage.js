@@ -274,6 +274,7 @@ function bankNoteOutcomeText(action) {
     const line = bankCategoryUiAppend(host, "div", "bob-bank-category-note-line");
     bankCategoryUiAppend(line, "span", "bob-bank-category-note-dash", "—", { "aria-hidden": "true" });
     const payee = this.cardRow().payee;
+    // bob-text: literal bank row note; bank fields never complete [[ and bankNoteNormalize folds links to text
     const input = bankCategoryUiAppend(line, "input", "bob-bank-category-note-input", null, {
       type: "text",
       "data-bank-note-input": "true",

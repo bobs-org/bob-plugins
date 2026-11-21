@@ -12303,13 +12303,15 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
    position and its tick track, and `2027-Q1 · W01 »`.
    Ink tokens hold in light and dark on the tinted cards: the muted ink is
    --text-muted pulled 15% toward --text-normal, and the faint ink is
-   --text-faint pulled 45% toward it, so text stays at or above 4.5:1 where
-   the raw tokens fall short (measured about 5:1 light, 6:1 dark). Edges
-   reuse the ink, so dashed and dotted borders clear 3:1. */
+   --text-faint pulled halfway toward it, so text stays at or above 4.5:1
+   where the raw tokens fall short. Measured with Obsidian's own palette in
+   scripts/preview-group-rail.cjs, the faint ink's worst case is the light
+   aqua quarter tint (a 45% pull read 4.47:1 there). Edges reuse the ink, so
+   dashed and dotted borders clear 3:1. */
 .bob-property-card-rail,
 .bob-property-card-group-row {
   --bob-property-card-muted-ink: color-mix(in srgb, var(--text-muted) 85%, var(--text-normal));
-  --bob-property-card-faint-ink: color-mix(in srgb, var(--text-faint) 55%, var(--text-normal));
+  --bob-property-card-faint-ink: color-mix(in srgb, var(--text-faint) 50%, var(--text-normal));
   --bob-property-card-group-accent: var(--bob-walk-ink, var(--bob-property-card-ink, var(--interactive-accent)));
 }
 
@@ -12524,14 +12526,19 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
 }
 
 /* No state depends on color: dashed and dotted edges use CanvasText, ghost
-   text uses GrayText, and the current tick and thumb use Highlight. */
+   text uses GrayText, and the current tick and thumb use Highlight. An
+   existing arm keeps no visible edge: forced colors would otherwise paint its
+   transparent 1px border in link ink and box it like a button. */
 @media (forced-colors: active) {
+  .bob-property-card-group-arm:not([data-state="creatable"]):not([data-state="ghost"]) { border-color: Canvas; }
   .bob-property-card-rail-item[data-state],
   .bob-property-card-rail-chip[data-state],
   .bob-property-card-group-arm[data-state="creatable"],
   .bob-property-card-group-arm[data-state="ghost"] { border-color: CanvasText; }
   .bob-property-card-rail-item[data-state="ghost"],
+  .bob-property-card-rail-item[data-state="ghost"] *,
   .bob-property-card-rail-chip[data-state="ghost"],
+  .bob-property-card-rail-chip[data-state="ghost"] *,
   .bob-property-card-group-arm[data-state="ghost"],
   .bob-property-card-group-arm[data-state="ghost"] * { color: GrayText; }
   .bob-property-card-group-tick,

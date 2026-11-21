@@ -241,8 +241,17 @@ function displayProbeSource(notePath) {
     const railItem = (direction) => {
       const node = card?.querySelector('.bob-property-card-rail [data-rail="' + direction + '"].bob-property-card-rail-item');
       return node ? { href: node.getAttribute("data-href"), text: node.textContent.trim(), aria: node.getAttribute("aria-label"),
-        unresolved: node.classList.contains("is-unresolved") } : null;
+        unresolved: node.classList.contains("is-unresolved"), state: node.getAttribute("data-state") } : null;
     };
+    const groupRow = (() => {
+      const row = card?.querySelector(".bob-property-card-rail .bob-property-card-group-row");
+      return row ? {
+        label: row.getAttribute("aria-label"),
+        position: row.querySelector(".bob-property-card-group-position-wide")?.textContent || "",
+        arms: Array.from(row.querySelectorAll(".bob-property-card-group-arm")).map((arm) => ({
+          group: arm.getAttribute("data-group"), state: arm.getAttribute("data-state"), href: arm.getAttribute("href") })),
+      } : null;
+    })();
     const slotParent = card?.parentElement;
     return {
       status: "pass", path: notePath, mode, source,
@@ -258,6 +267,7 @@ function displayProbeSource(notePath) {
         slot: slotParent?.classList.contains("cm-sizer") ? "cm-sizer" : slotParent?.classList.contains("mod-header") ? "mod-header" : "body",
         beforeProperties: Boolean(properties && card.nextElementSibling === properties),
         rail: card.querySelector(".bob-property-card-rail") ? { prev: railItem("prev"), parent: railItem("parent"), next: railItem("next") } : null,
+        groupRow,
         chips: Array.from(card.querySelectorAll(".bob-property-card-rail-chip")).map((node) => ({
           text: node.textContent.trim(), href: node.getAttribute("data-href"), current: node.classList.contains("is-current") })),
         ghost: Boolean(card.querySelector(".bob-intention-card-ghost")),
@@ -995,14 +1005,25 @@ async function displayPhase(ctx) {
     return results;
   });
 
-  // The H1-less legacy daily gets a title and hides nothing in the body.
+  // The H1-less legacy daily gets a title and hides nothing in the body. With
+  // no nav line, its step row is derived from the calendar (bob-cli-oj
+  // group-rail): prev / parent / next by date, each missing stop stated
+  // creatable or ghost, never children, and the week group row beneath.
   await attempt("display-legacy-daily", async () => {
     const results = {};
     for (const mode of ["live", "reading"]) {
       await open(plan.paths.legacy, mode);
-      const value = await waitCard(plan.paths.legacy, mounted(mode));
-      assertTitleSlot(value, { mode, title: lib.dayCardTitle(plan.legacy), hidesSource: false });
-      if (value.card.rail !== null) throw new Error("a legacy daily invents a rail: " + JSON.stringify(value.card.rail));
+      const value = await waitCard(plan.paths.legacy, (item) => mounted(mode)(item) && Boolean(item.card?.groupRow));
+      assertTitleSlot(value, { mode, title: lib.dayCardTitle(plan.legacy), hidesSource: false, rail: dayRail(plan.legacy) });
+      for (const direction of ["prev", "parent", "next"]) {
+        const item = value.card.rail[direction];
+        const stated = item.state === "creatable" || item.state === "ghost";
+        if (item.unresolved !== stated) throw new Error("derived " + direction + " is not stated: " + JSON.stringify(item));
+      }
+      if (value.card.chips.length) throw new Error("a legacy daily invents children: " + JSON.stringify(value.card.chips));
+      if (value.card.groupRow.label !== "Week groups" || value.card.groupRow.position !== "day 6 of 7") {
+        throw new Error("legacy group row: " + JSON.stringify(value.card.groupRow));
+      }
       if (!value.order.notes?.found || !value.order.notes.after) throw new Error("legacy body line is not below the card: " + JSON.stringify(value.order));
       const bodyLine = await client.evaluate(`(() => {
         const leaf = app.workspace.getLeavesOfType("markdown").find((item) => item.view?.file?.path === ${JSON.stringify(plan.paths.legacy)});
@@ -1011,7 +1032,7 @@ async function displayPhase(ctx) {
           && node.getBoundingClientRect().height > 0);
       })()`);
       if (!bodyLine) throw new Error("the legacy day:: line is hidden");
-      results[mode] = { title: value.card.title, slot: value.card.slot };
+      results[mode] = { title: value.card.title, slot: value.card.slot, rail: value.card.rail, groupRow: value.card.groupRow };
     }
     return results;
   });

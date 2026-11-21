@@ -57,6 +57,11 @@
   "185-gmail-archive-close-notice.js",
   "190-plugin-targets.js",
   "192-bank-row-guard.js",
+  "194-task-reqs-lines-twin.js",
+  "195-task-reqs-twin.js",
+  "196-task-block-layout-twin.js",
+  "197-task-block-tidy-twin.js",
   "200-install-methods.js",
-  "210-exports.js"
+  "210-exports.js",
+  "211-task-reqs-exports.js"
 ]

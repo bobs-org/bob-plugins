@@ -43,6 +43,9 @@
   "183-log-recall-model.js",
   "184-log-recall-band.js",
   "185-log-recall-picker.js",
+  "186-link-field-model.js",
+  "187-link-rank.js",
+  "188-link-index.js",
   "190-summary-modals.js",
   "192-freshness-refresh-summary-modal.js",
   "195-rotten-keep.js",
@@ -260,5 +263,6 @@
   "722-window-tab-exports.js",
   "723-video-zoom-exports.js",
   "724-log-recall-exports.js",
-  "725-nav-jump-landing-exports.js"
+  "725-nav-jump-landing-exports.js",
+  "726-link-engine-exports.js"
 ]

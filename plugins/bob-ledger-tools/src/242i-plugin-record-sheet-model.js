@@ -799,7 +799,8 @@ function recordSheetSignature(model, extra = {}) {
       warningLine: model.warningLine,
       hideEligible: model.hideEligible,
       editable: model.editable,
-      walk: model.walk || null,
+      walk: typeof recordSheetWalkSignature === "function"
+        ? recordSheetWalkSignature(model.walk) : (model.walk || null),
       collapsed: extra.collapsed === undefined ? model.collapsed === true : extra.collapsed === true,
       foldOpen: extra.foldOpen === undefined ? model.foldOpen === true : extra.foldOpen === true,
       hue: extra.hue === undefined ? model.hue : extra.hue,

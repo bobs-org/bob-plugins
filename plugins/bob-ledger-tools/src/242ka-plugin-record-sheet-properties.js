@@ -1,7 +1,7 @@
 // Native Properties remain usable for metadata outside the album schema.
-// Shared property-card ownership (240b) paints the owned rows, including the
-// record compatibility class; this adapter keeps one generation-bound release
-// handle per scope, so it never clears another card's newer owner.
+// Shared property-card ownership (240b) paints the owned rows with
+// bob-property-card-owned-property; this adapter keeps one generation-bound
+// release handle per scope, so it never clears another card's newer owner.
 class BobLedgerToolsRecordSheetPropertiesMixin {
   recordSheetClearNativeProperties(scope) {
     const state = this.recordSheetNativePropertiesScopes?.get(scope);
@@ -19,6 +19,12 @@ class BobLedgerToolsRecordSheetPropertiesMixin {
     }
     const keys = new Set([...(model.rows || []), ...(model.ghosts || [])].map((row) => row.key));
     if (model.coverage && model.coverage.title === "sheet") keys.add("title");
+    const previous = this.recordSheetNativePropertiesScopes.get(scope);
+    if (previous && previous.keys && previous.keys.size === keys.size
+      && Array.from(keys).every((key) => previous.keys.has(key))) {
+      return;
+    }
+    this.recordSheetClearNativeProperties(scope);
     let release = null;
     try {
       if (typeof propertyCardOwnKeys === "function") release = propertyCardOwnKeys(scope, keys);

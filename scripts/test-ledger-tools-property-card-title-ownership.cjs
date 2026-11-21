@@ -478,6 +478,30 @@ test("deferred editor ownership: async dispatch, idempotent keys, generations, r
   assert.equal(b.owner(), null);
 });
 
+test("a field that drops the owner every transaction re-arms once", () => {
+  const defer = queue();
+  const view = fakeView();
+  const recognizer = H.propertyCardAlbumTitleRecognizer("Restaurants");
+  const orig = view.dispatch;
+  view.dispatch = (spec) => {
+    orig(spec);
+    const saved = view.path;
+    view.path = "other.md";
+    view.reconfigure();
+    view.path = saved;
+  };
+  const handle = H.propertyCardOwnTitleInEditor(view, { path: "eat.md", recognizer, defer });
+  defer.flush();
+  assert.equal(view.owner(), null, "the follow-up transaction drops the owner");
+  assert.equal(view.dispatched.length, 1);
+  assert.equal(H.propertyCardOwnTitleInEditor(view, { path: "eat.md", recognizer, defer }), handle);
+  defer.flush();
+  assert.equal(view.dispatched.length, 2, "a dropped owner re-arms once");
+  assert.equal(H.propertyCardOwnTitleInEditor(view, { path: "eat.md", recognizer, defer }), handle);
+  defer.flush();
+  assert.equal(view.dispatched.length, 2, "a reducer that keeps dropping cannot microtask-loop");
+});
+
 test("a replaced owner released before its effect lands never strands the old range", () => {
   const defer = queue();
   const view = fakeView();

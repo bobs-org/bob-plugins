@@ -79552,11 +79552,6 @@ class BobLedgerToolsBankMarksReadingMixin {
 // container. Source, embeds, hover popovers, failed mounts, and teardown
 // keep native fields. Generalizes the record sheet observer.
 const PROPERTY_CARD_OWNED_PROPERTY_CLASS = "bob-property-card-owned-property";
-// Record compatibility: existing assertions expect this class on owned rows.
-// The shared painter tags both classes so the generalized owner preserves
-// the proven record selectors while album and bank hide through the shared
-// class with bounded owned-row rules.
-const PROPERTY_CARD_LEGACY_RECORD_OWNED_CLASS = "bob-record-sheet-owned-property";
 
 const propertyCardOwnerships = new WeakMap();
 let propertyCardOwnershipGeneration = 0;
@@ -79619,7 +79614,6 @@ function propertyCardNormalizeKeys(keys) {
 function propertyCardUntag(rows) {
   for (const row of rows || []) {
     try { row.classList?.remove(PROPERTY_CARD_OWNED_PROPERTY_CLASS); } catch (_) {}
-    try { row.classList?.remove(PROPERTY_CARD_LEGACY_RECORD_OWNED_CLASS); } catch (_) {}
   }
 }
 
@@ -79637,14 +79631,12 @@ function propertyCardPaintScope(scope) {
         if (!entry.keys.has(key)) continue;
         next.add(row);
         if (!row.classList?.contains(PROPERTY_CARD_OWNED_PROPERTY_CLASS)) row.classList?.add(PROPERTY_CARD_OWNED_PROPERTY_CLASS);
-        if (!row.classList?.contains(PROPERTY_CARD_LEGACY_RECORD_OWNED_CLASS)) row.classList?.add(PROPERTY_CARD_LEGACY_RECORD_OWNED_CLASS);
       } catch (_) {}
     }
   } catch (_) {}
   for (const row of entry.rows) {
     if (!next.has(row)) {
       try { row.classList?.remove(PROPERTY_CARD_OWNED_PROPERTY_CLASS); } catch (_) {}
-      try { row.classList?.remove(PROPERTY_CARD_LEGACY_RECORD_OWNED_CLASS); } catch (_) {}
     }
   }
   entry.rows = next;
@@ -79797,7 +79789,7 @@ function propertyCardOwnBankKeys(scope, desktop) {
 //   afterRefreshReading(),
 //   allowEmbedDisplay (default false; album/record/bank pass true),
 //   livePath(view), sourcePath(view), viewPath(view),
-//   buildDecorations(view), shouldRebuild(update, prevPath, nextPath),
+//   buildDecorations(view, update?), shouldRebuild(update, prevPath, nextPath),
 //   editorAttributes(view) (optional; omit to skip the CodeMirror facet),
 //   cleanEditor(view),
 //   ownKeys(scope, path), releaseKeys(scope, path) (wrap the adapter's
@@ -80265,7 +80257,7 @@ function propertyCardHostCreateExtension(controller, options, editors) {
         if (rebuild) {
           let next = null;
           try {
-            next = options.buildDecorations?.(update.view);
+            next = options.buildDecorations?.(update.view, update);
           } catch (error) {
             propertyCardHostCleanupEditorView(controller, options, update.view, path);
             this.decorations = propertyCardHostFallbackDecorations();
@@ -80383,6 +80375,8 @@ function propertyCardHostCleanEditor(controller, options, editors, editorScopes,
 const PROPERTY_CARD_TITLE_SLOT_CLASS = "bob-property-card-title-slot";
 const PROPERTY_CARD_TITLE_SLOT_REINSERT_BUDGET = 24;
 const PROPERTY_CARD_TITLE_SLOT_REINSERT_WINDOW_MS = 1000;
+const PROPERTY_CARD_TITLE_SLOT_MEASURE_BUDGET = 8;
+const PROPERTY_CARD_TITLE_SLOT_MEASURE_WINDOW_MS = 1000;
 const PROPERTY_CARD_TITLE_SLOT_ATTRIBUTES = ["data-title-slot-mode", "data-title-slot-kind"];
 
 const propertyCardTitleSlots = new Map();
@@ -80505,9 +80499,14 @@ function propertyCardTitleSlotOnEditorUpdate(update) {
   if (propertyCardTitleSlots.size === 0) return;
   try {
     const view = update?.view;
-    if (!view?.viewState?.scrollTarget) return;
+    const target = view?.viewState?.scrollTarget;
+    if (!target) return;
     for (const entry of propertyCardTitleSlots.values()) {
       if (entry.mode === "live" && entry.view === view) {
+        // The same pending target must not re-arm: a tall slot card plus
+        // setCursor leaves scrollTarget set, and requestMeasure would loop.
+        if (entry.rescueTarget === target) return;
+        entry.rescueTarget = target;
         propertyCardTitleSlotMeasure(entry);
         return;
       }
@@ -80531,6 +80530,12 @@ function propertyCardTitleSlotMeasure(entry) {
   const view = entry?.view;
   if (!view) return;
   try {
+    const now = propertyCardTitleSlotNow();
+    if (!entry.measureBudget || now - entry.measureBudget.windowStart > PROPERTY_CARD_TITLE_SLOT_MEASURE_WINDOW_MS) {
+      entry.measureBudget = { windowStart: now, count: 0 };
+    }
+    entry.measureBudget.count += 1;
+    if (entry.measureBudget.count > PROPERTY_CARD_TITLE_SLOT_MEASURE_BUDGET) return;
     if (entry.mode === "live" && typeof view.requestMeasure === "function") {
       view.requestMeasure({
         key: PROPERTY_CARD_TITLE_SLOT_RESCUE_KEY,
@@ -81644,7 +81649,8 @@ function propertyCardTitleEditorRelease(entry) {
 // Re-owning with the same path and recognizer key returns the existing
 // handle and dispatches nothing, so adapters may call this on every
 // decoration rebuild; if the field dropped this owner (Source round trip),
-// the same generation is re-dispatched.
+// the same generation is re-dispatched at most once until the field holds
+// it again.
 function propertyCardOwnTitleInEditor(view, options = {}) {
   try {
     if (!view || typeof view.dispatch !== "function") return null;
@@ -81659,7 +81665,16 @@ function propertyCardOwnTitleInEditor(view, options = {}) {
     const defer = typeof options.defer === "function" ? options.defer : propertyCardTitleDefer;
     const current = propertyCardTitleEditorOwners.get(view);
     if (current && !current.released && current.path === path && current.key === recognizer.key) {
-      if (current.pending || field.generation === current.generation) return current.handle;
+      if (field.generation === current.generation) {
+        current.rearmed = false;
+        return current.handle;
+      }
+      if (current.pending) return current.handle;
+      // A field that drops this owner every transaction must not re-dispatch
+      // in a microtask chain: that starves CDP evaluate. Source round-trips
+      // re-arm once; a later hold of this generation may re-arm again.
+      if (current.rearmed) return current.handle;
+      current.rearmed = true;
       current.recognizer = recognizer;
       current.defer = defer;
       propertyCardTitleEditorScheduleOwn(current);
@@ -81669,6 +81684,7 @@ function propertyCardOwnTitleInEditor(view, options = {}) {
     const entry = {
       view, path, key: recognizer.key, recognizer, defer,
       generation: propertyCardTitleGeneration, pending: false, released: false, handle: null,
+      rearmed: false,
     };
     // A replaced owner is released first (same queue, so the field sees the
     // release before the new own) so a new owner released before its own
@@ -81933,11 +81949,16 @@ function propertyCardBuildIdentityBadge(doc, spec = {}) {
 // Reading mounts synchronously. Live Preview returns "slot" at once and
 // mounts and owns in a deferred callback (default queueMicrotask), because
 // nothing may mutate the DOM or dispatch inside a CodeMirror update; a
-// deferred mount that fails calls onLost("insert-failed"). When the slot is
-// lost, title ownership is released in the same frame, the heading demotes,
-// and the adapter's onLost(reason) runs deferred so it can remount through
-// its refresh. Paths that came back unstable or insert-failed stay in the
-// fallback until the scope sees a new path or an explicit release.
+// deferred mount that fails calls onLost("insert-failed"). A same-path
+// re-adopt while pending keeps that in-flight mount and inserts the newest
+// node. A Live Preview re-adopt of the same path never drops a live slot:
+// a newer node is ignored once mounted, and a missing slot map re-inserts
+// the held node. Reading may still replace a mounted node by passing a
+// different one. When the slot is lost, title ownership is released in the
+// same frame, the heading demotes, and the adapter's onLost(reason) runs
+// deferred so it can remount through its refresh. Paths that came back
+// unstable or insert-failed stay in the fallback until the scope sees a
+// new path or an explicit release.
 //
 // The kit heading (.bob-property-card-title, role=heading, aria-level=1) is
 // promoted only while ownership is held; every other state demotes it, so a
@@ -82106,6 +82127,116 @@ function propertyCardAdoptHandle(scope, entry) {
   };
 }
 
+function propertyCardAdoptScopeOf(entry) {
+  for (const [scope, value] of propertyCardAdoptions) {
+    if (value === entry) return scope;
+  }
+  return null;
+}
+
+function propertyCardAdoptScheduleMount(entry) {
+  entry.pending = true;
+  entry.defer(() => {
+    if (entry.released) return;
+    const scope = propertyCardAdoptScopeOf(entry);
+    if (!scope) return;
+    if (!propertyCardAdoptMount(scope, entry)) propertyCardAdoptCall(entry.onLost, "insert-failed");
+  });
+}
+
+function propertyCardAdoptSourceView(scope) {
+  try {
+    if (scope?.classList?.contains("markdown-source-view")) return scope;
+    return scope?.closest?.(".markdown-source-view") || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function propertyCardAdoptRekey(fromScope, toScope, entry) {
+  if (!entry || fromScope === toScope) return entry;
+  if (propertyCardAdoptions.get(fromScope) === entry) propertyCardAdoptions.delete(fromScope);
+  propertyCardAdoptions.set(toScope, entry);
+  const memory = propertyCardAdoptMemory.get(fromScope);
+  if (memory) {
+    propertyCardAdoptMemory.delete(fromScope);
+    propertyCardAdoptMemory.set(toScope, memory);
+  }
+  entry.handle = propertyCardAdoptHandle(toScope, entry);
+  return entry;
+}
+
+// Same Live Preview pane, possibly a new .cm-editor after CodeMirror
+// rebuilt the editor: keep the in-flight or mounted adoption. Two panes
+// of the same file have different source views and stay isolated.
+function propertyCardAdoptExisting(scope, opts) {
+  const direct = propertyCardAdoptions.get(scope);
+  if (direct && !direct.released) return direct;
+  const source = propertyCardAdoptSourceView(scope);
+  const path = opts?.path;
+  if (!source || path == null || path === "") return null;
+  const view = opts.view;
+  const kind = opts.kind == null ? "" : String(opts.kind);
+  for (const [other, entry] of Array.from(propertyCardAdoptions.entries())) {
+    if (!entry || entry.released || other === scope || entry.path !== path) continue;
+    if (kind && entry.kind && entry.kind !== kind) continue;
+    if (view && entry.view && entry.view === view) return propertyCardAdoptRekey(other, scope, entry);
+    if (source && propertyCardAdoptSourceView(other) === source) return propertyCardAdoptRekey(other, scope, entry);
+    let connected = true;
+    try { connected = other.isConnected !== false; } catch (_) { connected = false; }
+    // A rebuilt .cm-editor is detached; closest() is then null, so the
+    // source-view match cannot fire. Two live panes stay connected.
+    if (!connected) return propertyCardAdoptRekey(other, scope, entry);
+  }
+  return null;
+}
+
+// Live Preview is the CodeMirror editor, even if a rebuild stripped
+// .cm-editor from the class attribute for a frame. Reading's renderer
+// has no dispatch, so a different node there still replaces.
+function propertyCardAdoptIsLivePreview(scope, existing, opts) {
+  try {
+    if (scope?.classList?.contains("cm-editor")) return true;
+    if (scope?.classList?.contains("markdown-preview-view")) return false;
+  } catch (_) {}
+  return typeof existing?.view?.dispatch === "function"
+    || typeof opts?.view?.dispatch === "function";
+}
+
+// Same-path keep: never AdoptDrop a live Live Preview slot. Pending LP
+// takes the newest node. Mounted LP re-inserts if the slot map missed.
+function propertyCardAdoptKeep(scope, node, opts, existing) {
+  if (!existing || existing.released || existing.path !== opts.path) return null;
+  if (opts.kind && existing.kind && existing.kind !== opts.kind) return null;
+  const livePreview = propertyCardAdoptIsLivePreview(scope, existing, opts);
+  const mountedNode = typeof propertyCardTitleSlotMountedNode === "function"
+    ? propertyCardTitleSlotMountedNode(scope) : null;
+  const sameNode = existing.node === node && (mountedNode === node || !livePreview);
+  if (!(existing.pending || livePreview || sameNode)) return null;
+  existing.onLost = opts.onLost;
+  existing.currentPath = opts.currentPath;
+  existing.defer = opts.defer;
+  if (opts.view) existing.view = opts.view;
+  if (opts.recognizer) existing.recognizer = opts.recognizer;
+  if (existing.pending && node && node !== existing.node) existing.node = node;
+  if (!existing.pending && livePreview) {
+    let connected = true;
+    try { connected = Boolean(existing.node) && existing.node.isConnected !== false; } catch (_) { connected = false; }
+    if (!mountedNode || mountedNode !== existing.node || !connected) {
+      if (node && !existing.node) existing.node = node;
+      propertyCardAdoptScheduleMount(existing);
+    } else {
+      const key = opts.recognizer && typeof opts.recognizer.key === "string" ? opts.recognizer.key : "";
+      if (key !== existing.titleKey || !existing.owned) propertyCardAdoptOwn(scope, existing);
+    }
+  } else if (!existing.pending) {
+    const key = opts.recognizer && typeof opts.recognizer.key === "string" ? opts.recognizer.key : "";
+    if (key !== existing.titleKey || !existing.owned) propertyCardAdoptOwn(scope, existing);
+  }
+  propertyCardSyncTitleHeading(existing.node, existing.owned);
+  return { mode: "slot", release: existing.handle };
+}
+
 function propertyCardAdoptFallback(scope, node) {
   const previous = propertyCardAdoptions.get(scope);
   if (previous) propertyCardAdoptDrop(scope, previous);
@@ -82118,22 +82249,9 @@ function propertyCardAdoptTitle(scope, node, options = {}) {
   try {
     const opts = propertyCardAdoptOptions(options);
     if (!scope || !node) return propertyCardAdoptFallback(scope, node);
-    const existing = propertyCardAdoptions.get(scope);
-    if (existing && existing.node === node && existing.path === opts.path && !existing.released
-      && (existing.pending || propertyCardTitleSlotMountedNode(scope) === node)) {
-      // Same node, same path, still mounted: never remount. Keep the newest
-      // callbacks and re-own only when the recognizer key changed (or
-      // ownership was refused before).
-      existing.onLost = opts.onLost;
-      existing.currentPath = opts.currentPath;
-      existing.defer = opts.defer;
-      if (opts.view) existing.view = opts.view;
-      const key = opts.recognizer && typeof opts.recognizer.key === "string" ? opts.recognizer.key : "";
-      if (opts.recognizer) existing.recognizer = opts.recognizer;
-      if (!existing.pending && (key !== existing.titleKey || !existing.owned)) propertyCardAdoptOwn(scope, existing);
-      propertyCardSyncTitleHeading(node, existing.owned);
-      return { mode: "slot", release: existing.handle };
-    }
+    const existing = propertyCardAdoptExisting(scope, opts);
+    const kept = propertyCardAdoptKeep(scope, node, opts, existing);
+    if (kept) return kept;
     if (propertyCardAdoptRemembered(scope, opts.path) || !propertyCardTitleSlotFor(scope)) {
       return propertyCardAdoptFallback(scope, node);
     }
@@ -82155,12 +82273,8 @@ function propertyCardAdoptTitle(scope, node, options = {}) {
     entry.handle = propertyCardAdoptHandle(scope, entry);
     propertyCardAdoptions.set(scope, entry);
     propertyCardDemoteTitleHeading(node);
-    if (scope.classList?.contains("cm-editor")) {
-      entry.pending = true;
-      entry.defer(() => {
-        if (entry.released || propertyCardAdoptions.get(scope) !== entry) return;
-        if (!propertyCardAdoptMount(scope, entry)) propertyCardAdoptCall(entry.onLost, "insert-failed");
-      });
+    if (propertyCardAdoptIsLivePreview(scope, entry, opts)) {
+      propertyCardAdoptScheduleMount(entry);
       return { mode: "slot", release: entry.handle };
     }
     if (!propertyCardAdoptMount(scope, entry)) return { mode: "fallback", release: propertyCardAdoptNoop };
@@ -82186,13 +82300,21 @@ function propertyCardAdoptedEntry(scope) {
   };
 }
 
-// Scope-wide release, optionally bound to one path. Also clears that path's
-// remembered fallback. Never calls onLost.
-function propertyCardAdoptRelease(scope, path) {
+// Release this scope's adoption. `path` and `kind` are optional filters:
+// album and record share one Map keyed by the editor, so a species with
+// no card must not drop the other species' slot. Also clears that path's
+// remembered fallback unless a kind filter skipped a live occupant.
+// Never calls onLost.
+function propertyCardAdoptRelease(scope, path, kind) {
   const bound = path === undefined || path === null || path === "" ? "" : String(path);
-  propertyCardAdoptForget(scope, bound);
+  const boundKind = kind == null || kind === "" ? "" : String(kind);
   const entry = propertyCardAdoptions.get(scope);
-  if (!entry || (bound && entry.path !== bound)) return false;
+  if (entry && !entry.released && boundKind && entry.kind && entry.kind !== boundKind) {
+    return false;
+  }
+  propertyCardAdoptForget(scope, bound);
+  if (!entry || entry.released) return false;
+  if (bound && entry.path !== bound) return false;
   propertyCardAdoptDrop(scope, entry);
   return true;
 }
@@ -97523,7 +97645,7 @@ class BobLedgerToolsAlbumHeaderMixin {
   }
 
   albumHeaderReleaseAdoption(scope, sourcePath = "") {
-    try { return propertyCardAdoptRelease(scope, sourcePath || undefined); } catch (_) { return false; }
+    try { return propertyCardAdoptRelease(scope, sourcePath || undefined, "album"); } catch (_) { return false; }
   }
 
   // Body-placed card nodes for this path under root: never the slot node,
@@ -103188,7 +103310,14 @@ function recordWalkModel(input = {}) {
   const position = positionIndex + 1;
   const total = ordered.length;
   const albumReport = recordWalkReportAlbum(input.report, albumPath);
-  const albumTitle = String(albumReport?.title || albumFrontmatter.title || recordWalkHumanizeStem(folder)).trim();
+  const albumTitle = String(
+    albumReport?.title
+    || (typeof notebookHeaderNoteTitle === "function"
+      ? notebookHeaderNoteTitle(albumPath, input.metadataCache, input.vault)
+      : "")
+    || albumFrontmatter.title
+    || recordWalkHumanizeStem(folder),
+  ).trim();
   const album = {
     stem: folder,
     path: albumPath,
@@ -103416,6 +103545,37 @@ function recordWalkReadingParagraphMatches(paragraph, walk) {
   return text(paragraph.textContent) === text(written.map((link) => recordWalkDisplayLabel(link.label)).join("·"));
 }
 // ---- src/242v-plugin-record-walk-rail.js ----
+// Slot cards live in the title slot, not in CodeMirror decorations. A
+// viewport-only update must not rebuild them: BuildMounted + adoptTitle
+// during measure is a main-thread loop that starves CDP. Doc edits, walk
+// reveal, refresh effects, and path changes still rebuild.
+function recordSheetSlotSkipsUpdate(update, plugin) {
+  if (!update) return false;
+  if (update.docChanged === true || update.selectionSet === true) return false;
+  try {
+    const effect = plugin && typeof plugin.recordPropertyCardHost === "function"
+      ? plugin.recordPropertyCardHost().ensureRefreshEffect?.() : null;
+    if (effect && (update.transactions || []).some((tx) =>
+      (tx.effects || []).some((item) => typeof item?.is === "function" && item.is(effect)))) {
+      return false;
+    }
+  } catch (_) {}
+  return true;
+}
+
+function recordSheetSlotIsLive(view, path) {
+  try {
+    const adopted = propertyCardAdoptedEntry(view?.dom);
+    if (!adopted || adopted.path !== path || adopted.mode !== "slot") return false;
+    if (adopted.pending) return true;
+    const mounted = typeof propertyCardTitleSlotMountedNode === "function"
+      ? propertyCardTitleSlotMountedNode(view.dom) : null;
+    return Boolean(mounted && mounted === adopted.node);
+  } catch (_) {
+    return false;
+  }
+}
+
 // Rail hosts share the sheet's source cache, decorations, refresh, and teardown.
 class BobLedgerToolsRecordWalkRailMixin {
   recordWalkFor(path, sourceText) {
@@ -103482,59 +103642,104 @@ class BobLedgerToolsRecordWalkRailMixin {
     }
   }
 
-  recordWalkPaintReading(root, path, sheet) {
+  recordWalkPaintReading(root, path, sheet, extra = {}) {
     const walk = this.recordWalkFor(path);
     if (!recordWalkHasRail(walk)) return null;
     const paragraph = Array.from(root.querySelectorAll?.("p") || []).find((node) =>
       this.recordSheetNodeBelongs(node, root) && !notebookInsideCode(node)
       && !node.closest?.(`.${RECORD_SHEET_CLASS}`) && recordWalkReadingParagraphMatches(node, walk));
     if (!paragraph) return null;
-    const rail = recordWalkRailBuildEl(walk, this.recordWalkOptions(path, sheet ? { hue: sheet.getAttribute("data-root-hue") } : null), recordSheetDomDoc(root));
-    if (!rail) return null;
-    if (sheet) {
-      sheet.classList.add("has-record-walk");
-      sheet.appendChild(rail);
-    } else paragraph.parentNode.insertBefore(rail, paragraph);
-    paragraph.classList.add(RECORD_WALK_SOURCE_CLASS);
-    paragraph.setAttribute("data-record-walk-source", path);
+    let rail = sheet?.querySelector?.(`.${RECORD_WALK_RAIL_CLASS}`) || null;
+    if (!rail) {
+      rail = recordWalkRailBuildEl(walk, this.recordWalkOptions(path, sheet ? { hue: sheet.getAttribute("data-root-hue") } : null), recordSheetDomDoc(root));
+      if (!rail) return null;
+      if (sheet) {
+        sheet.classList.add("has-record-walk");
+        sheet.appendChild(rail);
+      } else paragraph.parentNode.insertBefore(rail, paragraph);
+    }
+    const kitOwned = extra.owned === true && paragraph.classList?.contains?.("bob-property-card-title-source");
+    if (!kitOwned) {
+      paragraph.classList.add(RECORD_WALK_SOURCE_CLASS);
+      paragraph.setAttribute("data-record-walk-source", path);
+    }
     return rail;
   }
 
-  buildRecordSheetDecorations(view) {
+  buildRecordSheetDecorations(view, update) {
     try {
       if (!Decoration || !RangeSetBuilder || !WidgetType) return Decoration?.none || null;
-      const path = this.recordSheetLivePreview(view) ? this.recordSheetLivePath(view) : null;
-      if (!path || !view?.state?.doc) {
+      const live = this.recordSheetLivePreview(view);
+      const path = live ? this.recordSheetLivePath(view) : null;
+      if (!live || !view?.state?.doc) {
         this.recordSheetSetEditorScope(view, false);
+        this.recordSheetReleaseAdoption?.(view?.dom);
         this.recordSheetEditorCache?.delete?.(view);
         return Decoration.none;
       }
+      const previous = this.recordSheetEditorCache?.get?.(view);
+      if (!path) {
+        const adopted = propertyCardAdoptedEntry(view.dom);
+        if (adopted && adopted.mode === "slot") return previous?.decorations || Decoration.none;
+        this.recordSheetSetEditorScope(view, false);
+        this.recordSheetReleaseAdoption?.(view?.dom);
+        this.recordSheetEditorCache?.delete?.(view);
+        return Decoration.none;
+      }
+      if (this._recordSheetDecorating) {
+        const started = this._recordSheetDecorateStarted || 0;
+        if (Date.now() - started < 250) return previous?.decorations || Decoration.none;
+        this._recordSheetDecorating = false;
+      }
+      const remembered = typeof propertyCardAdoptRemembered === "function"
+        && propertyCardAdoptRemembered(view.dom, path);
+      // Viewport-only updates must not BuildMounted: that measure loop freezes
+      // the renderer. A lost slot remounts at most once per 250ms so a
+      // failed deferred mount can recover without a tight viewport retry.
+      // Sticky insert-failed/unstable still rebuilds once so widgets can paint.
+      if (previous?.path === path && recordSheetSlotSkipsUpdate(update, this)) {
+        if (recordSheetSlotIsLive(view, path) || previous.slotted === false) {
+          return previous.decorations;
+        }
+        if (!remembered) {
+          const nowSkip = Date.now();
+          if (nowSkip - (this._recordSheetLostRetry || 0) < 250) return previous.decorations;
+          this._recordSheetLostRetry = nowSkip;
+        }
+      }
+      const now = Date.now();
+      if (!this._recordSheetDecorateStamp || now - this._recordSheetDecorateStamp.t > 1000) {
+        this._recordSheetDecorateStamp = { t: now, n: 0 };
+      }
+      this._recordSheetDecorateStamp.n += 1;
+      if (this._recordSheetDecorateStamp.n > 8 && previous?.path === path
+        && !(remembered && previous.slotted)) {
+        return previous.decorations;
+      }
+      this._recordSheetDecorating = true;
+      this._recordSheetDecorateStarted = Date.now();
+      try {
       const text = view.state.doc.toString();
-      const model = this.recordSheetModelFor(path, text);
-      const walk = model?.walk || this.recordWalkFor(path, text);
-      this.recordSheetSetEditorScope(view, Boolean(model));
-      if (!model && !recordWalkHasRail(walk)) {
+      const card = typeof this.recordSheetCardModelFor === "function"
+        ? this.recordSheetCardModelFor(path, text) : null;
+      const walk = card?.body?.walk || this.recordWalkFor(path, text);
+      this.recordSheetSetEditorScope(view, Boolean(card));
+      if (!card) this.recordSheetReleaseAdoption?.(view?.dom, path);
+      if (!card && !recordWalkHasRail(walk)) {
         this.recordSheetEditorCache?.delete?.(view);
         this.recordSheetNotifyOwnership();
         return Decoration.none;
       }
       const line = recordWalkHasRail(walk) ? view.state.doc.line(walk.lineIndex + 1) : null;
       const reveal = line && recordWalkSelectionTouches(view.state, line);
-      // A first-body walk line is the sheet anchor, even before a legacy H1.
       const beforeWalk = line ? text.slice(0, line.from).split(/\r?\n/) : [];
       const fmEnd = recordWalkFrontmatterClose(beforeWalk);
       const docks = line && fmEnd !== null && beforeWalk.slice(fmEnd + 1).every((value) => !value.trim());
       const at = docks ? line.from : this.recordSheetAnchor(view, text);
-      const signature = JSON.stringify([recordSheetSignature(model), walk, Boolean(reveal), line?.from, line?.to]);
-      const previous = this.recordSheetEditorCache?.get?.(view);
-      if (previous?.path === path && previous.signature === signature && previous.anchor === at) {
-        this.recordSheetSetEditorHide(view, model);
-        return previous.decorations;
-      }
       const doc = recordSheetDomDoc(view.dom);
-      const options = this.recordWalkOptions(path, model);
-      const rows = [];
-      const widgetFor = (element, kind) => new class extends WidgetType {
+      const options = this.recordWalkOptions(path, card?.body);
+      const albumPath = card?.identity?.albumPath || walk?.albumPath || "";
+      const widgetFor = (element, kind, signature) => new class extends WidgetType {
         constructor() { super(); this.path = path; this.signature = signature; this.kind = kind; }
         eq(other) { return other?.path === path && other.signature === signature && other.kind === kind; }
         toDOM() {
@@ -103543,39 +103748,164 @@ class BobLedgerToolsRecordWalkRailMixin {
           return element;
         }
       }();
-      const sheet = model ? this.recordSheetBuildMounted(model, options, doc) : null;
-      this.recordSheetSetEditorHide(view, sheet ? model : null);
-      const rail = line && !reveal ? recordWalkRailBuildEl(walk, options, doc) : null;
-      if (sheet && rail && docks) {
-        // One inline replacement owns the pair. Two adjacent inline widgets
-        // get CodeMirror cursor buffers between their block-shaped DOM nodes,
-        // leaving a line-height gap that prevents the rail docking flush.
-        const dock = recordSheetEl(doc, "div", "bob-record-walk-dock");
-        sheet.classList.add("docks-record-walk");
-        sheet.setAttribute("data-cm-widget", "true");
-        dock.appendChild(sheet);
-        dock.appendChild(rail);
-        rows.push({ from: line.from, to: line.to, decoration: Decoration.replace({ widget: widgetFor(dock, "dock") }) });
-      } else {
-        if (sheet) rows.push({ from: at, to: at, decoration: Decoration.widget({ widget: widgetFor(sheet, "sheet"), side: docks ? -1 : 1 }) });
-        if (rail) rows.push({ from: line.from, to: line.to, decoration: Decoration.replace({ widget: widgetFor(rail, "walk") }) });
+      const cacheAndFinish = (rows, signature, hideModel, slotted) => {
+        const previous = this.recordSheetEditorCache?.get?.(view);
+        if (previous?.path === path && previous.signature === signature && previous.anchor === at
+          && previous.slotted === Boolean(slotted)) {
+          return previous.decorations;
+        }
+        const builder = new RangeSetBuilder();
+        rows.sort((a, b) => a.from - b.from || a.decoration.startSide - b.decoration.startSide);
+        for (const row of rows) builder.add(row.from, row.to, row.decoration);
+        const decorations = rows.length ? builder.finish() : Decoration.none;
+        this.recordSheetSetEditorHide(view, hideModel);
+        this.recordSheetEditorCache?.set?.(view, {
+          path, signature, anchor: at, decorations, albumPath, slotted: Boolean(slotted),
+        });
+        this.recordSheetEditors?.add(view);
+        this.recordSheetNotifyOwnership();
+        return decorations;
+      };
+
+      if (!card) {
+        const signature = JSON.stringify(["rail-only", recordSheetWalkSignature(walk), Boolean(reveal), line?.from, line?.to]);
+        const rows = [];
+        if (line && !reveal) {
+          const rail = recordWalkRailBuildEl(walk, options, doc);
+          if (rail) rows.push({ from: line.from, to: line.to, decoration: Decoration.replace({ widget: widgetFor(rail, "walk", signature) }) });
+        }
+        return cacheAndFinish(rows, signature, null, false);
       }
-      const builder = new RangeSetBuilder();
-      rows.sort((a, b) => a.from - b.from || a.decoration.startSide - b.decoration.startSide);
-      for (const row of rows) builder.add(row.from, row.to, row.decoration);
-      const decorations = builder.finish();
-      // A failed sheet build must stay native and retry. Caching a rail-only
-      // result for a healthy model would hide its properties on the next hit.
-      if (model && !sheet) this.recordSheetEditorCache?.delete?.(view);
-      else this.recordSheetEditorCache?.set?.(view, { path, signature, anchor: at, decorations, albumPath: model?.albumPath || walk?.albumPath });
-      // The rail still refreshes when there is no cached album report/sheet.
-      this.recordSheetEditors?.add(view);
-      this.recordSheetNotifyOwnership();
-      return decorations;
+
+      const cardSignature = recordSheetCardSignature(card, { ...options, walk });
+      const recognizer = recordSheetTitleRecognizer({
+        path, title: card.title, walk, sourceText: text,
+      });
+      const kitRange = typeof propertyCardTitleSourceRange === "function"
+        ? propertyCardTitleSourceRange(text, recognizer) : null;
+      const kitCoversWalk = Boolean(kitRange && Number.isInteger(walk?.lineIndex)
+        && walk.lineIndex >= kitRange.fromLine && walk.lineIndex <= kitRange.toLine);
+      const includeRail = recordWalkHasRail(walk) && kitCoversWalk;
+      const revealWalk = Boolean(reveal && !kitCoversWalk);
+      const slotSignature = JSON.stringify([cardSignature, kitCoversWalk, line?.from ?? null, line?.to ?? null, revealWalk]);
+      const adopted = propertyCardAdoptedEntry(view.dom);
+      const slotted = Boolean(adopted && adopted.path === path && adopted.mode === "slot" && adopted.node);
+      const cached = this.recordSheetEditorCache?.get?.(view);
+      if (slotted && cached?.path === path && cached.signature === slotSignature && cached.anchor === at) {
+        return cached.decorations;
+      }
+      let header = slotted ? adopted.node : null;
+      if (!header || recordSheetNodeSignatures.get(header) !== cardSignature) {
+        const fresh = this.recordSheetBuildMounted(card, options, doc, { walk, includeRail });
+        if (!fresh) {
+          this.recordSheetReleaseAdoption?.(view?.dom, path);
+          this.recordSheetEditorCache?.delete?.(view);
+          this.recordSheetNotifyOwnership();
+          return Decoration.none;
+        }
+        if (header) this.recordSheetPatchLive(view, adopted, fresh, cardSignature);
+        else {
+          header = fresh;
+          recordSheetNodeSignatures.set(header, cardSignature);
+        }
+      }
+      const adoption = propertyCardAdoptTitle(view.dom, header, {
+        path,
+        kind: "record",
+        view,
+        recognizer,
+        currentPath: () => this.recordSheetLivePath(view) || propertyCardLiveCurrentPath(view) || path,
+        onLost: () => {
+          this.recordSheetEditorCache?.delete?.(view);
+          this.scheduleRecordSheetRefresh();
+        },
+      });
+      if (adoption.mode === "slot") {
+        const rows = [];
+        if (recordWalkHasRail(walk) && !kitCoversWalk && !reveal) {
+          const rail = recordWalkRailBuildEl(walk, options, doc);
+          if (rail) rows.push({ from: line.from, to: line.to, decoration: Decoration.replace({ widget: widgetFor(rail, "walk", slotSignature) }) });
+        }
+        return cacheAndFinish(rows, slotSignature, card.body || null, true);
+      }
+
+      const signature = JSON.stringify([cardSignature, recordSheetWalkSignature(walk), Boolean(reveal), line?.from, line?.to]);
+      const rows = [];
+      const rail = line && !reveal ? recordWalkRailBuildEl(walk, options, doc) : null;
+      if (header && rail && docks) {
+        const dock = recordSheetEl(doc, "div", "bob-record-walk-dock");
+        header.classList.add("docks-record-walk");
+        header.setAttribute("data-cm-widget", "true");
+        dock.appendChild(header);
+        dock.appendChild(rail);
+        rows.push({ from: line.from, to: line.to, decoration: Decoration.replace({ widget: widgetFor(dock, "dock", signature) }) });
+      } else {
+        if (header) rows.push({ from: at, to: at, decoration: Decoration.widget({ widget: widgetFor(header, "sheet", signature), side: docks ? -1 : 1 }) });
+        if (rail) rows.push({ from: line.from, to: line.to, decoration: Decoration.replace({ widget: widgetFor(rail, "walk", signature) }) });
+      }
+      return cacheAndFinish(rows, signature, card.body || null, false);
+      } finally {
+        this._recordSheetDecorating = false;
+      }
     } catch (_) {
+      this._recordSheetDecorating = false;
       return Decoration?.none || null;
     }
   }
+}
+// ---- src/242w-plugin-record-title-recognizer.js ----
+// Record title recognizer: a legacy H1 equal to the card title, and a
+// classified first-body (or immediately following) walk line. requireHeading
+// is false so a walk line may start the owned range. Never classifies a
+// bare line; walk must already be current or stale from the whole source.
+function recordSheetTitleWalkLineMatches(line, walk) {
+  if (!walk || typeof recordWalkParseLinkRun !== "function" || typeof recordWalkIsWalkLine !== "function") {
+    return false;
+  }
+  const albumStem = String(walk.album?.stem || recordSheetStemOf(walk.albumPath) || "");
+  const links = recordWalkParseLinkRun(line, albumStem);
+  if (!recordWalkIsWalkLine(links)) return false;
+  const written = Array.isArray(walk.writtenLinks) ? walk.writtenLinks : [];
+  if (!written.length || links.length !== written.length) return false;
+  const normalize = (value) => String(value || "").replace(/\.md$/i, "");
+  const label = (value) => (typeof recordWalkDisplayLabel === "function"
+    ? recordWalkDisplayLabel(value) : String(value || ""));
+  return links.every((link, index) => normalize(link.target) === normalize(written[index].target)
+    && label(link.label) === label(written[index].label));
+}
+
+function recordSheetTitleRecognizer({ path, title, walk, sourceText } = {}) {
+  const never = typeof propertyCardNeverTitleRecognizer === "function"
+    ? propertyCardNeverTitleRecognizer("record")
+    : Object.freeze({
+      key: "never:record",
+      requireHeading: true,
+      heading: () => false,
+      follower: () => false,
+    });
+  const want = typeof propertyCardCleanInlineText === "function"
+    ? propertyCardCleanInlineText(title) : String(title || "").trim();
+  const hasWalk = typeof recordWalkHasRail === "function" && recordWalkHasRail(walk);
+  if (!want && !hasWalk) return never;
+  let walkLine = "";
+  if (hasWalk && typeof sourceText === "string" && Number.isInteger(walk.lineIndex)) {
+    const lines = sourceText.split(/\r?\n/);
+    walkLine = String(lines[walk.lineIndex] || "").trim();
+  }
+  const key = `record:${recordSheetPath(path)}:${want}:${walk && walk.lineState ? walk.lineState : ""}:${walkLine}`;
+  return Object.freeze({
+    key,
+    requireHeading: false,
+    heading: (cleaned) => Boolean(want) && (typeof propertyCardCleanInlineText === "function"
+      ? propertyCardCleanInlineText(cleaned) : String(cleaned || "").trim()) === want,
+    follower: (trimmedLine) => {
+      if (!hasWalk) return false;
+      const line = String(trimmedLine || "").trim();
+      if (!line) return false;
+      if (walkLine && line === walkLine) return true;
+      return recordSheetTitleWalkLineMatches(line, walk);
+    },
+  });
 }
 // ---- src/242i-plugin-record-sheet-model.js ----
 // Pure gate, value models, and coverage for the read-only record sheet.
@@ -104379,7 +104709,8 @@ function recordSheetSignature(model, extra = {}) {
       warningLine: model.warningLine,
       hideEligible: model.hideEligible,
       editable: model.editable,
-      walk: model.walk || null,
+      walk: typeof recordSheetWalkSignature === "function"
+        ? recordSheetWalkSignature(model.walk) : (model.walk || null),
       collapsed: extra.collapsed === undefined ? model.collapsed === true : extra.collapsed === true,
       foldOpen: extra.foldOpen === undefined ? model.foldOpen === true : extra.foldOpen === true,
       hue: extra.hue === undefined ? model.hue : extra.hue,
@@ -104393,6 +104724,213 @@ function recordSheetSignature(model, extra = {}) {
   } catch (_) {
     return `${model.path}:${model.state}:${model.heading}`;
   }
+}
+// ---- src/242ia-plugin-record-sheet-identity.js ----
+// Local identity for the record card's title block: path, title, album
+// kicker, and emoji from the metadata cache alone, so the title block paints
+// at once without waiting for a bob report. Null unless the note is a
+// canonical desktop record under one existing album parent in its folder.
+function recordSheetPlainString(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function recordSheetStemOf(path) {
+  const normalized = recordSheetPath(path);
+  return normalized ? normalized.split("/").pop().replace(/\.md$/i, "") : "";
+}
+
+// Report-free parent resolve: one unambiguous link to an existing note other
+// than this record. Missing, ambiguous, cyclic, and unresolved parents are
+// null. Album type and folder checks stay with the caller.
+function recordSheetIdentityParentPath(filePath, frontmatter, metadataCache, vault) {
+  const normalized = recordSheetPath(filePath);
+  if (!normalized || !frontmatter || typeof frontmatter !== "object") return "";
+  const rawParent = frontmatter.parent;
+  if (rawParent === null || rawParent === undefined
+    || (typeof rawParent === "string" && !rawParent.trim())
+    || (Array.isArray(rawParent) && rawParent.length === 0)) {
+    return "";
+  }
+  const target = typeof albumSchemaEntryParentTarget === "function"
+    ? albumSchemaEntryParentTarget(rawParent) : "";
+  if (!target) return "";
+  let resolvedPath = "";
+  try {
+    const resolved = typeof albumHeaderResolveFile === "function"
+      ? albumHeaderResolveFile(target, normalized, metadataCache, vault)
+      : null;
+    resolvedPath = resolved && resolved.path ? recordSheetPath(resolved.path) : "";
+  } catch (_) {
+    resolvedPath = "";
+  }
+  if (!resolvedPath) {
+    try {
+      const guessed = /\.md$/i.test(target) ? target : `${target}.md`;
+      const file = vault && typeof vault.getAbstractFileByPath === "function"
+        ? vault.getAbstractFileByPath(guessed) : null;
+      if (file && file.path) resolvedPath = recordSheetPath(file.path);
+    } catch (_) {}
+  }
+  let exists = false;
+  try {
+    if (resolvedPath && vault && typeof vault.getAbstractFileByPath === "function") {
+      exists = Boolean(vault.getAbstractFileByPath(resolvedPath));
+    }
+  } catch (_) {
+    exists = false;
+  }
+  if (!exists && resolvedPath && metadataCache && typeof metadataCache.getFirstLinkpathDest === "function") {
+    try {
+      const found = metadataCache.getFirstLinkpathDest(target, normalized);
+      if (found && found.path) {
+        resolvedPath = recordSheetPath(found.path);
+        exists = true;
+      }
+    } catch (_) {}
+  }
+  if (!exists || !resolvedPath) return "";
+  if (resolvedPath.toLocaleLowerCase() === normalized.toLocaleLowerCase()) return "";
+  return resolvedPath;
+}
+
+function recordSheetIdentityHeading(options = {}) {
+  if (typeof options.heading === "string" && options.heading.trim()) return options.heading.trim();
+  if (typeof options.sourceText === "string") {
+    const fromSource = typeof recordSheetFirstHeading === "function"
+      ? recordSheetFirstHeading(options.sourceText) : "";
+    if (fromSource) return fromSource;
+  }
+  if (options.cache) {
+    const fromCache = typeof recordSheetHeadingFromCache === "function"
+      ? recordSheetHeadingFromCache(options.cache) : "";
+    if (fromCache) return fromCache;
+  }
+  return "";
+}
+
+function recordSheetIdentityModel(path, options = {}) {
+  try {
+    if (options.desktop !== true) return null;
+    const filePath = recordSheetPath(path);
+    if (!filePath) return null;
+    const frontmatter = options.frontmatter;
+    if (!frontmatter || typeof frontmatter !== "object" || Array.isArray(frontmatter)) return null;
+    if (!recordSheetIsCanonicalRecordType(frontmatter)) return null;
+    const metadataCache = options.metadataCache || null;
+    const vault = options.vault || null;
+    const albumPath = recordSheetIdentityParentPath(filePath, frontmatter, metadataCache, vault);
+    if (!albumPath) return null;
+    if (!recordSheetParentIsAlbum(albumPath, metadataCache, vault)) return null;
+    const albumStem = recordSheetStemOf(albumPath);
+    if (recordSheetFolderKind(filePath, albumStem) !== "ok") return null;
+    const stem = recordSheetStemOf(filePath);
+    const title = recordSheetPlainString(frontmatter.title)
+      || recordSheetIdentityHeading(options)
+      || stem;
+    if (!title) return null;
+    const albumTitle = (typeof notebookHeaderNoteTitle === "function"
+      ? String(notebookHeaderNoteTitle(albumPath, metadataCache, vault) || "").trim()
+      : "") || albumStem;
+    let emoji = "";
+    try {
+      const albumFile = vault && typeof vault.getAbstractFileByPath === "function"
+        ? vault.getAbstractFileByPath(albumPath) : null;
+      const albumCache = albumFile && metadataCache && typeof metadataCache.getFileCache === "function"
+        ? metadataCache.getFileCache(albumFile) : null;
+      emoji = recordSheetPlainString(albumCache?.frontmatter?.emoji);
+    } catch (_) {
+      emoji = "";
+    }
+    return {
+      kind: "record",
+      path: filePath,
+      stem,
+      title,
+      albumPath,
+      albumStem,
+      albumTitle,
+      emoji,
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
+// { identity, body }: identity is required and always supplies the title;
+// body is today's report-backed record model, or null while the report is
+// pending, failed, or has no entry. A title alone never enables editing.
+function recordSheetCardModel(path, options = {}) {
+  const identity = recordSheetIdentityModel(path, options);
+  if (!identity) return null;
+  let body = null;
+  try {
+    body = typeof options.body === "function" ? options.body() : (options.body == null ? null : options.body);
+  } catch (_) {
+    body = null;
+  }
+  return { identity, body, title: identity.title };
+}
+
+// A bare report model (older callers and previews) still builds: identity
+// from itself. The title stays the body's title so existing tests keep it.
+function recordSheetCardFrom(model) {
+  if (!model) return null;
+  if (model.identity) return model;
+  const title = String(model.title || model.stem || "Record").trim() || "Record";
+  const albumPath = recordSheetPath(model.albumPath);
+  const albumStem = String(model.albumStem || recordSheetStemOf(albumPath));
+  return {
+    identity: {
+      kind: "record",
+      path: recordSheetPath(model.path),
+      stem: String(model.stem || recordSheetStemOf(model.path)),
+      title,
+      albumPath,
+      albumStem,
+      albumTitle: String(model.albumTitle || albumStem || "Album"),
+      emoji: recordSheetPlainString(model.emoji),
+    },
+    body: model,
+    title,
+  };
+}
+
+// Scalars only: stringifying the live walk model can include a new object
+// graph on every CodeMirror update and force a slot remount loop.
+function recordSheetWalkSignature(walk) {
+  if (!walk) return null;
+  return {
+    state: walk.state || "",
+    reason: walk.reason || "",
+    lineState: walk.lineState || "",
+    lineIndex: Number.isInteger(walk.lineIndex) ? walk.lineIndex : null,
+    position: Number.isInteger(walk.position) ? walk.position : null,
+    total: Number.isInteger(walk.total) ? walk.total : null,
+    albumPath: walk.albumPath || "",
+    prev: walk.prev && walk.prev.path ? walk.prev.path : "",
+    next: walk.next && walk.next.path ? walk.next.path : "",
+  };
+}
+
+function recordSheetCardSignature(card, extra = {}) {
+  if (!card?.identity) return "none";
+  const identity = card.identity;
+  return JSON.stringify({
+    path: identity.path,
+    title: identity.title,
+    albumPath: identity.albumPath,
+    albumTitle: identity.albumTitle,
+    emoji: identity.emoji,
+    hue: extra.hue || "",
+    body: card.body && typeof recordSheetSignature === "function"
+      ? recordSheetSignature(card.body, extra) : null,
+    walk: recordSheetWalkSignature(extra.walk || (card.body && card.body.walk) || null),
+    collapsed: extra.collapsed === true,
+    foldOpen: extra.foldOpen === true,
+    overlay: extra.overlay || null,
+    subscription: extra.subscription || null,
+    desktop: extra.desktop !== false,
+  });
 }
 // ---- src/242j-plugin-record-sheet-dom.js ----
 // Read-only record sheet DOM. Report and frontmatter strings always enter
@@ -104590,45 +105128,11 @@ function recordSheetBindOpen(node, handler, key, skipSelector) {
   });
 }
 
-function recordSheetRenderCrumbs(header, model, options, doc) {
-  const nav = recordSheetEl(doc, "nav", "bob-record-sheet-nav");
-  if (!nav) return null;
-  nav.setAttribute?.("aria-label", "Album location");
-  const crumbs = Array.isArray(model.crumbs) ? model.crumbs : [];
-  crumbs.forEach((crumb, index) => {
-    if (index > 0) recordSheetAppendText(nav, doc, " › ");
-    const resolved = recordSheetPath(crumb.path);
-    const current = crumb.current === true;
-    const node = !current && resolved && doc?.createElement ? doc.createElement("a") : recordSheetEl(doc, "span");
-    if (!node) return;
-    if (!current && resolved) {
-      node.setAttribute("class", "internal-link bob-record-sheet-crumb");
-      node.setAttribute("data-href", resolved);
-      node.setAttribute("href", resolved);
-      const open = (event) => options?.handlers?.openPath?.(resolved, event);
-      if (typeof notebookBindAction === "function") notebookBindAction(node, open);
-      else node.addEventListener?.("click", (event) => { event.preventDefault?.(); open(event); });
-      recordSheetBindHover(node, options, resolved);
-    } else {
-      node.setAttribute?.("class", "bob-record-sheet-crumb bob-record-sheet-current");
-    }
-    recordSheetText(node, crumb.title || crumb.stem || "");
-    nav.appendChild(node);
-  });
-  if (model.noun) {
-    recordSheetAppendText(nav, doc, " › ");
-    const noun = recordSheetEl(doc, "span", "bob-record-sheet-noun");
-    recordSheetText(noun, model.noun);
-    if (noun) nav.appendChild(noun);
-  }
-  header.appendChild(nav);
-  return nav;
-}
-
-function recordSheetRenderToolbar(header, model, options, doc) {
+function recordSheetRenderToolbar(slot, model, options, doc) {
+  if (!slot || !model) return null;
   const tools = recordSheetEl(doc, "div", "bob-record-sheet-tools");
   if (!tools) return null;
-  if (model && model.editable === true) {
+  if (model.editable === true) {
     const edit = recordSheetEl(doc, "button", "bob-record-sheet-edit");
     if (edit) {
       edit.setAttribute("type", "button");
@@ -104657,23 +105161,8 @@ function recordSheetRenderToolbar(header, model, options, doc) {
     });
     tools.appendChild(collapse);
   }
-  header.appendChild(tools);
+  slot.appendChild(tools);
   return tools;
-}
-
-function recordSheetRenderTitleRow(header, model, options, doc) {
-  const row = recordSheetEl(doc, "div", "bob-record-sheet-title-row");
-  if (!row) return null;
-  const title = recordSheetEl(doc, "div", "bob-record-sheet-title");
-  if (title) {
-    title.setAttribute?.("role", "heading");
-    title.setAttribute?.("aria-level", "1");
-    recordSheetText(title, model.title || "Record");
-    row.appendChild(title);
-  }
-  recordSheetRenderToolbar(row, model, options, doc);
-  header.appendChild(row);
-  return row;
 }
 
 function recordSheetRenderRow(list, row, options, doc) {
@@ -104792,26 +105281,58 @@ function recordSheetRenderFold(sheet, model, options, doc) {
 
 function recordSheetBuildEl(model, options = {}, doc) {
   if (!model) return null;
+  const card = typeof recordSheetCardFrom === "function" ? recordSheetCardFrom(model) : null;
+  const identity = card?.identity;
+  if (!identity) return null;
+  const body = card.body || null;
+  const title = String(card.title || identity.title || identity.stem || "").trim();
   const host = doc || recordSheetDomDoc(options.root);
   const sheet = recordSheetEl(host, "section", `${RECORD_SHEET_CLASS} bob-property-card`);
-  if (!sheet) return null;
+  if (!sheet || !title) return null;
   sheet.setAttribute("role", "group");
-  sheet.setAttribute("aria-label", `${model.title || "Record"} record details`);
   sheet.setAttribute("data-record-sheet", "true");
-  sheet.setAttribute("data-record-source", model.path || "");
-  if (model.hue) sheet.setAttribute("data-root-hue", model.hue);
-  if (model.state) sheet.setAttribute("data-record-state", model.state);
-  const header = recordSheetEl(host, "header", "bob-record-sheet-header");
-  if (header) {
-    recordSheetRenderTitleRow(header, model, options, host);
-    if (!model.collapsed || model.broken) recordSheetRenderCrumbs(header, model, options, host);
-    sheet.appendChild(header);
+  sheet.setAttribute("data-record-source", identity.path || "");
+  sheet.setAttribute("data-record-body", body ? "report" : "pending");
+  const hue = (body && body.hue) || options.hue || "";
+  if (hue) sheet.setAttribute("data-root-hue", hue);
+  if (body && body.state) sheet.setAttribute("data-record-state", body.state);
+  else sheet.setAttribute("data-record-state", "pending");
+  if (typeof propertyCardApplyIdentity === "function") {
+    propertyCardApplyIdentity(sheet, { kind: "record", title });
+  } else {
+    sheet.setAttribute("aria-label", `Record: ${title}`);
   }
-  if (model.broken) {
+  const albumTitle = String((body && body.albumTitle) || identity.albumTitle || "").trim();
+  const albumPath = typeof recordSheetPath === "function"
+    ? recordSheetPath((body && body.albumPath) || identity.albumPath)
+    : String((body && body.albumPath) || identity.albumPath || "");
+  const kicker = [];
+  if (albumTitle && albumPath) kicker.push({ text: albumTitle, target: albumPath });
+  else if (albumTitle) kicker.push({ text: albumTitle });
+  if (body && body.noun) kicker.push({ text: body.noun });
+  const block = typeof propertyCardBuildTitleBlock === "function"
+    ? propertyCardBuildTitleBlock(host, {
+      kind: "record",
+      title,
+      tile: { emoji: String((body && body.emoji) || identity.emoji || "").trim() },
+      kicker,
+      onLink: (target, event) => options?.handlers?.openPath?.(target, event),
+    })
+    : null;
+  if (!block) return null;
+  block.heading?.classList?.add?.("bob-record-sheet-title");
+  for (const link of Array.from(block.element.querySelectorAll?.(".bob-property-card-kicker-link") || [])) {
+    link.classList?.add?.("bob-record-sheet-crumb");
+    recordSheetBindHover(link, options, link.getAttribute?.("data-href") || identity.albumPath);
+  }
+  sheet.appendChild(block.element);
+  if (!body) return sheet;
+  recordSheetRenderToolbar(block.actions, body, options, host);
+  if (body.broken) {
     const warning = recordSheetEl(host, "p", "bob-record-sheet-warning");
     if (warning) {
       warning.setAttribute("role", "status");
-      recordSheetText(warning, model.warning || "The album schema is invalid.");
+      recordSheetText(warning, body.warning || "The album schema is invalid.");
       sheet.appendChild(warning);
     }
     const jump = recordSheetEl(host, "button", "bob-record-sheet-yaml");
@@ -104821,41 +105342,40 @@ function recordSheetBuildEl(model, options = {}, doc) {
       recordSheetText(jump, "Open album YAML");
       jump.addEventListener?.("click", (event) => {
         event.preventDefault?.();
-        options?.handlers?.jumpAlbumYaml?.(model.warningLine);
+        options?.handlers?.jumpAlbumYaml?.(body.warningLine);
       });
-      recordSheetBindYamlJump(jump, () => options?.handlers?.jumpAlbumYaml?.(model.warningLine), "schema");
+      recordSheetBindYamlJump(jump, () => options?.handlers?.jumpAlbumYaml?.(body.warningLine), "schema");
       sheet.appendChild(jump);
     }
     return sheet;
   }
-  if (model.collapsed) {
+  if (body.collapsed) {
     const summary = recordSheetEl(host, "div", "bob-record-sheet-summary");
     if (summary) {
-      recordSheetRenderCrumbs(summary, model, options, host);
-      recordSheetRenderChips(summary, host, model.choiceChips, options);
-      if (Number.isInteger(model.fieldCount)) {
+      recordSheetRenderChips(summary, host, body.choiceChips, options);
+      if (Number.isInteger(body.fieldCount)) {
         const count = recordSheetEl(host, "span", "bob-record-sheet-field-count");
-        recordSheetText(count, `· ${model.fieldCount} ${model.fieldCount === 1 ? "field" : "fields"}`);
+        recordSheetText(count, `· ${body.fieldCount} ${body.fieldCount === 1 ? "field" : "fields"}`);
         if (count) summary.appendChild(count);
       }
       sheet.appendChild(summary);
     }
-  } else {
-    if (model.rows && model.rows.length) {
-      const list = recordSheetEl(host, "dl", "bob-record-sheet-fields");
-      if (list) {
-        for (const row of model.rows) recordSheetRenderRow(list, row, options, host);
-        sheet.appendChild(list);
-      }
-    }
-    recordSheetRenderGhosts(sheet, model, options, host);
-    if (model.createdFooter) {
-      const footer = recordSheetEl(host, "p", "bob-record-sheet-created");
-      recordSheetText(footer, model.createdFooter);
-      if (footer) sheet.appendChild(footer);
-    }
-    recordSheetRenderFold(sheet, model, options, host);
+    return sheet;
   }
+  if (body.rows && body.rows.length) {
+    const list = recordSheetEl(host, "dl", "bob-record-sheet-fields");
+    if (list) {
+      for (const row of body.rows) recordSheetRenderRow(list, row, options, host);
+      sheet.appendChild(list);
+    }
+  }
+  recordSheetRenderGhosts(sheet, body, options, host);
+  if (body.createdFooter) {
+    const footer = recordSheetEl(host, "p", "bob-record-sheet-created");
+    recordSheetText(footer, body.createdFooter);
+    if (footer) sheet.appendChild(footer);
+  }
+  recordSheetRenderFold(sheet, body, options, host);
   return sheet;
 }
 
@@ -104893,6 +105413,7 @@ class BobLedgerToolsRecordSheetMixin {
       kind: "record",
       readingPriority: 49,
       allowEmbedDisplay: true,
+      titleOwnership: true,
       fields: {
         active: "recordSheetActive",
         reading: "recordSheetReading",
@@ -104912,7 +105433,13 @@ class BobLedgerToolsRecordSheetMixin {
       removeReading: (root, scope, path) => plugin.recordSheetRemoveReading(root, scope, path),
       onBind: (widget, el, ctx) => {
         widget.viewFallback = false;
-        widget.albumPath = plugin.recordSheetGateFor(ctx.sourcePath)?.albumPath || "";
+        let albumPath = "";
+        try {
+          albumPath = plugin.recordSheetCardModelFor?.(ctx.sourcePath)?.identity?.albumPath || "";
+        } catch (_) {
+          albumPath = "";
+        }
+        widget.albumPath = albumPath || plugin.recordSheetGateFor(ctx.sourcePath)?.albumPath || "";
         plugin.recordSheetEnsureWalkSource(ctx.sourcePath);
       },
       onUnbind: () => { plugin.recordSheetNotifyOwnership(); },
@@ -104920,7 +105447,9 @@ class BobLedgerToolsRecordSheetMixin {
         if (!root) plugin.recordSheetRemoveStrays(widget.el, widget.path);
       },
       livePath: (view) => plugin.recordSheetLivePath(view),
-      buildDecorations: (view) => plugin.buildRecordSheetDecorations(view),
+      // Forward the host's CodeMirror update so viewport-only rebuilds can
+      // skip BuildMounted. A one-arg wrapper dropped it and froze Live Preview.
+      buildDecorations: (view, update) => plugin.buildRecordSheetDecorations(view, update),
       shouldRebuild: (update) => {
         const liveChanged = editorLivePreviewField && update.startState && update.state
           ? (() => {
@@ -105286,8 +105815,10 @@ class BobLedgerToolsRecordSheetMixin {
     try {
       const workspace = this.app?.workspace;
       if (workspace && typeof workspace.openLinkText === "function") {
-        const newLeaf = Boolean(event?.ctrlKey || event?.metaKey || event?.shiftKey);
-        await workspace.openLinkText(path.replace(/\.md$/i, ""), sourcePath || "", newLeaf);
+        const pane = typeof albumHeaderLinkPane === "function"
+          ? albumHeaderLinkPane(event)
+          : Boolean(event?.ctrlKey || event?.metaKey || event?.shiftKey || (event?.type === "auxclick" && event?.button === 1));
+        await workspace.openLinkText(path.replace(/\.md$/i, ""), sourcePath || "", pane);
         return { ok: true };
       }
     } catch (_) {}
@@ -105429,23 +105960,6 @@ class BobLedgerToolsRecordSheetMixin {
     return propertyCardNodeBelongs(node, root);
   }
 
-  recordSheetRemoveReading(root, scope = root, sourcePath = "") {
-    if (!root) return;
-    this.recordWalkRemoveReading(root, sourcePath);
-    for (const node of Array.from(root.querySelectorAll?.(`.${RECORD_SHEET_CLASS}`) || [])) {
-      if (!this.recordSheetNodeBelongs(node, root)) continue;
-      const ownedPath = recordSheetPath(node.getAttribute?.("data-record-source") || "");
-      if (sourcePath && ownedPath && ownedPath !== recordSheetPath(sourcePath)) continue;
-      try { node.remove?.(); } catch (_) { node.parentNode?.removeChild?.(node); }
-    }
-    const anotherOwner = Array.from(this.recordSheetReading || []).some((item) =>
-      item.surface === root && item.path !== sourcePath);
-    if (!anotherOwner) scope?.classList?.remove?.(RECORD_SHEET_SURFACE_CLASS);
-    scope?.classList?.remove?.(RECORD_SHEET_HIDES_CLASS);
-    root?.classList?.remove?.(RECORD_SHEET_HIDES_CLASS);
-    this.recordSheetClearNativeProperties(scope);
-  }
-
   recordSheetRemoveStrays(root, sourcePath) {
     for (const node of Array.from(root?.querySelectorAll?.(`.${RECORD_SHEET_CLASS}`) || [])) {
       if (node.getAttribute?.("data-cm-widget") === "true") continue;
@@ -105455,53 +105969,18 @@ class BobLedgerToolsRecordSheetMixin {
     }
   }
 
-  recordSheetBuildMounted(model, options, doc) {
+  recordSheetBuildMounted(model, options, doc, extra = {}) {
     this.recordSheetDomBuilds = (this.recordSheetDomBuilds || 0) + 1;
     const sheet = recordSheetBuildEl(model, options, doc);
-    if (sheet) recordSheetAppendSubscriptionBand(sheet, model, options);
-    return sheet;
-  }
-
-  paintRecordSheetReading(el, sourcePath) {
-    const root = this.recordSheetReadingRoot(el);
-    const scope = this.recordSheetReadingScope(root);
-    if (!root || !sourcePath) return null;
-    this.recordSheetRemoveStrays(root, sourcePath);
-    const model = this.recordSheetModelFor(sourcePath);
-    const doc = recordSheetDomDoc(root) || (typeof document !== "undefined" ? document : null);
-    const old = Array.from(root.querySelectorAll?.(`.${RECORD_SHEET_CLASS}`) || [])
-      .find((node) => this.recordSheetNodeBelongs(node, root));
-    const active = doc?.activeElement;
-    const focusKey = active && old?.contains?.(active)
-      ? active.getAttribute?.("data-record-sheet-focus") : "";
-    this.recordSheetRemoveReading(root, scope, sourcePath);
-    if (!model) {
-      this.recordWalkPaintReading(root, sourcePath, null);
-      this.recordSheetNotifyOwnership();
-      return null;
+    const body = model && model.identity ? model.body : model;
+    if (sheet && body) recordSheetAppendSubscriptionBand(sheet, body, options);
+    if (sheet && extra.includeRail && extra.walk && typeof recordWalkRailBuildEl === "function") {
+      const rail = recordWalkRailBuildEl(extra.walk, options, doc);
+      if (rail) {
+        sheet.classList.add("has-record-walk");
+        sheet.appendChild(rail);
+      }
     }
-    scope?.classList?.add?.(RECORD_SHEET_SURFACE_CLASS);
-    const sheet = this.recordSheetBuildMounted(model, this.recordSheetOptions(sourcePath, model), doc);
-    if (!sheet) {
-      scope?.classList?.remove?.(RECORD_SHEET_SURFACE_CLASS);
-      return null;
-    }
-    const anchor = this.albumHeaderReadingAnchor?.(root);
-    // The card is the record's rendered title surface, so keep it before an
-    // authored legacy H1 instead of letting that heading precede the card.
-    if (anchor?.parentNode?.insertBefore) anchor.parentNode.insertBefore(sheet, anchor);
-    else if (root.insertBefore) root.insertBefore(sheet, root.firstChild || null);
-    else root.prepend?.(sheet);
-    this.recordWalkPaintReading(root, sourcePath, sheet);
-    if (focusKey) {
-      const next = sheet.querySelector?.(`[data-record-sheet-focus="${focusKey}"]`);
-      next?.focus?.({ preventScroll: true });
-    }
-    if (model.hideEligible === true && !recordSheetScopeIsEmbed(scope)) {
-      scope?.classList?.add?.(RECORD_SHEET_HIDES_CLASS);
-    }
-    this.recordSheetSetNativeProperties(scope, model);
-    this.recordSheetNotifyOwnership();
     return sheet;
   }
 
@@ -105650,6 +106129,7 @@ class BobLedgerToolsRecordSheetMixin {
   }
 
   recordSheetCleanEditor(view) {
+    this.recordSheetReleaseAdoption?.(view?.dom);
     this.recordPropertyCardHost().cleanEditor(view, {
       unmark: (scope) => {
         this.recordSheetClearNativeProperties(scope);
@@ -105684,11 +106164,210 @@ class BobLedgerToolsRecordSheetMixin {
     this.recordPropertyCardHost().scheduleRefresh();
   }
 }
+// ---- src/242kb-plugin-record-sheet-title.js ----
+// Record card title-slot adopter: paints the kit title block from local
+// identity, joins the report body inside the same node, and mounts in the
+// title slot through the shared glue (240k). Mixins cannot share method
+// names with 242k, so paint/remove/card-model live here.
+const recordSheetNodeSignatures = new WeakMap();
+
+function recordSheetDefer(callback) {
+  if (typeof queueMicrotask === "function") queueMicrotask(callback);
+  else Promise.resolve().then(callback);
+}
+
+class BobLedgerToolsRecordSheetTitleMixin {
+  recordSheetCardModelFor(path, sourceText) {
+    try {
+      const filePath = recordSheetPath(path);
+      if (!filePath) return null;
+      const frontmatter = this.recordSheetFrontmatter(filePath);
+      const cache = this.recordSheetCache(filePath);
+      const currentSource = typeof sourceText === "string"
+        ? sourceText
+        : this.recordSheetSourceCache?.get?.(filePath);
+      const heading = typeof sourceText === "string"
+        ? recordSheetFirstHeading(sourceText)
+        : recordSheetHeadingFromCache(cache);
+      return recordSheetCardModel(filePath, {
+        frontmatter,
+        heading,
+        sourceText: currentSource,
+        metadataCache: this.app?.metadataCache,
+        vault: this.app?.vault,
+        desktop: this.recordSheetDesktop(),
+        cache,
+        body: () => this.recordSheetModelFor(filePath, sourceText),
+      });
+    } catch (_) {
+      return null;
+    }
+  }
+
+  recordSheetReleaseAdoption(scope, sourcePath = "") {
+    try { return propertyCardAdoptRelease(scope, sourcePath || undefined, "record"); } catch (_) { return false; }
+  }
+
+  recordSheetBodyNodes(root, sourcePath, exclude = null) {
+    const path = recordSheetPath(sourcePath);
+    return Array.from(root?.querySelectorAll?.(`.${RECORD_SHEET_CLASS}`) || []).filter((node) => {
+      if (node === exclude || !this.recordSheetNodeBelongs(node, root)) return false;
+      if (node.classList?.contains?.(PROPERTY_CARD_TITLE_SLOT_CLASS)) return false;
+      const ownedPath = recordSheetPath(node.getAttribute?.("data-record-source") || "");
+      return !path || !ownedPath || ownedPath === path;
+    });
+  }
+
+  recordSheetFocusKey(node, doc) {
+    const active = doc?.activeElement;
+    return active && node?.contains?.(active) ? active.getAttribute?.("data-record-sheet-focus") || "" : "";
+  }
+
+  recordSheetRestoreFocus(node, focusKey) {
+    if (!focusKey || !node) return;
+    const next = Array.from(node.querySelectorAll?.("[data-record-sheet-focus]") || [])
+      .find((item) => item.getAttribute?.("data-record-sheet-focus") === focusKey);
+    next?.focus?.({ preventScroll: true });
+  }
+
+  recordSheetPlaceInBody(root, sheet) {
+    const anchor = this.albumHeaderReadingAnchor?.(root);
+    if (anchor?.parentNode?.insertBefore) {
+      if (sheet.parentNode === anchor.parentNode && sheet.nextSibling === anchor) return true;
+      anchor.parentNode.insertBefore(sheet, anchor);
+      return true;
+    }
+    if (sheet.parentNode === root && root.firstChild === sheet) return true;
+    if (root.insertBefore) root.insertBefore(sheet, root.firstChild || null);
+    else root.prepend?.(sheet);
+    return true;
+  }
+
+  recordSheetRemoveReading(root, scope = root, sourcePath = "") {
+    if (!root) return;
+    this.recordSheetReleaseAdoption(scope, sourcePath);
+    this.recordWalkRemoveReading(root, sourcePath);
+    for (const node of Array.from(root.querySelectorAll?.(`.${RECORD_SHEET_CLASS}`) || [])) {
+      if (!this.recordSheetNodeBelongs(node, root)) continue;
+      const ownedPath = recordSheetPath(node.getAttribute?.("data-record-source") || "");
+      if (sourcePath && ownedPath && ownedPath !== recordSheetPath(sourcePath)) continue;
+      try { node.remove?.(); } catch (_) { node.parentNode?.removeChild?.(node); }
+    }
+    const anotherOwner = Array.from(this.recordSheetReading || []).some((item) =>
+      item.surface === root && item.path !== sourcePath);
+    if (!anotherOwner) scope?.classList?.remove?.(RECORD_SHEET_SURFACE_CLASS);
+    scope?.classList?.remove?.(RECORD_SHEET_HIDES_CLASS);
+    root?.classList?.remove?.(RECORD_SHEET_HIDES_CLASS);
+    this.recordSheetClearNativeProperties(scope);
+  }
+
+  paintRecordSheetReading(el, sourcePath) {
+    const root = this.recordSheetReadingRoot(el);
+    const scope = this.recordSheetReadingScope(root);
+    if (!root || !sourcePath) return null;
+    this.recordSheetRemoveStrays(root, sourcePath);
+    let card = null;
+    try {
+      card = this.recordSheetCardModelFor(sourcePath);
+    } catch (_) {
+      card = null;
+    }
+    const reading = scope?.classList?.contains?.("markdown-preview-view")
+      ? propertyCardReadingViewFor(this.app, scope) : null;
+    const leafPath = reading ? reading.currentPath() : "";
+    const embed = recordSheetScopeIsEmbed(scope) || recordSheetScopeIsEmbed(root);
+    // The host leaf path is the wrapping note; an embed's sourcePath is the
+    // nested file, so that mismatch must not sweep a demoted embed card.
+    if (!card || (!embed && leafPath && leafPath !== sourcePath)) {
+      this.recordSheetRemoveReading(root, scope, sourcePath);
+      this.recordWalkPaintReading(root, sourcePath, null);
+      this.recordSheetNotifyOwnership();
+      return null;
+    }
+    const doc = recordSheetDomDoc(root) || (typeof document !== "undefined" ? document : null);
+    const adopted = propertyCardAdoptedEntry(scope);
+    const slotNode = adopted && adopted.path === sourcePath && adopted.mode === "slot" ? adopted.node : null;
+    const bodyNodes = this.recordSheetBodyNodes(root, sourcePath, slotNode);
+    let sheet = slotNode || bodyNodes[0] || null;
+    const focusKey = this.recordSheetFocusKey(sheet, doc);
+    const options = this.recordSheetOptions(sourcePath, card.body);
+    const walk = card.body?.walk || this.recordWalkFor(sourcePath);
+    const signature = recordSheetCardSignature(card, { ...options, walk });
+    if (!sheet || recordSheetNodeSignatures.get(sheet) !== signature) {
+      let fresh = null;
+      try {
+        fresh = this.recordSheetBuildMounted(card, options, doc);
+      } catch (_) {
+        fresh = null;
+      }
+      if (!fresh) {
+        this.recordSheetRemoveReading(root, scope, sourcePath);
+        this.recordSheetNotifyOwnership();
+        return null;
+      }
+      sheet = sheet ? propertyCardAdoptPatch(sheet, fresh) : fresh;
+      recordSheetNodeSignatures.set(sheet, signature);
+    }
+    for (const node of bodyNodes) {
+      if (node !== sheet) node.remove?.();
+    }
+    scope?.classList?.add?.(RECORD_SHEET_SURFACE_CLASS);
+    const sourceText = this.recordSheetSourceCache?.get?.(sourcePath);
+    const recognizer = recordSheetTitleRecognizer({
+      path: sourcePath,
+      title: card.title,
+      walk,
+      sourceText,
+    });
+    const adoption = propertyCardAdoptTitle(scope, sheet, {
+      path: sourcePath,
+      kind: "record",
+      view: reading?.view || null,
+      currentPath: reading?.currentPath || null,
+      recognizer,
+      onLost: () => this.scheduleRecordSheetRefresh(),
+    });
+    if (adoption.mode !== "slot") {
+      try {
+        this.recordSheetPlaceInBody(root, sheet);
+      } catch (_) {
+        this.recordSheetRemoveReading(root, scope, sourcePath);
+        this.recordSheetNotifyOwnership();
+        return null;
+      }
+    }
+    this.recordSheetRestoreFocus(sheet, focusKey);
+    this.recordWalkPaintReading(root, sourcePath, sheet, { owned: adoption.mode === "slot" });
+    if (card.body?.hideEligible === true && !recordSheetScopeIsEmbed(scope)) {
+      scope?.classList?.add?.(RECORD_SHEET_HIDES_CLASS);
+    } else {
+      scope?.classList?.remove?.(RECORD_SHEET_HIDES_CLASS);
+      root?.classList?.remove?.(RECORD_SHEET_HIDES_CLASS);
+    }
+    this.recordSheetSetNativeProperties(scope, card.body);
+    this.recordSheetNotifyOwnership();
+    return sheet;
+  }
+
+  recordSheetPatchLive(view, adopted, fresh, signature) {
+    const target = adopted.node;
+    recordSheetDefer(() => {
+      const entry = propertyCardAdoptedEntry(view?.dom);
+      if (!entry || entry.node !== target || entry.generation !== adopted.generation) return;
+      const doc = recordSheetDomDoc(target) || (typeof document !== "undefined" ? document : null);
+      const focusKey = this.recordSheetFocusKey(target, doc);
+      propertyCardAdoptPatch(target, fresh);
+      recordSheetNodeSignatures.set(target, signature);
+      propertyCardSyncTitleHeading(target, entry.owned);
+      this.recordSheetRestoreFocus(target, focusKey);
+    });
+  }
+}
 // ---- src/242ka-plugin-record-sheet-properties.js ----
 // Native Properties remain usable for metadata outside the album schema.
-// Shared property-card ownership (240b) paints the owned rows, including the
-// record compatibility class; this adapter keeps one generation-bound release
-// handle per scope, so it never clears another card's newer owner.
+// Shared property-card ownership (240b) paints the owned rows with
+// bob-property-card-owned-property; this adapter keeps one generation-bound
+// release handle per scope, so it never clears another card's newer owner.
 class BobLedgerToolsRecordSheetPropertiesMixin {
   recordSheetClearNativeProperties(scope) {
     const state = this.recordSheetNativePropertiesScopes?.get(scope);
@@ -105706,6 +106385,12 @@ class BobLedgerToolsRecordSheetPropertiesMixin {
     }
     const keys = new Set([...(model.rows || []), ...(model.ghosts || [])].map((row) => row.key));
     if (model.coverage && model.coverage.title === "sheet") keys.add("title");
+    const previous = this.recordSheetNativePropertiesScopes.get(scope);
+    if (previous && previous.keys && previous.keys.size === keys.size
+      && Array.from(keys).every((key) => previous.keys.has(key))) {
+      return;
+    }
+    this.recordSheetClearNativeProperties(scope);
     let release = null;
     try {
       if (typeof propertyCardOwnKeys === "function") release = propertyCardOwnKeys(scope, keys);
@@ -158485,6 +159170,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsAlbumRecordsMixin,
   BobLedgerToolsAlbumHeaderMixin,
   BobLedgerToolsRecordSheetMixin,
+  BobLedgerToolsRecordSheetTitleMixin,
   BobLedgerToolsRecordWalkRailMixin,
   BobLedgerToolsRecordSheetPropertiesMixin,
   BobLedgerToolsRecordUpdateMixin,
@@ -162502,6 +163188,12 @@ try {
       recordSheetYamlKeyLine,
       recordSheetModel,
       recordSheetSignature,
+      recordSheetIdentityModel,
+      recordSheetCardModel,
+      recordSheetCardFrom,
+      recordSheetCardSignature,
+      recordSheetWalkSignature,
+      recordSheetTitleRecognizer,
       recordSheetBuildEl,
       recordSheetAppendSubscriptionBand,
       albumSubscriptionHeaderIsSheetOwned,

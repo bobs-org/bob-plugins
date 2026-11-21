@@ -3,21 +3,25 @@ title: "Record Card"
 description: "Reference for the record card and its editor on canonical album records."
 ---
 
-Bob Ledger Tools paints a **record card** (formerly the record sheet) at the
-top of a canonical album record's body (`type: [[record]]`) in Reading view
-and Live Preview. An authored first-level heading stays below the card. Notes
-without an H1, including frontmatter-only notes, still show it at the top of
-the body. The **Record Card editor** is the keyboard-first editor for those
-values.
-When the card is hide-eligible — healthy schema, desktop Obsidian, and the
-cached report carries `record_values_v1` — native title and album-schema rows
-hide behind the card, along with the filename-derived inline title. Properties
-keeps `parent`, `type`, `created`, legacy and unrelated keys, and Add property.
-Every other case keeps all native rows visible.
+Bob Ledger Tools paints a **record card** (formerly the record sheet) in the
+title slot of a canonical album record (`type: [[record]]`) in desktop Reading
+view and Live Preview: after the inline title, before native Properties. The
+**RECORD** kicker names the parent [album card](albums.md) and, once the
+report arrives, the record noun; the sheet tile shows the album emoji else a
+page icon. The title paints from local metadata before any report; fields,
+ghosts, fold, and the created footer join inside the same node. Source mode,
+embeds, hover popovers, canvas, and mobile keep native rendering. The
+**Record Card editor** is the keyboard-first editor for those values.
 
-The card is desktop-only and reads the cached album report plus Obsidian
-metadata. Opening, folding, or collapsing a record never requests a new
-report and never writes the note. Source mode keeps native YAML.
+Title ownership is independent of row hiding. Whenever the card owns the
+title, the inline title and a matching first-body H1 or walk line hide; a
+Live Preview cursor on that line reveals the raw Markdown while the card and
+its rail stay in the slot. Native Properties rows hide only when the card is
+hide-eligible — healthy schema, desktop Obsidian, and the cached report
+carries `record_values_v1`. Properties keeps `parent`, `type`, `created`,
+legacy and unrelated keys, and Add property. Every other case keeps native
+rows visible. Opening, folding, or collapsing a record never requests a new
+report and never writes the note.
 
 ## Record walk position
 
@@ -59,11 +63,14 @@ same [navigation commands](bob-navigation-hotkeys.md) as `[n` / `]n`, including
 jump history and bracket repeat. Mod-click and middle-click open new tabs;
 missing records refuse navigation instead of creating an empty note.
 
-In Live Preview, touching the walk line with any cursor or selection reveals
-the raw Markdown; leaving it restores the rail. Source mode always shows the
-original line. Reading view replaces only the complete walk paragraph and
-restores it when the plugin unloads. Neither view writes a count into the
-note. A moved walk line remains in its authored position in Live Preview.
+The rail docks inside the card at its bottom, including while Live Preview
+reveals a first-body walk line. Touching that line with any cursor or
+selection shows the raw Markdown; the same card and rail stay mounted. A
+walk line that is not first keeps in-place replacement. Source mode always
+shows the original line. Reading view hides a first-body walk paragraph
+through the title kit and restores it when ownership drops. Neither view
+writes a count into the note. A moved walk line remains in its authored
+position in Live Preview.
 
 The isolated editor walkthrough covers both views, cursor reveal, wrap,
 footer agreement, narrow layout, singletons, and the missing-target guard:
@@ -75,17 +82,18 @@ xvfb-run -a node scripts/obsidian-record-walk-e2e.cjs \
 
 ## What the record card shows
 
-The card is a labelled group, *Title record details*. Its first row shows the
-frontmatter `title` (trimmed), falling back to the first H1 and then the file
-stem, in page-title styling. The muted album breadcrumb and noun follow on
-their own line, then a definition list of schema fields in declaration order.
-Title text is rendered literally. Choice values are chips; dates use today / yesterday or a friendly
-date plus age; URLs are safe `http(s)` anchors; wikilinks are internal
-links with hover previews. Empty optional fields sit in a shared `＋ Label`
-ghost row. A missing required field keeps its full row and an amber
-**missing** pill. Invalid values stay visible in monospace with a reason.
+The card is a labelled group, *Record: Title*, with paper material and a
+sheet tile. The kicker is `RECORD · <Album title link> · <noun>`. The title
+is the frontmatter `title` (trimmed), then the first H1, then the file stem,
+in page-title styling. Title text is rendered literally. Schema fields then
+follow in declaration order. Choice values are chips; dates use today /
+yesterday or a friendly date plus age; URLs are safe `http(s)` anchors;
+wikilinks are internal links with hover previews. Empty optional fields sit
+in a shared `＋ Label` ghost row. A missing required field keeps its full row
+and an amber **missing** pill. Invalid values stay visible in monospace with
+a reason.
 
-`parent` lives in the breadcrumb and `type` is implicit identity. The card is
+`parent` lives in the kicker and `type` is implicit identity. The card is
 the one home for the frontmatter `title`; H1 agreement or mismatch does not
 create another title entry. A valid `created` date is a footer (`added today,
 7:55 AM`, `added yesterday`, or `added Aug 8, 2025`).
@@ -93,9 +101,9 @@ An invalid created value stays in that fold with lint. Legacy keys declared
 on the album are labelled **legacy**. `null` compact values render as `—`.
 
 The card starts expanded. Collapse is a session toggle per record path:
-the title stays visible, followed by one line with the breadcrumb, selected
-choice chips (group field first), and `· N fields`. Fold and collapse choices
-are not stored in frontmatter or plugin settings.
+the title stays visible, followed by one line with the selected choice chips
+(group field first) and `· N fields`. Fold and collapse choices are not
+stored in frontmatter or plugin settings.
 
 On a `subscriptions/*.md` record the existing subscription money line,
 charge timeline, and finding sentence dock as a trailing band of this

@@ -158,6 +158,33 @@ test("sync repair requests are capability-gated and occur once per fresh-report 
   assert.equal(schedules, 2);
 });
 
+test("walk album title uses the report, then the notebook header, then frontmatter", () => {
+  const world = recordWalkWorld();
+  world.frontmatter.set("eat.md", { type: "[[album]]", emoji: "🍽️" });
+  world.metadataCache.getFileCache = (file) => {
+    if (file.path === "eat.md") {
+      return { frontmatter: world.frontmatter.get("eat.md"), headings: [{ level: 1, heading: "Restaurants" }] };
+    }
+    return { frontmatter: world.frontmatter.get(file.path) || {} };
+  };
+  const withReport = recordWalkModel({
+    path: "eat/a.md", sourceText: world.sourceText(world.lines[0]), report: world.report,
+    metadataCache: world.metadataCache, vault: world.vault,
+  });
+  assert.equal(withReport.album.title, "Eat");
+  const noReport = recordWalkModel({
+    path: "eat/a.md", sourceText: world.sourceText(world.lines[0]), report: null,
+    metadataCache: world.metadataCache, vault: world.vault,
+  });
+  assert.equal(noReport.album.title, "Restaurants");
+  world.frontmatter.set("eat.md", { type: "[[album]]", title: "Eat Here", emoji: "🍽️" });
+  const titled = recordWalkModel({
+    path: "eat/a.md", sourceText: world.sourceText(world.lines[0]), report: null,
+    metadataCache: world.metadataCache, vault: world.vault,
+  });
+  assert.equal(titled.album.title, "Eat Here");
+});
+
 test("links footer paints bare position, spinner, and singleton counts with tooltip context", () => {
   const ok = linksWalkerFooterRecordWalk({
     state: "ok", title: "Ramen Nagi", position: 3, total: 104,

@@ -242,6 +242,7 @@ function bankModel(H, expanded) {
 const ADOPTED_KINDS = Object.freeze({
   bank: Object.freeze({ word: "Bank", tile: "plain", headings: 0, glyph: "🏦" }),
   album: Object.freeze({ word: "Album", tile: "stack", headings: 1, glyph: "🍽️" }),
+  record: Object.freeze({ word: "Record", tile: "sheet", headings: 1, glyph: "🍽️" }),
 });
 
 function adoptedSpec(kind) {

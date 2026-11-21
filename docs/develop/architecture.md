@@ -194,7 +194,7 @@ card owns the title. Fallback cards and failed ownership demote it, so a pane
 never has two level-one headings. `propertyCardReadingViewFor(app, scope)`
 and `propertyCardLiveCurrentPath(view)` supply `view` and `currentPath`. The
 album card is the first adopter. The record card reuses the glue unchanged
-with its own recognizer. Unit tests live in
+with its own recognizer, which also hides a first-body walk line. Unit tests live in
 `scripts/test-ledger-tools-property-card-title-adopt.cjs`.
 
 ## Plugin files

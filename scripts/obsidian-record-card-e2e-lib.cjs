@@ -190,15 +190,17 @@ function frontmatterBodyCursorExpression(notePath, closingDelimiter = false) {
   })()`;
 }
 
-function assertNativeVisibility(probe, shouldHide) {
+function assertNativeVisibility(probe, expected) {
   if (!probe || probe.status !== "pass") throw new Error("DOM probe is missing or failed");
+  const titleOwned = expected && typeof expected === "object" ? expected.titleOwned === true : expected === true;
+  const rowsHidden = expected && typeof expected === "object" ? expected.rowsHidden === true : expected === true;
   const elements = [probe.properties, probe.inlineTitle, probe.addProperty];
   const labels = ["native Properties", "native inline title", "Add property"];
   for (let index = 0; index < elements.length; index += 1) {
     const item = elements[index];
     if (!item || item.present !== true) throw new Error(labels[index] + " is absent; presence must be checked");
     const hidden = item.display === "none" || item.visibility === "hidden" || item.rectVisible === false;
-    const expectedHidden = index === 1 && shouldHide;
+    const expectedHidden = index === 1 && titleOwned;
     if (hidden !== expectedHidden) {
       throw new Error(labels[index] + " visibility mismatch: expected " + (expectedHidden ? "hidden" : "visible") + ", saw " + JSON.stringify(item));
     }
@@ -214,7 +216,7 @@ function assertNativeVisibility(probe, shouldHide) {
   for (const row of rows) {
     if (row.present !== true) throw new Error("native property row is absent: " + row.key);
     const hidden = row.display === "none" || row.visibility === "hidden" || row.rectVisible === false;
-    if (hidden !== (shouldHide && schemaKeys.has(row.key))) {
+    if (hidden !== (rowsHidden && schemaKeys.has(row.key))) {
       throw new Error("native property visibility mismatch: " + row.key);
     }
   }
@@ -307,8 +309,10 @@ function selfTest() {
   };
   const hidden = { ...visible, inlineTitle: concealed,
     propertyRows: [{ key: "status", ...concealed }, { key: "parent", ...shown }] };
-  assertNativeVisibility(hidden, true);
-  assertNativeVisibility(visible, false);
+  assertNativeVisibility(hidden, { titleOwned: true, rowsHidden: true });
+  assertNativeVisibility(visible, { titleOwned: false, rowsHidden: false });
+  const titleOwnedRowsVisible = { ...visible, inlineTitle: concealed };
+  assertNativeVisibility(titleOwnedRowsVisible, { titleOwned: true, rowsHidden: false });
   for (const wrong of [
     { ...hidden, properties: concealed },
     { ...hidden, addProperty: concealed },
@@ -319,7 +323,7 @@ function selfTest() {
     { ...hidden, propertyRows: [] },
   ]) {
     let failed = false;
-    try { assertNativeVisibility(wrong, true); }
+    try { assertNativeVisibility(wrong, { titleOwned: true, rowsHidden: true }); }
     catch (_) { failed = true; }
     if (!failed) throw new Error("negative DOM assertion unexpectedly passed");
   }

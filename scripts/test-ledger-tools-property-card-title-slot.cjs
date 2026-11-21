@@ -681,9 +681,23 @@ test("the editor update listener arms the rescue only for an editor with a mount
   helpers.propertyCardTitleSlotOnEditorUpdate({ view });
   assert.equal(requests.length, 1, "a pending scroll target arms one rescue request");
   assert.equal(typeof requests[0].write, "function");
+  helpers.propertyCardTitleSlotOnEditorUpdate({ view });
+  assert.equal(requests.length, 1, "the same pending target does not re-arm");
   helpers.propertyCardTitleSlotOnEditorUpdate({ view: { viewState: { scrollTarget: {} }, requestMeasure() { assert.fail("another editor"); } } });
   view.viewState.scrollTarget = null;
   helpers.propertyCardTitleSlotOnEditorUpdate({ view });
   assert.equal(requests.length, 1, "no pending target: nothing to rescue");
   assert.doesNotThrow(() => helpers.propertyCardTitleSlotOnEditorUpdate(null));
+});
+
+test("Live Preview measure requests are budgeted so a size loop cannot freeze the renderer", () => {
+  const doc = makeDoc();
+  const parts = liveScope(doc);
+  const requests = [];
+  const view = { requestMeasure(request) { requests.push(request); } };
+  helpers.propertyCardMountInTitleSlot(parts.scope, card(doc), { path: "alpha.md", view });
+  const afterMount = requests.length;
+  for (let i = 0; i < 20; i += 1) doc.resize[0].fire();
+  assert.ok(requests.length - afterMount < 20, "a tight ResizeObserver loop does not measure on every fire");
+  assert.ok(requests.length <= 8, "mount plus the loop stay inside the measure budget");
 });

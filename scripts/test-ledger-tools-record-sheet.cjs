@@ -15,10 +15,20 @@ TestNotice.messages = [];
 
 const editorInfoField = { info: true };
 const editorLivePreviewField = { live: true };
-const StateEffect = { define: () => ({ of(value) { return { effect: this, value }; }, is(other) { return this === other; } }) };
+const StateEffect = { define: () => { const type = { of(value) { return { type, value, is: (other) => other === type }; } }; return type; } };
+const StateField = { define: (spec) => ({ stateField: true, spec }) };
 class WidgetType {}
 class RangeSetBuilder { constructor() { this.rows = []; } add(from, to, deco) { this.rows.push({ from, to, deco }); } finish() { return this.rows; } }
-const Decoration = { none: [], widget: (options) => ({ ...options, startSide: options.side }), replace: (options) => ({ ...options, startSide: 0, replace: true }) };
+const Decoration = {
+  none: [],
+  widget: (options) => ({ ...options, startSide: options.side }),
+  replace: (options) => ({ ...options, startSide: 0, replace: true, spec: options, range(from, to) { return { from, to, value: this }; } }),
+  set: (ranges) => ranges,
+};
+const EditorView = {
+  decorations: { from: (field, get) => ({ facet: "decorations", field, get }) },
+  editorAttributes: { of: (value) => value, from: (field, get) => ({ facet: "editorAttributes", field, get }) },
+};
 const originalLoad = Module._load;
 Module._load = function loadWithStubs(request, parent, isMain) {
   if (request === "obsidian") return {
@@ -26,10 +36,10 @@ Module._load = function loadWithStubs(request, parent, isMain) {
     Notice: TestNotice, Plugin: TestPlugin, Platform: { isDesktopApp: true },
     normalizePath: (value) => value, editorInfoField, editorLivePreviewField,
   };
-  if (request === "@codemirror/state") return { Prec: { highest: (value) => value }, StateEffect, RangeSetBuilder };
+  if (request === "@codemirror/state") return { Prec: { highest: (value) => value }, StateEffect, StateField, RangeSetBuilder };
   if (request === "@codemirror/view") return {
     Decoration, WidgetType, ViewPlugin: { fromClass: (cls, options) => ({ cls, options }) },
-    EditorView: { editorAttributes: { of: (attributes) => attributes } },
+    EditorView,
   };
   return originalLoad.call(this, request, parent, isMain);
 };
@@ -57,10 +67,15 @@ class FakeNode {
   }
   get textContent() { return this.nodeType === 3 ? this._text : this.children.map((child) => child.textContent).join(""); }
   set textContent(value) { this._text = String(value); if (this.nodeType === 1) this.children = [new FakeNode("", this.ownerDocument, this._text)]; }
+  get childNodes() { return this.children; }
   get firstChild() { return this.children[0] || null; }
   get nextSibling() { const xs = this.parentNode?.children || []; return xs[xs.indexOf(this) + 1] || null; }
+  get nextElementSibling() { const xs = (this.parentNode?.children || []).filter((x) => x.nodeType === 1); return xs[xs.indexOf(this) + 1] || null; }
+  get isConnected() { let item = this; while (item) { if (item.root) return true; item = item.parentNode; } return false; }
   setAttribute(name, value) { this.attrs.set(name, String(value)); }
   getAttribute(name) { return this.attrs.has(name) ? this.attrs.get(name) : null; }
+  hasAttribute(name) { return this.attrs.has(name); }
+  getAttributeNames() { return [...this.attrs.keys()]; }
   removeAttribute(name) { this.attrs.delete(name); }
   appendChild(node) { node.parentNode?.removeChild?.(node); node.parentNode = this; this.children.push(node); return node; }
   insertBefore(node, before) { node.parentNode?.removeChild?.(node); node.parentNode = this; const i = this.children.indexOf(before); this.children.splice(i < 0 ? this.children.length : i, 0, node); return node; }
@@ -101,11 +116,23 @@ class FakeNode {
 }
 
 function makeDoc() {
-  return {
+  const doc = {
     activeElement: null,
+    observers: [],
     createElement(tag) { return new FakeNode(tag, this); },
     createTextNode(text) { return new FakeNode("", this, String(text)); },
   };
+  doc.defaultView = {
+    MutationObserver: class {
+      constructor(callback) { this.callback = callback; this.targets = []; doc.observers.push(this); }
+      observe(target, options) { this.targets.push({ target, options }); }
+      disconnect() { this.targets = []; }
+      fire() { if (this.targets.length) this.callback([], this); }
+    },
+  };
+  doc.body = doc.createElement("body");
+  doc.body.root = true;
+  return doc;
 }
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 function node(doc, tag, cls = "", text = "") {
@@ -117,6 +144,10 @@ function node(doc, tag, cls = "", text = "") {
 
 const CLOCK = { today: "2026-11-17", now: new Date(2026, 10, 17, 12, 0, 0) };
 const HIDES = helpers.RECORD_SHEET_HIDES_CLASS;
+const OWNED = "bob-property-card-owned-property";
+const OWNS_TITLE = "bob-property-card-owns-title";
+const TITLE_SOURCE = "bob-property-card-title-source";
+const SLOT = "bob-property-card-title-slot";
 
 const choice = (value, label) => ({ value, label, count: 0 });
 const field = (key, kind, extra = {}) => ({
@@ -217,10 +248,10 @@ function fixture(options = {}) {
     });
   };
   add("body.md", { type: "[[area]]", root_parent: true }, "Body");
-  add("eat.md", { type: "[[album]]" }, "Restaurants");
-  add("movies.md", { type: "[[album]]" }, "Movies");
-  add("sase.md", { type: "[[album]]" }, "SASE");
-  add("subscriptions.md", { type: "[[album]]" }, "Subscriptions");
+  add("eat.md", { type: "[[album]]", emoji: "🍽️" }, "Restaurants");
+  add("movies.md", { type: "[[album]]", emoji: "🎬" }, "Movies");
+  add("sase.md", { type: "[[album]]", emoji: "🧶" }, "SASE");
+  add("subscriptions.md", { type: "[[album]]", emoji: "🔁" }, "Subscriptions");
   add("eat/smashburger.md", {
     type: "[[record]]", parent: "[[eat]]", title: "Smashburger", created: "2025-08-08",
     status: "to_try", cuisine: "burgers", location: "See [[body]] downtown",
@@ -332,31 +363,83 @@ function assertHomes(model, expected) {
   for (const key of ghost) assert.equal(fold.has(key), false, `${key} ghost+fold`);
 }
 
+function fakeCmDoc(text) {
+  const lines = [];
+  let cursor = 0;
+  for (const line of text.split("\n")) {
+    lines.push({ text: line, from: cursor, to: cursor + line.length });
+    cursor += line.length + 1;
+  }
+  return { lines: lines.length, length: text.length, line: (n) => ({ number: n, ...lines[n - 1] }), toString: () => text };
+}
+
 function liveView(doc, path, text, live = true) {
-  const lines = text.split("\n").map((line, i, rows) => {
-    const from = rows.slice(0, i).reduce((sum, item) => sum + item.length + 1, 0);
-    return { from, to: from + line.length };
-  });
-  const sourceView = node(doc, "div", "markdown-source-view");
+  const sourceView = node(doc, "div", `markdown-source-view mod-cm6${live ? " is-live-preview" : ""}`);
+  sourceView.root = true;
   const root = node(doc, "div", "cm-editor");
   const scroller = node(doc, "div", "cm-scroller");
   const sizer = node(doc, "div", "cm-sizer");
-  sizer.appendChild(node(doc, "div", "metadata-container"));
-  sizer.appendChild(node(doc, "div", "inline-title"));
+  const inline = node(doc, "div", "inline-title");
+  const properties = node(doc, "div", "metadata-container");
+  sizer.appendChild(inline);
+  sizer.appendChild(properties);
+  if (live) sizer.appendChild(node(doc, "div", "cm-contentContainer"));
   scroller.appendChild(sizer);
   root.appendChild(scroller);
   sourceView.appendChild(root);
-  return {
-    path, dom: root, sourceView, scroller, sizer,
+  const field = helpers.propertyCardTitleOwnershipExtension?.();
+  const fields = new Map();
+  if (field) fields.set(field, helpers.propertyCardTitleFieldCreate());
+  const view = {
+    path, live, dom: root, sourceView, scroller, sizer, inline, properties,
+    dispatched: [],
+    requestMeasure() { view.measures = (view.measures || 0) + 1; },
     state: {
-      doc: { toString: () => text, line: (n) => lines[n - 1], get lines() { return lines.length; }, get length() { return text.length; } },
+      doc: fakeCmDoc(text),
+      selection: { ranges: [{ from: 0, to: 0 }] },
       field(key) {
-        if (key === editorLivePreviewField) return live;
-        if (key === editorInfoField) return { file: { path } };
-        return undefined;
+        if (key === editorLivePreviewField) return view.live;
+        if (key === editorInfoField) return { file: { path: view.path } };
+        return fields.has(key) ? fields.get(key) : undefined;
       },
     },
   };
+  view.dispatch = (spec) => {
+    view.dispatched.push(spec);
+    if (field) {
+      fields.set(field, helpers.propertyCardTitleFieldReduce(fields.get(field), {
+        effects: [].concat(spec.effects || []),
+        docChanged: false,
+        state: view.state,
+        startState: view.state,
+      }));
+    }
+  };
+  return view;
+}
+
+function slotPane(doc, title = "Smashburger") {
+  const preview = node(doc, "div", "markdown-preview-view");
+  preview.root = true;
+  const sizer = node(doc, "div", "markdown-preview-sizer");
+  preview.appendChild(sizer);
+  const header = node(doc, "div", "mod-header");
+  sizer.appendChild(header);
+  const inline = node(doc, "div", "inline-title", title);
+  header.appendChild(inline);
+  const properties = node(doc, "div", "metadata-container");
+  header.appendChild(properties);
+  const h1 = node(doc, "h1", "", title);
+  const section = node(doc, "div", "el-h1");
+  section.appendChild(h1);
+  sizer.appendChild(section);
+  return { preview, sizer, header, inline, properties, h1, section };
+}
+
+function levelOneCount(scope) {
+  const aria = scope.querySelectorAll("[aria-level=\"1\"]").length;
+  const h1 = scope.querySelectorAll("h1").filter((node) => !node.classList.contains(TITLE_SOURCE)).length;
+  return aria + h1;
 }
 
 test("gate accepts only a canonical desktop record under its album folder", () => {
@@ -524,20 +607,27 @@ test("title row uses literal frontmatter title, then H1, then filename stem", ()
   const root = node(doc, "div", "markdown-preview-view");
   const sheet = plugin.paintRecordSheetReading(root, "eat/smashburger.md");
   assert.equal(sheet.classList.contains("bob-property-card"), true);
-  const title = sheet.querySelector(".bob-record-sheet-title");
-  assert.equal(title.tagName, "DIV");
-  assert.equal(title.getAttribute("role"), "heading");
-  assert.equal(title.getAttribute("aria-level"), "1");
+  assert.equal(sheet.getAttribute("data-card-kind"), "record");
+  const title = sheet.querySelector(".bob-property-card-title");
+  assert.equal(title.classList.contains("bob-record-sheet-title"), true);
+  assert.equal(title.getAttribute("aria-level"), null, "fallback demotes the kit heading");
   assert.equal(title.textContent, "[[x]] <b> #tag");
   assert.equal(title.querySelector("b"), null, "title markup stays text");
-  assert.equal(sheet.getAttribute("aria-label"), "[[x]] <b> #tag record details");
+  assert.equal(sheet.getAttribute("aria-label"), "Record: [[x]] <b> #tag");
+  assert.equal(sheet.querySelector(".bob-property-card-tile").getAttribute("data-tile-form"), "sheet");
+  assert.equal(sheet.querySelector(".bob-property-card-tile-glyph").textContent, "🍽️");
+  assert.equal(sheet.querySelector(".bob-property-card-kicker-species").textContent, "Record");
+  assert.equal(sheet.querySelector(".bob-property-card-kicker-link").textContent, "Restaurants");
+  assert.equal(sheet.querySelector(".bob-property-card-kicker-link").getAttribute("data-href"), "eat.md");
+  assert.match(sheet.querySelector(".bob-property-card-kicker").textContent, /restaurant/);
+  assert.equal(sheet.querySelector(".bob-record-sheet-tools").closest(".bob-property-card-actions") != null, true);
 
   delete record.frontmatter.title;
   const legacyTitle = plugin.paintRecordSheetReading(root, "eat/smashburger.md");
-  assert.equal(legacyTitle.querySelector(".bob-record-sheet-title").textContent, "Legacy heading");
+  assert.equal(legacyTitle.querySelector(".bob-property-card-title").textContent, "Legacy heading");
   record.headings = [];
   const stemTitle = plugin.paintRecordSheetReading(root, "eat/smashburger.md");
-  assert.equal(stemTitle.querySelector(".bob-record-sheet-title").textContent, "smashburger");
+  assert.equal(stemTitle.querySelector(".bob-property-card-title").textContent, "smashburger");
 
   const broken = albumEntry({
     issues: [{ severity: "error", code: "album_schema_invalid", message: "bad schema", path: "eat.md", line: 1, suggestions: [] }],
@@ -546,8 +636,9 @@ test("title row uses literal frontmatter title, then H1, then filename stem", ()
   const brokenWorld = fixture({ albums: [broken] });
   const brokenRoot = node(brokenWorld.doc, "div", "markdown-preview-view");
   const brokenSheet = brokenWorld.plugin.paintRecordSheetReading(brokenRoot, "eat/smashburger.md");
-  assert.equal(brokenSheet.querySelector(".bob-record-sheet-title").textContent, "Smashburger");
+  assert.equal(brokenSheet.querySelector(".bob-property-card-title").textContent, "Smashburger");
   assert.match(brokenSheet.querySelector(".bob-record-sheet-warning").textContent, /bad schema/);
+  assert.equal(brokenSheet.querySelector(".bob-property-card-title-block").nextSibling, brokenSheet.querySelector(".bob-record-sheet-warning"));
 });
 
 test("record link labels prefer frontmatter title over a legacy H1", () => {
@@ -601,6 +692,7 @@ test("collapsed summary leads with the group choice and keeps per-path fold stat
   const sheet = plugin.paintRecordSheetReading(root, "eat/smashburger.md");
   assert.equal(sheet.querySelectorAll(".bob-album-schema-field-key").length, 0, "record sheet paints no field keycaps");
   assert.match(sheet.querySelector(".bob-record-sheet-summary").textContent, /Loved/);
+  assert.equal(sheet.querySelector(".bob-record-sheet-nav"), null, "collapsed summary has no crumbs");
   assert.equal(plugin.recordSheetIsCollapsed("eat/smashburger.md"), true);
   assert.equal(plugin.recordSheetFoldOpen("eat/smashburger.md"), true);
   const other = node(doc, "div", "markdown-preview-view");
@@ -626,7 +718,7 @@ test("DOM keeps HTML-looking values as text, rejects dangerous URLs, and exposes
   assert.equal(sheet.textContent.includes("<img src=x onerror=alert(1)>"), true);
   assert.equal(sheet.querySelectorAll(".bob-record-sheet-url").length, 0);
   assert.equal(sheet.getAttribute("role"), "group");
-  assert.match(sheet.getAttribute("aria-label"), /Smashburger record details/);
+  assert.equal(sheet.getAttribute("aria-label"), "Record: Smashburger");
   const collapse = sheet.querySelector(".bob-record-sheet-collapse");
   assert.equal(collapse.getAttribute("aria-expanded"), "true");
   const status = sheet.querySelector("[data-record-key=\"status\"]");
@@ -692,13 +784,95 @@ test("YAML jump fallback explicitly requests raw Source and keeps unrelated view
   assert.equal(current.state.source, false, "the saved return state is untouched");
 });
 
-test("Live Preview caches decorations across body edits and rebuilds on model changes", () => {
+test("card and walk signatures are stable across identical model rebuilds", () => {
+  const { plugin, source } = walkFixture();
+  const path = "eat/0.md";
+  const text = source(0);
+  const first = plugin.recordSheetCardModelFor(path, text);
+  const second = plugin.recordSheetCardModelFor(path, text);
+  const walkA = first.body?.walk || plugin.recordWalkFor(path, text);
+  const walkB = second.body?.walk || plugin.recordWalkFor(path, text);
+  assert.ok(walkA && walkB, "walkFixture records carry a classified walk");
+  assert.notEqual(walkA, walkB);
+  assert.deepEqual(helpers.recordSheetWalkSignature(walkA), helpers.recordSheetWalkSignature(walkB));
+  const opts = plugin.recordWalkOptions(path, first.body);
+  assert.equal(
+    helpers.recordSheetCardSignature(first, { ...opts, walk: walkA }),
+    helpers.recordSheetCardSignature(second, { ...opts, walk: walkB }),
+  );
+  const smash = fixture();
+  const smashText = "---\ntype: [[record]]\nparent: [[eat]]\nstatus: to_try\n---\n# Smashburger\n";
+  const smashWalk = smash.plugin.recordWalkFor("eat/smashburger.md", smashText);
+  assert.equal(smashWalk, null);
+  assert.equal(helpers.recordSheetWalkSignature(null), null);
+});
+
+test("Live Preview slot skips viewport-only rebuilds after the card is mounted", async () => {
+  const { plugin, doc } = fixture();
+  const heading = "---\ntype: [[record]]\nparent: [[eat]]\nstatus: to_try\n---\n# Smashburger\nbody\n";
+  const view = liveView(doc, "eat/smashburger.md", heading, true);
+  const extension = plugin.createRecordSheetExtension();
+  const instance = new extension.cls(view);
+  await Promise.resolve();
+  const card = view.sizer.querySelector(".bob-record-sheet");
+  assert.ok(card, "slot card mounts on construct");
+  const builds = plugin.recordSheetDomBuilds;
+  const stamp = plugin._recordSheetDecorateStamp?.n;
+  instance.update({
+    view,
+    viewportChanged: true,
+    docChanged: false,
+    selectionSet: false,
+    transactions: [],
+    state: view.state,
+    startState: view.state,
+  });
+  assert.equal(plugin.recordSheetDomBuilds, builds, "viewport-only updates do not remount the slot card");
+  assert.equal(plugin._recordSheetDecorateStamp?.n, stamp, "the host forwards update so viewport-only skips before decorate work");
+  assert.equal(view.sizer.querySelector(".bob-record-sheet"), card);
+  helpers.propertyCardAdoptRelease(view.dom);
+  instance.update({
+    view,
+    viewportChanged: true,
+    docChanged: false,
+    selectionSet: false,
+    transactions: [],
+    state: view.state,
+    startState: view.state,
+  });
+  await Promise.resolve();
+  assert.ok(view.sizer.querySelector(".bob-record-sheet"), "a lost slot remounts on the next viewport update");
+});
+
+test("album Live Preview decorate does not drop a record slot on the same editor", async () => {
+  const { plugin, doc } = fixture();
+  const heading = "---\ntype: [[record]]\nparent: [[eat]]\nstatus: to_try\n---\n# Smashburger\nbody\n";
+  const view = liveView(doc, "eat/smashburger.md", heading, true);
+  const extension = plugin.createRecordSheetExtension();
+  const instance = new extension.cls(view);
+  await Promise.resolve();
+  const card = view.sizer.querySelector(".bob-record-sheet");
+  assert.ok(card, "record slot mounts");
+  assert.equal(helpers.propertyCardAdoptedEntry(view.dom).kind, "record");
+  plugin.buildAlbumHeaderDecorations(view);
+  await Promise.resolve();
+  assert.equal(helpers.propertyCardAdoptedEntry(view.dom)?.kind, "record",
+    "album has no card here, so it must not release the record adoption");
+  assert.equal(view.sizer.querySelector(".bob-record-sheet"), card);
+  instance.destroy();
+});
+
+test("Live Preview caches decorations across body edits and rebuilds on model changes", async () => {
   const { plugin, doc } = fixture();
   const heading = "---\ntype: [[record]]\nparent: [[eat]]\nstatus: to_try\n---\n# Smashburger\nbody\n";
   const view = liveView(doc, "eat/smashburger.md", heading, true);
   const first = plugin.buildRecordSheetDecorations(view);
+  await Promise.resolve();
+  const card = view.sizer.querySelector(".bob-record-sheet");
+  assert.equal(first.length, 0, "slot mode paints no card widget");
+  assert.equal(card.parentNode, view.sizer);
+  assert.equal(card.nextElementSibling, view.properties);
   const builds = plugin.recordSheetDomBuilds;
-  assert.equal(first.length, 1);
   const again = plugin.buildRecordSheetDecorations(view);
   assert.equal(again, first);
   assert.equal(plugin.recordSheetDomBuilds, builds);
@@ -708,15 +882,15 @@ test("Live Preview caches decorations across body edits and rebuilds on model ch
   assert.equal(plugin.recordSheetDomBuilds, builds);
   plugin.recordSheetDay = "2026-11-18";
   plugin.refreshRecordSheetOverlay("eat/smashburger.md", { properties: { status: "loved" }, changedKeys: ["status"] });
-  const overlayed = plugin.buildRecordSheetDecorations(view);
-  assert.notEqual(overlayed, first);
-  const widget = overlayed[0].deco.widget.toDOM();
-  assert.match(widget.textContent, /Loved/);
-  assert.equal(widget.querySelectorAll(".bob-record-sheet-row").some((row) => row.classList.contains("is-changed")), true);
+  plugin.buildRecordSheetDecorations(view);
+  await Promise.resolve();
+  assert.equal(view.sizer.querySelector(".bob-record-sheet"), card, "overlay patches the same slot node");
+  assert.match(card.textContent, /Loved/);
+  assert.equal(card.querySelectorAll(".bob-record-sheet-row").some((row) => row.classList.contains("is-changed")), true);
   assert.equal(view.dom.classList.contains(HIDES), true);
 });
 
-test("Source mode stays native YAML and Live Preview restores after the switch", () => {
+test("Source mode stays native YAML and Live Preview restores after the switch", async () => {
   const { plugin, doc, caches } = fixture();
   plugin.notebookCatalogLivePath = LedgerToolsPlugin.prototype.notebookCatalogLivePath;
   const text = "---\ntype: [[record]]\nparent: [[eat]]\n---\n# Smashburger\n";
@@ -726,7 +900,9 @@ test("Source mode stays native YAML and Live Preview restores after the switch",
   assert.equal(source.dom.classList.contains(HIDES), false);
   const live = liveView(doc, "eat/smashburger.md", text, true);
   const decorations = plugin.buildRecordSheetDecorations(live);
-  assert.equal(decorations.length, 1);
+  await Promise.resolve();
+  assert.equal(decorations.length, 0);
+  assert.equal(live.sizer.querySelectorAll(".bob-record-sheet").length, 1);
   assert.equal(live.dom.classList.contains(helpers.RECORD_SHEET_SURFACE_CLASS), true);
   assert.equal(live.dom.classList.contains(HIDES), true);
   assert.equal(live.sourceView.classList.contains(HIDES), false);
@@ -734,6 +910,7 @@ test("Source mode stays native YAML and Live Preview restores after the switch",
   live.state.doc = liveView(doc, "eat/smashburger.md", "---\ntype: [[note]]\n---\n# Smashburger\n", true).state.doc;
   assert.deepEqual(plugin.buildRecordSheetDecorations(live), Decoration.none);
   assert.equal(live.dom.classList.contains(HIDES), false);
+  assert.equal(live.sizer.querySelector(".bob-record-sheet"), null);
 });
 
 test("CodeMirror preserves mounted sheet ownership across focus-only class replacement", () => {
@@ -742,26 +919,24 @@ test("CodeMirror preserves mounted sheet ownership across focus-only class repla
   const view = liveView(doc, "eat/smashburger.md", text, true);
   const extension = plugin.createRecordSheetExtension();
   const instance = new extension.cls(view);
-  const attributes = extension.options.provide();
-  const expected = `${helpers.RECORD_SHEET_SURFACE_CLASS} ${HIDES}`;
   const builds = plugin.recordSheetDomBuilds;
+  assert.equal(view.dom.classList.contains(helpers.RECORD_SHEET_SURFACE_CLASS), true);
   view.dom.setAttribute("class", "cm-editor cm-focused");
-  instance.update({ view, focusChanged: true });
-  assert.equal(attributes(view).class, expected);
-  assert.equal(plugin.recordSheetDomBuilds, builds, "focus does not require a sheet rebuild");
-  assert.equal(attributes(liveView(doc, "ordinary.md", "body", true)).class, undefined);
+  plugin.recordSheetSetEditorScope(view, true);
+  assert.equal(view.dom.classList.contains(helpers.RECORD_SHEET_SURFACE_CLASS), true, "setEditorScope restores the surface class");
+  assert.equal(plugin.recordSheetDomBuilds, builds, "restoring the surface class does not remount");
 
   caches.get("eat/smashburger.md").frontmatter.type = "[[note]]";
   plugin.buildRecordSheetDecorations(view);
-  assert.deepEqual(attributes(view), {}, "gate loss releases CodeMirror ownership");
+  assert.equal(view.dom.classList.contains(helpers.RECORD_SHEET_SURFACE_CLASS), false, "gate loss releases the surface class");
   caches.get("eat/smashburger.md").frontmatter.type = "[[record]]";
   plugin.buildRecordSheetDecorations(view);
-  assert.equal(attributes(view).class, expected);
+  assert.equal(view.dom.classList.contains(helpers.RECORD_SHEET_SURFACE_CLASS), true);
   instance.destroy();
-  assert.deepEqual(attributes(view), {}, "destroy releases CodeMirror ownership");
+  assert.equal(view.dom.classList.contains(helpers.RECORD_SHEET_SURFACE_CLASS), false, "destroy releases the surface class");
   plugin.buildRecordSheetDecorations(view);
   plugin.teardownRecordSheet();
-  assert.deepEqual(attributes(view), {}, "disable cannot leave hidden native fields");
+  assert.equal(view.dom.classList.contains(helpers.RECORD_SHEET_SURFACE_CLASS), false, "disable cannot leave hidden native fields");
 });
 
 test("Reading paints one owned sheet, ignores nested embeds, and cleans up on unload", () => {
@@ -799,6 +974,26 @@ test("Reading paints one owned sheet, ignores nested embeds, and cleans up on un
   assert.equal(preview.querySelectorAll(".bob-record-sheet").length, 1, "embed sheet remains");
   assert.equal(embedPreview.querySelectorAll(".bob-record-sheet").length, 1);
   assert.equal(second.querySelectorAll(".bob-record-sheet").length, 1);
+});
+
+test("Reading embed cards still paint when the host leaf shows a different path", () => {
+  const { plugin, doc, app, flush } = fixture();
+  const preview = node(doc, "div", "markdown-preview-view");
+  preview.appendChild(node(doc, "h1", "", "Smashburger"));
+  const embed = node(doc, "div", "markdown-embed");
+  const embedPreview = node(doc, "div", "markdown-preview-view");
+  embedPreview.appendChild(node(doc, "h1", "", "Heat"));
+  embed.appendChild(embedPreview);
+  preview.appendChild(embed);
+  app.workspace.getLeavesOfType = () => [{
+    view: { file: { path: "eat/smashburger.md" }, previewMode: { containerEl: preview, renderer: {} } },
+  }];
+  plugin.renderRecordSheetInReading(embedPreview, { sourcePath: "movies/heat.md", addChild() {} });
+  flush();
+  assert.equal(embedPreview.querySelectorAll(".bob-record-sheet").length, 1,
+    "an embed keeps its demoted card even though the leaf path is the host note");
+  const heading = embedPreview.querySelector(".bob-property-card-title");
+  assert.equal(heading.getAttribute("aria-level"), null, "embed heading stays demoted");
 });
 
 test("subscription header yields to the sheet, docks one timeline, and survives standalone cleanup", () => {
@@ -904,18 +1099,15 @@ test("metadata edits on an open path refresh after eligibility is restored", () 
 
 test("Properties selectors follow the observed editor and Reading paths and leave embedded Properties visible", () => {
   const styles = fs.readFileSync(path.join(__dirname, "../plugins/bob-ledger-tools/styles.css"), "utf8");
-  const editorProperties = `.cm-editor.${HIDES} > .cm-scroller > .cm-sizer > .metadata-container`;
-  const editorTitle = `.cm-editor.${HIDES} > .cm-scroller > .cm-sizer > .inline-title`;
-  const readingProperties = `.markdown-preview-view.${HIDES} > .markdown-preview-sizer > .mod-header > .metadata-container`;
-  const readingTitle = `.markdown-preview-view.${HIDES} > .markdown-preview-sizer > .mod-header > .inline-title`;
-  for (const selector of [editorProperties, readingProperties]) {
-    assert.ok(styles.includes(`${selector} .metadata-property.bob-record-sheet-owned-property`));
-    assert.ok(!styles.includes(`${selector},`) && !styles.includes(`${selector} {`),
-      "the entire native Properties container must never be hidden");
+  const editorOwned = `.cm-editor > .cm-scroller > .cm-sizer > .metadata-container .metadata-property.${OWNED}`;
+  const readingOwned = `.markdown-preview-view > .markdown-preview-sizer > .mod-header > .metadata-container .metadata-property.${OWNED}`;
+  const editorTitle = `.cm-editor.${OWNS_TITLE} > .cm-scroller > .cm-sizer > .inline-title`;
+  const readingTitle = `.markdown-preview-view.${OWNS_TITLE} > .markdown-preview-sizer > .mod-header > .inline-title`;
+  for (const selector of [editorOwned, readingOwned, editorTitle, readingTitle]) {
+    assert.ok(styles.includes(selector), `missing observed selector: ${selector}`);
   }
-  for (const selector of [editorTitle, readingTitle]) {
-    assert.ok(styles.includes(selector), `missing observed Properties selector: ${selector}`);
-  }
+  assert.ok(!styles.includes(`.cm-editor.${HIDES} > .cm-scroller > .cm-sizer > .inline-title`));
+  assert.ok(!styles.includes("bob-record-sheet-owned-property"));
   assert.ok(styles.includes(`.${HIDES} .markdown-embed .metadata-container:not(.is-collapsed)`),
     "expanded embedded Properties remain visible inside a hidden parent");
   for (const obsoleteSelector of [
@@ -936,7 +1128,8 @@ test("Properties selectors follow the observed editor and Reading paths and leav
   assert.equal(view.sourceView.classList.contains(HIDES), false, "the broader source view does not own the hide");
   assert.equal(view.dom.children[0], view.scroller);
   assert.equal(view.scroller.children[0], view.sizer);
-  assert.equal(view.sizer.children[0].classList.contains("metadata-container"), true);
+  assert.equal(view.sizer.querySelector(".metadata-container"), view.properties);
+  assert.ok(view.sizer.querySelector(".cm-contentContainer"));
 
   const readingWorld = fixture();
   const preview = node(readingWorld.doc, "div", "markdown-preview-view");
@@ -995,13 +1188,13 @@ test("native Properties hides only card title/schema rows and restores them on e
     const addButton = properties.appendChild(node(doc, "button", "metadata-add-button", "Add property"));
     const paint = () => mode === "live" ? plugin.buildRecordSheetDecorations(view)
       : plugin.paintRecordSheetReading(scope, "eat/smashburger.md");
-    const hidden = () => rows.filter((row) => row.classList.contains("bob-record-sheet-owned-property"))
+    const hidden = () => rows.filter((row) => row.classList.contains(OWNED))
       .map((row) => row.getAttribute("data-property-key"));
     paint();
     assert.deepEqual(hidden(), ["title", "status", "location", "visited"], mode);
-    assert.equal(nestedRow.classList.contains("bob-record-sheet-owned-property"), false);
-    assert.equal(hoverRow.classList.contains("bob-record-sheet-owned-property"), false);
-    assert.equal(addButton.classList.contains("bob-record-sheet-owned-property"), false);
+    assert.equal(nestedRow.classList.contains(OWNED), false);
+    assert.equal(hoverRow.classList.contains(OWNED), false);
+    assert.equal(addButton.classList.contains(OWNED), false);
     // Collapsing the sheet/fold does not expose duplicate schema fields.
     plugin.recordSheetSetCollapsed("eat/smashburger.md", true);
     plugin.recordSheetSetFold("eat/smashburger.md", true);
@@ -1025,12 +1218,12 @@ test("failed sheet construction keeps native properties visible and retries befo
   for (let attempt = 0; attempt < 2; attempt += 1) {
     plugin.buildRecordSheetDecorations(view);
     assert.equal(view.dom.classList.contains(HIDES), false);
-    assert.equal(row.classList.contains("bob-record-sheet-owned-property"), false);
+    assert.equal(row.classList.contains(OWNED), false);
   }
   plugin.recordSheetBuildMounted = build;
-  assert.equal(plugin.buildRecordSheetDecorations(view).length, 1);
+  assert.equal(plugin.buildRecordSheetDecorations(view).length, 0);
   assert.equal(view.dom.classList.contains(HIDES), true);
-  assert.equal(row.classList.contains("bob-record-sheet-owned-property"), true);
+  assert.equal(row.classList.contains(OWNED), true);
 });
 
 test("late Properties replacements and renamed keys stay scoped and observers disconnect on teardown", () => {
@@ -1051,23 +1244,23 @@ test("late Properties replacements and renamed keys stay scoped and observers di
   const row = properties.appendChild(node(doc, "div", "metadata-property"));
   row.setAttribute("data-property-key", "status");
   observers[0].callback();
-  assert.equal(row.classList.contains("bob-record-sheet-owned-property"), true);
+  assert.equal(row.classList.contains(OWNED), true);
   row.setAttribute("data-property-key", "unrelated");
   observers[0].callback();
-  assert.equal(row.classList.contains("bob-record-sheet-owned-property"), false);
+  assert.equal(row.classList.contains(OWNED), false);
   row.setAttribute("data-property-key", "location");
   observers[0].callback();
-  assert.equal(row.classList.contains("bob-record-sheet-owned-property"), true);
+  assert.equal(row.classList.contains(OWNED), true);
   properties.remove();
   observers[0].callback();
-  assert.equal(row.classList.contains("bob-record-sheet-owned-property"), false, "detached rows lose ownership");
+  assert.equal(row.classList.contains(OWNED), false, "detached rows lose ownership");
   view.sizer.appendChild(properties);
   observers[0].callback();
   plugin.teardownRecordSheet();
   assert.equal(observers[0].disconnected, true);
-  assert.equal(row.classList.contains("bob-record-sheet-owned-property"), false);
+  assert.equal(row.classList.contains(OWNED), false);
   observers[0].callback();
-  assert.equal(row.classList.contains("bob-record-sheet-owned-property"), false, "late callbacks cannot restore hiding");
+  assert.equal(row.classList.contains(OWNED), false, "late callbacks cannot restore hiding");
 });
 
 test("old-bob and broken-schema sheets leave Properties visible", () => {
@@ -1127,7 +1320,7 @@ test("Reading view fallback mounts frontmatter-only records once and merges with
 
   await plugin.mountRecordSheetFrontmatterOnlyViews();
   assert.equal(sizer.querySelectorAll(".bob-record-sheet").length, 1);
-  assert.equal(sizer.querySelector(".bob-record-sheet-title").textContent, "Bare");
+  assert.equal(sizer.querySelector(".bob-property-card-title").textContent, "Bare");
   await plugin.mountRecordSheetFrontmatterOnlyViews();
   assert.equal(sizer.querySelectorAll(".bob-record-sheet").length, 1);
 
@@ -1330,47 +1523,56 @@ test("singleton, syncing, missing, and damaged rail states never invent a destin
   }
 });
 
-test("Live Preview rail reveals raw line for any touching selection and survives sheet collapse", () => {
+test("Live Preview rail reveals raw line for any touching selection and survives sheet collapse", async () => {
   const { plugin, doc, source } = walkFixture();
   const text = source(0);
   const view = liveView(doc, "eat/0.md", text);
   view.state.selection = { ranges: [{ from: text.length, to: text.length }] };
   const initial = plugin.buildRecordSheetDecorations(view);
-  assert.equal(initial.length, 1);
-  const replacement = initial.find((row) => row.deco.replace);
-  assert.match(text.slice(replacement.from, replacement.to), /^\[\[eat\/1/);
-  assert.equal(initial[0].from, replacement.from);
-  assert.equal(initial[0].deco.widget.toDOM().querySelector(".bob-record-sheet").classList.contains("docks-record-walk"), true);
+  await Promise.resolve();
+  const card = view.sizer.querySelector(".bob-record-sheet");
+  assert.equal(initial.length, 0, "kit-covered walk line has no record decoration");
+  assert.equal(card.parentNode, view.sizer);
+  assert.equal(card.querySelectorAll(".bob-record-walk-rail").length, 1);
   assert.equal(plugin.buildRecordSheetDecorations(view), initial);
+  const walkLine = text.split("\n").find((line) => line.startsWith("[[eat/"));
+  const walkFrom = text.indexOf(walkLine);
+  const walkTo = walkFrom + walkLine.length;
   for (const range of [
-    { from: replacement.from, to: replacement.from },
-    { from: replacement.to, to: replacement.to },
-    { from: replacement.from - 1, to: replacement.to + 1 },
+    { from: walkFrom, to: walkFrom },
+    { from: walkTo, to: walkTo },
+    { from: walkFrom - 1, to: walkTo + 1 },
   ]) {
     view.state.selection.ranges = [{ from: text.length, to: text.length }, range];
     const revealed = plugin.buildRecordSheetDecorations(view);
-    assert.equal(revealed.length, 1);
-    assert.equal(revealed[0].deco.widget.toDOM().classList.contains("docks-record-walk"), false);
+    assert.equal(revealed.length, 0);
+    assert.equal(view.sizer.querySelector(".bob-record-sheet"), card, "reveal keeps the slot card");
+    assert.equal(card.querySelectorAll(".bob-record-walk-rail").length, 1, "rail stays during reveal");
   }
   view.state.selection.ranges = [{ from: text.length, to: text.length }];
   plugin.recordSheetSetCollapsed("eat/0.md", true);
-  assert.equal(plugin.buildRecordSheetDecorations(view)[0].deco.widget.toDOM().querySelectorAll(".bob-record-walk-rail").length, 1);
+  plugin.buildRecordSheetDecorations(view);
+  await Promise.resolve();
+  assert.equal(view.sizer.querySelectorAll(".bob-record-walk-rail").length, 1);
   assert.deepEqual(plugin.buildRecordSheetDecorations(liveView(doc, "eat/0.md", text, false)), []);
 });
 
-test("rail mounts with no album report, keeps moved lines, and follows selection-only updates", () => {
+test("rail mounts with no album report, keeps moved lines, and follows selection-only updates", async () => {
   const { plugin, doc, source, state, lines } = walkFixture();
   state.report = null;
   const text = source(0, `## Notes\n\nMoved prose\n\n${lines[0]}`);
   const view = liveView(doc, "eat/0.md", text);
   const extension = plugin.createRecordSheetExtension();
   const instance = new extension.cls(view);
-  assert.equal(instance.decorations.length, 1);
+  await Promise.resolve();
+  assert.equal(view.sizer.querySelector(".bob-record-sheet").getAttribute("data-record-body"), "pending");
+  assert.equal(instance.decorations.length, 1, "a non-first walk line still replaces in place");
   const row = instance.decorations[0];
   assert.equal(row.from, text.indexOf(lines[0]));
   view.state.selection = { ranges: [{ from: row.from, to: row.from }] };
   instance.update({ view, selectionSet: true });
   assert.equal(instance.decorations.length, 0);
+  assert.equal(view.sizer.querySelectorAll(".bob-record-sheet").length, 1);
 });
 
 test("Reading rail hides only its whole paragraph, stays on collapsed sheet, restores on teardown", () => {
@@ -1389,9 +1591,10 @@ test("Reading rail hides only its whole paragraph, stays on collapsed sheet, res
   plugin.paintRecordSheetReading(root, "eat/0.md");
   assert.equal(root.querySelectorAll(".bob-record-walk-rail").length, 1);
   state.report = null;
-  plugin.paintRecordSheetReading(root, "eat/0.md");
-  assert.equal(root.querySelectorAll(".bob-record-sheet").length, 0);
-  assert.equal(root.querySelectorAll(".bob-record-walk-rail").length, 1);
+  const pending = plugin.paintRecordSheetReading(root, "eat/0.md");
+  assert.equal(root.querySelectorAll(".bob-record-sheet").length, 1);
+  assert.equal(pending.getAttribute("data-record-body"), "pending");
+  assert.equal(pending.querySelectorAll(".bob-record-walk-rail").length, 1);
   plugin.recordSheetRemoveReading(root, root, "eat/0.md");
   assert.equal(root.querySelectorAll(".bob-record-walk-rail").length, 0);
   assert.equal(paragraph.classList.contains("bob-record-walk-source"), false);
@@ -1447,4 +1650,163 @@ test("Reading source refresh ignores a late read invalidated by newer metadata",
   resolvers[0]("stale source");
   await old;
   assert.equal(plugin.recordSheetSourceCache.get("eat/0.md"), "new source");
+});
+
+test("local identity paints a pending card, rejects non-records, and follows the album title rule", () => {
+  const world = fixture();
+  const smash = world.caches.get("eat/smashburger.md").frontmatter;
+  const options = {
+    frontmatter: smash, metadataCache: world.app.metadataCache, vault: world.app.vault, desktop: true,
+    heading: "Smashburger", cache: world.caches.get("eat/smashburger.md"),
+  };
+  const identity = helpers.recordSheetIdentityModel("eat/smashburger.md", options);
+  assert.equal(identity.kind, "record");
+  assert.equal(identity.title, "Smashburger");
+  assert.equal(identity.albumPath, "eat.md");
+  assert.equal(identity.albumTitle, "Restaurants");
+  assert.equal(identity.emoji, "🍽️");
+  const pending = helpers.recordSheetCardModel("eat/smashburger.md", { ...options, body: null });
+  assert.equal(pending.body, null);
+  assert.equal(pending.title, "Smashburger");
+  world.caches.get("eat.md").frontmatter.title = "Eat Here";
+  assert.equal(helpers.recordSheetIdentityModel("eat/smashburger.md", options).albumTitle, "Eat Here");
+  world.caches.get("eat.md").frontmatter.emoji = "";
+  assert.equal(helpers.recordSheetIdentityModel("eat/smashburger.md", options).emoji, "");
+  assert.equal(helpers.recordSheetIdentityModel("eat/smashburger.md", { ...options, desktop: false }), null);
+  assert.equal(helpers.recordSheetIdentityModel("eat/smashburger.md", { ...options, frontmatter: { ...smash, type: ["[[record]]", "[[album]]"] } }), null);
+  assert.equal(helpers.recordSheetIdentityModel("inbox.md", { ...options, frontmatter: { type: "[[record]]", parent: "[[eat]]" } }), null);
+  assert.equal(helpers.recordSheetIdentityModel("eat/nested/down.md", { ...options, frontmatter: { type: "[[record]]", parent: "[[eat]]" } }), null);
+  assert.equal(helpers.recordSheetIdentityModel("eat/smashburger.md", { ...options, frontmatter: { type: "[[record]]" } }), null);
+  assert.equal(helpers.recordSheetIdentityModel("eat/smashburger.md", { ...options, frontmatter: { type: "[[record]]", parent: ["[[eat]]", "[[movies]]"] } }), null);
+  assert.equal(helpers.recordSheetIdentityModel("eat/smashburger.md", { ...options, frontmatter: { type: "[[record]]", parent: "[[eat/smashburger]]" } }), null);
+  assert.equal(helpers.recordSheetIdentityModel("eat/smashburger.md", { ...options, frontmatter: { type: "[[record]]", parent: "[[body]]" } }), null);
+  world.files.delete("eat.md");
+  assert.equal(helpers.recordSheetIdentityModel("eat/smashburger.md", options), null, "a missing album parent is not an identity");
+});
+
+test("record title recognizer hides a first-body walk line, a matching H1, and the Reading link form", () => {
+  const { plugin, source, walk } = walkFixture();
+  const text = source(0);
+  const model = walk();
+  const rec = helpers.recordSheetTitleRecognizer({
+    path: "eat/0.md", title: "Alpha", walk: model, sourceText: text,
+  });
+  assert.equal(rec.requireHeading, false);
+  assert.match(rec.key, /^record:eat\/0.md:Alpha:/);
+  const range = helpers.propertyCardTitleSourceRange(text, rec);
+  assert.ok(range);
+  assert.equal(text.slice(range.from, range.to).trim().startsWith("[[eat/"), true);
+  const withH1 = `---\ntype: "[[record]]"\nparent: "[[eat]]"\n---\n# Alpha\n\n${model.writtenLinks.map((link) => `[[${link.target}|${link.label}]]`).join(" · ")}\n`;
+  const headed = helpers.recordSheetTitleRecognizer({
+    path: "eat/0.md", title: "Alpha", walk: model, sourceText: withH1,
+  });
+  const headedRange = helpers.propertyCardTitleSourceRange(withH1, headed);
+  assert.equal(withH1.slice(headedRange.from, headedRange.to).includes("# Alpha"), true);
+  const stale = helpers.recordSheetTitleRecognizer({
+    path: "eat/0.md", title: "Alpha", walk: { ...model, lineState: "stale" }, sourceText: text,
+  });
+  assert.notEqual(stale.key, rec.key);
+  const notFirst = `---\n---\n## Notes\n\n${text.split("\n").find((line) => line.startsWith("[["))}\n`;
+  assert.equal(helpers.propertyCardTitleSourceRange(notFirst, rec), null);
+  const fenced = `---\n---\n\`\`\`\n${text.split("\n").find((line) => line.startsWith("[["))}\n\`\`\`\n`;
+  assert.equal(helpers.propertyCardTitleSourceRange(fenced, rec), null);
+  const otherH1 = `---\n---\n# Other title\n\n${text.split("\n").find((line) => line.startsWith("[["))}\n`;
+  assert.equal(helpers.propertyCardTitleSourceRange(otherH1, rec), null);
+  const readingLine = model.writtenLinks.map((link) => `[[${link.target}|${link.label}]]`).join(" · ");
+  assert.equal(rec.follower(readingLine), true);
+  const escaped = model.writtenLinks.map((link) => `[[${link.target}|${String(link.label).replace(/\|/g, "\\|")}]]`).join(" · ");
+  assert.equal(rec.follower(escaped) || rec.follower(readingLine), true);
+  const never = helpers.recordSheetTitleRecognizer({ path: "eat/0.md" });
+  assert.equal(never.heading("Alpha"), false);
+  assert.equal(never.follower(readingLine), false);
+  plugin.recordSheetSourceCache.set("eat/0.md", text);
+});
+
+test("title-field reveal stays on the walk line, hides again after it, and honors a second selection", () => {
+  const { walk, source } = walkFixture();
+  const text = source(0);
+  const rec = helpers.recordSheetTitleRecognizer({
+    path: "eat/0.md", title: "Alpha", walk: walk(), sourceText: text,
+  });
+  const range = helpers.propertyCardTitleSourceRange(text, rec);
+  const effect = helpers.propertyCardTitleEnsureEffect();
+  const tr = (cursor, extra = {}) => {
+    const state = {
+      doc: fakeCmDoc(text),
+      selection: { ranges: extra.ranges || [{ from: cursor, to: cursor }] },
+      field(key) {
+        if (key === editorLivePreviewField) return extra.live !== false;
+        if (key === editorInfoField) return { file: { path: extra.path || "eat/0.md" } };
+        return undefined;
+      },
+    };
+    return { effects: extra.effects || [], docChanged: extra.docChanged === true, state, startState: state };
+  };
+  let value = helpers.propertyCardTitleFieldCreate();
+  value = helpers.propertyCardTitleFieldReduce(value, tr(0, { effects: [effect.of({ own: { path: "eat/0.md", generation: 1, recognizer: rec } })] }));
+  assert.equal(value.revealed, false);
+  assert.equal(value.range.from, range.from);
+  const onLine = helpers.propertyCardTitleFieldReduce(value, tr(range.from + 1));
+  assert.equal(onLine.revealed, true);
+  const after = helpers.propertyCardTitleFieldReduce(value, tr(range.to + 1));
+  assert.equal(after.revealed, false);
+  const multi = helpers.propertyCardTitleFieldReduce(value, tr(0, { ranges: [{ from: 0, to: 0 }, { from: range.from, to: range.from }] }));
+  assert.equal(multi.revealed, true);
+});
+
+test("Reading slot owns the title, promotes one heading, and joins the report without remounting", () => {
+  const { plugin, doc, state } = fixture();
+  const pending = state.report;
+  state.report = null;
+  const pane = slotPane(doc);
+  const card = plugin.paintRecordSheetReading(pane.section, "eat/smashburger.md");
+  assert.equal(card.parentNode, pane.header, "the card mounts in the title slot");
+  assert.equal(card.nextElementSibling, pane.properties);
+  assert.equal(card.classList.contains(SLOT), true);
+  assert.equal(card.getAttribute("data-record-body"), "pending");
+  assert.equal(card.querySelector(".bob-property-card-title").textContent, "Smashburger");
+  assert.equal(card.querySelector(".bob-property-card-title").getAttribute("aria-level"), "1");
+  assert.equal(card.getAttribute("aria-label"), "Record: Smashburger");
+  assert.equal(pane.preview.classList.contains(OWNS_TITLE), true);
+  assert.equal(pane.h1.classList.contains(TITLE_SOURCE), true);
+  assert.equal(levelOneCount(pane.preview), 1);
+  assert.equal(card.querySelector(".bob-record-sheet-edit"), null);
+  const generation = helpers.propertyCardTitleSlotStats(pane.preview).generation;
+
+  state.report = pending;
+  const joined = plugin.paintRecordSheetReading(pane.section, "eat/smashburger.md");
+  assert.equal(joined, card, "the same node object");
+  assert.equal(helpers.propertyCardTitleSlotStats(pane.preview).generation, generation, "no remount");
+  assert.equal(card.getAttribute("data-record-body"), "report");
+  assert.equal(card.querySelector(".bob-record-sheet-edit").textContent, "⊞ Edit");
+  assert.equal(card.querySelector(".bob-property-card-title").getAttribute("aria-level"), "1");
+  assert.equal(levelOneCount(pane.preview), 1);
+
+  plugin.teardownRecordSheet();
+  helpers.propertyCardAdoptReleaseAll();
+  assert.equal(card.parentNode, null);
+  assert.equal(pane.preview.classList.contains(OWNS_TITLE), false);
+  assert.equal(pane.h1.classList.contains(TITLE_SOURCE), false);
+});
+
+test("two Reading panes of the same record stay isolated, and Source plus file switch release the slot", async () => {
+  const { plugin, doc } = fixture();
+  const first = slotPane(doc);
+  const second = slotPane(doc);
+  plugin.paintRecordSheetReading(first.section, "eat/smashburger.md");
+  plugin.paintRecordSheetReading(second.section, "eat/smashburger.md");
+  assert.equal(first.header.querySelectorAll(".bob-record-sheet").length, 1);
+  assert.equal(second.header.querySelectorAll(".bob-record-sheet").length, 1);
+  plugin.recordSheetRemoveReading(first.sizer, first.preview, "eat/smashburger.md");
+  assert.equal(first.header.querySelector(".bob-record-sheet"), null);
+  assert.equal(second.header.querySelectorAll(".bob-record-sheet").length, 1);
+  assert.equal(second.preview.classList.contains(OWNS_TITLE), true);
+
+  const view = liveView(doc, "eat/smashburger.md", "---\ntype: [[record]]\nparent: [[eat]]\n---\n# Smashburger\n", true);
+  plugin.buildRecordSheetDecorations(view);
+  await Promise.resolve();
+  assert.equal(view.sizer.querySelector(".bob-record-sheet").classList.contains(SLOT), true);
+  assert.equal(view.sizer.querySelector(".bob-property-card-title").getAttribute("aria-level"), "1");
+  plugin.recordSheetCleanEditor(view);
+  assert.equal(view.sizer.querySelector(".bob-record-sheet"), null);
 });

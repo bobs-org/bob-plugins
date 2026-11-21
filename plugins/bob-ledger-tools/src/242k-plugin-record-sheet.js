@@ -17,6 +17,7 @@ class BobLedgerToolsRecordSheetMixin {
       kind: "record",
       readingPriority: 49,
       allowEmbedDisplay: true,
+      titleOwnership: true,
       fields: {
         active: "recordSheetActive",
         reading: "recordSheetReading",
@@ -36,7 +37,13 @@ class BobLedgerToolsRecordSheetMixin {
       removeReading: (root, scope, path) => plugin.recordSheetRemoveReading(root, scope, path),
       onBind: (widget, el, ctx) => {
         widget.viewFallback = false;
-        widget.albumPath = plugin.recordSheetGateFor(ctx.sourcePath)?.albumPath || "";
+        let albumPath = "";
+        try {
+          albumPath = plugin.recordSheetCardModelFor?.(ctx.sourcePath)?.identity?.albumPath || "";
+        } catch (_) {
+          albumPath = "";
+        }
+        widget.albumPath = albumPath || plugin.recordSheetGateFor(ctx.sourcePath)?.albumPath || "";
         plugin.recordSheetEnsureWalkSource(ctx.sourcePath);
       },
       onUnbind: () => { plugin.recordSheetNotifyOwnership(); },
@@ -44,7 +51,9 @@ class BobLedgerToolsRecordSheetMixin {
         if (!root) plugin.recordSheetRemoveStrays(widget.el, widget.path);
       },
       livePath: (view) => plugin.recordSheetLivePath(view),
-      buildDecorations: (view) => plugin.buildRecordSheetDecorations(view),
+      // Forward the host's CodeMirror update so viewport-only rebuilds can
+      // skip BuildMounted. A one-arg wrapper dropped it and froze Live Preview.
+      buildDecorations: (view, update) => plugin.buildRecordSheetDecorations(view, update),
       shouldRebuild: (update) => {
         const liveChanged = editorLivePreviewField && update.startState && update.state
           ? (() => {
@@ -410,8 +419,10 @@ class BobLedgerToolsRecordSheetMixin {
     try {
       const workspace = this.app?.workspace;
       if (workspace && typeof workspace.openLinkText === "function") {
-        const newLeaf = Boolean(event?.ctrlKey || event?.metaKey || event?.shiftKey);
-        await workspace.openLinkText(path.replace(/\.md$/i, ""), sourcePath || "", newLeaf);
+        const pane = typeof albumHeaderLinkPane === "function"
+          ? albumHeaderLinkPane(event)
+          : Boolean(event?.ctrlKey || event?.metaKey || event?.shiftKey || (event?.type === "auxclick" && event?.button === 1));
+        await workspace.openLinkText(path.replace(/\.md$/i, ""), sourcePath || "", pane);
         return { ok: true };
       }
     } catch (_) {}
@@ -553,23 +564,6 @@ class BobLedgerToolsRecordSheetMixin {
     return propertyCardNodeBelongs(node, root);
   }
 
-  recordSheetRemoveReading(root, scope = root, sourcePath = "") {
-    if (!root) return;
-    this.recordWalkRemoveReading(root, sourcePath);
-    for (const node of Array.from(root.querySelectorAll?.(`.${RECORD_SHEET_CLASS}`) || [])) {
-      if (!this.recordSheetNodeBelongs(node, root)) continue;
-      const ownedPath = recordSheetPath(node.getAttribute?.("data-record-source") || "");
-      if (sourcePath && ownedPath && ownedPath !== recordSheetPath(sourcePath)) continue;
-      try { node.remove?.(); } catch (_) { node.parentNode?.removeChild?.(node); }
-    }
-    const anotherOwner = Array.from(this.recordSheetReading || []).some((item) =>
-      item.surface === root && item.path !== sourcePath);
-    if (!anotherOwner) scope?.classList?.remove?.(RECORD_SHEET_SURFACE_CLASS);
-    scope?.classList?.remove?.(RECORD_SHEET_HIDES_CLASS);
-    root?.classList?.remove?.(RECORD_SHEET_HIDES_CLASS);
-    this.recordSheetClearNativeProperties(scope);
-  }
-
   recordSheetRemoveStrays(root, sourcePath) {
     for (const node of Array.from(root?.querySelectorAll?.(`.${RECORD_SHEET_CLASS}`) || [])) {
       if (node.getAttribute?.("data-cm-widget") === "true") continue;
@@ -579,53 +573,18 @@ class BobLedgerToolsRecordSheetMixin {
     }
   }
 
-  recordSheetBuildMounted(model, options, doc) {
+  recordSheetBuildMounted(model, options, doc, extra = {}) {
     this.recordSheetDomBuilds = (this.recordSheetDomBuilds || 0) + 1;
     const sheet = recordSheetBuildEl(model, options, doc);
-    if (sheet) recordSheetAppendSubscriptionBand(sheet, model, options);
-    return sheet;
-  }
-
-  paintRecordSheetReading(el, sourcePath) {
-    const root = this.recordSheetReadingRoot(el);
-    const scope = this.recordSheetReadingScope(root);
-    if (!root || !sourcePath) return null;
-    this.recordSheetRemoveStrays(root, sourcePath);
-    const model = this.recordSheetModelFor(sourcePath);
-    const doc = recordSheetDomDoc(root) || (typeof document !== "undefined" ? document : null);
-    const old = Array.from(root.querySelectorAll?.(`.${RECORD_SHEET_CLASS}`) || [])
-      .find((node) => this.recordSheetNodeBelongs(node, root));
-    const active = doc?.activeElement;
-    const focusKey = active && old?.contains?.(active)
-      ? active.getAttribute?.("data-record-sheet-focus") : "";
-    this.recordSheetRemoveReading(root, scope, sourcePath);
-    if (!model) {
-      this.recordWalkPaintReading(root, sourcePath, null);
-      this.recordSheetNotifyOwnership();
-      return null;
+    const body = model && model.identity ? model.body : model;
+    if (sheet && body) recordSheetAppendSubscriptionBand(sheet, body, options);
+    if (sheet && extra.includeRail && extra.walk && typeof recordWalkRailBuildEl === "function") {
+      const rail = recordWalkRailBuildEl(extra.walk, options, doc);
+      if (rail) {
+        sheet.classList.add("has-record-walk");
+        sheet.appendChild(rail);
+      }
     }
-    scope?.classList?.add?.(RECORD_SHEET_SURFACE_CLASS);
-    const sheet = this.recordSheetBuildMounted(model, this.recordSheetOptions(sourcePath, model), doc);
-    if (!sheet) {
-      scope?.classList?.remove?.(RECORD_SHEET_SURFACE_CLASS);
-      return null;
-    }
-    const anchor = this.albumHeaderReadingAnchor?.(root);
-    // The card is the record's rendered title surface, so keep it before an
-    // authored legacy H1 instead of letting that heading precede the card.
-    if (anchor?.parentNode?.insertBefore) anchor.parentNode.insertBefore(sheet, anchor);
-    else if (root.insertBefore) root.insertBefore(sheet, root.firstChild || null);
-    else root.prepend?.(sheet);
-    this.recordWalkPaintReading(root, sourcePath, sheet);
-    if (focusKey) {
-      const next = sheet.querySelector?.(`[data-record-sheet-focus="${focusKey}"]`);
-      next?.focus?.({ preventScroll: true });
-    }
-    if (model.hideEligible === true && !recordSheetScopeIsEmbed(scope)) {
-      scope?.classList?.add?.(RECORD_SHEET_HIDES_CLASS);
-    }
-    this.recordSheetSetNativeProperties(scope, model);
-    this.recordSheetNotifyOwnership();
     return sheet;
   }
 
@@ -774,6 +733,7 @@ class BobLedgerToolsRecordSheetMixin {
   }
 
   recordSheetCleanEditor(view) {
+    this.recordSheetReleaseAdoption?.(view?.dom);
     this.recordPropertyCardHost().cleanEditor(view, {
       unmark: (scope) => {
         this.recordSheetClearNativeProperties(scope);

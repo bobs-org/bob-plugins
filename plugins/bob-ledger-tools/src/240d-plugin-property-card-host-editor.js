@@ -55,7 +55,7 @@ function propertyCardHostCreateExtension(controller, options, editors) {
         if (rebuild) {
           let next = null;
           try {
-            next = options.buildDecorations?.(update.view);
+            next = options.buildDecorations?.(update.view, update);
           } catch (error) {
             propertyCardHostCleanupEditorView(controller, options, update.view, path);
             this.decorations = propertyCardHostFallbackDecorations();

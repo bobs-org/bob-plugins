@@ -18,6 +18,8 @@
 const PROPERTY_CARD_TITLE_SLOT_CLASS = "bob-property-card-title-slot";
 const PROPERTY_CARD_TITLE_SLOT_REINSERT_BUDGET = 24;
 const PROPERTY_CARD_TITLE_SLOT_REINSERT_WINDOW_MS = 1000;
+const PROPERTY_CARD_TITLE_SLOT_MEASURE_BUDGET = 8;
+const PROPERTY_CARD_TITLE_SLOT_MEASURE_WINDOW_MS = 1000;
 const PROPERTY_CARD_TITLE_SLOT_ATTRIBUTES = ["data-title-slot-mode", "data-title-slot-kind"];
 
 const propertyCardTitleSlots = new Map();
@@ -140,9 +142,14 @@ function propertyCardTitleSlotOnEditorUpdate(update) {
   if (propertyCardTitleSlots.size === 0) return;
   try {
     const view = update?.view;
-    if (!view?.viewState?.scrollTarget) return;
+    const target = view?.viewState?.scrollTarget;
+    if (!target) return;
     for (const entry of propertyCardTitleSlots.values()) {
       if (entry.mode === "live" && entry.view === view) {
+        // The same pending target must not re-arm: a tall slot card plus
+        // setCursor leaves scrollTarget set, and requestMeasure would loop.
+        if (entry.rescueTarget === target) return;
+        entry.rescueTarget = target;
         propertyCardTitleSlotMeasure(entry);
         return;
       }
@@ -166,6 +173,12 @@ function propertyCardTitleSlotMeasure(entry) {
   const view = entry?.view;
   if (!view) return;
   try {
+    const now = propertyCardTitleSlotNow();
+    if (!entry.measureBudget || now - entry.measureBudget.windowStart > PROPERTY_CARD_TITLE_SLOT_MEASURE_WINDOW_MS) {
+      entry.measureBudget = { windowStart: now, count: 0 };
+    }
+    entry.measureBudget.count += 1;
+    if (entry.measureBudget.count > PROPERTY_CARD_TITLE_SLOT_MEASURE_BUDGET) return;
     if (entry.mode === "live" && typeof view.requestMeasure === "function") {
       view.requestMeasure({
         key: PROPERTY_CARD_TITLE_SLOT_RESCUE_KEY,

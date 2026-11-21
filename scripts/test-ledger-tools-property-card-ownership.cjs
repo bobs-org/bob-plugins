@@ -39,7 +39,6 @@ const { helpers } = LedgerToolsPlugin;
 Module._load = originalLoad;
 
 const OWNED = "bob-property-card-owned-property";
-const LEGACY = "bob-record-sheet-owned-property";
 
 class FakeNode {
   constructor(tag, doc, text = "") {
@@ -233,13 +232,13 @@ test("record adapter owns schema rows plus sheet title only", () => {
     ...extra,
   });
   plugin.recordSheetSetNativeProperties(scope, model());
-  for (const row of [...rows, title]) assert.equal(row.classList.contains(LEGACY), true);
-  assert.equal(unrelated.classList.contains(LEGACY), false);
+  for (const row of [...rows, title]) assert.equal(row.classList.contains(OWNED), true);
+  assert.equal(unrelated.classList.contains(OWNED), false);
   plugin.recordSheetSetNativeProperties(scope, model({ coverage: { title: "other" } }));
-  assert.equal(title.classList.contains(LEGACY), false);
-  assert.equal(rows[0].classList.contains(LEGACY), true);
+  assert.equal(title.classList.contains(OWNED), false);
+  assert.equal(rows[0].classList.contains(OWNED), true);
   plugin.recordSheetSetNativeProperties(scope, model({ hideEligible: false }));
-  assert.equal(rows[0].classList.contains(LEGACY), false);
+  assert.equal(rows[0].classList.contains(OWNED), false);
   assert.equal(plugin.recordSheetNativePropertiesScopes.size, 0);
 });
 
@@ -254,7 +253,7 @@ test("record adapter denies embeds and null mounts", () => {
   plugin.recordSheetSetNativeProperties(embedScope, {
     hideEligible: true, rows: [{ key: "status" }], ghosts: [], coverage: { title: "sheet" },
   });
-  assert.equal(row.classList.contains(LEGACY), false);
+  assert.equal(row.classList.contains(OWNED), false);
   plugin.recordSheetSetNativeProperties(null, null);
   plugin.recordSheetSetNativeProperties(scope, null);
   assert.equal(plugin.recordSheetNativePropertiesScopes.size, 0);
@@ -290,9 +289,9 @@ test("failed mounts roll back and teardown clears every adapter", () => {
   plugin.recordSheetSetNativeProperties(scope, {
     hideEligible: true, rows: [{ key: "status" }], ghosts: [], coverage: { title: "sheet" },
   });
-  assert.equal(row.classList.contains(LEGACY), true);
+  assert.equal(row.classList.contains(OWNED), true);
   plugin.recordSheetSetNativeProperties(scope, null);
-  assert.equal(row.classList.contains(LEGACY), false);
+  assert.equal(row.classList.contains(OWNED), false);
   const album = editorScope(doc);
   const albumRow = addRow(doc, album.container, "record");
   plugin.albumHeaderOwnKeys(album.scope);
@@ -302,9 +301,9 @@ test("failed mounts roll back and teardown clears every adapter", () => {
   plugin.recordSheetSetNativeProperties(scope, {
     hideEligible: true, rows: [{ key: "status" }], ghosts: [], coverage: { title: "sheet" },
   });
-  assert.equal(row.classList.contains(LEGACY), true);
+  assert.equal(row.classList.contains(OWNED), true);
   plugin.teardownRecordSheet?.();
-  assert.equal(row.classList.contains(LEGACY), false);
+  assert.equal(row.classList.contains(OWNED), false);
 });
 
 test("a pane's stale binding for an earlier note keeps the current card's rows owned", () => {
@@ -340,11 +339,11 @@ test("one card's teardown never clears another card's newer owner of the scope",
   // releases its old mount: the record keeps its rows.
   plugin.albumHeaderOwnKeys(scope, "albums/eat.md");
   plugin.recordSheetSetNativeProperties(scope, recordModel);
-  assert.equal(status.classList.contains(LEGACY), true);
+  assert.equal(status.classList.contains(OWNED), true);
   assert.equal(recordKey.classList.contains(OWNED), false, "new owner's keys replace the old set");
   plugin.albumHeaderReleaseKeys(scope);
   plugin.bankSetupReleaseKeys(scope);
-  assert.equal(status.classList.contains(LEGACY), true);
+  assert.equal(status.classList.contains(OWNED), true);
   // And back: the record's clear leaves the album's newer mount alone.
   plugin.albumHeaderOwnKeys(scope, "albums/eat.md");
   plugin.recordSheetSetNativeProperties(scope, null);

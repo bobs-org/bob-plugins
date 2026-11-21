@@ -25,7 +25,7 @@
 //   afterRefreshReading(),
 //   allowEmbedDisplay (default false; album/record/bank pass true),
 //   livePath(view), sourcePath(view), viewPath(view),
-//   buildDecorations(view), shouldRebuild(update, prevPath, nextPath),
+//   buildDecorations(view, update?), shouldRebuild(update, prevPath, nextPath),
 //   editorAttributes(view) (optional; omit to skip the CodeMirror facet),
 //   cleanEditor(view),
 //   ownKeys(scope, path), releaseKeys(scope, path) (wrap the adapter's

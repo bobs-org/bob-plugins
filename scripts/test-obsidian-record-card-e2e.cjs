@@ -225,12 +225,12 @@ test("hide assertion refuses absent native UI and incorrect visibility", () => {
     status: "pass",
     properties: { present: false, display: "none", visibility: "hidden", rectVisible: false },
     inlineTitle: { present: true, display: "none", visibility: "hidden", rectVisible: false },
-  }, true), /is absent/);
+  }, { titleOwned: true, rowsHidden: true }), /is absent/);
   assert.throws(() => assertNativeVisibility({
     status: "pass",
     properties: { present: true, display: "block", visibility: "visible", rectVisible: true },
     inlineTitle: { present: true, display: "none", visibility: "hidden", rectVisible: false },
-  }, false), /visibility mismatch/);
+  }, { titleOwned: false, rowsHidden: false }), /visibility mismatch/);
 });
 
 test("frontmatter cursor expression keeps escaped newlines valid for CDP evaluation", () => {

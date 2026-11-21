@@ -303,7 +303,7 @@ class BobLedgerToolsAlbumHeaderMixin {
   }
 
   albumHeaderReleaseAdoption(scope, sourcePath = "") {
-    try { return propertyCardAdoptRelease(scope, sourcePath || undefined); } catch (_) { return false; }
+    try { return propertyCardAdoptRelease(scope, sourcePath || undefined, "album"); } catch (_) { return false; }
   }
 
   // Body-placed card nodes for this path under root: never the slot node,

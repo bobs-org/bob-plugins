@@ -334,7 +334,14 @@ function recordWalkModel(input = {}) {
   const position = positionIndex + 1;
   const total = ordered.length;
   const albumReport = recordWalkReportAlbum(input.report, albumPath);
-  const albumTitle = String(albumReport?.title || albumFrontmatter.title || recordWalkHumanizeStem(folder)).trim();
+  const albumTitle = String(
+    albumReport?.title
+    || (typeof notebookHeaderNoteTitle === "function"
+      ? notebookHeaderNoteTitle(albumPath, input.metadataCache, input.vault)
+      : "")
+    || albumFrontmatter.title
+    || recordWalkHumanizeStem(folder),
+  ).trim();
   const album = {
     stem: folder,
     path: albumPath,

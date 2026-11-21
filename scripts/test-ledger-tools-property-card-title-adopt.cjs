@@ -307,6 +307,161 @@ test("Live Preview: returns slot at once, then mounts and dispatches ownership o
   assert.equal(H.propertyCardLiveCurrentPath(pane.view), "eat.md");
 });
 
+test("a pending Live Preview re-adopt keeps one mount and inserts the latest node", () => {
+  const doc = makeDoc();
+  const pane = livePane(doc);
+  const first = card(doc, "Alpha");
+  const second = card(doc, "Bravo");
+  const defer = queue();
+  const options = (node, title) => ({
+    path: "eat.md", kind: "album", view: pane.view, defer,
+    recognizer: H.propertyCardAlbumTitleRecognizer(title),
+    currentPath: () => "eat.md",
+  });
+  const firstResult = H.propertyCardAdoptTitle(pane.scope, first, options(first, "Alpha"));
+  const secondResult = H.propertyCardAdoptTitle(pane.scope, second, options(second, "Bravo"));
+  assert.equal(firstResult.mode, "slot");
+  assert.equal(secondResult.release, firstResult.release, "same in-flight handle");
+  assert.equal(defer.size(), 1, "one deferred mount");
+  assert.equal(H.propertyCardAdoptedEntry(pane.scope).pending, true);
+  assert.equal(H.propertyCardAdoptedEntry(pane.scope).node, second);
+  defer.flush();
+  assert.equal(first.parentNode, null);
+  assert.equal(second.parentNode, pane.sizer);
+  assert.equal(H.propertyCardAdoptedEntry(pane.scope).owned, true);
+});
+
+test("a Live Preview mounted re-adopt with a new node keeps the slotted card", () => {
+  const doc = makeDoc();
+  const pane = livePane(doc);
+  const first = card(doc, "Alpha");
+  const second = card(doc, "Bravo");
+  const defer = queue();
+  const options = (title) => ({
+    path: "eat.md", kind: "album", view: pane.view, defer,
+    recognizer: H.propertyCardAlbumTitleRecognizer(title),
+    currentPath: () => "eat.md",
+  });
+  H.propertyCardAdoptTitle(pane.scope, first, options("Alpha"));
+  defer.flush();
+  assert.equal(first.parentNode, pane.sizer);
+  const again = H.propertyCardAdoptTitle(pane.scope, second, options("Bravo"));
+  assert.equal(again.mode, "slot");
+  assert.equal(first.parentNode, pane.sizer, "the slotted node stays");
+  assert.equal(second.parentNode, null, "the new node is not swapped in");
+  assert.equal(H.propertyCardAdoptedEntry(pane.scope).node, first);
+});
+
+test("a Live Preview same-path re-adopt re-inserts when the slot map misses", () => {
+  const doc = makeDoc();
+  const pane = livePane(doc);
+  const first = card(doc, "Alpha");
+  const second = card(doc, "Bravo");
+  const defer = queue();
+  const options = (title) => ({
+    path: "eat.md", kind: "album", view: pane.view, defer,
+    recognizer: H.propertyCardAlbumTitleRecognizer(title),
+    currentPath: () => "eat.md",
+  });
+  H.propertyCardAdoptTitle(pane.scope, first, options("Alpha"));
+  defer.flush();
+  assert.equal(first.parentNode, pane.sizer);
+  H.propertyCardTitleSlotRelease(pane.scope);
+  assert.equal(first.parentNode, null, "the slot map drop detaches the node");
+  assert.ok(H.propertyCardAdoptedEntry(pane.scope), "the adoption entry remains");
+  const again = H.propertyCardAdoptTitle(pane.scope, second, options("Bravo"));
+  assert.equal(again.mode, "slot");
+  assert.equal(H.propertyCardAdoptedEntry(pane.scope).pending, true);
+  defer.flush();
+  assert.equal(first.parentNode, pane.sizer, "the held node is re-inserted");
+  assert.equal(second.parentNode, null, "the new node is not swapped in");
+  assert.equal(H.propertyCardAdoptedEntry(pane.scope).node, first);
+});
+
+test("a Live Preview re-adopt on a rebuilt editor in the same source view keeps the path", () => {
+  const doc = makeDoc();
+  const pane = livePane(doc);
+  const first = card(doc, "Alpha");
+  const defer = queue();
+  const options = (view) => ({
+    path: "eat.md", kind: "album", view, defer,
+    recognizer: H.propertyCardAlbumTitleRecognizer("Alpha"),
+    currentPath: () => "eat.md",
+  });
+  H.propertyCardAdoptTitle(pane.scope, first, options(pane.view));
+  defer.flush();
+  assert.equal(first.parentNode, pane.sizer);
+  const scope2 = el(doc, "div", "cm-editor");
+  pane.source.appendChild(scope2);
+  const scroller2 = el(doc, "div", "cm-scroller");
+  scope2.appendChild(scroller2);
+  const sizer2 = el(doc, "div", "cm-sizer");
+  scroller2.appendChild(sizer2);
+  sizer2.appendChild(el(doc, "div", "inline-title", "Restaurants"));
+  sizer2.appendChild(el(doc, "div", "metadata-container"));
+  sizer2.appendChild(el(doc, "div", "cm-contentContainer"));
+  const second = card(doc, "Bravo");
+  const again = H.propertyCardAdoptTitle(scope2, second, options({ ...pane.view, dom: scope2 }));
+  assert.equal(again.mode, "slot");
+  assert.equal(H.propertyCardAdoptedEntry(scope2).pending, true);
+  defer.flush();
+  assert.equal(first.parentNode, sizer2, "the held node moves to the rebuilt editor");
+  assert.equal(second.parentNode, null);
+  assert.equal(H.propertyCardAdoptedEntry(scope2).node, first);
+  assert.equal(H.propertyCardAdoptedEntry(pane.scope), null, "the old editor no longer owns the adoption");
+});
+
+test("a Live Preview re-adopt follows a disconnected editor of the same path", () => {
+  const doc = makeDoc();
+  const pane = livePane(doc);
+  const first = card(doc, "Alpha");
+  const defer = queue();
+  const options = (view) => ({
+    path: "eat.md", kind: "album", view, defer,
+    recognizer: H.propertyCardAlbumTitleRecognizer("Alpha"),
+    currentPath: () => "eat.md",
+  });
+  H.propertyCardAdoptTitle(pane.scope, first, options(pane.view));
+  defer.flush();
+  assert.equal(first.parentNode, pane.sizer);
+  pane.source.removeChild(pane.scope);
+  const next = livePane(doc);
+  const second = card(doc, "Bravo");
+  const again = H.propertyCardAdoptTitle(next.scope, second, options(next.view));
+  assert.equal(again.mode, "slot");
+  defer.flush();
+  assert.equal(first.parentNode, next.sizer, "the held node moves to the live editor");
+  assert.equal(H.propertyCardAdoptedEntry(next.scope).node, first);
+  assert.equal(H.propertyCardAdoptedEntry(pane.scope), null);
+});
+
+test("releasing one species leaves the other species' slot on the same editor", () => {
+  const doc = makeDoc();
+  const pane = livePane(doc);
+  const node = card(doc, "Smashburger");
+  const defer = queue();
+  const result = H.propertyCardAdoptTitle(pane.scope, node, {
+    path: "eat/smashburger.md",
+    kind: "record",
+    view: pane.view,
+    defer,
+    recognizer: H.propertyCardAlbumTitleRecognizer("Smashburger"),
+    currentPath: () => "eat/smashburger.md",
+  });
+  assert.equal(result.mode, "slot");
+  defer.flush();
+  assert.equal(node.parentNode, pane.sizer);
+  assert.equal(H.propertyCardAdoptedEntry(pane.scope).kind, "record");
+  assert.equal(H.propertyCardAdoptRelease(pane.scope, "eat/smashburger.md", "album"), false,
+    "a path-bound album release misses a record occupant");
+  assert.equal(H.propertyCardAdoptRelease(pane.scope, "", "album"), false,
+    "a kind-only album release misses a record occupant");
+  assert.equal(H.propertyCardAdoptedEntry(pane.scope).kind, "record");
+  assert.equal(node.parentNode, pane.sizer, "the record card stays in the slot");
+  assert.equal(H.propertyCardAdoptRelease(pane.scope, "eat/smashburger.md", "record"), true);
+  assert.equal(H.propertyCardAdoptedEntry(pane.scope), null);
+});
+
 test("no slot (embed, mobile, Source mode) falls back with the heading demoted and no ownership", () => {
   const doc = makeDoc();
   const recognizer = H.propertyCardAlbumTitleRecognizer("Restaurants");

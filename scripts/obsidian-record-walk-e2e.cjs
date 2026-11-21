@@ -115,15 +115,19 @@ async function runE2e(args) {
     })()`);
     await openNote(client, "eat/a.md");
     const live = await harness.waitFor(client, `(() => {
-      const rail = ${RAIL}; const sheet = ${SURFACE}.querySelector(".bob-record-sheet");
+      const sheet = ${SURFACE}.querySelector(".bob-record-sheet");
+      const rail = sheet && sheet.querySelector(".bob-record-walk-rail") || ${RAIL};
       return rail && sheet && { arms: [...rail.querySelectorAll(".bob-record-walk-arm")].map(a => a.getAttribute("data-href")), count: rail.querySelector(".bob-record-walk-count-wide").textContent,
-        wrap: rail.querySelector(".is-prev").title, gap: rail.getBoundingClientRect().top - sheet.getBoundingClientRect().bottom,
+        wrap: rail.querySelector(".is-prev").title,
+        inside: sheet.contains(rail),
+        slot: sheet.parentElement && (sheet.parentElement.classList.contains("cm-sizer") || sheet.parentElement.classList.contains("mod-header")),
+        bottomGap: sheet.getBoundingClientRect().bottom - rail.getBoundingClientRect().bottom,
         minHeight: rail.querySelector(".is-prev").getBoundingClientRect().height };
     })()`, value => value?.count === "1 of 2", "Live Preview rail");
     evidence.live = live;
     check("two-record arms both target the other record", live.arms.length === 2 && live.arms.every(target => target === "eat/b"));
     check("first record announces wrap", /Wraps around to Bravo \(2 of 2\)/.test(live.wrap));
-    check("rail docks flush below sheet with 32px targets", Math.abs(live.gap) < 3 && live.minHeight >= 32);
+    check("rail docks flush at the card bottom in the title slot", live.inside && live.slot && Math.abs(live.bottomGap) < 3 && live.minHeight >= 32);
     await client.evaluate(`app.commands.executeCommandById("bob-navigation-hotkeys:open-prev-link")`);
     await harness.waitFor(client, `${ACTIVE}.file.path`, value => value === "eat/b.md", "[n wraps to last record");
     check("[n wraps", true);
@@ -135,13 +139,22 @@ async function runE2e(args) {
     await openNote(client, "eat/a.md");
     await harness.waitFor(client, `${RAIL}?.querySelector(".bob-record-walk-count-wide").textContent`, value => value === "1 of 2", "rail before cursor reveal");
     await client.evaluate("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
+    const beforeReveal = await client.evaluate(`(() => {
+      const sheet = ${SURFACE}.querySelector(".bob-record-sheet");
+      const rail = sheet && sheet.querySelector(".bob-record-walk-rail");
+      return { sheet: Boolean(sheet), rail: Boolean(rail) };
+    })()`);
     await client.evaluate(`(() => { ${ACTIVE}.editor.focus(); ${ACTIVE}.editor.setCursor({ line: 6, ch: 3 }); })()`);
     await client.call("Input.dispatchKeyEvent", { type: "keyDown", key: "ArrowRight", code: "ArrowRight", windowsVirtualKeyCode: 39 });
     await client.call("Input.dispatchKeyEvent", { type: "keyUp", key: "ArrowRight", code: "ArrowRight", windowsVirtualKeyCode: 39 });
-    await harness.waitFor(client, `!${RAIL} && [...${SURFACE}.querySelectorAll(".cm-line")].some(line => line.textContent.includes("[[eat/b|"))`, Boolean, "raw walk line reveal");
-    check("cursor reveals raw walk Markdown", true);
-    await client.evaluate(`${ACTIVE}.editor.setCursor({ line: 10, ch: 0 })`);
-    await harness.waitFor(client, `Boolean(${RAIL})`, Boolean, "rail returns after cursor leaves");
+    const revealed = await harness.waitFor(client, `(() => {
+      const sheet = ${SURFACE}.querySelector(".bob-record-sheet");
+      const rail = sheet && sheet.querySelector(".bob-record-walk-rail");
+      const raw = [...${SURFACE}.querySelectorAll(".cm-line")].some(line => line.textContent.includes("[[eat/b|"));
+      return sheet && rail && raw && { sheet: true, rail: true, raw: true, slot: sheet.parentElement && sheet.parentElement.classList.contains("cm-sizer") };
+    })()`, value => value?.raw === true, "raw walk line reveal keeps card and rail");
+    check("cursor reveals raw walk Markdown while the same card and rail stay mounted",
+      beforeReveal.sheet && beforeReveal.rail && revealed.sheet && revealed.rail && revealed.slot);
     await client.evaluate(`${SURFACE}.querySelector(".bob-record-sheet-collapse").click()`);
     await harness.waitFor(client, `Boolean(${RAIL}) && ${SURFACE}.querySelector(".bob-record-sheet-collapse").getAttribute("aria-expanded") === "false"`, Boolean, "collapsed sheet retains rail");
     check("collapsed sheet retains rail", true);
@@ -154,7 +167,11 @@ async function runE2e(args) {
     }
     await openNote(client, "eat/a.md", "preview");
     await harness.waitFor(client, `${SURFACE}.querySelectorAll(".bob-record-sheet .bob-record-walk-rail").length`, value => value === 1, "Reading rail");
-    check("Reading paragraph replaced by one docked rail", await client.evaluate(`${SURFACE}.querySelectorAll("p.bob-record-walk-source").length === 1 && getComputedStyle(${SURFACE}.querySelector("p.bob-record-walk-source")).display === "none"`));
+    check("Reading first-body walk paragraph is kit-hidden", await client.evaluate(`${SURFACE}.querySelectorAll("p.bob-property-card-title-source").length >= 1 && getComputedStyle(${SURFACE}.querySelector("p.bob-property-card-title-source")).display === "none"`));
+    check("Reading rail docks inside the slot card", await client.evaluate(`(() => {
+      const sheet = ${SURFACE}.querySelector(".bob-record-sheet");
+      return Boolean(sheet && sheet.parentElement && sheet.parentElement.classList.contains("mod-header") && sheet.querySelector(".bob-record-walk-rail"));
+    })()`));
     await client.evaluate(`${SURFACE}.querySelector(".markdown-preview-sizer").style.maxWidth = "300px"`);
     evidence.narrow = await harness.waitFor(client, `(() => {
       const rail = ${RAIL};
@@ -187,12 +204,16 @@ async function runE2e(args) {
     return { status: "passed", cases, live, narrow: evidence.narrow, executable };
   } catch (error) {
     if (client && args.out) {
-      fs.mkdirSync(args.out, { recursive: true });
-      const png = await client.call("Page.captureScreenshot", { format: "png" });
-      fs.writeFileSync(path.join(args.out, "failure.png"), Buffer.from(png.data, "base64"));
-      evidence.guard = await client.evaluate(`({ exists: Boolean(app.vault.getAbstractFileByPath("eat/b.md")), path: ${ACTIVE}.file.path, errors: window.walkErrors, notices: [...document.querySelectorAll("[class*=notice]")].map(node => node.className + ": " + node.textContent) })`);
-      evidence.cursor = await client.evaluate(`({ pos: ${ACTIVE}.editor.getCursor(), selection: ${ACTIVE}.editor.cm?.state.selection.toJSON(), focus: document.hasFocus(), cmFocus: ${ACTIVE}.editor.cm?.hasFocus, active: document.activeElement?.className })`);
-      evidence.dom = await client.evaluate(`${SURFACE}.querySelector(".cm-content")?.innerHTML`);
+      try {
+        fs.mkdirSync(args.out, { recursive: true });
+        const png = await client.call("Page.captureScreenshot", { format: "png" });
+        fs.writeFileSync(path.join(args.out, "failure.png"), Buffer.from(png.data, "base64"));
+      } catch (_) {}
+      try {
+        evidence.guard = await client.evaluate(`({ exists: Boolean(app.vault.getAbstractFileByPath("eat/b.md")), path: ${ACTIVE}.file.path, errors: window.walkErrors, notices: [...document.querySelectorAll("[class*=notice]")].map(node => node.className + ": " + node.textContent) })`);
+        evidence.cursor = await client.evaluate(`({ pos: ${ACTIVE}.editor.getCursor(), selection: ${ACTIVE}.editor.cm?.state.selection.toJSON(), focus: document.hasFocus(), cmFocus: ${ACTIVE}.editor.cm?.hasFocus, active: document.activeElement?.className })`);
+        evidence.dom = await client.evaluate(`${SURFACE}.querySelector(".cm-content")?.innerHTML`);
+      } catch (_) {}
     }
     return { status: "failed", cases, evidence, error: String(error.stack || error) };
   } finally {

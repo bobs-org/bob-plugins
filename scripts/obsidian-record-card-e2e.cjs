@@ -443,7 +443,14 @@ function probeSource(notePath) {
     const readingScope = surface?.closest?.(".markdown-preview-view") || null;
     const scopeNodes = [surface, editor, readingScope]
       .filter((node, index, nodes) => node && nodes.indexOf(node) === index && node.classList?.contains("${HIDE_CLASS}"));
-    const title = sheet?.querySelector?.(".bob-record-sheet-title") || null;
+    const title = sheet?.querySelector?.(".bob-record-sheet-title, .bob-property-card-title") || null;
+    const shown = (el) => {
+      if (!el) return false;
+      const style = getComputedStyle(el);
+      const rect = el.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+    };
+    const leafContent = surface?.closest?.(".workspace-leaf-content") || surface;
     const authoredEmbedRoots = Array.from(surface?.querySelectorAll?.(".markdown-embed, .internal-embed") || []);
     const embeddedProperties = authoredEmbedRoots.flatMap((embed) =>
       Array.from(embed.querySelectorAll(".metadata-container")).map((node) => {
@@ -503,6 +510,19 @@ function probeSource(notePath) {
       inlineTitle: describeNative(".inline-title"),
       sheet: sheet ? {
         count: Array.from(surface.querySelectorAll(".bob-record-sheet")).filter((node) => node.getAttribute("data-record-source") === path && belongs(node)).length,
+        kind: sheet.getAttribute("data-card-kind") || "",
+        ariaLabel: sheet.getAttribute("aria-label") || "",
+        inTitleSlot: Boolean(sheet.parentElement?.classList.contains("cm-sizer") || sheet.parentElement?.classList.contains("mod-header")),
+        orderInTitleSlot: sheet.nextElementSibling?.classList.contains("metadata-container") ? "metadata-container"
+          : String(sheet.nextElementSibling?.className || ""),
+        levelOne: Array.from(leafContent?.querySelectorAll?.('[aria-level="1"]') || []).filter(shown).length,
+        kicker: {
+          species: sheet.querySelector(".bob-property-card-kicker-species")?.textContent?.replace(/\\s+/g, " ").trim() || "",
+          album: sheet.querySelector(".bob-property-card-kicker-link")?.textContent?.replace(/\\s+/g, " ").trim() || "",
+          href: sheet.querySelector(".bob-property-card-kicker-link")?.getAttribute("data-href") || "",
+          noun: sheet.querySelector(".bob-property-card-kicker-part")?.textContent?.replace(/\\s+/g, " ").trim() || "",
+        },
+        tile: sheet.querySelector(".bob-property-card-tile")?.getAttribute("data-tile-form") || "",
         title: title?.textContent?.replace(/\\s+/g, " ").trim() || "",
         titleRole: title?.getAttribute("role") || null,
         titleLevel: title?.getAttribute("aria-level") || null,
@@ -909,11 +929,14 @@ function writeAssertion(report, name, status, detail, mandatory = true) {
   });
 }
 
-function expectVisibility(report, name, probe, hidden) {
+function expectVisibility(report, name, probe, expected) {
+  const vis = expected && typeof expected === "object"
+    ? expected
+    : { titleOwned: expected === true, rowsHidden: expected === true };
   try {
-    lib.assertNativeVisibility(probe, hidden);
+    lib.assertNativeVisibility(probe, vis);
     writeAssertion(report, name, "pass", {
-      hidden, properties: probe.properties, propertyRows: probe.propertyRows,
+      ...vis, properties: probe.properties, propertyRows: probe.propertyRows,
       schemaKeys: probe.schemaKeys, inlineTitle: probe.inlineTitle,
     });
   } catch (error) {
@@ -1082,11 +1105,18 @@ async function run(args) {
       appendCapturedCheck(report, name + "-sheet-title-role-and-text",
         state.sheet?.titleRole === "heading" && state.sheet?.titleLevel === "1" && state.sheet?.title === options.title,
         { title: state.sheet?.title, role: state.sheet?.titleRole, level: state.sheet?.titleLevel, expected: options.title });
-      expectVisibility(report, name + "-only-schema-properties-and-inline-title-hide", state, true);
+      expectVisibility(report, name + "-title-owned-and-schema-rows-hidden", state, { titleOwned: true, rowsHidden: true });
       appendCapturedCheck(report, name + "-coverage-each-frontmatter-key-once",
         state.missingCoverage?.length === 0 && state.duplicateCoverage?.length === 0,
         { authoredKeys: state.authoredKeys, coverage: state.coverage, missing: state.missingCoverage, duplicates: state.duplicateCoverage });
-      appendCapturedCheck(report, name + "-sheet-precedes-body-heading", state.sheet?.orderBeforeFirstHeading === true, state.sheet);
+      appendCapturedCheck(report, name + "-card-in-title-slot",
+        state.sheet?.inTitleSlot === true && state.sheet?.orderInTitleSlot === "metadata-container", state.sheet);
+      appendCapturedCheck(report, name + "-accessible-name", state.sheet?.ariaLabel === `Record: ${options.title}`, state.sheet);
+      appendCapturedCheck(report, name + "-one-level-one-heading", state.sheet?.levelOne === 1, state.sheet);
+      appendCapturedCheck(report, name + "-kind-tile-kicker",
+        state.sheet?.kind === "record" && state.sheet?.tile === "sheet"
+          && state.sheet?.kicker?.species === "Record" && Boolean(state.sheet?.kicker?.album),
+        state.sheet);
       if (options.h1Count !== undefined) appendCapturedCheck(report, name + "-authored-h1-transition", state.h1Count === options.h1Count, { count: state.h1Count, text: state.h1Text });
       return state;
     };
@@ -1114,6 +1144,39 @@ async function run(args) {
     appendCapturedCheck(report, "sheet-theme-title-style-present",
       Boolean(state.sheet?.titleStyle?.fontFamily && state.sheet?.titleStyle?.fontSize && state.sheet?.titleStyle?.fontWeight),
       state.sheet?.titleStyle);
+    const join = await client.evaluate(`(() => (async () => {
+      const plugin = window.app.plugins.plugins["bob-ledger-tools"];
+      const view = window.app.workspace.activeLeaf.view;
+      const surface = view.containerEl.querySelector(".markdown-source-view");
+      const settle = () => new Promise((resolve) => setTimeout(resolve, 450));
+      const card = () => surface.querySelector(".bob-record-sheet");
+      const snapshot = (node) => ({
+        body: node?.getAttribute("data-record-body") || null,
+        slot: node?.parentElement?.className || "",
+        title: node?.querySelector(".bob-property-card-title")?.textContent || "",
+        edit: Boolean(node?.querySelector(".bob-record-sheet-edit")),
+      });
+      const real = plugin.albumReportState;
+      plugin.albumReportState = function pendingReport() { return { ...real.call(this), report: null, unavailable: true }; };
+      try {
+        plugin.scheduleRecordSheetRefresh();
+        await settle();
+      } finally {
+        delete plugin.albumReportState;
+      }
+      const pendingNode = card();
+      const pending = snapshot(pendingNode);
+      plugin.scheduleRecordSheetRefresh();
+      await settle();
+      const joinedNode = card();
+      return { pending, joined: { ...snapshot(joinedNode), sameNode: joinedNode === pendingNode } };
+    })())()`);
+    report.probes.bodyJoinLive = join;
+    appendCapturedCheck(report, "live-title-block-before-report",
+      join.pending.body === "pending" && join.pending.title === "Bead Lifecycle" && join.pending.edit === false
+        && /cm-sizer/.test(join.pending.slot), join.pending);
+    appendCapturedCheck(report, "live-body-joins-same-node",
+      join.joined.sameNode === true && join.joined.body === "report" && join.joined.edit === true, join.joined);
     report.screenshots.push(await capture(client, outDir, "record-sheet-live-light-wide", 1400, "light", "Live Preview"));
 
     const beforePassive = markdownFilesHash(vaultDir);
@@ -1126,7 +1189,7 @@ async function run(args) {
     (report.probes.clicks ||= []).push(await clickBy(client, '[data-record-sheet-focus="collapse"]'));
     state = await waitFor(client, probeSource("zettels/bead_lifecycle.md"), (value) => value.sheet?.collapsed === true, "sheet collapse");
     report.probes.collapsed = state;
-    expectVisibility(report, "collapsed-sheet-keeps-only-schema-rows-hidden", state, true);
+    expectVisibility(report, "collapsed-sheet-keeps-title-owned-and-schema-rows-hidden", state, { titleOwned: true, rowsHidden: true });
     appendCapturedCheck(report, "collapse-button-works", state.sheet?.collapsed === true, state.sheet);
     appendCapturedCheck(report, "collapse-does-not-write-markdown", markdownFilesHash(vaultDir) === beforePassive, state.sheet);
     report.screenshots.push(await capture(client, outDir, "record-sheet-collapsed", 1400, "light", "Live Preview"));
@@ -1184,6 +1247,37 @@ async function run(args) {
     state = await waitSheet("zettels/legacy-heading.md");
     report.probes.legacyHeading = state;
     checkPositive("legacy-h1-reading", state, { title: "Legacy Heading", h1Count: 1 });
+    await open("zettels/legacy-heading.md", "live");
+    state = await waitSheet("zettels/legacy-heading.md");
+    checkPositive("legacy-h1-live-preview", state, { title: "Legacy Heading" });
+    const reveal = await client.evaluate(`(() => {
+      const leaf = app.workspace.getLeavesOfType("markdown").find((item) => item.view?.file?.path === "zettels/legacy-heading.md");
+      const editor = leaf?.view?.editor;
+      if (!editor) return { ok: false, reason: "Live Preview editor unavailable" };
+      const line = editor.getValue().split("\\n").indexOf("# Legacy Heading");
+      if (line < 0) return { ok: false, reason: "legacy H1 missing", line };
+      editor.setCursor({ line, ch: 0 });
+      return { ok: true, line, target: line, actual: editor.getCursor().line, delimiter: "---", bodyLine: "# Legacy Heading" };
+    })()`);
+    const afterReveal = await waitFor(client, `(() => {
+      const leaf = app.workspace.getLeavesOfType("markdown").find((item) => item.view?.file?.path === "zettels/legacy-heading.md");
+      const surface = leaf?.view?.containerEl?.querySelector(".markdown-source-view");
+      const sheet = surface?.querySelector(".bob-record-sheet");
+      const raw = [...(surface?.querySelectorAll(".cm-content .cm-line") || [])].some((line) =>
+        /^(# )?Legacy Heading$/.test(String(line.textContent || "").trim()) && line.getBoundingClientRect().height > 0);
+      return {
+        inTitleSlot: Boolean(sheet?.parentElement?.classList.contains("cm-sizer")),
+        source: sheet?.getAttribute("data-record-source") || "",
+        raw,
+        ariaLabel: sheet?.getAttribute("aria-label") || "",
+      };
+    })()`, (value) => value && value.raw && value.inTitleSlot, "legacy H1 reveal keeps slot card");
+    report.probes.legacyHeadingReveal = { reveal, afterReveal };
+    appendCapturedCheck(report, "live-preview-reveal-keeps-slot-card",
+      reveal.ok && afterReveal.inTitleSlot && afterReveal.source === "zettels/legacy-heading.md"
+        && afterReveal.raw && afterReveal.ariaLabel === "Record: Legacy Heading",
+      { reveal, afterReveal });
+    report.screenshots.push(await capture(client, outDir, "record-sheet-live-reveal", 1400, "light", "Live Preview"));
 
     await open("movies/equilibrium.md", "live");
     state = await waitSheet("movies/equilibrium.md");
@@ -1199,7 +1293,6 @@ async function run(args) {
     appendCapturedCheck(report, "embed-properties-remain-visible",
       state.embeddedProperties.length > 0 && state.embeddedProperties.every((item) => item.present && item.display !== "none" && item.visibility !== "hidden" && item.rectVisible && !item.hideClassWithinEmbed),
       state.embeddedProperties);
-
     await open("eat/restaurant.md", "reading");
     state = await waitSheet("eat/restaurant.md");
     report.probes.restaurant = state;
@@ -1208,6 +1301,25 @@ async function run(args) {
       state.coverage.lid === "fold" && state.coverage.source_title === "fold" && state.coverage.source_url === "fold",
       state.coverage);
     await open("movies/equilibrium.md", "reading");
+    await waitSheet("movies/equilibrium.md");
+    const embedCard = await waitFor(client, `(() => {
+      const embed = document.querySelector(".markdown-embed .bob-record-sheet, .internal-embed .bob-record-sheet");
+      if (!embed) return null;
+      const heading = embed.querySelector(".bob-property-card-title");
+      const host = embed.closest(".markdown-embed, .internal-embed");
+      const preview = host?.querySelector(".markdown-preview-view");
+      return {
+        kind: embed.getAttribute("data-card-kind") || "",
+        titleLevel: heading?.getAttribute("aria-level"),
+        titleRole: heading?.getAttribute("role"),
+        ownsTitle: Boolean(preview?.classList.contains("bob-property-card-owns-title") || host?.classList.contains("bob-property-card-owns-title")),
+        inTitleSlot: Boolean(embed.parentElement?.classList.contains("mod-header") || embed.parentElement?.classList.contains("cm-sizer")),
+      };
+    })()`, (value) => Boolean(value && value.kind === "record" && value.titleLevel == null && value.ownsTitle !== true && value.inTitleSlot !== true), "demoted embed record card");
+    report.probes.embedCard = embedCard;
+    appendCapturedCheck(report, "embed-card-is-demoted-and-does-not-own-title",
+      Boolean(embedCard && embedCard.kind === "record" && embedCard.titleLevel == null && embedCard.ownsTitle !== true && embedCard.inTitleSlot !== true),
+      embedCard);
     // The walk rail links to this record too; hover the authored body link.
     report.probes.hoverTarget = await hoverBy(client, '.markdown-preview-view li a[data-href="movies/embedded-record"]:not(.bob-record-walk-arm)');
     const hover = await waitFor(client, `(() => Array.from(document.querySelectorAll(".hover-popover")).map((root) => ({
@@ -1243,7 +1355,7 @@ async function run(args) {
     appendCapturedCheck(report, "broken-schema-warning-retains-title",
       state.sheet?.title === "Broken Schema Record" && Boolean(state.sheet.warning) && state.gate?.state === "broken",
       { title: state.sheet?.title, warning: state.sheet?.warning, gate: state.gate });
-    expectVisibility(report, "broken-schema-properties-fail-open", state, false);
+    expectVisibility(report, "broken-schema-title-owned-rows-visible", state, { titleOwned: true, rowsHidden: false });
 
     for (const [name, notePath] of [
       ["bank-month-lookalike", "bank/2026-11.md"],
@@ -1260,7 +1372,7 @@ async function run(args) {
       report.probes[name] = state;
       appendCapturedCheck(report, name + "-has-no-record-sheet", !state.sheet, state);
       if (name === "ordinary-note") report.probes.ordinaryNativeAfterTransitions = await diagnoseNativeDom(client, notePath);
-      expectVisibility(report, name + "-native-ui-fails-open", state, false);
+      expectVisibility(report, name + "-native-ui-fails-open", state, { titleOwned: false, rowsHidden: false });
     }
 
     await open("zettels/bead_lifecycle.md", "source");
@@ -1363,7 +1475,7 @@ async function run(args) {
       return { ok: true };
     })()`);
     await sleep(450);
-    const leaked = await client.evaluate(`(() => Array.from(document.querySelectorAll(".${HIDE_CLASS}, .bob-record-sheet-owned-property")).map((node) => String(node.className || "")))()`);
+    const leaked = await client.evaluate(`(() => Array.from(document.querySelectorAll(".${HIDE_CLASS}, .bob-property-card-owned-property, .bob-property-card-owns-title")).map((node) => String(node.className || "")))()`);
     appendCapturedCheck(report, "view-destruction-removes-owned-hide", destroy.ok && leaked.length === 0, { destroy, leaked });
 
     await open("zettels/bead_lifecycle.md", "reading");

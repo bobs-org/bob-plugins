@@ -9,11 +9,16 @@
 // Reading mounts synchronously. Live Preview returns "slot" at once and
 // mounts and owns in a deferred callback (default queueMicrotask), because
 // nothing may mutate the DOM or dispatch inside a CodeMirror update; a
-// deferred mount that fails calls onLost("insert-failed"). When the slot is
-// lost, title ownership is released in the same frame, the heading demotes,
-// and the adapter's onLost(reason) runs deferred so it can remount through
-// its refresh. Paths that came back unstable or insert-failed stay in the
-// fallback until the scope sees a new path or an explicit release.
+// deferred mount that fails calls onLost("insert-failed"). A same-path
+// re-adopt while pending keeps that in-flight mount and inserts the newest
+// node. A Live Preview re-adopt of the same path never drops a live slot:
+// a newer node is ignored once mounted, and a missing slot map re-inserts
+// the held node. Reading may still replace a mounted node by passing a
+// different one. When the slot is lost, title ownership is released in the
+// same frame, the heading demotes, and the adapter's onLost(reason) runs
+// deferred so it can remount through its refresh. Paths that came back
+// unstable or insert-failed stay in the fallback until the scope sees a
+// new path or an explicit release.
 //
 // The kit heading (.bob-property-card-title, role=heading, aria-level=1) is
 // promoted only while ownership is held; every other state demotes it, so a
@@ -182,6 +187,116 @@ function propertyCardAdoptHandle(scope, entry) {
   };
 }
 
+function propertyCardAdoptScopeOf(entry) {
+  for (const [scope, value] of propertyCardAdoptions) {
+    if (value === entry) return scope;
+  }
+  return null;
+}
+
+function propertyCardAdoptScheduleMount(entry) {
+  entry.pending = true;
+  entry.defer(() => {
+    if (entry.released) return;
+    const scope = propertyCardAdoptScopeOf(entry);
+    if (!scope) return;
+    if (!propertyCardAdoptMount(scope, entry)) propertyCardAdoptCall(entry.onLost, "insert-failed");
+  });
+}
+
+function propertyCardAdoptSourceView(scope) {
+  try {
+    if (scope?.classList?.contains("markdown-source-view")) return scope;
+    return scope?.closest?.(".markdown-source-view") || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function propertyCardAdoptRekey(fromScope, toScope, entry) {
+  if (!entry || fromScope === toScope) return entry;
+  if (propertyCardAdoptions.get(fromScope) === entry) propertyCardAdoptions.delete(fromScope);
+  propertyCardAdoptions.set(toScope, entry);
+  const memory = propertyCardAdoptMemory.get(fromScope);
+  if (memory) {
+    propertyCardAdoptMemory.delete(fromScope);
+    propertyCardAdoptMemory.set(toScope, memory);
+  }
+  entry.handle = propertyCardAdoptHandle(toScope, entry);
+  return entry;
+}
+
+// Same Live Preview pane, possibly a new .cm-editor after CodeMirror
+// rebuilt the editor: keep the in-flight or mounted adoption. Two panes
+// of the same file have different source views and stay isolated.
+function propertyCardAdoptExisting(scope, opts) {
+  const direct = propertyCardAdoptions.get(scope);
+  if (direct && !direct.released) return direct;
+  const source = propertyCardAdoptSourceView(scope);
+  const path = opts?.path;
+  if (!source || path == null || path === "") return null;
+  const view = opts.view;
+  const kind = opts.kind == null ? "" : String(opts.kind);
+  for (const [other, entry] of Array.from(propertyCardAdoptions.entries())) {
+    if (!entry || entry.released || other === scope || entry.path !== path) continue;
+    if (kind && entry.kind && entry.kind !== kind) continue;
+    if (view && entry.view && entry.view === view) return propertyCardAdoptRekey(other, scope, entry);
+    if (source && propertyCardAdoptSourceView(other) === source) return propertyCardAdoptRekey(other, scope, entry);
+    let connected = true;
+    try { connected = other.isConnected !== false; } catch (_) { connected = false; }
+    // A rebuilt .cm-editor is detached; closest() is then null, so the
+    // source-view match cannot fire. Two live panes stay connected.
+    if (!connected) return propertyCardAdoptRekey(other, scope, entry);
+  }
+  return null;
+}
+
+// Live Preview is the CodeMirror editor, even if a rebuild stripped
+// .cm-editor from the class attribute for a frame. Reading's renderer
+// has no dispatch, so a different node there still replaces.
+function propertyCardAdoptIsLivePreview(scope, existing, opts) {
+  try {
+    if (scope?.classList?.contains("cm-editor")) return true;
+    if (scope?.classList?.contains("markdown-preview-view")) return false;
+  } catch (_) {}
+  return typeof existing?.view?.dispatch === "function"
+    || typeof opts?.view?.dispatch === "function";
+}
+
+// Same-path keep: never AdoptDrop a live Live Preview slot. Pending LP
+// takes the newest node. Mounted LP re-inserts if the slot map missed.
+function propertyCardAdoptKeep(scope, node, opts, existing) {
+  if (!existing || existing.released || existing.path !== opts.path) return null;
+  if (opts.kind && existing.kind && existing.kind !== opts.kind) return null;
+  const livePreview = propertyCardAdoptIsLivePreview(scope, existing, opts);
+  const mountedNode = typeof propertyCardTitleSlotMountedNode === "function"
+    ? propertyCardTitleSlotMountedNode(scope) : null;
+  const sameNode = existing.node === node && (mountedNode === node || !livePreview);
+  if (!(existing.pending || livePreview || sameNode)) return null;
+  existing.onLost = opts.onLost;
+  existing.currentPath = opts.currentPath;
+  existing.defer = opts.defer;
+  if (opts.view) existing.view = opts.view;
+  if (opts.recognizer) existing.recognizer = opts.recognizer;
+  if (existing.pending && node && node !== existing.node) existing.node = node;
+  if (!existing.pending && livePreview) {
+    let connected = true;
+    try { connected = Boolean(existing.node) && existing.node.isConnected !== false; } catch (_) { connected = false; }
+    if (!mountedNode || mountedNode !== existing.node || !connected) {
+      if (node && !existing.node) existing.node = node;
+      propertyCardAdoptScheduleMount(existing);
+    } else {
+      const key = opts.recognizer && typeof opts.recognizer.key === "string" ? opts.recognizer.key : "";
+      if (key !== existing.titleKey || !existing.owned) propertyCardAdoptOwn(scope, existing);
+    }
+  } else if (!existing.pending) {
+    const key = opts.recognizer && typeof opts.recognizer.key === "string" ? opts.recognizer.key : "";
+    if (key !== existing.titleKey || !existing.owned) propertyCardAdoptOwn(scope, existing);
+  }
+  propertyCardSyncTitleHeading(existing.node, existing.owned);
+  return { mode: "slot", release: existing.handle };
+}
+
 function propertyCardAdoptFallback(scope, node) {
   const previous = propertyCardAdoptions.get(scope);
   if (previous) propertyCardAdoptDrop(scope, previous);
@@ -194,22 +309,9 @@ function propertyCardAdoptTitle(scope, node, options = {}) {
   try {
     const opts = propertyCardAdoptOptions(options);
     if (!scope || !node) return propertyCardAdoptFallback(scope, node);
-    const existing = propertyCardAdoptions.get(scope);
-    if (existing && existing.node === node && existing.path === opts.path && !existing.released
-      && (existing.pending || propertyCardTitleSlotMountedNode(scope) === node)) {
-      // Same node, same path, still mounted: never remount. Keep the newest
-      // callbacks and re-own only when the recognizer key changed (or
-      // ownership was refused before).
-      existing.onLost = opts.onLost;
-      existing.currentPath = opts.currentPath;
-      existing.defer = opts.defer;
-      if (opts.view) existing.view = opts.view;
-      const key = opts.recognizer && typeof opts.recognizer.key === "string" ? opts.recognizer.key : "";
-      if (opts.recognizer) existing.recognizer = opts.recognizer;
-      if (!existing.pending && (key !== existing.titleKey || !existing.owned)) propertyCardAdoptOwn(scope, existing);
-      propertyCardSyncTitleHeading(node, existing.owned);
-      return { mode: "slot", release: existing.handle };
-    }
+    const existing = propertyCardAdoptExisting(scope, opts);
+    const kept = propertyCardAdoptKeep(scope, node, opts, existing);
+    if (kept) return kept;
     if (propertyCardAdoptRemembered(scope, opts.path) || !propertyCardTitleSlotFor(scope)) {
       return propertyCardAdoptFallback(scope, node);
     }
@@ -231,12 +333,8 @@ function propertyCardAdoptTitle(scope, node, options = {}) {
     entry.handle = propertyCardAdoptHandle(scope, entry);
     propertyCardAdoptions.set(scope, entry);
     propertyCardDemoteTitleHeading(node);
-    if (scope.classList?.contains("cm-editor")) {
-      entry.pending = true;
-      entry.defer(() => {
-        if (entry.released || propertyCardAdoptions.get(scope) !== entry) return;
-        if (!propertyCardAdoptMount(scope, entry)) propertyCardAdoptCall(entry.onLost, "insert-failed");
-      });
+    if (propertyCardAdoptIsLivePreview(scope, entry, opts)) {
+      propertyCardAdoptScheduleMount(entry);
       return { mode: "slot", release: entry.handle };
     }
     if (!propertyCardAdoptMount(scope, entry)) return { mode: "fallback", release: propertyCardAdoptNoop };
@@ -262,13 +360,21 @@ function propertyCardAdoptedEntry(scope) {
   };
 }
 
-// Scope-wide release, optionally bound to one path. Also clears that path's
-// remembered fallback. Never calls onLost.
-function propertyCardAdoptRelease(scope, path) {
+// Release this scope's adoption. `path` and `kind` are optional filters:
+// album and record share one Map keyed by the editor, so a species with
+// no card must not drop the other species' slot. Also clears that path's
+// remembered fallback unless a kind filter skipped a live occupant.
+// Never calls onLost.
+function propertyCardAdoptRelease(scope, path, kind) {
   const bound = path === undefined || path === null || path === "" ? "" : String(path);
-  propertyCardAdoptForget(scope, bound);
+  const boundKind = kind == null || kind === "" ? "" : String(kind);
   const entry = propertyCardAdoptions.get(scope);
-  if (!entry || (bound && entry.path !== bound)) return false;
+  if (entry && !entry.released && boundKind && entry.kind && entry.kind !== boundKind) {
+    return false;
+  }
+  propertyCardAdoptForget(scope, bound);
+  if (!entry || entry.released) return false;
+  if (bound && entry.path !== bound) return false;
   propertyCardAdoptDrop(scope, entry);
   return true;
 }

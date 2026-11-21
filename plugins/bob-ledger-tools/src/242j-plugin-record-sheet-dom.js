@@ -193,45 +193,11 @@ function recordSheetBindOpen(node, handler, key, skipSelector) {
   });
 }
 
-function recordSheetRenderCrumbs(header, model, options, doc) {
-  const nav = recordSheetEl(doc, "nav", "bob-record-sheet-nav");
-  if (!nav) return null;
-  nav.setAttribute?.("aria-label", "Album location");
-  const crumbs = Array.isArray(model.crumbs) ? model.crumbs : [];
-  crumbs.forEach((crumb, index) => {
-    if (index > 0) recordSheetAppendText(nav, doc, " › ");
-    const resolved = recordSheetPath(crumb.path);
-    const current = crumb.current === true;
-    const node = !current && resolved && doc?.createElement ? doc.createElement("a") : recordSheetEl(doc, "span");
-    if (!node) return;
-    if (!current && resolved) {
-      node.setAttribute("class", "internal-link bob-record-sheet-crumb");
-      node.setAttribute("data-href", resolved);
-      node.setAttribute("href", resolved);
-      const open = (event) => options?.handlers?.openPath?.(resolved, event);
-      if (typeof notebookBindAction === "function") notebookBindAction(node, open);
-      else node.addEventListener?.("click", (event) => { event.preventDefault?.(); open(event); });
-      recordSheetBindHover(node, options, resolved);
-    } else {
-      node.setAttribute?.("class", "bob-record-sheet-crumb bob-record-sheet-current");
-    }
-    recordSheetText(node, crumb.title || crumb.stem || "");
-    nav.appendChild(node);
-  });
-  if (model.noun) {
-    recordSheetAppendText(nav, doc, " › ");
-    const noun = recordSheetEl(doc, "span", "bob-record-sheet-noun");
-    recordSheetText(noun, model.noun);
-    if (noun) nav.appendChild(noun);
-  }
-  header.appendChild(nav);
-  return nav;
-}
-
-function recordSheetRenderToolbar(header, model, options, doc) {
+function recordSheetRenderToolbar(slot, model, options, doc) {
+  if (!slot || !model) return null;
   const tools = recordSheetEl(doc, "div", "bob-record-sheet-tools");
   if (!tools) return null;
-  if (model && model.editable === true) {
+  if (model.editable === true) {
     const edit = recordSheetEl(doc, "button", "bob-record-sheet-edit");
     if (edit) {
       edit.setAttribute("type", "button");
@@ -260,23 +226,8 @@ function recordSheetRenderToolbar(header, model, options, doc) {
     });
     tools.appendChild(collapse);
   }
-  header.appendChild(tools);
+  slot.appendChild(tools);
   return tools;
-}
-
-function recordSheetRenderTitleRow(header, model, options, doc) {
-  const row = recordSheetEl(doc, "div", "bob-record-sheet-title-row");
-  if (!row) return null;
-  const title = recordSheetEl(doc, "div", "bob-record-sheet-title");
-  if (title) {
-    title.setAttribute?.("role", "heading");
-    title.setAttribute?.("aria-level", "1");
-    recordSheetText(title, model.title || "Record");
-    row.appendChild(title);
-  }
-  recordSheetRenderToolbar(row, model, options, doc);
-  header.appendChild(row);
-  return row;
 }
 
 function recordSheetRenderRow(list, row, options, doc) {
@@ -395,26 +346,58 @@ function recordSheetRenderFold(sheet, model, options, doc) {
 
 function recordSheetBuildEl(model, options = {}, doc) {
   if (!model) return null;
+  const card = typeof recordSheetCardFrom === "function" ? recordSheetCardFrom(model) : null;
+  const identity = card?.identity;
+  if (!identity) return null;
+  const body = card.body || null;
+  const title = String(card.title || identity.title || identity.stem || "").trim();
   const host = doc || recordSheetDomDoc(options.root);
   const sheet = recordSheetEl(host, "section", `${RECORD_SHEET_CLASS} bob-property-card`);
-  if (!sheet) return null;
+  if (!sheet || !title) return null;
   sheet.setAttribute("role", "group");
-  sheet.setAttribute("aria-label", `${model.title || "Record"} record details`);
   sheet.setAttribute("data-record-sheet", "true");
-  sheet.setAttribute("data-record-source", model.path || "");
-  if (model.hue) sheet.setAttribute("data-root-hue", model.hue);
-  if (model.state) sheet.setAttribute("data-record-state", model.state);
-  const header = recordSheetEl(host, "header", "bob-record-sheet-header");
-  if (header) {
-    recordSheetRenderTitleRow(header, model, options, host);
-    if (!model.collapsed || model.broken) recordSheetRenderCrumbs(header, model, options, host);
-    sheet.appendChild(header);
+  sheet.setAttribute("data-record-source", identity.path || "");
+  sheet.setAttribute("data-record-body", body ? "report" : "pending");
+  const hue = (body && body.hue) || options.hue || "";
+  if (hue) sheet.setAttribute("data-root-hue", hue);
+  if (body && body.state) sheet.setAttribute("data-record-state", body.state);
+  else sheet.setAttribute("data-record-state", "pending");
+  if (typeof propertyCardApplyIdentity === "function") {
+    propertyCardApplyIdentity(sheet, { kind: "record", title });
+  } else {
+    sheet.setAttribute("aria-label", `Record: ${title}`);
   }
-  if (model.broken) {
+  const albumTitle = String((body && body.albumTitle) || identity.albumTitle || "").trim();
+  const albumPath = typeof recordSheetPath === "function"
+    ? recordSheetPath((body && body.albumPath) || identity.albumPath)
+    : String((body && body.albumPath) || identity.albumPath || "");
+  const kicker = [];
+  if (albumTitle && albumPath) kicker.push({ text: albumTitle, target: albumPath });
+  else if (albumTitle) kicker.push({ text: albumTitle });
+  if (body && body.noun) kicker.push({ text: body.noun });
+  const block = typeof propertyCardBuildTitleBlock === "function"
+    ? propertyCardBuildTitleBlock(host, {
+      kind: "record",
+      title,
+      tile: { emoji: String((body && body.emoji) || identity.emoji || "").trim() },
+      kicker,
+      onLink: (target, event) => options?.handlers?.openPath?.(target, event),
+    })
+    : null;
+  if (!block) return null;
+  block.heading?.classList?.add?.("bob-record-sheet-title");
+  for (const link of Array.from(block.element.querySelectorAll?.(".bob-property-card-kicker-link") || [])) {
+    link.classList?.add?.("bob-record-sheet-crumb");
+    recordSheetBindHover(link, options, link.getAttribute?.("data-href") || identity.albumPath);
+  }
+  sheet.appendChild(block.element);
+  if (!body) return sheet;
+  recordSheetRenderToolbar(block.actions, body, options, host);
+  if (body.broken) {
     const warning = recordSheetEl(host, "p", "bob-record-sheet-warning");
     if (warning) {
       warning.setAttribute("role", "status");
-      recordSheetText(warning, model.warning || "The album schema is invalid.");
+      recordSheetText(warning, body.warning || "The album schema is invalid.");
       sheet.appendChild(warning);
     }
     const jump = recordSheetEl(host, "button", "bob-record-sheet-yaml");
@@ -424,41 +407,40 @@ function recordSheetBuildEl(model, options = {}, doc) {
       recordSheetText(jump, "Open album YAML");
       jump.addEventListener?.("click", (event) => {
         event.preventDefault?.();
-        options?.handlers?.jumpAlbumYaml?.(model.warningLine);
+        options?.handlers?.jumpAlbumYaml?.(body.warningLine);
       });
-      recordSheetBindYamlJump(jump, () => options?.handlers?.jumpAlbumYaml?.(model.warningLine), "schema");
+      recordSheetBindYamlJump(jump, () => options?.handlers?.jumpAlbumYaml?.(body.warningLine), "schema");
       sheet.appendChild(jump);
     }
     return sheet;
   }
-  if (model.collapsed) {
+  if (body.collapsed) {
     const summary = recordSheetEl(host, "div", "bob-record-sheet-summary");
     if (summary) {
-      recordSheetRenderCrumbs(summary, model, options, host);
-      recordSheetRenderChips(summary, host, model.choiceChips, options);
-      if (Number.isInteger(model.fieldCount)) {
+      recordSheetRenderChips(summary, host, body.choiceChips, options);
+      if (Number.isInteger(body.fieldCount)) {
         const count = recordSheetEl(host, "span", "bob-record-sheet-field-count");
-        recordSheetText(count, `· ${model.fieldCount} ${model.fieldCount === 1 ? "field" : "fields"}`);
+        recordSheetText(count, `· ${body.fieldCount} ${body.fieldCount === 1 ? "field" : "fields"}`);
         if (count) summary.appendChild(count);
       }
       sheet.appendChild(summary);
     }
-  } else {
-    if (model.rows && model.rows.length) {
-      const list = recordSheetEl(host, "dl", "bob-record-sheet-fields");
-      if (list) {
-        for (const row of model.rows) recordSheetRenderRow(list, row, options, host);
-        sheet.appendChild(list);
-      }
-    }
-    recordSheetRenderGhosts(sheet, model, options, host);
-    if (model.createdFooter) {
-      const footer = recordSheetEl(host, "p", "bob-record-sheet-created");
-      recordSheetText(footer, model.createdFooter);
-      if (footer) sheet.appendChild(footer);
-    }
-    recordSheetRenderFold(sheet, model, options, host);
+    return sheet;
   }
+  if (body.rows && body.rows.length) {
+    const list = recordSheetEl(host, "dl", "bob-record-sheet-fields");
+    if (list) {
+      for (const row of body.rows) recordSheetRenderRow(list, row, options, host);
+      sheet.appendChild(list);
+    }
+  }
+  recordSheetRenderGhosts(sheet, body, options, host);
+  if (body.createdFooter) {
+    const footer = recordSheetEl(host, "p", "bob-record-sheet-created");
+    recordSheetText(footer, body.createdFooter);
+    if (footer) sheet.appendChild(footer);
+  }
+  recordSheetRenderFold(sheet, body, options, host);
   return sheet;
 }
 

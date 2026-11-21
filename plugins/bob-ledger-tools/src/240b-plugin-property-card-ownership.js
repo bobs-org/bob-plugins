@@ -4,11 +4,6 @@
 // container. Source, embeds, hover popovers, failed mounts, and teardown
 // keep native fields. Generalizes the record sheet observer.
 const PROPERTY_CARD_OWNED_PROPERTY_CLASS = "bob-property-card-owned-property";
-// Record compatibility: existing assertions expect this class on owned rows.
-// The shared painter tags both classes so the generalized owner preserves
-// the proven record selectors while album and bank hide through the shared
-// class with bounded owned-row rules.
-const PROPERTY_CARD_LEGACY_RECORD_OWNED_CLASS = "bob-record-sheet-owned-property";
 
 const propertyCardOwnerships = new WeakMap();
 let propertyCardOwnershipGeneration = 0;
@@ -71,7 +66,6 @@ function propertyCardNormalizeKeys(keys) {
 function propertyCardUntag(rows) {
   for (const row of rows || []) {
     try { row.classList?.remove(PROPERTY_CARD_OWNED_PROPERTY_CLASS); } catch (_) {}
-    try { row.classList?.remove(PROPERTY_CARD_LEGACY_RECORD_OWNED_CLASS); } catch (_) {}
   }
 }
 
@@ -89,14 +83,12 @@ function propertyCardPaintScope(scope) {
         if (!entry.keys.has(key)) continue;
         next.add(row);
         if (!row.classList?.contains(PROPERTY_CARD_OWNED_PROPERTY_CLASS)) row.classList?.add(PROPERTY_CARD_OWNED_PROPERTY_CLASS);
-        if (!row.classList?.contains(PROPERTY_CARD_LEGACY_RECORD_OWNED_CLASS)) row.classList?.add(PROPERTY_CARD_LEGACY_RECORD_OWNED_CLASS);
       } catch (_) {}
     }
   } catch (_) {}
   for (const row of entry.rows) {
     if (!next.has(row)) {
       try { row.classList?.remove(PROPERTY_CARD_OWNED_PROPERTY_CLASS); } catch (_) {}
-      try { row.classList?.remove(PROPERTY_CARD_LEGACY_RECORD_OWNED_CLASS); } catch (_) {}
     }
   }
   entry.rows = next;

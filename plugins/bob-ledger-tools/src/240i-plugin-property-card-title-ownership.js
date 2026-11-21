@@ -198,7 +198,8 @@ function propertyCardTitleEditorRelease(entry) {
 // Re-owning with the same path and recognizer key returns the existing
 // handle and dispatches nothing, so adapters may call this on every
 // decoration rebuild; if the field dropped this owner (Source round trip),
-// the same generation is re-dispatched.
+// the same generation is re-dispatched at most once until the field holds
+// it again.
 function propertyCardOwnTitleInEditor(view, options = {}) {
   try {
     if (!view || typeof view.dispatch !== "function") return null;
@@ -213,7 +214,16 @@ function propertyCardOwnTitleInEditor(view, options = {}) {
     const defer = typeof options.defer === "function" ? options.defer : propertyCardTitleDefer;
     const current = propertyCardTitleEditorOwners.get(view);
     if (current && !current.released && current.path === path && current.key === recognizer.key) {
-      if (current.pending || field.generation === current.generation) return current.handle;
+      if (field.generation === current.generation) {
+        current.rearmed = false;
+        return current.handle;
+      }
+      if (current.pending) return current.handle;
+      // A field that drops this owner every transaction must not re-dispatch
+      // in a microtask chain: that starves CDP evaluate. Source round-trips
+      // re-arm once; a later hold of this generation may re-arm again.
+      if (current.rearmed) return current.handle;
+      current.rearmed = true;
       current.recognizer = recognizer;
       current.defer = defer;
       propertyCardTitleEditorScheduleOwn(current);
@@ -223,6 +233,7 @@ function propertyCardOwnTitleInEditor(view, options = {}) {
     const entry = {
       view, path, key: recognizer.key, recognizer, defer,
       generation: propertyCardTitleGeneration, pending: false, released: false, handle: null,
+      rearmed: false,
     };
     // A replaced owner is released first (same queue, so the field sees the
     // release before the new own) so a new owner released before its own

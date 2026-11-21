@@ -11261,15 +11261,9 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
    parent, type, created, legacy keys and Add property available. Live Preview
    puts them under cm-editor > cm-scroller > cm-sizer; Reading view puts them
    under markdown-preview-view > markdown-preview-sizer > mod-header. These
-   direct paths keep nested embeds' native Properties visible. */
-.cm-editor.bob-record-sheet-hides-properties > .cm-scroller > .cm-sizer > .metadata-container .metadata-property.bob-record-sheet-owned-property,
-.markdown-preview-view.bob-record-sheet-hides-properties > .markdown-preview-sizer > .mod-header > .metadata-container .metadata-property.bob-record-sheet-owned-property {
-  display: none !important;
-}
-.cm-editor.bob-record-sheet-hides-properties > .cm-scroller > .cm-sizer > .inline-title,
-.markdown-preview-view.bob-record-sheet-hides-properties > .markdown-preview-sizer > .mod-header > .inline-title {
-  display: none !important;
-}
+   direct paths keep nested embeds' native Properties visible. Owned rows hide
+   through the shared kit class bob-property-card-owned-property; the inline
+   title hides through bob-property-card-owns-title. */
 /* Obsidian suppresses expanded Properties inside rendered embeds. A record
    card owns the parent note's Properties, but an expanded embedded record keeps
    its native fields. The collapsed class still honors the reader's fold. */
@@ -11284,53 +11278,18 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
   --bob-record-accent: var(--bob-property-card-accent);
   font-weight: var(--font-normal);
 }
-.bob-record-sheet-header {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 0.18em;
-  min-width: 0;
-}
-.bob-record-sheet-title-row {
-  display: flex;
-  flex-wrap: nowrap;
-  align-items: center;
-  gap: 0.5em;
-  min-width: 0;
-}
-.bob-record-sheet-title {
-  flex: 1 1 auto;
-  min-width: 0;
-  color: var(--inline-title-color, var(--h1-color, var(--text-normal)));
-  font-family: var(--inline-title-font, var(--h1-font, var(--font-text, inherit)));
-  font-size: var(--inline-title-size, var(--h1-size, 1.8em));
-  font-weight: var(--inline-title-weight, var(--h1-weight, 650));
-  line-height: var(--inline-title-line-height, var(--h1-line-height, 1.2));
-  overflow-wrap: anywhere;
-}
-.bob-record-sheet-nav {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  min-width: 0;
-  color: var(--text-muted);
-  font-size: var(--font-ui-smaller, 0.85em);
-}
-.bob-record-sheet-crumb,
-.bob-record-sheet-noun {
-  color: var(--text-muted);
-  font-weight: 500;
-  text-decoration: none;
-  overflow-wrap: anywhere;
-}
-.bob-record-sheet-current { font-weight: 600; }
-.bob-record-sheet-tools {
+.bob-record-sheet .bob-property-card-actions .bob-record-sheet-tools {
   display: flex;
   flex: 0 0 auto;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.35em;
-  margin-inline-start: auto;
+}
+.bob-record-sheet-crumb {
+  color: var(--text-muted);
+  font-weight: 500;
+  text-decoration: none;
+  overflow-wrap: anywhere;
 }
 .bob-record-sheet-collapse,
 .bob-record-sheet-edit,
@@ -11468,15 +11427,26 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
   to { background: transparent; }
 }
 @media (max-width: 375px) {
-  .bob-record-sheet-title-row { flex-wrap: wrap; align-items: flex-start; }
-  .bob-record-sheet-title { flex-basis: 100%; }
-  .bob-record-sheet-tools { margin-inline-start: auto; }
   .bob-record-sheet-fields {
     grid-template-columns: 1fr;
     gap: 0.15em;
   }
   .bob-record-sheet-row { display: block; margin: 0.35em 0; }
   .bob-record-sheet-label { display: block; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bob-record-sheet, .bob-record-sheet * { animation: none; transition: none; }
+}
+@media (forced-colors: active) {
+  .bob-record-sheet {
+    border-color: CanvasText;
+    outline: 1px solid CanvasText;
+  }
+  .bob-record-sheet-crumb:focus-visible,
+  .bob-record-sheet-collapse:focus-visible,
+  .bob-record-sheet-edit:focus-visible {
+    outline-color: Highlight;
+  }
 }
 .bob-record-card-modal {
   width: min(42em, calc(100vw - 2rem));
@@ -11784,9 +11754,8 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
 
 /* Title ownership: while a mounted card owns its note's title, the owning
    view scope carries bob-property-card-owns-title. Direct-child paths keep
-   embeds and hover popovers native. The record-specific
-   bob-record-sheet-hides-properties selectors above stay as aliases until the
-   collection-cards phase migrates them onto these kit classes. */
+   embeds and hover popovers native. Record row hiding stays on
+   bob-record-sheet-hides-properties plus the shared owned-property class. */
 .cm-editor.bob-property-card-owns-title > .cm-scroller > .cm-sizer > .inline-title,
 .markdown-preview-view.bob-property-card-owns-title > .markdown-preview-sizer > .mod-header > .inline-title {
   display: none !important;

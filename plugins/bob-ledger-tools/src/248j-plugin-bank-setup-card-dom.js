@@ -148,6 +148,7 @@ function bankSetupCardInput(parent, modal, field, caption, value, options = {}) 
   const row = bankSetupCardAppend(parent, "label", "bob-bank-setup-card-control");
   if (!row) return null;
   bankSetupCardAppend(row, "span", "bob-bank-setup-card-control-label", caption);
+  // bob-text: literal bank setup field
   const input = bankSetupCardAppend(row, "input", "bob-bank-setup-card-input", null, {
     type: "text",
     "data-setup-field": field,
@@ -174,6 +175,7 @@ function bankSetupCardFusedLabel(parent, modal, stage) {
   bankSetupCardAppend(row, "span", "bob-bank-setup-card-control-label", "Label");
   const fused = bankSetupCardAppend(row, "div", "bob-emoji-slot-fused");
   if (!fused) return null;
+  // bob-text: literal bank setup emoji label
   const input = bankSetupCardAppend(fused, "input", "bob-bank-setup-card-input bob-emoji-slot-label", null, {
     type: "text",
     "data-setup-field": "label",

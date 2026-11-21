@@ -32,7 +32,10 @@ function creationSite(line) {
     || /\.add(?:Text|TextArea|Search)\s*\(/.test(line)
     || /new\s+Text(?:Area)?Component\s*\(/.test(line)
     || /\.createElement\s*\(\s*["'](?:input|textarea)["']/.test(line)
-    || /(?:notebookCreateEl|recordCardEl|intentionCardEditorCreateEl|albumEmojiSlotCreateEl)\s*\(\s*[^,]+,\s*["'](?:input|textarea)["']/.test(line)
+    // Any DOM helper named *Append / *El / *Element whose tag argument is
+    // input or textarea (notebookCreateEl, recordCardEl, bankCategoryUiAppend,
+    // statsEl, copyChipAuthorMakeEl, ...), so a new helper cannot bypass a role.
+    || /\b[A-Za-z_$][\w$]*(?:Append|El|Element)\s*\(\s*[^,()]+,\s*["'](?:input|textarea)["']/.test(line)
     || /setAttribute\s*\(\s*["']contenteditable["']\s*,\s*["'](?:true|)["']/.test(line);
 }
 

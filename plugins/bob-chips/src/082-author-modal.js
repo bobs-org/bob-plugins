@@ -280,6 +280,7 @@ class CopyChipAuthorModal extends CopyChipsModal {
       const labelRow = copyChipAuthorMakeEl(doc, "label", "bob-copy-author-row");
       const labelName = copyChipAuthorMakeEl(doc, "span", "bob-copy-author-field-name");
       copyChipAuthorSetText(labelName, "Label");
+      // bob-text: literal copy chip label
       this.labelEl = copyChipAuthorMakeEl(doc, "input", "bob-copy-author-label");
       try {
         if (this.labelEl) {
@@ -297,6 +298,7 @@ class CopyChipAuthorModal extends CopyChipsModal {
 
       const textRow = copyChipAuthorMakeEl(doc, "label", "bob-copy-author-row bob-copy-author-row-text");
       this.textNameEl = copyChipAuthorMakeEl(doc, "span", "bob-copy-author-field-name");
+      // bob-text: literal copy chip payload (bash [[ stays literal)
       this.textEl = copyChipAuthorMakeEl(doc, "textarea", "bob-copy-author-text");
       try {
         if (this.textEl) {

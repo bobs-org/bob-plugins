@@ -376,39 +376,27 @@ Log Recall (`USED BEFORE`, see the [contract](https://bobs-org.github.io/log-rec
 ## Wikilink completion in prompts
 
 Typing `[[` in a Bob-owned prose field opens a **LINK** band in the recall
-slot (or under the field). Hosts: Work summary, the Task Card reason stages
-(see [Links in reasons](task-card.md#links-in-reasons)), Move to Next, Release
-task, Keep reasons (single, decay-card Stay, batch), the successor cancel
-reason, the notebook Summary, Bob Mail's Task from this email, and the
-[Record Card](record-card.md#wikilink-completion) typed stages.
-`[[#…` resolves against the task's note; multi-note prompts offer no same-note
-links. Candidates come from Obsidian's
-metadata cache, ranked the same way as `bob capture-complete`. An accepted note
-row inserts the vault-relative path without `.md`, for example `[[sase]]` or
-`[[2026/2026-11-21]]`. Completion only inserts text; it never creates notes or
-writes the vault.
-
-`[[` completes only in prose fields. Identifier, filter, and code-span text
-stay literal, and a leading `\` keeps `[[` inert. The band opens on a user
-keystroke with a collapsed caret; paste, drop, IME composition, and caret-only
-moves do not open it.
+slot or under the field: Work summary, Task Card
+[reasons](task-card.md#links-in-reasons), Move to Next, Release task, Keep
+reasons, the successor cancel reason, notebook Summary, Bob Mail's Task from
+this email, [Intention Card](intention-card.md) fields, and
+[Record Card](record-card.md#wikilink-completion) stages.
+Rows rank like `bob capture-complete`; a note row inserts its vault-relative
+path (`[[2026/2026-11-21]]`), and `[[#…` resolves against the task's note.
+Completion never writes the vault. Identifier, filter, code, and `\[[` text
+stay literal; paste, IME, and caret moves never open the band.
 
 | Key | Band open |
 | --- | --- |
-| ↓ / Ctrl+N, ↑ / Ctrl+P | Move the selection. It clamps and never wraps. |
-| Enter (also Ctrl/Cmd/Alt+Enter) | Insert the selected row. With zero rows, close and insert nothing. In the alias stage, finish the link. |
-| Shift+Enter | Textarea: a newline (the band closes). Input: same as Enter. |
-| Tab | Insert the selected row. With zero rows, pass through. |
-| Shift+Tab | Pass through. The band closes on blur. |
-| `#` / `^` | On a note row, enter the heading or block stage. |
-| `\|` | On a note row, enter the alias stage. |
-| Esc / Ctrl+[ | Close the band only. `q` types. |
-| Click a row | Insert. Hover never changes the selection. |
+| ↓ ↑, Ctrl+N/P | Move; never wraps. |
+| Enter, Tab | Insert; never submits. Zero-row Enter closes. |
+| Shift+Enter | Textarea newline; input inserts. |
+| `#` `^` `\|` | Heading, block, or alias stage. |
+| Esc, Ctrl+[ | Close only the band; `q` types. |
 
-While the band is open, USED BEFORE is hidden and its keys belong to the band.
-With the band closed, Ctrl+[ mirrors Esc in every host.
-A complete `[[missing]]` that does not resolve shows a faint hint under the
-slot; Enter still submits that text.
+USED BEFORE hides while the band is open. With the band closed, Ctrl+[
+mirrors Esc.
+An unresolved complete link shows a faint hint; Enter still submits.
 
 ## Review walk
 
@@ -646,19 +634,12 @@ no rows wait (counts in tooltips; `Highlight` when forced).
 
 ## Relation-label stage
 
-The Links and Linked-from relation-label stage adds a `⊘ cancels` cue to
-configured cancel-label suggestions, a `✓ completes` cue to configured
-complete-label suggestions, and a `⤵ merges` cue to configured merge-label
-suggestions, including labels with no previous use. The live
-sentence dims and prefixes the source task with `⊘` or `✓`, the consequence
-strip names the task and the close effects, and Return reads `↵ link & cancel`,
-`↵ link & complete`, `↵ link & merge`, or `↵ link & close` when both kinds are selected.
-Recurring sources show a disabled row with the Obsidian Tasks instruction;
-complete rows also disable when Task Status Cycler is below api v3. Inverse
-phrases explain that they never cancel or complete and point to `⇧L` or `l`
-with the closing label. A counted commit that closes two or more tasks waits
-for a second Return, with mixed cancel-and-complete copy when both happen;
-Escape or changing the query or selection disarms the confirm.
+The Links and Linked-from relation-label stage marks configured cancel,
+complete, and merge labels with `⊘ cancels`, `✓ completes`, and `⤵ merges`,
+including labels with no previous use; Return reads `↵ link & merge` for a
+merge label. Cancel and complete previews, counted confirms, inverse labels,
+and hand edits follow
+[Links stage and closing labels](task-card.md#links-stage-and-closing-labels).
 
 Committing a merge label previews through `bob task merge --dry-run` (the
 Bob Ledger Tools `api.taskMerge` namespace, desktop only) and fills the
@@ -674,14 +655,8 @@ When a source or the target has no `^block-id`, Return first runs the
 new-block-ID prompt for each one. Sources come first, then the target, and
 each prompt is prefilled from the task text. The relation field then returns
 and the merge previews as usual. Escape at a prompt closes the picker, and
-IDs already confirmed stay.
-
-Hand-editing a configured cancel or complete label into LINKS leaves an open
-task open and shows a hint to use the relation stage or capture. Unlinking a
-cancel-label edge or relabelling it away keeps a cancelled task cancelled;
-reopen it with `Alt+]`. The same for a complete-label edge keeps the task Done;
-reopen it with `Alt+[`. See [Task relations](task-relations.md) for the full
-behavior.
+IDs already confirmed stay. See [Task relations](task-relations.md) for the
+full behavior.
 
 ## Notes, tabs, and keyboard layers
 

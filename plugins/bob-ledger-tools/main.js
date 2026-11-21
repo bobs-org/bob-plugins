@@ -44031,6 +44031,7 @@ class BobLedgerToolsStatsClockMixin {
         class: "bob-stats-clock-option",
         title: detail,
       });
+      // bob-text: none stats clock radio
       const radio = statsEl(doc, "input", {
         type: "radio",
         name: "stats-clock-" + String(view && view.chartId || "view"),
@@ -45549,6 +45550,7 @@ class BobLedgerToolsStatsBlockMixin {
         return;
       }
       const popover = statsEl(doc, "div", { class: "bob-stats-custom", role: "dialog", "aria-label": "Custom range" });
+      // bob-text: none stats custom-range date inputs
       const start = statsEl(doc, "input", { class: "bob-stats-date", type: "date", "data-stats-focus-key": "range-custom-start" });
       const end = statsEl(doc, "input", { class: "bob-stats-date", type: "date", "data-stats-focus-key": "range-custom-end" });
       const apply = statsEl(doc, "button", { class: "bob-stats-chip", type: "button", "data-stats-focus-key": "range-custom-apply" }, "Apply");
@@ -75328,6 +75330,7 @@ class BobLedgerToolsBankCardsMixin {
   bankCardRenderQueueRow(parent, view, row) {
     const line = bankCardAppend(parent, "div", { class: "bob-bank-queue-row" });
     const label = bankCardAppend(line, "label", { class: "bob-bank-queue-row-label" });
+    // bob-text: none bank queue acknowledge checkbox
     const checkbox = bankCardAppend(label, "input", {
       type: "checkbox",
       "aria-label": `Acknowledge ${row.payee} on ${row.date}`,
@@ -88757,6 +88760,7 @@ function bankCategoryIsNewCategoryKey(key) {
     if (labelRow) {
       bankCategoryUiAppend(labelRow, "span", "bob-bank-category-stage-caption", "Label");
       const fused = bankCategoryUiAppend(labelRow, "div", "bob-emoji-slot-fused");
+      // bob-text: literal bank category label
       const input = fused ? bankCategoryUiAppend(fused, "input",
         "bob-bank-category-stage-input bob-emoji-slot-label", null, {
           type: "text",
@@ -88791,6 +88795,7 @@ function bankCategoryIsNewCategoryKey(key) {
       const row = bankCategoryUiAppend(form, "label", "bob-bank-category-stage-row");
       if (!row) continue;
       bankCategoryUiAppend(row, "span", "bob-bank-category-stage-caption", entry.caption);
+      // bob-text: literal bank category group and key
       const input = bankCategoryUiAppend(row, "input", "bob-bank-category-stage-input", null, {
         type: "text",
         "data-bank-new-field": entry.field,
@@ -89360,6 +89365,7 @@ function bankSubscriptionPickerStatus(item) {
     const picker = this.subscriptionPicker;
     if (!picker) return;
     bankCategoryUiAppend(root, "h3", "bob-bank-category-group", "Link subscription");
+    // bob-text: literal subscription picker filter
     const query = bankCategoryUiAppend(root, "input", "bob-bank-subscription-query", null, {
       type: "search", "data-bank-subscription-query": "true", "aria-label": "Search subscriptions",
       placeholder: "Search by title or statement text", value: picker.query,
@@ -89414,6 +89420,7 @@ function bankSubscriptionPickerStatus(item) {
     const textField = (label, name, value, type = "text") => {
       const row = bankCategoryUiAppend(form, "label", "bob-bank-subscription-field");
       bankCategoryUiAppend(row, "span", "bob-bank-category-stage-caption", label);
+      // bob-text: literal bank subscription fields
       const input = bankCategoryUiAppend(row, "input", "bob-bank-category-stage-input", null, {
         type, "data-bank-sub-field": name, "aria-label": label,
       });
@@ -90223,6 +90230,7 @@ function bankSetupCardInput(parent, modal, field, caption, value, options = {}) 
   const row = bankSetupCardAppend(parent, "label", "bob-bank-setup-card-control");
   if (!row) return null;
   bankSetupCardAppend(row, "span", "bob-bank-setup-card-control-label", caption);
+  // bob-text: literal bank setup field
   const input = bankSetupCardAppend(row, "input", "bob-bank-setup-card-input", null, {
     type: "text",
     "data-setup-field": field,
@@ -90249,6 +90257,7 @@ function bankSetupCardFusedLabel(parent, modal, stage) {
   bankSetupCardAppend(row, "span", "bob-bank-setup-card-control-label", "Label");
   const fused = bankSetupCardAppend(row, "div", "bob-emoji-slot-fused");
   if (!fused) return null;
+  // bob-text: literal bank setup emoji label
   const input = bankSetupCardAppend(fused, "input", "bob-bank-setup-card-input bob-emoji-slot-label", null, {
     type: "text",
     "data-setup-field": "label",

@@ -797,6 +797,7 @@ class BobLedgerToolsStatsBlockMixin {
         return;
       }
       const popover = statsEl(doc, "div", { class: "bob-stats-custom", role: "dialog", "aria-label": "Custom range" });
+      // bob-text: none stats custom-range date inputs
       const start = statsEl(doc, "input", { class: "bob-stats-date", type: "date", "data-stats-focus-key": "range-custom-start" });
       const end = statsEl(doc, "input", { class: "bob-stats-date", type: "date", "data-stats-focus-key": "range-custom-end" });
       const apply = statsEl(doc, "button", { class: "bob-stats-chip", type: "button", "data-stats-focus-key": "range-custom-apply" }, "Apply");

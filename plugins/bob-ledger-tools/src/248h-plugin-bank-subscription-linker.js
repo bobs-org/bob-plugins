@@ -536,6 +536,7 @@ function bankSubscriptionPickerStatus(item) {
     const picker = this.subscriptionPicker;
     if (!picker) return;
     bankCategoryUiAppend(root, "h3", "bob-bank-category-group", "Link subscription");
+    // bob-text: literal subscription picker filter
     const query = bankCategoryUiAppend(root, "input", "bob-bank-subscription-query", null, {
       type: "search", "data-bank-subscription-query": "true", "aria-label": "Search subscriptions",
       placeholder: "Search by title or statement text", value: picker.query,
@@ -590,6 +591,7 @@ function bankSubscriptionPickerStatus(item) {
     const textField = (label, name, value, type = "text") => {
       const row = bankCategoryUiAppend(form, "label", "bob-bank-subscription-field");
       bankCategoryUiAppend(row, "span", "bob-bank-category-stage-caption", label);
+      // bob-text: literal bank subscription fields
       const input = bankCategoryUiAppend(row, "input", "bob-bank-category-stage-input", null, {
         type, "data-bank-sub-field": name, "aria-label": label,
       });

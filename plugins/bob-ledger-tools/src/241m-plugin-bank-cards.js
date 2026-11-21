@@ -559,6 +559,7 @@ class BobLedgerToolsBankCardsMixin {
   bankCardRenderQueueRow(parent, view, row) {
     const line = bankCardAppend(parent, "div", { class: "bob-bank-queue-row" });
     const label = bankCardAppend(line, "label", { class: "bob-bank-queue-row-label" });
+    // bob-text: none bank queue acknowledge checkbox
     const checkbox = bankCardAppend(label, "input", {
       type: "checkbox",
       "aria-label": `Acknowledge ${row.payee} on ${row.date}`,

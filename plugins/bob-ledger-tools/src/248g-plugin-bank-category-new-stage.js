@@ -367,6 +367,7 @@
     if (labelRow) {
       bankCategoryUiAppend(labelRow, "span", "bob-bank-category-stage-caption", "Label");
       const fused = bankCategoryUiAppend(labelRow, "div", "bob-emoji-slot-fused");
+      // bob-text: literal bank category label
       const input = fused ? bankCategoryUiAppend(fused, "input",
         "bob-bank-category-stage-input bob-emoji-slot-label", null, {
           type: "text",
@@ -401,6 +402,7 @@
       const row = bankCategoryUiAppend(form, "label", "bob-bank-category-stage-row");
       if (!row) continue;
       bankCategoryUiAppend(row, "span", "bob-bank-category-stage-caption", entry.caption);
+      // bob-text: literal bank category group and key
       const input = bankCategoryUiAppend(row, "input", "bob-bank-category-stage-input", null, {
         type: "text",
         "data-bank-new-field": entry.field,

@@ -237,6 +237,7 @@ class BobLedgerToolsStatsClockMixin {
         class: "bob-stats-clock-option",
         title: detail,
       });
+      // bob-text: none stats clock radio
       const radio = statsEl(doc, "input", {
         type: "radio",
         name: "stats-clock-" + String(view && view.chartId || "view"),

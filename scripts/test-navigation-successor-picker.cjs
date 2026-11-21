@@ -1432,7 +1432,7 @@ test("relation successor copy vectors drive every copy-table string", () => {
 });
 
 
-// Successor jump pin (`api.successors` v5, docs/task-dependencies.md §12.22
+// Successor jump pin (`api.successors` v5, docs/task-dependencies.md §12.24
 // successor jump): the Ctrl+J pin on the nav card.
 
 function jumpModel(count, options = {}) {
@@ -1468,7 +1468,19 @@ test("Ctrl+J toggles, moves, and clears the pin without moving the highlight", a
   assert.match(allText(modal.footerEl), /after the close/);
   assert.equal(findAll(modal.resultsEl, "is-jump-pin").length, 1);
   assert.equal(findAll(modal.resultsEl, "bob-successor-jump-pin").length, 1);
-  assert.equal(findAll(modal.resultsEl, "bob-successor-jump-pin")[0].textContent, "Jump");
+  const capsule = findAll(modal.resultsEl, "bob-successor-jump-pin")[0];
+  assert.equal(findAll(capsule, "bob-successor-jump-pin-icon").length, 1);
+  assert.equal(findAll(capsule, "bob-successor-jump-pin-label")[0].textContent, "Jump");
+  const styles = fs.readFileSync(
+    path.join(__dirname, "../plugins/bob-navigation-hotkeys/styles.css"),
+    "utf8",
+  );
+  const jumpSource = fs.readFileSync(
+    path.join(__dirname, "../plugins/bob-navigation-hotkeys/src/206e-successor-picker-jump.js"),
+    "utf8",
+  );
+  assert.match(styles, /\.bob-successor-jump-pin\s*\{[^}]*order:\s*2;/s);
+  assert.match(jumpSource, /applyIcon\(icon,\s*"arrow-up-right"\)/);
   const labelled = findAll(modal.resultsEl, "bob-successor-row").filter(
     (el) => el.getAttribute("aria-label") && el.getAttribute("aria-label").includes("jump target"),
   );
@@ -1523,6 +1535,27 @@ test("pin-only Enter resolves picks [] with jump while plain Enter still pulls i
   plainPlugin.setNow(6000);
   pressKey(plain.modal, "Enter");
   assert.deepEqual(await plain.pending, { picks: [{ key: jumpModel(3).groups[0].rows[0].key }] });
+});
+
+test("a pin invalidated at commit cannot fall through to the highlighted pick", async () => {
+  const plugin = makePlugin({ now: 5000 });
+  const { pending, modal } = await openPicker(plugin, jumpModel(2));
+  pressJump(modal);
+  modal.jumpKey = "missing:key";
+  plugin.setNow(6000);
+  pressKey(modal, "Enter");
+  assert.deepEqual(modal.result, { picks: [] });
+  assert.equal(await pending, null, "an empty invalidated pin is not a commit");
+});
+
+test("the picker class delegates to its single jump-aware apply and settle methods", async () => {
+  const plugin = makePlugin();
+  const { pending, modal } = await openPicker(plugin, jumpModel(1));
+  assert.match(modal.applySelection.toString(), /successorJumpApplySelection/);
+  assert.match(modal.settle.toString(), /successorJumpSettle/);
+  modal.allowCloseWithoutArm = true;
+  modal.close();
+  assert.equal(await pending, null);
 });
 
 test("the Enter chip follows the copy table and the Ctrl+J chip sits before Esc", async () => {

@@ -16,6 +16,31 @@ const REVIEW_ADVANCE_SETTLE_MS = 350;
 const REVIEW_PRE_EXIT_SETTLE_MS = 1500;
 const REVIEW_WALK_BUSY = Object.freeze({ busy: true });
 
+function reviewWalkOutcomeResolves(origin, input, todayText) {
+  const kind = input ? String(input.kind || "") : "";
+  const tier = origin && typeof origin.tier === "string" ? origin.tier : "";
+  // A checklist completion that reaches continue (the claim declined on
+  // mixed versions) stays: the claim owns checklist rows.
+  return kind === "complete" && (tier === "pre" || tier === "post")
+    ? false
+    : reviewOutcomeResolves(tier, input, todayText);
+}
+
+function reviewWalkRecordAnswer(plugin, origin, input, todayText) {
+  const handledRefs = input && Array.isArray(input.handledRefs) ? input.handledRefs : [];
+  const answerKeys = collectReviewAnswerKeys(
+    origin,
+    handledRefs,
+    plugin.reviewAnsweredKeys,
+    todayText,
+    input && Array.isArray(input.excludeRefs) ? input.excludeRefs : [],
+  );
+  const answeredRefs = Array.isArray(answerKeys.answeredRefs) ? answerKeys.answeredRefs : [];
+  plugin.addReviewAnsweredKeys(answeredRefs, todayText);
+  plugin.recordReviewAnswer(origin, input, answeredRefs);
+  return answerKeys;
+}
+
 // nav api v3 `reviewWalk` (`docs/task-dependencies.md` §9). Synchronous
 // `capture` never throws (null off a landing, REVIEW_WALK_BUSY while
 // locked, otherwise a frozen origin that took the gesture lock); async
@@ -467,14 +492,9 @@ class BobNavigationHotkeysReviewAdvanceMixin {
         }
         return Object.freeze({ ok: true, advanced: false, stopped: false });
       }
-      const kind = input ? String(input.kind || "") : "";
       const tier = typeof origin.tier === "string" ? origin.tier : "";
-      // A checklist completion that reaches continue (the claim declined
-      // on mixed versions) stays: the claim owns checklist rows.
-      const resolves =
-        kind === "complete" && (tier === "pre" || tier === "post")
-          ? false
-          : reviewOutcomeResolves(tier, input, todayText);
+      const kind = input ? String(input.kind || "") : "";
+      const resolves = reviewWalkOutcomeResolves(origin, input, todayText);
       if (!resolves) {
         showNotice(notice);
         this.settleReviewWalkLock(false);
@@ -484,15 +504,7 @@ class BobNavigationHotkeysReviewAdvanceMixin {
       // covers the answered row before any await can interleave.
       this.reviewLanding = null;
       this.reviewWalkCurrent = null;
-      const handledRefs =
-        input && Array.isArray(input.handledRefs) ? input.handledRefs : [];
-      const answerKeys = collectReviewAnswerKeys(
-        origin,
-        handledRefs,
-        this.reviewAnsweredKeys,
-        todayText,
-        input && Array.isArray(input.excludeRefs) ? input.excludeRefs : [],
-      );
+      const answerKeys = reviewWalkRecordAnswer(this, origin, input, todayText);
       const positionKeys = Array.isArray(answerKeys.positionKeys)
         ? answerKeys.positionKeys
         : [];
@@ -503,15 +515,6 @@ class BobNavigationHotkeysReviewAdvanceMixin {
         answerKeys.handled instanceof Set
           ? answerKeys.handled
           : new Set(positionKeys.concat(excludeKeys));
-      this.addReviewAnsweredKeys(
-        Array.isArray(answerKeys.answeredRefs) ? answerKeys.answeredRefs : [],
-        todayText,
-      );
-      this.recordReviewAnswer(
-        origin,
-        input,
-        Array.isArray(answerKeys.answeredRefs) ? answerKeys.answeredRefs : [],
-      );
       const before = Array.isArray(origin.queueBefore) ? origin.queueBefore : [];
       const originRowKey =
         typeof origin.rowKey === "string" && origin.rowKey

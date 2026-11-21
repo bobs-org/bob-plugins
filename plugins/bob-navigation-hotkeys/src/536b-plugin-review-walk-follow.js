@@ -95,11 +95,24 @@ class BobNavigationHotkeysReviewWalkFollowMixin {
       });
     }
 
+    if (!reviewWalkOutcomeResolves(origin, input, todayText)) {
+      const landed = await land();
+      settleOwnLock();
+      show(compose(notice, landed && landed.ok ? jumpLine : lostLine));
+      return Object.freeze({
+        ok: true,
+        advanced: false,
+        parked: false,
+        landed: Boolean(landed && landed.ok),
+      });
+    }
+
     try {
       this.takeReviewWalkLock(REVIEW_GESTURE_LOCK_MS);
     } catch (_error) {
       // Keep whatever lock capture already took.
     }
+    reviewWalkRecordAnswer(this, origin, input, todayText);
     const handledRefs = Array.isArray(input.handledRefs) ? input.handledRefs : [];
     let parked = false;
     try {

@@ -1,5 +1,5 @@
 // Successor picker API and mixin (`api.successors` v4,
-// docs/task-dependencies.md §12.13/§12.22). Extracted from 206 with no
+// docs/task-dependencies.md §12.13/§12.24). Extracted from 206 with no
 // behavior change so 206 stays at or below the 1000-line fragment cap.
 // Shared scope with 206, 206a-206d, and 206e.
 function createSuccessorPickerApi(plugin) {

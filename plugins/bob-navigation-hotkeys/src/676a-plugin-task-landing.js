@@ -56,6 +56,17 @@ function resolveTaskLandingLine(content, target) {
   const rawLine = info.line;
   const blockId = info.blockId || info.block_id || null;
 
+  if (blockId) {
+    try {
+      const blockIdLine = findTaskLineByBlockId(lines, blockId);
+      if (blockIdLine !== null) {
+        return Object.freeze({ ok: true, line: blockIdLine, source: "block-id" });
+      }
+    } catch (_error) {
+      // Fall through to text identity.
+    }
+  }
+
   if (wantedText && Number.isInteger(rawLine)) {
     if (rawLine >= 0 && rawLine < lines.length && lines[rawLine] === wantedText) {
       return Object.freeze({ ok: true, line: rawLine, source: "planned" });
@@ -66,17 +77,6 @@ function resolveTaskLandingLine(content, target) {
       lines[rawLine - 1] === wantedText
     ) {
       return Object.freeze({ ok: true, line: rawLine - 1, source: "planned" });
-    }
-  }
-
-  if (blockId) {
-    try {
-      const blockIdLine = findTaskLineByBlockId(lines, blockId);
-      if (blockIdLine !== null) {
-        return Object.freeze({ ok: true, line: blockIdLine, source: "block-id" });
-      }
-    } catch (_error) {
-      // Fall through to text identity.
     }
   }
 

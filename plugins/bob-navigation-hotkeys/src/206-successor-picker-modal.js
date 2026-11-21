@@ -726,90 +726,10 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
   }
 
   applySelection() {
-    const keys = this.model.groups.flatMap((group) => group.rows)
-      .filter((row) => {
-        if (!row.selectable || !this.markedKeys.has(row.key)) {
-          return false;
-        }
-        if (this.verdicts instanceof Map && this.verdicts.has(row.key)) {
-          return false;
-        }
-        return true;
-      })
-      .map((row) => row.key);
-    const closes = [];
-    try {
-      if (this.verdicts instanceof Map) {
-        for (const [key, verdict] of this.verdicts) {
-          if (!verdict || !key) {
-            continue;
-          }
-          const row = successorFindRowByKey(this, key);
-          if (!row || !successorRowVerdictEligible(row, verdict.outcome)) {
-            continue;
-          }
-          if (this.markedKeys instanceof Set && this.markedKeys.has(key)) {
-            continue;
-          }
-          if (verdict.outcome === SUCCESSOR_VERDICT_CANCELLED) {
-            const reason = normalizeSuccessorCancelReason(verdict.reason);
-            closes.push(reason ? { key, outcome: "cancelled", reason } : { key, outcome: "cancelled" });
-          } else {
-            closes.push({ key, outcome: "done" });
-          }
-        }
-      }
-    } catch (_error) {
-      // Picks still apply without closes rather than refusing the gesture.
-    }
-    let selected = keys;
-    if (selected.length === 0 && closes.length === 0) {
-      const active = this.visibleItems[this.selectedIndex];
-      if (!active || active.kind !== "offer" || !active.row.selectable) {
-        return false;
-      }
-      selected = [active.row.key];
-    }
-    this.settle({
-      picks: selected.map((key) => {
-        const item = { key };
-        try {
-          const override = this.destinationOverrides && this.destinationOverrides.get(key);
-          if (override && typeof override === "object") {
-            item.destination = override;
-          }
-        } catch (_error) {
-          // A pick without an override still links at its planned spot.
-        }
-        return item;
-      }),
-      ...(closes.length > 0 ? { closes } : {}),
-    });
-    return true;
+    return successorJumpApplySelection(this);
   }
 
   settle(result) {
-    if (this.didSettle) return;
-    this.didSettle = true;
-    const picks = result && Array.isArray(result.picks) ? result.picks : null;
-    const closes = result && Array.isArray(result.closes) ? result.closes : null;
-    if (picks) {
-      this.result = closes ? { picks, closes } : { picks };
-    } else {
-      this.result = null;
-    }
-    try {
-      this.close();
-    } catch (_error) {
-      // Cleanup is delivered below even when Obsidian's modal teardown fails.
-    }
-    if (!this.onCloseSettled) {
-      this.onCloseSettled = true;
-      try {
-        this.onSettle(this.result);
-      } catch (_error) {
-        // A settled picker never re-opens or rejects its caller.
-      }
-    }
+    return successorJumpSettle(this, result);
   }
 }

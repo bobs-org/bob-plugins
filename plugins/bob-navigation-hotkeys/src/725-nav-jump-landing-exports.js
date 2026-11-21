@@ -23,9 +23,9 @@ buildUnblockedNoticeModel = function buildUnblockedNoticeModelWithJump(
     recovered: Object.freeze([]),
     stillBlocked: Object.freeze([]),
     chips: Object.freeze([]),
-    receipt: receipt,
-    title: receipt,
-    glyph: "↗",
+    receipt: "",
+    title: "Jumped to task",
+    glyph: "✓",
     text: receipt,
     durationMs: 6000,
     dailyPath: "",
@@ -51,11 +51,6 @@ renderUnblockedNoticeFragment = function renderUnblockedNoticeWithJump(
     return card;
   }
   const row = card.createDiv({ cls: "bob-nh-unblock-row is-jump" });
-  row.createSpan({
-    cls: "bob-nh-unblock-glyph",
-    text: "↗",
-    attr: { "aria-hidden": "true" },
-  });
   row.createSpan({
     cls: "bob-nh-unblock-text",
     text: formatSuccessorJumpReceipt(view.jumpLabel),

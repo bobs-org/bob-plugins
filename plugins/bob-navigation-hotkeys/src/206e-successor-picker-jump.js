@@ -1,5 +1,5 @@
 // Successor picker jump pin (`api.successors` v5,
-// docs/task-dependencies.md §12.22 successor jump). State, keys, commit,
+// docs/task-dependencies.md §12.24 successor jump). State, keys, commit,
 // and render helpers for the Ctrl+J pin. Follows the 206c prototype-patch
 // pattern: `successorInstallJumpModalPatches` runs from 206's onOpen next
 // to the verdict patches (plus a load-time install below, as in 206d), and
@@ -186,14 +186,19 @@ function successorRenderJumpRowAdornments(modal, rowEl, row, navIndex) {
     }
     const pinned = modal.jumpKey != null && row.key === modal.jumpKey;
     if (pinned) {
-      const capsule = rowEl.createSpan({ cls: "bob-successor-jump-pin", text: "Jump" });
+      const capsule = rowEl.createSpan({ cls: "bob-successor-jump-pin" });
+      const icon = capsule.createSpan({
+        cls: "bob-successor-jump-pin-icon",
+        attr: { "aria-hidden": "true" },
+      });
       try {
         if (typeof applyIcon === "function") {
-          applyIcon(capsule, "arrow-up-forward");
+          applyIcon(icon, "arrow-up-right");
         }
       } catch (_iconError) {
-        // The text carries the pin without the icon.
+        // The word carries the pin without the icon.
       }
+      capsule.createSpan({ cls: "bob-successor-jump-pin-label", text: "Jump" });
     }
     const selected = modal.selectedIndex === navIndex;
     if (!selected && !pinned) {
@@ -281,17 +286,19 @@ function successorJumpApplySelection(modal) {
     // Picks still apply without closes rather than refusing the gesture.
   }
   let jump = null;
+  let invalidJump = false;
   if (modal.jumpKey != null) {
     const row = successorFindRowByKey(modal, modal.jumpKey);
     if (row && successorJumpIsPinnableRow(row)) {
       jump = { key: modal.jumpKey };
     } else {
+      invalidJump = true;
       modal.jumpKey = null;
       modal.statusLine = { text: SUCCESSOR_JUMP_STATUS_LOST_KEY, kind: "refusal" };
     }
   }
   let selected = keys;
-  if (selected.length === 0 && closes.length === 0 && jump == null) {
+  if (selected.length === 0 && closes.length === 0 && jump == null && !invalidJump) {
     const active = modal.visibleItems[modal.selectedIndex];
     if (!active || active.kind !== "offer" || !active.row.selectable) {
       return false;
@@ -315,6 +322,40 @@ function successorJumpApplySelection(modal) {
     ...(jump ? { jump } : {}),
   });
   return true;
+}
+
+// The single settle implementation used by the picker class in 206.
+function successorJumpSettle(modal, result) {
+  if (modal.didSettle) return;
+  modal.didSettle = true;
+  const picks = result && Array.isArray(result.picks) ? result.picks : null;
+  const closes = result && Array.isArray(result.closes) ? result.closes : null;
+  const jump = result && result.jump && typeof result.jump === "object" &&
+    typeof result.jump.key === "string" && result.jump.key
+    ? { key: result.jump.key }
+    : null;
+  if (picks) {
+    modal.result = {
+      picks,
+      ...(closes ? { closes } : {}),
+      ...(jump ? { jump } : {}),
+    };
+  } else {
+    modal.result = null;
+  }
+  try {
+    modal.close();
+  } catch (_error) {
+    // Cleanup is delivered below even when Obsidian's modal teardown fails.
+  }
+  if (!modal.onCloseSettled) {
+    modal.onCloseSettled = true;
+    try {
+      modal.onSettle(modal.result);
+    } catch (_settleError) {
+      // A settled picker never re-opens or rejects its caller.
+    }
+  }
 }
 
 // Prototype patches for SuccessorOfferPickerModal (defined in 206). They
@@ -393,49 +434,6 @@ function successorInstallJumpModalPatches() {
       }
     };
 
-    const originalApplySelection = proto.applySelection;
-    proto.applySelection = function successorJumpApplySelectionPatched() {
-      try {
-        return successorJumpApplySelection(this);
-      } catch (_error) {
-        return originalApplySelection.call(this);
-      }
-    };
-
-    const originalSettle = proto.settle;
-    proto.settle = function successorJumpSettlePatched(result) {
-      if (this.didSettle) return;
-      this.didSettle = true;
-      const picks = result && Array.isArray(result.picks) ? result.picks : null;
-      const closes = result && Array.isArray(result.closes) ? result.closes : null;
-      const jump = result && result.jump && typeof result.jump === "object" &&
-        typeof result.jump.key === "string" && result.jump.key
-        ? { key: result.jump.key }
-        : null;
-      if (picks) {
-        this.result = {
-          picks,
-          ...(closes ? { closes } : {}),
-          ...(jump ? { jump } : {}),
-        };
-      } else {
-        this.result = null;
-      }
-      try {
-        this.close();
-      } catch (_error) {
-        // Cleanup is delivered below even when Obsidian's modal teardown fails.
-      }
-      if (!this.onCloseSettled) {
-        this.onCloseSettled = true;
-        try {
-          this.onSettle(this.result);
-        } catch (_settleError) {
-          // A settled picker never re-opens or rejects its caller.
-        }
-      }
-      void originalSettle;
-    };
   } catch (_error) {
     // The modal keeps its 206 behavior without jump keys.
   }

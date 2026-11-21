@@ -492,18 +492,14 @@ two-step Esc, hover buttons, and the `pull in {a} · ✓ {b} done · ⊘ {c}
 cancel` footer; the task-merge card never receives `close` and stays
 pull-in-only. Callers attach `close` descriptors only when
 `api.successors?.version >= 4`.
-`successors` v5 (jump pin, `docs/task-dependencies.md` §12.22 successor
-jump in bob-cli) keeps every v4 row and verdict and adds an opt-in jump
-pin. A model may carry `jump: { supported: true }`; the normalizer keeps
-it only then. `Ctrl+J` toggles the pin on the highlighted keyed, selectable
-offer row without moving the highlight; muted rows, folds, and empty lists
-refuse with a status line. A staged pin commits like a staged verdict with
-no highlight fallback, settling `{ picks, closes?, jump: { key } }`; the
-mixin drops a non-selectable `jump.key` and resolves non-null when picks,
-closes, or jump exist. The row renders a solid accent `Jump` capsule, a `↗`
-hover button, a `jump target` suffix, a `Ctrl+J jump` chip, and a
-`· ↗ “S”` summary (S truncated to 40 characters). Callers opt in only when
-`api.successors?.version >= 5`.
+`successors` v5 adds opt-in `jump: { supported: true }` to v4
+(`docs/task-dependencies.md` §12.24); only exact `true` survives
+normalization. Ctrl+J pins the highlighted keyed, selectable row without
+moving it; muted rows, folds, and empty lists refuse. Pins suppress highlight
+fallback and permit `{ picks: [], jump: { key } }`. Invalid pins drop; a result
+is non-null only with picks, closes, or a valid jump. Supported cards show a
+solid `Jump` capsule, hover button, `jump target` suffix, Ctrl+J chip, and
+truncated `· ↗ “S”` summary. Opt in at `api.successors?.version >= 5`.
 `blocks.openStage(ref)` and
 `blocks.removeDependent(ownerRef, target)` resolve to result
 objects. `relations.removeLink(sourceRef, targetRef)` removes the

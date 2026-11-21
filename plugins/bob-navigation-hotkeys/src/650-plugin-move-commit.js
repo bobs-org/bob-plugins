@@ -561,15 +561,10 @@ class BobNavigationHotkeysMoveCommitMixin {
       vimJumpContext &&
       vimJumpContext.origin &&
       normalizeVimJumpLocation(vimJumpContext.origin);
-    if (!hasMoveContext) {
-      const placed = this.jumpOrDeferTaskMoveDestination(file.path, anchor);
-      if (ensureEditing && typeof this.focusGoToTaskEditor === "function") {
-        this.focusGoToTaskEditor();
-      }
-      return placed;
+    if (!Number.isInteger(this.vimJumpOperationToken)) {
+      this.vimJumpOperationToken = 0;
     }
-
-    if (vimJumpContext.token !== this.vimJumpOperationToken) {
+    if (hasMoveContext && vimJumpContext.token !== this.vimJumpOperationToken) {
       return false;
     }
 
@@ -585,7 +580,7 @@ class BobNavigationHotkeysMoveCommitMixin {
           // Best-effort settle only.
         }
       },
-      token: vimJumpContext.token,
+      token: hasMoveContext ? vimJumpContext.token : this.vimJumpOperationToken,
     };
 
     try {
@@ -614,18 +609,20 @@ class BobNavigationHotkeysMoveCommitMixin {
       this.focusGoToTaskEditor();
     }
 
-    if (!landing || !landing.ok || !landing.destination) {
+    if (!landing || !landing.ok) {
       return Boolean(landing && landing.ok);
     }
 
-    try {
-      await this.enqueueVimJumpContextTransition(
-        vimJumpContext,
-        landing.destination,
-        { expectedPath: file.path },
-      );
-    } catch (error) {
-      // History is best-effort after a committed move.
+    if (hasMoveContext && landing.destination) {
+      try {
+        await this.enqueueVimJumpContextTransition(
+          vimJumpContext,
+          landing.destination,
+          { expectedPath: file.path },
+        );
+      } catch (error) {
+        // History is best-effort after a committed move.
+      }
     }
     return true;
   }

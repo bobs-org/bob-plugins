@@ -1342,6 +1342,8 @@ test("reviewWalk v2 follow parks, holds the lock until landing, and shows one to
   const firstText = plugin.reviewLanding.text;
   let busyDuringLand = null;
   const landCalls = [];
+  const recordedAnswers = [];
+  plugin.recordReviewAnswer = (...args) => recordedAnswers.push(args);
   plugin.landOnTask = async (target, options) => {
     landCalls.push({ target, options });
     busyDuringLand = plugin.reviewWalkBusy();
@@ -1369,6 +1371,10 @@ test("reviewWalk v2 follow parks, holds the lock until landing, and shows one to
   assert.equal(busyDuringLand, true, "the lock is held until landing");
   assert.equal(plugin.reviewWalkBusy(), false, "the lock is free after landing");
   assert.equal(plugin.reviewLanding, null, "the landing is consumed");
+  assert.ok(plugin.reviewAnsweredKeys.keys.has(origin.key), "the close enters today's answered set");
+  assert.equal(recordedAnswers.length, 1, "the close is journaled once");
+  assert.equal(recordedAnswers[0][1].kind, "complete");
+  assert.equal(recordedAnswers[0][2][0].key, origin.key);
   assert.deepEqual(notices, ["✓ Done · One\n↗ “Dest”"]);
   plugin.advanceReviewClock(400);
   clearNotices();
@@ -1378,6 +1384,61 @@ test("reviewWalk v2 follow parks, holds the lock until landing, and shows one to
     markFor("next", "Two"),
     "the next ]s resumes at the neighbour",
   );
+});
+
+test("reviewWalk v2 follow lands without parking or recording a non-resolving outcome", async () => {
+  const fixture = makePlugin({ rows: nextQueue(["One", "Two"]), activePath: "walk.md" });
+  const { plugin, editor } = fixture;
+  await land(fixture, "first");
+  const origin = plugin.captureReviewGesture(editor);
+  const landingKey = plugin.reviewLanding.key;
+  const recordedAnswers = [];
+  const landCalls = [];
+  plugin.recordReviewAnswer = (...args) => recordedAnswers.push(args);
+  plugin.landOnTask = async (target) => {
+    landCalls.push(target);
+    return { ok: true, line: 0 };
+  };
+  clearNotices();
+  const result = await plugin.continueReviewWalkAfter(origin, {
+    kind: "noop",
+    notice: "Relation complete · another task",
+    follow: { path: "dest.md", label: "Dest" },
+  });
+  assert.deepEqual(result, { ok: true, advanced: false, parked: false, landed: true });
+  assert.equal(plugin.reviewLanding.key, landingKey, "the unanswered row remains landed");
+  assert.equal(plugin.reviewAnsweredKeys.keys.has(origin.key), false, "no answer key is recorded");
+  assert.deepEqual(recordedAnswers, []);
+  assert.equal(landCalls.length, 1, "explicit follow intent still lands");
+  assert.deepEqual(notices, ["Relation complete · another task\n↗ “Dest”"]);
+});
+
+test("reviewWalk v2 follow applies the PRE/POST complete exception", async () => {
+  const fixture = makePlugin({
+    rows: [
+      laneEntry({ tier: "pre", path: "walk.md", line: 1, text: "Prep", rank: 1, tierRank: 1, tierTotal: 1 }),
+    ],
+    activePath: "walk.md",
+  });
+  const { plugin, editor } = fixture;
+  await land(fixture, "first");
+  const origin = plugin.captureReviewGesture(editor);
+  const landingKey = plugin.reviewLanding.key;
+  const recordedAnswers = [];
+  plugin.recordReviewAnswer = (...args) => recordedAnswers.push(args);
+  plugin.landOnTask = async () => ({ ok: true, line: 0 });
+  assert.equal(helpers.reviewOutcomeResolves("pre", { kind: "complete" }, DATE), true);
+  clearNotices();
+  const result = await plugin.continueReviewWalkAfter(origin, {
+    kind: "complete",
+    notice: "✓ Done · Prep",
+    follow: { path: "dest.md", label: "Dest" },
+  });
+  assert.deepEqual(result, { ok: true, advanced: false, parked: false, landed: true });
+  assert.equal(plugin.reviewLanding.key, landingKey, "PRE completion leaves the walk answer untouched");
+  assert.equal(plugin.reviewAnsweredKeys.keys.has(origin.key), false);
+  assert.deepEqual(recordedAnswers, []);
+  assert.deepEqual(notices, ["✓ Done · Prep\n↗ “Dest”"]);
 });
 
 test("reviewWalk v2 follow still lands on a stale origin without parking", async () => {

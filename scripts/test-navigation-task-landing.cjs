@@ -81,7 +81,7 @@ test("resolveTaskLandingLine uses planned, block-id, unique text, and unique des
       text: "- [ ] #task Moved ^moved",
       blockId: "moved",
     }),
-    { ok: true, line: 3, source: "planned" },
+    { ok: true, line: 3, source: "block-id" },
   );
   assert.deepEqual(
     helpers.resolveTaskLandingLine(content, {
@@ -89,7 +89,7 @@ test("resolveTaskLandingLine uses planned, block-id, unique text, and unique des
       text: "- [ ] #task Moved ^moved",
       blockId: "moved",
     }),
-    { ok: true, line: 3, source: "planned" },
+    { ok: true, line: 3, source: "block-id" },
     "a 1-based planned line still matches",
   );
 
@@ -109,6 +109,18 @@ test("resolveTaskLandingLine uses planned, block-id, unique text, and unique des
       blockId: "moved",
     }),
     { ok: true, line: 6, source: "block-id" },
+  );
+  assert.deepEqual(
+    helpers.resolveTaskLandingLine(
+      ["- [ ] #task Twin", "- [ ] #task Twin ^target"].join("\n"),
+      {
+        line: 1,
+        text: "- [ ] #task Twin",
+        blockId: "target",
+      },
+    ),
+    { ok: true, line: 1, source: "block-id" },
+    "a 1-based line guess cannot beat the target block ID",
   );
   assert.deepEqual(
     helpers.resolveTaskLandingLine(shifted, {
@@ -220,6 +232,32 @@ test("landOnTask notices a lost target and does not clamp", async () => {
   assert.deepEqual(notices, [
     "Couldn't find “Missing” to jump to — your changes are saved",
   ]);
+});
+
+test("landOnTask waits for a no-context placement retry before reporting", async () => {
+  const { plugin, editor, flashes } = makeLandingPlugin({
+    cursor: { line: 0, ch: 0 },
+  });
+  delete plugin.vimJumpOperationToken;
+  let attempts = 0;
+  plugin.jumpToActiveTaskMoveDestination = (_path, _anchor, _options) => {
+    attempts += 1;
+    if (attempts === 1) return false;
+    editor.setCursor({ line: 1, ch: 0 });
+    return true;
+  };
+  clearNotices();
+  const result = await plugin.landOnTask({
+    path: "dev.md",
+    text: "- [ ] #task Beta ^beta",
+    blockId: "beta",
+    label: "Beta",
+  }, { vimJumpContext: {} });
+  assert.deepEqual(result, { ok: true, line: 1 });
+  assert.equal(attempts, 2, "the retry settles before landOnTask resolves");
+  assert.deepEqual(editor.getCursor(), { line: 1, ch: 0 });
+  assert.deepEqual(flashes, [1]);
+  assert.deepEqual(notices, []);
 });
 
 test("landOnTask is lost when the file is missing", async () => {

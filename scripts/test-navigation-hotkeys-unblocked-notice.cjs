@@ -1218,8 +1218,9 @@ test("notice v5 appends a trailing jump receipt and leaves older payloads unchan
   assert.ok(jumpRow);
   assert.ok(jumpRow.classes.includes("bob-nh-unblock-row"));
   assert.equal(
-    findFragmentNode(jumpRow, nodeHasClass("bob-nh-unblock-glyph")).text,
-    "↗",
+    findFragmentNode(jumpRow, nodeHasClass("bob-nh-unblock-glyph")),
+    null,
+    "the receipt text supplies the only arrow",
   );
   assert.equal(
     findFragmentNode(jumpRow, nodeHasClass("bob-nh-unblock-text")).text,
@@ -1234,6 +1235,22 @@ test("notice v5 appends a trailing jump receipt and leaves older payloads unchan
   );
   assert.equal(jumpOnly.jumpLabel, "Solo");
   assert.equal(jumpOnly.text, "↗ “Solo”");
+  assert.equal(jumpOnly.title, "Jumped to task");
+  assert.equal(jumpOnly.glyph, "✓");
+  assert.equal(jumpOnly.receipt, "");
+  const jumpOnlyRoot = createFragmentNode();
+  helpers.renderUnblockedNoticeFragment(jumpOnly, jumpOnlyRoot, {});
+  const jumpOnlyRow = findFragmentNode(jumpOnlyRoot, nodeHasClass("is-jump"));
+  assert.ok(jumpOnlyRow);
+  assert.equal(
+    findFragmentNode(jumpOnlyRow, nodeHasClass("bob-nh-unblock-text")).text,
+    "↗ “Solo”",
+  );
+  assert.equal(findFragmentNode(jumpOnlyRow, nodeHasClass("bob-nh-unblock-glyph")), null);
+  assert.equal(
+    findFragmentNode(jumpOnlyRoot, nodeHasClass("bob-nh-notice-level")).text,
+    "Jumped to task",
+  );
 
   const blank = helpers.buildUnblockedNoticeModel(
     singleLinkedModel({ jump: { label: "   " } }),

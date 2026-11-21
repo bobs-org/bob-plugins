@@ -3680,10 +3680,11 @@
   75% { transform: translateX(3px); }
 }
 
-/* Jump pin capsule (picker API v5, §12.22 successor jump): the solid filled
+/* Jump pin capsule (picker API v5, §12.24 successor jump): the solid filled
    accent treatment. Highlight is an outline, a mark is a tint, and the pin
    is a solid capsule, so all three stay distinct in the same hue. */
 .bob-successor-jump-pin {
+  order: 2;
   display: inline-flex;
   align-items: center;
   gap: 4px;

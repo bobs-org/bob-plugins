@@ -88479,7 +88479,7 @@ class BobNavigationHotkeysChecklistWalkMixin {
           line: Number.isInteger(entry.line) ? entry.line - 1 : 0,
           raw: entry.originalMarkdown,
         }],
-      });
+      }, { answeredChecklist: true });
       return true;
     }
 
@@ -89852,7 +89852,7 @@ class BobNavigationHotkeysReviewDueRowMixin {
 // would clear the `]s` landing. Without `outcome.follow`, continue stays
 // on the v1 path byte for byte.
 class BobNavigationHotkeysReviewWalkFollowMixin {
-  async followReviewWalkAfter(origin, outcome) {
+  async followReviewWalkAfter(origin, outcome, options = {}) {
     const input = outcome && typeof outcome === "object" ? outcome : {};
     const follow =
       input.follow && typeof input.follow === "object" ? input.follow : null;
@@ -89944,7 +89944,12 @@ class BobNavigationHotkeysReviewWalkFollowMixin {
       });
     }
 
-    if (!reviewWalkOutcomeResolves(origin, input, todayText)) {
+    // The checklist claim owns PRE/POST completion and has already recorded
+    // its answer. Only that internal caller may bypass continue's mixed-version
+    // complete guard; public reviewWalk.continue keeps the v1 resolve rules.
+    const answeredChecklist = options.answeredChecklist === true &&
+      input.kind === "complete" && (origin.tier === "pre" || origin.tier === "post");
+    if (!answeredChecklist && !reviewWalkOutcomeResolves(origin, input, todayText)) {
       const landed = await land();
       settleOwnLock();
       show(compose(notice, landed && landed.ok ? jumpLine : lostLine));
@@ -89961,7 +89966,9 @@ class BobNavigationHotkeysReviewWalkFollowMixin {
     } catch (_error) {
       // Keep whatever lock capture already took.
     }
-    reviewWalkRecordAnswer(this, origin, input, todayText);
+    if (!answeredChecklist) {
+      reviewWalkRecordAnswer(this, origin, input, todayText);
+    }
     const handledRefs = Array.isArray(input.handledRefs) ? input.handledRefs : [];
     let parked = false;
     try {

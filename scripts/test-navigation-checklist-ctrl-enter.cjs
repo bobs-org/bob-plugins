@@ -920,41 +920,54 @@ test("cycler v6 without a jump still advances PRE", async () => {
   assert.match(fixture.editor.getLine(fixture.editor.getCursor().line), /#pre Two/);
 });
 
-test("cycler v6 checklist jump parks the walk then lands on the pin", async () => {
-  const queue = queueFor(["One", "Two"]);
-  const jump = {
-    path: "dest.md",
-    text: "- [ ] #task Dest ^dest",
-    label: "Dest",
-  };
-  const complete = async (editor) => ({
-    ...await completeAtCursor()(editor),
-    jump,
+for (const [name, queue] of [
+  ["PRE", queueFor(["One", "Two"])],
+  ["last PRE", queueFor(["One"], [], [{ tier: "new", text: "Two", markdown: "- [ ] #task Two" }])],
+  ["POST", queueFor([], ["One", "Two"])],
+]) {
+  test(`cycler v6 ${name} checklist jump records once, parks, then lands on the pin`, async () => {
+    const jump = {
+      path: "dest.md",
+      text: "- [ ] #task Dest ^dest",
+      label: "Dest",
+    };
+    const complete = async (editor) => ({
+      ...await completeAtCursor()(editor),
+      jump,
+    });
+    const fixture = makePlugin({
+      queue,
+      content: queue.map((row) => row.originalMarkdown).join("\n"),
+      complete,
+      cyclerVersion: 6,
+    });
+    const landCalls = [];
+    const answers = [];
+    fixture.plugin.recordReviewAnswer = (...args) => answers.push(args);
+    fixture.plugin.landOnTask = async (target, options) => {
+      landCalls.push({ target, options });
+      return { ok: true, line: 0 };
+    };
+    await land(fixture.plugin, "first");
+    const firstText = fixture.plugin.reviewLanding.text;
+    const firstKey = fixture.plugin.reviewLanding.key;
+    clearNotices();
+    assert.deepEqual(await claim(fixture.plugin, fixture.editor), { ok: true });
+    assert.equal(landCalls.length, 1);
+    assert.equal(landCalls[0].target, jump);
+    assert.equal(landCalls[0].options && landCalls[0].options.silent, true);
+    assert.equal(fixture.plugin.reviewLanding, null, "the pin parks the walk");
+    assert.equal(fixture.plugin.reviewAnsweredKeys.keys.has(firstKey), true);
+    assert.equal(answers.length, 1, "the checklist claim records the answer exactly once");
+    assert.equal(answers[0][1], "checklist");
+    assert.equal(answers[0][2][0].key, firstKey);
+    assert.equal(notices.length, 1, "the close and jump share one toast");
+    assert.match(notices.at(-1), /✓ Done · One/);
+    assert.match(notices.at(-1), /↗ “Dest”/);
+    fixture.plugin.advanceReviewClock(400);
+    clearNotices();
+    assert.equal(await fixture.plugin.jumpToDueTask(1), true);
+    assert.notEqual(fixture.plugin.reviewLanding.text, firstText);
+    assert.match(fixture.plugin.reviewLanding.text, /Two/, "the next ]s resumes at the neighbour");
   });
-  const fixture = makePlugin({
-    queue,
-    content: queue.map((row) => row.originalMarkdown).join("\n"),
-    complete,
-    cyclerVersion: 6,
-  });
-  const landCalls = [];
-  fixture.plugin.landOnTask = async (target, options) => {
-    landCalls.push({ target, options });
-    return { ok: true, line: 0 };
-  };
-  await land(fixture.plugin, "first");
-  const firstText = fixture.plugin.reviewLanding.text;
-  clearNotices();
-  assert.deepEqual(await claim(fixture.plugin, fixture.editor), { ok: true });
-  assert.equal(landCalls.length, 1);
-  assert.equal(landCalls[0].target, jump);
-  assert.equal(landCalls[0].options && landCalls[0].options.silent, true);
-  assert.equal(fixture.plugin.reviewLanding, null, "the pin parks the walk");
-  assert.match(notices.at(-1), /✓ Done · One/);
-  assert.match(notices.at(-1), /↗ “Dest”/);
-  fixture.plugin.advanceReviewClock(400);
-  clearNotices();
-  assert.equal(await fixture.plugin.jumpToDueTask(1), true);
-  assert.notEqual(fixture.plugin.reviewLanding.text, firstText);
-  assert.match(fixture.plugin.reviewLanding.text, /Two/, "the next ]s resumes at the neighbour");
-});
+}

@@ -348,7 +348,7 @@ class BobNavigationHotkeysChecklistWalkMixin {
           line: Number.isInteger(entry.line) ? entry.line - 1 : 0,
           raw: entry.originalMarkdown,
         }],
-      });
+      }, { answeredChecklist: true });
       return true;
     }
 

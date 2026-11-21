@@ -171,37 +171,65 @@ function recordCardChoiceList(field, reportField) {
   const source = reportField && Array.isArray(reportField.choices) && reportField.choices.length
     ? reportField.choices
     : (Array.isArray(field && field.choices) ? field.choices : []);
-  return source.map((choice, index) => {
+  const rows = source.map((choice) => {
     const modeled = typeof albumHeaderChoiceModel === "function" ? albumHeaderChoiceModel(choice) : choice;
     const value = String((modeled && modeled.value) || (choice && choice.value) || "");
     const label = String((modeled && modeled.label) || (choice && (choice.label || choice.value)) || value);
     const count = modeled && modeled.count != null
       ? modeled.count
       : (choice && Number.isInteger(choice.count) ? choice.count : null);
-    return {
-      value,
-      label,
-      count,
-      schemaIndex: index,
-      digit: index < 9 ? index + 1 : null,
-    };
+    return { value, label, count };
   }).filter((choice) => choice.value);
+  const width = Math.max(1, String(rows.length || 1).length);
+  return rows.map((choice, index) => ({
+    ...choice,
+    schemaIndex: index,
+    code: String(index + 1).padStart(width, "0"),
+  }));
 }
 
-function recordCardFilterChoices(choices, filter) {
+function recordCardChoiceRange(choices) {
+  const rows = Array.isArray(choices) ? choices : [];
+  if (!rows.length) return "";
+  const first = String(rows[0].code || "");
+  const last = String(rows[rows.length - 1].code || "");
+  return first === last ? first : `${first}–${last}`;
+}
+
+function recordCardFilterChoices(choices, filter, prefix = "") {
   const rows = Array.isArray(choices) ? choices : [];
   const text = String(filter || "").trim().toLowerCase();
-  if (!text) return rows.slice();
-  return rows.filter((choice) => (
-    String(choice.label || "").toLowerCase().includes(text)
-    || String(choice.value || "").toLowerCase().includes(text)
-  ));
+  const codePrefix = String(prefix || "");
+  return rows.filter((choice) => {
+    if (codePrefix && !String(choice.code || "").startsWith(codePrefix)) return false;
+    if (!text) return true;
+    return String(choice.label || "").toLowerCase().includes(text)
+      || String(choice.value || "").toLowerCase().includes(text);
+  });
 }
 
-function recordCardChoiceByDigit(choices, digit) {
-  const number = Number(digit);
-  if (!Number.isInteger(number) || number < 1 || number > 9) return null;
-  return (Array.isArray(choices) ? choices : []).find((choice) => choice.digit === number) || null;
+function recordCardChoiceByCode(choices, code) {
+  const value = String(code == null ? "" : code);
+  if (!/^\d+$/.test(value)) return null;
+  return (Array.isArray(choices) ? choices : []).find((choice) => choice.code === value) || null;
+}
+
+function recordCardDigitStep({ choices, visible, prefix, digit } = {}) {
+  const rows = Array.isArray(choices) ? choices : [];
+  const candidates = Array.isArray(visible) ? visible : rows;
+  const current = String(prefix || "");
+  const key = String(digit == null ? "" : digit);
+  if (!/^\d$/.test(key)) return { kind: "none", typed: `${current}${key}` };
+  const typed = `${current}${key}`;
+  const width = Math.max(1, String(rows.length || 1).length);
+  if (typed.length === width) {
+    const choice = recordCardChoiceByCode(candidates, typed);
+    return choice ? { kind: "pick", choice } : { kind: "none", typed };
+  }
+  if (typed.length < width && candidates.some((choice) => String(choice.code || "").startsWith(typed))) {
+    return { kind: "prefix", prefix: typed };
+  }
+  return { kind: "none", typed };
 }
 
 function recordCardTodayValue(clock) {
@@ -258,11 +286,17 @@ function recordCardHintItems(state) {
     return [{ keys: "esc/q", label: "close menu", action: "close-menu" }];
   }
   if (state && state.stage && state.stage.kind === "choices") {
-    return [
+    const items = [];
+    if (state.choiceCodeRange) items.push({ keys: state.choiceCodeRange, label: "pick" });
+    if (state.choiceDigitPrefix) {
+      items.push({ keys: "⌫", label: `clear ${state.choiceDigitPrefix}` });
+    }
+    items.push(
       { keys: "⏎", label: "pick", action: "apply-choice" },
       { keys: "esc/q", label: "cancel", action: "cancel-stage" },
       { keys: "y", label: "YAML", action: "yaml" },
-    ];
+    );
+    return items;
   }
   if (state && state.stage) {
     return [
@@ -275,8 +309,7 @@ function recordCardHintItems(state) {
   const items = [{ keys: "j/k", label: "fields" }];
   if (target && target.kind === "choices" && writable) {
     items.push({ keys: "⏎", label: "choices", action: "open-stage" });
-    const count = Math.min(Array.isArray(target.field && target.field.choices) ? target.field.choices.length : 0, 9);
-    if (count > 0) items.push({ keys: count === 1 ? "1" : `1–${count}`, label: "pick" });
+    if (state.choiceCodeRange) items.push({ keys: state.choiceCodeRange, label: "pick" });
   } else if (target && writable && target.stageKind) {
     items.push({ keys: "⏎", label: "edit", action: "open-stage" });
   } else if (target) {
@@ -395,6 +428,7 @@ function recordCardCaptureStage(state) {
     kind: state.stage.kind || "",
     field: state.stage.field || "",
     filter: state.choiceFilter || "",
+    choiceDigitPrefix: state.choiceDigitPrefix || "",
     selectedChoice: state.selectedChoice || "",
     draft: state.stageDraft || "",
     caret: state.stageCaret || null,
@@ -404,16 +438,37 @@ function recordCardCaptureStage(state) {
   };
 }
 
-function recordCardRestoreStage(captured, targets) {
+function recordCardRestoreStage(captured, targets, report) {
   if (!captured || !captured.kind || !captured.field) return null;
-  if (!(Array.isArray(targets) ? targets : []).some((target) => target.key === captured.field)) return null;
-  return captured;
+  const target = recordCardTargetByKey(targets, captured.field);
+  if (!target) return null;
+  const restored = { ...captured, choiceDigitPrefix: captured.choiceDigitPrefix || "" };
+  if (restored.kind === "choices" && restored.choiceDigitPrefix) {
+    const reportField = recordCardFieldFromReport(report, target.key);
+    const choices = recordCardChoiceList(target.field, reportField);
+    const textVisible = recordCardFilterChoices(choices, restored.filter);
+    if (!textVisible.some((choice) => choice.code.startsWith(restored.choiceDigitPrefix))) {
+      restored.choiceDigitPrefix = "";
+    }
+    const visible = recordCardFilterChoices(textVisible, "", restored.choiceDigitPrefix);
+    if (!visible.some((choice) => choice.value === restored.selectedChoice)) {
+      restored.selectedChoice = visible[0] ? visible[0].value : "";
+    }
+  } else {
+    restored.choiceDigitPrefix = "";
+  }
+  return restored;
 }
 
 function recordCardLiveAnnouncement(kind, payload) {
   if (kind === "select") return String((payload && (payload.label || payload.key)) || "");
   if (kind === "saved") return "Saved";
   if (kind === "refusal") return String((payload && payload.message) || "Refused");
+  if (kind === "choice-prefix") {
+    const range = String((payload && payload.range) || "");
+    const [first, last] = range.split("–");
+    return `Choices ${first || range}${last ? ` to ${last}` : ""} — type the next digit`;
+  }
   if (kind === "stale") return "This record changed elsewhere";
   return "";
 }

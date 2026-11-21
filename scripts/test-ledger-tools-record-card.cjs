@@ -344,19 +344,229 @@ test("targets include ghosts in schema order and skip identity rows", () => {
   assert.equal(helpers.recordCardHomeEnd(targets, "end"), "notes");
 });
 
-test("choice digits stay in schema order while filtering", () => {
+test("choice codes stay padded and in schema order while filtering", () => {
   const field = albumEntry().fields[0];
   const all = helpers.recordCardChoiceList(field);
   assert.equal(all.length, 10);
-  assert.equal(all[9].digit, null);
-  assert.equal(helpers.recordCardChoiceByDigit(all, 2).value, "loved");
+  assert.deepEqual(all.map((row) => row.code), ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10"]);
+  assert.equal(helpers.recordCardChoiceByCode(all, "02").value, "loved");
   const filtered = helpers.recordCardFilterChoices(all, "loved");
   assert.equal(filtered.length, 1);
-  assert.equal(filtered[0].digit, 2);
-  assert.equal(helpers.recordCardChoiceByDigit(filtered, 1), null);
+  assert.equal(filtered[0].code, "02");
+  assert.equal(helpers.recordCardChoiceByCode(filtered, "01"), null);
   assert.equal(helpers.recordCardFilterChoices(all, "nope").length, 0);
+  const restored = helpers.recordCardRestoreStage(
+    { kind: "choices", field: "status", filter: "", choiceDigitPrefix: "2", selectedChoice: "to_try" },
+    [{ key: "status", field }],
+  );
+  assert.equal(restored.choiceDigitPrefix, "", "refresh drops a prefix that no longer matches");
+  const withEmpty = helpers.recordCardChoiceList({ choices: [choice("", "Empty"), choice("kept", "Kept")] });
+  assert.deepEqual(withEmpty.map((row) => [row.schemaIndex, row.code]), [[0, "1"]]);
   assert.equal(helpers.recordCardTodayValue(CLOCK), "2026-11-17");
+  assert.equal(helpers.recordCardLiveAnnouncement("choice-prefix", { range: "01–09" }), "Choices 01 to 09 — type the next digit");
   assert.match(helpers.recordCardRequiredClearMessage({ label: "Status", kind: "choices", field }), /Status is required — pick one of 10 choices/);
+});
+
+test("choice digit steps handle one, two, and three digit codes", () => {
+  const step = helpers.recordCardDigitStep;
+  const oneDigit = helpers.recordCardChoiceList(albumEntry().fields[1]);
+  assert.equal(step({ choices: oneDigit, digit: "2" }).choice.value, "pizza");
+
+  const tenFields = albumEntry().fields[0].choices;
+  const twoDigit = helpers.recordCardChoiceList({ choices: tenFields });
+  assert.deepEqual(step({ choices: twoDigit, digit: "1" }), { kind: "prefix", prefix: "1" }, "a unique prefix still needs its final digit");
+  assert.equal(step({ choices: twoDigit, prefix: "1", digit: "0" }).choice.value, "c10");
+  assert.equal(step({ choices: twoDigit, prefix: "0", digit: "0" }).kind, "none", "00 is out of range");
+  assert.equal(step({ choices: twoDigit, prefix: "1", digit: "1" }).kind, "none", "an unavailable second digit does not pick");
+
+  const seventeen = helpers.recordCardChoiceList({ choices: Array.from({ length: 17 }, (_, i) => choice(`c${i + 1}`, `Choice ${i + 1}`)) });
+  assert.equal(step({ choices: seventeen, digit: "0" }).prefix, "0");
+  assert.equal(step({ choices: seventeen, prefix: "0", digit: "7" }).choice.value, "c7");
+  assert.equal(step({ choices: seventeen, digit: "9" }).kind, "none", "a first digit with no codes is ignored");
+  const visibleEight = helpers.recordCardFilterChoices(seventeen, "choice 8");
+  assert.equal(step({ choices: seventeen, visible: visibleEight, prefix: "0", digit: "7" }).kind, "none", "text-hidden codes cannot be picked");
+  assert.equal(step({ choices: seventeen, prefix: "2", digit: "0" }).kind, "none");
+
+  const oneHundred = helpers.recordCardChoiceList({ choices: Array.from({ length: 100 }, (_, i) => choice(`c${i + 1}`, `Choice ${i + 1}`)) });
+  assert.equal(oneHundred[0].code, "001");
+  assert.equal(oneHundred[99].code, "100");
+  assert.equal(step({ choices: oneHundred, digit: "0" }).prefix, "0");
+  assert.equal(step({ choices: oneHundred, prefix: "0", digit: "1" }).prefix, "01");
+  assert.equal(step({ choices: oneHundred, prefix: "01", digit: "0" }).choice.value, "c10");
+  assert.equal(step({ choices: oneHundred, prefix: "99", digit: "9" }).kind, "none");
+});
+
+test("choice-stage digits use padded codes and save only after the full code", async () => {
+  const { plugin, modal } = await openCard();
+  try {
+    modal.recordOpenStage("choices", "status");
+    let input = modal.contentEl.querySelector("[data-record-input='choice-filter']");
+    const before = plugin._applies.length;
+    const repeat = keyEvent("0", { target: input, repeat: true });
+    modal.recordOnKeyDown(repeat);
+    assert.equal(repeat.defaultPrevented, true);
+    assert.equal(modal.choiceDigitPrefix, "", "a held digit cannot create a longer code");
+    const chord = keyEvent("0", { target: input, ctrlKey: true });
+    modal.recordOnKeyDown(chord);
+    assert.equal(chord.defaultPrevented, undefined, "modified digit chords stay untouched");
+    const first = keyEvent("0", { target: input });
+    modal.recordOnKeyDown(first);
+    assert.equal(first.defaultPrevented, true);
+    assert.equal(modal.choiceFilter, "", "the digit never enters filter text");
+    assert.equal(modal.choiceDigitPrefix, "0");
+    assert.equal(plugin._applies.length, before);
+    assert.deepEqual(
+      modal.contentEl.querySelectorAll(".bob-record-card-choice-badge").map((badge) => badge.textContent),
+      ["01", "02", "03", "04", "05", "06", "07", "08", "09"],
+    );
+    assert.equal(modal.contentEl.querySelector(".bob-record-card-choice-pending").textContent, "0…");
+    assert.equal(modal.contentEl.querySelector(".bob-record-card-choice-badge-typed").textContent, "0");
+    assert.ok(helpers.recordCardHintItems(modal.recordStatusModel()).some((item) => item.keys === "01–09"));
+    assert.ok(helpers.recordCardHintItems(modal.recordStatusModel()).some((item) => item.label === "clear 0"));
+    assert.equal(modal.recordStatusModel().choiceCodeWidth, 2);
+
+    input = modal.contentEl.querySelector("[data-record-input='choice-filter']");
+    const second = keyEvent("7", { target: input });
+    modal.recordOnKeyDown(second);
+    await pause(0);
+    assert.equal(second.defaultPrevented, true);
+    assert.equal(plugin._applies.length, before + 1);
+    assert.deepEqual(plugin._applies.at(-1).ops, [{ op: "field.set", field: "status", value: "c7" }]);
+    assert.equal(modal.stage, null);
+  } finally { modal.close(); }
+});
+
+test("choice prefixes pop with Backspace, clear on text edits, and reject unmatched codes", async () => {
+  const { plugin, modal } = await openCard();
+  try {
+    modal.recordOpenStage("choices", "status");
+    let input = modal.contentEl.querySelector("[data-record-input='choice-filter']");
+    modal.recordOnKeyDown(keyEvent("1", { target: input }));
+    assert.equal(modal.choiceDigitPrefix, "1");
+    assert.equal(modal.selectedChoice, "c10", "a one-row prefix is not an automatic pick");
+    assert.equal(plugin._applies.length, 0);
+
+    input = modal.contentEl.querySelector("[data-record-input='choice-filter']");
+    const backspace = keyEvent("Backspace", { target: input });
+    modal.recordOnKeyDown(backspace);
+    assert.equal(backspace.defaultPrevented, true);
+    assert.equal(modal.choiceDigitPrefix, "");
+    assert.equal(modal.contentEl.querySelectorAll(".bob-record-card-choice").length, 10);
+    assert.equal(modal.contentEl.querySelector(".bob-record-card-choice-pending"), null);
+
+    input = modal.contentEl.querySelector("[data-record-input='choice-filter']");
+    modal.recordOnKeyDown(keyEvent("1", { target: input }));
+    input = modal.contentEl.querySelector("[data-record-input='choice-filter']");
+    input.value = "ten";
+    input.dispatchEvent({ type: "input", target: input });
+    assert.equal(modal.choiceDigitPrefix, "", "editing the text filter clears the code prefix");
+    assert.deepEqual(
+      modal.contentEl.querySelectorAll(".bob-record-card-choice-badge").map((badge) => badge.textContent),
+      ["10"],
+    );
+
+    input = modal.contentEl.querySelector("[data-record-input='choice-filter']");
+    modal.recordOnKeyDown(keyEvent("1", { target: input }));
+    input = modal.contentEl.querySelector("[data-record-input='choice-filter']");
+    const unmatched = keyEvent("1", { target: input });
+    modal.recordOnKeyDown(unmatched);
+    assert.equal(unmatched.defaultPrevented, true);
+    assert.equal(modal.refusalMessage, "No choice 11 · choices are 01–10");
+    assert.equal(modal.choiceDigitPrefix, "1", "a non-match keeps the pending prefix");
+    assert.equal(plugin._applies.length, 0);
+  } finally { modal.close(); }
+});
+
+test("browse digits stage large choices and keep one-digit choices direct", async () => {
+  const { plugin, modal } = await openCard();
+  try {
+    modal.recordSelect("status");
+    const unmatched = keyEvent("2");
+    modal.recordOnKeyDown(unmatched);
+    assert.equal(unmatched.defaultPrevented, true);
+    assert.equal(modal.stage, null, "a nonmatching first digit does not open the stage");
+    assert.equal(modal.refusalMessage, "No choice 2 · choices are 01–10");
+    assert.equal(plugin._applies.length, 0);
+
+    modal.recordOnKeyDown(keyEvent("1"));
+    assert.equal(modal.stage.kind, "choices");
+    assert.equal(modal.choiceDigitPrefix, "1");
+    assert.equal(modal.selectedChoice, "c10");
+    assert.equal(plugin._applies.length, 0);
+  } finally { modal.close(); }
+
+  const staged = await openCard();
+  try {
+    staged.modal.recordOpenStage("choices", "cuisine");
+    const input = staged.modal.contentEl.querySelector("[data-record-input='choice-filter']");
+    staged.modal.recordOnKeyDown(keyEvent("2", { target: input }));
+    await pause(0);
+    assert.deepEqual(staged.plugin._applies.at(-1).ops, [{ op: "field.set", field: "cuisine", value: "pizza" }]);
+  } finally { staged.modal.close(); }
+
+  const browse = await openCard();
+  try {
+    browse.modal.recordSelect("cuisine");
+    browse.modal.recordOnKeyDown(keyEvent("2"));
+    await pause(0);
+    assert.deepEqual(browse.plugin._applies.at(-1).ops, [{ op: "field.set", field: "cuisine", value: "pizza" }]);
+  } finally { browse.modal.close(); }
+});
+
+test("large list-choice fields keep browse digits inert", async () => {
+  const { plugin, modal } = await openCard();
+  try {
+    const multi = field("multi", "choices", {
+      list: true,
+      choices: Array.from({ length: 10 }, (_, i) => choice(`v${i + 1}`, `Value ${i + 1}`)),
+    });
+    modal.sheetModel.gate.album.fields.push(multi);
+    modal.latestReport.fields.push(multi);
+    modal.recordSelect("multi");
+    const event = keyEvent("1");
+    modal.recordOnKeyDown(event);
+    assert.equal(event.defaultPrevented, true);
+    assert.equal(modal.stage, null);
+    assert.equal(plugin._applies.length, 0);
+  } finally { modal.close(); }
+});
+
+test("prefix-filtered navigation, Enter, and keep-stage refresh use visible choices", async () => {
+  const { plugin, modal } = await openCard();
+  try {
+    modal.recordOpenStage("choices", "status");
+    let input = modal.contentEl.querySelector("[data-record-input='choice-filter']");
+    modal.recordOnKeyDown(keyEvent("0", { target: input }));
+    assert.equal(modal.selectedChoice, "to_try");
+
+    input = modal.contentEl.querySelector("[data-record-input='choice-filter']");
+    modal.recordOnKeyDown(keyEvent("ArrowDown", { target: input }));
+    assert.equal(modal.selectedChoice, "loved");
+    input = modal.contentEl.querySelector("[data-record-input='choice-filter']");
+    modal.recordOnKeyDown(keyEvent("n", { ctrlKey: true, target: input }));
+    assert.equal(modal.selectedChoice, "skip");
+    input = modal.contentEl.querySelector("[data-record-input='choice-filter']");
+    modal.recordOnKeyDown(keyEvent("p", { ctrlKey: true, target: input }));
+    assert.equal(modal.selectedChoice, "loved");
+
+    const outsideBackspace = keyEvent("Backspace", { target: modal.contentEl });
+    modal.recordOnKeyDown(outsideBackspace);
+    assert.equal(outsideBackspace.defaultPrevented, true);
+    assert.equal(modal.choiceDigitPrefix, "");
+    input = modal.contentEl.querySelector("[data-record-input='choice-filter']");
+    modal.recordOnKeyDown(keyEvent("0", { target: input }));
+    assert.equal(modal.choiceDigitPrefix, "0");
+    await modal.recordRefresh({ keepStage: true });
+    assert.equal(modal.stage.kind, "choices");
+    assert.equal(modal.choiceDigitPrefix, "0");
+    assert.equal(modal.contentEl.querySelectorAll(".bob-record-card-choice").length, 9);
+
+    input = modal.contentEl.querySelector("[data-record-input='choice-filter']");
+    modal.recordOnKeyDown(keyEvent("Enter", { target: input }));
+    await pause(0);
+    assert.deepEqual(plugin._applies.at(-1).ops, [{ op: "field.set", field: "status", value: "loved" }]);
+    assert.equal(plugin._applies.length, 1);
+  } finally { modal.close(); }
 });
 
 test("Ctrl+N/P helper accepts only the exact navigation chords", () => {
@@ -549,7 +759,11 @@ test("choice click, Enter, and digit emit one field.set with no preview", async 
   assert.deepEqual(plugin._applies[0].ops, [{ op: "field.set", field: "status", value: "loved" }]);
   assert.equal(plugin._applies[0].expect, "sha256:rec1");
   assert.match(modal.contentEl.textContent, /Saved/);
-  modal.recordOnKeyDown(keyEvent("2"));
+  modal.recordOnKeyDown(keyEvent("0"));
+  assert.equal(modal.stage.kind, "choices");
+  assert.equal(modal.choiceDigitPrefix, "0");
+  assert.equal(plugin._applies.length, 1);
+  modal.recordOnKeyDown(keyEvent("2", { target: modal.contentEl.querySelector("[data-record-input='choice-filter']") }));
   await pause(0);
   assert.equal(plugin._applies.length, 2);
 });

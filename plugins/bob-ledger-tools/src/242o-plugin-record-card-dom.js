@@ -183,7 +183,16 @@ function recordCardPaintChoices(host, choices, options, doc) {
   filter.setAttribute("aria-label", "Filter choices");
   filter.setAttribute("placeholder", "Filter choices");
   filter.value = (options && options.filter) || "";
-  host.appendChild(filter);
+  const filterRow = recordCardEl(doc, "div", "bob-record-card-choice-filter-row");
+  filterRow.appendChild(filter);
+  const prefix = String((options && options.choiceDigitPrefix) || "");
+  if (prefix) {
+    const pending = recordCardEl(doc, "span", "bob-record-card-choice-pending");
+    pending.setAttribute("aria-label", `Pending choice code ${prefix}; type the next digit`);
+    recordCardText(pending, `${prefix}…`);
+    filterRow.appendChild(pending);
+  }
+  host.appendChild(filterRow);
   const list = recordCardEl(doc, "div", "bob-record-card-choice-list");
   list.setAttribute("role", "listbox");
   list.setAttribute("aria-label", "Choices");
@@ -214,9 +223,17 @@ function recordCardPaintChoices(host, choices, options, doc) {
     } else {
       row.setAttribute("aria-selected", "false");
     }
-    if (choice.digit) {
+    if (choice.code) {
       const badge = recordCardEl(doc, "kbd", "bob-record-card-choice-badge");
-      recordCardText(badge, String(choice.digit));
+      const typed = prefix && String(choice.code).startsWith(prefix) ? prefix : "";
+      if (typed) {
+        const emphasis = recordCardEl(doc, "span", "bob-record-card-choice-badge-typed");
+        recordCardText(emphasis, typed);
+        badge.appendChild(emphasis);
+        if (typeof doc.createTextNode === "function") badge.appendChild(doc.createTextNode(String(choice.code).slice(typed.length)));
+      } else {
+        recordCardText(badge, String(choice.code));
+      }
       row.appendChild(badge);
     }
     const label = recordCardEl(doc, "span", "bob-record-card-choice-label");

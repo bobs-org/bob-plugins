@@ -11523,14 +11523,28 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
 .bob-record-card-stage,
 .bob-record-card-stage-host { margin-top: 0.35em; }
 .bob-record-card-choice-filter {
-  width: 100%;
-  margin-bottom: 0.35em;
+  flex: 1;
+  min-width: 0;
   padding: 0.3em 0.45em;
   border: 1px solid var(--background-modifier-border);
   border-radius: 6px;
   background: var(--background-primary);
   color: inherit;
   font: inherit;
+}
+.bob-record-card-choice-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+  margin-bottom: 0.35em;
+}
+.bob-record-card-choice-pending {
+  flex: none;
+  padding: 0.15em 0.4em;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  color: var(--interactive-accent);
+  font-variant-numeric: tabular-nums;
 }
 .bob-record-card-choice-list { display: flex; flex-direction: column; gap: 0.15em; }
 .bob-record-card-choice {
@@ -11562,6 +11576,11 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
   background: var(--background-modifier-border);
   font-size: 0.82em;
   text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.bob-record-card-choice-badge-typed {
+  color: var(--interactive-accent);
+  font-weight: 700;
 }
 .bob-record-card-choice-count {
   margin-inline-start: auto;

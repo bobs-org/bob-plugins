@@ -165,6 +165,7 @@ Object.assign(RecordCardModal.prototype, {
   recordCancelStageSilent() {
     this.stage = null;
     this.choiceFilter = "";
+    this.choiceDigitPrefix = "";
     this.selectedChoice = "";
     this.stageDraft = "";
     this.stageCaret = null;
@@ -671,6 +672,23 @@ Object.assign(RecordCardModal.prototype, {
       const kind = input.getAttribute?.("data-record-input") || "";
       if (kind === "choice-filter") {
         this.choiceFilter = String(input.value || "");
+        this.choiceDigitPrefix = "";
+        if (this.stage && this.stage.kind === "choices") {
+          const target = recordCardTargetByKey(this.recordTargets(), this.stage.field);
+          const reportField = recordCardFieldFromReport(this.latestReport, target && target.key);
+          const visible = recordCardFilterChoices(
+            recordCardChoiceList(target && target.field, reportField),
+            this.choiceFilter,
+          );
+          if (!visible.some((choice) => choice.value === this.selectedChoice)) {
+            this.selectedChoice = visible[0] ? visible[0].value : "";
+          }
+          if (this.statusKind === "refusal") {
+            this.statusKind = this.writable ? "" : this.statusKind;
+            this.refusalMessage = "";
+            this.refusalHint = "";
+          }
+        }
         if (typeof input.selectionStart === "number") {
           this.stageCaret = { start: input.selectionStart, end: input.selectionEnd };
         }

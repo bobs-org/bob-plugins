@@ -107124,37 +107124,65 @@ function recordCardChoiceList(field, reportField) {
   const source = reportField && Array.isArray(reportField.choices) && reportField.choices.length
     ? reportField.choices
     : (Array.isArray(field && field.choices) ? field.choices : []);
-  return source.map((choice, index) => {
+  const rows = source.map((choice) => {
     const modeled = typeof albumHeaderChoiceModel === "function" ? albumHeaderChoiceModel(choice) : choice;
     const value = String((modeled && modeled.value) || (choice && choice.value) || "");
     const label = String((modeled && modeled.label) || (choice && (choice.label || choice.value)) || value);
     const count = modeled && modeled.count != null
       ? modeled.count
       : (choice && Number.isInteger(choice.count) ? choice.count : null);
-    return {
-      value,
-      label,
-      count,
-      schemaIndex: index,
-      digit: index < 9 ? index + 1 : null,
-    };
+    return { value, label, count };
   }).filter((choice) => choice.value);
+  const width = Math.max(1, String(rows.length || 1).length);
+  return rows.map((choice, index) => ({
+    ...choice,
+    schemaIndex: index,
+    code: String(index + 1).padStart(width, "0"),
+  }));
 }
 
-function recordCardFilterChoices(choices, filter) {
+function recordCardChoiceRange(choices) {
+  const rows = Array.isArray(choices) ? choices : [];
+  if (!rows.length) return "";
+  const first = String(rows[0].code || "");
+  const last = String(rows[rows.length - 1].code || "");
+  return first === last ? first : `${first}–${last}`;
+}
+
+function recordCardFilterChoices(choices, filter, prefix = "") {
   const rows = Array.isArray(choices) ? choices : [];
   const text = String(filter || "").trim().toLowerCase();
-  if (!text) return rows.slice();
-  return rows.filter((choice) => (
-    String(choice.label || "").toLowerCase().includes(text)
-    || String(choice.value || "").toLowerCase().includes(text)
-  ));
+  const codePrefix = String(prefix || "");
+  return rows.filter((choice) => {
+    if (codePrefix && !String(choice.code || "").startsWith(codePrefix)) return false;
+    if (!text) return true;
+    return String(choice.label || "").toLowerCase().includes(text)
+      || String(choice.value || "").toLowerCase().includes(text);
+  });
 }
 
-function recordCardChoiceByDigit(choices, digit) {
-  const number = Number(digit);
-  if (!Number.isInteger(number) || number < 1 || number > 9) return null;
-  return (Array.isArray(choices) ? choices : []).find((choice) => choice.digit === number) || null;
+function recordCardChoiceByCode(choices, code) {
+  const value = String(code == null ? "" : code);
+  if (!/^\d+$/.test(value)) return null;
+  return (Array.isArray(choices) ? choices : []).find((choice) => choice.code === value) || null;
+}
+
+function recordCardDigitStep({ choices, visible, prefix, digit } = {}) {
+  const rows = Array.isArray(choices) ? choices : [];
+  const candidates = Array.isArray(visible) ? visible : rows;
+  const current = String(prefix || "");
+  const key = String(digit == null ? "" : digit);
+  if (!/^\d$/.test(key)) return { kind: "none", typed: `${current}${key}` };
+  const typed = `${current}${key}`;
+  const width = Math.max(1, String(rows.length || 1).length);
+  if (typed.length === width) {
+    const choice = recordCardChoiceByCode(candidates, typed);
+    return choice ? { kind: "pick", choice } : { kind: "none", typed };
+  }
+  if (typed.length < width && candidates.some((choice) => String(choice.code || "").startsWith(typed))) {
+    return { kind: "prefix", prefix: typed };
+  }
+  return { kind: "none", typed };
 }
 
 function recordCardTodayValue(clock) {
@@ -107211,11 +107239,17 @@ function recordCardHintItems(state) {
     return [{ keys: "esc/q", label: "close menu", action: "close-menu" }];
   }
   if (state && state.stage && state.stage.kind === "choices") {
-    return [
+    const items = [];
+    if (state.choiceCodeRange) items.push({ keys: state.choiceCodeRange, label: "pick" });
+    if (state.choiceDigitPrefix) {
+      items.push({ keys: "⌫", label: `clear ${state.choiceDigitPrefix}` });
+    }
+    items.push(
       { keys: "⏎", label: "pick", action: "apply-choice" },
       { keys: "esc/q", label: "cancel", action: "cancel-stage" },
       { keys: "y", label: "YAML", action: "yaml" },
-    ];
+    );
+    return items;
   }
   if (state && state.stage) {
     return [
@@ -107228,8 +107262,7 @@ function recordCardHintItems(state) {
   const items = [{ keys: "j/k", label: "fields" }];
   if (target && target.kind === "choices" && writable) {
     items.push({ keys: "⏎", label: "choices", action: "open-stage" });
-    const count = Math.min(Array.isArray(target.field && target.field.choices) ? target.field.choices.length : 0, 9);
-    if (count > 0) items.push({ keys: count === 1 ? "1" : `1–${count}`, label: "pick" });
+    if (state.choiceCodeRange) items.push({ keys: state.choiceCodeRange, label: "pick" });
   } else if (target && writable && target.stageKind) {
     items.push({ keys: "⏎", label: "edit", action: "open-stage" });
   } else if (target) {
@@ -107348,6 +107381,7 @@ function recordCardCaptureStage(state) {
     kind: state.stage.kind || "",
     field: state.stage.field || "",
     filter: state.choiceFilter || "",
+    choiceDigitPrefix: state.choiceDigitPrefix || "",
     selectedChoice: state.selectedChoice || "",
     draft: state.stageDraft || "",
     caret: state.stageCaret || null,
@@ -107357,16 +107391,37 @@ function recordCardCaptureStage(state) {
   };
 }
 
-function recordCardRestoreStage(captured, targets) {
+function recordCardRestoreStage(captured, targets, report) {
   if (!captured || !captured.kind || !captured.field) return null;
-  if (!(Array.isArray(targets) ? targets : []).some((target) => target.key === captured.field)) return null;
-  return captured;
+  const target = recordCardTargetByKey(targets, captured.field);
+  if (!target) return null;
+  const restored = { ...captured, choiceDigitPrefix: captured.choiceDigitPrefix || "" };
+  if (restored.kind === "choices" && restored.choiceDigitPrefix) {
+    const reportField = recordCardFieldFromReport(report, target.key);
+    const choices = recordCardChoiceList(target.field, reportField);
+    const textVisible = recordCardFilterChoices(choices, restored.filter);
+    if (!textVisible.some((choice) => choice.code.startsWith(restored.choiceDigitPrefix))) {
+      restored.choiceDigitPrefix = "";
+    }
+    const visible = recordCardFilterChoices(textVisible, "", restored.choiceDigitPrefix);
+    if (!visible.some((choice) => choice.value === restored.selectedChoice)) {
+      restored.selectedChoice = visible[0] ? visible[0].value : "";
+    }
+  } else {
+    restored.choiceDigitPrefix = "";
+  }
+  return restored;
 }
 
 function recordCardLiveAnnouncement(kind, payload) {
   if (kind === "select") return String((payload && (payload.label || payload.key)) || "");
   if (kind === "saved") return "Saved";
   if (kind === "refusal") return String((payload && payload.message) || "Refused");
+  if (kind === "choice-prefix") {
+    const range = String((payload && payload.range) || "");
+    const [first, last] = range.split("–");
+    return `Choices ${first || range}${last ? ` to ${last}` : ""} — type the next digit`;
+  }
   if (kind === "stale") return "This record changed elsewhere";
   return "";
 }
@@ -107687,7 +107742,16 @@ function recordCardPaintChoices(host, choices, options, doc) {
   filter.setAttribute("aria-label", "Filter choices");
   filter.setAttribute("placeholder", "Filter choices");
   filter.value = (options && options.filter) || "";
-  host.appendChild(filter);
+  const filterRow = recordCardEl(doc, "div", "bob-record-card-choice-filter-row");
+  filterRow.appendChild(filter);
+  const prefix = String((options && options.choiceDigitPrefix) || "");
+  if (prefix) {
+    const pending = recordCardEl(doc, "span", "bob-record-card-choice-pending");
+    pending.setAttribute("aria-label", `Pending choice code ${prefix}; type the next digit`);
+    recordCardText(pending, `${prefix}…`);
+    filterRow.appendChild(pending);
+  }
+  host.appendChild(filterRow);
   const list = recordCardEl(doc, "div", "bob-record-card-choice-list");
   list.setAttribute("role", "listbox");
   list.setAttribute("aria-label", "Choices");
@@ -107718,9 +107782,17 @@ function recordCardPaintChoices(host, choices, options, doc) {
     } else {
       row.setAttribute("aria-selected", "false");
     }
-    if (choice.digit) {
+    if (choice.code) {
       const badge = recordCardEl(doc, "kbd", "bob-record-card-choice-badge");
-      recordCardText(badge, String(choice.digit));
+      const typed = prefix && String(choice.code).startsWith(prefix) ? prefix : "";
+      if (typed) {
+        const emphasis = recordCardEl(doc, "span", "bob-record-card-choice-badge-typed");
+        recordCardText(emphasis, typed);
+        badge.appendChild(emphasis);
+        if (typeof doc.createTextNode === "function") badge.appendChild(doc.createTextNode(String(choice.code).slice(typed.length)));
+      } else {
+        recordCardText(badge, String(choice.code));
+      }
       row.appendChild(badge);
     }
     const label = recordCardEl(doc, "span", "bob-record-card-choice-label");
@@ -107932,6 +108004,7 @@ class RecordCardModal extends RecordCardModalBase {
     this.selectedIndex = 0;
     this.stage = null;
     this.choiceFilter = "";
+    this.choiceDigitPrefix = "";
     this.selectedChoice = "";
     this.stageDraft = "";
     this.stageCaret = null;
@@ -107977,6 +108050,16 @@ class RecordCardModal extends RecordCardModalBase {
 
   recordStatusModel() {
     const target = this.recordSelected();
+    const choiceTarget = this.stage && this.stage.kind === "choices"
+      ? recordCardTargetByKey(this.recordTargets(), this.stage.field)
+      : target;
+    const reportField = recordCardFieldFromReport(this.latestReport, choiceTarget && choiceTarget.key);
+    const allChoices = choiceTarget && choiceTarget.kind === "choices"
+      ? recordCardChoiceList(choiceTarget.field, reportField)
+      : [];
+    const visibleChoices = this.stage && this.stage.kind === "choices"
+      ? recordCardFilterChoices(allChoices, this.choiceFilter, this.choiceDigitPrefix)
+      : allChoices;
     const undo = this.sessionState && this.sessionState.undoAvailable;
     return {
       statusKind: this.statusKind,
@@ -107991,6 +108074,9 @@ class RecordCardModal extends RecordCardModalBase {
       menuOpen: this.menuOpen,
       stage: this.stage,
       target,
+      choiceCodeRange: recordCardChoiceRange(visibleChoices),
+      choiceCodeWidth: allChoices.length ? allChoices[0].code.length : 1,
+      choiceDigitPrefix: this.choiceDigitPrefix,
       undoAvailable: Boolean(undo || (this.recordPlugin && this.recordPlugin.recordUpdateLastUndo?.(this.recordPath))),
     };
   }
@@ -108001,7 +108087,7 @@ class RecordCardModal extends RecordCardModalBase {
     const allChoices = target && target.kind === "choices"
       ? recordCardChoiceList(target.field, reportField)
       : [];
-    const visibleChoices = recordCardFilterChoices(allChoices, this.choiceFilter);
+    const visibleChoices = recordCardFilterChoices(allChoices, this.choiceFilter, this.choiceDigitPrefix);
     return {
       selectedKey: this.selectedKey,
       targets: this.recordTargets(),
@@ -108321,32 +108407,21 @@ class RecordCardModal extends RecordCardModalBase {
   }
 
   recordMoveChoice(delta) {
-    const target = this.recordSelected();
+    const target = this.stage && this.stage.kind === "choices"
+      ? recordCardTargetByKey(this.recordTargets(), this.stage.field)
+      : this.recordSelected();
     const reportField = recordCardFieldFromReport(this.latestReport, target && target.key);
     const visible = recordCardFilterChoices(
       recordCardChoiceList(target && target.field, reportField),
       this.choiceFilter,
+      this.choiceDigitPrefix,
     );
     if (!visible.length) return;
     let index = visible.findIndex((choice) => choice.value === this.selectedChoice);
-    if (index < 0) index = 0;
+    if (index < 0) index = Number(delta) < 0 ? 0 : -1;
     index = (index + delta + visible.length) % visible.length;
     this.selectedChoice = visible[index].value;
     this.paintRecordCard();
-  }
-
-  recordDigit(digit, fromStage) {
-    const target = this.recordSelected();
-    if (!target || target.kind !== "choices") return;
-    const reportField = recordCardFieldFromReport(this.latestReport, target.key);
-    const all = recordCardChoiceList(target.field, reportField);
-    const choice = recordCardChoiceByDigit(all, digit);
-    if (!choice) return;
-    if (fromStage) {
-      const visible = recordCardFilterChoices(all, this.choiceFilter);
-      if (!visible.some((item) => item.value === choice.value)) return;
-    }
-    void this.recordApplyChoice(choice.value);
   }
 
   recordOps(op) {
@@ -108599,22 +108674,43 @@ class RecordCardModal extends RecordCardModalBase {
     this.warning = (this.sheetModel && this.sheetModel.warning) || this.warning;
     const captured = options.keepStage ? recordCardCaptureStage({
       stage: this.stage, choiceFilter: this.choiceFilter, selectedChoice: this.selectedChoice,
+      choiceDigitPrefix: this.choiceDigitPrefix,
       stageDraft: this.stageDraft, stageCaret: this.stageCaret,
     }) : null;
     const targets = this.recordTargets();
     this.selectedKey = recordCardPreserveSelection(targets, this.selectedKey, this.selectedIndex);
     this.selectedIndex = Math.max(0, targets.findIndex((target) => target.key === this.selectedKey));
-    const restored = recordCardRestoreStage(captured, targets);
+    const restored = recordCardRestoreStage(captured, targets, this.latestReport);
     if (restored) {
       this.stage = { kind: restored.kind, field: restored.field };
       this.choiceFilter = restored.filter || "";
+      this.choiceDigitPrefix = restored.choiceDigitPrefix || "";
       this.selectedChoice = restored.selectedChoice || "";
       this.stageDraft = restored.draft || "";
     } else if (!options.keepStage) {
       this.stage = null;
+      this.choiceDigitPrefix = "";
     }
     this.paintRecordCard();
     await this.recordRead();
+    if (this.stage && this.stage.kind === "choices") {
+      const target = recordCardTargetByKey(this.recordTargets(), this.stage.field);
+      const reportField = recordCardFieldFromReport(this.latestReport, target && target.key);
+      const allChoices = recordCardChoiceList(target && target.field, reportField);
+      const textVisible = recordCardFilterChoices(allChoices, this.choiceFilter);
+      const prefixBeforeRead = this.choiceDigitPrefix;
+      const selectedBeforeRead = this.selectedChoice;
+      if (this.choiceDigitPrefix && !textVisible.some((choice) => choice.code.startsWith(this.choiceDigitPrefix))) {
+        this.choiceDigitPrefix = "";
+      }
+      const visible = recordCardFilterChoices(textVisible, "", this.choiceDigitPrefix);
+      if (!visible.some((choice) => choice.value === this.selectedChoice)) {
+        this.selectedChoice = visible[0] ? visible[0].value : "";
+      }
+      if (prefixBeforeRead !== this.choiceDigitPrefix || selectedBeforeRead !== this.selectedChoice) {
+        this.paintRecordCard();
+      }
+    }
     if (this.session && this.latestReport && recordCardShowRecord(this.latestReport)) {
       this.session.rebase?.(recordCardShowRecord(this.latestReport).fingerprint);
       this.sessionState = this.session.getState?.() || this.sessionState;
@@ -109218,15 +109314,20 @@ Object.assign(RecordCardModal.prototype, {
     const reportField = recordCardFieldFromReport(this.latestReport, target && target.key);
     const stageTarget = this.stage ? recordCardTargetByKey(this.recordTargets(), this.stage.field) : target;
     const stageReportField = stageTarget ? recordCardFieldFromReport(this.latestReport, stageTarget.key) : reportField;
-    const allChoices = target && target.kind === "choices"
-      ? recordCardChoiceList(target.field, reportField)
+    const choiceTarget = stageTarget && stageTarget.kind === "choices" ? stageTarget : target;
+    const choiceReportField = choiceTarget
+      ? recordCardFieldFromReport(this.latestReport, choiceTarget.key)
+      : reportField;
+    const allChoices = choiceTarget && choiceTarget.kind === "choices"
+      ? recordCardChoiceList(choiceTarget.field, choiceReportField)
       : [];
-    const visibleChoices = recordCardFilterChoices(allChoices, this.choiceFilter);
+    const visibleChoices = recordCardFilterChoices(allChoices, this.choiceFilter, this.choiceDigitPrefix);
     return {
       selectedKey: this.selectedKey,
       targets: this.recordTargets(),
       stage: this.stage,
       filter: this.choiceFilter,
+      choiceDigitPrefix: this.choiceDigitPrefix,
       selectedChoice: this.selectedChoice,
       currentValue: target && target.value != null ? String(target.value) : "",
       visibleChoices,
@@ -109298,6 +109399,7 @@ Object.assign(RecordCardModal.prototype, {
     const index = targets.findIndex((target) => target.key === key);
     if (index < 0) return;
     this.recordInvalidatePendingTab();
+    if (this.selectedKey !== key) this.choiceDigitPrefix = "";
     this.selectedKey = key;
     this.selectedIndex = index;
     this.announce = recordCardLiveAnnouncement("select", targets[index]);
@@ -109374,12 +109476,20 @@ Object.assign(RecordCardModal.prototype, {
     this.stageEnterSeq = 0;
     if (resolved === "choices") {
       this.choiceFilter = options.filter || "";
+      this.choiceDigitPrefix = options.prefix || options.choiceDigitPrefix || "";
       this.selectedChoice = options.selectedChoice || (target.value != null ? String(target.value) : "");
+      const reportField = recordCardFieldFromReport(this.latestReport, target.key);
+      const allChoices = recordCardChoiceList(target.field, reportField);
+      const visibleChoices = recordCardFilterChoices(allChoices, this.choiceFilter, this.choiceDigitPrefix);
+      if (!visibleChoices.some((choice) => choice.value === this.selectedChoice)) {
+        this.selectedChoice = visibleChoices[0] ? visibleChoices[0].value : "";
+      }
       this.stageDraft = options.draft || "";
       this.stageDraftText = "";
       this.stageList = [];
       this.stageItemDraft = "";
     } else if (resolved === "list") {
+      this.choiceDigitPrefix = "";
       const seed = typeof recordCardSeedStage === "function" ? recordCardSeedStage(target) : { list: [] };
       this.stageList = Array.isArray(options.list) ? options.list.slice() : (seed.list || []).slice();
       this.stageItemDraft = options.itemDraft || "";
@@ -109387,6 +109497,7 @@ Object.assign(RecordCardModal.prototype, {
       this.choiceFilter = "";
       this.selectedChoice = "";
     } else {
+      this.choiceDigitPrefix = "";
       const seed = typeof recordCardSeedStage === "function" ? recordCardSeedStage(target) : { text: "" };
       this.stageDraftText = options.draft !== undefined ? String(options.draft) : String(seed.text || "");
       this.stageList = [];
@@ -109413,6 +109524,7 @@ Object.assign(RecordCardModal.prototype, {
     this.recordInvalidatePendingTab();
     this.stage = null;
     this.choiceFilter = "";
+    this.choiceDigitPrefix = "";
     this.selectedChoice = "";
     this.stageDraft = "";
     this.stageCaret = null;
@@ -109560,6 +109672,18 @@ Object.assign(RecordCardModal.prototype, {
         this.recordPopListChip();
         return;
       }
+      if (String(inputKind) === "choice-filter" && this.stage && this.stage.kind === "choices") {
+        if (event.key === "Backspace" && this.choiceDigitPrefix) {
+          event.preventDefault?.();
+          this.recordPopChoiceDigitPrefix();
+          return;
+        }
+        if (this.recordBare(event) && /^\d$/.test(event.key || "")) {
+          event.preventDefault?.();
+          if (!event.repeat) this.recordDigit(event.key, true);
+          return;
+        }
+      }
       if (String(inputKind) === "choice-filter" || (this.stage && this.stage.kind === "choices")) {
         const ctrlDelta = recordCardCtrlNavDelta(event);
         if (event.key === "ArrowDown" || ctrlDelta > 0) { event.preventDefault?.(); this.recordMoveChoice(1); return; }
@@ -109591,9 +109715,14 @@ Object.assign(RecordCardModal.prototype, {
         this.recordMoveChoice(-1);
         return;
       }
-      if (this.recordBare(event) && /^[1-9]$/.test(event.key || "")) {
+      if (event.key === "Backspace" && this.choiceDigitPrefix) {
         event.preventDefault?.();
-        this.recordDigit(event.key, true);
+        this.recordPopChoiceDigitPrefix();
+        return;
+      }
+      if (this.recordBare(event) && /^\d$/.test(event.key || "")) {
+        event.preventDefault?.();
+        if (!event.repeat) this.recordDigit(event.key, true);
       }
       return;
     }
@@ -109637,8 +109766,9 @@ Object.assign(RecordCardModal.prototype, {
       this.recordAction("open-stage");
       return;
     }
-    if (this.recordBare(event) && /^[1-9]$/.test(event.key || "")) {
+    if (this.recordBare(event) && /^\d$/.test(event.key || "")) {
       event.preventDefault?.();
+      if (event.repeat) return;
       this.recordDigit(event.key, false);
       return;
     }
@@ -109671,7 +109801,9 @@ Object.assign(RecordCardModal.prototype, {
   }
 ,
   recordDigit(digit, fromStage) {
-    const target = this.recordSelected();
+    const target = fromStage && this.stage && this.stage.kind === "choices"
+      ? recordCardTargetByKey(this.recordTargets(), this.stage.field)
+      : this.recordSelected();
     if (!target) return;
     if (target.kind !== "choices") {
       if (!fromStage) {
@@ -109687,17 +109819,75 @@ Object.assign(RecordCardModal.prototype, {
     }
     const reportField = recordCardFieldFromReport(this.latestReport, target.key);
     const all = recordCardChoiceList(target.field, reportField);
-    const choice = recordCardChoiceByDigit(all, digit);
-    if (!choice) return;
-    if (fromStage) {
-      const visible = recordCardFilterChoices(all, this.choiceFilter);
-      if (!visible.some((item) => item.value === choice.value)) return;
+    if (!fromStage && all.length >= 10 && target.stageKind !== "choices") return;
+    const visible = fromStage
+      ? recordCardFilterChoices(all, this.choiceFilter, this.choiceDigitPrefix)
+      : all;
+    const step = recordCardDigitStep({
+      choices: all,
+      visible,
+      prefix: fromStage ? this.choiceDigitPrefix : "",
+      digit,
+    });
+    if (step.kind === "none") {
+      const range = recordCardChoiceRange(all) || "no choices";
+      this.statusKind = "refusal";
+      this.refusalMessage = `No choice ${step.typed} · choices are ${range}`;
+      this.refusalHint = "";
+      this.announce = recordCardLiveAnnouncement("refusal", { message: this.refusalMessage });
+      this.paintRecordCard();
+      return;
     }
+    if (step.kind === "prefix") {
+      if (!fromStage) {
+        if (this.recordOpenStage("choices", target.key, { prefix: step.prefix })) {
+          const narrowed = recordCardFilterChoices(all, this.choiceFilter, this.choiceDigitPrefix);
+          this.announce = recordCardLiveAnnouncement("choice-prefix", {
+            range: recordCardChoiceRange(narrowed),
+          });
+          this.paintRecordCard();
+        }
+      } else {
+        this.choiceDigitPrefix = step.prefix;
+        const narrowed = recordCardFilterChoices(all, this.choiceFilter, this.choiceDigitPrefix);
+        if (!narrowed.some((choice) => choice.value === this.selectedChoice)) {
+          this.selectedChoice = narrowed[0] ? narrowed[0].value : "";
+        }
+        this.statusKind = this.writable ? "" : this.statusKind;
+        this.refusalMessage = "";
+        this.refusalHint = "";
+        this.announce = recordCardLiveAnnouncement("choice-prefix", {
+          range: recordCardChoiceRange(narrowed),
+        });
+        this.paintRecordCard();
+      }
+      return;
+    }
+    const choice = step.choice;
+    this.choiceDigitPrefix = "";
+    this.selectedChoice = choice.value;
     if (this.stage && this.stage.kind === "list") {
       this.recordListPickChoice(choice.value);
       return;
     }
     void this.recordApplyChoice(choice.value);
+  }
+,
+  recordPopChoiceDigitPrefix() {
+    if (!this.stage || this.stage.kind !== "choices" || !this.choiceDigitPrefix) return;
+    this.choiceDigitPrefix = this.choiceDigitPrefix.slice(0, -1);
+    const target = recordCardTargetByKey(this.recordTargets(), this.stage.field);
+    const reportField = recordCardFieldFromReport(this.latestReport, target && target.key);
+    const visible = recordCardFilterChoices(
+      recordCardChoiceList(target && target.field, reportField),
+      this.choiceFilter,
+      this.choiceDigitPrefix,
+    );
+    if (!visible.some((choice) => choice.value === this.selectedChoice)) {
+      this.selectedChoice = visible[0] ? visible[0].value : "";
+    }
+    this.announce = "";
+    this.paintRecordCard();
   }
 ,
   recordMoveSuggest(delta) {
@@ -109944,6 +110134,7 @@ Object.assign(RecordCardModal.prototype, {
   recordCancelStageSilent() {
     this.stage = null;
     this.choiceFilter = "";
+    this.choiceDigitPrefix = "";
     this.selectedChoice = "";
     this.stageDraft = "";
     this.stageCaret = null;
@@ -110450,6 +110641,23 @@ Object.assign(RecordCardModal.prototype, {
       const kind = input.getAttribute?.("data-record-input") || "";
       if (kind === "choice-filter") {
         this.choiceFilter = String(input.value || "");
+        this.choiceDigitPrefix = "";
+        if (this.stage && this.stage.kind === "choices") {
+          const target = recordCardTargetByKey(this.recordTargets(), this.stage.field);
+          const reportField = recordCardFieldFromReport(this.latestReport, target && target.key);
+          const visible = recordCardFilterChoices(
+            recordCardChoiceList(target && target.field, reportField),
+            this.choiceFilter,
+          );
+          if (!visible.some((choice) => choice.value === this.selectedChoice)) {
+            this.selectedChoice = visible[0] ? visible[0].value : "";
+          }
+          if (this.statusKind === "refusal") {
+            this.statusKind = this.writable ? "" : this.statusKind;
+            this.refusalMessage = "";
+            this.refusalHint = "";
+          }
+        }
         if (typeof input.selectionStart === "number") {
           this.stageCaret = { start: input.selectionStart, end: input.selectionEnd };
         }
@@ -164054,8 +164262,10 @@ try {
       recordCardBuildOps,
       recordCardDraftEqualsSeed,
       recordCardChoiceList,
+      recordCardChoiceRange,
       recordCardFilterChoices,
-      recordCardChoiceByDigit,
+      recordCardChoiceByCode,
+      recordCardDigitStep,
       recordCardTodayValue,
       recordCardRequiredClearMessage,
       recordCardEscLadder,

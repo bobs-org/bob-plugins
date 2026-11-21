@@ -22,6 +22,7 @@ class RecordCardModal extends RecordCardModalBase {
     this.selectedIndex = 0;
     this.stage = null;
     this.choiceFilter = "";
+    this.choiceDigitPrefix = "";
     this.selectedChoice = "";
     this.stageDraft = "";
     this.stageCaret = null;
@@ -67,6 +68,16 @@ class RecordCardModal extends RecordCardModalBase {
 
   recordStatusModel() {
     const target = this.recordSelected();
+    const choiceTarget = this.stage && this.stage.kind === "choices"
+      ? recordCardTargetByKey(this.recordTargets(), this.stage.field)
+      : target;
+    const reportField = recordCardFieldFromReport(this.latestReport, choiceTarget && choiceTarget.key);
+    const allChoices = choiceTarget && choiceTarget.kind === "choices"
+      ? recordCardChoiceList(choiceTarget.field, reportField)
+      : [];
+    const visibleChoices = this.stage && this.stage.kind === "choices"
+      ? recordCardFilterChoices(allChoices, this.choiceFilter, this.choiceDigitPrefix)
+      : allChoices;
     const undo = this.sessionState && this.sessionState.undoAvailable;
     return {
       statusKind: this.statusKind,
@@ -81,6 +92,9 @@ class RecordCardModal extends RecordCardModalBase {
       menuOpen: this.menuOpen,
       stage: this.stage,
       target,
+      choiceCodeRange: recordCardChoiceRange(visibleChoices),
+      choiceCodeWidth: allChoices.length ? allChoices[0].code.length : 1,
+      choiceDigitPrefix: this.choiceDigitPrefix,
       undoAvailable: Boolean(undo || (this.recordPlugin && this.recordPlugin.recordUpdateLastUndo?.(this.recordPath))),
     };
   }
@@ -91,7 +105,7 @@ class RecordCardModal extends RecordCardModalBase {
     const allChoices = target && target.kind === "choices"
       ? recordCardChoiceList(target.field, reportField)
       : [];
-    const visibleChoices = recordCardFilterChoices(allChoices, this.choiceFilter);
+    const visibleChoices = recordCardFilterChoices(allChoices, this.choiceFilter, this.choiceDigitPrefix);
     return {
       selectedKey: this.selectedKey,
       targets: this.recordTargets(),
@@ -411,32 +425,21 @@ class RecordCardModal extends RecordCardModalBase {
   }
 
   recordMoveChoice(delta) {
-    const target = this.recordSelected();
+    const target = this.stage && this.stage.kind === "choices"
+      ? recordCardTargetByKey(this.recordTargets(), this.stage.field)
+      : this.recordSelected();
     const reportField = recordCardFieldFromReport(this.latestReport, target && target.key);
     const visible = recordCardFilterChoices(
       recordCardChoiceList(target && target.field, reportField),
       this.choiceFilter,
+      this.choiceDigitPrefix,
     );
     if (!visible.length) return;
     let index = visible.findIndex((choice) => choice.value === this.selectedChoice);
-    if (index < 0) index = 0;
+    if (index < 0) index = Number(delta) < 0 ? 0 : -1;
     index = (index + delta + visible.length) % visible.length;
     this.selectedChoice = visible[index].value;
     this.paintRecordCard();
-  }
-
-  recordDigit(digit, fromStage) {
-    const target = this.recordSelected();
-    if (!target || target.kind !== "choices") return;
-    const reportField = recordCardFieldFromReport(this.latestReport, target.key);
-    const all = recordCardChoiceList(target.field, reportField);
-    const choice = recordCardChoiceByDigit(all, digit);
-    if (!choice) return;
-    if (fromStage) {
-      const visible = recordCardFilterChoices(all, this.choiceFilter);
-      if (!visible.some((item) => item.value === choice.value)) return;
-    }
-    void this.recordApplyChoice(choice.value);
   }
 
   recordOps(op) {
@@ -689,22 +692,43 @@ class RecordCardModal extends RecordCardModalBase {
     this.warning = (this.sheetModel && this.sheetModel.warning) || this.warning;
     const captured = options.keepStage ? recordCardCaptureStage({
       stage: this.stage, choiceFilter: this.choiceFilter, selectedChoice: this.selectedChoice,
+      choiceDigitPrefix: this.choiceDigitPrefix,
       stageDraft: this.stageDraft, stageCaret: this.stageCaret,
     }) : null;
     const targets = this.recordTargets();
     this.selectedKey = recordCardPreserveSelection(targets, this.selectedKey, this.selectedIndex);
     this.selectedIndex = Math.max(0, targets.findIndex((target) => target.key === this.selectedKey));
-    const restored = recordCardRestoreStage(captured, targets);
+    const restored = recordCardRestoreStage(captured, targets, this.latestReport);
     if (restored) {
       this.stage = { kind: restored.kind, field: restored.field };
       this.choiceFilter = restored.filter || "";
+      this.choiceDigitPrefix = restored.choiceDigitPrefix || "";
       this.selectedChoice = restored.selectedChoice || "";
       this.stageDraft = restored.draft || "";
     } else if (!options.keepStage) {
       this.stage = null;
+      this.choiceDigitPrefix = "";
     }
     this.paintRecordCard();
     await this.recordRead();
+    if (this.stage && this.stage.kind === "choices") {
+      const target = recordCardTargetByKey(this.recordTargets(), this.stage.field);
+      const reportField = recordCardFieldFromReport(this.latestReport, target && target.key);
+      const allChoices = recordCardChoiceList(target && target.field, reportField);
+      const textVisible = recordCardFilterChoices(allChoices, this.choiceFilter);
+      const prefixBeforeRead = this.choiceDigitPrefix;
+      const selectedBeforeRead = this.selectedChoice;
+      if (this.choiceDigitPrefix && !textVisible.some((choice) => choice.code.startsWith(this.choiceDigitPrefix))) {
+        this.choiceDigitPrefix = "";
+      }
+      const visible = recordCardFilterChoices(textVisible, "", this.choiceDigitPrefix);
+      if (!visible.some((choice) => choice.value === this.selectedChoice)) {
+        this.selectedChoice = visible[0] ? visible[0].value : "";
+      }
+      if (prefixBeforeRead !== this.choiceDigitPrefix || selectedBeforeRead !== this.selectedChoice) {
+        this.paintRecordCard();
+      }
+    }
     if (this.session && this.latestReport && recordCardShowRecord(this.latestReport)) {
       this.session.rebase?.(recordCardShowRecord(this.latestReport).fingerprint);
       this.sessionState = this.session.getState?.() || this.sessionState;

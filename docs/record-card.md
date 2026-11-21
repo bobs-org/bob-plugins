@@ -138,7 +138,7 @@ Digits here pick a choice; on the album card editor they jump to field N.
 | Shift+J / Shift+K | Step to the adjacent schema field including ghosts, clamp at the ends with a bump and `No next field` / `No previous field`, and announce `<Label>, field N of M`. Inert in stages, inputs, menus, and IME; never writes. All actions offers Previous/Next field. |
 | Home / End | First or last field. |
 | Enter | Open the selected field's stage. |
-| `1`–`9` on a choices row | Pick that schema-order choice and save. Elsewhere a digit does nothing and teaches `Digits pick a choice on choice fields`. |
+| Digit on a choices row | With fewer than 10 choices, one digit picks and saves. From 10 choices, the first digit opens the choices stage filtered to its code prefix; the next digit picks and saves. Elsewhere a digit does nothing and teaches `Digits pick a choice on choice fields`. |
 | `t` on a date | Set today in the local calendar date. |
 | Ctrl+D | Unset an optional field. Required fields refuse, for example `Status is required — pick one of 6 choices`. |
 | `u` / Ctrl+Z | Undo the last save for this record path. |
@@ -210,10 +210,15 @@ intent, and listeners.
 ### Choices
 
 The choices stage is inline under its field. Filter by label or value
-without changing stored identity. Digit badges stay in schema order and
-disappear for filtered-out rows. `j`/`k` outside the filter, arrows and Ctrl+N / Ctrl+P
-(also inside the filter), and Enter pick from the list; digits in the filter stay text. Positions past
-nine remain reachable by navigation and click. Empty results and the
+without changing stored identity. Every choice has a schema-order code; at
+10 or more choices codes are zero-padded to the digit count (`01`–`17` for
+17 choices). Badges stay in schema order and disappear for filtered-out
+rows. `j`/`k` outside the filter, arrows and Ctrl+N / Ctrl+P (also inside
+the filter), and Enter pick from the list. Bare digits in the filter type
+choice codes and never become filter text. A pending code prefix narrows
+the list and intersects with its text filter; Backspace removes one prefix
+digit. A digit that matches no visible code teaches and writes nothing, and
+a choice is picked only after its full code is typed. Empty results and the
 current choice are explicit. Filter text never invents a choice.
 
 ### Read-only states

@@ -5,15 +5,20 @@ Object.assign(RecordCardModal.prototype, {
     const reportField = recordCardFieldFromReport(this.latestReport, target && target.key);
     const stageTarget = this.stage ? recordCardTargetByKey(this.recordTargets(), this.stage.field) : target;
     const stageReportField = stageTarget ? recordCardFieldFromReport(this.latestReport, stageTarget.key) : reportField;
-    const allChoices = target && target.kind === "choices"
-      ? recordCardChoiceList(target.field, reportField)
+    const choiceTarget = stageTarget && stageTarget.kind === "choices" ? stageTarget : target;
+    const choiceReportField = choiceTarget
+      ? recordCardFieldFromReport(this.latestReport, choiceTarget.key)
+      : reportField;
+    const allChoices = choiceTarget && choiceTarget.kind === "choices"
+      ? recordCardChoiceList(choiceTarget.field, choiceReportField)
       : [];
-    const visibleChoices = recordCardFilterChoices(allChoices, this.choiceFilter);
+    const visibleChoices = recordCardFilterChoices(allChoices, this.choiceFilter, this.choiceDigitPrefix);
     return {
       selectedKey: this.selectedKey,
       targets: this.recordTargets(),
       stage: this.stage,
       filter: this.choiceFilter,
+      choiceDigitPrefix: this.choiceDigitPrefix,
       selectedChoice: this.selectedChoice,
       currentValue: target && target.value != null ? String(target.value) : "",
       visibleChoices,
@@ -85,6 +90,7 @@ Object.assign(RecordCardModal.prototype, {
     const index = targets.findIndex((target) => target.key === key);
     if (index < 0) return;
     this.recordInvalidatePendingTab();
+    if (this.selectedKey !== key) this.choiceDigitPrefix = "";
     this.selectedKey = key;
     this.selectedIndex = index;
     this.announce = recordCardLiveAnnouncement("select", targets[index]);
@@ -161,12 +167,20 @@ Object.assign(RecordCardModal.prototype, {
     this.stageEnterSeq = 0;
     if (resolved === "choices") {
       this.choiceFilter = options.filter || "";
+      this.choiceDigitPrefix = options.prefix || options.choiceDigitPrefix || "";
       this.selectedChoice = options.selectedChoice || (target.value != null ? String(target.value) : "");
+      const reportField = recordCardFieldFromReport(this.latestReport, target.key);
+      const allChoices = recordCardChoiceList(target.field, reportField);
+      const visibleChoices = recordCardFilterChoices(allChoices, this.choiceFilter, this.choiceDigitPrefix);
+      if (!visibleChoices.some((choice) => choice.value === this.selectedChoice)) {
+        this.selectedChoice = visibleChoices[0] ? visibleChoices[0].value : "";
+      }
       this.stageDraft = options.draft || "";
       this.stageDraftText = "";
       this.stageList = [];
       this.stageItemDraft = "";
     } else if (resolved === "list") {
+      this.choiceDigitPrefix = "";
       const seed = typeof recordCardSeedStage === "function" ? recordCardSeedStage(target) : { list: [] };
       this.stageList = Array.isArray(options.list) ? options.list.slice() : (seed.list || []).slice();
       this.stageItemDraft = options.itemDraft || "";
@@ -174,6 +188,7 @@ Object.assign(RecordCardModal.prototype, {
       this.choiceFilter = "";
       this.selectedChoice = "";
     } else {
+      this.choiceDigitPrefix = "";
       const seed = typeof recordCardSeedStage === "function" ? recordCardSeedStage(target) : { text: "" };
       this.stageDraftText = options.draft !== undefined ? String(options.draft) : String(seed.text || "");
       this.stageList = [];
@@ -200,6 +215,7 @@ Object.assign(RecordCardModal.prototype, {
     this.recordInvalidatePendingTab();
     this.stage = null;
     this.choiceFilter = "";
+    this.choiceDigitPrefix = "";
     this.selectedChoice = "";
     this.stageDraft = "";
     this.stageCaret = null;
@@ -347,6 +363,18 @@ Object.assign(RecordCardModal.prototype, {
         this.recordPopListChip();
         return;
       }
+      if (String(inputKind) === "choice-filter" && this.stage && this.stage.kind === "choices") {
+        if (event.key === "Backspace" && this.choiceDigitPrefix) {
+          event.preventDefault?.();
+          this.recordPopChoiceDigitPrefix();
+          return;
+        }
+        if (this.recordBare(event) && /^\d$/.test(event.key || "")) {
+          event.preventDefault?.();
+          if (!event.repeat) this.recordDigit(event.key, true);
+          return;
+        }
+      }
       if (String(inputKind) === "choice-filter" || (this.stage && this.stage.kind === "choices")) {
         const ctrlDelta = recordCardCtrlNavDelta(event);
         if (event.key === "ArrowDown" || ctrlDelta > 0) { event.preventDefault?.(); this.recordMoveChoice(1); return; }
@@ -378,9 +406,14 @@ Object.assign(RecordCardModal.prototype, {
         this.recordMoveChoice(-1);
         return;
       }
-      if (this.recordBare(event) && /^[1-9]$/.test(event.key || "")) {
+      if (event.key === "Backspace" && this.choiceDigitPrefix) {
         event.preventDefault?.();
-        this.recordDigit(event.key, true);
+        this.recordPopChoiceDigitPrefix();
+        return;
+      }
+      if (this.recordBare(event) && /^\d$/.test(event.key || "")) {
+        event.preventDefault?.();
+        if (!event.repeat) this.recordDigit(event.key, true);
       }
       return;
     }
@@ -424,8 +457,9 @@ Object.assign(RecordCardModal.prototype, {
       this.recordAction("open-stage");
       return;
     }
-    if (this.recordBare(event) && /^[1-9]$/.test(event.key || "")) {
+    if (this.recordBare(event) && /^\d$/.test(event.key || "")) {
       event.preventDefault?.();
+      if (event.repeat) return;
       this.recordDigit(event.key, false);
       return;
     }
@@ -458,7 +492,9 @@ Object.assign(RecordCardModal.prototype, {
   }
 ,
   recordDigit(digit, fromStage) {
-    const target = this.recordSelected();
+    const target = fromStage && this.stage && this.stage.kind === "choices"
+      ? recordCardTargetByKey(this.recordTargets(), this.stage.field)
+      : this.recordSelected();
     if (!target) return;
     if (target.kind !== "choices") {
       if (!fromStage) {
@@ -474,17 +510,75 @@ Object.assign(RecordCardModal.prototype, {
     }
     const reportField = recordCardFieldFromReport(this.latestReport, target.key);
     const all = recordCardChoiceList(target.field, reportField);
-    const choice = recordCardChoiceByDigit(all, digit);
-    if (!choice) return;
-    if (fromStage) {
-      const visible = recordCardFilterChoices(all, this.choiceFilter);
-      if (!visible.some((item) => item.value === choice.value)) return;
+    if (!fromStage && all.length >= 10 && target.stageKind !== "choices") return;
+    const visible = fromStage
+      ? recordCardFilterChoices(all, this.choiceFilter, this.choiceDigitPrefix)
+      : all;
+    const step = recordCardDigitStep({
+      choices: all,
+      visible,
+      prefix: fromStage ? this.choiceDigitPrefix : "",
+      digit,
+    });
+    if (step.kind === "none") {
+      const range = recordCardChoiceRange(all) || "no choices";
+      this.statusKind = "refusal";
+      this.refusalMessage = `No choice ${step.typed} · choices are ${range}`;
+      this.refusalHint = "";
+      this.announce = recordCardLiveAnnouncement("refusal", { message: this.refusalMessage });
+      this.paintRecordCard();
+      return;
     }
+    if (step.kind === "prefix") {
+      if (!fromStage) {
+        if (this.recordOpenStage("choices", target.key, { prefix: step.prefix })) {
+          const narrowed = recordCardFilterChoices(all, this.choiceFilter, this.choiceDigitPrefix);
+          this.announce = recordCardLiveAnnouncement("choice-prefix", {
+            range: recordCardChoiceRange(narrowed),
+          });
+          this.paintRecordCard();
+        }
+      } else {
+        this.choiceDigitPrefix = step.prefix;
+        const narrowed = recordCardFilterChoices(all, this.choiceFilter, this.choiceDigitPrefix);
+        if (!narrowed.some((choice) => choice.value === this.selectedChoice)) {
+          this.selectedChoice = narrowed[0] ? narrowed[0].value : "";
+        }
+        this.statusKind = this.writable ? "" : this.statusKind;
+        this.refusalMessage = "";
+        this.refusalHint = "";
+        this.announce = recordCardLiveAnnouncement("choice-prefix", {
+          range: recordCardChoiceRange(narrowed),
+        });
+        this.paintRecordCard();
+      }
+      return;
+    }
+    const choice = step.choice;
+    this.choiceDigitPrefix = "";
+    this.selectedChoice = choice.value;
     if (this.stage && this.stage.kind === "list") {
       this.recordListPickChoice(choice.value);
       return;
     }
     void this.recordApplyChoice(choice.value);
+  }
+,
+  recordPopChoiceDigitPrefix() {
+    if (!this.stage || this.stage.kind !== "choices" || !this.choiceDigitPrefix) return;
+    this.choiceDigitPrefix = this.choiceDigitPrefix.slice(0, -1);
+    const target = recordCardTargetByKey(this.recordTargets(), this.stage.field);
+    const reportField = recordCardFieldFromReport(this.latestReport, target && target.key);
+    const visible = recordCardFilterChoices(
+      recordCardChoiceList(target && target.field, reportField),
+      this.choiceFilter,
+      this.choiceDigitPrefix,
+    );
+    if (!visible.some((choice) => choice.value === this.selectedChoice)) {
+      this.selectedChoice = visible[0] ? visible[0].value : "";
+    }
+    this.announce = "";
+    this.paintRecordCard();
   }
 ,
   recordMoveSuggest(delta) {

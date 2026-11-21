@@ -102,7 +102,12 @@ function freshnessFooterEnsureDom(el) {
   if (!el) {
     return null;
   }
-  if (el._bobFreshnessParts && el._bobFreshnessParts.button) {
+  if (
+    el._bobFreshnessParts &&
+    el._bobFreshnessParts.button &&
+    el._bobFreshnessParts.linkGroupPrev &&
+    el._bobFreshnessParts.linkGroupNext
+  ) {
     return el._bobFreshnessParts;
   }
   try {
@@ -131,6 +136,11 @@ function freshnessFooterEnsureDom(el) {
     "span",
     "bob-freshness-context",
   );
+  const linkGroupPrev = freshnessFooterCreateChild(
+    el,
+    "button",
+    "bob-freshness-link-arm bob-freshness-link-group bob-freshness-link-group-prev",
+  );
   const linkPrev = freshnessFooterCreateChild(
     el,
     "button",
@@ -146,17 +156,26 @@ function freshnessFooterEnsureDom(el) {
     "button",
     "bob-freshness-link-arm bob-freshness-link-next",
   );
+  const linkGroupNext = freshnessFooterCreateChild(
+    el,
+    "button",
+    "bob-freshness-link-arm bob-freshness-link-group bob-freshness-link-group-next",
+  );
   const linkStatus = freshnessFooterCreateChild(
     el,
     "span",
     "bob-freshness-link-status",
   );
+  freshnessFooterSetAttr(linkGroupPrev, "type", "button");
   freshnessFooterSetAttr(linkPrev, "type", "button");
   freshnessFooterSetAttr(linkNext, "type", "button");
+  freshnessFooterSetAttr(linkGroupNext, "type", "button");
   freshnessFooterSetText(linkSeparator, "·");
+  freshnessFooterSetOmitted(linkGroupPrev, true);
   freshnessFooterSetOmitted(linkPrev, true);
   freshnessFooterSetOmitted(linkSeparator, true);
   freshnessFooterSetOmitted(linkNext, true);
+  freshnessFooterSetOmitted(linkGroupNext, true);
   freshnessFooterSetOmitted(linkStatus, true);
   const detail = freshnessFooterCreateChild(
     el,
@@ -175,9 +194,11 @@ function freshnessFooterEnsureDom(el) {
     icon,
     due,
     context,
+    linkGroupPrev,
     linkPrev,
     linkSeparator,
     linkNext,
+    linkGroupNext,
     linkStatus,
     detail,
     hint,
@@ -455,8 +476,9 @@ function freshnessFooterPaintHint(node, view) {
 }
 
 // Shed groups from the end, shorten stage detail, then hide detail,
-// shortcut hint, and upkeep meter. With an answer chip the meter sheds
-// before the hint, so the chip outlasts it. The current tier stays visible.
+// shortcut hint, and upkeep meter. Links sheds meter, hint, context,
+// group-arm labels, group arms, then step arms. With an answer chip the
+// meter sheds before the hint, so the chip outlasts it.
 function freshnessFooterFit(el, parts, view) {
   const groupContainer = parts && parts.groups;
   const nodes = groupContainer && Array.isArray(groupContainer._bobFreshnessGroupNodes)
@@ -475,8 +497,31 @@ function freshnessFooterFit(el, parts, view) {
   let hint = Boolean(view && view.hintText);
   let meter = Boolean(view && view.meterText);
   const bankPanel = Boolean(view && view.panel === "bank");
+  const linksPanel = Boolean(view && view.panel === "links");
   const showArms = Boolean(bankPanel && (view.linkPrev || view.linkNext));
   let arms = showArms;
+  let context = Boolean(linksPanel && view.contextText);
+  let groupArms = Boolean(linksPanel && (view.linkGroupPrev || view.linkGroupNext));
+  const groupCanCompact = Boolean(
+    groupArms && (
+      (view.linkGroupPrev && view.linkGroupPrev.compactText &&
+        view.linkGroupPrev.compactText !== view.linkGroupPrev.text) ||
+      (view.linkGroupNext && view.linkGroupNext.compactText &&
+        view.linkGroupNext.compactText !== view.linkGroupNext.text)
+    ),
+  );
+  let groupCompact = false;
+  let stepArms = Boolean(linksPanel && (view.linkPrev || view.linkNext));
+  const applyGroupArm = (button, arm) => {
+    if (!button) {
+      return;
+    }
+    freshnessFooterSetOmitted(button, !groupArms || !arm);
+    if (arm) {
+      const label = groupCompact && arm.compactText ? arm.compactText : arm.text;
+      freshnessFooterSetText(button, label);
+    }
+  };
   const apply = () => {
     if (bankPanel) {
       freshnessFooterPaintBankDetail(
@@ -507,6 +552,17 @@ function freshnessFooterFit(el, parts, view) {
         !arms || !view.linkPrev || !view.linkNext,
       );
     }
+    if (linksPanel) {
+      freshnessFooterSetOmitted(parts.context, !context);
+      applyGroupArm(parts.linkGroupPrev, view.linkGroupPrev);
+      applyGroupArm(parts.linkGroupNext, view.linkGroupNext);
+      freshnessFooterSetOmitted(parts.linkPrev, !stepArms || !view.linkPrev);
+      freshnessFooterSetOmitted(parts.linkNext, !stepArms || !view.linkNext);
+      freshnessFooterSetOmitted(
+        parts.linkSeparator,
+        !stepArms || !view.linkPrev || !view.linkNext,
+      );
+    }
   };
   const result = () => {
     const out = {
@@ -518,6 +574,12 @@ function freshnessFooterFit(el, parts, view) {
     };
     if (bankPanel) {
       out.arms = arms;
+    }
+    if (linksPanel) {
+      out.context = context;
+      out.groupCompact = groupCompact;
+      out.groupArms = groupArms;
+      out.stepArms = stepArms;
     }
     return out;
   };
@@ -562,6 +624,31 @@ function freshnessFooterFit(el, parts, view) {
     }
     if (overflows() && hint) {
       hint = false;
+      apply();
+    }
+  } else if (linksPanel) {
+    if (overflows() && meter) {
+      meter = false;
+      apply();
+    }
+    if (overflows() && hint) {
+      hint = false;
+      apply();
+    }
+    if (overflows() && context) {
+      context = false;
+      apply();
+    }
+    if (overflows() && groupArms && groupCanCompact && !groupCompact) {
+      groupCompact = true;
+      apply();
+    }
+    if (overflows() && groupArms) {
+      groupArms = false;
+      apply();
+    }
+    if (overflows() && stepArms) {
+      stepArms = false;
       apply();
     }
   } else {
@@ -741,6 +828,57 @@ function freshnessFooterPaint(el, view) {
   return parts;
 }
 
+function freshnessFooterPaintArm(button, arm, options = {}) {
+  const group = options.group === true;
+  freshnessFooterSetOmitted(button, !arm);
+  freshnessFooterSetText(button, arm ? arm.text : "");
+  freshnessFooterSetAttr(button, "title", arm ? arm.tooltip : "");
+  const aria = arm
+    ? (arm.ariaLabel ||
+      `${arm.direction === "prev" ? "Open previous" : "Open next"}: ${arm.name}`)
+    : "";
+  freshnessFooterSetAttr(button, "aria-label", aria);
+  freshnessFooterSetAttr(
+    button,
+    "data-walk-link-direction",
+    arm ? arm.direction : "",
+  );
+  if (group) {
+    freshnessFooterSetAttr(button, "data-walk-link-group", arm ? "true" : "");
+  } else if (button) {
+    freshnessFooterRemoveAttr(button, "data-walk-link-group");
+  }
+  freshnessFooterToggleClass(
+    button,
+    "bob-freshness-link-create",
+    Boolean(arm && arm.createEligible),
+  );
+  freshnessFooterToggleClass(
+    button,
+    "bob-freshness-link-ghost",
+    Boolean(arm && arm.ghost),
+  );
+  freshnessFooterToggleClass(
+    button,
+    "bob-freshness-link-unavailable",
+    Boolean(arm && !arm.enabled),
+  );
+  const ghostFocus = Boolean(arm && arm.ghost);
+  if (ghostFocus) {
+    freshnessFooterSetAttr(button, "aria-disabled", "true");
+  } else if (button) {
+    freshnessFooterRemoveAttr(button, "aria-disabled");
+  }
+  try {
+    if (button) {
+      button.disabled = !arm || (arm.enabled !== true && !ghostFocus);
+      button.tabIndex = arm && (arm.enabled === true || ghostFocus) ? 0 : -1;
+    }
+  } catch (error) {
+    // Focus management is best-effort.
+  }
+}
+
 function freshnessFooterPaintLinks(parts, view) {
   if (!parts) {
     return;
@@ -748,45 +886,16 @@ function freshnessFooterPaintLinks(parts, view) {
   const active = Boolean(
     view && (view.panel === "links" || view.panel === "bank"),
   );
+  const linksPanel = Boolean(view && view.panel === "links");
   const prev = active ? view.linkPrev : null;
   const next = active ? view.linkNext : null;
+  const groupPrev = linksPanel ? view.linkGroupPrev : null;
+  const groupNext = linksPanel ? view.linkGroupNext : null;
   const showSeparator = Boolean(prev && next);
-  for (const [button, arm] of [
-    [parts.linkPrev, prev],
-    [parts.linkNext, next],
-  ]) {
-    freshnessFooterSetOmitted(button, !arm);
-    freshnessFooterSetText(button, arm ? arm.text : "");
-    freshnessFooterSetAttr(button, "title", arm ? arm.tooltip : "");
-    const aria = arm
-      ? (arm.ariaLabel ||
-        `${arm.direction === "prev" ? "Open previous" : "Open next"}: ${arm.name}`)
-      : "";
-    freshnessFooterSetAttr(button, "aria-label", aria);
-    freshnessFooterSetAttr(
-      button,
-      "data-walk-link-direction",
-      arm ? arm.direction : "",
-    );
-    freshnessFooterToggleClass(
-      button,
-      "bob-freshness-link-create",
-      Boolean(arm && arm.createEligible),
-    );
-    freshnessFooterToggleClass(
-      button,
-      "bob-freshness-link-unavailable",
-      Boolean(arm && !arm.enabled),
-    );
-    try {
-      if (button) {
-        button.disabled = !arm || arm.enabled !== true;
-        button.tabIndex = arm && arm.enabled === true ? 0 : -1;
-      }
-    } catch (error) {
-      // Focus management is best-effort.
-    }
-  }
+  freshnessFooterPaintArm(parts.linkGroupPrev, groupPrev, { group: true });
+  freshnessFooterPaintArm(parts.linkPrev, prev);
+  freshnessFooterPaintArm(parts.linkNext, next);
+  freshnessFooterPaintArm(parts.linkGroupNext, groupNext, { group: true });
   freshnessFooterSetOmitted(parts.linkSeparator, !showSeparator);
   freshnessFooterSetText(
     parts.linkStatus,

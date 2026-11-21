@@ -15,7 +15,7 @@ Album cards and sync: [Album cards](albums.md); record cards and editor:
 | --- | --- |
 | Name | Bob Ledger Tools |
 | ID | `bob-ledger-tools` |
-| Version | 1.149.2 |
+| Version | 1.149.3 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
 | Description | Render Bob’s task and Pomodoro information in Obsidian: planning and freshness marks, dependencies, relations, calendar events, task types, and ledger navigation. Report-driven cards cover bank subscriptions, Stats, Reading Board, albums, projects, and areas. Snippets, session toggles, and versioned APIs connect these views to Bob and other Bob plugins. |
@@ -217,7 +217,7 @@ missing or invalid. The block re-renders live when the daily note or Tasks
 cache changes and shows `–` placeholders, never an error, with no daily note,
 Pomodoros section, or Tasks plugin.
 
-One walker footer follows `s/w/n/b` via nav `api.walkMode` v1 and its doorbell.
+One walker footer follows `s/w/n/b` via nav `api.walkMode` v1.
 Review attention is on iff `]s` has a row, including ROTTEN and POST; its hue
 is the first due group (PRE/POST cyan, ROTTEN orange). Its label shows walk and
 commitment counts, or `commitments done`. The gated `s` panel lists remaining
@@ -228,9 +228,9 @@ counts (`Lanes N`, position, `Lanes clear` / `REVIEW n` / `No
 Pending…` states, red `n/cap` over tokens (over lanes stay visible);
 `Lanes` acts like `]]`, counts never filter. Red `w` attention is pushed via nav
 `api.walkMode` v5 for any over-limit lane. Ledger pushes [`s`/`w`/`b`
-attention](https://bobs-org.github.io/walks/) including selected families,
-mirrored by Bob Mac Capture; labels omit “click to show”. The `n` links
-compass previews via `walkMode.links()` v2. The `b` bank panel shows the `api.bankWalk` v1 snapshot scope word first (`WAITING` amber while any row waits, `ALL` calm otherwise), day
+attention](https://bobs-org.github.io/walks/), mirrored by Mac Capture.
+The `n` compass (`walkMode.links()` v7) paints outer `«`/`»` group arms
+(dashed `+`, dotted ghost), context, `]}`/`]n` hints; sheds end-first. The `b` bank panel shows the `api.bankWalk` v1 snapshot scope word first (`WAITING` amber while any row waits, `ALL` calm otherwise), day
 arms from the planner (`[B` / `]B`), money only for the cursor row, and an account meter that never claims untold health: `✓ balanced`
 only from a cached `bob bank list` result where every
 account is balanced, otherwise the worst account's status in bob's own words.

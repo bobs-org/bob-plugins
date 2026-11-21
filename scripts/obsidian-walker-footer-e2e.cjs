@@ -156,6 +156,13 @@ function seedVault(vaultDir) {
   fs.writeFileSync(path.join(vaultDir, "links.md"), links);
   fs.writeFileSync(path.join(vaultDir, "2026-20261102.md"), "# Nov 2\n");
   fs.writeFileSync(path.join(vaultDir, "2026-20261104.md"), "# Nov 4\n");
+  fs.mkdirSync(path.join(vaultDir, "2026"), { recursive: true });
+  fs.writeFileSync(path.join(vaultDir, "2026", "2026-W29.md"), "# 2026-W29\n");
+  fs.writeFileSync(path.join(vaultDir, "2026", "2026-W30.md"), "# 2026-W30\n");
+  fs.writeFileSync(path.join(vaultDir, "2026", "2026-W31.md"), "# 2026-W31\n");
+  fs.writeFileSync(path.join(vaultDir, "2026", "20261120.md"), "# Fri Nov 20\n");
+  fs.writeFileSync(path.join(vaultDir, "2026", "20261121.md"), "# Sat Nov 21\n");
+  fs.writeFileSync(path.join(vaultDir, "2026", "20261122.md"), "# Sun Nov 22\n");
   fs.writeFileSync(path.join(vaultDir, "bank.md"), [
     "---",
     "type: \"[[area]]\"",
@@ -382,6 +389,16 @@ async function runE2e(args) {
   let trustButtonClicked = false;
   try {
     client = await connectToOwnedPage(port, vaultPath);
+    try {
+      await client.call("Emulation.setDeviceMetricsOverride", {
+        width: 1400,
+        height: 900,
+        deviceScaleFactor: 1,
+        mobile: false,
+      });
+    } catch (error) {
+      // Geometry is still asserted below; a missing CDP emulation method is not fatal.
+    }
     trustButtonClicked = await dismissTrustModal(client);
     await waitFor(client, `(() => {
       const nav = window.app && window.app.plugins && window.app.plugins.plugins && window.app.plugins.plugins[${JSON.stringify(NAV_ID)}];
@@ -417,8 +434,11 @@ async function runE2e(args) {
             const tasksPlugin = plugins[${JSON.stringify(TASKS_ID)}];
             const keys = Object.keys(plugins);
             const api = tasksPlugin && (tasksPlugin.apiV1 || tasksPlugin.api || tasksPlugin);
-            const hasGet = Boolean(api && typeof api.getTasks === "function");
-            const tasks = hasGet ? api.getTasks() : null;
+            const getter = (tasksPlugin && typeof tasksPlugin.getTasks === "function" && tasksPlugin.getTasks.bind(tasksPlugin))
+              || (api && typeof api.getTasks === "function" && api.getTasks.bind(api))
+              || null;
+            const hasGet = Boolean(getter);
+            const tasks = hasGet ? getter() : null;
             return { ready: Array.isArray(tasks) && tasks.length >= 3, count: Array.isArray(tasks) ? tasks.length : -1, hasPlugin: Boolean(tasksPlugin), hasGet, keys };
           } catch (error) { return { ready: false, error: String(error) }; }
         })()`,
@@ -432,10 +452,13 @@ async function runE2e(args) {
               const plugins = window.app && window.app.plugins && window.app.plugins.plugins || {};
               const tasksPlugin = plugins[${JSON.stringify(TASKS_ID)}];
               const api = tasksPlugin && (tasksPlugin.apiV1 || tasksPlugin.api || tasksPlugin);
-              const hasGet = Boolean(api && typeof api.getTasks === "function");
+              const getter = (tasksPlugin && typeof tasksPlugin.getTasks === "function" && tasksPlugin.getTasks.bind(tasksPlugin))
+                || (api && typeof api.getTasks === "function" && api.getTasks.bind(api))
+                || null;
+              const hasGet = Boolean(getter);
               let count = -1;
               try {
-                const tasks = hasGet ? api.getTasks() : null;
+                const tasks = hasGet ? getter() : null;
                 count = Array.isArray(tasks) ? tasks.length : -1;
               } catch (error) { return { ready: false, count: -2, hasPlugin: Boolean(tasksPlugin), hasGet, error: String(error) }; }
               return { ready: false, count, hasPlugin: Boolean(tasksPlugin), hasGet, keys: Object.keys(plugins), timeout: true };
@@ -578,6 +601,43 @@ async function runE2e(args) {
         };
       })();
 
+      const openPath = async (notePath) => {
+        const file = window.app.vault.getAbstractFileByPath(notePath);
+        const leaf = window.app.workspace.getLeaf(false);
+        if (file && leaf && typeof leaf.openFile === "function") await leaf.openFile(file);
+        await twoFrames();
+      };
+      const waitFooter = async (predicate) => {
+        let text = "";
+        for (let index = 0; index < 40; index += 1) {
+          text = footer() && String(footer().innerText || "").replace(/\s+/g, " ");
+          if (predicate(text)) return text;
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        return text;
+      };
+
+      const groupArmText = (selector) => {
+        const node = footer() && footer().querySelector(selector);
+        return node ? String(node.textContent || "") : "";
+      };
+
+      await openPath("2026/2026-W30.md");
+      api.select("n");
+      await twoFrames();
+      const weekFooter = await waitFooter((text) => Boolean(text && /Q3/.test(text) && /next quarter/.test(text)));
+      const weekPanel = footer() && footer().getAttribute("data-walker-panel");
+      const weekGroupPrev = groupArmText(".bob-freshness-link-group-prev");
+      const weekGroupNext = groupArmText(".bob-freshness-link-group-next");
+
+      await openPath("2026/20261121.md");
+      api.select("n");
+      await twoFrames();
+      const dailyFooter = await waitFooter((text) => Boolean(text && /W47/.test(text) && /next week/.test(text)));
+      const dailyPanel = footer() && footer().getAttribute("data-walker-panel");
+      const dailyGroupPrev = groupArmText(".bob-freshness-link-group-prev");
+      const dailyGroupNext = groupArmText(".bob-freshness-link-group-next");
+
       return {
         rectS, rectWImmediate, rectW, rectNImmediate, rectN, rectBImmediate, rectB,
         panelS, textS, dotOnS, inkOnS, inkTierOnS,
@@ -586,6 +646,10 @@ async function runE2e(args) {
         dotOffS, dotTier, dotTitle, dotCleared, panelBackS,
         footerItems: footerItems(),
         rowDispatched, afterRow, dayDispatched, afterDay,
+        weekPanel, weekFooter,
+        weekGroupPrev, weekGroupNext,
+        dailyPanel, dailyFooter,
+        dailyGroupPrev, dailyGroupNext,
       };
     })()`);
 
@@ -609,12 +673,22 @@ async function runE2e(args) {
       && result.afterDay.path === "bank/2026-11.md"
       && result.afterDay.payeeAt >= 0
       && result.afterDay.ch === result.afterDay.payeeAt;
+    const weekGroups = result.weekPanel === "n"
+      && /Q3/.test(String(result.weekFooter || ""))
+      && /next quarter/.test(String(result.weekFooter || ""))
+      && /Q2/.test(String(result.weekGroupPrev || ""))
+      && /Q4/.test(String(result.weekGroupNext || ""));
+    const dailyGroups = result.dailyPanel === "n"
+      && /W47/.test(String(result.dailyFooter || ""))
+      && /next week/.test(String(result.dailyFooter || ""))
+      && /W46/.test(String(result.dailyGroupPrev || ""))
+      && /W48/.test(String(result.dailyGroupNext || ""));
     const tasksOk = Boolean(tasksReady && tasksReady.ready);
-    const passed = geometryStable && panelsSwap && singleItem && dotBehaves && inkBehaves && tasksOk && bankLanding && bankDayJump;
+    const passed = geometryStable && panelsSwap && singleItem && dotBehaves && inkBehaves && tasksOk && bankLanding && bankDayJump && weekGroups && dailyGroups;
     if (passed) {
       return report("passed", { executable, vault: vaultPath, trustButtonClicked, tasksPlugin: fixture.tasksPlugin, tasksReady, ...result });
     }
-    report("failed", { executable, vault: vaultPath, trustButtonClicked, tasksPlugin: fixture.tasksPlugin, tasksReady, geometryStable, panelsSwap, singleItem, dotBehaves, inkBehaves, ...result });
+    report("failed", { executable, vault: vaultPath, trustButtonClicked, tasksPlugin: fixture.tasksPlugin, tasksReady, geometryStable, panelsSwap, singleItem, dotBehaves, inkBehaves, weekGroups, dailyGroups, ...result });
     process.exitCode = 1;
     return null;
   } catch (error) {
@@ -646,7 +720,10 @@ function selfTest() {
     if (!fixture.enabled.includes(NAV_ID) || !fixture.enabled.includes(LEDGER_ID)) {
       throw new Error("seed vault must enable both walker plugins");
     }
-    for (const name of ["review.md", "links.md", "bank.md", path.join("bank", "2026-11.md")]) {
+    for (const name of [
+      "review.md", "links.md", "bank.md", path.join("bank", "2026-11.md"),
+      path.join("2026", "2026-W30.md"), path.join("2026", "20261121.md"),
+    ]) {
       if (!fs.existsSync(path.join(vaultDir, name))) throw new Error("missing fixture " + name);
     }
   } finally {

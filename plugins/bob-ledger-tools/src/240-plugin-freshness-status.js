@@ -72,9 +72,11 @@ class BobLedgerToolsFreshnessStatusMixin {
       } catch (error) {
         // A status bar without a click still shows the counts.
       }
-      for (const [direction, button] of [
-        ["prev", parts && parts.linkPrev],
-        ["next", parts && parts.linkNext],
+      for (const [direction, button, group] of [
+        ["prev", parts && parts.linkPrev, false],
+        ["next", parts && parts.linkNext, false],
+        ["prev", parts && parts.linkGroupPrev, true],
+        ["next", parts && parts.linkGroupNext, true],
       ]) {
         try {
           if (!button || typeof button.addEventListener !== "function") {
@@ -92,10 +94,10 @@ class BobLedgerToolsFreshnessStatusMixin {
               // Best-effort.
             }
             const route = walkerFooterWalkMode(self);
-            if (!route.legacy && route.mode === "b") {
+            if (!group && !route.legacy && route.mode === "b") {
               bankWalkerFooterActivate(self, direction);
             } else {
-              linksWalkerFooterActivate(self, direction);
+              linksWalkerFooterActivate(self, direction, { group });
             }
           });
         } catch (error) {

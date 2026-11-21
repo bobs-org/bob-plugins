@@ -109,7 +109,9 @@ const {
   laneWalkerFooterView,
   walkerFooterPushLaneAttention,
   linksWalkerFooterActivate,
+  linksWalkerFooterLabel,
   linksWalkerFooterRequest,
+  linksWalkerFooterStripNavGlyphs,
   linksWalkerFooterView,
   walkerFooterClearView,
   walkerFooterReviewView,
@@ -565,6 +567,8 @@ function createLinkFooterHarness({ mode = "n", content = "[[target|next]]" } = {
       "bob-navigation-hotkeys:repeat-next-bracket-walk": {},
       "bob-navigation-hotkeys:open-prev-link": {},
       "bob-navigation-hotkeys:open-next-link": {},
+      "bob-navigation-hotkeys:open-prev-group-link": {},
+      "bob-navigation-hotkeys:open-next-group-link": {},
     },
     executeCommandById: (id) => calls.push(id),
   };
@@ -636,6 +640,334 @@ test("async link preview paints only for the still-selected mode and editor revi
   });
   await new Promise((resolve) => setImmediate(resolve));
   assert.notEqual(plugin.freshnessFooterLastView?.panel, "links");
+});
+
+function groupStop(overrides = {}) {
+  return {
+    text: "« W46",
+    target: "2026/20261109",
+    path: "2026/20261109.md",
+    exists: true,
+    state: "exists",
+    groupLabel: "W46",
+    landingLabel: "Mon Nov 9",
+    shortLabel: "W46",
+    wraps: false,
+    source: "calendar",
+    ...overrides,
+  };
+}
+
+test("links panel group arms, context, and hints match the footer table", () => {
+  const daily = linksWalkerFooterView({
+    ok: true,
+    prev: { text: "prev", target: "2026/20261120", path: "2026/20261120.md", exists: true },
+    next: { text: "next", target: "2026/20261122", path: "2026/20261122.md", exists: false },
+    prevGroup: groupStop(),
+    nextGroup: groupStop({
+      text: "W48 »",
+      target: "2026/20261123",
+      path: "2026/20261123.md",
+      exists: false,
+      state: "creatable",
+      createEligible: true,
+      groupLabel: "W48",
+      landingLabel: "Mon Nov 23",
+      shortLabel: "W48",
+    }),
+    group: {
+      noun: "day",
+      label: "W47",
+      shortLabel: "W47",
+      position: 6,
+      size: 7,
+      atStart: false,
+      atEnd: false,
+      enteringNext: "W48",
+      enteringPrev: "W46",
+    },
+  });
+  assert.equal(daily.contextText, "W47 6/7");
+  assert.equal(daily.linkGroupPrev.text, "« W46");
+  assert.equal(daily.linkPrev.text, "‹ Fri Nov 20");
+  assert.equal(daily.linkNext.text, "Sun Nov 22+ ›");
+  assert.equal(daily.linkGroupNext.text, "W48+ »");
+  assert.equal(daily.linkGroupNext.createEligible, true);
+  assert.equal(daily.hintText, "]} next week");
+
+  const week = linksWalkerFooterView({
+    ok: true,
+    prev: { text: "W29", target: "2026/2026-W29", path: "2026/2026-W29.md", exists: true },
+    next: { text: "W31", target: "2026/2026-W31", path: "2026/2026-W31.md", exists: true },
+    prevGroup: groupStop({
+      shortLabel: "Q2", groupLabel: "Q2", landingLabel: "W14",
+      target: "2026/2026-W14", path: "2026/2026-W14.md",
+    }),
+    nextGroup: groupStop({
+      shortLabel: "Q4", groupLabel: "Q4", landingLabel: "W40",
+      target: "2026/2026-W40", path: "2026/2026-W40.md",
+      text: "Q4 »",
+    }),
+    group: {
+      noun: "week", label: "Q3", shortLabel: "Q3",
+      position: 4, size: 13, atStart: false, atEnd: false,
+    },
+  });
+  assert.equal(week.contextText, "Q3 4/13");
+  assert.equal(week.linkGroupPrev.text, "« Q2");
+  assert.equal(week.linkGroupNext.text, "Q4 »");
+  assert.equal(week.hintText, "]} next quarter");
+
+  const quarter = linksWalkerFooterView({
+    ok: true,
+    prev: { text: "Q3", target: "2026/2026-Q3", path: "2026/2026-Q3.md", exists: true },
+    next: { text: "2027-Q1", target: "2027/2027-Q1", path: "2027/2027-Q1.md", exists: true },
+    prevGroup: groupStop({
+      shortLabel: "2025", groupLabel: "2025", landingLabel: "Q1",
+      target: "2025/2025-Q1", path: "2025/2025-Q1.md",
+      exists: false, state: "ghost", ghostReason: "2025-Q1 is before Bob's period notes began — navigation never creates it",
+    }),
+    nextGroup: groupStop({
+      shortLabel: "2027", groupLabel: "2027", landingLabel: "Q1",
+      target: "2027/2027-Q1", path: "2027/2027-Q1.md", text: "2027 »",
+    }),
+    group: {
+      noun: "quarter", label: "2026", shortLabel: "2026",
+      position: 4, size: 4, atStart: false, atEnd: true, enteringNext: "2027",
+    },
+  });
+  assert.equal(quarter.contextText, "2026 4/4");
+  assert.equal(quarter.linkGroupPrev.ghost, true);
+  assert.equal(quarter.linkGroupPrev.text, "« 2025");
+  assert.equal(quarter.hintText, "]n enters 2027");
+  assert.match(quarter.linkGroupPrev.tooltip, /before Bob's period notes began/);
+
+  const year = linksWalkerFooterView({
+    ok: true,
+    prev: { text: "2025", target: "2025", path: "2025.md", exists: true },
+    next: { text: "2027", target: "2027", path: "2027.md", exists: true },
+    prevGroup: null,
+    nextGroup: null,
+    group: null,
+    groupNone: { reason: "year", message: "Years have no group jump — ]n steps years" },
+  });
+  assert.equal(year.contextText, "");
+  assert.equal(year.linkGroupPrev, null);
+  assert.equal(year.hintText, "");
+  assert.match(year.tooltip, /Years have no group jump/);
+
+  const record = linksWalkerFooterView({
+    ok: true,
+    prev: { text: "‹ Bead Lifecycle", target: "zettel/bead", path: "sase_blog_zettel/bead.md", exists: true },
+    next: { text: "SASE is Too… ›", target: "zettel/too", path: "sase_blog_zettel/too.md", exists: true },
+    prevGroup: groupStop({
+      shortLabel: "🛑 Why SASE is still NOT ready?",
+      groupLabel: "🛑 Why SASE is still NOT ready?",
+      landingLabel: "AI Slop",
+      target: "zettel/why", path: "sase_blog_zettel/why.md",
+      source: "record",
+    }),
+    nextGroup: groupStop({
+      shortLabel: "🏁 Conclusion",
+      groupLabel: "🏁 Conclusion",
+      landingLabel: "Done",
+      target: "zettel/end", path: "sase_blog_zettel/end.md",
+      wraps: true, source: "record", text: "🏁 Conclusion »",
+    }),
+    group: {
+      noun: "section",
+      label: "🔮 Future Work",
+      shortLabel: "🔮 Future Work",
+      position: 2, size: 3, atStart: false, atEnd: false,
+    },
+    recordWalk: {
+      state: "ok", title: "Middle", position: 8, total: 12,
+      walkBy: "section",
+      album: { title: "SASE Blog Zettel", emoji: "🗂" },
+    },
+  });
+  assert.equal(record.dueText, "Links 8/12");
+  assert.equal(record.contextText, "🔮 Future Work 2/3");
+  assert.equal(record.linkGroupPrev.text, "« 🛑 Why SASE is still NOT ready?");
+  assert.equal(record.linkGroupNext.text, "🏁 Conclusion » ↺");
+  assert.equal(record.hintText, "]} next section");
+  assert.match(record.tooltip, /by section, then title · wraps around/);
+
+  const authored = linksWalkerFooterView({
+    ok: true,
+    prev: { text: "‹ Part 2", target: "part_2", path: "part_2.md", exists: true },
+    next: { text: "Part 4 ›", target: "part_4", path: "part_4.md", exists: true },
+    prevGroup: groupStop({
+      shortLabel: "Part 2", groupLabel: "Part 2", text: "« Part 2",
+      target: "part_2", path: "part_2.md", source: "authored",
+    }),
+    nextGroup: groupStop({
+      shortLabel: "Part 4", groupLabel: "Part 4", text: "Part 4 »",
+      target: "part_4", path: "part_4.md", source: "authored",
+    }),
+  });
+  assert.equal(authored.contextText, "");
+  assert.equal(authored.hintText, "]} next group");
+  assert.equal(authored.linkGroupPrev.text, "« Part 2");
+});
+
+test("links panel paints ghost and creatable group arms and keeps only-group notes useful", () => {
+  const host = new TestElement("div");
+  const view = linksWalkerFooterView({
+    ok: true,
+    prev: null,
+    next: null,
+    prevGroup: groupStop({
+      exists: false, state: "ghost",
+      ghostReason: "2025 is before Bob's period notes began — navigation never creates it",
+      shortLabel: "2025", groupLabel: "2025",
+    }),
+    nextGroup: groupStop({
+      exists: false, state: "creatable", createEligible: true,
+      shortLabel: "W48", groupLabel: "W48",
+      target: "2026/20261123", path: "2026/20261123.md", text: "W48 »",
+    }),
+  });
+  assert.equal(view.linkState, "group-only");
+  assert.notEqual(view.linkStatusText, "no ‹ / › links in this note");
+  const parts = freshnessFooterPaint(host, view);
+  assert.equal(parts.linkGroupPrev.classList.contains("bob-freshness-link-ghost"), true);
+  assert.equal(parts.linkGroupPrev.attrs["aria-disabled"], "true");
+  assert.equal(parts.linkGroupNext.classList.contains("bob-freshness-link-create"), true);
+  assert.equal(parts.linkPrev.attrs.hidden, "hidden");
+  assert.match(deepText(host), /« 2025/);
+  assert.match(deepText(host), /W48\+ »/);
+});
+
+test("links panel reports group-link conflicts without dropping step arms", () => {
+  const view = linksWalkerFooterView({
+    ok: true,
+    prev: { text: "prev", target: "a", path: "a.md", exists: true },
+    next: { text: "next", target: "b", path: "b.md", exists: true },
+    prevGroup: null,
+    nextGroup: groupStop({ shortLabel: "End", groupLabel: "End", text: "End »" }),
+    groupConflict: "prev",
+  });
+  assert.match(view.linkStatusText, /Two « links on nav lines — keep one/);
+  assert.equal(view.linkGroupPrev, null);
+  assert.equal(view.linkGroupNext.text, "End »");
+  assert.equal(view.linkPrev.text, "‹ a");
+});
+
+test("linksWalkerFooterLabel strips group glyphs so arms do not double them", () => {
+  assert.equal(linksWalkerFooterStripNavGlyphs("« W46"), "W46");
+  assert.equal(linksWalkerFooterStripNavGlyphs("W48 »"), "W48");
+  assert.equal(linksWalkerFooterStripNavGlyphs("<< Part 2"), "Part 2");
+  assert.equal(linksWalkerFooterStripNavGlyphs("Part 4 >>"), "Part 4");
+  assert.equal(
+    linksWalkerFooterLabel({ text: "« W46", path: "2026/2026-W46.md" }, "prev"),
+    "W46",
+  );
+});
+
+test("links footer sheds meter, hint, context, then group arms, then step arms", () => {
+  const view = linksWalkerFooterView({
+    ok: true,
+    prev: { text: "Fri", target: "2026/20261120", path: "2026/20261120.md", exists: true },
+    next: { text: "Sun", target: "2026/20261122", path: "2026/20261122.md", exists: true },
+    prevGroup: groupStop({
+      shortLabel: "W46", groupLabel: "Week 46 of 2026",
+    }),
+    nextGroup: groupStop({
+      shortLabel: "W48", groupLabel: "Week 48 of 2026", text: "W48 »",
+    }),
+    group: {
+      noun: "day", label: "W47", shortLabel: "W47",
+      position: 6, size: 7, atStart: false, atEnd: false,
+    },
+  });
+  view.meterText = "m";
+  const el = new TestElement("div");
+  const omitted = (node) => Boolean(node && node.classList.contains("bob-freshness-omit"));
+  const widthOf = (node) => {
+    if (!node || omitted(node)) return 0;
+    if (node.classList.contains("bob-freshness-main")) return 40;
+    if (node.classList.contains("bob-freshness-context")) return 28;
+    if (node.classList.contains("bob-freshness-link-group")) {
+      return String(node.text).length > 10 ? 40 : 16;
+    }
+    if (node.classList.contains("bob-freshness-link-arm")) return 20;
+    if (node.classList.contains("bob-freshness-link-separator")) return 5;
+    if (node.classList.contains("bob-freshness-hint")) return 22;
+    if (node.classList.contains("bob-freshness-meter")) return 18;
+    return 0;
+  };
+  Object.defineProperty(el, "scrollWidth", {
+    configurable: true,
+    get() {
+      return this.children.reduce((sum, child) => sum + widthOf(child), 0);
+    },
+  });
+  const parts = freshnessFooterPaint(el, view);
+  el.clientWidth = 1000;
+  const wide = freshnessFooterFit(el, parts, view);
+  assert.equal(wide.meter, true);
+  assert.equal(wide.hint, true);
+  assert.equal(wide.context, true);
+  assert.equal(wide.groupArms, true);
+  assert.equal(wide.stepArms, true);
+  el.clientWidth = 220;
+  const afterMeter = freshnessFooterFit(el, parts, view);
+  assert.equal(afterMeter.meter, false);
+  assert.equal(afterMeter.hint, true);
+  el.clientWidth = 200;
+  const afterHint = freshnessFooterFit(el, parts, view);
+  assert.equal(afterHint.hint, false);
+  assert.equal(afterHint.context, true);
+  el.clientWidth = 175;
+  const afterContext = freshnessFooterFit(el, parts, view);
+  assert.equal(afterContext.context, false);
+  assert.equal(afterContext.groupCompact, false);
+  assert.equal(afterContext.groupArms, true);
+  el.clientWidth = 130;
+  const afterCompact = freshnessFooterFit(el, parts, view);
+  assert.equal(afterCompact.groupCompact, true);
+  assert.equal(afterCompact.groupArms, true);
+  el.clientWidth = 90;
+  const afterGroup = freshnessFooterFit(el, parts, view);
+  assert.equal(afterGroup.groupArms, false);
+  assert.equal(afterGroup.stepArms, true);
+  el.clientWidth = 50;
+  const afterStep = freshnessFooterFit(el, parts, view);
+  assert.equal(afterStep.stepArms, false);
+});
+
+test("group arm activation revalidates the snapshot and refuses a stale target", async () => {
+  const { plugin, state, calls } = createLinkFooterHarness();
+  plugin.dependencyNavApi = () => ({
+    walkMode: {
+      version: 2,
+      current: () => state.mode,
+      links: ({ content: source }) => ({
+        ok: true,
+        prev: null,
+        next: null,
+        prevGroup: null,
+        nextGroup: {
+          text: "W48 »",
+          target: source.includes("changed") ? "changed" : "2026/20261123",
+          path: source.includes("changed") ? "changed.md" : "2026/20261123.md",
+          exists: true,
+          state: "exists",
+          shortLabel: "W48",
+        },
+      }),
+    },
+  });
+  linksWalkerFooterRequest(plugin);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(plugin.freshnessFooterLastView.linkGroupNext.text, "W48 »");
+  assert.equal(linksWalkerFooterActivate(plugin, "next", { group: true }), true);
+  assert.deepEqual(calls, ["bob-navigation-hotkeys:open-next-group-link"]);
+
+  state.content = "[[changed|» changed]]";
+  assert.equal(linksWalkerFooterActivate(plugin, "next", { group: true }), false);
+  assert.deepEqual(calls, ["bob-navigation-hotkeys:open-next-group-link"]);
 });
 
 test("link direction activation revalidates the preview and calls the existing command", async () => {

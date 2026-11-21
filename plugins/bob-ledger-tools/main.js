@@ -9933,7 +9933,12 @@ function freshnessFooterEnsureDom(el) {
   if (!el) {
     return null;
   }
-  if (el._bobFreshnessParts && el._bobFreshnessParts.button) {
+  if (
+    el._bobFreshnessParts &&
+    el._bobFreshnessParts.button &&
+    el._bobFreshnessParts.linkGroupPrev &&
+    el._bobFreshnessParts.linkGroupNext
+  ) {
     return el._bobFreshnessParts;
   }
   try {
@@ -9962,6 +9967,11 @@ function freshnessFooterEnsureDom(el) {
     "span",
     "bob-freshness-context",
   );
+  const linkGroupPrev = freshnessFooterCreateChild(
+    el,
+    "button",
+    "bob-freshness-link-arm bob-freshness-link-group bob-freshness-link-group-prev",
+  );
   const linkPrev = freshnessFooterCreateChild(
     el,
     "button",
@@ -9977,17 +9987,26 @@ function freshnessFooterEnsureDom(el) {
     "button",
     "bob-freshness-link-arm bob-freshness-link-next",
   );
+  const linkGroupNext = freshnessFooterCreateChild(
+    el,
+    "button",
+    "bob-freshness-link-arm bob-freshness-link-group bob-freshness-link-group-next",
+  );
   const linkStatus = freshnessFooterCreateChild(
     el,
     "span",
     "bob-freshness-link-status",
   );
+  freshnessFooterSetAttr(linkGroupPrev, "type", "button");
   freshnessFooterSetAttr(linkPrev, "type", "button");
   freshnessFooterSetAttr(linkNext, "type", "button");
+  freshnessFooterSetAttr(linkGroupNext, "type", "button");
   freshnessFooterSetText(linkSeparator, "·");
+  freshnessFooterSetOmitted(linkGroupPrev, true);
   freshnessFooterSetOmitted(linkPrev, true);
   freshnessFooterSetOmitted(linkSeparator, true);
   freshnessFooterSetOmitted(linkNext, true);
+  freshnessFooterSetOmitted(linkGroupNext, true);
   freshnessFooterSetOmitted(linkStatus, true);
   const detail = freshnessFooterCreateChild(
     el,
@@ -10006,9 +10025,11 @@ function freshnessFooterEnsureDom(el) {
     icon,
     due,
     context,
+    linkGroupPrev,
     linkPrev,
     linkSeparator,
     linkNext,
+    linkGroupNext,
     linkStatus,
     detail,
     hint,
@@ -10286,8 +10307,9 @@ function freshnessFooterPaintHint(node, view) {
 }
 
 // Shed groups from the end, shorten stage detail, then hide detail,
-// shortcut hint, and upkeep meter. With an answer chip the meter sheds
-// before the hint, so the chip outlasts it. The current tier stays visible.
+// shortcut hint, and upkeep meter. Links sheds meter, hint, context,
+// group-arm labels, group arms, then step arms. With an answer chip the
+// meter sheds before the hint, so the chip outlasts it.
 function freshnessFooterFit(el, parts, view) {
   const groupContainer = parts && parts.groups;
   const nodes = groupContainer && Array.isArray(groupContainer._bobFreshnessGroupNodes)
@@ -10306,8 +10328,31 @@ function freshnessFooterFit(el, parts, view) {
   let hint = Boolean(view && view.hintText);
   let meter = Boolean(view && view.meterText);
   const bankPanel = Boolean(view && view.panel === "bank");
+  const linksPanel = Boolean(view && view.panel === "links");
   const showArms = Boolean(bankPanel && (view.linkPrev || view.linkNext));
   let arms = showArms;
+  let context = Boolean(linksPanel && view.contextText);
+  let groupArms = Boolean(linksPanel && (view.linkGroupPrev || view.linkGroupNext));
+  const groupCanCompact = Boolean(
+    groupArms && (
+      (view.linkGroupPrev && view.linkGroupPrev.compactText &&
+        view.linkGroupPrev.compactText !== view.linkGroupPrev.text) ||
+      (view.linkGroupNext && view.linkGroupNext.compactText &&
+        view.linkGroupNext.compactText !== view.linkGroupNext.text)
+    ),
+  );
+  let groupCompact = false;
+  let stepArms = Boolean(linksPanel && (view.linkPrev || view.linkNext));
+  const applyGroupArm = (button, arm) => {
+    if (!button) {
+      return;
+    }
+    freshnessFooterSetOmitted(button, !groupArms || !arm);
+    if (arm) {
+      const label = groupCompact && arm.compactText ? arm.compactText : arm.text;
+      freshnessFooterSetText(button, label);
+    }
+  };
   const apply = () => {
     if (bankPanel) {
       freshnessFooterPaintBankDetail(
@@ -10338,6 +10383,17 @@ function freshnessFooterFit(el, parts, view) {
         !arms || !view.linkPrev || !view.linkNext,
       );
     }
+    if (linksPanel) {
+      freshnessFooterSetOmitted(parts.context, !context);
+      applyGroupArm(parts.linkGroupPrev, view.linkGroupPrev);
+      applyGroupArm(parts.linkGroupNext, view.linkGroupNext);
+      freshnessFooterSetOmitted(parts.linkPrev, !stepArms || !view.linkPrev);
+      freshnessFooterSetOmitted(parts.linkNext, !stepArms || !view.linkNext);
+      freshnessFooterSetOmitted(
+        parts.linkSeparator,
+        !stepArms || !view.linkPrev || !view.linkNext,
+      );
+    }
   };
   const result = () => {
     const out = {
@@ -10349,6 +10405,12 @@ function freshnessFooterFit(el, parts, view) {
     };
     if (bankPanel) {
       out.arms = arms;
+    }
+    if (linksPanel) {
+      out.context = context;
+      out.groupCompact = groupCompact;
+      out.groupArms = groupArms;
+      out.stepArms = stepArms;
     }
     return out;
   };
@@ -10393,6 +10455,31 @@ function freshnessFooterFit(el, parts, view) {
     }
     if (overflows() && hint) {
       hint = false;
+      apply();
+    }
+  } else if (linksPanel) {
+    if (overflows() && meter) {
+      meter = false;
+      apply();
+    }
+    if (overflows() && hint) {
+      hint = false;
+      apply();
+    }
+    if (overflows() && context) {
+      context = false;
+      apply();
+    }
+    if (overflows() && groupArms && groupCanCompact && !groupCompact) {
+      groupCompact = true;
+      apply();
+    }
+    if (overflows() && groupArms) {
+      groupArms = false;
+      apply();
+    }
+    if (overflows() && stepArms) {
+      stepArms = false;
       apply();
     }
   } else {
@@ -10572,6 +10659,57 @@ function freshnessFooterPaint(el, view) {
   return parts;
 }
 
+function freshnessFooterPaintArm(button, arm, options = {}) {
+  const group = options.group === true;
+  freshnessFooterSetOmitted(button, !arm);
+  freshnessFooterSetText(button, arm ? arm.text : "");
+  freshnessFooterSetAttr(button, "title", arm ? arm.tooltip : "");
+  const aria = arm
+    ? (arm.ariaLabel ||
+      `${arm.direction === "prev" ? "Open previous" : "Open next"}: ${arm.name}`)
+    : "";
+  freshnessFooterSetAttr(button, "aria-label", aria);
+  freshnessFooterSetAttr(
+    button,
+    "data-walk-link-direction",
+    arm ? arm.direction : "",
+  );
+  if (group) {
+    freshnessFooterSetAttr(button, "data-walk-link-group", arm ? "true" : "");
+  } else if (button) {
+    freshnessFooterRemoveAttr(button, "data-walk-link-group");
+  }
+  freshnessFooterToggleClass(
+    button,
+    "bob-freshness-link-create",
+    Boolean(arm && arm.createEligible),
+  );
+  freshnessFooterToggleClass(
+    button,
+    "bob-freshness-link-ghost",
+    Boolean(arm && arm.ghost),
+  );
+  freshnessFooterToggleClass(
+    button,
+    "bob-freshness-link-unavailable",
+    Boolean(arm && !arm.enabled),
+  );
+  const ghostFocus = Boolean(arm && arm.ghost);
+  if (ghostFocus) {
+    freshnessFooterSetAttr(button, "aria-disabled", "true");
+  } else if (button) {
+    freshnessFooterRemoveAttr(button, "aria-disabled");
+  }
+  try {
+    if (button) {
+      button.disabled = !arm || (arm.enabled !== true && !ghostFocus);
+      button.tabIndex = arm && (arm.enabled === true || ghostFocus) ? 0 : -1;
+    }
+  } catch (error) {
+    // Focus management is best-effort.
+  }
+}
+
 function freshnessFooterPaintLinks(parts, view) {
   if (!parts) {
     return;
@@ -10579,45 +10717,16 @@ function freshnessFooterPaintLinks(parts, view) {
   const active = Boolean(
     view && (view.panel === "links" || view.panel === "bank"),
   );
+  const linksPanel = Boolean(view && view.panel === "links");
   const prev = active ? view.linkPrev : null;
   const next = active ? view.linkNext : null;
+  const groupPrev = linksPanel ? view.linkGroupPrev : null;
+  const groupNext = linksPanel ? view.linkGroupNext : null;
   const showSeparator = Boolean(prev && next);
-  for (const [button, arm] of [
-    [parts.linkPrev, prev],
-    [parts.linkNext, next],
-  ]) {
-    freshnessFooterSetOmitted(button, !arm);
-    freshnessFooterSetText(button, arm ? arm.text : "");
-    freshnessFooterSetAttr(button, "title", arm ? arm.tooltip : "");
-    const aria = arm
-      ? (arm.ariaLabel ||
-        `${arm.direction === "prev" ? "Open previous" : "Open next"}: ${arm.name}`)
-      : "";
-    freshnessFooterSetAttr(button, "aria-label", aria);
-    freshnessFooterSetAttr(
-      button,
-      "data-walk-link-direction",
-      arm ? arm.direction : "",
-    );
-    freshnessFooterToggleClass(
-      button,
-      "bob-freshness-link-create",
-      Boolean(arm && arm.createEligible),
-    );
-    freshnessFooterToggleClass(
-      button,
-      "bob-freshness-link-unavailable",
-      Boolean(arm && !arm.enabled),
-    );
-    try {
-      if (button) {
-        button.disabled = !arm || arm.enabled !== true;
-        button.tabIndex = arm && arm.enabled === true ? 0 : -1;
-      }
-    } catch (error) {
-      // Focus management is best-effort.
-    }
-  }
+  freshnessFooterPaintArm(parts.linkGroupPrev, groupPrev, { group: true });
+  freshnessFooterPaintArm(parts.linkPrev, prev);
+  freshnessFooterPaintArm(parts.linkNext, next);
+  freshnessFooterPaintArm(parts.linkGroupNext, groupNext, { group: true });
   freshnessFooterSetOmitted(parts.linkSeparator, !showSeparator);
   freshnessFooterSetText(
     parts.linkStatus,
@@ -11320,6 +11429,15 @@ function laneWalkerFooterView(queue, options = {}) {
 // nav preview and then delegates to nav's existing [n / ]n commands.
 const LINKS_WALKER_FOOTER_API_VERSION = 2;
 
+function linksWalkerFooterStripNavGlyphs(text) {
+  return String(text || "")
+    .replace(/^(?:«|»|<<|>>)\s*/, "")
+    .replace(/\s*(?:«|»|<<|>>)$/, "")
+    .replace(/^[‹<>›]\s*/, "")
+    .replace(/\s*[‹<>›]$/, "")
+    .trim();
+}
+
 function linksWalkerFooterLabel(link, direction) {
   const text = String(link && link.text ? link.text : "").trim();
   const targetPath = String(link && link.path ? link.path : "");
@@ -11327,9 +11445,9 @@ function linksWalkerFooterLabel(link, direction) {
   const target = String(link && link.target ? link.target : "");
   const targetStem = target.split("#")[0].split("^")[0].split("/").pop().replace(/\.md$/i, "");
   const stem = pathStem || targetStem;
-  if (text !== "prev" && text !== "next") {
-    return text.replace(/^[‹<>›]\s*/, "").replace(/\s*[‹<>›]$/, "").trim() ||
-      stem || (direction === "prev" ? "previous" : "next");
+  const stripped = linksWalkerFooterStripNavGlyphs(text);
+  if (stripped !== "prev" && stripped !== "next" && text !== "prev" && text !== "next") {
+    return stripped || stem || (direction === "prev" ? "previous" : "next");
   }
 
   const daily = /^(\d{4})(\d{2})(\d{2})$/.exec(stem);
@@ -11425,9 +11543,13 @@ function linksWalkerFooterRecordWalk(walk) {
   const albumName = [walk.album.emoji, walk.album.title].filter(Boolean).join(" ");
   const recordName = String(walk.title || walk.stem || "This record");
   if (walk.state === "ok" && Number.isInteger(walk.position) && Number.isInteger(walk.total)) {
+    const field = String(walk.walkBy || (walk.group && walk.group.field) || "").trim();
+    const order = field
+      ? `by ${field}, then title · wraps around`
+      : "alphabetical, wraps around";
     return {
       dueText: `Links ${walk.position}/${walk.total}`,
-      tooltip: `${recordName} is ${walk.position} of ${walk.total} in ${albumName} · alphabetical, wraps around`,
+      tooltip: `${recordName} is ${walk.position} of ${walk.total} in ${albumName} · ${order}`,
       ariaLabel: `Links ${walk.position} of ${walk.total}`,
     };
   }
@@ -11491,73 +11613,160 @@ function linksWalkerFooterArm(link, direction) {
   };
 }
 
+function linksWalkerFooterGroupName(link) {
+  const short = linksWalkerFooterStripNavGlyphs(link && link.shortLabel);
+  if (short) return short;
+  const group = linksWalkerFooterStripNavGlyphs(link && link.groupLabel);
+  if (group) return group;
+  return linksWalkerFooterLabel(link, "next");
+}
+
+function linksWalkerFooterGroupLanding(link) {
+  return linksWalkerFooterStripNavGlyphs(link && link.landingLabel);
+}
+
+function linksWalkerFooterGroupArm(link, direction) {
+  if (!link) {
+    return null;
+  }
+  const name = linksWalkerFooterGroupName(link);
+  const exists = link.exists === true || link.state === "exists";
+  const createEligible = !exists && (
+    link.state === "creatable" || link.createEligible === true
+  );
+  const ghost = !exists && !createEligible;
+  const wraps = link.wraps === true;
+  const plus = createEligible ? "+" : "";
+  const wrapMark = wraps ? " ↺" : "";
+  const compactText = direction === "prev"
+    ? `« ${name}${plus}`
+    : `${name}${plus} »${wrapMark}`;
+  const groupLabel = linksWalkerFooterStripNavGlyphs(link && link.groupLabel);
+  const text = groupLabel && groupLabel !== name
+    ? (direction === "prev"
+      ? `« ${groupLabel}${plus}`
+      : `${groupLabel}${plus} »${wrapMark}`)
+    : compactText;
+  const landing = linksWalkerFooterGroupLanding(link);
+  const tooltip = ghost
+    ? (link.ghostReason || `${name} is not in the vault`)
+    : createEligible
+    ? `${name} isn't created yet — ${direction === "prev" ? "[N" : "]N"} creates it\n${linksWalkerFooterPathTooltip(link)}`
+    : landing && landing !== name
+    ? `${linksWalkerFooterPathTooltip(link)}\n${landing}`
+    : linksWalkerFooterPathTooltip(link);
+  const ariaLabel = ghost
+    ? `Previous group: ${name}, not in vault`.replace(/^Previous/, direction === "next" ? "Next" : "Previous")
+    : createEligible
+    ? `${direction === "prev" ? "Previous" : "Next"} group: ${name}, not created yet — activating creates it`
+    : `${direction === "prev" ? "Open previous" : "Open next"} group: ${name}`;
+  return {
+    direction,
+    group: true,
+    name,
+    text,
+    compactText,
+    tooltip,
+    ariaLabel,
+    enabled: exists || createEligible || ghost,
+    createEligible,
+    ghost,
+    wraps,
+    path: link.path || null,
+    target: link.target || "",
+    exists,
+    state: createEligible ? "creatable" : exists ? "exists" : "ghost",
+    sourceText: link.text || "",
+  };
+}
+
+function linksWalkerFooterHintNoun(group, groupNone) {
+  const reason = groupNone && groupNone.reason;
+  if (reason === "year" || reason === "all") {
+    return null;
+  }
+  const noun = group && typeof group.noun === "string" ? group.noun.trim() : "";
+  if (noun === "day") return "week";
+  if (noun === "week") return "quarter";
+  if (noun === "quarter") return "year";
+  if (noun) return noun;
+  return "group";
+}
+
+function linksWalkerFooterContextText(group) {
+  if (!group || !Number.isInteger(group.position) || !Number.isInteger(group.size) || group.size <= 0) {
+    return "";
+  }
+  const label = String(group.label || group.shortLabel || "").trim();
+  if (!label) {
+    return "";
+  }
+  return `${label} ${group.position}/${group.size}`;
+}
+
+function linksWalkerFooterStatusView(linkState, statusText, tooltip, ariaLabel) {
+  return {
+    visible: true,
+    mode: "links",
+    panel: "links",
+    glyph: "⇄",
+    dueText: "Links",
+    contextText: "",
+    linkState,
+    linkStatusText: statusText,
+    linkPrev: null,
+    linkNext: null,
+    linkGroupPrev: null,
+    linkGroupNext: null,
+    detailText: "",
+    hintText: "",
+    groups: [],
+    groupsText: "",
+    meterText: "",
+    tooltip,
+    ariaLabel,
+  };
+}
+
 function linksWalkerFooterView(preview, options = {}) {
   try {
     const walkDue = linksWalkerFooterRecordWalk(preview && preview.recordWalk);
     if (options.state === "open-note") {
-      return {
-        visible: true,
-        mode: "links",
-        panel: "links",
-        glyph: "⇄",
-        dueText: "Links",
-        contextText: "",
-        linkState: "open-note",
-        linkStatusText: "open a note",
-        linkPrev: null,
-        linkNext: null,
-        detailText: "",
-        hintText: "",
-        groups: [],
-        groupsText: "",
-        meterText: "",
-        tooltip: "⇄ Links · open a Markdown note to preview its prev / next links",
-        ariaLabel: "Links · open a note",
-      };
+      return linksWalkerFooterStatusView(
+        "open-note",
+        "open a note",
+        "⇄ Links · open a Markdown note to preview its prev / next links",
+        "Links · open a note",
+      );
     }
     if (options.state === "unavailable" || !preview || preview.ok !== true) {
-      return {
-        visible: true,
-        mode: "links",
-        panel: "links",
-        glyph: "⇄",
-        dueText: "Links",
-        contextText: "",
-        linkState: "unavailable",
-        linkStatusText: "links unavailable",
-        linkPrev: null,
-        linkNext: null,
-        detailText: "",
-        hintText: "",
-        groups: [],
-        groupsText: "",
-        meterText: "",
-        tooltip: "⇄ Links · update Bob Navigation Hotkeys to preview destinations",
-        ariaLabel: "Links · links unavailable",
-      };
+      return linksWalkerFooterStatusView(
+        "unavailable",
+        "links unavailable",
+        "⇄ Links · update Bob Navigation Hotkeys to preview destinations",
+        "Links · links unavailable",
+      );
     }
 
     let prev = linksWalkerFooterArm(preview.prev, "prev");
     let next = linksWalkerFooterArm(preview.next, "next");
-    if (!prev && !next && walkDue.dueText === "Links") {
+    const groupPrev = linksWalkerFooterGroupArm(preview.prevGroup, "prev");
+    const groupNext = linksWalkerFooterGroupArm(preview.nextGroup, "next");
+    const group = preview.group && typeof preview.group === "object" ? preview.group : null;
+    const groupNone = preview.groupNone && typeof preview.groupNone === "object"
+      ? preview.groupNone
+      : null;
+    if (!prev && !next && !groupPrev && !groupNext && walkDue.dueText === "Links") {
+      const emptyTooltip = groupNone && groupNone.message
+        ? `⇄ Links · ${groupNone.message}`
+        : "⇄ Links · no ‹ / › links in this note";
       return {
-        visible: true,
-        mode: "links",
-        panel: "links",
-        glyph: "⇄",
-        dueText: "Links",
-        contextText: "",
-        linkState: "empty",
-        linkStatusText: "no ‹ / › links in this note",
-        linkPrev: null,
-        linkNext: null,
-        detailText: "",
-        hintText: "",
-        groups: [],
-        groupsText: "",
-        meterText: "",
-        tooltip: "⇄ Links · no ‹ / › links in this note",
-        ariaLabel: "Links · no previous or next links in this note",
+        ...linksWalkerFooterStatusView(
+          "empty",
+          "no ‹ / › links in this note",
+          emptyTooltip,
+          "Links · no previous or next links in this note",
+        ),
       };
     }
 
@@ -11572,31 +11781,71 @@ function linksWalkerFooterView(preview, options = {}) {
       }
     }
 
-    const linkState = prev && next ? "both" : prev ? "prev-only" : next ? "next-only" : "empty";
-    const statusText = prev && !next ? "no next" : !prev && next ? "no prev" : "";
-    const arms = [prev, next].filter(Boolean);
+    const hasSteps = Boolean(prev || next);
+    const hasGroups = Boolean(groupPrev || groupNext);
+    const linkState = hasSteps && prev && next
+      ? "both"
+      : hasSteps && prev
+      ? "prev-only"
+      : hasSteps && next
+      ? "next-only"
+      : hasGroups
+      ? "group-only"
+      : "empty";
+    let statusText = prev && !next ? "no next" : !prev && next ? "no prev" : "";
+    if (preview.groupConflict === "prev" || preview.groupConflict === "next") {
+      const glyph = preview.groupConflict === "prev" ? "«" : "»";
+      statusText = statusText
+        ? `${statusText} · Two ${glyph} links on nav lines — keep one`
+        : `Two ${glyph} links on nav lines — keep one`;
+    }
+    const contextText = linksWalkerFooterContextText(group);
+    const hintNoun = (hasGroups || group)
+      ? linksWalkerFooterHintNoun(group, groupNone)
+      : null;
+    let hintText = hintNoun ? `]} next ${hintNoun}` : "";
+    let boundaryHint = "";
+    if (group && group.atEnd === true && group.enteringNext) {
+      boundaryHint = (groupNext && groupNext.wraps)
+        ? `]n wraps to ${group.enteringNext}`
+        : `]n enters ${group.enteringNext}`;
+      hintText = boundaryHint;
+    }
+    let startHint = "";
+    if (group && group.atStart === true && group.enteringPrev) {
+      startHint = (groupPrev && groupPrev.wraps)
+        ? `[n wraps to ${group.enteringPrev}`
+        : `[n enters ${group.enteringPrev}`;
+    }
+    const arms = [groupPrev, prev, next, groupNext].filter(Boolean);
     const summary = arms.map((arm) => arm.text).join(" · ");
+    const noneMessage = groupNone && groupNone.message ? groupNone.message : "";
+    const extraTips = [statusText, startHint, noneMessage].filter(Boolean);
     const armsTooltip = arms
       .map((arm) => `${arm.text}\n${arm.tooltip}`)
-      .concat(statusText ? [statusText] : [])
+      .concat(extraTips)
       .join("\n");
     const tooltip = walkDue.tooltip
       ? `⇄ Links · ${walkDue.tooltip}${armsTooltip ? `\n${armsTooltip}` : ""}`
-      : `⇄ Links · ${summary}${statusText ? ` · ${statusText}` : ""}${armsTooltip ? `\n${armsTooltip}` : ""}`;
-    const summaryText = [walkDue.ariaLabel, summary, statusText].filter(Boolean).join(" · ");
+      : `⇄ Links · ${[summary, hintText, statusText, noneMessage].filter(Boolean).join(" · ")}${armsTooltip ? `\n${armsTooltip}` : ""}`;
+    const summaryText = [walkDue.ariaLabel, contextText, summary, hintText, statusText]
+      .filter(Boolean)
+      .join(" · ");
     return {
       visible: true,
       mode: "links",
       panel: "links",
       glyph: "⇄",
       dueText: walkDue.dueText,
-      contextText: "",
+      contextText,
       linkState,
       linkStatusText: statusText,
       linkPrev: prev,
       linkNext: next,
+      linkGroupPrev: groupPrev,
+      linkGroupNext: groupNext,
       detailText: "",
-      hintText: "",
+      hintText,
       groups: [],
       groupsText: "",
       meterText: "",
@@ -11665,11 +11914,19 @@ function linksWalkerFooterPaint(plugin, view, source, preview, generation) {
       "walker:n",
       view.linkState,
       view.dueText,
+      view.contextText,
+      view.hintText,
       view.linkStatusText,
       view.linkPrev && view.linkPrev.text,
       view.linkPrev && view.linkPrev.tooltip,
       view.linkNext && view.linkNext.text,
       view.linkNext && view.linkNext.tooltip,
+      view.linkGroupPrev && view.linkGroupPrev.text,
+      view.linkGroupPrev && view.linkGroupPrev.tooltip,
+      view.linkGroupPrev && view.linkGroupPrev.state,
+      view.linkGroupNext && view.linkGroupNext.text,
+      view.linkGroupNext && view.linkGroupNext.tooltip,
+      view.linkGroupNext && view.linkGroupNext.state,
       view.tooltip,
     ].join("\0");
     plugin.linkWalkerFooterSnapshot = source && preview
@@ -11786,24 +12043,30 @@ function linksWalkerFooterSameLink(left, right) {
     left.text === right.text &&
     left.target === right.target &&
     left.path === right.path &&
-    left.exists === right.exists
+    left.exists === right.exists &&
+    (left.state == null || right.state == null || left.state === right.state)
   );
 }
 
-function linksWalkerFooterActivate(plugin, direction) {
+function linksWalkerFooterActivate(plugin, direction, options = {}) {
   try {
     if (direction !== "prev" && direction !== "next") {
       return false;
     }
+    const group = options && options.group === true;
     const route = walkerFooterWalkMode(plugin);
     const snapshot = plugin && plugin.linkWalkerFooterSnapshot;
     if (route.legacy || route.mode !== "n" || !snapshot) {
       return false;
     }
-    const expected = snapshot.preview && snapshot.preview[direction];
-    const arm = direction === "prev"
-      ? plugin.freshnessFooterLastView && plugin.freshnessFooterLastView.linkPrev
-      : plugin.freshnessFooterLastView && plugin.freshnessFooterLastView.linkNext;
+    const previewKey = group
+      ? (direction === "prev" ? "prevGroup" : "nextGroup")
+      : direction;
+    const expected = snapshot.preview && snapshot.preview[previewKey];
+    const lastView = plugin.freshnessFooterLastView;
+    const arm = group
+      ? (direction === "prev" ? lastView && lastView.linkGroupPrev : lastView && lastView.linkGroupNext)
+      : (direction === "prev" ? lastView && lastView.linkPrev : lastView && lastView.linkNext);
     if (!expected || !arm || arm.enabled !== true) {
       return false;
     }
@@ -11826,16 +12089,21 @@ function linksWalkerFooterActivate(plugin, direction) {
       path: snapshot.source.path,
       content: snapshot.source.content,
     });
+    const latestStop = latest && latest[previewKey];
     if (
       !latest || latest.ok !== true ||
-      !linksWalkerFooterSameLink(expected, latest[direction])
+      !linksWalkerFooterSameLink(expected, latestStop)
     ) {
       linksWalkerFooterRequest(plugin);
       return false;
     }
-    const commandId = direction === "prev"
-      ? "bob-navigation-hotkeys:open-prev-link"
-      : "bob-navigation-hotkeys:open-next-link";
+    const commandId = group
+      ? (direction === "prev"
+        ? "bob-navigation-hotkeys:open-prev-group-link"
+        : "bob-navigation-hotkeys:open-next-group-link")
+      : (direction === "prev"
+        ? "bob-navigation-hotkeys:open-prev-link"
+        : "bob-navigation-hotkeys:open-next-link");
     const commands = plugin.app && plugin.app.commands;
     let commandExists = Boolean(
       commands && commands.commands && commands.commands[commandId],
@@ -57435,9 +57703,11 @@ class BobLedgerToolsFreshnessStatusMixin {
       } catch (error) {
         // A status bar without a click still shows the counts.
       }
-      for (const [direction, button] of [
-        ["prev", parts && parts.linkPrev],
-        ["next", parts && parts.linkNext],
+      for (const [direction, button, group] of [
+        ["prev", parts && parts.linkPrev, false],
+        ["next", parts && parts.linkNext, false],
+        ["prev", parts && parts.linkGroupPrev, true],
+        ["next", parts && parts.linkGroupNext, true],
       ]) {
         try {
           if (!button || typeof button.addEventListener !== "function") {
@@ -57455,10 +57725,10 @@ class BobLedgerToolsFreshnessStatusMixin {
               // Best-effort.
             }
             const route = walkerFooterWalkMode(self);
-            if (!route.legacy && route.mode === "b") {
+            if (!group && !route.legacy && route.mode === "b") {
               bankWalkerFooterActivate(self, direction);
             } else {
-              linksWalkerFooterActivate(self, direction);
+              linksWalkerFooterActivate(self, direction, { group });
             }
           });
         } catch (error) {
@@ -163818,6 +164088,8 @@ try {
   ) {
     module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
       linksWalkerFooterLabel,
+      linksWalkerFooterStripNavGlyphs,
+      linksWalkerFooterGroupArm,
       linksWalkerFooterRecordWalk,
       linksWalkerFooterSubscribeAlbum,
       linksWalkerFooterView,

@@ -422,6 +422,29 @@ a.bob-plan-ready:hover {
   color: var(--text-muted);
 }
 
+.bob-freshness-link-ghost {
+  border-bottom: 1px dotted currentColor;
+  color: var(--text-faint, var(--text-muted));
+}
+
+.bob-freshness-link-group-prev:not(.bob-freshness-omit) {
+  margin-left: 0.35em;
+}
+
+.bob-freshness-link-group-prev:not(.bob-freshness-omit) ~ .bob-freshness-link-prev {
+  margin-left: 0;
+}
+
+@media (forced-colors: active) {
+  .bob-freshness-link-create,
+  .bob-freshness-link-ghost {
+    border-bottom-color: CanvasText;
+  }
+  .bob-freshness-link-ghost {
+    color: GrayText;
+  }
+}
+
 .bob-freshness-link-status {
   min-width: 0;
   overflow: hidden;

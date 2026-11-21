@@ -609,6 +609,31 @@ test("unstable and insert-failed paths stay in the fallback until a new path or 
   assert.equal(liveNode.parentNode, live.sizer);
 });
 
+test("a routine release forgets the sticky fallback once the pane shows another note", () => {
+  const doc = makeDoc();
+  const pane = readingPane(doc);
+  const node = card(doc);
+  let shown = "eat/ramen.md";
+  const options = {
+    path: "eat/ramen.md", kind: "record", recognizer: H.propertyCardAlbumTitleRecognizer("Ramen"),
+    currentPath: () => shown, onLost: () => {},
+  };
+  doc.failInsert = true;
+  assert.equal(H.propertyCardAdoptTitle(pane.scope, node, options).mode, "fallback", "the insertion fault falls back");
+  doc.failInsert = false;
+  assert.equal(H.propertyCardAdoptRelease(pane.scope, "eat/ramen.md", "record", { preserveFallback: true }), false);
+  assert.equal(H.propertyCardAdoptTitle(pane.scope, node, options).mode, "fallback",
+    "routine cleanup on the same note keeps the fallback");
+  shown = "ordinary.md";
+  H.propertyCardAdoptRelease(pane.scope, "eat/ramen.md", "record", { preserveFallback: true });
+  shown = "eat/ramen.md";
+  const back = H.propertyCardAdoptTitle(pane.scope, node, options);
+  assert.equal(back.mode, "slot", "returning to the note after the pane moved on retries the slot");
+  assert.equal(node.parentNode, pane.header);
+  assert.equal(pane.scope.classList.contains(OWNS), true);
+  back.release();
+});
+
 test("a same-node re-adopt never remounts; a changed recognizer key re-owns", () => {
   const doc = makeDoc();
   const pane = readingPane(doc);

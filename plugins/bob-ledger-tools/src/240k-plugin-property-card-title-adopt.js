@@ -18,7 +18,9 @@
 // same frame, the heading demotes, and the adapter's onLost(reason) runs
 // deferred so it can remount through its refresh. Paths that came back
 // unstable or insert-failed stay in the fallback until the scope sees a
-// new path or an explicit release.
+// new path or an explicit release. A routine (preserveFallback) release
+// also forgets once the adapter's currentPath reports another note: the
+// pane has moved on, so a later visit to the failed path tries the slot.
 //
 // The kit heading (.bob-property-card-title, role=heading, aria-level=1) is
 // promoted only while ownership is held; every other state demotes it, so a
@@ -88,6 +90,19 @@ function propertyCardAdoptForget(scope, path) {
   }
 }
 
+function propertyCardAdoptRemember(scope, entry, reason) {
+  propertyCardAdoptMemory.set(scope, { path: entry.path, reason, currentPath: entry.currentPath || null });
+}
+
+// True once the remembered pane shows another note (or none). Memory
+// without a currentPath reader never goes stale this way.
+function propertyCardAdoptMemoryMovedOn(memory) {
+  if (!memory || typeof memory.currentPath !== "function") return false;
+  let now = "";
+  try { now = String(memory.currentPath() || ""); } catch (_) { now = ""; }
+  return now !== memory.path;
+}
+
 function propertyCardAdoptCall(callback, ...args) {
   if (typeof callback !== "function") return;
   try { callback(...args); } catch (_) {}
@@ -134,7 +149,7 @@ function propertyCardAdoptLost(scope, entry, reason) {
   entry.slotRelease = null;
   propertyCardDemoteTitleHeading(entry.node);
   if (PROPERTY_CARD_ADOPT_STICKY_REASONS.includes(reason)) {
-    propertyCardAdoptMemory.set(scope, { path: entry.path, reason });
+    propertyCardAdoptRemember(scope, entry, reason);
   }
   entry.defer(() => propertyCardAdoptCall(entry.onLost, reason));
 }
@@ -158,7 +173,7 @@ function propertyCardAdoptMount(scope, entry) {
   if (typeof release !== "function") {
     entry.released = true;
     propertyCardAdoptions.delete(scope);
-    propertyCardAdoptMemory.set(scope, { path: entry.path, reason: "insert-failed" });
+    propertyCardAdoptRemember(scope, entry, "insert-failed");
     propertyCardDemoteTitleHeading(entry.node);
     return false;
   }
@@ -363,7 +378,8 @@ function propertyCardAdoptedEntry(scope) {
 // Release this scope's adoption. `path` and `kind` are optional filters:
 // album and record share one Map keyed by the editor, so a species with
 // no card must not drop the other species' slot. Also clears that path's
-// remembered fallback unless a kind filter skipped a live occupant.
+// remembered fallback unless a kind filter skipped a live occupant;
+// preserveFallback keeps it only while the pane still shows that path.
 // Never calls onLost.
 function propertyCardAdoptRelease(scope, path, kind, options = {}) {
   const bound = path === undefined || path === null || path === "" ? "" : String(path);
@@ -374,6 +390,7 @@ function propertyCardAdoptRelease(scope, path, kind, options = {}) {
     return false;
   }
   if (!preserveFallback) propertyCardAdoptForget(scope, bound);
+  else if (propertyCardAdoptMemoryMovedOn(propertyCardAdoptMemory.get(scope))) propertyCardAdoptMemory.delete(scope);
   if (!entry || entry.released) return false;
   if (bound && entry.path !== bound) return false;
   propertyCardAdoptDrop(scope, entry);

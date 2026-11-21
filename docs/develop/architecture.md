@@ -181,7 +181,9 @@ When the slot is lost, ownership drops in the same frame, so the inline title
 and H1 return at once. The adapter's `onLost(reason)` then runs deferred and
 remounts through its refresh. A path that came back `unstable` or
 `insert-failed` stays in the fallback until the scope sees a new path or an
-explicit `propertyCardAdoptRelease(scope, path?)`. Plugin teardown calls
+explicit `propertyCardAdoptRelease(scope, path?)`. Routine cleanup passes
+`{ preserveFallback: true }`, which keeps that memory only while the pane's
+`currentPath` still reports the failed path. Plugin teardown calls
 `propertyCardAdoptReleaseAll()`. Re-adopting the same node for the same path
 never remounts and re-owns only when the recognizer key changes. To update a
 mounted card, build a fresh node and pass it to `propertyCardAdoptPatch(target,

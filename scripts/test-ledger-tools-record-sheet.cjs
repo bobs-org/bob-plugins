@@ -1719,6 +1719,22 @@ test("record title recognizer hides a first-body walk line, a matching H1, and t
   const never = helpers.recordSheetTitleRecognizer({ path: "eat/0.md" });
   assert.equal(never.heading("Alpha"), false);
   assert.equal(never.follower(readingLine), false);
+
+  for (const [sourceText, lineIndex] of [
+    [`${readingLine}\n\n\nBody\n`, 0],
+    [`# Alpha\n\n${readingLine}\n\nBody\n`, 2],
+  ]) {
+    const trailing = helpers.recordSheetTitleRecognizer({
+      path: "eat/0.md", title: "Alpha", walk: { ...model, lineIndex }, sourceText,
+    });
+    const trailingRange = helpers.propertyCardTitleSourceRange(sourceText, trailing);
+    assert.ok(trailingRange);
+    assert.equal(trailingRange.toLine, lineIndex + (lineIndex ? 1 : 2), "blank lines after a record walk stay in the range");
+    const blank = sourceText.indexOf("\n\nBody") + 1;
+    const body = sourceText.indexOf("Body");
+    assert.equal(helpers.propertyCardSelectionTouches({ ranges: [{ from: blank, to: blank }] }, trailingRange), true, "the consumed blank reveals the record title source");
+    assert.equal(helpers.propertyCardSelectionTouches({ ranges: [{ from: body, to: body }] }, trailingRange), false, "the body line does not reveal the record title source");
+  }
   plugin.recordSheetSourceCache.set("eat/0.md", text);
 });
 

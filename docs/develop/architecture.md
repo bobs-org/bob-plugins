@@ -167,7 +167,7 @@ offline wrapper is `scripts/test-obsidian-title-slot-spike.cjs`.
 
 ### Adopting the title block
 
-Adapters do not call the slot and ownership primitives directly.
+Collection-card adapters do not call the slot and ownership primitives directly.
 `propertyCardAdoptTitle(scope, node, { path, kind, view, recognizer,
 currentPath, onLost })` mounts the card in the title slot and owns the title.
 It returns `{ mode, release }`: mode `"slot"` means the card is (or is about
@@ -196,6 +196,11 @@ and `propertyCardLiveCurrentPath(view)` supply `view` and `currentPath`. The
 album card is the first adopter. The record card reuses the glue unchanged
 with its own recognizer, which also hides a first-body walk line. Unit tests live in
 `scripts/test-ledger-tools-property-card-title-adopt.cjs`.
+
+The shared title range includes trailing blank lines after a recognized title and its
+nav or child-link lines. The first unrelated non-blank body line stays outside the
+range, so selecting a consumed blank reveals the source without revealing the body.
+The day and period controller manages its own render-component lifecycle.
 
 ## Plugin files
 

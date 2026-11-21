@@ -549,6 +549,17 @@ function makeHelpers(ctx) {
     view.editor.focus();
     return { ok: true, line };
   })()`);
+  const placeCursorBlankAfter = async (needle, notePath) => client.evaluate(`(() => {
+    const view = app.workspace.activeLeaf?.view;
+    if (!view?.editor || view.file?.path !== ${JSON.stringify(notePath)}) return { ok: false, path: view?.file?.path || null };
+    const lines = view.editor.getValue().split("\\n");
+    const line = lines.findIndex((text) => text.includes(${JSON.stringify(needle)}));
+    const blankLine = line + 1;
+    if (line < 0 || lines[blankLine] !== "") return { ok: false, line, blankLine, next: lines[blankLine] || null };
+    view.editor.focus();
+    view.editor.setCursor({ line: blankLine, ch: 0 });
+    return { ok: true, line, blankLine };
+  })()`);
   // A real mouse click (CDP) at the center of the first matching node in the
   // note's own pane, never inside an embed.
   const clickIn = async (notePath, selector) => {
@@ -567,11 +578,13 @@ function makeHelpers(ctx) {
     await client.call("Input.dispatchMouseEvent", { type: "mouseReleased", x: box.x, y: box.y, button: "left", clickCount: 1 });
     return box;
   };
-  return { key, keys, open, probe, waitCard, waitNoCard, shot, vault, invocations, writerApplies, placeCursor, expandProperties, clickIn };
+  return { key, keys, open, probe, waitCard, waitNoCard, shot, vault, invocations, writerApplies,
+    placeCursor, placeCursorBlankAfter, expandProperties, clickIn };
 }
 
 async function displayPhase(ctx) {
-  const { plan, attempt, open, probe, waitCard, waitNoCard, shot, client, vault, placeCursor, clickIn, sleep, waitFor } = ctx;
+  const { plan, attempt, open, probe, waitCard, waitNoCard, shot, client, vault, placeCursor,
+    placeCursorBlankAfter, clickIn, sleep, waitFor } = ctx;
   const passive = vault();
   const authored = (name) => Object.keys(Object.fromEntries(lib.frontmatterBlocks(ctx.notes[name]))).filter(Boolean);
   const linkOf = (notePath) => notePath.replace(/\.md$/, "");
@@ -834,25 +847,38 @@ async function displayPhase(ctx) {
     return { files: Object.keys(now).length };
   });
 
-  // Placing the cursor on the hidden H1 reveals the raw Markdown; moving it
-  // to the ^gtd line hides the title lines again.
+  // Placing the cursor on a consumed blank reveals the raw Markdown; the
+  // first body task stays outside the range and keeps the title hidden.
   await attempt("display-reveal-on-cursor", async () => {
     await open(plan.paths.today, "live");
-    await waitCard(plan.paths.today, (value) => mounted("live")(value) && value.title.h1Shown.length === 0);
-    const onHeading = await placeCursor("# " + plan.today, plan.paths.today);
-    if (!onHeading.ok) throw new Error("could not place the cursor on the H1: " + JSON.stringify(onHeading));
+    const initial = await waitCard(plan.paths.today, (value) => mounted("live")(value) && value.title.h1Shown.length === 0);
+    const hiddenGap = initial.order.gtd?.nodeTop - initial.order.gtd?.cardBottom;
+    const onBlank = await placeCursorBlankAfter("|prev]]", plan.paths.today);
+    if (!onBlank.ok) throw new Error("could not place the cursor on a consumed blank: " + JSON.stringify(onBlank));
     const revealed = await waitFor(client, displayProbeSource(plan.paths.today),
       (value) => value?.cardCount === 1 && value.title.h1Shown.length === 1 && value.title.navShown > 0, "raw H1 and nav revealed", 10_000);
+    const revealedGap = revealed.order.gtd?.nodeTop - revealed.order.gtd?.cardBottom;
+    const bodyStaysVisible = revealed.order.gtd?.found === true && revealed.order.gtd?.after === true;
+    const blankExpanded = Number.isFinite(hiddenGap) && Number.isFinite(revealedGap) && revealedGap - hiddenGap > 8;
     await shot("intention-card-live-reveal", "Live Preview");
     const away = await placeCursor("GTD-ANCHOR", plan.paths.today);
     if (!away.ok) throw new Error("could not move the cursor to ^gtd: " + JSON.stringify(away));
-    const hidden = await waitFor(client, displayProbeSource(plan.paths.today),
-      (value) => value?.cardCount === 1 && value.title.h1Shown.length === 0 && value.title.navShown === 0, "title lines hidden again", 10_000);
-    return { revealed: revealed.title, hidden: hidden.title };
+    const afterBody = await waitFor(client, displayProbeSource(plan.paths.today),
+      (value) => value?.cardCount === 1 && value.title.h1Shown.length === 0 && value.title.navShown === 0, "title lines hidden again at the next body line", 10_000);
+    const cardRetainedOnReveal = Boolean(revealed.cardCount === 1 && revealed.card?.rail);
+    const bodySelectionKeepsTitleHidden = afterBody.title.h1Shown.length === 0 && afterBody.title.navShown === 0;
+    if (!blankExpanded || !bodyStaysVisible || !cardRetainedOnReveal || !bodySelectionKeepsTitleHidden) {
+      throw new Error(JSON.stringify({ blank: onBlank, hiddenGap, revealedGap, blankExpanded, bodyStaysVisible,
+        cardRetainedOnReveal, bodySelectionKeepsTitleHidden }));
+    }
+    return { blank: onBlank, hiddenGap, revealedGap, blankExpanded, bodyStaysVisible,
+      cardRetainedOnReveal, bodySelectionKeepsTitleHidden,
+      revealed: revealed.title, hidden: afterBody.title };
   });
 
-  // The set-intentions ghost on an empty future day opens the card editor on
-  // the intention stage; the editor header carries the day's tile and word.
+  // The set-intentions ghost opens the editor on the intention stage. All
+  // four editor headers use the shared identity badge and keep their temporal
+  // accent across themes and a narrow viewport.
   await attempt("display-ghost-opens-editor", async () => {
     await open(plan.paths.future, "live");
     const value = await waitCard(plan.paths.future, (item) => mounted("live")(item) && item.card?.ghost === true);
@@ -862,30 +888,95 @@ async function displayPhase(ctx) {
     await clickIn(plan.paths.future, ".bob-intention-card .bob-intention-card-ghost");
     const modal = await waitFor(client, workflows.MODAL, (item) => item && item.path === plan.paths.future
       && item.stage === "intention" && item.stageField === "add", "card editor on the intention stage", 15_000);
-    const header = await client.evaluate(`(() => {
-      const row = app.plugins.plugins['bob-ledger-tools'].intentionCardEditorModal?.contentEl?.querySelector('.bob-intention-editor-identity');
-      return row ? { kind: row.getAttribute('data-card-kind'), word: row.querySelector('.bob-property-card-kicker-species')?.textContent || '',
-        band: row.querySelector('.bob-property-card-tile-band')?.textContent || '', value: row.querySelector('.bob-property-card-tile-value')?.textContent || '' } : null;
-    })()`);
-    if (!header || header.kind !== "day" || header.word !== "Day") throw new Error("editor header: " + JSON.stringify(header));
     await shot("intention-card-ghost-editor", "Card editor");
-    await client.evaluate("app.plugins.plugins['bob-ledger-tools'].intentionCardEditorModal?.close()");
-    await waitFor(client, workflows.MODAL, (item) => item === null, "card editor closed", 10_000);
+
+    const futureDate = new Date(`${plan.future}T00:00:00Z`);
+    const cases = [
+      { path: plan.paths.future, kind: "day", word: "Day",
+        band: new Intl.DateTimeFormat("en-US", { weekday: "short", timeZone: "UTC" }).format(futureDate).toUpperCase(),
+        value: String(Number(plan.future.slice(8))), name: "day", current: modal },
+      { path: plan.paths.week, kind: "week", word: "Week", band: "WEEK", value: plan.week.slice(6), name: "week" },
+      { path: plan.paths.quarter, kind: "quarter", word: "Quarter", band: "QTR", value: plan.quarter.slice(-2), name: "quarter" },
+      { path: plan.paths.year, kind: "year", word: "Year", band: "YEAR", value: plan.year, name: "year" },
+    ];
+    const headers = [];
+    for (const expected of cases) {
+      if (!expected.current) {
+        // openIntentionCard resolves with the live modal, which CDP cannot
+        // return by value; return only the serializable outcome.
+        const opened = await client.evaluate(`(async () => {
+          const result = await app.plugins.plugins['bob-ledger-tools'].openIntentionCard({ filePath: ${JSON.stringify(expected.path)} });
+          return { ok: result?.ok === true, reason: result?.reason || null };
+        })()`);
+        if (!opened?.ok) throw new Error(`${expected.name} editor did not open: ` + JSON.stringify(opened));
+      }
+      const current = expected.current || await waitFor(client, workflows.MODAL,
+        (item) => item && item.path === expected.path, `${expected.name} editor opened`, 15_000);
+      const header = await client.evaluate(`(() => {
+        const content = app.plugins.plugins['bob-ledger-tools'].intentionCardEditorModal?.contentEl;
+        const rows = Array.from(content?.querySelectorAll('.bob-intention-editor-identity') || []);
+        const row = rows[0];
+        const badges = Array.from(row?.querySelectorAll('.bob-property-card-identity') || []);
+        const badge = badges[0];
+        const word = badge?.querySelector('.bob-property-card-identity-word');
+        const rowStyle = row ? getComputedStyle(row) : null;
+        const badgeStyle = badge ? getComputedStyle(badge) : null;
+        return row ? {
+          kind: row.getAttribute('data-card-kind'), rowCount: rows.length,
+          badgeKind: badge?.getAttribute('data-card-kind') || '', badgeCount: badges.length,
+          word: word?.textContent || '', band: badge?.querySelector('.bob-property-card-tile-band')?.textContent || '',
+          value: badge?.querySelector('.bob-property-card-tile-value')?.textContent || '',
+          legacySpeciesWords: row.querySelectorAll('.bob-property-card-kicker-species').length,
+          levelOneCount: content.querySelectorAll('h1, [aria-level="1"]').length,
+          title: content.querySelector('.bob-intention-editor-title')?.textContent || '',
+          fields: Boolean(content.querySelector('[role="listbox"]')),
+          dayAccent: rowStyle.getPropertyValue('--bob-day-accent').trim(),
+          cardAccent: rowStyle.getPropertyValue('--bob-property-card-accent').trim(),
+          badgeAccent: badgeStyle.getPropertyValue('--bob-property-card-identity-accent').trim(),
+        } : null;
+      })()`);
+      if (!header || header.kind !== expected.kind || header.badgeKind !== expected.kind
+        || header.word !== expected.word || header.band !== expected.band || header.value !== expected.value
+        || header.rowCount !== 1 || header.badgeCount !== 1 || header.legacySpeciesWords !== 0
+        || header.levelOneCount !== 0 || !header.title || !header.fields
+        || !header.dayAccent || header.cardAccent !== header.dayAccent || header.badgeAccent !== header.dayAccent) {
+        throw new Error(`${expected.name} editor identity: ` + JSON.stringify({ expected, header }));
+      }
+      await shared.setTheme(client, "light");
+      await shared.setViewport(client, 1400, 1000);
+      await shot(`intention-card-editor-${expected.name}-light`, "Card editor", { theme: "light" });
+      await shared.setTheme(client, "dark");
+      await shot(`intention-card-editor-${expected.name}-dark`, "Card editor", { theme: "dark" });
+      await shared.setViewport(client, 375, 900);
+      await shot(`intention-card-editor-${expected.name}-dark-375`, "Card editor", { theme: "dark", width: 375 });
+      await shared.setViewport(client, 1400, 1000);
+      await shared.setTheme(client, "light");
+      headers.push({ kind: expected.kind, word: header.word, band: header.band, value: header.value,
+        rowCount: header.rowCount, badgeCount: header.badgeCount, levelOneCount: header.levelOneCount,
+        temporalAccent: header.dayAccent });
+      await client.evaluate("app.plugins.plugins['bob-ledger-tools'].intentionCardEditorModal?.close()");
+      await waitFor(client, workflows.MODAL, (item) => item === null, `${expected.name} editor closed`, 10_000);
+    }
     if (JSON.stringify(vault()) !== JSON.stringify(before)) throw new Error("opening the editor from the ghost changed bytes");
-    return { stage: modal.stage, field: modal.stageField, header };
+    return { stage: modal.stage, field: modal.stageField, headers };
   });
 
   // Rail next on yesterday opens today in the same leaf.
   await attempt("display-rail-navigates", async () => {
+    // The ghost-editor assertion can encounter the CDP object-reference limit
+    // after opening its modal. Close any leftover editor so it cannot intercept
+    // this rail click and make the navigation check depend on assertion order.
+    await client.evaluate("app.plugins.plugins['bob-ledger-tools'].intentionCardEditorModal?.close()");
+    await waitFor(client, workflows.MODAL, (item) => item === null, "no editor before rail navigation", 10_000);
     await open(plan.paths.yesterday, "live");
     await waitCard(plan.paths.yesterday, (value) => mounted("live")(value) && value.card?.rail?.next?.href === linkOf(plan.paths.today));
     const before = await client.evaluate("(() => { window.__railLeaf = app.workspace.activeLeaf; return { path: window.__railLeaf?.view?.file?.path || null, leaves: app.workspace.getLeavesOfType('markdown').length }; })()");
-    await clickIn(plan.paths.yesterday, '.bob-intention-card .bob-property-card-rail-item[data-rail="next"]');
+    const clickBox = await clickIn(plan.paths.yesterday, '.bob-intention-card .bob-property-card-rail-item[data-rail="next"]');
     const after = await waitFor(client, "(() => ({ path: window.__railLeaf?.view?.file?.path || null, same: app.workspace.activeLeaf === window.__railLeaf, leaves: app.workspace.getLeavesOfType('markdown').length }))()",
       (value) => value?.path === plan.paths.today, "rail next opens today", 15_000);
     if (!after.same || after.leaves !== before.leaves) throw new Error("rail next left the leaf: " + JSON.stringify({ before, after }));
     await client.evaluate("delete window.__railLeaf");
-    return { before, after };
+    return { before, clickBox, after };
   });
 
   // The week card docks its children strip with today's chip current.

@@ -431,7 +431,7 @@ function census(path, text, fm = {}) {
 
 test("census: legacy daily shapes hide only a recognized H1 and never invent a rail", () => {
   const dayColon = census("2023/20230719.md", "# Day: 2023-07-19 Wed\n\n~ gtd\nx Migrate bujo to notes\n");
-  assert.deepEqual([dayColon.range.fromLine, dayColon.range.toLine], [0, 0]);
+  assert.deepEqual([dayColon.range.fromLine, dayColon.range.toLine], [0, 1]);
   assert.equal(dayColon.rail, null);
   assert.ok(dayColon.model, "the card still mounts");
 
@@ -450,14 +450,14 @@ test("census: legacy daily shapes hide only a recognized H1 and never invent a r
 
   const june = census("2026/20260601.md",
     "---\n{}\n---\n\n# 2026-06-01 Mon\n\n[[2026/20260531|prev]] | [[2026/20260601|day]] | [[2026/20260602|next]]\n\n## Tasks\n");
-  assert.deepEqual([june.range.fromLine, june.range.toLine], [4, 4], "the H1 hides; the unrecognized nav stays visible");
+  assert.deepEqual([june.range.fromLine, june.range.toLine], [4, 5], "the H1 and its blank hide; the unrecognized nav stays visible");
   assert.equal(june.rail, null);
 });
 
 test("census: current dailies dock a rail from their nav line, both three-link and two-link", () => {
   const text = note({ aliases: ["2026-11-20 Fri"] }, BODIES[DAY]);
   const current = census(DAY, text, { aliases: ["2026-11-20 Fri"] });
-  assert.deepEqual([current.range.fromLine, current.range.toLine], [4, 6]);
+  assert.deepEqual([current.range.fromLine, current.range.toLine], [4, 7]);
   assert.deepEqual(current.rail.prev, { label: "Thu 19", shortLabel: "Thu", target: "2026/20261119", ariaLabel: "Previous day: Thu, Nov 19, 2026" });
   assert.deepEqual(current.rail.parent, { label: "W47", shortLabel: "W47", target: "2026/2026-W47", ariaLabel: "Parent week: 2026-W47" });
   assert.deepEqual(current.rail.next, { label: "Sat 21", shortLabel: "Sat", target: "2026/20261121", ariaLabel: "Next day: Sat, Nov 21, 2026" });
@@ -471,7 +471,7 @@ test("census: current dailies dock a rail from their nav line, both three-link a
 
 test("census: week, quarter, and year rails with children strips and today's chip current", () => {
   const week = census(WEEK, note({}, BODIES[WEEK]));
-  assert.deepEqual([week.range.fromLine, week.range.toLine], [4, 8]);
+  assert.deepEqual([week.range.fromLine, week.range.toLine], [4, 9]);
   assert.deepEqual(week.rail.prev, { label: "W46", shortLabel: "W46", target: "2026/2026-W46", ariaLabel: "Previous week: 2026-W46" });
   assert.deepEqual(week.rail.parent, { label: "2026-Q4", shortLabel: "2026-Q4", target: "2026/2026-Q4", ariaLabel: "Parent quarter: 2026-Q4" });
   assert.deepEqual(week.rail.next, { label: "W48", shortLabel: "W48", target: "2026/2026-W48", ariaLabel: "Next week: 2026-W48" });
@@ -882,12 +882,17 @@ test("the card editor header shows the tile and species word, and repaints with 
     const row = host.children[0];
     assert.equal(row.className, "bob-intention-editor-identity");
     assert.equal(row.getAttribute("data-card-kind"), kind);
-    assert.equal(row.querySelector(".bob-property-card-tile").getAttribute("data-tile-form"), "leaf");
-    assert.equal(row.querySelector(".bob-property-card-tile-band").textContent, band);
-    assert.equal(row.querySelector(".bob-property-card-tile-value").textContent, value);
-    assert.equal(row.querySelector(".bob-property-card-kicker-species").textContent, word);
+    assert.equal(row.querySelectorAll(".bob-property-card-identity").length, 1, "one shared badge per editor");
+    const badge = row.querySelector(".bob-property-card-identity");
+    assert.equal(badge.getAttribute("data-card-kind"), kind);
+    assert.equal(badge.querySelector(".bob-property-card-tile").getAttribute("data-tile-form"), "leaf");
+    assert.equal(badge.querySelector(".bob-property-card-tile-band").textContent, band);
+    assert.equal(badge.querySelector(".bob-property-card-tile-value").textContent, value);
+    assert.equal(badge.querySelector(".bob-property-card-identity-word").textContent, word);
+    assert.equal(row.querySelector(".bob-property-card-kicker-species"), null, "the shared species word is used");
     assert.equal(host.children[1].tagName, "H2", "the title h2 stays");
     assert.match(host.children[1].textContent, /^Edit intentions · /);
+    assert.equal(host.querySelectorAll("h1").length, 0, "the editor does not add a level-one heading");
     assert.equal(host.querySelectorAll(".bob-intention-editor-identity").length, 1, "one row per paint");
   }
 });

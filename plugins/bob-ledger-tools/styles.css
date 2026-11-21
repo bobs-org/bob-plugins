@@ -8828,16 +8828,9 @@ body.bob-task-tag-marks a.tag.bob-no-reply-pill::before {
   font-size: var(--font-text-size, 16px);
   line-height: 1.3;
 }
-.bob-intention-editor-identity .bob-property-card-kicker-species {
-  color: var(--bob-property-card-ink);
-  font: 650 0.74em/1.35 var(--font-interface);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
 @media (forced-colors: active) {
   .bob-intention-card button.bob-intention-card-ghost { border-color: CanvasText; color: CanvasText; }
   .bob-intention-card-ghost-keys { border-color: CanvasText; }
-  .bob-intention-editor-identity .bob-property-card-kicker-species { color: CanvasText; }
 }
 @media (prefers-reduced-motion: reduce) {
   .bob-intention-card button.bob-intention-card-ghost { transition: none; }

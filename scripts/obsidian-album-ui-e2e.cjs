@@ -1284,8 +1284,9 @@ async function run(args) {
     report.probes.eatLive = recordsLive;
     const liveHeader = album.assertHeaderIntegrity(recordsLive, { title: "Eat" });
     record("live-single-header-no-warning", liveHeader.ok, liveHeader.reason || "one title-slot card before Properties; no ancestry warning");
-    // Live Preview: the H1 line is hidden after open, the cursor on it reveals
-    // the raw Markdown under the still-mounted card, and moving away hides it.
+    // Live Preview: the title and its trailing blank line collapse. A cursor
+    // on that blank reveals the source under the still-mounted card; the first
+    // body line stays outside the owned range.
     const reveal = await client.evaluate(`(() => (async () => {
       const view = window.app.workspace.activeLeaf.view;
       const editor = view.editor;
@@ -1294,24 +1295,46 @@ async function run(args) {
       const h1Lines = () => Array.from(surface.querySelectorAll(".cm-content .cm-line"))
         .filter((line) => /^(# )?Eat$/.test(line.textContent.trim()) && line.getBoundingClientRect().height > 0).length;
       const card = () => surface.querySelector(".cm-sizer > .bob-album-header");
-      const line = editor.getValue().split("\\n").indexOf("# Eat");
+      const lines = editor.getValue().split("\\n");
+      const line = lines.indexOf("# Eat");
+      const blankLine = line + 1;
+      let bodyLine = blankLine + 1;
+      while (bodyLine < lines.length && !lines[bodyLine].trim()) bodyLine += 1;
+      const bodyText = lines[bodyLine] || "";
+      // Live Preview hides ATX markers, so match the rendered heading text.
+      const visibleBodyText = bodyText.replace(/^ {0,3}#{1,6}[ \t]+/, "").replace(/[ \t]+#+[ \t]*$/, "").trim();
+      const body = () => Array.from(surface.querySelectorAll(".cm-content .cm-line"))
+        .find((node) => node.textContent.trim() === visibleBodyText) || null;
+      const gap = () => {
+        const node = body();
+        const header = card();
+        return node && header ? node.getBoundingClientRect().top - header.getBoundingClientRect().bottom : null;
+      };
       const opened = h1Lines();
-      editor.setCursor({ line, ch: 0 });
+      const hiddenGap = gap();
+      const blankLineIsEmpty = lines[blankLine] === "";
+      editor.setCursor({ line: blankLine, ch: 0 });
       await settle();
       const touched = h1Lines();
       const cardWhileRevealed = Boolean(card());
-      editor.setCursor({ line: editor.lastLine(), ch: 0 });
+      const bodyVisibleWhileRevealed = Boolean(body());
+      const revealedGap = gap();
+      editor.setCursor({ line: bodyLine, ch: 0 });
       await settle();
       const away = h1Lines();
-      return { line, opened, touched, away, cardWhileRevealed };
+      return { line, blankLine, blankLineIsEmpty, bodyLine, bodyText, opened, touched, away,
+        cardWhileRevealed, bodyVisibleWhileRevealed, hiddenGap, revealedGap,
+        blanksCollapsed: Number.isFinite(hiddenGap) && Number.isFinite(revealedGap) && revealedGap - hiddenGap > 8 };
     })())()`);
     report.probes.liveReveal = reveal;
-    record("live-h1-hidden-and-revealed", reveal.line >= 0 && reveal.opened === 0 && reveal.touched === 1
-      && reveal.cardWhileRevealed && reveal.away === 0, JSON.stringify(reveal));
-    // Screenshot the reveal with the card in view, then put the cursor back
-    // in the frontmatter (where opening leaves it) and scroll to the top.
+    record("live-title-blanks-collapse-and-reveal", reveal.line >= 0 && reveal.blankLineIsEmpty && reveal.opened === 0
+      && reveal.touched === 1 && reveal.cardWhileRevealed && reveal.bodyVisibleWhileRevealed
+      && reveal.blanksCollapsed && reveal.away === 0,
+      JSON.stringify(reveal));
+    // Screenshot the blank-line reveal with the card in view, then put the
+    // cursor back in frontmatter (where opening leaves it) and scroll to top.
     const revealShot = path.join(outDir, "album-live-h1-revealed.png");
-    await client.evaluate(`(() => { const e = window.app.workspace.activeLeaf.view.editor; e.setCursor({ line: e.getValue().split("\\n").indexOf("# Eat"), ch: 0 }); e.scrollTo(null, 0); return true; })()`);
+    await client.evaluate(`(() => { const e = window.app.workspace.activeLeaf.view.editor; const lines = e.getValue().split("\\n"); const title = lines.indexOf("# Eat"); e.setCursor({ line: title + 1, ch: 0 }); e.scrollTo(null, 0); return true; })()`);
     await sleep(350);
     await capturePage(client, revealShot);
     report.screenshots.push(revealShot);

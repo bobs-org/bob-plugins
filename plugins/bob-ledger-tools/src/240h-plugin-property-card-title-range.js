@@ -1,8 +1,9 @@
 // Property-card identity kit (bob-cli-o6 identity-kit): the recognized source
 // title block and its recognizers. Pure: no DOM, no CodeMirror. A card that
 // owns the title hides exactly this range at render time (never bytes): the
-// first body H1 when it is redundant with the card title, plus the blank and
-// recognized nav or child-link lines after it. The first non-blank body line
+// first body H1 when it is redundant with the card title, plus following
+// blank lines and recognized nav or child-link lines. The first unrelated
+// non-blank body line stays outside the range. The first non-blank body line
 // must start the block, so a fenced, late, or after-prose H1 stays visible.
 
 const PROPERTY_CARD_TITLE_H1 = /^ {0,3}#[ \t]+\S/;
@@ -82,7 +83,10 @@ function propertyCardTitleSourceRangeFromLines(lineAt, lineCount, recognizer) {
     let toLine = index;
     for (let cursor = index + 1; cursor < count; cursor += 1) {
       const trimmed = line(cursor).text.trim();
-      if (!trimmed) continue;
+      if (!trimmed) {
+        toLine = cursor;
+        continue;
+      }
       if (typeof recognizer.follower === "function" && recognizer.follower(trimmed, cursor) === true) {
         toLine = cursor;
         continue;

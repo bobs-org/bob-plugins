@@ -69,21 +69,19 @@ function intentionCardEditorSummaryContext(doc, fields) {
 // species word as the day or period card. Omitted when the kit is missing.
 function intentionCardEditorIdentityRow(doc, options) {
   try {
-    if (typeof propertyCardBuildGlyphTile !== "function" || typeof propertyCardSpecies !== "function"
+    if (typeof propertyCardBuildIdentityBadge !== "function"
       || typeof intentionCardIdentity !== "function" || typeof intentionCardSubjectForPath !== "function") return null;
     const subject = intentionCardSubjectForPath(options.subjectPath || "");
     const identity = intentionCardIdentity(subject);
-    const species = identity ? propertyCardSpecies(identity.kind) : null;
-    if (!species) return null;
-    const tile = propertyCardBuildGlyphTile(doc, { kind: identity.kind, band: identity.tile.band, value: identity.tile.value });
-    if (!tile) return null;
+    if (!identity) return null;
     const row = intentionCardEditorCreateEl(doc, "div", "bob-intention-editor-identity");
     if (!row) return null;
     row.setAttribute("data-card-kind", identity.kind);
-    row.appendChild(tile);
-    const word = intentionCardEditorCreateEl(doc, "span", "bob-property-card-kicker-species");
-    intentionCardEditorSetText(word, species.word);
-    row.appendChild(word);
+    const badge = propertyCardBuildIdentityBadge(doc, {
+      kind: identity.kind, band: identity.tile.band, value: identity.tile.value,
+    });
+    if (!badge) return null;
+    row.appendChild(badge);
     return row;
   } catch (_) {
     return null;

@@ -81189,8 +81189,9 @@ function propertyCardBuildRail(doc, spec = {}) {
 // Property-card identity kit (bob-cli-o6 identity-kit): the recognized source
 // title block and its recognizers. Pure: no DOM, no CodeMirror. A card that
 // owns the title hides exactly this range at render time (never bytes): the
-// first body H1 when it is redundant with the card title, plus the blank and
-// recognized nav or child-link lines after it. The first non-blank body line
+// first body H1 when it is redundant with the card title, plus following
+// blank lines and recognized nav or child-link lines. The first unrelated
+// non-blank body line stays outside the range. The first non-blank body line
 // must start the block, so a fenced, late, or after-prose H1 stays visible.
 
 const PROPERTY_CARD_TITLE_H1 = /^ {0,3}#[ \t]+\S/;
@@ -81270,7 +81271,10 @@ function propertyCardTitleSourceRangeFromLines(lineAt, lineCount, recognizer) {
     let toLine = index;
     for (let cursor = index + 1; cursor < count; cursor += 1) {
       const trimmed = line(cursor).text.trim();
-      if (!trimmed) continue;
+      if (!trimmed) {
+        toLine = cursor;
+        continue;
+      }
       if (typeof recognizer.follower === "function" && recognizer.follower(trimmed, cursor) === true) {
         toLine = cursor;
         continue;
@@ -81910,8 +81914,8 @@ function propertyCardHostRegisterTitleOwnership(plugin) {
 // ---- src/240j-plugin-property-card-identity-badge.js ----
 // Property-card identity kit (bob-cli-o6 collection-cards): identity badge.
 // Additive and backward compatible. Surfaces that name their species without
-// owning the note title (the bank card's head row, and the Record Card and
-// album card editor modal headers) show the species glyph tile and the
+// owning the note title (the bank card's head row and card editor headers)
+// show the species glyph tile and the
 // species word. CSS uppercases the word like the kicker, so screen readers
 // still read a word. The badge is never a heading and adds no role, so it
 // never doubles a visible H1. The tile stays aria-hidden. Kit CSS gives the
@@ -156822,21 +156826,19 @@ function intentionCardEditorSummaryContext(doc, fields) {
 // species word as the day or period card. Omitted when the kit is missing.
 function intentionCardEditorIdentityRow(doc, options) {
   try {
-    if (typeof propertyCardBuildGlyphTile !== "function" || typeof propertyCardSpecies !== "function"
+    if (typeof propertyCardBuildIdentityBadge !== "function"
       || typeof intentionCardIdentity !== "function" || typeof intentionCardSubjectForPath !== "function") return null;
     const subject = intentionCardSubjectForPath(options.subjectPath || "");
     const identity = intentionCardIdentity(subject);
-    const species = identity ? propertyCardSpecies(identity.kind) : null;
-    if (!species) return null;
-    const tile = propertyCardBuildGlyphTile(doc, { kind: identity.kind, band: identity.tile.band, value: identity.tile.value });
-    if (!tile) return null;
+    if (!identity) return null;
     const row = intentionCardEditorCreateEl(doc, "div", "bob-intention-editor-identity");
     if (!row) return null;
     row.setAttribute("data-card-kind", identity.kind);
-    row.appendChild(tile);
-    const word = intentionCardEditorCreateEl(doc, "span", "bob-property-card-kicker-species");
-    intentionCardEditorSetText(word, species.word);
-    row.appendChild(word);
+    const badge = propertyCardBuildIdentityBadge(doc, {
+      kind: identity.kind, band: identity.tile.band, value: identity.tile.value,
+    });
+    if (!badge) return null;
+    row.appendChild(badge);
     return row;
   } catch (_) {
     return null;

@@ -212,6 +212,27 @@ test("album ranges keep exact offsets across a BOM, CRLF, and no frontmatter", (
   assert.equal(crRange.title, "Restaurants");
 });
 
+test("album title ranges consume trailing blanks with exact newline offsets", () => {
+  const recognizer = H.propertyCardAlbumTitleRecognizer("Restaurants");
+  const cases = [
+    { text: "# Restaurants\n\n\nBody\n", blank: 15, body: 16 },
+    { text: "# Restaurants\r\n\r\nBody\r\n", blank: 15, body: 17 },
+    { text: "# Restaurants\r\rBody\r", blank: 14, body: 15 },
+    { text: "\uFEFF# Restaurants\n\nBody", blank: 15, body: 16 },
+  ];
+  for (const { text, blank, body } of cases) {
+    const range = H.propertyCardTitleSourceRange(text, recognizer);
+    assert.equal(range.from, 0);
+    assert.equal(range.to, blank, JSON.stringify(text));
+    assert.equal(H.propertyCardSelectionTouches({ ranges: [{ from: blank, to: blank }] }, range), true, "a consumed blank reveals the source");
+    assert.equal(H.propertyCardSelectionTouches({ ranges: [{ from: body, to: body }] }, range), false, "the next content line stays outside");
+  }
+  const eof = "# Restaurants\n\n\n";
+  assert.equal(H.propertyCardTitleSourceRange(eof, recognizer).to, eof.length, "trailing blank lines at EOF are consumed");
+  const noFinalNewline = "# Restaurants";
+  assert.equal(H.propertyCardTitleSourceRange(noFinalNewline, recognizer).to, noFinalNewline.length);
+});
+
 test("heading cleanup strips markers, escapes, wikilinks, and whitespace", () => {
   assert.equal(H.propertyCardCleanHeadingText("#   Restaurants   ##  "), "Restaurants");
   assert.equal(H.propertyCardCleanHeadingText("# C\\# notes \\#"), "C# notes #");
@@ -219,7 +240,7 @@ test("heading cleanup strips markers, escapes, wikilinks, and whitespace", () =>
   assert.equal(H.propertyCardCleanHeadingText("  # a\t\tb  "), "a b");
 });
 
-test("day ranges: every H1 shape and alias, both nav forms, trailing blanks excluded", () => {
+test("day ranges: every H1 shape and alias, both nav forms, and trailing blanks", () => {
   const subject = daySubject();
   const recognizer = H.propertyCardDayTitleRecognizer(subject, { alias: ["Friday Nov 20"], today: TODAY });
   assert.equal(recognizer.key, "day:2026-11-20");
@@ -232,15 +253,19 @@ test("day ranges: every H1 shape and alias, both nav forms, trailing blanks excl
       const range = H.propertyCardTitleSourceRange(text, recognizer);
       assert.ok(range, `${heading} / ${nav}`);
       assert.equal(range.from, text.indexOf(heading));
-      assert.equal(range.to, text.indexOf(nav) + nav.length, "the range ends at the nav line, not the trailing blanks");
+      assert.equal(range.to, text.indexOf("Body prose") - 1, "the trailing blanks are included and the body line stays outside");
       assert.equal(range.headingLine, 3);
-      assert.equal(range.toLine, 5);
-      assert.equal(range.nextLine, 6);
+      assert.equal(range.toLine, 7);
+      assert.equal(range.nextLine, 8);
+      const blank = text.indexOf(nav) + nav.length + 1;
+      assert.equal(H.propertyCardSelectionTouches({ ranges: [{ from: blank, to: blank }] }, range), true);
+      const body = text.indexOf("Body prose");
+      assert.equal(H.propertyCardSelectionTouches({ ranges: [{ from: body, to: body }] }, range), false);
     }
   }
   const headingOnly = `${fm}# 2026-11-20 Fri\n\nday::2025-01-01 Wed\n`;
   const range = H.propertyCardTitleSourceRange(headingOnly, recognizer);
-  assert.equal(range.toLine, 3, "a legacy body line is never absorbed");
+  assert.equal(range.toLine, 4, "the blank before a legacy body line is consumed, but the line is never absorbed");
   assert.ok(!headingOnly.slice(range.from, range.to).includes("day::"));
   assert.equal(H.propertyCardTitleSourceRange(`${fm}# 2026-11-21 Sat\n`, recognizer), null, "another date's shape");
   assert.equal(H.propertyCardTitleSourceRange(`${fm}# 2026-11-20 Thu\n`, recognizer), null, "wrong weekday");
@@ -266,8 +291,11 @@ test("period ranges: week, quarter, and year with alias, nav, and child links", 
   ].join("\n");
   const weekRange = H.propertyCardTitleSourceRange(weekText, weekRecognizer);
   assert.equal(weekRange.headingLine, 3);
-  assert.equal(weekRange.toLine, 7);
-  assert.equal(weekRange.to, weekText.indexOf(days) + days.length);
+  assert.equal(weekRange.toLine, 8);
+  const weekBody = weekText.indexOf("## Days");
+  assert.equal(weekRange.to, weekBody - 1);
+  assert.equal(H.propertyCardSelectionTouches({ ranges: [{ from: weekBody - 1, to: weekBody - 1 }] }, weekRange), true);
+  assert.equal(H.propertyCardSelectionTouches({ ranges: [{ from: weekBody, to: weekBody }] }, weekRange), false);
   const scaffoldOnly = H.propertyCardPeriodTitleRecognizer(week, { today: TODAY });
   assert.ok(H.propertyCardTitleSourceRange(weekText, scaffoldOnly), "the scaffold title matches without an alias");
 
@@ -286,7 +314,7 @@ test("period ranges: week, quarter, and year with alias, nav, and child links", 
   const yearText = `---\nx: 1\n---\n# ${yearTitle}\n\n[[2025|‹ 2025]] · [[all_time|↑ All time]] · [[2027|2027 ›]]\n\n${quarters}\n`;
   const yearRecognizer = H.propertyCardPeriodTitleRecognizer(year, { alias: [yearTitle], today: TODAY });
   assert.equal(yearRecognizer.key, "year:2026");
-  assert.equal(H.propertyCardTitleSourceRange(yearText, yearRecognizer).toLine, 7);
+  assert.equal(H.propertyCardTitleSourceRange(yearText, yearRecognizer).toLine, 8);
   const legacyYear = H.intentionCardSubjectForPath("2025.md", TODAY);
   const legacyText = "---\nx: 1\n---\n[[2024|‹ 2024]] · [[all_time|↑ All time]] · [[2026|2026 ›]]\n\nNotes\n";
   assert.equal(H.propertyCardTitleSourceRange(legacyText, H.propertyCardPeriodTitleRecognizer(legacyYear, { today: TODAY })), null);
@@ -309,7 +337,11 @@ test("heading-less recognizers start at an accepted follower line", () => {
   assert.equal(range.headingLine, -1);
   assert.equal(range.title, "");
   assert.equal(range.fromLine, 4);
-  assert.equal(range.toLine, 4);
+  assert.equal(range.toLine, 5);
+  const blank = text.indexOf("\n\nBody") + 1;
+  const body = text.indexOf("Body");
+  assert.equal(H.propertyCardSelectionTouches({ ranges: [{ from: blank, to: blank }] }, range), true);
+  assert.equal(H.propertyCardSelectionTouches({ ranges: [{ from: body, to: body }] }, range), false);
   assert.equal(H.propertyCardTitleSourceRange("Body\n[[a]] · [[b]]\n", recognizer), null);
   assert.equal(H.propertyCardTitleSourceRange(text, { ...recognizer, requireHeading: true }), null);
 });

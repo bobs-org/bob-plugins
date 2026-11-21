@@ -142,8 +142,46 @@ async function runE2e(args) {
     const beforeReveal = await client.evaluate(`(() => {
       const sheet = ${SURFACE}.querySelector(".bob-record-sheet");
       const rail = sheet && sheet.querySelector(".bob-record-walk-rail");
-      return { sheet: Boolean(sheet), rail: Boolean(rail) };
+      const sourceLine = [...${SURFACE}.querySelectorAll(".cm-line")].some(line => {
+        const links = [...line.querySelectorAll(".cm-hmd-internal-link")].map(link => link.textContent.trim());
+        return links.length === 3 && links[0].includes("Bravo") && links[1].includes("Eat") && links[2].includes("Bravo");
+      });
+      return { sheet: Boolean(sheet), rail: Boolean(rail), sourceLine };
     })()`);
+    const boundary = await client.evaluate(`(() => {
+      const editor = ${ACTIVE}.editor;
+      const lines = editor.getValue().split("\\n");
+      const walkLine = lines.findIndex(line => line.includes("[[eat/b|"));
+      const blankLine = walkLine + 1;
+      const bodyLine = lines.findIndex((line, index) => index > walkLine && line.startsWith("## Notes"));
+      if (walkLine < 0 || lines[blankLine] !== "" || bodyLine < 0) return { ok: false, walkLine, blankLine, bodyLine };
+      editor.focus();
+      editor.setCursor({ line: blankLine, ch: 0 });
+      return { ok: true, walkLine, blankLine, bodyLine };
+    })()`);
+    if (!boundary.ok) throw new Error("record walk blank/body fixture boundary: " + JSON.stringify(boundary));
+    const blankRevealed = await harness.waitFor(client, `(() => {
+      const sheet = ${SURFACE}.querySelector(".bob-record-sheet");
+      const rail = sheet && sheet.querySelector(".bob-record-walk-rail");
+      const sourceLine = [...${SURFACE}.querySelectorAll(".cm-line")].some(line => {
+        const links = [...line.querySelectorAll(".cm-hmd-internal-link")].map(link => link.textContent.trim());
+        return links.length === 3 && links[0].includes("Bravo") && links[1].includes("Eat") && links[2].includes("Bravo");
+      });
+      return sheet && rail && sourceLine && { sheet: true, rail: true, sourceLine: true, slot: sheet.parentElement?.classList.contains("cm-sizer") };
+    })()`, value => value?.sourceLine === true, "blank after the record walk reveals source");
+    check("consumed record blank reveals while the slot card and rail remain mounted",
+      boundary.ok && beforeReveal.sheet && beforeReveal.rail && !beforeReveal.sourceLine && blankRevealed.sheet && blankRevealed.rail && blankRevealed.slot);
+    await client.evaluate(`(() => { ${ACTIVE}.editor.setCursor({ line: ${boundary.bodyLine}, ch: 0 }); })()`);
+    const bodyOutside = await harness.waitFor(client, `(() => {
+      const sheet = ${SURFACE}.querySelector(".bob-record-sheet");
+      const rail = sheet && sheet.querySelector(".bob-record-walk-rail");
+      const sourceLine = [...${SURFACE}.querySelectorAll(".cm-line")].some(line => {
+        const links = [...line.querySelectorAll(".cm-hmd-internal-link")].map(link => link.textContent.trim());
+        return links.length === 3 && links[0].includes("Bravo") && links[1].includes("Eat") && links[2].includes("Bravo");
+      });
+      return sheet && rail && !sourceLine && { sheet: true, rail: true, sourceLine: false };
+    })()`, value => value?.sourceLine === false, "next record body line stays outside the owned range");
+    check("next record body line stays outside the owned range", boundary.ok && bodyOutside.sheet && bodyOutside.rail);
     await client.evaluate(`(() => { ${ACTIVE}.editor.focus(); ${ACTIVE}.editor.setCursor({ line: 6, ch: 3 }); })()`);
     await client.call("Input.dispatchKeyEvent", { type: "keyDown", key: "ArrowRight", code: "ArrowRight", windowsVirtualKeyCode: 39 });
     await client.call("Input.dispatchKeyEvent", { type: "keyUp", key: "ArrowRight", code: "ArrowRight", windowsVirtualKeyCode: 39 });

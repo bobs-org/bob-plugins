@@ -24181,6 +24181,8 @@ function attachLogRecall(options = {}) {
 // only attach the USED BEFORE band below the preview, route keys, and clean
 // up on stage changes. All handles use ownKeys:false: the picker keydown
 // mixin offers Ctrl+N/P and arrows first, and Esc / Ctrl+[ back out first.
+// The reason stages (S7-S10) also opt into the LINK band (links: true), so
+// `[[` completes in Cancel, Release, Work, and Schedule Log text.
 function pickerLogRecallKindForStage(stage) {
   if (stage === "schedule-work-log" || stage === "lane-release-reason") return "work";
   if (stage === "cancel-reason") return "cancel";
@@ -24352,7 +24354,9 @@ function detachPickerLogRecall(picker, options = {}) {
   const handle = picker.logRecallHandle || null;
   picker.logRecallHandle = null;
   picker.logRecallStage = null;
+  picker.logRecallInputEl = null;
   try { picker.logRecallKind = null; } catch (_error) {}
+  try { detachPickerScheduledReasonLinks(picker); } catch (_error) {}
   if (handle) {
     try {
       if (typeof handle.detach === "function") handle.detach();
@@ -24398,6 +24402,9 @@ function attachPickerLogRecall(picker, inputEl, kind, options = {}) {
       arrowKeys: true,
       ownKeys: false,
       ...(Number.isInteger(opts.pinnedSlots) ? { pinnedSlots: opts.pinnedSlots } : {}),
+      links: true,
+      sourcePath: () => pickerProseSourcePath(picker),
+      ...(picker.plugin ? { plugin: picker.plugin } : {}),
       app: picker.app,
     });
   } catch (_error) {
@@ -24406,6 +24413,7 @@ function attachPickerLogRecall(picker, inputEl, kind, options = {}) {
   if (!handle) return null;
   picker.logRecallHandle = handle;
   picker.logRecallStage = picker.stage || null;
+  picker.logRecallInputEl = inputEl;
   try { picker.logRecallKind = kind; } catch (_error) {}
   return handle;
 }
@@ -24501,6 +24509,9 @@ function setupScheduleReviewLogRecall(picker) {
     if (!inputEl) return;
     if (picker.stage !== "schedule-review") return;
     const active = picker.logRecallHandle || null;
+    // Refocusing the bound field keeps its handle, so LINK band state
+    // (selection, dismissal memory) survives a focus round-trip.
+    if (active && picker.logRecallInputEl === inputEl && picker.logRecallKind === kind) return;
     if (active) {
       try {
         if (typeof active.detach === "function") active.detach();
@@ -24519,7 +24530,6 @@ function setupScheduleReviewLogRecall(picker) {
     if (reasonEl && typeof reasonEl.addEventListener === "function") {
       reasonEl.addEventListener("focus", () => {
         if (picker.stage !== "schedule-review") return;
-        const activeKind = picker.logRecallHandle ? null : null;
         switchTo("schedule", reasonEl);
         refreshScheduleReviewPinnedSlots(picker);
       });
@@ -24543,6 +24553,181 @@ function setupSingleFieldPickerLogRecall(picker, kind) {
   const handle = attachPickerLogRecall(picker, inputEl, kind, {});
   if (handle) picker.logRecallStage = picker.stage || null;
   return handle;
+}
+// ---- src/185a-picker-prose-links.js ----
+// Task Card prose links (phase bob-cli-om.5).
+//
+// S7-S10 (cancel, release, Work summary, schedule review) attach the LINK
+// band through attachPickerLogRecall with links: true. S11 is the scheduled
+// stage's inline reason tail: `3 waiting on [[api`. That stage's input is
+// a date filter, so its band opens only on an opener after a recognized
+// date token plus whitespace (minOffset). The date token and plain preset
+// filters never complete. Fail-open: without nav's proseField the stage is
+// unchanged. Completion only inserts text; it never writes the vault.
+
+// Reason text is written under the task, so same-note `[[#…` resolves
+// against the task's own note: the one note every Task Link target shares
+// in a link session (null when targets span notes), else the picker's note.
+function pickerProseSourcePath(picker) {
+  try {
+    if (!picker) return null;
+    if (typeof picker.isLinkSession === "function" && picker.isLinkSession()) {
+      const resolved = Array.isArray(picker.linkSession.resolved)
+        ? picker.linkSession.resolved
+        : [];
+      const paths = new Set();
+      for (const target of resolved) {
+        const path = target && typeof target.path === "string" ? target.path : "";
+        if (path) paths.add(path);
+      }
+      return paths.size === 1 ? Array.from(paths)[0] : null;
+    }
+    const path = typeof picker.filePath === "string" ? picker.filePath : "";
+    return path || null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+// First offset where a `[[` may open in the scheduled stage: the end of the
+// typed date token plus the whitespace after it. +Infinity when the query
+// has no recognized date token (a preset filter, or an attached `3x`).
+function scheduledReasonLinkMinOffset(text) {
+  try {
+    const value = String(text == null ? "" : text);
+    const trimmed = value.replace(/^\s+/u, "");
+    const lead = value.length - trimmed.length;
+    const prefix = matchTypedSchedulePrefix(trimmed);
+    if (!prefix || prefix.kind === "attached" || !prefix.token) return Infinity;
+    const tokenEnd = lead + prefix.token.length;
+    const gap = /^\s*/u.exec(value.slice(tokenEnd));
+    return tokenEnd + (gap ? gap[0].length : 0);
+  } catch (_error) {
+    return Infinity;
+  }
+}
+
+function getPickerProseFieldApi(picker) {
+  try {
+    const plugins = picker && picker.app && picker.app.plugins && picker.app.plugins.plugins;
+    const holder = plugins && plugins["bob-navigation-hotkeys"];
+    const api = holder && holder.api && holder.api.proseField;
+    return api && Number(api.version) >= 1 && typeof api.attach === "function" ? api : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function detachPickerScheduledReasonLinks(picker) {
+  if (!picker) return false;
+  const handle = picker.scheduledReasonLinkHandle || null;
+  picker.scheduledReasonLinkHandle = null;
+  picker.scheduledReasonLinkInputEl = null;
+  if (!handle) return false;
+  try {
+    if (typeof handle.detach === "function") handle.detach();
+  } catch (_error) {}
+  return true;
+}
+
+function attachPickerScheduledReasonLinks(picker) {
+  if (!picker) return null;
+  detachPickerScheduledReasonLinks(picker);
+  try {
+    if (typeof picker.isScheduledValueStage !== "function" || !picker.isScheduledValueStage()) return null;
+  } catch (_error) {
+    return null;
+  }
+  const inputEl = picker.inputEl || null;
+  if (!inputEl) return null;
+  const api = getPickerProseFieldApi(picker);
+  if (!api) return null;
+  try {
+    installPickerLogRecallCleanup(picker);
+  } catch (_error) {}
+  const host = ensurePickerLogRecallHost(picker);
+  if (!host) return null;
+  let handle = null;
+  try {
+    handle = api.attach({
+      inputEl,
+      bandHost: host,
+      recall: null,
+      links: true,
+      mode: "inline",
+      density: "roomy",
+      arrowKeys: true,
+      ownKeys: false,
+      sourcePath: () => pickerProseSourcePath(picker),
+      minOffset: () => scheduledReasonLinkMinOffset(inputEl.value),
+      app: picker.app,
+    });
+  } catch (_error) {
+    handle = null;
+  }
+  if (!handle) return null;
+  picker.scheduledReasonLinkHandle = handle;
+  picker.scheduledReasonLinkInputEl = inputEl;
+  return handle;
+}
+
+// The value stage calls this after every render: attach on the scheduled
+// stage, detach on any other value stage.
+function syncPickerScheduledReasonLinks(picker) {
+  try {
+    if (picker && typeof picker.isScheduledValueStage === "function" && picker.isScheduledValueStage()) {
+      return attachPickerScheduledReasonLinks(picker);
+    }
+    detachPickerScheduledReasonLinks(picker);
+  } catch (_error) {}
+  return null;
+}
+
+function getPickerScheduledReasonLinks(picker) {
+  const handle = picker && picker.scheduledReasonLinkHandle;
+  if (!handle) return null;
+  let current = false;
+  try {
+    current = typeof picker.isScheduledValueStage === "function"
+      && picker.isScheduledValueStage()
+      && picker.scheduledReasonLinkInputEl === picker.inputEl;
+  } catch (_error) {
+    current = false;
+  }
+  if (!current) {
+    detachPickerScheduledReasonLinks(picker);
+    return null;
+  }
+  return handle;
+}
+
+// The value-stage keydown offers every key here first. Esc and Ctrl+[ close
+// only the band (one layer per press); other keys reach the band before
+// date-row navigation, Enter, Shift+Enter, Ctrl+Enter, and Ctrl+R. With the
+// band closed nothing is consumed (beyond a held Enter that just accepted a
+// row), so the typed-row behaviour is unchanged.
+function offerPickerScheduledReasonLinkKey(picker, event) {
+  const handle = getPickerScheduledReasonLinks(picker);
+  if (!handle || !event) return false;
+  if (event.isComposing === true || event.keyCode === 229) return false;
+  let consumed = false;
+  try {
+    const plainEscape = event.key === "Escape"
+      && event.ctrlKey !== true
+      && event.metaKey !== true
+      && event.altKey !== true;
+    consumed = plainEscape || isCtrlLeftBracketKeydown(event)
+      ? handle.backOut() === true
+      : handle.handleKeydown(event) === true;
+  } catch (_error) {
+    consumed = false;
+  }
+  if (!consumed) return false;
+  try {
+    if (typeof event.preventDefault === "function") event.preventDefault();
+    if (typeof event.stopPropagation === "function") event.stopPropagation();
+  } catch (_error) {}
+  return true;
 }
 // ---- src/186-link-field-model.js ----
 // Prose `[[` link field model (phase bob-cli-om.2 link-engine).
@@ -25968,6 +26153,8 @@ function proseResolveMinOffset(minOffset) {
   try {
     const value = typeof minOffset === "function" ? minOffset() : minOffset;
     const number = Number(value);
+    // +Infinity means "no opener qualifies" (S11 without a date token).
+    if (number === Infinity) return Number.MAX_SAFE_INTEGER;
     if (!Number.isFinite(number)) return 0;
     return Math.max(0, Math.floor(number));
   } catch (_error) {
@@ -26085,8 +26272,8 @@ function proseFieldAt(text, caret, options) {
     const field = linkFieldAt(value, cursor, sourcePath);
     if (field) {
       const link = proseContainingLink(value, cursor);
-      if (link && link.start < minOffset) return null;
       const annotated = proseAnnotateField(field, link, value);
+      if (!annotated || annotated.linkStart < minOffset) return null;
       annotated.mode = mode;
       return annotated;
     }
@@ -26096,13 +26283,15 @@ function proseFieldAt(text, caret, options) {
   }
 }
 
-function proseAliasAt(text, caret) {
+function proseAliasAt(text, caret, options) {
   try {
     const value = String(text == null ? "" : text);
     const cursor = Number(caret);
     if (!Number.isInteger(cursor) || cursor < 0 || cursor > value.length) return null;
     const link = proseContainingLink(value, cursor);
     if (!link || !link.alias) return null;
+    const minOffset = proseResolveMinOffset(options && options.minOffset);
+    if (link.start < minOffset) return null;
     if (cursor < link.alias[0] || cursor > link.alias[1]) return null;
     return {
       aliasStage: true,
@@ -26201,6 +26390,7 @@ function proseCompleteLinks(text) {
         }
       }
       complete.push({
+        start: link.start,
         raw: value.slice(link.start, link.close[1]),
         target,
         heading,
@@ -26767,11 +26957,31 @@ attachLogRecall = function attachLogRecallWithLinks(options) {
   return attachLogRecallWithoutLinks(opts);
 };
 
+// Hosts that attach through api.logRecall pass no plugin. Cache their index
+// on nav's own instance (or per app) so a keystroke never rebuilds it and
+// vault listeners are registered once.
+const PROSE_LINK_INDEX_BY_APP = typeof WeakMap === "function" ? new WeakMap() : null;
+
 function getProseLinkIndex(plugin, app) {
   try {
-    if (plugin && plugin._bobProseLinkIndex) return plugin._bobProseLinkIndex;
-    const index = createLinkIndex(app || (plugin && plugin.app), plugin);
-    if (plugin) plugin._bobProseLinkIndex = index;
+    let owner = plugin || null;
+    if (!owner) {
+      try {
+        const plugins = app && app.plugins && app.plugins.plugins;
+        const nav = plugins && plugins["bob-navigation-hotkeys"];
+        if (nav && typeof nav === "object") owner = nav;
+      } catch (_error) {}
+    }
+    if (owner && owner._bobProseLinkIndex) return owner._bobProseLinkIndex;
+    const sourceApp = app || (owner && owner.app);
+    if (!owner && sourceApp && PROSE_LINK_INDEX_BY_APP && PROSE_LINK_INDEX_BY_APP.has(sourceApp)) {
+      return PROSE_LINK_INDEX_BY_APP.get(sourceApp);
+    }
+    const index = createLinkIndex(sourceApp, owner);
+    if (owner) owner._bobProseLinkIndex = index;
+    else if (sourceApp && typeof sourceApp === "object" && PROSE_LINK_INDEX_BY_APP) {
+      PROSE_LINK_INDEX_BY_APP.set(sourceApp, index);
+    }
     return index;
   } catch (_error) {
     return null;
@@ -27029,7 +27239,7 @@ function attachProseField(options) {
       return;
     }
     const { text, caret } = readState();
-    const alias = proseAliasAt(text, caret);
+    const alias = proseAliasAt(text, caret, { minOffset: minOffsetOpt });
     if (alias) {
       if (!fromInput && !linkOpen) {
         scheduleHint();
@@ -27293,7 +27503,8 @@ function attachProseField(options) {
       }
       try {
         const text = String(inputEl && inputEl.value || "");
-        const links = proseCompleteLinks(text);
+        const minOffset = proseResolveMinOffset(minOffsetOpt);
+        const links = proseCompleteLinks(text).filter((link) => !(link.start < minOffset));
         hintMessages = proseUnresolvedMessages(links, resolveComplete, sourcePathNow());
       } catch (_error) {
         hintMessages = [];
@@ -69329,6 +69540,10 @@ class BulletPropertyPickerScheduleReviewMixin extends FilteredPickerModal {
 
     if (this.resultsEl) {
       this.renderAll({ clearQuery: true });
+      // S11: `[[` completes in the scheduled stage's inline reason tail.
+      try {
+        syncPickerScheduledReasonLinks(this);
+      } catch (_error) {}
     }
   }
 
@@ -80586,6 +80801,16 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
           try {
             refreshScheduleReviewPinnedSlots(this);
           } catch (_error) {}
+          return;
+        }
+      } catch (_error) {}
+    }
+    // S11: the scheduled stage's LINK band (inline reason tail) sees every
+    // key before date rows, Enter, Shift+Enter, Ctrl+Enter, Ctrl+R, and the
+    // Ctrl+[ close. It consumes nothing while closed.
+    if (this.stage === "value" && this.scheduledReasonLinkHandle) {
+      try {
+        if (offerPickerScheduledReasonLinkKey(this, event)) {
           return;
         }
       } catch (_error) {}
@@ -131167,6 +131392,12 @@ try {
       setupSingleFieldPickerLogRecall,
       installPickerLogRecallCleanup,
       refreshScheduleReviewPinnedSlots,
+      pickerProseSourcePath,
+      scheduledReasonLinkMinOffset,
+      attachPickerScheduledReasonLinks,
+      detachPickerScheduledReasonLinks,
+      syncPickerScheduledReasonLinks,
+      offerPickerScheduledReasonLinkKey,
     });
   }
 } catch (_error) {}

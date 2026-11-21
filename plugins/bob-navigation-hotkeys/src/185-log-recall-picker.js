@@ -3,6 +3,8 @@
 // only attach the USED BEFORE band below the preview, route keys, and clean
 // up on stage changes. All handles use ownKeys:false: the picker keydown
 // mixin offers Ctrl+N/P and arrows first, and Esc / Ctrl+[ back out first.
+// The reason stages (S7-S10) also opt into the LINK band (links: true), so
+// `[[` completes in Cancel, Release, Work, and Schedule Log text.
 function pickerLogRecallKindForStage(stage) {
   if (stage === "schedule-work-log" || stage === "lane-release-reason") return "work";
   if (stage === "cancel-reason") return "cancel";
@@ -174,7 +176,9 @@ function detachPickerLogRecall(picker, options = {}) {
   const handle = picker.logRecallHandle || null;
   picker.logRecallHandle = null;
   picker.logRecallStage = null;
+  picker.logRecallInputEl = null;
   try { picker.logRecallKind = null; } catch (_error) {}
+  try { detachPickerScheduledReasonLinks(picker); } catch (_error) {}
   if (handle) {
     try {
       if (typeof handle.detach === "function") handle.detach();
@@ -220,6 +224,9 @@ function attachPickerLogRecall(picker, inputEl, kind, options = {}) {
       arrowKeys: true,
       ownKeys: false,
       ...(Number.isInteger(opts.pinnedSlots) ? { pinnedSlots: opts.pinnedSlots } : {}),
+      links: true,
+      sourcePath: () => pickerProseSourcePath(picker),
+      ...(picker.plugin ? { plugin: picker.plugin } : {}),
       app: picker.app,
     });
   } catch (_error) {
@@ -228,6 +235,7 @@ function attachPickerLogRecall(picker, inputEl, kind, options = {}) {
   if (!handle) return null;
   picker.logRecallHandle = handle;
   picker.logRecallStage = picker.stage || null;
+  picker.logRecallInputEl = inputEl;
   try { picker.logRecallKind = kind; } catch (_error) {}
   return handle;
 }
@@ -323,6 +331,9 @@ function setupScheduleReviewLogRecall(picker) {
     if (!inputEl) return;
     if (picker.stage !== "schedule-review") return;
     const active = picker.logRecallHandle || null;
+    // Refocusing the bound field keeps its handle, so LINK band state
+    // (selection, dismissal memory) survives a focus round-trip.
+    if (active && picker.logRecallInputEl === inputEl && picker.logRecallKind === kind) return;
     if (active) {
       try {
         if (typeof active.detach === "function") active.detach();
@@ -341,7 +352,6 @@ function setupScheduleReviewLogRecall(picker) {
     if (reasonEl && typeof reasonEl.addEventListener === "function") {
       reasonEl.addEventListener("focus", () => {
         if (picker.stage !== "schedule-review") return;
-        const activeKind = picker.logRecallHandle ? null : null;
         switchTo("schedule", reasonEl);
         refreshScheduleReviewPinnedSlots(picker);
       });

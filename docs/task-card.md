@@ -53,8 +53,8 @@ the owning task's Links or Linked-from stage.
 | `Ctrl+D` | Delete the selected property; Schedule is selected by default. On Type, clear to Use default through the same relocate path (field clearing only, never Recent hide; type need not be in the configured property list). On Links to, clear all outgoing relations (a cleared source that still mentions the target keeps a `(💬 mentions)` entry); Linked from is generated and refuses clearing. In the relation-label stage, hide or unhide the selected label; row zero toggles one-off instead. |
 | `Ctrl+H` | In the relation-label stage, show or hide the Hidden section. |
 | Backspace on an empty field or Back | Return to the card without writing. |
-| Escape, `q`, `Q` | Close and discard uncommitted state. `q` does not close while a text field is focused. |
-| `Ctrl+[` | Close the card or a stage it opened, including a focused date, reason, or Work summary field. |
+| Escape, `q`, `Q` | Close and discard uncommitted state. `q` does not close while a text field is focused. In a reason field, Escape first closes an open LINK band, then restores a recalled draft. |
+| `Ctrl+[` | Close the card or a stage it opened, including a focused date, reason, or Work summary field. In a reason field, it first backs out like Escape. |
 
 A resolving edit on a row just landed on by the review walk advances that
 walk once. Every card gesture that writes closes the card. For a Next or
@@ -150,6 +150,20 @@ A blank reason records `🤷 no reason given` only when the target
 already has a Schedule Log. A blank Work summary writes no Work Log. Priority
 picks keep their deterministic 🎲 reason and offer a Work summary only for
 an eligible Next or Pending target.
+
+## Links in reasons
+
+Typing `[[` opens the **LINK** band in the Cancel reason, Release summary,
+Work summary, and schedule review Reason and Work summary fields. In the
+Schedule stage, it opens only in the inline reason after a complete date
+token, as in `3 waiting on [[api`. The date token and preset filters stay
+literal. The band uses the keys in
+[Wikilink completion in prompts](bob-navigation-hotkeys.md#wikilink-completion-in-prompts).
+While it is open, Enter, Tab, Shift+Enter, and Ctrl+Enter insert the
+selected link and never commit. Same-note `[[#…` links resolve against the
+task's note. For a Task Link, that is the linked task's note, or no note
+when the targets span notes. With the band closed, every key keeps its
+usual stage behavior.
 
 ## Links stage and closing labels
 

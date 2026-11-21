@@ -17,11 +17,31 @@ attachLogRecall = function attachLogRecallWithLinks(options) {
   return attachLogRecallWithoutLinks(opts);
 };
 
+// Hosts that attach through api.logRecall pass no plugin. Cache their index
+// on nav's own instance (or per app) so a keystroke never rebuilds it and
+// vault listeners are registered once.
+const PROSE_LINK_INDEX_BY_APP = typeof WeakMap === "function" ? new WeakMap() : null;
+
 function getProseLinkIndex(plugin, app) {
   try {
-    if (plugin && plugin._bobProseLinkIndex) return plugin._bobProseLinkIndex;
-    const index = createLinkIndex(app || (plugin && plugin.app), plugin);
-    if (plugin) plugin._bobProseLinkIndex = index;
+    let owner = plugin || null;
+    if (!owner) {
+      try {
+        const plugins = app && app.plugins && app.plugins.plugins;
+        const nav = plugins && plugins["bob-navigation-hotkeys"];
+        if (nav && typeof nav === "object") owner = nav;
+      } catch (_error) {}
+    }
+    if (owner && owner._bobProseLinkIndex) return owner._bobProseLinkIndex;
+    const sourceApp = app || (owner && owner.app);
+    if (!owner && sourceApp && PROSE_LINK_INDEX_BY_APP && PROSE_LINK_INDEX_BY_APP.has(sourceApp)) {
+      return PROSE_LINK_INDEX_BY_APP.get(sourceApp);
+    }
+    const index = createLinkIndex(sourceApp, owner);
+    if (owner) owner._bobProseLinkIndex = index;
+    else if (sourceApp && typeof sourceApp === "object" && PROSE_LINK_INDEX_BY_APP) {
+      PROSE_LINK_INDEX_BY_APP.set(sourceApp, index);
+    }
     return index;
   } catch (_error) {
     return null;
@@ -279,7 +299,7 @@ function attachProseField(options) {
       return;
     }
     const { text, caret } = readState();
-    const alias = proseAliasAt(text, caret);
+    const alias = proseAliasAt(text, caret, { minOffset: minOffsetOpt });
     if (alias) {
       if (!fromInput && !linkOpen) {
         scheduleHint();
@@ -543,7 +563,8 @@ function attachProseField(options) {
       }
       try {
         const text = String(inputEl && inputEl.value || "");
-        const links = proseCompleteLinks(text);
+        const minOffset = proseResolveMinOffset(minOffsetOpt);
+        const links = proseCompleteLinks(text).filter((link) => !(link.start < minOffset));
         hintMessages = proseUnresolvedMessages(links, resolveComplete, sourcePathNow());
       } catch (_error) {
         hintMessages = [];

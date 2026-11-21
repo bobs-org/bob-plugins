@@ -24,6 +24,8 @@ function proseResolveMinOffset(minOffset) {
   try {
     const value = typeof minOffset === "function" ? minOffset() : minOffset;
     const number = Number(value);
+    // +Infinity means "no opener qualifies" (S11 without a date token).
+    if (number === Infinity) return Number.MAX_SAFE_INTEGER;
     if (!Number.isFinite(number)) return 0;
     return Math.max(0, Math.floor(number));
   } catch (_error) {
@@ -141,8 +143,8 @@ function proseFieldAt(text, caret, options) {
     const field = linkFieldAt(value, cursor, sourcePath);
     if (field) {
       const link = proseContainingLink(value, cursor);
-      if (link && link.start < minOffset) return null;
       const annotated = proseAnnotateField(field, link, value);
+      if (!annotated || annotated.linkStart < minOffset) return null;
       annotated.mode = mode;
       return annotated;
     }
@@ -152,13 +154,15 @@ function proseFieldAt(text, caret, options) {
   }
 }
 
-function proseAliasAt(text, caret) {
+function proseAliasAt(text, caret, options) {
   try {
     const value = String(text == null ? "" : text);
     const cursor = Number(caret);
     if (!Number.isInteger(cursor) || cursor < 0 || cursor > value.length) return null;
     const link = proseContainingLink(value, cursor);
     if (!link || !link.alias) return null;
+    const minOffset = proseResolveMinOffset(options && options.minOffset);
+    if (link.start < minOffset) return null;
     if (cursor < link.alias[0] || cursor > link.alias[1]) return null;
     return {
       aliasStage: true,
@@ -257,6 +261,7 @@ function proseCompleteLinks(text) {
         }
       }
       complete.push({
+        start: link.start,
         raw: value.slice(link.start, link.close[1]),
         target,
         heading,

@@ -66,6 +66,16 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
         }
       } catch (_error) {}
     }
+    // S11: the scheduled stage's LINK band (inline reason tail) sees every
+    // key before date rows, Enter, Shift+Enter, Ctrl+Enter, Ctrl+R, and the
+    // Ctrl+[ close. It consumes nothing while closed.
+    if (this.stage === "value" && this.scheduledReasonLinkHandle) {
+      try {
+        if (offerPickerScheduledReasonLinkKey(this, event)) {
+          return;
+        }
+      } catch (_error) {}
+    }
     // The relation field (⌃↵ from the Links stage): Escape and an empty
     // Backspace return to the list and write nothing (LG3); ↵ commits
     // through the list's openItem path.

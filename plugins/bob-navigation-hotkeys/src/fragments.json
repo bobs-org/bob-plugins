@@ -43,6 +43,7 @@
   "183-log-recall-model.js",
   "184-log-recall-band.js",
   "185-log-recall-picker.js",
+  "185a-picker-prose-links.js",
   "186-link-field-model.js",
   "187-link-rank.js",
   "188-link-index.js",

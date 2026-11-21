@@ -25,6 +25,12 @@ try {
       setupSingleFieldPickerLogRecall,
       installPickerLogRecallCleanup,
       refreshScheduleReviewPinnedSlots,
+      pickerProseSourcePath,
+      scheduledReasonLinkMinOffset,
+      attachPickerScheduledReasonLinks,
+      detachPickerScheduledReasonLinks,
+      syncPickerScheduledReasonLinks,
+      offerPickerScheduledReasonLinkKey,
     });
   }
 } catch (_error) {}

@@ -392,6 +392,10 @@ class BulletPropertyPickerScheduleReviewMixin extends FilteredPickerModal {
 
     if (this.resultsEl) {
       this.renderAll({ clearQuery: true });
+      // S11: `[[` completes in the scheduled stage's inline reason tail.
+      try {
+        syncPickerScheduledReasonLinks(this);
+      } catch (_error) {}
     }
   }
 

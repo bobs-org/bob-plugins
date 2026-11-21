@@ -566,6 +566,10 @@ class BobLedgerToolsBankCardsMixin {
     const cents = bankFormatCents(row.cents) || "—";
     bankCardAppend(label, "span", { class: "bob-bank-money" }, cents);
     bankCardAppend(label, "span", { class: "bob-bank-queue-payee" }, row.payee);
+    const queueNote = bankNoteCaptionText(row.note);
+    if (queueNote) {
+      bankCardAppend(label, "span", { class: "bob-bank-queue-note", title: queueNote }, `— ${queueNote}`);
+    }
     if (row.category) bankCardAppend(label, "span", { class: "bob-bank-queue-category" }, row.category);
     const subChip = bankSubscriptionChipForQueueRow(row);
     if (subChip) {

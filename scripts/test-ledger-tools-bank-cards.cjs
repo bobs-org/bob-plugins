@@ -925,3 +925,26 @@ test("bank card actions use the public API, while badges navigate without ensure
   assert.doesNotMatch(badge, /ensureOpenDay|bob\.bank\s+ensure/);
   assert.match(badge, /bankOpenMonthPathAtLine\(path, line, 0, \{ newLeaf, skipPendingSave: true \}\)/);
 });
+
+test("queue row shows a quiet note caption after the payee only when a note exists", async () => {
+  await withMissingConfig(async () => {
+    const { plugin } = makeHarness();
+    plugin.setupBankCards();
+    const base = { path: "bank/2026-11.md", line: 9, date: "2026-11-12", payee: "Amazon Reta", cents: -2321, category: "kids", id: "abcdef12" };
+    const withNote = fakeDom();
+    plugin.bankCardRenderQueueRow(withNote.el, { unloaded: false }, { ...base, note: "LEGO  set\nfor Sam" });
+    const note = withNote.el.querySelector(".bob-bank-queue-note");
+    assert.ok(note);
+    assert.equal(textOf(note), "— LEGO set for Sam");
+    assert.equal(note.getAttribute("title"), "LEGO set for Sam");
+    const label = withNote.el.querySelector(".bob-bank-queue-row-label");
+    const classes = label.children.map((node) => node.getAttribute("class"));
+    assert.ok(classes.indexOf("bob-bank-queue-payee") < classes.indexOf("bob-bank-queue-note"));
+    assert.ok(classes.indexOf("bob-bank-queue-note") < classes.indexOf("bob-bank-queue-category"));
+    const without = fakeDom();
+    plugin.bankCardRenderQueueRow(without.el, { unloaded: false }, { ...base, note: null });
+    assert.equal(without.el.querySelector(".bob-bank-queue-note"), null);
+    plugin.teardownBankCards();
+    plugin.teardownBankData();
+  });
+});

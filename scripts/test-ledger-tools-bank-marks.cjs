@@ -723,10 +723,15 @@ test("Live Preview protects every uncovered $ on a noted row in both branches", 
   for (let index = 0; index < rowText.length; index += 1) {
     if (rowText[index] === "$" && index > 10) noteDollars.push(line.from + index);
   }
+  // The note caption widget owns the whole note range, so its dollars never
+  // get BankDollarWidgets of their own (a widget's DOM text is never math).
+  const noteAdd = (decorated.adds || []).find((entry) => entry.value && entry.value.widget instanceof WidgetType
+    && entry.value.widget.text === "split $25 w/ Alex, $10 tip");
+  assert.ok(noteAdd, "decorated branch carries one note caption");
   for (const from of noteDollars) {
-    const add = (decorated.adds || []).find((entry) => entry.from === from && entry.to === from + 1);
-    assert.ok(add, `decorated branch missing dollar widget at ${from}`);
-    assert.equal(add.value.replace, true);
+    assert.ok(noteAdd.from <= from && noteAdd.to >= from + 1, `note caption covers the dollar at ${from}`);
+    const own = (decorated.adds || []).find((entry) => entry !== noteAdd && entry.from === from && entry.to === from + 1);
+    assert.equal(own, undefined, `no dollar widget inside the note range at ${from}`);
   }
   const revealed = plugin.buildBankMarkDecorations(makeView("bank/2026-11.md", source, {
     selection: [{ from: line.from + 4, to: line.from + 4 }],
@@ -777,4 +782,213 @@ test("reading-view math unwrap protects a $ that lives in a note", () => {
   const changed = H.bankProtectMathInElement(article, "bank/2026-11.md", mathNote);
   assert.ok(changed >= 1);
   assert.equal(row.querySelector(".bob-bank-math-protected").getAttribute("class").includes("bob-bank-math-protected"), true);
+});
+
+function captionRowSource(rowText) {
+  return ["---", "month: 2026-11", "---", "", "# 🏦 November 2026", "", "## Thu Nov 12", "", rowText, ""].join("\n");
+}
+
+function noteAddsFor(plugin, source, options) {
+  const decorated = plugin.buildBankMarkDecorations(makeView("bank/2026-11.md", source, options));
+  return (decorated.adds || []).filter((entry) => entry.value && entry.value.widget
+    && entry.value.widget.constructor.name === "BankNoteWidget");
+}
+
+test("Live Preview captions a note off the cursor line and reveals raw bytes on it", () => {
+  const plugin = makePlugin();
+  plugin.setupBankMarks();
+  const row = "- [ ] $23.21 Amazon Reta* 125dt [cat:: kids] — LEGO set ^bank-1a2b3c4d";
+  const source = captionRowSource(row);
+  const adds = noteAddsFor(plugin, source);
+  assert.equal(adds.length, 1);
+  const line = makeDoc(source).line(9);
+  assert.equal(line.text, row);
+  const dash = row.indexOf("— LEGO");
+  assert.equal(adds[0].from, line.from + dash);
+  assert.equal(adds[0].to, line.from + row.indexOf(" ^bank-"));
+  assert.equal(adds[0].value.widget.ignoreEvent(), false);
+  assert.equal(adds[0].value.widget.eq(adds[0].value.widget), true);
+  const revealed = noteAddsFor(plugin, source, { selection: [{ from: line.from + 4, to: line.from + 4 }] });
+  assert.equal(revealed.length, 0);
+});
+
+test("Live Preview captions -- notes and flag-opened notes without overlapping chips, flag, or id", () => {
+  const plugin = makePlugin();
+  plugin.setupBankMarks();
+  for (const [row, text] of [
+    ["- [ ] $5.00 Cafe [cat:: dining] -- oat latte ^bank-1a2b3c4d", "oat latte"],
+    ["- [ ] $5.00 Cafe [cat:: dining] ⚑ — check this ^bank-1a2b3c4d", "check this"],
+    ["- [ ] $5.00 Cafe [cat:: dining] !! -- check this", "check this"],
+  ]) {
+    const source = captionRowSource(row);
+    const decorated = plugin.buildBankMarkDecorations(makeView("bank/2026-11.md", source));
+    const adds = (decorated.adds || []).slice().sort((a, b) => a.from - b.from || a.to - b.to);
+    const notes = adds.filter((entry) => entry.value.widget && entry.value.widget.text === text);
+    assert.equal(notes.length, 1, row);
+    for (let index = 1; index < adds.length; index += 1) {
+      const prev = adds[index - 1];
+      const next = adds[index];
+      if (prev.to > prev.from && next.to > next.from) assert.ok(prev.to <= next.from, `overlap in ${row}`);
+    }
+  }
+});
+
+test("multi-run legacy notes caption only the first run and leave the rest raw", () => {
+  const plugin = makePlugin();
+  plugin.setupBankMarks();
+  const row = "- [ ] $5.00 Cafe [cat:: dining] — first [[eat/place]] second";
+  const source = captionRowSource(row);
+  const adds = noteAddsFor(plugin, source);
+  assert.equal(adds.length, 1);
+  assert.equal(adds[0].value.widget.text, "first");
+  const line = makeDoc(source).line(9);
+  assert.ok(adds[0].to <= line.from + row.indexOf("[[eat/place]]"));
+});
+
+test("a row without a note gets no caption, and marks-off removes it", () => {
+  const plugin = makePlugin();
+  plugin.setupBankMarks();
+  assert.equal(noteAddsFor(plugin, captionRowSource("- [ ] $5.00 Cafe [cat:: dining] ^bank-1a2b3c4d")).length, 0);
+  plugin.bankMarksSessionEnabled = false;
+  assert.equal(noteAddsFor(plugin, captionRowSource("- [ ] $5.00 Cafe — oat latte")).length, 0);
+});
+
+test("note caption element shape: dash upright, text muted, collapsed whitespace, dash-less variant", () => {
+  const doc = new Document();
+  const el = H.buildBankNoteElement(doc, "  LEGO \n set ");
+  assert.equal(el.getAttribute("class"), "bob-bank-mark-note");
+  assert.equal(el.getAttribute("title"), "LEGO set");
+  assert.equal(el.getAttribute("aria-label"), "Note: LEGO set");
+  const dash = el.querySelector(".bob-bank-mark-note-dash");
+  assert.equal(dash.textContent, "—");
+  assert.equal(dash.getAttribute("aria-hidden"), "true");
+  assert.equal(el.querySelector(".bob-bank-mark-note-text").textContent, "LEGO set");
+  const bare = H.buildBankNoteElement(doc, "LEGO set", { dash: false });
+  assert.equal(bare.querySelector(".bob-bank-mark-note-dash"), null);
+  assert.ok(bare.getAttribute("class").includes("is-dashless"));
+  assert.equal(H.buildBankNoteElement(doc, "   "), null);
+});
+
+function readingRow(plugin, rowText, build) {
+  const doc = new Document();
+  const root = doc.createElement("div");
+  const item = doc.createElement("li");
+  build(doc, item);
+  root.appendChild(item);
+  const source = captionRowSource(rowText);
+  // Nested list items sit on later source lines, as they do in Obsidian.
+  const ctx = {
+    sourcePath: "bank/2026-11.md",
+    getSectionInfo: (el) => ({ lineStart: el.parentNode && el.parentNode.tagName === "UL" ? 20 : 8 }),
+  };
+  plugin.bankMarkReadingSource = () => source;
+  plugin.renderBankMarksIn(root, ctx);
+  return { root, item, ctx };
+}
+
+test("Reading view wraps marker-through-note in one caption and restores cleanly", () => {
+  const plugin = makePlugin();
+  plugin.setupBankMarks();
+  const row = "- [ ] $23.21 Amazon Reta* 125dt [cat:: kids] — LEGO set ^bank-1a2b3c4d";
+  const { root, item, ctx } = readingRow(plugin, row, (doc, li) => {
+    li.appendChild(doc.createTextNode("$23.21 Amazon Reta* 125dt [cat:: kids] — LEGO set ^bank-1a2b3c4d"));
+  });
+  const notes = item.querySelectorAll(".bob-bank-mark-note");
+  assert.equal(notes.length, 1);
+  assert.ok(notes[0].querySelector(".bob-bank-mark-note-dash"));
+  assert.equal(notes[0].querySelector(".bob-bank-mark-note-text").textContent, "LEGO set");
+  plugin.renderBankMarksIn(root, ctx);
+  assert.equal(item.querySelectorAll(".bob-bank-mark-note").length, 1);
+  H.bankRestoreMarkHosts(root);
+  assert.equal(item.querySelectorAll(".bob-bank-mark-note").length, 0);
+  assert.ok(item.textContent.includes("— LEGO set"));
+});
+
+test("Reading view falls back to a dash-less caption when the note renders markdown", () => {
+  const plugin = makePlugin();
+  plugin.setupBankMarks();
+  const row = "- [ ] $5.00 Cafe [cat:: dining] — **oat** latte";
+  const { item } = readingRow(plugin, row, (doc, li) => {
+    li.appendChild(doc.createTextNode("$5.00 Cafe [cat:: dining] — "));
+    const strong = doc.createElement("strong");
+    strong.appendChild(doc.createTextNode("oat"));
+    li.appendChild(strong);
+    li.appendChild(doc.createTextNode(" latte"));
+  });
+  // Neither needle is a single text node, so the row is left untouched.
+  assert.equal(item.querySelectorAll(".bob-bank-mark-note").length, 0);
+  assert.equal(item.textContent.split("—").length - 1, 1);
+});
+
+test("Reading view dash-less fallback keeps the source dash exactly once", () => {
+  const plugin = makePlugin();
+  plugin.setupBankMarks();
+  const row = "- [ ] $5.00 Cafe [cat:: dining] — oat latte";
+  const { item } = readingRow(plugin, row, (doc, li) => {
+    li.appendChild(doc.createTextNode("$5.00 Cafe [cat:: dining] — "));
+    li.appendChild(doc.createTextNode("oat latte"));
+  });
+  const notes = item.querySelectorAll(".bob-bank-mark-note");
+  assert.equal(notes.length, 1);
+  assert.ok(notes[0].getAttribute("class").includes("is-dashless"));
+  assert.equal(notes[0].querySelector(".bob-bank-mark-note-dash"), null);
+  const visible = item.childNodes.map((node) => node.nodeType === 3 ? node.nodeValue : "").join("");
+  assert.equal(visible.split("—").length - 1, 1);
+});
+
+test("Reading view never captions a payee that repeats the note text or a nested child", () => {
+  const plugin = makePlugin();
+  plugin.setupBankMarks();
+  const row = "- [ ] $5.00 oat latte [cat:: dining] — oat latte";
+  const { item } = readingRow(plugin, row, (doc, li) => {
+    li.appendChild(doc.createTextNode("$5.00 oat latte [cat:: dining] — oat latte"));
+    const ul = doc.createElement("ul");
+    const child = doc.createElement("li");
+    child.appendChild(doc.createTextNode("— oat latte"));
+    ul.appendChild(child);
+    li.appendChild(ul);
+  });
+  assert.equal(item.querySelectorAll(".bob-bank-mark-note").length, 1);
+  assert.equal(item.querySelector("ul").querySelectorAll(".bob-bank-mark-note").length, 0);
+});
+
+test("shipped caption CSS: italic muted text, upright faint dash, acked and mobile rules", () => {
+  const css = fs.readFileSync(path.join(__dirname, "../plugins/bob-ledger-tools/styles.css"), "utf8");
+  const rule = (selector) => {
+    const match = css.match(new RegExp(`${selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\{([^}]*)\\}`));
+    assert.ok(match, `missing rule ${selector}`);
+    return match[1];
+  };
+  const note = rule(".bob-bank-mark-note");
+  assert.match(note, /font-style:\s*italic/);
+  assert.match(note, /color:\s*var\(--text-muted\)/);
+  assert.match(note, /margin-inline-start:\s*0\.35em/);
+  const dash = rule(".bob-bank-mark-note-dash");
+  assert.match(dash, /font-style:\s*normal/);
+  assert.match(dash, /color:\s*var\(--text-faint\)/);
+  assert.match(css, /li\.bob-bank-mark-acked \.bob-bank-mark-note\s*\{\s*color:\s*var\(--text-normal\)/);
+  assert.match(css, /@media \(max-width: 600px\)[^@]*\.bob-bank-queue-note\s*\{[^}]*white-space:\s*normal/);
+});
+
+test("caption contrast stays at least 4.5:1 on waiting and acknowledged rows in default themes", () => {
+  const hex = (value) => [1, 3, 5].map((i) => parseInt(value.slice(i, i + 2), 16));
+  const lum = (rgb) => {
+    const lin = rgb.map((c) => { const v = c / 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); });
+    return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2];
+  };
+  const ratio = (a, b) => (Math.max(lum(a), lum(b)) + 0.05) / (Math.min(lum(a), lum(b)) + 0.05);
+  const mix = (fg, bg, p) => fg.map((v, i) => v * p + bg[i] * (1 - p));
+  // Obsidian default-theme tokens, as in test-ledger-tools-block-marks-contrast.cjs.
+  const themes = {
+    light: { bg: hex("#ffffff"), normal: hex("#222222"), muted: hex("#5c5c5c") },
+    dark: { bg: hex("#1c1c1c"), normal: hex("#dadada"), muted: hex("#b3b3b3") },
+  };
+  const css = fs.readFileSync(path.join(__dirname, "../plugins/bob-ledger-tools/styles.css"), "utf8");
+  const opacity = Number(css.match(/li\.bob-bank-mark-acked\s*\{\s*opacity:\s*([\d.]+)/)[1]);
+  for (const [name, theme] of Object.entries(themes)) {
+    assert.ok(ratio(theme.muted, theme.bg) >= 4.5, `${name} waiting caption`);
+    assert.ok(ratio(mix(theme.normal, theme.bg, opacity), theme.bg) >= 4.5, `${name} acknowledged caption`);
+  }
+  // The override is what keeps acknowledged rows legible in the light theme.
+  assert.ok(ratio(mix(themes.light.muted, themes.light.bg, opacity), themes.light.bg) < 4.5);
 });

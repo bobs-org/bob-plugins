@@ -165,6 +165,7 @@ class BobLedgerToolsBankMarksReadingMixin {
         if (token.bankIdSpan) {
           this.bankMarkWrapReadingSpan(rowEl, token.lineText, token.bankIdSpan, (doc) => buildBankIdElement(doc));
         }
+        this.bankMarkDecorateReadingNote(rowEl, token);
         const subChip = this.bankMarkSubscriptionChip(token, catalogs, report);
         if (subChip) {
           if (subChip.kind === "linked") {
@@ -177,6 +178,44 @@ class BobLedgerToolsBankMarksReadingMixin {
         }
       } catch (error) {}
     }
+  }
+
+  // Marker-through-note first; when the note renders markdown and that run
+  // is not one text node, fall back to the note text alone with a dash-less
+  // caption so the source's own dash is never doubled.
+  bankMarkDecorateReadingNote(rowEl, token) {
+    try {
+      const noteSpan = token && token.noteSpan;
+      const caption = noteSpan ? bankNoteCaptionText(noteSpan.text) : "";
+      if (!caption) return false;
+      const lineText = typeof token.lineText === "string" ? token.lineText : "";
+      const marker = token.noteMarkerSpan && Number.isInteger(token.noteMarkerSpan.start)
+        ? token.noteMarkerSpan
+        : null;
+      if (marker && lineText) {
+        const full = lineText.slice(marker.start, noteSpan.end);
+        const wrapped = this.bankMarkWrapReadingSpan(
+          rowEl, lineText, { text: full }, (doc) => buildBankNoteElement(doc, caption), { last: true },
+        );
+        if (wrapped) return true;
+      }
+      return this.bankMarkWrapReadingSpan(
+        rowEl, lineText, { text: noteSpan.text }, (doc) => buildBankNoteElement(doc, caption, { dash: !marker }), { last: true },
+      );
+    } catch (error) {
+      return false;
+    }
+  }
+
+  bankMarkNestedNode(row, node) {
+    let owner = node && node.parentNode;
+    while (owner && owner !== row) {
+      const tag = String(owner.tagName || owner.nodeName || "").toUpperCase();
+      if (tag === "UL" || tag === "OL" || tag === "LI") return true;
+      if (bankNodeHasClass(owner, "bob-bank-mark-native") || bankNodeHasClass(owner, "bob-bank-mark-host")) return true;
+      owner = owner.parentNode;
+    }
+    return false;
   }
 
   bankMarkOwnText(row) {
@@ -204,7 +243,7 @@ class BobLedgerToolsBankMarksReadingMixin {
     }
   }
 
-  bankMarkWrapReadingSpan(row, lineText, span, build) {
+  bankMarkWrapReadingSpan(row, lineText, span, build, options = {}) {
     try {
       if (!row || !span || typeof build !== "function") return false;
       const doc = row.ownerDocument;
@@ -212,17 +251,26 @@ class BobLedgerToolsBankMarksReadingMixin {
       const needles = [span.text, String(span.text || "").replace(/\*\*/g, "")].filter(Boolean);
       const walker = doc.createTreeWalker(row, 4);
       let node = null;
+      const last = options && options.last === true;
+      let pick = null;
       while ((node = walker.nextNode())) {
+        if (last && this.bankMarkNestedNode(row, node)) continue;
         const value = String(node.nodeValue || "");
         let index = -1;
         let needle = "";
         for (const candidate of needles) {
-          index = value.indexOf(candidate);
+          index = last ? value.lastIndexOf(candidate) : value.indexOf(candidate);
           if (index >= 0) { needle = candidate; break; }
         }
         if (index < 0) continue;
+        pick = { node, value, index, needle };
+        if (!last) break;
+      }
+      if (pick) {
+        const { value, index, needle } = pick;
+        node = pick.node;
         const parent = node.parentNode;
-        if (!parent) continue;
+        if (!parent) return false;
         if (bankNodeHasClass(parent, "bob-bank-mark-host") || bankNodeHasClass(parent, "bob-bank-mark-native")) {
           return false;
         }

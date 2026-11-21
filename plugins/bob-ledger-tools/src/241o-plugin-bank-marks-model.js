@@ -634,6 +634,34 @@ function buildBankHeadingElement(doc, model) {
   return host;
 }
 
+// Quiet prose caption for a row note: an upright faint dash, then the note
+// in muted italic. `dash: false` is the Reading-view fallback that leaves
+// the source's own dash in place so it never doubles.
+function bankNoteCaptionText(text) {
+  return String(text === null || text === undefined ? "" : text).replace(/\s+/g, " ").trim();
+}
+
+function buildBankNoteElement(doc, text, options = {}) {
+  const caption = bankNoteCaptionText(text);
+  if (!caption) {
+    return null;
+  }
+  const dash = !options || options.dash !== false;
+  const host = bankMarkEl(doc, "span", {
+    class: "bob-bank-mark-note" + (dash ? "" : " is-dashless"),
+    title: caption,
+    "aria-label": `Note: ${caption}`,
+  });
+  if (!host) {
+    return null;
+  }
+  if (dash) {
+    host.appendChild(bankMarkEl(doc, "span", { class: "bob-bank-mark-note-dash", "aria-hidden": "true" }, "—"));
+  }
+  host.appendChild(bankMarkEl(doc, "span", { class: "bob-bank-mark-note-text" }, caption));
+  return host;
+}
+
 function buildBankDollarElement(doc) {
   return bankMarkEl(doc, "span", { class: "bob-bank-math-dollar", "aria-hidden": "true" }, "$");
 }

@@ -10072,6 +10072,7 @@ input.bob-emoji-slot-fallback {
 .bob-bank-queue-row-label { display: flex; min-width: 0; align-items: center; gap: 0.5rem; font-size: 0.84em; }
 .bob-bank-queue-row-label input { flex: 0 0 auto; }
 .bob-bank-queue-payee { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bob-bank-queue-note { min-width: 0; overflow: hidden; color: var(--text-muted); font-style: italic; text-overflow: ellipsis; white-space: nowrap; }
 .bob-bank-queue-category { flex: 0 0 auto; color: var(--text-muted); font-size: 0.84em; }
 .bob-bank-row-link { flex: 0 0 auto; border: 0; padding: 0.2em 0.35em; background: transparent; color: var(--text-muted); }
 .bob-bank-idless-note { margin: 0.25rem 0; color: var(--text-warning, var(--text-muted)); font-size: 0.78em; }
@@ -10187,6 +10188,7 @@ input.bob-emoji-slot-fallback {
   .bob-bank-queue-day-header { align-items: flex-start; flex-direction: column; }
   .bob-bank-queue-row { align-items: flex-start; }
   .bob-bank-queue-row-label { flex-wrap: wrap; }
+  .bob-bank-queue-note { flex: 1 1 100%; overflow: visible; text-overflow: clip; white-space: normal; overflow-wrap: anywhere; }
   .bob-bank-card-footer { align-items: flex-start; flex-direction: column; }
 }
 
@@ -10215,6 +10217,23 @@ input.bob-emoji-slot-fallback {
 .bob-bank-mark-acct { color: var(--text-muted); background: transparent; }
 .bob-bank-mark-flag { color: var(--text-warning, var(--text-normal)); }
 .bob-bank-mark-id { color: var(--text-faint); font-size: 0.82em; }
+/* Row note caption: quiet prose, never a chip. The row-level 0.72 opacity on
+   acknowledged rows would drop muted text under 4.5:1, so the caption inks
+   with the normal text colour there (see test-ledger-tools-bank-marks). */
+.bob-bank-mark-note {
+  margin-inline-start: 0.35em;
+  color: var(--text-muted);
+  font-style: italic;
+  overflow-wrap: anywhere;
+}
+.bob-bank-mark-note.is-dashless { margin-inline-start: 0; }
+.bob-bank-mark-note-dash {
+  margin-inline-end: 0.3em;
+  color: var(--text-faint);
+  font-style: normal;
+}
+.cm-line.bob-bank-mark-acked .bob-bank-mark-note,
+li.bob-bank-mark-acked .bob-bank-mark-note { color: var(--text-normal); }
 .bob-bank-mark-sub {
   color: var(--text-muted);
   background: transparent;

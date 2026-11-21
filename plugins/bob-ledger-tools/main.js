@@ -75250,6 +75250,10 @@ class BobLedgerToolsBankCardsMixin {
     const cents = bankFormatCents(row.cents) || "—";
     bankCardAppend(label, "span", { class: "bob-bank-money" }, cents);
     bankCardAppend(label, "span", { class: "bob-bank-queue-payee" }, row.payee);
+    const queueNote = bankNoteCaptionText(row.note);
+    if (queueNote) {
+      bankCardAppend(label, "span", { class: "bob-bank-queue-note", title: queueNote }, `— ${queueNote}`);
+    }
     if (row.category) bankCardAppend(label, "span", { class: "bob-bank-queue-category" }, row.category);
     const subChip = bankSubscriptionChipForQueueRow(row);
     if (subChip) {
@@ -79228,6 +79232,34 @@ function buildBankHeadingElement(doc, model) {
   return host;
 }
 
+// Quiet prose caption for a row note: an upright faint dash, then the note
+// in muted italic. `dash: false` is the Reading-view fallback that leaves
+// the source's own dash in place so it never doubles.
+function bankNoteCaptionText(text) {
+  return String(text === null || text === undefined ? "" : text).replace(/\s+/g, " ").trim();
+}
+
+function buildBankNoteElement(doc, text, options = {}) {
+  const caption = bankNoteCaptionText(text);
+  if (!caption) {
+    return null;
+  }
+  const dash = !options || options.dash !== false;
+  const host = bankMarkEl(doc, "span", {
+    class: "bob-bank-mark-note" + (dash ? "" : " is-dashless"),
+    title: caption,
+    "aria-label": `Note: ${caption}`,
+  });
+  if (!host) {
+    return null;
+  }
+  if (dash) {
+    host.appendChild(bankMarkEl(doc, "span", { class: "bob-bank-mark-note-dash", "aria-hidden": "true" }, "—"));
+  }
+  host.appendChild(bankMarkEl(doc, "span", { class: "bob-bank-mark-note-text" }, caption));
+  return host;
+}
+
 function buildBankDollarElement(doc) {
   return bankMarkEl(doc, "span", { class: "bob-bank-math-dollar", "aria-hidden": "true" }, "$");
 }
@@ -79438,6 +79470,7 @@ let BankIdWidget = null;
 let BankHeadingWidget = null;
 let BankDollarWidget = null;
 let BankSubscriptionChipWidget = null;
+let BankNoteWidget = null;
 if (WidgetType && typeof WidgetType === "function") {
   BankAmountWidget = class extends WidgetType {
     constructor(model) {
@@ -79502,6 +79535,20 @@ if (WidgetType && typeof WidgetType === "function") {
         || (typeof document !== "undefined" && document ? document.createElement("span") : null);
     }
     ignoreEvent() { return true; }
+  };
+  BankNoteWidget = class extends WidgetType {
+    constructor(text) {
+      super();
+      this.text = bankNoteCaptionText(text);
+    }
+    eq(other) {
+      return Boolean(other) && other instanceof BankNoteWidget && other.text === this.text;
+    }
+    toDOM() {
+      return buildBankNoteElement(typeof document !== "undefined" ? document : null, this.text)
+        || (typeof document !== "undefined" && document ? document.createElement("span") : null);
+    }
+    ignoreEvent() { return false; }
   };
   BankSubscriptionChipWidget = class extends WidgetType {
     constructor(model, plugin) {
@@ -79736,6 +79783,16 @@ class BobLedgerToolsBankMarksMixin {
                 from: line.from + row.bankIdSpan.start,
                 to: line.from + row.bankIdSpan.end,
                 spec: Decoration.replace({ widget: new BankIdWidget() }),
+              });
+            }
+            if (row.noteSpan && BankNoteWidget && bankNoteCaptionText(row.noteSpan.text)) {
+              const noteStart = row.noteMarkerSpan && Number.isInteger(row.noteMarkerSpan.start)
+                ? row.noteMarkerSpan.start
+                : row.noteSpan.start;
+              adds.push({
+                from: line.from + noteStart,
+                to: line.from + row.noteSpan.end,
+                spec: Decoration.replace({ widget: new BankNoteWidget(row.noteSpan.text) }),
               });
             }
             const subChip = this.bankMarkSubscriptionChip(row, catalogs, report);
@@ -80263,6 +80320,7 @@ class BobLedgerToolsBankMarksReadingMixin {
         if (token.bankIdSpan) {
           this.bankMarkWrapReadingSpan(rowEl, token.lineText, token.bankIdSpan, (doc) => buildBankIdElement(doc));
         }
+        this.bankMarkDecorateReadingNote(rowEl, token);
         const subChip = this.bankMarkSubscriptionChip(token, catalogs, report);
         if (subChip) {
           if (subChip.kind === "linked") {
@@ -80275,6 +80333,44 @@ class BobLedgerToolsBankMarksReadingMixin {
         }
       } catch (error) {}
     }
+  }
+
+  // Marker-through-note first; when the note renders markdown and that run
+  // is not one text node, fall back to the note text alone with a dash-less
+  // caption so the source's own dash is never doubled.
+  bankMarkDecorateReadingNote(rowEl, token) {
+    try {
+      const noteSpan = token && token.noteSpan;
+      const caption = noteSpan ? bankNoteCaptionText(noteSpan.text) : "";
+      if (!caption) return false;
+      const lineText = typeof token.lineText === "string" ? token.lineText : "";
+      const marker = token.noteMarkerSpan && Number.isInteger(token.noteMarkerSpan.start)
+        ? token.noteMarkerSpan
+        : null;
+      if (marker && lineText) {
+        const full = lineText.slice(marker.start, noteSpan.end);
+        const wrapped = this.bankMarkWrapReadingSpan(
+          rowEl, lineText, { text: full }, (doc) => buildBankNoteElement(doc, caption), { last: true },
+        );
+        if (wrapped) return true;
+      }
+      return this.bankMarkWrapReadingSpan(
+        rowEl, lineText, { text: noteSpan.text }, (doc) => buildBankNoteElement(doc, caption, { dash: !marker }), { last: true },
+      );
+    } catch (error) {
+      return false;
+    }
+  }
+
+  bankMarkNestedNode(row, node) {
+    let owner = node && node.parentNode;
+    while (owner && owner !== row) {
+      const tag = String(owner.tagName || owner.nodeName || "").toUpperCase();
+      if (tag === "UL" || tag === "OL" || tag === "LI") return true;
+      if (bankNodeHasClass(owner, "bob-bank-mark-native") || bankNodeHasClass(owner, "bob-bank-mark-host")) return true;
+      owner = owner.parentNode;
+    }
+    return false;
   }
 
   bankMarkOwnText(row) {
@@ -80302,7 +80398,7 @@ class BobLedgerToolsBankMarksReadingMixin {
     }
   }
 
-  bankMarkWrapReadingSpan(row, lineText, span, build) {
+  bankMarkWrapReadingSpan(row, lineText, span, build, options = {}) {
     try {
       if (!row || !span || typeof build !== "function") return false;
       const doc = row.ownerDocument;
@@ -80310,17 +80406,26 @@ class BobLedgerToolsBankMarksReadingMixin {
       const needles = [span.text, String(span.text || "").replace(/\*\*/g, "")].filter(Boolean);
       const walker = doc.createTreeWalker(row, 4);
       let node = null;
+      const last = options && options.last === true;
+      let pick = null;
       while ((node = walker.nextNode())) {
+        if (last && this.bankMarkNestedNode(row, node)) continue;
         const value = String(node.nodeValue || "");
         let index = -1;
         let needle = "";
         for (const candidate of needles) {
-          index = value.indexOf(candidate);
+          index = last ? value.lastIndexOf(candidate) : value.indexOf(candidate);
           if (index >= 0) { needle = candidate; break; }
         }
         if (index < 0) continue;
+        pick = { node, value, index, needle };
+        if (!last) break;
+      }
+      if (pick) {
+        const { value, index, needle } = pick;
+        node = pick.node;
         const parent = node.parentNode;
-        if (!parent) continue;
+        if (!parent) return false;
         if (bankNodeHasClass(parent, "bob-bank-mark-host") || bankNodeHasClass(parent, "bob-bank-mark-native")) {
           return false;
         }
@@ -166066,7 +166171,7 @@ module.exports.helpers = {
   BANK_SCHEMA_VERSION, BANK_CACHE_SIZE, BANK_REVALIDATE_DEBOUNCE_MS, BANK_ROLLOVER_INTERVAL_MS, bankBuildArgs, bankCacheKey, bankDecodeList, bankDecodeReport, bankBadgeSpecForStrip, bankBadgePeriodStart, bankBadgeOlderBobRefusal, bankPeriodSpecForStrip, bankPeriodOlderBobRefusal, bankNormalizeCharts, bankNormalizeBalances, bankIsoShiftDays, bankPeriodCompact, bankPeriodViewOf, bankPeriodBalanceModel, bankPeriodBuildBalance, bankPeriodChartsModel, bankPeriodPaint,
   bankErrorModel, bankFormatCents, bankLocalDate, bankPresentList, bankPresentReport, bankRelevantPath, bankMonthFromPath, bankParseAmountLead, bankClassifyLine,
   bankParseDayHeading, bankScanSource, bankRecognizeRow, bankLocateDayHeading, bankDiscoverMonthPaths, bankSourceFenceLines,
-  bankEnsureArgsForDay, bankAckArgsForIds, bankNormalizeAckId, bankDedupeIds, bankDecodeEnsureResponse, bankDecodeAckResponse, bankDayWaitingSnapshot, bankAckResultSummary, bankCursorDayContext, bankGuardedCheckboxPlan, bankEnterDecision, bankCategoryCompletions, bankRowBlockId, bankAckIdFromLine, BANK_CARD_HUES, BANK_CARD_HEAT_LEVELS, bankCardParseFence, bankCardValidateMonthFrontmatter, bankCardMonthHeatModel, bankCardMonthModel, bankCardDedupeIds, bankCardRecentMonths, bankCardQueueModel, bankBadgeAmount, bankBadgeCoverageText, bankBadgeModel, bankBadgePaint, bankBadgeActivate, bankBadgeExpectedBounds, bankBadgePeriodIdentityValid, bankTokenizeLine, bankTokenizeSource, bankRowPresentation, bankHeadingPresentation, bankReportDayFor, bankNaiveMathSpans, bankMathConflictSpans, bankMathDollarRanges, bankLineHasCursor, bankProtectMathInElement, bankRestoreMarkHosts, bankIsMathNode, buildBankAmountElement, buildBankChipElement, buildBankIdElement, buildBankHeadingElement, buildBankDollarElement,
+  bankEnsureArgsForDay, bankAckArgsForIds, bankNormalizeAckId, bankDedupeIds, bankDecodeEnsureResponse, bankDecodeAckResponse, bankDayWaitingSnapshot, bankAckResultSummary, bankCursorDayContext, bankGuardedCheckboxPlan, bankEnterDecision, bankCategoryCompletions, bankRowBlockId, bankAckIdFromLine, BANK_CARD_HUES, BANK_CARD_HEAT_LEVELS, bankCardParseFence, bankCardValidateMonthFrontmatter, bankCardMonthHeatModel, bankCardMonthModel, bankCardDedupeIds, bankCardRecentMonths, bankCardQueueModel, bankBadgeAmount, bankBadgeCoverageText, bankBadgeModel, bankBadgePaint, bankBadgeActivate, bankBadgeExpectedBounds, bankBadgePeriodIdentityValid, bankTokenizeLine, bankTokenizeSource, bankRowPresentation, bankHeadingPresentation, bankReportDayFor, bankNaiveMathSpans, bankMathConflictSpans, bankMathDollarRanges, bankLineHasCursor, bankProtectMathInElement, bankRestoreMarkHosts, bankIsMathNode, buildBankAmountElement, buildBankChipElement, buildBankIdElement, buildBankHeadingElement, buildBankDollarElement, buildBankNoteElement, bankNoteCaptionText,
 };
 // ---- src/351-exports-task-reqs.js ----
 // Task requirement recognizer helpers, exported beside the task-tag surface.

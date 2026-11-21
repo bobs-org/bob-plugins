@@ -22,6 +22,7 @@ let BankIdWidget = null;
 let BankHeadingWidget = null;
 let BankDollarWidget = null;
 let BankSubscriptionChipWidget = null;
+let BankNoteWidget = null;
 if (WidgetType && typeof WidgetType === "function") {
   BankAmountWidget = class extends WidgetType {
     constructor(model) {
@@ -86,6 +87,20 @@ if (WidgetType && typeof WidgetType === "function") {
         || (typeof document !== "undefined" && document ? document.createElement("span") : null);
     }
     ignoreEvent() { return true; }
+  };
+  BankNoteWidget = class extends WidgetType {
+    constructor(text) {
+      super();
+      this.text = bankNoteCaptionText(text);
+    }
+    eq(other) {
+      return Boolean(other) && other instanceof BankNoteWidget && other.text === this.text;
+    }
+    toDOM() {
+      return buildBankNoteElement(typeof document !== "undefined" ? document : null, this.text)
+        || (typeof document !== "undefined" && document ? document.createElement("span") : null);
+    }
+    ignoreEvent() { return false; }
   };
   BankSubscriptionChipWidget = class extends WidgetType {
     constructor(model, plugin) {
@@ -320,6 +335,16 @@ class BobLedgerToolsBankMarksMixin {
                 from: line.from + row.bankIdSpan.start,
                 to: line.from + row.bankIdSpan.end,
                 spec: Decoration.replace({ widget: new BankIdWidget() }),
+              });
+            }
+            if (row.noteSpan && BankNoteWidget && bankNoteCaptionText(row.noteSpan.text)) {
+              const noteStart = row.noteMarkerSpan && Number.isInteger(row.noteMarkerSpan.start)
+                ? row.noteMarkerSpan.start
+                : row.noteSpan.start;
+              adds.push({
+                from: line.from + noteStart,
+                to: line.from + row.noteSpan.end,
+                spec: Decoration.replace({ widget: new BankNoteWidget(row.noteSpan.text) }),
               });
             }
             const subChip = this.bankMarkSubscriptionChip(row, catalogs, report);

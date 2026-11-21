@@ -12,7 +12,7 @@ Block ID Prompt helps create and manage stable block identifiers and task links 
 | --- | --- |
 | Name | Block ID Prompt |
 | ID | `block-id-prompt` |
-| Version | 1.39.2 |
+| Version | 1.40.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
 | Description | Prompt for custom block IDs and complete wiki block links to open tasks, with a plan-budget suffix. Typing (( opens the Task Wikilink Picker to insert a [[note#^id]] link to any vault task. Ctrl+Shift+Enter refuses Depends-On ⛓️ **DEPENDS ON:** dependency lines. On inbox notes, a Ctrl+Shift+Enter link asks where the task goes first, and Link to today then suggests the destination's type; an unlink asks right before writing, then moves it with the toggle applied (nav inboxRoute v1). Unlinking an In Progress task with no live link left today offers configured starts-after successors through task-status-cycler api v4. Ctrl+Shift+Enter asks which of today's Pomodoros to link into (↵ = suggested, else current/next, type to filter or name a new one). Project Schedule comes from the ^prj task; a future-scheduled ^prj link is refused only when its date is the sole remaining reason, dependency reasons are reported first, and a direct link raises a Ready ^prj to Next. A tagged #prj_is_blocked ^prj is refused as blocked by its parent project without raising prerequisites. Ctrl+Shift+Enter refuses LINKS with the relation notice and LINKED FROM with the generated-line notice; Pomodoro cleanup skips both. Link to today also offers recent task types with component swatches and near-duplicate hints; Ctrl+D hides or restores Recent suggestions only. The block ID prompt also suggests an ID for a plain note bullet (a notebook note), ignoring its [created::] stamp. |
@@ -84,7 +84,9 @@ preview shows the stamp live, but the written stamp is read once at commit
 date-only entries are never rewritten. When the Bob phrase catalog is
 available, `Ctrl+N` / `Ctrl+P` and `↓` / `↑` fill its `USED BEFORE` band;
 Esc or Ctrl+[ first restores the typed draft, and Enter still writes exactly
-what the field shows. See the [bob-cli Log Recall contract](https://bobs-org.github.io/log-recall/).
+what the field shows. Typing `[[` in that same field opens the LINK band
+(`proseField` v1) so a note, heading, or block row can be inserted without
+submitting the prompt. See the [bob-cli Log Recall contract](https://bobs-org.github.io/log-recall/).
 After that prompt settles and the
 unlink write commits, a Pending task with no live Task Link left today
 offers its configured starts-after successors through task-status-cycler

@@ -46,6 +46,9 @@
   "186-link-field-model.js",
   "187-link-rank.js",
   "188-link-index.js",
+  "189-prose-field-model.js",
+  "189a-prose-field-band.js",
+  "189b-prose-field-controller.js",
   "190-summary-modals.js",
   "192-freshness-refresh-summary-modal.js",
   "195-rotten-keep.js",
@@ -264,5 +267,6 @@
   "723-video-zoom-exports.js",
   "724-log-recall-exports.js",
   "725-nav-jump-landing-exports.js",
-  "726-link-engine-exports.js"
+  "726-link-engine-exports.js",
+  "727-prose-field-exports.js"
 ]

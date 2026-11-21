@@ -24100,6 +24100,7 @@ function attachLogRecall(options = {}) {
       event.stopPropagation();
       if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
     }
+    return consumed;
   };
   const refreshFromApi = (snapshot) => {
     if (disposed) return;
@@ -25057,9 +25058,16 @@ const LINK_NEARBY_LIMIT = 8;
 const LINK_EMPTY_MATCH_RANK = 9;
 
 function linkAsciiLower(value) {
-  return String(value).replace(/[A-Z]/g, (letter) =>
-    String.fromCharCode(letter.charCodeAt(0) + 32),
-  );
+  const text = String(value);
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    if (code >= 65 && code <= 90) {
+      return text.replace(/[A-Z]/g, (letter) =>
+        String.fromCharCode(letter.charCodeAt(0) + 32),
+      );
+    }
+  }
+  return text;
 }
 
 function linkCompareNormalized(left, right) {
@@ -25077,8 +25085,12 @@ function linkEqualsNormalized(left, right) {
 }
 
 function linkPathDepth(path) {
-  const matches = String(path).match(/\//g);
-  return matches ? matches.length : 0;
+  const text = String(path);
+  let depth = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    if (text.charCodeAt(index) === 47) depth += 1;
+  }
+  return depth;
 }
 
 // Rust's `words()`: split on anything that is not ASCII-alphanumeric or
@@ -25128,7 +25140,7 @@ function linkMatchKind(tier, component) {
   return `${tierName}_${component}`;
 }
 
-function linkMatchScore(query, value, component) {
+function linkMatchScore(query, value, component, loweredQueryOpt) {
   if (query === "") {
     return {
       tier: LINK_EMPTY_MATCH_RANK,
@@ -25137,7 +25149,7 @@ function linkMatchScore(query, value, component) {
       kind: "empty",
     };
   }
-  const loweredQuery = linkAsciiLower(query);
+  const loweredQuery = loweredQueryOpt != null ? loweredQueryOpt : linkAsciiLower(query);
   const loweredValue = linkAsciiLower(value);
   let tier = null;
   if (loweredValue === loweredQuery) {
@@ -25166,10 +25178,10 @@ function linkCompareScoreRank(left, right) {
   return left.component - right.component;
 }
 
-function linkBestMatch(query, items) {
+function linkBestMatch(query, items, loweredQuery) {
   let best = null;
   for (const item of items) {
-    const score = linkMatchScore(query, item.value, item.component);
+    const score = linkMatchScore(query, item.value, item.component, loweredQuery);
     if (!score) continue;
     if (
       !best ||
@@ -25183,16 +25195,74 @@ function linkBestMatch(query, items) {
   return best;
 }
 
-function linkBestNoteMatch(note, query) {
-  const items = [
-    { value: note.stem, component: "stem" },
-    { value: note.insertTarget, component: "path" },
-    { value: note.path, component: "path" },
-  ];
-  for (const alias of note.aliases || []) {
-    items.push({ value: alias, component: "alias" });
+function linkBetterScore(score, best) {
+  if (!score) return false;
+  if (!best) return true;
+  const rank = linkCompareScoreRank(score, best);
+  if (rank < 0) return true;
+  if (rank > 0) return false;
+  return linkCompareNormalized(score.value, best.value) < 0;
+}
+
+function linkBestNoteMatch(note, query, loweredQueryOpt) {
+  if (query === "") {
+    return {
+      tier: LINK_EMPTY_MATCH_RANK,
+      component: linkEmptyComponentRank("stem"),
+      value: note.stem,
+      kind: "empty",
+    };
   }
-  return linkBestMatch(query, items);
+  const loweredQuery = loweredQueryOpt != null ? loweredQueryOpt : linkAsciiLower(query);
+  let best = linkMatchScore(query, note.stem, "stem", loweredQuery);
+  const consider = (value, component) => {
+    const score = linkMatchScore(query, value, component, loweredQuery);
+    if (linkBetterScore(score, best)) best = score;
+  };
+  // Prefix/exact stem already outranks every path match. Only an alias can beat it.
+  if (!(best && best.tier <= 1)) {
+    consider(note.insertTarget, "path");
+    consider(note.path, "path");
+  }
+  for (const alias of note.aliases || []) consider(alias, "alias");
+  return best;
+}
+
+function linkNotePathLower(entry) {
+  if (entry.pathLower == null) entry.pathLower = linkAsciiLower(entry.path);
+  return entry.pathLower;
+}
+
+function linkCompareNoteRank(left, right) {
+  if (left.tierOrder !== right.tierOrder) return left.tierOrder - right.tierOrder;
+  const score = linkCompareScoreRank(left.score, right.score);
+  if (score !== 0) return score;
+  if (left.depth !== right.depth) return left.depth - right.depth;
+  if (left.inbound !== right.inbound) return right.inbound - left.inbound;
+  const leftLower = linkNotePathLower(left);
+  const rightLower = linkNotePathLower(right);
+  if (leftLower < rightLower) return -1;
+  if (leftLower > rightLower) return 1;
+  if (left.path < right.path) return -1;
+  if (left.path > right.path) return 1;
+  return 0;
+}
+
+function linkPushTop(ranked, entry, limit, compare) {
+  let low = 0;
+  let high = ranked.length;
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    if (compare(entry, ranked[mid]) < 0) high = mid;
+    else low = mid + 1;
+  }
+  if (ranked.length < limit) {
+    ranked.splice(low, 0, entry);
+    return;
+  }
+  if (low >= limit) return;
+  ranked.splice(low, 0, entry);
+  ranked.pop();
 }
 
 function linkIsAliasMatchKind(kind) {
@@ -25206,25 +25276,28 @@ function linkIsAliasMatchKind(kind) {
 }
 
 function rankLinkNoteCandidates(field, notes) {
+  const query = field.query;
+  const loweredQuery = query === "" ? "" : linkAsciiLower(query);
   const ranked = [];
   for (const note of notes) {
-    const score = linkBestNoteMatch(note, field.query);
-    if (score) ranked.push({ score, note });
+    const score = linkBestNoteMatch(note, query, loweredQuery);
+    if (!score) continue;
+    linkPushTop(
+      ranked,
+      {
+        score,
+        note,
+        tierOrder: linkTierOrder(note.tier),
+        depth: linkPathDepth(note.path),
+        inbound: note.inbound,
+        pathLower: null,
+        path: note.path,
+      },
+      LINK_RESULT_LIMIT,
+      linkCompareNoteRank,
+    );
   }
-  ranked.sort((left, right) => {
-    const tier = linkTierOrder(left.note.tier) - linkTierOrder(right.note.tier);
-    if (tier !== 0) return tier;
-    const score = linkCompareScoreRank(left.score, right.score);
-    if (score !== 0) return score;
-    const depth =
-      linkPathDepth(left.note.path) - linkPathDepth(right.note.path);
-    if (depth !== 0) return depth;
-    if (left.note.inbound !== right.note.inbound) {
-      return right.note.inbound - left.note.inbound;
-    }
-    return linkCompareNormalized(left.note.path, right.note.path);
-  });
-  return ranked.slice(0, LINK_RESULT_LIMIT).map(({ score, note }) => {
+  return ranked.map(({ score, note }) => {
     const alias = linkIsAliasMatchKind(score.kind) ? score.value : null;
     let replacement = note.insertTarget;
     if (alias && !field.hasAuthoredAlias && !field.hasAuthoredSubpath) {
@@ -25236,6 +25309,9 @@ function rankLinkNoteCandidates(field, notes) {
       cursorAfter: linkCursorAfter(field, text.length),
       path: note.path,
       name: note.stem,
+      insertTarget: note.insertTarget,
+      tier: note.tier,
+      inbound: note.inbound,
       alias,
       matchKind: score.kind,
     };
@@ -25290,6 +25366,8 @@ function rankLinkHeadingCandidates(field, notes) {
       cursorAfter: linkCursorAfter(field, text.length),
       path: note.path,
       name: note.stem,
+      insertTarget: note.insertTarget,
+      tier: note.tier,
       heading: heading.title,
       level: heading.level,
       matchKind: score.kind,
@@ -25340,6 +25418,8 @@ function rankLinkBlockCandidates(field, notes) {
       cursorAfter: linkCursorAfter(field, text.length),
       path: note.path,
       name: note.stem,
+      insertTarget: note.insertTarget,
+      tier: note.tier,
       blockId: block.id,
       matchKind: score.kind,
     };
@@ -25392,15 +25472,45 @@ function linkIsExcludedDirectoryName(name) {
   return LINK_ALWAYS_EXCLUDED_DIRECTORY_NAMES.has(name);
 }
 
+function linkIsYearComponent(name) {
+  if (name.length !== 4) return false;
+  const n0 = name.charCodeAt(0);
+  const n1 = name.charCodeAt(1);
+  const n2 = name.charCodeAt(2);
+  const n3 = name.charCodeAt(3);
+  return (
+    n0 >= 48 &&
+    n0 <= 57 &&
+    n1 >= 48 &&
+    n1 <= 57 &&
+    n2 >= 48 &&
+    n2 <= 57 &&
+    n3 >= 48 &&
+    n3 <= 57
+  );
+}
+
 function linkIsExcludedNotePath(path) {
-  const components = String(path).split("/");
-  return components
-    .slice(0, -1)
-    .some(
-      (component) =>
-        component.startsWith(".") ||
-        linkIsExcludedDirectoryName(component),
-    );
+  const text = String(path);
+  const lastSlash = text.lastIndexOf("/");
+  if (lastSlash <= 0) return false;
+  let start = 0;
+  while (start < lastSlash) {
+    const slash = text.indexOf("/", start);
+    const end = slash === -1 || slash > lastSlash ? lastSlash : slash;
+    if (end > start) {
+      const first = text.charCodeAt(start);
+      if (first === 46) return true;
+      if (
+        first === 95 &&
+        LINK_ALWAYS_EXCLUDED_DIRECTORY_NAMES.has(text.slice(start, end))
+      ) {
+        return true;
+      }
+    }
+    start = end + 1;
+  }
+  return false;
 }
 
 function linkPathStartsWith(path, root) {
@@ -25444,36 +25554,52 @@ function linkIsSatellite(path) {
 
 function classifyLinkTier(path, options) {
   const relative = String(path).replace(/\\/g, "/");
-  const components = relative.split("/");
+  let start = 0;
+  let first = "";
+  let depth = 0;
+  while (true) {
+    const slash = relative.indexOf("/", start);
+    const isLast = slash === -1;
+    const component = isLast
+      ? relative.slice(start)
+      : relative.slice(start, slash);
+    if (depth === 0) first = component;
+    if (component.charCodeAt(0) === 46) return "hidden";
+    if (!isLast && component.charCodeAt(0) === 95) return "hidden";
+    if (isLast) break;
+    start = slash + 1;
+    depth += 1;
+  }
   const libraryRoots =
     (options && options.libraryRoots) || ["lib", "xlib"];
-  const hasPdfSibling =
-    (options && options.hasPdfSibling) || (() => false);
-  const hiddenComponent = components.some((component, index) => {
-    if (component.startsWith(".")) return true;
-    return component.startsWith("_") && index + 1 < components.length;
-  });
+  for (let index = 0; index < libraryRoots.length; index += 1) {
+    const root = libraryRoots[index];
+    if (root && linkPathStartsWith(relative, root)) return "hidden";
+  }
+  const hasPdfSibling = options && options.hasPdfSibling;
   if (
-    hiddenComponent ||
-    libraryRoots.some((root) => root && linkPathStartsWith(relative, root)) ||
-    (relative.endsWith(".md") &&
-      hasPdfSibling(
-        relative.slice(0, -3).split("/").slice(0, -1).concat([
-          `${relative.split("/").pop().slice(0, -3)}.pdf`,
-        ]).join("/"),
-      ))
+    hasPdfSibling &&
+    relative.endsWith(".md") &&
+    hasPdfSibling(linkPdfSiblingPath(relative))
   ) {
     return "hidden";
   }
-  const first = components[0] || "";
   if (
     first === "done" ||
-    ["old_lib", "ref_history", "lit_review"].includes(first) ||
-    linkIsSatellite(relative)
+    first === "old_lib" ||
+    first === "ref_history" ||
+    first === "lit_review" ||
+    (linkIsYearComponent(first) && linkIsSatellite(relative))
   ) {
     return "archive";
   }
   return "living";
+}
+
+function linkPdfSiblingPath(relative) {
+  const lastSlash = relative.lastIndexOf("/");
+  if (lastSlash === -1) return `${relative.slice(0, -3)}.pdf`;
+  return `${relative.slice(0, lastSlash + 1)}${relative.slice(lastSlash + 1, -3)}.pdf`;
 }
 
 // --- Nearby list: prompt-only convenience for an empty `[[`. ---
@@ -25624,50 +25750,113 @@ function buildLinkIndexEntries(state) {
     typeof vault.getMarkdownFiles === "function"
       ? vault.getMarkdownFiles()
       : [];
-  const allPaths =
-    typeof vault.getFiles === "function"
-      ? vault.getFiles().map((file) => String(file && file.path))
-      : markdownFiles.map((file) => String(file && file.path));
-  const pdfPaths = new Set(
-    allPaths.filter((path) => path.endsWith(".pdf")),
-  );
+  const pdfPaths = collectLinkPdfPaths(vault, markdownFiles);
+  const hasPdfSibling =
+    pdfPaths.size === 0 ? null : (sibling) => pdfPaths.has(sibling);
   const resolvedLinks =
     (metadataCache && metadataCache.resolvedLinks) || {};
+  const getFileCache =
+    typeof metadataCache.getFileCache === "function"
+      ? metadataCache.getFileCache.bind(metadataCache)
+      : null;
   const notes = [];
-  for (const file of markdownFiles) {
+  for (let index = 0; index < markdownFiles.length; index += 1) {
+    const file = markdownFiles[index];
     const path = String((file && file.path) || "");
     if (!path || linkIsExcludedNotePath(path)) continue;
-    const cache =
-      typeof metadataCache.getFileCache === "function"
-        ? metadataCache.getFileCache(file)
-        : null;
-    const stem = linkIndexStem(path, file);
-    const relative = path.replace(/\\/g, "/");
-    notes.push({
-      path,
-      tier: classifyLinkTier(relative, {
-        libraryRoots: state.libraryRoots,
-        hasPdfSibling: (sibling) => pdfPaths.has(sibling),
-      }),
-      insertTarget: relative.endsWith(".md")
-        ? relative.slice(0, -3)
-        : relative,
-      stem,
-      aliases: linkIndexAliases(cache),
-      headings: linkIndexHeadings(cache),
-      blocks: linkIndexBlocks(cache),
-      inbound: 0,
-    });
+    const cache = getFileCache ? getFileCache(file) : null;
+    const relative = path.includes("\\") ? path.replace(/\\/g, "/") : path;
+    notes.push(
+      new LinkIndexNote(
+        path,
+        classifyLinkTier(relative, {
+          libraryRoots: state.libraryRoots,
+          hasPdfSibling,
+        }),
+        relative.endsWith(".md") ? relative.slice(0, -3) : relative,
+        linkIndexStem(path, file),
+        linkIndexAliases(cache),
+        cache,
+      ),
+    );
   }
-  notes.sort((left, right) =>
-    linkCompareNormalized(left.path, right.path),
-  );
-  const byPath = new Map(notes.map((note) => [note.path, note]));
-  for (const note of notes) {
-    note.inbound = countLinkInbound(resolvedLinks, note.path);
+  const sorted = sortLinkIndexNotes(notes);
+  const byPath = new Map();
+  for (let index = 0; index < sorted.length; index += 1) {
+    byPath.set(sorted[index].path, sorted[index]);
   }
-  return { notes, byPath };
+  const inboundByPath = countAllLinkInbound(resolvedLinks);
+  for (let index = 0; index < sorted.length; index += 1) {
+    sorted[index].inbound = inboundByPath.get(sorted[index].path) || 0;
+  }
+  return { notes: sorted, byPath };
 }
+
+function collectLinkPdfPaths(vault, markdownFiles) {
+  const pdfPaths = new Set();
+  const files =
+    typeof vault.getFiles === "function" ? vault.getFiles() : markdownFiles;
+  for (let index = 0; index < files.length; index += 1) {
+    const path = files[index] && files[index].path;
+    if (typeof path === "string" && path.endsWith(".pdf")) pdfPaths.add(path);
+  }
+  return pdfPaths;
+}
+
+function sortLinkIndexNotes(notes) {
+  const count = notes.length;
+  if (count < 2) return notes;
+  const keys = new Array(count);
+  const order = new Array(count);
+  for (let index = 0; index < count; index += 1) {
+    keys[index] = linkAsciiLower(notes[index].path);
+    order[index] = index;
+  }
+  order.sort((left, right) => {
+    if (keys[left] < keys[right]) return -1;
+    if (keys[left] > keys[right]) return 1;
+    const leftPath = notes[left].path;
+    const rightPath = notes[right].path;
+    if (leftPath < rightPath) return -1;
+    if (leftPath > rightPath) return 1;
+    return 0;
+  });
+  const sorted = new Array(count);
+  for (let index = 0; index < count; index += 1) {
+    sorted[index] = notes[order[index]];
+  }
+  return sorted;
+}
+
+function LinkIndexNote(path, tier, insertTarget, stem, aliases, cache) {
+  this.path = path;
+  this.tier = tier;
+  this.insertTarget = insertTarget;
+  this.stem = stem;
+  this.aliases = aliases;
+  this.inbound = 0;
+  this._cache = cache;
+}
+
+Object.defineProperty(LinkIndexNote.prototype, "headings", {
+  enumerable: true,
+  get() {
+    if (this._headings === undefined) {
+      this._headings = linkIndexHeadings(this._cache);
+    }
+    return this._headings;
+  },
+});
+
+Object.defineProperty(LinkIndexNote.prototype, "blocks", {
+  enumerable: true,
+  get() {
+    if (this._blocks === undefined) {
+      this._blocks = linkIndexBlocks(this._cache);
+    }
+    return this._blocks;
+  },
+});
 
 function linkIndexStem(path, file) {
   if (file && typeof file.basename === "string" && file.basename) {
@@ -25678,6 +25867,13 @@ function linkIndexStem(path, file) {
 }
 
 function linkIndexAliases(cache) {
+  const frontmatter = cache && cache.frontmatter;
+  if (
+    !frontmatter ||
+    (frontmatter.aliases == null && frontmatter.alias == null)
+  ) {
+    return [];
+  }
   const clean = (aliases) =>
     (Array.isArray(aliases) ? aliases : [aliases])
       .filter((alias) => typeof alias === "string")
@@ -25685,19 +25881,14 @@ function linkIndexAliases(cache) {
       .filter(Boolean)
       .filter((alias, index, list) => list.indexOf(alias) === index);
   try {
-    if (
-      typeof parseFrontMatterAliases === "function" &&
-      cache &&
-      cache.frontmatter
-    ) {
-      const aliases = parseFrontMatterAliases(cache.frontmatter);
+    if (typeof parseFrontMatterAliases === "function") {
+      const aliases = parseFrontMatterAliases(frontmatter);
       if (aliases != null) return clean(aliases);
     }
   } catch (_error) {}
   // The metadata cache already parsed the frontmatter: read the alias
   // keys directly when the Obsidian helper is unavailable (tests).
   try {
-    const frontmatter = (cache && cache.frontmatter) || {};
     const aliases = clean(frontmatter.aliases).concat(
       clean(frontmatter.alias),
     );
@@ -25733,16 +25924,1586 @@ function linkIndexBlocks(cache) {
 
 // Distinct other notes linking to `path`, mirroring bob's
 // `count_inbound_links` (self-links excluded).
-function countLinkInbound(resolvedLinks, path) {
-  let count = 0;
-  for (const source of Object.keys(resolvedLinks || {})) {
-    if (source === path) continue;
-    const targets = resolvedLinks[source] || {};
-    if (Object.prototype.hasOwnProperty.call(targets, path)) {
-      count += 1;
+function countAllLinkInbound(resolvedLinks) {
+  const inbound = new Map();
+  if (!resolvedLinks) return inbound;
+  for (const source in resolvedLinks) {
+    const targets = resolvedLinks[source];
+    if (!targets) continue;
+    for (const target in targets) {
+      if (target === source) continue;
+      inbound.set(target, (inbound.get(target) || 0) + 1);
     }
   }
-  return count;
+  return inbound;
+}
+
+function countLinkInbound(resolvedLinks, path) {
+  return countAllLinkInbound(resolvedLinks).get(path) || 0;
+}
+// ---- src/189-prose-field-model.js ----
+// Prose-field helpers for the LINK band (phase bob-cli-om.3).
+//
+// Wraps the pure engine from 186/187 with the controller's opening rules,
+// field mode, minOffset, alias-stage detection, nearby empty-`[[` rows,
+// insert application, and unresolved-complete-link listing. Offsets stay
+// UTF-16. Never throws: every entry point returns null / empty on bad input.
+
+const PROSE_LINK_SLOTS_ROOMY = 5;
+const PROSE_LINK_SLOTS_DENSE = 3;
+const PROSE_HINT_DEBOUNCE_MS = 250;
+const PROSE_LINK_WINDOW_CAP = typeof LINK_RESULT_LIMIT === "number" ? LINK_RESULT_LIMIT : 20;
+
+function proseResolveSourcePath(sourcePath) {
+  try {
+    if (typeof sourcePath === "function") return sourcePath();
+    if (sourcePath == null || sourcePath === "") return null;
+    return String(sourcePath);
+  } catch (_error) {
+    return null;
+  }
+}
+
+function proseResolveMinOffset(minOffset) {
+  try {
+    const value = typeof minOffset === "function" ? minOffset() : minOffset;
+    const number = Number(value);
+    if (!Number.isFinite(number)) return 0;
+    return Math.max(0, Math.floor(number));
+  } catch (_error) {
+    return 0;
+  }
+}
+
+function proseCaretIsCollapsed(inputEl) {
+  if (!inputEl) return false;
+  try {
+    const start = inputEl.selectionStart;
+    const end = inputEl.selectionEnd;
+    if (start == null || end == null) return true;
+    return start === end;
+  } catch (_error) {
+    return true;
+  }
+}
+
+function proseReadCaret(inputEl) {
+  try {
+    const start = inputEl && inputEl.selectionStart;
+    if (Number.isInteger(start)) return start;
+  } catch (_error) {}
+  try {
+    const value = inputEl && inputEl.value;
+    return String(value == null ? "" : value).length;
+  } catch (_error) {
+    return 0;
+  }
+}
+
+function proseInputOpensBand(event) {
+  if (!event) return false;
+  if (event.isComposing) return false;
+  const type = event.inputType;
+  if (!type) return false;
+  if (type === "insertFromPaste" || type === "insertFromDrop" || type === "insertFromYank") {
+    return false;
+  }
+  return true;
+}
+
+function proseContainingLink(text, caret) {
+  try {
+    const value = String(text == null ? "" : text);
+    const links = linkScanLinks(value, linkCodeRanges(value));
+    for (const link of links) {
+      if (caret >= link.start && caret <= link.end) return link;
+    }
+  } catch (_error) {}
+  return null;
+}
+
+function proseStageOf(field) {
+  if (!field) return "notes";
+  if (field.aliasStage) return "alias";
+  if (field.context === LINK_CONTEXT_HEADING) return "headings";
+  if (field.context === LINK_CONTEXT_BLOCK) return "blocks";
+  if (field.query === "") return "nearby";
+  return "notes";
+}
+
+function proseAnnotateField(field, link, text) {
+  if (!field) return null;
+  const linkStart = link ? link.start : Math.max(0, field.replacement[0] - 2);
+  return {
+    ...field,
+    linkStart,
+    closed: field.existingCloseEnd != null,
+    appendClose: Boolean(field.suffixClose),
+    stage: proseStageOf(field),
+    aliasStage: false,
+  };
+}
+
+function proseSyntheticField(text) {
+  const value = String(text == null ? "" : text);
+  return {
+    context: LINK_CONTEXT_NOTE,
+    scope: "note",
+    targetKind: "note",
+    target: null,
+    query: value,
+    replacement: [0, value.length],
+    hasAuthoredAlias: false,
+    hasAuthoredSubpath: false,
+    suffixClose: false,
+    existingCloseEnd: null,
+    linkStart: 0,
+    closed: false,
+    appendClose: false,
+    stage: value ? "notes" : "nearby",
+    aliasStage: false,
+    mode: "field",
+  };
+}
+
+function proseFieldAt(text, caret, options) {
+  try {
+    const opts = options && typeof options === "object" ? options : {};
+    const value = String(text == null ? "" : text);
+    const cursor = Number(caret);
+    if (!Number.isInteger(cursor) || cursor < 0 || cursor > value.length) return null;
+    const minOffset = proseResolveMinOffset(opts.minOffset);
+    const sourcePath = proseResolveSourcePath(opts.sourcePath) || "";
+    const mode = opts.mode === "field" ? "field" : "inline";
+    if (mode === "field") {
+      const trimmed = value.replace(/^\s+/u, "");
+      if (!trimmed.startsWith("[[") && !trimmed.startsWith("![[")) {
+        if (minOffset > 0) return null;
+        return proseSyntheticField(value);
+      }
+    }
+    const field = linkFieldAt(value, cursor, sourcePath);
+    if (field) {
+      const link = proseContainingLink(value, cursor);
+      if (link && link.start < minOffset) return null;
+      const annotated = proseAnnotateField(field, link, value);
+      annotated.mode = mode;
+      return annotated;
+    }
+    return null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function proseAliasAt(text, caret) {
+  try {
+    const value = String(text == null ? "" : text);
+    const cursor = Number(caret);
+    if (!Number.isInteger(cursor) || cursor < 0 || cursor > value.length) return null;
+    const link = proseContainingLink(value, cursor);
+    if (!link || !link.alias) return null;
+    if (cursor < link.alias[0] || cursor > link.alias[1]) return null;
+    return {
+      aliasStage: true,
+      stage: "alias",
+      linkStart: link.start,
+      aliasStart: link.alias[0],
+      aliasEnd: link.alias[1],
+      query: value.slice(link.alias[0], cursor),
+      closed: Boolean(link.close),
+      innerEnd: link.innerEnd,
+      closeStart: link.close ? link.close[0] : null,
+      closeEnd: link.close ? link.close[1] : null,
+      replacement: [link.alias[0], link.alias[1]],
+      context: "wikilink_alias",
+    };
+  } catch (_error) {
+    return null;
+  }
+}
+
+function proseApplyInsert(text, field, replacement) {
+  const value = String(text == null ? "" : text);
+  if (!field || !Array.isArray(field.replacement)) {
+    return { text: value, caret: value.length, start: 0, end: 0, replacement: "" };
+  }
+  const start = field.replacement[0];
+  const end = field.replacement[1];
+  const inserted = String(replacement == null ? "" : replacement);
+  const next = value.slice(0, start) + inserted + value.slice(end);
+  let caret;
+  try {
+    caret = linkCursorAfter(field, inserted.length);
+  } catch (_error) {
+    caret = start + inserted.length;
+  }
+  if (field.mode === "field") caret = start + inserted.length;
+  return { text: next, caret, start, end, replacement: inserted };
+}
+
+function proseResultLink(text, field, replacement, linkStart) {
+  try {
+    const applied = proseApplyInsert(text, field, replacement);
+    const start = Number.isInteger(linkStart) ? linkStart : (field && field.linkStart) || 0;
+    let end = applied.text.indexOf("]]", start);
+    if (end < 0) {
+      end = applied.caret;
+      const slice = applied.text.slice(start, end);
+      return slice.endsWith("]]") ? slice : `${slice}]]`;
+    }
+    return applied.text.slice(start, end + 2);
+  } catch (_error) {
+    return String(replacement || "");
+  }
+}
+
+function proseCompleteLinks(text) {
+  try {
+    const value = String(text == null ? "" : text);
+    const links = linkScanLinks(value, linkCodeRanges(value));
+    const complete = [];
+    for (const link of links) {
+      if (!link.close) continue;
+      const inner = value.slice(link.innerStart, link.innerEnd);
+      const main = inner.split("|")[0];
+      let target = main;
+      let heading = null;
+      let blockId = null;
+      let scope = "note";
+      if (main.startsWith("^^")) {
+        blockId = main.slice(2);
+        target = "";
+        scope = "vault-block";
+      } else if (main.startsWith("##")) {
+        heading = main.slice(2);
+        target = "";
+        scope = "vault-heading";
+      } else if (main.startsWith("#^")) {
+        blockId = main.slice(2);
+        target = "";
+        scope = "current-block";
+      } else if (main.startsWith("#")) {
+        heading = main.slice(1);
+        target = "";
+        scope = "current-heading";
+      } else {
+        const blockAt = main.indexOf("#^");
+        if (blockAt >= 0) {
+          target = main.slice(0, blockAt);
+          blockId = main.slice(blockAt + 2);
+        } else {
+          const headingAt = main.indexOf("#");
+          if (headingAt >= 0) {
+            target = main.slice(0, headingAt);
+            heading = main.slice(headingAt + 1);
+          }
+        }
+      }
+      complete.push({
+        raw: value.slice(link.start, link.close[1]),
+        target,
+        heading,
+        blockId,
+        scope,
+        embed: value[link.start] === "!",
+      });
+    }
+    return complete;
+  } catch (_error) {
+    return [];
+  }
+}
+
+function proseMatchRanges(text, query) {
+  const source = String(text == null ? "" : text);
+  const q = String(query == null ? "" : query);
+  if (!q) return [];
+  try {
+    const lower = linkAsciiLower(source);
+    const needle = linkAsciiLower(q);
+    const index = lower.indexOf(needle);
+    if (index < 0) return [];
+    return [[index, index + q.length]];
+  } catch (_error) {
+    const index = source.toLowerCase().indexOf(q.toLowerCase());
+    if (index < 0) return [];
+    return [[index, index + q.length]];
+  }
+}
+
+function proseFolderOf(path) {
+  const rel = String(path || "").replace(/\.md$/i, "");
+  const parts = rel.split("/");
+  if (parts.length <= 1) return "";
+  return parts.slice(0, -1).join("/");
+}
+
+function proseNoteKind(path) {
+  const rel = String(path || "").replace(/\.md$/i, "");
+  if (rel === "ref" || rel.startsWith("ref/")) return "ref";
+  if (/^\d{4}\/\d{4}-\d{2}-\d{2}$/.test(rel)) return "calendar";
+  if (/^\d{4}$/.test(rel)) return "calendar";
+  if (/^\d{6}$/.test(rel)) return "calendar";
+  if (/^\d{4}-W\d{2}$/.test(rel)) return "calendar";
+  if (/^\d{4}-Q[1-4]$/.test(rel)) return "calendar";
+  return "note";
+}
+
+function proseIconForRow(row) {
+  if (!row) return "file-text";
+  if (row.kind === "heading") return "hash";
+  if (row.kind === "block") return "pilcrow";
+  if (row.noteKind === "ref" || proseNoteKind(row.path) === "ref") return "book-open";
+  if (row.noteKind === "calendar" || proseNoteKind(row.path) === "calendar") return "calendar-days";
+  return "file-text";
+}
+
+function proseNoteMap(notes) {
+  const map = new Map();
+  for (const note of notes || []) {
+    if (note && note.path) map.set(note.path, note);
+  }
+  return map;
+}
+
+function proseRowFromNoteCandidate(candidate, notesByPath, field, text) {
+  const note = notesByPath && typeof notesByPath.get === "function"
+    ? notesByPath.get(candidate.path) || {}
+    : {};
+  const insertTarget = note.insertTarget || candidate.insertTarget || candidate.name || String(candidate.path || "").replace(/\.md$/i, "");
+  const insert = candidate.alias && !field.hasAuthoredAlias && !field.hasAuthoredSubpath
+    ? `${insertTarget}|${candidate.alias}`
+    : String(insertTarget + (candidate.heading ? `#${candidate.heading}` : "") + (candidate.blockId ? `#^${candidate.blockId}` : ""));
+  const inner = candidate.alias
+    ? `${insertTarget}|${candidate.alias}`
+    : insertTarget;
+  const kind = candidate.heading ? "heading" : candidate.blockId ? "block" : "note";
+  const primary = candidate.alias || candidate.heading || candidate.blockId || candidate.name || note.stem || "";
+  return {
+    key: candidate.heading
+      ? `h:${candidate.path}:${candidate.heading}`
+      : candidate.blockId
+        ? `b:${candidate.path}:${candidate.blockId}`
+        : candidate.alias
+          ? `a:${candidate.path}:${candidate.alias}`
+          : `n:${candidate.path}`,
+    kind,
+    path: candidate.path,
+    stem: note.stem || candidate.name || "",
+    folder: proseFolderOf(candidate.path),
+    tier: note.tier || candidate.tier || "living",
+    alias: candidate.alias || null,
+    heading: candidate.heading || null,
+    level: candidate.level || null,
+    blockId: candidate.blockId || null,
+    matchKind: candidate.matchKind || "",
+    matchRanges: proseMatchRanges(primary, field.query),
+    insert: kind === "heading"
+      ? (field.scope === "vault" ? `${insertTarget}#${candidate.heading}` : candidate.heading)
+      : kind === "block"
+        ? (field.scope === "vault" ? `${insertTarget}#^${candidate.blockId}` : candidate.blockId)
+        : inner,
+    replacement: field.mode === "field" ? `[[${inner}]]` : candidate.replacement,
+    cursorAfter: field.mode === "field" ? `[[${inner}]]`.length : candidate.cursorAfter,
+    reason: null,
+    noteKind: proseNoteKind(candidate.path),
+    primary,
+    resultLink: proseResultLink(text, field, field.mode === "field" ? `[[${inner}]]` : candidate.replacement, field.linkStart),
+  };
+}
+
+function proseRowFromNearby(entry, notesByPath, field, text) {
+  const note = notesByPath.get(entry.path) || {};
+  const inner = note.insertTarget || String(entry.path || "").replace(/\.md$/i, "");
+  const replacement = field.mode === "field"
+    ? `[[${inner}]]`
+    : linkReplacementText(field, inner);
+  const cursorAfter = field.mode === "field"
+    ? replacement.length
+    : linkCursorAfter(field, replacement.length);
+  return {
+    key: `n:${entry.path}:${entry.reason || "nearby"}`,
+    kind: "note",
+    path: entry.path,
+    stem: note.stem || entry.name || "",
+    folder: proseFolderOf(entry.path),
+    tier: note.tier || "living",
+    alias: null,
+    heading: null,
+    level: null,
+    blockId: null,
+    matchKind: "nearby",
+    matchRanges: [],
+    insert: inner,
+    replacement,
+    cursorAfter,
+    reason: entry.reason || "recent",
+    noteKind: proseNoteKind(entry.path),
+    primary: note.stem || entry.name || "",
+    resultLink: proseResultLink(text, field, replacement, field.linkStart),
+  };
+}
+
+function proseRankRows(field, notes, options) {
+  try {
+    if (!field || field.aliasStage) return { rows: [], total: 0 };
+    const opts = options && typeof options === "object" ? options : {};
+    const list = Array.isArray(notes) ? notes : [];
+    const text = String(opts.text == null ? "" : opts.text);
+    if (field.context === LINK_CONTEXT_NOTE && field.query === "") {
+      const nearbySource = opts.nearbyIndex || list;
+      const nearby = rankLinkNearbyNotes(nearbySource, {
+        sourcePath: opts.sourcePath || null,
+        parentPaths: opts.parentPaths || [],
+        linkedPaths: opts.linkedPaths || [],
+        recentPaths: opts.recentPaths || [],
+      });
+      const nearbyByPath = nearby.length ? proseNoteMap(nearbySource) : null;
+      const rows = nearby.map((entry) => proseRowFromNearby(entry, nearbyByPath, field, text));
+      return { rows, total: rows.length };
+    }
+    let ranked = [];
+    if (field.context === LINK_CONTEXT_HEADING) {
+      ranked = rankLinkHeadingCandidates(field, list);
+    } else if (field.context === LINK_CONTEXT_BLOCK) {
+      ranked = rankLinkBlockCandidates(field, list);
+    } else {
+      ranked = rankLinkNoteCandidates(field, list);
+    }
+    const rows = ranked.map((candidate) => proseRowFromNoteCandidate(candidate, null, field, text));
+    return { rows, total: rows.length };
+  } catch (_error) {
+    return { rows: [], total: 0 };
+  }
+}
+
+function proseWindowRows(rows, selectedIndex, slots) {
+  const list = Array.isArray(rows) ? rows : [];
+  const cap = Math.max(1, Number(slots) || PROSE_LINK_SLOTS_ROOMY);
+  if (list.length <= cap) {
+    const view = list.slice();
+    while (view.length < cap) view.push(null);
+    return { start: 0, view };
+  }
+  const index = Number.isInteger(selectedIndex) ? selectedIndex : 0;
+  const maxStart = list.length - cap;
+  let start = Math.min(maxStart, Math.max(0, index - Math.floor((cap - 1) / 2)));
+  if (index < start) start = index;
+  if (index >= start + cap) start = index - cap + 1;
+  start = Math.max(0, Math.min(maxStart, start));
+  return { start, view: list.slice(start, start + cap) };
+}
+
+function proseSelectedIndex(rows, selectedKey) {
+  if (!selectedKey) return 0;
+  const index = (rows || []).findIndex((row) => row && row.key === selectedKey);
+  return index >= 0 ? index : 0;
+}
+
+function proseCrumb(field, selected) {
+  if (!field) return "notes";
+  if (field.aliasStage) return "alias";
+  if (field.stage === "nearby" || (field.context === LINK_CONTEXT_NOTE && field.query === "")) {
+    return "nearby";
+  }
+  if (field.context === LINK_CONTEXT_HEADING) {
+    const target = field.target || (selected && selected.stem) || "";
+    return target ? `${target} › headings` : "headings";
+  }
+  if (field.context === LINK_CONTEXT_BLOCK) {
+    const target = field.target || (selected && selected.stem) || "";
+    return target ? `${target} › blocks` : "blocks";
+  }
+  return "notes";
+}
+
+function proseQuietMessage(field, rows, sourcePath) {
+  if (!field || field.aliasStage) return null;
+  if (field.context === LINK_CONTEXT_HEADING || field.context === LINK_CONTEXT_BLOCK) {
+    if (field.scope === "current" && !sourcePath) {
+      return "Same-note links need one home note here — type a note name first";
+    }
+    if (field.scope === "target" && field.target && (!rows || rows.length === 0)) {
+      return `No note named “${field.target}”`;
+    }
+  }
+  if ((!rows || rows.length === 0) && field.context === LINK_CONTEXT_NOTE && field.query) {
+    return `No note matches “${field.query}” — keep typing, or esc`;
+  }
+  return null;
+}
+
+function proseUnresolvedMessages(links, resolveOne, sourcePath) {
+  const messages = [];
+  for (const link of links || []) {
+    try {
+      const result = resolveOne(link, sourcePath);
+      if (!result) {
+        if (!link.target && (link.heading || link.blockId) && !sourcePath) {
+          messages.push(`⚠ ${link.raw} — no such note`);
+          continue;
+        }
+        if (link.heading && link.target) {
+          messages.push(`— no heading “${link.heading}” in ${link.target}`);
+        } else if (link.blockId && link.target) {
+          messages.push(`— no block ^${link.blockId} in ${link.target}`);
+        } else {
+          messages.push(`⚠ ${link.raw} — no such note`);
+        }
+      }
+    } catch (_error) {}
+  }
+  if (messages.length === 0) return [];
+  if (messages.length === 1) return messages;
+  return [messages[0], `+${messages.length - 1} more`];
+}
+
+function proseParentPaths(app, sourcePath) {
+  if (!app || !sourcePath) return [];
+  try {
+    const vault = app.vault || {};
+    const metadataCache = app.metadataCache || {};
+    const file = typeof vault.getAbstractFileByPath === "function"
+      ? vault.getAbstractFileByPath(sourcePath)
+      : null;
+    const cache = typeof metadataCache.getFileCache === "function"
+      ? metadataCache.getFileCache(file) || {}
+      : {};
+    const parent = cache.frontmatter && cache.frontmatter.parent;
+    if (parent == null || parent === "") return [];
+    const raw = Array.isArray(parent) ? parent[0] : parent;
+    const text = String(raw);
+    const match = text.match(/\[\[([^\]|#]+)/);
+    const linkpath = (match ? match[1] : text).trim();
+    if (!linkpath) return [];
+    if (typeof metadataCache.getFirstLinkpathDest === "function") {
+      const dest = metadataCache.getFirstLinkpathDest(linkpath, sourcePath);
+      if (dest && dest.path) return [dest.path];
+    }
+    const asPath = linkpath.endsWith(".md") ? linkpath : `${linkpath}.md`;
+    return [asPath];
+  } catch (_error) {
+    return [];
+  }
+}
+
+function proseLinkedPaths(app, sourcePath) {
+  if (!app || !sourcePath) return [];
+  try {
+    const resolved = app.metadataCache && app.metadataCache.resolvedLinks;
+    const outbound = resolved && resolved[sourcePath];
+    if (!outbound || typeof outbound !== "object") return [];
+    return Object.keys(outbound);
+  } catch (_error) {
+    return [];
+  }
+}
+
+function proseRecentPaths(app) {
+  try {
+    const files = app && app.workspace && typeof app.workspace.getLastOpenFiles === "function"
+      ? app.workspace.getLastOpenFiles()
+      : [];
+    return Array.isArray(files) ? files.slice() : [];
+  } catch (_error) {
+    return [];
+  }
+}
+
+function proseBlockPreviewText(source, blockId) {
+  const text = String(source == null ? "" : source);
+  const needle = `^${blockId}`;
+  const index = text.indexOf(needle);
+  if (index < 0) return "";
+  let lineStart = text.lastIndexOf("\n", index - 1) + 1;
+  const before = text.slice(lineStart, index).replace(/^\s*[-*+]\s+/, "").trim();
+  const clipped = before.slice(0, 80);
+  return clipped;
+}
+// ---- src/189a-prose-field-band.js ----
+// LINK band renderer (phase bob-cli-om.3). Paints into a host-owned slot
+// using the same element helpers as USED BEFORE. Never throws, never
+// writes innerHTML, never moves focus.
+
+function proseApplyIcon(el, iconName) {
+  if (!el) return;
+  try {
+    if (typeof el.setAttribute === "function") el.setAttribute("data-icon", String(iconName || ""));
+  } catch (_error) {}
+  try {
+    const paint = typeof setIcon === "function"
+      ? setIcon
+      : (typeof obsidian !== "undefined" && obsidian && typeof obsidian.setIcon === "function" ? obsidian.setIcon : null);
+    if (typeof paint === "function") paint(el, iconName);
+  } catch (_error) {}
+}
+
+function proseHighlightText(rowEl, text, ranges) {
+  const source = String(text == null ? "" : text);
+  const spans = Array.isArray(ranges) ? ranges.filter((range) => Array.isArray(range) && range.length >= 2) : [];
+  if (!spans.length || typeof rowEl.createSpan !== "function") {
+    try { rowEl.textContent = source; } catch (_error) {}
+    return;
+  }
+  try { rowEl.textContent = ""; } catch (_error) {}
+  let cursor = 0;
+  for (const [start, end] of spans) {
+    const from = Math.max(0, Math.min(source.length, start));
+    const to = Math.max(from, Math.min(source.length, end));
+    if (from > cursor && typeof rowEl.appendText === "function") rowEl.appendText(source.slice(cursor, from));
+    else if (from > cursor) {
+      const gap = logRecallCreateElement(rowEl, "span", "", source.slice(cursor, from));
+      void gap;
+    }
+    logRecallCreateElement(rowEl, "span", "bob-link-band-match", source.slice(from, to));
+    cursor = to;
+  }
+  if (cursor < source.length && typeof rowEl.appendText === "function") rowEl.appendText(source.slice(cursor));
+  else if (cursor < source.length) logRecallCreateElement(rowEl, "span", "", source.slice(cursor));
+}
+
+function proseCapsuleFor(row) {
+  if (!row) return null;
+  if (row.reason) return { text: row.reason, cls: "is-reason" };
+  if (row.alias) return { text: "Alias", cls: "is-alias" };
+  if (row.kind === "heading" && row.level) return { text: `H${row.level}`, cls: "is-heading" };
+  if (row.kind === "block" && row.blockId) return { text: `^${row.blockId}`, cls: "is-block" };
+  if (row.tier === "archive") return { text: "Archived", cls: "is-archive" };
+  if (row.tier === "hidden") return { text: "Hidden", cls: "is-hidden-tier" };
+  return null;
+}
+
+function proseKeycapsFor(field, density) {
+  if (density === "dense") return ["⇥ insert"];
+  if (!field || field.aliasStage) return [];
+  if (field.context === LINK_CONTEXT_HEADING || field.context === LINK_CONTEXT_BLOCK) {
+    return ["⇥ insert"];
+  }
+  return ["⇥ insert", "# heading", "^ block", "| alias"];
+}
+
+function proseClearHost(host) {
+  if (!host) return;
+  try {
+    if (typeof host.empty === "function") host.empty();
+    else while (host.firstChild) host.removeChild(host.firstChild);
+  } catch (_error) {
+    try { host.textContent = ""; } catch (_ignored) {}
+  }
+}
+
+function renderProseLinkBand(host, view) {
+  if (!host) return null;
+  const state = view && typeof view === "object" ? view : {};
+  proseClearHost(host);
+  const open = state.open === true;
+  logRecallAddClass(host, "bob-link-band", true);
+  logRecallAddClass(host, "is-hidden", !open);
+  logRecallAddClass(host, "is-dense", state.density === "dense");
+  logRecallAddClass(host, "is-settled", state.fadePlayed === true);
+  if (!open) return host;
+  const slots = state.density === "dense" ? PROSE_LINK_SLOTS_DENSE : PROSE_LINK_SLOTS_ROOMY;
+  try { host.style.setProperty("--bob-link-band-slots", String(slots)); } catch (_error) {}
+  try { host.style.setProperty("--bob-log-recall-slots", String(slots)); } catch (_error) {}
+  const id = state.listId || "bob-link-band-list";
+  const root = logRecallCreateElement(host, "div", "bob-link-band-inner");
+  const header = logRecallCreateElement(root, "div", "bob-link-band-header");
+  const crumb = state.crumb || "notes";
+  const total = Number(state.total) || 0;
+  const selectedIndex = Number.isInteger(state.selectedIndex) ? state.selectedIndex : -1;
+  const count = total > 0 && selectedIndex >= 0 ? `${selectedIndex + 1} of ${total}` : "";
+  logRecallCreateElement(header, "span", "bob-link-band-title", `🔗 LINK · ${crumb}`);
+  if (count) logRecallCreateElement(header, "span", "bob-link-band-count", count);
+  const list = logRecallCreateElement(root, "div", "bob-link-band-rows");
+  logRecallSetAttr(list, "id", id);
+  logRecallSetAttr(list, "role", "listbox");
+  logRecallSetAttr(list, "aria-label", "Wikilink completion");
+  const windowed = Array.isArray(state.view) ? state.view : [];
+  const emptyMessage = state.message || null;
+  if (emptyMessage && total === 0) {
+    const empty = logRecallCreateElement(list, "div", "bob-link-band-empty");
+    logRecallCreateElement(empty, "span", "bob-link-band-empty-text", emptyMessage);
+    for (let index = 1; index < slots; index += 1) {
+      logRecallCreateElement(list, "div", "bob-link-band-row is-empty");
+    }
+  } else {
+    for (let index = 0; index < slots; index += 1) {
+      const row = windowed[index];
+      if (!row) {
+        logRecallCreateElement(list, "div", "bob-link-band-row is-empty");
+        continue;
+      }
+      const selected = row.key === state.selectedKey;
+      const dim = row.tier === "archive" || row.tier === "hidden";
+      const rowEl = logRecallCreateElement(
+        list,
+        "div",
+        `bob-link-band-row${selected ? " is-selected" : ""}${dim ? " is-dim" : ""}`,
+      );
+      const rowId = `${id}-${index}`;
+      logRecallSetAttr(rowEl, "id", rowId);
+      logRecallSetAttr(rowEl, "role", "option");
+      logRecallSetAttr(rowEl, "aria-selected", selected ? "true" : "false");
+      logRecallSetAttr(rowEl, "data-key", row.key);
+      const indent = row.kind === "heading" ? Math.min(3, Math.max(0, (Number(row.level) || 1) - 1)) : 0;
+      if (indent) {
+        try { rowEl.style.setProperty("--bob-link-band-indent", `${indent * 8}px`); } catch (_error) {}
+        logRecallAddClass(rowEl, "is-indented", true);
+      }
+      const icon = logRecallCreateElement(rowEl, "span", "bob-link-band-icon");
+      proseApplyIcon(icon, proseIconForRow(row));
+      const primary = logRecallCreateElement(rowEl, "span", "bob-link-band-text");
+      const primaryText = row.kind === "block" && row.preview ? row.preview : row.primary || row.stem || "";
+      proseHighlightText(primary, primaryText, row.matchRanges);
+      const meta = logRecallCreateElement(rowEl, "span", "bob-link-band-meta");
+      if (row.alias) {
+        logRecallCreateElement(meta, "span", "bob-link-band-secondary", `→ ${row.stem}`);
+      } else if (row.folder) {
+        logRecallCreateElement(meta, "span", "bob-link-band-folder", row.folder);
+      }
+      const capsule = proseCapsuleFor(row);
+      if (capsule) logRecallCreateElement(meta, "span", `bob-link-band-capsule ${capsule.cls}`, capsule.text);
+      if (typeof rowEl.addEventListener === "function") {
+        rowEl.addEventListener("mousedown", (event) => {
+          try { event.preventDefault(); } catch (_error) {}
+        });
+        if (typeof state.onRowClick === "function") {
+          rowEl.addEventListener("click", () => state.onRowClick(row));
+        }
+      }
+    }
+  }
+  const detail = logRecallCreateElement(root, "div", "bob-link-band-detail");
+  const selected = (state.rows || []).find((row) => row && row.key === state.selectedKey) || null;
+  if (state.aliasStage) {
+    logRecallCreateElement(detail, "span", "bob-link-band-result", "Type the label — ↵ finishes the link");
+    if (state.resultLink) logRecallCreateElement(detail, "span", "bob-link-band-result is-mono", `↵ ${state.resultLink}`);
+  } else if (total === 0) {
+    logRecallCreateElement(detail, "span", "bob-link-band-result", "↵ closes this list · nothing is inserted");
+    logRecallCreateElement(detail, "span", "bob-link-band-keycaps", "");
+    const caps = logRecallCreateElement(detail, "span", "bob-link-band-hints");
+    logRecallCreateElement(caps, "span", "bob-log-recall-keycap", "esc close");
+  } else {
+    const result = (selected && selected.resultLink) || state.resultLink || "";
+    logRecallCreateElement(detail, "span", "bob-link-band-result is-mono", result ? `↵ ${result}` : "");
+    const hints = logRecallCreateElement(detail, "span", "bob-link-band-hints");
+    for (const cap of proseKeycapsFor(state.field, state.density)) {
+      logRecallCreateElement(hints, "span", "bob-log-recall-keycap", cap);
+    }
+  }
+  const live = logRecallCreateElement(root, "span", "bob-link-band-live bob-log-recall-sr-only");
+  logRecallSetAttr(live, "aria-live", "polite");
+  logRecallSetAttr(live, "role", "status");
+  if (selected && total > 0) {
+    live.textContent = `Link ${selectedIndex + 1} of ${total}: ${selected.primary || selected.stem || ""}`;
+  } else if (state.aliasStage) {
+    live.textContent = "Alias stage. Enter finishes the link.";
+  } else if (emptyMessage) {
+    live.textContent = emptyMessage;
+  }
+  return host;
+}
+
+function renderProseLinkHint(host, messages) {
+  if (!host) return null;
+  proseClearHost(host);
+  const list = Array.isArray(messages) ? messages.filter(Boolean) : [];
+  logRecallAddClass(host, "bob-link-hint", true);
+  logRecallAddClass(host, "is-hidden", list.length === 0);
+  if (list.length === 0) return host;
+  const line = logRecallCreateElement(host, "div", "bob-link-hint-line");
+  logRecallCreateElement(line, "span", "bob-link-hint-text", list[0]);
+  if (list[1]) logRecallCreateElement(line, "span", "bob-link-hint-more", list[1]);
+  return host;
+}
+
+function proseBindInputAria(inputEl, view) {
+  if (!inputEl) return;
+  const state = view && typeof view === "object" ? view : {};
+  const isTextarea = String(inputEl.tagName || "").toLowerCase() === "textarea";
+  try {
+    if (state.open) {
+      if (!isTextarea) logRecallSetAttr(inputEl, "aria-autocomplete", "list");
+      logRecallSetAttr(inputEl, "aria-expanded", "true");
+      logRecallSetAttr(inputEl, "aria-controls", state.listId || "bob-link-band-list");
+      const windowed = Array.isArray(state.view) ? state.view : [];
+      const selectedAt = windowed.findIndex((row) => row && row.key === state.selectedKey);
+      if (selectedAt >= 0) {
+        logRecallSetAttr(inputEl, "aria-activedescendant", `${state.listId || "bob-link-band-list"}-${selectedAt}`);
+      } else {
+        try { inputEl.removeAttribute("aria-activedescendant"); } catch (_error) {}
+      }
+    } else {
+      proseClearInputAria(inputEl);
+    }
+  } catch (_error) {}
+}
+
+function proseClearInputAria(inputEl) {
+  if (!inputEl) return;
+  try { inputEl.removeAttribute("aria-autocomplete"); } catch (_error) {}
+  try { inputEl.removeAttribute("aria-expanded"); } catch (_error) {}
+  try { inputEl.removeAttribute("aria-controls"); } catch (_error) {}
+  try { inputEl.removeAttribute("aria-activedescendant"); } catch (_error) {}
+}
+// ---- src/189b-prose-field-controller.js ----
+// Two-mode proseField controller (phase bob-cli-om.3). One keyboard owner
+// for USED BEFORE and the LINK band. Insertion is undo-safe. Never writes
+// the vault. Fail-open: a thrown matcher or missing index hides the band.
+
+const attachLogRecallWithoutLinks = attachLogRecall;
+attachLogRecall = function attachLogRecallWithLinks(options) {
+  const opts = options && typeof options === "object" ? options : {};
+  if (opts.links === true) {
+    try {
+      const handle = attachProseField({ ...opts, recall: opts.recall || opts.kind || null });
+      if (handle) return handle;
+    } catch (_error) {}
+    const rest = { ...opts };
+    delete rest.links;
+    return attachLogRecallWithoutLinks(rest);
+  }
+  return attachLogRecallWithoutLinks(opts);
+};
+
+function getProseLinkIndex(plugin, app) {
+  try {
+    if (plugin && plugin._bobProseLinkIndex) return plugin._bobProseLinkIndex;
+    const index = createLinkIndex(app || (plugin && plugin.app), plugin);
+    if (plugin) plugin._bobProseLinkIndex = index;
+    return index;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function proseOwnerDocument(inputEl) {
+  try {
+    if (inputEl && inputEl.ownerDocument) return inputEl.ownerDocument;
+  } catch (_error) {}
+  try { if (typeof document !== "undefined") return document; } catch (_ignored) {}
+  return null;
+}
+
+function proseOwnerWindow(inputEl) {
+  const doc = proseOwnerDocument(inputEl);
+  try {
+    if (doc && doc.defaultView) return doc.defaultView;
+  } catch (_error) {}
+  try { if (typeof window !== "undefined") return window; } catch (_ignored) {}
+  return null;
+}
+
+function proseCreateChild(parent, cls) {
+  if (!parent) return null;
+  try {
+    if (typeof parent.querySelector === "function") {
+      const existing = parent.querySelector(`.${cls}`);
+      if (existing) return existing;
+    }
+    if (parent.children && Array.isArray(parent.children)) {
+      const found = parent.children.find((child) => child && child.classes && child.classes.includes(cls));
+      if (found) return found;
+    }
+  } catch (_error) {}
+  return logRecallCreateElement(parent, "div", cls);
+}
+
+function proseInsertText(inputEl, start, end, text) {
+  if (!inputEl) return false;
+  const inserted = String(text == null ? "" : text);
+  const doc = proseOwnerDocument(inputEl);
+  const win = proseOwnerWindow(inputEl);
+  try {
+    if (typeof inputEl.focus === "function") inputEl.focus();
+  } catch (_error) {}
+  try {
+    if (typeof inputEl.setSelectionRange === "function") inputEl.setSelectionRange(start, end);
+  } catch (_error) {}
+  try {
+    if (doc && typeof doc.execCommand === "function") {
+      const ok = doc.execCommand("insertText", false, inserted);
+      if (ok) return true;
+    }
+  } catch (_error) {}
+  try {
+    if (typeof inputEl.setRangeText === "function") {
+      inputEl.setRangeText(inserted, start, end, "end");
+      const EventClass = (win && (win.InputEvent || win.Event)) || (typeof InputEvent !== "undefined" ? InputEvent : Event);
+      const event = EventClass
+        ? new EventClass("input", { bubbles: true, inputType: "insertReplacementText" })
+        : { type: "input", inputType: "insertReplacementText", bubbles: true };
+      if (typeof inputEl.dispatchEvent === "function") inputEl.dispatchEvent(event);
+      return true;
+    }
+  } catch (_error) {}
+  return false;
+}
+
+function attachProseField(options) {
+  const opts = options && typeof options === "object" ? options : {};
+  let inputEl = opts.inputEl || null;
+  let bandHost = opts.bandHost || null;
+  const plugin = opts.plugin || null;
+  const app = opts.app || (plugin && plugin.app) || null;
+  const density = opts.density === "dense" ? "dense" : "roomy";
+  const mode = opts.mode === "field" ? "field" : "inline";
+  const ownKeys = opts.ownKeys === true;
+  const arrowKeys = opts.arrowKeys !== false;
+  const linksEnabled = opts.links !== false;
+  const hintDelay = Number.isInteger(opts.hintDebounceMs) ? Math.max(0, opts.hintDebounceMs) : PROSE_HINT_DEBOUNCE_MS;
+  const id = `bob-link-band-${Math.random().toString(36).slice(2, 10)}`;
+  let sourcePathOpt = opts.sourcePath;
+  let minOffsetOpt = opts.minOffset;
+  let disposed = false;
+  let composing = false;
+  let swallowEnter = false;
+  let fadePlayed = false;
+  let linkOpen = false;
+  let aliasStage = false;
+  let field = null;
+  let rows = [];
+  let selectedKey = null;
+  let dismissed = null;
+  let edge = null;
+  let previewToken = 0;
+  let hintTimer = null;
+  let hintMessages = [];
+  let scopeHandler = null;
+  let recallHandle = null;
+  let recallHost = null;
+  let linkHost = null;
+  let hintHost = null;
+  let keyupBound = null;
+  let selectionBound = null;
+  const notesOverride = Array.isArray(opts.notes) ? opts.notes : null;
+  const resolveOverride = typeof opts.resolveLink === "function" ? opts.resolveLink : null;
+  const previewOverride = typeof opts.blockPreview === "function" ? opts.blockPreview : null;
+
+  const sourcePathNow = () => proseResolveSourcePath(sourcePathOpt);
+  const fieldOptions = () => ({
+    sourcePath: sourcePathNow(),
+    minOffset: minOffsetOpt,
+    mode,
+  });
+
+  const ensureHosts = () => {
+    if (!bandHost) return;
+    recallHost = proseCreateChild(bandHost, "bob-prose-recall-slot");
+    linkHost = proseCreateChild(bandHost, "bob-prose-link-slot");
+    hintHost = proseCreateChild(bandHost, "bob-prose-hint-slot");
+  };
+
+  const notesNow = () => {
+    if (notesOverride) return notesOverride;
+    try {
+      const index = opts.index || getProseLinkIndex(plugin, app);
+      if (index && typeof index.getNotes === "function") return index.getNotes() || [];
+    } catch (_error) {}
+    return [];
+  };
+
+  const nearbyContext = () => {
+    const sourcePath = sourcePathNow();
+    return {
+      nearbyIndex: notesNow(),
+      sourcePath,
+      parentPaths: opts.parentPaths || proseParentPaths(app, sourcePath),
+      linkedPaths: opts.linkedPaths || proseLinkedPaths(app, sourcePath),
+      recentPaths: opts.recentPaths || proseRecentPaths(app),
+    };
+  };
+
+  const rankNow = (nextField, text) => {
+    try {
+      return proseRankRows(nextField, notesNow(), { ...nearbyContext(), text });
+    } catch (_error) {
+      return { rows: [], total: 0 };
+    }
+  };
+
+  const bumpEdge = (where) => {
+    edge = where;
+    if (linkHost) {
+      logRecallAddClass(linkHost, "is-edge-bump", true);
+      const win = proseOwnerWindow(inputEl);
+      const schedule = win && typeof win.setTimeout === "function" ? win.setTimeout.bind(win) : setTimeout;
+      schedule(() => logRecallAddClass(linkHost, "is-edge-bump", false), 120);
+    }
+    renderLink();
+  };
+
+  const currentView = () => {
+    const slots = density === "dense" ? PROSE_LINK_SLOTS_DENSE : PROSE_LINK_SLOTS_ROOMY;
+    const selectedIndex = rows.length ? proseSelectedIndex(rows, selectedKey) : -1;
+    const windowed = proseWindowRows(rows, Math.max(0, selectedIndex), slots);
+    const selected = selectedIndex >= 0 ? rows[selectedIndex] : null;
+    const sourcePath = sourcePathNow();
+    return {
+      open: linkOpen,
+      aliasStage,
+      field,
+      rows,
+      view: windowed.view,
+      selectedKey,
+      selectedIndex,
+      total: rows.length,
+      crumb: aliasStage ? "alias" : proseCrumb(field, selected),
+      density,
+      fadePlayed,
+      listId: id,
+      message: aliasStage ? "Type the label — ↵ finishes the link" : proseQuietMessage(field, rows, sourcePath),
+      resultLink: aliasStage
+        ? (inputEl && inputEl.value && field ? String(inputEl.value).slice(field.linkStart || 0) : "")
+        : (selected && selected.resultLink) || "",
+      onRowClick: (row) => acceptRow(row),
+    };
+  };
+
+  const renderLink = () => {
+    if (disposed) return;
+    const view = currentView();
+    try { renderProseLinkBand(linkHost, view); } catch (_error) {}
+    try { proseBindInputAria(inputEl, view); } catch (_error) {}
+    if (recallHost) logRecallAddClass(recallHost, "is-hidden", linkOpen === true);
+    if (hintHost) logRecallAddClass(hintHost, "is-hidden", linkOpen === true || hintMessages.length === 0);
+    if (linkOpen) fadePlayed = true;
+  };
+
+  const renderHint = () => {
+    if (disposed) return;
+    try { renderProseLinkHint(hintHost, linkOpen ? [] : hintMessages); } catch (_error) {}
+  };
+
+  const closeBand = (memory) => {
+    if (!linkOpen && !aliasStage) return;
+    if (memory && field) {
+      dismissed = { opener: field.linkStart, query: field.query };
+    } else if (!memory) {
+      dismissed = null;
+    }
+    linkOpen = false;
+    aliasStage = false;
+    field = null;
+    rows = [];
+    selectedKey = null;
+    renderLink();
+    scheduleHint();
+  };
+
+  const openBand = (nextField, text, keepKey) => {
+    field = nextField;
+    aliasStage = false;
+    const ranked = rankNow(nextField, text);
+    rows = ranked.rows;
+    if (keepKey && rows.some((row) => row.key === keepKey)) selectedKey = keepKey;
+    else selectedKey = rows[0] ? rows[0].key : null;
+    linkOpen = true;
+    dismissed = null;
+    renderLink();
+    hydratePreviews();
+  };
+
+  const openAlias = (alias) => {
+    field = alias;
+    aliasStage = true;
+    linkOpen = true;
+    rows = [];
+    selectedKey = null;
+    dismissed = null;
+    renderLink();
+  };
+
+  const readState = () => {
+    if (!inputEl) return { text: "", caret: 0 };
+    const text = String(inputEl.value || "");
+    return { text, caret: proseReadCaret(inputEl) };
+  };
+
+  const considerOpen = (fromInput) => {
+    if (disposed || !linksEnabled || composing) return;
+    if (!proseCaretIsCollapsed(inputEl)) {
+      if (linkOpen) closeBand(false);
+      else scheduleHint();
+      return;
+    }
+    const { text, caret } = readState();
+    const alias = proseAliasAt(text, caret);
+    if (alias) {
+      if (!fromInput && !linkOpen) {
+        scheduleHint();
+        return;
+      }
+      if (dismissed && dismissed.opener === alias.linkStart && dismissed.query === alias.query) return;
+      openAlias(alias);
+      return;
+    }
+    const next = proseFieldAt(text, caret, fieldOptions());
+    if (!next) {
+      if (linkOpen) closeBand(false);
+      else scheduleHint();
+      return;
+    }
+    if (!fromInput && !linkOpen) {
+      scheduleHint();
+      return;
+    }
+    if (dismissed && dismissed.opener === next.linkStart && dismissed.query === next.query) return;
+    openBand(next, text, selectedKey);
+  };
+
+  const acceptRow = (row) => {
+    if (!row || !field || !inputEl) {
+      closeBand(false);
+      return true;
+    }
+    const applied = proseApplyInsert(String(inputEl.value || ""), field, row.replacement);
+    const ok = proseInsertText(inputEl, applied.start, applied.end, applied.replacement);
+    if (!ok) {
+      try {
+        inputEl.value = applied.text;
+        if (typeof inputEl.setSelectionRange === "function") inputEl.setSelectionRange(applied.caret, applied.caret);
+      } catch (_error) {}
+    }
+    swallowEnter = true;
+    closeBand(false);
+    return true;
+  };
+
+  const finishAlias = () => {
+    const { text, caret } = readState();
+    const alias = proseAliasAt(text, caret) || field;
+    if (!alias) {
+      closeBand(false);
+      return true;
+    }
+    if (!alias.closed) {
+      proseInsertText(inputEl, alias.innerEnd, alias.innerEnd, "]]");
+    } else if (typeof inputEl.setSelectionRange === "function") {
+      try { inputEl.setSelectionRange(alias.closeEnd, alias.closeEnd); } catch (_error) {}
+    }
+    swallowEnter = true;
+    closeBand(false);
+    return true;
+  };
+
+  const drill = (suffix) => {
+    const selected = rows.find((row) => row && row.key === selectedKey);
+    if (!selected || !field) return false;
+    const target = String(selected.insert || "").split("|")[0];
+    if (!target) return false;
+    const applied = proseApplyInsert(String(inputEl.value || ""), field, `${target}${suffix}`);
+    proseInsertText(inputEl, applied.start, applied.end, applied.replacement);
+    return true;
+  };
+
+  const moveSelection = (direction) => {
+    if (!rows.length) {
+      bumpEdge("empty");
+      return true;
+    }
+    const index = proseSelectedIndex(rows, selectedKey);
+    const next = index + direction;
+    if (next < 0) {
+      bumpEdge("top");
+      return true;
+    }
+    if (next >= rows.length) {
+      bumpEdge("bottom");
+      return true;
+    }
+    selectedKey = rows[next].key;
+    edge = null;
+    renderLink();
+    return true;
+  };
+
+  const handleLinkKey = (event) => {
+    if (!event) return false;
+    if (event.isComposing || composing) return false;
+    const key = String(event.key || "");
+    const lower = key.toLowerCase();
+    if ((event.altKey || event.metaKey) && lower !== "enter") return false;
+    if (event.shiftKey && lower !== "enter" && lower !== "tab") return false;
+    if (lower === "arrowdown" || (event.ctrlKey && lower === "n")) {
+      if (event.ctrlKey && lower === "n" || (arrowKeys && !event.ctrlKey)) return moveSelection(1);
+    }
+    if (lower === "arrowup" || (event.ctrlKey && lower === "p")) {
+      if (event.ctrlKey && lower === "p" || (arrowKeys && !event.ctrlKey)) return moveSelection(-1);
+    }
+    if (lower === "tab" && event.shiftKey) return false;
+    if (lower === "tab") {
+      if (!rows.length) return false;
+      return acceptRow(rows.find((row) => row.key === selectedKey) || rows[0]);
+    }
+    if (lower === "enter") {
+      const isTextarea = String(inputEl && inputEl.tagName || "").toLowerCase() === "textarea";
+      if (event.shiftKey && isTextarea) {
+        closeBand(false);
+        return false;
+      }
+      if (aliasStage) return finishAlias();
+      if (!rows.length) {
+        closeBand(false);
+        return true;
+      }
+      return acceptRow(rows.find((row) => row.key === selectedKey) || rows[0]);
+    }
+    if (key === "#" && field && field.context === LINK_CONTEXT_NOTE && field.query && selectedKey) {
+      return drill("#");
+    }
+    if (key === "^" && field && field.context === LINK_CONTEXT_NOTE && field.query && selectedKey) {
+      return drill("#^");
+    }
+    if (key === "|" && field && field.context === LINK_CONTEXT_NOTE && selectedKey) {
+      return drill("|");
+    }
+    if (lower === "arrowleft" || lower === "arrowright" || lower === "home" || lower === "end") {
+      return false;
+    }
+    if (lower === "q") return false;
+    return false;
+  };
+
+  const handleKeydown = (event) => {
+    if (disposed || !event) return false;
+    if (event.isComposing || composing) return false;
+    const key = String(event.key || "");
+    if (swallowEnter && key === "Enter") return true;
+    if (linkOpen) return handleLinkKey(event);
+    if (recallHandle && typeof recallHandle.handleKeydown === "function") {
+      try { if (recallHandle.handleKeydown(event)) return true; } catch (_error) {}
+    }
+    return false;
+  };
+
+  const backOut = () => {
+    if (linkOpen || aliasStage) {
+      closeBand(true);
+      return true;
+    }
+    if (recallHandle && typeof recallHandle.backOut === "function") {
+      try { if (recallHandle.backOut()) return true; } catch (_error) {}
+    }
+    return false;
+  };
+
+  const captureKeydown = (event) => {
+    const key = String(event && event.key || "").toLowerCase();
+    const escChord = key === "escape" || (event && event.ctrlKey && !event.altKey && !event.metaKey && key === "[");
+    const consumed = escChord ? backOut() : handleKeydown(event);
+    if (consumed) {
+      try { event.preventDefault(); } catch (_error) {}
+      try { event.stopPropagation(); } catch (_error) {}
+      try {
+        if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+      } catch (_error) {}
+    }
+    return consumed;
+  };
+
+  const onKeyup = (event) => {
+    if (event && event.key === "Enter") swallowEnter = false;
+    if (disposed) return;
+    const key = String(event && event.key || "").toLowerCase();
+    if (key === "arrowleft" || key === "arrowright" || key === "home" || key === "end") {
+      considerOpen(false);
+    }
+  };
+
+  const onInput = (event) => {
+    if (disposed) return;
+    const type = event && event.inputType;
+    const blocked = !type
+      || type === "insertFromPaste"
+      || type === "insertFromDrop"
+      || type === "insertFromYank"
+      || Boolean(event && event.isComposing);
+    if (blocked && !linkOpen) {
+      scheduleHint();
+      return;
+    }
+    considerOpen(true);
+  };
+
+  const onCompositionStart = () => { composing = true; };
+  const onCompositionEnd = () => {
+    composing = false;
+    considerOpen(true);
+  };
+
+  const onBlur = () => {
+    if (linkOpen) closeBand(false);
+  };
+
+  const onSelectionChange = () => {
+    if (disposed || composing) return;
+    const doc = proseOwnerDocument(inputEl);
+    try {
+      if (doc && doc.activeElement && doc.activeElement !== inputEl) return;
+    } catch (_error) {}
+    considerOpen(false);
+  };
+
+  const resolveComplete = (link, sourcePath) => {
+    if (resolveOverride) return resolveOverride(link, sourcePath);
+    if (!app || !app.metadataCache) return true;
+    try {
+      const cache = app.metadataCache;
+      let dest = null;
+      if (link.target) {
+        dest = typeof cache.getFirstLinkpathDest === "function"
+          ? cache.getFirstLinkpathDest(link.target, sourcePath || "")
+          : null;
+      } else if (sourcePath && typeof app.vault.getAbstractFileByPath === "function") {
+        dest = app.vault.getAbstractFileByPath(sourcePath);
+      }
+      if (!dest) return null;
+      if (!link.heading && !link.blockId) return dest;
+      const fileCache = typeof cache.getFileCache === "function" ? cache.getFileCache(dest) : null;
+      if (link.heading) {
+        const headings = (fileCache && fileCache.headings) || [];
+        return headings.some((heading) => heading && heading.heading === link.heading) ? dest : null;
+      }
+      if (link.blockId) {
+        const blocks = (fileCache && fileCache.blocks) || {};
+        return blocks[link.blockId] ? dest : null;
+      }
+      return dest;
+    } catch (_error) {
+      return null;
+    }
+  };
+
+  const scheduleHint = () => {
+    const win = proseOwnerWindow(inputEl);
+    const schedule = win && typeof win.setTimeout === "function" ? win.setTimeout.bind(win) : setTimeout;
+    const clear = win && typeof win.clearTimeout === "function" ? win.clearTimeout.bind(win) : clearTimeout;
+    if (hintTimer) {
+      try { clear(hintTimer); } catch (_error) {}
+      hintTimer = null;
+    }
+    const run = () => {
+      hintTimer = null;
+      if (disposed || linkOpen) {
+        hintMessages = [];
+        renderHint();
+        return;
+      }
+      try {
+        const text = String(inputEl && inputEl.value || "");
+        const links = proseCompleteLinks(text);
+        hintMessages = proseUnresolvedMessages(links, resolveComplete, sourcePathNow());
+      } catch (_error) {
+        hintMessages = [];
+      }
+      renderHint();
+    };
+    if (hintDelay === 0) run();
+    else hintTimer = schedule(run, hintDelay);
+  };
+
+  const hydratePreviews = () => {
+    const token = ++previewToken;
+    const visible = (currentView().view || []).filter((row) => row && row.kind === "block" && row.blockId && !row.preview);
+    if (!visible.length) return;
+    const index = opts.index || (plugin && plugin._bobProseLinkIndex);
+    for (const row of visible) {
+      Promise.resolve()
+        .then(async () => {
+          if (previewOverride) return previewOverride(row.path, row.blockId);
+          if (index && typeof index.blockPreview === "function") return index.blockPreview(row.path, row.blockId);
+          if (!app || !app.vault) return "";
+          const file = typeof app.vault.getAbstractFileByPath === "function"
+            ? app.vault.getAbstractFileByPath(row.path)
+            : null;
+          const read = app.vault.cachedRead || app.vault.read;
+          if (!file || typeof read !== "function") return "";
+          const text = await read.call(app.vault, file);
+          return proseBlockPreviewText(text, row.blockId);
+        })
+        .then((preview) => {
+          if (disposed || token !== previewToken || !preview) return;
+          const target = rows.find((item) => item && item.key === row.key);
+          if (target) target.preview = String(preview);
+          renderLink();
+        })
+        .catch(() => {});
+    }
+  };
+
+  const bindInput = (el) => {
+    if (!el || typeof el.addEventListener !== "function") return;
+    el.addEventListener("input", onInput);
+    el.addEventListener("compositionstart", onCompositionStart);
+    el.addEventListener("compositionend", onCompositionEnd);
+    el.addEventListener("blur", onBlur);
+    if (ownKeys) el.addEventListener("keydown", captureKeydown, true);
+    el.addEventListener("keyup", onKeyup, true);
+    const doc = proseOwnerDocument(el);
+    if (doc && typeof doc.addEventListener === "function") {
+      selectionBound = onSelectionChange;
+      doc.addEventListener("selectionchange", selectionBound);
+    }
+    keyupBound = onKeyup;
+  };
+
+  const unbindInput = (el) => {
+    if (!el || typeof el.removeEventListener !== "function") return;
+    el.removeEventListener("input", onInput);
+    el.removeEventListener("compositionstart", onCompositionStart);
+    el.removeEventListener("compositionend", onCompositionEnd);
+    el.removeEventListener("blur", onBlur);
+    if (ownKeys) el.removeEventListener("keydown", captureKeydown, true);
+    el.removeEventListener("keyup", onKeyup, true);
+    const doc = proseOwnerDocument(el);
+    if (doc && selectionBound && typeof doc.removeEventListener === "function") {
+      doc.removeEventListener("selectionchange", selectionBound);
+    }
+    proseClearInputAria(el);
+  };
+
+  ensureHosts();
+  if (opts.recall && recallHost) {
+    try {
+      recallHandle = attachLogRecallWithoutLinks({
+        ...opts,
+        inputEl,
+        bandHost: recallHost,
+        kind: opts.recall,
+        ownKeys: false,
+        links: false,
+      });
+    } catch (_error) {
+      recallHandle = null;
+    }
+  }
+  bindInput(inputEl);
+  if (ownKeys && opts.scope && typeof opts.scope.register === "function") {
+    try {
+      scopeHandler = opts.scope.register(null, null, (event) => {
+        try {
+          const doc = proseOwnerDocument(inputEl);
+          if (doc && doc.activeElement && doc.activeElement !== inputEl) return true;
+          if (typeof document !== "undefined" && document.activeElement && document.activeElement !== inputEl) return true;
+        } catch (_error) {}
+        return captureKeydown(event) ? false : true;
+      });
+    } catch (_error) {
+      scopeHandler = null;
+    }
+  }
+  renderLink();
+  scheduleHint();
+
+  return {
+    handleKeydown,
+    backOut,
+    isLinkOpen: () => linkOpen === true,
+    isRecalling: () => {
+      try { return recallHandle && typeof recallHandle.isRecalling === "function" ? recallHandle.isRecalling() : false; }
+      catch (_error) { return false; }
+    },
+    rebind(next) {
+      const patch = next && typeof next === "object" ? next : {};
+      if (patch.inputEl && patch.inputEl !== inputEl) {
+        unbindInput(inputEl);
+        inputEl = patch.inputEl;
+        bindInput(inputEl);
+        if (recallHandle && typeof recallHandle.rebind === "function") {
+          try { recallHandle.rebind({ inputEl }); } catch (_error) {}
+        } else if (recallHandle && opts.recall) {
+          try { recallHandle.detach(); } catch (_error) {}
+          try {
+            recallHandle = attachLogRecallWithoutLinks({
+              ...opts,
+              inputEl,
+              bandHost: recallHost,
+              kind: opts.recall,
+              ownKeys: false,
+              links: false,
+            });
+          } catch (_error) {}
+        }
+      }
+      if (patch.bandHost && patch.bandHost !== bandHost) {
+        bandHost = patch.bandHost;
+        ensureHosts();
+        if (recallHandle && opts.recall) {
+          try { recallHandle.detach(); } catch (_error) {}
+          try {
+            recallHandle = attachLogRecallWithoutLinks({
+              ...opts,
+              inputEl,
+              bandHost: recallHost,
+              kind: opts.recall,
+              ownKeys: false,
+              links: false,
+            });
+          } catch (_error) {}
+        }
+      }
+      fadePlayed = true;
+      if (linkOpen) considerOpen(true);
+      else renderLink();
+      return true;
+    },
+    setSourcePath(next) {
+      sourcePathOpt = next;
+      if (linkOpen) considerOpen(true);
+      else scheduleHint();
+      return true;
+    },
+    setKind(nextKind) {
+      if (recallHandle && typeof recallHandle.setKind === "function") {
+        try { return recallHandle.setKind(nextKind); } catch (_error) { return false; }
+      }
+      return false;
+    },
+    setPinnedSlots(next) {
+      if (recallHandle && typeof recallHandle.setPinnedSlots === "function") {
+        try { return recallHandle.setPinnedSlots(next); } catch (_error) { return false; }
+      }
+      return true;
+    },
+    detach() {
+      if (disposed) return;
+      disposed = true;
+      previewToken += 1;
+      if (hintTimer) {
+        try { clearTimeout(hintTimer); } catch (_error) {}
+        hintTimer = null;
+      }
+      unbindInput(inputEl);
+      try {
+        if (scopeHandler && opts.scope && typeof opts.scope.unregister === "function") {
+          opts.scope.unregister(scopeHandler);
+        }
+      } catch (_error) {}
+      try { if (recallHandle && typeof recallHandle.detach === "function") recallHandle.detach(); } catch (_error) {}
+      try { proseClearHost(linkHost); } catch (_error) {}
+      try { proseClearHost(hintHost); } catch (_error) {}
+      try { proseClearHost(recallHost); } catch (_error) {}
+      linkOpen = false;
+      aliasStage = false;
+      recallHandle = null;
+    },
+  };
+}
+
+function createProseFieldApi(plugin) {
+  return Object.freeze({
+    version: 1,
+    attach(options) {
+      try {
+        const opts = options && typeof options === "object" ? options : {};
+        return attachProseField({ ...opts, plugin, app: opts.app || (plugin && plugin.app) });
+      } catch (_error) {
+        return null;
+      }
+    },
+  });
 }
 // ---- src/190-summary-modals.js ----
 function isSamePriorityRollTarget(cached, fresh) {
@@ -129507,6 +131268,44 @@ try {
       createLinkIndex,
       LINK_RESULT_LIMIT,
       LINK_NEARBY_LIMIT,
+    });
+  }
+} catch (_error) {}
+// ---- src/727-prose-field-exports.js ----
+const createDependencyNavApiBeforeProse = createDependencyNavApi;
+createDependencyNavApi = function createDependencyNavApiWithProseField(plugin) {
+  const api = createDependencyNavApiBeforeProse(plugin);
+  return Object.freeze({
+    ...api,
+    proseField: createProseFieldApi(plugin),
+  });
+};
+
+try {
+  if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
+    module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
+      attachProseField,
+      attachLogRecall,
+      createDependencyNavApi,
+      createProseFieldApi,
+      proseFieldAt,
+      proseAliasAt,
+      proseApplyInsert,
+      proseCompleteLinks,
+      proseInputOpensBand,
+      proseRankRows,
+      proseWindowRows,
+      proseUnresolvedMessages,
+      proseQuietMessage,
+      proseResultLink,
+      proseIconForRow,
+      proseNoteKind,
+      proseBlockPreviewText,
+      renderProseLinkBand,
+      renderProseLinkHint,
+      PROSE_LINK_SLOTS_ROOMY,
+      PROSE_LINK_SLOTS_DENSE,
+      PROSE_HINT_DEBOUNCE_MS,
     });
   }
 } catch (_error) {}

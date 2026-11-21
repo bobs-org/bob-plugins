@@ -106,50 +106,113 @@ function buildLinkIndexEntries(state) {
     typeof vault.getMarkdownFiles === "function"
       ? vault.getMarkdownFiles()
       : [];
-  const allPaths =
-    typeof vault.getFiles === "function"
-      ? vault.getFiles().map((file) => String(file && file.path))
-      : markdownFiles.map((file) => String(file && file.path));
-  const pdfPaths = new Set(
-    allPaths.filter((path) => path.endsWith(".pdf")),
-  );
+  const pdfPaths = collectLinkPdfPaths(vault, markdownFiles);
+  const hasPdfSibling =
+    pdfPaths.size === 0 ? null : (sibling) => pdfPaths.has(sibling);
   const resolvedLinks =
     (metadataCache && metadataCache.resolvedLinks) || {};
+  const getFileCache =
+    typeof metadataCache.getFileCache === "function"
+      ? metadataCache.getFileCache.bind(metadataCache)
+      : null;
   const notes = [];
-  for (const file of markdownFiles) {
+  for (let index = 0; index < markdownFiles.length; index += 1) {
+    const file = markdownFiles[index];
     const path = String((file && file.path) || "");
     if (!path || linkIsExcludedNotePath(path)) continue;
-    const cache =
-      typeof metadataCache.getFileCache === "function"
-        ? metadataCache.getFileCache(file)
-        : null;
-    const stem = linkIndexStem(path, file);
-    const relative = path.replace(/\\/g, "/");
-    notes.push({
-      path,
-      tier: classifyLinkTier(relative, {
-        libraryRoots: state.libraryRoots,
-        hasPdfSibling: (sibling) => pdfPaths.has(sibling),
-      }),
-      insertTarget: relative.endsWith(".md")
-        ? relative.slice(0, -3)
-        : relative,
-      stem,
-      aliases: linkIndexAliases(cache),
-      headings: linkIndexHeadings(cache),
-      blocks: linkIndexBlocks(cache),
-      inbound: 0,
-    });
+    const cache = getFileCache ? getFileCache(file) : null;
+    const relative = path.includes("\\") ? path.replace(/\\/g, "/") : path;
+    notes.push(
+      new LinkIndexNote(
+        path,
+        classifyLinkTier(relative, {
+          libraryRoots: state.libraryRoots,
+          hasPdfSibling,
+        }),
+        relative.endsWith(".md") ? relative.slice(0, -3) : relative,
+        linkIndexStem(path, file),
+        linkIndexAliases(cache),
+        cache,
+      ),
+    );
   }
-  notes.sort((left, right) =>
-    linkCompareNormalized(left.path, right.path),
-  );
-  const byPath = new Map(notes.map((note) => [note.path, note]));
-  for (const note of notes) {
-    note.inbound = countLinkInbound(resolvedLinks, note.path);
+  const sorted = sortLinkIndexNotes(notes);
+  const byPath = new Map();
+  for (let index = 0; index < sorted.length; index += 1) {
+    byPath.set(sorted[index].path, sorted[index]);
   }
-  return { notes, byPath };
+  const inboundByPath = countAllLinkInbound(resolvedLinks);
+  for (let index = 0; index < sorted.length; index += 1) {
+    sorted[index].inbound = inboundByPath.get(sorted[index].path) || 0;
+  }
+  return { notes: sorted, byPath };
 }
+
+function collectLinkPdfPaths(vault, markdownFiles) {
+  const pdfPaths = new Set();
+  const files =
+    typeof vault.getFiles === "function" ? vault.getFiles() : markdownFiles;
+  for (let index = 0; index < files.length; index += 1) {
+    const path = files[index] && files[index].path;
+    if (typeof path === "string" && path.endsWith(".pdf")) pdfPaths.add(path);
+  }
+  return pdfPaths;
+}
+
+function sortLinkIndexNotes(notes) {
+  const count = notes.length;
+  if (count < 2) return notes;
+  const keys = new Array(count);
+  const order = new Array(count);
+  for (let index = 0; index < count; index += 1) {
+    keys[index] = linkAsciiLower(notes[index].path);
+    order[index] = index;
+  }
+  order.sort((left, right) => {
+    if (keys[left] < keys[right]) return -1;
+    if (keys[left] > keys[right]) return 1;
+    const leftPath = notes[left].path;
+    const rightPath = notes[right].path;
+    if (leftPath < rightPath) return -1;
+    if (leftPath > rightPath) return 1;
+    return 0;
+  });
+  const sorted = new Array(count);
+  for (let index = 0; index < count; index += 1) {
+    sorted[index] = notes[order[index]];
+  }
+  return sorted;
+}
+
+function LinkIndexNote(path, tier, insertTarget, stem, aliases, cache) {
+  this.path = path;
+  this.tier = tier;
+  this.insertTarget = insertTarget;
+  this.stem = stem;
+  this.aliases = aliases;
+  this.inbound = 0;
+  this._cache = cache;
+}
+
+Object.defineProperty(LinkIndexNote.prototype, "headings", {
+  enumerable: true,
+  get() {
+    if (this._headings === undefined) {
+      this._headings = linkIndexHeadings(this._cache);
+    }
+    return this._headings;
+  },
+});
+
+Object.defineProperty(LinkIndexNote.prototype, "blocks", {
+  enumerable: true,
+  get() {
+    if (this._blocks === undefined) {
+      this._blocks = linkIndexBlocks(this._cache);
+    }
+    return this._blocks;
+  },
+});
 
 function linkIndexStem(path, file) {
   if (file && typeof file.basename === "string" && file.basename) {
@@ -160,6 +223,13 @@ function linkIndexStem(path, file) {
 }
 
 function linkIndexAliases(cache) {
+  const frontmatter = cache && cache.frontmatter;
+  if (
+    !frontmatter ||
+    (frontmatter.aliases == null && frontmatter.alias == null)
+  ) {
+    return [];
+  }
   const clean = (aliases) =>
     (Array.isArray(aliases) ? aliases : [aliases])
       .filter((alias) => typeof alias === "string")
@@ -167,19 +237,14 @@ function linkIndexAliases(cache) {
       .filter(Boolean)
       .filter((alias, index, list) => list.indexOf(alias) === index);
   try {
-    if (
-      typeof parseFrontMatterAliases === "function" &&
-      cache &&
-      cache.frontmatter
-    ) {
-      const aliases = parseFrontMatterAliases(cache.frontmatter);
+    if (typeof parseFrontMatterAliases === "function") {
+      const aliases = parseFrontMatterAliases(frontmatter);
       if (aliases != null) return clean(aliases);
     }
   } catch (_error) {}
   // The metadata cache already parsed the frontmatter: read the alias
   // keys directly when the Obsidian helper is unavailable (tests).
   try {
-    const frontmatter = (cache && cache.frontmatter) || {};
     const aliases = clean(frontmatter.aliases).concat(
       clean(frontmatter.alias),
     );
@@ -215,14 +280,20 @@ function linkIndexBlocks(cache) {
 
 // Distinct other notes linking to `path`, mirroring bob's
 // `count_inbound_links` (self-links excluded).
-function countLinkInbound(resolvedLinks, path) {
-  let count = 0;
-  for (const source of Object.keys(resolvedLinks || {})) {
-    if (source === path) continue;
-    const targets = resolvedLinks[source] || {};
-    if (Object.prototype.hasOwnProperty.call(targets, path)) {
-      count += 1;
+function countAllLinkInbound(resolvedLinks) {
+  const inbound = new Map();
+  if (!resolvedLinks) return inbound;
+  for (const source in resolvedLinks) {
+    const targets = resolvedLinks[source];
+    if (!targets) continue;
+    for (const target in targets) {
+      if (target === source) continue;
+      inbound.set(target, (inbound.get(target) || 0) + 1);
     }
   }
-  return count;
+  return inbound;
+}
+
+function countLinkInbound(resolvedLinks, path) {
+  return countAllLinkInbound(resolvedLinks).get(path) || 0;
 }

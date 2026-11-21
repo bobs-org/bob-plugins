@@ -401,7 +401,8 @@ The root `bob-navigation-hotkeys.api` is version 3:
 | `quickRoll` | 1 | Preview the `Alt+P` roll for a review row. |
 | `taskLinkLane` | 1 | Match a Pomodoro Task Link and toggle its Next/In Progress lane. |
 | `taskScope` | 1 | `at({ lines, line })` returns the frozen task owner and its owned zero-based lines, or `null`. |
-| `logRecall` | 1 | Attach the USED BEFORE phrase band to a host-owned text field and record successful Work Log writes. |
+| `logRecall` | 1 | Attach the USED BEFORE phrase band to a host-owned text field and record successful Work Log writes. Additive `links: true` delegates to `proseField`. |
+| `proseField` | 1 | Attach the two-mode controller that owns USED BEFORE and the LINK band for `[[` completion in prose prompts. |
 | `notice` | 5 | Show the Unblocked card; v2 `keep_moving`, v3 `relation_successors`, v4 `offer_closes`, v5 a trailing `↗ “S”` jump line. |
 | `successors` | 5 | Ask which offered successor links to add; v2 accepts `keep_moving`, v3 accepts the `relation` group, v4 resolves verdict closes, and v5 stages a `Ctrl+J` jump pin. |
 | `blocks` | 1 | Open the reverse Blocks stage or remove a dependent. |
@@ -432,9 +433,16 @@ with no recommendation. `parts` is additive (`keyLabel`, `verb`, `fromLabel`,
 to a result object. `logRecall.attach({ inputEl, kind, bandHost, density,
 arrowKeys, ownKeys })` returns `handleKeydown`, `backOut`, `isRecalling`,
 `setKind`, and `detach`; standalone modals set `ownKeys: true`, while picker
-pipelines set it to false and call `handleKeydown` once. `logRecall.noteUsed`
-forwards a successful local write to Ledger Tools `logs.noteUsed`. The root api
-version stays 3. `successors.pick(model)` resolves to a result
+pipelines set it to false and call `handleKeydown` once. Passing additive
+`links: true` (plus `sourcePath`) returns a `proseField` handle instead: the
+same keys, plus `isLinkOpen()`, `rebind`, and `setSourcePath`. Older nav
+ignores `links` and attaches recall only. `logRecall.noteUsed`
+forwards a successful local write to Ledger Tools `logs.noteUsed`. Feature-detect
+`api.proseField` with `Number(api.proseField.version) >= 1`. `proseField.attach`
+takes `inputEl`, `bandHost`, `sourcePath` (`string | null | () => string | null`),
+`recall`, `links`, `mode` (`inline` | `field`), `minOffset`, `density`, `ownKeys`,
+and `scope`. The root api version stays 3. Enter and Tab accept a row while the
+LINK band is open and never submit the prompt. Completion only inserts text. `successors.pick(model)` resolves to a result
 with a `picks` array or `null` when no choice is made. Selectable
 rows may carry additive `task: { path, line, text, displayText, status,
 preimage }` so `Ctrl+Shift+Enter` can retarget through

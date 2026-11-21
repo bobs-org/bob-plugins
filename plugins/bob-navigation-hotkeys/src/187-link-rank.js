@@ -25,9 +25,16 @@ const LINK_NEARBY_LIMIT = 8;
 const LINK_EMPTY_MATCH_RANK = 9;
 
 function linkAsciiLower(value) {
-  return String(value).replace(/[A-Z]/g, (letter) =>
-    String.fromCharCode(letter.charCodeAt(0) + 32),
-  );
+  const text = String(value);
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    if (code >= 65 && code <= 90) {
+      return text.replace(/[A-Z]/g, (letter) =>
+        String.fromCharCode(letter.charCodeAt(0) + 32),
+      );
+    }
+  }
+  return text;
 }
 
 function linkCompareNormalized(left, right) {
@@ -45,8 +52,12 @@ function linkEqualsNormalized(left, right) {
 }
 
 function linkPathDepth(path) {
-  const matches = String(path).match(/\//g);
-  return matches ? matches.length : 0;
+  const text = String(path);
+  let depth = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    if (text.charCodeAt(index) === 47) depth += 1;
+  }
+  return depth;
 }
 
 // Rust's `words()`: split on anything that is not ASCII-alphanumeric or
@@ -96,7 +107,7 @@ function linkMatchKind(tier, component) {
   return `${tierName}_${component}`;
 }
 
-function linkMatchScore(query, value, component) {
+function linkMatchScore(query, value, component, loweredQueryOpt) {
   if (query === "") {
     return {
       tier: LINK_EMPTY_MATCH_RANK,
@@ -105,7 +116,7 @@ function linkMatchScore(query, value, component) {
       kind: "empty",
     };
   }
-  const loweredQuery = linkAsciiLower(query);
+  const loweredQuery = loweredQueryOpt != null ? loweredQueryOpt : linkAsciiLower(query);
   const loweredValue = linkAsciiLower(value);
   let tier = null;
   if (loweredValue === loweredQuery) {
@@ -134,10 +145,10 @@ function linkCompareScoreRank(left, right) {
   return left.component - right.component;
 }
 
-function linkBestMatch(query, items) {
+function linkBestMatch(query, items, loweredQuery) {
   let best = null;
   for (const item of items) {
-    const score = linkMatchScore(query, item.value, item.component);
+    const score = linkMatchScore(query, item.value, item.component, loweredQuery);
     if (!score) continue;
     if (
       !best ||
@@ -151,16 +162,74 @@ function linkBestMatch(query, items) {
   return best;
 }
 
-function linkBestNoteMatch(note, query) {
-  const items = [
-    { value: note.stem, component: "stem" },
-    { value: note.insertTarget, component: "path" },
-    { value: note.path, component: "path" },
-  ];
-  for (const alias of note.aliases || []) {
-    items.push({ value: alias, component: "alias" });
+function linkBetterScore(score, best) {
+  if (!score) return false;
+  if (!best) return true;
+  const rank = linkCompareScoreRank(score, best);
+  if (rank < 0) return true;
+  if (rank > 0) return false;
+  return linkCompareNormalized(score.value, best.value) < 0;
+}
+
+function linkBestNoteMatch(note, query, loweredQueryOpt) {
+  if (query === "") {
+    return {
+      tier: LINK_EMPTY_MATCH_RANK,
+      component: linkEmptyComponentRank("stem"),
+      value: note.stem,
+      kind: "empty",
+    };
   }
-  return linkBestMatch(query, items);
+  const loweredQuery = loweredQueryOpt != null ? loweredQueryOpt : linkAsciiLower(query);
+  let best = linkMatchScore(query, note.stem, "stem", loweredQuery);
+  const consider = (value, component) => {
+    const score = linkMatchScore(query, value, component, loweredQuery);
+    if (linkBetterScore(score, best)) best = score;
+  };
+  // Prefix/exact stem already outranks every path match. Only an alias can beat it.
+  if (!(best && best.tier <= 1)) {
+    consider(note.insertTarget, "path");
+    consider(note.path, "path");
+  }
+  for (const alias of note.aliases || []) consider(alias, "alias");
+  return best;
+}
+
+function linkNotePathLower(entry) {
+  if (entry.pathLower == null) entry.pathLower = linkAsciiLower(entry.path);
+  return entry.pathLower;
+}
+
+function linkCompareNoteRank(left, right) {
+  if (left.tierOrder !== right.tierOrder) return left.tierOrder - right.tierOrder;
+  const score = linkCompareScoreRank(left.score, right.score);
+  if (score !== 0) return score;
+  if (left.depth !== right.depth) return left.depth - right.depth;
+  if (left.inbound !== right.inbound) return right.inbound - left.inbound;
+  const leftLower = linkNotePathLower(left);
+  const rightLower = linkNotePathLower(right);
+  if (leftLower < rightLower) return -1;
+  if (leftLower > rightLower) return 1;
+  if (left.path < right.path) return -1;
+  if (left.path > right.path) return 1;
+  return 0;
+}
+
+function linkPushTop(ranked, entry, limit, compare) {
+  let low = 0;
+  let high = ranked.length;
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    if (compare(entry, ranked[mid]) < 0) high = mid;
+    else low = mid + 1;
+  }
+  if (ranked.length < limit) {
+    ranked.splice(low, 0, entry);
+    return;
+  }
+  if (low >= limit) return;
+  ranked.splice(low, 0, entry);
+  ranked.pop();
 }
 
 function linkIsAliasMatchKind(kind) {
@@ -174,25 +243,28 @@ function linkIsAliasMatchKind(kind) {
 }
 
 function rankLinkNoteCandidates(field, notes) {
+  const query = field.query;
+  const loweredQuery = query === "" ? "" : linkAsciiLower(query);
   const ranked = [];
   for (const note of notes) {
-    const score = linkBestNoteMatch(note, field.query);
-    if (score) ranked.push({ score, note });
+    const score = linkBestNoteMatch(note, query, loweredQuery);
+    if (!score) continue;
+    linkPushTop(
+      ranked,
+      {
+        score,
+        note,
+        tierOrder: linkTierOrder(note.tier),
+        depth: linkPathDepth(note.path),
+        inbound: note.inbound,
+        pathLower: null,
+        path: note.path,
+      },
+      LINK_RESULT_LIMIT,
+      linkCompareNoteRank,
+    );
   }
-  ranked.sort((left, right) => {
-    const tier = linkTierOrder(left.note.tier) - linkTierOrder(right.note.tier);
-    if (tier !== 0) return tier;
-    const score = linkCompareScoreRank(left.score, right.score);
-    if (score !== 0) return score;
-    const depth =
-      linkPathDepth(left.note.path) - linkPathDepth(right.note.path);
-    if (depth !== 0) return depth;
-    if (left.note.inbound !== right.note.inbound) {
-      return right.note.inbound - left.note.inbound;
-    }
-    return linkCompareNormalized(left.note.path, right.note.path);
-  });
-  return ranked.slice(0, LINK_RESULT_LIMIT).map(({ score, note }) => {
+  return ranked.map(({ score, note }) => {
     const alias = linkIsAliasMatchKind(score.kind) ? score.value : null;
     let replacement = note.insertTarget;
     if (alias && !field.hasAuthoredAlias && !field.hasAuthoredSubpath) {
@@ -204,6 +276,9 @@ function rankLinkNoteCandidates(field, notes) {
       cursorAfter: linkCursorAfter(field, text.length),
       path: note.path,
       name: note.stem,
+      insertTarget: note.insertTarget,
+      tier: note.tier,
+      inbound: note.inbound,
       alias,
       matchKind: score.kind,
     };
@@ -258,6 +333,8 @@ function rankLinkHeadingCandidates(field, notes) {
       cursorAfter: linkCursorAfter(field, text.length),
       path: note.path,
       name: note.stem,
+      insertTarget: note.insertTarget,
+      tier: note.tier,
       heading: heading.title,
       level: heading.level,
       matchKind: score.kind,
@@ -308,6 +385,8 @@ function rankLinkBlockCandidates(field, notes) {
       cursorAfter: linkCursorAfter(field, text.length),
       path: note.path,
       name: note.stem,
+      insertTarget: note.insertTarget,
+      tier: note.tier,
       blockId: block.id,
       matchKind: score.kind,
     };
@@ -360,15 +439,45 @@ function linkIsExcludedDirectoryName(name) {
   return LINK_ALWAYS_EXCLUDED_DIRECTORY_NAMES.has(name);
 }
 
+function linkIsYearComponent(name) {
+  if (name.length !== 4) return false;
+  const n0 = name.charCodeAt(0);
+  const n1 = name.charCodeAt(1);
+  const n2 = name.charCodeAt(2);
+  const n3 = name.charCodeAt(3);
+  return (
+    n0 >= 48 &&
+    n0 <= 57 &&
+    n1 >= 48 &&
+    n1 <= 57 &&
+    n2 >= 48 &&
+    n2 <= 57 &&
+    n3 >= 48 &&
+    n3 <= 57
+  );
+}
+
 function linkIsExcludedNotePath(path) {
-  const components = String(path).split("/");
-  return components
-    .slice(0, -1)
-    .some(
-      (component) =>
-        component.startsWith(".") ||
-        linkIsExcludedDirectoryName(component),
-    );
+  const text = String(path);
+  const lastSlash = text.lastIndexOf("/");
+  if (lastSlash <= 0) return false;
+  let start = 0;
+  while (start < lastSlash) {
+    const slash = text.indexOf("/", start);
+    const end = slash === -1 || slash > lastSlash ? lastSlash : slash;
+    if (end > start) {
+      const first = text.charCodeAt(start);
+      if (first === 46) return true;
+      if (
+        first === 95 &&
+        LINK_ALWAYS_EXCLUDED_DIRECTORY_NAMES.has(text.slice(start, end))
+      ) {
+        return true;
+      }
+    }
+    start = end + 1;
+  }
+  return false;
 }
 
 function linkPathStartsWith(path, root) {
@@ -412,36 +521,52 @@ function linkIsSatellite(path) {
 
 function classifyLinkTier(path, options) {
   const relative = String(path).replace(/\\/g, "/");
-  const components = relative.split("/");
+  let start = 0;
+  let first = "";
+  let depth = 0;
+  while (true) {
+    const slash = relative.indexOf("/", start);
+    const isLast = slash === -1;
+    const component = isLast
+      ? relative.slice(start)
+      : relative.slice(start, slash);
+    if (depth === 0) first = component;
+    if (component.charCodeAt(0) === 46) return "hidden";
+    if (!isLast && component.charCodeAt(0) === 95) return "hidden";
+    if (isLast) break;
+    start = slash + 1;
+    depth += 1;
+  }
   const libraryRoots =
     (options && options.libraryRoots) || ["lib", "xlib"];
-  const hasPdfSibling =
-    (options && options.hasPdfSibling) || (() => false);
-  const hiddenComponent = components.some((component, index) => {
-    if (component.startsWith(".")) return true;
-    return component.startsWith("_") && index + 1 < components.length;
-  });
+  for (let index = 0; index < libraryRoots.length; index += 1) {
+    const root = libraryRoots[index];
+    if (root && linkPathStartsWith(relative, root)) return "hidden";
+  }
+  const hasPdfSibling = options && options.hasPdfSibling;
   if (
-    hiddenComponent ||
-    libraryRoots.some((root) => root && linkPathStartsWith(relative, root)) ||
-    (relative.endsWith(".md") &&
-      hasPdfSibling(
-        relative.slice(0, -3).split("/").slice(0, -1).concat([
-          `${relative.split("/").pop().slice(0, -3)}.pdf`,
-        ]).join("/"),
-      ))
+    hasPdfSibling &&
+    relative.endsWith(".md") &&
+    hasPdfSibling(linkPdfSiblingPath(relative))
   ) {
     return "hidden";
   }
-  const first = components[0] || "";
   if (
     first === "done" ||
-    ["old_lib", "ref_history", "lit_review"].includes(first) ||
-    linkIsSatellite(relative)
+    first === "old_lib" ||
+    first === "ref_history" ||
+    first === "lit_review" ||
+    (linkIsYearComponent(first) && linkIsSatellite(relative))
   ) {
     return "archive";
   }
   return "living";
+}
+
+function linkPdfSiblingPath(relative) {
+  const lastSlash = relative.lastIndexOf("/");
+  if (lastSlash === -1) return `${relative.slice(0, -3)}.pdf`;
+  return `${relative.slice(0, lastSlash + 1)}${relative.slice(lastSlash + 1, -3)}.pdf`;
 }
 
 // --- Nearby list: prompt-only convenience for an empty `[[`. ---

@@ -299,6 +299,75 @@ test("the Open-reset planner is removed: unlink plans only a Work Log insertion"
   assert.equal(blank.content, "- [*] #task Ship it ^ship");
 });
 
+test("S1 Work summary prompt opts into links with the right sourcePath", () => {
+  const attached = [];
+  const plugin = new Plugin();
+  plugin.now = () => new Date(2026, 10, 21, 10, 0);
+  plugin.getLogRecallApi = () => ({
+    version: 1,
+    attach(options) {
+      attached.push(options);
+      return { detach() {} };
+    },
+    noteUsed() { return true; },
+  });
+  plugin.cancelWorkSummaryPrompt = () => {};
+  plugin.lastPromptKey = null;
+  plugin.promptOpen = false;
+
+  function fieldHost() {
+    const el = {
+      children: [],
+      cls: "",
+      text: "",
+      attrs: {},
+      empty() { this.children = []; },
+      addClass() {},
+      removeClass() {},
+      setAttribute(name, value) { this.attrs[name] = value; },
+      addEventListener() {},
+      createDiv(options) { return this.createEl("div", options); },
+      createEl(tag, options = {}) {
+        const child = fieldHost();
+        child.tag = tag;
+        child.cls = options.cls || "";
+        child.text = options.text || "";
+        child.attrs = { ...(options.attr || {}) };
+        child.value = "";
+        child.focus = () => {};
+        this.children.push(child);
+        return child;
+      },
+    };
+    return el;
+  }
+
+  const unlink = new helpers.WorkSummaryPromptModal({}, plugin, {
+    sourcePath: "inbox/today.md",
+    task: { displayText: "Ship it" },
+  });
+  unlink.contentEl = fieldHost();
+  unlink.modalEl = fieldHost();
+  unlink.scope = { register() { return {}; }, unregister() {} };
+  try { unlink.onOpen(); } catch (_error) {}
+  assert.equal(attached.length >= 1, true);
+  assert.equal(attached[0].links, true);
+  assert.equal(attached[0].kind, "work");
+  assert.equal(attached[0].sourcePath(), "inbox/today.md");
+
+  const open = new helpers.WorkSummaryPromptModal({}, plugin, {
+    kind: "task-link-open",
+    sourcePath: "2026/2026-11-21.md",
+    target: { path: "projects/sase.md" },
+    task: { displayText: "Ship it" },
+  });
+  open.contentEl = fieldHost();
+  open.modalEl = fieldHost();
+  open.scope = { register() { return {}; }, unregister() {} };
+  try { open.onOpen(); } catch (_error) {}
+  assert.equal(attached[1].sourcePath(), "projects/sase.md");
+});
+
 test("unlink Work Log plan keeps the In Progress checkbox and appends one entry", () => {
   const content = ["- [/] #task Ship it ^ship", "  - Keep detail"].join("\n");
   const plan = helpers.planWorkLogInsertion(content, 0, "  Added\ncoverage  ", {

@@ -312,6 +312,7 @@ function attachLogRecall(options = {}) {
       event.stopPropagation();
       if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
     }
+    return consumed;
   };
   const refreshFromApi = (snapshot) => {
     if (disposed) return;

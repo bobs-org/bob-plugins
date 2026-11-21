@@ -482,6 +482,19 @@ class WorkSummaryPromptModal extends Modal {
           arrowKeys: true,
           ownKeys: true,
           scope: this.scope,
+          links: true,
+          sourcePath: () => {
+            try {
+              if (this.source && this.source.kind === TASK_LINK_OPEN_SOURCE_KIND) {
+                const path = this.source.target && this.source.target.path;
+                return path ? String(path) : null;
+              }
+              const path = this.source && this.source.sourcePath;
+              return path ? String(path) : null;
+            } catch (_error) {
+              return null;
+            }
+          },
         });
       } catch (_error) { this.logRecall = null; }
     }

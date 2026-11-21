@@ -75,6 +75,8 @@ ledger, or `Number.MAX_SAFE_INTEGER` when the task has no rank.
 | `attachments` | 1 | Look up recorded image origins and delegate image imports to bob. |
 | `bank` | 2 | Fetch cached `bob bank list` / `report` JSON, subscribe mounts, and run guarded acknowledgment and Category card actions. |
 | `bankWalk` | 1 | Serve the read-only bank-row walk snapshot, the shared step/day planners, cursor locate, live-buffer identity resolution, the session anchor, and the Category-card busy flag behind `]b` / `[b` and `]B` / `[B`. |
+| `periodNotes` | 2 | Open or create a canonical period note through `bob periods ensure`; v2 refuses pre-adoption past targets unless `allowPreAdoption`. |
+| `navGroups` | 1 | Resolve derived calendar group and step stops for `[N` / `]N` and legacy `[n` / `]n` fill-in. Records return `route: null` until record-groups. |
 
 `logs.fetch({ force? })` resolves `{ status, catalog, fetchedAt }`, where
 `status` is `ok`, `stale`, `unavailable`, `unsupported`, or `error`. A cached
@@ -155,6 +157,15 @@ at the payee start; `anchor()` / `setAnchor()` carry the session landing;
 `busy()` is true while the Category card modal is open. Nav keys, the footer
 panel, and the Category card all read this one snapshot and planner, so arms
 and jumps can never disagree. The top-level ledger api version is unchanged.
+
+`periodNotes` v2 adds a `pre-adoption` refusal on past targets whose ISO
+week-year has no week note (`allowPreAdoption` bypasses it). `navGroups` v1
+`resolve({ path, content })` is synchronous and never throws: calendar notes
+get derived step and group stops (`exists` / `creatable` / `ghost`;
+pre-adoption past targets are ghosts; missing dailies in adopted years and
+the future are creatable), year and `all_time` set `none`, and every other
+path returns `route: null` until record-groups. The adopted-year cache
+invalidates on week-note create, delete, and rename.
 
 - Register `vault` `create` / `modify` listeners inside `workspace.onLayoutReady`,
   because Obsidian replays `create` for every vault file (PDFs included) during load.

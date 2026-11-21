@@ -267,6 +267,11 @@ class BobLedgerToolsPeriodNotesMixin {
     } catch (error) {
       // The command is best-effort on limited test hosts.
     }
+    try {
+      if (typeof this.setupNavGroups === "function") this.setupNavGroups();
+    } catch (error) {
+      // The nav-groups cache is best-effort.
+    }
     const workspace = this.app && this.app.workspace;
     if (!workspace || typeof workspace.onLayoutReady !== "function") return;
     workspace.onLayoutReady(() => {
@@ -308,6 +313,11 @@ class BobLedgerToolsPeriodNotesMixin {
     }
     this.periodNotesRetryTimer = null;
     this.periodNotesSetupDone = false;
+    try {
+      if (typeof this.teardownNavGroups === "function") this.teardownNavGroups();
+    } catch (error) {
+      // Nav-groups teardown is best-effort.
+    }
   }
 
   periodNotesIsAdopted() {
@@ -386,12 +396,29 @@ class BobLedgerToolsPeriodNotesMixin {
   // Create one period note through bob — `bob periods ensure -d <its first
   // day>` is create-only and fills stubs — then resolve the file once
   // Obsidian indexes it. Resolves `{ ok, file, code, message }`; never rejects.
+  // Pre-adoption past targets (an ISO week-year with no week note, ending
+  // before today) refuse unless `options.allowPreAdoption === true`, so one
+  // `[N` from 2026-W01 cannot scaffold 2025.
   async periodNotesEnsureForPath(path, options = {}) {
     const opts = options && typeof options === "object" ? options : {};
     const fail = (code, message) => ({ ok: false, file: null, code, message });
     try {
       const period = periodNotesPeriodForPath(path);
       if (!period) return fail("not-period", "Not a period note path.");
+      if (opts.allowPreAdoption !== true && typeof this.navGroupsPathIsPreAdoption === "function") {
+        let preAdoption = false;
+        try {
+          preAdoption = this.navGroupsPathIsPreAdoption(path) === true;
+        } catch (_error) {
+          preAdoption = false;
+        }
+        if (preAdoption) {
+          const message = typeof this.navGroupsPreAdoptionMessage === "function"
+            ? this.navGroupsPreAdoptionMessage(path)
+            : "That note is before Bob's period notes began — navigation never creates it";
+          return fail("pre-adoption", message);
+        }
+      }
       if (!this.periodNotesIsAdopted()) return fail("not-adopted", periodNotesNotAdoptedText());
       const result = await this.periodNotesRunEnsure("open-period", { ...opts, date: period.date || undefined });
       if (!result || result.ok !== true) {
@@ -415,12 +442,14 @@ class BobLedgerToolsPeriodNotesMixin {
     }
   }
 
-  // `api.periodNotes` v1: sibling plugins (bob-navigation-hotkeys) open a
+  // `api.periodNotes` v2: sibling plugins (bob-navigation-hotkeys) open a
   // missing period note through bob instead of a Templater template.
-  // Additive: the top-level api stays v3. Members never throw.
+  // v2 refuses pre-adoption past targets (`code: "pre-adoption"`) unless
+  // `allowPreAdoption` is true. Additive: the top-level api stays v3.
+  // Members never throw.
   periodNotesApi() {
     return Object.freeze({
-      version: 1,
+      version: 2,
       periodForPath: (path) => periodNotesPeriodForPath(path),
       ensureNote: (path, options) => this.periodNotesEnsureForPath(path, options),
     });

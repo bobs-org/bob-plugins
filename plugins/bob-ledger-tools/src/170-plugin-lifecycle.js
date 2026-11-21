@@ -276,7 +276,7 @@ class BobLedgerToolsPlugin extends Plugin {
       // Read-only phrase history from bob-cli plus a per-session write overlay.
       // Additive: the top-level api stays v3.
       logs: this.logHistoryApi(),
-      periodNotes: this.periodNotesApi(), bank: this.bankApi(), bankWalk: this.bankWalkApi(),
+      periodNotes: this.periodNotesApi(), navGroups: this.navGroupsApi(), bank: this.bankApi(), bankWalk: this.bankWalkApi(),
       // Work badge tones (workBadges namespace v2 adds the magenta exact-cap
       // tone): shared count-to-limit colors for TODAY, PENDING, NEXT, and READY.
       // Additive: top-level api stays v3. Every member is synchronous
@@ -677,6 +677,11 @@ class BobLedgerToolsPlugin extends Plugin {
     this.setupTaskThemeMarks();
     this.setupPomodoroThemeChips();
     this.setupGcalEvents();
+    try {
+      if (typeof this.setupNavGroups === "function") this.setupNavGroups();
+    } catch (_error) {
+      // The nav-groups cache is best-effort.
+    }
     this.setupUnblockedGlyph();
     this.setupFreesMarks();
     this.scheduleFreshnessMarksRefresh();

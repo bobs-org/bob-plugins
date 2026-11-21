@@ -410,7 +410,7 @@ test("api.periodNotes.ensureNote creates a missing period note through bob, neve
     },
   });
   const api = harnessed.plugin.periodNotesApi();
-  assert.equal(api.version, 1);
+  assert.equal(api.version, 2);
   assert.deepEqual(api.periodForPath("2027.md"), { id: "2027", kind: "year", date: "2027-01-04" });
   const created = await api.ensureNote("2027.md");
   assert.equal(created.ok, true);

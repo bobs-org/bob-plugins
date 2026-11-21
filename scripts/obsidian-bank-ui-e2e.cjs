@@ -489,7 +489,7 @@ function runSelfTest() {
     const log = bank.readArgvLog(shimDir);
     if (!log.length || log[0].argv[1] !== "list") throw new Error("shim did not log argv");
     const source = fs.readFileSync(__filename, "utf8");
-    for (const token of ["toggle-bank-marks", "bank-open-today", "cycle-task-status-forward", "window-open", "xvfb-run", "never $0.00", ".math", "bob-bank-category-modal", "bob-bank-category-card", "walk-ctrl-enter-c", "walk-card.png", "walk-real-key-swallowed", "Input.dispatchKeyEvent", "walk-learn-coffee", "walk-learn-accept"]) {
+    for (const token of ["toggle-bank-marks", "bank-open-today", "cycle-task-status-forward", "window-open", "xvfb-run", "never $0.00", ".math", "bob-bank-category-modal", "bob-bank-category-card", "walk-ctrl-enter-c", "walk-note", "walk-card.png", "walk-real-key-swallowed", "Input.dispatchKeyEvent", "walk-learn-coffee", "walk-learn-accept"]) {
       if (!source.includes(token) && token !== "never $0.00") {
         if (token === "never $0.00") continue;
         throw new Error(`e2e source missing ${token}`);
@@ -1283,11 +1283,12 @@ async function runE2e(parsed) {
       const afterAccept = editor.getLine(lineOf("Market"));
       dbg.push(snap("afterAccept"));
 
-      const keyedSpace = await key(" ");
+      // "-" files without a category; Space now opens the note stage.
+      const keyedDash = await key("-");
       await sleep(400);
-      const afterSpace = editor.getLine(lineOf("Bookstore"));
-      const afterSpaceMarket = editor.getLine(lineOf("Market"));
-      dbg.push(Object.assign(snap("afterSpace"), { keyedSpace, afterSpaceMarket }));
+      const afterDash = editor.getLine(lineOf("Bookstore"));
+      const afterDashMarket = editor.getLine(lineOf("Market"));
+      dbg.push(Object.assign(snap("afterDash"), { keyedDash, afterDashMarket }));
 
       const hardwareBefore = editor.getLine(lineOf("Hardware"));
       await key("Escape");
@@ -1301,13 +1302,33 @@ async function runE2e(parsed) {
       toggle();
       await sleep(80);
       seed();
-      await key(" ");
+      await key("-");
       await sleep(400);
-      await key(" ");
+
+      // walk-note: Space → type → Enter writes the note and stays on Hardware.
+      const noteKeyed = await key(" ");
+      const noteStageOpen = Boolean(ledger.bankCategoryModal && ledger.bankCategoryModal.noteStage);
+      for (const char of "for the team") await key(char);
+      await key("Enter");
+      const afterNote = editor.getLine(lineOf("Hardware"));
+      const noteModal = ledger && ledger.bankCategoryModal;
+      const noteStayed = Boolean(noteModal && noteModal.closed !== true && !noteModal.summary &&
+        !noteModal.noteStage && noteModal.context && noteModal.context.cardRow &&
+        noteModal.context.cardRow.payee === "Hardware" && noteModal.didInteract !== true);
+      const noteCaption = Boolean(document.querySelector(".bob-bank-category-note"));
+      dbg.push(Object.assign(snap("afterNote"), { noteKeyed, noteStageOpen, afterNote, noteCaption }));
+      // Within CM6's 500 ms grouping window, Enter accepts and advances.
+      const hardwareLine = lineOf("Hardware");
+      seed([{ rows: [{ path, line: hardwareLine + 1, cents: -400, payee: "Hardware", suggestion: { category: "groceries", source: "learned" } }] }]);
+      await key("Enter");
       await sleep(500);
       const summary = Boolean(
         (ledger && ledger.bankCategoryModal && ledger.bankCategoryModal.summary) ||
         document.querySelector(".bob-bank-category-summary"),
+      );
+      const summaryDetail = String(
+        (ledger && ledger.bankCategoryModal && ledger.bankCategoryModal.summary &&
+          ledger.bankCategoryModal.summary.detail) || "",
       );
 
       const hardwareFiled = editor.getLine(lineOf("Hardware"));
@@ -1326,11 +1347,16 @@ async function runE2e(parsed) {
         afterC,
         landedOnMarket: landed && landed.line === marketLine,
         afterAccept,
-        afterSpace,
+        afterDash,
         hardwareBefore,
         afterEsc,
         afterUntick,
         summary,
+        summaryDetail,
+        noteStageOpen,
+        afterNote,
+        noteStayed,
+        noteCaption,
         hardwareFiled,
         afterUndo,
         apiV2: Boolean(ledger && ledger.api && ledger.api.bank && ledger.api.bank.version >= 2),
@@ -1339,11 +1365,18 @@ async function runE2e(parsed) {
     record("walk-import-fixture", Boolean(walk && walk.apiV2 && !walk.error), jsonDetail(walk));
     record("walk-ctrl-enter-c", Boolean(walk && walk.opened && /\[x\]/.test(String(walk.afterC || "")) && /\[cat:: coffee\]/.test(String(walk.afterC || "")) && walk.landedOnMarket), jsonDetail(walk));
     record("walk-accept-learned", Boolean(walk && /\[x\]/.test(String(walk.afterAccept || "")) && /\[cat:: coffee\]/.test(String(walk.afterAccept || ""))), jsonDetail(walk));
-    record("walk-space", Boolean(walk && /\[x\]/.test(String(walk.afterSpace || "")) && !/\[cat::/.test(String(walk.afterSpace || ""))), jsonDetail(walk));
+    record("walk-dash", Boolean(walk && /\[x\]/.test(String(walk.afterDash || "")) && !/\[cat::/.test(String(walk.afterDash || ""))), jsonDetail(walk));
     record("walk-esc", Boolean(walk && walk.afterEsc === walk.hardwareBefore), jsonDetail(walk));
     record("walk-untick-ticked", Boolean(walk && /\[ \]/.test(String(walk.afterUntick || ""))), jsonDetail(walk));
-    record("walk-end-of-run", Boolean(walk && walk.summary), jsonDetail(walk));
-    record("walk-undo", Boolean(walk && walk.afterUndo && walk.afterUndo !== walk.hardwareFiled && /\[ \]/.test(String(walk.afterUndo || ""))), jsonDetail(walk));
+    record("walk-note", Boolean(walk && walk.noteStageOpen && walk.noteStayed && walk.noteCaption &&
+      /^- \[ \] \$4\.00 Hardware — for the team$/.test(String(walk.afterNote || ""))), jsonDetail(walk));
+    record("walk-note-then-accept", Boolean(walk && /\[x\]/.test(String(walk.hardwareFiled || "")) &&
+      /\[cat:: groceries\] — for the team$/.test(String(walk.hardwareFiled || ""))), jsonDetail(walk));
+    record("walk-end-of-run", Boolean(walk && walk.summary && / · 1 note$/.test(String(walk.summaryDetail || ""))), jsonDetail(walk));
+    // One Ctrl+Z unwinds only the filing; the note stays its own undo step.
+    record("walk-undo", Boolean(walk && walk.afterUndo && walk.afterUndo !== walk.hardwareFiled &&
+      /\[ \]/.test(String(walk.afterUndo || "")) && !/\[cat::/.test(String(walk.afterUndo || "")) &&
+      /— for the team$/.test(String(walk.afterUndo || ""))), jsonDetail(walk));
 
     const learnOpen = await client.evaluate(`(() => (async () => {
       const path = "bank/2026-12.md";

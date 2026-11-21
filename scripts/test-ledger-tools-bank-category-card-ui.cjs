@@ -70,8 +70,20 @@ test("the modal key contract dispatches every action in close and set modes", as
     assert.deepEqual(state.actions, [{ category: "groceries", kind: "pick", mode }]);
 
     state = makeModal(mode);
-    await state.modal.onKeyDown(event(" "));
+    await state.modal.onKeyDown(event("-"));
     assert.deepEqual(state.actions, [{ category: null, kind: "no-category", mode }]);
+
+    state = makeModal(mode);
+    await state.modal.onKeyDown(event("Delete"));
+    assert.deepEqual(state.actions, mode === "set" ? [{ category: null, kind: "no-category", mode }] : []);
+
+    state = makeModal(mode);
+    const space = event(" ");
+    await state.modal.onKeyDown(space);
+    assert.equal(state.actions.length, 0);
+    assert.ok(state.modal.noteStage, "Space opens the note stage");
+    assert.equal(state.modal.didInteract, false);
+    assert.equal(space.defaultPrevented, true);
 
     state = makeModal(mode);
     const down = event("ArrowDown");
@@ -167,6 +179,10 @@ test("api.bank v2 exposes guarded close and set-category actions plus the comman
   assert.equal(typeof api.setCategory, "function");
   plugin.setupBankActions();
   assert.ok(plugin.commands.some((command) => command.id === "bank-set-category" && command.name === "Bank: set category"));
+  const note = plugin.commands.find((command) => command.id === "bank-note-row");
+  assert.ok(note);
+  assert.equal(note.name, "Bank: note this row");
+  assert.equal(note.hotkeys, undefined);
   plugin.teardownBankActions();
 });
 
@@ -536,19 +552,24 @@ test("the completion state paints the other-month ]b walk line", () => {
 test("restricted mode shows only acknowledge keys and the loading reason", () => {
   const loading = paintModal("close", {
     categories: null,
-    reason: "loading…",
     row: { payee: "Corner Cafe", cents: -645, date: "2026-11-12" },
   });
-  assert.match(loading.content.querySelector(".bob-bank-category-keys").textContent, /acknowledge/);
-  assert.doesNotMatch(loading.content.querySelector(".bob-bank-category-keys").textContent, /letter choose/);
+  assert.equal(loading.modal.loading, true);
+  assert.equal(loading.content.querySelector(".bob-bank-category-keys").textContent, "loading… · ␣ note · esc cancel");
+  assert.equal(loading.content.querySelector(".bob-bank-category-footer"), null);
   assert.equal(loading.content.querySelector(".bob-bank-category-hint").textContent, "loading…");
+  loading.modal.settleLoading();
+  assert.equal(loading.content.querySelector(".bob-bank-category-keys").textContent, "↵ acknowledge · ␣ note · esc cancel");
 
   const failed = paintModal("close", {
     categories: null,
-    reason: "bob bank failed.",
     row: { payee: "Corner Cafe", cents: -645, date: "2026-11-12" },
   });
+  failed.modal.setReason("bob bank failed.");
   assert.equal(failed.content.querySelector(".bob-bank-category-hint").textContent, "bob bank failed.");
+  assert.equal(failed.modal.loading, false);
+  assert.match(failed.content.querySelector(".bob-bank-category-keys").textContent, /^↵ acknowledge/);
+  assert.doesNotMatch(failed.content.querySelector(".bob-bank-category-keys").textContent, /letter choose/);
   assert.doesNotMatch(failed.content.querySelector(".bob-bank-category-hint").textContent, /unavailable —/);
 });
 
@@ -727,13 +748,22 @@ test("real-path scope keys file, accept, and move while swallowing every key", a
   assert.equal(evt.stopped, true);
   digit.modal.onClose();
 
+  const dash = openWithScope("close");
+  evt = scopeEvent("-", { target: outside });
+  assert.equal(dash.scope.fn(evt), false);
+  await tick();
+  assert.deepEqual(dash.actions, [{ category: null, kind: "no-category", mode: "close" }]);
+  assert.equal(evt.prevented, true);
+  assert.equal(evt.stopped, true);
+  dash.modal.onClose();
+
   const space = openWithScope("close");
   evt = scopeEvent(" ", { target: outside });
   assert.equal(space.scope.fn(evt), false);
   await tick();
-  assert.deepEqual(space.actions, [{ category: null, kind: "no-category", mode: "close" }]);
+  assert.equal(space.actions.length, 0);
+  assert.ok(space.modal.noteStage);
   assert.equal(evt.prevented, true);
-  assert.equal(evt.stopped, true);
   space.modal.onClose();
 
   const accept = openWithScope("close");
@@ -792,7 +822,7 @@ test("modifier letters never file while Shift+letter still files", async () => {
 
 test("held-key repeats never file but repeats still move the highlight", async () => {
   const filed = openWithScope("close");
-  for (const key of ["g", " ", "Enter"]) {
+  for (const key of ["g", " ", "-", "Enter"]) {
     const evt = scopeEvent(key, { repeat: true, target: { nodeName: "TEXTAREA" } });
     assert.equal(filed.scope.fn(evt), false);
     await tick();
@@ -800,6 +830,7 @@ test("held-key repeats never file but repeats still move the highlight", async (
     assert.equal(evt.stopped, true);
   }
   assert.equal(filed.actions.length, 0);
+  assert.equal(filed.modal.noteStage, null, "a held Space never opens the stage");
   filed.modal.onClose();
 
   const move = openWithScope("close");

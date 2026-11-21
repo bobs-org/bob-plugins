@@ -173,7 +173,8 @@ test("key table is case-insensitive; q/Esc cancel; chord and lock are pure state
   assert.equal(h.bankCategoryResolveCardKey({ table, key: "Ctrl+[" }).action, "cancel");
   assert.equal(h.bankCategoryResolveCardKey({ table, key: "Enter" }).action, "accept");
   assert.equal(h.bankCategoryResolveCardKey({ table, key: "Ctrl+Enter" }).action, "accept");
-  assert.equal(h.bankCategoryResolveCardKey({ table, key: " " }).action, "no-category");
+  assert.equal(h.bankCategoryResolveCardKey({ table, key: " " }).action, "note");
+  assert.equal(h.bankCategoryResolveCardKey({ table, key: "-" }).action, "no-category");
   assert.equal(h.bankCategoryResolveCardKey({ table, key: "ArrowDown" }).action, "move");
   assert.equal(h.bankCategoryResolveCardKey({ table, key: "Ctrl+N" }).action, "move");
   assert.equal(h.bankCategoryResolveCardKey({ table, key: "z" }).action, "ignore");
@@ -345,6 +346,83 @@ test("next-waiting finder walks in order, wraps once, and skips non-rows", () =>
   assert.equal(h.bankCategoryMatchJsonRow({ id: "aaa111", path: "x", line: 99, cents: 0, payee: "y" }, jsonRows).payee, "ShopRite");
   assert.equal(h.bankCategoryMatchJsonRow({ path: "bank/2026-11.md", line: 7, cents: -645, payee: "Corner Cafe" }, jsonRows).payee, "Corner Cafe");
   assert.equal(h.bankCategoryMatchJsonRow({ path: "bank/2026-11.md", line: 7, cents: -1, payee: "Corner Cafe" }, jsonRows), null);
+});
+
+test("Space, -, Delete, and restricted Enter follow the note-stage key matrix", () => {
+  const table = h.bankCategoryKeyTable(categories());
+  const resolve = (key, extra = {}) => h.bankCategoryResolveCardKey({ table, key, ...extra }).action;
+  const empty = new Map();
+  const cards = [
+    { name: "close", input: { mode: "close" }, enter: "accept", del: "ignore" },
+    { name: "set", input: { mode: "set" }, enter: "accept", del: "no-category" },
+    { name: "restricted", input: { mode: "close", restricted: true, table: empty }, enter: "no-category", del: "ignore" },
+    { name: "restricted set", input: { mode: "set", restricted: true, table: empty }, enter: "no-category", del: "ignore" },
+    { name: "restricted loading", input: { mode: "close", restricted: true, loading: true, table: empty }, enter: "ignore", del: "ignore" },
+  ];
+  for (const card of cards) {
+    assert.equal(resolve(" ", card.input), "note", `${card.name}: Space opens the note stage`);
+    assert.equal(resolve("-", card.input), "no-category", `${card.name}: - files without a category`);
+    assert.equal(resolve("Delete", card.input), card.del, `${card.name}: Delete`);
+    assert.equal(resolve("Enter", card.input), card.enter, `${card.name}: Enter`);
+    assert.equal(resolve("Ctrl+Enter", card.input), card.enter, `${card.name}: Ctrl+Enter`);
+    for (const cancel of ["Escape", "q", "Ctrl+["]) {
+      assert.equal(resolve(cancel, card.input), "cancel", `${card.name}: ${cancel}`);
+    }
+  }
+  // Everything else is unchanged on the full card.
+  assert.equal(resolve("c", { mode: "close" }), "file");
+  assert.equal(resolve("+", { mode: "set" }), "new-category");
+  assert.equal(resolve("ArrowLeft", { mode: "set" }), "move");
+  assert.equal(resolve("Ctrl+P", { mode: "close" }), "move");
+});
+
+test("footers name the note key and switch to edit when the row has a note", () => {
+  assert.equal(h.bankCategoryCardKeysText("close", "card"),
+    "↵ accept · letter choose · ␣ note · - no category · + new category · esc cancel");
+  assert.equal(h.bankCategoryCardKeysText("set", "card"),
+    "↵ accept · letter choose · ␣ note · - remove category · + new category · esc cancel");
+  assert.equal(h.bankCategoryCardKeysText("close", "restricted"), "↵ acknowledge · ␣ note · esc cancel");
+  assert.equal(h.bankCategoryCardKeysText("close", "restricted", { loading: true }), "loading… · ␣ note · esc cancel");
+  assert.equal(h.bankCategoryCardKeysText("close", "card", { hasNote: true }),
+    "↵ accept · letter choose · ␣ edit note · - no category · + new category · esc cancel");
+  assert.equal(h.bankCategoryCardKeysText("close", "restricted", { hasNote: true, loading: true }),
+    "loading… · ␣ edit note · esc cancel");
+});
+
+test("the card header carries the row note and whether the stage may edit it", () => {
+  const cats = categories();
+  const noted = h.bankCategoryCardModel({ categories: cats, row: row({ note: "LEGO set", noteEditable: true }), mode: "close" });
+  assert.equal(noted.header.note, "LEGO set");
+  assert.equal(noted.header.noteEditable, true);
+  const legacy = h.bankCategoryCardModel({ categories: cats, row: row({ note: "with at lunch", noteEditable: false }), mode: "set" });
+  assert.equal(legacy.header.noteEditable, false);
+  const bare = h.bankCategoryCardModel({ categories: cats, row: row(), mode: "close" });
+  assert.equal(bare.header.note, null);
+  assert.equal(bare.header.noteEditable, true);
+  const restricted = h.bankCategoryCardModel({ categories: null, row: row({ note: "LEGO set" }), mode: "close", loading: true });
+  assert.equal(restricted.kind, "restricted");
+  assert.equal(restricted.header.note, "LEGO set");
+  assert.equal(restricted.footer.text, null);
+  const settled = h.bankCategoryCardModel({ categories: null, row: row(), mode: "close", reason: "bob bank failed." });
+  assert.equal(settled.footer.text, "↵ acknowledge · no category");
+});
+
+test("a note counts toward notes only and the summary appends it", () => {
+  let session = h.bankCategorySessionStart("bank/2026-11.md", 0);
+  assert.equal(session.notes, 0);
+  session = h.bankCategorySessionNote(session, 5000);
+  session = h.bankCategorySessionNote(session, 6000);
+  assert.deepEqual([session.filed, session.accepted, session.picked, session.noCategory, session.notes], [0, 0, 0, 0, 2]);
+  assert.equal(session.lastActivity, 6000);
+  assert.deepEqual(h.bankCategorySessionProgress(session, 3), { filed: 1, total: 3, waiting: 3 });
+  const base = { monthLabel: "November", filed: 3, elapsedMs: 9000, accepted: 2, picked: 0, noCategory: 1 };
+  assert.equal(h.bankCategoryEndOfRunSummary({ ...base, notes: 2 }).detail,
+    "2 accepted · 0 picked · 1 without a category · 2 notes");
+  assert.equal(h.bankCategoryEndOfRunSummary({ ...base, notes: 1 }).detail,
+    "2 accepted · 0 picked · 1 without a category · 1 note");
+  assert.equal(h.bankCategoryEndOfRunSummary({ ...base, notes: 0 }).detail,
+    "2 accepted · 0 picked · 1 without a category");
+  assert.equal(h.bankCategoryEndOfRunSummary({ ...base, notes: 2 }).counts.notes, 2);
 });
 
 test("session counts progress and the summary owns every number", () => {

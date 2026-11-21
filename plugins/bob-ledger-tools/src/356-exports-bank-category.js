@@ -33,6 +33,8 @@ try {
       bankCategoryLockActive,
       bankCategorySessionStart,
       bankCategorySessionRecord,
+      bankCategorySessionNote,
+      bankCategoryCardHeader,
       bankCategorySessionProgress,
       bankCategorySessionIdleExpired,
       bankCategoryElapsedText,

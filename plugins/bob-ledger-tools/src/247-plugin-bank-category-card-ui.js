@@ -93,6 +93,8 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     this.suggestion = options.suggestion || null;
     this.progress = options.progress || null;
     this.reason = options.reason || (this.categories ? null : "loading…");
+    // True until the opening report request settles; restricted Enter waits.
+    this.loading = !this.categories && !options.reason;
     this.highlightKey = null;
     this.didInteract = false;
     this.busy = false;
@@ -105,6 +107,11 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     this.reportGen = 0;
     this.chord = bankCategoryChordInit(options.openedWithCtrlEnter === true);
     this.onChoose = typeof options.onChoose === "function" ? options.onChoose : null;
+    this.onNote = typeof options.onNote === "function" ? options.onNote : null;
+    this.noteStage = null;
+    this.noteStageHost = null;
+    this.noteHint = null;
+    this.noteFreshUntil = 0;
     this.onMonth = typeof options.onMonth === "function" ? options.onMonth : null;
     this.clickListener = (event) => this.onClick(event);
     this.keyListener = (event) => this.onKeyDown(event);
@@ -144,6 +151,11 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
             const routed = this.routeCardKey(event);
             if (routed && typeof routed.catch === "function") routed.catch(() => {});
           } catch (_) {}
+          if (this.noteStage && typeof this.shouldPassNoteStageKey === "function" &&
+              this.shouldPassNoteStageKey(event)) {
+            return true;
+          }
+          if (this.shouldPassNativeButtonSpace(event)) return true;
           if (this.newStage && typeof this.shouldPassNewCategoryKey === "function" &&
               this.shouldPassNewCategoryKey(event)) {
             return true;
@@ -180,6 +192,7 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     try { this.newSession?.close?.(); } catch (_) {}
     this.newSession = null;
     this.newStage = null;
+    this.noteStage = null;
     this.subscriptionPicker = null;
     this.subscriptionCreateStage = null;
     try {
@@ -199,6 +212,10 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
 
   onEscapeKey(event) {
     bankCategoryUiConsume(event);
+    if (this.noteStage && typeof this.backOutNoteStage === "function") {
+      this.backOutNoteStage();
+      return false;
+    }
     if (this.newStage && typeof this.closeNewCategoryStage === "function") {
       this.closeNewCategoryStage();
       return false;
@@ -232,6 +249,7 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
       progress: this.progress,
       reason: this.reason || (this.categories ? null : "loading…"),
       path: this.context && this.context.path,
+      loading: this.loading === true,
     });
     if (this.highlightKey === null) this.highlightKey = this.model.highlightKey;
     return this.model;
@@ -241,12 +259,21 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     if (!Array.isArray(categories) || this.closed) return false;
     this.categories = categories;
     this.reason = null;
+    this.loading = false;
+    try { this.paint(); } catch (_) {}
+    return true;
+  }
+
+  settleLoading() {
+    if (this.loading !== true || this.closed) return false;
+    this.loading = false;
     try { this.paint(); } catch (_) {}
     return true;
   }
 
   setReport(report) {
     if (!report || this.closed) return false;
+    this.loading = false;
     const fingerprint = typeof bankConfigFingerprintFromReport === "function"
       ? bankConfigFingerprintFromReport(report)
       : (typeof report.config_fingerprint === "string" ? report.config_fingerprint : "");
@@ -295,6 +322,9 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     this.subscriptionContext = null;
     this.subscriptionCandidate = false;
     this.subscriptionPickerMessage = "";
+    this.noteStage = null;
+    this.noteHint = null;
+    this.noteFreshUntil = 0;
     this.lock = lock || null;
     this.highlightKey = null;
     this.chord = bankCategoryChordInit(false);
@@ -308,6 +338,7 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
 
   setReason(reason) {
     this.reason = typeof reason === "string" && reason ? reason : "categories unavailable";
+    this.loading = false;
     try { this.paint(); } catch (_) {}
   }
 
@@ -321,6 +352,7 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     this.busy = false;
     this.subscriptionPicker = null;
     this.subscriptionCreateStage = null;
+    this.noteStage = null;
     this.summary = summary || null;
     this.paint();
   }
@@ -366,10 +398,25 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     return this.routeCardKey(event);
   }
 
+  // A focused native button keeps Space as its own activation.
+  shouldPassNativeButtonSpace(event) {
+    if (!event || event.key !== " " || this.noteStage) return false;
+    const target = event.target;
+    if (!target || typeof target.closest !== "function") return false;
+    const button = target.closest("button");
+    if (!button) return false;
+    const host = this.modalEl || this.contentEl;
+    return Boolean(host && typeof host.contains === "function" && host.contains(button));
+  }
+
   async routeCardKey(event) {
     if (!event || event.isComposing || event.keyCode === 229) return;
     const key = bankCategoryUiEventKey(event);
     if (!key) return;
+    if (this.noteStage && typeof this.routeNoteStageKey === "function") {
+      return this.routeNoteStageKey(event);
+    }
+    if (this.shouldPassNativeButtonSpace(event)) return;
     if (this.newStage && typeof this.routeNewCategoryKey === "function") {
       return this.routeNewCategoryKey(event);
     }
@@ -388,10 +435,21 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
       return;
     }
     const table = bankCategoryKeyTable(this.categories);
-    const action = bankCategoryResolveCardKey({ key, table });
+    const action = bankCategoryResolveCardKey({
+      key,
+      table,
+      mode: this.mode,
+      restricted: !Array.isArray(this.categories),
+      loading: this.loading === true,
+    });
     if (action.action === "ignore") return;
     bankCategoryUiConsume(event);
     if (this.busy || this.waitingRefresh || this.summary) return;
+    if (action.action === "note") {
+      // Space never types, never ticks, and never counts as an interaction.
+      if (event.repeat !== true && typeof this.openNoteStage === "function") this.openNoteStage();
+      return;
+    }
     if (key === "Ctrl+Enter" && bankCategoryLockActive(this.lock, Date.now())) return;
     if ((key === "Enter" || key === "Ctrl+Enter") && bankCategoryChordShouldSwallow(this.chord, "Enter")) return;
     if (event.repeat === true &&
@@ -422,6 +480,7 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
   }
 
   onClick(event) {
+    if (typeof this.onNoteStageClick === "function" && this.onNoteStageClick(event)) return;
     if (typeof this.onSubscriptionStageClick === "function" && this.onSubscriptionStageClick(event)) return;
     const target = event && event.target;
     const created = target && typeof target.closest === "function"
@@ -493,10 +552,15 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     return node;
   }
 
-  paintHeader(root, model) {
+  paintHeader(root, model, noteFocus = null) {
     const header = model.header || {};
     const row = bankCategoryUiAppend(root, "div", "bob-bank-category-header");
     if (!row) return;
+    const paintNote = () => {
+      // The note caption (or the stage input in its exact place) sits right
+      // under the payee line.
+      if (typeof this.paintNoteSlot === "function") this.paintNoteSlot(root, model, noteFocus);
+    };
     const amount = Number.isSafeInteger(header.cents) ? bankFormatCents(header.cents) : "";
     if (amount) {
       const amountClass = model.inflow
@@ -507,6 +571,7 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     bankCategoryUiAppend(row, "span", "bob-bank-category-payee", header.payee || "Bank row");
     const day = header.day || header.date;
     if (day) bankCategoryUiAppend(row, "span", "bob-bank-category-day", day);
+    paintNote();
     const chips = [];
     if (header.flagged) chips.push("⚑ flagged");
     if (header.account) chips.push(header.account);
@@ -587,6 +652,7 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     if (keepHost && keepHost.parentNode) {
       try { keepHost.parentNode.removeChild(keepHost); } catch (_) {}
     }
+    const noteFocus = typeof this.detachNoteStageHost === "function" ? this.detachNoteStageHost() : null;
     try {
       if (typeof content.empty === "function") {
         content.empty();
@@ -610,9 +676,15 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
       return;
     }
     const model = this.currentModel();
-    const title = bankCategoryUiAppend(root, "h2", "bob-bank-category-title bob-key-card-title", "Category");
+    const direct = Boolean(this.noteStage && this.noteStage.direct);
+    const title = bankCategoryUiAppend(root, "h2", "bob-bank-category-title bob-key-card-title",
+      direct ? "Note" : "Category");
     if (title) title.id = "bob-bank-category-title";
-    this.paintHeader(root, model);
+    this.paintHeader(root, model, noteFocus);
+    if (direct) {
+      if (typeof this.paintNoteStageKeys === "function") this.paintNoteStageKeys(root);
+      return;
+    }
     this.paintProgress(root, model);
     if (typeof this.paintSubscriptionContext === "function") this.paintSubscriptionContext(root);
     if (this.subscriptionCreateStage && typeof this.paintSubscriptionCreateStage === "function") {
@@ -624,6 +696,11 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
       return;
     }
     if (model.hint) bankCategoryUiAppend(root, "p", "bob-bank-category-hint", model.hint, { role: "status" });
+    if (this.noteHint && !this.noteStage) {
+      bankCategoryUiAppend(root, "p", "bob-bank-category-hint bob-bank-category-note-hint", this.noteHint, {
+        role: "status",
+      });
+    }
     if (this.waitingRefresh) {
       bankCategoryUiAppend(root, "p", "bob-bank-category-hint", "Refreshing suggestions…", { role: "status" });
     }
@@ -652,15 +729,19 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
       this.paintNewCategoryStage(root);
       return;
     }
-    bankCategoryUiAppend(root, "p", "bob-bank-category-footer", model.footer?.text || "pick a category");
+    if (model.kind !== "restricted" || model.footer?.text) {
+      bankCategoryUiAppend(root, "p", "bob-bank-category-footer", model.footer?.text || "pick a category");
+    }
     if (model.footer?.hint) bankCategoryUiAppend(root, "p", "bob-bank-category-hint", model.footer.hint);
-    const keys = typeof bankCategoryCardKeysText === "function"
-      ? bankCategoryCardKeysText(this.mode, model.kind)
-      : (model.kind === "restricted"
-        ? (model.footer?.text || "␣ acknowledge · esc cancel")
-        : (this.mode === "close"
-          ? "↵ accept · letter choose · Space no category · + new category · Esc cancel"
-          : "↵ accept · letter choose · Space remove category · + new category · Esc cancel"));
+    if (this.noteStage && typeof this.stageNoteTiles === "function") this.stageNoteTiles(root);
+    if (this.noteStage && typeof this.paintNoteStageKeys === "function") {
+      this.paintNoteStageKeys(root);
+      return;
+    }
+    const keys = bankCategoryCardKeysText(this.mode, model.kind, {
+      hasNote: Boolean(model.header && model.header.note),
+      loading: this.loading === true,
+    });
     bankCategoryUiAppend(root, "p", "bob-bank-category-keys", keys);
   }
 }

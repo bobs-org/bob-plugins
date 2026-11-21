@@ -66,6 +66,9 @@ class BobLedgerToolsBankCategoryMixin {
       flagged: token.flagged === true,
       acknowledged: token.acknowledged === true,
       id: row.ackId || null,
+      note: typeof token.note === "string" && token.note ? token.note : null,
+      noteEditable: token.noteEditable === true,
+      noteRaw: token.noteSpan ? current.raw.slice(token.noteSpan.start, token.noteSpan.end) : "",
     };
     return {
       path,
@@ -79,13 +82,20 @@ class BobLedgerToolsBankCategoryMixin {
     };
   }
 
-  bankCategoryOpenAtCursor(editor, view, mode, openedWithCtrlEnter) {
+  // `options.noteDirect` opens set mode straight into the note stage
+  // (`Bank: note this row`): no tiles, no progress, and no report fetch.
+  bankCategoryOpenAtCursor(editor, view, mode, openedWithCtrlEnter, options = {}) {
     const activeEditor = editor || this.bankActiveEditor(view);
     if (!activeEditor || typeof activeEditor.getCursor !== "function") return false;
     const cursor = activeEditor.getCursor();
     if (!cursor || !Number.isInteger(cursor.line)) return false;
     const context = this.bankCategoryContextAt(activeEditor, view, cursor.line + 1);
     if (!context || (mode === "close" && context.row.acknowledged)) return false;
+    const noteDirect = options && options.noteDirect === true;
+    if (noteDirect && context.row.note && context.row.noteEditable !== true) {
+      new Notice(BANK_NOTE_STRUCTURED_REFUSAL);
+      return true;
+    }
     if (this.bankCategoryModal) {
       try { this.bankCategoryModal.close(); } catch (_) {}
     }
@@ -100,7 +110,7 @@ class BobLedgerToolsBankCategoryMixin {
       this.bankCategorySession = session;
       progress = bankCategorySessionProgress(session, bankCategoryWaitingRows(context.scan).length);
     }
-    const cached = this.bankCategoryCachedReport(context.month);
+    const cached = noteDirect ? null : this.bankCategoryCachedReport(context.month);
     const categories = cached && Array.isArray(cached.categories) ? cached.categories : null;
     const modal = new BankCategoryCardModal(this.app, {
       plugin: this,
@@ -111,6 +121,7 @@ class BobLedgerToolsBankCategoryMixin {
       openedWithCtrlEnter,
       onChoose: (categoryKey, kind, activeModal, writeOptions) =>
         this.bankCategoryCommit(activeModal, categoryKey, kind, writeOptions),
+      onNote: (text, activeModal) => this.bankNoteCommit(activeModal, text),
       onMonth: (path) => this.bankCategoryOpenWaitingMonth(path),
     });
     modal.editor = activeEditor;
@@ -119,12 +130,26 @@ class BobLedgerToolsBankCategoryMixin {
     modal.month = context.month;
     this.bankCategoryModal = modal;
     modal.open();
+    if (noteDirect) {
+      if (typeof modal.openNoteStage !== "function" || !modal.openNoteStage({ direct: true })) {
+        try { modal.close(); } catch (_) {}
+        return false;
+      }
+      return true;
+    }
     if (cached) modal.setReport(cached);
     const reportGen = modal.reportGen || 0;
+    // The restricted card's Enter acknowledges only after this request has
+    // settled, whatever the answer and whether or not Bryan already acted.
+    const settle = () => {
+      if (this.bankCategoryModal === modal && !modal.closed && typeof modal.settleLoading === "function") {
+        modal.settleLoading();
+      }
+    };
     void Promise.resolve(this.apiBankRefresh({ command: "report", month: context.month }))
       .then((result) => {
-        if (this.bankCategoryModal !== modal || modal.didInteract || modal.closed) return;
-        if (modal.reportGen !== reportGen) return;
+        if (this.bankCategoryModal !== modal || modal.didInteract || modal.closed) return settle();
+        if (modal.reportGen !== reportGen) return settle();
         if (result && result.report) {
           modal.setReport(result.report);
           return;
@@ -135,12 +160,13 @@ class BobLedgerToolsBankCategoryMixin {
             : "categories unavailable";
           modal.setReason(message);
         }
+        settle();
       })
       .catch((error) => {
         if (this.bankCategoryModal !== modal || modal.didInteract || modal.closed || modal.categories) {
-          return;
+          return settle();
         }
-        if (modal.reportGen !== reportGen) return;
+        if (modal.reportGen !== reportGen) return settle();
         modal.setReason(error && error.message ? error.message : "categories unavailable");
       });
     return true;
@@ -413,6 +439,7 @@ class BobLedgerToolsBankCategoryMixin {
         accepted: session.accepted,
         picked: session.picked,
         noCategory: session.noCategory,
+        notes: session.notes,
         accounts: report?.accounts || [],
         waitingByMonth: Array.from(waitingByMonth.values()).sort((left, right) => left.month.localeCompare(right.month)),
         bobReachable: Boolean(report && !monthResult?.error),

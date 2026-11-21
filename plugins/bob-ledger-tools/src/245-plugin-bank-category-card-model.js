@@ -192,6 +192,24 @@ function bankCategoryRowLabel(categories, key) {
   return bankCategoryTileLabel(entry);
 }
 
+// The header shared by the full and restricted cards. `note` is the cleaned
+// value bob reports; `noteEditable` is false for multi-run legacy notes,
+// which the note stage refuses to edit.
+function bankCategoryCardHeader(mode, row) {
+  const note = bankCategoryText(row.note);
+  return {
+    cents: Number.isSafeInteger(row.cents) ? row.cents : null,
+    payee: bankCategoryText(row.payee) || "",
+    date: bankCategoryText(row.date) || null,
+    day: bankCategoryDayLabel(row.date),
+    flagged: row.flagged === true,
+    account: bankCategoryText(row.account) || null,
+    state: mode === "set" ? (row.acknowledged === true ? "acknowledged" : "waiting") : null,
+    note,
+    noteEditable: note ? row.noteEditable !== false : true,
+  };
+}
+
 function bankCategoryCardModel(input = {}) {
   const mode = input.mode === "set" ? "set" : "close";
   const categories = Array.isArray(input.categories) ? input.categories : null;
@@ -203,16 +221,12 @@ function bankCategoryCardModel(input = {}) {
       mode,
       inflow: Number.isSafeInteger(row.cents) && row.cents > 0,
       reason,
-      header: {
-        cents: Number.isSafeInteger(row.cents) ? row.cents : null,
-        payee: bankCategoryText(row.payee) || "",
-        date: bankCategoryText(row.date) || null,
-        day: bankCategoryDayLabel(row.date),
-        flagged: row.flagged === true,
-        account: bankCategoryText(row.account) || null,
-        state: mode === "set" ? (row.acknowledged === true ? "acknowledged" : "waiting") : null,
+      loading: input.loading === true,
+      header: bankCategoryCardHeader(mode, row),
+      footer: {
+        kind: "restricted",
+        text: input.loading === true ? null : "↵ acknowledge · no category",
       },
-      footer: { kind: "restricted", text: "␣ acknowledge · esc cancel" },
       hint: reason,
       progress: bankCategoryProgressModel(mode, input.progress, input.path || row.path),
     };
@@ -248,15 +262,7 @@ function bankCategoryCardModel(input = {}) {
     mode,
     inflow,
     oldBob,
-    header: {
-      cents: Number.isSafeInteger(row.cents) ? row.cents : null,
-      payee: bankCategoryText(row.payee) || "",
-      date: bankCategoryText(row.date) || null,
-      day: bankCategoryDayLabel(row.date),
-      flagged: row.flagged === true,
-      account: bankCategoryText(row.account) || null,
-      state: mode === "set" ? (row.acknowledged === true ? "acknowledged" : "waiting") : null,
-    },
+    header: bankCategoryCardHeader(mode, row),
     sections,
     highlightKey,
     footer: oldBob
@@ -267,15 +273,26 @@ function bankCategoryCardModel(input = {}) {
 }
 
 // Single-key resolution. Returns a pure action descriptor; rendering and the
-// editor transaction belong to card-ui.
+// editor transaction belong to card-ui. Space opens the note stage in every
+// card; `-` files without a category (close), removes it (set), or
+// acknowledges (restricted). Delete aliases `-` in set mode only. Restricted
+// Enter acknowledges once the report request has settled.
 function bankCategoryResolveCardKey(input = {}) {
   const key = typeof input.key === "string" ? input.key : "";
   const table = input.table instanceof Map ? input.table : bankCategoryKeyTable(input.categories);
+  const restricted = input.restricted === true;
   if (key === "Enter" || key === "Ctrl+Enter") {
+    if (restricted) return input.loading === true ? { action: "ignore" } : { action: "no-category" };
     return { action: "accept" };
   }
   if (key === " ") {
+    return { action: "note" };
+  }
+  if (key === "-") {
     return { action: "no-category" };
+  }
+  if (key === "Delete") {
+    return input.mode === "set" && !restricted ? { action: "no-category" } : { action: "ignore" };
   }
   if (key === "+" || key === "=" || key === "＋") {
     return { action: "new-category" };
@@ -353,6 +370,20 @@ function bankCategorySessionStart(path, nowMs) {
     accepted: 0,
     picked: 0,
     noCategory: 0,
+    notes: 0,
+  };
+}
+
+// A saved row note never files the row: it counts toward `notes` only.
+function bankCategorySessionNote(session, nowMs) {
+  if (!session) {
+    return session;
+  }
+  const notes = Number.isInteger(session.notes) ? session.notes : 0;
+  return {
+    ...session,
+    lastActivity: Number.isFinite(nowMs) ? nowMs : session.lastActivity,
+    notes: notes + 1,
   };
 }
 
@@ -437,16 +468,18 @@ function bankCategoryEndOfRunSummary(input = {}) {
   const accepted = Number.isInteger(input.accepted) ? input.accepted : 0;
   const picked = Number.isInteger(input.picked) ? input.picked : 0;
   const noCategory = Number.isInteger(input.noCategory) ? input.noCategory : 0;
+  const notes = Number.isInteger(input.notes) && input.notes > 0 ? input.notes : 0;
   const line1 = `🏦 ${monthLabel} filed — ${filed} row${filed === 1 ? "" : "s"} in ${elapsedText}`;
   if (input.bobReachable === false) {
-    return { line1, line2: null, waitingLinks: [], counts: { accepted, picked, noCategory } };
+    return { line1, line2: null, waitingLinks: [], counts: { accepted, picked, noCategory, notes } };
   }
   const accountLine = bankCategoryAccountLine(input.accounts);
   const waitingLinks = (Array.isArray(input.waitingByMonth) ? input.waitingByMonth : [])
     .filter((entry) => entry && Number.isInteger(entry.waiting) && entry.waiting > 0 &&
       bankCategoryText(entry.month))
     .map((entry) => ({ month: entry.month, waiting: entry.waiting, path: entry.path || `bank/${entry.month}.md` }));
-  const countsLine = `${accepted} accepted · ${picked} picked · ${noCategory} without a category`;
+  const notesText = notes > 0 ? ` · ${notes} note${notes === 1 ? "" : "s"}` : "";
+  const countsLine = `${accepted} accepted · ${picked} picked · ${noCategory} without a category${notesText}`;
   const line2parts = [];
   if (accountLine) {
     line2parts.push(accountLine);
@@ -459,6 +492,6 @@ function bankCategoryEndOfRunSummary(input = {}) {
     line2: line2parts.length > 0 ? line2parts.join("   ") : null,
     detail: countsLine,
     waitingLinks,
-    counts: { accepted, picked, noCategory },
+    counts: { accepted, picked, noCategory, notes },
   };
 }

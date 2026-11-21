@@ -6,6 +6,9 @@ try {
       BankCategoryCardModal,
       bankCategoryUiEventKey,
       bankCategoryApplyLineEdits,
+      bankCategoryCardKeysText,
+      bankNoteChangeChips,
+      BANK_NOTE_STAGE_HINT,
     });
   }
 } catch (_) {}

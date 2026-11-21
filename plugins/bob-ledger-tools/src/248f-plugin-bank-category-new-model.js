@@ -117,12 +117,17 @@ function bankCategoryNewAddedKey(report) {
   return typeof key === "string" && key ? key : null;
 }
 
-function bankCategoryCardKeysText(mode, kind) {
+// Card footers. `hasNote` turns "␣ note" into "␣ edit note"; `loading`
+// marks a restricted card whose report request has not settled yet.
+function bankCategoryCardKeysText(mode, kind, options = {}) {
+  const note = options && options.hasNote === true ? "␣ edit note" : "␣ note";
   if (kind === "restricted") {
-    return "␣ acknowledge · esc cancel";
+    return options && options.loading === true
+      ? `loading… · ${note} · esc cancel`
+      : `↵ acknowledge · ${note} · esc cancel`;
   }
-  const space = mode === "set" ? "Space remove category" : "Space no category";
-  return `↵ accept · letter choose · ${space} · + new category · Esc cancel`;
+  const dash = mode === "set" ? "- remove category" : "- no category";
+  return `↵ accept · letter choose · ${note} · ${dash} · + new category · esc cancel`;
 }
 
 function bankCategoryNewStageKeysText(stage) {

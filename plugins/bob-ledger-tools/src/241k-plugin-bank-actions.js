@@ -507,6 +507,13 @@ class BobLedgerToolsBankActionsMixin {
         }
       },
     });
+    this.addCommand({
+      id: "bank-note-row",
+      name: "Bank: note this row",
+      editorCallback: (editor, view) => {
+        if (!this.bankCategoryNoteRow(editor, view)) new Notice("Bank: put the cursor on a bank row first");
+      },
+    });
     if (typeof this.registerEditorExtension === "function" && keymap && typeof keymap.of === "function") {
       this.registerEditorExtension(
         keymap.of([

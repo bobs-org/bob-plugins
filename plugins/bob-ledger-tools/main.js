@@ -73949,6 +73949,13 @@ class BobLedgerToolsBankActionsMixin {
         }
       },
     });
+    this.addCommand({
+      id: "bank-note-row",
+      name: "Bank: note this row",
+      editorCallback: (editor, view) => {
+        if (!this.bankCategoryNoteRow(editor, view)) new Notice("Bank: put the cursor on a bank row first");
+      },
+    });
     if (typeof this.registerEditorExtension === "function" && keymap && typeof keymap.of === "function") {
       this.registerEditorExtension(
         keymap.of([
@@ -83795,6 +83802,24 @@ function bankCategoryRowLabel(categories, key) {
   return bankCategoryTileLabel(entry);
 }
 
+// The header shared by the full and restricted cards. `note` is the cleaned
+// value bob reports; `noteEditable` is false for multi-run legacy notes,
+// which the note stage refuses to edit.
+function bankCategoryCardHeader(mode, row) {
+  const note = bankCategoryText(row.note);
+  return {
+    cents: Number.isSafeInteger(row.cents) ? row.cents : null,
+    payee: bankCategoryText(row.payee) || "",
+    date: bankCategoryText(row.date) || null,
+    day: bankCategoryDayLabel(row.date),
+    flagged: row.flagged === true,
+    account: bankCategoryText(row.account) || null,
+    state: mode === "set" ? (row.acknowledged === true ? "acknowledged" : "waiting") : null,
+    note,
+    noteEditable: note ? row.noteEditable !== false : true,
+  };
+}
+
 function bankCategoryCardModel(input = {}) {
   const mode = input.mode === "set" ? "set" : "close";
   const categories = Array.isArray(input.categories) ? input.categories : null;
@@ -83806,16 +83831,12 @@ function bankCategoryCardModel(input = {}) {
       mode,
       inflow: Number.isSafeInteger(row.cents) && row.cents > 0,
       reason,
-      header: {
-        cents: Number.isSafeInteger(row.cents) ? row.cents : null,
-        payee: bankCategoryText(row.payee) || "",
-        date: bankCategoryText(row.date) || null,
-        day: bankCategoryDayLabel(row.date),
-        flagged: row.flagged === true,
-        account: bankCategoryText(row.account) || null,
-        state: mode === "set" ? (row.acknowledged === true ? "acknowledged" : "waiting") : null,
+      loading: input.loading === true,
+      header: bankCategoryCardHeader(mode, row),
+      footer: {
+        kind: "restricted",
+        text: input.loading === true ? null : "↵ acknowledge · no category",
       },
-      footer: { kind: "restricted", text: "␣ acknowledge · esc cancel" },
       hint: reason,
       progress: bankCategoryProgressModel(mode, input.progress, input.path || row.path),
     };
@@ -83851,15 +83872,7 @@ function bankCategoryCardModel(input = {}) {
     mode,
     inflow,
     oldBob,
-    header: {
-      cents: Number.isSafeInteger(row.cents) ? row.cents : null,
-      payee: bankCategoryText(row.payee) || "",
-      date: bankCategoryText(row.date) || null,
-      day: bankCategoryDayLabel(row.date),
-      flagged: row.flagged === true,
-      account: bankCategoryText(row.account) || null,
-      state: mode === "set" ? (row.acknowledged === true ? "acknowledged" : "waiting") : null,
-    },
+    header: bankCategoryCardHeader(mode, row),
     sections,
     highlightKey,
     footer: oldBob
@@ -83870,15 +83883,26 @@ function bankCategoryCardModel(input = {}) {
 }
 
 // Single-key resolution. Returns a pure action descriptor; rendering and the
-// editor transaction belong to card-ui.
+// editor transaction belong to card-ui. Space opens the note stage in every
+// card; `-` files without a category (close), removes it (set), or
+// acknowledges (restricted). Delete aliases `-` in set mode only. Restricted
+// Enter acknowledges once the report request has settled.
 function bankCategoryResolveCardKey(input = {}) {
   const key = typeof input.key === "string" ? input.key : "";
   const table = input.table instanceof Map ? input.table : bankCategoryKeyTable(input.categories);
+  const restricted = input.restricted === true;
   if (key === "Enter" || key === "Ctrl+Enter") {
+    if (restricted) return input.loading === true ? { action: "ignore" } : { action: "no-category" };
     return { action: "accept" };
   }
   if (key === " ") {
+    return { action: "note" };
+  }
+  if (key === "-") {
     return { action: "no-category" };
+  }
+  if (key === "Delete") {
+    return input.mode === "set" && !restricted ? { action: "no-category" } : { action: "ignore" };
   }
   if (key === "+" || key === "=" || key === "＋") {
     return { action: "new-category" };
@@ -83956,6 +83980,20 @@ function bankCategorySessionStart(path, nowMs) {
     accepted: 0,
     picked: 0,
     noCategory: 0,
+    notes: 0,
+  };
+}
+
+// A saved row note never files the row: it counts toward `notes` only.
+function bankCategorySessionNote(session, nowMs) {
+  if (!session) {
+    return session;
+  }
+  const notes = Number.isInteger(session.notes) ? session.notes : 0;
+  return {
+    ...session,
+    lastActivity: Number.isFinite(nowMs) ? nowMs : session.lastActivity,
+    notes: notes + 1,
   };
 }
 
@@ -84040,16 +84078,18 @@ function bankCategoryEndOfRunSummary(input = {}) {
   const accepted = Number.isInteger(input.accepted) ? input.accepted : 0;
   const picked = Number.isInteger(input.picked) ? input.picked : 0;
   const noCategory = Number.isInteger(input.noCategory) ? input.noCategory : 0;
+  const notes = Number.isInteger(input.notes) && input.notes > 0 ? input.notes : 0;
   const line1 = `🏦 ${monthLabel} filed — ${filed} row${filed === 1 ? "" : "s"} in ${elapsedText}`;
   if (input.bobReachable === false) {
-    return { line1, line2: null, waitingLinks: [], counts: { accepted, picked, noCategory } };
+    return { line1, line2: null, waitingLinks: [], counts: { accepted, picked, noCategory, notes } };
   }
   const accountLine = bankCategoryAccountLine(input.accounts);
   const waitingLinks = (Array.isArray(input.waitingByMonth) ? input.waitingByMonth : [])
     .filter((entry) => entry && Number.isInteger(entry.waiting) && entry.waiting > 0 &&
       bankCategoryText(entry.month))
     .map((entry) => ({ month: entry.month, waiting: entry.waiting, path: entry.path || `bank/${entry.month}.md` }));
-  const countsLine = `${accepted} accepted · ${picked} picked · ${noCategory} without a category`;
+  const notesText = notes > 0 ? ` · ${notes} note${notes === 1 ? "" : "s"}` : "";
+  const countsLine = `${accepted} accepted · ${picked} picked · ${noCategory} without a category${notesText}`;
   const line2parts = [];
   if (accountLine) {
     line2parts.push(accountLine);
@@ -84062,7 +84102,7 @@ function bankCategoryEndOfRunSummary(input = {}) {
     line2: line2parts.length > 0 ? line2parts.join("   ") : null,
     detail: countsLine,
     waitingLinks,
-    counts: { accepted, picked, noCategory },
+    counts: { accepted, picked, noCategory, notes },
   };
 }
 // ---- src/246-plugin-bank-category-card-write.js ----
@@ -84563,6 +84603,8 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     this.suggestion = options.suggestion || null;
     this.progress = options.progress || null;
     this.reason = options.reason || (this.categories ? null : "loading…");
+    // True until the opening report request settles; restricted Enter waits.
+    this.loading = !this.categories && !options.reason;
     this.highlightKey = null;
     this.didInteract = false;
     this.busy = false;
@@ -84575,6 +84617,11 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     this.reportGen = 0;
     this.chord = bankCategoryChordInit(options.openedWithCtrlEnter === true);
     this.onChoose = typeof options.onChoose === "function" ? options.onChoose : null;
+    this.onNote = typeof options.onNote === "function" ? options.onNote : null;
+    this.noteStage = null;
+    this.noteStageHost = null;
+    this.noteHint = null;
+    this.noteFreshUntil = 0;
     this.onMonth = typeof options.onMonth === "function" ? options.onMonth : null;
     this.clickListener = (event) => this.onClick(event);
     this.keyListener = (event) => this.onKeyDown(event);
@@ -84614,6 +84661,11 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
             const routed = this.routeCardKey(event);
             if (routed && typeof routed.catch === "function") routed.catch(() => {});
           } catch (_) {}
+          if (this.noteStage && typeof this.shouldPassNoteStageKey === "function" &&
+              this.shouldPassNoteStageKey(event)) {
+            return true;
+          }
+          if (this.shouldPassNativeButtonSpace(event)) return true;
           if (this.newStage && typeof this.shouldPassNewCategoryKey === "function" &&
               this.shouldPassNewCategoryKey(event)) {
             return true;
@@ -84650,6 +84702,7 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     try { this.newSession?.close?.(); } catch (_) {}
     this.newSession = null;
     this.newStage = null;
+    this.noteStage = null;
     this.subscriptionPicker = null;
     this.subscriptionCreateStage = null;
     try {
@@ -84669,6 +84722,10 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
 
   onEscapeKey(event) {
     bankCategoryUiConsume(event);
+    if (this.noteStage && typeof this.backOutNoteStage === "function") {
+      this.backOutNoteStage();
+      return false;
+    }
     if (this.newStage && typeof this.closeNewCategoryStage === "function") {
       this.closeNewCategoryStage();
       return false;
@@ -84702,6 +84759,7 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
       progress: this.progress,
       reason: this.reason || (this.categories ? null : "loading…"),
       path: this.context && this.context.path,
+      loading: this.loading === true,
     });
     if (this.highlightKey === null) this.highlightKey = this.model.highlightKey;
     return this.model;
@@ -84711,12 +84769,21 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     if (!Array.isArray(categories) || this.closed) return false;
     this.categories = categories;
     this.reason = null;
+    this.loading = false;
+    try { this.paint(); } catch (_) {}
+    return true;
+  }
+
+  settleLoading() {
+    if (this.loading !== true || this.closed) return false;
+    this.loading = false;
     try { this.paint(); } catch (_) {}
     return true;
   }
 
   setReport(report) {
     if (!report || this.closed) return false;
+    this.loading = false;
     const fingerprint = typeof bankConfigFingerprintFromReport === "function"
       ? bankConfigFingerprintFromReport(report)
       : (typeof report.config_fingerprint === "string" ? report.config_fingerprint : "");
@@ -84765,6 +84832,9 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     this.subscriptionContext = null;
     this.subscriptionCandidate = false;
     this.subscriptionPickerMessage = "";
+    this.noteStage = null;
+    this.noteHint = null;
+    this.noteFreshUntil = 0;
     this.lock = lock || null;
     this.highlightKey = null;
     this.chord = bankCategoryChordInit(false);
@@ -84778,6 +84848,7 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
 
   setReason(reason) {
     this.reason = typeof reason === "string" && reason ? reason : "categories unavailable";
+    this.loading = false;
     try { this.paint(); } catch (_) {}
   }
 
@@ -84791,6 +84862,7 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     this.busy = false;
     this.subscriptionPicker = null;
     this.subscriptionCreateStage = null;
+    this.noteStage = null;
     this.summary = summary || null;
     this.paint();
   }
@@ -84836,10 +84908,25 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     return this.routeCardKey(event);
   }
 
+  // A focused native button keeps Space as its own activation.
+  shouldPassNativeButtonSpace(event) {
+    if (!event || event.key !== " " || this.noteStage) return false;
+    const target = event.target;
+    if (!target || typeof target.closest !== "function") return false;
+    const button = target.closest("button");
+    if (!button) return false;
+    const host = this.modalEl || this.contentEl;
+    return Boolean(host && typeof host.contains === "function" && host.contains(button));
+  }
+
   async routeCardKey(event) {
     if (!event || event.isComposing || event.keyCode === 229) return;
     const key = bankCategoryUiEventKey(event);
     if (!key) return;
+    if (this.noteStage && typeof this.routeNoteStageKey === "function") {
+      return this.routeNoteStageKey(event);
+    }
+    if (this.shouldPassNativeButtonSpace(event)) return;
     if (this.newStage && typeof this.routeNewCategoryKey === "function") {
       return this.routeNewCategoryKey(event);
     }
@@ -84858,10 +84945,21 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
       return;
     }
     const table = bankCategoryKeyTable(this.categories);
-    const action = bankCategoryResolveCardKey({ key, table });
+    const action = bankCategoryResolveCardKey({
+      key,
+      table,
+      mode: this.mode,
+      restricted: !Array.isArray(this.categories),
+      loading: this.loading === true,
+    });
     if (action.action === "ignore") return;
     bankCategoryUiConsume(event);
     if (this.busy || this.waitingRefresh || this.summary) return;
+    if (action.action === "note") {
+      // Space never types, never ticks, and never counts as an interaction.
+      if (event.repeat !== true && typeof this.openNoteStage === "function") this.openNoteStage();
+      return;
+    }
     if (key === "Ctrl+Enter" && bankCategoryLockActive(this.lock, Date.now())) return;
     if ((key === "Enter" || key === "Ctrl+Enter") && bankCategoryChordShouldSwallow(this.chord, "Enter")) return;
     if (event.repeat === true &&
@@ -84892,6 +84990,7 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
   }
 
   onClick(event) {
+    if (typeof this.onNoteStageClick === "function" && this.onNoteStageClick(event)) return;
     if (typeof this.onSubscriptionStageClick === "function" && this.onSubscriptionStageClick(event)) return;
     const target = event && event.target;
     const created = target && typeof target.closest === "function"
@@ -84963,10 +85062,15 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     return node;
   }
 
-  paintHeader(root, model) {
+  paintHeader(root, model, noteFocus = null) {
     const header = model.header || {};
     const row = bankCategoryUiAppend(root, "div", "bob-bank-category-header");
     if (!row) return;
+    const paintNote = () => {
+      // The note caption (or the stage input in its exact place) sits right
+      // under the payee line.
+      if (typeof this.paintNoteSlot === "function") this.paintNoteSlot(root, model, noteFocus);
+    };
     const amount = Number.isSafeInteger(header.cents) ? bankFormatCents(header.cents) : "";
     if (amount) {
       const amountClass = model.inflow
@@ -84977,6 +85081,7 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     bankCategoryUiAppend(row, "span", "bob-bank-category-payee", header.payee || "Bank row");
     const day = header.day || header.date;
     if (day) bankCategoryUiAppend(row, "span", "bob-bank-category-day", day);
+    paintNote();
     const chips = [];
     if (header.flagged) chips.push("⚑ flagged");
     if (header.account) chips.push(header.account);
@@ -85057,6 +85162,7 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     if (keepHost && keepHost.parentNode) {
       try { keepHost.parentNode.removeChild(keepHost); } catch (_) {}
     }
+    const noteFocus = typeof this.detachNoteStageHost === "function" ? this.detachNoteStageHost() : null;
     try {
       if (typeof content.empty === "function") {
         content.empty();
@@ -85080,9 +85186,15 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
       return;
     }
     const model = this.currentModel();
-    const title = bankCategoryUiAppend(root, "h2", "bob-bank-category-title bob-key-card-title", "Category");
+    const direct = Boolean(this.noteStage && this.noteStage.direct);
+    const title = bankCategoryUiAppend(root, "h2", "bob-bank-category-title bob-key-card-title",
+      direct ? "Note" : "Category");
     if (title) title.id = "bob-bank-category-title";
-    this.paintHeader(root, model);
+    this.paintHeader(root, model, noteFocus);
+    if (direct) {
+      if (typeof this.paintNoteStageKeys === "function") this.paintNoteStageKeys(root);
+      return;
+    }
     this.paintProgress(root, model);
     if (typeof this.paintSubscriptionContext === "function") this.paintSubscriptionContext(root);
     if (this.subscriptionCreateStage && typeof this.paintSubscriptionCreateStage === "function") {
@@ -85094,6 +85206,11 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
       return;
     }
     if (model.hint) bankCategoryUiAppend(root, "p", "bob-bank-category-hint", model.hint, { role: "status" });
+    if (this.noteHint && !this.noteStage) {
+      bankCategoryUiAppend(root, "p", "bob-bank-category-hint bob-bank-category-note-hint", this.noteHint, {
+        role: "status",
+      });
+    }
     if (this.waitingRefresh) {
       bankCategoryUiAppend(root, "p", "bob-bank-category-hint", "Refreshing suggestions…", { role: "status" });
     }
@@ -85122,15 +85239,19 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
       this.paintNewCategoryStage(root);
       return;
     }
-    bankCategoryUiAppend(root, "p", "bob-bank-category-footer", model.footer?.text || "pick a category");
+    if (model.kind !== "restricted" || model.footer?.text) {
+      bankCategoryUiAppend(root, "p", "bob-bank-category-footer", model.footer?.text || "pick a category");
+    }
     if (model.footer?.hint) bankCategoryUiAppend(root, "p", "bob-bank-category-hint", model.footer.hint);
-    const keys = typeof bankCategoryCardKeysText === "function"
-      ? bankCategoryCardKeysText(this.mode, model.kind)
-      : (model.kind === "restricted"
-        ? (model.footer?.text || "␣ acknowledge · esc cancel")
-        : (this.mode === "close"
-          ? "↵ accept · letter choose · Space no category · + new category · Esc cancel"
-          : "↵ accept · letter choose · Space remove category · + new category · Esc cancel"));
+    if (this.noteStage && typeof this.stageNoteTiles === "function") this.stageNoteTiles(root);
+    if (this.noteStage && typeof this.paintNoteStageKeys === "function") {
+      this.paintNoteStageKeys(root);
+      return;
+    }
+    const keys = bankCategoryCardKeysText(this.mode, model.kind, {
+      hasNote: Boolean(model.header && model.header.note),
+      loading: this.loading === true,
+    });
     bankCategoryUiAppend(root, "p", "bob-bank-category-keys", keys);
   }
 }
@@ -85203,6 +85324,9 @@ class BobLedgerToolsBankCategoryMixin {
       flagged: token.flagged === true,
       acknowledged: token.acknowledged === true,
       id: row.ackId || null,
+      note: typeof token.note === "string" && token.note ? token.note : null,
+      noteEditable: token.noteEditable === true,
+      noteRaw: token.noteSpan ? current.raw.slice(token.noteSpan.start, token.noteSpan.end) : "",
     };
     return {
       path,
@@ -85216,13 +85340,20 @@ class BobLedgerToolsBankCategoryMixin {
     };
   }
 
-  bankCategoryOpenAtCursor(editor, view, mode, openedWithCtrlEnter) {
+  // `options.noteDirect` opens set mode straight into the note stage
+  // (`Bank: note this row`): no tiles, no progress, and no report fetch.
+  bankCategoryOpenAtCursor(editor, view, mode, openedWithCtrlEnter, options = {}) {
     const activeEditor = editor || this.bankActiveEditor(view);
     if (!activeEditor || typeof activeEditor.getCursor !== "function") return false;
     const cursor = activeEditor.getCursor();
     if (!cursor || !Number.isInteger(cursor.line)) return false;
     const context = this.bankCategoryContextAt(activeEditor, view, cursor.line + 1);
     if (!context || (mode === "close" && context.row.acknowledged)) return false;
+    const noteDirect = options && options.noteDirect === true;
+    if (noteDirect && context.row.note && context.row.noteEditable !== true) {
+      new Notice(BANK_NOTE_STRUCTURED_REFUSAL);
+      return true;
+    }
     if (this.bankCategoryModal) {
       try { this.bankCategoryModal.close(); } catch (_) {}
     }
@@ -85237,7 +85368,7 @@ class BobLedgerToolsBankCategoryMixin {
       this.bankCategorySession = session;
       progress = bankCategorySessionProgress(session, bankCategoryWaitingRows(context.scan).length);
     }
-    const cached = this.bankCategoryCachedReport(context.month);
+    const cached = noteDirect ? null : this.bankCategoryCachedReport(context.month);
     const categories = cached && Array.isArray(cached.categories) ? cached.categories : null;
     const modal = new BankCategoryCardModal(this.app, {
       plugin: this,
@@ -85248,6 +85379,7 @@ class BobLedgerToolsBankCategoryMixin {
       openedWithCtrlEnter,
       onChoose: (categoryKey, kind, activeModal, writeOptions) =>
         this.bankCategoryCommit(activeModal, categoryKey, kind, writeOptions),
+      onNote: (text, activeModal) => this.bankNoteCommit(activeModal, text),
       onMonth: (path) => this.bankCategoryOpenWaitingMonth(path),
     });
     modal.editor = activeEditor;
@@ -85256,12 +85388,26 @@ class BobLedgerToolsBankCategoryMixin {
     modal.month = context.month;
     this.bankCategoryModal = modal;
     modal.open();
+    if (noteDirect) {
+      if (typeof modal.openNoteStage !== "function" || !modal.openNoteStage({ direct: true })) {
+        try { modal.close(); } catch (_) {}
+        return false;
+      }
+      return true;
+    }
     if (cached) modal.setReport(cached);
     const reportGen = modal.reportGen || 0;
+    // The restricted card's Enter acknowledges only after this request has
+    // settled, whatever the answer and whether or not Bryan already acted.
+    const settle = () => {
+      if (this.bankCategoryModal === modal && !modal.closed && typeof modal.settleLoading === "function") {
+        modal.settleLoading();
+      }
+    };
     void Promise.resolve(this.apiBankRefresh({ command: "report", month: context.month }))
       .then((result) => {
-        if (this.bankCategoryModal !== modal || modal.didInteract || modal.closed) return;
-        if (modal.reportGen !== reportGen) return;
+        if (this.bankCategoryModal !== modal || modal.didInteract || modal.closed) return settle();
+        if (modal.reportGen !== reportGen) return settle();
         if (result && result.report) {
           modal.setReport(result.report);
           return;
@@ -85272,12 +85418,13 @@ class BobLedgerToolsBankCategoryMixin {
             : "categories unavailable";
           modal.setReason(message);
         }
+        settle();
       })
       .catch((error) => {
         if (this.bankCategoryModal !== modal || modal.didInteract || modal.closed || modal.categories) {
-          return;
+          return settle();
         }
-        if (modal.reportGen !== reportGen) return;
+        if (modal.reportGen !== reportGen) return settle();
         modal.setReason(error && error.message ? error.message : "categories unavailable");
       });
     return true;
@@ -85550,6 +85697,7 @@ class BobLedgerToolsBankCategoryMixin {
         accepted: session.accepted,
         picked: session.picked,
         noCategory: session.noCategory,
+        notes: session.notes,
         accounts: report?.accounts || [],
         waitingByMonth: Array.from(waitingByMonth.values()).sort((left, right) => left.month.localeCompare(right.month)),
         bobReachable: Boolean(report && !monthResult?.error),
@@ -88107,12 +88255,17 @@ function bankCategoryNewAddedKey(report) {
   return typeof key === "string" && key ? key : null;
 }
 
-function bankCategoryCardKeysText(mode, kind) {
+// Card footers. `hasNote` turns "␣ note" into "␣ edit note"; `loading`
+// marks a restricted card whose report request has not settled yet.
+function bankCategoryCardKeysText(mode, kind, options = {}) {
+  const note = options && options.hasNote === true ? "␣ edit note" : "␣ note";
   if (kind === "restricted") {
-    return "␣ acknowledge · esc cancel";
+    return options && options.loading === true
+      ? `loading… · ${note} · esc cancel`
+      : `↵ acknowledge · ${note} · esc cancel`;
   }
-  const space = mode === "set" ? "Space remove category" : "Space no category";
-  return `↵ accept · letter choose · ${space} · + new category · Esc cancel`;
+  const dash = mode === "set" ? "- remove category" : "- no category";
+  return `↵ accept · letter choose · ${note} · ${dash} · + new category · esc cancel`;
 }
 
 function bankCategoryNewStageKeysText(stage) {
@@ -93346,6 +93499,529 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
       }
     } catch (_) {}
   }
+}
+// ---- src/248n-plugin-bank-note-stage.js ----
+// Category-card note stage (bank_row_notes note-stage). Space opens an
+// in-card input in the caption's exact place; Enter writes the row's inline
+// `— note` as its own undo step and returns to the same card on the same
+// row: no tick, no advance, no session filing, no jump. The pure rules live
+// in 246a (bankNoteNormalize, bankNoteWritePlan, bankNoteStagePreview).
+
+const BANK_NOTE_STAGE_PLACEHOLDER = "What was this for?";
+const BANK_NOTE_STAGE_HINT = "This note has links or fields — edit it on the row";
+const BANK_NOTE_ROW_GONE = "Bank: the row is no longer open";
+const BANK_NOTE_FRESH_MS = 600;
+// Unmodified editing keys and the clipboard/undo/word chords the input
+// handles natively. Everything else is swallowed so no hotkey leaks out.
+const BANK_NOTE_STAGE_EDIT_KEYS = ["Backspace", "Delete", "ArrowLeft", "ArrowRight", "Home", "End"];
+const BANK_NOTE_STAGE_EDIT_CHORDS = ["a", "c", "v", "x", "z", "y", ...BANK_NOTE_STAGE_EDIT_KEYS];
+
+function bankNoteStageInInput(event) {
+  const target = event && event.target;
+  return Boolean(target && typeof target.closest === "function" &&
+    target.closest("input[data-bank-note-input]"));
+}
+
+// Up to two normalizer change chips, then "+N more"; each title says why.
+function bankNoteChangeChips(changes) {
+  const list = Array.isArray(changes) ? changes.filter(Boolean) : [];
+  const chips = list.slice(0, 2).map((change) => ({
+    text: change.to ? `${change.from} → ${change.to}` : `${change.from} dropped`,
+    title: typeof change.why === "string" ? change.why : "",
+  }));
+  if (list.length > 2) {
+    chips.push({
+      text: `+${list.length - 2} more`,
+      title: list.slice(2).map((change) => change.why).filter(Boolean).join("; "),
+    });
+  }
+  return chips;
+}
+
+function bankNoteOutcomeText(action) {
+  if (action === "remove") return "Note removed";
+  if (action === "noop") return "No change";
+  return "Note saved";
+}
+
+(function installBankNoteStage() {
+  if (typeof BankCategoryCardModal !== "function") return;
+  const proto = BankCategoryCardModal.prototype;
+
+  proto.noteStagePreview = function noteStagePreview() {
+    const stage = this.noteStage || {};
+    return bankNoteStagePreview({
+      draft: stage.draft,
+      existingNote: stage.existing,
+      editable: stage.editable !== false,
+    });
+  };
+
+  proto.focusNoteInput = function focusNoteInput(selection = null) {
+    const input = this.noteStageInput;
+    if (!input || typeof input.focus !== "function") return false;
+    try {
+      input.focus();
+      const length = String(input.value || "").length;
+      const start = selection && Number.isInteger(selection.start) ? selection.start : length;
+      const end = selection && Number.isInteger(selection.end) ? selection.end : length;
+      input.setSelectionRange?.(start, end);
+    } catch (_) {}
+    return true;
+  };
+
+  proto.openNoteStage = function openNoteStage(options = {}) {
+    const direct = Boolean(options && options.direct === true);
+    if (this.closed || this.summary) return false;
+    if (!direct && (this.busy || this.waitingRefresh)) return false;
+    if (this.newStage || this.subscriptionPicker || this.subscriptionCreateStage) return false;
+    if (this.noteStage) {
+      this.focusNoteInput();
+      return true;
+    }
+    const row = this.cardRow();
+    const existing = typeof row.note === "string" && row.note ? row.note : null;
+    if (existing && row.noteEditable === false) {
+      this.noteHint = BANK_NOTE_STAGE_HINT;
+      this.announce(BANK_NOTE_STAGE_HINT);
+      try { this.paint(); } catch (_) {}
+      return false;
+    }
+    // Edit starts from the raw note bytes so Bryan sees exactly the row.
+    const raw = existing && typeof row.noteRaw === "string" && row.noteRaw ? row.noteRaw : (existing || "");
+    this.noteHint = null;
+    this.noteStage = { direct, draft: raw, existing, editable: true, refusal: null, saving: false };
+    this.noteStageHost = null;
+    this.noteStageInput = null;
+    try { this.paint(); } catch (_) {}
+    this.focusNoteInput();
+    return true;
+  };
+
+  proto.closeNoteStage = function closeNoteStage() {
+    if (!this.noteStage) return false;
+    this.noteStage = null;
+    this.noteStageHost = null;
+    this.noteStageInput = null;
+    try { this.paint(); } catch (_) {}
+    try { this.contentEl?.focus?.(); } catch (_) {}
+    return true;
+  };
+
+  // Esc, Ctrl+[, and q outside the input back out one layer. The direct
+  // command has no tile layer beneath, so it closes the card.
+  proto.backOutNoteStage = function backOutNoteStage() {
+    const stage = this.noteStage;
+    if (!stage) return false;
+    if (stage.saving) return true;
+    if (stage.direct) {
+      this.close();
+      return true;
+    }
+    return this.closeNoteStage();
+  };
+
+  proto.shouldPassNoteStageKey = function shouldPassNoteStageKey(event) {
+    if (!this.noteStage || !event || !bankNoteStageInInput(event)) return false;
+    if (event.isComposing || event.keyCode === 229) return true;
+    const key = typeof event.key === "string" ? event.key : "";
+    if (!key || key === "Escape" || key === "Enter" || this.noteStage.saving) return false;
+    if (key === " " && event.repeat === true) return false;
+    if (event.ctrlKey && key === "[") return false;
+    if (event.ctrlKey || event.metaKey || event.altKey) {
+      return BANK_NOTE_STAGE_EDIT_CHORDS.includes(key.length === 1 ? key.toLowerCase() : key);
+    }
+    return key.length === 1 || BANK_NOTE_STAGE_EDIT_KEYS.includes(key);
+  };
+
+  proto.routeNoteStageKey = async function routeNoteStageKey(event) {
+    const stage = this.noteStage;
+    if (!stage || !event || event.isComposing || event.keyCode === 229) return;
+    const key = bankCategoryUiEventKey(event);
+    if (!key) return;
+    const inInput = bankNoteStageInInput(event);
+    if (key === "Escape" || key === "Ctrl+[" || (!inInput && (key === "q" || key === "Q"))) {
+      bankCategoryUiConsume(event);
+      this.backOutNoteStage();
+      return;
+    }
+    if (key === "Enter" || key === "Ctrl+Enter") {
+      // Ctrl+Enter saves too; it never files from inside the stage.
+      bankCategoryUiConsume(event);
+      if (event.repeat === true || stage.saving) return;
+      await this.saveNoteStage();
+      return;
+    }
+    if (inInput && this.shouldPassNoteStageKey(event)) return;
+    bankCategoryUiConsume(event);
+    if (inInput || stage.saving || event.ctrlKey || event.metaKey || event.altKey) return;
+    if (key === " " && event.repeat === true) return;
+    // Editor focus: the key focuses the input and is appended.
+    if (key.length === 1) this.setNoteDraft(`${stage.draft || ""}${key}`);
+    else if (key === "Backspace") this.setNoteDraft(String(stage.draft || "").slice(0, -1));
+  };
+
+  proto.setNoteDraft = function setNoteDraft(value) {
+    const stage = this.noteStage;
+    if (!stage) return false;
+    stage.draft = String(value === null || value === undefined ? "" : value);
+    stage.refusal = null;
+    const input = this.noteStageInput;
+    if (input && input.value !== stage.draft) {
+      try { input.value = stage.draft; } catch (_) {}
+    }
+    this.refreshNoteStage();
+    this.focusNoteInput();
+    return true;
+  };
+
+  proto.onNoteInput = function onNoteInput(value) {
+    const stage = this.noteStage;
+    if (!stage || stage.saving) return;
+    stage.draft = String(value === null || value === undefined ? "" : value);
+    stage.refusal = null;
+    this.refreshNoteStage();
+  };
+
+  proto.refuseNoteStage = function refuseNoteStage(message) {
+    const text = typeof message === "string" && message ? message : BANK_NOTE_WRITE_REFUSAL;
+    if (this.noteStage) {
+      this.noteStage.saving = false;
+      this.noteStage.refusal = text;
+    }
+    this.announce(text);
+    this.refreshNoteStage();
+    this.focusNoteInput();
+    return false;
+  };
+
+  proto.saveNoteStage = async function saveNoteStage() {
+    const stage = this.noteStage;
+    if (!stage || stage.saving || this.closed) return false;
+    if (this.noteStageInput && typeof this.noteStageInput.value === "string") {
+      stage.draft = this.noteStageInput.value;
+    }
+    const preview = this.noteStagePreview();
+    if (preview.refusal) return this.refuseNoteStage(preview.refusal);
+    let result = { ok: true, action: "noop" };
+    if (preview.action !== "noop") {
+      if (!this.onNote) return this.refuseNoteStage(BANK_NOTE_WRITE_REFUSAL);
+      stage.saving = true;
+      try {
+        result = await this.onNote(stage.draft, this);
+      } catch (error) {
+        result = { ok: false, message: error && error.message ? `Bank: ${error.message}` : BANK_NOTE_WRITE_REFUSAL };
+      }
+      if (this.closed || this.noteStage !== stage) return Boolean(result && result.ok);
+      stage.saving = false;
+      if (!result || result.ok !== true) return this.refuseNoteStage(result && result.message);
+    }
+    const outcome = bankNoteOutcomeText(result.action);
+    const announced = result.saveError ? `${outcome} · not saved to disk yet` : outcome;
+    if (stage.direct) {
+      this.close();
+      new Notice(`Bank: ${outcome.toLowerCase()}`);
+      return true;
+    }
+    this.noteStage = null;
+    this.noteStageHost = null;
+    this.noteStageInput = null;
+    this.noteFreshUntil = result.action === "insert" || result.action === "replace"
+      ? Date.now() + BANK_NOTE_FRESH_MS
+      : 0;
+    // The save Enter's keyup must arrive before Enter can accept a category.
+    this.chord = bankCategoryChordInit(true);
+    this.announce(announced);
+    try { this.paint(); } catch (_) {}
+    try { this.contentEl?.focus?.(); } catch (_) {}
+    return true;
+  };
+
+  proto.onNoteStageClick = function onNoteStageClick(event) {
+    const target = event && event.target;
+    if (this.noteStage) {
+      // Inert tiles never file while staged; clicks in the stage stay native.
+      const host = this.noteStageHost;
+      const inside = Boolean(host && target && typeof host.contains === "function" && host.contains(target));
+      if (!inside) bankCategoryUiConsume(event);
+      return true;
+    }
+    const caption = target && typeof target.closest === "function"
+      ? target.closest("button[data-bank-note-caption]")
+      : null;
+    if (!caption) return false;
+    bankCategoryUiConsume(event);
+    if (!caption.disabled) this.openNoteStage();
+    return true;
+  };
+
+  proto.detachNoteStageHost = function detachNoteStageHost() {
+    const host = this.noteStage ? this.noteStageHost : null;
+    if (!host) return null;
+    const input = this.noteStageInput;
+    const doc = host.ownerDocument;
+    let focus = null;
+    if (input && doc && doc.activeElement === input) {
+      focus = { start: input.selectionStart, end: input.selectionEnd };
+    }
+    if (host.parentNode) {
+      try { host.parentNode.removeChild(host); } catch (_) {}
+    }
+    return focus;
+  };
+
+  proto.buildNoteStageHost = function buildNoteStageHost(doc) {
+    const stage = this.noteStage;
+    const host = bankCategoryUiEl(doc, "div", "bob-bank-category-note-stage");
+    if (!host || !stage) return null;
+    const line = bankCategoryUiAppend(host, "div", "bob-bank-category-note-line");
+    bankCategoryUiAppend(line, "span", "bob-bank-category-note-dash", "—", { "aria-hidden": "true" });
+    const payee = this.cardRow().payee;
+    const input = bankCategoryUiAppend(line, "input", "bob-bank-category-note-input", null, {
+      type: "text",
+      "data-bank-note-input": "true",
+      placeholder: BANK_NOTE_STAGE_PLACEHOLDER,
+      "aria-label": `Note for ${typeof payee === "string" && payee ? payee : "this row"}`,
+      "aria-describedby": "bob-bank-category-note-status",
+      autocomplete: "off",
+      enterkeyhint: "done",
+    });
+    if (input) {
+      try { input.value = stage.draft || ""; } catch (_) {}
+      input.addEventListener?.("input", (event) => {
+        this.onNoteInput(event && event.target ? event.target.value : input.value);
+      });
+    }
+    const status = bankCategoryUiAppend(host, "div", "bob-bank-category-note-status", null, {
+      id: "bob-bank-category-note-status",
+    });
+    this.noteStageHost = host;
+    this.noteStageInput = input;
+    this.noteStageStatus = status;
+    return host;
+  };
+
+  // The consequence line, normalizer chips, refusal, and keys line update in
+  // place so typing never rebuilds (and never blurs) the input.
+  proto.refreshNoteStage = function refreshNoteStage() {
+    const stage = this.noteStage;
+    if (!stage) return;
+    const preview = this.noteStagePreview();
+    const status = this.noteStageStatus;
+    if (status) {
+      if (typeof status.replaceChildren === "function") status.replaceChildren();
+      else status.textContent = "";
+      const refusal = stage.refusal || preview.refusal;
+      if (refusal) {
+        bankCategoryUiAppend(status, "p", "bob-bank-category-note-refusal", refusal);
+      } else {
+        bankCategoryUiAppend(status, "p",
+          `bob-bank-category-note-consequence${preview.action === "remove" ? " is-remove" : ""}`,
+          preview.consequence);
+      }
+      const chips = bankNoteChangeChips(preview.changes);
+      if (chips.length) {
+        const row = bankCategoryUiAppend(status, "div", "bob-bank-category-note-changes");
+        for (const chip of chips) {
+          bankCategoryUiAppend(row, "span", "bob-bank-category-note-change", chip.text, {
+            title: chip.title || null,
+          });
+        }
+      }
+    }
+    if (this.noteStageKeys) this.noteStageKeys.textContent = this.noteStageKeysText(preview);
+  };
+
+  proto.noteStageKeysText = function noteStageKeysText(preview = this.noteStagePreview()) {
+    const keys = preview.keys || "↵ save · esc back";
+    return this.noteStage && this.noteStage.direct ? keys.replace(/esc back$/, "esc close") : keys;
+  };
+
+  proto.paintNoteSlot = function paintNoteSlot(root, model, noteFocus) {
+    if (this.noteStage) {
+      const host = this.noteStageHost || this.buildNoteStageHost(root && root.ownerDocument);
+      if (host && root && typeof root.appendChild === "function") root.appendChild(host);
+      this.refreshNoteStage();
+      if (noteFocus) this.focusNoteInput(noteFocus);
+      return;
+    }
+    const header = (model && model.header) || {};
+    if (!header.note) return;
+    const fresh = Date.now() < (this.noteFreshUntil || 0);
+    const classes = ["bob-bank-category-note"];
+    if (fresh) classes.push("is-fresh");
+    if (header.noteEditable === false) classes.push("is-structured");
+    const button = bankCategoryUiAppend(root, "button", classes.join(" "), null, {
+      type: "button",
+      "data-bank-note-caption": "true",
+      title: header.note,
+      "aria-label": `Note: ${header.note}`,
+    });
+    if (!button) return;
+    button.disabled = this.busy || this.waitingRefresh;
+    bankCategoryUiAppend(button, "span", "bob-bank-category-note-dash", "—", { "aria-hidden": "true" });
+    bankCategoryUiAppend(button, "span", "bob-bank-category-note-text", header.note);
+  };
+
+  // The tiles stay painted in place, dimmed and inert, while the stage owns
+  // the keyboard.
+  proto.stageNoteTiles = function stageNoteTiles(root) {
+    const staged = ["bob-bank-category-section", "bob-bank-category-new-row", "bob-bank-category-footer"];
+    for (const child of Array.from((root && root.children) || [])) {
+      const classes = String(child.className || "").split(/\s+/);
+      if (!staged.some((name) => classes.includes(name))) continue;
+      child.className = `${child.className} is-staged`;
+      try { child.setAttribute?.("inert", ""); } catch (_) {}
+      try { child.inert = true; } catch (_) {}
+    }
+  };
+
+  proto.paintNoteStageKeys = function paintNoteStageKeys(root) {
+    this.noteStageKeys = bankCategoryUiAppend(root, "p", "bob-bank-category-keys", this.noteStageKeysText());
+  };
+})();
+
+if (typeof BobLedgerToolsBankCategoryMixin === "function") {
+  const mixin = BobLedgerToolsBankCategoryMixin.prototype;
+
+  // `Bank: note this row`: set mode, directly in the note stage.
+  mixin.bankCategoryNoteRow = function bankCategoryNoteRow(editor, view) {
+    return this.bankCategoryOpenAtCursor(editor, view, "set", false, { noteDirect: true }) === true;
+  };
+
+  mixin.bankNoteIsolateHistory = function bankNoteIsolateHistory() {
+    try {
+      const commands = require("@codemirror/commands");
+      const isolate = commands && commands.isolateHistory;
+      return isolate && typeof isolate.of === "function" ? isolate : null;
+    } catch (_) {
+      return null;
+    }
+  };
+
+  // One whole-line replacement, isolated in CM6 history so a filing key
+  // pressed within the 500 ms grouping window stays its own undo step.
+  mixin.bankNoteApplyEdits = function bankNoteApplyEdits(editor, plan) {
+    if (!editor || !plan || plan.ok !== true) return null;
+    const lineIndex = plan.line - 1;
+    const raw = typeof editor.getLine === "function"
+      ? editor.getLine(lineIndex)
+      : String(editor.getValue() || "").split("\n")[lineIndex]?.replace(/\r$/, "");
+    if (typeof raw !== "string") return null;
+    const replacement = bankCategoryApplyLineEdits(raw, plan);
+    if (replacement === null) return null;
+    if (replacement === raw) return { raw, replacement };
+    const cm = editor.cm;
+    const isolate = this.bankNoteIsolateHistory();
+    if (isolate && cm && cm.state && cm.state.doc && typeof cm.dispatch === "function") {
+      try {
+        const line = cm.state.doc.line(plan.line);
+        if (line && line.text === raw) {
+          cm.dispatch({
+            changes: { from: line.from, to: line.to, insert: replacement },
+            annotations: isolate.of("full"),
+          });
+          return { raw, replacement };
+        }
+      } catch (_) {}
+    }
+    if (typeof editor.replaceRange !== "function") return null;
+    editor.replaceRange(replacement, { line: lineIndex, ch: 0 }, { line: lineIndex, ch: raw.length });
+    return { raw, replacement };
+  };
+
+  // Unlike bankCategorySaveNote, report the persistence outcome.
+  mixin.bankNoteSaveFile = async function bankNoteSaveFile(modal) {
+    const path = modal && modal.context && modal.context.path;
+    if (!path) return { ok: false, message: "no note path" };
+    try {
+      const view = modal.view;
+      if (view && view.file && view.file.path === path && typeof view.save === "function") {
+        await view.save();
+        return { ok: true };
+      }
+      const workspace = this.app && this.app.workspace;
+      const leaves = workspace && typeof workspace.getLeavesOfType === "function"
+        ? workspace.getLeavesOfType("markdown")
+        : [];
+      let saved = false;
+      for (const leaf of Array.isArray(leaves) ? leaves : []) {
+        const leafView = leaf && leaf.view;
+        if (leafView && leafView.file && leafView.file.path === path && typeof leafView.save === "function") {
+          await leafView.save();
+          saved = true;
+        }
+      }
+      return saved ? { ok: true } : { ok: false, message: "no open editor for the month note" };
+    } catch (error) {
+      return { ok: false, message: error && error.message ? String(error.message) : String(error) };
+    }
+  };
+
+  // Writes the note and keeps the card on the row. It never calls the
+  // session recorder, the next-waiting finder, bankCategoryRecordJump, or the
+  // completion summary, and it never flips didInteract.
+  mixin.bankNoteCommit = async function bankNoteCommit(modal, text) {
+    if (!modal || modal.closed || modal !== this.bankCategoryModal) {
+      return { ok: false, reason: "closed", message: BANK_NOTE_ROW_GONE };
+    }
+    const editor = modal.editor;
+    if (!editor || typeof editor.getValue !== "function") {
+      return { ok: false, reason: "closed", message: BANK_NOTE_ROW_GONE };
+    }
+    const context = modal.context || {};
+    const plan = bankNoteWritePlan({
+      capture: context.capture,
+      currentPath: this.bankActiveFilePath(),
+      currentSource: editor.getValue(),
+      text,
+    });
+    if (!plan.ok) return { ok: false, reason: plan.reason, message: plan.message || BANK_NOTE_WRITE_REFUSAL };
+    if (plan.action === "noop") return { ok: true, action: "noop", note: plan.note };
+    const before = typeof editor.getCursor === "function" ? editor.getCursor() : null;
+    const applied = this.bankNoteApplyEdits(editor, plan);
+    if (!applied) return { ok: false, reason: "apply-failed", message: BANK_NOTE_WRITE_REFUSAL };
+    const priorCh = before && Number.isInteger(before.ch) ? before.ch : 0;
+    try {
+      editor.setCursor?.({ line: plan.line - 1, ch: Math.max(0, Math.min(priorCh, applied.replacement.length)) });
+    } catch (_) {}
+    const saved = await this.bankNoteSaveFile(modal);
+    const path = context.path;
+    const next = this.bankCategoryContextAt(editor, { file: { path } }, plan.line);
+    if (next) {
+      // Re-capture so the next category key files this row, then re-anchor
+      // the walk on the new text so text-keyed (ID-less) entries resolve.
+      modal.context = next;
+      let anchor = null;
+      try { anchor = typeof this.bankWalkAnchor === "function" ? this.bankWalkAnchor() : null; } catch (_) {}
+      const anchored = anchor && anchor.path === path && anchor.line === plan.line;
+      if (modal.mode === "close" || anchored) {
+        const row = { path, line: plan.line, date: next.row.date, text: next.capture.lineText };
+        this.bankWalkHandOffOpenedRow(row);
+        try {
+          // A stale index entry would carry the old text (and, for ID-less
+          // rows, a text-derived key); rebuild both from the new line.
+          const after = this.bankWalkAnchor();
+          if (after && after.text !== row.text) {
+            const { key: _staleKey, ...rest } = after;
+            this.bankWalkSetAnchor({ ...rest, ...row });
+          }
+        } catch (_) {}
+      }
+    }
+    if (modal.mode === "close" && modal.session) {
+      modal.session = bankCategorySessionNote(modal.session, Date.now());
+      this.bankCategorySession = modal.session;
+    }
+    if (!saved.ok) new Notice(`Bank: the note is in the editor but was not saved (${saved.message})`);
+    return {
+      ok: true,
+      action: plan.action,
+      note: plan.note,
+      line: plan.line,
+      saveError: saved.ok ? null : saved.message,
+    };
+  };
 }
 // ---- src/249-plugin-bank-walk-model.js ----
 // Pure bank-walk model (api.bankWalk v1): membership, snapshot building,
@@ -166814,6 +167490,9 @@ try {
       BankCategoryCardModal,
       bankCategoryUiEventKey,
       bankCategoryApplyLineEdits,
+      bankCategoryCardKeysText,
+      bankNoteChangeChips,
+      BANK_NOTE_STAGE_HINT,
     });
   }
 } catch (_) {}
@@ -167133,6 +167812,8 @@ try {
       bankCategoryLockActive,
       bankCategorySessionStart,
       bankCategorySessionRecord,
+      bankCategorySessionNote,
+      bankCategoryCardHeader,
       bankCategorySessionProgress,
       bankCategorySessionIdleExpired,
       bankCategoryElapsedText,

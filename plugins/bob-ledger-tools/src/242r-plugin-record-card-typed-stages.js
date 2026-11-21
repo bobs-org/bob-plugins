@@ -32,6 +32,7 @@ Object.assign(RecordCardModal.prototype, {
       stagePreview: this.stagePreview,
       stageCaret: this.stageCaret,
       composing: this.composing,
+      linkBandOpen: typeof this.recordProseLinkOpen === "function" ? this.recordProseLinkOpen() : false,
       focusStage: true,
       recordPath: this.recordPath,
       plugin: this.recordPlugin,
@@ -273,10 +274,6 @@ Object.assign(RecordCardModal.prototype, {
       void this.recordPickSuggest(payload && payload.value);
       return;
     }
-    if (action === "pick-link") {
-      void this.recordPickLink(payload && payload.value);
-      return;
-    }
     if (action === "edit-chip") {
       this.recordEditChip(payload);
       return;
@@ -323,6 +320,9 @@ Object.assign(RecordCardModal.prototype, {
       return;
     }
     if (this.recordInInput(event)) {
+      // nav's LINK band (S15) sees every key first: Enter/Tab accept a row,
+      // arrows and Ctrl+N/P move it, and a held Enter cannot then save.
+      if (typeof this.recordProseOffer === "function" && this.recordProseOffer(event)) return;
       const inputKind = event.target?.getAttribute?.("data-record-input") || "";
       if (event.key === "Tab") {
         event.preventDefault?.();
@@ -384,7 +384,11 @@ Object.assign(RecordCardModal.prototype, {
       if (this.stage && (this.stage.kind === "suggest" || this.stage.kind === "link")
         && (event.key === "ArrowDown" || event.key === "ArrowUp" || suggestCtrlDelta)) {
         event.preventDefault?.();
-        this.recordMoveSuggest(event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : suggestCtrlDelta);
+        // The link stage's rows live in the LINK band; with it closed the
+        // arrows stay inert instead of cycling a second candidate list.
+        if (this.stage.kind === "suggest") {
+          this.recordMoveSuggest(event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : suggestCtrlDelta);
+        }
         return;
       }
       return;
@@ -582,38 +586,21 @@ Object.assign(RecordCardModal.prototype, {
   }
 ,
   recordMoveSuggest(delta) {
-    if (!this.stage || (this.stage.kind !== "suggest" && this.stage.kind !== "link")) return;
+    if (!this.stage || this.stage.kind !== "suggest") return;
     const target = recordCardTargetByKey(this.recordTargets(), this.stage.field);
     if (!target) return;
-    if (this.stage.kind === "suggest") {
-      const reportField = recordCardFieldFromReport(this.latestReport, target.key);
-      const values = typeof recordCardSuggestValues === "function"
-        ? recordCardSuggestValues(reportField, target.field) : [];
-      const visible = typeof recordCardFilterSuggest === "function"
-        ? recordCardFilterSuggest(values, this.stageDraftText || "") : values;
-      if (!visible.length) return;
-      const current = String(this.stageDraftText || "");
-      let index = visible.findIndex((row) => String((row && row.value) || "") === current);
-      if (index < 0) index = Number(delta) < 0 ? visible.length : -1;
-      index = (index + (Number(delta) < 0 ? -1 : 1) + visible.length) % visible.length;
-      this.stageDraftText = String(visible[index].value || "");
-      try {
-        const doc = this.recordDoc();
-        const card = this.contentEl?.querySelector?.(".bob-record-card");
-        const input = card?.querySelector?.("[data-record-input^='stage-']");
-        if (input) this.stageCaret = { start: input.value.length, end: input.value.length };
-      } catch (_) {}
-      this.recordTypedInput();
-      return;
-    }
-    const candidates = typeof recordCardLinkCandidates === "function"
-      ? recordCardLinkCandidates(this.recordPlugin, this.recordPath, this.stageDraftText || "") : [];
-    if (!candidates.length) return;
-    const current = String(this.stageDraftText || "").replace(/^\[\[|\]\]$/g, "");
-    let index = candidates.findIndex((row) => row.path === current || row.base === current);
-    if (index < 0) index = Number(delta) < 0 ? candidates.length : -1;
-    index = (index + (Number(delta) < 0 ? -1 : 1) + candidates.length) % candidates.length;
-    this.stageDraftText = `[[${candidates[index].path.replace(/\.md$/i, "")}]]`;
+    const reportField = recordCardFieldFromReport(this.latestReport, target.key);
+    const values = typeof recordCardSuggestValues === "function"
+      ? recordCardSuggestValues(reportField, target.field) : [];
+    const visible = typeof recordCardFilterSuggest === "function"
+      ? recordCardFilterSuggest(values, this.stageDraftText || "") : values;
+    if (!visible.length) return;
+    const current = String(this.stageDraftText || "");
+    let index = visible.findIndex((row) => String((row && row.value) || "") === current);
+    if (index < 0) index = Number(delta) < 0 ? visible.length : -1;
+    index = (index + (Number(delta) < 0 ? -1 : 1) + visible.length) % visible.length;
+    this.stageDraftText = String(visible[index].value || "");
+    this.stageCaret = { start: this.stageDraftText.length, end: this.stageDraftText.length };
     this.recordTypedInput();
   }
 ,

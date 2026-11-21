@@ -442,7 +442,10 @@ forwards a successful local write to Ledger Tools `logs.noteUsed`. Feature-detec
 takes `inputEl`, `bandHost`, `sourcePath` (`string | null | () => string | null`),
 `recall`, `links`, `mode` (`inline` | `field`), `minOffset`, `density`, `ownKeys`,
 and `scope`. The root api version stays 3. Enter and Tab accept a row while the
-LINK band is open and never submit the prompt. Completion only inserts text. `successors.pick(model)` resolves to a result
+LINK band is open and never submit the prompt; only an Enter accept swallows
+the held Enter. Hosts whose listeners run first (the Record Card) attach with
+`ownKeys: false`, call `backOut()` as their first Esc rung, and offer every key
+to `handleKeydown` first. Completion only inserts text. `successors.pick(model)` resolves to a result
 with a `picks` array or `null` when no choice is made. Selectable
 rows may carry additive `task: { path, line, text, displayText, status,
 preimage }` so `Ctrl+Shift+Enter` can retarget through

@@ -27289,7 +27289,9 @@ function attachProseField(options) {
     openBand(next, text, selectedKey);
   };
 
-  const acceptRow = (row) => {
+  // Only an Enter acceptance arms the held-Enter swallow; a Tab or click
+  // acceptance must leave the next Enter free to submit the host.
+  const acceptRow = (row, viaEnter) => {
     if (!row || !field || !inputEl) {
       closeBand(false);
       return true;
@@ -27302,7 +27304,7 @@ function attachProseField(options) {
         if (typeof inputEl.setSelectionRange === "function") inputEl.setSelectionRange(applied.caret, applied.caret);
       } catch (_error) {}
     }
-    swallowEnter = true;
+    if (viaEnter === true) swallowEnter = true;
     closeBand(false);
     return true;
   };
@@ -27384,7 +27386,7 @@ function attachProseField(options) {
         closeBand(false);
         return true;
       }
-      return acceptRow(rows.find((row) => row.key === selectedKey) || rows[0]);
+      return acceptRow(rows.find((row) => row.key === selectedKey) || rows[0], true);
     }
     if (key === "#" && field && field.context === LINK_CONTEXT_NOTE && field.query && selectedKey) {
       return drill("#");

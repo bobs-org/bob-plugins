@@ -232,6 +232,7 @@
   "242q-plugin-record-card-stages.js",
   "242r-plugin-record-card-typed-stages.js",
   "242s-plugin-record-card-typed-save.js",
+  "242sa-plugin-record-card-prose-field.js",
   "241e-plugin-notebook-header-model.js",
   "241f-plugin-notebook-header.js",
   "241g-plugin-notebook-header-live.js",

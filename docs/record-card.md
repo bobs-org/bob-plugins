@@ -161,7 +161,7 @@ Digits here pick a choice; on the album card editor they jump to field N.
 | `u` / Ctrl+Z | Undo the last save for this record path. |
 | `y` / Ctrl+E | Close and open Source on the field's YAML line, with Done. |
 | `=` | Close and open the parent album card editor on the same field, falling back to Album details. |
-| Esc / `q` / Ctrl+[ | Close All actions, then the stage, then the editor. `q` types only in text controls. |
+| Esc / `q` / Ctrl+[ | Close an open LINK band, then All actions, then the stage, then the editor. `q` types only in text controls. |
 
 ### Stages
 
@@ -170,13 +170,35 @@ and listbox relationships, visible focus, and text-only user strings.
 
 | Stage | Behavior |
 | --- | --- |
-| Text | Auto-growing textarea. Pasted newlines are preserved for bob to refuse; Enter saves, never inserts a newline. |
-| Suggest | Combobox over the full ranked `fields[].values` with rank and counts while filtering. Arrows or Ctrl+N / Ctrl+P step through candidates. Picking an existing suggestion applies it directly; free typing previews, including bob's `record_value_near` warning. Typing never implicitly picks. |
+| Text | Auto-growing textarea. Pasted newlines are preserved for bob to refuse; Enter saves, never inserts a newline. Typing `[[` opens the LINK band. |
+| Suggest | Combobox over the full ranked `fields[].values` with rank and counts while filtering. Arrows or Ctrl+N / Ctrl+P step through candidates. Picking an existing suggestion applies it directly; free typing previews, including bob's `record_value_near` warning. Typing never implicitly picks. Typing `[[` opens the LINK band, which owns the arrows until it closes. |
 | Date | Text input accepting `today`, `t`, `yesterday`, and ISO. The parsed echo comes from bob's preview. Browse `t` keeps its direct route. |
 | Number | Text input with numeric inputmode and schema min/max hints. Incomplete tokens are preserved for bob; no `parseFloat`, empty-to-zero, NaN, or clamping. |
 | URL | Text/URL input with bob's validation and hint; no normalization of invalid URLs. |
-| Link | Vault note suggester accepting a bare name or `[[wikilink]]`, resolved relative to the record with Obsidian metadata. Arrows or Ctrl+N / Ctrl+P step through candidates. Aliases, headings, and block anchors are preserved; picks preview before save. |
-| List | Chip editor with a separate item input. Enter on a nonempty item adds it; Enter on an empty item saves the list. Empty-input Backspace removes the last chip; chips expose edit/remove. Order and literal commas are preserved; values submit as a JSON array. |
+| Link | The whole value is one link. Typing a note name opens the LINK band; arrows or Ctrl+N / Ctrl+P move its rows, and Enter or Tab replaces the value with `[[path]]`. A second Enter saves once the band is closed. A bare name, `[[path]]`, `[[path#Heading]]`, `[[path#^block]]`, and `[[path\|Alias]]` are all accepted; an authored heading, block, or alias is kept. Candidates resolve relative to the record. Picks preview before save. |
+| List | Chip editor with a separate item input. Enter on a nonempty item adds it; Enter on an empty item saves the list. Empty-input Backspace removes the last chip; chips expose edit/remove. Order and literal commas are preserved; values submit as a JSON array. Text-list items complete `[[` like the Text stage; link-list items complete like the Link stage. |
+
+### Wikilink completion
+
+The Text, Suggest, Link, and text or link List stages use the shared LINK band
+from Bob Navigation Hotkeys (`proseField` v1; see
+[Wikilink completion in prompts](bob-navigation-hotkeys.md#wikilink-completion-in-prompts)).
+Candidates resolve relative to the record note. Date, Number, URL, and choice
+stages stay literal. While the band is open:
+
+- Enter or Tab inserts the selected row and never saves or advances. With no
+  rows, Enter closes the band and inserts nothing. A held Enter cannot insert
+  and then save.
+- Arrows and Ctrl+N / Ctrl+P move the band's rows. Suggest cycling and list
+  Enter wait until the band closes.
+- Esc / Ctrl+[ closes only the band; the next press backs out of the stage.
+  `q` types.
+- Shift+Enter in the Text stage closes the band and saves nothing.
+
+The stage keeps its input element while you type, so the caret, IME
+composition, the band, and one native Ctrl+Z after an insert all survive the
+card's repaints. Completion only inserts text; it never writes the vault.
+Without Bob Navigation Hotkeys, the stages are plain typing.
 
 For list fields a choice or suggestion pick edits the list draft instead
 of emitting a scalar `field.set`. Tab includes a nonempty pending list

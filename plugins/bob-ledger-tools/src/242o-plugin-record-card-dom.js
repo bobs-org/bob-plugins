@@ -127,42 +127,83 @@ function recordCardPaintHeader(card, sheetModel, options, doc) {
   }
 }
 
+function recordCardPaintRow(doc, target, selectedKey, options) {
+  const row = recordCardEl(doc, "button", `bob-record-card-row${target.ghost ? " is-ghost" : ""}`);
+  row.setAttribute("type", "button");
+  row.setAttribute("role", "option");
+  row.setAttribute("data-target-key", target.key);
+  row.setAttribute("aria-label", `${target.label}${target.required ? ", required" : ""}`);
+  if (target.key === selectedKey) {
+    row.setAttribute("class", `${row.getAttribute("class") || ""} is-selected`.trim());
+    row.setAttribute("aria-selected", "true");
+    row.setAttribute("aria-current", "true");
+  } else {
+    row.setAttribute("aria-selected", "false");
+  }
+  const label = recordCardEl(doc, "span", "bob-record-card-label");
+  recordCardText(label, target.label || target.key);
+  if (target.required) {
+    const mark = recordCardEl(doc, "span", "bob-record-card-required");
+    recordCardText(mark, "*");
+    label.appendChild(mark);
+  }
+  row.appendChild(label);
+  const value = recordCardEl(doc, "span", "bob-record-card-value");
+  recordCardPaintValue(value, doc, target, options);
+  row.appendChild(value);
+  return row;
+}
+
+// An open typed stage keeps its inline container (and so its live input)
+// in the document while the rows around it repaint; removing a focused
+// input would drop focus, IME state, and its native undo history.
+function recordCardKeptStageEl(host, stage, targets) {
+  try {
+    if (!host || !stage || !stage.kind || stage.kind === "choices" || !stage.field) return null;
+    if (!(Array.isArray(targets) && targets.some((target) => target && target.key === stage.field))) return null;
+    const el = host.querySelector?.("[data-record-card-stage]");
+    const list = el && el.parentNode;
+    if (!list || list.parentNode !== host || typeof list.insertBefore !== "function") return null;
+    if (el.getAttribute?.("data-record-card-stage") !== stage.kind) return null;
+    if (el.getAttribute?.("data-record-card-stage-field") !== stage.field) return null;
+    return el;
+  } catch (_) {
+    return null;
+  }
+}
+
 function recordCardPaintBody(card, targets, options, doc) {
   const host = recordCardRegion(card, "body");
   if (!host || !doc) return;
+  const selectedKey = options && options.selectedKey;
+  const kept = recordCardKeptStageEl(host, options && options.stage, targets);
+  if (kept) {
+    const list = kept.parentNode;
+    for (const child of recordCardNodeChildren(host)) {
+      if (child !== list) host.removeChild(child);
+    }
+    for (const child of recordCardNodeChildren(list)) {
+      if (child !== kept) list.removeChild(child);
+    }
+    let beforeStage = true;
+    for (const target of targets) {
+      const row = recordCardPaintRow(doc, target, selectedKey, options);
+      if (beforeStage) list.insertBefore(row, kept);
+      else list.appendChild(row);
+      if (target.key === options.stage.field) beforeStage = false;
+    }
+    return;
+  }
   recordCardRegionEmpty(host);
   const list = recordCardEl(doc, "div", "bob-record-card-fields");
   list.setAttribute("role", "listbox");
   list.setAttribute("aria-label", "Record fields");
-  const selectedKey = options && options.selectedKey;
   for (const target of Array.isArray(targets) ? targets : []) {
-    const row = recordCardEl(doc, "button", `bob-record-card-row${target.ghost ? " is-ghost" : ""}`);
-    row.setAttribute("type", "button");
-    row.setAttribute("role", "option");
-    row.setAttribute("data-target-key", target.key);
-    row.setAttribute("aria-label", `${target.label}${target.required ? ", required" : ""}`);
-    if (target.key === selectedKey) {
-      row.setAttribute("class", `${row.getAttribute("class") || ""} is-selected`.trim());
-      row.setAttribute("aria-selected", "true");
-      row.setAttribute("aria-current", "true");
-    } else {
-      row.setAttribute("aria-selected", "false");
-    }
-    const label = recordCardEl(doc, "span", "bob-record-card-label");
-    recordCardText(label, target.label || target.key);
-    if (target.required) {
-      const mark = recordCardEl(doc, "span", "bob-record-card-required");
-      recordCardText(mark, "*");
-      label.appendChild(mark);
-    }
-    row.appendChild(label);
-    const value = recordCardEl(doc, "span", "bob-record-card-value");
-    recordCardPaintValue(value, doc, target, options);
-    row.appendChild(value);
-    list.appendChild(row);
+    list.appendChild(recordCardPaintRow(doc, target, selectedKey, options));
     if (options && options.stage && options.stage.field === target.key) {
       const stage = recordCardEl(doc, "div", "bob-record-card-stage");
       stage.setAttribute("data-record-card-stage", options.stage.kind || "");
+      stage.setAttribute("data-record-card-stage-field", target.key);
       list.appendChild(stage);
     }
   }
@@ -286,6 +327,8 @@ function recordCardPaintStage(card, options, doc) {
         plugin: options.plugin || null,
         recordPath: options.recordPath || "",
         applying: options.status?.pendingApply === true,
+        bandOpen: options.linkBandOpen === true,
+        composing: options.composing === true,
       });
       if (inline && host !== inline) recordCardRegionEmpty(host);
       try {

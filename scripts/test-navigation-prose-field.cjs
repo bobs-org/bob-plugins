@@ -326,6 +326,21 @@ test("held Enter swallows the repeat after accept", () => {
   handle.detach();
 });
 
+test("Tab and click accepts leave the next Enter to the host", () => {
+  const { input, host, handle } = attach();
+  typeInput(input, "[[sas", 5);
+  assert.equal(handle.handleKeydown(keyEvent("Tab")), true);
+  assert.equal(handle.isLinkOpen(), false);
+  assert.equal(handle.handleKeydown(keyEvent("Enter")), false, "a Tab accept arms no Enter swallow");
+  typeInput(input, `${input.value} [[sas`, input.value.length + 6);
+  assert.equal(handle.isLinkOpen(), true);
+  const row = linkSlot(host).find((node) => node.classes.includes("bob-link-band-row") && node.listeners.click);
+  row.fire("click", {});
+  assert.equal(handle.isLinkOpen(), false);
+  assert.equal(handle.handleKeydown(keyEvent("Enter")), false, "a click accept arms no Enter swallow");
+  handle.detach();
+});
+
 test("Ctrl+[ mirrors Esc and q types", () => {
   const { input, handle } = attach({ ownKeys: true });
   typeInput(input, "[[sas", 5);

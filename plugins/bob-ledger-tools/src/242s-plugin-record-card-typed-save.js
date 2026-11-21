@@ -26,18 +26,6 @@ Object.assign(RecordCardModal.prototype, {
     return this.recordTypedInput();
   }
 ,
-  async recordPickLink(value) {
-    if (!value) return null;
-    const target = this.stage ? recordCardTargetByKey(this.recordTargets(), this.stage.field) : this.recordSelected();
-    if (!target) return null;
-    if (this.stage && this.stage.kind === "list") {
-      return this.recordListPickValue(String(value), "link");
-    }
-    const path = String(value).replace(/\.md$/i, "");
-    this.stageDraftText = /\[\[/.test(String(value)) ? String(value) : `[[${path}]]`;
-    return this.recordTypedInput();
-  }
-,
   async recordSettleApplyResult(result, ops, pending = this.pendingTab) {
     if (this.closed) return result;
     this.sessionState = this.session?.getState?.() || this.sessionState;

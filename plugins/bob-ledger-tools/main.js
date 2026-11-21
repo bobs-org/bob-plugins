@@ -109382,42 +109382,83 @@ function recordCardPaintHeader(card, sheetModel, options, doc) {
   }
 }
 
+function recordCardPaintRow(doc, target, selectedKey, options) {
+  const row = recordCardEl(doc, "button", `bob-record-card-row${target.ghost ? " is-ghost" : ""}`);
+  row.setAttribute("type", "button");
+  row.setAttribute("role", "option");
+  row.setAttribute("data-target-key", target.key);
+  row.setAttribute("aria-label", `${target.label}${target.required ? ", required" : ""}`);
+  if (target.key === selectedKey) {
+    row.setAttribute("class", `${row.getAttribute("class") || ""} is-selected`.trim());
+    row.setAttribute("aria-selected", "true");
+    row.setAttribute("aria-current", "true");
+  } else {
+    row.setAttribute("aria-selected", "false");
+  }
+  const label = recordCardEl(doc, "span", "bob-record-card-label");
+  recordCardText(label, target.label || target.key);
+  if (target.required) {
+    const mark = recordCardEl(doc, "span", "bob-record-card-required");
+    recordCardText(mark, "*");
+    label.appendChild(mark);
+  }
+  row.appendChild(label);
+  const value = recordCardEl(doc, "span", "bob-record-card-value");
+  recordCardPaintValue(value, doc, target, options);
+  row.appendChild(value);
+  return row;
+}
+
+// An open typed stage keeps its inline container (and so its live input)
+// in the document while the rows around it repaint; removing a focused
+// input would drop focus, IME state, and its native undo history.
+function recordCardKeptStageEl(host, stage, targets) {
+  try {
+    if (!host || !stage || !stage.kind || stage.kind === "choices" || !stage.field) return null;
+    if (!(Array.isArray(targets) && targets.some((target) => target && target.key === stage.field))) return null;
+    const el = host.querySelector?.("[data-record-card-stage]");
+    const list = el && el.parentNode;
+    if (!list || list.parentNode !== host || typeof list.insertBefore !== "function") return null;
+    if (el.getAttribute?.("data-record-card-stage") !== stage.kind) return null;
+    if (el.getAttribute?.("data-record-card-stage-field") !== stage.field) return null;
+    return el;
+  } catch (_) {
+    return null;
+  }
+}
+
 function recordCardPaintBody(card, targets, options, doc) {
   const host = recordCardRegion(card, "body");
   if (!host || !doc) return;
+  const selectedKey = options && options.selectedKey;
+  const kept = recordCardKeptStageEl(host, options && options.stage, targets);
+  if (kept) {
+    const list = kept.parentNode;
+    for (const child of recordCardNodeChildren(host)) {
+      if (child !== list) host.removeChild(child);
+    }
+    for (const child of recordCardNodeChildren(list)) {
+      if (child !== kept) list.removeChild(child);
+    }
+    let beforeStage = true;
+    for (const target of targets) {
+      const row = recordCardPaintRow(doc, target, selectedKey, options);
+      if (beforeStage) list.insertBefore(row, kept);
+      else list.appendChild(row);
+      if (target.key === options.stage.field) beforeStage = false;
+    }
+    return;
+  }
   recordCardRegionEmpty(host);
   const list = recordCardEl(doc, "div", "bob-record-card-fields");
   list.setAttribute("role", "listbox");
   list.setAttribute("aria-label", "Record fields");
-  const selectedKey = options && options.selectedKey;
   for (const target of Array.isArray(targets) ? targets : []) {
-    const row = recordCardEl(doc, "button", `bob-record-card-row${target.ghost ? " is-ghost" : ""}`);
-    row.setAttribute("type", "button");
-    row.setAttribute("role", "option");
-    row.setAttribute("data-target-key", target.key);
-    row.setAttribute("aria-label", `${target.label}${target.required ? ", required" : ""}`);
-    if (target.key === selectedKey) {
-      row.setAttribute("class", `${row.getAttribute("class") || ""} is-selected`.trim());
-      row.setAttribute("aria-selected", "true");
-      row.setAttribute("aria-current", "true");
-    } else {
-      row.setAttribute("aria-selected", "false");
-    }
-    const label = recordCardEl(doc, "span", "bob-record-card-label");
-    recordCardText(label, target.label || target.key);
-    if (target.required) {
-      const mark = recordCardEl(doc, "span", "bob-record-card-required");
-      recordCardText(mark, "*");
-      label.appendChild(mark);
-    }
-    row.appendChild(label);
-    const value = recordCardEl(doc, "span", "bob-record-card-value");
-    recordCardPaintValue(value, doc, target, options);
-    row.appendChild(value);
-    list.appendChild(row);
+    list.appendChild(recordCardPaintRow(doc, target, selectedKey, options));
     if (options && options.stage && options.stage.field === target.key) {
       const stage = recordCardEl(doc, "div", "bob-record-card-stage");
       stage.setAttribute("data-record-card-stage", options.stage.kind || "");
+      stage.setAttribute("data-record-card-stage-field", target.key);
       list.appendChild(stage);
     }
   }
@@ -109541,6 +109582,8 @@ function recordCardPaintStage(card, options, doc) {
         plugin: options.plugin || null,
         recordPath: options.recordPath || "",
         applying: options.status?.pendingApply === true,
+        bandOpen: options.linkBandOpen === true,
+        composing: options.composing === true,
       });
       if (inline && host !== inline) recordCardRegionEmpty(host);
       try {
@@ -110721,45 +110764,113 @@ function recordCardSuggestByValue(values, value) {
   return (Array.isArray(values) ? values : []).find((row) => String((row && row.value) || "") === want) || null;
 }
 
-function recordCardLinkCandidates(plugin, recordPath, filter) {
-  const text = String(filter || "").trim().toLowerCase();
-  let files = [];
-  try {
-    const vault = plugin && plugin.app && plugin.app.vault;
-    if (vault && typeof vault.getMarkdownFiles === "function") {
-      files = vault.getMarkdownFiles() || [];
-    } else if (vault && typeof vault.getFiles === "function") {
-      files = (vault.getFiles() || []).filter((file) => file && /\.md$/i.test(file.path || file));
-    }
-  } catch (_) {
-    files = [];
-  }
-  let paths = files.map((file) => (typeof file === "string" ? file : file.path)).filter(Boolean);
-  if (!paths.length) {
-    try {
-      const cache = plugin && plugin.app && plugin.app.metadataCache;
-      if (cache && typeof cache.getCache === "function") { paths = []; }
-    } catch (_) {}
-  }
-  const seen = new Set();
-  const ranked = [];
-  for (const path of paths) {
-    if (!path || seen.has(path)) continue;
-    seen.add(path);
-    const base = String(path).split("/").pop().replace(/\.md$/i, "");
-    if (text && !(String(path).toLowerCase().includes(text) || base.toLowerCase().includes(text))) continue;
-    ranked.push({ path, base });
-    if (ranked.length >= 30) break;
-  }
-  return ranked;
-}
-
+// Accepted link drafts: a bare name, `[[target]]`, `[[target#Heading]]`,
+// `[[target#^block]]`, and any of those with an authored `|Alias`. The
+// alias and subpath stay verbatim in `value`; bob remains the validator.
 function recordCardParseLinkDraft(text) {
   const raw = String(text || "").trim();
   if (!raw) return { kind: "empty", value: "" };
-  const match = /^\[\[([^\]]+)\]\]$/.exec(raw);
-  if (match) return { kind: "wikilink", value: raw, target: match[1] };
+  const match = /^\[\[([^\]|]+)(?:\|([^\]]*))?\]\]$/.exec(raw);
+  if (match) {
+    const inner = match[1];
+    const hash = inner.indexOf("#");
+    const target = (hash < 0 ? inner : inner.slice(0, hash)).trim();
+    const subpath = hash < 0 ? "" : inner.slice(hash);
+    const alias = match[2] === undefined ? null : match[2];
+    return { kind: "wikilink", value: raw, target, subpath, alias };
+  }
   return { kind: "bare", value: raw };
+}
+
+// Which typed stages complete `[[` through nav's proseField (S15): text,
+// suggest, and text-list items complete inline; the link stage and link-list
+// items treat the whole value as one link target (field mode). Date, number,
+// URL, and choice values stay literal.
+function recordCardStageProseMode(kind, field) {
+  if (kind === "text" || kind === "suggest") return "inline";
+  if (kind === "link") return "field";
+  if (kind !== "list") return null;
+  try {
+    if (typeof recordCardIsChoiceField === "function" && recordCardIsChoiceField(field)) return null;
+  } catch (_) {}
+  const scalar = String((field && field.kind) || "text").toLowerCase();
+  if (scalar === "link") return "field";
+  if (scalar === "text" || scalar === "suggest") return "inline";
+  return null;
+}
+
+// The suggest stage's combobox relationship belongs to the suggestion list
+// whenever nav's LINK band is closed; while the band is open the band owns
+// aria-expanded, aria-controls, and aria-activedescendant.
+function recordCardStageComboboxAria(input, targetKey, bandOpen) {
+  if (!input || typeof input.setAttribute !== "function") return;
+  try {
+    input.setAttribute("role", "combobox");
+    if (bandOpen === true) return;
+    input.setAttribute("aria-expanded", "true");
+    input.setAttribute("aria-autocomplete", "list");
+    input.setAttribute("aria-controls", `bob-record-card-suggest-${targetKey}`);
+    if (typeof input.removeAttribute === "function") input.removeAttribute("aria-activedescendant");
+  } catch (_) {}
+}
+
+function recordCardStageInputKey(kind) {
+  return kind === "list" ? "stage-list-item" : `stage-${kind}`;
+}
+
+function recordCardNodeChildren(node) {
+  if (!node) return [];
+  try {
+    if (node.childNodes && typeof node.childNodes.length === "number") return Array.from(node.childNodes);
+  } catch (_) {}
+  return Array.isArray(node.children) ? node.children.slice() : Array.from(node.children || []);
+}
+
+// A typed stage keeps its live input (and the LINK band host under it)
+// across repaints, so the caret, IME composition, the band, and native undo
+// all survive per-keystroke paints. Only a stage for the same field and kind
+// whose host supports insertBefore is reused; anything else rebuilds.
+function recordCardKeptStageInput(host, options) {
+  try {
+    if (!host || typeof host.insertBefore !== "function" || !options || !options.target) return null;
+    const key = recordCardStageInputKey(options.kind);
+    const input = host.querySelector?.(`[data-record-input='${key}']`);
+    if (!input || input.parentNode !== host) return null;
+    if (input.getAttribute?.("data-target-key") !== options.target.key) return null;
+    const band = host.querySelector?.("[data-record-band]");
+    return { input, band: band && band.parentNode === host ? band : null };
+  } catch (_) {
+    return null;
+  }
+}
+
+function recordCardStageClearExcept(host, keep) {
+  const kept = new Set((keep || []).filter(Boolean));
+  for (const child of recordCardNodeChildren(host)) {
+    if (!kept.has(child)) {
+      try { host.removeChild(child); } catch (_) {}
+    }
+  }
+}
+
+function recordCardStageBandHost(doc, host, options) {
+  if (!options.proseMode) return null;
+  const kept = options.keptBand || null;
+  if (kept) return kept;
+  // Called right after the input is placed, while it is the host's last
+  // child, so appending puts the band directly under the field.
+  const band = recordCardEl(doc, "div", "bob-record-card-link-band");
+  if (!band) return null;
+  band.setAttribute("data-record-band", "link");
+  host.appendChild(band);
+  return band;
+}
+
+function recordCardStagePut(host, node, before) {
+  if (!node) return node;
+  if (before && before.parentNode === host && typeof host.insertBefore === "function") host.insertBefore(node, before);
+  else host.appendChild(node);
+  return node;
 }
 
 function recordCardNumberHint(field) {
@@ -110813,33 +110924,36 @@ function recordCardPaintStageInput(doc, host, options) {
   const draft = options.draft || {};
   const attrs = recordCardStageInputAttrs(kind);
   const labelText = recordCardStageLabel(kind, target);
+  const kept = options.keptInput || null;
   const label = recordCardEl(doc, "label", "bob-record-card-stage-label");
   recordCardText(label, labelText);
   label.setAttribute("for", `bob-record-card-input-${target.key}`);
-  host.appendChild(label);
-  let input;
-  if (kind === "text") {
+  recordCardStagePut(host, label, kept);
+  let input = kept;
+  const value = String(draft.text || "");
+  if (input) {
+    // Same element as last paint: assign only a changed value so the caret
+    // and native undo history are untouched while typing, and never during
+    // IME composition, whose uncommitted text the draft does not hold yet.
+    if (!options.composing && String(input.value == null ? "" : input.value) !== value) input.value = value;
+  } else if (kind === "text") {
     input = recordCardEl(doc, "textarea", "bob-record-card-stage-input bob-record-card-text");
     input.setAttribute("rows", "3");
-    input.value = String(draft.text || "");
+    input.value = value;
   } else {
     input = recordCardEl(doc, "input", `bob-record-card-stage-input bob-record-card-${kind}`);
     input.setAttribute("type", attrs.type);
     if (attrs.inputmode) input.setAttribute("inputmode", attrs.inputmode);
     if (kind === "url") input.setAttribute("autocomplete", "url");
-    input.value = String(draft.text || "");
+    input.value = value;
   }
   input.setAttribute("id", `bob-record-card-input-${target.key}`);
   input.setAttribute("data-record-input", `stage-${kind}`);
   input.setAttribute("data-target-key", target.key);
   input.setAttribute("aria-label", labelText);
-  if (kind === "suggest") {
-    input.setAttribute("role", "combobox");
-    input.setAttribute("aria-expanded", "true");
-    input.setAttribute("aria-autocomplete", "list");
-    input.setAttribute("aria-controls", `bob-record-card-suggest-${target.key}`);
-  }
-  host.appendChild(input);
+  if (kind === "suggest") recordCardStageComboboxAria(input, target.key, options.bandOpen === true);
+  if (!kept) host.appendChild(input);
+  recordCardStageBandHost(doc, host, options);
   const hint = recordCardEl(doc, "p", "bob-record-card-stage-hint");
   recordCardText(hint, recordCardStageHintText(kind, target.field, options.reportField));
   host.appendChild(hint);
@@ -110879,35 +110993,18 @@ function recordCardPaintStageInput(doc, host, options) {
     }
     host.appendChild(list);
   }
-  if (kind === "link") {
-    const candidates = recordCardLinkCandidates(options.plugin, options.recordPath, draft.text || "");
-    const list = recordCardEl(doc, "div", "bob-record-card-link-list");
-    list.setAttribute("role", "listbox");
-    list.setAttribute("aria-label", "Note suggestions");
-    for (const candidate of candidates.slice(0, 12)) {
-      const item = recordCardEl(doc, "button", "bob-record-card-link-row");
-      item.setAttribute("type", "button");
-      item.setAttribute("role", "option");
-      item.setAttribute("data-record-action", "pick-link");
-      item.setAttribute("data-choice-value", candidate.path);
-      item.setAttribute("data-target-key", target.key);
-      item.setAttribute("aria-label", candidate.path);
-      recordCardText(item, candidate.base || candidate.path);
-      list.appendChild(item);
-    }
-    if (candidates.length) host.appendChild(list);
-  }
   return input;
 }
 
 function recordCardPaintStageList(doc, host, options) {
   const target = options.target;
   const draft = options.draft || {};
+  const kept = options.keptInput || null;
   const labelText = recordCardStageLabel("list", target);
   const label = recordCardEl(doc, "span", "bob-record-card-stage-label");
   label.setAttribute("id", `bob-record-card-list-${target.key}`);
   recordCardText(label, `${labelText} · ${recordCardStageHintText("list")}`);
-  host.appendChild(label);
+  recordCardStagePut(host, label, kept);
   const chips = recordCardEl(doc, "div", "bob-record-card-chip-list");
   chips.setAttribute("role", "list");
   chips.setAttribute("aria-labelledby", `bob-record-card-list-${target.key}`);
@@ -110936,19 +111033,26 @@ function recordCardPaintStageList(doc, host, options) {
     chip.appendChild(remove);
     chips.appendChild(chip);
   });
-  host.appendChild(chips);
+  recordCardStagePut(host, chips, kept);
   const itemLabel = recordCardEl(doc, "label", "bob-record-card-stage-label");
   recordCardText(itemLabel, "Add item");
   itemLabel.setAttribute("for", `bob-record-card-item-${target.key}`);
-  host.appendChild(itemLabel);
-  const input = recordCardEl(doc, "input", "bob-record-card-stage-input bob-record-card-list-input");
-  input.setAttribute("type", "text");
+  recordCardStagePut(host, itemLabel, kept);
+  let input = kept;
+  const value = String(draft.itemDraft || "");
+  if (input) {
+    if (!options.composing && String(input.value == null ? "" : input.value) !== value) input.value = value;
+  } else {
+    input = recordCardEl(doc, "input", "bob-record-card-stage-input bob-record-card-list-input");
+    input.setAttribute("type", "text");
+    input.value = value;
+  }
   input.setAttribute("id", `bob-record-card-item-${target.key}`);
   input.setAttribute("data-record-input", "stage-list-item");
   input.setAttribute("data-target-key", target.key);
   input.setAttribute("aria-label", "Add item");
-  input.value = String(draft.itemDraft || "");
-  host.appendChild(input);
+  if (!kept) host.appendChild(input);
+  recordCardStageBandHost(doc, host, options);
   return input;
 }
 
@@ -110978,13 +111082,22 @@ function recordCardPaintStageActions(doc, host, options) {
 
 function recordCardPaintTypedStage(doc, host, options) {
   if (!host || !doc || !options || !options.target) return null;
-  recordCardRegionEmpty(host);
   const kind = options.kind;
+  const proseMode = recordCardStageProseMode(kind, options.target.field);
+  const kept = recordCardKeptStageInput(host, options);
+  if (kept) recordCardStageClearExcept(host, [kept.input, proseMode ? kept.band : null]);
+  else recordCardRegionEmpty(host);
+  const paint = {
+    ...options,
+    proseMode,
+    keptInput: kept ? kept.input : null,
+    keptBand: kept && proseMode ? kept.band : null,
+  };
   let input = null;
   if (kind === "list") {
-    input = recordCardPaintStageList(doc, host, options);
+    input = recordCardPaintStageList(doc, host, paint);
   } else {
-    input = recordCardPaintStageInput(doc, host, options);
+    input = recordCardPaintStageInput(doc, host, paint);
   }
   const preview = options.preview;
   if (preview && preview.consequence) {
@@ -111037,6 +111150,7 @@ Object.assign(RecordCardModal.prototype, {
       stagePreview: this.stagePreview,
       stageCaret: this.stageCaret,
       composing: this.composing,
+      linkBandOpen: typeof this.recordProseLinkOpen === "function" ? this.recordProseLinkOpen() : false,
       focusStage: true,
       recordPath: this.recordPath,
       plugin: this.recordPlugin,
@@ -111278,10 +111392,6 @@ Object.assign(RecordCardModal.prototype, {
       void this.recordPickSuggest(payload && payload.value);
       return;
     }
-    if (action === "pick-link") {
-      void this.recordPickLink(payload && payload.value);
-      return;
-    }
     if (action === "edit-chip") {
       this.recordEditChip(payload);
       return;
@@ -111328,6 +111438,9 @@ Object.assign(RecordCardModal.prototype, {
       return;
     }
     if (this.recordInInput(event)) {
+      // nav's LINK band (S15) sees every key first: Enter/Tab accept a row,
+      // arrows and Ctrl+N/P move it, and a held Enter cannot then save.
+      if (typeof this.recordProseOffer === "function" && this.recordProseOffer(event)) return;
       const inputKind = event.target?.getAttribute?.("data-record-input") || "";
       if (event.key === "Tab") {
         event.preventDefault?.();
@@ -111389,7 +111502,11 @@ Object.assign(RecordCardModal.prototype, {
       if (this.stage && (this.stage.kind === "suggest" || this.stage.kind === "link")
         && (event.key === "ArrowDown" || event.key === "ArrowUp" || suggestCtrlDelta)) {
         event.preventDefault?.();
-        this.recordMoveSuggest(event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : suggestCtrlDelta);
+        // The link stage's rows live in the LINK band; with it closed the
+        // arrows stay inert instead of cycling a second candidate list.
+        if (this.stage.kind === "suggest") {
+          this.recordMoveSuggest(event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : suggestCtrlDelta);
+        }
         return;
       }
       return;
@@ -111587,38 +111704,21 @@ Object.assign(RecordCardModal.prototype, {
   }
 ,
   recordMoveSuggest(delta) {
-    if (!this.stage || (this.stage.kind !== "suggest" && this.stage.kind !== "link")) return;
+    if (!this.stage || this.stage.kind !== "suggest") return;
     const target = recordCardTargetByKey(this.recordTargets(), this.stage.field);
     if (!target) return;
-    if (this.stage.kind === "suggest") {
-      const reportField = recordCardFieldFromReport(this.latestReport, target.key);
-      const values = typeof recordCardSuggestValues === "function"
-        ? recordCardSuggestValues(reportField, target.field) : [];
-      const visible = typeof recordCardFilterSuggest === "function"
-        ? recordCardFilterSuggest(values, this.stageDraftText || "") : values;
-      if (!visible.length) return;
-      const current = String(this.stageDraftText || "");
-      let index = visible.findIndex((row) => String((row && row.value) || "") === current);
-      if (index < 0) index = Number(delta) < 0 ? visible.length : -1;
-      index = (index + (Number(delta) < 0 ? -1 : 1) + visible.length) % visible.length;
-      this.stageDraftText = String(visible[index].value || "");
-      try {
-        const doc = this.recordDoc();
-        const card = this.contentEl?.querySelector?.(".bob-record-card");
-        const input = card?.querySelector?.("[data-record-input^='stage-']");
-        if (input) this.stageCaret = { start: input.value.length, end: input.value.length };
-      } catch (_) {}
-      this.recordTypedInput();
-      return;
-    }
-    const candidates = typeof recordCardLinkCandidates === "function"
-      ? recordCardLinkCandidates(this.recordPlugin, this.recordPath, this.stageDraftText || "") : [];
-    if (!candidates.length) return;
-    const current = String(this.stageDraftText || "").replace(/^\[\[|\]\]$/g, "");
-    let index = candidates.findIndex((row) => row.path === current || row.base === current);
-    if (index < 0) index = Number(delta) < 0 ? candidates.length : -1;
-    index = (index + (Number(delta) < 0 ? -1 : 1) + candidates.length) % candidates.length;
-    this.stageDraftText = `[[${candidates[index].path.replace(/\.md$/i, "")}]]`;
+    const reportField = recordCardFieldFromReport(this.latestReport, target.key);
+    const values = typeof recordCardSuggestValues === "function"
+      ? recordCardSuggestValues(reportField, target.field) : [];
+    const visible = typeof recordCardFilterSuggest === "function"
+      ? recordCardFilterSuggest(values, this.stageDraftText || "") : values;
+    if (!visible.length) return;
+    const current = String(this.stageDraftText || "");
+    let index = visible.findIndex((row) => String((row && row.value) || "") === current);
+    if (index < 0) index = Number(delta) < 0 ? visible.length : -1;
+    index = (index + (Number(delta) < 0 ? -1 : 1) + visible.length) % visible.length;
+    this.stageDraftText = String(visible[index].value || "");
+    this.stageCaret = { start: this.stageDraftText.length, end: this.stageDraftText.length };
     this.recordTypedInput();
   }
 ,
@@ -111688,18 +111788,6 @@ Object.assign(RecordCardModal.prototype, {
       return this.recordApplyOps({ op: "field.set", field: target.key, value: String(exact.value) });
     }
     this.stageDraftText = String(value);
-    return this.recordTypedInput();
-  }
-,
-  async recordPickLink(value) {
-    if (!value) return null;
-    const target = this.stage ? recordCardTargetByKey(this.recordTargets(), this.stage.field) : this.recordSelected();
-    if (!target) return null;
-    if (this.stage && this.stage.kind === "list") {
-      return this.recordListPickValue(String(value), "link");
-    }
-    const path = String(value).replace(/\.md$/i, "");
-    this.stageDraftText = /\[\[/.test(String(value)) ? String(value) : `[[${path}]]`;
     return this.recordTypedInput();
   }
 ,
@@ -112453,6 +112541,218 @@ Object.assign(RecordCardModal.prototype, {
     if (this.recordPlugin && this.recordPlugin.recordCardModal === this) {
       this.recordPlugin.recordCardModal = null;
     }
+  }
+});
+// ---- src/242sa-plugin-record-card-prose-field.js ----
+// Record Card prose fields (S15). The text, suggest, and text-list item
+// inputs complete `[[` inline through nav's proseField; the link stage (and
+// link-list items) is a field-mode consumer of the same engine, so the whole
+// value is one link target. The card is an explicit consumer: its Esc / q /
+// Ctrl+[ ladder calls backOut() first, and its typed-stage key handler offers
+// every key to the band before Enter save, Tab, list Enter, and suggest
+// cycling. Typed stages keep their live input across repaints (242o/242q),
+// so the band, caret, IME state, and native undo survive each keystroke.
+// Without nav, or with an older nav, the stages stay plain typing.
+function recordCardProseFieldApi(app) {
+  try {
+    const plugins = app && app.plugins && app.plugins.plugins;
+    const nav = plugins ? plugins["bob-navigation-hotkeys"] : null;
+    const prose = nav && nav.api && nav.api.proseField;
+    if (!prose || Number(prose.version) < 1 || typeof prose.attach !== "function") return null;
+    return prose;
+  } catch (_) {
+    return null;
+  }
+}
+
+function recordCardProseListen(modal, binding) {
+  if (!binding || binding.kind !== "suggest") return;
+  const input = binding.inputEl;
+  if (!input || typeof input.addEventListener !== "function") return;
+  // Registered after the controller's own listeners, so these run once the
+  // band has settled and hand the combobox relationship back to the
+  // suggestion list whenever the band is closed.
+  const restore = () => {
+    try { modal.recordProseRestoreAria(); } catch (_) {}
+  };
+  binding.restoreAria = restore;
+  for (const type of ["input", "keyup", "blur"]) {
+    try { input.addEventListener(type, restore); } catch (_) {}
+  }
+}
+
+function recordCardProseUnlisten(binding) {
+  const input = binding && binding.inputEl;
+  const restore = binding && binding.restoreAria;
+  if (!input || !restore || typeof input.removeEventListener !== "function") return;
+  for (const type of ["input", "keyup", "blur"]) {
+    try { input.removeEventListener(type, restore); } catch (_) {}
+  }
+  binding.restoreAria = null;
+}
+
+const recordCardPaintBeforeProse = RecordCardModal.prototype.paintRecordCard;
+const recordCardHandleEscapeBeforeProse = RecordCardModal.prototype.recordHandleEscape;
+const recordCardOnCloseBeforeProse = RecordCardModal.prototype.onClose;
+
+Object.assign(RecordCardModal.prototype, {
+  paintRecordCard() {
+    recordCardPaintBeforeProse.call(this);
+    this.recordSyncProseField();
+  }
+,
+  recordHandleEscape() {
+    // First rung of the card's back-out ladder: an open LINK band closes
+    // alone, one layer per press, before the stage or the card.
+    if (this.recordProseBackOut()) return "stay";
+    return recordCardHandleEscapeBeforeProse.call(this);
+  }
+,
+  onClose() {
+    this.recordDetachProseField();
+    return recordCardOnCloseBeforeProse.call(this);
+  }
+,
+  recordProseLinkOpen() {
+    const binding = this.recordProseBinding;
+    if (!binding || !binding.handle) return false;
+    try { return binding.handle.isLinkOpen() === true; } catch (_) { return false; }
+  }
+,
+  recordProseStageNodes(stage) {
+    try {
+      const card = this.contentEl?.querySelector?.(".bob-record-card");
+      if (!card || !stage) return null;
+      const host = card.querySelector?.("[data-record-card-stage]") || recordCardRegion(card, "stage");
+      if (!host) return null;
+      const input = host.querySelector?.(`[data-record-input='${recordCardStageInputKey(stage.kind)}']`);
+      const band = host.querySelector?.("[data-record-band]");
+      if (!input || !band) return null;
+      if (input.getAttribute?.("data-target-key") !== stage.field) return null;
+      return { input, band };
+    } catch (_) {
+      return null;
+    }
+  }
+,
+  recordSyncProseField() {
+    if (this.closed) {
+      this.recordDetachProseField();
+      return;
+    }
+    const stage = this.stage;
+    const target = stage ? recordCardTargetByKey(this.recordTargets(), stage.field) : null;
+    const mode = stage && target ? recordCardStageProseMode(stage.kind, target.field) : null;
+    const nodes = mode ? this.recordProseStageNodes(stage) : null;
+    if (!mode || !nodes) {
+      this.recordDetachProseField();
+      return;
+    }
+    const binding = this.recordProseBinding;
+    if (binding && binding.field === stage.field && binding.kind === stage.kind && binding.mode === mode) {
+      if (binding.inputEl !== nodes.input || binding.bandHost !== nodes.band) {
+        // Fallback for hosts that could not keep the element: carry the band
+        // state onto the new input instead of reattaching.
+        recordCardProseUnlisten(binding);
+        try { binding.handle.rebind({ inputEl: nodes.input, bandHost: nodes.band }); } catch (_) {}
+        binding.inputEl = nodes.input;
+        binding.bandHost = nodes.band;
+        recordCardProseListen(this, binding);
+      }
+      this.recordProseRestoreAria();
+      return;
+    }
+    this.recordDetachProseField();
+    const api = recordCardProseFieldApi(this.recordPlugin?.app || this.app);
+    if (!api) return;
+    let handle = null;
+    try {
+      handle = api.attach({
+        inputEl: nodes.input,
+        bandHost: nodes.band,
+        sourcePath: () => this.recordPath || null,
+        recall: null,
+        links: true,
+        mode,
+        density: "roomy",
+        ownKeys: false,
+        arrowKeys: true,
+      });
+    } catch (_) {
+      handle = null;
+    }
+    if (!handle || typeof handle.handleKeydown !== "function") return;
+    this.recordProseBinding = {
+      handle,
+      field: stage.field,
+      kind: stage.kind,
+      mode,
+      inputEl: nodes.input,
+      bandHost: nodes.band,
+      restoreAria: null,
+    };
+    recordCardProseListen(this, this.recordProseBinding);
+    this.recordProseRestoreAria();
+  }
+,
+  recordDetachProseField() {
+    const binding = this.recordProseBinding;
+    this.recordProseBinding = null;
+    if (!binding) return;
+    recordCardProseUnlisten(binding);
+    try { binding.handle.detach(); } catch (_) {}
+  }
+,
+  recordProseOffer(event) {
+    const binding = this.recordProseBinding;
+    if (!binding || !binding.handle || !event || event.target !== binding.inputEl) return false;
+    let wasOpen = false;
+    try { wasOpen = binding.handle.isLinkOpen() === true; } catch (_) { wasOpen = false; }
+    let consumed = false;
+    try { consumed = binding.handle.handleKeydown(event) === true; } catch (_) { consumed = false; }
+    // An Enter the open band declined (Shift+Enter in the text textarea)
+    // closes the band and stops there: it never saves a half-typed link.
+    if (!consumed && wasOpen && event.key === "Enter") consumed = true;
+    if (!consumed) return false;
+    try { event.preventDefault?.(); } catch (_) {}
+    try { event.stopPropagation?.(); } catch (_) {}
+    this.recordProseSyncDraft(binding);
+    this.recordProseRestoreAria();
+    return true;
+  }
+,
+  recordProseBackOut() {
+    const binding = this.recordProseBinding;
+    if (!binding || !binding.handle) return false;
+    let consumed = false;
+    try { consumed = binding.handle.backOut() === true; } catch (_) { consumed = false; }
+    if (consumed) this.recordProseRestoreAria();
+    return consumed;
+  }
+,
+  recordProseSyncDraft(binding) {
+    // Insertions normally arrive through an input event; this covers a
+    // controller fallback that assigned the value without one.
+    const input = binding && binding.inputEl;
+    if (!input || !this.stage || this.closed) return;
+    const value = String(input.value == null ? "" : input.value);
+    const listItem = this.stage.kind === "list";
+    const current = String((listItem ? this.stageItemDraft : this.stageDraftText) || "");
+    if (value === current) return;
+    if (listItem) this.stageItemDraft = value;
+    else this.stageDraftText = value;
+    if (typeof input.selectionStart === "number") {
+      this.stageCaret = { start: input.selectionStart, end: input.selectionEnd };
+    }
+    this.recordInvalidatePendingTab();
+    void this.recordTypedInput();
+  }
+,
+  recordProseRestoreAria() {
+    const binding = this.recordProseBinding;
+    if (!binding || binding.kind !== "suggest") return;
+    if (this.recordProseLinkOpen()) return;
+    recordCardStageComboboxAria(binding.inputEl, binding.field, false);
   }
 });
 // ---- src/241e-plugin-notebook-header-model.js ----
@@ -167340,8 +167640,10 @@ try {
       recordCardSuggestValues,
       recordCardFilterSuggest,
       recordCardSuggestByValue,
-      recordCardLinkCandidates,
       recordCardParseLinkDraft,
+      recordCardStageProseMode,
+      recordCardStageComboboxAria,
+      recordCardProseFieldApi,
       recordCardNumberHint,
       recordCardStageHintText,
       recordCardPaintTypedStage,

@@ -148,9 +148,10 @@ function freshnessAfterListMarker(line, index) {
     : null;
 }
 
-// The checkbox status char on a task line, or null when `line` is not a
-// task line.
-function freshnessTaskStatus(line) {
+// The checkbox status and text after it, or null when `line` is not a
+// checkbox list item. This shape helper does not decide whether the row
+// carries Tasks' global filter.
+function freshnessCheckboxInfo(line) {
   const stripped = freshnessStripBlockquotePrefix(line);
   let index = 0;
   while (stripped[index] === " " || stripped[index] === "\t") {
@@ -179,7 +180,29 @@ function freshnessTaskStatus(line) {
   if (trailing !== "" && !/^\s/.test(trailing)) {
     return null;
   }
-  return inner;
+  return { status: inner, body: trailing };
+}
+
+// Any checkbox list-item status, for consumers that only need to recognize
+// Markdown task rows (including display-only rows without Tasks' filter).
+function freshnessCheckboxStatus(line) {
+  const parsed = freshnessCheckboxInfo(line);
+  return parsed ? parsed.status : null;
+}
+
+// The checkbox status char on any checkbox list item. Several visual marks
+// intentionally apply to native checklists outside the Tasks global filter.
+function freshnessTaskStatus(line) {
+  return freshnessCheckboxStatus(line);
+}
+
+// Freshness writers operate on Tasks-managed rows only; require the exact,
+// whitespace-separated global filter token at each mutation boundary.
+function freshnessManagedTaskStatus(line) {
+  const parsed = freshnessCheckboxInfo(line);
+  if (!parsed) return null;
+  if (!parsed.body.trim().split(/\s+/).includes("#task")) return null;
+  return parsed.status;
 }
 
 // Pomodoro headlines are recognizable without their daily-note context:
@@ -582,7 +605,7 @@ function freshnessNormalizeDateText(dateText) {
 function freshnessStampLine(line, dateText) {
   const text = String(line || "");
   const day = freshnessNormalizeDateText(dateText);
-  const status = freshnessTaskStatus(text);
+  const status = freshnessManagedTaskStatus(text);
   if (status === null) {
     return { line: text, changed: false, refused: "not_task" };
   }
@@ -626,7 +649,7 @@ function freshnessReturnedByFromLine(line, todayText, options = {}) {
     const text = String(line || "");
     const today = freshnessNormalizeDateText(todayText);
     const settings = options && typeof options === "object" ? options : {};
-    if (freshnessTaskStatus(text) !== " ") {
+    if (freshnessManagedTaskStatus(text) !== " ") {
       return null;
     }
     if (
@@ -677,11 +700,11 @@ function freshnessMarkUnblockedLine(line, options = {}) {
     const today = freshnessNormalizeDateText(settings.today);
     const status =
       settings.status === undefined || settings.status === null
-        ? freshnessTaskStatus(text)
+        ? freshnessManagedTaskStatus(text)
         : String(settings.status)[0];
     if (
       status !== " " ||
-      freshnessTaskStatus(text) === null ||
+      freshnessManagedTaskStatus(text) === null ||
       freshnessIsClosedStatus(status) ||
       freshnessHasRepeatField(text) ||
       freshnessHasHiddenTag(text) ||
@@ -746,7 +769,7 @@ function freshnessMarkUnblockedLine(line, options = {}) {
 function freshnessKeepLine(line, dateText, options) {
   const text = String(line || "");
   const day = freshnessNormalizeDateText(dateText);
-  const status = freshnessTaskStatus(text);
+  const status = freshnessManagedTaskStatus(text);
   if (status === null) {
     return { line: text, changed: false, refused: "not_task" };
   }
@@ -796,7 +819,7 @@ function freshnessSetRefreshLine(line, days, dateText) {
     Number.isSafeInteger(normalized) && normalized >= 1 && normalized <= 365
       ? normalized
       : null;
-  const status = freshnessTaskStatus(text);
+  const status = freshnessManagedTaskStatus(text);
   if (status === null) {
     return { line: text, changed: false, refused: "not_task" };
   }

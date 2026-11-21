@@ -6256,9 +6256,10 @@ function freshnessAfterListMarker(line, index) {
     : null;
 }
 
-// The checkbox status char on a task line, or null when `line` is not a
-// task line.
-function freshnessTaskStatus(line) {
+// The checkbox status and text after it, or null when `line` is not a
+// checkbox list item. This shape helper does not decide whether the row
+// carries Tasks' global filter.
+function freshnessCheckboxInfo(line) {
   const stripped = freshnessStripBlockquotePrefix(line);
   let index = 0;
   while (stripped[index] === " " || stripped[index] === "\t") {
@@ -6287,7 +6288,29 @@ function freshnessTaskStatus(line) {
   if (trailing !== "" && !/^\s/.test(trailing)) {
     return null;
   }
-  return inner;
+  return { status: inner, body: trailing };
+}
+
+// Any checkbox list-item status, for consumers that only need to recognize
+// Markdown task rows (including display-only rows without Tasks' filter).
+function freshnessCheckboxStatus(line) {
+  const parsed = freshnessCheckboxInfo(line);
+  return parsed ? parsed.status : null;
+}
+
+// The checkbox status char on any checkbox list item. Several visual marks
+// intentionally apply to native checklists outside the Tasks global filter.
+function freshnessTaskStatus(line) {
+  return freshnessCheckboxStatus(line);
+}
+
+// Freshness writers operate on Tasks-managed rows only; require the exact,
+// whitespace-separated global filter token at each mutation boundary.
+function freshnessManagedTaskStatus(line) {
+  const parsed = freshnessCheckboxInfo(line);
+  if (!parsed) return null;
+  if (!parsed.body.trim().split(/\s+/).includes("#task")) return null;
+  return parsed.status;
 }
 
 // Pomodoro headlines are recognizable without their daily-note context:
@@ -6690,7 +6713,7 @@ function freshnessNormalizeDateText(dateText) {
 function freshnessStampLine(line, dateText) {
   const text = String(line || "");
   const day = freshnessNormalizeDateText(dateText);
-  const status = freshnessTaskStatus(text);
+  const status = freshnessManagedTaskStatus(text);
   if (status === null) {
     return { line: text, changed: false, refused: "not_task" };
   }
@@ -6734,7 +6757,7 @@ function freshnessReturnedByFromLine(line, todayText, options = {}) {
     const text = String(line || "");
     const today = freshnessNormalizeDateText(todayText);
     const settings = options && typeof options === "object" ? options : {};
-    if (freshnessTaskStatus(text) !== " ") {
+    if (freshnessManagedTaskStatus(text) !== " ") {
       return null;
     }
     if (
@@ -6785,11 +6808,11 @@ function freshnessMarkUnblockedLine(line, options = {}) {
     const today = freshnessNormalizeDateText(settings.today);
     const status =
       settings.status === undefined || settings.status === null
-        ? freshnessTaskStatus(text)
+        ? freshnessManagedTaskStatus(text)
         : String(settings.status)[0];
     if (
       status !== " " ||
-      freshnessTaskStatus(text) === null ||
+      freshnessManagedTaskStatus(text) === null ||
       freshnessIsClosedStatus(status) ||
       freshnessHasRepeatField(text) ||
       freshnessHasHiddenTag(text) ||
@@ -6854,7 +6877,7 @@ function freshnessMarkUnblockedLine(line, options = {}) {
 function freshnessKeepLine(line, dateText, options) {
   const text = String(line || "");
   const day = freshnessNormalizeDateText(dateText);
-  const status = freshnessTaskStatus(text);
+  const status = freshnessManagedTaskStatus(text);
   if (status === null) {
     return { line: text, changed: false, refused: "not_task" };
   }
@@ -6904,7 +6927,7 @@ function freshnessSetRefreshLine(line, days, dateText) {
     Number.isSafeInteger(normalized) && normalized >= 1 && normalized <= 365
       ? normalized
       : null;
-  const status = freshnessTaskStatus(text);
+  const status = freshnessManagedTaskStatus(text);
   if (status === null) {
     return { line: text, changed: false, refused: "not_task" };
   }
@@ -16952,7 +16975,7 @@ if (WidgetType && typeof WidgetType === "function") {
 // listener-free DOM builder, and the Live Preview widget. Every
 // helper is synchronous and never throws; bad input yields null or an
 // empty list. Mirrors the priority-mark code paths in
-// `135-priority-marks.js` and reuses `freshnessTaskStatus` and
+// `135-priority-marks.js` and reuses the generic `freshnessCheckboxStatus` and
 // `freshnessMarkPosInCode` (code exclusion) from the sibling
 // fragments. The mark is truthful, never guessing: only exact, whole
 // `#task` tags on task lines get a mark. A `#task` tag immediately
@@ -17104,7 +17127,7 @@ function refTaskPairEnd(text, taskTo) {
 
 // A Live Preview line's task-tag-mark ranges, in line order: the
 // boundary tokens gated by the task-line check
-// (`freshnessTaskStatus(lineText) !== null`, quote-aware, so
+// (`freshnessCheckboxStatus(lineText) !== null`, quote-aware, so
 // callouts and numbered lists count). Ref pairs keep precedence,
 // then `#task #prj` pairs, then canonical `#gtd` plus `#pre`/`#post`
 // partner runs. Exact `#hide` tokens become their own `hide` ranges.
@@ -17121,7 +17144,7 @@ function taskTagMarkRanges(lineText) {
       return Object.freeze([]);
     }
     try {
-      if (freshnessTaskStatus(lineText) === null) {
+      if (freshnessCheckboxStatus(lineText) === null) {
         return Object.freeze([]);
       }
     } catch (error) {
@@ -19879,6 +19902,302 @@ function applyTaskTagTypeAttrs(el, identity, inheritedEnabled) {
 
 function clearTaskTagTypeAttrs(el) {
   return applyTaskTagTypeAttrs(el, null, false);
+}
+// ---- src/139-task-reqs.js ----
+// --- Task requirements (RQ mirror) ---------------------------------------
+// Mirrors bob-cli `src/native/task_reqs.rs` for display only. The shared
+// RQ fixture remains owned by bob-cli and is copied byte for byte into the
+// plugin. Nothing in this fragment writes Markdown.
+
+const TASK_REQ_MAX_DEPTH = 16;
+const TASK_REQ_GLOBAL_FILTER = "#task";
+const TASK_REQ_TEACHING_COPY =
+  "Part of this task's scope. Met when the task closes. Drop it or make it a task.";
+
+function taskReqIndent(line) {
+  try {
+    return (String(line || "").match(/^[ \t]*/) || [""])[0].length;
+  } catch (error) {
+    return 0;
+  }
+}
+
+// `list_item_body` twin: only list markers followed by whitespace count.
+function taskReqListItem(line) {
+  try {
+    const text = String(line || "");
+    const indent = taskReqIndent(text);
+    const afterIndent = text.slice(indent);
+    let markerLength = 0;
+    if (/^[-*+]/.test(afterIndent)) {
+      markerLength = 1;
+    } else {
+      const ordered = /^(\d+)[.)]/.exec(afterIndent);
+      if (!ordered) return null;
+      markerLength = ordered[0].length;
+    }
+    if (markerLength <= 0) return null;
+    let cursor = indent + markerLength;
+    const gap = (text.slice(cursor).match(/^[ \t]+/) || [""])[0].length;
+    if (gap === 0) return null;
+    cursor += gap;
+    return { body: text.slice(cursor), bodyFrom: cursor, indent };
+  } catch (error) {
+    return null;
+  }
+}
+
+function taskReqParseCheckbox(body) {
+  try {
+    const text = String(body || "");
+    if (!text.startsWith("[")) return null;
+    const afterOpen = text.slice(1);
+    const mark = Array.from(afterOpen)[0];
+    if (!mark) return null;
+    const afterMark = afterOpen.slice(mark.length);
+    if (!afterMark.startsWith("]")) return null;
+    const afterClose = afterMark.slice(1);
+    if (afterClose !== "" && !/^[ \t]/.test(afterClose)) return null;
+    return {
+      mark,
+      rest: afterClose.replace(/^[ \t]+/, ""),
+      markerLength: 1 + mark.length + 1,
+    };
+  } catch (error) {
+    return null;
+  }
+}
+
+function taskReqCarriesGlobalFilter(rest) {
+  try {
+    return String(rest || "").split(/\s+/).includes(TASK_REQ_GLOBAL_FILTER);
+  } catch (error) {
+    return false;
+  }
+}
+
+function taskReqFenceMarker(line) {
+  try {
+    const value = String(line || "").replace(/^ {0,3}/, "");
+    const match = /^(`{3,}|~{3,})(.*)$/.exec(value);
+    if (!match) return null;
+    if (match[1][0] === "`" && match[2].includes("`")) return null;
+    return { char: match[1][0], length: match[1].length };
+  } catch (error) {
+    return null;
+  }
+}
+
+function taskReqClosesFence(line, marker) {
+  try {
+    if (!marker) return false;
+    const value = String(line || "").replace(/^ {0,3}/, "");
+    const escaped = marker.char === "`" ? "`" : "~";
+    const match = new RegExp("^" + escaped + "{" + marker.length + ",}[\\t ]*$");
+    return match.test(value);
+  } catch (error) {
+    return false;
+  }
+}
+
+function taskReqFencedLines(lines) {
+  const fenced = new Set();
+  let open = null;
+  for (let index = 0; index < lines.length; index += 1) {
+    const marker = taskReqFenceMarker(lines[index]);
+    if (open) {
+      fenced.add(index);
+      if (taskReqClosesFence(lines[index], open)) open = null;
+    } else if (marker) {
+      fenced.add(index);
+      open = marker;
+    }
+  }
+  return fenced;
+}
+
+function taskReqFrontmatterEnd(lines) {
+  try {
+    if (!lines.length || String(lines[0]).replace(/[ \t]+$/, "") !== "---") return null;
+    for (let index = 1; index < lines.length; index += 1) {
+      if (String(lines[index]).replace(/[ \t]+$/, "") === "---") return index;
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function taskReqIsDrawerTitle(title) {
+  try {
+    const value = String(title || "").trim();
+    return /^[A-Z0-9][A-Z0-9\t &'(),.\/-?!;]*(?::)?$/.test(value) && /[A-Z]/.test(value);
+  } catch (error) {
+    return false;
+  }
+}
+
+function taskReqIsStructuralContainer(line) {
+  try {
+    const item = taskReqListItem(line);
+    if (!item) return false;
+    const body = item.body.trim();
+    if (taskReqIsDrawerTitle(body)) return true;
+    if (/^(?:⛓️\s*)?\*\*(?:DEPENDS ON|BLOCKS|SUB-PROJECTS|LINKS|LINKED FROM)(?::)?\*\*/i.test(body)) return true;
+    if (body.startsWith("❌") && body.includes("CANCEL LOG")) return true;
+    if (/^(?:🗓️?\s*|🛠️\s*|🥀\uFE0F?\s*)?\*\*(?:SCHEDULE|WORK|ROTTEN) LOG(?::)?\*\*$/.test(body)) return true;
+    return false;
+  } catch (error) {
+    return false;
+  }
+}
+
+function taskReqNearestParent(lines, childIndex) {
+  try {
+    const childIndent = taskReqIndent(lines[childIndex]);
+    for (let index = childIndex - 1; index >= 0; index -= 1) {
+      if (!String(lines[index] || "").trim()) continue;
+      if (taskReqIndent(lines[index]) >= childIndent) continue;
+      if (taskReqListItem(lines[index])) return index;
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function taskReqStateFor(mark, ownerStatus) {
+  if (mark === "-") return "dropped";
+  if (mark === ">") return "carried";
+  if (mark === "x" || mark === "X") return "met";
+  if (ownerStatus === "done") return "met";
+  if (ownerStatus === "cancelled") return "moot";
+  return "pending";
+}
+
+function taskReqCleanText(rest) {
+  try {
+    const value = String(rest || "").trimEnd();
+    const match = /(?:^|[ \t])\^([\p{L}\p{N}_-]+)$/u.exec(value);
+    if (!match) return { text: value.trim(), anchor: null };
+    const suffixStart = match.index + (match[0].startsWith(" ") || match[0].startsWith("\t") ? 1 : 0);
+    return {
+      text: value.slice(0, suffixStart).trimEnd(),
+      anchor: match[1],
+    };
+  } catch (error) {
+    return { text: String(rest || "").trim(), anchor: null };
+  }
+}
+
+function taskReqOwnerName(line) {
+  try {
+    const item = taskReqListItem(line);
+    const parsed = item && taskReqParseCheckbox(item.body);
+    if (!parsed) return "Task";
+    return parsed.rest
+      .replace(/(?:^|\s)#task(?=\s|$)/g, " ")
+      .replace(/\[(?:type|theme|created|priority|scheduled|due|completion|cancelled|repeat|onCompletion|id|dependsOn|fresh|refresh|keeps|unblocked)\s*::[^\]]*\]/g, " ")
+      .replace(/\([^)]*::[^)]*\)/g, " ")
+      .replace(/(?:^|\s)\^[\p{L}\p{N}_-]+\s*$/u, " ")
+      .replace(/[ \t]+/g, " ")
+      .trim() || "Task";
+  } catch (error) {
+    return "Task";
+  }
+}
+
+// Build the subset of the RQ forest needed by the display surfaces. Rows
+// retain source line numbers and the owner line so the glyph can follow the
+// owner's task type. Fences, quotes, structural containers, and nested task
+// boundaries follow the Rust recognizer.
+function taskReqForest(contents) {
+  try {
+    const text = String(contents || "").replace(/\r\n?/g, "\n");
+    const lines = text.split("\n");
+    const logical = lines.map((line) => {
+      const item = taskReqListItem(line);
+      return item ? item.body : line;
+    });
+    const fenced = taskReqFencedLines(logical);
+    const frontmatterEnd = taskReqFrontmatterEnd(logical);
+    const owners = new Map();
+    const reqs = new Map();
+    const rows = [];
+    for (let index = 0; index < lines.length; index += 1) {
+      if ((frontmatterEnd !== null && index <= frontmatterEnd) || fenced.has(index)) continue;
+      const item = taskReqListItem(lines[index]);
+      if (!item) continue;
+      const checkbox = taskReqParseCheckbox(item.body);
+      if (!checkbox) continue;
+      if (taskReqCarriesGlobalFilter(checkbox.rest)) {
+        owners.set(index, {
+          line: index + 1,
+          status: checkbox.mark === "x" || checkbox.mark === "X"
+            ? "done"
+            : checkbox.mark === "-"
+              ? "cancelled"
+              : "open",
+          text: lines[index],
+        });
+        continue;
+      }
+      if (taskReqIsStructuralContainer(lines[index])) continue;
+      const parentLine = taskReqNearestParent(lines, index);
+      if (parentLine === null || taskReqIsStructuralContainer(lines[parentLine])) continue;
+      const parentReq = reqs.get(parentLine);
+      const owner = owners.get(parentLine) || (parentReq && owners.get(parentReq.ownerLine - 1));
+      if (!owner) continue;
+      let depth = 1;
+      let state = taskReqStateFor(checkbox.mark, owner.status);
+      let excludedBy = null;
+      let excludedBecause = null;
+      if (parentReq) {
+        depth = parentReq.depth + 1;
+        if (state !== "dropped" && state !== "carried") {
+          if (parentReq.state === "dropped" || parentReq.state === "carried" || parentReq.state === "excluded") {
+            state = "excluded";
+            excludedBy = parentReq.line;
+            excludedBecause = parentReq.state === "excluded" ? parentReq.excludedBecause : parentReq.state;
+          }
+        }
+      }
+      const cleaned = taskReqCleanText(checkbox.rest);
+      const req = {
+        line: index + 1,
+        lineIndex: index,
+        depth,
+        parent: parentReq ? parentReq.line : null,
+        owner: owner.line,
+        ownerLine: owner.line,
+        ownerText: owner.text,
+        ownerName: taskReqOwnerName(owner.text),
+        mark: checkbox.mark === " " ? "open" : checkbox.mark === "-" ? "dropped" : checkbox.mark === ">" ? "carried" : checkbox.mark === "x" || checkbox.mark === "X" ? "legacy-met" : "unknown",
+        markChar: checkbox.mark,
+        state,
+        text: cleaned.text,
+        anchor: cleaned.anchor,
+        depth_exceeded: depth > TASK_REQ_MAX_DEPTH,
+        excludedBy,
+        excludedBecause,
+        markerFrom: item.bodyFrom + item.body.indexOf("["),
+        markerTo: item.bodyFrom + checkbox.markerLength,
+      };
+      reqs.set(index, req);
+      rows.push(req);
+    }
+    return rows;
+  } catch (error) {
+    return [];
+  }
+}
+
+function taskReqInfoAtLine(contents, lineIndex) {
+  try {
+    return taskReqForest(contents).find((row) => row.lineIndex === lineIndex) || null;
+  } catch (error) {
+    return null;
+  }
 }
 // ---- src/139-unblocked-glyph.js ----
 // --- Unblocked hand-off glyph: pure mark-core ---------------------------
@@ -117997,6 +118316,493 @@ class BobLedgerToolsTaskTagMarksMixin {
     }
   }
 }
+// ---- src/264-plugin-task-reqs.js ----
+// --- Task requirements: Live Preview and Reading view -------------------
+// Display-only twin of bob-cli's task-requirement recognizer. The checkbox
+// stays in the DOM; attributes and CSS draw the depth run in its place.
+
+const TASK_REQ_TOOLTIP_PREFIX = "Requirement";
+const TASK_REQ_DOC_FORESTS = new WeakMap();
+
+class BobLedgerToolsTaskReqMarksMixin {
+  setupTaskReqMarks() {
+    try {
+      this.taskReqCheckboxesByView = new Map();
+      this.taskReqCheckboxOriginals = new WeakMap();
+      this.taskReqDestroyedViews = new WeakSet();
+      this.taskReqRenderedOriginals = new WeakMap();
+      this.taskReqRenderedInputOriginals = new WeakMap();
+      const extension = this.createTaskReqMarkExtension();
+      if (extension && typeof this.registerEditorExtension === "function") {
+        this.registerEditorExtension(extension);
+      }
+      if (typeof this.registerMarkdownPostProcessor === "function") {
+        this.registerMarkdownPostProcessor(
+          (el, ctx) => this.renderTaskReqsIn(el, ctx),
+          51,
+        );
+      }
+      if (typeof this.register === "function") {
+        this.register(() => this.taskReqRestoreCheckboxInputs());
+      }
+    } catch (error) {
+      // Requirement marks never break plugin startup.
+    }
+  }
+
+  taskReqMarksAvailable() {
+    try {
+      return Boolean(
+        ViewPlugin &&
+          Decoration &&
+          RangeSetBuilder &&
+          editorInfoField &&
+          editorLivePreviewField &&
+          typeof taskReqForest === "function",
+      );
+    } catch (error) {
+      return false;
+    }
+  }
+
+  createTaskReqMarkExtension() {
+    try {
+      if (
+        !this.taskReqMarksAvailable() ||
+        !ViewPlugin ||
+        typeof ViewPlugin.fromClass !== "function" ||
+        !Prec ||
+        typeof Prec.highest !== "function"
+      ) {
+        return null;
+      }
+      const plugin = this;
+      const RequirementMarkPlugin = class {
+        constructor(view) {
+          this.view = view;
+          this.decorations = plugin.buildTaskReqDecorations(view);
+          plugin.taskReqScheduleCheckboxInputSync(view);
+        }
+
+        update(update) {
+          try {
+            if (plugin.taskReqMarkShouldRebuild(update)) {
+              this.decorations = plugin.buildTaskReqDecorations(update.view);
+              plugin.taskReqScheduleCheckboxInputSync(update.view);
+            }
+          } catch (error) {
+            // Keep the last valid decoration set if a refresh fails.
+          }
+        }
+
+        destroy() {
+          plugin.taskReqDestroyedViews.add(this.view);
+          plugin.taskReqRestoreCheckboxInputs(this.view);
+        }
+      };
+      return Prec.highest(
+        ViewPlugin.fromClass(RequirementMarkPlugin, {
+          decorations: (value) => value.decorations,
+        }),
+      );
+    } catch (error) {
+      return null;
+    }
+  }
+
+  taskReqMarkShouldRebuild(update) {
+    try {
+      if (!update || typeof update !== "object") return false;
+      if (update.docChanged || update.viewportChanged || update.selectionSet) return true;
+      try {
+        const refresh = ensureTaskTagMarksRefresh();
+        for (const transaction of update.transactions || []) {
+          const effects = transaction && transaction.effects;
+          for (const effect of !effects ? [] : Array.isArray(effects) ? effects : [effects]) {
+            if (effect && (effect === refresh || (refresh && typeof effect.is === "function" && effect.is(refresh)))) {
+              return true;
+            }
+          }
+        }
+      } catch (error) {
+        // Effect inspection is best-effort.
+      }
+      try {
+        if (editorLivePreviewField && update.startState && update.state) {
+          if (update.startState.field(editorLivePreviewField) !== update.state.field(editorLivePreviewField)) return true;
+        }
+        if (editorInfoField && update.startState && update.state) {
+          const before = update.startState.field(editorInfoField);
+          const after = update.state.field(editorInfoField);
+          const beforePath = before && before.file ? before.file.path : null;
+          const afterPath = after && after.file ? after.file.path : null;
+          if (beforePath !== afterPath) return true;
+        }
+      } catch (error) {
+        // State fields are best-effort.
+      }
+      return false;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  taskReqRowsForDoc(doc) {
+    try {
+      if (!doc || (typeof doc !== "object" && typeof doc !== "function")) return [];
+      const cached = TASK_REQ_DOC_FORESTS.get(doc);
+      if (cached) return cached;
+      const source = typeof doc.toString === "function" ? doc.toString() : "";
+      const rows = taskReqForest(source);
+      TASK_REQ_DOC_FORESTS.set(doc, rows);
+      return rows;
+    } catch (error) {
+      return [];
+    }
+  }
+
+  taskReqTooltip(row, rows) {
+    try {
+      if (!row) return "";
+      const state = String(row.state || "pending");
+      const stateLabel = state.charAt(0).toUpperCase() + state.slice(1);
+      let text = `${TASK_REQ_TOOLTIP_PREFIX} · level ${row.depth} of “${row.ownerName || "Task"}” · ${stateLabel}`;
+      if (state === "excluded" && Number.isInteger(row.excludedBy)) {
+        const ancestor = (rows || []).find((candidate) => candidate.line === row.excludedBy);
+        if (ancestor) text += ` · goes with “${ancestor.text || "requirement"}”`;
+      }
+      return text + "\n" + TASK_REQ_TEACHING_COPY;
+    } catch (error) {
+      return TASK_REQ_TOOLTIP_PREFIX + "\n" + TASK_REQ_TEACHING_COPY;
+    }
+  }
+
+  taskReqTypeAttrs(identity) {
+    try {
+      const attributes = {};
+      const sink = {
+        setAttribute: (name, value) => { attributes[name] = String(value); },
+        removeAttribute: (name) => { delete attributes[name]; },
+      };
+      if (typeof applyTaskTagTypeAttrs === "function") {
+        applyTaskTagTypeAttrs(sink, identity, true);
+      }
+      return attributes;
+    } catch (error) {
+      return {};
+    }
+  }
+
+  taskReqOwnerIdentity(row, path) {
+    try {
+      if (!row || typeof this.taskTagIdentityForLine !== "function") return null;
+      return this.taskTagIdentityForLine(row.ownerText, path);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  taskReqSelectionTouchesMarker(selectionRanges, lineFrom, row) {
+    try {
+      const from = lineFrom + row.markerFrom;
+      const to = lineFrom + row.markerTo;
+      for (const selection of selectionRanges || []) {
+        if (selection && selection.from <= to && selection.to >= from) return true;
+      }
+      return false;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  buildTaskReqDecorations(view) {
+    try {
+      if (
+        !this.taskTagMarksEnabled ||
+        !view ||
+        !view.state ||
+        !view.state.doc ||
+        !Decoration ||
+        typeof Decoration.line !== "function" ||
+        !RangeSetBuilder ||
+        !editorInfoField ||
+        !editorLivePreviewField
+      ) {
+        return Decoration && Decoration.none ? Decoration.none : null;
+      }
+      let live = false;
+      let info = null;
+      try {
+        live = view.state.field(editorLivePreviewField) === true;
+        info = view.state.field(editorInfoField);
+      } catch (error) {
+        return Decoration.none;
+      }
+      const path = info && info.file && typeof info.file.path === "string" ? info.file.path : "";
+      if (!live || !path) return Decoration.none;
+      const doc = view.state.doc;
+      if (!doc || typeof doc.lineAt !== "function") return Decoration.none;
+      const rows = this.taskReqRowsForDoc(doc);
+      if (!rows.length) return Decoration.none;
+      const byLine = new Map(rows.map((row) => [row.lineIndex, row]));
+      const selections = view.state.selection && view.state.selection.ranges || [];
+      const builder = new RangeSetBuilder();
+      const seen = new Set();
+      const docLength = typeof doc.length === "number" ? doc.length : Number.MAX_SAFE_INTEGER;
+      for (const range of view.visibleRanges || []) {
+        try {
+          if (!range || typeof range.from !== "number") continue;
+          let pos = Math.max(0, range.from);
+          const end = Math.min(typeof range.to === "number" ? range.to : docLength, docLength);
+          let guard = 0;
+          while (pos <= end && guard < 10000) {
+            guard += 1;
+            const line = doc.lineAt(pos);
+            if (!line || typeof line.text !== "string") break;
+            const row = byLine.get(line.number - 1);
+            if (row && !seen.has(row.lineIndex)) {
+              seen.add(row.lineIndex);
+              if (!this.taskReqSelectionTouchesMarker(selections, line.from, row)) {
+                const tooltip = this.taskReqTooltip(row, rows);
+                const identity = this.taskReqOwnerIdentity(row, path);
+                const attributes = {
+                  "data-bob-req": "true",
+                  "data-bob-req-depth": String(row.depth),
+                  "data-bob-req-state": row.state,
+                  "data-bob-req-label": tooltip,
+                  title: tooltip,
+                  ...this.taskReqTypeAttrs(identity),
+                };
+                builder.add(line.from, line.from, Decoration.line({ attributes }));
+              }
+            }
+            if (line.to >= end || line.to < pos) break;
+            pos = line.to + 1;
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      return builder.finish();
+    } catch (error) {
+      try {
+        return Decoration.none;
+      } catch (inner) {
+        return null;
+      }
+    }
+  }
+
+  taskReqReadAttr(node, name) {
+    try {
+      return node && typeof node.getAttribute === "function" ? node.getAttribute(name) : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  taskReqSetAttr(node, name, value) {
+    try {
+      if (node && typeof node.setAttribute === "function") node.setAttribute(name, value);
+    } catch (error) {
+      // Attribute writes are best-effort.
+    }
+  }
+
+  taskReqRestoreCheckboxInputs() {
+    try {
+      const views = arguments.length ? [arguments[0]] : Array.from(this.taskReqCheckboxesByView?.keys?.() || []);
+      for (const view of views) {
+        const inputs = this.taskReqCheckboxesByView && this.taskReqCheckboxesByView.get(view);
+        for (const input of inputs || []) {
+          const original = this.taskReqCheckboxOriginals && this.taskReqCheckboxOriginals.get(input);
+          if (!original) continue;
+          for (const [name, value] of Object.entries(original)) {
+            if (value === null || value === undefined) {
+              if (typeof input.removeAttribute === "function") input.removeAttribute(name);
+            } else {
+              this.taskReqSetAttr(input, name, value);
+            }
+          }
+        }
+        if (this.taskReqCheckboxesByView) this.taskReqCheckboxesByView.delete(view);
+      }
+    } catch (error) {
+      // Teardown and state restoration are best-effort.
+    }
+  }
+
+  taskReqScheduleCheckboxInputSync(view) {
+    try {
+      const sync = () => {
+        if (this.taskReqDestroyedViews && this.taskReqDestroyedViews.has(view)) return;
+        this.taskReqAnnotateCheckboxInputs(view);
+      };
+      if (typeof queueMicrotask === "function") queueMicrotask(sync);
+      else Promise.resolve().then(sync);
+    } catch (error) {
+      this.taskReqAnnotateCheckboxInputs(view);
+    }
+  }
+
+  taskReqAnnotateCheckboxInputs(view) {
+    try {
+      this.taskReqRestoreCheckboxInputs(view);
+      const root = view && view.dom;
+      if (!root || typeof root.querySelectorAll !== "function") return;
+      const inputs = root.querySelectorAll(".HyperMD-task-line[data-bob-req] input.task-list-item-checkbox");
+      const owned = new Set();
+      for (const input of inputs || []) {
+        const line = input.parentNode;
+        const label = this.taskReqReadAttr(line, "data-bob-req-label");
+        if (!label) continue;
+        this.taskReqCheckboxOriginals.set(input, {
+          title: this.taskReqReadAttr(input, "title"),
+          "aria-label": this.taskReqReadAttr(input, "aria-label"),
+          "data-tooltip-position": this.taskReqReadAttr(input, "data-tooltip-position"),
+        });
+        this.taskReqSetAttr(input, "title", label);
+        this.taskReqSetAttr(input, "aria-label", label);
+        this.taskReqSetAttr(input, "data-tooltip-position", "top");
+        owned.add(input);
+      }
+      if (this.taskReqCheckboxesByView) this.taskReqCheckboxesByView.set(view, owned);
+    } catch (error) {
+      // Checkbox labels are best-effort; line attributes remain available.
+    }
+  }
+
+  taskReqRenderedRows(root) {
+    try {
+      const rows = [];
+      const stack = [root];
+      while (stack.length) {
+        const node = stack.pop();
+        if (!node || node.nodeType !== 1) continue;
+        const isTaskRow = String(node.tagName || node.nodeName || "").toUpperCase() === "LI" &&
+          (node.classList && typeof node.classList.contains === "function"
+            ? node.classList.contains("task-list-item")
+            : String(node.className || "").split(/\s+/).includes("task-list-item"));
+        if (isTaskRow) rows.push(node);
+        const children = node.childNodes || [];
+        for (let index = children.length - 1; index >= 0; index -= 1) stack.push(children[index]);
+      }
+      return rows;
+    } catch (error) {
+      return [];
+    }
+  }
+
+  taskReqReadingSectionLine(li, info, lines) {
+    try {
+      if (!info || !Array.isArray(lines)) return null;
+      const status = this.taskReqReadAttr(li, "data-task");
+      if (status === null) return null;
+      const raw = this.taskReqReadAttr(li, "data-line");
+      const dataLine = Number(raw);
+      if (!Number.isInteger(dataLine) || dataLine < 0) return null;
+      const lineStart = Number.isInteger(info.lineStart) ? info.lineStart : 0;
+      const lineEnd = Number.isInteger(info.lineEnd) ? info.lineEnd : lineStart + lines.length - 1;
+      const fileLine = lineStart + dataLine;
+      const index = lines.length === lineEnd - lineStart + 1 ? fileLine - lineStart : fileLine;
+      const sourceLine = lines[index];
+      const item = taskReqListItem(sourceLine);
+      const checkbox = item && taskReqParseCheckbox(item.body);
+      if (!checkbox || checkbox.mark !== String(status)) return null;
+      return { sourceLine, lineIndex: index };
+    } catch (error) {
+      return null;
+    }
+  }
+
+  taskReqClearRenderedRow(li) {
+    try {
+      for (const name of [
+        "data-bob-req",
+        "data-bob-req-depth",
+        "data-bob-req-state",
+        "data-bob-req-label",
+      ]) {
+        if (li && typeof li.removeAttribute === "function") li.removeAttribute(name);
+      }
+      const original = this.taskReqRenderedOriginals && this.taskReqRenderedOriginals.get(li);
+      if (original) {
+        for (const [name, value] of Object.entries(original)) {
+          if (value === null || value === undefined) li.removeAttribute(name);
+          else li.setAttribute(name, value);
+        }
+        this.taskReqRenderedOriginals.delete(li);
+      }
+      const input = li && typeof li.querySelector === "function" ? li.querySelector("input.task-list-item-checkbox") : null;
+      const inputOriginal = input && this.taskReqRenderedInputOriginals && this.taskReqRenderedInputOriginals.get(input);
+      if (input && inputOriginal) {
+        for (const [name, value] of Object.entries(inputOriginal)) {
+          if (value === null || value === undefined) input.removeAttribute(name);
+          else input.setAttribute(name, value);
+        }
+        this.taskReqRenderedInputOriginals.delete(input);
+      }
+    } catch (error) {
+      // Clearing stale attributes is best-effort.
+    }
+  }
+
+  renderTaskReqsIn(root, ctx) {
+    try {
+      if (!this.taskTagMarksEnabled || !root || !ctx || typeof ctx.getSectionInfo !== "function") return;
+      const path = typeof ctx.sourcePath === "string" ? ctx.sourcePath : "";
+      const inheritedEnabled = true;
+      const sectionCache = new Map();
+      for (const li of this.taskReqRenderedRows(root)) {
+        this.taskReqClearRenderedRow(li);
+        let info = null;
+        try { info = ctx.getSectionInfo(li) || null; } catch (error) { info = null; }
+        if (!info || typeof info.text !== "string") continue;
+        const cacheKey = `${info.lineStart || 0}\0${info.lineEnd || ""}\0${info.text}`;
+        let model = sectionCache.get(cacheKey);
+        if (!model) {
+          const lines = info.text.split(/\r?\n/);
+          const rows = taskReqForest(info.text);
+          model = { lines, rows, byLine: new Map(rows.map((row) => [row.lineIndex, row])) };
+          sectionCache.set(cacheKey, model);
+        }
+        const mapped = this.taskReqReadingSectionLine(li, info, model.lines);
+        if (!mapped) continue;
+        const row = model.byLine.get(mapped.lineIndex);
+        if (!row) continue;
+        const tooltip = this.taskReqTooltip(row, model.rows);
+        const identity = this.taskReqOwnerIdentity(row, path);
+        this.taskReqRenderedOriginals.set(li, {
+          title: this.taskReqReadAttr(li, "title"),
+          "data-bob-type": this.taskReqReadAttr(li, "data-bob-type"),
+          "data-bob-type-hue": this.taskReqReadAttr(li, "data-bob-type-hue"),
+          "data-bob-type-state": this.taskReqReadAttr(li, "data-bob-type-state"),
+        });
+        this.taskReqSetAttr(li, "data-bob-req", "true");
+        this.taskReqSetAttr(li, "data-bob-req-depth", String(row.depth));
+        this.taskReqSetAttr(li, "data-bob-req-state", row.state);
+        this.taskReqSetAttr(li, "data-bob-req-label", tooltip);
+        this.taskReqSetAttr(li, "title", tooltip);
+        if (typeof applyTaskTagTypeAttrs === "function") {
+          applyTaskTagTypeAttrs(li, identity, inheritedEnabled);
+        }
+        const input = li && typeof li.querySelector === "function" ? li.querySelector("input.task-list-item-checkbox") : null;
+        if (input) {
+          this.taskReqRenderedInputOriginals.set(input, {
+            title: this.taskReqReadAttr(input, "title"),
+            "aria-label": this.taskReqReadAttr(input, "aria-label"),
+            "data-tooltip-position": this.taskReqReadAttr(input, "data-tooltip-position"),
+          });
+          this.taskReqSetAttr(input, "title", tooltip);
+          this.taskReqSetAttr(input, "aria-label", tooltip);
+          this.taskReqSetAttr(input, "data-tooltip-position", "top");
+        }
+      }
+    } catch (error) {
+      // A bad rendered row never breaks the post-processor.
+    }
+  }
+}
 // ---- src/264b-plugin-no-reply-pills.js ----
 // --- No-reply pill: Live Preview and reading view --------------------------
 // Rides Toggle task tag marks. Owned by bob-cli `docs/mail-link-marks.md`
@@ -145261,6 +146067,7 @@ class BobLedgerToolsTaskLinkMarksMixin {
   setupMarkFamilies() {
     this.setupFreshnessMarks();
     this.setupTaskTagMarks();
+    this.setupTaskReqMarks();
     this.setupPriorityMarks();
     this.setupDateMarks();
     this.setupProgressMarks();
@@ -162144,6 +162951,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsFreshnessMarkModelMixin,
   BobLedgerToolsFreshnessMarkRenderMixin,
   BobLedgerToolsTaskTagMarksMixin,
+  BobLedgerToolsTaskReqMarksMixin,
   BobLedgerToolsNoReplyPillsMixin,
   BobLedgerToolsTaskTagStageLabelsMixin,
   BobLedgerToolsTaskTagTypeMixin,
@@ -165243,6 +166051,24 @@ module.exports.helpers = {
   bankParseDayHeading, bankScanSource, bankRecognizeRow, bankLocateDayHeading, bankDiscoverMonthPaths, bankSourceFenceLines,
   bankEnsureArgsForDay, bankAckArgsForIds, bankNormalizeAckId, bankDedupeIds, bankDecodeEnsureResponse, bankDecodeAckResponse, bankDayWaitingSnapshot, bankAckResultSummary, bankCursorDayContext, bankGuardedCheckboxPlan, bankEnterDecision, bankCategoryCompletions, bankRowBlockId, bankAckIdFromLine, BANK_CARD_HUES, BANK_CARD_HEAT_LEVELS, bankCardParseFence, bankCardValidateMonthFrontmatter, bankCardMonthHeatModel, bankCardMonthModel, bankCardDedupeIds, bankCardRecentMonths, bankCardQueueModel, bankBadgeAmount, bankBadgeCoverageText, bankBadgeModel, bankBadgePaint, bankBadgeActivate, bankBadgeExpectedBounds, bankBadgePeriodIdentityValid, bankTokenizeLine, bankTokenizeSource, bankRowPresentation, bankHeadingPresentation, bankReportDayFor, bankNaiveMathSpans, bankMathConflictSpans, bankMathDollarRanges, bankLineHasCursor, bankProtectMathInElement, bankRestoreMarkHosts, bankIsMathNode, buildBankAmountElement, buildBankChipElement, buildBankIdElement, buildBankHeadingElement, buildBankDollarElement,
 };
+// ---- src/351-exports-task-reqs.js ----
+// Task requirement recognizer helpers, exported beside the task-tag surface.
+try {
+  if (module.exports && module.exports.helpers) {
+    Object.assign(module.exports.helpers, {
+      TASK_REQ_MAX_DEPTH,
+      TASK_REQ_GLOBAL_FILTER,
+      TASK_REQ_TEACHING_COPY,
+      taskReqListItem,
+      taskReqParseCheckbox,
+      taskReqCarriesGlobalFilter,
+      taskReqForest,
+      taskReqInfoAtLine,
+    });
+  }
+} catch (error) {
+  // Test exports are best-effort.
+}
 // ---- src/357-exports-bank-category-ui.js ----
 // UI-level test helpers for the Category card. Kept apart from the pure
 // models so the fragment manifest remains the source of truth.

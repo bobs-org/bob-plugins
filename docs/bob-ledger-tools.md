@@ -240,8 +240,7 @@ dots, selected-`b` ink in v6.
 
 ## Marks and rendered blocks
 
-Marks are display-only: nothing writes them, each with a session toggle
-restoring the unmarked rendering:
+Marks are display-only; session toggles restore source rendering:
 
 - The freshness mark renders each canonical `[fresh:: YYYY-MM-DD]` stamp as a
   compact mark (`✓ today`, a draining lease ring with its age, `⟳ Nd` when due)
@@ -290,6 +289,8 @@ restoring the unmarked rendering:
   every row is already a task. Adjacent `#task #ref` pairs render as one teal
   open-book mark. Adjacent `#task #prj` pairs render as one teal target mark,
   and an exact `#hide` tag on a task line renders as a quiet grey eye-off.
+- Nested requirements show owner-colored, depth-aware `⌗` marks with derived
+  state. Toggle restores checkboxes; Reading view annotates rows in place.
 - The task type mark renders each explicit `[type:: NAME]` field (and legacy
   `[theme:: NAME]` field) on a task line as one readable `#TYPE` mark in Live
   Preview, Reading view, and Tasks/Dataview task rows. The pill text is
@@ -347,10 +348,9 @@ restoring the unmarked rendering:
 The plugin renders live TODAY/PENDING/NEXT/READY badges, CROWDED, the
 `bob-ready-notes` ranked-bar block, and `## Tasks` heading chips.
 Pomodoro home chips name linked tasks' root parents with area hues and
-tooltips, and show recorded minutes for off-clock sessions. Type pills
-use shared catalog hues. The display-only 🍅 Today mark identifies open
-tasks linked under today's Pomodoros and jumps to the Task Link. Marks
-have session toggles; unknown type names stay neutral while typed.
+tooltips, and show recorded minutes for off-clock sessions. The display-only
+🍅 Today mark identifies open tasks linked under today's Pomodoros and jumps
+to the Task Link.
 Behavior and hues: [Task types](https://bobs-org.github.io/task-types/).
 
 The **Day strip** is a read-only daily Stats receipt above the `bob-plan`

@@ -36,6 +36,7 @@ class StubRangeSetBuilder {
 const StubDecoration = {
   none: { _decorationNone: true },
   replace: (spec) => ({ _decorationReplace: true, ...spec }),
+  line: (spec) => ({ _decorationLine: true, ...spec }),
 };
 
 const StubStateEffect = {
@@ -215,6 +216,9 @@ const {
   refTaskPairEnd,
   taskTagMarkTokenRanges,
   taskTagMarkRanges,
+  TASK_REQ_MAX_DEPTH,
+  TASK_REQ_TEACHING_COPY,
+  taskReqForest,
   checklistTagTokens,
   checklistKindForText,
   checklistTagConflict,
@@ -395,6 +399,9 @@ function makeDoc(lines) {
   });
   return {
     length: Math.max(0, offset - 1),
+    toString() {
+      return lines.join("\n");
+    },
     lineAt(pos) {
       for (const line of lineObjs) {
         if (pos >= line.from && pos <= line.to) {
@@ -471,6 +478,121 @@ function pluginWithTaskTag() {
   plugin.taskTagMarksEnabled = true;
   return plugin;
 }
+
+test("RQ vectors copied from bob-cli: requirement ownership, depth, and derived state", () => {
+  const fixture = JSON.parse(fs.readFileSync(
+    path.join(__dirname, "..", "plugins", "bob-ledger-tools", "scripts", "fixtures", "task_reqs", "vectors.json"),
+    "utf8",
+  ));
+  assert.equal(fixture.max_depth, TASK_REQ_MAX_DEPTH);
+  for (const example of fixture.cases) {
+    const actual = taskReqForest(example.source_lines.join("\n") + "\n");
+    const expected = example.expect.nodes || [];
+    assert.deepEqual(
+      actual.map((row) => ({
+        line: row.line,
+        depth: row.depth,
+        parent: row.parent,
+        owner: row.owner,
+        mark: row.mark,
+        state: row.state,
+        text: row.text,
+        anchor: row.anchor,
+        depth_exceeded: row.depth_exceeded,
+        ...(row.excludedBy === null || row.excludedBy === undefined
+          ? {}
+          : { excluded_by: row.excludedBy }),
+        ...(row.excludedBecause === null || row.excludedBecause === undefined
+          ? {}
+          : { excluded_because: row.excludedBecause }),
+      })),
+      expected.map((row) => ({
+        line: row.line,
+        depth: row.depth,
+        parent: row.parent,
+        owner: row.owner,
+        mark: row.mark,
+        state: row.state,
+        text: row.text,
+        anchor: row.anchor,
+        depth_exceeded: Boolean(row.depth_exceeded),
+        ...(row.excluded_by === undefined ? {} : { excluded_by: row.excluded_by }),
+        ...(row.excluded_because === undefined ? {} : { excluded_because: row.excluded_because }),
+      })),
+      example.id,
+    );
+  }
+});
+
+test("requirement Live Preview draws owner ink, state and depth, and reveals its marker", () => {
+  const plugin = pluginWithTaskTag();
+  const lines = [
+    "- [ ] #task Ship the exporter ^export",
+    "\t- [ ] Handles supported inputs",
+    "\t\t- [ ] Handles Windows files",
+  ];
+  const built = plugin.buildTaskReqDecorations(makeView({ lines }));
+  assert.equal(built.adds.length, 2);
+  const attrs = built.adds[0].value.attributes;
+  assert.equal(attrs["data-bob-req"], "true");
+  assert.equal(attrs["data-bob-req-depth"], "1");
+  assert.equal(attrs["data-bob-req-state"], "pending");
+  assert.match(attrs.title, /Requirement · level 1 of “Ship the exporter” · Pending/);
+  assert.ok(attrs.title.includes(TASK_REQ_TEACHING_COPY));
+  const inner = plugin.buildTaskReqDecorations(
+    makeView({ lines, selection: [{ from: 42, to: 42 }] }),
+  );
+  assert.equal(inner.adds.length, 1, "caret on the depth-1 marker reveals its raw bytes");
+  assert.equal(inner.adds[0].value.attributes["data-bob-req-depth"], "2");
+});
+
+test("requirement Reading view annotates existing rows and labels its checkbox", () => {
+  const fx = fakeRenderTree();
+  const li = fx.makeEl("li");
+  li.className = "task-list-item";
+  li.setAttribute("data-task", " ");
+  li.setAttribute("data-line", "1");
+  const input = fx.makeEl("input");
+  input.className = "task-list-item-checkbox";
+  li.appendChild(input);
+  li.querySelector = (selector) => selector.includes("input") ? input : null;
+  fx.root.appendChild(li);
+  const source = [
+    "- [ ] #task Ship the exporter ^export",
+    "\t- [ ] Handles supported inputs",
+  ].join("\n");
+  const plugin = pluginWithTaskTag();
+  plugin.taskTagIdentityForLine = (line) => {
+    assert.equal(line, "- [ ] #task Ship the exporter ^export");
+    return { type: "BUILD", hue: "blue", state: "explicit", inherited: false };
+  };
+  plugin.setupTaskReqMarks();
+  plugin.renderTaskReqsIn(fx.root, {
+    sourcePath: "project.md",
+    getSectionInfo: () => ({ text: source, lineStart: 0, lineEnd: 1 }),
+  });
+  assert.equal(li.getAttribute("data-bob-req"), "true");
+  assert.equal(li.getAttribute("data-bob-req-depth"), "1");
+  assert.equal(li.getAttribute("data-bob-req-state"), "pending");
+  assert.equal(li.getAttribute("data-bob-type-hue"), "blue");
+  assert.match(input.getAttribute("aria-label"), /Requirement · level 1 of “Ship the exporter”/);
+  assert.equal(input.getAttribute("data-tooltip-position"), "top");
+  assert.equal(fx.root.childNodes.length, 1, "the processor does not create DOM nodes");
+});
+
+test("requirement styles use the capped hash mask, state styling and inert checkbox", () => {
+  const css = fs.readFileSync(
+    path.join(__dirname, "..", "plugins", "bob-ledger-tools", "styles.css"),
+    "utf8",
+  );
+  assert.equal(css.split("--bob-req-glyph:").length - 1, 1);
+  assert.ok(css.includes("mask-image: var(--bob-req-glyph)"));
+  assert.ok(css.includes("pointer-events: none !important"));
+  assert.ok(css.includes("appearance: none !important"));
+  assert.ok(css.includes('[data-bob-req-state="dropped"]'));
+  assert.ok(css.includes('[data-bob-req-state="excluded"]'));
+  assert.ok(css.includes('[data-bob-req="true"][data-task="-"]'));
+});
 
 test("Live Preview decorations cover exactly the tag and respect reveal and code", () => {
   const plugin = pluginWithTaskTag();

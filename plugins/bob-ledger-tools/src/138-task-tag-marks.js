@@ -5,7 +5,7 @@
 // listener-free DOM builder, and the Live Preview widget. Every
 // helper is synchronous and never throws; bad input yields null or an
 // empty list. Mirrors the priority-mark code paths in
-// `135-priority-marks.js` and reuses `freshnessTaskStatus` and
+// `135-priority-marks.js` and reuses the generic `freshnessCheckboxStatus` and
 // `freshnessMarkPosInCode` (code exclusion) from the sibling
 // fragments. The mark is truthful, never guessing: only exact, whole
 // `#task` tags on task lines get a mark. A `#task` tag immediately
@@ -157,7 +157,7 @@ function refTaskPairEnd(text, taskTo) {
 
 // A Live Preview line's task-tag-mark ranges, in line order: the
 // boundary tokens gated by the task-line check
-// (`freshnessTaskStatus(lineText) !== null`, quote-aware, so
+// (`freshnessCheckboxStatus(lineText) !== null`, quote-aware, so
 // callouts and numbered lists count). Ref pairs keep precedence,
 // then `#task #prj` pairs, then canonical `#gtd` plus `#pre`/`#post`
 // partner runs. Exact `#hide` tokens become their own `hide` ranges.
@@ -174,7 +174,7 @@ function taskTagMarkRanges(lineText) {
       return Object.freeze([]);
     }
     try {
-      if (freshnessTaskStatus(lineText) === null) {
+      if (freshnessCheckboxStatus(lineText) === null) {
         return Object.freeze([]);
       }
     } catch (error) {

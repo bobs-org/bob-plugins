@@ -4,7 +4,9 @@ const {
   freshnessSetRefreshLine,
   freshnessStampLine,
   freshnessKeepLine,
+  freshnessTaskStatus,
   readFreshness,
+  LedgerToolsPlugin,
   D,
 } = require("./ledger-tools-harness.cjs");
 // docs/freshness.md §9: input line, expected line, `changed`.
@@ -101,6 +103,19 @@ const PLACEMENT_VECTORS = [
     true,
   ],
 ];
+
+test("freshness helpers and API wrappers refuse checkbox rows without #task", () => {
+  const line = "- [ ] Pack charger [fresh:: 2026-10-01]";
+  assert.equal(freshnessTaskStatus(line), " ", "checkbox-shape consumers retain checklist support");
+  assert.equal(freshnessStampLine(line, D).refused, "not_task");
+  assert.equal(freshnessSetRefreshLine(line, 30, D).refused, "not_task");
+  assert.equal(freshnessKeepLine(line, D, { counted: true }).refused, "not_task");
+  const plugin = new LedgerToolsPlugin({}, {});
+  assert.equal(plugin.apiFreshnessStampLine(line, D), line);
+  assert.equal(plugin.apiFreshnessSetRefreshLine(line, 30, D), line);
+  assert.equal(plugin.apiFreshnessKeepLine(line, D, { counted: true }), line);
+  assert.equal(plugin.apiFreshnessMarkUnblockedLine(line, { today: D }), line);
+});
 
 test("placement vectors P1-P11, P14-P16, P18 stamp canonically", () => {
   for (const [id, input, expected, changed] of PLACEMENT_VECTORS) {

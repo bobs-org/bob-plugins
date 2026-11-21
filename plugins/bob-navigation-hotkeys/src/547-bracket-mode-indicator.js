@@ -26,7 +26,7 @@ const BRACKET_MODE_FAMILIES = Object.freeze([
     name: "links",
     keys: "]n / [n",
     tooltip: "]] / [[ open the next / previous link (]n / [n)",
-    upperTooltip: "]} / [{ have no link variant (no ]N / [N)",
+    upperTooltip: "]} / [{ jump to the next / previous link group (]N / [N)",
     segmentAria: "Links (]n / [n)",
   }),
   Object.freeze({

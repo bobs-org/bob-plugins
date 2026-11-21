@@ -145,6 +145,7 @@
   "480a-task-scope-api.js",
   "481-review-group-jump.js",
   "482-walk-mode-nav-api.js",
+  "483-nav-group-links.js",
   "485-blocks-nav-api.js",
   "486-relations-nav-api.js",
   "490-plugin-lifecycle.js",

@@ -1,11 +1,9 @@
 // `]]` / `[[` repeat the last bracket-walk family command used in this vault.
 // `]}` / `[{` repeat that family's uppercase jump (`]S` / `[S` review groups,
-// `]W` / `[W` lanes, `]B` / `[B` bank days); links (`n`) have no uppercase walk.
+// `]W` / `[W` lanes, `]N` / `[N` link groups, `]B` / `[B` bank days).
 const BRACKET_REPEAT_STORAGE_KEY = "bob-navigation-hotkeys-bracket-repeat";
 const BRACKET_REPEAT_EMPTY_NOTICE =
   "Nothing to repeat yet — press ]s, ]w, ]n, or ]b first";
-const BRACKET_REPEAT_NO_UPPERCASE_NOTICE =
-  "No uppercase link walk — ]} / [{ repeat ]S / [S, ]W / [W, or ]B / [B";
 
 function normalizeBracketRepeatType(value) {
   return value === "s" || value === "w" || value === "n" || value === "b" ? value : null;
@@ -21,8 +19,8 @@ const BRACKET_REPEAT_PLANS = Object.freeze({
     backward: Object.freeze({ method: "jumpToLaneTask", args: Object.freeze([-1]) }),
   }),
   n: Object.freeze({
-    forward: Object.freeze({ method: "openLabeledBodyLink", args: Object.freeze(["next"]) }),
-    backward: Object.freeze({ method: "openLabeledBodyLink", args: Object.freeze(["prev"]) }),
+    forward: Object.freeze({ method: "openLabeledBodyLink", args: Object.freeze(["next", Object.freeze({ viaRepeat: true })]) }),
+    backward: Object.freeze({ method: "openLabeledBodyLink", args: Object.freeze(["prev", Object.freeze({ viaRepeat: true })]) }),
   }),
   b: Object.freeze({
     forward: Object.freeze({ method: "jumpToBankRow", args: Object.freeze([1]) }),
@@ -51,7 +49,10 @@ const BRACKET_REPEAT_UPPERCASE_PLANS = Object.freeze({
       args: Object.freeze([-1, Object.freeze({ laneJump: true })]),
     }),
   }),
-  n: null,
+  n: Object.freeze({
+    forward: Object.freeze({ method: "openGroupLink", args: Object.freeze(["next", Object.freeze({ viaRepeat: true })]) }),
+    backward: Object.freeze({ method: "openGroupLink", args: Object.freeze(["prev", Object.freeze({ viaRepeat: true })]) }),
+  }),
   b: Object.freeze({
     forward: Object.freeze({
       method: "jumpToBankRow",
@@ -137,11 +138,7 @@ class BobNavigationHotkeysBracketRepeatMixin {
       uppercase ? { uppercase: true } : {},
     );
     if (!plan) {
-      const message =
-        uppercase && type !== null
-          ? BRACKET_REPEAT_NO_UPPERCASE_NOTICE
-          : BRACKET_REPEAT_EMPTY_NOTICE;
-      new Notice(message);
+      new Notice(BRACKET_REPEAT_EMPTY_NOTICE);
       try {
         if (typeof this.flashBracketModeIndicator === "function") {
           this.flashBracketModeIndicator("empty");

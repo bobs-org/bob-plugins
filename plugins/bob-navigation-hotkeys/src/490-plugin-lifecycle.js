@@ -179,6 +179,17 @@ class BobNavigationHotkeysPlugin extends Plugin {
     });
 
     this.addCommand({
+      id: "open-prev-group-link",
+      name: "Open previous group link ([N)",
+      callback: () => this.openGroupLink("prev"),
+    });
+    this.addCommand({
+      id: "open-next-group-link",
+      name: "Open next group link (]N)",
+      callback: () => this.openGroupLink("next"),
+    });
+
+    this.addCommand({
       id: "repeat-next-bracket-walk",
       name: "Repeat last bracket walk forward (]s, ]w, ]n, or ]b)",
       callback: () => this.repeatBracketWalk(1),
@@ -192,13 +203,13 @@ class BobNavigationHotkeysPlugin extends Plugin {
 
     this.addCommand({
       id: "repeat-next-uppercase-bracket-walk",
-      name: "Repeat last bracket walk forward, uppercase (]S, ]W, or ]B)",
+      name: "Repeat last bracket walk forward, uppercase (]S, ]W, ]N, or ]B)",
       callback: () => this.repeatBracketWalk(1, { uppercase: true }),
     });
 
     this.addCommand({
       id: "repeat-prev-uppercase-bracket-walk",
-      name: "Repeat last bracket walk backward, uppercase ([S, [W, or [B)",
+      name: "Repeat last bracket walk backward, uppercase ([S, [W, [N, or [B)",
       callback: () => this.repeatBracketWalk(-1, { uppercase: true }),
     });
 

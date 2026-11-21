@@ -993,7 +993,7 @@ module.exports.helpers = {
   renderLaneWalkEmptyFragment,
   showLaneWalkNotice,
   normalizeBracketRepeatType, planBracketRepeat, BRACKET_REPEAT_UPPERCASE_PLANS,
-  BRACKET_REPEAT_STORAGE_KEY, BRACKET_REPEAT_EMPTY_NOTICE, BRACKET_REPEAT_NO_UPPERCASE_NOTICE,
+  BRACKET_REPEAT_STORAGE_KEY, BRACKET_REPEAT_EMPTY_NOTICE,
   BRACKET_MODE_FAMILIES, BRACKET_MODE_FLASH_MS, WALK_MODE_DOORBELL_EVENT, fireWalkModeDoorbell,
   bracketModeViewKey, buildBracketModeView, ensureBracketModeDom, paintBracketModeIndicator, createWalkModeApi,
 };

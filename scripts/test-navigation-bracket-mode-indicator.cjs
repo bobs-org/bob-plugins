@@ -55,7 +55,6 @@ const {
   normalizeBracketRepeatType,
   BRACKET_REPEAT_STORAGE_KEY,
   BRACKET_REPEAT_EMPTY_NOTICE,
-  BRACKET_REPEAT_NO_UPPERCASE_NOTICE,
   BRACKET_MODE_FAMILIES,
   BRACKET_MODE_FLASH_MS,
   bracketModeViewKey,
@@ -272,7 +271,7 @@ test("view model covers s, w, n, b, null, and garbage", () => {
   const expectations = [
     ["s", 0, "review walk", "]] / [[ repeat the review walk (]s / [s)", "]} / [{ jump to the next / previous review group (]S / [S)", "Review walk (]s / [s)"],
     ["w", 1, "lane walk", "]] / [[ repeat the lane walk (]w / [w)", "]} / [{ jump to the next / previous lane (]W / [W)", "Lane walk (]w / [w)"],
-    ["n", 2, "links", "]] / [[ open the next / previous link (]n / [n)", "]} / [{ have no link variant (no ]N / [N)", "Links (]n / [n)"],
+    ["n", 2, "links", "]] / [[ open the next / previous link (]n / [n)", "]} / [{ jump to the next / previous link group (]N / [N)", "Links (]n / [n)"],
     ["b", 3, "bank walk", "]] / [[ repeat the bank walk (]b / [b)", "]} / [{ jump to the next / previous bank day (]B / [B)", "Bank walk (]b / [b)"],
   ];
   for (const [type, index, name, firstLine, secondLine, segmentAria] of expectations) {
@@ -614,7 +613,7 @@ test("onunload clears flash and instant timers", async () => {
   assert.equal(plugin.bracketModeInstantFrame, null);
 });
 
-test("uppercase repeat flashes forward and backward; no-uppercase flashes empty", async () => {
+test("uppercase repeat flashes forward and backward, including link groups", async () => {
   const { plugin } = createMountedPlugin();
   plugin.rememberBracketRepeatType("s");
   plugin.jumpToDueTask = () => true;
@@ -629,20 +628,12 @@ test("uppercase repeat flashes forward and backward; no-uppercase flashes empty"
   notices.length = 0;
   plugin.rememberBracketRepeatType("n");
   let walked = false;
-  plugin.jumpToDueTask = () => {
-    walked = true;
-  };
-  plugin.jumpToLaneTask = () => {
-    walked = true;
-  };
-  plugin.openLabeledBodyLink = () => {
-    walked = true;
-  };
-  assert.equal(plugin.repeatBracketWalk(1, { uppercase: true }), false);
-  assert.equal(walked, false);
-  assert.deepEqual(notices, [BRACKET_REPEAT_NO_UPPERCASE_NOTICE]);
-  assert.equal(plugin.bracketModeEl.getAttribute("data-bracket-flash"), "empty");
-  await sleep(BRACKET_MODE_FLASH_MS.empty + 60);
+  plugin.openGroupLink = () => { walked = true; return true; };
+  assert.equal(plugin.repeatBracketWalk(1, { uppercase: true }), true);
+  assert.equal(walked, true);
+  assert.deepEqual(notices, []);
+  assert.equal(plugin.bracketModeEl.getAttribute("data-bracket-flash"), "forward");
+  await sleep(BRACKET_MODE_FLASH_MS.forward + 60);
 });
 
 test("per-family attention dots off-family and inks the selected s and b letters", () => {
@@ -802,12 +793,12 @@ test("attention ink styles carry no motion and forced-colors uses HighlightText"
   assert.ok(forced.includes("HighlightText"));
 });
 
-test("walkMode v6 accepts w, still refuses n, and reports the version", () => {
+test("walkMode v7 accepts w, still refuses n, and reports the version", () => {
   const { createWalkModeApi } = helpers;
   assert.equal(typeof createWalkModeApi, "function");
   const plugin = { bracketModeAttention: null, refreshBracketModeIndicator: () => {} };
   const api = createWalkModeApi(plugin);
-  assert.equal(api.version, 6);
+  assert.equal(api.version, 7);
   assert.deepEqual(api.setAttention("w", { tier: "over", label: "Lanes over limit: WIP 12/10 — click to show" }), { ok: true });
   assert.deepEqual(plugin.bracketModeAttention.w, { tier: "over", label: "Lanes over limit: WIP 12/10 — click to show" });
   assert.deepEqual(api.setAttention("w", null), { ok: true });

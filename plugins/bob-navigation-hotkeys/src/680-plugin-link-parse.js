@@ -6,9 +6,10 @@ function renderedLinkMatchesNavLabel(renderedText, label) {
   const text = String(renderedText === undefined || renderedText === null ? "" : renderedText).trim();
   const wanted = String(label === undefined || label === null ? "" : label).trim();
   if (!text) return false;
+  if ((wanted === "prev" || wanted === "next") && navGroupRole(text)) return false;
   if (text === wanted) return true;
-  if (wanted === "prev") return /^[‹<]/.test(text);
-  if (wanted === "next") return /^[›>]/.test(text) || /[›>]$/.test(text);
+  if (wanted === "prev") return /^(?:‹|<(?!<))/.test(text);
+  if (wanted === "next") return /^(?:›|>(?!>))/.test(text) || /(?:›|(?<!>)>)$/.test(text);
   return false;
 }
 

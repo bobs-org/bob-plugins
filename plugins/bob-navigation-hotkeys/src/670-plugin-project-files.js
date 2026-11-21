@@ -140,6 +140,10 @@ class BobNavigationHotkeysProjectFileMixin {
     } catch (error) {
       result = null;
     }
+    if (result?.code === "pre-adoption") {
+      new Notice(result.message || "This period predates Bob period notes — navigation never creates it");
+      return false;
+    }
     if (!result || result.ok !== true || !this.isMarkdownFile(result.file)) {
       const reason = result && result.message ? result.message : "bob periods ensure failed";
       new Notice(`Could not create ${name} — ${reason}`);
@@ -148,24 +152,16 @@ class BobNavigationHotkeysProjectFileMixin {
     return this.openMarkdownFileWithLeafReuse(result.file, "Could not open note");
   }
 
-  async openLabeledBodyLink(label) {
+  async openLabeledBodyLink(label, options = {}) {
     const context = await this.getActiveMarkdownContext();
-    if (!context) {
-      return;
-    }
-
-    const link = this.findFirstRenderedLink(context.content, label);
-    if (!link) {
+    if (!context) return false;
+    const snapshot = resolveNavLinks(this, { path: context.file.path, content: context.content });
+    const stop = snapshot[label];
+    if (!stop) {
       new Notice(`No ${label} link found`);
-      return;
+      return false;
     }
-
-    await this.openOrCreateLinkTarget(
-      link.target,
-      context.file.path,
-      `${this.capitalize(label)} note not found`,
-      link.renderedText,
-    );
+    return this.openNavLinkStop(stop, context.file.path, label, options);
   }
 
   async openOrCreateLinkTarget(

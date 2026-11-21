@@ -35,4 +35,5 @@ Object.assign(module.exports.helpers, {
   // Period-note links: `]n` / `[n` labels and bob-owned creation.
   isPeriodNoteCreationPath,
   renderedLinkMatchesNavLabel,
+  navGroupRole, authoredNavGroups, resolveNavLinks,
 });

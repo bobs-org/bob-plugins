@@ -78,6 +78,7 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysProjectConversionMixin,
   BobNavigationHotkeysProjectPromotionMixin,
   BobNavigationHotkeysProjectFileMixin,
+  BobNavigationHotkeysGroupLinksMixin,
   BobNavigationHotkeysGoToTaskUriMixin,
   BobNavigationHotkeysOpenNotesUriMixin,
   BobNavigationHotkeysTaskLandingMixin,

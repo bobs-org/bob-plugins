@@ -1,4 +1,4 @@
-// Additive nav `api.walkMode` v6: the persisted bracket-walk family plus a
+// Additive nav `api.walkMode` v7: the persisted bracket-walk family plus a
 // workspace doorbell. `current()` returns the persisted family ("s", "w",
 // "n", or null for unset) via `readBracketRepeatType()`; invalid stored
 // values normalize to null and it never throws. `select(type)` behaves
@@ -13,6 +13,7 @@
 // v5 adds `w` attention for lanes over limit. v6 paints the selected family's
 // attention as letter ink instead of hiding it; ledger keeps pushing attention
 // for the selected family.
+// v7 adds group stops and the provider fallback through resolveNavLinks.
 // Ledger feature-detects each member version.
 // The doorbell fires from `rememberBracketRepeatType` only on an actual
 // change and once at plugin setup after the stored value is first read. It
@@ -34,7 +35,7 @@ function fireWalkModeDoorbell(plugin) {
 
 function createWalkModeApi(plugin) {
   return Object.freeze({
-    version: 6,
+    version: 7,
     current() {
       try {
         if (!plugin || typeof plugin.readBracketRepeatType !== "function") {
@@ -140,43 +141,7 @@ function createWalkModeApi(plugin) {
         if (!plugin.isMarkdownFile(sourceFile)) {
           return Object.freeze({ ok: false, reason: "invalid-source" });
         }
-        const resolve = (label) => {
-          const link = plugin.findFirstRenderedLink(content, label);
-          if (!link) {
-            return null;
-          }
-          let candidate = null;
-          try {
-            candidate = plugin.toLineLinkCandidate(
-              {
-                target: link.target,
-                renderedText: link.renderedText,
-              },
-              path,
-              0,
-            );
-          } catch (error) {
-            candidate = null;
-          }
-          return Object.freeze({
-            text: String(link.renderedText || ""),
-            target: String(link.target || ""),
-            path:
-              candidate && typeof candidate.path === "string"
-                ? candidate.path
-                : null,
-            exists: Boolean(
-              candidate &&
-              candidate.actionKind === "open" &&
-              candidate.resolvedFile,
-            ),
-          });
-        };
-        return Object.freeze({
-          ok: true,
-          prev: resolve("prev"),
-          next: resolve("next"),
-        });
+        return resolveNavLinks(plugin, { path, content });
       } catch (error) {
         return Object.freeze({ ok: false, reason: "api-failed" });
       }

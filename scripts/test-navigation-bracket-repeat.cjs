@@ -48,7 +48,6 @@ const {
   BRACKET_REPEAT_UPPERCASE_PLANS,
   BRACKET_REPEAT_STORAGE_KEY,
   BRACKET_REPEAT_EMPTY_NOTICE,
-  BRACKET_REPEAT_NO_UPPERCASE_NOTICE,
 } = helpers;
 
 function createLoadedPlugin({ storage = new Map() } = {}) {
@@ -112,8 +111,8 @@ test("pure helpers accept s, w, n, and b and return frozen direction plans", () 
     ["s", -1, "jumpToDueTask", [-1]],
     ["w", 1, "jumpToLaneTask", [1]],
     ["w", -1, "jumpToLaneTask", [-1]],
-    ["n", 1, "openLabeledBodyLink", ["next"]],
-    ["n", -1, "openLabeledBodyLink", ["prev"]],
+    ["n", 1, "openLabeledBodyLink", ["next", { viaRepeat: true }]],
+    ["n", -1, "openLabeledBodyLink", ["prev", { viaRepeat: true }]],
     ["b", 1, "jumpToBankRow", [1]],
     ["b", -1, "jumpToBankRow", [-1]],
   ];
@@ -200,7 +199,7 @@ test("repeat delegates every type in both directions with key-owned direction", 
   for (const [type, rows] of [
     ["s", [[1, "jumpToDueTask", [1]], [-1, "jumpToDueTask", [-1]]]],
     ["w", [[1, "jumpToLaneTask", [1]], [-1, "jumpToLaneTask", [-1]]]],
-    ["n", [[1, "openLabeledBodyLink", ["next"]], [-1, "openLabeledBodyLink", ["prev"]]]],
+    ["n", [[1, "openLabeledBodyLink", ["next", { viaRepeat: true }]], [-1, "openLabeledBodyLink", ["prev", { viaRepeat: true }]]]],
     ["b", [[1, "jumpToBankRow", [1]], [-1, "jumpToBankRow", [-1]]]],
   ]) {
     for (const [direction, method, expectedArgs] of rows) {
@@ -397,7 +396,7 @@ test("other navigation, internal advances, and blank-line commands do not record
   assert.equal(saves.length, initialSaves);
 });
 
-test("uppercase planner returns group and lane jumps; n has no uppercase plan", () => {
+test("uppercase planner returns group, lane, bank, and guarded link jumps", () => {
   assert.ok(Object.isFrozen(BRACKET_REPEAT_UPPERCASE_PLANS));
   const rows = [
     ["s", 1, "jumpToDueTask", [1, { groupJump: true }]],
@@ -413,21 +412,17 @@ test("uppercase planner returns group and lane jumps; n has no uppercase plan", 
     assert.ok(Object.isFrozen(plan));
     assert.ok(Object.isFrozen(plan.args));
   }
-  assert.equal(planBracketRepeat("n", 1, { uppercase: true }), null);
-  assert.equal(planBracketRepeat("n", -1, { uppercase: true }), null);
+  assert.deepEqual(planBracketRepeat("n", 1, { uppercase: true }), { method: "openGroupLink", args: ["next", { viaRepeat: true }] });
+  assert.deepEqual(planBracketRepeat("n", -1, { uppercase: true }), { method: "openGroupLink", args: ["prev", { viaRepeat: true }] });
   assert.equal(planBracketRepeat("unknown", 1, { uppercase: true }), null);
-  assert.equal(
-    BRACKET_REPEAT_NO_UPPERCASE_NOTICE,
-    "No uppercase link walk — ]} / [{ repeat ]S / [S, ]W / [W, or ]B / [B",
-  );
 });
 
 test("registration adds uppercase repeat commands with no hotkeys", () => {
   const { commands } = createLoadedPlugin();
   const next = command(commands, "repeat-next-uppercase-bracket-walk");
   const prev = command(commands, "repeat-prev-uppercase-bracket-walk");
-  assert.equal(next.name, "Repeat last bracket walk forward, uppercase (]S, ]W, or ]B)");
-  assert.equal(prev.name, "Repeat last bracket walk backward, uppercase ([S, [W, or [B)");
+  assert.equal(next.name, "Repeat last bracket walk forward, uppercase (]S, ]W, ]N, or ]B)");
+  assert.equal(prev.name, "Repeat last bracket walk backward, uppercase ([S, [W, [N, or [B)");
   assert.equal(Object.hasOwn(next, "hotkeys"), false);
   assert.equal(Object.hasOwn(prev, "hotkeys"), false);
   const legacyNext = command(commands, "repeat-next-bracket-walk");
@@ -500,7 +495,7 @@ test("uppercase sequence keeps family and writes no new storage", () => {
   assert.equal(writes.length, laneSaveCount);
 });
 
-test("uppercase cold start shows the empty notice; n shows the no-uppercase notice", () => {
+test("uppercase cold start shows the empty notice; n dispatches a group jump", () => {
   for (const stored of [undefined, "garbage"]) {
     notices.length = 0;
     const storage = new Map();
@@ -523,22 +518,12 @@ test("uppercase cold start shows the empty notice; n shows the no-uppercase noti
     assert.deepEqual(notices, [BRACKET_REPEAT_EMPTY_NOTICE]);
   }
   for (const direction of [1, -1]) {
-    notices.length = 0;
     const { plugin } = makeBarePlugin();
     plugin.rememberBracketRepeatType("n");
-    let moved = false;
-    plugin.jumpToDueTask = () => {
-      moved = true;
-    };
-    plugin.jumpToLaneTask = () => {
-      moved = true;
-    };
-    plugin.openLabeledBodyLink = () => {
-      moved = true;
-    };
-    assert.equal(plugin.repeatBracketWalk(direction, { uppercase: true }), false);
-    assert.equal(moved, false);
-    assert.deepEqual(notices, [BRACKET_REPEAT_NO_UPPERCASE_NOTICE]);
+    let call;
+    plugin.openGroupLink = (...args) => { call = args; return true; };
+    assert.equal(plugin.repeatBracketWalk(direction, { uppercase: true }), true);
+    assert.deepEqual(call, [direction < 0 ? "prev" : "next", { viaRepeat: true }]);
   }
 });
 
@@ -645,7 +630,7 @@ test("walkMode api is versioned and the top-level api version is unchanged", () 
   const { plugin } = createDoorbellPlugin();
   assert.equal(plugin.api.version, 3);
   assert.ok(plugin.api.walkMode);
-  assert.equal(plugin.api.walkMode.version, 6);
+  assert.equal(plugin.api.walkMode.version, 7);
   assert.equal(
     WALK_MODE_DOORBELL_EVENT,
     "bob-navigation-hotkeys:walk-mode",
@@ -752,9 +737,9 @@ test("a throwing workspace trigger never breaks recording or selection", () => {
   assert.equal(plugin.api.walkMode.current(), "w");
 });
 
-test("walkMode v6 degrades with a null plugin", () => {
+test("walkMode v7 degrades with a null plugin", () => {
   const api = createWalkModeApi(null);
-  assert.equal(api.version, 6);
+  assert.equal(api.version, 7);
   assert.ok(Object.isFrozen(api));
   assert.equal(api.current(), null);
   assert.deepEqual(api.select("s"), { ok: false, reason: "unavailable" });

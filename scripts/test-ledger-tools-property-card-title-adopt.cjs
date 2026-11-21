@@ -599,6 +599,10 @@ test("unstable and insert-failed paths stay in the fallback until a new path or 
   assert.equal(live.view.dispatched.length, 0, "no ownership after a failed mount");
   assert.equal(heading(liveNode).getAttribute("aria-level"), null);
   assert.equal(H.propertyCardAdoptTitle(live.scope, liveNode, liveOptions).mode, "fallback");
+  assert.equal(H.propertyCardAdoptRelease(live.scope, undefined, undefined, { preserveFallback: true }), false,
+    "routine cleanup can keep the sticky fallback after an insert failure");
+  assert.equal(H.propertyCardAdoptTitle(live.scope, liveNode, liveOptions).mode, "fallback",
+    "the failed path stays in the fallback through routine cleanup");
   assert.equal(H.propertyCardAdoptRelease(live.scope), false, "nothing mounted, memory cleared");
   assert.equal(H.propertyCardAdoptTitle(live.scope, liveNode, liveOptions).mode, "slot");
   liveDefer.flush();

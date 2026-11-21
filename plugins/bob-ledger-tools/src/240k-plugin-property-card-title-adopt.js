@@ -365,14 +365,15 @@ function propertyCardAdoptedEntry(scope) {
 // no card must not drop the other species' slot. Also clears that path's
 // remembered fallback unless a kind filter skipped a live occupant.
 // Never calls onLost.
-function propertyCardAdoptRelease(scope, path, kind) {
+function propertyCardAdoptRelease(scope, path, kind, options = {}) {
   const bound = path === undefined || path === null || path === "" ? "" : String(path);
   const boundKind = kind == null || kind === "" ? "" : String(kind);
+  const preserveFallback = options?.preserveFallback === true;
   const entry = propertyCardAdoptions.get(scope);
   if (entry && !entry.released && boundKind && entry.kind && entry.kind !== boundKind) {
     return false;
   }
-  propertyCardAdoptForget(scope, bound);
+  if (!preserveFallback) propertyCardAdoptForget(scope, bound);
   if (!entry || entry.released) return false;
   if (bound && entry.path !== bound) return false;
   propertyCardAdoptDrop(scope, entry);

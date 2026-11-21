@@ -82314,14 +82314,15 @@ function propertyCardAdoptedEntry(scope) {
 // no card must not drop the other species' slot. Also clears that path's
 // remembered fallback unless a kind filter skipped a live occupant.
 // Never calls onLost.
-function propertyCardAdoptRelease(scope, path, kind) {
+function propertyCardAdoptRelease(scope, path, kind, options = {}) {
   const bound = path === undefined || path === null || path === "" ? "" : String(path);
   const boundKind = kind == null || kind === "" ? "" : String(kind);
+  const preserveFallback = options?.preserveFallback === true;
   const entry = propertyCardAdoptions.get(scope);
   if (entry && !entry.released && boundKind && entry.kind && entry.kind !== boundKind) {
     return false;
   }
-  propertyCardAdoptForget(scope, bound);
+  if (!preserveFallback) propertyCardAdoptForget(scope, bound);
   if (!entry || entry.released) return false;
   if (bound && entry.path !== bound) return false;
   propertyCardAdoptDrop(scope, entry);
@@ -97653,8 +97654,8 @@ class BobLedgerToolsAlbumHeaderMixin {
     } catch (_) { return null; }
   }
 
-  albumHeaderReleaseAdoption(scope, sourcePath = "") {
-    try { return propertyCardAdoptRelease(scope, sourcePath || undefined, "album"); } catch (_) { return false; }
+  albumHeaderReleaseAdoption(scope, sourcePath = "", options = {}) {
+    try { return propertyCardAdoptRelease(scope, sourcePath || undefined, "album", options); } catch (_) { return false; }
   }
 
   // Body-placed card nodes for this path under root: never the slot node,
@@ -97674,7 +97675,7 @@ class BobLedgerToolsAlbumHeaderMixin {
   // still owned the title.
   albumHeaderRemoveReading(root, scope = root, sourcePath = "") {
     if (!root) return;
-    this.albumHeaderReleaseAdoption(scope, sourcePath);
+    this.albumHeaderReleaseAdoption(scope, sourcePath, { preserveFallback: true });
     for (const node of Array.from(root.querySelectorAll?.(`.${ALBUM_HEADER_CLASS}`) || [])) {
       if (!this.albumHeaderNodeBelongs(node, root)) continue;
       const ownedPath = albumHeaderPath(node.getAttribute?.("data-album-source") || "");
@@ -106213,8 +106214,8 @@ class BobLedgerToolsRecordSheetTitleMixin {
     }
   }
 
-  recordSheetReleaseAdoption(scope, sourcePath = "") {
-    try { return propertyCardAdoptRelease(scope, sourcePath || undefined, "record"); } catch (_) { return false; }
+  recordSheetReleaseAdoption(scope, sourcePath = "", options = {}) {
+    try { return propertyCardAdoptRelease(scope, sourcePath || undefined, "record", options); } catch (_) { return false; }
   }
 
   recordSheetBodyNodes(root, sourcePath, exclude = null) {
@@ -106254,7 +106255,7 @@ class BobLedgerToolsRecordSheetTitleMixin {
 
   recordSheetRemoveReading(root, scope = root, sourcePath = "") {
     if (!root) return;
-    this.recordSheetReleaseAdoption(scope, sourcePath);
+    this.recordSheetReleaseAdoption(scope, sourcePath, { preserveFallback: true });
     this.recordWalkRemoveReading(root, sourcePath);
     for (const node of Array.from(root.querySelectorAll?.(`.${RECORD_SHEET_CLASS}`) || [])) {
       if (!this.recordSheetNodeBelongs(node, root)) continue;

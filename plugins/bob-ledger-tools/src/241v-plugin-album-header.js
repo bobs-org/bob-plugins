@@ -302,8 +302,8 @@ class BobLedgerToolsAlbumHeaderMixin {
     } catch (_) { return null; }
   }
 
-  albumHeaderReleaseAdoption(scope, sourcePath = "") {
-    try { return propertyCardAdoptRelease(scope, sourcePath || undefined, "album"); } catch (_) { return false; }
+  albumHeaderReleaseAdoption(scope, sourcePath = "", options = {}) {
+    try { return propertyCardAdoptRelease(scope, sourcePath || undefined, "album", options); } catch (_) { return false; }
   }
 
   // Body-placed card nodes for this path under root: never the slot node,
@@ -323,7 +323,7 @@ class BobLedgerToolsAlbumHeaderMixin {
   // still owned the title.
   albumHeaderRemoveReading(root, scope = root, sourcePath = "") {
     if (!root) return;
-    this.albumHeaderReleaseAdoption(scope, sourcePath);
+    this.albumHeaderReleaseAdoption(scope, sourcePath, { preserveFallback: true });
     for (const node of Array.from(root.querySelectorAll?.(`.${ALBUM_HEADER_CLASS}`) || [])) {
       if (!this.albumHeaderNodeBelongs(node, root)) continue;
       const ownedPath = albumHeaderPath(node.getAttribute?.("data-album-source") || "");

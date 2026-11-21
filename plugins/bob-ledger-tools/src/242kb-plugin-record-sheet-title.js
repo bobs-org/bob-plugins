@@ -37,8 +37,8 @@ class BobLedgerToolsRecordSheetTitleMixin {
     }
   }
 
-  recordSheetReleaseAdoption(scope, sourcePath = "") {
-    try { return propertyCardAdoptRelease(scope, sourcePath || undefined, "record"); } catch (_) { return false; }
+  recordSheetReleaseAdoption(scope, sourcePath = "", options = {}) {
+    try { return propertyCardAdoptRelease(scope, sourcePath || undefined, "record", options); } catch (_) { return false; }
   }
 
   recordSheetBodyNodes(root, sourcePath, exclude = null) {
@@ -78,7 +78,7 @@ class BobLedgerToolsRecordSheetTitleMixin {
 
   recordSheetRemoveReading(root, scope = root, sourcePath = "") {
     if (!root) return;
-    this.recordSheetReleaseAdoption(scope, sourcePath);
+    this.recordSheetReleaseAdoption(scope, sourcePath, { preserveFallback: true });
     this.recordWalkRemoveReading(root, sourcePath);
     for (const node of Array.from(root.querySelectorAll?.(`.${RECORD_SHEET_CLASS}`) || [])) {
       if (!this.recordSheetNodeBelongs(node, root)) continue;

@@ -12,10 +12,8 @@ const HELP_TEXT = [
   "Usage: node scripts/obsidian-title-block-e2e.cjs [OPTIONS]",
   "",
   "Prove shipped album, record, day, and period title blocks in an isolated",
-  "Obsidian vault: one card before Properties, scoped hiding, real Vim/search/",
-  "Outline/heading-link reveal, edit/undo, and fixture byte neutrality.",
-  "This phase covers the title-walkthrough inventory only; later phases extend",
-  "the same runner. Run the real walkthrough under xvfb-run -a on Linux.",
+  "Obsidian vault: ownership, reveal, first-paint native fallback, teardown,",
+  "denied surfaces, and fixture byte neutrality. Run under xvfb-run -a on Linux.",
   "Default executable is /snap/bin/obsidian.",
   "",
   "Options:",
@@ -26,7 +24,7 @@ const HELP_TEXT = [
   "  -h, --help             Print this help",
 ].join("\n");
 
-const PHASE = "title-walkthrough";
+const PHASE = "fail-open-proof";
 
 // Every mandatory check this phase must run. A missing, skipped, or unrun
 // name fails the walkthrough; later phases append, they do not rename these.
@@ -51,6 +49,15 @@ const REQUIRED_CHECKS = Object.freeze([
   "heading-link-live", "heading-link-reading",
   "edit-revealed-h1-stays-visible", "edit-undo-restores-bytes",
   "passive-bytes-neutral", "screenshots-captured", "no-console-exceptions",
+  "source-mode-fails-open", "source-mode-remounts", "file-switch-restores-native",
+  "leaf-close-clears-owner", "plugin-disable-restores-native",
+  "title-slot-unavailable-fallback", "title-slot-insert-failure-fallback",
+  "plugin-reenable-remounts", "title-slot-unavailable-recovers",
+  "title-slot-insert-failure-recovers", "repaint-failure-restores-native",
+  "surface-embed-album", "surface-embed-record", "surface-embed-day",
+  "surface-hover-album", "surface-hover-record", "surface-hover-day",
+  "surface-canvas-album", "surface-canvas-record", "surface-canvas-day",
+  "print-exclusion-cdp", "lifecycle-bytes-neutral",
 ]);
 
 function parseArgs(argv) {
@@ -311,6 +318,8 @@ function fixturePlan(today) {
       links: "links.md",
       ordinary: "ordinary.md",
       area: "body.md",
+      surfaces: "title-block-surfaces.md",
+      canvas: "title-block.canvas",
     },
   };
   const todayLink = plan.paths.today.replace(/\.md$/, "");
@@ -342,6 +351,17 @@ function fixturePlan(today) {
       "Jump to [[eat#Source heading]] and to [[" + todayLink + "#Notes]].", "",
       "- Body sentinel for the heading-link source.", "",
     ].join("\n"),
+    [plan.paths.surfaces]: [
+      "---", 'type: "[[note]]"', "---", "", "# Title-block surfaces", "",
+      "## Embeds", "", "![[eat]]", "", "![[eat/ramen]]", "", "![[" + todayLink + "]]", "",
+      "## Hover targets", "", "[[eat|Album target]]", "", "[[eat/ramen|Record target]]", "",
+      "[[" + todayLink + "|Day target]]", "",
+    ].join("\n"),
+    [plan.paths.canvas]: "{\n\t\"nodes\":[\n\t\t" + [
+      { id: "album", type: "file", file: "eat.md", x: 0, y: 0, width: 360, height: 500 },
+      { id: "record", type: "file", file: "eat/ramen.md", x: 420, y: 0, width: 360, height: 500 },
+      { id: "day", type: "file", file: plan.paths.today, x: 840, y: 0, width: 360, height: 500 },
+    ].map((node) => JSON.stringify(node)).join(",\n\t\t") + "\n\t],\n\t\"edges\":[]\n}",
     [plan.paths.ordinary]: "---\ntype: \"[[note]]\"\n---\n\n# Ordinary\n\nNothing to own here.\n",
   };
   const relative = [plan.paths.today, plan.paths.yesterday, plan.paths.empty, plan.paths.future, plan.paths.week, plan.paths.quarter, plan.paths.year];
@@ -415,6 +435,9 @@ function probeSource(notePath, options = {}) {
     const mode = view.getMode?.() || null;
     const source = Boolean(view.getState?.().source);
     const root = mode === "preview" ? view.previewMode?.containerEl : view.contentEl?.querySelector(".markdown-source-view") || view.contentEl;
+    const viewScope = mode === "preview"
+      ? (root?.matches?.(".markdown-preview-view") ? root : root?.querySelector?.(".markdown-preview-view"))
+      : (view.editor?.cm?.dom || root?.querySelector?.(".cm-editor"));
     const inEmbed = (node) => Boolean(node.closest(".markdown-embed, .internal-embed, .hover-popover, .canvas-node"));
     const shown = (node) => {
       if (!node || !node.isConnected) return false;
@@ -431,6 +454,9 @@ function probeSource(notePath, options = {}) {
     const cards = Array.from(root?.querySelectorAll(".bob-property-card") || []).filter((node) => !inEmbed(node));
     const embedCards = Array.from(root?.querySelectorAll(".bob-property-card") || []).filter(inEmbed);
     const properties = Array.from(root?.querySelectorAll(".metadata-container") || []).find((node) => !inEmbed(node)) || null;
+    const propertyRows = Array.from(root?.querySelectorAll(".metadata-property") || []).filter((node) => !inEmbed(node));
+    const ownedPropertyRows = propertyRows.filter((node) => node.classList?.contains("bob-property-card-owned-property"));
+    const taggedTitleSources = Array.from(root?.querySelectorAll(".bob-property-card-title-source") || []).filter((node) => !inEmbed(node));
     const card = cards[0] || null;
     const lineSelector = mode === "preview" ? "p, li, h1, h2, div.el-p, .task-list-item" : ".cm-line";
     const lineShown = (needle) => Array.from(root?.querySelectorAll(lineSelector) || [])
@@ -464,6 +490,22 @@ function probeSource(notePath, options = {}) {
       status: "pass", path: notePath, mode, source, leafId: leaf.id,
       cardCount: cards.length, embedCardCount: embedCards.length,
       ownsTitle: document.querySelectorAll(".bob-property-card-owns-title").length,
+      ownership: {
+        localTitleOwner: Boolean(viewScope?.classList?.contains("bob-property-card-owns-title")),
+        titleSourceTags: taggedTitleSources.length,
+        ownedPropertyRows: ownedPropertyRows.length,
+        hiddenOwnedPropertyRows: ownedPropertyRows.filter((node) => getComputedStyle(node).display === "none").length,
+        recordPropertyHider: Boolean(root?.querySelector?.(".bob-record-sheet-hides-properties")
+          || root?.classList?.contains("bob-record-sheet-hides-properties")),
+        titleSlotAvailable: (() => {
+          try { return Boolean(app.plugins.plugins["bob-ledger-tools"]?.constructor?.helpers?.propertyCardTitleSlotFor?.(viewScope)); }
+          catch (_) { return false; }
+        })(),
+        titleSlotStats: (() => {
+          try { return app.plugins.plugins["bob-ledger-tools"]?.constructor?.helpers?.propertyCardTitleSlotStats?.(viewScope) || null; }
+          catch (_) { return null; }
+        })(),
+      },
       card: card ? {
         kind: card.getAttribute("data-card-kind") || "",
         label: card.getAttribute("aria-label") || "",
@@ -475,6 +517,8 @@ function probeSource(notePath, options = {}) {
         slot: slotParent?.classList.contains("cm-sizer") ? "cm-sizer" : slotParent?.classList.contains("mod-header") ? "mod-header" : (slotParent?.className || "body"),
         beforeProperties: Boolean(properties && card.nextElementSibling === properties),
         mounted: shown(card),
+        display: getComputedStyle(card).display,
+        visibility: getComputedStyle(card).visibility,
       } : null,
       title: {
         inlineTitle: inlineTitle ? shown(inlineTitle) : null,
@@ -484,16 +528,172 @@ function probeSource(notePath, options = {}) {
           .map((node) => (node.textContent || "").trim().slice(0, 120)),
         navShown: lineShown("prev") + lineShown("‹"),
       },
-      properties: properties ? visible(properties) : { present: false },
+      properties: properties ? { ...visible(properties), rows: propertyRows.length, ownedRows: ownedPropertyRows.length } : { present: false, rows: 0, ownedRows: 0 },
       cursor,
       headings: { source: heading("Source heading"), notes: heading("Notes") },
     };
   })()`;
 }
 
+function lifecycleSnapshotSource(notePath, leafId) {
+  const state = probeSource(notePath, { leafId });
+  return `(() => {
+    const leafId = ${JSON.stringify(leafId)};
+    const notePath = ${JSON.stringify(notePath)};
+    const leaf = app.workspace.getLeafById(leafId);
+    const view = leaf?.view;
+    const state = view?.file?.path === notePath ? (${state}) : null;
+    const plugin = app.plugins.plugins["bob-ledger-tools"] || null;
+    const helpers = plugin?.constructor?.helpers || {};
+    const count = (selector) => document.querySelectorAll(selector).length;
+    return {
+      leafId, path: view?.file?.path || null, mode: view?.getMode?.() || null,
+      source: Boolean(view?.getState?.().source), state,
+      pluginEnabled: Boolean(app.plugins.enabledPlugins?.has?.("bob-ledger-tools")),
+      pluginLoaded: Boolean(plugin),
+      global: {
+        titleOwners: count(".bob-property-card-owns-title"),
+        hiddenSourceTags: count(".bob-property-card-title-source"),
+        ownedPropertyRows: count(".metadata-property.bob-property-card-owned-property"),
+        cards: count(".bob-property-card"),
+        titleSlotCards: count(".bob-property-card-title-slot"),
+        titleSlotEntries: (() => { try { return helpers.propertyCardTitleSlotLiveCount?.() ?? null; } catch (_) { return null; } })(),
+      },
+    };
+  })()`;
+}
+
+function lifecycleObservationSource(notePath, leafId, actionSource) {
+  const snapshot = lifecycleSnapshotSource(notePath, leafId);
+  return `(() => {
+    const sample = () => (${snapshot});
+    const before = sample();
+    let mutationCount = 0;
+    let mutationFrame = null;
+    let mutationFramePromise = null;
+    const nextFrame = () => new Promise((resolve) => requestAnimationFrame(() => resolve(sample())));
+    const observer = new MutationObserver((records) => {
+      mutationCount += records.length;
+      if (!mutationFramePromise) {
+        mutationFramePromise = new Promise((resolve) => requestAnimationFrame(() => {
+          mutationFrame = sample();
+          resolve(mutationFrame);
+        }));
+      }
+    });
+    observer.observe(document.documentElement, {
+      subtree: true, childList: true, attributes: true,
+      attributeFilter: ["class", "style", "data-property-key", "aria-level"],
+    });
+    return (async () => {
+      let actionResult;
+      try { actionResult = await (${actionSource})(); }
+      finally { observer.disconnect(); }
+      const firstObservedFrame = mutationFramePromise ? await mutationFramePromise : await nextFrame();
+      const afterActionFrame = await nextFrame();
+      return { before, firstObservedFrame, afterActionFrame, mutationCount, actionResult };
+    })();
+  })()`;
+}
+
+function surfaceProbeSource(surfaceKind, targetPath, expectedText, surfaceLeafId, ownerPath, ownerLeafId) {
+  const selector = surfaceKind === "hover" ? ".hover-popover"
+    : surfaceKind === "canvas" ? ".canvas-node" : ".markdown-embed";
+  // Resolve the control by its note path. Obsidian may replace a leaf while
+  // splitting/restoring a workspace; a stale id must not make a healthy,
+  // still-open control pane appear missing.
+  const owner = probeSource(ownerPath);
+  return `(() => {
+    const target = ${JSON.stringify(targetPath)}.replace(/\\.md$/i, "").toLocaleLowerCase();
+    const expectedText = ${JSON.stringify(expectedText)};
+    const surfaceKind = ${JSON.stringify(surfaceKind)};
+    const leaf = app.workspace.getLeafById(${JSON.stringify(surfaceLeafId)});
+    const root = leaf?.view?.getMode?.() === "preview"
+      ? leaf.view.previewMode?.containerEl : leaf?.view?.contentEl;
+    const normalize = (value) => String(value || "").replace(/\\.md$/i, "").replace(/^\\.\\//, "").toLocaleLowerCase();
+    const canvasRows = (() => {
+      const rows = leaf?.view?.canvas?.nodes;
+      if (rows && typeof rows.values === "function") return Array.from(rows.values());
+      if (rows && typeof rows === "object") return Object.values(rows);
+      return [];
+    })();
+    const canvasEntry = (node) => canvasRows.find((entry) => entry?.nodeEl === node
+      || entry?.containerEl === node
+      || entry?.nodeEl?.contains?.(node)
+      || (node?.getAttribute?.("data-node-id") && (entry?.id === node.getAttribute("data-node-id") || entry?.data?.id === node.getAttribute("data-node-id")))) || null;
+    const directRefs = (node) => [node?.getAttribute?.("data-href"), node?.getAttribute?.("data-path"), node?.getAttribute?.("src")]
+      .map(normalize).filter(Boolean);
+    const refs = (node) => {
+      const out = directRefs(node);
+      if (surfaceKind === "hover") {
+        for (const embed of node?.querySelectorAll?.(".markdown-embed, .internal-embed") || []) out.push(...directRefs(embed));
+      }
+      if (surfaceKind === "canvas") {
+        const entry = canvasEntry(node);
+        const data = entry?.data || entry || {};
+        const file = entry?.file;
+        out.push(...[data.file, data.path, file?.path, typeof file === "string" ? file : null].map(normalize).filter(Boolean));
+      }
+      return [...new Set(out)];
+    };
+    const candidates = Array.from((surfaceKind === "hover" ? document : root)?.querySelectorAll?.(${JSON.stringify(selector)}) || []);
+    const matchesTarget = (node) => refs(node).some((ref) => ref === target || ref.endsWith("/" + target));
+    // Obsidian's hover popover renderer does not expose the source path on its
+    // wrapper or nested markdown-embed in every supported app build. In this
+    // isolated fixture, the target heading is unique, so use that rendered
+    // content as the fallback identity while keeping the visibility/content
+    // assertions below. Embed and Canvas checks still require path identity.
+    const matched = candidates.filter((node) => matchesTarget(node)
+      || (surfaceKind === "hover" && expectedText && String(node.textContent || "").includes(expectedText)));
+    const visible = (node) => {
+      if (!node?.isConnected) return false;
+      const style = getComputedStyle(node); const rect = node.getBoundingClientRect();
+      return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+    };
+    const inViewport = (node) => {
+      const rect = node?.getBoundingClientRect?.();
+      return Boolean(rect && rect.bottom > 0 && rect.top < innerHeight && rect.right > 0 && rect.left < innerWidth);
+    };
+    const rows = matched.map((node) => ({
+      text: (node.textContent || "").slice(0, 500),
+      visible: visible(node),
+      inViewport: inViewport(node),
+      refs: refs(node),
+      matchedBy: matchesTarget(node) ? "path" : "fixture-heading",
+      cards: node.querySelectorAll(".bob-property-card").length,
+      titleOwners: node.querySelectorAll(".bob-property-card-owns-title").length,
+      titleSourceTags: node.querySelectorAll(".bob-property-card-title-source").length,
+      titleSlotCards: node.querySelectorAll(".bob-property-card-title-slot").length,
+      ownedPropertyRows: node.querySelectorAll(".metadata-property.bob-property-card-owned-property").length,
+      expectedTextVisible: Array.from(node.querySelectorAll("h1, h2, h3, p, li, .cm-line, .markdown-preview-section"))
+        .some((item) => visible(item) && (item.textContent || "").includes(expectedText)),
+    }));
+    const control = ${owner};
+    const pathValue = (value) => typeof value === "string" ? value
+      : (value && typeof value.path === "string" ? value.path : null);
+    return {
+      surfaceKind, target, path: leaf?.view?.file?.path || null, mode: leaf?.view?.getMode?.() || null,
+      candidateCount: candidates.length, matchedCount: matched.length, surfaces: rows,
+      candidateDiagnostics: surfaceKind === "hover" ? candidates.map((node) => ({
+        className: String(node.className || ""), refs: refs(node), text: (node.textContent || "").slice(0, 240),
+        embeds: Array.from(node.querySelectorAll(".markdown-embed, .internal-embed")).map((embed) => ({
+          className: String(embed.className || ""), refs: directRefs(embed), text: (embed.textContent || "").slice(0, 160),
+        })),
+      })) : [],
+      canvasFiles: surfaceKind === "canvas" ? canvasRows.map((entry) => {
+        const data = entry?.data || entry || {};
+        return { id: pathValue(entry?.id) || pathValue(data.id), file: pathValue(data.file) || pathValue(entry?.file) };
+      }) : [],
+      control: control || null,
+      controlOwned: Boolean(control?.ownership?.localTitleOwner && control.cardCount === 1),
+      rootReady: Boolean(root),
+    };
+  })()`;
+}
+
 function selfTest() {
   assert.equal(new Set(REQUIRED_CHECKS).size, REQUIRED_CHECKS.length);
-  assert.equal(PHASE, "title-walkthrough");
+  assert.equal(PHASE, "fail-open-proof");
   const args = parseArgs(["--executable", "/x/obsidian", "--out", "/tmp/a", "--report", "/tmp/r.json", "-s", "-h"]);
   assert.deepEqual(args, { executable: "/x/obsidian", out: "/tmp/a", report: "/tmp/r.json", selfTest: true, help: true });
   assert.throws(() => parseArgs(["-e"]), /--executable requires a PATH value/);
@@ -537,6 +737,9 @@ function selfTest() {
   assert.match(source, /^\(\(\) => \{/);
   assert.match(source, /bob-property-card/);
   assert.match(source, /aria-level="1"/);
+  assert.doesNotThrow(() => new Function("return " + lifecycleSnapshotSource("eat.md", "leaf-id")));
+  assert.doesNotThrow(() => new Function("return " + lifecycleObservationSource("eat.md", "leaf-id", "async () => true")));
+  assert.doesNotThrow(() => new Function("return " + surfaceProbeSource("embed", "eat.md", "Eat", "surface", "eat.md", "owner")));
 
   const healthy = REQUIRED_CHECKS.map((name) => ({ name, status: "pass", mandatory: true }));
   assert.equal(inventoryStatus(healthy).ok, true);
@@ -555,6 +758,7 @@ function selfTest() {
 
 module.exports = {
   HELP_TEXT, PHASE, REQUIRED_CHECKS, parseArgs, sha256Text, inventoryStatus,
-  fixturePlan, expectedSpecies, slotOf, placementFailures, probeSource, selfTest,
+  fixturePlan, expectedSpecies, slotOf, placementFailures, probeSource,
+  lifecycleSnapshotSource, lifecycleObservationSource, surfaceProbeSource, selfTest,
   albumListReport, keyEvents: days.keyEvents, dayCardTitle: days.dayCardTitle, localToday: days.localToday,
 };

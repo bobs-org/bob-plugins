@@ -28,12 +28,15 @@ test("obsidian-title-block-e2e --self-test", () => {
   assert.match(String(result.stdout || ""), /title-block/);
 });
 
-test("the phase field names title-walkthrough only", () => {
-  assert.equal(lib.PHASE, "title-walkthrough");
-  assert.equal(runner.PHASE, "title-walkthrough");
-  assert.ok(!lib.REQUIRED_CHECKS.includes("teardown-plugin-disable"));
-  assert.ok(!lib.REQUIRED_CHECKS.includes("deny-canvas"));
-  assert.ok(!lib.REQUIRED_CHECKS.includes("display-source-fails-open"));
+test("the phase field names fail-open-proof and retains the walkthrough", () => {
+  assert.equal(lib.PHASE, "fail-open-proof");
+  assert.equal(runner.PHASE, "fail-open-proof");
+  assert.ok(lib.REQUIRED_CHECKS.includes("species-album-live"));
+  assert.ok(lib.REQUIRED_CHECKS.includes("edit-undo-restores-bytes"));
+  assert.ok(lib.REQUIRED_CHECKS.includes("source-mode-fails-open"));
+  assert.ok(lib.REQUIRED_CHECKS.includes("title-slot-insert-failure-fallback"));
+  assert.ok(lib.REQUIRED_CHECKS.includes("surface-canvas-day"));
+  assert.ok(lib.REQUIRED_CHECKS.includes("print-exclusion-cdp"));
 });
 
 test("every mandatory check is listed once and missing or failed names cannot pass", () => {
@@ -60,6 +63,15 @@ test("every mandatory check is listed once and missing or failed names cannot pa
     "heading-link-live", "heading-link-reading",
     "edit-revealed-h1-stays-visible", "edit-undo-restores-bytes",
     "passive-bytes-neutral", "screenshots-captured", "no-console-exceptions",
+    "source-mode-fails-open", "source-mode-remounts", "file-switch-restores-native",
+    "leaf-close-clears-owner", "plugin-disable-restores-native",
+    "title-slot-unavailable-fallback", "title-slot-insert-failure-fallback",
+    "plugin-reenable-remounts", "title-slot-unavailable-recovers",
+    "title-slot-insert-failure-recovers", "repaint-failure-restores-native",
+    "surface-embed-album", "surface-embed-record", "surface-embed-day",
+    "surface-hover-album", "surface-hover-record", "surface-hover-day",
+    "surface-canvas-album", "surface-canvas-record", "surface-canvas-day",
+    "print-exclusion-cdp", "lifecycle-bytes-neutral",
   ]) {
     assert.ok(runner.REQUIRED_CHECKS.includes(name), name);
   }
@@ -116,6 +128,12 @@ test("fixtures cover album, record, day, period, and heading-link notes", () => 
   assert.equal(report.albums[0].last_record, "eat/ramen.md");
   assert.ok(notes["links.md"].includes("[[eat#Source heading]]"));
   assert.ok(notes["links.md"].includes("[[2026/20261120#Notes]]"));
+  assert.ok(notes[plan.paths.surfaces].includes("![[eat]]"));
+  assert.ok(notes[plan.paths.surfaces].includes("[[eat/ramen|Record target]]"));
+  const canvas = JSON.parse(notes[plan.paths.canvas]);
+  assert.deepEqual(canvas.nodes.map((node) => node.file), ["eat.md", "eat/ramen.md", plan.paths.today]);
+  assert.match(notes[plan.paths.canvas], /^\{\n\t"nodes":\[/);
+  assert.ok(!notes[plan.paths.canvas].endsWith("\n"), "Canvas fixture starts in Obsidian's stable serialization shape");
   assert.ok(!notes["links.md"].includes("[[\n"), "wikilinks stay on one line");
   assert.throws(() => lib.fixturePlan("2024-01-01"), /collides/);
   assert.throws(() => lib.fixturePlan("2025-03-01"), /collides/);
@@ -161,6 +179,9 @@ test("every page-side source compiles without running", () => {
     title: { inlineTitle: false, levelOne: [{ text: "Authored", card: true }, { text: "Keep this heading", card: false }], h1Shown: ["Keep this heading"], navShown: 0 },
   };
   assert.deepEqual(lib.placementFailures(authored, { ...lib.expectedSpecies().authored, title: "Authored", mode: "live" }), []);
+  assert.doesNotThrow(() => new Function("return " + lib.lifecycleSnapshotSource("eat.md", "leaf-abc")));
+  assert.doesNotThrow(() => new Function("return " + lib.lifecycleObservationSource("eat.md", "leaf-abc", "async () => true")));
+  assert.doesNotThrow(() => new Function("return " + lib.surfaceProbeSource("canvas", "eat.md", "Eat", "canvas", "eat.md", "owner")));
   const dayHidden = {
     ...album,
     card: { kind: "day", species: "Day", tileForm: "leaf", title: "Mon, Jun 1, 2026", slot: "cm-sizer", beforeProperties: true },
@@ -177,6 +198,7 @@ test("installVault enables Outline and copies only the working-tree plugin", () 
     runner.installVault(root);
     const core = JSON.parse(fs.readFileSync(path.join(root, ".obsidian/core-plugins.json"), "utf8"));
     assert.ok(core.includes("outline"));
+    assert.ok(core.includes("canvas"));
     assert.ok(core.includes("properties"));
     const app = JSON.parse(fs.readFileSync(path.join(root, ".obsidian/app.json"), "utf8"));
     assert.equal(app.vimMode, true);

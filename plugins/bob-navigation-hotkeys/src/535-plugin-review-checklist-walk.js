@@ -281,7 +281,9 @@ class BobNavigationHotkeysChecklistWalkMixin {
     }
     let result;
     try {
-      result = await cycler.completeTaskAtCursor(cm);
+      result = Number(cycler.version) >= 6
+        ? await cycler.completeTaskAtCursor(cm, { successorJumpTarget: "return" })
+        : await cycler.completeTaskAtCursor(cm);
     } catch (error) {
       new Notice("Not completed — not-closed");
       return false;
@@ -299,6 +301,56 @@ class BobNavigationHotkeysChecklistWalkMixin {
       : "";
     const withSuccessorToast = (toast) =>
       [toast, successorToastLine].filter(Boolean).join("\n");
+    const jump =
+      result && result.jump && typeof result.jump === "object" ? result.jump : null;
+    if (jump && typeof this.followReviewWalkAfter === "function") {
+      const taskText =
+        entry && typeof entry.text === "string" && entry.text.trim()
+          ? entry.text.trim()
+          : "task";
+      const origin = Object.freeze({
+        seq: Math.floor(numericOrDefault(this.reviewGestureSeq, 0)),
+        epoch: Math.floor(numericOrDefault(this.reviewLandingEpoch, 0)),
+        day: todayText,
+        path: filePath,
+        line: Number.isInteger(entry.line) ? entry.line - 1 : 0,
+        text: entry.originalMarkdown,
+        key: entryKey,
+        rowKey: entryKey,
+        tier,
+        taskText,
+        rank: Number.isInteger(entry.rank) ? entry.rank : null,
+        queueBefore: Object.freeze(
+          queueBefore.map((row) => Object.freeze({ ...(row || {}) })),
+        ),
+      });
+      this.addReviewAnsweredKeys(
+        [{ key: entryKey, text: entry.originalMarkdown }],
+        todayText,
+      );
+      this.recordReviewAnswer(
+        {
+          day: todayText,
+          key: entryKey,
+          rowKey: entryKey,
+          tier,
+          queueBefore,
+        },
+        "checklist",
+        [{ key: entryKey, text: entry.originalMarkdown, tier }],
+      );
+      await this.followReviewWalkAfter(origin, {
+        kind: "complete",
+        notice: withSuccessorToast(`✓ Done · ${taskText}`),
+        follow: jump,
+        handledRefs: [{
+          path: filePath,
+          line: Number.isInteger(entry.line) ? entry.line - 1 : 0,
+          raw: entry.originalMarkdown,
+        }],
+      });
+      return true;
+    }
 
     this.reviewLanding = null;
     this.reviewWalkCurrent = null;

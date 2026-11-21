@@ -881,3 +881,80 @@ test("nothing else due keeps the PRE-done toast alone", async () => {
   assert.deepEqual(await claim(fixture.plugin, fixture.editor), { ok: true });
   assert.equal(notices.at(-1), "✓ Done · Last · PRE done");
 });
+
+test("cycler v2 checklist complete does not request a successor jump", async () => {
+  const queue = queueFor(["One", "Two"]);
+  let seenOptions = "unset";
+  const complete = async (editor, options) => {
+    seenOptions = options;
+    return completeAtCursor()(editor);
+  };
+  const fixture = makePlugin({
+    queue,
+    content: queue.map((row) => row.originalMarkdown).join("\n"),
+    complete,
+    cyclerVersion: 2,
+  });
+  await land(fixture.plugin, "first");
+  assert.deepEqual(await claim(fixture.plugin, fixture.editor), { ok: true });
+  assert.equal(seenOptions, undefined);
+  assert.match(fixture.editor.getLine(fixture.editor.getCursor().line), /#pre Two/);
+});
+
+test("cycler v6 without a jump still advances PRE", async () => {
+  const queue = queueFor(["One", "Two"]);
+  let seenOptions = null;
+  const complete = async (editor, options) => {
+    seenOptions = options;
+    return completeAtCursor()(editor);
+  };
+  const fixture = makePlugin({
+    queue,
+    content: queue.map((row) => row.originalMarkdown).join("\n"),
+    complete,
+    cyclerVersion: 6,
+  });
+  await land(fixture.plugin, "first");
+  assert.deepEqual(await claim(fixture.plugin, fixture.editor), { ok: true });
+  assert.equal(seenOptions && seenOptions.successorJumpTarget, "return");
+  assert.match(fixture.editor.getLine(fixture.editor.getCursor().line), /#pre Two/);
+});
+
+test("cycler v6 checklist jump parks the walk then lands on the pin", async () => {
+  const queue = queueFor(["One", "Two"]);
+  const jump = {
+    path: "dest.md",
+    text: "- [ ] #task Dest ^dest",
+    label: "Dest",
+  };
+  const complete = async (editor) => ({
+    ...await completeAtCursor()(editor),
+    jump,
+  });
+  const fixture = makePlugin({
+    queue,
+    content: queue.map((row) => row.originalMarkdown).join("\n"),
+    complete,
+    cyclerVersion: 6,
+  });
+  const landCalls = [];
+  fixture.plugin.landOnTask = async (target, options) => {
+    landCalls.push({ target, options });
+    return { ok: true, line: 0 };
+  };
+  await land(fixture.plugin, "first");
+  const firstText = fixture.plugin.reviewLanding.text;
+  clearNotices();
+  assert.deepEqual(await claim(fixture.plugin, fixture.editor), { ok: true });
+  assert.equal(landCalls.length, 1);
+  assert.equal(landCalls[0].target, jump);
+  assert.equal(landCalls[0].options && landCalls[0].options.silent, true);
+  assert.equal(fixture.plugin.reviewLanding, null, "the pin parks the walk");
+  assert.match(notices.at(-1), /✓ Done · One/);
+  assert.match(notices.at(-1), /↗ “Dest”/);
+  fixture.plugin.advanceReviewClock(400);
+  clearNotices();
+  assert.equal(await fixture.plugin.jumpToDueTask(1), true);
+  assert.notEqual(fixture.plugin.reviewLanding.text, firstText);
+  assert.match(fixture.plugin.reviewLanding.text, /Two/, "the next ]s resumes at the neighbour");
+});

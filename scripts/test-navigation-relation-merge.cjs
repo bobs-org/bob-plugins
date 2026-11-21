@@ -4,6 +4,9 @@
 const assert = require("node:assert/strict");
 const Module = require("node:module");
 const test = require("node:test");
+const { ModalStub, pressKey } = require("./modal-harness.cjs");
+
+global.window = global.window || { setTimeout: (callback) => callback() };
 
 function scalar(raw) {
   const value = String(raw ?? "").trim();
@@ -71,13 +74,7 @@ const originalLoad = Module._load;
 Module._load = function loadWithObsidianStubs(request, parent, isMain) {
   if (request === "obsidian") {
     class EmptyClass {}
-    class TestModal {
-      constructor(app) {
-        this.app = app;
-        this.contentEl = { empty: () => {} };
-        this.modalEl = { removeClass: () => {} };
-      }
-    }
+    class TestModal extends ModalStub {}
     return {
       MarkdownView: EmptyClass,
       Modal: TestModal,
@@ -409,10 +406,48 @@ test("merge offer rows reuse the hand_off group with merged-from reasons", () =>
   const row = normalized.groups[0].rows[0];
   assert.equal(row.key, "db.md#^upgrade::BUILD");
   assert.equal(row.selectable, true);
+  assert.equal(model.jump, undefined);
+  assert.equal(normalized.jump, undefined);
   assert.equal(
     helpers.formatTaskMergeSuccessNotice(summary, "merged into"),
     "⤵ Merged 1 task into “Upgrade Postgres to 17” · merged into",
   );
+});
+
+test("merge card Ctrl+J shows no chip and changes nothing", async () => {
+  const summary = helpers.taskMergePreviewSummary(previewReport());
+  const model = helpers.taskMergeOfferPickerModel(summary, "merged into");
+  const plugin = Object.create(NavigationHotkeysPlugin.prototype);
+  plugin.app = {
+    workspace: { getLeavesOfType: () => [] },
+    vault: {},
+    plugins: { plugins: {} },
+  };
+  plugin.successorPickerUnavailable = false;
+  plugin.activeSuccessorPicker = null;
+  plugin.reviewSuccessorGestureOwner = null;
+  plugin.reviewSuccessorWalkHold = null;
+  plugin.reviewLanding = null;
+  plugin.reviewGestureSeq = 0;
+  plugin.reviewLandingEpoch = 0;
+  plugin.reviewWalkLock = null;
+  plugin.successorPickerNow = () => 1000;
+  plugin.reviewAdvanceNow = () => 1000;
+  plugin.api = helpers.createDependencyNavApi(plugin);
+  const pending = plugin.api.successors.pick(model);
+  await Promise.resolve();
+  const modal = plugin.activeSuccessorPicker;
+  assert.ok(modal, "the merge offer opens the successor picker");
+  assert.ok(
+    !modal.footerHints.some((hint) => hint.label === "jump"),
+    "the merge card withholds the jump chip",
+  );
+  const event = pressKey(modal, "j", { ctrlKey: true });
+  assert.equal(event.defaultPrevented, false, "Ctrl+J falls through without support");
+  assert.equal(modal.jumpKey, null);
+  modal.allowCloseWithoutArm = true;
+  modal.close();
+  assert.equal(await pending, null);
 });
 
 function makePicker(overrides = {}) {

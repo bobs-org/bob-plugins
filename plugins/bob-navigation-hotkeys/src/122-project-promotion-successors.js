@@ -232,6 +232,9 @@ function buildPromotionSuccessorModel(offerPlan, options = {}) {
     needsBlockId: row.needsBlockId === true,
     selectable: true,
     ...(row.mutedReason ? { mutedReason: row.mutedReason } : {}),
+    line: row.line,
+    rawLine: row.rawLine,
+    blockId: row.blockId,
   }));
   const muted = rows.filter((row) => row && !row.selectable);
   for (const row of muted) {
@@ -244,6 +247,9 @@ function buildPromotionSuccessorModel(offerPlan, options = {}) {
       needsBlockId: row.needsBlockId === true,
       selectable: false,
       mutedReason: row.mutedReason || "blocked",
+      line: row.line,
+      rawLine: row.rawLine,
+      blockId: row.blockId,
     }));
   }
   if (modelRows.length === 0 || selectable.length === 0) return null;

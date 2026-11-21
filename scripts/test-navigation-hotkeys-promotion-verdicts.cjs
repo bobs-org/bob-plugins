@@ -247,9 +247,77 @@ test("task-merge model carries no close support", () => {
     "merged into",
   );
   assert.equal(model.close, undefined);
+  assert.equal(model.jump, undefined);
   for (const group of model.groups) {
     for (const row of group.rows) assert.equal(row.close, undefined);
   }
+  const normalized = helpers.normalizeSuccessorPickerModel(model);
+  assert.equal(normalized.jump, undefined);
+});
+
+test("promotion jump identity uses minted ids and close after-lines", () => {
+  const offerPlan = {
+    rows: [
+      {
+        key: "P.md#^design",
+        text: "Design",
+        notePath: "P.md",
+        line: 4,
+        rawLine: "- [ ] #task Design ^design",
+        blockId: "design",
+        selectable: true,
+      },
+      {
+        key: "P.md#row-test",
+        text: "Test",
+        notePath: "P.md",
+        line: 5,
+        rawLine: "- [ ] #task Test",
+        blockId: null,
+        selectable: true,
+      },
+    ],
+  };
+  const mintedByKey = new Map([["P.md#row-test", "test-id"]]);
+  assert.deepEqual(helpers.promotionModelWithJump({ title: "x" }).jump, { supported: true });
+  assert.equal(helpers.buildPromotionJumpTarget({ jumpKey: "", offerPlan }), null);
+  const withBlock = helpers.buildPromotionJumpTarget({
+    jumpKey: "P.md#^design",
+    offerPlan,
+    mintedByKey,
+    projectPath: "P.md",
+  });
+  assert.equal(withBlock.blockId, "design");
+  assert.equal(withBlock.text, "- [ ] #task Design ^design");
+  assert.equal(withBlock.path, "P.md");
+  assert.equal(withBlock.label, "Design");
+  const minted = helpers.buildPromotionJumpTarget({
+    jumpKey: "P.md#row-test",
+    offerPlan,
+    mintedByKey,
+    projectPath: "P.md",
+  });
+  assert.equal(minted.blockId, "test-id");
+  const closed = helpers.buildPromotionJumpTarget({
+    jumpKey: "P.md#^design",
+    offerPlan,
+    closeReceipt: {
+      resolved: [{
+        key: "P.md#^design",
+        afterLine: "- [x] #task Design [completion:: 2026-09-30] ^design",
+      }],
+    },
+    projectPath: "P.md",
+  });
+  assert.equal(closed.text, "- [x] #task Design [completion:: 2026-09-30] ^design");
+  const fromContent = helpers.buildPromotionJumpTarget({
+    jumpKey: "P.md#row-test",
+    offerPlan,
+    mintedByKey,
+    projectPath: "P.md",
+    projectContent: "- [ ] #task #prj Ship ^prj\n- [ ] #task Test ^test-id",
+  });
+  assert.match(fromContent.text, /\^test-id/);
 });
 
 test("promotion with closes applies them after picks with a v4 receipt", async () => {
@@ -330,6 +398,7 @@ test("promotion with an older cycler keeps today's pull-in-only card", async () 
   assert.equal(await harness.plugin.createProjectNoteFromTask(harness.editor, harness.view), true);
   assert.ok(pickedModel, "expected the picker to open");
   assert.equal(pickedModel.close, undefined, "no close support from an older cycler");
+  assert.deepEqual(pickedModel.jump, { supported: true }, "promotion still opts into the jump pin");
   assert.ok(
     notices.every((message) => !/completed.*Ready → Done/.test(String(message))),
     "no closes receipt without verdicts",

@@ -16636,6 +16636,9 @@ function buildPromotionSuccessorModel(offerPlan, options = {}) {
     needsBlockId: row.needsBlockId === true,
     selectable: true,
     ...(row.mutedReason ? { mutedReason: row.mutedReason } : {}),
+    line: row.line,
+    rawLine: row.rawLine,
+    blockId: row.blockId,
   }));
   const muted = rows.filter((row) => row && !row.selectable);
   for (const row of muted) {
@@ -16648,6 +16651,9 @@ function buildPromotionSuccessorModel(offerPlan, options = {}) {
       needsBlockId: row.needsBlockId === true,
       selectable: false,
       mutedReason: row.mutedReason || "blocked",
+      line: row.line,
+      rawLine: row.rawLine,
+      blockId: row.blockId,
     }));
   }
   if (modelRows.length === 0 || selectable.length === 0) return null;
@@ -75526,7 +75532,9 @@ async function saveRelationMergeEditors(app, paths) {
 
 // The successor-picker model for one merge preview. Every offer reuses
 // group `hand_off` with its additive `merged_from` source key, so the
-// Mac Pull-In card and capture need no new group.
+// Mac Pull-In card and capture need no new group. Jump is withheld: the
+// rows are hand-off slots for one shared merge target, not distinct
+// landing identities.
 function taskMergeOfferPickerModel(summary, label) {
   const offers = summary && Array.isArray(summary.offers) ? summary.offers : [];
   const targetTitle = summary && summary.targetTitle ? String(summary.targetTitle) : "that task";
@@ -88486,7 +88494,9 @@ class BobNavigationHotkeysChecklistWalkMixin {
     }
     let result;
     try {
-      result = await cycler.completeTaskAtCursor(cm);
+      result = Number(cycler.version) >= 6
+        ? await cycler.completeTaskAtCursor(cm, { successorJumpTarget: "return" })
+        : await cycler.completeTaskAtCursor(cm);
     } catch (error) {
       new Notice("Not completed — not-closed");
       return false;
@@ -88504,6 +88514,56 @@ class BobNavigationHotkeysChecklistWalkMixin {
       : "";
     const withSuccessorToast = (toast) =>
       [toast, successorToastLine].filter(Boolean).join("\n");
+    const jump =
+      result && result.jump && typeof result.jump === "object" ? result.jump : null;
+    if (jump && typeof this.followReviewWalkAfter === "function") {
+      const taskText =
+        entry && typeof entry.text === "string" && entry.text.trim()
+          ? entry.text.trim()
+          : "task";
+      const origin = Object.freeze({
+        seq: Math.floor(numericOrDefault(this.reviewGestureSeq, 0)),
+        epoch: Math.floor(numericOrDefault(this.reviewLandingEpoch, 0)),
+        day: todayText,
+        path: filePath,
+        line: Number.isInteger(entry.line) ? entry.line - 1 : 0,
+        text: entry.originalMarkdown,
+        key: entryKey,
+        rowKey: entryKey,
+        tier,
+        taskText,
+        rank: Number.isInteger(entry.rank) ? entry.rank : null,
+        queueBefore: Object.freeze(
+          queueBefore.map((row) => Object.freeze({ ...(row || {}) })),
+        ),
+      });
+      this.addReviewAnsweredKeys(
+        [{ key: entryKey, text: entry.originalMarkdown }],
+        todayText,
+      );
+      this.recordReviewAnswer(
+        {
+          day: todayText,
+          key: entryKey,
+          rowKey: entryKey,
+          tier,
+          queueBefore,
+        },
+        "checklist",
+        [{ key: entryKey, text: entry.originalMarkdown, tier }],
+      );
+      await this.followReviewWalkAfter(origin, {
+        kind: "complete",
+        notice: withSuccessorToast(`✓ Done · ${taskText}`),
+        follow: jump,
+        handledRefs: [{
+          path: filePath,
+          line: Number.isInteger(entry.line) ? entry.line - 1 : 0,
+          raw: entry.originalMarkdown,
+        }],
+      });
+      return true;
+    }
 
     this.reviewLanding = null;
     this.reviewWalkCurrent = null;
@@ -104569,18 +104629,27 @@ class BobNavigationHotkeysRelationCompleteComposeMixin {
     };
     if (relationCompleteCyclerApiAvailable(api)) {
       try {
+        const successorJumpBox = {};
         const actual = await api.finalizeClosedTasks(identities, {
           activePath,
           editor,
           successorNoticeTarget: "return",
+          successorJumpTarget: "return",
+          successorJumpBox,
         });
         if (actual && typeof actual === "object") {
+          const jump = actual.jump && typeof actual.jump === "object"
+            ? actual.jump
+            : successorJumpBox.jump && typeof successorJumpBox.jump === "object"
+              ? successorJumpBox.jump
+              : null;
           finalization = {
             ...finalization,
             ...actual,
             reopened: Math.max(0, Math.floor(numericOrDefault(actual.reopened, 0))),
             recoveryFailures: Array.isArray(actual.recoveryFailures) ? actual.recoveryFailures : [],
             retirementFailures: Array.isArray(actual.retirementFailures) ? actual.retirementFailures : [],
+            ...(jump ? { jump } : {}),
           };
         }
       } catch (error) {
@@ -104602,14 +104671,30 @@ class BobNavigationHotkeysRelationCompleteComposeMixin {
       successorNotice: finalization.successorNotice,
     });
     const walkOrigin = picker && picker.reviewOrigin ? picker.reviewOrigin : null;
+    const jump =
+      finalization.jump && typeof finalization.jump === "object" ? finalization.jump : null;
     let noticeDisplayed = false;
     try {
       if (walkOrigin && typeof picker.settleReviewOrigin === "function") {
         const activeCompleted = identities.some((identity) => identity.path === activePath);
         await picker.settleReviewOrigin(activeCompleted ? "complete" : "noop", {
           notice: completionNotice,
+          ...(jump ? { follow: jump } : {}),
         });
         noticeDisplayed = true;
+      } else if (jump && typeof this.landOnTask === "function") {
+        const label = String(jump.label || jump.description || "").trim();
+        const receipt = typeof formatSuccessorJumpReceipt === "function"
+          ? formatSuccessorJumpReceipt(label)
+          : "";
+        const text = [completionNotice, receipt].filter(Boolean).join("\n");
+        if (text) new Notice(text);
+        noticeDisplayed = true;
+        try {
+          await this.landOnTask(jump);
+        } catch (_error) {
+          // The close already landed; navigation is best-effort.
+        }
       }
     } catch (_error) {
       noticeDisplayed = false;
@@ -115096,6 +115181,7 @@ class BobNavigationHotkeysProjectPromotionMixin {
     }
     let picks = null;
     let promotionCloses = [];
+    let promotionJumpKey = null;
     let offerPlan = null;
     let liveLinkedChildIds = new Set();
     if (anchor && !projectIsBlocked && parsedTask.blockId) {
@@ -115155,13 +115241,18 @@ class BobNavigationHotkeysProjectPromotionMixin {
           } catch (_error) {
             // The card stays pull-in-only.
           }
+          model = promotionModelWithJump(model);
           try {
             const result = await this.pickSuccessorOffers(model, { retarget: false });
             picks = result && Array.isArray(result.picks) ? result.picks : null;
             promotionCloses = result && Array.isArray(result.closes) ? result.closes : [];
+            promotionJumpKey = result && result.jump && typeof result.jump.key === "string"
+              ? result.jump.key
+              : null;
           } catch (_error) {
             picks = null;
             promotionCloses = [];
+            promotionJumpKey = null;
           }
         }
       }
@@ -115396,7 +115487,23 @@ class BobNavigationHotkeysProjectPromotionMixin {
     }
     const prjLineIndex = findProjectLifecycleTaskIndex(projectContent);
     const prjLineText = String((projectContent.split(/\r?\n/)[prjLineIndex] || ""));
-    await this.focusTaskMoveDestination(createdFile, { line: prjLineIndex, text: prjLineText, blockId: "prj" });
+    const jumpTarget = buildPromotionJumpTarget({
+      jumpKey: promotionJumpKey,
+      offerPlan,
+      mintedByKey,
+      closeReceipt: promotionCloseReceipt,
+      projectPath: createdPath,
+      projectContent,
+    });
+    if (jumpTarget && typeof this.landOnTask === "function") {
+      try {
+        await this.landOnTask(jumpTarget);
+      } catch (_error) {
+        // The pin already won; a lost target is reported by landOnTask.
+      }
+    } else {
+      await this.focusTaskMoveDestination(createdFile, { line: prjLineIndex, text: prjLineText, blockId: "prj" });
+    }
     let notice = getProjectFromTaskNoticeText(parsedTask.description, sourceBasename, createdFile.basename, updatedLinkCount, (seedResult.sectionsInserted || 0) + (seedResult.sectionsCreated || 0), (convertedManagedLogLines.map((line) => { const parsed = parseManagedTaskLogParentBullet(line); return parsed ? parsed.kind : null; }).filter(Boolean)));
     if (droppedResidentDependencyCount > 0) notice += ` · dropped ${formatCountLabel(droppedResidentDependencyCount, "prerequisite")} that became project residents`;
     if (parsedTask.blockId) {
@@ -115698,12 +115805,15 @@ class BobNavigationHotkeysProjectPromotionMixin {
 }
 // ---- src/667a-plugin-project-promotion-verdicts.js ----
 // Project-promotion successor verdicts (cycler api v5,
-// plan:202611/successor_card_verdicts.md promotion phase).
+// plan:202611/successor_card_verdicts.md promotion phase) and the jump pin
+// landing (plan:202611/successor_jump_pin.md nav-jump-callers).
 //
 // The promotion card attaches the cycler's close descriptors to its rows and
-// applies returned closes after the picks. The task-merge card (429a) never
-// attaches close descriptors and stays pull-in-only: its model carries no
-// `close.supported`, so the picker keeps today's pull-in-only card.
+// applies returned closes after the picks. A Ctrl+J pin lands on that offer
+// instead of the new ^prj line. The task-merge card (429a) never attaches
+// close descriptors and stays pull-in-only: its model carries no
+// `close.supported` and no `jump.supported`, so the picker keeps today's
+// pull-in-only card.
 
 // Feature detection for the cycler's public offer-close surface.
 function promotionOfferCloseCyclerApi(app) {
@@ -115885,6 +115995,74 @@ function promotionOfferCloseNoticeModel(receipt, plugin) {
       failures: Array.isArray(receipt.failures) ? receipt.failures : [],
       __noticePlugin: plugin || null,
     };
+  } catch (_error) {
+    return null;
+  }
+}
+
+function promotionModelWithJump(model) {
+  try {
+    if (!model || typeof model !== "object") return model;
+    return { ...model, jump: { supported: true } };
+  } catch (_error) {
+    return model;
+  }
+}
+
+function promotionJumpRowByKey(offerPlan, key) {
+  try {
+    const wanted = typeof key === "string" ? key.trim() : "";
+    if (!wanted) return null;
+    const rows = offerPlan && Array.isArray(offerPlan.rows) ? offerPlan.rows : [];
+    return rows.find((row) => row && row.key === wanted) || null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+// Post-write identity for a promotion pin. `blockId` is the plan row's ID
+// or the ID minted for a pick; closed rows use the close writer's
+// after-line when the receipt has one.
+function buildPromotionJumpTarget(details = {}) {
+  try {
+    const key = typeof details.jumpKey === "string" ? details.jumpKey.trim() : "";
+    const row = promotionJumpRowByKey(details.offerPlan, key);
+    if (!row) return null;
+    const minted = details.mintedByKey instanceof Map ? details.mintedByKey.get(key) : null;
+    const blockId = (typeof row.blockId === "string" && row.blockId)
+      ? row.blockId
+      : (typeof minted === "string" && minted ? minted : null);
+    let text = typeof row.rawLine === "string" ? row.rawLine : null;
+    const receipt = details.closeReceipt && typeof details.closeReceipt === "object"
+      ? details.closeReceipt
+      : null;
+    const resolved = receipt && Array.isArray(receipt.resolved)
+      ? receipt.resolved.find((entry) => entry && String(entry.key || "") === key)
+      : null;
+    if (resolved && typeof resolved.afterLine === "string") {
+      text = resolved.afterLine;
+    } else if (typeof details.projectContent === "string" && blockId) {
+      try {
+        const lines = String(details.projectContent).split(/\r?\n/);
+        const found = typeof findTaskLineByTrailingBlockId === "function"
+          ? findTaskLineByTrailingBlockId(lines, blockId)
+          : null;
+        if (found !== null && found !== undefined) text = String(lines[found] || text);
+      } catch (_error) {
+        // Keep the plan row's pre-write text as the description fallback.
+      }
+    }
+    const path = String(row.notePath || details.projectPath || "");
+    if (!path) return null;
+    const description = String(row.text || "").trim() || "task";
+    return Object.freeze({
+      path,
+      ...(blockId ? { blockId } : {}),
+      ...(typeof text === "string" ? { text } : {}),
+      ...(Number.isInteger(row.line) ? { line: row.line } : {}),
+      description,
+      label: description,
+    });
   } catch (_error) {
     return null;
   }
@@ -126510,7 +126688,7 @@ module.exports.helpers = {
   resolveProjectPromotionLinkTarget,
   parseProjectPromotionDedicatedLink,
   planPromotionProjectHistoryRewrites, planProjectPromotionFileEdits, promotionSuccessorFnv1aHex,
-  planPromotionSuccessorRows, findPromotionPlannedLinks, buildPromotionSuccessorModel, planPromotionHistoryRewrites, buildPromotionNoticeLine2, promotionSuccessorLinkForId, promotionTruncateTaskText, promotionOfferCloseCyclerApi, promotionSuccessorPickerCloseCapable, promotionSuccessorCloseRows, promotionCloseDescriptorEligible, promotionModelWithOfferCloses, promotionDescribeOfferCloses, promotionExpectedCloseLines, promotionOfferCloseReceiptEmpty, promotionApplyOfferCloses, promotionOfferCloseNoticeModel, showPromotionOfferCloseReceipt,
+  planPromotionSuccessorRows, findPromotionPlannedLinks, buildPromotionSuccessorModel, planPromotionHistoryRewrites, buildPromotionNoticeLine2, promotionSuccessorLinkForId, promotionTruncateTaskText, promotionOfferCloseCyclerApi, promotionSuccessorPickerCloseCapable, promotionSuccessorCloseRows, promotionCloseDescriptorEligible, promotionModelWithOfferCloses, promotionDescribeOfferCloses, promotionExpectedCloseLines, promotionOfferCloseReceiptEmpty, promotionApplyOfferCloses, promotionOfferCloseNoticeModel, showPromotionOfferCloseReceipt, promotionModelWithJump, promotionJumpRowByKey, buildPromotionJumpTarget,
   getProjectFromTaskNoticeText,
   getFutureProjectSchedule,
   isFutureInlineScheduledValue,

@@ -168,7 +168,9 @@ async function saveRelationMergeEditors(app, paths) {
 
 // The successor-picker model for one merge preview. Every offer reuses
 // group `hand_off` with its additive `merged_from` source key, so the
-// Mac Pull-In card and capture need no new group.
+// Mac Pull-In card and capture need no new group. Jump is withheld: the
+// rows are hand-off slots for one shared merge target, not distinct
+// landing identities.
 function taskMergeOfferPickerModel(summary, label) {
   const offers = summary && Array.isArray(summary.offers) ? summary.offers : [];
   const targetTitle = summary && summary.targetTitle ? String(summary.targetTitle) : "that task";

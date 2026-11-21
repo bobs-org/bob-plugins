@@ -455,18 +455,27 @@ class BobNavigationHotkeysRelationCompleteComposeMixin {
     };
     if (relationCompleteCyclerApiAvailable(api)) {
       try {
+        const successorJumpBox = {};
         const actual = await api.finalizeClosedTasks(identities, {
           activePath,
           editor,
           successorNoticeTarget: "return",
+          successorJumpTarget: "return",
+          successorJumpBox,
         });
         if (actual && typeof actual === "object") {
+          const jump = actual.jump && typeof actual.jump === "object"
+            ? actual.jump
+            : successorJumpBox.jump && typeof successorJumpBox.jump === "object"
+              ? successorJumpBox.jump
+              : null;
           finalization = {
             ...finalization,
             ...actual,
             reopened: Math.max(0, Math.floor(numericOrDefault(actual.reopened, 0))),
             recoveryFailures: Array.isArray(actual.recoveryFailures) ? actual.recoveryFailures : [],
             retirementFailures: Array.isArray(actual.retirementFailures) ? actual.retirementFailures : [],
+            ...(jump ? { jump } : {}),
           };
         }
       } catch (error) {
@@ -488,14 +497,30 @@ class BobNavigationHotkeysRelationCompleteComposeMixin {
       successorNotice: finalization.successorNotice,
     });
     const walkOrigin = picker && picker.reviewOrigin ? picker.reviewOrigin : null;
+    const jump =
+      finalization.jump && typeof finalization.jump === "object" ? finalization.jump : null;
     let noticeDisplayed = false;
     try {
       if (walkOrigin && typeof picker.settleReviewOrigin === "function") {
         const activeCompleted = identities.some((identity) => identity.path === activePath);
         await picker.settleReviewOrigin(activeCompleted ? "complete" : "noop", {
           notice: completionNotice,
+          ...(jump ? { follow: jump } : {}),
         });
         noticeDisplayed = true;
+      } else if (jump && typeof this.landOnTask === "function") {
+        const label = String(jump.label || jump.description || "").trim();
+        const receipt = typeof formatSuccessorJumpReceipt === "function"
+          ? formatSuccessorJumpReceipt(label)
+          : "";
+        const text = [completionNotice, receipt].filter(Boolean).join("\n");
+        if (text) new Notice(text);
+        noticeDisplayed = true;
+        try {
+          await this.landOnTask(jump);
+        } catch (_error) {
+          // The close already landed; navigation is best-effort.
+        }
       }
     } catch (_error) {
       noticeDisplayed = false;

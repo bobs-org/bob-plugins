@@ -453,3 +453,77 @@ test("completed source closes the relation modal before awaiting post-Done and s
   assert.equal(outcome.noticeDisplayed, true);
   assert.equal(harness.finalizations.length, 1);
 });
+
+test("relation-complete asks the cycler to return a jump and follows it on the walk", async () => {
+  const initial = "- [ ] #task Source ^source\n- [ ] #task Target ^target";
+  const jump = { path: "Next.md", label: "Next task", text: "- [ ] #task Next ^next" };
+  const harness = makePlugin({ "Tasks.md": initial });
+  harness.api.finalizeClosedTasks = async (identities, context) => {
+    harness.finalizations.push({ identities, context });
+    assert.equal(context.successorJumpTarget, "return");
+    assert.equal(context.successorJumpBox && typeof context.successorJumpBox, "object");
+    return {
+      reopened: 0,
+      retired: 0,
+      recoveryFailures: [],
+      retirementFailures: [],
+      successors: null,
+      successorNotice: null,
+      jump,
+    };
+  };
+  let settled = null;
+  const editor = new TestEditor(initial);
+  harness.openEditors.set("Tasks.md", editor);
+  const picker = {
+    filePath: "Tasks.md",
+    editor,
+    reviewOrigin: { seq: 1 },
+    close() { this.closed = true; },
+    clearPendingBatch() {},
+    async settleReviewOrigin(kind, outcome) {
+      settled = { kind, outcome };
+    },
+  };
+  harness.plugin.activeBulletPropertyPicker = picker;
+  const outcome = await harness.plugin.applyRelationEdit(writerArgs(
+    [{ path: "Tasks.md", line: 0, blockId: "source" }],
+    [{ path: "Tasks.md", blockId: "target", label: "implemented by" }],
+  ));
+  assert.equal(settled.kind, "complete");
+  assert.deepEqual(settled.outcome.follow, jump);
+  assert.equal(outcome.noticeDisplayed, true);
+  assert.equal(harness.finalizations.length, 1);
+});
+
+test("relation-complete without a walk origin lands on the returned jump", async () => {
+  const initial = "- [ ] #task Source ^source\n- [ ] #task Target ^target";
+  const jump = { path: "Next.md", label: "Next task" };
+  const harness = makePlugin({ "Tasks.md": initial });
+  harness.api.finalizeClosedTasks = async (_identities, context) => {
+    assert.equal(context.successorJumpTarget, "return");
+    return {
+      reopened: 0,
+      retired: 0,
+      recoveryFailures: [],
+      retirementFailures: [],
+      successors: null,
+      successorNotice: null,
+      jump,
+    };
+  };
+  const landCalls = [];
+  harness.plugin.landOnTask = async (target) => {
+    landCalls.push(target);
+    return { ok: true, line: 0 };
+  };
+  notices.length = 0;
+  const outcome = await harness.plugin.applyRelationEdit(writerArgs(
+    [{ path: "Tasks.md", line: 0, blockId: "source" }],
+    [{ path: "Tasks.md", blockId: "target", label: "implemented by" }],
+  ));
+  assert.equal(landCalls.length, 1);
+  assert.deepEqual(landCalls[0], jump);
+  assert.equal(outcome.noticeDisplayed, true);
+  assert.match(notices.at(-1), /↗ “Next task”/);
+});

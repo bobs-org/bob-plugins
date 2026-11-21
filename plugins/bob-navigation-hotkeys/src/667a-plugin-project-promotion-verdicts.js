@@ -1,10 +1,13 @@
 // Project-promotion successor verdicts (cycler api v5,
-// plan:202611/successor_card_verdicts.md promotion phase).
+// plan:202611/successor_card_verdicts.md promotion phase) and the jump pin
+// landing (plan:202611/successor_jump_pin.md nav-jump-callers).
 //
 // The promotion card attaches the cycler's close descriptors to its rows and
-// applies returned closes after the picks. The task-merge card (429a) never
-// attaches close descriptors and stays pull-in-only: its model carries no
-// `close.supported`, so the picker keeps today's pull-in-only card.
+// applies returned closes after the picks. A Ctrl+J pin lands on that offer
+// instead of the new ^prj line. The task-merge card (429a) never attaches
+// close descriptors and stays pull-in-only: its model carries no
+// `close.supported` and no `jump.supported`, so the picker keeps today's
+// pull-in-only card.
 
 // Feature detection for the cycler's public offer-close surface.
 function promotionOfferCloseCyclerApi(app) {
@@ -186,6 +189,74 @@ function promotionOfferCloseNoticeModel(receipt, plugin) {
       failures: Array.isArray(receipt.failures) ? receipt.failures : [],
       __noticePlugin: plugin || null,
     };
+  } catch (_error) {
+    return null;
+  }
+}
+
+function promotionModelWithJump(model) {
+  try {
+    if (!model || typeof model !== "object") return model;
+    return { ...model, jump: { supported: true } };
+  } catch (_error) {
+    return model;
+  }
+}
+
+function promotionJumpRowByKey(offerPlan, key) {
+  try {
+    const wanted = typeof key === "string" ? key.trim() : "";
+    if (!wanted) return null;
+    const rows = offerPlan && Array.isArray(offerPlan.rows) ? offerPlan.rows : [];
+    return rows.find((row) => row && row.key === wanted) || null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+// Post-write identity for a promotion pin. `blockId` is the plan row's ID
+// or the ID minted for a pick; closed rows use the close writer's
+// after-line when the receipt has one.
+function buildPromotionJumpTarget(details = {}) {
+  try {
+    const key = typeof details.jumpKey === "string" ? details.jumpKey.trim() : "";
+    const row = promotionJumpRowByKey(details.offerPlan, key);
+    if (!row) return null;
+    const minted = details.mintedByKey instanceof Map ? details.mintedByKey.get(key) : null;
+    const blockId = (typeof row.blockId === "string" && row.blockId)
+      ? row.blockId
+      : (typeof minted === "string" && minted ? minted : null);
+    let text = typeof row.rawLine === "string" ? row.rawLine : null;
+    const receipt = details.closeReceipt && typeof details.closeReceipt === "object"
+      ? details.closeReceipt
+      : null;
+    const resolved = receipt && Array.isArray(receipt.resolved)
+      ? receipt.resolved.find((entry) => entry && String(entry.key || "") === key)
+      : null;
+    if (resolved && typeof resolved.afterLine === "string") {
+      text = resolved.afterLine;
+    } else if (typeof details.projectContent === "string" && blockId) {
+      try {
+        const lines = String(details.projectContent).split(/\r?\n/);
+        const found = typeof findTaskLineByTrailingBlockId === "function"
+          ? findTaskLineByTrailingBlockId(lines, blockId)
+          : null;
+        if (found !== null && found !== undefined) text = String(lines[found] || text);
+      } catch (_error) {
+        // Keep the plan row's pre-write text as the description fallback.
+      }
+    }
+    const path = String(row.notePath || details.projectPath || "");
+    if (!path) return null;
+    const description = String(row.text || "").trim() || "task";
+    return Object.freeze({
+      path,
+      ...(blockId ? { blockId } : {}),
+      ...(typeof text === "string" ? { text } : {}),
+      ...(Number.isInteger(row.line) ? { line: row.line } : {}),
+      description,
+      label: description,
+    });
   } catch (_error) {
     return null;
   }

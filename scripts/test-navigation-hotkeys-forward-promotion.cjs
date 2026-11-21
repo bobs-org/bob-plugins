@@ -180,6 +180,7 @@ function createProjectForwardHarness(options) {
   plugin.pickSuccessorOffers =
     options.pickSuccessorOffers || (async () => null);
   plugin.focusTaskMoveDestination = async () => true;
+  plugin.landOnTask = options.landOnTask || (async () => ({ ok: true, line: 0 }));
   return { plugin, editor, view, contents, fileByPath, sourceFile, templateFile, createdArgs };
 }
 
@@ -612,4 +613,68 @@ test("PS14 picker model shape and retarget off", async () => {
   assert.ok(seenModel);
   assert.equal(seenOptions.retarget, false);
   assert.equal(seenModel.budget, null);
+  assert.deepEqual(seenModel.jump, { supported: true });
+});
+
+test("a promotion pin lands on the successor instead of ^prj", async () => {
+  notices.length = 0;
+  const today = new Date(2026, 8, 30);
+  const todayPath = promotionDailyPath(today);
+  const landCalls = [];
+  const focusCalls = [];
+  const harness = createProjectForwardHarness({
+    sourcePath: "Areas/Work.md",
+    sourceContent: ["---", 'type: "[[area]]"', "---", "", "## Tasks", "", "- [ ] #task Ship it ^ship", "\t- Design", "\t- Test"].join("\n"),
+    today,
+    extraFiles: [{ path: todayPath, content: ["## Pomodoros", "", "- [ ] (**0930-1000**)", "  - [[Areas/Work#^ship]]"].join("\n") }],
+    backlinks: {},
+    pickSuccessorOffers: async (model) => {
+      const design = model.groups[0].rows.find((row) => /Design/i.test(String(row.text || "")));
+      assert.ok(design, "expected the Design offer");
+      assert.deepEqual(model.jump, { supported: true });
+      return { picks: [{ key: design.key }], jump: { key: design.key } };
+    },
+    landOnTask: async (target) => {
+      landCalls.push(target);
+      return { ok: true, line: 0 };
+    },
+  });
+  const originalFocus = harness.plugin.focusTaskMoveDestination;
+  harness.plugin.focusTaskMoveDestination = async (...args) => {
+    focusCalls.push(args);
+    return originalFocus(...args);
+  };
+  assert.equal(await harness.plugin.createProjectNoteFromTask(harness.editor, harness.view), true);
+  assert.equal(landCalls.length, 1, "the pin lands on the successor");
+  assert.equal(focusCalls.length, 0, "a pin skips the ^prj landing");
+  assert.equal(landCalls[0].path, "Work_ship.md");
+  assert.match(String(landCalls[0].label || landCalls[0].description || ""), /Design/i);
+});
+
+test("promotion without a pin still lands on ^prj", async () => {
+  const today = new Date(2026, 8, 30);
+  const todayPath = promotionDailyPath(today);
+  const landCalls = [];
+  const focusCalls = [];
+  const harness = createProjectForwardHarness({
+    sourcePath: "Areas/Work.md",
+    sourceContent: ["---", 'type: "[[area]]"', "---", "", "## Tasks", "", "- [ ] #task Ship it ^ship", "\t- Design"].join("\n"),
+    today,
+    extraFiles: [{ path: todayPath, content: ["## Pomodoros", "", "- [ ] (**0930-1000**)", "  - [[Areas/Work#^ship]]"].join("\n") }],
+    backlinks: {},
+    pickSuccessorOffers: async (model) => ({ picks: [{ key: model.groups[0].rows[0].key }] }),
+    landOnTask: async (target) => {
+      landCalls.push(target);
+      return { ok: true, line: 0 };
+    },
+  });
+  const originalFocus = harness.plugin.focusTaskMoveDestination;
+  harness.plugin.focusTaskMoveDestination = async (...args) => {
+    focusCalls.push(args);
+    return originalFocus(...args);
+  };
+  assert.equal(await harness.plugin.createProjectNoteFromTask(harness.editor, harness.view), true);
+  assert.equal(landCalls.length, 0);
+  assert.equal(focusCalls.length, 1);
+  assert.equal(focusCalls[0][1].blockId, "prj");
 });

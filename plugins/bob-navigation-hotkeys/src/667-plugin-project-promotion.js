@@ -293,6 +293,7 @@ class BobNavigationHotkeysProjectPromotionMixin {
     }
     let picks = null;
     let promotionCloses = [];
+    let promotionJumpKey = null;
     let offerPlan = null;
     let liveLinkedChildIds = new Set();
     if (anchor && !projectIsBlocked && parsedTask.blockId) {
@@ -352,13 +353,18 @@ class BobNavigationHotkeysProjectPromotionMixin {
           } catch (_error) {
             // The card stays pull-in-only.
           }
+          model = promotionModelWithJump(model);
           try {
             const result = await this.pickSuccessorOffers(model, { retarget: false });
             picks = result && Array.isArray(result.picks) ? result.picks : null;
             promotionCloses = result && Array.isArray(result.closes) ? result.closes : [];
+            promotionJumpKey = result && result.jump && typeof result.jump.key === "string"
+              ? result.jump.key
+              : null;
           } catch (_error) {
             picks = null;
             promotionCloses = [];
+            promotionJumpKey = null;
           }
         }
       }
@@ -593,7 +599,23 @@ class BobNavigationHotkeysProjectPromotionMixin {
     }
     const prjLineIndex = findProjectLifecycleTaskIndex(projectContent);
     const prjLineText = String((projectContent.split(/\r?\n/)[prjLineIndex] || ""));
-    await this.focusTaskMoveDestination(createdFile, { line: prjLineIndex, text: prjLineText, blockId: "prj" });
+    const jumpTarget = buildPromotionJumpTarget({
+      jumpKey: promotionJumpKey,
+      offerPlan,
+      mintedByKey,
+      closeReceipt: promotionCloseReceipt,
+      projectPath: createdPath,
+      projectContent,
+    });
+    if (jumpTarget && typeof this.landOnTask === "function") {
+      try {
+        await this.landOnTask(jumpTarget);
+      } catch (_error) {
+        // The pin already won; a lost target is reported by landOnTask.
+      }
+    } else {
+      await this.focusTaskMoveDestination(createdFile, { line: prjLineIndex, text: prjLineText, blockId: "prj" });
+    }
     let notice = getProjectFromTaskNoticeText(parsedTask.description, sourceBasename, createdFile.basename, updatedLinkCount, (seedResult.sectionsInserted || 0) + (seedResult.sectionsCreated || 0), (convertedManagedLogLines.map((line) => { const parsed = parseManagedTaskLogParentBullet(line); return parsed ? parsed.kind : null; }).filter(Boolean)));
     if (droppedResidentDependencyCount > 0) notice += ` · dropped ${formatCountLabel(droppedResidentDependencyCount, "prerequisite")} that became project residents`;
     if (parsedTask.blockId) {

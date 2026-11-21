@@ -14037,19 +14037,35 @@ class WorkSummaryPromptModal extends Modal {
     }
 
     this.submitting = true;
+    // Close before the unlink writes so a modal focus restore cannot undo the
+    // parked successor landing: the landing runs after this prompt has closed.
+    // The stamp is still read at commit inside submitPomodoroWorkSummary, never
+    // at the time the prompt opened.
+    const value = this.inputEl ? this.inputEl.value : "";
+    this.completed = true;
     try {
-      // The stamp is read at commit inside submitPomodoroWorkSummary, never
-      // at the time the prompt opened.
-      const accepted = await this.plugin.submitPomodoroWorkSummary(
+      this.close();
+    } catch (_closeError) {
+      // Best effort: the writes below still land after the close attempt.
+    }
+    let accepted = false;
+    try {
+      accepted = await this.plugin.submitPomodoroWorkSummary(
         this.source,
-        this.inputEl ? this.inputEl.value : "",
+        value,
       );
-      if (accepted) {
-        this.completed = true;
-        this.close();
-      }
+    } catch (_submitError) {
+      accepted = false;
     } finally {
       this.submitting = false;
+    }
+    if (!accepted) {
+      // The pre-closed modal cannot retry: release the walk so it never sticks.
+      try {
+        this.plugin.cancelWorkSummaryPrompt(this.source);
+      } catch (_cancelError) {
+        // Best effort: the failure notice already landed.
+      }
     }
   }
 
@@ -16622,11 +16638,32 @@ class BlockIdPromptPomodoroInboxRouteMixin {
     return true;
   }
 
+  // Land a boxed parked jump once, best-effort. Walk origins land via the
+  // follow toast; other surfaces land directly after their notice. Never
+  // throws.
+  async landParkedJumpAfterUnlink(jump) {
+    try {
+      if (!jump || typeof jump !== "object") {
+        return;
+      }
+      const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
+      const nav = plugins && plugins["bob-navigation-hotkeys"];
+      const api = nav && nav.api;
+      if (api && typeof api.landOnTask === "function") {
+        await api.landOnTask(jump);
+      }
+    } catch (_error) {
+      // The unlink and its notice already landed; navigation is best-effort.
+    }
+  }
+
   // Post-write finish for a routed unlink: one composed toast
   // (`<unlink text> · moved to <dest>`) continued with a `route` walk
   // outcome when the move committed, otherwise today's outcome (a null
   // walk settle via the caller, which stays) plus the partial notice.
-  // Returns true like today's unlink success.
+  // The parked jump lands only after the route move and walk settle, so a
+  // tab switch cannot fail the move and the walk lands once. Returns true
+  // like today's unlink success.
   async finishPomodoroUnlinkWithInboxRoute(
     source,
     cleanupPlan,
@@ -16639,18 +16676,26 @@ class BlockIdPromptPomodoroInboxRouteMixin {
       workLogPlan || {},
       status,
     );
-    const offerParked = () => this.offerParkedSuccessorsAfterUnlink({
-      path: source && source.sourcePath,
-      blockId: source && source.task && source.task.existingId,
-      text: source && source.task && source.task.displayText,
-    }, {
-      status,
-      removedCount: cleanupPlan && cleanupPlan.removedCount,
-      slot: parkedSuccessorSlotFromCleanup(cleanupPlan),
-    });
+    const offerParkedReturning = () => {
+      const box = {};
+      return this.offerParkedSuccessorsAfterUnlink({
+        path: source && source.sourcePath,
+        blockId: source && source.task && source.task.existingId,
+        text: source && source.task && source.task.displayText,
+      }, {
+        status,
+        removedCount: cleanupPlan && cleanupPlan.removedCount,
+        slot: parkedSuccessorSlotFromCleanup(cleanupPlan),
+        successorJumpTarget: "return",
+        successorJumpBox: box,
+      }).then((jump) => jump || box.jump || null);
+    };
     if (!routeGate || routeGate.kind !== "move") {
       new Notice(unlinkText);
-      await offerParked();
+      const parkedJump = await offerParkedReturning();
+      if (parkedJump) {
+        await this.landParkedJumpAfterUnlink(parkedJump);
+      }
       return true;
     }
     // No-op guard: only a real ledger/Work Log change may move. An unlink
@@ -16661,10 +16706,13 @@ class BlockIdPromptPomodoroInboxRouteMixin {
       (workLogPlan && workLogPlan.hasChanges === true);
     if (unlinkWroteAny !== true) {
       new Notice(unlinkText);
-      await offerParked();
+      const parkedJump = await offerParkedReturning();
+      if (parkedJump) {
+        await this.landParkedJumpAfterUnlink(parkedJump);
+      }
       return true;
     }
-    await offerParked();
+    const parkedJump = await offerParkedReturning();
     const existingId = source.task && source.task.existingId;
     const expected = existingId
       ? [{ line: source.line, raw: source.task.rawLine, blockId: existingId }]
@@ -16687,9 +16735,13 @@ class BlockIdPromptPomodoroInboxRouteMixin {
           kind: "route",
           notice: text,
           handledRefs: commit.handledRefs,
+          ...(parkedJump ? { follow: parkedJump } : {}),
         });
       } else {
         new Notice(text);
+        if (parkedJump) {
+          await this.landParkedJumpAfterUnlink(parkedJump);
+        }
       }
       return true;
     }
@@ -16697,6 +16749,9 @@ class BlockIdPromptPomodoroInboxRouteMixin {
       (commit && (commit.notice || commit.reason)) || "Inbox route failed";
     new Notice(unlinkText);
     new Notice(partial);
+    if (parkedJump) {
+      await this.landParkedJumpAfterUnlink(parkedJump);
+    }
     return true;
   }
 }
@@ -18369,27 +18424,47 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
 
   // After an Unlink task prompt settles and the unlink write commits, offer
   // starts-after successors for a Pending task whose last live link was
-  // removed. Esc, non-Pending lanes, and older cyclers stay silent.
+  // removed. Esc, non-Pending lanes, and older cyclers stay silent. When the
+  // caller passes `successorJumpTarget: "return"` with a box, the parked
+  // offer returns the jump instead of landing (older cyclers without the
+  // return plumbing keep today's order and land immediately). Resolves to the
+  // boxed jump or null. Never throws.
   async offerParkedSuccessorsAfterUnlink(identity, options = {}) {
     try {
       if (!identity || !identity.path || !identity.blockId) {
-        return;
+        return null;
       }
       if (String(options.status || "") !== "/") {
-        return;
+        return null;
       }
       if (!(Number(options.removedCount) > 0)) {
-        return;
+        return null;
       }
       const api = this.getParkedSuccessorApi();
       if (!api) {
-        return;
+        return null;
       }
-      await api.offerParkedSuccessors([identity], {
+      const active = {
         slot: options.slot && typeof options.slot === "object" ? options.slot : null,
-      });
+      };
+      if (options.successorJumpTarget === "return") {
+        active.successorJumpTarget = "return";
+        if (options.successorJumpBox && typeof options.successorJumpBox === "object") {
+          active.successorJumpBox = options.successorJumpBox;
+        }
+      }
+      await api.offerParkedSuccessors([identity], active);
+      if (
+        active.successorJumpBox &&
+        active.successorJumpBox.jump &&
+        typeof active.successorJumpBox.jump === "object"
+      ) {
+        return active.successorJumpBox.jump;
+      }
+      return null;
     } catch (_error) {
       // Best effort: the unlink already landed.
+      return null;
     }
   }
 

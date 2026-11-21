@@ -178,11 +178,17 @@ With navigation `api.successors` v5 and `api.landOnTask`, the successor card can
 pin one offered task with Ctrl+J. The pin is independent of its Leave, Pull In,
 Done, or Cancel choice. After the managed Done writes, reference retirement, and
 notice finish, the cycler finds the task by its post-write identity and lands on
-it. A stale Pull In pick is left open and still remains a valid jump target.
-The pin stays hidden from walk-composing callers until they opt in with
-`successorJumpTarget: "return"` and nav `reviewWalk` v2; those callers receive
-the jump for `reviewWalk.continue(..., { follow })` to park the walk and land.
-The parked-successor picker also lands on its pin after showing its notice.
+it. A Task Link Ctrl+Enter close finalizes in return mode, strikes the link,
+then lands, so a cross-note jump never strands the strike. A stale Pull In pick
+is left open and still remains a valid jump target. The pin stays hidden from
+walk-composing callers until they opt in with `successorJumpTarget: "return"`
+and nav `reviewWalk` v2; those callers receive the jump for
+`reviewWalk.continue(..., { follow })` to park the walk and land, and the
+walk-return card omits the jump line so only the follow toast shows it. A Left
+pin resolves from the fresh plan row for its key, falling back to the card
+offer only when the fresh plan lacks the key. The parked-successor picker also
+lands on its pin after showing its notice, or returns it for the inbox-route
+move to land after.
 
 With navigation `api.successors` v4, the picker can also close an eligible
 offered task as Done or Cancelled. Each choice is re-read and checked against

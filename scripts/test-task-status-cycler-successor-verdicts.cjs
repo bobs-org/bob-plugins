@@ -427,3 +427,84 @@ test("jump identity uses each verdict's post-write task identity", () => {
     },
   );
 });
+
+test("jump identity builds Left from the fresh plan row, not the stale card line", () => {
+  const key = "Tasks.md#^a";
+  const offer = {
+    key,
+    text: "Task A",
+    notePath: "Tasks.md",
+    line: 3,
+    task: { path: "Tasks.md", line: 3, blockId: "a", rawLine: "- [?] #task Task A ^a" },
+  };
+  const original = new Map([[key, offer]]);
+  const freshText = "- [ ] #task Task A [unblocked:: 2026-11-05] ^a";
+  assert.deepEqual(
+    helpers.buildSuccessorJumpIdentity(key, original, {
+      edits: [{ path: "Tasks.md", line: 5, before: "- [?] #task Other ^a", after: freshText }],
+      rows: [{
+        offer: { key, selected: false },
+        note_path: "Tasks.md",
+        block_id: "a",
+        line: 5,
+        text: "- [?] #task Task A ^a",
+      }],
+    }, null),
+    {
+      key, outcome: "left", label: "Task A", path: "Tasks.md", blockId: "a",
+      text: freshText, line: 5, description: "Task A",
+    },
+  );
+});
+
+test("jump identity lands a refused stale pick as Left from its fresh row", () => {
+  const key = "Tasks.md#^a";
+  const offer = {
+    key,
+    text: "Task A",
+    notePath: "Tasks.md",
+    line: 3,
+    task: { path: "Tasks.md", line: 3, blockId: "a", rawLine: "- [?] #task Task A ^a" },
+  };
+  const original = new Map([[key, offer]]);
+  const freshText = "- [ ] #task Task A [unblocked:: 2026-11-05] ^a";
+  assert.deepEqual(
+    helpers.buildSuccessorJumpIdentity(key, original, {
+      edits: [{ path: "Tasks.md", line: 4, before: "- [?] #task Task A ^a", after: freshText }],
+      rows: [{
+        offer: { key, selected: false },
+        note_path: "Tasks.md",
+        block_id: "a",
+        line: 4,
+        text: "- [?] #task Task A ^a",
+      }],
+    }, null),
+    {
+      key, outcome: "left", label: "Task A", path: "Tasks.md", blockId: "a",
+      text: freshText, line: 4, description: "Task A",
+    },
+  );
+});
+
+test("jump identity keeps the cancelled close outcome", () => {
+  const key = "Tasks.md#^a";
+  const offer = {
+    key,
+    text: "Task A",
+    notePath: "Tasks.md",
+    line: 3,
+    task: { path: "Tasks.md", line: 3, blockId: "a", rawLine: "- [?] #task Task A ^a" },
+  };
+  const original = new Map([[key, offer]]);
+  const cancelledText = "- [?] #task Task A ^a";
+  assert.deepEqual(
+    helpers.buildSuccessorJumpIdentity(key, original, { edits: [], rows: [] }, {
+      offer_closes: [{ key, outcome: "cancelled" }],
+      resolved: [{ key, path: "Tasks.md", line: 3, blockId: "a", afterLine: cancelledText }],
+    }),
+    {
+      key, outcome: "cancelled", label: "Task A", path: "Tasks.md", blockId: "a",
+      text: cancelledText, line: 3, description: "Task A",
+    },
+  );
+});

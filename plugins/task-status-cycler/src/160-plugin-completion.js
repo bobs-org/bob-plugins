@@ -578,7 +578,7 @@ class TaskStatusCyclerCompletionMixin {
     );
   }
 
-  async handleActiveTaskBlockLinkOpenDone(editor, activeFile) {
+  async handleActiveTaskBlockLinkOpenDone(editor, activeFile, options = {}) {
     const activePath = activeFile && activeFile.path;
     const candidate = this.getActiveLineTaskBlockLinkTarget(editor, activePath);
     if (!candidate) {
@@ -694,7 +694,7 @@ class TaskStatusCyclerCompletionMixin {
           context,
           new Set(),
         );
-        await this.finalizeClosedTasks(result.closed, context);
+        const order = await finalizeTaskLinkCloseForJump(this, result.closed, context, options);
         const rootKey = `${resolvedTarget.file.path}#^${resolvedTarget.blockId}`;
         const rootClosed = Array.isArray(result.closed) && result.closed.some(
           (identity) =>
@@ -703,16 +703,13 @@ class TaskStatusCyclerCompletionMixin {
         );
         if (rootClosed) {
           try {
-            await this.strikeActiveSelectedTaskBlockLink(
-              editor,
-              activePath,
-              candidate,
-            );
+            await this.strikeActiveSelectedTaskBlockLink(editor, activePath, candidate);
           } catch (error) {
             // Best effort: the close already landed; a missed strike is cosmetic.
           }
         }
-        return { resolved: true, changed: !!result.changed };
+        await landTaskLinkCloseJump(this, order, context);
+        return taskLinkCloseJumpResult(order, result.changed);
       } catch (error) {
         // Once the eligible root resolved, a partial recursive close remains a
         // handled best-effort action.
@@ -732,18 +729,16 @@ class TaskStatusCyclerCompletionMixin {
         resolvedTarget.file.path,
         resolvedTarget.taskStatus.lineText,
       ) || { path: resolvedTarget.file.path, blockId: resolvedTarget.blockId };
-      await this.finalizeClosedTasks([identity], context);
+      const order = await finalizeTaskLinkCloseForJump(this, [identity], context, options);
       if (!onDependencyLine) {
         try {
-          await this.strikeActiveSelectedTaskBlockLink(
-            editor,
-            activePath,
-            candidate,
-          );
+          await this.strikeActiveSelectedTaskBlockLink(editor, activePath, candidate);
         } catch (error) {
           // Best effort: the close already landed; a missed strike is cosmetic.
         }
       }
+      await landTaskLinkCloseJump(this, order, context);
+      return taskLinkCloseJumpResult(order, wrote);
     }
     return { resolved: true, changed: !!wrote };
   }

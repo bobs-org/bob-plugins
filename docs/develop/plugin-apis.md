@@ -597,14 +597,17 @@ Ledger feature-detects `walkMode.version >= 4` before `b` and `>= 5` before `w`.
   lands after retirement and its notice; a walk owner opts into
   `context.successorJumpTarget: "return"` and receives the jump to park and
   follow.
-- `offerParkedSuccessors(identities, { slot }?)` plans relation-only
-  successor offers for Pending (`[/]`) tasks that have no live Task Link
-  left on today's daily note. It presents the nav picker with
-  `event: parked`, applies picks, and shows the notice. `slot` is the
-  removed link's `{ entryLine, bulletLine, entryDeleted }`. The method
-  never throws; it resolves `{ offered, picked }`. Still-linked,
-  non-Pending, and empty identities are silence (`{ offered: 0, picked: 0 }`).
-  Consumers feature-detect `api.version >= 4` and the method.
+- `offerParkedSuccessors(identities, { slot, successorJumpTarget?, successorJumpBox? }?)`
+  plans relation-only successor offers for Pending (`[/]`) tasks that have no
+  live Task Link left on today's daily note. It presents the nav picker with
+  `event: parked`, applies picks, and shows the notice. `slot` is the removed
+  link's `{ entryLine, bulletLine, entryDeleted }`. With
+  `successorJumpTarget: "return"` and a `successorJumpBox`, it returns the jump
+  through the box instead of landing, so the inbox-route move can land after.
+  Older cyclers ignore the return fields and land immediately. The method never
+  throws; it resolves `{ offered, picked }`. Still-linked, non-Pending, and
+  empty identities are silence (`{ offered: 0, picked: 0 }`). Consumers
+  feature-detect `api.version >= 4` and the method.
 - `describeOfferCloses({ rows, gesture }?)` reports per-row Done/Cancel
   eligibility for the project-promotion successor card. Each row is
   `{ key, text, notePath, status, selectable, line, rawLine, blockId? }`

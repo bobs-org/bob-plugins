@@ -51,14 +51,44 @@ function buildSuccessorJumpIdentity(key, originalOfferByKey, plan, closeResult) 
           text: edit ? edit.after : originalText,
         };
       } else {
-        const edit = editAt(originalPath, originalLine);
-        target = {
-          outcome: "left",
-          path: originalPath,
-          line: originalLine,
-          blockId: String(task.blockId || ""),
-          text: edit ? edit.after : originalText,
-        };
+        // Left identity comes from the fresh plan's row for the same offer
+        // key: after a replan a shifted note can give another task's line as
+        // text when the stale card-open line is reused. Fall back to the
+        // original offer only when the fresh plan lacks the key (a refused
+        // stale pick still lands as Left from its fresh unpicked row).
+        const freshRow = rows.find((row) => row && row.offer &&
+          String(row.offer.key || "") === wanted);
+        if (freshRow) {
+          const freshPath = String(
+            freshRow.note_path || freshRow.notePath || originalPath,
+          );
+          const freshLine = Number.isInteger(freshRow.line)
+            ? freshRow.line
+            : originalLine;
+          const freshBlockId = String(
+            freshRow.block_id || freshRow.blockId || task.blockId || "",
+          );
+          const freshFallback = typeof freshRow.text === "string"
+            ? freshRow.text
+            : originalText;
+          const edit = editAt(freshPath, freshLine);
+          target = {
+            outcome: "left",
+            path: freshPath,
+            line: freshLine,
+            blockId: freshBlockId,
+            text: edit ? edit.after : freshFallback,
+          };
+        } else {
+          const edit = editAt(originalPath, originalLine);
+          target = {
+            outcome: "left",
+            path: originalPath,
+            line: originalLine,
+            blockId: String(task.blockId || ""),
+            text: edit ? edit.after : originalText,
+          };
+        }
       }
     }
 
@@ -76,4 +106,47 @@ function buildSuccessorJumpIdentity(key, originalOfferByKey, plan, closeResult) 
   } catch (_error) {
     return null;
   }
+}
+
+// Task Link Ctrl+Enter jump ordering: finalize in return mode so the jump
+// lands only after the strike write. Returns {finalized, box, wantsReturn}.
+// Walk callers that already asked for return reuse their box (nav lands via
+// follow); others get a local box to land after the strike. Never throws.
+async function finalizeTaskLinkCloseForJump(plugin, closed, baseContext, options) {
+  const opts = options && typeof options === "object" ? options : {};
+  const wantsReturn = opts.successorJumpTarget === "return";
+  const callerBox = wantsReturn && opts.successorJumpBox &&
+    typeof opts.successorJumpBox === "object" ? opts.successorJumpBox : null;
+  const box = callerBox || {};
+  const ctx = { ...baseContext, successorJumpTarget: "return", successorJumpBox: box };
+  if (wantsReturn && opts.successorNoticeTarget) ctx.successorNoticeTarget = opts.successorNoticeTarget;
+  if (wantsReturn && opts.successorNoticeBox) ctx.successorNoticeBox = opts.successorNoticeBox;
+  try {
+    const finalized = await plugin.finalizeClosedTasks(closed, ctx);
+    return { finalized, box, wantsReturn };
+  } catch (_error) {
+    return { finalized: null, box, wantsReturn };
+  }
+}
+
+async function landTaskLinkCloseJump(plugin, order, baseContext) {
+  try {
+    if (!order || order.wantsReturn) return order && order.box ? order.box.jump || null : null;
+    const jump = order.box && order.box.jump;
+    if (!jump) return null;
+    await plugin.landSuccessorJump({ jump }, baseContext || {});
+    return jump;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function taskLinkCloseJumpResult(order, changed) {
+  const jump = order && order.box && order.box.jump;
+  const out = { resolved: true, changed: !!changed };
+  if (jump) out.jump = jump;
+  if (order && order.finalized && order.finalized.successorNotice) {
+    out.successorNotice = order.finalized.successorNotice;
+  }
+  return out;
 }

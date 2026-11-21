@@ -125,11 +125,32 @@ class BlockIdPromptPomodoroInboxRouteMixin {
     return true;
   }
 
+  // Land a boxed parked jump once, best-effort. Walk origins land via the
+  // follow toast; other surfaces land directly after their notice. Never
+  // throws.
+  async landParkedJumpAfterUnlink(jump) {
+    try {
+      if (!jump || typeof jump !== "object") {
+        return;
+      }
+      const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
+      const nav = plugins && plugins["bob-navigation-hotkeys"];
+      const api = nav && nav.api;
+      if (api && typeof api.landOnTask === "function") {
+        await api.landOnTask(jump);
+      }
+    } catch (_error) {
+      // The unlink and its notice already landed; navigation is best-effort.
+    }
+  }
+
   // Post-write finish for a routed unlink: one composed toast
   // (`<unlink text> · moved to <dest>`) continued with a `route` walk
   // outcome when the move committed, otherwise today's outcome (a null
   // walk settle via the caller, which stays) plus the partial notice.
-  // Returns true like today's unlink success.
+  // The parked jump lands only after the route move and walk settle, so a
+  // tab switch cannot fail the move and the walk lands once. Returns true
+  // like today's unlink success.
   async finishPomodoroUnlinkWithInboxRoute(
     source,
     cleanupPlan,
@@ -142,18 +163,26 @@ class BlockIdPromptPomodoroInboxRouteMixin {
       workLogPlan || {},
       status,
     );
-    const offerParked = () => this.offerParkedSuccessorsAfterUnlink({
-      path: source && source.sourcePath,
-      blockId: source && source.task && source.task.existingId,
-      text: source && source.task && source.task.displayText,
-    }, {
-      status,
-      removedCount: cleanupPlan && cleanupPlan.removedCount,
-      slot: parkedSuccessorSlotFromCleanup(cleanupPlan),
-    });
+    const offerParkedReturning = () => {
+      const box = {};
+      return this.offerParkedSuccessorsAfterUnlink({
+        path: source && source.sourcePath,
+        blockId: source && source.task && source.task.existingId,
+        text: source && source.task && source.task.displayText,
+      }, {
+        status,
+        removedCount: cleanupPlan && cleanupPlan.removedCount,
+        slot: parkedSuccessorSlotFromCleanup(cleanupPlan),
+        successorJumpTarget: "return",
+        successorJumpBox: box,
+      }).then((jump) => jump || box.jump || null);
+    };
     if (!routeGate || routeGate.kind !== "move") {
       new Notice(unlinkText);
-      await offerParked();
+      const parkedJump = await offerParkedReturning();
+      if (parkedJump) {
+        await this.landParkedJumpAfterUnlink(parkedJump);
+      }
       return true;
     }
     // No-op guard: only a real ledger/Work Log change may move. An unlink
@@ -164,10 +193,13 @@ class BlockIdPromptPomodoroInboxRouteMixin {
       (workLogPlan && workLogPlan.hasChanges === true);
     if (unlinkWroteAny !== true) {
       new Notice(unlinkText);
-      await offerParked();
+      const parkedJump = await offerParkedReturning();
+      if (parkedJump) {
+        await this.landParkedJumpAfterUnlink(parkedJump);
+      }
       return true;
     }
-    await offerParked();
+    const parkedJump = await offerParkedReturning();
     const existingId = source.task && source.task.existingId;
     const expected = existingId
       ? [{ line: source.line, raw: source.task.rawLine, blockId: existingId }]
@@ -190,9 +222,13 @@ class BlockIdPromptPomodoroInboxRouteMixin {
           kind: "route",
           notice: text,
           handledRefs: commit.handledRefs,
+          ...(parkedJump ? { follow: parkedJump } : {}),
         });
       } else {
         new Notice(text);
+        if (parkedJump) {
+          await this.landParkedJumpAfterUnlink(parkedJump);
+        }
       }
       return true;
     }
@@ -200,6 +236,9 @@ class BlockIdPromptPomodoroInboxRouteMixin {
       (commit && (commit.notice || commit.reason)) || "Inbox route failed";
     new Notice(unlinkText);
     new Notice(partial);
+    if (parkedJump) {
+      await this.landParkedJumpAfterUnlink(parkedJump);
+    }
     return true;
   }
 }

@@ -604,6 +604,92 @@ test("future-scheduled dependents stay Blocked on the planner, api, and close pa
   assert.match(closeHarness.getSource("Tasks.md"), /^- \[ \] #task Plain .* \^plain/m);
 });
 
+test("Task Link Ctrl+Enter strikes the link before landing the jump", async () => {
+  const daily = [
+    "## Pomodoros",
+    "- [ ] (**0920-0950** [t:: 30m])",
+    "\t- [[Tasks#^a]]",
+  ].join("\n");
+  const harness = createInMemoryObsidianApp({
+    "Daily.md": daily,
+    "Tasks.md": "- [ ] #task A ^a",
+  });
+  const editor = createTextEditor(daily, { line: 2, ch: 5 });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.getCompletionDateString = () => "2026-07-16";
+  plugin.scheduleCenterEditorLineInView = () => {};
+  attachActiveMarkdownView(plugin, harness, editor, "Daily.md");
+  const order = [];
+  const jump = { key: "Tasks.md#^b", path: "Tasks.md", blockId: "b", label: "B" };
+  plugin.finalizeClosedTasks = async (identities, context) => {
+    order.push("finalize");
+    assert.equal(context.successorJumpTarget, "return");
+    assert.ok(context.successorJumpBox && typeof context.successorJumpBox === "object");
+    context.successorJumpBox.jump = jump;
+    return { successorNotice: "notice", jump };
+  };
+  const realStrike = plugin.strikeActiveSelectedTaskBlockLink.bind(plugin);
+  plugin.strikeActiveSelectedTaskBlockLink = async (...args) => {
+    order.push("strike");
+    return realStrike(...args);
+  };
+  plugin.landSuccessorJump = async (model, context) => {
+    order.push("land");
+    assert.deepEqual(model, { jump });
+    assert.ok(!context.successorJumpTarget || context.successorJumpTarget !== "return");
+    return jump;
+  };
+  plugin.resolveTranscludedBlockTarget = async () => ({
+    file: { path: "Tasks.md" },
+    blockId: "a",
+    taskStatus: { symbol: " ", lineText: "- [ ] #task A ^a" },
+  });
+  plugin.replaceResolvedTranscludedTaskLine = async () => true;
+
+  const result = await plugin.handleActiveTaskBlockLinkOpenDone(
+    editor,
+    { path: "Daily.md" },
+  );
+  assert.deepEqual(order, ["finalize", "strike", "land"]);
+  assert.deepEqual(result.jump, jump);
+  assert.equal(result.resolved, true);
+});
+
+test("Task Link Ctrl+Enter with a walk return never self-lands", async () => {
+  const harness = createInMemoryObsidianApp({
+    "Daily.md": "## Pomodoros\n- [ ] Focus\n\t- [[Tasks#^a]]",
+    "Tasks.md": "- [ ] #task A ^a",
+  });
+  const editor = createTextEditor("## Pomodoros\n- [ ] Focus\n\t- [[Tasks#^a]]", { line: 2, ch: 5 });
+  const plugin = new TaskStatusCyclerPlugin();
+  attachActiveMarkdownView(plugin, harness, editor, "Daily.md");
+  const jump = { key: "Tasks.md#^b", path: "Tasks.md", blockId: "b", label: "B" };
+  const box = {};
+  let landed = 0;
+  plugin.finalizeClosedTasks = async (_identities, context) => {
+    assert.equal(context.successorJumpTarget, "return");
+    context.successorJumpBox.jump = jump;
+    return { successorNotice: "notice", jump };
+  };
+  plugin.strikeActiveSelectedTaskBlockLink = async () => true;
+  plugin.landSuccessorJump = async () => { landed += 1; return null; };
+  plugin.resolveTranscludedBlockTarget = async () => ({
+    file: { path: "Tasks.md" },
+    blockId: "a",
+    taskStatus: { symbol: " ", lineText: "- [ ] #task A ^a" },
+  });
+  plugin.replaceResolvedTranscludedTaskLine = async () => true;
+
+  const result = await plugin.handleActiveTaskBlockLinkOpenDone(
+    editor,
+    { path: "Daily.md" },
+    { successorJumpTarget: "return", successorJumpBox: box },
+  );
+  assert.deepEqual(box.jump, jump);
+  assert.deepEqual(result.jump, jump);
+  assert.equal(landed, 0);
+});
+
 test("Ctrl+Enter on a Task Link to a Cancelled task leaves the Pomodoro open", async () => {
   notices.length = 0;
   const daily = [

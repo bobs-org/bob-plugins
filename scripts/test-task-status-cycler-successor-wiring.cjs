@@ -2388,3 +2388,42 @@ test("walk-owned jump returns to follow without self-landing", async () => {
   assert.deepEqual(events, ["retire", "notice"]);
   assert.equal(selfLandCalls, 0);
 });
+
+test("walk-return receipt omits the jump line so the follow toast owns it", () => {
+  const harness = createInMemoryObsidianApp({ "Tasks.md": "- [x] #task Closed ^closed" });
+  const editor = createTextEditor("- [x] #task Closed ^closed", { line: 0, ch: 4 });
+  const plugin = makePlugin(harness, editor, "Tasks.md");
+  const seen = [];
+  installOfferCloseNavStub(plugin, { pick: () => null, shown: seen });
+  const model = {
+    unblocked: [],
+    keep_moving: [],
+    still_blocked: [],
+    offer_closes: [{ key: "Tasks.md#^a", outcome: "done", message: "done" }],
+    jump: { key: "Tasks.md#^next", label: "Next task", path: "Tasks.md", blockId: "next" },
+  };
+  plugin.presentSuccessorModel(model, {
+    successorNoticeTarget: "return",
+    successorJumpTarget: "return",
+    successorJumpBox: {},
+  });
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].jump, undefined, "walk-return card must not carry the jump receipt");
+});
+
+test("non-walk receipt keeps the jump line", () => {
+  const harness = createInMemoryObsidianApp({ "Tasks.md": "- [x] #task Closed ^closed" });
+  const editor = createTextEditor("- [x] #task Closed ^closed", { line: 0, ch: 4 });
+  const plugin = makePlugin(harness, editor, "Tasks.md");
+  const seen = [];
+  installOfferCloseNavStub(plugin, { pick: () => null, shown: seen });
+  const model = {
+    unblocked: [{ text: "Dep", status_symbol: " ", link: { line: 1 } }],
+    keep_moving: [],
+    still_blocked: [],
+    jump: { key: "Tasks.md#^next", label: "Next task", path: "Tasks.md", blockId: "next" },
+  };
+  plugin.presentSuccessorModel(model, {});
+  assert.equal(seen.length, 1);
+  assert.deepEqual(seen[0].jump, { label: "Next task" });
+});

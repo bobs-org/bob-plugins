@@ -709,10 +709,15 @@ class TaskStatusCyclerSuccessorsMixin {
         if (model.relation_picker_opened === true) delete noticeModel.relation_held;
         delete noticeModel.relation_picker_opened;
       }
-      const jumpLabel = model && model.jump &&
-        String(model.jump.label || model.jump.description || "").trim();
-      if (jumpLabel) {
-        noticeModel = { ...noticeModel, jump: { label: jumpLabel } };
+      // Walk returns compose the jump receipt into the follow toast, so the
+      // cycler's own card must not add the ↗ line (no doubled receipt).
+      const jumpForNotice = active.successorJumpTarget === "return" ? "" : (model && model.jump &&
+        String(model.jump.label || model.jump.description || "").trim());
+      if (jumpForNotice) {
+        noticeModel = { ...noticeModel, jump: { label: jumpForNotice } };
+      } else if (noticeModel && noticeModel.jump) {
+        noticeModel = { ...noticeModel };
+        delete noticeModel.jump;
       }
       const api = this.getNavNoticeApi();
       const hasKeepMoving = Array.isArray(model.keep_moving) && model.keep_moving.length > 0;

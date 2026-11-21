@@ -572,19 +572,35 @@ class WorkSummaryPromptModal extends Modal {
     }
 
     this.submitting = true;
+    // Close before the unlink writes so a modal focus restore cannot undo the
+    // parked successor landing: the landing runs after this prompt has closed.
+    // The stamp is still read at commit inside submitPomodoroWorkSummary, never
+    // at the time the prompt opened.
+    const value = this.inputEl ? this.inputEl.value : "";
+    this.completed = true;
     try {
-      // The stamp is read at commit inside submitPomodoroWorkSummary, never
-      // at the time the prompt opened.
-      const accepted = await this.plugin.submitPomodoroWorkSummary(
+      this.close();
+    } catch (_closeError) {
+      // Best effort: the writes below still land after the close attempt.
+    }
+    let accepted = false;
+    try {
+      accepted = await this.plugin.submitPomodoroWorkSummary(
         this.source,
-        this.inputEl ? this.inputEl.value : "",
+        value,
       );
-      if (accepted) {
-        this.completed = true;
-        this.close();
-      }
+    } catch (_submitError) {
+      accepted = false;
     } finally {
       this.submitting = false;
+    }
+    if (!accepted) {
+      // The pre-closed modal cannot retry: release the walk so it never sticks.
+      try {
+        this.plugin.cancelWorkSummaryPrompt(this.source);
+      } catch (_cancelError) {
+        // Best effort: the failure notice already landed.
+      }
     }
   }
 

@@ -20706,10 +20706,15 @@ class TaskStatusCyclerSuccessorsMixin {
         if (model.relation_picker_opened === true) delete noticeModel.relation_held;
         delete noticeModel.relation_picker_opened;
       }
-      const jumpLabel = model && model.jump &&
-        String(model.jump.label || model.jump.description || "").trim();
-      if (jumpLabel) {
-        noticeModel = { ...noticeModel, jump: { label: jumpLabel } };
+      // Walk returns compose the jump receipt into the follow toast, so the
+      // cycler's own card must not add the ↗ line (no doubled receipt).
+      const jumpForNotice = active.successorJumpTarget === "return" ? "" : (model && model.jump &&
+        String(model.jump.label || model.jump.description || "").trim());
+      if (jumpForNotice) {
+        noticeModel = { ...noticeModel, jump: { label: jumpForNotice } };
+      } else if (noticeModel && noticeModel.jump) {
+        noticeModel = { ...noticeModel };
+        delete noticeModel.jump;
       }
       const api = this.getNavNoticeApi();
       const hasKeepMoving = Array.isArray(model.keep_moving) && model.keep_moving.length > 0;
@@ -23437,14 +23442,44 @@ function buildSuccessorJumpIdentity(key, originalOfferByKey, plan, closeResult) 
           text: edit ? edit.after : originalText,
         };
       } else {
-        const edit = editAt(originalPath, originalLine);
-        target = {
-          outcome: "left",
-          path: originalPath,
-          line: originalLine,
-          blockId: String(task.blockId || ""),
-          text: edit ? edit.after : originalText,
-        };
+        // Left identity comes from the fresh plan's row for the same offer
+        // key: after a replan a shifted note can give another task's line as
+        // text when the stale card-open line is reused. Fall back to the
+        // original offer only when the fresh plan lacks the key (a refused
+        // stale pick still lands as Left from its fresh unpicked row).
+        const freshRow = rows.find((row) => row && row.offer &&
+          String(row.offer.key || "") === wanted);
+        if (freshRow) {
+          const freshPath = String(
+            freshRow.note_path || freshRow.notePath || originalPath,
+          );
+          const freshLine = Number.isInteger(freshRow.line)
+            ? freshRow.line
+            : originalLine;
+          const freshBlockId = String(
+            freshRow.block_id || freshRow.blockId || task.blockId || "",
+          );
+          const freshFallback = typeof freshRow.text === "string"
+            ? freshRow.text
+            : originalText;
+          const edit = editAt(freshPath, freshLine);
+          target = {
+            outcome: "left",
+            path: freshPath,
+            line: freshLine,
+            blockId: freshBlockId,
+            text: edit ? edit.after : freshFallback,
+          };
+        } else {
+          const edit = editAt(originalPath, originalLine);
+          target = {
+            outcome: "left",
+            path: originalPath,
+            line: originalLine,
+            blockId: String(task.blockId || ""),
+            text: edit ? edit.after : originalText,
+          };
+        }
       }
     }
 
@@ -23462,6 +23497,49 @@ function buildSuccessorJumpIdentity(key, originalOfferByKey, plan, closeResult) 
   } catch (_error) {
     return null;
   }
+}
+
+// Task Link Ctrl+Enter jump ordering: finalize in return mode so the jump
+// lands only after the strike write. Returns {finalized, box, wantsReturn}.
+// Walk callers that already asked for return reuse their box (nav lands via
+// follow); others get a local box to land after the strike. Never throws.
+async function finalizeTaskLinkCloseForJump(plugin, closed, baseContext, options) {
+  const opts = options && typeof options === "object" ? options : {};
+  const wantsReturn = opts.successorJumpTarget === "return";
+  const callerBox = wantsReturn && opts.successorJumpBox &&
+    typeof opts.successorJumpBox === "object" ? opts.successorJumpBox : null;
+  const box = callerBox || {};
+  const ctx = { ...baseContext, successorJumpTarget: "return", successorJumpBox: box };
+  if (wantsReturn && opts.successorNoticeTarget) ctx.successorNoticeTarget = opts.successorNoticeTarget;
+  if (wantsReturn && opts.successorNoticeBox) ctx.successorNoticeBox = opts.successorNoticeBox;
+  try {
+    const finalized = await plugin.finalizeClosedTasks(closed, ctx);
+    return { finalized, box, wantsReturn };
+  } catch (_error) {
+    return { finalized: null, box, wantsReturn };
+  }
+}
+
+async function landTaskLinkCloseJump(plugin, order, baseContext) {
+  try {
+    if (!order || order.wantsReturn) return order && order.box ? order.box.jump || null : null;
+    const jump = order.box && order.box.jump;
+    if (!jump) return null;
+    await plugin.landSuccessorJump({ jump }, baseContext || {});
+    return jump;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function taskLinkCloseJumpResult(order, changed) {
+  const jump = order && order.box && order.box.jump;
+  const out = { resolved: true, changed: !!changed };
+  if (jump) out.jump = jump;
+  if (order && order.finalized && order.finalized.successorNotice) {
+    out.successorNotice = order.finalized.successorNotice;
+  }
+  return out;
 }
 // ---- src/138-plugin-successor-relations.js ----
 // Managed-Done relation-index adapter for the successor planner. The index
@@ -26559,7 +26637,7 @@ class TaskStatusCyclerCompletionMixin {
     );
   }
 
-  async handleActiveTaskBlockLinkOpenDone(editor, activeFile) {
+  async handleActiveTaskBlockLinkOpenDone(editor, activeFile, options = {}) {
     const activePath = activeFile && activeFile.path;
     const candidate = this.getActiveLineTaskBlockLinkTarget(editor, activePath);
     if (!candidate) {
@@ -26675,7 +26753,7 @@ class TaskStatusCyclerCompletionMixin {
           context,
           new Set(),
         );
-        await this.finalizeClosedTasks(result.closed, context);
+        const order = await finalizeTaskLinkCloseForJump(this, result.closed, context, options);
         const rootKey = `${resolvedTarget.file.path}#^${resolvedTarget.blockId}`;
         const rootClosed = Array.isArray(result.closed) && result.closed.some(
           (identity) =>
@@ -26684,16 +26762,13 @@ class TaskStatusCyclerCompletionMixin {
         );
         if (rootClosed) {
           try {
-            await this.strikeActiveSelectedTaskBlockLink(
-              editor,
-              activePath,
-              candidate,
-            );
+            await this.strikeActiveSelectedTaskBlockLink(editor, activePath, candidate);
           } catch (error) {
             // Best effort: the close already landed; a missed strike is cosmetic.
           }
         }
-        return { resolved: true, changed: !!result.changed };
+        await landTaskLinkCloseJump(this, order, context);
+        return taskLinkCloseJumpResult(order, result.changed);
       } catch (error) {
         // Once the eligible root resolved, a partial recursive close remains a
         // handled best-effort action.
@@ -26713,18 +26788,16 @@ class TaskStatusCyclerCompletionMixin {
         resolvedTarget.file.path,
         resolvedTarget.taskStatus.lineText,
       ) || { path: resolvedTarget.file.path, blockId: resolvedTarget.blockId };
-      await this.finalizeClosedTasks([identity], context);
+      const order = await finalizeTaskLinkCloseForJump(this, [identity], context, options);
       if (!onDependencyLine) {
         try {
-          await this.strikeActiveSelectedTaskBlockLink(
-            editor,
-            activePath,
-            candidate,
-          );
+          await this.strikeActiveSelectedTaskBlockLink(editor, activePath, candidate);
         } catch (error) {
           // Best effort: the close already landed; a missed strike is cosmetic.
         }
       }
+      await landTaskLinkCloseJump(this, order, context);
+      return taskLinkCloseJumpResult(order, wrote);
     }
     return { resolved: true, changed: !!wrote };
   }

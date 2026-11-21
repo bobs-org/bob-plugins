@@ -382,27 +382,47 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
 
   // After an Unlink task prompt settles and the unlink write commits, offer
   // starts-after successors for a Pending task whose last live link was
-  // removed. Esc, non-Pending lanes, and older cyclers stay silent.
+  // removed. Esc, non-Pending lanes, and older cyclers stay silent. When the
+  // caller passes `successorJumpTarget: "return"` with a box, the parked
+  // offer returns the jump instead of landing (older cyclers without the
+  // return plumbing keep today's order and land immediately). Resolves to the
+  // boxed jump or null. Never throws.
   async offerParkedSuccessorsAfterUnlink(identity, options = {}) {
     try {
       if (!identity || !identity.path || !identity.blockId) {
-        return;
+        return null;
       }
       if (String(options.status || "") !== "/") {
-        return;
+        return null;
       }
       if (!(Number(options.removedCount) > 0)) {
-        return;
+        return null;
       }
       const api = this.getParkedSuccessorApi();
       if (!api) {
-        return;
+        return null;
       }
-      await api.offerParkedSuccessors([identity], {
+      const active = {
         slot: options.slot && typeof options.slot === "object" ? options.slot : null,
-      });
+      };
+      if (options.successorJumpTarget === "return") {
+        active.successorJumpTarget = "return";
+        if (options.successorJumpBox && typeof options.successorJumpBox === "object") {
+          active.successorJumpBox = options.successorJumpBox;
+        }
+      }
+      await api.offerParkedSuccessors([identity], active);
+      if (
+        active.successorJumpBox &&
+        active.successorJumpBox.jump &&
+        typeof active.successorJumpBox.jump === "object"
+      ) {
+        return active.successorJumpBox.jump;
+      }
+      return null;
     } catch (_error) {
       // Best effort: the unlink already landed.
+      return null;
     }
   }
 

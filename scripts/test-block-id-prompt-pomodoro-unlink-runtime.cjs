@@ -858,3 +858,97 @@ test("a prompt opened at 23:59 and committed at 00:01 stamps the commit instant"
     ].join("\n"),
   );
 });
+
+test("inbox-route unlink lands the parked jump only after the move and walk settle", async () => {
+  resetNotices();
+  const editor = createEditor("- [/] #task Ship it ^ship");
+  const source = sourceForPomodoroLink(editor, "Tasks.md", 0);
+  source.reviewOrigin = { seq: 1 };
+  const plugin = new Plugin();
+  plugin.resolveTaskFile = (path) => (path === "Tasks.md" ? { path: "Tasks.md" } : null);
+  plugin.resolveTodayDailyFile = () => null;
+  plugin.suppressEditorScans = () => {};
+  const order = [];
+  const jump = { key: "Tasks.md#^next", path: "Tasks.md", blockId: "next", label: "Next" };
+  plugin.offerParkedSuccessorsAfterUnlink = async (_identity, options) => {
+    order.push("offer");
+    assert.equal(options.successorJumpTarget, "return");
+    assert.ok(options.successorJumpBox && typeof options.successorJumpBox === "object");
+    options.successorJumpBox.jump = jump;
+    return jump;
+  };
+  plugin.commitPomodoroToggleInboxRoute = async () => {
+    order.push("commit");
+    return { ok: true, name: "health", handledRefs: [] };
+  };
+  const settled = [];
+  plugin.settleLinkReviewOrigin = (src, outcome) => {
+    order.push("settle");
+    settled.push(outcome);
+  };
+  plugin.landParkedJumpAfterUnlink = async () => {
+    order.push("land");
+  };
+  const result = await plugin.finishPomodoroUnlinkWithInboxRoute(
+    source,
+    { hasChanges: true, removedCount: 1 },
+    { hasChanges: false },
+    "/",
+    { kind: "move", path: "health.md", name: "health" },
+  );
+  assert.equal(result, true);
+  assert.deepEqual(order, ["offer", "commit", "settle"]);
+  assert.deepEqual(settled[0].follow, jump);
+});
+
+test("inbox-route unlink without a walk origin shows the notice then lands once", async () => {
+  resetNotices();
+  const editor = createEditor("- [/] #task Ship it ^ship");
+  const source = sourceForPomodoroLink(editor, "Tasks.md", 0);
+  const plugin = new Plugin();
+  plugin.resolveTaskFile = (path) => (path === "Tasks.md" ? { path: "Tasks.md" } : null);
+  plugin.resolveTodayDailyFile = () => null;
+  plugin.suppressEditorScans = () => {};
+  const order = [];
+  const jump = { key: "Tasks.md#^next", path: "Tasks.md", blockId: "next", label: "Next" };
+  plugin.offerParkedSuccessorsAfterUnlink = async (_identity, options) => {
+    order.push("offer");
+    options.successorJumpBox.jump = jump;
+    return jump;
+  };
+  plugin.commitPomodoroToggleInboxRoute = async () => {
+    order.push("commit");
+    return { ok: true, name: "health", handledRefs: [] };
+  };
+  plugin.landParkedJumpAfterUnlink = async (landed) => {
+    order.push("land");
+    assert.deepEqual(landed, jump);
+  };
+  const result = await plugin.finishPomodoroUnlinkWithInboxRoute(
+    source,
+    { hasChanges: true, removedCount: 1 },
+    { hasChanges: false },
+    "/",
+    { kind: "move", path: "health.md", name: "health" },
+  );
+  assert.equal(result, true);
+  assert.deepEqual(order, ["offer", "commit", "land"]);
+});
+
+test("work-summary prompt closes before the parked landing", async () => {
+  const editor = createEditor("- [/] #task Ship it ^ship");
+  const plugin = new Plugin();
+  const source = sourceForPomodoroLink(editor, "Tasks.md", 0);
+  const order = [];
+  const modal = new helpers.WorkSummaryPromptModal({}, plugin, source);
+  modal.inputEl = { value: "note" };
+  modal.close = () => { order.push("close"); };
+  plugin.submitPomodoroWorkSummary = async () => {
+    order.push("submit");
+    return true;
+  };
+  plugin.cancelWorkSummaryPrompt = () => { order.push("cancel"); };
+  await modal.submit();
+  assert.deepEqual(order, ["close", "submit"]);
+  assert.equal(modal.completed, true);
+});

@@ -496,7 +496,7 @@ test("H1-less albums paint at the start and embeds keep their own property scope
   assert.equal(parent.children.filter((child) => child.classList.contains("bob-album-header")).length, 0);
 });
 
-test("healthy schema summary starts folded to one line and expands per album in view state", () => {
+test("healthy schema summary starts expanded and collapses per album in view state", () => {
   const { doc, plugin, flushReading } = fixture(album({
     label: "Restaurant",
     plural: "restaurants",
@@ -514,23 +514,24 @@ test("healthy schema summary starts folded to one line and expands per album in 
   plugin.renderAlbumHeaderInReading(root, { sourcePath: "eat.md", addChild() {} });
   flushReading();
   const summary = root.querySelector(".bob-album-schema-summary");
-  assert.equal(summary.getAttribute("aria-expanded"), "false");
+  assert.equal(summary.getAttribute("aria-expanded"), "true");
   assert.equal(summary.textContent,
-    "▸ Schema · 2 fields · grouped by Status, sub-grouped by Location · dated notes · 104 restaurants");
-  assert.equal(summary.getAttribute("data-schema-fold"), "folded");
-  assert.equal(root.querySelector(".bob-album-schema-card").getAttribute("hidden"), "");
-  assert.equal(root.querySelectorAll(".bob-album-schema-field").length, 2, "chips stay in the DOM, hidden");
-  summary.fire("click");
-  const open = root.querySelector(".bob-album-schema-summary");
-  assert.equal(plugin.albumHeaderIsExpanded("eat.md"), true);
-  assert.equal(open.getAttribute("aria-expanded"), "true");
-  assert.match(open.textContent, /^▾ Schema · 2 fields · /);
+    "▾ Schema · 2 fields · grouped by Status, sub-grouped by Location · dated notes · 104 restaurants");
+  assert.equal(summary.getAttribute("data-schema-fold"), "open");
   assert.equal(root.querySelector(".bob-album-schema-card").getAttribute("hidden"), null);
+  assert.equal(root.querySelectorAll(".bob-album-schema-field").length, 2);
+  summary.fire("click");
+  const folded = root.querySelector(".bob-album-schema-summary");
+  assert.equal(plugin.albumHeaderIsExpanded("eat.md"), false);
+  assert.equal(folded.getAttribute("aria-expanded"), "false");
+  assert.match(folded.textContent, /^▸ Schema · 2 fields · /);
+  assert.equal(folded.getAttribute("data-schema-fold"), "folded");
+  assert.equal(root.querySelector(".bob-album-schema-card").getAttribute("hidden"), "");
   const other = node(doc, "div", "markdown-preview-view");
   plugin.paintAlbumHeaderReading(other, "eat.md");
-  assert.equal(other.querySelector(".bob-album-schema-summary").getAttribute("aria-expanded"), "true",
+  assert.equal(other.querySelector(".bob-album-schema-summary").getAttribute("aria-expanded"), "false",
     "the per-session toggle is per album, not per pane");
-  assert.equal(helpers.albumHeaderDefaultExpanded({ schemaInvalid: false, emptySchema: false }), false);
+  assert.equal(helpers.albumHeaderDefaultExpanded({ schemaInvalid: false, emptySchema: false }), true);
   assert.equal(helpers.albumHeaderDefaultExpanded({ emptySchema: true }), true);
   assert.equal(helpers.albumHeaderDefaultExpanded({ schemaInvalid: true }), true);
   const model = { fields: [{}], records: 1, noun: "restaurant", singular: "restaurant", groupingClause: "", datedNotes: false };
@@ -539,7 +540,28 @@ test("healthy schema summary starts folded to one line and expands per album in 
     "Restaurant · 1 field · dated notes · grouped by Status", "the editor's summary text is unchanged");
 });
 
-test("a walk_by album's folded schema line ends with a display-only walks-by pill", () => {
+test("a collapsed schema starts expanded again after the plugin reloads", () => {
+  const { doc, plugin, flushReading } = fixture(album({ records: 3, index_by: "status", fields: [
+    { key: "status", label: "Status", kind: "choices", required: true, list: false,
+      choices: [{ value: "a", label: "First" }] },
+  ] }));
+  const root = node(doc, "div", "markdown-preview-view");
+  plugin.renderAlbumHeaderInReading(root, { sourcePath: "eat.md", addChild() {} });
+  flushReading();
+  root.querySelector(".bob-album-schema-summary").fire("click");
+  assert.equal(plugin.albumHeaderIsExpanded("eat.md"), false);
+  plugin.teardownAlbumHeader();
+  assert.equal(plugin.albumHeaderIsExpanded("eat.md"), true, "unloading the plugin clears the session map");
+  plugin.setupAlbumHeader();
+  const fresh = node(doc, "div", "markdown-preview-view");
+  plugin.paintAlbumHeaderReading(fresh, "eat.md");
+  const summary = fresh.querySelector(".bob-album-schema-summary");
+  assert.equal(summary.getAttribute("aria-expanded"), "true");
+  assert.match(summary.textContent, /^▾ Schema · /);
+  assert.equal(fresh.querySelector(".bob-album-schema-card").getAttribute("hidden"), null);
+});
+
+test("a walk_by album's schema line ends with a display-only walks-by pill", () => {
   const fields = [
     { key: "status", label: "Status", kind: "choices", required: true, list: false,
       choices: [{ value: "a", label: "First" }, { value: "b", label: "Second" }] },
@@ -551,14 +573,14 @@ test("a walk_by album's folded schema line ends with a display-only walks-by pil
   plugin.renderAlbumHeaderInReading(root, { sourcePath: "eat.md", addChild() {} });
   flushReading();
   const summary = root.querySelector(".bob-album-schema-summary");
-  assert.equal(summary.textContent, "▸ Schema · 2 fields · grouped by Status · 12 restaurants · walks by Section");
+  assert.equal(summary.textContent, "▾ Schema · 2 fields · grouped by Status · 12 restaurants · walks by Section");
   const pill = summary.querySelector(".bob-album-schema-walks-by");
   assert.equal(pill.textContent, "walks by Section");
   assert.equal(pill.getAttribute("title"), "Record walk: grouped by Section, then title");
   assert.equal(pill.listeners.size, 0, "the pill is display-only; the summary keeps its own toggle");
   summary.fire("click");
-  assert.equal(plugin.albumHeaderIsExpanded("eat.md"), true);
-  assert.match(root.querySelector(".bob-album-schema-summary").textContent, /^▾ Schema · .* · walks by Section$/);
+  assert.equal(plugin.albumHeaderIsExpanded("eat.md"), false);
+  assert.match(root.querySelector(".bob-album-schema-summary").textContent, /^▸ Schema · .* · walks by Section$/);
 
   const model = helpers.albumHeaderModel(state.report, "eat.md", { sourceText: "---\ntype: \"[[album]]\"\n---\n" });
   assert.equal(model.walkBy, "section");
@@ -783,7 +805,7 @@ test("theme accent, schema button, and keyboard labels stay on the header", () =
   const header = root.querySelector(".bob-album-header");
   assert.equal(header.tagName, "SECTION");
   assert.equal(root.querySelector(".bob-album-header-schema").textContent, "⊞ Schema");
-  assert.equal(root.querySelector(".bob-album-schema-summary").getAttribute("aria-expanded"), "false");
+  assert.equal(root.querySelector(".bob-album-schema-summary").getAttribute("aria-expanded"), "true");
   const field = root.querySelector(".bob-album-schema-field");
   assert.equal(field.getAttribute("tabindex"), "0");
 });
@@ -941,7 +963,7 @@ test("the title block paints from local data before the report, and the body joi
   assert.equal(card.getAttribute("data-album-body"), "report");
   assert.equal(card.classList.contains("bob-property-card-title-slot"), true);
   assert.equal(card.querySelectorAll(".bob-album-header-copy").length, 1);
-  assert.match(card.querySelector(".bob-album-schema-summary").textContent, /^▸ Schema · 1 field · 3 restaurants$/);
+  assert.match(card.querySelector(".bob-album-schema-summary").textContent, /^▾ Schema · 1 field · 3 restaurants$/);
   assert.equal(card.querySelector(".bob-property-card-title").getAttribute("aria-level"), "1");
   assert.equal(pane.row.classList.contains(OWNED_ROW), true, "the record row hides once the body paints");
   assert.equal(pane.sizer.querySelectorAll(".bob-album-header").length, 1, "nothing in the body");

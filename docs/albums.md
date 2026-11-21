@@ -84,16 +84,18 @@ later H1 stays visible. Source mode shows no card. Embeds, hover previews, and
 mobile keep the inline title and H1 and place the card below the H1.
 
 When bob's report arrives, `＋ <noun>` and **⊞ Schema** join the kicker row
-and the schema folds to one line, such as
-`▸ Schema · 5 fields · grouped by Location · dated notes · 104 restaurants`;
+and the schema summary line, such as
+`▾ Schema · 5 fields · grouped by Location · dated notes · 104 restaurants`,
+starts expanded with the chip rows shown;
 the native `record` property hides only then. When the album sets a valid
 `walk_by`, the line ends with `· walks by Section` (the field's label), whose
 tooltip reads `Record walk: grouped by Section, then title`; it is
-display-only, and records show the matching group row on their walk rail. The `▸` toggle expands chip
-rows, one per field in declaration order: human labels, kind and flag
+display-only, and records show the matching group row on their walk rail. The `▾` toggle collapses the
+chip rows to that one line (`▸`); they are one per field in declaration order: human labels, kind and flag
 suffixes, required as a quiet `*`, choice chips with usage counts, grouping
 annotations, and muted `legacy` chips. The toggle state lives in view state
-keyed by the album for the session, never in frontmatter. An invalid schema
+keyed by the album for the session, never in frontmatter, so a new Obsidian
+session (or a plugin reload) starts expanded again. An invalid schema
 starts expanded with the first diagnostic on the summary and the lint list;
 an empty schema starts expanded and teaches how to add fields so
 `Name @stem/` can collect facts. The two states never impersonate each other.
@@ -270,7 +272,7 @@ Its JSON report records Bob's path and version. Run the writer acceptance with
 The wrappers report their real-Bob checks as skipped when `BOB_BIN` is absent.
 The walkthrough covers owner chips,
 group jump, folds, date chips, the album card in the title slot (H1 hide and
-reveal, the folded schema line, the body joining before the `record` row
+reveal, the expanded-by-default schema line, the body joining before the `record` row
 hides), property hiding, failure
 and retry, cleanup, byte preservation, the debounced sync, and the Schema
 Card walk: header, palette, record-parent, title-row album fallback with

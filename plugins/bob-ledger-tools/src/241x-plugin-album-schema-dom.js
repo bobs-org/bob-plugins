@@ -1,7 +1,6 @@
-// Schema summary (one folded line for healthy schemas, expanded for
-// invalid or empty ones), collapsible chip view, and lint marks. All report
-// strings are text nodes. Collapse is a view-state flag; this fragment never
-// writes the vault.
+// Schema summary line (starts expanded; the toggle collapses it to one line),
+// collapsible chip view, and lint marks. All report strings are text nodes.
+// Collapse is a session view-state flag; this fragment never writes the vault.
 function albumSchemaBindYaml(node, line, options) {
   if (!node || typeof node.addEventListener !== "function") return;
   node.addEventListener("keydown", (event) => {

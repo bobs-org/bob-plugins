@@ -1245,7 +1245,7 @@ async function run(args) {
     const readingHeader = album.assertHeaderIntegrity(records, { title: "Eat" });
     record("reading-single-header-no-warning", readingHeader.ok, readingHeader.reason || "one title-slot card before Properties; no ancestry warning");
     // The card owns the title: the redundant `# Eat` is hidden at render time,
-    // and a healthy schema starts folded to one line with its chips hidden.
+    // and a healthy schema starts expanded with its chips shown.
     const readingTitle = await client.evaluate(`(() => {
       const view = window.app.workspace.activeLeaf.view;
       const surface = view.containerEl.querySelector(".markdown-preview-view");
@@ -1269,8 +1269,8 @@ async function run(args) {
       JSON.stringify(readingTitle).slice(0, 260));
     record("card-identity", /^Album·Body$/i.test(readingTitle.kicker.replace(/\s+/g, "")) && readingTitle.subtitle === "Places to eat around here."
       && readingTitle.actionsInKicker.join(",") === "bob-album-header-copy,bob-album-header-schema", JSON.stringify(readingTitle).slice(0, 260));
-    record("schema-fold-default", readingTitle.summaryExpanded === "false" && /^▸ Schema · /.test(readingTitle.summaryText)
-      && / · \d+ restaurants?$/.test(readingTitle.summaryText) && readingTitle.chipsShown === false, JSON.stringify(readingTitle).slice(0, 260));
+    record("schema-expanded-default", readingTitle.summaryExpanded === "true" && /^▾ Schema · /.test(readingTitle.summaryText)
+      && / · \d+ restaurants?$/.test(readingTitle.summaryText) && readingTitle.chipsShown === true, JSON.stringify(readingTitle).slice(0, 260));
     record("records-card", (records.recordCards || []).length > 0, `cards=${(records.recordCards || []).length}`);
     record("records-folds-present", (records.folds || []).length > 0, `folds=${(records.folds || []).length}`);
     const foldStates = (records.recordGroups || []).map((item) => item.folded);

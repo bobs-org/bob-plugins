@@ -9036,8 +9036,8 @@ body.bob-task-tag-marks a.tag.bob-no-reply-pill::before {
   background: transparent;
   box-shadow: none;
 }
-/* A healthy schema folds to one muted line under the title block; it wraps
-   instead of overflowing, and the hidden chip card draws no rule. */
+/* The schema summary is one muted line under the title block; it wraps
+   instead of overflowing, and a collapsed (hidden) chip card draws no rule. */
 .bob-album-schema-summary[data-schema-fold] {
   color: var(--text-muted);
   font-family: var(--font-interface);

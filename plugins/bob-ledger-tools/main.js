@@ -98510,10 +98510,10 @@ function albumHeaderYamlLine(model, target = {}) {
   return firstField ? firstField.line : null;
 }
 
-// Healthy schemas start folded to one line; invalid and empty schemas start
-// expanded so their issues and teaching copy stay visible.
+// Every schema starts expanded; the summary toggle collapses it to one line
+// for the rest of the session.
 function albumHeaderDefaultExpanded(model) {
-  return Boolean(model?.schemaInvalid || model?.emptySchema);
+  return true;
 }
 
 // The folded schema line for a healthy schema:
@@ -98537,10 +98537,9 @@ function albumHeaderIsDesktopPlatform(platform) {
   }
 }
 // ---- src/241x-plugin-album-schema-dom.js ----
-// Schema summary (one folded line for healthy schemas, expanded for
-// invalid or empty ones), collapsible chip view, and lint marks. All report
-// strings are text nodes. Collapse is a view-state flag; this fragment never
-// writes the vault.
+// Schema summary line (starts expanded; the toggle collapses it to one line),
+// collapsible chip view, and lint marks. All report strings are text nodes.
+// Collapse is a session view-state flag; this fragment never writes the vault.
 function albumSchemaBindYaml(node, line, options) {
   if (!node || typeof node.addEventListener !== "function") return;
   node.addEventListener("keydown", (event) => {

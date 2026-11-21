@@ -128,7 +128,7 @@ test("header acceptance requires the title-slot card, its identity, and one visi
   const notes = album.fixtureNotes();
   assert.match(notes["h1less-album.md"], /\ntitle: Bites\n/, "the post-tidy fixture carries title: and no H1");
   const source = require("node:fs").readFileSync(path.join(__dirname, "obsidian-album-ui-e2e.cjs"), "utf8");
-  for (const name of ["reading-h1-hidden", "live-title-blanks-collapse-and-reveal", "schema-fold-default", "card-identity",
+  for (const name of ["reading-h1-hidden", "live-title-blanks-collapse-and-reveal", "schema-expanded-default", "card-identity",
     "post-tidy-title-hides-nothing", "-title-block-before-report", "-body-joins-same-node"]) {
     assert.ok(source.includes(name), name);
   }

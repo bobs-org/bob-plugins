@@ -108,10 +108,10 @@ function albumHeaderYamlLine(model, target = {}) {
   return firstField ? firstField.line : null;
 }
 
-// Healthy schemas start folded to one line; invalid and empty schemas start
-// expanded so their issues and teaching copy stay visible.
+// Every schema starts expanded; the summary toggle collapses it to one line
+// for the rest of the session.
 function albumHeaderDefaultExpanded(model) {
-  return Boolean(model?.schemaInvalid || model?.emptySchema);
+  return true;
 }
 
 // The folded schema line for a healthy schema:

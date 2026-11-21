@@ -136,6 +136,14 @@ function intentionCardEditorPaintAll(host, options, doc, modal) {
       input.value = String(options.stageDraft || "");
       stageHost.appendChild(input);
     }
+    // nav's LINK band paints here, directly under the field (S14).
+    if (input && options.proseBand) {
+      const band = intentionCardEditorCreateEl(doc, "div", "bob-intention-stage-band");
+      if (band) {
+        band.setAttribute("data-intention-band", options.stage.kind);
+        stageHost.appendChild(band);
+      }
+    }
     if (options.stageNote) {
       const note = intentionCardEditorCreateEl(doc, "p", "bob-intention-stage-note");
       intentionCardEditorSetText(note, options.stageNote);

@@ -195,6 +195,18 @@ newline, and Ctrl/Cmd+Enter to save and close. Clearing an existing intention
 removes it, clearing summary or reflection unsets it, and a blank Add writes
 nothing.
 
+Typing `[[` in the intention, summary, or reflection field opens Bob
+Navigation Hotkeys' LINK band under the field. Links resolve against the
+note the card is on, so `[[#` and the nearby list follow `[` / `]` travel.
+While the band is open, it handles the keys first. Enter, Tab, or
+Ctrl/Cmd+Enter inserts the selected row and never saves, and a held Enter
+cannot insert and then save. In the reflection field, Shift+Enter still
+types a newline. The first Esc or Ctrl+[ closes only the band; the next
+one cancels the stage, and `q` still types. A repaint keeps the band, its
+selection, and the caret. The band only inserts text. Without that plugin,
+the fields type `[[` as plain text.
+See [Wikilink completion in prompts](bob-navigation-hotkeys.md#wikilink-completion-in-prompts).
+
 Every write awaits open Source panes for the pinned path first and carries
 the server fingerprint. Writes, Undo, and retries share one busy window:
 while one runs, keys, clicks, travel, and a second open wait, and the close

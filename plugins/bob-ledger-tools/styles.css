@@ -8875,6 +8875,10 @@ body.bob-task-tag-marks a.tag.bob-no-reply-pill::before {
   line-height: 1.5;
 }
 .bob-intention-stage-note { color: var(--text-faint); font-size: 0.82em; }
+/* nav's LINK band host under the stage field; it takes no grid row while
+   the band and its unresolved-link hint are both hidden. */
+.bob-intention-stage-band { min-width: 0; }
+.bob-intention-stage-band:not(:has(> :not(.is-hidden):not(:empty))) { display: none; }
 .bob-intention-editor-status { color: var(--text-faint); font-size: 0.8em; }
 @media (max-width: 420px) {
   .bob-intention-card-editor { min-width: 0; width: 100%; }

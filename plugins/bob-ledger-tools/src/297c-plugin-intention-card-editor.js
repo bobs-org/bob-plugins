@@ -367,7 +367,9 @@ class IntentionCardModal extends IntentionCardModalBase {
   }
 
   intentionBackOut(event) {
-    const action = this.intentionHandleEscape();
+    // An open LINK band is the first rung: it closes alone.
+    const action = !this.pendingApply && intentionCardEditorProseBackOut(this)
+      ? "close-link" : this.intentionHandleEscape();
     try { event?.preventDefault?.(); } catch (_) {}
     try { event?.stopPropagation?.(); } catch (_) {}
     try { event.__schemaEscapeHandled = true; } catch (_) {}
@@ -439,6 +441,7 @@ class IntentionCardModal extends IntentionCardModalBase {
       stagePreview: this.stagePreview, fields: this.fields,
       softCapHint: intentionCardEditorSoftCapHint(this.fields ? this.fields.intentions.length : 0),
       status: this.intentionStatusModel(),
+      proseBand: Boolean(this.stage && intentionCardEditorProseApi(this)),
     };
   }
 
@@ -450,17 +453,24 @@ class IntentionCardModal extends IntentionCardModalBase {
     const caret = intentionCardEditorCaptureCaret(this, doc);
     let card = null;
     try { card = this.contentEl?.querySelector?.(".bob-intention-card-editor"); } catch (_) {}
-    if (!card) {
-      try { this.contentEl?.empty?.(); } catch (_) {}
-      card = intentionCardEditorBuildEl(options, doc, this);
-      if (card) {
-        try { this.contentEl?.appendChild?.(card); } catch (_) {}
+    this.intentionProsePainting = true;
+    try {
+      if (!card) {
+        try { this.contentEl?.empty?.(); } catch (_) {}
+        card = intentionCardEditorBuildEl(options, doc, this);
+        if (card) {
+          try { this.contentEl?.appendChild?.(card); } catch (_) {}
+        }
+      } else {
+        try { intentionCardEditorPaintAll(card, options, doc, this); } catch (_) {}
       }
-    } else {
-      try { intentionCardEditorPaintAll(card, options, doc, this); } catch (_) {}
+      try { intentionCardEditorAutogrow(card?.querySelector?.("[data-intention-input]")); } catch (_) {}
+      this.intentionRestoreFocus(caret);
+    } finally {
+      this.intentionProsePainting = false;
     }
-    try { intentionCardEditorAutogrow(card?.querySelector?.("[data-intention-input]")); } catch (_) {}
-    this.intentionRestoreFocus(caret);
+    // The rebuilt stage keeps its LINK band: rebind after the caret is back.
+    try { intentionCardEditorSyncProse(this); } catch (_) {}
   }
 
   // Browse mode focuses its row; only an explicitly opened stage owns focus.
@@ -482,6 +492,7 @@ class IntentionCardModal extends IntentionCardModalBase {
     this.closed = true;
     this.closeToken += 1;
     this.closeRequested = false;
+    try { intentionCardEditorProseDetach(this); } catch (_) {}
     try {
       if (typeof bobCardUnwireCloseKeys === "function") bobCardUnwireCloseKeys(this);
     } catch (_) {}
@@ -679,6 +690,8 @@ class IntentionCardModal extends IntentionCardModalBase {
       try { event.preventDefault?.(); } catch (_) {}
       return;
     }
+    // An open LINK band sees stage keys first; Esc reaches it via back-out.
+    if (this.stage && intentionCardEditorProseKey(this, event)) return;
     const closeKind = this.intentionCloseKind(event);
     if (closeKind && this.intentionShouldBackOut(closeKind, event)) {
       this.intentionBackOut(event);

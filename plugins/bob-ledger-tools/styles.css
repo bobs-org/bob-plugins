@@ -5876,7 +5876,7 @@ body:not(.bob-off-clock-link-chips) .bob-off-clock-link-chip {
   justify-content: center;
   min-width: 1.55em;
   padding-inline: 0.32em;
-  font-size: var(--font-ui-smaller);
+  font-size: var(--font-ui-smaller, 0.92em);
   font-variant-numeric: tabular-nums;
   line-height: 1.2;
   color: color-mix(in srgb, var(--bob-calendar-event-hue, var(--text-muted)) 72%, var(--text-muted));
@@ -5994,7 +5994,7 @@ body.theme-dark.bob-calendar-events .bob-calendar-event-time[data-state="running
 .bob-calendar-events .cm-line.bob-calendar-sync-stamp,
 .bob-calendar-events p.bob-calendar-sync-stamp {
   color: var(--text-faint);
-  font-size: var(--font-ui-smaller);
+  font-size: var(--font-ui-smaller, 0.92em);
   font-style: italic;
   padding-top: 0.2em;
 }
@@ -12165,6 +12165,272 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
   }
 }
 /* Property-card identity kit (bob-cli-o6 identity-kit): end. */
+
+/* Property-card group row (bob-cli-oj group-rail): start.
+   One missing-target language for the step row's items, the children chips,
+   and the group arms: dashed with a `+` is "not created yet" (creatable);
+   dotted, faint, and `· not in vault` is "won't be created from here"
+   (ghost). Never error red, never the unresolved-link underline: stated
+   items keep is-unresolved only as a compatibility marker. Then the quieter
+   group row between the step row and the children strip: `« Q3 · W27`, the
+   position and its tick track, and `2027-Q1 · W01 »`.
+   Ink tokens hold in light and dark on the tinted cards: the muted ink is
+   --text-muted pulled 15% toward --text-normal, and the faint ink is
+   --text-faint pulled 45% toward it, so text stays at or above 4.5:1 where
+   the raw tokens fall short (measured about 5:1 light, 6:1 dark). Edges
+   reuse the ink, so dashed and dotted borders clear 3:1. */
+.bob-property-card-rail,
+.bob-property-card-group-row {
+  --bob-property-card-muted-ink: color-mix(in srgb, var(--text-muted) 85%, var(--text-normal));
+  --bob-property-card-faint-ink: color-mix(in srgb, var(--text-faint) 55%, var(--text-normal));
+  --bob-property-card-group-accent: var(--bob-walk-ink, var(--bob-property-card-ink, var(--interactive-accent)));
+}
+
+/* Step items and chips with a state. */
+.bob-property-card-rail-item[data-state],
+.bob-property-card-rail-chip[data-state] {
+  opacity: 1;
+  text-decoration: none;
+  border: 1px dashed var(--bob-property-card-muted-ink);
+  color: var(--bob-property-card-muted-ink);
+}
+.bob-property-card-rail-item[data-state] { padding-inline: calc(0.4em - 1px); }
+.bob-property-card-rail-item[data-state="creatable"]:hover,
+.bob-property-card-rail-chip[data-state="creatable"]:hover { color: var(--text-normal); }
+.bob-property-card-rail-item[data-state="ghost"],
+.bob-property-card-rail-chip[data-state="ghost"] {
+  border-style: dotted;
+  border-color: var(--bob-property-card-faint-ink);
+  color: var(--bob-property-card-faint-ink);
+  cursor: help;
+}
+.bob-property-card-rail-plus {
+  flex: none;
+  margin-inline-start: 0.3em;
+  font-weight: 600;
+  line-height: 1;
+}
+.bob-property-card-rail-note { flex: none; margin-inline-start: 0.3em; white-space: nowrap; }
+
+/* The group row: three cells like the step row, one type step smaller. */
+.bob-property-card-group-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.5em;
+  min-width: 0;
+  margin-block-start: 0.25em;
+  font-family: var(--font-interface);
+  font-size: var(--font-ui-smaller, 0.92em);
+  line-height: 1.3;
+}
+.bob-property-card-rail-row + .bob-property-card-group-row { padding-block-start: 0.1em; }
+.bob-property-card-group-gap { min-width: 0; }
+.bob-property-card-group-arm {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  box-sizing: border-box;
+  min-width: 32px;
+  max-width: 100%;
+  min-height: 26px;
+  padding: 0 0.4em;
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--bob-property-card-muted-ink);
+  text-decoration: none;
+  white-space: nowrap;
+  transition: color 120ms ease, background-color 120ms ease;
+}
+.bob-property-card-group-arm[data-group="prev"] { justify-self: start; }
+.bob-property-card-group-arm[data-group="next"] { justify-self: end; }
+.bob-property-card-group-arm:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
+.bob-property-card-group-arm:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+}
+.bob-property-card-group-glyph,
+.bob-property-card-group-sep,
+.bob-property-card-group-wrap { flex: none; color: var(--bob-property-card-faint-ink); }
+.bob-property-card-group-label,
+.bob-property-card-group-label-narrow,
+.bob-property-card-group-landing {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bob-property-card-group-label,
+.bob-property-card-group-label-narrow { flex: 0 1 auto; font-weight: var(--font-medium, 500); }
+.bob-property-card-group-label-narrow { display: none; }
+/* The landing gives way first when the arm runs out of room. */
+.bob-property-card-group-landing { flex: 0 8 auto; color: var(--bob-property-card-faint-ink); }
+.bob-property-card-group-arm:hover .bob-property-card-group-landing { color: var(--bob-property-card-muted-ink); }
+.bob-property-card-group-plus { flex: none; font-weight: 600; color: var(--bob-property-card-muted-ink); }
+.bob-property-card-group-note { flex: none; color: var(--bob-property-card-faint-ink); }
+.bob-property-card-group-arm[data-state="creatable"] {
+  border-style: dashed;
+  border-color: var(--bob-property-card-muted-ink);
+}
+.bob-property-card-group-arm[data-state="ghost"],
+.bob-property-card-group-arm[data-state="ghost"]:hover {
+  border-style: dotted;
+  border-color: var(--bob-property-card-faint-ink);
+  color: var(--bob-property-card-faint-ink);
+  cursor: help;
+}
+.bob-property-card-group-arm[data-state="ghost"] .bob-property-card-group-landing { color: inherit; }
+
+/* Centre: optional group name, the position, then the tick track. */
+.bob-property-card-group-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45em;
+  min-width: 0;
+  max-width: 50cqw;
+  color: var(--bob-property-card-muted-ink);
+}
+.bob-property-card-group-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: var(--font-medium, 500);
+}
+.bob-property-card-group-name-sep { flex: none; color: var(--bob-property-card-faint-ink); }
+.bob-property-card-group-position {
+  flex: none;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.bob-property-card-group-position-narrow { display: none; }
+/* Screen readers read the position from this label; wide and narrow are
+   the visible forms. */
+.bob-property-card-group-position-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  border: 0;
+  white-space: nowrap;
+}
+.bob-property-card-group-track {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  block-size: 0.95em;
+}
+/* One 3px rounded bar per member: accent and taller for this note, muted
+   fill for an existing member, a hollow outline for a missing one. */
+.bob-property-card-group-tick {
+  box-sizing: border-box;
+  inline-size: 3px;
+  block-size: 0.62em;
+  border-radius: 1.5px;
+  background: var(--text-muted);
+}
+.bob-property-card-group-tick[data-state="current"] {
+  block-size: 0.95em;
+  background: var(--bob-property-card-group-accent);
+}
+.bob-property-card-group-tick[data-state="missing"] {
+  border: 1px solid var(--text-muted);
+  background: transparent;
+}
+/* Groups larger than 21 (or without members): a bar and a thumb. */
+.bob-property-card-group-track[data-track="bar"] {
+  position: relative;
+  inline-size: 4.5em;
+  block-size: 3px;
+  border-radius: 1.5px;
+  background: color-mix(in srgb, var(--text-muted) 45%, transparent);
+}
+.bob-property-card-group-thumb {
+  position: absolute;
+  inset-block-start: 50%;
+  inline-size: 3px;
+  block-size: 0.95em;
+  border-radius: 1.5px;
+  transform: translate(-50%, -50%);
+  background: var(--bob-property-card-group-accent);
+}
+
+/* Narrow (the card or the record walk below 28rem): `« Q3 · 8/14 ·
+   2027-Q1 »` with no landings, `+`/note text, names, or track; every arm
+   stays at least 32px wide. */
+@container bob-property-card (max-width: 28rem) {
+  .bob-property-card-group-label,
+  .bob-property-card-group-sep,
+  .bob-property-card-group-landing,
+  .bob-property-card-group-plus,
+  .bob-property-card-group-note,
+  .bob-property-card-group-wrap,
+  .bob-property-card-group-name,
+  .bob-property-card-group-name-sep,
+  .bob-property-card-group-track,
+  .bob-property-card-group-position-wide,
+  .bob-property-card-rail-note { display: none; }
+  .bob-property-card-group-label-narrow,
+  .bob-property-card-group-position-narrow { display: inline; }
+  .bob-property-card-group-arm { justify-content: center; }
+}
+@container record-walk (max-width: 28rem) {
+  .bob-property-card-group-label,
+  .bob-property-card-group-sep,
+  .bob-property-card-group-landing,
+  .bob-property-card-group-plus,
+  .bob-property-card-group-note,
+  .bob-property-card-group-wrap,
+  .bob-property-card-group-name,
+  .bob-property-card-group-name-sep,
+  .bob-property-card-group-track,
+  .bob-property-card-group-position-wide { display: none; }
+  .bob-property-card-group-label-narrow,
+  .bob-property-card-group-position-narrow { display: inline; }
+  .bob-property-card-group-arm { justify-content: center; }
+}
+
+/* No state depends on color: dashed and dotted edges use CanvasText, ghost
+   text uses GrayText, and the current tick and thumb use Highlight. */
+@media (forced-colors: active) {
+  .bob-property-card-rail-item[data-state],
+  .bob-property-card-rail-chip[data-state],
+  .bob-property-card-group-arm[data-state="creatable"],
+  .bob-property-card-group-arm[data-state="ghost"] { border-color: CanvasText; }
+  .bob-property-card-rail-item[data-state="ghost"],
+  .bob-property-card-rail-chip[data-state="ghost"],
+  .bob-property-card-group-arm[data-state="ghost"],
+  .bob-property-card-group-arm[data-state="ghost"] * { color: GrayText; }
+  .bob-property-card-group-tick,
+  .bob-property-card-group-track[data-track="bar"] {
+    forced-color-adjust: none;
+    background: CanvasText;
+  }
+  .bob-property-card-group-tick[data-state="missing"] {
+    border-color: CanvasText;
+    background: Canvas;
+  }
+  .bob-property-card-group-tick[data-state="current"],
+  .bob-property-card-group-thumb {
+    forced-color-adjust: none;
+    background: Highlight;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bob-property-card-group-row,
+  .bob-property-card-group-row * {
+    transition: none !important;
+    animation: none !important;
+  }
+}
+/* Property-card group row (bob-cli-oj group-rail): end. */
 
 /* Property-card identity badge (bob-cli-o6 collection-cards): start.
    The species tile and word on surfaces that name their species without

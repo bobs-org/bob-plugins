@@ -24,7 +24,7 @@ See [plugin deployment](https://bobs-org.github.io/develop/plugins/deployment/) 
 | [Bob Chips](bob-chips.md) | 0.16.0 | 1.8.7 | No |
 | [Bob Command Mode](bob-command-mode.md) | 0.4.0 | 1.8.7 | Yes |
 | [Bob Emoji](bob-emoji.md) | 0.2.0 | 1.8.7 | No |
-| [Bob Ledger Tools](bob-ledger-tools.md) | 1.149.3 | 1.8.7 | No |
+| [Bob Ledger Tools](bob-ledger-tools.md) | 1.150.0 | 1.8.7 | No |
 | [Bob Mail](bob-mail.md) | 0.2.0 | 1.8.7 | Yes |
 | [Bob Navigation Hotkeys](bob-navigation-hotkeys.md) | 2.97.0 | 1.8.7 | No |
 | [Bob Project Tasks](bob-project-tasks.md) | 1.1.0 | 1.8.7 | No |

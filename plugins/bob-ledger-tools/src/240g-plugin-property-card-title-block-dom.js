@@ -198,9 +198,14 @@ function propertyCardKitRailItemOk(item) {
     && propertyCardKitText(item.target).trim());
 }
 
+// Items and chips take a missing-target state (240l): `state` of exists,
+// creatable, or ghost, else the legacy `unresolved: true` as creatable.
+// The rail never decides activation; onNavigate sees the stated item.
 function propertyCardKitRailItem(doc, direction, item, onNavigate) {
   const target = propertyCardKitText(item.target).trim();
-  const link = propertyCardKitLink(doc, "bob-property-card-rail-item", target, item.unresolved === true);
+  const state = propertyCardTargetState(item);
+  const stated = propertyCardKitStatedItem(item, state);
+  const link = propertyCardKitLink(doc, "bob-property-card-rail-item", target, state !== "exists");
   link.setAttribute("data-rail", direction);
   const ariaLabel = propertyCardKitText(item.ariaLabel).trim();
   if (ariaLabel) link.setAttribute("aria-label", ariaLabel);
@@ -215,62 +220,79 @@ function propertyCardKitRailItem(doc, direction, item, onNavigate) {
   if (direction === "parent") link.appendChild(glyph("↑ "));
   link.appendChild(propertyCardKitSpan(doc, "bob-property-card-rail-label-wide", wide));
   link.appendChild(propertyCardKitSpan(doc, "bob-property-card-rail-label-narrow", narrow));
+  for (const mark of propertyCardKitStateMarks(doc, link, item, state, false)) link.appendChild(mark);
   if (direction === "next") link.appendChild(glyph(" ›"));
-  propertyCardKitBindLink(link, (event) => {
-    if (typeof onNavigate === "function") onNavigate(direction, item, event);
+  propertyCardKitBindTarget(link, state, (event) => {
+    if (typeof onNavigate === "function") onNavigate(direction, stated, event);
   });
   return link;
 }
 
-// { element, items: { prev, parent, next }, children: [] } or null when there
-// is neither an item nor a child. Missing items keep their grid column with
-// an empty gap span. Children render as a wrapping chip strip; the current
-// chip carries is-current and aria-current.
+function propertyCardKitRailChip(doc, child, onNavigate) {
+  const target = propertyCardKitText(child.target).trim();
+  const state = propertyCardTargetState(child);
+  const stated = propertyCardKitStatedItem(child, state);
+  const chip = propertyCardKitLink(doc, "bob-property-card-rail-chip", target, state !== "exists");
+  chip.setAttribute("role", "listitem");
+  if (child.current === true) {
+    propertyCardKitAddClass(chip, "is-current");
+    chip.setAttribute("aria-current", "true");
+  }
+  propertyCardKitAppendText(doc, chip, propertyCardKitText(child.label).trim());
+  for (const mark of propertyCardKitStateMarks(doc, chip, child, state, true)) chip.appendChild(mark);
+  propertyCardKitBindTarget(chip, state, (event) => {
+    if (typeof onNavigate === "function") onNavigate("child", stated, event);
+  });
+  return chip;
+}
+
+// { element, items: { prev, parent, next }, children: [], group } or null
+// when there is no item, child, or group row. Missing items keep their grid
+// column with an empty gap span. spec.group (a group-row spec, 240l) renders
+// between the step row and the children strip; with a group row and no step
+// item the step row is left out. Children render as a wrapping chip strip;
+// the current chip carries is-current and aria-current.
 function propertyCardBuildRail(doc, spec = {}) {
   try {
     if (!propertyCardKitDocOk(doc)) return null;
     const options = spec && typeof spec === "object" ? spec : {};
     const children = (Array.isArray(options.children) ? options.children : []).filter(propertyCardKitRailItemOk);
     const present = PROPERTY_CARD_RAIL_DIRECTIONS.filter((direction) => propertyCardKitRailItemOk(options[direction]));
-    if (!present.length && !children.length) return null;
+    const group = options.group && typeof options.group === "object" && typeof propertyCardBuildGroupRow === "function"
+      ? propertyCardBuildGroupRow(doc, options.group)
+      : null;
+    if (!present.length && !children.length && !group) return null;
     const element = propertyCardKitEl(doc, "nav", "bob-property-card-rail");
     element.setAttribute("aria-label", propertyCardKitText(options.label).trim() || "Note navigation");
     const items = { prev: null, parent: null, next: null };
-    const row = propertyCardKitEl(doc, "div", "bob-property-card-rail-row");
-    for (const direction of PROPERTY_CARD_RAIL_DIRECTIONS) {
-      const item = options[direction];
-      if (propertyCardKitRailItemOk(item)) {
-        items[direction] = propertyCardKitRailItem(doc, direction, item, options.onNavigate);
-        row.appendChild(items[direction]);
-      } else {
-        const gap = propertyCardKitEl(doc, "span", "bob-property-card-rail-gap");
-        gap.setAttribute("data-rail", direction);
-        row.appendChild(gap);
+    if (present.length || !group) {
+      const row = propertyCardKitEl(doc, "div", "bob-property-card-rail-row");
+      for (const direction of PROPERTY_CARD_RAIL_DIRECTIONS) {
+        const item = options[direction];
+        if (propertyCardKitRailItemOk(item)) {
+          items[direction] = propertyCardKitRailItem(doc, direction, item, options.onNavigate);
+          row.appendChild(items[direction]);
+        } else {
+          const gap = propertyCardKitEl(doc, "span", "bob-property-card-rail-gap");
+          gap.setAttribute("data-rail", direction);
+          row.appendChild(gap);
+        }
       }
+      element.appendChild(row);
     }
-    element.appendChild(row);
+    if (group) element.appendChild(group.element);
     const chips = [];
     if (children.length) {
       const strip = propertyCardKitEl(doc, "div", "bob-property-card-rail-children");
       strip.setAttribute("role", "list");
       for (const child of children) {
-        const target = propertyCardKitText(child.target).trim();
-        const chip = propertyCardKitLink(doc, "bob-property-card-rail-chip", target, child.unresolved === true);
-        chip.setAttribute("role", "listitem");
-        if (child.current === true) {
-          propertyCardKitAddClass(chip, "is-current");
-          chip.setAttribute("aria-current", "true");
-        }
-        propertyCardKitAppendText(doc, chip, propertyCardKitText(child.label).trim());
-        propertyCardKitBindLink(chip, (event) => {
-          if (typeof options.onNavigate === "function") options.onNavigate("child", child, event);
-        });
+        const chip = propertyCardKitRailChip(doc, child, options.onNavigate);
         strip.appendChild(chip);
         chips.push(chip);
       }
       element.appendChild(strip);
     }
-    return { element, items, children: chips };
+    return { element, items, children: chips, group: group || null };
   } catch (_) {
     return null;
   }

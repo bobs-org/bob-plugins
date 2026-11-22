@@ -236,7 +236,13 @@ class TaskStatusCyclerDependencyIdsMixin {
       typeof this.app.vault.getMarkdownFiles === "function"
     ) {
       for (const file of this.app.vault.getMarkdownFiles()) {
-        if (!file || (originFile && file.path === originFile.path)) continue;
+        if (
+          !file ||
+          (originFile && file.path === originFile.path) ||
+          isExcludedSuccessorVaultPath(file.path)
+        ) {
+          continue;
+        }
         try {
           const text = typeof this.app.vault.cachedRead === "function"
             ? await this.app.vault.cachedRead(file)
@@ -279,7 +285,11 @@ class TaskStatusCyclerDependencyIdsMixin {
     ];
 
     for (const candidate of orderedFiles) {
-      if (!candidate || candidate.path === originPath) {
+      if (
+        !candidate ||
+        candidate.path === originPath ||
+        isExcludedSuccessorVaultPath(candidate.path)
+      ) {
         continue;
       }
 
@@ -459,7 +469,13 @@ class TaskStatusCyclerDependencyIdsMixin {
       return collisions;
     }
     for (const file of this.app.vault.getMarkdownFiles()) {
-      if (!file || (originFile && file.path === originFile.path)) continue;
+      if (
+        !file ||
+        (originFile && file.path === originFile.path) ||
+        isExcludedSuccessorVaultPath(file.path)
+      ) {
+        continue;
+      }
       const text = typeof this.app.vault.cachedRead === "function"
         ? await this.app.vault.cachedRead(file)
         : await this.app.vault.read(file);

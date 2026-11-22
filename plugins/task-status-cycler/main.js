@@ -7172,10 +7172,16 @@ function successorDefaultIsInbox(path) {
   return normalizeDependencyMarkdownPath(path) === "inbox.md";
 }
 
-// Vault directories capture never walks (`vault_note_paths`): hidden
-// dot-directories and the always-excluded names. Only directory segments
-// count — a dotted file name is still eligible.
+// Vault directories capture never walks (`vault_note_paths`,
+// `ALWAYS_EXCLUDED_NOTE_DIRECTORY_NAMES` in bob-cli `src/native.rs`):
+// hidden dot-directories and the always-excluded names. This predicate
+// gates the successor and recovery pools and the `[id::]` scans, not just
+// basename counting. Only directory segments count — a dotted file name
+// is still eligible. `.bob` is listed for documentation alongside the
+// dot-prefix rule that already covers it, keeping the set identical to
+// the Rust list.
 const SUCCESSOR_EXCLUDED_DIR_NAMES = new Set([
+  ".bob",
   ".git",
   ".obsidian",
   "_conflicts",
@@ -11279,7 +11285,7 @@ async function resolveProjectRecoveryOpenIds(plugin, tasks, context) {
       break;
     }
     const path = file && file.path;
-    if (!path || path === localPath) {
+    if (!path || path === localPath || isExcludedSuccessorVaultPath(path)) {
       continue;
     }
     let text = null;
@@ -18744,7 +18750,13 @@ class TaskStatusCyclerDependencyIdsMixin {
       typeof this.app.vault.getMarkdownFiles === "function"
     ) {
       for (const file of this.app.vault.getMarkdownFiles()) {
-        if (!file || (originFile && file.path === originFile.path)) continue;
+        if (
+          !file ||
+          (originFile && file.path === originFile.path) ||
+          isExcludedSuccessorVaultPath(file.path)
+        ) {
+          continue;
+        }
         try {
           const text = typeof this.app.vault.cachedRead === "function"
             ? await this.app.vault.cachedRead(file)
@@ -18787,7 +18799,11 @@ class TaskStatusCyclerDependencyIdsMixin {
     ];
 
     for (const candidate of orderedFiles) {
-      if (!candidate || candidate.path === originPath) {
+      if (
+        !candidate ||
+        candidate.path === originPath ||
+        isExcludedSuccessorVaultPath(candidate.path)
+      ) {
         continue;
       }
 
@@ -18967,7 +18983,13 @@ class TaskStatusCyclerDependencyIdsMixin {
       return collisions;
     }
     for (const file of this.app.vault.getMarkdownFiles()) {
-      if (!file || (originFile && file.path === originFile.path)) continue;
+      if (
+        !file ||
+        (originFile && file.path === originFile.path) ||
+        isExcludedSuccessorVaultPath(file.path)
+      ) {
+        continue;
+      }
       const text = typeof this.app.vault.cachedRead === "function"
         ? await this.app.vault.cachedRead(file)
         : await this.app.vault.read(file);
@@ -19285,7 +19307,11 @@ class TaskStatusCyclerReferencesMixin {
     }
     const openEditors = this.getOpenMarkdownEditors(context || {});
     const files = vault.getMarkdownFiles().filter(
-      (file) => file && file.path && MARKDOWN_EXTENSION_RE.test(file.path),
+      (file) =>
+        file &&
+        file.path &&
+        MARKDOWN_EXTENSION_RE.test(file.path) &&
+        !isExcludedSuccessorVaultPath(file.path),
     );
     const fileByPath = new Map(files.map((file) => [file.path, file]));
     const documents = [];
@@ -20067,7 +20093,7 @@ class TaskStatusCyclerSuccessorsMixin {
         }
         const tasks = raw
           .map((entry) => normalizeTasksCacheTask(entry))
-          .filter(Boolean);
+          .filter((task) => task && !isExcludedSuccessorVaultPath(task.path));
         return { ready: true, tasks };
       }
     } catch (_error) {
@@ -20220,6 +20246,9 @@ class TaskStatusCyclerSuccessorsMixin {
           }
         }
         for (const [path, text] of noteTexts) {
+          if (isExcludedSuccessorVaultPath(path)) {
+            continue;
+          }
           for (const task of tasksFromDocuments([{ path, text }])) {
             tasks.push(task);
           }
@@ -20267,7 +20296,11 @@ class TaskStatusCyclerSuccessorsMixin {
       }
       const openEditors = this.getOpenMarkdownEditors(context || {});
       const files = vault.getMarkdownFiles().filter(
-        (file) => file && file.path && MARKDOWN_EXTENSION_RE.test(file.path),
+        (file) =>
+          file &&
+          file.path &&
+          MARKDOWN_EXTENSION_RE.test(file.path) &&
+          !isExcludedSuccessorVaultPath(file.path),
       );
       for (const file of files) {
         try {
@@ -21809,7 +21842,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
         const overlayPaths = new Set(freshRelationTexts.keys());
         tasks = refreshedTasks.filter((task) => !overlayPaths.has(String(task && task.path || "")));
         for (const [path, text] of freshRelationTexts) {
-          tasks.push(...tasksFromDocuments([{ path, text }]));
+          if (!isExcludedSuccessorVaultPath(path)) tasks.push(...tasksFromDocuments([{ path, text }]));
         }
         noteTexts = refreshedNotes;
       }
@@ -22045,11 +22078,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
                 }
               }
               for (const [path, text] of freshNoteTexts) {
-                if (affected.has(String(path))) {
-                  for (const task of tasksFromDocuments([{ path, text }])) {
-                    base.push(task);
-                  }
-                }
+                if (affected.has(String(path)) && !isExcludedSuccessorVaultPath(path)) base.push(...tasksFromDocuments([{ path, text }]));
               }
               freshTasks = base;
             } else {
@@ -22073,12 +22102,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
                 }
               }
               for (const [path, text] of freshNoteTexts) {
-                if (!affected.has(String(path))) {
-                  continue;
-                }
-                for (const task of tasksFromDocuments([{ path, text }])) {
-                  next.push(task);
-                }
+                if (affected.has(String(path)) && !isExcludedSuccessorVaultPath(path)) next.push(...tasksFromDocuments([{ path, text }]));
               }
               freshTasks = next;
             }

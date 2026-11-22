@@ -1581,6 +1581,35 @@ test("countSuccessorBasenames walks the vault set, not the task set", () => {
   assert.equal(cased.d, 2);
 });
 
+test("SO33 isExcludedSuccessorVaultPath gates the pools and id scans", () => {
+  // SO33: the excluded set stays identical to bob capture's
+  // `ALWAYS_EXCLUDED_NOTE_DIRECTORY_NAMES` — hidden dot-directories plus
+  // `.git`, `.obsidian`, `_conflicts`, `_generated`, and `_templates`.
+  // Only directory segments count, so a dotted file name stays eligible.
+  for (const path of [
+    "_conflicts/x.md",
+    "a/_conflicts/x.md",
+    "_generated/x.md",
+    "_templates/x.md",
+    ".git/x.md",
+    ".obsidian/x.md",
+    ".bob/x.md",
+    ".drafts/wip.md",
+    "a/.hidden/x.md",
+  ]) {
+    assert.equal(helpers.isExcludedSuccessorVaultPath(path), true, path);
+  }
+  for (const path of [
+    "sase_blog.apollo-2026.md",
+    "_conflictsx/x.md",
+    "notes/_conflicts.md",
+    "x.md",
+    "a/b.md",
+  ]) {
+    assert.equal(helpers.isExcludedSuccessorVaultPath(path), false, path);
+  }
+});
+
 test("the pass threads a richer isInbox into unblocked rows", () => {
   const { plan } = planFixture({
     day: FIX_DAY,

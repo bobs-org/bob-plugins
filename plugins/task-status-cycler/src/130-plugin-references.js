@@ -217,7 +217,11 @@ class TaskStatusCyclerReferencesMixin {
     }
     const openEditors = this.getOpenMarkdownEditors(context || {});
     const files = vault.getMarkdownFiles().filter(
-      (file) => file && file.path && MARKDOWN_EXTENSION_RE.test(file.path),
+      (file) =>
+        file &&
+        file.path &&
+        MARKDOWN_EXTENSION_RE.test(file.path) &&
+        !isExcludedSuccessorVaultPath(file.path),
     );
     const fileByPath = new Map(files.map((file) => [file.path, file]));
     const documents = [];

@@ -367,10 +367,16 @@ function successorDefaultIsInbox(path) {
   return normalizeDependencyMarkdownPath(path) === "inbox.md";
 }
 
-// Vault directories capture never walks (`vault_note_paths`): hidden
-// dot-directories and the always-excluded names. Only directory segments
-// count — a dotted file name is still eligible.
+// Vault directories capture never walks (`vault_note_paths`,
+// `ALWAYS_EXCLUDED_NOTE_DIRECTORY_NAMES` in bob-cli `src/native.rs`):
+// hidden dot-directories and the always-excluded names. This predicate
+// gates the successor and recovery pools and the `[id::]` scans, not just
+// basename counting. Only directory segments count — a dotted file name
+// is still eligible. `.bob` is listed for documentation alongside the
+// dot-prefix rule that already covers it, keeping the set identical to
+// the Rust list.
 const SUCCESSOR_EXCLUDED_DIR_NAMES = new Set([
+  ".bob",
   ".git",
   ".obsidian",
   "_conflicts",

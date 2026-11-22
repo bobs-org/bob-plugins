@@ -218,7 +218,7 @@ async function resolveProjectRecoveryOpenIds(plugin, tasks, context) {
       break;
     }
     const path = file && file.path;
-    if (!path || path === localPath) {
+    if (!path || path === localPath || isExcludedSuccessorVaultPath(path)) {
       continue;
     }
     let text = null;

@@ -709,3 +709,72 @@ test("recoverBlockedDependents leaves a closed tagged resident untouched (PDT7)"
   );
   assert.match(editor.getValue(), /^- \[x\] #task Done #prj_is_blocked ✅ 2026-10-01 \^done$/m);
 });
+
+// SO33: the `[id::]` scans skip `_conflicts/` sync copies (and the other
+// always-excluded directories), matching bob capture's `vault_note_paths`.
+test("SO33 id scans skip conflict copies and excluded directories", async () => {
+  const originText = "- [ ] #task Target [id:: abc123] ^target";
+  const duplicate = "- [?] #task Copy [id:: abc123] ^copy";
+  const harness = createInMemoryObsidianApp({
+    "Target.md": originText,
+    "_conflicts/Target.apollo-2026-11-22T153045.md": duplicate,
+    "_generated/g.md": duplicate,
+    "_templates/t.md": duplicate,
+    ".drafts/d.md": duplicate,
+  });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.app = harness.app;
+  const file = harness.app.vault.getAbstractFileByPath("Target.md");
+
+  // An `[id::]` duplicated only by excluded copies is not ambiguous.
+  const ambiguous = await plugin.findAmbiguousDependencyIds(
+    ["abc123"],
+    file,
+    originText,
+  );
+  assert.deepEqual([...ambiguous], []);
+
+  // No excluded copy is rewritten by propagation.
+  const written = [];
+  const live = "- [ ] #task Live [dependsOn:: old]";
+  const harness2 = createInMemoryObsidianApp({
+    "Target2.md": "- [ ] #task Target [id:: old] ^review",
+    "A.md": live,
+    "_conflicts/A.apollo.md": live,
+    "_generated/g.md": live,
+    "_templates/t.md": live,
+    ".drafts/d.md": live,
+  });
+  const plugin2 = new TaskStatusCyclerPlugin();
+  plugin2.app = harness2.app;
+  const process2 = harness2.app.vault.process;
+  harness2.app.vault.process = async (candidate, updateSourceText) => {
+    written.push(candidate.path);
+    return process2(candidate, updateSourceText);
+  };
+  await plugin2.propagateDependencyBlockIds(
+    { old: "Target2__review" },
+    { path: "Target2.md" },
+  );
+  assert.match(harness2.getSource("A.md"), /\[dependsOn:: Target2__review\]/);
+  for (const path of [
+    "_conflicts/A.apollo.md",
+    "_generated/g.md",
+    "_templates/t.md",
+    ".drafts/d.md",
+  ]) {
+    assert.equal(harness2.getSource(path), live, `${path} must stay byte-identical`);
+    assert.ok(
+      !written.some((entry) => String(entry) === path),
+      `${path} was written`,
+    );
+  }
+
+  // An identity collision reported only by an excluded copy is not a
+  // collision (block IDs are path-qualified, so this pins the skip itself).
+  const collisions = await plugin.findDependencyIdentityCollisions(
+    new Set(["Target__target"]),
+    file,
+  );
+  assert.deepEqual([...collisions], []);
+});

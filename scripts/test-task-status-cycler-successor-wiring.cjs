@@ -2469,3 +2469,288 @@ test("follow receipt omits the jump line so the follow toast owns it", () => {
   assert.equal(seen.length, 1);
   assert.equal(seen[0].jump, undefined, "follow owner must not double the jump receipt");
 });
+
+// SO33: successor and recovery pools skip `_conflicts/` sync copies (and the
+// other always-excluded directories), matching bob capture's
+// `vault_note_paths`. The reported bug: closing `#prj Review …` offered each
+// dependent twice — once from `sase_blog.md`, once from its conflict copy.
+const SO33_PREREQ_ID = "sase_blog_annotations__prj";
+const SO33_PREREQ_LINE =
+  `- [x] #task Review prj annotations [id:: ${SO33_PREREQ_ID}] ^prj-review`;
+const SO33_DEP_A =
+  `- [?] #task Merge future section [dependsOn:: ${SO33_PREREQ_ID}] [id:: sase_blog__merge] ^merge-future-section`;
+const SO33_DEP_B =
+  `- [?] #task Fill evals future zettel [dependsOn:: ${SO33_PREREQ_ID}] [id:: sase_blog__evals] ^evals-future-zettel`;
+const SO33_DEP_C =
+  `- [?] #task Fill zettel album [dependsOn:: ${SO33_PREREQ_ID}] [id:: sase_blog__album] ^fill-zettel-album`;
+const SO33_DEPS = [SO33_DEP_A, SO33_DEP_B, SO33_DEP_C];
+const SO33_COPY_PATH = "_conflicts/sase_blog.apollo-2026-11-22T153045.md";
+const SO33_LIVE_TEXT = [SO33_PREREQ_LINE, ...SO33_DEPS].join("\n");
+
+function so33Day() {
+  return [
+    `# ${TODAY}`,
+    "",
+    "## Pomodoros",
+    "- [ ] () — FIX",
+    "\t- [[sase_blog#^prj-review]]",
+  ].join("\n");
+}
+
+function so33CacheTasks() {
+  const tasks = [
+    {
+      path: "sase_blog.md",
+      lineNumber: 0,
+      status: "x",
+      originalMarkdown: SO33_PREREQ_LINE,
+      description: "Review prj annotations",
+      blockId: "prj-review",
+      id: SO33_PREREQ_ID,
+      dependsOn: [],
+    },
+  ];
+  for (const [path, status] of [
+    ["sase_blog.md", "?"],
+    [SO33_COPY_PATH, "?"],
+  ]) {
+    for (const [index, line] of SO33_DEPS.entries()) {
+      const blockId = line.match(/\^([A-Za-z0-9_-]+)\s*$/)?.[1];
+      const id = line.match(/\[id::\s*([^\]]+)\]/)?.[1].trim();
+      tasks.push({
+        path,
+        lineNumber: index + 1,
+        status,
+        originalMarkdown: line,
+        description: `Dependent ${index + 1}`,
+        blockId,
+        id,
+        dependsOn: [SO33_PREREQ_ID],
+      });
+    }
+  }
+  return tasks;
+}
+
+function so33AssertLiveOnly(result, harness, counts) {
+  const model = result.successors;
+  assert.ok(model);
+  // SO33: exactly the three live rows — the copy is never offered.
+  assert.equal(model.unblocked.length, 3);
+  for (const row of model.unblocked) {
+    assert.equal(row.note_path, "sase_blog.md");
+  }
+  assert.ok(
+    (model.still_blocked || []).every(
+      (row) => !String(row.note_path || "").startsWith("_conflicts/"),
+    ),
+  );
+  assert.equal(result.reopened, 3);
+  assert.deepEqual(result.recoveryFailures, []);
+  const reads = [...counts.cachedRead, ...counts.read];
+  assert.ok(
+    reads.every((path) => !String(path).startsWith("_conflicts/")),
+    `conflict copy was read: ${JSON.stringify(reads)}`,
+  );
+  const writes = [...counts.process, ...counts.modify];
+  assert.ok(
+    writes.every((path) => !String(path).startsWith("_conflicts/")),
+    `conflict copy was written: ${JSON.stringify(writes)}`,
+  );
+  // The copy is byte-identical; the live note recovered all three rows.
+  assert.equal(harness.getSource(SO33_COPY_PATH), SO33_LIVE_TEXT);
+  for (const line of harness.getSource("sase_blog.md").split("\n").slice(1)) {
+    assert.match(line, /^- \[\*\] #task /);
+  }
+}
+
+test("SO33 warm successor pool skips _conflicts duplicates", async () => {
+  notices.length = 0;
+  const day = so33Day();
+  const harness = createInMemoryObsidianApp({
+    "sase_blog.md": SO33_LIVE_TEXT,
+    [SO33_COPY_PATH]: SO33_LIVE_TEXT,
+    [DAILY_PATH]: day,
+  });
+  // Complete link metadata: only the live note links the prerequisite, so
+  // reference retirement stays linker-scoped (the copy links nothing).
+  harness.app.metadataCache.resolvedLinks = {
+    [DAILY_PATH]: { "sase_blog.md": 1 },
+  };
+  const editor = createTextEditor(day, { line: 4, ch: 5 });
+  const plugin = makePlugin(harness, editor, DAILY_PATH);
+  const seen = [];
+  installNavStub(plugin, seen);
+  installTasksStub(plugin, so33CacheTasks());
+  const counts = countVaultReads(harness);
+
+  const result = await plugin.finalizeClosedTasks(
+    [{ path: "sase_blog.md", blockId: "prj-review" }],
+    { editor, activePath: DAILY_PATH },
+  );
+
+  so33AssertLiveOnly(result, harness, counts);
+  assert.equal(seen.length, 1);
+  assert.equal(notices.length, 0, JSON.stringify(notices));
+});
+
+test("SO33 cold successor scan skips _conflicts duplicates", async () => {
+  notices.length = 0;
+  const day = so33Day();
+  const harness = createInMemoryObsidianApp({
+    "sase_blog.md": SO33_LIVE_TEXT,
+    [SO33_COPY_PATH]: SO33_LIVE_TEXT,
+    [DAILY_PATH]: day,
+  });
+  // Complete link metadata: only the live note links the prerequisite, so
+  // reference retirement stays linker-scoped (the copy links nothing).
+  harness.app.metadataCache.resolvedLinks = {
+    [DAILY_PATH]: { "sase_blog.md": 1 },
+  };
+  const editor = createTextEditor(day, { line: 4, ch: 5 });
+  const plugin = makePlugin(harness, editor, DAILY_PATH);
+  const seen = [];
+  installNavStub(plugin, seen);
+  const counts = countVaultReads(harness);
+
+  const result = await plugin.finalizeClosedTasks(
+    [{ path: "sase_blog.md", blockId: "prj-review" }],
+    { editor, activePath: DAILY_PATH },
+  );
+
+  so33AssertLiveOnly(result, harness, counts);
+  assert.equal(seen.length, 1);
+  assert.equal(notices.length, 0, JSON.stringify(notices));
+});
+
+test("SO33 open conflict buffer never rejoins the warm pool", async () => {
+  notices.length = 0;
+  const day = so33Day();
+  const harness = createInMemoryObsidianApp({
+    "sase_blog.md": SO33_LIVE_TEXT,
+    [SO33_COPY_PATH]: SO33_LIVE_TEXT,
+    [DAILY_PATH]: day,
+  });
+  // Complete link metadata: only the live note links the prerequisite, so
+  // reference retirement stays linker-scoped (the copy links nothing).
+  harness.app.metadataCache.resolvedLinks = {
+    [DAILY_PATH]: { "sase_blog.md": 1 },
+  };
+  const editor = createTextEditor(day, { line: 4, ch: 5 });
+  const plugin = makePlugin(harness, editor, DAILY_PATH);
+  const seen = [];
+  installNavStub(plugin, seen);
+  installTasksStub(plugin, so33CacheTasks());
+  // The conflict copy is open in an editor. Its text may stay in noteTexts,
+  // but it must never become pool tasks.
+  const conflictEditor = createTextEditor(SO33_LIVE_TEXT, { line: 0, ch: 0 });
+  const conflictFile = harness.app.vault.getAbstractFileByPath(SO33_COPY_PATH);
+  const workspace = harness.app.workspace;
+  workspace.getLeavesOfType = (type) =>
+    type === "markdown" ? [{ view: { file: conflictFile, editor: conflictEditor } }] : [];
+  const counts = countVaultReads(harness);
+
+  const result = await plugin.finalizeClosedTasks(
+    [{ path: "sase_blog.md", blockId: "prj-review" }],
+    { editor, activePath: DAILY_PATH },
+  );
+
+  so33AssertLiveOnly(result, harness, counts);
+  assert.equal(conflictEditor.getValue(), SO33_LIVE_TEXT);
+  assert.equal(seen.length, 1);
+  assert.equal(notices.length, 0, JSON.stringify(notices));
+});
+
+test("SO33 warm cache read drops excluded paths at the choke point", () => {
+  const harness = createInMemoryObsidianApp({
+    "sase_blog.md": SO33_LIVE_TEXT,
+    [SO33_COPY_PATH]: SO33_LIVE_TEXT,
+  });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.app = harness.app;
+  installTasksStub(plugin, so33CacheTasks());
+
+  const cacheRead = plugin.readSuccessorTasksCache();
+
+  assert.equal(cacheRead.ready, true);
+  assert.ok(cacheRead.tasks.length > 0);
+  for (const task of cacheRead.tasks) {
+    assert.ok(
+      !String(task.path || "").startsWith("_conflicts/"),
+      `excluded task leaked: ${task.path}`,
+    );
+  }
+  assert.ok(cacheRead.tasks.some((task) => task.path === "sase_blog.md"));
+});
+
+test("SO33 warm pool builds no tasks from an open excluded buffer", async () => {
+  const day = so33Day();
+  const harness = createInMemoryObsidianApp({
+    "sase_blog.md": SO33_LIVE_TEXT,
+    [SO33_COPY_PATH]: SO33_LIVE_TEXT,
+    [DAILY_PATH]: day,
+  });
+  const editor = createTextEditor(day, { line: 4, ch: 5 });
+  const plugin = makePlugin(harness, editor, DAILY_PATH);
+  installTasksStub(plugin, so33CacheTasks());
+  const conflictEditor = createTextEditor(SO33_LIVE_TEXT, { line: 0, ch: 0 });
+  const conflictFile = harness.app.vault.getAbstractFileByPath(SO33_COPY_PATH);
+  harness.app.workspace.getLeavesOfType = (type) =>
+    type === "markdown" ? [{ view: { file: conflictFile, editor: conflictEditor } }] : [];
+
+  const pool = await plugin.buildSuccessorPool(
+    new Set([SO33_PREREQ_ID]),
+    { editor, activePath: DAILY_PATH },
+    new Map(),
+  );
+
+  assert.equal(pool.warm, true);
+  assert.ok(
+    pool.tasks.every(
+      (task) => !String(task && task.path || "").startsWith("_conflicts/"),
+    ),
+  );
+  assert.ok(pool.tasks.some((task) => task && task.path === "sase_blog.md"));
+  // The buffer text may stay cached for minting, but it sources no tasks.
+  assert.equal(pool.noteTexts.get(SO33_COPY_PATH), SO33_LIVE_TEXT);
+});
+
+test("SO33 open twin in a conflict copy never keeps the prerequisite open", async () => {
+  notices.length = 0;
+  // Cold recovery derives the open-id set from parsed documents: an open
+  // `[ ]` twin of the closed prerequisite inside the copy used to keep the
+  // `[id::]` open, so the live dependent stayed Blocked.
+  const twinCopy = "- [ ] #task Review prj annotations [id:: sase_blog_annotations__prj] ^prj-review";
+  const harness = createInMemoryObsidianApp({
+    "sase_blog.md": [
+      "- [x] #task Review prj annotations [id:: sase_blog_annotations__prj] ^prj-review",
+      SO33_DEP_A,
+    ].join("\n"),
+    [SO33_COPY_PATH]: twinCopy,
+  });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.app = harness.app;
+  const processed = [];
+  const process = harness.app.vault.process;
+  harness.app.vault.process = async (file, updateSourceText) => {
+    processed.push(file.path);
+    return process(file, updateSourceText);
+  };
+
+  const result = await plugin.recoverBlockedDependentsNow(
+    [{ path: "sase_blog.md", taskId: SO33_PREREQ_ID }],
+    {},
+  );
+
+  assert.equal(result.reopened, 1);
+  assert.deepEqual(result.failures, []);
+  assert.match(
+    harness.getSource("sase_blog.md").split("\n")[1],
+    /^- \[ \] #task Merge future section/,
+  );
+  assert.ok(
+    processed.every((path) => !String(path).startsWith("_conflicts/")),
+    `conflict copy was processed: ${JSON.stringify(processed)}`,
+  );
+  assert.equal(harness.getSource(SO33_COPY_PATH), twinCopy);
+});

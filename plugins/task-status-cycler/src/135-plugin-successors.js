@@ -61,7 +61,7 @@ class TaskStatusCyclerSuccessorsMixin {
         }
         const tasks = raw
           .map((entry) => normalizeTasksCacheTask(entry))
-          .filter(Boolean);
+          .filter((task) => task && !isExcludedSuccessorVaultPath(task.path));
         return { ready: true, tasks };
       }
     } catch (_error) {
@@ -214,6 +214,9 @@ class TaskStatusCyclerSuccessorsMixin {
           }
         }
         for (const [path, text] of noteTexts) {
+          if (isExcludedSuccessorVaultPath(path)) {
+            continue;
+          }
           for (const task of tasksFromDocuments([{ path, text }])) {
             tasks.push(task);
           }
@@ -261,7 +264,11 @@ class TaskStatusCyclerSuccessorsMixin {
       }
       const openEditors = this.getOpenMarkdownEditors(context || {});
       const files = vault.getMarkdownFiles().filter(
-        (file) => file && file.path && MARKDOWN_EXTENSION_RE.test(file.path),
+        (file) =>
+          file &&
+          file.path &&
+          MARKDOWN_EXTENSION_RE.test(file.path) &&
+          !isExcludedSuccessorVaultPath(file.path),
       );
       for (const file of files) {
         try {

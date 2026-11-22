@@ -336,7 +336,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
         const overlayPaths = new Set(freshRelationTexts.keys());
         tasks = refreshedTasks.filter((task) => !overlayPaths.has(String(task && task.path || "")));
         for (const [path, text] of freshRelationTexts) {
-          tasks.push(...tasksFromDocuments([{ path, text }]));
+          if (!isExcludedSuccessorVaultPath(path)) tasks.push(...tasksFromDocuments([{ path, text }]));
         }
         noteTexts = refreshedNotes;
       }
@@ -572,11 +572,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
                 }
               }
               for (const [path, text] of freshNoteTexts) {
-                if (affected.has(String(path))) {
-                  for (const task of tasksFromDocuments([{ path, text }])) {
-                    base.push(task);
-                  }
-                }
+                if (affected.has(String(path)) && !isExcludedSuccessorVaultPath(path)) base.push(...tasksFromDocuments([{ path, text }]));
               }
               freshTasks = base;
             } else {
@@ -600,12 +596,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
                 }
               }
               for (const [path, text] of freshNoteTexts) {
-                if (!affected.has(String(path))) {
-                  continue;
-                }
-                for (const task of tasksFromDocuments([{ path, text }])) {
-                  next.push(task);
-                }
+                if (affected.has(String(path)) && !isExcludedSuccessorVaultPath(path)) next.push(...tasksFromDocuments([{ path, text }]));
               }
               freshTasks = next;
             }

@@ -124,6 +124,23 @@ function collectChoiceCase(helpers, all, choiceCase) {
   return collectCase(helpers, { notes: choiceCaseNotes(all, choiceCase) });
 }
 
+function writesCaseNotes(all, testCase) {
+  if (Array.isArray(testCase.input && testCase.input.notes)) {
+    return JSON.parse(JSON.stringify(testCase.input.notes));
+  }
+  const baseId = testCase.input && testCase.input.base_case;
+  const base = all.cases.find((entry) => entry.id === baseId);
+  return JSON.parse(JSON.stringify((base && base.notes) || []));
+}
+
+function writesCaseFiles(notes) {
+  const files = {};
+  for (const note of notes || []) {
+    if (note && typeof note.path === "string" && note.path) files[note.path] = sourceOf(note);
+  }
+  return files;
+}
+
 module.exports = {
   CANONICAL_DIR,
   REQ_CLOSE_FIXTURE_FILES,
@@ -133,6 +150,8 @@ module.exports = {
   sourceOf,
   collectCase,
   collectChoiceCase,
+  writesCaseNotes,
+  writesCaseFiles,
   ownerJson,
   groupJson,
   rowJson,

@@ -96,6 +96,8 @@ Object.assign(module.exports.helpers, {
   reqCloseResolveVerdicts,
   reqCloseRevalidatePreimages,
   reqCloseChoiceState,
+  planReqCloseWrites,
+  composeReqCloseRestores,
   CYCLER_REQ_LANE_COPY,
   CYCLER_REQ_CARRIED_COPY,
   CYCLER_REQ_DROP_PLACEHOLDER,

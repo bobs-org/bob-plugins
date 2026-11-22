@@ -65,6 +65,8 @@
   "198-task-reqs-writers-twin.js",
   "198a-req-close-twin.js",
   "198b-req-verdicts-twin.js",
+  "198c-req-close-apply-plan.js",
+  "198d-req-close-apply.js",
   "199-req-toggle.js",
   "199a-req-typing.js",
   "200-install-methods.js",

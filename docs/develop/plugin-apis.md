@@ -407,7 +407,7 @@ The root `bob-navigation-hotkeys.api` is version 3:
 | `taskScope` | 1 | `at({ lines, line })` returns the frozen task owner and its owned zero-based lines, or `null`. |
 | `logRecall` | 1 | Attach the USED BEFORE phrase band to a host-owned text field and record successful Work Log writes. Additive `links: true` delegates to `proseField`. |
 | `proseField` | 2 | Attach the controller that owns USED BEFORE and the LINK band for `[[` notes mode plus `((` tasks mode (list + in-band NAME) in prose prompts. |
-| `notice` | 5 | Show the Unblocked card; v2 `keep_moving`, v3 `relation_successors`, v4 `offer_closes`, v5 a trailing `↗ “S”` jump line. |
+| `notice` | 6 | Show the Unblocked card; v2 `keep_moving`, v3 `relation_successors`, v4 `offer_closes`, v5 a trailing `↗ “S”` jump line, v6 `req_outcomes`/`req_met`. |
 | `successors` | 5 | Ask which offered successor links to add; v2 accepts `keep_moving`, v3 accepts the `relation` group, v4 resolves verdict closes, and v5 stages a `Ctrl+J` jump pin. |
 | `taskSplit` | 1 | Carry one task requirement into its own task through `carryReq`. |
 | `blocks` | 1 | Open the reverse Blocks stage or remove a dependent. |
@@ -599,7 +599,12 @@ Callers add relation rows only when `api.notice?.version >= 3`.
 `↳` tickler rows, a refusal line, and a guarded `Undo closes` action. The action
 restores only when every note still matches the recorded postimage. Older payloads
 retain the v3 rendering. v5 appends a trailing `↗ “S”` from `jump.label`
-(`api.notice?.version >= 5`).
+(`api.notice?.version >= 5`). v6 reads `req_outcomes` (`verdict`, `receipt`,
+`row_key`) and `req_met` (`owner_key`, `count`, `receipt`) from the
+requirement close apply service. A req-only card shows those receipts and a
+guarded `Undo` action from `undo.restores`. Mixed cards keep `Undo closes`
+and append the requirement receipts. Older payloads still render as before.
+Callers add requirement receipts when `api.notice?.version >= 6`.
 
 `cancel` v1 exposes the pure `planCancel(content, targets, {date, reason})` planner.
 Each target is `{line, rawLine}` from the source shown to the user. It wraps the Task

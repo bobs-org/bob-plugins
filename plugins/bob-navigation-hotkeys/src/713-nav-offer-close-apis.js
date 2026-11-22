@@ -117,8 +117,15 @@ renderUnblockedNoticeFragment = function renderUnblockedNoticeWithOfferCloses(vi
   if (view.offerCloseUndo && view.offerClosePlugin) {
     const plugin = view.offerClosePlugin;
     const button = typeof card.createEl === "function"
-      ? card.createEl("button", { text: "Undo closes", cls: "bob-nh-notice-action" })
-      : card.createDiv({ text: "Undo closes", cls: "bob-nh-notice-action", attr: { role: "button" } });
+      ? card.createEl("button", {
+        text: (view.offerCloses && view.offerCloses.length) || view.offerCloseRefused ? "Undo closes" : "Undo",
+        cls: "bob-nh-notice-action",
+      })
+      : card.createDiv({
+        text: (view.offerCloses && view.offerCloses.length) || view.offerCloseRefused ? "Undo closes" : "Undo",
+        cls: "bob-nh-notice-action",
+        attr: { role: "button" },
+      });
     if (typeof button.addEventListener === "function") button.addEventListener("click", () => {
       if (typeof plugin.restoreGuardedSnapshots === "function") {
         void plugin.restoreGuardedSnapshots(view.offerCloseUndo, {

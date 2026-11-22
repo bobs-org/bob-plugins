@@ -43,4 +43,5 @@ installTaskStatusCyclerMixins(TaskStatusCyclerPlugin, [
   TaskStatusCyclerReqDropMixin,
   TaskStatusCyclerReqToggleMixin,
   TaskStatusCyclerReqTypingMixin,
+  TaskStatusCyclerReqCloseApplyMixin,
 ]);

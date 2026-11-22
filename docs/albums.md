@@ -100,6 +100,23 @@ starts expanded with the first diagnostic on the summary and the lint list;
 an empty schema starts expanded and teaches how to add fields so
 `Name @stem/` can collect facts. The two states never impersonate each other.
 
+`parent` lives in the kicker and `type` is implicit identity. `emoji` is the
+tile, `summary` the subtitle, and `record` the schema with the nested schema
+opener. `created` lives in the foot (`created today, 7:55 AM`, `created
+yesterday`, or `created Aug 8, 2025`); a missing `created` shows a faint `no
+created date`, and an invalid one shows an amber stamp with the raw value kept
+in the drawer. The drawer inventories every top-level key in file order —
+loose keys (legacy chips keep their **legacy** label), then **On this card**
+with those marks, then a folded **Managed** group — with duplicate keys as two
+linted rows.
+
+The foot follows the schema and any rail or mobile hint, including
+identity-only cards that paint before the report arrives. Both the disclosure
+and the future `=-` key toggle the same drawer; open state is a per-note
+session toggle shared by every pane on the note. `y` on a focused drawer row
+jumps to that key's exact YAML line. Painting, toggling, and collapsing never
+spawn bob and never write the note.
+
 **⊞ Schema** opens the album card editor (formerly the Schema Card) in the Task
 Card idiom: a species badge (the album emoji, else a library icon, in a
 stacked tile, then **ALBUM**), one title line (`Restaurant`), a truncated

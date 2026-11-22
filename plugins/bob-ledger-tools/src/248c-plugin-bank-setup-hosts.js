@@ -70,6 +70,7 @@ class BobLedgerToolsBankSetupMixin {
         if (!(plugin.bankSetupExpanded instanceof Map)) plugin.bankSetupExpanded = new Map();
         if (!(plugin.bankSetupSurfaces instanceof Set)) plugin.bankSetupSurfaces = new Set();
         if (!(plugin.bankSetupLintCache instanceof Map)) plugin.bankSetupLintCache = new Map();
+        try { plugin.bankSetupFootBind?.(); } catch (_) {}
         if (plugin.bankSetupDesktop()) {
           try {
             plugin.bankSetupUnsubscribe = plugin.apiBankSubscribe
@@ -87,6 +88,7 @@ class BobLedgerToolsBankSetupMixin {
         }
       },
       onDisposeStart: () => {
+        try { plugin.bankSetupFootUnbind?.(); } catch (_) {}
         try {
           if (typeof plugin.bankSetupUnsubscribe === "function") plugin.bankSetupUnsubscribe();
         } catch (error) {}
@@ -339,6 +341,7 @@ class BobLedgerToolsBankSetupMixin {
     if (!root) {
       return;
     }
+    try { this.bankSetupTrackFoot?.(scope, sourcePath, null); } catch (_) {}
     for (const node of Array.from(root.querySelectorAll?.(`.${BANK_SETUP_CLASS}`) || [])) {
       if (!this.bankSetupNodeBelongs(node, root)) {
         continue;
@@ -385,8 +388,13 @@ class BobLedgerToolsBankSetupMixin {
       if (!header) {
         return null;
       }
+      const extra = options.footExtra || (typeof this.bankSetupFootExtra === "function"
+        ? this.bankSetupFootExtra(options.sourcePath)
+        : null);
       header.setAttribute?.("data-bank-setup-source", options.sourcePath);
-      header.setAttribute?.("data-bank-setup-signature", model.signature);
+      header.setAttribute?.("data-bank-setup-signature", typeof this.bankSetupFootSignature === "function"
+        ? this.bankSetupFootSignature(model, extra, options)
+        : model.signature);
       try {
         const hue = typeof this.bankCardRootHue === "function"
           ? this.bankCardRootHue(options.sourcePath)
@@ -395,6 +403,7 @@ class BobLedgerToolsBankSetupMixin {
           header.setAttribute?.("data-root-hue", hue);
         }
       } catch (error) {}
+      this.bankSetupAppendFoot?.(header, options.sourcePath, doc, extra?.footSpec);
       return header;
     } catch (error) {
       return null;
@@ -420,8 +429,13 @@ class BobLedgerToolsBankSetupMixin {
     const active = doc?.activeElement;
     const focusKey = active && old?.contains?.(active)
       ? active.getAttribute?.("data-bank-setup-focus") : "";
-    if (old && model && old.getAttribute?.("data-bank-setup-signature") === model.signature
+    const extra = typeof this.bankSetupFootExtra === "function" ? this.bankSetupFootExtra(sourcePath) : null;
+    const signature = typeof this.bankSetupFootSignature === "function"
+      ? this.bankSetupFootSignature(model, extra, { expanded: Boolean(model && model.expanded), desktop: this.bankSetupDesktop() })
+      : (model && model.signature);
+    if (old && model && old.getAttribute?.("data-bank-setup-signature") === signature
       && old.getAttribute?.("data-bank-setup-source") === bankSetupHubPath(sourcePath)) {
+      try { this.bankSetupTrackFoot?.(scope, sourcePath, old); } catch (_) {}
       this.bankSetupOwnKeys(scope, sourcePath);
       return old;
     }
@@ -433,7 +447,7 @@ class BobLedgerToolsBankSetupMixin {
       scope?.classList?.add?.(BANK_SETUP_SURFACE_CLASS);
       this.bankSetupSurfaces?.add?.(scope);
     } catch (error) {}
-    const options = this.bankSetupOptions(sourcePath, model);
+    const options = { ...this.bankSetupOptions(sourcePath, model), footExtra: extra };
     let header = null;
     try {
       header = this.bankSetupBuildReading(model, options, doc);
@@ -441,6 +455,7 @@ class BobLedgerToolsBankSetupMixin {
       header = null;
     }
     if (!header) {
+      try { this.bankSetupTrackFoot?.(scope, sourcePath, null); } catch (_) {}
       this.bankSetupReleaseKeys(scope);
       try {
         scope?.classList?.remove?.(BANK_SETUP_SURFACE_CLASS);
@@ -467,6 +482,8 @@ class BobLedgerToolsBankSetupMixin {
       } catch (error) {}
     }
     this.bankSetupOwnKeys(scope, sourcePath);
+    try { this.bankSetupTrackFoot?.(scope, sourcePath, header); } catch (_) {}
+    try { this.bankSetupEnsureSource?.(sourcePath); } catch (_) {}
     return header;
   }
 
@@ -573,33 +590,44 @@ class BobLedgerToolsBankSetupMixin {
 
   bankSetupLiveDecorations(view, livePath) {
     const text = view.state.doc.toString();
+    try { this.bankSetupRememberSource?.(livePath, text); } catch (_) {}
     const model = this.bankSetupModelFor(livePath);
     this.bankSetupSetEditorScope(view, Boolean(model));
     if (!model) {
+      try { this.bankSetupTrackFoot?.(view?.dom, livePath, null); } catch (_) {}
       this.bankSetupReleaseKeys(view?.dom);
       return Decoration.none;
     }
     const doc = (typeof notebookDomDoc === "function" ? notebookDomDoc(view.dom) : null)
       || (typeof document !== "undefined" ? document : null);
-    const options = this.bankSetupOptions(livePath, model);
+    const extra = typeof this.bankSetupFootExtra === "function" ? this.bankSetupFootExtra(livePath) : null;
+    const options = { ...this.bankSetupOptions(livePath, model), footExtra: extra };
     const header = this.bankSetupBuildReading(model, options, doc);
     if (!header) {
+      try { this.bankSetupTrackFoot?.(view?.dom, livePath, null); } catch (_) {}
       this.bankSetupReleaseKeys(view?.dom);
       return Decoration.none;
     }
     // Native Properties live under the CodeMirror editor (view.dom), not the
     // .markdown-source-view that carries the surface class.
     this.bankSetupOwnKeys(view?.dom, livePath);
+    try { this.bankSetupTrackFoot?.(view?.dom, livePath, header); } catch (_) {}
     const anchor = this.notebookHeaderLiveAnchor?.(text) ?? -1;
     const frontmatterEnd = this.notebookHeaderFrontmatterEnd?.(text) ?? -1;
+    const footSignature = typeof this.bankSetupFootSignature === "function"
+      ? this.bankSetupFootSignature(model, extra, {
+        expanded: options.expanded,
+        desktop: options.desktop,
+      })
+      : bankSetupSignature(model, {
+        expanded: options.expanded,
+        desktop: options.desktop,
+      });
     const widget = new class extends WidgetType {
       constructor() {
         super();
         this.path = livePath;
-        this.signature = bankSetupSignature(model, {
-          expanded: options.expanded,
-          desktop: options.desktop,
-        });
+        this.signature = footSignature;
       }
       eq(other) {
         return Boolean(other && other.path === this.path && other.signature === this.signature);
@@ -698,6 +726,7 @@ class BobLedgerToolsBankSetupMixin {
   }
 
   bankSetupCleanEditor(view) {
+    try { this.bankSetupTrackFoot?.(view?.dom, this.bankSetupLivePath(view), null); } catch (_) {}
     this.bankPropertyCardHost().cleanEditor(view, {
       unmark: (scope) => {
         scope?.classList?.remove?.(BANK_SETUP_SURFACE_CLASS);

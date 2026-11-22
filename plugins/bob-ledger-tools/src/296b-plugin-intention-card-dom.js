@@ -359,6 +359,9 @@ function intentionCardBuildDom(model, plugin, doc) {
 
   const rail = intentionCardDomRail(model, plugin, doc);
   if (rail) card.appendChild(rail);
+  if (plugin && typeof plugin.intentionCardAppendFoot === "function") {
+    try { plugin.intentionCardAppendFoot(card, model, doc); } catch (_) {}
+  }
   return card;
 }
 

@@ -86,6 +86,20 @@ If the stop changed, the card repaints and says
 `The group stop changed — try again`. Cards repaint when calendar notes are
 created, deleted, or renamed, and at midnight.
 
+`parent` lives in the kicker and `type` is the tile. `intentions`, `summary`,
+`reflection`, and `summary_drafted` (agent) mark the bands they actually
+render. `created` lives in the foot; on a day, week, quarter, or year note a
+missing `created` stays quiet (no stamp), and an invalid one shows an amber
+stamp with the raw value kept in the drawer. Identity-only cards still carry
+the foot. The drawer inventories every top-level key in file order — loose
+keys, then **On this card** with those marks, then a folded **Managed**
+group.
+
+The foot follows the rail. Both the disclosure and the future `=-` key toggle
+the same drawer; open state is a per-note session toggle shared by every pane
+on the note. `y` on a focused drawer row jumps to that key's exact YAML line.
+Painting and toggling never spawn bob and never write the note.
+
 ### Hidden title lines
 
 While the card owns the title, the inline title is hidden, and so is the

@@ -32,6 +32,23 @@ try {
       propertyCardFootViewPath,
       propertyCardFootViewContains,
       propertyCardToggleProperties,
+      propertyCardFootAdapterPath,
+      propertyCardFootAdapterPendingInventory,
+      propertyCardFootAdapterFrontmatter,
+      propertyCardFootAdapterCanRead,
+      propertyCardFootAdapterReadSource,
+      propertyCardFootAdapterRememberSource,
+      propertyCardFootAdapterEnsureSource,
+      propertyCardFootAdapterSpec,
+      propertyCardFootAdapterDigest,
+      propertyCardFootAdapterExtra,
+      propertyCardFootAdapterSearchTag,
+      propertyCardFootAdapterHoverLink,
+      propertyCardFootAdapterHandlers,
+      propertyCardFootAdapterTrack,
+      propertyCardFootAdapterAppend,
+      propertyCardFootAdapterBind,
+      propertyCardFootAdapterUnbind,
     });
   }
 } catch (_) {}

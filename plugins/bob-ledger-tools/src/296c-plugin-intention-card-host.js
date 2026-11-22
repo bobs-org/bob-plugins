@@ -99,6 +99,7 @@ class BobLedgerToolsIntentionCardMixin {
 
   intentionCardOnSetup() {
     this.intentionCardEnsureMaps();
+    try { this.intentionCardFootBind?.(); } catch (_) {}
     this.intentionCardDay = this.intentionCardToday();
     try {
       const cache = this.app?.metadataCache;
@@ -135,6 +136,7 @@ class BobLedgerToolsIntentionCardMixin {
   }
 
   intentionCardOnDisposeStart() {
+    try { this.intentionCardFootUnbind?.(); } catch (_) {}
     try { this.intentionCardSlotReleaseAll?.(); } catch (_) {}
     if (this.intentionCardMidnightTimer != null) {
       if (this.albumClearTimeout) this.albumClearTimeout(this.intentionCardMidnightTimer);

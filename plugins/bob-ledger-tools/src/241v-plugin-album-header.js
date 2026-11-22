@@ -71,8 +71,10 @@ class BobLedgerToolsAlbumHeaderMixin {
           plugin.albumHeaderLastState = state;
           plugin.scheduleAlbumHeaderRefresh();
         }) || null;
+        try { plugin.albumHeaderFootBind?.(); } catch (_) {}
       },
       onDisposeStart: () => {
+        try { plugin.albumHeaderFootUnbind?.(); } catch (_) {}
         plugin.albumHeaderUnsubscribe?.();
         plugin.albumHeaderUnsubscribe = null;
         try { plugin.albumSchemaCardModal?.close?.(); } catch (_) {}
@@ -323,6 +325,7 @@ class BobLedgerToolsAlbumHeaderMixin {
   // still owned the title.
   albumHeaderRemoveReading(root, scope = root, sourcePath = "") {
     if (!root) return;
+    try { this.albumHeaderTrackFoot?.(scope, sourcePath, null); } catch (_) {}
     this.albumHeaderReleaseAdoption(scope, sourcePath, { preserveFallback: true });
     for (const node of Array.from(root.querySelectorAll?.(`.${ALBUM_HEADER_CLASS}`) || [])) {
       if (!this.albumHeaderNodeBelongs(node, root)) continue;
@@ -420,7 +423,10 @@ class BobLedgerToolsAlbumHeaderMixin {
         link.classList?.add?.(ALBUM_HEADER_CRUMB_CLASS);
         link.setAttribute?.("data-album-header-focus", `crumb:${link.getAttribute?.("data-href") || ""}`);
       }
-      if (!body) return header;
+      if (!body) {
+        this.albumHeaderAppendFoot?.(header, card, options, doc);
+        return header;
+      }
       this.albumHeaderAppendActions(block.actions, body, options, doc);
       if (body.ancestryMessage) {
         const note = notebookCreateEl(doc, "p", "bob-album-header-ancestry-note");
@@ -429,6 +435,7 @@ class BobLedgerToolsAlbumHeaderMixin {
         header.appendChild(note);
       }
       albumSchemaHeaderAppend(header, body, options, doc);
+      this.albumHeaderAppendFoot?.(header, card, options, doc);
       return header;
     } catch (_) {
       return null;
@@ -481,7 +488,7 @@ class BobLedgerToolsAlbumHeaderMixin {
     this.albumHeaderRemoveStrays(root, sourcePath);
     let card = null;
     try {
-      card = this.albumHeaderCardModelFor(sourcePath, state);
+      card = this.albumHeaderCardModelFor(sourcePath, state, this.albumHeaderSourceCache?.get?.(sourcePath));
     } catch (_) {
       card = null;
     }
@@ -499,8 +506,9 @@ class BobLedgerToolsAlbumHeaderMixin {
     const bodyNodes = this.albumHeaderBodyNodes(root, sourcePath, slotNode);
     let header = slotNode || bodyNodes[0] || null;
     const focusKey = this.albumHeaderFocusKey(header, doc);
-    const options = this.albumHeaderOptions(sourcePath, state, card.body);
-    const signature = albumHeaderCardSignature(card, options);
+    const extra = typeof this.albumHeaderFootExtra === "function" ? this.albumHeaderFootExtra(sourcePath, card) : null;
+    const options = { ...this.albumHeaderOptions(sourcePath, state, card.body), footSpec: extra?.footSpec };
+    const signature = JSON.stringify([albumHeaderCardSignature(card, options), extra?.footDigest || "", extra?.footOpen === true]);
     if (!header || albumHeaderNodeSignatures.get(header) !== signature) {
       let fresh = null;
       try {
@@ -537,6 +545,8 @@ class BobLedgerToolsAlbumHeaderMixin {
       }
     }
     this.albumHeaderRestoreFocus(header, focusKey);
+    try { this.albumHeaderTrackFoot?.(scope || root, sourcePath, header); } catch (_) {}
+    try { this.albumHeaderEnsureSource?.(sourcePath); } catch (_) {}
     // Owned Properties rows (record) hide only once the report body paints.
     if (card.body) this.albumHeaderOwnKeys(scope, sourcePath);
     else this.albumHeaderReleaseKeys(scope, sourcePath);
@@ -598,22 +608,26 @@ class BobLedgerToolsAlbumHeaderMixin {
         return Decoration.none;
       }
       const text = view.state.doc.toString();
+      try { this.albumHeaderRememberSource?.(path, text); } catch (_) {}
       const state = this.albumHeaderState();
       const card = this.albumHeaderCardModelFor(path, state, text);
       this.albumHeaderSetEditorScope(view, Boolean(card));
       if (!card) {
+        try { this.albumHeaderTrackFoot?.(view?.dom, path, null); } catch (_) {}
         this.albumHeaderReleaseKeys(view?.dom);
         this.albumHeaderReleaseAdoption(view?.dom);
         return Decoration.none;
       }
       const doc = notebookDomDoc(view.dom) || (typeof document !== "undefined" ? document : null);
-      const options = this.albumHeaderOptions(path, state, card.body);
-      const signature = albumHeaderCardSignature(card, options);
+      const extra = typeof this.albumHeaderFootExtra === "function" ? this.albumHeaderFootExtra(path, card) : null;
+      const options = { ...this.albumHeaderOptions(path, state, card.body), footSpec: extra?.footSpec };
+      const signature = JSON.stringify([albumHeaderCardSignature(card, options), extra?.footDigest || "", extra?.footOpen === true]);
       const adopted = propertyCardAdoptedEntry(view.dom);
       let header = adopted && adopted.path === path && adopted.mode === "slot" ? adopted.node : null;
       if (!header || albumHeaderNodeSignatures.get(header) !== signature) {
         const fresh = this.albumHeaderBuildEl(card, options, doc);
         if (!fresh) {
+          try { this.albumHeaderTrackFoot?.(view?.dom, path, null); } catch (_) {}
           this.albumHeaderReleaseKeys(view?.dom);
           this.albumHeaderReleaseAdoption(view?.dom);
           return Decoration.none;
@@ -637,6 +651,7 @@ class BobLedgerToolsAlbumHeaderMixin {
       // hides only once the report body paints.
       if (card.body) this.albumHeaderOwnKeys(view?.dom, path);
       else this.albumHeaderReleaseKeys(view?.dom, path);
+      try { this.albumHeaderTrackFoot?.(view?.dom, path, header); } catch (_) {}
       if (adoption.mode === "slot") return Decoration.none;
 
       // Fallback: today's inline widget at the end of the first `# ` line.
@@ -689,6 +704,7 @@ class BobLedgerToolsAlbumHeaderMixin {
   }
 
   albumHeaderCleanEditor(view) {
+    try { this.albumHeaderTrackFoot?.(view?.dom, this.albumHeaderLivePath(view), null); } catch (_) {}
     this.albumHeaderReleaseAdoption(view?.dom);
     this.albumPropertyCardHost().cleanEditor(view, {
       unmark: (scope) => { scope?.classList?.remove?.(ALBUM_HEADER_SURFACE_CLASS); },

@@ -85478,6 +85478,333 @@ function propertyCardHostRegisterFrontmatterOwnership(plugin) {
     return false;
   }
 }
+// ---- src/240r-plugin-property-card-foot-adapter.js ----
+// Shared property-card foot adapter helpers (bob-cli-pf adapters).
+// Album, day/week/quarter/year, and bank setup reuse these so each mixin
+// only declares truthful where-marks, nested openers, and species jumps.
+function propertyCardFootAdapterPath(value) {
+  return typeof propertyCardFootPath === "function"
+    ? propertyCardFootPath(value)
+    : (typeof value === "string" ? value.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/$/, "") : "");
+}
+
+function propertyCardFootAdapterPendingInventory(reason = "kit-unavailable") {
+  return { state: "pending", reason, rows: [], groups: [], count: 0, issues: [], recovery: null };
+}
+
+function propertyCardFootAdapterFrontmatter(plugin, path) {
+  try {
+    const key = propertyCardFootAdapterPath(path);
+    const file = plugin?.app?.vault?.getAbstractFileByPath?.(key);
+    const cache = file ? plugin.app?.metadataCache?.getFileCache?.(file) : null;
+    const fm = cache?.frontmatter;
+    return fm && typeof fm === "object" && !Array.isArray(fm) ? fm : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function propertyCardFootAdapterCanRead(plugin) {
+  try {
+    if (plugin?.app?.vault && typeof plugin.app.vault.read === "function") return true;
+  } catch (_) {}
+  try {
+    if (plugin?.app?.vault?.adapter && typeof plugin.app.vault.adapter.read === "function") return true;
+  } catch (_) {}
+  return false;
+}
+
+function propertyCardFootAdapterReadSource(plugin, path) {
+  const key = propertyCardFootAdapterPath(path);
+  return Promise.resolve().then(async () => {
+    try {
+      const file = plugin?.app?.vault?.getAbstractFileByPath?.(key);
+      if (file && plugin.app?.vault && typeof plugin.app.vault.read === "function") {
+        return await plugin.app.vault.read(file);
+      }
+    } catch (_) {}
+    try {
+      const adapter = plugin?.app?.vault?.adapter;
+      if (adapter && typeof adapter.read === "function") return await adapter.read(key);
+    } catch (_) {}
+    return null;
+  });
+}
+
+function propertyCardFootAdapterRememberSource(cache, path, text) {
+  const key = propertyCardFootAdapterPath(path);
+  if (!key || typeof text !== "string" || !(cache instanceof Map)) return text;
+  cache.set(key, text);
+  return text;
+}
+
+function propertyCardFootAdapterEnsureSource(plugin, path, maps) {
+  const key = propertyCardFootAdapterPath(path);
+  if (!key || !maps || !(maps.cache instanceof Map) || !(maps.flights instanceof Map)) return null;
+  if (maps.cache.has(key)) return Promise.resolve(maps.cache.get(key));
+  if (maps.flights.has(key)) return maps.flights.get(key);
+  if (typeof maps.canRead === "function" ? !maps.canRead() : !propertyCardFootAdapterCanRead(plugin)) return null;
+  const flight = Promise.resolve()
+    .then(() => (typeof maps.read === "function" ? maps.read(key) : propertyCardFootAdapterReadSource(plugin, key)))
+    .then((source) => {
+      if (typeof maps.active === "function" && maps.active() === false) return "";
+      if (maps.flights.get(key) !== flight) return "";
+      if (source == null) return "";
+      const text = String(source);
+      const previous = maps.cache.has(key) ? maps.cache.get(key) : undefined;
+      maps.cache.set(key, text);
+      if (!(previous === undefined && text === "")) maps.refresh?.();
+      return text;
+    })
+    .catch(() => "")
+    .finally(() => {
+      if (maps.flights.get(key) === flight) maps.flights.delete(key);
+    });
+  maps.flights.set(key, flight);
+  return flight;
+}
+
+function propertyCardFootAdapterSpec(options = {}) {
+  const path = propertyCardFootAdapterPath(options.path);
+  const frontmatter = options.frontmatter && typeof options.frontmatter === "object" && !Array.isArray(options.frontmatter)
+    ? options.frontmatter : {};
+  const where = options.where && typeof options.where === "object" ? options.where : {};
+  const nested = options.nested && typeof options.nested === "object" ? options.nested : {};
+  const legacy = options.legacy && typeof options.legacy === "object" ? options.legacy : {};
+  const sourceText = typeof options.sourceText === "string" ? options.sourceText : undefined;
+  let inventory = null;
+  try {
+    inventory = typeof propertyCardInventory === "function"
+      ? propertyCardInventory({
+        path,
+        sourcePath: options.sourcePath || (sourceText !== undefined ? path : ""),
+        cachePath: options.cachePath || path,
+        sourceText,
+        frontmatter,
+        parseYaml: typeof parseYaml === "function" ? parseYaml : null,
+        where,
+        nested,
+        legacy,
+      })
+      : null;
+  } catch (_) {
+    inventory = null;
+  }
+  if (!inventory) inventory = propertyCardFootAdapterPendingInventory();
+  const createdRow = Array.isArray(inventory.rows)
+    ? inventory.rows.find((row) => row && row.key === "created")
+    : null;
+  let stamp = null;
+  try {
+    stamp = typeof propertyCardFormatCreatedStamp === "function"
+      ? propertyCardFormatCreatedStamp({
+        kind: options.kind || "",
+        temporal: options.temporal === true,
+        value: frontmatter.created,
+        present: Object.prototype.hasOwnProperty.call(frontmatter, "created"),
+        sourceScalar: createdRow ? createdRow.sourceScalar : "",
+        noteDate: options.noteDate,
+        clock: options.clock,
+        now: options.now,
+        timeZone: options.timeZone,
+      })
+      : null;
+  } catch (_) {
+    stamp = null;
+  }
+  return { path, inventory, stamp };
+}
+
+function propertyCardFootAdapterDigest(spec) {
+  try {
+    const rows = Array.isArray(spec?.inventory?.rows) ? spec.inventory.rows : [];
+    return JSON.stringify({
+      state: spec?.inventory?.state || "",
+      stamp: spec?.stamp?.text || "",
+      rows: rows.map((row) => [
+        row.key,
+        row.occurrence,
+        row.line,
+        row.valueState,
+        typeof propertyCardFootRowText === "function" ? propertyCardFootRowText(row) : String(row.value),
+      ]),
+    });
+  } catch (_) {
+    return "";
+  }
+}
+
+function propertyCardFootAdapterExtra(path, spec) {
+  let open = false;
+  try {
+    open = typeof propertyCardFootIsOpen === "function" && propertyCardFootIsOpen(path);
+  } catch (_) {}
+  return { footOpen: open, footDigest: propertyCardFootAdapterDigest(spec), footSpec: spec };
+}
+
+function propertyCardFootAdapterSearchTag(plugin, tag) {
+  const query = String(tag || "").trim();
+  if (!query) return false;
+  try {
+    const commands = plugin?.app?.commands;
+    if (commands && typeof commands.executeCommandById === "function") {
+      const opened = commands.executeCommandById("global-search:open");
+      if (opened === false) return false;
+      return true;
+    }
+  } catch (_) {}
+  return false;
+}
+
+function propertyCardFootAdapterHoverLink(plugin, event, targetEl, linktext, sourcePath, source) {
+  try {
+    plugin?.app?.workspace?.trigger?.("hover-link", {
+      event,
+      source: source || "bob-property-card",
+      hoverParent: targetEl,
+      targetEl,
+      linktext: String(linktext || ""),
+      sourcePath: String(sourcePath || ""),
+    });
+  } catch (_) {}
+}
+
+function propertyCardFootAdapterHandlers(plugin, path, options = {}) {
+  const refresh = typeof options.refresh === "function" ? options.refresh : () => {};
+  const pending = options.pendingScroll;
+  return {
+    onToggle: (notePath, next) => {
+      let decided = next;
+      try {
+        if (typeof propertyCardFootToggle === "function") {
+          propertyCardFootToggle(notePath);
+          decided = propertyCardFootIsOpen(notePath);
+        }
+      } catch (_) {}
+      if (decided === true && pending instanceof Set) pending.add(propertyCardFootAdapterPath(notePath));
+      refresh();
+      return decided;
+    },
+    jumpYaml: (key, line) => { void options.jumpYaml?.(key, line); },
+    jumpRecovery: () => { void options.jumpRecovery?.(); },
+    openPath: (target, event) => { void options.openPath?.(target, event); },
+    hoverLink: (event, targetEl, linktext) => {
+      if (typeof options.hoverLink === "function") return options.hoverLink(event, targetEl, linktext);
+      return propertyCardFootAdapterHoverLink(plugin, event, targetEl, linktext, path, options.hoverSource);
+    },
+    searchTag: (tag, event) => {
+      if (typeof options.searchTag === "function") return options.searchTag(tag, event);
+      return propertyCardFootAdapterSearchTag(plugin, tag);
+    },
+    openNested: typeof options.openNested === "function" ? options.openNested : null,
+    onOpenEditor: typeof propertyCardFootEditorHook === "function" && propertyCardFootEditorHook
+      ? (key) => propertyCardFootOpenEditor(path, key)
+      : null,
+  };
+}
+
+function propertyCardFootAdapterTrack(container, path, card, tracked) {
+  const key = propertyCardFootAdapterPath(path);
+  try {
+    if (typeof propertyCardFootReleaseScope === "function") {
+      propertyCardFootReleaseScope(container || null, key);
+    }
+  } catch (_) {}
+  if (!card || !key) return null;
+  if (tracked instanceof Set) tracked.add(key);
+  let foot = null;
+  try {
+    foot = typeof card.querySelector === "function"
+      ? card.querySelector(`.${PROPERTY_CARD_FOOT_CLASS}`)
+      : null;
+  } catch (_) {
+    foot = null;
+  }
+  if (!foot) return null;
+  try {
+    if (typeof propertyCardFootRegisterMount === "function") {
+      const drawer = typeof foot.querySelector === "function"
+        ? foot.querySelector(`.${PROPERTY_CARD_FOOT_DRAWER_CLASS}`)
+        : null;
+      const drawerId = drawer?.getAttribute?.("id") || "";
+      const disclosureId = drawerId.endsWith("-drawer") ? drawerId.slice(0, -"-drawer".length) : "";
+      return propertyCardFootRegisterMount(foot, key, disclosureId || undefined);
+    }
+  } catch (_) {}
+  return null;
+}
+
+function propertyCardFootAdapterAppend(card, path, doc, spec, handlers, pendingScroll) {
+  try {
+    const key = propertyCardFootAdapterPath(path);
+    if (!card || !key || typeof propertyCardFootBuildEl !== "function") return null;
+    const open = typeof propertyCardFootIsOpen === "function" && propertyCardFootIsOpen(key);
+    let disclosureId = "";
+    try {
+      disclosureId = typeof propertyCardFootNextDisclosureId === "function"
+        ? propertyCardFootNextDisclosureId()
+        : "";
+    } catch (_) {
+      disclosureId = "";
+    }
+    const built = propertyCardFootBuildEl(doc || card.ownerDocument, {
+      path: key,
+      disclosureId,
+      open,
+      inventory: spec?.inventory,
+      stamp: spec?.stamp,
+      handlers: handlers || {},
+    });
+    if (!built || !built.element) return null;
+    if (doc && built.element.ownerDocument !== doc) {
+      try { doc.adoptNode?.(built.element); } catch (_) {}
+    }
+    card.appendChild(built.element);
+    if (open && pendingScroll instanceof Set && pendingScroll.has(key)) {
+      pendingScroll.delete(key);
+      try {
+        if (typeof propertyCardFootReveal === "function") propertyCardFootReveal(built.element);
+      } catch (_) {}
+    }
+    return built;
+  } catch (_) {
+    return null;
+  }
+}
+
+function propertyCardFootAdapterBind(plugin, options = {}) {
+  const pendingKey = options.pendingKey;
+  const untoggleKey = options.untoggleKey;
+  const unresolverKey = options.unresolverKey;
+  if (pendingKey && !(plugin[pendingKey] instanceof Set)) plugin[pendingKey] = new Set();
+  if (untoggleKey && !plugin[untoggleKey] && typeof propertyCardFootOnToggle === "function") {
+    plugin[untoggleKey] = propertyCardFootOnToggle((path, open) => {
+      if (open && pendingKey) plugin[pendingKey]?.add?.(propertyCardFootAdapterPath(path));
+      options.refresh?.();
+    });
+  }
+  if (unresolverKey && !plugin[unresolverKey] && typeof propertyCardFootRegisterPathResolver === "function") {
+    plugin[unresolverKey] = propertyCardFootRegisterPathResolver((view) => {
+      try { return options.livePath?.(view) || ""; } catch (_) { return ""; }
+    });
+  }
+}
+
+function propertyCardFootAdapterUnbind(plugin, options = {}) {
+  try { plugin[options.untoggleKey]?.(); } catch (_) {}
+  if (options.untoggleKey) plugin[options.untoggleKey] = null;
+  try { plugin[options.unresolverKey]?.(); } catch (_) {}
+  if (options.unresolverKey) plugin[options.unresolverKey] = null;
+  plugin[options.pendingKey]?.clear?.();
+  for (const path of Array.from(options.tracked || [])) {
+    try {
+      if (typeof propertyCardFootReleasePath === "function") propertyCardFootReleasePath(path);
+    } catch (_) {}
+  }
+  if (options.tracked instanceof Set) options.tracked.clear();
+  options.cache?.clear?.();
+  options.flights?.clear?.();
+}
 // ---- src/245-plugin-bank-category-card-model.js ----
 // Pure Category card view model, key table, session, and end-of-run summary
 // (bank_weekly_category_walk card-model). No DOM, no spawns: card-ui renders
@@ -88693,6 +89020,7 @@ class BobLedgerToolsBankSetupMixin {
         if (!(plugin.bankSetupExpanded instanceof Map)) plugin.bankSetupExpanded = new Map();
         if (!(plugin.bankSetupSurfaces instanceof Set)) plugin.bankSetupSurfaces = new Set();
         if (!(plugin.bankSetupLintCache instanceof Map)) plugin.bankSetupLintCache = new Map();
+        try { plugin.bankSetupFootBind?.(); } catch (_) {}
         if (plugin.bankSetupDesktop()) {
           try {
             plugin.bankSetupUnsubscribe = plugin.apiBankSubscribe
@@ -88710,6 +89038,7 @@ class BobLedgerToolsBankSetupMixin {
         }
       },
       onDisposeStart: () => {
+        try { plugin.bankSetupFootUnbind?.(); } catch (_) {}
         try {
           if (typeof plugin.bankSetupUnsubscribe === "function") plugin.bankSetupUnsubscribe();
         } catch (error) {}
@@ -88962,6 +89291,7 @@ class BobLedgerToolsBankSetupMixin {
     if (!root) {
       return;
     }
+    try { this.bankSetupTrackFoot?.(scope, sourcePath, null); } catch (_) {}
     for (const node of Array.from(root.querySelectorAll?.(`.${BANK_SETUP_CLASS}`) || [])) {
       if (!this.bankSetupNodeBelongs(node, root)) {
         continue;
@@ -89008,8 +89338,13 @@ class BobLedgerToolsBankSetupMixin {
       if (!header) {
         return null;
       }
+      const extra = options.footExtra || (typeof this.bankSetupFootExtra === "function"
+        ? this.bankSetupFootExtra(options.sourcePath)
+        : null);
       header.setAttribute?.("data-bank-setup-source", options.sourcePath);
-      header.setAttribute?.("data-bank-setup-signature", model.signature);
+      header.setAttribute?.("data-bank-setup-signature", typeof this.bankSetupFootSignature === "function"
+        ? this.bankSetupFootSignature(model, extra, options)
+        : model.signature);
       try {
         const hue = typeof this.bankCardRootHue === "function"
           ? this.bankCardRootHue(options.sourcePath)
@@ -89018,6 +89353,7 @@ class BobLedgerToolsBankSetupMixin {
           header.setAttribute?.("data-root-hue", hue);
         }
       } catch (error) {}
+      this.bankSetupAppendFoot?.(header, options.sourcePath, doc, extra?.footSpec);
       return header;
     } catch (error) {
       return null;
@@ -89043,8 +89379,13 @@ class BobLedgerToolsBankSetupMixin {
     const active = doc?.activeElement;
     const focusKey = active && old?.contains?.(active)
       ? active.getAttribute?.("data-bank-setup-focus") : "";
-    if (old && model && old.getAttribute?.("data-bank-setup-signature") === model.signature
+    const extra = typeof this.bankSetupFootExtra === "function" ? this.bankSetupFootExtra(sourcePath) : null;
+    const signature = typeof this.bankSetupFootSignature === "function"
+      ? this.bankSetupFootSignature(model, extra, { expanded: Boolean(model && model.expanded), desktop: this.bankSetupDesktop() })
+      : (model && model.signature);
+    if (old && model && old.getAttribute?.("data-bank-setup-signature") === signature
       && old.getAttribute?.("data-bank-setup-source") === bankSetupHubPath(sourcePath)) {
+      try { this.bankSetupTrackFoot?.(scope, sourcePath, old); } catch (_) {}
       this.bankSetupOwnKeys(scope, sourcePath);
       return old;
     }
@@ -89056,7 +89397,7 @@ class BobLedgerToolsBankSetupMixin {
       scope?.classList?.add?.(BANK_SETUP_SURFACE_CLASS);
       this.bankSetupSurfaces?.add?.(scope);
     } catch (error) {}
-    const options = this.bankSetupOptions(sourcePath, model);
+    const options = { ...this.bankSetupOptions(sourcePath, model), footExtra: extra };
     let header = null;
     try {
       header = this.bankSetupBuildReading(model, options, doc);
@@ -89064,6 +89405,7 @@ class BobLedgerToolsBankSetupMixin {
       header = null;
     }
     if (!header) {
+      try { this.bankSetupTrackFoot?.(scope, sourcePath, null); } catch (_) {}
       this.bankSetupReleaseKeys(scope);
       try {
         scope?.classList?.remove?.(BANK_SETUP_SURFACE_CLASS);
@@ -89090,6 +89432,8 @@ class BobLedgerToolsBankSetupMixin {
       } catch (error) {}
     }
     this.bankSetupOwnKeys(scope, sourcePath);
+    try { this.bankSetupTrackFoot?.(scope, sourcePath, header); } catch (_) {}
+    try { this.bankSetupEnsureSource?.(sourcePath); } catch (_) {}
     return header;
   }
 
@@ -89196,33 +89540,44 @@ class BobLedgerToolsBankSetupMixin {
 
   bankSetupLiveDecorations(view, livePath) {
     const text = view.state.doc.toString();
+    try { this.bankSetupRememberSource?.(livePath, text); } catch (_) {}
     const model = this.bankSetupModelFor(livePath);
     this.bankSetupSetEditorScope(view, Boolean(model));
     if (!model) {
+      try { this.bankSetupTrackFoot?.(view?.dom, livePath, null); } catch (_) {}
       this.bankSetupReleaseKeys(view?.dom);
       return Decoration.none;
     }
     const doc = (typeof notebookDomDoc === "function" ? notebookDomDoc(view.dom) : null)
       || (typeof document !== "undefined" ? document : null);
-    const options = this.bankSetupOptions(livePath, model);
+    const extra = typeof this.bankSetupFootExtra === "function" ? this.bankSetupFootExtra(livePath) : null;
+    const options = { ...this.bankSetupOptions(livePath, model), footExtra: extra };
     const header = this.bankSetupBuildReading(model, options, doc);
     if (!header) {
+      try { this.bankSetupTrackFoot?.(view?.dom, livePath, null); } catch (_) {}
       this.bankSetupReleaseKeys(view?.dom);
       return Decoration.none;
     }
     // Native Properties live under the CodeMirror editor (view.dom), not the
     // .markdown-source-view that carries the surface class.
     this.bankSetupOwnKeys(view?.dom, livePath);
+    try { this.bankSetupTrackFoot?.(view?.dom, livePath, header); } catch (_) {}
     const anchor = this.notebookHeaderLiveAnchor?.(text) ?? -1;
     const frontmatterEnd = this.notebookHeaderFrontmatterEnd?.(text) ?? -1;
+    const footSignature = typeof this.bankSetupFootSignature === "function"
+      ? this.bankSetupFootSignature(model, extra, {
+        expanded: options.expanded,
+        desktop: options.desktop,
+      })
+      : bankSetupSignature(model, {
+        expanded: options.expanded,
+        desktop: options.desktop,
+      });
     const widget = new class extends WidgetType {
       constructor() {
         super();
         this.path = livePath;
-        this.signature = bankSetupSignature(model, {
-          expanded: options.expanded,
-          desktop: options.desktop,
-        });
+        this.signature = footSignature;
       }
       eq(other) {
         return Boolean(other && other.path === this.path && other.signature === this.signature);
@@ -89321,6 +89676,7 @@ class BobLedgerToolsBankSetupMixin {
   }
 
   bankSetupCleanEditor(view) {
+    try { this.bankSetupTrackFoot?.(view?.dom, this.bankSetupLivePath(view), null); } catch (_) {}
     this.bankPropertyCardHost().cleanEditor(view, {
       unmark: (scope) => {
         scope?.classList?.remove?.(BANK_SETUP_SURFACE_CLASS);
@@ -89389,6 +89745,135 @@ function bankSetupLintDeltas(beforeText, afterText) {
     fromLine: prefix + 1,
     delta: (after.length - suffix) - (before.length - suffix),
   }];
+}
+// ---- src/248ca-plugin-bank-setup-foot.js ----
+// Bank setup header shared-foot adapter (bob-cli-pf adapters). The foot
+// appends after bankSetupBuildEl so collapsed, loading, and mobile states
+// still carry it. Fence, category, and modal surfaces stay foot-free.
+class BobLedgerToolsBankSetupFootMixin {
+  bankSetupFootBind() {
+    if (!(this.bankSetupSourceCache instanceof Map)) this.bankSetupSourceCache = new Map();
+    if (!(this.bankSetupSourceFlights instanceof Map)) this.bankSetupSourceFlights = new Map();
+    if (!(this.bankSetupFootTracked instanceof Set)) this.bankSetupFootTracked = new Set();
+    propertyCardFootAdapterBind(this, {
+      pendingKey: "bankSetupFootPendingScroll",
+      untoggleKey: "bankSetupFootUntoggle",
+      unresolverKey: "bankSetupFootUnresolver",
+      refresh: () => this.scheduleBankSetupRefresh(),
+      livePath: (view) => this.bankSetupLivePath(view) || "",
+    });
+    try {
+      const cache = this.app?.metadataCache;
+      if (cache && typeof cache.on === "function" && typeof this.registerEvent === "function" && !this.bankSetupFootMetaBound) {
+        this.bankSetupFootMetaBound = true;
+        this.registerEvent(cache.on("changed", (file) => {
+          const path = bankSetupHubPath(file?.path);
+          if (!path || !bankSetupIsHubPath(path)) return;
+          this.bankSetupSourceCache?.delete?.(path);
+          this.bankSetupSourceFlights?.delete?.(path);
+          this.scheduleBankSetupRefresh();
+        }));
+      }
+    } catch (_) {}
+  }
+
+  bankSetupFootUnbind() {
+    propertyCardFootAdapterUnbind(this, {
+      pendingKey: "bankSetupFootPendingScroll",
+      untoggleKey: "bankSetupFootUntoggle",
+      unresolverKey: "bankSetupFootUnresolver",
+      tracked: this.bankSetupFootTracked,
+      cache: this.bankSetupSourceCache,
+      flights: this.bankSetupSourceFlights,
+    });
+  }
+
+  bankSetupRememberSource(path, text) {
+    if (!(this.bankSetupSourceCache instanceof Map)) this.bankSetupSourceCache = new Map();
+    return propertyCardFootAdapterRememberSource(this.bankSetupSourceCache, path, text);
+  }
+
+  bankSetupEnsureSource(path) {
+    if (!(this.bankSetupSourceCache instanceof Map)) this.bankSetupSourceCache = new Map();
+    if (!(this.bankSetupSourceFlights instanceof Map)) this.bankSetupSourceFlights = new Map();
+    return propertyCardFootAdapterEnsureSource(this, path, {
+      cache: this.bankSetupSourceCache,
+      flights: this.bankSetupSourceFlights,
+      active: () => this.bankSetupActive !== false,
+      refresh: () => this.scheduleBankSetupRefresh(),
+    });
+  }
+
+  bankSetupFootSpec(path) {
+    const filePath = bankSetupHubPath(path) || BANK_SETUP_HUB_PATH;
+    const nested = {};
+    if (this.bankSetupDesktop?.() !== false) nested.bank = "setup";
+    return propertyCardFootAdapterSpec({
+      path: filePath,
+      kind: "bank",
+      sourceText: this.bankSetupSourceCache?.get?.(filePath),
+      frontmatter: propertyCardFootAdapterFrontmatter(this, filePath),
+      where: { bank: "card", created: "foot" },
+      nested,
+    });
+  }
+
+  bankSetupFootExtra(path) {
+    let spec = null;
+    try { spec = this.bankSetupFootSpec(path); } catch (_) { spec = null; }
+    if (!spec) {
+      spec = {
+        path: bankSetupHubPath(path) || BANK_SETUP_HUB_PATH,
+        inventory: propertyCardFootAdapterPendingInventory(),
+        stamp: null,
+      };
+    }
+    return propertyCardFootAdapterExtra(path, spec);
+  }
+
+  bankSetupFootHandlers(path) {
+    const filePath = bankSetupHubPath(path) || BANK_SETUP_HUB_PATH;
+    return propertyCardFootAdapterHandlers(this, filePath, {
+      pendingScroll: this.bankSetupFootPendingScroll,
+      refresh: () => this.scheduleBankSetupRefresh(),
+      hoverSource: "bob-bank-setup",
+      jumpYaml: (key, line) => { void this.bankSetupJumpYaml(filePath, line); },
+      jumpRecovery: () => { void this.bankSetupJumpYaml(filePath, 1); },
+      openPath: (target, event) => {
+        try {
+          const workspace = this.app?.workspace;
+          if (workspace && typeof workspace.openLinkText === "function") {
+            const pane = typeof albumHeaderLinkPane === "function"
+              ? albumHeaderLinkPane(event)
+              : Boolean(event?.ctrlKey || event?.metaKey);
+            void workspace.openLinkText(String(target || "").replace(/\.md$/i, ""), filePath, pane);
+          }
+        } catch (_) {}
+      },
+      openNested: this.bankSetupDesktop?.() === false ? null : (key) => {
+        if (key === "bank") void this.openBankSetupCard?.({ sourcePath: filePath });
+      },
+    });
+  }
+
+  bankSetupTrackFoot(container, path, header) {
+    return propertyCardFootAdapterTrack(container, path, header, this.bankSetupFootTracked);
+  }
+
+  bankSetupAppendFoot(header, path, doc, footSpec) {
+    const filePath = bankSetupHubPath(path) || BANK_SETUP_HUB_PATH;
+    const spec = footSpec || this.bankSetupFootSpec(filePath);
+    return propertyCardFootAdapterAppend(
+      header, filePath, doc, spec, this.bankSetupFootHandlers(filePath), this.bankSetupFootPendingScroll,
+    );
+  }
+
+  bankSetupFootSignature(model, extra, options) {
+    const base = typeof bankSetupSignature === "function"
+      ? bankSetupSignature(model, options)
+      : (model && model.signature);
+    return [base, extra?.footDigest || "", extra?.footOpen === true].join("::");
+  }
 }
 // ---- src/248d-plugin-bank-config-update.js ----
 // Bank config update wire helpers. `bob bank config update` is the only
@@ -101335,8 +101820,10 @@ class BobLedgerToolsAlbumHeaderMixin {
           plugin.albumHeaderLastState = state;
           plugin.scheduleAlbumHeaderRefresh();
         }) || null;
+        try { plugin.albumHeaderFootBind?.(); } catch (_) {}
       },
       onDisposeStart: () => {
+        try { plugin.albumHeaderFootUnbind?.(); } catch (_) {}
         plugin.albumHeaderUnsubscribe?.();
         plugin.albumHeaderUnsubscribe = null;
         try { plugin.albumSchemaCardModal?.close?.(); } catch (_) {}
@@ -101587,6 +102074,7 @@ class BobLedgerToolsAlbumHeaderMixin {
   // still owned the title.
   albumHeaderRemoveReading(root, scope = root, sourcePath = "") {
     if (!root) return;
+    try { this.albumHeaderTrackFoot?.(scope, sourcePath, null); } catch (_) {}
     this.albumHeaderReleaseAdoption(scope, sourcePath, { preserveFallback: true });
     for (const node of Array.from(root.querySelectorAll?.(`.${ALBUM_HEADER_CLASS}`) || [])) {
       if (!this.albumHeaderNodeBelongs(node, root)) continue;
@@ -101684,7 +102172,10 @@ class BobLedgerToolsAlbumHeaderMixin {
         link.classList?.add?.(ALBUM_HEADER_CRUMB_CLASS);
         link.setAttribute?.("data-album-header-focus", `crumb:${link.getAttribute?.("data-href") || ""}`);
       }
-      if (!body) return header;
+      if (!body) {
+        this.albumHeaderAppendFoot?.(header, card, options, doc);
+        return header;
+      }
       this.albumHeaderAppendActions(block.actions, body, options, doc);
       if (body.ancestryMessage) {
         const note = notebookCreateEl(doc, "p", "bob-album-header-ancestry-note");
@@ -101693,6 +102184,7 @@ class BobLedgerToolsAlbumHeaderMixin {
         header.appendChild(note);
       }
       albumSchemaHeaderAppend(header, body, options, doc);
+      this.albumHeaderAppendFoot?.(header, card, options, doc);
       return header;
     } catch (_) {
       return null;
@@ -101745,7 +102237,7 @@ class BobLedgerToolsAlbumHeaderMixin {
     this.albumHeaderRemoveStrays(root, sourcePath);
     let card = null;
     try {
-      card = this.albumHeaderCardModelFor(sourcePath, state);
+      card = this.albumHeaderCardModelFor(sourcePath, state, this.albumHeaderSourceCache?.get?.(sourcePath));
     } catch (_) {
       card = null;
     }
@@ -101763,8 +102255,9 @@ class BobLedgerToolsAlbumHeaderMixin {
     const bodyNodes = this.albumHeaderBodyNodes(root, sourcePath, slotNode);
     let header = slotNode || bodyNodes[0] || null;
     const focusKey = this.albumHeaderFocusKey(header, doc);
-    const options = this.albumHeaderOptions(sourcePath, state, card.body);
-    const signature = albumHeaderCardSignature(card, options);
+    const extra = typeof this.albumHeaderFootExtra === "function" ? this.albumHeaderFootExtra(sourcePath, card) : null;
+    const options = { ...this.albumHeaderOptions(sourcePath, state, card.body), footSpec: extra?.footSpec };
+    const signature = JSON.stringify([albumHeaderCardSignature(card, options), extra?.footDigest || "", extra?.footOpen === true]);
     if (!header || albumHeaderNodeSignatures.get(header) !== signature) {
       let fresh = null;
       try {
@@ -101801,6 +102294,8 @@ class BobLedgerToolsAlbumHeaderMixin {
       }
     }
     this.albumHeaderRestoreFocus(header, focusKey);
+    try { this.albumHeaderTrackFoot?.(scope || root, sourcePath, header); } catch (_) {}
+    try { this.albumHeaderEnsureSource?.(sourcePath); } catch (_) {}
     // Owned Properties rows (record) hide only once the report body paints.
     if (card.body) this.albumHeaderOwnKeys(scope, sourcePath);
     else this.albumHeaderReleaseKeys(scope, sourcePath);
@@ -101862,22 +102357,26 @@ class BobLedgerToolsAlbumHeaderMixin {
         return Decoration.none;
       }
       const text = view.state.doc.toString();
+      try { this.albumHeaderRememberSource?.(path, text); } catch (_) {}
       const state = this.albumHeaderState();
       const card = this.albumHeaderCardModelFor(path, state, text);
       this.albumHeaderSetEditorScope(view, Boolean(card));
       if (!card) {
+        try { this.albumHeaderTrackFoot?.(view?.dom, path, null); } catch (_) {}
         this.albumHeaderReleaseKeys(view?.dom);
         this.albumHeaderReleaseAdoption(view?.dom);
         return Decoration.none;
       }
       const doc = notebookDomDoc(view.dom) || (typeof document !== "undefined" ? document : null);
-      const options = this.albumHeaderOptions(path, state, card.body);
-      const signature = albumHeaderCardSignature(card, options);
+      const extra = typeof this.albumHeaderFootExtra === "function" ? this.albumHeaderFootExtra(path, card) : null;
+      const options = { ...this.albumHeaderOptions(path, state, card.body), footSpec: extra?.footSpec };
+      const signature = JSON.stringify([albumHeaderCardSignature(card, options), extra?.footDigest || "", extra?.footOpen === true]);
       const adopted = propertyCardAdoptedEntry(view.dom);
       let header = adopted && adopted.path === path && adopted.mode === "slot" ? adopted.node : null;
       if (!header || albumHeaderNodeSignatures.get(header) !== signature) {
         const fresh = this.albumHeaderBuildEl(card, options, doc);
         if (!fresh) {
+          try { this.albumHeaderTrackFoot?.(view?.dom, path, null); } catch (_) {}
           this.albumHeaderReleaseKeys(view?.dom);
           this.albumHeaderReleaseAdoption(view?.dom);
           return Decoration.none;
@@ -101901,6 +102400,7 @@ class BobLedgerToolsAlbumHeaderMixin {
       // hides only once the report body paints.
       if (card.body) this.albumHeaderOwnKeys(view?.dom, path);
       else this.albumHeaderReleaseKeys(view?.dom, path);
+      try { this.albumHeaderTrackFoot?.(view?.dom, path, header); } catch (_) {}
       if (adoption.mode === "slot") return Decoration.none;
 
       // Fallback: today's inline widget at the end of the first `# ` line.
@@ -101953,6 +102453,7 @@ class BobLedgerToolsAlbumHeaderMixin {
   }
 
   albumHeaderCleanEditor(view) {
+    try { this.albumHeaderTrackFoot?.(view?.dom, this.albumHeaderLivePath(view), null); } catch (_) {}
     this.albumHeaderReleaseAdoption(view?.dom);
     this.albumPropertyCardHost().cleanEditor(view, {
       unmark: (scope) => { scope?.classList?.remove?.(ALBUM_HEADER_SURFACE_CLASS); },
@@ -101969,6 +102470,136 @@ class BobLedgerToolsAlbumHeaderMixin {
 
   scheduleAlbumHeaderRefresh() {
     this.albumPropertyCardHost().scheduleRefresh();
+  }
+}
+// ---- src/241va-plugin-album-header-foot.js ----
+// Album header shared-foot adapter (bob-cli-pf adapters): truthful
+// where-marks, nested schema opener, source cache, and the kit append
+// after schema/header content including identity-only returns.
+class BobLedgerToolsAlbumHeaderFootMixin {
+  albumHeaderFootBind() {
+    if (!(this.albumHeaderSourceCache instanceof Map)) this.albumHeaderSourceCache = new Map();
+    if (!(this.albumHeaderSourceFlights instanceof Map)) this.albumHeaderSourceFlights = new Map();
+    if (!(this.albumHeaderFootTracked instanceof Set)) this.albumHeaderFootTracked = new Set();
+    propertyCardFootAdapterBind(this, {
+      pendingKey: "albumHeaderFootPendingScroll",
+      untoggleKey: "albumHeaderFootUntoggle",
+      unresolverKey: "albumHeaderFootUnresolver",
+      refresh: () => this.scheduleAlbumHeaderRefresh(),
+      livePath: (view) => this.albumHeaderLivePath(view) || "",
+    });
+    try {
+      const cache = this.app?.metadataCache;
+      if (cache && typeof cache.on === "function" && typeof this.registerEvent === "function" && !this.albumHeaderFootMetaBound) {
+        this.albumHeaderFootMetaBound = true;
+        this.registerEvent(cache.on("changed", (file) => {
+          const path = albumHeaderPath(file?.path);
+          if (!path) return;
+          this.albumHeaderSourceCache?.delete?.(path);
+          this.albumHeaderSourceFlights?.delete?.(path);
+          this.scheduleAlbumHeaderRefresh();
+        }));
+      }
+    } catch (_) {}
+  }
+
+  albumHeaderFootUnbind() {
+    propertyCardFootAdapterUnbind(this, {
+      pendingKey: "albumHeaderFootPendingScroll",
+      untoggleKey: "albumHeaderFootUntoggle",
+      unresolverKey: "albumHeaderFootUnresolver",
+      tracked: this.albumHeaderFootTracked,
+      cache: this.albumHeaderSourceCache,
+      flights: this.albumHeaderSourceFlights,
+    });
+  }
+
+  albumHeaderRememberSource(path, text) {
+    if (!(this.albumHeaderSourceCache instanceof Map)) this.albumHeaderSourceCache = new Map();
+    return propertyCardFootAdapterRememberSource(this.albumHeaderSourceCache, path, text);
+  }
+
+  albumHeaderEnsureSource(path) {
+    if (!(this.albumHeaderSourceCache instanceof Map)) this.albumHeaderSourceCache = new Map();
+    if (!(this.albumHeaderSourceFlights instanceof Map)) this.albumHeaderSourceFlights = new Map();
+    return propertyCardFootAdapterEnsureSource(this, path, {
+      cache: this.albumHeaderSourceCache,
+      flights: this.albumHeaderSourceFlights,
+      active: () => this.albumHeaderActive !== false,
+      refresh: () => this.scheduleAlbumHeaderRefresh(),
+    });
+  }
+
+  albumHeaderFootWhere(card) {
+    const identity = card?.identity || {};
+    const body = card?.body || null;
+    const where = { type: "tile", created: "foot" };
+    if (Array.isArray(identity.owners) && identity.owners.length) where.parent = "kicker";
+    if (identity.emoji) where.emoji = "tile";
+    if (card?.subtitle) where.summary = "subtitle";
+    if (body) where.record = "schema";
+    const legacy = {};
+    for (const key of Array.isArray(body?.legacy) ? body.legacy : []) {
+      if (key) legacy[key] = "legacy";
+    }
+    const nested = {};
+    if (body && this.albumHeaderDesktop?.() !== false) nested.record = "schema";
+    return { where, nested, legacy };
+  }
+
+  albumHeaderFootSpec(path, card) {
+    const filePath = albumHeaderPath(path);
+    const marks = this.albumHeaderFootWhere(card);
+    return propertyCardFootAdapterSpec({
+      path: filePath,
+      kind: "album",
+      sourceText: this.albumHeaderSourceCache?.get?.(filePath),
+      frontmatter: propertyCardFootAdapterFrontmatter(this, filePath),
+      ...marks,
+    });
+  }
+
+  albumHeaderFootExtra(path, card) {
+    let spec = null;
+    try { spec = this.albumHeaderFootSpec(path, card); } catch (_) { spec = null; }
+    if (!spec) {
+      spec = {
+        path: albumHeaderPath(path),
+        inventory: propertyCardFootAdapterPendingInventory(),
+        stamp: null,
+      };
+    }
+    return propertyCardFootAdapterExtra(path, spec);
+  }
+
+  albumHeaderFootHandlers(path) {
+    return propertyCardFootAdapterHandlers(this, path, {
+      pendingScroll: this.albumHeaderFootPendingScroll,
+      refresh: () => this.scheduleAlbumHeaderRefresh(),
+      hoverSource: "bob-album-header",
+      jumpYaml: (key, line) => { void this.albumHeaderJumpYaml(path, line); },
+      jumpRecovery: () => { void this.albumHeaderJumpYaml(path, 1); },
+      openPath: (target, event) => { void this.albumHeaderOpenPath(target, path, event); },
+      openNested: this.albumHeaderDesktop?.() === false ? null : (key) => {
+        if (key === "record") {
+          void (typeof this.openAlbumSchemaEntry === "function"
+            ? this.openAlbumSchemaEntry({ filePath: path })
+            : this.openAlbumSchemaCard?.(null, path));
+        }
+      },
+    });
+  }
+
+  albumHeaderTrackFoot(container, path, header) {
+    return propertyCardFootAdapterTrack(container, path, header, this.albumHeaderFootTracked);
+  }
+
+  albumHeaderAppendFoot(header, card, options, doc) {
+    const path = albumHeaderPath(options?.sourcePath || card?.identity?.path || card?.path);
+    const spec = options?.footSpec || this.albumHeaderFootSpec(path, card);
+    return propertyCardFootAdapterAppend(
+      header, path, doc, spec, this.albumHeaderFootHandlers(path), this.albumHeaderFootPendingScroll,
+    );
   }
 }
 // ---- src/241y-plugin-album-schema-card-dom.js ----
@@ -158617,6 +159248,9 @@ function intentionCardBuildDom(model, plugin, doc) {
 
   const rail = intentionCardDomRail(model, plugin, doc);
   if (rail) card.appendChild(rail);
+  if (plugin && typeof plugin.intentionCardAppendFoot === "function") {
+    try { plugin.intentionCardAppendFoot(card, model, doc); } catch (_) {}
+  }
   return card;
 }
 
@@ -158783,6 +159417,7 @@ class BobLedgerToolsIntentionCardMixin {
 
   intentionCardOnSetup() {
     this.intentionCardEnsureMaps();
+    try { this.intentionCardFootBind?.(); } catch (_) {}
     this.intentionCardDay = this.intentionCardToday();
     try {
       const cache = this.app?.metadataCache;
@@ -158819,6 +159454,7 @@ class BobLedgerToolsIntentionCardMixin {
   }
 
   intentionCardOnDisposeStart() {
+    try { this.intentionCardFootUnbind?.(); } catch (_) {}
     try { this.intentionCardSlotReleaseAll?.(); } catch (_) {}
     if (this.intentionCardMidnightTimer != null) {
       if (this.albumClearTimeout) this.albumClearTimeout(this.intentionCardMidnightTimer);
@@ -159801,6 +160437,7 @@ class BobLedgerToolsIntentionCardTitleSlotMixin {
         }
       } catch (_) {}
     }
+    try { this.intentionCardTrackFoot?.(entry.scope, entry.path, null); } catch (_) {}
     try { this.intentionCardRelease(entry.scope, entry.path); } catch (_) {}
   }
 
@@ -159894,18 +160531,24 @@ class BobLedgerToolsIntentionCardTitleSlotMixin {
     const model = prepared?.model || null;
     const path = intentionCardFilePath(options.path);
     if (!scope || !path || !model) return null;
+    const extra = typeof this.intentionCardFootExtra === "function" ? this.intentionCardFootExtra(path, model) : null;
+    if (extra?.footSpec) model.footSpec = extra.footSpec;
+    const signature = typeof this.intentionCardFootSignature === "function"
+      ? this.intentionCardFootSignature(model, extra)
+      : model.signature;
     const map = this.intentionCardSlotMap();
     const existing = map.get(scope) || null;
     const mounted = typeof propertyCardTitleSlotMountedNode === "function" ? propertyCardTitleSlotMountedNode(scope) : null;
     if (existing && !existing.fallback && existing.path === path && existing.mode === mode
-      && existing.signature === model.signature && existing.node && mounted === existing.node) {
+      && existing.signature === signature && existing.node && mounted === existing.node) {
       this.intentionCardSlotOwnTitle(existing, view, prepared.recognizer);
       this.intentionCardCommitKeys(scope, path, model);
+      try { this.intentionCardTrackFoot?.(scope, path, existing.node); } catch (_) {}
       return existing.node;
     }
     const generation = this.intentionCardSlotNextGeneration();
     const entry = {
-      scope, mode, path, signature: model.signature, node: null, slotRelease: null,
+      scope, mode, path, signature, node: null, slotRelease: null,
       titleRelease: null, titleKey: "", titlePath: "", fallback: false, generation,
     };
     if (existing && !existing.fallback && existing.path === path && existing.mode === mode) {
@@ -159949,6 +160592,7 @@ class BobLedgerToolsIntentionCardTitleSlotMixin {
     map.set(scope, entry);
     this.intentionCardSlotOwnTitle(entry, view, prepared.recognizer);
     this.intentionCardCommitKeys(scope, path, model);
+    try { this.intentionCardTrackFoot?.(scope, path, entry.node); } catch (_) {}
     return entry.node;
   }
 
@@ -160019,6 +160663,7 @@ class BobLedgerToolsIntentionCardTitleSlotMixin {
 
   intentionCardLiveRelease(view) {
     try { this.intentionCardHost().setEditorScope(view, false); } catch (_) {}
+    try { this.intentionCardTrackFoot?.(view?.dom, this.intentionCardLivePath(view), null); } catch (_) {}
     this.intentionCardSlotRelease(view?.dom);
     this.intentionCardRelease(view?.dom);
   }
@@ -160033,7 +160678,11 @@ class BobLedgerToolsIntentionCardTitleSlotMixin {
       return Decoration.none;
     }
     const model = prepared.model;
-    const signature = JSON.stringify([path, anchor.offset, anchor.side, model.signature]);
+    const extra = typeof plugin.intentionCardFootExtra === "function" ? plugin.intentionCardFootExtra(path, model) : null;
+    if (extra?.footSpec) model.footSpec = extra.footSpec;
+    const signature = JSON.stringify([
+      path, anchor.offset, anchor.side, model.signature, extra?.footDigest || "", extra?.footOpen === true,
+    ]);
     // Built lazily: CodeMirror discards an equal widget without toDOM, and
     // destroy() unloads the card's render component with its DOM.
     const Widget = class extends WidgetType {
@@ -160043,9 +160692,13 @@ class BobLedgerToolsIntentionCardTitleSlotMixin {
         const element = intentionCardBuildDom(model, plugin, doc) || doc.createElement("span");
         element.setAttribute("data-cm-widget", "true");
         plugin.intentionCardCommitKeys(view.dom, path, model);
+        try { plugin.intentionCardTrackFoot?.(view.dom, path, element); } catch (_) {}
         return element;
       }
-      destroy(dom) { intentionCardDomRelease(dom); }
+      destroy(dom) {
+        try { plugin.intentionCardTrackFoot?.(view.dom, path, null); } catch (_) {}
+        intentionCardDomRelease(dom);
+      }
       ignoreEvent() { return true; }
     };
     const builder = new RangeSetBuilder();
@@ -160129,7 +160782,10 @@ class BobLedgerToolsIntentionCardTitleSlotMixin {
       if (!this.intentionCardSlotIsFallback(scope, sourcePath)) {
         if (intentionCardReadingHeaderParked(scope)) {
           const entry = this.intentionCardSlotMap().get(scope);
-          if (entry && !entry.fallback && entry.path === intentionCardFilePath(sourcePath)) return entry.node;
+          if (entry && !entry.fallback && entry.path === intentionCardFilePath(sourcePath)) {
+            try { this.intentionCardTrackFoot?.(scope, sourcePath, entry.node); } catch (_) {}
+            return entry.node;
+          }
           this.intentionCardRetryReading(root);
           return null;
         }
@@ -160140,6 +160796,7 @@ class BobLedgerToolsIntentionCardTitleSlotMixin {
         if (node) {
           this.intentionCardReadingRetries?.delete?.(root);
           this.intentionCardRemoveNodes(root, sourcePath, node);
+          try { this.intentionCardTrackFoot?.(scope, sourcePath, node); } catch (_) {}
           return node;
         }
       }
@@ -160178,12 +160835,14 @@ class BobLedgerToolsIntentionCardTitleSlotMixin {
     else root.appendChild?.(card);
     if (!card.parentNode) return null;
     this.intentionCardCommitKeys(scope, sourcePath, prepared.model);
+    try { this.intentionCardTrackFoot?.(scope, sourcePath, card); } catch (_) {}
     return card;
   }
 
   // Remove every display this scope holds for the path: slot entry (title and
   // keys with it), body cards, and keys.
   intentionCardReadingDrop(root, scope, sourcePath = "") {
+    try { this.intentionCardTrackFoot?.(scope, sourcePath, null); } catch (_) {}
     this.intentionCardSlotRelease(scope, { path: sourcePath });
     this.intentionCardRemoveNodes(root, sourcePath);
     this.intentionCardRelease(scope, sourcePath);
@@ -160315,6 +160974,113 @@ class BobLedgerToolsIntentionCardTitleSlotMixin {
   intentionCardOpenGhost(path) {
     if (typeof this.openIntentionCard !== "function") return null;
     return this.openIntentionCard({ filePath: path, initialStage: "add" });
+  }
+}
+// ---- src/296da-plugin-intention-card-foot.js ----
+// Day/week/quarter/year card shared-foot adapter (bob-cli-pf adapters).
+// Identity-only temporal cards still get the foot; missing created stays
+// quiet. Reuses the existing confirmed-source cache.
+class BobLedgerToolsIntentionCardFootMixin {
+  intentionCardFootBind() {
+    if (!(this.intentionCardFootTracked instanceof Set)) this.intentionCardFootTracked = new Set();
+    propertyCardFootAdapterBind(this, {
+      pendingKey: "intentionCardFootPendingScroll",
+      untoggleKey: "intentionCardFootUntoggle",
+      unresolverKey: "intentionCardFootUnresolver",
+      refresh: () => this.intentionCardHost?.().scheduleRefresh?.(),
+      livePath: (view) => this.intentionCardLivePath(view) || "",
+    });
+  }
+
+  intentionCardFootUnbind() {
+    propertyCardFootAdapterUnbind(this, {
+      pendingKey: "intentionCardFootPendingScroll",
+      untoggleKey: "intentionCardFootUntoggle",
+      unresolverKey: "intentionCardFootUnresolver",
+      tracked: this.intentionCardFootTracked,
+    });
+  }
+
+  intentionCardFootSource(path) {
+    const key = intentionCardFilePath(path);
+    return this.intentionCardSourceCache?.get?.(key)
+      || this.intentionCardUnconfirmedSource?.get?.(key)
+      || null;
+  }
+
+  intentionCardFootWhere(model) {
+    const where = { type: "tile", created: "foot" };
+    if (Array.isArray(model?.identity?.kicker) && model.identity.kicker.length) where.parent = "kicker";
+    if (Array.isArray(model?.intentions) && model.intentions.length) where.intentions = "intentions";
+    if (model?.summary) where.summary = "summary";
+    if (model?.reflection) where.reflection = "reflection";
+    if (model?.summaryState === "agent") where.summary_drafted = "agent";
+    return where;
+  }
+
+  intentionCardFootNoteDate(model) {
+    const subject = model?.subject;
+    if (!subject) return "";
+    return subject.kind === "day" ? subject.id : subject.start || "";
+  }
+
+  intentionCardFootSpec(path, model) {
+    const key = intentionCardFilePath(path);
+    const current = this.intentionCardFootSource(key);
+    const baseFm = current?.frontmatter || propertyCardFootAdapterFrontmatter(this, key);
+    const merged = typeof this.intentionCardOverlayFrontmatterFor === "function"
+      ? this.intentionCardOverlayFrontmatterFor(key, baseFm)
+      : { frontmatter: baseFm };
+    return propertyCardFootAdapterSpec({
+      path: key,
+      kind: model?.kind || "day",
+      temporal: true,
+      noteDate: this.intentionCardFootNoteDate(model),
+      sourceText: current?.source,
+      frontmatter: merged.frontmatter || baseFm,
+      where: this.intentionCardFootWhere(model),
+    });
+  }
+
+  intentionCardFootExtra(path, model) {
+    let spec = null;
+    try { spec = this.intentionCardFootSpec(path, model); } catch (_) { spec = null; }
+    if (!spec) {
+      spec = {
+        path: intentionCardFilePath(path),
+        inventory: propertyCardFootAdapterPendingInventory(),
+        stamp: null,
+      };
+    }
+    return propertyCardFootAdapterExtra(path, spec);
+  }
+
+  intentionCardFootSignature(model, extra) {
+    return JSON.stringify([model?.signature || "", extra?.footDigest || "", extra?.footOpen === true]);
+  }
+
+  intentionCardFootHandlers(path) {
+    const key = intentionCardFilePath(path);
+    return propertyCardFootAdapterHandlers(this, key, {
+      pendingScroll: this.intentionCardFootPendingScroll,
+      refresh: () => this.intentionCardHost?.().scheduleRefresh?.(),
+      hoverSource: "bob-intention-card",
+      jumpYaml: (name, line) => { void this.intentionCardJumpSource?.(key, line); },
+      jumpRecovery: () => { void this.intentionCardJumpSource?.(key, 1); },
+      openPath: (target, event) => { void this.intentionCardOpenLink?.(target, key, event); },
+    });
+  }
+
+  intentionCardTrackFoot(container, path, card) {
+    return propertyCardFootAdapterTrack(container, path, card, this.intentionCardFootTracked);
+  }
+
+  intentionCardAppendFoot(card, model, doc) {
+    const path = intentionCardFilePath(model?.path);
+    const spec = model?.footSpec || this.intentionCardFootSpec(path, model);
+    return propertyCardFootAdapterAppend(
+      card, path, doc, spec, this.intentionCardFootHandlers(path), this.intentionCardFootPendingScroll,
+    );
   }
 }
 // ---- src/296e-plugin-nav-groups-calendar.js ----
@@ -166442,6 +167208,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsBankMarksMixin,
   BobLedgerToolsBankMarksReadingMixin,
   BobLedgerToolsBankSetupMixin,
+  BobLedgerToolsBankSetupFootMixin,
   BobLedgerToolsBankSetupCardMixin,
   BobLedgerToolsSchemaDoubleEqualsMixin,
   BobLedgerToolsNotebookCatalogMixin,
@@ -166451,6 +167218,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsWorkspaceScrollGuardMixin,
   BobLedgerToolsAlbumRecordsMixin,
   BobLedgerToolsAlbumHeaderMixin,
+  BobLedgerToolsAlbumHeaderFootMixin,
   BobLedgerToolsRecordSheetMixin,
   BobLedgerToolsRecordSheetTitleMixin,
   BobLedgerToolsRecordSheetFootMixin,
@@ -166546,6 +167314,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsIntentionCardMixin,
   BobLedgerToolsIntentionCardGroupRailMixin,
   BobLedgerToolsIntentionCardTitleSlotMixin,
+  BobLedgerToolsIntentionCardFootMixin,
   BobLedgerToolsIntentionUpdateMixin,
   BobLedgerToolsIntentionCardEditorMixin,
   BobLedgerToolsIntentionCardNavigationMixin,
@@ -170842,6 +171611,23 @@ try {
       propertyCardFootViewPath,
       propertyCardFootViewContains,
       propertyCardToggleProperties,
+      propertyCardFootAdapterPath,
+      propertyCardFootAdapterPendingInventory,
+      propertyCardFootAdapterFrontmatter,
+      propertyCardFootAdapterCanRead,
+      propertyCardFootAdapterReadSource,
+      propertyCardFootAdapterRememberSource,
+      propertyCardFootAdapterEnsureSource,
+      propertyCardFootAdapterSpec,
+      propertyCardFootAdapterDigest,
+      propertyCardFootAdapterExtra,
+      propertyCardFootAdapterSearchTag,
+      propertyCardFootAdapterHoverLink,
+      propertyCardFootAdapterHandlers,
+      propertyCardFootAdapterTrack,
+      propertyCardFootAdapterAppend,
+      propertyCardFootAdapterBind,
+      propertyCardFootAdapterUnbind,
     });
   }
 } catch (_) {}

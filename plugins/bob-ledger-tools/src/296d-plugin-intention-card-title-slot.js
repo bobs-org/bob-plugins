@@ -125,6 +125,7 @@ class BobLedgerToolsIntentionCardTitleSlotMixin {
         }
       } catch (_) {}
     }
+    try { this.intentionCardTrackFoot?.(entry.scope, entry.path, null); } catch (_) {}
     try { this.intentionCardRelease(entry.scope, entry.path); } catch (_) {}
   }
 
@@ -218,18 +219,24 @@ class BobLedgerToolsIntentionCardTitleSlotMixin {
     const model = prepared?.model || null;
     const path = intentionCardFilePath(options.path);
     if (!scope || !path || !model) return null;
+    const extra = typeof this.intentionCardFootExtra === "function" ? this.intentionCardFootExtra(path, model) : null;
+    if (extra?.footSpec) model.footSpec = extra.footSpec;
+    const signature = typeof this.intentionCardFootSignature === "function"
+      ? this.intentionCardFootSignature(model, extra)
+      : model.signature;
     const map = this.intentionCardSlotMap();
     const existing = map.get(scope) || null;
     const mounted = typeof propertyCardTitleSlotMountedNode === "function" ? propertyCardTitleSlotMountedNode(scope) : null;
     if (existing && !existing.fallback && existing.path === path && existing.mode === mode
-      && existing.signature === model.signature && existing.node && mounted === existing.node) {
+      && existing.signature === signature && existing.node && mounted === existing.node) {
       this.intentionCardSlotOwnTitle(existing, view, prepared.recognizer);
       this.intentionCardCommitKeys(scope, path, model);
+      try { this.intentionCardTrackFoot?.(scope, path, existing.node); } catch (_) {}
       return existing.node;
     }
     const generation = this.intentionCardSlotNextGeneration();
     const entry = {
-      scope, mode, path, signature: model.signature, node: null, slotRelease: null,
+      scope, mode, path, signature, node: null, slotRelease: null,
       titleRelease: null, titleKey: "", titlePath: "", fallback: false, generation,
     };
     if (existing && !existing.fallback && existing.path === path && existing.mode === mode) {
@@ -273,6 +280,7 @@ class BobLedgerToolsIntentionCardTitleSlotMixin {
     map.set(scope, entry);
     this.intentionCardSlotOwnTitle(entry, view, prepared.recognizer);
     this.intentionCardCommitKeys(scope, path, model);
+    try { this.intentionCardTrackFoot?.(scope, path, entry.node); } catch (_) {}
     return entry.node;
   }
 
@@ -343,6 +351,7 @@ class BobLedgerToolsIntentionCardTitleSlotMixin {
 
   intentionCardLiveRelease(view) {
     try { this.intentionCardHost().setEditorScope(view, false); } catch (_) {}
+    try { this.intentionCardTrackFoot?.(view?.dom, this.intentionCardLivePath(view), null); } catch (_) {}
     this.intentionCardSlotRelease(view?.dom);
     this.intentionCardRelease(view?.dom);
   }
@@ -357,7 +366,11 @@ class BobLedgerToolsIntentionCardTitleSlotMixin {
       return Decoration.none;
     }
     const model = prepared.model;
-    const signature = JSON.stringify([path, anchor.offset, anchor.side, model.signature]);
+    const extra = typeof plugin.intentionCardFootExtra === "function" ? plugin.intentionCardFootExtra(path, model) : null;
+    if (extra?.footSpec) model.footSpec = extra.footSpec;
+    const signature = JSON.stringify([
+      path, anchor.offset, anchor.side, model.signature, extra?.footDigest || "", extra?.footOpen === true,
+    ]);
     // Built lazily: CodeMirror discards an equal widget without toDOM, and
     // destroy() unloads the card's render component with its DOM.
     const Widget = class extends WidgetType {
@@ -367,9 +380,13 @@ class BobLedgerToolsIntentionCardTitleSlotMixin {
         const element = intentionCardBuildDom(model, plugin, doc) || doc.createElement("span");
         element.setAttribute("data-cm-widget", "true");
         plugin.intentionCardCommitKeys(view.dom, path, model);
+        try { plugin.intentionCardTrackFoot?.(view.dom, path, element); } catch (_) {}
         return element;
       }
-      destroy(dom) { intentionCardDomRelease(dom); }
+      destroy(dom) {
+        try { plugin.intentionCardTrackFoot?.(view.dom, path, null); } catch (_) {}
+        intentionCardDomRelease(dom);
+      }
       ignoreEvent() { return true; }
     };
     const builder = new RangeSetBuilder();
@@ -453,7 +470,10 @@ class BobLedgerToolsIntentionCardTitleSlotMixin {
       if (!this.intentionCardSlotIsFallback(scope, sourcePath)) {
         if (intentionCardReadingHeaderParked(scope)) {
           const entry = this.intentionCardSlotMap().get(scope);
-          if (entry && !entry.fallback && entry.path === intentionCardFilePath(sourcePath)) return entry.node;
+          if (entry && !entry.fallback && entry.path === intentionCardFilePath(sourcePath)) {
+            try { this.intentionCardTrackFoot?.(scope, sourcePath, entry.node); } catch (_) {}
+            return entry.node;
+          }
           this.intentionCardRetryReading(root);
           return null;
         }
@@ -464,6 +484,7 @@ class BobLedgerToolsIntentionCardTitleSlotMixin {
         if (node) {
           this.intentionCardReadingRetries?.delete?.(root);
           this.intentionCardRemoveNodes(root, sourcePath, node);
+          try { this.intentionCardTrackFoot?.(scope, sourcePath, node); } catch (_) {}
           return node;
         }
       }
@@ -502,12 +523,14 @@ class BobLedgerToolsIntentionCardTitleSlotMixin {
     else root.appendChild?.(card);
     if (!card.parentNode) return null;
     this.intentionCardCommitKeys(scope, sourcePath, prepared.model);
+    try { this.intentionCardTrackFoot?.(scope, sourcePath, card); } catch (_) {}
     return card;
   }
 
   // Remove every display this scope holds for the path: slot entry (title and
   // keys with it), body cards, and keys.
   intentionCardReadingDrop(root, scope, sourcePath = "") {
+    try { this.intentionCardTrackFoot?.(scope, sourcePath, null); } catch (_) {}
     this.intentionCardSlotRelease(scope, { path: sourcePath });
     this.intentionCardRemoveNodes(root, sourcePath);
     this.intentionCardRelease(scope, sourcePath);

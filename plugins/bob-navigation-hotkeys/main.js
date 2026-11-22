@@ -27110,10 +27110,15 @@ function attachProseField(options) {
   const ownKeys = opts.ownKeys === true;
   const arrowKeys = opts.arrowKeys !== false;
   const linksEnabled = opts.links !== false;
+  const tasksEnabled = opts.tasks === false ? false : (opts.tasks === true ? true : linksEnabled);
   const hintDelay = Number.isInteger(opts.hintDebounceMs) ? Math.max(0, opts.hintDebounceMs) : PROSE_HINT_DEBOUNCE_MS;
   const id = `bob-link-band-${Math.random().toString(36).slice(2, 10)}`;
   let sourcePathOpt = opts.sourcePath;
   let minOffsetOpt = opts.minOffset;
+  let subjectsOpt = opts.subjects;
+  let taskMode = null;
+  let dismissedTask = null;
+  let justNamedTasks = new Set();
   let disposed = false;
   let composing = false;
   let swallowEnter = false;
@@ -27274,6 +27279,67 @@ function attachProseField(options) {
     renderLink();
   };
 
+  const taskApiNow = () => {
+    try {
+      if (typeof proseTaskLinksApiFromApp === "function") return proseTaskLinksApiFromApp(app);
+      return null;
+    } catch (_error) {
+      return null;
+    }
+  };
+
+  const ensureTaskMode = () => {
+    if (taskMode || disposed || !tasksEnabled) return taskMode;
+    if (!taskApiNow()) return null;
+    try {
+      taskMode = createControllerTaskMode({
+        app, density, sourcePath: sourcePathOpt, subjects: subjectsOpt,
+        minOffset: minOffsetOpt, mode, listId: `${id}-tasks`,
+        inputEl: () => inputEl,
+        render: (view) => {
+          try { renderProseTaskBand(linkHost, view); } catch (_error) {}
+          try { proseBindInputAria(inputEl, view); } catch (_error) {}
+          if (recallHost) logRecallAddClass(recallHost, "is-hidden", true);
+          if (hintHost) logRecallAddClass(hintHost, "is-hidden", true);
+          fadePlayed = true;
+        },
+        bindAria: (view) => { try { proseBindInputAria(inputEl, view); } catch (_error) {} },
+        armSwallow: () => { swallowEnter = true; },
+        bump: () => bumpEdge("empty"),
+        shake: () => { if (linkHost) logRecallAddClass(linkHost, "is-edge-bump", true); },
+        markNamed: (notePath, blockId) => {
+          try { justNamedTasks.add(`${notePath}#^${blockId}`); } catch (_error) {}
+        },
+      });
+    } catch (_error) {
+      taskMode = null;
+    }
+    return taskMode;
+  };
+
+  const taskIsOpen = () => {
+    try {
+      return Boolean(taskMode && taskMode.isOpen);
+    } catch (_error) {
+      return false;
+    }
+  };
+
+  const renderTaskOrLink = () => {
+    if (taskIsOpen() && taskMode) {
+      try {
+        const view = taskMode.currentView();
+        renderProseTaskBand(linkHost, view);
+        proseBindInputAria(inputEl, view);
+      } catch (_error) {}
+      if (recallHost) logRecallAddClass(recallHost, "is-hidden", true);
+      if (hintHost) logRecallAddClass(hintHost, "is-hidden", true);
+      fadePlayed = true;
+    } else {
+      renderLink();
+    }
+  };
+
   const readState = () => {
     if (!inputEl) return { text: "", caret: 0 };
     const text = String(inputEl.value || "");
@@ -27281,15 +27347,26 @@ function attachProseField(options) {
   };
 
   const considerOpen = (fromInput) => {
-    if (disposed || !linksEnabled || composing) return;
+    if (disposed || composing) return;
+    if (taskIsOpen() && taskMode) {
+      if (!proseCaretIsCollapsed(inputEl)) taskMode.close(false);
+      else {
+        if (fromInput) { try { taskMode.onInput(); } catch (_error) {} }
+        if (taskMode.consider(fromInput)) return;
+        renderTaskOrLink();
+      }
+      if (!taskMode.isOpen && !linkOpen) scheduleHint();
+      return;
+    }
     if (!proseCaretIsCollapsed(inputEl)) {
       if (linkOpen) closeBand(false);
       else scheduleHint();
       return;
     }
     const { text, caret } = readState();
-    const alias = proseAliasAt(text, caret, { minOffset: minOffsetOpt });
+    const alias = linksEnabled ? proseAliasAt(text, caret, { minOffset: minOffsetOpt }) : null;
     if (alias) {
+      try { if (taskMode) taskMode.close(false); } catch (_error) {}
       if (!fromInput && !linkOpen) {
         scheduleHint();
         return;
@@ -27298,18 +27375,33 @@ function attachProseField(options) {
       openAlias(alias);
       return;
     }
-    const next = proseFieldAt(text, caret, fieldOptions());
-    if (!next) {
-      if (linkOpen) closeBand(false);
-      else scheduleHint();
+    const next = linksEnabled ? proseFieldAt(text, caret, fieldOptions()) : null;
+    if (next) {
+      try { if (taskMode) taskMode.close(false); } catch (_error) {}
+      if (!fromInput && !linkOpen) {
+        scheduleHint();
+        return;
+      }
+      if (dismissed && dismissed.opener === next.linkStart && dismissed.query === next.query) return;
+      openBand(next, text, selectedKey);
       return;
     }
-    if (!fromInput && !linkOpen) {
-      scheduleHint();
-      return;
+    if (tasksEnabled) {
+      const mode = ensureTaskMode();
+      if (mode) {
+        if (linkOpen) closeBand(false);
+        if (!fromInput && !mode.isOpen) {
+          scheduleHint();
+          return;
+        }
+        const handled = mode.consider(fromInput);
+        if (handled) return;
+        if (!mode.isOpen && !linkOpen) scheduleHint();
+        return;
+      }
     }
-    if (dismissed && dismissed.opener === next.linkStart && dismissed.query === next.query) return;
-    openBand(next, text, selectedKey);
+    if (linkOpen) closeBand(false);
+    else scheduleHint();
   };
 
   // Only an Enter acceptance arms the held-Enter swallow; a Tab or click
@@ -27432,6 +27524,11 @@ function attachProseField(options) {
     if (event.isComposing || composing) return false;
     const key = String(event.key || "");
     if (swallowEnter && key === "Enter") return true;
+    if (taskIsOpen() && taskMode) {
+      const consumed = taskMode.handleKeydown(event);
+      if (consumed) renderTaskOrLink();
+      return consumed;
+    }
     if (linkOpen) return handleLinkKey(event);
     if (recallHandle && typeof recallHandle.handleKeydown === "function") {
       try { if (recallHandle.handleKeydown(event)) return true; } catch (_error) {}
@@ -27440,6 +27537,12 @@ function attachProseField(options) {
   };
 
   const backOut = () => {
+    if (taskIsOpen() && taskMode) {
+      taskMode.backOut();
+      renderTaskOrLink();
+      if (!taskMode.isOpen) scheduleHint();
+      return true;
+    }
     if (linkOpen || aliasStage) {
       closeBand(true);
       return true;
@@ -27495,7 +27598,31 @@ function attachProseField(options) {
   };
 
   const onBlur = () => {
+    if (taskIsOpen() && taskMode) {
+      try { taskMode.close(false); } catch (_error) {}
+      renderTaskOrLink();
+      scheduleHint();
+      return;
+    }
     if (linkOpen) closeBand(false);
+  };
+
+  const onBeforeinput = (event) => {
+    if (disposed || composing) return;
+    if (taskIsOpen() && taskMode) {
+      let consumed = false;
+      try {
+        consumed = taskMode.handleBeforeinput(event);
+      } catch (_error) {
+        consumed = false;
+      }
+      if (consumed) {
+        try { event.preventDefault(); } catch (_error) {}
+        try {
+          if (typeof event.stopPropagation === "function") event.stopPropagation();
+        } catch (_error) {}
+      }
+    }
   };
 
   const onSelectionChange = () => {
@@ -27547,7 +27674,7 @@ function attachProseField(options) {
     }
     const run = () => {
       hintTimer = null;
-      if (disposed || linkOpen) {
+      if (disposed || linkOpen || taskIsOpen()) {
         hintMessages = [];
         renderHint();
         return;
@@ -27556,7 +27683,27 @@ function attachProseField(options) {
         const text = String(inputEl && inputEl.value || "");
         const minOffset = proseResolveMinOffset(minOffsetOpt);
         const links = proseCompleteLinks(text).filter((link) => !(link.start < minOffset));
-        hintMessages = proseUnresolvedMessages(links, resolveComplete, sourcePathNow());
+        hintMessages = proseUnresolvedMessages(links, (link, sourcePath) => {
+          try {
+            if (link && link.blockId && justNamedTasks.has(`${link.target}#^${link.blockId}`)) return {};
+          } catch (_error) {}
+          return resolveComplete(link, sourcePath);
+        }, sourcePathNow());
+        if (tasksEnabled) {
+          const api = taskApiNow();
+          if (api) {
+            try {
+              const caret = proseReadCaret(inputEl);
+              const token = api.fieldAt(text, caret, { minOffset });
+              void token;
+              const match = /(^|[\s\t])\(\(([^\n()[\]`]*)$/.exec(text.slice(0, caret));
+              if (match && match[2] !== undefined) {
+                const leftover = proseTaskLeftoverMessage(match[2].slice(0, 60));
+                if (leftover) hintMessages = [...hintMessages, leftover];
+              }
+            } catch (_error) {}
+          }
+        }
       } catch (_error) {
         hintMessages = [];
       }
@@ -27598,6 +27745,7 @@ function attachProseField(options) {
   const bindInput = (el) => {
     if (!el || typeof el.addEventListener !== "function") return;
     el.addEventListener("input", onInput);
+    el.addEventListener("beforeinput", onBeforeinput, true);
     el.addEventListener("compositionstart", onCompositionStart);
     el.addEventListener("compositionend", onCompositionEnd);
     el.addEventListener("blur", onBlur);
@@ -27614,6 +27762,7 @@ function attachProseField(options) {
   const unbindInput = (el) => {
     if (!el || typeof el.removeEventListener !== "function") return;
     el.removeEventListener("input", onInput);
+    el.removeEventListener("beforeinput", onBeforeinput, true);
     el.removeEventListener("compositionstart", onCompositionStart);
     el.removeEventListener("compositionend", onCompositionEnd);
     el.removeEventListener("blur", onBlur);
@@ -27688,7 +27837,11 @@ function attachProseField(options) {
   return {
     handleKeydown,
     backOut,
-    isLinkOpen: () => linkOpen === true,
+    isLinkOpen: () => linkOpen === true || taskIsOpen(),
+    isTaskOpen: () => taskIsOpen(),
+    isNaming: () => {
+      try { return Boolean(taskMode && taskMode.isNaming); } catch (_error) { return false; }
+    },
     isRecalling: () => {
       try { return recallHandle && typeof recallHandle.isRecalling === "function" ? recallHandle.isRecalling() : false; }
       catch (_error) { return false; }
@@ -27733,14 +27886,27 @@ function attachProseField(options) {
         }
       }
       fadePlayed = true;
-      if (linkOpen) considerOpen(true);
-      else renderLink();
+      try {
+        if (taskMode) taskMode.rebind();
+      } catch (_error) {}
+      if (linkOpen || taskIsOpen()) considerOpen(true);
+      else renderTaskOrLink();
       return true;
     },
     setSourcePath(next) {
       sourcePathOpt = next;
-      if (linkOpen) considerOpen(true);
+      try {
+        if (taskMode) taskMode.setSourcePath(next);
+      } catch (_error) {}
+      if (linkOpen || taskIsOpen()) considerOpen(true);
       else scheduleHint();
+      return true;
+    },
+    setSubjects(next) {
+      subjectsOpt = next;
+      try {
+        if (taskMode) taskMode.setSubjects(next);
+      } catch (_error) {}
       return true;
     },
     setKind(nextKind) {
@@ -27759,10 +27925,7 @@ function attachProseField(options) {
       if (disposed) return;
       disposed = true;
       previewToken += 1;
-      if (hintTimer) {
-        try { clearTimeout(hintTimer); } catch (_error) {}
-        hintTimer = null;
-      }
+      if (hintTimer) { try { clearTimeout(hintTimer); } catch (_error) {} hintTimer = null; }
       unbindInput(inputEl);
       try {
         if (scopeHandler && opts.scope && typeof opts.scope.unregister === "function") {
@@ -27773,6 +27936,8 @@ function attachProseField(options) {
         }
       } catch (_error) {}
       try { if (recallHandle && typeof recallHandle.detach === "function") recallHandle.detach(); } catch (_error) {}
+      try { if (taskMode && typeof taskMode.detach === "function") taskMode.detach(); } catch (_error) {}
+      taskMode = null;
       try { proseClearHost(linkHost); } catch (_error) {}
       try { proseClearHost(hintHost); } catch (_error) {}
       try { proseClearHost(recallHost); } catch (_error) {}
@@ -27785,16 +27950,1368 @@ function attachProseField(options) {
 
 function createProseFieldApi(plugin) {
   return Object.freeze({
-    version: 1,
+    version: 2,
     attach(options) {
       try {
         const opts = options && typeof options === "object" ? options : {};
         return attachProseField({ ...opts, plugin, app: opts.app || (plugin && plugin.app) });
-      } catch (_error) {
-        return null;
-      }
+      } catch (_error) { return null; }
     },
   });
+}
+// ---- src/189c-prose-task-model.js ----
+// Tasks-mode pure model for nav's proseField v2 (phase bob-cli-oz.3).
+//
+// Pure helpers for the LINK band's tasks mode: the ID-line model, row to
+// view mapping, group runs, crumbs, detail strings, and leftover-(( hint
+// messages. Never throws, never touches the DOM or the vault. Offsets stay
+// UTF-16.
+
+const PROSE_TASK_BLOCK_ID_RE = /^[A-Za-z0-9-]+$/;
+const PROSE_TASK_ID_MAX_LENGTH = 64;
+const PROSE_TASK_NAME_TIMEOUT_MS = 3000;
+const PROSE_TASK_WRITE_FLASH_MS = 150;
+
+function proseTaskSanitizeId(raw) {
+  try {
+    const value = String(raw == null ? "" : raw);
+    let out = "";
+    for (const char of value) {
+      if (/[A-Za-z0-9-]/u.test(char)) out += char;
+      else if (char === " " || char === "_") out += "-";
+    }
+    return out.slice(0, PROSE_TASK_ID_MAX_LENGTH);
+  } catch (_error) {
+    return "";
+  }
+}
+
+function proseTaskValidateId(id, reserved) {
+  try {
+    const value = String(id == null ? "" : id);
+    if (!value) return { ok: false, short: "letters, digits, - only", message: "Type a block ID: letters, numbers, and dashes" };
+    if (!PROSE_TASK_BLOCK_ID_RE.test(value)) {
+      return { ok: false, short: "letters, digits, - only", message: "Use letters, numbers, and dashes" };
+    }
+    if (reserved && typeof reserved.has === "function" && reserved.has(value)) {
+      return { ok: false, short: "already in note", message: `^${value} already exists in this note` };
+    }
+    return { ok: true };
+  } catch (_error) {
+    return { ok: false, short: "letters, digits, - only", message: "Use letters, numbers, and dashes" };
+  }
+}
+
+function createProseTaskIdLine(suggestion) {
+  const seed = proseTaskSanitizeId(suggestion);
+  return {
+    value: seed,
+    caret: seed.length,
+    selected: seed.length > 0,
+    suggestions: seed ? [seed] : [],
+    suggestionIndex: 0,
+    error: null,
+  };
+}
+
+function proseTaskIdLineInsert(line, text) {
+  const next = line && typeof line === "object"
+    ? { value: String(line.value || ""), caret: Number.isInteger(line.caret) ? line.caret : 0, selected: Boolean(line.selected), suggestions: Array.isArray(line.suggestions) ? line.suggestions.slice() : [], suggestionIndex: Number.isInteger(line.suggestionIndex) ? line.suggestionIndex : 0, error: null }
+    : createProseTaskIdLine("");
+  try {
+    const insert = proseTaskSanitizeId(text);
+    if (!insert) {
+      next.error = "letters, digits, - only";
+      return { line: next, refused: true };
+    }
+    if (next.selected) {
+      next.value = insert;
+      next.caret = insert.length;
+      next.selected = false;
+    } else {
+      const before = next.value.slice(0, Math.max(0, Math.min(next.value.length, next.caret)));
+      const after = next.value.slice(Math.max(0, Math.min(next.value.length, next.caret)));
+      next.value = (before + insert + after).slice(0, PROSE_TASK_ID_MAX_LENGTH);
+      next.caret = before.length + insert.length;
+    }
+    next.error = null;
+    return { line: next, refused: false };
+  } catch (_error) {
+    return { line: next, refused: true };
+  }
+}
+
+function proseTaskIdLineBackspace(line) {
+  const next = line && typeof line === "object"
+    ? { ...line, value: String(line.value || ""), suggestions: Array.isArray(line.suggestions) ? line.suggestions.slice() : [] }
+    : createProseTaskIdLine("");
+  try {
+    if (next.selected) {
+      next.value = "";
+      next.caret = 0;
+      next.selected = false;
+      next.error = null;
+      return next;
+    }
+    if (next.caret <= 0) return next;
+    const before = next.value.slice(0, next.caret - 1);
+    const after = next.value.slice(next.caret);
+    next.value = before + after;
+    next.caret = before.length;
+    next.error = null;
+    return next;
+  } catch (_error) {
+    return next;
+  }
+}
+
+function proseTaskIdLineDeleteWord(line) {
+  if (line && line.selected) return proseTaskIdLineBackspace(line);
+  const next = proseTaskIdLineBackspace({ ...line, selected: false });
+  try {
+    const value = String(next.value || "");
+    let start = Math.max(0, Math.min(value.length, Number.isInteger(next.caret) ? next.caret : value.length));
+    let end = start;
+    while (end < value.length && value[end] !== "-") end += 1;
+    if (end === start && start > 0) {
+      let cut = start - 1;
+      while (cut > 0 && value[cut - 1] !== "-") cut -= 1;
+      next.value = value.slice(0, cut) + value.slice(start);
+      next.caret = cut;
+      return next;
+    }
+    return next;
+  } catch (_error) {
+    return next;
+  }
+}
+
+function proseTaskIdLineSetSuggestion(line, suggestion) {
+  const next = line && typeof line === "object" ? { ...line } : createProseTaskIdLine("");
+  try {
+    const clean = proseTaskSanitizeId(suggestion);
+    next.value = clean;
+    next.caret = clean.length;
+    next.selected = clean.length > 0;
+    next.error = null;
+    return next;
+  } catch (_error) {
+    return next;
+  }
+}
+
+function proseTaskIdLineCycle(line, direction) {
+  const next = line && typeof line === "object"
+    ? { ...line, suggestions: Array.isArray(line.suggestions) ? line.suggestions.slice() : [] }
+    : createProseTaskIdLine("");
+  try {
+    const list = next.suggestions.filter(Boolean);
+    if (!list.length) return next;
+    const step = direction < 0 ? -1 : 1;
+    next.suggestionIndex = ((Number.isInteger(next.suggestionIndex) ? next.suggestionIndex : 0) + step + list.length) % list.length;
+    return proseTaskIdLineSetSuggestion({ ...next, selected: false }, list[next.suggestionIndex]);
+  } catch (_error) {
+    return next;
+  }
+}
+
+const PROSE_TASK_STATUS_PILL = {
+  todo: "[ ]",
+  active: "[/]",
+  next: "[*]",
+  blocked: "[?]",
+  done: "✓",
+  cancelled: "✕",
+};
+
+function proseTaskPillFor(row) {
+  try {
+    const status = String((row && row.status) || "todo").toLowerCase();
+    if (status === "active" || status === "in-progress" || status === "inprogress") return PROSE_TASK_STATUS_PILL.active;
+    if (status === "next") return PROSE_TASK_STATUS_PILL.next;
+    if (status === "blocked") return PROSE_TASK_STATUS_PILL.blocked;
+    if (status === "done" || status === "completed") return PROSE_TASK_STATUS_PILL.done;
+    if (status === "cancelled" || status === "canceled") return PROSE_TASK_STATUS_PILL.cancelled;
+    return PROSE_TASK_STATUS_PILL.todo;
+  } catch (_error) {
+    return PROSE_TASK_STATUS_PILL.todo;
+  }
+}
+
+function proseTaskGroupCapsule(group) {
+  const value = String(group || "");
+  if (value === "this-note") return "this note";
+  if (value === "in-progress") return "in progress";
+  if (value === "next") return "next";
+  if (value === "open") return "open";
+  if (value === "history") return "history";
+  return "";
+}
+
+function proseTaskLocatorFor(row) {
+  try {
+    if (!row) return "";
+    if (!row.blockId) return `⊕ ${row.suggestedId ? `^${row.suggestedId}` : "needs ID"}`;
+    const target = row.linkTarget || row.notePath || "";
+    return `${target}#^${row.blockId}`;
+  } catch (_error) {
+    return "";
+  }
+}
+
+function proseTaskDetailFor(row) {
+  try {
+    if (!row) return { left: "↵ closes this list · nothing is inserted", right: "esc close" };
+    if (row.disabled) {
+      return { left: `⊘ ${row.disabled.full || row.disabled.short || "unavailable"}`, right: "esc close" };
+    }
+    if (!row.blockId) {
+      const note = row.notePath || "note";
+      const suggestion = row.suggestedId ? `^${row.suggestedId}` : "^id";
+      return { left: `↵ names it ${suggestion} in ${note}, then links it`, right: "⇥ insert" };
+    }
+    const link = row.link || (row.linkTarget ? `[[${row.linkTarget}#^${row.blockId}]]` : `[[#^${row.blockId}]]`);
+    return { left: `↵ ${link}`, right: "⇥ insert" };
+  } catch (_error) {
+    return { left: "↵ closes this list · nothing is inserted", right: "esc close" };
+  }
+}
+
+function proseTaskNameDetailFor(id, notePath) {
+  try {
+    const clean = proseTaskSanitizeId(id) || "id";
+    return { left: `↵ adds ^${clean}, then links [[${notePath || "note"}#^${clean}]]`, right: "esc back" };
+  } catch (_error) {
+    return { left: "↵ adds the ID, then links it", right: "esc back" };
+  }
+}
+
+function proseTaskCrumb(query, stage, group) {
+  try {
+    if (stage === "name") return "🔗 LINK · tasks › name it";
+    if (!query) return `🔗 LINK · tasks › ${proseTaskGroupCapsule(group) || "tasks"}`;
+    return "🔗 LINK · tasks";
+  } catch (_error) {
+    return "🔗 LINK · tasks";
+  }
+}
+
+function proseTaskLeftoverMessage(token) {
+  try {
+    const query = String(token == null ? "" : token).slice(0, 80);
+    if (!query) return null;
+    return `⚠ ((${query})) isn't a link yet — type in it to pick a task`;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function proseTaskTokenAt(text, caret, fieldAt) {
+  try {
+    if (typeof fieldAt !== "function") return null;
+    const value = String(text == null ? "" : text);
+    const cursor = Number(caret);
+    if (!Number.isInteger(cursor) || cursor < 0 || cursor > value.length) return null;
+    return fieldAt(value, cursor);
+  } catch (_error) {
+    return null;
+  }
+}
+
+function proseTaskGroupRuns(rows, limit) {
+  try {
+    const list = Array.isArray(rows) ? rows : [];
+    const cap = Math.max(1, Number(limit) || list.length || 1);
+    const runs = new Map();
+    let lastGroup = null;
+    for (const row of list.slice(0, cap)) {
+      if (!row) continue;
+      const group = String(row.group || "");
+      if (group && group !== lastGroup) {
+        if (!runs.has(row.key)) runs.set(row.key, proseTaskGroupCapsule(group));
+        lastGroup = group;
+      }
+    }
+    return runs;
+  } catch (_error) {
+    return new Map();
+  }
+}
+// ---- src/189d-prose-task-band.js ----
+// Tasks-mode renderer for nav's proseField v2 (phase bob-cli-oz.3).
+//
+// Paints the LINK band's tasks mode (list stage and NAME stage) on the
+// shared `bob-link-band-*` frame, with `bob-task-band-*` classes for the
+// pill, locator, ID line, suggestions, and validation glyph. Reuses the
+// log-recall element helpers. Never throws, never uses innerHTML, never
+// moves focus.
+
+function proseTaskBandPillClass(row) {
+  try {
+    const status = String((row && row.status) || "todo").toLowerCase();
+    if (status === "active" || status === "in-progress" || status === "inprogress") return "is-active";
+    if (status === "next") return "is-next";
+    if (status === "blocked") return "is-blocked";
+    if (status === "done" || status === "completed") return "is-done";
+    if (status === "cancelled" || status === "canceled") return "is-cancelled";
+    return "is-todo";
+  } catch (_error) {
+    return "is-todo";
+  }
+}
+
+function proseTaskBandTitleParts(rowEl, row) {
+  try {
+    const parts = row && Array.isArray(row.titleParts) ? row.titleParts : null;
+    if (!parts || !parts.length || typeof rowEl.createSpan !== "function") {
+      const fallback = String((row && (row.displayText || row.primary)) || "");
+      try { rowEl.textContent = fallback; } catch (_error) {}
+      return;
+    }
+    try { rowEl.textContent = ""; } catch (_error) {}
+    for (const part of parts) {
+      const text = String((part && part.text) || "");
+      if (!text) continue;
+      const kind = String((part && part.kind) || "text");
+      if (kind === "match") {
+        logRecallCreateElement(rowEl, "span", "bob-link-band-match", text);
+      } else if (kind === "code") {
+        logRecallCreateElement(rowEl, "span", "bob-task-band-code", text);
+      } else if (kind === "link" || kind === "url") {
+        logRecallCreateElement(rowEl, "span", "bob-task-band-link", text);
+      } else if (typeof rowEl.appendText === "function") {
+        rowEl.appendText(text);
+      } else {
+        logRecallCreateElement(rowEl, "span", "", text);
+      }
+    }
+  } catch (_error) {}
+}
+
+function proseTaskBandRowLocator(metaEl, row) {
+  try {
+    const locator = String(proseTaskLocatorFor(row));
+    if (!locator) return;
+    const hashAt = locator.indexOf("#^");
+    const line = logRecallCreateElement(metaEl, "span", "bob-task-band-locator");
+    if (hashAt < 0) {
+      line.textContent = locator;
+      return;
+    }
+    const target = locator.slice(0, hashAt);
+    const rest = locator.slice(hashAt);
+    if (typeof line.createSpan === "function" || typeof line.appendChild === "function") {
+      try { line.textContent = ""; } catch (_error) {}
+      const targetEl = logRecallCreateElement(line, "span", "bob-task-band-target", target);
+      void targetEl;
+      logRecallCreateElement(line, "span", "bob-task-band-id", rest);
+    } else {
+      line.textContent = locator;
+    }
+  } catch (_error) {}
+}
+
+function proseTaskBandRenderList(root, view, slots) {
+  const state = view && typeof view === "object" ? view : {};
+  const windowed = Array.isArray(state.view) ? state.view : [];
+  const runs = proseTaskGroupRuns(state.rows, Math.max(0, (state.windowStart || 0) + windowed.length));
+  const selectedKey = state.selectedKey || null;
+  for (let index = 0; index < slots; index += 1) {
+    const row = windowed[index];
+    if (!row) {
+      logRecallCreateElement(root, "div", "bob-link-band-row is-empty");
+      continue;
+    }
+    const selected = row.key === selectedKey;
+    const dimmed = Boolean(row.disabled) || row.status === "done" || row.status === "completed" || row.status === "cancelled" || row.hidden === true;
+    const rowEl = logRecallCreateElement(
+      root,
+      "div",
+      `bob-link-band-row bob-task-band-row${selected ? " is-selected" : ""}${dimmed ? " is-dim" : ""}`,
+    );
+    const rowId = `${state.listId || "bob-link-band-list"}-${index}`;
+    logRecallSetAttr(rowEl, "id", rowId);
+    logRecallSetAttr(rowEl, "role", "option");
+    logRecallSetAttr(rowEl, "aria-selected", selected ? "true" : "false");
+    logRecallSetAttr(rowEl, "data-key", row.key);
+    const pill = logRecallCreateElement(rowEl, "span", `bob-task-band-pill ${proseTaskBandPillClass(row)}`, proseTaskPillFor(row));
+    void pill;
+    if (row.taskKind === "ref") {
+      const book = logRecallCreateElement(rowEl, "span", "bob-task-band-book");
+      proseApplyIcon(book, "book-open");
+    }
+    const primary = logRecallCreateElement(rowEl, "span", "bob-link-band-text bob-task-band-text");
+    proseTaskBandTitleParts(primary, row);
+    const meta = logRecallCreateElement(rowEl, "span", "bob-link-band-meta bob-task-band-meta");
+    const runCapsule = runs.get(row.key);
+    if (runCapsule) logRecallCreateElement(meta, "span", "bob-task-band-capsule is-group", runCapsule);
+    if (row.hidden) logRecallCreateElement(meta, "span", "bob-task-band-capsule is-hidden-tier", "Hidden");
+    else if (row.disabled && row.disabled.short) logRecallCreateElement(meta, "span", "bob-task-band-capsule is-guard", String(row.disabled.short));
+    proseTaskBandRowLocator(meta, row);
+    if (typeof rowEl.addEventListener === "function") {
+      rowEl.addEventListener("mousedown", (event) => {
+        try { event.preventDefault(); } catch (_error) {}
+      });
+      if (typeof state.onRowClick === "function") {
+        const captured = row;
+        rowEl.addEventListener("click", () => state.onRowClick(captured));
+      }
+    }
+  }
+}
+
+function proseTaskBandRenderName(root, view) {
+  const state = view && typeof view === "object" ? view : {};
+  const row = state.nameRow || null;
+  const idLine = state.idLine || createProseTaskIdLine("");
+  const suggestions = Array.isArray(state.nameSuggestions) ? state.nameSuggestions : [];
+  const validation = state.nameValidation || null;
+  const pending = state.namePending === true;
+  const slots = state.density === "dense" ? PROSE_TASK_SLOTS_DENSE() : PROSE_TASK_SLOTS_ROOMY();
+  void slots;
+  const pinned = logRecallCreateElement(root, "div", "bob-link-band-row bob-task-band-row is-selected is-pinned");
+  logRecallSetAttr(pinned, "role", "option");
+  logRecallSetAttr(pinned, "aria-selected", "true");
+  logRecallCreateElement(pinned, "span", `bob-task-band-pill ${proseTaskBandPillClass(row)}`, proseTaskPillFor(row));
+  const pinnedText = logRecallCreateElement(pinned, "span", "bob-link-band-text bob-task-band-text");
+  try { pinnedText.textContent = String((row && (row.displayText || row.primary)) || ""); } catch (_error) {}
+  logRecallCreateElement(pinned, "span", "bob-task-band-capsule is-name", "⊕ Add ID");
+  const idRow = logRecallCreateElement(root, "div", "bob-link-band-row bob-task-band-id-row is-selected");
+  logRecallSetAttr(idRow, "id", `${state.listId || "bob-link-band-list"}-id`);
+  logRecallSetAttr(idRow, "role", "option");
+  logRecallSetAttr(idRow, "aria-label", `Block ID ${String(idLine.value || "")}`);
+  const sigil = logRecallCreateElement(idRow, "span", "bob-task-band-sigil", "^");
+  void sigil;
+  const idText = logRecallCreateElement(idRow, "span", "bob-task-band-id-entry", String(idLine.value || ""));
+  void idText;
+  const glyph = validation && validation.ok === false
+    ? `✕ ${validation.short || "invalid"}`
+    : "✓ free";
+  const glyphEl = logRecallCreateElement(idRow, "span", `bob-task-band-glyph${validation && validation.ok === false ? " is-invalid" : " is-valid"}`, pending && PROSE_TASK_NAME_SHOWS_PENDING() ? "Adding…" : glyph);
+  void glyphEl;
+  const suggRow = logRecallCreateElement(root, "div", "bob-link-band-row bob-task-band-sugg-row");
+  const shown = suggestions.filter(Boolean).slice(0, 4);
+  if (shown.length) {
+    shown.forEach((suggestion, index) => {
+      if (index > 0) logRecallCreateElement(suggRow, "span", "bob-task-band-sugg-sep", "·");
+      logRecallCreateElement(
+        suggRow,
+        "span",
+        `bob-task-band-sugg${index === 0 ? " is-current" : ""}`,
+        String(suggestion),
+      );
+    });
+    logRecallCreateElement(suggRow, "span", "bob-task-band-next", "⇥ next idea");
+  } else {
+    logRecallCreateElement(suggRow, "span", "bob-task-band-sugg is-none", "type an ID: letters, digits, -");
+  }
+}
+
+function PROSE_TASK_SLOTS_ROOMY() {
+  try {
+    if (Number.isInteger(PROSE_LINK_SLOTS_ROOMY)) return PROSE_LINK_SLOTS_ROOMY;
+  } catch (_error) {}
+  return 5;
+}
+
+function PROSE_TASK_SLOTS_DENSE() {
+  try {
+    if (Number.isInteger(PROSE_LINK_SLOTS_DENSE)) return PROSE_LINK_SLOTS_DENSE;
+  } catch (_error) {}
+  return 3;
+}
+
+function PROSE_TASK_NAME_SHOWS_PENDING() {
+  return true;
+}
+
+function renderProseTaskBand(host, view) {
+  if (!host) return null;
+  const state = view && typeof view === "object" ? view : {};
+  proseClearHost(host);
+  logRecallAddClass(host, "bob-link-band", true);
+  logRecallAddClass(host, "bob-task-band", true);
+  logRecallAddClass(host, "is-hidden", state.open !== true);
+  logRecallAddClass(host, "is-dense", state.density === "dense");
+  logRecallAddClass(host, "is-settled", state.fadePlayed === true);
+  logRecallAddClass(host, "is-tasks", true);
+  if (state.stage === "name") logRecallAddClass(host, "is-naming", true);
+  if (state.open !== true) return host;
+  const slots = state.density === "dense" ? PROSE_TASK_SLOTS_DENSE() : PROSE_TASK_SLOTS_ROOMY();
+  try { host.style.setProperty("--bob-link-band-slots", String(slots)); } catch (_error) {}
+  const id = state.listId || "bob-link-band-list";
+  const root = logRecallCreateElement(host, "div", "bob-link-band-inner");
+  const header = logRecallCreateElement(root, "div", "bob-link-band-header");
+  const count = state.headerCount || "";
+  logRecallCreateElement(header, "span", "bob-link-band-title", state.headerTitle || "🔗 LINK · tasks");
+  if (count) logRecallCreateElement(header, "span", "bob-link-band-count", count);
+  const list = logRecallCreateElement(root, "div", "bob-link-band-rows");
+  logRecallSetAttr(list, "id", id);
+  logRecallSetAttr(list, "role", "listbox");
+  logRecallSetAttr(list, "aria-label", "Task link completion");
+  if (state.stage === "name") {
+    proseTaskBandRenderName(list, state);
+  } else if ((state.total || 0) === 0) {
+    const empty = logRecallCreateElement(list, "div", "bob-link-band-empty");
+    logRecallCreateElement(empty, "span", "bob-link-band-empty-text", state.message || "No task matches — keep typing, or esc");
+    for (let index = 1; index < slots; index += 1) {
+      logRecallCreateElement(list, "div", "bob-link-band-row is-empty");
+    }
+  } else {
+    proseTaskBandRenderList(list, state, slots);
+  }
+  const detail = logRecallCreateElement(root, "div", "bob-link-band-detail");
+  logRecallCreateElement(detail, "span", "bob-link-band-result is-mono", state.detailLeft || "");
+  const hints = logRecallCreateElement(detail, "span", "bob-link-band-hints");
+  const caps = state.stage === "name"
+    ? (state.density === "dense" ? ["esc back"] : ["↵ adds", "esc back"])
+    : (state.density === "dense" ? ["⇥ insert"] : ["⇥ insert"]);
+  for (const cap of caps) {
+    logRecallCreateElement(hints, "span", "bob-log-recall-keycap", cap);
+  }
+  const right = logRecallCreateElement(detail, "span", "bob-task-band-right", state.detailRight || "");
+  void right;
+  const live = logRecallCreateElement(root, "span", "bob-link-band-live bob-log-recall-sr-only");
+  logRecallSetAttr(live, "aria-live", "polite");
+  logRecallSetAttr(live, "role", "status");
+  try {
+    live.textContent = String(state.liveText || state.detailLeft || "");
+  } catch (_error) {}
+  return host;
+}
+
+function proseTaskBandHeaderCount(selectedIndex, total, indexing) {
+  try {
+    if (indexing) return `Indexing · ${Number(indexing.done) || 0} of ${Number(indexing.total) || 0} notes`;
+    if (!total) return "";
+    return `${(Number.isInteger(selectedIndex) ? selectedIndex : 0) + 1} of ${total}`;
+  } catch (_error) {
+    return "";
+  }
+}
+// ---- src/189e-prose-task-mode.js ----
+// Tasks-mode state machine for nav's proseField v2 (phase bob-cli-oz.3).
+//
+// `createProseTaskMode(ctx)` owns one tasks-mode session: list stage with
+// ranked rows from block-id-prompt `api.taskLinks`, plus the in-band NAME
+// stage fed through the field's own `beforeinput`/`keydown` (no second
+// input). Focus never leaves the prompt field. The only vault write is an
+// explicit NAME Enter via `session.name`. Fail-open: without bip, or with
+// an old bip, every entry returns null/false and the field stays literal.
+
+function proseTaskLinksApiFromApp(app) {
+  try {
+    const plugins = app && app.plugins && app.plugins.plugins;
+    const bip = plugins && plugins["block-id-prompt"];
+    const api = bip && bip.api && bip.api.taskLinks;
+    if (api && Number(api.version) >= 1 && typeof api.fieldAt === "function" && typeof api.open === "function") {
+      return api;
+    }
+    return null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function proseTaskResolveSubjects(subjects) {
+  try {
+    if (typeof subjects === "function") return subjects();
+    return Array.isArray(subjects) ? subjects : [];
+  } catch (_error) {
+    return [];
+  }
+}
+
+function createProseTaskMode(ctx) {
+  const options = ctx && typeof ctx === "object" ? ctx : {};
+  const inputEl = () => options.inputEl ? options.inputEl() : null;
+  const app = options.app || null;
+  const density = options.density === "dense" ? "dense" : "roomy";
+  let sourcePathOpt = options.sourcePath;
+  let subjectsOpt = options.subjects;
+  let minOffsetOpt = options.minOffset;
+  let modeOpt = options.mode;
+  const listId = options.listId || `bob-link-band-${Math.random().toString(36).slice(2, 10)}`;
+  let disposed = false;
+  let open = false;
+  let stage = "list";
+  let field = null;
+  let rows = [];
+  let total = 0;
+  let indexing = null;
+  let selectedKey = null;
+  let session = null;
+  let unsubscribe = null;
+  let nameRow = null;
+  let idLine = createProseTaskIdLine("");
+  let nameSuggestions = [];
+  let nameValidation = null;
+  let namePending = false;
+  let nameWriteTimer = null;
+  let justNamed = new Set();
+  let inserting = false;
+  let snapshot = null;
+  let dismissed = null;
+  let fadePlayed = false;
+  let edge = null;
+
+  const sourcePathNow = () => proseResolveSourcePath(sourcePathOpt);
+  const apiNow = () => proseTaskLinksApiFromApp(app);
+
+  const announce = (text) => {
+    try {
+      if (typeof options.announce === "function") options.announce(text);
+    } catch (_error) {}
+  };
+
+  const notice = (text) => {
+    try {
+      if (typeof options.notice === "function") options.notice(text);
+      else if (typeof Notice !== "undefined") new Notice(text);
+    } catch (_error) {}
+  };
+
+  const closeSession = () => {
+    try { if (typeof unsubscribe === "function") unsubscribe(); } catch (_error) {}
+    unsubscribe = null;
+    try { if (session && typeof session.close === "function") session.close(); } catch (_error) {}
+    session = null;
+  };
+
+  const selectedRow = () => {
+    if (!rows.length) return null;
+    const index = rows.findIndex((row) => row && row.key === selectedKey);
+    return index >= 0 ? rows[index] : rows[0];
+  };
+
+  const rerank = () => {
+    if (!session || !field) return;
+    let result = null;
+    try {
+      result = session.rank(String(field.query || ""));
+    } catch (_error) {
+      result = null;
+    }
+    if (!result || !Array.isArray(result.rows)) {
+      rows = [];
+      total = 0;
+      indexing = null;
+      return;
+    }
+    rows = result.rows;
+    total = Number(result.total) || rows.length;
+    indexing = result.indexing || null;
+    if (!rows.some((row) => row && row.key === selectedKey)) {
+      selectedKey = rows[0] ? rows[0].key : null;
+    }
+  };
+
+  const headerTitle = () => {
+    if (stage === "name") return "🔗 LINK · tasks › name it";
+    if (!field || !field.query) {
+      const first = rows[0] || null;
+      const group = first ? proseTaskGroupCapsule(first.group) : "";
+      return group ? `🔗 LINK · tasks › ${group}` : "🔗 LINK · tasks";
+    }
+    return "🔗 LINK · tasks";
+  };
+
+  const currentView = () => {
+    const slots = density === "dense" ? PROSE_TASK_SLOTS_DENSE() : PROSE_TASK_SLOTS_ROOMY();
+    const index = rows.length ? Math.max(0, rows.findIndex((row) => row && row.key === selectedKey)) : -1;
+    const safeIndex = index >= 0 ? index : 0;
+    const start = rows.length <= slots ? 0 : Math.min(Math.max(0, rows.length - slots), Math.max(0, safeIndex - Math.floor((slots - 1) / 2)));
+    const selected = selectedRow();
+    let detail = proseTaskDetailFor(selected);
+    let live = "";
+    if (stage === "name") {
+      const named = proseTaskNameDetailFor(idLine.value, nameRow && nameRow.notePath);
+      detail = { left: nameValidation && !nameValidation.ok ? `⊘ ${nameValidation.message || nameValidation.short}` : named.left, right: named.right };
+      live = `Name a block ID for ${String((nameRow && (nameRow.displayText || nameRow.primary)) || "task")}: ${String(idLine.value || "")}. Enter adds it and links.`;
+    } else if (total === 0) {
+      detail = { left: "↵ closes this list · nothing is inserted", right: "esc close" };
+      live = `No task matches. ${detail.left}`;
+    } else if (selected) {
+      live = `Task ${safeIndex + 1} of ${total}: ${String(selected.displayText || selected.primary || "")}${selected.disabled ? `. ${selected.disabled.full}` : ""}`;
+    }
+    return {
+      open,
+      stage,
+      field,
+      rows,
+      view: rows.slice(start, start + slots),
+      windowStart: start,
+      selectedKey,
+      selectedIndex: safeIndex,
+      total,
+      density,
+      fadePlayed,
+      listId,
+      headerTitle: headerTitle(),
+      headerCount: stage === "name"
+        ? `in ${String((nameRow && nameRow.notePath) || "note")}`
+        : proseTaskBandHeaderCount(safeIndex, total, indexing),
+      message: total === 0 && stage === "list" ? "No task matches — keep typing, or esc" : null,
+      detailLeft: detail.left,
+      detailRight: detail.right,
+      liveText: live,
+      nameRow,
+      idLine,
+      nameSuggestions,
+      nameValidation,
+      namePending,
+      onRowClick: (row) => acceptRow(row, false),
+    };
+  };
+
+  const render = () => {
+    if (disposed) return;
+    try {
+      if (typeof options.render === "function") options.render(currentView());
+    } catch (_error) {}
+    try {
+      if (typeof options.bindAria === "function") options.bindAria(currentView());
+    } catch (_error) {}
+    if (open) fadePlayed = true;
+  };
+
+  const restoreSnapshot = () => {
+    const el = inputEl();
+    if (!el || !snapshot) return;
+    try {
+      if (String(el.value || "") !== String(snapshot.value || "")) {
+        el.value = String(snapshot.value || "");
+        if (typeof el.setSelectionRange === "function") {
+          el.setSelectionRange(snapshot.caret, snapshot.caret);
+        }
+        const EventClass = (typeof InputEvent !== "undefined" ? InputEvent : Event);
+        try {
+          el.dispatchEvent(new EventClass("input", { bubbles: true, inputType: "insertReplacementText" }));
+        } catch (_error) {}
+      }
+    } catch (_error) {}
+  };
+
+  const fieldIsByteIdentical = () => {
+    const el = inputEl();
+    if (!el || !snapshot) return true;
+    try {
+      return String(el.value || "") === String(snapshot.value || "");
+    } catch (_error) {
+      return false;
+    }
+  };
+
+  const takeSnapshot = () => {
+    const el = inputEl();
+    try {
+      snapshot = { value: String((el && el.value) || ""), caret: Number((el && el.selectionStart) || 0) };
+    } catch (_error) {
+      snapshot = { value: "", caret: 0 };
+    }
+  };
+
+  const openSession = () => {
+    const api = apiNow();
+    if (!api) return null;
+    try {
+      const next = api.open({ sourcePath: sourcePathNow(), subjects: proseTaskResolveSubjects(subjectsOpt) });
+      if (!next || typeof next.rank !== "function") return null;
+      return next;
+    } catch (_error) {
+      return null;
+    }
+  };
+
+  const tryOpen = (nextField, keepKey) => {
+    const api = apiNow();
+    if (!api) return false;
+    let detected = null;
+    try {
+      detected = nextField || null;
+    } catch (_error) {
+      return false;
+    }
+    if (!detected) return false;
+    if (dismissed && dismissed.opener === detected.start && dismissed.query === detected.query) return false;
+    closeSession();
+    session = openSession();
+    if (!session) return false;
+    try {
+      if (typeof session.onChange === "function") {
+        unsubscribe = session.onChange(() => {
+          if (disposed || !open || stage !== "list") return;
+          rerank();
+          render();
+        });
+      }
+    } catch (_error) {
+      unsubscribe = null;
+    }
+    field = detected;
+    stage = "list";
+    rerank();
+    if (keepKey && rows.some((row) => row && row.key === keepKey)) selectedKey = keepKey;
+    else selectedKey = rows[0] ? rows[0].key : null;
+    open = true;
+    dismissed = null;
+    takeSnapshot();
+    render();
+    return true;
+  };
+
+  const close = (memory) => {
+    if (!open) return;
+    if (memory && field) {
+      dismissed = { opener: field.start, query: field.query, mode: "tasks" };
+    } else if (!memory) {
+      dismissed = null;
+    }
+    open = false;
+    stage = "list";
+    field = null;
+    rows = [];
+    total = 0;
+    indexing = null;
+    selectedKey = null;
+    nameRow = null;
+    namePending = false;
+    if (nameWriteTimer) {
+      try { clearTimeout(nameWriteTimer); } catch (_error) {}
+      nameWriteTimer = null;
+    }
+    closeSession();
+    snapshot = null;
+    render();
+  };
+
+  const detectAt = (fromInput) => {
+    const el = inputEl();
+    if (!el) return null;
+    let text = "";
+    let caret = 0;
+    try {
+      text = String(el.value || "");
+      caret = Number.isInteger(el.selectionStart) ? el.selectionStart : text.length;
+    } catch (_error) {
+      return null;
+    }
+    try {
+      if (el.selectionStart !== el.selectionEnd) return null;
+    } catch (_error) {}
+    const api = apiNow();
+    if (!api) return null;
+    let minOffset = 0;
+    try {
+      minOffset = proseResolveMinOffset(minOffsetOpt);
+    } catch (_error) {
+      minOffset = 0;
+    }
+    let token = null;
+    try {
+      token = api.fieldAt(text, caret, { minOffset, mode: modeOpt === "field" ? "field" : undefined });
+    } catch (_error) {
+      return null;
+    }
+    if (!token) return null;
+    void fromInput;
+    return token;
+  };
+
+  const consider = (fromInput) => {
+    if (disposed) return false;
+    if (open && stage === "name") return true;
+    const token = detectAt(fromInput);
+    if (!token) {
+      if (open) close(false);
+      return false;
+    }
+    if (!fromInput && !open) return false;
+    if (open && field && field.start === token.start && field.query === token.query && stage === "list") {
+      rerank();
+      render();
+      return true;
+    }
+    return tryOpen(token, selectedKey);
+  };
+
+  const insertLink = (link) => {
+    const el = inputEl();
+    if (!el || !field) return false;
+    const start = field.start;
+    const end = field.end;
+    const inserted = String(link || "");
+    let caretAfter = start + inserted.length;
+    inserting = true;
+    try {
+      if (typeof el.focus === "function") el.focus();
+    } catch (_error) {}
+    try {
+      if (typeof el.setSelectionRange === "function") el.setSelectionRange(start, end);
+    } catch (_error) {}
+    let ok = false;
+    try {
+      const doc = el.ownerDocument || (typeof document !== "undefined" ? document : null);
+      if (doc && typeof doc.execCommand === "function") ok = doc.execCommand("insertText", false, inserted) === true;
+    } catch (_error) {
+      ok = false;
+    }
+    if (!ok) {
+      try {
+        if (typeof el.setRangeText === "function") {
+          el.setRangeText(inserted, start, end, "end");
+          ok = true;
+        } else {
+          el.value = String(el.value || "").slice(0, start) + inserted + String(el.value || "").slice(end);
+          if (typeof el.setSelectionRange === "function") el.setSelectionRange(caretAfter, caretAfter);
+          ok = true;
+        }
+      } catch (_error) {
+        inserting = false;
+        return false;
+      }
+    }
+    try {
+      caretAfter = Number.isInteger(el.selectionStart) ? el.selectionStart : caretAfter;
+    } catch (_error) {}
+    inserting = false;
+    return { ok, caret: caretAfter };
+  };
+
+  const acceptRow = (row, viaEnter) => {
+    if (!row || !field) {
+      close(false);
+      return true;
+    }
+    if (row.disabled) {
+      announce(`⊘ ${row.disabled.full || row.disabled.short}`);
+      try {
+        if (typeof options.bump === "function") options.bump();
+      } catch (_error) {}
+      if (viaEnter === true && typeof options.armSwallow === "function") {
+        try { options.armSwallow(); } catch (_error) {}
+      }
+      render();
+      return true;
+    }
+    if (!row.blockId) {
+      enterName(row);
+      if (viaEnter === true && typeof options.armSwallow === "function") {
+        try { options.armSwallow(); } catch (_error) {}
+      }
+      return true;
+    }
+    let link = null;
+    try {
+      link = session ? session.linkFor(row) : null;
+    } catch (_error) {
+      link = null;
+    }
+    if (!link) {
+      close(false);
+      return true;
+    }
+    insertLink(link);
+    try {
+      if (typeof options.markResolved === "function") options.markResolved(row.notePath, row.blockId);
+    } catch (_error) {}
+    announce(`Linked ${String(row.displayText || row.primary || "task")}`);
+    if (viaEnter === true && typeof options.armSwallow === "function") {
+      try { options.armSwallow(); } catch (_error) {}
+    }
+    close(false);
+    return true;
+  };
+
+  const enterName = (row) => {
+    nameRow = row;
+    stage = "name";
+    namePending = false;
+    takeSnapshot();
+    let suggestions = [];
+    try {
+      const out = session ? session.suggestions(row) : null;
+      if (out && typeof out.then === "function") {
+        out.then((list) => {
+          if (disposed || !open || stage !== "name" || nameRow !== row) return;
+          nameSuggestions = Array.isArray(list) ? list.filter(Boolean).slice(0, 4) : [];
+          idLine = createProseTaskIdLine(nameSuggestions[0] || "");
+          idLine.suggestions = nameSuggestions.slice();
+          nameValidation = { ok: true };
+          announce(`Name a block ID for ${String(row.displayText || row.primary || "task")}: ${String(idLine.value || "")}. Enter adds it and links.`);
+          render();
+        }).catch(() => {});
+        nameSuggestions = [];
+        idLine = createProseTaskIdLine("");
+      } else {
+        suggestions = Array.isArray(out) ? out : [];
+      }
+    } catch (_error) {
+      suggestions = [];
+    }
+    if (!nameSuggestions.length && !idLine.value) {
+      nameSuggestions = suggestions.filter(Boolean).slice(0, 4);
+      const seed = row.suggestedId || nameSuggestions[0] || "";
+      idLine = createProseTaskIdLine(seed);
+      idLine.suggestions = nameSuggestions.slice();
+    }
+    nameValidation = { ok: true };
+    announce(`Name a block ID for ${String(row.displayText || row.primary || "task")}: ${String(idLine.value || "")}. Enter adds it and links.`);
+    render();
+  };
+
+  const exitName = (toList) => {
+    if (toList === true && field) {
+      stage = "list";
+      nameRow = null;
+      namePending = false;
+      if (nameWriteTimer) {
+        try { clearTimeout(nameWriteTimer); } catch (_error) {}
+        nameWriteTimer = null;
+      }
+      render();
+      return true;
+    }
+    return false;
+  };
+
+  const commitName = async () => {
+    if (!session || !nameRow) return false;
+    const id = String(idLine.value || "");
+    let valid = null;
+    try {
+      valid = session.validate(nameRow, id);
+    } catch (_error) {
+      valid = { ok: false, short: "invalid", message: "Use letters, numbers, and dashes" };
+    }
+    if (!valid || !valid.ok) {
+      nameValidation = valid;
+      announce(String((valid && valid.message) || "Invalid ID"));
+      render();
+      return true;
+    }
+    if (!fieldIsByteIdentical()) {
+      notice("The field changed — nothing was inserted");
+      close(false);
+      return true;
+    }
+    namePending = true;
+    render();
+    let outcome = null;
+    let timedOut = false;
+    const timer = new Promise((resolve) => {
+      nameWriteTimer = setTimeout(() => {
+        timedOut = true;
+        resolve({ ok: false, message: `Couldn't add ^${id} — try again` });
+      }, PROSE_TASK_NAME_TIMEOUT_MS);
+    });
+    try {
+      const pending = session.name(nameRow, id);
+      outcome = await Promise.race([Promise.resolve(pending), timer]);
+    } catch (_error) {
+      outcome = { ok: false, message: "The task note could not be modified" };
+    }
+    try { clearTimeout(nameWriteTimer); } catch (_error) {}
+    nameWriteTimer = null;
+    if (timedOut && outcome && outcome.ok) {
+      timedOut = false;
+    }
+    namePending = false;
+    if (!outcome || !outcome.ok) {
+      nameValidation = { ok: false, short: "failed", message: String((outcome && outcome.message) || "The task note could not be modified") };
+      announce(String(nameValidation.message));
+      render();
+      return true;
+    }
+    if (!fieldIsByteIdentical()) {
+      notice(`Added ^${outcome.id} to ${outcome.notePath}`);
+      close(false);
+      return true;
+    }
+    insertLink(outcome.link);
+    try {
+      if (typeof options.markResolved === "function") options.markResolved(outcome.notePath, outcome.id);
+    } catch (_error) {}
+    justNamed.add(`${outcome.notePath}#^${outcome.id}`);
+    try {
+      if (typeof options.markNamed === "function") options.markNamed(outcome.notePath, outcome.id);
+    } catch (_error) {}
+    notice(`Added ^${outcome.id} to ${outcome.notePath}`);
+    announce(`Linked ${String((nameRow && (nameRow.displayText || nameRow.primary)) || "task")}`);
+    if (typeof options.armSwallow === "function") {
+      try { options.armSwallow(); } catch (_error) {}
+    }
+    close(false);
+    return true;
+  };
+
+  const moveSelection = (direction) => {
+    if (stage === "name") {
+      idLine = proseTaskIdLineCycle(idLine, direction);
+      nameValidation = { ok: true };
+      render();
+      return true;
+    }
+    if (!rows.length) {
+      try { if (typeof options.bump === "function") options.bump("empty"); } catch (_error) {}
+      return true;
+    }
+    const index = Math.max(0, rows.findIndex((row) => row && row.key === selectedKey));
+    const next = index + direction;
+    if (next < 0 || next >= rows.length) {
+      try { if (typeof options.bump === "function") options.bump(next < 0 ? "top" : "bottom"); } catch (_error) {}
+      return true;
+    }
+    selectedKey = rows[next].key;
+    render();
+    return true;
+  };
+
+  const handleBeforeinput = (event) => {
+    if (disposed || !open || stage !== "name") return false;
+    const type = event ? event.inputType : "";
+    try {
+      if (type === "insertText" && typeof event.data === "string") {
+        const result = proseTaskIdLineInsert(idLine, event.data);
+        idLine = result.line;
+        if (result.refused) announce("letters, digits, - only");
+        else nameValidation = { ok: true };
+        render();
+        return true;
+      }
+      if (type === "insertFromPaste" && event.clipboardData) {
+        const pasted = event.clipboardData.getData("text/plain");
+        const result = proseTaskIdLineInsert(idLine, pasted);
+        idLine = result.line;
+        nameValidation = { ok: true };
+        render();
+        return true;
+      }
+      if (type === "insertReplacementText") {
+        idLine = proseTaskIdLineSetSuggestion(idLine, "");
+        render();
+        return true;
+      }
+      if (type === "deleteContentBackward" || type === "deleteWordBackward") {
+        idLine = type === "deleteWordBackward" ? proseTaskIdLineDeleteWord({ ...idLine, caret: Math.min(idLine.caret, idLine.value.length) }) : proseTaskIdLineBackspace(idLine);
+        nameValidation = { ok: true };
+        render();
+        return true;
+      }
+      if (type === "deleteContentForward" || type === "deleteWordForward" || (typeof type === "string" && type.startsWith("delete"))) {
+        nameValidation = { ok: true };
+        render();
+        return true;
+      }
+      if (type === "insertLineBreak" || type === "insertParagraph") return true;
+    } catch (_error) {}
+    return true;
+  };
+
+  const handleKeydown = (event) => {
+    if (disposed || !event || !open) return false;
+    if (event.isComposing) return false;
+    const key = String(event.key || "");
+    const lower = key.toLowerCase();
+    if (stage === "name") {
+      if ((event.ctrlKey || event.metaKey || event.altKey) && lower !== "enter" && lower !== "backspace" && lower !== "a" && lower !== "[" && lower !== "m") return false;
+      if (lower === "escape" || (event.ctrlKey && !event.altKey && !event.metaKey && lower === "[")) return exitName(true);
+      if (key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        if (key === " " || key === "_") {
+          idLine = proseTaskIdLineInsert(idLine, "-").line;
+          nameValidation = { ok: true };
+          render();
+          return true;
+        }
+        if (/[A-Za-z0-9-]/u.test(key)) {
+          idLine = proseTaskIdLineInsert(idLine, key).line;
+          nameValidation = { ok: true };
+          render();
+          return true;
+        }
+        announce("letters, digits, - only");
+        try { if (typeof options.shake === "function") options.shake(); } catch (_error) {}
+        render();
+        return true;
+      }
+      if (lower === "backspace") {
+        idLine = event.ctrlKey || event.altKey || event.metaKey
+          ? proseTaskIdLineDeleteWord(idLine)
+          : proseTaskIdLineBackspace(idLine);
+        nameValidation = { ok: true };
+        render();
+        return true;
+      }
+      if (lower === "delete") {
+        nameValidation = { ok: true };
+        render();
+        return true;
+      }
+      if (lower === "arrowleft" || lower === "arrowright" || lower === "home" || lower === "end") {
+        try {
+          if (lower === "arrowleft") idLine.caret = Math.max(0, (idLine.caret || 0) - 1);
+          if (lower === "arrowright") idLine.caret = Math.min(String(idLine.value || "").length, (idLine.caret || 0) + 1);
+          if (lower === "home") idLine.caret = 0;
+          if (lower === "end") idLine.caret = String(idLine.value || "").length;
+          idLine.selected = false;
+          render();
+        } catch (_error) {}
+        return true;
+      }
+      if ((event.ctrlKey || event.metaKey) && lower === "a") {
+        idLine.selected = true;
+        idLine.caret = String(idLine.value || "").length;
+        render();
+        return true;
+      }
+      if (lower === "tab" || lower === "arrowdown" || lower === "arrowup" || ((event.ctrlKey || event.metaKey) && (lower === "n" || lower === "p"))) {
+        if (lower === "tab" && event.shiftKey) idLine = proseTaskIdLineCycle(idLine, -1);
+        else if (lower === "tab" || lower === "arrowdown" || lower === "n") idLine = proseTaskIdLineCycle(idLine, 1);
+        else idLine = proseTaskIdLineCycle(idLine, -1);
+        nameValidation = { ok: true };
+        render();
+        return true;
+      }
+      if (lower === "enter") {
+        if (event.repeat) return true;
+        void commitName();
+        return true;
+      }
+      return true;
+    }
+    if ((event.altKey || event.metaKey) && lower !== "enter") return false;
+    if (event.shiftKey && lower !== "enter" && lower !== "tab") return false;
+    if (lower === "arrowdown" || (event.ctrlKey && lower === "n")) return moveSelection(1);
+    if (lower === "arrowup" || (event.ctrlKey && lower === "p")) return moveSelection(-1);
+    if (lower === "tab" && event.shiftKey) return false;
+    if (lower === "tab") {
+      if (!rows.length) return false;
+      return acceptRow(selectedRow(), false);
+    }
+    if (lower === "enter") {
+      if (event.repeat) return true;
+      const row = selectedRow();
+      if (!row) {
+        close(false);
+        return true;
+      }
+      if (event.shiftKey && String(inputEl() && inputEl().tagName || "").toLowerCase() === "textarea") {
+        close(false);
+        return false;
+      }
+      return acceptRow(row, true);
+    }
+    if (lower === "arrowleft" || lower === "arrowright" || lower === "home" || lower === "end") return false;
+    if (lower === "q") return false;
+    return false;
+  };
+
+  const backOut = () => {
+    if (!open) return false;
+    if (stage === "name") {
+      exitName(true);
+      return true;
+    }
+    close(true);
+    return true;
+  };
+
+  const onInput = () => {
+    if (disposed || inserting) return;
+    if (open && stage === "name") {
+      restoreSnapshot();
+      return;
+    }
+  };
+
+  return {
+    get isOpen() { return open; },
+    get isNaming() { return open && stage === "name"; },
+    get mode() { return "tasks"; },
+    consider,
+    detectAt,
+    handleKeydown,
+    handleBeforeinput,
+    backOut,
+    onInput,
+    acceptRow,
+    close,
+    rerank,
+    currentView,
+    restoreSnapshot,
+    setSubjects(next) {
+      subjectsOpt = next;
+      if (open) {
+        closeSession();
+        session = openSession();
+        if (session) {
+          rerank();
+          render();
+        } else {
+          close(false);
+        }
+      }
+      return true;
+    },
+    setSourcePath(next) {
+      sourcePathOpt = next;
+      if (open) consider(true);
+      return true;
+    },
+    rebind() {
+      if (open) {
+        takeSnapshot();
+        consider(true);
+      }
+      return true;
+    },
+    detach() {
+      disposed = true;
+      if (nameWriteTimer) {
+        try { clearTimeout(nameWriteTimer); } catch (_error) {}
+      }
+      closeSession();
+      open = false;
+    },
+    isJustNamed(notePath, blockId) {
+      try {
+        return justNamed.has(`${notePath}#^${blockId}`);
+      } catch (_error) {
+        return false;
+      }
+    },
+    markNamed(notePath, blockId) {
+      try { justNamed.add(`${notePath}#^${blockId}`); } catch (_error) {}
+    },
+  };
+}
+
+function createControllerTaskMode(deps) {
+  const d = deps && typeof deps === "object" ? deps : {};
+  try {
+    if (typeof createProseTaskMode !== "function") return null;
+    return createProseTaskMode({
+      app: d.app || null,
+      density: d.density === "dense" ? "dense" : "roomy",
+      sourcePath: d.sourcePath,
+      subjects: d.subjects,
+      minOffset: d.minOffset,
+      mode: d.mode,
+      listId: d.listId,
+      inputEl: d.inputEl,
+      announce: d.announce,
+      notice: d.notice,
+      render: d.render,
+      bindAria: d.bindAria,
+      armSwallow: d.armSwallow,
+      bump: d.bump,
+      shake: d.shake,
+      markResolved: d.markResolved,
+      markNamed: d.markNamed,
+    });
+  } catch (_error) {
+    return null;
+  }
 }
 // ---- src/190-summary-modals.js ----
 function isSamePriorityRollTarget(cached, fresh) {
@@ -134117,6 +135634,27 @@ try {
       proseBlockPreviewText,
       renderProseLinkBand,
       renderProseLinkHint,
+      renderProseTaskBand,
+      createProseTaskMode,
+      createControllerTaskMode,
+      proseTaskLinksApiFromApp,
+      proseTaskSanitizeId,
+      proseTaskValidateId,
+      createProseTaskIdLine,
+      proseTaskIdLineInsert,
+      proseTaskIdLineBackspace,
+      proseTaskIdLineDeleteWord,
+      proseTaskIdLineSetSuggestion,
+      proseTaskIdLineCycle,
+      proseTaskPillFor,
+      proseTaskGroupCapsule,
+      proseTaskLocatorFor,
+      proseTaskDetailFor,
+      proseTaskNameDetailFor,
+      proseTaskCrumb,
+      proseTaskLeftoverMessage,
+      proseTaskGroupRuns,
+      PROSE_TASK_BLOCK_ID_RE,
       PROSE_LINK_SLOTS_ROOMY,
       PROSE_LINK_SLOTS_DENSE,
       PROSE_HINT_DEBOUNCE_MS,

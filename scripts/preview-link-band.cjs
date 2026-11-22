@@ -148,6 +148,154 @@ const STATES = [
     total: 2,
     rows: [row({}), row({ key: "n:sase_blog.md", stem: "sase_blog", primary: "sase_blog" })],
   },
+  {
+    name: "tasks-grouped",
+    tasks: true,
+    open: true,
+    stage: "list",
+    headerTitle: "\ud83d\udd17 LINK \u00b7 tasks \u203a in progress",
+    headerCount: "1 of 4",
+    selectedKey: "t:api#^api-docs",
+    selectedIndex: 0,
+    total: 4,
+    rows: [
+      { key: "t:api#^api-docs", status: "active", titleParts: [{ text: "Write the API docs", kind: "text" }], displayText: "Write the API docs", primary: "Write the API docs", group: "in-progress", linkTarget: "api", blockId: "api-docs", notePath: "api.md" },
+      { key: "t:api#publish", status: "todo", titleParts: [{ text: "Publish the API docs site", kind: "text" }], displayText: "Publish the API docs site", primary: "Publish the API docs site", group: "open", linkTarget: "projects/api", blockId: null, suggestedId: "publish-api-docs", notePath: "projects/api.md" },
+    ],
+    detailLeft: "\u21b5 [[api#^api-docs]]",
+    detailRight: "\u21e5 insert",
+    liveText: "Task 1 of 4: Write the API docs",
+  },
+  {
+    name: "tasks-query",
+    tasks: true,
+    open: true,
+    stage: "list",
+    headerTitle: "\ud83d\udd17 LINK \u00b7 tasks",
+    headerCount: "1 of 1",
+    selectedKey: "t:sync#^flaky",
+    selectedIndex: 0,
+    total: 1,
+    rows: [
+      { key: "t:sync#^flaky", status: "todo", titleParts: [{ text: "Fix the ", kind: "text" }, { text: "flaky", kind: "match" }, { text: " sync test", kind: "text" }], displayText: "Fix the flaky sync test", primary: "Fix the flaky sync test", group: "open", linkTarget: "sync", blockId: "flaky", notePath: "sync.md" },
+    ],
+    detailLeft: "\u21b5 [[sync#^flaky]]",
+    detailRight: "\u21e5 insert",
+    liveText: "Task 1 of 1: Fix the flaky sync test",
+  },
+  {
+    name: "tasks-idless",
+    tasks: true,
+    open: true,
+    stage: "list",
+    headerTitle: "\ud83d\udd17 LINK \u00b7 tasks \u203a this note",
+    headerCount: "1 of 2",
+    selectedKey: "t:note#reply",
+    selectedIndex: 0,
+    total: 2,
+    rows: [
+      { key: "t:note#reply", status: "todo", titleParts: [{ text: "Reply to Dana about the offsite", kind: "text" }], displayText: "Reply to Dana about the offsite", primary: "Reply to Dana about the offsite", group: "this-note", linkTarget: "2026/2026-11-21", blockId: null, suggestedId: "reply-dana", notePath: "2026/2026-11-21.md" },
+    ],
+    detailLeft: "\u21b5 names it ^reply-dana in 2026/2026-11-21.md, then links it",
+    detailRight: "\u21e5 insert",
+    liveText: "Task 1 of 2: Reply to Dana about the offsite",
+  },
+  {
+    name: "tasks-disabled",
+    tasks: true,
+    open: true,
+    stage: "list",
+    headerTitle: "\ud83d\udd17 LINK \u00b7 tasks",
+    headerCount: "2 of 2",
+    selectedKey: "t:api#^api-docs",
+    selectedIndex: 0,
+    total: 2,
+    rows: [
+      { key: "t:api#^api-docs", status: "active", titleParts: [{ text: "Write the API docs", kind: "text" }], displayText: "Write the API docs", primary: "Write the API docs", group: "this-note", linkTarget: "api", blockId: "api-docs", notePath: "api.md", disabled: { short: "this prompt", full: "The task this prompt is about" } },
+    ],
+    detailLeft: "\u2298 The task this prompt is about",
+    detailRight: "esc close",
+    liveText: "Task 1 of 2: Write the API docs. The task this prompt is about",
+  },
+  {
+    name: "tasks-no-match",
+    tasks: true,
+    open: true,
+    stage: "list",
+    headerTitle: "\ud83d\udd17 LINK \u00b7 tasks",
+    headerCount: "",
+    selectedKey: null,
+    selectedIndex: -1,
+    total: 0,
+    rows: [],
+    message: "No task matches",
+    detailLeft: "\u21b5 closes this list \u00b7 nothing is inserted",
+    detailRight: "esc close",
+    liveText: "No task matches.",
+  },
+  {
+    name: "tasks-indexing",
+    tasks: true,
+    open: true,
+    stage: "list",
+    headerTitle: "\ud83d\udd17 LINK \u00b7 tasks \u203a open",
+    headerCount: "Indexing \u00b7 1,200 of 6,500 notes",
+    selectedKey: "t:q1#^q1",
+    selectedIndex: 0,
+    total: 24,
+    rows: [
+      { key: "t:q1#^q1", status: "todo", titleParts: [{ text: "Draft the Q1 plan", kind: "text" }], displayText: "Draft the Q1 plan", primary: "Draft the Q1 plan", group: "open", linkTarget: "plans", blockId: "q1", notePath: "plans.md" },
+    ],
+    detailLeft: "\u21b5 [[plans#^q1]]",
+    detailRight: "\u21e5 insert",
+    liveText: "Task 1 of 24: Draft the Q1 plan",
+  },
+  {
+    name: "tasks-name-roomy",
+    tasks: true,
+    open: true,
+    stage: "name",
+    headerTitle: "\ud83d\udd17 LINK \u00b7 tasks \u203a name it",
+    headerCount: "in projects/api.md",
+    selectedKey: "t:api#publish",
+    selectedIndex: 0,
+    total: 1,
+    density: "roomy",
+    nameRow: { status: "todo", titleParts: [{ text: "Publish the API docs site", kind: "text" }], displayText: "Publish the API docs site", primary: "Publish the API docs site", notePath: "projects/api.md" },
+    idLine: { value: "publish-api-docs", caret: 16, selected: true, suggestions: ["publish-api-docs", "api-docs-site"] },
+    nameSuggestions: ["publish-api-docs", "api-docs-site"],
+    nameValidation: { ok: true },
+    namePending: false,
+    detailLeft: "\u21b5 adds ^publish-api-docs, then links [[projects/api#^publish-api-docs]]",
+    detailRight: "esc back",
+    liveText: "Name a block ID for Publish the API docs site: publish-api-docs. Enter adds it and links.",
+  },
+  {
+    name: "tasks-name-dense",
+    tasks: true,
+    open: true,
+    stage: "name",
+    density: "dense",
+    headerTitle: "\ud83d\udd17 LINK \u00b7 tasks \u203a name it",
+    headerCount: "in projects/api.md",
+    selectedKey: "t:api#publish",
+    selectedIndex: 0,
+    total: 1,
+    nameRow: { status: "todo", titleParts: [{ text: "Publish the API docs site", kind: "text" }], displayText: "Publish the API docs site", primary: "Publish the API docs site", notePath: "projects/api.md" },
+    idLine: { value: "bad id!", caret: 7, selected: false, suggestions: [] },
+    nameSuggestions: [],
+    nameValidation: { ok: false, short: "letters, digits, - only", message: "Use letters, numbers, and dashes" },
+    namePending: false,
+    detailLeft: "\u2298 Use letters, numbers, and dashes",
+    detailRight: "esc back",
+    liveText: "Name a block ID for Publish the API docs site: bad id!. Enter adds it and links.",
+  },
+  {
+    name: "tasks-leftover-hint",
+    tasks: true,
+    open: false,
+    hint: "\u26a0 ((api docs)) isn't a link yet \u2014 type in it to pick a task",
+  },
 ];
 
 function paint(state) {
@@ -163,7 +311,8 @@ function paint(state) {
     listId: `preview-${state.name}`,
     fadePlayed: true,
   };
-  helpers.renderProseLinkBand(host, view);
+  if (state.tasks) helpers.renderProseTaskBand(host, view);
+  else helpers.renderProseLinkBand(host, view);
   return host;
 }
 
@@ -240,6 +389,13 @@ function main() {
     assert.match(nearby, /parent/);
     const alias = paint(STATES[5]).toHTML();
     assert.match(alias, /alias/i);
+    const grouped = paint(STATES.find((entry) => entry.name === "tasks-grouped")).toHTML();
+    assert.match(grouped, /tasks/);
+    assert.match(grouped, /api-docs/);
+    const nameStage = paint(STATES.find((entry) => entry.name === "tasks-name-roomy")).toHTML();
+    assert.match(nameStage, /publish-api-docs/);
+    const invalid = paint(STATES.find((entry) => entry.name === "tasks-name-dense")).toHTML();
+    assert.match(invalid, /letters, digits/);
     console.log("preview-link-band self-test ok");
     return;
   }

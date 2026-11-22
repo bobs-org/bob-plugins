@@ -148,10 +148,15 @@ function attachProseField(options) {
   const ownKeys = opts.ownKeys === true;
   const arrowKeys = opts.arrowKeys !== false;
   const linksEnabled = opts.links !== false;
+  const tasksEnabled = opts.tasks === false ? false : (opts.tasks === true ? true : linksEnabled);
   const hintDelay = Number.isInteger(opts.hintDebounceMs) ? Math.max(0, opts.hintDebounceMs) : PROSE_HINT_DEBOUNCE_MS;
   const id = `bob-link-band-${Math.random().toString(36).slice(2, 10)}`;
   let sourcePathOpt = opts.sourcePath;
   let minOffsetOpt = opts.minOffset;
+  let subjectsOpt = opts.subjects;
+  let taskMode = null;
+  let dismissedTask = null;
+  let justNamedTasks = new Set();
   let disposed = false;
   let composing = false;
   let swallowEnter = false;
@@ -312,6 +317,67 @@ function attachProseField(options) {
     renderLink();
   };
 
+  const taskApiNow = () => {
+    try {
+      if (typeof proseTaskLinksApiFromApp === "function") return proseTaskLinksApiFromApp(app);
+      return null;
+    } catch (_error) {
+      return null;
+    }
+  };
+
+  const ensureTaskMode = () => {
+    if (taskMode || disposed || !tasksEnabled) return taskMode;
+    if (!taskApiNow()) return null;
+    try {
+      taskMode = createControllerTaskMode({
+        app, density, sourcePath: sourcePathOpt, subjects: subjectsOpt,
+        minOffset: minOffsetOpt, mode, listId: `${id}-tasks`,
+        inputEl: () => inputEl,
+        render: (view) => {
+          try { renderProseTaskBand(linkHost, view); } catch (_error) {}
+          try { proseBindInputAria(inputEl, view); } catch (_error) {}
+          if (recallHost) logRecallAddClass(recallHost, "is-hidden", true);
+          if (hintHost) logRecallAddClass(hintHost, "is-hidden", true);
+          fadePlayed = true;
+        },
+        bindAria: (view) => { try { proseBindInputAria(inputEl, view); } catch (_error) {} },
+        armSwallow: () => { swallowEnter = true; },
+        bump: () => bumpEdge("empty"),
+        shake: () => { if (linkHost) logRecallAddClass(linkHost, "is-edge-bump", true); },
+        markNamed: (notePath, blockId) => {
+          try { justNamedTasks.add(`${notePath}#^${blockId}`); } catch (_error) {}
+        },
+      });
+    } catch (_error) {
+      taskMode = null;
+    }
+    return taskMode;
+  };
+
+  const taskIsOpen = () => {
+    try {
+      return Boolean(taskMode && taskMode.isOpen);
+    } catch (_error) {
+      return false;
+    }
+  };
+
+  const renderTaskOrLink = () => {
+    if (taskIsOpen() && taskMode) {
+      try {
+        const view = taskMode.currentView();
+        renderProseTaskBand(linkHost, view);
+        proseBindInputAria(inputEl, view);
+      } catch (_error) {}
+      if (recallHost) logRecallAddClass(recallHost, "is-hidden", true);
+      if (hintHost) logRecallAddClass(hintHost, "is-hidden", true);
+      fadePlayed = true;
+    } else {
+      renderLink();
+    }
+  };
+
   const readState = () => {
     if (!inputEl) return { text: "", caret: 0 };
     const text = String(inputEl.value || "");
@@ -319,15 +385,26 @@ function attachProseField(options) {
   };
 
   const considerOpen = (fromInput) => {
-    if (disposed || !linksEnabled || composing) return;
+    if (disposed || composing) return;
+    if (taskIsOpen() && taskMode) {
+      if (!proseCaretIsCollapsed(inputEl)) taskMode.close(false);
+      else {
+        if (fromInput) { try { taskMode.onInput(); } catch (_error) {} }
+        if (taskMode.consider(fromInput)) return;
+        renderTaskOrLink();
+      }
+      if (!taskMode.isOpen && !linkOpen) scheduleHint();
+      return;
+    }
     if (!proseCaretIsCollapsed(inputEl)) {
       if (linkOpen) closeBand(false);
       else scheduleHint();
       return;
     }
     const { text, caret } = readState();
-    const alias = proseAliasAt(text, caret, { minOffset: minOffsetOpt });
+    const alias = linksEnabled ? proseAliasAt(text, caret, { minOffset: minOffsetOpt }) : null;
     if (alias) {
+      try { if (taskMode) taskMode.close(false); } catch (_error) {}
       if (!fromInput && !linkOpen) {
         scheduleHint();
         return;
@@ -336,18 +413,33 @@ function attachProseField(options) {
       openAlias(alias);
       return;
     }
-    const next = proseFieldAt(text, caret, fieldOptions());
-    if (!next) {
-      if (linkOpen) closeBand(false);
-      else scheduleHint();
+    const next = linksEnabled ? proseFieldAt(text, caret, fieldOptions()) : null;
+    if (next) {
+      try { if (taskMode) taskMode.close(false); } catch (_error) {}
+      if (!fromInput && !linkOpen) {
+        scheduleHint();
+        return;
+      }
+      if (dismissed && dismissed.opener === next.linkStart && dismissed.query === next.query) return;
+      openBand(next, text, selectedKey);
       return;
     }
-    if (!fromInput && !linkOpen) {
-      scheduleHint();
-      return;
+    if (tasksEnabled) {
+      const mode = ensureTaskMode();
+      if (mode) {
+        if (linkOpen) closeBand(false);
+        if (!fromInput && !mode.isOpen) {
+          scheduleHint();
+          return;
+        }
+        const handled = mode.consider(fromInput);
+        if (handled) return;
+        if (!mode.isOpen && !linkOpen) scheduleHint();
+        return;
+      }
     }
-    if (dismissed && dismissed.opener === next.linkStart && dismissed.query === next.query) return;
-    openBand(next, text, selectedKey);
+    if (linkOpen) closeBand(false);
+    else scheduleHint();
   };
 
   // Only an Enter acceptance arms the held-Enter swallow; a Tab or click
@@ -470,6 +562,11 @@ function attachProseField(options) {
     if (event.isComposing || composing) return false;
     const key = String(event.key || "");
     if (swallowEnter && key === "Enter") return true;
+    if (taskIsOpen() && taskMode) {
+      const consumed = taskMode.handleKeydown(event);
+      if (consumed) renderTaskOrLink();
+      return consumed;
+    }
     if (linkOpen) return handleLinkKey(event);
     if (recallHandle && typeof recallHandle.handleKeydown === "function") {
       try { if (recallHandle.handleKeydown(event)) return true; } catch (_error) {}
@@ -478,6 +575,12 @@ function attachProseField(options) {
   };
 
   const backOut = () => {
+    if (taskIsOpen() && taskMode) {
+      taskMode.backOut();
+      renderTaskOrLink();
+      if (!taskMode.isOpen) scheduleHint();
+      return true;
+    }
     if (linkOpen || aliasStage) {
       closeBand(true);
       return true;
@@ -533,7 +636,31 @@ function attachProseField(options) {
   };
 
   const onBlur = () => {
+    if (taskIsOpen() && taskMode) {
+      try { taskMode.close(false); } catch (_error) {}
+      renderTaskOrLink();
+      scheduleHint();
+      return;
+    }
     if (linkOpen) closeBand(false);
+  };
+
+  const onBeforeinput = (event) => {
+    if (disposed || composing) return;
+    if (taskIsOpen() && taskMode) {
+      let consumed = false;
+      try {
+        consumed = taskMode.handleBeforeinput(event);
+      } catch (_error) {
+        consumed = false;
+      }
+      if (consumed) {
+        try { event.preventDefault(); } catch (_error) {}
+        try {
+          if (typeof event.stopPropagation === "function") event.stopPropagation();
+        } catch (_error) {}
+      }
+    }
   };
 
   const onSelectionChange = () => {
@@ -585,7 +712,7 @@ function attachProseField(options) {
     }
     const run = () => {
       hintTimer = null;
-      if (disposed || linkOpen) {
+      if (disposed || linkOpen || taskIsOpen()) {
         hintMessages = [];
         renderHint();
         return;
@@ -594,7 +721,27 @@ function attachProseField(options) {
         const text = String(inputEl && inputEl.value || "");
         const minOffset = proseResolveMinOffset(minOffsetOpt);
         const links = proseCompleteLinks(text).filter((link) => !(link.start < minOffset));
-        hintMessages = proseUnresolvedMessages(links, resolveComplete, sourcePathNow());
+        hintMessages = proseUnresolvedMessages(links, (link, sourcePath) => {
+          try {
+            if (link && link.blockId && justNamedTasks.has(`${link.target}#^${link.blockId}`)) return {};
+          } catch (_error) {}
+          return resolveComplete(link, sourcePath);
+        }, sourcePathNow());
+        if (tasksEnabled) {
+          const api = taskApiNow();
+          if (api) {
+            try {
+              const caret = proseReadCaret(inputEl);
+              const token = api.fieldAt(text, caret, { minOffset });
+              void token;
+              const match = /(^|[\s\t])\(\(([^\n()[\]`]*)$/.exec(text.slice(0, caret));
+              if (match && match[2] !== undefined) {
+                const leftover = proseTaskLeftoverMessage(match[2].slice(0, 60));
+                if (leftover) hintMessages = [...hintMessages, leftover];
+              }
+            } catch (_error) {}
+          }
+        }
       } catch (_error) {
         hintMessages = [];
       }
@@ -636,6 +783,7 @@ function attachProseField(options) {
   const bindInput = (el) => {
     if (!el || typeof el.addEventListener !== "function") return;
     el.addEventListener("input", onInput);
+    el.addEventListener("beforeinput", onBeforeinput, true);
     el.addEventListener("compositionstart", onCompositionStart);
     el.addEventListener("compositionend", onCompositionEnd);
     el.addEventListener("blur", onBlur);
@@ -652,6 +800,7 @@ function attachProseField(options) {
   const unbindInput = (el) => {
     if (!el || typeof el.removeEventListener !== "function") return;
     el.removeEventListener("input", onInput);
+    el.removeEventListener("beforeinput", onBeforeinput, true);
     el.removeEventListener("compositionstart", onCompositionStart);
     el.removeEventListener("compositionend", onCompositionEnd);
     el.removeEventListener("blur", onBlur);
@@ -726,7 +875,11 @@ function attachProseField(options) {
   return {
     handleKeydown,
     backOut,
-    isLinkOpen: () => linkOpen === true,
+    isLinkOpen: () => linkOpen === true || taskIsOpen(),
+    isTaskOpen: () => taskIsOpen(),
+    isNaming: () => {
+      try { return Boolean(taskMode && taskMode.isNaming); } catch (_error) { return false; }
+    },
     isRecalling: () => {
       try { return recallHandle && typeof recallHandle.isRecalling === "function" ? recallHandle.isRecalling() : false; }
       catch (_error) { return false; }
@@ -771,14 +924,27 @@ function attachProseField(options) {
         }
       }
       fadePlayed = true;
-      if (linkOpen) considerOpen(true);
-      else renderLink();
+      try {
+        if (taskMode) taskMode.rebind();
+      } catch (_error) {}
+      if (linkOpen || taskIsOpen()) considerOpen(true);
+      else renderTaskOrLink();
       return true;
     },
     setSourcePath(next) {
       sourcePathOpt = next;
-      if (linkOpen) considerOpen(true);
+      try {
+        if (taskMode) taskMode.setSourcePath(next);
+      } catch (_error) {}
+      if (linkOpen || taskIsOpen()) considerOpen(true);
       else scheduleHint();
+      return true;
+    },
+    setSubjects(next) {
+      subjectsOpt = next;
+      try {
+        if (taskMode) taskMode.setSubjects(next);
+      } catch (_error) {}
       return true;
     },
     setKind(nextKind) {
@@ -797,10 +963,7 @@ function attachProseField(options) {
       if (disposed) return;
       disposed = true;
       previewToken += 1;
-      if (hintTimer) {
-        try { clearTimeout(hintTimer); } catch (_error) {}
-        hintTimer = null;
-      }
+      if (hintTimer) { try { clearTimeout(hintTimer); } catch (_error) {} hintTimer = null; }
       unbindInput(inputEl);
       try {
         if (scopeHandler && opts.scope && typeof opts.scope.unregister === "function") {
@@ -811,6 +974,8 @@ function attachProseField(options) {
         }
       } catch (_error) {}
       try { if (recallHandle && typeof recallHandle.detach === "function") recallHandle.detach(); } catch (_error) {}
+      try { if (taskMode && typeof taskMode.detach === "function") taskMode.detach(); } catch (_error) {}
+      taskMode = null;
       try { proseClearHost(linkHost); } catch (_error) {}
       try { proseClearHost(hintHost); } catch (_error) {}
       try { proseClearHost(recallHost); } catch (_error) {}
@@ -823,14 +988,12 @@ function attachProseField(options) {
 
 function createProseFieldApi(plugin) {
   return Object.freeze({
-    version: 1,
+    version: 2,
     attach(options) {
       try {
         const opts = options && typeof options === "object" ? options : {};
         return attachProseField({ ...opts, plugin, app: opts.app || (plugin && plugin.app) });
-      } catch (_error) {
-        return null;
-      }
+      } catch (_error) { return null; }
     },
   });
 }

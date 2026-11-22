@@ -406,7 +406,7 @@ The root `bob-navigation-hotkeys.api` is version 3:
 | `taskLinkLane` | 1 | Match a Pomodoro Task Link and toggle its Next/In Progress lane. |
 | `taskScope` | 1 | `at({ lines, line })` returns the frozen task owner and its owned zero-based lines, or `null`. |
 | `logRecall` | 1 | Attach the USED BEFORE phrase band to a host-owned text field and record successful Work Log writes. Additive `links: true` delegates to `proseField`. |
-| `proseField` | 1 | Attach the two-mode controller that owns USED BEFORE and the LINK band for `[[` completion in prose prompts. |
+| `proseField` | 2 | Attach the controller that owns USED BEFORE and the LINK band for `[[` notes mode plus `((` tasks mode (list + in-band NAME) in prose prompts. |
 | `notice` | 5 | Show the Unblocked card; v2 `keep_moving`, v3 `relation_successors`, v4 `offer_closes`, v5 a trailing `↗ “S”` jump line. |
 | `successors` | 5 | Ask which offered successor links to add; v2 accepts `keep_moving`, v3 accepts the `relation` group, v4 resolves verdict closes, and v5 stages a `Ctrl+J` jump pin. |
 | `blocks` | 1 | Open the reverse Blocks stage or remove a dependent. |
@@ -444,8 +444,8 @@ ignores `links` and attaches recall only. `logRecall.noteUsed`
 forwards a successful local write to Ledger Tools `logs.noteUsed`. Feature-detect
 `api.proseField` with `Number(api.proseField.version) >= 1`. `proseField.attach`
 takes `inputEl`, `bandHost`, `sourcePath` (`string | null | () => string | null`),
-`recall`, `links`, `mode` (`inline` | `field`), `minOffset`, `density`, `ownKeys`,
-and `scope`. The root api version stays 3. Enter and Tab accept a row while the
+`recall`, `links`, `tasks` (defaults to `links`), `subjects`, `mode` (`inline` | `field`), `minOffset`, `density`, `ownKeys`,
+and `scope`. v2 adds `isTaskOpen()`, `isNaming()`, and `setSubjects(next)`; `isLinkOpen()` covers both modes. The root api version stays 3. Enter and Tab accept a row while the
 LINK band is open and never submit the prompt; only an Enter accept swallows
 the held Enter. Hosts whose listeners run first (the Record Card) attach with
 `ownKeys: false`, call `backOut()` as their first Esc rung, and offer every key

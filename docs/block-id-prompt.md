@@ -151,6 +151,36 @@ link result.
 Keys: `↑↓` move, `↵` / Tab insert the selected identified link, `esc` clears a
 filter or closes, and `⌫` on an empty filter undoes `((`.
 
+## Task links in prompts
+
+Typing `((` in any Bob prose prompt that already completes `[[` opens the same
+LINK band's **tasks mode**: `🔗 LINK · tasks` with grouped rows (this note, in
+progress, next, open, history), the pill, title, group capsule, and locator the
+editor picker uses. `[[` wins when both could apply. The band fails open: with no
+(or an old) block-id-prompt it stays literal text, a thrown ranker shows no band,
+and the host still submits normally while the band is closed.
+
+List keys: `↓`/`↑` (or Ctrl+N/P) move without wrapping, `↵` (or Tab, or click)
+inserts the identified row's `[[target#^id]]` with one undo restoring `((query`,
+`⇧Tab` leaves to the host, `esc`/`Ctrl+[` close one layer with separate `((`
+dismissal memory, and `q` types. Disabled rows (the prompt's own subject tasks,
+duplicates, archived or read-only IDs) stay selectable but never insert; zero rows
+close the band and insert nothing. Never submits while open, in either stage.
+
+Enter on an ID-less row opens the in-band **NAME stage** (focus never leaves the
+field): the pinned task, a `^` ID line prefilled with the first suggestion and
+selected, other suggestions after `·`, and `✓ free` / `✕ reason` validation.
+Type letters, digits, `-` (`Space`/`_` become `-`; anything else shakes once),
+`⌫` deletes, Tab/`↓`/`↑` cycles suggestions, paste is sanitized into the ID line,
+and `esc`/`Ctrl+[` returns to the list with query and selection restored. Enter
+validates, re-locates the task line by identity, and writes exactly ` ^id` plus
+the editor-parity freshness stamp through `vault.process` (or one editor line
+edit after a preimage check) — one explicit vault write, never touching a subject
+task. Success inserts the link, shows `Added ^id to note.md`, and closes; failure
+keeps NAME open with the reason. Blur cancels naming without writing, and undo
+never removes an added ID — cancelling the prompt afterwards keeps it, as in the
+editor.
+
 ## Task Link selection
 
 `Ctrl+Shift+Enter` on a selected Task Link — a plain or embedded wiki block

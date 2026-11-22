@@ -3562,9 +3562,50 @@
   gap: var(--size-4-2);
 }
 
+.bob-task-band-row .bob-task-band-pill {
+  flex: 0 0 auto;
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+.bob-task-band-row .bob-task-band-pill.is-active,
+.bob-task-band-row .bob-task-band-pill.is-next { color: var(--interactive-accent); }
+.bob-task-band-row .bob-task-band-pill.is-done { color: var(--color-green); }
+.bob-task-band-row .bob-task-band-pill.is-blocked { color: var(--color-orange); }
+.bob-task-band-text .bob-task-band-code {
+  background: var(--background-modifier-form-field);
+  border-radius: var(--radius-s);
+  padding: 0 2px;
+}
+.bob-task-band-text .bob-task-band-link { color: var(--interactive-accent); }
+.bob-task-band-locator {
+  flex: 0 0 auto;
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  max-width: 42%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bob-task-band-locator .bob-task-band-target { color: var(--text-faint); }
+.bob-task-band-locator .bob-task-band-id { color: var(--interactive-accent); }
+.bob-task-band-capsule.is-group { color: var(--text-faint); }
+.bob-task-band-capsule.is-guard { color: var(--color-orange); }
+.bob-task-band-id-row .bob-task-band-sigil { color: var(--text-faint); font-family: var(--font-monospace); }
+.bob-task-band-id-entry {
+  font-family: var(--font-monospace);
+  caret-color: var(--interactive-accent);
+  border-right: 1px solid var(--interactive-accent);
+}
+.bob-task-band-glyph.is-valid { color: var(--color-green); }
+.bob-task-band-glyph.is-invalid { color: var(--color-red); }
+.bob-task-band-sugg.is-current { color: var(--text-normal); }
+
 @media (prefers-reduced-motion: reduce) {
   .bob-link-band { animation: bob-log-recall-reduced 120ms linear; }
   .bob-link-band.is-edge-bump .bob-link-band-row.is-selected { animation: bob-log-recall-reduced 120ms linear; }
+  .bob-task-band-id-entry { border-right-style: solid; }
 }
 
 @media (prefers-contrast: more) {

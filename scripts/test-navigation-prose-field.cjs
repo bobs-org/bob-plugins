@@ -200,10 +200,10 @@ function selectedRow(host) {
   return slot && slot.find((node) => node.classes.includes("is-selected"));
 }
 
-test("nav api exposes additive proseField v1 next to logRecall v1", () => {
+test("nav api exposes additive proseField v2 next to logRecall v1", () => {
   const api = helpers.createDependencyNavApi({ app: { plugins: { plugins: {} } } });
   assert.equal(api.version, 3);
-  assert.equal(api.proseField.version, 1);
+  assert.equal(api.proseField.version, 2);
   assert.equal(typeof api.proseField.attach, "function");
   assert.equal(api.logRecall.version, 1);
 });

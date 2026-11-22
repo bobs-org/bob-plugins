@@ -83730,6 +83730,518 @@ function propertyCardBuildGroupRow(doc, spec = {}) {
     return null;
   }
 }
+// ---- src/240m-plugin-property-card-created.js ----
+// Pure created-stamp formatter shared by property-card adapters. The caller
+// supplies the value and, when available, its confirmed source scalar so YAML
+// date-only syntax is not confused with a timestamp converted by Obsidian.
+const PROPERTY_CARD_MONTHS = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+const PROPERTY_CARD_CREATED_STAMP_RE = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,9}))?)?(?:\s*(Z|[+-]\d{2}:?\d{2}))?)?$/i;
+
+function propertyCardCalendarEpoch(year, month, day, hour = 0, minute = 0, second = 0, millisecond = 0) {
+  const value = new Date(0);
+  value.setUTCFullYear(year, month - 1, day);
+  value.setUTCHours(hour, minute, second, millisecond);
+  return value.getTime();
+}
+
+function propertyCardValidCalendarParts(year, month, day, hour = 0, minute = 0, second = 0) {
+  if (!Number.isInteger(year) || month < 1 || month > 12 || day < 1 || hour < 0 || hour > 23
+    || minute < 0 || minute > 59 || second < 0 || second > 59) return false;
+  const probe = new Date(propertyCardCalendarEpoch(year, month, day, hour, minute, second));
+  return probe.getUTCFullYear() === year && probe.getUTCMonth() + 1 === month
+    && probe.getUTCDate() === day && probe.getUTCHours() === hour
+    && probe.getUTCMinutes() === minute && probe.getUTCSeconds() === second;
+}
+
+function propertyCardZoneName(zone) {
+  const requested = typeof zone === "string" && zone.trim()
+    ? zone.trim()
+    : Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: requested }).format(0);
+    return requested;
+  } catch (_) {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  }
+}
+
+function propertyCardPartsInZone(date, zone) {
+  const rows = new Intl.DateTimeFormat("en-US-u-hc-h23", {
+    timeZone: zone,
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+  const parts = Object.create(null);
+  for (const row of rows) if (row.type !== "literal") parts[row.type] = Number(row.value);
+  if (parts.hour === 24) parts.hour = 0;
+  return parts;
+}
+
+function propertyCardZoneWallEpoch(parts) {
+  return propertyCardCalendarEpoch(parts.year, parts.month, parts.day, parts.hour || 0, parts.minute || 0, parts.second || 0);
+}
+
+function propertyCardLocalWallTimeEpoch(parts, zone) {
+  const wanted = propertyCardZoneWallEpoch(parts);
+  let guess = wanted;
+  // Resolve a wall-clock timestamp in the viewer zone without relying on the
+  // process zone. Iteration also follows offset changes near DST boundaries.
+  for (let i = 0; i < 5; i += 1) {
+    const probe = new Date(guess);
+    const localAsUtc = propertyCardZoneWallEpoch(propertyCardPartsInZone(probe, zone));
+    const offset = localAsUtc - (guess - (guess % 1000));
+    const next = wanted - offset;
+    if (next === guess) break;
+    guess = next;
+  }
+  return guess;
+}
+
+function propertyCardUnquoteYamlScalar(value) {
+  let text = String(value == null ? "" : value).trim();
+  let quote = "";
+  let escaped = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    if (quote === "\"") {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === "\"") quote = "";
+    } else if (quote === "'") {
+      if (char === "'" && text[i + 1] === "'") i += 1;
+      else if (char === "'") quote = "";
+    } else if (char === "\"" || char === "'") quote = char;
+    else if (char === "#" && (i === 0 || /\s/.test(text[i - 1]))) {
+      text = text.slice(0, i).trimEnd();
+      break;
+    }
+  }
+  if (text.length >= 2 && text[0] === "\"" && text[text.length - 1] === "\"") {
+    try { return JSON.parse(text); } catch (_) { return text.slice(1, -1); }
+  }
+  if (text.length >= 2 && text[0] === "'" && text[text.length - 1] === "'") {
+    return text.slice(1, -1).replace(/''/g, "'");
+  }
+  return text;
+}
+
+function propertyCardParseCreatedDate(value, sourceScalar, zone) {
+  const sourceText = typeof sourceScalar === "string" ? propertyCardUnquoteYamlScalar(sourceScalar) : "";
+  const sourceDateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(sourceText);
+  if (sourceDateOnly) {
+    const year = Number(sourceDateOnly[1]);
+    const month = Number(sourceDateOnly[2]);
+    const day = Number(sourceDateOnly[3]);
+    if (!propertyCardValidCalendarParts(year, month, day)) return null;
+    return { dateOnly: true, calendar: { year, month, day }, raw: String(sourceScalar).trim() };
+  }
+
+  // Prefer confirmed source syntax for YAML Date objects. Obsidian's YAML
+  // parser can turn both date-only and timestamp scalars into Date instances.
+  const input = value instanceof Date && sourceText ? sourceText : value;
+  if (input instanceof Date) {
+    if (Number.isNaN(input.getTime())) return null;
+    return { dateOnly: false, instant: new Date(input.getTime()), raw: String(sourceScalar || input.toISOString()).trim() };
+  }
+  if (typeof input !== "string") return null;
+  const text = input.trim();
+  const match = PROPERTY_CARD_CREATED_STAMP_RE.exec(text);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hasTime = match[4] !== undefined;
+  const hour = hasTime ? Number(match[4]) : 0;
+  const minute = hasTime ? Number(match[5]) : 0;
+  const second = hasTime && match[6] ? Number(match[6]) : 0;
+  const millis = hasTime && match[7] ? Number((match[7] + "000").slice(0, 3)) : 0;
+  if (!propertyCardValidCalendarParts(year, month, day, hour, minute, second)) return null;
+  if (!hasTime) return { dateOnly: true, calendar: { year, month, day }, raw: String(sourceScalar || text).trim() };
+
+  let instantMs;
+  const offsetText = match[8] || "";
+  const wallParts = { year, month, day, hour, minute, second };
+  if (/^Z$/i.test(offsetText)) {
+    instantMs = propertyCardCalendarEpoch(year, month, day, hour, minute, second, millis);
+  } else if (offsetText) {
+    const offsetMatch = /^([+-])(\d{2}):?(\d{2})$/.exec(offsetText);
+    if (!offsetMatch) return null;
+    const offsetHour = Number(offsetMatch[2]);
+    const offsetMinute = Number(offsetMatch[3]);
+    if (offsetHour > 23 || offsetMinute > 59) return null;
+    const sign = offsetMatch[1] === "+" ? 1 : -1;
+    const offsetMs = sign * (offsetHour * 60 + offsetMinute) * 60_000;
+    instantMs = propertyCardCalendarEpoch(year, month, day, hour, minute, second, millis) - offsetMs;
+  } else {
+    instantMs = propertyCardLocalWallTimeEpoch(wallParts, zone) + millis;
+  }
+  const instant = new Date(instantMs);
+  if (Number.isNaN(instant.getTime())) return null;
+  return { dateOnly: false, instant, raw: String(sourceScalar || text).trim() };
+}
+
+function propertyCardCalendarForCreated(parsed, zone) {
+  return parsed.dateOnly ? parsed.calendar : propertyCardPartsInZone(parsed.instant, zone);
+}
+
+function propertyCardCreatedAge(createdParts, nowParts) {
+  const createdDay = Math.floor(propertyCardZoneWallEpoch({ ...createdParts, hour: 0, minute: 0, second: 0 }) / 86_400_000);
+  const nowDay = Math.floor(propertyCardZoneWallEpoch({ ...nowParts, hour: 0, minute: 0, second: 0 }) / 86_400_000);
+  const days = nowDay - createdDay;
+  if (days === 0) return "today";
+  if (days === 1) return "yesterday";
+  if (days === -1) return "tomorrow";
+  return days > 0 ? `${days} days ago` : `in ${-days} days`;
+}
+
+function propertyCardCreatedDateText(parts, includeYear) {
+  const date = `${PROPERTY_CARD_MONTHS[parts.month - 1]} ${parts.day}`;
+  return includeYear ? `${date}, ${parts.year}` : date;
+}
+
+function propertyCardCreatedTimeText(date, zone) {
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: zone, hour: "numeric", minute: "2-digit", hour12: true,
+  }).format(date);
+}
+
+function propertyCardFormatCreatedStamp(input = {}) {
+  const options = input && typeof input === "object" ? input : {};
+  const kind = String(options.kind || "").toLowerCase();
+  const verb = kind === "record" ? "added" : "created";
+  const temporal = options.temporal === true || ["day", "week", "quarter", "year"].includes(kind);
+  const present = options.present === undefined
+    ? Object.prototype.hasOwnProperty.call(options, "value") && options.value !== undefined
+    : options.present === true;
+  if (!present) return { text: temporal ? "" : "no created date", tooltip: "", state: "missing", dateOnly: false };
+
+  const zone = propertyCardZoneName(options.timeZone);
+  const parsed = propertyCardParseCreatedDate(options.value, options.sourceScalar, zone);
+  if (!parsed) {
+    const raw = typeof options.sourceScalar === "string" && options.sourceScalar.trim()
+      ? options.sourceScalar.trim()
+      : options.value instanceof Date ? String(options.value) : String(options.value);
+    return { text: `${verb} ⚠`, tooltip: `Invalid created value: ${raw}`, state: "invalid", dateOnly: false };
+  }
+
+  const nowValue = typeof options.clock === "function" ? options.clock() : options.now;
+  const now = nowValue instanceof Date && !Number.isNaN(nowValue.getTime()) ? nowValue : new Date();
+  const nowParts = propertyCardPartsInZone(now, zone);
+  const dateParts = propertyCardCalendarForCreated(parsed, zone);
+  const age = propertyCardCreatedAge(dateParts, nowParts);
+  const raw = parsed.raw || String(options.value);
+  const tooltip = `${raw} · ${age}`;
+  const earlierYear = dateParts.year < nowParts.year;
+  const dateText = propertyCardCreatedDateText(dateParts, earlierYear);
+  const timeText = parsed.dateOnly ? "" : propertyCardCreatedTimeText(parsed.instant, zone);
+  const noteDate = typeof options.noteDate === "string"
+    ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(options.noteDate.trim())
+    : null;
+  const represented = noteDate
+    ? { year: Number(noteDate[1]), month: Number(noteDate[2]), day: Number(noteDate[3]) }
+    : options.noteDate instanceof Date && !Number.isNaN(options.noteDate.getTime())
+      ? propertyCardPartsInZone(options.noteDate, zone)
+      : null;
+  const sameDayNote = kind === "day" && represented
+    && represented.year === dateParts.year && represented.month === dateParts.month && represented.day === dateParts.day;
+
+  let text;
+  if (temporal) {
+    if (sameDayNote && !parsed.dateOnly) text = `${verb} ${timeText}`;
+    else text = `${verb} ${dateText}${timeText ? `, ${timeText}` : ""}`;
+  } else if (age === "today" || age === "yesterday") {
+    text = `${verb} ${age}${timeText ? `, ${timeText}` : ""}`;
+  } else {
+    text = `${verb} ${dateText}`;
+  }
+  return { text, tooltip, state: "ok", dateOnly: parsed.dateOnly };
+}
+// ---- src/240n-plugin-property-card-inventory.js ----
+// Pure source-ordered frontmatter inventory for the property-card drawer.
+// Source provides membership, order, occurrences, and line locations; the
+// metadata cache provides values when the current path's cache is confirmed.
+const PROPERTY_CARD_INVENTORY_RECOVERY = "Frontmatter doesn't parse — y opens YAML";
+
+function propertyCardInventoryPath(value) {
+  return typeof value === "string" ? value.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/$/, "") : "";
+}
+
+function propertyCardInventorySyntheticKey(key, value) {
+  return key === "position" && value && typeof value === "object" && !Array.isArray(value)
+    && (Object.prototype.hasOwnProperty.call(value, "start") || Object.prototype.hasOwnProperty.call(value, "end"));
+}
+
+function propertyCardInventoryCacheKeys(frontmatter) {
+  if (!frontmatter || typeof frontmatter !== "object" || Array.isArray(frontmatter)) return [];
+  return Object.keys(frontmatter).filter((key) => !propertyCardInventorySyntheticKey(key, frontmatter[key]));
+}
+
+function propertyCardInventoryTypedValue(present, value) {
+  if (!present) return "absent";
+  if (value === null) return "null";
+  if (value === "") return "empty-string";
+  if (Array.isArray(value)) return value.length === 0 ? "empty-list" : "list";
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (typeof value === "number") return value === 0 ? "zero" : "number";
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? "invalid-date" : "date";
+  if (typeof value === "string") return "text";
+  if (typeof value === "object") return "map";
+  return "other";
+}
+
+function propertyCardInventoryColon(line) {
+  let quote = "";
+  let escaped = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (quote === "\"") {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === "\"") quote = "";
+      continue;
+    }
+    if (quote === "'") {
+      if (char === "'" && line[index + 1] === "'") { index += 1; continue; }
+      if (char === "'") quote = "";
+      continue;
+    }
+    if (char === "\"" || char === "'") { quote = char; continue; }
+    if (char === "#" && (index === 0 || /\s/.test(line[index - 1]))) return -1;
+    if (char === ":" && (index + 1 === line.length || /\s/.test(line[index + 1]))) return index;
+  }
+  return -1;
+}
+
+function propertyCardInventoryKey(raw) {
+  const text = String(raw || "").trim();
+  if (!text) return null;
+  if (text[0] === "\"" && text[text.length - 1] === "\"") {
+    try { return JSON.parse(text); } catch (_) { return text.slice(1, -1); }
+  }
+  if (text[0] === "'" && text[text.length - 1] === "'") return text.slice(1, -1).replace(/''/g, "'");
+  if (text[0] === "?" && /^\?\s/.test(text)) return text.slice(1).trim();
+  return text;
+}
+
+function propertyCardInventoryScalar(line, colon) {
+  if (!Number.isInteger(colon) || colon < 0) return "";
+  let raw = line.slice(colon + 1).trim();
+  let quote = "";
+  let escaped = false;
+  for (let index = 0; index < raw.length; index += 1) {
+    const char = raw[index];
+    if (quote === "\"") {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === "\"") quote = "";
+    } else if (quote === "'") {
+      if (char === "'" && raw[index + 1] === "'") index += 1;
+      else if (char === "'") quote = "";
+    } else if (char === "\"" || char === "'") quote = char;
+    else if (char === "#" && (index === 0 || /\s/.test(raw[index - 1]))) {
+      raw = raw.slice(0, index).trimEnd();
+      break;
+    }
+  }
+  return raw;
+}
+
+function propertyCardScanFrontmatter(sourceText) {
+  const allLines = String(sourceText).split(/\r?\n/);
+  if (allLines.length && allLines[0].charCodeAt(0) === 0xFEFF) allLines[0] = allLines[0].slice(1);
+  if (!allLines.length || allLines[0].trim() !== "---") {
+    return { state: "none", yaml: "", yamlLines: [], entries: [], sourceLineOffset: 0 };
+  }
+  let close = -1;
+  for (let index = 1; index < allLines.length; index += 1) {
+    const marker = allLines[index].trim();
+    if (marker === "---" || marker === "...") { close = index; break; }
+  }
+  if (close < 0) return { state: "unclosed", yaml: "", yamlLines: [], entries: [], sourceLineOffset: 1 };
+
+  const yamlLines = allLines.slice(1, close);
+  const entries = [];
+  for (let index = 0; index < yamlLines.length; index += 1) {
+    const line = yamlLines[index];
+    if (!line.trim() || /^\s*#/.test(line) || /^\s/.test(line) || /^\s*[-?](?:\s|$)/.test(line)) continue;
+    const colon = propertyCardInventoryColon(line);
+    if (colon < 0) continue;
+    const key = propertyCardInventoryKey(line.slice(0, colon));
+    if (key === null || key === undefined || typeof key === "object") continue;
+    entries.push({ key: String(key), yamlLine: index, colon, line: index + 2, rawScalar: propertyCardInventoryScalar(line, colon) });
+  }
+  return { state: "closed", yaml: yamlLines.join("\n"), yamlLines, entries, sourceLineOffset: 1 };
+}
+
+function propertyCardInventoryParserResult(parseYaml, yaml) {
+  try {
+    const value = parseYaml(yaml);
+    if (value === null || value === undefined) return { ok: true, value: {} };
+    if (!value || typeof value !== "object" || Array.isArray(value)) return { ok: false, error: new Error("Frontmatter must be a mapping") };
+    return { ok: true, value };
+  } catch (error) {
+    return { ok: false, error };
+  }
+}
+
+function propertyCardInventoryTopLevelDuplicates(entries) {
+  const byKey = new Map();
+  for (const entry of entries) {
+    const lines = byKey.get(entry.key) || [];
+    lines.push(entry.line);
+    byKey.set(entry.key, lines);
+  }
+  return [...byKey.entries()]
+    .filter(([, lines]) => lines.length > 1)
+    .map(([key, lines]) => ({ kind: "duplicate", key, lines }));
+}
+
+function propertyCardInventoryCheckYaml(scan, parseYaml, duplicates) {
+  if (typeof parseYaml !== "function") return { ok: false, pending: true, error: null };
+  const direct = propertyCardInventoryParserResult(parseYaml, scan.yaml);
+  if (direct.ok || !duplicates.length) return { ...direct, pending: false };
+
+  // Some YAML parsers reject duplicate mapping keys. Rename only the later
+  // top-level occurrences and parse again: duplicate rows stay visible, while
+  // unrelated syntax errors still produce the ordinary recovery state.
+  const lines = scan.yamlLines.slice();
+  const seen = new Set();
+  let replacement = 0;
+  for (const entry of scan.entries) {
+    if (!seen.has(entry.key)) { seen.add(entry.key); continue; }
+    let candidate;
+    do { candidate = `__bob_property_duplicate_${replacement++}__`; }
+    while (seen.has(candidate));
+    lines[entry.yamlLine] = `${JSON.stringify(candidate)}${lines[entry.yamlLine].slice(entry.colon)}`;
+    seen.add(candidate);
+  }
+  const afterRenaming = propertyCardInventoryParserResult(parseYaml, lines.join("\n"));
+  return afterRenaming.ok ? { ok: true, duplicateOnly: true } : { ...direct, pending: false };
+}
+
+function propertyCardInventoryManaged(key) {
+  return /_digest$/.test(key) || /_drafted$/.test(key) || /^zorg_/.test(key) || /^generated_from_zorg/.test(key);
+}
+
+function propertyCardInventoryRows(entries, frontmatter, options = {}) {
+  const cacheAvailable = options.cacheAvailable === true;
+  const counts = new Map();
+  for (const entry of entries) counts.set(entry.key, (counts.get(entry.key) || 0) + 1);
+  const seen = new Map();
+  return entries.map((entry) => {
+    const occurrence = (seen.get(entry.key) || 0) + 1;
+    seen.set(entry.key, occurrence);
+    const duplicate = (counts.get(entry.key) || 0) > 1;
+    const hasValue = cacheAvailable && Object.prototype.hasOwnProperty.call(frontmatter, entry.key);
+    const value = hasValue ? frontmatter[entry.key] : undefined;
+    const where = options.where && typeof options.where === "object" ? options.where : {};
+    const nested = options.nested && typeof options.nested === "object" ? options.nested : {};
+    const legacy = options.legacy && typeof options.legacy === "object" ? options.legacy : {};
+    const hasMark = Object.prototype.hasOwnProperty.call(where, entry.key) && where[entry.key] != null && where[entry.key] !== "";
+    const group = hasMark ? "card" : propertyCardInventoryManaged(entry.key) ? "managed" : "loose";
+    const hasNested = Object.prototype.hasOwnProperty.call(nested, entry.key);
+    const hasLegacy = Object.prototype.hasOwnProperty.call(legacy, entry.key);
+    const pendingValue = options.valuePending === true || (cacheAvailable && !hasValue);
+    return {
+      id: `property:${encodeURIComponent(entry.key)}:${occurrence}`,
+      key: entry.key,
+      occurrence,
+      line: entry.line == null ? null : entry.line,
+      group,
+      mark: hasMark ? String(where[entry.key]) : null,
+      nested: hasNested ? nested[entry.key] : null,
+      legacy: hasLegacy ? (legacy[entry.key] === true ? "legacy" : String(legacy[entry.key])) : null,
+      duplicate,
+      value,
+      valuePresent: hasValue,
+      valueState: pendingValue ? "pending" : propertyCardInventoryTypedValue(hasValue, value),
+      valueSource: pendingValue ? "pending" : duplicate && hasValue ? "shared-cache" : hasValue ? "cache" : "absent",
+      duplicateValuesIndependent: !duplicate,
+      sourceScalar: entry.rawScalar || "",
+    };
+  });
+}
+
+function propertyCardInventoryGroups(rows) {
+  const loose = rows.filter((row) => row.group === "loose");
+  const card = rows.filter((row) => row.group === "card");
+  const managed = rows.filter((row) => row.group === "managed");
+  return [
+    { id: "loose", label: "", rows: loose, count: loose.length },
+    { id: "card", label: "On this card", rows: card, count: card.length },
+    { id: "managed", label: `Managed · ${managed.length}`, rows: managed, count: managed.length, initiallyFolded: true },
+  ];
+}
+
+function propertyCardInventoryPending(reason, rows = []) {
+  return { state: "pending", reason, rows, groups: propertyCardInventoryGroups(rows), count: rows.length, issues: [], recovery: null };
+}
+
+function propertyCardInventoryFailure(state, issue, additionalIssues = []) {
+  return {
+    state, reason: issue.kind, rows: [], groups: propertyCardInventoryGroups([]),
+    count: 0, issues: [issue, ...additionalIssues], recovery: PROPERTY_CARD_INVENTORY_RECOVERY,
+  };
+}
+
+function propertyCardInventory(input = {}) {
+  const options = input && typeof input === "object" ? input : {};
+  const frontmatter = options.frontmatter && typeof options.frontmatter === "object" && !Array.isArray(options.frontmatter)
+    ? options.frontmatter : null;
+  const expectedPath = propertyCardInventoryPath(options.path);
+  const sourcePath = propertyCardInventoryPath(options.sourcePath);
+  const cachePath = propertyCardInventoryPath(options.cachePath);
+  if (expectedPath && sourcePath && expectedPath !== sourcePath) return propertyCardInventoryPending("source-path-mismatch");
+  const cacheMatches = !expectedPath || !cachePath || expectedPath === cachePath;
+  const cacheAvailable = Boolean(frontmatter && cacheMatches);
+  const sourceAvailable = typeof options.sourceText === "string";
+
+  if (!sourceAvailable) {
+    if (!cacheAvailable) return propertyCardInventoryPending("source-unavailable");
+    const entries = propertyCardInventoryCacheKeys(frontmatter).map((key) => ({ key, line: null, rawScalar: "" }));
+    const rows = propertyCardInventoryRows(entries, frontmatter, { ...options, cacheAvailable: true });
+    return propertyCardInventoryPending("source-unavailable", rows);
+  }
+
+  const scan = propertyCardScanFrontmatter(options.sourceText);
+  if (scan.state === "unclosed") return propertyCardInventoryFailure("unclosed", { kind: "unclosed-frontmatter" });
+  if (scan.state === "none") {
+    const cachedKeys = cacheAvailable ? propertyCardInventoryCacheKeys(frontmatter) : [];
+    if (cachedKeys.length) return propertyCardInventoryPending("source-cache-mismatch");
+    return { state: "ready", reason: null, rows: [], groups: propertyCardInventoryGroups([]), count: 0, issues: [], recovery: null };
+  }
+
+  const duplicates = propertyCardInventoryTopLevelDuplicates(scan.entries);
+  const parsed = propertyCardInventoryCheckYaml(scan, options.parseYaml, duplicates);
+  if (parsed.pending) return propertyCardInventoryPending("yaml-parser-unavailable");
+  if (!parsed.ok) return propertyCardInventoryFailure(
+    "invalid",
+    { kind: "parse-failure", message: String(parsed.error && parsed.error.message || parsed.error || "Invalid YAML") },
+    duplicates,
+  );
+
+  const rows = propertyCardInventoryRows(scan.entries, frontmatter, {
+    ...options,
+    cacheAvailable,
+    valuePending: !cacheAvailable,
+  });
+  const valuesPending = rows.some((row) => row.valueState === "pending");
+  return {
+    state: cacheAvailable && !valuesPending ? "ready" : "pending",
+    reason: valuesPending
+      ? cachePath && expectedPath && cachePath !== expectedPath ? "cache-path-mismatch" : "cache-incomplete"
+      : cacheAvailable ? null : "cache-unavailable",
+    rows,
+    groups: propertyCardInventoryGroups(rows),
+    count: rows.length,
+    issues: duplicates,
+    recovery: null,
+  };
+}
 // ---- src/240q-plugin-property-card-frontmatter-ownership.js ----
 // Property-card kit: whole-container frontmatter ownership (unwired).
 // propertyCardOwnFrontmatter(scope, { path, view }) adds
@@ -169248,6 +169760,19 @@ try {
       propertyCardTargetState,
       propertyCardGroupMark,
       propertyCardBuildGroupRow,
+    });
+  }
+} catch (_) {}
+// ---- src/374e-exports-property-card-models.js ----
+// Test-facing exports for the pure property-card models.
+try {
+  if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
+    module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
+      propertyCardFormatCreatedStamp,
+      propertyCardParseCreatedDate,
+      propertyCardInventory,
+      propertyCardScanFrontmatter,
+      propertyCardInventoryTypedValue,
     });
   }
 } catch (_) {}

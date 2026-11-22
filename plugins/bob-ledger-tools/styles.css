@@ -8967,6 +8967,16 @@ body.bob-task-tag-marks a.tag.bob-no-reply-pill::before {
   .bob-intention-card button.bob-intention-card-ghost { transition: none; }
 }
 
+/* YAML excursion Done: a compact control at the top left under the pane
+   header, clear of the floating status bar over the pane bottom and of the
+   notices that stack at the top right (a refusal notice must not cover it). */
+button.bob-album-yaml-done {
+  align-self: flex-start;
+  flex: 0 0 auto;
+  width: auto;
+  margin: var(--size-4-2, 8px) var(--size-4-4, 16px) 0;
+}
+
 .bob-album-header {
   --bob-property-card-fallback-accent: var(--bob-area-ink, var(--interactive-accent));
   --bob-album-accent: var(--bob-property-card-accent);

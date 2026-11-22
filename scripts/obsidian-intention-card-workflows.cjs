@@ -601,11 +601,17 @@ async function runWorkflows(ctx) {
   })()`, (value) => value.path === plan.paths.today && value.source === true && value.mode === "source" && value.done && /^intentions:/.test(value.line || ""),
   "YAML Source jump to intentions", 15_000);
   const clickDone = async () => {
-    const point = await client.evaluate(`(() => {
+    // A real click lands on whatever paints at the control's centre, so prove
+    // nothing (the floating status bar, a footer) covers it before pressing.
+    const target = await client.evaluate(`(() => {
       const el = app.workspace.activeLeaf.view.containerEl.querySelector('[data-album-yaml-done]');
-      if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+      if (!el) return null; const r = el.getBoundingClientRect(), x = r.x + r.width / 2, y = r.y + r.height / 2;
+      const hit = document.elementFromPoint(x, y);
+      return { x, y, covered: hit && (hit === el || el.contains(hit)) ? null : (hit ? hit.tagName + "." + String(hit.className || "") : "nothing") };
     })()`);
-    assert.ok(point, "Done control missing");
+    assert.ok(target, "Done control missing");
+    assert.equal(target.covered, null, "Done control is covered at its centre by " + target.covered);
+    const point = { x: target.x, y: target.y };
     await client.call("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", clickCount: 1, ...point });
     await client.call("Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", clickCount: 1, ...point });
   };

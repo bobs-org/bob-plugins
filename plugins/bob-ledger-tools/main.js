@@ -69374,6 +69374,19 @@ function albumYamlExcursionOwnPath(record) {
   return typeof albumHeaderPath === "function" ? albumHeaderPath(record.albumPath || "") : String(record.albumPath || "");
 }
 
+// Done mounts just above the pane's `.view-content`, under the view header
+// (styled to the top left). The pane bottom is where Obsidian's floating status
+// bar (and the walker footer it carries) paints, and notices stack at the top
+// right, so a control in either place can be covered and unclickable.
+function albumYamlDoneAnchor(container) {
+  try {
+    for (const child of Array.from(container?.children || [])) {
+      if (child?.classList?.contains?.("view-content")) return child;
+    }
+  } catch (_) {}
+  return null;
+}
+
 function albumYamlBuildDoneEl(doc, albumPath, kind = "album") {
   if (!doc || typeof doc.createElement !== "function") return null;
   let button = null;
@@ -69384,7 +69397,7 @@ function albumYamlBuildDoneEl(doc, albumPath, kind = "album") {
   }
   if (!button) return null;
   button.setAttribute("type", "button");
-  button.setAttribute("class", "bob-album-yaml-done");
+  button.setAttribute("class", "bob-album-yaml-done mod-cta");
   button.setAttribute("data-album-yaml-done", albumPath || "");
   button.setAttribute(
     "aria-label",
@@ -69528,7 +69541,9 @@ class BobLedgerToolsAlbumYamlExcursionMixin {
       });
     } catch (_) {}
     try {
-      if (container && typeof container.appendChild === "function") container.appendChild(el);
+      const anchor = albumYamlDoneAnchor(container);
+      if (anchor && typeof container.insertBefore === "function") container.insertBefore(el, anchor);
+      else if (container && typeof container.appendChild === "function") container.appendChild(el);
       else if (doc?.body && typeof doc.body.appendChild === "function") { doc.body.appendChild(el); container = doc.body; }
       else return null;
     } catch (_) {

@@ -248,6 +248,42 @@ test("Done button is a small accessible affordance outside the note text", () =>
   assert.equal(bank.getAttribute("data-album-yaml-done"), "bank.md");
 });
 
+test("Done mounts under the pane header, never at the pane bottom", () => {
+  // Obsidian's floating status bar paints over the pane bottom, so Done goes
+  // just above .view-content; a pane without one still gets the control.
+  const doc = {
+    createElement: (tag) => {
+      const attrs = new Map();
+      return {
+        tag, attrs, textContent: "", listeners: [],
+        setAttribute: (k, v) => attrs.set(k, v),
+        getAttribute: (k) => attrs.get(k) ?? null,
+        addEventListener(type, fn) { this.listeners.push([type, fn]); },
+      };
+    },
+  };
+  const child = (cls) => ({ classList: { contains: (name) => name === cls } });
+  const pane = (children) => {
+    const container = {
+      ownerDocument: doc, children: children.slice(),
+      insertBefore(el, anchor) { this.children.splice(this.children.indexOf(anchor), 0, el); },
+      appendChild(el) { this.children.push(el); },
+    };
+    return container;
+  };
+  const plugin = Object.create(LedgerToolsPlugin.prototype);
+  const header = child("view-header");
+  const content = child("view-content");
+  const container = pane([header, content]);
+  const el = plugin.albumYamlExcursionMount({ view: { containerEl: container } }, { albumPath: "eat.md", kind: "intentions" });
+  assert.ok(el);
+  assert.deepEqual(container.children, [header, el, content]);
+  assert.match(el.getAttribute("class"), /\bbob-album-yaml-done\b/);
+  const bare = pane([header]);
+  const fallback = plugin.albumYamlExcursionMount({ view: { containerEl: bare } }, { albumPath: "eat.md", kind: "album" });
+  assert.deepEqual(bare.children, [header, fallback]);
+});
+
 test("two panes keep separate excursions: decisions are per-leaf records", () => {
   // The excursion record carries its own album path, view state, selected
   // key, and session identity, so Pane A approving never clears Pane B.

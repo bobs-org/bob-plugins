@@ -235,27 +235,37 @@ test("releaseScope drops detached mounts and keeps foreign paths", () => {
   helpers.propertyCardFootResetAll();
 });
 
-test("toggleProperties acts only on live path-matching mounts", () => {
+test("toggleProperties acts only on a live matching mount inside the supplied view", () => {
   helpers.propertyCardFootResetAll();
   const doc = makeDoc();
-  const view = { file: { path: "eat/a.md" } };
+  const scopeA = doc.createElement("div");
+  const scopeB = doc.createElement("div");
+  doc.body.appendChild(scopeA);
+  doc.body.appendChild(scopeB);
+  const view = { file: { path: "eat/a.md" }, containerEl: scopeA };
+  const otherPane = { file: { path: "eat/a.md" }, containerEl: scopeB };
   assert.equal(helpers.propertyCardToggleProperties(view), false, "no mount does not act");
   assert.equal(helpers.propertyCardToggleProperties(null), false);
-  const host = doc.createElement("div");
-  doc.body.appendChild(host);
   const foot = doc.createElement("div");
-  host.appendChild(foot);
+  scopeB.appendChild(foot);
   helpers.propertyCardFootRegisterMount(foot, "eat/a.md");
+  assert.equal(helpers.propertyCardCanToggleProperties(view), false, "same-path mount in another pane is not local");
+  assert.equal(helpers.propertyCardToggleProperties(view), false);
+  assert.equal(helpers.propertyCardToggleProperties(otherPane), true);
+  assert.equal(helpers.propertyCardFootIsOpen("eat/a.md"), true, "both panes share per-path state");
+  const localFoot = doc.createElement("div");
+  scopeA.appendChild(localFoot);
+  helpers.propertyCardFootRegisterMount(localFoot, "eat/a.md");
   assert.equal(helpers.propertyCardToggleProperties(view), true);
-  assert.equal(helpers.propertyCardFootIsOpen("eat/a.md"), true, "two panes share per-path state");
-  foot.remove();
+  assert.equal(helpers.propertyCardFootIsOpen("eat/a.md"), false, "local toggle updates the shared path state");
+  localFoot.remove();
   assert.equal(helpers.propertyCardToggleProperties(view), false, "a detached mount never acts");
   // A resolver supplies Live Preview paths that views do not carry directly.
   const live = doc.createElement("div");
   doc.body.appendChild(live);
   helpers.propertyCardFootRegisterMount(live, "eat/b.md");
   const release = helpers.propertyCardFootRegisterPathResolver((candidate) => candidate?.livePath || "");
-  assert.equal(helpers.propertyCardToggleProperties({ livePath: "eat/b.md" }), true);
+  assert.equal(helpers.propertyCardToggleProperties({ livePath: "eat/b.md", containerEl: doc.body }), true);
   assert.equal(helpers.propertyCardFootIsOpen("eat/b.md"), true);
   release();
   helpers.propertyCardFootResetAll();

@@ -251,6 +251,22 @@ function propertyCardFootViewContains(view, node) {
   return false;
 }
 
+// The supplied view must itself contain a live foot for its current path.
+// Another pane showing the same note is not enough to make a local gesture
+// actionable, even though its open state is shared once either pane toggles.
+function propertyCardCanToggleProperties(view) {
+  try {
+    if (!view) return false;
+    const path = propertyCardFootViewPath(view);
+    if (!path) return false;
+    return propertyCardFootLiveMountsFor(path).some((entry) =>
+      propertyCardFootViewContains(view, entry.node),
+    );
+  } catch (_) {
+    return false;
+  }
+}
+
 // Toggle the foot of the card mounted in the supplied view. Resolves the
 // view's current path, then requires a connected mount carrying that path:
 // mounts removed on replacement, path change, or failed paint are
@@ -259,10 +275,8 @@ function propertyCardFootViewContains(view, node) {
 // (including a second pane) follows one toggle. Returns whether it acted.
 function propertyCardToggleProperties(view) {
   try {
-    if (!view) return false;
+    if (!propertyCardCanToggleProperties(view)) return false;
     const path = propertyCardFootViewPath(view);
-    if (!path) return false;
-    if (!propertyCardFootLiveMountsFor(path).length) return false;
     propertyCardFootToggle(path);
     return true;
   } catch (_) {

@@ -82,9 +82,9 @@ function propertyCardBuiltinMatch(kind, { path, frontmatter } = {}) {
   return false;
 }
 
-function schemaDoubleEqualsGate(input) {
+function propertyCardSecondKeyCommonGate(input) {
   const snap = (input && input.vim) || { readable: false };
-  if (!input || input.key !== "=") return { act: false, reason: "not-equals" };
+  if (!input || typeof input.key !== "string") return { act: false, reason: "not-second-key" };
   if (input.ctrlKey || input.altKey || input.metaKey) {
     return { act: false, reason: "modified" };
   }
@@ -102,6 +102,31 @@ function schemaDoubleEqualsGate(input) {
   }
   if (snap.countPending) return { act: false, reason: "counted" };
   if (snap.registerPending) return { act: false, reason: "register" };
+  return { act: true, reason: "clean-pending-equals" };
+}
+
+function propertyCardSecondKeyGate(input) {
+  const common = propertyCardSecondKeyCommonGate(input);
+  if (!common.act) return common;
+  const arm = input && input.arm;
+  if (!arm || typeof arm.run !== "function" || typeof arm.canAct !== "function") {
+    return { act: false, reason: "unregistered-arm" };
+  }
+  if (!input.canHandleKey) return { act: false, reason: "no-handle-key" };
+  try {
+    if (arm.canAct(input.context) !== true) return { act: false, reason: "arm-not-actionable" };
+  } catch (_) {
+    return { act: false, reason: "arm-not-actionable" };
+  }
+  return { act: true, reason: arm.reason || "second-key-arm" };
+}
+
+// Compatibility helper retained for existing == callers and tests. Runtime
+// key dispatch uses the arm table below, with this arm's same species gate.
+function schemaDoubleEqualsGate(input) {
+  if (!input || input.key !== "=") return { act: false, reason: "not-equals" };
+  const common = propertyCardSecondKeyCommonGate(input);
+  if (!common.act) return common;
   const allowed = Array.isArray(input.allowedKinds) && input.allowedKinds.length > 0
     ? input.allowedKinds
     : propertyCardGateKinds();
@@ -294,6 +319,30 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
     return true;
   }
 
+  propertyCardSecondKeyArmRegistry() {
+    if (!(this.propertyCardSecondKeyArms instanceof Map)) {
+      this.propertyCardSecondKeyArms = new Map();
+    }
+    return this.propertyCardSecondKeyArms;
+  }
+
+  // The '=' and '-' arms are owned by this plugin. Editor Core may register
+  // the future '+' arm through this instance API; no '+' arm ships here.
+  registerPropertyCardSecondKeyArm(arm) {
+    if (!arm || arm.key !== "+" || typeof arm.canAct !== "function" || typeof arm.run !== "function") {
+      return false;
+    }
+    const registry = this.propertyCardSecondKeyArmRegistry();
+    if (registry.has("+")) return false;
+    registry.set("+", { key: "+", reason: arm.reason || "property-editor", canAct: arm.canAct, run: arm.run });
+    return true;
+  }
+
+  unregisterPropertyCardSecondKeyArm(key) {
+    if (key !== "+") return false;
+    return this.propertyCardSecondKeyArmRegistry().delete("+");
+  }
+
   ensurePropertyCardBuiltins() {
     const registry = this.propertyCardRegistry();
     for (const kind of PROPERTY_CARD_BUILTIN_KINDS) {
@@ -327,6 +376,22 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
     this.schemaDoubleEqualsActive = true;
     this.ensurePropertyCardBuiltins();
     this.handledSchemaDoubleEqualsEvents = new WeakSet();
+    if (this.propertyCardToggleCommandRegistered !== true) {
+      try {
+        this.addCommand({
+          id: "toggle-card-properties",
+          name: "Toggle card properties",
+          callback: () => {
+            if (this.schemaDoubleEqualsActive === false) return false;
+            const view = schemaDoubleEqualsActiveView(this);
+            return typeof propertyCardToggleProperties === "function"
+              ? propertyCardToggleProperties(view)
+              : false;
+          },
+        });
+        this.propertyCardToggleCommandRegistered = true;
+      } catch (_) {}
+    }
     const keydownHandler = (event) => this.handleSchemaDoubleEqualsKeydown(event);
     const windowObject = typeof window === "undefined" ? null : window;
     const documentObject = typeof document === "undefined" ? null : document;
@@ -349,6 +414,8 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
   teardownSchemaDoubleEquals() {
     this.schemaDoubleEqualsActive = false;
     this.propertyCardRegistryEntries = [];
+    this.propertyCardSecondKeyArms?.clear?.();
+    this.handledSchemaDoubleEqualsEvents = null;
   }
 
   handleSchemaDoubleEqualsKeydown(event) {
@@ -359,6 +426,8 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
     ) {
       return;
     }
+    const key = event && event.key;
+    if (key !== "=" && key !== "-" && key !== "+") return;
     const view = schemaDoubleEqualsActiveView(this);
     const cm = schemaDoubleEqualsResolveCm(view);
     let frontmatter = {};
@@ -374,26 +443,41 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
         frontmatter = cache.frontmatter;
       }
     } catch (_) {}
-    // The registry is the sole dispatch authority. Built-ins are seeded at
-    // setup; a runtime miss never mutates the registry or consumes Vim input.
-    // An explicit new setup restores built-ins as before.
+    // The species registry is the sole authority for '='. The other built-in
+    // arm checks the live mount in this view; '+' is future-registered only.
+    // A runtime miss never mutates a registry or consumes Vim input.
     let entry = null;
-    try {
-      if (typeof this.resolvePropertyCard === "function") {
-        entry = this.resolvePropertyCard({ path: filePath, frontmatter });
+    if (key === "=") {
+      try {
+        if (typeof this.resolvePropertyCard === "function") {
+          entry = this.resolvePropertyCard({ path: filePath, frontmatter });
+        }
+      } catch (_) {
+        entry = null;
       }
-    } catch (_) {
-      entry = null;
     }
-    const target = entry ? entry.kind : null;
-    let allowedKinds = null;
-    try {
-      allowedKinds = typeof this.propertyCardKinds === "function" ? this.propertyCardKinds() : null;
-    } catch (_) {
-      allowedKinds = null;
+    let arm = null;
+    const context = { plugin: this, view, cm, path: filePath, frontmatter, entry, event };
+    if (key === "=") {
+      arm = {
+        key,
+        reason: "schema-key",
+        canAct: () => Boolean(entry),
+        run: () => { if (entry) void entry.open({ path: filePath, frontmatter }); },
+      };
+    } else if (key === "-") {
+      arm = {
+        key,
+        reason: "properties-toggle",
+        canAct: () => typeof propertyCardCanToggleProperties === "function"
+          && propertyCardCanToggleProperties(view),
+        run: () => { if (typeof propertyCardToggleProperties === "function") propertyCardToggleProperties(view); },
+      };
+    } else {
+      arm = this.propertyCardSecondKeyArmRegistry().get("+") || null;
     }
-    const gate = schemaDoubleEqualsGate({
-      key: event && event.key,
+    const gate = propertyCardSecondKeyGate({
+      key,
       ctrlKey: Boolean(event && event.ctrlKey),
       altKey: Boolean(event && event.altKey),
       metaKey: Boolean(event && event.metaKey),
@@ -404,9 +488,12 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
       inEditor: schemaDoubleEqualsEventInEditor(event, view),
       livePreview: schemaDoubleEqualsLivePreview(view, cm),
       vim: schemaDoubleEqualsVimSnapshot(cm),
-      target,
-      allowedKinds,
       canHandleKey: schemaDoubleEqualsCanHandleKey(),
+      arm: arm && {
+        ...arm,
+        canAct: () => arm.canAct(context),
+      },
+      context,
     });
     if (!gate.act) return;
     if (this.handledSchemaDoubleEqualsEvents) {
@@ -423,9 +510,7 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
       window.CodeMirrorAdapter.Vim.handleKey(cm, "<Esc>", "mapping");
     } catch (_) {}
     try {
-      if (entry) {
-        void entry.open({ path: filePath, frontmatter });
-      }
+      arm.run(context);
     } catch (_) {}
   }
 }

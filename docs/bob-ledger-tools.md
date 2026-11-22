@@ -59,6 +59,7 @@ Album cards and sync: [Album cards](albums.md); record cards and editor:
 | Toggle bank marks | `toggle-bank-marks` | — |
 | Toggle blocked-reason marks | `toggle-block-marks` | — |
 | Toggle calendar event painting | `toggle-calendar-event-painting` | — |
+| Toggle card properties | `toggle-card-properties` | — |
 | Toggle dependency chips | `toggle-dependency-chips` | — |
 | Toggle inherited task types | `toggle-inherited-task-types` | — |
 | Toggle mail link marks | `toggle-mail-link-marks` | — |
@@ -72,6 +73,17 @@ Album cards and sync: [Album cards](albums.md); record cards and editor:
 | Toggle task type marks | `toggle-task-theme-marks` | — |
 | Toggle unblocked hand-off glyph | `toggle-unblocked-glyph` | — |
 <!-- END GENERATED: commands -->
+
+## Property-card properties drawer
+
+Album, record, day and period, and bank setup cards show a **Properties** foot
+with a read-only drawer of the note's frontmatter. Click the disclosure in
+Reading or Live Preview, type `=-` in Live Preview Vim normal mode, or run
+**Toggle card properties** from the palette or Command Mode. The command uses
+the active view and acts only when its card foot is mounted there. Drawer state
+is shared by panes on the same note for the plugin session; opening it does not
+write the note or refresh a report. The existing `==` card-editor gesture is
+unchanged.
 
 ## Bank cards and the bank badge
 

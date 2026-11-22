@@ -121,6 +121,23 @@ hosts are needed. Core unit entry points are
 `scripts/test-ledger-tools-property-card-ownership.cjs`, and
 `scripts/test-ledger-tools-property-card-host.cjs`.
 
+The same capture-phase gate dispatches the property-card second-key arms.
+`=` keeps the species registry route; `-` calls
+`propertyCardToggleProperties(view)` only when the current view contains a live
+foot for its current note. Extensions may register the future `+` arm on the
+Bob Ledger Tools plugin instance with
+`registerPropertyCardSecondKeyArm({ key: "+", canAct(context), run(context) })`;
+the method returns `false` for invalid or duplicate registrations, and
+`unregisterPropertyCardSecondKeyArm("+")` removes it. The context carries
+`plugin`, `view`, `cm`, `path`, `frontmatter`, `entry`, and `event`. The gate
+shares the clean pending-`indentAuto` checks across arms and falls through when
+an arm is absent or cannot act.
+
+The foot kit's editor hook is `propertyCardFootSetEditorHook(handler)`. A
+registered handler receives `(path, { key, mode })` from the drawer's
+`onOpenEditor` action. It remains unset until the property editor registers;
+this API contract does not make `=+` available by itself.
+
 ### Title block kit
 
 `propertyCardSpecies(kind)` names seven species: album, record, day, week,

@@ -59,6 +59,7 @@ const CM_SHEET_SURFACE_ROWS = [
   { plugin: "bob-navigation-hotkeys", id: "open-dash-tasks", title: "Dash tasks", section: "tasks" },
   { plugin: "bob-navigation-hotkeys", id: "open-relation-labels-manager", title: "Relation labels manager", section: "tasks" },
   { plugin: "bob-ledger-tools", id: "open-reading-board", title: "Reading Board", section: "vault" },
+  { plugin: "bob-ledger-tools", id: "toggle-card-properties", title: "Toggle card properties", section: "vault" },
   { plugin: "bob-ledger-tools", id: "edit-album-schema", title: "Edit album schema", section: "vault" },
   { plugin: "bob-ledger-tools", id: "edit-bank-setup", title: "Edit bank setup", section: "vault" },
   { plugin: "bob-ledger-tools", id: "edit-record", title: "Edit record", section: "vault" },

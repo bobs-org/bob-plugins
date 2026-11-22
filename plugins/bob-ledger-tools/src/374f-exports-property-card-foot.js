@@ -31,6 +31,7 @@ try {
       propertyCardFootRegisterPathResolver,
       propertyCardFootViewPath,
       propertyCardFootViewContains,
+      propertyCardCanToggleProperties,
       propertyCardToggleProperties,
       propertyCardFootAdapterPath,
       propertyCardFootAdapterPendingInventory,

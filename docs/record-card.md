@@ -15,6 +15,13 @@ key. Source mode, embeds, hover popovers, canvas, and mobile keep native
 rendering. The **Record Card editor** is the keyboard-first editor for those
 values.
 
+Open or close the drawer with its **Properties** disclosure, `=-` after Vim's
+pending `=` operator in Live Preview, the **Toggle card properties** palette
+command, or the same Vault row in Command Mode. The command acts on the active
+view and only when this card's foot is mounted there. Drawer state is shared by
+panes of the same note for the plugin session; reading properties never writes
+the note. `==` remains the Record Card editor gesture.
+
 Title ownership is independent of row hiding. Whenever the card owns the
 title, the inline title and a matching first-body H1 or walk line hide; a
 Live Preview cursor on that line reveals the raw Markdown while the card and

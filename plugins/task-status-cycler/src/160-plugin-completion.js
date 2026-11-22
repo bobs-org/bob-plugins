@@ -26,7 +26,6 @@ class TaskStatusCyclerCompletionMixin {
       return null;
     }
   }
-
   // True when the cursor line is a Pomodoro Task Link line per nav's
   // `api.taskLinkLane.matches`, the single definition both plugins share.
   // Never throws; false when the api is missing or the editor has no cursor.
@@ -145,7 +144,7 @@ class TaskStatusCyclerCompletionMixin {
       this.cyclerBankHandleOpenDone(editor, view, openDoneBank);
       return true;
     }
-
+    if (this.cyclerReqGuardRefuse(editor, "ctrl-enter", checking)) return true;
     const taskStatus = this.getActiveTaskStatus(editor);
     if (!this.isOpenDoneTaskStatus(taskStatus)) {
       return false;
@@ -199,7 +198,7 @@ class TaskStatusCyclerCompletionMixin {
       }
       return true;
     }
-
+    if (this.cyclerReqGuardRefuse(editor, "lane", checking)) return true;
     const obsidianTaskToggle = this.getActiveObsidianTaskToggle(editor);
     if (!obsidianTaskToggle) {
       return false;
@@ -280,7 +279,6 @@ class TaskStatusCyclerCompletionMixin {
       return Object.freeze({ ok: false, reason: "not_completable", lineText: line });
     }
   }
-
   toggleActiveCheckboxOpenDone(editor, taskStatus = this.getActiveTaskStatus(editor)) {
     if (!this.isOpenDoneTaskStatus(taskStatus)) {
       return false;
@@ -304,6 +302,7 @@ class TaskStatusCyclerCompletionMixin {
     if (taskStatus && this.cyclerBankInfoAtCursor(editor)) {
       return { ok: false, reason: "bank-row" };
     }
+    if (taskStatus && this.cyclerReqInfoAtCursor(editor)) return { ok: false, reason: "requirement" };
     if (
       !taskStatus ||
       !this.lineMatchesTasksGlobalFilter(taskStatus.lineText)
@@ -452,6 +451,7 @@ class TaskStatusCyclerCompletionMixin {
     if (propagateBank) {
       return this.cyclerBankLocalFlip(editor, propagateBank);
     }
+    if (this.cyclerReqInfoAtCursor(editor)) return false;
     const cursor =
       typeof editor.getCursor === "function" ? editor.getCursor() : null;
     const isFenced =
@@ -828,7 +828,7 @@ class TaskStatusCyclerCompletionMixin {
     if (this.cyclerBankTransclusionIsBank(resolvedTarget)) {
       return false;
     }
-
+    if (this.cyclerReqGuardRefuseTarget(resolvedTarget.sourceText, resolvedTarget.line, "transclusion", false)) return false;
     const sourceSymbol = resolvedTarget.taskStatus.symbol;
     if (
       sourceSymbol === BLOCKED_TASK_STATUS_SYMBOL &&

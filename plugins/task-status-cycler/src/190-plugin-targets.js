@@ -263,6 +263,13 @@ class TaskStatusCyclerTargetsMixin {
     if (this.cyclerBankTransclusionIsBank(resolvedTarget)) {
       return false;
     }
+    if (resolvedTarget && this.cyclerReqTargetIsReq(resolvedTarget.sourceText, resolvedTarget.line)) {
+      try {
+        const info = this.cyclerReqInfoForText(resolvedTarget.sourceText, resolvedTarget.line);
+        new Notice(info ? cyclerReqRefuse(info, "transclusion") : CYCLER_REQ_LANE_COPY);
+      } catch (error) {}
+      return false;
+    }
     // Write through the editor only when the resolved task lives in the active
     // note; all other source notes are written through the vault.
     if (this.fileMatchesPath(resolvedTarget.file, context && context.activePath)) {

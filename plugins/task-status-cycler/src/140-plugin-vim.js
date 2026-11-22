@@ -139,6 +139,9 @@ class TaskStatusCyclerVimMixin {
       this.cyclerBankHandleOpenDone(view.editor, view, vimBank);
       return;
     }
+    if (this.cyclerReqGuardRefuse(view.editor, "ctrl-enter", false)) {
+      return;
+    }
 
     if (this.claimReviewWalkCtrlEnter(view.editor)) {
       return;
@@ -339,6 +342,9 @@ class TaskStatusCyclerVimMixin {
 
     if (this.cyclerBankInfoAtCursor(view.editor, (view.file && view.file.path) || null)) {
       new Notice(CYCLER_BANK_ROW_NOTICE);
+      return;
+    }
+    if (this.cyclerReqGuardRefuse(view.editor, "lane", false)) {
       return;
     }
 

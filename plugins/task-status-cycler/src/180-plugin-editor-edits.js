@@ -446,7 +446,7 @@ class TaskStatusCyclerEditorEditsMixin {
       );
       return true;
     }
-
+    if (this.cyclerReqRefuseLine(editor, taskStatus.line)) return false;
     if (this.applyTasksCommandAndMaybeStamp(editor, taskStatus, nextSymbol)) {
       return true;
     }
@@ -493,7 +493,7 @@ class TaskStatusCyclerEditorEditsMixin {
       );
       return true;
     }
-
+    if (this.cyclerReqRefuseLine(editor, taskStatus.line)) return false;
     if (this.lineMatchesTasksGlobalFilter(taskStatus.lineText)) {
       return this.setActiveCheckboxStatusLocalWithTaskMetadata(
         editor,
@@ -594,7 +594,7 @@ class TaskStatusCyclerEditorEditsMixin {
     if (this.cyclerBankInfoAtCursor(editor)) {
       return { mode: "refuse", message: CYCLER_BANK_ROW_NOTICE };
     }
-
+    if (this.cyclerReqInfoAtCursor(editor)) return { mode: "refuse", message: CYCLER_REQ_LANE_COPY };
     const lines = this.getEditorLineArray(editor);
     return getObsidianTaskToggleRangeDocumentPlan(
       lines,

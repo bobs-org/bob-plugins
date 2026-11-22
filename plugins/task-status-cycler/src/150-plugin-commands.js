@@ -17,6 +17,13 @@ class TaskStatusCyclerCommandsMixin {
       }
       return true;
     }
+    const cycleReqInfo = this.cyclerReqInfoAtCursor(editor);
+    if (cycleReqInfo) {
+      if (direction < 0) {
+        return this.cyclerReqHandleDrop(checking, editor, view, cycleReqInfo);
+      }
+      return this.cyclerReqHandleRestore(checking, editor, view, cycleReqInfo);
+    }
 
     const taskStatus = this.getActiveTaskStatus(editor);
     if (taskStatus) {
@@ -559,6 +566,15 @@ class TaskStatusCyclerCommandsMixin {
       lastLine,
     );
     const activePath = activeFile && activeFile.path;
+    try {
+      const rangeText = Array.isArray(lines) ? lines.join("\n") : String(editor.getValue() || "");
+      for (let line = startLine; line <= endLine; line += 1) {
+        if (cyclerReqInfoForText(rangeText, line)) {
+          new Notice(CYCLER_REQ_LANE_COPY);
+          return false;
+        }
+      }
+    } catch (error) {}
     const context = activePath
       ? {
           editor,

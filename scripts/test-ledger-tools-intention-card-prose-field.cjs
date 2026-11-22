@@ -545,3 +545,34 @@ test("blurOnRemoval off: repaints keep the band open as well", async () => {
     blurOnRemoval = true;
   }
 });
+
+test("S14 NAME accept resolving after keyup: one Enter saves the reflection stage", async () => {
+  const taskLinks = createTaskLinksApi();
+  const { modal, vault, calls: bob } = setup({ intentions: ["One"] }, realProseApi([], taskLinks));
+  await flush();
+  try {
+    modal.intentionOnKeyDown(key("i", null));
+    type(modal, "Read ((reply");
+    const handle = modal.intentionProse.handle;
+    assert.equal(handle.isTaskOpen(), true);
+    const toName = key("Enter", input(modal));
+    modal.intentionOnKeyDown(toName);
+    fire(input(modal), "keyup", { key: "Enter" });
+    await flush();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(handle.isNaming(), true);
+    const commit = key("Enter", input(modal));
+    modal.intentionOnKeyDown(commit);
+    fire(input(modal), "keyup", { key: "Enter" });
+    await flush();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(handle.isTaskOpen(), false, "NAME commit closes the band");
+    assert.match(input(modal).value, /\[\[2026\/2026-11-21#\^reply-dana\]\]/);
+    const save = key("Enter", input(modal));
+    modal.intentionOnKeyDown(save);
+    fire(input(modal), "keyup", { key: "Enter" });
+    await flush();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(applies(bob).length, 1, "a single Enter saves without a retry press");
+  } finally { modal.close(); }
+});

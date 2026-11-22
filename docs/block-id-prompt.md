@@ -185,7 +185,7 @@ Every task-bearing prompt declares its **subjects**, the task or tasks it is
 about to write: the Unlink and opened-task Work summary, Move to Next, Release
 task, Keep and decay Stay reasons, the successor cancel row, and every Task Card
 reason stage. Those rows show `this prompt` and never insert or get named; the
-Notebook Summary declares none. Naming a different task in a subject's own note
+Notebook Summary declares none. In the successor picker's cancel reason, ID-less successor rows are also shown disabled, because naming one would make its own verdict stale. Naming a different task in a subject's own note
 while a prompt is open never makes the host's write stale: naming is one in-place
 line edit, and a host adopts the live note when only lines it does not write
 changed. An edit to the subject's own line still refuses.

@@ -531,7 +531,7 @@ function createProseTaskMode(ctx) {
       render();
       return true;
     }
-    if (!fieldIsByteIdentical()) {
+    if (disposed || !open || stage !== "name" || !fieldIsByteIdentical()) {
       notice(`Added ^${outcome.id} to ${outcome.notePath}`);
       close(false);
       return true;
@@ -546,9 +546,6 @@ function createProseTaskMode(ctx) {
     } catch (_error) {}
     notice(`Added ^${outcome.id} to ${outcome.notePath}`);
     announce(`Linked ${String((nameRow && (nameRow.displayText || nameRow.primary)) || "task")}`);
-    if (typeof options.armSwallow === "function") {
-      try { options.armSwallow(); } catch (_error) {}
-    }
     close(false);
     return true;
   };
@@ -622,6 +619,7 @@ function createProseTaskMode(ctx) {
     const key = String(event.key || "");
     const lower = key.toLowerCase();
     if (stage === "name") {
+      if (namePending) return true;
       if ((event.ctrlKey || event.metaKey || event.altKey) && lower !== "enter" && lower !== "backspace" && lower !== "a" && lower !== "[" && lower !== "m") return false;
       if (lower === "escape" || (event.ctrlKey && !event.altKey && !event.metaKey && lower === "[")) return exitName(true);
       if (key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
@@ -682,6 +680,7 @@ function createProseTaskMode(ctx) {
       }
       if (lower === "enter") {
         if (event.repeat) return true;
+        try { if (typeof options.armSwallow === "function") options.armSwallow(); } catch (_error) {}
         void commitName();
         return true;
       }
@@ -717,6 +716,7 @@ function createProseTaskMode(ctx) {
   const backOut = () => {
     if (!open) return false;
     if (stage === "name") {
+      if (namePending) return true;
       exitName(true);
       return true;
     }

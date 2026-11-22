@@ -13,14 +13,39 @@ const SUCCESSOR_VERDICT_FOOTER_PULL_IN = [{ keys: ["↵"], label: "pull in" }];
 const SUCCESSOR_VERDICT_FOOTER_NONE = [{ keys: ["Esc"], label: "none" }];
 
 // The row being cancelled is the inline reason's subject (T10/T11): `((` shows
-// it disabled. Successor task context carries a 1-based line; the guard's
-// lines are 0-based. A row without task context has no stable identity, so it
-// declares no subject rather than guessing one.
-function successorReasonSubjects(row) {
+// it disabled, plus every ID-less sibling row (T11): naming one would change
+// its line digest and refuse its own staged verdict with changed_identity.
+// Successor task context carries a 1-based line; the guard's lines are
+// 0-based. A row without task context has no stable identity, so it declares
+// no subject rather than guessing one. Identified siblings stay linkable.
+function successorReasonSubjects(row, modal) {
   try {
+    const entries = [];
     const task = row && row.task;
-    if (!task || typeof task.path !== "string" || !Number.isInteger(task.line) || task.line < 1) return [];
-    return proseTaskSubjects([{ path: task.path, line: task.line - 1, rawLine: task.preimage }]);
+    if (task && typeof task.path === "string" && Number.isInteger(task.line) && task.line >= 1) {
+      entries.push({ path: task.path, line: task.line - 1, rawLine: task.preimage });
+    }
+    try {
+      const groups = modal && modal.model && Array.isArray(modal.model.groups) ? modal.model.groups : null;
+      if (groups) {
+        for (const group of groups) {
+          const rows = group && group.rows;
+          if (!Array.isArray(rows)) continue;
+          for (const sibling of rows) {
+            if (!sibling || sibling === row) continue;
+            const stask = sibling && sibling.task;
+            if (!stask || typeof stask.path !== "string" || !Number.isInteger(stask.line) || stask.line < 1) continue;
+            const raw = typeof stask.preimage === "string" ? stask.preimage : (typeof stask.text === "string" ? stask.text : null);
+            if (typeof raw !== "string") continue;
+            let trailing = null;
+            try { trailing = getTrailingBlockId(raw); } catch (_error) { trailing = null; }
+            if (trailing) continue;
+            entries.push({ path: stask.path, line: stask.line - 1, rawLine: raw });
+          }
+        }
+      }
+    } catch (_error) {}
+    return proseTaskSubjects(entries);
   } catch (_error) {
     return [];
   }
@@ -422,7 +447,7 @@ function successorRenderReasonEditor(modal, container, row, draft) {
           density: "dense",
           ownKeys: true,
           links: true,
-          subjects: () => successorReasonSubjects(row),
+          subjects: () => successorReasonSubjects(row, modal),
           sourcePath: () => (row && row.notePath ? String(row.notePath) : null),
         });
       }

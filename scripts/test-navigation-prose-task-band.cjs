@@ -495,3 +495,132 @@ test("performance: rank 5000 snapshot rows stays interactive with no vault reads
   session.close();
   handle.detach();
 });
+
+test("NAME accept arms swallow synchronously: write resolving after keyup leaves next Enter free", async () => {
+  const rows = [idlessRow({})];
+  let resolveName = null;
+  let calls = 0;
+  const { input, handle } = attachTasks(rows, {
+    name: (row, id) => { calls += 1; return new Promise((resolve) => { resolveName = () => resolve({ ok: true, link: `[[${row.linkTarget || "2026/2026-11-21"}#^${id}]]`, notePath: row.notePath, id }); }); },
+  }, { value: "Note ((rep", caret: 10 });
+  typeInput(input, "Note ((rep", 10);
+  assert.equal(handle.isTaskOpen(), true);
+  // List Enter -> NAME.
+  assert.equal(handle.handleKeydown({ key: "Enter", repeat: false }), true);
+  input.fire("keyup", { key: "Enter" });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(handle.isNaming(), true);
+  // NAME Enter starts the write (arms swallow synchronously).
+  assert.equal(handle.handleKeydown({ key: "Enter", repeat: false }), true);
+  // Keyup arrives while the vault write is still in flight.
+  input.fire("keyup", { key: "Enter" });
+  assert.equal(resolveName !== null, true);
+  resolveName();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(calls, 1);
+  assert.match(input.value, /\[\[.*#\^reply-dana\]\]/);
+  assert.equal(handle.isTaskOpen(), false);
+  const next = handle.handleKeydown({ key: "Enter", repeat: false });
+  assert.equal(next, false, "the next fresh Enter reaches the host");
+  input.fire("keyup", { key: "Enter" });
+  handle.detach();
+});
+
+test("NAME write resolving while Enter is held swallows the held key, then frees Enter", async () => {
+  const rows = [idlessRow({})];
+  let resolveName = null;
+  let calls = 0;
+  const { input, handle } = attachTasks(rows, {
+    name: (row, id) => { calls += 1; return new Promise((resolve) => { resolveName = () => resolve({ ok: true, link: `[[${row.linkTarget || "2026/2026-11-21"}#^${id}]]`, notePath: row.notePath, id }); }); },
+  }, { value: "Note ((rep", caret: 10 });
+  typeInput(input, "Note ((rep", 10);
+  assert.equal(handle.handleKeydown({ key: "Enter", repeat: false }), true);
+  input.fire("keyup", { key: "Enter" });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(handle.isNaming(), true);
+  assert.equal(handle.handleKeydown({ key: "Enter", repeat: false }), true);
+  // A repeat/second keydown before the keyup is swallowed and never renames.
+  assert.equal(handle.handleKeydown({ key: "Enter", repeat: true }), true);
+  assert.equal(handle.handleKeydown({ key: "Enter", repeat: false }), true);
+  assert.equal(calls, 1);
+  input.fire("keyup", { key: "Enter" });
+  resolveName();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(handle.isTaskOpen(), false);
+  assert.equal(handle.handleKeydown({ key: "Enter", repeat: false }), false);
+  input.fire("keyup", { key: "Enter" });
+  handle.detach();
+});
+
+test("a second Enter during a pending NAME write never starts a second session.name", async () => {
+  const rows = [idlessRow({})];
+  let resolveName = null;
+  let calls = 0;
+  const { input, handle } = attachTasks(rows, {
+    name: () => { calls += 1; return new Promise((resolve) => { resolveName = () => resolve({ ok: true, link: "[[x#^y]]", notePath: "x.md", id: "y" }); }); },
+  }, { value: "Note ((rep", caret: 10 });
+  typeInput(input, "Note ((rep", 10);
+  assert.equal(handle.handleKeydown({ key: "Enter", repeat: false }), true);
+  input.fire("keyup", { key: "Enter" });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(handle.handleKeydown({ key: "Enter", repeat: false }), true);
+  assert.equal(calls, 1, "the NAME Enter starts exactly one session.name");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(calls, 1);
+  assert.equal(handle.handleKeydown({ key: "Enter", repeat: false }), true);
+  assert.equal(calls, 1, "the second Enter is swallowed while namePending");
+  input.fire("keyup", { key: "Enter" });
+  resolveName();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(calls, 1);
+  handle.detach();
+});
+
+test("Esc and Ctrl+[ during a pending NAME write leave NAME until the write settles", async () => {
+  const rows = [idlessRow({})];
+  let resolveName = null;
+  const { input, handle } = attachTasks(rows, {
+    name: (row, id) => new Promise((resolve) => { resolveName = () => resolve({ ok: true, link: `[[${row.linkTarget || "x"}#^${id}]]`, notePath: row.notePath, id }); }),
+  }, { value: "Note ((rep", caret: 10 });
+  typeInput(input, "Note ((rep", 10);
+  assert.equal(handle.handleKeydown({ key: "Enter", repeat: false }), true);
+  input.fire("keyup", { key: "Enter" });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(handle.handleKeydown({ key: "Enter", repeat: false }), true);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(handle.isNaming(), true);
+  assert.equal(handle.handleKeydown({ key: "Escape" }), true);
+  assert.equal(handle.isNaming(), true, "Esc is swallowed while namePending");
+  assert.equal(handle.handleKeydown({ key: "[", ctrlKey: true }), true);
+  assert.equal(handle.isNaming(), true, "Ctrl+[ is swallowed while namePending");
+  assert.equal(handle.backOut(), true, "backOut stays on NAME while namePending");
+  assert.equal(handle.isNaming(), true);
+  input.fire("keyup", { key: "Enter" });
+  resolveName();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(handle.isTaskOpen(), false);
+  handle.detach();
+});
+
+test("blur during a pending NAME write inserts nothing and still shows the Notice", async () => {
+  const rows = [idlessRow({})];
+  let resolveName = null;
+  const { input, handle } = attachTasks(rows, {
+    name: (row, id) => new Promise((resolve) => { resolveName = () => resolve({ ok: true, link: `[[${row.notePath}#^${id}]]`, notePath: row.notePath, id }); }),
+  }, { value: "Note ((rep", caret: 10 });
+  const before = "Note ((rep";
+  typeInput(input, before, 10);
+  assert.equal(handle.handleKeydown({ key: "Enter", repeat: false }), true);
+  input.fire("keyup", { key: "Enter" });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(handle.handleKeydown({ key: "Enter", repeat: false }), true);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const noticesBefore = input.ownerDocument && input.ownerDocument.notices ? input.ownerDocument.notices.length : null;
+  void noticesBefore;
+  input.fire("blur", {});
+  assert.equal(handle.isNaming(), false, "blur closes NAME even mid-write");
+  resolveName();
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(input.value, before, "the field is unchanged: no link was inserted after blur");
+  handle.detach();
+});

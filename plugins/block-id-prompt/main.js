@@ -19137,31 +19137,71 @@ function createTaskLinksSession(plugin, request) {
     ? request.sourcePath
     : null;
   const subjects = request.subjects;
+  const initialOverlays = index.collectEditorOverlays(plugin.app);
   const snapshot = index.snapshot({
     ownerPath: sourcePath,
-    overlays: index.collectEditorOverlays(plugin.app),
+    overlays: initialOverlays,
     statOf: index.vaultStatOf(plugin.app),
   });
   let snapshotRows = snapshot.rows;
   let blockIdsByPath = new Map();
   let closed = false;
   const listeners = new Set();
+  const taskLinksStaticCache = new Map();
+  const taskLinksGuardCache = new Map();
+  const taskLinksParsedTitleCache = new Map();
+  const taskLinksTitlePartsCache = new Map();
+
+  let cachedNotePaths = null;
+  let cachedOverlays = null;
+  let cachedPreviousDailyPath = null;
+
+  function taskLinksBlockIdsFor(notePath) {
+    let cached = blockIdsByPath.get(notePath);
+    if (cached) return cached;
+    let ids = null;
+    try {
+      ids = index.blockIdsFor(notePath);
+    } catch (_error) {
+      ids = [];
+    }
+    cached = new Set(Array.isArray(ids) ? ids : []);
+    if (cachedOverlays) {
+      for (const [path, content] of cachedOverlays) {
+        if (path !== notePath) continue;
+        try {
+          for (const match of collectBlockTokenMatches(content)) cached.add(match.id);
+        } catch (_error) {}
+      }
+    }
+    blockIdsByPath.set(notePath, cached);
+    return cached;
+  }
 
   function refreshRows() {
     const overlays = index.collectEditorOverlays(plugin.app);
+    cachedOverlays = overlays;
     snapshotRows = index.rowsForPicker({ ownerPath: sourcePath, overlays });
     blockIdsByPath = new Map();
-    for (const path of index.notePaths()) {
-      blockIdsByPath.set(path, new Set(index.blockIdsFor(path)));
+    cachedNotePaths = index.notePaths();
+    try {
+      cachedPreviousDailyPath = previousDailyNotePath(cachedNotePaths, plugin.now());
+    } catch (_error) {
+      cachedPreviousDailyPath = null;
     }
-    for (const [path, content] of overlays) {
-      blockIdsByPath.set(
-        path,
-        new Set(collectBlockTokenMatches(content).map((match) => match.id)),
-      );
-    }
+    taskLinksStaticCache.clear();
+    taskLinksGuardCache.clear();
+    taskLinksParsedTitleCache.clear();
+    taskLinksTitlePartsCache.clear();
   }
-  refreshRows();
+  cachedOverlays = initialOverlays;
+  blockIdsByPath = new Map();
+  cachedNotePaths = index.notePaths();
+  try {
+    cachedPreviousDailyPath = previousDailyNotePath(cachedNotePaths, plugin.now());
+  } catch (_error) {
+    cachedPreviousDailyPath = null;
+  }
 
   function rowForPublic(row) {
     if (!row || typeof row !== "object" || typeof row.key !== "string") {
@@ -19223,7 +19263,7 @@ function createTaskLinksSession(plugin, request) {
     if (row.blockId) {
       return { ok: false, short: "already has an ID", message: "The task already has a block ID", code: "identified" };
     }
-    const reserved = blockIdsByPath.get(row.notePath);
+    const reserved = taskLinksBlockIdsFor(row.notePath);
     if (reserved && reserved.has(String(id))) {
       return {
         ok: false,
@@ -19250,15 +19290,163 @@ function createTaskLinksSession(plugin, request) {
   const unsubscribeIndex = snapshot.subscribe(onIndexChange);
   if (!plugin.activeTaskLinksSessions) plugin.activeTaskLinksSessions = new Set();
 
+  function taskLinksStaticFor(row) {
+    const key = taskWikilinkRowKey(row);
+    let cached = taskLinksStaticCache.get(key);
+    if (cached) return cached;
+    let parsed = null;
+    try {
+      const base = parseTaskWikilinkTitleParts(row.displayText);
+      parsed = new Array(base.length);
+      for (let i = 0; i < base.length; i += 1) {
+        const part = base[i];
+        const text = String(part.text || "");
+        parsed[i] = { type: part.type, text, lower: text.toLowerCase() };
+      }
+    } catch (_error) {
+      const text = String(row.displayText || "");
+      parsed = [{ type: "text", text, lower: text.toLowerCase() }];
+    }
+    cached = {
+      key,
+      notePath: row.notePath,
+      line: row.line,
+      blockId: row.blockId || null,
+      needsId: !row.blockId,
+      status: taskLinksStatus(row),
+      glyph: taskWikilinkStatusGlyph(row.status),
+      taskKind: taskLinksTaskKind(row, index.settings),
+      section: row.section || null,
+      group: taskLinksPublicGroup(row, sourcePath),
+      hidden: Boolean(row.hidden),
+      linkTarget: row.linkTarget,
+      suggestedId: row.blockId ? null : taskWikilinkSuggestedBlockId(row, taskLinksBlockIdsFor(row.notePath)),
+      parsed,
+    };
+    taskLinksStaticCache.set(key, cached);
+    return cached;
+  }
+
+  function taskLinksGuardFor(base, row, previousDailyPath, resolvedSubjects) {
+    if ("guard" in base) return base.guard;
+    let reason = null;
+    try {
+      reason = pickerDisabledReasonFor(row, { previousDailyPath, subjects: resolvedSubjects });
+    } catch (_error) {
+      reason = null;
+    }
+    let guard = null;
+    try {
+      guard = taskWikilinkGuardPresentation(reason, row);
+    } catch (_error) {
+      guard = null;
+    }
+    const out = guard ? { short: guard.badge, full: guard.full } : null;
+    base.guard = out;
+    return out;
+  }
+
+  function taskLinksTitlePartsFast(base, queryText, terms) {
+    let inner = taskLinksTitlePartsCache.get(queryText);
+    if (inner) {
+      const hit = inner.get(base.key);
+      if (hit) return hit;
+    } else {
+      inner = new Map();
+      taskLinksTitlePartsCache.set(queryText, inner);
+    }
+    const parts = [];
+    if (!terms || terms.length === 0) {
+      const parsed = base.parsed;
+      for (let i = 0; i < parsed.length; i += 1) {
+        const part = parsed[i];
+        if (!part.text) continue;
+        parts.push({ text: part.text, kind: part.type });
+      }
+      inner.set(base.key, parts);
+      return parts;
+    }
+    const parsed = base.parsed;
+    for (let i = 0; i < parsed.length; i += 1) {
+      const part = parsed[i];
+      const lower = part.lower;
+      const text = part.text;
+      if (!text) continue;
+      let ranges = null;
+      for (let t = 0; t < terms.length; t += 1) {
+        const needle = terms[t];
+        if (!needle) continue;
+        let at = lower.indexOf(needle);
+        while (at !== -1) {
+          if (ranges === null) ranges = [];
+          ranges.push([at, at + needle.length]);
+          at = lower.indexOf(needle, at + needle.length);
+        }
+      }
+      if (!ranges) {
+        parts.push({ text, kind: part.type });
+        continue;
+      }
+      ranges.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+      let pos = 0;
+      let curStart = ranges[0][0];
+      let curEnd = ranges[0][1];
+      for (let r = 1; r <= ranges.length; r += 1) {
+        const next = r < ranges.length ? ranges[r] : null;
+        if (next && next[0] <= curEnd) {
+          if (next[1] > curEnd) curEnd = next[1];
+          continue;
+        }
+        if (curStart > pos) parts.push({ text: text.slice(pos, curStart), kind: part.type });
+        parts.push({ text: text.slice(curStart, curEnd), kind: "match" });
+        pos = curEnd;
+        if (next) {
+          curStart = next[0];
+          curEnd = next[1];
+        }
+      }
+      if (pos < text.length) parts.push({ text: text.slice(pos), kind: part.type });
+    }
+    inner.set(base.key, parts);
+    return parts;
+  }
+
   const session = {
     rank(query) {
       if (closed) return { rows: [], total: 0, indexing: null };
-      const ranked = orderForWikilinkPicker(snapshotRows, String(query || ""), sourcePath);
-      return {
-        rows: ranked.map((row) => publicRow(row, String(query || ""))),
-        total: ranked.length,
-        indexing: taskLinksIndexing(index),
-      };
+      const queryText = String(query || "");
+      const ranked = orderForWikilinkPicker(snapshotRows, queryText, sourcePath);
+      const previousDailyPath = cachedPreviousDailyPath;
+      const resolvedSubjects = taskLinksSubjectRows(subjects);
+      let terms = null;
+      try {
+        terms = splitWikilinkQueryTerms(queryText);
+      } catch (_error) {
+        terms = String(queryText).split(/\s+/).filter(Boolean).map((term) => term.toLowerCase());
+      }
+      const rows = new Array(ranked.length);
+      for (let i = 0; i < ranked.length; i += 1) {
+        const row = ranked[i];
+        const base = taskLinksStaticFor(row);
+        rows[i] = {
+          key: base.key,
+          notePath: base.notePath,
+          line: base.line,
+          blockId: base.blockId,
+          needsId: base.needsId,
+          status: base.status,
+          glyph: base.glyph,
+          taskKind: base.taskKind,
+          titleParts: taskLinksTitlePartsFast(base, queryText, terms),
+          section: base.section,
+          group: base.group,
+          hidden: base.hidden,
+          linkTarget: base.linkTarget,
+          suggestedId: base.suggestedId,
+          disabled: taskLinksGuardFor(base, row, previousDailyPath, resolvedSubjects),
+        };
+      }
+      return { rows, total: ranked.length, indexing: taskLinksIndexing(index) };
     },
     linkFor(row) {
       if (closed) return null;

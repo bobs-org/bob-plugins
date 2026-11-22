@@ -612,3 +612,56 @@ test("T11 successor cancel: naming a sibling during the inline reason never refu
   assert.ok(final.includes("- [ ] #task Sibling idea ^sibling-idea"), "the named sibling kept its ID");
   namer.close();
 });
+
+test("T11 ID-less picker rows are subject-guarded; naming a non-picker ID-less row keeps cancels applicable", async () => {
+  const source = "- [ ] #task A ^a\n- [ ] #task B ^b\n- [ ] #task Picker sibling\n- [ ] #task Other sibling\n";
+  const { harness, plugin, recall } = setupPlugin({ "Tasks.md": source });
+  const { offersByKey } = offersFor(source);
+  const expected = expectedFor(source, offersByKey);
+  const cancelledRow = {
+    key: "Tasks.md#^a",
+    notePath: "Tasks.md",
+    task: { path: "Tasks.md", line: 1, text: "- [ ] #task A ^a", preimage: "- [ ] #task A ^a" },
+  };
+  const identifiedRow = {
+    key: "Tasks.md#^b",
+    notePath: "Tasks.md",
+    task: { path: "Tasks.md", line: 2, text: "- [ ] #task B ^b", preimage: "- [ ] #task B ^b" },
+  };
+  const pickerIdlessRow = {
+    key: "picker-idless",
+    notePath: "Tasks.md",
+    task: { path: "Tasks.md", line: 3, text: "- [ ] #task Picker sibling", preimage: "- [ ] #task Picker sibling" },
+  };
+  const modal = { model: { groups: [{ rows: [cancelledRow, identifiedRow, pickerIdlessRow] }] } };
+  const subjects = navHarness.helpers.successorReasonSubjects(cancelledRow, modal);
+  assert.deepEqual(subjects, [
+    { path: "Tasks.md", line: 0, blockId: "a" },
+    { path: "Tasks.md", line: 2 },
+  ], "cancelled plus ID-less picker row, identified sibling stays linkable");
+  const store = { "Tasks.md": source };
+  const namer = createSiblingNamer({ files: store, sourcePath: "Tasks.md", subjects });
+  await namer.assertSubjectGuarded("Picker sibling");
+  const other = namer.rowFor("Other sibling");
+  assert.equal(other.disabled, null, "a non-picker ID-less task stays nameable");
+  await namer.nameSibling("Other sibling", "other-sibling");
+  await harness.app.vault.modify(harness.app.vault.getAbstractFileByPath("Tasks.md"), store["Tasks.md"]);
+  const live = harness.getSource("Tasks.md");
+  assert.match(live, /Other sibling \^other-sibling/);
+  const context = {
+    today: TODAY, dailyBefore: [], dailyAfter: [], dailyPath: "",
+    dependencySnapshotAvailable: true, markUnblockedLine,
+    noteTexts: new Map([["Tasks.md", live]]),
+  };
+  const res = await runQueued(plugin, () => plugin.applyOfferClosesNow({
+    closes: [
+      { key: "Tasks.md#^a", outcome: "cancelled", reason: "superseded" },
+      { key: "Tasks.md#^b", outcome: "done" },
+    ],
+    offers: [...offersByKey.values()], offersByKey, expectedLines: expected,
+    noteTexts: new Map([["Tasks.md", live]]), context,
+  }));
+  assert.equal(res.offer_close_refused, null, "cancel plus staged verdict apply without changed_identity");
+  assert.equal(res.offer_closes.length, 2);
+  namer.close();
+});

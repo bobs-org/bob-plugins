@@ -803,3 +803,32 @@ test("suggest stage keeps its combobox relationship whenever the band is closed"
     assert.equal(input.getAttribute("role"), "combobox");
   } finally { modal.close(); }
 });
+
+test("S15 NAME accept resolving after keyup: one Enter saves the record stage", async () => {
+  const taskLinks = createTaskLinksApi();
+  const attaches = [];
+  const { modal, plugin } = await openCard({ prose: realProseApi(attaches, taskLinks) });
+  try {
+    modal.recordOpenStage("text", "claim");
+    const input = stageInput(modal, "text");
+    typeInto(input, "Follow up ((reply");
+    const handle = modal.recordProseBinding.handle;
+    assert.equal(handle.isTaskOpen(), true);
+    press(modal, input, "Enter");
+    release(input, "Enter");
+    await pause(0);
+    assert.equal(handle.isNaming(), true);
+    press(modal, input, "Enter");
+    release(input, "Enter");
+    await pause(20);
+    assert.equal(handle.isTaskOpen(), false, "NAME commit closes the band");
+    assert.match(modal.stageDraftText, /^Follow up \[\[2026\/2026-11-21#\^reply-dana\]\]$/);
+    await modal.session.previewNow();
+    const expected = modal.stageDraftText;
+    const save = press(modal, input, "Enter");
+    release(input, "Enter");
+    await untilCard(() => plugin._applies.length === 1);
+    assert.equal(save.defaultPrevented, true, "a single Enter saves without retry");
+    assert.deepEqual(plugin._applies[0].ops, [{ op: "field.set", field: "claim", value: expected }]);
+  } finally { modal.close(); }
+});

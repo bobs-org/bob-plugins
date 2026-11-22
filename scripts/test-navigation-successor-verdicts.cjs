@@ -791,3 +791,52 @@ test("S6 dense reason: NAME owns Enter, never blurs, and a real blur cancels nam
   modal.close();
   assert.equal(await pending, null);
 });
+
+test("S6 reason subjects include the cancelled row plus ID-less siblings, never identified siblings", () => {
+  const cancelled = row("projects/project-1.md#^cut-me", 1, {
+    notePath: "projects/project-1.md",
+    close: closeDescriptor({ unblocks: 0 }),
+    task: {
+      path: "projects/project-1.md",
+      line: 5,
+      text: "- [ ] #task Cut me ^cut-me",
+      displayText: "Cut me",
+      status: " ",
+      preimage: "- [ ] #task Cut me ^cut-me",
+    },
+  });
+  const identified = row("projects/project-1.md#^keep", 2, {
+    notePath: "projects/project-1.md",
+    close: closeDescriptor({ unblocks: 0 }),
+    task: {
+      path: "projects/project-1.md",
+      line: 6,
+      text: "- [ ] #task Keep ^keep",
+      displayText: "Keep",
+      status: " ",
+      preimage: "- [ ] #task Keep ^keep",
+    },
+  });
+  const idless = row("projects/project-1.md#sibling", 3, {
+    notePath: "projects/project-1.md",
+    close: closeDescriptor({ unblocks: 0 }),
+    task: {
+      path: "projects/project-1.md",
+      line: 7,
+      text: "- [ ] #task Sibling idea",
+      displayText: "Sibling idea",
+      status: " ",
+      preimage: "- [ ] #task Sibling idea",
+    },
+  });
+  const modal = { model: { groups: [{ rows: [cancelled, identified, idless] }] } };
+  const subjects = helpers.successorReasonSubjects(cancelled, modal);
+  assert.deepEqual(subjects, [
+    { path: "projects/project-1.md", line: 4, blockId: "cut-me" },
+    { path: "projects/project-1.md", line: 6 },
+  ], "cancelled row plus ID-less sibling, identified sibling stays linkable");
+  // One-arg form keeps working.
+  assert.deepEqual(helpers.successorReasonSubjects(cancelled), [
+    { path: "projects/project-1.md", line: 4, blockId: "cut-me" },
+  ]);
+});

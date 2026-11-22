@@ -1,6 +1,7 @@
-// Task requirement (RQ), task block layout (RL), and requirement writer (RW)
-// twins, byte-identical copies of the cycler's fragments, exported for the
-// shared bob-cli vector tests and the twin drift test.
+// Task requirement (RQ), task block layout (RL), requirement writer (RW),
+// and requirement close-card (RV) twins, byte-identical copies of the
+// cycler's fragments, exported for the shared bob-cli vector tests and the
+// twin drift test. Live requirement close support is not advertised.
 try {
   if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
     module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
@@ -61,6 +62,43 @@ try {
       taskReqRestore,
       taskReqToggle,
       taskReqInsert,
+      REQ_CLOSE_COPY,
+      reqCloseQuoted,
+      reqCloseGroupTitle,
+      reqCloseScope,
+      reqCloseHistory,
+      reqCloseOverlap,
+      reqCloseNestedGoWithIt,
+      reqCloseMetReceipt,
+      reqCloseHumanMetLine,
+      reqCloseDropReceipt,
+      reqCloseCarryReceipt,
+      reqCloseSummary,
+      reqCloseAccessibility,
+      reqCloseWouldMet,
+      reqCloseConsequences,
+      reqCloseDigest8,
+      reqCloseNotePath,
+      reqCloseIsRecurringTaskLine,
+      reqCloseStableTaskKey,
+      reqCloseOwnerSnapshotKey,
+      reqCloseOwnerBlockPreimage,
+      reqCloseFindTask,
+      reqCloseHistoryFolds,
+      reqClosePendingCount,
+      reqClosePendingBranches,
+      reqCloseOwnerView,
+      reqCloseOwnerGroup,
+      reqCloseGroupsFromOwners,
+      reqCloseCollectOwner,
+      reqCloseCollectOwners,
+      REQ_CLOSE_VERDICTS,
+      reqCloseTakesBranch,
+      reqCloseNormalizeReason,
+      reqCloseCardNumbering,
+      reqCloseResolveVerdicts,
+      reqCloseRevalidatePreimages,
+      reqCloseChoiceState,
     });
   }
 } catch (_error) {}

@@ -1,0 +1,2872 @@
+{
+  "schema_version": 1,
+  "contract": "docs/task-requirements.md §7",
+  "family": "rows",
+  "copy": {
+    "why": "Met when it closes, unless you say otherwise",
+    "drop_prompt": "Why drop it? (optional)",
+    "footer": "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
+    "jump_hint": "↗ jumps to the requirement — ⌃⇧T makes it a task",
+    "hint": "-k N own task · -X N[=why] drop · -p N pull in",
+    "teaching": "Part of this task's scope. Met when the task closes. Drop it or make it a task",
+    "overlap": "“{ancestor}” already takes this branch — restage it as met to choose here",
+    "nested_go_with_it": "· {k} nested go with it",
+    "met_receipt": "✓ {n} requirements met with “{S}”",
+    "human_met": "⌗⌗ {n} requirements met with “{S}”",
+    "drop_receipt": "⊘ Dropped “{T}”",
+    "carry_receipt": "→ “{T}” is its own task now",
+    "carry_pulled_receipt": "→ “{T}” is its own task now · pulled in",
+    "summary": "reqs ✓4 ⊘1 →1",
+    "accessibility": "requirement, level 2, will be dropped"
+  },
+  "cases": [
+    {
+      "id": "RV1",
+      "family": "rows",
+      "title": "three depths of pending requirements",
+      "notes": [
+        {
+          "path": "Tasks.md",
+          "source_lines": [
+            "- [ ] #task Ship the exporter ^export",
+            "\t- [ ] Handles supported inputs",
+            "\t\t- [ ] Handles Windows files",
+            "\t\t\t- [ ] Preserves CRLF",
+            "\t\t- [ ] Handles empty input"
+          ],
+          "closing": [
+            {
+              "block_id": "export"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "owners": [
+          {
+            "task_key": "Tasks.md#^export",
+            "key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198",
+            "path": "Tasks.md",
+            "block_id": "export",
+            "line": 1,
+            "text": "Ship the exporter",
+            "preimage": "- [ ] #task Ship the exporter ^export\n\t- [ ] Handles supported inputs\n\t\t- [ ] Handles Windows files\n\t\t\t- [ ] Preserves CRLF\n\t\t- [ ] Handles empty input\n",
+            "depth_exceeded": false
+          }
+        ],
+        "groups": [
+          {
+            "group": "requirements",
+            "kind": "requirements",
+            "owner": {
+              "task_key": "Tasks.md#^export",
+              "key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198",
+              "path": "Tasks.md",
+              "block_id": "export",
+              "line": 1,
+              "text": "Ship the exporter"
+            },
+            "copy": {
+              "title": "Requirements · “Ship the exporter”",
+              "scope": "4 reqs",
+              "why": "Met when it closes, unless you say otherwise",
+              "glyph": "⌗⌗",
+              "footer": "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
+              "hint": "-k N own task · -X N[=why] drop · -p N pull in",
+              "history": null
+            },
+            "folded": {},
+            "rows": [
+              {
+                "offer": {
+                  "key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1~84afa836",
+                  "n": 0,
+                  "group": "requirements",
+                  "selected": false
+                },
+                "req": {
+                  "owner": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198",
+                  "path": "1",
+                  "depth": 1,
+                  "parent_key": null,
+                  "text": "Handles supported inputs",
+                  "line": 2,
+                  "state": "pending",
+                  "pending_descendants": 3
+                },
+                "consequences": {
+                  "met": "Met when it closes, unless you say otherwise",
+                  "drop": "⊘ Dropped “Handles supported inputs”",
+                  "carry": "→ “Handles supported inputs” is its own task now",
+                  "carry_pulled": "→ “Handles supported inputs” is its own task now · pulled in"
+                },
+                "run": "⌗⌗",
+                "accessibility": "requirement, level 1, will be met"
+              },
+              {
+                "offer": {
+                  "key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1~11514ecf",
+                  "n": 0,
+                  "group": "requirements",
+                  "selected": false
+                },
+                "req": {
+                  "owner": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198",
+                  "path": "1.1",
+                  "depth": 2,
+                  "parent_key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1~84afa836",
+                  "text": "Handles Windows files",
+                  "line": 3,
+                  "state": "pending",
+                  "pending_descendants": 1
+                },
+                "consequences": {
+                  "met": "Met when it closes, unless you say otherwise",
+                  "drop": "⊘ Dropped “Handles Windows files”",
+                  "carry": "→ “Handles Windows files” is its own task now",
+                  "carry_pulled": "→ “Handles Windows files” is its own task now · pulled in"
+                },
+                "run": "⌗⌗⌗",
+                "accessibility": "requirement, level 2, will be met"
+              },
+              {
+                "offer": {
+                  "key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1.1~ec98ff88",
+                  "n": 0,
+                  "group": "requirements",
+                  "selected": false
+                },
+                "req": {
+                  "owner": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198",
+                  "path": "1.1.1",
+                  "depth": 3,
+                  "parent_key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1~11514ecf",
+                  "text": "Preserves CRLF",
+                  "line": 4,
+                  "state": "pending",
+                  "pending_descendants": 0
+                },
+                "consequences": {
+                  "met": "Met when it closes, unless you say otherwise",
+                  "drop": "⊘ Dropped “Preserves CRLF”",
+                  "carry": "→ “Preserves CRLF” is its own task now",
+                  "carry_pulled": "→ “Preserves CRLF” is its own task now · pulled in"
+                },
+                "run": "⌗⌗⌗⌗",
+                "accessibility": "requirement, level 3, will be met"
+              },
+              {
+                "offer": {
+                  "key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+                  "n": 0,
+                  "group": "requirements",
+                  "selected": false
+                },
+                "req": {
+                  "owner": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198",
+                  "path": "1.2",
+                  "depth": 2,
+                  "parent_key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1~84afa836",
+                  "text": "Handles empty input",
+                  "line": 5,
+                  "state": "pending",
+                  "pending_descendants": 0
+                },
+                "consequences": {
+                  "met": "Met when it closes, unless you say otherwise",
+                  "drop": "⊘ Dropped “Handles empty input”",
+                  "carry": "→ “Handles empty input” is its own task now",
+                  "carry_pulled": "→ “Handles empty input” is its own task now · pulled in"
+                },
+                "run": "⌗⌗⌗",
+                "accessibility": "requirement, level 2, will be met"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "RV2",
+      "family": "rows",
+      "title": "mixed space and tab indentation at depth 1",
+      "notes": [
+        {
+          "path": "Tasks.md",
+          "source_lines": [
+            "- [ ] #task Mixed indent ^mixed",
+            "  - [ ] Two-space req",
+            "\t- [ ] Tab req"
+          ],
+          "closing": [
+            {
+              "block_id": "mixed"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "owners": [
+          {
+            "task_key": "Tasks.md#^mixed",
+            "key": "Tasks.md#^mixed@14cd268d38ed50e2a632f696a33a78b2bc19a78f415523fb1e567547866492ef",
+            "path": "Tasks.md",
+            "block_id": "mixed",
+            "line": 1,
+            "text": "Mixed indent",
+            "preimage": "- [ ] #task Mixed indent ^mixed\n  - [ ] Two-space req\n\t- [ ] Tab req\n",
+            "depth_exceeded": false
+          }
+        ],
+        "groups": [
+          {
+            "group": "requirements",
+            "kind": "requirements",
+            "owner": {
+              "task_key": "Tasks.md#^mixed",
+              "key": "Tasks.md#^mixed@14cd268d38ed50e2a632f696a33a78b2bc19a78f415523fb1e567547866492ef",
+              "path": "Tasks.md",
+              "block_id": "mixed",
+              "line": 1,
+              "text": "Mixed indent"
+            },
+            "copy": {
+              "title": "Requirements · “Mixed indent”",
+              "scope": "2 reqs in 2 branches",
+              "why": "Met when it closes, unless you say otherwise",
+              "glyph": "⌗⌗",
+              "footer": "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
+              "hint": "-k N own task · -X N[=why] drop · -p N pull in",
+              "history": null
+            },
+            "folded": {},
+            "rows": [
+              {
+                "offer": {
+                  "key": "Tasks.md#^mixed@14cd268d38ed50e2a632f696a33a78b2bc19a78f415523fb1e567547866492ef/req/1~64741448",
+                  "n": 0,
+                  "group": "requirements",
+                  "selected": false
+                },
+                "req": {
+                  "owner": "Tasks.md#^mixed@14cd268d38ed50e2a632f696a33a78b2bc19a78f415523fb1e567547866492ef",
+                  "path": "1",
+                  "depth": 1,
+                  "parent_key": null,
+                  "text": "Two-space req",
+                  "line": 2,
+                  "state": "pending",
+                  "pending_descendants": 0
+                },
+                "consequences": {
+                  "met": "Met when it closes, unless you say otherwise",
+                  "drop": "⊘ Dropped “Two-space req”",
+                  "carry": "→ “Two-space req” is its own task now",
+                  "carry_pulled": "→ “Two-space req” is its own task now · pulled in"
+                },
+                "run": "⌗⌗",
+                "accessibility": "requirement, level 1, will be met"
+              },
+              {
+                "offer": {
+                  "key": "Tasks.md#^mixed@14cd268d38ed50e2a632f696a33a78b2bc19a78f415523fb1e567547866492ef/req/2~48ecec71",
+                  "n": 0,
+                  "group": "requirements",
+                  "selected": false
+                },
+                "req": {
+                  "owner": "Tasks.md#^mixed@14cd268d38ed50e2a632f696a33a78b2bc19a78f415523fb1e567547866492ef",
+                  "path": "2",
+                  "depth": 1,
+                  "parent_key": null,
+                  "text": "Tab req",
+                  "line": 3,
+                  "state": "pending",
+                  "pending_descendants": 0
+                },
+                "consequences": {
+                  "met": "Met when it closes, unless you say otherwise",
+                  "drop": "⊘ Dropped “Tab req”",
+                  "carry": "→ “Tab req” is its own task now",
+                  "carry_pulled": "→ “Tab req” is its own task now · pulled in"
+                },
+                "run": "⌗⌗",
+                "accessibility": "requirement, level 1, will be met"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "RV3",
+      "family": "rows",
+      "title": "a note interrupts ancestry so its checkbox is not a req",
+      "notes": [
+        {
+          "path": "Tasks.md",
+          "source_lines": [
+            "- [ ] #task Owner ^owner",
+            "\t- [ ] Real req",
+            "\t- a note",
+            "\t\t- [ ] Not a req",
+            "\t- [ ] Another req"
+          ],
+          "closing": [
+            {
+              "block_id": "owner"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "owners": [
+          {
+            "task_key": "Tasks.md#^owner",
+            "key": "Tasks.md#^owner@6b78c6342a237d333e2218d721746870915e978f08fb54f882728acaa104db2f",
+            "path": "Tasks.md",
+            "block_id": "owner",
+            "line": 1,
+            "text": "Owner",
+            "preimage": "- [ ] #task Owner ^owner\n\t- [ ] Real req\n\t- a note\n\t\t- [ ] Not a req\n\t- [ ] Another req\n",
+            "depth_exceeded": false
+          }
+        ],
+        "groups": [
+          {
+            "group": "requirements",
+            "kind": "requirements",
+            "owner": {
+              "task_key": "Tasks.md#^owner",
+              "key": "Tasks.md#^owner@6b78c6342a237d333e2218d721746870915e978f08fb54f882728acaa104db2f",
+              "path": "Tasks.md",
+              "block_id": "owner",
+              "line": 1,
+              "text": "Owner"
+            },
+            "copy": {
+              "title": "Requirements · “Owner”",
+              "scope": "2 reqs in 2 branches",
+              "why": "Met when it closes, unless you say otherwise",
+              "glyph": "⌗⌗",
+              "footer": "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
+              "hint": "-k N own task · -X N[=why] drop · -p N pull in",
+              "history": null
+            },
+            "folded": {},
+            "rows": [
+              {
+                "offer": {
+                  "key": "Tasks.md#^owner@6b78c6342a237d333e2218d721746870915e978f08fb54f882728acaa104db2f/req/1~a15a505f",
+                  "n": 0,
+                  "group": "requirements",
+                  "selected": false
+                },
+                "req": {
+                  "owner": "Tasks.md#^owner@6b78c6342a237d333e2218d721746870915e978f08fb54f882728acaa104db2f",
+                  "path": "1",
+                  "depth": 1,
+                  "parent_key": null,
+                  "text": "Real req",
+                  "line": 2,
+                  "state": "pending",
+                  "pending_descendants": 0
+                },
+                "consequences": {
+                  "met": "Met when it closes, unless you say otherwise",
+                  "drop": "⊘ Dropped “Real req”",
+                  "carry": "→ “Real req” is its own task now",
+                  "carry_pulled": "→ “Real req” is its own task now · pulled in"
+                },
+                "run": "⌗⌗",
+                "accessibility": "requirement, level 1, will be met"
+              },
+              {
+                "offer": {
+                  "key": "Tasks.md#^owner@6b78c6342a237d333e2218d721746870915e978f08fb54f882728acaa104db2f/req/2~eb8fd2fb",
+                  "n": 0,
+                  "group": "requirements",
+                  "selected": false
+                },
+                "req": {
+                  "owner": "Tasks.md#^owner@6b78c6342a237d333e2218d721746870915e978f08fb54f882728acaa104db2f",
+                  "path": "2",
+                  "depth": 1,
+                  "parent_key": null,
+                  "text": "Another req",
+                  "line": 5,
+                  "state": "pending",
+                  "pending_descendants": 0
+                },
+                "consequences": {
+                  "met": "Met when it closes, unless you say otherwise",
+                  "drop": "⊘ Dropped “Another req”",
+                  "carry": "→ “Another req” is its own task now",
+                  "carry_pulled": "→ “Another req” is its own task now · pulled in"
+                },
+                "run": "⌗⌗",
+                "accessibility": "requirement, level 1, will be met"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "RV4",
+      "family": "rows",
+      "title": "nested real-task owners each keep their own forest",
+      "notes": [
+        {
+          "path": "Tasks.md",
+          "source_lines": [
+            "- [ ] #task Parent ^parent",
+            "\t- [ ] Parent req",
+            "\t- [ ] #task Child ^child",
+            "\t\t- [ ] Child req"
+          ],
+          "closing": [
+            {
+              "block_id": "child"
+            },
+            {
+              "block_id": "parent"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "owners": [
+          {
+            "task_key": "Tasks.md#^child",
+            "key": "Tasks.md#^child@3332592137d4aca4a04940b060df4d6ca8ebab5475f2d69bb73ef1f5850f0277",
+            "path": "Tasks.md",
+            "block_id": "child",
+            "line": 3,
+            "text": "Child",
+            "preimage": "\t- [ ] #task Child ^child\n\t\t- [ ] Child req\n",
+            "depth_exceeded": false
+          },
+          {
+            "task_key": "Tasks.md#^parent",
+            "key": "Tasks.md#^parent@2a589c99d11757d5fac639210a5356224bdfb41055c4ce00e6ae35f9db9d9f32",
+            "path": "Tasks.md",
+            "block_id": "parent",
+            "line": 1,
+            "text": "Parent",
+            "preimage": "- [ ] #task Parent ^parent\n\t- [ ] Parent req\n\t- [ ] #task Child ^child\n\t\t- [ ] Child req\n",
+            "depth_exceeded": false
+          }
+        ],
+        "groups": [
+          {
+            "group": "requirements",
+            "kind": "requirements",
+            "owner": {
+              "task_key": "Tasks.md#^child",
+              "key": "Tasks.md#^child@3332592137d4aca4a04940b060df4d6ca8ebab5475f2d69bb73ef1f5850f0277",
+              "path": "Tasks.md",
+              "block_id": "child",
+              "line": 3,
+              "text": "Child"
+            },
+            "copy": {
+              "title": "Requirements · “Child”",
+              "scope": "1 reqs",
+              "why": "Met when it closes, unless you say otherwise",
+              "glyph": "⌗⌗",
+              "footer": "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
+              "hint": "-k N own task · -X N[=why] drop · -p N pull in",
+              "history": null
+            },
+            "folded": {},
+            "rows": [
+              {
+                "offer": {
+                  "key": "Tasks.md#^child@3332592137d4aca4a04940b060df4d6ca8ebab5475f2d69bb73ef1f5850f0277/req/1~cc8b8daf",
+                  "n": 0,
+                  "group": "requirements",
+                  "selected": false
+                },
+                "req": {
+                  "owner": "Tasks.md#^child@3332592137d4aca4a04940b060df4d6ca8ebab5475f2d69bb73ef1f5850f0277",
+                  "path": "1",
+                  "depth": 1,
+                  "parent_key": null,
+                  "text": "Child req",
+                  "line": 4,
+                  "state": "pending",
+                  "pending_descendants": 0
+                },
+                "consequences": {
+                  "met": "Met when it closes, unless you say otherwise",
+                  "drop": "⊘ Dropped “Child req”",
+                  "carry": "→ “Child req” is its own task now",
+                  "carry_pulled": "→ “Child req” is its own task now · pulled in"
+                },
+                "run": "⌗⌗",
+                "accessibility": "requirement, level 1, will be met"
+              }
+            ]
+          },
+          {
+            "group": "requirements",
+            "kind": "requirements",
+            "owner": {
+              "task_key": "Tasks.md#^parent",
+              "key": "Tasks.md#^parent@2a589c99d11757d5fac639210a5356224bdfb41055c4ce00e6ae35f9db9d9f32",
+              "path": "Tasks.md",
+              "block_id": "parent",
+              "line": 1,
+              "text": "Parent"
+            },
+            "copy": {
+              "title": "Requirements · “Parent”",
+              "scope": "1 reqs",
+              "why": "Met when it closes, unless you say otherwise",
+              "glyph": "⌗⌗",
+              "footer": "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
+              "hint": "-k N own task · -X N[=why] drop · -p N pull in",
+              "history": null
+            },
+            "folded": {},
+            "rows": [
+              {
+                "offer": {
+                  "key": "Tasks.md#^parent@2a589c99d11757d5fac639210a5356224bdfb41055c4ce00e6ae35f9db9d9f32/req/1~46c0aa32",
+                  "n": 0,
+                  "group": "requirements",
+                  "selected": false
+                },
+                "req": {
+                  "owner": "Tasks.md#^parent@2a589c99d11757d5fac639210a5356224bdfb41055c4ce00e6ae35f9db9d9f32",
+                  "path": "1",
+                  "depth": 1,
+                  "parent_key": null,
+                  "text": "Parent req",
+                  "line": 2,
+                  "state": "pending",
+                  "pending_descendants": 0
+                },
+                "consequences": {
+                  "met": "Met when it closes, unless you say otherwise",
+                  "drop": "⊘ Dropped “Parent req”",
+                  "carry": "→ “Parent req” is its own task now",
+                  "carry_pulled": "→ “Parent req” is its own task now · pulled in"
+                },
+                "run": "⌗⌗",
+                "accessibility": "requirement, level 1, will be met"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "RV5",
+      "family": "rows",
+      "title": "recurring owners are excluded from the audit",
+      "notes": [
+        {
+          "path": "Tasks.md",
+          "source_lines": [
+            "- [ ] #task Recurring [repeat:: every week] ^rec",
+            "\t- [ ] A req"
+          ],
+          "closing": [
+            {
+              "block_id": "rec"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "owners": [],
+        "groups": []
+      }
+    },
+    {
+      "id": "RV6",
+      "family": "rows",
+      "title": "resolved folds count dropped, carried, and met earlier",
+      "notes": [
+        {
+          "path": "Tasks.md",
+          "source_lines": [
+            "- [ ] #task Owner ^owner",
+            "\t- [ ] Live",
+            "\t- [-] Dropped",
+            "\t\t- [ ] Excluded child",
+            "\t- [>] [[#^carried|Carried]]",
+            "\t- [x] Hand met"
+          ],
+          "closing": [
+            {
+              "block_id": "owner"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "owners": [
+          {
+            "task_key": "Tasks.md#^owner",
+            "key": "Tasks.md#^owner@7e086cc40b89972771cb7e93c6c12019c5dc8a0cfd6e26f040a0cfbb3b60019e",
+            "path": "Tasks.md",
+            "block_id": "owner",
+            "line": 1,
+            "text": "Owner",
+            "preimage": "- [ ] #task Owner ^owner\n\t- [ ] Live\n\t- [-] Dropped\n\t\t- [ ] Excluded child\n\t- [>] [[#^carried|Carried]]\n\t- [x] Hand met\n",
+            "depth_exceeded": false
+          }
+        ],
+        "groups": [
+          {
+            "group": "requirements",
+            "kind": "requirements",
+            "owner": {
+              "task_key": "Tasks.md#^owner",
+              "key": "Tasks.md#^owner@7e086cc40b89972771cb7e93c6c12019c5dc8a0cfd6e26f040a0cfbb3b60019e",
+              "path": "Tasks.md",
+              "block_id": "owner",
+              "line": 1,
+              "text": "Owner"
+            },
+            "copy": {
+              "title": "Requirements · “Owner”",
+              "scope": "1 reqs",
+              "why": "Met when it closes, unless you say otherwise",
+              "glyph": "⌗⌗",
+              "footer": "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
+              "hint": "-k N own task · -X N[=why] drop · -p N pull in",
+              "history": "· 1 dropped earlier · 1 carried earlier · 1 met earlier"
+            },
+            "folded": {
+              "dropped": 1,
+              "carried": 1,
+              "met": 1
+            },
+            "rows": [
+              {
+                "offer": {
+                  "key": "Tasks.md#^owner@7e086cc40b89972771cb7e93c6c12019c5dc8a0cfd6e26f040a0cfbb3b60019e/req/1~b64ac05f",
+                  "n": 0,
+                  "group": "requirements",
+                  "selected": false
+                },
+                "req": {
+                  "owner": "Tasks.md#^owner@7e086cc40b89972771cb7e93c6c12019c5dc8a0cfd6e26f040a0cfbb3b60019e",
+                  "path": "1",
+                  "depth": 1,
+                  "parent_key": null,
+                  "text": "Live",
+                  "line": 2,
+                  "state": "pending",
+                  "pending_descendants": 0
+                },
+                "consequences": {
+                  "met": "Met when it closes, unless you say otherwise",
+                  "drop": "⊘ Dropped “Live”",
+                  "carry": "→ “Live” is its own task now",
+                  "carry_pulled": "→ “Live” is its own task now · pulled in"
+                },
+                "run": "⌗⌗",
+                "accessibility": "requirement, level 1, will be met"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "RV7",
+      "family": "rows",
+      "title": "flagged unknown marks stay pending",
+      "notes": [
+        {
+          "path": "Tasks.md",
+          "source_lines": [
+            "- [ ] #task Owner ^owner",
+            "\t- [?] Flagged",
+            "\t- [*] Starred"
+          ],
+          "closing": [
+            {
+              "block_id": "owner"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "owners": [
+          {
+            "task_key": "Tasks.md#^owner",
+            "key": "Tasks.md#^owner@725a9f1ec65f00801f71310c62492fba71846da904ee4e18f4866a0c2e700269",
+            "path": "Tasks.md",
+            "block_id": "owner",
+            "line": 1,
+            "text": "Owner",
+            "preimage": "- [ ] #task Owner ^owner\n\t- [?] Flagged\n\t- [*] Starred\n",
+            "depth_exceeded": false
+          }
+        ],
+        "groups": [
+          {
+            "group": "requirements",
+            "kind": "requirements",
+            "owner": {
+              "task_key": "Tasks.md#^owner",
+              "key": "Tasks.md#^owner@725a9f1ec65f00801f71310c62492fba71846da904ee4e18f4866a0c2e700269",
+              "path": "Tasks.md",
+              "block_id": "owner",
+              "line": 1,
+              "text": "Owner"
+            },
+            "copy": {
+              "title": "Requirements · “Owner”",
+              "scope": "2 reqs in 2 branches",
+              "why": "Met when it closes, unless you say otherwise",
+              "glyph": "⌗⌗",
+              "footer": "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
+              "hint": "-k N own task · -X N[=why] drop · -p N pull in",
+              "history": null
+            },
+            "folded": {},
+            "rows": [
+              {
+                "offer": {
+                  "key": "Tasks.md#^owner@725a9f1ec65f00801f71310c62492fba71846da904ee4e18f4866a0c2e700269/req/1~2f1978c6",
+                  "n": 0,
+                  "group": "requirements",
+                  "selected": false
+                },
+                "req": {
+                  "owner": "Tasks.md#^owner@725a9f1ec65f00801f71310c62492fba71846da904ee4e18f4866a0c2e700269",
+                  "path": "1",
+                  "depth": 1,
+                  "parent_key": null,
+                  "text": "Flagged",
+                  "line": 2,
+                  "state": "pending",
+                  "pending_descendants": 0
+                },
+                "consequences": {
+                  "met": "Met when it closes, unless you say otherwise",
+                  "drop": "⊘ Dropped “Flagged”",
+                  "carry": "→ “Flagged” is its own task now",
+                  "carry_pulled": "→ “Flagged” is its own task now · pulled in"
+                },
+                "run": "⌗⌗",
+                "accessibility": "requirement, level 1, will be met"
+              },
+              {
+                "offer": {
+                  "key": "Tasks.md#^owner@725a9f1ec65f00801f71310c62492fba71846da904ee4e18f4866a0c2e700269/req/2~07a2d579",
+                  "n": 0,
+                  "group": "requirements",
+                  "selected": false
+                },
+                "req": {
+                  "owner": "Tasks.md#^owner@725a9f1ec65f00801f71310c62492fba71846da904ee4e18f4866a0c2e700269",
+                  "path": "2",
+                  "depth": 1,
+                  "parent_key": null,
+                  "text": "Starred",
+                  "line": 3,
+                  "state": "pending",
+                  "pending_descendants": 0
+                },
+                "consequences": {
+                  "met": "Met when it closes, unless you say otherwise",
+                  "drop": "⊘ Dropped “Starred”",
+                  "carry": "→ “Starred” is its own task now",
+                  "carry_pulled": "→ “Starred” is its own task now · pulled in"
+                },
+                "run": "⌗⌗",
+                "accessibility": "requirement, level 1, will be met"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "RV8",
+      "family": "rows",
+      "title": "no pending rows yields a snapshot without a group",
+      "notes": [
+        {
+          "path": "Tasks.md",
+          "source_lines": [
+            "- [ ] #task Owner ^owner",
+            "\t- [-] Dropped",
+            "\t- [x] Hand met"
+          ],
+          "closing": [
+            {
+              "block_id": "owner"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "owners": [
+          {
+            "task_key": "Tasks.md#^owner",
+            "key": "Tasks.md#^owner@d231ee0247c724f4737ace3b4062ce7653face0d6533ac29e2fdf3b96a9e2492",
+            "path": "Tasks.md",
+            "block_id": "owner",
+            "line": 1,
+            "text": "Owner",
+            "preimage": "- [ ] #task Owner ^owner\n\t- [-] Dropped\n\t- [x] Hand met\n",
+            "depth_exceeded": false
+          }
+        ],
+        "groups": []
+      }
+    },
+    {
+      "id": "RV9",
+      "family": "rows",
+      "title": "multiple closing owners keep explicit close order",
+      "notes": [
+        {
+          "path": "Tasks.md",
+          "source_lines": [
+            "- [ ] #task First ^first",
+            "\t- [ ] Req A",
+            "- [ ] #task Second ^second",
+            "\t- [ ] Req B"
+          ],
+          "closing": [
+            {
+              "block_id": "first"
+            },
+            {
+              "block_id": "second"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "owners": [
+          {
+            "task_key": "Tasks.md#^first",
+            "key": "Tasks.md#^first@102c38ebf34bb23027393e30bf101271d44354d195244224442e2aa880979589",
+            "path": "Tasks.md",
+            "block_id": "first",
+            "line": 1,
+            "text": "First",
+            "preimage": "- [ ] #task First ^first\n\t- [ ] Req A\n",
+            "depth_exceeded": false
+          },
+          {
+            "task_key": "Tasks.md#^second",
+            "key": "Tasks.md#^second@04c60692e1f3521d60376d6eeb15aa023195303f57bec140a8aa3e6305479097",
+            "path": "Tasks.md",
+            "block_id": "second",
+            "line": 3,
+            "text": "Second",
+            "preimage": "- [ ] #task Second ^second\n\t- [ ] Req B\n",
+            "depth_exceeded": false
+          }
+        ],
+        "groups": [
+          {
+            "group": "requirements",
+            "kind": "requirements",
+            "owner": {
+              "task_key": "Tasks.md#^first",
+              "key": "Tasks.md#^first@102c38ebf34bb23027393e30bf101271d44354d195244224442e2aa880979589",
+              "path": "Tasks.md",
+              "block_id": "first",
+              "line": 1,
+              "text": "First"
+            },
+            "copy": {
+              "title": "Requirements · “First”",
+              "scope": "1 reqs",
+              "why": "Met when it closes, unless you say otherwise",
+              "glyph": "⌗⌗",
+              "footer": "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
+              "hint": "-k N own task · -X N[=why] drop · -p N pull in",
+              "history": null
+            },
+            "folded": {},
+            "rows": [
+              {
+                "offer": {
+                  "key": "Tasks.md#^first@102c38ebf34bb23027393e30bf101271d44354d195244224442e2aa880979589/req/1~e018c9a1",
+                  "n": 0,
+                  "group": "requirements",
+                  "selected": false
+                },
+                "req": {
+                  "owner": "Tasks.md#^first@102c38ebf34bb23027393e30bf101271d44354d195244224442e2aa880979589",
+                  "path": "1",
+                  "depth": 1,
+                  "parent_key": null,
+                  "text": "Req A",
+                  "line": 2,
+                  "state": "pending",
+                  "pending_descendants": 0
+                },
+                "consequences": {
+                  "met": "Met when it closes, unless you say otherwise",
+                  "drop": "⊘ Dropped “Req A”",
+                  "carry": "→ “Req A” is its own task now",
+                  "carry_pulled": "→ “Req A” is its own task now · pulled in"
+                },
+                "run": "⌗⌗",
+                "accessibility": "requirement, level 1, will be met"
+              }
+            ]
+          },
+          {
+            "group": "requirements",
+            "kind": "requirements",
+            "owner": {
+              "task_key": "Tasks.md#^second",
+              "key": "Tasks.md#^second@04c60692e1f3521d60376d6eeb15aa023195303f57bec140a8aa3e6305479097",
+              "path": "Tasks.md",
+              "block_id": "second",
+              "line": 3,
+              "text": "Second"
+            },
+            "copy": {
+              "title": "Requirements · “Second”",
+              "scope": "1 reqs",
+              "why": "Met when it closes, unless you say otherwise",
+              "glyph": "⌗⌗",
+              "footer": "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
+              "hint": "-k N own task · -X N[=why] drop · -p N pull in",
+              "history": null
+            },
+            "folded": {},
+            "rows": [
+              {
+                "offer": {
+                  "key": "Tasks.md#^second@04c60692e1f3521d60376d6eeb15aa023195303f57bec140a8aa3e6305479097/req/1~8e514986",
+                  "n": 0,
+                  "group": "requirements",
+                  "selected": false
+                },
+                "req": {
+                  "owner": "Tasks.md#^second@04c60692e1f3521d60376d6eeb15aa023195303f57bec140a8aa3e6305479097",
+                  "path": "1",
+                  "depth": 1,
+                  "parent_key": null,
+                  "text": "Req B",
+                  "line": 4,
+                  "state": "pending",
+                  "pending_descendants": 0
+                },
+                "consequences": {
+                  "met": "Met when it closes, unless you say otherwise",
+                  "drop": "⊘ Dropped “Req B”",
+                  "carry": "→ “Req B” is its own task now",
+                  "carry_pulled": "→ “Req B” is its own task now · pulled in"
+                },
+                "run": "⌗⌗",
+                "accessibility": "requirement, level 1, will be met"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "RV10",
+      "family": "rows",
+      "title": "duplicate labels in different branches get distinct row keys",
+      "notes": [
+        {
+          "path": "Tasks.md",
+          "source_lines": [
+            "- [ ] #task Owner ^owner",
+            "\t- [ ] Same",
+            "\t\t- [ ] Left child",
+            "\t- [ ] Same",
+            "\t\t- [ ] Right child"
+          ],
+          "closing": [
+            {
+              "block_id": "owner"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "owners": [
+          {
+            "task_key": "Tasks.md#^owner",
+            "key": "Tasks.md#^owner@35aad3849db9d65d66a97e1fbae3961fa0b11b4d5fad8cab2b8aa78dc04fa26d",
+            "path": "Tasks.md",
+            "block_id": "owner",
+            "line": 1,
+            "text": "Owner",
+            "preimage": "- [ ] #task Owner ^owner\n\t- [ ] Same\n\t\t- [ ] Left child\n\t- [ ] Same\n\t\t- [ ] Right child\n",
+            "depth_exceeded": false
+          }
+        ],
+        "groups": [
+          {
+            "group": "requirements",
+            "kind": "requirements",
+            "owner": {
+              "task_key": "Tasks.md#^owner",
+              "key": "Tasks.md#^owner@35aad3849db9d65d66a97e1fbae3961fa0b11b4d5fad8cab2b8aa78dc04fa26d",
+              "path": "Tasks.md",
+              "block_id": "owner",
+              "line": 1,
+              "text": "Owner"
+            },
+            "copy": {
+              "title": "Requirements · “Owner”",
+              "scope": "4 reqs in 2 branches",
+              "why": "Met when it closes, unless you say otherwise",
+              "glyph": "⌗⌗",
+              "footer": "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
+              "hint": "-k N own task · -X N[=why] drop · -p N pull in",
+              "history": null
+            },
+            "folded": {},
+            "rows": [
+              {
+                "offer": {
+                  "key": "Tasks.md#^owner@35aad3849db9d65d66a97e1fbae3961fa0b11b4d5fad8cab2b8aa78dc04fa26d/req/1~2a98b1de",
+                  "n": 0,
+                  "group": "requirements",
+                  "selected": false
+                },
+                "req": {
+                  "owner": "Tasks.md#^owner@35aad3849db9d65d66a97e1fbae3961fa0b11b4d5fad8cab2b8aa78dc04fa26d",
+                  "path": "1",
+                  "depth": 1,
+                  "parent_key": null,
+                  "text": "Same",
+                  "line": 2,
+                  "state": "pending",
+                  "pending_descendants": 1
+                },
+                "consequences": {
+                  "met": "Met when it closes, unless you say otherwise",
+                  "drop": "⊘ Dropped “Same”",
+                  "carry": "→ “Same” is its own task now",
+                  "carry_pulled": "→ “Same” is its own task now · pulled in"
+                },
+                "run": "⌗⌗",
+                "accessibility": "requirement, level 1, will be met"
+              },
+              {
+                "offer": {
+                  "key": "Tasks.md#^owner@35aad3849db9d65d66a97e1fbae3961fa0b11b4d5fad8cab2b8aa78dc04fa26d/req/1.1~4f271740",
+                  "n": 0,
+                  "group": "requirements",
+                  "selected": false
+                },
+                "req": {
+                  "owner": "Tasks.md#^owner@35aad3849db9d65d66a97e1fbae3961fa0b11b4d5fad8cab2b8aa78dc04fa26d",
+                  "path": "1.1",
+                  "depth": 2,
+                  "parent_key": "Tasks.md#^owner@35aad3849db9d65d66a97e1fbae3961fa0b11b4d5fad8cab2b8aa78dc04fa26d/req/1~2a98b1de",
+                  "text": "Left child",
+                  "line": 3,
+                  "state": "pending",
+                  "pending_descendants": 0
+                },
+                "consequences": {
+                  "met": "Met when it closes, unless you say otherwise",
+                  "drop": "⊘ Dropped “Left child”",
+                  "carry": "→ “Left child” is its own task now",
+                  "carry_pulled": "→ “Left child” is its own task now · pulled in"
+                },
+                "run": "⌗⌗⌗",
+                "accessibility": "requirement, level 2, will be met"
+              },
+              {
+                "offer": {
+                  "key": "Tasks.md#^owner@35aad3849db9d65d66a97e1fbae3961fa0b11b4d5fad8cab2b8aa78dc04fa26d/req/2~2a98b1de",
+                  "n": 0,
+                  "group": "requirements",
+                  "selected": false
+                },
+                "req": {
+                  "owner": "Tasks.md#^owner@35aad3849db9d65d66a97e1fbae3961fa0b11b4d5fad8cab2b8aa78dc04fa26d",
+                  "path": "2",
+                  "depth": 1,
+                  "parent_key": null,
+                  "text": "Same",
+                  "line": 4,
+                  "state": "pending",
+                  "pending_descendants": 1
+                },
+                "consequences": {
+                  "met": "Met when it closes, unless you say otherwise",
+                  "drop": "⊘ Dropped “Same”",
+                  "carry": "→ “Same” is its own task now",
+                  "carry_pulled": "→ “Same” is its own task now · pulled in"
+                },
+                "run": "⌗⌗",
+                "accessibility": "requirement, level 1, will be met"
+              },
+              {
+                "offer": {
+                  "key": "Tasks.md#^owner@35aad3849db9d65d66a97e1fbae3961fa0b11b4d5fad8cab2b8aa78dc04fa26d/req/2.1~ae369099",
+                  "n": 0,
+                  "group": "requirements",
+                  "selected": false
+                },
+                "req": {
+                  "owner": "Tasks.md#^owner@35aad3849db9d65d66a97e1fbae3961fa0b11b4d5fad8cab2b8aa78dc04fa26d",
+                  "path": "2.1",
+                  "depth": 2,
+                  "parent_key": "Tasks.md#^owner@35aad3849db9d65d66a97e1fbae3961fa0b11b4d5fad8cab2b8aa78dc04fa26d/req/2~2a98b1de",
+                  "text": "Right child",
+                  "line": 5,
+                  "state": "pending",
+                  "pending_descendants": 0
+                },
+                "consequences": {
+                  "met": "Met when it closes, unless you say otherwise",
+                  "drop": "⊘ Dropped “Right child”",
+                  "carry": "→ “Right child” is its own task now",
+                  "carry_pulled": "→ “Right child” is its own task now · pulled in"
+                },
+                "run": "⌗⌗⌗",
+                "accessibility": "requirement, level 2, will be met"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "RV11",
+      "family": "rows",
+      "title": "identical owner-block hashes stay distinct through task_key",
+      "notes": [
+        {
+          "path": "alpha.md",
+          "source_lines": [
+            "- [ ] #task Same ^same",
+            "\t- [ ] Shared"
+          ],
+          "closing": [
+            {
+              "block_id": "same"
+            }
+          ]
+        },
+        {
+          "path": "beta.md",
+          "source_lines": [
+            "- [ ] #task Same ^same",
+            "\t- [ ] Shared"
+          ],
+          "closing": [
+            {
+              "block_id": "same"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "owners": [
+          {
+            "task_key": "alpha.md#^same",
+            "key": "alpha.md#^same@0a5dd1ec14b2f5d85fad550ff99eaf712f545833f992054e9d1bd84c0b8889d0",
+            "path": "alpha.md",
+            "block_id": "same",
+            "line": 1,
+            "text": "Same",
+            "preimage": "- [ ] #task Same ^same\n\t- [ ] Shared\n",
+            "depth_exceeded": false
+          },
+          {
+            "task_key": "beta.md#^same",
+            "key": "beta.md#^same@0a5dd1ec14b2f5d85fad550ff99eaf712f545833f992054e9d1bd84c0b8889d0",
+            "path": "beta.md",
+            "block_id": "same",
+            "line": 1,
+            "text": "Same",
+            "preimage": "- [ ] #task Same ^same\n\t- [ ] Shared\n",
+            "depth_exceeded": false
+          }
+        ],
+        "groups": [
+          {
+            "group": "requirements",
+            "kind": "requirements",
+            "owner": {
+              "task_key": "alpha.md#^same",
+              "key": "alpha.md#^same@0a5dd1ec14b2f5d85fad550ff99eaf712f545833f992054e9d1bd84c0b8889d0",
+              "path": "alpha.md",
+              "block_id": "same",
+              "line": 1,
+              "text": "Same"
+            },
+            "copy": {
+              "title": "Requirements · “Same”",
+              "scope": "1 reqs",
+              "why": "Met when it closes, unless you say otherwise",
+              "glyph": "⌗⌗",
+              "footer": "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
+              "hint": "-k N own task · -X N[=why] drop · -p N pull in",
+              "history": null
+            },
+            "folded": {},
+            "rows": [
+              {
+                "offer": {
+                  "key": "alpha.md#^same@0a5dd1ec14b2f5d85fad550ff99eaf712f545833f992054e9d1bd84c0b8889d0/req/1~e3c4b39d",
+                  "n": 0,
+                  "group": "requirements",
+                  "selected": false
+                },
+                "req": {
+                  "owner": "alpha.md#^same@0a5dd1ec14b2f5d85fad550ff99eaf712f545833f992054e9d1bd84c0b8889d0",
+                  "path": "1",
+                  "depth": 1,
+                  "parent_key": null,
+                  "text": "Shared",
+                  "line": 2,
+                  "state": "pending",
+                  "pending_descendants": 0
+                },
+                "consequences": {
+                  "met": "Met when it closes, unless you say otherwise",
+                  "drop": "⊘ Dropped “Shared”",
+                  "carry": "→ “Shared” is its own task now",
+                  "carry_pulled": "→ “Shared” is its own task now · pulled in"
+                },
+                "run": "⌗⌗",
+                "accessibility": "requirement, level 1, will be met"
+              }
+            ]
+          },
+          {
+            "group": "requirements",
+            "kind": "requirements",
+            "owner": {
+              "task_key": "beta.md#^same",
+              "key": "beta.md#^same@0a5dd1ec14b2f5d85fad550ff99eaf712f545833f992054e9d1bd84c0b8889d0",
+              "path": "beta.md",
+              "block_id": "same",
+              "line": 1,
+              "text": "Same"
+            },
+            "copy": {
+              "title": "Requirements · “Same”",
+              "scope": "1 reqs",
+              "why": "Met when it closes, unless you say otherwise",
+              "glyph": "⌗⌗",
+              "footer": "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
+              "hint": "-k N own task · -X N[=why] drop · -p N pull in",
+              "history": null
+            },
+            "folded": {},
+            "rows": [
+              {
+                "offer": {
+                  "key": "beta.md#^same@0a5dd1ec14b2f5d85fad550ff99eaf712f545833f992054e9d1bd84c0b8889d0/req/1~e3c4b39d",
+                  "n": 0,
+                  "group": "requirements",
+                  "selected": false
+                },
+                "req": {
+                  "owner": "beta.md#^same@0a5dd1ec14b2f5d85fad550ff99eaf712f545833f992054e9d1bd84c0b8889d0",
+                  "path": "1",
+                  "depth": 1,
+                  "parent_key": null,
+                  "text": "Shared",
+                  "line": 2,
+                  "state": "pending",
+                  "pending_descendants": 0
+                },
+                "consequences": {
+                  "met": "Met when it closes, unless you say otherwise",
+                  "drop": "⊘ Dropped “Shared”",
+                  "carry": "→ “Shared” is its own task now",
+                  "carry_pulled": "→ “Shared” is its own task now · pulled in"
+                },
+                "run": "⌗⌗",
+                "accessibility": "requirement, level 1, will be met"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "RV12",
+      "family": "choices",
+      "title": "every same-row final verdict pair",
+      "input": {
+        "base_case": "RV1",
+        "key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1~84afa836",
+        "pairs": [
+          {
+            "left": "met",
+            "right": "met",
+            "result": "idempotent"
+          },
+          {
+            "left": "met",
+            "right": "drop",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "met",
+            "right": "carry",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "met",
+            "right": "carry_pulled",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "drop",
+            "right": "met",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "drop",
+            "right": "drop",
+            "result": "idempotent"
+          },
+          {
+            "left": "drop",
+            "right": "carry",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "drop",
+            "right": "carry_pulled",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "carry",
+            "right": "met",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "carry",
+            "right": "drop",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "carry",
+            "right": "carry",
+            "result": "idempotent"
+          },
+          {
+            "left": "carry",
+            "right": "carry_pulled",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "carry_pulled",
+            "right": "met",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "carry_pulled",
+            "right": "drop",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "carry_pulled",
+            "right": "carry",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "carry_pulled",
+            "right": "carry_pulled",
+            "result": "idempotent"
+          }
+        ]
+      },
+      "expect": {
+        "pair_results": [
+          {
+            "left": "met",
+            "right": "met",
+            "result": "idempotent"
+          },
+          {
+            "left": "met",
+            "right": "drop",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "met",
+            "right": "carry",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "met",
+            "right": "carry_pulled",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "drop",
+            "right": "met",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "drop",
+            "right": "drop",
+            "result": "idempotent"
+          },
+          {
+            "left": "drop",
+            "right": "carry",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "drop",
+            "right": "carry_pulled",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "carry",
+            "right": "met",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "carry",
+            "right": "drop",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "carry",
+            "right": "carry",
+            "result": "idempotent"
+          },
+          {
+            "left": "carry",
+            "right": "carry_pulled",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "carry_pulled",
+            "right": "met",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "carry_pulled",
+            "right": "drop",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "carry_pulled",
+            "right": "carry",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "carry_pulled",
+            "right": "carry_pulled",
+            "result": "idempotent"
+          }
+        ]
+      }
+    },
+    {
+      "id": "RV13",
+      "family": "choices",
+      "title": "structural ancestor choice rejects an explicit descendant choice",
+      "input": {
+        "base_case": "RV1",
+        "requests": [
+          {
+            "selector": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1~11514ecf",
+            "verdict": "drop"
+          },
+          {
+            "selector": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1.1~ec98ff88",
+            "verdict": "carry"
+          }
+        ]
+      },
+      "expect": {
+        "error_code": "req_verdict_overlap",
+        "ancestor_key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1~11514ecf",
+        "descendant_key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1.1~ec98ff88"
+      }
+    },
+    {
+      "id": "RV14",
+      "family": "choices",
+      "title": "navigation pin may target a descendant owned by an ancestor choice",
+      "input": {
+        "base_case": "RV1",
+        "requests": [
+          {
+            "selector": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1~11514ecf",
+            "verdict": "carry"
+          }
+        ],
+        "jump": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1.1~ec98ff88"
+      },
+      "expect": {
+        "error_code": null,
+        "verdicts": [
+          {
+            "key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1~11514ecf",
+            "verdict": "carry"
+          }
+        ],
+        "jump": {
+          "key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1.1~ec98ff88",
+          "kind": "requirement",
+          "owner": "Ship the exporter"
+        }
+      }
+    },
+    {
+      "id": "RV15",
+      "family": "choices",
+      "title": "shared numbering puts requirements first and mark-all skips them",
+      "input": {
+        "base_case": "RV1",
+        "task_offer_keys": [
+          "offer:a",
+          "offer:b"
+        ]
+      },
+      "expect": {
+        "numbered": [
+          {
+            "key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1~84afa836",
+            "n": 1,
+            "kind": "requirement"
+          },
+          {
+            "key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1~11514ecf",
+            "n": 2,
+            "kind": "requirement"
+          },
+          {
+            "key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1.1~ec98ff88",
+            "n": 3,
+            "kind": "requirement"
+          },
+          {
+            "key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+            "n": 4,
+            "kind": "requirement"
+          },
+          {
+            "key": "offer:a",
+            "n": 5,
+            "kind": "task_offer"
+          },
+          {
+            "key": "offer:b",
+            "n": 6,
+            "kind": "task_offer"
+          }
+        ],
+        "mark_all": [
+          "offer:a",
+          "offer:b"
+        ]
+      }
+    },
+    {
+      "id": "RV16",
+      "family": "choices",
+      "title": "folding retains staged descendants and met unfolds them",
+      "input": {
+        "base_case": "RV1",
+        "actions": [
+          {
+            "key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1.1~ec98ff88",
+            "verdict": "carry"
+          },
+          {
+            "key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1~11514ecf",
+            "verdict": "drop"
+          },
+          {
+            "key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1~11514ecf",
+            "verdict": "met"
+          }
+        ],
+        "toggle_key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+        "toggle": [
+          {
+            "key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+            "verdict": "drop"
+          },
+          {
+            "key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+            "verdict": "carry"
+          },
+          {
+            "key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+            "verdict": "carry"
+          }
+        ]
+      },
+      "expect": {
+        "after_drop": {
+          "visible": [
+            "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1~84afa836",
+            "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1~11514ecf",
+            "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe"
+          ],
+          "hidden": {
+            "key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1.1~ec98ff88",
+            "hidden_by": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1~11514ecf"
+          },
+          "nested_go_with_it": {
+            "key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1~11514ecf",
+            "count": 1
+          },
+          "overlap_code": "req_verdict_overlap"
+        },
+        "after_met": {
+          "visible": [
+            "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1~84afa836",
+            "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1~11514ecf",
+            "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1.1~ec98ff88",
+            "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe"
+          ],
+          "choices": [
+            {
+              "key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1.1~ec98ff88",
+              "verdict": "carry"
+            }
+          ],
+          "error_code": null
+        },
+        "toggle_final": "met"
+      }
+    },
+    {
+      "id": "RV17",
+      "family": "choices",
+      "title": "disjoint choices across closing owners stay independent",
+      "input": {
+        "base_case": "RV4",
+        "requests": [
+          {
+            "selector": "Tasks.md#^child@3332592137d4aca4a04940b060df4d6ca8ebab5475f2d69bb73ef1f5850f0277/req/1~cc8b8daf",
+            "verdict": "carry"
+          },
+          {
+            "selector": "Tasks.md#^parent@2a589c99d11757d5fac639210a5356224bdfb41055c4ce00e6ae35f9db9d9f32/req/1~46c0aa32",
+            "verdict": "drop"
+          }
+        ]
+      },
+      "expect": {
+        "error_code": null,
+        "verdicts": [
+          {
+            "key": "Tasks.md#^child@3332592137d4aca4a04940b060df4d6ca8ebab5475f2d69bb73ef1f5850f0277/req/1~cc8b8daf",
+            "verdict": "carry",
+            "owner_task_key": "Tasks.md#^child"
+          },
+          {
+            "key": "Tasks.md#^parent@2a589c99d11757d5fac639210a5356224bdfb41055c4ce00e6ae35f9db9d9f32/req/1~46c0aa32",
+            "verdict": "drop",
+            "owner_task_key": "Tasks.md#^parent"
+          }
+        ]
+      }
+    },
+    {
+      "id": "RV18",
+      "family": "choices",
+      "title": "same-labelled branches reordered after preview are stale",
+      "input": {
+        "base_case": "RV10",
+        "source_lines_after": [
+          "- [ ] #task Owner ^owner",
+          "\t- [ ] Same",
+          "\t\t- [ ] Right child",
+          "\t- [ ] Same",
+          "\t\t- [ ] Left child"
+        ],
+        "requests": [
+          {
+            "selector": "Tasks.md#^owner@35aad3849db9d65d66a97e1fbae3961fa0b11b4d5fad8cab2b8aa78dc04fa26d/req/1~2a98b1de",
+            "verdict": "drop"
+          }
+        ]
+      },
+      "expect": {
+        "error_code": "req_close_stale",
+        "old_key": "Tasks.md#^owner@35aad3849db9d65d66a97e1fbae3961fa0b11b4d5fad8cab2b8aa78dc04fa26d/req/1~2a98b1de"
+      }
+    },
+    {
+      "id": "RV19",
+      "family": "choices",
+      "title": "duplicate closing owner identities refuse safely",
+      "input": {
+        "base_case": "RV4",
+        "duplicate_owner_index": 0
+      },
+      "expect": {
+        "error_code": "req_close_stale"
+      }
+    },
+    {
+      "id": "RV44",
+      "family": "choices",
+      "title": "structural overlap and fold walk the full forest across a hand-ticked intermediate",
+      "input": {
+        "base_case": "RV1",
+        "notes": [
+          {
+            "path": "Tasks.md",
+            "source_lines": [
+              "- [ ] #task Ship parser [id:: ship] ^ship",
+              "\t- [ ] Edge cases",
+              "\t\t- [x] Empty input",
+              "\t\t\t- [ ] Zero bytes",
+              "\t- [ ] Handles unicode"
+            ],
+            "closing": [
+              {
+                "block_id": "ship"
+              }
+            ]
+          }
+        ],
+        "pairs": [
+          {
+            "ancestor": "1",
+            "ancestor_verdict": "drop",
+            "descendant": "2",
+            "descendant_verdict": "carry"
+          },
+          {
+            "ancestor": "1",
+            "ancestor_verdict": "carry",
+            "descendant": "2",
+            "descendant_verdict": "drop"
+          }
+        ]
+      },
+      "expect": {
+        "error_code": "req_verdict_overlap",
+        "ancestor_path": "1",
+        "descendant_path": "1.1.1",
+        "after_drop": {
+          "visible_paths": ["1", "2"]
+        }
+      }
+    },
+    {
+      "expect": {
+        "met": [
+          {
+            "count": 3,
+            "owner_key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198",
+            "receipt": "✓ 3 requirements met with “Ship the exporter”"
+          }
+        ],
+        "outcomes": [
+          {
+            "carried": {
+              "block_id": "handles-empty-input",
+              "line": 6,
+              "path": "Tasks.md"
+            },
+            "moves": [],
+            "receipt": "→ “Handles empty input” is its own task now",
+            "row_key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+            "verdict": "carry"
+          }
+        ],
+        "postimages": {
+          "Tasks.md": "- [ ] #task Ship the exporter ^export\n\t- [ ] Handles supported inputs\n\t\t- [ ] Handles Windows files\n\t\t\t- [ ] Preserves CRLF\n\t\t- [>] [[#^handles-empty-input|Handles empty input]]\n- [ ] #task Handles empty input [created:: 2026-11-22] ^handles-empty-input\n\t- 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n"
+        }
+      },
+      "family": "writes",
+      "id": "RV20",
+      "input": {
+        "base_case": "RV1",
+        "date": "2026-11-22",
+        "requests": [
+          {
+            "reason": null,
+            "selector": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+            "verdict": "carry"
+          }
+        ],
+        "today": "2026-11-22"
+      },
+      "title": "depth-1 carry exact bytes"
+    },
+    {
+      "expect": {
+        "met": [
+          {
+            "count": 3,
+            "owner_key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198",
+            "receipt": "✓ 3 requirements met with “Ship the exporter”"
+          }
+        ],
+        "outcomes": [
+          {
+            "carried": {
+              "block_id": "preserves-crlf",
+              "line": 6,
+              "path": "Tasks.md"
+            },
+            "moves": [],
+            "receipt": "→ “Preserves CRLF” is its own task now",
+            "row_key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1.1~ec98ff88",
+            "verdict": "carry"
+          }
+        ],
+        "postimages": {
+          "Tasks.md": "- [ ] #task Ship the exporter ^export\n\t- [ ] Handles supported inputs\n\t\t- [ ] Handles Windows files\n\t\t\t- [>] [[#^preserves-crlf|Preserves CRLF]]\n\t\t- [ ] Handles empty input\n- [ ] #task Preserves CRLF [created:: 2026-11-22] ^preserves-crlf\n\t- 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n"
+        }
+      },
+      "family": "writes",
+      "id": "RV21",
+      "input": {
+        "base_case": "RV1",
+        "date": "2026-11-22",
+        "requests": [
+          {
+            "reason": null,
+            "selector": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1.1~ec98ff88",
+            "verdict": "carry"
+          }
+        ],
+        "today": "2026-11-22"
+      },
+      "title": "nested leaf carry exact bytes"
+    },
+    {
+      "expect": {
+        "met": [],
+        "outcomes": [
+          {
+            "carried": {
+              "block_id": "handles-supported",
+              "line": 3,
+              "path": "Tasks.md"
+            },
+            "moves": [
+              {
+                "from": 3,
+                "to": 5
+              },
+              {
+                "from": 4,
+                "to": 6
+              },
+              {
+                "from": 5,
+                "to": 7
+              }
+            ],
+            "receipt": "→ “Handles supported inputs” is its own task now",
+            "row_key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1~84afa836",
+            "verdict": "carry"
+          }
+        ],
+        "postimages": {
+          "Tasks.md": "- [ ] #task Ship the exporter ^export\n\t- [>] [[#^handles-supported|Handles supported inputs]]\n- [ ] #task Handles supported inputs [created:: 2026-11-22] ^handles-supported\n\t- 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n\t- [ ] Handles Windows files\n\t\t- [ ] Preserves CRLF\n\t- [ ] Handles empty input\n"
+        }
+      },
+      "family": "writes",
+      "id": "RV22",
+      "input": {
+        "base_case": "RV1",
+        "date": "2026-11-22",
+        "requests": [
+          {
+            "reason": null,
+            "selector": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1~84afa836",
+            "verdict": "carry"
+          }
+        ],
+        "today": "2026-11-22"
+      },
+      "title": "branch carry covers descendants"
+    },
+    {
+      "expect": {
+        "met": [
+          {
+            "count": 2,
+            "owner_key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198",
+            "receipt": "✓ 2 requirements met with “Ship the exporter”"
+          }
+        ],
+        "outcomes": [
+          {
+            "carried": {
+              "block_id": "preserves-crlf",
+              "line": 8,
+              "path": "Tasks.md"
+            },
+            "moves": [],
+            "receipt": "→ “Preserves CRLF” is its own task now",
+            "row_key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1.1~ec98ff88",
+            "verdict": "carry"
+          },
+          {
+            "carried": null,
+            "moves": [],
+            "receipt": "⊘ Dropped “Handles empty input” · “out of scope”",
+            "row_key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+            "verdict": "drop"
+          }
+        ],
+        "postimages": {
+          "Tasks.md": "- [ ] #task Ship the exporter ^export\n\t- [ ] Handles supported inputs\n\t\t- [ ] Handles Windows files\n\t\t\t- [>] [[#^preserves-crlf|Preserves CRLF]]\n\t\t- [-] Handles empty input\n\t\t\t- ❌ **CANCEL LOG**\n\t\t\t\t- *2026-11-22* — out of scope\n- [ ] #task Preserves CRLF [created:: 2026-11-22] ^preserves-crlf\n\t- 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n"
+        }
+      },
+      "family": "writes",
+      "id": "RV23",
+      "input": {
+        "base_case": "RV1",
+        "date": "2026-11-22",
+        "requests": [
+          {
+            "reason": null,
+            "selector": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1.1~ec98ff88",
+            "verdict": "carry"
+          },
+          {
+            "reason": "out of scope",
+            "selector": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+            "verdict": "drop"
+          }
+        ],
+        "today": "2026-11-22"
+      },
+      "title": "disjoint mixed carry and drop"
+    },
+    {
+      "expect": {
+        "met": [
+          {
+            "count": 1,
+            "owner_key": "Tasks.md#^research@8bd5f0dfff8f509fa29bfe2d5b6129e8a7066be3ddba72aeadddb33a85f0a4ea",
+            "receipt": "✓ 1 requirements met with “Research the exporter”"
+          }
+        ],
+        "outcomes": [
+          {
+            "carried": {
+              "block_id": "draft-plan",
+              "line": 4,
+              "path": "Tasks.md"
+            },
+            "moves": [
+              {
+                "from": 3,
+                "to": 6
+              }
+            ],
+            "receipt": "→ “Draft the plan” is its own task now",
+            "row_key": "Tasks.md#^research@8bd5f0dfff8f509fa29bfe2d5b6129e8a7066be3ddba72aeadddb33a85f0a4ea/req/1~7540eee6",
+            "verdict": "carry"
+          }
+        ],
+        "postimages": {
+          "Tasks.md": "- [ ] #task Research the exporter ^research\n\t- [>] [[#^draft-plan|Draft the plan]]\n\t- [ ] Benchmarks\n- [ ] #task Draft the plan [created:: 2026-11-22] ^draft-plan\n\t- 🪢 **LINKED FROM:** [[#^research]] (💬 mentions)\n\t- shared note\n"
+        }
+      },
+      "family": "writes",
+      "id": "RV24",
+      "input": {
+        "date": "2026-11-22",
+        "notes": [
+          {
+            "closing": [
+              {
+                "block_id": "research"
+              }
+            ],
+            "path": "Tasks.md",
+            "source_lines": [
+              "- [ ] #task Research the exporter ^research",
+              "\t- [ ] Draft the plan",
+              "\t\t- shared note",
+              "\t- [ ] Benchmarks"
+            ]
+          }
+        ],
+        "requests": [
+          {
+            "reason": null,
+            "selector": "Tasks.md#^research@8bd5f0dfff8f509fa29bfe2d5b6129e8a7066be3ddba72aeadddb33a85f0a4ea/req/1~7540eee6",
+            "verdict": "carry"
+          }
+        ],
+        "today": "2026-11-22"
+      },
+      "title": "carry keeps attached notes with the new task"
+    },
+    {
+      "expect": {
+        "met": [],
+        "outcomes": [
+          {
+            "carried": {
+              "block_id": "handles",
+              "line": 3,
+              "path": "Tasks.md"
+            },
+            "moves": [],
+            "receipt": "→ “Handles input” is its own task now",
+            "row_key": "Tasks.md#^export@3e7448180630b2a4e292b2f5bf6b828d47b882711b59a09e69bd4fe0dd1a072b/req/1~df718f5a",
+            "verdict": "carry"
+          }
+        ],
+        "postimages": {
+          "Tasks.md": "- [ ] #task Ship the exporter ^export\n\t- [>] [[#^handles|Handles input]]\n- [ ] #task Handles input [created:: 2026-11-22] ^handles\n\t- 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n"
+        }
+      },
+      "family": "writes",
+      "id": "RV25",
+      "input": {
+        "date": "2026-11-22",
+        "notes": [
+          {
+            "closing": [
+              {
+                "block_id": "export"
+              }
+            ],
+            "path": "Tasks.md",
+            "source_lines": [
+              "- [ ] #task Ship the exporter ^export",
+              "\t- [ ] Handles input ^handles"
+            ]
+          }
+        ],
+        "requests": [
+          {
+            "reason": null,
+            "selector": "Tasks.md#^export@3e7448180630b2a4e292b2f5bf6b828d47b882711b59a09e69bd4fe0dd1a072b/req/1~df718f5a",
+            "verdict": "carry"
+          }
+        ],
+        "today": "2026-11-22"
+      },
+      "title": "carry reuses the existing anchor"
+    },
+    {
+      "expect": {
+        "met": [
+          {
+            "count": 4,
+            "owner_key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198",
+            "receipt": "✓ 4 requirements met with “Ship the exporter”"
+          }
+        ],
+        "outcomes": [],
+        "postimages": {}
+      },
+      "family": "writes",
+      "id": "RV26",
+      "input": {
+        "base_case": "RV1",
+        "date": "2026-11-22",
+        "requests": [],
+        "today": "2026-11-22"
+      },
+      "title": "no-op met writes no bytes"
+    },
+    {
+      "expect": {
+        "met": [
+          {
+            "count": 3,
+            "owner_key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198",
+            "receipt": "✓ 3 requirements met with “Ship the exporter”"
+          }
+        ],
+        "outcomes": [
+          {
+            "carried": null,
+            "moves": [],
+            "receipt": "⊘ Dropped “Handles empty input” · “duplicate effort”",
+            "row_key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+            "verdict": "drop"
+          }
+        ],
+        "postimages": {
+          "Tasks.md": "- [ ] #task Ship the exporter ^export\n\t- [ ] Handles supported inputs\n\t\t- [ ] Handles Windows files\n\t\t\t- [ ] Preserves CRLF\n\t\t- [-] Handles empty input\n\t\t\t- ❌ **CANCEL LOG**\n\t\t\t\t- *2026-11-22* — duplicate effort\n"
+        }
+      },
+      "family": "writes",
+      "id": "RV27",
+      "input": {
+        "base_case": "RV1",
+        "date": "2026-11-22",
+        "requests": [
+          {
+            "reason": "duplicate effort",
+            "selector": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+            "verdict": "drop"
+          }
+        ],
+        "today": "2026-11-22"
+      },
+      "title": "drop with cancel log reason"
+    },
+    {
+      "expect": {
+        "met": [],
+        "outcomes": [
+          {
+            "carried": {
+              "block_id": "carry-req",
+              "line": 2,
+              "path": "inbox.md"
+            },
+            "moves": [],
+            "receipt": "→ “Carry this req” is its own task now",
+            "row_key": "2026/2026-11-22.md#^daily@ca416784613778e1c9dfee5c3ce5e0d49d90899f2c3da4a3d69fa1fe9d11f910/req/1~755007bf",
+            "verdict": "carry"
+          }
+        ],
+        "postimages": {
+          "2026/2026-11-22.md": "- [ ] #task Daily owner ^daily\n\t- [>] [[inbox#^carry-req|Carry this req]]\n",
+          "inbox.md": "## Tasks\n- [ ] #task Carry this req [created:: 2026-11-22] ^carry-req\n\t- 🪢 **LINKED FROM:** [[2026/2026-11-22#^daily]] (💬 mentions)\n"
+        }
+      },
+      "family": "writes",
+      "id": "RV28",
+      "input": {
+        "date": "2026-11-22",
+        "notes": [
+          {
+            "closing": [
+              {
+                "block_id": "daily"
+              }
+            ],
+            "path": "2026/2026-11-22.md",
+            "source_lines": [
+              "- [ ] #task Daily owner ^daily",
+              "\t- [ ] Carry this req"
+            ]
+          }
+        ],
+        "requests": [
+          {
+            "reason": null,
+            "selector": "2026/2026-11-22.md#^daily@ca416784613778e1c9dfee5c3ce5e0d49d90899f2c3da4a3d69fa1fe9d11f910/req/1~755007bf",
+            "verdict": "carry"
+          }
+        ],
+        "today": "2026-11-22"
+      },
+      "title": "daily-owner carry routes to the inbox note"
+    },
+    {
+      "id": "RV29",
+      "family": "placement",
+      "title": "pulled carry links after the owner's slot as Next with no freshness stamp",
+      "input": {
+        "base_case": "RV1",
+        "today": "2026-11-22",
+        "requests": [
+          {
+            "selector": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+            "verdict": "carry_pulled",
+            "reason": null
+          }
+        ],
+        "day": {
+          "path": "20261122.md",
+          "source_lines": [
+            "## Pomodoros",
+            "- [ ] (**0920-0950**) — CAPTURE",
+            "  - [[Tasks#^export]]",
+            "- [ ] () — FIX",
+            "  - [[sase#^other]]"
+          ]
+        },
+        "index": [
+          "Tasks.md",
+          "20261122.md",
+          "sase.md"
+        ],
+        "completed": [
+          {
+            "path": "Tasks.md",
+            "block_id": "export",
+            "is_root": true
+          }
+        ],
+        "closing": null
+      },
+      "expect": {
+        "day_after": "## Pomodoros\n- [ ] (**0920-0950**) — CAPTURE\n  - [[Tasks#^export]]\n  - [[Tasks#^handles-empty-input]]\n- [ ] () — FIX\n  - [[sase#^other]]\n",
+        "links": [
+          {
+            "block_id": "handles-empty-input",
+            "block_link": "[[Tasks#^handles-empty-input]]",
+            "entry_created": false,
+            "entry_line": 2,
+            "entry_name": "CAPTURE",
+            "entry_role": "slot",
+            "fallback": false,
+            "line": 4,
+            "path": "Tasks.md",
+            "previous_status": " ",
+            "row_key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+            "status": "*"
+          }
+        ],
+        "notes_after": {
+          "Tasks.md": "- [ ] #task Ship the exporter ^export\n\t- [ ] Handles supported inputs\n\t\t- [ ] Handles Windows files\n\t\t\t- [ ] Preserves CRLF\n\t\t- [>] [[#^handles-empty-input|Handles empty input]]\n- [*] #task Handles empty input [created:: 2026-11-22] ^handles-empty-input\n\t- 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n"
+        }
+      }
+    },
+    {
+      "id": "RV30",
+      "family": "placement",
+      "title": "nested owner inherits the root's slot",
+      "input": {
+        "base_case": "RV4",
+        "today": "2026-11-22",
+        "requests": [
+          {
+            "selector": "Tasks.md#^child@3332592137d4aca4a04940b060df4d6ca8ebab5475f2d69bb73ef1f5850f0277/req/1~cc8b8daf",
+            "verdict": "carry_pulled",
+            "reason": null
+          }
+        ],
+        "day": {
+          "path": "20261122.md",
+          "source_lines": [
+            "## Pomodoros",
+            "- [ ] (**0920-0950**) — SHIP",
+            "  - [[Tasks#^parent]]"
+          ]
+        },
+        "index": [
+          "Tasks.md",
+          "20261122.md"
+        ],
+        "completed": [
+          {
+            "path": "Tasks.md",
+            "block_id": "parent",
+            "is_root": true
+          },
+          {
+            "path": "Tasks.md",
+            "block_id": "child",
+            "is_root": false
+          }
+        ],
+        "closing": null
+      },
+      "expect": {
+        "day_after": "## Pomodoros\n- [ ] (**0920-0950**) — SHIP\n  - [[Tasks#^parent]]\n  - [[Tasks#^child-req]]\n",
+        "links": [
+          {
+            "block_id": "child-req",
+            "block_link": "[[Tasks#^child-req]]",
+            "entry_created": false,
+            "entry_line": 2,
+            "entry_name": "SHIP",
+            "entry_role": "slot",
+            "fallback": false,
+            "line": 4,
+            "path": "Tasks.md",
+            "previous_status": " ",
+            "row_key": "Tasks.md#^child@3332592137d4aca4a04940b060df4d6ca8ebab5475f2d69bb73ef1f5850f0277/req/1~cc8b8daf",
+            "status": "*"
+          }
+        ],
+        "notes_after": {
+          "Tasks.md": "- [ ] #task Parent ^parent\n\t- [ ] Parent req\n\t- [ ] #task Child ^child\n\t\t- [>] [[#^child-req|Child req]]\n\t- [*] #task Child req [created:: 2026-11-22] ^child-req\n\t\t- 🪢 **LINKED FROM:** [[#^child]] (💬 mentions)\n"
+        }
+      }
+    },
+    {
+      "id": "RV31",
+      "family": "placement",
+      "title": "pomodoro close places the carried link in a created continuation",
+      "input": {
+        "base_case": "RV1",
+        "today": "2026-11-22",
+        "requests": [
+          {
+            "selector": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+            "verdict": "carry_pulled",
+            "reason": null
+          }
+        ],
+        "day": {
+          "path": "20261122.md",
+          "source_lines": [
+            "## Pomodoros",
+            "- [x] (**0920-0950**) — FIX",
+            "  - ~~[[Tasks#^export]]~~"
+          ]
+        },
+        "index": [
+          "Tasks.md",
+          "20261122.md"
+        ],
+        "completed": [
+          {
+            "path": "Tasks.md",
+            "block_id": "export",
+            "is_root": true
+          }
+        ],
+        "closing": {
+          "continuation_name": "FIX",
+          "closed_line": 1,
+          "continuation": null
+        }
+      },
+      "expect": {
+        "day_after": "## Pomodoros\n- [x] (**0920-0950**) — FIX\n  - ~~[[Tasks#^export]]~~\n- [ ] () — FIX\n\t- [[Tasks#^handles-empty-input]]\n",
+        "links": [
+          {
+            "block_id": "handles-empty-input",
+            "block_link": "[[Tasks#^handles-empty-input]]",
+            "entry_created": true,
+            "entry_line": 4,
+            "entry_name": "FIX",
+            "entry_role": "created",
+            "fallback": false,
+            "line": 5,
+            "path": "Tasks.md",
+            "previous_status": " ",
+            "row_key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+            "status": "*"
+          }
+        ],
+        "notes_after": {
+          "Tasks.md": "- [ ] #task Ship the exporter ^export\n\t- [ ] Handles supported inputs\n\t\t- [ ] Handles Windows files\n\t\t\t- [ ] Preserves CRLF\n\t\t- [>] [[#^handles-empty-input|Handles empty input]]\n- [*] #task Handles empty input [created:: 2026-11-22] ^handles-empty-input\n\t- 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n"
+        }
+      }
+    },
+    {
+      "id": "RV32",
+      "family": "placement",
+      "title": "an unlinked owner falls back to the implicit destination",
+      "input": {
+        "base_case": "RV1",
+        "today": "2026-11-22",
+        "requests": [
+          {
+            "selector": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+            "verdict": "carry_pulled",
+            "reason": null
+          }
+        ],
+        "day": {
+          "path": "20261122.md",
+          "source_lines": [
+            "## Pomodoros",
+            "- [x] (**0850-0915**) — MAIL",
+            "- [ ] () — FIX"
+          ]
+        },
+        "index": [
+          "Tasks.md",
+          "20261122.md"
+        ],
+        "completed": [
+          {
+            "path": "Tasks.md",
+            "block_id": "export",
+            "is_root": true
+          }
+        ],
+        "closing": null
+      },
+      "expect": {
+        "day_after": "## Pomodoros\n- [x] (**0850-0915**) — MAIL\n- [ ] () — FIX\n\t- [[Tasks#^handles-empty-input]]\n",
+        "links": [
+          {
+            "block_id": "handles-empty-input",
+            "block_link": "[[Tasks#^handles-empty-input]]",
+            "entry_created": false,
+            "entry_line": 3,
+            "entry_name": "FIX",
+            "entry_role": "implicit",
+            "fallback": true,
+            "line": 4,
+            "path": "Tasks.md",
+            "previous_status": " ",
+            "row_key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+            "status": "*"
+          }
+        ],
+        "notes_after": {
+          "Tasks.md": "- [ ] #task Ship the exporter ^export\n\t- [ ] Handles supported inputs\n\t\t- [ ] Handles Windows files\n\t\t\t- [ ] Preserves CRLF\n\t\t- [>] [[#^handles-empty-input|Handles empty input]]\n- [*] #task Handles empty input [created:: 2026-11-22] ^handles-empty-input\n\t- 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n"
+        }
+      }
+    },
+    {
+      "id": "RV33",
+      "family": "placement",
+      "title": "multiple pulled carries in one note link in card order",
+      "input": {
+        "base_case": "RV1",
+        "today": "2026-11-22",
+        "requests": [
+          {
+            "selector": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+            "verdict": "carry_pulled",
+            "reason": null
+          },
+          {
+            "selector": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1.1~ec98ff88",
+            "verdict": "carry_pulled",
+            "reason": null
+          }
+        ],
+        "day": {
+          "path": "20261122.md",
+          "source_lines": [
+            "## Pomodoros",
+            "- [ ] (**0920-0950**) — CAPTURE",
+            "  - [[Tasks#^export]]",
+            "- [ ] () — FIX",
+            "  - [[sase#^other]]"
+          ]
+        },
+        "index": [
+          "Tasks.md",
+          "20261122.md",
+          "sase.md"
+        ],
+        "completed": [
+          {
+            "path": "Tasks.md",
+            "block_id": "export",
+            "is_root": true
+          }
+        ],
+        "closing": null
+      },
+      "expect": {
+        "day_after": "## Pomodoros\n- [ ] (**0920-0950**) — CAPTURE\n  - [[Tasks#^export]]\n  - [[Tasks#^preserves-crlf]]\n  - [[Tasks#^handles-empty-input]]\n- [ ] () — FIX\n  - [[sase#^other]]\n",
+        "links": [
+          {
+            "block_id": "preserves-crlf",
+            "block_link": "[[Tasks#^preserves-crlf]]",
+            "entry_created": false,
+            "entry_line": 2,
+            "entry_name": "CAPTURE",
+            "entry_role": "slot",
+            "fallback": false,
+            "line": 4,
+            "path": "Tasks.md",
+            "previous_status": " ",
+            "row_key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1.1~ec98ff88",
+            "status": "*"
+          },
+          {
+            "block_id": "handles-empty-input",
+            "block_link": "[[Tasks#^handles-empty-input]]",
+            "entry_created": false,
+            "entry_line": 2,
+            "entry_name": "CAPTURE",
+            "entry_role": "slot",
+            "fallback": false,
+            "line": 5,
+            "path": "Tasks.md",
+            "previous_status": " ",
+            "row_key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+            "status": "*"
+          }
+        ],
+        "notes_after": {
+          "Tasks.md": "- [ ] #task Ship the exporter ^export\n\t- [ ] Handles supported inputs\n\t\t- [ ] Handles Windows files\n\t\t\t- [>] [[#^preserves-crlf|Preserves CRLF]]\n\t\t- [>] [[#^handles-empty-input|Handles empty input]]\n- [*] #task Preserves CRLF [created:: 2026-11-22] ^preserves-crlf\n\t- 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n- [*] #task Handles empty input [created:: 2026-11-22] ^handles-empty-input\n\t- 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n"
+        }
+      }
+    },
+    {
+      "id": "RV34",
+      "family": "placement",
+      "title": "a daily owner's carried task links from the inbox",
+      "input": {
+        "notes": [
+          {
+            "path": "2026/2026-11-22.md",
+            "closing": [
+              {
+                "block_id": "daily"
+              }
+            ],
+            "source_lines": [
+              "## Pomodoros",
+              "- [ ] (**0920-0950**) — CAPTURE",
+              "\t- [[2026-11-22#^daily]]",
+              "## Tasks",
+              "- [ ] #task Daily owner ^daily",
+              "\t- [ ] Carry this req"
+            ]
+          }
+        ],
+        "today": "2026-11-22",
+        "requests": [
+          {
+            "selector": "2026/2026-11-22.md#^daily@ca416784613778e1c9dfee5c3ce5e0d49d90899f2c3da4a3d69fa1fe9d11f910/req/1~755007bf",
+            "verdict": "carry_pulled",
+            "reason": null
+          }
+        ],
+        "day": {
+          "path": "2026/2026-11-22.md",
+          "source_lines": null
+        },
+        "index": [
+          "2026/2026-11-22.md",
+          "inbox.md"
+        ],
+        "completed": [
+          {
+            "path": "2026/2026-11-22.md",
+            "block_id": "daily",
+            "is_root": true
+          }
+        ],
+        "closing": null
+      },
+      "expect": {
+        "day_after": "## Pomodoros\n- [ ] (**0920-0950**) — CAPTURE\n\t- [[2026-11-22#^daily]]\n\t- [[inbox#^carry-req]]\n## Tasks\n- [ ] #task Daily owner ^daily\n\t- [>] [[inbox#^carry-req|Carry this req]]\n",
+        "links": [
+          {
+            "block_id": "carry-req",
+            "block_link": "[[inbox#^carry-req]]",
+            "entry_created": false,
+            "entry_line": 2,
+            "entry_name": "CAPTURE",
+            "entry_role": "slot",
+            "fallback": false,
+            "line": 4,
+            "path": "inbox.md",
+            "previous_status": " ",
+            "row_key": "2026/2026-11-22.md#^daily@ca416784613778e1c9dfee5c3ce5e0d49d90899f2c3da4a3d69fa1fe9d11f910/req/1~755007bf",
+            "status": "*"
+          }
+        ],
+        "notes_after": {
+          "inbox.md": "## Tasks\n- [*] #task Carry this req [created:: 2026-11-22] ^carry-req\n\t- 🪢 **LINKED FROM:** [[2026/2026-11-22#^daily]] (💬 mentions)\n"
+        }
+      }
+    },
+    {
+      "id": "RV35",
+      "family": "placement",
+      "title": "a pulled carry with no open entry refuses the batch",
+      "input": {
+        "base_case": "RV1",
+        "today": "2026-11-22",
+        "requests": [
+          {
+            "selector": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+            "verdict": "carry_pulled",
+            "reason": null
+          }
+        ],
+        "day": {
+          "path": "20261122.md",
+          "source_lines": [
+            "## Pomodoros",
+            "- [x] (**0850-0915**) — MAIL"
+          ]
+        },
+        "index": [
+          "Tasks.md",
+          "20261122.md"
+        ],
+        "completed": [
+          {
+            "path": "Tasks.md",
+            "block_id": "export",
+            "is_root": true
+          }
+        ],
+        "closing": null
+      },
+      "expect": {
+        "refusal": "req_pull_in_no_destination"
+      }
+    },
+    {
+      "id": "RV36",
+      "family": "jump",
+      "title": "a carried row lands on its new task, not the stub",
+      "input": {
+        "base_case": "RV1",
+        "today": "2026-11-22",
+        "requests": [
+          {
+            "selector": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+            "verdict": "carry",
+            "reason": null
+          }
+        ],
+        "jump": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe"
+      },
+      "expect": {
+        "carried": {
+          "1.2": "handles-empty-input"
+        },
+        "landing": {
+          "block_id": "handles-empty-input",
+          "in_task": "handles-empty-input",
+          "kind": "carried_task",
+          "line": 6,
+          "outcome": "carry",
+          "path": "Tasks.md",
+          "text": "- [ ] #task Handles empty input [created:: 2026-11-22] ^handles-empty-input"
+        },
+        "postimage_count": 1
+      }
+    },
+    {
+      "id": "RV37",
+      "family": "jump",
+      "title": "a pinned child moves with its carried ancestor",
+      "input": {
+        "base_case": "RV1",
+        "today": "2026-11-22",
+        "requests": [
+          {
+            "selector": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1~84afa836",
+            "verdict": "carry_pulled",
+            "reason": null
+          }
+        ],
+        "jump": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1.1~ec98ff88"
+      },
+      "expect": {
+        "carried": {
+          "1": "handles-supported"
+        },
+        "landing": {
+          "block_id": null,
+          "in_task": "handles-supported",
+          "kind": "moved_with_ancestor",
+          "line": 6,
+          "outcome": "carry_pulled",
+          "path": "Tasks.md",
+          "text": "\t\t- [ ] Preserves CRLF"
+        },
+        "postimage_count": 1
+      }
+    },
+    {
+      "id": "RV38",
+      "family": "jump",
+      "title": "a met row follows an earlier sibling branch carry",
+      "input": {
+        "base_case": "RV1",
+        "today": "2026-11-22",
+        "requests": [
+          {
+            "selector": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1~11514ecf",
+            "verdict": "carry",
+            "reason": null
+          }
+        ],
+        "jump": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe"
+      },
+      "expect": {
+        "carried": {
+          "1.1": "handles-windows"
+        },
+        "landing": {
+          "block_id": null,
+          "in_task": "export",
+          "kind": "requirement",
+          "line": 4,
+          "outcome": "met",
+          "path": "Tasks.md",
+          "text": "\t\t- [ ] Handles empty input"
+        },
+        "postimage_count": 1
+      }
+    },
+    {
+      "id": "RV39",
+      "family": "jump",
+      "title": "a met row follows a preceding drop's cancel log",
+      "input": {
+        "base_case": "RV1",
+        "today": "2026-11-22",
+        "requests": [
+          {
+            "selector": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1.1~ec98ff88",
+            "verdict": "drop",
+            "reason": "not needed"
+          }
+        ],
+        "jump": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe"
+      },
+      "expect": {
+        "carried": {},
+        "landing": {
+          "block_id": null,
+          "in_task": "export",
+          "kind": "requirement",
+          "line": 7,
+          "outcome": "met",
+          "path": "Tasks.md",
+          "text": "\t\t- [ ] Handles empty input"
+        },
+        "postimage_count": 1
+      }
+    },
+    {
+      "id": "RV40",
+      "family": "jump",
+      "title": "a row under a dropped ancestor stays in place as dropped",
+      "input": {
+        "base_case": "RV1",
+        "today": "2026-11-22",
+        "requests": [
+          {
+            "selector": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1~11514ecf",
+            "verdict": "drop",
+            "reason": null
+          }
+        ],
+        "jump": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1.1~ec98ff88"
+      },
+      "expect": {
+        "carried": {},
+        "landing": {
+          "block_id": null,
+          "in_task": "export",
+          "kind": "requirement",
+          "line": 4,
+          "outcome": "drop",
+          "path": "Tasks.md",
+          "text": "\t\t\t- [ ] Preserves CRLF"
+        },
+        "postimage_count": 1
+      }
+    },
+    {
+      "id": "RV41",
+      "family": "jump",
+      "title": "same-labelled carried branches land by identity, not label",
+      "input": {
+        "base_case": "RV10",
+        "today": "2026-11-22",
+        "requests": [
+          {
+            "selector": "Tasks.md#^owner@35aad3849db9d65d66a97e1fbae3961fa0b11b4d5fad8cab2b8aa78dc04fa26d/req/1~2a98b1de",
+            "verdict": "carry",
+            "reason": null
+          },
+          {
+            "selector": "Tasks.md#^owner@35aad3849db9d65d66a97e1fbae3961fa0b11b4d5fad8cab2b8aa78dc04fa26d/req/2~2a98b1de",
+            "verdict": "carry",
+            "reason": null
+          }
+        ],
+        "jump": "Tasks.md#^owner@35aad3849db9d65d66a97e1fbae3961fa0b11b4d5fad8cab2b8aa78dc04fa26d/req/2.1~ae369099"
+      },
+      "expect": {
+        "carried": {
+          "1": "same-2",
+          "2": "same"
+        },
+        "landing": {
+          "block_id": null,
+          "in_task": "same",
+          "kind": "moved_with_ancestor",
+          "line": 9,
+          "outcome": "carry",
+          "path": "Tasks.md",
+          "text": "\t- [ ] Right child"
+        },
+        "postimage_count": 1
+      }
+    },
+    {
+      "id": "RV42",
+      "family": "jump",
+      "title": "a jump pin alone writes nothing and lands on the requirement",
+      "input": {
+        "base_case": "RV1",
+        "today": "2026-11-22",
+        "requests": [],
+        "jump": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1.1~ec98ff88"
+      },
+      "expect": {
+        "carried": {},
+        "landing": {
+          "block_id": null,
+          "in_task": "export",
+          "kind": "requirement",
+          "line": 4,
+          "outcome": "met",
+          "path": "Tasks.md",
+          "text": "\t\t\t- [ ] Preserves CRLF"
+        },
+        "postimage_count": 0
+      }
+    },
+    {
+      "id": "RV43",
+      "family": "jump",
+      "title": "an inbox route forwards the owner through its renamed block",
+      "input": {
+        "base_case": "RV1",
+        "today": "2026-11-22",
+        "requests": [],
+        "jump": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+        "final_notes": {
+          "Tasks.md": [
+            "## Tasks"
+          ],
+          "Projects.md": [
+            "## Tasks",
+            "- [ ] #task Other exporter ^export",
+            "- [ ] #task Ship the exporter ^export-2",
+            "\t- [ ] Handles supported inputs",
+            "\t\t- [ ] Handles Windows files",
+            "\t\t\t- [ ] Preserves CRLF",
+            "\t\t- [ ] Handles empty input"
+          ]
+        },
+        "routes": [
+          {
+            "source": "Tasks.md",
+            "dest": "Projects.md",
+            "old_block_id": "export",
+            "new_block_id": "export-2"
+          }
+        ]
+      },
+      "expect": {
+        "carried": {},
+        "landing": {
+          "block_id": null,
+          "in_task": "export-2",
+          "kind": "requirement",
+          "line": 7,
+          "outcome": "met",
+          "path": "Projects.md",
+          "text": "\t\t- [ ] Handles empty input"
+        },
+        "postimage_count": 0
+      }
+    }
+  ]
+}

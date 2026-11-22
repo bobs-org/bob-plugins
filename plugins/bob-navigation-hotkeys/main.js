@@ -134171,6 +134171,707 @@ function taskReqInsert(contents, target, blocks, options) {
     notesCreated,
   };
 }
+// ---- src/699-req-close-twin.js ----
+// --- Requirement close-card twin (RV rows): snapshots, groups, and copy ------
+// Twin of bob-cli `src/native/task_complete/req_close.rs`
+// (`docs/task-requirements.md` §7). Rust is the authority; the shared RV
+// vectors in `scripts/fixtures/req_close/` are copied byte for byte from
+// bob-cli. Plugin-agnostic and copied byte for byte; update bob-cli first,
+// then this file, then its copies. Reads the RQ twin.
+//
+// Collection binds each successful non-recurring closing owner to the exact
+// pre-close owner-block bytes. Groups list only Pending rows. SHA-256 is
+// injected (`sha256Hex(text) -> hex`) so this fragment stays pure.
+
+const REQ_CLOSE_COPY = Object.freeze({
+  WHY: "Met when it closes, unless you say otherwise",
+  DROP_PROMPT: "Why drop it? (optional)",
+  FOOTER: "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
+  JUMP_HINT: "↗ jumps to the requirement — ⌃⇧T makes it a task",
+  HINT: "-k N own task · -X N[=why] drop · -p N pull in",
+  TEACHING: "Part of this task's scope. Met when the task closes. Drop it or make it a task",
+});
+
+function reqCloseQuoted(text) {
+  return `“${text}”`;
+}
+
+function reqCloseGroupTitle(ownerText) {
+  return `Requirements · ${reqCloseQuoted(ownerText)}`;
+}
+
+function reqCloseScope(pending, branches) {
+  return branches <= 1 ? `${pending} reqs` : `${pending} reqs in ${branches} branches`;
+}
+
+function reqCloseHistory(dropped, carried, met) {
+  const parts = [];
+  if (dropped > 0) parts.push(`${dropped} dropped earlier`);
+  if (carried > 0) parts.push(`${carried} carried earlier`);
+  if (met > 0) parts.push(`${met} met earlier`);
+  return parts.length ? `· ${parts.join(" · ")}` : null;
+}
+
+function reqCloseOverlap(ancestor) {
+  return `${reqCloseQuoted(ancestor)} already takes this branch — restage it as met to choose here`;
+}
+
+function reqCloseNestedGoWithIt(count) {
+  return `· ${count} nested go with it`;
+}
+
+function reqCloseMetReceipt(count, ownerText) {
+  return `✓ ${count} requirements met with ${reqCloseQuoted(ownerText)}`;
+}
+
+function reqCloseHumanMetLine(count, ownerText) {
+  return `${taskReqRun(1)} ${count} requirements met with ${reqCloseQuoted(ownerText)}`;
+}
+
+function reqCloseDropReceipt(text, reason) {
+  let line = `⊘ Dropped ${reqCloseQuoted(text)}`;
+  if (reason) line += ` · ${reqCloseQuoted(reason)}`;
+  return line;
+}
+
+function reqCloseCarryReceipt(text, pulled) {
+  let line = `→ ${reqCloseQuoted(text)} is its own task now`;
+  if (pulled) line += " · pulled in";
+  return line;
+}
+
+function reqCloseSummary(met, dropped, carried) {
+  return `reqs ✓${met} ⊘${dropped} →${carried}`;
+}
+
+function reqCloseAccessibility(depth, verb) {
+  return `requirement, level ${depth}, ${verb}`;
+}
+
+function reqCloseWouldMet(count, ownerText) {
+  return `would meet ${count} requirements with ${reqCloseQuoted(ownerText)}`;
+}
+
+function reqCloseConsequences(text) {
+  return {
+    met: REQ_CLOSE_COPY.WHY,
+    drop: reqCloseDropReceipt(text, null),
+    carry: reqCloseCarryReceipt(text, false),
+    carry_pulled: reqCloseCarryReceipt(text, true),
+  };
+}
+
+function reqCloseNeedHash(sha256Hex) {
+  if (typeof sha256Hex !== "function") {
+    throw new Error("reqClose twins need sha256Hex(text) -> hex");
+  }
+  return sha256Hex;
+}
+
+function reqCloseDigest8(sha256Hex) {
+  const hash = reqCloseNeedHash(sha256Hex);
+  return (text) => String(hash(text)).slice(0, 8);
+}
+
+function reqCloseNotePath(relativePath) {
+  return String(relativePath || "")
+    .split(/[\\/]+/)
+    .filter((part) => part && part !== ".")
+    .join("/");
+}
+
+function reqCloseIsRecurringTaskLine(line) {
+  const text = String(line == null ? "" : line);
+  return text.includes("[repeat::") || text.includes("(repeat::") || text.includes("🔁");
+}
+
+function reqCloseStableTaskKey(relativePath, blockId, description, globalFilter, digestOrdinal, sha256Hex) {
+  const path = reqCloseNotePath(relativePath);
+  if (blockId) return `${path}#^${blockId}`;
+  const cleaned = taskReqCleanDescription(description, globalFilter === undefined ? TASK_REQ_GLOBAL_FILTER : globalFilter, null);
+  const hex = String(reqCloseNeedHash(sha256Hex)(cleaned));
+  const ordinal = digestOrdinal == null ? 1 : digestOrdinal;
+  return ordinal >= 2 ? `${path}@${hex.slice(0, 8)}~${ordinal}` : `${path}@${hex.slice(0, 8)}`;
+}
+
+function reqCloseOwnerSnapshotKey(taskKey, preimage, sha256Hex) {
+  return `${taskKey}@${reqCloseNeedHash(sha256Hex)(preimage)}`;
+}
+
+function reqCloseOwnerBlockPreimage(contents, task) {
+  const text = String(contents == null ? "" : contents);
+  const spans = taskReqLineSpans(text);
+  const start = task.lineIndex <= 0
+    ? 0
+    : (spans[task.lineIndex - 1] ? spans[task.lineIndex - 1].end : 0);
+  const end = Math.min(task.blockEnd, text.length);
+  if (start >= end || start > text.length) return "";
+  return text.slice(start, end);
+}
+
+function reqCloseDigestOrdinal(contents, task, options) {
+  if (task.blockId) return 1;
+  const scan = taskReqNoteTasks(contents, options);
+  let ordinal = 0;
+  for (const other of scan) {
+    if (other.blockId) continue;
+    if (other.description === task.description) ordinal += 1;
+    if (other.lineIndex === task.lineIndex) break;
+  }
+  return Math.max(ordinal, 1);
+}
+
+function reqClosePendingDescendantCount(forest, node) {
+  return forest.filter((other) => (
+    other.lineIndex > node.lineIndex
+    && other.lineIndex <= node.subtreeEndIndex
+    && other.ownerIndex === node.ownerIndex
+    && other.state === "pending"
+  )).length;
+}
+
+function reqCloseFindTask(tasks, spec) {
+  if (spec && spec.block_id) {
+    return tasks.find((task) => task.blockId === spec.block_id) || null;
+  }
+  if (spec && spec.line != null) {
+    const lineIndex = Number(spec.line) - 1;
+    return tasks.find((task) => task.lineIndex === lineIndex) || null;
+  }
+  return null;
+}
+
+function reqCloseHistoryFolds(nodes) {
+  const folds = { dropped: 0, carried: 0, met: 0 };
+  for (const node of nodes) {
+    if (node.state === "dropped") folds.dropped += 1;
+    else if (node.state === "carried") folds.carried += 1;
+    else if (node.state === "met") folds.met += 1;
+  }
+  return folds;
+}
+
+function reqClosePendingCount(owner) {
+  return owner.nodes.filter((node) => node.state === "pending").length;
+}
+
+function reqClosePendingBranches(owner) {
+  return owner.nodes.filter((node) => node.state === "pending" && node.depth === 1).length;
+}
+
+function reqCloseOwnerView(owner) {
+  return {
+    task_key: owner.task_key,
+    key: owner.key,
+    path: owner.path,
+    block_id: owner.block_id,
+    line: owner.line,
+    text: owner.text,
+  };
+}
+
+function reqCloseOwnerGroup(owner) {
+  const pending = owner.nodes.filter((node) => node.state === "pending");
+  if (!pending.length) return null;
+  const folds = reqCloseHistoryFolds(owner.nodes);
+  return {
+    group: "requirements",
+    kind: "requirements",
+    owner: reqCloseOwnerView(owner),
+    copy: {
+      title: reqCloseGroupTitle(owner.text),
+      scope: reqCloseScope(pending.length, reqClosePendingBranches(owner)),
+      why: REQ_CLOSE_COPY.WHY,
+      history: reqCloseHistory(folds.dropped, folds.carried, folds.met),
+      glyph: taskReqRun(1),
+      footer: REQ_CLOSE_COPY.FOOTER,
+      hint: REQ_CLOSE_COPY.HINT,
+    },
+    folded: folds,
+    rows: pending.map((node) => ({
+      offer: {
+        key: node.key,
+        n: 0,
+        group: "requirements",
+        selected: false,
+      },
+      owner_key: owner.key,
+      path: node.path,
+      depth: node.depth,
+      parent_key: node.parent_key,
+      text: node.text,
+      line: node.line,
+      state: node.state,
+      pending_descendants: node.pending_descendants,
+      depth_exceeded: node.depth_exceeded,
+      run: taskReqRun(node.depth),
+      accessibility: reqCloseAccessibility(node.depth, "will be met"),
+      consequences: reqCloseConsequences(node.text),
+    })),
+  };
+}
+
+function reqCloseGroupsFromOwners(owners) {
+  return (owners || []).map(reqCloseOwnerGroup).filter(Boolean);
+}
+
+function reqCloseCollectOwner(contents, relativePath, task, sha256Hex, options) {
+  const text = String(contents == null ? "" : contents);
+  const resolved = taskReqOptions(options);
+  const spans = taskReqLineSpans(text);
+  const taskLine = spans[task.lineIndex] ? spans[task.lineIndex].text : String(task.description || "");
+  if (reqCloseIsRecurringTaskLine(taskLine)) return null;
+  const scan = taskReqNoteTasks(text, resolved);
+  const owned = scan.find((row) => row.lineIndex === task.lineIndex) || task;
+  const preimage = reqCloseOwnerBlockPreimage(text, owned);
+  const ordinal = reqCloseDigestOrdinal(text, owned, resolved);
+  const taskKey = reqCloseStableTaskKey(
+    relativePath,
+    owned.blockId,
+    owned.description,
+    resolved.globalFilter,
+    ordinal,
+    sha256Hex,
+  );
+  const key = reqCloseOwnerSnapshotKey(taskKey, preimage, sha256Hex);
+  const forest = taskReqForestForOwner(text, owned.lineIndex, resolved);
+  const digest8 = reqCloseDigest8(sha256Hex);
+  const keysByLine = new Map();
+  for (const node of forest) {
+    keysByLine.set(node.lineIndex, taskReqRowKey(key, node, digest8));
+  }
+  let depthExceeded = false;
+  const nodes = forest.map((node) => {
+    if (node.depth_exceeded || node.depth > TASK_REQ_MAX_DEPTH) depthExceeded = true;
+    const parentKey = node.parentIndex == null ? null : (keysByLine.get(node.parentIndex) || null);
+    return {
+      key: keysByLine.get(node.lineIndex) || taskReqRowKey(key, node, digest8),
+      path: taskReqPathText(node),
+      depth: node.depth,
+      parent_key: parentKey,
+      text: node.text,
+      line: node.lineIndex + 1,
+      state: node.state,
+      mark: node.mark,
+      pending_descendants: reqClosePendingDescendantCount(forest, node),
+      depth_exceeded: Boolean(node.depth_exceeded),
+    };
+  });
+  return {
+    task_key: taskKey,
+    key,
+    path: reqCloseNotePath(relativePath),
+    block_id: owned.blockId || "",
+    line: owned.lineIndex + 1,
+    text: owned.description,
+    preimage,
+    task_line: taskLine,
+    depth_exceeded: depthExceeded,
+    nodes,
+  };
+}
+
+function reqCloseCollectOwners(notes, sha256Hex, options) {
+  const owners = [];
+  for (const note of notes || []) {
+    const ending = note.eol === "crlf" ? "\r\n" : "\n";
+    const contents = `${(note.source_lines || []).join(ending)}${ending}`;
+    const tasks = taskReqNoteTasks(contents, options);
+    for (const spec of note.closing || []) {
+      const task = reqCloseFindTask(tasks, spec);
+      if (!task) continue;
+      const owner = reqCloseCollectOwner(contents, note.path, task, sha256Hex, options);
+      if (owner) owners.push(owner);
+    }
+  }
+  return owners;
+}
+// ---- src/699a-req-verdicts-twin.js ----
+// --- Requirement close-card twin (RV choices): numbering, fold, validation --
+// Twin of bob-cli `src/native/task_complete/req_verdicts.rs` interactive and
+// final choice logic (`docs/task-requirements.md` §7). Consumes
+// `req-close-twin.js` snapshots and never writes requirement state.
+// Plugin-agnostic and copied byte for byte; update bob-cli first, then this
+// file, then its copies.
+
+const REQ_CLOSE_VERDICTS = Object.freeze(["met", "drop", "carry", "carry_pulled"]);
+
+function reqCloseTakesBranch(verdict) {
+  return verdict === "drop" || verdict === "carry" || verdict === "carry_pulled";
+}
+
+function reqCloseNormalizeReason(reason) {
+  if (reason == null) return null;
+  const normalized = taskReqSplitWhitespace(String(reason)).join(" ");
+  return normalized === "" ? null : normalized;
+}
+
+function reqCloseSelectorIsNumber(selector) {
+  const text = String(selector == null ? "" : selector);
+  for (let index = 0; index < text.length; index += 1) {
+    const ch = text[index];
+    if (ch < "0" || ch > "9") return false;
+  }
+  return true;
+}
+
+function reqCloseCloneGroup(group) {
+  return {
+    group: group.group,
+    kind: group.kind,
+    owner: Object.assign({}, group.owner),
+    copy: Object.assign({}, group.copy),
+    folded: Object.assign({}, group.folded),
+    rows: group.rows.map((row) => ({
+      offer: Object.assign({}, row.offer),
+      owner_key: row.owner_key,
+      path: row.path,
+      depth: row.depth,
+      parent_key: row.parent_key,
+      text: row.text,
+      line: row.line,
+      state: row.state,
+      pending_descendants: row.pending_descendants,
+      depth_exceeded: row.depth_exceeded,
+      run: row.run,
+      accessibility: row.accessibility,
+      consequences: Object.assign({}, row.consequences),
+    })),
+  };
+}
+
+function reqCloseStaleError(selectors, groups, numbering) {
+  const numbered = numbering.numberedGroups(groups);
+  return {
+    ok: false,
+    code: "req_close_stale",
+    selectors: selectors.slice(),
+    current: {
+      groups: numbered.ok === false ? groups.map(reqCloseCloneGroup) : numbered.groups,
+      rows: numbering.rows.map((row) => Object.assign({}, row)),
+    },
+  };
+}
+
+function reqCloseCardNumbering(groups, taskOfferKeys) {
+  const rows = [];
+  const byKey = new Map();
+  const byNumber = new Map();
+
+  function push(key, kind) {
+    if (byKey.has(key)) {
+      return { ok: false, code: "req_close_stale", key, kind: "duplicate_card_key" };
+    }
+    const n = rows.length + 1;
+    byKey.set(key, n);
+    byNumber.set(n, rows.length);
+    rows.push({ key, n, kind });
+    return null;
+  }
+
+  for (const group of groups || []) {
+    for (const row of group.rows) {
+      const error = push(row.offer.key, "requirement");
+      if (error) return error;
+    }
+  }
+  for (const key of taskOfferKeys || []) {
+    const error = push(key, "task_offer");
+    if (error) return error;
+  }
+
+  function resolve(selector) {
+    const text = String(selector == null ? "" : selector);
+    if (reqCloseSelectorIsNumber(text)) {
+      const n = text === "" ? NaN : Number(text);
+      const index = Number.isInteger(n) ? byNumber.get(n) : undefined;
+      if (index === undefined) {
+        return { ok: false, code: "req_close_stale", selectors: [text] };
+      }
+      return { ok: true, row: rows[index] };
+    }
+    const n = byKey.get(text);
+    const index = n == null ? undefined : byNumber.get(n);
+    if (index === undefined) {
+      return { ok: false, code: "req_close_stale", selectors: [text] };
+    }
+    return { ok: true, row: rows[index] };
+  }
+
+  function numberedGroups(source) {
+    const next = (source || []).map(reqCloseCloneGroup);
+    for (const group of next) {
+      for (const row of group.rows) {
+        const n = byKey.get(row.offer.key);
+        if (n == null) {
+          return { ok: false, code: "req_close_stale", selectors: [row.offer.key] };
+        }
+        row.offer.n = n;
+      }
+    }
+    return { ok: true, groups: next };
+  }
+
+  return {
+    ok: true,
+    rows,
+    resolve,
+    numberedGroups,
+    markAllKeys() {
+      return rows.filter((row) => row.kind === "task_offer").map((row) => row.key);
+    },
+  };
+}
+
+function reqCloseRowIndex(owners, groups) {
+  const ownersByKey = new Map((owners || []).map((owner) => [owner.key, owner]));
+  const rows = new Map();
+  for (const group of groups || []) {
+    const owner = ownersByKey.get(group.owner.key);
+    if (!owner) continue;
+    for (const row of group.rows) rows.set(row.offer.key, { owner, row });
+  }
+  return rows;
+}
+
+function reqCloseProvenance(owner, row) {
+  return {
+    owner_task_key: owner.task_key,
+    owner_key: owner.key,
+    owner_path: owner.path,
+    owner_block_id: owner.block_id,
+    owner_line: owner.line,
+    owner_preimage: owner.preimage,
+    key: row.offer.key,
+    path: row.path,
+    depth: row.depth,
+    parent_key: row.parent_key,
+    text: row.text,
+    line: row.line,
+    pending_descendants: row.pending_descendants,
+  };
+}
+
+function reqCloseValidateOwnerIdentities(owners, sha256Hex) {
+  const taskKeys = new Set();
+  const ownerKeys = new Set();
+  for (const owner of owners || []) {
+    const snapshot = sha256Hex
+      ? reqCloseOwnerSnapshotKey(owner.task_key, owner.preimage, sha256Hex)
+      : owner.key;
+    if (taskKeys.has(owner.task_key) || ownerKeys.has(owner.key) || snapshot !== owner.key) {
+      return {
+        ok: false,
+        code: "req_close_stale",
+        kind: "duplicate_owner",
+        task_key: owner.task_key,
+      };
+    }
+    taskKeys.add(owner.task_key);
+    ownerKeys.add(owner.key);
+  }
+  return { ok: true };
+}
+
+function reqCloseValidateNonOverlapping(selections, rows) {
+  for (const ancestor of selections.filter((selection) => reqCloseTakesBranch(selection.verdict))) {
+    for (const descendant of selections) {
+      if (descendant.row.owner_key !== ancestor.row.owner_key || descendant.row.key === ancestor.row.key) {
+        continue;
+      }
+      const hit = rows.get(descendant.row.key);
+      if (!hit) continue;
+      const parents = new Map(hit.owner.nodes.map((node) => [node.key, node.parent_key]));
+      let parent = descendant.row.parent_key;
+      while (parent) {
+        if (parent === ancestor.row.key) {
+          return {
+            ok: false,
+            code: "req_verdict_overlap",
+            ancestor_key: ancestor.row.key,
+            ancestor_text: ancestor.row.text,
+            descendant_key: descendant.row.key,
+          };
+        }
+        parent = parents.has(parent) ? parents.get(parent) : null;
+      }
+    }
+  }
+  return { ok: true };
+}
+
+function reqCloseResolveVerdicts(owners, taskOfferKeys, requests, jumpSelector, sha256Hex) {
+  const identity = reqCloseValidateOwnerIdentities(owners, sha256Hex);
+  if (!identity.ok) return identity;
+  const unnumbered = reqCloseGroupsFromOwners(owners);
+  const numbering = reqCloseCardNumbering(unnumbered, taskOfferKeys);
+  if (!numbering.ok) return numbering;
+  const numbered = numbering.numberedGroups(unnumbered);
+  if (!numbered.ok) return numbered;
+  const groups = numbered.groups;
+  const rows = reqCloseRowIndex(owners, groups);
+  const selected = [];
+  const selectedByKey = new Map();
+  const bad = [];
+
+  for (const request of requests || []) {
+    const resolvedRow = numbering.resolve(request.selector);
+    if (!resolvedRow.ok || resolvedRow.row.kind !== "requirement") {
+      bad.push(String(request.selector));
+      continue;
+    }
+    const hit = rows.get(resolvedRow.row.key);
+    if (!hit) {
+      bad.push(String(request.selector));
+      continue;
+    }
+    const reason = reqCloseNormalizeReason(request.reason);
+    if (reason && request.verdict !== "drop") {
+      return { ok: false, code: "offer_verdict_conflict", key: resolvedRow.row.key, kind: "invalid_reason" };
+    }
+    if (reqCloseTakesBranch(request.verdict) && hit.row.depth_exceeded) {
+      return {
+        ok: false,
+        code: "req_depth_exceeded",
+        key: resolvedRow.row.key,
+        depth: hit.row.depth,
+      };
+    }
+    const resolved = {
+      row: reqCloseProvenance(hit.owner, hit.row),
+      verdict: request.verdict,
+      reason,
+    };
+    if (selectedByKey.has(resolvedRow.row.key)) {
+      const previous = selected[selectedByKey.get(resolvedRow.row.key)];
+      if (previous.verdict !== resolved.verdict || previous.reason !== resolved.reason) {
+        return { ok: false, code: "offer_verdict_conflict", key: resolvedRow.row.key };
+      }
+      continue;
+    }
+    selectedByKey.set(resolvedRow.row.key, selected.length);
+    selected.push(resolved);
+  }
+  if (bad.length) return reqCloseStaleError(bad, unnumbered, numbering);
+
+  const overlap = reqCloseValidateNonOverlapping(selected, rows);
+  if (!overlap.ok) return overlap;
+
+  let jump = null;
+  if (jumpSelector != null && jumpSelector !== "") {
+    const resolvedJump = numbering.resolve(jumpSelector);
+    if (!resolvedJump.ok) {
+      return reqCloseStaleError([String(jumpSelector)], unnumbered, numbering);
+    }
+    const requirement = resolvedJump.row.kind === "requirement"
+      ? (() => {
+        const hit = rows.get(resolvedJump.row.key);
+        return hit ? reqCloseProvenance(hit.owner, hit.row) : null;
+      })()
+      : null;
+    jump = {
+      card_row: Object.assign({}, resolvedJump.row),
+      requirement,
+    };
+  }
+
+  return {
+    ok: true,
+    groups,
+    numbering,
+    verdicts: selected,
+    jump,
+  };
+}
+
+function reqCloseRevalidatePreimages(selection, freshOwners, freshTaskOfferKeys, sha256Hex) {
+  const identity = reqCloseValidateOwnerIdentities(freshOwners, sha256Hex);
+  if (!identity.ok) return identity;
+  const freshGroups = reqCloseGroupsFromOwners(freshOwners);
+  const freshNumbering = reqCloseCardNumbering(freshGroups, freshTaskOfferKeys);
+  if (!freshNumbering.ok) return freshNumbering;
+  const freshNumbered = freshNumbering.numberedGroups(freshGroups);
+  if (!freshNumbered.ok) return reqCloseStaleError(freshNumbered.selectors || [], freshGroups, freshNumbering);
+  const freshByTask = new Map((freshOwners || []).map((owner) => [owner.task_key, owner]));
+  const checked = new Set();
+  const rowsToCheck = (selection.verdicts || []).map((verdict) => verdict.row);
+  if (selection.jump && selection.jump.requirement) rowsToCheck.push(selection.jump.requirement);
+  for (const selected of rowsToCheck) {
+    if (checked.has(selected.owner_task_key)) continue;
+    checked.add(selected.owner_task_key);
+    const fresh = freshByTask.get(selected.owner_task_key);
+    if (!fresh) {
+      return reqCloseStaleError([selected.key], freshNumbered.groups, freshNumbering);
+    }
+    const snapshot = sha256Hex
+      ? reqCloseOwnerSnapshotKey(fresh.task_key, fresh.preimage, sha256Hex)
+      : fresh.key;
+    const sameNode = fresh.nodes.some((node) => (
+      node.key === selected.key
+      && node.path === selected.path
+      && node.depth === selected.depth
+      && node.parent_key === selected.parent_key
+      && node.text === selected.text
+      && node.line === selected.line
+      && node.state === "pending"
+    ));
+    if (
+      fresh.key !== selected.owner_key
+      || fresh.path !== selected.owner_path
+      || fresh.block_id !== selected.owner_block_id
+      || fresh.line !== selected.owner_line
+      || fresh.preimage !== selected.owner_preimage
+      || snapshot !== fresh.key
+      || !sameNode
+    ) {
+      return reqCloseStaleError([selected.key], freshNumbered.groups, freshNumbering);
+    }
+  }
+  return { ok: true };
+}
+
+function reqCloseChoiceState() {
+  const choices = new Map();
+  return {
+    choice(key) {
+      return choices.has(key) ? choices.get(key) : "met";
+    },
+    stage(key, verdict) {
+      if (verdict === "met" || choices.get(key) === verdict) choices.delete(key);
+      else choices.set(key, verdict);
+    },
+    fold(group, owner) {
+      const byKey = new Map((owner.nodes || []).map((node) => [node.key, node.parent_key]));
+      return group.rows.map((row) => {
+        let ancestor = row.parent_key;
+        let hiddenBy = null;
+        while (ancestor) {
+          if (choices.has(ancestor) && reqCloseTakesBranch(choices.get(ancestor))) {
+            hiddenBy = ancestor;
+            break;
+          }
+          ancestor = byKey.has(ancestor) ? byKey.get(ancestor) : null;
+        }
+        const choice = choices.has(row.offer.key) ? choices.get(row.offer.key) : "met";
+        return {
+          key: row.offer.key,
+          visible: hiddenBy == null,
+          hidden_by: hiddenBy,
+          nested_go_with_it: (reqCloseTakesBranch(choice) && row.pending_descendants > 0)
+            ? row.pending_descendants
+            : null,
+        };
+      });
+    },
+    requests() {
+      return [...choices.entries()].map(([key, verdict]) => ({
+        selector: key,
+        verdict,
+        reason: null,
+      }));
+    },
+  };
+}
 // ---- src/700-exports.js ----
 module.exports = BobNavigationHotkeysPlugin;
 
@@ -135962,9 +136663,10 @@ try {
   }
 } catch (_error) {}
 // ---- src/728-task-reqs-exports.js ----
-// Task requirement (RQ), task block layout (RL), and requirement writer (RW)
-// twins, byte-identical copies of the cycler's fragments, exported for the
-// shared bob-cli vector tests and the twin drift test.
+// Task requirement (RQ), task block layout (RL), requirement writer (RW),
+// and requirement close-card (RV) twins, byte-identical copies of the
+// cycler's fragments, exported for the shared bob-cli vector tests and the
+// twin drift test. Live requirement close support is not advertised.
 try {
   if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
     module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
@@ -136025,6 +136727,43 @@ try {
       taskReqRestore,
       taskReqToggle,
       taskReqInsert,
+      REQ_CLOSE_COPY,
+      reqCloseQuoted,
+      reqCloseGroupTitle,
+      reqCloseScope,
+      reqCloseHistory,
+      reqCloseOverlap,
+      reqCloseNestedGoWithIt,
+      reqCloseMetReceipt,
+      reqCloseHumanMetLine,
+      reqCloseDropReceipt,
+      reqCloseCarryReceipt,
+      reqCloseSummary,
+      reqCloseAccessibility,
+      reqCloseWouldMet,
+      reqCloseConsequences,
+      reqCloseDigest8,
+      reqCloseNotePath,
+      reqCloseIsRecurringTaskLine,
+      reqCloseStableTaskKey,
+      reqCloseOwnerSnapshotKey,
+      reqCloseOwnerBlockPreimage,
+      reqCloseFindTask,
+      reqCloseHistoryFolds,
+      reqClosePendingCount,
+      reqClosePendingBranches,
+      reqCloseOwnerView,
+      reqCloseOwnerGroup,
+      reqCloseGroupsFromOwners,
+      reqCloseCollectOwner,
+      reqCloseCollectOwners,
+      REQ_CLOSE_VERDICTS,
+      reqCloseTakesBranch,
+      reqCloseNormalizeReason,
+      reqCloseCardNumbering,
+      reqCloseResolveVerdicts,
+      reqCloseRevalidatePreimages,
+      reqCloseChoiceState,
     });
   }
 } catch (_error) {}

@@ -35,6 +35,7 @@ Module._load = function loadWithStubs(request, parent, isMain) {
     MarkdownRenderChild: class { constructor(el) { this.containerEl = el; } },
     Notice: TestNotice, Plugin: TestPlugin, Platform: { isDesktopApp: true },
     normalizePath: (value) => value, editorInfoField, editorLivePreviewField,
+    parseYaml: () => ({}),
   };
   if (request === "@codemirror/state") return { Prec: { highest: (value) => value }, StateEffect, StateField, RangeSetBuilder };
   if (request === "@codemirror/view") return {
@@ -302,7 +303,10 @@ function fixture(options = {}) {
   plugin.recordSheetEditorScopes = new Map();
   plugin.recordSheetEditorCache = new WeakMap();
   plugin.recordSheetCollapsed = new Map();
-  plugin.recordSheetFolds = new Map();
+  helpers.propertyCardFootResetAll();
+  plugin.recordSheetFootPendingScroll = new Set();
+  plugin.recordSheetSourceCache = new Map();
+  plugin.recordSheetSourceFlights = new Map();
   plugin.recordSheetOverlays = new Map();
   plugin.recordSheetOwnedKey = "";
   plugin.recordSheetDomBuilds = 0;
@@ -344,7 +348,7 @@ function modelFor(path, frontmatter, album, extra = {}) {
     path, frontmatter, report: world.state.report, heading: extra.heading,
     clock: extra.clock || CLOCK, overlay: extra.overlay, gate,
     metadataCache: world.app.metadataCache, vault: world.app.vault,
-    collapsed: extra.collapsed === true, foldOpen: extra.foldOpen === true,
+    collapsed: extra.collapsed === true,
     hue: extra.hue || "", subscription: extra.subscription || null,
   });
 }
@@ -355,12 +359,7 @@ function assertHomes(model, expected) {
   }
   const row = new Set(model.rows.map((item) => item.key));
   const ghost = new Set(model.ghosts.map((item) => item.key));
-  const fold = new Set(model.fold.map((item) => item.key));
-  for (const key of row) {
-    assert.equal(ghost.has(key), false, `${key} row+ghost`);
-    assert.equal(fold.has(key), false, `${key} row+fold`);
-  }
-  for (const key of ghost) assert.equal(fold.has(key), false, `${key} ghost+fold`);
+  for (const key of row) assert.equal(ghost.has(key), false, `${key} row+ghost`);
 }
 
 function fakeCmDoc(text) {
@@ -507,13 +506,11 @@ test("eat, movies, sase, and subscription fixtures cover every authored key once
   const eat = modelFor("eat/smashburger.md", eatFm, albumEntry(), { heading: "Smashburger" });
   assert.deepEqual(eat.rows.map((row) => row.key), ["status", "cuisine", "location", "visited", "notes"]);
   assertHomes(eat, {
-    parent: "breadcrumb", type: "identity", title: "sheet", created: "footer",
+    parent: "breadcrumb", type: "identity", title: "sheet", created: "foot",
     status: "row", cuisine: "row", location: "row", visited: "row", notes: "row",
-    old_place: "fold", extra: "fold",
+    old_place: "drawer", extra: "drawer",
   });
-  assert.equal(eat.createdFooter, "added Aug 8, 2025");
-  assert.equal(eat.fold.find((item) => item.key === "old_place").legacy, true);
-  assert.equal(eat.fold.find((item) => item.key === "extra").text, "—");
+  assert.deepEqual(eat.legacyKeys, ["old_place"]);
   assert.equal(eat.rows.find((row) => row.key === "visited").text, "yesterday");
   assert.match(eat.rows.find((row) => row.key === "location").spans.find((span) => span.kind === "link").text, /Body|body/);
 
@@ -529,7 +526,7 @@ test("eat, movies, sase, and subscription fixtures cover every authored key once
     status: "open", started: "2026-11-17", url: "https://example.test/beads",
     related: "[[sase]]", count: 3, tags: ["phase", "record sheet"], notes: "See [[eat/smashburger]] too",
   }, saseAlbum(), { heading: "Bead lifecycle" });
-  assert.equal(bead.createdFooter, "added today, 7:55 AM");
+  assert.equal(bead.coverage.created, "foot");
   assert.equal(bead.rows.find((row) => row.key === "started").text, "today");
   assert.equal(bead.rows.find((row) => row.key === "url").href, "https://example.test/beads");
   assert.equal(bead.rows.find((row) => row.key === "related").spans[0].kind, "link");
@@ -576,27 +573,24 @@ test("invalid shapes stay visible and never coerce; missing differs from empty",
   assert.equal(bounds.rows.find((row) => row.key === "rating").state, "invalid");
 });
 
-test("title lives in the sheet regardless of H1 agreement; created coverage is unchanged", () => {
+test("title lives in the sheet regardless of H1 agreement; created coverage lives in the foot", () => {
   const base = {
     type: "[[record]]", parent: "[[eat]]", title: "Smashburger", created: "2025-08-08", status: "to_try",
   };
   const match = modelFor("eat/smashburger.md", base, albumEntry(), { heading: "Smashburger" });
   assert.equal(match.coverage.title, "sheet");
-  assert.equal(match.fold.some((item) => item.key === "title"), false);
+  assert.equal(match.coverage.created, "foot");
   const mismatch = modelFor("eat/smashburger.md", base, albumEntry(), { heading: "A burger" });
   assert.equal(mismatch.coverage.title, "sheet");
-  assert.equal(mismatch.fold.some((item) => item.key === "title"), false);
+  assert.equal(mismatch.coverage.created, "foot");
   const noH1 = modelFor("eat/smashburger.md", base, albumEntry(), { heading: "" });
   assert.equal(noH1.coverage.title, "sheet");
   const invalidCreated = modelFor("eat/smashburger.md", { ...base, created: "soon" }, albumEntry(), { heading: "Smashburger" });
-  assert.equal(invalidCreated.coverage.created, "fold");
-  assert.equal(invalidCreated.createdFooter, null);
-  assert.match(invalidCreated.fold.find((item) => item.key === "created").lint, /invalid date/);
+  assert.equal(invalidCreated.coverage.created, "foot");
   const absentCreated = modelFor("eat/smashburger.md", { type: "[[record]]", parent: "[[eat]]", status: "to_try" }, albumEntry(), { heading: "Smashburger" });
-  assert.equal(absentCreated.createdFooter, null);
-  assert.equal(absentCreated.coverage.created, undefined);
+  assert.equal(absentCreated.coverage.created, "absent");
   const yesterday = modelFor("eat/smashburger.md", { ...base, created: "2026-11-16" }, albumEntry(), { heading: "Smashburger" });
-  assert.equal(yesterday.createdFooter, "added yesterday");
+  assert.equal(yesterday.coverage.created, "foot");
 });
 
 test("title row uses literal frontmatter title, then H1, then filename stem", () => {
@@ -674,7 +668,7 @@ test("reading Record Card precedes the authored legacy H1", () => {
   assert.ok(root.children.indexOf(sheet) < root.children.indexOf(heading), "the card must precede the body heading");
 });
 
-test("collapsed summary leads with the group choice and keeps per-path fold state", () => {
+test("collapsed summary leads with the group choice and keeps per-path foot state", () => {
   const fm = {
     type: "[[record]]", parent: "[[eat]]", title: "Smashburger",
     status: "loved", cuisine: "pizza", notes: "Good",
@@ -688,17 +682,24 @@ test("collapsed summary leads with the group choice and keeps per-path fold stat
   const root = node(doc, "div", "markdown-preview-view");
   root.appendChild(node(doc, "h1", "", "Smashburger"));
   plugin.recordSheetSetCollapsed("eat/smashburger.md", true);
-  plugin.recordSheetSetFold("eat/smashburger.md", true);
+  helpers.propertyCardFootSetOpen("eat/smashburger.md", true);
   const sheet = plugin.paintRecordSheetReading(root, "eat/smashburger.md");
   assert.equal(sheet.querySelectorAll(".bob-album-schema-field-key").length, 0, "record sheet paints no field keycaps");
   assert.match(sheet.querySelector(".bob-record-sheet-summary").textContent, /Loved/);
   assert.equal(sheet.querySelector(".bob-record-sheet-nav"), null, "collapsed summary has no crumbs");
   assert.equal(plugin.recordSheetIsCollapsed("eat/smashburger.md"), true);
-  assert.equal(plugin.recordSheetFoldOpen("eat/smashburger.md"), true);
+  assert.equal(helpers.propertyCardFootIsOpen("eat/smashburger.md"), true);
+  // The foot stays rendered while the card body is collapsed, with the
+  // drawer open on the shared per-note state.
+  const foot = sheet.querySelector(".bob-property-card-foot");
+  assert.ok(foot, "collapsed sheet keeps its foot");
+  assert.equal(foot.querySelector(".bob-property-card-foot-disclosure").getAttribute("aria-expanded"), "true");
+  assert.match(foot.querySelector(".bob-property-card-foot-disclosure").textContent, /Properties · 11/);
   const other = node(doc, "div", "markdown-preview-view");
   other.appendChild(node(doc, "h1", "", "Heat"));
   plugin.paintRecordSheetReading(other, "movies/heat.md");
   assert.equal(plugin.recordSheetIsCollapsed("movies/heat.md"), false);
+  assert.equal(helpers.propertyCardFootIsOpen("movies/heat.md"), false, "a different note starts closed");
 });
 
 test("DOM keeps HTML-looking values as text, rejects dangerous URLs, and exposes YAML jumps", async () => {
@@ -731,10 +732,60 @@ test("DOM keeps HTML-looking values as text, rejects dangerous URLs, and exposes
   const jumped = await plugin.recordSheetJumpYaml("eat/smashburger.md", "status");
   assert.equal(jumped.ok, true);
   assert.equal(leaf.cursor.line, 3);
-  plugin.recordSheetSetFold("eat/smashburger.md", true);
-  plugin.paintRecordSheetReading(root, "eat/smashburger.md");
+  // An exact inventory line skips the source rescan.
+  const exact = await plugin.recordSheetJumpYaml("eat/smashburger.md", "status", 9);
+  assert.equal(exact.ok, true);
+  assert.equal(leaf.cursor.line, 8);
+  // Opening the shared foot paints the drawer from the confirmed source
+  // without spawning bob or writing the note.
+  plugin.recordSheetSourceCache.set(
+    "eat/smashburger.md",
+    "---\ntype: [[record]]\nparent: [[eat]]\nstatus: to_try\nnotes: <img src=x>\n---\n# Smashburger\n",
+  );
+  helpers.propertyCardFootSetOpen("eat/smashburger.md", true);
+  const reopened = plugin.paintRecordSheetReading(root, "eat/smashburger.md");
   assert.equal(plugin._spawns, 0);
   assert.equal(root.classList.contains(HIDES), true);
+  const foot = reopened.querySelector(".bob-property-card-foot");
+  assert.ok(foot, "the foot mounts in Reading view");
+  const drawerStatus = foot.querySelectorAll(".bob-property-card-foot-row").find(
+    (row) => row.getAttribute("data-property-key") === "status",
+  );
+  assert.ok(drawerStatus, "the drawer inventories source keys");
+  assert.equal(drawerStatus.getAttribute("data-line"), "4");
+  assert.equal(drawerStatus.getAttribute("tabindex"), "0");
+});
+
+test("record foot spec declares card marks and digests drawer state", () => {
+  const { plugin } = fixture({
+    sources: {
+      "eat/smashburger.md": "---\ntype: [[record]]\nparent: [[eat]]\nstatus: to_try\nnotes: hi\n---\n# Smashburger\n",
+    },
+  });
+  const source = "---\ntype: [[record]]\nparent: [[eat]]\nstatus: to_try\nnotes: hi\n---\n# Smashburger\n";
+  plugin.recordSheetSourceCache.set("eat/smashburger.md", source);
+  const card = plugin.recordSheetCardModelFor("eat/smashburger.md", source);
+  assert.ok(card && card.body, "record mounts with a confirmed source");
+  const closed = plugin.recordSheetFootExtra("eat/smashburger.md", card);
+  assert.equal(closed.footOpen, false);
+  assert.equal(closed.footSpec.inventory.count, 4);
+  const markOf = (key) => (closed.footSpec.inventory.rows || []).find((row) => row.key === key)?.mark;
+  assert.equal(markOf("parent"), "kicker");
+  assert.equal(markOf("type"), "tile");
+  assert.equal(markOf("status"), "field", "schema fields read as field");
+  assert.equal(markOf("notes"), "field");
+  assert.ok(closed.footDigest, "the digest captures drawer state");
+  helpers.propertyCardFootSetOpen("eat/smashburger.md", true);
+  const opened = plugin.recordSheetFootExtra("eat/smashburger.md", card);
+  assert.equal(opened.footOpen, true);
+  assert.equal(opened.footDigest, closed.footDigest, "open state rides the signature, not the digest");
+  plugin.recordSheetSourceCache.set(
+    "eat/smashburger.md",
+    source.replace("notes: hi", "notes: hi\nvisited: 2026-11-16"),
+  );
+  const refreshed = plugin.recordSheetFootExtra("eat/smashburger.md", card);
+  assert.equal(refreshed.footSpec.inventory.count, 5);
+  assert.notEqual(refreshed.footDigest, opened.footDigest, "source refresh changes the repaint signature");
 });
 
 test("YAML jumps leave Live Preview and await raw Source before placing the cursor", async () => {
@@ -1195,9 +1246,9 @@ test("native Properties hides only card title/schema rows and restores them on e
     assert.equal(nestedRow.classList.contains(OWNED), false);
     assert.equal(hoverRow.classList.contains(OWNED), false);
     assert.equal(addButton.classList.contains(OWNED), false);
-    // Collapsing the sheet/fold does not expose duplicate schema fields.
+    // Collapsing the sheet/drawer does not expose duplicate schema fields.
     plugin.recordSheetSetCollapsed("eat/smashburger.md", true);
-    plugin.recordSheetSetFold("eat/smashburger.md", true);
+    helpers.propertyCardFootSetOpen("eat/smashburger.md", true);
     paint();
     assert.deepEqual(hidden(), ["title", "status", "location", "visited"]);
     caches.get("eat/smashburger.md").frontmatter.type = "[[note]]";

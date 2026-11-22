@@ -8,10 +8,12 @@ title slot of a canonical album record (`type: [[record]]`) in desktop Reading
 view and Live Preview: after the inline title, before native Properties. The
 **RECORD** kicker names the parent [album card](albums.md) and, once the
 report arrives, the record noun; the sheet tile shows the album emoji else a
-page icon. The title paints from local metadata before any report; fields,
-ghosts, fold, and the created footer join inside the same node. Source mode,
-embeds, hover popovers, canvas, and mobile keep native rendering. The
-**Record Card editor** is the keyboard-first editor for those values.
+page icon. The title paints from local metadata before any report; fields
+and ghosts join inside the same node, and the shared foot below the walk
+rail carries the created stamp plus a `=-` drawer with every frontmatter
+key. Source mode, embeds, hover popovers, canvas, and mobile keep native
+rendering. The **Record Card editor** is the keyboard-first editor for those
+values.
 
 Title ownership is independent of row hiding. Whenever the card owns the
 title, the inline title and a matching first-body H1 or walk line hide; a
@@ -20,8 +22,8 @@ its rail stay in the slot. Native Properties rows hide only when the card is
 hide-eligible — healthy schema, desktop Obsidian, and the cached report
 carries `record_values_v1`. Properties keeps `parent`, `type`, `created`,
 legacy and unrelated keys, and Add property. Every other case keeps native
-rows visible. Opening, folding, or collapsing a record never requests a new
-report and never writes the note.
+rows visible. Opening the drawer, toggling the foot, or collapsing a record
+never requests a new report and never writes the note.
 
 ## Record walk position
 
@@ -116,14 +118,27 @@ a reason.
 
 `parent` lives in the kicker and `type` is implicit identity. The card is
 the one home for the frontmatter `title`; H1 agreement or mismatch does not
-create another title entry. A valid `created` date is a footer (`added today,
-7:55 AM`, `added yesterday`, or `added Aug 8, 2025`).
-An invalid created value stays in that fold with lint. Legacy keys declared
-on the album are labelled **legacy**. `null` compact values render as `—`.
+create another title entry. `created` lives in the foot (`added today,
+7:55 AM`, `added yesterday`, or `added Aug 8, 2025`); a missing `created`
+shows a faint `no created date`, and an invalid one shows an amber stamp
+with the raw value kept in the drawer. The drawer inventories every
+top-level key in file order — loose keys, then **On this card** with
+`parent`→kicker, `type`→tile, `title`→title, and schema field marks, then a
+folded **Managed** group — with duplicate keys as two linted rows. Legacy
+keys declared on the album keep their **legacy** label. `null` renders as
+`—`, empty strings and lists are labelled, and nested maps show a summary
+with the species editor opener, never a YAML dump.
+
+The foot follows the walk rail, outside the collapsible body, so the stamp
+stays visible on identity-only, broken-schema, and collapsed cards. Both
+the disclosure and the future `=-` key toggle the same drawer; open state
+is a per-note session toggle shared by every pane on the note. `y` on a
+focused drawer row jumps to that key's exact YAML line. Painting, toggling,
+and collapsing never spawn bob and never write the note.
 
 The card starts expanded. Collapse is a session toggle per record path:
 the title stays visible, followed by one line with the selected choice chips
-(group field first) and `· N fields`. Fold and collapse choices are not
+(group field first) and `· N fields`. Drawer and collapse choices are not
 stored in frontmatter or plugin settings.
 
 On a `subscriptions/*.md` record the existing subscription money line,
@@ -295,8 +310,8 @@ Done.
 | **Edit record** palette command | Open the editor; non-records say `Open a record note to edit its fields.` |
 | Command Mode Vault row | Run **Edit record** through Obsidian's command route. |
 | Collapse control | Session-collapse or expand this record card. |
-| Other-properties disclosure | Session-show or hide leftover keys. |
-| `y` on a focused row, ghost, or fold row | Open this record in Source on that YAML key. |
+| Properties disclosure (`Toggle properties =-`) | Session-show or hide every frontmatter key in the drawer. |
+| `y` on a focused row, ghost, or drawer row | Open this record in Source on that YAML key. |
 | Open album YAML (broken schema) | Open the parent album in Source on the diagnostic line. |
 | Breadcrumb / wikilink / URL | Ordinary Obsidian navigation and hover previews. |
 

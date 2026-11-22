@@ -267,18 +267,6 @@ function recordSheetTimeLabel(date) {
   return `${hours}:${String(minutes).padStart(2, "0")} ${suffix}`;
 }
 
-function recordSheetCreatedFooter(value, clock) {
-  const presented = recordSheetDatePresentation(value, clock);
-  if (!presented) return null;
-  const date = recordSheetDateObject(value);
-  if (presented.age === "today") {
-    const time = recordSheetHasClockTime(value, date) ? recordSheetTimeLabel(date) : "";
-    return time ? `added today, ${time}` : "added today";
-  }
-  if (presented.age === "yesterday") return "added yesterday";
-  return presented.friendly ? `added ${presented.friendly}` : null;
-}
-
 function recordSheetParseWikilink(raw) {
   const text = String(raw || "").trim();
   if (!text) return null;
@@ -641,7 +629,6 @@ function recordSheetModel(input = {}) {
   const heading = String(input.heading == null ? "" : input.heading).trim();
   const clock = recordSheetClock(input.clock);
   const collapsed = input.collapsed === true;
-  const foldOpen = input.foldOpen === true;
   const hue = input.hue == null ? "" : String(input.hue);
   const fields = (Array.isArray(album.fields) ? album.fields : []).map((field) => (
     typeof albumHeaderFieldModel === "function" ? albumHeaderFieldModel(field) : field
@@ -657,11 +644,11 @@ function recordSheetModel(input = {}) {
     : undefined;
   const titleText = title == null ? "" : String(title).trim();
   if (titleText) coverage.title = "sheet";
+  // The shared foot owns the created stamp: a stored created key always
+  // renders in the foot, and every other key lives in the drawer. Native
+  // Properties hiding only reads rows, ghosts, and the title.
   const createdPresent = frontmatter && Object.prototype.hasOwnProperty.call(frontmatter, "created");
-  const createdFooter = createdPresent ? recordSheetCreatedFooter(frontmatter.created, clock) : null;
-  const createdInvalid = createdPresent && !recordSheetIsEmpty(frontmatter.created) && !createdFooter;
-  if (createdPresent && createdFooter) coverage.created = "footer";
-  else if (createdPresent) coverage.created = createdInvalid ? "fold" : "absent";
+  coverage.created = createdPresent ? "foot" : "absent";
 
   const rows = [];
   const ghosts = [];
@@ -694,31 +681,14 @@ function recordSheetModel(input = {}) {
   }
   choiceChips.sort((left, right) => Number(right.group) - Number(left.group));
 
-  const schemaKeys = new Set(fields.map((field) => field.key));
-  const fold = [];
-  if (createdInvalid) {
-    fold.push({
-      key: "created",
-      label: "Created",
-      text: recordSheetRawText(frontmatter.created),
-      lint: "invalid date",
-      spans: [{ kind: "mono", text: recordSheetRawText(frontmatter.created) }],
-    });
-  }
+  // Every authored key stays visible: schema fields paint as rows, and the
+  // shared foot drawer inventories the complete top-level source, including
+  // identity keys and legacy keys. Coverage marks the drawer's homes so the
+  // old fold/footer bookkeeping cannot drive native row hiding.
   for (const key of recordSheetAuthoredKeys(frontmatter)) {
-    if (RECORD_SHEET_IDENTITY_KEYS.has(key) || schemaKeys.has(key)) continue;
-    const compact = recordSheetCompactValue(frontmatter[key]);
-    fold.push({
-      key,
-      label: (typeof albumHeaderHumanize === "function" ? albumHeaderHumanize(key) : key) || key,
-      text: compact,
-      lint: "",
-      legacy: legacy.includes(key),
-      spans: typeof frontmatter[key] === "string"
-        ? recordSheetWikilinkSpans(frontmatter[key])
-        : [{ kind: "text", text: compact }],
-    });
-    coverage[key] = "fold";
+    if (RECORD_SHEET_IDENTITY_KEYS.has(key)) continue;
+    if (coverage[key] != null) continue;
+    coverage[key] = key === "created" ? "foot" : "drawer";
   }
 
   const broken = gate.state === "broken";
@@ -767,10 +737,8 @@ function recordSheetModel(input = {}) {
     warningLine: Number.isInteger(error?.line) && error.line > 0 ? error.line : null,
     rows,
     ghosts,
-    fold,
-    foldOpen,
     collapsed,
-    createdFooter,
+    legacyKeys: legacy,
     choiceChips: collapsedChips,
     fieldCount,
     coverage,
@@ -793,8 +761,7 @@ function recordSheetSignature(model, extra = {}) {
       crumbs: model.crumbs,
       rows: model.rows,
       ghosts: model.ghosts,
-      fold: model.fold,
-      createdFooter: model.createdFooter,
+      legacyKeys: model.legacyKeys,
       warning: model.warning,
       warningLine: model.warningLine,
       hideEligible: model.hideEligible,
@@ -802,7 +769,8 @@ function recordSheetSignature(model, extra = {}) {
       walk: typeof recordSheetWalkSignature === "function"
         ? recordSheetWalkSignature(model.walk) : (model.walk || null),
       collapsed: extra.collapsed === undefined ? model.collapsed === true : extra.collapsed === true,
-      foldOpen: extra.foldOpen === undefined ? model.foldOpen === true : extra.foldOpen === true,
+      footOpen: extra.footOpen === true,
+      footDigest: extra.footDigest == null ? null : String(extra.footDigest),
       hue: extra.hue === undefined ? model.hue : extra.hue,
       overlay: extra.overlay === undefined ? model.overlay : extra.overlay,
       subscription: extra.subscription === undefined

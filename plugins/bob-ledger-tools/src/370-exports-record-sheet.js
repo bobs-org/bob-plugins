@@ -23,7 +23,6 @@ try {
       recordSheetBindOpen,
       recordSheetCalendarDate,
       recordSheetDatePresentation,
-      recordSheetCreatedFooter,
       recordSheetParseWikilink,
       recordSheetWikilinkSpans,
       recordSheetSafeUrl,

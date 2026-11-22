@@ -73,11 +73,51 @@ class BobLedgerToolsRecordSheetMixin {
       onSetup: () => {
         if (!(plugin.recordSheetEditorCache instanceof WeakMap)) plugin.recordSheetEditorCache = new WeakMap();
         if (!(plugin.recordSheetCollapsed instanceof Map)) plugin.recordSheetCollapsed = new Map();
-        if (!(plugin.recordSheetFolds instanceof Map)) plugin.recordSheetFolds = new Map();
         if (!(plugin.recordSheetOverlays instanceof Map)) plugin.recordSheetOverlays = new Map();
         if (!(plugin.recordSheetOverlayTimers instanceof Map)) plugin.recordSheetOverlayTimers = new Map();
         if (!(plugin.recordSheetSourceCache instanceof Map)) plugin.recordSheetSourceCache = new Map();
         if (!(plugin.recordSheetSourceFlights instanceof Map)) plugin.recordSheetSourceFlights = new Map();
+        if (!(plugin.recordSheetFootPendingScroll instanceof Set)) plugin.recordSheetFootPendingScroll = new Set();
+        try {
+          if (typeof propertyCardFootOnToggle === "function" && !plugin.recordSheetFootUntoggle) {
+            plugin.recordSheetFootUntoggle = propertyCardFootOnToggle((path, open) => {
+              if (open) plugin.recordSheetFootPendingScroll?.add?.(propertyCardFootPath(path));
+              plugin.scheduleRecordSheetRefresh();
+            });
+          }
+        } catch (_) {}
+        try {
+          if (typeof propertyCardFootRegisterPathResolver === "function" && !plugin.recordSheetFootUnresolver) {
+            plugin.recordSheetFootUnresolver = propertyCardFootRegisterPathResolver((view) => {
+              try {
+                return plugin.recordSheetLivePath(view) || "";
+              } catch (_) {
+                return "";
+              }
+            });
+          }
+        } catch (_) {}
+        try {
+          const vault = plugin.app?.vault;
+          if (vault && typeof vault.on === "function" && typeof plugin.registerEvent === "function") {
+            plugin.registerEvent(vault.on("rename", (file, oldPath) => {
+              try {
+                if (typeof propertyCardFootRenamePath === "function") {
+                  propertyCardFootRenamePath(oldPath, file?.path);
+                }
+              } catch (_) {}
+              plugin.scheduleRecordSheetRefresh();
+            }));
+            plugin.registerEvent(vault.on("delete", (file) => {
+              try {
+                if (typeof propertyCardFootReleasePath === "function") {
+                  propertyCardFootReleasePath(file?.path);
+                }
+              } catch (_) {}
+              plugin.scheduleRecordSheetRefresh();
+            }));
+          }
+        } catch (_) {}
         plugin.recordSheetOwnedKey = plugin.recordSheetOwnedKey || "";
         plugin.recordSheetDomBuilds = plugin.recordSheetDomBuilds || 0;
         plugin.recordSheetDay = plugin.recordSheetToday();
@@ -98,6 +138,10 @@ class BobLedgerToolsRecordSheetMixin {
         } catch (_) {}
       },
       onDisposeStart: () => {
+        try { plugin.recordSheetFootUntoggle?.(); } catch (_) {}
+        plugin.recordSheetFootUntoggle = null;
+        try { plugin.recordSheetFootUnresolver?.(); } catch (_) {}
+        plugin.recordSheetFootUnresolver = null;
         plugin.recordSheetUnsubscribe?.();
         plugin.recordSheetUnsubscribe = null;
         plugin.albumClearTimeout?.(plugin.recordSheetReadingViewMountTimer);
@@ -111,7 +155,10 @@ class BobLedgerToolsRecordSheetMixin {
       },
       onDisposeEnd: () => {
         plugin.recordSheetCollapsed?.clear?.();
-        plugin.recordSheetFolds?.clear?.();
+        plugin.recordSheetFootPendingScroll?.clear?.();
+        try {
+          if (typeof propertyCardFootResetAll === "function") propertyCardFootResetAll();
+        } catch (_) {}
         plugin.recordSheetOverlayTimers?.clear?.();
         plugin.recordSheetOverlays?.clear?.();
         plugin.recordSheetSourceCache?.clear?.();
@@ -260,18 +307,6 @@ class BobLedgerToolsRecordSheetMixin {
     this.scheduleRecordSheetRefresh();
   }
 
-  recordSheetFoldOpen(path) {
-    const key = recordSheetPath(path);
-    const map = this.recordSheetFolds instanceof Map ? this.recordSheetFolds : new Map();
-    this.recordSheetFolds = map;
-    return key && map.has(key) ? map.get(key) === true : false;
-  }
-
-  recordSheetSetFold(path, open) {
-    const key = recordSheetPath(path);
-    if (key) this.recordSheetFolds.set(key, open === true);
-    this.scheduleRecordSheetRefresh();
-  }
 
   refreshRecordSheetOverlay(path, overlay) {
     const key = recordSheetPath(path);
@@ -386,7 +421,6 @@ class BobLedgerToolsRecordSheetMixin {
       metadataCache: this.app?.metadataCache,
       vault: this.app?.vault,
       collapsed: this.recordSheetIsCollapsed(path),
-      foldOpen: this.recordSheetFoldOpen(path),
       hue: this.recordSheetHue(path),
       subscription: this.recordSheetSubscription(path),
       gate,
@@ -404,8 +438,7 @@ class BobLedgerToolsRecordSheetMixin {
         openPath: (target, event) => { void this.recordSheetOpenPath(target, path, event); },
         hoverLink: (event, targetEl, linktext) => this.recordSheetHoverLink(event, targetEl, linktext, path),
         toggleCollapsed: (next) => this.recordSheetSetCollapsed(path, next),
-        toggleFold: (next) => this.recordSheetSetFold(path, next),
-        jumpYaml: (key) => { void this.recordSheetJumpYaml(path, key); },
+        jumpYaml: (key, line) => { void this.recordSheetJumpYaml(path, key, line); },
         jumpAlbumYaml: (line) => { void this.recordSheetJumpAlbumYaml(model?.albumPath, line); },
         openEdit: () => { void this.openRecordCard?.({ filePath: path }); },
         openField: (key) => { void this.openRecordCard?.({ filePath: path, field: key }); },
@@ -494,17 +527,20 @@ class BobLedgerToolsRecordSheetMixin {
     return flight;
   }
 
-  async recordSheetJumpYaml(recordPath, key) {
+  // The foot passes the inventory's exact 1-based source line (including
+  // duplicate occurrences); without one, fall back to the first key line.
+  async recordSheetJumpYaml(recordPath, key, line) {
     const path = recordSheetPath(recordPath);
     if (!path) return { ok: false, reason: "missing path" };
-    let line = 1;
+    if (Number.isInteger(line) && line > 0) return this.recordSheetOpenSource(path, line);
+    let target = 1;
     try {
       const source = await this.recordSheetReadSource(path);
-      line = recordSheetYamlKeyLine(source, key);
+      target = recordSheetYamlKeyLine(source, key);
     } catch (_) {
-      line = 1;
+      target = 1;
     }
-    return this.recordSheetOpenSource(path, line);
+    return this.recordSheetOpenSource(path, target);
   }
 
   async recordSheetJumpAlbumYaml(albumPath, line) {
@@ -586,6 +622,10 @@ class BobLedgerToolsRecordSheetMixin {
         sheet.appendChild(rail);
       }
     }
+    // The foot follows the nav rail, outside the collapsible body, in every
+    // return: Reading and Live Preview, identity-only, broken-schema, and
+    // collapsed. recordSheetAppendFoot is a no-op without the kit.
+    if (sheet) this.recordSheetAppendFoot(sheet, model, options, doc, extra && extra.footSpec);
     return sheet;
   }
 
@@ -734,6 +774,12 @@ class BobLedgerToolsRecordSheetMixin {
   }
 
   recordSheetCleanEditor(view) {
+    try {
+      const cached = this.recordSheetEditorCache?.get?.(view);
+      if (typeof propertyCardFootReleaseScope === "function") {
+        propertyCardFootReleaseScope(view?.dom, cached?.path);
+      }
+    } catch (_) {}
     this.recordSheetReleaseAdoption?.(view?.dom);
     this.recordPropertyCardHost().cleanEditor(view, {
       unmark: (scope) => {

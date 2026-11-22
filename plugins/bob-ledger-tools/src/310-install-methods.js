@@ -58,6 +58,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsAlbumHeaderMixin,
   BobLedgerToolsRecordSheetMixin,
   BobLedgerToolsRecordSheetTitleMixin,
+  BobLedgerToolsRecordSheetFootMixin,
   BobLedgerToolsRecordWalkRailMixin,
   BobLedgerToolsRecordWalkGroupRailMixin,
   BobLedgerToolsRecordSheetPropertiesMixin,

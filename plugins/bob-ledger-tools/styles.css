@@ -11492,7 +11492,6 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
 }
 .bob-record-sheet-collapse,
 .bob-record-sheet-edit,
-.bob-record-sheet-fold-toggle,
 .bob-record-sheet-yaml {
   padding: 0.15em 0.45em;
   border: 0;
@@ -11530,8 +11529,7 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
 }
 .bob-record-sheet-chip,
 .bob-record-sheet-ghost,
-.bob-record-sheet-missing,
-.bob-record-sheet-legacy {
+.bob-record-sheet-missing {
   display: inline-block;
   margin: 0 0.25em 0.2em 0;
   padding: 0.05em 0.4em;
@@ -11560,29 +11558,11 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
   margin-top: 0.45em;
 }
 .bob-record-sheet-ghost { color: var(--text-faint); }
-.bob-record-sheet-created,
 .bob-record-sheet-warning {
   margin: 0.45em 0 0;
   color: var(--text-muted);
 }
 .bob-record-sheet-warning { color: var(--text-warning); }
-.bob-record-sheet-fold { margin-top: 0.45em; }
-.bob-record-sheet-fold-body { margin-top: 0.25em; }
-.bob-record-sheet-fold-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.25em 0.55em;
-  min-width: 0;
-  margin: 0.15em 0;
-}
-.bob-record-sheet-fold-label { color: var(--text-muted); font-weight: 600; }
-.bob-record-sheet-fold-value {
-  min-width: 0;
-  color: var(--text-normal);
-  font-family: var(--font-text, var(--font-text-theme, inherit));
-  overflow-wrap: anywhere;
-}
-.bob-record-sheet-legacy { color: var(--text-faint); }
 .bob-record-sheet-summary {
   display: flex;
   flex-wrap: wrap;
@@ -11600,13 +11580,11 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
 .bob-record-sheet-crumb:focus-visible,
 .bob-record-sheet-collapse:focus-visible,
 .bob-record-sheet-edit:focus-visible,
-.bob-record-sheet-fold-toggle:focus-visible,
 .bob-record-sheet-yaml:focus-visible,
 .bob-record-sheet-row:focus-visible,
 .bob-record-sheet-chip:focus-visible,
 .bob-record-sheet-ghost:focus-visible,
 .bob-record-sheet-missing:focus-visible,
-.bob-record-sheet-fold-row:focus-visible,
 .bob-record-sheet-link:focus-visible {
   outline: 2px solid var(--interactive-accent);
   outline-offset: 2px;
@@ -11646,6 +11624,180 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
   .bob-record-sheet-edit:focus-visible {
     outline-color: Highlight;
   }
+}
+/* Shared property-card foot row and properties drawer (240o/240p). The foot
+   follows the nav rail, outside the collapsible body, on every card that
+   adopts it. All rules stay under .bob-property-card roots. */
+.bob-property-card .bob-property-card-foot {
+  container-type: inline-size;
+  margin-top: 0.45em;
+  border-top: 1px solid var(--bob-walk-ink, var(--text-muted));
+  padding-top: 0.15em;
+  min-height: 1.6em;
+  font-variant-numeric: tabular-nums;
+}
+.bob-property-card .bob-property-card-foot-disclosure {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.25em;
+  padding: 0.1em 0.3em;
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  cursor: pointer;
+}
+.bob-property-card .bob-property-card-foot-chevron {
+  display: inline-block;
+  transition: transform 160ms ease;
+}
+.bob-property-card .bob-property-card-foot-disclosure[aria-expanded="true"] .bob-property-card-foot-chevron {
+  transform: rotate(90deg);
+}
+.bob-property-card .bob-property-card-foot-stamp {
+  float: right;
+  padding-top: 0.1em;
+  color: var(--text-faint);
+}
+.bob-property-card .bob-property-card-foot-stamp.is-invalid { color: var(--text-warning); }
+.bob-property-card .bob-property-card-foot-lint-chip {
+  margin-inline-start: 0.6em;
+  padding: 0 0.35em;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--text-warning) 18%, transparent);
+  color: var(--text-warning);
+}
+.bob-property-card .bob-property-card-foot-drawer {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 160ms ease;
+}
+.bob-property-card .bob-property-card-foot-drawer[data-open="true"] { grid-template-rows: 1fr; }
+.bob-property-card .bob-property-card-foot-drawer-body {
+  overflow: hidden;
+  min-height: 0;
+}
+.bob-property-card .bob-property-card-foot-group {
+  display: block;
+  margin: 0.5em 0 0.1em;
+  color: var(--text-faint);
+  font-size: 0.78em;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.bob-property-card .bob-property-card-foot-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+}
+.bob-property-card .bob-property-card-foot-row {
+  display: grid;
+  grid-template-columns: minmax(84px, max-content) 1fr auto;
+  gap: 0.25em 0.6em;
+  align-items: baseline;
+  padding: 0.12em 0;
+  border-radius: 3px;
+}
+.bob-property-card .bob-property-card-foot-key {
+  margin: 0;
+  color: var(--text-muted);
+  font-family: var(--font-monospace);
+  font-size: 0.86em;
+  overflow-wrap: anywhere;
+}
+.bob-property-card .bob-property-card-foot-key-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.bob-property-card .bob-property-card-foot-value {
+  margin: 0;
+  min-width: 0;
+  color: var(--text-normal);
+  overflow-wrap: anywhere;
+}
+.bob-property-card .bob-property-card-foot-scalar {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.bob-property-card .bob-property-card-foot-mark,
+.bob-property-card .bob-property-card-foot-legacy {
+  color: var(--text-faint);
+  font-size: 0.86em;
+  white-space: nowrap;
+}
+.bob-property-card .bob-property-card-foot-lint { color: var(--text-warning); }
+.bob-property-card .bob-property-card-foot-empty { color: var(--text-faint); }
+.bob-property-card .bob-property-card-foot-bool { font-variant-numeric: tabular-nums; }
+.bob-property-card .bob-property-card-foot-chip {
+  display: inline-block;
+  margin-inline-end: 0.3em;
+  padding: 0 0.4em;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 3px;
+}
+.bob-property-card .bob-property-card-foot-tag {
+  padding: 0 0.4em;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 3px;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  cursor: pointer;
+}
+.bob-property-card .bob-property-card-foot-more { color: var(--text-faint); }
+.bob-property-card .bob-property-card-foot-nested {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  cursor: pointer;
+}
+.bob-property-card .bob-property-card-foot-managed { margin-top: 0.3em; }
+.bob-property-card .bob-property-card-foot-managed-toggle {
+  padding: 0.1em 0;
+  border: 0;
+  background: none;
+  color: var(--text-faint);
+  font: inherit;
+  cursor: pointer;
+}
+.bob-property-card .bob-property-card-foot-recovery {
+  display: block;
+  margin-top: 0.4em;
+  padding: 0.1em 0;
+  border: 0;
+  background: none;
+  color: var(--text-warning);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.bob-property-card .bob-property-card-foot-disclosure:focus-visible,
+.bob-property-card .bob-property-card-foot-row:focus-visible,
+.bob-property-card .bob-property-card-foot-tag:focus-visible,
+.bob-property-card .bob-property-card-foot-nested:focus-visible,
+.bob-property-card .bob-property-card-foot-managed-toggle:focus-visible,
+.bob-property-card .bob-property-card-foot-key-button:focus-visible,
+.bob-property-card .bob-property-card-foot-recovery:focus-visible,
+.bob-property-card .bob-property-card-foot-link:focus-visible,
+.bob-property-card .bob-property-card-foot-url:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+}
+@container (max-width: 420px) {
+  .bob-property-card .bob-property-card-foot-row { grid-template-columns: 1fr; }
+  .bob-property-card .bob-property-card-foot-key { font-size: 0.8em; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bob-property-card .bob-property-card-foot *,
+  .bob-property-card .bob-property-card-foot-drawer { animation: none; transition: none; }
 }
 .bob-record-card-modal {
   width: min(42em, calc(100vw - 2rem));

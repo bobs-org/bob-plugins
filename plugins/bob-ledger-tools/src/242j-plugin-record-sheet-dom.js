@@ -292,58 +292,6 @@ function recordSheetRenderGhosts(sheet, model, options, doc) {
   return row;
 }
 
-function recordSheetRenderFold(sheet, model, options, doc) {
-  if (!model.fold || !model.fold.length) return null;
-  const details = recordSheetEl(doc, "div", "bob-record-sheet-fold");
-  if (!details) return null;
-  const toggle = recordSheetEl(doc, "button", "bob-record-sheet-fold-toggle");
-  const count = model.fold.length;
-  const label = `${count} other ${count === 1 ? "property" : "properties"}`;
-  if (toggle) {
-    toggle.setAttribute("type", "button");
-    toggle.setAttribute("data-record-sheet-focus", "fold");
-    toggle.setAttribute("aria-expanded", model.foldOpen ? "true" : "false");
-    toggle.setAttribute("aria-label", model.foldOpen ? `Hide ${label}` : `Show ${label}`);
-    recordSheetText(toggle, `${model.foldOpen ? "▾" : "▸"} ${label}`);
-    toggle.addEventListener?.("click", (event) => {
-      event.preventDefault?.();
-      options?.handlers?.toggleFold?.(!model.foldOpen);
-    });
-    details.appendChild(toggle);
-  }
-  if (model.foldOpen) {
-    const body = recordSheetEl(doc, "div", "bob-record-sheet-fold-body");
-    for (const item of model.fold) {
-      const row = recordSheetEl(doc, "div", "bob-record-sheet-fold-row");
-      if (!row) continue;
-      row.setAttribute("data-record-key", item.key);
-      recordSheetBindYamlJump(row, options?.handlers?.jumpYaml, item.key);
-      const labelNode = recordSheetEl(doc, "span", "bob-record-sheet-fold-label");
-      recordSheetText(labelNode, item.label || item.key);
-      if (labelNode) row.appendChild(labelNode);
-      if (item.legacy) {
-        const legacy = recordSheetEl(doc, "span", "bob-record-sheet-legacy");
-        recordSheetText(legacy, "legacy");
-        if (legacy) row.appendChild(legacy);
-      }
-      const value = recordSheetEl(doc, "span", "bob-record-sheet-fold-value");
-      if (value) {
-        recordSheetRenderSpans(value, doc, item.spans, options);
-        row.appendChild(value);
-      }
-      if (item.lint) {
-        const lint = recordSheetEl(doc, "span", "bob-record-sheet-lint");
-        recordSheetText(lint, item.lint);
-        if (lint) row.appendChild(lint);
-      }
-      if (body) body.appendChild(row);
-    }
-    if (body) details.appendChild(body);
-  }
-  sheet.appendChild(details);
-  return details;
-}
-
 function recordSheetBuildEl(model, options = {}, doc) {
   if (!model) return null;
   const card = typeof recordSheetCardFrom === "function" ? recordSheetCardFrom(model) : null;
@@ -435,12 +383,9 @@ function recordSheetBuildEl(model, options = {}, doc) {
     }
   }
   recordSheetRenderGhosts(sheet, body, options, host);
-  if (body.createdFooter) {
-    const footer = recordSheetEl(host, "p", "bob-record-sheet-created");
-    recordSheetText(footer, body.createdFooter);
-    if (footer) sheet.appendChild(footer);
-  }
-  recordSheetRenderFold(sheet, body, options, host);
+  // The created stamp and every remaining property live in the shared foot
+  // below the walk rail; it is appended by recordSheetBuildMounted so it
+  // also covers identity-only, broken-schema, and collapsed returns.
   return sheet;
 }
 

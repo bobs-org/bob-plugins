@@ -84242,6 +84242,830 @@ function propertyCardInventory(input = {}) {
     recovery: null,
   };
 }
+// ---- src/240o-plugin-property-card-foot-dom.js ----
+// Shared property-card foot row and properties drawer (bob-cli-pf drawer-record).
+// Pure DOM kit: the foot follows the nav rail, outside the collapsible body.
+// The drawer builds its body only when opened. Painting never spawns bob and
+// never writes the vault; view navigation stays distinct from vault mutation.
+//
+// spec for propertyCardFootBuildEl(doc, spec):
+//   { path, disclosureId, open, inventory, stamp,
+//     handlers: { onToggle(path, nextOpen), jumpYaml(key, line),
+//                 jumpRecovery(), openPath(target, event),
+//                 hoverLink(event, node, linktext), searchTag(tag, event),
+//                 openNested(key, event), onOpenEditor(key) (only when the
+//                 future editor hook is registered) } }
+const PROPERTY_CARD_FOOT_CLASS = "bob-property-card-foot";
+const PROPERTY_CARD_FOOT_DRAWER_CLASS = "bob-property-card-foot-drawer";
+const PROPERTY_CARD_FOOT_WIKILINK_RE = /\[\[([^\]\n]+)\]\]/g;
+const PROPERTY_CARD_FOOT_SAFE_URL_RE = /^(https?:)\/\//i;
+const PROPERTY_CARD_FOOT_TAG_KEYS_RE = /^(tags?|aliases?)$/i;
+const PROPERTY_CARD_FOOT_TAG_TEXT_RE = /^#[^\s#][^\s]*$/;
+const PROPERTY_CARD_FOOT_LIST_PREVIEW_LIMIT = 6;
+
+function propertyCardFootText(value) {
+  return value === null || value === undefined ? "" : String(value);
+}
+
+// Shared `y` row jump, generalized from the record sheet's
+// recordSheetBindYamlJump. The handler sees (key, line); line is the exact
+// 1-based source line when the inventory knows it, else null.
+function propertyCardFootBindYamlJump(node, handler, key, line) {
+  if (!node || typeof node.addEventListener !== "function") return;
+  if (typeof handler !== "function" || !key) return;
+  node.setAttribute("tabindex", "0");
+  node.addEventListener("keydown", (event) => {
+    if (!event) return;
+    if (event.isComposing || event.repeat) return;
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    const keyName = event.key || "";
+    if (keyName !== "y" && keyName !== "Y") return;
+    try { event.preventDefault?.(); } catch (_) {}
+    try { handler(key, Number.isInteger(line) && line > 0 ? line : null); } catch (_) {}
+  });
+}
+
+function propertyCardFootReducedMotion() {
+  try {
+    if (typeof matchMedia === "function") {
+      return matchMedia("(prefers-reduced-motion: reduce)").matches === true;
+    }
+  } catch (_) {}
+  return false;
+}
+
+// Scroll an expanded foot into view without moving the cursor. Collapse
+// never scrolls; callers only invoke this on expand.
+function propertyCardFootReveal(footEl) {
+  try {
+    if (!footEl || typeof footEl.scrollIntoView !== "function") return false;
+    if (propertyCardFootReducedMotion()) {
+      footEl.scrollIntoView({ block: "nearest" });
+    } else {
+      footEl.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function propertyCardFootParseWikilink(raw) {
+  const text = propertyCardFootText(raw).trim();
+  if (!text) return null;
+  const inner = text.startsWith("[[") && text.endsWith("]]") ? text.slice(2, -2) : text;
+  if (!inner || inner.includes("[[") || inner.includes("\n")) return null;
+  const pipe = inner.indexOf("|");
+  const targetPart = (pipe >= 0 ? inner.slice(0, pipe) : inner).trim();
+  const alias = pipe >= 0 ? inner.slice(pipe + 1).trim() : "";
+  if (!targetPart) return null;
+  return {
+    raw: text.startsWith("[[") ? text : `[[${inner}]]`,
+    target: targetPart,
+    alias,
+    complete: text.startsWith("[[") && text.endsWith("]]"),
+  };
+}
+
+function propertyCardFootSafeUrl(value) {
+  const text = propertyCardFootText(value).trim();
+  if (!text || !PROPERTY_CARD_FOOT_SAFE_URL_RE.test(text)) return null;
+  try {
+    const parsed = new URL(text);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+    return parsed.href;
+  } catch (_) {
+    return null;
+  }
+}
+
+function propertyCardFootIsTag(key, text) {
+  if (PROPERTY_CARD_FOOT_TAG_KEYS_RE.test(String(key || "").trim())) return true;
+  return PROPERTY_CARD_FOOT_TAG_TEXT_RE.test(String(text || "").trim());
+}
+
+function propertyCardFootCompactValue(value) {
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) return "invalid date";
+    try {
+      return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
+    } catch (_) {
+      return String(value);
+    }
+  }
+  if (Array.isArray(value)) return value.map((item) => propertyCardFootCompactValue(item)).join(", ");
+  try {
+    return JSON.stringify(value);
+  } catch (_) {
+    return String(value);
+  }
+}
+
+// Accessible value text for one inventory row. Mirrors the drawer's visible
+// text so tests and aria-labels agree.
+function propertyCardFootRowText(row) {
+  if (!row || typeof row !== "object") return "";
+  switch (row.valueState) {
+    case "pending": return "…";
+    case "absent": return "—";
+    case "null": return "—";
+    case "empty-string": return "empty";
+    case "empty-list": return "empty list";
+    case "true": return "✓";
+    case "false": return "✗";
+    case "invalid-date": return "invalid date";
+    case "date":
+      return row.value instanceof Date && !Number.isNaN(row.value.getTime())
+        ? propertyCardFootCompactValue(row.value)
+        : propertyCardFootCompactValue(row.value);
+    case "map": {
+      const size = row.value && typeof row.value === "object" && !Array.isArray(row.value)
+        ? Object.keys(row.value).length
+        : null;
+      return Number.isInteger(size) ? `map · ${size} ${size === 1 ? "field" : "fields"}` : "map";
+    }
+    default:
+      return propertyCardFootCompactValue(row.value);
+  }
+}
+
+// Lint summary for the foot chip. Causes: invalid created, unparseable or
+// unclosed frontmatter, duplicate keys. The chip never opens the drawer.
+function propertyCardFootLint(spec = {}) {
+  const kinds = [];
+  const inventory = spec.inventory && typeof spec.inventory === "object" ? spec.inventory : null;
+  const stamp = spec.stamp && typeof spec.stamp === "object" ? spec.stamp : null;
+  if (stamp && stamp.state === "invalid") kinds.push("invalid created");
+  if (inventory) {
+    if (inventory.state === "invalid") kinds.push("frontmatter doesn't parse");
+    else if (inventory.state === "unclosed") kinds.push("frontmatter is unclosed");
+    for (const issue of Array.isArray(inventory.issues) ? inventory.issues : []) {
+      if (issue && (issue.kind === "duplicate" || issue.kind === "duplicate-key") && issue.key) {
+        kinds.push(`duplicate key: ${issue.key}`);
+      }
+    }
+  }
+  const count = kinds.length;
+  return {
+    count,
+    kinds,
+    tooltip: count ? `Properties need attention: ${kinds.join("; ")}` : "",
+  };
+}
+
+function propertyCardFootBindLink(node, openPath, target, hoverLink) {
+  propertyCardKitBindLink(node, (event) => {
+    if (typeof openPath === "function") {
+      try { openPath(target, event); } catch (_) {}
+    }
+  });
+  if (typeof hoverLink === "function" && target) {
+    try {
+      node.addEventListener?.("mouseover", (event) => {
+        try { hoverLink(event, node, target); } catch (_) {}
+      });
+    } catch (_) {}
+  }
+}
+
+function propertyCardFootRenderWikilink(parent, doc, display, link, handlers) {
+  const node = doc.createElement("a");
+  node.setAttribute("class", "bob-property-card-foot-link internal-link");
+  node.setAttribute("href", link.target || "");
+  node.setAttribute("data-href", link.target || "");
+  propertyCardKitAppendText(doc, node, display || link.target || "");
+  propertyCardFootBindLink(node, handlers?.openPath, link.raw || link.target, handlers?.hoverLink);
+  parent.appendChild(node);
+  return node;
+}
+
+function propertyCardFootRenderUrl(parent, doc, href, text) {
+  const node = doc.createElement("a");
+  node.setAttribute("class", "bob-property-card-foot-url external-link");
+  node.setAttribute("href", href);
+  node.setAttribute("rel", "noopener noreferrer");
+  node.setAttribute("target", "_blank");
+  node.setAttribute("title", href);
+  propertyCardKitAppendText(doc, node, text || href);
+  parent.appendChild(node);
+  return node;
+}
+
+function propertyCardFootRenderTag(parent, doc, tag, handlers) {
+  const node = doc.createElement("button");
+  node.setAttribute("type", "button");
+  node.setAttribute("class", "bob-property-card-foot-tag");
+  node.setAttribute("title", `Search ${tag}`);
+  node.setAttribute("aria-label", `Search ${tag}`);
+  propertyCardKitAppendText(doc, node, tag);
+  node.addEventListener?.("click", (event) => {
+    try { event.preventDefault?.(); } catch (_) {}
+    if (typeof handlers?.searchTag === "function") {
+      try { handlers.searchTag(tag, event); } catch (_) {}
+    }
+  });
+  parent.appendChild(node);
+  return node;
+}
+
+// One scalar item inside a value cell or list preview.
+function propertyCardFootRenderScalar(parent, doc, key, raw, handlers) {
+  const text = propertyCardFootText(raw);
+  const href = propertyCardFootSafeUrl(text);
+  if (href) {
+    propertyCardFootRenderUrl(parent, doc, href, text);
+    return;
+  }
+  const link = propertyCardFootParseWikilink(text);
+  if (link && link.complete) {
+    propertyCardFootRenderWikilink(parent, doc, link.alias || link.target, link, handlers);
+    return;
+  }
+  if (propertyCardFootIsTag(key, text)) {
+    propertyCardFootRenderTag(parent, doc, text, handlers);
+    return;
+  }
+  propertyCardKitAppendText(doc, parent, text);
+}
+
+function propertyCardFootRenderValueCell(cell, doc, row, handlers) {
+  const key = row.key;
+  switch (row.valueState) {
+    case "pending": {
+      const pending = propertyCardKitSpan(doc, "bob-property-card-foot-pending", "…");
+      pending.setAttribute("title", "Waiting for metadata");
+      cell.appendChild(pending);
+      return;
+    }
+    case "absent": {
+      const absent = propertyCardKitSpan(doc, "bob-property-card-foot-empty", "—");
+      absent.setAttribute("title", "Not in cache");
+      cell.appendChild(absent);
+      return;
+    }
+    case "null": {
+      const empty = propertyCardKitSpan(doc, "bob-property-card-foot-empty", "—");
+      cell.appendChild(empty);
+      return;
+    }
+    case "empty-string": {
+      const empty = propertyCardKitSpan(doc, "bob-property-card-foot-empty", "empty");
+      cell.appendChild(empty);
+      return;
+    }
+    case "empty-list": {
+      const empty = propertyCardKitSpan(doc, "bob-property-card-foot-empty", "empty list");
+      cell.appendChild(empty);
+      return;
+    }
+    case "true": {
+      const mark = propertyCardKitSpan(doc, "bob-property-card-foot-bool", "✓");
+      mark.setAttribute("aria-label", "true");
+      cell.appendChild(mark);
+      return;
+    }
+    case "false": {
+      const mark = propertyCardKitSpan(doc, "bob-property-card-foot-bool", "✗");
+      mark.setAttribute("aria-label", "false");
+      cell.appendChild(mark);
+      return;
+    }
+    case "invalid-date": {
+      const lint = propertyCardKitSpan(doc, "bob-property-card-foot-lint", "invalid date");
+      cell.appendChild(lint);
+      return;
+    }
+    case "map": {
+      if (row.nested != null && typeof handlers?.openNested === "function") {
+        const opener = doc.createElement("button");
+        opener.setAttribute("type", "button");
+        opener.setAttribute("class", "bob-property-card-foot-nested");
+        const size = row.value && typeof row.value === "object" && !Array.isArray(row.value)
+          ? Object.keys(row.value).length
+          : null;
+        const label = Number.isInteger(size) ? `${key} · ${size} ${size === 1 ? "field" : "fields"}  ==` : `${key}  ==`;
+        propertyCardKitAppendText(doc, opener, label);
+        opener.setAttribute("aria-label", `Open ${key} editor`);
+        opener.addEventListener?.("click", (event) => {
+          try { event.preventDefault?.(); } catch (_) {}
+          try { handlers.openNested(key, event); } catch (_) {}
+        });
+        cell.appendChild(opener);
+      } else {
+        const summary = propertyCardKitSpan(doc, "bob-property-card-foot-map", propertyCardFootRowText(row));
+        cell.appendChild(summary);
+      }
+      return;
+    }
+    case "list": {
+      const items = Array.isArray(row.value) ? row.value : [];
+      const shown = items.slice(0, PROPERTY_CARD_FOOT_LIST_PREVIEW_LIMIT);
+      for (const item of shown) {
+        const chip = propertyCardKitEl(doc, "span", "bob-property-card-foot-chip");
+        propertyCardFootRenderScalar(chip, doc, key, item, handlers);
+        cell.appendChild(chip);
+      }
+      if (items.length > shown.length) {
+        cell.appendChild(propertyCardKitSpan(doc, "bob-property-card-foot-more", `+${items.length - shown.length}`));
+      }
+      return;
+    }
+    default: {
+      const text = propertyCardFootCompactValue(row.value);
+      const wrap = propertyCardKitEl(doc, "span", "bob-property-card-foot-scalar");
+      wrap.setAttribute("title", text);
+      propertyCardFootRenderScalar(wrap, doc, key, row.value, handlers);
+      cell.appendChild(wrap);
+    }
+  }
+}
+
+function propertyCardFootAccessName(row) {
+  const name = propertyCardFootText(row.key).trim() || "Property";
+  const value = propertyCardFootRowText(row).trim();
+  const occurrence = Number.isInteger(row.occurrence) && row.occurrence > 1 ? ` (occurrence ${row.occurrence})` : "";
+  const lint = row.duplicate === true ? ", duplicate key" : "";
+  return value ? `${name}${occurrence}: ${value}${lint}` : `${name}${occurrence}${lint}`;
+}
+
+// One inventory row: key, value, where-mark. Focusable; `y` jumps to the
+// exact source line when the inventory knows it.
+function propertyCardFootRenderRow(list, doc, row, handlers) {
+  const wrap = propertyCardKitEl(doc, "div", row.duplicate === true
+    ? "bob-property-card-foot-row is-duplicate"
+    : "bob-property-card-foot-row");
+  wrap.setAttribute("data-property-key", row.key);
+  if (Number.isInteger(row.occurrence)) wrap.setAttribute("data-occurrence", String(row.occurrence));
+  if (Number.isInteger(row.line) && row.line > 0) wrap.setAttribute("data-line", String(row.line));
+  wrap.setAttribute("aria-label", propertyCardFootAccessName(row));
+  propertyCardFootBindYamlJump(wrap, handlers?.jumpYaml, row.key, row.line);
+  const openEditor = typeof handlers?.onOpenEditor === "function" ? handlers.onOpenEditor : null;
+  const keyCell = propertyCardKitEl(doc, "dt", "bob-property-card-foot-key");
+  if (openEditor) {
+    const keyButton = doc.createElement("button");
+    keyButton.setAttribute("type", "button");
+    keyButton.setAttribute("class", "bob-property-card-foot-key-button");
+    keyButton.setAttribute("aria-label", `Edit ${row.key}`);
+    propertyCardKitAppendText(doc, keyButton, row.key);
+    keyButton.addEventListener?.("click", (event) => {
+      try { event.preventDefault?.(); } catch (_) {}
+      try { openEditor(row.key); } catch (_) {}
+    });
+    keyButton.addEventListener?.("keydown", (event) => {
+      if (!event || event.isComposing || event.repeat) return;
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      if (event.key !== "Enter") return;
+      try { event.preventDefault?.(); } catch (_) {}
+      try { openEditor(row.key); } catch (_) {}
+    });
+    keyCell.appendChild(keyButton);
+  } else {
+    propertyCardKitAppendText(doc, keyCell, row.key);
+  }
+  wrap.appendChild(keyCell);
+  const valueCell = propertyCardKitEl(doc, "dd", "bob-property-card-foot-value");
+  propertyCardFootRenderValueCell(valueCell, doc, row, handlers);
+  wrap.appendChild(valueCell);
+  if (row.mark) {
+    const mark = propertyCardKitSpan(doc, "bob-property-card-foot-mark", String(row.mark));
+    wrap.appendChild(mark);
+  } else if (row.legacy) {
+    wrap.appendChild(propertyCardKitSpan(doc, "bob-property-card-foot-legacy", "legacy"));
+  }
+  if (row.duplicate === true) {
+    wrap.appendChild(propertyCardKitSpan(doc, "bob-property-card-foot-lint", "duplicate key"));
+  }
+  list.appendChild(wrap);
+  return wrap;
+}
+
+function propertyCardFootRenderRecovery(drawerBody, doc, spec) {
+  const handlers = spec.handlers || {};
+  const recovery = doc.createElement("button");
+  recovery.setAttribute("type", "button");
+  recovery.setAttribute("class", "bob-property-card-foot-recovery");
+  propertyCardKitAppendText(doc, recovery, "Frontmatter doesn't parse — y opens YAML");
+  recovery.addEventListener?.("click", (event) => {
+    try { event.preventDefault?.(); } catch (_) {}
+    try { handlers.jumpRecovery?.(); } catch (_) {}
+  });
+  recovery.addEventListener?.("keydown", (event) => {
+    if (!event || event.isComposing || event.repeat) return;
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    const keyName = event.key || "";
+    if (keyName !== "y" && keyName !== "Y" && keyName !== "Enter" && keyName !== " ") return;
+    try { event.preventDefault?.(); } catch (_) {}
+    try { handlers.jumpRecovery?.(); } catch (_) {}
+  });
+  try { recovery.setAttribute("tabindex", "0"); } catch (_) {}
+  drawerBody.appendChild(recovery);
+}
+
+// Fill an open drawer body from the inventory: loose rows, then "On this
+// card", then the initially folded "Managed · N" sub-fold.
+function propertyCardFootRenderDrawer(doc, drawerBody, spec) {
+  try {
+    if (!propertyCardKitDocOk(doc) || !drawerBody) return false;
+    const inventory = spec.inventory && typeof spec.inventory === "object" ? spec.inventory : null;
+    const handlers = spec.handlers || {};
+    if (!inventory || inventory.state === "invalid" || inventory.state === "unclosed") {
+      propertyCardFootRenderRecovery(drawerBody, doc, spec);
+      return true;
+    }
+    const groups = Array.isArray(inventory.groups) ? inventory.groups : [];
+    for (const group of groups) {
+      const rows = Array.isArray(group?.rows) ? group.rows : [];
+      if (!rows.length) continue;
+      if (group.id === "managed") {
+        const fold = propertyCardKitEl(doc, "div", "bob-property-card-foot-managed");
+        const toggle = doc.createElement("button");
+        toggle.setAttribute("type", "button");
+        toggle.setAttribute("class", "bob-property-card-foot-managed-toggle");
+        toggle.setAttribute("aria-expanded", "false");
+        propertyCardKitAppendText(doc, toggle, `▸ Managed · ${rows.length}`);
+        const managedBody = propertyCardKitEl(doc, "div", "bob-property-card-foot-managed-body");
+        managedBody.setAttribute("hidden", "");
+        toggle.addEventListener?.("click", (event) => {
+          try { event.preventDefault?.(); } catch (_) {}
+          const willOpen = managedBody.hasAttribute?.("hidden") === true;
+          if (willOpen) managedBody.removeAttribute?.("hidden");
+          else managedBody.setAttribute?.("hidden", "");
+          toggle.setAttribute("aria-expanded", willOpen ? "true" : "false");
+          const label = toggle.childNodes?.[0];
+          if (label && label.nodeType === 3) label.textContent = `${willOpen ? "▾" : "▸"} Managed · ${rows.length}`;
+          else propertyCardKitAppendText(doc, toggle, "");
+        });
+        fold.appendChild(toggle);
+        const list = propertyCardKitEl(doc, "dl", "bob-property-card-foot-list");
+        for (const row of rows) propertyCardFootRenderRow(list, doc, row, handlers);
+        managedBody.appendChild(list);
+        fold.appendChild(managedBody);
+        drawerBody.appendChild(fold);
+        continue;
+      }
+      if (group.id === "card") {
+        drawerBody.appendChild(propertyCardKitSpan(doc, "bob-property-card-foot-group", "On this card"));
+      }
+      const list = propertyCardKitEl(doc, "dl", "bob-property-card-foot-list");
+      for (const row of rows) propertyCardFootRenderRow(list, doc, row, handlers);
+      drawerBody.appendChild(list);
+    }
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+// The foot row plus its drawer shell. The drawer body is built only when
+// open; closed drawers keep an empty shell for aria-controls.
+function propertyCardFootBuildEl(doc, spec = {}) {
+  try {
+    if (!propertyCardKitDocOk(doc)) return null;
+    const options = spec && typeof spec === "object" ? spec : {};
+    const handlers = options.handlers || {};
+    const inventory = options.inventory && typeof options.inventory === "object" ? options.inventory : null;
+    const stamp = options.stamp && typeof options.stamp === "object" ? options.stamp : null;
+    const disclosureId = propertyCardFootText(options.disclosureId).trim()
+      || `bob-property-foot-${propertyCardFootText(options.path).trim() || "note"}`;
+    const drawerId = `${disclosureId}-drawer`;
+    const count = inventory && Number.isInteger(inventory.count) ? inventory.count : 0;
+    const open = options.open === true;
+
+    const foot = propertyCardKitEl(doc, "div", PROPERTY_CARD_FOOT_CLASS);
+    foot.setAttribute("data-property-foot", "true");
+    if (options.path) foot.setAttribute("data-foot-source", propertyCardFootText(options.path));
+
+    const disclosure = doc.createElement("button");
+    disclosure.setAttribute("type", "button");
+    disclosure.setAttribute("class", "bob-property-card-foot-disclosure");
+    disclosure.setAttribute("aria-expanded", open ? "true" : "false");
+    disclosure.setAttribute("aria-controls", drawerId);
+    disclosure.setAttribute("title", "Toggle properties =-");
+    disclosure.setAttribute("aria-label", `Toggle properties, ${count} ${count === 1 ? "property" : "properties"}`);
+    disclosure.setAttribute("data-foot-focus", "foot");
+    const chevron = propertyCardKitSpan(doc, "bob-property-card-foot-chevron", "▸");
+    chevron.setAttribute("aria-hidden", "true");
+    disclosure.appendChild(chevron);
+    propertyCardKitAppendText(doc, disclosure, ` Properties · ${count}`);
+    disclosure.addEventListener?.("click", (event) => {
+      try { event.preventDefault?.(); } catch (_) {}
+      let next = !open;
+      if (typeof handlers.onToggle === "function") {
+        try {
+          const decided = handlers.onToggle(options.path, next);
+          if (typeof decided === "boolean") next = decided;
+        } catch (_) {}
+      }
+      if (next) propertyCardFootReveal(foot);
+    });
+    foot.appendChild(disclosure);
+
+    const lint = propertyCardFootLint({ inventory, stamp });
+    if (lint.count > 0) {
+      const chip = propertyCardKitSpan(doc, "bob-property-card-foot-lint-chip", `⚠ ${lint.count}`);
+      chip.setAttribute("title", lint.tooltip);
+      chip.setAttribute("aria-label", lint.tooltip);
+      chip.setAttribute("role", "status");
+      foot.appendChild(chip);
+    }
+
+    if (stamp && stamp.text) {
+      const stampNode = propertyCardKitSpan(doc, stamp.state === "invalid"
+        ? "bob-property-card-foot-stamp is-invalid"
+        : "bob-property-card-foot-stamp", stamp.text);
+      if (stamp.tooltip) stampNode.setAttribute("title", stamp.tooltip);
+      foot.appendChild(stampNode);
+    }
+
+    const drawer = propertyCardKitEl(doc, "div", PROPERTY_CARD_FOOT_DRAWER_CLASS);
+    drawer.setAttribute("id", drawerId);
+    drawer.setAttribute("data-open", open ? "true" : "false");
+    if (open) {
+      const body = propertyCardKitEl(doc, "div", "bob-property-card-foot-drawer-body");
+      propertyCardFootRenderDrawer(doc, body, { ...options, handlers });
+      drawer.appendChild(body);
+    }
+    foot.appendChild(drawer);
+    return { element: foot, disclosure, drawer };
+  } catch (_) {
+    return null;
+  }
+}
+// ---- src/240p-plugin-property-card-foot-state.js ----
+// Shared property-card foot runtime (bob-cli-pf drawer-record): per-note
+// session state and mount lifecycle for the lazy accessible foot.
+//
+// drawer_memory = note: session-only state is keyed by normalized note path
+// and shared by every mount of that note. A different note starts closed.
+// Per-path open state survives refresh, card-body collapse, and revisiting
+// the note, but never survives plugin reload: adapters reset on dispose.
+// Per-path state is separate from per-mount disclosure IDs, which stay unique
+// even for two panes showing one note.
+//
+// propertyCardToggleProperties(view) returns whether it acted: it resolves a
+// live, path-matching mount in the supplied view and never toggles a hidden
+// or stale mount left by a previous file, another pane, or an embed.
+function propertyCardFootPath(value) {
+  return typeof value === "string" ? value.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/$/, "") : "";
+}
+
+const propertyCardFootOpenStates = new Map();
+const propertyCardFootMounts = new Map();
+const propertyCardFootMountByNode = new WeakMap();
+const propertyCardFootToggleListeners = new Set();
+const propertyCardFootPathResolvers = [];
+let propertyCardFootMountSeq = 0;
+let propertyCardFootEditorHook = null;
+
+function propertyCardFootIsOpen(path) {
+  const key = propertyCardFootPath(path);
+  if (!key) return false;
+  return propertyCardFootOpenStates.get(key) === true;
+}
+
+// Flip open state for one path and notify adapter listeners so the affected
+// mounts repaint. Returns the new open state.
+function propertyCardFootToggle(path) {
+  const key = propertyCardFootPath(path);
+  if (!key) return false;
+  const next = propertyCardFootOpenStates.get(key) !== true;
+  if (next) propertyCardFootOpenStates.set(key, true);
+  else propertyCardFootOpenStates.delete(key);
+  for (const listener of Array.from(propertyCardFootToggleListeners)) {
+    try { listener(key, next); } catch (_) {}
+  }
+  return next;
+}
+
+function propertyCardFootSetOpen(path, open) {
+  const key = propertyCardFootPath(path);
+  if (!key) return false;
+  const next = open === true;
+  const current = propertyCardFootOpenStates.get(key) === true;
+  if (current === next) return next;
+  if (next) propertyCardFootOpenStates.set(key, true);
+  else propertyCardFootOpenStates.delete(key);
+  for (const listener of Array.from(propertyCardFootToggleListeners)) {
+    try { listener(key, next); } catch (_) {}
+  }
+  return next;
+}
+
+// Adapters repaint through this subscription; the entrypoints phase's `-`
+// arm reaches mounts through propertyCardToggleProperties below.
+function propertyCardFootOnToggle(listener) {
+  if (typeof listener !== "function") return () => {};
+  propertyCardFootToggleListeners.add(listener);
+  return () => { propertyCardFootToggleListeners.delete(listener); };
+}
+
+// Mount registry: one entry per mounted foot node. Disclosure IDs come from
+// a session counter so two panes on one note never share an ID. Claim an ID
+// before building so the builder never derives one from the path.
+function propertyCardFootNextDisclosureId() {
+  propertyCardFootMountSeq += 1;
+  return `bob-property-foot-${propertyCardFootMountSeq}`;
+}
+
+function propertyCardFootRegisterMount(node, path, disclosureId) {
+  const key = propertyCardFootPath(path);
+  if (!node || !key) return null;
+  const existing = propertyCardFootMountByNode.get(node);
+  if (existing && propertyCardFootMounts.has(existing.id)) {
+    existing.path = key;
+    if (disclosureId) existing.disclosureId = disclosureId;
+    return { id: existing.id, disclosureId: existing.disclosureId };
+  }
+  propertyCardFootMountSeq += 1;
+  const id = `foot-${propertyCardFootMountSeq}`;
+  const entry = { id, node, path: key, disclosureId: disclosureId || `bob-property-foot-${propertyCardFootMountSeq}` };
+  propertyCardFootMounts.set(id, entry);
+  try { propertyCardFootMountByNode.set(node, entry); } catch (_) {}
+  return { id: entry.id, disclosureId: entry.disclosureId };
+}
+
+function propertyCardFootUnregisterMount(id) {
+  const entry = propertyCardFootMounts.get(id);
+  if (!entry) return false;
+  propertyCardFootMounts.delete(id);
+  try { if (propertyCardFootMountByNode.get(entry.node) === entry) propertyCardFootMountByNode.delete(entry.node); } catch (_) {}
+  return true;
+}
+
+function propertyCardFootUnregisterNode(node) {
+  if (!node) return false;
+  let entry = null;
+  try { entry = propertyCardFootMountByNode.get(node) || null; } catch (_) {}
+  if (!entry) return false;
+  return propertyCardFootUnregisterMount(entry.id);
+}
+
+// Release every mount under a removed root (path change, removal, failed
+// paint). With a path, only that path's mounts release. Disconnected mounts
+// for the path always release: a rebuilt mount leaves its predecessor
+// detached, so repaint pruning keeps the registry from growing.
+function propertyCardFootReleaseScope(root, path) {
+  const key = path == null || path === "" ? "" : propertyCardFootPath(path);
+  let released = 0;
+  for (const entry of Array.from(propertyCardFootMounts.values())) {
+    if (key && entry.path !== key) continue;
+    let connected = true;
+    try {
+      connected = entry.node ? entry.node.isConnected !== false : false;
+    } catch (_) {
+      connected = true;
+    }
+    if (!connected) {
+      if (propertyCardFootUnregisterMount(entry.id)) released += 1;
+      continue;
+    }
+    let inside = false;
+    try {
+      inside = Boolean(root && (root === entry.node || (typeof root.contains === "function" && root.contains(entry.node))));
+    } catch (_) {
+      inside = false;
+    }
+    if (!inside) continue;
+    if (propertyCardFootUnregisterMount(entry.id)) released += 1;
+  }
+  return released;
+}
+
+function propertyCardFootMountsFor(path) {
+  const key = propertyCardFootPath(path);
+  if (!key) return [];
+  return Array.from(propertyCardFootMounts.values()).filter((entry) => entry.path === key);
+}
+
+function propertyCardFootLiveMountsFor(path) {
+  return propertyCardFootMountsFor(path).filter((entry) => {
+    try {
+      return entry.node && entry.node.isConnected !== false;
+    } catch (_) {
+      return false;
+    }
+  });
+}
+
+// Rename/delete events must not leak old-path state: renames carry the open
+// state to the new path, deletes drop the path's mounts and state.
+function propertyCardFootRenamePath(oldPath, newPath) {
+  const from = propertyCardFootPath(oldPath);
+  const to = propertyCardFootPath(newPath);
+  if (!from || !to || from === to) return false;
+  if (propertyCardFootOpenStates.get(from) === true) {
+    propertyCardFootOpenStates.set(to, true);
+  }
+  propertyCardFootOpenStates.delete(from);
+  for (const entry of propertyCardFootMounts.values()) {
+    if (entry.path === from) entry.path = to;
+  }
+  return true;
+}
+
+function propertyCardFootReleasePath(path) {
+  const key = propertyCardFootPath(path);
+  if (!key) return false;
+  propertyCardFootOpenStates.delete(key);
+  for (const entry of Array.from(propertyCardFootMounts.values())) {
+    if (entry.path === key) propertyCardFootUnregisterMount(entry.id);
+  }
+  return true;
+}
+
+// Unload/tests: drop every open state, mount, listener, and the editor hook.
+function propertyCardFootResetAll() {
+  propertyCardFootOpenStates.clear();
+  propertyCardFootMounts.clear();
+  propertyCardFootToggleListeners.clear();
+  propertyCardFootEditorHook = null;
+}
+
+// Future editor hook for `=+` (editor-core): key labels and Enter invoke it
+// only when registered. Unset in this phase; value links keep navigating.
+function propertyCardFootSetEditorHook(hook) {
+  propertyCardFootEditorHook = typeof hook === "function" ? hook : null;
+  return propertyCardFootEditorHook;
+}
+
+function propertyCardFootOpenEditor(path, key, mode) {
+  if (typeof propertyCardFootEditorHook !== "function") return false;
+  try {
+    propertyCardFootEditorHook(propertyCardFootPath(path), { key, mode });
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function propertyCardFootRegisterPathResolver(resolver) {
+  if (typeof resolver !== "function") return () => {};
+  propertyCardFootPathResolvers.push(resolver);
+  return () => {
+    const index = propertyCardFootPathResolvers.indexOf(resolver);
+    if (index >= 0) propertyCardFootPathResolvers.splice(index, 1);
+  };
+}
+
+// Best-effort view path without an adapter resolver: Reading views carry
+// the file; Source-mode fallbacks carry it in view state.
+function propertyCardFootFallbackViewPath(view) {
+  try {
+    const direct = propertyCardFootPath(view?.file?.path);
+    if (direct) return direct;
+  } catch (_) {}
+  try {
+    const state = typeof view?.getState === "function" ? view.getState() : null;
+    const fromState = propertyCardFootPath(state?.file);
+    if (fromState) return fromState;
+  } catch (_) {}
+  return "";
+}
+
+function propertyCardFootViewPath(view) {
+  for (const resolver of propertyCardFootPathResolvers) {
+    try {
+      const resolved = propertyCardFootPath(resolver(view));
+      if (resolved) return resolved;
+    } catch (_) {}
+  }
+  return propertyCardFootFallbackViewPath(view);
+}
+
+function propertyCardFootViewContains(view, node) {
+  if (!view || !node) return false;
+  const scopes = [view.dom, view.containerEl, view.contentEl];
+  for (const scope of scopes) {
+    if (!scope) continue;
+    try {
+      if (scope === node) return true;
+      if (typeof scope.contains === "function" && scope.contains(node)) return true;
+    } catch (_) {}
+  }
+  return false;
+}
+
+// Toggle the foot of the card mounted in the supplied view. Resolves the
+// view's current path, then requires a connected mount carrying that path:
+// mounts removed on replacement, path change, or failed paint are
+// disconnected, and mounts from a previous file carry its old path, so
+// neither can act. Open state is per path, so every live mount of the note
+// (including a second pane) follows one toggle. Returns whether it acted.
+function propertyCardToggleProperties(view) {
+  try {
+    if (!view) return false;
+    const path = propertyCardFootViewPath(view);
+    if (!path) return false;
+    if (!propertyCardFootLiveMountsFor(path).length) return false;
+    propertyCardFootToggle(path);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
 // ---- src/240q-plugin-property-card-frontmatter-ownership.js ----
 // Property-card kit: whole-container frontmatter ownership (unwired).
 // propertyCardOwnFrontmatter(scope, { path, view }) adds
@@ -107032,10 +107856,14 @@ class BobLedgerToolsRecordWalkRailMixin {
           const rail = recordWalkRailBuildEl(walk, options, doc);
           if (rail) rows.push({ from: line.from, to: line.to, decoration: Decoration.replace({ widget: widgetFor(rail, "walk", signature) }) });
         }
+        // No card, no foot: release the path's mounts so a demoted note
+        // cannot toggle a stale drawer.
+        try { this.recordSheetTrackFoot(view.dom, path, null); } catch (_) {}
         return cacheAndFinish(rows, signature, null, false);
       }
 
-      const cardSignature = recordSheetCardSignature(card, { ...options, walk });
+      const footExtra = this.recordSheetFootExtra(path, card);
+      const cardSignature = recordSheetCardSignature(card, { ...options, walk, ...footExtra });
       const recognizer = recordSheetTitleRecognizer({
         path, title: card.title, walk, sourceText: text,
       });
@@ -107054,7 +107882,7 @@ class BobLedgerToolsRecordWalkRailMixin {
       }
       let header = slotted ? adopted.node : null;
       if (!header || recordSheetNodeSignatures.get(header) !== cardSignature) {
-        const fresh = this.recordSheetBuildMounted(card, options, doc, { walk, includeRail });
+        const fresh = this.recordSheetBuildMounted(card, options, doc, { walk, includeRail, footSpec: footExtra.footSpec });
         if (!fresh) {
           this.recordSheetReleaseAdoption?.(view?.dom, path);
           this.recordSheetEditorCache?.delete?.(view);
@@ -107084,12 +107912,14 @@ class BobLedgerToolsRecordWalkRailMixin {
           const rail = recordWalkRailBuildEl(walk, options, doc);
           if (rail) rows.push({ from: line.from, to: line.to, decoration: Decoration.replace({ widget: widgetFor(rail, "walk", slotSignature) }) });
         }
+        try { this.recordSheetTrackFoot(view.dom, path, header); } catch (_) {}
         return cacheAndFinish(rows, slotSignature, card.body || null, true);
       }
 
       const signature = JSON.stringify([cardSignature, recordSheetWalkSignature(walk), Boolean(reveal), line?.from, line?.to]);
       const rows = [];
       const rail = line && !reveal ? recordWalkRailBuildEl(walk, options, doc) : null;
+      try { this.recordSheetTrackFoot(view.dom, path, header); } catch (_) {}
       if (header && rail && docks) {
         const dock = recordSheetEl(doc, "div", "bob-record-walk-dock");
         header.classList.add("docks-record-walk");
@@ -107772,18 +108602,6 @@ function recordSheetTimeLabel(date) {
   return `${hours}:${String(minutes).padStart(2, "0")} ${suffix}`;
 }
 
-function recordSheetCreatedFooter(value, clock) {
-  const presented = recordSheetDatePresentation(value, clock);
-  if (!presented) return null;
-  const date = recordSheetDateObject(value);
-  if (presented.age === "today") {
-    const time = recordSheetHasClockTime(value, date) ? recordSheetTimeLabel(date) : "";
-    return time ? `added today, ${time}` : "added today";
-  }
-  if (presented.age === "yesterday") return "added yesterday";
-  return presented.friendly ? `added ${presented.friendly}` : null;
-}
-
 function recordSheetParseWikilink(raw) {
   const text = String(raw || "").trim();
   if (!text) return null;
@@ -108146,7 +108964,6 @@ function recordSheetModel(input = {}) {
   const heading = String(input.heading == null ? "" : input.heading).trim();
   const clock = recordSheetClock(input.clock);
   const collapsed = input.collapsed === true;
-  const foldOpen = input.foldOpen === true;
   const hue = input.hue == null ? "" : String(input.hue);
   const fields = (Array.isArray(album.fields) ? album.fields : []).map((field) => (
     typeof albumHeaderFieldModel === "function" ? albumHeaderFieldModel(field) : field
@@ -108162,11 +108979,11 @@ function recordSheetModel(input = {}) {
     : undefined;
   const titleText = title == null ? "" : String(title).trim();
   if (titleText) coverage.title = "sheet";
+  // The shared foot owns the created stamp: a stored created key always
+  // renders in the foot, and every other key lives in the drawer. Native
+  // Properties hiding only reads rows, ghosts, and the title.
   const createdPresent = frontmatter && Object.prototype.hasOwnProperty.call(frontmatter, "created");
-  const createdFooter = createdPresent ? recordSheetCreatedFooter(frontmatter.created, clock) : null;
-  const createdInvalid = createdPresent && !recordSheetIsEmpty(frontmatter.created) && !createdFooter;
-  if (createdPresent && createdFooter) coverage.created = "footer";
-  else if (createdPresent) coverage.created = createdInvalid ? "fold" : "absent";
+  coverage.created = createdPresent ? "foot" : "absent";
 
   const rows = [];
   const ghosts = [];
@@ -108199,31 +109016,14 @@ function recordSheetModel(input = {}) {
   }
   choiceChips.sort((left, right) => Number(right.group) - Number(left.group));
 
-  const schemaKeys = new Set(fields.map((field) => field.key));
-  const fold = [];
-  if (createdInvalid) {
-    fold.push({
-      key: "created",
-      label: "Created",
-      text: recordSheetRawText(frontmatter.created),
-      lint: "invalid date",
-      spans: [{ kind: "mono", text: recordSheetRawText(frontmatter.created) }],
-    });
-  }
+  // Every authored key stays visible: schema fields paint as rows, and the
+  // shared foot drawer inventories the complete top-level source, including
+  // identity keys and legacy keys. Coverage marks the drawer's homes so the
+  // old fold/footer bookkeeping cannot drive native row hiding.
   for (const key of recordSheetAuthoredKeys(frontmatter)) {
-    if (RECORD_SHEET_IDENTITY_KEYS.has(key) || schemaKeys.has(key)) continue;
-    const compact = recordSheetCompactValue(frontmatter[key]);
-    fold.push({
-      key,
-      label: (typeof albumHeaderHumanize === "function" ? albumHeaderHumanize(key) : key) || key,
-      text: compact,
-      lint: "",
-      legacy: legacy.includes(key),
-      spans: typeof frontmatter[key] === "string"
-        ? recordSheetWikilinkSpans(frontmatter[key])
-        : [{ kind: "text", text: compact }],
-    });
-    coverage[key] = "fold";
+    if (RECORD_SHEET_IDENTITY_KEYS.has(key)) continue;
+    if (coverage[key] != null) continue;
+    coverage[key] = key === "created" ? "foot" : "drawer";
   }
 
   const broken = gate.state === "broken";
@@ -108272,10 +109072,8 @@ function recordSheetModel(input = {}) {
     warningLine: Number.isInteger(error?.line) && error.line > 0 ? error.line : null,
     rows,
     ghosts,
-    fold,
-    foldOpen,
     collapsed,
-    createdFooter,
+    legacyKeys: legacy,
     choiceChips: collapsedChips,
     fieldCount,
     coverage,
@@ -108298,8 +109096,7 @@ function recordSheetSignature(model, extra = {}) {
       crumbs: model.crumbs,
       rows: model.rows,
       ghosts: model.ghosts,
-      fold: model.fold,
-      createdFooter: model.createdFooter,
+      legacyKeys: model.legacyKeys,
       warning: model.warning,
       warningLine: model.warningLine,
       hideEligible: model.hideEligible,
@@ -108307,7 +109104,8 @@ function recordSheetSignature(model, extra = {}) {
       walk: typeof recordSheetWalkSignature === "function"
         ? recordSheetWalkSignature(model.walk) : (model.walk || null),
       collapsed: extra.collapsed === undefined ? model.collapsed === true : extra.collapsed === true,
-      foldOpen: extra.foldOpen === undefined ? model.foldOpen === true : extra.foldOpen === true,
+      footOpen: extra.footOpen === true,
+      footDigest: extra.footDigest == null ? null : String(extra.footDigest),
       hue: extra.hue === undefined ? model.hue : extra.hue,
       overlay: extra.overlay === undefined ? model.overlay : extra.overlay,
       subscription: extra.subscription === undefined
@@ -108523,7 +109321,8 @@ function recordSheetCardSignature(card, extra = {}) {
       ? recordSheetSignature(card.body, extra) : null,
     walk: recordSheetWalkSignature(extra.walk || (card.body && card.body.walk) || null),
     collapsed: extra.collapsed === true,
-    foldOpen: extra.foldOpen === true,
+    footOpen: extra.footOpen === true,
+    footDigest: extra.footDigest == null ? null : String(extra.footDigest),
     overlay: extra.overlay || null,
     subscription: extra.subscription || null,
     desktop: extra.desktop !== false,
@@ -108824,58 +109623,6 @@ function recordSheetRenderGhosts(sheet, model, options, doc) {
   return row;
 }
 
-function recordSheetRenderFold(sheet, model, options, doc) {
-  if (!model.fold || !model.fold.length) return null;
-  const details = recordSheetEl(doc, "div", "bob-record-sheet-fold");
-  if (!details) return null;
-  const toggle = recordSheetEl(doc, "button", "bob-record-sheet-fold-toggle");
-  const count = model.fold.length;
-  const label = `${count} other ${count === 1 ? "property" : "properties"}`;
-  if (toggle) {
-    toggle.setAttribute("type", "button");
-    toggle.setAttribute("data-record-sheet-focus", "fold");
-    toggle.setAttribute("aria-expanded", model.foldOpen ? "true" : "false");
-    toggle.setAttribute("aria-label", model.foldOpen ? `Hide ${label}` : `Show ${label}`);
-    recordSheetText(toggle, `${model.foldOpen ? "▾" : "▸"} ${label}`);
-    toggle.addEventListener?.("click", (event) => {
-      event.preventDefault?.();
-      options?.handlers?.toggleFold?.(!model.foldOpen);
-    });
-    details.appendChild(toggle);
-  }
-  if (model.foldOpen) {
-    const body = recordSheetEl(doc, "div", "bob-record-sheet-fold-body");
-    for (const item of model.fold) {
-      const row = recordSheetEl(doc, "div", "bob-record-sheet-fold-row");
-      if (!row) continue;
-      row.setAttribute("data-record-key", item.key);
-      recordSheetBindYamlJump(row, options?.handlers?.jumpYaml, item.key);
-      const labelNode = recordSheetEl(doc, "span", "bob-record-sheet-fold-label");
-      recordSheetText(labelNode, item.label || item.key);
-      if (labelNode) row.appendChild(labelNode);
-      if (item.legacy) {
-        const legacy = recordSheetEl(doc, "span", "bob-record-sheet-legacy");
-        recordSheetText(legacy, "legacy");
-        if (legacy) row.appendChild(legacy);
-      }
-      const value = recordSheetEl(doc, "span", "bob-record-sheet-fold-value");
-      if (value) {
-        recordSheetRenderSpans(value, doc, item.spans, options);
-        row.appendChild(value);
-      }
-      if (item.lint) {
-        const lint = recordSheetEl(doc, "span", "bob-record-sheet-lint");
-        recordSheetText(lint, item.lint);
-        if (lint) row.appendChild(lint);
-      }
-      if (body) body.appendChild(row);
-    }
-    if (body) details.appendChild(body);
-  }
-  sheet.appendChild(details);
-  return details;
-}
-
 function recordSheetBuildEl(model, options = {}, doc) {
   if (!model) return null;
   const card = typeof recordSheetCardFrom === "function" ? recordSheetCardFrom(model) : null;
@@ -108967,12 +109714,9 @@ function recordSheetBuildEl(model, options = {}, doc) {
     }
   }
   recordSheetRenderGhosts(sheet, body, options, host);
-  if (body.createdFooter) {
-    const footer = recordSheetEl(host, "p", "bob-record-sheet-created");
-    recordSheetText(footer, body.createdFooter);
-    if (footer) sheet.appendChild(footer);
-  }
-  recordSheetRenderFold(sheet, body, options, host);
+  // The created stamp and every remaining property live in the shared foot
+  // below the walk rail; it is appended by recordSheetBuildMounted so it
+  // also covers identity-only, broken-schema, and collapsed returns.
   return sheet;
 }
 
@@ -109066,11 +109810,51 @@ class BobLedgerToolsRecordSheetMixin {
       onSetup: () => {
         if (!(plugin.recordSheetEditorCache instanceof WeakMap)) plugin.recordSheetEditorCache = new WeakMap();
         if (!(plugin.recordSheetCollapsed instanceof Map)) plugin.recordSheetCollapsed = new Map();
-        if (!(plugin.recordSheetFolds instanceof Map)) plugin.recordSheetFolds = new Map();
         if (!(plugin.recordSheetOverlays instanceof Map)) plugin.recordSheetOverlays = new Map();
         if (!(plugin.recordSheetOverlayTimers instanceof Map)) plugin.recordSheetOverlayTimers = new Map();
         if (!(plugin.recordSheetSourceCache instanceof Map)) plugin.recordSheetSourceCache = new Map();
         if (!(plugin.recordSheetSourceFlights instanceof Map)) plugin.recordSheetSourceFlights = new Map();
+        if (!(plugin.recordSheetFootPendingScroll instanceof Set)) plugin.recordSheetFootPendingScroll = new Set();
+        try {
+          if (typeof propertyCardFootOnToggle === "function" && !plugin.recordSheetFootUntoggle) {
+            plugin.recordSheetFootUntoggle = propertyCardFootOnToggle((path, open) => {
+              if (open) plugin.recordSheetFootPendingScroll?.add?.(propertyCardFootPath(path));
+              plugin.scheduleRecordSheetRefresh();
+            });
+          }
+        } catch (_) {}
+        try {
+          if (typeof propertyCardFootRegisterPathResolver === "function" && !plugin.recordSheetFootUnresolver) {
+            plugin.recordSheetFootUnresolver = propertyCardFootRegisterPathResolver((view) => {
+              try {
+                return plugin.recordSheetLivePath(view) || "";
+              } catch (_) {
+                return "";
+              }
+            });
+          }
+        } catch (_) {}
+        try {
+          const vault = plugin.app?.vault;
+          if (vault && typeof vault.on === "function" && typeof plugin.registerEvent === "function") {
+            plugin.registerEvent(vault.on("rename", (file, oldPath) => {
+              try {
+                if (typeof propertyCardFootRenamePath === "function") {
+                  propertyCardFootRenamePath(oldPath, file?.path);
+                }
+              } catch (_) {}
+              plugin.scheduleRecordSheetRefresh();
+            }));
+            plugin.registerEvent(vault.on("delete", (file) => {
+              try {
+                if (typeof propertyCardFootReleasePath === "function") {
+                  propertyCardFootReleasePath(file?.path);
+                }
+              } catch (_) {}
+              plugin.scheduleRecordSheetRefresh();
+            }));
+          }
+        } catch (_) {}
         plugin.recordSheetOwnedKey = plugin.recordSheetOwnedKey || "";
         plugin.recordSheetDomBuilds = plugin.recordSheetDomBuilds || 0;
         plugin.recordSheetDay = plugin.recordSheetToday();
@@ -109091,6 +109875,10 @@ class BobLedgerToolsRecordSheetMixin {
         } catch (_) {}
       },
       onDisposeStart: () => {
+        try { plugin.recordSheetFootUntoggle?.(); } catch (_) {}
+        plugin.recordSheetFootUntoggle = null;
+        try { plugin.recordSheetFootUnresolver?.(); } catch (_) {}
+        plugin.recordSheetFootUnresolver = null;
         plugin.recordSheetUnsubscribe?.();
         plugin.recordSheetUnsubscribe = null;
         plugin.albumClearTimeout?.(plugin.recordSheetReadingViewMountTimer);
@@ -109104,7 +109892,10 @@ class BobLedgerToolsRecordSheetMixin {
       },
       onDisposeEnd: () => {
         plugin.recordSheetCollapsed?.clear?.();
-        plugin.recordSheetFolds?.clear?.();
+        plugin.recordSheetFootPendingScroll?.clear?.();
+        try {
+          if (typeof propertyCardFootResetAll === "function") propertyCardFootResetAll();
+        } catch (_) {}
         plugin.recordSheetOverlayTimers?.clear?.();
         plugin.recordSheetOverlays?.clear?.();
         plugin.recordSheetSourceCache?.clear?.();
@@ -109253,18 +110044,6 @@ class BobLedgerToolsRecordSheetMixin {
     this.scheduleRecordSheetRefresh();
   }
 
-  recordSheetFoldOpen(path) {
-    const key = recordSheetPath(path);
-    const map = this.recordSheetFolds instanceof Map ? this.recordSheetFolds : new Map();
-    this.recordSheetFolds = map;
-    return key && map.has(key) ? map.get(key) === true : false;
-  }
-
-  recordSheetSetFold(path, open) {
-    const key = recordSheetPath(path);
-    if (key) this.recordSheetFolds.set(key, open === true);
-    this.scheduleRecordSheetRefresh();
-  }
 
   refreshRecordSheetOverlay(path, overlay) {
     const key = recordSheetPath(path);
@@ -109379,7 +110158,6 @@ class BobLedgerToolsRecordSheetMixin {
       metadataCache: this.app?.metadataCache,
       vault: this.app?.vault,
       collapsed: this.recordSheetIsCollapsed(path),
-      foldOpen: this.recordSheetFoldOpen(path),
       hue: this.recordSheetHue(path),
       subscription: this.recordSheetSubscription(path),
       gate,
@@ -109397,8 +110175,7 @@ class BobLedgerToolsRecordSheetMixin {
         openPath: (target, event) => { void this.recordSheetOpenPath(target, path, event); },
         hoverLink: (event, targetEl, linktext) => this.recordSheetHoverLink(event, targetEl, linktext, path),
         toggleCollapsed: (next) => this.recordSheetSetCollapsed(path, next),
-        toggleFold: (next) => this.recordSheetSetFold(path, next),
-        jumpYaml: (key) => { void this.recordSheetJumpYaml(path, key); },
+        jumpYaml: (key, line) => { void this.recordSheetJumpYaml(path, key, line); },
         jumpAlbumYaml: (line) => { void this.recordSheetJumpAlbumYaml(model?.albumPath, line); },
         openEdit: () => { void this.openRecordCard?.({ filePath: path }); },
         openField: (key) => { void this.openRecordCard?.({ filePath: path, field: key }); },
@@ -109487,17 +110264,20 @@ class BobLedgerToolsRecordSheetMixin {
     return flight;
   }
 
-  async recordSheetJumpYaml(recordPath, key) {
+  // The foot passes the inventory's exact 1-based source line (including
+  // duplicate occurrences); without one, fall back to the first key line.
+  async recordSheetJumpYaml(recordPath, key, line) {
     const path = recordSheetPath(recordPath);
     if (!path) return { ok: false, reason: "missing path" };
-    let line = 1;
+    if (Number.isInteger(line) && line > 0) return this.recordSheetOpenSource(path, line);
+    let target = 1;
     try {
       const source = await this.recordSheetReadSource(path);
-      line = recordSheetYamlKeyLine(source, key);
+      target = recordSheetYamlKeyLine(source, key);
     } catch (_) {
-      line = 1;
+      target = 1;
     }
-    return this.recordSheetOpenSource(path, line);
+    return this.recordSheetOpenSource(path, target);
   }
 
   async recordSheetJumpAlbumYaml(albumPath, line) {
@@ -109579,6 +110359,10 @@ class BobLedgerToolsRecordSheetMixin {
         sheet.appendChild(rail);
       }
     }
+    // The foot follows the nav rail, outside the collapsible body, in every
+    // return: Reading and Live Preview, identity-only, broken-schema, and
+    // collapsed. recordSheetAppendFoot is a no-op without the kit.
+    if (sheet) this.recordSheetAppendFoot(sheet, model, options, doc, extra && extra.footSpec);
     return sheet;
   }
 
@@ -109727,6 +110511,12 @@ class BobLedgerToolsRecordSheetMixin {
   }
 
   recordSheetCleanEditor(view) {
+    try {
+      const cached = this.recordSheetEditorCache?.get?.(view);
+      if (typeof propertyCardFootReleaseScope === "function") {
+        propertyCardFootReleaseScope(view?.dom, cached?.path);
+      }
+    } catch (_) {}
     this.recordSheetReleaseAdoption?.(view?.dom);
     this.recordPropertyCardHost().cleanEditor(view, {
       unmark: (scope) => {
@@ -109844,6 +110634,11 @@ class BobLedgerToolsRecordSheetTitleMixin {
   recordSheetRemoveReading(root, scope = root, sourcePath = "") {
     if (!root) return;
     this.recordSheetReleaseAdoption(scope, sourcePath, { preserveFallback: true });
+    try {
+      if (typeof propertyCardFootReleaseScope === "function") {
+        propertyCardFootReleaseScope(root, sourcePath);
+      }
+    } catch (_) {}
     this.recordWalkRemoveReading(root, sourcePath);
     for (const node of Array.from(root.querySelectorAll?.(`.${RECORD_SHEET_CLASS}`) || [])) {
       if (!this.recordSheetNodeBelongs(node, root)) continue;
@@ -109890,11 +110685,12 @@ class BobLedgerToolsRecordSheetTitleMixin {
     const focusKey = this.recordSheetFocusKey(sheet, doc);
     const options = this.recordSheetOptions(sourcePath, card.body);
     const walk = card.body?.walk || this.recordWalkFor(sourcePath);
-    const signature = recordSheetCardSignature(card, { ...options, walk });
+    const footExtra = this.recordSheetFootExtra(sourcePath, card);
+    const signature = recordSheetCardSignature(card, { ...options, walk, ...footExtra });
     if (!sheet || recordSheetNodeSignatures.get(sheet) !== signature) {
       let fresh = null;
       try {
-        fresh = this.recordSheetBuildMounted(card, options, doc);
+        fresh = this.recordSheetBuildMounted(card, options, doc, { footSpec: footExtra.footSpec });
       } catch (_) {
         fresh = null;
       }
@@ -109906,6 +110702,9 @@ class BobLedgerToolsRecordSheetTitleMixin {
       sheet = sheet ? propertyCardAdoptPatch(sheet, fresh) : fresh;
       recordSheetNodeSignatures.set(sheet, signature);
     }
+    // The toggle API resolves live mounts: track this mount after every
+    // successful paint, including signature-stable repaints.
+    this.recordSheetTrackFoot(scope || root, sourcePath, sheet);
     for (const node of bodyNodes) {
       if (node !== sheet) node.remove?.();
     }
@@ -109959,6 +110758,238 @@ class BobLedgerToolsRecordSheetTitleMixin {
       propertyCardSyncTitleHeading(target, entry.owned);
       this.recordSheetRestoreFocus(target, focusKey);
     });
+  }
+}
+// ---- src/242kc-plugin-record-sheet-foot.js ----
+// Record sheet shared-foot adapter (bob-cli-pf drawer-record): per-note
+// foot spec, mount tracking, and the kit append below the walk rail.
+// Methods merge onto the plugin through 310-install-methods.js; this file
+// owns every name starting with recordSheetFoot.
+class BobLedgerToolsRecordSheetFootMixin {
+  // Shared-foot spec for one record mount: where-marks declare the
+  // card-to-YAML mapping (parent→kicker, type→tile, title→title when the
+  // sheet covers it, schema fields and ghosts→field, created→foot). An
+  // absent ghost is not a fabricated stored property; the drawer inventories
+  // actual top-level source keys.
+  recordSheetFootSpec(path, card) {
+    const filePath = recordSheetPath(path);
+    const body = card && card.body ? card.body : null;
+    const frontmatter = this.recordSheetFrontmatter(filePath) || {};
+    const cache = this.recordSheetCache(filePath);
+    const sourceText = this.recordSheetSourceCache?.get?.(filePath);
+    const where = { parent: "kicker", type: "tile", created: "foot" };
+    if (body && body.coverage && body.coverage.title === "sheet") where.title = "title";
+    for (const row of [...(body?.rows || []), ...(body?.ghosts || [])]) {
+      if (row && row.key) where[row.key] = "field";
+    }
+    const legacy = {};
+    for (const key of Array.isArray(body?.legacyKeys) ? body.legacyKeys : []) {
+      if (key) legacy[key] = "legacy";
+    }
+    let inventory = null;
+    try {
+      inventory = typeof propertyCardInventory === "function"
+        ? propertyCardInventory({
+          path: filePath,
+          sourcePath: filePath,
+          cachePath: cache ? filePath : "",
+          sourceText,
+          frontmatter,
+          parseYaml: typeof parseYaml === "function" ? parseYaml : null,
+          where,
+          nested: {},
+          legacy,
+        })
+        : null;
+    } catch (_) {
+      inventory = null;
+    }
+    if (!inventory) {
+      inventory = {
+        state: "pending", reason: "kit-unavailable", rows: [],
+        groups: [], count: 0, issues: [], recovery: null,
+      };
+    }
+    const createdRow = Array.isArray(inventory.rows)
+      ? inventory.rows.find((row) => row && row.key === "created")
+      : null;
+    let stamp = null;
+    try {
+      stamp = typeof propertyCardFormatCreatedStamp === "function"
+        ? propertyCardFormatCreatedStamp({
+          kind: "record",
+          value: frontmatter.created,
+          present: Object.prototype.hasOwnProperty.call(frontmatter, "created"),
+          sourceScalar: createdRow ? createdRow.sourceScalar : "",
+        })
+        : null;
+    } catch (_) {
+      stamp = null;
+    }
+    return { path: filePath, inventory, stamp };
+  }
+
+  // One foot computation per paint: signature, mount, and drawer share it.
+  recordSheetFootExtra(path, card) {
+    let spec = null;
+    try {
+      spec = this.recordSheetFootSpec(path, card);
+    } catch (_) {
+      spec = null;
+    }
+    if (!spec) {
+      spec = {
+        path: recordSheetPath(path),
+        inventory: {
+          state: "pending", reason: "kit-unavailable", rows: [],
+          groups: [], count: 0, issues: [], recovery: null,
+        },
+        stamp: null,
+      };
+    }
+    let open = false;
+    try {
+      open = typeof propertyCardFootIsOpen === "function" && propertyCardFootIsOpen(path);
+    } catch (_) {}
+    return { footOpen: open, footDigest: this.recordSheetFootDigest(spec), footSpec: spec };
+  }
+
+  recordSheetFootDigest(spec) {
+    try {
+      const rows = Array.isArray(spec?.inventory?.rows) ? spec.inventory.rows : [];
+      return JSON.stringify({
+        state: spec?.inventory?.state || "",
+        stamp: spec?.stamp?.text || "",
+        rows: rows.map((row) => [
+          row.key,
+          row.occurrence,
+          row.line,
+          row.valueState,
+          typeof propertyCardFootRowText === "function" ? propertyCardFootRowText(row) : String(row.value),
+        ]),
+      });
+    } catch (_) {
+      return "";
+    }
+  }
+
+  recordSheetFootHandlers(path) {
+    return {
+      onToggle: (notePath, next) => {
+        let decided = next;
+        try {
+          if (typeof propertyCardFootToggle === "function") {
+            propertyCardFootToggle(notePath);
+            decided = propertyCardFootIsOpen(notePath);
+          }
+        } catch (_) {}
+        if (decided === true) {
+          if (!(this.recordSheetFootPendingScroll instanceof Set)) this.recordSheetFootPendingScroll = new Set();
+          this.recordSheetFootPendingScroll.add(recordSheetPath(notePath));
+        }
+        this.scheduleRecordSheetRefresh();
+        return decided;
+      },
+      jumpYaml: (key, line) => { void this.recordSheetJumpYaml(path, key, line); },
+      jumpRecovery: () => { void this.recordSheetOpenSource(path, 1); },
+      openPath: (target, event) => { void this.recordSheetOpenPath(target, path, event); },
+      hoverLink: (event, targetEl, linktext) => this.recordSheetHoverLink(event, targetEl, linktext, path),
+      searchTag: (tag) => { this.recordSheetSearchTag(tag); },
+      openNested: null,
+      onOpenEditor: typeof propertyCardFootEditorHook === "function" && propertyCardFootEditorHook
+        ? (key) => propertyCardFootOpenEditor(path, key)
+        : null,
+    };
+  }
+
+  recordSheetSearchTag(tag) {
+    const query = String(tag || "").trim();
+    if (!query) return false;
+    try {
+      const commands = this.app?.commands;
+      if (commands && typeof commands.executeCommandById === "function") {
+        const opened = commands.executeCommandById("global-search:open");
+        if (opened === false) return false;
+        return true;
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  // Track the mounted foot node for propertyCardToggleProperties: release
+  // the path's previous (possibly detached) mounts under the container,
+  // then register the live node. Null sheet only releases.
+  recordSheetTrackFoot(container, path, sheet) {
+    const key = recordSheetPath(path);
+    try {
+      if (typeof propertyCardFootReleaseScope === "function") {
+        propertyCardFootReleaseScope(container || null, key);
+      }
+    } catch (_) {}
+    if (!sheet || !key) return null;
+    let foot = null;
+    try {
+      foot = typeof sheet.querySelector === "function"
+        ? sheet.querySelector(`.${PROPERTY_CARD_FOOT_CLASS}`)
+        : null;
+    } catch (_) {
+      foot = null;
+    }
+    if (!foot) return null;
+    try {
+      if (typeof propertyCardFootRegisterMount === "function") {
+        const drawer = typeof foot.querySelector === "function"
+          ? foot.querySelector(`.${PROPERTY_CARD_FOOT_DRAWER_CLASS}`)
+          : null;
+        const drawerId = drawer?.getAttribute?.("id") || "";
+        const disclosureId = drawerId.endsWith("-drawer") ? drawerId.slice(0, -"-drawer".length) : "";
+        return propertyCardFootRegisterMount(foot, key, disclosureId || undefined);
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  // Append the shared foot below the walk rail in every return: Reading and
+  // Live Preview, identity-only, broken-schema, and collapsed. Consumes one
+  // pending API-toggle scroll per expand; disclosure clicks scroll
+  // synchronously in the foot DOM before the repaint.
+  recordSheetAppendFoot(sheet, model, options, doc, footSpec) {
+    try {
+      const path = recordSheetPath(options?.sourcePath || model?.identity?.path || model?.path);
+      if (!sheet || !path || typeof propertyCardFootBuildEl !== "function") return null;
+      const spec = footSpec || this.recordSheetFootSpec(path, model && model.identity ? model : null);
+      const open = typeof propertyCardFootIsOpen === "function" && propertyCardFootIsOpen(path);
+      let disclosureId = "";
+      try {
+        disclosureId = typeof propertyCardFootNextDisclosureId === "function"
+          ? propertyCardFootNextDisclosureId()
+          : "";
+      } catch (_) {
+        disclosureId = "";
+      }
+      const built = propertyCardFootBuildEl(doc || recordSheetDomDoc(sheet), {
+        path,
+        disclosureId,
+        open,
+        inventory: spec.inventory,
+        stamp: spec.stamp,
+        handlers: this.recordSheetFootHandlers(path),
+      });
+      if (!built || !built.element) return null;
+      if (doc && built.element.ownerDocument !== doc) {
+        try { doc.adoptNode?.(built.element); } catch (_) {}
+      }
+      sheet.appendChild(built.element);
+      if (open && this.recordSheetFootPendingScroll instanceof Set && this.recordSheetFootPendingScroll.has(path)) {
+        this.recordSheetFootPendingScroll.delete(path);
+        try {
+          if (typeof propertyCardFootReveal === "function") propertyCardFootReveal(built.element);
+        } catch (_) {}
+      }
+      return built;
+    } catch (_) {
+      return null;
+    }
   }
 }
 // ---- src/242ka-plugin-record-sheet-properties.js ----
@@ -165422,6 +166453,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsAlbumHeaderMixin,
   BobLedgerToolsRecordSheetMixin,
   BobLedgerToolsRecordSheetTitleMixin,
+  BobLedgerToolsRecordSheetFootMixin,
   BobLedgerToolsRecordWalkRailMixin,
   BobLedgerToolsRecordWalkGroupRailMixin,
   BobLedgerToolsRecordSheetPropertiesMixin,
@@ -169459,7 +170491,6 @@ try {
       recordSheetBindOpen,
       recordSheetCalendarDate,
       recordSheetDatePresentation,
-      recordSheetCreatedFooter,
       recordSheetParseWikilink,
       recordSheetWikilinkSpans,
       recordSheetSafeUrl,
@@ -169773,6 +170804,44 @@ try {
       propertyCardInventory,
       propertyCardScanFrontmatter,
       propertyCardInventoryTypedValue,
+    });
+  }
+} catch (_) {}
+// ---- src/374f-exports-property-card-foot.js ----
+// Test-facing exports for the shared property-card foot kit.
+try {
+  if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
+    module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
+      PROPERTY_CARD_FOOT_CLASS,
+      PROPERTY_CARD_FOOT_DRAWER_CLASS,
+      propertyCardFootPath,
+      propertyCardFootBindYamlJump,
+      propertyCardFootReducedMotion,
+      propertyCardFootReveal,
+      propertyCardFootRowText,
+      propertyCardFootLint,
+      propertyCardFootRenderDrawer,
+      propertyCardFootBuildEl,
+      propertyCardFootIsOpen,
+      propertyCardFootToggle,
+      propertyCardFootSetOpen,
+      propertyCardFootOnToggle,
+      propertyCardFootNextDisclosureId,
+      propertyCardFootRegisterMount,
+      propertyCardFootUnregisterMount,
+      propertyCardFootUnregisterNode,
+      propertyCardFootReleaseScope,
+      propertyCardFootMountsFor,
+      propertyCardFootLiveMountsFor,
+      propertyCardFootRenamePath,
+      propertyCardFootReleasePath,
+      propertyCardFootResetAll,
+      propertyCardFootSetEditorHook,
+      propertyCardFootOpenEditor,
+      propertyCardFootRegisterPathResolver,
+      propertyCardFootViewPath,
+      propertyCardFootViewContains,
+      propertyCardToggleProperties,
     });
   }
 } catch (_) {}

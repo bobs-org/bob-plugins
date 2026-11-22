@@ -534,7 +534,8 @@ function probeSource(notePath) {
         toolsRect: toolsRect ? { x: toolsRect.x, y: toolsRect.y, width: toolsRect.width, height: toolsRect.height } : null,
         rect: sheetRect ? { x: sheetRect.x, y: sheetRect.y, width: sheetRect.width, height: sheetRect.height, clientWidth: sheet.clientWidth, scrollWidth: sheet.scrollWidth } : null,
         collapsed: Boolean(sheet.querySelector(".bob-record-sheet-summary")),
-        foldExpanded: sheet.querySelector(".bob-record-sheet-fold-toggle")?.getAttribute("aria-expanded") || null,
+        footExpanded: sheet.querySelector(".bob-property-card-foot-disclosure")?.getAttribute("aria-expanded") || null,
+        footCount: sheet.querySelector(".bob-property-card-foot-disclosure")?.textContent?.replace(/\s+/g, " ").trim() || "",
         warning: sheet.querySelector(".bob-record-sheet-warning")?.textContent?.replace(/\\s+/g, " ").trim() || "",
         rowKeys: Array.from(sheet.querySelectorAll("[data-record-key]")).map((node) => node.getAttribute("data-record-key")),
         bands: sheet.querySelectorAll('[data-bob-record-sheet-band="true"]').length,
@@ -1180,12 +1181,12 @@ async function run(args) {
     report.screenshots.push(await capture(client, outDir, "record-sheet-live-light-wide", 1400, "light", "Live Preview"));
 
     const beforePassive = markdownFilesHash(vaultDir);
-    (report.probes.clicks ||= []).push(await clickBy(client, '[data-record-sheet-focus="fold"]'));
-    state = await waitFor(client, probeSource("zettels/bead_lifecycle.md"), (value) => value.sheet?.foldExpanded === "true", "legacy-property fold open");
-    report.probes.foldOpen = state;
-    appendCapturedCheck(report, "fold-opens-without-markdown-writes", markdownFilesHash(vaultDir) === beforePassive, state.sheet);
-    report.screenshots.push(await capture(client, outDir, "record-sheet-fold-open", 1400, "light", "Live Preview"));
-    (report.probes.clicks ||= []).push(await clickBy(client, '[data-record-sheet-focus="fold"]'));
+    (report.probes.clicks ||= []).push(await clickBy(client, '[data-foot-focus="foot"]'));
+    state = await waitFor(client, probeSource("zettels/bead_lifecycle.md"), (value) => value.sheet?.footExpanded === "true", "shared foot drawer open");
+    report.probes.footOpen = state;
+    appendCapturedCheck(report, "drawer-opens-without-markdown-writes", markdownFilesHash(vaultDir) === beforePassive, state.sheet);
+    report.screenshots.push(await capture(client, outDir, "record-sheet-foot-open", 1400, "light", "Live Preview"));
+    (report.probes.clicks ||= []).push(await clickBy(client, '[data-foot-focus="foot"]'));
     (report.probes.clicks ||= []).push(await clickBy(client, '[data-record-sheet-focus="collapse"]'));
     state = await waitFor(client, probeSource("zettels/bead_lifecycle.md"), (value) => value.sheet?.collapsed === true, "sheet collapse");
     report.probes.collapsed = state;
@@ -1297,8 +1298,8 @@ async function run(args) {
     state = await waitSheet("eat/restaurant.md");
     report.probes.restaurant = state;
     checkPositive("restaurant-wikilink-reading", state, { title: "Cranford Ramen", h1Count: 0 });
-    appendCapturedCheck(report, "legacy-keys-render-in-fold",
-      state.coverage.lid === "fold" && state.coverage.source_title === "fold" && state.coverage.source_url === "fold",
+    appendCapturedCheck(report, "legacy-keys-render-in-drawer",
+      state.coverage.lid === "drawer" && state.coverage.source_title === "drawer" && state.coverage.source_url === "drawer",
       state.coverage);
     await open("movies/equilibrium.md", "reading");
     await waitSheet("movies/equilibrium.md");

@@ -79,6 +79,11 @@ class BobLedgerToolsRecordSheetTitleMixin {
   recordSheetRemoveReading(root, scope = root, sourcePath = "") {
     if (!root) return;
     this.recordSheetReleaseAdoption(scope, sourcePath, { preserveFallback: true });
+    try {
+      if (typeof propertyCardFootReleaseScope === "function") {
+        propertyCardFootReleaseScope(root, sourcePath);
+      }
+    } catch (_) {}
     this.recordWalkRemoveReading(root, sourcePath);
     for (const node of Array.from(root.querySelectorAll?.(`.${RECORD_SHEET_CLASS}`) || [])) {
       if (!this.recordSheetNodeBelongs(node, root)) continue;
@@ -125,11 +130,12 @@ class BobLedgerToolsRecordSheetTitleMixin {
     const focusKey = this.recordSheetFocusKey(sheet, doc);
     const options = this.recordSheetOptions(sourcePath, card.body);
     const walk = card.body?.walk || this.recordWalkFor(sourcePath);
-    const signature = recordSheetCardSignature(card, { ...options, walk });
+    const footExtra = this.recordSheetFootExtra(sourcePath, card);
+    const signature = recordSheetCardSignature(card, { ...options, walk, ...footExtra });
     if (!sheet || recordSheetNodeSignatures.get(sheet) !== signature) {
       let fresh = null;
       try {
-        fresh = this.recordSheetBuildMounted(card, options, doc);
+        fresh = this.recordSheetBuildMounted(card, options, doc, { footSpec: footExtra.footSpec });
       } catch (_) {
         fresh = null;
       }
@@ -141,6 +147,9 @@ class BobLedgerToolsRecordSheetTitleMixin {
       sheet = sheet ? propertyCardAdoptPatch(sheet, fresh) : fresh;
       recordSheetNodeSignatures.set(sheet, signature);
     }
+    // The toggle API resolves live mounts: track this mount after every
+    // successful paint, including signature-stable repaints.
+    this.recordSheetTrackFoot(scope || root, sourcePath, sheet);
     for (const node of bodyNodes) {
       if (node !== sheet) node.remove?.();
     }

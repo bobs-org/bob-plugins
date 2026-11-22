@@ -232,10 +232,14 @@ class BobLedgerToolsRecordWalkRailMixin {
           const rail = recordWalkRailBuildEl(walk, options, doc);
           if (rail) rows.push({ from: line.from, to: line.to, decoration: Decoration.replace({ widget: widgetFor(rail, "walk", signature) }) });
         }
+        // No card, no foot: release the path's mounts so a demoted note
+        // cannot toggle a stale drawer.
+        try { this.recordSheetTrackFoot(view.dom, path, null); } catch (_) {}
         return cacheAndFinish(rows, signature, null, false);
       }
 
-      const cardSignature = recordSheetCardSignature(card, { ...options, walk });
+      const footExtra = this.recordSheetFootExtra(path, card);
+      const cardSignature = recordSheetCardSignature(card, { ...options, walk, ...footExtra });
       const recognizer = recordSheetTitleRecognizer({
         path, title: card.title, walk, sourceText: text,
       });
@@ -254,7 +258,7 @@ class BobLedgerToolsRecordWalkRailMixin {
       }
       let header = slotted ? adopted.node : null;
       if (!header || recordSheetNodeSignatures.get(header) !== cardSignature) {
-        const fresh = this.recordSheetBuildMounted(card, options, doc, { walk, includeRail });
+        const fresh = this.recordSheetBuildMounted(card, options, doc, { walk, includeRail, footSpec: footExtra.footSpec });
         if (!fresh) {
           this.recordSheetReleaseAdoption?.(view?.dom, path);
           this.recordSheetEditorCache?.delete?.(view);
@@ -284,12 +288,14 @@ class BobLedgerToolsRecordWalkRailMixin {
           const rail = recordWalkRailBuildEl(walk, options, doc);
           if (rail) rows.push({ from: line.from, to: line.to, decoration: Decoration.replace({ widget: widgetFor(rail, "walk", slotSignature) }) });
         }
+        try { this.recordSheetTrackFoot(view.dom, path, header); } catch (_) {}
         return cacheAndFinish(rows, slotSignature, card.body || null, true);
       }
 
       const signature = JSON.stringify([cardSignature, recordSheetWalkSignature(walk), Boolean(reveal), line?.from, line?.to]);
       const rows = [];
       const rail = line && !reveal ? recordWalkRailBuildEl(walk, options, doc) : null;
+      try { this.recordSheetTrackFoot(view.dom, path, header); } catch (_) {}
       if (header && rail && docks) {
         const dock = recordSheetEl(doc, "div", "bob-record-walk-dock");
         header.classList.add("docks-record-walk");

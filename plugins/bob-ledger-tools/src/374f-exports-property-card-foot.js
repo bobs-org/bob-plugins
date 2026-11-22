@@ -1,0 +1,37 @@
+// Test-facing exports for the shared property-card foot kit.
+try {
+  if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
+    module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
+      PROPERTY_CARD_FOOT_CLASS,
+      PROPERTY_CARD_FOOT_DRAWER_CLASS,
+      propertyCardFootPath,
+      propertyCardFootBindYamlJump,
+      propertyCardFootReducedMotion,
+      propertyCardFootReveal,
+      propertyCardFootRowText,
+      propertyCardFootLint,
+      propertyCardFootRenderDrawer,
+      propertyCardFootBuildEl,
+      propertyCardFootIsOpen,
+      propertyCardFootToggle,
+      propertyCardFootSetOpen,
+      propertyCardFootOnToggle,
+      propertyCardFootNextDisclosureId,
+      propertyCardFootRegisterMount,
+      propertyCardFootUnregisterMount,
+      propertyCardFootUnregisterNode,
+      propertyCardFootReleaseScope,
+      propertyCardFootMountsFor,
+      propertyCardFootLiveMountsFor,
+      propertyCardFootRenamePath,
+      propertyCardFootReleasePath,
+      propertyCardFootResetAll,
+      propertyCardFootSetEditorHook,
+      propertyCardFootOpenEditor,
+      propertyCardFootRegisterPathResolver,
+      propertyCardFootViewPath,
+      propertyCardFootViewContains,
+      propertyCardToggleProperties,
+    });
+  }
+} catch (_) {}

@@ -66,6 +66,7 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysCountedTaskMoveMixin,
   BobNavigationHotkeysPomodoroSplitMixin,
   BobNavigationHotkeysTaskSplitMixin,
+  BobNavigationHotkeysTaskSplitPersistMixin,
   BobNavigationHotkeysTaskUndoMixin,
   BobNavigationHotkeysVimJumpMixin,
   BobNavigationHotkeysLeafMixin,

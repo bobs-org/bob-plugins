@@ -921,6 +921,7 @@ function createDependencyNavApi(plugin) {
       },
     }),
     successors: createSuccessorPickerApi(plugin),
+    taskSplit: createTaskSplitApi(plugin),
     blocks: createBlocksNavApi(plugin),
     relations: createRelationsNavApi(plugin),
     walkMode: createWalkModeApi(plugin),

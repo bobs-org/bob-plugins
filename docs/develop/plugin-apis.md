@@ -409,6 +409,7 @@ The root `bob-navigation-hotkeys.api` is version 3:
 | `proseField` | 2 | Attach the controller that owns USED BEFORE and the LINK band for `[[` notes mode plus `((` tasks mode (list + in-band NAME) in prose prompts. |
 | `notice` | 5 | Show the Unblocked card; v2 `keep_moving`, v3 `relation_successors`, v4 `offer_closes`, v5 a trailing `↗ “S”` jump line. |
 | `successors` | 5 | Ask which offered successor links to add; v2 accepts `keep_moving`, v3 accepts the `relation` group, v4 resolves verdict closes, and v5 stages a `Ctrl+J` jump pin. |
+| `taskSplit` | 1 | Carry one task requirement into its own task through `carryReq`. |
 | `blocks` | 1 | Open the reverse Blocks stage or remove a dependent. |
 | `relations` | 0 | Remove a LINKS edge (`removeLink`). `openStage` opens the Links direction; the reverse direction settles `{ ok: false }` until both stage directions ship. |
 | `openReferencePdf(path)` | Additive member | Open a vault-relative PDF in Highlights; resolves `{ ok, reason? }`. |
@@ -526,6 +527,23 @@ fallback and permit `{ picks: [], jump: { key } }`. Invalid pins drop; a result
 is non-null only with picks, closes, or a valid jump. Supported cards show a
 solid `Jump` capsule, hover button, `jump target` suffix, Ctrl+J chip, and
 truncated `· ↗ “S”` summary. Opt in at `api.successors?.version >= 5`.
+`taskSplit` v1 carries one task requirement into its own task.
+`carryReq({ notePath, line, expectedLine?, expectedOwnerPreimage? })`
+resolves to `{ ok: true, task, moveMap, restores, notice, cursor }` or
+`{ ok: false, code, message, failedPaths? }`. `line` and the returned
+`task.line` are one-based; `task` is `{ path, line, blockId, text }` and
+`moveMap` is `{ sourcePath, destinationPath, moves }` with one-based line
+moves. `restores` holds exact before/after snapshots plus `created` flags
+for every changed file, so one guarded Undo restores the whole batch.
+`expectedLine` is the digest of the requirement line the caller saw and
+`expectedOwnerPreimage` is the exact owner-block text it saw; both refuse
+as `split_stale_ref` when the note moved underneath the caller. Missing or
+non-requirement targets refuse as `split_owner_missing` or `not_a_req`;
+an unavailable writer refuses as `split_unavailable`. The API never
+navigates and never shows an Undo notice: the standalone `Ctrl+Shift+T`
+command owns its notice and landing, and the close card owns the batch
+receipt. Feature-detect the namespace with
+`Number(api.taskSplit?.version) >= 1`.
 `blocks.openStage(ref)` and
 `blocks.removeDependent(ownerRef, target)` resolve to result
 objects. `relations.removeLink(sourceRef, targetRef)` removes the

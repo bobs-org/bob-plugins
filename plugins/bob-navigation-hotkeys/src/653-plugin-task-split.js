@@ -536,6 +536,32 @@ class BobNavigationHotkeysTaskSplitMixin {
       new Notice(described.message);
       return false;
     }
+    // A plain cursor on a requirement head carries through the guarded
+    // `api.taskSplit` API; every other gesture (picker, count, visual)
+    // plans through the shared split twin, which carries reqs the same way.
+    if (
+      !described.picker &&
+      described.selection &&
+      described.selection.kind === "cursor"
+    ) {
+      let reqInfo = null;
+      try {
+        reqInfo = navReqInfoAtLine(
+          sourceContent,
+          described.selection.line - 1,
+        );
+      } catch (_reqError) {
+        reqInfo = null;
+      }
+      if (reqInfo) {
+        return this.splitRequirementCarry(
+          editor,
+          sourceFile,
+          sourceContent,
+          cursor,
+        );
+      }
+    }
     let selection = described.selection;
     if (described.picker) {
       const listed = listTaskSplitCandidates(
@@ -647,6 +673,122 @@ class BobNavigationHotkeysTaskSplitMixin {
     );
   }
 
+  // Ctrl+Shift+T on a requirement head: carry through `api.taskSplit`
+  // with one notice, one landing, and exactly one Ctrl+O history record.
+  // The API owns planning and guarded persistence; this command owns the
+  // notice and the navigation.
+  async splitRequirementCarry(editor, sourceFile, sourceContent, cursor) {
+    const liveLines = taskSplitLines(String(sourceContent || ""));
+    const expectedLine = taskSplitLineDigest(
+      taskSplitStripEnding(liveLines[cursor.line] || ""),
+    );
+    let result;
+    try {
+      result = await this.taskSplitCarryReq({
+        notePath: sourceFile.path,
+        line: cursor.line + 1,
+        expectedLine,
+      });
+    } catch (error) {
+      new Notice("Split failed to apply");
+      return false;
+    }
+    if (!result || result.ok !== true) {
+      new Notice((result && result.message) || "Split failed to apply");
+      return false;
+    }
+    const landingLine = Math.max(0, (result.task.line || 1) - 1);
+    if (result.task.path !== sourceFile.path) {
+      this.showGuardedUndoNotice(
+        result.notice || "Split requirement into task",
+        (result.restores || []).map((restore) => ({
+          path: restore.path,
+          file:
+            (this.app &&
+              this.app.vault &&
+              typeof this.app.vault.getAbstractFileByPath === "function" &&
+              this.app.vault.getAbstractFileByPath(restore.path)) ||
+            null,
+          before: restore.before,
+          after: restore.after,
+          created: restore.created === true,
+        })),
+        {
+          actionLabel: "Undo split",
+          successMessage: "Undid split",
+          failureLabel: "Could not undo split",
+        },
+      );
+    } else {
+      try {
+        if (editor && typeof editor.setCursor === "function") {
+          editor.setCursor(landingLine, 0);
+        }
+      } catch (_cursorError) {
+        // Landing the cursor is a nicety; the write already landed.
+      }
+      new Notice(result.notice || "Split requirement into task");
+    }
+    try {
+      if (typeof this.ensureVimJumpHistory === "function") {
+        this.ensureVimJumpHistory();
+      }
+      recordVimJumpTransition(
+        this.vimJumpHistory,
+        {
+          path: sourceFile.path,
+          line: cursor.line,
+          ch: cursor.ch || 0,
+        },
+        { path: result.task.path, line: landingLine, ch: 0 },
+      );
+    } catch (_jumpError) {
+      // Navigation still succeeds if jump history is unavailable.
+    }
+    if (result.task.path === sourceFile.path) {
+      return true;
+    }
+    let opened = false;
+    try {
+      const destinationFile = this.app.vault.getAbstractFileByPath(
+        result.task.path,
+      );
+      if (
+        destinationFile &&
+        typeof this.openMarkdownFileWithLeafReuse === "function"
+      ) {
+        opened = await this.openMarkdownFileWithLeafReuse(
+          destinationFile,
+          null,
+        );
+      }
+    } catch (_openError) {
+      opened = false;
+    }
+    if (opened) {
+      try {
+        const destinationView = this.getActiveMarkdownView();
+        const destinationEditor =
+          destinationView &&
+          destinationView.file &&
+          destinationView.file.path === result.task.path
+            ? destinationView.editor
+            : null;
+        if (
+          destinationEditor &&
+          typeof destinationEditor.setCursor === "function"
+        ) {
+          destinationEditor.setCursor(landingLine, 0);
+        }
+      } catch (_cursorError) {
+        // The task landed; placing the cursor is a nicety after opening.
+      }
+    } else {
+      new Notice(`Split completed in ${result.task.path}`);
+    }
+    return true;
+  }
+
   applyTaskSplitSameNote(editor, sourceFile, sourceContent, cursor, plan) {
     const after = plan.files[sourceFile.path];
     if (typeof after !== "string") {
@@ -703,100 +845,18 @@ class BobNavigationHotkeysTaskSplitMixin {
       new Notice("Split planned no change");
       return false;
     }
-    const sourcePreimages = plannedFiles || {};
-    const hadDestinationPreimage = Object.prototype.hasOwnProperty.call(
-      sourcePreimages,
-      destinationPath,
-    );
-    const destinationBefore = hadDestinationPreimage
-      ? String(sourcePreimages[destinationPath])
-      : "";
-    const session = { sourcePath: sourceFile.path, editor };
-    const written = [];
-    try {
-      const destinationFile = this.app.vault.getAbstractFileByPath(
-        destinationPath,
-      );
-      if (destinationFile && this.isMarkdownFile(destinationFile)) {
-        if (!hadDestinationPreimage) {
-          new Notice("Split destination changed; nothing was written");
-          return false;
-        }
-        written.push(
-          await this.writeTaskMoveChange(
-            destinationPath,
-            { before: destinationBefore, after: destinationAfter },
-            destinationFile,
-            session,
-          ),
-        );
-      } else if (!destinationFile) {
-        if (hadDestinationPreimage) {
-          new Notice("Split destination changed; nothing was written");
-          return false;
-        }
-        const created = await this.app.vault.create(
-          destinationPath,
-          destinationAfter,
-        );
-        written.push({
-          path: destinationPath,
-          file: created,
-          editor: null,
-          change: { before: "", after: destinationAfter },
-          created: true,
-        });
-      } else {
-        new Notice(`Split destination is not a Markdown note: ${destinationPath}`);
-        return false;
-      }
-      written.push(
-        await this.writeTaskMoveChange(
-          sourceFile.path,
-          { before: sourceContent, after: sourceAfter },
-          sourceFile,
-          session,
-        ),
-      );
-    } catch (error) {
-      const partial = error && error.taskMoveAppliedEntry;
-      if (
-        partial &&
-        partial.path &&
-        !written.some((entry) => entry.path === partial.path)
-      ) {
-        written.push(partial);
-      }
-      const failedPaths = await this.rollbackTaskMoveChanges(
-        written.filter((entry) => !entry.created),
-      );
-      for (const entry of written.filter((entry) => entry.created)) {
-        if (failedPaths.length > 0) {
-          // Keep the destination copy if any source postimage could not be
-          // restored. A duplicate is recoverable; deleting it could lose work.
-          failedPaths.push(entry.path);
-          continue;
-        }
-        try {
-          const current = String(
-            (await this.app.vault.cachedRead(entry.file)) || "",
-          );
-          if (current !== entry.change.after) {
-            failedPaths.push(entry.path);
-            continue;
-          }
-          await this.app.vault.delete(entry.file);
-        } catch (ignoredError) {
-          failedPaths.push(entry.path);
-        }
-      }
-      if (failedPaths.length > 0) {
-        new Notice(`Split wrote partially — review: ${failedPaths.join(", ")}`);
-      } else {
-        new Notice("Split failed to apply");
-      }
+    // Every plan postimage persists through the shared guarded writer:
+    // destination first, then any other changed note, then the source.
+    const persisted = await this.persistTaskSplitPostimages(plan, {
+      sourcePath: sourceFile.path,
+      sourceEditor: editor,
+      before: plannedFiles || {},
+    });
+    if (!persisted.ok) {
+      new Notice(persisted.message || "Split failed to apply");
       return false;
     }
+    const written = persisted.written;
     this.showGuardedUndoNotice(
       formatTaskSplitGestureNotice(plan),
       written.map((entry) => ({

@@ -450,3 +450,217 @@ test("a same-note split applies in one undoable transaction", () => {
     ch: 0,
   });
 });
+
+const REQ_SOURCE = [
+  "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export",
+  "  - [ ] Handles supported inputs",
+  "    - [ ] Handles Windows files",
+  "      - Fixture: windows.csv",
+  "    - [ ] Handles empty input",
+  "  - [ ] Benchmarks within 5% of v1",
+  "",
+].join("\n");
+
+test("cursor on a requirement head selects it for carry", () => {
+  const described = helpers.describeTaskSplitGesture(REQ_SOURCE, {
+    cursorLine: 1,
+  });
+  assert.equal(described.refuse, undefined);
+  assert.deepEqual(described.selection, { kind: "cursor", line: 2 });
+  assert.ok(helpers.navReqInfoAtLine(REQ_SOURCE, 1));
+  const plan = helpers.planSplitBullets(
+    { "db.md": REQ_SOURCE },
+    {
+      ownerPath: "db.md",
+      ownerLine: described.ownerLine + 1,
+      selection: described.selection,
+      today: "2026-11-03",
+      settings: SETTINGS,
+    },
+  );
+  assert.equal(plan.ok, true, plan.message);
+  assert.equal(plan.tasks.length, 1);
+  assert.equal(plan.tasks[0].req_depth, 1);
+  assert.equal(plan.tasks[0].block_id, "handles-supported");
+  assert.deepEqual(plan.stubs, [
+    {
+      path: "db.md",
+      line: 2,
+      text: "- [>] [[#^handles-supported|Handles supported inputs]]",
+    },
+  ]);
+});
+
+test("cursor on a requirement note selects the innermost requirement", () => {
+  const { described, plan } = planFor(REQ_SOURCE, { cursorLine: 3 });
+  assert.deepEqual(described.selection, { kind: "cursor", line: 4 });
+  assert.equal(plan.tasks.length, 1);
+  assert.equal(plan.tasks[0].req_depth, 2);
+  assert.equal(plan.tasks[0].block_id, "handles-windows");
+});
+
+test("cursor on a daily-note requirement routes through its root owner", () => {
+  const content = [
+    "- [ ] #task Deploy the release [created:: 2026-11-03] ^deploy [root:: projects/launch]",
+    "  - [ ] Backups are current",
+    "    - Check the S3 bucket",
+    "",
+  ].join("\n");
+  const described = helpers.describeTaskSplitGesture(content, {
+    cursorLine: 1,
+  });
+  assert.equal(described.refuse, undefined);
+  assert.equal(described.ownerKind, "task");
+  const plan = helpers.planSplitBullets(
+    {
+      "2026/20261103.md": content,
+      "projects/launch.md": "# Launch\n\n## Tasks\n",
+    },
+    {
+      ownerPath: "2026/20261103.md",
+      ownerLine: described.ownerLine + 1,
+      selection: described.selection,
+      today: "2026-11-03",
+      settings: SETTINGS,
+    },
+  );
+  assert.equal(plan.ok, true, plan.message);
+  assert.equal(plan.tasks[0].req_depth, 1);
+  assert.deepEqual(plan.placement, {
+    kind: "root_note",
+    path: "projects/launch.md",
+  });
+});
+
+test("counted split walks requirement siblings under one parent", () => {
+  const { described, plan } = planFor(REQ_SOURCE, {
+    cursorLine: 2,
+    countExplicit: true,
+    additionalCount: 1,
+  });
+  assert.deepEqual(described.selection, { kind: "count", line: 3, count: 2 });
+  assert.equal(plan.tasks.length, 2);
+  assert.deepEqual(
+    plan.tasks.map((task) => task.req_depth),
+    [2, 2],
+  );
+  assert.deepEqual(
+    plan.tasks.map((task) => task.block_id),
+    ["handles-windows", "handles-empty-input"],
+  );
+});
+
+test("a visual selection across a requirement and its descendant is an overlap", () => {
+  const described = helpers.describeTaskSplitGesture(REQ_SOURCE, {
+    cursorLine: 1,
+    anchorLine: 1,
+    headLine: 2,
+  });
+  assert.equal(described.refuse, undefined);
+  const plan = helpers.planSplitBullets(
+    { "db.md": REQ_SOURCE },
+    {
+      ownerPath: "db.md",
+      ownerLine: described.ownerLine + 1,
+      selection: described.selection,
+      today: "2026-11-03",
+      settings: SETTINGS,
+    },
+  );
+  assert.equal(plan.ok, false);
+  assert.equal(plan.code, "split_overlap");
+});
+
+test("duplicate requirement labels refuse ambiguous matches but carry by line", () => {
+  const content = [
+    "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export",
+    "  - [ ] Same text",
+    "  - [ ] Same text",
+    "",
+  ].join("\n");
+  const ambiguous = helpers.planSplitBullets(
+    { "db.md": content },
+    {
+      ownerPath: "db.md",
+      ownerLine: 1,
+      selection: { kind: "match", texts: ["Same text"] },
+      today: "2026-11-03",
+      settings: SETTINGS,
+    },
+  );
+  assert.equal(ambiguous.ok, false);
+  assert.equal(ambiguous.code, "split_match_ambiguous");
+  const first = helpers.planSplitBullets(
+    { "db.md": content },
+    {
+      ownerPath: "db.md",
+      ownerLine: 1,
+      selection: { kind: "cursor", line: 2 },
+      today: "2026-11-03",
+      settings: SETTINGS,
+    },
+  );
+  assert.equal(first.ok, true, first.message);
+  assert.equal(first.tasks[0].req_depth, 1);
+  // Sequential carries re-plan against the updated note, so the second
+  // mint sees the first task's anchor and stays distinct.
+  const updated = first.files["db.md"];
+  const remaining =
+    updated.split("\n").findIndex((line) => line.includes("- [ ] Same text")) + 1;
+  assert.ok(remaining > 1);
+  const second = helpers.planSplitBullets(
+    { "db.md": updated },
+    {
+      ownerPath: "db.md",
+      ownerLine: 1,
+      selection: { kind: "cursor", line: remaining },
+      today: "2026-11-03",
+      settings: SETTINGS,
+    },
+  );
+  assert.equal(second.ok, true, second.message);
+  assert.equal(second.tasks[0].req_depth, 1);
+  assert.notEqual(first.tasks[0].block_id, second.tasks[0].block_id);
+});
+
+test("a stale bullet reference refuses instead of carrying", () => {
+  const { plan } = planFor(REQ_SOURCE, { cursorLine: 1 });
+  assert.equal(plan.ok, true);
+  const stale = helpers.planSplitBullets(
+    { "db.md": REQ_SOURCE },
+    {
+      ownerPath: "db.md",
+      ownerLine: 1,
+      selection: { kind: "bulletref", ref: "2:deadbeef" },
+      today: "2026-11-03",
+      settings: SETTINGS,
+    },
+    {},
+  );
+  assert.equal(stale.ok, false);
+  assert.equal(stale.code, "split_stale_ref");
+});
+
+test("a task picker lists requirements with their depth", () => {
+  const described = helpers.describeTaskSplitGesture(REQ_SOURCE, {
+    cursorLine: 0,
+  });
+  assert.deepEqual(described.picker, { scope: "task" });
+  const listed = helpers.listTaskSplitCandidates({ "db.md": REQ_SOURCE }, {
+    ownerPath: "db.md",
+    ownerLine: 1,
+  });
+  assert.equal(listed.ok, true);
+  assert.deepEqual(
+    listed.candidates.map((candidate) => [
+      candidate.title,
+      candidate.req ? candidate.req.depth : null,
+    ]),
+    [
+      ["Handles supported inputs", 1],
+      ["Handles Windows files", 2],
+      ["Handles empty input", 2],
+      ["Benchmarks within 5% of v1", 1],
+    ],
+  );
+});

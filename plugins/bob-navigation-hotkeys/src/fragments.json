@@ -98,6 +98,7 @@
   "256-task-split-plan.js",
   "257-task-split-apply.js",
   "258-req-line-guard.js",
+  "259-task-split-req-carry.js",
   "260-project-schedules.js",
   "265-project-schedule-inline.js",
   "266-window-prefix-model.js",
@@ -217,6 +218,7 @@
   "653-plugin-task-split.js",
   "654-task-undo-notice.js",
   "655-plugin-inbox-route.js",
+  "656-task-split-persist.js",
   "660-plugin-project-notes.js",
   "665-plugin-project-conversion.js",
   "666-project-reversal-rewrites.js",
@@ -283,5 +285,6 @@
   "726-link-engine-exports.js",
   "727-prose-field-exports.js",
   "728-task-reqs-exports.js",
-  "729-req-line-guard-exports.js"
+  "729-req-line-guard-exports.js",
+  "730-task-split-carry-exports.js"
 ]

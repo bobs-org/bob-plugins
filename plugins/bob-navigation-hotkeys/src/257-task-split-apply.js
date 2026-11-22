@@ -72,7 +72,11 @@ function taskSplitResolveOwner(lines, stripped, fenced, ownerPath, request) {
       error: null,
     };
   }
-  const line = Math.max(0, (request.ownerLine || 1) - 1);
+  const requested = Math.max(0, (request.ownerLine || 1) - 1);
+  // A requirement line names its root owner: the real task its req chain
+  // hangs off (mirrors `plan::resolve_owner`).
+  const reqOwner = taskSplitReqOwnerForLine(lines.join(""), requested);
+  const line = reqOwner === null ? requested : reqOwner;
   const parsed = !fenced.has(line) ? taskSplitParseTaskLine(lines[line]) : null;
   if (parsed) {
     const blockId =
@@ -114,9 +118,17 @@ function taskSplitResolveOwner(lines, stripped, fenced, ownerPath, request) {
 
 function taskSplitCollectCandidates(lines, ownerLine, ownerEnd, kind) {
   const stripped = lines.map((line) => taskSplitStripEnding(line));
+  const source = lines.join("");
   const result = [];
   if (kind === "task") {
     const ownerIndent = taskSplitIndentOf(stripped[ownerLine] || "");
+    // Requirement lines are never plain notes; each req is collected with
+    // its whole branch below.
+    const reqLines = new Set(
+      taskSplitReqNodesFor(source, ownerLine, ownerEnd).map(
+        (node) => node.lineIndex,
+      ),
+    );
     const last = Math.min(ownerEnd, stripped.length - 1);
     const drawerLines = new Set();
     for (let index = ownerLine + 1; index <= last; index += 1) {
@@ -151,7 +163,10 @@ function taskSplitCollectCandidates(lines, ownerLine, ownerEnd, kind) {
       if (body === null) {
         continue;
       }
-      if (taskSplitIndentOf(stripped[index]).length <= ownerIndent.length) {
+      if (
+        taskSplitIndentOf(stripped[index]).length <= ownerIndent.length ||
+        reqLines.has(index)
+      ) {
         continue;
       }
       const direct = taskSplitParentListLine(stripped, index, ownerLine);
@@ -198,6 +213,8 @@ function taskSplitCollectCandidates(lines, ownerLine, ownerEnd, kind) {
         title,
         childLines,
         drawerTitle: parentDrawer,
+        parent:
+          direct === null || direct === undefined ? ownerLine : direct,
       });
     }
   } else {
@@ -223,252 +240,23 @@ function taskSplitCollectCandidates(lines, ownerLine, ownerEnd, kind) {
         title,
         childLines,
         drawerTitle: null,
+        parent: ownerLine,
       });
     }
   }
+  if (kind === "task") {
+    // Requirements at any depth, each with its whole branch, in document
+    // order (mirrors `plan::collect_candidates`).
+    for (const candidate of taskSplitCollectReqCandidates(
+      source,
+      ownerLine,
+      ownerEnd,
+    )) {
+      result.push(candidate);
+    }
+    result.sort((left, right) => left.line - right.line);
+  }
   return result;
-}
-
-function taskSplitValidateCandidates(candidates, selected) {
-  for (const index of selected) {
-    const item = candidates[index];
-    const parsed = taskSplitParseBullet(item.rawBody);
-    if (item.rawBody.includes("#task")) {
-      return taskSplitError(
-        "split_already_task",
-        "Already a task — split one of its notes or drawer entries instead",
-      );
-    }
-    if (parsed.checked) {
-      return taskSplitError(
-        "split_not_splittable",
-        "Checked box — split an unchecked note instead",
-      );
-    }
-    if (parsed.title.trim() === "") {
-      return taskSplitError(
-        "split_not_splittable",
-        "Bullet has no text to split",
-      );
-    }
-    if (taskSplitIsStub(parsed.title)) {
-      return taskSplitError(
-        "split_stub",
-        "Stub only links a task — split a note with its own text instead",
-      );
-    }
-  }
-  return null;
-}
-
-function taskSplitSelectCandidates(candidates, lines, selection, owner, options) {
-  const lineToCandidate = (line) => {
-    for (let index = 0; index < candidates.length; index += 1) {
-      if (line >= candidates[index].line && line <= candidates[index].end) {
-        return index;
-      }
-    }
-    return -1;
-  };
-  const kind = selection.kind || "cursor";
-  if (kind === "cursor") {
-    const index = Math.max(0, (selection.line || 1) - 1);
-    if (owner.kind === "task" && index === owner.line) {
-      return {
-        selected: null,
-        error: taskSplitError(
-          "split_already_task",
-          "Already a task — split one of its notes or drawer entries instead",
-        ),
-      };
-    }
-    const found = lineToCandidate(index);
-    if (found !== -1) {
-      const error = taskSplitValidateCandidates(candidates, [found]);
-      return { selected: error ? null : [found], error };
-    }
-    const raw = lines[index] == null ? "" : String(lines[index]);
-    if (
-      raw.includes("DEPENDS ON") ||
-      raw.includes("BLOCKS:") ||
-      raw.includes("LINKS:") ||
-      raw.includes("LINKED FROM") ||
-      raw.includes("SCHEDULE LOG") ||
-      raw.includes("WORK LOG") ||
-      raw.includes("ROTTEN LOG") ||
-      raw.includes("CANCEL LOG") ||
-      raw.trimStart().startsWith("- (**")
-    ) {
-      return {
-        selected: null,
-        error: taskSplitError(
-          "split_managed_line",
-          "Managed line — Bob writes it; split a note or drawer entry instead",
-        ),
-      };
-    }
-    if (raw.trimStart().startsWith("- [x]") || raw.trimStart().startsWith("- [X]")) {
-      return {
-        selected: null,
-        error: taskSplitError(
-          "split_not_splittable",
-          "Checked box — split an unchecked note instead",
-        ),
-      };
-    }
-    if (lineToCandidate(index) === -1 && raw.includes("[[") && !raw.includes(" ")) {
-      return {
-        selected: null,
-        error: taskSplitError(
-          "split_stub",
-          "Stub only links a task — split a note with its own text instead",
-        ),
-      };
-    }
-    return {
-      selected: null,
-      error: taskSplitError(
-        "split_not_splittable",
-        "That line is not a splittable note",
-      ),
-    };
-  }
-  if (kind === "count") {
-    const start = lineToCandidate(Math.max(0, (selection.line || 1) - 1));
-    if (start === -1) {
-      return {
-        selected: null,
-        error: taskSplitError(
-          "split_not_splittable",
-          "That line is not a splittable note",
-        ),
-      };
-    }
-    const anchor = candidates[start];
-    const siblings = [];
-    for (let index = 0; index < candidates.length; index += 1) {
-      const item = candidates[index];
-      if (
-        item.indent === anchor.indent &&
-        item.drawerTitle === anchor.drawerTitle &&
-        item.line >= anchor.line
-      ) {
-        siblings.push(index);
-      }
-    }
-    const picked = siblings.slice(0, Math.max(0, selection.count || 0));
-    const error = taskSplitValidateCandidates(candidates, picked);
-    return { selected: error ? null : picked, error };
-  }
-  if (kind === "lines") {
-    const from = selection.from || 1;
-    const to = selection.to || 1;
-    const picked = [];
-    for (let index = 0; index < candidates.length; index += 1) {
-      const item = candidates[index];
-      if (item.line + 1 <= to && item.end + 1 >= from) {
-        picked.push(index);
-      }
-    }
-    picked.sort((left, right) => candidates[left].line - candidates[right].line);
-    const error = taskSplitValidateCandidates(candidates, picked);
-    return { selected: error ? null : picked, error };
-  }
-  if (kind === "nth") {
-    const picked = [];
-    for (const ordinal of selection.picks || []) {
-      if (!ordinal || ordinal > candidates.length) {
-        return {
-          selected: null,
-          error: taskSplitError(
-            "split_nth_missing",
-            `no splittable bullet ${ordinal}`,
-          ),
-        };
-      }
-      picked.push(ordinal - 1);
-    }
-    const error = taskSplitValidateCandidates(candidates, picked);
-    return { selected: error ? null : picked, error };
-  }
-  if (kind === "match") {
-    const picked = [];
-    for (const text of selection.texts || []) {
-      const matches = [];
-      for (let index = 0; index < candidates.length; index += 1) {
-        if (candidates[index].title.includes(text)) {
-          matches.push(index);
-        }
-      }
-      if (matches.length === 1) {
-        picked.push(matches[0]);
-      } else if (matches.length === 0) {
-        return {
-          selected: null,
-          error: taskSplitError(
-            "split_match_missing",
-            `no splittable bullet contains ${JSON.stringify(text)}`,
-          ),
-        };
-      } else {
-        return {
-          selected: null,
-          error: taskSplitError(
-            "split_match_ambiguous",
-            `more than one splittable bullet contains ${JSON.stringify(text)}`,
-          ),
-        };
-      }
-    }
-    const error = taskSplitValidateCandidates(candidates, picked);
-    return { selected: error ? null : picked, error };
-  }
-  if (kind === "section") {
-    const picked = candidates.map((item, index) => index);
-    const error = taskSplitValidateCandidates(candidates, picked);
-    return { selected: error ? null : picked, error };
-  }
-  if (kind === "bulletref") {
-    const value = String(selection.ref || "");
-    const separator = value.indexOf(":");
-    const line = Number(separator === -1 ? "" : value.slice(0, separator));
-    const digest = separator === -1 ? "" : value.slice(separator + 1);
-    const lineDigest =
-      options && typeof options.lineDigest === "function"
-        ? options.lineDigest
-        : null;
-    let found = -1;
-    if (Number.isInteger(line) && line >= 1 && lineDigest) {
-      for (let index = 0; index < candidates.length; index += 1) {
-        const item = candidates[index];
-        if (
-          item.line + 1 === line &&
-          lineDigest(taskSplitStripEnding(lines[item.line] || "")) === digest
-        ) {
-          found = index;
-          break;
-        }
-      }
-    }
-    if (found === -1) {
-      return {
-        selected: null,
-        error: taskSplitError(
-          "split_stale_ref",
-          "stale bullet reference; list candidates and try again",
-        ),
-      };
-    }
-    const error = taskSplitValidateCandidates(candidates, [found]);
-    return { selected: error ? null : [found], error };
-  }
-  return {
-    selected: null,
-    error: taskSplitError(
-      "split_not_splittable",
-      "That line is not a splittable note",
-    ),
-  };
 }
 
 function taskSplitChoosePlacement(ownerPath, lines, owner, inboxRoute) {
@@ -678,6 +466,8 @@ function planSplitBullets(files, request, options) {
   }
   const generated = [];
   const plannedTasks = [];
+  // Per planned task: the carried req's head line and its in-block moves.
+  const plannedMoves = [];
   const stubs = [];
   for (const candidateIndex of selected) {
     const candidate = candidates[candidateIndex];
@@ -701,7 +491,10 @@ function planSplitBullets(files, request, options) {
         : `[[${taskSplitNoteTarget(destinationPath)}#^${id}|${alias}]]`;
     const originalLine = String(transformedSource[candidate.line] || "");
     const [, ending] = taskSplitSplitEnding(originalLine);
-    const stub = `${candidate.indent}- ${link}${ending}`;
+    // A carried requirement keeps its place as a `[>]` stub; any other
+    // bullet keeps today's plain stub.
+    const marker = candidate.req ? "[>] " : "";
+    const stub = `${candidate.indent}- ${marker}${link}${ending}`;
     transformedSource[candidate.line] = stub;
     for (let row = candidate.line + 1; row <= candidate.end; row += 1) {
       transformedSource[row] = "";
@@ -719,6 +512,7 @@ function planSplitBullets(files, request, options) {
       candidate.indent,
       baseIndent,
     );
+    let backLink = null;
     if (
       linkedFromLines &&
       linkedFromMentions &&
@@ -729,20 +523,44 @@ function planSplitBullets(files, request, options) {
         destinationPath === ownerPath
           ? `#^${mentionId}`
           : `${taskSplitNoteTarget(ownerPath)}#^${mentionId}`;
-      const mention = formatLinkedFromLine(childIndent, [
-        { link: `[[${parentTarget}]]`, label: TASK_MENTION_LABEL },
-      ]);
-      children.push(`${mention}\n`);
+      backLink = `[[${parentTarget}]]`;
     }
     const childCount = candidate.childLines.length;
-    plannedTasks.push({
+    const planned = {
       path: destinationPath,
       line: 0,
       block_id: id,
       title,
       anchor_reused: anchor !== null,
       child_lines: childCount,
-    });
+    };
+    if (candidate.req) {
+      // The branch becomes a canonical task block: the back-link in the
+      // managed zone and the req's notes filed by the NOTES rule.
+      planned.req_depth = candidate.req.depth;
+      planned.moves = [];
+      const unit = taskSplitNestingUnit(sourceLines, candidate);
+      const carried = taskSplitCarriedBlock(
+        taskLine,
+        children,
+        backLink,
+        `${baseIndent}${unit}`,
+      );
+      plannedMoves.push({ head: candidate.line, moves: carried.moves });
+      plannedTasks.push(planned);
+      for (const carriedLine of carried.lines) {
+        generated.push(carriedLine);
+      }
+      continue;
+    }
+    if (backLink) {
+      const mention = formatLinkedFromLine(childIndent, [
+        { link: backLink, label: TASK_MENTION_LABEL },
+      ]);
+      children.push(`${mention}\n`);
+    }
+    plannedMoves.push(null);
+    plannedTasks.push(planned);
     generated.push(taskLine);
     for (const child of children) {
       generated.push(child);
@@ -756,7 +574,18 @@ function planSplitBullets(files, request, options) {
   }
   if (destinationIsSource) {
     if (owner.kind === "task") {
-      sourceAfter = taskSplitInsertAfterBlock(sourceAfter, owner.end, generated);
+      // The moved branches' rows were cleared out of the owner's block, so
+      // its last line moved up by that many rows.
+      const removed = selected.reduce(
+        (sum, candidateIndex) =>
+          sum + (candidates[candidateIndex].end - candidates[candidateIndex].line),
+        0,
+      );
+      sourceAfter = taskSplitInsertAfterBlock(
+        sourceAfter,
+        owner.end - removed,
+        generated,
+      );
     } else {
       sourceAfter = taskSplitInsertTasksSectionString(sourceAfter, generated);
     }
@@ -788,17 +617,24 @@ function planSplitBullets(files, request, options) {
       postimages[key] = nextFiles[key];
     }
   }
-  for (const task of plannedTasks) {
+  for (let taskIndex = 0; taskIndex < plannedTasks.length; taskIndex += 1) {
+    const task = plannedTasks[taskIndex];
     const located = taskSplitLocateLine(nextFiles[destinationPath], task.block_id);
     task.line = (located === -1 ? 0 : located) + 1;
+    // Link repair rewrites text inside lines and never adds or removes one,
+    // so block offsets still land on the final bytes.
+    const carried = plannedMoves[taskIndex];
+    if (carried) {
+      task.moves = carried.moves
+        .filter((pair) => pair[0] > 0)
+        .map((pair) => ({
+          from: carried.head + pair[0] + 1,
+          to: task.line + pair[1],
+        }));
+    }
   }
   const first = plannedTasks[0];
-  const displayTitles = plannedTasks
-    .map((task) => `\u25EF ${taskSplitShortNoticeTitle(task.title)}`)
-    .join(" \u00B7 ");
-  const notice =
-    `\u2702 Split ${plannedTasks.length} ` +
-    `${plannedTasks.length === 1 ? "note" : "notes"} into tasks \u00B7 ${displayTitles}`;
+  const notice = taskSplitNoticeFor(plannedTasks);
   let cursorLine = taskSplitLocateLine(nextFiles[destinationPath], first.block_id);
   cursorLine = (cursorLine === -1 ? 0 : cursorLine) + 1;
   let clamped = null;
@@ -871,6 +707,16 @@ function listTaskSplitCandidates(files, request) {
       title: item.title,
       drawer: item.drawerTitle,
       child_lines: item.childLines.length,
+      ...(item.req
+        ? {
+            req: {
+              depth: item.req.depth,
+              mark: item.req.mark,
+              state: item.req.state,
+              carriable: item.req.carriable,
+            },
+          }
+        : {}),
     })),
   };
 }

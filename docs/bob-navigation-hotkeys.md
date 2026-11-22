@@ -278,23 +278,25 @@ write, and requires explicit confirmation before merging labels.
 
 ## Task splitting
 
-`Ctrl+Shift+T` splits the note under the cursor into a new task, and the
-counted and visual-selection forms split the touched bullets together. On a
-task line it opens a picker across that task's splittable notes; on a drawer
-title it opens the same picker scoped to that drawer. Nothing starts marked.
-`Tab` marks or unmarks a row and advances, `Enter` splits the marked rows (or
-the highlighted row when none are marked), and `Esc` cancels without writing.
+`Ctrl+Shift+T` splits the cursor bullet into its own task; counted and
+visual forms split the touched bullets together. On a task line it opens a
+picker over that task's splittable notes and requirements, drawer-scoped
+from a title: nothing starts marked, `Tab` marks and advances, `Enter`
+splits the marked rows or the highlighted row, `Esc` cancels. Section
+bullets become tasks in the note's `## Tasks` intake. Daily-note splits and
+carries write to the `[root::]` note or the default inbox. Same-note writes
+are one `Ctrl+Z` transaction; cross-note writes persist destination-first
+under guard, and **Undo split** restores the text only while every affected
+note matches, otherwise listing the changed paths. The cursor lands on the
+first new task and `Ctrl+O` returns to the source, or names the path
+otherwise. The gesture never advances the `]s` review walk.
 
-A plain section bullet, such as one under `## Future Work`, becomes a task in
-the note's `## Tasks` intake and leaves a live link stub in the section. A
-split from a daily-note task writes new tasks to the task's `[root::]` note, or
-to the default inbox when no root is set. Same-note writes are one editor
-transaction and one `Ctrl+Z`. Cross-note writes put the destination first and
-guard both notes; their **Undo split** notice action restores the saved text
-only while all affected notes still match, otherwise it lists the changed
-paths. The cursor lands on the first new task and `Ctrl+O` returns to the
-source; if Bob cannot open the destination, it reports the destination path.
-The gesture never advances the `]s` review walk.
+On a requirement row the chord carries instead: the branch travels with
+depth kept, notes attached, loose notes filed under a created `NOTES`
+drawer, the row keeping a `[>]` stub as the new task links back, reusing a
+trailing anchor. A cursor on a requirement note carries the innermost one;
+counted carries take siblings. Dropped, carried, excluded, and overlapping
+selections refuse with a teaching notice.
 
 ## Task properties, dependencies, and moves
 

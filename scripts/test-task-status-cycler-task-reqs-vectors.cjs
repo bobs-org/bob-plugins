@@ -332,6 +332,20 @@ test("refusals carry bob-cli's codes and exact copy", () => {
   ]);
 });
 
+test("insert reports the number of newly owned requirements at every depth", () => {
+  const nested = "- [ ] head\n\t- [ ] nested one\n\t\t- [ ] nested two";
+  const empty = "- [ ] #task A ^a\n";
+  assert.equal(taskReqInsert(empty, at(empty, 0), [nested]).added, 3);
+
+  const existing = "- [ ] #task A ^a\n\t- [ ] old one\n\t- [ ] old two\n";
+  assert.equal(taskReqInsert(existing, at(existing, 0), ["- [ ] new"]).added, 1);
+
+  const loose = "- [ ] #task A ^a\n\t- loose note\n";
+  const scooped = taskReqInsert(loose, at(loose, 0), ["- [ ] new"]);
+  assert.equal(scooped.scooped, 1);
+  assert.equal(scooped.added, 1, "scooped notes are not requirements");
+});
+
 test("the toggle reports firstReq only when a note becomes its owner's first req", () => {
   const fresh = ["- [ ] #task Fresh ^f", "\t- first note", "\t- second note", ""].join("\n");
   const first = taskReqToggle(fresh, at(fresh, 2));

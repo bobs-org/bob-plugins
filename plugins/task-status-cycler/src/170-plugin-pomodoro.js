@@ -750,7 +750,13 @@ class TaskStatusCyclerPomodoroMixin {
     // Done parents stay done; Todo, Next, and In Progress tasks are forced to
     // Done. The replacement path revalidates the line and block ID before
     // writing.
-    if (isTranscludedCompletionClosableStatus(resolvedTarget.taskStatus)) {
+    const targetLineText = resolvedTarget.taskStatus && resolvedTarget.taskStatus.lineText
+      ? resolvedTarget.taskStatus.lineText
+      : getLineTextFromSourceText(resolvedTarget.sourceText, resolvedTarget.line);
+    if (
+      isTranscludedCompletionClosableStatus(resolvedTarget.taskStatus)
+      && taskReqCarriesGlobalFilter(targetLineText, TASKS_GLOBAL_FILTER)
+    ) {
       const wrote = await this.replaceResolvedTranscludedTaskLine(
         resolvedTarget,
         context,

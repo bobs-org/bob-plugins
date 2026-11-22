@@ -189,6 +189,63 @@ test("transcluded writes refuse req targets", async () => {
   assert.ok(notices.some((m) => m.includes("Requirements are met")));
 });
 
+test("Pomodoro tree close skips a plain node but still closes its #task child", async () => {
+  const plugin = makeReqPlugin();
+  const context = { editor: createTextEditor(""), activePath: "Daily.md" };
+  const plainTree = {
+    file: { path: "Other.md" },
+    blockId: "plain",
+    sourceText: "- [ ] plain item ^plain\n  - ![[Child#^child]]",
+    line: 0,
+    taskStatus: { symbol: " ", lineText: "- [ ] plain item ^plain" },
+  };
+  const taskChild = {
+    file: { path: "Child.md" },
+    blockId: "child",
+    sourceText: "- [ ] #task child ^child",
+    line: 0,
+    taskStatus: { symbol: " ", lineText: "- [ ] #task child ^child" },
+  };
+  const writes = [];
+  plugin.replaceResolvedTranscludedTaskLine = async (target, _context, mark) => {
+    writes.push([target.taskStatus.lineText, mark]);
+    return true;
+  };
+  plugin.completeTranscludedTaskTargetTree = async (_target, childContext, seen, depth, rootKey) =>
+    plugin.completeResolvedTranscludedTaskTargetTree(taskChild, childContext, seen, depth, rootKey);
+
+  const result = await plugin.completeResolvedTranscludedTaskTargetTree(
+    plainTree,
+    context,
+    new Set(),
+  );
+  assert.deepEqual(writes, [["- [ ] #task child ^child", "x"]]);
+  assert.deepEqual([result.visited, result.changed, result.closed.length], [true, true, 1]);
+});
+
+test("Pomodoro tree close keeps completion field writes on a #task root", async () => {
+  const plugin = makeReqPlugin();
+  const target = {
+    file: { path: "Other.md" },
+    blockId: "root",
+    sourceText: "- [ ] #task root ^root [completion:: keep]",
+    line: 0,
+    taskStatus: { symbol: " ", lineText: "- [ ] #task root ^root [completion:: keep]" },
+  };
+  const writes = [];
+  plugin.replaceResolvedTranscludedTaskLine = async (resolved, _context, mark) => {
+    writes.push([resolved.taskStatus.lineText, mark]);
+    return true;
+  };
+  const result = await plugin.completeResolvedTranscludedTaskTargetTree(
+    target,
+    { editor: createTextEditor(""), activePath: "Daily.md" },
+    new Set(),
+  );
+  assert.deepEqual(writes, [[target.taskStatus.lineText, "x"]]);
+  assert.equal(result.closed.length, 1);
+});
+
 test("#task lines, plain checklists, NOTES, fences, and bank rows keep behavior", () => {
   const plugin = makeReqPlugin();
   // #task line is not a req

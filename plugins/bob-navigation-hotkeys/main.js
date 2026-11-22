@@ -132342,6 +132342,10 @@ function taskReqInsert(contents, target, blocks, options) {
   }
   const forest = taskReqForest(updated, resolved);
   if (forest.some((row) => row.ownerIndex === task.lineIndex && row.depth_exceeded)) return taskReqWriteDepthRefusal();
+  const ownedBefore = taskReqForest(text, resolved)
+    .filter((row) => row.ownerIndex === task.lineIndex).length;
+  const ownedAfter = forest
+    .filter((row) => row.ownerIndex === task.lineIndex).length;
   const topLevel = forest
     .filter((row) => row.ownerIndex === task.lineIndex && row.depth === 1)
     .map((row) => row.lineIndex)
@@ -132352,6 +132356,7 @@ function taskReqInsert(contents, target, blocks, options) {
     updated: taskBlockRestoreFinalNewline(text, updated),
     firstLine: from >= 0 && from < topLevel.length ? topLevel[from] : slot.lineIndex,
     lineCount: lines.length,
+    added: Math.max(0, ownedAfter - ownedBefore),
     scooped,
     notesCreated,
   };

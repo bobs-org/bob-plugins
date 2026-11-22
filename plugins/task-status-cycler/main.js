@@ -28113,7 +28113,13 @@ class TaskStatusCyclerPomodoroMixin {
     // Done parents stay done; Todo, Next, and In Progress tasks are forced to
     // Done. The replacement path revalidates the line and block ID before
     // writing.
-    if (isTranscludedCompletionClosableStatus(resolvedTarget.taskStatus)) {
+    const targetLineText = resolvedTarget.taskStatus && resolvedTarget.taskStatus.lineText
+      ? resolvedTarget.taskStatus.lineText
+      : getLineTextFromSourceText(resolvedTarget.sourceText, resolvedTarget.line);
+    if (
+      isTranscludedCompletionClosableStatus(resolvedTarget.taskStatus)
+      && taskReqCarriesGlobalFilter(targetLineText, TASKS_GLOBAL_FILTER)
+    ) {
       const wrote = await this.replaceResolvedTranscludedTaskLine(
         resolvedTarget,
         context,
@@ -33279,6 +33285,10 @@ function taskReqInsert(contents, target, blocks, options) {
   }
   const forest = taskReqForest(updated, resolved);
   if (forest.some((row) => row.ownerIndex === task.lineIndex && row.depth_exceeded)) return taskReqWriteDepthRefusal();
+  const ownedBefore = taskReqForest(text, resolved)
+    .filter((row) => row.ownerIndex === task.lineIndex).length;
+  const ownedAfter = forest
+    .filter((row) => row.ownerIndex === task.lineIndex).length;
   const topLevel = forest
     .filter((row) => row.ownerIndex === task.lineIndex && row.depth === 1)
     .map((row) => row.lineIndex)
@@ -33289,6 +33299,7 @@ function taskReqInsert(contents, target, blocks, options) {
     updated: taskBlockRestoreFinalNewline(text, updated),
     firstLine: from >= 0 && from < topLevel.length ? topLevel[from] : slot.lineIndex,
     lineCount: lines.length,
+    added: Math.max(0, ownedAfter - ownedBefore),
     scooped,
     notesCreated,
   };

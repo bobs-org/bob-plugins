@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Real-Obsidian CDP verification of the requirement gestures (typing assist,
-// Ctrl+] toggle) in an owned scratch vault/profile. Never opens the live vault.
+// Ctrl+] toggle, Alt+[ drop, Alt+] restore, refusal guards, owner Task Card)
+// in an owned scratch vault/profile. Never opens the live vault.
 "use strict";
 const { spawn, spawnSync } = require("node:child_process");
 const crypto = require("node:crypto");
@@ -32,8 +33,17 @@ const TASKS_DATA = {
 };
 const HOTKEYS = {
   "task-status-cycler:toggle-task-checkbox-marker": [{ modifiers: ["Ctrl"], key: "]" }],
+  "task-status-cycler:cycle-task-status-backward": [{ modifiers: ["Alt"], key: "[" }],
+  "task-status-cycler:cycle-task-status-forward": [{ modifiers: ["Alt"], key: "]" }],
+  "task-status-cycler:toggle-task-open-done": [{ modifiers: ["Ctrl"], key: "Enter" }],
+  "task-status-cycler:toggle-obsidian-task": [{ modifiers: ["Ctrl", "Shift"], key: "]" }],
+  // No Ctrl+Shift+P entry: it is also Obsidian's default command-palette
+  // chord, so the owner-card scenario runs the nav command by id instead.
 };
-const GROUPS = ["typing", "vim", "toggle"];
+// Alt+N, Alt+F, and Ctrl+Shift+Enter arrive through the plugins' own
+// built-in hotkeys (nav toggleTaskLane / refreshTaskFreshness, Block ID
+// Prompt link-task-to-pomodoro), so they need no vault hotkeys.json entry.
+const GROUPS = ["typing", "vim", "toggle", "drop", "guards", "ownercard"];
 const HELP = [
   "Usage: node scripts/obsidian-task-reqs-e2e.cjs [OPTIONS]",
   "",
@@ -58,6 +68,8 @@ const KEY_CODES = {
   "-": { code: "Minus", vk: 189 },
 };
 const CTRL = 2;
+const ALT = 1;
+const SHIFT = 8;
 
 // Each case: a start document with the caret, the keystrokes, and the
 // document and caret expected afterwards. `autopair` is the vault setting.
@@ -146,6 +158,164 @@ const TOGGLE_CASES = [
   },
 ];
 
+// A task block with reqs at three depths, a loose note between branches,
+// and a NOTES drawer: the shared fixture for the drop, guard, and
+// owner-card scenarios.
+const GESTURE_DOC = [
+  "- [ ] #task Ship the exporter",
+  "\t- loose note",
+  "\t- [ ] top req",
+  "\t\t- [ ] mid req",
+  "\t\t\t- [ ] deep req",
+  "\t- [ ] second req",
+  "\t- NOTES",
+  "\t\t- filed note",
+].join("\n");
+const OWNER_COPY = "Requirements are met when “Ship the exporter” closes — Ctrl+Enter on the task";
+const LANE_COPY = "Requirements have no lane or schedule — Ctrl+Shift+T makes it a task";
+const CARRIED_COPY = "Carried — open the linked task";
+
+function gestureDropDate() {
+  const now = new Date();
+  const pad = (value) => String(value).padStart(2, "0");
+  return now.getFullYear() + "-" + pad(now.getMonth() + 1) + "-" + pad(now.getDate());
+}
+
+function gestureDropExpected(date) {
+  return [
+    "- [ ] #task Ship the exporter",
+    "\t- loose note",
+    "\t- [ ] top req",
+    "\t\t- [-] mid req",
+    "\t\t\t- ❌ **CANCEL LOG**",
+    "\t\t\t\t- *" + date + "* — out of scope",
+    "\t\t\t- [ ] deep req",
+    "\t- [ ] second req",
+    "\t- NOTES",
+    "\t\t- filed note",
+  ].join("\n");
+}
+
+const DROP_CASES = [
+  {
+    name: "Alt+[ drop with a reason then Undo",
+    doc: GESTURE_DOC,
+    caret: [3, 10],
+    keys: [{ key: "[", modifiers: ALT }],
+    modal: ".tsc-req-drop-input",
+    type: "out of scope",
+    submit: "Enter",
+    modalGone: ".tsc-req-drop-input",
+    expect: { caret: [3, 10], notice: "⊘ Dropped “mid req” · 1 nested go with it" },
+    expectDoc: (date) => gestureDropExpected(date),
+    thenUndo: GESTURE_DOC,
+  },
+  {
+    name: "Alt+[ Esc writes nothing",
+    doc: GESTURE_DOC,
+    caret: [5, 8],
+    keys: [{ key: "[", modifiers: ALT }],
+    modal: ".tsc-req-drop-input",
+    dismiss: "escape",
+    modalGone: ".tsc-req-drop-input",
+    expect: { doc: GESTURE_DOC, caret: [5, 8] },
+  },
+  {
+    name: "Alt+] restores a dropped req",
+    doc: [
+      "- [ ] #task Ship the exporter",
+      "\t- loose note",
+      "\t- [-] old req",
+      "\t\t- ❌ **CANCEL LOG**",
+      "\t\t\t- *2026-11-01* — first reason",
+      "\t- [ ] second req",
+    ].join("\n"),
+    caret: [2, 8],
+    keys: [{ key: "]", modifiers: ALT }],
+    expect: {
+      doc: [
+        "- [ ] #task Ship the exporter",
+        "\t- loose note",
+        "\t- [ ] old req",
+        "\t\t- ❌ **CANCEL LOG**",
+        "\t\t\t- *2026-11-01* — first reason",
+        "\t- [ ] second req",
+      ].join("\n"),
+      caret: [2, 8],
+      notice: "↺ Restored “old req”",
+    },
+  },
+  {
+    name: "Alt+] on a pending req refuses with the owner copy",
+    doc: GESTURE_DOC,
+    caret: [3, 10],
+    keys: [{ key: "]", modifiers: ALT }],
+    expect: { doc: GESTURE_DOC, caret: [3, 10], notice: OWNER_COPY },
+  },
+];
+
+const GUARDS_CASES = [
+  {
+    name: "Ctrl+Enter on a req refuses with the owner copy",
+    doc: GESTURE_DOC,
+    caret: [3, 10],
+    keys: [{ key: "Enter", modifiers: CTRL }],
+    expect: { doc: GESTURE_DOC, caret: [3, 10], notice: OWNER_COPY },
+  },
+  {
+    name: "Ctrl+Shift+] on a req refuses with the lane copy",
+    doc: GESTURE_DOC,
+    caret: [5, 8],
+    keys: [{ key: "]", modifiers: CTRL | SHIFT }],
+    expect: { doc: GESTURE_DOC, caret: [5, 8], notice: LANE_COPY },
+  },
+  {
+    name: "Alt+N on a req refuses with the lane copy",
+    doc: GESTURE_DOC,
+    caret: [3, 10],
+    keys: [{ key: "n", modifiers: ALT }],
+    expect: { doc: GESTURE_DOC, caret: [3, 10], notice: LANE_COPY },
+  },
+  {
+    name: "Alt+F on a req refuses with the lane copy",
+    doc: GESTURE_DOC,
+    caret: [4, 10],
+    keys: [{ key: "f", modifiers: ALT }],
+    expect: { doc: GESTURE_DOC, caret: [4, 10], notice: LANE_COPY },
+  },
+  {
+    name: "Ctrl+Shift+Enter on a carried stub refuses and keeps the link",
+    doc: [
+      "- [ ] #task Ship the exporter",
+      "\t- [>] Carried stub [[#^abc|Alias]]",
+    ].join("\n"),
+    caret: [1, 8],
+    keys: [{ key: "Enter", modifiers: CTRL | SHIFT }],
+    expect: {
+      doc: [
+        "- [ ] #task Ship the exporter",
+        "\t- [>] Carried stub [[#^abc|Alias]]",
+      ].join("\n"),
+      caret: [1, 8],
+      notice: CARRIED_COPY,
+    },
+  },
+];
+
+const OWNERCARD_CASES = [
+  {
+    name: "Ctrl+Shift+P on a depth-3 req opens the owner's Task Card",
+    doc: GESTURE_DOC,
+    caret: [4, 10],
+    viaCommand: "bob-navigation-hotkeys:set-bullet-property",
+    modal: ".bob-cnp-modal",
+    modalTitle: ".bob-task-card-title",
+    modalTitleText: "Ship the exporter",
+    closeModal: "Escape",
+    expect: { doc: GESTURE_DOC, caret: [0, 0] },
+  },
+];
+
 function parseArgs(argv) {
   const args = { executable: null, help: false, only: null, report: null, selfTest: false };
   for (let i = 0; i < argv.length; i += 1) {
@@ -224,10 +394,13 @@ async function probeExecutable(executable) {
   return { ok: true };
 }
 
-// Plugins the scenarios exercise. Later phases add the nav and Block ID
-// Prompt gestures to this list; unrelated plugins stay out so their startup
-// work cannot stall the editor under test.
-const SCENARIO_PLUGINS = [CYCLER];
+// Plugins the scenarios exercise: the cycler for typing, toggle, drop,
+// and restore; nav for the lane guards and the owner Task Card; Block ID
+// Prompt for the carried-stub Ctrl+Shift+Enter guard. Unrelated plugins
+// stay out so their startup work cannot stall the editor under test.
+const NAV = "bob-navigation-hotkeys";
+const BLOCK_ID_PROMPT = "block-id-prompt";
+const SCENARIO_PLUGINS = [CYCLER, NAV, BLOCK_ID_PROMPT];
 
 function expectedPlugins() {
   const plugins = [];
@@ -247,9 +420,24 @@ function findTasksPluginSource() {
     ? candidate : null;
 }
 
-function buildFixture(vault, profilePath) {
+function buildFixture(vault, profilePath, configHome) {
   fs.mkdirSync(vault, { recursive: true });
   fs.writeFileSync(path.join(vault, NOTE), "# Task requirements fixture\n");
+  // A hermetic bullet-property config for the owner Task Card scenario:
+  // nav reads it from the XDG config home, never from the host's config.
+  if (configHome) {
+    fs.mkdirSync(path.join(configHome, "bob"), { recursive: true });
+    fs.writeFileSync(path.join(configHome, "bob", "config.yml"), [
+      "timezone: America/New_York",
+      "",
+      "properties:",
+      "  - name: scheduled",
+      "    values: date",
+      "  - name: dependsOn",
+      "    values: local_task_id",
+      "",
+    ].join("\n"));
+  }
   const obsidian = path.join(vault, ".obsidian");
   fs.mkdirSync(obsidian, { recursive: true });
   const enabled = [];
@@ -485,9 +673,128 @@ async function runCase(client, entry) {
   if (problems.length) throw new Error(problems.join("; "));
 }
 
+async function closeStrayModals(client) {
+  // Startup and previous-scenario modals (trust confirm, drop prompt, Task
+  // Card) all close on Escape; retry so a slowly appearing modal still
+  // settles before the case's own keystrokes land.
+  let stray = null;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    await key(client, "Escape");
+    await sleep(400);
+    stray = await client.evaluate(
+      '(() => { const modal = document.querySelector(".modal"); return modal ? (modal.className + " :: " + modal.textContent).slice(0, 400) : null; })()',
+    ).catch(() => false);
+    if (!stray) return;
+  }
+  throw new Error("a previous scenario left a modal open: " + stray);
+}
+
+async function waitForGone(client, selector, label) {
+  await waitFor(client, `!document.querySelector(${JSON.stringify(selector)})`, Boolean, label + " closed", 5000);
+}
+
+// Modal and command-driven scenarios: drop with a reason, Esc, restore,
+// key-chord refusals, and the owner Task Card. `expect.doc` may be a string
+// or, for today's dated Cancel Log, omitted in favor of `expectDoc(date)`.
+async function runGestureCase(client, entry) {
+  await setMode(client, false, true);
+  await closeStrayModals(client);
+  await setDoc(client, entry.doc, entry.caret);
+  for (const input of entry.keys || []) await key(client, input);
+  if (entry.viaCommand) {
+    await client.evaluate(
+      `window.app.commands.executeCommandById(${JSON.stringify(entry.viaCommand)})`,
+      RPC_TIMEOUT_MS,
+    );
+    await sleep(300);
+  }
+  await sleep(250);
+  if (entry.modal) {
+    await waitFor(client, `Boolean(document.querySelector(${JSON.stringify(entry.modal)}))`, Boolean, entry.name + " modal", 5000);
+  }
+  if (entry.modalTitle) {
+    const title = await client.evaluate(
+      `(() => { const el = document.querySelector(${JSON.stringify(entry.modalTitle)}); return el ? el.textContent : null; })()`,
+      RPC_TIMEOUT_MS,
+    ).catch(() => null);
+    if (typeof title !== "string" || !title.includes(entry.modalTitleText)) {
+      throw new Error("card title " + JSON.stringify(title) + " lacks " + JSON.stringify(entry.modalTitleText));
+    }
+  }
+  if (entry.type) {
+    for (const char of entry.type) await key(client, char);
+    await sleep(300);
+    await key(client, entry.submit || "Enter");
+    await sleep(400);
+  } else if (entry.dismiss === "escape") {
+    await key(client, "Escape");
+    await sleep(400);
+  } else {
+    await sleep(200);
+  }
+  if (entry.modalGone) await waitForGone(client, entry.modalGone, entry.name);
+  const state = await readEditor(client);
+  const problems = [];
+  const wantDoc = typeof entry.expectDoc === "function" ? entry.expectDoc(gestureDropDate()) : entry.expect.doc;
+  if (wantDoc !== undefined && state.doc !== wantDoc) {
+    problems.push("doc " + JSON.stringify(state.doc) + " != " + JSON.stringify(wantDoc));
+  }
+  if (entry.expect.caret && JSON.stringify(state.caret) !== JSON.stringify(entry.expect.caret)) {
+    problems.push("caret " + JSON.stringify(state.caret) + " != " + JSON.stringify(entry.expect.caret));
+  }
+  if (entry.expect.notice && !state.notices.some((text) => text.includes(entry.expect.notice))) {
+    problems.push("notice " + JSON.stringify(state.notices) + " lacks " + JSON.stringify(entry.expect.notice));
+  }
+  if (!problems.length && entry.closeModal) {
+    await key(client, entry.closeModal);
+    await sleep(400);
+    await waitForGone(client, entry.modal, entry.name);
+    const closed = await readEditor(client);
+    if (closed.doc !== wantDoc) problems.push("close changed doc to " + JSON.stringify(closed.doc));
+  }
+  if (!problems.length && entry.thenUndo !== undefined) {
+    await key(client, { key: "z", modifiers: CTRL, vk: 90 });
+    await sleep(250);
+    const undone = await readEditor(client);
+    if (undone.doc !== entry.thenUndo) problems.push("one Undo gave " + JSON.stringify(undone.doc) + " != " + JSON.stringify(entry.thenUndo));
+  }
+  if (problems.length) throw new Error(problems.join("; "));
+}
+
+function gestureSelfTest() {
+  const names = new Set();
+  const gestureCases = DROP_CASES.concat(GUARDS_CASES, OWNERCARD_CASES);
+  if (!gestureCases.length) throw new Error("no gesture scenarios");
+  for (const entry of TYPING_CASES.concat(VIM_CASES, TOGGLE_CASES, gestureCases)) {
+    if (names.has(entry.name)) throw new Error("duplicate case name: " + entry.name);
+    names.add(entry.name);
+    if (!entry.expect) throw new Error("malformed case: " + entry.name);
+    for (const input of entry.keys || []) {
+      const payload = keyPayload(input);
+      if (!payload.key || payload.windowsVirtualKeyCode === undefined) throw new Error("bad key in " + entry.name);
+    }
+  }
+  for (const entry of gestureCases) {
+    if (!entry.doc || !Array.isArray(entry.caret)) throw new Error("gesture case needs a doc and caret: " + entry.name);
+  }
+  for (const entry of DROP_CASES) {
+    if (entry.modal && !entry.modalGone) throw new Error("drop case must prove the modal closed: " + entry.name);
+  }
+  // The drop notice embeds today's dated Cancel Log; the expectation must be
+  // a function of the run date, never a hardcoded string.
+  const dropDate = gestureDropDate();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dropDate)) throw new Error("bad drop date: " + dropDate);
+  const dropDoc = gestureDropExpected(dropDate);
+  if (!dropDoc.includes("*" + dropDate + "* — out of scope")) throw new Error("drop expectation lacks the dated reason");
+  if (!DROP_CASES[0].expect.notice.includes("1 nested go with it")) throw new Error("drop notice must count the nested req");
+  const owner = OWNERCARD_CASES[0];
+  if (!owner.viaCommand || !owner.modalTitleText || !owner.closeModal) throw new Error("owner-card case must run the command, check the card, and close it");
+}
+
 function selfTest() {
   const parsed = parseArgs(["--self-test", "--only", "typing", "--report", "/tmp/reqs.json"]);
   if (!parsed.selfTest || parsed.only !== "typing") throw new Error("argument parsing failed");
+  gestureSelfTest();
   const names = new Set();
   for (const entry of TYPING_CASES.concat(VIM_CASES, TOGGLE_CASES)) {
     if (names.has(entry.name)) throw new Error("duplicate case name: " + entry.name);
@@ -501,16 +808,27 @@ function selfTest() {
   const ctrlBracket = keyPayload({ key: "]", modifiers: CTRL });
   if (ctrlBracket.windowsVirtualKeyCode !== 221 || ctrlBracket.text) throw new Error("Ctrl+] chord payload changed");
   if (keyPayload("[").text !== "[" || keyPayload("Backspace").text) throw new Error("text key payload changed");
+  const altBracket = keyPayload({ key: "[", modifiers: ALT });
+  if (altBracket.windowsVirtualKeyCode !== 219 || altBracket.text) throw new Error("Alt+[ chord payload changed");
+  const ctrlShiftEnter = keyPayload({ key: "Enter", modifiers: CTRL | SHIFT });
+  if (ctrlShiftEnter.windowsVirtualKeyCode !== 13 || ctrlShiftEnter.text) throw new Error("Ctrl+Shift+Enter chord payload changed");
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "bob-task-reqs-e2e-self-"));
   try {
-    const built = buildFixture(temp, path.join(temp, "profile"));
-    if (!built.enabled.includes(CYCLER)) throw new Error("scratch vault does not enable " + CYCLER);
+    const configHome = path.join(temp, "xdg");
+    const built = buildFixture(temp, path.join(temp, "profile"), configHome);
+    for (const plugin of SCENARIO_PLUGINS) {
+      if (!built.enabled.includes(plugin)) throw new Error("scratch vault does not enable " + plugin);
+    }
     const app = JSON.parse(fs.readFileSync(path.join(temp, ".obsidian", "app.json"), "utf8"));
     if (app.vimMode !== false || app.autoPairBrackets !== true) throw new Error("fixture settings changed");
     const hotkeys = JSON.parse(fs.readFileSync(path.join(temp, ".obsidian", "hotkeys.json"), "utf8"));
     if (!hotkeys["task-status-cycler:toggle-task-checkbox-marker"]) throw new Error("Ctrl+] hotkey missing");
+    if (!hotkeys["task-status-cycler:cycle-task-status-backward"]) throw new Error("Alt+[ hotkey missing");
+    if (!hotkeys["task-status-cycler:toggle-task-open-done"]) throw new Error("Ctrl+Enter hotkey missing");
+    const config = fs.readFileSync(path.join(configHome, "bob", "config.yml"), "utf8");
+    if (!config.includes("values: date")) throw new Error("fixture bullet config changed");
     const source = fs.readFileSync(__filename, "utf8");
-    for (const token of ["Input.dispatchKeyEvent", "autoPairBrackets", "thenUndo", "vimMode"]) {
+    for (const token of ["Input.dispatchKeyEvent", "autoPairBrackets", "thenUndo", "vimMode", "tsc-req-drop-input", "bob-cnp-modal", "executeCommandById", "XDG_CONFIG_HOME"]) {
       if (!source.includes(token)) throw new Error("e2e is missing " + token);
     }
     console.log("offline self-test complete (not an Obsidian pass)");
@@ -528,7 +846,8 @@ async function runE2e(args) {
   const runRoot = fs.mkdtempSync(path.join(scratchBase(), "bob-reqs-e2e-"));
   const vault = path.join(runRoot, "vault");
   const profile = path.join(runRoot, "profile");
-  buildFixture(vault, profile);
+  const configHome = path.join(runRoot, "xdg");
+  buildFixture(vault, profile, configHome);
   const fixturePath = fs.realpathSync(vault);
   const port = await freePort();
   // Obsidian gets its own private display: sharing the runner's Xvfb made
@@ -542,7 +861,7 @@ async function runE2e(args) {
     "--remote-allow-origins=http://127.0.0.1/*", fixturePath,
   ]), {
     cwd: fixturePath,
-    env: launchEnv({ BOB_DIR: fixturePath, TMPDIR: scratchBase() }),
+    env: launchEnv({ BOB_DIR: fixturePath, TMPDIR: scratchBase(), XDG_CONFIG_HOME: configHome }),
     detached: true,
     stdio: ["ignore", logFd, logFd],
   });
@@ -566,16 +885,25 @@ async function runE2e(args) {
     await waitFor(client, "Boolean(window.app&&window.app.workspace&&window.app.workspace.layoutReady)", Boolean, "layout-ready", lib.LAYOUT_READY_TIMEOUT_MS);
     progress("layout ready");
     await dismissTrust(client);
-    await waitFor(client, 'Boolean(window.app.plugins.plugins&&window.app.plugins.plugins["' + CYCLER + '"])', Boolean, "cycler plugin", 30_000);
-    progress("cycler plugin loaded");
+    for (const plugin of SCENARIO_PLUGINS) {
+      await waitFor(client, 'Boolean(window.app.plugins.plugins&&window.app.plugins.plugins["' + plugin + '"])', Boolean, plugin + " plugin", 30_000);
+      progress(plugin + " loaded");
+    }
     await sleep(1000);
     report.appVersion = await client.evaluate("window.app.version||null").catch(() => null);
     const opened = await openNote(client);
     if (!opened || !opened.ok) throw new Error("could not open the fixture note");
-    const groups = { typing: TYPING_CASES, vim: VIM_CASES, toggle: TOGGLE_CASES };
+    const groups = {
+      typing: { cases: TYPING_CASES, run: runCase },
+      vim: { cases: VIM_CASES, run: runCase },
+      toggle: { cases: TOGGLE_CASES, run: runCase },
+      drop: { cases: DROP_CASES, run: runGestureCase },
+      guards: { cases: GUARDS_CASES, run: runGestureCase },
+      ownercard: { cases: OWNERCARD_CASES, run: runGestureCase },
+    };
     for (const group of args.only ? [args.only] : GROUPS) {
-      for (const entry of groups[group]) {
-        try { await runCase(client, entry); record(entry.name, "pass"); }
+      for (const entry of groups[group].cases) {
+        try { await groups[group].run(client, entry); record(entry.name, "pass"); }
         catch (error) { record(entry.name, "fail", error && error.message ? error.message : String(error)); }
       }
     }
@@ -611,17 +939,29 @@ async function main() {
 }
 
 module.exports = {
+  ALT,
+  BLOCK_ID_PROMPT,
   Cdp,
+  DROP_CASES,
+  GESTURE_DOC,
+  GUARDS_CASES,
   launchEnv,
   GROUPS,
   HOTKEYS,
   KEY_CODES,
+  NAV,
+  OWNERCARD_CASES,
+  SHIFT,
   TOGGLE_CASES,
   TYPING_CASES,
   VIM_CASES,
   buildFixture,
+  gestureDropExpected,
+  gestureDropDate,
+  gestureSelfTest,
   keyPayload,
   parseArgs,
+  runGestureCase,
   selfTest,
 };
 

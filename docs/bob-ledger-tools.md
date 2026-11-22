@@ -76,14 +76,12 @@ Album cards and sync: [Album cards](albums.md); record cards and editor:
 
 ## Property-card properties drawer
 
-Album, record, day and period, and bank setup cards show a **Properties** foot
-with a read-only drawer of the note's frontmatter. Click the disclosure in
-Reading or Live Preview, type `=-` in Live Preview Vim normal mode, or run
-**Toggle card properties** from the palette or Command Mode. The command uses
-the active view and acts only when its card foot is mounted there. Drawer state
-is shared by panes on the same note for the plugin session; opening it does not
-write the note or refresh a report. The existing `==` card-editor gesture is
-unchanged.
+Album, record, day/period, and bank setup cards expose note frontmatter in a
+read-only **Properties** drawer. Open it with the foot disclosure, `=-` in Live
+Preview Vim normal mode, or **Toggle card properties** (palette/Command Mode).
+The command needs a mounted foot in the active view; same-note panes share
+session state. Opening is read-only: no note writes or report refreshes. `==`
+editing is unchanged.
 
 ## Bank cards and the bank badge
 
@@ -97,29 +95,23 @@ On a waiting bank row, Task Status Cycler hands Ctrl+Enter to `api.bank` v2 `cla
 
 ## Bank Period Charts
 
-The read-only Bank Period Charts panel is third in week, quarter, ISO-year,
-and all-time `bob-stats-strip` fences. It skips Day strips, `bob-day-stats`,
-`bob-period-parts`, embeds, hover popovers, mobile, and future periods. A
-separate `bank report -p <id> -s -c` cache isolates old-bob or bad-`charts`
-failures; one warning per session. Bank events and revalidation refresh it;
-repaint clears only its host.
+Bank Period Charts is third in week, quarter, ISO-year, and all-time
+`bob-stats-strip` fences; it skips Day strips, `bob-day-stats`,
+`bob-period-parts`, embeds, popovers, mobile, and future periods. A separate
+`bank report -p <id> -s -c` cache isolates old-bob and bad-`charts` failures;
+one warning/session, refreshed on bank events or revalidation.
 
-The header holds a collapse disclosure (`BANK CHARTS`), a view glyph cycling
-Both → In / Out → Categories (when available),
-a readout naming the hovered or focused bucket, and a resting `BALANCE`
-readout with the hero close: a bare amount at close, an as-of date while
-coverage arrives, or a muted `not imported yet` / `not imported` /
-`unverified` word. It yields to the hover readout; quiet weeks render
-header-only. View and collapse
-persist per device (`bob-ledger-tools-bank-period-view`). The
-cashflow axis and balance are roving tab stops: arrows move focus; hover
-and focus dim siblings and fill the readout; Escape clears it; Enter,
-Space, or click activates. Each chart ships a hidden table twin. Activation
-never creates a note: buckets open the day heading or child note; the
-balance opens the as-of day (inert without a month note).
-Exact cents; only a negative balance takes warning ink.
-`stats.bank_period` (default on) gates every period host,
-independently of `stats.bank_badge`.
+`BANK CHARTS` collapses the panel, cycles Both → In / Out → Categories (when
+available), and reads the hovered/focused bucket. Resting `BALANCE` shows the
+close amount, coverage date, or muted import status; quiet weeks show only the
+header. View and collapse persist per device
+(`bob-ledger-tools-bank-period-view`). Cashflow and balance use roving focus:
+arrows move; hover/focus dims siblings; Escape clears;
+Enter/Space/click activates. Hidden table twins accompany charts. Buckets open
+a day heading or child note; balance opens the as-of day when a month note
+exists. Activation creates no note. Exact cents; negative balances warn.
+`stats.bank_period` (default on) gates period hosts independently of
+`stats.bank_badge`.
 
 ## Snippets and the plan block
 

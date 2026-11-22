@@ -57,7 +57,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
     const dateText = formatBulletPropertyDate(baseDate);
     const workLogNow = options.now instanceof Date ? options.now : new Date();
     const workLogStamp = formatWorkLogStamp(workLogNow);
-    const groups = groupLinkPickerTargetsByNote(linkSession.resolved);
+    const groups = await this.linkSessionGroups(linkSession.resolved);
     if (groups.length === 0) {
       new Notice("Could not update task; no tasks were updated");
       return false;

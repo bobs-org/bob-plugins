@@ -75,3 +75,37 @@ test("S1-S15 fixture pins creation markers and proseField wiring", () => {
     assert.match(wiring, /links:\s*true|proseField/, `${surface.id} wiring file must opt into proseField`);
   }
 });
+
+// T10: every task-bearing surface declares its subjects, the task(s) the
+// prompt writes to. `((` shows those rows disabled, because naming one would
+// change its line under the host's pending write. Task-bearing prompts
+// (S1-S11) must pass a real `subjects:` option; prompts with no subject task
+// (S12-S15) must say so and never wire a subject callback.
+test("every surface declares its subjects and wired surfaces pass them", () => {
+  for (const surface of fixture.surfaces) {
+    assert.ok(
+      surface.subjects === "wired" || surface.subjects === "none",
+      `${surface.id} must declare subjects: "wired" or "none"`,
+    );
+    const wiring = fs.readFileSync(path.join(root, surface.wiring), "utf8");
+    if (surface.subjects === "wired") {
+      assert.match(
+        wiring,
+        /\bsubjects\s*:\s*(?:\(\)\s*=>|\[|[A-Za-z_$])/,
+        `${surface.id} wiring file ${surface.wiring} must pass a subjects option to proseField`,
+      );
+    } else {
+      assert.doesNotMatch(
+        wiring,
+        /\bsubjects\s*:\s*\(\)\s*=>/,
+        `${surface.id} declares no subjects, so ${surface.wiring} must not wire a subjects callback`,
+      );
+    }
+  }
+  const wired = fixture.surfaces.filter((surface) => surface.subjects === "wired").map((surface) => surface.id);
+  assert.deepEqual(
+    wired.sort(),
+    Array.from({ length: 11 }, (_, index) => `S${index + 1}`).sort(),
+    "S1-S11 carry subjects; S12-S15 carry none",
+  );
+});

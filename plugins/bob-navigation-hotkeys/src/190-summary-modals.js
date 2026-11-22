@@ -744,6 +744,8 @@ class LaneReleaseSummaryModal extends Modal {
     this.sourcePath = options && typeof options.sourcePath === "string" && options.sourcePath
       ? options.sourcePath
       : null;
+    // The released tasks (`{ path, line, blockId? }`): `((` shows them disabled.
+    this.subjectTasks = options && Array.isArray(options.subjects) ? options.subjects : [];
     this.completed = false;
     this.inputEl = null;
     this.previewEl = null;
@@ -798,6 +800,7 @@ class LaneReleaseSummaryModal extends Modal {
           ownKeys: true,
           scope: this.scope,
           links: true,
+          subjects: () => proseTaskSubjects(this.subjectTasks),
           sourcePath: () => this.sourcePath,
         });
       } catch (_error) { this.logRecall = null; }

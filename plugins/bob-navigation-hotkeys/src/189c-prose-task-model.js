@@ -275,3 +275,38 @@ function proseTaskGroupRuns(rows, limit) {
     return new Map();
   }
 }
+
+// Subjects for `((` (T10/T11): the task(s) a prompt writes to. Those rows are
+// shown but disabled ("The task this prompt is about"), because naming one
+// would change its line under the host's pending write. Every host builds its
+// list from the identities its own write plan already holds, so a task entry
+// is `{ path, line?, blockId? }` (an `id` or `existingId` field, or a trailing
+// `^id` on `rawLine`, supplies the block ID when `blockId` is absent). Entries
+// without a path, or with neither a line nor a block ID, are dropped;
+// duplicates collapse. Never throws.
+function proseTaskSubjects(tasks) {
+  try {
+    const out = [];
+    const seen = new Set();
+    for (const task of Array.isArray(tasks) ? tasks : []) {
+      if (!task || typeof task !== "object") continue;
+      const path = [task.path, task.notePath, task.sourcePath].find((value) => typeof value === "string" && value.trim());
+      if (!path) continue;
+      let blockId = [task.blockId, task.id, task.existingId].find((value) => typeof value === "string" && value);
+      if (!blockId && typeof task.rawLine === "string") blockId = getTrailingBlockId(task.rawLine) || "";
+      const entry = { path: String(path) };
+      if (Number.isInteger(task.line) && task.line >= 0) entry.line = task.line;
+      if (blockId) entry.blockId = String(blockId);
+      // A path alone identifies no task: bip matches by block ID, or by path
+      // plus line. Guessing a subject is worse than declaring none.
+      if (entry.line === undefined && entry.blockId === undefined) continue;
+      const key = `${entry.path}\u0000${entry.blockId || ""}\u0000${entry.line == null ? "" : entry.line}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(entry);
+    }
+    return out;
+  } catch (_error) {
+    return [];
+  }
+}

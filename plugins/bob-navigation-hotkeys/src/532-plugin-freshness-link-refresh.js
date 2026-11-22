@@ -192,6 +192,8 @@ async function refreshTaskFreshnessOnLinks(cm, cursor, content, options = {}) {
         keep: item.keep,
         rung: item.keep.rung,
         history: item.history,
+        target: item.target,
+        group: item.group,
       })),
       laneTargets,
     });
@@ -212,6 +214,7 @@ async function refreshTaskFreshnessOnLinks(cm, cursor, content, options = {}) {
       keepReason = result.keepReason;
     }
     const promptShown = promptPlan.kind !== "none";
+    const liveGroups = new Map();
     if (promptShown) {
       if (this.laneReleaseDateText() !== localDayBefore) {
         new Notice("Day changed while the prompt was open; nothing was written");
@@ -225,7 +228,15 @@ async function refreshTaskFreshnessOnLinks(cm, cursor, content, options = {}) {
         new Notice("Current note changed; no tasks were updated");
         return false;
       }
-      for (const { group } of linkResolved) {
+      // A sibling named by the prompt's `((` is not a stale note (T11): a
+      // linked note whose only changes are off the kept lines is adopted.
+      if (typeof options.keepReason !== "string") {
+        const readNote = (group) => this.readLinkPickerNoteContent(group.path, group.file);
+        const adopted = await navGroupsAfterPrompt(linkResolved.map((item) => item.group), readNote);
+        linkResolved.forEach((item, index) => liveGroups.set(item.group, adopted[index]));
+      }
+      for (const { group: original } of linkResolved) {
+        const group = liveGroups.get(original) || original;
         const live = await this.readLinkPickerNoteContent(
           group.path,
           group.file,
@@ -241,12 +252,13 @@ async function refreshTaskFreshnessOnLinks(cm, cursor, content, options = {}) {
     const stampedAll = [];
     let workLogWrittenCount = 0;
     let rottenLogWrittenCount = 0;
-    for (const { group, targets } of stampTargetsByGroup) {
+    for (const { group: resolvedGroup, targets } of stampTargetsByGroup) {
+      const group = liveGroups.get(resolvedGroup) || resolvedGroup;
       const groupRottenTargets = rottenTargets
-        .filter((item) => item.group === group)
+        .filter((item) => item.group === resolvedGroup)
         .map((item) => ({ line: item.target.line, rung: item.keep.rung }));
       const groupLaneTargets = laneTargets
-        .filter((item) => item.group === group)
+        .filter((item) => item.group === resolvedGroup)
         .map((item) => ({ line: item.target.line, rung: item.keep.rung }));
       const plan = planFreshStampBatchWithLogs(
         group.content,

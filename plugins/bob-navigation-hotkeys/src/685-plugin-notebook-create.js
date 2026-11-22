@@ -106,6 +106,8 @@ class NotebookCreateModal extends Modal {
 
   // The Summary is prose (S12): `[[` completes through nav's proseField.
   // A notebook does not exist yet, so there is no home note for `[[#…`.
+  // `((` completes too, and the prompt has no subject task (S12 declares
+  // none): it writes a new notebook, never a task line.
   attachSummaryLinks() {
     try {
       const api = getNavigationProseFieldApi(this.app) ||
@@ -121,6 +123,7 @@ class NotebookCreateModal extends Modal {
         bandHost,
         recall: null,
         sourcePath: null,
+        subjects: [],
         density: "roomy",
         arrowKeys: true,
         ownKeys: true,

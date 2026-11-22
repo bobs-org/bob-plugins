@@ -491,6 +491,24 @@ function rottenKeepSourcePath(options) {
   return entry && typeof entry.path === "string" && entry.path ? entry.path : null;
 }
 
+// The task(s) a Keep / Stay reason is about (T10/T11): `((` shows them
+// disabled. Hosts pass `subjects` explicitly (batch keep) or the single keep's
+// `line` + `raw` task line next to its note path.
+function rottenKeepSubjects(options) {
+  const opts = options || {};
+  if (Array.isArray(opts.subjects)) return proseTaskSubjects(opts.subjects);
+  const entry = opts.entry && typeof opts.entry === "object" ? opts.entry : {};
+  // Queue entries count lines from 1; the guard's lines count from 0.
+  const line = Number.isInteger(opts.line)
+    ? opts.line
+    : Number.isInteger(entry.line) && entry.line >= 1 ? entry.line - 1 : undefined;
+  return proseTaskSubjects([{
+    path: rottenKeepSourcePath(opts),
+    line,
+    rawLine: typeof opts.raw === "string" ? opts.raw : entry.originalMarkdown,
+  }]);
+}
+
 // Shared by the refresh modal and the decay card. The stage owns only its
 // subtree and input; its host owns closing, committing, and returning to choices.
 class RottenKeepReasonStage {
@@ -520,6 +538,7 @@ class RottenKeepReasonStage {
         kind: "rotten",
         ownKeys: true,
         links: true,
+        subjects: () => rottenKeepSubjects(this.options),
         sourcePath: () => rottenKeepSourcePath(this.options),
       });
     }

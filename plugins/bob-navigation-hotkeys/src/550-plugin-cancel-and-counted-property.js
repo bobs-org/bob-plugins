@@ -15,7 +15,7 @@ class BobNavigationHotkeysCancelPropertyMixin {
       new Notice("Could not update task; no tasks were updated");
       return false;
     }
-    const groups = groupLinkPickerTargetsByNote(resolved);
+    const groups = await this.linkSessionGroups(resolved);
     if (groups.length === 0) {
       new Notice("Could not update task; no tasks were updated");
       return false;

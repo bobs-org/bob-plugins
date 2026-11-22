@@ -225,6 +225,7 @@ function attachPickerLogRecall(picker, inputEl, kind, options = {}) {
       ownKeys: false,
       ...(Number.isInteger(opts.pinnedSlots) ? { pinnedSlots: opts.pinnedSlots } : {}),
       links: true,
+      subjects: () => pickerProseSubjects(picker),
       sourcePath: () => pickerProseSourcePath(picker),
       ...(picker.plugin ? { plugin: picker.plugin } : {}),
       app: picker.app,

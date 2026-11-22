@@ -306,13 +306,21 @@ test("S2 Move to Next opts into links with the tasks' shared note", () => {
   const doc = makeDocument();
   const results = [];
   const modal = mount(new helpers.TaskLinkLanePromptModal(app, {
-    tasks: [{ displayText: "Ship", path: "projects/plan.md" }, { displayText: "Test", path: "projects/plan.md" }],
+    tasks: [
+      { displayText: "Ship", path: "projects/plan.md", line: 3, blockId: "ship" },
+      { displayText: "Test", path: "projects/plan.md", line: 7 },
+    ],
     sourcePaths: ["projects/plan.md", "projects/plan.md"],
     onDone: (value) => results.push(value),
   }), doc);
   assert.equal(attached.at(-1).links, true);
   assert.equal(attached.at(-1).kind, "work");
   assert.equal(attached.at(-1).sourcePath(), "projects/plan.md");
+  // T10/T11: every moved task is the prompt's subject, so `((` shows it disabled.
+  assert.deepEqual(attached.at(-1).subjects(), [
+    { path: "projects/plan.md", line: 3, blockId: "ship" },
+    { path: "projects/plan.md", line: 7 },
+  ]);
 
   type(modal.inputEl, "Outlined [[sa");
   assert.equal(modal.logRecall.isLinkOpen(), true);
@@ -340,10 +348,15 @@ test("S3 Release task passes the released task's note and keeps Esc layering", (
   const modal = mount(new helpers.LaneReleaseSummaryModal(
     app,
     (value) => results.push(value),
-    { sourcePath: "projects/plan.md" },
+    {
+      sourcePath: "projects/plan.md",
+      subjects: [{ path: "projects/plan.md", line: 4, blockId: "work" }],
+    },
   ), doc);
   assert.equal(attached.at(-1).links, true);
   assert.equal(attached.at(-1).sourcePath(), "projects/plan.md");
+  assert.deepEqual(attached.at(-1).subjects(), [{ path: "projects/plan.md", line: 4, blockId: "work" }],
+    "the released task is the prompt's subject");
   type(modal.inputEl, "Blocked on [[sa");
   assert.equal(modal.logRecall.isLinkOpen(), true);
   press(modal.inputEl, "Escape");
@@ -353,13 +366,15 @@ test("S3 Release task passes the released task's note and keeps Esc layering", (
   assert.deepEqual(results, ["Blocked on [[sa"], "Enter with the band closed submits the draft");
   const bare = new helpers.LaneReleaseSummaryModal(app, () => {});
   assert.equal(bare.sourcePath, null);
+  assert.deepEqual(helpers.proseTaskSubjects(bare.subjectTasks), [], "no declared subjects, none guarded");
 });
 
-function batchTarget(path, raw) {
+function batchTarget(path, raw, line) {
   return {
     kind: "counted",
     raw,
     entry: path ? { path } : {},
+    ...(Number.isInteger(line) ? { target: { line, raw } } : {}),
     history: { status: "ok", entries: [] },
   };
 }
@@ -370,13 +385,17 @@ test("S4 batch Keep reason links against the shared entry note and Ctrl+[ cancel
   const results = [];
   const modal = mount(new helpers.FreshnessRefreshSummaryModal(app, {
     dateText: "2026-11-21",
-    keepTargets: [batchTarget("projects/plan.md", "- [ ] #task A"), batchTarget("projects/plan.md", "- [ ] #task B")],
+    keepTargets: [batchTarget("projects/plan.md", "- [ ] #task A ^a", 2), batchTarget("projects/plan.md", "- [ ] #task B", 5)],
     totalCount: 2,
     onDone: (value) => results.push(value),
   }), doc);
   assert.equal(attached.at(-1).links, true);
   assert.equal(attached.at(-1).kind, "rotten");
   assert.equal(attached.at(-1).sourcePath(), "projects/plan.md");
+  assert.deepEqual(attached.at(-1).subjects(), [
+    { path: "projects/plan.md", line: 2, blockId: "a" },
+    { path: "projects/plan.md", line: 5 },
+  ], "every kept entry is a subject");
 
   type(modal.keepInputEl, "Waiting on [[sa");
   assert.equal(modal.keepRecall.isLinkOpen(), true);
@@ -430,6 +449,7 @@ test("S5 Rotten keep stage links against the kept task's note and Ctrl+[ cancels
   assert.equal(attached.at(-1).links, true);
   assert.equal(attached.at(-1).kind, "rotten");
   assert.equal(attached.at(-1).sourcePath(), "projects/plan.md");
+  assert.deepEqual(attached.at(-1).subjects(), [], "no line known: no subject is guessed");
 
   type(stage.inputEl, "Still [[sa");
   assert.equal(stage.logRecall.isLinkOpen(), true);
@@ -448,6 +468,22 @@ test("S5 Rotten keep stage links against the kept task's note and Ctrl+[ cancels
   }));
   assert.equal(attached.at(-1).sourcePath(), "areas/home.md", "the host's explicit note wins");
   decay.destroy();
+
+  // A single keep carries its line and raw task line: that task is the subject.
+  const single = new helpers.RottenKeepReasonStage(new El(doc), rottenStageOptions({
+    app,
+    line: 8,
+    raw: "- [ ] #task Keep me [fresh:: 2026-10-01] ^keep-me",
+  }));
+  assert.deepEqual(attached.at(-1).subjects(), [{ path: "projects/plan.md", line: 8, blockId: "keep-me" }]);
+  single.destroy();
+  // Queue entries count lines from 1; the guard's lines count from 0.
+  const queued = new helpers.RottenKeepReasonStage(new El(doc), rottenStageOptions({
+    app,
+    entry: { path: "projects/plan.md", line: 9, fresh: "2026-10-01" },
+  }));
+  assert.deepEqual(attached.at(-1).subjects(), [{ path: "projects/plan.md", line: 8 }]);
+  queued.destroy();
 });
 
 test("S5 decay card Stay stage: Ctrl+[ returns to the choices, the band layer first", () => {
@@ -486,6 +522,7 @@ test("S12 Notebook Summary attaches proseField with no home note; Enter accepts,
   assert.equal(options.inputEl, modal.summaryInput);
   assert.equal(options.recall, null);
   assert.equal(options.sourcePath, null);
+  assert.deepEqual(options.subjects, [], "S12 declares no subject: a notebook is not a task");
   assert.equal(options.ownKeys, true);
   assert.equal(options.scope, modal.scope);
   assert.equal(modal.summaryInput.parent.contains(options.bandHost), true, "the band sits under the Summary field");

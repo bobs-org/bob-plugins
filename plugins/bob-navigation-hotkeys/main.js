@@ -24403,6 +24403,7 @@ function attachPickerLogRecall(picker, inputEl, kind, options = {}) {
       ownKeys: false,
       ...(Number.isInteger(opts.pinnedSlots) ? { pinnedSlots: opts.pinnedSlots } : {}),
       links: true,
+      subjects: () => pickerProseSubjects(picker),
       sourcePath: () => pickerProseSourcePath(picker),
       ...(picker.plugin ? { plugin: picker.plugin } : {}),
       app: picker.app,
@@ -24589,6 +24590,20 @@ function pickerProseSourcePath(picker) {
   }
 }
 
+// The Task Card's target task(s) are every prose stage's subjects (S7-S11,
+// T10/T11): `((` shows them disabled. They come from the same live target list
+// the stage's own write plan uses, so a prompt never offers to link (or name)
+// the task it is about to change. Never throws; a picker without targets
+// declares none.
+function pickerProseSubjects(picker) {
+  try {
+    if (!picker || typeof picker.getSchedulingWorkLogTargets !== "function") return [];
+    return proseTaskSubjects(picker.getSchedulingWorkLogTargets());
+  } catch (_error) {
+    return [];
+  }
+}
+
 // First offset where a `[[` may open in the scheduled stage: the end of the
 // typed date token plus the whitespace after it. +Infinity when the query
 // has no recognized date token (a preset filter, or an attached `3x`).
@@ -24658,6 +24673,7 @@ function attachPickerScheduledReasonLinks(picker) {
       density: "roomy",
       arrowKeys: true,
       ownKeys: false,
+      subjects: () => pickerProseSubjects(picker),
       sourcePath: () => pickerProseSourcePath(picker),
       minOffset: () => scheduledReasonLinkMinOffset(inputEl.value),
       app: picker.app,
@@ -28237,6 +28253,41 @@ function proseTaskGroupRuns(rows, limit) {
     return new Map();
   }
 }
+
+// Subjects for `((` (T10/T11): the task(s) a prompt writes to. Those rows are
+// shown but disabled ("The task this prompt is about"), because naming one
+// would change its line under the host's pending write. Every host builds its
+// list from the identities its own write plan already holds, so a task entry
+// is `{ path, line?, blockId? }` (an `id` or `existingId` field, or a trailing
+// `^id` on `rawLine`, supplies the block ID when `blockId` is absent). Entries
+// without a path, or with neither a line nor a block ID, are dropped;
+// duplicates collapse. Never throws.
+function proseTaskSubjects(tasks) {
+  try {
+    const out = [];
+    const seen = new Set();
+    for (const task of Array.isArray(tasks) ? tasks : []) {
+      if (!task || typeof task !== "object") continue;
+      const path = [task.path, task.notePath, task.sourcePath].find((value) => typeof value === "string" && value.trim());
+      if (!path) continue;
+      let blockId = [task.blockId, task.id, task.existingId].find((value) => typeof value === "string" && value);
+      if (!blockId && typeof task.rawLine === "string") blockId = getTrailingBlockId(task.rawLine) || "";
+      const entry = { path: String(path) };
+      if (Number.isInteger(task.line) && task.line >= 0) entry.line = task.line;
+      if (blockId) entry.blockId = String(blockId);
+      // A path alone identifies no task: bip matches by block ID, or by path
+      // plus line. Guessing a subject is worse than declaring none.
+      if (entry.line === undefined && entry.blockId === undefined) continue;
+      const key = `${entry.path}\u0000${entry.blockId || ""}\u0000${entry.line == null ? "" : entry.line}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(entry);
+    }
+    return out;
+  } catch (_error) {
+    return [];
+  }
+}
 // ---- src/189d-prose-task-band.js ----
 // Tasks-mode renderer for nav's proseField v2 (phase bob-cli-oz.3).
 //
@@ -30060,6 +30111,8 @@ class LaneReleaseSummaryModal extends Modal {
     this.sourcePath = options && typeof options.sourcePath === "string" && options.sourcePath
       ? options.sourcePath
       : null;
+    // The released tasks (`{ path, line, blockId? }`): `((` shows them disabled.
+    this.subjectTasks = options && Array.isArray(options.subjects) ? options.subjects : [];
     this.completed = false;
     this.inputEl = null;
     this.previewEl = null;
@@ -30114,6 +30167,7 @@ class LaneReleaseSummaryModal extends Modal {
           ownKeys: true,
           scope: this.scope,
           links: true,
+          subjects: () => proseTaskSubjects(this.subjectTasks),
           sourcePath: () => this.sourcePath,
         });
       } catch (_error) { this.logRecall = null; }
@@ -30315,6 +30369,7 @@ class FreshnessRefreshSummaryModal extends Modal {
           kind: "rotten",
           ownKeys: true,
           links: true,
+          subjects: () => this.batchKeepSubjects(),
           sourcePath: () => this.batchKeepSourcePath(),
         });
       }
@@ -30362,6 +30417,25 @@ class FreshnessRefreshSummaryModal extends Modal {
     const targets = Array.isArray(this.options.keepTargets) ? this.options.keepTargets : [];
     return proseSharedSourcePath(targets.map((target) =>
       (target && target.entry && target.entry.path) || (target && target.group && target.group.path) || null));
+  }
+
+  // Every kept entry is a subject: `((` shows each disabled. A target's note
+  // is its group's path (linked notes) or the gesture's own note.
+  batchKeepSubjects() {
+    const fallback = typeof this.options.sourcePath === "string" ? this.options.sourcePath : "";
+    const targets = Array.isArray(this.options.keepTargets) ? this.options.keepTargets : [];
+    return proseTaskSubjects(targets.map((target) => {
+      const entry = (target && target.entry) || {};
+      const inner = (target && target.target) || {};
+      return {
+        path: (target && target.group && target.group.path) || entry.path || fallback,
+        // Queue entries count lines from 1; the guard's lines count from 0.
+        line: Number.isInteger(inner.line)
+          ? inner.line
+          : Number.isInteger(entry.line) && entry.line >= 1 ? entry.line - 1 : undefined,
+        rawLine: (target && target.raw) || entry.originalMarkdown,
+      };
+    }));
   }
 
   renderBatchPreview() {
@@ -30979,6 +31053,24 @@ function rottenKeepSourcePath(options) {
   return entry && typeof entry.path === "string" && entry.path ? entry.path : null;
 }
 
+// The task(s) a Keep / Stay reason is about (T10/T11): `((` shows them
+// disabled. Hosts pass `subjects` explicitly (batch keep) or the single keep's
+// `line` + `raw` task line next to its note path.
+function rottenKeepSubjects(options) {
+  const opts = options || {};
+  if (Array.isArray(opts.subjects)) return proseTaskSubjects(opts.subjects);
+  const entry = opts.entry && typeof opts.entry === "object" ? opts.entry : {};
+  // Queue entries count lines from 1; the guard's lines count from 0.
+  const line = Number.isInteger(opts.line)
+    ? opts.line
+    : Number.isInteger(entry.line) && entry.line >= 1 ? entry.line - 1 : undefined;
+  return proseTaskSubjects([{
+    path: rottenKeepSourcePath(opts),
+    line,
+    rawLine: typeof opts.raw === "string" ? opts.raw : entry.originalMarkdown,
+  }]);
+}
+
 // Shared by the refresh modal and the decay card. The stage owns only its
 // subtree and input; its host owns closing, committing, and returning to choices.
 class RottenKeepReasonStage {
@@ -31008,6 +31100,7 @@ class RottenKeepReasonStage {
         kind: "rotten",
         ownKeys: true,
         links: true,
+        subjects: () => rottenKeepSubjects(this.options),
         sourcePath: () => rottenKeepSourcePath(this.options),
       });
     }
@@ -31132,6 +31225,9 @@ class TaskLinkLanePromptModal extends Modal {
         Object.freeze({
           displayText: String(task.displayText || "(untitled task)"),
           path: String(task.path || "Current note"),
+          line: Number.isInteger(task.line) ? task.line : undefined,
+          blockId: typeof task.blockId === "string" && task.blockId ? task.blockId : undefined,
+          rawLine: typeof task.rawLine === "string" ? task.rawLine : undefined,
         }),
       );
   }
@@ -31140,6 +31236,11 @@ class TaskLinkLanePromptModal extends Modal {
   // share one; mixed notes (or none) leave same-note links unresolved.
   taskLinkLaneSourcePath() {
     return proseSharedSourcePath(this.options.sourcePaths);
+  }
+
+  // Every moved task is the prompt's subject: `((` shows each one disabled.
+  taskLinkLaneSubjects() {
+    return proseTaskSubjects(this.options.tasks);
   }
 
   workLogClockNow() {
@@ -31277,6 +31378,7 @@ class TaskLinkLanePromptModal extends Modal {
           ownKeys: true,
           scope: this.scope,
           links: true,
+          subjects: () => this.taskLinkLaneSubjects(),
           sourcePath: () => this.taskLinkLaneSourcePath(),
         });
       } catch (_error) { this.logRecall = null; }
@@ -36789,6 +36891,20 @@ const SUCCESSOR_VERDICT_FOOTER_APPLY = [{ keys: ["↵"], label: "apply" }];
 const SUCCESSOR_VERDICT_FOOTER_PULL_IN = [{ keys: ["↵"], label: "pull in" }];
 const SUCCESSOR_VERDICT_FOOTER_NONE = [{ keys: ["Esc"], label: "none" }];
 
+// The row being cancelled is the inline reason's subject (T10/T11): `((` shows
+// it disabled. Successor task context carries a 1-based line; the guard's
+// lines are 0-based. A row without task context has no stable identity, so it
+// declares no subject rather than guessing one.
+function successorReasonSubjects(row) {
+  try {
+    const task = row && row.task;
+    if (!task || typeof task.path !== "string" || !Number.isInteger(task.line) || task.line < 1) return [];
+    return proseTaskSubjects([{ path: task.path, line: task.line - 1, rawLine: task.preimage }]);
+  } catch (_error) {
+    return [];
+  }
+}
+
 function successorVerdictFooterHints(modal) {
   try {
     const hints = SUCCESSOR_VERDICT_FOOTER_BASE.slice();
@@ -37185,6 +37301,7 @@ function successorRenderReasonEditor(modal, container, row, draft) {
           density: "dense",
           ownKeys: true,
           links: true,
+          subjects: () => successorReasonSubjects(row),
           sourcePath: () => (row && row.notePath ? String(row.notePath) : null),
         });
       }
@@ -47822,6 +47939,66 @@ function getScheduleReviewHints(options = {}) {
 // when the reason is still unknown or any explicit Next/Pending target
 // qualifies for a Work Log. Inline/skip reasons with no Work target dispatch
 // immediately.
+// ---- src/221-prompt-sibling-edits.js ----
+// Prompt-surviving snapshots (T11, phase bob-cli-oz.4).
+//
+// A prompt's `((` can name an ID-less sibling task while the host prompt is
+// still open over its own pending write. Naming is one in-place edit of one
+// other line (it appends ` ^id`, plus the freshness stamp) and never changes
+// the line count. A host that snapshotted its note before the prompt must not
+// read that as "the note changed": it adopts the live text when the ONLY
+// differences are on lines it does not write. Everything else still refuses.
+//
+// Pure and never throws. A line-count change, or a change on any protected
+// (target) line, returns null, so the host keeps its existing stale refusal.
+
+function navAdoptSiblingEdits(before, live, protectedLines) {
+  try {
+    if (typeof before !== "string" || typeof live !== "string") return null;
+    if (live === before) return before;
+    const left = before.split("\n");
+    const right = live.split("\n");
+    if (left.length !== right.length) return null;
+    const guarded = new Set(Array.isArray(protectedLines) ? protectedLines : []);
+    for (let index = 0; index < left.length; index += 1) {
+      if (left[index] !== right[index] && guarded.has(index)) return null;
+    }
+    return live;
+  } catch (_error) {
+    return null;
+  }
+}
+
+// Cursor hosts: the open editor's text after the prompt, or `content` itself
+// when the buffer changed on a target line (the host's own check then refuses).
+function navContentAfterPrompt(cm, content, protectedLines) {
+  try {
+    if (!cm || typeof cm.getValue !== "function") return content;
+    const adopted = navAdoptSiblingEdits(content, String(cm.getValue() || ""), protectedLines);
+    return adopted === null ? content : adopted;
+  } catch (_error) {
+    return content;
+  }
+}
+
+// Link-session hosts: each group's live note text after the prompt. `readNote`
+// is the host's own reader (`readLinkPickerNoteContent`); a group whose note
+// changed on a target line (or cannot be read) is returned unchanged, so the
+// host's preimage check still refuses it.
+async function navGroupsAfterPrompt(groups, readNote) {
+  const out = [];
+  for (const group of Array.isArray(groups) ? groups : []) {
+    try {
+      const live = await readNote(group);
+      const targets = group && group.session && Array.isArray(group.session.targets) ? group.session.targets : [];
+      const adopted = navAdoptSiblingEdits(group.content, live, targets.map((target) => target.line));
+      out.push(adopted === null || adopted === group.content ? group : Object.freeze({ ...group, content: adopted }));
+    } catch (_error) {
+      out.push(group);
+    }
+  }
+  return out;
+}
 // ---- src/230-schedule-review.js ----
 function planScheduleReview(options = {}) {
   const dateItem = options.dateItem || null;
@@ -89190,6 +89367,17 @@ class BobNavigationHotkeysTransclusionLinkMixin {
   // the live open editor first, then any open buffer, then the vault. Null
   // when the note cannot be read (including ambiguous open buffers, mirroring
   // readDeferredPomodoroSnapshot).
+  // Task Card link-session groups for a commit. The picker snapshots each
+  // linked note when it opens; a sibling named by a prose stage's `((` while
+  // the picker waits changes that note without touching any target line (T11),
+  // so each group adopts the live text unless a target line itself changed.
+  async linkSessionGroups(resolved) {
+    return await navGroupsAfterPrompt(
+      groupLinkPickerTargetsByNote(resolved),
+      (group) => this.readLinkPickerNoteContent(group.path, group.file),
+    );
+  }
+
   async readLinkPickerNoteContent(path, file) {
     const normalized = normalizeVaultRelativePath(path);
     const editor = this.getOpenMarkdownEditorForPath(normalized);
@@ -89510,7 +89698,7 @@ class BobNavigationHotkeysTransclusionLinkMixin {
     const baseDate = picker.valueBaseDate instanceof Date
       ? getLocalDateStart(picker.valueBaseDate)
       : getLocalDateStart(new Date());
-    const groups = groupLinkPickerTargetsByNote(linkSession.resolved);
+    const groups = await this.linkSessionGroups(linkSession.resolved);
     const planned = [];
     for (const group of groups) {
       let recoveryByLine = null;
@@ -89577,7 +89765,7 @@ class BobNavigationHotkeysTransclusionLinkMixin {
     const baseDate = picker.valueBaseDate instanceof Date
       ? picker.valueBaseDate
       : getLocalDateStart(new Date());
-    const groups = groupLinkPickerTargetsByNote(linkSession.resolved);
+    const groups = await this.linkSessionGroups(linkSession.resolved);
     if (groups.length === 0) {
       new Notice("Could not update task; no tasks were updated");
       return false;
@@ -89665,7 +89853,7 @@ class BobNavigationHotkeysTransclusionLinkMixin {
     const random = typeof picker.priorityRandom === "function"
       ? picker.priorityRandom
       : Math.random;
-    const groups = groupLinkPickerTargetsByNote(linkSession.resolved);
+    const groups = await this.linkSessionGroups(linkSession.resolved);
     if (groups.length === 0) {
       new Notice("Could not update priority: invalid configured level");
       return false;
@@ -90214,7 +90402,10 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
         } else {
           resolve({ cancelled: false, summary: String(result || "") });
         }
-      }, { sourcePath: prompt && prompt.sourcePath });
+      }, {
+        sourcePath: prompt && prompt.sourcePath,
+        subjects: prompt && prompt.subjects,
+      });
       try {
         modal.open();
       } catch (error) {
@@ -90421,7 +90612,7 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
       new Notice("Could not update task; no tasks were updated");
       return false;
     }
-    const groups = groupLinkPickerTargetsByNote(linkSession.resolved);
+    const groups = await this.linkSessionGroups(linkSession.resolved);
     const planned = [];
     for (const group of groups) {
       const source = splitMarkdownContent(group.content);
@@ -90549,7 +90740,14 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
         (entry) => entry.fromStatus === "/",
       );
       if (needsReason) {
-        const answer = await this.requestLaneReleaseSummary(options, { sourcePath: filePath });
+        const answer = await this.requestLaneReleaseSummary(options, {
+          sourcePath: filePath,
+          subjects: probe.released.map((entry) => ({
+            path: filePath,
+            line: entry.line,
+            blockId: entry.blockId,
+          })),
+        });
         if (answer.cancelled) {
           return false;
         }
@@ -90581,6 +90779,8 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
     if (!laneRouteGate || laneRouteGate.kind === "cancel") {
       return false;
     }
+    // A sibling named by the prompt's `((` is not a stale note (T11).
+    content = navContentAfterPrompt(cm, content, session.targets.map((target) => target.line));
     // Work Log clock: sample once after awaited input and routing settle,
     // before planning writes. Explicit stampText wins for tests; otherwise
     // format the injected now or the live clock. One stamp per gesture.
@@ -91011,7 +91211,7 @@ class BobNavigationHotkeysLaneReviewMixin {
       return false;
     }
     const laneBudgets = readLaneBudgets(this.app);
-    const groups = groupLinkPickerTargetsByNote(resolution.targets);
+    let groups = groupLinkPickerTargetsByNote(resolution.targets);
     if (groups.length === 0) {
       new Notice("Could not update task; no tasks were updated");
       return false;
@@ -91033,6 +91233,7 @@ class BobNavigationHotkeysLaneReviewMixin {
     // A release with an In Progress target asks once for an optional summary.
     let needsReason = false;
     const releasedPaths = [];
+    const releasedSubjects = [];
     for (const group of groups) {
       const probe = planTaskLaneBatch(group.content, group.session, {});
       if (
@@ -91042,16 +91243,22 @@ class BobNavigationHotkeysLaneReviewMixin {
       ) {
         needsReason = true;
         releasedPaths.push(group.path);
+        for (const entry of probe.released) {
+          releasedSubjects.push({ path: group.path, line: entry.line, blockId: entry.blockId });
+        }
       }
     }
     if (needsReason) {
       const answer = await this.requestLaneReleaseSummary(options, {
         sourcePath: proseSharedSourcePath(releasedPaths),
+        subjects: releasedSubjects,
       });
       if (answer.cancelled) {
         return false;
       }
       summary = answer.summary;
+      // A sibling named by the prompt's `((` is not a stale note (T11).
+      groups = await navGroupsAfterPrompt(groups, (group) => this.readLinkPickerNoteContent(group.path, group.file));
     }
     // Work Log clock: sample once after awaited input settles, before
     // planning writes. Explicit stampText wins for tests; one stamp per
@@ -91708,6 +91915,7 @@ class BobNavigationHotkeysLaneReviewMixin {
         keep: item.keep,
         rung: item.keep.rung,
         history: item.history,
+        target: item.target,
       })),
       laneTargets,
     });
@@ -91730,6 +91938,7 @@ class BobNavigationHotkeysLaneReviewMixin {
           ...(item.kind === "lane" && !item.rung && !(item.keep && item.keep.rung) ? { lane: "next" } : {}),
           advance: options.advance === true,
           sourcePath: filePath,
+          line: item.target && item.target.line,
         },
       });
       if (result.failed) {
@@ -91759,6 +91968,11 @@ class BobNavigationHotkeysLaneReviewMixin {
       if (this.laneReleaseDateText() !== localDayBefore) {
         new Notice("Day changed while the prompt was open; nothing was written");
         return false;
+      }
+      // A sibling named by the prompt's `((` is not a stale note (T11). A
+      // supplied reason never opened a prompt, so nothing could have named one.
+      if (typeof options.keepReason !== "string") {
+        content = navContentAfterPrompt(cm, content, keepTargets.map((target) => target.line));
       }
     }
     if (
@@ -91936,7 +92150,7 @@ class BobNavigationHotkeysTaskLinkLaneMixin {
       ) {
         return fail("stale", "A linked note changed; no tasks were updated");
       }
-      const groups = groupLinkPickerTargetsByNote(resolution.targets);
+      let groups = groupLinkPickerTargetsByNote(resolution.targets);
       if (groups.length === 0) {
         return fail("refused", "Could not update task; no tasks were updated");
       }
@@ -91976,6 +92190,8 @@ class BobNavigationHotkeysTaskLinkLaneMixin {
             return Object.freeze({ ok: false, reason: "cancelled" });
           }
           summary = answer.summary;
+          // A sibling named by the prompt's `((` is not a stale note (T11).
+          groups = await navGroupsAfterPrompt(groups, (group) => this.readLinkPickerNoteContent(group.path, group.file));
         }
       }
       // Work Log clock: sample once after awaited input settles, before
@@ -92092,6 +92308,9 @@ class BobNavigationHotkeysTaskLinkLaneMixin {
         displayText:
           target.displayText || cleanTaskDisplayText(target.rawLine || ""),
         path: target.path || "Current note",
+        line: target.line,
+        blockId: target.blockId,
+        rawLine: target.rawLine,
       }),
     );
     return await new Promise((resolve) => {
@@ -92572,6 +92791,7 @@ class BobNavigationHotkeysFreshnessDecayMixin {
           dateText: cardCtx.dateText,
           advance: cardCtx.advance,
           sourcePath: cardCtx.filePath,
+          line: cardCtx.line,
         },
         onChoose: (action) => {
           this.activeFreshnessDecayCard = null;
@@ -93236,6 +93456,8 @@ async function refreshTaskFreshnessOnLinks(cm, cursor, content, options = {}) {
         keep: item.keep,
         rung: item.keep.rung,
         history: item.history,
+        target: item.target,
+        group: item.group,
       })),
       laneTargets,
     });
@@ -93256,6 +93478,7 @@ async function refreshTaskFreshnessOnLinks(cm, cursor, content, options = {}) {
       keepReason = result.keepReason;
     }
     const promptShown = promptPlan.kind !== "none";
+    const liveGroups = new Map();
     if (promptShown) {
       if (this.laneReleaseDateText() !== localDayBefore) {
         new Notice("Day changed while the prompt was open; nothing was written");
@@ -93269,7 +93492,15 @@ async function refreshTaskFreshnessOnLinks(cm, cursor, content, options = {}) {
         new Notice("Current note changed; no tasks were updated");
         return false;
       }
-      for (const { group } of linkResolved) {
+      // A sibling named by the prompt's `((` is not a stale note (T11): a
+      // linked note whose only changes are off the kept lines is adopted.
+      if (typeof options.keepReason !== "string") {
+        const readNote = (group) => this.readLinkPickerNoteContent(group.path, group.file);
+        const adopted = await navGroupsAfterPrompt(linkResolved.map((item) => item.group), readNote);
+        linkResolved.forEach((item, index) => liveGroups.set(item.group, adopted[index]));
+      }
+      for (const { group: original } of linkResolved) {
+        const group = liveGroups.get(original) || original;
         const live = await this.readLinkPickerNoteContent(
           group.path,
           group.file,
@@ -93285,12 +93516,13 @@ async function refreshTaskFreshnessOnLinks(cm, cursor, content, options = {}) {
     const stampedAll = [];
     let workLogWrittenCount = 0;
     let rottenLogWrittenCount = 0;
-    for (const { group, targets } of stampTargetsByGroup) {
+    for (const { group: resolvedGroup, targets } of stampTargetsByGroup) {
+      const group = liveGroups.get(resolvedGroup) || resolvedGroup;
       const groupRottenTargets = rottenTargets
-        .filter((item) => item.group === group)
+        .filter((item) => item.group === resolvedGroup)
         .map((item) => ({ line: item.target.line, rung: item.keep.rung }));
       const groupLaneTargets = laneTargets
-        .filter((item) => item.group === group)
+        .filter((item) => item.group === resolvedGroup)
         .map((item) => ({ line: item.target.line, rung: item.keep.rung }));
       const plan = planFreshStampBatchWithLogs(
         group.content,
@@ -98456,7 +98688,7 @@ class BobNavigationHotkeysDecayCancelMixin {
         return false;
       }
       const laneBudgets = readLaneBudgets(this.app);
-      const groups = groupLinkPickerTargetsByNote(resolved);
+      const groups = await this.linkSessionGroups(resolved);
       const planned = [];
       for (const group of groups) {
         const plan = planTaskLaneBatch(group.content, group.session, {
@@ -101150,7 +101382,7 @@ class BobNavigationHotkeysCancelPropertyMixin {
       new Notice("Could not update task; no tasks were updated");
       return false;
     }
-    const groups = groupLinkPickerTargetsByNote(resolved);
+    const groups = await this.linkSessionGroups(resolved);
     if (groups.length === 0) {
       new Notice("Could not update task; no tasks were updated");
       return false;
@@ -103100,7 +103332,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
     const dateText = formatBulletPropertyDate(baseDate);
     const workLogNow = options.now instanceof Date ? options.now : new Date();
     const workLogStamp = formatWorkLogStamp(workLogNow);
-    const groups = groupLinkPickerTargetsByNote(linkSession.resolved);
+    const groups = await this.linkSessionGroups(linkSession.resolved);
     if (groups.length === 0) {
       new Notice("Could not update task; no tasks were updated");
       return false;
@@ -129438,6 +129670,8 @@ class NotebookCreateModal extends Modal {
 
   // The Summary is prose (S12): `[[` completes through nav's proseField.
   // A notebook does not exist yet, so there is no home note for `[[#…`.
+  // `((` completes too, and the prompt has no subject task (S12 declares
+  // none): it writes a new notebook, never a task line.
   attachSummaryLinks() {
     try {
       const api = getNavigationProseFieldApi(this.app) ||
@@ -129453,6 +129687,7 @@ class NotebookCreateModal extends Modal {
         bandHost,
         recall: null,
         sourcePath: null,
+        subjects: [],
         density: "roomy",
         arrowKeys: true,
         ownKeys: true,
@@ -135654,6 +135889,13 @@ try {
       proseTaskCrumb,
       proseTaskLeftoverMessage,
       proseTaskGroupRuns,
+      proseTaskSubjects,
+      rottenKeepSubjects,
+      successorReasonSubjects,
+      pickerProseSubjects,
+      navAdoptSiblingEdits,
+      navContentAfterPrompt,
+      navGroupsAfterPrompt,
       PROSE_TASK_BLOCK_ID_RE,
       PROSE_LINK_SLOTS_ROOMY,
       PROSE_LINK_SLOTS_DENSE,

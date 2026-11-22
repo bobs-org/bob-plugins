@@ -13907,6 +13907,32 @@ class WorkSummaryPromptModal extends Modal {
     this.logRecall = null;
   }
 
+  // The one task this prompt writes to: the unlinked task, or the opened task
+  // of a task-link-open. `((` shows it but never inserts it, because naming it
+  // would change the line under this prompt's pending write.
+  proseSubjects() {
+    try {
+      const source = this.source || {};
+      if (source.kind === TASK_LINK_OPEN_SOURCE_KIND) {
+        const target = source.target || {};
+        const blockId = source.link && source.link.oldId ? String(source.link.oldId) : "";
+        if (!target.path) return [];
+        const entry = { path: String(target.path) };
+        if (Number.isInteger(target.line)) entry.line = target.line;
+        if (blockId) entry.blockId = blockId;
+        return [entry];
+      }
+      const task = source.task || {};
+      if (!source.sourcePath) return [];
+      const entry = { path: String(source.sourcePath) };
+      if (Number.isInteger(source.line)) entry.line = source.line;
+      if (task.existingId) entry.blockId = String(task.existingId);
+      return [entry];
+    } catch (_error) {
+      return [];
+    }
+  }
+
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
@@ -13993,6 +14019,8 @@ class WorkSummaryPromptModal extends Modal {
           ownKeys: true,
           scope: this.scope,
           links: true,
+          // The prompt's own task is shown but disabled in `((` (S1 subjects).
+          subjects: () => this.proseSubjects(),
           sourcePath: () => {
             try {
               if (this.source && this.source.kind === TASK_LINK_OPEN_SOURCE_KIND) {
@@ -15635,7 +15663,7 @@ class BlockIdPromptPomodoroLinksMixin {
         link,
         contextPath: target.path,
         task: { displayText: target.displayText },
-        target: { path: target.path, rawLine: target.rawLine, status: target.status },
+        target: { path: target.path, line: target.line, rawLine: target.rawLine, status: target.status },
       };
       if (target.status === "/") {
         promptSource = linkSource;

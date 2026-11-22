@@ -57,7 +57,9 @@ field that attaches `api.proseField` with its `sourcePath`; use `literal` for id
 and filters, `mixed` for shared controls with both kinds of stages, and `none` for
 non-text input types. Keep the S1–S15 allowlist and creation/wiring paths in
 `scripts/fixtures/prose-fields.json`; `npm test` checks that every control is declared
-and each allowlisted surface remains wired.
+and each allowlisted surface remains wired. Each surface also declares `subjects`:
+`wired` surfaces pass the task or tasks they write to as a `subjects` option, so `((`
+shows those rows disabled, and `none` surfaces write no task.
 
 Obsidian runs a modal scope's handlers in registration order, and `Modal` binds Escape
 to `onEscapeKey` first, so an input listener never sees a real Escape. A host that

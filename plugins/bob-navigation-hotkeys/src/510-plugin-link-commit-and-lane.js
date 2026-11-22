@@ -426,7 +426,10 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
         } else {
           resolve({ cancelled: false, summary: String(result || "") });
         }
-      }, { sourcePath: prompt && prompt.sourcePath });
+      }, {
+        sourcePath: prompt && prompt.sourcePath,
+        subjects: prompt && prompt.subjects,
+      });
       try {
         modal.open();
       } catch (error) {
@@ -633,7 +636,7 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
       new Notice("Could not update task; no tasks were updated");
       return false;
     }
-    const groups = groupLinkPickerTargetsByNote(linkSession.resolved);
+    const groups = await this.linkSessionGroups(linkSession.resolved);
     const planned = [];
     for (const group of groups) {
       const source = splitMarkdownContent(group.content);
@@ -761,7 +764,14 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
         (entry) => entry.fromStatus === "/",
       );
       if (needsReason) {
-        const answer = await this.requestLaneReleaseSummary(options, { sourcePath: filePath });
+        const answer = await this.requestLaneReleaseSummary(options, {
+          sourcePath: filePath,
+          subjects: probe.released.map((entry) => ({
+            path: filePath,
+            line: entry.line,
+            blockId: entry.blockId,
+          })),
+        });
         if (answer.cancelled) {
           return false;
         }
@@ -793,6 +803,8 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
     if (!laneRouteGate || laneRouteGate.kind === "cancel") {
       return false;
     }
+    // A sibling named by the prompt's `((` is not a stale note (T11).
+    content = navContentAfterPrompt(cm, content, session.targets.map((target) => target.line));
     // Work Log clock: sample once after awaited input and routing settle,
     // before planning writes. Explicit stampText wins for tests; otherwise
     // format the injected now or the live clock. One stamp per gesture.

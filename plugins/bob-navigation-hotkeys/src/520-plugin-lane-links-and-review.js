@@ -38,7 +38,7 @@ class BobNavigationHotkeysLaneReviewMixin {
       return false;
     }
     const laneBudgets = readLaneBudgets(this.app);
-    const groups = groupLinkPickerTargetsByNote(resolution.targets);
+    let groups = groupLinkPickerTargetsByNote(resolution.targets);
     if (groups.length === 0) {
       new Notice("Could not update task; no tasks were updated");
       return false;
@@ -60,6 +60,7 @@ class BobNavigationHotkeysLaneReviewMixin {
     // A release with an In Progress target asks once for an optional summary.
     let needsReason = false;
     const releasedPaths = [];
+    const releasedSubjects = [];
     for (const group of groups) {
       const probe = planTaskLaneBatch(group.content, group.session, {});
       if (
@@ -69,16 +70,22 @@ class BobNavigationHotkeysLaneReviewMixin {
       ) {
         needsReason = true;
         releasedPaths.push(group.path);
+        for (const entry of probe.released) {
+          releasedSubjects.push({ path: group.path, line: entry.line, blockId: entry.blockId });
+        }
       }
     }
     if (needsReason) {
       const answer = await this.requestLaneReleaseSummary(options, {
         sourcePath: proseSharedSourcePath(releasedPaths),
+        subjects: releasedSubjects,
       });
       if (answer.cancelled) {
         return false;
       }
       summary = answer.summary;
+      // A sibling named by the prompt's `((` is not a stale note (T11).
+      groups = await navGroupsAfterPrompt(groups, (group) => this.readLinkPickerNoteContent(group.path, group.file));
     }
     // Work Log clock: sample once after awaited input settles, before
     // planning writes. Explicit stampText wins for tests; one stamp per
@@ -735,6 +742,7 @@ class BobNavigationHotkeysLaneReviewMixin {
         keep: item.keep,
         rung: item.keep.rung,
         history: item.history,
+        target: item.target,
       })),
       laneTargets,
     });
@@ -757,6 +765,7 @@ class BobNavigationHotkeysLaneReviewMixin {
           ...(item.kind === "lane" && !item.rung && !(item.keep && item.keep.rung) ? { lane: "next" } : {}),
           advance: options.advance === true,
           sourcePath: filePath,
+          line: item.target && item.target.line,
         },
       });
       if (result.failed) {
@@ -786,6 +795,11 @@ class BobNavigationHotkeysLaneReviewMixin {
       if (this.laneReleaseDateText() !== localDayBefore) {
         new Notice("Day changed while the prompt was open; nothing was written");
         return false;
+      }
+      // A sibling named by the prompt's `((` is not a stale note (T11). A
+      // supplied reason never opened a prompt, so nothing could have named one.
+      if (typeof options.keepReason !== "string") {
+        content = navContentAfterPrompt(cm, content, keepTargets.map((target) => target.line));
       }
     }
     if (

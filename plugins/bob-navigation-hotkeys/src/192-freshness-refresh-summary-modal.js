@@ -92,6 +92,7 @@ class FreshnessRefreshSummaryModal extends Modal {
           kind: "rotten",
           ownKeys: true,
           links: true,
+          subjects: () => this.batchKeepSubjects(),
           sourcePath: () => this.batchKeepSourcePath(),
         });
       }
@@ -139,6 +140,25 @@ class FreshnessRefreshSummaryModal extends Modal {
     const targets = Array.isArray(this.options.keepTargets) ? this.options.keepTargets : [];
     return proseSharedSourcePath(targets.map((target) =>
       (target && target.entry && target.entry.path) || (target && target.group && target.group.path) || null));
+  }
+
+  // Every kept entry is a subject: `((` shows each disabled. A target's note
+  // is its group's path (linked notes) or the gesture's own note.
+  batchKeepSubjects() {
+    const fallback = typeof this.options.sourcePath === "string" ? this.options.sourcePath : "";
+    const targets = Array.isArray(this.options.keepTargets) ? this.options.keepTargets : [];
+    return proseTaskSubjects(targets.map((target) => {
+      const entry = (target && target.entry) || {};
+      const inner = (target && target.target) || {};
+      return {
+        path: (target && target.group && target.group.path) || entry.path || fallback,
+        // Queue entries count lines from 1; the guard's lines count from 0.
+        line: Number.isInteger(inner.line)
+          ? inner.line
+          : Number.isInteger(entry.line) && entry.line >= 1 ? entry.line - 1 : undefined,
+        rawLine: (target && target.raw) || entry.originalMarkdown,
+      };
+    }));
   }
 
   renderBatchPreview() {

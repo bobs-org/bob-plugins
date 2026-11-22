@@ -56,7 +56,8 @@ The Summary is prose: typing `[[` opens the LINK band under it (see
 [Wikilink completion in prompts](bob-navigation-hotkeys.md#wikilink-completion-in-prompts)).
 While the band is open, Enter or Tab inserts the link and never creates, and
 Esc or Ctrl+[ closes only the band. The ID and Title stay literal. With the
-band closed, Esc or Ctrl+[ closes the modal without writing.
+band closed, Esc or Ctrl+[ closes the modal without writing. `((` completes
+tasks there too; a new notebook has no subject task, so no row is disabled.
 
 Enter or **Create** runs `bob notebooks create` through the Bob Ledger Tools
 `api.notebooks` v1 namespace (desktop only). Bob writes the new note and every

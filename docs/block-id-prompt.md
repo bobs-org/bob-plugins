@@ -12,7 +12,7 @@ Block ID Prompt helps create and manage stable block identifiers and task links 
 | --- | --- |
 | Name | Block ID Prompt |
 | ID | `block-id-prompt` |
-| Version | 1.43.0 |
+| Version | 1.44.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
 | Description | Prompt for custom block IDs and complete wiki block links to open tasks, with a plan-budget suffix. Ctrl+Shift+Enter on a requirement line or carried stub refuses without linking or unlinking. Typing (( opens the Task Wikilink Picker to insert a [[note#^id]] link to any vault task. Ctrl+Shift+Enter refuses Depends-On ⛓️ **DEPENDS ON:** dependency lines. On inbox notes, a Ctrl+Shift+Enter link asks where the task goes first, and Link to today then suggests the destination's type; an unlink asks right before writing, then moves it with the toggle applied (nav inboxRoute v1). Unlinking an In Progress task with no live link left today offers configured starts-after successors through task-status-cycler api v4. Ctrl+Shift+Enter asks which of today's Pomodoros to link into (↵ = suggested, else current/next, type to filter or name a new one). Project Schedule comes from the ^prj task; a future-scheduled ^prj link is refused only when its date is the sole remaining reason, dependency reasons are reported first, and a direct link raises a Ready ^prj to Next. A tagged #prj_is_blocked ^prj is refused as blocked by its parent project without raising prerequisites. Ctrl+Shift+Enter refuses LINKS with the relation notice and LINKED FROM with the generated-line notice; Pomodoro cleanup skips both. Link to today also offers recent task types with component swatches and near-duplicate hints; Ctrl+D hides or restores Recent suggestions only. The block ID prompt also suggests an ID for a plain note bullet (a notebook note), ignoring its [created::] stamp. |
@@ -180,6 +180,15 @@ task. Success inserts the link, shows `Added ^id to note.md`, and closes; failur
 keeps NAME open with the reason. Blur cancels naming without writing, and undo
 never removes an added ID — cancelling the prompt afterwards keeps it, as in the
 editor.
+
+Every task-bearing prompt declares its **subjects**, the task or tasks it is
+about to write: the Unlink and opened-task Work summary, Move to Next, Release
+task, Keep and decay Stay reasons, the successor cancel row, and every Task Card
+reason stage. Those rows show `this prompt` and never insert or get named; the
+Notebook Summary declares none. Naming a different task in a subject's own note
+while a prompt is open never makes the host's write stale: naming is one in-place
+line edit, and a host adopts the live note when only lines it does not write
+changed. An edit to the subject's own line still refuses.
 
 ## Task Link selection
 

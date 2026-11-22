@@ -66,6 +66,7 @@ function row(key, index, options = {}) {
     selectable: options.selectable !== false,
     ...(options.mutedReason ? { mutedReason: options.mutedReason } : {}),
     ...(options.close ? { close: options.close } : {}),
+    ...(options.task ? { task: options.task } : {}),
   };
 }
 
@@ -293,6 +294,7 @@ test("S6 reason field opts into links and keeps its draft and band across re-ren
   assert.equal(options.kind, "cancel");
   assert.equal(options.density, "dense");
   assert.equal(options.sourcePath(), "projects/project-1.md", "links resolve against the offer's note");
+  assert.deepEqual(options.subjects(), [], "a row without task context has no identity, so no subject is guessed");
   assert.equal(handles.length, 1);
 
   const first = findAll(modal.resultsEl, "bob-successor-reason-input")[0];
@@ -693,4 +695,99 @@ test("Ctrl+J is inert in the reason editor and Esc closes a pin-only card to nul
   pressKey(modal, "Escape");
   assert.equal(modal.pickerOpen, false, "a pin alone never arms Esc");
   assert.equal(await pending, null, "the Esc that closes the card discards the pin");
+});
+
+test("S6 reason field declares the cancelled row as its subject (1-based task line to 0-based guard line)", async () => {
+  const plugin = makePlugin({ now: 5000 });
+  const model = verdictModel(1, { closeOptions: { unblocks: 0 } });
+  model.groups[0].rows[0] = row("projects/project-1.md#^cut-me", 1, {
+    notePath: "projects/project-1.md",
+    close: closeDescriptor({ unblocks: 0 }),
+    task: {
+      path: "projects/project-1.md",
+      line: 5,
+      text: "- [ ] #task Cut me ^cut-me",
+      displayText: "Cut me",
+      status: " ",
+      preimage: "- [ ] #task Cut me ^cut-me",
+    },
+  });
+  const { pending, modal } = await openPicker(plugin, model);
+  pressVerdict(modal, true);
+  const options = plugin.recallState.attached.at(-1);
+  assert.equal(options.density, "dense");
+  assert.deepEqual(options.subjects(), [{ path: "projects/project-1.md", line: 4, blockId: "cut-me" }],
+    "the row being cancelled is shown but disabled in the reason's `((`");
+  assert.deepEqual(helpers.successorReasonSubjects(null), []);
+  assert.deepEqual(helpers.successorReasonSubjects({ task: { path: "a.md", line: 0, preimage: "x" } }), [],
+    "a malformed line declares no subject");
+  modal.allowCloseWithoutArm = true;
+  modal.close();
+  assert.equal(await pending, null);
+});
+
+// --- S6 NAME stage inside the dense inline reason (phase bob-cli-oz.4) -----
+// The reason field commits on Enter (after a 350 ms guard) and on blur. NAME
+// never moves focus, so it can never trigger that blur commit; Enter in NAME
+// belongs to the band (never the host's commit); and a real blur while NAME is
+// open cancels naming without writing the vault, then the host's own blur
+// commit stores the byte-identical draft.
+const { createSiblingNamer } = require("./prompt-sibling-naming-helpers.cjs");
+
+test("S6 dense reason: NAME owns Enter, never blurs, and a real blur cancels naming without a write", async () => {
+  const plugin = makePlugin({ now: 5000 });
+  const model = verdictModel(1, { closeOptions: { unblocks: 0 } });
+  model.groups[0].rows[0] = row("projects/project-1.md#^cut-me", 1, {
+    notePath: "projects/project-1.md",
+    close: closeDescriptor({ unblocks: 0 }),
+    task: {
+      path: "projects/project-1.md",
+      line: 1,
+      text: "- [ ] #task Cut me ^cut-me",
+      displayText: "Cut me",
+      status: " ",
+      preimage: "- [ ] #task Cut me ^cut-me",
+    },
+  });
+  const noteText = ["- [ ] #task Cut me ^cut-me", "- [ ] #task Reply to Dana"].join("\n");
+  const store = { "projects/project-1.md": noteText };
+  const namer = createSiblingNamer({ files: store, sourcePath: "projects/project-1.md", subjects: [] });
+  plugin.app.plugins.plugins["block-id-prompt"] = { api: { taskLinks: namer.api } };
+  const logRecall = plugin.app.plugins.plugins["bob-navigation-hotkeys"].api.logRecall;
+  logRecall.attach = (attachOptions) => {
+    plugin.recallState.attached.push(attachOptions);
+    return helpers.attachLogRecall({ ...attachOptions, app: plugin.app, hintDebounceMs: 0, notes: [], parentPaths: [], linkedPaths: [], recentPaths: [] });
+  };
+  const { pending, modal } = await openPicker(plugin, model);
+  pressVerdict(modal, true);
+  const input = findAll(modal.resultsEl, "bob-successor-reason-input")[0];
+  const handle = modal.reasonRecall;
+  assert.equal(typeof handle.isTaskOpen, "function", "the real proseField handle is attached");
+  input.value = "dup of ((Reply";
+  input.selectionStart = input.value.length;
+  input.selectionEnd = input.value.length;
+  input.focus();
+  for (const handler of [...((input._listeners && input._listeners.input) || [])]) {
+    handler.call(input, { type: "input", inputType: "insertText", isComposing: false, target: input });
+  }
+  assert.equal(handle.isTaskOpen(), true, "(( opens the tasks mode in the dense reason field");
+  plugin.setNow(6000);
+  pressKey(modal, "Enter");
+  assert.equal(handle.isNaming(), true, "Enter on the ID-less row opens NAME, it never commits the reason");
+  assert.equal(modal.reasonEditKey, "projects/project-1.md#^cut-me", "the reason field stays open");
+  assert.equal(input.value, "dup of ((Reply", "NAME leaves the field byte-identical");
+  const written = JSON.stringify(store);
+
+  // A real blur cancels naming without a vault write.
+  input.blur();
+  input.listeners.blur({});
+  assert.equal(handle.isNaming(), false, "blur leaves NAME");
+  assert.equal(JSON.stringify(store), written, "blur never writes the vault");
+  assert.equal(store["projects/project-1.md"], noteText, "the note is exactly as before");
+  assert.equal(modal.verdicts.get("projects/project-1.md#^cut-me").reason, "dup of ((Reply",
+    "the host's own blur commit stores the unchanged draft");
+  namer.close();
+  modal.allowCloseWithoutArm = true;
+  modal.close();
+  assert.equal(await pending, null);
 });

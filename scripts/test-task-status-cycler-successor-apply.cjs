@@ -566,3 +566,49 @@ test("a failed dependent write reaches the rich notice with only successful writ
   assert.equal(harness.getSource("Root.md"), root, "Undo touches only the successful root write");
   assert.equal(harness.getSource("Deps.md"), dependent, "the failed recovery path remains untouched");
 });
+
+// --- T11 host safety: `((` naming a sibling while the inline cancel reason is open ---
+// (phase bob-cli-oz.4). The successor picker's inline cancel reason (S6) is a
+// prose prompt; its `((` can name an ID-less sibling in the cancelled row's
+// note through the real block-id-prompt `api.taskLinks` session while the
+// picker's own verdicts wait to be applied.
+const { createSiblingNamer } = require("./prompt-sibling-naming-helpers.cjs");
+
+test("T11 successor cancel: naming a sibling during the inline reason never refuses the cancel", async () => {
+  const source = "- [ ] #task A ^a\n- [ ] #task B ^b\n- [ ] #task Sibling idea\n";
+  const { harness, plugin, recall } = setupPlugin({ "Tasks.md": source });
+  const { offersByKey } = offersFor(source);
+  const expected = expectedFor(source, offersByKey);
+  const rowB = {
+    key: "Tasks.md#^b",
+    notePath: "Tasks.md",
+    task: { path: "Tasks.md", line: 2, text: "- [ ] #task B ^b", preimage: "- [ ] #task B ^b" },
+  };
+  const subjects = navHarness.helpers.successorReasonSubjects(rowB);
+  assert.deepEqual(subjects, [{ path: "Tasks.md", line: 1, blockId: "b" }], "the cancelled row is the reason's subject");
+  const store = { "Tasks.md": source };
+  const namer = createSiblingNamer({ files: store, sourcePath: "Tasks.md", subjects });
+  await namer.assertSubjectGuarded("B");
+  await namer.nameSibling("Sibling idea", "sibling-idea");
+  await harness.app.vault.modify(harness.app.vault.getAbstractFileByPath("Tasks.md"), store["Tasks.md"]);
+  const live = harness.getSource("Tasks.md");
+  assert.match(live, /Sibling idea \^sibling-idea/, "the sibling was named in the live note");
+  const context = {
+    today: TODAY, dailyBefore: [], dailyAfter: [], dailyPath: "",
+    dependencySnapshotAvailable: true, markUnblockedLine,
+    noteTexts: new Map([["Tasks.md", live]]),
+  };
+  const res = await runQueued(plugin, () => plugin.applyOfferClosesNow({
+    closes: [{ key: "Tasks.md#^b", outcome: "cancelled", reason: "superseded" }],
+    offers: [...offersByKey.values()], offersByKey, expectedLines: expected,
+    noteTexts: new Map([["Tasks.md", live]]), context,
+  }));
+  assert.equal(res.offer_close_refused, null, "the cancel was never refused as stale");
+  assert.equal(res.offer_closes.length, 1);
+  assert.equal(res.offer_closes[0].outcome, "cancelled");
+  assert.deepEqual(recall.noted, [["cancel", "superseded"]]);
+  const final = harness.getSource("Tasks.md").split("\n");
+  assert.match(final[1], /\[-\].*\[cancelled:: 2026-11-05\].*\^b/, "the cancel landed on the cancelled row's own line");
+  assert.ok(final.includes("- [ ] #task Sibling idea ^sibling-idea"), "the named sibling kept its ID");
+  namer.close();
+});

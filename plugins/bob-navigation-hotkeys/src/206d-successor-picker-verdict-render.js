@@ -12,6 +12,20 @@ const SUCCESSOR_VERDICT_FOOTER_APPLY = [{ keys: ["↵"], label: "apply" }];
 const SUCCESSOR_VERDICT_FOOTER_PULL_IN = [{ keys: ["↵"], label: "pull in" }];
 const SUCCESSOR_VERDICT_FOOTER_NONE = [{ keys: ["Esc"], label: "none" }];
 
+// The row being cancelled is the inline reason's subject (T10/T11): `((` shows
+// it disabled. Successor task context carries a 1-based line; the guard's
+// lines are 0-based. A row without task context has no stable identity, so it
+// declares no subject rather than guessing one.
+function successorReasonSubjects(row) {
+  try {
+    const task = row && row.task;
+    if (!task || typeof task.path !== "string" || !Number.isInteger(task.line) || task.line < 1) return [];
+    return proseTaskSubjects([{ path: task.path, line: task.line - 1, rawLine: task.preimage }]);
+  } catch (_error) {
+    return [];
+  }
+}
+
 function successorVerdictFooterHints(modal) {
   try {
     const hints = SUCCESSOR_VERDICT_FOOTER_BASE.slice();
@@ -408,6 +422,7 @@ function successorRenderReasonEditor(modal, container, row, draft) {
           density: "dense",
           ownKeys: true,
           links: true,
+          subjects: () => successorReasonSubjects(row),
           sourcePath: () => (row && row.notePath ? String(row.notePath) : null),
         });
       }

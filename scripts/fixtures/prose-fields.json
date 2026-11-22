@@ -1,19 +1,19 @@
 {
   "surfaces": [
-    { "id": "S1", "plugin": "block-id-prompt", "creation": "plugins/block-id-prompt/src/090-prompt-modals.js", "wiring": "plugins/block-id-prompt/src/090-prompt-modals.js" },
-    { "id": "S2", "plugin": "bob-navigation-hotkeys", "creation": "plugins/bob-navigation-hotkeys/src/196-task-link-lane-modal.js", "wiring": "plugins/bob-navigation-hotkeys/src/196-task-link-lane-modal.js" },
-    { "id": "S3", "plugin": "bob-navigation-hotkeys", "creation": "plugins/bob-navigation-hotkeys/src/190-summary-modals.js", "wiring": "plugins/bob-navigation-hotkeys/src/190-summary-modals.js" },
-    { "id": "S4", "plugin": "bob-navigation-hotkeys", "creation": "plugins/bob-navigation-hotkeys/src/192-freshness-refresh-summary-modal.js", "wiring": "plugins/bob-navigation-hotkeys/src/192-freshness-refresh-summary-modal.js" },
-    { "id": "S5", "plugin": "bob-navigation-hotkeys", "creation": "plugins/bob-navigation-hotkeys/src/195-rotten-keep.js", "wiring": "plugins/bob-navigation-hotkeys/src/195-rotten-keep.js" },
-    { "id": "S6", "plugin": "bob-navigation-hotkeys", "creation": "plugins/bob-navigation-hotkeys/src/206d-successor-picker-verdict-render.js", "wiring": "plugins/bob-navigation-hotkeys/src/206d-successor-picker-verdict-render.js" },
-    { "id": "S7", "plugin": "bob-navigation-hotkeys", "creation": "plugins/bob-navigation-hotkeys/src/200-filtered-picker-modals.js", "wiring": "plugins/bob-navigation-hotkeys/src/185a-picker-prose-links.js" },
-    { "id": "S8", "plugin": "bob-navigation-hotkeys", "creation": "plugins/bob-navigation-hotkeys/src/200-filtered-picker-modals.js", "wiring": "plugins/bob-navigation-hotkeys/src/185a-picker-prose-links.js" },
-    { "id": "S9", "plugin": "bob-navigation-hotkeys", "creation": "plugins/bob-navigation-hotkeys/src/370-picker-schedule-work-log.js", "wiring": "plugins/bob-navigation-hotkeys/src/185a-picker-prose-links.js" },
-    { "id": "S10", "plugin": "bob-navigation-hotkeys", "creation": "plugins/bob-navigation-hotkeys/src/370-picker-schedule-work-log.js", "wiring": "plugins/bob-navigation-hotkeys/src/185-log-recall-picker.js" },
-    { "id": "S11", "plugin": "bob-navigation-hotkeys", "creation": "plugins/bob-navigation-hotkeys/src/200-filtered-picker-modals.js", "wiring": "plugins/bob-navigation-hotkeys/src/185a-picker-prose-links.js" },
-    { "id": "S12", "plugin": "bob-navigation-hotkeys", "creation": "plugins/bob-navigation-hotkeys/src/685-plugin-notebook-create.js", "wiring": "plugins/bob-navigation-hotkeys/src/685-plugin-notebook-create.js" },
-    { "id": "S13", "plugin": "bob-mail", "creation": "plugins/bob-mail/src/040-task-modal.js", "wiring": "plugins/bob-mail/src/040-task-modal.js" },
-    { "id": "S14", "plugin": "bob-ledger-tools", "creation": "plugins/bob-ledger-tools/src/297cc-plugin-intention-card-editor-paint.js", "wiring": "plugins/bob-ledger-tools/src/297cd-plugin-intention-card-editor-prose.js" },
-    { "id": "S15", "plugin": "bob-ledger-tools", "creation": "plugins/bob-ledger-tools/src/242q-plugin-record-card-stages.js", "wiring": "plugins/bob-ledger-tools/src/242sa-plugin-record-card-prose-field.js" }
+    { "id": "S1", "subjects": "wired", "plugin": "block-id-prompt", "creation": "plugins/block-id-prompt/src/090-prompt-modals.js", "wiring": "plugins/block-id-prompt/src/090-prompt-modals.js" },
+    { "id": "S2", "subjects": "wired", "plugin": "bob-navigation-hotkeys", "creation": "plugins/bob-navigation-hotkeys/src/196-task-link-lane-modal.js", "wiring": "plugins/bob-navigation-hotkeys/src/196-task-link-lane-modal.js" },
+    { "id": "S3", "subjects": "wired", "plugin": "bob-navigation-hotkeys", "creation": "plugins/bob-navigation-hotkeys/src/190-summary-modals.js", "wiring": "plugins/bob-navigation-hotkeys/src/190-summary-modals.js" },
+    { "id": "S4", "subjects": "wired", "plugin": "bob-navigation-hotkeys", "creation": "plugins/bob-navigation-hotkeys/src/192-freshness-refresh-summary-modal.js", "wiring": "plugins/bob-navigation-hotkeys/src/192-freshness-refresh-summary-modal.js" },
+    { "id": "S5", "subjects": "wired", "plugin": "bob-navigation-hotkeys", "creation": "plugins/bob-navigation-hotkeys/src/195-rotten-keep.js", "wiring": "plugins/bob-navigation-hotkeys/src/195-rotten-keep.js" },
+    { "id": "S6", "subjects": "wired", "plugin": "bob-navigation-hotkeys", "creation": "plugins/bob-navigation-hotkeys/src/206d-successor-picker-verdict-render.js", "wiring": "plugins/bob-navigation-hotkeys/src/206d-successor-picker-verdict-render.js" },
+    { "id": "S7", "subjects": "wired", "plugin": "bob-navigation-hotkeys", "creation": "plugins/bob-navigation-hotkeys/src/200-filtered-picker-modals.js", "wiring": "plugins/bob-navigation-hotkeys/src/185a-picker-prose-links.js" },
+    { "id": "S8", "subjects": "wired", "plugin": "bob-navigation-hotkeys", "creation": "plugins/bob-navigation-hotkeys/src/200-filtered-picker-modals.js", "wiring": "plugins/bob-navigation-hotkeys/src/185a-picker-prose-links.js" },
+    { "id": "S9", "subjects": "wired", "plugin": "bob-navigation-hotkeys", "creation": "plugins/bob-navigation-hotkeys/src/370-picker-schedule-work-log.js", "wiring": "plugins/bob-navigation-hotkeys/src/185a-picker-prose-links.js" },
+    { "id": "S10", "subjects": "wired", "plugin": "bob-navigation-hotkeys", "creation": "plugins/bob-navigation-hotkeys/src/370-picker-schedule-work-log.js", "wiring": "plugins/bob-navigation-hotkeys/src/185-log-recall-picker.js" },
+    { "id": "S11", "subjects": "wired", "plugin": "bob-navigation-hotkeys", "creation": "plugins/bob-navigation-hotkeys/src/200-filtered-picker-modals.js", "wiring": "plugins/bob-navigation-hotkeys/src/185a-picker-prose-links.js" },
+    { "id": "S12", "subjects": "none", "plugin": "bob-navigation-hotkeys", "creation": "plugins/bob-navigation-hotkeys/src/685-plugin-notebook-create.js", "wiring": "plugins/bob-navigation-hotkeys/src/685-plugin-notebook-create.js" },
+    { "id": "S13", "subjects": "none", "plugin": "bob-mail", "creation": "plugins/bob-mail/src/040-task-modal.js", "wiring": "plugins/bob-mail/src/040-task-modal.js" },
+    { "id": "S14", "subjects": "none", "plugin": "bob-ledger-tools", "creation": "plugins/bob-ledger-tools/src/297cc-plugin-intention-card-editor-paint.js", "wiring": "plugins/bob-ledger-tools/src/297cd-plugin-intention-card-editor-prose.js" },
+    { "id": "S15", "subjects": "none", "plugin": "bob-ledger-tools", "creation": "plugins/bob-ledger-tools/src/242q-plugin-record-card-stages.js", "wiring": "plugins/bob-ledger-tools/src/242sa-plugin-record-card-prose-field.js" }
   ]
 }

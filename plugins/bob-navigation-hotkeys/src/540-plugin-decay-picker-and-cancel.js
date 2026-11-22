@@ -419,7 +419,7 @@ class BobNavigationHotkeysDecayCancelMixin {
         return false;
       }
       const laneBudgets = readLaneBudgets(this.app);
-      const groups = groupLinkPickerTargetsByNote(resolved);
+      const groups = await this.linkSessionGroups(resolved);
       const planned = [];
       for (const group of groups) {
         const plan = planTaskLaneBatch(group.content, group.session, {

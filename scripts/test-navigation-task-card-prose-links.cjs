@@ -192,6 +192,8 @@ test("S7 cancel reason: [[ completes, Enter inserts without submitting", async (
   assert.ok(wiring, "cancel stage attached");
   assert.equal(wiring.opts.links, true);
   assert.equal(wiring.opts.sourcePath(), "Tasks.md");
+  assert.deepEqual(wiring.opts.subjects(), [{ path: "Tasks.md", line: 0, blockId: "a" }],
+    "the card's own task is the cancel reason's subject");
   const handle = picker.logRecallHandle;
   assert.equal(typeof handle.isLinkOpen, "function", "a proseField handle");
 
@@ -264,6 +266,8 @@ test("S8 lane release and S9 Work summary attach links with the picker's note", 
   const laneWiring = attached.filter((entry) => entry.opts.kind === "work").pop();
   assert.equal(laneWiring.opts.links, true);
   assert.equal(laneWiring.opts.sourcePath(), "Tasks.md");
+  assert.deepEqual(laneWiring.opts.subjects(), [{ path: "Tasks.md", line: 0, blockId: "a1" }],
+    "the released task is the lane-release reason's subject");
   typeInto(lane.picker.inputEl, "parked on [[api");
   assert.equal(lane.picker.logRecallHandle.isLinkOpen(), true);
   lane.picker.handleKeydown(key(lane.picker.inputEl, "Tab"));
@@ -281,6 +285,8 @@ test("S8 lane release and S9 Work summary attach links with the picker's note", 
     scheduleSummary: "scheduled → 2026-10-05",
   });
   assert.equal(work.picker.stage, "schedule-work-log");
+  assert.deepEqual(helpers.pickerProseSubjects(work.picker), [{ path: "Tasks.md", line: 0, blockId: "a" }],
+    "the Work summary's subject is the scheduled task");
   typeInto(work.picker.inputEl, "drafted [[sase_b");
   assert.equal(work.picker.logRecallHandle.isLinkOpen(), true);
   work.picker.handleKeydown(key(work.picker.inputEl, "Enter"));
@@ -475,4 +481,157 @@ test("S11 fails open without nav's proseField", async () => {
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(writes.length, 1);
   assert.equal(writes[0].reason, "waiting on [[api");
+});
+
+// --- `((` NAME-stage key routing in picker hosts (phase bob-cli-oz.4) -------
+// The picker hosts attach with `ownKeys: false`: every key is OFFERED to the
+// prose handle by the stage's keydown first. While the tasks mode's NAME stage
+// is open the handle must consume Tab, Shift+Tab, the arrows, Ctrl+N/P, and
+// Esc / Ctrl+[ before the picker's own logic sees them (S10's Tab field cycling,
+// S11's date-row navigation, the list's selection), and an Enter that names a
+// task must never commit the stage.
+const { createSiblingNamer } = require("./prompt-sibling-naming-helpers.cjs");
+
+const NAMING_KEYS = [
+  ["Tab", {}],
+  ["Tab", { shiftKey: true }],
+  ["ArrowDown", {}],
+  ["ArrowUp", {}],
+  ["n", { ctrlKey: true }],
+  ["p", { ctrlKey: true }],
+];
+
+function withRealTaskLinks(app, picker, harness, subjectsSource) {
+  const namer = createSiblingNamer({
+    editors: [{ path: "Tasks.md", editor: harness.editor }],
+    sourcePath: "Tasks.md",
+    subjects: subjectsSource,
+  });
+  app.plugins.plugins["block-id-prompt"] = { api: { taskLinks: namer.api } };
+  return namer;
+}
+
+function pressNamingKeys(picker, handle, inputEl, assertUnchanged) {
+  for (const [name, modifiers] of NAMING_KEYS) {
+    const event = key(inputEl, name, modifiers);
+    picker.handleKeydown(event);
+    assert.equal(event.defaultPrevented, true, `${modifiers.shiftKey ? "Shift+" : modifiers.ctrlKey ? "Ctrl+" : ""}${name} is consumed by NAME`);
+    assert.equal(handle.isNaming(), true, `${name} never leaves NAME`);
+    assertUnchanged(`${name}`);
+  }
+}
+
+test("S7 cancel reason: NAME gets every navigation key first and Enter never commits the stage", async () => {
+  const { app } = appWithProse({ phrases: { cancel: ["duplicate task"] } });
+  const { harness, picker } = openHarness("- [ ] #task One ^a1\n- [ ] #task Reply to Dana", app);
+  const payloads = [];
+  harness.plugin.applyTaskCancelFromPicker = async (_picker, payload) => { payloads.push(payload); return true; };
+  const namer = withRealTaskLinks(app, picker, harness, []);
+  await runCardAction(picker, "cancel");
+  assert.equal(picker.stage, "cancel-reason");
+  const handle = picker.logRecallHandle;
+  typeInto(picker.inputEl, "dup of ((Reply");
+  assert.equal(handle.isTaskOpen(), true, "(( opens the tasks mode in the cancel reason");
+  const selectedBefore = picker.selectedIndex;
+  const enter = key(picker.inputEl, "Enter");
+  picker.handleKeydown(enter);
+  assert.equal(enter.defaultPrevented, true);
+  keyup(picker.inputEl, "Enter");
+  assert.equal(handle.isNaming(), true, "Enter on an ID-less row opens NAME");
+  assert.equal(picker.inputEl.value, "dup of ((Reply", "NAME leaves the field byte-identical");
+  pressNamingKeys(picker, handle, picker.inputEl, (label) => {
+    assert.equal(picker.inputEl.value, "dup of ((Reply", `${label} never edits the field`);
+    assert.equal(picker.selectedIndex, selectedBefore, `${label} never moves the picker's own selection`);
+    assert.deepEqual(payloads, [], `${label} never commits the stage`);
+    assert.equal(picker.stage, "cancel-reason");
+  });
+
+  // Esc and Ctrl+[ go back one layer each: NAME, then the list.
+  const esc = key(picker.inputEl, "Escape");
+  picker.handleKeydown(esc);
+  assert.equal(esc.defaultPrevented, true);
+  assert.equal(handle.isNaming(), false, "Esc leaves NAME for the list");
+  assert.equal(handle.isTaskOpen(), true);
+  assert.equal(picker.pickerOpen, true, "the picker itself stays open");
+  picker.handleKeydown(key(picker.inputEl, "Enter"));
+  keyup(picker.inputEl, "Enter");
+  assert.equal(handle.isNaming(), true);
+  const chord = key(picker.inputEl, "[", { ctrlKey: true, code: "BracketLeft" });
+  picker.handleKeydown(chord);
+  assert.equal(handle.isNaming(), false, "Ctrl+[ mirrors Esc inside NAME");
+  assert.equal(handle.isTaskOpen(), true);
+
+  // Enter in NAME names the task, inserts its link, and still never commits.
+  picker.handleKeydown(key(picker.inputEl, "Enter"));
+  keyup(picker.inputEl, "Enter");
+  assert.equal(handle.isNaming(), true);
+  picker.handleKeydown(key(picker.inputEl, "Enter"));
+  for (let i = 0; i < 20 && handle.isNaming(); i += 1) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(handle.isLinkOpen(), false, "the band closes after the write");
+  assert.match(picker.inputEl.value, /^dup of \[\[Tasks#\^[a-z0-9-]+\]\]$/, "the field holds the one inserted link");
+  assert.match(harness.editor.getValue(), /- \[ \] #task Reply to Dana \^[a-z0-9-]+/, "the task gained exactly its ID");
+  assert.deepEqual(payloads, [], "naming never commits the cancel");
+  keyup(picker.inputEl, "Enter");
+  namer.close();
+  picker.close();
+});
+
+test("S10 schedule review: while NAME is open Tab never cycles the Reason and Work summary fields", async () => {
+  const { app } = appWithProse({ phrases: { schedule: ["replan soon"], work: ["athena agent"] } });
+  const { harness, picker } = openHarness("- [/] #task Pending work ^a\n- [ ] #task Reply to Dana", app);
+  const namer = withRealTaskLinks(app, picker, harness, []);
+  await runCardAction(picker, "schedule");
+  const dateItem = picker.visibleItems.find((item) => item.kind === "value" && item.value);
+  await picker.openItem(dateItem);
+  assert.equal(picker.stage, "schedule-review");
+  const reasonEl = picker.scheduleReviewReasonEl;
+  const handle = picker.logRecallHandle;
+  let cycles = 0;
+  const cycle = picker.cycleScheduleReviewFocus;
+  picker.cycleScheduleReviewFocus = function wrapped(...args) { cycles += 1; return cycle.apply(this, args); };
+  typeInto(reasonEl, "blocked on ((Reply");
+  assert.equal(handle.isTaskOpen(), true);
+  picker.handleKeydown(key(reasonEl, "Enter"));
+  keyup(reasonEl, "Enter");
+  assert.equal(handle.isNaming(), true);
+  pressNamingKeys(picker, handle, reasonEl, (label) => {
+    assert.equal(reasonEl.value, "blocked on ((Reply", `${label} never edits the Reason`);
+    assert.equal(cycles, 0, `${label} never cycles the review's fields`);
+    assert.equal(picker.logRecallHandle, handle, `${label} keeps the Reason's handle`);
+    assert.equal(picker.stage, "schedule-review");
+  });
+  // Back out of NAME, then out of the band: Tab then cycles fields again.
+  picker.handleKeydown(key(reasonEl, "Escape"));
+  picker.handleKeydown(key(reasonEl, "Escape"));
+  assert.equal(handle.isTaskOpen(), false);
+  picker.handleKeydown(key(reasonEl, "Tab"));
+  assert.equal(cycles, 1, "with the band closed Tab cycles the fields as before");
+  namer.close();
+  picker.close();
+});
+
+test("S11 scheduled inline reason: while NAME is open the arrows never move the date rows", async () => {
+  const { app } = appWithProse({});
+  const { harness, picker } = openHarness("- [ ] #task Pending work ^a\n- [ ] #task Reply to Dana", app);
+  const namer = withRealTaskLinks(app, picker, harness, []);
+  await runCardAction(picker, "schedule");
+  assert.equal(picker.stage, "value");
+  typeInto(picker.inputEl, "3 waiting on ((Reply");
+  const handle = picker.scheduledReasonLinkHandle;
+  assert.ok(handle, "the scheduled stage attached its reason band");
+  assert.equal(handle.isTaskOpen(), true, "(( opens in the reason tail after the date token");
+  const selectedBefore = picker.selectedIndex;
+  picker.handleKeydown(key(picker.inputEl, "Enter"));
+  keyup(picker.inputEl, "Enter");
+  assert.equal(handle.isNaming(), true);
+  pressNamingKeys(picker, handle, picker.inputEl, (label) => {
+    assert.equal(picker.inputEl.value, "3 waiting on ((Reply", `${label} never edits the date filter`);
+    assert.equal(picker.selectedIndex, selectedBefore, `${label} never moves the date rows`);
+    assert.equal(picker.stage, "value");
+  });
+  picker.handleKeydown(key(picker.inputEl, "Escape"));
+  assert.equal(handle.isNaming(), false);
+  assert.equal(picker.pickerOpen, true);
+  namer.close();
+  picker.close();
 });

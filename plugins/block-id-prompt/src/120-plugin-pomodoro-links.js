@@ -381,7 +381,7 @@ class BlockIdPromptPomodoroLinksMixin {
         link,
         contextPath: target.path,
         task: { displayText: target.displayText },
-        target: { path: target.path, rawLine: target.rawLine, status: target.status },
+        target: { path: target.path, line: target.line, rawLine: target.rawLine, status: target.status },
       };
       if (target.status === "/") {
         promptSource = linkSource;

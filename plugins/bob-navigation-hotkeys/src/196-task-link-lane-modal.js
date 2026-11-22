@@ -30,6 +30,9 @@ class TaskLinkLanePromptModal extends Modal {
         Object.freeze({
           displayText: String(task.displayText || "(untitled task)"),
           path: String(task.path || "Current note"),
+          line: Number.isInteger(task.line) ? task.line : undefined,
+          blockId: typeof task.blockId === "string" && task.blockId ? task.blockId : undefined,
+          rawLine: typeof task.rawLine === "string" ? task.rawLine : undefined,
         }),
       );
   }
@@ -38,6 +41,11 @@ class TaskLinkLanePromptModal extends Modal {
   // share one; mixed notes (or none) leave same-note links unresolved.
   taskLinkLaneSourcePath() {
     return proseSharedSourcePath(this.options.sourcePaths);
+  }
+
+  // Every moved task is the prompt's subject: `((` shows each one disabled.
+  taskLinkLaneSubjects() {
+    return proseTaskSubjects(this.options.tasks);
   }
 
   workLogClockNow() {
@@ -175,6 +183,7 @@ class TaskLinkLanePromptModal extends Modal {
           ownKeys: true,
           scope: this.scope,
           links: true,
+          subjects: () => this.taskLinkLaneSubjects(),
           sourcePath: () => this.taskLinkLaneSourcePath(),
         });
       } catch (_error) { this.logRecall = null; }

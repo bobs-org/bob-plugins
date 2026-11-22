@@ -340,6 +340,17 @@ class BobNavigationHotkeysTransclusionLinkMixin {
   // the live open editor first, then any open buffer, then the vault. Null
   // when the note cannot be read (including ambiguous open buffers, mirroring
   // readDeferredPomodoroSnapshot).
+  // Task Card link-session groups for a commit. The picker snapshots each
+  // linked note when it opens; a sibling named by a prose stage's `((` while
+  // the picker waits changes that note without touching any target line (T11),
+  // so each group adopts the live text unless a target line itself changed.
+  async linkSessionGroups(resolved) {
+    return await navGroupsAfterPrompt(
+      groupLinkPickerTargetsByNote(resolved),
+      (group) => this.readLinkPickerNoteContent(group.path, group.file),
+    );
+  }
+
   async readLinkPickerNoteContent(path, file) {
     const normalized = normalizeVaultRelativePath(path);
     const editor = this.getOpenMarkdownEditorForPath(normalized);
@@ -660,7 +671,7 @@ class BobNavigationHotkeysTransclusionLinkMixin {
     const baseDate = picker.valueBaseDate instanceof Date
       ? getLocalDateStart(picker.valueBaseDate)
       : getLocalDateStart(new Date());
-    const groups = groupLinkPickerTargetsByNote(linkSession.resolved);
+    const groups = await this.linkSessionGroups(linkSession.resolved);
     const planned = [];
     for (const group of groups) {
       let recoveryByLine = null;
@@ -727,7 +738,7 @@ class BobNavigationHotkeysTransclusionLinkMixin {
     const baseDate = picker.valueBaseDate instanceof Date
       ? picker.valueBaseDate
       : getLocalDateStart(new Date());
-    const groups = groupLinkPickerTargetsByNote(linkSession.resolved);
+    const groups = await this.linkSessionGroups(linkSession.resolved);
     if (groups.length === 0) {
       new Notice("Could not update task; no tasks were updated");
       return false;
@@ -815,7 +826,7 @@ class BobNavigationHotkeysTransclusionLinkMixin {
     const random = typeof picker.priorityRandom === "function"
       ? picker.priorityRandom
       : Math.random;
-    const groups = groupLinkPickerTargetsByNote(linkSession.resolved);
+    const groups = await this.linkSessionGroups(linkSession.resolved);
     if (groups.length === 0) {
       new Notice("Could not update priority: invalid configured level");
       return false;

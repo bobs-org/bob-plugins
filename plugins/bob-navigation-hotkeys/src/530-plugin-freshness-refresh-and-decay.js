@@ -351,6 +351,7 @@ class BobNavigationHotkeysFreshnessDecayMixin {
           dateText: cardCtx.dateText,
           advance: cardCtx.advance,
           sourcePath: cardCtx.filePath,
+          line: cardCtx.line,
         },
         onChoose: (action) => {
           this.activeFreshnessDecayCard = null;

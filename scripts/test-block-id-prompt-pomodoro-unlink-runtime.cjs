@@ -955,3 +955,66 @@ test("work-summary prompt closes before the parked landing", async () => {
   assert.deepEqual(order, ["close", "submit"]);
   assert.equal(modal.completed, true);
 });
+
+// --- T11 host safety + S1 subjects (phase bob-cli-oz.4) ---------------------
+// The Unlink / task-link-open Work summary (S1) is a prose prompt: its `((`
+// can name an ID-less sibling in the task's own note, through the real
+// `api.taskLinks` session, while the unlink write waits for Enter.
+const { createSiblingNamer, assertOneLineInPlace } = require("./prompt-sibling-naming-helpers.cjs");
+
+test("S1 unlink declares the unlinked task as its prose subject", () => {
+  const editor = createEditor(["## Notes", "- [/] #task Ship it ^ship"].join("\n"));
+  const source = sourceForPomodoroLink(editor, "Tasks.md", 1);
+  const modal = new helpers.WorkSummaryPromptModal({}, new Plugin(), source);
+  assert.deepEqual(modal.proseSubjects(), [{ path: "Tasks.md", line: 1, blockId: "ship" }]);
+
+  const idless = createEditor("- [/] #task Ship it");
+  const bare = new helpers.WorkSummaryPromptModal({}, new Plugin(), sourceForPomodoroLink(idless, "Tasks.md", 0));
+  assert.deepEqual(bare.proseSubjects(), [{ path: "Tasks.md", line: 0 }], "an ID-less task is guarded by its line");
+});
+
+test("S1 task-link-open declares the opened task as its prose subject", () => {
+  const modal = new helpers.WorkSummaryPromptModal({}, new Plugin(), {
+    kind: "task-link-open",
+    sourcePath: "Daily.md",
+    line: 3,
+    link: { oldId: "ship" },
+    contextPath: "Tasks.md",
+    task: { displayText: "Ship it" },
+    target: { path: "Tasks.md", line: 6, rawLine: "- [/] #task Ship it ^ship", status: "/" },
+  });
+  assert.deepEqual(modal.proseSubjects(), [{ path: "Tasks.md", line: 6, blockId: "ship" }],
+    "the opened task, not the daily note's link line, is the subject");
+  assert.deepEqual(new helpers.WorkSummaryPromptModal({}, new Plugin(), {}).proseSubjects(), []);
+});
+
+test("T11 S1 unlink: naming a sibling during the Work summary never makes the unlink stale", async () => {
+  resetNotices();
+  const editor = createEditor(["- [/] #task Ship it ^ship", "- [ ] #task Sibling idea"].join("\n"));
+  const source = sourceForPomodoroLink(editor, "Tasks.md", 0);
+  const modal = new helpers.WorkSummaryPromptModal({}, new Plugin(), source);
+  const namer = createSiblingNamer({
+    editors: [{ path: "Tasks.md", editor }],
+    sourcePath: "Tasks.md",
+    subjects: modal.proseSubjects(),
+  });
+  await namer.assertSubjectGuarded("Ship it");
+  const before = editor.getValue();
+  await namer.nameSibling("Sibling idea", "sibling-idea");
+  assertOneLineInPlace(before, editor.getValue(), 1);
+
+  const plugin = new Plugin();
+  plugin.resolveTaskFile = (path) => (path === "Tasks.md" ? { path: "Tasks.md" } : null);
+  plugin.resolveTodayDailyFile = () => null;
+  plugin.suppressEditorScans = () => {};
+  plugin.now = () => WORK_LOG_NOW;
+  const result = await plugin.submitPomodoroWorkSummary(source, "Paused after tests");
+
+  assert.equal(result, true, lastNotice());
+  const lines = editor.getValue().split("\n");
+  assert.equal(lines[0], "- [/] #task Ship it ^ship", "the unlinked task kept its lane and its line");
+  assert.match(editor.getValue(), /\*2026-08-15 14:32\* — Paused after tests/, "the Work Log landed under the unlinked task");
+  assert.ok(lines.includes("- [ ] #task Sibling idea ^sibling-idea"), "the named sibling kept its ID");
+  assert.equal(lastNotice(), "Unlinked · stays In Progress · Work Log updated");
+  namer.close();
+});

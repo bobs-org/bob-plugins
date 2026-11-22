@@ -1739,3 +1739,100 @@ test("already-handled refresh keydown leaves Vim state alone", async () => {
   assert.equal(cm.state.vim.inputState.reason, "");
   assert.equal(editor.state.lines[2], ROTTEN_LINE);
 });
+
+// --- T11 host safety: `((` naming a sibling while the Keep prompt is open --
+// (phase bob-cli-oz.4). The prompt's `((` names an ID-less sibling through
+// the real block-id-prompt `api.taskLinks` session; the host's counted keep
+// must still land on its own line and never refuse the note as stale.
+const { createSiblingNamer } = require("./prompt-sibling-naming-helpers.cjs");
+
+test("T11 single keep: naming a sibling during the Keep prompt never makes the write stale", async () => {
+  clearNotices();
+  const lines = ["# Tasks", "", ROTTEN_LINE, "- [ ] #task Sibling idea"];
+  const editor = makeEditor(lines.join("\n"), 2);
+  const plugin = makePlugin({
+    filePath: "a.md",
+    editor,
+    freshness: freshnessV5([rottenEntry()], BASE_COUNTS),
+  });
+  const namer = createSiblingNamer({
+    editors: [{ path: "a.md", editor }],
+    sourcePath: "a.md",
+    subjects: [{ path: "a.md", line: 2 }],
+  });
+  let asked = 0;
+  plugin.requestFreshnessRefreshAnswers = async (options) => {
+    asked += 1;
+    assert.equal(options.keep.line, 2, "the prompt carries the kept task's line");
+    assert.deepEqual(
+      helpers.rottenKeepSubjects({ ...options.keep, sourcePath: "a.md" }),
+      [{ path: "a.md", line: 2 }],
+      "the Keep reason's `((` shows the kept task disabled",
+    );
+    await namer.assertSubjectGuarded("Buy milk");
+    await namer.nameSibling("Sibling idea", "sibling-idea");
+    return { cancelled: false, failed: false, summary: "", keepReason: "still matters" };
+  };
+  const ok = await plugin.refreshTaskFreshness(editor, { dateText: DATE });
+  assert.equal(asked, 1, "a counted keep asks for its reason");
+  assert.equal(ok, true, notices[notices.length - 1]);
+  assert.equal(
+    editor.state.lines[2],
+    "- [ ] #task Buy milk [fresh:: 2026-10-08] [keeps:: 3]",
+    "the keep landed on the kept task's own line",
+  );
+  assert.ok(
+    editor.state.lines.includes("- [ ] #task Sibling idea ^sibling-idea"),
+    "the named sibling kept its ID (the keep's Rotten Log drawer sits above it)",
+  );
+  assert.match(editor.state.lines.join("\n"), /still matters/, "the keep's reason was logged");
+  assert.match(notices[notices.length - 1], /kept 1×/);
+  namer.close();
+});
+
+test("T11 single keep still refuses when the prompt-time edit touches the kept line", async () => {
+  clearNotices();
+  const editor = makeEditor(["# Tasks", "", ROTTEN_LINE, "- [ ] #task Sibling idea"].join("\n"), 2);
+  const plugin = makePlugin({
+    filePath: "a.md",
+    editor,
+    freshness: freshnessV5([rottenEntry()], BASE_COUNTS),
+  });
+  plugin.requestFreshnessRefreshAnswers = async () => {
+    editor.state.lines[2] = `${ROTTEN_LINE} #edited`;
+    return { cancelled: false, failed: false, summary: "", keepReason: "why" };
+  };
+  const ok = await plugin.refreshTaskFreshness(editor, { dateText: DATE });
+  assert.equal(ok, false);
+  assert.match(notices[notices.length - 1], /changed; no tasks were updated/);
+  assert.equal(editor.state.lines[2], `${ROTTEN_LINE} #edited`, "a genuinely stale target is never written over");
+});
+
+test("T11 Task Link keep: naming a sibling in the linked note during the Keep prompt never makes the write stale", async () => {
+  clearNotices();
+  const store = { "Target.md": [TARGET_LINE, "- [ ] #task Sibling idea"].join("\n") };
+  const noteMap = new Map([["Target.md", store["Target.md"]]]);
+  const plugin = makeLinkPlugin({
+    cursorContent: LINK_LINE,
+    cursorLine: 0,
+    noteMap,
+    freshness: freshnessV5(linkQueue(), BASE_COUNTS),
+  });
+  const namer = createSiblingNamer({
+    files: store,
+    sourcePath: "Target.md",
+    subjects: [{ path: "Target.md", line: 0, blockId: "abc" }],
+  });
+  plugin.requestFreshnessRefreshAnswers = async () => {
+    await namer.nameSibling("Sibling idea", "sibling-idea");
+    noteMap.set("Target.md", store["Target.md"]);
+    return { cancelled: false, failed: false, summary: "", keepReason: "link reason" };
+  };
+  const ok = await plugin.refreshTaskFreshness(plugin.view.editor, { dateText: DATE });
+  assert.equal(ok, true, notices[notices.length - 1]);
+  const target = noteMap.get("Target.md").split("\n");
+  assert.match(target[0], /\[fresh:: 2026-10-08\] \[keeps:: 3\]/, "the keep landed on the linked task's own line");
+  assert.ok(target.includes("- [ ] #task Sibling idea ^sibling-idea"), "the named sibling kept its ID");
+  assert.match(target.join("\n"), /link reason/, "the keep's reason was logged");
+  namer.close();
+});

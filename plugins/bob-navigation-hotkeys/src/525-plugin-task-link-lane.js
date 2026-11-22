@@ -81,7 +81,7 @@ class BobNavigationHotkeysTaskLinkLaneMixin {
       ) {
         return fail("stale", "A linked note changed; no tasks were updated");
       }
-      const groups = groupLinkPickerTargetsByNote(resolution.targets);
+      let groups = groupLinkPickerTargetsByNote(resolution.targets);
       if (groups.length === 0) {
         return fail("refused", "Could not update task; no tasks were updated");
       }
@@ -121,6 +121,8 @@ class BobNavigationHotkeysTaskLinkLaneMixin {
             return Object.freeze({ ok: false, reason: "cancelled" });
           }
           summary = answer.summary;
+          // A sibling named by the prompt's `((` is not a stale note (T11).
+          groups = await navGroupsAfterPrompt(groups, (group) => this.readLinkPickerNoteContent(group.path, group.file));
         }
       }
       // Work Log clock: sample once after awaited input settles, before
@@ -237,6 +239,9 @@ class BobNavigationHotkeysTaskLinkLaneMixin {
         displayText:
           target.displayText || cleanTaskDisplayText(target.rawLine || ""),
         path: target.path || "Current note",
+        line: target.line,
+        blockId: target.blockId,
+        rawLine: target.rawLine,
       }),
     );
     return await new Promise((resolve) => {

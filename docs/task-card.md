@@ -167,6 +167,11 @@ task's note. For a Task Link, that is the linked task's note, or no note
 when the targets span notes. With the band closed, every key keeps its
 usual stage behavior.
 
+`((` works in the same fields and opens the tasks mode (see
+[Task links in prompts](block-id-prompt.md#task-links-in-prompts)). The
+card's own task shows there but is disabled (`this prompt`), so a reason never
+links to, or names, the task it is about to change.
+
 ## Links stage and closing labels
 
 The `l` Links to and `⇧L` Linked from stages list configured cancel labels with

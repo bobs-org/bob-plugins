@@ -32,6 +32,20 @@ function pickerProseSourcePath(picker) {
   }
 }
 
+// The Task Card's target task(s) are every prose stage's subjects (S7-S11,
+// T10/T11): `((` shows them disabled. They come from the same live target list
+// the stage's own write plan uses, so a prompt never offers to link (or name)
+// the task it is about to change. Never throws; a picker without targets
+// declares none.
+function pickerProseSubjects(picker) {
+  try {
+    if (!picker || typeof picker.getSchedulingWorkLogTargets !== "function") return [];
+    return proseTaskSubjects(picker.getSchedulingWorkLogTargets());
+  } catch (_error) {
+    return [];
+  }
+}
+
 // First offset where a `[[` may open in the scheduled stage: the end of the
 // typed date token plus the whitespace after it. +Infinity when the query
 // has no recognized date token (a preset filter, or an attached `3x`).
@@ -101,6 +115,7 @@ function attachPickerScheduledReasonLinks(picker) {
       density: "roomy",
       arrowKeys: true,
       ownKeys: false,
+      subjects: () => pickerProseSubjects(picker),
       sourcePath: () => pickerProseSourcePath(picker),
       minOffset: () => scheduledReasonLinkMinOffset(inputEl.value),
       app: picker.app,

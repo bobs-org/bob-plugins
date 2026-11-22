@@ -1153,3 +1153,68 @@ test("config without a priority property uses distinct copy", async () => {
     "no `priority` property in bob/config.yml",
   );
 });
+
+// --- T11 host safety: `((` naming a sibling while the Stay reason is open ---
+// (phase bob-cli-oz.4). The decay card's Stay stage is a prose prompt (S5);
+// its `((` can name an ID-less sibling through the real block-id-prompt
+// `api.taskLinks` session while the card's own pending write waits.
+const { createSiblingNamer } = require("./prompt-sibling-naming-helpers.cjs");
+
+test("T11 decay Stay: naming a sibling during the Stay reason never makes the card stale", async () => {
+  clearNotices();
+  const editor = makeEditor(
+    ["# Tasks", "", ROTTEN_AT_LIMIT, "- [ ] #task Sibling idea"].join("\n"),
+    2,
+  );
+  const entry = rottenEntry({ line: 3, originalMarkdown: ROTTEN_AT_LIMIT });
+  const plugin = makePlugin({
+    filePath: "a.md",
+    editor,
+    freshness: freshnessCapable([entry], BASE_COUNTS),
+    dateText: DATE,
+  });
+  await plugin.refreshTaskFreshness(editor, { dateText: DATE });
+  const cardCtx = plugin.openedCards[0];
+  assert.ok(cardCtx, "the decay card opened");
+  const namer = createSiblingNamer({
+    editors: [{ path: "a.md", editor }],
+    sourcePath: "a.md",
+    subjects: helpers.rottenKeepSubjects({
+      raw: cardCtx.rawLine,
+      entry: cardCtx.entry,
+      line: cardCtx.line,
+      sourcePath: cardCtx.filePath,
+    }),
+  });
+  assert.deepEqual(
+    helpers.rottenKeepSubjects({ raw: cardCtx.rawLine, entry: cardCtx.entry, line: cardCtx.line, sourcePath: "a.md" }),
+    [{ path: "a.md", line: 2 }],
+    "the Stay reason's `((` shows the decaying task disabled",
+  );
+  await namer.assertSubjectGuarded("Buy milk");
+  await namer.nameSibling("Sibling idea", "sibling-idea");
+  const ok = await plugin.applyFreshnessDecayCardChoice(cardCtx, "stay", { reason: "still useful" });
+  assert.equal(ok, true, notices.join(" | "));
+  assert.match(editor.state.lines[2], /\[fresh:: 2026-10-20\]/, "Stay stamped the decaying task's own line");
+  assert.doesNotMatch(editor.state.lines[2], /keeps::/);
+  assert.ok(
+    editor.state.lines.includes("- [ ] #task Sibling idea ^sibling-idea"),
+    "the named sibling kept its ID",
+  );
+  const history = helpers.readRottenLog(editor.state.lines.join("\n"), 2);
+  assert.equal(history.entries[0].reason, "still useful");
+  namer.close();
+});
+
+test("the decay card's keep options carry the decaying task's line for its prose subjects", async () => {
+  clearNotices();
+  openedModals.length = 0;
+  const { editor, plugin } = singleAtLimitFixture();
+  await plugin.refreshTaskFreshness(editor, { dateText: DATE });
+  const cardCtx = plugin.openedCards[0];
+  assert.equal(cardCtx.line, 2);
+  const card = plugin.activeFreshnessDecayCard;
+  assert.ok(card);
+  assert.equal(card.rottenKeep.line, 2, "the Stay stage's options carry the card's task line");
+  assert.deepEqual(helpers.rottenKeepSubjects(card.rottenKeep), [{ path: "a.md", line: 2 }]);
+});

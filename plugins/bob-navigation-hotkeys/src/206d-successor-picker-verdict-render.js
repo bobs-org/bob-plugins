@@ -159,6 +159,9 @@ function successorStatusForHighlight(modal) {
       return null;
     }
     const active = modal.visibleItems && modal.visibleItems[modal.selectedIndex];
+    if (active && active.kind === "requirement" && typeof successorRequirementStatusForRow === "function") {
+      return successorRequirementStatusForRow(modal, active.row.key);
+    }
     if (!active || active.kind !== "offer" || !active.row) {
       return null;
     }
@@ -181,7 +184,13 @@ function successorRenderStatusLine(modal, footerHost) {
     if (modal.escArmed === true) {
       const counts = successorVerdictCounts(modal);
       const total = counts.done + counts.cancel;
-      if (total > 0) {
+      const reqCount = typeof successorRequirementChoiceCount === "function"
+        ? successorRequirementChoiceCount(modal) : 0;
+      if (total > 0 && reqCount > 0) {
+        status = { text: `Esc again to discard ${total + reqCount} staged choices`, kind: "warning" };
+      } else if (reqCount > 0) {
+        status = { text: `Esc again to discard ${reqCount} requirement choice${reqCount === 1 ? "" : "s"}`, kind: "warning" };
+      } else if (total > 0) {
         status = { text: successorEscArmedText(total), kind: "warning" };
       }
     } else if (!status) {
@@ -388,8 +397,9 @@ function successorDropParkedReasonEditor(modal) {
 
 // Inline cancel reason field. Replaces the row's detail line while open.
 // Enter confirms, Esc or Ctrl+[ restores, blur confirms the typed text.
-function successorRenderReasonEditor(modal, container, row, draft) {
+function successorRenderReasonEditor(modal, container, row, draft, options = {}) {
   try {
+    const requirement = options && options.requirement === true;
     const parked = modal.reasonParked && modal.reasonParked.key === row.key ? modal.reasonParked : null;
     if (parked) modal.reasonParked = null;
     const initial = parked ? parked.value : draft || "";
@@ -403,8 +413,8 @@ function successorRenderReasonEditor(modal, container, row, draft) {
       cls: "bob-successor-reason-input",
       attr: {
         type: "text",
-        placeholder: SUCCESSOR_VERDICT_REASON_PLACEHOLDER,
-        "aria-label": SUCCESSOR_VERDICT_REASON_PLACEHOLDER,
+        placeholder: requirement ? REQ_CLOSE_COPY.DROP_PROMPT : SUCCESSOR_VERDICT_REASON_PLACEHOLDER,
+        "aria-label": requirement ? REQ_CLOSE_COPY.DROP_PROMPT : SUCCESSOR_VERDICT_REASON_PLACEHOLDER,
         value: initial,
       },
     });
@@ -460,19 +470,24 @@ function successorRenderReasonEditor(modal, container, row, draft) {
       try {
         if (resolved || modal.reasonEditKey !== row.key) return;
         resolved = true;
-        const reason = normalizeSuccessorCancelReason(value);
+        const reason = requirement
+          ? reqCloseNormalizeReason(value)
+          : normalizeSuccessorCancelReason(value);
         const current = modal.verdicts instanceof Map ? modal.verdicts.get(row.key) : null;
-        if (current && current.outcome === SUCCESSOR_VERDICT_CANCELLED) {
+        if (requirement) {
+          successorRequirementSetChoice(modal, row.key, "drop", reason);
+          modal.reasonPreviousRequirementChoice = null;
+        } else if (current && current.outcome === SUCCESSOR_VERDICT_CANCELLED) {
           modal.verdicts.set(row.key, { outcome: SUCCESSOR_VERDICT_CANCELLED, reason });
         } else {
           successorSetVerdict(modal, row.key, SUCCESSOR_VERDICT_CANCELLED, reason);
         }
         modal.reasonEditKey = null;
-        modal.statusLine = {
-          text: successorStatusTextForRow(row, SUCCESSOR_VERDICT_CANCELLED),
-          kind: "consequence",
-        };
-        const advance = successorNextSelectableKey(modal, row.key);
+        modal.reasonEditKind = null;
+        modal.statusLine = requirement
+          ? { text: successorRequirementStatusForRow(modal, row.key).text, kind: "consequence" }
+          : { text: successorStatusTextForRow(row, SUCCESSOR_VERDICT_CANCELLED), kind: "consequence" };
+        const advance = requirement ? null : successorNextSelectableKey(modal, row.key);
         modal.renderAll();
         if (advance) {
           const visible = modal.visibleItems || [];
@@ -493,17 +508,26 @@ function successorRenderReasonEditor(modal, container, row, draft) {
       try {
         if (resolved || modal.reasonEditKey !== row.key) return;
         resolved = true;
-        const previous = modal.reasonPreviousVerdict || null;
-        if (modal.verdicts instanceof Map) {
-          if (previous) {
-            modal.verdicts.set(row.key, previous);
-          } else {
-            modal.verdicts.delete(row.key);
+        if (requirement) {
+          const previous = modal.reasonPreviousRequirementChoice || null;
+          if (modal.requirementChoices instanceof Map) {
+            if (previous) modal.requirementChoices.set(row.key, previous);
+            else modal.requirementChoices.delete(row.key);
+          }
+          modal.reasonPreviousRequirementChoice = null;
+        } else {
+          const previous = modal.reasonPreviousVerdict || null;
+          if (modal.verdicts instanceof Map) {
+            if (previous) modal.verdicts.set(row.key, previous);
+            else modal.verdicts.delete(row.key);
           }
         }
         modal.reasonEditKey = null;
+        modal.reasonEditKind = null;
         modal.reasonPreviousVerdict = null;
-        modal.statusLine = successorStatusForHighlight(modal);
+        modal.statusLine = requirement
+          ? successorRequirementStatusForRow(modal, row.key)
+          : successorStatusForHighlight(modal);
         modal.renderAll();
         if (modal.inputEl && typeof modal.inputEl.focus === "function") {
           modal.inputEl.focus();

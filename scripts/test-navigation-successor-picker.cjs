@@ -85,6 +85,61 @@ function modelFor(count, options = {}) {
   };
 }
 
+function requirementModel(options = {}) {
+  const ownerKey = "work/ship.md#^ship@owner-snapshot";
+  const parentKey = `${ownerKey}/req/1~parent000`;
+  const childKey = `${ownerKey}/req/1.1~child000`;
+  return {
+    title: "Choose successor tasks",
+    groups: [{
+      group: "requirements",
+      kind: "requirements",
+      owner: {
+        task_key: "work/ship.md#^ship",
+        key: ownerKey,
+        path: "work/ship.md",
+        block_id: "ship",
+        line: 3,
+        text: "Ship parser",
+        ink: "var(--task-status-next)",
+      },
+      copy: {
+        title: "Requirements · “Ship parser”",
+        scope: "2 reqs",
+        why: "Met when it closes, unless you say otherwise",
+        history: "· 1 dropped earlier",
+        footer: "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
+        hint: "-k N own task · -X N[=why] drop · -p N pull in",
+        glyph: "⌗⌗",
+      },
+      folded: { hidden: 1, dropped: 1, carried: 0, met: 0 },
+      rows: [
+        {
+          offer: { key: parentKey, n: 1, group: "requirements", selected: false },
+          req: { owner: ownerKey, path: "1", depth: 1, parent_key: null, text: "Handle supported input", line: 4, state: "pending", pending_descendants: 1 },
+          consequences: {
+            met: "Met when it closes, unless you say otherwise",
+            drop: "⊘ Dropped “Handle supported input”",
+            carry: "→ “Handle supported input” is its own task now",
+            carry_pulled: "→ “Handle supported input” is its own task now · pulled in",
+          },
+        },
+        {
+          offer: { key: childKey, n: 2, group: "requirements", selected: false },
+          req: { owner: ownerKey, path: "1.1", depth: 2, parent_key: parentKey, text: "Preserve CRLF", line: 5, state: "pending", pending_descendants: 0 },
+          consequences: {
+            met: "Met when it closes, unless you say otherwise",
+            drop: "⊘ Dropped “Preserve CRLF”",
+            carry: "→ “Preserve CRLF” is its own task now",
+            carry_pulled: "→ “Preserve CRLF” is its own task now · pulled in",
+          },
+        },
+      ],
+    }],
+    ...(options.jump ? { jump: { supported: true } } : {}),
+  };
+}
+
 function makePlugin(options = {}) {
   const plugin = Object.create(NavigationHotkeysPlugin.prototype);
   let now = options.now === undefined ? 1000 : options.now;
@@ -989,7 +1044,7 @@ function keepMovingModel(groups = [keepMovingGroup()], extra = {}) {
 
 test("picker API v2 renders a keep_moving group: title, caption, tag, lanes, fold line, and the skip-forward icon", async () => {
   const plugin = makePlugin();
-  assert.equal(plugin.api.successors.version, 5);
+  assert.equal(plugin.api.successors.version, 6);
   const { pending, modal } = await openPicker(plugin, keepMovingModel());
   assert.equal(modal.title, "Keep ‹sase_badges› moving", "only-keep_moving models derive the picker title");
   assert.equal(modal.headerIcon, "skip-forward");
@@ -1305,7 +1360,7 @@ function relationModel(groups = [relationGroup()], extra = {}) {
 
 test("picker API v3 renders a relation group: header, caption, tag, fold, title, and link-2 icon", async () => {
   const plugin = makePlugin();
-  assert.equal(plugin.api.successors.version, 5);
+  assert.equal(plugin.api.successors.version, 6);
   const { pending, modal } = await openPicker(plugin, relationModel());
   assert.equal(modal.title, REL_HEADER);
   assert.equal(modal.headerIcon, "link-2");
@@ -1444,9 +1499,9 @@ function pressJump(modal, keyOptions = {}) {
   return pressKey(modal, "j", { ctrlKey: true, ...keyOptions });
 }
 
-test("api.successors is v5 and the jump model normalizes support", () => {
+test("api.successors is v6 and the jump model normalizes support", () => {
   const plugin = makePlugin();
-  assert.equal(plugin.api.successors.version, 5);
+  assert.equal(plugin.api.successors.version, 6);
   const supported = helpers.normalizeSuccessorPickerModel(jumpModel(1));
   assert.deepEqual(supported.jump, { supported: true });
   const unsupported = helpers.normalizeSuccessorPickerModel(modelFor(1));
@@ -1665,13 +1720,134 @@ test("the footer summary truncates long jump targets to 40 characters", async ()
   assert.equal(await pending, null);
 });
 
-test("v5 pick() passes jump-only results and still drops empty commits", async () => {
+test("v6 pick() passes jump-only and req-only results and still drops empty commits", async () => {
+  const requirementKey = requirementModel().groups[0].rows[0].offer.key;
   assert.deepEqual(
     await helpers.createSuccessorPickerApi({ pickSuccessorOffers: async () => ({ picks: [], jump: { key: "k" } }) }).pick({}),
     { picks: [], jump: { key: "k" } },
+  );
+  assert.deepEqual(
+    await helpers.createSuccessorPickerApi({ pickSuccessorOffers: async () => ({ picks: [], reqs: [{ key: requirementKey, verdict: "carry" }] }) }).pick({}),
+    { picks: [], reqs: [{ key: requirementKey, verdict: "carry" }] },
   );
   assert.equal(
     await helpers.createSuccessorPickerApi({ pickSuccessorOffers: async () => ({ picks: [] }) }).pick({}),
     null,
   );
+});
+
+test("v6 normalizes a requirement-only model and renders canonical copy, depth, history, and ink", async () => {
+  const model = requirementModel();
+  const normalized = helpers.normalizeSuccessorPickerModel(model);
+  assert.equal(normalized.requirementsOnly, true);
+  assert.equal(normalized.selectableCount, 2);
+  assert.equal(normalized.taskRowCount, 0);
+  assert.equal(normalized.groups[0].owner.key, model.groups[0].owner.key);
+  assert.equal(normalized.groups[0].copy.title, model.groups[0].copy.title);
+  assert.equal(normalized.groups[0].folded.hidden, 1);
+  assert.equal(normalized.groups[0].rows[1].offer.key, model.groups[0].rows[1].offer.key);
+  assert.equal(normalized.groups[0].rows[1].req.parent_key, model.groups[0].rows[1].req.parent_key);
+  assert.equal(normalized.groups[0].rows[1].consequences.carry, model.groups[0].rows[1].consequences.carry);
+
+  const plugin = makePlugin();
+  const { pending, modal } = await openPicker(plugin, model);
+  assert.deepEqual(modal.visibleItems.map((item) => item.kind), ["requirement", "requirement"]);
+  assert.match(allText(modal.resultsEl), /Requirements · “Ship parser”/);
+  assert.match(allText(modal.resultsEl), /2 reqs/);
+  assert.match(allText(modal.resultsEl), /Met when it closes, unless you say otherwise/);
+  assert.match(allText(modal.resultsEl), /· 1 dropped earlier/);
+  assert.match(allText(modal.resultsEl), /⌗⌗⌗/);
+  assert.match(allText(modal.resultsEl), /Preserve CRLF/);
+  const rows = findAll(modal.resultsEl, "bob-successor-req-row");
+  assert.equal(rows.length, 2);
+  assert.equal(rows[1].getAttribute("aria-label"), "requirement, level 2, will be met — Preserve CRLF");
+  assert.match(rows[0].getAttribute("style"), /--bob-successor-req-ink:var\(--task-status-next\)/);
+  assert.match(allText(modal.footerEl), /reqs ✓2 ⊘0 →0/);
+
+  pressKey(modal, "a", { ctrlKey: true });
+  assert.equal(modal.markedKeys.size, 0, "Ctrl+A never marks requirement rows");
+  assert.equal(modal.requirementChoices.size, 0, "mark-all does not stage requirement verdicts");
+  modal.allowCloseWithoutArm = true;
+  modal.close();
+  assert.equal(await pending, null);
+});
+
+test("requirement keys stage explicit Met, carry, and carry-pulled and settle req-only results", async () => {
+  const model = requirementModel();
+  const [parent, child] = model.groups[0].rows.map((row) => row.offer.key);
+  const plugin = makePlugin({ now: 5000 });
+  const { pending, modal } = await openPicker(plugin, model);
+
+  pressKey(modal, "x", { ctrlKey: true });
+  assert.deepEqual(modal.requirementChoices.get(parent), { verdict: "met", explicit: true });
+  pressKey(modal, "t", { ctrlKey: true, shiftKey: true });
+  assert.equal(modal.requirementChoices.get(parent).verdict, "carry");
+  pressKey(modal, "t", { ctrlKey: true, shiftKey: true });
+  assert.deepEqual(modal.requirementChoices.get(parent), { verdict: "met", explicit: true }, "repeating carry returns to Met");
+
+  modal.selectedIndex = 1;
+  modal.renderResults();
+  pressKey(modal, " ");
+  assert.equal(modal.requirementChoices.get(child).verdict, "carry_pulled");
+  assert.match(allText(modal.footerEl), /reqs ✓1 ⊘0 →1/);
+  plugin.setNow(6000);
+  pressKey(modal, "Enter");
+  assert.deepEqual(await pending, {
+    picks: [],
+    reqs: [
+      { key: parent, verdict: "met" },
+      { key: child, verdict: "carry_pulled" },
+    ],
+  });
+});
+
+test("branch choices retain folded descendants, show the ancestor conflict, and unfold on Met", async () => {
+  const model = requirementModel();
+  const [parent, child] = model.groups[0].rows.map((row) => row.offer.key);
+  const plugin = makePlugin({ now: 5000 });
+  const { pending, modal } = await openPicker(plugin, model);
+  modal.selectedIndex = 1;
+  modal.renderResults();
+  pressKey(modal, "t", { ctrlKey: true, shiftKey: true });
+  modal.selectedIndex = 0;
+  modal.renderResults();
+  pressKey(modal, "t", { ctrlKey: true, shiftKey: true });
+
+  assert.equal(modal.requirementChoices.get(child).verdict, "carry", "the child choice is retained under the folded ancestor");
+  assert.equal(modal.requirementChoices.get(parent).verdict, "carry");
+  assert.match(allText(modal.resultsEl), /· 1 nested go with it/);
+  assert.match(allText(modal.resultsEl), /“Handle supported input” already takes this branch — restage it as met to choose here/);
+  plugin.setNow(6000);
+  pressKey(modal, "Enter");
+  assert.equal(modal.didSettle, false, "an unresolved overlap cannot submit");
+
+  modal.selectedIndex = modal.visibleItems.findIndex((item) => item.kind === "requirement" && item.row.key === parent);
+  pressKey(modal, "x", { ctrlKey: true });
+  assert.equal(modal.requirementChoices.get(parent).verdict, "met");
+  assert.equal(modal.visibleItems.some((item) => item.kind === "requirement" && item.row.key === child), true,
+    "restaging Met restores the descendant row and its staged choice");
+  pressKey(modal, "Enter");
+  assert.deepEqual(await pending, {
+    picks: [],
+    reqs: [
+      { key: parent, verdict: "met" },
+      { key: child, verdict: "carry" },
+    ],
+  });
+});
+
+test("Ctrl+J pins a requirement for navigation only and supports a pin-only settlement", async () => {
+  const model = requirementModel({ jump: true });
+  const [first, second] = model.groups[0].rows.map((row) => row.offer.key);
+  const plugin = makePlugin({ now: 5000 });
+  const { pending, modal } = await openPicker(plugin, model);
+  pressJump(modal);
+  assert.equal(modal.jumpKey, first);
+  pressKey(modal, "n", { ctrlKey: true });
+  pressJump(modal);
+  assert.equal(modal.jumpKey, second, "only one requirement pin is retained");
+  assert.equal(modal.requirementChoices.size, 0, "pinning never stages a verdict");
+  plugin.setNow(6000);
+  pressKey(modal, "Enter");
+  assert.deepEqual(await pending, { picks: [], reqs: [], jump: { key: second } });
 });

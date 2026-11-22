@@ -108,11 +108,12 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
       title: normalized ? normalized.title : "Choose successor tasks",
       headerIcon: normalized && normalized.relationOnly
         ? "link-2"
-        : normalized && normalized.keepMovingOnly ? "skip-forward" : "git-pull-request",
+        : normalized && normalized.keepMovingOnly ? "skip-forward"
+          : normalized && normalized.requirementsOnly ? "list-check" : "git-pull-request",
       inputLabel: "Filter successor offers",
       placeholder: "Filter tasks, notes, and groups",
       resultsLabel: "Successor offers",
-      emptyText: "No matching offers",
+      emptyText: normalized && normalized.requirementsOnly ? "No matching requirements" : "No matching offers",
       footerHints: SUCCESSOR_PICKER_FOOTER_HINTS.slice(),
     });
     this.model = normalized;
@@ -124,10 +125,15 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
     // Per-row verdicts (`api.successors` v4): key → {outcome, reason?}.
     // One verdict per row, staged never written, exclusive with marks.
     this.verdicts = new Map();
+    // Requirement choices are separate from task-offer marks and close
+    // verdicts. Explicit Met remains distinct from untouched default Met.
+    this.requirementChoices = new Map();
     // Jump pin (`api.successors` v5): the pinned offer key, or null.
     this.jumpKey = null;
     this.reasonEditKey = null;
+    this.reasonEditKind = null;
     this.reasonPreviousVerdict = null;
+    this.reasonPreviousRequirementChoice = null;
     this.reasonOpenedAt = null;
     this.reasonRecall = null;
     this.restoreReason = null;
@@ -181,6 +187,9 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
         }
         if (typeof successorInstallJumpModalPatches === "function") {
           successorInstallJumpModalPatches();
+        }
+        if (typeof successorInstallRequirementModalPatches === "function") {
+          successorInstallRequirementModalPatches();
         }
       } catch (_error) {
         // The card renders without verdict keys rather than throwing.
@@ -345,13 +354,19 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
         return;
       }
     }
+    if (this.reasonEditKey != null && this.reasonEditKind === "requirement") {
+      return;
+    }
     if (typeof this.handleJumpKey === "function" && this.handleJumpKey(event)) {
+      return;
+    }
+    if (typeof this.handleRequirementKey === "function" && this.handleRequirementKey(event)) {
       return;
     }
     if (this.handleVerdictKey(event)) {
       return;
     }
-    if (this.escArmed === true && successorModalHasVerdicts(this)) {
+    if (this.escArmed === true && successorModalHasStagedChoices(this)) {
       const harmless = event.key === "Shift" || event.key === "Control" || event.key === "Alt" || event.key === "Meta";
       if (!harmless) {
         this.escArmed = false;
@@ -369,7 +384,9 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
         return;
       }
       const active = this.visibleItems[this.selectedIndex];
-      if (this.markedKeys.size > 0 || successorModalHasVerdicts(this) || this.jumpKey != null) {
+      if (this.markedKeys.size > 0 || successorModalHasVerdicts(this) ||
+          (typeof successorRequirementHasStagedChoices === "function" && successorRequirementHasStagedChoices(this)) ||
+          this.jumpKey != null) {
         this.applySelection();
         return;
       }
@@ -377,7 +394,7 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
         this.expandGroup(active.groupIndex);
         return;
       }
-      if (active && active.kind === "offer" && active.row.selectable) {
+      if (active && (active.kind === "offer" || active.kind === "requirement") && active.row.selectable) {
         this.applySelection();
       }
       return;
@@ -453,6 +470,9 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
     if (!group) {
       return;
     }
+    if (group.group === "requirements") {
+      return;
+    }
     for (const row of group.rows) {
       if (row.selectable) {
         if (this.verdicts instanceof Map && this.verdicts.has(row.key)) {
@@ -506,7 +526,9 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
     if (!query) {
       return group.rows.map((row, index) => ({ row, index }));
     }
-    const context = [group.header, group.caption, group.tag, group.project, group.foldText, group.label, group.event, successorPickerGroupTitle(group)]
+    const context = [group.header, group.caption, group.tag, group.project, group.foldText, group.label, group.event,
+      group.copy && group.copy.title, group.copy && group.copy.scope, group.copy && group.copy.why,
+      group.copy && group.copy.history, group.owner && group.owner.text, successorPickerGroupTitle(group)]
       .join(" ").toLowerCase();
     if (context.includes(query)) {
       return group.rows.map((row, index) => ({ row, index }));
@@ -536,10 +558,13 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
   }
 
   renderFooter() {
+    const active = this.visibleItems && this.visibleItems[this.selectedIndex];
     try {
-      this.footerHints = typeof successorJumpFooterHints === "function"
-        ? successorJumpFooterHints(this)
-        : successorVerdictFooterHints(this);
+      this.footerHints = active && active.kind === "requirement" && typeof successorRequirementFooterHints === "function"
+        ? successorRequirementFooterHints(this)
+        : typeof successorJumpFooterHints === "function"
+          ? successorJumpFooterHints(this)
+          : successorVerdictFooterHints(this);
     } catch (_error) {
       // The static hints stay when the verdict hints cannot build.
     }
@@ -562,6 +587,15 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
     } catch (_error) {
       // The pull count stands without the jump summary.
     }
+    if (typeof successorRequirementCounts === "function") {
+      const reqs = successorRequirementCounts(this);
+      if (reqs && reqs.met + reqs.dropped + reqs.carried > 0) {
+        summary.createSpan({
+          cls: "bob-successor-req-summary",
+          text: reqCloseSummary(reqs.met, reqs.dropped, reqs.carried),
+        });
+      }
+    }
     if (this.model.budget) {
       const current = this.model.budget.links;
       const maximum = this.model.budget.max;
@@ -579,7 +613,9 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
       return;
     }
     const activeBefore = this.visibleItems[this.selectedIndex];
-    const oldKey = activeBefore && activeBefore.kind === "offer" ? activeBefore.row.key : null;
+    const oldKey = typeof successorPickerItemKey === "function"
+      ? successorPickerItemKey(activeBefore)
+      : activeBefore && activeBefore.kind === "offer" ? activeBefore.row.key : null;
     const query = this.getQuery();
     const navigation = [];
     if (typeof successorParkReasonEditor === "function") successorParkReasonEditor(this);
@@ -589,6 +625,10 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
       const group = this.model.groups[groupIndex];
       const matches = this.matchingRows(group, query);
       if (query && matches.length === 0) {
+        continue;
+      }
+      if (group.group === "requirements" && typeof successorRequirementRenderGroup === "function") {
+        successorRequirementRenderGroup(this, group, groupIndex, matches, query, navigation);
         continue;
       }
       const groupEl = this.resultsEl.createDiv({ cls: `bob-successor-group is-${group.group}` });
@@ -709,15 +749,15 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
     }
     this.visibleItems = navigation;
     if (this.highlightKeyAfterRender) {
-      const desired = navigation.findIndex((item) => item.kind === "offer" && item.row.key === this.highlightKeyAfterRender);
+      const desired = navigation.findIndex((item) => successorPickerItemKey(item) === this.highlightKeyAfterRender);
       if (desired >= 0) this.selectedIndex = desired;
       this.highlightKeyAfterRender = null;
     } else if (oldKey) {
-      const retained = navigation.findIndex((item) => item.kind === "offer" && item.row.key === oldKey);
+      const retained = navigation.findIndex((item) => successorPickerItemKey(item) === oldKey);
       if (retained >= 0) this.selectedIndex = retained;
     }
     if (this.selectedIndex >= navigation.length || this.selectedIndex < 0) {
-      this.selectedIndex = navigation.findIndex((item) => item.kind === "offer" && item.row.selectable);
+      this.selectedIndex = navigation.findIndex((item) => successorPickerItemKey(item) && item.row.selectable);
       if (this.selectedIndex < 0) this.selectedIndex = 0;
     }
     if (navigation.length === 0) {
@@ -743,10 +783,15 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
   updateSubtitle() {
     if (!this.subtitleEl || !this.model) return;
     const predecessorCount = this.model.predecessors.length;
-    const predecessorText = predecessorCount === 1
+    const predecessorText = this.model.requirementsOnly
+      ? "Task requirements"
+      : predecessorCount === 1
       ? this.model.predecessors[0].text || successorPickerNoteName(this.model.predecessors[0].notePath)
       : predecessorCount > 1 ? `${predecessorCount} predecessors` : "Successor offers";
-    this.subtitleEl.textContent = `${predecessorText} · ${this.model.selectableCount} offer${this.model.selectableCount === 1 ? "" : "s"}`;
+    const count = this.model.requirementsOnly
+      ? `${this.model.selectableCount} requirement${this.model.selectableCount === 1 ? "" : "s"}`
+      : `${this.model.selectableCount} offer${this.model.selectableCount === 1 ? "" : "s"}`;
+    this.subtitleEl.textContent = `${predecessorText} · ${count}`;
   }
 
   applySelection() {

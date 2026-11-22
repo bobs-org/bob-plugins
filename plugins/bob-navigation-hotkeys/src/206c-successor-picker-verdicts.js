@@ -462,7 +462,10 @@ function successorInstallVerdictModalPatches() {
         if (this.didSettle === true || this.allowCloseWithoutArm === true) {
           return Object.getPrototypeOf(proto).close.call(this);
         }
-        if (this.verdicts instanceof Map && this.verdicts.size > 0) {
+        const hasStaged = typeof successorModalHasStagedChoices === "function"
+          ? successorModalHasStagedChoices(this)
+          : this.verdicts instanceof Map && this.verdicts.size > 0;
+        if (hasStaged) {
           if (this.escArmed !== true) {
             this.escArmed = true;
             try {
@@ -473,10 +476,13 @@ function successorInstallVerdictModalPatches() {
             return this;
           }
           this.verdicts.clear();
+          if (this.requirementChoices instanceof Map) this.requirementChoices.clear();
           this.escArmed = false;
           this.statusLine = null;
           this.reasonEditKey = null;
+          this.reasonEditKind = null;
           this.reasonPreviousVerdict = null;
+          this.reasonPreviousRequirementChoice = null;
         }
         return Object.getPrototypeOf(proto).close.call(this);
       } catch (_error) {
@@ -569,7 +575,10 @@ function successorInstallVerdictModalPatches() {
 
     proto.handleEscapeKey = function successorHandleEscapeKey(event) {
       try {
-        if (!successorModalHasVerdicts(this)) {
+        const hasStaged = typeof successorModalHasStagedChoices === "function"
+          ? successorModalHasStagedChoices(this)
+          : successorModalHasVerdicts(this);
+        if (!hasStaged) {
           return false;
         }
         event.preventDefault();
@@ -580,10 +589,13 @@ function successorInstallVerdictModalPatches() {
           return true;
         }
         this.verdicts.clear();
+        if (this.requirementChoices instanceof Map) this.requirementChoices.clear();
         this.escArmed = false;
         this.statusLine = null;
         this.reasonEditKey = null;
+        this.reasonEditKind = null;
         this.reasonPreviousVerdict = null;
+        this.reasonPreviousRequirementChoice = null;
         this.renderAll();
         return true;
       } catch (_error) {

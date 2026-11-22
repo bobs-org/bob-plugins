@@ -301,12 +301,109 @@ function normalizeSuccessorPickerTaskContext(task) {
   }
 }
 
+function normalizeSuccessorRequirementOwner(owner) {
+  if (!owner || typeof owner !== "object") return null;
+  const normalized = Object.assign({}, owner);
+  normalized.key = successorPickerText(owner.key);
+  normalized.path = successorPickerText(owner.path);
+  normalized.text = successorPickerText(owner.text);
+  normalized.task_key = successorPickerText(owner.task_key);
+  normalized.block_id = successorPickerText(owner.block_id);
+  normalized.line = Number.isInteger(owner.line) && owner.line > 0 ? owner.line : null;
+  if (!normalized.key || !normalized.path || !normalized.text || !normalized.line) return null;
+  return Object.freeze(normalized);
+}
+
+function normalizeSuccessorRequirementCopy(copy) {
+  if (!copy || typeof copy !== "object") return null;
+  const normalized = Object.assign({}, copy);
+  for (const key of ["title", "scope", "why", "history", "footer", "hint", "glyph"]) {
+    if (copy[key] != null) normalized[key] = successorPickerText(copy[key]);
+  }
+  if (!normalized.title || !normalized.scope || !normalized.why) return null;
+  return Object.freeze(normalized);
+}
+
+function normalizeSuccessorRequirementGroup(source) {
+  if (!source || typeof source !== "object" || source.group !== "requirements" ||
+      source.kind !== "requirements") return null;
+  const owner = normalizeSuccessorRequirementOwner(source.owner);
+  const copy = normalizeSuccessorRequirementCopy(source.copy);
+  if (!owner || !copy) return null;
+  const foldedSource = source.folded && typeof source.folded === "object" ? source.folded : {};
+  const folded = Object.freeze(Object.assign({}, foldedSource, {
+    hidden: successorPickerCount(foldedSource.hidden),
+  }));
+  const rows = [];
+  for (const sourceRow of Array.isArray(source.rows) ? source.rows : []) {
+    if (!sourceRow || typeof sourceRow !== "object" || !sourceRow.offer || typeof sourceRow.offer !== "object" ||
+        !sourceRow.req || typeof sourceRow.req !== "object") continue;
+    const offer = Object.assign({}, sourceRow.offer);
+    const req = Object.assign({}, sourceRow.req);
+    const key = successorPickerText(offer.key);
+    const text = successorPickerText(req.text);
+    const depth = Number(req.depth);
+    if (!key || !text || !Number.isInteger(depth) || depth < 1) continue;
+    offer.key = key;
+    offer.group = "requirements";
+    offer.selected = offer.selected === true;
+    req.owner = successorPickerText(req.owner || owner.key);
+    req.path = successorPickerText(req.path);
+    req.depth = depth;
+    req.parent_key = successorPickerText(req.parent_key) || null;
+    req.text = text;
+    req.line = Number.isInteger(req.line) && req.line > 0 ? req.line : null;
+    req.state = successorPickerText(req.state) || "pending";
+    req.pending_descendants = successorPickerCount(req.pending_descendants);
+    const consequencesSource = sourceRow.consequences && typeof sourceRow.consequences === "object"
+      ? sourceRow.consequences : {};
+    const consequences = Object.freeze(Object.fromEntries(
+      ["met", "drop", "carry", "carry_pulled"]
+        .filter((key) => typeof consequencesSource[key] === "string")
+        .map((key) => [key, successorPickerText(consequencesSource[key])]),
+    ));
+    const row = Object.freeze({
+      key,
+      text,
+      notePath: owner.path,
+      status: req.state,
+      lane: "",
+      destinationLabel: "",
+      needsBlockId: false,
+      selectable: true,
+      group: "requirements",
+      owner,
+      copy,
+      folded,
+      offer: Object.freeze(offer),
+      req: Object.freeze(req),
+      consequences,
+      ...(req.run ? { run: successorPickerText(req.run) } : {}),
+      ...(req.accessibility ? { accessibility: successorPickerText(req.accessibility) } : {}),
+    });
+    rows.push(row);
+  }
+  if (rows.length === 0) return null;
+  return Object.freeze({
+    group: "requirements",
+    kind: "requirements",
+    header: copy.title,
+    caption: copy.why,
+    tag: "",
+    project: owner.path,
+    owner,
+    copy,
+    folded,
+    rows: Object.freeze(rows),
+  });
+}
+
 function normalizeSuccessorPickerModel(model) {
   try {
     if (!model || typeof model !== "object" || !Array.isArray(model.groups)) {
       return null;
     }
-    const allowedGroups = new Set(["hand_off", "project", "project_finished", "keep_moving", "relation"]);
+    const allowedGroups = new Set(["hand_off", "project", "project_finished", "keep_moving", "relation", "requirements"]);
     const seenKeys = new Set();
     const groups = [];
     let selectableCount = 0;
@@ -314,6 +411,17 @@ function normalizeSuccessorPickerModel(model) {
     const closeSupported = Boolean(model.close && typeof model.close === "object" && model.close.supported === true);
     for (const source of model.groups) {
       if (!source || typeof source !== "object" || !allowedGroups.has(source.group)) {
+        continue;
+      }
+      if (source.group === "requirements") {
+        const requirementGroup = normalizeSuccessorRequirementGroup(source);
+        if (!requirementGroup) continue;
+        for (const row of requirementGroup.rows) {
+          if (seenKeys.has(row.key)) return null;
+          seenKeys.add(row.key);
+          selectableCount += 1;
+        }
+        groups.push(requirementGroup);
         continue;
       }
       const rows = [];
@@ -412,8 +520,12 @@ function normalizeSuccessorPickerModel(model) {
           text: successorPickerText(row.text),
         }))
       : [];
+    // Requirement groups are always first on the v6 card, including for
+    // callers that assembled a mixed model in a different order.
+    groups.sort((left, right) => (left.group === "requirements" ? 0 : 1) - (right.group === "requirements" ? 0 : 1));
     const keepMovingOnly = successorPickerAllKeepMoving(groups);
     const relationOnly = successorPickerAllRelation(groups);
+    const requirementsOnly = groups.length > 0 && groups.every((group) => group.group === "requirements");
     const jumpSupported = Boolean(model.jump && typeof model.jump === "object" && model.jump.supported === true);
     return Object.freeze({
       title: successorPickerText(model.title) ||
@@ -425,6 +537,7 @@ function normalizeSuccessorPickerModel(model) {
       budget,
       keepMovingOnly,
       relationOnly,
+      requirementsOnly,
       selectableCount,
       taskRowCount,
       ...(closeSupported ? { close: Object.freeze({ supported: true }) } : {}),

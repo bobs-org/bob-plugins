@@ -544,6 +544,30 @@ navigates and never shows an Undo notice: the standalone `Ctrl+Shift+T`
 command owns its notice and landing, and the close card owns the batch
 receipt. Feature-detect the namespace with
 `Number(api.taskSplit?.version) >= 1`.
+
+`successors` v6 adds `requirements` groups before ordinary successor groups
+(`docs/task-dependencies.md` §12.25 in bob-cli). A group has
+`group: "requirements"`, `kind: "requirements"`, snapshot-bound `owner`,
+canonical `copy` and `folded`, plus rows with the `offer`, `req`, and
+`consequences` objects from bob. Requirement-only models need no ordinary
+offer, close descriptor, or destination. The normalizer preserves these
+objects and adapts each row to the picker shell at one boundary.
+
+Requirement rows use `Ctrl+X` for Met, `Ctrl+Shift+X` for Drop with the
+optional `Why drop it? (optional)` Log Recall field, `Ctrl+Shift+T` for Carry,
+and `Space`/`Tab` for Carry plus pull-in (`Tab` advances). Repeating a choice
+returns the row to Met. A structural choice folds its descendants while
+retaining their staged choices; conflicting descendant choices remain visible
+with the canonical ancestor message and block submission until resolved.
+`Ctrl+A` never selects requirement rows. `Ctrl+J` pins a requirement row for
+navigation only. The footer shows `reqs ✓N ⊘N →N`.
+
+`pick(model)` adds `reqs: [{ key, verdict, reason? }]` to the existing result;
+`verdict` is `met`, `drop`, `carry`, or `carry_pulled`. Default Met is
+unstaged, while explicit Met remains a keyed result for validation. A req-only
+or pin-only result is non-null and may carry an empty `picks` array. Callers
+must offer requirement groups only when `api.successors?.version >= 6`; older
+pickers continue to receive v5 models.
 `blocks.openStage(ref)` and
 `blocks.removeDependent(ownerRef, target)` resolve to result
 objects. `relations.removeLink(sourceRef, targetRef)` removes the

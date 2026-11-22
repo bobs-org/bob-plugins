@@ -93,6 +93,34 @@ function plainModel(count) {
   };
 }
 
+function requirementModel() {
+  const ownerKey = "work/ship.md#^ship@owner-snapshot";
+  const key = `${ownerKey}/req/1~requirement1`;
+  return {
+    title: "Choose successor tasks",
+    groups: [{
+      group: "requirements",
+      kind: "requirements",
+      owner: { task_key: "work/ship.md#^ship", key: ownerKey, path: "work/ship.md", block_id: "ship", line: 3, text: "Ship parser" },
+      copy: {
+        title: "Requirements · “Ship parser”", scope: "1 req", why: "Met when it closes, unless you say otherwise",
+        glyph: "⌗⌗", footer: "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
+        hint: "-k N own task · -X N[=why] drop · -p N pull in",
+      },
+      rows: [{
+        offer: { key, n: 1, group: "requirements", selected: false },
+        req: { owner: ownerKey, path: "1", depth: 1, parent_key: null, text: "Handle empty input", line: 4, state: "pending", pending_descendants: 0 },
+        consequences: {
+          met: "Met when it closes, unless you say otherwise",
+          drop: "⊘ Dropped “Handle empty input”",
+          carry: "→ “Handle empty input” is its own task now",
+          carry_pulled: "→ “Handle empty input” is its own task now · pulled in",
+        },
+      }],
+    }],
+  };
+}
+
 function makePlugin(options = {}) {
   const plugin = Object.create(NavigationHotkeysPlugin.prototype);
   const recallState = { attached: [], noted: [] };
@@ -157,9 +185,9 @@ function pressVerdict(modal, shift = false, keyOptions = {}) {
   });
 }
 
-test("api.successors is v5 and the close descriptor normalizes both cases", () => {
+test("api.successors is v6 and the close descriptor normalizes both cases", () => {
   const plugin = makePlugin();
-  assert.equal(plugin.api.successors.version, 5);
+  assert.equal(plugin.api.successors.version, 6);
   const snake = helpers.normalizeSuccessorPickerModel({
     title: "Choose",
     predecessors: [],
@@ -269,6 +297,49 @@ test("Ctrl+Shift+X opens the reason field; Enter confirms and Esc restores", asy
   modal.allowCloseWithoutArm = true;
   modal.close();
   assert.equal(await pending, null);
+});
+
+test("requirement Drop reuses Log Recall, normalizes its reason, and restores staged choices on Esc", async () => {
+  const plugin = makePlugin({ now: 5000 });
+  const model = requirementModel();
+  const key = model.groups[0].rows[0].offer.key;
+  const { pending, modal } = await openPicker(plugin, model);
+  pressVerdict(modal, true);
+  assert.equal(modal.reasonEditKey, key);
+  assert.equal(modal.reasonEditKind, "requirement");
+  assert.equal(modal.requirementChoices.get(key).verdict, "drop");
+  assert.equal(plugin.recallState.attached.at(-1).kind, "cancel", "drop uses the existing Cancel Log Recall source");
+  assert.equal(plugin.recallState.attached.at(-1).sourcePath(), "work/ship.md");
+  const input = findAll(modal.resultsEl, "bob-successor-reason-input")[0];
+  assert.equal(input.getAttribute("placeholder"), "Why drop it? (optional)");
+  input.value = "  no longer needed\n now  ";
+  plugin.setNow(6000);
+  pressKey(modal, "Enter");
+  assert.equal(modal.requirementChoices.get(key).reason, "no longer needed now");
+  assert.match(allText(modal.resultsEl), /no longer needed now/);
+  plugin.setNow(7000);
+  pressKey(modal, "Enter");
+  assert.deepEqual(await pending, {
+    picks: [],
+    reqs: [{ key, verdict: "drop", reason: "no longer needed now" }],
+  });
+
+  const restorePlugin = makePlugin({ now: 5000 });
+  const restoreModel = requirementModel();
+  const restoreKey = restoreModel.groups[0].rows[0].offer.key;
+  const restored = await openPicker(restorePlugin, restoreModel);
+  pressKey(restored.modal, "t", { ctrlKey: true, shiftKey: true });
+  pressVerdict(restored.modal, true);
+  pressKey(restored.modal, "Escape");
+  assert.equal(restored.modal.reasonEditKey, null);
+  assert.equal(restored.modal.requirementChoices.get(restoreKey).verdict, "carry", "Esc restores the previous staged choice");
+  pressKey(restored.modal, "Escape");
+  assert.equal(restored.modal.escArmed, true, "the first list Esc arms the existing discard step");
+  pressKey(restored.modal, "Escape");
+  assert.equal(restored.modal.requirementChoices.size, 0, "the second Esc discards staged requirement choices");
+  restored.modal.allowCloseWithoutArm = true;
+  restored.modal.close();
+  assert.equal(await restored.pending, null);
 });
 
 test("S6 reason field opts into links and keeps its draft and band across re-renders", async () => {
@@ -537,7 +608,7 @@ test("retarget ignores verdict rows with a soft refusal", async () => {
 
 test("v3-shaped models render exactly as before with no chords", async () => {
   const plugin = makePlugin();
-  assert.equal(plugin.api.successors.version, 5);
+  assert.equal(plugin.api.successors.version, 6);
   const { pending, modal } = await openPicker(plugin, plainModel(2));
   assert.equal(findAll(modal.resultsEl, "bob-successor-verdict-actions").length, 0);
   assert.ok(!allText(modal.footerEl).includes("✓"));

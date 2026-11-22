@@ -1,10 +1,10 @@
-// Successor picker API and mixin (`api.successors` v4,
+// Successor picker API and mixin (`api.successors` v6,
 // docs/task-dependencies.md §12.13/§12.24). Extracted from 206 with no
 // behavior change so 206 stays at or below the 1000-line fragment cap.
 // Shared scope with 206, 206a-206d, and 206e.
 function createSuccessorPickerApi(plugin) {
   return Object.freeze({
-    version: 5,
+    version: 6,
     pick(model) {
       try {
         if (!plugin || plugin.successorPickerUnavailable === true || typeof plugin.pickSuccessorOffers !== "function") {
@@ -18,7 +18,8 @@ function createSuccessorPickerApi(plugin) {
                 return null;
               }
               if (result.picks.length === 0 && !(Array.isArray(result.closes) && result.closes.length > 0) &&
-                !(result.jump && typeof result.jump === "object" && typeof result.jump.key === "string" && result.jump.key)) {
+                !(result.jump && typeof result.jump === "object" && typeof result.jump.key === "string" && result.jump.key) &&
+                !Array.isArray(result.reqs)) {
                 return null;
               }
               return result;
@@ -140,14 +141,19 @@ class BobNavigationHotkeysSuccessorPickerMixin {
                 return;
               }
               const byKey = new Map();
+              const requirementKeys = new Set();
               for (const group of normalized.groups) {
                 for (const row of group.rows) {
                   if (row && typeof row.key === "string" && !byKey.has(row.key)) {
                     byKey.set(row.key, row);
+                    if (row.group === "requirements") requirementKeys.add(row.key);
                   }
                 }
               }
-              const allowed = new Set([...byKey].filter(([, row]) => row.selectable).map(([key]) => key));
+              const allowed = new Set([...byKey]
+                .filter(([, row]) => row.selectable && row.group !== "requirements")
+                .map(([key]) => key));
+              const jumpAllowed = new Set([...byKey].filter(([, row]) => row.selectable).map(([key]) => key));
               const picks = [];
               const pickedKeys = new Set();
               for (const pick of result.picks) {
@@ -165,22 +171,42 @@ class BobNavigationHotkeysSuccessorPickerMixin {
               }
               const closes = normalizeSuccessorClosesForResult({ model: normalized }, result.closes);
               const kept = closes.filter((close) => !pickedKeys.has(close.key));
+              let reqs = null;
+              if (Array.isArray(result.reqs)) {
+                reqs = [];
+                const seenReqs = new Set();
+                for (const choice of result.reqs) {
+                  if (!choice || typeof choice !== "object") continue;
+                  const key = typeof choice.key === "string" ? choice.key : "";
+                  const verdict = typeof choice.verdict === "string" ? choice.verdict : "";
+                  if (!key || !requirementKeys.has(key) || seenReqs.has(key) || !SUCCESSOR_REQ_VERDICTS.includes(verdict)) continue;
+                  seenReqs.add(key);
+                  const item = { key, verdict };
+                  if (verdict === "drop") {
+                    const reason = reqCloseNormalizeReason(choice.reason);
+                    if (reason) item.reason = reason;
+                  }
+                  reqs.push(item);
+                }
+              }
               let jump = null;
               try {
                 const jumpKey = result.jump && typeof result.jump === "object" &&
                   typeof result.jump.key === "string" ? result.jump.key : "";
-                if (jumpKey && allowed.has(jumpKey)) {
+                if (jumpKey && jumpAllowed.has(jumpKey)) {
                   jump = { key: jumpKey };
                 }
               } catch (_jumpError) {
                 jump = null;
               }
-              if (picks.length === 0 && kept.length === 0 && !jump) {
+              const hasReqSubmission = reqs !== null && (reqs.length > 0 || (result.reqs.length === 0 && requirementKeys.size > 0));
+              if (picks.length === 0 && kept.length === 0 && !jump && !hasReqSubmission) {
                 resolve(null);
                 return;
               }
               resolve({
                 picks,
+                ...(reqs !== null ? { reqs } : {}),
                 ...(kept.length > 0 ? { closes: kept } : {}),
                 ...(jump ? { jump } : {}),
               });

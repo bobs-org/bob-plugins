@@ -485,12 +485,13 @@ An unprioritized row previews `Alt+P set P1 · 2–7d`. `↑`/`↓` and
 `Tab` toggles and advances; empty-filter `Space` toggles in place; filtered
 `Space` types. `Ctrl+Shift+Enter` retargets via Block ID Prompt in order;
 cancel or unavailable/changed sources preserve overrides, marks, and
-selection. Enter merges the type; Alt+Enter retypes. Picker v4 stages Done
-(`Ctrl+X`) or Cancel (`Ctrl+Shift+X`, optional reason); repeat the key clears
-it. `Tab` or empty-filter `Space` turns a verdict into Pull in; `Ctrl+A` skips
-verdicts; `Enter` applies staged choices without highlight fallback; two-step
-`Esc` discards. Picker v5 adds a `Ctrl+J` pin. Promotion lands it; merge
-withholds it.
+selection. Enter merges the type; Alt+Enter retypes. Picker v4 stages
+Done/Cancel (`Ctrl+X`/`Ctrl+Shift+X`; repeat clears) and Pull in (`Tab` or
+empty-filter `Space`); `Ctrl+A` skips, Enter applies, and two-step Esc
+discards. v5 adds a `Ctrl+J` pin; promotion lands it, merge withholds it. v6
+puts requirements first: `Ctrl+X` Met, `Ctrl+Shift+X` Drop (optional Log
+Recall), `Ctrl+Shift+T` Carry, `Space`/`Tab` Carry+pull in; `Ctrl+J` pins
+for navigation.
 
 The Task Card's Review every action sets or clears `[refresh:: N]` through the
 ledger-tools stamper, reading lane intervals with the task's own refresh kept

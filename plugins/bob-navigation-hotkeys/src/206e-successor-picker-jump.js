@@ -249,9 +249,12 @@ function successorRenderJumpRowAdornments(modal, rowEl, row, navIndex) {
 // 206 logic plus the staged pin. A staged pin commits with no highlight
 // fallback, and settles `{picks, closes?, jump: {key}}`.
 function successorJumpApplySelection(modal) {
+  if (typeof successorRequirementPrepareCommit === "function" && !successorRequirementPrepareCommit(modal)) {
+    return false;
+  }
   const keys = modal.model.groups.flatMap((group) => group.rows)
     .filter((row) => {
-      if (!row.selectable || !modal.markedKeys.has(row.key)) {
+      if (row.group === "requirements" || !row.selectable || !modal.markedKeys.has(row.key)) {
         return false;
       }
       if (modal.verdicts instanceof Map && modal.verdicts.has(row.key)) {
@@ -297,14 +300,20 @@ function successorJumpApplySelection(modal) {
       modal.statusLine = { text: SUCCESSOR_JUMP_STATUS_LOST_KEY, kind: "refusal" };
     }
   }
+  const reqs = typeof successorRequirementResults === "function" ? successorRequirementResults(modal) : [];
   let selected = keys;
-  if (selected.length === 0 && closes.length === 0 && jump == null && !invalidJump) {
+  let defaultRequirementSubmit = false;
+  if (selected.length === 0 && closes.length === 0 && reqs.length === 0 && jump == null && !invalidJump) {
     const active = modal.visibleItems[modal.selectedIndex];
-    if (!active || active.kind !== "offer" || !active.row.selectable) {
+    if (active && active.kind === "requirement" && active.row.selectable) {
+      defaultRequirementSubmit = true;
+    } else if (!active || active.kind !== "offer" || !active.row.selectable) {
       return false;
+    } else {
+      selected = [active.row.key];
     }
-    selected = [active.row.key];
   }
+  const hasReqGroups = (modal.model.groups || []).some((group) => group && group.group === "requirements");
   modal.settle({
     picks: selected.map((key) => {
       const item = { key };
@@ -318,6 +327,7 @@ function successorJumpApplySelection(modal) {
       }
       return item;
     }),
+    ...(hasReqGroups && (reqs.length > 0 || defaultRequirementSubmit || jump != null) ? { reqs } : {}),
     ...(closes.length > 0 ? { closes } : {}),
     ...(jump ? { jump } : {}),
   });
@@ -329,6 +339,7 @@ function successorJumpSettle(modal, result) {
   if (modal.didSettle) return;
   modal.didSettle = true;
   const picks = result && Array.isArray(result.picks) ? result.picks : null;
+  const reqs = result && Array.isArray(result.reqs) ? result.reqs : null;
   const closes = result && Array.isArray(result.closes) ? result.closes : null;
   const jump = result && result.jump && typeof result.jump === "object" &&
     typeof result.jump.key === "string" && result.jump.key
@@ -337,6 +348,7 @@ function successorJumpSettle(modal, result) {
   if (picks) {
     modal.result = {
       picks,
+      ...(reqs ? { reqs } : {}),
       ...(closes ? { closes } : {}),
       ...(jump ? { jump } : {}),
     };
@@ -401,10 +413,10 @@ function successorInstallJumpModalPatches() {
         event.preventDefault();
         event.stopPropagation();
         const active = this.visibleItems && this.visibleItems[this.selectedIndex];
-        const row = active && active.kind === "offer" ? active.row : null;
+        const row = active && (active.kind === "offer" || active.kind === "requirement") ? active.row : null;
         if (!row || !successorJumpIsPinnableRow(row)) {
           this.statusLine = { text: SUCCESSOR_JUMP_STATUS_NOT_PINNABLE, kind: "refusal" };
-          if (typeof successorModalHasVerdicts === "function" && successorModalHasVerdicts(this)) {
+          if (typeof successorModalHasStagedChoices === "function" && successorModalHasStagedChoices(this)) {
             this.escArmed = false;
           }
           try {
@@ -424,7 +436,7 @@ function successorInstallJumpModalPatches() {
           this.jumpKey = row.key;
           successorJumpSetStatus(this, row);
         }
-        if (typeof successorModalHasVerdicts === "function" && successorModalHasVerdicts(this)) {
+        if (typeof successorModalHasStagedChoices === "function" && successorModalHasStagedChoices(this)) {
           this.escArmed = false;
         }
         this.renderAll();

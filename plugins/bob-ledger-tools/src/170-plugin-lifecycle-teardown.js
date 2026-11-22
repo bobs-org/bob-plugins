@@ -118,6 +118,7 @@ BobLedgerToolsPlugin.prototype.teardownLedgerToolsSurfaces = function () {
     try { this.teardownRecordCard?.(); this.teardownRecordUpdate?.(); this.teardownRecordSheet?.(); this.teardownIntentionCardNavigation?.(); this.teardownIntentionCardEditor?.(); this.teardownIntentionUpdate?.(); this.teardownIntentionCard?.(); this.teardownSubscriptionSurfaces(); this.teardownAlbumHeader(); this.teardownNotebookHeader(); this.teardownAlbumYamlExcursion?.(); this.teardownAlbumSchemaEntrypoints?.(); } catch (error) {}
     try { propertyCardAdoptReleaseAll(); } catch (_) {}
     try { propertyCardTitleSlotReleaseAll(); } catch (_) {}
+    try { propertyCardFrontmatterReleaseAll(); } catch (_) {}
     try {
       this.teardownAlbumRecords(); this.teardownAreasCatalog(); this.teardownProjectsCatalog(); this.teardownAlbumCatalog(); this.teardownNotebookCatalog(); this.teardownAreasData(); this.teardownNotebookData(); this.teardownAlbumData(); this.teardownProjectsData();
     } catch (error) {

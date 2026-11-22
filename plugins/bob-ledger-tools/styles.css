@@ -11982,6 +11982,21 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
   display: none !important;
 }
 
+/* Whole-container frontmatter ownership (unwired kit primitive): the owning
+   view scope carries bob-property-card-owns-frontmatter. Obsidian's own
+   visibility variables plus a direct-child fallback on the exact native
+   paths propertyCardNativeContainer uses. Never a global .metadata-container
+   rule; the node stays in the DOM as the title-slot anchor. */
+.cm-editor.bob-property-card-owns-frontmatter,
+.markdown-preview-view.bob-property-card-owns-frontmatter {
+  --metadata-display-editing: none;
+  --metadata-display-reading: none;
+}
+.cm-editor.bob-property-card-owns-frontmatter > .cm-scroller > .cm-sizer > .metadata-container,
+.markdown-preview-view.bob-property-card-owns-frontmatter > .markdown-preview-sizer > .mod-header > .metadata-container {
+  display: none !important;
+}
+
 /* Card kinds. The card is the inline-size container for the narrow rules,
    so cards that opt in must be block-width (the day card drops its
    fit-content width when it adopts the kit). The ink token is the accent

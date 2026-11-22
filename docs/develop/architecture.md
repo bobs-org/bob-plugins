@@ -149,6 +149,25 @@ from Properties row ownership. The unit entry points are
 `scripts/test-ledger-tools-property-card-title-ownership.cjs`.
 `scripts/preview-title-block.cjs` renders the preview matrix.
 
+### Frontmatter ownership
+
+`propertyCardOwnFrontmatter(scope, { path, view })` is the unwired
+whole-container ownership primitive. It adds
+`bob-property-card-owns-frontmatter` to the view scope. Live Preview uses
+one kit `StateField` plus `editorAttributes`; Reading uses a
+generation-bound class. Kit CSS sets Obsidian's
+`--metadata-display-editing` / `--metadata-display-reading` to `none` and
+hides the exact native paths `propertyCardNativeContainer` uses. The
+container stays in the DOM as the title-slot anchor, with `inert` plus
+`aria-hidden` and a `focusin` guard that returns focus to the editor.
+Ownership drops on release, a newer owner, Source mode, a file change, or
+plugin teardown via `propertyCardFrontmatterReleaseAll()`. Adapters do not
+call it yet. The unit entry point is
+`scripts/test-ledger-tools-property-card-frontmatter-ownership.cjs`.
+`scripts/obsidian-frontmatter-ownership-spike.cjs` is the S1 real-Obsidian
+go/no-go probe, and its offline wrapper is
+`scripts/test-obsidian-frontmatter-ownership-spike.cjs`.
+
 ### Title slot
 
 `propertyCardMountInTitleSlot(scope, node, { path, kind, view, currentPath,

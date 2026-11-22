@@ -48,6 +48,12 @@ then a managed cache clone of bob-cli origin `master`. It runs
 `just docs-check` with `BOB_DOCS_BOB_PLUGINS_DIR` set to this
 repository. Set `BOB_CLI_DIR` to the checkout you are working in.
 
+The offline wrapper `scripts/test-obsidian-frontmatter-ownership-spike.cjs`
+is part of `npm test`. It checks fixtures, the S1 verdict, and page-source
+syntax without launching Obsidian. Run the real go/no-go probe with
+`xvfb-run -a node scripts/obsidian-frontmatter-ownership-spike.cjs`. The
+report records the Add file property command id for `takeover`.
+
 The offline wrapper `scripts/test-obsidian-vim-yank-flash-e2e.cjs` is part of
 `npm test`. It checks the scratch-vault fixture without launching Obsidian;
 run the real CDP check on athena after an Obsidian upgrade, as described in

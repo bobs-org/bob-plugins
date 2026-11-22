@@ -52,6 +52,21 @@ try {
       propertyCardOwnTitle,
       propertyCardTitleReleaseAll,
       propertyCardHostRegisterTitleOwnership,
+      PROPERTY_CARD_OWNS_FRONTMATTER_CLASS,
+      propertyCardFrontmatterScopeDenied,
+      propertyCardFrontmatterFieldCreate,
+      propertyCardFrontmatterFieldReduce,
+      propertyCardFrontmatterFieldAttributes,
+      propertyCardFrontmatterOwnershipExtension,
+      propertyCardFrontmatterEnsureEffect,
+      propertyCardFrontmatterSyncEditor,
+      propertyCardFrontmatterPaintScope,
+      propertyCardFrontmatterUnpaintScope,
+      propertyCardOwnFrontmatterInEditor,
+      propertyCardOwnFrontmatterInReading,
+      propertyCardOwnFrontmatter,
+      propertyCardFrontmatterReleaseAll,
+      propertyCardHostRegisterFrontmatterOwnership,
     });
   }
 } catch (_) {}

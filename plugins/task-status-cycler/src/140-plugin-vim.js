@@ -330,7 +330,7 @@ class TaskStatusCyclerVimMixin {
       new Notice(CYCLER_BANK_ROW_NOTICE);
       return;
     }
-
+    if (this.cyclerReqToggleRoute(view.editor, false)) return;
     this.toggleActiveCheckboxMarker(view.editor);
   }
 

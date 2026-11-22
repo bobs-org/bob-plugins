@@ -61,6 +61,7 @@ class TaskStatusCyclerPlugin extends Plugin {
     });
 
     this.registerChildBulletInputListeners();
+    this.registerCyclerReqTyping();
     this.registerPomodoroBulletToggleInputListeners();
     this.registerCountedTaskCycleInputListeners();
 

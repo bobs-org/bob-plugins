@@ -41,4 +41,6 @@ installTaskStatusCyclerMixins(TaskStatusCyclerPlugin, [
   TaskStatusCyclerBankGuardMixin,
   TaskStatusCyclerReqGuardMixin,
   TaskStatusCyclerReqDropMixin,
+  TaskStatusCyclerReqToggleMixin,
+  TaskStatusCyclerReqTypingMixin,
 ]);

@@ -68,4 +68,13 @@ Object.assign(module.exports.helpers, {
   cyclerReqInfoForText,
   cyclerReqTargetIsReq,
   cyclerReqRefuse,
+  cyclerReqToggleFirstReqNotice,
+  cyclerReqToggleContentFrom,
+  cyclerReqToggleLandingCh,
+  cyclerReqToggleKind,
+  cyclerReqTypingExpansion,
+  cyclerReqTypingBackspace,
+  cyclerReqTypingAbsorb,
+  cyclerReqTypingBlockedLine,
+  cyclerReqTypingBuild,
 });

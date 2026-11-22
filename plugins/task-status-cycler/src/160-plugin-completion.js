@@ -174,7 +174,7 @@ class TaskStatusCyclerCompletionMixin {
       }
       return true;
     }
-
+    if (this.cyclerReqToggleRoute(editor, checking)) return true;
     const checkboxToggle = this.getActiveTaskCheckboxMarkerToggle(editor);
     if (!checkboxToggle) {
       return false;

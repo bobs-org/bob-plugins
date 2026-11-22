@@ -21,6 +21,7 @@ const { helpers } = require("./block-id-prompt-harness.cjs");
 const OPEN_BUDGET_MS = 50;
 const KEYSTROKE_BUDGET_MS = 12;
 const QUERIES = ["task", "task number 1", "task number 12", "trains", "trains topic-3", "task number 412", ""];
+const TYPED_QUERIES = ["task number 412", "trains topic-3", "task number 12"];
 
 function taskLinksAppFor(index, app, files) {
   const byPath = new Map(files.map((file) => [file.path, file]));
@@ -139,8 +140,43 @@ test("api.taskLinks performs no vault reads while filtering", async () => {
   try {
     perfApp.reads.length = 0;
     for (const query of QUERIES) session.rank(query);
+    for (const query of TYPED_QUERIES) {
+      for (let end = 1; end <= query.length; end += 1) {
+        const result = session.rank(query.slice(0, end));
+        for (const row of result.rows.slice(0, 3)) assert.ok(Array.isArray(row.titleParts));
+      }
+    }
     assert.equal(perfApp.reads.length, 0, `expected zero vault reads, saw ${perfApp.reads.length}`);
   } finally {
     session.close();
   }
+});
+
+test("api.taskLinks typed keystrokes p95 takes at most 12 ms over 5,000 tasks", async (t) => {
+  const { api } = await warmedSession();
+  const samples = [];
+  for (const query of TYPED_QUERIES) {
+    const minima = new Array(query.length).fill(Infinity);
+    // As in bestOf, retain the least noisy CPU sample, but every attempt
+    // types into a fresh session: no warm per-term cache can hide scoring.
+    for (let run = 0; run < 5; run += 1) {
+      const session = api.open({ sourcePath: "sase.md", subjects: [] });
+      try {
+        for (let end = 1; end <= query.length; end += 1) {
+          const start = cpuTimeMs();
+          const result = session.rank(query.slice(0, end));
+          for (const row of result.rows.slice(0, 3)) assert.ok(Array.isArray(row.titleParts));
+          const elapsed = cpuTimeMs() - start;
+          minima[end - 1] = Math.min(minima[end - 1], elapsed);
+        }
+      } finally {
+        session.close();
+      }
+      await delay(5);
+    }
+    samples.push(...minima);
+  }
+  const value = p95(samples);
+  t.diagnostic(`typed keystroke p95: ${value.toFixed(2)} ms`);
+  assert.ok(value <= KEYSTROKE_BUDGET_MS, `typed keystroke p95 ${value.toFixed(1)} ms exceeds ${KEYSTROKE_BUDGET_MS} ms`);
 });

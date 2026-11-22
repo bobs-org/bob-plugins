@@ -21,6 +21,30 @@ function makeIndex() {
   return index;
 }
 
+test("reopened snapshots isolate rows and refresh decorated fields after edits and basename changes", () => {
+  const index = makeIndex();
+  index.ingestNote("one/Tasks.md", "- [ ] #task Alpha ^alpha");
+  const first = index.rowsForPicker();
+  const originalFields = [...first[0].loweredSearchFields];
+  first[0].displayText = "consumer edit";
+  first[0].loweredSearchFields.length = 0;
+  const reopened = index.rowsForPicker();
+  assert.equal(reopened[0].displayText, "Alpha");
+  assert.deepEqual(reopened[0].loweredSearchFields, originalFields);
+  assert.equal(reopened[0].linkTarget, "Tasks");
+  index.ingestNote("two/Tasks.md", "- [ ] #task Beta ^beta");
+  const collided = index.rowsForPicker().find((row) => row.blockId === "alpha");
+  assert.equal(collided.linkTarget, "one/Tasks");
+  assert.ok(collided.loweredSearchFields.includes("one/tasks:alpha"));
+  index.ingestNote("one/Tasks.md", "- [ ] #task Changed ^changed");
+  index.renameNote("one/Tasks.md", "one/Renamed.md");
+  const renamed = index.rowsForPicker().find((row) => row.blockId === "changed");
+  assert.equal(renamed.linkTarget, "Renamed");
+  assert.ok(renamed.loweredSearchFields.includes("renamed:changed"));
+  assert.equal(helpers.orderForWikilinkPicker(index.rowsForPicker(), "alpha").length, 0);
+  assert.equal(reopened[0].linkTarget, "Tasks", "earlier snapshots keep their own names");
+});
+
 function makeFile(path, content, options = {}) {
   return {
     path,

@@ -168,6 +168,8 @@ module.exports.helpers = {
   loweredTaskWikilinkSearchFields,
   matchScoreLoweredFields,
   scoreLoweredFieldsWithTerms,
+  taskLinksTermTier,
+  taskLinksTermTiers,
   splitWikilinkQueryTerms,
   taskWikilinkCacheHasTasks,
   taskWikilinkSubstringTier,

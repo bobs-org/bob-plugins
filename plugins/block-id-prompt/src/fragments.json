@@ -35,6 +35,7 @@
   "129-plugin-task-wikilink-pomodoro.js",
   "130-plugin-task-link-open-and-notices.js",
   "132-plugin-task-links-api.js",
+  "132a-task-links-term-cache.js",
   "140-plugin-target-plans-and-rewrites.js",
   "150-plugin-reference-files.js",
   "155-block-rename-writes.js",

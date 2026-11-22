@@ -261,6 +261,111 @@ test("title parts keep their query and snapshot after later ranks and refresh", 
   ]);
 });
 
+test("per-term tiers and prefix narrowing agree with the fused Unicode scorer", () => {
+  // Completing a pair changes the existing scorer from code-point to
+  // code-unit subsequence matching; a rejected partial pair cannot prune it.
+  const pairRows = [{ loweredSearchFields: ["😀xé\ud83dx\ude00"] }];
+  const pairCache = new Map();
+  assert.equal(helpers.taskLinksTermTiers(pairCache, pairRows, "😀é\ud83d")[0], -1);
+  assert.equal(helpers.taskLinksTermTiers(pairCache, pairRows, "😀é😀")[0], 0);
+  let seed = 0x523abc;
+  const random = (limit) => {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    return seed % limit;
+  };
+  const alphabet = ["a", "b", "1", "-", " ", "é", "中", "文", "😀", "\ud83d", "\ude00"];
+  const word = () => Array.from({ length: 1 + random(12) }, () => alphabet[random(alphabet.length)]).join("");
+  const rows = Array.from({ length: 160 }, () => ({
+    loweredSearchFields: [word(), word(), word(), "éclair 中文 a😀b a\ud83db a\ude00b"],
+  }));
+  const queries = ["", " \t ", "a a", "a ab abc", "é", "中文", "😀", "\ud83d", "\ude00", "a😀b", "a\ud83db", "a\ude00b"];
+  for (let i = 0; i < 120; i += 1) queries.push(`${word()} ${word()}`);
+  const cache = new Map();
+  for (const query of queries) {
+    const terms = helpers.splitWikilinkQueryTerms(query);
+    for (const term of terms) {
+      // Exercise cached prefixes ending inside as well as after a pair.
+      for (let end = 1; end <= term.length; end += 1) {
+        const prefix = term.slice(0, end);
+        const tiers = helpers.taskLinksTermTiers(cache, rows, prefix);
+        for (let i = 0; i < rows.length; i += 1) {
+          const expected = helpers.scoreLoweredFieldsWithTerms(rows[i].loweredSearchFields, [prefix]);
+          assert.equal(tiers[i], expected === null ? -1 : expected, JSON.stringify(prefix));
+        }
+      }
+    }
+    for (const row of rows) {
+      let total = 0;
+      for (const term of terms) {
+        const tier = helpers.taskLinksTermTier(row.loweredSearchFields, term);
+        if (tier === -1) {
+          total = null;
+          break;
+        }
+        total += tier;
+      }
+      assert.equal(total, helpers.scoreLoweredFieldsWithTerms(row.loweredSearchFields, terms), JSON.stringify(query));
+    }
+    assert.ok(cache.size <= 32, "the session bounds its term cache");
+  }
+});
+
+test("typed, backspaced, and edited queries preserve picker order through a refresh", () => {
+  const files = {};
+  for (let i = 0; i < 150; i += 1) {
+    const notePath = `area-${i % 3}/Tasks.md`;
+    files[notePath] = (files[notePath] || "## Trains\n") +
+      `- [${i % 5 ? " " : "x"}] #task Task number ${i} about trains é中😀 ^task-${i}\n`;
+  }
+  const harness = makeHarness({ files });
+  const index = harness.plugin.taskWikilinkIndex;
+  const sourcePath = "area-0/Tasks.md";
+  const session = harness.api.open({ sourcePath });
+  const typed = "task number 412";
+  const prefixes = Array.from({ length: typed.length + 1 }, (_, end) => typed.slice(0, end));
+  const queries = [...prefixes, ...prefixes.toReversed(), "task trains 12", "é中", "😀", "a a", "unrelated", " "];
+  try {
+    const check = (query) => {
+      const raw = index.rowsForPicker({ ownerPath: sourcePath });
+      const expected = helpers.orderForWikilinkPicker(raw, query, sourcePath).map(helpers.taskWikilinkRowKey);
+      assert.deepEqual(session.rank(query).rows.map((row) => row.key), expected, query);
+    };
+    for (let i = 0; i < queries.length; i += 1) {
+      check(queries[i]);
+      if (i === prefixes.length - 1) {
+        // Change both row contents and alignment after all these terms are cached.
+        index.ingestNote(sourcePath, "- [ ] #task Task number 412 about trains ^new\n- [/] #task Unrelated é中😀 ^other");
+        index.emitForced();
+        check(queries[i]);
+        assert.ok(session.rank(typed).rows.some((row) => row.blockId === "new"));
+      }
+    }
+  } finally {
+    session.close();
+  }
+});
+
+test("public title parts are lazy, memoized own properties and serialize normally", () => {
+  const title = "Review the `API` docs [[Guide|manual]]";
+  const harness = makeHarness({ files: { "Tasks.md": `- [ ] #task ${title} ^review` } });
+  const session = harness.api.open({});
+  const row = session.rank("api").rows[0];
+  assert.equal(harness.plugin.taskLinksParsedTitles.size, 0, "rank does not parse unread titles");
+  const descriptor = Object.getOwnPropertyDescriptor(row, "titleParts");
+  assert.equal(typeof descriptor.get, "function");
+  assert.equal(descriptor.enumerable, true);
+  assert.ok(Object.keys(row).includes("titleParts"));
+  const expected = helpers.taskWikilinkHighlightedTitleParts(title, "api").flatMap((part) =>
+    part.spans.filter((span) => span.text).map((span) => ({ text: span.text, kind: span.hl ? "match" : part.type })));
+  assert.deepEqual(row.titleParts, expected);
+  const first = row.titleParts;
+  assert.strictEqual(row.titleParts, first);
+  assert.strictEqual({ ...row }.titleParts, first);
+  assert.deepEqual(JSON.parse(JSON.stringify(row)).titleParts, expected);
+  assert.deepEqual(structuredClone(row).titleParts, expected);
+  session.close();
+});
+
 test("linkFor rechecks note resolution and falls back to the vault path", () => {
   const harness = makeHarness({
     files: { "folder/Tasks.md": "- [ ] #task Finish this ^finish" },

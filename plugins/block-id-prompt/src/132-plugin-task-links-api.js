@@ -294,6 +294,7 @@ function createTaskLinksSession(plugin, request) {
   const taskLinksStaticCache = new Map();
   const taskLinksGuardCache = new Map();
   const taskLinksTitlePartsCache = new Map();
+  const termTiersCache = new Map();
   // Parsing is pure in the exact displayed text, so reopening a prompt can
   // reuse it. Bound the plugin-lifetime cache independently of query caches.
   if (!(plugin.taskLinksParsedTitles instanceof Map)) plugin.taskLinksParsedTitles = new Map();
@@ -344,6 +345,7 @@ function createTaskLinksSession(plugin, request) {
     taskLinksStaticCache.clear();
     taskLinksGuardCache.clear();
     taskLinksTitlePartsCache.clear();
+    termTiersCache.clear();
     lastRankQuery = null;
     lastRanked = null;
     lastPublicRows = null;
@@ -570,10 +572,19 @@ function createTaskLinksSession(plugin, request) {
         // candidate order; public rows and changing subject guards stay fresh.
         ranked = lastRanked;
       } else if (terms.length) {
+        const termTiers = terms.map((term) => taskLinksTermTiers(termTiersCache, snapshotRows, term));
         const buckets = [];
-        for (const row of snapshotRows) {
-          const score = scoreLoweredFieldsWithTerms(loweredTaskWikilinkSearchFields(row), terms);
-          if (score !== null) (buckets[score] ||= []).push(row);
+        for (let i = 0; i < snapshotRows.length; i += 1) {
+          let score = 0;
+          for (let t = 0; t < termTiers.length; t += 1) {
+            const tier = termTiers[t][i];
+            if (tier === -1) {
+              score = -1;
+              break;
+            }
+            score += tier;
+          }
+          if (score !== -1) (buckets[score] ||= []).push(snapshotRows[i]);
         }
         ranked = [];
         for (let score = buckets.length - 1; score >= 0; score -= 1) {
@@ -583,11 +594,12 @@ function createTaskLinksSession(plugin, request) {
       lastRankQuery = queryText;
       lastRanked = ranked;
       const titleCache = titleCacheFor(queryText);
+      const renderTitle = (base) => taskLinksTitlePartsFast(base, titleCache, terms);
       const rows = new Array(ranked.length);
       for (let i = 0; i < ranked.length; i += 1) {
         const row = ranked[i];
         const base = taskLinksStaticFor(row);
-        rows[i] = {
+        rows[i] = Object.defineProperty({
           key: base.key,
           notePath: base.notePath,
           line: base.line,
@@ -596,14 +608,14 @@ function createTaskLinksSession(plugin, request) {
           status: base.status,
           glyph: base.glyph,
           taskKind: base.taskKind,
-          titleParts: taskLinksTitlePartsFast(base, titleCache, terms),
           section: base.section,
           group: base.group,
           hidden: base.hidden,
           linkTarget: base.linkTarget,
           suggestedId: base.suggestedId,
           disabled: taskLinksGuardFor(base, row, previousDailyPath, resolvedSubjects),
-        };
+        }, "titleParts", taskLinksTitlePartsDescriptor);
+        taskLinksLazyTitleStates.set(rows[i], { base, render: renderTitle });
       }
       // A repaint of an unchanged query reuses its snapshot rows. Retain only
       // the latest result, and never reuse it across subject/index changes.

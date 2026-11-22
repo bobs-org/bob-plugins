@@ -3698,6 +3698,7 @@ class TaskWikilinkIndex {
     // path -> { mtime, size, rows, blockIds }. Never note texts.
     this.entries = new Map();
     this.basename = buildBasenameIndex([]);
+    this.decoratedRows = new WeakMap();
     this.batchDepth = 0;
     this.basenameDirty = false;
     this.warnings = [];
@@ -3979,6 +3980,12 @@ class TaskWikilinkIndex {
   }
 
   decorateRow(row) {
+    const cached = this.decoratedRows.get(row);
+    if (cached && cached.basename === this.basename) {
+      // Reopening a prompt need not rebuild unchanged search fields. Keep
+      // each snapshot's row and field array independent of its consumers.
+      return Object.assign({}, cached.row, { loweredSearchFields: cached.row.loweredSearchFields.slice() });
+    }
     const [locator, linkTarget] = this.basename.locatorAndTargetFor(row.notePath);
     // Fresh Object.assign copy: spreading then appending properties
     // deoptimized V8 hidden classes on the snapshot/rank path. Compute
@@ -3987,6 +3994,10 @@ class TaskWikilinkIndex {
     // scoring can exit on the first field.
     const decorated = Object.assign({}, row, { locator, linkTarget });
     decorated.loweredSearchFields = loweredTaskWikilinkSearchFields(decorated);
+    this.decoratedRows.set(row, {
+      basename: this.basename,
+      row: Object.assign({}, decorated, { loweredSearchFields: decorated.loweredSearchFields.slice() }),
+    });
     return decorated;
   }
 
@@ -19163,6 +19174,7 @@ function createTaskLinksSession(plugin, request) {
   const taskLinksStaticCache = new Map();
   const taskLinksGuardCache = new Map();
   const taskLinksTitlePartsCache = new Map();
+  const termTiersCache = new Map();
   // Parsing is pure in the exact displayed text, so reopening a prompt can
   // reuse it. Bound the plugin-lifetime cache independently of query caches.
   if (!(plugin.taskLinksParsedTitles instanceof Map)) plugin.taskLinksParsedTitles = new Map();
@@ -19213,6 +19225,7 @@ function createTaskLinksSession(plugin, request) {
     taskLinksStaticCache.clear();
     taskLinksGuardCache.clear();
     taskLinksTitlePartsCache.clear();
+    termTiersCache.clear();
     lastRankQuery = null;
     lastRanked = null;
     lastPublicRows = null;
@@ -19439,10 +19452,19 @@ function createTaskLinksSession(plugin, request) {
         // candidate order; public rows and changing subject guards stay fresh.
         ranked = lastRanked;
       } else if (terms.length) {
+        const termTiers = terms.map((term) => taskLinksTermTiers(termTiersCache, snapshotRows, term));
         const buckets = [];
-        for (const row of snapshotRows) {
-          const score = scoreLoweredFieldsWithTerms(loweredTaskWikilinkSearchFields(row), terms);
-          if (score !== null) (buckets[score] ||= []).push(row);
+        for (let i = 0; i < snapshotRows.length; i += 1) {
+          let score = 0;
+          for (let t = 0; t < termTiers.length; t += 1) {
+            const tier = termTiers[t][i];
+            if (tier === -1) {
+              score = -1;
+              break;
+            }
+            score += tier;
+          }
+          if (score !== -1) (buckets[score] ||= []).push(snapshotRows[i]);
         }
         ranked = [];
         for (let score = buckets.length - 1; score >= 0; score -= 1) {
@@ -19452,11 +19474,12 @@ function createTaskLinksSession(plugin, request) {
       lastRankQuery = queryText;
       lastRanked = ranked;
       const titleCache = titleCacheFor(queryText);
+      const renderTitle = (base) => taskLinksTitlePartsFast(base, titleCache, terms);
       const rows = new Array(ranked.length);
       for (let i = 0; i < ranked.length; i += 1) {
         const row = ranked[i];
         const base = taskLinksStaticFor(row);
-        rows[i] = {
+        rows[i] = Object.defineProperty({
           key: base.key,
           notePath: base.notePath,
           line: base.line,
@@ -19465,14 +19488,14 @@ function createTaskLinksSession(plugin, request) {
           status: base.status,
           glyph: base.glyph,
           taskKind: base.taskKind,
-          titleParts: taskLinksTitlePartsFast(base, titleCache, terms),
           section: base.section,
           group: base.group,
           hidden: base.hidden,
           linkTarget: base.linkTarget,
           suggestedId: base.suggestedId,
           disabled: taskLinksGuardFor(base, row, previousDailyPath, resolvedSubjects),
-        };
+        }, "titleParts", taskLinksTitlePartsDescriptor);
+        taskLinksLazyTitleStates.set(rows[i], { base, render: renderTitle });
       }
       // A repaint of an unchanged query reuses its snapshot rows. Retain only
       // the latest result, and never reuse it across subject/index changes.
@@ -19643,6 +19666,79 @@ function taskWikilinkAlreadyNamedLine(content, task) {
     if (withoutId === task.rawLine) matches.push({ line, rawLine, id });
   }
   return matches.length === 1 ? matches[0] : null;
+}
+// ---- src/132a-task-links-term-cache.js ----
+// Share the accessor across sessions and queries so public rows retain one
+// compact shape. Weak keys keep deferred titles alive only with their rows;
+// the renderer captures the query, and its base retains the snapshot title.
+const taskLinksLazyTitleStates = new WeakMap();
+const taskLinksTitlePartsDescriptor = {
+  enumerable: true,
+  get() {
+    const state = taskLinksLazyTitleStates.get(this);
+    return state.render(state.base);
+  },
+};
+
+// The prose session reuses unchanged query terms while typing. Keep this
+// single-term scorer equivalent to the editor's fused hot loop in 032;
+// differential tests pin its prunes and Unicode/subsequence semantics.
+function taskLinksTermTier(fields, term) {
+  let best = -1;
+  for (let f = 0; f < fields.length; f += 1) {
+    const field = fields[f];
+    if (field.startsWith(term)) return 3;
+    if (best >= 2) continue;
+    let tier = -1;
+    let at = field.indexOf(term, 1);
+    while (at !== -1) {
+      tier = 1;
+      const prev = field.charCodeAt(at - 1);
+      const wordChar = prev < 128
+        ? (prev >= 48 && prev <= 57) || (prev >= 65 && prev <= 90) || (prev >= 97 && prev <= 122)
+        : taskWikilinkIsWordChar(field[at - 1]);
+      if (!wordChar) {
+        tier = 2;
+        break;
+      }
+      at = field.indexOf(term, at + 1);
+    }
+    if (tier === -1 && best === -1 && taskWikilinkIsSubsequence(field, term)) tier = 0;
+    if (tier > best) best = tier;
+  }
+  return best;
+}
+
+function taskLinksTermTiers(cache, rows, term) {
+  const hit = cache.get(term);
+  if (hit) {
+    cache.delete(term);
+    cache.set(term, hit);
+    return hit;
+  }
+  // Narrow by prefix, preserving the editor's two subsequence modes. A
+  // prefix with a lone surrogate uses code-point iteration; completing the
+  // pair may switch to code-unit searches, which can match rows that the
+  // prefix rejected. Do not narrow across that switch.
+  const codePointTerm = /[\uD800-\uDFFF]/u.test(term);
+  let prefixLength = 0;
+  let prefixTiers = null;
+  for (const [prefix, tiers] of cache) {
+    if (prefix.length > prefixLength && term.startsWith(prefix) &&
+        (codePointTerm || !/[\uD800-\uDFFF]/u.test(prefix))) {
+      prefixLength = prefix.length;
+      prefixTiers = tiers;
+    }
+  }
+  const tiers = new Int8Array(rows.length);
+  for (let i = 0; i < rows.length; i += 1) {
+    tiers[i] = prefixTiers && prefixTiers[i] === -1
+      ? -1
+      : taskLinksTermTier(loweredTaskWikilinkSearchFields(rows[i]), term);
+  }
+  if (cache.size >= 32) cache.delete(cache.keys().next().value);
+  cache.set(term, tiers);
+  return tiers;
 }
 // ---- src/140-plugin-target-plans-and-rewrites.js ----
 class BlockIdPromptTargetPlansAndRewritesMixin {
@@ -22277,6 +22373,8 @@ module.exports.helpers = {
   loweredTaskWikilinkSearchFields,
   matchScoreLoweredFields,
   scoreLoweredFieldsWithTerms,
+  taskLinksTermTier,
+  taskLinksTermTiers,
   splitWikilinkQueryTerms,
   taskWikilinkCacheHasTasks,
   taskWikilinkSubstringTier,

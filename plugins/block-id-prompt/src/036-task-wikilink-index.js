@@ -91,6 +91,7 @@ class TaskWikilinkIndex {
     // path -> { mtime, size, rows, blockIds }. Never note texts.
     this.entries = new Map();
     this.basename = buildBasenameIndex([]);
+    this.decoratedRows = new WeakMap();
     this.batchDepth = 0;
     this.basenameDirty = false;
     this.warnings = [];
@@ -372,6 +373,12 @@ class TaskWikilinkIndex {
   }
 
   decorateRow(row) {
+    const cached = this.decoratedRows.get(row);
+    if (cached && cached.basename === this.basename) {
+      // Reopening a prompt need not rebuild unchanged search fields. Keep
+      // each snapshot's row and field array independent of its consumers.
+      return Object.assign({}, cached.row, { loweredSearchFields: cached.row.loweredSearchFields.slice() });
+    }
     const [locator, linkTarget] = this.basename.locatorAndTargetFor(row.notePath);
     // Fresh Object.assign copy: spreading then appending properties
     // deoptimized V8 hidden classes on the snapshot/rank path. Compute
@@ -380,6 +387,10 @@ class TaskWikilinkIndex {
     // scoring can exit on the first field.
     const decorated = Object.assign({}, row, { locator, linkTarget });
     decorated.loweredSearchFields = loweredTaskWikilinkSearchFields(decorated);
+    this.decoratedRows.set(row, {
+      basename: this.basename,
+      row: Object.assign({}, decorated, { loweredSearchFields: decorated.loweredSearchFields.slice() }),
+    });
     return decorated;
   }
 

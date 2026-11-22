@@ -639,89 +639,35 @@ function copyCardPreviewText(value) {
   return String(value ?? "").replace(/\r\n|\n|\r/g, COPY_CARD_NEWLINE_MARK);
 }
 
-function copyCardPathPreviewParts(value) {
-  const text = String(value ?? "");
-  const slash = text.lastIndexOf("/");
-  if (slash === -1) {
-    return Object.freeze({ head: "", tail: text });
-  }
-  return Object.freeze({
-    head: text.slice(0, slash + 1),
-    tail: text.slice(slash + 1),
-  });
-}
-
-function copyCardMiddleTruncate(text, limit) {
-  const value = String(text ?? "");
-  const max = Math.max(1, Math.floor(numericOrDefault(limit, COPY_CARD_NOTICE_VALUE_LIMIT)));
-  if (value.length <= max) {
-    return value;
-  }
-  const keep = max - 1;
-  const head = Math.ceil(keep / 2);
-  const tail = Math.floor(keep / 2);
-  return `${value.slice(0, head)}…${value.slice(value.length - tail)}`;
-}
-
-function formatCopiedNotice(value) {
-  const display = copyCardPreviewText(value);
-  return `Copied ${copyCardMiddleTruncate(display, COPY_CARD_NOTICE_VALUE_LIMIT)}`;
-}
-
 function copyCardTaskState(task) {
   const state = task && typeof task === "object" ? String(task.state || "") : "none";
-  if (state === "ready" || state === "no-id") {
+  if (state === "ready" || state === "no-id" || state === "unresolved") {
     return state;
   }
   return "none";
 }
 
-function copyCardAvailableValue(value) {
-  if (value === null || value === undefined) {
-    return null;
-  }
-  const text = String(value);
-  return text === "" ? null : text;
-}
-
-function copyCardTemplateUsesBlockId(template) {
-  const variables = Array.isArray(template && template.variables)
-    ? template.variables
-    : [];
-  return variables.includes("block_id");
-}
-
-function isCopyableCopyCardRow(row) {
-  return Boolean(row) && (row.state === "ready" || row.state === "collision");
-}
-
-function buildCopyCardRow(fields) {
-  return freezeCopyCardValue({
-    id: fields.id,
-    group: fields.group,
-    key: fields.key || null,
-    label: fields.label,
-    value: fields.value === undefined ? null : fields.value,
-    preview: fields.preview,
-    previewParts: fields.previewParts || null,
-    state: fields.state,
-    reason: fields.reason || null,
-    isPath: fields.isPath === true,
-    copyChip: fields.copyChip || null,
-    chipScope:
-      fields.chipScope === "task" || fields.chipScope === "cursor"
-        ? fields.chipScope
-        : null,
-  });
-}
-
-function buildCopyCardBuiltinRow(spec, values, taskState) {
+function buildCopyCardBuiltinRow(spec, values, taskState, taskReason) {
   if (spec.id === "block-id") {
     if (taskState === "none") {
       return null;
     }
     if (taskState === "no-id") {
       const reason = "none yet · Ctrl+6 on the task line names one";
+      return buildCopyCardRow({
+        id: spec.id,
+        group: "task",
+        key: spec.key,
+        label: spec.label,
+        value: null,
+        preview: reason,
+        state: "unavailable",
+        reason,
+        isPath: false,
+      });
+    }
+    if (taskState === "unresolved") {
+      const reason = taskReason || "task link could not be resolved";
       return buildCopyCardRow({
         id: spec.id,
         group: "task",
@@ -798,7 +744,7 @@ function buildCopyCardBuiltinRow(spec, values, taskState) {
   });
 }
 
-function buildCopyCardTemplateRow(template, values, taskState) {
+function buildCopyCardTemplateRow(template, values, taskValues, taskState, taskReason) {
   const usesBlockId = copyCardTemplateUsesBlockId(template);
   const group = usesBlockId ? "task" : "file";
   if (template.state === "error") {
@@ -831,7 +777,24 @@ function buildCopyCardTemplateRow(template, values, taskState) {
       isPath: false,
     });
   }
-  const rendered = renderCopyTemplate(template.tokens, values);
+  if (usesBlockId && taskState === "unresolved") {
+    const reason = taskReason || "task link could not be resolved";
+    return buildCopyCardRow({
+      id: template.id,
+      group: "task",
+      key: template.key,
+      label: template.label,
+      value: null,
+      preview: reason,
+      state: "unavailable",
+      reason,
+      isPath: false,
+    });
+  }
+  const rendered = renderCopyTemplate(
+    template.tokens,
+    usesBlockId ? taskValues : values,
+  );
   if (rendered === null) {
     const needsPath =
       Array.isArray(template.variables) &&
@@ -889,6 +852,9 @@ function buildCopyCardModel(input) {
     ? options.task
     : COPY_CARD_NONE_TASK;
   const taskState = copyCardTaskState(task);
+  const taskPath = task.path
+    ? normalizeVaultRelativePath(task.path)
+    : relative;
   const values = Object.freeze({
     path: copyCardAvailableValue(pathText),
     absolute_path: copyCardAvailableValue(absolute),
@@ -897,6 +863,25 @@ function buildCopyCardModel(input) {
     block_id:
       taskState === "ready" ? copyCardAvailableValue(task.blockId) : null,
   });
+  const taskValues = Object.freeze({
+    path: copyCardAvailableValue(
+      getYankPathText("absolute-tilde", taskPath, basePath, homePath),
+    ),
+    absolute_path: copyCardAvailableValue(
+      getYankPathText("absolute", taskPath, basePath, homePath),
+    ),
+    file_name: copyCardAvailableValue(
+      getYankPathText("basename", taskPath, basePath, homePath),
+    ),
+    note_name: copyCardAvailableValue(
+      getYankPathText("basename-no-extension", taskPath, basePath, homePath),
+    ),
+    block_id:
+      taskState === "ready" ? copyCardAvailableValue(task.blockId) : null,
+  });
+  const taskReason = taskState === "unresolved"
+    ? String(task.reason || "task link could not be resolved")
+    : null;
   const templates = normalizeCopyCardTemplates(options.templates);
   const diagnostic =
     typeof options.diagnostic === "string" && options.diagnostic.trim()
@@ -910,7 +895,7 @@ function buildCopyCardModel(input) {
       chipRow = buildCopyCardChipRow(spec, options.copyChip);
       continue;
     }
-    const row = buildCopyCardBuiltinRow(spec, values, taskState);
+    const row = buildCopyCardBuiltinRow(spec, values, taskState, taskReason);
     if (!row) {
       continue;
     }
@@ -923,7 +908,13 @@ function buildCopyCardModel(input) {
   const fileTemplates = [];
   const taskTemplates = [];
   for (const template of templates) {
-    const row = buildCopyCardTemplateRow(template, values, taskState);
+    const row = buildCopyCardTemplateRow(
+      template,
+      values,
+      taskValues,
+      taskState,
+      taskReason,
+    );
     if (!row) {
       continue;
     }
@@ -974,6 +965,14 @@ function buildCopyCardModel(input) {
     task: Object.freeze({
       state: taskState,
       title: taskState === "none" ? null : task.title || null,
+      linked: task.linked === true,
+      path: taskState === "none"
+        ? null
+        : task.path
+          ? normalizeVaultRelativePath(task.path)
+          : task.linked === true
+            ? null
+            : relative,
     }),
   });
 }

@@ -16,8 +16,34 @@ const notices = [];
 const originalLoad = Module._load;
 function parseTestYaml(text) {
   const result = {};
+  let inCopy = false;
+  let currentCopyTemplate = null;
   for (const line of String(text || "").split(/\r?\n/)) {
-    if (!line.trim() || line.trimStart().startsWith("#") || /^\s/.test(line)) {
+    if (!line.trim() || line.trimStart().startsWith("#")) {
+      continue;
+    }
+    if (/^\s/.test(line)) {
+      if (!inCopy) continue;
+      if (/^\s{2}templates:\s*$/.test(line)) {
+        result.copy = { templates: [] };
+        continue;
+      }
+      const label = /^\s{4}- label:\s*(.*)$/.exec(line);
+      if (label && result.copy && Array.isArray(result.copy.templates)) {
+        currentCopyTemplate = { label: label[1].trim() };
+        result.copy.templates.push(currentCopyTemplate);
+        continue;
+      }
+      const field = /^\s{6}(key|template):\s*(.*)$/.exec(line);
+      if (field && currentCopyTemplate) {
+        const raw = field[2].trim();
+        currentCopyTemplate[field[1]] =
+          raw.length >= 2 &&
+            ((raw.startsWith('"') && raw.endsWith('"')) ||
+              (raw.startsWith("'") && raw.endsWith("'")))
+            ? raw.slice(1, -1)
+            : raw;
+      }
       continue;
     }
     const match = /^([^:]+):(.*)$/.exec(line);
@@ -26,6 +52,8 @@ function parseTestYaml(text) {
     }
     const key = match[1].trim();
     let value = match[2].trim();
+    inCopy = key === "copy" && value === "";
+    currentCopyTemplate = null;
     if (value === "" || value === "null" || value === "~") {
       result[key] = null;
     } else {
@@ -632,6 +660,12 @@ function makePluginForGuards(options = {}) {
     },
     vault: { adapter: { getBasePath: () => "/Users/bbugyi/bob" } },
   };
+  if (typeof options.resolveLinkTargetFile === "function") {
+    plugin.resolveLinkTargetFile = options.resolveLinkTargetFile;
+  }
+  if (typeof options.readLinkPickerNoteContent === "function") {
+    plugin.readLinkPickerNoteContent = options.readLinkPickerNoteContent;
+  }
   plugin.isMarkdownFile = (file) => Boolean(file) && file.extension === "md";
   plugin.getActiveMarkdownFile = function () {
     const file = this.app.workspace.getActiveFile();
@@ -860,6 +894,164 @@ test("openCopyCard: reading view, multiple cursors, and no editor yield no TASK 
   }
 });
 
+test("openCopyCard: Task Links resolve sync in-file and async across notes", async (t) => {
+  const os = require("node:os");
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copy-card-links-"));
+  const previousXdg = process.env.XDG_CONFIG_HOME;
+  const previousHome = process.env.HOME;
+  process.env.XDG_CONFIG_HOME = tmp;
+  process.env.HOME = "/Users/bbugyi";
+  fs.mkdirSync(path.join(tmp, "bob"), { recursive: true });
+  fs.writeFileSync(
+    path.join(tmp, "bob", "config.yml"),
+    'copy:\n  templates:\n    - label: Task ref\n      key: t\n      template: "the ^{block_id} task in the {path} file"\n',
+  );
+  resetCopyCardTemplatesCache();
+  t.after(() => {
+    if (previousXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = previousXdg;
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    resetCopyCardTemplatesCache();
+  });
+  const sameNoteSource = [
+    "- [x] #task In this note ^linked",
+    "- [ ] (09:00 - 09:25) — WORK",
+    "  - [[#^linked|A linked task]]",
+  ].join("\n");
+  const sameNoteSelections = [{ anchor: { line: 2, ch: 8 }, head: { line: 2, ch: 8 } }];
+  openedModals.length = 0;
+  const sameNote = makePluginForGuards({
+    activeFile: { path: "daily.md", extension: "md" },
+    editor: singleCursorEditor(sameNoteSource, sameNoteSelections),
+    resolveLinkTargetFile(target, sourcePath) {
+      assert.equal(target, "#^linked");
+      assert.equal(sourcePath, "daily.md");
+      return { path: "daily.md", extension: "md" };
+    },
+  }).plugin;
+  const syncResult = sameNote.openCopyCard();
+  assert.equal(syncResult, undefined);
+  assert.equal(openedModals.length, 1);
+  let model = openedModals[0].copyCardModel;
+  assert.equal(model.task.linked, true);
+  assert.equal(model.task.path, "daily.md");
+  assert.equal(model.task.title, "In this note");
+  assert.equal(model.rows.find((entry) => entry.id === "block-id").value, "linked");
+  assert.equal(model.rows.find((entry) => entry.id === "template-1").value,
+    "the ^linked task in the ~/bob/daily.md file");
+  assert.equal(model.rows.find((entry) => entry.id === "path").value, "~/bob/daily.md");
+  let linkedDivider = byClass(openedModals[0].contentEl, "bob-copy-card-divider")[0];
+  assert.match(flattenText(linkedDivider), /LINKED TASK/);
+  assert.equal(
+    byClass(linkedDivider, "bob-copy-card-divider-title")[0].attributes.title,
+    "daily.md",
+  );
+  openedModals[0].close();
+
+  const linkLine = "  - [[tasks#^linked|A linked task]]";
+  const source = ["- [ ] (09:00 - 09:25) — WORK", linkLine].join("\n");
+  const selections = [{ anchor: { line: 1, ch: 8 }, head: { line: 1, ch: 8 } }];
+  const chipRequests = [];
+  const chipApi = {
+    version: 2,
+    chipAt(request) {
+      chipRequests.push(request);
+      return null;
+    },
+  };
+  openedModals.length = 0;
+  const crossNote = makePluginForGuards({
+    activeFile: { path: "daily.md", extension: "md" },
+    editor: singleCursorEditor(source, selections),
+    plugins: { "bob-chips": { api: { copyChips: chipApi } } },
+    resolveLinkTargetFile: () => ({ path: "tasks/task note.md", extension: "md" }),
+    readLinkPickerNoteContent: async (path, file) => {
+      assert.equal(path, "tasks/task note.md");
+      assert.equal(file.path, path);
+      return "- [ ] #task Cross-note task ^linked";
+    },
+  }).plugin;
+  const asyncResult = crossNote.openCopyCard();
+  assert.equal(typeof asyncResult.then, "function");
+  assert.equal(openedModals.length, 0);
+  await asyncResult;
+  assert.equal(openedModals.length, 1);
+  model = openedModals[0].copyCardModel;
+  assert.equal(model.task.title, "Cross-note task");
+  assert.equal(model.task.path, "tasks/task note.md");
+  assert.equal(model.rows.find((entry) => entry.id === "path").value, "~/bob/daily.md");
+  assert.equal(model.rows.find((entry) => entry.id === "template-1").value,
+    "the ^linked task in the ~/bob/tasks/task note.md file");
+  linkedDivider = byClass(openedModals[0].contentEl, "bob-copy-card-divider")[0];
+  assert.match(flattenText(linkedDivider), /LINKED TASK/);
+  assert.equal(
+    byClass(linkedDivider, "bob-copy-card-divider-title")[0].attributes.title,
+    "tasks/task note.md",
+  );
+  assert.equal(chipRequests.length, 1);
+  assert.equal(Object.hasOwn(chipRequests[0], "scope"), false);
+  openedModals[0].close();
+});
+
+test("openCopyCard: a newer open or changed source buffer drops a pending linked read", async () => {
+  const linkLine = "  - [[tasks#^linked|A linked task]]";
+  let sourceText = ["- [ ] (09:00 - 09:25) — WORK", linkLine].join("\n");
+  const selections = [{ anchor: { line: 1, ch: 8 }, head: { line: 1, ch: 8 } }];
+  const editor = {
+    getValue: () => sourceText,
+    listSelections: () => selections,
+  };
+  const activeFile = { path: "daily.md", extension: "md" };
+  const view = { file: activeFile, editor, getMode: () => "source" };
+  const pendingReads = [];
+  const { plugin } = makePluginForGuards({
+    activeFile,
+    editor,
+    view,
+    resolveLinkTargetFile: () => ({ path: "tasks.md", extension: "md" }),
+    readLinkPickerNoteContent: () => new Promise((resolve) => pendingReads.push(resolve)),
+  });
+
+  openedModals.length = 0;
+  const staleNewer = plugin.openCopyCard();
+  sourceText = "Plain prose";
+  plugin.openCopyCard();
+  assert.equal(openedModals.length, 1);
+  pendingReads[0]("- [ ] #task Linked ^linked");
+  await staleNewer;
+  assert.equal(openedModals.length, 1);
+  openedModals[0].close();
+
+  sourceText = ["- [ ] (09:00 - 09:25) — WORK", linkLine].join("\n");
+  openedModals.length = 0;
+  const staleBuffer = plugin.openCopyCard();
+  sourceText = sourceText + "\nChanged while reading";
+  pendingReads[1]("- [ ] #task Linked ^linked");
+  await staleBuffer;
+  assert.equal(openedModals.length, 0);
+});
+
+test("openCopyCard: an owning task wins over a Task Link child note", () => {
+  const content = [
+    "- [ ] #task Parent task ^parent",
+    "  - [[other#^linked|A linked task]]",
+  ].join("\n");
+  const selections = [{ anchor: { line: 1, ch: 8 }, head: { line: 1, ch: 8 } }];
+  openedModals.length = 0;
+  const plugin = makePluginForGuards({
+    editor: singleCursorEditor(content, selections),
+    resolveLinkTargetFile() {
+      throw new Error("owner should win before resolving the link");
+    },
+  }).plugin;
+  plugin.openCopyCard();
+  assert.equal(openedModals[0].copyCardModel.task.linked, false);
+  assert.equal(openedModals[0].copyCardModel.task.title, "Parent task");
+  assert.equal(openedModals[0].copyCardModel.rows.find((entry) => entry.id === "block-id").value, "parent");
+  openedModals[0].close();
+});
+
 test("yank-block-id copies the bare id, and reports no task or no id", async () => {
   global.navigator = global.navigator || {};
   const writes = [];
@@ -913,6 +1105,34 @@ test("yank-block-id copies the bare id, and reports no task or no id", async () 
   const none = await prose.plugin.yankTaskBlockId();
   assert.equal(none, false);
   assert.match(notices.at(-1), /No task at the cursor/);
+  delete global.navigator.clipboard;
+});
+
+test("yank-block-id follows Task Links and notices unresolved targets", async () => {
+  global.navigator = global.navigator || {};
+  const writes = [];
+  global.navigator.clipboard = { writeText: async (text) => writes.push(text) };
+  const content = "  - [[tasks#^linked|A linked task]]";
+  const selections = [{ anchor: { line: 0, ch: 8 }, head: { line: 0, ch: 8 } }];
+  const editor = singleCursorEditor(content, selections);
+  const view = { file: { path: "daily.md" }, editor, getMode: () => "source" };
+  const plugin = makePluginForGuards({
+    activeFile: { path: "daily.md", extension: "md" },
+    editor,
+    view,
+    resolveLinkTargetFile: () => ({ path: "tasks.md", extension: "md" }),
+    readLinkPickerNoteContent: async () => "- [ ] #task Linked task ^linked",
+  }).plugin;
+  notices.length = 0;
+  assert.equal(await plugin.yankTaskBlockId(), true);
+  assert.deepEqual(writes, ["linked"]);
+
+  writes.length = 0;
+  notices.length = 0;
+  plugin.readLinkPickerNoteContent = async () => "- [ ] #task Other task ^other";
+  assert.equal(await plugin.yankTaskBlockId(), false);
+  assert.deepEqual(writes, []);
+  assert.equal(notices.at(-1), "^linked not found in tasks.md");
   delete global.navigator.clipboard;
 });
 

@@ -4,6 +4,8 @@ Object.assign(module.exports.helpers, {
   COPY_CARD_CLOSE_KEY,
   copyCardTaskScopeLines,
   resolveCopyCardTask,
+  resolveCopyCardTaskLink,
+  buildCopyCardLinkedTask,
   parseCopyTemplate,
   renderCopyTemplate,
   buildCopyCardModel,

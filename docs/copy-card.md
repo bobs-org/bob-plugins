@@ -5,8 +5,9 @@ description: "Reference for the Cmd+Y Copy card: keys, task rows, template gramm
 
 `Cmd+Y` (command `bob-navigation-hotkeys:copy-active-file-path`) opens the
 Copy card: a compact, filter-less card where every row copies with one key.
-`P` stays the `↵` default. The cursor's task contributes an `I` Block ID
-row, and `copy.templates` in `~/.config/bob/config.yml` adds rows such as
+`P` stays the `↵` default. The cursor's task, or the task a Task Link bullet
+at the cursor points to, contributes an `I` Block ID row, and `copy.templates`
+in `~/.config/bob/config.yml` adds rows such as
 `the ^{block_id} task in the {path} file`. An optional `C` chip row copies
 the copy chip at the cursor, or the only chip in the cursor's task, when Bob
 Copy Chips is enabled. Preview and
@@ -24,13 +25,16 @@ clipboard never disagree, and copying never writes the vault.
 | `C` | Chip (CHIP group; needs Bob Chips) | the payload of the copy chip at the cursor, or the only chip in the cursor's task |
 | `key:` or `1`–`9` | Each `copy.templates` entry | `the ^bank-records task in the ~/bob/bob.md file` |
 
+For example, pressing a configured `t` on a Task Link bullet copies a task
+template using the linked task's note path.
+
 A template like `^{block_id}` copies the caret form for anyone who wants it.
 
 `P A F N I C` are reserved even when their row is hidden, and `q` is reserved
 for closing, so a key never changes meaning. `Esc`, `q`, and `Ctrl+[` close
 the card without copying; `Shift+Q` closes like `q`. Other `Shift+letter`
 keys are ignored.
-Row order is fixed: file rows, file-only templates, the `TASK` group,
+Row order is fixed: file rows, file-only templates, the `TASK` or `LINKED TASK` group,
 then the `CHIP` group. Templates keep the order
 they have in `copy.templates`. The highlight starts on Path, or on the
 first copyable row when Path is unavailable. `↵` copies the highlighted
@@ -49,7 +53,7 @@ The palette `yank-*` commands (`yank-absolute-path-tilde`,
 plus the kept `yank-parent-directory` and `yank-relative-path`) report the
 copied value, and `yank-block-id` (command
 `bob-navigation-hotkeys:yank-block-id`, no hotkey) copies the bare block
-ID (`id`) for the cursor's owning task, not `^id`.
+ID (`id`) for the cursor's owning task or qualifying Task Link, not `^id`.
 
 ## Which task
 
@@ -63,11 +67,32 @@ under a child bullet. A cursor inside a fence is no task; it never falls
 back to the surrounding parent. A checkbox without `#task` is no task. A
 non-empty selection needs equal owners at both ends, or there is no task.
 Any checkbox status is accepted. Pomodoro rows are not `#task` lines, so
-they have no owner. The same-file invariant holds: a `[[other#^id]]` link
-or Task Link under the cursor never supplies the block ID.
+they have no owner.
 
-The result has three states: `none` (no group), `no-id` (dimmed group with
-`none yet · Ctrl+6 on the task line names one`), and `ready` (live group).
+## Task Links
+
+The owner rule runs first and stays unchanged. Only when there is no owning
+task does the card consider the cursor line, and exactly one selection must
+start and end on that same line. The line must be outside frontmatter and a
+fence, and it must match the dedicated Task Link bullet grammar used by
+Ctrl+Shift+P. Plain, 🍅, struck, embedded, aliased, and same-note
+`[[#^id]]` links count. The Pomodoro row, prose links, LINKS rows,
+Depends-On rows, and child bullets under a Task Link do not count.
+
+For a same-note link, the card resolves against the live editor buffer and
+opens synchronously. For another note, it reads the target's open editor,
+then any open buffer, then the cached vault content, and opens after that read
+finishes. Any checkbox status is accepted, including closed tasks. A linked
+task uses the `LINKED TASK` divider and the linked note's path for `{path}`,
+`{absolute_path}`, `{file_name}`, and `{note_name}` in TASK-group templates.
+File rows and file-only templates continue to describe the active file. A
+missing note, unreadable note, missing or duplicate ID, or non-`#task` target
+shows a dimmed unresolved group; `I` and block-ID templates announce the
+specific reason.
+
+The result has four states: `none` (no group), `no-id` (dimmed group with
+`none yet · Ctrl+6 on the task line names one`), `ready` (live group), and
+`unresolved` (dimmed linked group with its resolution reason).
 
 An optional `C` chip row copies the copy chip at the cursor, or the only chip
 in the cursor's task, when Bob Chips is enabled. It appears only when
@@ -105,6 +130,10 @@ task's chip: the card reads only the live buffer in the current file.
 | `{file_name}` | `bob.md` |
 | `{note_name}` | `bob` |
 | `{block_id}` | Bare block ID (`bank-records`, so write `^{block_id}`) |
+
+In a TASK-group template, path variables name the task's note. For a linked
+task, those variables name the linked note; file rows and file-only templates
+always use the active file.
 
 ## Template grammar and errors
 

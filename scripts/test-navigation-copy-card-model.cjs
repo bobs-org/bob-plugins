@@ -9,6 +9,8 @@ const {
   COPY_CARD_RESERVED_KEYS,
   COPY_CARD_CLOSE_KEY,
   resolveCopyCardTask,
+  resolveCopyCardTaskLink,
+  buildCopyCardLinkedTask,
   copyCardTaskScopeLines,
   findOwningTaskLine,
   createDependencyNavApi,
@@ -353,6 +355,65 @@ test("task rule: Pomodoro Task Link line is none", () => {
   assert.equal(onPomodoro.state, "none");
 });
 
+test("Task Link resolver: accepts dedicated link bullets and same-note links", () => {
+  const cases = [
+    "  - [[other#^plain|A task]]",
+    "  - 🍅 [[other#^pom|A task]]",
+    "  - ~~[[other#^struck|A task]]~~",
+    "  - ![[other#^embedded|A task]]",
+    "  - [x] [[other#^aliased|A task]] #",
+    "  - [[#^same|A task]]",
+  ];
+  const ids = ["plain", "pom", "struck", "embedded", "aliased", "same"];
+  for (const [index, line] of cases.entries()) {
+    const link = resolveCopyCardTaskLink([line], cursor(0));
+    assert.equal(link.blockId, ids[index], line);
+    assert.equal(link.line, 0);
+  }
+  assert.equal(resolveCopyCardTask([cases[0]], cursor(0)).state, "none");
+});
+
+test("Task Link resolver: rejects non-link lines, fences, frontmatter, and cross-line selections", () => {
+  const linkLine = "  - [[other#^linked|A task]]";
+  assert.equal(resolveCopyCardTaskLink(["- [ ] (09:00) — WORK", linkLine], cursor(0)), null);
+  assert.equal(resolveCopyCardTaskLink(["---", linkLine, "---"], cursor(1)), null);
+  assert.equal(resolveCopyCardTaskLink(["```", linkLine, "```"], cursor(1)), null);
+  assert.equal(resolveCopyCardTaskLink([linkLine, "plain"], selection(0, 2, 1, 2)), null);
+  assert.equal(
+    resolveCopyCardTaskLink([linkLine], [
+      { anchor: { line: 0, ch: 0 }, head: { line: 0, ch: 0 } },
+      { anchor: { line: 0, ch: 1 }, head: { line: 0, ch: 1 } },
+    ]),
+    null,
+  );
+});
+
+test("Task Link resolution reports exact ready and unresolved states", () => {
+  const link = { target: "notes", blockId: "wanted", line: 0 };
+  const content = "- [x] #task A closed task ^wanted";
+  const ready = buildCopyCardLinkedTask({ link, path: "notes/a.md", content });
+  assert.deepEqual(ready, {
+    state: "ready",
+    linked: true,
+    path: "notes/a.md",
+    line: 0,
+    blockId: "wanted",
+    title: "A closed task",
+  });
+  assert.equal(
+    buildCopyCardLinkedTask({ link, path: "notes/a.md", content: "" }).reason,
+    "^wanted not found in notes/a.md",
+  );
+  assert.equal(
+    buildCopyCardLinkedTask({ link, path: "notes/a.md", content: `${content}\n${content}` }).reason,
+    "^wanted is duplicated in notes/a.md",
+  );
+  assert.equal(
+    buildCopyCardLinkedTask({ link, path: "notes/a.md", content: "- plain ^wanted" }).reason,
+    "^wanted in notes/a.md is not a #task",
+  );
+});
+
 test("task rule: two-task selection is none", () => {
   const lines = [
     "- [ ] #task First ^first",
@@ -509,9 +570,87 @@ test("model: Bryan's Task ref template renders the exact clipboard string", () =
   assert.equal(taskRef.state, "ready");
   assert.equal(model.defaultRowId, "path");
   assert.equal(model.task.state, "ready");
+  assert.equal(model.task.linked, false);
+  assert.equal(model.task.path, "bob.md");
   assert.ok(Object.isFrozen(model));
   assert.ok(Object.isFrozen(model.rows));
   assert.ok(Object.isFrozen(model.rows[0]));
+});
+
+test("model: linked TASK templates use the linked note while file rows use the active note", () => {
+  const model = buildCopyCardModel({
+    filePath: "2026/20261122.md",
+    basePath: BRYAN_VAULT,
+    homePath: BRYAN_HOME,
+    task: {
+      state: "ready",
+      linked: true,
+      path: "sase/sase.md",
+      line: 4,
+      blockId: "commit-failures-show",
+      title: "Show commit failures",
+    },
+    templates: [
+      { label: "Task ref", key: "t", template: "the ^{block_id} task in the {path} file" },
+    ],
+  });
+  assert.equal(row(model, "path").value, "~/bob/2026/20261122.md");
+  assert.equal(row(model, "block-id").value, "commit-failures-show");
+  assert.equal(
+    row(model, "template-1").value,
+    "the ^commit-failures-show task in the ~/bob/sase/sase.md file",
+  );
+  assert.equal(model.task.linked, true);
+  assert.equal(model.task.path, "sase/sase.md");
+
+  const owned = bryanModel();
+  assert.deepEqual(
+    owned.rows.map(({ id, value, preview, state, reason }) => ({ id, value, preview, state, reason })),
+    [
+      { id: "path", value: "~/bob/bob.md", preview: "~/bob/bob.md", state: "ready", reason: null },
+      { id: "absolute", value: "/Users/bbugyi/bob/bob.md", preview: "/Users/bbugyi/bob/bob.md", state: "ready", reason: null },
+      { id: "file", value: "bob.md", preview: "bob.md", state: "ready", reason: null },
+      { id: "note", value: "bob", preview: "bob", state: "ready", reason: null },
+      { id: "block-id", value: "bank-records", preview: "bank-records", state: "ready", reason: null },
+      { id: "template-1", value: "the ^bank-records task in the ~/bob/bob.md", preview: "the ^bank-records task in the ~/bob/bob.md", state: "ready", reason: null },
+    ],
+  );
+});
+
+test("model: unresolved links dim the ID row and every block-ID template with its reason", () => {
+  const reasons = [
+    "linked note not found · other",
+    "could not read other.md",
+    "^wanted not found in other.md",
+    "^wanted is duplicated in other.md",
+    "^wanted in other.md is not a #task",
+  ];
+  for (const reason of reasons) {
+    const model = buildCopyCardModel({
+      filePath: "today.md",
+      basePath: BRYAN_VAULT,
+      homePath: BRYAN_HOME,
+      task: {
+        state: "unresolved",
+        linked: true,
+        path: "other.md",
+        title: "other#^wanted",
+        reason,
+      },
+      templates: [
+        { label: "Task ref", key: "t", template: "the ^{block_id} task in the {path} file" },
+        { label: "ID only", key: "x", template: "^{block_id}" },
+      ],
+    });
+    assert.equal(model.task.state, "unresolved");
+    assert.equal(model.task.linked, true);
+    assert.equal(model.task.path, "other.md");
+    for (const id of ["block-id", "template-1", "template-2"]) {
+      assert.equal(row(model, id).state, "unavailable", `${reason} · ${id}`);
+      assert.equal(row(model, id).preview, reason);
+      assert.equal(row(model, id).reason, reason);
+    }
+  }
 });
 
 test("model: vault outside home uses the absolute path for {path}", () => {

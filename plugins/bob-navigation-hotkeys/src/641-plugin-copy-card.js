@@ -93,6 +93,8 @@ function resolveCopyCardChip(api, lines, selections, taskScopeLines) {
 
 class BobNavigationHotkeysCopyCardMixin {
   openCopyCard() {
+    const openToken = (Number(this.copyCardOpenToken) || 0) + 1;
+    this.copyCardOpenToken = openToken;
     const file = this.getActiveMarkdownFile();
     if (!file) {
       return;
@@ -109,8 +111,10 @@ class BobNavigationHotkeysCopyCardMixin {
 
     let lines = [];
     let selections = [];
+    let editorText = "";
     if (guardsOk && editor && typeof editor.getValue === "function") {
-      lines = String(editor.getValue() || "").split(/\r?\n/);
+      editorText = String(editor.getValue() || "");
+      lines = editorText.split(/\r?\n/);
       if (typeof editor.listSelections === "function") {
         try {
           selections = editor.listSelections() || [];
@@ -129,10 +133,91 @@ class BobNavigationHotkeysCopyCardMixin {
       selections = [];
     }
 
-    const task = resolveCopyCardTask(lines, selections.length === 1 ? selections : []);
+    const singleSelection = selections.length === 1 ? selections : [];
+    let task = resolveCopyCardTask(lines, singleSelection);
+    const link = task.state === "none"
+      ? resolveCopyCardTaskLink(lines, singleSelection)
+      : null;
+    if (!link) {
+      this.openCopyCardSnapshot({ file, view, editor, lines, selections, task });
+      return;
+    }
+
+    let targetFile = null;
+    try {
+      targetFile = this.resolveLinkTargetFile(
+        `${link.target}#^${link.blockId}`,
+        file.path,
+      );
+    } catch (_error) {
+      targetFile = null;
+    }
+    if (!targetFile || !this.isMarkdownFile(targetFile)) {
+      task = buildCopyCardLinkedTask({
+        link,
+        error: `linked note not found · ${link.target || file.path}`,
+      });
+      this.openCopyCardSnapshot({ file, view, editor, lines, selections, task });
+      return;
+    }
+
+    const activePath = normalizeVaultRelativePath(file.path);
+    const targetPath = normalizeVaultRelativePath(targetFile.path);
+    if (targetPath === activePath) {
+      task = buildCopyCardLinkedTask({
+        link,
+        path: targetPath,
+        content: editorText,
+      });
+      this.openCopyCardSnapshot({ file, view, editor, lines, selections, task });
+      return;
+    }
+
+    return (async () => {
+      let content = null;
+      try {
+        content = await this.readLinkPickerNoteContent(targetPath, targetFile);
+      } catch (_error) {
+        content = null;
+      }
+      if (!this.copyCardOpenReadIsCurrent(openToken, file, view, editor, editorText)) {
+        return;
+      }
+      task = content === null
+        ? buildCopyCardLinkedTask({
+            link,
+            path: targetPath,
+            error: `could not read ${targetPath}`,
+          })
+        : buildCopyCardLinkedTask({ link, path: targetPath, content });
+      this.openCopyCardSnapshot({ file, view, editor, lines, selections, task });
+    })();
+  }
+
+  copyCardOpenReadIsCurrent(openToken, file, view, editor, editorText) {
+    if (this.copyCardOpenToken !== openToken) {
+      return false;
+    }
+    try {
+      const currentView = this.app && this.app.workspace &&
+        typeof this.app.workspace.getActiveViewOfType === "function"
+        ? this.app.workspace.getActiveViewOfType(MarkdownView)
+        : null;
+      return currentView === view &&
+        currentView.file === file &&
+        currentView.editor === editor &&
+        this.getActiveMarkdownFile() === file &&
+        String(editor.getValue() || "") === editorText;
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  openCopyCardSnapshot({ file, view, editor, lines, selections, task }) {
     const copyChipsApi = getCopyCardCopyChipsApi(this.app);
     const taskScopeLines =
-      task && (task.state === "ready" || task.state === "no-id")
+      task && task.linked !== true &&
+        (task.state === "ready" || task.state === "no-id")
         ? copyCardTaskScopeLines(lines, task.line)
         : null;
     const copyChip = resolveCopyCardChip(
@@ -207,7 +292,7 @@ class BobNavigationHotkeysCopyCardMixin {
     return { ok: true };
   }
 
-  yankTaskBlockId() {
+  async yankTaskBlockId() {
     const file = this.getActiveMarkdownFile();
     if (!file) {
       return false;
@@ -231,10 +316,53 @@ class BobNavigationHotkeysCopyCardMixin {
         selections = [];
       }
     }
-    const lines = String(editor.getValue() || "").split(/\r?\n/);
-    const task = resolveCopyCardTask(lines, selections.length === 1 ? selections : []);
+    const editorText = String(editor.getValue() || "");
+    const lines = editorText.split(/\r?\n/);
+    const singleSelection = selections.length === 1 ? selections : [];
+    let task = resolveCopyCardTask(lines, singleSelection);
+    const link = task.state === "none"
+      ? resolveCopyCardTaskLink(lines, singleSelection)
+      : null;
+    if (link) {
+      let targetFile = null;
+      try {
+        targetFile = this.resolveLinkTargetFile(
+          `${link.target}#^${link.blockId}`,
+          file.path,
+        );
+      } catch (_error) {
+        targetFile = null;
+      }
+      if (!targetFile || !this.isMarkdownFile(targetFile)) {
+        task = buildCopyCardLinkedTask({
+          link,
+          error: `linked note not found · ${link.target || file.path}`,
+        });
+      } else {
+        const targetPath = normalizeVaultRelativePath(targetFile.path);
+        let content = editorText;
+        if (targetPath !== normalizeVaultRelativePath(file.path)) {
+          try {
+            content = await this.readLinkPickerNoteContent(targetPath, targetFile);
+          } catch (_error) {
+            content = null;
+          }
+        }
+        task = content === null
+          ? buildCopyCardLinkedTask({
+              link,
+              path: targetPath,
+              error: `could not read ${targetPath}`,
+            })
+          : buildCopyCardLinkedTask({ link, path: targetPath, content });
+      }
+    }
     if (!task || task.state === "none") {
       new Notice("No task at the cursor");
+      return false;
+    }
+    if (task.state === "unresolved") {
+      new Notice(task.reason);
       return false;
     }
     if (task.state === "no-id" || !task.blockId) {

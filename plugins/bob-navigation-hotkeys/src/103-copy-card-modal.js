@@ -159,11 +159,21 @@ class CopyCardModal extends Modal {
       ) {
         const divider = this.rowsEl.createDiv({ cls: "bob-copy-card-divider" });
         divider.createDiv({ cls: "bob-copy-card-divider-rule" });
-        divider.createDiv({ cls: "bob-copy-card-divider-label", text: "TASK" });
         divider.createDiv({
+          cls: "bob-copy-card-divider-label",
+          text: model.task.linked === true ? "LINKED TASK" : "TASK",
+        });
+        const title = divider.createDiv({
           cls: "bob-copy-card-divider-title",
           text: String(model.task.title || ""),
         });
+        if (
+          model.task.linked === true &&
+          model.task.path &&
+          typeof title.setAttribute === "function"
+        ) {
+          title.setAttribute("title", String(model.task.path));
+        }
         divider.createDiv({ cls: "bob-copy-card-divider-rule" });
         dividerRendered = true;
       }

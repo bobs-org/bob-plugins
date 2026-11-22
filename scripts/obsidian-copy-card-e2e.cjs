@@ -112,6 +112,12 @@ function makeFixture(runRoot) {
   fs.mkdirSync(profileDir, { recursive: true });
   const noteFile = path.join(vaultDir, fixture.notePath());
   fs.writeFileSync(noteFile, fixture.seedNote());
+  const linkedFile = path.join(vaultDir, "Linked target.md");
+  fs.writeFileSync(
+    linkedFile,
+    "# Linked target\n\n- [ ] #task " + fixture.TASKS.linked.title +
+      " ^" + fixture.TASKS.linked.blockId + "\n",
+  );
   const otherFile = path.join(vaultDir, "Other note.md");
   fs.writeFileSync(otherFile, "# Other note\n\nSwitched-to file for the frozen Copy card.\n");
   const noteBytes = fs.readFileSync(noteFile);
@@ -755,7 +761,47 @@ async function runE2e(args) {
 
     await openCardAt(client, "Copy card e2e#^" + fixture.TASKS.id.blockId, true);
     card = await client.evaluate(cardProbeExpression());
-    record("pomodoro-task-link-has-no-task-group", card && card.open && !card.taskDivider && card.taskState === "none", JSON.stringify(card && { divider: card.taskDivider, state: card.taskState }));
+    const sameNoteDivider = await client.evaluate("(() => { const root=document.querySelector('.bob-copy-card'); const divider=root&&root.querySelector('.bob-copy-card-divider:not(.is-chip)'); return String((divider&&divider.querySelector('.bob-copy-card-divider-label')||{}).textContent||'').trim(); })()");
+    record("pomodoro-task-link-targets-linked-task", card && card.open && card.taskDivider && card.taskTitle === fixture.TASKS.id.title && sameNoteDivider === "LINKED TASK", JSON.stringify(card && { divider: sameNoteDivider, state: card.taskState, title: card.taskTitle }));
+    const sameNoteIdSeed = await writeClipboard(client, "copy-card-linked-I-sentinel");
+    await dispatchKey(client, { key: "i" });
+    const sameNoteIdClip = await readClipboard(client);
+    record("same-note-task-link-I-copies-id", Boolean(sameNoteIdSeed && sameNoteIdClip && sameNoteIdClip.ok && sameNoteIdClip.value === fixture.TASKS.id.blockId), sameNoteIdClip && sameNoteIdClip.value || "");
+    await closeCard(client);
+
+    card = await openCardAt(client, "Linked target#^" + fixture.TASKS.linked.blockId, true);
+    const linkedDivider = await client.evaluate("(() => { const root=document.querySelector('.bob-copy-card'); const divider=root&&root.querySelector('.bob-copy-card-divider:not(.is-chip)'); const title=divider&&divider.querySelector('.bob-copy-card-divider-title'); return {label:String((divider&&divider.querySelector('.bob-copy-card-divider-label')||{}).textContent||'').trim(),path:title&&title.getAttribute('title')||''}; })()");
+    record("cross-note-task-link-targets-linked-task", Boolean(card && card.open && card.taskDivider && card.taskTitle === fixture.TASKS.linked.title && linkedDivider && linkedDivider.label === "LINKED TASK" && linkedDivider.path === "Linked target.md"), JSON.stringify({ card: card && { title: card.taskTitle, taskState: card.taskState }, divider: linkedDivider }));
+    await capturePair(client, outDir, "linked-task", report);
+    const linkedIdSeed = await writeClipboard(client, "copy-card-linked-cross-I-sentinel");
+    await dispatchKey(client, { key: "i" });
+    const linkedIdClip = await readClipboard(client);
+    record("cross-note-task-link-I-copies-id", Boolean(linkedIdSeed && linkedIdClip && linkedIdClip.ok && linkedIdClip.value === fixture.TASKS.linked.blockId), linkedIdClip && linkedIdClip.value || "");
+    await closeCard(client);
+
+    card = await openCardAt(client, "Linked target#^" + fixture.TASKS.linked.blockId, true);
+    const linkedPathSeed = await writeClipboard(client, "copy-card-linked-path-sentinel");
+    await dispatchKey(client, { key: "t" });
+    const linkedPathClip = await readClipboard(client);
+    record("cross-note-task-link-template-uses-linked-path", Boolean(linkedPathSeed && linkedPathClip && linkedPathClip.ok && linkedPathClip.value === expected.linkedTaskRef), linkedPathClip && linkedPathClip.value || "");
+    await closeCard(client);
+
+    card = await openCardAt(client, "Linked target#^" + fixture.TASKS.linked.blockId, true);
+    const activePathSeed = await writeClipboard(client, "copy-card-active-path-sentinel");
+    await dispatchKey(client, { key: "p" });
+    const activePathClip = await readClipboard(client);
+    record("cross-note-task-link-P-keeps-active-path", Boolean(activePathSeed && activePathClip && activePathClip.ok && activePathClip.value === expected.path), activePathClip && activePathClip.value || "");
+    await closeCard(client);
+
+    card = await openCardAt(client, "Copy card e2e#^missing-target", true);
+    const missingIdSeed = await writeClipboard(client, "copy-card-missing-id-sentinel");
+    await dispatchKey(client, { key: "i" });
+    card = await waitFor(client, cardProbeExpression(), (state) => state && state.open && /missing-target/.test(state.live), "refused unresolved Task Link");
+    const missingIdClip = await readClipboard(client);
+    record("broken-task-link-I-refuses-with-reason", Boolean(missingIdSeed && card && card.taskTitle === "Copy card e2e#^missing-target" && /missing-target/.test(card.live) && missingIdClip && missingIdClip.ok && missingIdClip.value === "copy-card-missing-id-sentinel"), JSON.stringify({ title: card && card.taskTitle, live: card && card.live, copied: missingIdClip && missingIdClip.value }));
+    await closeCard(client);
+
+    await openCardAt(client, "Plain prose for the file-only", true);
     await writeClipboard(client, "copy-card-hidden-I-sentinel");
     await dispatchKey(client, { key: "i" });
     card = await client.evaluate(cardProbeExpression());

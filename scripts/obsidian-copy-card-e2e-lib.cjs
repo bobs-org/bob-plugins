@@ -16,6 +16,10 @@ const TASKS = Object.freeze({
     title: "Close the old records task",
     blockId: "closed-records",
   }),
+  linked: Object.freeze({
+    title: "Review the linked task from another note",
+    blockId: "linked-target",
+  }),
   taskChip: Object.freeze({ title: "Copy one chip from the task", blockId: "task-chip-single" }),
   taskChipPair: Object.freeze({ title: "Disambiguate task chips", blockId: "task-chip-pair" }),
   nestedChipParent: Object.freeze({ title: "Keep nested task chips separate", blockId: "nested-chip-parent" }),
@@ -61,6 +65,10 @@ function seedNote() {
     "",
     "- [ ] (" + TASKS.pomodoro + ")",
     "  - [[Copy card e2e#^" + TASKS.id.blockId + "|Use records to start tracking bank transactions]]",
+    "- [ ] (11:30 - 11:55) — review a task from another note",
+    "  - [[Linked target#^" + TASKS.linked.blockId + "|Review the linked task from another note]]",
+    "- [ ] (12:00 - 12:25) — missing linked task",
+    "  - [[Copy card e2e#^missing-target|A missing task]]",
     "",
     "Plain prose for the file-only Copy card state.",
     "",
@@ -134,6 +142,11 @@ function expectedValues(vaultDir, homeDir) {
     taskRef: "the ^" + TASKS.id.blockId + " task in the " + compact + " file",
     noteLink: "[[" + path.basename(NOTE, path.extname(NOTE)) + "]]",
     closedBlockId: TASKS.closed.blockId,
+    linkedPath: path.join(vaultDir, "Linked target.md"),
+    linkedTaskRef: "the ^" + TASKS.linked.blockId + " task in the " +
+      (homeRelative && !homeRelative.startsWith("..") && !path.isAbsolute(homeRelative)
+        ? "~/bob/Linked target.md"
+        : path.join(vaultDir, "Linked target.md")) + " file",
   });
 }
 
@@ -213,6 +226,7 @@ function expectedScreenshotNames() {
     "identified-task",
     "task-scope",
     "no-id",
+    "linked-task",
     "broken-collision",
     "narrow-460",
     "long-list",

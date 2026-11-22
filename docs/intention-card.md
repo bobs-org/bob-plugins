@@ -200,6 +200,9 @@ nothing.
 Typing `[[` in the intention, summary, or reflection field opens Bob
 Navigation Hotkeys' LINK band under the field. Links resolve against the
 note the card is on, so `[[#` and the nearby list follow `[` / `]` travel.
+Typing `((` opens the same band in tasks mode; choosing an ID-less task opens
+the in-band NAME step, whose explicit Enter names the task and inserts its block
+link while keeping focus in the field.
 While the band is open, it handles the keys first. Enter, Tab, or
 Ctrl/Cmd+Enter inserts the selected row and never saves, and a held Enter
 cannot insert and then save. In the reflection field, Shift+Enter still

@@ -769,7 +769,11 @@ function createProseTaskMode(ctx) {
     rebind() {
       if (open) {
         takeSnapshot();
-        consider(true);
+        // `consider` deliberately treats NAME as already handled, so render
+        // its retained ID line into the replacement band host after a host
+        // repaint. The list stage still re-detects and reranks its field.
+        if (stage === "name") render();
+        else consider(true);
       }
       return true;
     },

@@ -286,6 +286,26 @@ test("list stage: typing (( opens tasks mode and [[ still wins", () => {
   handle.detach();
 });
 
+test("field mode gives a leading (( task token priority over note-name search", () => {
+  const task = attachTasks([idlessRow({})], {}, { mode: "field" });
+  typeInput(task.input, "((rep", 5);
+  assert.equal(task.handle.isTaskOpen(), true);
+  assert.equal(task.handle.isLinkOpen(), true);
+  task.handle.detach();
+
+  const input = new Element({ tag: "input" });
+  const host = new Element();
+  makeDocument(input);
+  const literal = helpers.attachProseField({
+    inputEl: input, bandHost: host, ownKeys: true, mode: "field",
+    app: { plugins: { plugins: {} } }, hintDebounceMs: 0,
+  });
+  typeInput(input, "((rep", 5);
+  assert.equal(literal.isTaskOpen(), false);
+  assert.equal(literal.isLinkOpen(), false, "without block-id-prompt, (( stays literal");
+  literal.detach();
+});
+
 test("accepting an identified row inserts the link with one undo step", () => {
   const rows = [taskRow({})];
   const { input, host, handle } = attachTasks(rows, {}, { value: "See ((api", caret: 8 });
@@ -317,6 +337,37 @@ test("ID-less row opens NAME; beforeinput feeds the ID line and field stays byte
   assert.equal(prevented.length, 2);
   handle.detach();
   void host;
+});
+
+test("rebinding a host while NAME is open rerenders its retained ID line and field snapshot", async () => {
+  const rows = [idlessRow({})];
+  const { input, host, handle } = attachTasks(rows, {}, { value: "See ((rep", caret: 10 });
+  typeInput(input, "See ((rep", 10);
+  assert.equal(pressEnter(handle, input, { repeat: false }), true);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(handle.isNaming(), true);
+  input.fire("beforeinput", {
+    inputType: "insertText", data: "x",
+    preventDefault() {},
+  });
+  const oldId = host.find((node) => node.classes.includes("bob-task-band-id-entry"));
+  assert.equal(oldId.textContent, "x");
+
+  const replacement = new Element({ tag: "input" });
+  replacement.value = input.value;
+  replacement.selectionStart = input.selectionStart;
+  replacement.selectionEnd = input.selectionEnd;
+  makeDocument(replacement);
+  const replacementHost = new Element();
+  handle.rebind({ inputEl: replacement, bandHost: replacementHost });
+
+  assert.equal(handle.isNaming(), true);
+  assert.equal(replacement.value, "See ((rep", "rebind keeps the byte-identical field snapshot");
+  const band = replacementHost.find((node) => node.classes.includes("bob-task-band"));
+  assert.ok(band, "NAME rerenders into the replacement host");
+  assert.equal(band.classes.includes("is-naming"), true);
+  assert.equal(band.find((node) => node.classes.includes("bob-task-band-id-entry")).textContent, "x");
+  handle.detach();
 });
 
 test("NAME commit writes once, inserts the link, and announces; failure stays open", async () => {

@@ -74,8 +74,9 @@ was and the notice shows Bob's message.
   in a message card, that link points to the message's `^m-…` block. It
   shares the widened email context above, so it is also available on
   line-borne and child-hop rows. With Bob Navigation Hotkeys enabled, typing
-  `[[` in the task text opens its LINK band; Enter or Tab inserts the link and
-  never captures. Esc or Ctrl+[ closes the band first, then the modal.
+  `[[` opens its LINK band for notes and `((` opens tasks; choosing an ID-less
+  task names it in the in-band NAME step. Enter or Tab inserts a link and never
+  captures, and Esc or Ctrl+[ closes the band before the modal.
 - Bob Command Mode offers **Save this email to Bob Mail** under **FROM
   CLIPBOARD** when the clipboard contains a Gmail URL.
 

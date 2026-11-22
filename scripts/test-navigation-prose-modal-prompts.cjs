@@ -10,6 +10,7 @@ const Module = require("node:module");
 const test = require("node:test");
 const { helpers } = require("./navigation-hotkeys-harness.cjs");
 const { ModalStub } = require("./modal-harness.cjs");
+const { createTaskLinksApi } = require("./prose-task-links-harness.cjs");
 
 const originalLoad = Module._load;
 Module._load = function loadWithMailStubs(request, parent, isMain) {
@@ -251,7 +252,7 @@ function makeApp(options = {}) {
     nav.api = options.spy === false ? api : {
       ...api,
       logRecall: {
-        version: 1,
+        version: 2,
         attach(attachOptions) { attached.push(attachOptions); return api.logRecall.attach(attachOptions); },
         noteUsed: () => true,
       },
@@ -551,8 +552,10 @@ test("S12 Ctrl+[ closes from the literal ID and Title fields too", () => {
   assert.equal(modal.isOpen, false);
 });
 
-test("S13 Task from email attaches proseField when nav has it and fails open without", () => {
-  const { app, proseAttached } = makeApp();
+test("S13 Task from email completes notes and tasks without capturing, and fails open without nav", async () => {
+  const taskLinks = createTaskLinksApi();
+  const { app, proseAttached } = makeApp({ taskLinks });
+  app.plugins.plugins["block-id-prompt"] = { api: { taskLinks } };
   const doc = makeDocument();
   const captured = [];
   const plugin = { mailCaptureTask: async (text) => { captured.push(text); return true; } };
@@ -562,6 +565,7 @@ test("S13 Task from email attaches proseField when nav has it and fails open wit
   assert.equal(options.recall, null);
   assert.equal(options.sourcePath, null);
   assert.equal(options.scope, modal.scope);
+  assert.equal(options.tasks, true);
 
   type(modal.input, "Follow up: Launch per [[sa");
   assert.equal(modal.prose.isLinkOpen(), true);
@@ -571,6 +575,20 @@ test("S13 Task from email attaches proseField when nav has it and fails open wit
   assert.equal(modal.isOpen, true);
   press(modal.input, "Enter");
   assert.equal(modal.isOpen, true, "Enter with the band closed still does nothing");
+
+  type(modal.input, "Follow up: ((reply");
+  assert.equal(modal.prose.isTaskOpen(), true);
+  press(modal.input, "Enter");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(modal.prose.isNaming(), true);
+  const name = press(modal.input, "Enter", { ctrlKey: true });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(name.defaultPrevented, true, "NAME Enter is consumed before any capture action");
+  assert.equal(taskLinks.state.named.at(-1).id, "reply-dana");
+  assert.equal(modal.input.value, "Follow up: [[2026/2026-11-21#^reply-dana]]");
+  assert.deepEqual(captured, [], "task linking never captures the email task");
+  assert.equal(modal.isOpen, true);
+
   type(modal.input, "Follow up: [[sa");
   press(modal.input, "[", { ctrlKey: true });
   assert.equal(modal.isOpen, true, "Ctrl+[ closes the band first");

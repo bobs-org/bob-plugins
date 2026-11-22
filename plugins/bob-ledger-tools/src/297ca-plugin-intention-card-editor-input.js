@@ -52,6 +52,9 @@ function intentionCardEditorPaste(modal, event) {
     const target = event && event.target;
     if (!modal || !modal.stage || modal.stage.kind !== "intention") return false;
     if (!target || target.getAttribute?.("data-intention-input") !== "intention") return false;
+    // While the in-band NAME stage is active, paste belongs to its ID line;
+    // proseField consumes insertFromPaste in beforeinput after this event.
+    if (typeof intentionCardEditorProseIsNaming === "function" && intentionCardEditorProseIsNaming(modal)) return false;
     let text = "";
     try { text = event.clipboardData?.getData?.("text/plain") || event.clipboardData?.getData?.("text") || ""; } catch (_) {}
     if (!/[\r\n\u2028\u2029]/.test(text)) return false;

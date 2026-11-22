@@ -870,7 +870,7 @@ class BobMailPickerModal extends Modal {
   }
 }
 // ---- src/040-task-modal.js ----
-// nav's proseField v1 namespace, or null: without it the field types plainly.
+// nav's proseField namespace, or null: without it the field types plainly.
 function mailProseFieldApi(app) {
   try {
     const plugins = app && app.plugins && app.plugins.plugins;
@@ -936,7 +936,7 @@ class BobMailTaskModal extends Modal {
     this.input.select();
   }
 
-  // The task text is prose (S13): `[[` completes through nav's proseField.
+  // The task text is prose (S13): `[[` and `((` share nav's LINK band.
   // bob capture routes the task, so there is no home note for `[[#…`.
   attachLinks(content) {
     try {
@@ -949,6 +949,8 @@ class BobMailTaskModal extends Modal {
         recall: null,
         sourcePath: null,
         density: "roomy",
+        links: true,
+        tasks: true,
         arrowKeys: true,
         ownKeys: true,
         scope: this.scope,

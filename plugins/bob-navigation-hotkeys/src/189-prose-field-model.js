@@ -136,6 +136,9 @@ function proseFieldAt(text, caret, options) {
     if (mode === "field") {
       const trimmed = value.replace(/^\s+/u, "");
       if (!trimmed.startsWith("[[") && !trimmed.startsWith("![[")) {
+        // Reserve a field-leading task opener for `api.taskLinks`. Without
+        // that API, `((` remains literal instead of becoming a note query.
+        if (value.startsWith("((")) return null;
         if (minOffset > 0) return null;
         return proseSyntheticField(value);
       }

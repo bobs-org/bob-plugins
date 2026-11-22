@@ -1,6 +1,6 @@
-// Intention card editor wikilink completion (S14): the intention input, the
+// Intention card editor prose completion (S14): the intention input, the
 // summary input, and the reflection textarea attach nav's `proseField` LINK
-// band, so `[[` completes notes, headings, and blocks in place. The band
+// band, so `[[` completes notes, headings, and blocks and `((` completes tasks. The band
 // host sits inside the stage directly under the field. Repaints rebuild the
 // stage, so every paint rebinds the same handle to the new input and host;
 // the band, its selection, the caret, and Esc dismissal memory survive. The
@@ -8,7 +8,7 @@
 // stage's keys before the card does. No nav, an old nav, or a thrown call
 // means the stage types exactly as before. Completion only inserts text.
 
-// nav's proseField v1, or null when nav is missing, old, or unloaded.
+// nav's proseField, or null when nav is missing, old, or unloaded.
 function intentionCardEditorProseApi(modal) {
   try {
     const app = modal && (modal.app || (modal.intentionPlugin && modal.intentionPlugin.app));
@@ -26,6 +26,11 @@ function intentionCardEditorProseApi(modal) {
 function intentionCardEditorProseHandle(modal) {
   const state = modal && modal.intentionProse;
   return state && state.handle ? state.handle : null;
+}
+
+function intentionCardEditorProseIsNaming(modal) {
+  const handle = intentionCardEditorProseHandle(modal);
+  try { return Boolean(handle && typeof handle.isNaming === "function" && handle.isNaming()); } catch (_) { return false; }
 }
 
 function intentionCardEditorProseDetach(modal) {
@@ -95,6 +100,7 @@ function intentionCardEditorSyncProse(modal) {
       sourcePath,
       recall: null,
       links: true,
+      tasks: true,
       mode: "inline",
       density: "roomy",
       ownKeys: false,

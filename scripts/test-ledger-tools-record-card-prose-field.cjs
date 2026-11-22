@@ -5,6 +5,7 @@ const assert = require("node:assert/strict");
 const Module = require("node:module");
 const test = require("node:test");
 const { helpers: navHelpers } = require("./navigation-hotkeys-harness.cjs");
+const { createTaskLinksApi, taskLinksApp } = require("./prose-task-links-harness.cjs");
 
 class TestPlugin {
   constructor(app) { this.app = app; }
@@ -251,13 +252,14 @@ const NOTES = [
 
 // The real nav controller behind a fake api: same attach contract, fixed
 // candidates, and a record of every attach call.
-function realProseApi(attaches) {
+function realProseApi(attaches, taskLinks = createTaskLinksApi()) {
+  const app = taskLinksApp(taskLinks);
   return {
-    version: 1,
+    version: 2,
     attach(options) {
       attaches.push(options);
       return navHelpers.attachProseField({
-        ...options, notes: NOTES, hintDebounceMs: 0,
+        ...options, app, notes: NOTES, hintDebounceMs: 0,
         parentPaths: [], linkedPaths: [], recentPaths: [],
         resolveLink: (link) => NOTES.find((row) => row.insertTarget === link.target) || null,
       });
@@ -506,6 +508,7 @@ test("each prose stage attaches once with the record as sourcePath", async () =>
     assert.equal(opts.recall, null);
     assert.equal(opts.ownKeys, false);
     assert.equal(opts.links, true);
+    assert.equal(opts.tasks, true);
     typeInto(input, "see [[cr");
     typeInto(input, "see [[cra");
     assert.equal(stageInput(modal, "text"), input, "per-keystroke paints keep the element");
@@ -680,6 +683,84 @@ test("link stage: Esc closes only the band and arrows stay inert while closed", 
     assert.equal(modal.stageDraftText, "cl", "no hidden candidate cycling rewrites the draft");
     typeInto(input, "cla");
     assert.equal(modal.recordProseLinkOpen(), true, "editing the query reopens the band");
+  } finally { modal.close(); }
+});
+
+test("task NAME owns typing and Ctrl+Enter without triggering Record Card input or save", async () => {
+  const taskLinks = createTaskLinksApi();
+  const attaches = [];
+  const { modal, plugin } = await openCard({ prose: realProseApi(attaches, taskLinks) });
+  try {
+    modal.recordOpenStage("text", "claim");
+    const input = stageInput(modal, "text");
+    typeInto(input, "Follow up ((reply");
+    const handle = modal.recordProseBinding.handle;
+    assert.equal(handle.isTaskOpen(), true);
+    press(modal, input, "Enter");
+    release(input, "Enter");
+    await pause(0);
+    assert.equal(handle.isNaming(), true);
+    const draft = modal.stageDraftText;
+    const tab = press(modal, input, "Tab");
+    assert.equal(tab.defaultPrevented, true, "NAME Tab cycles suggestions before Record Card field navigation");
+    assert.match(modal.contentEl.querySelector("[data-record-band]").textContent, /follow-up/);
+    const shiftTab = press(modal, input, "Tab", { shiftKey: true });
+    assert.equal(shiftTab.defaultPrevented, true);
+
+    let inputEvents = 0;
+    input.addEventListener("input", () => { inputEvents += 1; });
+    const beforeinput = {
+      type: "beforeinput", inputType: "insertFromPaste",
+      clipboardData: { getData: () => "fresh-id" },
+      preventDefault() { this.defaultPrevented = true; }, stopPropagation() {},
+    };
+    input.dispatchEvent(beforeinput);
+    assert.equal(beforeinput.defaultPrevented, true);
+    assert.equal(inputEvents, 0, "cancelled beforeinput emits no input event");
+    assert.equal(modal.stageDraftText, draft, "NAME input does not repaint or change the record draft");
+    assert.equal(input.value, draft, "NAME editing stays outside the prompt field snapshot");
+
+    const confirm = press(modal, input, "Enter", { metaKey: true });
+    await pause(0);
+    assert.equal(confirm.defaultPrevented, true, "Cmd+Enter is consumed by task naming");
+    assert.equal(taskLinks.state.named.at(-1).id, "fresh-id");
+    assert.equal(handle.isTaskOpen(), false);
+    assert.deepEqual(modal.stage, { kind: "text", field: "claim" });
+    assert.equal(plugin._applies.length, 0, "naming a task never saves the record field");
+    assert.match(modal.stageDraftText, /^Follow up \[\[2026\/2026-11-21#\^fresh-id\]\]$/);
+  } finally { modal.close(); }
+});
+
+test("link stage: (( is field-mode and its named block link parses as a subpath", async () => {
+  const taskLinks = createTaskLinksApi();
+  const attaches = [];
+  const { modal, plugin } = await openCard({ prose: realProseApi(attaches, taskLinks) });
+  try {
+    modal.recordOpenStage("link", "spot");
+    let input = stageInput(modal, "link");
+    assert.equal(attaches.at(-1).mode, "field");
+    typeInto(input, "Context ((reply");
+    assert.equal(modal.recordProseBinding.handle.isTaskOpen(), false, "field mode ignores an opener after offset zero");
+    input = stageInput(modal, "link");
+    typeInto(input, "((reply");
+    const handle = modal.recordProseBinding.handle;
+    assert.equal(handle.isTaskOpen(), true, "field mode opens at offset zero");
+    assert.equal(taskLinks.state.requests.length, 1);
+    press(modal, input, "Enter");
+    release(input, "Enter");
+    await pause(0);
+    assert.equal(handle.isNaming(), true);
+    const confirm = press(modal, input, "Enter", { ctrlKey: true });
+    await pause(0);
+    assert.equal(confirm.defaultPrevented, true);
+    assert.equal(plugin._applies.length, 0, "task naming does not save the link field");
+    assert.deepEqual(helpers.recordCardParseLinkDraft(modal.stageDraftText), {
+      kind: "wikilink",
+      value: "[[2026/2026-11-21#^reply-dana]]",
+      target: "2026/2026-11-21",
+      subpath: "#^reply-dana",
+      alias: null,
+    });
   } finally { modal.close(); }
 });
 

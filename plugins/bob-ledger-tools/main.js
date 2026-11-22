@@ -113514,9 +113514,9 @@ Object.assign(RecordCardModal.prototype, {
 });
 // ---- src/242sa-plugin-record-card-prose-field.js ----
 // Record Card prose fields (S15). The text, suggest, and text-list item
-// inputs complete `[[` inline through nav's proseField; the link stage (and
-// link-list items) is a field-mode consumer of the same engine, so the whole
-// value is one link target. The card is an explicit consumer: its Esc / q /
+// inputs complete `[[` and `((` inline through nav's proseField; the link
+// stage (and link-list items) is a field-mode consumer of the same engine, so
+// the whole value is one link target. The card is an explicit consumer: its Esc / q /
 // Ctrl+[ ladder calls backOut() first, and its typed-stage key handler offers
 // every key to the band before Enter save, Tab, list Enter, and suggest
 // cycling. Typed stages keep their live input across repaints (242o/242q),
@@ -113642,6 +113642,7 @@ Object.assign(RecordCardModal.prototype, {
         sourcePath: () => this.recordPath || null,
         recall: null,
         links: true,
+        tasks: true,
         mode,
         density: "roomy",
         ownKeys: false,
@@ -160587,6 +160588,9 @@ function intentionCardEditorPaste(modal, event) {
     const target = event && event.target;
     if (!modal || !modal.stage || modal.stage.kind !== "intention") return false;
     if (!target || target.getAttribute?.("data-intention-input") !== "intention") return false;
+    // While the in-band NAME stage is active, paste belongs to its ID line;
+    // proseField consumes insertFromPaste in beforeinput after this event.
+    if (typeof intentionCardEditorProseIsNaming === "function" && intentionCardEditorProseIsNaming(modal)) return false;
     let text = "";
     try { text = event.clipboardData?.getData?.("text/plain") || event.clipboardData?.getData?.("text") || ""; } catch (_) {}
     if (!/[\r\n\u2028\u2029]/.test(text)) return false;
@@ -161321,9 +161325,9 @@ function intentionCardEditorAutogrow(input) {
   }
 }
 // ---- src/297cd-plugin-intention-card-editor-prose.js ----
-// Intention card editor wikilink completion (S14): the intention input, the
+// Intention card editor prose completion (S14): the intention input, the
 // summary input, and the reflection textarea attach nav's `proseField` LINK
-// band, so `[[` completes notes, headings, and blocks in place. The band
+// band, so `[[` completes notes, headings, and blocks and `((` completes tasks. The band
 // host sits inside the stage directly under the field. Repaints rebuild the
 // stage, so every paint rebinds the same handle to the new input and host;
 // the band, its selection, the caret, and Esc dismissal memory survive. The
@@ -161331,7 +161335,7 @@ function intentionCardEditorAutogrow(input) {
 // stage's keys before the card does. No nav, an old nav, or a thrown call
 // means the stage types exactly as before. Completion only inserts text.
 
-// nav's proseField v1, or null when nav is missing, old, or unloaded.
+// nav's proseField, or null when nav is missing, old, or unloaded.
 function intentionCardEditorProseApi(modal) {
   try {
     const app = modal && (modal.app || (modal.intentionPlugin && modal.intentionPlugin.app));
@@ -161349,6 +161353,11 @@ function intentionCardEditorProseApi(modal) {
 function intentionCardEditorProseHandle(modal) {
   const state = modal && modal.intentionProse;
   return state && state.handle ? state.handle : null;
+}
+
+function intentionCardEditorProseIsNaming(modal) {
+  const handle = intentionCardEditorProseHandle(modal);
+  try { return Boolean(handle && typeof handle.isNaming === "function" && handle.isNaming()); } catch (_) { return false; }
 }
 
 function intentionCardEditorProseDetach(modal) {
@@ -161418,6 +161427,7 @@ function intentionCardEditorSyncProse(modal) {
       sourcePath,
       recall: null,
       links: true,
+      tasks: true,
       mode: "inline",
       density: "roomy",
       ownKeys: false,

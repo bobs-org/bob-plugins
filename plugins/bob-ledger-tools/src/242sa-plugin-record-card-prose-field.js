@@ -1,7 +1,7 @@
 // Record Card prose fields (S15). The text, suggest, and text-list item
-// inputs complete `[[` inline through nav's proseField; the link stage (and
-// link-list items) is a field-mode consumer of the same engine, so the whole
-// value is one link target. The card is an explicit consumer: its Esc / q /
+// inputs complete `[[` and `((` inline through nav's proseField; the link
+// stage (and link-list items) is a field-mode consumer of the same engine, so
+// the whole value is one link target. The card is an explicit consumer: its Esc / q /
 // Ctrl+[ ladder calls backOut() first, and its typed-stage key handler offers
 // every key to the band before Enter save, Tab, list Enter, and suggest
 // cycling. Typed stages keep their live input across repaints (242o/242q),
@@ -127,6 +127,7 @@ Object.assign(RecordCardModal.prototype, {
         sourcePath: () => this.recordPath || null,
         recall: null,
         links: true,
+        tasks: true,
         mode,
         density: "roomy",
         ownKeys: false,

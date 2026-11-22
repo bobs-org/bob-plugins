@@ -26300,6 +26300,9 @@ function proseFieldAt(text, caret, options) {
     if (mode === "field") {
       const trimmed = value.replace(/^\s+/u, "");
       if (!trimmed.startsWith("[[") && !trimmed.startsWith("![[")) {
+        // Reserve a field-leading task opener for `api.taskLinks`. Without
+        // that API, `((` remains literal instead of becoming a note query.
+        if (value.startsWith("((")) return null;
         if (minOffset > 0) return null;
         return proseSyntheticField(value);
       }
@@ -27391,7 +27394,7 @@ function attachProseField(options) {
       openAlias(alias);
       return;
     }
-    const next = linksEnabled ? proseFieldAt(text, caret, fieldOptions()) : null;
+    const next = linksEnabled && !(mode === "field" && text.startsWith("((")) ? proseFieldAt(text, caret, fieldOptions()) : null;
     if (next) {
       try { if (taskMode) taskMode.close(false); } catch (_error) {}
       if (!fromInput && !linkOpen) {
@@ -29312,7 +29315,11 @@ function createProseTaskMode(ctx) {
     rebind() {
       if (open) {
         takeSnapshot();
-        consider(true);
+        // `consider` deliberately treats NAME as already handled, so render
+        // its retained ID line into the replacement band host after a host
+        // repaint. The list stage still re-detects and reranks its field.
+        if (stage === "name") render();
+        else consider(true);
       }
       return true;
     },

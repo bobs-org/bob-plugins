@@ -9,6 +9,7 @@ const { helpers: nav } = require("./navigation-hotkeys-harness.cjs");
 const {
   loadLedgerTools, flush, fakeVault, installBobSimulator, FakeNode, FakeDocument,
 } = require("./intention-card-test-helpers.cjs");
+const { createTaskLinksApi, taskLinksApp } = require("./prose-task-links-harness.cjs");
 
 const LedgerToolsPlugin = loadLedgerTools();
 const H = LedgerToolsPlugin.helpers;
@@ -105,13 +106,15 @@ const NOTES = [
 ];
 
 // The real nav controller, with a fixed note list in place of the vault index.
-function realProseApi(log = []) {
+function realProseApi(log = [], taskLinks = createTaskLinksApi()) {
+  const app = taskLinksApp(taskLinks);
   return {
-    version: 1,
+    version: 2,
     attach(options) {
       log.push(options);
       return nav.attachProseField({
         ...options,
+        app,
         notes: NOTES,
         hintDebounceMs: 0,
         parentPaths: [],
@@ -229,6 +232,7 @@ test("each stage attaches once under its field, rebinds on repaint, and detaches
   assert.equal(opts.inputEl, input(modal));
   assert.equal(opts.bandHost, bandHost(modal));
   assert.equal(opts.links, true);
+  assert.equal(opts.tasks, true);
   assert.equal(opts.recall, null);
   assert.equal(opts.ownKeys, false, "the card routes keys itself");
   assert.equal(opts.mode, "inline");
@@ -433,6 +437,98 @@ test("real controller: the summary stage completes links too", async () => {
   assert.equal(modal.intentionProse.handle.isLinkOpen(), true);
   modal.close();
   assert.equal(modal.intentionProse, null);
+});
+
+test("real controller: (( NAME paste, key routing, and card repaint keep the task snapshot", async () => {
+  const taskLinks = createTaskLinksApi();
+  const { modal, vault, calls: bob } = setup({ intentions: ["One"] }, realProseApi([], taskLinks));
+  await flush();
+  modal.intentionOnKeyDown(key("i", null));
+  type(modal, "Read ((reply");
+  const handle = modal.intentionProse.handle;
+  assert.equal(handle.isTaskOpen(), true);
+  const opener = key("Enter", input(modal));
+  modal.intentionOnKeyDown(opener);
+  fire(input(modal), "keyup", { key: "Enter" });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(handle.isNaming(), true);
+  assert.equal(input(modal).value, "Read ((reply");
+
+  const tab = key("Tab", input(modal));
+  modal.intentionOnKeyDown(tab);
+  assert.equal(tab.defaultPrevented, true, "Tab cycles the NAME suggestions before card navigation");
+  assert.match(bandHost(modal).textContent, /follow-up/);
+  const shiftTab = key("Tab", input(modal), { shiftKey: true });
+  modal.intentionOnKeyDown(shiftTab);
+  assert.equal(shiftTab.defaultPrevented, true, "Shift+Tab cycles back through NAME suggestions");
+
+  const draft = modal.stageDraft;
+  const pasteText = "fresh\nid";
+  const clipboardData = { getData: (kind) => kind === "text/plain" ? pasteText : "" };
+  const pasteEvent = fire(input(modal), "paste", { clipboardData }, true);
+  assert.equal(pasteEvent.defaultPrevented, false, "the card's one-line paste handler leaves NAME paste alone");
+  let inputEvents = 0;
+  input(modal).addEventListener("input", () => { inputEvents += 1; });
+  const beforeinput = {
+    inputType: "insertFromPaste", clipboardData,
+    preventDefault() { this.defaultPrevented = true; }, stopPropagation() {},
+  };
+  const beforeinputEvent = fire(input(modal), "beforeinput", beforeinput, true);
+  assert.equal(beforeinputEvent.defaultPrevented, true, "proseField routes the paste into the ID line");
+  assert.equal(inputEvents, 0, "a cancelled beforeinput has no input event");
+  assert.equal(modal.stageDraft, draft, "NAME paste does not edit the intention draft");
+  assert.equal(input(modal).value, draft, "the task field stays byte-identical to its snapshot");
+  assert.match(bandHost(modal).textContent, /freshid/);
+
+  const beforePaint = input(modal);
+  const caret = [beforePaint.selectionStart, beforePaint.selectionEnd];
+  modal.paintIntentionCard();
+  assert.notEqual(input(modal), beforePaint);
+  assert.equal(modal.intentionProse.handle, handle, "the same prose session is rebound");
+  assert.equal(handle.isNaming(), true, "NAME survives the card repaint");
+  assert.equal(input(modal).value, draft, "the task field snapshot survives repaint");
+  assert.deepEqual([input(modal).selectionStart, input(modal).selectionEnd], caret);
+  assert.match(bandHost(modal).textContent, /freshid/, "the ID line and its caret state survive repaint");
+
+  const confirm = key("Enter", input(modal), { ctrlKey: true });
+  modal.intentionOnKeyDown(confirm);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(confirm.defaultPrevented, true, "Ctrl+Enter is owned by NAME, not the card save");
+  assert.equal(taskLinks.state.named.at(-1).id, "freshid");
+  assert.equal(handle.isTaskOpen(), false);
+  assert.ok(modal.stage, "naming a task leaves the intention stage open");
+  assert.equal(applies(bob).length, 0, "task naming never saves the card field");
+  assert.equal(vault.fields.get(DAY).intentions[0], "One");
+  modal.close();
+});
+
+test("task list keeps the pending-write guard and one-line paste behavior", async () => {
+  const { modal } = setup({ intentions: ["One"] }, realProseApi());
+  await flush();
+  modal.intentionOnKeyDown(key("i", null));
+  type(modal, "Read ((reply");
+  const handle = modal.intentionProse.handle;
+  assert.equal(handle.isTaskOpen(), true);
+
+  modal.pendingApply = true;
+  const tab = key("Tab", input(modal));
+  modal.intentionOnKeyDown(tab);
+  assert.equal(tab.defaultPrevented, true);
+  assert.equal(handle.isNaming(), false, "the pending write guard runs before task selection");
+  assert.equal(handle.isTaskOpen(), true);
+  modal.pendingApply = false;
+
+  const pasteText = "tomorrow\nwith Dana";
+  const paste = {
+    target: input(modal),
+    clipboardData: { getData: (kind) => kind === "text/plain" ? pasteText : "" },
+    preventDefault() { this.defaultPrevented = true; },
+  };
+  const pasteEvent = fire(input(modal), "paste", paste, true);
+  assert.equal(pasteEvent.defaultPrevented, true, "list-stage intention paste keeps its one-line normalization");
+  assert.match(modal.stageDraft, /tomorrow with Dana$/);
+  assert.doesNotMatch(modal.stageDraft, /[\r\n]/);
+  modal.close();
 });
 
 test("blurOnRemoval off: repaints keep the band open as well", async () => {

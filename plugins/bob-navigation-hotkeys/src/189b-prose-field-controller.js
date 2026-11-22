@@ -413,7 +413,7 @@ function attachProseField(options) {
       openAlias(alias);
       return;
     }
-    const next = linksEnabled ? proseFieldAt(text, caret, fieldOptions()) : null;
+    const next = linksEnabled && !(mode === "field" && text.startsWith("((")) ? proseFieldAt(text, caret, fieldOptions()) : null;
     if (next) {
       try { if (taskMode) taskMode.close(false); } catch (_error) {}
       if (!fromInput && !linkOpen) {

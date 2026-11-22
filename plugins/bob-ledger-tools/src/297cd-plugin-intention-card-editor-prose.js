@@ -134,8 +134,8 @@ function intentionCardEditorProseKey(modal, event) {
 
 // First rung of the back-out ladder: an open band closes alone, one layer
 // per Esc / Ctrl+[ press, before the stage cancels.
-function intentionCardEditorProseBackOut(modal) {
+function intentionCardEditorProseBackOut(modal, event) {
   const handle = intentionCardEditorProseHandle(modal);
   if (!handle || !modal.stage) return false;
-  try { return handle.backOut() === true; } catch (_) { return false; }
+  try { return handle.backOut(event) === true; } catch (_) { return false; }
 }

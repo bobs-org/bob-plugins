@@ -239,7 +239,7 @@ class RecordCardModal extends RecordCardModalBase {
   }
 
   recordBackOut(event) {
-    const action = this.recordHandleEscape();
+    const action = this.recordHandleEscape(event);
     this.recordMarkEscapeHandled(event);
     if (action === "close") this.close();
     return action;

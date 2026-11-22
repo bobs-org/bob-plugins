@@ -175,7 +175,7 @@ function offerPickerScheduledReasonLinkKey(picker, event) {
       && event.metaKey !== true
       && event.altKey !== true;
     consumed = plainEscape || isCtrlLeftBracketKeydown(event)
-      ? handle.backOut() === true
+      ? handle.backOut(event) === true
       : handle.handleKeydown(event) === true;
   } catch (_error) {
     consumed = false;
@@ -202,7 +202,7 @@ function pickerProseEscapeBackOut(picker, event) {
   } catch (_error) {}
   const links = getPickerScheduledReasonLinks(picker);
   try {
-    if (links && typeof links.backOut === "function" && links.backOut() === true) return true;
+    if (links && typeof links.backOut === "function" && links.backOut(event) === true) return true;
   } catch (_error) {}
-  return typeof pickerLogRecallBackOut === "function" && pickerLogRecallBackOut(picker);
+  return typeof pickerLogRecallBackOut === "function" && pickerLogRecallBackOut(picker, event);
 }

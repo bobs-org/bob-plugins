@@ -110929,7 +110929,7 @@ class RecordCardModal extends RecordCardModalBase {
   }
 
   recordBackOut(event) {
-    const action = this.recordHandleEscape();
+    const action = this.recordHandleEscape(event);
     this.recordMarkEscapeHandled(event);
     if (action === "close") this.close();
     return action;
@@ -113573,11 +113573,11 @@ Object.assign(RecordCardModal.prototype, {
     this.recordSyncProseField();
   }
 ,
-  recordHandleEscape() {
+  recordHandleEscape(event) {
     // First rung of the card's back-out ladder: an open LINK band closes
     // alone, one layer per press, before the stage or the card.
-    if (this.recordProseBackOut()) return "stay";
-    return recordCardHandleEscapeBeforeProse.call(this);
+    if (this.recordProseBackOut(event)) return "stay";
+    return recordCardHandleEscapeBeforeProse.call(this, event);
   }
 ,
   onClose() {
@@ -113694,11 +113694,11 @@ Object.assign(RecordCardModal.prototype, {
     return true;
   }
 ,
-  recordProseBackOut() {
+  recordProseBackOut(event) {
     const binding = this.recordProseBinding;
     if (!binding || !binding.handle) return false;
     let consumed = false;
-    try { consumed = binding.handle.backOut() === true; } catch (_) { consumed = false; }
+    try { consumed = binding.handle.backOut(event) === true; } catch (_) { consumed = false; }
     if (consumed) this.recordProseRestoreAria();
     return consumed;
   }
@@ -160135,7 +160135,7 @@ class IntentionCardModal extends IntentionCardModalBase {
 
   intentionBackOut(event) {
     // An open LINK band is the first rung: it closes alone.
-    const action = !this.pendingApply && intentionCardEditorProseBackOut(this)
+    const action = !this.pendingApply && intentionCardEditorProseBackOut(this, event)
       ? "close-link" : this.intentionHandleEscape();
     try { event?.preventDefault?.(); } catch (_) {}
     try { event?.stopPropagation?.(); } catch (_) {}
@@ -161465,10 +161465,10 @@ function intentionCardEditorProseKey(modal, event) {
 
 // First rung of the back-out ladder: an open band closes alone, one layer
 // per Esc / Ctrl+[ press, before the stage cancels.
-function intentionCardEditorProseBackOut(modal) {
+function intentionCardEditorProseBackOut(modal, event) {
   const handle = intentionCardEditorProseHandle(modal);
   if (!handle || !modal.stage) return false;
-  try { return handle.backOut() === true; } catch (_) { return false; }
+  try { return handle.backOut(event) === true; } catch (_) { return false; }
 }
 // ---- src/297d-plugin-intention-card-entrypoints.js ----
 // Intention card editor entry points: the `intentions` registry kind, the

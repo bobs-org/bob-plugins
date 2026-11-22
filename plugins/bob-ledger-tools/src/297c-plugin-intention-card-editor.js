@@ -368,7 +368,7 @@ class IntentionCardModal extends IntentionCardModalBase {
 
   intentionBackOut(event) {
     // An open LINK band is the first rung: it closes alone.
-    const action = !this.pendingApply && intentionCardEditorProseBackOut(this)
+    const action = !this.pendingApply && intentionCardEditorProseBackOut(this, event)
       ? "close-link" : this.intentionHandleEscape();
     try { event?.preventDefault?.(); } catch (_) {}
     try { event?.stopPropagation?.(); } catch (_) {}

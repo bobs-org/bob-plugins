@@ -331,6 +331,23 @@ BOB_BIN=$HOME/.cargo/bin/bob xvfb-run -a node --experimental-websocket \
   scripts/obsidian-prose-field-e2e.cjs -r /tmp/prose-walk.json -o /tmp/prose-walk-shots
 ```
 
+## Prose-task walkthrough
+
+`scripts/obsidian-prose-task-e2e.cjs` drives `((` completion through the real
+Work summary (S1), dense successor cancel reason (S6), Task Card review and
+scheduled reason (S10, S11), Intention Card reflection (S14), and Record Card
+text and link stages (S15). On each surface it accepts an identified task,
+names an ID-less task, undoes once, checks Enter safety and the Esc ladder,
+submits, and confirms `[[target#^id]]` in the written note. It then runs
+`bob task reconcile` and checks the target's `🪢 LINKED FROM` row for a `💬`
+mention chip with no Task Link or relation. `BOB_BIN` is the bob the plugins
+spawn. Run it on athena from a fresh `/tmp` copy of the working tree:
+
+```bash
+BOB_BIN=$HOME/.cargo/bin/bob xvfb-run -a node --experimental-websocket \
+  scripts/obsidian-prose-task-e2e.cjs -r /tmp/prose-task-walk.json -o /tmp/prose-task-shots
+```
+
 ## Group-jump walkthrough
 
 `scripts/obsidian-group-jump-e2e.cjs` proves `[N` / `]N` in one owned Obsidian.

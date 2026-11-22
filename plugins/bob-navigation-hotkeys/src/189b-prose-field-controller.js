@@ -442,8 +442,7 @@ function attachProseField(options) {
     else scheduleHint();
   };
 
-  // Only an Enter acceptance arms the held-Enter swallow; a Tab or click
-  // acceptance must leave the next Enter free to submit the host.
+  // Only an Enter acceptance arms the held-Enter swallow; Tab/click leave Enter free.
   const acceptRow = (row, viaEnter) => {
     if (!row || !field || !inputEl) {
       closeBand(false);
@@ -557,11 +556,23 @@ function attachProseField(options) {
     return false;
   };
 
+  // One Escape can hit capture and the host; peel one layer per event.
+  const escLayerEvents = typeof WeakSet === "function" ? new WeakSet() : null;
+  const markPeeled = (event) => {
+    try { if (event && escLayerEvents) escLayerEvents.add(event); } catch (_error) {}
+    return true;
+  };
+  const isEscChord = (event) => {
+    const key = String(event && event.key || "").toLowerCase();
+    return key === "escape" || key === "esc" || Boolean(event && event.ctrlKey && !event.altKey && !event.metaKey && key === "[");
+  };
+
   const handleKeydown = (event) => {
     if (disposed || !event) return false;
     if (event.isComposing || composing) return false;
     const key = String(event.key || "");
     if (swallowEnter && key === "Enter") return true;
+    if ((key === "Escape" || key === "Esc") && (taskIsOpen() || linkOpen || aliasStage)) return backOut(event);
     if (taskIsOpen() && taskMode) {
       const consumed = taskMode.handleKeydown(event);
       if (consumed) renderTaskOrLink();
@@ -574,33 +585,28 @@ function attachProseField(options) {
     return false;
   };
 
-  const backOut = () => {
+  const backOut = (event) => {
+    if (event && escLayerEvents && escLayerEvents.has(event)) return true;
     if (taskIsOpen() && taskMode) {
       taskMode.backOut();
       renderTaskOrLink();
       if (!taskMode.isOpen) scheduleHint();
-      return true;
+      return markPeeled(event);
     }
     if (linkOpen || aliasStage) {
       closeBand(true);
-      return true;
+      return markPeeled(event);
     }
     if (recallHandle && typeof recallHandle.backOut === "function") {
-      try { if (recallHandle.backOut()) return true; } catch (_error) {}
+      try { if (recallHandle.backOut(event)) return markPeeled(event); } catch (_error) {}
     }
     return false;
   };
 
   const captureKeydown = (event) => {
-    const key = String(event && event.key || "").toLowerCase();
-    const escChord = key === "escape" || (event && event.ctrlKey && !event.altKey && !event.metaKey && key === "[");
-    const consumed = escChord ? backOut() : handleKeydown(event);
+    const consumed = isEscChord(event) ? backOut(event) : handleKeydown(event);
     if (consumed) {
-      try { event.preventDefault(); } catch (_error) {}
-      try { event.stopPropagation(); } catch (_error) {}
-      try {
-        if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
-      } catch (_error) {}
+      try { event.preventDefault(); event.stopPropagation(); if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation(); } catch (_error) {}
     }
     return consumed;
   };
@@ -617,11 +623,8 @@ function attachProseField(options) {
   const onInput = (event) => {
     if (disposed) return;
     const type = event && event.inputType;
-    const blocked = !type
-      || type === "insertFromPaste"
-      || type === "insertFromDrop"
-      || type === "insertFromYank"
-      || Boolean(event && event.isComposing);
+    const blocked = !type || type === "insertFromPaste" || type === "insertFromDrop"
+      || type === "insertFromYank" || Boolean(event && event.isComposing);
     if (blocked && !linkOpen) {
       scheduleHint();
       return;
@@ -846,9 +849,7 @@ function attachProseField(options) {
     try {
       escapeScopeHandler = opts.scope.register(null, null, (event) => {
         if (focusedElsewhere()) return undefined;
-        const key = String(event && event.key || "").toLowerCase();
-        const escChord = key === "escape" || (event && event.ctrlKey && !event.altKey && !event.metaKey && key === "[");
-        if (!escChord) return undefined;
+        if (!isEscChord(event)) return undefined;
         return captureKeydown(event) ? false : undefined;
       });
       const keys = opts.scope.keys;

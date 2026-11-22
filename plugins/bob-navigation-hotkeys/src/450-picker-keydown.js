@@ -36,7 +36,7 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
         && event.altKey !== true
       ) {
         try {
-          if (pickerLogRecallBackOut(this)) {
+          if (pickerLogRecallBackOut(this, event)) {
             event.preventDefault();
             event.stopPropagation();
             return;
@@ -50,7 +50,7 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
         && isCtrlLeftBracketKeydown(event)
       ) {
         try {
-          if (pickerLogRecallBackOut(this)) {
+          if (pickerLogRecallBackOut(this, event)) {
             event.preventDefault();
             event.stopPropagation();
             return;

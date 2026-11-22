@@ -55,11 +55,11 @@ Object.assign(RecordCardModal.prototype, {
     this.recordSyncProseField();
   }
 ,
-  recordHandleEscape() {
+  recordHandleEscape(event) {
     // First rung of the card's back-out ladder: an open LINK band closes
     // alone, one layer per press, before the stage or the card.
-    if (this.recordProseBackOut()) return "stay";
-    return recordCardHandleEscapeBeforeProse.call(this);
+    if (this.recordProseBackOut(event)) return "stay";
+    return recordCardHandleEscapeBeforeProse.call(this, event);
   }
 ,
   onClose() {
@@ -176,11 +176,11 @@ Object.assign(RecordCardModal.prototype, {
     return true;
   }
 ,
-  recordProseBackOut() {
+  recordProseBackOut(event) {
     const binding = this.recordProseBinding;
     if (!binding || !binding.handle) return false;
     let consumed = false;
-    try { consumed = binding.handle.backOut() === true; } catch (_) { consumed = false; }
+    try { consumed = binding.handle.backOut(event) === true; } catch (_) { consumed = false; }
     if (consumed) this.recordProseRestoreAria();
     return consumed;
   }

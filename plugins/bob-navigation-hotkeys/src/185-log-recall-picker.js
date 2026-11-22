@@ -249,11 +249,11 @@ function getPickerActiveLogRecall(picker) {
   return handle;
 }
 
-function pickerLogRecallBackOut(picker) {
+function pickerLogRecallBackOut(picker, event) {
   const handle = getPickerActiveLogRecall(picker);
   if (!handle || typeof handle.backOut !== "function") return false;
   try {
-    return handle.backOut() === true;
+    return handle.backOut(event) === true;
   } catch (_error) {
     return false;
   }

@@ -418,6 +418,26 @@ test("Esc ladder: NAME back to list, then close; held Enter never writes twice",
   handle.detach();
 });
 
+test("the same Escape event peels only one NAME layer", () => {
+  const rows = [idlessRow({})];
+  const { handle, input } = attachTasks(rows, {}, { value: "Note ((rep", caret: 10 });
+  typeInput(input, "Note ((rep", 10);
+  pressEnter(handle, input, {});
+  assert.equal(handle.isNaming(), true);
+  const event = { key: "Escape", preventDefault() {}, stopPropagation() {}, stopImmediatePropagation() {} };
+  assert.equal(handle.handleKeydown(event), true);
+  assert.equal(handle.isNaming(), false);
+  assert.equal(handle.isTaskOpen(), true);
+  assert.equal(handle.backOut(event), true);
+  assert.equal(handle.isTaskOpen(), true, "a second backOut on the same event stays on the list");
+  assert.equal(handle.backOut(), true);
+  assert.equal(handle.isTaskOpen(), false);
+  const idle = { key: "Escape", preventDefault() {}, stopPropagation() {}, stopImmediatePropagation() {} };
+  assert.equal(handle.backOut(idle), false, "nothing open: the host may close");
+  assert.equal(handle.backOut(idle), false, "an unpeeled Escape stays free for the next handler");
+  handle.detach();
+});
+
 test("blur cancels naming without writing; fail-open without bip", () => {
   const rows = [idlessRow({})];
   let named = 0;

@@ -510,6 +510,12 @@ function successorRenderReasonEditor(modal, container, row, draft) {
         if (event.key === "Escape" || event.key === "Esc" || isCtrlLeftBracketKeydown(event)) {
           event.preventDefault();
           event.stopPropagation();
+          const handle = modal.reasonRecall;
+          if (handle && typeof handle.backOut === "function") {
+            try {
+              if (handle.backOut(event) === true) return;
+            } catch (_error) {}
+          }
           restore();
         }
       } catch (_error) {

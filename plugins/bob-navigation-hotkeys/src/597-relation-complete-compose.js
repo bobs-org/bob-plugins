@@ -462,6 +462,7 @@ class BobNavigationHotkeysRelationCompleteComposeMixin {
           successorNoticeTarget: "return",
           successorJumpTarget: "return",
           successorJumpBox,
+          reqCloseOwners: Array.isArray(result.reqCloseOwners) ? result.reqCloseOwners : [],
         });
         if (actual && typeof actual === "object") {
           const jump = actual.jump && typeof actual.jump === "object"

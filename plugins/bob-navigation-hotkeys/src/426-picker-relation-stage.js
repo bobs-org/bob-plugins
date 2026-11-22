@@ -542,6 +542,7 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
           ok: true,
           activePath: this.filePath,
           completedIdentities,
+          reqCloseOwners: outcomes.flatMap((entry) => entry.reqCloseOwners || []),
           closingRows: outcomes.flatMap((entry) => entry.closingRows || []),
           relationNotice: outcomes.map((entry) => entry.relationNotice).filter(Boolean).join(" · ") || null,
           mirrorFailed: outcomes.flatMap((entry) => entry.mirrorFailed || []),

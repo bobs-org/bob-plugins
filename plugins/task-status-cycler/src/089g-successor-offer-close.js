@@ -103,10 +103,22 @@ function normalizeSuccessorChoices(result) {
       ? result.jump.key.trim()
       : "";
     const jump = jumpKey ? { key: jumpKey } : null;
-    if (disjointPicks.length === 0 && closes.length === 0 && !jump) return null;
+    const reqs = Array.isArray(result.reqs)
+      ? result.reqs.filter((row) => row && typeof row === "object")
+        .map((row) => {
+          const key = typeof row.key === "string" ? row.key.trim() : "";
+          const verdict = row.verdict;
+          if (!key || !["met", "drop", "carry", "carry_pulled"].includes(verdict)) return null;
+          const request = { key, verdict };
+          if (row.reason !== undefined && typeof row.reason === "string") request.reason = row.reason;
+          return request;
+        }).filter(Boolean)
+      : null;
+    if (disjointPicks.length === 0 && closes.length === 0 && !jump && reqs === null) return null;
     return {
       picks: disjointPicks,
       closes,
+      ...(reqs !== null ? { reqs } : {}),
       ...(jump ? { jump } : {}),
     };
   } catch (_error) {

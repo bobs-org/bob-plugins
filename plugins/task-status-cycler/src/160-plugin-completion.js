@@ -291,9 +291,7 @@ class TaskStatusCyclerCompletionMixin {
     );
   }
 
-  // Cross-plugin close for checklist rows (API v2). Always goes through the
-  // Tasks `set-status-symbol-to-x` command so recurrence fires; never stamps
-  // and never falls back to writing `[x]` raw. Callers await the result.
+  // Cross-plugin close for checklist rows always goes through Tasks so recurrence fires.
   async completeTaskAtCursor(editor, options = {}) {
     const taskStatus =
       editor && typeof editor.getCursor === "function"
@@ -329,6 +327,9 @@ class TaskStatusCyclerCompletionMixin {
         : null;
     const activePath = activeFile && activeFile.path;
     const identity = closedTaskIdentity(activePath, taskStatus.lineText);
+    const reqCloseOwners = this.captureReqCloseOwnersFromEditor(
+      identity, editor, activePath, taskStatus.lineText,
+    );
     const beforeLineCount = this.getEditorLineCount(editor);
 
     if (
@@ -357,6 +358,7 @@ class TaskStatusCyclerCompletionMixin {
       }
       const finalized = await this.finalizeClosedTasks([identity], {
         ...finalizeContext,
+        reqCloseOwners,
       });
       return {
         ok: true,
@@ -418,26 +420,22 @@ class TaskStatusCyclerCompletionMixin {
     const closing = isTranscludedCompletionClosableStatus(
       resolvedTarget.taskStatus,
     );
+    const identity = this.reqCloseIdentityForResolvedTarget(resolvedTarget);
+    const reqCloseOwners = closing
+      ? this.captureReqCloseOwnersForResolvedTarget(resolvedTarget, context)
+      : [];
     const wrote = await this.replaceResolvedTranscludedTaskLine(
       resolvedTarget,
       context,
     );
     if (wrote && closing) {
-      const identity = closedTaskIdentity(
-        resolvedTarget.file.path,
-        resolvedTarget.taskStatus.lineText,
-      ) || { path: resolvedTarget.file.path, blockId: resolvedTarget.blockId };
-      await this.finalizeClosedTasks([identity], context);
+      await this.finalizeClosedTasks([identity], { ...context, reqCloseOwners });
     }
     return wrote;
   }
 
-  // Shared body for the Vim Ctrl+Enter dispatch and the non-Vim open/done
-  // command: toggle the local checkbox, then propagate the same open/done
-  // transition to an embedded block transclusion on the active line (if any),
-  // and finalize both identities together in one batch. The candidate embed
-  // is captured before the local write so a Tasks-plugin recurrence insertion
-  // above the active line cannot shift which line's transclusion is selected.
+  // Toggle the local checkbox, propagate to an embedded block transclusion, and
+  // finalize both identities in one batch. Capture the embed before the write.
   async toggleActiveCheckboxOpenDoneAndPropagate(
     editor,
     activeFile,
@@ -462,25 +460,30 @@ class TaskStatusCyclerCompletionMixin {
       ? null
       : this.getActiveLineTranscludedTaskTarget(editor, activePath);
 
+    const closing = isTranscludedCompletionClosableStatus(taskStatus);
+    const localIdentity = closedTaskIdentity(activePath, taskStatus.lineText);
+    const reqCloseOwners = closing
+      ? this.captureReqCloseOwnersFromEditor(localIdentity, editor, activePath, taskStatus.lineText)
+      : [];
+
     const wrote = this.toggleActiveCheckboxOpenDone(editor, taskStatus);
     if (!wrote) {
       return false;
     }
 
-    const localIdentity = closedTaskIdentity(activePath, taskStatus.lineText);
-    const closing = isTranscludedCompletionClosableStatus(taskStatus);
     const targetIdentity = await this.closeOrReopenTranscludedTaskLine(
       transclusionCandidate,
       editor,
       activePath,
       closing,
+      reqCloseOwners,
     );
     const identities = [localIdentity, targetIdentity].filter(Boolean);
     if (identities.length) {
       // Walk landings pass `successorNoticeTarget: "return"` with a
       // `successorNoticeBox`: the text is composed into `outcome.notice`
       // and no card is shown, keeping the gesture's single walk toast.
-      const context = { editor, activePath };
+      const context = { editor, activePath, reqCloseOwners };
       if (
         options && options.successorNoticeTarget === "return"
       ) {
@@ -533,7 +536,7 @@ class TaskStatusCyclerCompletionMixin {
   // that status is eligible to be forced. Returns the target's closed-task
   // identity when a write actually landed, `null` otherwise (no candidate,
   // unresolvable target, or target ineligible for the forced direction).
-  async closeOrReopenTranscludedTaskLine(candidate, editor, activePath, closing) {
+  async closeOrReopenTranscludedTaskLine(candidate, editor, activePath, closing, reqCloseOwners = []) {
     if (!candidate) {
       return null;
     }
@@ -554,6 +557,7 @@ class TaskStatusCyclerCompletionMixin {
     let wrote = false;
     if (closing) {
       if (isTranscludedCompletionClosableStatus(resolvedTarget.taskStatus)) {
+        reqCloseOwners.push(...this.captureReqCloseOwnersForResolvedTarget(resolvedTarget, context));
         wrote = await this.replaceResolvedTranscludedTaskLine(
           resolvedTarget,
           context,
@@ -694,7 +698,10 @@ class TaskStatusCyclerCompletionMixin {
           context,
           new Set(),
         );
-        const order = await finalizeTaskLinkCloseForJump(this, result.closed, context, options);
+        const order = await finalizeTaskLinkCloseForJump(this, result.closed, {
+          ...context,
+          reqCloseOwners: result.reqCloseOwners || [],
+        }, options);
         const rootKey = `${resolvedTarget.file.path}#^${resolvedTarget.blockId}`;
         const rootClosed = Array.isArray(result.closed) && result.closed.some(
           (identity) =>
@@ -720,16 +727,19 @@ class TaskStatusCyclerCompletionMixin {
     const closing = isTranscludedCompletionClosableStatus(
       resolvedTarget.taskStatus,
     );
+    const reqCloseOwners = closing
+      ? this.captureReqCloseOwnersForResolvedTarget(resolvedTarget, context)
+      : [];
     const wrote = await this.replaceResolvedTranscludedTaskLine(
       resolvedTarget,
       context,
     );
     if (wrote && closing) {
-      const identity = closedTaskIdentity(
-        resolvedTarget.file.path,
-        resolvedTarget.taskStatus.lineText,
-      ) || { path: resolvedTarget.file.path, blockId: resolvedTarget.blockId };
-      const order = await finalizeTaskLinkCloseForJump(this, [identity], context, options);
+      const identity = this.reqCloseIdentityForResolvedTarget(resolvedTarget);
+      const order = await finalizeTaskLinkCloseForJump(this, [identity], {
+        ...context,
+        reqCloseOwners,
+      }, options);
       if (!onDependencyLine) {
         try {
           await this.strikeActiveSelectedTaskBlockLink(editor, activePath, candidate);
@@ -852,6 +862,13 @@ class TaskStatusCyclerCompletionMixin {
       return false;
     }
 
+    const identity = nextSymbol === "x"
+      ? this.reqCloseIdentityForResolvedTarget(resolvedTarget)
+      : null;
+    const reqCloseOwners = identity
+      ? this.captureReqCloseOwnersForResolvedTarget(resolvedTarget, context)
+      : [];
+
     const wrote = await this.replaceResolvedTranscludedTaskLine(
       resolvedTarget,
       context,
@@ -874,26 +891,20 @@ class TaskStatusCyclerCompletionMixin {
       }
     }
 
-    // `cycler_polish` (bead bob-cli-3k): a transcluded-target cycle into
-    // Done or Cancelled joins the same pass as Ctrl+Enter, unless the caller
-    // batches the finalize itself (the counted range passes
-    // `deferFinalize`).
+    if (wrote && options && options.deferFinalize && nextSymbol === "x" &&
+        context && Array.isArray(context.reqCloseOwners)) {
+      context.reqCloseOwners.push(...reqCloseOwners);
+    }
     if (
       wrote && !(options && options.deferFinalize) &&
       (nextSymbol === "x" || nextSymbol === "-")
     ) {
       const targetPath = resolvedTarget.file && resolvedTarget.file.path;
       if (targetPath) {
-        const identity = closedTaskIdentity(
-          targetPath,
-          resolvedTarget.taskStatus.lineText,
-        ) || (resolvedTarget.blockId
-          ? { path: targetPath, blockId: resolvedTarget.blockId }
-          : null);
         if (identity) {
           void this.finalizeCycledClosedTasks(
             [{ identity, symbol: nextSymbol }],
-            context,
+            { ...context, reqCloseOwners },
           );
         }
       }

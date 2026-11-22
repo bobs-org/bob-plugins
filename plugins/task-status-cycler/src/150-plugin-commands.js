@@ -61,6 +61,18 @@ class TaskStatusCyclerCommandsMixin {
         return true;
       }
 
+      const cycleFile = view.file ||
+        (this.app.workspace && typeof this.app.workspace.getActiveFile === "function"
+          ? this.app.workspace.getActiveFile()
+          : null);
+      const cyclePath = cycleFile && cycleFile.path;
+      const cycleIdentity = cyclePath
+        ? closedTaskIdentity(cyclePath, taskStatus.lineText)
+        : null;
+      const reqCloseOwners = nextSymbol === "x" && cycleIdentity && editor &&
+          typeof editor.getValue === "function"
+        ? this.captureReqCloseOwnersFromText(editor.getValue(), cyclePath, [cycleIdentity])
+        : [];
       const wrote = this.setActiveCheckboxStatus(editor, taskStatus, nextSymbol);
       if (wrote && taskStatus.symbol === BLOCKED_TASK_STATUS_SYMBOL) {
         this.applyBlockedStatusRetirementInEditor(editor, taskStatus.line);
@@ -70,16 +82,11 @@ class TaskStatusCyclerCommandsMixin {
       // recover-and-link pass as Ctrl+Enter; a cycle into Cancelled recovers
       // only (`closeKind: "cancelled"`, never links).
       if (wrote && (nextSymbol === "x" || nextSymbol === "-")) {
-        const cycleFile = view.file ||
-          (this.app.workspace &&
-          typeof this.app.workspace.getActiveFile === "function"
-            ? this.app.workspace.getActiveFile()
-            : null);
-        const cyclePath = cycleFile && cycleFile.path;
         if (cyclePath) {
-          const identity = closedTaskIdentity(cyclePath, taskStatus.lineText);
+          const identity = cycleIdentity;
           if (identity) {
             const cycleContext = { activePath: cyclePath };
+            if (nextSymbol === "x") cycleContext.reqCloseOwners = reqCloseOwners;
             if (editor && typeof editor.getValue === "function") {
               cycleContext.editor = editor;
             }
@@ -580,6 +587,10 @@ class TaskStatusCyclerCommandsMixin {
           editor,
           activePath,
           originPath: activePath,
+          reqCloseOwners: this.captureReqCloseOwnersFromText(
+            Array.isArray(lines) ? lines.join("\n") : String(editor.getValue() || ""),
+            activePath,
+          ),
         }
       : null;
     const seenResolvedTargets = new Set();
@@ -827,6 +838,7 @@ class TaskStatusCyclerCommandsMixin {
       void this.finalizeCycledClosedTasks(cycleClosed, {
         editor,
         activePath,
+        reqCloseOwners: context && context.reqCloseOwners || [],
       });
     }
 

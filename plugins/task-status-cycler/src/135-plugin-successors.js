@@ -733,7 +733,12 @@ class TaskStatusCyclerSuccessorsMixin {
       const hasKeepMoving = Array.isArray(model.keep_moving) && model.keep_moving.length > 0;
       const relationNoticeCompatible = !relationBearing || Number(api && api.version) >= 3;
       const closeNoticeCompatible = !offerCloseReceipt || Number(api && api.version) >= 4;
+      const reqCloseNoticeCompatible =
+        (!(Array.isArray(model && model.req_outcomes) && model.req_outcomes.length > 0) &&
+          !(Array.isArray(model && model.req_met) && model.req_met.length > 0)) ||
+        Number(api && api.version) >= 6;
       if (api && relationNoticeCompatible && closeNoticeCompatible &&
+          reqCloseNoticeCompatible &&
           (!hasKeepMoving || Number(api.version) >= 2)) {
         try {
           const shown = api.showUnblocked(noticeModel);

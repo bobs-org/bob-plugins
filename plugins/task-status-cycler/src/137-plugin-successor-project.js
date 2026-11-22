@@ -45,6 +45,10 @@ class TaskStatusCyclerSuccessorProjectMixin {
       const cancelledClose = active.closeKind === "cancelled";
       const pickerApi = cancelledClose ? null : getSuccessorPickerApi(this.app);
       const pickerV2 = !!(pickerApi && Number(pickerApi.version) >= 2);
+      const reqCloseOwners = pickerApi && Number(pickerApi.version) >= 6
+        ? this.reqCloseOwnersForManagedDone(active.reqCloseOwners, identities, active)
+        : [];
+      const reqCloseGroups = reqCloseGroupsFromOwners(reqCloseOwners);
       const relationRuntime = this.prepareSuccessorRelationRuntime(
         active,
         cancelledClose,
@@ -138,7 +142,8 @@ class TaskStatusCyclerSuccessorProjectMixin {
         notePaths,
       );
       const hasExistingCandidates = closedTaskIds.size > 0 || pullInPaths.length > 0 ||
-        pullInParentCandidates.length > 0 || keepMovingPotentialPaths.length > 0;
+        pullInParentCandidates.length > 0 || keepMovingPotentialPaths.length > 0 ||
+        reqCloseGroups.length > 0;
       if (!hasExistingCandidates && relationPreflight.state !== "candidates" &&
           relationPreflight.state !== "unavailable") {
         return quietGate;
@@ -218,12 +223,14 @@ class TaskStatusCyclerSuccessorProjectMixin {
       }
       if (closedTaskIds.size === 0 && pullInPaths.length === 0 &&
           pullInParentCandidates.length === 0 && keepMovingCandidatePaths.length === 0 &&
+          reqCloseGroups.length === 0 &&
           relationPreflight.state !== "candidates" &&
           relationPreflight.state !== "unavailable") {
         return quietGate;
       }
       if (closedTaskIds.size === 0 && pullInPaths.length === 0 &&
           pullInParentCandidates.length === 0 && keepMovingCandidatePaths.length === 0 &&
+          reqCloseGroups.length === 0 &&
           relationPreflight.state === "unavailable") {
         return relationUnavailableGate();
       }
@@ -436,7 +443,9 @@ class TaskStatusCyclerSuccessorProjectMixin {
       const selectableOffers = Array.isArray(plan.offers) ? plan.offers : [];
       let selectedKeys = [];
       let closeChoices = [];
+      let reqRequests = null;
       let jumpKey = null;
+      let reqJumpKey = null;
       let closeRevalidatedKeys = new Set();
       let pickerOpened = false;
       let originalOfferByKey = new Map();
@@ -444,10 +453,11 @@ class TaskStatusCyclerSuccessorProjectMixin {
       let closePassNoteTexts = noteTextsObject;
       let closePassTasks = tasks;
       let closePassDependencySnapshotAvailable = dependencySnapshotAvailable;
-      if (selectableOffers.length > 0 && pickerApi) {
+      if ((selectableOffers.length > 0 || reqCloseGroups.length > 0) && pickerApi) {
         const picked = await this.pickSuccessorOfferChoices({
           plan,
           offers: selectableOffers,
+          reqCloseGroups,
           identities,
           pickerApi,
           context: active,
@@ -466,6 +476,10 @@ class TaskStatusCyclerSuccessorProjectMixin {
           : new Map();
         const choices = picked.choices;
         jumpKey = choices && choices.jump && typeof choices.jump.key === "string" ? choices.jump.key : null;
+        reqRequests = choices && Array.isArray(choices.reqs) ? choices.reqs : null;
+        reqJumpKey = reqCloseOwners.some((owner) => (owner.nodes || []).some((node) => node.key === jumpKey))
+          ? jumpKey
+          : null;
         const closeSupported = isSuccessorOfferCloseSupported(
           this.successorOfferCloseCapabilities(pickerApi),
         );
@@ -484,267 +498,32 @@ class TaskStatusCyclerSuccessorProjectMixin {
             selectedDestinations.set(String(pick.key), pick.destination);
           }
         }
-        if (selectedKeys.length > 0 || closeChoices.length > 0) {
-          // Re-read fresh texts (editor buffers first), invalidating caches.
-          const affected = new Set();
-          for (const identity of identities) {
-            if (identity && identity.path) {
-              affected.add(String(identity.path));
-            }
-          }
-          for (const offer of selectableOffers) {
-            if (offer && offer.notePath) {
-              affected.add(String(offer.notePath));
-            }
-          }
-          for (const row of successorPlanRows(plan)) {
-            if (row && row.note_path) {
-              affected.add(String(row.note_path));
-            }
-          }
-          for (const row of plan.still_blocked || []) {
-            if (row && row.note_path) {
-              affected.add(String(row.note_path));
-            }
-          }
-          for (const path of noteTexts.keys()) {
-            affected.add(String(path));
-          }
-          if (dailyPath) {
-            affected.add(String(dailyPath));
-          }
-          for (const path of affected) {
-            try {
-              cache.delete(path);
-            } catch (error) {
-              // Best effort.
-            }
-          }
-          let dailyFresh = null;
-          if (dailyPath) {
-            dailyFresh = await this.readSuccessorNoteText(dailyPath, active, cache);
-          }
-          const freshNoteTexts = new Map();
-          const unavailableFreshNotes = new Set();
-          if (dailyPath) {
-            if (typeof dailyFresh === "string") {
-              freshNoteTexts.set(dailyPath, dailyFresh);
-            } else {
-              unavailableFreshNotes.add(dailyPath);
-            }
-          }
-          for (const path of affected) {
-            if (path === dailyPath) {
-              continue;
-            }
-            const text = await this.readSuccessorNoteText(path, active, cache);
-            if (typeof text === "string") {
-              freshNoteTexts.set(path, text);
-            } else {
-              unavailableFreshNotes.add(path);
-            }
-          }
-          // Preserve untouched snapshots, but never revive an affected note
-          // whose fresh read failed or whose file was deleted.
-          for (const [path, text] of noteTexts) {
-            if (!freshNoteTexts.has(path) && !unavailableFreshNotes.has(path) && !affected.has(String(path))) {
-              freshNoteTexts.set(path, text);
-            }
-          }
-          let freshNotesObj = {};
-          for (const [path, text] of freshNoteTexts) {
-            freshNotesObj[path] = text;
-          }
-          // Rebuild the dependents index with fresh affected docs overriding
-          // stale cache locations (warm) or fresh overlay (cold). No new
-          // full-vault scan on a warm pass.
-          let freshTasks = tasks;
-          let freshDependencySnapshotAvailable = false;
-          try {
-            const freshCache = typeof this.readSuccessorTasksCache === "function" ? this.readSuccessorTasksCache() : { ready: false, tasks: [] };
-            if (freshCache && freshCache.ready) {
-              freshDependencySnapshotAvailable = true;
-              const freshBuffered = new Set(freshNoteTexts.keys());
-              const base = [];
-              for (const task of freshCache.tasks || []) {
-                if (!freshBuffered.has(task.path)) {
-                  base.push(task);
-                }
-              }
-              for (const [path, text] of freshNoteTexts) {
-                if (affected.has(String(path)) && !isExcludedSuccessorVaultPath(path)) base.push(...tasksFromDocuments([{ path, text }]));
-              }
-              freshTasks = base;
-            } else {
-              const oldByPath = new Map();
-              for (const task of tasks || []) {
-                if (!task || !task.path) {
-                  continue;
-                }
-                if (!oldByPath.has(task.path)) {
-                  oldByPath.set(task.path, []);
-                }
-                oldByPath.get(task.path).push(task);
-              }
-              const next = [];
-              for (const [path, list] of oldByPath) {
-                if (affected.has(String(path))) {
-                  continue;
-                }
-                for (const task of list) {
-                  next.push(task);
-                }
-              }
-              for (const [path, text] of freshNoteTexts) {
-                if (affected.has(String(path)) && !isExcludedSuccessorVaultPath(path)) next.push(...tasksFromDocuments([{ path, text }]));
-              }
-              freshTasks = next;
-            }
-          } catch (error) {
-            freshTasks = tasks;
-          }
-          const dailyFreshLines = typeof dailyFresh === "string" ? dailyFresh.split(/\r?\n/) : dailyAfter;
-          // Relocate the closing entry against fresh text; never carry an old
-          // bullet offset into a newly edited ledger.
-          let freshClosing = null;
-          if (hint && Number.isInteger(hint.line)) {
-            try {
-              const relocated = this.relocateSuccessorClosingEntry(dailyFreshLines, hint);
-              freshClosing = relocated;
-            } catch (error) {
-              freshClosing = null;
-            }
-          } else if (Number.isInteger(planClosingEntry)) {
-            freshClosing = planClosingEntry < dailyFreshLines.length ? planClosingEntry : null;
-          }
-          // The anchor / already-planned baseline is the day before this
-          // gesture: the fresh text with the closed entry's headline restored
-          // to its pre-close form, so its links still anchor `closing`
-          // instead of falling through to the implicit destination.
-          let freshBefore = dailyFreshLines;
-          if (
-            hint && typeof hint.lineText === "string" &&
-            Number.isInteger(freshClosing) &&
-            freshClosing >= 0 && freshClosing < dailyFreshLines.length
-          ) {
-            freshBefore = dailyFreshLines.slice();
-            freshBefore[freshClosing] = hint.lineText;
-          }
-          const freshRelationRuntime = this.prepareSuccessorRelationRuntime(
-            active,
-            cancelledClose,
-            cancelledClose ? null : getSuccessorPickerApi(this.app),
-          );
-          const freshRelationPreflight = this.preflightSuccessorRelationIndex(
-            relationLookupIdentities,
-            freshRelationRuntime,
-          );
-          let freshRelationOptions = {};
-          if (freshRelationPreflight.state === "unavailable") {
-            freshRelationOptions = {
-              relationSuccessorLabels: freshRelationRuntime.labels,
-              navSuccessorsVersion: 3,
-              relationIndexReady: false,
-            };
-          } else if (freshRelationPreflight.state === "candidates") {
-            const freshRelation = await this.readSuccessorRelationInputs({
-              runtime: freshRelationRuntime,
-              preflight: freshRelationPreflight,
-              active,
-              cache,
-              noteTexts: freshNoteTexts,
-              identities: relationLookupIdentities,
-              baselineDay: freshBefore,
-              currentDay: dailyFreshLines,
-              dailyPath: dailyPath || "",
-              closingEntry: freshClosing,
-              eventKind: relationEventKind,
-              slot: parkedSlot,
-            });
-            freshRelationOptions = freshRelation.options || {};
-            for (const [path, text] of freshRelation.noteTexts || []) {
-              if (typeof text === "string") {
-                freshNoteTexts.set(path, text);
-                affected.add(path);
-              }
-            }
-          }
-          if (successorRelationInputsNeedDependencySnapshot(freshRelationOptions, freshNoteTexts)) {
-            // A relation's own prerequisite or project may have changed while
-            // the picker was open. Trust only the refreshed warm Tasks pool;
-            // otherwise the classifier conservatively holds the candidate.
-            dependencySnapshotAvailable = freshDependencySnapshotAvailable;
-          }
-          freshNotesObj = {};
-          for (const [path, text] of freshNoteTexts) freshNotesObj[path] = text;
-          const freshBasenames = countSuccessorBasenames(this.app, freshTasks, identities, dailyPath, freshNoteTexts);
-          basenameCounts = freshBasenames;
-          let replanned = planFirst(
-            selectedKeys,
-            freshBefore,
-            dailyFreshLines,
-            freshTasks,
-            freshNotesObj,
-            freshClosing,
-            selectedDestinations,
-            freshRelationOptions,
-            freshRelationRuntime.linkUnblocked,
-          );
-          if (!replanned) {
-            replanned = plan;
-            selectedKeys = [];
-            selectedDestinations = new Map();
-            closeRevalidatedKeys = new Set();
-          } else {
-            // Refuse stale/ambiguous picks individually; newly appearing
-            // offers stay unpicked (no second picker).
-            const freshKeys = new Set((replanned.offers || []).map((offer) => String(offer.key)));
-            const refused = selectedKeys.filter((key) => !freshKeys.has(String(key)));
-            // Ambiguous idless rebinding: when a note's digest count changed,
-            // refuse every idless pick for that digest in that note.
-            const ambiguousCloseKeys = successorOfferCloseAmbiguousKeys(
-              [...selectedKeys, ...closeChoices.map((close) => String(close.key))],
-              noteTextsObject,
-              freshNotesObj,
-            );
-            for (const key of ambiguousCloseKeys) {
-              if (selectedKeys.some((selected) => String(selected) === String(key)) &&
-                  !refused.includes(key)) {
-                refused.push(key);
-              }
-            }
-            closeRevalidatedKeys = new Set(closeChoices
-              .map((close) => String(close.key))
-              .filter((key) => freshKeys.has(key) && !ambiguousCloseKeys.has(key)));
-            if (refused.length > 0) {
-              replanned.refusedKeys = refused;
-            }
-            plan = replanned;
-            // Swap working sets to the fresh texts for the apply below.
-            tasks = freshTasks;
-            closePassTasks = freshTasks;
-            closePassNoteTexts = freshNotesObj;
-            closePassDependencySnapshotAvailable = dependencySnapshotAvailable;
-            for (const [path, text] of freshNoteTexts) {
-              noteTexts.set(path, text);
-            }
-            dailyCurrent = dailyFresh;
-            // dailyBefore/dailyAfter for insertion planning become fresh.
-            dailyBefore = dailyFreshLines;
-            dailyAfter = dailyFreshLines;
-            planClosingEntry = freshClosing;
-            selectedKeys = selectedKeys.filter((key) => !refused.includes(String(key)));
-            if (refused.length > 0) {
-              const refusedSet = new Set(refused.map(String));
-              for (const key of [...selectedDestinations.keys()]) {
-                if (refusedSet.has(String(key))) {
-                  selectedDestinations.delete(key);
-                }
-              }
-            }
-          }
-        }
+        const refreshed = await this.revalidateSuccessorPickerChoices({
+          identities, selectableOffers, plan, selectedKeys, closeChoices, reqRequests, reqJumpKey,
+          noteTexts, noteTextsObject, dailyPath, dailyBefore, dailyAfter, hint, planClosingEntry,
+          active, cache, tasks, dailyCurrent, relationLookupIdentities, cancelledClose, pickerApi, today,
+          relationPreflight, relationRuntime, relationEventKind, parkedSlot, relationPlanOptions,
+          linkUnblocked, keepMovingEnabled, keepMovingCandidatePaths, keepMovingAnchorHints,
+          dependencySnapshotAvailable, keepMovingBaseline, basenameCounts, planFirst,
+          reqCloseOwners, closeRevalidatedKeys, selectedDestinations, closePassNoteTexts,
+          closePassTasks, closePassDependencySnapshotAvailable,
+          updateBasenames: (value) => { basenameCounts = value; },
+          updateDependencySnapshot: (value) => { dependencySnapshotAvailable = value; },
+        });
+        plan = refreshed.plan;
+        selectedKeys = refreshed.selectedKeys;
+        selectedDestinations = refreshed.selectedDestinations;
+        closeRevalidatedKeys = refreshed.closeRevalidatedKeys;
+        closePassNoteTexts = refreshed.closePassNoteTexts;
+        closePassTasks = refreshed.closePassTasks;
+        closePassDependencySnapshotAvailable = refreshed.closePassDependencySnapshotAvailable;
+        tasks = refreshed.tasks;
+        dailyCurrent = refreshed.dailyCurrent;
+        dailyBefore = refreshed.dailyBefore;
+        dailyAfter = refreshed.dailyAfter;
+        planClosingEntry = refreshed.planClosingEntry;
       }
+      let reqCloseResult = null;
       const noteOutcome = await applySuccessorNoteEditsWithUnblockedGuard(this, plan, active);
       if (noteOutcome.failed > 0) {
         const planRows = successorPlanRows(plan);
@@ -776,6 +555,12 @@ class TaskStatusCyclerSuccessorProjectMixin {
         }
       }
       let insertion = { splices: [], links: [], skipped: [], text: null };
+      let reqPullInClosing = hint && Number.isInteger(planClosingEntry)
+        ? {
+          continuationName: String(hint.createdName || hint.name || ""),
+          closedLine: planClosingEntry,
+        }
+        : null;
       if (plan.placements.length > 0 && dailyPath && dailyCurrent != null) {
         let relocated = null;
         let createdEntry = null;
@@ -846,6 +631,15 @@ class TaskStatusCyclerSuccessorProjectMixin {
             }
           }
         }
+        if (relocated != null) {
+          reqPullInClosing = {
+            continuationName: String(hint && (hint.createdName || hint.name) || ""),
+            closedLine: relocated,
+            ...(createdEntry && Number.isInteger(createdEntry.line)
+              ? { continuation: { line: createdEntry.line + 1, created: true } }
+              : {}),
+          };
+        }
         try {
           insertion = planSuccessorInsertions(dailyAfter, plan.placements, {
             ...(relocated != null ? { closingEntry: relocated } : {}),
@@ -905,6 +699,51 @@ class TaskStatusCyclerSuccessorProjectMixin {
         });
         if (closeResult) removeResolvedOfferCloseRows(plan, closeResult);
       }
+      if (reqRequests !== null || reqJumpKey) {
+        reqCloseResult = await this.applyManagedReqCloseCard({
+          owners: reqCloseOwners,
+          choices: {
+            ...(reqRequests !== null ? { reqs: reqRequests } : {}),
+            ...(reqJumpKey ? { jump: { key: reqJumpKey } } : {}),
+          },
+          taskOfferKeys: selectableOffers.map((offer) => String(offer && offer.key || "")).filter(Boolean),
+          notes: closePassNoteTexts,
+          identities,
+          today,
+          dailyPath,
+          closing: reqPullInClosing,
+          closingHint: hint,
+          context: active,
+        });
+      }
+      if (reqCloseResult && Array.isArray(reqCloseResult.outcomes) &&
+          reqCloseResult.outcomes.some((row) => row && row.verdict === "carry_pulled")) {
+        reqCloseResult = await this.finishManagedReqPullIn({
+          result: reqCloseResult,
+          owners: reqCloseOwners,
+          identities,
+          dailyPath,
+          today,
+          index: reqCloseResult.index,
+          completed: reqCloseResult.completed,
+          closing: reqPullInClosing,
+          closingHint: hint,
+          context: active,
+        });
+      }
+      const reqRestores = reqCloseResult && Array.isArray(reqCloseResult.restores)
+        ? reqCloseResult.restores
+        : [];
+      const closeRestores = closeResult && closeResult.undo && Array.isArray(closeResult.undo.restores)
+        ? closeResult.undo.restores
+        : [];
+      const composedRestores = reqCloseIntegrationComposeRestores([...reqRestores, ...closeRestores]);
+      if (composedRestores.length > 0) {
+        closeResult = {
+          ...(closeResult || {}),
+          undo: { ...(closeResult && closeResult.undo || {}), restores: composedRestores },
+        };
+      }
       try {
         if (typeof this.rememberSuccessorPass === "function") {
           this.rememberSuccessorPass(identities, plan, insertion, {
@@ -941,9 +780,30 @@ class TaskStatusCyclerSuccessorProjectMixin {
           dailyContent = null;
         }
       }
-      const jump = jumpKey
-        ? buildSuccessorJumpIdentity(jumpKey, originalOfferByKey, plan, closeResult)
+      let jump = reqCloseResult && reqCloseResult.reqJump
+        ? await this.resolveManagedReqCloseLanding({
+          owners: reqCloseOwners,
+          plan: reqCloseResult,
+          key: reqCloseResult.reqJump,
+          context: active,
+        })
         : null;
+      if (jump && jump.ok === false) {
+        reqCloseResult.failures = [
+          ...(Array.isArray(reqCloseResult.failures) ? reqCloseResult.failures : []),
+          { kind: "requirement_jump", code: jump.code, reason: jump.message },
+        ];
+        jump = null;
+      } else if (jump && jump.ok === true) {
+        jump = { ...jump, label: jump.description || "requirement" };
+      }
+      if (!jump && jumpKey && !reqJumpKey) {
+        jump = buildSuccessorJumpIdentity(jumpKey, originalOfferByKey, plan, closeResult);
+      }
+      const receiptFailures = [
+        ...(closeResult && Array.isArray(closeResult.failures) ? closeResult.failures : []),
+        ...(reqCloseResult && Array.isArray(reqCloseResult.failures) ? reqCloseResult.failures : []),
+      ];
       return {
         version: 1,
         predecessors,
@@ -967,11 +827,17 @@ class TaskStatusCyclerSuccessorProjectMixin {
           ? { offer_close_refused: closeResult.offer_close_refused }
           : {}),
         ...(closeResult && closeResult.undo ? { undo: closeResult.undo } : {}),
+        ...(reqCloseResult && Array.isArray(reqCloseResult.req_outcomes)
+          ? { req_outcomes: reqCloseResult.req_outcomes }
+          : {}),
+        ...(reqCloseResult && Array.isArray(reqCloseResult.met)
+          ? { req_met: reqCloseResult.met }
+          : {}),
         ...(closeResult && Array.isArray(closeResult.resolved)
           ? { resolved: closeResult.resolved }
           : {}),
-        ...(closeResult && Array.isArray(closeResult.failures) && closeResult.failures.length > 0
-          ? { failures: closeResult.failures }
+        ...(receiptFailures.length > 0
+          ? { failures: receiptFailures }
           : {}),
         ...(jump ? { jump } : {}),
         relation_picker_opened: pickerOpened,

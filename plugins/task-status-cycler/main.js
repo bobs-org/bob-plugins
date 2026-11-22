@@ -15509,10 +15509,22 @@ function normalizeSuccessorChoices(result) {
       ? result.jump.key.trim()
       : "";
     const jump = jumpKey ? { key: jumpKey } : null;
-    if (disjointPicks.length === 0 && closes.length === 0 && !jump) return null;
+    const reqs = Array.isArray(result.reqs)
+      ? result.reqs.filter((row) => row && typeof row === "object")
+        .map((row) => {
+          const key = typeof row.key === "string" ? row.key.trim() : "";
+          const verdict = row.verdict;
+          if (!key || !["met", "drop", "carry", "carry_pulled"].includes(verdict)) return null;
+          const request = { key, verdict };
+          if (row.reason !== undefined && typeof row.reason === "string") request.reason = row.reason;
+          return request;
+        }).filter(Boolean)
+      : null;
+    if (disjointPicks.length === 0 && closes.length === 0 && !jump && reqs === null) return null;
     return {
       picks: disjointPicks,
       closes,
+      ...(reqs !== null ? { reqs } : {}),
       ...(jump ? { jump } : {}),
     };
   } catch (_error) {
@@ -18354,7 +18366,7 @@ class TaskStatusCyclerPlugin extends Plugin {
     // Cross-plugin surface (plugins never import one another's `main.js`).
     // Keep the shape additive: bump `version` whenever a method is added.
     this.api = Object.freeze({
-      version: 6,
+      version: 7,
       recoverBlockedDependents: (closedIdentities, context) =>
         this.recoverBlockedDependents(closedIdentities, context),
       completeTaskAtCursor: (editor, options) => this.completeTaskAtCursor(editor, options),
@@ -18366,6 +18378,8 @@ class TaskStatusCyclerPlugin extends Plugin {
         this.offerParkedSuccessors(identities, options),
       describeOfferCloses: (options) => this.describeOfferCloses(options),
       applyOfferCloses: (options) => this.applyOfferCloses(options),
+      captureReqCloseOwners: (identities, context) =>
+        this.captureReqCloseOwners(identities, context),
     });
 
     this.addCommand({
@@ -20765,7 +20779,12 @@ class TaskStatusCyclerSuccessorsMixin {
       const hasKeepMoving = Array.isArray(model.keep_moving) && model.keep_moving.length > 0;
       const relationNoticeCompatible = !relationBearing || Number(api && api.version) >= 3;
       const closeNoticeCompatible = !offerCloseReceipt || Number(api && api.version) >= 4;
+      const reqCloseNoticeCompatible =
+        (!(Array.isArray(model && model.req_outcomes) && model.req_outcomes.length > 0) &&
+          !(Array.isArray(model && model.req_met) && model.req_met.length > 0)) ||
+        Number(api && api.version) >= 6;
       if (api && relationNoticeCompatible && closeNoticeCompatible &&
+          reqCloseNoticeCompatible &&
           (!hasKeepMoving || Number(api.version) >= 2)) {
         try {
           const shown = api.showUnblocked(noticeModel);
@@ -21551,6 +21570,10 @@ class TaskStatusCyclerSuccessorProjectMixin {
       const cancelledClose = active.closeKind === "cancelled";
       const pickerApi = cancelledClose ? null : getSuccessorPickerApi(this.app);
       const pickerV2 = !!(pickerApi && Number(pickerApi.version) >= 2);
+      const reqCloseOwners = pickerApi && Number(pickerApi.version) >= 6
+        ? this.reqCloseOwnersForManagedDone(active.reqCloseOwners, identities, active)
+        : [];
+      const reqCloseGroups = reqCloseGroupsFromOwners(reqCloseOwners);
       const relationRuntime = this.prepareSuccessorRelationRuntime(
         active,
         cancelledClose,
@@ -21644,7 +21667,8 @@ class TaskStatusCyclerSuccessorProjectMixin {
         notePaths,
       );
       const hasExistingCandidates = closedTaskIds.size > 0 || pullInPaths.length > 0 ||
-        pullInParentCandidates.length > 0 || keepMovingPotentialPaths.length > 0;
+        pullInParentCandidates.length > 0 || keepMovingPotentialPaths.length > 0 ||
+        reqCloseGroups.length > 0;
       if (!hasExistingCandidates && relationPreflight.state !== "candidates" &&
           relationPreflight.state !== "unavailable") {
         return quietGate;
@@ -21724,12 +21748,14 @@ class TaskStatusCyclerSuccessorProjectMixin {
       }
       if (closedTaskIds.size === 0 && pullInPaths.length === 0 &&
           pullInParentCandidates.length === 0 && keepMovingCandidatePaths.length === 0 &&
+          reqCloseGroups.length === 0 &&
           relationPreflight.state !== "candidates" &&
           relationPreflight.state !== "unavailable") {
         return quietGate;
       }
       if (closedTaskIds.size === 0 && pullInPaths.length === 0 &&
           pullInParentCandidates.length === 0 && keepMovingCandidatePaths.length === 0 &&
+          reqCloseGroups.length === 0 &&
           relationPreflight.state === "unavailable") {
         return relationUnavailableGate();
       }
@@ -21942,7 +21968,9 @@ class TaskStatusCyclerSuccessorProjectMixin {
       const selectableOffers = Array.isArray(plan.offers) ? plan.offers : [];
       let selectedKeys = [];
       let closeChoices = [];
+      let reqRequests = null;
       let jumpKey = null;
+      let reqJumpKey = null;
       let closeRevalidatedKeys = new Set();
       let pickerOpened = false;
       let originalOfferByKey = new Map();
@@ -21950,10 +21978,11 @@ class TaskStatusCyclerSuccessorProjectMixin {
       let closePassNoteTexts = noteTextsObject;
       let closePassTasks = tasks;
       let closePassDependencySnapshotAvailable = dependencySnapshotAvailable;
-      if (selectableOffers.length > 0 && pickerApi) {
+      if ((selectableOffers.length > 0 || reqCloseGroups.length > 0) && pickerApi) {
         const picked = await this.pickSuccessorOfferChoices({
           plan,
           offers: selectableOffers,
+          reqCloseGroups,
           identities,
           pickerApi,
           context: active,
@@ -21972,6 +22001,10 @@ class TaskStatusCyclerSuccessorProjectMixin {
           : new Map();
         const choices = picked.choices;
         jumpKey = choices && choices.jump && typeof choices.jump.key === "string" ? choices.jump.key : null;
+        reqRequests = choices && Array.isArray(choices.reqs) ? choices.reqs : null;
+        reqJumpKey = reqCloseOwners.some((owner) => (owner.nodes || []).some((node) => node.key === jumpKey))
+          ? jumpKey
+          : null;
         const closeSupported = isSuccessorOfferCloseSupported(
           this.successorOfferCloseCapabilities(pickerApi),
         );
@@ -21990,267 +22023,32 @@ class TaskStatusCyclerSuccessorProjectMixin {
             selectedDestinations.set(String(pick.key), pick.destination);
           }
         }
-        if (selectedKeys.length > 0 || closeChoices.length > 0) {
-          // Re-read fresh texts (editor buffers first), invalidating caches.
-          const affected = new Set();
-          for (const identity of identities) {
-            if (identity && identity.path) {
-              affected.add(String(identity.path));
-            }
-          }
-          for (const offer of selectableOffers) {
-            if (offer && offer.notePath) {
-              affected.add(String(offer.notePath));
-            }
-          }
-          for (const row of successorPlanRows(plan)) {
-            if (row && row.note_path) {
-              affected.add(String(row.note_path));
-            }
-          }
-          for (const row of plan.still_blocked || []) {
-            if (row && row.note_path) {
-              affected.add(String(row.note_path));
-            }
-          }
-          for (const path of noteTexts.keys()) {
-            affected.add(String(path));
-          }
-          if (dailyPath) {
-            affected.add(String(dailyPath));
-          }
-          for (const path of affected) {
-            try {
-              cache.delete(path);
-            } catch (error) {
-              // Best effort.
-            }
-          }
-          let dailyFresh = null;
-          if (dailyPath) {
-            dailyFresh = await this.readSuccessorNoteText(dailyPath, active, cache);
-          }
-          const freshNoteTexts = new Map();
-          const unavailableFreshNotes = new Set();
-          if (dailyPath) {
-            if (typeof dailyFresh === "string") {
-              freshNoteTexts.set(dailyPath, dailyFresh);
-            } else {
-              unavailableFreshNotes.add(dailyPath);
-            }
-          }
-          for (const path of affected) {
-            if (path === dailyPath) {
-              continue;
-            }
-            const text = await this.readSuccessorNoteText(path, active, cache);
-            if (typeof text === "string") {
-              freshNoteTexts.set(path, text);
-            } else {
-              unavailableFreshNotes.add(path);
-            }
-          }
-          // Preserve untouched snapshots, but never revive an affected note
-          // whose fresh read failed or whose file was deleted.
-          for (const [path, text] of noteTexts) {
-            if (!freshNoteTexts.has(path) && !unavailableFreshNotes.has(path) && !affected.has(String(path))) {
-              freshNoteTexts.set(path, text);
-            }
-          }
-          let freshNotesObj = {};
-          for (const [path, text] of freshNoteTexts) {
-            freshNotesObj[path] = text;
-          }
-          // Rebuild the dependents index with fresh affected docs overriding
-          // stale cache locations (warm) or fresh overlay (cold). No new
-          // full-vault scan on a warm pass.
-          let freshTasks = tasks;
-          let freshDependencySnapshotAvailable = false;
-          try {
-            const freshCache = typeof this.readSuccessorTasksCache === "function" ? this.readSuccessorTasksCache() : { ready: false, tasks: [] };
-            if (freshCache && freshCache.ready) {
-              freshDependencySnapshotAvailable = true;
-              const freshBuffered = new Set(freshNoteTexts.keys());
-              const base = [];
-              for (const task of freshCache.tasks || []) {
-                if (!freshBuffered.has(task.path)) {
-                  base.push(task);
-                }
-              }
-              for (const [path, text] of freshNoteTexts) {
-                if (affected.has(String(path)) && !isExcludedSuccessorVaultPath(path)) base.push(...tasksFromDocuments([{ path, text }]));
-              }
-              freshTasks = base;
-            } else {
-              const oldByPath = new Map();
-              for (const task of tasks || []) {
-                if (!task || !task.path) {
-                  continue;
-                }
-                if (!oldByPath.has(task.path)) {
-                  oldByPath.set(task.path, []);
-                }
-                oldByPath.get(task.path).push(task);
-              }
-              const next = [];
-              for (const [path, list] of oldByPath) {
-                if (affected.has(String(path))) {
-                  continue;
-                }
-                for (const task of list) {
-                  next.push(task);
-                }
-              }
-              for (const [path, text] of freshNoteTexts) {
-                if (affected.has(String(path)) && !isExcludedSuccessorVaultPath(path)) next.push(...tasksFromDocuments([{ path, text }]));
-              }
-              freshTasks = next;
-            }
-          } catch (error) {
-            freshTasks = tasks;
-          }
-          const dailyFreshLines = typeof dailyFresh === "string" ? dailyFresh.split(/\r?\n/) : dailyAfter;
-          // Relocate the closing entry against fresh text; never carry an old
-          // bullet offset into a newly edited ledger.
-          let freshClosing = null;
-          if (hint && Number.isInteger(hint.line)) {
-            try {
-              const relocated = this.relocateSuccessorClosingEntry(dailyFreshLines, hint);
-              freshClosing = relocated;
-            } catch (error) {
-              freshClosing = null;
-            }
-          } else if (Number.isInteger(planClosingEntry)) {
-            freshClosing = planClosingEntry < dailyFreshLines.length ? planClosingEntry : null;
-          }
-          // The anchor / already-planned baseline is the day before this
-          // gesture: the fresh text with the closed entry's headline restored
-          // to its pre-close form, so its links still anchor `closing`
-          // instead of falling through to the implicit destination.
-          let freshBefore = dailyFreshLines;
-          if (
-            hint && typeof hint.lineText === "string" &&
-            Number.isInteger(freshClosing) &&
-            freshClosing >= 0 && freshClosing < dailyFreshLines.length
-          ) {
-            freshBefore = dailyFreshLines.slice();
-            freshBefore[freshClosing] = hint.lineText;
-          }
-          const freshRelationRuntime = this.prepareSuccessorRelationRuntime(
-            active,
-            cancelledClose,
-            cancelledClose ? null : getSuccessorPickerApi(this.app),
-          );
-          const freshRelationPreflight = this.preflightSuccessorRelationIndex(
-            relationLookupIdentities,
-            freshRelationRuntime,
-          );
-          let freshRelationOptions = {};
-          if (freshRelationPreflight.state === "unavailable") {
-            freshRelationOptions = {
-              relationSuccessorLabels: freshRelationRuntime.labels,
-              navSuccessorsVersion: 3,
-              relationIndexReady: false,
-            };
-          } else if (freshRelationPreflight.state === "candidates") {
-            const freshRelation = await this.readSuccessorRelationInputs({
-              runtime: freshRelationRuntime,
-              preflight: freshRelationPreflight,
-              active,
-              cache,
-              noteTexts: freshNoteTexts,
-              identities: relationLookupIdentities,
-              baselineDay: freshBefore,
-              currentDay: dailyFreshLines,
-              dailyPath: dailyPath || "",
-              closingEntry: freshClosing,
-              eventKind: relationEventKind,
-              slot: parkedSlot,
-            });
-            freshRelationOptions = freshRelation.options || {};
-            for (const [path, text] of freshRelation.noteTexts || []) {
-              if (typeof text === "string") {
-                freshNoteTexts.set(path, text);
-                affected.add(path);
-              }
-            }
-          }
-          if (successorRelationInputsNeedDependencySnapshot(freshRelationOptions, freshNoteTexts)) {
-            // A relation's own prerequisite or project may have changed while
-            // the picker was open. Trust only the refreshed warm Tasks pool;
-            // otherwise the classifier conservatively holds the candidate.
-            dependencySnapshotAvailable = freshDependencySnapshotAvailable;
-          }
-          freshNotesObj = {};
-          for (const [path, text] of freshNoteTexts) freshNotesObj[path] = text;
-          const freshBasenames = countSuccessorBasenames(this.app, freshTasks, identities, dailyPath, freshNoteTexts);
-          basenameCounts = freshBasenames;
-          let replanned = planFirst(
-            selectedKeys,
-            freshBefore,
-            dailyFreshLines,
-            freshTasks,
-            freshNotesObj,
-            freshClosing,
-            selectedDestinations,
-            freshRelationOptions,
-            freshRelationRuntime.linkUnblocked,
-          );
-          if (!replanned) {
-            replanned = plan;
-            selectedKeys = [];
-            selectedDestinations = new Map();
-            closeRevalidatedKeys = new Set();
-          } else {
-            // Refuse stale/ambiguous picks individually; newly appearing
-            // offers stay unpicked (no second picker).
-            const freshKeys = new Set((replanned.offers || []).map((offer) => String(offer.key)));
-            const refused = selectedKeys.filter((key) => !freshKeys.has(String(key)));
-            // Ambiguous idless rebinding: when a note's digest count changed,
-            // refuse every idless pick for that digest in that note.
-            const ambiguousCloseKeys = successorOfferCloseAmbiguousKeys(
-              [...selectedKeys, ...closeChoices.map((close) => String(close.key))],
-              noteTextsObject,
-              freshNotesObj,
-            );
-            for (const key of ambiguousCloseKeys) {
-              if (selectedKeys.some((selected) => String(selected) === String(key)) &&
-                  !refused.includes(key)) {
-                refused.push(key);
-              }
-            }
-            closeRevalidatedKeys = new Set(closeChoices
-              .map((close) => String(close.key))
-              .filter((key) => freshKeys.has(key) && !ambiguousCloseKeys.has(key)));
-            if (refused.length > 0) {
-              replanned.refusedKeys = refused;
-            }
-            plan = replanned;
-            // Swap working sets to the fresh texts for the apply below.
-            tasks = freshTasks;
-            closePassTasks = freshTasks;
-            closePassNoteTexts = freshNotesObj;
-            closePassDependencySnapshotAvailable = dependencySnapshotAvailable;
-            for (const [path, text] of freshNoteTexts) {
-              noteTexts.set(path, text);
-            }
-            dailyCurrent = dailyFresh;
-            // dailyBefore/dailyAfter for insertion planning become fresh.
-            dailyBefore = dailyFreshLines;
-            dailyAfter = dailyFreshLines;
-            planClosingEntry = freshClosing;
-            selectedKeys = selectedKeys.filter((key) => !refused.includes(String(key)));
-            if (refused.length > 0) {
-              const refusedSet = new Set(refused.map(String));
-              for (const key of [...selectedDestinations.keys()]) {
-                if (refusedSet.has(String(key))) {
-                  selectedDestinations.delete(key);
-                }
-              }
-            }
-          }
-        }
+        const refreshed = await this.revalidateSuccessorPickerChoices({
+          identities, selectableOffers, plan, selectedKeys, closeChoices, reqRequests, reqJumpKey,
+          noteTexts, noteTextsObject, dailyPath, dailyBefore, dailyAfter, hint, planClosingEntry,
+          active, cache, tasks, dailyCurrent, relationLookupIdentities, cancelledClose, pickerApi, today,
+          relationPreflight, relationRuntime, relationEventKind, parkedSlot, relationPlanOptions,
+          linkUnblocked, keepMovingEnabled, keepMovingCandidatePaths, keepMovingAnchorHints,
+          dependencySnapshotAvailable, keepMovingBaseline, basenameCounts, planFirst,
+          reqCloseOwners, closeRevalidatedKeys, selectedDestinations, closePassNoteTexts,
+          closePassTasks, closePassDependencySnapshotAvailable,
+          updateBasenames: (value) => { basenameCounts = value; },
+          updateDependencySnapshot: (value) => { dependencySnapshotAvailable = value; },
+        });
+        plan = refreshed.plan;
+        selectedKeys = refreshed.selectedKeys;
+        selectedDestinations = refreshed.selectedDestinations;
+        closeRevalidatedKeys = refreshed.closeRevalidatedKeys;
+        closePassNoteTexts = refreshed.closePassNoteTexts;
+        closePassTasks = refreshed.closePassTasks;
+        closePassDependencySnapshotAvailable = refreshed.closePassDependencySnapshotAvailable;
+        tasks = refreshed.tasks;
+        dailyCurrent = refreshed.dailyCurrent;
+        dailyBefore = refreshed.dailyBefore;
+        dailyAfter = refreshed.dailyAfter;
+        planClosingEntry = refreshed.planClosingEntry;
       }
+      let reqCloseResult = null;
       const noteOutcome = await applySuccessorNoteEditsWithUnblockedGuard(this, plan, active);
       if (noteOutcome.failed > 0) {
         const planRows = successorPlanRows(plan);
@@ -22282,6 +22080,12 @@ class TaskStatusCyclerSuccessorProjectMixin {
         }
       }
       let insertion = { splices: [], links: [], skipped: [], text: null };
+      let reqPullInClosing = hint && Number.isInteger(planClosingEntry)
+        ? {
+          continuationName: String(hint.createdName || hint.name || ""),
+          closedLine: planClosingEntry,
+        }
+        : null;
       if (plan.placements.length > 0 && dailyPath && dailyCurrent != null) {
         let relocated = null;
         let createdEntry = null;
@@ -22352,6 +22156,15 @@ class TaskStatusCyclerSuccessorProjectMixin {
             }
           }
         }
+        if (relocated != null) {
+          reqPullInClosing = {
+            continuationName: String(hint && (hint.createdName || hint.name) || ""),
+            closedLine: relocated,
+            ...(createdEntry && Number.isInteger(createdEntry.line)
+              ? { continuation: { line: createdEntry.line + 1, created: true } }
+              : {}),
+          };
+        }
         try {
           insertion = planSuccessorInsertions(dailyAfter, plan.placements, {
             ...(relocated != null ? { closingEntry: relocated } : {}),
@@ -22411,6 +22224,51 @@ class TaskStatusCyclerSuccessorProjectMixin {
         });
         if (closeResult) removeResolvedOfferCloseRows(plan, closeResult);
       }
+      if (reqRequests !== null || reqJumpKey) {
+        reqCloseResult = await this.applyManagedReqCloseCard({
+          owners: reqCloseOwners,
+          choices: {
+            ...(reqRequests !== null ? { reqs: reqRequests } : {}),
+            ...(reqJumpKey ? { jump: { key: reqJumpKey } } : {}),
+          },
+          taskOfferKeys: selectableOffers.map((offer) => String(offer && offer.key || "")).filter(Boolean),
+          notes: closePassNoteTexts,
+          identities,
+          today,
+          dailyPath,
+          closing: reqPullInClosing,
+          closingHint: hint,
+          context: active,
+        });
+      }
+      if (reqCloseResult && Array.isArray(reqCloseResult.outcomes) &&
+          reqCloseResult.outcomes.some((row) => row && row.verdict === "carry_pulled")) {
+        reqCloseResult = await this.finishManagedReqPullIn({
+          result: reqCloseResult,
+          owners: reqCloseOwners,
+          identities,
+          dailyPath,
+          today,
+          index: reqCloseResult.index,
+          completed: reqCloseResult.completed,
+          closing: reqPullInClosing,
+          closingHint: hint,
+          context: active,
+        });
+      }
+      const reqRestores = reqCloseResult && Array.isArray(reqCloseResult.restores)
+        ? reqCloseResult.restores
+        : [];
+      const closeRestores = closeResult && closeResult.undo && Array.isArray(closeResult.undo.restores)
+        ? closeResult.undo.restores
+        : [];
+      const composedRestores = reqCloseIntegrationComposeRestores([...reqRestores, ...closeRestores]);
+      if (composedRestores.length > 0) {
+        closeResult = {
+          ...(closeResult || {}),
+          undo: { ...(closeResult && closeResult.undo || {}), restores: composedRestores },
+        };
+      }
       try {
         if (typeof this.rememberSuccessorPass === "function") {
           this.rememberSuccessorPass(identities, plan, insertion, {
@@ -22447,9 +22305,30 @@ class TaskStatusCyclerSuccessorProjectMixin {
           dailyContent = null;
         }
       }
-      const jump = jumpKey
-        ? buildSuccessorJumpIdentity(jumpKey, originalOfferByKey, plan, closeResult)
+      let jump = reqCloseResult && reqCloseResult.reqJump
+        ? await this.resolveManagedReqCloseLanding({
+          owners: reqCloseOwners,
+          plan: reqCloseResult,
+          key: reqCloseResult.reqJump,
+          context: active,
+        })
         : null;
+      if (jump && jump.ok === false) {
+        reqCloseResult.failures = [
+          ...(Array.isArray(reqCloseResult.failures) ? reqCloseResult.failures : []),
+          { kind: "requirement_jump", code: jump.code, reason: jump.message },
+        ];
+        jump = null;
+      } else if (jump && jump.ok === true) {
+        jump = { ...jump, label: jump.description || "requirement" };
+      }
+      if (!jump && jumpKey && !reqJumpKey) {
+        jump = buildSuccessorJumpIdentity(jumpKey, originalOfferByKey, plan, closeResult);
+      }
+      const receiptFailures = [
+        ...(closeResult && Array.isArray(closeResult.failures) ? closeResult.failures : []),
+        ...(reqCloseResult && Array.isArray(reqCloseResult.failures) ? reqCloseResult.failures : []),
+      ];
       return {
         version: 1,
         predecessors,
@@ -22473,11 +22352,17 @@ class TaskStatusCyclerSuccessorProjectMixin {
           ? { offer_close_refused: closeResult.offer_close_refused }
           : {}),
         ...(closeResult && closeResult.undo ? { undo: closeResult.undo } : {}),
+        ...(reqCloseResult && Array.isArray(reqCloseResult.req_outcomes)
+          ? { req_outcomes: reqCloseResult.req_outcomes }
+          : {}),
+        ...(reqCloseResult && Array.isArray(reqCloseResult.met)
+          ? { req_met: reqCloseResult.met }
+          : {}),
         ...(closeResult && Array.isArray(closeResult.resolved)
           ? { resolved: closeResult.resolved }
           : {}),
-        ...(closeResult && Array.isArray(closeResult.failures) && closeResult.failures.length > 0
-          ? { failures: closeResult.failures }
+        ...(receiptFailures.length > 0
+          ? { failures: receiptFailures }
           : {}),
         ...(jump ? { jump } : {}),
         relation_picker_opened: pickerOpened,
@@ -22711,6 +22596,8 @@ function removeResolvedOfferCloseRows(plan, result) {
 function successorOfferCloseHasReceipt(model) {
   return !!(model && typeof model === "object" && (
     (Array.isArray(model.offer_closes) && model.offer_closes.length > 0) ||
+    (Array.isArray(model.req_outcomes) && model.req_outcomes.length > 0) ||
+    (Array.isArray(model.req_met) && model.req_met.length > 0) ||
     (model.offer_close_refused && Number(model.offer_close_refused.count) > 0) ||
     (Array.isArray(model.failures) && model.failures.length > 0)
   ));
@@ -22720,6 +22607,14 @@ function successorOfferCloseNoticeText(model, baseText) {
   const source = model && typeof model === "object" ? model : {};
   const lines = [];
   if (typeof baseText === "string" && baseText) lines.push(baseText);
+  for (const row of Array.isArray(source.req_outcomes) ? source.req_outcomes : []) {
+    const receipt = String(row && (row.receipt || row.message) || "").trim();
+    if (receipt) lines.push(receipt);
+  }
+  for (const row of Array.isArray(source.req_met) ? source.req_met : []) {
+    const receipt = String(row && (row.receipt || row.message) || "").trim();
+    if (receipt) lines.push(receipt);
+  }
   const stampedRecoveries = [];
   for (const row of Array.isArray(source.offer_closes) ? source.offer_closes : []) {
     if (!row || typeof row !== "object") continue;
@@ -22762,6 +22657,14 @@ class TaskStatusCyclerSuccessorOfferCloseIntegrationMixin {
 
   async pickSuccessorOfferChoices(options = {}) {
     const offers = Array.isArray(options.offers) ? options.offers : [];
+    const reqGroups = Array.isArray(options.reqCloseGroups) ? options.reqCloseGroups : [];
+    const numbering = reqCloseCardNumbering(
+      reqGroups,
+      offers.map((offer) => String(offer && offer.key || "")).filter(Boolean),
+    );
+    const numberedReqGroups = numbering.ok && reqGroups.length
+      ? numbering.numberedGroups(reqGroups).groups
+      : [];
     const plan = options.plan && typeof options.plan === "object" ? options.plan : {};
     const successors = options.pickerApi || null;
     const capabilities = this.successorOfferCloseCapabilities(successors);
@@ -22797,11 +22700,14 @@ class TaskStatusCyclerSuccessorOfferCloseIntegrationMixin {
           hasLiveLink: successorOfferCloseLiveLinkCheck(options.dailyAfter || [], options.dailyPath),
         },
       });
+      if (model && numberedReqGroups.length) {
+        model.groups = [...numberedReqGroups, ...(model.groups || [])];
+      }
     } catch (_error) {
       model = null;
     }
     if (!model || !Array.isArray(model.groups) || !model.groups.some((group) =>
-      Array.isArray(group.rows) && group.rows.some((row) => row.selectable),
+      Array.isArray(group.rows) && group.rows.some((row) => row.selectable || group.group === "requirements"),
     )) {
       return { pickerOpened: false, model, choices: null, originalOfferByKey };
     }
@@ -22816,6 +22722,302 @@ class TaskStatusCyclerSuccessorOfferCloseIntegrationMixin {
     } catch (_error) {
       return { pickerOpened: true, model, choices: null, originalOfferByKey };
     }
+  }
+
+  async revalidateSuccessorPickerChoices(options = {}) {
+    const {
+      identities, selectableOffers, closeChoices, reqRequests, reqJumpKey,
+      noteTexts, noteTextsObject, dailyPath, hint, active, cache,
+      relationLookupIdentities, cancelledClose, pickerApi, today, relationPreflight,
+      relationRuntime, relationEventKind, parkedSlot, relationPlanOptions,
+      linkUnblocked, keepMovingEnabled, keepMovingCandidatePaths, keepMovingAnchorHints,
+      keepMovingBaseline, planFirst, reqCloseOwners, updateBasenames, updateDependencySnapshot,
+    } = options;
+    const reqCloseOwnerRows = Array.isArray(reqCloseOwners) ? reqCloseOwners : [];
+    let plan = options.plan;
+    let selectedKeys = Array.isArray(options.selectedKeys) ? options.selectedKeys : [];
+    let selectedDestinations = options.selectedDestinations instanceof Map
+      ? options.selectedDestinations : new Map();
+    let closeRevalidatedKeys = options.closeRevalidatedKeys instanceof Set
+      ? options.closeRevalidatedKeys : new Set();
+    let closePassNoteTexts = options.closePassNoteTexts;
+    let closePassTasks = options.closePassTasks;
+    let closePassDependencySnapshotAvailable = options.closePassDependencySnapshotAvailable;
+    let tasks = options.tasks;
+    let dailyCurrent = options.dailyCurrent;
+    let dailyBefore = options.dailyBefore;
+    let dailyAfter = options.dailyAfter;
+    let planClosingEntry = options.planClosingEntry;
+    let dependencySnapshotAvailable = options.dependencySnapshotAvailable;
+    if (selectedKeys.length > 0 || closeChoices.length > 0 || reqRequests !== null || reqJumpKey) {
+      // Re-read fresh texts (editor buffers first), invalidating caches.
+      const affected = new Set();
+      for (const identity of identities) {
+        if (identity && identity.path) {
+          affected.add(String(identity.path));
+        }
+      }
+      for (const owner of reqCloseOwnerRows) {
+        if (owner && owner.path) affected.add(String(owner.path));
+      }
+      for (const offer of selectableOffers) {
+        if (offer && offer.notePath) {
+          affected.add(String(offer.notePath));
+        }
+      }
+      for (const row of successorPlanRows(plan)) {
+        if (row && row.note_path) {
+          affected.add(String(row.note_path));
+        }
+      }
+      for (const row of plan.still_blocked || []) {
+        if (row && row.note_path) {
+          affected.add(String(row.note_path));
+        }
+      }
+      for (const path of noteTexts.keys()) {
+        affected.add(String(path));
+      }
+      if (dailyPath) {
+        affected.add(String(dailyPath));
+      }
+      for (const path of affected) {
+        try {
+          cache.delete(path);
+        } catch (error) {
+          // Best effort.
+        }
+      }
+      let dailyFresh = null;
+      if (dailyPath) {
+        dailyFresh = await this.readSuccessorNoteText(dailyPath, active, cache);
+      }
+      const freshNoteTexts = new Map();
+      const unavailableFreshNotes = new Set();
+      if (dailyPath) {
+        if (typeof dailyFresh === "string") {
+          freshNoteTexts.set(dailyPath, dailyFresh);
+        } else {
+          unavailableFreshNotes.add(dailyPath);
+        }
+      }
+      for (const path of affected) {
+        if (path === dailyPath) {
+          continue;
+        }
+        const text = await this.readSuccessorNoteText(path, active, cache);
+        if (typeof text === "string") {
+          freshNoteTexts.set(path, text);
+        } else {
+          unavailableFreshNotes.add(path);
+        }
+      }
+      // Preserve untouched snapshots, but never revive an affected note
+      // whose fresh read failed or whose file was deleted.
+      for (const [path, text] of noteTexts) {
+        if (!freshNoteTexts.has(path) && !unavailableFreshNotes.has(path) && !affected.has(String(path))) {
+          freshNoteTexts.set(path, text);
+        }
+      }
+      let freshNotesObj = {};
+      for (const [path, text] of freshNoteTexts) {
+        freshNotesObj[path] = text;
+      }
+      // Rebuild the dependents index with fresh affected docs overriding
+      // stale cache locations (warm) or fresh overlay (cold). No new
+      // full-vault scan on a warm pass.
+      let freshTasks = tasks;
+      let freshDependencySnapshotAvailable = false;
+      try {
+        const freshCache = typeof this.readSuccessorTasksCache === "function" ? this.readSuccessorTasksCache() : { ready: false, tasks: [] };
+        if (freshCache && freshCache.ready) {
+          freshDependencySnapshotAvailable = true;
+          const freshBuffered = new Set(freshNoteTexts.keys());
+          const base = [];
+          for (const task of freshCache.tasks || []) {
+            if (!freshBuffered.has(task.path)) {
+              base.push(task);
+            }
+          }
+          for (const [path, text] of freshNoteTexts) {
+            if (affected.has(String(path)) && !isExcludedSuccessorVaultPath(path)) base.push(...tasksFromDocuments([{ path, text }]));
+          }
+          freshTasks = base;
+        } else {
+          const oldByPath = new Map();
+          for (const task of tasks || []) {
+            if (!task || !task.path) {
+              continue;
+            }
+            if (!oldByPath.has(task.path)) {
+              oldByPath.set(task.path, []);
+            }
+            oldByPath.get(task.path).push(task);
+          }
+          const next = [];
+          for (const [path, list] of oldByPath) {
+            if (affected.has(String(path))) {
+              continue;
+            }
+            for (const task of list) {
+              next.push(task);
+            }
+          }
+          for (const [path, text] of freshNoteTexts) {
+            if (affected.has(String(path)) && !isExcludedSuccessorVaultPath(path)) next.push(...tasksFromDocuments([{ path, text }]));
+          }
+          freshTasks = next;
+        }
+      } catch (error) {
+        freshTasks = tasks;
+      }
+      const dailyFreshLines = typeof dailyFresh === "string" ? dailyFresh.split(/\r?\n/) : dailyAfter;
+      // Relocate the closing entry against fresh text; never carry an old
+      // bullet offset into a newly edited ledger.
+      let freshClosing = null;
+      if (hint && Number.isInteger(hint.line)) {
+        try {
+          const relocated = this.relocateSuccessorClosingEntry(dailyFreshLines, hint);
+          freshClosing = relocated;
+        } catch (error) {
+          freshClosing = null;
+        }
+      } else if (Number.isInteger(planClosingEntry)) {
+        freshClosing = planClosingEntry < dailyFreshLines.length ? planClosingEntry : null;
+      }
+      // The anchor / already-planned baseline is the day before this
+      // gesture: the fresh text with the closed entry's headline restored
+      // to its pre-close form, so its links still anchor `closing`
+      // instead of falling through to the implicit destination.
+      let freshBefore = dailyFreshLines;
+      if (
+        hint && typeof hint.lineText === "string" &&
+        Number.isInteger(freshClosing) &&
+        freshClosing >= 0 && freshClosing < dailyFreshLines.length
+      ) {
+        freshBefore = dailyFreshLines.slice();
+        freshBefore[freshClosing] = hint.lineText;
+      }
+      const freshRelationRuntime = this.prepareSuccessorRelationRuntime(
+        active,
+        cancelledClose,
+        cancelledClose ? null : getSuccessorPickerApi(this.app),
+      );
+      const freshRelationPreflight = this.preflightSuccessorRelationIndex(
+        relationLookupIdentities,
+        freshRelationRuntime,
+      );
+      let freshRelationOptions = {};
+      if (freshRelationPreflight.state === "unavailable") {
+        freshRelationOptions = {
+          relationSuccessorLabels: freshRelationRuntime.labels,
+          navSuccessorsVersion: 3,
+          relationIndexReady: false,
+        };
+      } else if (freshRelationPreflight.state === "candidates") {
+        const freshRelation = await this.readSuccessorRelationInputs({
+          runtime: freshRelationRuntime,
+          preflight: freshRelationPreflight,
+          active,
+          cache,
+          noteTexts: freshNoteTexts,
+          identities: relationLookupIdentities,
+          baselineDay: freshBefore,
+          currentDay: dailyFreshLines,
+          dailyPath: dailyPath || "",
+          closingEntry: freshClosing,
+          eventKind: relationEventKind,
+          slot: parkedSlot,
+        });
+        freshRelationOptions = freshRelation.options || {};
+        for (const [path, text] of freshRelation.noteTexts || []) {
+          if (typeof text === "string") {
+            freshNoteTexts.set(path, text);
+            affected.add(path);
+          }
+        }
+      }
+      if (successorRelationInputsNeedDependencySnapshot(freshRelationOptions, freshNoteTexts)) {
+        // A relation's own prerequisite or project may have changed while
+        // the picker was open. Trust only the refreshed warm Tasks pool;
+        // otherwise the classifier conservatively holds the candidate.
+        dependencySnapshotAvailable = freshDependencySnapshotAvailable;
+        updateDependencySnapshot(freshDependencySnapshotAvailable);
+      }
+      freshNotesObj = {};
+      for (const [path, text] of freshNoteTexts) freshNotesObj[path] = text;
+      const freshBasenames = countSuccessorBasenames(this.app, freshTasks, identities, dailyPath, freshNoteTexts);
+      updateBasenames(freshBasenames);
+      let replanned = planFirst(
+        selectedKeys,
+        freshBefore,
+        dailyFreshLines,
+        freshTasks,
+        freshNotesObj,
+        freshClosing,
+        selectedDestinations,
+        freshRelationOptions,
+        freshRelationRuntime.linkUnblocked,
+      );
+      if (!replanned) {
+        replanned = plan;
+        selectedKeys = [];
+        selectedDestinations = new Map();
+        closeRevalidatedKeys = new Set();
+      } else {
+        // Refuse stale/ambiguous picks individually; newly appearing
+        // offers stay unpicked (no second picker).
+        const freshKeys = new Set((replanned.offers || []).map((offer) => String(offer.key)));
+        const refused = selectedKeys.filter((key) => !freshKeys.has(String(key)));
+        // Ambiguous idless rebinding: when a note's digest count changed,
+        // refuse every idless pick for that digest in that note.
+        const ambiguousCloseKeys = successorOfferCloseAmbiguousKeys(
+          [...selectedKeys, ...closeChoices.map((close) => String(close.key))],
+          noteTextsObject,
+          freshNotesObj,
+        );
+        for (const key of ambiguousCloseKeys) {
+          if (selectedKeys.some((selected) => String(selected) === String(key)) &&
+              !refused.includes(key)) {
+            refused.push(key);
+          }
+        }
+        closeRevalidatedKeys = new Set(closeChoices
+          .map((close) => String(close.key))
+          .filter((key) => freshKeys.has(key) && !ambiguousCloseKeys.has(key)));
+        if (refused.length > 0) {
+          replanned.refusedKeys = refused;
+        }
+        plan = replanned;
+        // Swap working sets to the fresh texts for the apply below.
+        tasks = freshTasks;
+        closePassTasks = freshTasks;
+        closePassNoteTexts = freshNotesObj;
+        closePassDependencySnapshotAvailable = dependencySnapshotAvailable;
+        for (const [path, text] of freshNoteTexts) {
+          noteTexts.set(path, text);
+        }
+        dailyCurrent = dailyFresh;
+        // dailyBefore/dailyAfter for insertion planning become fresh.
+        dailyBefore = dailyFreshLines;
+        dailyAfter = dailyFreshLines;
+        planClosingEntry = freshClosing;
+        selectedKeys = selectedKeys.filter((key) => !refused.includes(String(key)));
+        if (refused.length > 0) {
+          const refusedSet = new Set(refused.map(String));
+          for (const key of [...selectedDestinations.keys()]) {
+            if (refusedSet.has(String(key))) {
+              selectedDestinations.delete(key);
+            }
+          }
+        }
+      }
+    }
+    return {
+      plan, selectedKeys, selectedDestinations, closeRevalidatedKeys, closePassNoteTexts,
+      closePassTasks, closePassDependencySnapshotAvailable, tasks, dailyCurrent,
+      dailyBefore, dailyAfter, planClosingEntry, dependencySnapshotAvailable,
+    };
   }
 
   async applySuccessorOfferCloseChoices(options = {}) {
@@ -25255,6 +25457,18 @@ class TaskStatusCyclerCommandsMixin {
         return true;
       }
 
+      const cycleFile = view.file ||
+        (this.app.workspace && typeof this.app.workspace.getActiveFile === "function"
+          ? this.app.workspace.getActiveFile()
+          : null);
+      const cyclePath = cycleFile && cycleFile.path;
+      const cycleIdentity = cyclePath
+        ? closedTaskIdentity(cyclePath, taskStatus.lineText)
+        : null;
+      const reqCloseOwners = nextSymbol === "x" && cycleIdentity && editor &&
+          typeof editor.getValue === "function"
+        ? this.captureReqCloseOwnersFromText(editor.getValue(), cyclePath, [cycleIdentity])
+        : [];
       const wrote = this.setActiveCheckboxStatus(editor, taskStatus, nextSymbol);
       if (wrote && taskStatus.symbol === BLOCKED_TASK_STATUS_SYMBOL) {
         this.applyBlockedStatusRetirementInEditor(editor, taskStatus.line);
@@ -25264,16 +25478,11 @@ class TaskStatusCyclerCommandsMixin {
       // recover-and-link pass as Ctrl+Enter; a cycle into Cancelled recovers
       // only (`closeKind: "cancelled"`, never links).
       if (wrote && (nextSymbol === "x" || nextSymbol === "-")) {
-        const cycleFile = view.file ||
-          (this.app.workspace &&
-          typeof this.app.workspace.getActiveFile === "function"
-            ? this.app.workspace.getActiveFile()
-            : null);
-        const cyclePath = cycleFile && cycleFile.path;
         if (cyclePath) {
-          const identity = closedTaskIdentity(cyclePath, taskStatus.lineText);
+          const identity = cycleIdentity;
           if (identity) {
             const cycleContext = { activePath: cyclePath };
+            if (nextSymbol === "x") cycleContext.reqCloseOwners = reqCloseOwners;
             if (editor && typeof editor.getValue === "function") {
               cycleContext.editor = editor;
             }
@@ -25774,6 +25983,10 @@ class TaskStatusCyclerCommandsMixin {
           editor,
           activePath,
           originPath: activePath,
+          reqCloseOwners: this.captureReqCloseOwnersFromText(
+            Array.isArray(lines) ? lines.join("\n") : String(editor.getValue() || ""),
+            activePath,
+          ),
         }
       : null;
     const seenResolvedTargets = new Set();
@@ -26021,6 +26234,7 @@ class TaskStatusCyclerCommandsMixin {
       void this.finalizeCycledClosedTasks(cycleClosed, {
         editor,
         activePath,
+        reqCloseOwners: context && context.reqCloseOwners || [],
       });
     }
 
@@ -26408,9 +26622,7 @@ class TaskStatusCyclerCompletionMixin {
     );
   }
 
-  // Cross-plugin close for checklist rows (API v2). Always goes through the
-  // Tasks `set-status-symbol-to-x` command so recurrence fires; never stamps
-  // and never falls back to writing `[x]` raw. Callers await the result.
+  // Cross-plugin close for checklist rows always goes through Tasks so recurrence fires.
   async completeTaskAtCursor(editor, options = {}) {
     const taskStatus =
       editor && typeof editor.getCursor === "function"
@@ -26446,6 +26658,9 @@ class TaskStatusCyclerCompletionMixin {
         : null;
     const activePath = activeFile && activeFile.path;
     const identity = closedTaskIdentity(activePath, taskStatus.lineText);
+    const reqCloseOwners = this.captureReqCloseOwnersFromEditor(
+      identity, editor, activePath, taskStatus.lineText,
+    );
     const beforeLineCount = this.getEditorLineCount(editor);
 
     if (
@@ -26474,6 +26689,7 @@ class TaskStatusCyclerCompletionMixin {
       }
       const finalized = await this.finalizeClosedTasks([identity], {
         ...finalizeContext,
+        reqCloseOwners,
       });
       return {
         ok: true,
@@ -26535,26 +26751,22 @@ class TaskStatusCyclerCompletionMixin {
     const closing = isTranscludedCompletionClosableStatus(
       resolvedTarget.taskStatus,
     );
+    const identity = this.reqCloseIdentityForResolvedTarget(resolvedTarget);
+    const reqCloseOwners = closing
+      ? this.captureReqCloseOwnersForResolvedTarget(resolvedTarget, context)
+      : [];
     const wrote = await this.replaceResolvedTranscludedTaskLine(
       resolvedTarget,
       context,
     );
     if (wrote && closing) {
-      const identity = closedTaskIdentity(
-        resolvedTarget.file.path,
-        resolvedTarget.taskStatus.lineText,
-      ) || { path: resolvedTarget.file.path, blockId: resolvedTarget.blockId };
-      await this.finalizeClosedTasks([identity], context);
+      await this.finalizeClosedTasks([identity], { ...context, reqCloseOwners });
     }
     return wrote;
   }
 
-  // Shared body for the Vim Ctrl+Enter dispatch and the non-Vim open/done
-  // command: toggle the local checkbox, then propagate the same open/done
-  // transition to an embedded block transclusion on the active line (if any),
-  // and finalize both identities together in one batch. The candidate embed
-  // is captured before the local write so a Tasks-plugin recurrence insertion
-  // above the active line cannot shift which line's transclusion is selected.
+  // Toggle the local checkbox, propagate to an embedded block transclusion, and
+  // finalize both identities in one batch. Capture the embed before the write.
   async toggleActiveCheckboxOpenDoneAndPropagate(
     editor,
     activeFile,
@@ -26579,25 +26791,30 @@ class TaskStatusCyclerCompletionMixin {
       ? null
       : this.getActiveLineTranscludedTaskTarget(editor, activePath);
 
+    const closing = isTranscludedCompletionClosableStatus(taskStatus);
+    const localIdentity = closedTaskIdentity(activePath, taskStatus.lineText);
+    const reqCloseOwners = closing
+      ? this.captureReqCloseOwnersFromEditor(localIdentity, editor, activePath, taskStatus.lineText)
+      : [];
+
     const wrote = this.toggleActiveCheckboxOpenDone(editor, taskStatus);
     if (!wrote) {
       return false;
     }
 
-    const localIdentity = closedTaskIdentity(activePath, taskStatus.lineText);
-    const closing = isTranscludedCompletionClosableStatus(taskStatus);
     const targetIdentity = await this.closeOrReopenTranscludedTaskLine(
       transclusionCandidate,
       editor,
       activePath,
       closing,
+      reqCloseOwners,
     );
     const identities = [localIdentity, targetIdentity].filter(Boolean);
     if (identities.length) {
       // Walk landings pass `successorNoticeTarget: "return"` with a
       // `successorNoticeBox`: the text is composed into `outcome.notice`
       // and no card is shown, keeping the gesture's single walk toast.
-      const context = { editor, activePath };
+      const context = { editor, activePath, reqCloseOwners };
       if (
         options && options.successorNoticeTarget === "return"
       ) {
@@ -26650,7 +26867,7 @@ class TaskStatusCyclerCompletionMixin {
   // that status is eligible to be forced. Returns the target's closed-task
   // identity when a write actually landed, `null` otherwise (no candidate,
   // unresolvable target, or target ineligible for the forced direction).
-  async closeOrReopenTranscludedTaskLine(candidate, editor, activePath, closing) {
+  async closeOrReopenTranscludedTaskLine(candidate, editor, activePath, closing, reqCloseOwners = []) {
     if (!candidate) {
       return null;
     }
@@ -26671,6 +26888,7 @@ class TaskStatusCyclerCompletionMixin {
     let wrote = false;
     if (closing) {
       if (isTranscludedCompletionClosableStatus(resolvedTarget.taskStatus)) {
+        reqCloseOwners.push(...this.captureReqCloseOwnersForResolvedTarget(resolvedTarget, context));
         wrote = await this.replaceResolvedTranscludedTaskLine(
           resolvedTarget,
           context,
@@ -26811,7 +27029,10 @@ class TaskStatusCyclerCompletionMixin {
           context,
           new Set(),
         );
-        const order = await finalizeTaskLinkCloseForJump(this, result.closed, context, options);
+        const order = await finalizeTaskLinkCloseForJump(this, result.closed, {
+          ...context,
+          reqCloseOwners: result.reqCloseOwners || [],
+        }, options);
         const rootKey = `${resolvedTarget.file.path}#^${resolvedTarget.blockId}`;
         const rootClosed = Array.isArray(result.closed) && result.closed.some(
           (identity) =>
@@ -26837,16 +27058,19 @@ class TaskStatusCyclerCompletionMixin {
     const closing = isTranscludedCompletionClosableStatus(
       resolvedTarget.taskStatus,
     );
+    const reqCloseOwners = closing
+      ? this.captureReqCloseOwnersForResolvedTarget(resolvedTarget, context)
+      : [];
     const wrote = await this.replaceResolvedTranscludedTaskLine(
       resolvedTarget,
       context,
     );
     if (wrote && closing) {
-      const identity = closedTaskIdentity(
-        resolvedTarget.file.path,
-        resolvedTarget.taskStatus.lineText,
-      ) || { path: resolvedTarget.file.path, blockId: resolvedTarget.blockId };
-      const order = await finalizeTaskLinkCloseForJump(this, [identity], context, options);
+      const identity = this.reqCloseIdentityForResolvedTarget(resolvedTarget);
+      const order = await finalizeTaskLinkCloseForJump(this, [identity], {
+        ...context,
+        reqCloseOwners,
+      }, options);
       if (!onDependencyLine) {
         try {
           await this.strikeActiveSelectedTaskBlockLink(editor, activePath, candidate);
@@ -26969,6 +27193,13 @@ class TaskStatusCyclerCompletionMixin {
       return false;
     }
 
+    const identity = nextSymbol === "x"
+      ? this.reqCloseIdentityForResolvedTarget(resolvedTarget)
+      : null;
+    const reqCloseOwners = identity
+      ? this.captureReqCloseOwnersForResolvedTarget(resolvedTarget, context)
+      : [];
+
     const wrote = await this.replaceResolvedTranscludedTaskLine(
       resolvedTarget,
       context,
@@ -26991,26 +27222,20 @@ class TaskStatusCyclerCompletionMixin {
       }
     }
 
-    // `cycler_polish` (bead bob-cli-3k): a transcluded-target cycle into
-    // Done or Cancelled joins the same pass as Ctrl+Enter, unless the caller
-    // batches the finalize itself (the counted range passes
-    // `deferFinalize`).
+    if (wrote && options && options.deferFinalize && nextSymbol === "x" &&
+        context && Array.isArray(context.reqCloseOwners)) {
+      context.reqCloseOwners.push(...reqCloseOwners);
+    }
     if (
       wrote && !(options && options.deferFinalize) &&
       (nextSymbol === "x" || nextSymbol === "-")
     ) {
       const targetPath = resolvedTarget.file && resolvedTarget.file.path;
       if (targetPath) {
-        const identity = closedTaskIdentity(
-          targetPath,
-          resolvedTarget.taskStatus.lineText,
-        ) || (resolvedTarget.blockId
-          ? { path: targetPath, blockId: resolvedTarget.blockId }
-          : null);
         if (identity) {
           void this.finalizeCycledClosedTasks(
             [{ identity, symbol: nextSymbol }],
-            context,
+            { ...context, reqCloseOwners },
           );
         }
       }
@@ -27652,7 +27877,10 @@ class TaskStatusCyclerPomodoroMixin {
         context,
         seen,
       );
-      await this.finalizeClosedTasks(result.closed, context);
+      await this.finalizeClosedTasks(result.closed, {
+        ...context,
+        reqCloseOwners: result.reqCloseOwners || [],
+      });
     } catch (error) {
       // Best effort: a mid-traversal failure still counts as handled because the
       // root target resolved as a Pomodoro sub-bullet transclusion.
@@ -27742,7 +27970,14 @@ class TaskStatusCyclerPomodoroMixin {
       context.pomodoroLine,
       subBulletRange,
     );
-    const closed = await this.completePomodoroTranscludedTaskBullets(
+    const pomodoroIdentity = closedTaskIdentity(
+      sourcePath,
+      lines[context.pomodoroLine],
+    );
+    const pomodoroReqOwners = pomodoroIdentity
+      ? this.captureReqCloseOwnersFromEditor(pomodoroIdentity, editor, sourcePath, lines.join("\n"))
+      : [];
+    const completedLinks = await this.completePomodoroTranscludedTaskBullets(
       subBullets.transcludedTaskLinkBullets,
       {
         editor,
@@ -27750,6 +27985,10 @@ class TaskStatusCyclerPomodoroMixin {
         originPath: sourcePath,
       },
     );
+    const closed = completedLinks.closed;
+    const reqCloseOwners = Array.isArray(completedLinks.reqCloseOwners)
+      ? completedLinks.reqCloseOwners
+      : [];
     await this.startPomodoroNonTranscludedTaskBullets(
       subBullets.startableNonTranscludedTaskLinkBullets,
       {
@@ -27830,10 +28069,6 @@ class TaskStatusCyclerPomodoroMixin {
       successorClosingEntry = null;
     }
 
-    const pomodoroIdentity = closedTaskIdentity(
-      sourcePath,
-      lines[context.pomodoroLine],
-    );
     if (pomodoroIdentity) {
       closed.push(pomodoroIdentity);
     }
@@ -27859,6 +28094,7 @@ class TaskStatusCyclerPomodoroMixin {
       editor,
       activePath: sourcePath,
       originPath: sourcePath,
+      reqCloseOwners: [...reqCloseOwners, ...pomodoroReqOwners],
       ...(successorDailyBefore ? { dailyBefore: successorDailyBefore } : {}),
       ...(successorClosingEntry ? { closingEntry: successorClosingEntry } : {}),
     });
@@ -27996,6 +28232,7 @@ class TaskStatusCyclerPomodoroMixin {
     // Pomodoro operation dedupes targets and terminates on cycles.
     const seen = new Set();
     const closed = [];
+    const reqCloseOwners = [];
     for (const bullet of Array.isArray(bullets) ? bullets : []) {
       for (const target of Array.isArray(bullet.targets) ? bullet.targets : []) {
         try {
@@ -28007,12 +28244,15 @@ class TaskStatusCyclerPomodoroMixin {
           if (result && Array.isArray(result.closed)) {
             closed.push(...result.closed);
           }
+          if (result && Array.isArray(result.reqCloseOwners)) {
+            reqCloseOwners.push(...result.reqCloseOwners);
+          }
         } catch (error) {
           // Best effort: one broken embed should not block Pomodoro completion.
         }
       }
     }
-    return closed;
+    return { closed, reqCloseOwners };
   }
 
   async startPomodoroNonTranscludedTaskBullets(bullets, context) {
@@ -28058,7 +28298,7 @@ class TaskStatusCyclerPomodoroMixin {
       return { visited: false, changed: false, closed: [] };
     }
     if (!resolvedTarget || !resolvedTarget.file) {
-      return { visited: false, changed: false, closed: [] };
+      return { visited: false, changed: false, closed: [], reqCloseOwners: [] };
     }
 
     return this.completeResolvedTranscludedTaskTargetTree(
@@ -28088,7 +28328,7 @@ class TaskStatusCyclerPomodoroMixin {
 
     const seenKey = `${resolvedTarget.file.path}#^${resolvedTarget.blockId}`;
     if (seen.has(seenKey) || seen.size >= MAX_TRANSCLUDED_RECURSION_TARGETS) {
-      return { visited: false, changed: false, closed: [] };
+      return { visited: false, changed: false, closed: [], reqCloseOwners: [] };
     }
     seen.add(seenKey);
 
@@ -28114,6 +28354,7 @@ class TaskStatusCyclerPomodoroMixin {
     );
     let changed = false;
     const closed = [];
+    const reqCloseOwners = [];
     for (const childTarget of childTargets) {
       try {
         const childResult = await this.completeTranscludedTaskTargetTree(
@@ -28128,6 +28369,9 @@ class TaskStatusCyclerPomodoroMixin {
         }
         if (childResult && Array.isArray(childResult.closed)) {
           closed.push(...childResult.closed);
+        }
+        if (childResult && Array.isArray(childResult.reqCloseOwners)) {
+          reqCloseOwners.push(...childResult.reqCloseOwners);
         }
       } catch (error) {
         // Best effort: one broken descendant should not block its siblings.
@@ -28144,6 +28388,7 @@ class TaskStatusCyclerPomodoroMixin {
       isTranscludedCompletionClosableStatus(resolvedTarget.taskStatus)
       && taskReqCarriesGlobalFilter(targetLineText, TASKS_GLOBAL_FILTER)
     ) {
+      const ownReqOwners = this.captureReqCloseOwnersForResolvedTarget(resolvedTarget, context);
       const wrote = await this.replaceResolvedTranscludedTaskLine(
         resolvedTarget,
         context,
@@ -28167,10 +28412,11 @@ class TaskStatusCyclerPomodoroMixin {
           };
         }
         closed.push(identity);
+        reqCloseOwners.push(...ownReqOwners);
       }
     }
 
-    return { visited: true, changed, closed };
+    return { visited: true, changed, closed, reqCloseOwners };
   }
 
   // Starts a single strict bare non-transcluded Pomodoro link target. Unlike
@@ -35969,6 +36215,481 @@ function resolveReqLanding(input, finalText) {
     throw refusal;
   }
 }
+// ---- src/198g-req-close-integration.js ----
+// Managed Done requirement-close support. Capture requirement forests before
+// the initiating write, then match those frozen owners to the actual closed
+// identity order at the post-close successor card.
+
+function reqCloseIntegrationNotes(value) {
+  const out = new Map();
+  if (value instanceof Map) {
+    for (const [path, text] of value) {
+      if (typeof path === "string" && path && typeof text === "string") out.set(path, text);
+    }
+  } else if (value && typeof value === "object" && !Array.isArray(value)) {
+    for (const [path, text] of Object.entries(value)) {
+      if (path && typeof text === "string") out.set(path, text);
+    }
+  }
+  return out;
+}
+
+function reqCloseIntegrationSameIdentity(left, right) {
+  if (String(left && left.path || "") !== String(right && right.path || "")) return false;
+  const leftBlock = String(left && (left.blockId || left.block_id) || "");
+  const rightBlock = String(right && (right.blockId || right.block_id) || "");
+  if (leftBlock && rightBlock) return leftBlock === rightBlock;
+  const leftTask = String(left && (left.taskId || left.task_id) || "");
+  const rightTask = String(right && (right.taskId || right.task_id) || "");
+  return !!leftTask && leftTask === rightTask;
+}
+
+function reqCloseIntegrationTaskMatches(task, identity) {
+  const wantedBlock = String(identity && (identity.blockId || identity.block_id) || "");
+  if (wantedBlock) return String(task && task.blockId || "") === wantedBlock;
+  const wantedTask = String(identity && (identity.taskId || identity.task_id) || "");
+  if (!wantedTask) return false;
+  let taskId = String(task && (task.taskId || task.task_id) || "");
+  if (!taskId && task && typeof task.lineText === "string" &&
+      typeof parseTaskDependencyMetadata === "function") {
+    try { taskId = String(parseTaskDependencyMetadata(task.lineText).taskId || ""); } catch (_error) {}
+  }
+  return taskId === wantedTask;
+}
+
+function reqCloseIntegrationComposeRestores(entries) {
+  const paths = new Map();
+  for (const row of Array.isArray(entries) ? entries : []) {
+    if (!row || typeof row.path !== "string" || !row.path) continue;
+    const previous = paths.get(row.path);
+    if (!previous) {
+      paths.set(row.path, {
+        path: row.path,
+        before: typeof row.before === "string" ? row.before : "",
+        after: typeof row.after === "string" ? row.after : "",
+        created: row.created === true,
+      });
+    } else {
+      previous.after = typeof row.after === "string" ? row.after : previous.after;
+      previous.created = previous.created || row.created === true;
+    }
+  }
+  return [...paths.values()].filter((row) => row.created || row.before !== row.after);
+}
+
+class TaskStatusCyclerReqCloseIntegrationMixin {
+  captureReqCloseOwnersFromText(contents, path, identities) {
+    if (typeof contents !== "string" || !path) return [];
+    const tasks = taskReqNoteTasks(contents);
+    const selected = Array.isArray(identities)
+      ? identities.map((identity) => tasks.filter((task) => reqCloseIntegrationTaskMatches(task, identity)))
+      : tasks.filter((task) => task.blockId || task.taskId);
+    const owners = [];
+    for (const matches of selected) {
+      if (!Array.isArray(matches) || matches.length !== 1) continue;
+      const task = matches[0];
+      const blockId = String(task.blockId || "");
+      let taskId = String(task.taskId || "");
+      if (!taskId && typeof task.lineText === "string" &&
+          typeof parseTaskDependencyMetadata === "function") {
+        try { taskId = String(parseTaskDependencyMetadata(task.lineText).taskId || ""); } catch (_error) {}
+      }
+      const owner = reqCloseCollectOwner(contents, path, task, reqCloseWriteDefaultSha256);
+      if (owner) owners.push({
+        ...owner,
+        close_identity: { path: String(path), blockId, taskId },
+      });
+    }
+    return owners;
+  }
+
+  captureReqCloseOwnersFromEditor(identity, editor, path, fallbackText = "") {
+    if (!identity) return [];
+    const text = editor && typeof editor.getValue === "function"
+      ? editor.getValue()
+      : this.getEditorLineTexts(editor).join("\n");
+    return this.captureReqCloseOwnersFromText(text || fallbackText, path, [identity]);
+  }
+
+  reqCloseIdentityForResolvedTarget(target) {
+    if (!target || !target.file) return null;
+    return closedTaskIdentity(target.file.path, target.taskStatus && target.taskStatus.lineText) ||
+      (target.blockId ? { path: target.file.path, blockId: target.blockId } : null);
+  }
+
+  captureReqCloseOwnersForResolvedTarget(target, context = {}) {
+    const identity = this.reqCloseIdentityForResolvedTarget(target);
+    if (!identity || !target || typeof target.sourceText !== "string") return [];
+    return this.captureReqCloseOwnersFromText(target.sourceText, target.file.path, [identity]);
+  }
+
+  // Read-only pre-close snapshot API for managed callers that own their write
+  // outside this plugin (currently the navigation relation close gesture).
+  async captureReqCloseOwners(identities, context = {}) {
+    const closed = Array.isArray(identities) ? identities : [];
+    const active = context && typeof context === "object" ? context : {};
+    const supplied = reqCloseIntegrationNotes(active.preCloseNotes);
+    const cache = new Map();
+    const owners = [];
+    for (const identity of closed) {
+      if (!identity || !identity.path) continue;
+      const path = String(identity.path);
+      let contents = supplied.get(path);
+      if (typeof contents !== "string") {
+        try { contents = await this.readSuccessorNoteText(path, active, cache); } catch (_error) { contents = null; }
+      }
+      if (typeof contents !== "string") continue;
+      owners.push(...this.captureReqCloseOwnersFromText(contents, path, [identity]));
+    }
+    return owners;
+  }
+
+  reqCloseOwnersForManagedDone(captured, closed, context = {}) {
+    const active = context && typeof context === "object" ? context : {};
+    if (active.closeKind === "cancelled" || active.closeKind === "parked" ||
+        active.relationEventKind === "parked" || active.automated === true) return [];
+    const snapshots = Array.isArray(captured) ? captured : [];
+    const ordered = [];
+    for (const identity of Array.isArray(closed) ? closed : []) {
+      const hit = snapshots.find((owner) => owner && owner.close_identity &&
+        reqCloseIntegrationSameIdentity(owner.close_identity, identity));
+      if (hit && !ordered.some((owner) => owner.key === hit.key)) ordered.push(hit);
+    }
+    return ordered;
+  }
+
+  reqCloseExpectedOwnerPostimages(owners, notes) {
+    const files = reqCloseIntegrationNotes(notes);
+    const result = {};
+    for (const owner of Array.isArray(owners) ? owners : []) {
+      if (!owner || !owner.path || !files.has(owner.path)) continue;
+      const block = reqCloseWriteOwnerBlock(files.get(owner.path), owner);
+      if (typeof block === "string") result[owner.key] = block;
+    }
+    return result;
+  }
+
+  async applyManagedReqCloseCard(options = {}) {
+    const owners = Array.isArray(options.owners) ? options.owners : [];
+    const choices = options.choices && typeof options.choices === "object" ? options.choices : {};
+    const requests = Array.isArray(choices.reqs) ? choices.reqs : [];
+    const jumpKey = choices.jump && typeof choices.jump.key === "string"
+      ? choices.jump.key
+      : "";
+    const reqJump = owners.some((owner) => (owner.nodes || []).some((node) => node.key === jumpKey));
+    if (!owners.length || (!Array.isArray(choices.reqs) && !reqJump)) return null;
+    const notes = reqCloseIntegrationNotes(options.notes);
+    const ownerPaths = new Set(owners.map((owner) => owner && owner.path).filter(Boolean));
+    if (options.dailyPath) ownerPaths.add(String(options.dailyPath));
+    const liveCache = new Map();
+    for (const path of ownerPaths) {
+      try {
+        const live = await this.readSuccessorNoteText(path, options.context || {}, liveCache);
+        if (typeof live === "string") notes.set(path, live);
+      } catch (_error) {}
+    }
+    const expectedNotes = {};
+    for (const owner of owners) {
+      const path = owner && owner.path;
+      if (!path) continue;
+      if (notes.has(path)) expectedNotes[path] = notes.get(path);
+    }
+    const dailyPath = String(options.dailyPath || "");
+    const vault = this.app && this.app.vault;
+    const index = vault && typeof vault.getMarkdownFiles === "function"
+      ? vault.getMarkdownFiles().map((file) => file && file.path).filter(Boolean)
+      : [...notes.keys()];
+    const completed = (Array.isArray(options.identities) ? options.identities : []).map((identity) => ({
+      path: String(identity && identity.path || ""),
+      blockId: String(identity && identity.blockId || ""),
+      isRoot: !identity?.rootKey,
+    }));
+    let closing = options.closing && typeof options.closing === "object"
+      ? options.closing
+      : null;
+    if (options.closingHint && dailyPath && typeof this.relocateSuccessorClosingEntry === "function") {
+      try {
+        const day = notes.get(dailyPath);
+        const line = typeof day === "string"
+          ? this.relocateSuccessorClosingEntry(day.split(/\r?\n/), options.closingHint)
+          : null;
+        if (Number.isInteger(line)) {
+          closing = {
+            continuationName: String(options.closingHint.createdName || options.closingHint.name || ""),
+            closedLine: line,
+          };
+        }
+      } catch (_error) {}
+    }
+    const pullInPreflight = createReqPullInPreflight({
+      dayPath: dailyPath,
+      day: notes.get(dailyPath),
+      index,
+      completed,
+      closing,
+    });
+    const result = await this.applyReqCloseWrites({
+      owners,
+      taskOfferKeys: (Array.isArray(options.taskOfferKeys) ? options.taskOfferKeys : []).map(String),
+      requests,
+      jumpSelector: reqJump ? jumpKey : null,
+      today: options.today,
+      date: options.today,
+      notes,
+      expectedNotes,
+      expectedOwnerPostimages: this.reqCloseExpectedOwnerPostimages(owners, notes),
+      pullInPreflight,
+      context: options.context || {},
+      cache: new Map(),
+    });
+    return { ...result, reqJump: reqJump ? jumpKey : null, index, completed, closing };
+  }
+
+  async finishManagedReqPullIn(options = {}) {
+    const result = options.result;
+    if (!result || !Array.isArray(result.outcomes) ||
+        !result.outcomes.some((row) => row && row.verdict === "carry_pulled")) return result;
+    const notes = reqCloseIntegrationNotes(result.notes);
+    const dayPath = String(options.dailyPath || "");
+    const active = options.context || {};
+    const cache = new Map();
+    const carriedPaths = (Array.isArray(result.outcomes) ? result.outcomes : [])
+      .map((row) => row && row.carried && row.carried.path)
+      .filter((path) => typeof path === "string" && path);
+    const paths = new Set([...notes.keys(), ...carriedPaths, dayPath].filter(Boolean));
+    for (const path of paths) {
+      try { cache.delete(path); } catch (_error) {}
+      let text = null;
+      try { text = await this.readSuccessorNoteText(path, active, cache); } catch (_error) {}
+      if (typeof text === "string") notes.set(path, text);
+    }
+    let closing = options.closing && typeof options.closing === "object"
+      ? { ...options.closing }
+      : null;
+    if (closing && options.closingHint && typeof this.relocateSuccessorClosingEntry === "function") {
+      const dayText = notes.get(dayPath);
+      try {
+        const line = typeof dayText === "string"
+          ? this.relocateSuccessorClosingEntry(dayText.split(/\r?\n/), options.closingHint)
+          : null;
+        if (Number.isInteger(line)) closing.closedLine = line;
+      } catch (_error) {}
+    }
+    const themesApi = (() => {
+      try {
+        return typeof getSuccessorTaskThemesApi === "function"
+          ? getSuccessorTaskThemesApi(this.app)
+          : null;
+      } catch (_error) { return null; }
+    })();
+    const routePulledTask = ({ task, target, destination }) => {
+      if (!themesApi || !task || !task.path || !task.blockId) return {};
+      const taskText = notes.get(String(task.path));
+      if (typeof taskText !== "string") return {};
+      let rows = [];
+      try { rows = taskReqNoteTasks(taskText) || []; } catch (_error) {}
+      const taskRow = rows.find((row) => String(row && row.blockId || "") === String(task.blockId));
+      if (!taskRow || !Number.isInteger(taskRow.lineIndex)) return {};
+      const view = reqPullInDayView(notes.get(dayPath) || "", dayPath, options.index || []);
+      const entryIndex = target && Number.isInteger(target.entryIndex) ? target.entryIndex : null;
+      const entry = entryIndex == null ? null : view.entries[entryIndex];
+      let anchor = null;
+      let implicit = null;
+      if (entry) {
+        if (destination && destination.entryRole === "implicit") {
+          anchor = { kind: "implicit", entryLine: entry.line };
+          implicit = { entryLine: entry.line, name: entry.name };
+        } else {
+          anchor = {
+            kind: destination && destination.entryRole === "closing" ? "closing" : "inherit",
+            entryLine: entry.line,
+          };
+        }
+      }
+      // A closing continuation can already have a newly-created typed name.
+      // Preserve it when the effective task type agrees with that name.
+      if (destination && destination.entryRole === "created") {
+        try {
+          const suggestion = typeof themesApi.effectiveTypeFor === "function"
+            ? themesApi.effectiveTypeFor({ path: task.path, line: taskRow.lineIndex + 1, text: taskText })
+            : null;
+          const typeKey = suggestion && suggestion.theme && suggestion.theme.key;
+          if (!typeKey || (typeof themesApi.typeAgrees === "function" &&
+              themesApi.typeAgrees(typeKey, destination.entryName))) return {};
+        } catch (_error) { return {}; }
+      }
+      const routed = successorOfferTypedDestination({
+        anchor,
+        implicit,
+        dailyLines: view.lines,
+        dailyPath: dayPath,
+        task: { path: task.path, line: taskRow.lineIndex },
+        noteText: taskText,
+        themesApi,
+      });
+      const override = routed && routed.placementOverride;
+      if (!override) return {};
+      if (override.kind === "existing") {
+        const at = view.entries.findIndex((candidate) => candidate.line === override.entryLine &&
+          String(view.lines[candidate.line] || "").replace(/\r$/, "") === override.entryText && candidate.open);
+        if (at < 0) return { refusal: { code: "req_pull_in_no_destination", message: "the typed Pomodoro destination changed" } };
+        const selected = view.entries[at];
+        return {
+          target: { kind: "closing", entryIndex: at, insertAt: selected.end, createdName: null },
+          destination: { entryName: selected.name, entryRole: "typed", fallback: false },
+          routed: true,
+        };
+      }
+      if (override.kind === "new" && typeof override.name === "string" && override.name.trim()) {
+        const probe = "__bob_req_pull_in_d7_probe__";
+        const planned = planSuccessorInsertions(view.lines, [{
+          key: "req-pull-in-d7",
+          blockLink: probe,
+          anchor,
+          implicit,
+          override,
+        }]);
+        if (!planned || !Array.isArray(planned.links) || !planned.links.length) {
+          return { refusal: { code: "req_pull_in_no_destination", message: "no typed Pomodoro destination is available" } };
+        }
+        const link = planned.links[0];
+        if (link.entry_created !== true) {
+          const routedEntry = view.entries.findIndex((candidate) => candidate.line === link.entry_line - 1 && candidate.open);
+          if (routedEntry < 0) return { refusal: { code: "req_pull_in_no_destination", message: "the typed Pomodoro destination changed" } };
+          const selected = view.entries[routedEntry];
+          return {
+            target: { kind: "closing", entryIndex: routedEntry, insertAt: selected.end, createdName: null },
+            destination: { entryName: selected.name, entryRole: "typed", fallback: false },
+            routed: true,
+          };
+        }
+        const splice = (planned.splices || []).find((row) => Array.isArray(row.lines) && row.lines.includes(`\t- ${probe}`));
+        if (!splice || !Number.isInteger(splice.at)) {
+          return { refusal: { code: "req_pull_in_no_destination", message: "no typed Pomodoro destination is available" } };
+        }
+        return {
+          target: { kind: "closing", entryIndex: null, insertAt: splice.at, createdName: override.name.trim() },
+          destination: { entryName: override.name.trim(), entryRole: "created", fallback: false },
+          routed: true,
+        };
+      }
+      return {};
+    };
+    const pull = planReqPullInLinks({
+      owners: options.owners || [],
+      outcomes: result.outcomes,
+      day: notes.get(dayPath),
+      dayPath,
+      index: options.index || [],
+      completed: options.completed || [],
+      closing,
+      notes,
+      today: options.today,
+      routePulledTask,
+    });
+    let persisted = { ok: pull.ok === true, notes, restores: [], failures: [] };
+    if (pull.ok) persisted = await this.persistReqPullInPlan({ notes }, pull, { ...active, cache });
+    const failed = !pull.ok || persisted.ok !== true;
+    const outcomes = result.outcomes.map((row) => {
+      if (!row || row.verdict !== "carry_pulled") return row;
+      const linked = !failed;
+      return {
+        ...row,
+        pulled: linked,
+        receipt: reqCloseCarryReceipt(row.text, linked),
+        ...(failed ? { pull_in_failed: true } : {}),
+      };
+    });
+    const failures = [
+      ...(Array.isArray(result.failures) ? result.failures : []),
+      ...(pull.ok ? (persisted.failures || []) : [{ code: pull.code, message: pull.message }]),
+    ];
+    return {
+      ...result,
+      outcomes,
+      req_outcomes: outcomes,
+      notes: Object.fromEntries(persisted.notes || notes),
+      restores: reqCloseIntegrationComposeRestores([
+        ...(result.restores || []),
+        ...(persisted.restores || []),
+      ]),
+      failures: failures.length ? failures : null,
+      pullIn: pull,
+    };
+  }
+
+  async resolveManagedReqCloseLanding(options = {}) {
+    const owners = Array.isArray(options.owners) ? options.owners : [];
+    const plan = options.plan && typeof options.plan === "object" ? options.plan : {};
+    const key = String(options.key || "");
+    if (!key) return null;
+    const owner = owners.find((entry) => entry && (entry.nodes || []).some((node) => node.key === key));
+    const node = owner && owner.nodes.find((entry) => entry && entry.key === key);
+    if (!owner || !node) return null;
+    const target = {
+      key,
+      owner_key: owner.key,
+      owner_path: owner.path,
+      owner_block_id: owner.block_id,
+      path: node.path,
+      parent_key: node.parent_key,
+      text: node.text,
+      line: node.line,
+    };
+    const active = options.context || {};
+    const routes = Array.isArray(options.routes) ? options.routes : [];
+    const resolved = resolveReqLanding({ target, owners, plan, routes }, async (path) => {
+      const cache = new Map();
+      try { return await this.readSuccessorNoteText(path, active, cache); } catch (_error) { return null; }
+    });
+    if (!resolved || resolved.ok !== true) return resolved || null;
+    const landing = resolved.landing;
+    const text = landing.kind === "requirement"
+      ? await this.readSuccessorNoteText(landing.path, active, new Map())
+      : null;
+    const lineText = typeof text === "string" ? String(text.split(/\r?\n/)[landing.line - 1] || "") : "";
+    return {
+      ok: true,
+      ...landing,
+      ...(landing.kind === "requirement" ? { line: landing.line - 1, text: lineText } : {}),
+      description: node.text,
+      label: node.text,
+    };
+  }
+
+  async persistReqPullInPlan(result, plan, context = {}) {
+    const current = reqCloseIntegrationNotes(result && result.notes);
+    const postimages = plan && plan.postimages && typeof plan.postimages === "object"
+      ? plan.postimages
+      : {};
+    const restores = [];
+    const failures = [];
+    const entries = Object.entries(postimages);
+    for (const [path, afterValue] of entries) {
+      const after = String(afterValue);
+      const before = current.get(path);
+      if (typeof before !== "string") {
+        failures.push({ path, reason: "note changed before pull-in write" });
+        break;
+      }
+      if (before === after) continue;
+      const written = await reqCloseWritePersistDrop(this, path, before, after, context);
+      if (!written || written.ok !== true) {
+        failures.push({ path, reason: written && written.reason || "note changed before pull-in write" });
+        break;
+      }
+      current.set(path, after);
+      restores.push({ path, before, after, created: false });
+      try { if (context.cache instanceof Map) context.cache.delete(path); } catch (_error) {}
+    }
+    return {
+      ok: failures.length === 0,
+      notes: current,
+      restores,
+      failures,
+    };
+  }
+}
 // ---- src/199-req-toggle.js ----
 // Ctrl+] note/req toggle (bob-cli-on.10.1.4): route the cycler's Ctrl+]
 // through the RW twin's `taskReqToggle` on req lines and on plain list items
@@ -36429,6 +37150,7 @@ installTaskStatusCyclerMixins(TaskStatusCyclerPlugin, [
   TaskStatusCyclerReqToggleMixin,
   TaskStatusCyclerReqTypingMixin,
   TaskStatusCyclerReqCloseApplyMixin,
+  TaskStatusCyclerReqCloseIntegrationMixin,
 ]);
 // ---- src/210-exports.js ----
 module.exports = TaskStatusCyclerPlugin;
@@ -36808,7 +37530,8 @@ module.exports.helpers = {
 // ---- src/211-task-reqs-exports.js ----
 // Task requirement (RQ), task block layout (RL), requirement writer (RW),
 // and requirement close-card (RV) twin helpers, exported for the shared
-// bob-cli vector tests. Live requirement close support is not advertised.
+// bob-cli vector tests. Managed Done requirement close is exposed by the
+// task-status-cycler v7 API.
 Object.assign(module.exports.helpers, {
   TASK_REQ_MAX_DEPTH,
   TASK_REQ_GLOBAL_FILTER,

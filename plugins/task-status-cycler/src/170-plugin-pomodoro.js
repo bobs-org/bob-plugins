@@ -265,7 +265,10 @@ class TaskStatusCyclerPomodoroMixin {
         context,
         seen,
       );
-      await this.finalizeClosedTasks(result.closed, context);
+      await this.finalizeClosedTasks(result.closed, {
+        ...context,
+        reqCloseOwners: result.reqCloseOwners || [],
+      });
     } catch (error) {
       // Best effort: a mid-traversal failure still counts as handled because the
       // root target resolved as a Pomodoro sub-bullet transclusion.
@@ -355,7 +358,14 @@ class TaskStatusCyclerPomodoroMixin {
       context.pomodoroLine,
       subBulletRange,
     );
-    const closed = await this.completePomodoroTranscludedTaskBullets(
+    const pomodoroIdentity = closedTaskIdentity(
+      sourcePath,
+      lines[context.pomodoroLine],
+    );
+    const pomodoroReqOwners = pomodoroIdentity
+      ? this.captureReqCloseOwnersFromEditor(pomodoroIdentity, editor, sourcePath, lines.join("\n"))
+      : [];
+    const completedLinks = await this.completePomodoroTranscludedTaskBullets(
       subBullets.transcludedTaskLinkBullets,
       {
         editor,
@@ -363,6 +373,10 @@ class TaskStatusCyclerPomodoroMixin {
         originPath: sourcePath,
       },
     );
+    const closed = completedLinks.closed;
+    const reqCloseOwners = Array.isArray(completedLinks.reqCloseOwners)
+      ? completedLinks.reqCloseOwners
+      : [];
     await this.startPomodoroNonTranscludedTaskBullets(
       subBullets.startableNonTranscludedTaskLinkBullets,
       {
@@ -443,10 +457,6 @@ class TaskStatusCyclerPomodoroMixin {
       successorClosingEntry = null;
     }
 
-    const pomodoroIdentity = closedTaskIdentity(
-      sourcePath,
-      lines[context.pomodoroLine],
-    );
     if (pomodoroIdentity) {
       closed.push(pomodoroIdentity);
     }
@@ -472,6 +482,7 @@ class TaskStatusCyclerPomodoroMixin {
       editor,
       activePath: sourcePath,
       originPath: sourcePath,
+      reqCloseOwners: [...reqCloseOwners, ...pomodoroReqOwners],
       ...(successorDailyBefore ? { dailyBefore: successorDailyBefore } : {}),
       ...(successorClosingEntry ? { closingEntry: successorClosingEntry } : {}),
     });
@@ -609,6 +620,7 @@ class TaskStatusCyclerPomodoroMixin {
     // Pomodoro operation dedupes targets and terminates on cycles.
     const seen = new Set();
     const closed = [];
+    const reqCloseOwners = [];
     for (const bullet of Array.isArray(bullets) ? bullets : []) {
       for (const target of Array.isArray(bullet.targets) ? bullet.targets : []) {
         try {
@@ -620,12 +632,15 @@ class TaskStatusCyclerPomodoroMixin {
           if (result && Array.isArray(result.closed)) {
             closed.push(...result.closed);
           }
+          if (result && Array.isArray(result.reqCloseOwners)) {
+            reqCloseOwners.push(...result.reqCloseOwners);
+          }
         } catch (error) {
           // Best effort: one broken embed should not block Pomodoro completion.
         }
       }
     }
-    return closed;
+    return { closed, reqCloseOwners };
   }
 
   async startPomodoroNonTranscludedTaskBullets(bullets, context) {
@@ -671,7 +686,7 @@ class TaskStatusCyclerPomodoroMixin {
       return { visited: false, changed: false, closed: [] };
     }
     if (!resolvedTarget || !resolvedTarget.file) {
-      return { visited: false, changed: false, closed: [] };
+      return { visited: false, changed: false, closed: [], reqCloseOwners: [] };
     }
 
     return this.completeResolvedTranscludedTaskTargetTree(
@@ -701,7 +716,7 @@ class TaskStatusCyclerPomodoroMixin {
 
     const seenKey = `${resolvedTarget.file.path}#^${resolvedTarget.blockId}`;
     if (seen.has(seenKey) || seen.size >= MAX_TRANSCLUDED_RECURSION_TARGETS) {
-      return { visited: false, changed: false, closed: [] };
+      return { visited: false, changed: false, closed: [], reqCloseOwners: [] };
     }
     seen.add(seenKey);
 
@@ -727,6 +742,7 @@ class TaskStatusCyclerPomodoroMixin {
     );
     let changed = false;
     const closed = [];
+    const reqCloseOwners = [];
     for (const childTarget of childTargets) {
       try {
         const childResult = await this.completeTranscludedTaskTargetTree(
@@ -741,6 +757,9 @@ class TaskStatusCyclerPomodoroMixin {
         }
         if (childResult && Array.isArray(childResult.closed)) {
           closed.push(...childResult.closed);
+        }
+        if (childResult && Array.isArray(childResult.reqCloseOwners)) {
+          reqCloseOwners.push(...childResult.reqCloseOwners);
         }
       } catch (error) {
         // Best effort: one broken descendant should not block its siblings.
@@ -757,6 +776,7 @@ class TaskStatusCyclerPomodoroMixin {
       isTranscludedCompletionClosableStatus(resolvedTarget.taskStatus)
       && taskReqCarriesGlobalFilter(targetLineText, TASKS_GLOBAL_FILTER)
     ) {
+      const ownReqOwners = this.captureReqCloseOwnersForResolvedTarget(resolvedTarget, context);
       const wrote = await this.replaceResolvedTranscludedTaskLine(
         resolvedTarget,
         context,
@@ -780,10 +800,11 @@ class TaskStatusCyclerPomodoroMixin {
           };
         }
         closed.push(identity);
+        reqCloseOwners.push(...ownReqOwners);
       }
     }
 
-    return { visited: true, changed, closed };
+    return { visited: true, changed, closed, reqCloseOwners };
   }
 
   // Starts a single strict bare non-transcluded Pomodoro link target. Unlike

@@ -213,6 +213,8 @@ function removeResolvedOfferCloseRows(plan, result) {
 function successorOfferCloseHasReceipt(model) {
   return !!(model && typeof model === "object" && (
     (Array.isArray(model.offer_closes) && model.offer_closes.length > 0) ||
+    (Array.isArray(model.req_outcomes) && model.req_outcomes.length > 0) ||
+    (Array.isArray(model.req_met) && model.req_met.length > 0) ||
     (model.offer_close_refused && Number(model.offer_close_refused.count) > 0) ||
     (Array.isArray(model.failures) && model.failures.length > 0)
   ));
@@ -222,6 +224,14 @@ function successorOfferCloseNoticeText(model, baseText) {
   const source = model && typeof model === "object" ? model : {};
   const lines = [];
   if (typeof baseText === "string" && baseText) lines.push(baseText);
+  for (const row of Array.isArray(source.req_outcomes) ? source.req_outcomes : []) {
+    const receipt = String(row && (row.receipt || row.message) || "").trim();
+    if (receipt) lines.push(receipt);
+  }
+  for (const row of Array.isArray(source.req_met) ? source.req_met : []) {
+    const receipt = String(row && (row.receipt || row.message) || "").trim();
+    if (receipt) lines.push(receipt);
+  }
   const stampedRecoveries = [];
   for (const row of Array.isArray(source.offer_closes) ? source.offer_closes : []) {
     if (!row || typeof row !== "object") continue;
@@ -264,6 +274,14 @@ class TaskStatusCyclerSuccessorOfferCloseIntegrationMixin {
 
   async pickSuccessorOfferChoices(options = {}) {
     const offers = Array.isArray(options.offers) ? options.offers : [];
+    const reqGroups = Array.isArray(options.reqCloseGroups) ? options.reqCloseGroups : [];
+    const numbering = reqCloseCardNumbering(
+      reqGroups,
+      offers.map((offer) => String(offer && offer.key || "")).filter(Boolean),
+    );
+    const numberedReqGroups = numbering.ok && reqGroups.length
+      ? numbering.numberedGroups(reqGroups).groups
+      : [];
     const plan = options.plan && typeof options.plan === "object" ? options.plan : {};
     const successors = options.pickerApi || null;
     const capabilities = this.successorOfferCloseCapabilities(successors);
@@ -299,11 +317,14 @@ class TaskStatusCyclerSuccessorOfferCloseIntegrationMixin {
           hasLiveLink: successorOfferCloseLiveLinkCheck(options.dailyAfter || [], options.dailyPath),
         },
       });
+      if (model && numberedReqGroups.length) {
+        model.groups = [...numberedReqGroups, ...(model.groups || [])];
+      }
     } catch (_error) {
       model = null;
     }
     if (!model || !Array.isArray(model.groups) || !model.groups.some((group) =>
-      Array.isArray(group.rows) && group.rows.some((row) => row.selectable),
+      Array.isArray(group.rows) && group.rows.some((row) => row.selectable || group.group === "requirements"),
     )) {
       return { pickerOpened: false, model, choices: null, originalOfferByKey };
     }
@@ -318,6 +339,302 @@ class TaskStatusCyclerSuccessorOfferCloseIntegrationMixin {
     } catch (_error) {
       return { pickerOpened: true, model, choices: null, originalOfferByKey };
     }
+  }
+
+  async revalidateSuccessorPickerChoices(options = {}) {
+    const {
+      identities, selectableOffers, closeChoices, reqRequests, reqJumpKey,
+      noteTexts, noteTextsObject, dailyPath, hint, active, cache,
+      relationLookupIdentities, cancelledClose, pickerApi, today, relationPreflight,
+      relationRuntime, relationEventKind, parkedSlot, relationPlanOptions,
+      linkUnblocked, keepMovingEnabled, keepMovingCandidatePaths, keepMovingAnchorHints,
+      keepMovingBaseline, planFirst, reqCloseOwners, updateBasenames, updateDependencySnapshot,
+    } = options;
+    const reqCloseOwnerRows = Array.isArray(reqCloseOwners) ? reqCloseOwners : [];
+    let plan = options.plan;
+    let selectedKeys = Array.isArray(options.selectedKeys) ? options.selectedKeys : [];
+    let selectedDestinations = options.selectedDestinations instanceof Map
+      ? options.selectedDestinations : new Map();
+    let closeRevalidatedKeys = options.closeRevalidatedKeys instanceof Set
+      ? options.closeRevalidatedKeys : new Set();
+    let closePassNoteTexts = options.closePassNoteTexts;
+    let closePassTasks = options.closePassTasks;
+    let closePassDependencySnapshotAvailable = options.closePassDependencySnapshotAvailable;
+    let tasks = options.tasks;
+    let dailyCurrent = options.dailyCurrent;
+    let dailyBefore = options.dailyBefore;
+    let dailyAfter = options.dailyAfter;
+    let planClosingEntry = options.planClosingEntry;
+    let dependencySnapshotAvailable = options.dependencySnapshotAvailable;
+    if (selectedKeys.length > 0 || closeChoices.length > 0 || reqRequests !== null || reqJumpKey) {
+      // Re-read fresh texts (editor buffers first), invalidating caches.
+      const affected = new Set();
+      for (const identity of identities) {
+        if (identity && identity.path) {
+          affected.add(String(identity.path));
+        }
+      }
+      for (const owner of reqCloseOwnerRows) {
+        if (owner && owner.path) affected.add(String(owner.path));
+      }
+      for (const offer of selectableOffers) {
+        if (offer && offer.notePath) {
+          affected.add(String(offer.notePath));
+        }
+      }
+      for (const row of successorPlanRows(plan)) {
+        if (row && row.note_path) {
+          affected.add(String(row.note_path));
+        }
+      }
+      for (const row of plan.still_blocked || []) {
+        if (row && row.note_path) {
+          affected.add(String(row.note_path));
+        }
+      }
+      for (const path of noteTexts.keys()) {
+        affected.add(String(path));
+      }
+      if (dailyPath) {
+        affected.add(String(dailyPath));
+      }
+      for (const path of affected) {
+        try {
+          cache.delete(path);
+        } catch (error) {
+          // Best effort.
+        }
+      }
+      let dailyFresh = null;
+      if (dailyPath) {
+        dailyFresh = await this.readSuccessorNoteText(dailyPath, active, cache);
+      }
+      const freshNoteTexts = new Map();
+      const unavailableFreshNotes = new Set();
+      if (dailyPath) {
+        if (typeof dailyFresh === "string") {
+          freshNoteTexts.set(dailyPath, dailyFresh);
+        } else {
+          unavailableFreshNotes.add(dailyPath);
+        }
+      }
+      for (const path of affected) {
+        if (path === dailyPath) {
+          continue;
+        }
+        const text = await this.readSuccessorNoteText(path, active, cache);
+        if (typeof text === "string") {
+          freshNoteTexts.set(path, text);
+        } else {
+          unavailableFreshNotes.add(path);
+        }
+      }
+      // Preserve untouched snapshots, but never revive an affected note
+      // whose fresh read failed or whose file was deleted.
+      for (const [path, text] of noteTexts) {
+        if (!freshNoteTexts.has(path) && !unavailableFreshNotes.has(path) && !affected.has(String(path))) {
+          freshNoteTexts.set(path, text);
+        }
+      }
+      let freshNotesObj = {};
+      for (const [path, text] of freshNoteTexts) {
+        freshNotesObj[path] = text;
+      }
+      // Rebuild the dependents index with fresh affected docs overriding
+      // stale cache locations (warm) or fresh overlay (cold). No new
+      // full-vault scan on a warm pass.
+      let freshTasks = tasks;
+      let freshDependencySnapshotAvailable = false;
+      try {
+        const freshCache = typeof this.readSuccessorTasksCache === "function" ? this.readSuccessorTasksCache() : { ready: false, tasks: [] };
+        if (freshCache && freshCache.ready) {
+          freshDependencySnapshotAvailable = true;
+          const freshBuffered = new Set(freshNoteTexts.keys());
+          const base = [];
+          for (const task of freshCache.tasks || []) {
+            if (!freshBuffered.has(task.path)) {
+              base.push(task);
+            }
+          }
+          for (const [path, text] of freshNoteTexts) {
+            if (affected.has(String(path)) && !isExcludedSuccessorVaultPath(path)) base.push(...tasksFromDocuments([{ path, text }]));
+          }
+          freshTasks = base;
+        } else {
+          const oldByPath = new Map();
+          for (const task of tasks || []) {
+            if (!task || !task.path) {
+              continue;
+            }
+            if (!oldByPath.has(task.path)) {
+              oldByPath.set(task.path, []);
+            }
+            oldByPath.get(task.path).push(task);
+          }
+          const next = [];
+          for (const [path, list] of oldByPath) {
+            if (affected.has(String(path))) {
+              continue;
+            }
+            for (const task of list) {
+              next.push(task);
+            }
+          }
+          for (const [path, text] of freshNoteTexts) {
+            if (affected.has(String(path)) && !isExcludedSuccessorVaultPath(path)) next.push(...tasksFromDocuments([{ path, text }]));
+          }
+          freshTasks = next;
+        }
+      } catch (error) {
+        freshTasks = tasks;
+      }
+      const dailyFreshLines = typeof dailyFresh === "string" ? dailyFresh.split(/\r?\n/) : dailyAfter;
+      // Relocate the closing entry against fresh text; never carry an old
+      // bullet offset into a newly edited ledger.
+      let freshClosing = null;
+      if (hint && Number.isInteger(hint.line)) {
+        try {
+          const relocated = this.relocateSuccessorClosingEntry(dailyFreshLines, hint);
+          freshClosing = relocated;
+        } catch (error) {
+          freshClosing = null;
+        }
+      } else if (Number.isInteger(planClosingEntry)) {
+        freshClosing = planClosingEntry < dailyFreshLines.length ? planClosingEntry : null;
+      }
+      // The anchor / already-planned baseline is the day before this
+      // gesture: the fresh text with the closed entry's headline restored
+      // to its pre-close form, so its links still anchor `closing`
+      // instead of falling through to the implicit destination.
+      let freshBefore = dailyFreshLines;
+      if (
+        hint && typeof hint.lineText === "string" &&
+        Number.isInteger(freshClosing) &&
+        freshClosing >= 0 && freshClosing < dailyFreshLines.length
+      ) {
+        freshBefore = dailyFreshLines.slice();
+        freshBefore[freshClosing] = hint.lineText;
+      }
+      const freshRelationRuntime = this.prepareSuccessorRelationRuntime(
+        active,
+        cancelledClose,
+        cancelledClose ? null : getSuccessorPickerApi(this.app),
+      );
+      const freshRelationPreflight = this.preflightSuccessorRelationIndex(
+        relationLookupIdentities,
+        freshRelationRuntime,
+      );
+      let freshRelationOptions = {};
+      if (freshRelationPreflight.state === "unavailable") {
+        freshRelationOptions = {
+          relationSuccessorLabels: freshRelationRuntime.labels,
+          navSuccessorsVersion: 3,
+          relationIndexReady: false,
+        };
+      } else if (freshRelationPreflight.state === "candidates") {
+        const freshRelation = await this.readSuccessorRelationInputs({
+          runtime: freshRelationRuntime,
+          preflight: freshRelationPreflight,
+          active,
+          cache,
+          noteTexts: freshNoteTexts,
+          identities: relationLookupIdentities,
+          baselineDay: freshBefore,
+          currentDay: dailyFreshLines,
+          dailyPath: dailyPath || "",
+          closingEntry: freshClosing,
+          eventKind: relationEventKind,
+          slot: parkedSlot,
+        });
+        freshRelationOptions = freshRelation.options || {};
+        for (const [path, text] of freshRelation.noteTexts || []) {
+          if (typeof text === "string") {
+            freshNoteTexts.set(path, text);
+            affected.add(path);
+          }
+        }
+      }
+      if (successorRelationInputsNeedDependencySnapshot(freshRelationOptions, freshNoteTexts)) {
+        // A relation's own prerequisite or project may have changed while
+        // the picker was open. Trust only the refreshed warm Tasks pool;
+        // otherwise the classifier conservatively holds the candidate.
+        dependencySnapshotAvailable = freshDependencySnapshotAvailable;
+        updateDependencySnapshot(freshDependencySnapshotAvailable);
+      }
+      freshNotesObj = {};
+      for (const [path, text] of freshNoteTexts) freshNotesObj[path] = text;
+      const freshBasenames = countSuccessorBasenames(this.app, freshTasks, identities, dailyPath, freshNoteTexts);
+      updateBasenames(freshBasenames);
+      let replanned = planFirst(
+        selectedKeys,
+        freshBefore,
+        dailyFreshLines,
+        freshTasks,
+        freshNotesObj,
+        freshClosing,
+        selectedDestinations,
+        freshRelationOptions,
+        freshRelationRuntime.linkUnblocked,
+      );
+      if (!replanned) {
+        replanned = plan;
+        selectedKeys = [];
+        selectedDestinations = new Map();
+        closeRevalidatedKeys = new Set();
+      } else {
+        // Refuse stale/ambiguous picks individually; newly appearing
+        // offers stay unpicked (no second picker).
+        const freshKeys = new Set((replanned.offers || []).map((offer) => String(offer.key)));
+        const refused = selectedKeys.filter((key) => !freshKeys.has(String(key)));
+        // Ambiguous idless rebinding: when a note's digest count changed,
+        // refuse every idless pick for that digest in that note.
+        const ambiguousCloseKeys = successorOfferCloseAmbiguousKeys(
+          [...selectedKeys, ...closeChoices.map((close) => String(close.key))],
+          noteTextsObject,
+          freshNotesObj,
+        );
+        for (const key of ambiguousCloseKeys) {
+          if (selectedKeys.some((selected) => String(selected) === String(key)) &&
+              !refused.includes(key)) {
+            refused.push(key);
+          }
+        }
+        closeRevalidatedKeys = new Set(closeChoices
+          .map((close) => String(close.key))
+          .filter((key) => freshKeys.has(key) && !ambiguousCloseKeys.has(key)));
+        if (refused.length > 0) {
+          replanned.refusedKeys = refused;
+        }
+        plan = replanned;
+        // Swap working sets to the fresh texts for the apply below.
+        tasks = freshTasks;
+        closePassTasks = freshTasks;
+        closePassNoteTexts = freshNotesObj;
+        closePassDependencySnapshotAvailable = dependencySnapshotAvailable;
+        for (const [path, text] of freshNoteTexts) {
+          noteTexts.set(path, text);
+        }
+        dailyCurrent = dailyFresh;
+        // dailyBefore/dailyAfter for insertion planning become fresh.
+        dailyBefore = dailyFreshLines;
+        dailyAfter = dailyFreshLines;
+        planClosingEntry = freshClosing;
+        selectedKeys = selectedKeys.filter((key) => !refused.includes(String(key)));
+        if (refused.length > 0) {
+          const refusedSet = new Set(refused.map(String));
+          for (const key of [...selectedDestinations.keys()]) {
+            if (refusedSet.has(String(key))) {
+              selectedDestinations.delete(key);
+            }
+          }
+        }
+      }
+    }
+    return {
+      plan, selectedKeys, selectedDestinations, closeRevalidatedKeys, closePassNoteTexts,
+      closePassTasks, closePassDependencySnapshotAvailable, tasks, dailyCurrent,
+      dailyBefore, dailyAfter, planClosingEntry, dependencySnapshotAvailable,
+    };
   }
 
   async applySuccessorOfferCloseChoices(options = {}) {

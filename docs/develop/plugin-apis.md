@@ -627,7 +627,7 @@ Ledger feature-detects `walkMode.version >= 4` before `b` and `>= 5` before `w`.
 
 ## Task Status Cycler
 
-`task-status-cycler.api` is version 6:
+`task-status-cycler.api` is version 7:
 
 - `recoverBlockedDependents(identities, context?)` runs the same
   dependent recovery as task completion without retiring references. It
@@ -655,10 +655,22 @@ Ledger feature-detects `walkMode.version >= 4` before `b` and `>= 5` before `w`.
   Ctrl+Enter runs after its write: dependent recovery, embed retirement,
   the Unblocked notice, and the successor picker. It resolves to
   `{ reopened, retired, recoveryFailures, retirementFailures, successors,
-  successorNotice, jump? }` and never throws. A normal caller's pinned offer
+  successorNotice, jump? }` and never throws. Managed Done close gestures
+  capture requirement forests before their write and include them in the
+  same successor card when Navigation Hotkeys exposes picker v6 or newer.
+  The card defaults Pending requirements to Met, applies explicit Drop/Carry/
+  Carry plus pull-in choices, and resolves a requirement jump after all writes.
+  Callers that own the close write can pass pre-close snapshots as
+  `context.reqCloseOwners`; cancellation, parked, automated, and offer-close
+  verdict paths do not open a requirement audit. A normal caller's pinned offer
   lands after retirement and its notice; a walk owner opts into
   `context.successorJumpTarget: "return"` and receives the jump to park and
   follow.
+- `captureReqCloseOwners(identities, { preCloseNotes?, activePath?, editor? }?)`
+  is the read-only pre-close capture for external managed Done writers. It
+  returns opaque owner snapshots in identity order; pass the result to
+  `finalizeClosedTasks` as `context.reqCloseOwners`. When `preCloseNotes` is
+  supplied, it maps vault-relative paths to the exact pre-write text.
 - `offerParkedSuccessors(identities, { slot, successorJumpTarget?, successorJumpBox? }?)`
   plans relation-only successor offers for Pending (`[/]`) tasks that have no
   live Task Link left on today's daily note. It presents the nav picker with

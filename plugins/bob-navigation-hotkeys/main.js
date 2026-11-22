@@ -78944,6 +78944,7 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
           ok: true,
           activePath: this.filePath,
           completedIdentities,
+          reqCloseOwners: outcomes.flatMap((entry) => entry.reqCloseOwners || []),
           closingRows: outcomes.flatMap((entry) => entry.closingRows || []),
           relationNotice: outcomes.map((entry) => entry.relationNotice).filter(Boolean).join(" · ") || null,
           mirrorFailed: outcomes.flatMap((entry) => entry.mirrorFailed || []),
@@ -109183,6 +109184,21 @@ class BobNavigationHotkeysRelationEditMixin {
       const dailyCleanupPlan = dailyPrep.plan;
       const cleanupHandled = dailyPrep.cleanupHandled === true;
 
+      let reqCloseOwners = [];
+      if (Number(cyclerApi && cyclerApi.version) >= 7 &&
+          typeof cyclerApi.captureReqCloseOwners === "function" && completedIdentities.length > 0) {
+        const preCloseNotes = Object.fromEntries([...sourceWrites].map(([path, write]) => [path, write.original]));
+        try {
+          reqCloseOwners = await cyclerApi.captureReqCloseOwners(completedIdentities, {
+            activePath: liveSources[0] && liveSources[0].path,
+            editor: this.findRelationEditOpenEditor(liveSources[0] && liveSources[0].path),
+            preCloseNotes,
+          });
+        } catch (_error) {
+          reqCloseOwners = [];
+        }
+      }
+
       const failed = [];
       for (const write of sourceWrites.values()) {
         const result = await this.writeRelationEditNote(
@@ -109322,6 +109338,7 @@ class BobNavigationHotkeysRelationEditMixin {
         relationNotice,
         closingRows: committedClosingRows,
         completedIdentities: committedCompleted,
+        reqCloseOwners: Object.freeze(reqCloseOwners),
         activePath: liveSources[0] && liveSources[0].path,
         committed: Object.freeze(committed),
         failed: Object.freeze(failed),
@@ -111604,6 +111621,7 @@ class BobNavigationHotkeysRelationCompleteComposeMixin {
           successorNoticeTarget: "return",
           successorJumpTarget: "return",
           successorJumpBox,
+          reqCloseOwners: Array.isArray(result.reqCloseOwners) ? result.reqCloseOwners : [],
         });
         if (actual && typeof actual === "object") {
           const jump = actual.jump && typeof actual.jump === "object"

@@ -19,7 +19,7 @@ const vectorsPath = path.join(
 );
 const vectors = JSON.parse(fs.readFileSync(vectorsPath, "utf8"));
 
-test("cycler api v6 exposes the Done line rewrite, post-Done pass, and parked offers frozen", () => {
+test("cycler api v7 exposes the Done line rewrite, post-Done pass, and parked offers frozen", () => {
   const plugin = new TaskStatusCyclerPlugin();
   plugin.addCommand = () => {};
   plugin.registerEvent = () => {};
@@ -32,7 +32,7 @@ test("cycler api v6 exposes the Done line rewrite, post-Done pass, and parked of
   };
   plugin.onload();
 
-  assert.equal(plugin.api.version, 6);
+  assert.equal(plugin.api.version, 7);
   assert.equal(Object.isFrozen(plugin.api), true);
   assert.equal(typeof plugin.api.recoverBlockedDependents, "function");
   assert.equal(typeof plugin.api.completeTaskAtCursor, "function");

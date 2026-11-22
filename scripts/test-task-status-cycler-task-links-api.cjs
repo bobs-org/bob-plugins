@@ -479,7 +479,7 @@ test("recovery api is frozen at version 3 and recovers without striking referenc
   };
   plugin.onload();
 
-  assert.equal(plugin.api.version, 6);
+  assert.equal(plugin.api.version, 7);
   assert.equal(Object.isFrozen(plugin.api), true);
   assert.equal(typeof plugin.api.recoverBlockedDependents, "function");
   assert.equal(typeof plugin.api.completeTaskAtCursor, "function");

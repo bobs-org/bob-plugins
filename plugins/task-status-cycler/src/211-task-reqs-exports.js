@@ -1,6 +1,7 @@
 // Task requirement (RQ), task block layout (RL), requirement writer (RW),
 // and requirement close-card (RV) twin helpers, exported for the shared
-// bob-cli vector tests. Live requirement close support is not advertised.
+// bob-cli vector tests. Managed Done requirement close is exposed by the
+// task-status-cycler v7 API.
 Object.assign(module.exports.helpers, {
   TASK_REQ_MAX_DEPTH,
   TASK_REQ_GLOBAL_FILTER,

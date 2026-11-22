@@ -356,6 +356,9 @@ class BobNavigationHotkeysLaneReviewMixin {
         }
       }
     }
+    if (typeof this.navReqRefuseAtCursor === "function" && this.navReqRefuseAtCursor(cm, content, cursor.line)) {
+      return false;
+    }
     const api = this.requireFreshnessApi();
     if (!api) {
       return false;
@@ -515,6 +518,9 @@ class BobNavigationHotkeysLaneReviewMixin {
     );
     if (!session.valid) {
       new Notice(session.error);
+      return false;
+    }
+    if (typeof this.navReqRefuseTargets === "function" && this.navReqRefuseTargets(content, session.targets)) {
       return false;
     }
     const contentLines = splitMarkdownContent(content).lines;

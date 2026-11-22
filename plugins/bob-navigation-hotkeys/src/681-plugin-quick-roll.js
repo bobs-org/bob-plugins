@@ -46,6 +46,14 @@ class BobNavigationHotkeysQuickRollMixin {
         }
       }
     }
+    if (typeof this.navReqRefuseAtCursor === "function") {
+      const cursor = getEditorCursor(cm);
+      const content =
+        cm && typeof cm.getValue === "function" ? String(cm.getValue() || "") : "";
+      if (cursor && this.navReqRefuseAtCursor(cm, content, cursor.line)) {
+        return false;
+      }
+    }
     return this.openBulletPropertyPicker(cm, {
       ...options,
       initialTaskCardIntent: "apply-recommendation",

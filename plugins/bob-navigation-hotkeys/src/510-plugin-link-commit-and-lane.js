@@ -344,6 +344,9 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
         }
       }
     }
+    if (typeof this.navReqRefuseAtCursor === "function" && this.navReqRefuseAtCursor(cm, content, cursor.line)) {
+      return false;
+    }
     // Review-walk auto-advance (nav-gestures): capture after the pending
     // Vim count is consumed and before dispatch. While the gesture lock is
     // held the key is swallowed with no write. Off a landing, Alt+N also
@@ -735,6 +738,9 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
     );
     if (!session.valid) {
       new Notice(session.error);
+      return false;
+    }
+    if (typeof this.navReqRefuseTargets === "function" && this.navReqRefuseTargets(content, session.targets)) {
       return false;
     }
     const activeView = this.getActiveMarkdownView();

@@ -1,0 +1,3 @@
+installBlockIdPromptMixins(BlockIdPromptPlugin, [
+  BlockIdPromptReqLineGuardMixin,
+]);

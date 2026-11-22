@@ -477,6 +477,9 @@ class BobNavigationHotkeysNotesMoveMixin {
       if (findPomodoroEntryContext(sourceContent, cursor.line)) {
         return this.openPomodoroEntryMovePicker(editor, view, options);
       }
+      if (typeof this.navReqRefuseAtCursor === "function" && this.navReqRefuseAtCursor(editor, sourceContent, cursor.line)) {
+        return false;
+      }
     }
 
     return this.openTaskMoveDestinationPicker(editor, view, options);

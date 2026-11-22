@@ -7,7 +7,8 @@ The Task Card is the property-editing surface opened by
 `Ctrl+Shift+P` (command
 `bob-navigation-hotkeys:set-bullet-property`). It has no plugin
 setting or activation date. It opens for the task under the cursor, a
-dedicated Task Link's target, or a counted batch.
+dedicated Task Link's target, or a counted batch. On a requirement line it
+opens the owning task's card, including a carried `[>]` stub.
 
 `Alt+P` (command `bob-navigation-hotkeys:roll-by-recommendation`) applies the
 Task Card's recommended roll, decay, or confirmed cancel in one key,
@@ -74,6 +75,7 @@ Schedule task Work summary stage.
 | The task is in an inbox | Opens the route prompt before writing; backing out returns to the visible card. |
 | A counted batch or Task Link batch includes a cancel | Waits on the card for confirmation before changing any target. |
 | The cursor is on a Depends-On, BLOCKS, LINKS, or LINKED FROM line | Applies the recommendation to the owning task. |
+| The cursor is on a requirement line | Refuses with the lane copy and writes nothing. |
 
 ## Scope and previews
 

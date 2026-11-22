@@ -93,6 +93,7 @@
   "255-inbox-route.js",
   "256-task-split-plan.js",
   "257-task-split-apply.js",
+  "258-req-line-guard.js",
   "260-project-schedules.js",
   "265-project-schedule-inline.js",
   "266-window-prefix-model.js",
@@ -275,5 +276,6 @@
   "725-nav-jump-landing-exports.js",
   "726-link-engine-exports.js",
   "727-prose-field-exports.js",
-  "728-task-reqs-exports.js"
+  "728-task-reqs-exports.js",
+  "729-req-line-guard-exports.js"
 ]

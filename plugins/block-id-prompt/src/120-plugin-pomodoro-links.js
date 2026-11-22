@@ -13,6 +13,9 @@ class BlockIdPromptPomodoroLinksMixin {
     if (this.promptOpen) {
       return;
     }
+    if (typeof this.blockIdReqRefuseAtEditor === "function" && this.blockIdReqRefuseAtEditor(editor)) {
+      return;
+    }
 
     // Review-walk auto-advance (nav api v3): capture the landing before the
     // toggle reads anything. BUSY swallows the key with no write. The origin

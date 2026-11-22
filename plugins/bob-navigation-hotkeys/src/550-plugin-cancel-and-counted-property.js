@@ -298,11 +298,9 @@ class BobNavigationHotkeysCancelPropertyMixin {
       cm && typeof cm.getValue === "function"
         ? String(cm.getValue() || "")
         : "";
-    // Only a managed Depends-On, BLOCKS, LINKS, or LINKED FROM line moves to its owning
-    // task first, so a direction-specific one-shot row never opens on the
-    // link bullet (`docs/task-dependencies.md` §6.1, §15.2). Every other
-    // line, including a plain child bullet or a nested Task Link, is
-    // unchanged.
+    // Only a managed Depends-On, BLOCKS, LINKS, or LINKED FROM line moves to its
+    // owning task first, so a one-shot row never opens on the link bullet
+    // (`docs/task-dependencies.md` §6.1, §15.2). Other lines stay put.
     if (!options.taskSession && !options.initialProperty) {
       const entry = resolveDependencyStageEntry(content, cursor.line);
       if (
@@ -371,6 +369,7 @@ class BobNavigationHotkeysCancelPropertyMixin {
         return this.openBulletPropertyPicker(cm, { ...options });
       }
     }
+    try { const reqCard = typeof this.openReqOwnerTaskCard === "function" ? this.openReqOwnerTaskCard(cm, content, cursor, options) : null; if (reqCard !== null && reqCard !== undefined) return reqCard; } catch (_) {}
     if (!options.taskSession && editorSelectionSpansTasks(cm, content)) {
       new Notice("Selection spans several tasks; put the cursor on one task");
       return false;

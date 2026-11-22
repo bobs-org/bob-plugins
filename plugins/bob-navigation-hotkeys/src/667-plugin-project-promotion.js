@@ -24,6 +24,12 @@ class BobNavigationHotkeysProjectPromotionMixin {
       new Notice("Place the cursor on an open #task checkbox");
       return false;
     }
+    if (typeof this.navReqRefuseAtCursor === "function") {
+      const content = typeof editor.getValue === "function" ? String(editor.getValue() || "") : "";
+      if (this.navReqRefuseAtCursor(editor, content, cursor.line)) {
+        return false;
+      }
+    }
     if (isProjectLifecycleTaskLine(lineText) && isProjectLifecycleTaskAtLine(editor.getValue(), cursor.line)) {
       return this.convertProjectNoteToTask(editor, view, cursor, lineText);
     }

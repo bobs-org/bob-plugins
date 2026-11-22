@@ -9,6 +9,7 @@ const READING_BOARD_KIND_MAP = Object.freeze({
   blogs: Object.freeze({ icon: "📰", label: "Blog" }),
   docs: Object.freeze({ icon: "📚", label: "Docs" }),
   chat: Object.freeze({ icon: "💬", label: "Chat" }),
+  podcasts: Object.freeze({ icon: "🎙️", label: "Podcast" }),
 });
 
 function readingBoardStripComment(value) {

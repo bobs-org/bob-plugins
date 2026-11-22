@@ -196,6 +196,12 @@ test("fence options accept parent and type lists while turning bad input into li
 
 test("kind names, title code spans, and render signatures are deterministic", () => {
   assert.deepEqual(readingBoardKind("ai"), { type: "ai", icon: "🤖", label: "AI", text: "🤖 AI" });
+  assert.deepEqual(readingBoardKind("podcasts"), {
+    type: "podcasts",
+    icon: "🎙️",
+    label: "Podcast",
+    text: "🎙️ Podcast",
+  });
   assert.equal(readingBoardKind(null).text, "🔖 Ref");
   assert.deepEqual(readingBoardTitleParts("Read `foo` then ``bar`baz``"), [
     { type: "text", text: "Read " },

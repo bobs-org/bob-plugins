@@ -10,7 +10,7 @@
 
 const TODAY = "2026-10-20";
 
-const KINDS = ["ai", "papers", "blogs", "docs", "chat", null];
+const KINDS = ["ai", "papers", "blogs", "docs", "chat", "podcasts", null];
 const PARENTS = ["sase", "bob", "job_search", "home_lab", "reading", null];
 const PRIORITIES = ["highest", "high", "medium", "low", "lowest", null];
 

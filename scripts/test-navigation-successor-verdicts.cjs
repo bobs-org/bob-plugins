@@ -734,6 +734,63 @@ test("S6 reason field declares the cancelled row as its subject (1-based task li
 // commit stores the byte-identical draft.
 const { createSiblingNamer } = require("./prompt-sibling-naming-helpers.cjs");
 
+test("S6 native Scope Escape peels NAME, the list, then the reason without blur-committing", async () => {
+  const plugin = makePlugin({ now: 5000 });
+  const store = { "Tasks.md": "- [ ] #task Reply to Dana" };
+  const namer = createSiblingNamer({ files: store, sourcePath: "Tasks.md", subjects: [] });
+  plugin.app.plugins.plugins["block-id-prompt"] = { api: { taskLinks: namer.api } };
+  plugin.app.plugins.plugins["bob-navigation-hotkeys"].api.logRecall.attach = (options) =>
+    helpers.attachLogRecall({ ...options, app: plugin.app, hintDebounceMs: 0, notes: [], parentPaths: [], linkedPaths: [], recentPaths: [] });
+  const { pending, modal } = await openPicker(plugin, verdictModel(1));
+  // Obsidian Scope checks handlers in registration order, before DOM input
+  // listeners. Its constructor's Escape handler is already present at attach.
+  const scope = {
+    keys: [],
+    register(modifiers, key, func) { const handler = { modifiers, key, func }; this.keys.push(handler); return handler; },
+    unregister(handler) { this.keys = this.keys.filter((entry) => entry !== handler); },
+    escape(event) {
+      for (const handler of this.keys) {
+        if (handler.key !== null && handler.key !== "Escape") continue;
+        const result = handler.func(event);
+        if (result !== undefined || handler.key !== null || handler.modifiers !== null) return result;
+      }
+    },
+  };
+  modal.scope = scope;
+  let nativeEscapes = 0;
+  scope.register([], "Escape", (event) => { nativeEscapes += 1; return modal.onEscapeKey(event); });
+  pressVerdict(modal, true);
+  const input = modal.reasonInputEl;
+  const handle = modal.reasonRecall;
+  input.value = "dup of ((Reply";
+  input.selectionStart = input.selectionEnd = input.value.length;
+  input.focus();
+  input.listeners.input({ type: "input", inputType: "insertText", target: input });
+  plugin.setNow(6000);
+  pressKey(modal, "Enter");
+  assert.equal(handle.isNaming(), true);
+  const escape = () => scope.escape({ key: "Escape", target: input, preventDefault() {}, stopPropagation() {}, stopImmediatePropagation() {} });
+  assert.equal(escape(), false);
+  assert.equal(handle.isNaming(), false);
+  assert.equal(handle.isTaskOpen(), true);
+  assert.equal(input.value, "dup of ((Reply");
+  assert.equal(modal.reasonEditKey, "verdict:key/0");
+  assert.equal(modal.escArmed, false);
+  assert.equal(escape(), false);
+  assert.equal(handle.isTaskOpen(), false);
+  assert.equal(modal.reasonEditKey, "verdict:key/0");
+  assert.equal(nativeEscapes, 0, "neither band Escape reaches Modal");
+  assert.equal(escape(), false);
+  assert.equal(nativeEscapes, 1);
+  assert.equal(modal.reasonEditKey, null);
+  assert.equal(modal.verdicts.size, 0, "Esc restores the pre-edit verdict instead of storing the draft");
+  assert.equal(store["Tasks.md"], "- [ ] #task Reply to Dana");
+  assert.equal(scope.keys.length, 1, "reason disposal removes its scope handlers");
+  namer.close();
+  modal.close();
+  assert.equal(await pending, null);
+});
+
 test("S6 dense reason: NAME owns Enter, never blurs, and a real blur cancels naming without a write", async () => {
   const plugin = makePlugin({ now: 5000 });
   const model = verdictModel(1, { closeOptions: { unblocks: 0 } });

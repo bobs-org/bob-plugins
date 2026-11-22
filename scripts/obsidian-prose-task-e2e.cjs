@@ -148,6 +148,7 @@ function fixture(today) {
     "- [ ] #task Zxqref nameless",
     "- [ ] #task Zxqtxt nameless",
     "- [ ] #task Zxqlnk nameless",
+    "- [ ] #task Zxqescape nameless",
     "",
   ].join("\n");
   Object.assign(notes, albumNotes());
@@ -180,7 +181,7 @@ function writeVault(vaultDir, notes) {
   fs.writeFileSync(path.join(obsidian, "appearance.json"), JSON.stringify({ cssTheme: "", theme: "moonstone" }, null, 2));
 }
 
-const KEY_CODES = { Enter: 13, Escape: 27, Tab: 9, Backspace: 8, ArrowDown: 40, ArrowUp: 38 };
+const KEY_CODES = { Enter: 13, Escape: 27, Tab: 9, Backspace: 8, ArrowDown: 40, ArrowUp: 38, "[": 219 };
 
 function keyPayload(key, modifiers) {
   const vk = KEY_CODES[key] || key.toUpperCase().charCodeAt(0);
@@ -555,7 +556,7 @@ async function confirmNamedLine(ctx, entry, title, id) {
   const ok = typeof text === "string";
   const line = ok ? text.split("\n").find((row) => row.includes(title)) : null;
   const stamped = ok && /\[[a-zA-Z]+:: [^\]]+\]/.test(line || "") && line.includes(" ^" + id);
-  check(entry, "named-line-gained-id-and-stamp", ok && (stamped || (line || "").includes(" ^" + id)),
+  check(entry, "named-line-gained-id-and-stamp", ok && stamped,
     { line, id, stamped });
   return { ok, line, id };
 }
@@ -634,6 +635,19 @@ async function walkTasks(ctx, entry, hostExpr, prefix, named, options = {}) {
     { naming: stillNaming.naming, value: stillNaming.value });
   await stageShots(ctx, entry, "name");
 
+  await press("Escape");
+  const escaped = await waitField((v) => v.bandOpen && v.tasks && !v.naming,
+    "Escape returns NAME to the task list", 4_000);
+  check(entry, "name-escape-peels-one-layer",
+    escaped.value === idless.value && (await host(hostExpr)).open
+      && escaped.rows.some((row) => row.includes(named.title)),
+    { value: escaped.value, expected: idless.value, rows: escaped.rows });
+  check(entry, "name-escape-never-writes",
+    await ctx.client.evaluate(noteTextExpression(TASKS_PATH)) === beforeName);
+  await selectRowContaining(ctx, named.title);
+  await press("Enter");
+  await waitField((v) => v.naming, "re-enter NAME after Escape", 4_000);
+
   const beforeCycle = (await field()).idLine;
   await press("Tab");
   await ctx.sleep(120);
@@ -659,7 +673,7 @@ async function walkTasks(ctx, entry, hostExpr, prefix, named, options = {}) {
   const inserted = await waitField((v) => !v.bandOpen && typeof v.value === "string" && v.value.includes("[[tasks#^"),
     "NAME write inserted the link", 20_000);
   check(entry, "name-enter-inserts-link-without-submitting",
-    inserted.value === afterName || (inserted.value || "").includes(namedLink),
+    inserted.value === afterName,
     { value: inserted.value, expected: afterName, id });
   const namedHost = await host(hostExpr);
   check(entry, "name-enter-never-submits", namedHost.open, { host: namedHost });
@@ -670,25 +684,13 @@ async function walkTasks(ctx, entry, hostExpr, prefix, named, options = {}) {
   const undone = await field();
   const undoneExpected = fieldMode ? idlessToken : (prefix + identifiedInserted + " " + idlessToken);
   check(entry, "one-ctrl-z-restores-typed-token",
-    undone.value === undoneExpected || (undone.value || "").endsWith(idlessToken) || (undone.value || "").includes("((" + named.query),
+    undone.value === undoneExpected,
     { value: undone.value, expected: undoneExpected });
   await press("z", 10);
   await ctx.sleep(200);
-  const submitValue = fieldMode ? identifiedInserted : afterName;
-  let restored = await field();
-  if (!(restored.value === submitValue || (restored.value || "").includes(fieldMode ? identifiedInserted : namedLink))) {
-    await ctx.client.evaluate(`(() => {
-      const el = document.activeElement;
-      if (!el || typeof el.value !== "string") return false;
-      el.value = ${JSON.stringify(submitValue)};
-      if (typeof el.setSelectionRange === "function") el.setSelectionRange(el.value.length, el.value.length);
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-      return true;
-    })()`);
-    restored = await field();
-  }
-  check(entry, "submit-value-restored-after-undo",
-    (restored.value || "").includes(fieldMode ? identifiedInserted : namedLink),
+  const submitValue = afterName;
+  const restored = await field();
+  check(entry, "submit-value-restored-after-undo", restored.value === submitValue,
     { value: restored.value, expected: submitValue });
   if (restored.bandOpen) {
     await press("Escape");
@@ -697,6 +699,30 @@ async function walkTasks(ctx, entry, hostExpr, prefix, named, options = {}) {
   const stillOpen = await host(hostExpr);
   if (!stillOpen.open) throw new Error("host closed before submit: " + JSON.stringify(stillOpen));
   return { fieldValue: submitValue, namedId: id, namedLink };
+}
+
+async function fullEscapeLadder(ctx, hostExpr, key, modifiers, hostExited) {
+  const { entry } = ctx;
+  const { type, press, waitField, waitHost } = io(ctx);
+  const label = modifiers ? "ctrl-bracket" : "escape";
+  const before = await ctx.client.evaluate(noteTextExpression(TASKS_PATH));
+  await type("((zxqescape");
+  await waitField((v) => v.tasks && v.rows.some((row) => row.includes("Zxqescape")), "Escape probe task listed");
+  await selectRowContaining(ctx, "Zxqescape nameless");
+  await press("Enter");
+  const naming = await waitField((v) => v.naming, "Escape probe in NAME");
+  await press(key, modifiers);
+  const listed = await waitField((v) => v.bandOpen && v.tasks && !v.naming, label + " NAME to list", 4_000);
+  check(entry, label + "-full-ladder-name-to-list", listed.value === naming.value, listed);
+  await press(key, modifiers);
+  const closed = await waitField((v) => !v.bandOpen && v.value === naming.value, label + " list to field", 4_000);
+  const stillOpen = await ctx.client.evaluate(hostExpr);
+  check(entry, label + "-full-ladder-list-to-field", stillOpen.open, { field: closed, host: stillOpen });
+  await press(key, modifiers);
+  const exited = await waitHost(hostExpr, hostExited, label + " reaches host", 4_000);
+  check(entry, label + "-full-ladder-reaches-host", hostExited(exited), exited);
+  check(entry, label + "-full-ladder-never-writes",
+    await ctx.client.evaluate(noteTextExpression(TASKS_PATH)) === before);
 }
 
 async function confirmNote(ctx, entry, notePath, pattern, name) {
@@ -720,6 +746,9 @@ async function surfaceS1(ctx) {
   await runCommand(ctx, "block-id-prompt:link-task-to-pomodoro");
   await waitHost(HOSTS.S1, (v) => v.open, "Work summary prompt");
   await waitField((v) => v.id === "bid-wlp-summary", "Work summary focus");
+  await fullEscapeLadder(ctx, HOSTS.S1, "Escape", 0, (v) => !v.open);
+  await runCommand(ctx, "block-id-prompt:link-task-to-pomodoro");
+  await waitField((v) => v.id === "bid-wlp-summary", "Work summary reopened after Escape");
   const walked = await walkTasks(ctx, entry, HOSTS.S1, "Shipped ", NAMED.S1);
   await press("Enter");
   await waitHost(HOSTS.S1, (v) => !v.open, "Work summary closes on submit");
@@ -780,12 +809,8 @@ async function surfaceS6(ctx) {
   const walked = await walkTasks(ctx, entry, HOSTS.S6, "dup of ", NAMED.S6);
   await ctx.sleep(400);
   await press("Enter");
-  await ctx.sleep(250);
-  const afterReason = await ctx.client.evaluate(HOSTS.S6);
-  if (afterReason.open && afterReason.stage === "reason") {
-    await ctx.sleep(200);
-    await press("Enter");
-  }
+  const afterReason = await waitHost(HOSTS.S6, (v) => v.open && v.stage === "picker",
+    "one Enter commits the inline cancel reason");
   const reasonText = walked.fieldValue || "";
   check(entry, "dense-reason-holds-task-links", reasonText.includes(IDENTIFIED_LINK), { value: reasonText, host: afterReason });
   await ctx.client.evaluate(`(() => {
@@ -858,11 +883,7 @@ async function surfaceS14(ctx) {
   await refocusPrompt(ctx);
   await waitField((v) => v.tag === "TEXTAREA", "reflection textarea before save");
   await press("Enter");
-  let saved = await waitHost(HOSTS.intention, (v) => !v.open || (v.stage !== "reflection" && !v.pending), "reflection saved", 8_000).catch(() => null);
-  if (!saved) {
-    await press("Enter", 2);
-    saved = await waitHost(HOSTS.intention, (v) => !v.open || (v.stage !== "reflection" && !v.pending), "reflection saved with Ctrl+Enter", 20_000);
-  }
+  await waitHost(HOSTS.intention, (v) => !v.open || (v.stage !== "reflection" && !v.pending), "reflection saved with one Enter", 20_000);
   await confirmNote(ctx, entry, plan.paths.yesterday, new RegExp("Learned from " + IDENTIFIED_LINK.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
     "reflection-holds-task-link");
   entry.walked = walked;
@@ -893,23 +914,15 @@ async function saveRecordStage(ctx, entry, fieldKey, value) {
     await waitField((v) => !v.bandOpen, "band closed before record save", 4_000).catch(() => field());
   }
   await press("Enter");
-  let saved = await waitHost(HOSTS.record, (v) => v.status === "saved" && !v.pending, fieldKey + " saved", 8_000).catch(() => null);
-  if (!saved) {
-    await ctx.client.evaluate(`(() => {
-      const modal = app.plugins.plugins["bob-ledger-tools"]?.recordCardModal;
-      if (modal && typeof modal.recordApplyTyped === "function") {
-        try { modal.recordApplyTyped(null); return "apply"; } catch (error) { return String(error && error.message || error); }
-      }
-      const button = document.querySelector(".modal-container button.mod-cta, .bob-record-card button.mod-cta");
-      if (button) { button.click(); return "click"; }
-      return "none";
-    })()`);
-    saved = await waitHost(HOSTS.record, (v) => v.status === "saved" && !v.pending, fieldKey + " saved after apply", 20_000);
-  }
+  await waitHost(HOSTS.record, (v) => v.status === "saved" && !v.pending, fieldKey + " saved with one Enter", 20_000);
 }
 
 async function surfaceS15Text(ctx) {
   const { entry } = ctx;
+  for (const [key, modifiers] of [["Escape", 0], ["[", 2]]) {
+    await openRecordStage(ctx, "service", "text");
+    await fullEscapeLadder(ctx, HOSTS.record, key, modifiers, (v) => v.open && v.stage !== "text");
+  }
   await openRecordStage(ctx, "service", "text");
   const walked = await walkTasks(ctx, entry, HOSTS.record, "Watched on ", NAMED["S15-text"]);
   await saveRecordStage(ctx, entry, "service", walked.fieldValue);
@@ -924,7 +937,8 @@ async function surfaceS15Link(ctx) {
   await openRecordStage(ctx, "reference", "link");
   const walked = await walkTasks(ctx, entry, HOSTS.record, "", NAMED["S15-link"], { fieldMode: true });
   await saveRecordStage(ctx, entry, "reference", walked.fieldValue);
-  await confirmNote(ctx, entry, RECORD_PATH, /\[\[omega#\^omega\]\]/, "record-link-holds-task-link");
+  const escapedLink = walked.namedLink.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  await confirmNote(ctx, entry, RECORD_PATH, new RegExp("reference:.*" + escapedLink), "record-link-holds-task-link");
   entry.walked = walked;
   await recover(ctx);
 }
@@ -991,6 +1005,7 @@ function selfTest() {
   assert.equal(down.autoRepeat, true);
   assert.equal(keyDownEvent("z", 2).type, "rawKeyDown");
   assert.equal(keyDownEvent("X", 10).modifiers, 10);
+  assert.equal(keyDownEvent("[", 2).windowsVirtualKeyCode, 219);
   assert.deepEqual(parseArgs(["--only", "S1,S6,S15-link"]).only, ["S1", "S6", "S15-link"]);
   assert.deepEqual(Object.keys(pluginSource().builds), PLUGIN_IDS);
   assert.equal(NAMED.S1.title, "Zxqone nameless");
@@ -1018,7 +1033,7 @@ async function main() {
   catch (error) { fatal = String(error && error.stack || error); report.error = fatal; }
   const checks = report.surfaces.flatMap((surface) => surface.checks.map((item) => ({ surface: surface.id, ...item })));
   report.failed = checks.filter((item) => !item.ok).map((item) => item.surface + ":" + item.name);
-  report.pass = !fatal && checks.length > 0 && report.failed.length === 0;
+  report.pass = !fatal && checks.length > 0 && report.failed.length === 0 && report.consoleExceptions.length === 0;
   report.finishedAt = new Date().toISOString();
   fs.mkdirSync(path.dirname(reportPath), { recursive: true });
   fs.writeFileSync(reportPath, JSON.stringify(report, null, 2) + "\n");

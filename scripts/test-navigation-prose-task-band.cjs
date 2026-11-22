@@ -399,12 +399,15 @@ test("NAME commit writes once, inserts the link, and announces; failure stays op
 
 test("Esc ladder: NAME back to list, then close; held Enter never writes twice", () => {
   const rows = [idlessRow({})];
-  const { input, handle } = attachTasks(rows, {}, { value: "Note ((rep", caret: 10 });
+  const { input, handle, host } = attachTasks(rows, {}, { value: "Note ((rep", caret: 10 });
   typeInput(input, "Note ((rep", 10);
   pressEnter(handle, input, {});
   assert.equal(handle.isNaming(), true);
+  const band = host.querySelector(".bob-prose-link-slot");
+  assert.equal(band.classList.contains("is-naming"), true);
   assert.equal(handle.backOut(), true);
   assert.equal(handle.isNaming(), false);
+  assert.equal(band.classList.contains("is-naming"), false, "the visible list leaves NAME styling too");
   assert.equal(handle.isTaskOpen(), true);
   assert.equal(handle.backOut(), true);
   assert.equal(handle.isTaskOpen(), false);

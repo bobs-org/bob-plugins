@@ -204,6 +204,7 @@ function taskLinksStatus(row) {
 }
 
 function taskLinksTaskKind(row, settings) {
+  if (!String(row && row.rawLine || "").toLowerCase().includes("#ref")) return null;
   const match = TASK_WIKILINK_LINE_RE.exec(String(row && row.rawLine || ""));
   if (!match || !settings || !settings.globalFilter) {
     return null;
@@ -285,13 +286,23 @@ function createTaskLinksSession(plugin, request) {
     statOf: index.vaultStatOf(plugin.app),
   });
   let snapshotRows = snapshot.rows;
+  // The index already orders each snapshot canonically. Each query only
+  // needs stable score buckets, preserving the editor ranker's tie order.
   let blockIdsByPath = new Map();
   let closed = false;
   const listeners = new Set();
   const taskLinksStaticCache = new Map();
   const taskLinksGuardCache = new Map();
-  const taskLinksParsedTitleCache = new Map();
   const taskLinksTitlePartsCache = new Map();
+  // Parsing is pure in the exact displayed text, so reopening a prompt can
+  // reuse it. Bound the plugin-lifetime cache independently of query caches.
+  if (!(plugin.taskLinksParsedTitles instanceof Map)) plugin.taskLinksParsedTitles = new Map();
+  const parsedTitles = plugin.taskLinksParsedTitles;
+  let guardSignature = null;
+  let lastRankQuery = null;
+  let lastRanked = null;
+  let lastPublicRows = null;
+  let lastPublicGuardSignature = null;
 
   let cachedNotePaths = null;
   let cachedOverlays = null;
@@ -332,8 +343,11 @@ function createTaskLinksSession(plugin, request) {
     }
     taskLinksStaticCache.clear();
     taskLinksGuardCache.clear();
-    taskLinksParsedTitleCache.clear();
     taskLinksTitlePartsCache.clear();
+    lastRankQuery = null;
+    lastRanked = null;
+    lastPublicRows = null;
+    lastPublicGuardSignature = null;
   }
   cachedOverlays = initialOverlays;
   blockIdsByPath = new Map();
@@ -363,30 +377,6 @@ function createTaskLinksSession(plugin, request) {
       previousDailyPath: previousDailyNotePath(index.notePaths(), plugin.now()),
       subjects,
     });
-  }
-
-  function publicRow(row, query) {
-    const reason = guardFor(row);
-    const guard = taskWikilinkGuardPresentation(reason, row);
-    return {
-      key: taskWikilinkRowKey(row),
-      notePath: row.notePath,
-      line: row.line,
-      blockId: row.blockId || null,
-      needsId: !row.blockId,
-      status: taskLinksStatus(row),
-      glyph: taskWikilinkStatusGlyph(row.status),
-      taskKind: taskLinksTaskKind(row, index.settings),
-      titleParts: taskLinksTitleParts(row.displayText, query),
-      section: row.section || null,
-      group: taskLinksPublicGroup(row, sourcePath),
-      hidden: Boolean(row.hidden),
-      linkTarget: row.linkTarget,
-      suggestedId: row.blockId
-        ? null
-        : taskWikilinkSuggestedBlockId(row, blockIdsByPath.get(row.notePath)),
-      disabled: guard ? { short: guard.badge, full: guard.full } : null,
-    };
   }
 
   function validateRawRow(row, id) {
@@ -432,22 +422,9 @@ function createTaskLinksSession(plugin, request) {
   if (!plugin.activeTaskLinksSessions) plugin.activeTaskLinksSessions = new Set();
 
   function taskLinksStaticFor(row) {
-    const key = taskWikilinkRowKey(row);
-    let cached = taskLinksStaticCache.get(key);
+    let cached = taskLinksStaticCache.get(row);
     if (cached) return cached;
-    let parsed = null;
-    try {
-      const base = parseTaskWikilinkTitleParts(row.displayText);
-      parsed = new Array(base.length);
-      for (let i = 0; i < base.length; i += 1) {
-        const part = base[i];
-        const text = String(part.text || "");
-        parsed[i] = { type: part.type, text, lower: text.toLowerCase() };
-      }
-    } catch (_error) {
-      const text = String(row.displayText || "");
-      parsed = [{ type: "text", text, lower: text.toLowerCase() }];
-    }
+    const key = taskWikilinkRowKey(row);
     cached = {
       key,
       notePath: row.notePath,
@@ -462,14 +439,15 @@ function createTaskLinksSession(plugin, request) {
       hidden: Boolean(row.hidden),
       linkTarget: row.linkTarget,
       suggestedId: row.blockId ? null : taskWikilinkSuggestedBlockId(row, taskLinksBlockIdsFor(row.notePath)),
-      parsed,
+      displayText: row.displayText,
+      titleData: null,
     };
-    taskLinksStaticCache.set(key, cached);
+    taskLinksStaticCache.set(row, cached);
     return cached;
   }
 
   function taskLinksGuardFor(base, row, previousDailyPath, resolvedSubjects) {
-    if ("guard" in base) return base.guard;
+    if (taskLinksGuardCache.has(base)) return taskLinksGuardCache.get(base);
     let reason = null;
     try {
       reason = pickerDisabledReasonFor(row, { previousDailyPath, subjects: resolvedSubjects });
@@ -483,31 +461,44 @@ function createTaskLinksSession(plugin, request) {
       guard = null;
     }
     const out = guard ? { short: guard.badge, full: guard.full } : null;
-    base.guard = out;
+    taskLinksGuardCache.set(base, out);
     return out;
   }
 
-  function taskLinksTitlePartsFast(base, queryText, terms) {
+  function titleCacheFor(queryText) {
     let inner = taskLinksTitlePartsCache.get(queryText);
-    if (inner) {
-      const hit = inner.get(base.key);
-      if (hit) return hit;
-    } else {
+    if (!inner) {
+      // A prompt can stay open through many edits; retain only recent queries.
+      if (taskLinksTitlePartsCache.size >= 4) {
+        taskLinksTitlePartsCache.delete(taskLinksTitlePartsCache.keys().next().value);
+      }
       inner = new Map();
       taskLinksTitlePartsCache.set(queryText, inner);
     }
-    const parts = [];
-    if (!terms || terms.length === 0) {
-      const parsed = base.parsed;
-      for (let i = 0; i < parsed.length; i += 1) {
-        const part = parsed[i];
-        if (!part.text) continue;
-        parts.push({ text: part.text, kind: part.type });
+    return inner;
+  }
+
+  function taskLinksTitlePartsFast(base, inner, terms) {
+    const hit = inner.get(base);
+    if (hit) return hit;
+    if (!base.titleData) {
+      const text = String(base.displayText || "");
+      let data = parsedTitles.get(text);
+      if (!data) {
+        const parsed = parseTaskWikilinkTitleParts(text);
+        for (const part of parsed) part.lower = part.text.toLowerCase();
+        data = { parsed, plain: parsed.filter((part) => part.text).map((part) => ({ text: part.text, kind: part.type })) };
+        if (parsedTitles.size >= 8192) parsedTitles.delete(parsedTitles.keys().next().value);
+        parsedTitles.set(text, data);
       }
-      inner.set(base.key, parts);
-      return parts;
+      base.titleData = data;
     }
-    const parsed = base.parsed;
+    if (!terms || terms.length === 0) {
+      inner.set(base, base.titleData.plain);
+      return base.titleData.plain;
+    }
+    const parts = [];
+    const parsed = base.titleData.parsed;
     for (let i = 0; i < parsed.length; i += 1) {
       const part = parsed[i];
       const lower = part.lower;
@@ -548,7 +539,7 @@ function createTaskLinksSession(plugin, request) {
       }
       if (pos < text.length) parts.push({ text: text.slice(pos), kind: part.type });
     }
-    inner.set(base.key, parts);
+    inner.set(base, parts);
     return parts;
   }
 
@@ -556,15 +547,42 @@ function createTaskLinksSession(plugin, request) {
     rank(query) {
       if (closed) return { rows: [], total: 0, indexing: null };
       const queryText = String(query || "");
-      const ranked = orderForWikilinkPicker(snapshotRows, queryText, sourcePath);
       const previousDailyPath = cachedPreviousDailyPath;
       const resolvedSubjects = taskLinksSubjectRows(subjects);
+      // Hosts may change their pending write targets without changing the index.
+      const nextGuardSignature = JSON.stringify([previousDailyPath, resolvedSubjects]);
+      if (guardSignature !== nextGuardSignature) {
+        taskLinksGuardCache.clear();
+        guardSignature = nextGuardSignature;
+      }
+      if (queryText === lastRankQuery && lastPublicRows && lastPublicGuardSignature === guardSignature) {
+        return { rows: lastPublicRows.slice(), total: lastPublicRows.length, indexing: taskLinksIndexing(index) };
+      }
       let terms = null;
       try {
         terms = splitWikilinkQueryTerms(queryText);
       } catch (_error) {
         terms = String(queryText).split(/\s+/).filter(Boolean).map((term) => term.toLowerCase());
       }
+      let ranked = snapshotRows;
+      if (queryText === lastRankQuery && lastRanked) {
+        // Repaints can ask for the same query. Reuse only the immutable
+        // candidate order; public rows and changing subject guards stay fresh.
+        ranked = lastRanked;
+      } else if (terms.length) {
+        const buckets = [];
+        for (const row of snapshotRows) {
+          const score = scoreLoweredFieldsWithTerms(loweredTaskWikilinkSearchFields(row), terms);
+          if (score !== null) (buckets[score] ||= []).push(row);
+        }
+        ranked = [];
+        for (let score = buckets.length - 1; score >= 0; score -= 1) {
+          if (buckets[score]) for (const row of buckets[score]) ranked.push(row);
+        }
+      }
+      lastRankQuery = queryText;
+      lastRanked = ranked;
+      const titleCache = titleCacheFor(queryText);
       const rows = new Array(ranked.length);
       for (let i = 0; i < ranked.length; i += 1) {
         const row = ranked[i];
@@ -578,7 +596,7 @@ function createTaskLinksSession(plugin, request) {
           status: base.status,
           glyph: base.glyph,
           taskKind: base.taskKind,
-          titleParts: taskLinksTitlePartsFast(base, queryText, terms),
+          titleParts: taskLinksTitlePartsFast(base, titleCache, terms),
           section: base.section,
           group: base.group,
           hidden: base.hidden,
@@ -587,6 +605,10 @@ function createTaskLinksSession(plugin, request) {
           disabled: taskLinksGuardFor(base, row, previousDailyPath, resolvedSubjects),
         };
       }
+      // A repaint of an unchanged query reuses its snapshot rows. Retain only
+      // the latest result, and never reuse it across subject/index changes.
+      lastPublicRows = rows.slice();
+      lastPublicGuardSignature = guardSignature;
       return { rows, total: ranked.length, indexing: taskLinksIndexing(index) };
     },
     linkFor(row) {

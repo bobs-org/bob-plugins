@@ -1,6 +1,6 @@
 // api.taskLinks CPU-performance gate (T9): the ranked session path, not just
-// the editor index path. `session.rank` maps every ranked row through
-// `publicRow` (title parts and guards) on each keystroke, so this gates the
+// the editor index path. `session.rank` returns the complete public row set;
+// also access the three visible titles on every sample, so this gates the
 // real `api.taskLinks` (`open({ sourcePath, subjects })`, then `rank(q)`)
 // over 5,000 tasks: session open (snapshot plus first rank) at most 50 ms,
 // keystroke-to-rows p95 at most 12 ms, and no vault reads while filtering.
@@ -84,25 +84,28 @@ function p95(samples) {
   return sorted[Math.max(0, at)];
 }
 
-test("api.taskLinks session open (snapshot plus first rank) takes at most 50 ms", async () => {
+test("api.taskLinks session open (snapshot plus first rank) takes at most 50 ms", async (t) => {
   const { api, perfApp } = await warmedSession();
   perfApp.reads.length = 0;
-  let opened = null;
+  let ranked = null;
   const { best: ms } = await bestOf(async () => {
     const start = cpuTimeMs();
     const session = api.open({ sourcePath: "sase.md", subjects: [] });
-    const ranked = session.rank("task number 1");
-    const elapsed = cpuTimeMs() - start;
-    opened = { session, ranked };
-    return elapsed;
+    try {
+      ranked = session.rank("");
+      for (const row of ranked.rows.slice(0, 3)) assert.ok(Array.isArray(row.titleParts));
+      return cpuTimeMs() - start;
+    } finally {
+      session.close();
+    }
   }, 5);
-  assert.ok(opened.ranked.rows.length > 0, "first rank returns rows");
-  assert.ok(opened.ranked.total >= 5000 || opened.ranked.rows.length > 0, "first rank covers the vault");
-  opened.session.close();
+  assert.ok(ranked.rows.length >= 5000, "first rank returns every task");
+  assert.equal(ranked.total, ranked.rows.length);
+  t.diagnostic(`session open: ${ms.toFixed(2)} ms`);
   assert.ok(ms <= OPEN_BUDGET_MS, `session open ${ms.toFixed(1)} ms exceeds ${OPEN_BUDGET_MS} ms`);
 });
 
-test("api.taskLinks keystroke-to-rows p95 takes at most 12 ms over 5,000 tasks", async () => {
+test("api.taskLinks keystroke-to-rows p95 takes at most 12 ms over 5,000 tasks", async (t) => {
   const { api } = await warmedSession();
   const session = api.open({ sourcePath: "sase.md", subjects: [] });
   try {
@@ -113,6 +116,7 @@ test("api.taskLinks keystroke-to-rows p95 takes at most 12 ms over 5,000 tasks",
       const { best, samples: attempts } = await bestOf(async () => {
         const start = cpuTimeMs();
         const result = session.rank(query);
+        for (const row of result.rows.slice(0, 3)) assert.ok(Array.isArray(row.titleParts));
         assert.ok(Array.isArray(result.rows), `rank(${JSON.stringify(query)}) returns rows`);
         assert.ok("total" in result && "indexing" in result, "API shape stays { rows, total, indexing }");
         return cpuTimeMs() - start;
@@ -122,6 +126,7 @@ test("api.taskLinks keystroke-to-rows p95 takes at most 12 ms over 5,000 tasks",
       await delay(5);
     }
     const value = p95(samples);
+    t.diagnostic(`keystroke p95: ${value.toFixed(2)} ms`);
     assert.ok(value <= KEYSTROKE_BUDGET_MS, `keystroke p95 ${value.toFixed(1)} ms exceeds ${KEYSTROKE_BUDGET_MS} ms`);
   } finally {
     session.close();

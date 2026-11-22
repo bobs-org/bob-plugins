@@ -446,6 +446,7 @@ function successorRenderReasonEditor(modal, container, row, draft) {
           kind: "cancel",
           density: "dense",
           ownKeys: true,
+          scope: modal.scope,
           links: true,
           subjects: () => successorReasonSubjects(row, modal),
           sourcePath: () => (row && row.notePath ? String(row.notePath) : null),
@@ -511,6 +512,7 @@ function successorRenderReasonEditor(modal, container, row, draft) {
         // The editor closes without touching the verdict map.
       }
     };
+    modal.restoreReason = restore;
     input.addEventListener("keydown", (event) => {
       try {
         if (!event || typeof event !== "object") {

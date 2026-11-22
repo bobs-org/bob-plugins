@@ -130,6 +130,7 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
     this.reasonPreviousVerdict = null;
     this.reasonOpenedAt = null;
     this.reasonRecall = null;
+    this.restoreReason = null;
     // The live reason editor (206d parks it across renderResults).
     this.reasonInputEl = null;
     this.reasonInputKey = null;
@@ -221,6 +222,21 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
     } catch (_error) {
       return Date.now();
     }
+  }
+
+  // Modal's first-registered Escape runs before the input listener. Keep the
+  // same NAME → list → reason ladder, without a close/repaint blurring and
+  // committing the draft while the user is backing out.
+  onEscapeKey(event) {
+    if (this.reasonEditKey != null) {
+      if (this.reasonRecall && typeof this.reasonRecall.backOut === "function" &&
+        this.reasonRecall.backOut(event) === true) return false;
+      if (typeof this.restoreReason === "function") this.restoreReason();
+      return false;
+    }
+    if (typeof super.onEscapeKey === "function") return super.onEscapeKey(event);
+    this.close();
+    return false;
   }
 
   // Ctrl+Shift+Enter retargets the marked (or highlighted) rows through
@@ -714,6 +730,7 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
   }
 
   disposeReasonRecall() {
+    this.restoreReason = null;
     const recall = this.reasonRecall;
     this.reasonRecall = null;
     try {

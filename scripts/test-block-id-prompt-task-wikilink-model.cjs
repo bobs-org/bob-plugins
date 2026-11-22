@@ -512,3 +512,37 @@ test("fused scorer matches the layered scorer across randomized rows and queries
     }
   }
 });
+
+test("fuzzy scoring preserves the character-walk result for ASCII, Unicode, and surrogate halves", () => {
+  function referenceTier(field, term) {
+    if (field.startsWith(term)) return 3;
+    let at = field.indexOf(term, 1);
+    let found = false;
+    while (at !== -1) {
+      found = true;
+      if (!/[\p{L}\p{N}]/u.test(field[at - 1])) return 2;
+      at = field.indexOf(term, at + 1);
+    }
+    if (found) return 1;
+    let wanted = 0;
+    for (const cell of field) {
+      if (cell === term[wanted]) {
+        wanted += 1;
+        if (wanted === term.length) return 0;
+      }
+    }
+    return wanted === term.length ? 0 : null;
+  }
+  const cells = ["a", "b", "1", "-", " ", "é", "中", "🚂", "\uD83D", "\uDE82"];
+  let seed = 22026;
+  const pick = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return cells[seed % cells.length]; };
+  const fields = ["", "trains topic-3", "task number 412", "a🚂b", "x\uD83Dy\uDE82z", "é 中 a"];
+  for (let i = 0; i < 200; i += 1) fields.push(Array.from({ length: 14 }, pick).join(""));
+  const terms = ["", "trn", "tpc3", "412", "ab", "🚂", "\uD83D", "\uDE82", "éa", "中"];
+  for (const field of fields) {
+    for (const term of terms) {
+      assert.equal(helpers.scoreLoweredFieldsWithTerms([field], [term]), referenceTier(field, term),
+        JSON.stringify({ field, term }));
+    }
+  }
+});

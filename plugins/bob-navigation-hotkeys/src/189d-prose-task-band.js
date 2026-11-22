@@ -195,7 +195,7 @@ function renderProseTaskBand(host, view) {
   logRecallAddClass(host, "is-dense", state.density === "dense");
   logRecallAddClass(host, "is-settled", state.fadePlayed === true);
   logRecallAddClass(host, "is-tasks", true);
-  if (state.stage === "name") logRecallAddClass(host, "is-naming", true);
+  logRecallAddClass(host, "is-naming", state.stage === "name");
   if (state.open !== true) return host;
   const slots = state.density === "dense" ? PROSE_TASK_SLOTS_DENSE() : PROSE_TASK_SLOTS_ROOMY();
   try { host.style.setProperty("--bob-link-band-slots", String(slots)); } catch (_error) {}

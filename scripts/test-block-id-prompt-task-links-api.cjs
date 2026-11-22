@@ -194,6 +194,73 @@ test("snapshot ranks without vault reads, reports indexing, and relays index cha
   session.close();
 });
 
+test("cached rows follow changing prompt subjects without an index refresh", () => {
+  const harness = makeHarness({ files: { "Tasks.md": "- [ ] #task First\n- [ ] #task Second ^second" } });
+  const subjects = [{ path: "Tasks.md", line: 0 }];
+  const session = harness.api.open({ subjects: () => subjects });
+  assert.equal(rowWithTitle(session, "First").disabled.short, "this prompt");
+  assert.equal(rowWithTitle(session, "Second").disabled, null);
+  subjects[0] = { blockId: "second" };
+  assert.equal(rowWithTitle(session, "First").disabled, null);
+  const second = rowWithTitle(session, "Second");
+  assert.equal(second.disabled.short, "this prompt");
+  assert.equal(session.linkFor(second), null);
+  subjects.length = 0;
+  assert.equal(rowWithTitle(session, "Second").disabled, null);
+  session.close();
+});
+
+test("cached title spans agree with the editor across query changes and index refresh", () => {
+  const title = "Review the `API` docs [[Guide|manual]]";
+  const harness = makeHarness({ files: { "Tasks.md": `- [ ] #task ${title} ^review` } });
+  const session = harness.api.open({});
+  for (const query of ["", "api", "a api", "manual", "rev", "docs", "api"]) {
+    const expected = helpers.taskWikilinkHighlightedTitleParts(title, query).flatMap((part) =>
+      part.spans.filter((span) => span.text).map((span) => ({ text: span.text, kind: span.hl ? "match" : part.type })));
+    assert.deepEqual(session.rank(query).rows[0].titleParts, expected, query);
+  }
+  harness.plugin.taskWikilinkIndex.ingestNote("Tasks.md", "- [ ] #task Changed ^review");
+  harness.plugin.taskWikilinkIndex.emitForced();
+  assert.equal(session.rank("api").total, 0);
+  assert.equal(rowWithTitle(session, "Changed").blockId, "review");
+  session.close();
+});
+
+test("session score buckets preserve editor ranking, including fuzzy matches and ties", () => {
+  const files = {};
+  const words = ["Train", "API", "éclair", "Boats", "planning", "alpha"];
+  const statuses = [" ", "/", "*", "x", "-", "?"];
+  for (let i = 0; i < 120; i += 1) {
+    const notePath = `area-${i % 3}/Note-${i % 7}.md`;
+    files[notePath] = (files[notePath] || "## Section\n") +
+      `- [${statuses[i % statuses.length]}] #task ${words[i % words.length]} ${words[Math.floor(i / 6) % words.length]} ${i}${i % 3 ? ` ^task-${i}` : ""}\n`;
+  }
+  const harness = makeHarness({ files });
+  for (const sourcePath of [null, "area-0/Note-0.md", "area-1/Note-1.md"]) {
+    const session = harness.api.open({ sourcePath });
+    const raw = harness.plugin.taskWikilinkIndex.rowsForPicker({ ownerPath: sourcePath });
+    for (const query of ["", " ", "train", "API alpha", "t n", "écl", "plng", "12", "note-1", "task-7", "zzz", "section"]) {
+      const expected = helpers.orderForWikilinkPicker(raw, query, sourcePath).map(helpers.taskWikilinkRowKey);
+      assert.deepEqual(session.rank(query).rows.map((row) => row.key), expected, `${sourcePath}: ${query}`);
+    }
+    session.close();
+  }
+});
+
+test("title parts keep their query and snapshot after later ranks and refresh", () => {
+  const harness = makeHarness({ files: { "Tasks.md": "- [ ] #task Review `API` docs ^review" } });
+  const session = harness.api.open({});
+  const first = session.rank("api");
+  for (const query of ["review", "docs", "r", "", "API docs"]) session.rank(query);
+  harness.plugin.taskWikilinkIndex.ingestNote("Tasks.md", "- [ ] #task Changed ^review");
+  harness.plugin.taskWikilinkIndex.emitForced();
+  session.close();
+  const serialized = JSON.parse(JSON.stringify(first));
+  assert.deepEqual(serialized.rows[0].titleParts, [
+    { text: "Review ", kind: "text" }, { text: "API", kind: "match" }, { text: " docs", kind: "text" },
+  ]);
+});
+
 test("linkFor rechecks note resolution and falls back to the vault path", () => {
   const harness = makeHarness({
     files: { "folder/Tasks.md": "- [ ] #task Finish this ^finish" },

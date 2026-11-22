@@ -79,16 +79,26 @@ function taskWikilinkFieldTier(field, term) {
 }
 
 function taskWikilinkIsSubsequence(field, term) {
-  let wanted = 0;
-  for (const cell of field) {
-    if (cell === term[wanted]) {
-      wanted += 1;
-      if (wanted === term.length) {
-        return true;
+  // Native searches skip the intervening text instead of walking every
+  // character in every field for each fuzzy query. Preserve the original
+  // code-point iteration for surrogate-bearing terms (including lone halves).
+  if (/[\uD800-\uDFFF]/u.test(term)) {
+    let wanted = 0;
+    for (const cell of field) {
+      if (cell === term[wanted]) {
+        wanted += 1;
+        if (wanted === term.length) return true;
       }
     }
+    return wanted === term.length;
   }
-  return wanted === term.length;
+  let offset = 0;
+  for (let wanted = 0; wanted < term.length; wanted += 1) {
+    const at = field.indexOf(term[wanted], offset);
+    if (at === -1) return false;
+    offset = at + 1;
+  }
+  return true;
 }
 
 // Lowercased searchable fields for one row, in hit-likelihood order:

@@ -67,8 +67,16 @@ function taskWikilinkStatOf(stat) {
   };
 }
 
-function taskWikilinkBlockIdsForRows(rows) {
+function taskWikilinkBlockIdsForRows(rows, content) {
   const ids = new Set();
+  if (typeof content === "string") {
+    for (const match of collectBlockTokenMatches(content)) {
+      if (match && typeof match.id === "string") {
+        ids.add(match.id);
+      }
+    }
+    return ids;
+  }
   for (const row of rows) {
     if (row && row.blockId) {
       ids.add(row.blockId);
@@ -140,7 +148,7 @@ class TaskWikilinkIndex {
       mtime: stamp.mtime,
       size: stamp.size,
       rows,
-      blockIds: taskWikilinkBlockIdsForRows(rows),
+      blockIds: taskWikilinkBlockIdsForRows(rows, String(content ?? "")),
     });
     this.dequeueReparse(path);
     this.markBasenameDirty();

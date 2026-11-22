@@ -217,29 +217,39 @@ class BlockIdPromptBlockIdSubmitMixin {
     }
 
     let task = source.task;
+    let plan;
     if (source.trigger === "((") {
-      const relocated = taskWikilinkLineForIdentity(destination.content, source.task);
-      if (!relocated) {
+      const activationEligible = sourceQualifiesForPomodoroActivation(source);
+      const planned = taskWikilinkNamingPlanForContent(
+        this,
+        destination.content,
+        source.task,
+        newId,
+        { activationEligible },
+      );
+      if (planned.code === "moved") {
         new Notice(`Task link blocked: selected task moved or changed in ${destination.file.path}`);
         return false;
       }
-      if (getTrailingBlockId(relocated.rawLine)) {
+      if (planned.code === "identified") {
         new Notice(`Task link stopped: selected task already has a block ID in ${destination.file.path}`);
         return false;
       }
-      task = { ...source.task, line: relocated.line, rawLine: relocated.rawLine };
+      task = planned.task;
+      plan = planned.plan;
     } else if (!this.taskLineStillPresent(destination.content, source.task, destination.file.path)) {
       return false;
     }
 
-    const activationEligible = sourceQualifiesForPomodoroActivation(source);
-    const plan = planTargetTaskUpdate(destination.content, task.line, {
-      newBlockId: newId,
-      activationEligible,
-      now: this.now(),
-      stampLine: this.getFreshnessStampLine(),
-      freshDateText: this.getFreshnessDateText(),
-    });
+    if (!plan) {
+      plan = planTargetTaskUpdate(destination.content, task.line, {
+        newBlockId: newId,
+        activationEligible: sourceQualifiesForPomodoroActivation(source),
+        now: this.now(),
+        stampLine: this.getFreshnessStampLine(),
+        freshDateText: this.getFreshnessDateText(),
+      });
+    }
     if (!plan) {
       new Notice(`Task link stopped: selected task changed in ${destination.file.path}`);
       return false;

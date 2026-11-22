@@ -2,6 +2,7 @@ class BlockIdPromptPlugin extends Plugin {
   onload() {
     this.promptOpen = false;
     this.activePomodoroLinkPicker = null;
+    this.activeTaskLinksSessions = new Set();
     this.scanTimer = null;
     this.scanView = null;
     this.suppressUntil = 0;
@@ -10,6 +11,7 @@ class BlockIdPromptPlugin extends Plugin {
     // §12.13): nav feature-detects `api?.pomodoroLinkPicker?.version >= 1`.
     this.api = Object.freeze({
       pomodoroLinkPicker: createPomodoroLinkPickerApi(this),
+      taskLinks: createTaskLinksApi(this),
     });
 
     this.addCommand({
@@ -489,6 +491,16 @@ class BlockIdPromptPlugin extends Plugin {
       this.activePomodoroLinkPicker = null;
     }
     this.taskWikilinkWrittenRanges = [];
+    for (const session of [...(this.activeTaskLinksSessions || [])]) {
+      try {
+        session.close();
+      } catch (_error) {
+        // Best effort: Obsidian is tearing down.
+      }
+    }
+    if (this.activeTaskLinksSessions) {
+      this.activeTaskLinksSessions.clear();
+    }
     this.taskWikilinkIndex = null;
     this.clearBlockRenameFollow();
     // Drop the picker capability first so nav retargeting degrades to no
@@ -497,6 +509,7 @@ class BlockIdPromptPlugin extends Plugin {
     try {
       this.api = Object.freeze({
         pomodoroLinkPicker: createPomodoroLinkPickerApi(null),
+        taskLinks: createTaskLinksApi(null),
       });
     } catch (_error) {
       // Best effort: Obsidian is tearing down.

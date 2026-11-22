@@ -19,7 +19,7 @@ See [plugin deployment](https://bobs-org.github.io/develop/plugins/deployment/) 
 <!-- BEGIN GENERATED: inventory -->
 | Plugin | Version | Minimum Obsidian version | Desktop only |
 | --- | ---: | ---: | --- |
-| [Block ID Prompt](block-id-prompt.md) | 1.42.0 | 1.8.7 | No |
+| [Block ID Prompt](block-id-prompt.md) | 1.43.0 | 1.8.7 | No |
 | [Bob Articles](bob-articles.md) | 0.2.1 | 1.8.7 | No |
 | [Bob Chips](bob-chips.md) | 0.16.0 | 1.8.7 | No |
 | [Bob Command Mode](bob-command-mode.md) | 0.4.0 | 1.8.7 | Yes |

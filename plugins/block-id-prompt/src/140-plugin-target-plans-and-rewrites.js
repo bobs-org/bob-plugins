@@ -66,34 +66,21 @@ class BlockIdPromptTargetPlansAndRewritesMixin {
     }
 
     if (file.path === source.sourcePath) {
-      if (!source.editor || typeof source.editor.replaceRange !== "function") {
+      if (!applyTaskPlanToEditor(this, source.editor, content, plan)) {
         if (!quiet) {
           new Notice(`${noticePrefix}: active note could not be modified`);
         }
         return false;
       }
-
-      this.suppressEditorScans();
-      const sortedEdits = [...plan.edits].sort((left, right) => right.start - left.start);
-      for (const edit of sortedEdits) {
-        source.editor.replaceRange(
-          edit.replacement,
-          indexToEditorPosition(content, edit.start),
-          indexToEditorPosition(content, edit.end),
-        );
-      }
       return true;
     }
 
     if (targetEditor && typeof targetEditor.replaceRange === "function") {
-      this.suppressEditorScans();
-      const sortedEdits = [...plan.edits].sort((left, right) => right.start - left.start);
-      for (const edit of sortedEdits) {
-        targetEditor.replaceRange(
-          edit.replacement,
-          indexToEditorPosition(content, edit.start),
-          indexToEditorPosition(content, edit.end),
-        );
+      if (!applyTaskPlanToEditor(this, targetEditor, content, plan)) {
+        if (!quiet) {
+          new Notice(`${noticePrefix}: ${file.path} changed before update`);
+        }
+        return false;
       }
       return true;
     }

@@ -39,6 +39,10 @@ its explicit retype path. A stale shown suggestion skips the type and name
 change. Picks without task context keep the legacy shape, and a malformed
 optional intent is dropped. The namespace version stays 1.
 
+| Namespace | Version | Contract |
+| --- | ---: | --- |
+| `taskLinks` | 1 | `fieldAt()` returns UTF-16 prose-field ranges; `open()` returns an indexed session with `rank`, `linkFor`, `suggestions`, `validate`, `name`, `onChange`, and `close`. Subject tasks are guarded. `name()` rechecks identity and IDs, writes open editors after a preimage check or closed notes through `vault.process`, and returns `{ ok, link, notePath, id }` on success. |
+
 ## Bob Ledger Tools
 
 The root `bob-ledger-tools.api` is version 3. It shares live

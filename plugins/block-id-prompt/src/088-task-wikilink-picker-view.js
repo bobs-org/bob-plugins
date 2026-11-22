@@ -190,6 +190,32 @@ function pickerDisabledReasonFor(row, options) {
   if (taskWikilinkPathIsUnlinkable(row.notePath)) {
     return "This note's name can't be linked";
   }
+  const subjects = options && options.subjects;
+  let subjectRows = subjects;
+  if (typeof subjects === "function") {
+    try {
+      subjectRows = subjects();
+    } catch (_error) {
+      subjectRows = [];
+    }
+  }
+  for (const subject of Array.isArray(subjectRows) ? subjectRows : []) {
+    if (!subject || typeof subject !== "object") {
+      continue;
+    }
+    if (
+      typeof subject.blockId === "string" && subject.blockId &&
+      row.blockId === subject.blockId
+    ) {
+      return "The task this prompt is about";
+    }
+    if (
+      !subject.blockId && subject.path === row.notePath &&
+      Number.isInteger(subject.line) && subject.line === row.line
+    ) {
+      return "The task this prompt is about";
+    }
+  }
   const source = options && options.source;
   if (
     source &&
@@ -214,6 +240,12 @@ function taskWikilinkGuardPresentation(reason, row) {
     return null;
   }
   const lower = String(reason).toLowerCase();
+  if (lower === "the task this prompt is about") {
+    return {
+      badge: "this prompt",
+      full: "The task this prompt is about",
+    };
+  }
   if (lower.startsWith("archived")) {
     const stem = taskWikilinkPathStem(row && row.notePath);
     return {

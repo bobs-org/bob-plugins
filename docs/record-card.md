@@ -55,6 +55,8 @@ the count becomes `⟳` with “Record walk is syncing”. The links still follo
 the written destinations. Missing or damaged lines stay as Markdown; a
 frontmatter-only record has no rail. Rendering needs no cached album report
 or CLI capability; automatic repair requests require `record_walk_v1`.
+An arm rewritten by Obsidian after a rename or move is still recognized;
+the rail shows `⟳` and requests one album sync, which rewrites the line.
 
 When the album sets `walk_by`, the walk follows that field's groups, then
 titles, and the rail adds a quieter group row in place of the location line:

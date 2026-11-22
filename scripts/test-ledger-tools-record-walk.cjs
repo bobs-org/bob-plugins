@@ -32,6 +32,7 @@ const {
   recordWalkClassify,
   recordWalkClearSyncedEpisodes,
   recordWalkGroupProjection,
+  recordWalkHasRail,
   recordWalkLabel,
   recordWalkModel,
   recordWalkOrder,
@@ -157,6 +158,34 @@ test("metadata-cache ring counts immediate members, cross-checks links, and foll
   assert.equal(refreshed.total, 4);
   assert.equal(recordSheetSignature({ path: "eat/a.md", state: "ready", walk: valid }) ===
     recordSheetSignature({ path: "eat/a.md", state: "ready", walk: refreshed }), false);
+});
+
+test("Obsidian-rewritten arms keep the rail and request one sync despite matching stems", () => {
+  const world = recordWalkWorld();
+  let schedules = 0;
+  const plugin = {
+    albumReportState: () => ({ report: world.report, reportGeneration: 4, stale: false }),
+    albumScheduleSync: () => { schedules += 1; return true; },
+  };
+  for (const [from, target, arm] of [
+    ["eat/c", "c", "writtenNext"],
+    ["eat/a", "a", "writtenPrev"],
+    ["eat/c", "drinks/c.md#Notes", "writtenNext"],
+  ]) {
+    const model = recordWalkModel({
+      path: "eat/b.md", sourceText: world.sourceText(world.lines[1].replace(from, target)),
+      report: world.report, metadataCache: world.metadataCache, vault: world.vault,
+    });
+    assert.equal(model.lineState, "stale");
+    assert.equal(model.state, "syncing");
+    assert.equal(model.reason, "neighbors_mismatch");
+    assert.equal(model[arm].target, target);
+    assert.equal(model[arm].stem, arm === "writtenNext" ? "c" : "a");
+    assert.equal(recordWalkHasRail(model), true);
+    recordWalkRequestSync(plugin, model);
+    assert.equal(recordWalkRequestSync(plugin, model), false);
+  }
+  assert.equal(schedules, 1);
 });
 
 test("sync repair requests are capability-gated and occur once per fresh-report episode", () => {

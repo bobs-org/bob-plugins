@@ -1706,6 +1706,15 @@ test("record title recognizer hides a first-body walk line, a matching H1, and t
     path: "eat/0.md", title: "Alpha", walk: { ...model, lineState: "stale" }, sourceText: text,
   });
   assert.notEqual(stale.key, rec.key);
+  const rewritten = text.replace("[[eat/1|", "[[1|");
+  const rewrittenModel = plugin.recordWalkFor("eat/0.md", rewritten);
+  assert.equal(rewrittenModel.lineState, "stale");
+  const rewrittenRecognizer = helpers.recordSheetTitleRecognizer({
+    path: "eat/0.md", title: "Alpha", walk: rewrittenModel, sourceText: rewritten,
+  });
+  const rewrittenRange = helpers.propertyCardTitleSourceRange(rewritten, rewrittenRecognizer);
+  assert.ok(rewrittenRange, "an Obsidian-rewritten walk line is still hidden");
+  assert.equal(rewritten.slice(rewrittenRange.from, rewrittenRange.to).includes("[[1|"), true);
   const notFirst = `---\n---\n## Notes\n\n${text.split("\n").find((line) => line.startsWith("[["))}\n`;
   assert.equal(helpers.propertyCardTitleSourceRange(notFirst, rec), null);
   const fenced = `---\n---\n\`\`\`\n${text.split("\n").find((line) => line.startsWith("[["))}\n\`\`\`\n`;

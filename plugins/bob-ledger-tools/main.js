@@ -105446,8 +105446,12 @@ function recordWalkParseLinkRun(line, albumStem) {
     if (inner.includes("[[")) return null;
     const parsed = recordWalkParseLinkInner(inner);
     const allowed = parsed && recordWalkAllowedTarget(parsed.target, albumStem);
-    if (!parsed || !allowed) return null;
-    links.push({ ...parsed, ...allowed });
+    if (!parsed) return null;
+    links.push({ ...parsed, ...(allowed || {
+      root: false,
+      foreign: true,
+      stem: recordWalkStem(parsed.target.split(/[#^]/)[0]),
+    }) });
     if (links.length > 3) return null;
     remaining = rest.slice(close + 2).trimStart();
     if (!remaining) return links;
@@ -105460,14 +105464,12 @@ function recordWalkParseLinkRun(line, albumStem) {
 
 function recordWalkIsWalkLine(links) {
   if (!Array.isArray(links)) return false;
-  let roots = 0;
-  for (const link of links) {
-    if (link.root) {
-      roots += 1;
-      if (!String(link.label || "").startsWith("↑")) return false;
-    }
-  }
-  return roots === 1;
+  const hub = links.findIndex((link) => link.root);
+  if (hub < 0 || links.filter((link) => link.root).length !== 1
+    || !String(links[hub].label || "").startsWith("↑")) return false;
+  return links.every((link, index) => !link.foreign
+    || (index + 1 === hub && String(link.label || "").startsWith("‹"))
+    || (index === hub + 1 && String(link.label || "").endsWith("›")));
 }
 
 function recordWalkHasNavLikeLink(line, albumStem) {
@@ -105655,7 +105657,8 @@ function recordWalkModel(input = {}) {
       const writtenNext = classification.writtenNext;
       const matches = total === 1
         ? !writtenPrev && !writtenNext
-        : writtenPrev?.stem === previous?.stem && writtenNext?.stem === next?.stem;
+        : !writtenPrev?.foreign && !writtenNext?.foreign
+          && writtenPrev?.stem === previous?.stem && writtenNext?.stem === next?.stem;
       state = matches ? "ok" : "syncing";
       reason = matches ? null : "neighbors_mismatch";
     }

@@ -453,6 +453,14 @@ class TaskStatusCyclerSuccessorProjectMixin {
       let closePassNoteTexts = noteTextsObject;
       let closePassTasks = tasks;
       let closePassDependencySnapshotAvailable = dependencySnapshotAvailable;
+      const reqCloseOpenNotes = reqCloseIntegrationNotes(noteTextsObject);
+      const reqCloseOpenOwnerBlocks = this.reqCloseExpectedOwnerPostimages(
+        reqCloseOwners,
+        reqCloseOpenNotes,
+      );
+      let reqCloseOwnersLive = reqCloseOwners;
+      let reqStaleFailures = [];
+      let reqExpectedDailyAfter = null;
       if ((selectableOffers.length > 0 || reqCloseGroups.length > 0) && pickerApi) {
         const picked = await this.pickSuccessorOfferChoices({
           plan,
@@ -522,6 +530,19 @@ class TaskStatusCyclerSuccessorProjectMixin {
         dailyBefore = refreshed.dailyBefore;
         dailyAfter = refreshed.dailyAfter;
         planClosingEntry = refreshed.planClosingEntry;
+        if (reqCloseOwners.length && (reqRequests !== null || reqJumpKey)) {
+          const filtered = reqCloseRefuseStaleOwnerChoices({
+            owners: reqCloseOwners,
+            requests: reqRequests,
+            jumpKey: reqJumpKey,
+            openBlocks: reqCloseOpenOwnerBlocks,
+            freshNotes: closePassNoteTexts,
+          });
+          reqCloseOwnersLive = filtered.owners;
+          reqRequests = filtered.requests;
+          reqJumpKey = filtered.jumpKey;
+          reqStaleFailures = filtered.failures;
+        }
       }
       let reqCloseResult = null;
       const noteOutcome = await applySuccessorNoteEditsWithUnblockedGuard(this, plan, active);
@@ -655,6 +676,9 @@ class TaskStatusCyclerSuccessorProjectMixin {
           active,
           dailyPath,
         );
+        if (dailyOutcome.failed === 0 && insertion && typeof insertion.text === "string") {
+          reqExpectedDailyAfter = insertion.text;
+        }
         noteOutcome.failed += dailyOutcome.failed;
         if (!noteOutcome.failureReason && dailyOutcome.failureReason) {
           noteOutcome.failureReason = dailyOutcome.failureReason;
@@ -699,28 +723,42 @@ class TaskStatusCyclerSuccessorProjectMixin {
         });
         if (closeResult) removeResolvedOfferCloseRows(plan, closeResult);
       }
-      if (reqRequests !== null || reqJumpKey) {
+      if ((reqRequests !== null || reqJumpKey) && reqCloseOwnersLive.length) {
+        const expectedNotes = reqCloseComposeExpectedNotes({
+          openNotes: reqCloseOpenNotes,
+          owners: reqCloseOwnersLive,
+          plan,
+          dailyPath,
+          dailyAfter: reqExpectedDailyAfter,
+          restores: closeResult && closeResult.undo && closeResult.undo.restores,
+        });
         reqCloseResult = await this.applyManagedReqCloseCard({
-          owners: reqCloseOwners,
+          owners: reqCloseOwnersLive,
           choices: {
             ...(reqRequests !== null ? { reqs: reqRequests } : {}),
             ...(reqJumpKey ? { jump: { key: reqJumpKey } } : {}),
           },
           taskOfferKeys: selectableOffers.map((offer) => String(offer && offer.key || "")).filter(Boolean),
           notes: closePassNoteTexts,
+          expectedNotes,
+          expectedOwnerPostimages: this.reqCloseExpectedOwnerPostimages(
+            reqCloseOwnersLive,
+            expectedNotes,
+          ),
           identities,
           today,
           dailyPath,
           closing: reqPullInClosing,
           closingHint: hint,
           context: active,
+          cache,
         });
       }
       if (reqCloseResult && Array.isArray(reqCloseResult.outcomes) &&
           reqCloseResult.outcomes.some((row) => row && row.verdict === "carry_pulled")) {
         reqCloseResult = await this.finishManagedReqPullIn({
           result: reqCloseResult,
-          owners: reqCloseOwners,
+          owners: reqCloseOwnersLive,
           identities,
           dailyPath,
           today,
@@ -786,6 +824,9 @@ class TaskStatusCyclerSuccessorProjectMixin {
           plan: reqCloseResult,
           key: reqCloseResult.reqJump,
           context: active,
+          cache,
+          dailyPath,
+          routes: Array.isArray(reqCloseResult.routes) ? reqCloseResult.routes : [],
         })
         : null;
       if (jump && jump.ok === false) {
@@ -801,6 +842,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
         jump = buildSuccessorJumpIdentity(jumpKey, originalOfferByKey, plan, closeResult);
       }
       const receiptFailures = [
+        ...reqStaleFailures,
         ...(closeResult && Array.isArray(closeResult.failures) ? closeResult.failures : []),
         ...(reqCloseResult && Array.isArray(reqCloseResult.failures) ? reqCloseResult.failures : []),
       ];

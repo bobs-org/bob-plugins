@@ -587,9 +587,11 @@ class TaskStatusCyclerCommandsMixin {
           editor,
           activePath,
           originPath: activePath,
-          reqCloseOwners: this.captureReqCloseOwnersFromText(
+          reqCloseOwners: this.captureReqCloseOwnersFromRange(
             Array.isArray(lines) ? lines.join("\n") : String(editor.getValue() || ""),
             activePath,
+            startLine,
+            endLine,
           ),
         }
       : null;

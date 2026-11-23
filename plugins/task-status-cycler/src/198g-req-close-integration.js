@@ -65,7 +65,7 @@ class TaskStatusCyclerReqCloseIntegrationMixin {
     const tasks = taskReqNoteTasks(contents);
     const selected = Array.isArray(identities)
       ? identities.map((identity) => tasks.filter((task) => reqCloseIntegrationTaskMatches(task, identity)))
-      : tasks.filter((task) => task.blockId || task.taskId);
+      : tasks.filter((task) => task.blockId || task.taskId).map((task) => [task]);
     const owners = [];
     for (const matches of selected) {
       if (!Array.isArray(matches) || matches.length !== 1) continue;
@@ -83,6 +83,22 @@ class TaskStatusCyclerReqCloseIntegrationMixin {
       });
     }
     return owners;
+  }
+
+  captureReqCloseOwnersFromRange(contents, path, startLine, endLine) {
+    if (typeof contents !== "string" || !path) return [];
+    const lo = Math.min(Number(startLine) || 0, Number(endLine) || 0);
+    const hi = Math.max(Number(startLine) || 0, Number(endLine) || 0);
+    const tasks = taskReqNoteTasks(contents);
+    const identities = [];
+    for (const task of tasks) {
+      if (!Number.isInteger(task.lineIndex) || task.lineIndex < lo || task.lineIndex > hi) continue;
+      const identity = (typeof closedTaskIdentity === "function"
+        ? closedTaskIdentity(path, task.lineText)
+        : null) || (task.blockId ? { path: String(path), blockId: String(task.blockId) } : null);
+      if (identity) identities.push(identity);
+    }
+    return this.captureReqCloseOwnersFromText(contents, path, identities);
   }
 
   captureReqCloseOwnersFromEditor(identity, editor, path, fallbackText = "") {
@@ -141,41 +157,36 @@ class TaskStatusCyclerReqCloseIntegrationMixin {
   }
 
   reqCloseExpectedOwnerPostimages(owners, notes) {
-    const files = reqCloseIntegrationNotes(notes);
-    const result = {};
-    for (const owner of Array.isArray(owners) ? owners : []) {
-      if (!owner || !owner.path || !files.has(owner.path)) continue;
-      const block = reqCloseWriteOwnerBlock(files.get(owner.path), owner);
-      if (typeof block === "string") result[owner.key] = block;
-    }
-    return result;
+    return reqCloseOwnerPostimagesFromNotes(owners, notes);
   }
 
   async applyManagedReqCloseCard(options = {}) {
     const owners = Array.isArray(options.owners) ? options.owners : [];
     const choices = options.choices && typeof options.choices === "object" ? options.choices : {};
-    const requests = Array.isArray(choices.reqs) ? choices.reqs : [];
+    const requests = reqCloseCardRequestsFromChoices(Array.isArray(choices.reqs) ? choices.reqs : []);
     const jumpKey = choices.jump && typeof choices.jump.key === "string"
       ? choices.jump.key
       : "";
     const reqJump = owners.some((owner) => (owner.nodes || []).some((node) => node.key === jumpKey));
     if (!owners.length || (!Array.isArray(choices.reqs) && !reqJump)) return null;
+    const expectedNotes = options.expectedNotes != null
+      ? reqCloseIntegrationNotes(options.expectedNotes)
+      : reqCloseIntegrationNotes(options.notes);
     const notes = reqCloseIntegrationNotes(options.notes);
     const ownerPaths = new Set(owners.map((owner) => owner && owner.path).filter(Boolean));
     if (options.dailyPath) ownerPaths.add(String(options.dailyPath));
-    const liveCache = new Map();
-    for (const path of ownerPaths) {
+    const liveCache = options.cache instanceof Map ? options.cache : new Map();
+    const livePaths = new Set([...ownerPaths, ...expectedNotes.keys()]);
+    for (const path of livePaths) {
+      try { liveCache.delete(path); } catch (_error) {}
       try {
         const live = await this.readSuccessorNoteText(path, options.context || {}, liveCache);
         if (typeof live === "string") notes.set(path, live);
       } catch (_error) {}
     }
-    const expectedNotes = {};
-    for (const owner of owners) {
-      const path = owner && owner.path;
-      if (!path) continue;
-      if (notes.has(path)) expectedNotes[path] = notes.get(path);
-    }
+    const expectedOwnerPostimages = options.expectedOwnerPostimages != null
+      ? options.expectedOwnerPostimages
+      : reqCloseOwnerPostimagesFromNotes(owners, expectedNotes);
     const dailyPath = String(options.dailyPath || "");
     const vault = this.app && this.app.vault;
     const index = vault && typeof vault.getMarkdownFiles === "function"
@@ -219,7 +230,7 @@ class TaskStatusCyclerReqCloseIntegrationMixin {
       date: options.today,
       notes,
       expectedNotes,
-      expectedOwnerPostimages: this.reqCloseExpectedOwnerPostimages(owners, notes),
+      expectedOwnerPostimages,
       pullInPreflight,
       context: options.context || {},
       cache: new Map(),
@@ -420,23 +431,34 @@ class TaskStatusCyclerReqCloseIntegrationMixin {
     };
     const active = options.context || {};
     const routes = Array.isArray(options.routes) ? options.routes : [];
-    const resolved = resolveReqLanding({ target, owners, plan, routes }, async (path) => {
-      const cache = new Map();
-      try { return await this.readSuccessorNoteText(path, active, cache); } catch (_error) { return null; }
+    const cache = options.cache instanceof Map ? options.cache : new Map();
+    const paths = reqCloseLandingNotePaths({
+      owners,
+      plan,
+      routes,
+      dailyPath: options.dailyPath,
     });
+    for (const path of paths) {
+      try { cache.delete(path); } catch (_error) {}
+    }
+    const texts = new Map();
+    if (plan.notes && typeof plan.notes === "object" && !Array.isArray(plan.notes)) {
+      for (const [path, text] of Object.entries(plan.notes)) {
+        if (typeof text === "string") texts.set(path, text);
+      }
+    }
+    for (const path of paths) {
+      try {
+        const text = await this.readSuccessorNoteText(path, active, cache);
+        if (typeof text === "string") texts.set(path, text);
+      } catch (_error) {}
+    }
+    const resolved = resolveReqLanding({ target, owners, plan, routes }, (path) => (
+      texts.has(path) ? texts.get(path) : null
+    ));
     if (!resolved || resolved.ok !== true) return resolved || null;
     const landing = resolved.landing;
-    const text = landing.kind === "requirement"
-      ? await this.readSuccessorNoteText(landing.path, active, new Map())
-      : null;
-    const lineText = typeof text === "string" ? String(text.split(/\r?\n/)[landing.line - 1] || "") : "";
-    return {
-      ok: true,
-      ...landing,
-      ...(landing.kind === "requirement" ? { line: landing.line - 1, text: lineText } : {}),
-      description: node.text,
-      label: node.text,
-    };
+    return reqCloseLandableTarget(landing, texts.get(landing.path), node);
   }
 
   async persistReqPullInPlan(result, plan, context = {}) {

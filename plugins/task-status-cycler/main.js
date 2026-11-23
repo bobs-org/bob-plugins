@@ -21985,6 +21985,14 @@ class TaskStatusCyclerSuccessorProjectMixin {
       let closePassNoteTexts = noteTextsObject;
       let closePassTasks = tasks;
       let closePassDependencySnapshotAvailable = dependencySnapshotAvailable;
+      const reqCloseOpenNotes = reqCloseIntegrationNotes(noteTextsObject);
+      const reqCloseOpenOwnerBlocks = this.reqCloseExpectedOwnerPostimages(
+        reqCloseOwners,
+        reqCloseOpenNotes,
+      );
+      let reqCloseOwnersLive = reqCloseOwners;
+      let reqStaleFailures = [];
+      let reqExpectedDailyAfter = null;
       if ((selectableOffers.length > 0 || reqCloseGroups.length > 0) && pickerApi) {
         const picked = await this.pickSuccessorOfferChoices({
           plan,
@@ -22054,6 +22062,19 @@ class TaskStatusCyclerSuccessorProjectMixin {
         dailyBefore = refreshed.dailyBefore;
         dailyAfter = refreshed.dailyAfter;
         planClosingEntry = refreshed.planClosingEntry;
+        if (reqCloseOwners.length && (reqRequests !== null || reqJumpKey)) {
+          const filtered = reqCloseRefuseStaleOwnerChoices({
+            owners: reqCloseOwners,
+            requests: reqRequests,
+            jumpKey: reqJumpKey,
+            openBlocks: reqCloseOpenOwnerBlocks,
+            freshNotes: closePassNoteTexts,
+          });
+          reqCloseOwnersLive = filtered.owners;
+          reqRequests = filtered.requests;
+          reqJumpKey = filtered.jumpKey;
+          reqStaleFailures = filtered.failures;
+        }
       }
       let reqCloseResult = null;
       const noteOutcome = await applySuccessorNoteEditsWithUnblockedGuard(this, plan, active);
@@ -22187,6 +22208,9 @@ class TaskStatusCyclerSuccessorProjectMixin {
           active,
           dailyPath,
         );
+        if (dailyOutcome.failed === 0 && insertion && typeof insertion.text === "string") {
+          reqExpectedDailyAfter = insertion.text;
+        }
         noteOutcome.failed += dailyOutcome.failed;
         if (!noteOutcome.failureReason && dailyOutcome.failureReason) {
           noteOutcome.failureReason = dailyOutcome.failureReason;
@@ -22231,28 +22255,42 @@ class TaskStatusCyclerSuccessorProjectMixin {
         });
         if (closeResult) removeResolvedOfferCloseRows(plan, closeResult);
       }
-      if (reqRequests !== null || reqJumpKey) {
+      if ((reqRequests !== null || reqJumpKey) && reqCloseOwnersLive.length) {
+        const expectedNotes = reqCloseComposeExpectedNotes({
+          openNotes: reqCloseOpenNotes,
+          owners: reqCloseOwnersLive,
+          plan,
+          dailyPath,
+          dailyAfter: reqExpectedDailyAfter,
+          restores: closeResult && closeResult.undo && closeResult.undo.restores,
+        });
         reqCloseResult = await this.applyManagedReqCloseCard({
-          owners: reqCloseOwners,
+          owners: reqCloseOwnersLive,
           choices: {
             ...(reqRequests !== null ? { reqs: reqRequests } : {}),
             ...(reqJumpKey ? { jump: { key: reqJumpKey } } : {}),
           },
           taskOfferKeys: selectableOffers.map((offer) => String(offer && offer.key || "")).filter(Boolean),
           notes: closePassNoteTexts,
+          expectedNotes,
+          expectedOwnerPostimages: this.reqCloseExpectedOwnerPostimages(
+            reqCloseOwnersLive,
+            expectedNotes,
+          ),
           identities,
           today,
           dailyPath,
           closing: reqPullInClosing,
           closingHint: hint,
           context: active,
+          cache,
         });
       }
       if (reqCloseResult && Array.isArray(reqCloseResult.outcomes) &&
           reqCloseResult.outcomes.some((row) => row && row.verdict === "carry_pulled")) {
         reqCloseResult = await this.finishManagedReqPullIn({
           result: reqCloseResult,
-          owners: reqCloseOwners,
+          owners: reqCloseOwnersLive,
           identities,
           dailyPath,
           today,
@@ -22318,6 +22356,9 @@ class TaskStatusCyclerSuccessorProjectMixin {
           plan: reqCloseResult,
           key: reqCloseResult.reqJump,
           context: active,
+          cache,
+          dailyPath,
+          routes: Array.isArray(reqCloseResult.routes) ? reqCloseResult.routes : [],
         })
         : null;
       if (jump && jump.ok === false) {
@@ -22333,6 +22374,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
         jump = buildSuccessorJumpIdentity(jumpKey, originalOfferByKey, plan, closeResult);
       }
       const receiptFailures = [
+        ...reqStaleFailures,
         ...(closeResult && Array.isArray(closeResult.failures) ? closeResult.failures : []),
         ...(reqCloseResult && Array.isArray(reqCloseResult.failures) ? reqCloseResult.failures : []),
       ];
@@ -25990,9 +26032,11 @@ class TaskStatusCyclerCommandsMixin {
           editor,
           activePath,
           originPath: activePath,
-          reqCloseOwners: this.captureReqCloseOwnersFromText(
+          reqCloseOwners: this.captureReqCloseOwnersFromRange(
             Array.isArray(lines) ? lines.join("\n") : String(editor.getValue() || ""),
             activePath,
+            startLine,
+            endLine,
           ),
         }
       : null;
@@ -36290,7 +36334,7 @@ class TaskStatusCyclerReqCloseIntegrationMixin {
     const tasks = taskReqNoteTasks(contents);
     const selected = Array.isArray(identities)
       ? identities.map((identity) => tasks.filter((task) => reqCloseIntegrationTaskMatches(task, identity)))
-      : tasks.filter((task) => task.blockId || task.taskId);
+      : tasks.filter((task) => task.blockId || task.taskId).map((task) => [task]);
     const owners = [];
     for (const matches of selected) {
       if (!Array.isArray(matches) || matches.length !== 1) continue;
@@ -36308,6 +36352,22 @@ class TaskStatusCyclerReqCloseIntegrationMixin {
       });
     }
     return owners;
+  }
+
+  captureReqCloseOwnersFromRange(contents, path, startLine, endLine) {
+    if (typeof contents !== "string" || !path) return [];
+    const lo = Math.min(Number(startLine) || 0, Number(endLine) || 0);
+    const hi = Math.max(Number(startLine) || 0, Number(endLine) || 0);
+    const tasks = taskReqNoteTasks(contents);
+    const identities = [];
+    for (const task of tasks) {
+      if (!Number.isInteger(task.lineIndex) || task.lineIndex < lo || task.lineIndex > hi) continue;
+      const identity = (typeof closedTaskIdentity === "function"
+        ? closedTaskIdentity(path, task.lineText)
+        : null) || (task.blockId ? { path: String(path), blockId: String(task.blockId) } : null);
+      if (identity) identities.push(identity);
+    }
+    return this.captureReqCloseOwnersFromText(contents, path, identities);
   }
 
   captureReqCloseOwnersFromEditor(identity, editor, path, fallbackText = "") {
@@ -36366,41 +36426,36 @@ class TaskStatusCyclerReqCloseIntegrationMixin {
   }
 
   reqCloseExpectedOwnerPostimages(owners, notes) {
-    const files = reqCloseIntegrationNotes(notes);
-    const result = {};
-    for (const owner of Array.isArray(owners) ? owners : []) {
-      if (!owner || !owner.path || !files.has(owner.path)) continue;
-      const block = reqCloseWriteOwnerBlock(files.get(owner.path), owner);
-      if (typeof block === "string") result[owner.key] = block;
-    }
-    return result;
+    return reqCloseOwnerPostimagesFromNotes(owners, notes);
   }
 
   async applyManagedReqCloseCard(options = {}) {
     const owners = Array.isArray(options.owners) ? options.owners : [];
     const choices = options.choices && typeof options.choices === "object" ? options.choices : {};
-    const requests = Array.isArray(choices.reqs) ? choices.reqs : [];
+    const requests = reqCloseCardRequestsFromChoices(Array.isArray(choices.reqs) ? choices.reqs : []);
     const jumpKey = choices.jump && typeof choices.jump.key === "string"
       ? choices.jump.key
       : "";
     const reqJump = owners.some((owner) => (owner.nodes || []).some((node) => node.key === jumpKey));
     if (!owners.length || (!Array.isArray(choices.reqs) && !reqJump)) return null;
+    const expectedNotes = options.expectedNotes != null
+      ? reqCloseIntegrationNotes(options.expectedNotes)
+      : reqCloseIntegrationNotes(options.notes);
     const notes = reqCloseIntegrationNotes(options.notes);
     const ownerPaths = new Set(owners.map((owner) => owner && owner.path).filter(Boolean));
     if (options.dailyPath) ownerPaths.add(String(options.dailyPath));
-    const liveCache = new Map();
-    for (const path of ownerPaths) {
+    const liveCache = options.cache instanceof Map ? options.cache : new Map();
+    const livePaths = new Set([...ownerPaths, ...expectedNotes.keys()]);
+    for (const path of livePaths) {
+      try { liveCache.delete(path); } catch (_error) {}
       try {
         const live = await this.readSuccessorNoteText(path, options.context || {}, liveCache);
         if (typeof live === "string") notes.set(path, live);
       } catch (_error) {}
     }
-    const expectedNotes = {};
-    for (const owner of owners) {
-      const path = owner && owner.path;
-      if (!path) continue;
-      if (notes.has(path)) expectedNotes[path] = notes.get(path);
-    }
+    const expectedOwnerPostimages = options.expectedOwnerPostimages != null
+      ? options.expectedOwnerPostimages
+      : reqCloseOwnerPostimagesFromNotes(owners, expectedNotes);
     const dailyPath = String(options.dailyPath || "");
     const vault = this.app && this.app.vault;
     const index = vault && typeof vault.getMarkdownFiles === "function"
@@ -36444,7 +36499,7 @@ class TaskStatusCyclerReqCloseIntegrationMixin {
       date: options.today,
       notes,
       expectedNotes,
-      expectedOwnerPostimages: this.reqCloseExpectedOwnerPostimages(owners, notes),
+      expectedOwnerPostimages,
       pullInPreflight,
       context: options.context || {},
       cache: new Map(),
@@ -36645,23 +36700,34 @@ class TaskStatusCyclerReqCloseIntegrationMixin {
     };
     const active = options.context || {};
     const routes = Array.isArray(options.routes) ? options.routes : [];
-    const resolved = resolveReqLanding({ target, owners, plan, routes }, async (path) => {
-      const cache = new Map();
-      try { return await this.readSuccessorNoteText(path, active, cache); } catch (_error) { return null; }
+    const cache = options.cache instanceof Map ? options.cache : new Map();
+    const paths = reqCloseLandingNotePaths({
+      owners,
+      plan,
+      routes,
+      dailyPath: options.dailyPath,
     });
+    for (const path of paths) {
+      try { cache.delete(path); } catch (_error) {}
+    }
+    const texts = new Map();
+    if (plan.notes && typeof plan.notes === "object" && !Array.isArray(plan.notes)) {
+      for (const [path, text] of Object.entries(plan.notes)) {
+        if (typeof text === "string") texts.set(path, text);
+      }
+    }
+    for (const path of paths) {
+      try {
+        const text = await this.readSuccessorNoteText(path, active, cache);
+        if (typeof text === "string") texts.set(path, text);
+      } catch (_error) {}
+    }
+    const resolved = resolveReqLanding({ target, owners, plan, routes }, (path) => (
+      texts.has(path) ? texts.get(path) : null
+    ));
     if (!resolved || resolved.ok !== true) return resolved || null;
     const landing = resolved.landing;
-    const text = landing.kind === "requirement"
-      ? await this.readSuccessorNoteText(landing.path, active, new Map())
-      : null;
-    const lineText = typeof text === "string" ? String(text.split(/\r?\n/)[landing.line - 1] || "") : "";
-    return {
-      ok: true,
-      ...landing,
-      ...(landing.kind === "requirement" ? { line: landing.line - 1, text: lineText } : {}),
-      description: node.text,
-      label: node.text,
-    };
+    return reqCloseLandableTarget(landing, texts.get(landing.path), node);
   }
 
   async persistReqPullInPlan(result, plan, context = {}) {
@@ -36696,6 +36762,167 @@ class TaskStatusCyclerReqCloseIntegrationMixin {
       failures,
     };
   }
+}
+// ---- src/198h-req-close-card-wiring.js ----
+// Cycler-boundary wiring for the managed Done requirement close card:
+// picker `{key, verdict}` → resolver `{selector}`, owner-block snapshots at
+// card open, composed expected texts through later gesture writes, and
+// landable jump targets. Does not change the RV resolver or twin.
+
+function reqCloseCardRequestSelector(request) {
+  if (!request || typeof request !== "object") return "";
+  if (typeof request.selector === "string" && request.selector.trim()) {
+    return request.selector.trim();
+  }
+  return typeof request.key === "string" ? request.key.trim() : "";
+}
+
+function reqCloseCardRequestsFromChoices(reqs) {
+  const out = [];
+  for (const row of Array.isArray(reqs) ? reqs : []) {
+    if (!row || typeof row !== "object") continue;
+    const selector = reqCloseCardRequestSelector(row);
+    const verdict = row.verdict;
+    if (!selector || !["met", "drop", "carry", "carry_pulled"].includes(verdict)) continue;
+    const request = { selector, verdict };
+    if (row.reason !== undefined) request.reason = row.reason;
+    out.push(request);
+  }
+  return out;
+}
+
+function reqCloseOwnerPostimagesFromNotes(owners, notes) {
+  const files = typeof reqCloseIntegrationNotes === "function"
+    ? reqCloseIntegrationNotes(notes)
+    : new Map();
+  const result = {};
+  for (const owner of Array.isArray(owners) ? owners : []) {
+    if (!owner || !owner.key || !owner.path || !files.has(owner.path)) continue;
+    const block = typeof reqCloseWriteOwnerBlock === "function"
+      ? reqCloseWriteOwnerBlock(files.get(owner.path), owner)
+      : null;
+    if (typeof block === "string") result[owner.key] = block;
+  }
+  return result;
+}
+
+function reqCloseOwnerKeyForSelector(owners, selector) {
+  const wanted = String(selector || "");
+  if (!wanted) return "";
+  for (const owner of Array.isArray(owners) ? owners : []) {
+    if (!owner) continue;
+    if (owner.key === wanted) return owner.key;
+    if ((owner.nodes || []).some((node) => node && node.key === wanted)) return owner.key;
+  }
+  return "";
+}
+
+function reqCloseRefuseStaleOwnerChoices(options = {}) {
+  const owners = Array.isArray(options.owners) ? options.owners : [];
+  const requests = Array.isArray(options.requests) ? options.requests.slice() : [];
+  const jumpKey = typeof options.jumpKey === "string" && options.jumpKey ? options.jumpKey : null;
+  const openBlocks = options.openBlocks instanceof Map
+    ? Object.fromEntries(options.openBlocks)
+    : (options.openBlocks && typeof options.openBlocks === "object" ? options.openBlocks : {});
+  const freshBlocks = reqCloseOwnerPostimagesFromNotes(owners, options.freshNotes);
+  const stale = new Set();
+  const failures = [];
+  for (const owner of owners) {
+    if (!owner || !owner.key) continue;
+    const expected = openBlocks[owner.key];
+    const live = freshBlocks[owner.key];
+    if (typeof expected === "string" && expected !== live) {
+      stale.add(owner.key);
+      failures.push({
+        kind: "requirement",
+        code: "req_close_stale",
+        key: owner.key,
+        reason: `requirement choices went stale for “${owner.text || "task"}”`,
+      });
+    }
+  }
+  return {
+    owners: owners.filter((owner) => owner && !stale.has(owner.key)),
+    requests: requests.filter((request) => {
+      const ownerKey = reqCloseOwnerKeyForSelector(owners, reqCloseCardRequestSelector(request));
+      return !ownerKey || !stale.has(ownerKey);
+    }),
+    jumpKey: jumpKey && stale.has(reqCloseOwnerKeyForSelector(owners, jumpKey)) ? null : jumpKey,
+    failures,
+    staleKeys: [...stale],
+  };
+}
+
+function reqCloseComposeExpectedNotes(options = {}) {
+  const open = typeof reqCloseIntegrationNotes === "function"
+    ? reqCloseIntegrationNotes(options.openNotes)
+    : new Map();
+  const expected = new Map();
+  for (const owner of Array.isArray(options.owners) ? options.owners : []) {
+    if (owner && owner.path && open.has(owner.path)) expected.set(owner.path, open.get(owner.path));
+  }
+  if (typeof successorOfferClosePostPickNotes === "function") {
+    const planned = successorOfferClosePostPickNotes(open, options.plan);
+    for (const edit of Array.isArray(options.plan && options.plan.edits) ? options.plan.edits : []) {
+      if (edit && typeof edit.path === "string" && planned.has(edit.path)) {
+        expected.set(edit.path, planned.get(edit.path));
+      }
+    }
+  }
+  if (options.dailyPath && typeof options.dailyAfter === "string") {
+    expected.set(String(options.dailyPath), options.dailyAfter);
+  }
+  for (const restore of Array.isArray(options.restores) ? options.restores : []) {
+    if (!restore || typeof restore.path !== "string" || typeof restore.after !== "string") continue;
+    expected.set(restore.path, restore.after);
+  }
+  return expected;
+}
+
+function reqCloseLandingNotePaths(options = {}) {
+  const paths = new Set();
+  const add = (path) => {
+    if (typeof path === "string" && path) paths.add(path);
+  };
+  for (const owner of Array.isArray(options.owners) ? options.owners : []) {
+    add(owner && owner.path);
+  }
+  const plan = options.plan && typeof options.plan === "object" ? options.plan : {};
+  for (const outcome of Array.isArray(plan.outcomes) ? plan.outcomes : []) {
+    add(outcome && outcome.carried && outcome.carried.path);
+  }
+  const notes = plan.notes && typeof plan.notes === "object" && !Array.isArray(plan.notes)
+    ? plan.notes
+    : {};
+  for (const path of Object.keys(notes)) add(path);
+  for (const route of Array.isArray(options.routes) ? options.routes : []) {
+    add(route && route.source);
+    add(route && route.dest);
+  }
+  add(options.dailyPath);
+  return [...paths];
+}
+
+function reqCloseLandableTarget(landing, noteText, node) {
+  const lineIndex = landing && Number.isInteger(landing.line) ? landing.line - 1 : -1;
+  const lineText = typeof noteText === "string" && lineIndex >= 0
+    ? String(noteText.split(/\r?\n/)[lineIndex] || "")
+    : "";
+  const description = node && typeof node.text === "string" ? node.text : "";
+  return {
+    ok: true,
+    key: landing && landing.key,
+    kind: landing && landing.kind,
+    outcome: landing && landing.outcome,
+    path: landing && landing.path,
+    line: lineIndex,
+    text: lineText,
+    blockId: landing && landing.kind === "carried_task"
+      ? (landing.blockId || landing.block_id || null)
+      : null,
+    description,
+    label: description,
+  };
 }
 // ---- src/199-req-toggle.js ----
 // Ctrl+] note/req toggle (bob-cli-on.10.1.4): route the cycler's Ctrl+]
@@ -37641,6 +37868,12 @@ Object.assign(module.exports.helpers, {
   planReqPullInLinks,
   createReqPullInPreflight,
   resolveReqLanding,
+  reqCloseCardRequestsFromChoices,
+  reqCloseOwnerPostimagesFromNotes,
+  reqCloseRefuseStaleOwnerChoices,
+  reqCloseComposeExpectedNotes,
+  reqCloseLandingNotePaths,
+  reqCloseLandableTarget,
   CYCLER_REQ_LANE_COPY,
   CYCLER_REQ_CARRIED_COPY,
   CYCLER_REQ_DROP_PLACEHOLDER,

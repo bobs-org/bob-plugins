@@ -160,3 +160,120 @@ test("pulled carry D7 creates a typed entry at ordinary successor placement", as
   assert.equal(result.pullIn.links[0].link.entryCreated, true);
   assert.match(result.pullIn.dayAfter, /- \[ \] \(\) — WRITING\n\t- \[\[Tasks#\^handles-empty-input\]\]/);
 });
+
+test("picker {key,verdict} maps to resolver {selector} at the cycler boundary", () => {
+  const dropKey = "Tasks.md#^export@abc/req/1.2~a59403fe";
+  const mapped = helpers.reqCloseCardRequestsFromChoices([
+    { key: dropKey, verdict: "drop", reason: "out of scope" },
+    { key: "Tasks.md#^export@abc/req/1~84afa836", verdict: "met" },
+    { selector: "already-selector", verdict: "carry" },
+    { key: "ignored", verdict: "nope" },
+    null,
+  ]);
+  assert.deepEqual(mapped, [
+    { selector: dropKey, verdict: "drop", reason: "out of scope" },
+    { selector: "Tasks.md#^export@abc/req/1~84afa836", verdict: "met" },
+    { selector: "already-selector", verdict: "carry" },
+  ]);
+});
+
+test("applyManagedReqCloseCard sends mapped selectors into applyReqCloseWrites", async () => {
+  const plugin = pluginWithNav(async () => null);
+  const captured = plugin.captureReqCloseOwnersFromText(preCloseText, identity.path, [identity]);
+  const dropKey = captured[0].nodes.find((node) => node.text === "Handles empty input").key;
+  const metKey = captured[0].nodes.find((node) => node.text === "Handles supported inputs").key;
+  const postCloseText = preCloseText.replace("- [ ] #task", "- [x] #task");
+  let seen = null;
+  plugin.applyReqCloseWrites = async (options) => {
+    seen = options;
+    return { ok: true, outcomes: [], met: [], notes: {}, restores: [], req_outcomes: [] };
+  };
+  plugin.readSuccessorNoteText = async () => postCloseText;
+  await plugin.applyManagedReqCloseCard({
+    owners: captured,
+    choices: {
+      reqs: [
+        { key: dropKey, verdict: "drop", reason: "duplicate effort" },
+        { key: metKey, verdict: "met" },
+      ],
+    },
+    notes: { [identity.path]: postCloseText },
+    identities: [identity],
+    today: "2026-11-22",
+  });
+  assert.ok(seen);
+  assert.deepEqual(seen.requests, [
+    { selector: dropKey, verdict: "drop", reason: "duplicate effort" },
+    { selector: metKey, verdict: "met" },
+  ]);
+  assert.equal(seen.requests.some((row) => Object.prototype.hasOwnProperty.call(row, "key")), false);
+});
+
+test("identity-less capture groups each matching task as its own owner", () => {
+  const plugin = pluginWithNav(async () => null);
+  const captured = plugin.captureReqCloseOwnersFromText(preCloseText, identity.path);
+  assert.equal(captured.length, 1);
+  assert.equal(captured[0].close_identity.blockId, identity.blockId);
+  assert.equal(captured[0].nodes.length, 4);
+});
+
+test("counted-range capture keeps only owners whose line lies in the window", () => {
+  const plugin = pluginWithNav(async () => null);
+  const twoOwners = [
+    "- [ ] #task First owner ^first",
+    "\t- [ ] First req",
+    "- [ ] #task Second owner ^second",
+    "\t- [ ] Second req",
+    "- [ ] #task Third owner ^third",
+    "\t- [ ] Third req",
+  ].join("\n") + "\n";
+  const inRange = plugin.captureReqCloseOwnersFromRange(twoOwners, "Tasks.md", 2, 3);
+  assert.equal(inRange.length, 1);
+  assert.equal(inRange[0].close_identity.blockId, "second");
+  const outside = plugin.captureReqCloseOwnersFromRange(twoOwners, "Tasks.md", 0, 1);
+  assert.equal(outside.length, 1);
+  assert.equal(outside[0].close_identity.blockId, "first");
+  const none = plugin.captureReqCloseOwnersFromRange(twoOwners, "Tasks.md", 1, 1);
+  assert.equal(none.length, 0);
+});
+
+test("managed landing hands nav a 0-based line plus exact text", async () => {
+  const plugin = pluginWithNav(async () => null);
+  const captured = plugin.captureReqCloseOwnersFromText(preCloseText, identity.path, [identity]);
+  const node = captured[0].nodes.find((entry) => entry.text === "Handles empty input");
+  const postCloseText = preCloseText.replace("- [ ] #task", "- [x] #task");
+  plugin.readSuccessorNoteText = async (path) => (path === identity.path ? postCloseText : null);
+  const landing = await plugin.resolveManagedReqCloseLanding({
+    owners: captured,
+    plan: { outcomes: [], notes: { [identity.path]: postCloseText } },
+    key: node.key,
+  });
+  assert.equal(landing.ok, true);
+  assert.equal(landing.kind, "requirement");
+  assert.equal(landing.line, node.line - 1);
+  assert.equal(landing.text, postCloseText.split("\n")[node.line - 1]);
+  assert.match(landing.text, /Handles empty input/);
+  assert.equal(landing.blockId, null);
+  assert.equal(landing.description, "Handles empty input");
+  assert.equal(landing.label, "Handles empty input");
+});
+
+test("a carried-task landing keeps blockId and the created task's exact line", () => {
+  const note = [
+    "- [x] #task Ship the exporter ^export",
+    "\t- [>] [[#^handles-empty-input|Handles empty input]]",
+    "- [ ] #task Handles empty input [created:: 2026-11-22] ^handles-empty-input",
+  ].join("\n") + "\n";
+  const landing = helpers.reqCloseLandableTarget({
+    key: "row",
+    kind: "carried_task",
+    outcome: "carry",
+    path: "Tasks.md",
+    line: 3,
+    blockId: "handles-empty-input",
+  }, note, { text: "Handles empty input" });
+  assert.equal(landing.line, 2);
+  assert.equal(landing.text, "- [ ] #task Handles empty input [created:: 2026-11-22] ^handles-empty-input");
+  assert.equal(landing.blockId, "handles-empty-input");
+  assert.equal(landing.description, "Handles empty input");
+});

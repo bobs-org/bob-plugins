@@ -93,7 +93,19 @@ test("every plugin copy of the req_close fixtures is byte-identical", (t) => {
 
 test("each plugin's exports fragment publishes the same req-close helpers", () => {
   const names = (helpers) => Object.keys(helpers).filter((name) => /^(reqClose[A-Z]|REQ_CLOSE_)/.test(name)).sort();
-  assert.deepEqual(names(navHelpers), names(cyclerHelpers), "nav exports every cycler req-close helper");
+  const cyclerNames = names(cyclerHelpers);
+  const navNames = names(navHelpers);
+  const wiring = fs.readFileSync(srcPath(CYCLER, "198h-req-close-card-wiring.js"), "utf8");
+  const cyclerOnly = new Set(
+    [...wiring.matchAll(/^function (reqClose[A-Z]\w*)\(/gm)]
+      .map((match) => match[1])
+      .filter((name) => cyclerNames.includes(name)),
+  );
+  assert.deepEqual(
+    cyclerNames.filter((name) => !cyclerOnly.has(name)),
+    navNames,
+    "nav exports every twin req-close helper; cycler-only card-wiring helpers live in 198h",
+  );
 });
 
 const vectors = readFixture(CYCLER, "vectors.json");

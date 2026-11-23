@@ -70,6 +70,7 @@
   "198e-req-close-pull-in.js",
   "198f-req-close-landing.js",
   "198g-req-close-integration.js",
+  "198h-req-close-card-wiring.js",
   "199-req-toggle.js",
   "199a-req-typing.js",
   "200-install-methods.js",

@@ -862,11 +862,12 @@ function formatProjectSectionTitle(body) {
 // the task-split planner, so an all-digit or empty body is rejected too).
 function parseProjectSectionBulletTitle(body) {
   const trimmed = String(body || "").trim();
-  if (!isTaskSplitDrawerTitle(trimmed)) {
-    return null;
-  }
-
-  return formatProjectSectionTitle(trimmed);
+  const parsed = drawer_body_title(trimmed);
+  if (!parsed) return null;
+  const key = drawer_key(parsed.title);
+  const legacyLog = parsed.marker === "legacy_caps" && DRAWER_LEGACY_LOG_KEYS.has(key);
+  if ((drawer_is_reserved_key(key) && !legacyLog) || drawer_is_structural_h2_key(key)) return null;
+  return heading_for_drawer(parsed.title, parsed.marker);
 }
 
 // Casefolded, whitespace-collapsed comparison key for matching a section

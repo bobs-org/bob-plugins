@@ -59,6 +59,7 @@
   "190-plugin-targets.js",
   "192-bank-row-guard.js",
   "193-req-line-guard.js",
+  "193a-task-drawers-twin.js",
   "194-task-reqs-lines-twin.js",
   "195-task-reqs-twin.js",
   "196-task-block-layout-twin.js",

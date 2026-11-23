@@ -16,6 +16,8 @@
 // column-zero bullets. Tasks are the `taskReqNoteTasks` rows; `blockEnd` and
 // every `offset` are UTF-16 offsets into the note.
 
+const TASK_BLOCK_NOTES_KEY = "NOTES";
+// Creation stays legacy throughout the reader rollout.
 const TASK_BLOCK_NOTES_TITLE = "NOTES";
 const TASK_BLOCK_NOTES_SECTION_TITLE = "Notes";
 // Drawer slots read the block with the default filter, as bob-cli does.
@@ -72,8 +74,14 @@ function taskBlockClassifyChild(line, nestedTaskOpen, globalFilter) {
   if (mark !== null) return { type: "requirement", mark };
   const body = taskReqListItemBody(text);
   if (body !== null) {
-    const title = taskReqTrim(body);
-    if (taskReqIsDrawerTitle(title)) return { type: "drawer", title };
+    const parsed = drawer_body_title(taskReqTrim(body));
+    if (parsed) {
+      const key = drawer_key(parsed.title);
+      const legacyLog = parsed.marker === "legacy_caps" && DRAWER_LEGACY_LOG_KEYS.has(key);
+      if ((!drawer_is_reserved_key(key) || legacyLog) && !drawer_is_structural_h2_key(key)) {
+        return { type: "drawer", title: parsed.title };
+      }
+    }
   }
   return { type: "authored" };
 }
@@ -149,7 +157,7 @@ function taskBlockIsLooseNote(child) {
 }
 
 function taskBlockIsNotesDrawer(child) {
-  return child.kind.type === "drawer" && taskReqDrawerKey(child.kind.title) === TASK_BLOCK_NOTES_TITLE;
+  return child.kind.type === "drawer" && taskReqDrawerKey(child.kind.title) === TASK_BLOCK_NOTES_KEY;
 }
 
 // True when the task owns at least one req (any state, any depth).
@@ -298,24 +306,21 @@ function taskBlockRawFenced(doc) {
   return taskReqDocMemo(doc, "raw-fenced", () => taskReqFencedLines(doc.texts, 0, doc.texts.length));
 }
 
-// `capture_drawers::drawers`: the ALL-CAPS drawer bullets directly under the
+// `capture_drawers::drawers`: the dual-read drawer headers directly under the
 // task, as `{title, key, line (1-based), lineIndex, indentation, blockEnd,
 // entryCount}`.
 function taskBlockDrawersIn(doc, task) {
-  const fenced = taskBlockRawFenced(doc);
-  const children = taskBlockDirectChildListIndexes(doc, task.lineIndex, task.blockEnd);
+  const children = drawer_direct_child_indexes(doc.contents, task);
   const drawers = [];
   children.forEach((lineIndex, index) => {
     const text = doc.texts[lineIndex];
-    if (fenced.has(lineIndex) || taskReqManagedLogKind(text) !== null) return;
-    const body = doc.bodies[lineIndex];
-    if (body === null || taskBlockHasTaskCheckbox(body)) return;
-    const title = taskReqTrim(body);
-    if (!taskReqIsDrawerTitle(title)) return;
+    const header = recognize_drawer_header(doc.contents, task, lineIndex);
+    if (!header || taskReqManagedLogKind(text) !== null) return;
     const blockEnd = index + 1 < children.length ? taskBlockLineStart(doc, children[index + 1]) : task.blockEnd;
     drawers.push({
-      title,
-      key: taskReqDrawerKey(title),
+      title: header.title,
+      key: header.key,
+      marker: header.marker,
       line: lineIndex + 1,
       lineIndex,
       indentation: taskReqLeadingWhitespace(text),
@@ -416,7 +421,7 @@ function taskBlockProjectNotesDrawer(contents) {
     const heading = taskBlockAtxHeading(doc.texts[lineIndex]);
     if (!heading || heading.level !== 2) continue;
     const title = taskReqTrim(heading.title);
-    if (title === "" || taskReqDrawerKey(title) !== TASK_BLOCK_NOTES_TITLE) continue;
+    if (title === "" || taskReqDrawerKey(title) !== TASK_BLOCK_NOTES_KEY) continue;
     let endLine = doc.texts.length;
     for (let next = lineIndex + 1; next < doc.texts.length; next += 1) {
       if (fenced.has(next)) continue;
@@ -429,7 +434,7 @@ function taskBlockProjectNotesDrawer(contents) {
     const blockEnd = endLine === 0
       ? 0
       : endLine <= doc.spans.length ? doc.spans[endLine - 1].end : doc.spans[doc.spans.length - 1].end;
-    return { title, key: TASK_BLOCK_NOTES_TITLE, line: lineIndex + 1, lineIndex, indentation: "", blockEnd };
+    return { title, key: TASK_BLOCK_NOTES_KEY, line: lineIndex + 1, lineIndex, indentation: "", blockEnd };
   }
   return null;
 }
@@ -451,7 +456,7 @@ function taskBlockDocumentLineEnding(contents) {
 // `^prj` owner, else the task-child `NOTES` drawer.
 function taskBlockNotesDrawer(contents, task) {
   if (taskBlockIsPrjParent(contents, task)) return taskBlockProjectNotesDrawer(contents);
-  return taskBlockDrawers(contents, task).find((drawer) => drawer.key === TASK_BLOCK_NOTES_TITLE) || null;
+  return taskBlockDrawers(contents, task).find((drawer) => drawer.key === TASK_BLOCK_NOTES_KEY) || null;
 }
 
 // `task_block_layout::notes_create_title`.
@@ -483,7 +488,7 @@ function taskBlockEnsureNotesDrawer(contents, task) {
     blockEnd: headerOffset <= task.blockEnd ? task.blockEnd + addition.length : task.blockEnd,
   });
   const updated = `${text.slice(0, headerOffset)}${addition}${text.slice(headerOffset)}`;
-  const drawer = taskBlockDrawers(updated, updatedTask).find((entry) => entry.key === TASK_BLOCK_NOTES_TITLE);
+  const drawer = taskBlockDrawers(updated, updatedTask).find((entry) => entry.key === TASK_BLOCK_NOTES_KEY);
   return drawer ? { updated, drawer, created: true } : null;
 }
 

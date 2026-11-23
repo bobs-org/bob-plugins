@@ -323,8 +323,9 @@ function taskReqWriteNoteToReq(contents, target, forest, options) {
     ownerLine = parentReq.ownerIndex;
     depth = parentReq.depth + 1;
   } else {
-    const parentBody = doc.bodies[parent] === null ? "" : doc.bodies[parent];
-    return taskReqIsDrawerTitle(taskReqTrim(parentBody))
+    const drawerOwnerLine = taskReqDocParent(doc, parent);
+    const drawerOwner = drawerOwnerLine === null ? null : taskBlockFindTask(contents, drawerOwnerLine, options);
+    return (drawerOwner && recognize_drawer_header(contents, drawerOwner, parent))
       ? taskReqWriteRefusal("req_in_drawer", "Drawers hold notes — put the requirement directly under the task")
       : taskReqWriteParentRefusal();
   }

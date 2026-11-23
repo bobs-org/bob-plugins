@@ -3,6 +3,14 @@
 // bob-cli vector tests. Managed Done requirement close is exposed by the
 // task-status-cycler v7 API.
 Object.assign(module.exports.helpers, {
+  drawer_body_title,
+  is_legacy_drawer_title,
+  drawer_key,
+  recognize_drawer_header,
+  heading_for_drawer,
+  drawer_for_heading,
+  can_create_drawer,
+  TASK_BLOCK_NOTES_KEY,
   TASK_REQ_MAX_DEPTH,
   TASK_REQ_GLOBAL_FILTER,
   TASK_REQ_DEFAULT_STATUS_TYPES,

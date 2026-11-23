@@ -363,29 +363,15 @@ function taskReqManagedLogKind(line) {
   return taskReqManagedLogLabel(rest);
 }
 
-function taskReqIsTitleLead(character) {
-  return (character >= "A" && character <= "Z") || taskReqIsAsciiDigit(character);
-}
-
-// `capture_drawers::is_drawer_title`.
+// Body-shape compatibility name; context-aware readers call the shared
+// `recognize_drawer_header` adapter before treating this as a drawer.
 function taskReqIsDrawerTitle(title) {
-  const characters = Array.from(String(title));
-  if (!characters.length || !taskReqIsTitleLead(characters[0])) return false;
-  let hasLetter = characters[0] >= "A" && characters[0] <= "Z";
-  for (let index = 1; index < characters.length; index += 1) {
-    const character = characters[index];
-    const allowed = taskReqIsTitleLead(character)
-      || " \t&'(),./-?!;".includes(character)
-      || (character === ":" && index === characters.length - 1);
-    if (!allowed) return false;
-    if (character >= "A" && character <= "Z") hasLetter = true;
-  }
-  return hasLetter;
+  return drawer_body_title(title) !== null;
 }
 
-// `capture_drawers::drawer_key`: whitespace collapsed, ASCII uppercase.
+// `capture_drawers::drawer_key`: whitespace collapsed, Unicode uppercase.
 function taskReqDrawerKey(title) {
-  return taskReqSplitWhitespace(title).join(" ").replace(/[a-z]+/g, (letters) => letters.toUpperCase());
+  return drawer_key(title);
 }
 
 // Lines that can never be a req or a req parent by shape: drawer titles and

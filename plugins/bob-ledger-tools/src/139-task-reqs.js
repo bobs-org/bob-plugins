@@ -124,8 +124,7 @@ function taskReqFrontmatterEnd(lines) {
 
 function taskReqIsDrawerTitle(title) {
   try {
-    const value = String(title || "").trim();
-    return /^[A-Z0-9][A-Z0-9\t &'(),.\/-?!;]*(?::)?$/.test(value) && /[A-Z]/.test(value);
+    return drawer_body_title(String(title || "").trim()) !== null;
   } catch (error) {
     return false;
   }

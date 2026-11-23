@@ -41,6 +41,7 @@
   "155-block-rename-writes.js",
   "157-block-rename-follow.js",
   "160-install-methods.js",
+  "164a-task-drawers-twin.js",
   "165-task-reqs-lines-twin.js",
   "166-task-reqs-twin.js",
   "167-req-line-guard.js",

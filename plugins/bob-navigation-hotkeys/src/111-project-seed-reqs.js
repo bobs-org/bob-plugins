@@ -20,21 +20,21 @@
 
 function projectSeedReqNotesKey(title) {
   try {
-    const key = taskReqDrawerKey(String(title || "").trim());
-    return key === "NOTES" || key === "REQUIREMENTS" ? "NOTES" : key;
+    const key = drawer_key(String(title || "").trim());
+    return key === TASK_BLOCK_NOTES_KEY || key === "REQUIREMENTS" ? TASK_BLOCK_NOTES_KEY : key;
   } catch (_error) {
     const normalized = String(title || "")
       .trim()
       .replace(/\s+/g, " ")
       .toUpperCase();
-    return normalized === "NOTES" || normalized === "REQUIREMENTS"
-      ? "NOTES"
+    return normalized === TASK_BLOCK_NOTES_KEY || normalized === "REQUIREMENTS"
+      ? TASK_BLOCK_NOTES_KEY
       : normalized;
   }
 }
 
 function projectSeedReqIsNotesDrawerTitle(title) {
-  return projectSeedReqNotesKey(title) === "NOTES";
+  return projectSeedReqNotesKey(title) === TASK_BLOCK_NOTES_KEY;
 }
 
 // Build a promoted task line from a direct-child req or subtask. Pending and

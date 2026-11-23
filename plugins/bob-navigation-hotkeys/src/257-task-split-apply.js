@@ -119,6 +119,13 @@ function taskSplitResolveOwner(lines, stripped, fenced, ownerPath, request) {
 function taskSplitCollectCandidates(lines, ownerLine, ownerEnd, kind) {
   const stripped = lines.map((line) => taskSplitStripEnding(line));
   const source = lines.join("");
+  const knownTask = taskBlockFindTask(source, ownerLine);
+  const drawerOwner = knownTask || {
+    lineIndex: ownerLine,
+    blockEnd: ownerEnd + 1 < lines.length
+      ? lines.slice(0, ownerEnd + 1).join("").length
+      : source.length,
+  };
   const result = [];
   if (kind === "task") {
     const ownerIndent = taskSplitIndentOf(stripped[ownerLine] || "");
@@ -138,7 +145,8 @@ function taskSplitCollectCandidates(lines, ownerLine, ownerEnd, kind) {
       ) {
         continue;
       }
-      if (taskSplitClassifyChild(stripped[index]).kind !== "drawer") {
+      const header = recognize_drawer_header(source, drawerOwner, index);
+      if (!header) {
         continue;
       }
       const drawerIndent = taskSplitIndentOf(stripped[index]).length;
@@ -174,7 +182,8 @@ function taskSplitCollectCandidates(lines, ownerLine, ownerEnd, kind) {
       if (!isDirect && !drawerLines.has(index)) {
         continue;
       }
-      const classified = taskSplitClassifyChild(stripped[index]);
+      const drawerHeader = isDirect ? recognize_drawer_header(source, drawerOwner, index) : null;
+      const classified = taskSplitClassifyChild(stripped[index], drawerHeader);
       const drawerTitle =
         classified.kind === "drawer" ? classified.title : null;
       if (
@@ -200,10 +209,9 @@ function taskSplitCollectCandidates(lines, ownerLine, ownerEnd, kind) {
         : taskSplitParentListLine(stripped, index, ownerLine) === null
           ? null
           : (() => {
-              const parentBody = taskSplitListBody(
-                lines[taskSplitParentListLine(stripped, index, ownerLine)],
-              );
-              return parentBody === null ? null : parentBody.trim();
+              const parentLine = taskSplitParentListLine(stripped, index, ownerLine);
+              const header = recognize_drawer_header(source, drawerOwner, parentLine);
+              return header ? header.title : null;
             })();
       result.push({
         line: index,

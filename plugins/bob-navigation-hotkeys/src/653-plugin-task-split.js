@@ -136,7 +136,10 @@ function taskSplitDrawerTitleAt(content, ownerLine, line) {
   if (body === null) {
     return null;
   }
-  const classified = taskSplitClassifyChild(stripped[line]);
+  const knownTask = taskBlockFindTask(String(content || ""), ownerLine);
+  const drawerOwner = knownTask || { lineIndex: ownerLine, blockEnd: String(content || "").length };
+  const header = recognize_drawer_header(String(content || ""), drawerOwner, line);
+  const classified = taskSplitClassifyChild(stripped[line], header);
   return classified.kind === "drawer" ? classified.title : null;
 }
 

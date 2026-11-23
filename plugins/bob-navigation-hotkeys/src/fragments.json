@@ -254,6 +254,7 @@
   "688-plugin-window-prefix-commands.js",
   "689-plugin-window-tab-numbers.js",
   "690-install-plugin-mixins.js",
+  "693a-task-drawers-twin.js",
   "694-task-reqs-lines-twin.js",
   "695-task-reqs-twin.js",
   "696-task-block-layout-twin.js",

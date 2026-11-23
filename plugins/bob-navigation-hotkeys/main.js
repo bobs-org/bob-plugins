@@ -12798,11 +12798,12 @@ function formatProjectSectionTitle(body) {
 // the task-split planner, so an all-digit or empty body is rejected too).
 function parseProjectSectionBulletTitle(body) {
   const trimmed = String(body || "").trim();
-  if (!isTaskSplitDrawerTitle(trimmed)) {
-    return null;
-  }
-
-  return formatProjectSectionTitle(trimmed);
+  const parsed = drawer_body_title(trimmed);
+  if (!parsed) return null;
+  const key = drawer_key(parsed.title);
+  const legacyLog = parsed.marker === "legacy_caps" && DRAWER_LEGACY_LOG_KEYS.has(key);
+  if ((drawer_is_reserved_key(key) && !legacyLog) || drawer_is_structural_h2_key(key)) return null;
+  return heading_for_drawer(parsed.title, parsed.marker);
 }
 
 // Casefolded, whitespace-collapsed comparison key for matching a section
@@ -15886,21 +15887,21 @@ function getProjectBasenameFromTaskBlockId(sourceBasename, blockId) {
 
 function projectSeedReqNotesKey(title) {
   try {
-    const key = taskReqDrawerKey(String(title || "").trim());
-    return key === "NOTES" || key === "REQUIREMENTS" ? "NOTES" : key;
+    const key = drawer_key(String(title || "").trim());
+    return key === TASK_BLOCK_NOTES_KEY || key === "REQUIREMENTS" ? TASK_BLOCK_NOTES_KEY : key;
   } catch (_error) {
     const normalized = String(title || "")
       .trim()
       .replace(/\s+/g, " ")
       .toUpperCase();
-    return normalized === "NOTES" || normalized === "REQUIREMENTS"
-      ? "NOTES"
+    return normalized === TASK_BLOCK_NOTES_KEY || normalized === "REQUIREMENTS"
+      ? TASK_BLOCK_NOTES_KEY
       : normalized;
   }
 }
 
 function projectSeedReqIsNotesDrawerTitle(title) {
-  return projectSeedReqNotesKey(title) === "NOTES";
+  return projectSeedReqNotesKey(title) === TASK_BLOCK_NOTES_KEY;
 }
 
 // Build a promoted task line from a direct-child req or subtask. Pending and
@@ -53387,65 +53388,10 @@ function createInboxRouteApi(plugin) {
 //   clamped, owner_minted_id, owner_path, owner_line }.
 // Failure: { ok: false, code, message } with the §5.1 codes verbatim.
 
-// Drawer titles are the note-drawer grammar from
-// `capture_drawers::is_drawer_title` (`punctuation = sentence`): an
-// uppercase/digit lead, the drawer rest alphabet, at least one letter,
-// plus `?`, `!`, `;` anywhere after the lead and `:` only as the final
-// character. `buildProjectSeedFromChildBullets` gates its section titles
-// on this same predicate.
+// Compatibility predicate for callers that still ask about the legacy
+// ALL-CAPS body form. Contextual readers use `recognize_drawer_header`.
 function isTaskSplitDrawerTitle(title) {
-  const text = String(title || "");
-  if (text.length === 0) {
-    return false;
-  }
-  const first = text.charAt(0);
-  if (!isTaskSplitDrawerTitleFirst(first)) {
-    return false;
-  }
-  let hasLetter = first >= "A" && first <= "Z";
-  for (let index = 1; index < text.length; index += 1) {
-    const character = text.charAt(index);
-    const isLast = index === text.length - 1;
-    if (!isTaskSplitDrawerTitleRest(character, isLast)) {
-      return false;
-    }
-    if (character >= "A" && character <= "Z") {
-      hasLetter = true;
-    }
-  }
-  return hasLetter;
-}
-
-function isTaskSplitDrawerTitleFirst(character) {
-  return (
-    (character >= "A" && character <= "Z") ||
-    (character >= "0" && character <= "9")
-  );
-}
-
-function isTaskSplitDrawerTitleRest(character, isLast) {
-  if (
-    isTaskSplitDrawerTitleFirst(character) ||
-    character === " " ||
-    character === "\t" ||
-    character === "&" ||
-    character === "'" ||
-    character === "(" ||
-    character === ")" ||
-    character === "," ||
-    character === "." ||
-    character === "/" ||
-    character === "-"
-  ) {
-    return true;
-  }
-  if (character === "?" || character === "!" || character === ";") {
-    return true;
-  }
-  if (character === ":") {
-    return isLast === true;
-  }
-  return false;
+  return is_legacy_drawer_title(title);
 }
 
 // --- Block-ID mint pipeline (mirrors `capture_block_ids`) ---
@@ -54312,7 +54258,7 @@ function taskSplitCancelLogLine(line) {
 // Classify one direct-child list line. Managed lines are never splittable;
 // drawer titles scope the picker; nested tasks read as authored here because
 // the planner validates `#task` lines with a teaching error instead.
-function taskSplitClassifyChild(line) {
+function taskSplitClassifyChild(line, drawerHeader) {
   const text = String(line || "");
   if (isProjectSubprojectsLine(text)) {
     return { kind: "managed" };
@@ -54330,10 +54276,7 @@ function taskSplitClassifyChild(line) {
   ) {
     return { kind: "managed" };
   }
-  const body = taskSplitListBody(text);
-  if (body !== null && isTaskSplitDrawerTitle(body.trim())) {
-    return { kind: "drawer", title: body.trim() };
-  }
+  if (drawerHeader) return { kind: "drawer", title: drawerHeader.title };
   return { kind: "authored" };
 }
 
@@ -54459,6 +54402,13 @@ function taskSplitResolveOwner(lines, stripped, fenced, ownerPath, request) {
 function taskSplitCollectCandidates(lines, ownerLine, ownerEnd, kind) {
   const stripped = lines.map((line) => taskSplitStripEnding(line));
   const source = lines.join("");
+  const knownTask = taskBlockFindTask(source, ownerLine);
+  const drawerOwner = knownTask || {
+    lineIndex: ownerLine,
+    blockEnd: ownerEnd + 1 < lines.length
+      ? lines.slice(0, ownerEnd + 1).join("").length
+      : source.length,
+  };
   const result = [];
   if (kind === "task") {
     const ownerIndent = taskSplitIndentOf(stripped[ownerLine] || "");
@@ -54478,7 +54428,8 @@ function taskSplitCollectCandidates(lines, ownerLine, ownerEnd, kind) {
       ) {
         continue;
       }
-      if (taskSplitClassifyChild(stripped[index]).kind !== "drawer") {
+      const header = recognize_drawer_header(source, drawerOwner, index);
+      if (!header) {
         continue;
       }
       const drawerIndent = taskSplitIndentOf(stripped[index]).length;
@@ -54514,7 +54465,8 @@ function taskSplitCollectCandidates(lines, ownerLine, ownerEnd, kind) {
       if (!isDirect && !drawerLines.has(index)) {
         continue;
       }
-      const classified = taskSplitClassifyChild(stripped[index]);
+      const drawerHeader = isDirect ? recognize_drawer_header(source, drawerOwner, index) : null;
+      const classified = taskSplitClassifyChild(stripped[index], drawerHeader);
       const drawerTitle =
         classified.kind === "drawer" ? classified.title : null;
       if (
@@ -54540,10 +54492,9 @@ function taskSplitCollectCandidates(lines, ownerLine, ownerEnd, kind) {
         : taskSplitParentListLine(stripped, index, ownerLine) === null
           ? null
           : (() => {
-              const parentBody = taskSplitListBody(
-                lines[taskSplitParentListLine(stripped, index, ownerLine)],
-              );
-              return parentBody === null ? null : parentBody.trim();
+              const parentLine = taskSplitParentListLine(stripped, index, ownerLine);
+              const header = recognize_drawer_header(source, drawerOwner, parentLine);
+              return header ? header.title : null;
             })();
       result.push({
         line: index,
@@ -120624,7 +120575,10 @@ function taskSplitDrawerTitleAt(content, ownerLine, line) {
   if (body === null) {
     return null;
   }
-  const classified = taskSplitClassifyChild(stripped[line]);
+  const knownTask = taskBlockFindTask(String(content || ""), ownerLine);
+  const drawerOwner = knownTask || { lineIndex: ownerLine, blockEnd: String(content || "").length };
+  const header = recognize_drawer_header(String(content || ""), drawerOwner, line);
+  const classified = taskSplitClassifyChild(stripped[line], header);
   return classified.kind === "drawer" ? classified.title : null;
 }
 
@@ -135522,6 +135476,261 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysWindowPrefixCommandsMixin,
   BobNavigationHotkeysWindowTabNumbersMixin,
 ]);
+// ---- src/693a-task-drawers-twin.js ----
+// Shared task-drawer reader twin. The bob-cli fixtures are authoritative;
+// copy this fragment byte for byte to every plugin that reads task blocks.
+// Marker searched by the reader-rollout phase: bob-task-drawer-dual-read-v1
+
+const DRAWER_RESERVED_KEYS = new Set([
+  "SCHEDULE LOG", "WORK LOG", "ROTTEN LOG", "CANCEL LOG",
+  "DEPENDS ON", "BLOCKS", "LINKS", "LINKS TO", "LINKED FROM", "BACKLINKS",
+  "TASKS", "NEXT & IN PROGRESS", "BLOCKED", "DONE & CANCELED",
+  "POMODOROS", "EVENTS", "HIGHLIGHTS", "AREAS", "NOTEBOOKS", "ALBUMS", "PROJECTS",
+]);
+const DRAWER_LEGACY_LOG_KEYS = new Set(["SCHEDULE LOG", "WORK LOG", "ROTTEN LOG"]);
+const DRAWER_STRUCTURAL_H2_KEYS = new Set([
+  "TASKS", "NEXT & IN PROGRESS", "BLOCKED", "DONE & CANCELED", "POMODOROS",
+  "EVENTS", "HIGHLIGHTS", "AREAS", "NOTEBOOKS", "ALBUMS", "PROJECTS",
+]);
+
+function is_legacy_drawer_title(title) {
+  const chars = Array.from(String(title == null ? "" : title));
+  if (!chars.length || !((chars[0] >= "A" && chars[0] <= "Z") || (chars[0] >= "0" && chars[0] <= "9"))) return false;
+  let hasLetter = chars[0] >= "A" && chars[0] <= "Z";
+  for (let index = 1; index < chars.length; index += 1) {
+    const character = chars[index];
+    const isLast = index === chars.length - 1;
+    const asciiLead = (character >= "A" && character <= "Z") || (character >= "0" && character <= "9");
+    if (!asciiLead && !" \t&'(),./-?!;".includes(character) && !(character === ":" && isLast)) return false;
+    if (character >= "A" && character <= "Z") hasLetter = true;
+  }
+  return hasLetter;
+}
+
+function drawer_key(title) {
+  return String(title == null ? "" : title).trim().replace(/\s+/gu, " ").toUpperCase();
+}
+
+function drawer_body_title(body) {
+  const value = String(body == null ? "" : body);
+  if (/^\[[^\]\r\n]\][ \t]+/u.test(value)) return null;
+  const trimmed = value.trim();
+  if (is_legacy_drawer_title(trimmed)) return { title: trimmed, marker: "legacy_caps" };
+  if (!trimmed.startsWith("**") || !trimmed.endsWith("**")) return null;
+  const title = trimmed.slice(2, -2);
+  if (!title || /[\r\n*]/u.test(title) || title.trim() !== title || title.endsWith(":")) return null;
+  if (!Array.from(title).some((character) => /[\p{L}\p{N}]/u.test(character))) return null;
+  return { title, marker: "bold" };
+}
+
+function drawer_is_reserved_key(key) {
+  return DRAWER_RESERVED_KEYS.has(String(key || ""));
+}
+
+function drawer_is_structural_h2_key(key) {
+  return DRAWER_STRUCTURAL_H2_KEYS.has(String(key || ""));
+}
+
+function drawer_title_refusal(title) {
+  if (!title) return "not_a_drawer_title";
+  if (title.trim() !== title || /[\r\n*]/u.test(title) || title.endsWith(":")) return "not_a_drawer_title";
+  if (!Array.from(title).some((character) => /[\p{L}\p{N}]/u.test(character))) return "not_a_drawer_title";
+  return drawer_is_reserved_key(drawer_key(title)) ? "reserved" : null;
+}
+
+function can_create_drawer(title, hasContent) {
+  const value = String(title == null ? "" : title);
+  const refusal = drawer_title_refusal(value);
+  if (refusal) return { ok: false, refusal };
+  if (!hasContent) return { ok: false, refusal: "empty_drawer" };
+  return { ok: true };
+}
+
+function drawer_title_case_legacy(title) {
+  return String(title || "").trim().replace(/\s+/g, " ").toLowerCase()
+    .replace(/[a-z0-9]+/g, (run) => run.charAt(0).toUpperCase() + run.slice(1));
+}
+
+function heading_for_drawer(title, marker) {
+  return marker === "legacy_caps" ? drawer_title_case_legacy(title) : String(title || "");
+}
+
+function drawer_for_heading(title) {
+  const value = String(title == null ? "" : title);
+  if (value === "") return { ok: true, title: "" };
+  const refusal = drawer_title_refusal(value);
+  return refusal ? { ok: false, refusal } : { ok: true, title: value };
+}
+
+function drawer_utf8_length(text) {
+  let bytes = 0;
+  for (const character of String(text)) {
+    const point = character.codePointAt(0);
+    bytes += point <= 0x7f ? 1 : point <= 0x7ff ? 2 : point <= 0xffff ? 3 : 4;
+  }
+  return bytes;
+}
+
+function drawer_line_spans(contents) {
+  const text = String(contents == null ? "" : contents);
+  const spans = [];
+  let start = 0;
+  while (start < text.length) {
+    const newline = text.indexOf("\n", start);
+    const end = newline < 0 ? text.length : newline;
+    let bodyEnd = end;
+    if (bodyEnd > start && text[bodyEnd - 1] === "\r") bodyEnd -= 1;
+    spans.push({ start, end: bodyEnd, text: text.slice(start, bodyEnd) });
+    start = newline < 0 ? text.length : newline + 1;
+  }
+  if (text === "" || text.endsWith("\n")) spans.push({ start: text.length, end: text.length, text: "" });
+  return spans;
+}
+
+function drawer_list_item(line) {
+  const text = String(line || "");
+  const indent = (text.match(/^[ \t]*/) || [""])[0];
+  const rest = text.slice(indent.length);
+  let markerLength = 0;
+  if (/^[-*+]/u.test(rest)) markerLength = 1;
+  else {
+    const ordered = /^\d+[.)]/u.exec(rest);
+    if (ordered) markerLength = ordered[0].length;
+  }
+  if (!markerLength) return null;
+  const after = indent.length + markerLength;
+  const gap = (text.slice(after).match(/^[ \t]+/u) || [""])[0].length;
+  if (!gap) return null;
+  const bodyFrom = after + gap;
+  return {
+    indent: indent.length,
+    indentColumns: drawer_indent_columns(text),
+    body: text.slice(bodyFrom),
+    bodyFrom,
+  };
+}
+
+function drawer_indent_columns(line) {
+  let columns = 0;
+  for (const character of String(line || "")) {
+    if (character === " ") columns += 1;
+    else if (character === "\t") columns += 2;
+    else break;
+  }
+  return columns;
+}
+
+function drawer_direct_child_indexes(contents, task) {
+  const text = String(contents == null ? "" : contents);
+  const spans = drawer_line_spans(text);
+  const taskIndex = task && Number.isInteger(task.lineIndex) ? task.lineIndex
+    : task && Number.isInteger(task.line_index) ? task.line_index : -1;
+  if (taskIndex < 0 || taskIndex >= spans.length) return [];
+  const parentIndent = drawer_indent_columns(spans[taskIndex].text);
+  const children = [];
+  for (let lineIndex = taskIndex + 1; lineIndex < spans.length; lineIndex += 1) {
+    if (Number.isFinite(task.blockEnd) && spans[lineIndex].start >= task.blockEnd) break;
+    const item = drawer_list_item(spans[lineIndex].text);
+    if (!item || item.indentColumns <= parentIndent) continue;
+    let parent = null;
+    for (let index = lineIndex - 1; index >= 0; index -= 1) {
+      const previous = drawer_list_item(spans[index].text);
+      if (previous && previous.indentColumns < item.indentColumns) { parent = index; break; }
+    }
+    if (parent === taskIndex) children.push(lineIndex);
+  }
+  return children;
+}
+
+function drawer_fence_marker(line) {
+  const text = String(line || "");
+  const indent = (text.match(/^ */u) || [""])[0].length;
+  if (indent > 3) return null;
+  const rest = text.slice(indent);
+  const character = rest[0];
+  if (character !== "`" && character !== "~") return null;
+  let length = 0;
+  while (rest[length] === character) length += 1;
+  return length >= 3 ? { character, length } : null;
+}
+
+function drawer_fenced_lines(spans) {
+  const fenced = new Set();
+  let open = null;
+  for (let index = 0; index < spans.length; index += 1) {
+    const item = drawer_list_item(spans[index].text);
+    const logical = item ? item.body : spans[index].text;
+    const marker = drawer_fence_marker(logical);
+    if (open) {
+      fenced.add(index);
+      if (marker && marker.character === open.character && marker.length >= open.length
+        && !logical.trim().slice(marker.length)) open = null;
+    } else if (marker) {
+      fenced.add(index);
+      open = marker;
+    }
+  }
+  return fenced;
+}
+
+function drawer_is_managed_line(line, body) {
+  const text = String(body || "").trim();
+  if (/^(?:🧩\s*)?\*\*SUB-PROJECTS(?::)?\*\*/iu.test(text)) return true;
+  if (/^(?:⛓️|🧱|🔗|🪢)\s*\*\*(?:DEPENDS ON|BLOCKS|LINKS|LINKS TO|LINKED FROM|BACKLINKS)(?::)?\*\*/iu.test(text)
+    || /^\*\*(?:DEPENDS ON|BLOCKS|LINKS|LINKS TO|LINKED FROM|BACKLINKS)(?::)?\*\*/iu.test(text)) return true;
+  if (text.startsWith("❌") && text.includes("CANCEL LOG")) return true;
+  if (/^(?:🗓️?\s*|🛠️\s*|🥀\uFE0F?\s*)?\*\*(?:SCHEDULE|WORK|ROTTEN) LOG(?::)?\*\*/u.test(text)) return true;
+  return /\*\*(?:SCHEDULE|WORK|ROTTEN) LOG(?::)?\*\*$/u.test(text);
+}
+
+function drawer_is_task_line(line) {
+  const item = drawer_list_item(line);
+  return Boolean(item && /^\[[^\]\r\n]\][ \t]+/u.test(item.body)
+    && /(?:^|\s)#task(?:\s|$)/u.test(item.body));
+}
+
+// Contextual counterpart to drawer_body_title. `task` is a task-reader
+// adapter with zero-based lineIndex and a UTF-16 blockEnd; ranges returned
+// here are half-open UTF-8 byte offsets like bob-cli's DrawerHeader.
+function recognize_drawer_header(contents, task, line_index) {
+  const text = String(contents == null ? "" : contents);
+  const spans = drawer_line_spans(text);
+  const taskIndex = task && Number.isInteger(task.lineIndex) ? task.lineIndex
+    : task && Number.isInteger(task.line_index) ? task.line_index : -1;
+  const lineIndex = Number(line_index);
+  if (taskIndex < 0 || lineIndex <= taskIndex || lineIndex >= spans.length) return null;
+  const ownerLine = spans[taskIndex] && spans[taskIndex].text;
+  const candidate = spans[lineIndex];
+  if (!ownerLine || !drawer_is_task_line(ownerLine) || !candidate) return null;
+  if (Number.isFinite(task.blockEnd) && candidate.start >= task.blockEnd) return null;
+  const item = drawer_list_item(candidate.text);
+  if (!item) return null;
+  let parent = null;
+  for (let index = lineIndex - 1; index >= 0; index -= 1) {
+    const previous = drawer_list_item(spans[index].text);
+    if (previous && previous.indentColumns < item.indentColumns) { parent = index; break; }
+  }
+  if (parent !== taskIndex) return null;
+  if (drawer_fenced_lines(spans).has(lineIndex)) return null;
+  if (/^\s*>/u.test(item.body) || drawer_is_managed_line(candidate.text, item.body)) return null;
+  const parsed = drawer_body_title(item.body);
+  if (!parsed) return null;
+  const key = drawer_key(parsed.title);
+  const legacyLog = parsed.marker === "legacy_caps" && DRAWER_LEGACY_LOG_KEYS.has(key);
+  if ((drawer_is_reserved_key(key) && !legacyLog) || drawer_is_structural_h2_key(key)) return null;
+  const titleWithinBody = item.body.indexOf(parsed.title) + item.bodyFrom;
+  const linePrefix = text.slice(0, candidate.start);
+  const titlePrefix = text.slice(0, candidate.start + titleWithinBody);
+  const header = candidate.text;
+  return {
+    title: parsed.title,
+    key,
+    marker: parsed.marker,
+    line: lineIndex + 1,
+    header_range: [drawer_utf8_length(linePrefix), drawer_utf8_length(linePrefix) + drawer_utf8_length(header)],
+    title_range: [drawer_utf8_length(titlePrefix), drawer_utf8_length(titlePrefix) + drawer_utf8_length(parsed.title)],
+  };
+}
 // ---- src/694-task-reqs-lines-twin.js ----
 // --- Task requirements twin (RQ), part 1: lines, managed lines, task scan --
 // Twin of the bob-cli helpers `src/native/task_reqs.rs` reads
@@ -135888,29 +136097,15 @@ function taskReqManagedLogKind(line) {
   return taskReqManagedLogLabel(rest);
 }
 
-function taskReqIsTitleLead(character) {
-  return (character >= "A" && character <= "Z") || taskReqIsAsciiDigit(character);
-}
-
-// `capture_drawers::is_drawer_title`.
+// Body-shape compatibility name; context-aware readers call the shared
+// `recognize_drawer_header` adapter before treating this as a drawer.
 function taskReqIsDrawerTitle(title) {
-  const characters = Array.from(String(title));
-  if (!characters.length || !taskReqIsTitleLead(characters[0])) return false;
-  let hasLetter = characters[0] >= "A" && characters[0] <= "Z";
-  for (let index = 1; index < characters.length; index += 1) {
-    const character = characters[index];
-    const allowed = taskReqIsTitleLead(character)
-      || " \t&'(),./-?!;".includes(character)
-      || (character === ":" && index === characters.length - 1);
-    if (!allowed) return false;
-    if (character >= "A" && character <= "Z") hasLetter = true;
-  }
-  return hasLetter;
+  return drawer_body_title(title) !== null;
 }
 
-// `capture_drawers::drawer_key`: whitespace collapsed, ASCII uppercase.
+// `capture_drawers::drawer_key`: whitespace collapsed, Unicode uppercase.
 function taskReqDrawerKey(title) {
-  return taskReqSplitWhitespace(title).join(" ").replace(/[a-z]+/g, (letters) => letters.toUpperCase());
+  return drawer_key(title);
 }
 
 // Lines that can never be a req or a req parent by shape: drawer titles and
@@ -136477,6 +136672,8 @@ function taskReqGlyph(state) {
 // column-zero bullets. Tasks are the `taskReqNoteTasks` rows; `blockEnd` and
 // every `offset` are UTF-16 offsets into the note.
 
+const TASK_BLOCK_NOTES_KEY = "NOTES";
+// Creation stays legacy throughout the reader rollout.
 const TASK_BLOCK_NOTES_TITLE = "NOTES";
 const TASK_BLOCK_NOTES_SECTION_TITLE = "Notes";
 // Drawer slots read the block with the default filter, as bob-cli does.
@@ -136533,8 +136730,14 @@ function taskBlockClassifyChild(line, nestedTaskOpen, globalFilter) {
   if (mark !== null) return { type: "requirement", mark };
   const body = taskReqListItemBody(text);
   if (body !== null) {
-    const title = taskReqTrim(body);
-    if (taskReqIsDrawerTitle(title)) return { type: "drawer", title };
+    const parsed = drawer_body_title(taskReqTrim(body));
+    if (parsed) {
+      const key = drawer_key(parsed.title);
+      const legacyLog = parsed.marker === "legacy_caps" && DRAWER_LEGACY_LOG_KEYS.has(key);
+      if ((!drawer_is_reserved_key(key) || legacyLog) && !drawer_is_structural_h2_key(key)) {
+        return { type: "drawer", title: parsed.title };
+      }
+    }
   }
   return { type: "authored" };
 }
@@ -136610,7 +136813,7 @@ function taskBlockIsLooseNote(child) {
 }
 
 function taskBlockIsNotesDrawer(child) {
-  return child.kind.type === "drawer" && taskReqDrawerKey(child.kind.title) === TASK_BLOCK_NOTES_TITLE;
+  return child.kind.type === "drawer" && taskReqDrawerKey(child.kind.title) === TASK_BLOCK_NOTES_KEY;
 }
 
 // True when the task owns at least one req (any state, any depth).
@@ -136759,24 +136962,21 @@ function taskBlockRawFenced(doc) {
   return taskReqDocMemo(doc, "raw-fenced", () => taskReqFencedLines(doc.texts, 0, doc.texts.length));
 }
 
-// `capture_drawers::drawers`: the ALL-CAPS drawer bullets directly under the
+// `capture_drawers::drawers`: the dual-read drawer headers directly under the
 // task, as `{title, key, line (1-based), lineIndex, indentation, blockEnd,
 // entryCount}`.
 function taskBlockDrawersIn(doc, task) {
-  const fenced = taskBlockRawFenced(doc);
-  const children = taskBlockDirectChildListIndexes(doc, task.lineIndex, task.blockEnd);
+  const children = drawer_direct_child_indexes(doc.contents, task);
   const drawers = [];
   children.forEach((lineIndex, index) => {
     const text = doc.texts[lineIndex];
-    if (fenced.has(lineIndex) || taskReqManagedLogKind(text) !== null) return;
-    const body = doc.bodies[lineIndex];
-    if (body === null || taskBlockHasTaskCheckbox(body)) return;
-    const title = taskReqTrim(body);
-    if (!taskReqIsDrawerTitle(title)) return;
+    const header = recognize_drawer_header(doc.contents, task, lineIndex);
+    if (!header || taskReqManagedLogKind(text) !== null) return;
     const blockEnd = index + 1 < children.length ? taskBlockLineStart(doc, children[index + 1]) : task.blockEnd;
     drawers.push({
-      title,
-      key: taskReqDrawerKey(title),
+      title: header.title,
+      key: header.key,
+      marker: header.marker,
       line: lineIndex + 1,
       lineIndex,
       indentation: taskReqLeadingWhitespace(text),
@@ -136877,7 +137077,7 @@ function taskBlockProjectNotesDrawer(contents) {
     const heading = taskBlockAtxHeading(doc.texts[lineIndex]);
     if (!heading || heading.level !== 2) continue;
     const title = taskReqTrim(heading.title);
-    if (title === "" || taskReqDrawerKey(title) !== TASK_BLOCK_NOTES_TITLE) continue;
+    if (title === "" || taskReqDrawerKey(title) !== TASK_BLOCK_NOTES_KEY) continue;
     let endLine = doc.texts.length;
     for (let next = lineIndex + 1; next < doc.texts.length; next += 1) {
       if (fenced.has(next)) continue;
@@ -136890,7 +137090,7 @@ function taskBlockProjectNotesDrawer(contents) {
     const blockEnd = endLine === 0
       ? 0
       : endLine <= doc.spans.length ? doc.spans[endLine - 1].end : doc.spans[doc.spans.length - 1].end;
-    return { title, key: TASK_BLOCK_NOTES_TITLE, line: lineIndex + 1, lineIndex, indentation: "", blockEnd };
+    return { title, key: TASK_BLOCK_NOTES_KEY, line: lineIndex + 1, lineIndex, indentation: "", blockEnd };
   }
   return null;
 }
@@ -136912,7 +137112,7 @@ function taskBlockDocumentLineEnding(contents) {
 // `^prj` owner, else the task-child `NOTES` drawer.
 function taskBlockNotesDrawer(contents, task) {
   if (taskBlockIsPrjParent(contents, task)) return taskBlockProjectNotesDrawer(contents);
-  return taskBlockDrawers(contents, task).find((drawer) => drawer.key === TASK_BLOCK_NOTES_TITLE) || null;
+  return taskBlockDrawers(contents, task).find((drawer) => drawer.key === TASK_BLOCK_NOTES_KEY) || null;
 }
 
 // `task_block_layout::notes_create_title`.
@@ -136944,7 +137144,7 @@ function taskBlockEnsureNotesDrawer(contents, task) {
     blockEnd: headerOffset <= task.blockEnd ? task.blockEnd + addition.length : task.blockEnd,
   });
   const updated = `${text.slice(0, headerOffset)}${addition}${text.slice(headerOffset)}`;
-  const drawer = taskBlockDrawers(updated, updatedTask).find((entry) => entry.key === TASK_BLOCK_NOTES_TITLE);
+  const drawer = taskBlockDrawers(updated, updatedTask).find((entry) => entry.key === TASK_BLOCK_NOTES_KEY);
   return drawer ? { updated, drawer, created: true } : null;
 }
 
@@ -137560,8 +137760,9 @@ function taskReqWriteNoteToReq(contents, target, forest, options) {
     ownerLine = parentReq.ownerIndex;
     depth = parentReq.depth + 1;
   } else {
-    const parentBody = doc.bodies[parent] === null ? "" : doc.bodies[parent];
-    return taskReqIsDrawerTitle(taskReqTrim(parentBody))
+    const drawerOwnerLine = taskReqDocParent(doc, parent);
+    const drawerOwner = drawerOwnerLine === null ? null : taskBlockFindTask(contents, drawerOwnerLine, options);
+    return (drawerOwner && recognize_drawer_header(contents, drawerOwner, parent))
       ? taskReqWriteRefusal("req_in_drawer", "Drawers hold notes — put the requirement directly under the task")
       : taskReqWriteParentRefusal();
   }
@@ -140357,6 +140558,14 @@ try {
 try {
   if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
     module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
+      drawer_body_title,
+      is_legacy_drawer_title,
+      drawer_key,
+      recognize_drawer_header,
+      heading_for_drawer,
+      drawer_for_heading,
+      can_create_drawer,
+      TASK_BLOCK_NOTES_KEY,
       TASK_REQ_MAX_DEPTH,
       TASK_REQ_GLOBAL_FILTER,
       TASK_REQ_DEFAULT_STATUS_TYPES,

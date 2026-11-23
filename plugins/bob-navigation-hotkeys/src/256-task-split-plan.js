@@ -20,65 +20,10 @@
 //   clamped, owner_minted_id, owner_path, owner_line }.
 // Failure: { ok: false, code, message } with the §5.1 codes verbatim.
 
-// Drawer titles are the note-drawer grammar from
-// `capture_drawers::is_drawer_title` (`punctuation = sentence`): an
-// uppercase/digit lead, the drawer rest alphabet, at least one letter,
-// plus `?`, `!`, `;` anywhere after the lead and `:` only as the final
-// character. `buildProjectSeedFromChildBullets` gates its section titles
-// on this same predicate.
+// Compatibility predicate for callers that still ask about the legacy
+// ALL-CAPS body form. Contextual readers use `recognize_drawer_header`.
 function isTaskSplitDrawerTitle(title) {
-  const text = String(title || "");
-  if (text.length === 0) {
-    return false;
-  }
-  const first = text.charAt(0);
-  if (!isTaskSplitDrawerTitleFirst(first)) {
-    return false;
-  }
-  let hasLetter = first >= "A" && first <= "Z";
-  for (let index = 1; index < text.length; index += 1) {
-    const character = text.charAt(index);
-    const isLast = index === text.length - 1;
-    if (!isTaskSplitDrawerTitleRest(character, isLast)) {
-      return false;
-    }
-    if (character >= "A" && character <= "Z") {
-      hasLetter = true;
-    }
-  }
-  return hasLetter;
-}
-
-function isTaskSplitDrawerTitleFirst(character) {
-  return (
-    (character >= "A" && character <= "Z") ||
-    (character >= "0" && character <= "9")
-  );
-}
-
-function isTaskSplitDrawerTitleRest(character, isLast) {
-  if (
-    isTaskSplitDrawerTitleFirst(character) ||
-    character === " " ||
-    character === "\t" ||
-    character === "&" ||
-    character === "'" ||
-    character === "(" ||
-    character === ")" ||
-    character === "," ||
-    character === "." ||
-    character === "/" ||
-    character === "-"
-  ) {
-    return true;
-  }
-  if (character === "?" || character === "!" || character === ";") {
-    return true;
-  }
-  if (character === ":") {
-    return isLast === true;
-  }
-  return false;
+  return is_legacy_drawer_title(title);
 }
 
 // --- Block-ID mint pipeline (mirrors `capture_block_ids`) ---
@@ -945,7 +890,7 @@ function taskSplitCancelLogLine(line) {
 // Classify one direct-child list line. Managed lines are never splittable;
 // drawer titles scope the picker; nested tasks read as authored here because
 // the planner validates `#task` lines with a teaching error instead.
-function taskSplitClassifyChild(line) {
+function taskSplitClassifyChild(line, drawerHeader) {
   const text = String(line || "");
   if (isProjectSubprojectsLine(text)) {
     return { kind: "managed" };
@@ -963,10 +908,7 @@ function taskSplitClassifyChild(line) {
   ) {
     return { kind: "managed" };
   }
-  const body = taskSplitListBody(text);
-  if (body !== null && isTaskSplitDrawerTitle(body.trim())) {
-    return { kind: "drawer", title: body.trim() };
-  }
+  if (drawerHeader) return { kind: "drawer", title: drawerHeader.title };
   return { kind: "authored" };
 }
 

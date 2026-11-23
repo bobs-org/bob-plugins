@@ -382,6 +382,7 @@ async function run(args) {
         fixtureIndexed: Boolean(window.app?.vault?.getAbstractFileByPath("projects/project-note.md")),
       };
     })()`, (state) => state?.active && state?.fixtureIndexed, "property editor startup and fixture indexing");
+    report.applicationFocus = await diagnostics.focusApplicationWindow(client, shared.waitFor);
     await client.evaluate(diagnostics.installEditorDiagnosticSource());
     report.obsidian = { pid: child.pid, executable, startupErrors: startupErrors.slice(-8) };
 

@@ -14,6 +14,9 @@ function editorDiagnostics() {
     layoutReady: window.app?.workspace?.layoutReady ?? null,
     activePath: window.app?.workspace?.activeLeaf?.view?.file?.path || null,
     documentUrl: document.URL,
+    documentFocused: document.hasFocus?.() ?? null,
+    activeWindowMatches: typeof activeWindow === "undefined" ? null : activeWindow === window,
+    activeDocumentUrl: typeof activeDocument === "undefined" ? null : activeDocument?.URL,
     documentEditors: document.querySelectorAll(".bob-property-editor").length,
     documentModals: document.querySelectorAll(".modal-container").length,
     modal: modal ? {
@@ -70,7 +73,21 @@ function installEditorDiagnostics() {
   }
 }
 
+async function focusApplicationWindow(client, waitFor) {
+  // A fresh Electron profile can leave Obsidian's activeWindow pointing to its
+  // about:blank startup window. Native Modal.open() mounts into that document.
+  // Focus the real page before exercising the API or sending keyboard input.
+  await client.call("Page.bringToFront");
+  await client.evaluate("window.focus()");
+  return waitFor(client, `({
+    focused: document.hasFocus(),
+    active: typeof activeWindow !== "undefined" && activeWindow === window,
+    documentUrl: document.URL,
+  })`, (state) => state?.focused && state?.active, "Obsidian application window focus");
+}
+
 module.exports = {
+  focusApplicationWindow,
   editorDiagnosticSource: () => `(${editorDiagnostics.toString()})()`,
   installEditorDiagnosticSource: () => `(${installEditorDiagnostics.toString()})()`,
 };

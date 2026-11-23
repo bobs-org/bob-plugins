@@ -57,6 +57,29 @@ test("missing document selector retains connected modal and lifecycle evidence",
   assert.match(result.modal.contentHtml, /bob-property-editor/);
 });
 
+test("startup focus waits for Obsidian to leave its blank window before opening modals", async () => {
+  const calls = [];
+  const window = { focus: () => calls.push("focus") };
+  const document = { hasFocus: () => true, URL: "app://obsidian.md/index.html" };
+  const context = { window, document, activeWindow: {} };
+  const client = {
+    call: async (method) => calls.push(method),
+    evaluate: async (source) => vm.runInNewContext(source, context),
+  };
+  const result = await diagnostics.focusApplicationWindow(client, async (cdp, source, ready) => {
+    assert.deepEqual(calls, ["Page.bringToFront", "focus"]);
+    assert.equal(ready(await cdp.evaluate(source)), false, "a focused page with a stale activeWindow is unsafe");
+    context.activeWindow = window;
+    document.hasFocus = () => false;
+    assert.equal(ready(await cdp.evaluate(source)), false, "keyboard input needs page focus too");
+    document.hasFocus = () => true;
+    const state = await cdp.evaluate(source);
+    assert.equal(ready(state), true);
+    return state;
+  });
+  assert.equal(result.documentUrl, document.URL);
+});
+
 test("lifecycle diagnostics preserve receiver, return values, and thrown open errors", () => {
   class Modal {
     open(value) { this.value = value; return value; }

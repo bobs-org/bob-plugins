@@ -521,6 +521,9 @@ function selfTest() {
   assert.equal(yamlHasScalar("edit_me: draft\n", "edit_me", "draft"), true);
   assert.equal(yamlHasScalar('edit_me: "held-draft"\n', "edit_me", "draft"), false);
   assert.equal(yamlHasScalar('edit_me: "draft"\n', "edit_me", "held-draft"), false);
+  assert.equal(/draft/.test("≡edit_meheld-draft"), true);
+  assert.equal(({ key: "edit_me", text: "≡edit_meheld-draft", valueText: "held-draft" }).valueText === "draft", false);
+  assert.equal(({ key: "edit_me", text: "≡edit_medraft", valueText: "draft" }).valueText === "draft", true);
 
   const fakeBob = path.join(__dirname, "fixtures", "fake-bob.cjs");
   const show = showFixture();

@@ -214,7 +214,11 @@ async function runSurfaceAcceptance(ctx) {
   probe = await openPropertyEditor(client, "surfaces.md");
   addCheck(report, "history survives close and reopen", (probe.history?.undo || 0) === undoBefore, probe.history);
   await sendKey(client, "u");
-  await waitForEditor(client, (value) => value.rows.some((row) => row.key === "edit_me" && /draft/.test(row.text)),
+  await waitForEditor(client, (value) => value.open
+    && value.readSettled
+    && !/Checking/i.test(value.status || "")
+    && (value.history?.undo || 0) === undoBefore - 1
+    && value.rows.some((row) => row.key === "edit_me" && row.valueText === "draft"),
     "undo after reopen");
   addCheck(report, "reopened undo restores bytes", lib.yamlHasScalar(fs.readFileSync(surfacesPath, "utf8"), "edit_me", "draft"),
     { text: fs.readFileSync(surfacesPath, "utf8") });

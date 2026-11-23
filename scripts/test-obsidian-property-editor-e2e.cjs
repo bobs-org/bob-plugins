@@ -233,6 +233,22 @@ test("stale refusal wait matches the Property Editor copy and retries preview", 
   assert.match(stages, /The note changed; preview this draft again before saving\./);
 });
 
+test("reopened undo wait matches exact draft value, not held-draft", () => {
+  const held = { key: "edit_me", text: "≡edit_meheld-draft", valueText: "held-draft" };
+  const restored = { key: "edit_me", text: "≡edit_medraft", valueText: "draft" };
+  assert.equal(/draft/.test(held.text), true);
+  assert.equal(held.valueText === "draft", false);
+  assert.equal(restored.valueText === "draft", true);
+  const surfaces = fs.readFileSync(path.join(__dirname, "obsidian-property-editor-e2e-surfaces.cjs"), "utf8");
+  const undoWait = surfaces.indexOf("undo after reopen");
+  assert.ok(undoWait >= 0);
+  const waitSlice = surfaces.slice(surfaces.lastIndexOf("waitForEditor", undoWait), undoWait);
+  assert.match(waitSlice, /row\.valueText === "draft"/);
+  assert.match(waitSlice, /history\?\.undo \|\| 0\) === undoBefore - 1/);
+  assert.match(waitSlice, /!\/Checking\/i\.test\(value\.status/);
+  assert.doesNotMatch(waitSlice, /\/draft\/\.test\(row\.text\)/);
+});
+
 test("lifecycle diagnostics preserve receiver, return values, and thrown open errors", () => {
   class Modal {
     open(value) { this.value = value; return value; }

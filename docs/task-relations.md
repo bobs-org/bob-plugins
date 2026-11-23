@@ -29,6 +29,9 @@ relation index (`api.relationIndex`), never the stored mirror:
 - Three or more closed chips collapse to `✓×N`, which expands on click.
 - Closed and archived targets are dimmed and never struck; `#hide` tasks are
   muted. Colour carries status, never direction.
+- A chip whose target or source is an Event Task names it `HHMM-HHMM Title`,
+  dropping the calendar, video, and location link markdown and fields; the
+  40-character cut still applies.
 - With nav `api.relations` v1 present, a trailing ＋ opens the Links /
   Linked-from stage and a hover × on each live chip removes the link
   (`Unlink ‹name›` on LINKS, `Remove the link from ‹name›` on LINKED FROM).
@@ -115,10 +118,16 @@ CURRENT holds the outgoing links with label pills in authored order. RESULTS
 ranks every match (open, Blocked `[?]`, closed, and `done/` archives) by match
 score, so a better match always ranks higher whatever its status; exact-score
 ties put In Progress and Next first, then Ready and Blocked together, then
-closed tasks, then archives. An empty filter ties every score, so its closed
-tasks and archives trail under a CLOSED header. `↵` links (or unlinks on CURRENT), `⌃↵` opens the relation field
-(or relabels on CURRENT), `⇥` marks several, and id-less targets run the
-block-ID prompt once on apply. Shift+Enter in those stages does nothing.
+closed tasks, then archives. RESULTS also covers Event Tasks from daily notes:
+each one is named `HHMM-HHMM Title`, equal-score meetings list newest day
+first, and typing `events` narrows the list to meetings. An empty filter ties
+every score, so its closed tasks and archives trail under a CLOSED header;
+closed Event Tasks outside the owner's note are not listed. `↵` links (or
+unlinks on CURRENT), `⌃↵` opens the relation field (or relabels on CURRENT),
+`⇥` marks several, and id-less targets run the block-ID prompt once on apply.
+An Event Task in the previous daily note links with no mirror, plus the suffix
+`· previous daily note: 🪢 LINKED FROM follows after rollover`; an id-less row
+there is disabled. Shift+Enter in those stages does nothing.
 Typing `~` anywhere in the Links /
 Linked-from filter flips the stage in place, keeping the filter text and
 caret while clearing Tab marks; counted sessions refuse the flip to Linked

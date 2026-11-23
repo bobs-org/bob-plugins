@@ -1143,3 +1143,36 @@ test("MN click opens the source at its occurrence line and column, with Mod-clic
   assert.deepEqual(opened, [["sources#^s", "target.md", true]]);
   assert.deepEqual(cursor, [["cursor", 3, 22], ["focus"]]);
 });
+
+test("LG25 chips name Event Task targets as HHMM-HHMM Title", () => {
+  const line = "- [*] #task **1500-1530** Bryan Bugyi and Derrick Blakely [📅](https://cal) [📹](https://meet) [📍](Room) [buffer:: -15m] [root:: job] [type:: MEET] ^bryan-bugyi-derrick";
+  const target = task({
+    blockId: "bryan-bugyi-derrick",
+    id: "bryan-bugyi-derrick",
+    description: line,
+    path: "2026/20261123.md",
+    status: "TODO",
+  });
+  target.path = "2026/20261123.md";
+  target.text = line;
+  const model = relationChipModelForRow({
+    direction: "to",
+    lineText: "- 🪢 **LINKS:** [[2026/20261123#^bryan-bugyi-derrick]]",
+    sourcePath: "job.md",
+    live: [liveTo({ path: "2026/20261123.md", blockId: "bryan-bugyi-derrick" }, { task: target })],
+    lookup: lookupFor([target], "job.md"),
+    resolve: resolveFor(),
+  });
+  assert.equal(model.chips.length, 1);
+  assert.equal(model.chips[0].fullText, "1500-1530 Bryan Bugyi and Derrick Blakely");
+  assert.ok(String(model.chips[0].text).startsWith("1500-1530 Bryan Bugyi"));
+  const from = relationChipModelForRow({
+    direction: "from",
+    lineText: "- 🪢 **LINKED FROM:** [[2026/20261123#^bryan-bugyi-derrick]]",
+    sourcePath: "job.md",
+    live: [liveFrom({ path: "2026/20261123.md", blockId: "bryan-bugyi-derrick" }, { task: target })],
+    lookup: lookupFor([target], "job.md"),
+    resolve: resolveFor(),
+  });
+  assert.equal(from.chips[0].fullText, "1500-1530 Bryan Bugyi and Derrick Blakely");
+});

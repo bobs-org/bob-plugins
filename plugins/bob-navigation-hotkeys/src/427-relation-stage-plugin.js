@@ -147,6 +147,26 @@ class BobNavigationHotkeysRelationStageMixin {
         ? relationStageRowKey(ownerPath, parentBlockId)
         : null;
     }
+    let ownerDisplayText = cleanTaskDisplayText(parentText) || null;
+    try {
+      if (isRelationStageDailyNotePath(ownerPath)) {
+        const ownerEventName = relationStageEventTaskName(parentText);
+        if (ownerEventName) {
+          ownerDisplayText = ownerEventName;
+        }
+      }
+    } catch (_error) {
+      // Fall through with the cleaned task text.
+    }
+    let previousDailyPath = "";
+    try {
+      const listed = [...files.keys()].map((path) => ({ path }));
+      previousDailyPath = normalizeVaultRelativePath(
+        scheduledRecoveryDailyPaths(listed).previous || "",
+      );
+    } catch (_error) {
+      previousDailyPath = "";
+    }
     const raw = {
       candidates,
       current: Object.freeze(current),
@@ -156,12 +176,13 @@ class BobNavigationHotkeysRelationStageMixin {
       cacheReady,
       prerequisiteIds,
       todayMap: new Map(),
+      previousDailyPath,
       dependent: Object.freeze({
         path: ownerPath,
         line: primary,
         key: dependentKey,
-        displayText: cleanTaskDisplayText(parentText) || null,
-        text: cleanTaskDisplayText(parentText) || null,
+        displayText: ownerDisplayText,
+        text: ownerDisplayText,
       }),
       parentLines: Object.freeze(parents.slice()),
       poolSize: candidates.length,
@@ -370,6 +391,26 @@ class BobNavigationHotkeysRelationStageMixin {
     if (primary >= 0) {
       parentText = String(lines[primary] || "");
     }
+    let snapshotOwnerDisplayText = cleanTaskDisplayText(parentText) || null;
+    try {
+      if (isRelationStageDailyNotePath(ownerPath)) {
+        const ownerEventName = relationStageEventTaskName(parentText);
+        if (ownerEventName) {
+          snapshotOwnerDisplayText = ownerEventName;
+        }
+      }
+    } catch (_error) {
+      // Fall through with the cleaned task text.
+    }
+    let snapshotPreviousDailyPath = "";
+    try {
+      const listed = [...files.keys()].map((path) => ({ path }));
+      snapshotPreviousDailyPath = normalizeVaultRelativePath(
+        scheduledRecoveryDailyPaths(listed).previous || "",
+      );
+    } catch (_error) {
+      snapshotPreviousDailyPath = "";
+    }
     const decorated = decorateRelationVaultStage({
       candidates,
       current: Object.freeze(current),
@@ -379,6 +420,7 @@ class BobNavigationHotkeysRelationStageMixin {
       cacheReady,
       prerequisiteIds,
       todayMap: new Map(),
+      previousDailyPath: snapshotPreviousDailyPath,
       dependent: Object.freeze({
         path: ownerPath,
         line: primary,
@@ -386,8 +428,8 @@ class BobNavigationHotkeysRelationStageMixin {
           primary >= 0 && getTrailingBlockId(parentText)
             ? relationStageRowKey(ownerPath, getTrailingBlockId(parentText))
             : null,
-        displayText: cleanTaskDisplayText(parentText) || null,
-        text: cleanTaskDisplayText(parentText) || null,
+        displayText: snapshotOwnerDisplayText,
+        text: snapshotOwnerDisplayText,
       }),
       parentLines: Object.freeze(parents.slice()),
       poolSize: candidates.length,

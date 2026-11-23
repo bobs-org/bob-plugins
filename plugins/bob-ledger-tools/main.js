@@ -31240,8 +31240,110 @@ function relationStateFromTask(task) {
   }
 }
 
+function relationChipEventTaskName(task) {
+  try {
+    let path = "";
+    try {
+      path = (typeof planTaskPath === "function" ? planTaskPath(task) : "") || "";
+    } catch (_error) {
+      path = "";
+    }
+    if (!path && task && typeof task.path === "string") {
+      path = task.path;
+    }
+    if (!path || !/(^|\/)\d{4}\/\d{8}\.md$/i.test(path)) {
+      return null;
+    }
+    const candidates = [];
+    try {
+      const described = (typeof planTaskDescription === "function" && planTaskDescription(task)) || null;
+      if (typeof described === "string" && described) {
+        candidates.push(described);
+      }
+    } catch (_error) {
+      // Fall through to the text fields.
+    }
+    if (task && typeof task.text === "string" && task.text) {
+      candidates.push(task.text);
+    }
+    if (task && typeof task.originalMarkdown === "string" && task.originalMarkdown) {
+      candidates.push(task.originalMarkdown);
+    }
+    for (const candidate of candidates) {
+      const text = String(candidate || "");
+      if (!text) {
+        continue;
+      }
+      let match = null;
+      try {
+        match = (typeof EVENT_TASK_LINE_RE !== "undefined" && EVENT_TASK_LINE_RE.exec(text)) || null;
+      } catch (_error) {
+        match = null;
+      }
+      if (match) {
+        let startMin = null;
+        let endMin = null;
+        try {
+          startMin = (typeof eventRunParseHhmm === "function" && eventRunParseHhmm(match[2])) || null;
+          endMin = (typeof eventRunParseHhmm === "function" && eventRunParseHhmm(match[3])) || null;
+        } catch (_error) {
+          startMin = null;
+          endMin = null;
+        }
+        if (startMin === null || endMin === null) {
+          continue;
+        }
+        let after = text.slice(match[0].length);
+        let title = "";
+        try {
+          title = (typeof eventRunCleanTitle === "function" && eventRunCleanTitle(after)) || "";
+        } catch (_error) {
+          title = String(after || "").trim();
+        }
+        title = String(title || "").trim();
+        const span = `${match[2]}-${match[3]}`;
+        return title ? `${span} ${title}` : span;
+      }
+      const trimmed = text.replace(/^\s*(?:[-*+]|\d+[.)])\s+\[[^\]\n]\]\s+/u, "").trim();
+      const bare = trimmed.replace(/^#task(?:\s+|$)/, "").trim();
+      const spanMatch = /^\*\*(\d{4})-(\d{4})\*\*(?=$|\s)/.exec(bare);
+      if (spanMatch) {
+        let startMin = null;
+        let endMin = null;
+        try {
+          startMin = (typeof eventRunParseHhmm === "function" && eventRunParseHhmm(spanMatch[1])) || null;
+          endMin = (typeof eventRunParseHhmm === "function" && eventRunParseHhmm(spanMatch[2])) || null;
+        } catch (_error) {
+          startMin = null;
+          endMin = null;
+        }
+        if (startMin === null || endMin === null) {
+          continue;
+        }
+        const after = bare.slice(spanMatch[0].length);
+        let title = "";
+        try {
+          title = (typeof eventRunCleanTitle === "function" && eventRunCleanTitle(after)) || "";
+        } catch (_error) {
+          title = String(after || "").trim();
+        }
+        title = String(title || "").trim();
+        const span = `${spanMatch[1]}-${spanMatch[2]}`;
+        return title ? `${span} ${title}` : span;
+      }
+    }
+    return null;
+  } catch (_error) {
+    return null;
+  }
+}
+
 function relationFullTextFor(task, blockId) {
   try {
+    const eventName = relationChipEventTaskName(task);
+    if (eventName) {
+      return eventName;
+    }
     let raw = null;
     try {
       raw = planTaskDescription(task) || null;

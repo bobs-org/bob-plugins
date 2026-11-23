@@ -10,8 +10,11 @@ function relationStageRowKey(path, blockId) {
 
 // RESULTS exclusions mirror `isDependencyStageExcludedPath` except that
 // `done/` archives stay: they are linkable targets whose LINKED FROM shows
-// live only (LG6). Daily notes, `_templates`, `_generated`, `_conflicts`,
-// dot-directories, and unsafe paths stay excluded.
+// live only (LG6). Daily notes still answer true here so the Linked-from
+// fallback scan stays unchanged; the Links pool routes daily notes through
+// `relationStageDailyAdmission` instead (LG25–LG28). `_templates`,
+// `_generated`, `_conflicts`, dot-directories, and unsafe paths stay
+// excluded.
 function isRelationStageExcludedPath(path) {
   const normalized = String(path || "").replace(/\\/g, "");
   if (!normalized || isUnsafeVaultPath(normalized)) {
@@ -42,6 +45,8 @@ function isRelationStageArchivedPath(path) {
 function relationStageCandidateFromEntry(path, entry) {
   const route = dependencyStageRouteOf(path);
   const archived = isRelationStageArchivedPath(path);
+  const displayText = relationStageEventDisplayName(path, entry.rawLine, entry.text);
+  const isEvent = displayText !== entry.text;
   return Object.freeze({
     path,
     route,
@@ -49,8 +54,8 @@ function relationStageCandidateFromEntry(path, entry) {
     line: entry.line,
     rawLine: entry.rawLine,
     status: entry.status,
-    displayText: entry.text,
-    text: entry.text,
+    displayText,
+    text: displayText,
     blockId: entry.blockId,
     existingBlockId: entry.blockId,
     idField: entry.idField,
@@ -61,6 +66,9 @@ function relationStageCandidateFromEntry(path, entry) {
     archived,
     blocked: entry.blocked === true,
     hidden: entry.hidden === true,
+    dailyNote: isEvent,
+    eventTask: isEvent,
+    noteDay: isEvent ? relationStageNoteDay(path) : null,
   });
 }
 
@@ -72,7 +80,20 @@ function collectVaultRelationCandidatesFromSnapshots(snapshots, options = {}) {
       : new Set(options.dependentLines || []);
   const out = [];
   for (const [path, snapshot] of snapshots) {
-    if (!path || isRelationStageExcludedPath(path)) {
+    if (!path) {
+      continue;
+    }
+    const normalized = normalizeVaultRelativePath(path);
+    if (isRelationStageDailyNotePath(normalized)) {
+      out.push(...relationStageCollectDailySnapshotCandidates(
+        normalized,
+        snapshot,
+        dependentPath,
+        dependentLines,
+      ));
+      continue;
+    }
+    if (isRelationStageExcludedPath(path)) {
       continue;
     }
     const entries = Array.isArray(snapshot && snapshot.entries)
@@ -112,6 +133,20 @@ function mergeRelationStageCacheCandidates(cacheTasks, notes, options = {}) {
   ).slice();
   for (const record of cacheTasks || []) {
     if (!record || buffered.has(record.path)) {
+      continue;
+    }
+    const recordPath = normalizeVaultRelativePath(record.path || "");
+    if (isRelationStageDailyNotePath(recordPath)) {
+      if (
+        record.path === dependentPath &&
+        dependentLines.has(record.line)
+      ) {
+        continue;
+      }
+      const admitted = relationStageDailyAdmission(recordPath, record, {});
+      if (admitted) {
+        out.push(admitted);
+      }
       continue;
     }
     if (isRelationStageExcludedPath(record.path)) {
@@ -203,14 +238,16 @@ function resolveRelationStageCurrent(
       );
       continue;
     }
+    const currentText = relationStageEventDisplayName(record.path, record.rawLine, record.text);
+    const isCurrentEvent = currentText !== record.text;
     rows.push(
       Object.freeze({
         kind: "current",
         path: record.path,
         blockId: record.blockId,
         status: record.status,
-        displayText: record.text,
-        text: record.text,
+        displayText: currentText,
+        text: currentText,
         label: entry.label || null,
         missing: false,
         nonTask: record.isTask === false,
@@ -220,6 +257,9 @@ function resolveRelationStageCurrent(
         rawLine: record.rawLine,
         line: record.line,
         section: record.section,
+        dailyNote: isCurrentEvent,
+        eventTask: isCurrentEvent,
+        noteDay: isCurrentEvent ? relationStageNoteDay(record.path) : null,
       }),
     );
   }
@@ -264,7 +304,7 @@ function relationStageSourceFromLine(content, path, line) {
   const idField = idFieldRaw
     ? normalizeBulletPropertyValue(idFieldRaw.value)
     : null;
-  const displayText = cleanTaskDisplayText(rawLine);
+  const displayText = relationStageEventDisplayName(path, rawLine, cleanTaskDisplayText(rawLine));
   const key =
     (blockId && relationStageRowKey(path, blockId)) ||
     (idField ? `id:${idField}` : `${normalizeVaultRelativePath(path)}#line:${at}`);
@@ -425,6 +465,7 @@ function relationStageIncomingRowsFromEdges(edges, index, previousDailyPath) {
     const archived = isRelationStageArchivedPath(path);
     let rowSource;
     if (record) {
+      const recordText = relationStageEventDisplayName(path, record.rawLine, record.text);
       rowSource = {
         ...record,
         path,
@@ -432,6 +473,8 @@ function relationStageIncomingRowsFromEdges(edges, index, previousDailyPath) {
         archived,
         note: dependencyStageBasenameOf(path),
         route: dependencyStageRouteOf(path),
+        displayText: recordText,
+        text: recordText,
       };
     } else {
       const line =
@@ -439,7 +482,7 @@ function relationStageIncomingRowsFromEdges(edges, index, previousDailyPath) {
           ? source.line - 1
           : -1;
       const rawText = source && source.text != null ? String(source.text) : "";
-      const cleaned = rawText ? cleanTaskDisplayText(rawText) : "";
+      const cleaned = relationStageEventDisplayName(path, rawText, rawText ? cleanTaskDisplayText(rawText) : "");
       const text = cleaned || `^${blockId}`;
       const status = relationStageEdgeStatusSymbol(source);
       rowSource = {
@@ -538,6 +581,7 @@ function planRelationStageView(args = {}) {
   const prerequisiteIds =
     args.prerequisiteIds instanceof Set ? args.prerequisiteIds : new Set();
   const todayMap = args.todayMap instanceof Map ? args.todayMap : new Map();
+  const previousDailyPath = normalizeVaultRelativePath(args.previousDailyPath || "");
   const maxRows = Math.max(
     1,
     Math.floor(numericOrDefault(args.maxRows, DEPENDENCY_STAGE_MAX_ROWS)),
@@ -585,19 +629,16 @@ function planRelationStageView(args = {}) {
   // Empty query shows only what the design lists: CURRENT is separate,
   // then same-note tasks plus the In Progress and Next lanes, then closed
   // tasks plus `done/` archives. Ready tasks from other notes need typing.
+  // Admitted daily rows join only through the same-note and In Progress /
+  // Next rules; the closed rule never admits them, so past meetings never
+  // flood CLOSED (LG28).
   const emptyQuery = !query.trim();
   const searchable = emptyQuery
-    ? fresh.filter(
-        (entry) =>
-          entry.candidate.path === sourcePath ||
-          entry.candidate.status === "/" ||
-          entry.candidate.status === "*" ||
-          entry.candidate.closed === true ||
-          entry.candidate.archived === true,
-      )
+    ? fresh.filter((entry) => relationStageDailyVisibleInEmptyFilter(entry.candidate, sourcePath))
     : fresh;
   // Score leads; the canonical comparator breaks exact-score ties, sinking
   // archived, then closed, rows and keeping Blocked as Ready's peer (LG17).
+  // Equal-score Event Tasks list newest day first (LG28).
   const ordered = orderDependencyStageMatches(
     searchable.map((entry) => entry.candidate),
     query,
@@ -623,6 +664,9 @@ function planRelationStageView(args = {}) {
     const todayLink = (key && todayMap.get(key)) || null;
     const prerequisite =
       Boolean(key) && prerequisiteIds.has(blocksIdentity(candidate.path, candidate.blockId));
+    const prevDaily = relationStagePreviousDailyDisabled(candidate, previousDailyPath);
+    const disabled = Boolean(self || prevDaily.disabled);
+    const disabledReason = self ? "this task" : prevDaily.reason;
     return Object.freeze({
       kind: "local-task",
       relationKind: true,
@@ -660,13 +704,16 @@ function planRelationStageView(args = {}) {
       hidden: candidate.hidden,
       section: candidate.section,
       markKey: `${candidate.path}#${candidate.line >= 0 ? candidate.line : (candidate.blockId || candidate.displayText)}`,
-      disabled: self,
-      disabledReason: self ? "this task" : null,
+      disabled,
+      disabledReason,
       label: null,
       archived: candidate.archived === true,
       closed: candidate.closed === true,
       prerequisite,
       todayLink,
+      dailyNote: candidate.dailyNote === true,
+      eventTask: candidate.eventTask === true,
+      noteDay: candidate.noteDay || null,
     });
   };
   const out = [...markedCurrent];
@@ -722,6 +769,7 @@ function planLinkedFromStageView(args = {}) {
   const fresh = [];
   for (const candidate of pool) {
     if (!candidate || candidate.archived === true) continue;
+    if (candidate.dailyNote === true) continue;
     const path = normalizeVaultRelativePath(candidate.path || "");
     if (!path || path === previousDailyPath) continue;
     const blockId = normalizeBulletPropertyValue(candidate.blockId || "");
@@ -797,7 +845,9 @@ function planLinkedFromStageView(args = {}) {
 // Archived rows sink below closed rows; open rows float above both. Within
 // a tier the owner's note wins, then visible before `#hide`, then In
 // Progress, Next, Ready and Blocked together, then other statuses, then
-// path, then line (relations never block, so Blocked shares Ready's lane).
+// non-daily rows before daily rows with newest day first, then path, then
+// line (relations never block, so Blocked shares Ready's lane). Daily rows
+// are never compared by path (LG28).
 function compareRelationStageCanonical(first, second, ownerPath) {
   const firstArchived = first && first.archived === true ? 1 : 0;
   const secondArchived = second && second.archived === true ? 1 : 0;
@@ -811,6 +861,7 @@ function compareRelationStageCanonical(first, second, ownerPath) {
   }
   return compareDependencyStageCanonical(first, second, ownerPath, {
     blockedWithReady: true,
+    dailyNewestFirst: true,
   });
 }
 
@@ -836,6 +887,7 @@ function planRelationStageItemsFromVault(stage, query) {
     linkedKeys: stage.linkedKeys,
     prerequisiteIds: stage.prerequisiteIds,
     todayMap: stage.todayMap,
+    previousDailyPath: stage.previousDailyPath,
   });
 }
 

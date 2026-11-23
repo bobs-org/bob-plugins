@@ -2881,3 +2881,229 @@ test("merge label prompts for the missing source ID then previews with Current:c
   assert.ok(saveCalls.includes("Other.md") || saveCalls.includes("Current.md"));
   assert.equal(picker.stage, "relation-label");
 });
+
+test("LG25 pool admits Event Tasks with clean names and drops the rest", () => {
+  const derrick = "- [*] #task **1500-1530** Bryan Bugyi and Derrick Blakely [📅](https://cal) [📹](https://meet) [📍](Room) [buffer:: -15m] [root:: job] [type:: MEET] ^bryan-bugyi-derrick";
+  const notes = {
+    "Tasks.md": "- [ ] #task Owner ^owner",
+    "2026/20261123.md": [
+      "---",
+      "title: day",
+      "---",
+      "## Events",
+      derrick,
+      "- [ ] #task Span-less row ^nospan",
+      "```",
+      "- [ ] #task **0900-0930** Fenced ^fenced",
+      "```",
+      "## Pomodoros",
+      "- [ ] #task **1000-1030** Later ^later",
+    ].join("\n"),
+    "2026/20261122.md": [
+      "## Events",
+      "- [ ] #task **0800-0830** Old standup ^gtd",
+    ].join("\n"),
+    "_templates/T.md": "- [ ] #task Template ^template",
+  };
+  notes["2026/20261122.md"] = [
+    "- [ ] #task ^gtd floating gtd row",
+    "## Events",
+    "- [ ] #task **0800-0830** Old standup ^old-standup",
+    "## Pomodoros",
+    "- [ ] #task **0900-0930** Not an event ^not-event",
+  ].join("\n");
+  const candidates = helpers.collectVaultRelationCandidatesFromSnapshots(
+    snapshotMap(notes),
+    { dependentPath: "Tasks.md", dependentLines: new Set([0]) },
+  );
+  const byId = new Map(candidates.map((entry) => [entry.blockId, entry]));
+  const meeting = byId.get("bryan-bugyi-derrick");
+  assert.ok(meeting);
+  assert.equal(meeting.displayText, "1500-1530 Bryan Bugyi and Derrick Blakely");
+  assert.equal(meeting.text, "1500-1530 Bryan Bugyi and Derrick Blakely");
+  assert.equal(meeting.eventTask, true);
+  assert.equal(meeting.dailyNote, true);
+  assert.equal(meeting.noteDay, "2026-11-23");
+  assert.ok(!byId.has("nospan"));
+  assert.ok(!byId.has("later"));
+  assert.ok(!byId.has("fenced"));
+  assert.ok(!byId.has("not-event"));
+  assert.ok(!byId.has("template"));
+  const gtd = byId.get("gtd");
+  assert.equal(gtd, undefined);
+  assert.equal(helpers.isRelationStageExcludedPath("2026/20261020.md"), true);
+});
+
+test("LG25 cache merge admits Events-heading records and buffers win", () => {
+  const rawLine = "- [*] #task **1500-1530** Bryan Bugyi and Derrick Blakely [📅](https://x) ^bryan-bugyi-derrick";
+  const tasks = [
+    {
+      path: "2026/20261123.md",
+      line: 5,
+      rawLine,
+      originalMarkdown: rawLine,
+      status: "*",
+      displayText: rawLine,
+      text: rawLine,
+      blockId: "bryan-bugyi-derrick",
+      section: "Events",
+      precedingHeader: "Events",
+      open: true,
+      hidden: false,
+    },
+    {
+      path: "2026/20261123.md",
+      line: 9,
+      rawLine: "- [ ] #task **1000-1030** Later ^later",
+      originalMarkdown: "- [ ] #task **1000-1030** Later ^later",
+      status: " ",
+      displayText: "Later",
+      text: "Later",
+      blockId: "later",
+      section: "Pomodoros",
+      precedingHeader: "Pomodoros",
+      open: true,
+      hidden: false,
+    },
+  ];
+  const merged = helpers.mergeRelationStageCacheCandidates(tasks, [], {});
+  const byId = new Map(merged.map((entry) => [entry.blockId, entry]));
+  assert.ok(byId.has("bryan-bugyi-derrick"));
+  assert.equal(byId.get("bryan-bugyi-derrick").displayText, "1500-1530 Bryan Bugyi and Derrick Blakely");
+  assert.ok(!byId.has("later"));
+});
+
+test("LG25 ranking puts meetings first and newest day first", () => {
+  const notes = {
+    "Tasks.md": "- [ ] #task Owner ^owner",
+    "2026/20261123.md": "## Events\n- [*] #task **1500-1530** Bryan Bugyi and Derrick Blakely ^bryan-bugyi-derrick",
+    "2026/20261122.md": "## Events\n- [*] #task **1500-1530** Bryan Bugyi and Derrick Blakely ^bryan-bugyi-derrick-old",
+    "Other.md": "- [x] #task Closed mail task about Derrick Blake ^mail",
+  };
+  const stage = relationStageHarness(notes, "Tasks.md", [0]);
+  const typed = helpers.planRelationStageItemsFromVault(stage, "derrick blake");
+  const first = typed.find((item) => item.kind === "local-task" && item.stageSection !== "current");
+  assert.equal(first.blockId, "bryan-bugyi-derrick");
+  assert.equal(first.displayText, "1500-1530 Bryan Bugyi and Derrick Blakely");
+  const sameTitle = helpers.planRelationStageItemsFromVault(stage, "bryan bugyi derrick");
+  const meetings = sameTitle.filter((item) => String(item.displayText || "").includes("Bryan Bugyi"));
+  assert.deepEqual(
+    meetings.map((item) => item.blockId),
+    ["bryan-bugyi-derrick", "bryan-bugyi-derrick-old"],
+  );
+  const mixed = [
+    { path: "2026/2026-Q1.md", line: 0, status: " ", hidden: false, dailyNote: false },
+    { path: "2025/20250101.md", line: 0, status: " ", hidden: false, dailyNote: false },
+    { path: "2026/20261123.md", line: 1, status: " ", hidden: false, dailyNote: true, noteDay: "2026-11-23" },
+    { path: "2026/20261122.md", line: 1, status: " ", hidden: false, dailyNote: true, noteDay: "2026-11-22" },
+  ];
+  const once = mixed.slice().sort((a, b) => helpers.compareRelationStageCanonical(a, b, "Tasks.md"));
+  const twice = mixed.slice().sort((a, b) => helpers.compareRelationStageCanonical(a, b, "Tasks.md"));
+  assert.deepEqual(once.map((row) => row.path), twice.map((row) => row.path));
+  assert.ok(!once[0].dailyNote);
+  assert.equal(once[2].noteDay, "2026-11-23");
+});
+
+test("LG28 empty filter lists today but hides other-day closed meetings", () => {
+  const notes = {
+    "Tasks.md": "- [ ] #task Owner ^owner",
+    "2026/20261123.md": "## Events\n- [*] #task **1500-1530** Today meeting ^today-meet",
+    "2026/20261122.md": "## Events\n- [x] #task **0900-0930** Yesterday call ^yesterday-call",
+  };
+  const stage = relationStageHarness(notes, "Tasks.md", [0]);
+  const items = helpers.planRelationStageItemsFromVault(stage, "");
+  assert.ok(items.some((item) => item.blockId === "today-meet"));
+  assert.ok(!items.some((item) => item.blockId === "yesterday-call"));
+  const ownerStage = relationStageHarness(
+    { ...notes, "2026/20261122.md": "## Events\n- [ ] #task Owner ^owner\n- [x] #task **0900-0930** Yesterday call ^yesterday-call" },
+    "2026/20261122.md",
+    [1],
+  );
+  const ownerItems = helpers.planRelationStageItemsFromVault(ownerStage, "");
+  assert.ok(ownerItems.some((item) => item.blockId === "yesterday-call"));
+});
+
+test("LG29 linked-from never offers daily rows and flipping drops them", () => {
+  const notes = {
+    "Tasks.md": "- [ ] #task Owner ^owner",
+    "2026/20261123.md": "## Events\n- [ ] #task **1500-1530** Meeting ^meet",
+    "Other.md": "- [ ] #task Helper ^helper",
+  };
+  const stage = relationStageHarness(notes, "Tasks.md", [0]);
+  const view = helpers.planLinkedFromStageView({
+    sources: [{ path: "Tasks.md", line: 0, blockId: "owner" }],
+    current: [],
+    candidates: stage.candidates,
+    query: "",
+    linkedKeys: new Set(),
+    previousDailyPath: "",
+  });
+  assert.ok(!view.some((item) => item.path === "2026/20261123.md"));
+  assert.ok(view.some((item) => item.path === "Other.md"));
+});
+
+test("LG25 event names strip fields, tags, links, and tails", () => {
+  assert.equal(
+    helpers.relationStageEventTaskName("- [ ] #task **1100-1130** Lunch #off ^call"),
+    "1100-1130 Lunch",
+  );
+  assert.equal(
+    helpers.relationStageEventTaskName("- [ ] #task **1200-1300** Lunch [📅](https://cal) [buffer:: -30m] [root:: love] [type:: MEET] ^lunch"),
+    "1200-1300 Lunch",
+  );
+  assert.equal(
+    helpers.relationStageEventTaskName("- [ ] #task **1000-1030** Standup [buffer:: +15m] [📅](https://x) #untracked ^standup"),
+    "1000-1030 Standup",
+  );
+  assert.equal(
+    helpers.relationStageEventTaskName("- [ ] #task **0900-0930** Sync · *extra* ^sync"),
+    "0900-0930 Sync",
+  );
+  assert.equal(helpers.relationStageEventTaskName("- [ ] #task No span ^x"), null);
+  assert.equal(
+    helpers.relationStageEventTaskName("- [ ] #task **0800-0830**word ^x"),
+    null,
+  );
+});
+
+test("LG27 previous daily links without a mirror; id-less rows disable", () => {
+  const notes = {
+    "Tasks.md": "- [ ] #task Owner ^owner",
+    "2026/20261123.md": "## Events\n- [ ] #task **1500-1530** Today meeting ^today-meet",
+    "2026/20261122.md": "## Events\n- [ ] #task **0900-0930** Yesterday meeting ^yesterday-meet\n- [ ] #task **1000-1030** No id meeting",
+  };
+  const snapshots = snapshotMap(notes);
+  const stage = {
+    candidates: helpers.collectVaultRelationCandidatesFromSnapshots(snapshots, {
+      dependentPath: "Tasks.md",
+      dependentLines: new Set([0]),
+    }),
+    current: [],
+    linkedKeys: new Set(),
+    sources: [{ path: "Tasks.md", line: 0, blockId: "owner" }],
+    prerequisiteIds: new Set(),
+    todayMap: new Map(),
+    previousDailyPath: "2026/20261122.md",
+  };
+  const items = helpers.planRelationStageView({ ...stage, query: "meeting" });
+  const yesterday = items.find((item) => item.blockId === "yesterday-meet");
+  assert.ok(yesterday);
+  assert.equal(yesterday.disabled, false);
+  const noId = items.find((item) => item.displayText === "1000-1030 No id meeting");
+  assert.ok(noId);
+  assert.equal(noId.disabled, true);
+  assert.equal(noId.disabledReason, "previous daily note is read-only");
+});
+
+test("LG25 exports expose the Event Task twin", () => {
+  for (const name of [
+    "isRelationStageDailyNotePath",
+    "relationStageNoteDay",
+    "relationStageEventsSectionRange",
+    "relationStageEventTaskSpan",
+    "relationStageEventTaskName",
+    "relationStageDailyAdmission",
+  ]) {
+    assert.equal(typeof helpers[name], "function");
+  }
+});

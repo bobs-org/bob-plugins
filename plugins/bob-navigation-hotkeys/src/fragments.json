@@ -117,6 +117,7 @@
   "303-blocks-stage-copy.js",
   "303a-relation-inverse-phrase.js",
   "304-relation-stage-view.js",
+  "304a-relation-event-targets.js",
   "305-relation-stage-copy.js",
   "310-task-card-previews.js",
   "311-task-card-blocks.js",
@@ -292,5 +293,6 @@
   "728-task-reqs-exports.js",
   "729-req-line-guard-exports.js",
   "730-task-split-carry-exports.js",
-  "731-project-seed-reqs-exports.js"
+  "731-project-seed-reqs-exports.js",
+  "732-relation-event-target-exports.js"
 ]

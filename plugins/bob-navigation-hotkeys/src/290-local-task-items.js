@@ -688,7 +688,10 @@ function findDependencyStageCycle(edges, fromKey, toKey) {
 // Canonical order for ties and the empty query
 // (`docs/task-dependencies.md` §6.3): same-note tasks in document order,
 // then In Progress, Next, Ready (by path, then line), then `#hide`.
-// Relations pass `{ blockedWithReady: true }` so Blocked shares Ready's lane.
+// Relations pass `{ blockedWithReady: true }` so Blocked shares Ready's lane,
+// plus `{ dailyNewestFirst: true }` so admitted daily Event Tasks rank after
+// non-daily rows with newest day first (LG28). Daily rows are never compared
+// by path, keeping a strict total order.
 function compareDependencyStageCanonical(first, second, dependentPath, options = {}) {
   const firstSame = first.path === dependentPath;
   const secondSame = second.path === dependentPath;
@@ -714,6 +717,21 @@ function compareDependencyStageCanonical(first, second, dependentPath, options =
   const laneDiff = lane(first.status) - lane(second.status);
   if (laneDiff !== 0) {
     return laneDiff;
+  }
+  if (Boolean(options && options.dailyNewestFirst)) {
+    const firstDaily = Boolean(first && first.dailyNote === true);
+    const secondDaily = Boolean(second && second.dailyNote === true);
+    if (firstDaily !== secondDaily) {
+      return firstDaily ? 1 : -1;
+    }
+    if (firstDaily && secondDaily) {
+      const firstDay = String((first && first.noteDay) || "");
+      const secondDay = String((second && second.noteDay) || "");
+      if (firstDay !== secondDay) {
+        return firstDay < secondDay ? 1 : -1;
+      }
+      return (first.line || 0) - (second.line || 0);
+    }
   }
   if (first.path !== second.path) {
     return first.path < second.path ? -1 : 1;

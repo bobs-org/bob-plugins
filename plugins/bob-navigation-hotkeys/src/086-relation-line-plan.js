@@ -658,6 +658,14 @@ function quoteRelationNoticeName(name) {
 }
 
 function relationNoticeNameFromLine(lineText) {
+  try {
+    const eventName = relationStageEventTaskName(lineText);
+    if (eventName) {
+      return eventName;
+    }
+  } catch (_error) {
+    // Fall through to the task description.
+  }
   return blocksDependentDescription(lineText);
 }
 
@@ -754,6 +762,11 @@ function withArchivedRelationNotice(notice, archived) {
   return `${notice} \u00b7 archived: shown live only`;
 }
 
+function withPreviousDailyRelationNotice(notice, previousDaily) {
+  if (!previousDaily || !notice) return notice;
+  return `${notice} \u00b7 previous daily note: 🪢 LINKED FROM follows after rollover`;
+}
+
 function buildRelationEditNotice(details = {}) {
   const added = Array.isArray(details.added) ? details.added : [];
   const removed = Array.isArray(details.removed) ? details.removed : [];
@@ -792,6 +805,7 @@ function buildRelationEditNotice(details = {}) {
   }
   let notice = parts.join("");
   notice = withArchivedRelationNotice(notice, details.archived);
+  notice = withPreviousDailyRelationNotice(notice, details.previousDaily);
   notice = withLinkedFromFollowUpNotice(notice, details.mirrorFailed);
   return notice;
 }

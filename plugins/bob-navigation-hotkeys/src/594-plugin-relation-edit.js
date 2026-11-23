@@ -264,6 +264,7 @@ class BobNavigationHotkeysRelationEditMixin {
       let completeStayedDone = false;
       const consumedLinesByPath = new Map();
       let archived = false;
+      let previousDailySkipped = false;
       const contentOf = (path) =>
         sourceWrites.has(path)
           ? sourceWrites.get(path).nextContent
@@ -460,7 +461,15 @@ class BobNavigationHotkeysRelationEditMixin {
         const writableMirrors = [];
         for (const target of mirrorTargets) {
           if (!relationPathIsWritable(target.path, previousDailyPath)) {
-            archived = true;
+            if (
+              previousDailyPath &&
+              normalizeVaultRelativePath(target.path || "") ===
+                normalizeVaultRelativePath(previousDailyPath)
+            ) {
+              previousDailySkipped = true;
+            } else {
+              archived = true;
+            }
             continue;
           }
           writableMirrors.push(target);
@@ -837,6 +846,7 @@ class BobNavigationHotkeysRelationEditMixin {
             relabeled: committedNoticeRelabeled,
             direction,
             archived,
+            previousDaily: previousDailySkipped,
             mirrorFailed: [],
           }), cancelStayedCancelled, completeStayedDone);
       // A downgrade-only gesture reports only the unlink notice; mixed

@@ -234,6 +234,7 @@ function editorProbeSource() {
     const report = plugin?.propertyEditorModal?.report || null;
     return {
       open: true,
+      readSettled: Boolean(report || plugin?.propertyEditorModal?.refusal),
       heading: editor.querySelector(".bob-property-editor-heading")?.textContent || "",
       rows: Array.from(editor.querySelectorAll("[data-property-row]")).map((row) => ({
         key: row.getAttribute("data-property-key"),

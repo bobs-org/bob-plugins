@@ -133,12 +133,6 @@ function removeLineOnce(source, line) {
   return replaceOnce(source, line + "\n", "");
 }
 
-function insertFrontmatterLine(source, line) {
-  const close = source.indexOf("\n---\n", 4);
-  if (close < 0) throw new Error("Could not find the frontmatter closing delimiter");
-  return source.slice(0, close) + "\n" + line + source.slice(close);
-}
-
 function insertAfterLineOnce(source, beforeLine, line) {
   return replaceOnce(source, beforeLine + "\n", beforeLine + "\n" + line + "\n");
 }
@@ -206,6 +200,9 @@ async function waitForEditor(client, predicate, label, timeoutMs = 25_000) {
 }
 
 async function openPropertyEditor(client, filePath, options = {}) {
+  // Opening a note yields through layout and window activation. Verify focus
+  // here as well as at startup, immediately before Native Modal.open uses it.
+  await diagnostics.focusApplicationWindow(client, shared.waitFor);
   const result = await client.evaluate(`(async () => {
     const plugin = window.app?.plugins?.plugins?.["bob-ledger-tools"];
     if (!plugin || typeof plugin.openPropertyEditor !== "function") return { ok: false, reason: "plugin-api-missing" };
@@ -220,7 +217,7 @@ async function openPropertyEditor(client, filePath, options = {}) {
     return { ok: opened?.ok === true, reason: opened?.reason || null };
   })()`, 30_000);
   if (!result?.ok) throw new Error("openPropertyEditor failed: " + JSON.stringify(result));
-  return waitForEditor(client, (probe) => probe.open, "property editor to open");
+  return waitForEditor(client, (probe) => probe.open && probe.readSettled, "property editor initial read");
 }
 
 async function setInput(client, selector, value) {
@@ -255,7 +252,7 @@ async function saveCollectionStage(client, value, rowKey) {
   await setInput(client, "[data-property-stage-input]", value);
   await sendKey(client, "Enter");
   await shared.waitFor(client,
-    `document.querySelector(".bob-property-editor-stage-chip")?.textContent || ""`,
+    `Array.from(document.querySelectorAll(".bob-property-editor-stage-chip"), (chip) => chip.textContent || "").join("\\n")`,
     (text) => text.includes(String(value).replace(/^#+/, "#")), "collection item added");
   await shared.waitFor(client,
     `document.querySelector(".bob-property-editor-stage-preview")?.textContent || ""`,
@@ -271,16 +268,19 @@ async function yamlTarget(client, line, expectedText, label, report) {
     const editor = view?.editor;
     const cursor = editor?.getCursor?.();
     return cursor && editor?.getLine
-      ? { path: view?.file?.path || "", line: cursor.line + 1, text: editor.getLine(cursor.line) }
+      ? {
+        path: view?.file?.path || "", line: cursor.line + 1, text: editor.getLine(cursor.line),
+        done: Boolean(document.querySelector("[data-album-yaml-done]")),
+      }
       : null;
-  })()`, (target) => target?.line === line && (!expectedText || target.text.includes(expectedText)), label);
+  })()`, (target) => target?.done && target.line === line && (!expectedText || target.text.includes(expectedText)), label);
   addCheck(report, label, result?.line === line && (!expectedText || result.text.includes(expectedText)), result);
   return result;
 }
 
 async function finishYamlExcursion(client, label) {
   if (!await selectorClick(client, "[data-album-yaml-done]")) throw new Error(`Missing YAML Done button after ${label}`);
-  return waitForEditor(client, (probe) => probe.open, `property editor reopened after ${label}`);
+  return waitForEditor(client, (probe) => probe.open && probe.readSettled, `property editor reopened after ${label}`);
 }
 
 async function closePropertyEditor(client) {
@@ -395,7 +395,9 @@ async function run(args) {
 
     await shared.waitFor(client, `Boolean(document.querySelector(".bob-property-editor [data-property-stage]"))`, Boolean, "project status stage");
     await saveStage(client, "[data-property-stage-input]", "ready", "launch_window");
-    const projectReady = replaceOnce(projectBefore, 'launch_window: "draft"', 'launch_window: "ready"');
+    // props emits safe scalars without quotes; only untouched spans retain
+    // their authored spelling (see bob-cli docs/props.md serialization rules).
+    const projectReady = replaceOnce(projectBefore, 'launch_window: "draft"', 'launch_window: ready');
     assertDiskBytes(report, "project edit bytes", projectPath, projectReady);
     await sendKey(client, "u");
     await waitForEditor(client, (value) => value.rows.some((row) => row.key === "launch_window" && /draft/.test(row.text)), "Undo of project edit");
@@ -411,7 +413,7 @@ async function run(args) {
     await sendKey(client, "Enter", { shift: true });
     await shared.waitFor(client, `Boolean(document.querySelector(".bob-property-editor [data-property-stage]"))`, Boolean, "added property value stage");
     await saveStage(client, "[data-property-stage-input]", "from-editor", "added_field");
-    const projectAdded = insertFrontmatterLine(projectReady, 'added_field: "from-editor"');
+    const projectAdded = insertAfterLineOnce(projectReady, "locked_toggle: false", "added_field: from-editor");
     assertDiskBytes(report, "project add bytes", projectPath, projectAdded);
 
     if (!await propertyRowClick(client, "remove_me")) throw new Error("Could not select remove_me");
@@ -498,7 +500,7 @@ async function run(args) {
     await shared.waitFor(client, `document.querySelector(".bob-property-editor-stage-preview")?.textContent || ""`, (text) => /Preview ·/.test(text), "completed tags preview");
     await sendKey(client, "Enter");
     await waitForEditor(client, (value) => !value.stage && /Saved/.test(value.status) && value.rows.some((row) => row.key === "tags"), "completed tags property saved");
-    const projectWithTags = insertFrontmatterLine(projectDeleted, "tags: [home]");
+    const projectWithTags = insertAfterLineOnce(projectDeleted, "locked_toggle: false", "tags:\n  - home");
     assertDiskBytes(report, "Tab-completed tags add bytes", projectPath, projectWithTags);
 
     await closePropertyEditor(client);
@@ -511,7 +513,7 @@ async function run(args) {
     await sendKey(client, "Enter");
     await shared.waitFor(client, `Boolean(document.querySelector(".bob-property-editor [data-property-stage]"))`, Boolean, "day marker stage");
     await saveStage(client, "[data-property-stage-input]", "day-edited", "day_marker");
-    const dayEdited = replaceOnce(dayBefore, 'day_marker: "day stays : exact #"', 'day_marker: "day-edited"');
+    const dayEdited = replaceOnce(dayBefore, 'day_marker: "day stays : exact #"', 'day_marker: day-edited');
     assertDiskBytes(report, "day-note edit bytes", dayPath, dayEdited);
     await sendKey(client, "u");
     await waitForEditor(client, (value) => value.rows.some((row) => row.key === "day_marker" && /day stays/.test(row.text)), "day-note edit undo");
@@ -527,7 +529,7 @@ async function run(args) {
     await sendKey(client, "Enter", { shift: true });
     await waitForEditor(client, (value) => value.stageKind === "text", "day-note literal add value stage");
     await saveStage(client, "[data-property-stage-input]", "day value", "day_extra");
-    const dayAdded = insertAfterLineOnce(dayEdited, 'day_marker: "day-edited"', 'day_extra: "day value"');
+    const dayAdded = insertAfterLineOnce(dayEdited, 'day_marker: day-edited', 'day_extra: day value');
     assertDiskBytes(report, "day-note add bytes", dayPath, dayAdded);
 
     await propertyRowClick(client, "day_remove_me");
@@ -563,14 +565,14 @@ async function run(args) {
 
     await propertyRowClick(client, "enabled");
     await sendKey(client, "Enter");
-    await waitForEditor(client, (value) => value.rows.some((row) => value.rows.find((row) => row.key === "enabled")?.text.includes("true")), "checkbox flip");
+    await waitForEditor(client, (value) => value.rows.some((row) => row.key === "enabled" && row.valueText === "✓"), "checkbox flip");
     kindsExpected = replaceOnce(kindsExpected, "enabled: false", "enabled: true");
     assertDiskBytes(report, "checkbox flip bytes", kindsPath, kindsExpected);
 
     const datetimeCases = [
-      ["no_offset_at", "2026-11-24T10:31:00", '"2026-11-23T09:30:00"', '"2026-11-24T10:31:00"', "datetime without offset"],
-      ["offset_at", "2026-11-24T10:31:00-05:00", '"2026-11-23T09:30:00-05:00"', '"2026-11-24T10:31:00-05:00"', "datetime with -05:00"],
-      ["relative_at", "-3d", '"2026-11-23T09:30:00"', '"2026-11-20T09:30:00"', "relative datetime token"],
+      ["no_offset_at", "2026-11-24T10:31:00", '"2026-11-23T09:30:00"', '2026-11-24T10:31:00', "datetime without offset"],
+      ["offset_at", "2026-11-24T10:31:00-05:00", '"2026-11-23T09:30:00-05:00"', '2026-11-24T10:31:00-05:00', "datetime with -05:00"],
+      ["relative_at", "-3d", '"2026-11-23T09:30:00"', '2026-11-20T09:30:00', "relative datetime token"],
     ];
     for (const [key, input, before, after, label] of datetimeCases) {
       await propertyRowClick(client, key);
@@ -589,7 +591,7 @@ async function run(args) {
     probe = await waitForEditor(client, (value) => value.stageKind === "tags", "tags stage");
     addCheck(report, "tags use tags stage", probe.stageKind === "tags", probe);
     await saveCollectionStage(client, "##work", "tags");
-    kindsExpected = replaceOnce(kindsExpected, "tags: [home]", 'tags: [home, "work"]');
+    kindsExpected = replaceOnce(kindsExpected, "tags: [home]", 'tags: [home, work]');
     assertDiskBytes(report, "tags omit leading hash bytes", kindsPath, kindsExpected);
 
     await propertyRowClick(client, "steps");
@@ -597,7 +599,7 @@ async function run(args) {
     probe = await waitForEditor(client, (value) => value.stageKind === "list", "ordered-list stage");
     addCheck(report, "ordered list uses list stage", probe.stageKind === "list", probe);
     await saveCollectionStage(client, "third", "steps");
-    kindsExpected = replaceOnce(kindsExpected, 'steps: ["first", "second"]', 'steps: ["first", "second", "third"]');
+    kindsExpected = replaceOnce(kindsExpected, 'steps: ["first", "second"]', 'steps: [first, second, third]');
     assertDiskBytes(report, "ordered list bytes", kindsPath, kindsExpected);
 
     probe = await waitForEditor(client, (value) => value.rows.some((row) => row.key === "nullable"), "null and empty rows");
@@ -627,7 +629,7 @@ async function run(args) {
       const band = await client.evaluate(`Boolean(document.querySelector("[data-property-stage-band]"))`);
       addCheck(report, "prose stage attaches navigation band", band, { loaded: proseLoaded });
       await saveStage(client, "[data-property-stage-input]", "See [[projects]] and ((next task", "description");
-      kindsExpected = replaceOnce(kindsExpected, 'description: "Plain prose"', 'description: "See [[projects]] and ((next task"');
+      kindsExpected = replaceOnce(kindsExpected, 'description: "Plain prose"', 'description: See [[projects]] and ((next task');
       assertDiskBytes(report, "prose link task text bytes", kindsPath, kindsExpected);
     } else {
       report.assertions.push({ name: "prose stage attaches navigation band", status: "skip", detail: "bob-navigation-hotkeys is not loaded in the isolated acceptance vault" });
@@ -646,7 +648,7 @@ async function run(args) {
     probe = await waitForEditor(client, (value) => value.stageKind === "text", "Shift+Enter literal name type");
     addCheck(report, "Shift+Enter keeps literal name as text", probe.stageKind === "text", probe);
     await saveStage(client, "[data-property-stage-input]", "first value", "first_added");
-    const plainAdded = '---\nfirst_added: "first value"\n---\n\n' + plainBefore;
+    const plainAdded = '---\nfirst_added: first value\n---\n' + plainBefore;
     assertDiskBytes(report, "first plain-note add bytes", plainPath, plainAdded);
     await sendKey(client, "u");
     await waitForEditor(client, (value) => value.open && !value.rows.some((row) => row.key === "first_added"), "plain-note add undo");
@@ -668,7 +670,7 @@ async function run(args) {
     addCheck(report, "literal name remains text", probe.stageKind === "text", probe);
     await saveStage(client, "[data-property-stage-input]", "literal value", "literal_new");
     assertDiskBytes(report, "literal name add bytes", literalPath,
-      '---\nliteral_new: "literal value"\n---\n\n' + literalBefore);
+      '---\nliteral_new: literal value\n---\n' + literalBefore);
 
     await closePropertyEditor(client);
     await shared.openNote(client, "invalid.md", "live");
@@ -677,7 +679,8 @@ async function run(args) {
     addCheck(report, "invalid YAML shows bob diagnostic verbatim",
       Boolean(probe.frontmatterError) && probe.recovery.includes(probe.frontmatterError), probe);
     await sendKey(client, "y");
-    const invalidTarget = await yamlTarget(client, probe.frontmatterErrorLine, "broken: [unterminated", "invalid YAML error-line target", report);
+    const invalidTarget = await yamlTarget(client, probe.frontmatterErrorLine,
+      notes["invalid.md"].split("\n")[probe.frontmatterErrorLine - 1], "invalid YAML error-line target", report);
     await finishYamlExcursion(client, "invalid YAML recovery");
 
     await closePropertyEditor(client);
@@ -687,7 +690,7 @@ async function run(args) {
     addCheck(report, "unclosed YAML shows bob diagnostic verbatim",
       Boolean(probe.frontmatterError) && probe.recovery.includes(probe.frontmatterError), probe);
     await sendKey(client, "y");
-    const unclosedTarget = await yamlTarget(client, probe.frontmatterErrorLine, "broken: [unterminated", "unclosed YAML error-line target", report);
+    const unclosedTarget = await yamlTarget(client, probe.frontmatterErrorLine, "---", "unclosed YAML error-line target", report);
     await finishYamlExcursion(client, "unclosed YAML recovery");
 
     await closePropertyEditor(client);
@@ -695,7 +698,7 @@ async function run(args) {
     probe = await openPropertyEditor(client, "duplicate.md", { key: "title", resetCapability: true });
     probe = await waitForEditor(client, (value) => value.properties.filter((row) => row.key === "title").length === 2, "duplicate title rows");
     const duplicateProperties = probe.properties.filter((row) => row.key === "title");
-    const duplicateLine = duplicateProperties.find((row) => row.duplicate)?.line;
+    const duplicateLine = duplicateProperties[1].line;
     addCheck(report, "duplicate YAML shows row diagnostic", duplicateProperties.some((row) => row.diagnostic), duplicateProperties);
     await propertyRowClick(client, "title", 1);
     await sendKey(client, "y");
@@ -829,4 +832,4 @@ async function main(argv) {
 }
 
 if (require.main === module) void main(process.argv.slice(2));
-module.exports = { run, parseArgs: lib.parseArgs };
+module.exports = { run, openPropertyEditor, parseArgs: lib.parseArgs };

@@ -376,7 +376,7 @@ class BobLedgerToolsPropertyEditorEntrypointsMixin {
     const key = typeof input.key === "string"
       ? input.key
       : (modal && modal.editorSelected && modal.editorSelected()?.row?.key) || "";
-    return this.propertyEditorStartYamlExcursion({ filePath, key, modal });
+    return this.propertyEditorStartYamlExcursion({ filePath, key, line: input.line, modal });
   }
 
   // y / Ctrl+E switches to Source at the reported key or the parse-error
@@ -412,6 +412,11 @@ class BobLedgerToolsPropertyEditorEntrypointsMixin {
       report = null;
     }
     let line = explicitLine;
+    // Recovery follows Bob's parse diagnostic even when the cached selection
+    // names an otherwise valid key. An explicitly selected duplicate wins.
+    if (!line && report && typeof propertyEditorRecoveryDetails === "function") {
+      line = propertyEditorRecoveryDetails(report)?.line || 0;
+    }
     if (!line && key) {
       try {
         if (report && Array.isArray(report.properties)) {

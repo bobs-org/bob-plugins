@@ -62,13 +62,15 @@ test("startup focus waits for Obsidian to leave its blank window before opening 
   const window = { focus: () => calls.push("focus") };
   const document = { hasFocus: () => true, URL: "app://obsidian.md/index.html" };
   const context = { window, document, activeWindow: {} };
+  context.require = () => ({ remote: { getCurrentWindow: () => ({ focus: () => calls.push("native-focus") }) } });
   const client = {
     call: async (method) => calls.push(method),
     evaluate: async (source) => vm.runInNewContext(source, context),
   };
   const result = await diagnostics.focusApplicationWindow(client, async (cdp, source, ready) => {
-    assert.deepEqual(calls, ["Page.bringToFront", "focus"]);
+    assert.deepEqual(calls, ["Page.bringToFront"]);
     assert.equal(ready(await cdp.evaluate(source)), false, "a focused page with a stale activeWindow is unsafe");
+    assert.deepEqual(calls, ["Page.bringToFront", "native-focus", "focus"]);
     context.activeWindow = window;
     document.hasFocus = () => false;
     assert.equal(ready(await cdp.evaluate(source)), false, "keyboard input needs page focus too");
@@ -78,6 +80,55 @@ test("startup focus waits for Obsidian to leave its blank window before opening 
     return state;
   });
   assert.equal(result.documentUrl, document.URL);
+});
+
+test("every API open restores focus lost during note navigation", async () => {
+  let focused = false;
+  let opens = 0;
+  let readPolls = 0;
+  const editor = { querySelector: () => null, querySelectorAll: () => [], getAttribute: () => null };
+  const document = {
+    hasFocus: () => focused, URL: "app://obsidian.md/index.html",
+    querySelector: () => opens ? editor : null,
+    querySelectorAll: () => opens ? [editor] : [],
+  };
+  const window = {
+    focus: () => { focused = true; context.activeWindow = window; },
+    app: { plugins: { plugins: { "bob-ledger-tools": {
+      async openPropertyEditor({ filePath }) {
+        assert.equal(focused, true, "the modal must open in the app document");
+        assert.equal(context.activeWindow, window);
+        assert.equal(filePath, "projects/project-note.md");
+        opens += 1;
+        this.propertyEditorModal = { report: null, refusal: null };
+        readPolls = 0;
+        return { ok: true, modal: { contentEl: { isConnected: true } } };
+      },
+    } } } },
+  };
+  const context = { window, document, activeWindow: {} };
+  context.require = () => ({ remote: { getCurrentWindow: () => ({ focus: () => {} }) } });
+  const client = {
+    call: async () => {},
+    evaluate: async (source) => {
+      if (source === lib.editorProbeSource()) {
+        readPolls += 1;
+        if (readPolls === 2) {
+          const modal = window.app.plugins.plugins["bob-ledger-tools"].propertyEditorModal;
+          if (opens === 1) modal.report = { properties: [] };
+          else modal.refusal = { code: "needs-bob" };
+        }
+      }
+      return vm.runInNewContext(source, context);
+    },
+  };
+  for (let i = 0; i < 2; i += 1) {
+    focused = false;
+    context.activeWindow = {};
+    assert.equal((await runner.openPropertyEditor(client, "projects/project-note.md")).open, true);
+    assert.equal(readPolls, 2, "cached DOM must wait for a Bob report or a typed refusal");
+  }
+  assert.equal(opens, 2);
 });
 
 test("lifecycle diagnostics preserve receiver, return values, and thrown open errors", () => {

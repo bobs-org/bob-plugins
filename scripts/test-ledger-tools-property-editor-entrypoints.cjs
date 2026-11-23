@@ -631,6 +631,41 @@ test("y excursion jumps to the reported key line and installs Done state", async
   assert.equal(leaf.view.file.path, "notes/groceries.md");
 });
 
+test("YAML recovery uses the parser line even when a cached key is selected", async () => {
+  for (const [state, line] of [["invalid", 4], ["unclosed", 1]]) {
+    const inst = makeEntrypoints(makeApp());
+    const report = showReport([wireRow({ key: "title", line: 2 })]);
+    report.frontmatter = { state, start_line: 1, error: { message: "damaged YAML", line } };
+    inst.apiPropertyShow = async () => ({ ok: true, report });
+    const outcome = await inst.propertyEditorYamlEscape({ filePath: report.path, key: "title" });
+    assert.equal(outcome.ok, true);
+    assert.equal(outcome.line, line, state);
+  }
+});
+
+test("YAML escape retains the selected duplicate occurrence through modal close", async () => {
+  const inst = makeEntrypoints(makeApp());
+  const report = showReport([
+    wireRow({ key: "title", line: 2, duplicate: true }),
+    wireRow({ key: "title", line: 3, duplicate: true }),
+  ]);
+  report.frontmatter = { state: "invalid", start_line: 1, error: { code: "prop_duplicate_key", line: 2 } };
+  inst.apiPropertyShow = async () => ({ ok: true, report });
+  let excursion;
+  const modal = new H.PropertyEditorModal(inst.app, {
+    plugin: inst, filePath: report.path, report,
+    onYamlEscape: (info) => { excursion = inst.propertyEditorYamlEscape(info); },
+  });
+  modal.selectedId = "title::3";
+  modal.close = () => { modal.closed = true; inst.propertyEditorModal = null; };
+  inst.propertyEditorModal = modal;
+  await modal.propertyEditorPerform("yaml");
+  const outcome = await excursion;
+  assert.equal(modal.closed, true);
+  assert.equal(outcome.ok, true);
+  assert.equal(outcome.line, 3, "the second occurrence must not collapse to the first key");
+});
+
 test("Done refuses stale excursions and failed saves without reopening", async () => {
   const inst = makeEntrypoints(makeApp());
   const leaf = makeLeaf("notes/groceries.md");

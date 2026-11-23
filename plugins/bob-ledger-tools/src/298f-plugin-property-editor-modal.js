@@ -451,10 +451,13 @@ class PropertyEditorModal extends PropertyEditorModalBase {
       // Close the modal first, as the record card does: the Source view
       // owns the leaf while the excursion runs, and Done reopens the
       // editor on the preserved key.
-      const key = this.editorSelected()?.row?.key || "";
+      const selected = this.editorSelected()?.row;
+      const key = selected?.key || "";
+      // A key alone loses the selected occurrence when YAML has duplicates.
+      const line = selected?.duplicate === true && Number.isInteger(selected.line) ? selected.line : 0;
       const filePath = this.filePath;
       try { this.close(); } catch (_) {}
-      try { this.onYamlEscape?.({ path: filePath, filePath, key }); } catch (_) {}
+      try { this.onYamlEscape?.({ path: filePath, filePath, key, ...(line > 0 ? { line } : {}) }); } catch (_) {}
       return;
     }
     void event;

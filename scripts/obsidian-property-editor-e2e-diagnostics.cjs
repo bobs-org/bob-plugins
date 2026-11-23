@@ -76,14 +76,19 @@ function installEditorDiagnostics() {
 async function focusApplicationWindow(client, waitFor) {
   // A fresh Electron profile can leave Obsidian's activeWindow pointing to its
   // about:blank startup window. Native Modal.open() mounts into that document.
-  // Focus the real page before exercising the API or sending keyboard input.
+  // Xvfb can deliver a delayed native blur after bringToFront has succeeded.
+  // Reassert native focus while waiting; CDP focus emulation alone leaves
+  // Obsidian's activeWindow stale even when document.hasFocus() is true.
   await client.call("Page.bringToFront");
-  await client.evaluate("window.focus()");
-  return waitFor(client, `({
-    focused: document.hasFocus(),
-    active: typeof activeWindow !== "undefined" && activeWindow === window,
-    documentUrl: document.URL,
-  })`, (state) => state?.focused && state?.active, "Obsidian application window focus");
+  return waitFor(client, `(() => {
+    require("electron").remote.getCurrentWindow().focus();
+    window.focus();
+    return {
+      focused: document.hasFocus(),
+      active: typeof activeWindow !== "undefined" && activeWindow === window,
+      documentUrl: document.URL,
+    };
+  })()`, (state) => state?.focused && state?.active, "Obsidian application window focus");
 }
 
 module.exports = {

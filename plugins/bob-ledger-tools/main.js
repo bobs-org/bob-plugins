@@ -167525,10 +167525,13 @@ class PropertyEditorModal extends PropertyEditorModalBase {
       // Close the modal first, as the record card does: the Source view
       // owns the leaf while the excursion runs, and Done reopens the
       // editor on the preserved key.
-      const key = this.editorSelected()?.row?.key || "";
+      const selected = this.editorSelected()?.row;
+      const key = selected?.key || "";
+      // A key alone loses the selected occurrence when YAML has duplicates.
+      const line = selected?.duplicate === true && Number.isInteger(selected.line) ? selected.line : 0;
       const filePath = this.filePath;
       try { this.close(); } catch (_) {}
-      try { this.onYamlEscape?.({ path: filePath, filePath, key }); } catch (_) {}
+      try { this.onYamlEscape?.({ path: filePath, filePath, key, ...(line > 0 ? { line } : {}) }); } catch (_) {}
       return;
     }
     void event;
@@ -170405,7 +170408,7 @@ class BobLedgerToolsPropertyEditorEntrypointsMixin {
     const key = typeof input.key === "string"
       ? input.key
       : (modal && modal.editorSelected && modal.editorSelected()?.row?.key) || "";
-    return this.propertyEditorStartYamlExcursion({ filePath, key, modal });
+    return this.propertyEditorStartYamlExcursion({ filePath, key, line: input.line, modal });
   }
 
   // y / Ctrl+E switches to Source at the reported key or the parse-error
@@ -170441,6 +170444,11 @@ class BobLedgerToolsPropertyEditorEntrypointsMixin {
       report = null;
     }
     let line = explicitLine;
+    // Recovery follows Bob's parse diagnostic even when the cached selection
+    // names an otherwise valid key. An explicitly selected duplicate wins.
+    if (!line && report && typeof propertyEditorRecoveryDetails === "function") {
+      line = propertyEditorRecoveryDetails(report)?.line || 0;
+    }
     if (!line && key) {
       try {
         if (report && Array.isArray(report.properties)) {

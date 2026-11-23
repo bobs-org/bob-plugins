@@ -13033,8 +13033,11 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
+/* The button-qualified reset is (0,2,1). Hover/selected/locked/focus
+   must keep at least that specificity or background:transparent wins. */
 .bob-property-editor button.bob-property-row,
 .bob-property-row {
+  appearance: none;
   display: block;
   box-sizing: border-box;
   width: 100%;
@@ -13056,14 +13059,19 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
   width: 100%;
   min-width: 0;
 }
+.bob-property-editor button.bob-property-row:hover,
 .bob-property-row:hover {
   background: var(--background-modifier-hover);
 }
+.bob-property-editor button.bob-property-row.is-selected,
+.bob-property-editor button.bob-property-row[aria-selected="true"],
 .bob-property-row.is-selected,
 .bob-property-row[aria-selected="true"] {
   border-color: var(--interactive-accent);
   background: color-mix(in srgb, var(--interactive-accent) 14%, var(--background-primary));
 }
+.bob-property-editor button.bob-property-row.is-locked,
+.bob-property-editor button.bob-property-row[aria-disabled="true"],
 .bob-property-row.is-locked,
 .bob-property-row[aria-disabled="true"] {
   color: var(--text-muted);
@@ -13073,6 +13081,7 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
 .bob-property-row[aria-disabled="true"] .bob-property-row-key {
   color: var(--text-normal);
 }
+.bob-property-editor button.bob-property-row:focus-visible,
 .bob-property-row:focus-visible {
   outline: 2px solid var(--interactive-accent);
   outline-offset: 2px;
@@ -13123,8 +13132,12 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
   .bob-property-row-value { grid-area: value; }
 }
 @media (forced-colors: active) {
+  .bob-property-editor button.bob-property-row,
   .bob-property-row { border: 1px solid CanvasText; }
+  .bob-property-editor button.bob-property-row.is-selected,
+  .bob-property-editor button.bob-property-row[aria-selected="true"],
   .bob-property-row.is-selected,
   .bob-property-row[aria-selected="true"] { border: 2px solid Highlight; }
+  .bob-property-editor button.bob-property-row:focus-visible,
   .bob-property-row:focus-visible { outline: 2px solid Highlight; }
 }

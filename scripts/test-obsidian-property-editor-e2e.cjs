@@ -247,6 +247,17 @@ test("narrow screenshots restore the wide viewport before unload", () => {
   assert.match(surfaces, /propertyEditorEntrypointsActive/);
 });
 
+test("selected-row fill beats the button-qualified transparent reset", () => {
+  const css = fs.readFileSync(path.join(__dirname, "../plugins/bob-ledger-tools/styles.css"), "utf8");
+  const reset = css.match(/\.bob-property-editor button\.bob-property-row,[\s\S]*?\{[\s\S]*?background:\s*transparent;[\s\S]*?\}/);
+  const selected = css.match(/\.bob-property-editor button\.bob-property-row\.is-selected[\s\S]*?\{[\s\S]*?\}/);
+  assert.ok(reset, "row reset qualifies the button so Obsidian UA styles lose");
+  assert.ok(selected, "selected fill must use the same button-qualified specificity");
+  assert.match(selected[0], /background:\s*color-mix/);
+  assert.match(css, /\.bob-property-editor button\.bob-property-row\.is-locked/);
+  assert.match(css, /\.bob-property-editor button\.bob-property-row:focus-visible/);
+});
+
 test("reopened undo wait matches exact draft value, not held-draft", () => {
   const held = { key: "edit_me", text: "≡edit_meheld-draft", valueText: "held-draft" };
   const restored = { key: "edit_me", text: "≡edit_medraft", valueText: "draft" };

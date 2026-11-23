@@ -11,8 +11,9 @@ const { readFixture } = require("./task-reqs-vectors.cjs");
 
 const ROOT = path.join(__dirname, "..");
 const PLUGINS = path.join(ROOT, "plugins");
-const CLI = path.join(__dirname, "..", "..", "..", "..", "..", "tests", "fixtures");
-const DRAWER_FIXTURE = path.join(CLI, "task_drawers");
+// bob-cli's canonical fixtures, present when this checkout is a linked repo
+// inside a bob-cli workspace. Plugin-local copies are always the DV/DH source.
+const CANONICAL_DIR = path.join(__dirname, "..", "..", "..", "..", "..", "tests", "fixtures", "task_drawers");
 const PLUGINS_UNDER_TEST = [
   { id: "task-status-cycler", fragment: "193a-task-drawers-twin.js", before: "194-task-reqs-lines-twin.js", exports: "211-task-reqs-exports.js", helpers: cycler },
   { id: "bob-navigation-hotkeys", fragment: "693a-task-drawers-twin.js", before: "694-task-reqs-lines-twin.js", exports: "728-task-reqs-exports.js", helpers: nav },
@@ -22,6 +23,8 @@ const PLUGINS_UNDER_TEST = [
 const DRAWER_FILES = ["README.md", "vectors.json"];
 const fragmentPath = (plugin, file) => path.join(PLUGINS, plugin, "src", file);
 const manifestOf = (plugin) => JSON.parse(fs.readFileSync(fragmentPath(plugin, "fragments.json"), "utf8"));
+const drawerFixtureDir = (plugin) => path.join(PLUGINS, plugin, "scripts", "fixtures", "task_drawers");
+const CYCLER_DRAWER_DIR = drawerFixtureDir("task-status-cycler");
 
 function sourceOf(vector) {
   const ending = vector.eol === "crlf" ? "\r\n" : "\n";
@@ -66,14 +69,30 @@ test("four source fragments, manifests, bundles, fixtures, and exports stay in s
     for (const helper of ["drawer_body_title", "is_legacy_drawer_title", "drawer_key", "recognize_drawer_header", "heading_for_drawer", "drawer_for_heading", "can_create_drawer"]) {
       assert.equal(typeof entry.helpers[helper], "function", `${entry.id} exports ${helper}`);
     }
-    const copiedFixtureDir = path.join(PLUGINS, entry.id, "scripts", "fixtures", "task_drawers");
+    const copiedFixtureDir = drawerFixtureDir(entry.id);
     for (const name of DRAWER_FILES) {
-      assert.ok(fs.readFileSync(path.join(copiedFixtureDir, name)).equals(fs.readFileSync(path.join(DRAWER_FIXTURE, name))), `${entry.id} ${name} matches bob-cli`);
+      assert.ok(
+        fs.readFileSync(path.join(copiedFixtureDir, name)).equals(fs.readFileSync(path.join(CYCLER_DRAWER_DIR, name))),
+        `${entry.id} ${name} matches the cycler's copy`,
+      );
     }
   }
 });
 
-const vectors = JSON.parse(fs.readFileSync(path.join(DRAWER_FIXTURE, "vectors.json"), "utf8"));
+test("cycler drawer fixtures match bob-cli when the bob-cli checkout is present", (t) => {
+  if (!fs.existsSync(CANONICAL_DIR)) {
+    t.diagnostic("bob-cli fixtures are not beside this checkout; only the cross-repository comparison is unavailable");
+    return;
+  }
+  for (const name of DRAWER_FILES) {
+    assert.ok(
+      fs.readFileSync(path.join(CYCLER_DRAWER_DIR, name)).equals(fs.readFileSync(path.join(CANONICAL_DIR, name))),
+      `${name} matches bob-cli's canonical fixture`,
+    );
+  }
+});
+
+const vectors = JSON.parse(fs.readFileSync(path.join(CYCLER_DRAWER_DIR, "vectors.json"), "utf8"));
 for (const entry of PLUGINS_UNDER_TEST) {
   test(`${entry.id} bundle runs DV and DH vectors`, () => {
     for (const vector of vectors.cases) {

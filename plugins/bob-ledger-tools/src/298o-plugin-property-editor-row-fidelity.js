@@ -24,6 +24,25 @@ function propertyEditorSelectionOf(rows, id) {
   return null;
 }
 
+function propertyEditorNormalizeSelection(value) {
+  if (!value || typeof value !== "object") return null;
+  const key = typeof value.key === "string" ? value.key : "";
+  const ordinal = Number.isInteger(value.ordinal) && value.ordinal >= 0 ? value.ordinal : 0;
+  const line = Number.isInteger(value.line) && value.line > 0 ? value.line : null;
+  if (!key && line === null) return null;
+  return { key, ordinal, line };
+}
+
+function propertyEditorYamlReopenSelection(rows, wanted) {
+  const target = propertyEditorNormalizeSelection(wanted) || { key: "", ordinal: 0, line: null };
+  const list = Array.isArray(rows) ? rows : [];
+  if (!list.length) return target.key || target.line !== null ? target : null;
+  const nearest = propertyEditorNearestId(list, target);
+  if (!nearest) return target.key ? target : null;
+  const found = propertyEditorSelectionOf(list, nearest);
+  return found || target;
+}
+
 function propertyEditorNearestId(rows, wanted) {
   const list = Array.isArray(rows) ? rows : [];
   const entries = [];
@@ -81,8 +100,12 @@ function propertyEditorWantedSelection(modal) {
   try {
     const rows = modal && Array.isArray(modal.properties) ? modal.properties : [];
     const found = propertyEditorSelectionOf(rows, modal && modal.selectedId);
-    if (found) return found;
+    // Cache-first rows have no source line and collapse duplicates, so they
+    // cannot override a stored duplicate ordinal or source position.
+    if (found && Number.isInteger(found.line)) return found;
   } catch (_) {}
+  const stored = propertyEditorNormalizeSelection(modal && modal.requestedSelection);
+  if (stored && stored.key) return stored;
   try {
     const cache = modal && Array.isArray(modal.cacheRows) ? modal.cacheRows : [];
     const found = propertyEditorSelectionOf(cache, modal && modal.selectedId);

@@ -49,6 +49,7 @@ const ACCEPTANCE_CHECKS = [
   "history-survives-close-reopen",
   "yaml-done-restores-leaf-and-key",
   "yaml-done-nearest-row-after-external-delete",
+  "yaml-done-retains-duplicate-occurrence",
   "close-esc-q-ctrl-bracket-ladder",
   "q-types-in-text-field",
   "ctrl-bracket-never-types",
@@ -64,7 +65,7 @@ const ACCEPTANCE_CHECKS = [
   "entry-api-open-property-editor",
   "entry-ordinary-and-invalid-yaml-notes",
   "screenshots-light-dark-narrow-wide",
-  "screenshots-reviewed-light-dark-narrow-wide",
+  "screenshots-layout-probes-light-dark-narrow-wide",
 ];
 
 function parseArgs(argv) {
@@ -436,7 +437,8 @@ const COVERAGE_PATTERNS = {
   "stale-draft-keeps-preview-requirement": [/stale refusal/, /fresh preview required after stale/],
   "history-survives-close-reopen": [/history survives close and reopen/, /reopened undo restores bytes/],
   "yaml-done-restores-leaf-and-key": [/Done restores Live Preview/, /Done reopens the same key/],
-  "yaml-done-nearest-row-after-external-delete": [/Done lands on a nearest remaining row/],
+  "yaml-done-nearest-row-after-external-delete": [/Done lands on nearest remaining edit_me occurrence/],
+  "yaml-done-retains-duplicate-occurrence": [/Done reopens the second duplicate title occurrence/],
   "close-esc-q-ctrl-bracket-ladder": [/peels the (menu|stage)/, /closes the modal from browse/],
   "q-types-in-text-field": [/q types in a text field/],
   "ctrl-bracket-never-types": [/Ctrl\+\[ never types/],
@@ -452,7 +454,7 @@ const COVERAGE_PATTERNS = {
   "entry-api-open-property-editor": [/API openPropertyEditor/],
   "entry-ordinary-and-invalid-yaml-notes": [/API openPropertyEditor on an ordinary note/, /API openPropertyEditor on invalid YAML/, /palette opens invalid YAML recovery/],
   "screenshots-light-dark-narrow-wide": [/screenshots light dark narrow wide/, /screenshot .+ contains the populated editor/],
-  "screenshots-reviewed-light-dark-narrow-wide": [/reviewed every screenshot/, /selected and locked rows are legible/, /selected row is visually distinct/, /values stay inside their rows/],
+  "screenshots-layout-probes-light-dark-narrow-wide": [/layout probes every screenshot/, /selected and locked rows are legible/, /selected row is visually distinct/, /values stay inside their rows/],
 };
 
 function isStaleRefusalCopy(value) {

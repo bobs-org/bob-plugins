@@ -276,13 +276,15 @@ class BobLedgerToolsPropertyEditorEntrypointsMixin {
       cacheRows = [];
     }
     const key = typeof options.key === "string" ? options.key : "";
+    const selection = options.selection && typeof options.selection === "object" ? options.selection : null;
     const mode = options.mode === "add" || options.mode === "edit" ? options.mode : "browse";
     let modal = null;
     try {
       modal = openPropertyEditor(this.app, {
         plugin: this,
         filePath,
-        key,
+        key: (selection && typeof selection.key === "string" && selection.key) || key,
+        selection,
         mode,
         cacheRows,
         noteKind: typeof options.noteKind === "string" ? options.noteKind : undefined,
@@ -373,10 +375,20 @@ class BobLedgerToolsPropertyEditorEntrypointsMixin {
       ? propertyEditorEntryNormalizePath(explicit)
       : (modal && modal.filePath)
         || this.propertyEditorEntryActivePath(input.filePath || input.path || "");
+    let selection = typeof propertyEditorNormalizeSelection === "function"
+      ? propertyEditorNormalizeSelection(input.selection)
+      : (input.selection && typeof input.selection === "object" ? input.selection : null);
+    if (!selection && modal && typeof propertyEditorWantedSelection === "function") {
+      try { selection = propertyEditorWantedSelection(modal); } catch (_) { selection = null; }
+    }
     const key = typeof input.key === "string"
       ? input.key
-      : (modal && modal.editorSelected && modal.editorSelected()?.row?.key) || "";
-    return this.propertyEditorStartYamlExcursion({ filePath, key, line: input.line, modal });
+      : (selection && typeof selection.key === "string" && selection.key)
+        || (modal && modal.editorSelected && modal.editorSelected()?.row?.key)
+        || "";
+    return this.propertyEditorStartYamlExcursion({
+      filePath, key, line: input.line, modal, selection, ordinal: input.ordinal,
+    });
   }
 
   // y / Ctrl+E switches to Source at the reported key or the parse-error
@@ -389,6 +401,21 @@ class BobLedgerToolsPropertyEditorEntrypointsMixin {
     }
     const key = typeof input.key === "string" ? input.key : "";
     const explicitLine = Number.isInteger(input.line) && input.line > 0 ? input.line : 0;
+    let selection = typeof propertyEditorNormalizeSelection === "function"
+      ? propertyEditorNormalizeSelection(input.selection)
+      : (input.selection && typeof input.selection === "object" ? input.selection : null);
+    if (!selection && input.modal && typeof propertyEditorWantedSelection === "function") {
+      try { selection = propertyEditorWantedSelection(input.modal); } catch (_) { selection = null; }
+    }
+    if (!selection) {
+      selection = {
+        key,
+        ordinal: Number.isInteger(input.ordinal) && input.ordinal >= 0 ? input.ordinal : 0,
+        line: explicitLine || null,
+      };
+    } else if (!selection.key && key) {
+      selection = { ...selection, key };
+    }
     const leaf = propertyEditorEntryLeafFor(this, filePath);
     if (!leaf) {
       try {
@@ -417,9 +444,13 @@ class BobLedgerToolsPropertyEditorEntrypointsMixin {
     if (!line && report && typeof propertyEditorRecoveryDetails === "function") {
       line = propertyEditorRecoveryDetails(report)?.line || 0;
     }
-    if (!line && key) {
+    if (!line && (key || (selection && Number.isInteger(selection.line)))) {
       try {
-        if (report && Array.isArray(report.properties)) {
+        if (report && Array.isArray(report.properties) && typeof propertyEditorYamlReopenSelection === "function") {
+          const resolved = propertyEditorYamlReopenSelection(report.properties, selection || { key, ordinal: 0, line: null });
+          if (resolved && Number.isInteger(resolved.line) && resolved.line > 0) line = resolved.line;
+          if (resolved) selection = resolved;
+        } else if (report && Array.isArray(report.properties)) {
           const row = report.properties.find((entry) => entry && entry.key === key
             && Number.isInteger(entry.line) && entry.line > 0);
           if (row) line = row.line;
@@ -438,7 +469,8 @@ class BobLedgerToolsPropertyEditorEntrypointsMixin {
           kind: "props",
           notePath: filePath,
           viewState,
-          selectedKey: key,
+          selectedKey: (selection && selection.key) || key,
+          selection,
           reopenCard: true,
         });
       }
@@ -543,8 +575,18 @@ class BobLedgerToolsPropertyEditorEntrypointsMixin {
       if (typeof this.albumYamlExcursionClear === "function") this.albumYamlExcursionClear(leaf);
     } catch (_) {}
     if (record.reopenCard === false) return { ok: true, reopened: false };
-    const wanted = typeof record.selectedKey === "string" ? record.selectedKey : "";
-    let key = wanted;
+    const wanted = typeof propertyEditorNormalizeSelection === "function"
+      ? (propertyEditorNormalizeSelection(record.selection)
+        || propertyEditorNormalizeSelection({
+          key: typeof record.selectedKey === "string" ? record.selectedKey : "",
+          ordinal: 0,
+          line: null,
+        }))
+      : (record.selection && typeof record.selection === "object"
+        ? record.selection
+        : { key: typeof record.selectedKey === "string" ? record.selectedKey : "", ordinal: 0, line: null });
+    let selection = wanted;
+    let key = wanted && typeof wanted.key === "string" ? wanted.key : "";
     try {
       if (typeof this.apiPropertyShow === "function") {
         const outcome = await this.apiPropertyShow(ownPath);
@@ -552,11 +594,11 @@ class BobLedgerToolsPropertyEditorEntrypointsMixin {
           ? outcome.report.properties
           : null;
         if (rows) {
-          const alive = wanted && rows.some((row) => row && row.key === wanted);
-          if (alive) {
-            key = wanted;
+          if (typeof propertyEditorYamlReopenSelection === "function") {
+            selection = propertyEditorYamlReopenSelection(rows, wanted) || wanted;
+            key = selection && typeof selection.key === "string" ? selection.key : "";
           } else if (typeof propertyEditorNearestId === "function") {
-            const nearest = propertyEditorNearestId(rows, { key: wanted, ordinal: 0, line: null });
+            const nearest = propertyEditorNearestId(rows, wanted || { key, ordinal: 0, line: null });
             const match = rows.find((row, index) => {
               try {
                 return typeof propertyEditorRowId === "function"
@@ -566,13 +608,21 @@ class BobLedgerToolsPropertyEditorEntrypointsMixin {
               }
             });
             key = match && typeof match.key === "string" ? match.key : "";
+            selection = match
+              ? { key, ordinal: 0, line: Number.isInteger(match.line) ? match.line : null }
+              : wanted;
           } else {
             key = rows.length && typeof rows[0].key === "string" ? rows[0].key : "";
+            selection = key ? { key, ordinal: 0, line: Number.isInteger(rows[0].line) ? rows[0].line : null } : wanted;
           }
         }
       }
     } catch (_) {}
-    const opened = await this.openPropertyEditor({ filePath: ownPath, key });
+    const opened = await this.openPropertyEditor({
+      filePath: ownPath,
+      key,
+      ...(selection ? { selection } : {}),
+    });
     return { ok: true, reopened: Boolean(opened && opened.ok) };
   }
 

@@ -124,6 +124,8 @@ try {
       propertyEditorNoteKindSpecies,
       propertyEditorSelectionOf,
       propertyEditorNearestId,
+      propertyEditorNormalizeSelection,
+      propertyEditorYamlReopenSelection,
       propertyEditorWantedSelection,
       propertyEditorRecoveryDetails,
       propertyEditorRowDiagnostics,

@@ -248,8 +248,12 @@ async function runSurfaceAcceptance(ctx) {
   await finishYamlExcursion(client, "YAML after external keep_me delete");
   probe = await waitForEditor(client, (value) => value.open && value.readSettled && !value.rows.some((row) => row.key === "keep_me"),
     "keep_me gone after Done");
-  addCheck(report, "Done lands on a nearest remaining row",
-    probe.rows.some((row) => row.selected) && !probe.rows.some((row) => row.key === "keep_me"), probe);
+  const nearest = probe.rows.find((row) => row.key === "edit_me");
+  addCheck(report, "Done lands on nearest remaining edit_me occurrence",
+    Boolean(nearest && nearest.selected && probe.focusedRow === nearest.id)
+      && !probe.rows.some((row) => row.key === "keep_me")
+      && !probe.rows.some((row) => row.key === "type" && row.selected),
+    probe);
 
   // Close keys: Esc/q/Ctrl+[ peel menu, then stage, then modal. q types in a field.
   await closePropertyEditor(client);

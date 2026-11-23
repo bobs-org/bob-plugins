@@ -771,7 +771,16 @@ async function run(args) {
     await sendKey(client, "y");
     const duplicateTarget = await yamlTarget(client, duplicateLine, "title:", "duplicate YAML target", report);
     addCheck(report, "duplicate y targets duplicate line", duplicateTarget?.line === duplicateLine, duplicateTarget);
-    await finishYamlExcursion(client, "duplicate YAML recovery");
+    await client.evaluate(`(async () => {
+      const file = app.vault.getAbstractFileByPath("duplicate.md");
+      const text = await app.vault.read(file);
+      await app.vault.modify(file, text.replace(/^---\\n/, "---\\n# shifted\\n"));
+    })()`);
+    probe = await finishYamlExcursion(client, "duplicate YAML recovery");
+    const titles = (probe.rows || []).filter((row) => row.key === "title");
+    addCheck(report, "Done reopens the second duplicate title occurrence",
+      titles.length === 2 && titles[1].selected === true && probe.focusedRow === titles[1].id,
+      { titles, focusedRow: probe.focusedRow, properties: probe.properties });
     await closePropertyEditor(client);
     fs.writeFileSync(oldFlag, "simulate old bob\n");
     await shared.openNote(client, "old-bob.md", "live");
@@ -843,11 +852,17 @@ async function run(args) {
     }
     addCheck(report, "screenshots light dark narrow wide", report.screenshots.length === 4,
       report.screenshots.map(({ name, width, theme, bytes }) => ({ name, width, theme, bytes })));
-    addCheck(report, "reviewed every screenshot for clipping focus ring selected and locked rows",
+    addCheck(report, "layout probes every screenshot for clipping focus ring selected and locked rows",
       report.screenshots.every((shot) => shot.review && shot.review.clipped && shot.review.selectedDiffers
         && shot.review.lockedReadable && shot.review.keyValueOverlap && shot.review.rowOverlap
         && shot.review.valueOverflow),
       report.screenshots.map((shot) => ({ name: shot.name, review: shot.review })));
+    report.screenshotInspection = report.screenshots.map((shot) => ({
+      name: shot.name,
+      sha256: shot.sha256 || "",
+      visualVerdict: "pending inspection",
+    }));
+    report.visualVerdict = "layout-probed";
 
     await shared.setTheme(client, "light");
     await shared.setViewport(client, 1400, 900);

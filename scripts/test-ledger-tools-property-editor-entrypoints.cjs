@@ -627,6 +627,7 @@ test("y excursion jumps to the reported key line and installs Done state", async
   assert.ok(record, "excursion record installed");
   assert.equal(record.kind, "props");
   assert.equal(record.selectedKey, "count");
+  assert.deepEqual(record.selection, { key: "count", ordinal: 0, line: 5 });
   assert.deepEqual(leaf.openOptions, { state: { mode: "source", source: true } });
   assert.equal(leaf.view.file.path, "notes/groceries.md");
 });
@@ -664,6 +665,8 @@ test("YAML escape retains the selected duplicate occurrence through modal close"
   assert.equal(modal.closed, true);
   assert.equal(outcome.ok, true);
   assert.equal(outcome.line, 3, "the second occurrence must not collapse to the first key");
+  const record = inst.albumYamlExcursionForLeaf(inst.app.workspace.activeLeaf);
+  assert.deepEqual(record.selection, { key: "title", ordinal: 1, line: 3 });
 });
 
 test("Done refuses stale excursions and failed saves without reopening", async () => {
@@ -684,7 +687,7 @@ test("Done refuses stale excursions and failed saves without reopening", async (
   assert.equal(opened, 0);
 });
 
-test("Done saves, restores the leaf mode, and reopens the surviving key", async () => {
+test("Done saves, restores the leaf mode, and reopens the same surviving key", async () => {
   const inst = makeEntrypoints(makeApp());
   const leaf = makeLeaf("notes/groceries.md");
   leaf.workspaceState = { type: "markdown", state: { mode: "preview", source: false, file: "notes/groceries.md" } };
@@ -692,14 +695,15 @@ test("Done saves, restores the leaf mode, and reopens the surviving key", async 
     kind: "props",
     notePath: "notes/groceries.md",
     viewState: leaf.workspaceState,
-    selectedKey: "gone",
+    selectedKey: "count",
+    selection: { key: "count", ordinal: 0, line: 5 },
     reopenCard: true,
   });
   const saved = [];
   inst.albumYamlSaveExcursionEditors = async (paths) => { saved.push(paths); return { ok: true }; };
   inst.apiPropertyShow = async () => ({
     ok: true,
-    report: showReport([wireRow({ key: "title", line: 2 }), wireRow({ key: "count", line: 3, value: 1, kind: "number" })]),
+    report: showReport([wireRow({ key: "title", line: 2 }), wireRow({ key: "count", line: 5, value: 1, kind: "number" })]),
   });
   const reopened = [];
   inst.openPropertyEditor = async (options) => { reopened.push(options); return { ok: true, modal: {} }; };
@@ -707,8 +711,89 @@ test("Done saves, restores the leaf mode, and reopens the surviving key", async 
   assert.deepEqual(outcome, { ok: true, reopened: true });
   assert.deepEqual(saved, [["notes/groceries.md"]], "every target pane saves before Done restores");
   assert.equal(leaf.workspaceState.state.mode, "preview", "the leaf mode is restored");
-  assert.deepEqual(reopened, [{ filePath: "notes/groceries.md", key: "title" }], "nearest surviving row reopens");
+  assert.equal(reopened[0].filePath, "notes/groceries.md");
+  assert.equal(reopened[0].key, "count");
+  assert.deepEqual(reopened[0].selection, { key: "count", ordinal: 0, line: 5 });
   assert.equal(inst.albumYamlExcursionForLeaf(leaf), null, "the excursion clears after Done");
+});
+
+test("Done after an external delete lands on the nearest surviving source position", async () => {
+  const inst = makeEntrypoints(makeApp());
+  const leaf = makeLeaf("notes/groceries.md");
+  leaf.workspaceState = { type: "markdown", state: { mode: "preview", source: false, file: "notes/groceries.md" } };
+  const record = inst.albumYamlExcursionBegin(leaf, {
+    kind: "props",
+    notePath: "notes/groceries.md",
+    viewState: leaf.workspaceState,
+    selectedKey: "keep_me",
+    selection: { key: "keep_me", ordinal: 0, line: 3 },
+    reopenCard: true,
+  });
+  inst.albumYamlSaveExcursionEditors = async () => ({ ok: true });
+  inst.apiPropertyShow = async () => ({
+    ok: true,
+    report: showReport([
+      wireRow({ key: "type", line: 2, role: "identity" }),
+      wireRow({ key: "edit_me", line: 3 }),
+    ]),
+  });
+  const reopened = [];
+  inst.openPropertyEditor = async (options) => { reopened.push(options); return { ok: true, modal: {} }; };
+  const outcome = await inst.propertyEditorYamlDoneAttempt(leaf, record);
+  assert.deepEqual(outcome, { ok: true, reopened: true });
+  assert.equal(reopened[0].key, "edit_me", "nearest survivor is edit_me at the deleted line, not the first row");
+  assert.deepEqual(reopened[0].selection, { key: "edit_me", ordinal: 0, line: 3 });
+});
+
+test("Done retains the second duplicate after a source line shift", async () => {
+  const inst = makeEntrypoints(makeApp());
+  const leaf = makeLeaf("notes/groceries.md");
+  leaf.workspaceState = { type: "markdown", state: { mode: "preview", source: false, file: "notes/groceries.md" } };
+  const record = inst.albumYamlExcursionBegin(leaf, {
+    kind: "props",
+    notePath: "notes/groceries.md",
+    viewState: leaf.workspaceState,
+    selectedKey: "repeat",
+    selection: { key: "repeat", ordinal: 1, line: 9 },
+    reopenCard: true,
+  });
+  inst.albumYamlSaveExcursionEditors = async () => ({ ok: true });
+  inst.apiPropertyShow = async () => ({
+    ok: true,
+    report: showReport([
+      wireRow({ key: "repeat", line: 6, value: "first", duplicate: true }),
+      wireRow({ key: "repeat", line: 11, value: "second", duplicate: true }),
+    ]),
+  });
+  const reopened = [];
+  inst.openPropertyEditor = async (options) => { reopened.push(options); return { ok: true, modal: {} }; };
+  const outcome = await inst.propertyEditorYamlDoneAttempt(leaf, record);
+  assert.deepEqual(outcome, { ok: true, reopened: true });
+  assert.equal(reopened[0].key, "repeat");
+  assert.deepEqual(reopened[0].selection, { key: "repeat", ordinal: 1, line: 11 },
+    "ordinal plus nearest line beat an obsolete key::line");
+});
+
+test("legacy Done records without selection still reopen by key", async () => {
+  const inst = makeEntrypoints(makeApp());
+  const leaf = makeLeaf("notes/groceries.md");
+  const record = inst.albumYamlExcursionBegin(leaf, {
+    kind: "props",
+    notePath: "notes/groceries.md",
+    viewState: leaf.workspaceState,
+    selectedKey: "count",
+    reopenCard: true,
+  });
+  assert.equal(record.selection, null);
+  inst.albumYamlSaveExcursionEditors = async () => ({ ok: true });
+  inst.apiPropertyShow = async () => ({
+    ok: true,
+    report: showReport([wireRow({ key: "title", line: 2 }), wireRow({ key: "count", line: 5, value: 1, kind: "number" })]),
+  });
+  const reopened = [];
+  inst.openPropertyEditor = async (options) => { reopened.push(options); return { ok: true, modal: {} }; };
+  await inst.propertyEditorYamlDoneAttempt(leaf, record);
+  assert.equal(reopened[0].key, "count");
 });
 
 test("Done reopens recovery mode when the YAML stays damaged", async () => {
@@ -727,6 +812,7 @@ test("Done reopens recovery mode when the YAML stays damaged", async () => {
   inst.openPropertyEditor = async (options) => { reopened.push(options); return { ok: true, modal: {} }; };
   const outcome = await inst.propertyEditorYamlDoneAttempt(leaf, record);
   assert.deepEqual(outcome, { ok: true, reopened: true });
-  assert.deepEqual(reopened, [{ filePath: "notes/groceries.md", key: "title" }], "the kept key reopens in recovery");
+  assert.equal(reopened[0].filePath, "notes/groceries.md");
+  assert.equal(reopened[0].key, "title", "the kept key reopens in recovery");
 });
 

@@ -88,6 +88,34 @@ test("wanted selection falls back to the requested open key", () => {
   }), { key: "keep_me", ordinal: 0, line: null });
 });
 
+test("wanted selection prefers stored duplicate ordinal over collapsed cache", () => {
+  assert.deepEqual(H.propertyEditorWantedSelection({
+    properties: [row({ key: "title", line: null })],
+    cacheRows: [row({ key: "title", line: null })],
+    selectedId: "title::0",
+    requestedKey: "title",
+    requestedSelection: { key: "title", ordinal: 1, line: 9 },
+  }), { key: "title", ordinal: 1, line: 9 });
+});
+
+test("cache-first reopen keeps the second duplicate through report reconciliation", () => {
+  const modal = new H.PropertyEditorModal({}, {
+    filePath: "notes/groceries.md",
+    key: "title",
+    selection: { key: "title", ordinal: 1, line: 9 },
+    cacheRows: [row({ key: "title", line: null, value: "second" })],
+  });
+  modal.propertyEditorReconcile(report([
+    row({ key: "title", line: 6, value: "first", duplicate: true }),
+    row({ key: "title", line: 11, value: "second", duplicate: true }),
+  ], "after"));
+  assert.equal(modal.selectedId, "title::11");
+  assert.deepEqual(H.propertyEditorYamlReopenSelection(
+    [row({ key: "title", line: 6, duplicate: true }), row({ key: "title", line: 11, duplicate: true })],
+    { key: "title", ordinal: 1, line: 9 },
+  ), { key: "title", ordinal: 1, line: 11 });
+});
+
 test("empty cache still opens the requested key's stage after the report arrives", () => {
   const modal = new H.PropertyEditorModal({}, {
     filePath: "surfaces.md", key: "keep_me", mode: "edit", cacheRows: [],

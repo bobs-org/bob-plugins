@@ -420,12 +420,12 @@ preservation; derived and identity refusals with YAML targets; invalid,
 unclosed, and duplicate YAML recovery; old-bob read-only; and record-field
 handoff. Surface coverage includes two panes of one note with unsaved editor
 text, a stale draft that keeps its preview, history across close and reopen,
-`y` then Done restoring Live Preview and the same or nearest key, the Esc / `q`
-/ Ctrl+[ close ladder (`q` types in a field; Ctrl+[ never does), plugin unload
-with no late reopen, and every entry point (`=+` and Shift+`=` in Live Preview
-Vim normal, palette **Edit note properties**, Command Mode, drawer key-label /
-Add property / Edit all, and `openPropertyEditor`) on ordinary and invalid-YAML
-notes.
+`y` then Done restoring Live Preview and the same key, duplicate occurrence, or
+nearest surviving row, the Esc / `q` / Ctrl+[ close ladder (`q` types in a
+field; Ctrl+[ never does), plugin unload with no late reopen, and every entry
+point (`=+` and Shift+`=` in Live Preview Vim normal, palette **Edit note
+properties**, Command Mode, drawer key-label / Add property / Edit all, and
+`openPropertyEditor`) on ordinary and invalid-YAML notes.
 
 The offline wrapper `scripts/test-obsidian-property-editor-e2e.cjs` is part of
 `npm test`. It checks fixtures, fake-bob JSON, probes, coverage mapping, and
@@ -458,8 +458,10 @@ palette binding, and never opens the live vault. The report retains pass, skip,
 and fail assertions, console exceptions, Bob invocations, light/dark
 narrow/wide screenshots, and per-image layout metrics (clipping, key/value
 overlap, adjacent-row overlap, value overflow, selected-row contrast,
-locked-row contrast, focus ring). Open and
-review every PNG before claiming acceptance; the offline self-test is not
+locked-row contrast, focus ring). The runner's layout probes are automated
+geometry checks (`visualVerdict: layout-probed`); they do not inspect the PNG
+pixels. Open and review every PNG, record per-image hashes and verdicts on the
+report, and only then claim visual acceptance. The offline self-test is not
 real-Obsidian acceptance. Copy the report and screenshots back from athena and
 retain them through `/sase_artifact`.
 

@@ -78,7 +78,15 @@ class PropertyEditorModal extends PropertyEditorModalBase {
       ? propertyNotePath(options.filePath || options.path || "")
       : String(options.filePath || options.path || "");
     this.mode = options.mode === "edit" || options.mode === "add" ? options.mode : "browse";
-    this.requestedKey = typeof options.key === "string" ? options.key : "";
+    const fromSelection = typeof propertyEditorNormalizeSelection === "function"
+      ? propertyEditorNormalizeSelection(options.selection)
+      : null;
+    const requestedKey = (fromSelection && fromSelection.key)
+      || (typeof options.key === "string" ? options.key : "");
+    this.requestedKey = requestedKey;
+    this.requestedSelection = fromSelection
+      ? { ...fromSelection, key: fromSelection.key || requestedKey }
+      : (requestedKey ? { key: requestedKey, ordinal: 0, line: null } : null);
     this.report = options.report && typeof options.report === "object" ? options.report : null;
     this.cacheRows = Array.isArray(options.cacheRows) ? options.cacheRows : [];
     this.properties = Array.isArray(options.properties)
@@ -101,16 +109,19 @@ class PropertyEditorModal extends PropertyEditorModalBase {
     this.pendingApply = false;
     this.announce = "";
     const initialRows = this.properties.length ? this.properties : this.cacheRows;
+    const wanted = this.requestedSelection || (requestedKey ? { key: requestedKey, ordinal: 0, line: null } : null);
     if (typeof propertyEditorNearestId === "function") {
       if (!this.selectedId) this.selectedId = propertyEditorNearestId(initialRows, { key: "", ordinal: 0, line: null });
-      if (typeof options.key === "string" && options.key) {
-        this.selectedId = propertyEditorNearestId(initialRows, { key: options.key, ordinal: 0, line: null });
+      if (wanted && wanted.key) {
+        this.selectedId = propertyEditorNearestId(initialRows, wanted);
       }
     } else {
       const ids = propertyEditorOrderedIds(initialRows);
       if (!this.selectedId && ids.length) this.selectedId = ids[0];
-      if (typeof options.key === "string" && options.key) {
-        const match = initialRows.find((row) => row && row.key === options.key);
+      if (wanted && wanted.key) {
+        const sameKey = initialRows.filter((row) => row && row.key === wanted.key);
+        const match = (Number.isInteger(wanted.ordinal) && sameKey[wanted.ordinal]) || sameKey[0]
+          || initialRows.find((row) => row && row.key === wanted.key);
         if (match) {
           const idx = initialRows.indexOf(match);
           this.selectedId = propertyEditorRowId(match, idx);
@@ -458,14 +469,28 @@ class PropertyEditorModal extends PropertyEditorModalBase {
       }
       // Close the modal first, as the record card does: the Source view
       // owns the leaf while the excursion runs, and Done reopens the
-      // editor on the preserved key.
+      // editor on the preserved key, ordinal, and source line.
       const selected = this.editorSelected()?.row;
-      const key = selected?.key || "";
+      let selection = null;
+      try {
+        selection = typeof propertyEditorWantedSelection === "function"
+          ? propertyEditorWantedSelection(this)
+          : null;
+      } catch (_) {
+        selection = null;
+      }
+      const key = (selection && selection.key) || selected?.key || "";
       // A key alone loses the selected occurrence when YAML has duplicates.
+      // Unique keys omit line so recovery can still jump to the parse error.
       const line = selected?.duplicate === true && Number.isInteger(selected.line) ? selected.line : 0;
       const filePath = this.filePath;
       try { this.close(); } catch (_) {}
-      try { this.onYamlEscape?.({ path: filePath, filePath, key, ...(line > 0 ? { line } : {}) }); } catch (_) {}
+      try {
+        this.onYamlEscape?.({
+          path: filePath, filePath, key, selection,
+          ...(line > 0 ? { line } : {}),
+        });
+      } catch (_) {}
       return;
     }
     void event;

@@ -486,7 +486,12 @@ test("the yaml action closes the modal first and keeps the key for Done", async 
   modal.close = () => { modal.closed = true; };
   await modal.propertyEditorPerform("yaml");
   assert.equal(modal.closed, true, "the modal closes before the Source view opens");
-  assert.deepEqual(seen, [{ path: "notes/groceries.md", filePath: "notes/groceries.md", key: "title" }]);
+  assert.deepEqual(seen, [{
+    path: "notes/groceries.md",
+    filePath: "notes/groceries.md",
+    key: "title",
+    selection: { key: "title", ordinal: 0, line: 3 },
+  }]);
 });
 
 test("browse equals opens the owning card editor and explains ordinary notes", async () => {

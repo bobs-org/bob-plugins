@@ -214,6 +214,59 @@ test("modal reconciles without losing selection and closes cleanly", () => {
   assert.equal(modal.session, null);
 });
 
+for (const keys of [["first", "second"], ["duplicate", "duplicate"]]) {
+  test(`browse focus follows the selected source row after repaint: ${keys.join(" / ")}`, () => {
+    const rows = keys.map((key, index) => wireRow({ key, line: index + 3 }));
+    const modal = new H.PropertyEditorModal({}, {
+      filePath: "notes/groceries.md", report: showReport({ properties: rows }),
+    });
+    const doc = { activeElement: null };
+    let buttons;
+    const render = () => {
+      buttons = rows.map((row) => ({
+        id: `${row.key}::${row.line}`,
+        getAttribute: (name) => name === "data-property-key" ? row.key : null,
+        focus() { doc.activeElement = this; },
+      }));
+      // Removing the previously focused row returns focus to the document.
+      doc.activeElement = null;
+    };
+    modal.contentEl = {
+      querySelector(selector) {
+        if (selector === '[aria-current="true"]') return buttons.find((button) => button.id === modal.selectedId);
+        return buttons.find((button) => selector === `[data-property-key="${button.getAttribute("data-property-key")}"]`);
+      },
+      contains: (node) => buttons.includes(node),
+    };
+    modal.paintPropertyEditor = () => {
+      const caret = modal.editorCaptureCaret(doc);
+      render();
+      modal.editorRestoreFocus(doc, caret);
+    };
+    render();
+    buttons[0].focus();
+    modal.propertyEditorMove(1);
+    assert.equal(modal.selectedId, `${keys[1]}::4`);
+    assert.equal(doc.activeElement, buttons[1], "native button keys must target the selected row");
+    modal.paintPropertyEditor();
+    assert.equal(doc.activeElement, buttons[1], "a later repaint must retain the same source occurrence");
+  });
+}
+
+test("an empty editor focuses its browse host so the first add receives keyboard input", () => {
+  const modal = new H.PropertyEditorModal({}, {
+    filePath: "notes/plain.md", report: showReport({ properties: [] }),
+  });
+  const doc = { activeElement: { name: "previous note editor" } };
+  const host = { focus() { doc.activeElement = this; } };
+  modal.contentEl = {
+    querySelector: (selector) => selector === ".bob-property-editor" ? host : null,
+    contains: (node) => node === host,
+  };
+  modal.editorRestoreFocus(doc, null);
+  assert.equal(doc.activeElement, host);
+});
+
 test("discrete ops build exact envelopes and history round-trips", () => {
   assert.deepEqual(H.propertyEditorToggleOp({ key: "done", value: false }), { op: "prop.set", key: "done", value: true });
   assert.deepEqual(H.propertyEditorToggleOp({ key: "done", value: true }), { op: "prop.set", key: "done", value: false });

@@ -213,6 +213,7 @@ class PropertyEditorModal extends PropertyEditorModalBase {
       host = propertyEditorCreateEl(doc, "div", "bob-property-editor");
       if (!host) return;
       try { host.setAttribute("role", "dialog"); } catch (_) {}
+      try { host.setAttribute("tabindex", "-1"); } catch (_) {}
       try { host.setAttribute("aria-label", `Edit properties · ${this.filePath}`); } catch (_) {}
       try {
         host.addEventListener?.("click", (event) => this.propertyEditorOnClick(event));
@@ -283,16 +284,15 @@ class PropertyEditorModal extends PropertyEditorModalBase {
 
   editorRestoreFocus(doc, caret) {
     try {
-      if (caret && caret.key) {
-        const node = this.contentEl?.querySelector?.(`[data-property-key="${caret.key}"]`);
-        if (node && typeof node.focus === "function") {
-          node.focus();
-          return;
-        }
-      }
-      const selected = this.contentEl?.querySelector?.('[aria-current="true"]');
+      // Browse keys can change selection before the old button is removed.
+      // Restore the selected source occurrence, not the previously focused
+      // key: native Space would otherwise click that old row after a move.
+      // Stage/add inputs restore their own caret before reaching this method.
+      // Empty notes still need a keyboard target for o/O and Mod+;.
+      const selected = this.contentEl?.querySelector?.('[aria-current="true"]')
+        || this.contentEl?.querySelector?.(".bob-property-editor");
       if (selected && typeof selected.focus === "function"
-        && (!doc?.activeElement || !this.contentEl?.contains?.(doc.activeElement))) {
+        && (caret?.key || !doc?.activeElement || !this.contentEl?.contains?.(doc.activeElement))) {
         selected.focus();
       }
     } catch (_) {}

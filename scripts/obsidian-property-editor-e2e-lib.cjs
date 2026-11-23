@@ -235,6 +235,7 @@ function editorProbeSource() {
     return {
       open: true,
       readSettled: Boolean(report || plugin?.propertyEditorModal?.refusal),
+      focusedRow: document.activeElement?.getAttribute?.("data-property-row") || "",
       heading: editor.querySelector(".bob-property-editor-heading")?.textContent || "",
       rows: Array.from(editor.querySelectorAll("[data-property-row]")).map((row) => ({
         key: row.getAttribute("data-property-key"),

@@ -199,6 +199,12 @@ async function waitForEditor(client, predicate, label, timeoutMs = 25_000) {
   return shared.waitFor(client, lib.editorProbeSource(), predicate, label, timeoutMs);
 }
 
+async function assertBrowseSelection(client, report, key, label) {
+  const probe = await client.evaluate(lib.editorProbeSource());
+  const row = probe.rows?.find((item) => item.key === key && item.selected);
+  addCheck(report, label, Boolean(row && probe.focusedRow === row.id), probe);
+}
+
 async function openPropertyEditor(client, filePath, options = {}) {
   // Opening a note yields through layout and window activation. Verify focus
   // here as well as at startup, immediately before Native Modal.open uses it.
@@ -429,7 +435,9 @@ async function run(args) {
     await waitForEditor(client, (value) => !value.rows.some((row) => row.key === "remove_me"), "final property deletion");
     assertDiskBytes(report, "project final delete bytes", projectPath, projectDeleted);
 
-    await propertyRowClick(client, "project_digest");
+    await propertyRowClick(client, "keep_exact");
+    await sendKey(client, "j");
+    await assertBrowseSelection(client, report, "project_digest", "keyboard navigation focuses selected row");
     probe = await waitForEditor(client, (value) => value.rows.some((row) => row.key === "project_digest"), "derived project property");
     const derived = probe.rows.find((row) => row.key === "project_digest");
     const derivedReport = probe.properties.find((row) => row.key === "project_digest");
@@ -443,6 +451,7 @@ async function run(args) {
     await sendKey(client, " ");
     await waitForEditor(client, (value) => value.open && !value.stage, "derived checkbox gesture refused");
     assertDiskBytes(report, "derived checkbox gesture leaves bytes unchanged", projectPath, projectDeleted);
+    await assertBrowseSelection(client, report, "project_digest", "derived gestures retain selection and focus");
     await sendKey(client, "y");
     const derivedLine = projectDeleted.split("\n").findIndex((line) => line.startsWith("project_digest:")) + 1;
     const derivedTarget = await yamlTarget(client, derivedLine, "project_digest:", "derived YAML key target", report);
@@ -462,6 +471,7 @@ async function run(args) {
     await sendKey(client, " ");
     await waitForEditor(client, (value) => value.open && !value.stage, "derived checkbox key refused");
     assertDiskBytes(report, "derived checkbox key leaves bytes unchanged", projectPath, projectDeleted);
+    await assertBrowseSelection(client, report, "review_enabled", "derived checkbox gestures retain selection and focus");
     await sendKey(client, "y");
     const checkboxLine = projectDeleted.split("\n").findIndex((line) => line.startsWith("review_enabled:")) + 1;
     const checkboxTarget = await yamlTarget(client, checkboxLine, "review_enabled:", "derived checkbox YAML target", report);
@@ -481,6 +491,7 @@ async function run(args) {
     await sendKey(client, " ");
     await waitForEditor(client, (value) => value.open && !value.stage, "identity checkbox gesture refused");
     assertDiskBytes(report, "identity checkbox gesture leaves bytes unchanged", projectPath, projectDeleted);
+    await assertBrowseSelection(client, report, "type", "identity gestures retain selection and focus");
     await sendKey(client, "y");
     const identityLine = projectDeleted.split("\n").findIndex((line) => line.startsWith("type:")) + 1;
     const identityTarget = await yamlTarget(client, identityLine, "type:", "identity YAML key target", report);
@@ -551,9 +562,15 @@ async function run(args) {
     await waitForEditor(client, (value) => value.rows.some((row) => row.key === "status"), "record property rows");
     await propertyRowClick(client, "status");
     await sendKey(client, "Enter");
-    const handoff = await shared.waitFor(client,
-      `Boolean(document.querySelector(".bob-record-card-modal"))`, Boolean, "record field handoff", 25_000);
-    addCheck(report, "record-field handoff", handoff === true, "status handed off to the Record Card editor");
+    const handoff = await shared.waitFor(client, `(() => {
+      const card = document.querySelector(".bob-record-card-modal");
+      const modal = app.plugins.plugins["bob-ledger-tools"].recordCardModal;
+      return {
+        open: Boolean(card), path: modal?.recordPath || "",
+        field: card?.querySelector('[data-target-key][aria-selected="true"]')?.getAttribute("data-target-key") || "",
+      };
+    })()`, (value) => value?.open && value.path === "projects-album/acceptance.md" && value.field === "status", "record field handoff", 25_000);
+    addCheck(report, "record-field handoff", handoff.field === "status", handoff);
     await client.evaluate("app.plugins.plugins['bob-ledger-tools'].recordCardModal?.close?.()");
 
     await closePropertyEditor(client);

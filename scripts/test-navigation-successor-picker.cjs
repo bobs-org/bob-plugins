@@ -1826,6 +1826,32 @@ test("v6 requirement rows wear the shared diamond mark and flip it with the stag
   assert.equal(await pending, null);
 });
 
+test("staged requirement cues recolor the mark ink, never the hidden fallback text", () => {
+  const styles = fs.readFileSync(
+    path.join(__dirname, "../plugins/bob-navigation-hotkeys/styles.css"),
+    "utf8",
+  );
+  for (const verdict of ["drop", "carry", "carry_pulled"]) {
+    const rule = new RegExp(
+      `\\.bob-successor-req-row\\.is-req-${verdict} \\.bob-successor-req-glyph[^{]*\\{([^}]*)\\}`,
+      "s",
+    );
+    const body = (styles.match(rule) || [])[1];
+    assert.ok(body, `the staged ${verdict} cue rule exists`);
+    assert.match(body, /--bob-successor-req-ink:/, `staged ${verdict} sets the mark ink`);
+    // A direct `color` here outranks ledger-tools' transparent fallback text
+    // and draws the Unicode glyph on top of the diamond mask.
+    assert.doesNotMatch(body, /(^|[;\s])color:/, `staged ${verdict} never sets color directly`);
+  }
+  // ledger-tools defaults --bob-req-ink on the mark itself (one body class,
+  // one class); the card restates it with higher specificity so owner ink and
+  // staged cues reach the drawn diamond.
+  assert.match(
+    styles,
+    /\.bob-cnp-successor \.bob-req-mark\.bob-successor-req-glyph\s*\{[^}]*--bob-req-ink:\s*var\(--bob-successor-req-ink,/s,
+  );
+});
+
 test("requirement keys stage explicit Met, carry, and carry-pulled and settle req-only results", async () => {
   const model = requirementModel();
   const [parent, child] = model.groups[0].rows.map((row) => row.offer.key);

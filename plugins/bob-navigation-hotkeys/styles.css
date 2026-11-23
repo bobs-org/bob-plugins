@@ -191,13 +191,23 @@
   text-align: center;
 }
 
+/* Staged cues recolor the mark through its ink variable, never `color`
+   directly: with bob-ledger-tools on, the Unicode fallback text must stay
+   transparent under the drawn diamond. */
 .bob-successor-req-row.is-req-drop .bob-successor-req-glyph {
-  color: var(--color-red, #d14b4b);
+  --bob-successor-req-ink: var(--color-red, #d14b4b);
 }
 
 .bob-successor-req-row.is-req-carry .bob-successor-req-glyph,
 .bob-successor-req-row.is-req-carry_pulled .bob-successor-req-glyph {
-  color: var(--color-green, #3e9b62);
+  --bob-successor-req-ink: var(--color-green, #3e9b62);
+}
+
+/* bob-ledger-tools defaults --bob-req-ink on the mark itself, so restate it
+   there: the owner ink inherited from the row or heading, else the staged
+   cue above, else ledger-tools' own default. */
+.bob-cnp-successor .bob-req-mark.bob-successor-req-glyph {
+  --bob-req-ink: var(--bob-successor-req-ink, var(--bob-task-tag-color, var(--bob-task-tag-hue)));
 }
 
 .bob-successor-req-row.is-req-conflict {

@@ -491,9 +491,9 @@ discards. v5 adds a `Ctrl+J` pin; promotion lands it, merge withholds it. v6
 puts requirements first: `Ctrl+X` Met, `Ctrl+Shift+X` Drop (optional Log
 Recall), `Ctrl+Shift+T` Carry, `Space`/`Tab` Carry+pull in; `Ctrl+J` pins
 for navigation. Requirement rows start with the shared diamond —
-hollow for pending and staged Met, slashed for Drop, an arrow for Own task
-or Pull in; the heading carries a pending mark. Requirements-only cards use
-the diamond icon.
+hollow for pending and staged Met, red slashed for Drop, green arrow for
+Own task or Pull in; headings carry a pending mark. Requirements-only cards
+use the diamond icon.
 
 The Task Card's Review every action sets or clears `[refresh:: N]` through the
 ledger-tools stamper, reading lane intervals with the task's own refresh kept

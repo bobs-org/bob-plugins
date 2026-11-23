@@ -13284,6 +13284,26 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
   overflow: hidden;
   clip: rect(0 0 0 0);
 }
+.bob-property-editor button.bob-property-row.is-sliding-down {
+  animation: bob-property-row-slide-down 120ms ease-out;
+}
+.bob-property-editor button.bob-property-row.is-sliding-up {
+  animation: bob-property-row-slide-up 120ms ease-out;
+}
+@keyframes bob-property-row-slide-down {
+  from { transform: translateY(-0.55em); }
+  to { transform: translateY(0); }
+}
+@keyframes bob-property-row-slide-up {
+  from { transform: translateY(0.55em); }
+  to { transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bob-property-editor button.bob-property-row.is-sliding-down,
+  .bob-property-editor button.bob-property-row.is-sliding-up {
+    animation: none;
+  }
+}
 @media (max-width: 420px) {
   .bob-property-row-grid {
     grid-template-columns: 1.1em 1.4em minmax(0, 1fr);

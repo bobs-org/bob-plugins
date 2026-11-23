@@ -60,6 +60,8 @@ These keys act while browsing the rows, not while typing in a value field.
 | `g`, Home / `G`, End | Select the first or last row |
 | Enter / `l` | Edit a loose value, flip a loose checkbox, or hand off a card field |
 | `o` / `O` / Mod+; | Add below, above, or at the end |
+| `r` | Rename the focused property |
+| Alt+J / Alt+↓, Alt+K / Alt+↑ | Move the focused property down or up in source order |
 | Ctrl+D / Mod+Backspace | Delete marked rows together, or the focused row |
 | Space | Mark or unmark the focused row for batch actions |
 | `V` | Start or stop a visual range; `j` / `k` extend it |
@@ -83,13 +85,30 @@ the range anchor, so rows hidden by a filter cannot remain selected for deletion
 Enter or ↓ in the filter returns focus to matching rows; with no matches, the
 editor announces the empty result and keeps a stable keyboard target. Esc clears
 the filter layer before closing the editor. The All actions menu exposes these
-gestures and batch deletion; a reorder action is disabled while a filter query is
-active.
+gestures, rename, source-order moves, and batch deletion; reorder actions are
+disabled while a filter query is active.
 
 Ctrl+D / Mod+Backspace deletes marked rows together as one undoable update. With
 no marks, it deletes the focused visible row. A selection containing a card,
 identity, derived, or unresolved property is refused as a whole and names the
 locked rows; the editor never partially deletes a mixed selection.
+
+`r` opens an inline name stage seeded with the current key. The current name is
+excluded from the local duplicate check; a same-name save is a no-op. Bob still
+refuses a destination that would be card-owned, identity, or derived, even when
+that name is not on the note, and the typed draft stays for correction. A
+successful rename keeps focus and any mark on the renamed key without dropping
+other marks.
+
+Alt+J / Alt+K (and Alt+↓ / Alt+↑) move only the focused property relative to its
+neighbor in the full source inventory, not the grouped or filtered row list.
+Leading comments travel with the entry through `prop.move`. Marks stay for later
+batch actions. A protected row cannot itself be moved; a protected neighbor may
+still be a position reference. Source-order boundaries, an open stage, a pending
+write, and an active filter query are no-ops or refusals; held-key repeats do
+not queue extra writes. A successful move announces the new source position,
+keeps the row visible, and plays a 120 ms row slide unless reduced motion is
+requested.
 
 ## Value and add stages
 
@@ -131,7 +150,7 @@ empty note says **No properties yet — o adds the first**. Invalid YAML shows
 Bob's diagnostic and source-line target. Once a capable Bob report arrives,
 the current report—not cached metadata—authorizes mutations.
 
-The editor supports viewing, value edits, add, delete, undo/redo, ownership
-hand-off, YAML return, multi-select, filtering, and batch deletion. Rename,
-reorder, copy/paste, property-kind changes, and the inline YAML value stage are
-the remaining native-Properties parity work.
+The editor supports viewing, value edits, add, rename, source-order reorder,
+delete, undo/redo, ownership hand-off, YAML return, multi-select, filtering, and
+batch deletion. Copy/paste, property-kind changes, and the inline YAML value
+stage are the remaining native-Properties parity work.

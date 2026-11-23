@@ -39,6 +39,9 @@ function propertyEditorKeyAction(event, context = {}) {
     if (!ctrl && !meta && !alt && key === "/") return "filter";
     if (!ctrl && !meta && !alt && (key === " " || event.code === "Space")) return "toggle-mark";
     if (!ctrl && !meta && !alt && key === "V") return "visual-range";
+    if (alt && !ctrl && !meta && (key === "j" || key === "J" || key === "ArrowDown")) return "move-down";
+    if (alt && !ctrl && !meta && (key === "k" || key === "K" || key === "ArrowUp")) return "move-up";
+    if (!ctrl && !meta && !alt && (key === "r" || key === "R")) return "rename";
 
     if (!ctrl && !meta && !alt && (key === "q" || key === "Q")) return "close";
     if (ctrl && !meta && !alt && !shift && (event.code === "BracketLeft" || key === "[")) return "close";

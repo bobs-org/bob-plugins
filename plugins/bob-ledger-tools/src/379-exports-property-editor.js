@@ -146,6 +146,16 @@ try {
       propertyEditorFormatDateTimeParts,
       propertyEditorAcceptAddNameExactFirst,
       PROPERTY_EDITOR_FINISH_EDIT_FIRST,
+      PROPERTY_EDITOR_REORDER_SLIDE_MS,
+      PROPERTY_EDITOR_REORDER_FILTER_HINT,
+      propertyEditorRenameExistingKeys,
+      propertyEditorValidateRenameKey,
+      propertyEditorRenameOp,
+      propertyEditorRenameStageBuild,
+      propertyEditorSourceMovePlan,
+      propertyEditorRenameReorderReducedMotion,
+      propertyEditorRenameRemapFocus,
+      propertyEditorPaintRenameStage,
     });
   }
 } catch (_) {}

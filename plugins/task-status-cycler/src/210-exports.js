@@ -155,6 +155,7 @@ module.exports.helpers = {
   successorOfferCloseExpectedLines,
   successorOfferClosePostPickNotes,
   successorOfferCloseRelocatedOffers,
+  successorOfferCloseRecoveryDrift,
   removeResolvedOfferCloseRows,
   successorOfferCloseNoticeText,
   successorOfferCloseHasReceipt,

@@ -2754,3 +2754,191 @@ test("SO33 open twin in a conflict copy never keeps the prerequisite open", asyn
   );
   assert.equal(harness.getSource(SO33_COPY_PATH), twinCopy);
 });
+
+test("SV26: Done and Cancel survive a concurrent bob task reconcile", async () => {
+  notices.length = 0;
+  const rootLine = "- [x] #task Root [id:: root] ^root";
+  const firstBlocked = `- [?] #task First [fresh:: ${TODAY}] [dependsOn:: root] [id:: first] ^first`;
+  const secondBlocked = `- [?] #task Second [dependsOn:: root] [id:: second] ^second`;
+  const source = [rootLine, "### Blocked", firstBlocked, secondBlocked].join("\n");
+  const day = fixDay("");
+  const harness = createInMemoryObsidianApp({ "Tasks.md": source, [DAILY_PATH]: day });
+  const editor = createTextEditor(day, { line: 3, ch: 0 });
+  const plugin = makePlugin(harness, editor, DAILY_PATH);
+  let pickerFailure = null;
+  const integration = installOfferCloseNavStub(plugin, {
+    async pick(model) {
+      try {
+        const rows = model.groups.flatMap((group) => group.rows || []).filter((row) => row && row.selectable);
+        const byText = new Map(rows.map((row) => [row.text, row]));
+        const first = byText.get("First");
+        const second = byText.get("Second");
+        assert.ok(first && second, `missing close rows: ${JSON.stringify(rows.map((row) => row.text))}`);
+        const firstReady = `- [ ] #task First [fresh:: ${TODAY}] [unblocked:: ${TODAY}] [dependsOn:: root] [id:: first] ^first`;
+        const secondReady = `- [ ] #task Second [dependsOn:: root] [id:: second] ^second`;
+        const drifted = [rootLine, firstReady, secondReady, "### Blocked"].join("\n");
+        await harness.app.vault.modify(
+          harness.app.vault.getAbstractFileByPath("Tasks.md"),
+          drifted,
+        );
+        assert.match(harness.getSource("Tasks.md"), /\[unblocked:: /, "the reconcile drift lands while the picker is open");
+        return {
+          closes: [
+            { key: first.key, outcome: "done" },
+            { key: second.key, outcome: "cancelled", reason: "duplicate work" },
+          ],
+        };
+      } catch (error) {
+        pickerFailure = error;
+        return null;
+      }
+    },
+  });
+  plugin.app.plugins.plugins["bob-navigation-hotkeys"].api.cancel =
+    navigationHelpers.createCancelApi();
+
+  const result = await plugin.finalizeClosedTasks(
+    [{ path: "Tasks.md", blockId: "root", taskId: "root", text: "Root" }],
+    { editor, activePath: DAILY_PATH, dailyPath: DAILY_PATH },
+  );
+
+  assert.equal(pickerFailure, null, pickerFailure && pickerFailure.stack);
+  assert.equal(integration.picked.length, 1, "the supported picker opens for the two drifted rows");
+  assert.ok(result.successors.offer_closes, JSON.stringify(result.successors));
+  assert.equal(Boolean(result.successors.offer_close_refused), false, JSON.stringify(result.successors.offer_close_refused));
+  assert.equal(result.successors.offer_closes.length, 2);
+  assert.deepEqual(result.successors.offer_closes.map((row) => row.outcome).sort(), ["cancelled", "done"]);
+  const done = result.successors.offer_closes.find((row) => row.outcome === "done");
+  const cancelled = result.successors.offer_closes.find((row) => row.outcome === "cancelled");
+  assert.match(done.message, /Ready → Done/, `done receipt reports the recovered status: ${done.message}`);
+  assert.match(cancelled.message, /Ready → Cancelled/, `cancel receipt reports the recovered status: ${cancelled.message}`);
+  assert.match(cancelled.message, /duplicate work/);
+  const current = harness.getSource("Tasks.md");
+  assert.match(current, new RegExp(`^- \\[x\\] #task First .*\\[completion:: ${TODAY}\\] .*\\^first$`, "m"));
+  assert.match(current, new RegExp(`^- \\[-\\] #task Second .*\\[cancelled:: ${TODAY}\\] .*\\^second$`, "m"));
+  assert.match(current, /CANCEL LOG/);
+  assert.match(current, /duplicate work/);
+  assert.ok(result.successors.undo && result.successors.undo.restores.length > 0, "undo snapshot exists");
+  const restore = result.successors.undo.restores.find((entry) => entry.path === "Tasks.md");
+  assert.ok(restore, JSON.stringify(result.successors.undo));
+  assert.match(restore.before, /^- \[ \] #task First .*\[unblocked:: /m, "undo preimage is the recovered line, not the stale [?]");
+  assert.match(restore.before, /^- \[ \] #task Second /m);
+  assert.doesNotMatch(restore.before, /^- \[\?\] #task First /m);
+  assert.equal(integration.shown.length, 1);
+  assert.ok(integration.shown[0].undo, "the v4 notice receives the take-back snapshot");
+  assert.equal(notices.length, 0, JSON.stringify(notices));
+});
+
+test("SV26 edge cases: drift plus an edit refuses while the neighbour applies", async () => {
+  const drift = helpers.successorOfferCloseRecoveryDrift;
+  assert.equal(typeof drift, "function", "the drift helper is exported for tests");
+  const fresh = `- [?] #task Keep [fresh:: ${TODAY}] [dependsOn:: root] [id:: keep] ^keep`;
+  const freshDrifted = `- [ ] #task Keep [fresh:: ${TODAY}] [unblocked:: ${TODAY}] [dependsOn:: root] [id:: keep] ^keep`;
+  assert.equal(drift(fresh, freshDrifted), true, "status flip plus stamp is recovery drift");
+  assert.equal(drift(fresh, `${freshDrifted} edited`), false, "drift plus a text edit is not recovery drift");
+  assert.equal(drift(freshDrifted, fresh), false, "re-blocking a recovered row is not recovery drift");
+
+  notices.length = 0;
+  const rootLine = "- [x] #task Root [id:: root] ^root";
+  const keepBlocked = `- [?] #task Keep [fresh:: ${TODAY}] [dependsOn:: root] [id:: keep] ^keep`;
+  const editBlocked = `- [?] #task Edit [dependsOn:: root] [id:: edit] ^edit`;
+  const source = [rootLine, keepBlocked, editBlocked].join("\n");
+  const day = fixDay("");
+  const harness = createInMemoryObsidianApp({ "Tasks.md": source, [DAILY_PATH]: day });
+  const editor = createTextEditor(day, { line: 3, ch: 0 });
+  const plugin = makePlugin(harness, editor, DAILY_PATH);
+  const integration = installOfferCloseNavStub(plugin, {
+    async pick(model) {
+      const rows = model.groups.flatMap((group) => group.rows || []).filter((row) => row && row.selectable);
+      const byText = new Map(rows.map((row) => [row.text, row]));
+      const keep = byText.get("Keep");
+      const edit = byText.get("Edit");
+      assert.ok(keep && edit, JSON.stringify(rows.map((row) => row.text)));
+      const keepReady = `- [ ] #task Keep [fresh:: ${TODAY}] [unblocked:: ${TODAY}] [dependsOn:: root] [id:: keep] ^keep`;
+      const editReadyEdited = `- [ ] #task Edit edited [dependsOn:: root] [id:: edit] ^edit`;
+      await harness.app.vault.modify(
+        harness.app.vault.getAbstractFileByPath("Tasks.md"),
+        [rootLine, keepReady, editReadyEdited].join("\n"),
+      );
+      return {
+        closes: [
+          { key: keep.key, outcome: "done" },
+          { key: edit.key, outcome: "done" },
+        ],
+      };
+    },
+  });
+  plugin.app.plugins.plugins["bob-navigation-hotkeys"].api.cancel =
+    navigationHelpers.createCancelApi();
+  const result = await plugin.finalizeClosedTasks(
+    [{ path: "Tasks.md", blockId: "root", taskId: "root", text: "Root" }],
+    { editor, activePath: DAILY_PATH, dailyPath: DAILY_PATH },
+  );
+  assert.equal(result.successors.offer_closes.length, 1, JSON.stringify(result.successors));
+  assert.equal(result.successors.offer_closes[0].key, "Tasks.md#^keep");
+  assert.equal(result.successors.offer_close_refused.count, 1);
+  assert.match(harness.getSource("Tasks.md"), /^- \[x\] #task Keep /m);
+  assert.match(harness.getSource("Tasks.md"), /^- \[ \] #task Edit edited /m, "the edited row stays open");
+});
+
+test("SV26 edge cases: re-blocked, idless, and project-tagged drift", async () => {
+  const drift = helpers.successorOfferCloseRecoveryDrift;
+  const reblockedFrom = `- [ ] #task Keep [dependsOn:: root] [id:: keep] ^keep`;
+  const reblockedTo = `- [?] #task Keep [dependsOn:: root] [id:: keep] ^keep`;
+  assert.equal(drift(reblockedFrom, reblockedTo), false, "Ready back to Blocked refuses");
+
+  const tagged = `- [?] #task Resident #prj_is_blocked [dependsOn:: root] [id:: resident] ^resident`;
+  const untagged = `- [ ] #task Resident [dependsOn:: root] [id:: resident] ^resident`;
+  assert.equal(drift(tagged, untagged), true, "project recovery strips the tag plus the status flip");
+
+  notices.length = 0;
+  const rootLine = "- [x] #task Root [id:: root] ^root";
+  const idlessBlocked = "- [?] #task Idless task [dependsOn:: root]";
+  const taggedBlocked = `- [?] #task Resident #prj_is_blocked [dependsOn:: root] [id:: resident] ^resident`;
+  const source = [rootLine, idlessBlocked, taggedBlocked].join("\n");
+  const day = fixDay("");
+  const harness = createInMemoryObsidianApp({ "Tasks.md": source, [DAILY_PATH]: day });
+  const editor = createTextEditor(day, { line: 3, ch: 0 });
+  const plugin = makePlugin(harness, editor, DAILY_PATH);
+  let idlessKey = null;
+  let residentKey = null;
+  const integration = installOfferCloseNavStub(plugin, {
+    async pick(model) {
+      const rows = model.groups.flatMap((group) => group.rows || []).filter((row) => row && row.selectable);
+      const idless = rows.find((row) => row.text === "Idless task");
+      const resident = rows.find((row) => row.key === "Tasks.md#^resident");
+      assert.ok(idless && resident, JSON.stringify(rows.map((row) => ({ key: row.key, text: row.text }))));
+      idlessKey = idless.key;
+      residentKey = resident.key;
+      const idlessReady = "- [ ] #task Idless task [dependsOn:: root]";
+      const residentReady = `- [ ] #task Resident [dependsOn:: root] [id:: resident] ^resident`;
+      await harness.app.vault.modify(
+        harness.app.vault.getAbstractFileByPath("Tasks.md"),
+        [rootLine, idlessReady, residentReady].join("\n"),
+      );
+      return {
+        closes: [
+          { key: idless.key, outcome: "done" },
+          { key: resident.key, outcome: "done" },
+        ],
+      };
+    },
+  });
+  plugin.app.plugins.plugins["bob-navigation-hotkeys"].api.cancel =
+    navigationHelpers.createCancelApi();
+  const result = await plugin.finalizeClosedTasks(
+    [{ path: "Tasks.md", blockId: "root", taskId: "root", text: "Root" }],
+    { editor, activePath: DAILY_PATH, dailyPath: DAILY_PATH },
+  );
+  assert.ok(idlessKey && residentKey, "both drifted rows were picked");
+  const byKey = new Map((result.successors.offer_closes || []).map((row) => [row.key, row]));
+  const refusedTexts = String(JSON.stringify(result.successors.offer_close_refused || ""));
+  if (byKey.has(idlessKey)) {
+    assert.match(harness.getSource("Tasks.md"), /^- \[x\] #task Idless task /m, "idless drift applies");
+  } else {
+    assert.match(refusedTexts, /Changed since/, `idless refusal pins the reason: ${refusedTexts}`);
+  }
+  assert.ok(byKey.has(residentKey), `project-tagged drift applies: ${JSON.stringify(result.successors)}`);
+  assert.match(harness.getSource("Tasks.md"), /^- \[x\] #task Resident /m);
+  assert.doesNotMatch(harness.getSource("Tasks.md"), /#prj_is_blocked/, "the tag stays stripped after close");
+});

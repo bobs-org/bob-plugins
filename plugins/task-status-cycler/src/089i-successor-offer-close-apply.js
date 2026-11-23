@@ -80,7 +80,7 @@ function successorOfferCloseValidateApplyRow(close, offer, expected, noteTexts, 
   if (line < 0 || line >= lines.length) {
     return { valid: false, key, outcome, refusal: "changed_identity", display: displayFallback, status: " " };
   }
-  const expectedLine = typeof expected === "string"
+  let expectedLine = typeof expected === "string"
     ? expected
     : (offer.task && typeof offer.task.rawLine === "string" ? offer.task.rawLine : null);
   if (typeof expectedLine !== "string") {
@@ -88,8 +88,11 @@ function successorOfferCloseValidateApplyRow(close, offer, expected, noteTexts, 
   }
   const current = lines[line];
   if (current !== expectedLine) {
-    const status = (getTaskStatusForLine(expectedLine, line) || {}).symbol || " ";
-    return { valid: false, key, outcome, refusal: "changed_identity", display: successorOfferCloseDisplayForApply(offer, null), status };
+    if (successorOfferCloseRecoveryDrift(expectedLine, current) !== true) {
+      const status = (getTaskStatusForLine(expectedLine, line) || {}).symbol || " ";
+      return { valid: false, key, outcome, refusal: "changed_identity", display: successorOfferCloseDisplayForApply(offer, null), status };
+    }
+    expectedLine = current;
   }
   const parsed = parseTaskDependencyLine(current, path, line);
   if (!parsed) {
@@ -253,8 +256,10 @@ function planOfferCloseRoots(options = {}) {
     let pathFailed = false;
     for (const row of ordered) {
       if (row.line < 0 || row.line >= currentLines.length || currentLines[row.line] !== row.expected) {
-        refused.push({ key: row.key, outcome: row.outcome, text: row.display, why: successorOfferCloseRefusalDescriptor("changed_identity", row.display, row.status).why });
-        continue;
+        if (!successorOfferCloseAdoptRecoveryDrift(row, currentLines[row.line])) {
+          refused.push({ key: row.key, outcome: row.outcome, text: row.display, why: successorOfferCloseRefusalDescriptor("changed_identity", row.display, row.status).why });
+          continue;
+        }
       }
       if (row.outcome === "done") {
         if (typeof completeFn !== "function") {
@@ -742,9 +747,11 @@ class TaskStatusCyclerOfferCloseApplyMixin {
       const kept = [];
       for (const row of rows) {
         if (!Number.isInteger(row.line) || row.line < 0 || row.line >= liveLines.length || liveLines[row.line] !== row.expected) {
-          liveRefused.push({ key: row.key, outcome: row.outcome, text: row.display, why: successorOfferCloseRefusalDescriptor("changed_identity", row.display, row.status).why });
-          refusedByKey.set(String(row.key), liveRefused[liveRefused.length - 1]);
-          continue;
+          if (!successorOfferCloseAdoptRecoveryDrift(row, liveLines[row.line])) {
+            liveRefused.push({ key: row.key, outcome: row.outcome, text: row.display, why: successorOfferCloseRefusalDescriptor("changed_identity", row.display, row.status).why });
+            refusedByKey.set(String(row.key), liveRefused[liveRefused.length - 1]);
+            continue;
+          }
         }
         kept.push(row);
       }

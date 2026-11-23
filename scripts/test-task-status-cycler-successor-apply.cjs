@@ -665,3 +665,58 @@ test("T11 ID-less picker rows are subject-guarded; naming a non-picker ID-less r
   assert.equal(res.offer_closes.length, 2);
   namer.close();
 });
+
+test("SV26 recovery drift matrix accepts only Bob's ordinary recovery", () => {
+  const drift = helpers.successorOfferCloseRecoveryDrift;
+  assert.equal(typeof drift, "function");
+  const base = "- [?] #task Keep [fresh:: 2026-11-01] [dependsOn:: root] [id:: keep] ^keep";
+  const flipped = "- [ ] #task Keep [fresh:: 2026-11-01] [dependsOn:: root] [id:: keep] ^keep";
+  const stamped = "- [ ] #task Keep [fresh:: 2026-11-01] [unblocked:: 2026-11-05] [dependsOn:: root] [id:: keep] ^keep";
+  const restampedFrom = "- [ ] #task Keep [fresh:: 2026-11-01] [unblocked:: 2026-11-04] [dependsOn:: root] [id:: keep] ^keep";
+  const restampedTo = "- [ ] #task Keep [fresh:: 2026-11-01] [unblocked:: 2026-11-05] [dependsOn:: root] [id:: keep] ^keep";
+  const taggedFrom = "- [?] #task Resident #prj_is_blocked [dependsOn:: root] [id:: resident] ^resident";
+  const taggedTo = "- [ ] #task Resident [dependsOn:: root] [id:: resident] ^resident";
+  const combinedFrom = `- [?] #task Keep #prj_is_blocked [fresh:: 2026-11-01] [dependsOn:: root] [id:: keep] ^keep`;
+  const combinedTo = `- [ ] #task Keep [fresh:: 2026-11-01] [unblocked:: 2026-11-05] [dependsOn:: root] [id:: keep] ^keep`;
+  assert.equal(drift(base, base), false, "identical lines are not drift");
+  assert.equal(drift(base, flipped), true, "status flip alone applies");
+  assert.equal(drift(base, stamped), true, "flip plus stamp applies");
+  assert.equal(drift(flipped, stamped), true, "stamp alone on the same open status applies");
+  assert.equal(drift(restampedFrom, restampedTo), true, "a restamped date still applies");
+  assert.equal(drift(taggedFrom, taggedTo), true, "tag removal plus flip applies");
+  assert.equal(drift(combinedFrom, combinedTo), true, "flip plus stamp plus tag removal applies");
+  assert.equal(drift(flipped, flipped), false, "identical open lines are not drift");
+  assert.equal(drift(base, "- [*] #task Keep [fresh:: 2026-11-01] [dependsOn:: root] [id:: keep] ^keep"), false, "? to * refuses");
+  assert.equal(drift(base, "- [/] #task Keep [fresh:: 2026-11-01] [dependsOn:: root] [id:: keep] ^keep"), false, "? to / refuses");
+  assert.equal(drift(flipped, base), false, "Ready back to Blocked refuses");
+  assert.equal(drift(flipped, "- [x] #task Keep [fresh:: 2026-11-01] [dependsOn:: root] [id:: keep] ^keep"), false, "closing refuses");
+  assert.equal(drift(flipped, "- [-] #task Keep [fresh:: 2026-11-01] [dependsOn:: root] [id:: keep] ^keep"), false, "cancelling refuses");
+  assert.equal(drift(base, `${stamped} edited`), false, "drift plus a text edit refuses");
+  assert.equal(drift(base, "not a task line"), false, "non-task lines refuse");
+  assert.equal(drift("not a task line", stamped), false, "non-task preimages refuse");
+});
+
+test("SV26 drift that lands only on the live re-read still applies", async () => {
+  const blocked = "- [?] #task Keep [fresh:: 2026-11-05] [dependsOn:: root] [id:: keep] ^keep";
+  const source = `- [ ] #task Root [id:: root] ^root\n${blocked}\n`;
+  const drifted = `- [ ] #task Root [id:: root] ^root\n- [ ] #task Keep [fresh:: 2026-11-05] [unblocked:: 2026-11-05] [dependsOn:: root] [id:: keep] ^keep\n`;
+  const { harness, plugin } = setupPlugin({ "Tasks.md": source });
+  const { offersByKey } = offersFor(source);
+  const expected = expectedFor(source, offersByKey);
+  await harness.app.vault.modify(harness.app.vault.getAbstractFileByPath("Tasks.md"), drifted);
+  plugin.readSuccessorNoteText = async () => drifted;
+  const context = {
+    today: TODAY, dailyBefore: [], dailyAfter: [], dailyPath: "",
+    dependencySnapshotAvailable: true, markUnblockedLine,
+    noteTexts: new Map([["Tasks.md", source]]),
+  };
+  const res = await runQueued(plugin, () => plugin.applyOfferClosesNow({
+    closes: [{ key: "Tasks.md#^keep", outcome: "done" }],
+    offers: [...offersByKey.values()], offersByKey, expectedLines: expected,
+    noteTexts: new Map([["Tasks.md", source]]), context,
+  }));
+  assert.equal(res.offer_close_refused, null, JSON.stringify(res.offer_close_refused));
+  assert.equal(res.offer_closes.length, 1);
+  assert.equal(res.offer_closes[0].previous_status_name, "Ready", `receipt reports the live status: ${res.offer_closes[0].message}`);
+  assert.match(harness.getSource("Tasks.md"), /\[x\].*\[completion:: 2026-11-05\].*\^keep/);
+});

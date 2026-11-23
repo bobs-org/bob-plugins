@@ -34,6 +34,7 @@
   "089h-successor-offer-close-copy.js",
   "089i-successor-offer-close-apply.js",
   "089j-successor-offer-close-identity.js",
+  "089k-successor-offer-close-drift.js",
   "090-source-and-formatting.js",
   "100-editor-and-modal.js",
   "110-plugin-lifecycle.js",

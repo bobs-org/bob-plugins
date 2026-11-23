@@ -287,12 +287,19 @@ class PropertyEditorModal extends PropertyEditorModalBase {
       // Browse keys can change selection before the old button is removed.
       // Restore the selected source occurrence, not the previously focused
       // key: native Space would otherwise click that old row after a move.
-      // Stage/add inputs restore their own caret before reaching this method.
+      // Existing stage/add inputs restore their own caret before reaching
+      // this method; newly opened inputs take focus from the browse row.
       // Empty notes still need a keyboard target for o/O and Mod+;.
-      const selected = this.contentEl?.querySelector?.('[aria-current="true"]')
-        || this.contentEl?.querySelector?.(".bob-property-editor");
+      const host = this.contentEl?.querySelector?.(".bob-property-editor");
+      const selected = this.contentEl?.querySelector?.("[data-property-add-input]")
+        || this.contentEl?.querySelector?.("[data-property-stage-input]")
+        || this.contentEl?.querySelector?.('[aria-current="true"]') || host;
+      // Deletion overlays and the initial read can temporarily leave no
+      // selected button. Return focus from the persistent host when a row
+      // becomes available again.
       if (selected && typeof selected.focus === "function"
-        && (caret?.key || !doc?.activeElement || !this.contentEl?.contains?.(doc.activeElement))) {
+        && (caret?.key || doc?.activeElement === host
+          || !doc?.activeElement || !this.contentEl?.contains?.(doc.activeElement))) {
         selected.focus();
       }
     } catch (_) {}

@@ -559,7 +559,11 @@ async function run(args) {
     await closePropertyEditor(client);
     await shared.openNote(client, "projects-album/acceptance.md", "live");
     probe = await openPropertyEditor(client, "projects-album/acceptance.md", { key: "status" });
-    await waitForEditor(client, (value) => value.rows.some((row) => row.key === "status"), "record property rows");
+    probe = await waitForEditor(client, (value) => value.rows.some((row) => row.key === "status"), "record property rows");
+    addCheck(report, "canonical record field belongs to its card",
+      probe.heading === "RECORD · PROPERTIES"
+        && probe.properties.some((row) => row.key === "status" && row.role === "card")
+        && probe.rows.some((row) => row.key === "status" && row.action === "handoff"), probe);
     await propertyRowClick(client, "status");
     await sendKey(client, "Enter");
     const handoff = await shared.waitFor(client, `(() => {

@@ -267,6 +267,73 @@ test("an empty editor focuses its browse host so the first add receives keyboard
   assert.equal(doc.activeElement, host);
 });
 
+for (const stage of ["value", "name"]) {
+  test(`opening the ${stage} stage transfers browse focus to its input`, () => {
+    const modal = new H.PropertyEditorModal({}, {
+      filePath: "notes/groceries.md", report: showReport(),
+    });
+    const doc = { activeElement: null };
+    const row = { focus() { doc.activeElement = this; } };
+    const input = { focus() { doc.activeElement = this; } };
+    modal.contentEl = {
+      querySelector(selector) {
+        if (selector === '[aria-current="true"]') return row;
+        if (selector === (stage === "value" ? "[data-property-stage-input]" : "[data-property-add-input]")) return input;
+        return null;
+      },
+      contains: (node) => node === row || node === input,
+    };
+    // The old row had focus before painting the newly opened stage.
+    modal.editorRestoreFocus(doc, { key: "title" });
+    assert.equal(doc.activeElement, input, "typing and unchanged Enter must reach the new stage");
+  });
+}
+
+for (const initiallyEmpty of [false, true]) {
+  test(`browse host returns focus to a row after ${initiallyEmpty ? "the initial report" : "deletion reconciliation"}`, () => {
+    const rows = [wireRow({ key: "removed", line: 3 }), wireRow({ key: "remaining", line: 4 })];
+    const modal = new H.PropertyEditorModal({}, {
+      filePath: "notes/groceries.md",
+      report: showReport({ properties: initiallyEmpty ? [] : rows }),
+    });
+    const doc = { activeElement: null };
+    const host = { focus() { doc.activeElement = this; } };
+    let buttons = [];
+    // A confirmed deletion overlay can hide the selected row before the
+    // returned report reconciles selection. The host survives both paints.
+    let hideRemoved = false;
+    modal.contentEl = {
+      querySelector(selector) {
+        if (selector === ".bob-property-editor") return host;
+        if (selector === '[aria-current="true"]') return buttons.find((button) => button.id === modal.selectedId);
+        return null;
+      },
+      contains: (node) => node === host || buttons.includes(node),
+    };
+    modal.paintPropertyEditor = () => {
+      const caret = modal.editorCaptureCaret(doc);
+      if (buttons.includes(doc.activeElement)) doc.activeElement = null;
+      buttons = modal.editorOrderedRows().filter(({ row }) => !hideRemoved || row.key !== "removed")
+        .map(({ row, id }) => ({
+          id,
+          getAttribute: (name) => name === "data-property-key" ? row.key : null,
+          focus() { doc.activeElement = this; },
+        }));
+      modal.editorRestoreFocus(doc, caret);
+    };
+    modal.paintPropertyEditor();
+    if (!initiallyEmpty) {
+      assert.equal(doc.activeElement.id, "removed::3");
+      hideRemoved = true;
+      modal.paintPropertyEditor();
+    }
+    assert.equal(doc.activeElement, host, "the panel receives focus while no selected row is rendered");
+    modal.propertyEditorReconcile(showReport({ properties: [wireRow({ key: "remaining", line: 3 })] }));
+    assert.equal(modal.selectedId, "remaining::3");
+    assert.equal(doc.activeElement, buttons[0], "native button keys must follow the reconciled row");
+  });
+}
+
 test("discrete ops build exact envelopes and history round-trips", () => {
   assert.deepEqual(H.propertyEditorToggleOp({ key: "done", value: false }), { op: "prop.set", key: "done", value: true });
   assert.deepEqual(H.propertyEditorToggleOp({ key: "done", value: true }), { op: "prop.set", key: "done", value: false });

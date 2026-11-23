@@ -136,6 +136,23 @@ Undo and redo history is session-only, kept per normalized note path, and
 bounded to 20 writes in each direction. Closing and reopening the editor keeps
 that history for the session. A successful new edit clears redo.
 
+## Source fragments (read-only)
+
+Copying and the inline YAML value stage read through a read-only source
+adapter, never through a reconstructed note. The adapter returns the
+source-ordered entries with their exact byte spans, attached leading trivia,
+and a `valueYaml` fragment suitable for `prop.set_yaml`. Block entries keep
+their original bytes; root flow mappings are reassembled with only the
+necessary braces and commas. Anchors, aliases, merge keys, and custom tags
+stay explicitly opaque: copying one is refused with the YAML escape rather
+than flattened. Clipboard text decodes through the same adapter and accepts
+exactly one mapping, optionally wrapped in one frontmatter delimiter pair;
+fences, note bodies, extra documents, duplicate keys, and non-mapping roots
+are refused. The snapshot reader checks the note path, source, and report
+inventory against each other with bounded retries, refuses unsaved panes
+without saving, and stops on cancellation. Every write still goes through
+Bob's guarded `prop.set_yaml` preview and session flow.
+
 ## YAML escape and recovery
 
 Press `y` / Ctrl+E on a property to jump to its source line in YAML. **Done**

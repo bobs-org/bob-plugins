@@ -156,6 +156,16 @@ try {
       propertyEditorRenameReorderReducedMotion,
       propertyEditorRenameRemapFocus,
       propertyEditorPaintRenameStage,
+      PROPERTY_EDITOR_SOURCE_MAX_RETRIES,
+      propertyEditorSourceNormalizePath,
+      propertyEditorSourceFindFrontmatter,
+      propertyEditorSourceEntries,
+      propertyEditorSourceFragments,
+      propertyEditorClipboardStripWrapper,
+      propertyEditorClipboardDecode,
+      propertyEditorSourceAssembleEntries,
+      propertyEditorSourceInventoryCorresponds,
+      propertyEditorReadSourceSnapshot,
     });
   }
 } catch (_) {}

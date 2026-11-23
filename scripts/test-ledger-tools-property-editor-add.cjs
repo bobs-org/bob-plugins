@@ -221,6 +221,34 @@ test("Tab/Enter takes a completion type and Shift+Enter keeps a literal text key
   assert.equal(H.propertyEditorValidateNewKey("title", ["title"]).code, "prop_exists");
 });
 
+test("Obsidian widget property infos preserve completion types and literal override", () => {
+  // Real getAllPropertyInfos() returns { name, widget }, without type/count.
+  const app = { metadataCache: { getAllPropertyInfos: () => ({
+    tags: { name: "tags", widget: "tags" },
+    aliases: { name: "aliases", widget: "aliases" },
+    steps: { name: "steps", widget: "multitext" },
+    enabled: { name: "enabled", widget: "checkbox" },
+    created: { name: "created", widget: "date" },
+    custom: { name: "custom", widget: "unknown" },
+  }) } };
+  const modal = new H.PropertyEditorModal(app, { filePath: "notes/plain.md", report: report([row()]) });
+  for (const [name, kind] of [
+    ["tags", "tags"], ["aliases", "aliases"], ["steps", "list"],
+    ["enabled", "checkbox"], ["created", "date"], ["custom", "text"],
+  ]) {
+    modal.propertyEditorStartAdd("below");
+    modal.propertyEditorSetAddName(name);
+    assert.equal(modal.propertyEditorCommitAddName(), true);
+    assert.equal(modal.stage.kind, kind, name);
+    assert.equal(modal.stage.addPlacement.after, "title");
+    modal.propertyEditorCancelAdd();
+  }
+  modal.propertyEditorStartAdd("end");
+  modal.propertyEditorSetAddName("tags");
+  modal.propertyEditorCommitAddName({ literal: true });
+  assert.equal(modal.stage.kind, "text");
+});
+
 test("add ops carry before/after and checkbox/url kinds stay on supported wire types", () => {
   const tags = H.propertyEditorAddSyntheticRow("tags", "tags");
   const built = H.propertyEditorAddStageBuild({

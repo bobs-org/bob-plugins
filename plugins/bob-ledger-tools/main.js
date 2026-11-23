@@ -169324,7 +169324,10 @@ function propertyEditorPropertyInfosFromApi(app) {
     for (const [key, info] of Object.entries(raw)) {
       const name = info && typeof info.name === "string" && info.name ? info.name : key;
       if (!name) continue;
-      const type = info && typeof info.type === "string" && info.type ? info.type : "text";
+      // Obsidian reports its assigned property type as `widget`; keep support
+      // for adapters that expose `type` as well. Never infer it from values.
+      const type = info && typeof info.type === "string" && info.type ? info.type
+        : info && typeof info.widget === "string" && info.widget ? info.widget : "text";
       const count = info && Number.isFinite(Number(info.count)) ? Number(info.count) : 0;
       rows.push({
         name,

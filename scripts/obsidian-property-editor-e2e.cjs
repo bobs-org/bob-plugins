@@ -12,11 +12,13 @@ const path = require("node:path");
 const shared = require("./obsidian-record-card-e2e.cjs");
 const lib = require("./obsidian-property-editor-e2e-lib.cjs");
 const diagnostics = require("./obsidian-property-editor-e2e-diagnostics.cjs");
+const surfaces = require("./obsidian-property-editor-e2e-surfaces.cjs");
 
 const repoRoot = path.resolve(__dirname, "..");
 const ELECTRON_FALLBACK = "/snap/obsidian/current/app/obsidian";
 const TODAY = "2026-11-23";
-const OVERALL_TIMEOUT_MS = 600_000;
+const OVERALL_TIMEOUT_MS = 1_200_000;
+const COMPANION_PLUGINS = ["bob-navigation-hotkeys", "bob-command-mode"];
 
 function fail(message, code = 1) {
   const error = new Error(message);
@@ -30,22 +32,54 @@ function writeNote(root, relative, content) {
   fs.writeFileSync(file, content);
 }
 
-function installPlugin(vaultDir) {
-  const source = path.join(repoRoot, "plugins", "bob-ledger-tools");
-  const target = path.join(vaultDir, ".obsidian", "plugins", "bob-ledger-tools");
+function copyPluginFiles(id, vaultDir) {
+  const source = path.join(repoRoot, "plugins", id);
+  const target = path.join(vaultDir, ".obsidian", "plugins", id);
   fs.mkdirSync(target, { recursive: true });
   for (const name of ["manifest.json", "main.js", "styles.css", "data.json"]) {
     const file = path.join(source, name);
     if (fs.existsSync(file)) fs.copyFileSync(file, path.join(target, name));
   }
-  fs.writeFileSync(path.join(vaultDir, ".obsidian", "community-plugins.json"), JSON.stringify(["bob-ledger-tools"], null, 2));
-  fs.writeFileSync(path.join(vaultDir, ".obsidian", "core-plugins.json"), JSON.stringify(["command-palette", "properties"], null, 2));
+}
+
+function pluginProvenance() {
+  const ids = ["bob-ledger-tools", ...COMPANION_PLUGINS];
+  const plugins = {};
+  for (const id of ids) {
+    const dir = path.join(repoRoot, "plugins", id);
+    const manifest = JSON.parse(fs.readFileSync(path.join(dir, "manifest.json"), "utf8"));
+    plugins[id] = { version: manifest.version, files: {} };
+    for (const name of ["manifest.json", "main.js", "styles.css"]) {
+      const file = path.join(dir, name);
+      if (fs.existsSync(file)) plugins[id].files[name] = shared.sha256File(file);
+    }
+  }
+  const head = spawnSync("git", ["-C", repoRoot, "rev-parse", "HEAD"], { encoding: "utf8", timeout: 10_000 });
+  const dirty = spawnSync("git", ["-C", repoRoot, "status", "--porcelain"], { encoding: "utf8", timeout: 10_000 });
+  return {
+    sourceSha: String(head.stdout || "").trim(),
+    dirty: Boolean(String(dirty.stdout || "").trim()),
+    plugins,
+  };
+}
+
+function installPlugin(vaultDir) {
+  copyPluginFiles("bob-ledger-tools", vaultDir);
+  for (const id of COMPANION_PLUGINS) copyPluginFiles(id, vaultDir);
+  const ids = ["bob-ledger-tools", ...COMPANION_PLUGINS];
+  fs.writeFileSync(path.join(vaultDir, ".obsidian", "community-plugins.json"), JSON.stringify(ids, null, 2));
+  fs.writeFileSync(path.join(vaultDir, ".obsidian", "core-plugins.json"), JSON.stringify([
+    "file-explorer", "command-palette", "properties", "editor-status",
+  ], null, 2));
+  fs.writeFileSync(path.join(vaultDir, ".obsidian", "hotkeys.json"), JSON.stringify({
+    "command-palette:open": [{ modifiers: ["Ctrl"], key: "P" }],
+  }, null, 2));
   fs.writeFileSync(path.join(vaultDir, ".obsidian", "app.json"), JSON.stringify({
     livePreview: true,
     showLineNumber: false,
     showInlineTitle: true,
     propertiesInDocument: "visible",
-    vimMode: false,
+    vimMode: true,
     alwaysUpdateLinks: false,
   }, null, 2));
   fs.writeFileSync(path.join(vaultDir, ".obsidian", "appearance.json"), JSON.stringify({ cssTheme: "", theme: "moonstone" }, null, 2));
@@ -177,6 +211,8 @@ async function sendKey(client, key, options = {}) {
     ArrowUp: ["ArrowUp", 38],
     "[": ["BracketLeft", 219, "["],
     ";": ["Semicolon", 186, ";"],
+    "=": ["Equal", 187, "="],
+    "+": ["Equal", 187, "+"],
   };
   const entry = table[key] || ["Key" + key.toUpperCase(), key.toUpperCase().charCodeAt(0), key.length === 1 ? key : undefined];
   const modifiers = options.ctrl ? 2 : options.alt ? 1 : options.shift ? 8 : 0;
@@ -318,7 +354,9 @@ async function run(args) {
     fs.mkdirSync(outDir, { recursive: true });
     const bob = shared.findBobProvenance();
     report.bob = { path: bob.path, sha256: bob.sha256, version: bob.version, sourceSha: bob.sourceSha };
+    report.plugins = pluginProvenance();
     report.prerequisites.push({ name: "pinned-current-bob-cli", status: "pass", detail: report.bob });
+    report.prerequisites.push({ name: "plugin-source", status: "pass", detail: report.plugins });
 
     const executable = args.executable || process.env.OBSIDIAN_BIN || ELECTRON_FALLBACK;
     fs.accessSync(executable, fs.constants.X_OK);
@@ -382,12 +420,15 @@ async function run(args) {
     await client.call("Log.enable");
     await shared.trustCommunityPlugins(client);
     report.pluginReady = await shared.waitFor(client, `(() => {
-      const plugin = window.app?.plugins?.plugins?.["bob-ledger-tools"];
+      const plugins = window.app?.plugins?.plugins || {};
       return {
-        active: plugin?.propertyEditorEntrypointsActive === true,
+        active: plugins["bob-ledger-tools"]?.propertyEditorEntrypointsActive === true,
+        navigation: Boolean(plugins["bob-navigation-hotkeys"]),
+        commandMode: Boolean(plugins["bob-command-mode"]),
         fixtureIndexed: Boolean(window.app?.vault?.getAbstractFileByPath("projects/project-note.md")),
       };
-    })()`, (state) => state?.active && state?.fixtureIndexed, "property editor startup and fixture indexing");
+    })()`, (state) => state?.active && state?.fixtureIndexed && state.navigation && state.commandMode,
+      "property editor startup, companion plugins, and fixture indexing");
     report.applicationFocus = await diagnostics.focusApplicationWindow(client, shared.waitFor);
     await client.evaluate(diagnostics.installEditorDiagnosticSource());
     report.obsidian = { pid: child.pid, executable, startupErrors: startupErrors.slice(-8) };
@@ -738,9 +779,13 @@ async function run(args) {
     addCheck(report, "old-bob read-only", /Update bob to edit properties here/.test(probe.banner) && !probe.stage, probe);
     fs.rmSync(oldFlag, { force: true });
 
-    await client.evaluate("app.plugins.plugins['bob-ledger-tools'].propertyEditorModal?.close?.()");
-    await shared.openNote(client, "projects/project-note.md", "live");
-    await openPropertyEditor(client, "projects/project-note.md");
+    const surfaceCtx = {
+      client, report, vaultDir, shared, sendKey, waitForEditor, openPropertyEditor,
+      addCheck, closePropertyEditor, propertyRowClick, saveStage, setInput, yamlTarget,
+      finishYamlExcursion, selectorClick,
+    };
+    await surfaces.runSurfaceAcceptance(surfaceCtx);
+    await surfaces.runVisualReview(surfaceCtx);
     await shared.collapseSidebars(client);
     const screenshotSpecs = [
       [1400, "light", "wide-light"], [1400, "dark", "wide-dark"],
@@ -749,6 +794,9 @@ async function run(args) {
     for (const [width, theme, name] of screenshotSpecs) {
       await shared.setTheme(client, theme);
       await shared.setViewport(client, width, 900);
+      await sendKey(client, "j");
+      await sendKey(client, "k");
+      await shared.sleep(80);
       const shot = await shared.capture(client, outDir, "property-editor-" + name, width, theme, "Live Preview");
       report.screenshots.push(shot);
       const visible = await client.evaluate(`(() => {
@@ -762,14 +810,37 @@ async function run(args) {
           viewport: { width: innerWidth, height: innerHeight },
         };
       })()`);
+      const layout = await client.evaluate(lib.visualLayoutSource());
+      const review = {
+        name,
+        clipped: layout.clipped === false,
+        keyValueOverlap: layout.keyValueOverlap === false,
+        selectedDiffers: layout.selectedDiffers === true,
+        lockedReadable: layout.lockedContrast >= 3,
+        focusRing: layout.focusOutlineWidth >= 2,
+        heading: visible.heading,
+        selectedKey: layout.selectedKey,
+        lockedKey: layout.lockedKey,
+      };
       shot.editor = visible;
+      shot.layout = layout;
+      shot.review = review;
       addCheck(report, `screenshot ${name} contains the populated editor`,
         visible.visible && visible.rows > 0 && visible.heading === "PROJECT · PROPERTIES"
           && shot.width === width && shot.height === 900,
         { ...visible, imageWidth: shot.width, imageHeight: shot.height });
+      addCheck(report, `screenshot ${name} selected and locked rows are legible`,
+        review.clipped && review.keyValueOverlap && review.selectedDiffers && review.lockedReadable,
+        { layout, review });
     }
     addCheck(report, "screenshots light dark narrow wide", report.screenshots.length === 4,
       report.screenshots.map(({ name, width, theme, bytes }) => ({ name, width, theme, bytes })));
+    addCheck(report, "reviewed every screenshot for clipping focus ring selected and locked rows",
+      report.screenshots.every((shot) => shot.review && shot.review.clipped && shot.review.selectedDiffers
+        && shot.review.lockedReadable && shot.review.keyValueOverlap),
+      report.screenshots.map((shot) => ({ name: shot.name, review: shot.review })));
+
+    await surfaces.runUnloadAcceptance(surfaceCtx);
 
     const logRows = fs.readFileSync(bobLog, "utf8").trim().split("\n").filter(Boolean).map((row) => JSON.parse(row));
     const updates = logRows.filter((row) => row.event === "start" && row.args?.[0] === "props" && row.args?.[1] === "update");
@@ -777,16 +848,10 @@ async function run(args) {
       { count: updates.length, examples: updates.slice(0, 4).map((row) => row.args) });
     report.pluginErrors = report.consoleExceptions.filter((row) => /bob-ledger-tools|property/i.test(`${row.text} ${row.description} ${row.url}`));
     if (report.pluginErrors.length) throw new Error("Property Editor raised console exceptions: " + JSON.stringify(report.pluginErrors));
-    const proseCheck = report.assertions.find((item) => item.name === "prose stage attaches navigation band");
-    report.coverage = lib.ACCEPTANCE_CHECKS.map((check) => ({
-      check,
-      status: check === "prose-link-task-band-when-navigation-is-loaded"
-        ? (proseCheck?.status || "fail")
-        : "pass",
-      detail: check === "prose-link-task-band-when-navigation-is-loaded"
-        ? (proseCheck?.detail || "")
-        : "All corresponding interaction and byte assertions completed.",
-    }));
+    report.coverage = lib.coverageFromAssertions(lib.ACCEPTANCE_CHECKS, report.assertions);
+    if (report.coverage.some((item) => item.status === "fail")) {
+      throw new Error("Acceptance coverage incomplete: " + JSON.stringify(report.coverage.filter((item) => item.status === "fail")));
+    }
     report.pass = true;
     successful = true;
   } catch (error) {

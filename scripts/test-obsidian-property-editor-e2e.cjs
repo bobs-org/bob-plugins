@@ -4,6 +4,7 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const test = require("node:test");
@@ -33,7 +34,24 @@ test("runner advertises the complete editor acceptance matrix", () => {
     "null-versus-empty-string-disk-bytes", "prose-link-task-band-when-navigation-is-loaded",
     "old-bob-read-only", "invalid-unclosed-and-duplicate-yaml-recovery-targets",
     "exact-note-bytes-after-every-write", "screenshots-light-dark-narrow-wide",
+    "panes-save-unsaved-editor-text", "stale-draft-keeps-preview-requirement",
+    "history-survives-close-reopen", "yaml-done-restores-leaf-and-key",
+    "yaml-done-nearest-row-after-external-delete", "close-esc-q-ctrl-bracket-ladder",
+    "q-types-in-text-field", "ctrl-bracket-never-types",
+    "unload-open-modal-clears-listeners", "unload-pending-preview-no-late-reopen",
+    "entry-plus-chord-live-preview-vim", "entry-plus-chord-shift-equals",
+    "entry-palette-edit-note-properties", "entry-command-mode-row",
+    "entry-drawer-key-label", "entry-drawer-add-property", "entry-drawer-edit-all",
+    "entry-api-open-property-editor", "entry-ordinary-and-invalid-yaml-notes",
+    "screenshots-reviewed-light-dark-narrow-wide",
   ]) assert.ok(lib.ACCEPTANCE_CHECKS.includes(check), check);
+  for (const check of lib.ACCEPTANCE_CHECKS) {
+    assert.ok(lib.COVERAGE_PATTERNS[check], check);
+  }
+  assert.equal(typeof lib.visualLayoutSource, "function");
+  assert.match(lib.visualLayoutSource(), /selectedDiffers/);
+  assert.match(lib.fixtureNotes()["surfaces.md"], /keep_me: "original"/);
+  assert.match(lib.fixtureNotes()["ordinary.md"], /title: "Ordinary note"/);
   assert.equal(typeof runner.run, "function");
   assert.throws(() => lib.parseArgs(["--executable"]), /requires a PATH/);
 });
@@ -129,6 +147,29 @@ test("every API open restores focus lost during note navigation", async () => {
     assert.equal(readPolls, 2, "cached DOM must wait for a Bob report or a typed refusal");
   }
   assert.equal(opens, 2);
+});
+
+test("runner wires surface, visual, and unload acceptance with companion plugins", () => {
+  const source = fs.readFileSync(path.join(__dirname, "obsidian-property-editor-e2e.cjs"), "utf8");
+  assert.match(source, /runSurfaceAcceptance/);
+  assert.match(source, /runVisualReview/);
+  assert.match(source, /runUnloadAcceptance/);
+  assert.match(source, /bob-command-mode/);
+  assert.match(source, /bob-navigation-hotkeys/);
+  assert.match(source, /vimMode:\s*true/);
+  assert.match(source, /command-palette:open/);
+  assert.match(source, /coverageFromAssertions/);
+  const surfaces = require("./obsidian-property-editor-e2e-surfaces.cjs");
+  assert.equal(typeof surfaces.runSurfaceAcceptance, "function");
+  assert.equal(typeof surfaces.runVisualReview, "function");
+  assert.equal(typeof surfaces.runUnloadAcceptance, "function");
+});
+
+test("coverage mapping fails a missing surface assertion", () => {
+  const coverage = lib.coverageFromAssertions(["q-types-in-text-field"], [{ name: "unrelated", status: "pass" }]);
+  assert.equal(coverage[0].status, "fail");
+  const passing = lib.coverageFromAssertions(["q-types-in-text-field"], [{ name: "q types in a text field", status: "pass" }]);
+  assert.equal(passing[0].status, "pass");
 });
 
 test("lifecycle diagnostics preserve receiver, return values, and thrown open errors", () => {

@@ -167727,6 +167727,8 @@ class PropertyEditorModal extends PropertyEditorModalBase {
   }
 
   onOpen() {
+    try { this.modalEl?.classList?.add("bob-property-editor-modal"); } catch (_) {}
+    try { this.modalEl?.addClass?.("bob-property-editor-modal"); } catch (_) {}
     this.paintPropertyEditor();
     try {
       if (typeof bobCardWireCloseKeys === "function") {
@@ -167911,7 +167913,13 @@ function propertyEditorPaintAll(host, options, doc, modal) {
 
 function propertyEditorPaintRow(doc, host, entry, selected, modal) {
   const row = entry.row;
-  const button = propertyEditorCreateEl(doc, "button", "bob-property-row");
+  const decision = propertyEditorActionForRow(row);
+  const className = [
+    "bob-property-row",
+    selected ? "is-selected" : "",
+    decision.action === "locked" ? "is-locked" : "",
+  ].filter(Boolean).join(" ");
+  const button = propertyEditorCreateEl(doc, "button", className);
   if (!button) return;
   try {
     button.setAttribute("type", "button");
@@ -167920,7 +167928,6 @@ function propertyEditorPaintRow(doc, host, entry, selected, modal) {
     button.setAttribute("role", "option");
     button.setAttribute("aria-selected", selected ? "true" : "false");
     if (selected) button.setAttribute("aria-current", "true");
-    const decision = propertyEditorActionForRow(row);
     button.setAttribute("data-property-action", decision.action);
     if (decision.action === "locked") button.setAttribute("aria-disabled", "true");
     if (row && typeof row.diagnostic === "string" && row.diagnostic) {

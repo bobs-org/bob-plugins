@@ -3,7 +3,9 @@
 // (bob-cli-pf.4.1.2 editor-shell). Pure-model plus modal-logic coverage;
 // rendering itself must not spawn bob or write.
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
 const Module = require("node:module");
+const path = require("node:path");
 const test = require("node:test");
 
 class TestPlugin {
@@ -356,4 +358,61 @@ test("locked rows refuse discrete actions without spawning", async () => {
   modal.editorEnsureSession = () => { throw new Error("must not spawn for locked rows"); };
   await modal.propertyEditorDelete(modal.editorSelected());
   assert.equal(modal.status.kind, "refusal");
+});
+
+function paintDoc() {
+  const doc = {
+    createElement(tag) {
+      const el = {
+        tagName: String(tag).toUpperCase(),
+        className: "",
+        attrs: {},
+        children: [],
+        setAttribute(name, value) {
+          this.attrs[name] = String(value);
+          if (name === "class") this.className = String(value);
+        },
+        getAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attrs, name) ? this.attrs[name] : null; },
+        appendChild(child) { this.children.push(child); return child; },
+      };
+      return el;
+    },
+  };
+  return doc;
+}
+
+test("paintRow marks selected and locked classes", () => {
+  const doc = paintDoc();
+  const host = { children: [], appendChild(child) { this.children.push(child); return child; } };
+  const row = wireRow({ key: "project_digest", line: 7, role: "derived", reason: "locked" });
+  H.propertyEditorPaintRow(doc, host, { id: "project_digest::7", row }, true, {});
+  const button = host.children[0];
+  assert.match(button.className, /\bbob-property-row\b/);
+  assert.match(button.className, /\bis-selected\b/);
+  assert.match(button.className, /\bis-locked\b/);
+  assert.equal(button.attrs["aria-selected"], "true");
+  assert.equal(button.attrs["aria-disabled"], "true");
+  assert.equal(button.attrs["data-property-action"], "locked");
+});
+
+test("paintRow leaves a loose unselected row without lock or selection classes", () => {
+  const doc = paintDoc();
+  const host = { children: [], appendChild(child) { this.children.push(child); return child; } };
+  H.propertyEditorPaintRow(doc, host, { id: "title::3", row: wireRow() }, false, {});
+  const button = host.children[0];
+  assert.match(button.className, /\bbob-property-row\b/);
+  assert.doesNotMatch(button.className, /\bis-selected\b/);
+  assert.doesNotMatch(button.className, /\bis-locked\b/);
+  assert.equal(button.attrs["aria-selected"], "false");
+  assert.equal(button.getAttribute("aria-disabled"), null);
+});
+
+test("property editor shell CSS distinguishes selected and locked rows", () => {
+  const css = fs.readFileSync(path.join(__dirname, "../plugins/bob-ledger-tools/styles.css"), "utf8");
+  assert.match(css, /\.bob-property-editor-modal\s*\{/);
+  assert.match(css, /\.bob-property-row\s*\{[\s\S]*?grid-template-columns/);
+  assert.match(css, /\.bob-property-row\.is-selected/);
+  assert.match(css, /\.bob-property-row\.is-locked/);
+  assert.match(css, /\.bob-property-row:focus-visible/);
+  assert.match(css, /outline:\s*2px solid var\(--interactive-accent\)/);
 });

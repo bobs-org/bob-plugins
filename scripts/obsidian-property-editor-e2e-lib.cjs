@@ -10,7 +10,8 @@ const { spawnSync } = require("node:child_process");
 const HELP_TEXT = [
   "Usage: node scripts/obsidian-property-editor-e2e.cjs [OPTIONS]",
   "",
-  "Prove Property Editor writes and role routing in a disposable Obsidian vault.",
+  "Prove Property Editor writes, panes, entry points, close keys, unload, and visuals",
+  "in a disposable Obsidian vault.",
   "Set BOB_BIN and BOB_CLI_DIR to the exact debug binary and bob-cli checkout.",
   "Run under xvfb-run -a on Linux when the Obsidian Electron window needs a display.",
   "",
@@ -43,7 +44,27 @@ const ACCEPTANCE_CHECKS = [
   "old-bob-read-only",
   "invalid-unclosed-and-duplicate-yaml-recovery-targets",
   "exact-note-bytes-after-every-write",
+  "panes-save-unsaved-editor-text",
+  "stale-draft-keeps-preview-requirement",
+  "history-survives-close-reopen",
+  "yaml-done-restores-leaf-and-key",
+  "yaml-done-nearest-row-after-external-delete",
+  "close-esc-q-ctrl-bracket-ladder",
+  "q-types-in-text-field",
+  "ctrl-bracket-never-types",
+  "unload-open-modal-clears-listeners",
+  "unload-pending-preview-no-late-reopen",
+  "entry-plus-chord-live-preview-vim",
+  "entry-plus-chord-shift-equals",
+  "entry-palette-edit-note-properties",
+  "entry-command-mode-row",
+  "entry-drawer-key-label",
+  "entry-drawer-add-property",
+  "entry-drawer-edit-all",
+  "entry-api-open-property-editor",
+  "entry-ordinary-and-invalid-yaml-notes",
   "screenshots-light-dark-narrow-wide",
+  "screenshots-reviewed-light-dark-narrow-wide",
 ];
 
 function parseArgs(argv) {
@@ -206,6 +227,27 @@ function fixtureNotes(today = "2026-11-23") {
       "",
     ].join("\n"),
     "old-bob.md": ["---", 'custom: "cached row"', "---", "", "# Old bob", ""].join("\n"),
+    "surfaces.md": [
+      "---",
+      'type: "[[note]]"',
+      'keep_me: "original"',
+      'edit_me: "draft"',
+      "---",
+      "",
+      "# Surfaces",
+      "",
+      "Body bytes stay outside pane and stale-draft edits.",
+      "",
+    ].join("\n"),
+    "ordinary.md": [
+      "---",
+      'type: "[[note]]"',
+      'title: "Ordinary note"',
+      "---",
+      "",
+      "# Ordinary note",
+      "",
+    ].join("\n"),
   };
 }
 
@@ -247,6 +289,9 @@ function editorProbeSource() {
         text: row.textContent || "",
         valueText: row.querySelector(".bob-property-row-value")?.textContent ?? null,
         diagnostic: row.getAttribute("title") || "",
+        classes: String(row.className || ""),
+        selectedClass: row.classList.contains("is-selected"),
+        lockedClass: row.classList.contains("is-locked"),
       })),
       properties: Array.isArray(report?.properties) ? report.properties.map((row) => ({ key: row.key, line: row.line, kind: row.kind, role: row.role, duplicate: row.duplicate === true, diagnostic: row.diagnostic || "" })) : [],
       banner: editor.querySelector(".bob-property-editor-banner")?.textContent || "",
@@ -254,12 +299,159 @@ function editorProbeSource() {
       status: editor.querySelector(".bob-property-editor-status")?.textContent || "",
       stage: editor.querySelector("[data-property-stage], [data-property-add]")?.getAttribute("aria-label") || "",
       stageKind: plugin?.propertyEditorModal?.stage?.kind || null,
+      stageInput: document.querySelector("[data-property-stage-input], [data-property-add-input]")?.value || "",
+      focusTag: document.activeElement?.tagName || "",
+      focusClass: String(document.activeElement?.className || ""),
+      inInput: Boolean(document.activeElement?.closest?.("input,textarea,[contenteditable='true']")),
+      menuOpen: plugin?.propertyEditorModal?.menuOpen === true,
+      history: typeof plugin?.propertyHistory?.snapshot === "function"
+        ? plugin.propertyHistory.snapshot(plugin?.propertyEditorModal?.filePath || "")
+        : null,
+      filePath: plugin?.propertyEditorModal?.filePath || "",
       frontmatterState: report?.frontmatter?.state || "",
       frontmatterError: report?.frontmatter?.error?.message || "",
       frontmatterErrorLine: report?.frontmatter?.error?.line || null,
       ownershipDiagnostics: report?.ownership_diagnostics || [],
     };
   })()`;
+}
+
+function visualLayoutSource() {
+  return `(() => {
+    const parse = (value) => {
+      const match = String(value || "").match(/rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)/);
+      return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null;
+    };
+    const lum = (rgb) => {
+      if (!rgb) return 0;
+      const channel = (value) => {
+        const next = value / 255;
+        return next <= 0.03928 ? next / 12.92 : ((next + 0.055) / 1.055) ** 2.4;
+      };
+      return 0.2126 * channel(rgb[0]) + 0.7152 * channel(rgb[1]) + 0.0722 * channel(rgb[2]);
+    };
+    const contrast = (left, right) => {
+      const hi = Math.max(lum(left), lum(right));
+      const lo = Math.min(lum(left), lum(right));
+      return (hi + 0.05) / (lo + 0.05);
+    };
+    const editor = document.querySelector(".bob-property-editor");
+    const modal = editor?.closest(".modal") || editor;
+    if (!editor || !modal) return { open: false };
+    const selected = editor.querySelector("[data-property-row][aria-selected='true']");
+    const locked = editor.querySelector("[data-property-row][aria-disabled='true']");
+    const loose = Array.from(editor.querySelectorAll("[data-property-row]"))
+      .find((row) => row.getAttribute("aria-disabled") !== "true");
+    const focused = document.activeElement?.closest?.("[data-property-row]") || null;
+    const styleOf = (node) => node ? getComputedStyle(node) : null;
+    const boxOf = (node) => {
+      if (!node) return null;
+      const rect = node.getBoundingClientRect();
+      return { top: rect.top, left: rect.left, right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.height };
+    };
+    const key = selected?.querySelector(".bob-property-row-key");
+    const value = selected?.querySelector(".bob-property-row-value");
+    const keyBox = boxOf(key);
+    const valueBox = boxOf(value);
+    const overlap = keyBox && valueBox
+      ? !(keyBox.right <= valueBox.left + 1 || valueBox.right <= keyBox.left + 1
+        || keyBox.bottom <= valueBox.top + 1 || valueBox.bottom <= keyBox.top + 1)
+      : null;
+    const modalBox = boxOf(modal);
+    const rows = Array.from(editor.querySelectorAll("[data-property-row]"));
+    const clipped = rows.some((row) => {
+      const rect = row.getBoundingClientRect();
+      return rect.right > modalBox.right + 2 || rect.left < modalBox.left - 2;
+    });
+    const selectedStyle = styleOf(selected);
+    const lockedStyle = styleOf(locked);
+    const looseStyle = styleOf(loose);
+    const focusedStyle = styleOf(focused);
+    const modalBg = parse(styleOf(modal)?.backgroundColor);
+    return {
+      open: true,
+      clipped,
+      keyValueOverlap: overlap,
+      selectedDisplay: selectedStyle?.display || "",
+      selectedBackground: selectedStyle?.backgroundColor || "",
+      looseBackground: looseStyle?.backgroundColor || "",
+      selectedBorder: selectedStyle?.borderColor || "",
+      lockedColor: lockedStyle?.color || "",
+      looseColor: looseStyle?.color || "",
+      lockedContrast: lockedStyle ? contrast(parse(lockedStyle.color), modalBg || parse(lockedStyle.backgroundColor)) : 0,
+      selectedDiffers: Boolean(selectedStyle && looseStyle && selectedStyle.backgroundColor !== looseStyle.backgroundColor),
+      focusOutlineWidth: focusedStyle ? Number.parseFloat(focusedStyle.outlineWidth || "0") : 0,
+      focusOutlineStyle: focusedStyle?.outlineStyle || "",
+      rowCount: rows.length,
+      selectedKey: selected?.getAttribute("data-property-key") || "",
+      lockedKey: locked?.getAttribute("data-property-key") || "",
+      selectedClasses: String(selected?.className || ""),
+      lockedClasses: String(locked?.className || ""),
+    };
+  })()`;
+}
+
+const COVERAGE_PATTERNS = {
+  "project-edit-undo-redo-disk-bytes": [/^project edit (bytes|undo bytes|redo bytes)$/],
+  "project-add-disk-bytes": [/^project add bytes$/],
+  "project-delete-undo-disk-bytes": [/^project (delete bytes|delete undo bytes|final delete bytes)$/],
+  "plain-note-add-undo-redo-framing-disk-bytes": [/plain-note/, /^first plain-note add bytes$/],
+  "tab-completion-preserves-known-type": [/Tab completion chooses known type/, /Tab-completed tags add bytes/],
+  "shift-enter-keeps-literal-name-as-text": [/Shift\+Enter keeps literal name/, /literal name remains text/, /literal name add bytes/],
+  "day-note-edit-disk-bytes": [/^day-note /],
+  "record-field-handoff": [/canonical record field/, /record-field handoff/],
+  "derived-and-identity-gestures-refused-and-yaml-targets": [/derived /, /identity /],
+  "checkbox-flip-disk-bytes": [/checkbox flip bytes/],
+  "datetime-no-offset-disk-bytes": [/datetime without offset/],
+  "datetime-explicit-offset-disk-bytes": [/datetime with -05:00/],
+  "datetime-relative-token-disk-bytes": [/relative datetime token/],
+  "tags-without-hash-disk-bytes": [/tags omit leading hash/, /tags use tags stage/],
+  "ordered-list-disk-bytes": [/ordered list/],
+  "null-versus-empty-string-disk-bytes": [/null and empty/],
+  "prose-link-task-band-when-navigation-is-loaded": [/prose stage attaches navigation band/],
+  "old-bob-read-only": [/old-bob read-only/],
+  "invalid-unclosed-and-duplicate-yaml-recovery-targets": [/invalid YAML/, /unclosed YAML/, /duplicate YAML/, /duplicate y targets/],
+  "exact-note-bytes-after-every-write": [/bytes$/],
+  "panes-save-unsaved-editor-text": [/unsaved pane/, /apply saved unsaved pane/],
+  "stale-draft-keeps-preview-requirement": [/stale refusal/, /fresh preview required after stale/],
+  "history-survives-close-reopen": [/history survives close and reopen/, /reopened undo restores bytes/],
+  "yaml-done-restores-leaf-and-key": [/Done restores Live Preview/, /Done reopens the same key/],
+  "yaml-done-nearest-row-after-external-delete": [/Done lands on a nearest remaining row/],
+  "close-esc-q-ctrl-bracket-ladder": [/peels the (menu|stage)/, /closes the modal from browse/],
+  "q-types-in-text-field": [/q types in a text field/],
+  "ctrl-bracket-never-types": [/Ctrl\+\[ never types/],
+  "unload-open-modal-clears-listeners": [/disabling the plugin closes the open modal/, /disabling while browsing leaves no editor/],
+  "unload-pending-preview-no-late-reopen": [/pending preview does not reopen after unload/, /no late reopen after browse unload/],
+  "entry-plus-chord-live-preview-vim": [/=\+ Live Preview Vim chord/],
+  "entry-plus-chord-shift-equals": [/Shift\+= Live Preview Vim chord/],
+  "entry-palette-edit-note-properties": [/palette Edit note properties/],
+  "entry-command-mode-row": [/Command Mode row opens the editor/],
+  "entry-drawer-key-label": [/drawer key-label/],
+  "entry-drawer-add-property": [/drawer Add property/],
+  "entry-drawer-edit-all": [/drawer Edit all/],
+  "entry-api-open-property-editor": [/API openPropertyEditor/],
+  "entry-ordinary-and-invalid-yaml-notes": [/API openPropertyEditor on an ordinary note/, /API openPropertyEditor on invalid YAML/, /palette opens invalid YAML recovery/],
+  "screenshots-light-dark-narrow-wide": [/screenshots light dark narrow wide/, /screenshot .+ contains the populated editor/],
+  "screenshots-reviewed-light-dark-narrow-wide": [/reviewed every screenshot/, /selected and locked rows are legible/, /selected row is visually distinct/],
+};
+
+function coverageFromAssertions(checks, assertions) {
+  return checks.map((check) => {
+    const patterns = COVERAGE_PATTERNS[check];
+    if (!patterns) return { check, status: "fail", detail: "missing coverage pattern" };
+    const rows = (assertions || []).filter((item) => patterns.some((re) => re.test(item.name)));
+    if (!rows.length) return { check, status: "fail", detail: "no matching assertions" };
+    if (rows.some((item) => item.status === "fail")) {
+      return { check, status: "fail", detail: rows.filter((item) => item.status === "fail").map((item) => item.name) };
+    }
+    if (rows.every((item) => item.status === "skip")) {
+      return { check, status: "skip", detail: rows[0].detail || "" };
+    }
+    if (rows.some((item) => item.status === "pass")) {
+      return { check, status: "pass", detail: rows.filter((item) => item.status === "pass").map((item) => item.name) };
+    }
+    return { check, status: "fail", detail: rows.map((item) => item.name) };
+  });
 }
 
 function assertProbe(probe, { heading, rows = [], banner, recovery } = {}) {
@@ -285,9 +477,11 @@ function selfTest() {
 
   const notes = fixtureNotes();
   assert.match(notes["projects-album.md"], /  noun: acceptance_fixture\n/);
-  for (const pathValue of ["projects/project-note.md", "2026/20261123.md", "projects-album/acceptance.md", "invalid.md", "unclosed.md", "duplicate.md", "plain.md", "literal-name.md", "value-kinds.md", "old-bob.md"]) {
+  for (const pathValue of ["projects/project-note.md", "2026/20261123.md", "projects-album/acceptance.md", "invalid.md", "unclosed.md", "duplicate.md", "plain.md", "literal-name.md", "value-kinds.md", "old-bob.md", "surfaces.md", "ordinary.md"]) {
     assert.ok(notes[pathValue], `fixture missing ${pathValue}`);
   }
+  assert.match(notes["surfaces.md"], /keep_me: "original"/);
+  assert.match(notes["ordinary.md"], /title: "Ordinary note"/);
   assert.match(notes["projects/project-note.md"], /# Keep this comment exactly as authored/);
   assert.match(notes["projects/project-note.md"], /keep_exact: "keep : and # exactly"/);
   assert.match(notes["projects/project-note.md"], /project_digest: sha256:/);
@@ -298,6 +492,12 @@ function selfTest() {
   assert.doesNotMatch(notes["plain.md"], /^---$/m);
   assert.match(notes["value-kinds.md"], /offset_at: "2026-11-23T09:30:00-05:00"/);
   assert.deepEqual(ACCEPTANCE_CHECKS, [...new Set(ACCEPTANCE_CHECKS)]);
+  for (const check of ACCEPTANCE_CHECKS) {
+    assert.ok(COVERAGE_PATTERNS[check], `coverage pattern missing for ${check}`);
+  }
+  assert.equal(typeof visualLayoutSource(), "string");
+  assert.match(visualLayoutSource(), /selectedDiffers/);
+  assert.match(editorProbeSource(), /selectedClass/);
 
   const fakeBob = path.join(__dirname, "fixtures", "fake-bob.cjs");
   const show = showFixture();
@@ -328,11 +528,14 @@ function selfTest() {
 
 module.exports = {
   ACCEPTANCE_CHECKS,
+  COVERAGE_PATTERNS,
   HELP_TEXT,
   assertProbe,
+  coverageFromAssertions,
   editorProbeSource,
   fixtureNotes,
   parseArgs,
   selfTest,
   showFixture,
+  visualLayoutSource,
 };

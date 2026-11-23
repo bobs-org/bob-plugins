@@ -12919,7 +12919,8 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
 .bob-property-editor-stage-cancel {
   border: 1px solid var(--background-modifier-border);
   border-radius: 999px;
-  padding: 0.25em 0.65em;
+  padding: 0.4em 0.85em;
+  min-height: 2.25em;
   color: var(--text-normal);
   background: var(--background-primary);
   font-size: var(--font-ui-small);
@@ -12940,10 +12941,10 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
   font-size: var(--font-ui-small);
   overflow-wrap: anywhere;
 }
-.bob-property-editor-stage-actions { justify-content: flex-end; }
+.bob-property-editor-stage-actions { justify-content: flex-end; gap: 0.5em; }
 @media (max-width: 420px) {
   .bob-property-editor-stage { padding: 0.65em; }
-  .bob-property-editor-stage-actions > button { flex: 1 1 auto; }
+  .bob-property-editor-stage-actions > button { flex: 1 1 auto; min-width: 7em; }
 }
 @media (forced-colors: active) {
   .bob-property-editor-stage,
@@ -12960,4 +12961,161 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
   display: inline-flex;
   max-width: 100%;
   overflow-wrap: anywhere;
+}
+
+/* Property editor shell (bob-cli-pf.4.1.7.4 acceptance-surfaces).
+   Rows are a three-column grid so keys and values never run together.
+   Selected rows use the accent mix; locked rows stay muted and readable.
+   Focus rings are 2px accent outlines on every interactive control. */
+.bob-property-editor-modal {
+  width: min(44rem, calc(100vw - 1.5rem));
+  max-width: calc(100vw - 1.5rem);
+}
+.bob-property-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65em;
+  min-width: 0;
+  max-height: min(78vh, 46rem);
+  overflow: auto;
+  font-family: var(--font-interface);
+}
+.bob-property-editor-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65em;
+  min-width: 0;
+}
+.bob-property-editor-tile {
+  flex: none;
+  font-size: 1.35em;
+  line-height: 1;
+}
+.bob-property-editor-titles { min-width: 0; }
+.bob-property-editor-heading {
+  margin: 0;
+  color: var(--text-muted);
+  font: 650 0.8em/1.2 var(--font-interface);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.bob-property-editor-title {
+  font-size: 1.05em;
+  overflow-wrap: anywhere;
+}
+.bob-property-editor-sub {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  overflow-wrap: anywhere;
+}
+.bob-property-editor-banner,
+.bob-property-editor-empty {
+  padding: 0.45em 0.6em;
+  border-radius: 6px;
+  color: var(--text-warning);
+  background: color-mix(in srgb, var(--text-warning) 12%, var(--background-primary));
+}
+.bob-property-editor-banner.is-recovery {
+  color: var(--text-error);
+  background: color-mix(in srgb, var(--text-error) 12%, var(--background-primary));
+}
+.bob-property-editor-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7em;
+  min-width: 0;
+}
+.bob-property-editor-group-title {
+  margin: 0 0 0.25em;
+  color: var(--text-muted);
+  font: 650 0.78em/1.2 var(--font-interface);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.bob-property-row {
+  display: grid;
+  grid-template-columns: 1.6em minmax(6em, 34%) minmax(0, 1fr);
+  column-gap: 0.7em;
+  align-items: baseline;
+  width: 100%;
+  margin: 0;
+  padding: 0.4em 0.55em;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.bob-property-row:hover {
+  background: var(--background-modifier-hover);
+}
+.bob-property-row.is-selected,
+.bob-property-row[aria-selected="true"] {
+  border-color: var(--interactive-accent);
+  background: color-mix(in srgb, var(--interactive-accent) 14%, var(--background-primary));
+}
+.bob-property-row.is-locked,
+.bob-property-row[aria-disabled="true"] {
+  color: var(--text-muted);
+  cursor: default;
+}
+.bob-property-row.is-locked .bob-property-row-key,
+.bob-property-row[aria-disabled="true"] .bob-property-row-key {
+  color: var(--text-normal);
+}
+.bob-property-row:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+}
+.bob-property-row-icon {
+  color: var(--text-muted);
+  font-size: 0.95em;
+  text-align: center;
+}
+.bob-property-row-key {
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+.bob-property-row-value {
+  min-width: 0;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+.bob-property-row.is-selected .bob-property-row-value {
+  color: var(--text-normal);
+}
+.bob-property-editor-status {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  overflow-wrap: anywhere;
+}
+.bob-property-editor-hints {
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  overflow-wrap: anywhere;
+}
+.bob-property-editor-announce {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+@media (max-width: 420px) {
+  .bob-property-row {
+    grid-template-columns: 1.4em minmax(0, 1fr);
+    grid-template-areas: "icon key" ". value";
+    row-gap: 0.15em;
+  }
+  .bob-property-row-icon { grid-area: icon; }
+  .bob-property-row-key { grid-area: key; }
+  .bob-property-row-value { grid-area: value; }
+}
+@media (forced-colors: active) {
+  .bob-property-row { border: 1px solid CanvasText; }
+  .bob-property-row.is-selected,
+  .bob-property-row[aria-selected="true"] { border: 2px solid Highlight; }
+  .bob-property-row:focus-visible { outline: 2px solid Highlight; }
 }

@@ -243,6 +243,7 @@ function editorProbeSource() {
         disabled: row.getAttribute("aria-disabled") === "true",
         selected: row.getAttribute("aria-selected") === "true",
         text: row.textContent || "",
+        valueText: row.querySelector(".bob-property-row-value")?.textContent ?? null,
         diagnostic: row.getAttribute("title") || "",
       })),
       properties: Array.isArray(report?.properties) ? report.properties.map((row) => ({ key: row.key, line: row.line, kind: row.kind, role: row.role, duplicate: row.duplicate === true, diagnostic: row.diagnostic || "" })) : [],

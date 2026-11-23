@@ -7,6 +7,8 @@ const assert = require("node:assert/strict");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const test = require("node:test");
+const vm = require("node:vm");
+const diagnostics = require("./obsidian-property-editor-e2e-diagnostics.cjs");
 const lib = require("./obsidian-property-editor-e2e-lib.cjs");
 const runner = require("./obsidian-property-editor-e2e.cjs");
 
@@ -34,4 +36,40 @@ test("runner advertises the complete editor acceptance matrix", () => {
   ]) assert.ok(lib.ACCEPTANCE_CHECKS.includes(check), check);
   assert.equal(typeof runner.run, "function");
   assert.throws(() => lib.parseArgs(["--executable"]), /requires a PATH/);
+});
+
+test("missing document selector retains connected modal and lifecycle evidence", () => {
+  const document = { URL: "main-window", querySelectorAll: () => [] };
+  const owner = { URL: "modal-window", querySelectorAll: () => [{}] };
+  const modal = {
+    filePath: "projects/project-note.md", closed: false, status: { text: "Checking value…" },
+    contentEl: {
+      isConnected: true, ownerDocument: owner, outerHTML: '<div class="bob-property-editor"></div>',
+      getRootNode: () => ({ nodeName: "#document" }),
+    },
+  };
+  const window = { app: { plugins: { plugins: { "bob-ledger-tools": { propertyEditorModal: modal } } } } };
+  const result = vm.runInNewContext(diagnostics.editorDiagnosticSource(), { window, document });
+  assert.equal(result.documentEditors, 0);
+  assert.equal(result.modal.connected, true);
+  assert.equal(result.modal.ownerDocumentMatches, false);
+  assert.equal(result.modal.ownerDocumentEditors, 1);
+  assert.match(result.modal.contentHtml, /bob-property-editor/);
+});
+
+test("lifecycle diagnostics preserve receiver, return values, and thrown open errors", () => {
+  class Modal {
+    open(value) { this.value = value; return value; }
+    onOpen() { throw new Error("mount failed"); }
+  }
+  const window = { app: { plugins: { plugins: {
+    "bob-ledger-tools": { constructor: { helpers: { PropertyEditorModal: Modal } } },
+  } } } };
+  vm.runInNewContext(diagnostics.installEditorDiagnosticSource(), { window });
+  const modal = new Modal();
+  assert.equal(modal.open(42), 42);
+  assert.equal(modal.value, 42);
+  assert.throws(() => modal.onOpen(), /mount failed/);
+  assert.equal(window.__bobPropertyEditorLifecycle[0].method, "open");
+  assert.match(window.__bobPropertyEditorLifecycle[1].error, /mount failed/);
 });

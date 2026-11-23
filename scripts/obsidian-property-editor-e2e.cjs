@@ -11,6 +11,7 @@ const os = require("node:os");
 const path = require("node:path");
 const shared = require("./obsidian-record-card-e2e.cjs");
 const lib = require("./obsidian-property-editor-e2e-lib.cjs");
+const diagnostics = require("./obsidian-property-editor-e2e-diagnostics.cjs");
 
 const repoRoot = path.resolve(__dirname, "..");
 const ELECTRON_FALLBACK = "/snap/obsidian/current/app/obsidian";
@@ -210,6 +211,12 @@ async function openPropertyEditor(client, filePath, options = {}) {
     if (!plugin || typeof plugin.openPropertyEditor !== "function") return { ok: false, reason: "plugin-api-missing" };
     if (${options.resetCapability === true ? "true" : "false"}) plugin.propertyCapability = null;
     const opened = await plugin.openPropertyEditor(${JSON.stringify({ filePath, ...(options.key ? { key: options.key } : {}), ...(options.mode ? { mode: options.mode } : {}) })});
+    window.__bobPropertyEditorLastOpen = {
+      filePath: ${JSON.stringify(filePath)}, ok: opened?.ok === true,
+      reason: opened?.reason || null, message: opened?.message || null,
+      connected: opened?.modal?.contentEl?.isConnected ?? null,
+      documentEditors: document.querySelectorAll(".bob-property-editor").length,
+    };
     return { ok: opened?.ok === true, reason: opened?.reason || null };
   })()`, 30_000);
   if (!result?.ok) throw new Error("openPropertyEditor failed: " + JSON.stringify(result));
@@ -295,6 +302,7 @@ async function run(args) {
   let scratch = "";
   let child = null;
   let client = null;
+  let ctx = null;
   let successful = false;
   const outDir = path.resolve(args.out || path.join(os.tmpdir(), "bob-property-editor-e2e-" + Math.random().toString(16).slice(2)));
   const reportPath = path.resolve(args.report || path.join(outDir, "property-editor-report.json"));
@@ -328,7 +336,7 @@ async function run(args) {
     shared.initScratchGit(vaultDir);
     const vaultReal = fs.realpathSync(vaultDir);
     shared.seedProfile(profileDir, vaultReal);
-    const ctx = { bob, vaultDir, profileDir, shimDir, bobLog, oldFlag };
+    ctx = { bob, vaultDir, profileDir, shimDir, bobLog, oldFlag };
 
     const showProject = runBob(ctx, ["props", "show", "projects/project-note.md", "-f", "json"]);
     report.bobRuns.push(showProject);
@@ -367,6 +375,14 @@ async function run(args) {
     await client.call("Runtime.enable");
     await client.call("Log.enable");
     await shared.trustCommunityPlugins(client);
+    report.pluginReady = await shared.waitFor(client, `(() => {
+      const plugin = window.app?.plugins?.plugins?.["bob-ledger-tools"];
+      return {
+        active: plugin?.propertyEditorEntrypointsActive === true,
+        fixtureIndexed: Boolean(window.app?.vault?.getAbstractFileByPath("projects/project-note.md")),
+      };
+    })()`, (state) => state?.active && state?.fixtureIndexed, "property editor startup and fixture indexing");
+    await client.evaluate(diagnostics.installEditorDiagnosticSource());
     report.obsidian = { pid: child.pid, executable, startupErrors: startupErrors.slice(-8) };
 
     const projectPath = path.join(vaultDir, "projects/project-note.md");
@@ -584,19 +600,22 @@ async function run(args) {
     assertDiskBytes(report, "ordered list bytes", kindsPath, kindsExpected);
 
     probe = await waitForEditor(client, (value) => value.rows.some((row) => row.key === "nullable"), "null and empty rows");
+    const nullValue = probe.rows.find((row) => row.key === "nullable")?.valueText;
+    const emptyValue = probe.rows.find((row) => row.key === "empty_text")?.valueText;
     addCheck(report, "null and empty string display differently",
-      probe.rows.find((row) => row.key === "nullable")?.text !== probe.rows.find((row) => row.key === "empty_text")?.text,
-      { nullable: probe.rows.find((row) => row.key === "nullable"), empty: probe.rows.find((row) => row.key === "empty_text") });
+      typeof nullValue === "string" && typeof emptyValue === "string" && nullValue !== emptyValue,
+      { nullable: nullValue, empty: emptyValue });
     await propertyRowClick(client, "nullable");
     await sendKey(client, "Enter");
     probe = await waitForEditor(client, (value) => value.stageKind === "text", "null text stage");
-    await sendKey(client, "Escape");
-    await waitForEditor(client, (value) => value.open && !value.stage, "null stage cancel");
+    await sendKey(client, "Enter");
+    await waitForEditor(client, (value) => value.open && !value.stage && /No changes/.test(value.status), "untouched null stage is a no-op");
+    assertDiskBytes(report, "untouched null Enter preserves bytes", kindsPath, kindsExpected);
     await propertyRowClick(client, "empty_text");
     await sendKey(client, "Enter");
     probe = await waitForEditor(client, (value) => value.stageKind === "text", "empty-string text stage");
-    await sendKey(client, "Escape");
-    await waitForEditor(client, (value) => value.open && !value.stage, "empty-string stage cancel");
+    await sendKey(client, "Enter");
+    await waitForEditor(client, (value) => value.open && !value.stage && /No changes/.test(value.status), "untouched empty-string stage is a no-op");
     assertDiskBytes(report, "null and empty-string no-op bytes", kindsPath, kindsExpected);
 
     const proseLoaded = await client.evaluate(`Boolean(window.app?.plugins?.plugins?.["bob-navigation-hotkeys"]?.api?.proseField?.attach)`);
@@ -707,7 +726,22 @@ async function run(args) {
       await shared.setViewport(client, width, 900);
       const shot = await shared.capture(client, outDir, "property-editor-" + name, width, theme, "Live Preview");
       report.screenshots.push(shot);
-      if (shot.bytes < 1000) throw new Error("Property Editor screenshot is unexpectedly small: " + name);
+      const visible = await client.evaluate(`(() => {
+        const editor = document.querySelector(".bob-property-editor");
+        const bounds = editor?.getBoundingClientRect();
+        return {
+          heading: editor?.querySelector(".bob-property-editor-heading")?.textContent || "",
+          rows: editor?.querySelectorAll("[data-property-row]").length || 0,
+          visible: Boolean(bounds && bounds.width > 0 && bounds.height > 0
+            && bounds.right > 0 && bounds.bottom > 0 && bounds.left < innerWidth && bounds.top < innerHeight),
+          viewport: { width: innerWidth, height: innerHeight },
+        };
+      })()`);
+      shot.editor = visible;
+      addCheck(report, `screenshot ${name} contains the populated editor`,
+        visible.visible && visible.rows > 0 && visible.heading === "PROJECT · PROPERTIES"
+          && shot.width === width && shot.height === 900,
+        { ...visible, imageWidth: shot.width, imageHeight: shot.height });
     }
     addCheck(report, "screenshots light dark narrow wide", report.screenshots.length === 4,
       report.screenshots.map(({ name, width, theme, bytes }) => ({ name, width, theme, bytes })));
@@ -732,7 +766,15 @@ async function run(args) {
     successful = true;
   } catch (error) {
     report.error = error && error.message ? error.message : String(error);
+    report.errorStack = error?.stack || null;
     report.scratch = scratch || null;
+    if (client) {
+      try { report.failureDiagnostics = await client.evaluate(diagnostics.editorDiagnosticSource()); }
+      catch (diagnosticError) { report.failureDiagnosticError = String(diagnosticError?.message || diagnosticError); }
+      try {
+        report.screenshots.push(await shared.capture(client, outDir, "property-editor-failure", null, "current", "failure"));
+      } catch (captureError) { report.failureScreenshotError = String(captureError?.message || captureError); }
+    }
   } finally {
     if (client) client.close();
     if (child && child.exitCode == null) {
@@ -740,6 +782,11 @@ async function run(args) {
       await shared.sleep(250);
       if (child.exitCode == null) { try { child.kill("SIGKILL"); } catch (_) {} }
     }
+    try {
+      if (ctx && fs.existsSync(ctx.bobLog)) {
+        report.bobInvocations = fs.readFileSync(ctx.bobLog, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse);
+      }
+    } catch (logError) { report.bobInvocationLogError = String(logError?.message || logError); }
     report.finishedAt = new Date().toISOString();
     report.scratchPreserved = Boolean(scratch && !successful && fs.existsSync(scratch));
     if (successful && scratch) fs.rmSync(scratch, { recursive: true, force: true });

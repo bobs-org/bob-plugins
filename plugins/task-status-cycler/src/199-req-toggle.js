@@ -9,9 +9,9 @@
 function cyclerReqToggleFirstReqNotice(scooped) {
   const count = Number(scooped) || 0;
   if (count <= 0) {
-    return "⌗⌗ First requirement";
+    return "◇ First requirement";
   }
-  return `⌗⌗ First requirement · filed ${count} ${count === 1 ? "note" : "notes"} under NOTES`;
+  return `◇ First requirement · filed ${count} ${count === 1 ? "note" : "notes"} under NOTES`;
 }
 
 // Index where the item's description starts: past the list marker and, when

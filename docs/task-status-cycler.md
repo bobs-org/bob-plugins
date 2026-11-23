@@ -352,8 +352,8 @@ Depth-1 moves follow the contract: a new requirement lands at the end of the
 reqs zone, and a depth-1 requirement turned into a note files into `NOTES`
 (created only when a note lands there). A requirement nested deeper converts in
 place. The first requirement a task gets also scoops its loose notes into
-`NOTES` in the same write, with the notice `⌗⌗ First requirement · filed N
-notes under NOTES` (just `⌗⌗ First requirement` when nothing moved). The cursor
+`NOTES` in the same write, with the notice `◇ First requirement · filed N
+notes under NOTES` (just `◇ First requirement` when nothing moved). The cursor
 lands on the toggled item at the same offset into its text. Writer refusals
 (note under a note, note inside a drawer, a dropped or carried requirement, a
 requirement with nested requirements, the 16-level depth bound) show the

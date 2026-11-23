@@ -129,7 +129,7 @@ const TOGGLE_CASES = [
     doc: TOGGLE_START,
     caret: [2, 8],
     keys: [{ key: "]", modifiers: CTRL }],
-    expect: { doc: TOGGLE_DONE, caret: [1, 12], notice: "⌗⌗ First requirement · filed 1 note under NOTES" },
+    expect: { doc: TOGGLE_DONE, caret: [1, 12], notice: "◇ First requirement · filed 1 note under NOTES" },
     thenUndo: TOGGLE_START,
   },
   {

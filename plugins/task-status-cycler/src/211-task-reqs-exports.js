@@ -28,7 +28,7 @@ Object.assign(module.exports.helpers, {
   taskReqIsReqLine,
   taskReqPathText,
   taskReqRowKey,
-  taskReqRun,
+  taskReqGlyph,
   TASK_BLOCK_NOTES_TITLE,
   TASK_BLOCK_ZONES,
   TASK_BLOCK_CHILD_KINDS,

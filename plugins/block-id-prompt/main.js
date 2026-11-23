@@ -22108,11 +22108,13 @@ function taskReqRowKey(ownerKey, row, digest8) {
   return `${ownerKey}/req/${taskReqPathText(row)}~${String(digest8(row.text)).slice(0, 8)}`;
 }
 
-// `task_reqs::req_run`: the hash run drawn in place of a req's checkbox.
-function taskReqRun(depth) {
-  if (depth <= 1) return "⌗⌗";
-  if (depth === 2) return "⌗⌗⌗";
-  return "⌗⌗⌗⌗";
+// `task_reqs::req_glyph`: one text glyph per state, never per depth.
+// Depth takes no part, so the same state reads the same at every depth.
+function taskReqGlyph(state) {
+  if (state === "met") return "◆";
+  if (state === "dropped") return "⊘";
+  if (state === "carried") return "→";
+  return "◇";
 }
 // ---- src/167-req-line-guard.js ----
 // Requirement-line guard for Block ID Prompt Ctrl+Shift+Enter
@@ -22446,7 +22448,7 @@ Object.assign(module.exports.helpers, {
   taskReqIsReqLine,
   taskReqPathText,
   taskReqRowKey,
-  taskReqRun,
+  taskReqGlyph,
 });
 // ---- src/172-req-line-guard-exports.js ----
 // Requirement-line guard helpers, exported for unit tests.

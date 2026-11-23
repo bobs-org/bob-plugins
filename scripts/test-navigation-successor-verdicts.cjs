@@ -103,8 +103,8 @@ function requirementModel() {
       kind: "requirements",
       owner: { task_key: "work/ship.md#^ship", key: ownerKey, path: "work/ship.md", block_id: "ship", line: 3, text: "Ship parser" },
       copy: {
-        title: "Requirements · “Ship parser”", scope: "1 req", why: "Met when it closes, unless you say otherwise",
-        glyph: "⌗⌗", footer: "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
+        title: "Requirements · “Ship parser”", scope: "1 requirement", why: "Met when it closes, unless you say otherwise",
+        glyph: "requirement", footer: "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
         hint: "-k N own task · -X N[=why] drop · -p N pull in",
       },
       rows: [{

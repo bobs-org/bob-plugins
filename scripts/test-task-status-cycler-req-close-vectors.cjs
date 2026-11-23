@@ -106,8 +106,9 @@ test("copy catalog matches the shared fixture", () => {
   assert.equal(reqCloseWouldMet(4, "S"), "would meet 4 requirements with “S”");
   assert.equal(reqCloseQuoted("Ship"), "“Ship”");
   assert.equal(reqCloseGroupTitle("Ship the exporter"), "Requirements · “Ship the exporter”");
-  assert.equal(reqCloseScope(4, 1), "4 reqs");
-  assert.equal(reqCloseScope(2, 2), "2 reqs in 2 branches");
+  assert.equal(reqCloseScope(1, 1), "1 requirement");
+  assert.equal(reqCloseScope(4, 1), "4 requirements");
+  assert.equal(reqCloseScope(2, 2), "2 requirements in 2 branches");
   assert.equal(reqCloseHistory(0, 0, 0), null);
   assert.equal(reqCloseHistory(1, 0, 0), "· 1 dropped earlier");
   assert.equal(reqCloseHistory(1, 1, 1), "· 1 dropped earlier · 1 carried earlier · 1 met earlier");

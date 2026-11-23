@@ -71,19 +71,19 @@ test("first note becoming a req scoops loose notes into NOTES with the notice", 
   // Same offset into the item body: the caret sat 5 into "note to req", so
   // it lands 5 into the req text, after "\t- [ ] ".
   assert.deepEqual(editor.getCursor(), { line: 1, ch: 7 + 5 });
-  assert.deepEqual(notices, ["⌗⌗ First requirement · filed 2 notes under NOTES"]);
+  assert.deepEqual(notices, ["◇ First requirement · filed 2 notes under NOTES"]);
 });
 
 test("first-req notice counts one note and none", () => {
-  assert.equal(cyclerReqToggleFirstReqNotice(1), "⌗⌗ First requirement · filed 1 note under NOTES");
-  assert.equal(cyclerReqToggleFirstReqNotice(2), "⌗⌗ First requirement · filed 2 notes under NOTES");
-  assert.equal(cyclerReqToggleFirstReqNotice(0), "⌗⌗ First requirement");
+  assert.equal(cyclerReqToggleFirstReqNotice(1), "◇ First requirement · filed 1 note under NOTES");
+  assert.equal(cyclerReqToggleFirstReqNotice(2), "◇ First requirement · filed 2 notes under NOTES");
+  assert.equal(cyclerReqToggleFirstReqNotice(0), "◇ First requirement");
   const text = ["- [ ] #task Ship", "\t- only note"].join("\n");
   const { editor } = press(text, { line: 1, ch: 4 });
   assert.equal(editor.getValue(), "- [ ] #task Ship\n\t- [ ] only note");
   // NOTES is born only when a note lands in it.
   assert.ok(!editor.getValue().includes("NOTES"));
-  assert.deepEqual(notices, ["⌗⌗ First requirement"]);
+  assert.deepEqual(notices, ["◇ First requirement"]);
 });
 
 test("a later note becoming a req moves to the end of the reqs zone silently", () => {
@@ -242,7 +242,7 @@ test("Vim Ctrl+] routes through the same toggle", () => {
   plugin.handleVimToggleCheckboxMarker();
   assert.equal(editor.getValue(), "- [ ] #task Ship\n\t- [ ] note to req\n\t- NOTES\n\t\t- loose");
   assert.equal(editor.replaceRangeCalls(), 1);
-  assert.deepEqual(notices, ["⌗⌗ First requirement · filed 1 note under NOTES"]);
+  assert.deepEqual(notices, ["◇ First requirement · filed 1 note under NOTES"]);
 
   // A req toggles back through the Vim path too (depth 1 files into NOTES).
   const second = countingEditor(editor.getValue(), { line: 1, ch: 6 });

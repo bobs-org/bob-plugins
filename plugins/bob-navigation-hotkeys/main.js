@@ -39532,11 +39532,8 @@ function successorRequirementInk(owner) {
 }
 
 function successorRequirementGlyph(row) {
-  const depth = Math.max(1, Number(row && row.req && row.req.depth) || 1);
-  const run = String((row && row.run) || (row && row.req && row.req.run) ||
-    (typeof taskReqRun === "function" ? taskReqRun(depth) : "⌗⌗"));
-  const count = Math.max(2, Math.min(4, (run.match(/⌗/g) || []).length || depth + 1));
-  return "⌗".repeat(count);
+  const state = (row && (row.state || (row.req && row.req.state))) || "pending";
+  return typeof taskReqGlyph === "function" ? taskReqGlyph(state) : "◇";
 }
 
 function successorRequirementRenderGroup(modal, group, groupIndex, matches, query, navigation) {
@@ -135888,11 +135885,13 @@ function taskReqRowKey(ownerKey, row, digest8) {
   return `${ownerKey}/req/${taskReqPathText(row)}~${String(digest8(row.text)).slice(0, 8)}`;
 }
 
-// `task_reqs::req_run`: the hash run drawn in place of a req's checkbox.
-function taskReqRun(depth) {
-  if (depth <= 1) return "⌗⌗";
-  if (depth === 2) return "⌗⌗⌗";
-  return "⌗⌗⌗⌗";
+// `task_reqs::req_glyph`: one text glyph per state, never per depth.
+// Depth takes no part, so the same state reads the same at every depth.
+function taskReqGlyph(state) {
+  if (state === "met") return "◆";
+  if (state === "dropped") return "⊘";
+  if (state === "carried") return "→";
+  return "◇";
 }
 // ---- src/696-task-block-layout-twin.js ----
 // --- Task block layout twin (RL), part 1: zones, slots, drawers -------------
@@ -137148,7 +137147,7 @@ const REQ_CLOSE_COPY = Object.freeze({
   FOOTER: "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
   JUMP_HINT: "↗ jumps to the requirement — ⌃⇧T makes it a task",
   HINT: "-k N own task · -X N[=why] drop · -p N pull in",
-  TEACHING: "Part of this task's scope. Met when the task closes. Drop it or make it a task",
+  TEACHING: "Met when this task closes. Drop it or make it a task if the scope changes.",
 });
 
 function reqCloseQuoted(text) {
@@ -137160,7 +137159,8 @@ function reqCloseGroupTitle(ownerText) {
 }
 
 function reqCloseScope(pending, branches) {
-  return branches <= 1 ? `${pending} reqs` : `${pending} reqs in ${branches} branches`;
+  if (branches > 1) return `${pending} requirements in ${branches} branches`;
+  return pending === 1 ? "1 requirement" : `${pending} requirements`;
 }
 
 function reqCloseHistory(dropped, carried, met) {
@@ -137184,7 +137184,7 @@ function reqCloseMetReceipt(count, ownerText) {
 }
 
 function reqCloseHumanMetLine(count, ownerText) {
-  return `${taskReqRun(1)} ${count} requirements met with ${reqCloseQuoted(ownerText)}`;
+  return reqCloseMetReceipt(count, ownerText);
 }
 
 function reqCloseDropReceipt(text, reason) {
@@ -137342,13 +137342,13 @@ function reqCloseOwnerGroup(owner) {
       scope: reqCloseScope(pending.length, reqClosePendingBranches(owner)),
       why: REQ_CLOSE_COPY.WHY,
       history: reqCloseHistory(folds.dropped, folds.carried, folds.met),
-      glyph: taskReqRun(1),
+      glyph: "requirement",
       footer: REQ_CLOSE_COPY.FOOTER,
       hint: REQ_CLOSE_COPY.HINT,
     },
     folded: folds,
     rows: pending.map((node) => {
-      const run = taskReqRun(node.depth);
+      const run = taskReqGlyph(node.state);
       const accessibility = reqCloseAccessibility(node.depth, "will be met");
       return {
         offer: {
@@ -139817,7 +139817,7 @@ try {
       taskReqIsReqLine,
       taskReqPathText,
       taskReqRowKey,
-      taskReqRun,
+      taskReqGlyph,
       TASK_BLOCK_NOTES_TITLE,
       TASK_BLOCK_ZONES,
       TASK_BLOCK_CHILD_KINDS,

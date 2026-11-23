@@ -230,11 +230,8 @@ function successorRequirementInk(owner) {
 }
 
 function successorRequirementGlyph(row) {
-  const depth = Math.max(1, Number(row && row.req && row.req.depth) || 1);
-  const run = String((row && row.run) || (row && row.req && row.req.run) ||
-    (typeof taskReqRun === "function" ? taskReqRun(depth) : "⌗⌗"));
-  const count = Math.max(2, Math.min(4, (run.match(/⌗/g) || []).length || depth + 1));
-  return "⌗".repeat(count);
+  const state = (row && (row.state || (row.req && row.req.state))) || "pending";
+  return typeof taskReqGlyph === "function" ? taskReqGlyph(state) : "◇";
 }
 
 function successorRequirementRenderGroup(modal, group, groupIndex, matches, query, navigation) {

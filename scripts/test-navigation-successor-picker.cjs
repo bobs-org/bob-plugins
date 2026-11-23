@@ -105,12 +105,12 @@ function requirementModel(options = {}) {
       },
       copy: {
         title: "Requirements · “Ship parser”",
-        scope: "2 reqs",
+        scope: "2 requirements",
         why: "Met when it closes, unless you say otherwise",
         history: "· 1 dropped earlier",
         footer: "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
         hint: "-k N own task · -X N[=why] drop · -p N pull in",
-        glyph: "⌗⌗",
+        glyph: "requirement",
       },
       folded: { hidden: 1, dropped: 1, carried: 0, met: 0 },
       rows: [
@@ -1753,10 +1753,10 @@ test("v6 normalizes a requirement-only model and renders canonical copy, depth, 
   const { pending, modal } = await openPicker(plugin, model);
   assert.deepEqual(modal.visibleItems.map((item) => item.kind), ["requirement", "requirement"]);
   assert.match(allText(modal.resultsEl), /Requirements · “Ship parser”/);
-  assert.match(allText(modal.resultsEl), /2 reqs/);
+  assert.match(allText(modal.resultsEl), /2 requirements/);
   assert.match(allText(modal.resultsEl), /Met when it closes, unless you say otherwise/);
   assert.match(allText(modal.resultsEl), /· 1 dropped earlier/);
-  assert.match(allText(modal.resultsEl), /⌗⌗⌗/);
+  assert.match(allText(modal.resultsEl), /◇/);
   assert.match(allText(modal.resultsEl), /Preserve CRLF/);
   const rows = findAll(modal.resultsEl, "bob-successor-req-row");
   assert.equal(rows.length, 2);

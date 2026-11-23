@@ -15,7 +15,7 @@ const REQ_CLOSE_COPY = Object.freeze({
   FOOTER: "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
   JUMP_HINT: "↗ jumps to the requirement — ⌃⇧T makes it a task",
   HINT: "-k N own task · -X N[=why] drop · -p N pull in",
-  TEACHING: "Part of this task's scope. Met when the task closes. Drop it or make it a task",
+  TEACHING: "Met when this task closes. Drop it or make it a task if the scope changes.",
 });
 
 function reqCloseQuoted(text) {
@@ -27,7 +27,8 @@ function reqCloseGroupTitle(ownerText) {
 }
 
 function reqCloseScope(pending, branches) {
-  return branches <= 1 ? `${pending} reqs` : `${pending} reqs in ${branches} branches`;
+  if (branches > 1) return `${pending} requirements in ${branches} branches`;
+  return pending === 1 ? "1 requirement" : `${pending} requirements`;
 }
 
 function reqCloseHistory(dropped, carried, met) {
@@ -51,7 +52,7 @@ function reqCloseMetReceipt(count, ownerText) {
 }
 
 function reqCloseHumanMetLine(count, ownerText) {
-  return `${taskReqRun(1)} ${count} requirements met with ${reqCloseQuoted(ownerText)}`;
+  return reqCloseMetReceipt(count, ownerText);
 }
 
 function reqCloseDropReceipt(text, reason) {
@@ -209,13 +210,13 @@ function reqCloseOwnerGroup(owner) {
       scope: reqCloseScope(pending.length, reqClosePendingBranches(owner)),
       why: REQ_CLOSE_COPY.WHY,
       history: reqCloseHistory(folds.dropped, folds.carried, folds.met),
-      glyph: taskReqRun(1),
+      glyph: "requirement",
       footer: REQ_CLOSE_COPY.FOOTER,
       hint: REQ_CLOSE_COPY.HINT,
     },
     folded: folds,
     rows: pending.map((node) => {
-      const run = taskReqRun(node.depth);
+      const run = taskReqGlyph(node.state);
       const accessibility = reqCloseAccessibility(node.depth, "will be met");
       return {
         offer: {

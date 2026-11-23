@@ -27,5 +27,5 @@ Object.assign(module.exports.helpers, {
   taskReqIsReqLine,
   taskReqPathText,
   taskReqRowKey,
-  taskReqRun,
+  taskReqGlyph,
 });

@@ -57,7 +57,7 @@ test("every text-control creation site declares its prose role", () => {
   for (const marker of markers.values()) {
     const ids = [...marker.detail.matchAll(/S(\d{1,2})/g)].map((match) => `S${match[1]}`);
     if (marker.role === "prose") {
-      assert.ok(ids.length, `${marker.file}:${marker.line} prose marker needs an S1-S15 ID`);
+      assert.ok(ids.length, `${marker.file}:${marker.line} prose marker needs an S1-S16 ID`);
     }
     for (const id of ids) {
       assert.ok(fixture.surfaces.some((surface) => surface.id === id), `${marker.file}:${marker.line} names unknown ${id}`);
@@ -65,9 +65,9 @@ test("every text-control creation site declares its prose role", () => {
   }
 });
 
-test("S1-S15 fixture pins creation markers and proseField wiring", () => {
+test("S1-S16 fixture pins creation markers and proseField wiring", () => {
   const ids = new Set(fixture.surfaces.map((surface) => surface.id));
-  assert.deepEqual([...ids].sort(), Array.from({ length: 15 }, (_, index) => `S${index + 1}`).sort());
+  assert.deepEqual([...ids].sort(), Array.from({ length: 16 }, (_, index) => `S${index + 1}`).sort());
   for (const surface of fixture.surfaces) {
     const creation = fs.readFileSync(path.join(root, surface.creation), "utf8");
     const wiring = fs.readFileSync(path.join(root, surface.wiring), "utf8");
@@ -106,6 +106,6 @@ test("every surface declares its subjects and wired surfaces pass them", () => {
   assert.deepEqual(
     wired.sort(),
     Array.from({ length: 11 }, (_, index) => `S${index + 1}`).sort(),
-    "S1-S11 carry subjects; S12-S15 carry none",
+    "S1-S11 carry subjects; S12-S16 carry none",
   );
 });

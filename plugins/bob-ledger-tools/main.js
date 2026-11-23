@@ -166963,7 +166963,11 @@ class PropertyEditorModal extends PropertyEditorModalBase {
       if (plugin && typeof propertyUpdateServiceDeps === "function") {
         deps = propertyUpdateServiceDeps(plugin, {
           path: this.filePath,
-          onChange: () => { if (!this.closed) this.paintPropertyEditor(); },
+          onChange: () => {
+            if (this.closed) return;
+            try { this.propertyEditorStageSyncPreview?.(); } catch (_) {}
+            this.paintPropertyEditor();
+          },
         });
       }
     } catch (_) {}
@@ -167024,6 +167028,7 @@ class PropertyEditorModal extends PropertyEditorModalBase {
       groups: propertyEditorGroupRows(rows),
       ordered: this.editorOrderedRows(),
       selectedId: this.selectedId,
+      stage: typeof this.propertyEditorStageView === "function" ? this.propertyEditorStageView() : null,
       status: this.status,
       refusal: this.refusal,
       announce: this.announce,
@@ -167469,6 +167474,10 @@ function propertyEditorPaintAll(host, options, doc, modal) {
     host.appendChild(list);
   }
 
+  if (options.stage && typeof propertyEditorPaintStage === "function") {
+    try { propertyEditorPaintStage(doc, host, options.stage, modal); } catch (_) {}
+  }
+
   const status = propertyEditorCreateEl(doc, "div", "bob-property-editor-status");
   if (status) {
     const text = options.refusal && options.refusal.message
@@ -167639,6 +167648,1144 @@ function propertyEditorCloseLadder(state = {}) {
   if (state.filterOpen === true) return "filter";
   return "modal";
 }
+// ---- src/298h-plugin-property-editor-stages.js ----
+// Property editor typed values (bob-cli-pf.4.1.3). The editor owns only the
+// stage UI and draft conversion; every value still previews and writes through
+// the guarded props session.
+const PROPERTY_EDITOR_STAGE_WIRE_KINDS = new Set([
+  "text", "number", "date", "datetime", "list", "tags", "aliases",
+]);
+
+function propertyEditorStageKindForRow(row) {
+  if (!row || propertyEditorRoleOf(row) !== "loose" || row.pending === true || row.opaque === true) return null;
+  switch (String(row.kind || "").toLowerCase()) {
+    case "text":
+    case "null": return "text";
+    case "number": return "number";
+    case "date": return "date";
+    case "datetime": return "datetime";
+    case "list": return "list";
+    case "tags": return "tags";
+    case "aliases": return "aliases";
+    default: return null;
+  }
+}
+
+function propertyEditorStageSeed(row, kind) {
+  const value = row ? row.value : undefined;
+  if (kind === "list" || kind === "tags" || kind === "aliases") {
+    return { items: Array.isArray(value) ? value.slice() : [], itemDraft: "" };
+  }
+  return { value: value == null ? "" : String(value), items: [], itemDraft: "" };
+}
+
+function propertyEditorJsonEqual(left, right) {
+  try { return JSON.stringify(left) === JSON.stringify(right); } catch (_) { return left === right; }
+}
+
+function propertyEditorStageListShape(row, kind) {
+  if (!row || !["list", "tags", "aliases"].includes(kind)) return true;
+  return Array.isArray(row.value);
+}
+
+function propertyEditorIsoDateParts(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ""));
+  if (!match) return null;
+  const parts = { year: Number(match[1]), month: Number(match[2]), day: Number(match[3]) };
+  const check = new Date(Date.UTC(parts.year, parts.month - 1, parts.day));
+  return check.getUTCFullYear() === parts.year
+    && check.getUTCMonth() === parts.month - 1
+    && check.getUTCDate() === parts.day
+    ? parts
+    : null;
+}
+
+function propertyEditorClockParts(value) {
+  const match = /^(\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?(\s*[ap]m)?$/i.exec(String(value || "").trim());
+  if (!match) return null;
+  let hour = Number(match[1]);
+  const minute = Number(match[2]);
+  const second = Number(match[3] || 0);
+  const meridiem = String(match[5] || "").replace(/\s+/g, "").toLowerCase();
+  if (meridiem) {
+    if (hour < 1 || hour > 12) return null;
+    hour = (hour % 12) + (meridiem === "pm" ? 12 : 0);
+  }
+  if (hour > 23 || minute > 59 || second > 59) return null;
+  return { hour, minute, second };
+}
+
+function propertyEditorPartsInZone(date, timeZone) {
+  const zone = timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: zone,
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
+  });
+  const byType = Object.fromEntries(formatter.formatToParts(date).map((part) => [part.type, part.value]));
+  return {
+    year: Number(byType.year), month: Number(byType.month), day: Number(byType.day),
+    hour: Number(byType.hour), minute: Number(byType.minute), second: Number(byType.second),
+  };
+}
+
+function propertyEditorOffsetMinutes(date, timeZone) {
+  const local = propertyEditorPartsInZone(date, timeZone);
+  const asUtc = Date.UTC(local.year, local.month - 1, local.day, local.hour, local.minute, local.second);
+  return Math.round((asUtc - date.getTime()) / 60000);
+}
+
+function propertyEditorFormatOffset(minutes) {
+  const sign = minutes < 0 ? "-" : "+";
+  const absolute = Math.abs(minutes);
+  return `${sign}${String(Math.floor(absolute / 60)).padStart(2, "0")}:${String(absolute % 60).padStart(2, "0")}`;
+}
+
+function propertyEditorFormatDate(parts) {
+  return `${String(parts.year).padStart(4, "0")}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
+}
+
+function propertyEditorFormatTime(parts) {
+  return `${String(parts.hour).padStart(2, "0")}:${String(parts.minute).padStart(2, "0")}:${String(parts.second || 0).padStart(2, "0")}`;
+}
+
+function propertyEditorWallTimeInstant(parts, timeZone) {
+  let zone = timeZone || "UTC";
+  try { new Intl.DateTimeFormat("en", { timeZone: zone }).format(new Date(0)); }
+  catch (_) { zone = "UTC"; }
+  const wall = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second || 0);
+  const offsets = new Set();
+  for (const hours of [-48, -24, -12, 0, 12, 24, 48]) {
+    try { offsets.add(propertyEditorOffsetMinutes(new Date(wall + hours * 3600000), zone)); } catch (_) {}
+  }
+  const candidates = [];
+  for (const offset of offsets) {
+    const instant = new Date(wall - offset * 60000);
+    try {
+      const observed = propertyEditorPartsInZone(instant, zone);
+      if (observed.year === parts.year && observed.month === parts.month && observed.day === parts.day
+        && observed.hour === parts.hour && observed.minute === parts.minute && observed.second === (parts.second || 0)) {
+        if (!candidates.some((candidate) => candidate.instant.getTime() === instant.getTime())) {
+          candidates.push({ instant, offset: propertyEditorOffsetMinutes(instant, zone) });
+        }
+      }
+    } catch (_) {}
+  }
+  if (candidates.length === 1) return candidates[0];
+  if (candidates.length === 0) return { error: "That local time does not exist in the viewer's time zone." };
+  return { error: "That local time is ambiguous; include an ISO offset to choose the intended instant." };
+}
+
+function propertyEditorClockNow(input) {
+  let value = input && input.now;
+  if (typeof value === "function") {
+    try { value = value(); } catch (_) { value = null; }
+  }
+  const date = value instanceof Date ? new Date(value.getTime()) : value == null ? new Date() : new Date(value);
+  return Number.isFinite(date.getTime()) ? date : new Date();
+}
+
+function propertyEditorRelativeDate(raw, nowParts) {
+  const input = String(raw || "").trim().toLowerCase();
+  if (!input) return { error: "Enter a date." };
+  let delta = null;
+  if (input === "now" || input === "today") delta = 0;
+  else if (input === "tomorrow") delta = 1;
+  else if (input === "yesterday") delta = -1;
+  else {
+    const relative = /^([+-]\d+)d$/.exec(input);
+    if (relative) delta = Number(relative[1]);
+    const weekdays = {
+      sun: 0, sunday: 0, mon: 1, monday: 1, tue: 2, tues: 2, tuesday: 2,
+      wed: 3, wednesday: 3, thu: 4, thur: 4, thurs: 4, thursday: 4,
+      fri: 5, friday: 5, sat: 6, saturday: 6,
+    };
+    if (Object.prototype.hasOwnProperty.call(weekdays, input)) {
+      const target = weekdays[input];
+      const today = new Date(Date.UTC(nowParts.year, nowParts.month - 1, nowParts.day)).getUTCDay();
+      delta = (target - today + 7) % 7;
+    }
+  }
+  if (delta !== null) {
+    if (!Number.isSafeInteger(delta) || Math.abs(delta) > 366000) return { error: "That relative date is out of range." };
+    const date = new Date(Date.UTC(nowParts.year, nowParts.month - 1, nowParts.day + delta));
+    return { parts: { year: date.getUTCFullYear(), month: date.getUTCMonth() + 1, day: date.getUTCDate() } };
+  }
+  const iso = propertyEditorIsoDateParts(raw);
+  return iso ? { parts: iso } : { error: "Use now, a weekday, ±Nd, or an ISO date." };
+}
+
+function propertyEditorExplicitIsoDateTime(raw) {
+  const match = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(\.\d{1,3})?)?(Z|[+-]\d{2}(?::?\d{2})?)$/i.exec(String(raw || "").trim());
+  if (!match) return null;
+  const date = propertyEditorIsoDateParts(match[1]);
+  const time = propertyEditorClockParts(`${match[2]}:${match[3]}:${match[4] || "00"}`);
+  const zone = match[6].toUpperCase();
+  const offsetMatch = /^([+-])(\d{2})(?::?(\d{2}))?$/.exec(zone);
+  if (!date || !time || !Number.isFinite(Date.parse(String(raw).trim().replace(" ", "T")))) return { error: "Enter a valid ISO date and time." };
+  if (offsetMatch && (Number(offsetMatch[2]) > 14 || Number(offsetMatch[3] || 0) > 59)) return { error: "The ISO offset is out of range." };
+  return { value: String(raw).trim().replace(" ", "T") };
+}
+
+function propertyEditorLocalIsoDateTime(raw) {
+  const match = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,3})?)?$/.exec(String(raw || "").trim());
+  if (!match) return null;
+  const date = propertyEditorIsoDateParts(match[1]);
+  const time = propertyEditorClockParts(`${match[2]}:${match[3]}:${match[4] || "00"}`);
+  return date && time ? { ...date, ...time } : { error: "Enter a valid ISO date and time." };
+}
+
+function propertyEditorExistingClock(value) {
+  const match = /^\d{4}-\d{2}-\d{2}[T ](\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?)(?:\s*(Z|[+-]\d{2}(?::?\d{2})?))?$/i.exec(String(value || ""));
+  if (!match) return null;
+  const time = propertyEditorClockParts(match[1]);
+  if (!time) return null;
+  return { ...time, offset: match[2] || "" };
+}
+
+function propertyEditorDateTimeValue(raw, options = {}) {
+  const input = String(raw || "").trim();
+  const now = propertyEditorClockNow(options);
+  const zone = options.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  const nowParts = propertyEditorPartsInZone(now, zone);
+  if (!input) return { ok: false, message: "Enter a date and time; use Ctrl+D to unset this property." };
+  if (/^now$/i.test(input)) {
+    const offset = propertyEditorOffsetMinutes(now, zone);
+    return { ok: true, value: `${propertyEditorFormatDate(nowParts)}T${propertyEditorFormatTime(nowParts)}${propertyEditorFormatOffset(offset)}` };
+  }
+  const explicit = propertyEditorExplicitIsoDateTime(input);
+  if (explicit) return explicit.error ? { ok: false, message: explicit.error } : { ok: true, value: explicit.value };
+  const localIso = propertyEditorLocalIsoDateTime(input);
+  if (localIso) {
+    if (localIso.error) return { ok: false, message: localIso.error };
+    const resolved = propertyEditorWallTimeInstant(localIso, zone);
+    if (resolved.error) return { ok: false, message: resolved.error };
+    return { ok: true, value: `${propertyEditorFormatDate(localIso)}T${propertyEditorFormatTime(localIso)}${propertyEditorFormatOffset(resolved.offset)}` };
+  }
+  const timeOnly = propertyEditorClockParts(input);
+  if (timeOnly) {
+    const parts = { ...nowParts, ...timeOnly };
+    const resolved = propertyEditorWallTimeInstant(parts, zone);
+    if (resolved.error) return { ok: false, message: resolved.error };
+    return { ok: true, value: `${propertyEditorFormatDate(parts)}T${propertyEditorFormatTime(parts)}${propertyEditorFormatOffset(resolved.offset)}` };
+  }
+  const dateResult = propertyEditorRelativeDate(input, nowParts);
+  if (dateResult.error) return { ok: false, message: dateResult.error };
+  const existing = propertyEditorExistingClock(options.existingValue);
+  if (existing && existing.offset) {
+    return { ok: true, value: `${propertyEditorFormatDate(dateResult.parts)}T${propertyEditorFormatTime(existing)}${existing.offset}` };
+  }
+  const parts = { ...dateResult.parts, ...(existing || { hour: 0, minute: 0, second: 0 }) };
+  const resolved = propertyEditorWallTimeInstant(parts, zone);
+  if (resolved.error) return { ok: false, message: resolved.error };
+  return { ok: true, value: `${propertyEditorFormatDate(parts)}T${propertyEditorFormatTime(parts)}${propertyEditorFormatOffset(resolved.offset)}` };
+}
+
+function propertyEditorDateValue(raw, options = {}) {
+  const now = propertyEditorClockNow(options);
+  const zone = options.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  const nowParts = propertyEditorPartsInZone(now, zone);
+  const result = propertyEditorRelativeDate(raw, nowParts);
+  return result.error ? { ok: false, message: result.error } : { ok: true, value: propertyEditorFormatDate(result.parts) };
+}
+
+function propertyEditorParseNumber(raw) {
+  const text = String(raw == null ? "" : raw).trim();
+  if (!text || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(text)) return { ok: false, message: "Enter a valid number; use Ctrl+D to unset this property." };
+  const value = Number(text);
+  return Number.isFinite(value) ? { ok: true, value } : { ok: false, message: "That number is out of range." };
+}
+
+function propertyEditorNormalizeTag(raw) {
+  return String(raw == null ? "" : raw).trim().replace(/^#+/, "");
+}
+
+function propertyEditorSuggestValues(app, key, currentPath = "") {
+  const counts = new Map();
+  try {
+    const files = app?.vault?.getMarkdownFiles?.() || [];
+    for (const file of files) {
+      if (!file || file.path === currentPath) continue;
+      const frontmatter = app?.metadataCache?.getFileCache?.(file)?.frontmatter;
+      if (!frontmatter || !Object.prototype.hasOwnProperty.call(frontmatter, key)) continue;
+      const raw = frontmatter[key];
+      const values = Array.isArray(raw) ? raw : [raw];
+      for (const value of values) {
+        if (typeof value !== "string" && typeof value !== "number") continue;
+        const text = String(value);
+        if (!text) continue;
+        counts.set(text, (counts.get(text) || 0) + 1);
+      }
+    }
+  } catch (_) {}
+  return [...counts].map(([value, count]) => ({ value, count }))
+    .sort((left, right) => right.count - left.count || left.value.localeCompare(right.value));
+}
+
+function propertyEditorTagSuggestions(app) {
+  try {
+    const tags = app?.metadataCache?.getTags?.();
+    if (!tags || typeof tags !== "object") return [];
+    return Object.entries(tags)
+      .map(([tag, count]) => ({ value: propertyEditorNormalizeTag(tag), count: Number(count) || 0 }))
+      .filter((row) => row.value)
+      .sort((left, right) => right.count - left.count || left.value.localeCompare(right.value));
+  } catch (_) {
+    return [];
+  }
+}
+
+function propertyEditorStageBuild(row, stage, draft, options = {}) {
+  if (!row || !stage || propertyEditorRoleOf(row) !== "loose") return { ok: false, message: "This property cannot be edited here." };
+  const kind = stage.kind;
+  const wireKind = stage.wireKind;
+  if (!PROPERTY_EDITOR_STAGE_WIRE_KINDS.has(wireKind)) return { ok: false, message: "This property type uses the YAML escape." };
+  let value;
+  if (kind === "text") {
+    value = draft && Object.prototype.hasOwnProperty.call(draft, "value") ? String(draft.value) : "";
+  } else if (kind === "number") {
+    const parsed = propertyEditorParseNumber(draft && draft.value);
+    if (!parsed.ok) return parsed;
+    value = parsed.value;
+  } else if (kind === "date") {
+    const parsed = propertyEditorDateValue(draft && draft.value, options);
+    if (!parsed.ok) return parsed;
+    value = parsed.value;
+  } else if (kind === "datetime") {
+    const parsed = propertyEditorDateTimeValue(draft && draft.value, { ...options, existingValue: row.value });
+    if (!parsed.ok) return parsed;
+    value = parsed.value;
+  } else if (["list", "tags", "aliases"].includes(kind)) {
+    if (!propertyEditorStageListShape(row, kind)) return { ok: false, message: "This scalar value cannot be edited as a list; use YAML to preserve its shape." };
+    const items = Array.isArray(draft && draft.items) ? draft.items.slice() : [];
+    const itemDraft = String((draft && draft.itemDraft) ?? "");
+    const item = kind === "tags" ? propertyEditorNormalizeTag(itemDraft) : itemDraft.trim();
+    if (item) items.push(item);
+    value = kind === "tags" ? items.map(propertyEditorNormalizeTag) : items;
+  } else {
+    return { ok: false, message: "This property type uses the YAML escape." };
+  }
+  const op = { op: "prop.set", key: row.key, value, kind: wireKind };
+  return { ok: true, value, kind: wireKind, ops: [op], changed: !propertyEditorJsonEqual(row.value, value) };
+}
+// ---- src/298i-plugin-property-editor-modal-stages.js ----
+// Property editor stage DOM, draft controller, preview latch, and lifecycle.
+function propertyEditorStageIdentity(stage) {
+  return stage ? `${stage.id}:${stage.rowId}:${stage.kind}` : "";
+}
+
+function propertyEditorStageFilterSuggestions(values, filter, tags = false) {
+  const text = tags ? propertyEditorNormalizeTag(filter).toLowerCase() : String(filter || "").trim().toLowerCase();
+  return (Array.isArray(values) ? values : []).filter((entry) => {
+    const value = String(entry && entry.value || "");
+    return !text || value.toLowerCase().includes(text);
+  }).slice(0, 12);
+}
+
+function propertyEditorPaintStage(doc, host, options, modal) {
+  if (!doc || !host || !options) return null;
+  const panel = propertyEditorCreateEl(doc, "section", "bob-property-editor-stage");
+  panel.setAttribute("data-property-stage", options.stageId);
+  panel.setAttribute("aria-label", `Edit ${options.key}`);
+  const title = propertyEditorCreateEl(doc, "div", "bob-property-editor-stage-title");
+  propertyEditorSetText(title, `${options.key} · ${options.label}`);
+  panel.appendChild(title);
+  if (options.collection) {
+    const chips = propertyEditorCreateEl(doc, "div", "bob-property-editor-stage-chips");
+    chips.setAttribute("role", "list");
+    chips.setAttribute("aria-label", `${options.key} values`);
+    for (const [index, item] of options.items.entries()) {
+      const chip = propertyEditorCreateEl(doc, "span", "bob-property-editor-stage-chip");
+      chip.setAttribute("role", "listitem");
+      const label = propertyEditorCreateEl(doc, "span", "bob-property-editor-stage-chip-label");
+      const display = String(item == null ? "null" : item);
+      propertyEditorSetText(label, options.kind === "tags" ? `#${display}` : display);
+      chip.appendChild(label);
+      const remove = propertyEditorCreateEl(doc, "button", "bob-property-editor-stage-chip-remove");
+      remove.setAttribute("type", "button");
+      remove.setAttribute("data-property-stage-action", "remove-item");
+      remove.setAttribute("data-property-stage-index", String(index));
+      remove.setAttribute("aria-label", `Remove ${display}`);
+      propertyEditorSetText(remove, "×");
+      chip.appendChild(remove);
+      chips.appendChild(chip);
+    }
+    panel.appendChild(chips);
+  }
+  const label = propertyEditorCreateEl(doc, "label", "bob-property-editor-stage-label");
+  const inputId = `bob-property-editor-stage-input-${options.stageId}`;
+  label.setAttribute("for", inputId);
+  propertyEditorSetText(label, options.collection ? "Add value" : `New ${options.label.toLowerCase()} value`);
+  panel.appendChild(label);
+  const inputKey = `property-stage-${options.stageId}`;
+  let input = options.keptInput || null;
+  if (!input) {
+    if (options.kind === "text") {
+      // bob-text: prose S16 text and list property values use nav proseField.
+      input = propertyEditorCreateEl(doc, "textarea", "bob-property-editor-stage-input is-text");
+      input.setAttribute("rows", "3");
+    } else {
+      // bob-text: prose S16 text and list property values use nav proseField.
+      input = propertyEditorCreateEl(doc, "input", "bob-property-editor-stage-input");
+      input.setAttribute("type", "text");
+      input.setAttribute("inputmode", options.kind === "number" ? "decimal" : "text");
+    }
+    input.value = options.value;
+  } else if (!options.composing && String(input.value == null ? "" : input.value) !== options.value) {
+    input.value = options.value;
+  }
+  input.setAttribute("id", inputId);
+  input.setAttribute("data-property-stage-input", inputKey);
+  input.setAttribute("data-property-stage-id", String(options.stageId));
+  input.setAttribute("data-property-stage-kind", options.kind);
+  input.setAttribute("aria-label", `${options.key} ${options.label.toLowerCase()}`);
+  input.setAttribute("autocomplete", options.kind === "tags" ? "off" : "on");
+  if (options.disabled) input.disabled = true;
+  else input.disabled = false;
+  if (!input.parentNode || input.parentNode !== panel) panel.appendChild(input);
+  let band = options.keptBand || null;
+  if (options.prose) {
+    if (!band) band = propertyEditorCreateEl(doc, "div", "bob-property-editor-stage-prose");
+    band.setAttribute("data-property-stage-band", String(options.stageId));
+    panel.appendChild(band);
+  }
+  if (options.collection && typeof modal?.propertyEditorStageAddItem === "function") {
+    const add = propertyEditorCreateEl(doc, "button", "bob-property-editor-stage-add");
+    add.setAttribute("type", "button");
+    add.setAttribute("data-property-stage-action", "add-item");
+    add.setAttribute("aria-label", "Add value");
+    propertyEditorSetText(add, "Add");
+    panel.appendChild(add);
+  }
+  if (options.suggestions && options.suggestions.length) {
+    const list = propertyEditorCreateEl(doc, "div", "bob-property-editor-stage-suggestions");
+    list.setAttribute("role", "listbox");
+    list.setAttribute("aria-label", options.kind === "tags" ? "Vault tags" : `Existing ${options.key} values`);
+    for (const [index, suggestion] of options.suggestions.entries()) {
+      const button = propertyEditorCreateEl(doc, "button", "bob-property-editor-stage-suggestion");
+      button.setAttribute("type", "button");
+      button.setAttribute("role", "option");
+      button.setAttribute("data-property-stage-action", "pick-suggestion");
+      button.setAttribute("data-property-stage-index", String(index));
+      button.setAttribute("aria-label", String(suggestion.value));
+      propertyEditorSetText(button, `${options.kind === "tags" ? "#" : ""}${suggestion.value}${suggestion.count ? ` · ${suggestion.count}` : ""}`);
+      list.appendChild(button);
+    }
+    panel.appendChild(list);
+  }
+  const preview = propertyEditorCreateEl(doc, "div", "bob-property-editor-stage-preview");
+  preview.setAttribute("role", "status");
+  preview.setAttribute("aria-live", "polite");
+  propertyEditorSetText(preview, options.previewText || "");
+  panel.appendChild(preview);
+  const actions = propertyEditorCreateEl(doc, "div", "bob-property-editor-stage-actions");
+  actions.setAttribute("role", "group");
+  actions.setAttribute("aria-label", "Property value actions");
+  const save = propertyEditorCreateEl(doc, "button", "bob-property-editor-stage-save");
+  save.setAttribute("type", "button");
+  save.setAttribute("data-property-stage-action", "save");
+  save.disabled = options.disabled;
+  propertyEditorSetText(save, "Save");
+  actions.appendChild(save);
+  const cancel = propertyEditorCreateEl(doc, "button", "bob-property-editor-stage-cancel");
+  cancel.setAttribute("type", "button");
+  cancel.setAttribute("data-property-stage-action", "cancel");
+  propertyEditorSetText(cancel, "Cancel");
+  actions.appendChild(cancel);
+  panel.appendChild(actions);
+  host.appendChild(panel);
+  return { panel, input, band };
+}
+
+function propertyEditorStageLabels(kind) {
+  return ({
+    text: "Text", number: "Number", date: "Date", datetime: "Date & time",
+    list: "List", tags: "Tags", aliases: "Aliases",
+  })[kind] || "Value";
+}
+
+function propertyEditorStageOpsJson(ops) {
+  try { return JSON.stringify(Array.isArray(ops) ? ops : []); } catch (_) { return ""; }
+}
+
+const propertyEditorPaintBeforeStages = PropertyEditorModal.prototype.paintPropertyEditor;
+const propertyEditorActivateBeforeStages = PropertyEditorModal.prototype.propertyEditorActivate;
+const propertyEditorSelectBeforeStages = PropertyEditorModal.prototype.propertyEditorSelect;
+const propertyEditorClickBeforeStages = PropertyEditorModal.prototype.propertyEditorOnClick;
+const propertyEditorKeyBeforeStages = PropertyEditorModal.prototype.propertyEditorOnKeyDown;
+const propertyEditorBackOutBeforeStages = PropertyEditorModal.prototype.propertyEditorBackOut;
+const propertyEditorReconcileBeforeStages = PropertyEditorModal.prototype.propertyEditorReconcile;
+const propertyEditorOpenBeforeStages = PropertyEditorModal.prototype.onOpen;
+const propertyEditorCloseBeforeStages = PropertyEditorModal.prototype.onClose;
+const propertyEditorCaptureCaretBeforeStages = PropertyEditorModal.prototype.editorCaptureCaret;
+const propertyEditorRestoreFocusBeforeStages = PropertyEditorModal.prototype.editorRestoreFocus;
+
+Object.assign(PropertyEditorModal.prototype, {
+  propertyEditorStageEntry(row) {
+    const index = this.editorOrderedRows().findIndex((entry) => entry.row === row || (entry.row.key === row?.key && entry.row.line === row?.line));
+    if (index < 0) return null;
+    return this.editorOrderedRows()[index];
+  }
+,
+  propertyEditorStageFindRow(stage = this.stage) {
+    if (!stage) return null;
+    const rows = this.editorOrderedRows();
+    const exact = rows.find((entry) => entry.id === stage.rowId);
+    if (exact) return exact;
+    const sameKey = rows.filter((entry) => entry.row.key === stage.key);
+    if (!sameKey.length) return null;
+    const wantedLine = Number.isInteger(stage.line) ? stage.line : 0;
+    sameKey.sort((left, right) => Math.abs((left.row.line || 0) - wantedLine) - Math.abs((right.row.line || 0) - wantedLine));
+    stage.rowId = sameKey[0].id;
+    stage.line = sameKey[0].row.line;
+    return sameKey[0];
+  }
+,
+  propertyEditorStageView() {
+    const stage = this.stage;
+    const entry = this.propertyEditorStageFindRow(stage);
+    if (!stage || !entry) return null;
+    const suggestions = stage.kind === "tags"
+      ? propertyEditorStageFilterSuggestions(stage.suggestionCatalog || [], stage.itemDraft, true)
+      : ["text", "list", "aliases"].includes(stage.kind)
+        ? propertyEditorStageFilterSuggestions(stage.suggestionCatalog || [], stage.kind === "text" ? stage.value : stage.itemDraft)
+        : [];
+    const retained = this._propertyStageRetained;
+    const sameRetained = retained && retained.stageId === stage.id;
+    return {
+      stageId: stage.id,
+      key: entry.row.key,
+      row: entry.row,
+      kind: stage.kind,
+      label: propertyEditorStageLabels(stage.kind),
+      value: String(stage.value == null ? "" : stage.value),
+      items: Array.isArray(stage.items) ? stage.items.slice() : [],
+      itemDraft: String(stage.itemDraft || ""),
+      collection: ["list", "tags", "aliases"].includes(stage.kind),
+      suggestions,
+      selectedSuggestion: Number.isInteger(stage.suggestionIndex) ? stage.suggestionIndex : -1,
+      previewText: stage.previewText || "",
+      disabled: this.pendingApply === true,
+      composing: this.stageComposing === true,
+      prose: stage.kind === "text" || stage.kind === "list",
+      keptInput: sameRetained ? retained.input : null,
+      keptBand: sameRetained ? retained.band : null,
+    };
+  }
+,
+  propertyEditorStageDataFrom(row, kind) {
+    const config = { kind, wireKind: kind === "text" ? "text" : kind };
+    return { ...config, ...propertyEditorStageSeed(row, kind) };
+  }
+,
+  propertyEditorOpenStage(entry) {
+    if (!entry || this.closed || this.pendingApply) return false;
+    const decision = propertyEditorActionForRow(entry.row);
+    if (decision.action !== "edit") return false;
+    const kind = propertyEditorStageKindForRow(entry.row);
+    if (!kind) {
+      this.refusal = { code: "unsupported-kind", message: `“${entry.row.key}” uses a value type that is not available in this stage.`, hint: "y opens YAML." };
+      this.status = { kind: "refusal", text: this.refusal.message };
+      this.paintPropertyEditor();
+      return false;
+    }
+    if (!propertyEditorStageListShape(entry.row, kind)) {
+      this.refusal = { code: "scalar-list", message: `“${entry.row.key}” is a scalar value reported as a list.`, hint: "Use YAML to preserve its shape." };
+      this.status = { kind: "refusal", text: this.refusal.message };
+      this.paintPropertyEditor();
+      return false;
+    }
+    this.propertyEditorCancelStage({ quiet: true });
+    const seeded = propertyEditorStageSeed(entry.row, kind);
+    this.stageSeq = (this.stageSeq || 0) + 1;
+    this.stage = {
+      id: this.stageSeq,
+      rowId: entry.id,
+      key: entry.row.key,
+      line: entry.row.line,
+      kind,
+      wireKind: kind,
+      value: seeded.value ?? "",
+      items: seeded.items || [],
+      itemDraft: "",
+      revision: 0,
+      previewText: "",
+      suggestionIndex: -1,
+      suggestionCatalog: kind === "tags"
+        ? propertyEditorTagSuggestions(this.app)
+        : ["text", "list", "aliases"].includes(kind)
+          ? propertyEditorSuggestValues(this.app, entry.row.key, this.filePath)
+          : [],
+    };
+    this.pendingStageEnter = null;
+    this.stageComposing = false;
+    this.stageNeedsPreview = false;
+    this.refusal = null;
+    this.status = { kind: "ready", text: "" };
+    this.announce = "";
+    this.paintPropertyEditor();
+    return true;
+  }
+,
+  propertyEditorCurrentStageDraft() {
+    if (!this.stage) return null;
+    return { value: this.stage.value, items: this.stage.items.slice(), itemDraft: this.stage.itemDraft };
+  }
+,
+  propertyEditorBuildCurrentStage() {
+    const entry = this.propertyEditorStageFindRow();
+    if (!entry || !this.stage) return { ok: false, message: "The property is no longer available." };
+    return propertyEditorStageBuild(entry.row, this.stage, this.propertyEditorCurrentStageDraft(), {
+      now: this.propertyEditorNow,
+      timeZone: this.propertyEditorTimeZone,
+    });
+  }
+,
+  propertyEditorStagePreviewText(built) {
+    if (!built || built.ok !== true) return built?.message || "Enter a valid value.";
+    if (this.stage?.kind === "list" || this.stage?.kind === "tags" || this.stage?.kind === "aliases") {
+      return `Preview · ${built.value.length} ${built.value.length === 1 ? "value" : "values"} · Enter saves`;
+    }
+    const preview = JSON.stringify(built.value);
+    return `Preview · ${this.stage?.rowId ? this.propertyEditorStageFindRow()?.row?.key || "property" : "property"} = ${preview} · Enter saves`;
+  }
+,
+  propertyEditorStageInputChanged(input) {
+    if (!this.stage || this.closed || this.pendingApply || this.stageComposing) return;
+    const kind = input?.getAttribute?.("data-property-stage-kind") || this.stage.kind;
+    if (Number(input?.getAttribute?.("data-property-stage-id")) !== this.stage.id || kind !== this.stage.kind) return;
+    if (this.stage.kind === "list" || this.stage.kind === "tags" || this.stage.kind === "aliases") this.stage.itemDraft = String(input.value ?? "");
+    else this.stage.value = String(input.value ?? "");
+    if (typeof input.selectionStart === "number") this.stage.caret = { start: input.selectionStart, end: input.selectionEnd };
+    this.stage.revision += 1;
+    this.stage.suggestionIndex = -1;
+    this.pendingStageEnter = null;
+    this.stageNeedsPreview = false;
+    const built = this.propertyEditorBuildCurrentStage();
+    const session = this.editorEnsureSession();
+    if (!built.ok) {
+      try { session?.setDraft?.([]); } catch (_) {}
+      this.refusal = { code: "bad-stage-value", message: built.message, hint: "Correct the value or use Ctrl+D to unset it." };
+      this.status = { kind: "refusal", text: built.message };
+      this.stage.previewText = built.message;
+      this.paintPropertyEditor();
+      return;
+    }
+    const entry = this.propertyEditorStageFindRow();
+    if (!entry || !built.changed) {
+      try { session?.setDraft?.([]); } catch (_) {}
+      this.refusal = null;
+      this.status = { kind: "ready", text: "" };
+      this.stage.previewText = built.changed === false ? "No changes · Esc returns to properties" : "";
+      this.paintPropertyEditor();
+      return;
+    }
+    this.refusal = null;
+    this.status = propertyEditorStatusChecking();
+    this.stage.previewText = this.propertyEditorStagePreviewText(built);
+    try { session?.setDraft?.(built.ops); } catch (_) {}
+    this.sessionState = session?.getState?.() || this.sessionState;
+    this.paintPropertyEditor();
+  }
+,
+  propertyEditorStageAddItem(raw = null) {
+    if (!this.stage || !["list", "tags", "aliases"].includes(this.stage.kind)) return false;
+    const inputValue = raw == null ? this.stage.itemDraft : String(raw);
+    const value = this.stage.kind === "tags" ? propertyEditorNormalizeTag(inputValue) : String(inputValue).trim();
+    if (!value) return false;
+    this.stage.items.push(value);
+    this.stage.itemDraft = "";
+    this.stage.revision += 1;
+    this.pendingStageEnter = null;
+    this.propertyEditorStageInputChanged({
+      value: "", getAttribute: (name) => name === "data-property-stage-kind" ? this.stage.kind : String(this.stage.id),
+    });
+    return true;
+  }
+,
+  propertyEditorStageRemoveItem(index) {
+    if (!this.stage || !Array.isArray(this.stage.items) || !Number.isInteger(index) || index < 0 || index >= this.stage.items.length) return false;
+    this.stage.items.splice(index, 1);
+    this.stage.revision += 1;
+    this.pendingStageEnter = null;
+    this.propertyEditorStageInputChanged({
+      value: this.stage.itemDraft,
+      getAttribute: (name) => name === "data-property-stage-kind" ? this.stage.kind : String(this.stage.id),
+    });
+    return true;
+  }
+,
+  propertyEditorPickStageSuggestion(index) {
+    if (!this.stage || !Number.isInteger(index)) return false;
+    const view = this.propertyEditorStageView();
+    const suggestion = view?.suggestions?.[index];
+    if (!suggestion) return false;
+    if (["list", "tags", "aliases"].includes(this.stage.kind)) return this.propertyEditorStageAddItem(suggestion.value);
+    this.stage.value = String(suggestion.value);
+    this.stage.revision += 1;
+    const input = this.contentEl?.querySelector?.("[data-property-stage-input]");
+    if (input) input.value = this.stage.value;
+    this.propertyEditorStageInputChanged(input || { value: this.stage.value, getAttribute: (name) => name === "data-property-stage-kind" ? this.stage.kind : String(this.stage.id) });
+    return true;
+  }
+,
+  propertyEditorMoveStageSuggestion(delta) {
+    const view = this.propertyEditorStageView();
+    if (!view || !view.suggestions.length) return false;
+    const current = Number.isInteger(view.selectedSuggestion) ? view.selectedSuggestion : -1;
+    const next = Math.max(0, Math.min(view.suggestions.length - 1, current + delta));
+    this.stage.suggestionIndex = next;
+    this.paintPropertyEditor();
+    return true;
+  }
+,
+  propertyEditorStageSyncPreview() {
+    if (!this.stage || this.closed || !this.session) return;
+    const state = this.session.getState?.();
+    this.sessionState = state || this.sessionState;
+    if (!state) return;
+    if (state.status === "preview-pending" || state.status === "draft" || state.status === "applying") {
+      this.status = state.status === "applying" ? { kind: "checking", text: "Saving…" } : propertyEditorStatusChecking();
+      this.paintPropertyEditor();
+      return;
+    }
+    if (state.status === "preview-ready" && state.canApply) {
+      const built = this.propertyEditorBuildCurrentStage();
+      const matches = built.ok && propertyEditorStageOpsJson(state.draftOps) === propertyEditorStageOpsJson(built.ops);
+      if (!matches) {
+        this.pendingStageEnter = null;
+        this.stageNeedsPreview = true;
+        this.status = { kind: "ready", text: "The value changed; preview it again before saving." };
+        this.paintPropertyEditor();
+        return;
+      }
+      this.refusal = null;
+      this.status = { kind: "ready", text: "Preview ready · Enter saves" };
+      this.stage.previewText = this.propertyEditorStagePreviewText(built);
+      const pending = this.pendingStageEnter;
+      if (pending && pending.stageId === this.stage.id && pending.revision === this.stage.revision
+        && pending.opsJson === propertyEditorStageOpsJson(built.ops) && !this.stageComposing) {
+        this.pendingStageEnter = null;
+        void this.propertyEditorApplyStage(built);
+        return;
+      }
+      this.paintPropertyEditor();
+      return;
+    }
+    if (state.status === "refused" && state.refusal) {
+      const refusal = state.refusal;
+      const stale = refusal.kind === "stale" || refusal.code === "prop_stale" || refusal.code === "stale_generation";
+      this.pendingStageEnter = null;
+      if (stale) this.stageNeedsPreview = true;
+      this.refusal = { code: refusal.code || "failed", message: refusal.message || "The property preview was refused.", hint: refusal.hint || "" };
+      this.status = { kind: "refusal", text: this.refusal.message };
+      this.stage.previewText = this.refusal.message;
+      this.paintPropertyEditor();
+      if (stale) void this.propertyEditorRefreshStale(this.stage.id, this.stage.revision);
+      return;
+    }
+  }
+,
+  async propertyEditorRefreshStale(stageId, revision) {
+    if (this.staleRefreshPending || this.closed || !this.propertyPlugin?.apiPropertyShow) return;
+    this.staleRefreshPending = true;
+    let result;
+    try { result = await this.propertyPlugin.apiPropertyShow(this.filePath); } catch (_) { result = null; }
+    this.staleRefreshPending = false;
+    if (this.closed || !this.stage || this.stage.id !== stageId || this.stage.revision !== revision) return;
+    if (result?.ok === true && result.report) this.propertyEditorReconcile(result.report);
+    this.stageNeedsPreview = true;
+    this.pendingStageEnter = null;
+    this.status = { kind: "refusal", text: "The note changed. Your draft is kept; press Enter to preview it against the current note." };
+    this.refusal = { code: "prop_stale", message: this.status.text, hint: "Nothing was written." };
+    this.paintPropertyEditor();
+  }
+,
+  async propertyEditorSaveStage() {
+    if (!this.stage || this.closed || this.pendingApply || this.stageComposing) return null;
+    const built = this.propertyEditorBuildCurrentStage();
+    if (!built.ok) {
+      this.refusal = { code: "bad-stage-value", message: built.message, hint: "Correct the value or use Ctrl+D to unset it." };
+      this.status = { kind: "refusal", text: built.message };
+      this.stage.previewText = built.message;
+      this.paintPropertyEditor();
+      return built;
+    }
+    if (!built.changed) {
+      this.propertyEditorCancelStage({ quiet: true });
+      this.status = { kind: "ready", text: "No changes." };
+      this.paintPropertyEditor();
+      return { ok: true, changed: false, noOp: true };
+    }
+    const session = this.editorEnsureSession();
+    if (!session) return null;
+    const state = session.getState?.();
+    const matches = state?.status === "preview-ready" && state.canApply
+      && !this.stageNeedsPreview
+      && propertyEditorStageOpsJson(state.draftOps) === propertyEditorStageOpsJson(built.ops);
+    if (matches) return this.propertyEditorApplyStage(built);
+    this.pendingStageEnter = { stageId: this.stage.id, revision: this.stage.revision, opsJson: propertyEditorStageOpsJson(built.ops) };
+    if (this.stageNeedsPreview || !state || propertyEditorStageOpsJson(state.draftOps) !== propertyEditorStageOpsJson(built.ops)
+      || state.status === "refused" || state.status === "browsing") {
+      this.stageNeedsPreview = false;
+      this.status = propertyEditorStatusChecking();
+      this.stage.previewText = this.propertyEditorStagePreviewText(built);
+      try { session.setDraft(built.ops); } catch (_) {}
+    } else {
+      this.status = propertyEditorStatusChecking();
+    }
+    this.sessionState = session.getState?.() || this.sessionState;
+    this.paintPropertyEditor();
+    return { ok: false, code: "preview-pending", message: "Waiting for a current property preview." };
+  }
+,
+  async propertyEditorApplyStage(built) {
+    if (!this.stage || this.closed || this.pendingApply || !built?.ok) return null;
+    const stageId = this.stage.id;
+    const revision = this.stage.revision;
+    this.pendingStageEnter = null;
+    this.pendingApply = true;
+    this.status = { kind: "checking", text: "Saving…" };
+    this.paintPropertyEditor();
+    let result;
+    try { result = await this.session.apply(); }
+    catch (error) { result = { ok: false, code: "failed", message: error?.message || "The property update failed." }; }
+    if (this.closed || !this.stage || this.stage.id !== stageId || this.stage.revision !== revision) return result;
+    this.pendingApply = false;
+    if (result?.ok === true) {
+      if (result.report?.properties) this.propertyEditorReconcile({ ...this.report, ...result.report });
+      this.propertyEditorCancelStage({ quiet: true });
+      this.refusal = null;
+      this.status = propertyEditorStatusSaved();
+    } else {
+      const failure = result?.report?.error || result || {};
+      const refusal = propertyEditorStatusRefusal(failure);
+      const stale = result?.kind === "stale" || result?.code === "prop_stale" || failure?.code === "prop_stale" || failure?.code === "stale_generation";
+      this.refusal = refusal;
+      this.status = { kind: "refusal", text: refusal.message };
+      this.stage.previewText = `${refusal.message}${refusal.hint ? ` — ${refusal.hint}` : ""}`;
+      if (stale) {
+        this.stageNeedsPreview = true;
+        this.pendingStageEnter = null;
+        void this.propertyEditorRefreshStale(stageId, revision);
+      }
+    }
+    this.paintPropertyEditor();
+    return result;
+  }
+,
+  propertyEditorCancelStage(options = {}) {
+    if (!this.stage) return false;
+    const session = this.session;
+    this.stage = null;
+    this.pendingStageEnter = null;
+    this.stageNeedsPreview = false;
+    this.stageComposing = false;
+    this.staleRefreshPending = false;
+    try { session?.setDraft?.([]); } catch (_) {}
+    if (options.quiet !== true) {
+      this.refusal = null;
+      this.status = { kind: "ready", text: "" };
+    }
+    this.paintPropertyEditor();
+    return true;
+  }
+,
+  paintPropertyEditor() {
+    this._propertyStageRetained = null;
+    if (this.stage) {
+      try {
+        const input = this.contentEl?.querySelector?.("[data-property-stage-input]");
+        const band = this.contentEl?.querySelector?.("[data-property-stage-band]");
+        if (input && Number(input.getAttribute?.("data-property-stage-id")) === this.stage.id) {
+          this._propertyStageRetained = { stageId: this.stage.id, input, band: band || null };
+        }
+      } catch (_) {}
+    }
+    try {
+      const result = propertyEditorPaintBeforeStages.call(this);
+      this.propertyEditorSyncProseField?.();
+      return result;
+    } finally { this._propertyStageRetained = null; }
+  }
+,
+  editorCaptureCaret(doc) {
+    try {
+      const active = doc?.activeElement;
+      if (active?.getAttribute?.("data-property-stage-input")) {
+        return {
+          propertyStage: true,
+          stageId: Number(active.getAttribute("data-property-stage-id")),
+          start: active.selectionStart ?? 0,
+          end: active.selectionEnd ?? active.selectionStart ?? 0,
+        };
+      }
+    } catch (_) {}
+    return propertyEditorCaptureCaretBeforeStages.call(this, doc);
+  }
+,
+  editorRestoreFocus(doc, caret) {
+    if (caret?.propertyStage === true && this.stage && this.stage.id === caret.stageId) {
+      try {
+        const input = this.contentEl?.querySelector?.("[data-property-stage-input]");
+        if (input && typeof input.focus === "function") {
+          if (doc?.activeElement !== input) input.focus();
+          if (typeof input.setSelectionRange === "function") input.setSelectionRange(caret.start, caret.end);
+          return;
+        }
+      } catch (_) {}
+    }
+    return propertyEditorRestoreFocusBeforeStages.call(this, doc, caret);
+  }
+,
+  propertyEditorActivate(entry) {
+    const decision = entry ? propertyEditorActionForRow(entry.row) : null;
+    if (decision?.action === "edit") return this.propertyEditorOpenStage(entry);
+    return propertyEditorActivateBeforeStages.call(this, entry);
+  }
+,
+  propertyEditorSelect(id) {
+    if (this.stage && id !== this.selectedId) this.propertyEditorCancelStage({ quiet: true });
+    return propertyEditorSelectBeforeStages.call(this, id);
+  }
+,
+  propertyEditorOnClick(event) {
+    const target = event?.target?.closest?.("[data-property-stage-action]");
+    if (target && this.stage) {
+      const action = target.getAttribute("data-property-stage-action");
+      const index = Number(target.getAttribute("data-property-stage-index"));
+      event?.preventDefault?.();
+      event?.stopPropagation?.();
+      if (action === "cancel") return this.propertyEditorCancelStage();
+      if (action === "save") return void this.propertyEditorSaveStage();
+      if (action === "add-item") return this.propertyEditorStageAddItem();
+      if (action === "remove-item") return this.propertyEditorStageRemoveItem(index);
+      if (action === "pick-suggestion") return this.propertyEditorPickStageSuggestion(index);
+    }
+    if (this.stage && event?.target?.closest?.("[data-property-row]")) this.propertyEditorCancelStage({ quiet: true });
+    return propertyEditorClickBeforeStages.call(this, event);
+  }
+,
+  propertyEditorOnKeyDown(event) {
+    const input = event?.target?.closest?.("[data-property-stage-input]");
+    if (input && this.stage) {
+      if (this.propertyEditorProseOffer?.(event)) return;
+      if (event.isComposing || event.keyCode === 229 || this.stageComposing) return;
+      if (event.key === "Escape") {
+        event.preventDefault?.();
+        this.propertyEditorBackOut(event);
+        return;
+      }
+      if (event.key === "ArrowDown" && this.propertyEditorMoveStageSuggestion(1)) {
+        event.preventDefault?.();
+        return;
+      }
+      if (event.key === "ArrowUp" && this.propertyEditorMoveStageSuggestion(-1)) {
+        event.preventDefault?.();
+        return;
+      }
+      if (event.key === "Enter") {
+        const view = this.propertyEditorStageView();
+        if (Number.isInteger(view?.selectedSuggestion) && view.selectedSuggestion >= 0) {
+          event.preventDefault?.();
+          event.stopPropagation?.();
+          this.propertyEditorPickStageSuggestion(view.selectedSuggestion);
+          return;
+        }
+        if (this.stage.kind === "text" && event.shiftKey) return;
+        event.preventDefault?.();
+        event.stopPropagation?.();
+        if (["list", "tags", "aliases"].includes(this.stage.kind) && String(this.stage.itemDraft || "").trim()) {
+          this.propertyEditorStageAddItem();
+        } else {
+          void this.propertyEditorSaveStage();
+        }
+        return;
+      }
+      if (event.key === "Backspace" && ["list", "tags", "aliases"].includes(this.stage.kind)
+        && !String(this.stage.itemDraft || "") && this.stage.items.length) {
+        event.preventDefault?.();
+        this.propertyEditorStageRemoveItem(this.stage.items.length - 1);
+        return;
+      }
+      return;
+    }
+    return propertyEditorKeyBeforeStages.call(this, event);
+  }
+,
+  propertyEditorBackOut(event) {
+    if (this.propertyEditorProseBackOut?.(event)) return;
+    if (this.stage) {
+      this.propertyEditorCancelStage();
+      return;
+    }
+    return propertyEditorBackOutBeforeStages.call(this, event);
+  }
+,
+  propertyEditorReconcile(report) {
+    const incoming = report && typeof report === "object" && typeof report.fingerprint_after === "string"
+      ? { ...report, fingerprint: report.fingerprint_after }
+      : report;
+    const before = this.report?.fingerprint || "";
+    propertyEditorReconcileBeforeStages.call(this, incoming);
+    const after = this.report?.fingerprint || "";
+    if (this.stage && before && after && before !== after) {
+      this.pendingStageEnter = null;
+      this.stageNeedsPreview = true;
+      this.stage.previewText = "The note changed; preview this draft again before saving.";
+    }
+  }
+,
+  onOpen() {
+    propertyEditorOpenBeforeStages.call(this);
+    if (!this.stageInputListener) {
+      this.stageInputListener = (event) => {
+        const input = event?.target?.closest?.("[data-property-stage-input]");
+        if (input) this.propertyEditorStageInputChanged(input);
+      };
+      this.stageCompositionStartListener = (event) => {
+        const input = event?.target?.closest?.("[data-property-stage-input]");
+        if (!input || !this.stage) return;
+        this.stageComposing = true;
+        this.pendingStageEnter = null;
+        try { this.session?.setDraft?.([]); } catch (_) {}
+      };
+      this.stageCompositionEndListener = (event) => {
+        const input = event?.target?.closest?.("[data-property-stage-input]");
+        if (!input || !this.stage) return;
+        this.stageComposing = false;
+        this.propertyEditorStageInputChanged(input);
+      };
+      this.contentEl?.addEventListener?.("input", this.stageInputListener);
+      this.contentEl?.addEventListener?.("compositionstart", this.stageCompositionStartListener);
+      this.contentEl?.addEventListener?.("compositionend", this.stageCompositionEndListener);
+    }
+    this.propertyEditorSyncProseField?.();
+  }
+,
+  onClose() {
+    this.propertyEditorDetachProseField?.();
+    try {
+      this.contentEl?.removeEventListener?.("input", this.stageInputListener);
+      this.contentEl?.removeEventListener?.("compositionstart", this.stageCompositionStartListener);
+      this.contentEl?.removeEventListener?.("compositionend", this.stageCompositionEndListener);
+    } catch (_) {}
+    this.stageInputListener = null;
+    this.stageCompositionStartListener = null;
+    this.stageCompositionEndListener = null;
+    return propertyEditorCloseBeforeStages.call(this);
+  }
+,
+});
+// ---- src/298j-plugin-property-editor-prose-field.js ----
+// Property Editor proseField consumer (S16): Text and List values share
+// navigation's [[ and (( completion. The editor's Escape/q/Ctrl+[ ladder
+// owns back-out; subjects are omitted because this stage does not edit tasks.
+function propertyEditorProseFieldApi(app) {
+  try {
+    const plugins = app && app.plugins && app.plugins.plugins;
+    const nav = plugins ? plugins["bob-navigation-hotkeys"] : null;
+    const prose = nav && nav.api && nav.api.proseField;
+    if (!prose || Number(prose.version) < 1 || typeof prose.attach !== "function") return null;
+    return prose;
+  } catch (_) {
+    return null;
+  }
+}
+
+Object.assign(PropertyEditorModal.prototype, {
+  propertyEditorProseStageNodes(stage = this.stage) {
+    try {
+      if (!stage || !["text", "list"].includes(stage.kind)) return null;
+      const panel = this.contentEl?.querySelector?.("[data-property-stage]");
+      const input = panel?.querySelector?.("[data-property-stage-input]");
+      const band = panel?.querySelector?.("[data-property-stage-band]");
+      if (!input || !band || Number(input.getAttribute?.("data-property-stage-id")) !== stage.id) return null;
+      return { input, band };
+    } catch (_) {
+      return null;
+    }
+  }
+,
+  propertyEditorSyncProseField() {
+    if (this.closed) {
+      this.propertyEditorDetachProseField();
+      return;
+    }
+    const stage = this.stage;
+    const nodes = this.propertyEditorProseStageNodes(stage);
+    if (!nodes) {
+      this.propertyEditorDetachProseField();
+      return;
+    }
+    const binding = this.propertyEditorProseBinding;
+    if (binding && binding.stageId === stage.id && binding.kind === stage.kind) {
+      if (binding.inputEl !== nodes.input || binding.bandHost !== nodes.band) {
+        try { binding.handle.rebind?.({ inputEl: nodes.input, bandHost: nodes.band }); } catch (_) {}
+        binding.inputEl = nodes.input;
+        binding.bandHost = nodes.band;
+      }
+      return;
+    }
+    this.propertyEditorDetachProseField();
+    const api = propertyEditorProseFieldApi(this.propertyPlugin?.app || this.app);
+    if (!api) return;
+    let handle = null;
+    try {
+      handle = api.attach({
+        inputEl: nodes.input,
+        bandHost: nodes.band,
+        sourcePath: () => this.filePath || null,
+        links: true,
+        tasks: true,
+        mode: "inline",
+        density: "roomy",
+        ownKeys: false,
+        arrowKeys: true,
+      });
+    } catch (_) {
+      handle = null;
+    }
+    if (!handle || typeof handle.handleKeydown !== "function") return;
+    this.propertyEditorProseBinding = {
+      handle,
+      stageId: stage.id,
+      kind: stage.kind,
+      inputEl: nodes.input,
+      bandHost: nodes.band,
+    };
+  }
+,
+  propertyEditorDetachProseField() {
+    const binding = this.propertyEditorProseBinding;
+    this.propertyEditorProseBinding = null;
+    try { binding?.handle?.detach?.(); } catch (_) {}
+  }
+,
+  propertyEditorProseOffer(event) {
+    const binding = this.propertyEditorProseBinding;
+    if (!binding || !binding.handle || !event || event.target !== binding.inputEl) return false;
+    let wasOpen = false;
+    try { wasOpen = binding.handle.isLinkOpen?.() === true; } catch (_) {}
+    let consumed = false;
+    try { consumed = binding.handle.handleKeydown(event) === true; } catch (_) {}
+    if (!consumed && wasOpen && event.key === "Enter") consumed = true;
+    if (!consumed) return false;
+    try { event.preventDefault?.(); } catch (_) {}
+    try { event.stopPropagation?.(); } catch (_) {}
+    this.propertyEditorStageInputChanged(binding.inputEl);
+    return true;
+  }
+,
+  propertyEditorProseBackOut(event) {
+    const binding = this.propertyEditorProseBinding;
+    if (!binding?.handle) return false;
+    let consumed = false;
+    try { consumed = binding.handle.backOut?.(event) === true; } catch (_) {}
+    return consumed;
+  }
+,
+});
 // ---- src/293-keep-inbox-render.js ----
 // Keep inbox render (keep-indicator-view): DOM for the `bob-keep-inbox`
 // status-bar item. Pure DOM helpers plus one paint entry point; no spawn,
@@ -174427,6 +175574,28 @@ try {
       propertyEditorPaintRow,
       propertyEditorKindIcon,
       propertyEditorEventInInput,
+      PROPERTY_EDITOR_STAGE_WIRE_KINDS,
+      propertyEditorStageKindForRow,
+      propertyEditorStageSeed,
+      propertyEditorJsonEqual,
+      propertyEditorStageListShape,
+      propertyEditorIsoDateParts,
+      propertyEditorClockParts,
+      propertyEditorPartsInZone,
+      propertyEditorOffsetMinutes,
+      propertyEditorFormatOffset,
+      propertyEditorRelativeDate,
+      propertyEditorDateTimeValue,
+      propertyEditorDateValue,
+      propertyEditorParseNumber,
+      propertyEditorNormalizeTag,
+      propertyEditorSuggestValues,
+      propertyEditorTagSuggestions,
+      propertyEditorStageBuild,
+      propertyEditorStageFilterSuggestions,
+      propertyEditorStageLabels,
+      propertyEditorPaintStage,
+      propertyEditorProseFieldApi,
       openPropertyEditor,
     });
   }

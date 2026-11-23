@@ -392,6 +392,7 @@ test("a stubbed period note is filled once through ensure -d; bob scaffolds neve
   const stub = { path: "2026/2026-W47.md", contents: "---\nparent: \"[[2026/2026-W46]]\"\ncreated: 2026-11-03\n---\n" };
   const scaffold = { path: "2026/2026-W48.md", contents: "---\nid: 2026-W48\n---\n\n# 2026-W48 · Nov 23 – 29\n" };
   const harnessed = makeHarness({ vaultPaths: { "all_time.md": { path: "all_time.md" }, [stub.path]: stub, [scaffold.path]: scaffold } });
+  harnessed.plugin.navGroupsTodayOverride = "2026-11-22";
   harnessed.plugin.periodNotesStubSettleMs = 5;
   assert.equal(harnessed.plugin.periodNotesHandleCreate(stub), true);
   assert.equal(harnessed.plugin.periodNotesHandleCreate(stub), false, "one fill per settle window");

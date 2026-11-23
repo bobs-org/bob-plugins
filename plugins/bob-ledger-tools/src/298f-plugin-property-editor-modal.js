@@ -152,7 +152,11 @@ class PropertyEditorModal extends PropertyEditorModalBase {
       if (plugin && typeof propertyUpdateServiceDeps === "function") {
         deps = propertyUpdateServiceDeps(plugin, {
           path: this.filePath,
-          onChange: () => { if (!this.closed) this.paintPropertyEditor(); },
+          onChange: () => {
+            if (this.closed) return;
+            try { this.propertyEditorStageSyncPreview?.(); } catch (_) {}
+            this.paintPropertyEditor();
+          },
         });
       }
     } catch (_) {}
@@ -213,6 +217,7 @@ class PropertyEditorModal extends PropertyEditorModalBase {
       groups: propertyEditorGroupRows(rows),
       ordered: this.editorOrderedRows(),
       selectedId: this.selectedId,
+      stage: typeof this.propertyEditorStageView === "function" ? this.propertyEditorStageView() : null,
       status: this.status,
       refusal: this.refusal,
       announce: this.announce,
@@ -656,6 +661,10 @@ function propertyEditorPaintAll(host, options, doc, modal) {
       }
     }
     host.appendChild(list);
+  }
+
+  if (options.stage && typeof propertyEditorPaintStage === "function") {
+    try { propertyEditorPaintStage(doc, host, options.stage, modal); } catch (_) {}
   }
 
   const status = propertyEditorCreateEl(doc, "div", "bob-property-editor-status");

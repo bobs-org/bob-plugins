@@ -351,7 +351,7 @@ function strikeSelectedTaskBlockLinkInLine(lineText, selection, options = {}) {
       return null;
     }
     const prefix = getPomodoroMarkerPrefix(line, prepared.startIndex);
-    if (prefix.count === 0) {
+    if (prefix.count === 0 && getPomodoroWorkLogTaskLinkTarget(line)) {
       const marker = `${POMODORO_MARKER} `;
       workingLine = `${line.slice(0, prepared.startIndex)}${marker}${line.slice(prepared.startIndex)}`;
       workingSelection = Number.isInteger(selection && selection.startIndex)
@@ -379,16 +379,19 @@ function strikeSelectedTaskBlockLinkInLine(lineText, selection, options = {}) {
 }
 
 // Rewrite an exact `~~[[X]]~~` strike to a live plain link. Under a closed
-// Pomodoro, add a canonical `🍅 ` when the occurrence has no marker prefix
-// (`getPomodoroMarkerPrefix` at `exactStrike.start - 2`). Existing markers
-// stay. Returns `{ start, end, text }` for in-place splicing.
+// Pomodoro, add a canonical `🍅 ` on a dedicated Task Link bullet when the
+// occurrence has no marker prefix (`getPomodoroMarkerPrefix` at
+// `exactStrike.start - 2`). Mentions stay unmarked. Existing markers stay.
+// Returns `{ start, end, text }` for in-place splicing.
 function buildRestoredExactStrikeEdit(lineText, exactStrike, wikilink, options = {}) {
   const line = String(lineText || "");
   const strikeStart = exactStrike.start - 2;
   const strikeEnd = exactStrike.end + 2;
   const closedPomodoro = !!(options && options.closedPomodoro);
   const prefix = getPomodoroMarkerPrefix(line, strikeStart);
-  const addMarker = closedPomodoro && prefix.count === 0;
+  const addMarker = closedPomodoro
+    && prefix.count === 0
+    && !!getPomodoroWorkLogTaskLinkTarget(line);
   return {
     start: strikeStart,
     end: strikeEnd,

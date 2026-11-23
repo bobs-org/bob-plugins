@@ -303,6 +303,28 @@ test("strike and unstrike helpers are idempotent, alias-preserving, and marker-a
     }),
     "\t- 🍅 ~~[[Tasks#^a]]~~",
   );
+  const mentionSelection = {
+    pathPart: "Tasks",
+    blockId: "a",
+    startIndex: "\t- Planned ".length,
+    embedded: false,
+  };
+  assert.equal(
+    helpers.strikeSelectedTaskBlockLinkInLine(
+      "\t- Planned [[Tasks#^a]]!",
+      mentionSelection,
+      { keepPomodoroMarker: true },
+    ),
+    "\t- Planned ~~[[Tasks#^a]]~~!",
+  );
+  assert.equal(
+    helpers.unstrikeSelectedTaskBlockLinkInLine(
+      "\t- Planned ~~[[Tasks#^a]]~~!",
+      mentionSelection,
+      { closedPomodoro: true },
+    ),
+    "\t- Planned [[Tasks#^a]]!",
+  );
 });
 
 test("completeTaskAtCursor closes each open symbol through the Tasks command", async () => {

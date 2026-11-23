@@ -75,6 +75,12 @@ function stripPomodoroMarkersFromLine(lineText) {
   return rewritePomodoroMarkersInLine(lineText, false);
 }
 
+function rewriteCompletedPomodoroMarkersInLine(lineText) {
+  return getPomodoroWorkLogTaskLinkTarget(lineText)
+    ? rewritePomodoroMarkersInLine(lineText, completedPomodoroMarkerPolicy)
+    : stripPomodoroMarkersFromLine(lineText);
+}
+
 function rewritePomodoroMarkersInText(sourceText, marked) {
   const sourceLines = splitTextByLineEndings(sourceText);
   const fenced = getFencedLineNumbers(sourceLines.map((line) => line.text));
@@ -589,19 +595,20 @@ function classifyPomodoroSubBullets(lines, range) {
       (target) => !rangeIsStruck(target.startIndex, target.endIndex, strikeSpans),
     );
     if (nonEmbeddedTargets.length > 0) {
-      copyableTaskLinkBullets.push({
-        line,
-        lineText,
-        targets: nonEmbeddedTargets,
-      });
-
       const bareTarget = getBareNonEmbeddedBlockLinkTargetFromListItem(lineText);
       if (bareTarget) {
+        copyableTaskLinkBullets.push({
+          line,
+          lineText,
+          targets: [bareTarget],
+        });
         startableNonTranscludedTaskLinkBullets.push({
           line,
           lineText,
           targets: [bareTarget],
         });
+      } else {
+        noteBullets.push({ line, lineText });
       }
       continue;
     }
@@ -869,10 +876,7 @@ function buildPomodoroCompletionPlan(lines, section, pomodoroLine, options = {})
       continue;
     }
     const sourceLineText = String(lines[line] || "");
-    const lineText = rewritePomodoroMarkersInLine(
-      sourceLineText,
-      completedPomodoroMarkerPolicy,
-    );
+    const lineText = rewriteCompletedPomodoroMarkersInLine(sourceLineText);
     if (lineText !== sourceLineText) {
       edits.push({ type: "replaceLine", line, sourceLineText, lineText });
     }

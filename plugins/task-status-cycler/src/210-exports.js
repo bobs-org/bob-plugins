@@ -349,6 +349,7 @@ module.exports.helpers = {
   parseNonEmbeddedBlockLinks,
   getPomodoroMarkerPrefix,
   completedPomodoroMarkerPolicy,
+  rewriteCompletedPomodoroMarkersInLine,
   rewritePomodoroMarkersInLine,
   rewritePomodoroMarkersInText,
   stripPomodoroMarkersFromLine,

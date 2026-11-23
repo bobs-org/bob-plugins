@@ -252,7 +252,7 @@ test("reopened-reference restoration is ancestry-aware, conservative, and idempo
   assert.match(result.text, /```md\r\n- \[ \] #task Example\r\n\t- ~~\[\[Alpha/);
   assert.match(
     result.text,
-    /🍅 \[\[Alpha#\^review\|History alias\]\] and 🍅 \[\[Alpha#\^review\|Again\]\]/,
+    /🍅 \[\[Alpha#\^review\|History alias\]\] and \[\[Alpha#\^review\|Again\]\]/,
   );
   assert.match(
     result.text,
@@ -704,7 +704,7 @@ test("full Pomodoro completion retires embeds only after carry-forward planning"
   assert.match(harness.getSource("Root.md"), /^- \[x\] #task Root/);
   assert.match(
     editor.getValue(),
-    /- \[x\] Focus\n\t- ~~\[\[Root#\^root\|Finished work\]\]~~\n\t- 🍅 \[\[Continue#\^continue\|Carry forward\]\]\n\t- Mix ~~\[\[Mixed#\^mixed\|Retire mixed\]\]~~ with 🍅 \[\[Continue#\^other\|Do not copy\]\]/,
+    /- \[x\] Focus\n\t- ~~\[\[Root#\^root\|Finished work\]\]~~\n\t- 🍅 \[\[Continue#\^continue\|Carry forward\]\]\n\t- Mix ~~\[\[Mixed#\^mixed\|Retire mixed\]\]~~ with \[\[Continue#\^other\|Do not copy\]\]/,
   );
   assert.equal((editor.getValue().match(/Root#\^root/g) || []).length, 1);
   assert.equal((editor.getValue().match(/Mixed#\^mixed/g) || []).length, 1);

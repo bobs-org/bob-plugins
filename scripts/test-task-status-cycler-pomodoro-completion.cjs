@@ -484,9 +484,7 @@ test("Pomodoro completion marks originals and carries clean live copies", () => 
   ];
   const section = helpers.findPomodorosSectionInLines(lines);
   const plan = helpers.buildPomodoroCompletionPlan(lines, section, 1);
-  assert.deepEqual(plan.copiedBulletLines, [
-    "  - [[Tasks#^live|Live]] and [[Tasks#^other]]",
-  ]);
+  assert.deepEqual(plan.copiedBulletLines, []);
   const replacements = new Map(
     plan.edits
       .filter((edit) => edit.type === "replaceLine")
@@ -494,7 +492,7 @@ test("Pomodoro completion marks originals and carries clean live copies", () => 
   );
   assert.equal(
     replacements.get(2),
-    "  - 🍅 [[Tasks#^live|Live]] and 🍅 [[Tasks#^other]]",
+    "  - [[Tasks#^live|Live]] and [[Tasks#^other]]",
   );
   assert.equal(replacements.get(3), "  - ![[Tasks#^embedded|Embedded]]");
   assert.equal(replacements.has(4), false);
@@ -502,6 +500,50 @@ test("Pomodoro completion marks originals and carries clean live copies", () => 
     replacements.get(5),
     "  - 🍅 ~~[[Tasks#^marked-retired|Marked retirement]]~~",
   );
+});
+
+test("Pomodoro completion leaves mention history behind and does not continue", () => {
+  const lines = [
+    "## Pomodoros",
+    "- [ ] (**1750-1755** [t:: 5m]) — PLAN",
+    "\t- Planned [[20261122#^rahway-station-ucpac]]!",
+    "- [ ] () — PLAN",
+    "\t- [[job#^calendar-event-dan]]",
+  ];
+  const section = helpers.findPomodorosSectionInLines(lines);
+  const plan = helpers.buildPomodoroCompletionPlan(lines, section, 1);
+  assert.deepEqual(plan.copiedBulletLines, []);
+  assert.equal(plan.createdPomodoro, false);
+  assert.equal(
+    plan.edits.some(
+      (edit) =>
+        edit.type === "replaceLine" &&
+        String(edit.sourceLineText || "").includes("Planned"),
+    ),
+    false,
+  );
+});
+
+test("Pomodoro completion carries dedicated links and leaves mentions unmarked", () => {
+  const lines = [
+    "## Pomodoros",
+    "- [ ] (**1750-1755** [t:: 5m]) — PLAN",
+    "\t- Planned [[20261122#^rahway-station-ucpac]]!",
+    "\t- [[bob#^x]]",
+    "- [ ] () — PLAN",
+    "\t- [[job#^calendar-event-dan]]",
+  ];
+  const section = helpers.findPomodorosSectionInLines(lines);
+  const plan = helpers.buildPomodoroCompletionPlan(lines, section, 1);
+  assert.deepEqual(plan.copiedBulletLines, ["\t- [[bob#^x]]"]);
+  assert.equal(plan.createdPomodoro, true);
+  const replacements = new Map(
+    plan.edits
+      .filter((edit) => edit.type === "replaceLine")
+      .map((edit) => [edit.line, edit.lineText]),
+  );
+  assert.equal(replacements.has(2), false);
+  assert.equal(replacements.get(3), "\t- 🍅 [[bob#^x]]");
 });
 
 test("Pomodoro completion groups worked-on links before deferred marked links before a later Pomodoro", () => {

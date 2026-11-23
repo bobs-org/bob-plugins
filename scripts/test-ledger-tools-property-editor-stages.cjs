@@ -125,8 +125,8 @@ test("stage selection uses only supported props kinds and loose rows", () => {
 
 test("text and number stages preserve empty strings, null, zero, and finite numbers", () => {
   const empty = H.propertyEditorStageBuild(row({ value: null, kind: "null" }), { kind: "text", wireKind: "text" }, { value: "" });
-  assert.deepEqual(empty.ops, [{ op: "prop.set", key: "title", value: "", kind: "text" }]);
-  assert.equal(empty.changed, true, "null and empty string remain distinct");
+  assert.deepEqual(empty.ops, []);
+  assert.equal(empty.changed, false, "an untouched null stage is a no-op; null stays null");
   assert.equal(H.propertyEditorStageBuild(row({ value: "" }), { kind: "text", wireKind: "text" }, { value: "" }).changed, false);
   const zero = H.propertyEditorStageBuild(row({ key: "count", value: 1, kind: "number" }), { kind: "number", wireKind: "number" }, { value: "0" });
   assert.deepEqual(zero.ops, [{ op: "prop.set", key: "count", value: 0, kind: "number" }]);
@@ -142,8 +142,8 @@ test("date and datetime stages resolve local tokens, preserve explicit offsets, 
   assert.equal(H.propertyEditorDateValue("-3d", opts).value, "2026-03-05");
   assert.equal(H.propertyEditorDateValue("fri", { now: new Date("2026-11-17T17:00:00Z"), timeZone: "America/New_York" }).value, "2026-11-20");
   assert.equal(H.propertyEditorDateValue("2026-02-30", opts).ok, false);
-  assert.equal(H.propertyEditorDateTimeValue("now", opts).value, "2026-03-08T08:00:00-04:00");
-  assert.equal(H.propertyEditorDateTimeValue("9:41pm", opts).value, "2026-03-08T21:41:00-04:00");
+  assert.equal(H.propertyEditorDateTimeValue("now", opts).value, "2026-03-08T08:00:00");
+  assert.equal(H.propertyEditorDateTimeValue("9:41pm", opts).value, "2026-03-08T21:41:00");
   assert.equal(H.propertyEditorDateTimeValue("2026-11-01T01:30:00-04:00", opts).value, "2026-11-01T01:30:00-04:00");
   assert.equal(H.propertyEditorDateTimeValue("2026-03-08T02:30", opts).ok, false, "DST gap is rejected");
   assert.equal(H.propertyEditorDateTimeValue("2026-11-01T01:30", opts).ok, false, "DST overlap is rejected");

@@ -12,15 +12,26 @@ function propertyCardFootAdapterPendingInventory(reason = "kit-unavailable") {
 }
 
 function propertyCardFootAdapterFrontmatter(plugin, path) {
+  let base = {};
   try {
     const key = propertyCardFootAdapterPath(path);
     const file = plugin?.app?.vault?.getAbstractFileByPath?.(key);
     const cache = file ? plugin.app?.metadataCache?.getFileCache?.(file) : null;
     const fm = cache?.frontmatter;
-    return fm && typeof fm === "object" && !Array.isArray(fm) ? fm : {};
+    base = fm && typeof fm === "object" && !Array.isArray(fm) ? fm : {};
   } catch (_) {
-    return {};
+    base = {};
   }
+  // Confirmed property post-images paint until the metadata cache catches
+  // up. Null stays distinct from absence; deletions remove the key.
+  try {
+    if (plugin && typeof plugin.propertyOverlayFor === "function"
+      && typeof propertyOverlayPaintFrontmatter === "function") {
+      const overlay = plugin.propertyOverlayFor(path);
+      if (overlay) return propertyOverlayPaintFrontmatter(base, overlay);
+    }
+  } catch (_) {}
+  return base;
 }
 
 function propertyCardFootAdapterCanRead(plugin) {
@@ -137,9 +148,14 @@ function propertyCardFootAdapterSpec(options = {}) {
 function propertyCardFootAdapterDigest(spec) {
   try {
     const rows = Array.isArray(spec?.inventory?.rows) ? spec.inventory.rows : [];
+    // The editor hook's presence is part of the signature: registering or
+    // unregistering it repaints open drawers so they gain or lose the
+    // Add property / Edit all actions without waiting for vault traffic.
+    const hook = typeof propertyCardFootEditorHook === "function" && propertyCardFootEditorHook ? 1 : 0;
     return JSON.stringify({
       state: spec?.inventory?.state || "",
       stamp: spec?.stamp?.text || "",
+      hook,
       rows: rows.map((row) => [
         row.key,
         row.occurrence,

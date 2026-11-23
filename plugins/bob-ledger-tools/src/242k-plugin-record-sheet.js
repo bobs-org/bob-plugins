@@ -254,13 +254,22 @@ class BobLedgerToolsRecordSheetMixin {
   }
 
   recordSheetFrontmatter(path) {
+    let base = null;
     try {
       const file = this.app?.vault?.getAbstractFileByPath?.(path);
       const cache = file ? this.app?.metadataCache?.getFileCache?.(file) : null;
-      return cache && cache.frontmatter && typeof cache.frontmatter === "object" ? cache.frontmatter : null;
+      base = cache && cache.frontmatter && typeof cache.frontmatter === "object" ? cache.frontmatter : null;
     } catch (_) {
-      return null;
+      base = null;
     }
+    try {
+      if (typeof this.propertyOverlayFor === "function"
+        && typeof propertyOverlayPaintFrontmatter === "function") {
+        const overlay = this.propertyOverlayFor(path);
+        if (overlay) return propertyOverlayPaintFrontmatter(base || {}, overlay);
+      }
+    } catch (_) {}
+    return base;
   }
 
   recordSheetCache(path) {

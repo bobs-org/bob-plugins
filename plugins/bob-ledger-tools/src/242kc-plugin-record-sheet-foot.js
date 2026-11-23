@@ -94,9 +94,11 @@ class BobLedgerToolsRecordSheetFootMixin {
   recordSheetFootDigest(spec) {
     try {
       const rows = Array.isArray(spec?.inventory?.rows) ? spec.inventory.rows : [];
+      const hook = typeof propertyCardFootEditorHook === "function" && propertyCardFootEditorHook ? 1 : 0;
       return JSON.stringify({
         state: spec?.inventory?.state || "",
         stamp: spec?.stamp?.text || "",
+        hook,
         rows: rows.map((row) => [
           row.key,
           row.occurrence,

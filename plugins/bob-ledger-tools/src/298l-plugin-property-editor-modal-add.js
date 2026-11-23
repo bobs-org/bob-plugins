@@ -130,6 +130,17 @@ Object.assign(PropertyEditorModal.prototype, {
       this.propertyEditorRefuseWhileSaving?.();
       return false;
     }
+    // An open value stage keeps its draft: o/O/Mod+; refuses like `=`
+    // instead of quietly cancelling the stage, even when its input lost
+    // focus and the key reads as a browse gesture.
+    if (this.stage) {
+      const notice = typeof PROPERTY_EDITOR_FINISH_EDIT_FIRST === "string"
+        ? PROPERTY_EDITOR_FINISH_EDIT_FIRST
+        : "Finish the open edit first — = is reserved while drafting.";
+      this.announce = notice;
+      this.paintPropertyEditor();
+      return false;
+    }
     if (!this.propertyEditorCanAdd()) {
       this.refusal = {
         code: "unwritable",
@@ -149,6 +160,7 @@ Object.assign(PropertyEditorModal.prototype, {
       catalog: inventory.rows,
       source: inventory.source,
       suggestionIndex: inventory.rows.length ? 0 : -1,
+      suggestionTouched: false,
       previewText: "Tab/Enter uses the highlighted name and type · Shift+Enter keeps this name as text",
     };
     this.addComposing = false;
@@ -177,6 +189,7 @@ Object.assign(PropertyEditorModal.prototype, {
   propertyEditorSetAddName(raw) {
     if (!this.addName || this.closed) return;
     this.addName.name = String(raw == null ? "" : raw);
+    this.addName.suggestionTouched = false;
     const suggestions = propertyEditorFilterPropertyNames(this.addName.catalog, this.addName.name);
     if (!suggestions.length) this.addName.suggestionIndex = -1;
     else if (!Number.isInteger(this.addName.suggestionIndex) || this.addName.suggestionIndex < 0
@@ -197,6 +210,7 @@ Object.assign(PropertyEditorModal.prototype, {
     if (!suggestions.length) return false;
     const current = Number.isInteger(this.addName.suggestionIndex) ? this.addName.suggestionIndex : -1;
     this.addName.suggestionIndex = Math.max(0, Math.min(suggestions.length - 1, current + delta));
+    this.addName.suggestionTouched = true;
     this.paintPropertyEditor();
     return true;
   }
@@ -206,6 +220,7 @@ Object.assign(PropertyEditorModal.prototype, {
     const accepted = propertyEditorAcceptAddName(this.addName.name, this.addName.catalog, {
       literal: options.literal === true,
       suggestionIndex: options.literal === true ? -1 : this.addName.suggestionIndex,
+      suggestionTouched: options.literal === true ? false : this.addName.suggestionTouched === true,
     });
     const valid = propertyEditorValidateNewKey(accepted.name, propertyEditorExistingKeys(this.properties));
     if (!valid.ok) {
@@ -362,6 +377,7 @@ Object.assign(PropertyEditorModal.prototype, {
       if (action === "literal") return this.propertyEditorCommitAddName({ literal: true });
       if (action === "pick-name" && Number.isInteger(index)) {
         this.addName.suggestionIndex = index;
+        this.addName.suggestionTouched = true;
         return this.propertyEditorCommitAddName();
       }
     }

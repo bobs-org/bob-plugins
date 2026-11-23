@@ -99,14 +99,21 @@ class PropertyEditorModal extends PropertyEditorModalBase {
     this.closeToken = 0;
     this.pendingApply = false;
     this.announce = "";
-    const ids = propertyEditorOrderedIds(this.properties.length ? this.properties : this.cacheRows);
-    if (!this.selectedId && ids.length) this.selectedId = ids[0];
-    if (typeof options.key === "string" && options.key) {
-      const match = (this.properties.length ? this.properties : this.cacheRows)
-        .find((row) => row && row.key === options.key);
-      if (match) {
-        const idx = (this.properties.length ? this.properties : this.cacheRows).indexOf(match);
-        this.selectedId = propertyEditorRowId(match, idx);
+    const initialRows = this.properties.length ? this.properties : this.cacheRows;
+    if (typeof propertyEditorNearestId === "function") {
+      if (!this.selectedId) this.selectedId = propertyEditorNearestId(initialRows, { key: "", ordinal: 0, line: null });
+      if (typeof options.key === "string" && options.key) {
+        this.selectedId = propertyEditorNearestId(initialRows, { key: options.key, ordinal: 0, line: null });
+      }
+    } else {
+      const ids = propertyEditorOrderedIds(initialRows);
+      if (!this.selectedId && ids.length) this.selectedId = ids[0];
+      if (typeof options.key === "string" && options.key) {
+        const match = initialRows.find((row) => row && row.key === options.key);
+        if (match) {
+          const idx = initialRows.indexOf(match);
+          this.selectedId = propertyEditorRowId(match, idx);
+        }
       }
     }
   }
@@ -173,6 +180,20 @@ class PropertyEditorModal extends PropertyEditorModalBase {
     try {
       if (typeof propertyEditorRegisterSession === "function") propertyEditorRegisterSession(this);
     } catch (_) {}
+    try {
+      if (!this._propertyOverlayUnsub && this.propertyPlugin
+        && typeof this.propertyPlugin.propertyOverlayStore === "function") {
+        const store = this.propertyPlugin.propertyOverlayStore();
+        if (store && typeof store.subscribe === "function") {
+          const modal = this;
+          this._propertyOverlayUnsub = store.subscribe((path) => {
+            if (modal.closed) return;
+            if (path !== modal.filePath) return;
+            try { modal.paintPropertyEditor(); } catch (_) {}
+          });
+        }
+      }
+    } catch (_) {}
     return this.session;
   }
 
@@ -207,7 +228,16 @@ class PropertyEditorModal extends PropertyEditorModalBase {
   }
 
   propertyEditorPaintOptions() {
-    const rows = this.properties.length ? this.properties : this.cacheRows;
+    const base = this.properties.length ? this.properties : this.cacheRows;
+    let rows = base;
+    try {
+      if (typeof propertyEditorOverlayFor === "function" && typeof propertyEditorOverlayRows === "function") {
+        const overlay = propertyEditorOverlayFor(this.propertyPlugin, this.filePath);
+        if (overlay) rows = propertyEditorOverlayRows(base, overlay);
+      }
+    } catch (_) {
+      rows = base;
+    }
     const degraded = propertyEditorDegradedFor({
       capability: this.propertyPlugin?.propertyCapability ?? this.editorCapability(),
       report: this.report,
@@ -296,6 +326,14 @@ class PropertyEditorModal extends PropertyEditorModalBase {
   // otherwise fall back to the nearest surviving row.
   propertyEditorReconcile(report) {
     if (this.closed || !report || typeof report !== "object") return;
+    let wanted = null;
+    try {
+      wanted = typeof propertyEditorWantedSelection === "function"
+        ? propertyEditorWantedSelection(this)
+        : null;
+    } catch (_) {
+      wanted = null;
+    }
     this.report = report;
     if (typeof report.note_kind === "string" && report.note_kind) this.noteKind = report.note_kind;
     const rows = Array.isArray(report.properties) ? report.properties.slice() : [];
@@ -304,8 +342,12 @@ class PropertyEditorModal extends PropertyEditorModalBase {
     if (typeof report.fingerprint === "string" && report.fingerprint) this.editorRebase(report.fingerprint);
     const ids = new Set(propertyEditorOrderedIds(rows));
     if (!ids.has(this.selectedId)) {
-      const ordered = this.editorOrderedRows();
-      this.selectedId = ordered.length ? ordered[0].id : "";
+      if (typeof propertyEditorNearestId === "function" && wanted) {
+        this.selectedId = propertyEditorNearestId(rows, wanted);
+      } else {
+        const ordered = this.editorOrderedRows();
+        this.selectedId = ordered.length ? ordered[0].id : "";
+      }
     }
     if (this.status.kind === "reading" || this.status.kind === "checking") {
       this.status = rows.length
@@ -614,6 +656,10 @@ class PropertyEditorModal extends PropertyEditorModalBase {
     this.closed = true;
     this.closeToken += 1;
     try {
+      if (typeof this._propertyOverlayUnsub === "function") this._propertyOverlayUnsub();
+    } catch (_) {}
+    this._propertyOverlayUnsub = null;
+    try {
       if (typeof bobCardUnwireCloseKeys === "function") bobCardUnwireCloseKeys(this);
     } catch (_) {}
     try {
@@ -710,8 +756,12 @@ function propertyEditorPaintAll(host, options, doc, modal) {
   }
   if (degraded.mode === "recovery") {
     const banner = propertyEditorCreateEl(doc, "div", "bob-property-editor-banner is-recovery");
+    const message = degraded.message || PROPERTY_EDITOR_RECOVERY_TEXT;
     const line = degraded.line !== null && degraded.line !== undefined ? ` · line ${degraded.line}` : "";
-    propertyEditorSetText(banner, `${PROPERTY_EDITOR_RECOVERY_TEXT}${line}`);
+    const ownership = Array.isArray(degraded.ownership) && degraded.ownership.length
+      ? ` · ${degraded.ownership.join("; ")}`
+      : "";
+    propertyEditorSetText(banner, `${message}${line}${ownership}`);
     if (banner) host.appendChild(banner);
   }
   if (degraded.mode === "empty") {
@@ -789,6 +839,9 @@ function propertyEditorPaintRow(doc, host, entry, selected, modal) {
     const decision = propertyEditorActionForRow(row);
     button.setAttribute("data-property-action", decision.action);
     if (decision.action === "locked") button.setAttribute("aria-disabled", "true");
+    if (row && typeof row.diagnostic === "string" && row.diagnostic) {
+      try { button.setAttribute("title", row.diagnostic); } catch (_) {}
+    }
   } catch (_) {}
   const icon = propertyEditorCreateEl(doc, "span", "bob-property-row-icon");
   propertyEditorSetText(icon, propertyEditorKindIcon(row.kind));

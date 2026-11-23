@@ -243,10 +243,18 @@ class BobLedgerToolsPropertyUpdateMixin {
   }
 
   propertyPublishOverlay(path, overlay) {
-    // Later editor-shell, card, and drawer surfaces subscribe through
-    // propertyOverlayStore().subscribe; this hook stays a no-op publisher
-    // so confirmed writes can land before those surfaces exist.
-    void path;
+    // Confirmed post-images repaint every surface until source or cache
+    // catches up: drawers and feet reread through their scheduled refresh,
+    // and the open editor on the same path repaints its overlay-merged rows.
+    // Rendering never spawns bob or writes; the store keeps null, deletion,
+    // and ordering semantics.
+    try {
+      if (typeof this.propertyEditorRefreshDrawers === "function") this.propertyEditorRefreshDrawers();
+    } catch (_) {}
+    try {
+      const modal = this.propertyEditorModal;
+      if (modal && modal.closed !== true && modal.filePath === path) modal.paintPropertyEditor();
+    } catch (_) {}
     void overlay;
   }
 

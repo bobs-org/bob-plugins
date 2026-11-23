@@ -122,6 +122,18 @@ try {
       propertyEditorEntryReadSource,
       PROPERTY_EDITOR_SAVING_TEXT,
       propertyEditorNoteKindSpecies,
+      propertyEditorSelectionOf,
+      propertyEditorNearestId,
+      propertyEditorWantedSelection,
+      propertyEditorRecoveryDetails,
+      propertyEditorRowDiagnostics,
+      propertyEditorOverlayRows,
+      propertyEditorOverlayFor,
+      propertyEditorExistingDateTimeInfo,
+      propertyEditorDateTimeHasSeconds,
+      propertyEditorFormatDateTimeParts,
+      propertyEditorAcceptAddNameExactFirst,
+      PROPERTY_EDITOR_FINISH_EDIT_FIRST,
     });
   }
 } catch (_) {}

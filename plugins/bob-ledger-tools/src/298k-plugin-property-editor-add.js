@@ -173,7 +173,10 @@ function propertyEditorAcceptAddName(typed, catalog, options = {}) {
   const index = Number.isInteger(options.suggestionIndex) ? options.suggestionIndex : -1;
   const picked = index >= 0 ? filtered[index] : null;
   const exact = name ? filtered.find((row) => row && row.name === name) : null;
-  const chosen = picked || exact || null;
+  // An exact typed name wins on Enter/Tab unless the user explicitly moved
+  // the highlight after typing; a lingering substring highlight never beats
+  // an exact name on its own.
+  const chosen = options.suggestionTouched === true ? (picked || exact || null) : (exact || picked || null);
   if (chosen) {
     const authoritative = chosen.authoritative === true;
     return {

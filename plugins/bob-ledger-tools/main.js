@@ -85608,15 +85608,26 @@ function propertyCardFootAdapterPendingInventory(reason = "kit-unavailable") {
 }
 
 function propertyCardFootAdapterFrontmatter(plugin, path) {
+  let base = {};
   try {
     const key = propertyCardFootAdapterPath(path);
     const file = plugin?.app?.vault?.getAbstractFileByPath?.(key);
     const cache = file ? plugin.app?.metadataCache?.getFileCache?.(file) : null;
     const fm = cache?.frontmatter;
-    return fm && typeof fm === "object" && !Array.isArray(fm) ? fm : {};
+    base = fm && typeof fm === "object" && !Array.isArray(fm) ? fm : {};
   } catch (_) {
-    return {};
+    base = {};
   }
+  // Confirmed property post-images paint until the metadata cache catches
+  // up. Null stays distinct from absence; deletions remove the key.
+  try {
+    if (plugin && typeof plugin.propertyOverlayFor === "function"
+      && typeof propertyOverlayPaintFrontmatter === "function") {
+      const overlay = plugin.propertyOverlayFor(path);
+      if (overlay) return propertyOverlayPaintFrontmatter(base, overlay);
+    }
+  } catch (_) {}
+  return base;
 }
 
 function propertyCardFootAdapterCanRead(plugin) {
@@ -85733,9 +85744,14 @@ function propertyCardFootAdapterSpec(options = {}) {
 function propertyCardFootAdapterDigest(spec) {
   try {
     const rows = Array.isArray(spec?.inventory?.rows) ? spec.inventory.rows : [];
+    // The editor hook's presence is part of the signature: registering or
+    // unregistering it repaints open drawers so they gain or lose the
+    // Add property / Edit all actions without waiting for vault traffic.
+    const hook = typeof propertyCardFootEditorHook === "function" && propertyCardFootEditorHook ? 1 : 0;
     return JSON.stringify({
       state: spec?.inventory?.state || "",
       stamp: spec?.stamp?.text || "",
+      hook,
       rows: rows.map((row) => [
         row.key,
         row.occurrence,
@@ -110860,13 +110876,22 @@ class BobLedgerToolsRecordSheetMixin {
   }
 
   recordSheetFrontmatter(path) {
+    let base = null;
     try {
       const file = this.app?.vault?.getAbstractFileByPath?.(path);
       const cache = file ? this.app?.metadataCache?.getFileCache?.(file) : null;
-      return cache && cache.frontmatter && typeof cache.frontmatter === "object" ? cache.frontmatter : null;
+      base = cache && cache.frontmatter && typeof cache.frontmatter === "object" ? cache.frontmatter : null;
     } catch (_) {
-      return null;
+      base = null;
     }
+    try {
+      if (typeof this.propertyOverlayFor === "function"
+        && typeof propertyOverlayPaintFrontmatter === "function") {
+        const overlay = this.propertyOverlayFor(path);
+        if (overlay) return propertyOverlayPaintFrontmatter(base || {}, overlay);
+      }
+    } catch (_) {}
+    return base;
   }
 
   recordSheetCache(path) {
@@ -111726,9 +111751,11 @@ class BobLedgerToolsRecordSheetFootMixin {
   recordSheetFootDigest(spec) {
     try {
       const rows = Array.isArray(spec?.inventory?.rows) ? spec.inventory.rows : [];
+      const hook = typeof propertyCardFootEditorHook === "function" && propertyCardFootEditorHook ? 1 : 0;
       return JSON.stringify({
         state: spec?.inventory?.state || "",
         stamp: spec?.stamp?.text || "",
+        hook,
         rows: rows.map((row) => [
           row.key,
           row.occurrence,
@@ -166597,10 +166624,18 @@ class BobLedgerToolsPropertyUpdateMixin {
   }
 
   propertyPublishOverlay(path, overlay) {
-    // Later editor-shell, card, and drawer surfaces subscribe through
-    // propertyOverlayStore().subscribe; this hook stays a no-op publisher
-    // so confirmed writes can land before those surfaces exist.
-    void path;
+    // Confirmed post-images repaint every surface until source or cache
+    // catches up: drawers and feet reread through their scheduled refresh,
+    // and the open editor on the same path repaints its overlay-merged rows.
+    // Rendering never spawns bob or writes; the store keeps null, deletion,
+    // and ordering semantics.
+    try {
+      if (typeof this.propertyEditorRefreshDrawers === "function") this.propertyEditorRefreshDrawers();
+    } catch (_) {}
+    try {
+      const modal = this.propertyEditorModal;
+      if (modal && modal.closed !== true && modal.filePath === path) modal.paintPropertyEditor();
+    } catch (_) {}
     void overlay;
   }
 
@@ -166939,6 +166974,11 @@ function propertyEditorFrontmatterState(report) {
 }
 
 function propertyEditorRecoveryIssue(report) {
+  if (typeof propertyEditorRecoveryDetails === "function") {
+    const details = propertyEditorRecoveryDetails(report);
+    if (!details) return null;
+    return { state: details.state, line: details.line };
+  }
   if (!report || typeof report !== "object") return null;
   const state = propertyEditorFrontmatterState(report);
   if (state !== "invalid" && state !== "unclosed" && state !== "duplicate") return null;
@@ -166977,12 +167017,23 @@ function propertyEditorDegradedFor(input = {}) {
   }
   const issue = propertyEditorRecoveryIssue(report);
   if (issue) {
+    let details = null;
+    try {
+      details = typeof propertyEditorRecoveryDetails === "function"
+        ? propertyEditorRecoveryDetails(report)
+        : null;
+    } catch (_) {
+      details = null;
+    }
     return {
       mode: "recovery",
       writable: false,
       state: issue.state,
       line: issue.line,
       text: PROPERTY_EDITOR_RECOVERY_TEXT,
+      message: details && details.message ? details.message : PROPERTY_EDITOR_RECOVERY_TEXT,
+      diagnostics: details ? details.diagnostics : [],
+      ownership: details ? details.ownership : [],
     };
   }
   const rows = Array.isArray(report.properties) ? report.properties : [];
@@ -167122,14 +167173,21 @@ class PropertyEditorModal extends PropertyEditorModalBase {
     this.closeToken = 0;
     this.pendingApply = false;
     this.announce = "";
-    const ids = propertyEditorOrderedIds(this.properties.length ? this.properties : this.cacheRows);
-    if (!this.selectedId && ids.length) this.selectedId = ids[0];
-    if (typeof options.key === "string" && options.key) {
-      const match = (this.properties.length ? this.properties : this.cacheRows)
-        .find((row) => row && row.key === options.key);
-      if (match) {
-        const idx = (this.properties.length ? this.properties : this.cacheRows).indexOf(match);
-        this.selectedId = propertyEditorRowId(match, idx);
+    const initialRows = this.properties.length ? this.properties : this.cacheRows;
+    if (typeof propertyEditorNearestId === "function") {
+      if (!this.selectedId) this.selectedId = propertyEditorNearestId(initialRows, { key: "", ordinal: 0, line: null });
+      if (typeof options.key === "string" && options.key) {
+        this.selectedId = propertyEditorNearestId(initialRows, { key: options.key, ordinal: 0, line: null });
+      }
+    } else {
+      const ids = propertyEditorOrderedIds(initialRows);
+      if (!this.selectedId && ids.length) this.selectedId = ids[0];
+      if (typeof options.key === "string" && options.key) {
+        const match = initialRows.find((row) => row && row.key === options.key);
+        if (match) {
+          const idx = initialRows.indexOf(match);
+          this.selectedId = propertyEditorRowId(match, idx);
+        }
       }
     }
   }
@@ -167196,6 +167254,20 @@ class PropertyEditorModal extends PropertyEditorModalBase {
     try {
       if (typeof propertyEditorRegisterSession === "function") propertyEditorRegisterSession(this);
     } catch (_) {}
+    try {
+      if (!this._propertyOverlayUnsub && this.propertyPlugin
+        && typeof this.propertyPlugin.propertyOverlayStore === "function") {
+        const store = this.propertyPlugin.propertyOverlayStore();
+        if (store && typeof store.subscribe === "function") {
+          const modal = this;
+          this._propertyOverlayUnsub = store.subscribe((path) => {
+            if (modal.closed) return;
+            if (path !== modal.filePath) return;
+            try { modal.paintPropertyEditor(); } catch (_) {}
+          });
+        }
+      }
+    } catch (_) {}
     return this.session;
   }
 
@@ -167230,7 +167302,16 @@ class PropertyEditorModal extends PropertyEditorModalBase {
   }
 
   propertyEditorPaintOptions() {
-    const rows = this.properties.length ? this.properties : this.cacheRows;
+    const base = this.properties.length ? this.properties : this.cacheRows;
+    let rows = base;
+    try {
+      if (typeof propertyEditorOverlayFor === "function" && typeof propertyEditorOverlayRows === "function") {
+        const overlay = propertyEditorOverlayFor(this.propertyPlugin, this.filePath);
+        if (overlay) rows = propertyEditorOverlayRows(base, overlay);
+      }
+    } catch (_) {
+      rows = base;
+    }
     const degraded = propertyEditorDegradedFor({
       capability: this.propertyPlugin?.propertyCapability ?? this.editorCapability(),
       report: this.report,
@@ -167319,6 +167400,14 @@ class PropertyEditorModal extends PropertyEditorModalBase {
   // otherwise fall back to the nearest surviving row.
   propertyEditorReconcile(report) {
     if (this.closed || !report || typeof report !== "object") return;
+    let wanted = null;
+    try {
+      wanted = typeof propertyEditorWantedSelection === "function"
+        ? propertyEditorWantedSelection(this)
+        : null;
+    } catch (_) {
+      wanted = null;
+    }
     this.report = report;
     if (typeof report.note_kind === "string" && report.note_kind) this.noteKind = report.note_kind;
     const rows = Array.isArray(report.properties) ? report.properties.slice() : [];
@@ -167327,8 +167416,12 @@ class PropertyEditorModal extends PropertyEditorModalBase {
     if (typeof report.fingerprint === "string" && report.fingerprint) this.editorRebase(report.fingerprint);
     const ids = new Set(propertyEditorOrderedIds(rows));
     if (!ids.has(this.selectedId)) {
-      const ordered = this.editorOrderedRows();
-      this.selectedId = ordered.length ? ordered[0].id : "";
+      if (typeof propertyEditorNearestId === "function" && wanted) {
+        this.selectedId = propertyEditorNearestId(rows, wanted);
+      } else {
+        const ordered = this.editorOrderedRows();
+        this.selectedId = ordered.length ? ordered[0].id : "";
+      }
     }
     if (this.status.kind === "reading" || this.status.kind === "checking") {
       this.status = rows.length
@@ -167637,6 +167730,10 @@ class PropertyEditorModal extends PropertyEditorModalBase {
     this.closed = true;
     this.closeToken += 1;
     try {
+      if (typeof this._propertyOverlayUnsub === "function") this._propertyOverlayUnsub();
+    } catch (_) {}
+    this._propertyOverlayUnsub = null;
+    try {
       if (typeof bobCardUnwireCloseKeys === "function") bobCardUnwireCloseKeys(this);
     } catch (_) {}
     try {
@@ -167733,8 +167830,12 @@ function propertyEditorPaintAll(host, options, doc, modal) {
   }
   if (degraded.mode === "recovery") {
     const banner = propertyEditorCreateEl(doc, "div", "bob-property-editor-banner is-recovery");
+    const message = degraded.message || PROPERTY_EDITOR_RECOVERY_TEXT;
     const line = degraded.line !== null && degraded.line !== undefined ? ` · line ${degraded.line}` : "";
-    propertyEditorSetText(banner, `${PROPERTY_EDITOR_RECOVERY_TEXT}${line}`);
+    const ownership = Array.isArray(degraded.ownership) && degraded.ownership.length
+      ? ` · ${degraded.ownership.join("; ")}`
+      : "";
+    propertyEditorSetText(banner, `${message}${line}${ownership}`);
     if (banner) host.appendChild(banner);
   }
   if (degraded.mode === "empty") {
@@ -167812,6 +167913,9 @@ function propertyEditorPaintRow(doc, host, entry, selected, modal) {
     const decision = propertyEditorActionForRow(row);
     button.setAttribute("data-property-action", decision.action);
     if (decision.action === "locked") button.setAttribute("aria-disabled", "true");
+    if (row && typeof row.diagnostic === "string" && row.diagnostic) {
+      try { button.setAttribute("title", row.diagnostic); } catch (_) {}
+    }
   } catch (_) {}
   const icon = propertyEditorCreateEl(doc, "span", "bob-property-row-icon");
   propertyEditorSetText(icon, propertyEditorKindIcon(row.kind));
@@ -168144,9 +168248,22 @@ function propertyEditorDateTimeValue(raw, options = {}) {
   const zone = options.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
   const nowParts = propertyEditorPartsInZone(now, zone);
   if (!input) return { ok: false, message: "Enter a date and time; use Ctrl+D to unset this property." };
+  // An existing value without an offset — and a brand-new datetime — sends
+  // local wall time with no offset. Only an explicitly typed offset (handled
+  // above) or an existing offset keeps one. Seconds follow the existing
+  // value's precision so 09:41 never becomes 09:41:00.
+  const existingInfo = typeof propertyEditorExistingDateTimeInfo === "function"
+    ? propertyEditorExistingDateTimeInfo(options.existingValue, options.existingStyle)
+    : { hasOffset: null, hasSeconds: null };
+  const omitOffset = existingInfo.hasOffset !== true;
+  const omitSeconds = existingInfo.hasSeconds === false;
+  const formatWall = (parts, offsetMinutes) => propertyEditorFormatDateTimeParts(parts, {
+    offset: omitOffset ? "" : propertyEditorFormatOffset(offsetMinutes),
+    seconds: !omitSeconds,
+  });
   if (/^now$/i.test(input)) {
     const offset = propertyEditorOffsetMinutes(now, zone);
-    return { ok: true, value: `${propertyEditorFormatDate(nowParts)}T${propertyEditorFormatTime(nowParts)}${propertyEditorFormatOffset(offset)}` };
+    return { ok: true, value: formatWall(nowParts, offset) };
   }
   const explicit = propertyEditorExplicitIsoDateTime(input);
   if (explicit) return explicit.error ? { ok: false, message: explicit.error } : { ok: true, value: explicit.value };
@@ -168155,25 +168272,28 @@ function propertyEditorDateTimeValue(raw, options = {}) {
     if (localIso.error) return { ok: false, message: localIso.error };
     const resolved = propertyEditorWallTimeInstant(localIso, zone);
     if (resolved.error) return { ok: false, message: resolved.error };
-    return { ok: true, value: `${propertyEditorFormatDate(localIso)}T${propertyEditorFormatTime(localIso)}${propertyEditorFormatOffset(resolved.offset)}` };
+    return { ok: true, value: formatWall(localIso, resolved.offset) };
   }
   const timeOnly = propertyEditorClockParts(input);
   if (timeOnly) {
     const parts = { ...nowParts, ...timeOnly };
     const resolved = propertyEditorWallTimeInstant(parts, zone);
     if (resolved.error) return { ok: false, message: resolved.error };
-    return { ok: true, value: `${propertyEditorFormatDate(parts)}T${propertyEditorFormatTime(parts)}${propertyEditorFormatOffset(resolved.offset)}` };
+    return { ok: true, value: formatWall(parts, resolved.offset) };
   }
   const dateResult = propertyEditorRelativeDate(input, nowParts);
   if (dateResult.error) return { ok: false, message: dateResult.error };
   const existing = propertyEditorExistingClock(options.existingValue);
   if (existing && existing.offset) {
-    return { ok: true, value: `${propertyEditorFormatDate(dateResult.parts)}T${propertyEditorFormatTime(existing)}${existing.offset}` };
+    const time = omitSeconds
+      ? `${String(existing.hour).padStart(2, "0")}:${String(existing.minute).padStart(2, "0")}`
+      : propertyEditorFormatTime(existing);
+    return { ok: true, value: `${propertyEditorFormatDate(dateResult.parts)}T${time}${existing.offset}` };
   }
   const parts = { ...dateResult.parts, ...(existing || { hour: 0, minute: 0, second: 0 }) };
   const resolved = propertyEditorWallTimeInstant(parts, zone);
   if (resolved.error) return { ok: false, message: resolved.error };
-  return { ok: true, value: `${propertyEditorFormatDate(parts)}T${propertyEditorFormatTime(parts)}${propertyEditorFormatOffset(resolved.offset)}` };
+  return { ok: true, value: formatWall(parts, resolved.offset) };
 }
 
 function propertyEditorDateValue(raw, options = {}) {
@@ -168237,7 +168357,13 @@ function propertyEditorStageBuild(row, stage, draft, options = {}) {
   if (!PROPERTY_EDITOR_STAGE_WIRE_KINDS.has(wireKind)) return { ok: false, message: "This property type uses the YAML escape." };
   let value;
   if (kind === "text") {
-    value = draft && Object.prototype.hasOwnProperty.call(draft, "value") ? String(draft.value) : "";
+    const draftValue = draft && Object.prototype.hasOwnProperty.call(draft, "value") ? String(draft.value) : "";
+    // An untouched text stage on a null value is a no-op: null stays null
+    // instead of collapsing to an empty string.
+    if ((row.value === null || row.value === undefined) && draftValue === "") {
+      return { ok: true, value: row.value ?? null, kind: wireKind, ops: [], changed: false };
+    }
+    value = draftValue;
   } else if (kind === "number") {
     const parsed = propertyEditorParseNumber(draft && draft.value);
     if (!parsed.ok) return parsed;
@@ -168247,16 +168373,22 @@ function propertyEditorStageBuild(row, stage, draft, options = {}) {
     if (!parsed.ok) return parsed;
     value = parsed.value;
   } else if (kind === "datetime") {
-    const parsed = propertyEditorDateTimeValue(draft && draft.value, { ...options, existingValue: row.value });
+    const parsed = propertyEditorDateTimeValue(
+      draft && draft.value,
+      { ...options, existingValue: row.value, existingStyle: row.style },
+    );
     if (!parsed.ok) return parsed;
     value = parsed.value;
   } else if (["list", "tags", "aliases"].includes(kind)) {
     if (!propertyEditorStageListShape(row, kind)) return { ok: false, message: "This scalar value cannot be edited as a list; use YAML to preserve its shape." };
-    const items = Array.isArray(draft && draft.items) ? draft.items.slice() : [];
+    const base = Array.isArray(row.value) ? row.value.slice() : [];
+    const items = Array.isArray(draft && draft.items) ? draft.items.slice() : base.slice();
     const itemDraft = String((draft && draft.itemDraft) ?? "");
+    // Only the newly typed item is normalized: untouched items keep their
+    // stored spelling and types so an unedited stage compares as unchanged.
     const item = kind === "tags" ? propertyEditorNormalizeTag(itemDraft) : itemDraft.trim();
     if (item) items.push(item);
-    value = kind === "tags" ? items.map(propertyEditorNormalizeTag) : items;
+    value = items;
   } else {
     return { ok: false, message: "This property type uses the YAML escape." };
   }
@@ -169281,7 +169413,10 @@ function propertyEditorAcceptAddName(typed, catalog, options = {}) {
   const index = Number.isInteger(options.suggestionIndex) ? options.suggestionIndex : -1;
   const picked = index >= 0 ? filtered[index] : null;
   const exact = name ? filtered.find((row) => row && row.name === name) : null;
-  const chosen = picked || exact || null;
+  // An exact typed name wins on Enter/Tab unless the user explicitly moved
+  // the highlight after typing; a lingering substring highlight never beats
+  // an exact name on its own.
+  const chosen = options.suggestionTouched === true ? (picked || exact || null) : (exact || picked || null);
   if (chosen) {
     const authoritative = chosen.authoritative === true;
     return {
@@ -169487,6 +169622,17 @@ Object.assign(PropertyEditorModal.prototype, {
       this.propertyEditorRefuseWhileSaving?.();
       return false;
     }
+    // An open value stage keeps its draft: o/O/Mod+; refuses like `=`
+    // instead of quietly cancelling the stage, even when its input lost
+    // focus and the key reads as a browse gesture.
+    if (this.stage) {
+      const notice = typeof PROPERTY_EDITOR_FINISH_EDIT_FIRST === "string"
+        ? PROPERTY_EDITOR_FINISH_EDIT_FIRST
+        : "Finish the open edit first — = is reserved while drafting.";
+      this.announce = notice;
+      this.paintPropertyEditor();
+      return false;
+    }
     if (!this.propertyEditorCanAdd()) {
       this.refusal = {
         code: "unwritable",
@@ -169506,6 +169652,7 @@ Object.assign(PropertyEditorModal.prototype, {
       catalog: inventory.rows,
       source: inventory.source,
       suggestionIndex: inventory.rows.length ? 0 : -1,
+      suggestionTouched: false,
       previewText: "Tab/Enter uses the highlighted name and type · Shift+Enter keeps this name as text",
     };
     this.addComposing = false;
@@ -169534,6 +169681,7 @@ Object.assign(PropertyEditorModal.prototype, {
   propertyEditorSetAddName(raw) {
     if (!this.addName || this.closed) return;
     this.addName.name = String(raw == null ? "" : raw);
+    this.addName.suggestionTouched = false;
     const suggestions = propertyEditorFilterPropertyNames(this.addName.catalog, this.addName.name);
     if (!suggestions.length) this.addName.suggestionIndex = -1;
     else if (!Number.isInteger(this.addName.suggestionIndex) || this.addName.suggestionIndex < 0
@@ -169554,6 +169702,7 @@ Object.assign(PropertyEditorModal.prototype, {
     if (!suggestions.length) return false;
     const current = Number.isInteger(this.addName.suggestionIndex) ? this.addName.suggestionIndex : -1;
     this.addName.suggestionIndex = Math.max(0, Math.min(suggestions.length - 1, current + delta));
+    this.addName.suggestionTouched = true;
     this.paintPropertyEditor();
     return true;
   }
@@ -169563,6 +169712,7 @@ Object.assign(PropertyEditorModal.prototype, {
     const accepted = propertyEditorAcceptAddName(this.addName.name, this.addName.catalog, {
       literal: options.literal === true,
       suggestionIndex: options.literal === true ? -1 : this.addName.suggestionIndex,
+      suggestionTouched: options.literal === true ? false : this.addName.suggestionTouched === true,
     });
     const valid = propertyEditorValidateNewKey(accepted.name, propertyEditorExistingKeys(this.properties));
     if (!valid.ok) {
@@ -169719,6 +169869,7 @@ Object.assign(PropertyEditorModal.prototype, {
       if (action === "literal") return this.propertyEditorCommitAddName({ literal: true });
       if (action === "pick-name" && Number.isInteger(index)) {
         this.addName.suggestionIndex = index;
+        this.addName.suggestionTouched = true;
         return this.propertyEditorCommitAddName();
       }
     }
@@ -169928,9 +170079,16 @@ function propertyEditorHandoffSpecies(input = {}) {
   return null;
 }
 
-// Recovery line for a damaged show report: the earliest reported property
-// line, else the frontmatter start, else the first line.
+// Recovery line for a damaged show report: bob's parse-error line first,
+// then the duplicate row's line for duplicate-key YAML, then the earliest
+// surviving row line, else the frontmatter start, else the first line.
 function propertyEditorYamlIssueLine(report) {
+  try {
+    if (typeof propertyEditorRecoveryDetails === "function") {
+      const details = propertyEditorRecoveryDetails(report);
+      if (details && Number.isInteger(details.line) && details.line > 0) return details.line;
+    }
+  } catch (_) {}
   try {
     const rows = Array.isArray(report && report.properties) ? report.properties : [];
     let line = null;
@@ -170419,7 +170577,22 @@ class BobLedgerToolsPropertyEditorEntrypointsMixin {
           : null;
         if (rows) {
           const alive = wanted && rows.some((row) => row && row.key === wanted);
-          key = alive ? wanted : (rows.length && typeof rows[0].key === "string" ? rows[0].key : "");
+          if (alive) {
+            key = wanted;
+          } else if (typeof propertyEditorNearestId === "function") {
+            const nearest = propertyEditorNearestId(rows, { key: wanted, ordinal: 0, line: null });
+            const match = rows.find((row, index) => {
+              try {
+                return typeof propertyEditorRowId === "function"
+                  && propertyEditorRowId(row, index) === nearest;
+              } catch (_) {
+                return false;
+              }
+            });
+            key = match && typeof match.key === "string" ? match.key : "";
+          } else {
+            key = rows.length && typeof rows[0].key === "string" ? rows[0].key : "";
+          }
         }
       }
     } catch (_) {}
@@ -170586,6 +170759,246 @@ function propertyEditorUnregisterSession(modal) {
     }
   } catch (_) {}
 }
+// ---- src/298o-plugin-property-editor-row-fidelity.js ----
+// Property editor row fidelity (bob-cli-pf.4.1.7 row-fidelity).
+// Nearest-row identity across reconciliation, overlay post-images for every
+// surface, hook-aware drawer digests, verbatim recovery diagnostics, and
+// datetime/tag/null/add-flow value fidelity. Pure helpers stay DOM-free;
+// prototype patches follow the 298i/298l pattern.
+function propertyEditorSelectionOf(rows, id) {
+  const list = Array.isArray(rows) ? rows : [];
+  let ordinal = 0;
+  const seen = new Map();
+  for (let index = 0; index < list.length; index += 1) {
+    const row = list[index];
+    if (!row || typeof row.key !== "string") continue;
+    const count = seen.get(row.key) || 0;
+    seen.set(row.key, count + 1);
+    if (propertyEditorRowId(row, index) === id) {
+      return {
+        key: row.key,
+        ordinal: count,
+        line: Number.isInteger(row.line) ? row.line : null,
+      };
+    }
+    void ordinal;
+  }
+  return null;
+}
+
+function propertyEditorNearestId(rows, wanted) {
+  const list = Array.isArray(rows) ? rows : [];
+  const entries = [];
+  list.forEach((row, index) => {
+    if (!row || typeof row.key !== "string") return;
+    entries.push({ row, index, id: propertyEditorRowId(row, index) });
+  });
+  if (!entries.length) return "";
+  const key = wanted && typeof wanted.key === "string" ? wanted.key : "";
+  if (!key) return entries[0].id;
+  const sameKey = entries.filter((entry) => entry.row.key === key);
+  if (sameKey.length) {
+    const ordinal = wanted && Number.isInteger(wanted.ordinal) ? wanted.ordinal : 0;
+    if (ordinal >= 0 && ordinal < sameKey.length) return sameKey[ordinal].id;
+    const line = wanted && Number.isInteger(wanted.line) ? wanted.line : null;
+    if (line !== null) {
+      let best = sameKey[0];
+      let bestDistance = best.row && Number.isInteger(best.row.line)
+        ? Math.abs(best.row.line - line)
+        : Number.MAX_SAFE_INTEGER;
+      for (const entry of sameKey.slice(1)) {
+        const distance = entry.row && Number.isInteger(entry.row.line)
+          ? Math.abs(entry.row.line - line)
+          : Number.MAX_SAFE_INTEGER;
+        if (distance < bestDistance) {
+          best = entry;
+          bestDistance = distance;
+        }
+      }
+      return best.id;
+    }
+    return sameKey[0].id;
+  }
+  const line = wanted && Number.isInteger(wanted.line) ? wanted.line : null;
+  if (line !== null) {
+    let best = entries[0];
+    let bestDistance = best.row && Number.isInteger(best.row.line)
+      ? Math.abs(best.row.line - line)
+      : Number.MAX_SAFE_INTEGER;
+    for (const entry of entries.slice(1)) {
+      const distance = entry.row && Number.isInteger(entry.row.line)
+        ? Math.abs(entry.row.line - line)
+        : Number.MAX_SAFE_INTEGER;
+      if (distance < bestDistance) {
+        best = entry;
+        bestDistance = distance;
+      }
+    }
+    return best.id;
+  }
+  return entries[0].id;
+}
+
+function propertyEditorWantedSelection(modal) {
+  try {
+    const rows = modal && Array.isArray(modal.properties) ? modal.properties : [];
+    const found = propertyEditorSelectionOf(rows, modal && modal.selectedId);
+    if (found) return found;
+  } catch (_) {}
+  try {
+    const cache = modal && Array.isArray(modal.cacheRows) ? modal.cacheRows : [];
+    const found = propertyEditorSelectionOf(cache, modal && modal.selectedId);
+    if (found) return found;
+  } catch (_) {}
+  return { key: "", ordinal: 0, line: null };
+}
+
+// Recovery diagnostics arrive on three channels: frontmatter.error carries
+// the parse message and 1-based source line, duplicate rows carry their own
+// source lines, and ownership_diagnostics explains unresolved ownership.
+// The YAML target prefers the parse-error line, then the first duplicate
+// row's line, then the earliest surviving row line.
+function propertyEditorRecoveryDetails(report) {
+  if (!report || typeof report !== "object") return null;
+  const state = propertyEditorFrontmatterState(report);
+  if (state !== "invalid" && state !== "unclosed" && state !== "duplicate") return null;
+  const frontmatter = report.frontmatter && typeof report.frontmatter === "object" ? report.frontmatter : {};
+  const error = frontmatter.error && typeof frontmatter.error === "object" ? frontmatter.error : {};
+  const message = typeof error.message === "string" && error.message ? error.message : "";
+  const errorLine = Number.isInteger(error.line) && error.line > 0 ? error.line : null;
+  const rows = Array.isArray(report.properties) ? report.properties : [];
+  let duplicateLine = null;
+  let earliestLine = null;
+  const diagnostics = [];
+  for (const row of rows) {
+    if (!row) continue;
+    if (Number.isInteger(row.line) && row.line > 0) {
+      if (earliestLine === null || row.line < earliestLine) earliestLine = row.line;
+      if (row.duplicate === true && duplicateLine === null) duplicateLine = row.line;
+    }
+    if (typeof row.diagnostic === "string" && row.diagnostic) {
+      diagnostics.push({ key: typeof row.key === "string" ? row.key : "", line: row.line ?? null, diagnostic: row.diagnostic });
+    }
+  }
+  const ownership = Array.isArray(report.ownership_diagnostics)
+    ? report.ownership_diagnostics.filter((entry) => typeof entry === "string" && entry)
+    : [];
+  let line = errorLine;
+  if (line === null && state === "duplicate" && duplicateLine !== null) line = duplicateLine;
+  if (line === null) line = earliestLine;
+  if (line === null && Number.isInteger(frontmatter.start_line) && frontmatter.start_line > 0) line = frontmatter.start_line;
+  return { state, line, message, diagnostics, ownership };
+}
+
+function propertyEditorRowDiagnostics(report) {
+  const details = propertyEditorRecoveryDetails(report);
+  if (!details) return [];
+  return details.diagnostics;
+}
+
+// Overlay post-image for one surface paint: confirmed values replace the
+// cached ones by key (first occurrence wins for duplicates) while rows keep
+// their inventory metadata; deleted keys leave the paint. Null stays null:
+// only absence removes a row.
+function propertyEditorOverlayRows(rows, overlay) {
+  const list = Array.isArray(rows) ? rows : [];
+  if (!overlay || typeof overlay !== "object") return list;
+  const replacements = new Map();
+  for (const row of Array.isArray(overlay.properties) ? overlay.properties : []) {
+    if (!row || typeof row.key !== "string" || !row.key) continue;
+    if (!replacements.has(row.key)) replacements.set(row.key, row.value);
+  }
+  const deleted = new Set(
+    (Array.isArray(overlay.deletedKeys) ? overlay.deletedKeys : []).filter((key) => typeof key === "string" && key),
+  );
+  if (!replacements.size && !deleted.size) return list;
+  const seen = new Set();
+  const next = [];
+  for (const row of list) {
+    if (!row || typeof row.key !== "string") continue;
+    if (deleted.has(row.key)) continue;
+    if (replacements.has(row.key) && !seen.has(row.key)) {
+      seen.add(row.key);
+      next.push({ ...row, value: replacements.get(row.key) });
+      continue;
+    }
+    if (replacements.has(row.key)) {
+      seen.add(row.key);
+      continue;
+    }
+    next.push(row);
+  }
+  return next;
+}
+
+function propertyEditorOverlayFor(plugin, path) {
+  try {
+    if (plugin && typeof plugin.propertyOverlayFor === "function") return plugin.propertyOverlayFor(path);
+  } catch (_) {}
+  return null;
+}
+
+// Datetime fidelity: an existing value without an offset (empty-style) and
+// a brand-new datetime both send local wall time with no offset, unless the
+// user typed an explicit offset whose instant is then retained. Seconds
+// follow the existing value's precision.
+function propertyEditorExistingDateTimeInfo(value, style) {
+  const text = typeof value === "string" ? value : "";
+  let offset = null;
+  if (style && typeof style === "object" && style.datetime_offset !== undefined && style.datetime_offset !== null) {
+    offset = String(style.datetime_offset);
+  } else if (text) {
+    const match = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?\s*(Z|[+-]\d{2}(?::?\d{2})?)?$/i.exec(text.trim());
+    if (match) offset = match[1] || "";
+  }
+  let seconds = null;
+  if (text) {
+    const timeMatch = /^\d{4}-\d{2}-\d{2}[T ](\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?)/.exec(text.trim());
+    if (timeMatch) seconds = timeMatch[1].split(":").length >= 3;
+  }
+  return { hasOffset: offset === null ? null : offset !== "", offset: offset || "", hasSeconds: seconds };
+}
+
+function propertyEditorDateTimeHasSeconds(raw) {
+  const match = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?/.exec(String(raw || "").trim());
+  if (!match) return null;
+  return match[0].split(":").length >= 3;
+}
+
+function propertyEditorFormatDateTimeParts(parts, options = {}) {
+  const date = propertyEditorFormatDate(parts);
+  const wantSeconds = options.seconds !== false;
+  const time = wantSeconds
+    ? propertyEditorFormatTime(parts)
+    : `${String(parts.hour).padStart(2, "0")}:${String(parts.minute).padStart(2, "0")}`;
+  const offset = typeof options.offset === "string" ? options.offset : "";
+  return `${date}T${time}${offset}`;
+}
+
+// Exact typed names win over a highlighted substring match on Enter/Tab
+// unless the user explicitly moved the highlight after typing.
+function propertyEditorAcceptAddNameExactFirst(typed, catalog, options = {}) {
+  const name = propertyEditorNormalizePropertyName(typed);
+  const filtered = propertyEditorFilterPropertyNames(catalog, propertyEditorNormalizePropertyName(typed));
+  if (options.literal === true) {
+    return { ok: true, name, wireKind: "text", type: "text", fromCompletion: false, authoritative: false };
+  }
+  const exact = name ? filtered.find((row) => row && row.name === name) : null;
+  if (exact && options.suggestionTouched !== true) {
+    const authoritative = exact.authoritative === true;
+    return {
+      ok: true,
+      name: exact.name,
+      wireKind: authoritative ? exact.wireKind : "text",
+      type: authoritative ? exact.type : "text",
+      fromCompletion: true,
+      authoritative,
+    };
+  }
+  return propertyEditorAcceptAddName(typed, catalog, options);
+}
+
+const PROPERTY_EDITOR_FINISH_EDIT_FIRST = "Finish the open edit first \u2014 = is reserved while drafting.";
 // ---- src/293-keep-inbox-render.js ----
 // Keep inbox render (keep-indicator-view): DOM for the `bob-keep-inbox`
 // status-bar item. Pure DOM helpers plus one paint entry point; no spawn,
@@ -177426,6 +177839,18 @@ try {
       propertyEditorEntryReadSource,
       PROPERTY_EDITOR_SAVING_TEXT,
       propertyEditorNoteKindSpecies,
+      propertyEditorSelectionOf,
+      propertyEditorNearestId,
+      propertyEditorWantedSelection,
+      propertyEditorRecoveryDetails,
+      propertyEditorRowDiagnostics,
+      propertyEditorOverlayRows,
+      propertyEditorOverlayFor,
+      propertyEditorExistingDateTimeInfo,
+      propertyEditorDateTimeHasSeconds,
+      propertyEditorFormatDateTimeParts,
+      propertyEditorAcceptAddNameExactFirst,
+      PROPERTY_EDITOR_FINISH_EDIT_FIRST,
     });
   }
 } catch (_) {}

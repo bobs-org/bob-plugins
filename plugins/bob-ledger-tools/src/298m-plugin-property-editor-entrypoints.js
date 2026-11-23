@@ -50,9 +50,16 @@ function propertyEditorHandoffSpecies(input = {}) {
   return null;
 }
 
-// Recovery line for a damaged show report: the earliest reported property
-// line, else the frontmatter start, else the first line.
+// Recovery line for a damaged show report: bob's parse-error line first,
+// then the duplicate row's line for duplicate-key YAML, then the earliest
+// surviving row line, else the frontmatter start, else the first line.
 function propertyEditorYamlIssueLine(report) {
+  try {
+    if (typeof propertyEditorRecoveryDetails === "function") {
+      const details = propertyEditorRecoveryDetails(report);
+      if (details && Number.isInteger(details.line) && details.line > 0) return details.line;
+    }
+  } catch (_) {}
   try {
     const rows = Array.isArray(report && report.properties) ? report.properties : [];
     let line = null;
@@ -541,7 +548,22 @@ class BobLedgerToolsPropertyEditorEntrypointsMixin {
           : null;
         if (rows) {
           const alive = wanted && rows.some((row) => row && row.key === wanted);
-          key = alive ? wanted : (rows.length && typeof rows[0].key === "string" ? rows[0].key : "");
+          if (alive) {
+            key = wanted;
+          } else if (typeof propertyEditorNearestId === "function") {
+            const nearest = propertyEditorNearestId(rows, { key: wanted, ordinal: 0, line: null });
+            const match = rows.find((row, index) => {
+              try {
+                return typeof propertyEditorRowId === "function"
+                  && propertyEditorRowId(row, index) === nearest;
+              } catch (_) {
+                return false;
+              }
+            });
+            key = match && typeof match.key === "string" ? match.key : "";
+          } else {
+            key = rows.length && typeof rows[0].key === "string" ? rows[0].key : "";
+          }
         }
       }
     } catch (_) {}

@@ -167,6 +167,11 @@ function propertyEditorFrontmatterState(report) {
 }
 
 function propertyEditorRecoveryIssue(report) {
+  if (typeof propertyEditorRecoveryDetails === "function") {
+    const details = propertyEditorRecoveryDetails(report);
+    if (!details) return null;
+    return { state: details.state, line: details.line };
+  }
   if (!report || typeof report !== "object") return null;
   const state = propertyEditorFrontmatterState(report);
   if (state !== "invalid" && state !== "unclosed" && state !== "duplicate") return null;
@@ -205,12 +210,23 @@ function propertyEditorDegradedFor(input = {}) {
   }
   const issue = propertyEditorRecoveryIssue(report);
   if (issue) {
+    let details = null;
+    try {
+      details = typeof propertyEditorRecoveryDetails === "function"
+        ? propertyEditorRecoveryDetails(report)
+        : null;
+    } catch (_) {
+      details = null;
+    }
     return {
       mode: "recovery",
       writable: false,
       state: issue.state,
       line: issue.line,
       text: PROPERTY_EDITOR_RECOVERY_TEXT,
+      message: details && details.message ? details.message : PROPERTY_EDITOR_RECOVERY_TEXT,
+      diagnostics: details ? details.diagnostics : [],
+      ownership: details ? details.ownership : [],
     };
   }
   const rows = Array.isArray(report.properties) ? report.properties : [];

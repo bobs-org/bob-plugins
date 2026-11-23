@@ -198,9 +198,22 @@ function propertyEditorDateTimeValue(raw, options = {}) {
   const zone = options.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
   const nowParts = propertyEditorPartsInZone(now, zone);
   if (!input) return { ok: false, message: "Enter a date and time; use Ctrl+D to unset this property." };
+  // An existing value without an offset — and a brand-new datetime — sends
+  // local wall time with no offset. Only an explicitly typed offset (handled
+  // above) or an existing offset keeps one. Seconds follow the existing
+  // value's precision so 09:41 never becomes 09:41:00.
+  const existingInfo = typeof propertyEditorExistingDateTimeInfo === "function"
+    ? propertyEditorExistingDateTimeInfo(options.existingValue, options.existingStyle)
+    : { hasOffset: null, hasSeconds: null };
+  const omitOffset = existingInfo.hasOffset !== true;
+  const omitSeconds = existingInfo.hasSeconds === false;
+  const formatWall = (parts, offsetMinutes) => propertyEditorFormatDateTimeParts(parts, {
+    offset: omitOffset ? "" : propertyEditorFormatOffset(offsetMinutes),
+    seconds: !omitSeconds,
+  });
   if (/^now$/i.test(input)) {
     const offset = propertyEditorOffsetMinutes(now, zone);
-    return { ok: true, value: `${propertyEditorFormatDate(nowParts)}T${propertyEditorFormatTime(nowParts)}${propertyEditorFormatOffset(offset)}` };
+    return { ok: true, value: formatWall(nowParts, offset) };
   }
   const explicit = propertyEditorExplicitIsoDateTime(input);
   if (explicit) return explicit.error ? { ok: false, message: explicit.error } : { ok: true, value: explicit.value };
@@ -209,25 +222,28 @@ function propertyEditorDateTimeValue(raw, options = {}) {
     if (localIso.error) return { ok: false, message: localIso.error };
     const resolved = propertyEditorWallTimeInstant(localIso, zone);
     if (resolved.error) return { ok: false, message: resolved.error };
-    return { ok: true, value: `${propertyEditorFormatDate(localIso)}T${propertyEditorFormatTime(localIso)}${propertyEditorFormatOffset(resolved.offset)}` };
+    return { ok: true, value: formatWall(localIso, resolved.offset) };
   }
   const timeOnly = propertyEditorClockParts(input);
   if (timeOnly) {
     const parts = { ...nowParts, ...timeOnly };
     const resolved = propertyEditorWallTimeInstant(parts, zone);
     if (resolved.error) return { ok: false, message: resolved.error };
-    return { ok: true, value: `${propertyEditorFormatDate(parts)}T${propertyEditorFormatTime(parts)}${propertyEditorFormatOffset(resolved.offset)}` };
+    return { ok: true, value: formatWall(parts, resolved.offset) };
   }
   const dateResult = propertyEditorRelativeDate(input, nowParts);
   if (dateResult.error) return { ok: false, message: dateResult.error };
   const existing = propertyEditorExistingClock(options.existingValue);
   if (existing && existing.offset) {
-    return { ok: true, value: `${propertyEditorFormatDate(dateResult.parts)}T${propertyEditorFormatTime(existing)}${existing.offset}` };
+    const time = omitSeconds
+      ? `${String(existing.hour).padStart(2, "0")}:${String(existing.minute).padStart(2, "0")}`
+      : propertyEditorFormatTime(existing);
+    return { ok: true, value: `${propertyEditorFormatDate(dateResult.parts)}T${time}${existing.offset}` };
   }
   const parts = { ...dateResult.parts, ...(existing || { hour: 0, minute: 0, second: 0 }) };
   const resolved = propertyEditorWallTimeInstant(parts, zone);
   if (resolved.error) return { ok: false, message: resolved.error };
-  return { ok: true, value: `${propertyEditorFormatDate(parts)}T${propertyEditorFormatTime(parts)}${propertyEditorFormatOffset(resolved.offset)}` };
+  return { ok: true, value: formatWall(parts, resolved.offset) };
 }
 
 function propertyEditorDateValue(raw, options = {}) {
@@ -291,7 +307,13 @@ function propertyEditorStageBuild(row, stage, draft, options = {}) {
   if (!PROPERTY_EDITOR_STAGE_WIRE_KINDS.has(wireKind)) return { ok: false, message: "This property type uses the YAML escape." };
   let value;
   if (kind === "text") {
-    value = draft && Object.prototype.hasOwnProperty.call(draft, "value") ? String(draft.value) : "";
+    const draftValue = draft && Object.prototype.hasOwnProperty.call(draft, "value") ? String(draft.value) : "";
+    // An untouched text stage on a null value is a no-op: null stays null
+    // instead of collapsing to an empty string.
+    if ((row.value === null || row.value === undefined) && draftValue === "") {
+      return { ok: true, value: row.value ?? null, kind: wireKind, ops: [], changed: false };
+    }
+    value = draftValue;
   } else if (kind === "number") {
     const parsed = propertyEditorParseNumber(draft && draft.value);
     if (!parsed.ok) return parsed;
@@ -301,16 +323,22 @@ function propertyEditorStageBuild(row, stage, draft, options = {}) {
     if (!parsed.ok) return parsed;
     value = parsed.value;
   } else if (kind === "datetime") {
-    const parsed = propertyEditorDateTimeValue(draft && draft.value, { ...options, existingValue: row.value });
+    const parsed = propertyEditorDateTimeValue(
+      draft && draft.value,
+      { ...options, existingValue: row.value, existingStyle: row.style },
+    );
     if (!parsed.ok) return parsed;
     value = parsed.value;
   } else if (["list", "tags", "aliases"].includes(kind)) {
     if (!propertyEditorStageListShape(row, kind)) return { ok: false, message: "This scalar value cannot be edited as a list; use YAML to preserve its shape." };
-    const items = Array.isArray(draft && draft.items) ? draft.items.slice() : [];
+    const base = Array.isArray(row.value) ? row.value.slice() : [];
+    const items = Array.isArray(draft && draft.items) ? draft.items.slice() : base.slice();
     const itemDraft = String((draft && draft.itemDraft) ?? "");
+    // Only the newly typed item is normalized: untouched items keep their
+    // stored spelling and types so an unedited stage compares as unchanged.
     const item = kind === "tags" ? propertyEditorNormalizeTag(itemDraft) : itemDraft.trim();
     if (item) items.push(item);
-    value = kind === "tags" ? items.map(propertyEditorNormalizeTag) : items;
+    value = items;
   } else {
     return { ok: false, message: "This property type uses the YAML escape." };
   }

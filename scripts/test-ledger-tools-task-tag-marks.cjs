@@ -537,8 +537,9 @@ test("requirement Live Preview draws owner ink, state and depth, and reveals its
   assert.equal(attrs["data-bob-req"], "true");
   assert.equal(attrs["data-bob-req-depth"], "1");
   assert.equal(attrs["data-bob-req-state"], "pending");
-  assert.match(attrs.title, /Requirement · level 1 of “Ship the exporter” · Pending/);
-  assert.ok(attrs.title.includes(TASK_REQ_TEACHING_COPY));
+  assert.equal(attrs.title, undefined);
+  assert.match(attrs["data-bob-req-label"], /Requirement of “Ship the exporter” · Pending/);
+  assert.ok(attrs["data-bob-req-label"].includes(TASK_REQ_TEACHING_COPY));
   const inner = plugin.buildTaskReqDecorations(
     makeView({ lines, selection: [{ from: 42, to: 42 }] }),
   );
@@ -550,7 +551,7 @@ test("requirement Reading view annotates existing rows and labels its checkbox",
   const fx = fakeRenderTree();
   const li = fx.makeEl("li");
   li.className = "task-list-item";
-  li.setAttribute("data-task", " ");
+  li.setAttribute("data-task", ""); // Obsidian Reading view uses empty for an open box.
   li.setAttribute("data-line", "1");
   const input = fx.makeEl("input");
   input.className = "task-list-item-checkbox";
@@ -575,23 +576,135 @@ test("requirement Reading view annotates existing rows and labels its checkbox",
   assert.equal(li.getAttribute("data-bob-req-depth"), "1");
   assert.equal(li.getAttribute("data-bob-req-state"), "pending");
   assert.equal(li.getAttribute("data-bob-type-hue"), "blue");
-  assert.match(input.getAttribute("aria-label"), /Requirement · level 1 of “Ship the exporter”/);
+  assert.match(input.getAttribute("aria-label"), /Requirement of “Ship the exporter”/);
   assert.equal(input.getAttribute("data-tooltip-position"), "top");
+  assert.equal(input.getAttribute("aria-readonly"), "true");
+  assert.equal(input.getAttribute("title"), null);
+  assert.equal(li.getAttribute("title"), null);
+  plugin.markGateDocuments = () => [{ querySelectorAll: () => [li] }];
+  plugin.toggleTaskTagMarks();
+  for (const name of ["data-bob-req", "data-bob-req-depth", "data-bob-req-state", "data-bob-req-label", "data-bob-req-notice", "data-bob-type-hue"]) {
+    assert.equal(li.getAttribute(name), null, name);
+  }
+  assert.equal(input.getAttribute("aria-label"), null);
+  assert.equal(input.getAttribute("aria-readonly"), null);
+  assert.equal(plugin.taskReqRenderedOriginals.has(li), false);
+  assert.equal(plugin.taskReqRenderedInputOriginals.has(input), false);
+  // A note can render for the first time while marks are disabled.
+  plugin.taskReqRenderedModels = new WeakMap();
+  plugin.renderTaskReqsIn(fx.root, {
+    sourcePath: "project.md",
+    getSectionInfo: () => ({ text: source, lineStart: 0, lineEnd: 1 }),
+  });
+  assert.equal(li.getAttribute("data-bob-req"), null);
+  plugin.toggleTaskTagMarks();
+  assert.equal(li.getAttribute("data-bob-req-state"), "pending");
+  assert.equal(input.getAttribute("aria-readonly"), "true");
   assert.equal(fx.root.childNodes.length, 1, "the processor does not create DOM nodes");
 });
 
-test("requirement styles use the capped hash mask, state styling and inert checkbox", () => {
-  const css = fs.readFileSync(
-    path.join(__dirname, "..", "plugins", "bob-ledger-tools", "styles.css"),
-    "utf8",
-  );
-  assert.equal(css.split("--bob-req-glyph:").length - 1, 1);
-  assert.ok(css.includes("mask-image: var(--bob-req-glyph)"));
-  assert.ok(css.includes("pointer-events: none !important"));
-  assert.ok(css.includes("appearance: none !important"));
-  assert.ok(css.includes('[data-bob-req-state="dropped"]'));
-  assert.ok(css.includes('[data-bob-req-state="excluded"]'));
-  assert.ok(css.includes('[data-bob-req="true"][data-task="-"]'));
+test("requirement styles use four constant-slot masks, shared ink and accessible states", () => {
+  const css = fs.readFileSync(path.join(__dirname, "..", "plugins", "bob-ledger-tools", "styles.css"), "utf8");
+  for (const state of ["pending", "met", "dropped", "carried"]) {
+    assert.equal(css.split(`--bob-req-glyph-${state}:`).length - 1, 1);
+  }
+  assert.ok(!css.includes("--bob-req-count"));
+  assert.ok(!css.includes("viewBox='0 0 32 16'"));
+  assert.ok(css.includes("mask: var(--bob-req-mask) center / contain no-repeat !important"));
+  assert.ok(css.includes('input.task-list-item-checkbox:checked::after'));
+  assert.ok(css.includes('pointer-events: auto !important'));
+  assert.ok(css.includes('[data-bob-req="true"][data-task]'));
+  assert.ok(css.includes("forced-color-adjust: none"));
+  assert.ok(css.includes("--bob-req-ink: GrayText"));
+  assert.ok(css.includes("--checklist-done-decoration: none"));
+  assert.ok(css.includes(".bob-req-mark::before"));
+  // Requirements use the very same per-hue and state ink declarations as tasks.
+  for (const hue of ["blue", "orange", "aqua", "yellow", "magenta", "green", "violet", "red"]) {
+    assert.ok(css.includes(`.bob-task-tag-mark[data-bob-type-hue="${hue}"],\nbody.bob-task-tag-marks [data-bob-req="true"][data-bob-type-hue="${hue}"]`));
+  }
+});
+
+test("requirement ink attributes follow the owner's inherited-type toggle", () => {
+  const plugin = pluginWithTaskTag();
+  const identity = { type: "BUILD", hue: "blue", state: "inherited", inherited: true };
+  plugin.inheritedTaskTypesEnabled = false;
+  assert.deepEqual(plugin.taskReqTypeAttrs(identity), {});
+  plugin.inheritedTaskTypesEnabled = true;
+  assert.equal(plugin.taskReqTypeAttrs(identity)["data-bob-type-hue"], "blue");
+  for (const state of ["explicit", "muted", "unconfigured", "repair"]) {
+    const typed = { ...identity, state, inherited: false };
+    plugin.inheritedTaskTypesEnabled = false;
+    assert.equal(plugin.taskReqTypeAttrs(typed)["data-bob-type-state"], state);
+  }
+});
+
+test("Live Preview input labels restore original attributes on reveal and teardown", () => {
+  const fx = fakeRenderTree();
+  const line = fx.makeEl("div");
+  const input = fx.makeEl("input");
+  const tooltip = "Requirement of “Ship” · Pending";
+  line.setAttribute("data-bob-req-label", tooltip);
+  line.setAttribute("title", "stale row tooltip");
+  input.setAttribute("title", "Native checkbox");
+  input.setAttribute("aria-label", "Native label");
+  input.closest = () => line;
+  const view = { dom: { querySelectorAll: () => [input] } };
+  const plugin = pluginWithTaskTag();
+  plugin.setupTaskReqMarks();
+  plugin.taskReqAnnotateCheckboxInputs(view);
+  assert.equal(input.getAttribute("aria-label"), tooltip);
+  assert.equal(input.getAttribute("aria-readonly"), "true");
+  assert.equal(input.getAttribute("title"), null);
+  assert.equal(line.getAttribute("title"), null);
+  plugin.taskReqAnnotateCheckboxInputs(view);
+  plugin.taskReqRestoreCheckboxInputs(view);
+  assert.equal(input.getAttribute("title"), "Native checkbox");
+  assert.equal(input.getAttribute("aria-label"), "Native label");
+  assert.equal(input.getAttribute("aria-readonly"), null);
+  assert.equal(plugin.taskReqCheckboxesByView.size, 0);
+});
+
+test("requirement labels and click guards cover every state without writing", () => {
+  const source = ["- [ ] #task Ship", "\t- [ ] Pending", "\t\t- [?] Flagged", "\t- [-] Drop", "\t\t- [ ] Excluded", "\t- [>] Carried", "\t- [x] Hand met", "- [x] #task Done", "\t- [ ] Derived met", "- [-] #task Cancelled", "\t- [ ] Moot"].join("\n");
+  const rows = taskReqForest(source);
+  const plugin = pluginWithTaskTag();
+  plugin.setupTaskReqMarks();
+  const notices = [
+    "Requirements are met when “Ship” closes — Ctrl+Enter on the task",
+    "Requirements are met when “Ship” closes — Ctrl+Enter on the task",
+    "Dropped — Alt+] restores it", "Goes with “Drop”", "Carried — open the linked task",
+    "Met with “Ship”", "Met with “Done”", "Moot — “Cancelled” was cancelled",
+  ];
+  const registered = [];
+  plugin.registerDomEvent = (...args) => registered.push(args);
+  const doc = {};
+  plugin.taskReqBindClickGuard(doc);
+  plugin.taskReqBindClickGuard(doc);
+  assert.deepEqual(registered.map((args) => args[1]), ["pointerdown", "mousedown", "touchstart", "click"]);
+  assert.ok(registered.every((args) => args[3].capture && args[3].passive === false));
+  for (const [index, row] of rows.entries()) {
+    const label = plugin.taskReqTooltip(row, rows);
+    assert.ok(!label.includes("::"));
+    assert.equal(label.includes("level"), row.depth >= 2);
+    assert.equal(label.includes("Alt+[ drop"), row.state === "pending");
+    assert.equal(label.includes("Alt+] restore"), row.state === "dropped");
+    if (row.mark === "unknown") assert.ok(label.includes("Flagged [?]"));
+    const copy = plugin.taskReqClickNotice(row, rows);
+    assert.equal(copy, notices[index]);
+    const host = { getAttribute: (name) => ({ "data-bob-req": "true", "data-bob-req-notice": copy })[name] };
+    const input = { closest: (selector) => selector.startsWith("input") ? input : host };
+    let refused = 0;
+    const before = TestNotice.messages.length;
+    for (const type of ["pointerdown", "touchstart", "mousedown", "click"]) {
+      assert.equal(plugin.taskReqGuardClick({ type, target: input, preventDefault() { refused++; }, stopPropagation() {}, stopImmediatePropagation() {} }), true);
+    }
+    assert.equal(refused, 4);
+    assert.equal(TestNotice.messages.length, before + 1);
+    assert.equal(TestNotice.messages.at(-1), copy);
+  }
+  assert.deepEqual(taskReqForest(source), rows, "no source or recognized state changed");
+  plugin.taskTagMarksEnabled = false;
+  assert.equal(plugin.taskReqGuardClick({ target: { closest() { throw new Error("must not inspect off-gate events"); } } }), false);
 });
 
 test("Live Preview decorations cover exactly the tag and respect reveal and code", () => {

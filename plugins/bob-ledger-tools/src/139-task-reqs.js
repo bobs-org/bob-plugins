@@ -6,7 +6,7 @@
 const TASK_REQ_MAX_DEPTH = 16;
 const TASK_REQ_GLOBAL_FILTER = "#task";
 const TASK_REQ_TEACHING_COPY =
-  "Part of this task's scope. Met when the task closes. Drop it or make it a task.";
+  "Met when this task closes. Drop it or make it a task if the scope changes.";
 
 function taskReqIndent(line) {
   try {

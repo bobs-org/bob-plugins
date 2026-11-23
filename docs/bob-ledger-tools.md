@@ -296,8 +296,9 @@ Marks are display-only; session toggles restore source rendering:
   every row is already a task. Adjacent `#task #ref` pairs render as one teal
   open-book mark. Adjacent `#task #prj` pairs render as one teal target mark,
   and an exact `#hide` tag on a task line renders as a quiet grey eye-off.
-- Nested requirements show owner-colored, depth-aware `⌗` marks with derived
-  state. Toggle restores checkboxes; Reading view annotates rows in place.
+- Requirements wear constant-width, owner-colored diamonds: hollow pending,
+  filled met, faded moot/excluded, slashed dropped, arrow carried. Clicks teach;
+  toggle restores checkboxes.
 - The task type mark renders each explicit `[type:: NAME]` field (and legacy
   `[theme:: NAME]` field) on a task line as one readable `#TYPE` mark in Live
   Preview, Reading view, and Tasks/Dataview task rows. The pill text is

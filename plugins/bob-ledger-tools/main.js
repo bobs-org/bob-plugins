@@ -19986,7 +19986,7 @@ function clearTaskTagTypeAttrs(el) {
 const TASK_REQ_MAX_DEPTH = 16;
 const TASK_REQ_GLOBAL_FILTER = "#task";
 const TASK_REQ_TEACHING_COPY =
-  "Part of this task's scope. Met when the task closes. Drop it or make it a task.";
+  "Met when this task closes. Drop it or make it a task if the scope changes.";
 
 function taskReqIndent(line) {
   try {
@@ -122487,6 +122487,8 @@ class BobLedgerToolsTaskTagMarksMixin {
       this.taskTagMarksEnabled = !this.taskTagMarksEnabled;
       const enabled = this.taskTagMarksEnabled;
       this.applyMarkGateClass("bob-task-tag-marks", enabled);
+      this.taskReqRefreshRenderedRows(enabled);
+      if (!enabled) this.taskReqRestoreCheckboxInputs();
       try {
         if (enabled) {
           this.annotateTaskTagMarksInDocument();
@@ -122563,7 +122565,7 @@ class BobLedgerToolsTaskTagMarksMixin {
 // ---- src/264-plugin-task-reqs.js ----
 // --- Task requirements: Live Preview and Reading view -------------------
 // Display-only twin of bob-cli's task-requirement recognizer. The checkbox
-// stays in the DOM; attributes and CSS draw the depth run in its place.
+// stays in the DOM; attributes and CSS draw the criterion diamond in its place.
 
 const TASK_REQ_TOOLTIP_PREFIX = "Requirement";
 const TASK_REQ_DOC_FORESTS = new WeakMap();
@@ -122576,6 +122578,9 @@ class BobLedgerToolsTaskReqMarksMixin {
       this.taskReqDestroyedViews = new WeakSet();
       this.taskReqRenderedOriginals = new WeakMap();
       this.taskReqRenderedInputOriginals = new WeakMap();
+      this.taskReqRenderedModels = new WeakMap();
+      this.taskReqClickDocs = new WeakSet();
+      for (const doc of this.markGateDocuments()) this.taskReqBindClickGuard(doc);
       const extension = this.createTaskReqMarkExtension();
       if (extension && typeof this.registerEditorExtension === "function") {
         this.registerEditorExtension(extension);
@@ -122587,7 +122592,10 @@ class BobLedgerToolsTaskReqMarksMixin {
         );
       }
       if (typeof this.register === "function") {
-        this.register(() => this.taskReqRestoreCheckboxInputs());
+        this.register(() => {
+          this.taskReqRestoreCheckboxInputs();
+          this.taskReqRefreshRenderedRows(false);
+        });
       }
     } catch (error) {
       // Requirement marks never break plugin startup.
@@ -122709,13 +122717,18 @@ class BobLedgerToolsTaskReqMarksMixin {
     try {
       if (!row) return "";
       const state = String(row.state || "pending");
-      const stateLabel = state.charAt(0).toUpperCase() + state.slice(1);
-      let text = `${TASK_REQ_TOOLTIP_PREFIX} · level ${row.depth} of “${row.ownerName || "Task"}” · ${stateLabel}`;
+      const flagged = state === "pending" && row.mark === "unknown";
+      const stateLabel = flagged ? `Flagged [${row.markChar}]` : state.charAt(0).toUpperCase() + state.slice(1);
+      let text = `${TASK_REQ_TOOLTIP_PREFIX} of “${row.ownerName || "Task"}” · ${stateLabel}`;
+      if (row.depth >= 2) text += ` · level ${row.depth}`;
       if (state === "excluded" && Number.isInteger(row.excludedBy)) {
         const ancestor = (rows || []).find((candidate) => candidate.line === row.excludedBy);
         if (ancestor) text += ` · goes with “${ancestor.text || "requirement"}”`;
       }
-      return text + "\n" + TASK_REQ_TEACHING_COPY;
+      text += "\n" + TASK_REQ_TEACHING_COPY;
+      if (state === "pending") text += "\nAlt+[ drop · Ctrl+Shift+T own task";
+      if (state === "dropped") text += "\nAlt+] restore";
+      return text.replace(/::/g, ":");
     } catch (error) {
       return TASK_REQ_TOOLTIP_PREFIX + "\n" + TASK_REQ_TEACHING_COPY;
     }
@@ -122729,7 +122742,7 @@ class BobLedgerToolsTaskReqMarksMixin {
         removeAttribute: (name) => { delete attributes[name]; },
       };
       if (typeof applyTaskTagTypeAttrs === "function") {
-        applyTaskTagTypeAttrs(sink, identity, true);
+        applyTaskTagTypeAttrs(sink, identity, this.inheritedTaskTypesEnabled === true);
       }
       return attributes;
     } catch (error) {
@@ -122814,7 +122827,7 @@ class BobLedgerToolsTaskReqMarksMixin {
                   "data-bob-req-depth": String(row.depth),
                   "data-bob-req-state": row.state,
                   "data-bob-req-label": tooltip,
-                  title: tooltip,
+                  "data-bob-req-notice": this.taskReqClickNotice(row, rows),
                   ...this.taskReqTypeAttrs(identity),
                 };
                 builder.add(line.from, line.from, Decoration.line({ attributes }));
@@ -122893,19 +122906,23 @@ class BobLedgerToolsTaskReqMarksMixin {
     try {
       this.taskReqRestoreCheckboxInputs(view);
       const root = view && view.dom;
+      this.taskReqBindClickGuard(root && root.ownerDocument);
       if (!root || typeof root.querySelectorAll !== "function") return;
       const inputs = root.querySelectorAll(".HyperMD-task-line[data-bob-req] input.task-list-item-checkbox");
       const owned = new Set();
       for (const input of inputs || []) {
-        const line = input.parentNode;
+        const line = input.closest(".HyperMD-task-line[data-bob-req]");
         const label = this.taskReqReadAttr(line, "data-bob-req-label");
         if (!label) continue;
         this.taskReqCheckboxOriginals.set(input, {
           title: this.taskReqReadAttr(input, "title"),
           "aria-label": this.taskReqReadAttr(input, "aria-label"),
           "data-tooltip-position": this.taskReqReadAttr(input, "data-tooltip-position"),
+          "aria-readonly": this.taskReqReadAttr(input, "aria-readonly"),
         });
-        this.taskReqSetAttr(input, "title", label);
+        input.removeAttribute("title");
+        line.removeAttribute("title");
+        this.taskReqSetAttr(input, "aria-readonly", "true");
         this.taskReqSetAttr(input, "aria-label", label);
         this.taskReqSetAttr(input, "data-tooltip-position", "top");
         owned.add(input);
@@ -122952,7 +122969,7 @@ class BobLedgerToolsTaskReqMarksMixin {
       const sourceLine = lines[index];
       const item = taskReqListItem(sourceLine);
       const checkbox = item && taskReqParseCheckbox(item.body);
-      if (!checkbox || checkbox.mark !== String(status)) return null;
+      if (!checkbox || checkbox.mark !== (status === "" ? " " : String(status))) return null;
       return { sourceLine, lineIndex: index };
     } catch (error) {
       return null;
@@ -122966,6 +122983,7 @@ class BobLedgerToolsTaskReqMarksMixin {
         "data-bob-req-depth",
         "data-bob-req-state",
         "data-bob-req-label",
+        "data-bob-req-notice",
       ]) {
         if (li && typeof li.removeAttribute === "function") li.removeAttribute(name);
       }
@@ -122993,12 +123011,17 @@ class BobLedgerToolsTaskReqMarksMixin {
 
   renderTaskReqsIn(root, ctx) {
     try {
-      if (!this.taskTagMarksEnabled || !root || !ctx || typeof ctx.getSectionInfo !== "function") return;
+      if (!root) return;
+      this.taskReqBindClickGuard(root.ownerDocument);
+      if (!ctx || typeof ctx.getSectionInfo !== "function") {
+        for (const li of this.taskReqRenderedRows(root)) this.taskReqClearRenderedRow(li);
+        return;
+      }
       const path = typeof ctx.sourcePath === "string" ? ctx.sourcePath : "";
-      const inheritedEnabled = true;
       const sectionCache = new Map();
       for (const li of this.taskReqRenderedRows(root)) {
         this.taskReqClearRenderedRow(li);
+        this.taskReqRenderedModels.delete(li);
         let info = null;
         try { info = ctx.getSectionInfo(li) || null; } catch (error) { info = null; }
         if (!info || typeof info.text !== "string") continue;
@@ -123014,37 +123037,100 @@ class BobLedgerToolsTaskReqMarksMixin {
         if (!mapped) continue;
         const row = model.byLine.get(mapped.lineIndex);
         if (!row) continue;
-        const tooltip = this.taskReqTooltip(row, model.rows);
-        const identity = this.taskReqOwnerIdentity(row, path);
-        this.taskReqRenderedOriginals.set(li, {
-          title: this.taskReqReadAttr(li, "title"),
-          "data-bob-type": this.taskReqReadAttr(li, "data-bob-type"),
-          "data-bob-type-hue": this.taskReqReadAttr(li, "data-bob-type-hue"),
-          "data-bob-type-state": this.taskReqReadAttr(li, "data-bob-type-state"),
-        });
-        this.taskReqSetAttr(li, "data-bob-req", "true");
-        this.taskReqSetAttr(li, "data-bob-req-depth", String(row.depth));
-        this.taskReqSetAttr(li, "data-bob-req-state", row.state);
-        this.taskReqSetAttr(li, "data-bob-req-label", tooltip);
-        this.taskReqSetAttr(li, "title", tooltip);
-        if (typeof applyTaskTagTypeAttrs === "function") {
-          applyTaskTagTypeAttrs(li, identity, inheritedEnabled);
-        }
-        const input = li && typeof li.querySelector === "function" ? li.querySelector("input.task-list-item-checkbox") : null;
-        if (input) {
-          this.taskReqRenderedInputOriginals.set(input, {
-            title: this.taskReqReadAttr(input, "title"),
-            "aria-label": this.taskReqReadAttr(input, "aria-label"),
-            "data-tooltip-position": this.taskReqReadAttr(input, "data-tooltip-position"),
-          });
-          this.taskReqSetAttr(input, "title", tooltip);
-          this.taskReqSetAttr(input, "aria-label", tooltip);
-          this.taskReqSetAttr(input, "data-tooltip-position", "top");
-        }
+        // Keep the source model even when marks are off, so notes opened in
+        // native mode can be annotated immediately when the toggle turns on.
+        this.taskReqRenderedModels.set(li, { row, rows: model.rows, path });
+        if (this.taskTagMarksEnabled) this.taskReqApplyRenderedRow(li, row, model.rows, path);
       }
     } catch (error) {
       // A bad rendered row never breaks the post-processor.
     }
+  }
+
+  taskReqApplyRenderedRow(li, row, rows, path) {
+    const tooltip = this.taskReqTooltip(row, rows);
+    const identity = this.taskReqOwnerIdentity(row, path);
+    this.taskReqRenderedOriginals.set(li, {
+      title: this.taskReqReadAttr(li, "title"),
+      "data-bob-type": this.taskReqReadAttr(li, "data-bob-type"),
+      "data-bob-type-hue": this.taskReqReadAttr(li, "data-bob-type-hue"),
+      "data-bob-type-state": this.taskReqReadAttr(li, "data-bob-type-state"),
+    });
+    this.taskReqSetAttr(li, "data-bob-req", "true");
+    this.taskReqSetAttr(li, "data-bob-req-depth", String(row.depth));
+    this.taskReqSetAttr(li, "data-bob-req-state", row.state);
+    this.taskReqSetAttr(li, "data-bob-req-label", tooltip);
+    li.removeAttribute("title");
+    this.taskReqSetAttr(li, "data-bob-req-notice", this.taskReqClickNotice(row, rows));
+    if (typeof applyTaskTagTypeAttrs === "function") {
+      applyTaskTagTypeAttrs(li, identity, this.inheritedTaskTypesEnabled === true);
+    }
+    const input = li && typeof li.querySelector === "function" ? li.querySelector("input.task-list-item-checkbox") : null;
+    if (input) {
+      this.taskReqRenderedInputOriginals.set(input, {
+        title: this.taskReqReadAttr(input, "title"),
+        "aria-label": this.taskReqReadAttr(input, "aria-label"),
+        "data-tooltip-position": this.taskReqReadAttr(input, "data-tooltip-position"),
+        "aria-readonly": this.taskReqReadAttr(input, "aria-readonly"),
+      });
+      input.removeAttribute("title");
+      this.taskReqSetAttr(input, "aria-readonly", "true");
+      this.taskReqSetAttr(input, "aria-label", tooltip);
+      this.taskReqSetAttr(input, "data-tooltip-position", "top");
+    }
+  }
+
+  taskReqRefreshRenderedRows(enabled = this.taskTagMarksEnabled) {
+    for (const doc of this.markGateDocuments()) {
+      if (typeof doc.querySelectorAll !== "function") continue;
+      for (const li of doc.querySelectorAll("li.task-list-item")) {
+        this.taskReqClearRenderedRow(li);
+        const model = this.taskReqRenderedModels && this.taskReqRenderedModels.get(li);
+        if (enabled && model) this.taskReqApplyRenderedRow(li, model.row, model.rows, model.path);
+      }
+    }
+  }
+
+  taskReqClickNotice(row, rows) {
+    const owner = row.ownerName || "Task";
+    const ancestor = (rows || []).find((candidate) => candidate.line === row.excludedBy);
+    const copy = {
+      met: `Met with “${owner}”`,
+      moot: `Moot — “${owner}” was cancelled`,
+      dropped: "Dropped — Alt+] restores it",
+      carried: "Carried — open the linked task",
+      excluded: `Goes with “${ancestor && ancestor.text || "requirement"}”`,
+    };
+    return (copy[row.state] || `Requirements are met when “${owner}” closes — Ctrl+Enter on the task`).replace(/::/g, ":");
+  }
+
+  taskReqBindClickGuard(doc) {
+    if (!doc || !this.taskReqClickDocs || this.taskReqClickDocs.has(doc) ||
+        typeof this.registerDomEvent !== "function") return;
+    this.taskReqClickDocs.add(doc);
+    const handler = (event) => this.taskReqGuardClick(event);
+    for (const type of ["pointerdown", "mousedown", "touchstart", "click"]) {
+      this.registerDomEvent(doc, type, handler, { capture: true, passive: false });
+    }
+  }
+
+  taskReqGuardClick(event) {
+    if (!this.taskTagMarksEnabled || !event) return false;
+    const input = event.target && typeof event.target.closest === "function" &&
+      event.target.closest("input.task-list-item-checkbox");
+    const row = input && input.closest('.HyperMD-task-line, li.task-list-item');
+    if (!row || this.taskReqReadAttr(row, "data-bob-req") !== "true") return false;
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    // Pointer/touch -> compatibility mouse -> click is one gesture, one Notice.
+    // Click alone covers keyboard activation and accessibility-generated clicks.
+    const previous = this.taskReqLastDown;
+    const now = Date.now();
+    const sameGesture = previous && previous.input === input && now - previous.time < 1000;
+    if (!sameGesture) new Notice(this.taskReqReadAttr(row, "data-bob-req-notice"));
+    this.taskReqLastDown = event.type === "click" ? null : { input, time: now };
+    return true;
   }
 }
 // ---- src/264b-plugin-no-reply-pills.js ----
@@ -123952,6 +124038,7 @@ class BobLedgerToolsTaskTagTypeMixin {
       try {
         if (this.taskTagMarksEnabled) {
           this.annotateTaskTagMarksInDocument();
+          this.taskReqRefreshRenderedRows();
         }
       } catch (error) {
         // Document re-annotation is best-effort.

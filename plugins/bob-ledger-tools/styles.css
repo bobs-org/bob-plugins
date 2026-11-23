@@ -2319,36 +2319,46 @@ body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type].bob-prj-task-mark::aft
   content: attr(data-bob-type);
 }
 
-body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type-hue="blue"] {
+body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type-hue="blue"],
+body.bob-task-tag-marks [data-bob-req="true"][data-bob-type-hue="blue"] {
   --bob-task-tag-ink: var(--bob-task-tag-color, var(--bob-type-ink-blue));
 }
-body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type-hue="orange"] {
+body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type-hue="orange"],
+body.bob-task-tag-marks [data-bob-req="true"][data-bob-type-hue="orange"] {
   --bob-task-tag-ink: var(--bob-task-tag-color, var(--bob-type-ink-orange));
 }
-body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type-hue="aqua"] {
+body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type-hue="aqua"],
+body.bob-task-tag-marks [data-bob-req="true"][data-bob-type-hue="aqua"] {
   --bob-task-tag-ink: var(--bob-task-tag-color, var(--bob-type-ink-aqua));
 }
-body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type-hue="yellow"] {
+body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type-hue="yellow"],
+body.bob-task-tag-marks [data-bob-req="true"][data-bob-type-hue="yellow"] {
   --bob-task-tag-ink: var(--bob-task-tag-color, var(--bob-type-ink-yellow));
 }
-body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type-hue="magenta"] {
+body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type-hue="magenta"],
+body.bob-task-tag-marks [data-bob-req="true"][data-bob-type-hue="magenta"] {
   --bob-task-tag-ink: var(--bob-task-tag-color, var(--bob-type-ink-magenta));
 }
-body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type-hue="green"] {
+body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type-hue="green"],
+body.bob-task-tag-marks [data-bob-req="true"][data-bob-type-hue="green"] {
   --bob-task-tag-ink: var(--bob-task-tag-color, var(--bob-type-ink-green));
 }
-body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type-hue="violet"] {
+body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type-hue="violet"],
+body.bob-task-tag-marks [data-bob-req="true"][data-bob-type-hue="violet"] {
   --bob-task-tag-ink: var(--bob-task-tag-color, var(--bob-type-ink-violet));
 }
-body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type-hue="red"] {
+body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type-hue="red"],
+body.bob-task-tag-marks [data-bob-req="true"][data-bob-type-hue="red"] {
   --bob-task-tag-ink: var(--bob-task-tag-color, var(--bob-type-ink-red));
 }
 
-body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type-state="muted"] {
+body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type-state="muted"],
+body.bob-task-tag-marks [data-bob-req="true"][data-bob-type-state="muted"] {
   --bob-task-tag-ink: var(--bob-task-tag-color, var(--bob-type-ink-muted));
 }
 
-body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type-state="unconfigured"] {
+body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type-state="unconfigured"],
+body.bob-task-tag-marks [data-bob-req="true"][data-bob-type-state="unconfigured"] {
   --bob-task-tag-ink: var(--text-muted);
 }
 
@@ -2362,7 +2372,8 @@ body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type-state="inherited"]::aft
   opacity: 0.85;
 }
 
-body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type-state="repair"] {
+body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type-state="repair"],
+body.bob-task-tag-marks [data-bob-req="true"][data-bob-type-state="repair"] {
   --bob-task-tag-ink: color-mix(in srgb, var(--bob-hue-orange) 70%, var(--text-normal));
 }
 
@@ -7490,108 +7501,183 @@ body:not(.bob-root-marks) .bob-root-mark-native {
   }
 }
 
-/* Task requirements (reqs): depth-aware checkbox marks in the owner's
-   task-type ink. The single four-cell mask is clipped to two, three, or
-   four cells by the depth attribute. */
+/* Requirements: identity by shape, state by fill, depth only by indentation.
+   The existing checkbox is the hover host; no Markdown or DOM nodes change. */
 body {
-  --bob-req-glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 16' fill='none' stroke='black' stroke-width='1.45' stroke-linecap='round'%3E%3Cpath d='M2.5 2 1.5 14M5.5 2 4.5 14M.5 6h7M.5 10h7M10.5 2 9.5 14M13.5 2 12.5 14M8.5 6h7M8.5 10h7M18.5 2 17.5 14M21.5 2 20.5 14M16.5 6h7M16.5 10h7M26.5 2 25.5 14M29.5 2 28.5 14M24.5 6h7M24.5 10h7'/%3E%3C/svg%3E");
+  --bob-req-glyph-pending: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 1.7 14.3 8 8 14.3 1.7 8Z'/%3E%3C/svg%3E");
+  --bob-req-glyph-met: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='black' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 1.7 14.3 8 8 14.3 1.7 8Z'/%3E%3C/svg%3E");
+  --bob-req-glyph-dropped: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 1.7 14.3 8 8 14.3 1.7 8Z M4.4 11.6 11.6 4.4'/%3E%3C/svg%3E");
+  --bob-req-glyph-carried: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.4 8h10.4M9.2 4.3 12.9 8 9.2 11.7'/%3E%3C/svg%3E");
 }
 
-body.bob-task-tag-marks [data-bob-req-depth="1"] { --bob-req-count: 2; }
-body.bob-task-tag-marks [data-bob-req-depth="2"] { --bob-req-count: 3; }
-body.bob-task-tag-marks [data-bob-req-depth="3"],
-body.bob-task-tag-marks [data-bob-req-depth="4"],
-body.bob-task-tag-marks [data-bob-req-depth="5"],
-body.bob-task-tag-marks [data-bob-req-depth="6"],
-body.bob-task-tag-marks [data-bob-req-depth="7"],
-body.bob-task-tag-marks [data-bob-req-depth="8"],
-body.bob-task-tag-marks [data-bob-req-depth="9"],
-body.bob-task-tag-marks [data-bob-req-depth="10"],
-body.bob-task-tag-marks [data-bob-req-depth="11"],
-body.bob-task-tag-marks [data-bob-req-depth="12"],
-body.bob-task-tag-marks [data-bob-req-depth="13"],
-body.bob-task-tag-marks [data-bob-req-depth="14"],
-body.bob-task-tag-marks [data-bob-req-depth="15"],
-body.bob-task-tag-marks [data-bob-req-depth="16"] { --bob-req-count: 4; }
-
-body.bob-task-tag-marks [data-bob-req] {
-  --bob-req-ink: var(--bob-task-tag-color, var(--bob-task-tag-hue));
+body.bob-task-tag-marks [data-bob-req="true"] {
+  --bob-task-tag-ink: var(--bob-task-tag-color, var(--bob-task-tag-hue));
+  --bob-req-ink: var(--bob-task-tag-ink);
 }
-body.bob-task-tag-marks [data-bob-req][data-bob-type-hue="blue"] { --bob-req-ink: var(--bob-task-tag-color, var(--bob-type-ink-blue)); }
-body.bob-task-tag-marks [data-bob-req][data-bob-type-hue="orange"] { --bob-req-ink: var(--bob-task-tag-color, var(--bob-type-ink-orange)); }
-body.bob-task-tag-marks [data-bob-req][data-bob-type-hue="aqua"] { --bob-req-ink: var(--bob-task-tag-color, var(--bob-type-ink-aqua)); }
-body.bob-task-tag-marks [data-bob-req][data-bob-type-hue="yellow"] { --bob-req-ink: var(--bob-task-tag-color, var(--bob-type-ink-yellow)); }
-body.bob-task-tag-marks [data-bob-req][data-bob-type-hue="magenta"] { --bob-req-ink: var(--bob-task-tag-color, var(--bob-type-ink-magenta)); }
-body.bob-task-tag-marks [data-bob-req][data-bob-type-hue="green"] { --bob-req-ink: var(--bob-task-tag-color, var(--bob-type-ink-green)); }
-body.bob-task-tag-marks [data-bob-req][data-bob-type-hue="violet"] { --bob-req-ink: var(--bob-task-tag-color, var(--bob-type-ink-violet)); }
-body.bob-task-tag-marks [data-bob-req][data-bob-type-hue="red"] { --bob-req-ink: var(--bob-task-tag-color, var(--bob-type-ink-red)); }
-body.bob-task-tag-marks [data-bob-req][data-bob-type-state="muted"] { --bob-req-ink: var(--bob-task-tag-color, var(--bob-type-ink-muted)); }
-body.bob-task-tag-marks [data-bob-req][data-bob-type-state="unconfigured"] { --bob-req-ink: var(--text-muted); }
-body.bob-task-tag-marks [data-bob-req][data-bob-type-state="repair"] { --bob-req-ink: color-mix(in srgb, var(--bob-hue-orange) 70%, var(--text-normal)); }
 
-body.bob-task-tag-marks .HyperMD-task-line[data-bob-req] input.task-list-item-checkbox,
-body.bob-task-tag-marks li.task-list-item[data-bob-req] > input.task-list-item-checkbox {
-  width: calc(var(--bob-req-count, 2) * 0.5em) !important;
-  min-width: calc(var(--bob-req-count, 2) * 0.5em) !important;
+body.bob-task-tag-marks :is([data-bob-req="true"], .bob-req-mark) {
+  --bob-req-mask: var(--bob-req-glyph-pending);
+  --bob-req-opacity: 0.9;
+}
+body.bob-task-tag-marks :is([data-bob-req-state="met"], .bob-req-mark[data-state="met"]) {
+  --bob-req-mask: var(--bob-req-glyph-met);
+  --bob-req-opacity: 0.62;
+}
+body.bob-task-tag-marks :is([data-bob-req-state="moot"], [data-bob-req-state="excluded"], .bob-req-mark[data-state="moot"], .bob-req-mark[data-state="excluded"]) {
+  --bob-req-opacity: 0.42;
+}
+body.bob-task-tag-marks :is([data-bob-req-state="dropped"], .bob-req-mark[data-state="dropped"]) {
+  --bob-req-mask: var(--bob-req-glyph-dropped);
+  --bob-req-opacity: 0.55;
+}
+body.bob-task-tag-marks :is([data-bob-req-state="carried"], .bob-req-mark[data-state="carried"]) {
+  --bob-req-mask: var(--bob-req-glyph-carried);
+}
+body.bob-task-tag-marks [data-bob-req-state="pending"]:not([data-task=" "], [data-task=""]) {
+  --bob-req-ink: color-mix(in srgb, var(--bob-hue-orange) 70%, var(--text-normal));
+}
+
+/* Direct children prevent a parent's treatment leaking into nested rows.
+   Loose Markdown lists put the input inside the row's first paragraph. */
+body.bob-task-tag-marks .HyperMD-task-line[data-bob-req="true"] input.task-list-item-checkbox,
+body.bob-task-tag-marks li.task-list-item[data-bob-req="true"] > input.task-list-item-checkbox,
+body.bob-task-tag-marks li.task-list-item[data-bob-req="true"] > p > input.task-list-item-checkbox {
+  width: 1em !important;
+  min-width: 1em !important;
   height: 1em !important;
   margin: 0 0.24em 0 0 !important;
   padding: 0 !important;
   border: 0 !important;
-  border-radius: 0 !important;
+  border-radius: 999px !important;
+  position: relative;
   background: transparent !important;
-  background-color: var(--bob-req-ink) !important;
+  box-shadow: none !important;
   appearance: none !important;
   -webkit-appearance: none !important;
-  pointer-events: none !important;
+  -webkit-mask: none !important;
+  mask: none !important;
+  opacity: 1 !important;
+  pointer-events: auto !important;
   cursor: default !important;
-  -webkit-mask-image: var(--bob-req-glyph);
-  mask-image: var(--bob-req-glyph);
-  -webkit-mask-size: 2em 1em;
-  mask-size: 2em 1em;
-  -webkit-mask-position: left center;
-  mask-position: left center;
-  -webkit-mask-repeat: no-repeat;
-  mask-repeat: no-repeat;
+  transition: background-color 120ms ease;
 }
 
-body.bob-task-tag-marks .HyperMD-task-line[data-bob-req-state="met"] input.task-list-item-checkbox,
-body.bob-task-tag-marks .HyperMD-task-line[data-bob-req-state="moot"] input.task-list-item-checkbox,
-body.bob-task-tag-marks li.task-list-item[data-bob-req-state="met"] > input.task-list-item-checkbox,
-body.bob-task-tag-marks li.task-list-item[data-bob-req-state="moot"] > input.task-list-item-checkbox,
-body.bob-task-tag-marks .HyperMD-task-line[data-bob-req-state="dropped"] input.task-list-item-checkbox,
-body.bob-task-tag-marks li.task-list-item[data-bob-req-state="dropped"] > input.task-list-item-checkbox {
-  opacity: 0.58;
+/* Cards keep a Unicode fallback when this stylesheet or the mark gate is off. */
+body.bob-task-tag-marks .bob-req-mark {
+  --bob-req-ink: var(--bob-task-tag-color, var(--bob-task-tag-hue));
+  display: inline-flex;
+  position: relative;
+  flex: 0 0 1em;
+  width: 1em;
+  height: 1em;
+  margin-inline-end: 0.24em;
+  color: transparent;
+  vertical-align: -0.1em;
 }
 
-body.bob-task-tag-marks .HyperMD-task-line[data-bob-req-state="met"],
-body.bob-task-tag-marks .HyperMD-task-line[data-bob-req-state="moot"],
-body.bob-task-tag-marks .HyperMD-task-line[data-bob-req-state="dropped"],
-body.bob-task-tag-marks .HyperMD-task-line[data-bob-req-state="excluded"],
-body.bob-task-tag-marks li.task-list-item[data-bob-req-state="met"] > p,
-body.bob-task-tag-marks li.task-list-item[data-bob-req-state="moot"] > p,
-body.bob-task-tag-marks li.task-list-item[data-bob-req-state="dropped"] > p,
-body.bob-task-tag-marks li.task-list-item[data-bob-req-state="excluded"] > p {
-  color: var(--text-muted);
-}
-body.bob-task-tag-marks .HyperMD-task-line[data-bob-req-state="dropped"],
-body.bob-task-tag-marks li.task-list-item[data-bob-req-state="dropped"] > p {
-  text-decoration: line-through;
-}
-body.bob-task-tag-marks .HyperMD-task-line[data-bob-req-state="carried"]::after,
-body.bob-task-tag-marks li.task-list-item[data-bob-req-state="carried"]::after {
-  content: "→";
-  margin-inline-start: 0.22em;
-  color: var(--text-faint);
-  font-size: 0.8em;
-  text-decoration: none;
+body.bob-task-tag-marks .HyperMD-task-line[data-bob-req="true"] input.task-list-item-checkbox::before,
+body.bob-task-tag-marks li.task-list-item[data-bob-req="true"] > input.task-list-item-checkbox::before,
+body.bob-task-tag-marks li.task-list-item[data-bob-req="true"] > p > input.task-list-item-checkbox::before,
+body.bob-task-tag-marks .bob-req-mark::before {
+  content: "" !important;
+  position: absolute;
+  inset: 0.04em !important;
+  width: 0.92em !important;
+  height: 0.92em !important;
+  background-color: var(--bob-req-ink) !important;
+  -webkit-mask: var(--bob-req-mask) center / contain no-repeat !important;
+  mask: var(--bob-req-mask) center / contain no-repeat !important;
+  opacity: var(--bob-req-opacity);
+  transform: none !important;
+  border: 0 !important;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
 }
 
-/* The vault status theme paints cancelled tasks with a full-width grey
-   bar. A dropped requirement keeps its own muted row treatment instead. */
-.HyperMD-task-line[data-bob-req="true"][data-task="-"],
-li.task-list-item[data-bob-req="true"][data-task="-"] {
+body.bob-task-tag-marks .HyperMD-task-line[data-bob-req="true"] input.task-list-item-checkbox::after,
+body.bob-task-tag-marks li.task-list-item[data-bob-req="true"] > input.task-list-item-checkbox::after,
+body.bob-task-tag-marks li.task-list-item[data-bob-req="true"] > p > input.task-list-item-checkbox::after,
+body.bob-task-tag-marks .HyperMD-task-line[data-bob-req="true"] input.task-list-item-checkbox:checked::after,
+body.bob-task-tag-marks li.task-list-item[data-bob-req="true"] > input.task-list-item-checkbox:checked::after,
+body.bob-task-tag-marks li.task-list-item[data-bob-req="true"] > p > input.task-list-item-checkbox:checked::after {
+  content: none !important;
+  display: none !important;
+}
+
+body.bob-task-tag-marks .HyperMD-task-line[data-bob-req="true"] input.task-list-item-checkbox:hover,
+body.bob-task-tag-marks li.task-list-item[data-bob-req="true"] > input.task-list-item-checkbox:hover,
+body.bob-task-tag-marks li.task-list-item[data-bob-req="true"] > p > input.task-list-item-checkbox:hover {
+  background-color: color-mix(in srgb, var(--bob-req-ink) 14%, transparent) !important;
+}
+body.bob-task-tag-marks .HyperMD-task-line[data-bob-req="true"] input.task-list-item-checkbox:hover::before,
+body.bob-task-tag-marks li.task-list-item[data-bob-req="true"] > input.task-list-item-checkbox:hover::before,
+body.bob-task-tag-marks li.task-list-item[data-bob-req="true"] > p > input.task-list-item-checkbox:hover::before {
+  opacity: 1;
+}
+
+/* Requirements have no lane. Reset every hand mark, not just cancellation.
+   Met-by-hand and derived-met share text ink and never inherit a strike. */
+body.bob-task-tag-marks .HyperMD-task-line[data-bob-req="true"][data-task],
+body.bob-task-tag-marks li.task-list-item[data-bob-req="true"][data-task] {
+  --checklist-done-decoration: none;
   background: transparent !important;
   background-image: none !important;
+  border-inline-start: none !important;
+  box-shadow: none !important;
+  text-decoration: none !important;
+  color: var(--text-normal) !important;
+}
+body.bob-task-tag-marks .HyperMD-task-line[data-bob-req="true"]:is([data-bob-req-state="met"], [data-bob-req-state="moot"], [data-bob-req-state="excluded"], [data-bob-req-state="dropped"]),
+body.bob-task-tag-marks li.task-list-item[data-bob-req="true"]:is([data-bob-req-state="met"], [data-bob-req-state="moot"], [data-bob-req-state="excluded"], [data-bob-req-state="dropped"]) {
+  color: var(--text-muted) !important;
+}
+body.bob-task-tag-marks .HyperMD-task-line[data-bob-req="true"][data-task][data-bob-req-state="dropped"],
+body.bob-task-tag-marks li.task-list-item[data-bob-req="true"][data-task][data-bob-req-state="dropped"] {
+  text-decoration: line-through !important;
+}
+/* CSS text-decoration propagates through inline descendants even if they
+   request none. A child list forms its own inline-block decoration context,
+   including the done owner’s list so derived-met text is never struck. */
+body.bob-task-tag-marks li.task-list-item[data-bob-req="true"] > :is(ul, ol),
+body.bob-task-tag-marks li.task-list-item > :is(ul, ol):has(> li.task-list-item[data-bob-req="true"]) {
+  display: inline-block;
+  width: 100%;
+  text-decoration: none;
+}
+body.bob-task-tag-marks li.task-list-item[data-bob-req="true"] > p {
+  text-decoration: inherit;
+  color: inherit;
+}
+
+@media (prefers-reduced-motion: reduce) {
+body.bob-task-tag-marks .HyperMD-task-line[data-bob-req="true"] input.task-list-item-checkbox,
+body.bob-task-tag-marks li.task-list-item[data-bob-req="true"] > input.task-list-item-checkbox,
+body.bob-task-tag-marks li.task-list-item[data-bob-req="true"] > p > input.task-list-item-checkbox {
+    transition: none;
+  }
+body.bob-task-tag-marks .HyperMD-task-line[data-bob-req="true"] input.task-list-item-checkbox::before,
+body.bob-task-tag-marks li.task-list-item[data-bob-req="true"] > input.task-list-item-checkbox::before,
+body.bob-task-tag-marks li.task-list-item[data-bob-req="true"] > p > input.task-list-item-checkbox::before,
+  body.bob-task-tag-marks .bob-req-mark::before {
+    transition: none;
+  }
+}
+@media (forced-colors: active) {
+  body.bob-task-tag-marks :is([data-bob-req="true"], .bob-req-mark) {
+    --bob-req-ink: CanvasText !important;
+  }
+  body.bob-task-tag-marks :is([data-bob-req-state="met"], [data-bob-req-state="moot"], [data-bob-req-state="excluded"], [data-bob-req-state="dropped"], .bob-req-mark[data-state="met"], .bob-req-mark[data-state="moot"], .bob-req-mark[data-state="excluded"], .bob-req-mark[data-state="dropped"]) {
+    --bob-req-ink: GrayText !important;
+  }
+body.bob-task-tag-marks .HyperMD-task-line[data-bob-req="true"] input.task-list-item-checkbox::before,
+body.bob-task-tag-marks li.task-list-item[data-bob-req="true"] > input.task-list-item-checkbox::before,
+body.bob-task-tag-marks li.task-list-item[data-bob-req="true"] > p > input.task-list-item-checkbox::before,
+  body.bob-task-tag-marks .bob-req-mark::before {
+    forced-color-adjust: none;
+    opacity: 1;
+  }
 }
 
 /* Keep inbox indicator (keep-indicator-view): calm intake item beside the

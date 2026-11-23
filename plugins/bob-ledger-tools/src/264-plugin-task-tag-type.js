@@ -323,6 +323,7 @@ class BobLedgerToolsTaskTagTypeMixin {
       try {
         if (this.taskTagMarksEnabled) {
           this.annotateTaskTagMarksInDocument();
+          this.taskReqRefreshRenderedRows();
         }
       } catch (error) {
         // Document re-annotation is best-effort.

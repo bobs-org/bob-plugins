@@ -28,7 +28,7 @@ test("obsidian-task-reqs-e2e --self-test", () => {
 });
 
 test("every group has cases and every key builds a payload", () => {
-  assert.deepEqual(GROUPS, ["typing", "vim", "toggle", "drop", "guards", "ownercard"]);
+  assert.deepEqual(GROUPS, ["typing", "vim", "toggle", "drop", "guards", "ownercard", "look"]);
   for (const cases of [TYPING_CASES, VIM_CASES, TOGGLE_CASES, DROP_CASES, GUARDS_CASES, OWNERCARD_CASES]) {
     assert.ok(cases.length > 0);
     for (const entry of cases) {

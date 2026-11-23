@@ -849,6 +849,8 @@ class BobLedgerToolsTaskTagMarksMixin {
       this.taskTagMarksEnabled = !this.taskTagMarksEnabled;
       const enabled = this.taskTagMarksEnabled;
       this.applyMarkGateClass("bob-task-tag-marks", enabled);
+      this.taskReqRefreshRenderedRows(enabled);
+      if (!enabled) this.taskReqRestoreCheckboxInputs();
       try {
         if (enabled) {
           this.annotateTaskTagMarksInDocument();

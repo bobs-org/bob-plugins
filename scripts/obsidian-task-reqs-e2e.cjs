@@ -49,7 +49,7 @@ const HOTKEYS = {
 // Alt+N, Alt+F, and Ctrl+Shift+Enter arrive through the plugins' own
 // built-in hotkeys (nav toggleTaskLane / refreshTaskFreshness, Block ID
 // Prompt link-task-to-pomodoro), so they need no vault hotkeys.json entry.
-const GROUPS = ["typing", "vim", "toggle", "drop", "guards", "ownercard"];
+const GROUPS = ["typing", "vim", "toggle", "drop", "guards", "ownercard", "look"];
 const HELP = [
   "Usage: node scripts/obsidian-task-reqs-e2e.cjs [OPTIONS]",
   "",
@@ -406,7 +406,7 @@ async function probeExecutable(executable) {
 // stay out so their startup work cannot stall the editor under test.
 const NAV = "bob-navigation-hotkeys";
 const BLOCK_ID_PROMPT = "block-id-prompt";
-const SCENARIO_PLUGINS = [CYCLER, NAV, BLOCK_ID_PROMPT];
+const SCENARIO_PLUGINS = [CYCLER, NAV, BLOCK_ID_PROMPT, "bob-ledger-tools"];
 
 function expectedPlugins() {
   const plugins = [];
@@ -913,6 +913,10 @@ async function runE2e(args, options = {}) {
       drop: { cases: DROP_CASES, run: runGestureCase },
       guards: { cases: GUARDS_CASES, run: runGestureCase },
       ownercard: { cases: OWNERCARD_CASES, run: runGestureCase },
+      look: {
+        cases: require("./obsidian-task-reqs-look-e2e.cjs").CASES,
+        run: (client, entry) => require("./obsidian-task-reqs-look-e2e.cjs").run(client, entry, { setDoc, setMode, waitFor, args }),
+      },
       ...extensionGroups,
     };
     for (const group of args.only ? [args.only] : defaultGroups) {

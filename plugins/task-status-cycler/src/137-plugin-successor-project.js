@@ -778,7 +778,9 @@ class TaskStatusCyclerSuccessorProjectMixin {
       const closeRestores = closeResult && closeResult.undo && Array.isArray(closeResult.undo.restores)
         ? closeResult.undo.restores
         : [];
-      const composedRestores = reqCloseIntegrationComposeRestores([...reqRestores, ...closeRestores]);
+      // Offer-close writes first, then requirement (and pull-in) writes. Keep
+      // the earliest post-initiating-close before and the last successful after.
+      const composedRestores = reqCloseIntegrationComposeRestores([...closeRestores, ...reqRestores]);
       if (composedRestores.length > 0) {
         closeResult = {
           ...(closeResult || {}),

@@ -335,9 +335,10 @@ lines against the captured post-close snapshot; moved or edited rows refuse
 instead of targeting a new line. API line values are 1-based; conversion to
 the editor's 0-based line happens at the editor boundary.
 
-Drop and Carry receipts share one guarded Undo action. It restores only the
-requirement writes while every affected note still matches the postimage, and
-leaves the owner Done. Reopening the task later that day takes back only the
+Drop, Carry, and ordinary offer-close receipts share one guarded Undo action.
+It restores the requirement writes and ordinary offer-close writes together
+while every affected note still matches the postimage, and leaves the
+initiating owner Done. Reopening the task later that day takes back only the
 untouched successor links recorded by the close pass; it does not undo a Drop
 or Carry choice. Esc closes the card without writing requirement bytes.
 

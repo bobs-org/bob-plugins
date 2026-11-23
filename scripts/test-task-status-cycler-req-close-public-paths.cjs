@@ -58,6 +58,40 @@ function reqRowByText(model, text) {
   return reqRows(model).find((row) => row.text === text) || null;
 }
 
+function offerRowByText(model, text) {
+  for (const group of (model && model.groups) || []) {
+    if (group && group.group === "requirements") continue;
+    for (const row of group.rows || []) {
+      if (row && row.text === text) return row;
+    }
+  }
+  return null;
+}
+
+function restoresByPath(shown) {
+  const restores = shown && shown[0] && shown[0].undo && shown[0].undo.restores;
+  assert.ok(Array.isArray(restores) && restores.length > 0, "receipt has guarded restores");
+  const paths = new Map();
+  for (const row of restores) {
+    assert.ok(row && row.path, "restore names a path");
+    assert.equal(paths.has(row.path), false, `duplicate restore for ${row.path}`);
+    paths.set(row.path, row);
+  }
+  return { restores, paths };
+}
+
+async function restoreShown(shown, harness, editorsByPath = {}) {
+  const { restores } = restoresByPath(shown);
+  const navPlugin = new navHarness.NavigationHotkeysPlugin();
+  navPlugin.app = harness.app;
+  navPlugin.getOpenMarkdownEditorForPath = (path) => editorsByPath[path] || null;
+  const undone = await navPlugin.restoreGuardedSnapshots(restores, {
+    successMessage: "Undid change",
+    failureLabel: "Could not undo change",
+  });
+  return { restores, undone };
+}
+
 function makePlugin(harness, editor, path) {
   const plugin = new TaskStatusCyclerPlugin();
   plugin.getScheduleLogDateString = () => TODAY;
@@ -113,6 +147,7 @@ function installReqCloseNav(plugin, harness, options = {}) {
             return { ok: true };
           },
           reviewWalk: { version: 2 },
+          cancel: navHarness.helpers.createCancelApi(),
           notice: {
             version: 6,
             showUnblocked(model) {
@@ -195,6 +230,13 @@ function exporterNote({ status = " ", id = "export__task" } = {}) {
 
 function idlessExporterNote(options = {}) {
   return exporterNote({ ...options, id: "" }).replace(" ^export", "");
+}
+
+function exporterWithOfferedNote() {
+  return [
+    exporterNote({ id: "export__task" }).trimEnd(),
+    "- [ ] #task Offered [dependsOn:: export__task] [id:: offered] ^offered",
+  ].join("\n") + "\n";
 }
 
 test("1. Ctrl+Enter Drop with a reason writes drop bytes and keeps the owner Done", async () => {
@@ -699,15 +741,16 @@ test("10. recurring, cancel, parked, automated, and offer-close targets skip the
   });
   const offerEditor = createTextEditor(offerSource, { line: 0, ch: 4 });
   const offerPlugin = makePlugin(offerHarness, offerEditor, "Tasks.md");
-  let offerGroups = null;
+  const offerPicked = [];
   installReqCloseNav(offerPlugin, offerHarness, {
     pick(model) {
-      offerGroups = (model.groups || []).filter((group) => group.group === "requirements");
-      const closeRow = (model.groups || []).flatMap((group) => group.rows || [])
-        .find((row) => row && row.key && String(row.key).includes("offered") && row.close);
+      offerPicked.push(model);
+      const closeRow = offerRowByText(model, "Offered");
+      assert.ok(closeRow, "ordinary Offered row is on the card");
+      assert.equal(closeRow.close && closeRow.close.complete, true, "ordinary close is accepted");
       return {
         picks: [],
-        closes: closeRow ? [{ key: closeRow.key, outcome: "done" }] : [],
+        closes: [{ key: closeRow.key, outcome: "done" }],
         reqs: [],
       };
     },
@@ -716,7 +759,16 @@ test("10. recurring, cancel, parked, automated, and offer-close targets skip the
     [{ path: "Tasks.md", blockId: "pred", taskId: "pred" }],
     { editor: offerEditor, activePath: "Tasks.md", reqCloseOwners: [] },
   );
-  assert.equal((offerGroups || []).length, 0, "offer-close targets do not open a requirement audit");
+  assert.equal(offerPicked.length, 1, "offer-close does not open a recursive requirement card");
+  assert.equal(
+    (offerPicked[0].groups || []).filter((group) => group.group === "requirements").length,
+    0,
+    "the initiating card has no requirement audit for the offer-close target",
+  );
+  const closedOffer = offerEditor.getValue();
+  assert.match(closedOffer, /^- \[x\] #task Offered/m);
+  assert.match(closedOffer, /- \[ \] Offered req/);
+  assert.doesNotMatch(closedOffer, /CANCEL LOG/);
 });
 
 test("11. Esc writes no requirement bytes and leaves the owner Done", async () => {
@@ -742,6 +794,234 @@ test("11. Esc writes no requirement bytes and leaves the owner Done", async () =
   const reopened = plugin.toggleActiveCheckboxOpenDone(editor, plugin.getActiveTaskStatus(editor));
   assert.equal(reopened, true);
   assert.match(editor.getValue(), /^- \[ \] #task Ship the exporter/m);
+});
+
+test("12a. mixed ordinary Done and requirement Drop share one restore and Undo", async () => {
+  notices.length = 0;
+  const source = exporterWithOfferedNote();
+  const harness = createInMemoryObsidianApp({
+    "Tasks.md": source,
+    [DAILY_PATH]: dayNote("[[Tasks#^export]]"),
+    "inbox.md": "## Tasks\n",
+  });
+  const editor = createTextEditor(source, { line: 0, ch: 4 });
+  const plugin = makePlugin(harness, editor, "Tasks.md");
+  const shown = [];
+  installReqCloseNav(plugin, harness, {
+    shown,
+    pick(model) {
+      const req = reqRowByText(model, "Handles empty input");
+      const offer = offerRowByText(model, "Offered");
+      assert.ok(req, "requirement is on the card");
+      assert.ok(offer, "ordinary Offered row is on the card");
+      assert.equal(offer.close && offer.close.complete, true);
+      return {
+        closes: [{ key: offer.key, outcome: "done" }],
+        reqs: [{ key: req.key, verdict: "drop", reason: "mixed undo" }],
+      };
+    },
+  });
+  const wrote = await plugin.toggleActiveCheckboxOpenDoneAndPropagate(
+    editor,
+    { path: "Tasks.md" },
+    plugin.getActiveTaskStatus(editor),
+  );
+  assert.equal(wrote, true);
+  const after = editor.getValue();
+  assert.match(after, /^- \[x\] #task Ship the exporter/m);
+  assert.match(after, /^- \[x\] #task Offered/m);
+  assert.match(after, /- \[-\] Handles empty input/);
+  assert.match(after, /❌ \*\*CANCEL LOG\*\*/);
+  assert.match(after, /mixed undo/);
+  assert.ok((shown[0].req_outcomes || []).some((row) => row.verdict === "drop"));
+  assert.ok((shown[0].offer_closes || []).some((row) => row.outcome === "done"));
+  const { paths } = restoresByPath(shown);
+  assert.equal(paths.get("Tasks.md").after, after);
+  assert.match(paths.get("Tasks.md").before, /^- \[x\] #task Ship the exporter/m);
+  assert.match(paths.get("Tasks.md").before, /^- \[ \] #task Offered/m);
+  assert.match(paths.get("Tasks.md").before, /- \[ \] Handles empty input/);
+  assert.doesNotMatch(paths.get("Tasks.md").before, /CANCEL LOG/);
+  const { undone } = await restoreShown(shown, harness, { "Tasks.md": editor });
+  assert.equal(undone, true);
+  const restored = editor.getValue();
+  assert.match(restored, /^- \[x\] #task Ship the exporter/m);
+  assert.match(restored, /^- \[ \] #task Offered/m);
+  assert.match(restored, /- \[ \] Handles empty input/);
+  assert.doesNotMatch(restored, /CANCEL LOG/);
+  assert.doesNotMatch(restored, /mixed undo/);
+});
+
+test("12b. mixed ordinary close and Carry restore source and created destination", async () => {
+  notices.length = 0;
+  const source = exporterWithOfferedNote();
+  const harness = createInMemoryObsidianApp({
+    "Tasks.md": source,
+    [DAILY_PATH]: dayNote("[[Tasks#^export]]"),
+    "inbox.md": "## Tasks\n",
+  });
+  const editor = createTextEditor(source, { line: 0, ch: 4 });
+  const plugin = makePlugin(harness, editor, "Tasks.md");
+  const shown = [];
+  installReqCloseNav(plugin, harness, {
+    shown,
+    pick(model) {
+      const req = reqRowByText(model, "Handles empty input");
+      const offer = offerRowByText(model, "Offered");
+      assert.equal(offer.close && offer.close.complete, true);
+      return {
+        closes: [{ key: offer.key, outcome: "done" }],
+        reqs: [{ key: req.key, verdict: "carry_pulled" }],
+      };
+    },
+  });
+  plugin.app.plugins.plugins["bob-ledger-tools"] = {
+    api: {
+      themes: {
+        version: 1,
+        effectiveTypeFor: () => ({ theme: { key: "fix", name: "FIX" } }),
+        typeAgrees: () => true,
+        planPlacement: () => ({ kind: "entry", index: 0 }),
+      },
+    },
+  };
+  await plugin.toggleActiveCheckboxOpenDoneAndPropagate(
+    editor,
+    { path: "Tasks.md" },
+    plugin.getActiveTaskStatus(editor),
+  );
+  const after = editor.getValue();
+  assert.match(after, /^- \[x\] #task Offered/m);
+  assert.match(after, /\[>\] \[\[#\^handles-empty-input\|Handles empty input\]\]/);
+  assert.match(after, /#task Handles empty input/);
+  const daily = harness.getSource(DAILY_PATH);
+  assert.match(daily, /\[\[Tasks#\^handles-empty-input\]\]/);
+  const { paths } = restoresByPath(shown);
+  assert.equal(paths.get("Tasks.md").after, after);
+  assert.ok(paths.has(DAILY_PATH), "pull-in daily write is in the composed restore");
+  assert.equal(paths.get(DAILY_PATH).after, daily);
+  const { undone } = await restoreShown(shown, harness, { "Tasks.md": editor });
+  assert.equal(undone, true);
+  const restored = editor.getValue();
+  assert.match(restored, /^- \[x\] #task Ship the exporter/m);
+  assert.match(restored, /^- \[ \] #task Offered/m);
+  assert.match(restored, /- \[ \] Handles empty input/);
+  assert.doesNotMatch(restored, /#task Handles empty input/);
+  assert.doesNotMatch(restored, /\[>\]/);
+  assert.doesNotMatch(harness.getSource(DAILY_PATH), /handles-empty-input/);
+});
+
+test("12c. mixed Undo refuses the whole operation after a later postimage edit", async () => {
+  notices.length = 0;
+  const source = exporterWithOfferedNote();
+  const harness = createInMemoryObsidianApp({
+    "Tasks.md": source,
+    [DAILY_PATH]: dayNote("[[Tasks#^export]]"),
+    "inbox.md": "## Tasks\n",
+  });
+  const editor = createTextEditor(source, { line: 0, ch: 4 });
+  const plugin = makePlugin(harness, editor, "Tasks.md");
+  const shown = [];
+  installReqCloseNav(plugin, harness, {
+    shown,
+    pick(model) {
+      const req = reqRowByText(model, "Handles empty input");
+      const offer = offerRowByText(model, "Offered");
+      return {
+        closes: [{ key: offer.key, outcome: "done" }],
+        reqs: [{ key: req.key, verdict: "drop", reason: "guard me" }],
+      };
+    },
+  });
+  await plugin.toggleActiveCheckboxOpenDoneAndPropagate(
+    editor,
+    { path: "Tasks.md" },
+    plugin.getActiveTaskStatus(editor),
+  );
+  const beforeEdit = editor.getValue();
+  replaceEditorText(editor, `${beforeEdit}- late mixed edit\n`);
+  const { undone } = await restoreShown(shown, harness, { "Tasks.md": editor });
+  assert.equal(undone, false);
+  assert.match(editor.getValue(), /late mixed edit/);
+  assert.match(editor.getValue(), /^- \[x\] #task Offered/m);
+  assert.match(editor.getValue(), /CANCEL LOG/);
+});
+
+test("12d. one successful verdict family still undoes, and partial failures keep honest receipts", async () => {
+  notices.length = 0;
+  const source = exporterWithOfferedNote();
+  const closeOnlyHarness = createInMemoryObsidianApp({
+    "Tasks.md": source,
+    [DAILY_PATH]: dayNote("[[Tasks#^export]]"),
+    "inbox.md": "## Tasks\n",
+  });
+  const closeOnlyEditor = createTextEditor(source, { line: 0, ch: 4 });
+  const closeOnlyPlugin = makePlugin(closeOnlyHarness, closeOnlyEditor, "Tasks.md");
+  const closeOnlyShown = [];
+  installReqCloseNav(closeOnlyPlugin, closeOnlyHarness, {
+    shown: closeOnlyShown,
+    pick(model) {
+      const offer = offerRowByText(model, "Offered");
+      assert.equal(offer.close && offer.close.complete, true);
+      return { closes: [{ key: offer.key, outcome: "done" }], reqs: [] };
+    },
+  });
+  await closeOnlyPlugin.toggleActiveCheckboxOpenDoneAndPropagate(
+    closeOnlyEditor,
+    { path: "Tasks.md" },
+    closeOnlyPlugin.getActiveTaskStatus(closeOnlyEditor),
+  );
+  assert.match(closeOnlyEditor.getValue(), /^- \[x\] #task Offered/m);
+  assert.match(closeOnlyEditor.getValue(), /- \[ \] Handles empty input/);
+  const { undone: closeUndone } = await restoreShown(closeOnlyShown, closeOnlyHarness, {
+    "Tasks.md": closeOnlyEditor,
+  });
+  assert.equal(closeUndone, true);
+  assert.match(closeOnlyEditor.getValue(), /^- \[x\] #task Ship the exporter/m);
+  assert.match(closeOnlyEditor.getValue(), /^- \[ \] #task Offered/m);
+
+  const staleHarness = createInMemoryObsidianApp({
+    "Tasks.md": source,
+    [DAILY_PATH]: dayNote("[[Tasks#^export]]"),
+    "inbox.md": "## Tasks\n",
+  });
+  const staleEditor = createTextEditor(source, { line: 0, ch: 4 });
+  const stalePlugin = makePlugin(staleHarness, staleEditor, "Tasks.md");
+  const staleShown = [];
+  installReqCloseNav(stalePlugin, staleHarness, {
+    shown: staleShown,
+    pick(model) {
+      const mutated = staleEditor.getValue().replace(
+        "\t- [ ] Handles empty input\n",
+        "\t- [ ] Handles empty input\n\t- [ ] Sneaky mixed req\n",
+      );
+      replaceEditorText(staleEditor, mutated);
+      const req = reqRowByText(model, "Handles empty input");
+      const offer = offerRowByText(model, "Offered");
+      return {
+        closes: [{ key: offer.key, outcome: "done" }],
+        reqs: [{ key: req.key, verdict: "drop", reason: "too late mixed" }],
+      };
+    },
+  });
+  await stalePlugin.toggleActiveCheckboxOpenDoneAndPropagate(
+    staleEditor,
+    { path: "Tasks.md" },
+    stalePlugin.getActiveTaskStatus(staleEditor),
+  );
+  const staleText = staleEditor.getValue();
+  assert.match(staleText, /^- \[x\] #task Offered/m);
+  assert.match(staleText, /Sneaky mixed req/);
+  assert.doesNotMatch(staleText, /CANCEL LOG/);
+  const failures = (staleShown[0] && staleShown[0].failures) || [];
+  assert.ok(failures.some((row) => row && row.code === "req_close_stale"), JSON.stringify(failures));
+  assert.ok((staleShown[0].offer_closes || []).some((row) => row.outcome === "done"));
+  const { undone: staleUndone } = await restoreShown(staleShown, staleHarness, {
+    "Tasks.md": staleEditor,
+  });
+  assert.equal(staleUndone, true);
+  assert.match(staleEditor.getValue(), /^- \[ \] #task Offered/m);
+  assert.match(staleEditor.getValue(), /Sneaky mixed req/);
+  assert.match(staleEditor.getValue(), /^- \[x\] #task Ship the exporter/m);
 });
 
 test("12. one guarded Undo restores req writes and refuses after a later edit", async () => {

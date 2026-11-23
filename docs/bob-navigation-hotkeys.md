@@ -114,23 +114,23 @@ Bob Navigation Hotkeys adds keyboard commands for navigating and editing Bob not
 | Yank task block ID | `yank-block-id` | — |
 <!-- END GENERATED: commands -->
 
-`Ctrl+0` reuses an already open tab showing `dash.md` in any window before using
+`Ctrl+0` reuses an open tab showing `dash.md` in any window before using
 the current tab or opening a new one, including a background tab Obsidian has
-not loaded yet. Pinned main-area tabs are preferred, followed by other main-area
+not loaded. Pinned main-area tabs are preferred, followed by other main-area
 tabs, pinned sidebar tabs, and other sidebar tabs.
 When the current tab is a lower-ranked copy of `dash.md`, `Ctrl+0` switches to
 the best-ranked tab and leaves that tab's scroll position untouched.
 
 ## Task Card
 
-`Ctrl+Shift+P` opens the Task Card: a focused first screen with exact priority
-previews that closes on `Esc`, `q`, or `Ctrl+[`. There is no plugin setting, no
-activation date, and no filtered property list. Inbox answers that write ask
-where the task goes and move there. See [Task Card](task-card.md) for the
-stages, Type row, Cancel log, and recommendation keys. On album and record
+`Ctrl+Shift+P` opens the Task Card: a focused first screen with priority
+previews closing on `Esc`, `q`, or `Ctrl+[`. No plugin setting, activation
+date, or filtered property list. Inbox answers that write ask
+where the task goes and move there. See [Task Card](task-card.md) for
+stages, the Type row, Cancel log, and recommendation keys. On album and record
 notes where the cursor has no task, Task Link, or dependency/relation
-target, the chord opens the Schema Card (Record Card on records) on any
-row, including title and blank rows. This fallback resolves direct album
+target, the chord opens the Schema Card (Record Card on records),
+including on title and blank rows. This fallback resolves direct album
 and record-parent notes only; recognized Task Card targets keep priority.
 
 `Ctrl+Shift+B` is `Ctrl+Shift+P` then `b` (Depends on). `Ctrl+Shift+Alt+B` is
@@ -144,10 +144,10 @@ the lane copy. Any writing gesture closes the card.
 
 `Ctrl+Shift+J/K` navigates Ready, In Progress, and Next `#task` lines while
 skipping Blocked `[?]` tasks — except on an open current or future Pomodoro
-entry, where the same chord instead moves that Pomodoro and everything it owns
+entry, where the same chord instead moves that Pomodoro and its contents
 among adjacent future Pomodoros (the current slot keeps its time range;
 crossing the current/history boundary or the last future Pomodoro is refused
-with a notice). A counted chord moves a Pomodoro exactly N positions
+with a notice). A counted chord moves a Pomodoro N positions
 atomically, or jumps to the Nth circular navigation target elsewhere.
 
 Normal-mode Enter on a link records a file-aware jump in a 100-entry session
@@ -181,8 +181,7 @@ no frontmatter gets a three-line block. The panel refuses cycles, stale edits,
 unclosed frontmatter, duplicate `parent:` keys, unquotable names, and
 [notebook parent rules](notebook-gestures.md); typing a ruled-out name explains
 why, and Enter re-checks the live vault before writing, so a stale pick is
-refused with the same wording. It never creates a note. One undo reverts the write when the note is open in
-the editor.
+refused with the same wording. It never creates a note. One undo reverts the write in an open editor.
 
 Root-parent grouping is computed from the new tree at read time. Inherited
 project blocking (`#prj_is_blocked`) is repaired by the next
@@ -207,18 +206,18 @@ files setting.
 ## Pomodoro gestures
 
 The same move keymap on a Pomodoro sub-bullet moves that bullet plus the next N
-siblings, each carrying its descendants, into another open Pomodoro in the same
+siblings with their descendants, into another open Pomodoro in the same
 note — or into a new `- [ ] () — NAME` Pomodoro created directly below the
 current one from a typed, uppercased, em-dash-stripped picker name. Typing `=`
 creates a fresh destination with the source Pomodoro's normalized name when the
 source is named; typing `=NAME` peels every matching `NAME` component from a
 merged source into a new placeholder containing the selected bullet subtrees.
-Exact duplicate destination bullets merge away, and moving out a source's last
+Duplicate destination bullets merge away, and moving out a source's last
 owned content deletes that Pomodoro entry instead of leaving it behind. Nested
 `#task` lines under Pomodoro entries route to the Pomodoro move.
 
 On a Pomodoro entry line itself the keymap opens a picker: Enter on another
-open Pomodoro keeps the existing whole-entry move/delete behavior, typing a new
+open Pomodoro keeps the whole-entry move/delete behavior, typing a new
 name renames the entry in place, and `Ctrl+X` on a highlighted open
 current/future Pomodoro merges entries in one undoable edit (a current timed
 entry survives and absorbs the selected future one; names combine
@@ -251,7 +250,7 @@ titled `Split BUILD + FIX + READ` with a `BUILD stays` header, a preselected
 `All · FIX, READ` row, one row per merged-in type with its hue swatch and
 link count, a footer previewing the lineup (`BUILD + READ · FIX ↓`), and
 `↵ split · ⇥ mark · esc` keys — `Tab` marks or unmarks type rows, `Enter`
-applies the marked rows else the highlighted row, and `Esc` cancels. Closed
+applies the marked or highlighted row, and `Esc` cancels. Closed
 entries, MEET entries, single-type entries (`BUILD has one type — nothing to
 split`), and containers (`LATER holds any type — nothing to split`) are
 refused with a notice and no edit. The **Bob: Split Pomodoro by type**
@@ -263,7 +262,7 @@ with Active, Hidden, Possible duplicates, and All views on `Tab`.
 Collision hints sit on top; rows carry today, hidden, pinned, exempt, hue, and
 reappeared badges. `Ctrl+D` hides or restores the selected type, `Enter`
 offers rename, color, hide, and occurrences, and single keys (`r`/`c`/`h`/`o`
-with an empty filter, `1`–`8`/`a` in the color list) jump straight there.
+with an empty filter, `1`–`8`/`a` in the color list) jump there.
 Rename previews the one-commit rename before applying; occurrences lists daily
 notes and opens the entry. On a rename row, the footer counts linked tasks that
 will change type and reports when a destination leaves task types unchanged.
@@ -282,7 +281,7 @@ write, and requires explicit confirmation before merging labels.
 visual forms split the touched bullets together. On a task line it opens a
 picker over that task's splittable notes and requirements, drawer-scoped
 from a title: nothing starts marked, `Tab` marks and advances, `Enter`
-splits the marked rows or the highlighted row, `Esc` cancels. Section
+splits the marked or highlighted row, `Esc` cancels. Section
 bullets become tasks in the note's `## Tasks` intake. Daily-note splits and
 carries write to the `[root::]` note or the default inbox. Same-note writes
 are one `Ctrl+Z` transaction; cross-note writes persist destination-first
@@ -301,7 +300,7 @@ selections refuse with a teaching notice.
 ## Task properties, dependencies, and moves
 
 `Ctrl+Shift+P` edits scheduled, dependency, and priority properties. Priority
-levels roll scheduled dates, report the exact ISO date/span and distance from
+levels roll scheduled dates, report the ISO date/span and distance from
 today, and offer date-picker re-roll suggestions. Choosing `scheduled` opens a
 combined Reason/Work summary review; its optional reason becomes a nested
 Schedule Log entry. A blank reason on a task with a log records `🤷 no reason
@@ -431,14 +430,14 @@ targets. An exact due keep counts once per review day on its rung (WIP,
 Next, Ready, or P-level); uncounted keeps preserve the streak. A due WIP
 (`[/]`) keep asks “Why keep it in WIP?” and a due Next (`[*]`) keep asks
 “Why keep it in Next?”, each with its rung allowance (`keep 1 of 2 in
-Next`; `keep 2 of 2` names the decay card for Ready). The prompt also shows
+Next`; `keep 2 of 2` names the decay card for Ready). The prompt shows
 per-rung tallies, previews the exact entry, and lists up to three earlier
 reasons. Every counted keep on every rung writes one rung-qualified Rotten
 Log entry (`kept N× in WIP / in Next / in Ready`, `kept N× at P2`) under
 `🥀 **ROTTEN LOG**` in the same undo step as the stamp; a blank reason logs
 `🤷 no reason given`. Enter stamps and increments the streak. A counted
 keep whose entry cannot be written (duplicate `🥀 ROTTEN LOG` markers,
-unreadable history) writes nothing at all. Early and Today-linked keeps
+unreadable history) writes nothing. Early and Today-linked keeps
 stamp quietly with an “early · not counted” notice: no prompt and no entry.
 Esc writes nothing and retains the walk position. Alt+F stays, while
 Ctrl+Alt+F advances after a landed walk answer.
@@ -491,7 +490,10 @@ empty-filter `Space`); `Ctrl+A` skips, Enter applies, and two-step Esc
 discards. v5 adds a `Ctrl+J` pin; promotion lands it, merge withholds it. v6
 puts requirements first: `Ctrl+X` Met, `Ctrl+Shift+X` Drop (optional Log
 Recall), `Ctrl+Shift+T` Carry, `Space`/`Tab` Carry+pull in; `Ctrl+J` pins
-for navigation.
+for navigation. Requirement rows start with the shared diamond —
+hollow for pending and staged Met, slashed for Drop, an arrow for Own task
+or Pull in; the heading carries a pending mark. Requirements-only cards use
+the diamond icon.
 
 The Task Card's Review every action sets or clears `[refresh:: N]` through the
 ledger-tools stamper, reading lane intervals with the task's own refresh kept
@@ -501,7 +503,7 @@ as the once-Ready return value.
 
 `]w` / `[w` walk the vault's PENDING (`[/]`), NEXT (`[*]`), and READY
 (`[ ]`) tasks that have no Task Link under today's open Pomodoros. These
-are exactly the tasks counted by the `PENDING n/cap`, `NEXT n/cap`, and
+are the tasks counted by the `PENDING n/cap`, `NEXT n/cap`, and
 `READY n/cap` chips and listed in the dash's `### PENDING Tasks`,
 `### NEXT Tasks`, and `### READY Tasks` sections. NEW and ROTTEN Ready
 tasks stay with `]s`; they are not in the READY lane. The walk lists
@@ -511,7 +513,7 @@ moves top to bottom through each note.
 Each press steps one entry from the cursor when the cursor is on a live
 entry, else from today's anchor when the anchored task is still listed in
 the same lane, else by inserting the anchor's `(lane, path, line)` tuple
-into the current sort order and continuing from there. When the cursor or
+into the current sort order and continuing. When the cursor or
 a live anchor resolves to a task whose current lane differs from the
 anchor's lane, the origin stays the anchor tuple in the **anchor's** lane,
 so the walk does not teleport into the new lane. With no origin, `]w` lands on
@@ -616,7 +618,7 @@ stats-journal events, freshness stamps, or local storage.
 
 ### Footer indicator
 
-The desktop status bar always shows `[[ s w n b ]]` with the active walk lit;
+The desktop status bar shows `[[ s w n b ]]` with the active walk lit;
 mobile shows no item. Without a saved or used type, it has no thumb and its tooltip
 carries the empty notice. Each tooltip names the uppercase jump (`]S`, `]W`,
 `]N`, or `]B`). The thumb slides between letters.
@@ -648,19 +650,19 @@ and hand edits follow
 Committing a merge label previews through `bob task merge --dry-run` (the
 Bob Ledger Tools `api.taskMerge` namespace, desktop only) and fills the
 consequence strip from the preview: `⤵ Merges “S” into “T” · copies N notes ·
-cancels “S” · …`. When the preview reports offers, the existing successor
+cancels “S” · …`. When the preview reports offers, the successor
 offer picker opens; the commit then runs `bob task merge` with the picks and shows an
 **Undo merge** notice that restores the applied notes only while they still
 match the post-merge text. Merging two or more sources waits for a second
 Return behind the same batch banner. An already-closed source takes the plain
-relation through the existing writer with `Already Cancelled · link only`,
+relation through the writer with `Already Cancelled · link only`,
 and mobile shows `⤵ merging needs the desktop app` and writes nothing.
 When a source or the target has no `^block-id`, Return first runs the
 new-block-ID prompt for each one. Sources come first, then the target, and
 each prompt is prefilled from the task text. The relation field then returns
 and the merge previews as usual. Escape at a prompt closes the picker, and
 IDs already confirmed stay. See [Task relations](task-relations.md) for the
-full behavior.
+behavior.
 
 ## Notes, tabs, and keyboard layers
 

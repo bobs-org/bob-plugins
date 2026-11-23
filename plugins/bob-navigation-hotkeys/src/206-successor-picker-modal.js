@@ -109,7 +109,7 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
       headerIcon: normalized && normalized.relationOnly
         ? "link-2"
         : normalized && normalized.keepMovingOnly ? "skip-forward"
-          : normalized && normalized.requirementsOnly ? "list-check" : "git-pull-request",
+          : normalized && normalized.requirementsOnly ? "diamond" : "git-pull-request",
       inputLabel: "Filter successor offers",
       placeholder: "Filter tasks, notes, and groups",
       resultsLabel: "Successor offers",

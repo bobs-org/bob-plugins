@@ -41,12 +41,20 @@ async function openCard(client) {
   const order = await client.evaluate(
     `(() => { const modal = document.querySelector(${JSON.stringify(CARD)}); if (!modal) return null; ` +
       `const groups = Array.from(modal.querySelectorAll(".bob-successor-group")); ` +
+      `const markOf = (row) => { const mark = row.querySelector(".bob-req-mark"); ` +
+      `return mark ? { state: mark.getAttribute("data-state"), text: mark.textContent } : null; }; ` +
       `return { firstIsRequirements: groups.length > 0 && groups[0].classList.contains("is-requirements"), ` +
+      `headingMark: Boolean(modal.querySelector(".bob-successor-req-heading .bob-req-mark")), ` +
       `groups: groups.map((group) => group.className), rows: Array.from(modal.querySelectorAll(".bob-successor-req-row"))` +
-      `.map((row) => ({ text: row.textContent, depth: row.getAttribute("data-requirement-depth") })) }; })()`,
+      `.map((row) => ({ text: row.textContent, depth: row.getAttribute("data-requirement-depth"), mark: markOf(row) })) }; })()`,
   );
   assert.ok(order && order.firstIsRequirements, "requirements were not the first card group");
   assert.deepEqual(order.rows.map((row) => Number(row.depth)), [1, 2]);
+  assert.ok(order.headingMark, "the requirement group heading has no shared diamond mark");
+  for (const row of order.rows) {
+    assert.equal(row.mark && row.mark.state, "pending", "a fresh requirement row does not wear the pending mark");
+    assert.equal(row.mark && row.mark.text, "◇", "a fresh requirement row does not wear the hollow diamond");
+  }
   return order;
 }
 
@@ -80,6 +88,11 @@ async function runDropUndo(client) {
   for (const char of DROP_REASON) await base.key(client, char);
   await base.key(client, "Enter");
   await new Promise((resolve) => setTimeout(resolve, 250));
+  const stagedMark = await client.evaluate(
+    '(() => { const mark = document.querySelector(".bob-successor-group.is-requirements .bob-successor-req-row .bob-req-mark");' +
+    ' return mark ? { state: mark.getAttribute("data-state"), text: mark.textContent } : null; })()',
+  );
+  assert.deepEqual(stagedMark, { state: "dropped", text: "⊘" }, "the staged Drop did not slash the row mark");
   await base.key(client, "Enter");
   await base.waitForGone(client, CARD, "requirement close card after Drop");
   await base.waitFor(

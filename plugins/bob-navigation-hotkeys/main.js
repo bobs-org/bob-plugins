@@ -36647,7 +36647,7 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
       headerIcon: normalized && normalized.relationOnly
         ? "link-2"
         : normalized && normalized.keepMovingOnly ? "skip-forward"
-          : normalized && normalized.requirementsOnly ? "list-check" : "git-pull-request",
+          : normalized && normalized.requirementsOnly ? "diamond" : "git-pull-request",
       inputLabel: "Filter successor offers",
       placeholder: "Filter tasks, notes, and groups",
       resultsLabel: "Successor offers",
@@ -39528,12 +39528,20 @@ function successorRequirementFooterHints(modal) {
 
 function successorRequirementInk(owner) {
   const ink = owner && typeof owner.ink === "string" ? owner.ink.trim() : "";
-  return ink && /^[\w\s#(),.%+-]+$/.test(ink) ? `--bob-successor-req-ink:${ink}` : "";
+  // The card chrome reads --bob-successor-req-ink; the shared ledger-tools
+  // mark reads --bob-req-ink. Set both so the diamond wears the owner's ink.
+  return ink && /^[\w\s#(),.%+-]+$/.test(ink)
+    ? `--bob-successor-req-ink:${ink};--bob-req-ink:${ink}`
+    : "";
 }
 
-function successorRequirementGlyph(row) {
-  const state = (row && (row.state || (row.req && row.req.state))) || "pending";
-  return typeof taskReqGlyph === "function" ? taskReqGlyph(state) : "◇";
+// The card previews the staged outcome: pending until Drop or Carry is
+// staged, slashed for Drop, an arrow for Own task or Pull in. A staged Met
+// stays pending: the requirement is still open until the close lands.
+function successorRequirementMarkState(verdict) {
+  if (verdict === "drop") return "dropped";
+  if (verdict === "carry" || verdict === "carry_pulled") return "carried";
+  return "pending";
 }
 
 function successorRequirementRenderGroup(modal, group, groupIndex, matches, query, navigation) {
@@ -39541,6 +39549,11 @@ function successorRequirementRenderGroup(modal, group, groupIndex, matches, quer
   const groupEl = modal.resultsEl.createDiv({ cls: "bob-successor-group is-requirements" });
   const heading = groupEl.createDiv({ cls: "bob-successor-group-heading bob-successor-req-heading" });
   const titleRow = heading.createDiv({ cls: "bob-successor-group-titlebar" });
+  titleRow.createSpan({
+    cls: "bob-req-mark bob-successor-req-glyph",
+    text: typeof taskReqGlyph === "function" ? taskReqGlyph("pending") : "◇",
+    attr: { "aria-hidden": "true", "data-state": "pending" },
+  });
   titleRow.createDiv({ cls: "bob-successor-group-title", text: group.copy.title });
   titleRow.createSpan({ cls: "bob-successor-group-tag bob-successor-req-scope", text: group.copy.scope });
   if (group.copy.why) heading.createDiv({ cls: "bob-successor-group-caption", text: group.copy.why });
@@ -39579,8 +39592,12 @@ function successorRequirementRenderGroup(modal, group, groupIndex, matches, quer
         style: `--bob-successor-req-depth:${Math.min(depth, 16)};${inkStyle}`,
       },
     });
-    const glyph = successorRequirementGlyph(row);
-    rowEl.createSpan({ cls: "bob-successor-mark bob-successor-req-glyph", text: glyph, attr: { "aria-hidden": "true" } });
+    const markState = successorRequirementMarkState(state.verdict);
+    rowEl.createSpan({
+      cls: "bob-req-mark bob-successor-req-glyph",
+      text: typeof taskReqGlyph === "function" ? taskReqGlyph(markState) : "◇",
+      attr: { "aria-hidden": "true", "data-state": markState },
+    });
     try {
       if (typeof successorRenderJumpRowAdornments === "function") {
         successorRenderJumpRowAdornments(modal, rowEl, row, navIndex);

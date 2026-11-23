@@ -1772,6 +1772,60 @@ test("v6 normalizes a requirement-only model and renders canonical copy, depth, 
   assert.equal(await pending, null);
 });
 
+test("v6 requirement rows wear the shared diamond mark and flip it with the staged verdict", async () => {
+  const model = requirementModel();
+  const plugin = makePlugin({ now: 5000 });
+  const { pending, modal } = await openPicker(plugin, model);
+  assert.equal(modal.headerIcon, "diamond", "requirements-only cards use the diamond header icon");
+
+  const heading = findAll(modal.resultsEl, "bob-successor-req-heading")[0];
+  const headingMark = findAll(heading, "bob-req-mark")[0];
+  assert.ok(headingMark, "the group heading starts with the shared mark");
+  assert.equal(headingMark.getAttribute("data-state"), "pending");
+  assert.equal(headingMark.textContent, "◇");
+
+  const rowMarks = () => findAll(modal.resultsEl, "bob-successor-req-row")
+    .map((rowEl) => findAll(rowEl, "bob-req-mark")[0]);
+  let marks = rowMarks();
+  assert.equal(marks.length, 2);
+  for (const mark of marks) {
+    assert.equal(mark.getAttribute("data-state"), "pending");
+    assert.equal(mark.textContent, "◇");
+  }
+
+  pressKey(modal, "x", { ctrlKey: true });
+  marks = rowMarks();
+  assert.equal(marks[0].getAttribute("data-state"), "pending", "a staged Met stays pending");
+  assert.equal(marks[0].textContent, "◇");
+
+  pressKey(modal, "x", { ctrlKey: true, shiftKey: true });
+  marks = rowMarks();
+  assert.equal(marks[0].getAttribute("data-state"), "dropped", "a staged Drop slashes the mark");
+  assert.equal(marks[0].textContent, "⊘");
+  pressKey(modal, "Escape");
+  marks = rowMarks();
+  assert.equal(marks[0].getAttribute("data-state"), "pending", "discarding Drop restores the hollow mark");
+
+  pressKey(modal, "t", { ctrlKey: true, shiftKey: true });
+  marks = rowMarks();
+  assert.equal(marks[0].getAttribute("data-state"), "carried", "Own task stages the arrow");
+  assert.equal(marks[0].textContent, "→");
+
+  pressKey(modal, "t", { ctrlKey: true, shiftKey: true });
+  marks = rowMarks();
+  assert.equal(marks[0].getAttribute("data-state"), "pending", "repeating Own task returns to Met");
+
+  modal.selectedIndex = 1;
+  modal.renderResults();
+  pressKey(modal, " ");
+  marks = rowMarks();
+  assert.equal(marks[1].getAttribute("data-state"), "carried", "Pull in stages the arrow");
+  assert.match(allText(modal.resultsEl), /→/, "the Unicode fallback stays visible without ledger-tools");
+  modal.allowCloseWithoutArm = true;
+  modal.close();
+  assert.equal(await pending, null);
+});
+
 test("requirement keys stage explicit Met, carry, and carry-pulled and settle req-only results", async () => {
   const model = requirementModel();
   const [parent, child] = model.groups[0].rows.map((row) => row.offer.key);

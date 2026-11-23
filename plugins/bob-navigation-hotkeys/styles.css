@@ -159,6 +159,14 @@
   color: var(--bob-successor-req-ink, var(--text-normal));
 }
 
+.bob-successor-req-heading .bob-successor-group-titlebar {
+  justify-content: flex-start;
+}
+
+.bob-successor-req-heading .bob-successor-group-tag {
+  margin-left: auto;
+}
+
 .bob-successor-req-scope {
   flex: 0 0 auto;
   color: var(--text-muted);
@@ -175,12 +183,11 @@
   border-left-color: var(--bob-successor-req-ink, var(--interactive-accent));
 }
 
-.bob-successor-req-row .bob-successor-req-glyph {
-  flex: 0 0 42px;
+.bob-successor-req-row .bob-successor-req-glyph,
+.bob-successor-req-heading .bob-req-mark {
+  flex: 0 0 1em;
   color: var(--bob-successor-req-ink, var(--interactive-accent));
-  font-family: var(--font-monospace);
   font-size: 13px;
-  letter-spacing: -0.06em;
   text-align: center;
 }
 

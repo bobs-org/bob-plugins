@@ -9,7 +9,7 @@
 //                 jumpRecovery(), openPath(target, event),
 //                 hoverLink(event, node, linktext), searchTag(tag, event),
 //                 openNested(key, event), onOpenEditor(key) (only when the
-//                 future editor hook is registered) } }
+//                 editor hook is registered), onAddProperty(), onEditAll() } }
 const PROPERTY_CARD_FOOT_CLASS = "bob-property-card-foot";
 const PROPERTY_CARD_FOOT_DRAWER_CLASS = "bob-property-card-foot-drawer";
 const PROPERTY_CARD_FOOT_WIKILINK_RE = /\[\[([^\]\n]+)\]\]/g;
@@ -468,6 +468,41 @@ function propertyCardFootRenderDrawer(doc, drawerBody, spec) {
       for (const row of rows) propertyCardFootRenderRow(list, doc, row, handlers);
       drawerBody.appendChild(list);
     }
+    try {
+      const openEditor = handlers && typeof handlers.onOpenEditor === "function" ? handlers.onOpenEditor : null;
+      if (openEditor) {
+        const actions = propertyCardKitEl(doc, "div", "bob-property-card-foot-actions");
+        const add = doc.createElement("button");
+        add.setAttribute("type", "button");
+        add.setAttribute("class", "bob-property-card-foot-add");
+        add.setAttribute("data-property-foot-action", "add");
+        add.setAttribute("aria-label", "Add property");
+        propertyCardKitAppendText(doc, add, "＋ Add property");
+        add.addEventListener?.("click", (event) => {
+          try { event.preventDefault?.(); } catch (_) {}
+          try {
+            if (handlers && typeof handlers.onAddProperty === "function") handlers.onAddProperty();
+            else openEditor();
+          } catch (_) {}
+        });
+        actions.appendChild(add);
+        const all = doc.createElement("button");
+        all.setAttribute("type", "button");
+        all.setAttribute("class", "bob-property-card-foot-edit-all");
+        all.setAttribute("data-property-foot-action", "edit-all");
+        all.setAttribute("aria-label", "Edit all properties");
+        propertyCardKitAppendText(doc, all, "✎ Edit all =+");
+        all.addEventListener?.("click", (event) => {
+          try { event.preventDefault?.(); } catch (_) {}
+          try {
+            if (handlers && typeof handlers.onEditAll === "function") handlers.onEditAll();
+            else openEditor();
+          } catch (_) {}
+        });
+        actions.appendChild(all);
+        drawerBody.appendChild(actions);
+      }
+    } catch (_) {}
     return true;
   } catch (_) {
     return false;

@@ -59,6 +59,9 @@ function albumYamlDoneButtonDoc(host) {
 
 function albumYamlExcursionOwnPath(record) {
   if (!record) return "";
+  if (record.kind === "props" && record.notePath) {
+    return typeof propertyNotePath === "function" ? propertyNotePath(record.notePath || "") : String(record.notePath || "");
+  }
   if (record.kind === "record" && record.recordPath) {
     return typeof albumHeaderPath === "function" ? albumHeaderPath(record.recordPath) : String(record.recordPath || "");
   }
@@ -95,7 +98,8 @@ function albumYamlBuildDoneEl(doc, albumPath, kind = "album") {
     kind === "bank" ? "Done editing bank setup"
       : kind === "record" ? "Done editing record"
         : kind === "intentions" ? "Done editing intentions"
-          : "Done editing album schema",
+          : kind === "props" ? "Done editing properties"
+            : "Done editing album schema",
   );
   try {
     button.textContent = "Done";
@@ -177,16 +181,24 @@ class BobLedgerToolsAlbumYamlExcursionMixin {
   albumYamlExcursionBegin(leaf, details = {}) {
     if (!leaf) return null;
     if (!(this.albumYamlExcursions instanceof Map)) this.albumYamlExcursions = new Map();
-    const albumPath = typeof albumHeaderPath === "function" ? albumHeaderPath(details.albumPath || "") : String(details.albumPath || "");
+    const kind = details.kind === "bank" ? "bank" : details.kind === "record" ? "record" : details.kind === "intentions" ? "intentions" : details.kind === "props" ? "props" : "album";
+    const notePath = kind === "props"
+      ? (typeof propertyNotePath === "function"
+        ? propertyNotePath(details.notePath || details.albumPath || "")
+        : String(details.notePath || details.albumPath || ""))
+      : "";
+    const albumPath = kind === "props"
+      ? notePath
+      : (typeof albumHeaderPath === "function" ? albumHeaderPath(details.albumPath || "") : String(details.albumPath || ""));
     if (!albumPath) return null;
     try { this.albumYamlExcursionClear(leaf); } catch (_) {}
-    const kind = details.kind === "bank" ? "bank" : details.kind === "record" ? "record" : details.kind === "intentions" ? "intentions" : "album";
     const recordPath = kind === "record"
       ? (typeof albumHeaderPath === "function" ? albumHeaderPath(details.recordPath || "") : String(details.recordPath || ""))
       : "";
     const record = {
       albumPath,
       recordPath,
+      notePath,
       kind,
       viewState: details.viewState || null,
       selectedKey: typeof details.selectedKey === "string" ? details.selectedKey : "stats",
@@ -337,6 +349,9 @@ class BobLedgerToolsAlbumYamlExcursionMixin {
     }
     if (record?.kind === "intentions" && typeof this.intentionCardYamlDoneAttempt === "function") {
       return this.intentionCardYamlDoneAttempt(leaf, record);
+    }
+    if (record?.kind === "props" && typeof this.propertyEditorYamlDoneAttempt === "function") {
+      return this.propertyEditorYamlDoneAttempt(leaf, record);
     }
     if (!this.albumYamlExcursionStillCurrent(leaf, record)) return { ok: false, reason: "stale-excursion" };
     let save = { ok: true };

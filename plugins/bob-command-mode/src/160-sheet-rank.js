@@ -63,6 +63,7 @@ const CM_SHEET_SURFACE_ROWS = [
   { plugin: "bob-ledger-tools", id: "edit-album-schema", title: "Edit album schema", section: "vault" },
   { plugin: "bob-ledger-tools", id: "edit-bank-setup", title: "Edit bank setup", section: "vault" },
   { plugin: "bob-ledger-tools", id: "edit-record", title: "Edit record", section: "vault" },
+  { plugin: "bob-ledger-tools", id: "edit-note-properties", title: "Edit note properties", section: "vault" },
   { plugin: "bob-ledger-tools", id: "edit-intentions", title: "Edit intentions", section: "vault" },
   { plugin: "bob-ledger-tools", id: "reflect-on-yesterday", title: "Reflect on yesterday", section: "vault" },
   { plugin: "bob-articles", id: "format-article", title: "Format this article", section: "vault" },

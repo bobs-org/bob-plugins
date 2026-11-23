@@ -109,6 +109,15 @@ try {
       propertyEditorAddStageBuild,
       propertyEditorPaintNameStage,
       openPropertyEditor,
+      PROPERTY_EDITOR_ENTRY_COMMAND_ID,
+      PROPERTY_EDITOR_ENTRY_COMMAND_NAME,
+      propertyEditorEntryIsMarkdownPath,
+      propertyEditorEntryNormalizePath,
+      propertyEditorEntryResolvePath,
+      propertyEditorHandoffSpecies,
+      propertyEditorYamlIssueLine,
+      propertyEditorEntryLeafFor,
+      propertyEditorEntryReadSource,
     });
   }
 } catch (_) {}

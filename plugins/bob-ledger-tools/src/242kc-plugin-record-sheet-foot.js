@@ -136,6 +136,12 @@ class BobLedgerToolsRecordSheetFootMixin {
       onOpenEditor: typeof propertyCardFootEditorHook === "function" && propertyCardFootEditorHook
         ? (key) => propertyCardFootOpenEditor(path, key)
         : null,
+      onAddProperty: typeof propertyCardFootEditorHook === "function" && propertyCardFootEditorHook
+        ? () => propertyCardFootOpenEditor(path, undefined, "add")
+        : null,
+      onEditAll: typeof propertyCardFootEditorHook === "function" && propertyCardFootEditorHook
+        ? () => propertyCardFootOpenEditor(path, undefined, "browse")
+        : null,
     };
   }
 

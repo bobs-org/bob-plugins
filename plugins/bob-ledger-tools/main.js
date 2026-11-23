@@ -35340,7 +35340,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.setupWorkspaceScrollGuard();
     this.setupNotebookData(); this.setupAlbumData(); this.setupProjectsData(); this.setupAreasData(); this.setupBankData(); this.setupBankActions(); this.setupBankWalk();
     this.setupBankCards(); this.setupBankBadge(); this.setupBankMarks(); this.setupBankSetup(); this.setupBankSetupCard(); this.setupSchemaDoubleEquals?.();
-    this.setupNotebookCatalog(); this.setupAlbumCatalog(); this.setupProjectsCatalog(); this.setupAreasCatalog(); this.setupAlbumRecords(); this.setupNotebookHeader(); this.setupAlbumHeader(); this.setupRecordSheet?.(); this.setupIntentionCard?.(); this.setupIntentionUpdate?.(); this.setupIntentionCardEditor?.(); this.setupIntentionCardNavigation?.(); this.setupRecordUpdate?.(); this.setupPropertyUpdate?.(); this.setupRecordCard?.(); this.setupSubscriptionSurfaces(); this.setupAlbumSchemaEntrypoints?.(); this.setupAlbumYamlExcursion?.();
+    this.setupNotebookCatalog(); this.setupAlbumCatalog(); this.setupProjectsCatalog(); this.setupAreasCatalog(); this.setupAlbumRecords(); this.setupNotebookHeader(); this.setupAlbumHeader(); this.setupRecordSheet?.(); this.setupIntentionCard?.(); this.setupIntentionUpdate?.(); this.setupIntentionCardEditor?.(); this.setupIntentionCardNavigation?.(); this.setupRecordUpdate?.(); this.setupPropertyUpdate?.(); this.setupRecordCard?.(); this.setupPropertyEditorEntrypoints?.(); this.setupSubscriptionSurfaces(); this.setupAlbumSchemaEntrypoints?.(); this.setupAlbumYamlExcursion?.();
     this.setupReadingBoardBlock();
   }
 
@@ -35466,7 +35466,7 @@ BobLedgerToolsPlugin.prototype.teardownLedgerToolsSurfaces = function () {
     } catch (error) {
       // Reading Board data teardown is best-effort.
     }
-    try { this.teardownRecordCard?.(); this.teardownRecordUpdate?.(); this.teardownPropertyUpdate?.(); this.teardownRecordSheet?.(); this.teardownIntentionCardNavigation?.(); this.teardownIntentionCardEditor?.(); this.teardownIntentionUpdate?.(); this.teardownIntentionCard?.(); this.teardownSubscriptionSurfaces(); this.teardownAlbumHeader(); this.teardownNotebookHeader(); this.teardownAlbumYamlExcursion?.(); this.teardownAlbumSchemaEntrypoints?.(); } catch (error) {}
+    try { this.teardownRecordCard?.(); this.teardownPropertyEditorEntrypoints?.(); this.teardownRecordUpdate?.(); this.teardownPropertyUpdate?.(); this.teardownRecordSheet?.(); this.teardownIntentionCardNavigation?.(); this.teardownIntentionCardEditor?.(); this.teardownIntentionUpdate?.(); this.teardownIntentionCard?.(); this.teardownSubscriptionSurfaces(); this.teardownAlbumHeader(); this.teardownNotebookHeader(); this.teardownAlbumYamlExcursion?.(); this.teardownAlbumSchemaEntrypoints?.(); } catch (error) {}
     try { propertyCardAdoptReleaseAll(); } catch (_) {}
     try { propertyCardTitleSlotReleaseAll(); } catch (_) {}
     try { propertyCardFrontmatterReleaseAll(); } catch (_) {}
@@ -69369,6 +69369,9 @@ function albumYamlDoneButtonDoc(host) {
 
 function albumYamlExcursionOwnPath(record) {
   if (!record) return "";
+  if (record.kind === "props" && record.notePath) {
+    return typeof propertyNotePath === "function" ? propertyNotePath(record.notePath || "") : String(record.notePath || "");
+  }
   if (record.kind === "record" && record.recordPath) {
     return typeof albumHeaderPath === "function" ? albumHeaderPath(record.recordPath) : String(record.recordPath || "");
   }
@@ -69405,7 +69408,8 @@ function albumYamlBuildDoneEl(doc, albumPath, kind = "album") {
     kind === "bank" ? "Done editing bank setup"
       : kind === "record" ? "Done editing record"
         : kind === "intentions" ? "Done editing intentions"
-          : "Done editing album schema",
+          : kind === "props" ? "Done editing properties"
+            : "Done editing album schema",
   );
   try {
     button.textContent = "Done";
@@ -69487,16 +69491,24 @@ class BobLedgerToolsAlbumYamlExcursionMixin {
   albumYamlExcursionBegin(leaf, details = {}) {
     if (!leaf) return null;
     if (!(this.albumYamlExcursions instanceof Map)) this.albumYamlExcursions = new Map();
-    const albumPath = typeof albumHeaderPath === "function" ? albumHeaderPath(details.albumPath || "") : String(details.albumPath || "");
+    const kind = details.kind === "bank" ? "bank" : details.kind === "record" ? "record" : details.kind === "intentions" ? "intentions" : details.kind === "props" ? "props" : "album";
+    const notePath = kind === "props"
+      ? (typeof propertyNotePath === "function"
+        ? propertyNotePath(details.notePath || details.albumPath || "")
+        : String(details.notePath || details.albumPath || ""))
+      : "";
+    const albumPath = kind === "props"
+      ? notePath
+      : (typeof albumHeaderPath === "function" ? albumHeaderPath(details.albumPath || "") : String(details.albumPath || ""));
     if (!albumPath) return null;
     try { this.albumYamlExcursionClear(leaf); } catch (_) {}
-    const kind = details.kind === "bank" ? "bank" : details.kind === "record" ? "record" : details.kind === "intentions" ? "intentions" : "album";
     const recordPath = kind === "record"
       ? (typeof albumHeaderPath === "function" ? albumHeaderPath(details.recordPath || "") : String(details.recordPath || ""))
       : "";
     const record = {
       albumPath,
       recordPath,
+      notePath,
       kind,
       viewState: details.viewState || null,
       selectedKey: typeof details.selectedKey === "string" ? details.selectedKey : "stats",
@@ -69647,6 +69659,9 @@ class BobLedgerToolsAlbumYamlExcursionMixin {
     }
     if (record?.kind === "intentions" && typeof this.intentionCardYamlDoneAttempt === "function") {
       return this.intentionCardYamlDoneAttempt(leaf, record);
+    }
+    if (record?.kind === "props" && typeof this.propertyEditorYamlDoneAttempt === "function") {
+      return this.propertyEditorYamlDoneAttempt(leaf, record);
     }
     if (!this.albumYamlExcursionStillCurrent(leaf, record)) return { ok: false, reason: "stale-excursion" };
     let save = { ok: true };
@@ -84254,7 +84269,7 @@ function propertyCardInventory(input = {}) {
 //                 jumpRecovery(), openPath(target, event),
 //                 hoverLink(event, node, linktext), searchTag(tag, event),
 //                 openNested(key, event), onOpenEditor(key) (only when the
-//                 future editor hook is registered) } }
+//                 editor hook is registered), onAddProperty(), onEditAll() } }
 const PROPERTY_CARD_FOOT_CLASS = "bob-property-card-foot";
 const PROPERTY_CARD_FOOT_DRAWER_CLASS = "bob-property-card-foot-drawer";
 const PROPERTY_CARD_FOOT_WIKILINK_RE = /\[\[([^\]\n]+)\]\]/g;
@@ -84713,6 +84728,41 @@ function propertyCardFootRenderDrawer(doc, drawerBody, spec) {
       for (const row of rows) propertyCardFootRenderRow(list, doc, row, handlers);
       drawerBody.appendChild(list);
     }
+    try {
+      const openEditor = handlers && typeof handlers.onOpenEditor === "function" ? handlers.onOpenEditor : null;
+      if (openEditor) {
+        const actions = propertyCardKitEl(doc, "div", "bob-property-card-foot-actions");
+        const add = doc.createElement("button");
+        add.setAttribute("type", "button");
+        add.setAttribute("class", "bob-property-card-foot-add");
+        add.setAttribute("data-property-foot-action", "add");
+        add.setAttribute("aria-label", "Add property");
+        propertyCardKitAppendText(doc, add, "＋ Add property");
+        add.addEventListener?.("click", (event) => {
+          try { event.preventDefault?.(); } catch (_) {}
+          try {
+            if (handlers && typeof handlers.onAddProperty === "function") handlers.onAddProperty();
+            else openEditor();
+          } catch (_) {}
+        });
+        actions.appendChild(add);
+        const all = doc.createElement("button");
+        all.setAttribute("type", "button");
+        all.setAttribute("class", "bob-property-card-foot-edit-all");
+        all.setAttribute("data-property-foot-action", "edit-all");
+        all.setAttribute("aria-label", "Edit all properties");
+        propertyCardKitAppendText(doc, all, "✎ Edit all =+");
+        all.addEventListener?.("click", (event) => {
+          try { event.preventDefault?.(); } catch (_) {}
+          try {
+            if (handlers && typeof handlers.onEditAll === "function") handlers.onEditAll();
+            else openEditor();
+          } catch (_) {}
+        });
+        actions.appendChild(all);
+        drawerBody.appendChild(actions);
+      }
+    } catch (_) {}
     return true;
   } catch (_) {
     return false;
@@ -85777,6 +85827,12 @@ function propertyCardFootAdapterHandlers(plugin, path, options = {}) {
     openNested: typeof options.openNested === "function" ? options.openNested : null,
     onOpenEditor: typeof propertyCardFootEditorHook === "function" && propertyCardFootEditorHook
       ? (key) => propertyCardFootOpenEditor(path, key)
+      : null,
+    onAddProperty: typeof propertyCardFootEditorHook === "function" && propertyCardFootEditorHook
+      ? () => propertyCardFootOpenEditor(path, undefined, "add")
+      : null,
+    onEditAll: typeof propertyCardFootEditorHook === "function" && propertyCardFootEditorHook
+      ? () => propertyCardFootOpenEditor(path, undefined, "browse")
       : null,
   };
 }
@@ -111711,6 +111767,12 @@ class BobLedgerToolsRecordSheetFootMixin {
       openNested: null,
       onOpenEditor: typeof propertyCardFootEditorHook === "function" && propertyCardFootEditorHook
         ? (key) => propertyCardFootOpenEditor(path, key)
+        : null,
+      onAddProperty: typeof propertyCardFootEditorHook === "function" && propertyCardFootEditorHook
+        ? () => propertyCardFootOpenEditor(path, undefined, "add")
+        : null,
+      onEditAll: typeof propertyCardFootEditorHook === "function" && propertyCardFootEditorHook
+        ? () => propertyCardFootOpenEditor(path, undefined, "browse")
         : null,
     };
   }
@@ -167167,6 +167229,25 @@ class PropertyEditorModal extends PropertyEditorModalBase {
     if (action === "undo") return this.propertyEditorHistory("undo");
     if (action === "redo") return this.propertyEditorHistory("redo");
     if (action === "equals") {
+      // An open stage or add draft keeps its text: routing never discards
+      // an uncommitted draft.
+      if (this.stage || this.addName) {
+        this.announce = "Finish the open edit first — = is reserved while drafting.";
+        return this.paintPropertyEditor();
+      }
+      const selected = this.editorSelected();
+      const decision = selected ? propertyEditorActionForRow(selected.row) : null;
+      if (decision && decision.action === "handoff") {
+        try {
+          this.onCardHandoff?.({
+            key: selected.row.key,
+            editor: decision.editor,
+            owner: decision.owner,
+            row: selected.row,
+          });
+        } catch (_) {}
+        return;
+      }
       this.announce = "Add and filter arrive in later phases; = is reserved here.";
       return this.paintPropertyEditor();
     }
@@ -169536,6 +169617,534 @@ Object.assign(PropertyEditorModal.prototype, {
   }
 ,
 });
+// ---- src/298m-plugin-property-editor-entrypoints.js ----
+// Property editor public entry points and props YAML excursion
+// (bob-cli-pf.4.1.5 entrypoints-yaml). One opener for the `+` chord, the
+// palette, Command Mode, drawer actions, and sibling plugins, plus the
+// species hand-offs and the `kind: "props"` YAML excursion with Done return.
+// Pure helpers stay DOM-free; the mixin owns registration and teardown.
+
+const PROPERTY_EDITOR_ENTRY_COMMAND_ID = "edit-note-properties";
+const PROPERTY_EDITOR_ENTRY_COMMAND_NAME = "Edit note properties";
+
+// Any Markdown note may host the editor. Non-Markdown targets refuse with
+// a useful reason instead of opening on the wrong file.
+function propertyEditorEntryIsMarkdownPath(path) {
+  return typeof path === "string" && /\.md$/i.test(path);
+}
+
+function propertyEditorEntryNormalizePath(value) {
+  if (typeof propertyNotePath === "function") return propertyNotePath(value);
+  const path = value && typeof value.path === "string" ? value.path : value;
+  return String(path || "").replace(/\\/g, "/").replace(/^\.\//, "");
+}
+
+// An explicit path always wins; an omitted path means the active note.
+// Returns { ok, path } or { ok: false, reason } for missing-path.
+function propertyEditorEntryResolvePath(plugin, options = {}) {
+  const explicit = options.filePath || options.path || "";
+  if (explicit) return { ok: true, path: propertyEditorEntryNormalizePath(explicit) };
+  try {
+    if (typeof getActiveMarkdownView === "function") {
+      const view = getActiveMarkdownView(plugin && plugin.app);
+      const filePath = view && view.file && view.file.path;
+      if (filePath) return { ok: true, path: propertyEditorEntryNormalizePath(filePath) };
+    }
+  } catch (_) {}
+  try {
+    const file = plugin && plugin.app && plugin.app.workspace && plugin.app.workspace.activeLeaf
+      && plugin.app.workspace.activeLeaf.view && plugin.app.workspace.activeLeaf.view.file;
+    if (file && file.path) return { ok: true, path: propertyEditorEntryNormalizePath(file.path) };
+  } catch (_) {}
+  return { ok: false, reason: "missing-path" };
+}
+
+// Card rows hand off to the owning species editor. The owner names the
+// species; the wire editor is always "==" on card rows today.
+function propertyEditorHandoffSpecies(input = {}) {
+  const owner = String(input.owner || "").trim().toLowerCase();
+  if (owner === "record") return "record";
+  if (owner === "intentions" || owner === "intention") return "intentions";
+  if (owner === "album") return "album";
+  if (owner === "bank") return "bank";
+  return null;
+}
+
+// Recovery line for a damaged show report: the earliest reported property
+// line, else the frontmatter start, else the first line.
+function propertyEditorYamlIssueLine(report) {
+  try {
+    const rows = Array.isArray(report && report.properties) ? report.properties : [];
+    let line = null;
+    for (const row of rows) {
+      if (row && Number.isInteger(row.line) && row.line > 0) {
+        if (line === null || row.line < line) line = row.line;
+      }
+    }
+    if (line !== null) return line;
+    const start = report && report.frontmatter && report.frontmatter.start_line;
+    if (Number.isInteger(start) && start > 0) return start;
+  } catch (_) {}
+  return 1;
+}
+
+function propertyEditorEntryLeafFor(plugin, path) {
+  const target = propertyEditorEntryNormalizePath(path);
+  try {
+    const leaves = plugin && plugin.app && plugin.app.workspace
+      && typeof plugin.app.workspace.getLeavesOfType === "function"
+      ? plugin.app.workspace.getLeavesOfType("markdown") || []
+      : [];
+    const match = leaves.find((leaf) => propertyEditorEntryNormalizePath(
+      leaf && leaf.view && leaf.view.file && leaf.view.file.path,
+    ) === target);
+    if (match) return match;
+  } catch (_) {}
+  try {
+    const recent = plugin && plugin.app && plugin.app.workspace
+      && typeof plugin.app.workspace.getMostRecentLeaf === "function"
+      ? plugin.app.workspace.getMostRecentLeaf()
+      : null;
+    if (recent) return recent;
+  } catch (_) {}
+  try {
+    return (plugin && plugin.app && plugin.app.workspace && plugin.app.workspace.activeLeaf) || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function propertyEditorEntryReadSource(plugin, path) {
+  const key = propertyEditorEntryNormalizePath(path);
+  if (!key) return Promise.resolve(null);
+  return Promise.resolve().then(async () => {
+    try {
+      const file = plugin && plugin.app && plugin.app.vault
+        && typeof plugin.app.vault.getAbstractFileByPath === "function"
+        ? plugin.app.vault.getAbstractFileByPath(key)
+        : null;
+      if (file && plugin.app.vault && typeof plugin.app.vault.read === "function") {
+        return await plugin.app.vault.read(file);
+      }
+    } catch (_) {}
+    try {
+      const adapter = plugin && plugin.app && plugin.app.vault && plugin.app.vault.adapter;
+      if (adapter && typeof adapter.read === "function") return await adapter.read(key);
+    } catch (_) {}
+    return null;
+  });
+}
+
+class BobLedgerToolsPropertyEditorEntrypointsMixin {
+  setupPropertyEditorEntrypoints() {
+    if (this.propertyEditorEntrypointsActive === true) return;
+    this.propertyEditorEntrypointsActive = true;
+    this.propertyEditorModal = null;
+    try {
+      // The manifest validator requires a string literal here; the
+      // PROPERTY_EDITOR_ENTRY_* constants stay the testable source of truth.
+      this.addCommand({
+        id: "edit-note-properties",
+        name: "Edit note properties",
+        callback: () => { void this.openPropertyEditor({}); },
+      });
+    } catch (_) {}
+    // The `+` arm accepts Shift (event.key is "+") and inherits the shared
+    // normal-mode, Live Preview, count, register, buffer, IME, repeat, and
+    // modifier guards from the second-key gate. Vim's pending `=` operator
+    // is cancelled only when this arm acts, by the shared dispatcher.
+    try {
+      if (typeof this.registerPropertyCardSecondKeyArm === "function") {
+        this.registerPropertyCardSecondKeyArm({
+          key: "+",
+          reason: "property-editor",
+          canAct: (context = {}) => propertyEditorEntryIsMarkdownPath(context && context.path),
+          run: (context = {}) => {
+            void this.openPropertyEditor(
+              context && context.path ? { filePath: context.path } : {},
+            );
+          },
+        });
+      }
+    } catch (_) {}
+    try {
+      if (typeof propertyCardFootSetEditorHook === "function") {
+        propertyCardFootSetEditorHook((path, options = {}) => {
+          void this.openPropertyEditor({
+            filePath: path,
+            key: typeof options.key === "string" ? options.key : "",
+            mode: options.mode === "add" ? "add" : "browse",
+          });
+        });
+      }
+    } catch (_) {}
+    try { this.propertyEditorRefreshDrawers(); } catch (_) {}
+  }
+
+  teardownPropertyEditorEntrypoints() {
+    this.propertyEditorEntrypointsActive = false;
+    try { this.propertyEditorModal?.close?.(); } catch (_) {}
+    this.propertyEditorModal = null;
+    try {
+      if (typeof this.unregisterPropertyCardSecondKeyArm === "function") {
+        this.unregisterPropertyCardSecondKeyArm("+");
+      }
+    } catch (_) {}
+    try {
+      if (typeof propertyCardFootSetEditorHook === "function") {
+        propertyCardFootSetEditorHook(null);
+      }
+    } catch (_) {}
+    try { this.propertyEditorRefreshDrawers(); } catch (_) {}
+  }
+
+  propertyEditorEntryActivePath(overridePath = "") {
+    if (overridePath) return propertyEditorEntryNormalizePath(overridePath);
+    const resolved = propertyEditorEntryResolvePath(this, {});
+    return resolved.ok === true ? resolved.path : "";
+  }
+
+  propertyEditorModalClosed(modal) {
+    if (modal && this.propertyEditorModal === modal) this.propertyEditorModal = null;
+  }
+
+  // Public plugin API for sibling plugins and the later takeover. Resolves
+  // only existing Markdown files; an omitted path means the active note.
+  async openPropertyEditor(options = {}) {
+    if (this.propertyEditorEntrypointsActive === false) {
+      try { new Notice("The property editor has unloaded."); } catch (_) {}
+      return { ok: false, reason: "unloaded" };
+    }
+    const resolved = propertyEditorEntryResolvePath(this, options);
+    if (resolved.ok !== true) {
+      try { new Notice("Open a Markdown note to edit its properties."); } catch (_) {}
+      return { ok: false, reason: resolved.reason || "missing-path" };
+    }
+    const filePath = resolved.path;
+    if (!propertyEditorEntryIsMarkdownPath(filePath)) {
+      try { new Notice("The property editor only opens Markdown notes."); } catch (_) {}
+      return { ok: false, reason: "non-markdown" };
+    }
+    let exists = false;
+    try {
+      exists = Boolean(this.app && this.app.vault
+        && typeof this.app.vault.getAbstractFileByPath === "function"
+        && this.app.vault.getAbstractFileByPath(filePath));
+    } catch (_) {
+      exists = false;
+    }
+    if (!exists) {
+      try { new Notice("That note is missing — open an existing Markdown note."); } catch (_) {}
+      return { ok: false, reason: "missing-note" };
+    }
+    const live = this.propertyEditorModal && this.propertyEditorModal.closed !== true
+      ? this.propertyEditorModal
+      : null;
+    if (live && live.pendingApply === true) {
+      try { new Notice("Wait for the property save to finish."); } catch (_) {}
+      return { ok: false, reason: "busy" };
+    }
+    try { live?.close?.(); } catch (_) {}
+    this.propertyEditorModal = null;
+    let cacheRows = [];
+    try {
+      const frontmatter = typeof this.propertyCacheFrontmatter === "function"
+        ? this.propertyCacheFrontmatter(filePath)
+        : null;
+      cacheRows = typeof propertyEditorCacheRows === "function"
+        ? propertyEditorCacheRows(frontmatter)
+        : [];
+    } catch (_) {
+      cacheRows = [];
+    }
+    const key = typeof options.key === "string" ? options.key : "";
+    const mode = options.mode === "add" || options.mode === "edit" ? options.mode : "browse";
+    let modal = null;
+    try {
+      modal = openPropertyEditor(this.app, {
+        plugin: this,
+        filePath,
+        key,
+        mode,
+        cacheRows,
+        noteKind: typeof options.noteKind === "string" ? options.noteKind : undefined,
+        onCardHandoff: (info = {}) => this.propertyEditorHandoff({ ...info, modal: info.modal || null }),
+        onYamlEscape: (info = {}) => this.propertyEditorYamlEscape({ ...info, modal: info.modal || null }),
+      });
+    } catch (error) {
+      try { new Notice("Could not open the property editor."); } catch (_) {}
+      return { ok: false, reason: "open-failed", message: String((error && error.message) || error) };
+    }
+    if (!modal) return { ok: false, reason: "open-failed" };
+    this.propertyEditorModal = modal;
+    const owned = modal;
+    const originalClose = typeof modal.close === "function" ? modal.close.bind(modal) : null;
+    if (originalClose) {
+      modal.close = (...args) => {
+        try { this.propertyEditorModalClosed(owned); } catch (_) {}
+        return originalClose(...args);
+      };
+    }
+    // Mode "add" needs no eager start here: the modal's own
+    // propertyEditorMaybeStartModeAdd begins the positioned add flow once
+    // the validated current report arrives.
+    return { ok: true, modal, readOnly: false };
+  }
+
+  // Card-row Enter and browse `=` land here. Species rows open their owning
+  // card; ordinary notes keep the property modal open with an explanation.
+  // Protected rows never reach this path: role gates keep them locked with
+  // a YAML escape instead.
+  async propertyEditorHandoff(input = {}) {
+    const modal = input.modal || this.propertyEditorModal;
+    const key = typeof input.key === "string" ? input.key : "";
+    const species = propertyEditorHandoffSpecies(input);
+    if (!species) {
+      try {
+        if (modal && modal.closed !== true) {
+          modal.refusal = {
+            code: "no-route",
+            message: key
+              ? `“${key}” has no card editor on this note.`
+              : "This note has no card editor.",
+            hint: "y opens YAML.",
+          };
+          modal.status = { kind: "refusal", text: modal.refusal.message };
+          modal.paintPropertyEditor?.();
+        }
+      } catch (_) {}
+      return { ok: false, reason: "no-route" };
+    }
+    const filePath = (modal && modal.filePath)
+      || this.propertyEditorEntryActivePath(input.filePath || input.path || "");
+    try { modal?.close?.(); } catch (_) {}
+    if (modal) this.propertyEditorModalClosed(modal);
+    try {
+      if (species === "record" && typeof this.openRecordCard === "function") {
+        return await this.openRecordCard({ filePath, field: key });
+      }
+      if (species === "intentions" && typeof this.openIntentionCard === "function") {
+        return await this.openIntentionCard({ filePath, field: key });
+      }
+      if (species === "album" && typeof this.openAlbumSchemaEntry === "function") {
+        return await this.openAlbumSchemaEntry({ filePath, field: key });
+      }
+      if (species === "bank" && typeof this.openBankSetupCard === "function") {
+        return await this.openBankSetupCard({});
+      }
+    } catch (error) {
+      return { ok: false, reason: "handoff-failed", message: String((error && error.message) || error) };
+    }
+    return { ok: false, reason: "handoff-unavailable" };
+  }
+
+  async propertyEditorYamlEscape(input = {}) {
+    const modal = input.modal || this.propertyEditorModal;
+    const filePath = (modal && modal.filePath)
+      || this.propertyEditorEntryActivePath(input.filePath || input.path || "");
+    const key = typeof input.key === "string"
+      ? input.key
+      : (modal && modal.editorSelected && modal.editorSelected()?.row?.key) || "";
+    return this.propertyEditorStartYamlExcursion({ filePath, key, modal });
+  }
+
+  // y / Ctrl+E switches to Source at the reported key or the parse-error
+  // line and installs the floating Done button. Damaged YAML opens the same
+  // excursion; Done restores the leaf mode and reopens in recovery mode.
+  async propertyEditorStartYamlExcursion(input = {}) {
+    const filePath = propertyEditorEntryNormalizePath(input.filePath || input.path || "");
+    if (!filePath || !propertyEditorEntryIsMarkdownPath(filePath)) {
+      return { ok: false, reason: "missing-path" };
+    }
+    const key = typeof input.key === "string" ? input.key : "";
+    const explicitLine = Number.isInteger(input.line) && input.line > 0 ? input.line : 0;
+    const leaf = propertyEditorEntryLeafFor(this, filePath);
+    if (!leaf) {
+      try {
+        if (this.app && this.app.workspace && typeof this.app.workspace.openLinkText === "function") {
+          await this.app.workspace.openLinkText(filePath.replace(/\.md$/i, ""), filePath, false);
+        }
+      } catch (_) {}
+      return { ok: false, reason: "missing-leaf" };
+    }
+    let viewState = null;
+    try { viewState = typeof leaf.getViewState === "function" ? leaf.getViewState() : null; } catch (_) {}
+    let source = null;
+    try { source = await propertyEditorEntryReadSource(this, filePath); } catch (_) { source = null; }
+    let report = null;
+    try {
+      if (typeof this.apiPropertyShow === "function") {
+        const outcome = await this.apiPropertyShow(filePath);
+        if (outcome && outcome.ok === true && outcome.report) report = outcome.report;
+      }
+    } catch (_) {
+      report = null;
+    }
+    let line = explicitLine;
+    if (!line && key) {
+      try {
+        if (report && Array.isArray(report.properties)) {
+          const row = report.properties.find((entry) => entry && entry.key === key
+            && Number.isInteger(entry.line) && entry.line > 0);
+          if (row) line = row.line;
+        }
+      } catch (_) {}
+      if (!line && typeof source === "string" && typeof recordSheetYamlKeyLine === "function") {
+        try { line = recordSheetYamlKeyLine(source, key); } catch (_) {}
+      }
+    }
+    if (!line && report) line = propertyEditorYamlIssueLine(report);
+    if (!line) line = 1;
+    let record = null;
+    try {
+      if (typeof this.albumYamlExcursionBegin === "function") {
+        record = this.albumYamlExcursionBegin(leaf, {
+          kind: "props",
+          notePath: filePath,
+          viewState,
+          selectedKey: key,
+          reopenCard: true,
+        });
+      }
+    } catch (_) {
+      record = null;
+    }
+    const jumped = await this.propertyEditorYamlJump(filePath, line);
+    if (!record) return { ok: Boolean(jumped && jumped.ok), reason: jumped && jumped.ok ? undefined : "excursion-rejected", line };
+    return { ok: Boolean(jumped && jumped.ok), line };
+  }
+
+  async propertyEditorYamlJump(path, line) {
+    const target = Number.isInteger(line) && line > 0 ? line : 1;
+    try {
+      const file = (this.app && this.app.vault
+        && typeof this.app.vault.getAbstractFileByPath === "function"
+        && this.app.vault.getAbstractFileByPath(path)) || { path };
+      const leaf = propertyEditorEntryLeafFor(this, path);
+      if (leaf && typeof leaf.openFile === "function") {
+        await leaf.openFile(file, { state: { mode: "source", source: true } });
+      } else if (leaf && typeof leaf.setViewState === "function") {
+        const current = typeof leaf.getViewState === "function"
+          ? leaf.getViewState()
+          : { type: "markdown", state: {} };
+        await leaf.setViewState({
+          ...(current || {}),
+          type: "markdown",
+          state: { ...((current && current.state) || {}), mode: "source", source: true, file: path },
+        });
+      } else if (this.app && this.app.workspace && typeof this.app.workspace.openLinkText === "function") {
+        await this.app.workspace.openLinkText(path.replace(/\.md$/i, ""), path, false);
+      } else {
+        return { ok: false, reason: "missing-leaf" };
+      }
+      const editor = leaf && leaf.view && leaf.view.editor;
+      const cursorLine = target - 1;
+      try {
+        if (editor && typeof editor.setCursor === "function") {
+          editor.setCursor({ line: cursorLine, ch: 0 });
+          if (typeof editor.scrollIntoView === "function") {
+            editor.scrollIntoView({ from: { line: cursorLine, ch: 0 }, to: { line: cursorLine, ch: 0 } }, true);
+          }
+          if (typeof editor.focus === "function") editor.focus();
+        }
+      } catch (_) {}
+      try {
+        if (this.app && this.app.workspace && typeof this.app.workspace.setActiveLeaf === "function") {
+          this.app.workspace.setActiveLeaf(leaf, { focus: true });
+        }
+      } catch (_) {}
+      return { ok: true, line: target };
+    } catch (_) {
+      return { ok: false, reason: "source-jump-failed" };
+    }
+  }
+
+  // Done saves every pane showing the note, restores the leaf's original
+  // mode, rereads props, and reopens on the same surviving key (nearest row
+  // otherwise). The excursion itself never writes vault bytes.
+  async propertyEditorYamlDoneAttempt(leaf, record) {
+    const ownPath = record && record.notePath
+      ? propertyEditorEntryNormalizePath(record.notePath)
+      : "";
+    if (typeof this.albumYamlExcursionStillCurrent !== "function"
+      || !this.albumYamlExcursionStillCurrent(leaf, record)) {
+      return { ok: false, reason: "stale-excursion" };
+    }
+    let save = { ok: true };
+    try {
+      save = await this.albumYamlSaveExcursionEditors([ownPath]);
+    } catch (error) {
+      save = { ok: false, code: "save-failed", message: String((error && error.message) || error) };
+    }
+    if (!this.albumYamlExcursionStillCurrent(leaf, record)) return { ok: false, reason: "stale-excursion" };
+    if (!save || save.ok !== true) {
+      try { new Notice(save?.message || "Saving the note pane failed — fix it before Done."); } catch (_) {}
+      return { ok: false, reason: (save && save.code) || "save-failed" };
+    }
+    let restoreError = null;
+    try {
+      record.restoring = true;
+      if (record.viewState && typeof leaf.setViewState === "function") {
+        await leaf.setViewState(record.viewState);
+      } else if (record.viewState && record.viewState.state && typeof leaf.openFile === "function") {
+        const file = (this.app && this.app.vault
+          && typeof this.app.vault.getAbstractFileByPath === "function"
+          && this.app.vault.getAbstractFileByPath(ownPath)) || { path: ownPath };
+        await leaf.openFile(file, { state: { ...(record.viewState.state || {}), file: ownPath } });
+      }
+    } catch (error) {
+      restoreError = error;
+    }
+    record.restoring = false;
+    if (typeof this.albumYamlExcursionForLeaf === "function"
+      && this.albumYamlExcursionForLeaf(leaf) !== record && !restoreError) {
+      return { ok: false, reason: "stale-excursion" };
+    }
+    if (restoreError) {
+      return { ok: false, reason: "restore-failed", message: String(restoreError.message || restoreError) };
+    }
+    try {
+      if (typeof this.albumYamlExcursionClear === "function") this.albumYamlExcursionClear(leaf);
+    } catch (_) {}
+    if (record.reopenCard === false) return { ok: true, reopened: false };
+    const wanted = typeof record.selectedKey === "string" ? record.selectedKey : "";
+    let key = wanted;
+    try {
+      if (typeof this.apiPropertyShow === "function") {
+        const outcome = await this.apiPropertyShow(ownPath);
+        const rows = outcome && outcome.ok === true && outcome.report && Array.isArray(outcome.report.properties)
+          ? outcome.report.properties
+          : null;
+        if (rows) {
+          const alive = wanted && rows.some((row) => row && row.key === wanted);
+          key = alive ? wanted : (rows.length && typeof rows[0].key === "string" ? rows[0].key : "");
+        }
+      }
+    } catch (_) {}
+    const opened = await this.openPropertyEditor({ filePath: ownPath, key });
+    return { ok: true, reopened: Boolean(opened && opened.ok) };
+  }
+
+  // Already-open drawers build their opener handlers per paint, so they
+  // pick up hook registration on the next repaint. Nudge every known foot
+  // host to repaint after register and unregister.
+  propertyEditorRefreshDrawers() {
+    const schedulers = [
+      "scheduleAlbumHeaderRefresh",
+      "scheduleRecordSheetRefresh",
+      "scheduleBankSetupRefresh",
+    ];
+    for (const name of schedulers) {
+      try {
+        if (typeof this[name] === "function") this[name]();
+      } catch (_) {}
+    }
+    try {
+      const host = typeof this.intentionCardHost === "function" ? this.intentionCardHost() : null;
+      if (host && typeof host.scheduleRefresh === "function") host.scheduleRefresh();
+    } catch (_) {}
+  }
+}
 // ---- src/293-keep-inbox-render.js ----
 // Keep inbox render (keep-indicator-view): DOM for the `bob-keep-inbox`
 // status-bar item. Pure DOM helpers plus one paint entry point; no spawn,
@@ -171728,6 +172337,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsIntentionUpdateMixin,
   BobLedgerToolsIntentionCardEditorMixin,
   BobLedgerToolsIntentionCardNavigationMixin,
+  BobLedgerToolsPropertyEditorEntrypointsMixin,
   BobLedgerToolsPropertyUpdateMixin,
   BobLedgerToolsEventLinkTimesMixin,
   BobLedgerToolsEventLinkTimesReadingMixin,
@@ -176362,6 +176972,15 @@ try {
       propertyEditorAddStageBuild,
       propertyEditorPaintNameStage,
       openPropertyEditor,
+      PROPERTY_EDITOR_ENTRY_COMMAND_ID,
+      PROPERTY_EDITOR_ENTRY_COMMAND_NAME,
+      propertyEditorEntryIsMarkdownPath,
+      propertyEditorEntryNormalizePath,
+      propertyEditorEntryResolvePath,
+      propertyEditorHandoffSpecies,
+      propertyEditorYamlIssueLine,
+      propertyEditorEntryLeafFor,
+      propertyEditorEntryReadSource,
     });
   }
 } catch (_) {}

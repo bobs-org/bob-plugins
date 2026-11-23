@@ -157,6 +157,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsIntentionUpdateMixin,
   BobLedgerToolsIntentionCardEditorMixin,
   BobLedgerToolsIntentionCardNavigationMixin,
+  BobLedgerToolsPropertyEditorEntrypointsMixin,
   BobLedgerToolsPropertyUpdateMixin,
   BobLedgerToolsEventLinkTimesMixin,
   BobLedgerToolsEventLinkTimesReadingMixin,

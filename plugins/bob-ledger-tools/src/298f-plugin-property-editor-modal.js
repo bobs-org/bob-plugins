@@ -356,6 +356,25 @@ class PropertyEditorModal extends PropertyEditorModalBase {
     if (action === "undo") return this.propertyEditorHistory("undo");
     if (action === "redo") return this.propertyEditorHistory("redo");
     if (action === "equals") {
+      // An open stage or add draft keeps its text: routing never discards
+      // an uncommitted draft.
+      if (this.stage || this.addName) {
+        this.announce = "Finish the open edit first — = is reserved while drafting.";
+        return this.paintPropertyEditor();
+      }
+      const selected = this.editorSelected();
+      const decision = selected ? propertyEditorActionForRow(selected.row) : null;
+      if (decision && decision.action === "handoff") {
+        try {
+          this.onCardHandoff?.({
+            key: selected.row.key,
+            editor: decision.editor,
+            owner: decision.owner,
+            row: selected.row,
+          });
+        } catch (_) {}
+        return;
+      }
       this.announce = "Add and filter arrive in later phases; = is reserved here.";
       return this.paintPropertyEditor();
     }

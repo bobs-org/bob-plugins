@@ -36,6 +36,7 @@ Album cards and sync: [Album cards](albums.md); record cards and editor:
 | Edit album schema | `edit-album-schema` | — |
 | Edit bank setup | `edit-bank-setup` | — |
 | Edit intentions | `edit-intentions` | — |
+| Edit note properties | `edit-note-properties` | — |
 | Edit record | `edit-record` | — |
 | Expand Bob snippet | `expand-ledger-time-range-snippet` | — |
 | Go to today's Task Link | `go-to-today-task-link` | — |

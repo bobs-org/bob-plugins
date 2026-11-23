@@ -233,6 +233,20 @@ test("stale refusal wait matches the Property Editor copy and retries preview", 
   assert.match(stages, /The note changed; preview this draft again before saving\./);
 });
 
+test("narrow screenshots restore the wide viewport before unload", () => {
+  const runner = fs.readFileSync(path.join(__dirname, "obsidian-property-editor-e2e.cjs"), "utf8");
+  const surfaces = fs.readFileSync(path.join(__dirname, "obsidian-property-editor-e2e-surfaces.cjs"), "utf8");
+  const shots = runner.indexOf("narrow-dark");
+  const unloadCall = runner.indexOf("runUnloadAcceptance");
+  const restore = runner.indexOf("setViewport(client, 1400", shots);
+  assert.ok(shots >= 0 && unloadCall >= 0 && restore >= 0);
+  assert.ok(restore < unloadCall, "wide viewport must return before plugin unload");
+  assert.match(lib.visualLayoutSource(), /rowOverlap/);
+  assert.match(surfaces, /adjacent rows do not overlap/);
+  assert.match(surfaces, /setViewport\(client, 1400, 900\)/);
+  assert.match(surfaces, /propertyEditorEntrypointsActive/);
+});
+
 test("reopened undo wait matches exact draft value, not held-draft", () => {
   const held = { key: "edit_me", text: "≡edit_meheld-draft", valueText: "held-draft" };
   const restored = { key: "edit_me", text: "≡edit_medraft", valueText: "draft" };

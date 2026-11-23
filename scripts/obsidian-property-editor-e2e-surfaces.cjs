@@ -402,6 +402,7 @@ async function runVisualReview(ctx) {
   addCheck(report, "selected row is visually distinct", layout.selectedDiffers === true && /is-selected/.test(layout.selectedClasses || ""), layout);
   addCheck(report, "locked row stays readable", layout.lockedContrast >= 3 && /is-locked/.test(layout.lockedClasses || ""), layout);
   addCheck(report, "key and value do not overlap", layout.keyValueOverlap === false, layout);
+  addCheck(report, "adjacent rows do not overlap", layout.rowOverlap === false, layout);
   addCheck(report, "rows are not clipped", layout.clipped === false, layout);
   addCheck(report, "selected row shows a focus ring", layout.focusOutlineWidth >= 2, layout);
   report.visualLayout = layout;
@@ -410,6 +411,11 @@ async function runVisualReview(ctx) {
 
 async function runUnloadAcceptance(ctx) {
   const { client, report, shared, addCheck, openPropertyEditor, waitForEditor, sendKey, setInput } = ctx;
+  // Screenshots leave the session at 390px dark. Plugin reload in that
+  // viewport has closed the CDP socket; restore the wide light shell first.
+  await shared.setTheme(client, "light");
+  await shared.setViewport(client, 1400, 900);
+  await shared.sleep(200);
   await shared.openNote(client, "ordinary.md", "live");
   await openPropertyEditor(client, "ordinary.md", { key: "title", mode: "edit" });
   await shared.waitFor(client, `Boolean(document.querySelector(".bob-property-editor [data-property-stage]"))`, Boolean, "unload pending preview stage");
@@ -444,6 +450,7 @@ async function runUnloadAcceptance(ctx) {
     return Boolean(app.plugins.plugins["bob-ledger-tools"]);
   })()`, 20_000);
   addCheck(report, "plugin re-enable for second unload", enabled === true, { enabled });
+  await shared.sleep(400);
   await shared.waitFor(client, `Boolean(app.plugins.plugins["bob-ledger-tools"]?.propertyEditorEntrypointsActive)`, Boolean,
     "entry points active after re-enable");
   await openPropertyEditor(client, "ordinary.md");

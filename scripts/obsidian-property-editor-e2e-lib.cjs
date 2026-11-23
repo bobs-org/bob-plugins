@@ -350,17 +350,24 @@ function visualLayoutSource() {
       const rect = node.getBoundingClientRect();
       return { top: rect.top, left: rect.left, right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.height };
     };
-    const key = selected?.querySelector(".bob-property-row-key");
-    const value = selected?.querySelector(".bob-property-row-value");
-    const keyBox = boxOf(key);
-    const valueBox = boxOf(value);
-    const overlap = keyBox && valueBox
-      ? !(keyBox.right <= valueBox.left + 1 || valueBox.right <= keyBox.left + 1
-        || keyBox.bottom <= valueBox.top + 1 || valueBox.bottom <= keyBox.top + 1)
-      : null;
+    const boxesOverlap = (left, right) => Boolean(left && right
+      && !(left.right <= right.left + 1 || right.right <= left.left + 1
+        || left.bottom <= right.top + 1 || right.bottom <= left.top + 1));
     const modalBox = boxOf(modal);
     const rows = Array.from(editor.querySelectorAll("[data-property-row]"));
-    const clipped = rows.some((row) => {
+    const keyValueOverlap = rows.some((row) => boxesOverlap(
+      boxOf(row.querySelector(".bob-property-row-key")),
+      boxOf(row.querySelector(".bob-property-row-value")),
+    ));
+    const rowOverlap = rows.some((row, index) => index > 0 && boxesOverlap(boxOf(rows[index - 1]), boxOf(row)));
+    const valueOverflow = rows.some((row) => {
+      const rowBox = boxOf(row);
+      const valueBox = boxOf(row.querySelector(".bob-property-row-value"));
+      if (!rowBox || !valueBox || valueBox.height === 0) return false;
+      return valueBox.bottom > rowBox.bottom + 2 || valueBox.right > rowBox.right + 2
+        || valueBox.left < rowBox.left - 2;
+    });
+    const clipped = valueOverflow || rows.some((row) => {
       const rect = row.getBoundingClientRect();
       return rect.right > modalBox.right + 2 || rect.left < modalBox.left - 2;
     });
@@ -372,7 +379,8 @@ function visualLayoutSource() {
     return {
       open: true,
       clipped,
-      keyValueOverlap: overlap,
+      keyValueOverlap,
+      rowOverlap,
       selectedDisplay: selectedStyle?.display || "",
       selectedBackground: selectedStyle?.backgroundColor || "",
       looseBackground: looseStyle?.backgroundColor || "",
@@ -509,6 +517,7 @@ function selfTest() {
   }
   assert.equal(typeof visualLayoutSource(), "string");
   assert.match(visualLayoutSource(), /selectedDiffers/);
+  assert.match(visualLayoutSource(), /rowOverlap/);
   assert.match(editorProbeSource(), /selectedClass/);
   assert.match(editorProbeSource(), /stagePreview/);
   assert.equal(isStaleRefusalCopy({

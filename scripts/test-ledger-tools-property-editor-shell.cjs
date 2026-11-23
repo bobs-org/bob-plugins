@@ -407,10 +407,22 @@ test("paintRow leaves a loose unselected row without lock or selection classes",
   assert.equal(button.getAttribute("aria-disabled"), null);
 });
 
+test("paintRow keeps the row grid on an inner span", () => {
+  const doc = paintDoc();
+  const host = { children: [], appendChild(child) { this.children.push(child); return child; } };
+  H.propertyEditorPaintRow(doc, host, { id: "title::3", row: wireRow() }, false, {});
+  const button = host.children[0];
+  const grid = button.children[0];
+  assert.equal(grid.className, "bob-property-row-grid");
+  assert.equal(grid.children.map((child) => child.className).join(" "),
+    "bob-property-row-icon bob-property-row-key bob-property-row-value");
+});
+
 test("property editor shell CSS distinguishes selected and locked rows", () => {
   const css = fs.readFileSync(path.join(__dirname, "../plugins/bob-ledger-tools/styles.css"), "utf8");
   assert.match(css, /\.bob-property-editor-modal\s*\{/);
-  assert.match(css, /\.bob-property-row\s*\{[\s\S]*?grid-template-columns/);
+  assert.match(css, /\.bob-property-row-grid\s*\{[\s\S]*?grid-template-columns/);
+  assert.match(css, /@media \(max-width: 420px\) \{[\s\S]*?grid-template-areas:\s*"icon key" "\. value"/);
   assert.match(css, /\.bob-property-row\.is-selected/);
   assert.match(css, /\.bob-property-row\.is-locked/);
   assert.match(css, /\.bob-property-row:focus-visible/);

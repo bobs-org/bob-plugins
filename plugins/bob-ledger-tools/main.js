@@ -167935,18 +167935,23 @@ function propertyEditorPaintRow(doc, host, entry, selected, modal) {
       try { button.setAttribute("title", row.diagnostic); } catch (_) {}
     }
   } catch (_) {}
+  // Chromium sizes a <button> from its first line box, so a two-row grid on
+  // the button itself overflows onto the next row. Keep the grid on an inner
+  // span; phrasing content stays valid inside the button.
+  const grid = propertyEditorCreateEl(doc, "span", "bob-property-row-grid");
   const icon = propertyEditorCreateEl(doc, "span", "bob-property-row-icon");
   propertyEditorSetText(icon, propertyEditorKindIcon(row.kind));
   if (icon) {
     try { icon.setAttribute("aria-hidden", "true"); } catch (_) {}
-    button.appendChild(icon);
+    (grid || button).appendChild(icon);
   }
   const key = propertyEditorCreateEl(doc, "span", "bob-property-row-key");
   propertyEditorSetText(key, row.key);
-  if (key) button.appendChild(key);
+  if (key) (grid || button).appendChild(key);
   const value = propertyEditorCreateEl(doc, "span", "bob-property-row-value");
   propertyEditorSetText(value, propertyEditorRowText(row));
-  if (value) button.appendChild(value);
+  if (value) (grid || button).appendChild(value);
+  if (grid) button.appendChild(grid);
   host.appendChild(button);
   void modal;
 }

@@ -12964,9 +12964,10 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
 }
 
 /* Property editor shell (bob-cli-pf.4.1.7.4 acceptance-surfaces).
-   Rows are a three-column grid so keys and values never run together.
-   Selected rows use the accent mix; locked rows stay muted and readable.
-   Focus rings are 2px accent outlines on every interactive control. */
+   The row button stays a block; an inner span is the three-column grid so
+   Chromium includes stacked narrow rows in the button height. Selected rows
+   use the accent mix; locked rows stay muted and readable. Focus rings are
+   2px accent outlines on every interactive control. */
 .bob-property-editor-modal {
   width: min(44rem, calc(100vw - 1.5rem));
   max-width: calc(100vw - 1.5rem);
@@ -13032,11 +13033,10 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
+.bob-property-editor button.bob-property-row,
 .bob-property-row {
-  display: grid;
-  grid-template-columns: 1.6em minmax(6em, 34%) minmax(0, 1fr);
-  column-gap: 0.7em;
-  align-items: baseline;
+  display: block;
+  box-sizing: border-box;
   width: 100%;
   margin: 0;
   padding: 0.4em 0.55em;
@@ -13047,6 +13047,14 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
   font: inherit;
   text-align: start;
   cursor: pointer;
+}
+.bob-property-row-grid {
+  display: grid;
+  grid-template-columns: 1.6em minmax(6em, 34%) minmax(0, 1fr);
+  column-gap: 0.7em;
+  align-items: baseline;
+  width: 100%;
+  min-width: 0;
 }
 .bob-property-row:hover {
   background: var(--background-modifier-hover);
@@ -13104,10 +13112,11 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
   clip: rect(0 0 0 0);
 }
 @media (max-width: 420px) {
-  .bob-property-row {
+  .bob-property-row-grid {
     grid-template-columns: 1.4em minmax(0, 1fr);
     grid-template-areas: "icon key" ". value";
-    row-gap: 0.15em;
+    row-gap: 0.2em;
+    align-items: start;
   }
   .bob-property-row-icon { grid-area: icon; }
   .bob-property-row-key { grid-area: key; }

@@ -13047,6 +13047,26 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
   overflow-wrap: anywhere;
 }
 .bob-property-editor-stage-actions { justify-content: flex-end; gap: 0.5em; }
+.bob-property-editor-stage.is-clipboard { max-height: min(70vh, 42em); overflow: auto; }
+.bob-property-editor-clipboard-list { display: grid; gap: 0.5em; }
+.bob-property-editor-clipboard-row {
+  display: grid;
+  gap: 0.3em;
+  min-width: 0;
+  padding: 0.55em;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: var(--background-primary);
+}
+.bob-property-editor-clipboard-head { display: flex; align-items: baseline; gap: 0.55em; min-width: 0; }
+.bob-property-editor-clipboard-state { color: var(--text-muted); font-size: var(--font-ui-small); }
+.bob-property-editor-clipboard-key { overflow-wrap: anywhere; }
+.bob-property-editor-clipboard-value { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0.5em; font-size: var(--font-ui-small); }
+.bob-property-editor-clipboard-value-label,
+.bob-property-editor-clipboard-reason { color: var(--text-muted); }
+.bob-property-editor-clipboard-value-text { overflow-wrap: anywhere; white-space: pre-wrap; }
+.bob-property-editor-clipboard-row.is-skipped { opacity: 0.75; }
+.bob-property-editor-clipboard-row.is-blocked { border-color: var(--text-error); }
 @media (max-width: 420px) {
   .bob-property-editor-stage { padding: 0.65em; }
   .bob-property-editor-stage-actions > button { flex: 1 1 auto; min-width: 7em; }

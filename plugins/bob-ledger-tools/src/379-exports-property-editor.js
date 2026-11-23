@@ -173,6 +173,15 @@ try {
       propertyEditorYamlOrdinal,
       propertyEditorYamlEditorTexts,
       propertyEditorYamlStageSeedFor,
+      PROPERTY_EDITOR_CLIPBOARD_SKIP_CODES,
+      propertyEditorClipboardFailure,
+      propertyEditorClipboardReportProblem,
+      propertyEditorClipboardPlan,
+      propertyEditorClipboardOps,
+      propertyEditorClipboardOpsJson,
+      propertyEditorClipboardSelection,
+      propertyEditorClipboardProbeNewKey,
+      propertyEditorClipboardKeyAction,
       propertyEditorPaintYamlStage,
     });
   }

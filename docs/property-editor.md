@@ -70,6 +70,7 @@ These keys act while browsing the rows, not while typing in a value field.
 | `u` / Ctrl+Z | Undo the latest successful property edit |
 | Ctrl+R / Ctrl+Shift+Z | Redo the latest undone edit |
 | `y` / Ctrl+E | Open the property's YAML line in Source mode |
+| Mod+C / Mod+V | Copy marked properties or the focused property; paste a YAML mapping |
 | `=` | Open the note's owning `==` card editor when one is available |
 | Esc / `q` / Ctrl+[ | Back out one layer, then close |
 
@@ -172,6 +173,25 @@ inventory against each other with bounded retries, refuses unsaved panes
 without saving, and stops on cancellation. Every write still goes through
 Bob's guarded `prop.set_yaml` preview and session flow.
 
+## Copy and paste
+
+Mod+C copies marked properties in file order, or the focused property when
+nothing is marked. Copy uses validated source bytes, including comments
+attached to each property; it never reconstructs YAML from the displayed value.
+Read-only properties can be copied. An opaque or ambiguous source selection is
+refused with the `y` YAML escape, and clipboard permission failures leave the
+note untouched.
+
+Mod+V reads one YAML mapping from the clipboard and opens a review stage. Each
+incoming key is labelled **New**, **Replace** with its old and proposed value,
+or **Skipped** with the ownership or opacity reason. Bob dry-runs new keys to
+resolve ownership; invalid YAML, invalid values, damaged frontmatter, and
+transport failures block the proposal. The complete editable set is previewed
+against the current fingerprint. Enter applies only that exact preview as one
+undoable update. A stale preview keeps the clipboard draft and requires a new
+confirmation; an uncertain write is never repeated. An all-skipped paste has
+no enabled apply action.
+
 ## YAML escape and recovery
 
 Press `y` / Ctrl+E on a property to jump to its source line in YAML. **Done**
@@ -187,6 +207,6 @@ Bob's diagnostic and source-line target. Once a capable Bob report arrives,
 the current report—not cached metadata—authorizes mutations.
 
 The editor supports viewing, value edits, add, rename, source-order reorder,
-delete, undo/redo, ownership hand-off, YAML return, multi-select, filtering, and
-batch deletion. Copy/paste and property-kind changes are the remaining
-native-Properties parity work.
+delete, undo/redo, ownership hand-off, YAML return, multi-select, filtering,
+batch deletion, and YAML copy/paste. Property-kind changes complete the
+remaining native-Properties parity work.

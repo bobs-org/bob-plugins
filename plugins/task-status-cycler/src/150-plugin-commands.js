@@ -69,9 +69,9 @@ class TaskStatusCyclerCommandsMixin {
       const cycleIdentity = cyclePath
         ? closedTaskIdentity(cyclePath, taskStatus.lineText)
         : null;
-      const reqCloseOwners = nextSymbol === "x" && cycleIdentity && editor &&
+      const reqCloseOwners = nextSymbol === "x" && cyclePath && editor &&
           typeof editor.getValue === "function"
-        ? this.captureReqCloseOwnersFromText(editor.getValue(), cyclePath, [cycleIdentity])
+        ? this.captureReqCloseOwnersAtEditorLine(editor, cyclePath, taskStatus.line, taskStatus.lineText)
         : [];
       const wrote = this.setActiveCheckboxStatus(editor, taskStatus, nextSymbol);
       if (wrote && taskStatus.symbol === BLOCKED_TASK_STATUS_SYMBOL) {
@@ -84,14 +84,14 @@ class TaskStatusCyclerCommandsMixin {
       if (wrote && (nextSymbol === "x" || nextSymbol === "-")) {
         if (cyclePath) {
           const identity = cycleIdentity;
-          if (identity) {
+          if (identity || (nextSymbol === "x" && reqCloseOwners.length > 0)) {
             const cycleContext = { activePath: cyclePath };
             if (nextSymbol === "x") cycleContext.reqCloseOwners = reqCloseOwners;
             if (editor && typeof editor.getValue === "function") {
               cycleContext.editor = editor;
             }
             void this.finalizeCycledClosedTasks(
-              [{ identity, symbol: nextSymbol }],
+              identity ? [{ identity, symbol: nextSymbol }] : [],
               cycleContext,
             );
           }
@@ -582,17 +582,21 @@ class TaskStatusCyclerCommandsMixin {
         }
       }
     } catch (error) {}
+    const rangeReqCloseOwners = activePath
+      ? this.captureReqCloseOwnersFromRange(
+        Array.isArray(lines) ? lines.join("\n") : String(editor.getValue() || ""),
+        activePath,
+        startLine,
+        endLine,
+      )
+      : [];
     const context = activePath
       ? {
           editor,
           activePath,
           originPath: activePath,
-          reqCloseOwners: this.captureReqCloseOwnersFromRange(
-            Array.isArray(lines) ? lines.join("\n") : String(editor.getValue() || ""),
-            activePath,
-            startLine,
-            endLine,
-          ),
+          reqCloseOwners: [],
+          reqCloseRangeOwners: rangeReqCloseOwners,
         }
       : null;
     const seenResolvedTargets = new Set();
@@ -727,6 +731,14 @@ class TaskStatusCyclerCommandsMixin {
             if (identity) {
               cycleClosed.push({ identity, symbol: nextSymbol });
             }
+            if (nextSymbol === "x" && context) {
+              const owner = rangeReqCloseOwners.find((row) =>
+                row && row.close_identity && row.close_identity.path === activePath &&
+                Number(row.close_identity.line) === line + 1);
+              if (owner && !context.reqCloseOwners.some((row) => row.key === owner.key)) {
+                context.reqCloseOwners.push(owner);
+              }
+            }
           }
         }
         continue;
@@ -836,7 +848,7 @@ class TaskStatusCyclerCommandsMixin {
 
     // One batched pass for the whole counted range (partitioned Done vs
     // Cancelled inside); the cycle writes already landed.
-    if (cycleClosed.length > 0 && activePath) {
+    if ((cycleClosed.length > 0 || (context && context.reqCloseOwners.length > 0)) && activePath) {
       void this.finalizeCycledClosedTasks(cycleClosed, {
         editor,
         activePath,

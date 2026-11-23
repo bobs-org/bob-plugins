@@ -166,10 +166,16 @@ class TaskStatusCyclerSuccessorReceiptMixin {
           done.push(identity);
         }
       }
-      if (done.length === 0 && cancelled.length === 0) {
-        return;
-      }
       const active = context && typeof context === "object" ? context : {};
+      if (done.length === 0 && Array.isArray(active.reqCloseOwners) &&
+          active.reqCloseOwners.length > 0) {
+        try {
+          await this.finalizeClosedTasks([], { ...active, reqCloseOnly: true });
+        } catch (_error) {
+          // Requirement-only cards are best effort, like the ordinary pass.
+        }
+      }
+      if (done.length === 0 && cancelled.length === 0) return;
       if (done.length > 0) {
         try {
           await this.finalizeClosedTasks(done, active);

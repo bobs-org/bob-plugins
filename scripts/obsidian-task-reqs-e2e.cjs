@@ -835,14 +835,21 @@ function selfTest() {
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 }
 
-async function runE2e(args) {
+async function runE2e(args, options = {}) {
+  const extensionGroups = options && options.groups && typeof options.groups === "object"
+    ? options.groups
+    : {};
+  const defaultGroups = Array.isArray(options.defaultGroups)
+    ? options.defaultGroups
+    : GROUPS;
+  const groupNames = [...GROUPS, ...Object.keys(extensionGroups)];
   const executable = findExecutable(args.executable);
   progress("probing " + executable);
   const probe = await probeExecutable(executable);
   progress("probe ok=" + probe.ok);
   if (!probe.ok) fail("unrun: " + probe.reason, 2);
   if (spawnSync("xvfb-run", ["--help"], { stdio: "ignore" }).error) fail("unrun: xvfb-run is not installed", 2);
-  if (args.only && !GROUPS.includes(args.only)) fail("--only must be one of " + GROUPS.join(", "), 2);
+  if (args.only && !groupNames.includes(args.only)) fail("--only must be one of " + groupNames.join(", "), 2);
   const runRoot = fs.mkdtempSync(path.join(scratchBase(), "bob-reqs-e2e-"));
   const vault = path.join(runRoot, "vault");
   const profile = path.join(runRoot, "profile");
@@ -900,8 +907,9 @@ async function runE2e(args) {
       drop: { cases: DROP_CASES, run: runGestureCase },
       guards: { cases: GUARDS_CASES, run: runGestureCase },
       ownercard: { cases: OWNERCARD_CASES, run: runGestureCase },
+      ...extensionGroups,
     };
-    for (const group of args.only ? [args.only] : GROUPS) {
+    for (const group of args.only ? [args.only] : defaultGroups) {
       for (const entry of groups[group].cases) {
         try { await groups[group].run(client, entry); record(entry.name, "pass"); }
         catch (error) { record(entry.name, "fail", error && error.message ? error.message : String(error)); }
@@ -952,6 +960,7 @@ module.exports = {
   NAV,
   OWNERCARD_CASES,
   SHIFT,
+  CTRL,
   TOGGLE_CASES,
   TYPING_CASES,
   VIM_CASES,
@@ -960,7 +969,15 @@ module.exports = {
   gestureDropDate,
   gestureSelfTest,
   keyPayload,
+  key,
+  setDoc,
+  setMode,
+  readEditor,
+  closeStrayModals,
+  waitFor,
+  waitForGone,
   parseArgs,
+  runE2e,
   runGestureCase,
   selfTest,
 };

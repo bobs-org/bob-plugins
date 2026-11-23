@@ -52,6 +52,43 @@ class TaskStatusCyclerReferencesMixin {
   finalizeClosedTasks(closedIdentities, context) {
     const closed = normalizeClosedTaskIdentities(closedIdentities);
     if (closed.length === 0) {
+      const active = context && typeof context === "object" ? context : {};
+      if (Array.isArray(active.reqCloseOwners) && active.reqCloseOwners.length > 0) {
+        return this.enqueueTaskReferenceMutation(async () => {
+          let successors = null;
+          try {
+            successors = await this.planAndApplySuccessorsNow([], {
+              ...active,
+              reqCloseOnly: true,
+            });
+          } catch (_error) {
+            successors = null;
+          }
+          if (!successors || successors.gated === true) {
+            return {
+              reopened: 0,
+              retired: 0,
+              recoveryFailures: [],
+              retirementFailures: [],
+              successors: null,
+              successorNotice: null,
+            };
+          }
+          let successorNotice = null;
+          let jump = null;
+          try { successorNotice = this.presentSuccessorModel(successors, active); } catch (_error) {}
+          try { jump = await this.landSuccessorJump(successors, active); } catch (_error) {}
+          return {
+            reopened: 0,
+            retired: 0,
+            recoveryFailures: [],
+            retirementFailures: [],
+            successors,
+            successorNotice,
+            ...(jump ? { jump } : {}),
+          };
+        });
+      }
       return Promise.resolve({
         reopened: 0,
         retired: 0,

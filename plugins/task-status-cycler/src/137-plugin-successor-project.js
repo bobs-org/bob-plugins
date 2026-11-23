@@ -10,6 +10,9 @@ class TaskStatusCyclerSuccessorProjectMixin {
   async planAndApplySuccessorsNow(closed, context) {
     try {
       const active = context && typeof context === "object" ? context : {};
+      if (active.reqCloseOnly === true) {
+        return await this.planAndApplyIdlessRequirementOnlyCard(active);
+      }
       const vault = this.app && this.app.vault;
       const cache = new Map();
       const gate = await this.resolveSuccessorClosedIdentities(

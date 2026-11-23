@@ -19163,6 +19163,43 @@ class TaskStatusCyclerReferencesMixin {
   finalizeClosedTasks(closedIdentities, context) {
     const closed = normalizeClosedTaskIdentities(closedIdentities);
     if (closed.length === 0) {
+      const active = context && typeof context === "object" ? context : {};
+      if (Array.isArray(active.reqCloseOwners) && active.reqCloseOwners.length > 0) {
+        return this.enqueueTaskReferenceMutation(async () => {
+          let successors = null;
+          try {
+            successors = await this.planAndApplySuccessorsNow([], {
+              ...active,
+              reqCloseOnly: true,
+            });
+          } catch (_error) {
+            successors = null;
+          }
+          if (!successors || successors.gated === true) {
+            return {
+              reopened: 0,
+              retired: 0,
+              recoveryFailures: [],
+              retirementFailures: [],
+              successors: null,
+              successorNotice: null,
+            };
+          }
+          let successorNotice = null;
+          let jump = null;
+          try { successorNotice = this.presentSuccessorModel(successors, active); } catch (_error) {}
+          try { jump = await this.landSuccessorJump(successors, active); } catch (_error) {}
+          return {
+            reopened: 0,
+            retired: 0,
+            recoveryFailures: [],
+            retirementFailures: [],
+            successors,
+            successorNotice,
+            ...(jump ? { jump } : {}),
+          };
+        });
+      }
       return Promise.resolve({
         reopened: 0,
         retired: 0,
@@ -21007,10 +21044,16 @@ class TaskStatusCyclerSuccessorReceiptMixin {
           done.push(identity);
         }
       }
-      if (done.length === 0 && cancelled.length === 0) {
-        return;
-      }
       const active = context && typeof context === "object" ? context : {};
+      if (done.length === 0 && Array.isArray(active.reqCloseOwners) &&
+          active.reqCloseOwners.length > 0) {
+        try {
+          await this.finalizeClosedTasks([], { ...active, reqCloseOnly: true });
+        } catch (_error) {
+          // Requirement-only cards are best effort, like the ordinary pass.
+        }
+      }
+      if (done.length === 0 && cancelled.length === 0) return;
       if (done.length > 0) {
         try {
           await this.finalizeClosedTasks(done, active);
@@ -21542,6 +21585,9 @@ class TaskStatusCyclerSuccessorProjectMixin {
   async planAndApplySuccessorsNow(closed, context) {
     try {
       const active = context && typeof context === "object" ? context : {};
+      if (active.reqCloseOnly === true) {
+        return await this.planAndApplyIdlessRequirementOnlyCard(active);
+      }
       const vault = this.app && this.app.vault;
       const cache = new Map();
       const gate = await this.resolveSuccessorClosedIdentities(
@@ -25514,9 +25560,9 @@ class TaskStatusCyclerCommandsMixin {
       const cycleIdentity = cyclePath
         ? closedTaskIdentity(cyclePath, taskStatus.lineText)
         : null;
-      const reqCloseOwners = nextSymbol === "x" && cycleIdentity && editor &&
+      const reqCloseOwners = nextSymbol === "x" && cyclePath && editor &&
           typeof editor.getValue === "function"
-        ? this.captureReqCloseOwnersFromText(editor.getValue(), cyclePath, [cycleIdentity])
+        ? this.captureReqCloseOwnersAtEditorLine(editor, cyclePath, taskStatus.line, taskStatus.lineText)
         : [];
       const wrote = this.setActiveCheckboxStatus(editor, taskStatus, nextSymbol);
       if (wrote && taskStatus.symbol === BLOCKED_TASK_STATUS_SYMBOL) {
@@ -25529,14 +25575,14 @@ class TaskStatusCyclerCommandsMixin {
       if (wrote && (nextSymbol === "x" || nextSymbol === "-")) {
         if (cyclePath) {
           const identity = cycleIdentity;
-          if (identity) {
+          if (identity || (nextSymbol === "x" && reqCloseOwners.length > 0)) {
             const cycleContext = { activePath: cyclePath };
             if (nextSymbol === "x") cycleContext.reqCloseOwners = reqCloseOwners;
             if (editor && typeof editor.getValue === "function") {
               cycleContext.editor = editor;
             }
             void this.finalizeCycledClosedTasks(
-              [{ identity, symbol: nextSymbol }],
+              identity ? [{ identity, symbol: nextSymbol }] : [],
               cycleContext,
             );
           }
@@ -26027,17 +26073,21 @@ class TaskStatusCyclerCommandsMixin {
         }
       }
     } catch (error) {}
+    const rangeReqCloseOwners = activePath
+      ? this.captureReqCloseOwnersFromRange(
+        Array.isArray(lines) ? lines.join("\n") : String(editor.getValue() || ""),
+        activePath,
+        startLine,
+        endLine,
+      )
+      : [];
     const context = activePath
       ? {
           editor,
           activePath,
           originPath: activePath,
-          reqCloseOwners: this.captureReqCloseOwnersFromRange(
-            Array.isArray(lines) ? lines.join("\n") : String(editor.getValue() || ""),
-            activePath,
-            startLine,
-            endLine,
-          ),
+          reqCloseOwners: [],
+          reqCloseRangeOwners: rangeReqCloseOwners,
         }
       : null;
     const seenResolvedTargets = new Set();
@@ -26172,6 +26222,14 @@ class TaskStatusCyclerCommandsMixin {
             if (identity) {
               cycleClosed.push({ identity, symbol: nextSymbol });
             }
+            if (nextSymbol === "x" && context) {
+              const owner = rangeReqCloseOwners.find((row) =>
+                row && row.close_identity && row.close_identity.path === activePath &&
+                Number(row.close_identity.line) === line + 1);
+              if (owner && !context.reqCloseOwners.some((row) => row.key === owner.key)) {
+                context.reqCloseOwners.push(owner);
+              }
+            }
           }
         }
         continue;
@@ -26281,7 +26339,7 @@ class TaskStatusCyclerCommandsMixin {
 
     // One batched pass for the whole counted range (partitioned Done vs
     // Cancelled inside); the cycle writes already landed.
-    if (cycleClosed.length > 0 && activePath) {
+    if ((cycleClosed.length > 0 || (context && context.reqCloseOwners.length > 0)) && activePath) {
       void this.finalizeCycledClosedTasks(cycleClosed, {
         editor,
         activePath,
@@ -26709,8 +26767,8 @@ class TaskStatusCyclerCompletionMixin {
         : null;
     const activePath = activeFile && activeFile.path;
     const identity = closedTaskIdentity(activePath, taskStatus.lineText);
-    const reqCloseOwners = this.captureReqCloseOwnersFromEditor(
-      identity, editor, activePath, taskStatus.lineText,
+    const reqCloseOwners = this.captureReqCloseOwnersAtEditorLine(
+      editor, activePath, taskStatus.line, taskStatus.lineText,
     );
     const beforeLineCount = this.getEditorLineCount(editor);
 
@@ -26729,7 +26787,7 @@ class TaskStatusCyclerCompletionMixin {
 
     // Successor notice is returned, never shown here: nav's walk caller
     // appends it to the walk toast it already shows.
-    if (identity) {
+    if (identity || reqCloseOwners.length > 0) {
       const active = options && typeof options === "object" ? options : {};
       const finalizeContext = { editor, activePath, successorNoticeTarget: "return" };
       if (active.successorJumpTarget === "return") {
@@ -26738,7 +26796,7 @@ class TaskStatusCyclerCompletionMixin {
           finalizeContext.successorJumpBox = active.successorJumpBox;
         }
       }
-      const finalized = await this.finalizeClosedTasks([identity], {
+      const finalized = await this.finalizeClosedTasks(identity ? [identity] : [], {
         ...finalizeContext,
         reqCloseOwners,
       });
@@ -26845,7 +26903,7 @@ class TaskStatusCyclerCompletionMixin {
     const closing = isTranscludedCompletionClosableStatus(taskStatus);
     const localIdentity = closedTaskIdentity(activePath, taskStatus.lineText);
     const reqCloseOwners = closing
-      ? this.captureReqCloseOwnersFromEditor(localIdentity, editor, activePath, taskStatus.lineText)
+      ? this.captureReqCloseOwnersAtEditorLine(editor, activePath, taskStatus.line, taskStatus.lineText)
       : [];
 
     const wrote = this.toggleActiveCheckboxOpenDone(editor, taskStatus);
@@ -26861,7 +26919,7 @@ class TaskStatusCyclerCompletionMixin {
       reqCloseOwners,
     );
     const identities = [localIdentity, targetIdentity].filter(Boolean);
-    if (identities.length) {
+    if (identities.length || (closing && reqCloseOwners.length > 0)) {
       // Walk landings pass `successorNoticeTarget: "return"` with a
       // `successorNoticeBox`: the text is composed into `outcome.notice`
       // and no card is shown, keeping the gesture's single walk toast.
@@ -36333,10 +36391,15 @@ class TaskStatusCyclerReqCloseIntegrationMixin {
     if (typeof contents !== "string" || !path) return [];
     const tasks = taskReqNoteTasks(contents);
     const selected = Array.isArray(identities)
-      ? identities.map((identity) => tasks.filter((task) => reqCloseIntegrationTaskMatches(task, identity)))
-      : tasks.filter((task) => task.blockId || task.taskId).map((task) => [task]);
+      ? identities.map((identity) => ({
+        identity,
+        matches: tasks.filter((task) => reqCloseIntegrationTaskMatches(task, identity) ||
+          (identity && identity.task_key && Number(identity.line) === task.lineIndex + 1)),
+      }))
+      : tasks.map((task) => ({ matches: [task] }));
     const owners = [];
-    for (const matches of selected) {
+    for (const selection of selected) {
+      const matches = selection.matches;
       if (!Array.isArray(matches) || matches.length !== 1) continue;
       const task = matches[0];
       const blockId = String(task.blockId || "");
@@ -36346,9 +36409,18 @@ class TaskStatusCyclerReqCloseIntegrationMixin {
         try { taskId = String(parseTaskDependencyMetadata(task.lineText).taskId || ""); } catch (_error) {}
       }
       const owner = reqCloseCollectOwner(contents, path, task, reqCloseWriteDefaultSha256);
-      if (owner) owners.push({
+      if (!owner || !owner.nodes.some((node) => node.state === "pending")) continue;
+      if (selection.identity && selection.identity.task_key &&
+          selection.identity.task_key !== owner.task_key) continue;
+      owners.push({
         ...owner,
-        close_identity: { path: String(path), blockId, taskId },
+        close_identity: {
+          path: String(path),
+          ...(blockId ? { blockId } : {}),
+          ...(taskId ? { taskId } : {}),
+          task_key: owner.task_key,
+          line: owner.line,
+        },
       });
     }
     return owners;
@@ -36362,9 +36434,7 @@ class TaskStatusCyclerReqCloseIntegrationMixin {
     const identities = [];
     for (const task of tasks) {
       if (!Number.isInteger(task.lineIndex) || task.lineIndex < lo || task.lineIndex > hi) continue;
-      const identity = (typeof closedTaskIdentity === "function"
-        ? closedTaskIdentity(path, task.lineText)
-        : null) || (task.blockId ? { path: String(path), blockId: String(task.blockId) } : null);
+      const identity = this.reqCloseIdentityForTaskLine(contents, path, task.lineIndex);
       if (identity) identities.push(identity);
     }
     return this.captureReqCloseOwnersFromText(contents, path, identities);
@@ -36417,10 +36487,19 @@ class TaskStatusCyclerReqCloseIntegrationMixin {
         active.relationEventKind === "parked" || active.automated === true) return [];
     const snapshots = Array.isArray(captured) ? captured : [];
     const ordered = [];
-    for (const identity of Array.isArray(closed) ? closed : []) {
-      const hit = snapshots.find((owner) => owner && owner.close_identity &&
-        reqCloseIntegrationSameIdentity(owner.close_identity, identity));
-      if (hit && !ordered.some((owner) => owner.key === hit.key)) ordered.push(hit);
+    const identities = Array.isArray(closed) ? closed : [];
+    for (const owner of snapshots) {
+      if (!owner || !owner.close_identity || ordered.some((row) => row.key === owner.key)) continue;
+      const identity = owner.close_identity;
+      const anchored = Boolean(identity.blockId || identity.taskId);
+      if (anchored) {
+        if (identities.some((closedIdentity) =>
+          reqCloseIntegrationSameIdentity(identity, closedIdentity))) ordered.push(owner);
+      } else if (identity.task_key && Number.isInteger(Number(identity.line))) {
+        // Idless owners have no dependency identity. Their caller supplies
+        // snapshots only after the corresponding Done write succeeds.
+        ordered.push(owner);
+      }
     }
     return ordered;
   }
@@ -36924,6 +37003,195 @@ function reqCloseLandableTarget(landing, noteText, node) {
     label: description,
   };
 }
+// ---- src/198i-req-close-idless.js ----
+// Idless managed Done owners use the existing canonical line/digest identity
+// only for the requirement audit. They never enter dependency recovery.
+
+class TaskStatusCyclerReqCloseIdlessMixin {
+  captureReqCloseOwnersAtEditorLine(editor, path, line, fallbackText = "") {
+    const text = editor && typeof editor.getValue === "function"
+      ? editor.getValue()
+      : typeof fallbackText === "string" ? fallbackText : "";
+    const identity = this.reqCloseIdentityForTaskLine(text, path, line);
+    return this.captureReqCloseOwnersFromEditor(identity, editor, path, fallbackText);
+  }
+
+  reqCloseIdentityForTaskLine(contents, path, lineIndex) {
+    if (typeof contents !== "string" || !path || !Number.isInteger(lineIndex)) return null;
+    const task = taskReqNoteTasks(contents).find((row) => row.lineIndex === lineIndex);
+    if (!task) return null;
+    const owner = reqCloseCollectOwner(contents, path, task, reqCloseWriteDefaultSha256);
+    if (!owner) return null;
+    const lineText = taskReqLineSpans(contents)[lineIndex]?.text || "";
+    const managed = closedTaskIdentity(path, lineText) || {};
+    return {
+      ...managed,
+      path: String(path),
+      line: owner.line,
+      task_key: owner.task_key,
+    };
+  }
+
+  async planAndApplyIdlessRequirementOnlyCard(context = {}) {
+    const active = context && typeof context === "object" ? context : {};
+    const empty = {
+      version: 1,
+      gated: true,
+      predecessors: [],
+      unblocked: [],
+      keep_moving: [],
+      still_blocked: [],
+      daily_path: "",
+      daily_content: null,
+      failure: null,
+    };
+    const pickerApi = getSuccessorPickerApi(this.app);
+    if (!pickerApi || Number(pickerApi.version) < 6) return empty;
+    const owners = this.reqCloseOwnersForManagedDone(
+      active.reqCloseOwners,
+      [],
+      { ...active, reqCloseOnly: true },
+    );
+    const reqCloseGroups = reqCloseGroupsFromOwners(owners);
+    if (!reqCloseGroups.length) return empty;
+
+    const cache = new Map();
+    const openNotes = new Map();
+    for (const path of new Set(owners.map((owner) => String(owner.path || "")).filter(Boolean))) {
+      const text = await this.readSuccessorNoteText(path, active, cache);
+      if (typeof text !== "string") return empty;
+      openNotes.set(path, text);
+    }
+    const today = typeof active.today === "string" && active.today
+      ? active.today
+      : formatLocalDate();
+    let dailyPath = typeof active.dailyPath === "string" && active.dailyPath
+      ? active.dailyPath
+      : "";
+    if (!dailyPath) {
+      try { dailyPath = todayDailyPath(this.app) || ""; } catch (_error) { dailyPath = ""; }
+    }
+    const openNotesObject = Object.fromEntries(openNotes);
+    const picked = await this.pickSuccessorOfferChoices({
+      plan: { still_blocked: [], offers: [] },
+      offers: [],
+      reqCloseGroups,
+      identities: [],
+      pickerApi,
+      context: active,
+      noteTexts: openNotesObject,
+      tasks: [],
+      today,
+      dailyPath,
+      dailyBefore: [],
+      dailyAfter: [],
+      dependencySnapshotAvailable: false,
+      markUnblockedLine: this.getFreshnessMarkUnblockedLine(),
+    });
+    if (!picked.pickerOpened || !picked.choices) return empty;
+    const choices = picked.choices;
+    const requests = Array.isArray(choices.reqs) ? choices.reqs : null;
+    const jumpKey = choices.jump && typeof choices.jump.key === "string"
+      ? choices.jump.key
+      : null;
+    const reqJumpKey = owners.some((owner) => (owner.nodes || []).some((node) => node.key === jumpKey))
+      ? jumpKey
+      : null;
+    if (requests === null && !reqJumpKey) return empty;
+
+    const openOwnerBlocks = this.reqCloseExpectedOwnerPostimages(owners, openNotes);
+    const freshNotes = new Map();
+    for (const path of openNotes.keys()) {
+      cache.delete(path);
+      const text = await this.readSuccessorNoteText(path, active, cache);
+      if (typeof text === "string") freshNotes.set(path, text);
+    }
+    const filtered = reqCloseRefuseStaleOwnerChoices({
+      owners,
+      requests,
+      jumpKey: reqJumpKey,
+      openBlocks: openOwnerBlocks,
+      freshNotes,
+    });
+    const liveOwners = filtered.owners;
+    let reqResult = null;
+    if (liveOwners.length && (filtered.requests !== null || filtered.jumpKey)) {
+      reqResult = await this.applyManagedReqCloseCard({
+        owners: liveOwners,
+        choices: {
+          ...(filtered.requests !== null ? { reqs: filtered.requests } : {}),
+          ...(filtered.jumpKey ? { jump: { key: filtered.jumpKey } } : {}),
+        },
+        notes: freshNotes,
+        expectedNotes: freshNotes,
+        expectedOwnerPostimages: this.reqCloseExpectedOwnerPostimages(liveOwners, freshNotes),
+        identities: [],
+        today,
+        dailyPath,
+        context: active,
+        cache,
+      });
+      if (reqResult && Array.isArray(reqResult.outcomes) &&
+          reqResult.outcomes.some((row) => row && row.verdict === "carry_pulled")) {
+        reqResult = await this.finishManagedReqPullIn({
+          result: reqResult,
+          owners: liveOwners,
+          identities: [],
+          dailyPath,
+          today,
+          index: reqResult.index,
+          completed: [],
+          closing: null,
+          context: active,
+        });
+      }
+    }
+    let jump = null;
+    if (reqResult && reqResult.reqJump) {
+      jump = await this.resolveManagedReqCloseLanding({
+        owners,
+        plan: reqResult,
+        key: reqResult.reqJump,
+        context: active,
+        cache,
+        dailyPath,
+        routes: Array.isArray(reqResult.routes) ? reqResult.routes : [],
+      });
+      if (jump && jump.ok === false) {
+        reqResult.failures = [
+          ...(Array.isArray(reqResult.failures) ? reqResult.failures : []),
+          { kind: "requirement_jump", code: jump.code, reason: jump.message },
+        ];
+        jump = null;
+      } else if (jump && jump.ok === true) {
+        jump = { ...jump, label: jump.description || "requirement" };
+      }
+    }
+    return {
+      version: 1,
+      predecessors: [],
+      unblocked: [],
+      keep_moving: [],
+      still_blocked: [],
+      ...(reqResult && Array.isArray(reqResult.req_outcomes)
+        ? { req_outcomes: reqResult.req_outcomes }
+        : {}),
+      ...(reqResult && Array.isArray(reqResult.met) ? { req_met: reqResult.met } : {}),
+      ...(reqResult && Array.isArray(reqResult.restores) && reqResult.restores.length
+        ? { undo: { restores: reqResult.restores } }
+        : {}),
+      failures: [
+        ...filtered.failures,
+        ...(reqResult && Array.isArray(reqResult.failures) ? reqResult.failures : []),
+      ],
+      ...(jump ? { jump } : {}),
+      relation_picker_opened: false,
+      daily_path: dailyPath,
+      daily_content: null,
+      failure: null,
+    };
+  }
+}
 // ---- src/199-req-toggle.js ----
 // Ctrl+] note/req toggle (bob-cli-on.10.1.4): route the cycler's Ctrl+]
 // through the RW twin's `taskReqToggle` on req lines and on plain list items
@@ -37385,6 +37653,7 @@ installTaskStatusCyclerMixins(TaskStatusCyclerPlugin, [
   TaskStatusCyclerReqTypingMixin,
   TaskStatusCyclerReqCloseApplyMixin,
   TaskStatusCyclerReqCloseIntegrationMixin,
+  TaskStatusCyclerReqCloseIdlessMixin,
 ]);
 // ---- src/210-exports.js ----
 module.exports = TaskStatusCyclerPlugin;

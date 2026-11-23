@@ -237,6 +237,21 @@ test("counted-range capture keeps only owners whose line lies in the window", ()
   assert.equal(none.length, 0);
 });
 
+test("RV owner capture accepts a canonical idless path/line/task_key identity", () => {
+  const plugin = pluginWithNav(async () => null);
+  const idlessText = preCloseText.replace(" ^export", "");
+  const reqIdentity = plugin.reqCloseIdentityForTaskLine(idlessText, identity.path, 0);
+  assert.deepEqual(Object.keys(reqIdentity).sort(), ["line", "path", "task_key"]);
+  assert.equal(reqIdentity.line, 1);
+  assert.match(reqIdentity.task_key, /^Tasks\.md@[0-9a-f]{8}$/);
+  const captured = plugin.captureReqCloseOwnersFromText(idlessText, identity.path, [reqIdentity]);
+  assert.equal(captured.length, 1);
+  assert.equal(captured[0].task_key, reqIdentity.task_key);
+  assert.equal(captured[0].close_identity.line, 1);
+  assert.deepEqual(plugin.reqCloseOwnersForManagedDone(captured, []).map((row) => row.task_key), [reqIdentity.task_key]);
+  assert.equal(plugin.captureReqCloseOwnersFromRange(idlessText, identity.path, 0, 0).length, 1);
+});
+
 test("managed landing hands nav a 0-based line plus exact text", async () => {
   const plugin = pluginWithNav(async () => null);
   const captured = plugin.captureReqCloseOwnersFromText(preCloseText, identity.path, [identity]);

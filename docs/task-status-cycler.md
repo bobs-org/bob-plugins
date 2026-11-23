@@ -315,6 +315,32 @@ The transcluded tree close (Ctrl+Enter through a Pomodoro transclusion) never
 checks a line without `#task`, matching bob-cli, while still walking that
 line's embedded children.
 
+### Requirement close card
+
+A managed Done write opens the requirement-first card for each non-recurring
+owner with Pending reqs when Navigation Hotkeys exposes successor picker API
+v6. This includes idless owners; the cycler snapshots their pre-close path,
+1-based line, and canonical `task_key` without minting an ID. The local
+Ctrl+Enter toggle, `completeTaskAtCursor`, single and counted cycles, and
+managed callers that pass `context.reqCloseOwners` use the same close path.
+Req-less idless closes keep the no-extra-scan path. Cancelled, parked, and
+offer-close verdicts do not open the card. With an older or missing picker,
+the task still closes and the req bytes are left alone.
+
+The task close is already written when the card opens. Submission applies
+requirement carries, then drops, completes close bookkeeping and receipts,
+applies any pull-in links, and resolves a pinned requirement landing last.
+Before applying the staged choices, the cycler re-reads the owner and its req
+lines against the captured post-close snapshot; moved or edited rows refuse
+instead of targeting a new line. API line values are 1-based; conversion to
+the editor's 0-based line happens at the editor boundary.
+
+Drop and Carry receipts share one guarded Undo action. It restores only the
+requirement writes while every affected note still matches the postimage, and
+leaves the owner Done. Reopening the task later that day takes back only the
+untouched successor links recorded by the close pass; it does not undo a Drop
+or Carry choice. Esc closes the card without writing requirement bytes.
+
 ### Ctrl+] note and requirement toggle
 
 Ctrl+] (the command and the Vim mapping) toggles a list item between a note and

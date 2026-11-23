@@ -64,10 +64,15 @@ class TaskStatusCyclerReqCloseIntegrationMixin {
     if (typeof contents !== "string" || !path) return [];
     const tasks = taskReqNoteTasks(contents);
     const selected = Array.isArray(identities)
-      ? identities.map((identity) => tasks.filter((task) => reqCloseIntegrationTaskMatches(task, identity)))
-      : tasks.filter((task) => task.blockId || task.taskId).map((task) => [task]);
+      ? identities.map((identity) => ({
+        identity,
+        matches: tasks.filter((task) => reqCloseIntegrationTaskMatches(task, identity) ||
+          (identity && identity.task_key && Number(identity.line) === task.lineIndex + 1)),
+      }))
+      : tasks.map((task) => ({ matches: [task] }));
     const owners = [];
-    for (const matches of selected) {
+    for (const selection of selected) {
+      const matches = selection.matches;
       if (!Array.isArray(matches) || matches.length !== 1) continue;
       const task = matches[0];
       const blockId = String(task.blockId || "");
@@ -77,9 +82,18 @@ class TaskStatusCyclerReqCloseIntegrationMixin {
         try { taskId = String(parseTaskDependencyMetadata(task.lineText).taskId || ""); } catch (_error) {}
       }
       const owner = reqCloseCollectOwner(contents, path, task, reqCloseWriteDefaultSha256);
-      if (owner) owners.push({
+      if (!owner || !owner.nodes.some((node) => node.state === "pending")) continue;
+      if (selection.identity && selection.identity.task_key &&
+          selection.identity.task_key !== owner.task_key) continue;
+      owners.push({
         ...owner,
-        close_identity: { path: String(path), blockId, taskId },
+        close_identity: {
+          path: String(path),
+          ...(blockId ? { blockId } : {}),
+          ...(taskId ? { taskId } : {}),
+          task_key: owner.task_key,
+          line: owner.line,
+        },
       });
     }
     return owners;
@@ -93,9 +107,7 @@ class TaskStatusCyclerReqCloseIntegrationMixin {
     const identities = [];
     for (const task of tasks) {
       if (!Number.isInteger(task.lineIndex) || task.lineIndex < lo || task.lineIndex > hi) continue;
-      const identity = (typeof closedTaskIdentity === "function"
-        ? closedTaskIdentity(path, task.lineText)
-        : null) || (task.blockId ? { path: String(path), blockId: String(task.blockId) } : null);
+      const identity = this.reqCloseIdentityForTaskLine(contents, path, task.lineIndex);
       if (identity) identities.push(identity);
     }
     return this.captureReqCloseOwnersFromText(contents, path, identities);
@@ -148,10 +160,19 @@ class TaskStatusCyclerReqCloseIntegrationMixin {
         active.relationEventKind === "parked" || active.automated === true) return [];
     const snapshots = Array.isArray(captured) ? captured : [];
     const ordered = [];
-    for (const identity of Array.isArray(closed) ? closed : []) {
-      const hit = snapshots.find((owner) => owner && owner.close_identity &&
-        reqCloseIntegrationSameIdentity(owner.close_identity, identity));
-      if (hit && !ordered.some((owner) => owner.key === hit.key)) ordered.push(hit);
+    const identities = Array.isArray(closed) ? closed : [];
+    for (const owner of snapshots) {
+      if (!owner || !owner.close_identity || ordered.some((row) => row.key === owner.key)) continue;
+      const identity = owner.close_identity;
+      const anchored = Boolean(identity.blockId || identity.taskId);
+      if (anchored) {
+        if (identities.some((closedIdentity) =>
+          reqCloseIntegrationSameIdentity(identity, closedIdentity))) ordered.push(owner);
+      } else if (identity.task_key && Number.isInteger(Number(identity.line))) {
+        // Idless owners have no dependency identity. Their caller supplies
+        // snapshots only after the corresponding Done write succeeds.
+        ordered.push(owner);
+      }
     }
     return ordered;
   }

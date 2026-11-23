@@ -658,6 +658,10 @@ Ledger feature-detects `walkMode.version >= 4` before `b` and `>= 5` before `w`.
   successorNotice, jump? }` and never throws. Managed Done close gestures
   capture requirement forests before their write and include them in the
   same successor card when Navigation Hotkeys exposes picker v6 or newer.
+  The capture includes idless owners with Pending requirements. Their close
+  identity is the note path, pre-close 1-based line, and canonical `task_key`;
+  the cycler never mints a block ID to open the requirement-only pass. An
+  idless close with no Pending requirements stays on the no-extra-scan path.
   The card defaults Pending requirements to Met, applies explicit Drop/Carry/
   Carry plus pull-in choices, and resolves a requirement jump after all writes.
   Callers that own the close write can pass pre-close snapshots as
@@ -670,7 +674,14 @@ Ledger feature-detects `walkMode.version >= 4` before `b` and `>= 5` before `w`.
   is the read-only pre-close capture for external managed Done writers. It
   returns opaque owner snapshots in identity order; pass the result to
   `finalizeClosedTasks` as `context.reqCloseOwners`. When `preCloseNotes` is
-  supplied, it maps vault-relative paths to the exact pre-write text.
+  supplied, it maps vault-relative paths to the exact pre-write text. An
+  idless identity supplies `{ path, line, task_key }`, where `line` is
+  1-based and `task_key` is the canonical key produced by
+  `reqCloseStableTaskKey`; the owner forest is still captured from the
+  pre-close text. If an idless owner is the only closing row,
+  `finalizeClosedTasks` calls the requirement-only successor pass with an
+  empty close list, so it does not plan recovery, retirement, or successor
+  links for that owner.
 - `offerParkedSuccessors(identities, { slot, successorJumpTarget?, successorJumpBox? }?)`
   plans relation-only successor offers for Pending (`[/]`) tasks that have no
   live Task Link left on today's daily note. It presents the nav picker with

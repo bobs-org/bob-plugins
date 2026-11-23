@@ -327,8 +327,8 @@ class TaskStatusCyclerCompletionMixin {
         : null;
     const activePath = activeFile && activeFile.path;
     const identity = closedTaskIdentity(activePath, taskStatus.lineText);
-    const reqCloseOwners = this.captureReqCloseOwnersFromEditor(
-      identity, editor, activePath, taskStatus.lineText,
+    const reqCloseOwners = this.captureReqCloseOwnersAtEditorLine(
+      editor, activePath, taskStatus.line, taskStatus.lineText,
     );
     const beforeLineCount = this.getEditorLineCount(editor);
 
@@ -347,7 +347,7 @@ class TaskStatusCyclerCompletionMixin {
 
     // Successor notice is returned, never shown here: nav's walk caller
     // appends it to the walk toast it already shows.
-    if (identity) {
+    if (identity || reqCloseOwners.length > 0) {
       const active = options && typeof options === "object" ? options : {};
       const finalizeContext = { editor, activePath, successorNoticeTarget: "return" };
       if (active.successorJumpTarget === "return") {
@@ -356,7 +356,7 @@ class TaskStatusCyclerCompletionMixin {
           finalizeContext.successorJumpBox = active.successorJumpBox;
         }
       }
-      const finalized = await this.finalizeClosedTasks([identity], {
+      const finalized = await this.finalizeClosedTasks(identity ? [identity] : [], {
         ...finalizeContext,
         reqCloseOwners,
       });
@@ -463,7 +463,7 @@ class TaskStatusCyclerCompletionMixin {
     const closing = isTranscludedCompletionClosableStatus(taskStatus);
     const localIdentity = closedTaskIdentity(activePath, taskStatus.lineText);
     const reqCloseOwners = closing
-      ? this.captureReqCloseOwnersFromEditor(localIdentity, editor, activePath, taskStatus.lineText)
+      ? this.captureReqCloseOwnersAtEditorLine(editor, activePath, taskStatus.line, taskStatus.lineText)
       : [];
 
     const wrote = this.toggleActiveCheckboxOpenDone(editor, taskStatus);
@@ -479,7 +479,7 @@ class TaskStatusCyclerCompletionMixin {
       reqCloseOwners,
     );
     const identities = [localIdentity, targetIdentity].filter(Boolean);
-    if (identities.length) {
+    if (identities.length || (closing && reqCloseOwners.length > 0)) {
       // Walk landings pass `successorNoticeTarget: "return"` with a
       // `successorNoticeBox`: the text is composed into `outcome.notice`
       // and no card is shown, keeping the gesture's single walk toast.

@@ -193,6 +193,10 @@ function exporterNote({ status = " ", id = "export__task" } = {}) {
   ].join("\n") + "\n";
 }
 
+function idlessExporterNote(options = {}) {
+  return exporterNote({ ...options, id: "" }).replace(" ^export", "");
+}
+
 test("1. Ctrl+Enter Drop with a reason writes drop bytes and keeps the owner Done", async () => {
   notices.length = 0;
   const source = exporterNote();
@@ -908,4 +912,163 @@ test("14. a walk-owned close returns exactly one requirement jump", async () => 
   assert.equal(box.jump.kind, "requirement");
   assert.match(box.jump.text, /Handles empty input/);
   assert.equal(box.jump.description, "Handles empty input");
+});
+
+test("15. Ctrl+Enter on an idless owner opens the requirement-only card and applies Drop", async () => {
+  notices.length = 0;
+  const source = idlessExporterNote();
+  const harness = createInMemoryObsidianApp({
+    "Tasks.md": source,
+    [DAILY_PATH]: dayNote(),
+    "inbox.md": "## Tasks\n",
+  });
+  const editor = createTextEditor(source, { line: 0, ch: 4 });
+  const plugin = makePlugin(harness, editor, "Tasks.md");
+  const shown = [];
+  installReqCloseNav(plugin, harness, {
+    shown,
+    pick(model) {
+      const row = reqRowByText(model, "Handles empty input");
+      return { reqs: [{ key: row.key, verdict: "drop", reason: "idless audit" }] };
+    },
+  });
+  const wrote = await plugin.toggleActiveCheckboxOpenDoneAndPropagate(
+    editor,
+    { path: "Tasks.md" },
+    plugin.getActiveTaskStatus(editor),
+  );
+  assert.equal(wrote, true);
+  assert.match(editor.getValue(), /^- \[x\] #task Ship the exporter/m);
+  assert.match(editor.getValue(), /- \[-\] Handles empty input/);
+  assert.equal(shown.length, 1);
+  assert.match(JSON.stringify(shown[0]), /⊘ Dropped/);
+  assert.deepEqual(shown[0].unblocked, []);
+  assert.equal(Object.prototype.hasOwnProperty.call(shown[0], "offer_closes"), false);
+});
+
+test("15b. an idless owner opens through completeTaskAtCursor and a single Done cycle", async () => {
+  for (const pathKind of ["complete", "cycle"]) {
+    notices.length = 0;
+    const source = pathKind === "cycle"
+      ? idlessExporterNote({ status: "*" })
+      : idlessExporterNote();
+    const harness = createInMemoryObsidianApp({
+      "Tasks.md": source,
+      [DAILY_PATH]: dayNote(),
+      "inbox.md": "## Tasks\n",
+    });
+    const editor = createTextEditor(source, { line: 0, ch: 4 });
+    const plugin = makePlugin(harness, editor, "Tasks.md");
+    installTasksCloseCommand(plugin, editor);
+    let opened = false;
+    installReqCloseNav(plugin, harness, {
+      pick(model) { opened = reqRows(model).length > 0; return { reqs: [] }; },
+    });
+    if (pathKind === "complete") {
+      assert.equal((await plugin.completeTaskAtCursor(editor)).ok, true);
+    } else {
+      const view = plugin.app.workspace.getActiveViewOfType(MarkdownView);
+      await awaitCycle(plugin, () => assert.equal(plugin.handleCycleCommand(false, editor, view, 1), true));
+    }
+    assert.equal(opened, true, pathKind);
+    assert.match(editor.getValue(), /^- \[x\] #task Ship the exporter/m);
+  }
+});
+
+test("15c. counted-range Done opens an idless owner's requirement-only card", async () => {
+  notices.length = 0;
+  const source = idlessExporterNote({ status: "*" });
+  const harness = createInMemoryObsidianApp({
+    "Tasks.md": source,
+    [DAILY_PATH]: dayNote(),
+    "inbox.md": "## Tasks\n",
+  });
+  const editor = createTextEditor(source, { line: 0, ch: 4 });
+  const plugin = makePlugin(harness, editor, "Tasks.md");
+  let opened = false;
+  installReqCloseNav(plugin, harness, {
+    pick(model) { opened = reqRows(model).length > 0; return { reqs: [] }; },
+  });
+  await awaitCycle(plugin, () => plugin.cycleTaskStatusRange(editor, { path: "Tasks.md" }, 1, 0));
+  assert.equal(opened, true);
+  assert.match(editor.getValue(), /^- \[x\] #task Ship the exporter/m);
+});
+
+test("15d. idless requirement pin lands, while Esc and recurring idless closes stay quiet", async () => {
+  notices.length = 0;
+  const source = idlessExporterNote();
+  const harness = createInMemoryObsidianApp({
+    "Tasks.md": source,
+    [DAILY_PATH]: dayNote(),
+    "inbox.md": "## Tasks\n",
+  });
+  const editor = createTextEditor(source, { line: 0, ch: 4 });
+  const plugin = makePlugin(harness, editor, "Tasks.md");
+  const landings = [];
+  installReqCloseNav(plugin, harness, {
+    landings,
+    pick(model) {
+      const row = reqRowByText(model, "Handles empty input");
+      return { reqs: [], jump: { key: row.key } };
+    },
+  });
+  await plugin.toggleActiveCheckboxOpenDoneAndPropagate(
+    editor,
+    { path: "Tasks.md" },
+    plugin.getActiveTaskStatus(editor),
+  );
+  assert.equal(landings.length, 1);
+  assert.equal(landings[0].kind, "requirement");
+  assert.match(landings[0].text, /Handles empty input/);
+
+  const escEditor = createTextEditor(source, { line: 0, ch: 4 });
+  const escPlugin = makePlugin(harness, escEditor, "Tasks.md");
+  installReqCloseNav(escPlugin, harness, { pick: () => null });
+  await escPlugin.toggleActiveCheckboxOpenDoneAndPropagate(
+    escEditor,
+    { path: "Tasks.md" },
+    escPlugin.getActiveTaskStatus(escEditor),
+  );
+  assert.match(escEditor.getValue(), /^- \[x\] #task Ship the exporter/m);
+  assert.match(escEditor.getValue(), /- \[ \] Handles empty input/);
+
+  const recurring = idlessExporterNote().replace("Ship the exporter", "Ship the exporter [repeat:: every day]");
+  const recurringEditor = createTextEditor(recurring, { line: 0, ch: 4 });
+  const recurringPlugin = makePlugin(harness, recurringEditor, "Tasks.md");
+  let opened = false;
+  installReqCloseNav(recurringPlugin, harness, { pick() { opened = true; return { reqs: [] }; } });
+  await recurringPlugin.toggleActiveCheckboxOpenDoneAndPropagate(
+    recurringEditor,
+    { path: "Tasks.md" },
+    recurringPlugin.getActiveTaskStatus(recurringEditor),
+  );
+  assert.equal(opened, false);
+});
+
+test("15e. mixed idless and anchored owner groups preserve captured close order", async () => {
+  const source = [
+    "- [ ] #task Idless owner",
+    "\t- [ ] First req",
+    "- [ ] #task Anchored owner ^anchored",
+    "\t- [ ] Second req",
+  ].join("\n") + "\n";
+  const harness = createInMemoryObsidianApp({
+    "Tasks.md": source.replace("- [ ] #task", "- [x] #task"),
+    [DAILY_PATH]: dayNote(),
+    "inbox.md": "## Tasks\n",
+  });
+  const editor = createTextEditor(source.replace("- [ ] #task", "- [x] #task"), { line: 0, ch: 4 });
+  const plugin = makePlugin(harness, editor, "Tasks.md");
+  const preCloseOwners = plugin.captureReqCloseOwnersFromText(source, "Tasks.md");
+  const shown = [];
+  installReqCloseNav(plugin, harness, {
+    shown,
+    pick(model) { shown.push(model); return { reqs: [] }; },
+  });
+  await plugin.finalizeClosedTasks(
+    [{ path: "Tasks.md", blockId: "anchored", taskId: "" }],
+    { editor, activePath: "Tasks.md", reqCloseOwners: preCloseOwners },
+  );
+  const groups = shown[0].groups.filter((group) => group.group === "requirements");
+  assert.deepEqual(groups.map((group) => group.owner.text), ["Idless owner", "Anchored owner"]);
 });

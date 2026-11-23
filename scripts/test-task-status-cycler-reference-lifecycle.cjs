@@ -85,11 +85,9 @@ test("recursive completion closes a Next root and its nested Next descendant", a
     ],
   });
   assert.deepEqual(
-    reqCloseOwners.map((owner) => owner.close_identity),
-    [
-      { path: "Root.md", blockId: "child", taskId: "" },
-      { path: "Root.md", blockId: "root", taskId: "" },
-    ],
+    reqCloseOwners,
+    [],
+    "tasks without pending requirements do not enter the requirement-close pass",
   );
   assert.equal(
     harness.getSource("Root.md"),
@@ -137,8 +135,9 @@ test("recursive completion traverses Done parents and skips excluded siblings", 
     ],
   });
   assert.deepEqual(
-    reqCloseOwners.map((owner) => owner.close_identity),
-    [{ path: "Tree.md", blockId: "next", taskId: "" }],
+    reqCloseOwners,
+    [],
+    "tasks without pending requirements do not enter the requirement-close pass",
   );
   assert.equal(
     harness.getSource("Tree.md"),

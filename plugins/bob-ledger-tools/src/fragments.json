@@ -360,6 +360,7 @@
   "298p-plugin-property-editor-selection-filter.js",
   "298q-plugin-property-editor-rename-reorder.js",
   "298r-plugin-property-editor-source-fragments.js",
+  "298s-plugin-property-editor-yaml-stage.js",
   "293-keep-inbox-render.js",
   "294-keep-inbox-indicator.js",
   "295-keep-inbox-actions.js",

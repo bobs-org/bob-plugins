@@ -12989,6 +12989,25 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
   resize: vertical;
   min-height: 4.5em;
 }
+.bob-property-editor-stage-input.is-yaml {
+  resize: vertical;
+  min-height: 10em;
+  font-family: var(--font-monospace);
+  white-space: pre;
+}
+.bob-property-editor-stage-note {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  overflow-wrap: anywhere;
+}
+.bob-property-editor-stage-note.is-diagnostic {
+  padding-left: 0.5em;
+  border-left: 2px solid var(--interactive-accent);
+}
+.bob-property-editor-stage-keys {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
 .bob-property-editor-stage-prose:empty { display: none; }
 .bob-property-editor-stage-chips,
 .bob-property-editor-stage-suggestions,
@@ -13039,7 +13058,8 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
   .bob-property-editor-stage-suggestion,
   .bob-property-editor-stage-add,
   .bob-property-editor-stage-save,
-  .bob-property-editor-stage-cancel { border: 1px solid CanvasText; }
+  .bob-property-editor-stage-cancel,
+  .bob-property-editor-stage-note.is-diagnostic { border: 1px solid CanvasText; }
 }
 
 /* Property editor add-flow name stage (bob-cli-pf.4.1.4). */

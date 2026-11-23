@@ -58,7 +58,7 @@ These keys act while browsing the rows, not while typing in a value field.
 | --- | --- |
 | `j` / `k`, ↑ / ↓, Ctrl+N / Ctrl+P | Move to the next or previous row |
 | `g`, Home / `G`, End | Select the first or last row |
-| Enter / `l` | Edit a loose value, flip a loose checkbox, or hand off a card field |
+| Enter / `l` | Edit a loose value (maps and opaque values open the YAML stage), flip a loose checkbox, or hand off a card field |
 | `o` / `O` / Mod+; | Add below, above, or at the end |
 | `r` | Rename the focused property |
 | Alt+J / Alt+↓, Alt+K / Alt+↑ | Move the focused property down or up in source order |
@@ -85,8 +85,8 @@ the range anchor, so rows hidden by a filter cannot remain selected for deletion
 Enter or ↓ in the filter returns focus to matching rows; with no matches, the
 editor announces the empty result and keeps a stable keyboard target. Esc clears
 the filter layer before closing the editor. The All actions menu exposes these
-gestures, rename, source-order moves, and batch deletion; reorder actions are
-disabled while a filter query is active.
+gestures, rename, source-order moves, YAML editing, and batch deletion; reorder
+actions are disabled while a filter query is active.
 
 Ctrl+D / Mod+Backspace deletes marked rows together as one undoable update. With
 no marks, it deletes the focused visible row. A selection containing a card,
@@ -113,8 +113,8 @@ requested.
 ## Value and add stages
 
 Loose values use a stage suited to Bob's reported kind: multiline Text, Number,
-Date, Date & time, ordered List, Tags, or Aliases. A loose checkbox flips
-immediately. Tags are stored without `#`; list and alias order is retained.
+Date, Date & time, ordered List, Tags, Aliases, or the YAML stage for maps and
+other exotic values. A loose checkbox flips immediately. Tags are stored without `#`; list and alias order is retained.
 Date & time accepts `now`, local times such as `9:41pm`, weekdays such as
 `fri`, relative dates such as `-3d`, and valid ISO values. Invalid or ambiguous
 input remains visible for correction.
@@ -135,6 +135,25 @@ name and value are written together; canceling either stage writes nothing.
 Undo and redo history is session-only, kept per normalized note path, and
 bounded to 20 writes in each direction. Closing and reopening the editor keeps
 that history for the session. A successful new edit clears redo.
+
+## YAML value stage
+
+Enter on a loose map (or any other loose value without a typed stage) opens a
+multiline YAML stage seeded with that key's exact source bytes, including block
+scalar chomping and nested flow content. The All actions menu offers **Edit
+value as YAML** for any other loose value, so typed values can also be edited
+as raw YAML. Opaque values (anchors, aliases, merge keys, custom tags) open
+for inspection with a diagnostic; saving one is refused by Bob with
+`prop_opaque`, and the draft is kept.
+
+The draft builds exactly one `prop.set_yaml` op and previews through the same
+250 ms Bob dry-run as every other stage; Bob's error and hint show verbatim.
+Plain Enter inserts a newline, Mod+Enter saves through the current preview
+latch, and Esc cancels the stage without closing the modal or applying the
+draft. Multiline editing keeps caret, composition, and native text undo. Stale
+reports keep the draft and require a new preview, and one save is one undoable
+batch. `y` / Ctrl+E still mean the Source-mode excursion, and card maps still
+route to `==`.
 
 ## Source fragments (read-only)
 
@@ -169,5 +188,5 @@ the current report—not cached metadata—authorizes mutations.
 
 The editor supports viewing, value edits, add, rename, source-order reorder,
 delete, undo/redo, ownership hand-off, YAML return, multi-select, filtering, and
-batch deletion. Copy/paste, property-kind changes, and the inline YAML value
-stage are the remaining native-Properties parity work.
+batch deletion. Copy/paste and property-kind changes are the remaining
+native-Properties parity work.

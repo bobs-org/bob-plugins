@@ -166,6 +166,14 @@ try {
       propertyEditorSourceAssembleEntries,
       propertyEditorSourceInventoryCorresponds,
       propertyEditorReadSourceSnapshot,
+      propertyEditorYamlStageKindForRow,
+      propertyEditorYamlStageAvailableForRow,
+      propertyEditorYamlOp,
+      propertyEditorYamlStageBuild,
+      propertyEditorYamlOrdinal,
+      propertyEditorYamlEditorTexts,
+      propertyEditorYamlStageSeedFor,
+      propertyEditorPaintYamlStage,
     });
   }
 } catch (_) {}

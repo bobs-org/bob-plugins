@@ -37,6 +37,12 @@ const HOTKEYS = {
   "task-status-cycler:cycle-task-status-forward": [{ modifiers: ["Alt"], key: "]" }],
   "task-status-cycler:toggle-task-open-done": [{ modifiers: ["Ctrl"], key: "Enter" }],
   "task-status-cycler:toggle-obsidian-task": [{ modifiers: ["Ctrl", "Shift"], key: "]" }],
+  "bob-navigation-hotkeys:split-bullets-into-tasks": [{ modifiers: ["Ctrl", "Shift"], key: "T" }],
+  // The split command owns Ctrl+Shift+T in the vault; move Obsidian's
+  // default reopen-pane chord out of the way in this isolated profile too.
+  "workspace:undo-close-pane": [{ modifiers: ["Ctrl", "Shift"], key: "E" }],
+  // Vim owns Ctrl+O for file-aware jump history; move Quick Switcher aside.
+  "switcher:open": [{ modifiers: ["Ctrl", "Shift"], key: "O" }],
   // No Ctrl+Shift+P entry: it is also Obsidian's default command-palette
   // chord, so the owner-card scenario runs the nav command by id instead.
 };

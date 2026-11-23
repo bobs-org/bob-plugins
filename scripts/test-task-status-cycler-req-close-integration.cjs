@@ -1,6 +1,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 const { TaskStatusCyclerPlugin, helpers } = require("./task-status-cycler-harness.cjs");
+const { helpers: navigationHelpers } = require("./navigation-hotkeys-harness.cjs");
 const { readFixture } = require("./req-close-vectors.cjs");
 
 const vectors = readFixture("task-status-cycler", "vectors.json");
@@ -58,6 +59,9 @@ test("the one successor card accepts a requirements-only model and keeps req cho
   });
   assert.equal(result.pickerOpened, true);
   assert.equal(shown.groups[0].group, "requirements");
+  const normalized = navigationHelpers.normalizeSuccessorPickerModel(shown);
+  assert.ok(normalized, "the navigation v6 API accepts the Cycler's requirement group");
+  assert.equal(normalized.groups[0].rows[0].req.text, shown.groups[0].rows[0].req.text);
   assert.equal(result.choices.reqs.length, 0);
 });
 

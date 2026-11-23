@@ -214,26 +214,45 @@ function reqCloseOwnerGroup(owner) {
       hint: REQ_CLOSE_COPY.HINT,
     },
     folded: folds,
-    rows: pending.map((node) => ({
-      offer: {
-        key: node.key,
-        n: 0,
-        group: "requirements",
-        selected: false,
-      },
-      owner_key: owner.key,
-      path: node.path,
-      depth: node.depth,
-      parent_key: node.parent_key,
-      text: node.text,
-      line: node.line,
-      state: node.state,
-      pending_descendants: node.pending_descendants,
-      depth_exceeded: node.depth_exceeded,
-      run: taskReqRun(node.depth),
-      accessibility: reqCloseAccessibility(node.depth, "will be met"),
-      consequences: reqCloseConsequences(node.text),
-    })),
+    rows: pending.map((node) => {
+      const run = taskReqRun(node.depth);
+      const accessibility = reqCloseAccessibility(node.depth, "will be met");
+      return {
+        offer: {
+          key: node.key,
+          n: 0,
+          group: "requirements",
+          selected: false,
+        },
+        req: {
+          owner: owner.key,
+          path: node.path,
+          depth: node.depth,
+          parent_key: node.parent_key,
+          text: node.text,
+          line: node.line,
+          state: node.state,
+          pending_descendants: node.pending_descendants,
+          depth_exceeded: node.depth_exceeded,
+          run,
+          accessibility,
+        },
+        // Keep the Cycler's local flat view for its write planner and audit
+        // vectors; `req` is the canonical v6 navigation API payload.
+        owner_key: owner.key,
+        path: node.path,
+        depth: node.depth,
+        parent_key: node.parent_key,
+        text: node.text,
+        line: node.line,
+        state: node.state,
+        pending_descendants: node.pending_descendants,
+        depth_exceeded: node.depth_exceeded,
+        run,
+        accessibility,
+        consequences: reqCloseConsequences(node.text),
+      };
+    }),
   };
 }
 

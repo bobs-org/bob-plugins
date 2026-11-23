@@ -23,8 +23,8 @@ const cases = [
   { name: "direct Ctrl+Shift+T carries and Ctrl+O returns" },
 ];
 
-async function start(client, doc = OWNER_DOC, caret = [0, 0]) {
-  await base.setMode(client, false, true);
+async function start(client, doc = OWNER_DOC, caret = [0, 0], vim = false) {
+  await base.setMode(client, vim, true);
   await base.closeStrayModals(client);
   await base.setDoc(client, doc, caret);
 }
@@ -51,6 +51,9 @@ async function openCard(client) {
 }
 
 async function submitCard(client) {
+  // The picker ignores Enter for its 350 ms open guard, even when a verdict
+  // was staged immediately after it opened.
+  await new Promise((resolve) => setTimeout(resolve, 400));
   await base.key(client, "Enter");
   await base.waitForGone(client, CARD, "requirement close card");
   await new Promise((resolve) => setTimeout(resolve, 450));
@@ -121,10 +124,12 @@ async function runCarry(client) {
 }
 
 async function runPinnedNestedJump(client) {
-  await start(client);
+  await start(client, OWNER_DOC, [0, 0], true);
+  await base.key(client, "Escape");
   await openCard(client);
   await base.key(client, { key: "ArrowDown", vk: 40 });
   await base.key(client, { key: "j", modifiers: base.CTRL, vk: 74 });
+  await new Promise((resolve) => setTimeout(resolve, 400));
   await base.key(client, "Enter");
   await base.waitForGone(client, CARD, "requirement close card after pin");
   await base.waitFor(
@@ -136,6 +141,8 @@ async function runPinnedNestedJump(client) {
   );
   let state = await base.readEditor(client);
   assert.equal(state.caret[0], 2, "pinned nested requirement did not land on its final line");
+  await client.evaluate("(() => { window.app.workspace.activeLeaf.view.editor.focus(); return true; })()");
+  await base.key(client, "Escape");
   await base.key(client, { key: "o", modifiers: base.CTRL, vk: 79 });
   await new Promise((resolve) => setTimeout(resolve, 350));
   state = await base.readEditor(client);
@@ -156,7 +163,8 @@ async function runEsc(client) {
 }
 
 async function runDirectCarry(client) {
-  await start(client, OWNER_DOC, [2, 7]);
+  await start(client, OWNER_DOC, [2, 7], true);
+  await base.key(client, "Escape");
   await base.key(client, { key: "t", modifiers: base.CTRL | base.SHIFT, vk: 84 });
   await base.waitFor(
     client,
@@ -168,6 +176,8 @@ async function runDirectCarry(client) {
   let state = await base.readEditor(client);
   assert.match(state.doc, /#task Nested requirement/);
   assert.ok(state.caret[0] > 2, "direct Carry did not land on the created task");
+  await client.evaluate("(() => { window.app.workspace.activeLeaf.view.editor.focus(); return true; })()");
+  await base.key(client, "Escape");
   await base.key(client, { key: "o", modifiers: base.CTRL, vk: 79 });
   await new Promise((resolve) => setTimeout(resolve, 350));
   state = await base.readEditor(client);

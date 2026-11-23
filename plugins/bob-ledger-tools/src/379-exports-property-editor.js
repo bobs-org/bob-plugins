@@ -1,4 +1,5 @@
-// Test-facing exports for the props v1 client, guarded session, history, and overlays.
+// Test-facing exports for the props v1 client, guarded session, history,
+// overlays, and the editor-shell modal (grouped rows, role routing, keys).
 try {
   if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
     module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
@@ -32,6 +33,45 @@ try {
       createPropertyOverlayStore,
       createPropertyUpdateSession,
       propertyUpdateServiceDeps,
+      PROPERTY_EDITOR_GROUPS,
+      PROPERTY_EDITOR_GROUP_TITLES,
+      PROPERTY_EDITOR_OLD_BOB_HINT,
+      PROPERTY_EDITOR_EMPTY_TEXT,
+      PROPERTY_EDITOR_CHECKING_TEXT,
+      PROPERTY_EDITOR_RECOVERY_TEXT,
+      PROPERTY_EDITOR_FILTER_SLOT,
+      propertyEditorKindLabel,
+      propertyEditorRoleOf,
+      propertyEditorIsCheckbox,
+      propertyEditorRowId,
+      propertyEditorGroupForRow,
+      propertyEditorGroupRows,
+      propertyEditorOrderedIds,
+      propertyEditorHeaderModel,
+      propertyEditorActionForRow,
+      propertyEditorCanMutate,
+      propertyEditorCacheRows,
+      propertyEditorFrontmatterState,
+      propertyEditorRecoveryIssue,
+      propertyEditorDegradedFor,
+      propertyEditorToggleOp,
+      propertyEditorUnsetOp,
+      propertyEditorStatusSaved,
+      propertyEditorStatusChecking,
+      propertyEditorStatusRefusal,
+      propertyEditorKeyAction,
+      propertyEditorKeyIsTypingTarget,
+      propertyEditorCloseLadder,
+      propertyEditorCreateEl,
+      propertyEditorSetText,
+      propertyEditorRowText,
+      propertyEditorBadgeKind,
+      PropertyEditorModal,
+      propertyEditorPaintAll,
+      propertyEditorPaintRow,
+      propertyEditorKindIcon,
+      propertyEditorEventInInput,
+      openPropertyEditor,
     });
   }
 } catch (_) {}

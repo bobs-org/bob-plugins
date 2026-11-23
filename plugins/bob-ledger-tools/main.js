@@ -166557,6 +166557,1088 @@ class BobLedgerToolsPropertyUpdateMixin {
     return this.propertyHistoryStore().snapshot(path);
   }
 }
+// ---- src/298e-plugin-property-editor-model.js ----
+// Property editor model: cache-first grouped rows, role routing, and
+// degraded states (bob-cli-pf.4.1.2 editor-shell). Pure and DOM-free: no
+// top-level document access, no bob spawns, no writes. The modal paints from
+// these helpers; later value stages reuse the ops and intents here.
+const PROPERTY_EDITOR_GROUPS = ["loose", "card", "identity", "managed"];
+const PROPERTY_EDITOR_GROUP_TITLES = {
+  loose: "Loose",
+  card: "On the kind's card",
+  identity: "Identity",
+  managed: "Bob-managed",
+};
+const PROPERTY_EDITOR_NOTE_KIND_LABELS = {
+  day: "Day",
+  week: "Week",
+  quarter: "Quarter",
+  year: "Year",
+  all_time: "All time",
+  record: "Record",
+  album: "Album",
+  bank: "Bank",
+  area: "Area",
+  project: "Project",
+  notebook: "Notebook",
+  reference: "Reference",
+  note: "Note",
+};
+const PROPERTY_EDITOR_OLD_BOB_HINT = "Update bob to edit properties here — y opens YAML";
+const PROPERTY_EDITOR_EMPTY_TEXT = "No properties yet — o adds the first";
+const PROPERTY_EDITOR_CHECKING_TEXT = "Checking value…";
+const PROPERTY_EDITOR_RECOVERY_TEXT = "Frontmatter doesn't parse — y opens YAML";
+const PROPERTY_EDITOR_FILTER_SLOT = "filter";
+
+function propertyEditorKindLabel(noteKind) {
+  const key = String(noteKind || "").trim().toLowerCase();
+  if (PROPERTY_EDITOR_NOTE_KIND_LABELS[key]) return PROPERTY_EDITOR_NOTE_KIND_LABELS[key];
+  if (!key) return "Note";
+  return key.charAt(0).toUpperCase() + key.slice(1);
+}
+
+function propertyEditorRoleOf(row) {
+  const role = row && typeof row.role === "string" ? row.role.trim().toLowerCase() : "";
+  if (role === "loose" || role === "card" || role === "identity" || role === "derived") return role;
+  return "unresolved";
+}
+
+function propertyEditorIsCheckbox(row) {
+  return Boolean(row && (row.kind === "checkbox" || row.kind === "bool" || row.kind === "boolean"));
+}
+
+function propertyEditorRowId(row, index) {
+  const key = row && typeof row.key === "string" ? row.key : "";
+  const line = row && Number.isInteger(row.line) ? row.line : null;
+  if (line !== null) return `${key}::${line}`;
+  return `${key}::${Number.isInteger(index) ? index : 0}`;
+}
+
+function propertyEditorGroupForRow(row) {
+  const role = propertyEditorRoleOf(row);
+  if (role === "loose") return "loose";
+  if (role === "card") return "card";
+  if (role === "identity") return "identity";
+  return "managed";
+}
+
+// Source order is preserved within each group; duplicate keys stay separate
+// rows keyed by their source line so they remain separately visible.
+function propertyEditorGroupRows(properties) {
+  const rows = Array.isArray(properties) ? properties : [];
+  const groups = { loose: [], card: [], identity: [], managed: [] };
+  rows.forEach((row, index) => {
+    if (!row || typeof row.key !== "string") return;
+    const group = propertyEditorGroupForRow(row);
+    groups[group].push({ id: propertyEditorRowId(row, index), index, group, row });
+  });
+  return PROPERTY_EDITOR_GROUPS.map((group) => ({
+    group,
+    title: PROPERTY_EDITOR_GROUP_TITLES[group],
+    rows: groups[group],
+  })).filter((entry) => entry.rows.length > 0);
+}
+
+function propertyEditorOrderedIds(properties) {
+  const rows = Array.isArray(properties) ? properties : [];
+  return rows
+    .map((row, index) => ({ row, index }))
+    .filter((entry) => entry.row && typeof entry.row.key === "string")
+    .map((entry) => propertyEditorRowId(entry.row, entry.index));
+}
+
+function propertyEditorHeaderModel(input = {}) {
+  const kindLabel = propertyEditorKindLabel(input.noteKind);
+  const path = typeof input.path === "string" ? input.path : "";
+  const count = Number.isInteger(input.count)
+    ? input.count
+    : Array.isArray(input.properties) ? input.properties.length : 0;
+  return {
+    kindLabel,
+    heading: `${kindLabel.toUpperCase()} · PROPERTIES`,
+    title: typeof input.title === "string" && input.title ? input.title : kindLabel,
+    sub: `${path} · ${count} ${count === 1 ? "property" : "properties"}`,
+    path,
+    count,
+  };
+}
+
+// Roles gate every action, not only Enter. Card rows dispatch a typed
+// hand-off intent for the entrypoints phase; identity/derived/unresolved rows
+// are locked with bob's reason/writer and a YAML escape. Loose rows are
+// editable here (checkboxes flip immediately; other kinds open a typed stage
+// in the value-stages phase).
+function propertyEditorActionForRow(row) {
+  const role = propertyEditorRoleOf(row);
+  if (role === "card") {
+    return {
+      action: "handoff",
+      editor: row && typeof row.editor === "string" && row.editor ? row.editor : "==",
+      owner: row && typeof row.owner === "string" ? row.owner : "",
+      key: row ? row.key : "",
+    };
+  }
+  if (role === "loose") {
+    if (propertyEditorIsCheckbox(row)) return { action: "toggle", key: row.key };
+    return { action: "edit", key: row ? row.key : "" };
+  }
+  const reason = row && typeof row.reason === "string" && row.reason
+    ? row.reason
+    : role === "unresolved"
+      ? "Ownership is unresolved; writes stay disabled until bob reports a role."
+      : "This property is managed elsewhere.";
+  const writer = row && typeof row.owner === "string" ? row.owner : "";
+  return { action: "locked", reason, writer, key: row ? row.key : "", yamlEscape: true };
+}
+
+function propertyEditorCanMutate(row) {
+  const decision = propertyEditorActionForRow(row);
+  return decision.action === "toggle" || decision.action === "edit";
+}
+
+// Cache values may paint first but never authorize a mutation: cache rows
+// carry pending:true and stay locked until a validated current report
+// reconciles them.
+function propertyEditorCacheRows(frontmatter) {
+  if (!frontmatter || typeof frontmatter !== "object" || Array.isArray(frontmatter)) return [];
+  return Object.keys(frontmatter).map((key, index) => ({
+    key,
+    value: frontmatter[key],
+    line: null,
+    end_line: null,
+    kind: null,
+    style: null,
+    role: null,
+    owner: null,
+    editor: null,
+    reason: null,
+    duplicate: false,
+    opaque: false,
+    pending: true,
+    cacheIndex: index,
+  }));
+}
+
+function propertyEditorFrontmatterState(report) {
+  if (report && report.frontmatter && typeof report.frontmatter.state === "string") {
+    return report.frontmatter.state;
+  }
+  return "";
+}
+
+function propertyEditorRecoveryIssue(report) {
+  if (!report || typeof report !== "object") return null;
+  const state = propertyEditorFrontmatterState(report);
+  if (state !== "invalid" && state !== "unclosed" && state !== "duplicate") return null;
+  const rows = Array.isArray(report.properties) ? report.properties : [];
+  let line = null;
+  for (const row of rows) {
+    if (row && Number.isInteger(row.line)) {
+      if (line === null || row.line < line) line = row.line;
+    }
+  }
+  if (line === null && report.frontmatter && Number.isInteger(report.frontmatter.start_line)) {
+    line = report.frontmatter.start_line;
+  }
+  return { state, line };
+}
+
+// Degraded states: old bob (cached rows, writes disabled), recovery
+// (diagnostics + source-line target), empty (first-add hint), cache
+// (pre-report paint), or ready. Never invents roles for cache rows.
+function propertyEditorDegradedFor(input = {}) {
+  const capability = input.capability;
+  if (capability === false) {
+    return { mode: "old-bob", writable: false, hint: PROPERTY_EDITOR_OLD_BOB_HINT };
+  }
+  const report = input.report || null;
+  if (!report) {
+    const cacheRows = Array.isArray(input.cacheRows) ? input.cacheRows : [];
+    if (cacheRows.length === 0) return { mode: "empty", writable: false, text: PROPERTY_EDITOR_EMPTY_TEXT };
+    return { mode: "cache", writable: false, hint: PROPERTY_EDITOR_CHECKING_TEXT };
+  }
+  if (report.ok === false) {
+    const code = report.error && typeof report.error.code === "string" ? report.error.code : "";
+    const message = report.error && typeof report.error.message === "string" ? report.error.message : "";
+    const hint = report.error && typeof report.error.hint === "string" ? report.error.hint : "";
+    return { mode: "report-error", writable: false, code, message, hint };
+  }
+  const issue = propertyEditorRecoveryIssue(report);
+  if (issue) {
+    return {
+      mode: "recovery",
+      writable: false,
+      state: issue.state,
+      line: issue.line,
+      text: PROPERTY_EDITOR_RECOVERY_TEXT,
+    };
+  }
+  const rows = Array.isArray(report.properties) ? report.properties : [];
+  if (rows.length === 0) return { mode: "empty", writable: true, text: PROPERTY_EDITOR_EMPTY_TEXT };
+  return { mode: "ready", writable: typeof propertyShowAllowsWrite === "function" ? propertyShowAllowsWrite(report) : false };
+}
+
+function propertyEditorToggleOp(row) {
+  if (!row || typeof row.key !== "string" || !row.key) return null;
+  return { op: "prop.set", key: row.key, value: !(row.value === true) };
+}
+
+function propertyEditorUnsetOp(row) {
+  if (!row || typeof row.key !== "string" || !row.key) return null;
+  return { op: "prop.unset", key: row.key };
+}
+
+function propertyEditorStatusSaved() {
+  return { kind: "saved", text: "✓ Saved · u undo" };
+}
+
+function propertyEditorStatusChecking() {
+  return { kind: "checking", text: PROPERTY_EDITOR_CHECKING_TEXT };
+}
+
+function propertyEditorStatusRefusal(report) {
+  const error = report && typeof report === "object" ? report : {};
+  const model = typeof propertyUpdateErrorModel === "function"
+    ? propertyUpdateErrorModel(error.code ? error : { code: "failed", message: String(error.message || ""), hint: error.hint })
+    : { code: error.code || "failed", hint: error.hint || error.message || "" };
+  return {
+    kind: "refusal",
+    code: error.code || model.code || "failed",
+    message: error.message || model.code || "The property update failed.",
+    hint: error.hint || model.hint || "",
+  };
+}
+// ---- src/298f-plugin-property-editor-modal.js ----
+// Property editor modal on the shared chassis (bob-cli-pf.4.1.2
+// editor-shell). Cache-first grouped rows, role routing, and discrete
+// actions. Mounted internally for tests; public entry-point registration
+// belongs to the entrypoints-yaml phase and must not live here.
+const PropertyEditorModalBase = typeof albumSchemaCardModalBase === "function"
+  ? albumSchemaCardModalBase()
+  : class PropertyEditorFallback {
+    constructor(app) {
+      this.app = app;
+      this.contentEl = { children: [], empty() { this.children = []; }, appendChild(n) { this.children.push(n); return n; } };
+      this.modalEl = this.contentEl;
+      this.containerEl = this.contentEl;
+    }
+    open() { this.onOpen?.(); }
+    close() { this.onClose?.(); }
+  };
+
+function propertyEditorCreateEl(doc, tag, className) {
+  try {
+    if (typeof notebookCreateEl === "function") return notebookCreateEl(doc, tag, className);
+  } catch (_) {}
+  try {
+    if (!doc || typeof doc.createElement !== "function") return null;
+    const el = doc.createElement(tag);
+    if (className) {
+      try { el.setAttribute("class", className); } catch (_) {}
+      try { el.className = className; } catch (_) {}
+    }
+    return el;
+  } catch (_) {
+    return null;
+  }
+}
+
+function propertyEditorSetText(el, text) {
+  try {
+    if (typeof notebookSetText === "function") return notebookSetText(el, text);
+  } catch (_) {}
+  try { if (el) el.textContent = String(text == null ? "" : text); } catch (_) {}
+}
+
+function propertyEditorRowText(row) {
+  try {
+    if (row && row.pending === true) return "…";
+    if (typeof propertyCardFootRowText === "function") {
+      const valueState = row && row.valueState
+        ? row.valueState
+        : row && row.value === null ? "null"
+          : row && row.value === "" ? "empty-string"
+            : Array.isArray(row && row.value) && row.value.length === 0 ? "empty-list"
+              : row && row.value === true ? "true"
+                : row && row.value === false ? "false"
+                  : null;
+      if (valueState) return propertyCardFootRowText({ ...row, valueState });
+    }
+  } catch (_) {}
+  const value = row ? row.value : undefined;
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "string") return value === "" ? "empty" : value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) return value.length === 0 ? "empty list" : value.map((v) => String(v)).join(", ");
+  try { return JSON.stringify(value); } catch (_) { return String(value); }
+}
+
+function propertyEditorBadgeKind(noteKind) {
+  const kind = String(noteKind || "").trim().toLowerCase();
+  if (kind === "record") return "record";
+  if (kind === "album") return "album";
+  if (kind === "bank") return "bank";
+  return null;
+}
+
+class PropertyEditorModal extends PropertyEditorModalBase {
+  constructor(app, options = {}) {
+    super(app);
+    this.propertyPlugin = options.plugin || null;
+    this.filePath = typeof propertyNotePath === "function"
+      ? propertyNotePath(options.filePath || options.path || "")
+      : String(options.filePath || options.path || "");
+    this.mode = options.mode === "edit" || options.mode === "add" ? options.mode : "browse";
+    this.report = options.report && typeof options.report === "object" ? options.report : null;
+    this.cacheRows = Array.isArray(options.cacheRows) ? options.cacheRows : [];
+    this.properties = Array.isArray(options.properties)
+      ? options.properties
+      : this.report && Array.isArray(this.report.properties) ? this.report.properties.slice() : [];
+    this.noteKind = options.noteKind
+      || (this.report && typeof this.report.note_kind === "string" ? this.report.note_kind : "note");
+    this.onCardHandoff = typeof options.onCardHandoff === "function" ? options.onCardHandoff : null;
+    this.onYamlEscape = typeof options.onYamlEscape === "function" ? options.onYamlEscape : null;
+    this.menuOpen = false;
+    this.stage = null;
+    this.filterOpen = false;
+    this.selectedId = typeof options.selectedId === "string" && options.selectedId ? options.selectedId : "";
+    this.status = { kind: "reading", text: propertyEditorStatusChecking().text };
+    this.refusal = null;
+    this.session = null;
+    this.readSeq = 0;
+    this.closed = false;
+    this.closeToken = 0;
+    this.pendingApply = false;
+    this.announce = "";
+    const ids = propertyEditorOrderedIds(this.properties.length ? this.properties : this.cacheRows);
+    if (!this.selectedId && ids.length) this.selectedId = ids[0];
+    if (typeof options.key === "string" && options.key) {
+      const match = (this.properties.length ? this.properties : this.cacheRows)
+        .find((row) => row && row.key === options.key);
+      if (match) {
+        const idx = (this.properties.length ? this.properties : this.cacheRows).indexOf(match);
+        this.selectedId = propertyEditorRowId(match, idx);
+      }
+    }
+  }
+
+  editorDoc() {
+    return this.contentEl?.ownerDocument || this.app?.document
+      || (typeof document !== "undefined" ? document : null);
+  }
+
+  editorReadSeq() {
+    this.readSeq += 1;
+    return this.readSeq;
+  }
+
+  editorLive(seq) {
+    return !this.closed && seq === this.readSeq;
+  }
+
+  editorOrderedRows() {
+    const rows = this.properties.length ? this.properties : this.cacheRows;
+    return rows
+      .map((row, index) => ({ row, index, id: propertyEditorRowId(row, index) }))
+      .filter((entry) => entry.row && typeof entry.row.key === "string");
+  }
+
+  editorSelected() {
+    const ordered = this.editorOrderedRows();
+    if (!ordered.length) return null;
+    const found = ordered.find((entry) => entry.id === this.selectedId);
+    return found || ordered[0];
+  }
+
+  editorEnsureSession() {
+    if (this.session) return this.session;
+    const plugin = this.propertyPlugin;
+    let deps = {
+      spawnPreview: () => Promise.resolve({ ok: false, code: "unavailable", message: "Preview is unavailable." }),
+      spawnApply: () => Promise.resolve({ ok: false, code: "unavailable", message: "Apply is unavailable." }),
+      saveEditors: () => Promise.resolve({ ok: true }),
+      getGeneration: () => 0,
+    };
+    try {
+      if (plugin && typeof propertyUpdateServiceDeps === "function") {
+        deps = propertyUpdateServiceDeps(plugin, {
+          path: this.filePath,
+          onChange: () => { if (!this.closed) this.paintPropertyEditor(); },
+        });
+      }
+    } catch (_) {}
+    const expect = this.report && typeof this.report.fingerprint === "string" ? this.report.fingerprint : "";
+    try {
+      this.session = createPropertyUpdateSession(
+        { path: this.filePath, expect, properties: this.properties },
+        deps,
+      );
+    } catch (_) {
+      this.session = null;
+    }
+    return this.session;
+  }
+
+  editorRebase(fingerprint) {
+    try { this.session?.rebase?.(fingerprint); } catch (_) {}
+  }
+
+  paintPropertyEditor() {
+    if (this.closed) return;
+    const doc = this.editorDoc();
+    if (!doc) return;
+    const caret = this.editorCaptureCaret(doc);
+    let host = null;
+    try { host = this.contentEl?.querySelector?.(".bob-property-editor"); } catch (_) {}
+    if (!host) {
+      try { this.contentEl?.empty?.(); } catch (_) {}
+      host = propertyEditorCreateEl(doc, "div", "bob-property-editor");
+      if (!host) return;
+      try { host.setAttribute("role", "dialog"); } catch (_) {}
+      try { host.setAttribute("aria-label", `Edit properties · ${this.filePath}`); } catch (_) {}
+      try {
+        host.addEventListener?.("click", (event) => this.propertyEditorOnClick(event));
+        host.addEventListener?.("keydown", (event) => this.propertyEditorOnKeyDown(event));
+      } catch (_) {}
+      try { this.contentEl?.appendChild?.(host); } catch (_) {}
+    }
+    try {
+      while (host.firstChild) host.removeChild(host.firstChild);
+    } catch (_) {}
+    try { propertyEditorPaintAll(host, this.propertyEditorPaintOptions(), doc, this); } catch (_) {}
+    this.editorRestoreFocus(doc, caret);
+  }
+
+  propertyEditorPaintOptions() {
+    const rows = this.properties.length ? this.properties : this.cacheRows;
+    const degraded = propertyEditorDegradedFor({
+      capability: this.propertyPlugin?.propertyCapability ?? this.editorCapability(),
+      report: this.report,
+      cacheRows: this.cacheRows,
+    });
+    return {
+      path: this.filePath,
+      noteKind: this.noteKind,
+      header: propertyEditorHeaderModel({ noteKind: this.noteKind, path: this.filePath, count: rows.length }),
+      badgeKind: propertyEditorBadgeKind(this.noteKind),
+      groups: propertyEditorGroupRows(rows),
+      ordered: this.editorOrderedRows(),
+      selectedId: this.selectedId,
+      status: this.status,
+      refusal: this.refusal,
+      announce: this.announce,
+      degraded,
+      filterSlot: PROPERTY_EDITOR_FILTER_SLOT,
+    };
+  }
+
+  editorCapability() {
+    try {
+      if (this.propertyPlugin && typeof this.propertyPlugin.apiPropertyUpdateCapable === "function") {
+        return null;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  editorCaptureCaret(doc) {
+    try {
+      const active = doc?.activeElement;
+      if (!active || typeof active.getAttribute !== "function") return null;
+      const key = active.getAttribute("data-property-key");
+      if (!key) return null;
+      return { key, selectionStart: active.selectionStart ?? null, selectionEnd: active.selectionEnd ?? null };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  editorRestoreFocus(doc, caret) {
+    try {
+      if (caret && caret.key) {
+        const node = this.contentEl?.querySelector?.(`[data-property-key="${caret.key}"]`);
+        if (node && typeof node.focus === "function") {
+          node.focus();
+          return;
+        }
+      }
+      const selected = this.contentEl?.querySelector?.('[aria-current="true"]');
+      if (selected && typeof selected.focus === "function"
+        && (!doc?.activeElement || !this.contentEl?.contains?.(doc.activeElement))) {
+        selected.focus();
+      }
+    } catch (_) {}
+  }
+
+  propertyEditorSelect(id) {
+    const ordered = this.editorOrderedRows();
+    if (!ordered.some((entry) => entry.id === id)) return;
+    this.selectedId = id;
+    this.announce = "";
+    this.paintPropertyEditor();
+  }
+
+  propertyEditorMove(delta) {
+    const ordered = this.editorOrderedRows();
+    if (!ordered.length) return;
+    let index = ordered.findIndex((entry) => entry.id === this.selectedId);
+    if (index < 0) index = 0;
+    const next = Math.max(0, Math.min(ordered.length - 1, index + delta));
+    this.propertyEditorSelect(ordered[next].id);
+  }
+
+  propertyEditorMoveEdge(edge) {
+    const ordered = this.editorOrderedRows();
+    if (!ordered.length) return;
+    this.propertyEditorSelect(edge === "top" ? ordered[0].id : ordered[ordered.length - 1].id);
+  }
+
+  // Reconcile a fresh show report without stealing focus or losing
+  // selection: keep the selected source-line identity when it survives,
+  // otherwise fall back to the nearest surviving row.
+  propertyEditorReconcile(report) {
+    if (this.closed || !report || typeof report !== "object") return;
+    this.report = report;
+    if (typeof report.note_kind === "string" && report.note_kind) this.noteKind = report.note_kind;
+    const rows = Array.isArray(report.properties) ? report.properties.slice() : [];
+    this.properties = rows;
+    try { this.session?.rememberProperties?.(rows); } catch (_) {}
+    if (typeof report.fingerprint === "string" && report.fingerprint) this.editorRebase(report.fingerprint);
+    const ids = new Set(propertyEditorOrderedIds(rows));
+    if (!ids.has(this.selectedId)) {
+      const ordered = this.editorOrderedRows();
+      this.selectedId = ordered.length ? ordered[0].id : "";
+    }
+    if (this.status.kind === "reading" || this.status.kind === "checking") {
+      this.status = rows.length
+        ? { kind: "ready", text: "" }
+        : { kind: "ready", text: PROPERTY_EDITOR_EMPTY_TEXT };
+    }
+    this.paintPropertyEditor();
+  }
+
+  propertyEditorOnClick(event) {
+    try {
+      const target = event?.target?.closest?.("[data-property-key]");
+      if (!target) return;
+      const key = target.getAttribute("data-property-key");
+      const entry = this.editorOrderedRows().find((row) => row.row.key === key
+        && (target.getAttribute("data-property-row") || row.id) === (target.getAttribute("data-property-row") || row.id));
+      const ordered = this.editorOrderedRows();
+      const match = ordered.find((row) => row.id === target.getAttribute("data-property-row"))
+        || ordered.find((row) => row.row.key === key);
+      if (match) this.propertyEditorSelect(match.id);
+      if (event?.detail === 2 || target.getAttribute("data-property-open") === "true") {
+        void this.propertyEditorActivate(match || this.editorSelected());
+      }
+    } catch (_) {}
+  }
+
+  propertyEditorOnKeyDown(event) {
+    let action = null;
+    try {
+      action = propertyEditorKeyAction(event, {
+        inInput: propertyEditorEventInInput(event, this.contentEl),
+      });
+    } catch (_) {}
+    if (!action) return;
+    if (action === "close") {
+      try { event?.preventDefault?.(); } catch (_) {}
+      this.propertyEditorBackOut(event);
+      return;
+    }
+    try { event?.preventDefault?.(); } catch (_) {}
+    void this.propertyEditorPerform(action, event);
+  }
+
+  async propertyEditorPerform(action, event) {
+    if (this.closed) return;
+    if (action === "up") return this.propertyEditorMove(-1);
+    if (action === "down") return this.propertyEditorMove(1);
+    if (action === "top") return this.propertyEditorMoveEdge("top");
+    if (action === "bottom") return this.propertyEditorMoveEdge("bottom");
+    if (action === "open" || action === "toggle") return this.propertyEditorActivate(this.editorSelected());
+    if (action === "delete") return this.propertyEditorDelete(this.editorSelected());
+    if (action === "undo") return this.propertyEditorHistory("undo");
+    if (action === "redo") return this.propertyEditorHistory("redo");
+    if (action === "equals") {
+      this.announce = "Add and filter arrive in later phases; = is reserved here.";
+      return this.paintPropertyEditor();
+    }
+    if (action === "yaml") {
+      try { this.onYamlEscape?.({ path: this.filePath, key: this.editorSelected()?.row?.key || "" }); } catch (_) {}
+      return;
+    }
+    void event;
+  }
+
+  async propertyEditorActivate(entry) {
+    if (!entry || this.pendingApply) return;
+    const row = entry.row;
+    const decision = propertyEditorActionForRow(row);
+    if (decision.action === "handoff") {
+      try {
+        if (this.onCardHandoff) {
+          this.onCardHandoff({ key: row.key, editor: decision.editor, owner: decision.owner, row });
+          return;
+        }
+      } catch (_) {}
+      this.refusal = {
+        code: "card-handoff",
+        message: `“${row.key}” lives on the ${this.noteKind} card.`,
+        hint: "Open it from the card — the typed stage for it arrives in a later phase.",
+      };
+      this.status = { kind: "refusal", text: this.refusal.message };
+      return this.paintPropertyEditor();
+    }
+    if (decision.action === "locked") {
+      this.refusal = { code: "locked", message: decision.reason, hint: "y opens YAML." };
+      this.status = { kind: "refusal", text: decision.reason };
+      return this.paintPropertyEditor();
+    }
+    if (decision.action === "toggle") return this.propertyEditorFlip(entry);
+    this.announce = `“${row.key}” opens a typed stage in the next phase.`;
+    this.status = { kind: "ready", text: "" };
+    return this.paintPropertyEditor();
+  }
+
+  async propertyEditorFlip(entry) {
+    if (!entry || this.pendingApply) return;
+    const op = propertyEditorToggleOp(entry.row);
+    if (!op) return;
+    this.status = propertyEditorStatusChecking();
+    this.refusal = null;
+    this.paintPropertyEditor();
+    const session = this.editorEnsureSession();
+    if (!session) {
+      this.refusal = { code: "unavailable", message: "Property editing is unavailable.", hint: "" };
+      this.status = { kind: "refusal", text: this.refusal.message };
+      return this.paintPropertyEditor();
+    }
+    this.pendingApply = true;
+    let result = null;
+    try {
+      result = await session.applyOps([op]);
+    } catch (error) {
+      result = { ok: false, code: "failed", message: error?.message || "The property update failed." };
+    } finally {
+      this.pendingApply = false;
+    }
+    if (this.closed) return;
+    if (result && result.ok === true) {
+      if (result.report && Array.isArray(result.report.properties)) {
+        this.propertyEditorReconcile({ ...this.report, ...result.report });
+      }
+      this.status = propertyEditorStatusSaved();
+      this.refusal = null;
+    } else {
+      const refusal = propertyEditorStatusRefusal(result && result.report && result.report.error
+        ? result.report.error : result || {});
+      this.refusal = refusal;
+      this.status = { kind: "refusal", text: refusal.message };
+    }
+    this.paintPropertyEditor();
+  }
+
+  async propertyEditorDelete(entry) {
+    if (!entry || this.pendingApply) return;
+    const decision = propertyEditorActionForRow(entry.row);
+    if (decision.action !== "toggle" && decision.action !== "edit") {
+      this.refusal = {
+        code: "locked",
+        message: decision.reason || "This property cannot be deleted here.",
+        hint: "y opens YAML.",
+      };
+      this.status = { kind: "refusal", text: this.refusal.message };
+      return this.paintPropertyEditor();
+    }
+    const op = propertyEditorUnsetOp(entry.row);
+    if (!op) return;
+    this.status = propertyEditorStatusChecking();
+    this.refusal = null;
+    this.paintPropertyEditor();
+    const session = this.editorEnsureSession();
+    if (!session) return;
+    this.pendingApply = true;
+    let result = null;
+    try {
+      result = await session.applyOps([op]);
+    } catch (error) {
+      result = { ok: false, code: "failed", message: error?.message || "The property update failed." };
+    } finally {
+      this.pendingApply = false;
+    }
+    if (this.closed) return;
+    if (result && result.ok === true) {
+      if (result.report && Array.isArray(result.report.properties)) {
+        this.propertyEditorReconcile({ ...this.report, ...result.report });
+      }
+      this.status = propertyEditorStatusSaved();
+      this.refusal = null;
+    } else {
+      const refusal = propertyEditorStatusRefusal(result && result.report && result.report.error
+        ? result.report.error : result || {});
+      this.refusal = refusal;
+      this.status = { kind: "refusal", text: refusal.message };
+    }
+    this.paintPropertyEditor();
+  }
+
+  async propertyEditorHistory(kind) {
+    const session = this.editorEnsureSession();
+    if (!session) return;
+    this.status = propertyEditorStatusChecking();
+    this.paintPropertyEditor();
+    let result = null;
+    try {
+      result = await (kind === "redo" ? session.redo() : session.undo());
+    } catch (error) {
+      result = { ok: false, code: "failed", message: error?.message || "History is unavailable." };
+    }
+    if (this.closed) return;
+    if (result && result.ok === true) {
+      if (result.report && Array.isArray(result.report.properties)) {
+        this.propertyEditorReconcile({ ...this.report, ...result.report });
+      }
+      this.status = propertyEditorStatusSaved();
+      this.refusal = null;
+    } else {
+      const refusal = propertyEditorStatusRefusal(result || {});
+      this.refusal = refusal;
+      this.status = { kind: "refusal", text: refusal.message || "Nothing to undo." };
+    }
+    this.paintPropertyEditor();
+  }
+
+  // Close ladder: open menu, then typed stage, then the reserved filter
+  // layer, then the modal. Esc, q, and Ctrl+[ share it even when focus
+  // strays; q types in text controls and never closes from them.
+  propertyEditorBackOut(event) {
+    if (this.menuOpen) {
+      this.menuOpen = false;
+      this.paintPropertyEditor();
+      return;
+    }
+    if (this.stage) {
+      this.stage = null;
+      this.paintPropertyEditor();
+      return;
+    }
+    if (this.filterOpen) {
+      this.filterOpen = false;
+      this.paintPropertyEditor();
+      return;
+    }
+    try { this.close(); } catch (_) {}
+  }
+
+  onOpen() {
+    this.paintPropertyEditor();
+    try {
+      if (typeof bobCardWireCloseKeys === "function") {
+        bobCardWireCloseKeys(this, { backOut: (event) => this.propertyEditorBackOut(event) });
+      }
+    } catch (_) {}
+    void this.propertyEditorInitialRead();
+  }
+
+  onClose() {
+    this.closed = true;
+    this.closeToken += 1;
+    try {
+      if (typeof bobCardUnwireCloseKeys === "function") bobCardUnwireCloseKeys(this);
+    } catch (_) {}
+    try { this.session?.close?.(); } catch (_) {}
+    this.session = null;
+    this.menuOpen = false;
+    this.stage = null;
+    this.filterOpen = false;
+  }
+
+  async propertyEditorInitialRead() {
+    if (this.closed || this.report) return;
+    const seq = this.editorReadSeq();
+    this.status = propertyEditorStatusChecking();
+    this.paintPropertyEditor();
+    const plugin = this.propertyPlugin;
+    if (!plugin || typeof plugin.apiPropertyShow !== "function") return;
+    let outcome = null;
+    try {
+      outcome = await plugin.apiPropertyShow(this.filePath);
+    } catch (error) {
+      outcome = { ok: false, code: "failed", message: error?.message || "bob props show failed." };
+    }
+    if (!this.editorLive(seq) || this.closed) return;
+    if (outcome && outcome.ok === true && outcome.report) {
+      this.propertyEditorReconcile(outcome.report);
+      return;
+    }
+    const refusal = propertyEditorStatusRefusal(outcome || {});
+    this.refusal = refusal;
+    if (refusal.code === "needs-bob" || refusal.code === "desktop-only") {
+      this.status = { kind: "refusal", text: PROPERTY_EDITOR_OLD_BOB_HINT };
+    } else {
+      this.status = { kind: "refusal", text: refusal.message };
+    }
+    this.paintPropertyEditor();
+  }
+}
+
+function propertyEditorEventInInput(event, root) {
+  try {
+    const target = event?.target;
+    if (!target || typeof target.closest !== "function") return false;
+    if (target.closest("input,select,textarea")) return true;
+    const editable = target.closest("[contenteditable]");
+    if (editable) {
+      const value = typeof editable.getAttribute === "function"
+        ? editable.getAttribute("contenteditable")
+        : editable.contentEditable;
+      if (String(value).toLowerCase() !== "false") return true;
+    }
+    return false;
+  } catch (_) {
+    return false;
+  }
+}
+
+function propertyEditorPaintAll(host, options, doc, modal) {
+  const header = propertyEditorCreateEl(doc, "div", "bob-property-editor-header");
+  if (header) {
+    if (options.badgeKind && typeof propertyCardBuildIdentityBadge === "function") {
+      try {
+        const badge = propertyCardBuildIdentityBadge(doc, { kind: options.badgeKind });
+        if (badge) header.appendChild(badge);
+      } catch (_) {}
+    } else {
+      const tile = propertyEditorCreateEl(doc, "span", "bob-property-editor-tile");
+      propertyEditorSetText(tile, "▤");
+      if (tile) header.appendChild(tile);
+    }
+    const titles = propertyEditorCreateEl(doc, "div", "bob-property-editor-titles");
+    if (titles) {
+      const heading = propertyEditorCreateEl(doc, "h2", "bob-property-editor-heading");
+      propertyEditorSetText(heading, options.header.heading);
+      titles.appendChild(heading);
+      const title = propertyEditorCreateEl(doc, "div", "bob-property-editor-title");
+      propertyEditorSetText(title, options.header.title);
+      titles.appendChild(title);
+      const sub = propertyEditorCreateEl(doc, "div", "bob-property-editor-sub");
+      propertyEditorSetText(sub, options.header.sub);
+      titles.appendChild(sub);
+      header.appendChild(titles);
+    }
+    host.appendChild(header);
+  }
+
+  const degraded = options.degraded || { mode: "ready", writable: true };
+  if (degraded.mode === "old-bob" || degraded.writable === false && degraded.mode === "cache") {
+    const banner = propertyEditorCreateEl(doc, "div", "bob-property-editor-banner");
+    propertyEditorSetText(banner, degraded.mode === "old-bob" ? degraded.hint : PROPERTY_EDITOR_CHECKING_TEXT);
+    if (banner) host.appendChild(banner);
+  }
+  if (degraded.mode === "recovery") {
+    const banner = propertyEditorCreateEl(doc, "div", "bob-property-editor-banner is-recovery");
+    const line = degraded.line !== null && degraded.line !== undefined ? ` · line ${degraded.line}` : "";
+    propertyEditorSetText(banner, `${PROPERTY_EDITOR_RECOVERY_TEXT}${line}`);
+    if (banner) host.appendChild(banner);
+  }
+  if (degraded.mode === "empty") {
+    const empty = propertyEditorCreateEl(doc, "div", "bob-property-editor-empty");
+    propertyEditorSetText(empty, PROPERTY_EDITOR_EMPTY_TEXT);
+    if (empty) host.appendChild(empty);
+  }
+
+  const list = propertyEditorCreateEl(doc, "div", "bob-property-editor-list");
+  if (list) {
+    try { list.setAttribute("role", "listbox"); } catch (_) {}
+    try { list.setAttribute("aria-label", "Properties"); } catch (_) {}
+    for (const group of options.groups || []) {
+      const section = propertyEditorCreateEl(doc, "div", "bob-property-editor-group");
+      if (section) {
+        try { section.setAttribute("data-property-group", group.group); } catch (_) {}
+        const heading = propertyEditorCreateEl(doc, "div", "bob-property-editor-group-title");
+        propertyEditorSetText(heading, group.title);
+        section.appendChild(heading);
+        for (const entry of group.rows) {
+          propertyEditorPaintRow(doc, section, entry, entry.id === options.selectedId, modal);
+        }
+        list.appendChild(section);
+      }
+    }
+    host.appendChild(list);
+  }
+
+  const status = propertyEditorCreateEl(doc, "div", "bob-property-editor-status");
+  if (status) {
+    const text = options.refusal && options.refusal.message
+      ? `${options.refusal.message}${options.refusal.hint ? ` — ${options.refusal.hint}` : ""}`
+      : options.status && options.status.text ? options.status.text : "";
+    propertyEditorSetText(status, text);
+    try {
+      status.setAttribute("role", "status");
+      status.setAttribute("aria-live", "polite");
+    } catch (_) {}
+    host.appendChild(status);
+  }
+
+  const hints = propertyEditorCreateEl(doc, "div", "bob-property-editor-hints");
+  propertyEditorSetText(hints, "j/k move · Enter/l open · Ctrl+D delete · u undo · = add · y YAML · Esc close");
+  if (hints) host.appendChild(hints);
+
+  if (options.announce) {
+    const live = propertyEditorCreateEl(doc, "div", "bob-property-editor-announce");
+    propertyEditorSetText(live, options.announce);
+    try {
+      live.setAttribute("role", "status");
+      live.setAttribute("aria-live", "polite");
+    } catch (_) {}
+    if (live) host.appendChild(live);
+  }
+}
+
+function propertyEditorPaintRow(doc, host, entry, selected, modal) {
+  const row = entry.row;
+  const button = propertyEditorCreateEl(doc, "button", "bob-property-row");
+  if (!button) return;
+  try {
+    button.setAttribute("type", "button");
+    button.setAttribute("data-property-key", row.key);
+    button.setAttribute("data-property-row", entry.id);
+    button.setAttribute("role", "option");
+    button.setAttribute("aria-selected", selected ? "true" : "false");
+    if (selected) button.setAttribute("aria-current", "true");
+    const decision = propertyEditorActionForRow(row);
+    button.setAttribute("data-property-action", decision.action);
+    if (decision.action === "locked") button.setAttribute("aria-disabled", "true");
+  } catch (_) {}
+  const icon = propertyEditorCreateEl(doc, "span", "bob-property-row-icon");
+  propertyEditorSetText(icon, propertyEditorKindIcon(row.kind));
+  if (icon) {
+    try { icon.setAttribute("aria-hidden", "true"); } catch (_) {}
+    button.appendChild(icon);
+  }
+  const key = propertyEditorCreateEl(doc, "span", "bob-property-row-key");
+  propertyEditorSetText(key, row.key);
+  if (key) button.appendChild(key);
+  const value = propertyEditorCreateEl(doc, "span", "bob-property-row-value");
+  propertyEditorSetText(value, propertyEditorRowText(row));
+  if (value) button.appendChild(value);
+  host.appendChild(button);
+  void modal;
+}
+
+function propertyEditorKindIcon(kind) {
+  switch (String(kind || "")) {
+    case "checkbox": return "☑";
+    case "number": return "#";
+    case "date":
+    case "datetime": return "📅";
+    case "list":
+    case "tags":
+    case "aliases": return "☰";
+    case "map": return "{}";
+    case "null":
+    case "opaque": return "◌";
+    default: return "≡";
+  }
+}
+
+// Mount internally for tests: no global command, palette, or drawer hook
+// registration. Public entry points belong to entrypoints-yaml.
+function openPropertyEditor(app, options = {}) {
+  const modal = new PropertyEditorModal(app, options);
+  try { modal.open(); } catch (_) {}
+  return modal;
+}
+// ---- src/298g-plugin-property-editor-keys.js ----
+// Property editor browse keys and discrete-operation intents
+// (bob-cli-pf.4.1.2 editor-shell). DOM-free: key mapping never touches the
+// document; the modal passes its event and input state. Native text undo and
+// typing inside inputs stay separate from browse shortcuts. `=` and y/Ctrl+E
+// are exposed as intents for the later integration phase.
+function propertyEditorKeyIsTypingTarget(event) {
+  try {
+    const target = event?.target;
+    if (!target || typeof target.closest !== "function") return false;
+    if (target.closest("input,select,textarea")) return true;
+    const editable = target.closest("[contenteditable]");
+    if (editable) {
+      const value = typeof editable.getAttribute === "function"
+        ? editable.getAttribute("contenteditable")
+        : editable.contentEditable;
+      if (String(value).toLowerCase() !== "false") return true;
+    }
+    return false;
+  } catch (_) {
+    return false;
+  }
+}
+
+function propertyEditorKeyAction(event, context = {}) {
+  try {
+    if (!event || event.isComposing || event.keyCode === 229) return null;
+    const inInput = context.inInput === true || propertyEditorKeyIsTypingTarget(event);
+    const key = event.key;
+    const ctrl = event.ctrlKey === true;
+    const meta = event.metaKey === true;
+    const alt = event.altKey === true;
+    const shift = event.shiftKey === true;
+    const cmd = ctrl || meta;
+
+    if (key === "Escape") return "close";
+
+    if (inInput) return null;
+
+    if (!ctrl && !meta && !alt && (key === "q" || key === "Q")) return "close";
+    if (ctrl && !meta && !alt && !shift && (event.code === "BracketLeft" || key === "[")) return "close";
+
+    if (!ctrl && !meta && !alt && key === "j") return "down";
+    if (!ctrl && !meta && !alt && key === "k") return "up";
+    if (!ctrl && !meta && !alt && key === "l") return "open";
+    if (!ctrl && !meta && !alt && key === "g") return "top";
+    if (!ctrl && !meta && !alt && key === "G") return "bottom";
+    if (!ctrl && !meta && !alt && key === "u") return "undo";
+    if (!ctrl && !meta && !alt && (key === "=")) return "equals";
+    if (!ctrl && !meta && !alt && (key === "y" || key === "Y")) return "yaml";
+    if (key === "ArrowDown" && !meta && !alt) {
+      if (ctrl && shift) return null;
+      if (ctrl) return "down";
+      if (!shift) return "down";
+      return null;
+    }
+    if (key === "ArrowUp" && !meta && !alt) {
+      if (ctrl) return "up";
+      if (!shift) return "up";
+      return null;
+    }
+    if (key === "Home" && !ctrl && !meta && !alt) return "top";
+    if (key === "End" && !ctrl && !meta && !alt) return "bottom";
+    if (ctrl && !meta && !alt && !shift && (key === "n" || key === "N")) return "down";
+    if (ctrl && !meta && !alt && !shift && (key === "p" || key === "P")) return "up";
+    if (key === "Enter" && !ctrl && !meta && !alt) return "open";
+    if (ctrl && !meta && !alt && !shift && (key === "d" || key === "D")) return "delete";
+    if ((cmd && !alt && !shift && (key === "Backspace" || key === "Delete"))
+      || (!ctrl && !meta && alt && key === "Backspace")) return "delete";
+    if (!ctrl && !meta && !alt && (key === "u" || key === "U")) return "undo";
+    if (ctrl && !meta && !alt && !shift && (key === "z" || key === "Z")) return "undo";
+    if (ctrl && !meta && !alt && !shift && (key === "r" || key === "R")) return "redo";
+    if (ctrl && !meta && !alt && shift && (key === "Z" || key === "z")) return "redo";
+    if (ctrl && !meta && !alt && (key === "e" || key === "E")) return "yaml";
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
+
+// Close-ladder order for tests and the modal: menu, typed stage, reserved
+// filter layer, modal.
+function propertyEditorCloseLadder(state = {}) {
+  if (state.menuOpen === true) return "menu";
+  if (state.stage) return "stage";
+  if (state.filterOpen === true) return "filter";
+  return "modal";
+}
 // ---- src/293-keep-inbox-render.js ----
 // Keep inbox render (keep-indicator-view): DOM for the `bob-keep-inbox`
 // status-bar item. Pure DOM helpers plus one paint entry point; no spawn,
@@ -173272,7 +174354,8 @@ try {
   }
 } catch (_) {}
 // ---- src/379-exports-property-editor.js ----
-// Test-facing exports for the props v1 client, guarded session, history, and overlays.
+// Test-facing exports for the props v1 client, guarded session, history,
+// overlays, and the editor-shell modal (grouped rows, role routing, keys).
 try {
   if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
     module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
@@ -173306,6 +174389,45 @@ try {
       createPropertyOverlayStore,
       createPropertyUpdateSession,
       propertyUpdateServiceDeps,
+      PROPERTY_EDITOR_GROUPS,
+      PROPERTY_EDITOR_GROUP_TITLES,
+      PROPERTY_EDITOR_OLD_BOB_HINT,
+      PROPERTY_EDITOR_EMPTY_TEXT,
+      PROPERTY_EDITOR_CHECKING_TEXT,
+      PROPERTY_EDITOR_RECOVERY_TEXT,
+      PROPERTY_EDITOR_FILTER_SLOT,
+      propertyEditorKindLabel,
+      propertyEditorRoleOf,
+      propertyEditorIsCheckbox,
+      propertyEditorRowId,
+      propertyEditorGroupForRow,
+      propertyEditorGroupRows,
+      propertyEditorOrderedIds,
+      propertyEditorHeaderModel,
+      propertyEditorActionForRow,
+      propertyEditorCanMutate,
+      propertyEditorCacheRows,
+      propertyEditorFrontmatterState,
+      propertyEditorRecoveryIssue,
+      propertyEditorDegradedFor,
+      propertyEditorToggleOp,
+      propertyEditorUnsetOp,
+      propertyEditorStatusSaved,
+      propertyEditorStatusChecking,
+      propertyEditorStatusRefusal,
+      propertyEditorKeyAction,
+      propertyEditorKeyIsTypingTarget,
+      propertyEditorCloseLadder,
+      propertyEditorCreateEl,
+      propertyEditorSetText,
+      propertyEditorRowText,
+      propertyEditorBadgeKind,
+      PropertyEditorModal,
+      propertyEditorPaintAll,
+      propertyEditorPaintRow,
+      propertyEditorKindIcon,
+      propertyEditorEventInInput,
+      openPropertyEditor,
     });
   }
 } catch (_) {}

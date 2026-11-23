@@ -172124,6 +172124,7 @@ propertyEditorPaintAll = function propertyEditorPaintAllWithSelectionFilter(host
   if (options.filterOpen) {
     const filter = propertyEditorCreateEl(doc, "div", "bob-property-editor-filter");
     const label = propertyEditorCreateEl(doc, "label", "bob-property-editor-filter-label");
+    // bob-text: literal property key/value filter
     const input = propertyEditorCreateEl(doc, "input", "bob-property-editor-filter-input");
     propertyEditorSetText(label, "Filter properties");
     if (input) {

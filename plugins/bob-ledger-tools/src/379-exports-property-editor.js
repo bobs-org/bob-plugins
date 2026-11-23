@@ -183,6 +183,22 @@ try {
       propertyEditorClipboardProbeNewKey,
       propertyEditorClipboardKeyAction,
       propertyEditorPaintYamlStage,
+      PROPERTY_EDITOR_CONVERT_KINDS,
+      PROPERTY_EDITOR_CONVERT_CREATED_WARNING,
+      PROPERTY_EDITOR_CONVERT_ALL_PROPERTIES_HINT,
+      propertyEditorConvertKindLabel,
+      propertyEditorConvertFormatValue,
+      propertyEditorConvertWireKind,
+      propertyEditorConvertWireToObsidianType,
+      propertyEditorObsidianTypeLabel,
+      propertyEditorConvertInferredKind,
+      propertyEditorConvertPreview,
+      propertyEditorConvertStageBuild,
+      propertyEditorDetectTypeManager,
+      propertyEditorApplyVaultType,
+      propertyEditorConvertCountKeyUses,
+      propertyEditorConvertVaultConfirmText,
+      propertyEditorPaintConvertStage,
     });
   }
 } catch (_) {}

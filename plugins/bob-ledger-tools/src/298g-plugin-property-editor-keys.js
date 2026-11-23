@@ -42,6 +42,7 @@ function propertyEditorKeyAction(event, context = {}) {
     if (alt && !ctrl && !meta && (key === "j" || key === "J" || key === "ArrowDown")) return "move-down";
     if (alt && !ctrl && !meta && (key === "k" || key === "K" || key === "ArrowUp")) return "move-up";
     if (!ctrl && !meta && !alt && (key === "r" || key === "R")) return "rename";
+    if (!ctrl && !meta && !alt && (key === "t" || key === "T")) return "kind";
 
     if (!ctrl && !meta && !alt && (key === "q" || key === "Q")) return "close";
     if (ctrl && !meta && !alt && !shift && (event.code === "BracketLeft" || key === "[")) return "close";

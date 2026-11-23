@@ -13067,6 +13067,26 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
 .bob-property-editor-clipboard-value-text { overflow-wrap: anywhere; white-space: pre-wrap; }
 .bob-property-editor-clipboard-row.is-skipped { opacity: 0.75; }
 .bob-property-editor-clipboard-row.is-blocked { border-color: var(--text-error); }
+.bob-property-editor-kind-current,
+.bob-property-editor-kind-vault { display: grid; gap: 0.4em; }
+.bob-property-editor-kind-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35em;
+}
+.bob-property-editor-kind-choice {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 999px;
+  padding: 0.35em 0.75em;
+  min-height: 2.1em;
+  color: var(--text-normal);
+  background: var(--background-primary);
+  font-size: var(--font-ui-small);
+}
+.bob-property-editor-kind-choice.is-selected,
+.bob-property-editor-kind-choice[aria-pressed="true"] {
+  border-color: var(--interactive-accent);
+}
 @media (max-width: 420px) {
   .bob-property-editor-stage { padding: 0.65em; }
   .bob-property-editor-stage-actions > button { flex: 1 1 auto; min-width: 7em; }

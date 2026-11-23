@@ -61,6 +61,7 @@ These keys act while browsing the rows, not while typing in a value field.
 | Enter / `l` | Edit a loose value (maps and opaque values open the YAML stage), flip a loose checkbox, or hand off a card field |
 | `o` / `O` / Mod+; | Add below, above, or at the end |
 | `r` | Rename the focused property |
+| `t` | Change this value's kind, with a separate vault-type confirmation |
 | Alt+J / Alt+↓, Alt+K / Alt+↑ | Move the focused property down or up in source order |
 | Ctrl+D / Mod+Backspace | Delete marked rows together, or the focused row |
 | Space | Mark or unmark the focused row for batch actions |
@@ -86,8 +87,8 @@ the range anchor, so rows hidden by a filter cannot remain selected for deletion
 Enter or ↓ in the filter returns focus to matching rows; with no matches, the
 editor announces the empty result and keeps a stable keyboard target. Esc clears
 the filter layer before closing the editor. The All actions menu exposes these
-gestures, rename, source-order moves, YAML editing, and batch deletion; reorder
-actions are disabled while a filter query is active.
+gestures, rename, kind conversion, source-order moves, YAML editing, and batch
+deletion; reorder actions are disabled while a filter query is active.
 
 Ctrl+D / Mod+Backspace deletes marked rows together as one undoable update. With
 no marks, it deletes the focused visible row. A selection containing a card,
@@ -208,5 +209,33 @@ the current report—not cached metadata—authorizes mutations.
 
 The editor supports viewing, value edits, add, rename, source-order reorder,
 delete, undo/redo, ownership hand-off, YAML return, multi-select, filtering,
-batch deletion, and YAML copy/paste. Property-kind changes complete the
-remaining native-Properties parity work.
+batch deletion, YAML copy/paste, and kind conversion.
+
+## Kind conversion
+
+`t` opens a conversion stage on a loose property. It shows the current kind
+and value, destination types (text, number, checkbox, date, date & time, list,
+tags, aliases, and map/YAML), and a preview of the converted value. Safe
+scalar conversions, a single text value to a one-item list, and validated
+date/datetime tokens convert through the existing parsers. Ambiguous or
+destructive conversions keep an editable field instead of guessing. Null,
+empty, false, and zero stay distinct; list order is preserved; tags and
+aliases stay key-specific. Map and opaque values convert through the YAML
+stage. Bob infers kind from the stored YAML, so a date-looking string written
+as text is still reported as date.
+
+Note-local conversion writes `prop.set` with the supported kind, or
+`prop.set_yaml` via the YAML stage, through the standard preview, apply, and
+history flow. It never changes the vault's property type. Converting
+`created` to datetime warns that Obsidian's datetime widget can strip
+offsets; Bob still preserves the stored offset style.
+
+**Change vault property type** is a separate action in the same stage. The
+editor feature-detects `app.metadataTypeManager.setType` and counts distinct
+notes that contain the key. Confirmation names the key, proposed type, and
+note count, then rechecks both before applying. A missing, throwing, or
+unusable manager explains how to use All Properties and makes no global
+change. Vault type mutation is not a property undo token: `u` undoes this
+note's value, not the vault type. Local conversion and the vault confirmation
+are separate submissions. Changing the vault type does not rewrite other
+notes' values. The editor never writes `.obsidian/types.json` itself.

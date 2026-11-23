@@ -35340,7 +35340,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.setupWorkspaceScrollGuard();
     this.setupNotebookData(); this.setupAlbumData(); this.setupProjectsData(); this.setupAreasData(); this.setupBankData(); this.setupBankActions(); this.setupBankWalk();
     this.setupBankCards(); this.setupBankBadge(); this.setupBankMarks(); this.setupBankSetup(); this.setupBankSetupCard(); this.setupSchemaDoubleEquals?.();
-    this.setupNotebookCatalog(); this.setupAlbumCatalog(); this.setupProjectsCatalog(); this.setupAreasCatalog(); this.setupAlbumRecords(); this.setupNotebookHeader(); this.setupAlbumHeader(); this.setupRecordSheet?.(); this.setupIntentionCard?.(); this.setupIntentionUpdate?.(); this.setupIntentionCardEditor?.(); this.setupIntentionCardNavigation?.(); this.setupRecordUpdate?.(); this.setupRecordCard?.(); this.setupSubscriptionSurfaces(); this.setupAlbumSchemaEntrypoints?.(); this.setupAlbumYamlExcursion?.();
+    this.setupNotebookCatalog(); this.setupAlbumCatalog(); this.setupProjectsCatalog(); this.setupAreasCatalog(); this.setupAlbumRecords(); this.setupNotebookHeader(); this.setupAlbumHeader(); this.setupRecordSheet?.(); this.setupIntentionCard?.(); this.setupIntentionUpdate?.(); this.setupIntentionCardEditor?.(); this.setupIntentionCardNavigation?.(); this.setupRecordUpdate?.(); this.setupPropertyUpdate?.(); this.setupRecordCard?.(); this.setupSubscriptionSurfaces(); this.setupAlbumSchemaEntrypoints?.(); this.setupAlbumYamlExcursion?.();
     this.setupReadingBoardBlock();
   }
 
@@ -35466,7 +35466,7 @@ BobLedgerToolsPlugin.prototype.teardownLedgerToolsSurfaces = function () {
     } catch (error) {
       // Reading Board data teardown is best-effort.
     }
-    try { this.teardownRecordCard?.(); this.teardownRecordUpdate?.(); this.teardownRecordSheet?.(); this.teardownIntentionCardNavigation?.(); this.teardownIntentionCardEditor?.(); this.teardownIntentionUpdate?.(); this.teardownIntentionCard?.(); this.teardownSubscriptionSurfaces(); this.teardownAlbumHeader(); this.teardownNotebookHeader(); this.teardownAlbumYamlExcursion?.(); this.teardownAlbumSchemaEntrypoints?.(); } catch (error) {}
+    try { this.teardownRecordCard?.(); this.teardownRecordUpdate?.(); this.teardownPropertyUpdate?.(); this.teardownRecordSheet?.(); this.teardownIntentionCardNavigation?.(); this.teardownIntentionCardEditor?.(); this.teardownIntentionUpdate?.(); this.teardownIntentionCard?.(); this.teardownSubscriptionSurfaces(); this.teardownAlbumHeader(); this.teardownNotebookHeader(); this.teardownAlbumYamlExcursion?.(); this.teardownAlbumSchemaEntrypoints?.(); } catch (error) {}
     try { propertyCardAdoptReleaseAll(); } catch (_) {}
     try { propertyCardTitleSlotReleaseAll(); } catch (_) {}
     try { propertyCardFrontmatterReleaseAll(); } catch (_) {}
@@ -165298,6 +165298,1265 @@ if (typeof IntentionCardModal !== "undefined" && IntentionCardModal && !Intentio
     return intentionCardEditorHandleAction.call(this, action, payload);
   };
 }
+// ---- src/298-plugin-property-protocol.js ----
+// Props v1 client: argv, envelope, and show/update decoders for `bob props`.
+// Recovery show reports (null fingerprint) are accepted for rendering and
+// never authorize a write. Unknown-subcommand output from an old bob is the
+// only exit-2 that means capability unavailable.
+const PROPERTY_UPDATE_SCHEMA_VERSION = 1;
+const PROPERTY_UPDATE_TIMEOUT_MS = BOB_SPAWN_TIMEOUT_MS;
+const PROPERTY_UPDATE_MAX_BUFFER = BOB_SPAWN_MAX_BUFFER;
+const PROPERTY_UPDATE_PREVIEW_DEBOUNCE_MS = 250;
+const PROPERTY_HISTORY_LIMIT = 20;
+const PROPERTY_OVERLAY_TTL_MS = 5000;
+const PROPERTY_CAPABILITY = "props_v1";
+
+function propertyJsonObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function propertyNullableString(value) {
+  return value === null || value === undefined || typeof value === "string";
+}
+
+function propertyNullableLine(value) {
+  return value === null || value === undefined || (Number.isInteger(value) && value >= 0);
+}
+
+function propertyCloneJson(value) {
+  if (value === undefined) return undefined;
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch (_) {
+    return value;
+  }
+}
+
+function propertyNotePath(value) {
+  if (typeof albumReportPath === "function") {
+    return albumReportPath(value);
+  }
+  const path = typeof value === "string"
+    ? value
+    : value && typeof value.path === "string"
+      ? value.path
+      : "";
+  return path.replace(/\\/g, "/").replace(/^\.\//, "");
+}
+
+function propertyShowArgs(notePath) {
+  return ["props", "show", String(notePath || ""), "-f", "json"];
+}
+
+function propertyUpdateArgs(notePath, options = {}) {
+  const opts = propertyJsonObject(options) ? options : {};
+  const args = ["props", "update", String(notePath || ""), "-f", "json", "-i", "-"];
+  if (opts.dryRun === true) args.push("-d");
+  return args;
+}
+
+function propertyUpdateEnvelope(expect, ops) {
+  return {
+    schema_version: PROPERTY_UPDATE_SCHEMA_VERSION,
+    expect: String(expect || ""),
+    ops: Array.isArray(ops) ? ops : [],
+  };
+}
+
+function propertyUpdateEnvelopeText(expect, ops) {
+  return JSON.stringify(propertyUpdateEnvelope(expect, ops));
+}
+
+function propertyIsStaleUpdateCode(code) {
+  return code === "prop_stale";
+}
+
+function propertyHasCapability(report) {
+  return Boolean(
+    propertyJsonObject(report) &&
+    Array.isArray(report.capabilities) &&
+    report.capabilities.includes(PROPERTY_CAPABILITY),
+  );
+}
+
+function propertyFingerprintOf(report) {
+  if (!propertyJsonObject(report)) return "";
+  if (typeof report.fingerprint === "string" && report.fingerprint) return report.fingerprint;
+  return "";
+}
+
+function propertyShowAllowsWrite(report) {
+  return propertyHasCapability(report) && Boolean(propertyFingerprintOf(report));
+}
+
+function propertyErrorShape(error) {
+  if (error === null || error === undefined) return true;
+  if (!propertyJsonObject(error)) return false;
+  if (typeof error.code !== "string" || !error.code) return false;
+  if (typeof error.message !== "string") return false;
+  return propertyNullableString(error.hint) &&
+    propertyNullableString(error.key) &&
+    propertyNullableLine(error.line) &&
+    (error.op_index === undefined || error.op_index === null || Number.isInteger(error.op_index));
+}
+
+function propertyFrontmatterShape(frontmatter) {
+  if (!propertyJsonObject(frontmatter)) return false;
+  if (typeof frontmatter.state !== "string" || !frontmatter.state) return false;
+  return propertyNullableLine(frontmatter.start_line) && propertyNullableLine(frontmatter.end_line);
+}
+
+function propertyRowShape(row) {
+  if (!propertyJsonObject(row)) return false;
+  if (typeof row.key !== "string") return false;
+  if (row.line !== undefined && !propertyNullableLine(row.line)) return false;
+  if (row.end_line !== undefined && !propertyNullableLine(row.end_line)) return false;
+  if (row.kind !== undefined && row.kind !== null && typeof row.kind !== "string") return false;
+  if (row.style !== undefined && row.style !== null && !propertyJsonObject(row.style)) return false;
+  if (row.role !== undefined && !propertyNullableString(row.role)) return false;
+  if (row.owner !== undefined && !propertyNullableString(row.owner)) return false;
+  if (row.editor !== undefined && !propertyNullableString(row.editor)) return false;
+  if (row.reason !== undefined && !propertyNullableString(row.reason)) return false;
+  if (row.duplicate !== undefined && typeof row.duplicate !== "boolean") return false;
+  if (row.opaque !== undefined && typeof row.opaque !== "boolean") return false;
+  return true;
+}
+
+function propertyRowsShape(rows) {
+  return Array.isArray(rows) && rows.every(propertyRowShape);
+}
+
+function propertyShowReportShape(body) {
+  if (!propertyJsonObject(body) || body.schema_version !== PROPERTY_UPDATE_SCHEMA_VERSION) return false;
+  if (typeof body.ok !== "boolean") return false;
+  if (body.ok === false) return propertyErrorShape(body.error);
+  if (typeof body.path !== "string") return false;
+  if (typeof body.note_kind !== "string") return false;
+  if (!Array.isArray(body.capabilities)) return false;
+  if (!(typeof body.fingerprint === "string" || body.fingerprint === null)) return false;
+  if (!propertyFrontmatterShape(body.frontmatter)) return false;
+  return propertyRowsShape(body.properties);
+}
+
+function propertyUpdateReportShape(body) {
+  if (!propertyJsonObject(body) || body.schema_version !== PROPERTY_UPDATE_SCHEMA_VERSION) return false;
+  if (typeof body.ok !== "boolean") return false;
+  if (body.ok === false) {
+    if (body.dry_run !== undefined && typeof body.dry_run !== "boolean") return false;
+    if (body.changed !== undefined && typeof body.changed !== "boolean") return false;
+    if (body.path !== undefined && typeof body.path !== "string") return false;
+    return propertyErrorShape(body.error);
+  }
+  if (typeof body.path !== "string") return false;
+  if (typeof body.dry_run !== "boolean") return false;
+  if (typeof body.changed !== "boolean") return false;
+  if (typeof body.fingerprint_before !== "string" || typeof body.fingerprint_after !== "string") return false;
+  if (!Array.isArray(body.inverse_ops) || !Array.isArray(body.changes)) return false;
+  return propertyRowsShape(body.properties);
+}
+
+// Only an exit-2 usage error whose own text disowns the `props` subcommand
+// counts as an old bob. Real validation failures also exit 2.
+function propertyIsUnsupportedOutput(stdout, stderr, exitCode) {
+  if (exitCode !== 2) return false;
+  const text = `${String(stdout || "")}\n${String(stderr || "")}`;
+  if (!/\bprops\b/i.test(text)) return false;
+  return /unknown (subcommand|command)|unrecognized|no such (subcommand|command)|invalid subcommand/i.test(text);
+}
+
+function propertyUnsupportedResult(commandLabel, stdout, stderr, exitCode) {
+  return {
+    ok: false,
+    code: "needs-bob",
+    message: `This bob does not support \`${commandLabel}\`.`,
+    detail: (typeof statsFirstLine === "function" ? statsFirstLine(stderr) : "") ||
+      (typeof statsFirstLine === "function" ? statsFirstLine(stdout) : String(stderr || stdout || "")),
+    exitCode,
+  };
+}
+
+function propertyDecodeFailure(code, message, stderr, exitCode) {
+  return {
+    ok: false,
+    code,
+    message,
+    detail: typeof statsFirstLine === "function" ? statsFirstLine(stderr) : String(stderr || ""),
+    exitCode,
+  };
+}
+
+function propertyParseJson(stdout) {
+  return JSON.parse(String(stdout === undefined ? "" : stdout));
+}
+
+function propertyDecodeShowReport(stdout, stderr = "", exitCode = null) {
+  if (propertyIsUnsupportedOutput(stdout, stderr, exitCode)) {
+    return propertyUnsupportedResult("bob props show", stdout, stderr, exitCode);
+  }
+  let body;
+  try {
+    body = propertyParseJson(stdout);
+  } catch (error) {
+    return propertyDecodeFailure("bad-json", "bob props show returned invalid JSON.", stderr, exitCode);
+  }
+  if (!propertyShowReportShape(body)) {
+    if (propertyJsonObject(body) && body.schema_version !== PROPERTY_UPDATE_SCHEMA_VERSION) {
+      return propertyDecodeFailure("schema-mismatch", "bob props show uses a different schema.", stderr, exitCode);
+    }
+    return propertyDecodeFailure("bad-shape", "bob props show returned an incomplete report.", stderr, exitCode);
+  }
+  if (body.ok === false) {
+    return { ok: true, report: { ...body, ok: false }, exitCode };
+  }
+  return { ok: true, report: { ...body, ok: true }, exitCode };
+}
+
+function propertyDecodeUpdateReport(stdout, stderr = "", exitCode = null) {
+  if (propertyIsUnsupportedOutput(stdout, stderr, exitCode)) {
+    return propertyUnsupportedResult("bob props update", stdout, stderr, exitCode);
+  }
+  let body;
+  try {
+    body = propertyParseJson(stdout);
+  } catch (error) {
+    return propertyDecodeFailure("bad-json", "bob props update returned invalid JSON.", stderr, exitCode);
+  }
+  if (!propertyUpdateReportShape(body)) {
+    if (propertyJsonObject(body) && body.schema_version !== PROPERTY_UPDATE_SCHEMA_VERSION) {
+      return propertyDecodeFailure("schema-mismatch", "bob props update uses a different schema.", stderr, exitCode);
+    }
+    return propertyDecodeFailure("bad-shape", "bob props update returned an incomplete report.", stderr, exitCode);
+  }
+  return { ok: true, report: body, exitCode };
+}
+
+function propertyUpdateErrorModel(result) {
+  const source = propertyJsonObject(result) ? result : { code: "failed" };
+  const code = typeof source.code === "string" ? source.code : "failed";
+  if (code === "bob-not-found" && /needs the desktop app/i.test(String(source.message || ""))) {
+    return { code: "desktop-only", hint: "Property editing needs desktop Obsidian, where bob can run." };
+  }
+  if (code === "bob-not-found" || code === "needs-bob") {
+    return { code, hint: "Update bob to edit properties here — y opens YAML." };
+  }
+  if (code === "timeout") {
+    return { code, hint: "bob props update timed out. Refresh and reconcile before retrying; never blind-retry." };
+  }
+  if (code === "stdin-failed") {
+    return { code, hint: "The update envelope never reached bob. Nothing was written; preview again." };
+  }
+  if (code === "schema-mismatch" || code === "bad-json" || code === "bad-shape") {
+    return { code, hint: "Update bob-cli and Bob Ledger Tools together, then retry." };
+  }
+  if (code === "prop_stale") {
+    return { code, hint: source.hint || "Re-read the note and preview the retained draft against the current fingerprint." };
+  }
+  return {
+    code,
+    hint: source.detail || source.hint || source.message || "The property update failed. Refresh before retrying.",
+  };
+}
+
+function propertyDeletedKeys(beforeProperties, afterProperties) {
+  const afterKeys = new Set();
+  for (const row of Array.isArray(afterProperties) ? afterProperties : []) {
+    if (row && typeof row.key === "string") afterKeys.add(row.key);
+  }
+  const deleted = [];
+  for (const row of Array.isArray(beforeProperties) ? beforeProperties : []) {
+    if (row && typeof row.key === "string" && row.key && !afterKeys.has(row.key) && !deleted.includes(row.key)) {
+      deleted.push(row.key);
+    }
+  }
+  return deleted;
+}
+
+function propertyOverlayBeforeFromProperties(properties) {
+  return {
+    properties: propertyCloneJson(Array.isArray(properties) ? properties : []) || [],
+    deletedKeys: [],
+  };
+}
+
+function propertyOverlayFromReport(report, beforeProperties) {
+  const properties = propertyCloneJson(Array.isArray(report && report.properties) ? report.properties : []) || [];
+  return {
+    properties,
+    deletedKeys: propertyDeletedKeys(beforeProperties, properties),
+    fingerprint: report && typeof report.fingerprint_after === "string" ? report.fingerprint_after : "",
+    before: propertyOverlayBeforeFromProperties(beforeProperties),
+  };
+}
+
+function propertyOverlayPaintFrontmatter(frontmatter, overlay) {
+  const base = frontmatter && typeof frontmatter === "object" && !Array.isArray(frontmatter)
+    ? { ...frontmatter }
+    : {};
+  if (!overlay || typeof overlay !== "object") return base;
+  const next = { ...base };
+  if (Array.isArray(overlay.deletedKeys)) {
+    for (const key of overlay.deletedKeys) {
+      if (typeof key === "string" && key) delete next[key];
+    }
+  }
+  if (Array.isArray(overlay.properties)) {
+    for (const row of overlay.properties) {
+      if (!row || typeof row.key !== "string" || !row.key) continue;
+      next[row.key] = row.value;
+    }
+  }
+  return next;
+}
+// ---- src/298a-plugin-property-history.js ----
+// Session-only per-path undo/redo stacks for props writes. Entries keep the
+// inverse batch and the fingerprint that batch expects; that expect is never
+// rewritten to the current fingerprint. New successful edits clear redo.
+// No-op, failed, and stale applies do not consume history.
+function propertyHistoryEntry(inverseOps, expect) {
+  const ops = Array.isArray(inverseOps) ? propertyCloneJson(inverseOps) : [];
+  if (!Array.isArray(ops) || ops.length === 0) return null;
+  return {
+    inverseOps: ops,
+    expect: typeof expect === "string" ? expect : "",
+  };
+}
+
+function createPropertyHistory(options = {}) {
+  const limit = Number.isInteger(options.limit) && options.limit > 0
+    ? options.limit
+    : PROPERTY_HISTORY_LIMIT;
+  const stacks = new Map();
+
+  function keyOf(path) {
+    return propertyNotePath(path);
+  }
+
+  function bucket(path, create) {
+    const key = keyOf(path);
+    if (!key) return null;
+    let entry = stacks.get(key);
+    if (!entry && create) {
+      entry = { undo: [], redo: [] };
+      stacks.set(key, entry);
+    }
+    return entry;
+  }
+
+  function bound(list) {
+    while (list.length > limit) list.shift();
+  }
+
+  function snapshot(path) {
+    const entry = bucket(path, false);
+    return {
+      undo: entry ? entry.undo.length : 0,
+      redo: entry ? entry.redo.length : 0,
+    };
+  }
+
+  function peekUndo(path) {
+    const entry = bucket(path, false);
+    if (!entry || entry.undo.length === 0) return null;
+    return entry.undo[entry.undo.length - 1];
+  }
+
+  function peekRedo(path) {
+    const entry = bucket(path, false);
+    if (!entry || entry.redo.length === 0) return null;
+    return entry.redo[entry.redo.length - 1];
+  }
+
+  function pushEdit(path, inverseOps, expect) {
+    const record = propertyHistoryEntry(inverseOps, expect);
+    if (!record) return snapshot(path);
+    const entry = bucket(path, true);
+    if (!entry) return snapshot(path);
+    entry.undo.push(record);
+    bound(entry.undo);
+    entry.redo = [];
+    return snapshot(path);
+  }
+
+  function popUndo(path) {
+    const entry = bucket(path, false);
+    if (!entry || entry.undo.length === 0) return null;
+    return entry.undo.pop();
+  }
+
+  function popRedo(path) {
+    const entry = bucket(path, false);
+    if (!entry || entry.redo.length === 0) return null;
+    return entry.redo.pop();
+  }
+
+  function restoreUndo(path, record) {
+    if (!record || !Array.isArray(record.inverseOps) || record.inverseOps.length === 0) {
+      return snapshot(path);
+    }
+    const entry = bucket(path, true);
+    if (!entry) return snapshot(path);
+    entry.undo.push({
+      inverseOps: propertyCloneJson(record.inverseOps),
+      expect: typeof record.expect === "string" ? record.expect : "",
+    });
+    bound(entry.undo);
+    return snapshot(path);
+  }
+
+  function restoreRedo(path, record) {
+    if (!record || !Array.isArray(record.inverseOps) || record.inverseOps.length === 0) {
+      return snapshot(path);
+    }
+    const entry = bucket(path, true);
+    if (!entry) return snapshot(path);
+    entry.redo.push({
+      inverseOps: propertyCloneJson(record.inverseOps),
+      expect: typeof record.expect === "string" ? record.expect : "",
+    });
+    bound(entry.redo);
+    return snapshot(path);
+  }
+
+  function completeUndo(path, inverseOps, expect) {
+    const record = propertyHistoryEntry(inverseOps, expect);
+    if (!record) return snapshot(path);
+    const entry = bucket(path, true);
+    if (!entry) return snapshot(path);
+    entry.redo.push(record);
+    bound(entry.redo);
+    return snapshot(path);
+  }
+
+  function completeRedo(path, inverseOps, expect) {
+    const record = propertyHistoryEntry(inverseOps, expect);
+    if (!record) return snapshot(path);
+    const entry = bucket(path, true);
+    if (!entry) return snapshot(path);
+    entry.undo.push(record);
+    bound(entry.undo);
+    return snapshot(path);
+  }
+
+  function migrate(fromPath, toPath) {
+    const from = keyOf(fromPath);
+    const to = keyOf(toPath);
+    if (!from || from === to) return;
+    const entry = stacks.get(from);
+    stacks.delete(from);
+    if (!to) return;
+    if (entry) stacks.set(to, entry);
+  }
+
+  function release(path) {
+    const key = keyOf(path);
+    if (key) stacks.delete(key);
+  }
+
+  function clear() {
+    stacks.clear();
+  }
+
+  return {
+    limit,
+    snapshot,
+    peekUndo,
+    peekRedo,
+    pushEdit,
+    popUndo,
+    popRedo,
+    restoreUndo,
+    restoreRedo,
+    completeUndo,
+    completeRedo,
+    migrate,
+    release,
+    clear,
+  };
+}
+// ---- src/298b-plugin-property-overlays.js ----
+// Confirmed post-image overlays for props writes. Null, empty string, empty
+// list, false, zero, and absence stay distinct; deletions keep their keys
+// rather than converting null to unset. Rendering never spawns bob or writes.
+function propertyOverlayValuesEqual(left, right) {
+  if (left === right) return true;
+  if (left === undefined) left = null;
+  if (right === undefined) right = null;
+  try {
+    return JSON.stringify(left) === JSON.stringify(right);
+  } catch (_) {
+    return false;
+  }
+}
+
+function propertyOverlayCacheValue(frontmatter, key) {
+  if (!frontmatter || typeof frontmatter !== "object" || Array.isArray(frontmatter)) {
+    return { present: false, value: undefined };
+  }
+  if (!Object.prototype.hasOwnProperty.call(frontmatter, key)) {
+    return { present: false, value: undefined };
+  }
+  return { present: true, value: frontmatter[key] };
+}
+
+function propertyOverlayMatchesImage(overlay, image) {
+  if (!overlay || !image) return false;
+  const overlayRows = Array.isArray(overlay.properties) ? overlay.properties : [];
+  const imageRows = Array.isArray(image.properties) ? image.properties : [];
+  if (overlayRows.length !== imageRows.length) return false;
+  for (let index = 0; index < overlayRows.length; index += 1) {
+    const want = overlayRows[index];
+    const have = imageRows[index];
+    if (!want || !have || want.key !== have.key) return false;
+    if (!propertyOverlayValuesEqual(want.value, have.value)) return false;
+  }
+  const overlayDeleted = Array.isArray(overlay.deletedKeys) ? overlay.deletedKeys : [];
+  const imageDeleted = Array.isArray(image.deletedKeys) ? image.deletedKeys : [];
+  if (overlayDeleted.length !== imageDeleted.length) return false;
+  for (let index = 0; index < overlayDeleted.length; index += 1) {
+    if (overlayDeleted[index] !== imageDeleted[index]) return false;
+  }
+  return true;
+}
+
+function propertyOverlayMatchesCache(overlay, frontmatter) {
+  if (!overlay) return false;
+  const rows = Array.isArray(overlay.properties) ? overlay.properties : [];
+  for (const row of rows) {
+    if (!row || typeof row.key !== "string" || !row.key) continue;
+    const actual = propertyOverlayCacheValue(frontmatter, row.key);
+    if (!actual.present) return false;
+    if (!propertyOverlayValuesEqual(row.value, actual.value)) return false;
+  }
+  for (const key of Array.isArray(overlay.deletedKeys) ? overlay.deletedKeys : []) {
+    if (typeof key !== "string" || !key) continue;
+    if (propertyOverlayCacheValue(frontmatter, key).present) return false;
+  }
+  return rows.length > 0 || (Array.isArray(overlay.deletedKeys) && overlay.deletedKeys.length > 0);
+}
+
+function createPropertyOverlayStore(options = {}) {
+  const ttlMs = Number.isFinite(options.ttlMs) && options.ttlMs >= 0
+    ? options.ttlMs
+    : PROPERTY_OVERLAY_TTL_MS;
+  const setTimeoutFn = typeof options.setTimeout === "function" ? options.setTimeout : null;
+  const clearTimeoutFn = typeof options.clearTimeout === "function" ? options.clearTimeout : null;
+  const nowFn = typeof options.now === "function" ? options.now : () => Date.now();
+  const overlays = new Map();
+  const timers = new Map();
+  const listeners = new Set();
+
+  function keyOf(path) {
+    return propertyNotePath(path);
+  }
+
+  function notify(path, overlay) {
+    for (const listener of listeners) {
+      try { listener(path, overlay || null); } catch (_) {}
+    }
+  }
+
+  function clearTimer(key) {
+    const timer = timers.get(key);
+    timers.delete(key);
+    if (timer === undefined || timer === null) return;
+    if (clearTimeoutFn) {
+      try { clearTimeoutFn(timer); } catch (_) {}
+      return;
+    }
+    try { clearTimeout(timer); } catch (_) {}
+  }
+
+  function get(path) {
+    const key = keyOf(path);
+    if (!key) return null;
+    return overlays.get(key) || null;
+  }
+
+  function retire(path, token) {
+    const key = keyOf(path);
+    if (!key) return null;
+    const current = overlays.get(key);
+    if (token && current && current.token !== token) return current;
+    clearTimer(key);
+    overlays.delete(key);
+    notify(key, null);
+    return null;
+  }
+
+  function push(path, overlay, extra = {}) {
+    const key = keyOf(path);
+    if (!key) return null;
+    clearTimer(key);
+    if (!overlay) {
+      overlays.delete(key);
+      notify(key, null);
+      return null;
+    }
+    const token = extra.token || overlay.token || {};
+    const record = {
+      ...overlay,
+      properties: propertyCloneJson(overlay.properties) || [],
+      deletedKeys: Array.isArray(overlay.deletedKeys) ? overlay.deletedKeys.slice() : [],
+      before: overlay.before ? {
+        properties: propertyCloneJson(overlay.before.properties) || [],
+        deletedKeys: Array.isArray(overlay.before.deletedKeys) ? overlay.before.deletedKeys.slice() : [],
+      } : null,
+      fingerprint: typeof overlay.fingerprint === "string" ? overlay.fingerprint : "",
+      token,
+      publishedAt: nowFn(),
+    };
+    overlays.set(key, record);
+    notify(key, record);
+    const ttl = Number.isFinite(extra.ttlMs) && extra.ttlMs >= 0 ? extra.ttlMs : ttlMs;
+    if (ttl === 0) return record;
+    const schedule = setTimeoutFn || setTimeout;
+    const timer = schedule(() => {
+      timers.delete(key);
+      const current = overlays.get(key);
+      if (current && current.token === token) {
+        overlays.delete(key);
+        notify(key, null);
+      }
+    }, ttl);
+    if (timer !== undefined && timer !== null) timers.set(key, timer);
+    return record;
+  }
+
+  function observeSource(path, properties) {
+    const current = get(path);
+    if (!current) return null;
+    const rows = Array.isArray(properties) ? properties : [];
+    const image = { properties: rows, deletedKeys: [] };
+    if (propertyOverlayMatchesImage(current, image)) return retire(path, current.token);
+    if (current.before && propertyOverlayMatchesImage(current.before, image)) return current;
+    const frontmatter = {};
+    for (const row of rows) {
+      if (row && typeof row.key === "string" && row.key) frontmatter[row.key] = row.value;
+    }
+    return observeCache(path, frontmatter);
+  }
+
+  function observeCache(path, frontmatter) {
+    const current = get(path);
+    if (!current) return null;
+    if (propertyOverlayMatchesCache(current, frontmatter)) return retire(path, current.token);
+    if (current.before && propertyOverlayMatchesCache(current.before, frontmatter)) return current;
+    return retire(path, current.token);
+  }
+
+  function migrate(fromPath, toPath) {
+    const from = keyOf(fromPath);
+    const to = keyOf(toPath);
+    if (!from || from === to) return;
+    const record = overlays.get(from);
+    const timer = timers.get(from);
+    overlays.delete(from);
+    timers.delete(from);
+    notify(from, null);
+    if (!to) {
+      if (timer !== undefined && timer !== null) {
+        if (clearTimeoutFn) try { clearTimeoutFn(timer); } catch (_) {}
+        else try { clearTimeout(timer); } catch (_) {}
+      }
+      return;
+    }
+    if (record) {
+      overlays.set(to, record);
+      if (timer !== undefined && timer !== null) timers.set(to, timer);
+      notify(to, record);
+    }
+  }
+
+  function release(path) {
+    retire(path);
+  }
+
+  function clear() {
+    for (const key of [...overlays.keys()]) retire(key);
+  }
+
+  function subscribe(listener) {
+    if (typeof listener !== "function") return () => {};
+    listeners.add(listener);
+    return () => { listeners.delete(listener); };
+  }
+
+  return {
+    ttlMs,
+    get,
+    push,
+    retire,
+    observeSource,
+    observeCache,
+    migrate,
+    release,
+    clear,
+    subscribe,
+  };
+}
+// ---- src/298c-plugin-property-update-session.js ----
+// Property update session: a thin wrapper over the shared guarded session
+// with props_v1 preview/apply, inverse-op Undo/Redo, pane saves for any
+// Markdown note, and confirmed post-image overlays. Typed previews debounce
+// 250 ms; Enter commits only a matching successful preview.
+function createPropertyUpdateSession(init = {}, deps = {}) {
+  const notePath = propertyNotePath(init.path || init.ownPath || "");
+  const history = deps.history || null;
+  const overlays = deps.overlays || null;
+  let lastProperties = Array.isArray(init.properties)
+    ? propertyCloneJson(init.properties)
+    : [];
+  let historyKind = "edit";
+
+  const inner = createGuardedUpdateSession({
+    identity: notePath,
+    ownPath: notePath,
+    savePaths: [notePath].filter(Boolean),
+    allowDirectApply: true,
+    expect: init.expect,
+    undo: init.undo,
+    debounceMs: PROPERTY_UPDATE_PREVIEW_DEBOUNCE_MS,
+    lockRetryMs: init.lockRetryMs,
+    lockWaitBudgetMs: init.lockWaitBudgetMs,
+    buildEnvelope: propertyUpdateEnvelopeText,
+    isStaleCode: propertyIsStaleUpdateCode,
+    failureFromReport: (report) => (propertyJsonObject(report) && propertyJsonObject(report.error) ? report.error : {}),
+    snapshotExtras: { path: notePath, notePath },
+    copy: {
+      previewEmpty: "There is nothing to preview.",
+      previewFailed: "The property preview failed.",
+      previewRefused: "The property preview was refused.",
+      applyFailed: "The property apply failed.",
+      applyRefused: "The property apply was refused.",
+      stalePreview: "The vault changed while this preview was running.",
+      stalePreviewHint: "Refresh the note and preview the retained draft against the current fingerprint.",
+      staleGeneration: "The vault changed under this preview.",
+      staleGenerationHint: "Preview again before applying; nothing was written.",
+      saveUnsupported: "Open editors could not confirm the note is saved.",
+      saveUnsupportedHint: "Save every pane showing the note in Source mode, then preview again. Nothing was written.",
+      saveFailedHint: "Apply is refused until every pane showing the note saves. Nothing was written.",
+      supersededDuringSave: "The property draft changed while panes were saving; preview the current draft before applying.",
+      saveInvalidated: "Saving changed the vault; preview again before applying.",
+      nothingToUndo: "There is no property edit to undo.",
+      syncWarningHint: "The property edit is saved and Undo is available. Retry sync with `bob vault-sync` only.",
+      retryHint: "Retry `bob vault-sync` later. The saved edit and Undo are kept.",
+    },
+  }, deps);
+
+  function rememberProperties(properties) {
+    if (Array.isArray(properties)) lastProperties = propertyCloneJson(properties);
+  }
+
+  async function rereadFingerprint() {
+    if (typeof deps.spawnShow !== "function") return "";
+    let outcome;
+    try {
+      outcome = await deps.spawnShow(notePath);
+    } catch (_) {
+      return "";
+    }
+    const report = outcome && outcome.ok === true && propertyJsonObject(outcome.report) ? outcome.report : null;
+    if (!report) return "";
+    if (Array.isArray(report.properties)) rememberProperties(report.properties);
+    return propertyFingerprintOf(report);
+  }
+
+  function publishOverlay(report) {
+    if (!overlays || typeof overlays.push !== "function") return;
+    overlays.push(notePath, propertyOverlayFromReport(report, lastProperties));
+  }
+
+  function rememberHistory(report) {
+    if (!history || !report) return;
+    const inverse = report.inverse_ops;
+    const expect = typeof report.fingerprint_after === "string" ? report.fingerprint_after : "";
+    if (historyKind === "undo") {
+      history.completeUndo(notePath, inverse, expect);
+      return;
+    }
+    if (historyKind === "redo") {
+      history.completeRedo(notePath, inverse, expect);
+      return;
+    }
+    history.pushEdit(notePath, inverse, expect);
+  }
+
+  async function settle(result) {
+    if (!result) return result;
+    const stale = result.ok === false && (
+      result.kind === "stale" ||
+      result.code === "prop_stale" ||
+      (result.report && result.report.error && result.report.error.code === "prop_stale")
+    );
+    if (stale) {
+      const fingerprint = await rereadFingerprint();
+      if (fingerprint) inner.rebase(fingerprint);
+      return result;
+    }
+    if (result.ok === true && result.changed === true && result.report) {
+      rememberHistory(result.report);
+      publishOverlay(result.report);
+      if (Array.isArray(result.report.properties)) rememberProperties(result.report.properties);
+      if (typeof deps.onApplied === "function") {
+        try { deps.onApplied(result); } catch (_) {}
+      }
+    }
+    return result;
+  }
+
+  async function replayHistory(kind) {
+    if (!history) {
+      return { ok: false, code: "nothing-to-undo", message: "There is no property edit to undo." };
+    }
+    const popped = kind === "redo" ? history.popRedo(notePath) : history.popUndo(notePath);
+    if (!popped) {
+      return {
+        ok: false,
+        code: kind === "redo" ? "nothing-to-redo" : "nothing-to-undo",
+        message: kind === "redo" ? "There is no property edit to redo." : "There is no property edit to undo.",
+      };
+    }
+    historyKind = kind;
+    try {
+      inner.rebase(popped.expect);
+      const result = await settle(await inner.applyOps(popped.inverseOps));
+      const consumed = result && result.ok === true && result.changed === true;
+      if (!consumed) {
+        if (kind === "redo") history.restoreRedo(notePath, popped);
+        else history.restoreUndo(notePath, popped);
+      }
+      return result;
+    } finally {
+      historyKind = "edit";
+    }
+  }
+
+  return {
+    setDraft: inner.setDraft,
+    previewNow: inner.previewNow,
+    invalidateEnter: () => inner.setDraft(inner.getState().draftOps),
+    apply: async () => {
+      if (!inner.getState().expect) {
+        return {
+          ok: false,
+          code: "unwritable",
+          message: "Repair the frontmatter YAML before editing properties.",
+        };
+      }
+      historyKind = "edit";
+      return settle(await inner.apply());
+    },
+    applyOps: async (ops) => {
+      if (!inner.getState().expect) {
+        return {
+          ok: false,
+          code: "unwritable",
+          message: "Repair the frontmatter YAML before editing properties.",
+        };
+      }
+      historyKind = "edit";
+      return settle(await inner.applyOps(ops));
+    },
+    undo: async () => replayHistory("undo"),
+    redo: async () => replayHistory("redo"),
+    stopWaiting: inner.stopWaiting,
+    stageUndo: inner.stageUndo,
+    retrySync: inner.retrySync,
+    noteGenerationChanged: inner.noteGenerationChanged,
+    rebase: inner.rebase,
+    close: inner.close,
+    getState: () => {
+      const state = inner.getState();
+      const hist = history ? history.snapshot(notePath) : { undo: 0, redo: 0 };
+      return {
+        ...state,
+        path: notePath,
+        undoAvailable: hist.undo > 0,
+        redoAvailable: hist.redo > 0,
+        history: hist,
+      };
+    },
+    rememberProperties,
+  };
+}
+
+function propertyUpdateServiceDeps(plugin, options = {}) {
+  const notePath = propertyNotePath(options.path || options.ownPath || "");
+  const saveEditors = options.saveEditors || ((paths) =>
+    typeof albumSchemaSaveOpenEditors === "function"
+      ? albumSchemaSaveOpenEditors(plugin, paths)
+      : Promise.resolve({
+        ok: false,
+        code: "save-unsupported",
+        message: "Open editors could not confirm they are saved.",
+      }));
+  return {
+    spawnPreview: (_identity, envelopeText) => plugin.apiPropertyUpdatePreview(notePath, envelopeText),
+    spawnApply: (_identity, envelopeText, applyOptions) =>
+      plugin.apiPropertyUpdateApply(notePath, envelopeText, {
+        ...applyOptions,
+        ownPaths: [notePath].filter(Boolean),
+      }),
+    spawnShow: () => plugin.apiPropertyShow(notePath),
+    spawnVaultSync: () =>
+      typeof plugin.apiAlbumVaultSyncRetry === "function"
+        ? plugin.apiAlbumVaultSyncRetry()
+        : Promise.resolve({ ok: false, code: "sync-unsupported", message: "Sync retry is unavailable here." }),
+    saveEditors,
+    getGeneration: () => {
+      try {
+        if (plugin && Number.isInteger(plugin.propertyVaultGeneration)) return plugin.propertyVaultGeneration;
+        if (plugin && Number.isInteger(plugin.albumVaultGeneration)) return plugin.albumVaultGeneration;
+      } catch (_) {}
+      return 0;
+    },
+    timers: options.timers,
+    onChange: options.onChange,
+    history: options.history || (plugin && plugin.propertyHistory) || null,
+    overlays: options.overlays || (plugin && plugin.propertyOverlays) || null,
+    onApplied: options.onApplied,
+  };
+}
+// ---- src/298d-plugin-property-update-service.js ----
+// Property update service mixin. Show and dry-run are read-only; apply
+// saves every pane showing the target note, then writes through bob props.
+// History and overlays are per normalized path, survive reopen, and clear
+// on unload. Rename migrates state; delete releases it.
+class BobLedgerToolsPropertyUpdateMixin {
+  propertyHistoryStore() {
+    if (!this.propertyHistory) {
+      this.propertyHistory = createPropertyHistory({ limit: PROPERTY_HISTORY_LIMIT });
+    }
+    return this.propertyHistory;
+  }
+
+  propertyOverlayStore() {
+    if (!this.propertyOverlays) {
+      this.propertyOverlays = createPropertyOverlayStore({
+        ttlMs: PROPERTY_OVERLAY_TTL_MS,
+        setTimeout: (callback, delay) => this.albumSetTimeout
+          ? this.albumSetTimeout(callback, delay)
+          : setTimeout(callback, delay),
+        clearTimeout: (timer) => this.albumClearTimeout
+          ? this.albumClearTimeout(timer)
+          : clearTimeout(timer),
+        now: () => {
+          try {
+            if (this.albumTimers && typeof this.albumTimers.now === "number") return this.albumTimers.now;
+          } catch (_) {}
+          return Date.now();
+        },
+      });
+    }
+    return this.propertyOverlays;
+  }
+
+  setupPropertyUpdate() {
+    this.propertyUpdateActive = true;
+    this.propertyCapability = null;
+    this.propertyVaultGeneration = this.propertyVaultGeneration || 0;
+    this.propertyUpdateFlight = null;
+    this.propertyUpdateBusy = false;
+    this.propertySessions = new Map();
+    this.propertyHistory = createPropertyHistory({ limit: PROPERTY_HISTORY_LIMIT });
+    this.propertyOverlays = createPropertyOverlayStore({
+      ttlMs: PROPERTY_OVERLAY_TTL_MS,
+      setTimeout: (callback, delay) => this.albumSetTimeout
+        ? this.albumSetTimeout(callback, delay)
+        : setTimeout(callback, delay),
+      clearTimeout: (timer) => this.albumClearTimeout
+        ? this.albumClearTimeout(timer)
+        : clearTimeout(timer),
+      now: () => {
+        try {
+          if (this.albumTimers && typeof this.albumTimers.now === "number") return this.albumTimers.now;
+        } catch (_) {}
+        return Date.now();
+      },
+    });
+    this.propertyOverlayUnsub = this.propertyOverlays.subscribe((path, overlay) => {
+      try { this.propertyPublishOverlay(path, overlay); } catch (_) {}
+    });
+    try {
+      const vault = this.app?.vault;
+      if (vault && typeof vault.on === "function" && typeof this.registerEvent === "function") {
+        this.registerEvent(vault.on("rename", (file, oldPath) => this.propertyHandleRename(file, oldPath)));
+        this.registerEvent(vault.on("delete", (file) => this.propertyHandleDelete(file)));
+        this.registerEvent(vault.on("modify", (file) => this.propertyHandleModify(file)));
+      }
+    } catch (_) {}
+    try {
+      const metadata = this.app?.metadataCache;
+      if (metadata && typeof metadata.on === "function" && typeof this.registerEvent === "function") {
+        this.registerEvent(metadata.on("changed", (file, data) => {
+          const path = propertyNotePath(file && file.path);
+          if (!path) return;
+          const frontmatter = data && data.frontmatter
+            ? data.frontmatter
+            : this.propertyCacheFrontmatter(path);
+          this.propertyOverlayStore().observeCache(path, frontmatter);
+        }));
+      }
+    } catch (_) {}
+  }
+
+  teardownPropertyUpdate() {
+    this.propertyUpdateActive = false;
+    this.propertyUpdateBusy = false;
+    this.propertyUpdateFlight = null;
+    try {
+      if (this.propertySessions instanceof Map) {
+        for (const session of this.propertySessions.values()) {
+          try { session.close(); } catch (_) {}
+        }
+        this.propertySessions.clear();
+      }
+    } catch (_) {}
+    try { this.propertyOverlayUnsub?.(); } catch (_) {}
+    this.propertyOverlayUnsub = null;
+    try { this.propertyHistory?.clear(); } catch (_) {}
+    try { this.propertyOverlays?.clear(); } catch (_) {}
+    this.propertyHistory = null;
+    this.propertyOverlays = null;
+    this.propertyCapability = null;
+  }
+
+  propertyBumpGeneration() {
+    this.propertyVaultGeneration = (this.propertyVaultGeneration || 0) + 1;
+    if (this.propertySessions instanceof Map) {
+      for (const session of this.propertySessions.values()) {
+        try { session.noteGenerationChanged(); } catch (_) {}
+      }
+    }
+    return this.propertyVaultGeneration;
+  }
+
+  propertyHandleRename(file, oldPath) {
+    const from = propertyNotePath(oldPath);
+    const to = propertyNotePath(file && file.path);
+    if (!from) return;
+    this.propertyBumpGeneration();
+    this.propertyHistoryStore().migrate(from, to);
+    this.propertyOverlayStore().migrate(from, to);
+    if (this.propertySessions instanceof Map) {
+      const session = this.propertySessions.get(from);
+      if (session) {
+        this.propertySessions.delete(from);
+        try { session.close(); } catch (_) {}
+      }
+    }
+  }
+
+  propertyHandleDelete(file) {
+    const path = propertyNotePath(file && file.path);
+    if (!path) return;
+    this.propertyBumpGeneration();
+    this.propertyHistoryStore().release(path);
+    this.propertyOverlayStore().release(path);
+    if (this.propertySessions instanceof Map) {
+      const session = this.propertySessions.get(path);
+      if (session) {
+        this.propertySessions.delete(path);
+        try { session.close(); } catch (_) {}
+      }
+    }
+  }
+
+  propertyHandleModify(file) {
+    const path = propertyNotePath(file && file.path);
+    if (!path) return;
+    this.propertyBumpGeneration();
+    try {
+      const source = this.propertySourceInventory(path);
+      if (source) this.propertyOverlayStore().observeSource(path, source);
+    } catch (_) {}
+  }
+
+  propertyCacheFrontmatter(path) {
+    try {
+      const file = this.app?.vault?.getAbstractFileByPath?.(path);
+      const cache = file ? this.app?.metadataCache?.getFileCache?.(file) : null;
+      return cache && cache.frontmatter && typeof cache.frontmatter === "object" ? cache.frontmatter : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  propertySourceInventory(path) {
+    const frontmatter = this.propertyCacheFrontmatter(path);
+    if (!frontmatter) return null;
+    return Object.keys(frontmatter).map((key) => ({ key, value: frontmatter[key] }));
+  }
+
+  propertyPublishOverlay(path, overlay) {
+    // Later editor-shell, card, and drawer surfaces subscribe through
+    // propertyOverlayStore().subscribe; this hook stays a no-op publisher
+    // so confirmed writes can land before those surfaces exist.
+    void path;
+    void overlay;
+  }
+
+  propertySpawnJson(args, decode, options = {}) {
+    const opts = propertyJsonObject(options) ? options : {};
+    return bobSpawnJson(args, decode, {
+      ...opts,
+      resolveBobPath: () =>
+        typeof this.apiStatsBobPath === "function"
+          ? this.apiStatsBobPath()
+          : { path: "bob", source: "path" },
+      getVaultPath: () =>
+        typeof this.statsVaultBasePath === "function" ? this.statsVaultBasePath() : null,
+      timeout: PROPERTY_UPDATE_TIMEOUT_MS,
+      maxBuffer: PROPERTY_UPDATE_MAX_BUFFER,
+      firstLine: typeof statsFirstLine === "function" ? statsFirstLine : undefined,
+    });
+  }
+
+  apiPropertyShow(notePath, options = {}) {
+    if (this.propertyUpdateActive === false) {
+      return Promise.resolve({ ok: false, code: "unloaded", message: "Property editing has unloaded." });
+    }
+    const path = propertyNotePath(notePath);
+    if (!path) {
+      return Promise.resolve({ ok: false, code: "missing-path", message: "A Markdown note path is required." });
+    }
+    return this.propertySpawnJson(
+      propertyShowArgs(path),
+      propertyDecodeShowReport,
+      { ...options, commandLabel: "bob props show" },
+    ).then((outcome) => {
+      if (outcome && outcome.code === "needs-bob") this.propertyCapability = false;
+      else if (outcome && outcome.ok === true && outcome.report) {
+        this.propertyCapability = propertyHasCapability(outcome.report);
+      }
+      return outcome;
+    });
+  }
+
+  apiPropertyUpdateCapable(report) {
+    if (report !== undefined) return propertyHasCapability(report);
+    return this.propertyCapability === true;
+  }
+
+  apiPropertyUpdatePreview(notePath, envelopeText, options = {}) {
+    if (this.propertyUpdateActive === false) {
+      return Promise.resolve({ ok: false, code: "unloaded", message: "Property editing has unloaded." });
+    }
+    if (this.propertyCapability === false) {
+      return Promise.resolve({
+        ok: false,
+        code: "needs-bob",
+        message: "Update bob to edit properties here — y opens YAML.",
+      });
+    }
+    const path = propertyNotePath(notePath);
+    return this.propertySpawnJson(
+      propertyUpdateArgs(path, { dryRun: true }),
+      propertyDecodeUpdateReport,
+      {
+        ...options,
+        stdin: typeof envelopeText === "string" ? envelopeText : "",
+        commandLabel: "bob props update -d",
+      },
+    );
+  }
+
+  apiPropertyUpdateApply(notePath, envelopeText, options = {}) {
+    const opts = propertyJsonObject(options) ? options : {};
+    if (this.propertyUpdateActive === false) {
+      return Promise.resolve({ ok: false, code: "unloaded", message: "Property editing has unloaded." });
+    }
+    if (this.propertyCapability === false) {
+      return Promise.resolve({
+        ok: false,
+        code: "needs-bob",
+        message: "Update bob to edit properties here — y opens YAML.",
+      });
+    }
+    if (this.propertyUpdateFlight) {
+      return Promise.resolve({
+        ok: false,
+        code: "apply-busy",
+        message: "Another property apply is already running.",
+        hint: "Wait for it to settle, then preview again.",
+      });
+    }
+    const path = propertyNotePath(notePath);
+    const applyPromise = (async () => {
+      this.propertyUpdateBusy = true;
+      let outcome;
+      try {
+        try {
+          outcome = await this.propertySpawnJson(
+            propertyUpdateArgs(path, { dryRun: false }),
+            propertyDecodeUpdateReport,
+            {
+              ...opts,
+              stdin: typeof envelopeText === "string" ? envelopeText : "",
+              commandLabel: "bob props update",
+            },
+          );
+        } catch (error) {
+          outcome = {
+            ok: false,
+            code: "failed",
+            message: error && error.message ? String(error.message) : "bob props update failed.",
+          };
+        }
+        const wrote = Boolean(
+          outcome && outcome.ok && outcome.report && outcome.report.ok === true &&
+          outcome.report.dry_run === false && guardedUpdateReportChanged(outcome.report),
+        );
+        const unknown = Boolean(outcome && !outcome.ok && (outcome.code === "timeout" || outcome.code === "failed"));
+        return { ...outcome, wrote, unknown };
+      } finally {
+        this.propertyUpdateBusy = false;
+        if (this.propertyUpdateFlight === applyPromise) this.propertyUpdateFlight = null;
+      }
+    })();
+    this.propertyUpdateFlight = applyPromise;
+    return applyPromise;
+  }
+
+  openPropertyUpdateSession(options = {}) {
+    const path = propertyNotePath(options.path || options.ownPath || "");
+    if (!path) return null;
+    if (this.propertySessions instanceof Map) {
+      const existing = this.propertySessions.get(path);
+      if (existing && options.reuse === true) return existing;
+      if (existing) {
+        try { existing.close(); } catch (_) {}
+        this.propertySessions.delete(path);
+      }
+    }
+    const deps = propertyUpdateServiceDeps(this, {
+      path,
+      timers: options.timers,
+      onChange: options.onChange,
+      saveEditors: options.saveEditors,
+      history: this.propertyHistoryStore(),
+      overlays: this.propertyOverlayStore(),
+    });
+    const session = createPropertyUpdateSession({
+      path,
+      expect: options.expect,
+      properties: options.properties,
+      undo: options.undo,
+      lockRetryMs: options.lockRetryMs,
+      lockWaitBudgetMs: options.lockWaitBudgetMs,
+    }, deps);
+    if (this.propertySessions instanceof Map) this.propertySessions.set(path, session);
+    return session;
+  }
+
+  propertyOverlayFor(path) {
+    return this.propertyOverlayStore().get(path);
+  }
+
+  propertyHistoryFor(path) {
+    return this.propertyHistoryStore().snapshot(path);
+  }
+}
 // ---- src/293-keep-inbox-render.js ----
 // Keep inbox render (keep-indicator-view): DOM for the `bob-keep-inbox`
 // status-bar item. Pure DOM helpers plus one paint entry point; no spawn,
@@ -167490,6 +168749,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsIntentionUpdateMixin,
   BobLedgerToolsIntentionCardEditorMixin,
   BobLedgerToolsIntentionCardNavigationMixin,
+  BobLedgerToolsPropertyUpdateMixin,
   BobLedgerToolsEventLinkTimesMixin,
   BobLedgerToolsEventLinkTimesReadingMixin,
   BobLedgerToolsVimSnippetsMixin,
@@ -172008,6 +173268,44 @@ try {
       navGroupsPathIsPreAdoptionWith,
       navGroupsPreAdoptionMessageForPath,
       BobLedgerToolsNavGroupsMixin,
+    });
+  }
+} catch (_) {}
+// ---- src/379-exports-property-editor.js ----
+// Test-facing exports for the props v1 client, guarded session, history, and overlays.
+try {
+  if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
+    module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
+      PROPERTY_UPDATE_SCHEMA_VERSION,
+      PROPERTY_UPDATE_TIMEOUT_MS,
+      PROPERTY_UPDATE_MAX_BUFFER,
+      PROPERTY_UPDATE_PREVIEW_DEBOUNCE_MS,
+      PROPERTY_HISTORY_LIMIT,
+      PROPERTY_OVERLAY_TTL_MS,
+      PROPERTY_CAPABILITY,
+      propertyNotePath,
+      propertyShowArgs,
+      propertyUpdateArgs,
+      propertyUpdateEnvelope,
+      propertyUpdateEnvelopeText,
+      propertyIsStaleUpdateCode,
+      propertyHasCapability,
+      propertyFingerprintOf,
+      propertyShowAllowsWrite,
+      propertyCloneJson,
+      propertyIsUnsupportedOutput,
+      propertyDecodeShowReport,
+      propertyDecodeUpdateReport,
+      propertyUpdateErrorModel,
+      propertyOverlayFromReport,
+      propertyOverlayPaintFrontmatter,
+      propertyOverlayMatchesImage,
+      propertyOverlayMatchesCache,
+      propertyOverlayBeforeFromProperties,
+      createPropertyHistory,
+      createPropertyOverlayStore,
+      createPropertyUpdateSession,
+      propertyUpdateServiceDeps,
     });
   }
 } catch (_) {}

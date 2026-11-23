@@ -340,6 +340,11 @@
   "297cd-plugin-intention-card-editor-prose.js",
   "297d-plugin-intention-card-entrypoints.js",
   "297e-plugin-intention-card-navigation.js",
+  "298-plugin-property-protocol.js",
+  "298a-plugin-property-history.js",
+  "298b-plugin-property-overlays.js",
+  "298c-plugin-property-update-session.js",
+  "298d-plugin-property-update-service.js",
   "293-keep-inbox-render.js",
   "294-keep-inbox-indicator.js",
   "295-keep-inbox-actions.js",
@@ -388,5 +393,6 @@
   "375-exports-log-history.js",
   "376-exports-intention-card-editor.js",
   "377-exports-intention-card-navigation.js",
-  "378-exports-nav-groups.js"
+  "378-exports-nav-groups.js",
+  "379-exports-property-editor.js"
 ]

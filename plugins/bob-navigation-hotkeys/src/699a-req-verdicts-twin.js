@@ -35,6 +35,7 @@ function reqCloseCloneGroup(group) {
     folded: Object.assign({}, group.folded),
     rows: group.rows.map((row) => ({
       offer: Object.assign({}, row.offer),
+      req: Object.assign({}, row.req),
       owner_key: row.owner_key,
       path: row.path,
       depth: row.depth,

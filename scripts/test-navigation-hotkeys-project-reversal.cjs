@@ -278,7 +278,7 @@ test("buildTaskBlockFromProjectNote restores the worked example and round-trips"
   ]);
   assert.deepEqual(seed.sections, [
     {
-      title: "Requirements",
+      title: "Notes",
       noteLines: ["- Must be within walking distance"],
     },
     {

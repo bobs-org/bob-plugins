@@ -683,6 +683,13 @@ function buildProjectContentFromTask(content, parsedTask, options = {}) {
     } else {
       tasksSectionMissing = true;
     }
+  } else if (typeof removeProjectTasksPlaceholderLine === "function") {
+    // A requirement-less source promotes to an empty ## Tasks section.
+    const emptied = removeProjectTasksPlaceholderLine(nextContent);
+    if (emptied.removed) {
+      nextContent = emptied.content;
+      tasksInserted = true;
+    }
   }
 
   const sections = Array.isArray(options.sections) ? options.sections : [];

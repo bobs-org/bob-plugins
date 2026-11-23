@@ -331,8 +331,8 @@ test("PS1 promotion offers the new tasks and links only the pick", async () => {
   const sourceContent = [
     "---", 'type: "[[area]]"', "---", "", "## Tasks", "",
     "- [*] #task Command-mode improvements ^command-mode-improvements",
-    "\t- Hide command history and sort commands based on recently used.",
-    "\t- Add support for bulk commands.",
+    "\t- [ ] Hide command history and sort commands based on recently used.",
+    "\t- [ ] Add support for bulk commands.",
   ].join("\n");
   const harness = createProjectForwardHarness({
     sourcePath: "bob.md",
@@ -362,7 +362,7 @@ test("PS3 Esc consumes the anchor without linking", async () => {
   notices.length = 0;
   const today = new Date(2026, 8, 30);
   const todayPath = promotionDailyPath(today);
-  const sourceContent = ["---", 'type: "[[area]]"', "---", "", "## Tasks", "", "- [ ] #task Ship it ^ship", "\t- Design", "\t- Test"].join("\n");
+  const sourceContent = ["---", 'type: "[[area]]"', "---", "", "## Tasks", "", "- [ ] #task Ship it ^ship", "\t- [ ] Design", "\t- [ ] Test"].join("\n");
   const harness = createProjectForwardHarness({
     sourcePath: "Areas/Work.md",
     sourceContent,
@@ -404,7 +404,7 @@ test("PS5 blocked project offers nothing and consumes links", async () => {
   let pickerCalled = false;
   const harness = createProjectForwardHarness({
     sourcePath: "Areas/Work.md",
-    sourceContent: ["---", 'type: "[[area]]"', "---", "", "## Tasks", "", "- [ ] #task Ship it [scheduled:: 2099-01-01] ^ship", "\t- Design"].join("\n"),
+    sourceContent: ["---", 'type: "[[area]]"', "---", "", "## Tasks", "", "- [ ] #task Ship it [scheduled:: 2099-01-01] ^ship", "\t- [ ] Design"].join("\n"),
     today,
     extraFiles: [{ path: todayPath, content: ["## Pomodoros", "", "- [ ] (**0930-1000**)", "  - [[Areas/Work#^ship]]"].join("\n") }],
     backlinks: {},
@@ -422,7 +422,7 @@ test("PS6 no planned link leaves children untouched", async () => {
   let pickerCalled = false;
   const harness = createProjectForwardHarness({
     sourcePath: "Areas/Work.md",
-    sourceContent: ["---", 'type: "[[area]]"', "---", "", "## Tasks", "", "- [ ] #task Ship it ^ship", "\t- Design"].join("\n"),
+    sourceContent: ["---", 'type: "[[area]]"', "---", "", "## Tasks", "", "- [ ] #task Ship it ^ship", "\t- [ ] Design"].join("\n"),
     today,
     extraFiles: [{ path: todayPath, content: ["## Pomodoros", "", "- [ ] (**0930-1000**)", "  - unrelated"].join("\n") }],
     backlinks: {},
@@ -439,7 +439,7 @@ test("PS7 struck, closed, prose, past, and later links are handled", async () =>
   const todayPath = promotionDailyPath(today);
   const laterPath = promotionDailyPath(new Date(2026, 9, 1));
   const pastPath = promotionDailyPath(new Date(2026, 8, 29));
-  const sourceContent = ["---", 'type: "[[area]]"', "---", "", "## Tasks", "", "- [ ] #task Ship it ^ship", "\t- Design"].join("\n");
+  const sourceContent = ["---", 'type: "[[area]]"', "---", "", "## Tasks", "", "- [ ] #task Ship it ^ship", "\t- [ ] Design"].join("\n");
   const harness = createProjectForwardHarness({
     sourcePath: "Areas/Work.md",
     sourceContent,
@@ -461,7 +461,7 @@ test("PS9 lagging open editor completes with open:false and late open", async ()
   notices.length = 0;
   const today = new Date(2026, 8, 30);
   const todayPath = promotionDailyPath(today);
-  const sourceContent = ["---", 'type: "[[area]]"', "---", "", "## Tasks", "", "- [ ] #task Ship it ^ship", "\t- Design", "\t- Test"].join("\n");
+  const sourceContent = ["---", 'type: "[[area]]"', "---", "", "## Tasks", "", "- [ ] #task Ship it ^ship", "\t- [ ] Design", "\t- [ ] Test"].join("\n");
   const projectEditor = new TransactionEditor("", { line: 0, ch: 0 });
   const projectLeaf = { view: { file: null, editor: projectEditor } };
   let sourceReadsAfterCreate = 0;
@@ -492,7 +492,7 @@ test("PS11 source change during pick trashes the note", async () => {
   const todayPath = promotionDailyPath(today);
   const harness = createProjectForwardHarness({
     sourcePath: "Areas/Work.md",
-    sourceContent: ["---", 'type: "[[area]]"', "---", "", "## Tasks", "", "- [ ] #task Ship it ^ship", "\t- Design"].join("\n"),
+    sourceContent: ["---", 'type: "[[area]]"', "---", "", "## Tasks", "", "- [ ] #task Ship it ^ship", "\t- [ ] Design"].join("\n"),
     today,
     extraFiles: [{ path: todayPath, content: ["## Pomodoros", "", "- [ ] (**0930-1000**)", "  - [[Areas/Work#^ship]]"].join("\n") }],
     backlinks: {},
@@ -532,7 +532,7 @@ test("PS2 picking both keeps the sub-bullet under the first", async () => {
   const todayPath = promotionDailyPath(today);
   const harness = createProjectForwardHarness({
     sourcePath: "Areas/Work.md",
-    sourceContent: ["---", 'type: "[[area]]"', "---", "", "## Tasks", "", "- [ ] #task Ship it ^ship", "\t- Design", "\t- Test"].join("\n"),
+    sourceContent: ["---", 'type: "[[area]]"', "---", "", "## Tasks", "", "- [ ] #task Ship it ^ship", "\t- [ ] Design", "\t- [ ] Test"].join("\n"),
     today,
     extraFiles: [{ path: todayPath, content: ["## Pomodoros", "", "- [ ] (**0930-1000**) — BUILD", "  - [[Areas/Work#^ship]]", "    - child kept once"].join("\n") }],
     backlinks: {},
@@ -555,7 +555,7 @@ test("PS10 concurrent note edits still apply picks by key", async () => {
   const todayPath = promotionDailyPath(today);
   const harness = createProjectForwardHarness({
     sourcePath: "Areas/Work.md",
-    sourceContent: ["---", 'type: "[[area]]"', "---", "", "## Tasks", "", "- [ ] #task Ship it ^ship", "\t- Design", "\t- Test"].join("\n"),
+    sourceContent: ["---", 'type: "[[area]]"', "---", "", "## Tasks", "", "- [ ] #task Ship it ^ship", "\t- [ ] Design", "\t- [ ] Test"].join("\n"),
     today,
     extraFiles: [{ path: todayPath, content: ["## Pomodoros", "", "- [ ] (**0930-1000**)", "  - [[Areas/Work#^ship]]"].join("\n") }],
     backlinks: {},
@@ -576,7 +576,7 @@ test("PS12 deleted pick applies the rest with a refusal suffix", async () => {
   const todayPath = promotionDailyPath(today);
   const harness = createProjectForwardHarness({
     sourcePath: "Areas/Work.md",
-    sourceContent: ["---", 'type: "[[area]]"', "---", "", "## Tasks", "", "- [ ] #task Ship it ^ship", "\t- Design", "\t- Test"].join("\n"),
+    sourceContent: ["---", 'type: "[[area]]"', "---", "", "## Tasks", "", "- [ ] #task Ship it ^ship", "\t- [ ] Design", "\t- [ ] Test"].join("\n"),
     today,
     extraFiles: [{ path: todayPath, content: ["## Pomodoros", "", "- [ ] (**0930-1000**)", "  - [[Areas/Work#^ship]]"].join("\n") }],
     backlinks: {},
@@ -598,7 +598,7 @@ test("PS14 picker model shape and retarget off", async () => {
   let seenOptions = null;
   const harness = createProjectForwardHarness({
     sourcePath: "Areas/Work.md",
-    sourceContent: ["---", 'type: "[[area]]"', "---", "", "## Tasks", "", "- [ ] #task Ship it ^ship", "\t- Design", "\t- Design"].join("\n"),
+    sourceContent: ["---", 'type: "[[area]]"', "---", "", "## Tasks", "", "- [ ] #task Ship it ^ship", "\t- [ ] Design", "\t- [ ] Design"].join("\n"),
     today,
     extraFiles: [{ path: todayPath, content: ["## Pomodoros", "", "- [ ] (**0930-1000**)", "  - [[Areas/Work#^ship]]"].join("\n") }],
     backlinks: {},
@@ -624,7 +624,7 @@ test("a promotion pin lands on the successor instead of ^prj", async () => {
   const focusCalls = [];
   const harness = createProjectForwardHarness({
     sourcePath: "Areas/Work.md",
-    sourceContent: ["---", 'type: "[[area]]"', "---", "", "## Tasks", "", "- [ ] #task Ship it ^ship", "\t- Design", "\t- Test"].join("\n"),
+    sourceContent: ["---", 'type: "[[area]]"', "---", "", "## Tasks", "", "- [ ] #task Ship it ^ship", "\t- [ ] Design", "\t- [ ] Test"].join("\n"),
     today,
     extraFiles: [{ path: todayPath, content: ["## Pomodoros", "", "- [ ] (**0930-1000**)", "  - [[Areas/Work#^ship]]"].join("\n") }],
     backlinks: {},
@@ -658,7 +658,7 @@ test("promotion without a pin still lands on ^prj", async () => {
   const focusCalls = [];
   const harness = createProjectForwardHarness({
     sourcePath: "Areas/Work.md",
-    sourceContent: ["---", 'type: "[[area]]"', "---", "", "## Tasks", "", "- [ ] #task Ship it ^ship", "\t- Design"].join("\n"),
+    sourceContent: ["---", 'type: "[[area]]"', "---", "", "## Tasks", "", "- [ ] #task Ship it ^ship", "\t- [ ] Design"].join("\n"),
     today,
     extraFiles: [{ path: todayPath, content: ["## Pomodoros", "", "- [ ] (**0930-1000**)", "  - [[Areas/Work#^ship]]"].join("\n") }],
     backlinks: {},

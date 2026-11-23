@@ -6,22 +6,22 @@ const {
 
 test("buildProjectSeedFromChildBullets: an ALL-CAPS bullet becomes a section only when it has nested list items", () => {
   const withChildren = helpers.buildProjectSeedFromChildBullets(
-    ["  - REQUIREMENTS", "    - Must work offline"],
+    ["  - FUTURE WORK", "    - Must work offline"],
     "2026-08-12",
   );
   assert.deepEqual(withChildren.taskLines, []);
   assert.deepEqual(withChildren.sections, [
-    { title: "Requirements", noteLines: ["- Must work offline"] },
+    { title: "Future Work", noteLines: ["- Must work offline"] },
   ]);
   assert.equal(withChildren.lossless, true);
 
   const withoutChildren = helpers.buildProjectSeedFromChildBullets(
-    ["  - REQUIREMENTS"],
+    ["  - FUTURE WORK"],
     "2026-08-12",
   );
-  assert.deepEqual(withoutChildren.sections, []);
-  assert.deepEqual(withoutChildren.taskLines, [
-    "- [ ] #task REQUIREMENTS [created::2026-08-12]",
+  assert.deepEqual(withoutChildren.taskLines, []);
+  assert.deepEqual(withoutChildren.sections, [
+    { title: "Notes", noteLines: ["- FUTURE WORK"] },
   ]);
 });
 
@@ -105,7 +105,7 @@ test("buildProjectSeedFromChildBullets keeps schedule-log boundary cases on the 
 test("buildProjectSeedFromChildBullets leaves a nested schedule log under the converted child task", () => {
   const result = helpers.buildProjectSeedFromChildBullets(
     [
-      "  - Draft the API",
+      "  - [ ] Draft the API",
       "    - 🗓️ **SCHEDULE LOG**",
       "      - *2026-08-05* — reason",
     ],
@@ -150,12 +150,12 @@ test("buildProjectSeedFromChildBullets moves empty and deeply nested schedule lo
 test("buildProjectSeedFromChildBullets routes mixed child blocks to tasks, sections, and the schedule log", () => {
   const result = helpers.buildProjectSeedFromChildBullets(
     [
-      "  - Draft the API",
+      "  - [ ] Draft the API",
       "  - 🗓️ **SCHEDULE LOG**",
       "    - *2026-08-05* — waiting on the vendor quote",
-      "  - REQUIREMENTS",
+      "  - FUTURE WORK",
       "    - Must work offline",
-      "  - Write the migration",
+      "  - [ ] Write the migration",
     ],
     "2026-08-12",
   );
@@ -166,7 +166,7 @@ test("buildProjectSeedFromChildBullets routes mixed child blocks to tasks, secti
     "- [ ] #task Write the migration [created::2026-08-12]",
   ]);
   assert.deepEqual(result.sections, [
-    { title: "Requirements", noteLines: ["- Must work offline"] },
+    { title: "Future Work", noteLines: ["- Must work offline"] },
   ]);
   assert.deepEqual(result.managedLogLines, [
     "\t- 🗓️ **SCHEDULE LOG**",
@@ -242,7 +242,7 @@ test("buildProjectSeedFromChildBullets keeps work-log boundary cases on the exis
 test("buildProjectSeedFromChildBullets leaves a nested work log under the converted child task", () => {
   const result = helpers.buildProjectSeedFromChildBullets(
     [
-      "  - Draft the API",
+      "  - [ ] Draft the API",
       "    - 🛠️ **WORK LOG**",
       "      - *2026-08-15* — reason",
     ],
@@ -299,14 +299,14 @@ test("buildProjectSeedFromChildBullets moves managed logs in source order withou
 test("buildProjectSeedFromChildBullets routes mixed child blocks to tasks, sections, and both logs", () => {
   const result = helpers.buildProjectSeedFromChildBullets(
     [
-      "  - Draft the API",
+      "  - [ ] Draft the API",
       "  - 🗓️ **SCHEDULE LOG**",
       "    - *2026-08-05* — waiting on the vendor quote",
-      "  - REQUIREMENTS",
+      "  - FUTURE WORK",
       "    - Must work offline",
       "  - 🛠️ **WORK LOG**",
       "    - *2026-08-15* — Added coverage for the parser",
-      "  - Write the migration",
+      "  - [ ] Write the migration",
     ],
     "2026-08-12",
   );
@@ -317,7 +317,7 @@ test("buildProjectSeedFromChildBullets routes mixed child blocks to tasks, secti
     "- [ ] #task Write the migration [created::2026-08-12]",
   ]);
   assert.deepEqual(result.sections, [
-    { title: "Requirements", noteLines: ["- Must work offline"] },
+    { title: "Future Work", noteLines: ["- Must work offline"] },
   ]);
   assert.deepEqual(result.managedLogLines, [
     "\t- 🗓️ **SCHEDULE LOG**",
@@ -443,9 +443,9 @@ test("parseManagedTaskLogParentBullet rejects emoji/label mismatches like parse_
     "2026-08-12",
   );
   assert.deepEqual(mismatched.managedLogLines, []);
-  assert.deepEqual(mismatched.taskLines, [
-    "- [ ] #task 🗓️ **WORK LOG** [created::2026-08-12]",
-    "- [ ] #task 🛠️ **SCHEDULE LOG** [created::2026-08-12]",
+  assert.deepEqual(mismatched.taskLines, []);
+  assert.deepEqual(mismatched.sections, [
+    { title: "Notes", noteLines: ["- 🗓️ **WORK LOG**", "- 🛠️ **SCHEDULE LOG**"] },
   ]);
 });
 
@@ -627,7 +627,7 @@ test("buildProjectSeedFromChildBullets merges drawers with equally-normalized ti
     [
       "  - OPEN QUESTIONS",
       "    - Who owns rollout?",
-      "  - Draft the API",
+      "  - [ ] Draft the API",
       "  - OPEN  QUESTIONS",
       "    - What about backfill?",
     ],
@@ -747,14 +747,14 @@ test("a punctuated WHAT IS SASE? drawer promotes to title case and reverses to t
 
 test("buildProjectSeedFromChildBullets splits a mixed child block into tasks and sections, preserving relative note depth verbatim", () => {
   const childLines = [
-    "  - Draft the API",
-    "  - REQUIREMENTS",
+    "  - [ ] Draft the API",
+    "  - FUTURE WORK",
     "    - Must work offline",
     "    - p95 under 200ms",
     "      - measured at the edge",
     "  - OPEN QUESTIONS",
     "    - Who owns rollout?",
-    "  - Write the migration",
+    "  - [ ] Write the migration",
   ];
 
   const result = helpers.buildProjectSeedFromChildBullets(
@@ -769,7 +769,7 @@ test("buildProjectSeedFromChildBullets splits a mixed child block into tasks and
   ]);
   assert.deepEqual(result.sections, [
     {
-      title: "Requirements",
+      title: "Future Work",
       noteLines: [
         "- Must work offline",
         "- p95 under 200ms",
@@ -793,7 +793,7 @@ test("buildProjectSeedFromChildBullets splits a mixed child block into tasks and
 test("buildProjectSeedFromChildBullets marks lossless false for content that fits neither a task nor a section, without losing the other tasks", () => {
   const result = helpers.buildProjectSeedFromChildBullets(
     [
-      "  - Draft the API",
+      "  - [ ] Draft the API",
       "    Stray paragraph nested under the task",
       "not a list item and not indented under anything",
     ],
@@ -1184,4 +1184,177 @@ test("forward conversion leaves the project Ready when only the source status wa
   assert.doesNotMatch(root, /#prj_is_blocked/);
   const resident = lines.find((line) => /Follow up/.test(line));
   assert.doesNotMatch(resident, /#prj_is_blocked/);
+});
+
+test("promotion: outer reqs become tasks with nested reqs staying reqs (one-level promotion)", () => {
+  const result = helpers.buildProjectSeedFromChildBullets(
+    [
+      "  - [ ] Handles supported inputs",
+      "    - [ ] Handles Windows files",
+      "      - [ ] Preserves CRLF",
+      "    - [ ] Handles empty input",
+      "  - [ ] Benchmarks within 5% of v1",
+    ],
+    "2026-08-12",
+  );
+  assert.equal(result.lossless, true);
+  assert.deepEqual(result.taskLines, [
+    "- [ ] #task Handles supported inputs [created::2026-08-12]",
+    "  - [ ] Handles Windows files",
+    "    - [ ] Preserves CRLF",
+    "  - [ ] Handles empty input",
+    "- [ ] #task Benchmarks within 5% of v1 [created::2026-08-12]",
+  ]);
+  assert.deepEqual(result.sections, []);
+});
+
+test("promotion: dropped, legacy, and carried req states keep their bytes", () => {
+  const result = helpers.buildProjectSeedFromChildBullets(
+    [
+      "  - [-] Benchmarks within 5% of v1",
+      "    - ❌ **CANCEL LOG**",
+      "      - *2026-08-12* — v1 is gone",
+      "  - [x] Hand-ticked branch",
+      "  - [>] [[#^export-docs|Docs cover every flag]]",
+      "  - [ ] Pending req",
+    ],
+    "2026-08-12",
+  );
+  assert.equal(result.lossless, true);
+  assert.deepEqual(result.taskLines, [
+    "- [-] #task Benchmarks within 5% of v1 [created::2026-08-12]",
+    "  - ❌ **CANCEL LOG**",
+    "    - *2026-08-12* — v1 is gone",
+    "- [x] #task Hand-ticked branch [created::2026-08-12]",
+    "- [ ] #task Pending req [created::2026-08-12]",
+  ]);
+  assert.deepEqual(result.sections, [
+    { title: "Notes", noteLines: ["- [>] [[#^export-docs|Docs cover every flag]]"] },
+  ]);
+});
+
+test("promotion: loose notes and NOTES merge into one ## Notes section", () => {
+  const result = helpers.buildProjectSeedFromChildBullets(
+    [
+      "  - [ ] Handles supported inputs",
+      "    - Morgan reported the original issue.",
+      "  - Loose note on the source",
+      "  - NOTES",
+      "    - Filed note from the drawer",
+    ],
+    "2026-08-12",
+  );
+  assert.equal(result.lossless, true);
+  assert.deepEqual(result.taskLines, [
+    "- [ ] #task Handles supported inputs [created::2026-08-12]",
+    "  - Morgan reported the original issue.",
+  ]);
+  assert.deepEqual(result.sections, [
+    {
+      title: "Notes",
+      noteLines: ["- Loose note on the source", "- Filed note from the drawer"],
+    },
+  ]);
+});
+
+test("promotion: a row that owns child reqs files its direct notes into NOTES (with_first_note)", () => {
+  const result = helpers.buildProjectSeedFromChildBullets(
+    [
+      "  - [ ] Outer req",
+      "    - Direct note of the outer row",
+      "    - [ ] Child req",
+    ],
+    "2026-08-12",
+  );
+  assert.equal(result.lossless, true);
+  assert.deepEqual(result.taskLines, [
+    "- [ ] #task Outer req [created::2026-08-12]",
+    "  - [ ] Child req",
+    "  - NOTES",
+    "    - Direct note of the outer row",
+  ]);
+  assert.deepEqual(result.sections, []);
+});
+
+test("promotion: a task with no reqs promotes its notes to ## Notes with an empty ## Tasks", () => {
+  const result = helpers.buildProjectSeedFromChildBullets(
+    ["  - Just a note", "  - Another note"],
+    "2026-08-12",
+  );
+  assert.equal(result.lossless, true);
+  assert.deepEqual(result.taskLines, []);
+  assert.deepEqual(result.sections, [
+    { title: "Notes", noteLines: ["- Just a note", "- Another note"] },
+  ]);
+  const counts = helpers.projectSeedPromotionCounts(result);
+  assert.deepEqual(counts, { taskCount: 0, noteCount: 2 });
+  assert.equal(
+    helpers.getProjectPromotionReceiptText("Ship it", counts.taskCount, counts.noteCount),
+    "Promoted “Ship it” · 0 tasks · 2 notes",
+  );
+  assert.equal(
+    helpers.PROJECT_PROMOTION_NO_REQS_NOTICE,
+    "No requirements to promote — Ctrl+] marks one",
+  );
+});
+
+test("promotion: images and Gmail links stay notes, never tasks", () => {
+  const result = helpers.buildProjectSeedFromChildBullets(
+    [
+      "  - [ ] Handles supported inputs",
+      "  - ![](image.png)",
+      "  - [Gmail thread](https://mail.google.com/mail/u/0/#inbox/abc123)",
+    ],
+    "2026-08-12",
+  );
+  assert.equal(result.lossless, true);
+  assert.deepEqual(result.taskLines, [
+    "- [ ] #task Handles supported inputs [created::2026-08-12]",
+  ]);
+  assert.deepEqual(result.sections, [
+    {
+      title: "Notes",
+      noteLines: [
+        "- ![](image.png)",
+        "- [Gmail thread](https://mail.google.com/mail/u/0/#inbox/abc123)",
+      ],
+    },
+  ]);
+  for (const taskLine of result.taskLines) {
+    assert.doesNotMatch(taskLine, /!\[\]\(/);
+    assert.doesNotMatch(taskLine, /mail\.google\.com/);
+  }
+});
+
+test("promotion: receipt counts tasks and notes", () => {
+  const result = helpers.buildProjectSeedFromChildBullets(
+    [
+      "  - [ ] First req",
+      "  - [ ] Second req",
+      "  - A loose note",
+    ],
+    "2026-08-12",
+  );
+  const counts = helpers.projectSeedPromotionCounts(result);
+  assert.deepEqual(counts, { taskCount: 2, noteCount: 1 });
+  assert.equal(
+    helpers.getProjectPromotionReceiptText("Ship it", counts.taskCount, counts.noteCount),
+    "Promoted “Ship it” · 2 tasks · 1 note",
+  );
+});
+
+test("promotion: requirement-less seed removes the placeholder for an empty ## Tasks", () => {
+  const content = [
+    "- [ ] #task #prj (REPLACE WITH PROJECT COMPLETION CRITERIA) #hide ^prj",
+    "",
+    "## Tasks",
+    "",
+    "- [ ] #task (REPLACE WITH TASK DESCRIPTION) [created::<date>]",
+    "",
+    "## Notes",
+  ].join("\n");
+  const emptied = helpers.removeProjectTasksPlaceholderLine(content);
+  assert.equal(emptied.removed, true);
+  assert.doesNotMatch(emptied.content, /REPLACE WITH TASK DESCRIPTION/);
+  assert.match(emptied.content, /## Tasks/);
 });

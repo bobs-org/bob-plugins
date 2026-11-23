@@ -623,6 +623,12 @@ class BobNavigationHotkeysProjectPromotionMixin {
       await this.focusTaskMoveDestination(createdFile, { line: prjLineIndex, text: prjLineText, blockId: "prj" });
     }
     let notice = getProjectFromTaskNoticeText(parsedTask.description, sourceBasename, createdFile.basename, updatedLinkCount, (seedResult.sectionsInserted || 0) + (seedResult.sectionsCreated || 0), (convertedManagedLogLines.map((line) => { const parsed = parseManagedTaskLogParentBullet(line); return parsed ? parsed.kind : null; }).filter(Boolean)));
+    try {
+      const withReceipt = buildProjectPromotionNoticeWithReceipt(notice, parsedTask.description, { taskLines: convertedChildTaskLines, sections: convertedChildSections });
+      notice = withReceipt.notice;
+    } catch (_error) {
+      // The Created-project notice stays when receipt helpers are unavailable.
+    }
     if (droppedResidentDependencyCount > 0) notice += ` · dropped ${formatCountLabel(droppedResidentDependencyCount, "prerequisite")} that became project residents`;
     if (parsedTask.blockId) {
       const anchorLabel = (anchor && anchor.destinationLabel) || "Pomodoro";

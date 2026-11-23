@@ -178,12 +178,15 @@ async function runSurfaceAcceptance(ctx) {
   })()`, 20_000);
   addCheck(report, "external pane modify landed", external?.ok === true, external);
   await sendKey(client, "Enter");
-  probe = await waitForEditor(client, (value) => value.open && value.stage && /stale|vault changed|preview again/i.test(`${value.status} ${value.banner}`),
+  probe = await waitForEditor(client, (value) => value.open && value.stage
+    && /held-draft/.test(value.stageInput || "")
+    && lib.isStaleRefusalCopy(value),
     "stale refusal keeps the stage");
   addCheck(report, "stale refusal keeps the draft",
     probe.stageKind === "text" && probe.stageInput.includes("held-draft"), probe);
   const staleBytes = fs.readFileSync(surfacesPath, "utf8");
   addCheck(report, "stale refusal writes nothing", staleBytes.includes("edit_me: draft") && staleBytes.includes("keep_me: elsewhere"), { staleBytes });
+  await sendKey(client, "Enter");
   await shared.waitFor(client,
     `document.querySelector(".bob-property-editor-stage-preview")?.textContent || ""`,
     (text) => /Preview ·/.test(text), "fresh preview after stale");

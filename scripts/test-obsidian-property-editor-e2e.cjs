@@ -194,6 +194,39 @@ test("coverage mapping fails a missing surface assertion", () => {
   assert.equal(passing[0].status, "pass");
 });
 
+test("stale refusal wait matches the Property Editor copy and retries preview", () => {
+  const athenaProbe = {
+    open: true,
+    stage: "Edit edit_me",
+    stageKind: "text",
+    stageInput: "held-draft",
+    status: "The note changed. Your draft is kept; press Enter to preview it against the current note. — Nothing was written.",
+    banner: "",
+    recovery: "",
+    stagePreview: "The note changed; preview this draft again before saving.",
+  };
+  assert.equal(lib.isStaleRefusalCopy(athenaProbe), true);
+  assert.equal(athenaProbe.open && athenaProbe.stage && /held-draft/.test(athenaProbe.stageInput) && lib.isStaleRefusalCopy(athenaProbe), true);
+  assert.equal(lib.isStaleRefusalCopy({
+    status: "The note changed. Your draft is kept; press Enter to preview it against the current note. — Nothing was written.",
+    banner: "",
+    stagePreview: "",
+  }), true);
+  assert.equal(lib.isStaleRefusalCopy({ status: "Preview ready · Enter saves", banner: "", stagePreview: "Preview · edit_me: held-draft" }), false);
+  const surfaces = fs.readFileSync(path.join(__dirname, "obsidian-property-editor-e2e-surfaces.cjs"), "utf8");
+  const stages = fs.readFileSync(path.join(__dirname, "../plugins/bob-ledger-tools/src/298i-plugin-property-editor-modal-stages.js"), "utf8");
+  assert.match(lib.editorProbeSource(), /stagePreview/);
+  assert.match(surfaces, /lib\.isStaleRefusalCopy\(value\)/);
+  assert.match(surfaces, /held-draft/);
+  const staleWait = surfaces.indexOf("stale refusal keeps the stage");
+  const retryEnter = surfaces.indexOf("sendKey(client, \"Enter\")", staleWait);
+  const freshPreview = surfaces.indexOf("fresh preview after stale");
+  assert.ok(staleWait >= 0 && retryEnter >= 0 && freshPreview >= 0);
+  assert.ok(retryEnter < freshPreview, "Enter requests a fresh preview after the stale refusal");
+  assert.match(stages, /The note changed\. Your draft is kept; press Enter to preview it against the current note\./);
+  assert.match(stages, /The note changed; preview this draft again before saving\./);
+});
+
 test("lifecycle diagnostics preserve receiver, return values, and thrown open errors", () => {
   class Modal {
     open(value) { this.value = value; return value; }

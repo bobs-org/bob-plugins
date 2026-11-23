@@ -300,6 +300,7 @@ function editorProbeSource() {
       stage: editor.querySelector("[data-property-stage], [data-property-add]")?.getAttribute("aria-label") || "",
       stageKind: plugin?.propertyEditorModal?.stage?.kind || null,
       stageInput: document.querySelector("[data-property-stage-input], [data-property-add-input]")?.value || "",
+      stagePreview: editor.querySelector(".bob-property-editor-stage-preview")?.textContent || "",
       focusTag: document.activeElement?.tagName || "",
       focusClass: String(document.activeElement?.className || ""),
       inInput: Boolean(document.activeElement?.closest?.("input,textarea,[contenteditable='true']")),
@@ -435,6 +436,11 @@ const COVERAGE_PATTERNS = {
   "screenshots-reviewed-light-dark-narrow-wide": [/reviewed every screenshot/, /selected and locked rows are legible/, /selected row is visually distinct/],
 };
 
+function isStaleRefusalCopy(value) {
+  const copy = `${value?.status || ""} ${value?.banner || ""} ${value?.recovery || ""} ${value?.stagePreview || ""}`;
+  return /note changed|draft is kept|preview again|preview it against|stale|vault changed/i.test(copy);
+}
+
 function coverageFromAssertions(checks, assertions) {
   return checks.map((check) => {
     const patterns = COVERAGE_PATTERNS[check];
@@ -498,6 +504,13 @@ function selfTest() {
   assert.equal(typeof visualLayoutSource(), "string");
   assert.match(visualLayoutSource(), /selectedDiffers/);
   assert.match(editorProbeSource(), /selectedClass/);
+  assert.match(editorProbeSource(), /stagePreview/);
+  assert.equal(isStaleRefusalCopy({
+    status: "The note changed. Your draft is kept; press Enter to preview it against the current note. — Nothing was written.",
+    banner: "",
+    stagePreview: "The note changed; preview this draft again before saving.",
+  }), true);
+  assert.equal(isStaleRefusalCopy({ status: "Preview ready · Enter saves", banner: "", stagePreview: "Preview · edit_me: held-draft" }), false);
 
   const fakeBob = path.join(__dirname, "fixtures", "fake-bob.cjs");
   const show = showFixture();
@@ -534,6 +547,7 @@ module.exports = {
   coverageFromAssertions,
   editorProbeSource,
   fixtureNotes,
+  isStaleRefusalCopy,
   parseArgs,
   selfTest,
   showFixture,

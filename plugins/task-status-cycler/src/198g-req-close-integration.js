@@ -256,6 +256,39 @@ class TaskStatusCyclerReqCloseIntegrationMixin {
       context: options.context || {},
       cache: new Map(),
     });
+    if (result && result.ok === false) {
+      const requestedOwners = new Set();
+      for (const request of requests) {
+        const key = reqCloseOwnerKeyForSelector(owners, request.selector);
+        if (key) requestedOwners.add(key);
+      }
+      const failedOwners = requestedOwners.size > 0
+        ? owners.filter((owner) => owner && requestedOwners.has(owner.key))
+        : owners;
+      const failures = failedOwners.map((owner) => ({
+        kind: "requirement",
+        code: result.code,
+        reason: result.code === "req_close_stale"
+          ? `requirement choices went stale for “${owner.text || "task"}”`
+          : result.message,
+        key: owner.key,
+      }));
+      return {
+        ...result,
+        outcomes: [],
+        req_outcomes: [],
+        met: [],
+        restores: [],
+        failures: [
+          ...(Array.isArray(result.failures) ? result.failures : []),
+          ...failures,
+        ],
+        reqJump: reqJump ? jumpKey : null,
+        index,
+        completed,
+        closing,
+      };
+    }
     return { ...result, reqJump: reqJump ? jumpKey : null, index, completed, closing };
   }
 

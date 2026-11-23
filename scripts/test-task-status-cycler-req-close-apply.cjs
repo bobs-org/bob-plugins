@@ -195,6 +195,28 @@ test("a dirty editor that no longer matches expectedNotes is stale", async () =>
   assert.equal(result.code, "req_close_stale");
 });
 
+test("an edit outside the owner block stays fresh with expectedNotes", async () => {
+  const testCase = writesCase("RV20");
+  const notes = writesCaseNotes(vectors, testCase);
+  const files = writesCaseFiles(notes);
+  const { owners } = collectCase(helpers, { notes });
+  const plugin = applyPlugin(files);
+  plugin.readSuccessorNoteText = async () => (
+    `---\nopen_task_count: 2\n---\n${files["Tasks.md"]}`
+  );
+  const result = await plugin.applyReqCloseWrites({
+    notes: files,
+    owners,
+    requests: testCase.input.requests,
+    expectedNotes: files,
+    today: "2026-11-22",
+    date: "2026-11-22",
+    sha256Hex,
+    planCarryReq,
+  });
+  assert.equal(result.ok, true, result.message);
+});
+
 test("a changed owner-block postimage is stale before any write", async () => {
   const testCase = writesCase("RV20");
   const notes = writesCaseNotes(vectors, testCase);

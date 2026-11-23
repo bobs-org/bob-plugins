@@ -152,25 +152,32 @@ function reqCloseWriteSortBottomToTop(left, right) {
 
 function reqCloseWritePreflightExpected(notes, owners, verdicts, expectedNotes, expectedOwnerPostimages) {
   const expectedFiles = reqCloseWriteCoerceNotes(expectedNotes);
-  if (expectedFiles.size > 0) {
-    for (const [path, expected] of expectedFiles) {
-      const live = notes.get(path);
-      if (live !== expected) return reqCloseWriteStale([path]);
-    }
-  }
-  if (!expectedOwnerPostimages || typeof expectedOwnerPostimages !== "object") return { ok: true };
   const blocks = expectedOwnerPostimages instanceof Map
     ? expectedOwnerPostimages
-    : new Map(Object.entries(expectedOwnerPostimages));
+    : (expectedOwnerPostimages && typeof expectedOwnerPostimages === "object"
+      ? new Map(Object.entries(expectedOwnerPostimages))
+      : new Map());
   const needed = new Set();
-  for (const resolved of verdicts) needed.add(resolved.row.owner_key);
+  for (const resolved of Array.isArray(verdicts) ? verdicts : []) {
+    if (resolved && resolved.row && resolved.row.owner_key) needed.add(resolved.row.owner_key);
+  }
   for (const owner of owners) {
-    if (!needed.has(owner.key) || !blocks.has(owner.key)) continue;
+    if (!owner || !needed.has(owner.key)) continue;
+    let expectedBlock;
+    if (blocks.has(owner.key)) {
+      expectedBlock = blocks.get(owner.key);
+    } else if (owner.path && expectedFiles.has(owner.path)) {
+      expectedBlock = reqCloseWriteOwnerBlock(expectedFiles.get(owner.path), owner);
+    } else {
+      continue;
+    }
     const live = notes.get(owner.path);
     if (typeof live !== "string") return reqCloseWriteStale([owner.key]);
     const block = reqCloseWriteOwnerBlock(live, owner);
-    if (block !== blocks.get(owner.key)) return reqCloseWriteStale([owner.key]);
+    if (block !== expectedBlock) return reqCloseWriteStale([owner.key]);
   }
+  // Bytes outside the owner block (frontmatter counts, other tasks, vault sync)
+  // are not staleness; the contract is scoped to the owner and its req rows.
   return { ok: true };
 }
 

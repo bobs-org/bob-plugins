@@ -22813,7 +22813,12 @@ function successorOfferCloseNoticeText(model, baseText) {
     }
   }
   for (const failure of Array.isArray(source.failures) ? source.failures : []) {
-    if (failure && failure.reason) lines.push(`⚠ ${failure.kind === "recovery" ? "Recovery failed" : "Close write failed"}: ${failure.reason}`);
+    if (!failure || !failure.reason) continue;
+    if (failure.kind === "requirement") {
+      lines.push(`⚠ Requirements unchanged: ${failure.reason}`);
+    } else {
+      lines.push(`⚠ ${failure.kind === "recovery" ? "Recovery failed" : "Close write failed"}: ${failure.reason}`);
+    }
   }
   return lines.join("\n");
 }
@@ -34933,25 +34938,32 @@ function reqCloseWriteSortBottomToTop(left, right) {
 
 function reqCloseWritePreflightExpected(notes, owners, verdicts, expectedNotes, expectedOwnerPostimages) {
   const expectedFiles = reqCloseWriteCoerceNotes(expectedNotes);
-  if (expectedFiles.size > 0) {
-    for (const [path, expected] of expectedFiles) {
-      const live = notes.get(path);
-      if (live !== expected) return reqCloseWriteStale([path]);
-    }
-  }
-  if (!expectedOwnerPostimages || typeof expectedOwnerPostimages !== "object") return { ok: true };
   const blocks = expectedOwnerPostimages instanceof Map
     ? expectedOwnerPostimages
-    : new Map(Object.entries(expectedOwnerPostimages));
+    : (expectedOwnerPostimages && typeof expectedOwnerPostimages === "object"
+      ? new Map(Object.entries(expectedOwnerPostimages))
+      : new Map());
   const needed = new Set();
-  for (const resolved of verdicts) needed.add(resolved.row.owner_key);
+  for (const resolved of Array.isArray(verdicts) ? verdicts : []) {
+    if (resolved && resolved.row && resolved.row.owner_key) needed.add(resolved.row.owner_key);
+  }
   for (const owner of owners) {
-    if (!needed.has(owner.key) || !blocks.has(owner.key)) continue;
+    if (!owner || !needed.has(owner.key)) continue;
+    let expectedBlock;
+    if (blocks.has(owner.key)) {
+      expectedBlock = blocks.get(owner.key);
+    } else if (owner.path && expectedFiles.has(owner.path)) {
+      expectedBlock = reqCloseWriteOwnerBlock(expectedFiles.get(owner.path), owner);
+    } else {
+      continue;
+    }
     const live = notes.get(owner.path);
     if (typeof live !== "string") return reqCloseWriteStale([owner.key]);
     const block = reqCloseWriteOwnerBlock(live, owner);
-    if (block !== blocks.get(owner.key)) return reqCloseWriteStale([owner.key]);
+    if (block !== expectedBlock) return reqCloseWriteStale([owner.key]);
   }
+  // Bytes outside the owner block (frontmatter counts, other tasks, vault sync)
+  // are not staleness; the contract is scoped to the owner and its req rows.
   return { ok: true };
 }
 
@@ -36977,6 +36989,39 @@ class TaskStatusCyclerReqCloseIntegrationMixin {
       context: options.context || {},
       cache: new Map(),
     });
+    if (result && result.ok === false) {
+      const requestedOwners = new Set();
+      for (const request of requests) {
+        const key = reqCloseOwnerKeyForSelector(owners, request.selector);
+        if (key) requestedOwners.add(key);
+      }
+      const failedOwners = requestedOwners.size > 0
+        ? owners.filter((owner) => owner && requestedOwners.has(owner.key))
+        : owners;
+      const failures = failedOwners.map((owner) => ({
+        kind: "requirement",
+        code: result.code,
+        reason: result.code === "req_close_stale"
+          ? `requirement choices went stale for “${owner.text || "task"}”`
+          : result.message,
+        key: owner.key,
+      }));
+      return {
+        ...result,
+        outcomes: [],
+        req_outcomes: [],
+        met: [],
+        restores: [],
+        failures: [
+          ...(Array.isArray(result.failures) ? result.failures : []),
+          ...failures,
+        ],
+        reqJump: reqJump ? jumpKey : null,
+        index,
+        completed,
+        closing,
+      };
+    }
     return { ...result, reqJump: reqJump ? jumpKey : null, index, completed, closing };
   }
 

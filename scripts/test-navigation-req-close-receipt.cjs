@@ -76,3 +76,19 @@ test("notice v6 leaves payloads without req fields unchanged", () => {
   assert.equal(view.reqOutcomes, undefined);
   assert.doesNotMatch(view.text, /requirements met/);
 });
+
+test("failure-only requirement receipts leave visibility to the cycler's plain Notice", () => {
+  const shown = helpers.showUnblockedNotice({}, {
+    version: 1,
+    predecessors: [],
+    unblocked: [],
+    still_blocked: [],
+    failures: [{
+      kind: "requirement",
+      code: "req_close_stale",
+      key: "Tasks.md#^export",
+      reason: "requirement choices went stale for “Ship the exporter”",
+    }],
+  });
+  assert.equal(shown, false);
+});

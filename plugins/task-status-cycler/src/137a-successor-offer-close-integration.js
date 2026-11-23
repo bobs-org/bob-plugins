@@ -262,7 +262,12 @@ function successorOfferCloseNoticeText(model, baseText) {
     }
   }
   for (const failure of Array.isArray(source.failures) ? source.failures : []) {
-    if (failure && failure.reason) lines.push(`⚠ ${failure.kind === "recovery" ? "Recovery failed" : "Close write failed"}: ${failure.reason}`);
+    if (!failure || !failure.reason) continue;
+    if (failure.kind === "requirement") {
+      lines.push(`⚠ Requirements unchanged: ${failure.reason}`);
+    } else {
+      lines.push(`⚠ ${failure.kind === "recovery" ? "Recovery failed" : "Close write failed"}: ${failure.reason}`);
+    }
   }
   return lines.join("\n");
 }

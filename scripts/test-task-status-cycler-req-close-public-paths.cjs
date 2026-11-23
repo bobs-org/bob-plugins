@@ -647,6 +647,144 @@ test("8. external owner-block edits while the card is open refuse req_close_stal
   assert.doesNotMatch(harness.getSource("Dep.md"), /^- \[\?\] #task Waiting/m);
 });
 
+test("8a. project frontmatter writes during the card preserve Carry, Drop, and pull-in", async () => {
+  notices.length = 0;
+  const source = [
+    "---",
+    'type: "[[project]]"',
+    "open_task_count: 1",
+    "---",
+    "- [ ] #task Ship the exporter [id:: export__task] ^export",
+    "\t- [ ] Nested branch",
+    "\t\t- [ ] Carry this deep req",
+    "\t\t- [ ] Drop this req",
+  ].join("\n") + "\n";
+  const harness = createInMemoryObsidianApp({
+    "Project.md": source,
+    [DAILY_PATH]: dayNote("[[Project#^export]]"),
+    "inbox.md": "## Tasks\n",
+  });
+  const editor = createTextEditor(source, { line: 4, ch: 4 });
+  const plugin = makePlugin(harness, editor, "Project.md");
+  const shown = [];
+  installReqCloseNav(plugin, harness, {
+    shown,
+    async pick(model) {
+      const carry = reqRowByText(model, "Carry this deep req");
+      const drop = reqRowByText(model, "Drop this req");
+      assert.ok(carry && carry.depth === 2, "Carry targets a depth-2 requirement");
+      assert.ok(drop);
+      const updated = editor.getValue().replace("open_task_count: 1", "open_task_count: 2");
+      replaceEditorText(editor, updated);
+      const file = harness.app.vault.getAbstractFileByPath("Project.md");
+      await harness.app.vault.modify(file, updated);
+      return {
+        reqs: [
+          { key: carry.key, verdict: "carry_pulled" },
+          { key: drop.key, verdict: "drop", reason: "obsolete" },
+        ],
+      };
+    },
+  });
+  const wrote = await plugin.toggleActiveCheckboxOpenDoneAndPropagate(
+    editor,
+    { path: "Project.md" },
+    plugin.getActiveTaskStatus(editor),
+  );
+  assert.equal(wrote, true);
+  const project = editor.getValue();
+  assert.match(project, /^open_task_count: 2$/m);
+  assert.match(project, /^- \[x\] #task Ship the exporter/m);
+  assert.match(project, /- \[>\] \[\[#\^carry-deep-req\|Carry this deep req\]\]/);
+  assert.match(project, /- \[-\] Drop this req/);
+  assert.match(project, /❌ \*\*CANCEL LOG\*\*/);
+  assert.match(project, new RegExp(`\\*${TODAY}\\* — obsolete`));
+  assert.match(project, /^- \[\*\] #task Carry this deep req/m);
+  assert.match(project, /\^carry-deep-req/);
+  assert.match(harness.getSource(DAILY_PATH), /\[\[Project#\^carry-deep-req\]\]/);
+  assert.equal(shown.length, 1);
+  assert.ok((shown[0].req_outcomes || []).some((row) => row.verdict === "carry_pulled"));
+  assert.ok((shown[0].req_outcomes || []).some((row) => row.verdict === "drop"));
+  assert.deepEqual(shown[0].failures || [], []);
+});
+
+test("8b. edits to another task in the note do not stale requirement choices", async () => {
+  notices.length = 0;
+  const source = `${exporterNote()}- [ ] #task Separate task [id:: separate__task] ^separate\n`;
+  const harness = createInMemoryObsidianApp({
+    "Tasks.md": source,
+    [DAILY_PATH]: dayNote("[[Tasks#^export]]"),
+    "inbox.md": "## Tasks\n",
+  });
+  const editor = createTextEditor(source, { line: 0, ch: 4 });
+  const plugin = makePlugin(harness, editor, "Tasks.md");
+  const shown = [];
+  installReqCloseNav(plugin, harness, {
+    shown,
+    pick(model) {
+      const row = reqRowByText(model, "Handles empty input");
+      replaceEditorText(editor, editor.getValue().replace("Separate task", "Renamed separate task"));
+      return { reqs: [{ key: row.key, verdict: "drop", reason: "unneeded" }] };
+    },
+  });
+  await plugin.toggleActiveCheckboxOpenDoneAndPropagate(
+    editor,
+    { path: "Tasks.md" },
+    plugin.getActiveTaskStatus(editor),
+  );
+  assert.match(editor.getValue(), /Renamed separate task/);
+  assert.match(editor.getValue(), /- \[-\] Handles empty input/);
+  assert.ok((shown[0].req_outcomes || []).some((row) => row.verdict === "drop"));
+  assert.deepEqual(shown[0].failures || [], []);
+});
+
+test("8c. whole-pass requirement refusal shows a receipt and skips pull-in finishing", async () => {
+  notices.length = 0;
+  const source = exporterNote();
+  const harness = createInMemoryObsidianApp({
+    "Tasks.md": source,
+    [DAILY_PATH]: dayNote("[[Tasks#^export]]"),
+    "inbox.md": "## Tasks\n",
+  });
+  const editor = createTextEditor(source, { line: 0, ch: 4 });
+  const plugin = makePlugin(harness, editor, "Tasks.md");
+  const shown = [];
+  let finishCalls = 0;
+  installReqCloseNav(plugin, harness, {
+    shown,
+    pick(model) {
+      const row = reqRowByText(model, "Handles empty input");
+      return { reqs: [{ key: row.key, verdict: "carry_pulled" }] };
+    },
+  });
+  plugin.app.plugins.plugins["bob-navigation-hotkeys"].api.notice.showUnblocked = (model) => {
+    shown.push(model);
+    return false;
+  };
+  plugin.applyReqCloseWrites = async () => ({
+    ok: false,
+    code: "req_close_stale",
+    message: "stale requirement pick: Tasks.md",
+    selectors: ["Tasks.md"],
+  });
+  plugin.finishManagedReqPullIn = async (options) => {
+    finishCalls += 1;
+    return options.result;
+  };
+  await plugin.toggleActiveCheckboxOpenDoneAndPropagate(
+    editor,
+    { path: "Tasks.md" },
+    plugin.getActiveTaskStatus(editor),
+  );
+  assert.equal(finishCalls, 0);
+  assert.equal(shown.length, 1);
+  assert.deepEqual(shown[0].req_outcomes, []);
+  assert.deepEqual(shown[0].req_met, []);
+  assert.ok(shown[0].failures.some((row) => row.kind === "requirement" && row.code === "req_close_stale"));
+  assert.match(helpers.successorNoticeText(shown[0]), /⚠ Requirements unchanged:/);
+  assert.ok(notices.some((text) => text.includes("⚠ Requirements unchanged:")), "plain Notice is the visible fallback");
+});
+
 test("9. older picker or missing nav leaves reqs implicitly Met", async () => {
   notices.length = 0;
   const source = exporterNote();
@@ -1224,6 +1362,48 @@ test("15. Ctrl+Enter on an idless owner opens the requirement-only card and appl
   assert.match(JSON.stringify(shown[0]), /⊘ Dropped/);
   assert.deepEqual(shown[0].unblocked, []);
   assert.equal(Object.prototype.hasOwnProperty.call(shown[0], "offer_closes"), false);
+});
+
+test("15a. an idless whole-pass refusal produces a visible requirement receipt", async () => {
+  notices.length = 0;
+  const source = idlessExporterNote();
+  const harness = createInMemoryObsidianApp({
+    "Tasks.md": source,
+    [DAILY_PATH]: dayNote(),
+    "inbox.md": "## Tasks\n",
+  });
+  const editor = createTextEditor(source, { line: 0, ch: 4 });
+  const plugin = makePlugin(harness, editor, "Tasks.md");
+  const shown = [];
+  let finishCalls = 0;
+  installReqCloseNav(plugin, harness, {
+    shown,
+    pick(model) {
+      const row = reqRowByText(model, "Handles empty input");
+      return { reqs: [{ key: row.key, verdict: "drop", reason: "idless stale" }] };
+    },
+  });
+  plugin.applyReqCloseWrites = async () => ({
+    ok: false,
+    code: "req_close_stale",
+    message: "stale requirement pick: Tasks.md",
+    selectors: ["Tasks.md"],
+  });
+  plugin.finishManagedReqPullIn = async (options) => {
+    finishCalls += 1;
+    return options.result;
+  };
+  await plugin.toggleActiveCheckboxOpenDoneAndPropagate(
+    editor,
+    { path: "Tasks.md" },
+    plugin.getActiveTaskStatus(editor),
+  );
+  assert.equal(finishCalls, 0);
+  assert.match(editor.getValue(), /^- \[x\] #task Ship the exporter/m);
+  assert.match(editor.getValue(), /- \[ \] Handles empty input/);
+  assert.doesNotMatch(editor.getValue(), /CANCEL LOG/);
+  assert.ok(shown[0].failures.some((row) => row.kind === "requirement" && row.code === "req_close_stale"));
+  assert.match(helpers.successorNoticeText(shown[0]), /⚠ Requirements unchanged:/);
 });
 
 test("15b. an idless owner opens through completeTaskAtCursor and a single Done cycle", async () => {

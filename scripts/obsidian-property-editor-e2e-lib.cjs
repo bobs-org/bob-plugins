@@ -441,6 +441,12 @@ function isStaleRefusalCopy(value) {
   return /note changed|draft is kept|preview again|preview it against|stale|vault changed/i.test(copy);
 }
 
+function yamlHasScalar(text, key, value) {
+  const escapedKey = String(key).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escapedValue = String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^${escapedKey}:\\s*(?:${escapedValue}|"${escapedValue}"|'${escapedValue}')\\s*$`, "m").test(String(text || ""));
+}
+
 function coverageFromAssertions(checks, assertions) {
   return checks.map((check) => {
     const patterns = COVERAGE_PATTERNS[check];
@@ -511,6 +517,10 @@ function selfTest() {
     stagePreview: "The note changed; preview this draft again before saving.",
   }), true);
   assert.equal(isStaleRefusalCopy({ status: "Preview ready · Enter saves", banner: "", stagePreview: "Preview · edit_me: held-draft" }), false);
+  assert.equal(yamlHasScalar('edit_me: "draft"\nkeep_me: elsewhere\n', "edit_me", "draft"), true);
+  assert.equal(yamlHasScalar("edit_me: draft\n", "edit_me", "draft"), true);
+  assert.equal(yamlHasScalar('edit_me: "held-draft"\n', "edit_me", "draft"), false);
+  assert.equal(yamlHasScalar('edit_me: "draft"\n', "edit_me", "held-draft"), false);
 
   const fakeBob = path.join(__dirname, "fixtures", "fake-bob.cjs");
   const show = showFixture();
@@ -552,4 +562,5 @@ module.exports = {
   selfTest,
   showFixture,
   visualLayoutSource,
+  yamlHasScalar,
 };

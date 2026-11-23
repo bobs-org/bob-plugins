@@ -213,10 +213,16 @@ test("stale refusal wait matches the Property Editor copy and retries preview", 
     stagePreview: "",
   }), true);
   assert.equal(lib.isStaleRefusalCopy({ status: "Preview ready · Enter saves", banner: "", stagePreview: "Preview · edit_me: held-draft" }), false);
+  const athenaStaleBytes = "---\ntype: \"[[note]]\"\nkeep_me: elsewhere\nedit_me: \"draft\"\n---\n";
+  assert.equal(lib.yamlHasScalar(athenaStaleBytes, "edit_me", "draft"), true);
+  assert.equal(lib.yamlHasScalar(athenaStaleBytes, "keep_me", "elsewhere"), true);
+  assert.equal(lib.yamlHasScalar(athenaStaleBytes, "edit_me", "held-draft"), false);
+  assert.equal(athenaStaleBytes.includes("edit_me: draft"), false);
   const surfaces = fs.readFileSync(path.join(__dirname, "obsidian-property-editor-e2e-surfaces.cjs"), "utf8");
   const stages = fs.readFileSync(path.join(__dirname, "../plugins/bob-ledger-tools/src/298i-plugin-property-editor-modal-stages.js"), "utf8");
   assert.match(lib.editorProbeSource(), /stagePreview/);
   assert.match(surfaces, /lib\.isStaleRefusalCopy\(value\)/);
+  assert.match(surfaces, /lib\.yamlHasScalar\(staleBytes, "edit_me", "draft"\)/);
   assert.match(surfaces, /held-draft/);
   const staleWait = surfaces.indexOf("stale refusal keeps the stage");
   const retryEnter = surfaces.indexOf("sendKey(client, \"Enter\")", staleWait);

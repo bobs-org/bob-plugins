@@ -156,7 +156,7 @@ async function runSurfaceAcceptance(ctx) {
   await saveStage(client, "[data-property-stage-input]", "pane-saved", "keep_me");
   const afterPanes = fs.readFileSync(surfacesPath, "utf8");
   addCheck(report, "apply saved unsaved pane text",
-    afterPanes.includes("keep_me: pane-saved") && afterPanes.includes("Unsaved pane text for acceptance."),
+    lib.yamlHasScalar(afterPanes, "keep_me", "pane-saved") && afterPanes.includes("Unsaved pane text for acceptance."),
     { afterPanes });
 
   // External modify during a draft: stale refusal keeps the draft.
@@ -170,7 +170,7 @@ async function runSurfaceAcceptance(ctx) {
   const external = await client.evaluate(`(async () => {
     const view = window.__propertyEditorPanes.second.view;
     const text = view.editor.getValue();
-    const next = text.replace('keep_me: pane-saved', 'keep_me: elsewhere');
+    const next = text.replace(/keep_me:\\s*(?:pane-saved|"pane-saved"|'pane-saved')/, 'keep_me: elsewhere');
     if (next === text) return { ok: false, text };
     view.editor.setValue(next);
     await view.save();
@@ -185,7 +185,11 @@ async function runSurfaceAcceptance(ctx) {
   addCheck(report, "stale refusal keeps the draft",
     probe.stageKind === "text" && probe.stageInput.includes("held-draft"), probe);
   const staleBytes = fs.readFileSync(surfacesPath, "utf8");
-  addCheck(report, "stale refusal writes nothing", staleBytes.includes("edit_me: draft") && staleBytes.includes("keep_me: elsewhere"), { staleBytes });
+  addCheck(report, "stale refusal writes nothing",
+    lib.yamlHasScalar(staleBytes, "edit_me", "draft")
+      && lib.yamlHasScalar(staleBytes, "keep_me", "elsewhere")
+      && !lib.yamlHasScalar(staleBytes, "edit_me", "held-draft"),
+    { staleBytes });
   await sendKey(client, "Enter");
   await shared.waitFor(client,
     `document.querySelector(".bob-property-editor-stage-preview")?.textContent || ""`,
@@ -193,7 +197,7 @@ async function runSurfaceAcceptance(ctx) {
   await sendKey(client, "Enter");
   await waitForEditor(client, (value) => !value.stage && /Saved/.test(value.status) && value.rows.some((row) => row.key === "edit_me"),
     "retry after stale saves");
-  addCheck(report, "fresh preview required after stale", fs.readFileSync(surfacesPath, "utf8").includes("edit_me: held-draft"),
+  addCheck(report, "fresh preview required after stale", lib.yamlHasScalar(fs.readFileSync(surfacesPath, "utf8"), "edit_me", "held-draft"),
     { text: fs.readFileSync(surfacesPath, "utf8") });
   await client.evaluate(`(() => {
     const second = window.__propertyEditorPanes && window.__propertyEditorPanes.second;
@@ -212,7 +216,7 @@ async function runSurfaceAcceptance(ctx) {
   await sendKey(client, "u");
   await waitForEditor(client, (value) => value.rows.some((row) => row.key === "edit_me" && /draft/.test(row.text)),
     "undo after reopen");
-  addCheck(report, "reopened undo restores bytes", fs.readFileSync(surfacesPath, "utf8").includes("edit_me: draft"),
+  addCheck(report, "reopened undo restores bytes", lib.yamlHasScalar(fs.readFileSync(surfacesPath, "utf8"), "edit_me", "draft"),
     { text: fs.readFileSync(surfacesPath, "utf8") });
 
   // y then Done restores Live Preview and the same key; external delete uses nearest.

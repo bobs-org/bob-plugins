@@ -11,10 +11,13 @@
 // `#task` subtasks), drawers (`NOTES` first on a req owner), and logs. Order
 // inside a zone is authored order and is never re-sorted. A task that owns
 // reqs keeps its notes in a `NOTES` drawer, created only when a note lands in
-// it. Tasks are the `taskReqNoteTasks` rows; `blockEnd` and every `offset`
-// are UTF-16 offsets into the note.
+// it. On a `^prj` owner the home is the project note's `## Notes` section
+// (Title Case when created; an existing `## NOTES` spelling is kept), with
+// column-zero bullets. Tasks are the `taskReqNoteTasks` rows; `blockEnd` and
+// every `offset` are UTF-16 offsets into the note.
 
 const TASK_BLOCK_NOTES_TITLE = "NOTES";
+const TASK_BLOCK_NOTES_SECTION_TITLE = "Notes";
 // Drawer slots read the block with the default filter, as bob-cli does.
 const TASK_BLOCK_DEFAULT_FILTER = "#task";
 const TASK_BLOCK_ZONES = Object.freeze(["cancel-log", "managed-links", "reqs", "authored", "drawers", "logs"]);
@@ -382,8 +385,29 @@ function taskBlockAtxHeading(line) {
   return { level: hashes, title };
 }
 
-// The project note's `## NOTES` section as a drawer (`project_h2_drawers`
-// narrowed to the NOTES key, which is never reserved or structural).
+// `capture_drawers::h2_insert_position`: `{offset, empty}` for a column-zero
+// capture into a project `##` section.
+function taskBlockH2InsertPosition(contents, drawer) {
+  const doc = taskReqDocument(contents);
+  const headingIdx = Math.min(Math.max((drawer.line || 1) - 1, 0), doc.texts.length);
+  let endIdx = doc.texts.length;
+  for (let idx = 0; idx <= doc.texts.length; idx += 1) {
+    if (taskBlockLineOffset(doc, idx) >= drawer.blockEnd) {
+      endIdx = idx;
+      break;
+    }
+  }
+  const last = Math.min(endIdx, doc.texts.length);
+  for (let idx = last - 1; idx > headingIdx; idx -= 1) {
+    if (taskReqTrim(doc.texts[idx]) === "") continue;
+    return { offset: doc.spans[idx].end, empty: false };
+  }
+  const heading = doc.spans[headingIdx];
+  return { offset: heading ? heading.end : 0, empty: true };
+}
+
+// The project note's `## Notes` (or `## NOTES`) section as a drawer
+// (`project_h2_drawers` narrowed to the NOTES key).
 function taskBlockProjectNotesDrawer(contents) {
   const doc = taskReqDocument(contents);
   const fenced = taskBlockRawFenced(doc);
@@ -423,10 +447,23 @@ function taskBlockDocumentLineEnding(contents) {
   return String(contents).includes("\r\n") ? "\r\n" : "\n";
 }
 
+// `task_block_layout::notes_drawer`: the project `## Notes` section on a
+// `^prj` owner, else the task-child `NOTES` drawer.
+function taskBlockNotesDrawer(contents, task) {
+  if (taskBlockIsPrjParent(contents, task)) return taskBlockProjectNotesDrawer(contents);
+  return taskBlockDrawers(contents, task).find((drawer) => drawer.key === TASK_BLOCK_NOTES_TITLE) || null;
+}
+
+// `task_block_layout::notes_create_title`.
+function taskBlockNotesCreateTitle(contents, task) {
+  return taskBlockIsPrjParent(contents, task) ? TASK_BLOCK_NOTES_SECTION_TITLE : TASK_BLOCK_NOTES_TITLE;
+}
+
 // `task_block_layout::ensure_notes_drawer` (`capture_drawers::ensure_drawer`
 // creating `NOTES`): `{updated, drawer, created: true}`, or null when the
 // drawer could not be found after the write. A `^prj` project task gets a
-// `## NOTES` section at the end of the note instead of a child bullet.
+// Title Case `## Notes` section at the end of the note instead of a child
+// bullet.
 function taskBlockEnsureNotesDrawer(contents, task) {
   const text = String(contents);
   if (taskBlockIsPrjParent(text, task)) {
@@ -434,7 +471,7 @@ function taskBlockEnsureNotesDrawer(contents, task) {
     const separator = text === "" || text.endsWith(`${ending}${ending}`)
       ? ""
       : text.endsWith(ending) ? ending : `${ending}${ending}`;
-    const updated = `${text}${separator}## ${TASK_BLOCK_NOTES_TITLE}${ending}`;
+    const updated = `${text}${separator}## ${TASK_BLOCK_NOTES_SECTION_TITLE}${ending}`;
     const drawer = taskBlockProjectNotesDrawer(updated);
     return drawer ? { updated, drawer, created: true } : null;
   }
@@ -460,7 +497,7 @@ function taskBlockNoteHome(contents, task, options) {
   const doc = taskReqDocument(contents);
   const block = taskBlockReadIn(doc, task, resolved.globalFilter);
   if (!taskBlockOwnsReqs(block)) return { home: "loose", slot: taskBlockInsertionSlotIn(doc, task, "authored", resolved) };
-  const drawer = taskBlockDrawersIn(doc, task).find((entry) => entry.key === TASK_BLOCK_NOTES_TITLE);
+  const drawer = taskBlockNotesDrawer(contents, task);
   return drawer ? { home: "notes", drawer } : { home: "new-notes" };
 }
 

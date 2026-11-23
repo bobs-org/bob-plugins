@@ -32514,10 +32514,13 @@ function taskReqRun(depth) {
 // `#task` subtasks), drawers (`NOTES` first on a req owner), and logs. Order
 // inside a zone is authored order and is never re-sorted. A task that owns
 // reqs keeps its notes in a `NOTES` drawer, created only when a note lands in
-// it. Tasks are the `taskReqNoteTasks` rows; `blockEnd` and every `offset`
-// are UTF-16 offsets into the note.
+// it. On a `^prj` owner the home is the project note's `## Notes` section
+// (Title Case when created; an existing `## NOTES` spelling is kept), with
+// column-zero bullets. Tasks are the `taskReqNoteTasks` rows; `blockEnd` and
+// every `offset` are UTF-16 offsets into the note.
 
 const TASK_BLOCK_NOTES_TITLE = "NOTES";
+const TASK_BLOCK_NOTES_SECTION_TITLE = "Notes";
 // Drawer slots read the block with the default filter, as bob-cli does.
 const TASK_BLOCK_DEFAULT_FILTER = "#task";
 const TASK_BLOCK_ZONES = Object.freeze(["cancel-log", "managed-links", "reqs", "authored", "drawers", "logs"]);
@@ -32885,8 +32888,29 @@ function taskBlockAtxHeading(line) {
   return { level: hashes, title };
 }
 
-// The project note's `## NOTES` section as a drawer (`project_h2_drawers`
-// narrowed to the NOTES key, which is never reserved or structural).
+// `capture_drawers::h2_insert_position`: `{offset, empty}` for a column-zero
+// capture into a project `##` section.
+function taskBlockH2InsertPosition(contents, drawer) {
+  const doc = taskReqDocument(contents);
+  const headingIdx = Math.min(Math.max((drawer.line || 1) - 1, 0), doc.texts.length);
+  let endIdx = doc.texts.length;
+  for (let idx = 0; idx <= doc.texts.length; idx += 1) {
+    if (taskBlockLineOffset(doc, idx) >= drawer.blockEnd) {
+      endIdx = idx;
+      break;
+    }
+  }
+  const last = Math.min(endIdx, doc.texts.length);
+  for (let idx = last - 1; idx > headingIdx; idx -= 1) {
+    if (taskReqTrim(doc.texts[idx]) === "") continue;
+    return { offset: doc.spans[idx].end, empty: false };
+  }
+  const heading = doc.spans[headingIdx];
+  return { offset: heading ? heading.end : 0, empty: true };
+}
+
+// The project note's `## Notes` (or `## NOTES`) section as a drawer
+// (`project_h2_drawers` narrowed to the NOTES key).
 function taskBlockProjectNotesDrawer(contents) {
   const doc = taskReqDocument(contents);
   const fenced = taskBlockRawFenced(doc);
@@ -32926,10 +32950,23 @@ function taskBlockDocumentLineEnding(contents) {
   return String(contents).includes("\r\n") ? "\r\n" : "\n";
 }
 
+// `task_block_layout::notes_drawer`: the project `## Notes` section on a
+// `^prj` owner, else the task-child `NOTES` drawer.
+function taskBlockNotesDrawer(contents, task) {
+  if (taskBlockIsPrjParent(contents, task)) return taskBlockProjectNotesDrawer(contents);
+  return taskBlockDrawers(contents, task).find((drawer) => drawer.key === TASK_BLOCK_NOTES_TITLE) || null;
+}
+
+// `task_block_layout::notes_create_title`.
+function taskBlockNotesCreateTitle(contents, task) {
+  return taskBlockIsPrjParent(contents, task) ? TASK_BLOCK_NOTES_SECTION_TITLE : TASK_BLOCK_NOTES_TITLE;
+}
+
 // `task_block_layout::ensure_notes_drawer` (`capture_drawers::ensure_drawer`
 // creating `NOTES`): `{updated, drawer, created: true}`, or null when the
 // drawer could not be found after the write. A `^prj` project task gets a
-// `## NOTES` section at the end of the note instead of a child bullet.
+// Title Case `## Notes` section at the end of the note instead of a child
+// bullet.
 function taskBlockEnsureNotesDrawer(contents, task) {
   const text = String(contents);
   if (taskBlockIsPrjParent(text, task)) {
@@ -32937,7 +32974,7 @@ function taskBlockEnsureNotesDrawer(contents, task) {
     const separator = text === "" || text.endsWith(`${ending}${ending}`)
       ? ""
       : text.endsWith(ending) ? ending : `${ending}${ending}`;
-    const updated = `${text}${separator}## ${TASK_BLOCK_NOTES_TITLE}${ending}`;
+    const updated = `${text}${separator}## ${TASK_BLOCK_NOTES_SECTION_TITLE}${ending}`;
     const drawer = taskBlockProjectNotesDrawer(updated);
     return drawer ? { updated, drawer, created: true } : null;
   }
@@ -32963,7 +33000,7 @@ function taskBlockNoteHome(contents, task, options) {
   const doc = taskReqDocument(contents);
   const block = taskBlockReadIn(doc, task, resolved.globalFilter);
   if (!taskBlockOwnsReqs(block)) return { home: "loose", slot: taskBlockInsertionSlotIn(doc, task, "authored", resolved) };
-  const drawer = taskBlockDrawersIn(doc, task).find((entry) => entry.key === TASK_BLOCK_NOTES_TITLE);
+  const drawer = taskBlockNotesDrawer(contents, task);
   return drawer ? { home: "notes", drawer } : { home: "new-notes" };
 }
 
@@ -33148,13 +33185,16 @@ function taskBlockReorder(contents, task, options) {
 
 // `tidy::file_into_notes`: append pulled ranges to the end of the task's
 // `NOTES` entries (before the drawer's own managed logs), creating `NOTES`
-// first among the drawers when the task has none. `{updated, created,
+// first among the drawers when the task has none. On a `^prj` owner the home
+// is the note's `## Notes` section: bullets land at column zero, each pulled
+// line dedented by the task's child indent unit. `{updated, created,
 // firstLine}` (0-based line of the first filed line) or null.
 function taskBlockFileIntoNotes(contents, taskLine, pulled, options) {
   const resolved = taskReqOptions(options);
   const task = taskBlockFindTask(contents, taskLine, resolved);
   if (!task) return null;
-  const existing = taskBlockDrawers(contents, task).find((drawer) => drawer.key === TASK_BLOCK_NOTES_TITLE);
+  const project = taskBlockIsPrjParent(contents, task);
+  const existing = taskBlockNotesDrawer(contents, task);
   let staged = String(contents);
   let drawer = existing || null;
   let created = false;
@@ -33164,6 +33204,17 @@ function taskBlockFileIntoNotes(contents, taskLine, pulled, options) {
     staged = ensured.updated;
     drawer = ensured.drawer;
     created = ensured.created;
+  }
+  if (project) {
+    const insertion = taskBlockH2InsertPosition(staged, drawer);
+    const entries = [];
+    for (const range of pulled) entries.push(...taskBlockRebased(range, ""));
+    if (insertion.empty) entries.unshift("");
+    const before = staged.slice(0, insertion.offset);
+    const firstLine = (before.match(/\n/g) || []).length
+      + (before !== "" && !before.endsWith("\n") ? 1 : 0)
+      + (insertion.empty ? 1 : 0);
+    return { updated: taskBlockInsertLines(staged, insertion.offset, entries), created, firstLine };
   }
   const insertion = taskBlockDrawerInsertion(staged, drawer);
   const entries = [];

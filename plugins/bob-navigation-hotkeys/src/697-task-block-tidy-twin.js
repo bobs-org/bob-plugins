@@ -123,13 +123,16 @@ function taskBlockReorder(contents, task, options) {
 
 // `tidy::file_into_notes`: append pulled ranges to the end of the task's
 // `NOTES` entries (before the drawer's own managed logs), creating `NOTES`
-// first among the drawers when the task has none. `{updated, created,
+// first among the drawers when the task has none. On a `^prj` owner the home
+// is the note's `## Notes` section: bullets land at column zero, each pulled
+// line dedented by the task's child indent unit. `{updated, created,
 // firstLine}` (0-based line of the first filed line) or null.
 function taskBlockFileIntoNotes(contents, taskLine, pulled, options) {
   const resolved = taskReqOptions(options);
   const task = taskBlockFindTask(contents, taskLine, resolved);
   if (!task) return null;
-  const existing = taskBlockDrawers(contents, task).find((drawer) => drawer.key === TASK_BLOCK_NOTES_TITLE);
+  const project = taskBlockIsPrjParent(contents, task);
+  const existing = taskBlockNotesDrawer(contents, task);
   let staged = String(contents);
   let drawer = existing || null;
   let created = false;
@@ -139,6 +142,17 @@ function taskBlockFileIntoNotes(contents, taskLine, pulled, options) {
     staged = ensured.updated;
     drawer = ensured.drawer;
     created = ensured.created;
+  }
+  if (project) {
+    const insertion = taskBlockH2InsertPosition(staged, drawer);
+    const entries = [];
+    for (const range of pulled) entries.push(...taskBlockRebased(range, ""));
+    if (insertion.empty) entries.unshift("");
+    const before = staged.slice(0, insertion.offset);
+    const firstLine = (before.match(/\n/g) || []).length
+      + (before !== "" && !before.endsWith("\n") ? 1 : 0)
+      + (insertion.empty ? 1 : 0);
+    return { updated: taskBlockInsertLines(staged, insertion.offset, entries), created, firstLine };
   }
   const insertion = taskBlockDrawerInsertion(staged, drawer);
   const entries = [];

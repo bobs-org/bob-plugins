@@ -129,7 +129,7 @@ function fixtureNotes(today = "2026-11-23") {
       "title: Projects",
       "summary: Property editor acceptance fixtures.",
       "record:",
-      "  noun: project",
+      "  noun: acceptance_fixture",
       "  fields:",
       "    status: {required: true, values: {draft: Draft, ready: Ready}}",
       "---",
@@ -281,6 +281,7 @@ function selfTest() {
   assert.throws(() => parseArgs(["--unknown"]), /Unknown argument/);
 
   const notes = fixtureNotes();
+  assert.match(notes["projects-album.md"], /  noun: acceptance_fixture\n/);
   for (const pathValue of ["projects/project-note.md", "2026/20261123.md", "projects-album/acceptance.md", "invalid.md", "unclosed.md", "duplicate.md", "plain.md", "literal-name.md", "value-kinds.md", "old-bob.md"]) {
     assert.ok(notes[pathValue], `fixture missing ${pathValue}`);
   }

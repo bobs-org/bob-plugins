@@ -863,7 +863,8 @@ function propertyEditorPaintRow(doc, host, entry, selected, modal) {
   } catch (_) {}
   // Chromium sizes a <button> from its first line box, so a two-row grid on
   // the button itself overflows onto the next row. Keep the grid on an inner
-  // span; phrasing content stays valid inside the button.
+  // span (phrasing content stays valid) and size the button as a column flex
+  // container so the stacked value row is included in the button height.
   const grid = propertyEditorCreateEl(doc, "span", "bob-property-row-grid");
   const icon = propertyEditorCreateEl(doc, "span", "bob-property-row-icon");
   propertyEditorSetText(icon, propertyEditorKindIcon(row.kind));

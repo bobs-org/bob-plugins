@@ -359,7 +359,17 @@ function visualLayoutSource() {
       boxOf(row.querySelector(".bob-property-row-key")),
       boxOf(row.querySelector(".bob-property-row-value")),
     ));
-    const rowOverlap = rows.some((row, index) => index > 0 && boxesOverlap(boxOf(rows[index - 1]), boxOf(row)));
+    const rowOverlap = rows.some((row, index) => {
+      if (index === 0) return false;
+      const prev = rows[index - 1];
+      const prevBox = boxOf(prev);
+      const prevValue = boxOf(prev.querySelector(".bob-property-row-value"));
+      const thisBox = boxOf(row);
+      const thisKey = boxOf(row.querySelector(".bob-property-row-key"));
+      return boxesOverlap(prevBox, thisBox)
+        || boxesOverlap(prevValue, thisBox)
+        || boxesOverlap(prevValue, thisKey);
+    });
     const valueOverflow = rows.some((row) => {
       const rowBox = boxOf(row);
       const valueBox = boxOf(row.querySelector(".bob-property-row-value"));
@@ -381,6 +391,7 @@ function visualLayoutSource() {
       clipped,
       keyValueOverlap,
       rowOverlap,
+      valueOverflow,
       selectedDisplay: selectedStyle?.display || "",
       selectedBackground: selectedStyle?.backgroundColor || "",
       looseBackground: looseStyle?.backgroundColor || "",
@@ -441,7 +452,7 @@ const COVERAGE_PATTERNS = {
   "entry-api-open-property-editor": [/API openPropertyEditor/],
   "entry-ordinary-and-invalid-yaml-notes": [/API openPropertyEditor on an ordinary note/, /API openPropertyEditor on invalid YAML/, /palette opens invalid YAML recovery/],
   "screenshots-light-dark-narrow-wide": [/screenshots light dark narrow wide/, /screenshot .+ contains the populated editor/],
-  "screenshots-reviewed-light-dark-narrow-wide": [/reviewed every screenshot/, /selected and locked rows are legible/, /selected row is visually distinct/],
+  "screenshots-reviewed-light-dark-narrow-wide": [/reviewed every screenshot/, /selected and locked rows are legible/, /selected row is visually distinct/, /values stay inside their rows/],
 };
 
 function isStaleRefusalCopy(value) {
@@ -518,6 +529,7 @@ function selfTest() {
   assert.equal(typeof visualLayoutSource(), "string");
   assert.match(visualLayoutSource(), /selectedDiffers/);
   assert.match(visualLayoutSource(), /rowOverlap/);
+  assert.match(visualLayoutSource(), /valueOverflow/);
   assert.match(editorProbeSource(), /selectedClass/);
   assert.match(editorProbeSource(), /stagePreview/);
   assert.equal(isStaleRefusalCopy({

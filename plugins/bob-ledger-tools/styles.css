@@ -13050,10 +13050,12 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
 }
 
 /* Property editor shell (bob-cli-pf.4.1.7.4 acceptance-surfaces).
-   The row button stays a block; an inner span is the three-column grid so
-   Chromium includes stacked narrow rows in the button height. Selected rows
-   use the accent mix; locked rows stay muted and readable. Focus rings are
-   2px accent outlines on every interactive control. */
+   Chromium sizes a <button> from its first line box, so display:block still
+   overflows a stacked inner grid onto the next row. The button is a column
+   flex container; the inner span is the three-column (narrow: stacked) grid
+   so the button height includes both rows. Selected rows use the accent mix;
+   locked rows stay muted and readable. Focus rings are 2px accent outlines
+   on every interactive control. */
 .bob-property-editor-modal {
   width: min(44rem, calc(100vw - 1.5rem));
   max-width: calc(100vw - 1.5rem);
@@ -13120,11 +13122,15 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
   text-transform: uppercase;
 }
 /* The button-qualified reset is (0,2,1). Hover/selected/locked/focus
-   must keep at least that specificity or background:transparent wins. */
+   must keep at least that specificity or background:transparent wins.
+   display:flex is required so Chromium includes the inner stacked grid
+   in the button's height. */
 .bob-property-editor button.bob-property-row,
 .bob-property-row {
   appearance: none;
-  display: block;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
   box-sizing: border-box;
   width: 100%;
   margin: 0;
@@ -13136,12 +13142,15 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
   font: inherit;
   text-align: start;
   cursor: pointer;
+  overflow: visible;
+  min-height: min-content;
 }
 .bob-property-row-grid {
   display: grid;
   grid-template-columns: 1.6em minmax(6em, 34%) minmax(0, 1fr);
   column-gap: 0.7em;
   align-items: baseline;
+  flex: 1 1 auto;
   width: 100%;
   min-width: 0;
 }

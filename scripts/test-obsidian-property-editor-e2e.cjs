@@ -242,7 +242,10 @@ test("narrow screenshots restore the wide viewport before unload", () => {
   assert.ok(shots >= 0 && unloadCall >= 0 && restore >= 0);
   assert.ok(restore < unloadCall, "wide viewport must return before plugin unload");
   assert.match(lib.visualLayoutSource(), /rowOverlap/);
+  assert.match(lib.visualLayoutSource(), /valueOverflow/);
+  assert.match(lib.visualLayoutSource(), /prevValue, thisKey/);
   assert.match(surfaces, /adjacent rows do not overlap/);
+  assert.match(surfaces, /values stay inside their rows/);
   assert.match(surfaces, /setViewport\(client, 1400, 900\)/);
   assert.match(surfaces, /propertyEditorEntrypointsActive/);
 });
@@ -252,6 +255,8 @@ test("selected-row fill beats the button-qualified transparent reset", () => {
   const reset = css.match(/\.bob-property-editor button\.bob-property-row,[\s\S]*?\{[\s\S]*?background:\s*transparent;[\s\S]*?\}/);
   const selected = css.match(/\.bob-property-editor button\.bob-property-row\.is-selected[\s\S]*?\{[\s\S]*?\}/);
   assert.ok(reset, "row reset qualifies the button so Obsidian UA styles lose");
+  assert.match(reset[0], /display:\s*flex;/);
+  assert.match(reset[0], /flex-direction:\s*column;/);
   assert.ok(selected, "selected fill must use the same button-qualified specificity");
   assert.match(selected[0], /background:\s*color-mix/);
   assert.match(css, /\.bob-property-editor button\.bob-property-row\.is-locked/);

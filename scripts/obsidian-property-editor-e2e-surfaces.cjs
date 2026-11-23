@@ -403,6 +403,7 @@ async function runVisualReview(ctx) {
   addCheck(report, "locked row stays readable", layout.lockedContrast >= 3 && /is-locked/.test(layout.lockedClasses || ""), layout);
   addCheck(report, "key and value do not overlap", layout.keyValueOverlap === false, layout);
   addCheck(report, "adjacent rows do not overlap", layout.rowOverlap === false, layout);
+  addCheck(report, "values stay inside their rows", layout.valueOverflow === false, layout);
   addCheck(report, "rows are not clipped", layout.clipped === false, layout);
   addCheck(report, "selected row shows a focus ring", layout.focusOutlineWidth >= 2, layout);
   report.visualLayout = layout;

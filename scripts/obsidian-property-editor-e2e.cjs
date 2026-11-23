@@ -821,6 +821,7 @@ async function run(args) {
         clipped: layout.clipped === false,
         keyValueOverlap: layout.keyValueOverlap === false,
         rowOverlap: layout.rowOverlap === false,
+        valueOverflow: layout.valueOverflow === false,
         selectedDiffers: layout.selectedDiffers === true,
         lockedReadable: layout.lockedContrast >= 3,
         focusRing: layout.focusOutlineWidth >= 2,
@@ -836,14 +837,16 @@ async function run(args) {
           && shot.width === width && shot.height === 900,
         { ...visible, imageWidth: shot.width, imageHeight: shot.height });
       addCheck(report, `screenshot ${name} selected and locked rows are legible`,
-        review.clipped && review.keyValueOverlap && review.rowOverlap && review.selectedDiffers && review.lockedReadable,
+        review.clipped && review.keyValueOverlap && review.rowOverlap && review.valueOverflow
+          && review.selectedDiffers && review.lockedReadable,
         { layout, review });
     }
     addCheck(report, "screenshots light dark narrow wide", report.screenshots.length === 4,
       report.screenshots.map(({ name, width, theme, bytes }) => ({ name, width, theme, bytes })));
     addCheck(report, "reviewed every screenshot for clipping focus ring selected and locked rows",
       report.screenshots.every((shot) => shot.review && shot.review.clipped && shot.review.selectedDiffers
-        && shot.review.lockedReadable && shot.review.keyValueOverlap && shot.review.rowOverlap),
+        && shot.review.lockedReadable && shot.review.keyValueOverlap && shot.review.rowOverlap
+        && shot.review.valueOverflow),
       report.screenshots.map((shot) => ({ name: shot.name, review: shot.review })));
 
     await shared.setTheme(client, "light");

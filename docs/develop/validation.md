@@ -457,7 +457,8 @@ navigation-hotkeys and Command Mode, enables Vim mode and a Ctrl+P command
 palette binding, and never opens the live vault. The report retains pass, skip,
 and fail assertions, console exceptions, Bob invocations, light/dark
 narrow/wide screenshots, and per-image layout metrics (clipping, key/value
-overlap, selected-row contrast, locked-row contrast, focus ring). Open and
+overlap, adjacent-row overlap, value overflow, selected-row contrast,
+locked-row contrast, focus ring). Open and
 review every PNG before claiming acceptance; the offline self-test is not
 real-Obsidian acceptance. Copy the report and screenshots back from athena and
 retain them through `/sase_artifact`.

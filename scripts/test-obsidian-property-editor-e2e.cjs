@@ -79,17 +79,39 @@ test("startup focus waits for Obsidian to leave its blank window before opening 
   const calls = [];
   const window = { focus: () => calls.push("focus") };
   const document = { hasFocus: () => true, URL: "app://obsidian.md/index.html" };
-  const context = { window, document, activeWindow: {} };
-  context.require = () => ({ remote: { getCurrentWindow: () => ({ focus: () => calls.push("native-focus") }) } });
+  const blank = {
+    close: () => calls.push("close-blank"),
+    destroy: () => calls.push("destroy-blank"),
+    webContents: { getURL: () => "about:blank", focus: () => {} },
+  };
+  const current = {
+    show: () => calls.push("native-show"),
+    focus: () => calls.push("native-focus"),
+    webContents: { focus: () => calls.push("webcontents-focus"), getURL: () => document.URL },
+  };
+  const context = { window, document, activeWindow: blank, activeDocument: { URL: "about:blank" } };
+  context.require = () => ({
+    remote: {
+      getCurrentWindow: () => current,
+      BrowserWindow: { getAllWindows: () => [current, blank] },
+    },
+  });
   const client = {
     call: async (method) => calls.push(method),
     evaluate: async (source) => vm.runInNewContext(source, context),
   };
   const result = await diagnostics.focusApplicationWindow(client, async (cdp, source, ready) => {
-    assert.deepEqual(calls, ["Page.bringToFront"]);
-    assert.equal(ready(await cdp.evaluate(source)), false, "a focused page with a stale activeWindow is unsafe");
-    assert.deepEqual(calls, ["Page.bringToFront", "native-focus", "focus"]);
+    assert.equal(calls[0], "Page.bringToFront");
+    assert.equal(calls.filter((name) => name === "Input.dispatchMouseEvent").length, 2);
+    const stale = await cdp.evaluate(source);
+    assert.equal(ready(stale), false, "a focused page with a stale activeWindow is unsafe");
+    assert.equal(JSON.stringify(stale.closed), JSON.stringify(["about:blank", "about:blank"]));
+    assert.ok(calls.includes("native-focus"));
+    assert.ok(calls.includes("focus"));
+    assert.ok(calls.includes("close-blank"));
+    assert.ok(calls.includes("destroy-blank"));
     context.activeWindow = window;
+    context.activeDocument = { URL: document.URL };
     document.hasFocus = () => false;
     assert.equal(ready(await cdp.evaluate(source)), false, "keyboard input needs page focus too");
     document.hasFocus = () => true;

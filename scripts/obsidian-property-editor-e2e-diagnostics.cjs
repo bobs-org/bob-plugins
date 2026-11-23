@@ -76,17 +76,50 @@ function installEditorDiagnostics() {
 async function focusApplicationWindow(client, waitFor) {
   // A fresh Electron profile can leave Obsidian's activeWindow pointing to its
   // about:blank startup window. Native Modal.open() mounts into that document.
-  // Xvfb can deliver a delayed native blur after bringToFront has succeeded.
-  // Reassert native focus while waiting; CDP focus emulation alone leaves
-  // Obsidian's activeWindow stale even when document.hasFocus() is true.
+  // Xvfb without a window manager leaves BrowserWindow.focus() as a no-op, so
+  // reasserting native focus never retires that blank window. Close it, then
+  // keep focusing the vault window until Chromium's activeWindow matches.
   await client.call("Page.bringToFront");
+  try {
+    await client.call("Input.dispatchMouseEvent", {
+      type: "mousePressed", x: 360, y: 24, button: "left", clickCount: 1,
+    });
+    await client.call("Input.dispatchMouseEvent", {
+      type: "mouseReleased", x: 360, y: 24, button: "left", clickCount: 1,
+    });
+  } catch (_) {}
   return waitFor(client, `(() => {
-    require("electron").remote.getCurrentWindow().focus();
-    window.focus();
+    const closed = [];
+    try {
+      const remote = require("electron").remote;
+      const current = remote.getCurrentWindow();
+      try { current.show(); } catch (_) {}
+      try { current.focus(); } catch (_) {}
+      try { current.webContents.focus(); } catch (_) {}
+      const windows = remote.BrowserWindow && remote.BrowserWindow.getAllWindows
+        ? remote.BrowserWindow.getAllWindows() : [];
+      for (const win of windows) {
+        if (win === current) continue;
+        let url = "";
+        try { url = String(win.webContents.getURL()); } catch (_) {}
+        if (url === "about:blank") {
+          try { win.destroy(); closed.push(url); } catch (_) {}
+        }
+      }
+    } catch (_) {}
+    try { window.focus(); } catch (_) {}
+    if (typeof activeWindow !== "undefined" && activeWindow !== window) {
+      const url = typeof activeDocument !== "undefined" ? String(activeDocument && activeDocument.URL || "") : "";
+      if (url === "about:blank") {
+        try { activeWindow.close(); closed.push(url); } catch (_) {}
+      }
+    }
     return {
       focused: document.hasFocus(),
       active: typeof activeWindow !== "undefined" && activeWindow === window,
       documentUrl: document.URL,
+      activeDocumentUrl: typeof activeDocument === "undefined" ? null : (activeDocument && activeDocument.URL || null),
+      closed,
     };
   })()`, (state) => state?.focused && state?.active, "Obsidian application window focus");
 }

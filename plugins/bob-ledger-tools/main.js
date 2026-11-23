@@ -84259,7 +84259,7 @@ const PROPERTY_CARD_FOOT_CLASS = "bob-property-card-foot";
 const PROPERTY_CARD_FOOT_DRAWER_CLASS = "bob-property-card-foot-drawer";
 const PROPERTY_CARD_FOOT_WIKILINK_RE = /\[\[([^\]\n]+)\]\]/g;
 const PROPERTY_CARD_FOOT_SAFE_URL_RE = /^(https?:)\/\//i;
-const PROPERTY_CARD_FOOT_TAG_KEYS_RE = /^(tags?|aliases?)$/i;
+const PROPERTY_CARD_FOOT_TAG_KEYS_RE = /^tags?$/i;
 const PROPERTY_CARD_FOOT_TAG_TEXT_RE = /^#[^\s#][^\s]*$/;
 const PROPERTY_CARD_FOOT_LIST_PREVIEW_LIMIT = 6;
 
@@ -85055,7 +85055,9 @@ function propertyCardFootViewContains(view, node) {
 function propertyCardFootEnsureViewMount(view, path) {
   try {
     if (!view || !path) return false;
-    if (propertyCardFootLiveMountsFor(path).length > 0) return true;
+    if (propertyCardFootLiveMountsFor(path).some((entry) =>
+      propertyCardFootViewContains(view, entry.node),
+    )) return true;
     const scopes = [view.dom, view.containerEl, view.contentEl].filter(Boolean);
     if (!scopes.length) return false;
     let found = false;
@@ -85705,11 +85707,20 @@ function propertyCardFootAdapterExtra(path, spec) {
   return { footOpen: open, footDigest: propertyCardFootAdapterDigest(spec), footSpec: spec };
 }
 
-function propertyCardFootAdapterSearchTag(plugin, tag) {
-  const query = String(tag || "").trim();
-  if (!query) return false;
+function propertyCardFootOpenTagSearch(app, tag) {
+  const name = String(tag || "").trim().replace(/^#+/, "");
+  if (!name) return false;
+  const query = `tag:#${name}`;
   try {
-    const commands = plugin?.app?.commands;
+    const globalSearch = app?.internalPlugins?.getPluginById?.("global-search")?.instance;
+    const openGlobalSearch = globalSearch?.openGlobalSearch;
+    if (typeof openGlobalSearch === "function") {
+      openGlobalSearch.call(globalSearch, query);
+      return true;
+    }
+  } catch (_) {}
+  try {
+    const commands = app?.commands;
     if (commands && typeof commands.executeCommandById === "function") {
       const opened = commands.executeCommandById("global-search:open");
       if (opened === false) return false;
@@ -85717,6 +85728,10 @@ function propertyCardFootAdapterSearchTag(plugin, tag) {
     }
   } catch (_) {}
   return false;
+}
+
+function propertyCardFootAdapterSearchTag(plugin, tag) {
+  return propertyCardFootOpenTagSearch(plugin?.app, tag);
 }
 
 function propertyCardFootAdapterHoverLink(plugin, event, targetEl, linktext, sourcePath, source) {
@@ -111701,17 +111716,7 @@ class BobLedgerToolsRecordSheetFootMixin {
   }
 
   recordSheetSearchTag(tag) {
-    const query = String(tag || "").trim();
-    if (!query) return false;
-    try {
-      const commands = this.app?.commands;
-      if (commands && typeof commands.executeCommandById === "function") {
-        const opened = commands.executeCommandById("global-search:open");
-        if (opened === false) return false;
-        return true;
-      }
-    } catch (_) {}
-    return false;
+    return propertyCardFootOpenTagSearch(this.app, tag);
   }
 
   // Track the mounted foot node for propertyCardToggleProperties: release

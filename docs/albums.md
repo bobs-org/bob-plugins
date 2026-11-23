@@ -111,11 +111,12 @@ with those marks, then a folded **Managed** group — with duplicate keys as two
 linted rows.
 
 The foot follows the schema and any rail or mobile hint, including
-identity-only cards that paint before the report arrives. Both the disclosure
-and the future `=-` key toggle the same drawer; open state is a per-note
-session toggle shared by every pane on the note. `y` on a focused drawer row
-jumps to that key's exact YAML line. Painting, toggling, and collapsing never
-spawn bob and never write the note.
+identity-only cards that paint before the report arrives. The disclosure,
+`=-` in Live Preview Vim normal mode, and **Toggle card properties** (palette
+or Command Mode) toggle the same drawer; open state is a per-note session
+toggle shared by every pane on the note. `y` on a focused drawer row jumps to
+that key's exact YAML line. Painting, toggling, and collapsing never spawn bob
+and never write the note.
 
 **⊞ Schema** opens the album card editor (formerly the Schema Card) in the Task
 Card idiom: a species badge (the album emoji, else a library icon, in a

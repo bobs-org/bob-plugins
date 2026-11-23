@@ -140,17 +140,7 @@ class BobLedgerToolsRecordSheetFootMixin {
   }
 
   recordSheetSearchTag(tag) {
-    const query = String(tag || "").trim();
-    if (!query) return false;
-    try {
-      const commands = this.app?.commands;
-      if (commands && typeof commands.executeCommandById === "function") {
-        const opened = commands.executeCommandById("global-search:open");
-        if (opened === false) return false;
-        return true;
-      }
-    } catch (_) {}
-    return false;
+    return propertyCardFootOpenTagSearch(this.app, tag);
   }
 
   // Track the mounted foot node for propertyCardToggleProperties: release

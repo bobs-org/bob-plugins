@@ -137,11 +137,12 @@ keys declared on the album keep their **legacy** label. `null` renders as
 with the species editor opener, never a YAML dump.
 
 The foot follows the walk rail, outside the collapsible body, so the stamp
-stays visible on identity-only, broken-schema, and collapsed cards. Both
-the disclosure and the future `=-` key toggle the same drawer; open state
-is a per-note session toggle shared by every pane on the note. `y` on a
-focused drawer row jumps to that key's exact YAML line. Painting, toggling,
-and collapsing never spawn bob and never write the note.
+stays visible on identity-only, broken-schema, and collapsed cards. The
+disclosure, `=-` in Live Preview Vim normal mode, and **Toggle card
+properties** (palette or Command Mode) toggle the same drawer; open state is a
+per-note session toggle shared by every pane on the note. `y` on a focused
+drawer row jumps to that key's exact YAML line. Painting, toggling, and
+collapsing never spawn bob and never write the note.
 
 The card starts expanded. Collapse is a session toggle per record path:
 the title stays visible, followed by one line with the selected choice chips
@@ -318,6 +319,8 @@ Done.
 | Command Mode Vault row | Run **Edit record** through Obsidian's command route. |
 | Collapse control | Session-collapse or expand this record card. |
 | Properties disclosure (`Toggle properties =-`) | Session-show or hide every frontmatter key in the drawer. |
+| `=-` in Vim normal mode in Live Preview | Toggle the drawer; counts, registers, Source mode, insert and visual modes, and views without a mounted foot keep Vim's reindent. |
+| **Toggle card properties** (palette or Command Mode) | Toggle the drawer. |
 | `y` on a focused row, ghost, or drawer row | Open this record in Source on that YAML key. |
 | Open album YAML (broken schema) | Open the parent album in Source on the diagnostic line. |
 | Breadcrumb / wikilink / URL | Ordinary Obsidian navigation and hover previews. |

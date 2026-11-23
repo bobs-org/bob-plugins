@@ -395,3 +395,24 @@ test("adapter EnsureSource caches a first empty read without refresh", async () 
   assert.equal(refresh, 0, "the first empty read does not refresh");
   helpers.propertyCardFootResetAll();
 });
+
+test("tag search opens a tag query for adapters and record sheets, with command fallback", () => {
+  const queries = [];
+  const app = {
+    internalPlugins: {
+      getPluginById: (id) => id === "global-search" ? {
+        instance: { openGlobalSearch: (query) => { queries.push(query); } },
+      } : null,
+    },
+  };
+  assert.equal(helpers.propertyCardFootAdapterSearchTag({ app }, "phase"), true);
+  assert.equal(helpers.propertyCardFootAdapterSearchTag({ app }, "#phase"), true);
+  const recordPlugin = new LedgerToolsPlugin({ ...app });
+  assert.equal(recordPlugin.recordSheetSearchTag("phase"), true);
+  assert.deepEqual(queries, ["tag:#phase", "tag:#phase", "tag:#phase"]);
+
+  let fallbackCommand = "";
+  const fallbackApp = { commands: { executeCommandById: (id) => { fallbackCommand = id; return true; } } };
+  assert.equal(helpers.propertyCardFootAdapterSearchTag({ app: fallbackApp }, "#phase"), true);
+  assert.equal(fallbackCommand, "global-search:open");
+});

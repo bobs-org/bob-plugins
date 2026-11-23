@@ -161,11 +161,20 @@ function propertyCardFootAdapterExtra(path, spec) {
   return { footOpen: open, footDigest: propertyCardFootAdapterDigest(spec), footSpec: spec };
 }
 
-function propertyCardFootAdapterSearchTag(plugin, tag) {
-  const query = String(tag || "").trim();
-  if (!query) return false;
+function propertyCardFootOpenTagSearch(app, tag) {
+  const name = String(tag || "").trim().replace(/^#+/, "");
+  if (!name) return false;
+  const query = `tag:#${name}`;
   try {
-    const commands = plugin?.app?.commands;
+    const globalSearch = app?.internalPlugins?.getPluginById?.("global-search")?.instance;
+    const openGlobalSearch = globalSearch?.openGlobalSearch;
+    if (typeof openGlobalSearch === "function") {
+      openGlobalSearch.call(globalSearch, query);
+      return true;
+    }
+  } catch (_) {}
+  try {
+    const commands = app?.commands;
     if (commands && typeof commands.executeCommandById === "function") {
       const opened = commands.executeCommandById("global-search:open");
       if (opened === false) return false;
@@ -173,6 +182,10 @@ function propertyCardFootAdapterSearchTag(plugin, tag) {
     }
   } catch (_) {}
   return false;
+}
+
+function propertyCardFootAdapterSearchTag(plugin, tag) {
+  return propertyCardFootOpenTagSearch(plugin?.app, tag);
 }
 
 function propertyCardFootAdapterHoverLink(plugin, event, targetEl, linktext, sourcePath, source) {

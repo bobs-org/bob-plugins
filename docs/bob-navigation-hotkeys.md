@@ -691,8 +691,9 @@ Keyboard layers:
   Obsidian's link opener. Missing chip or mail APIs fall through.
 - **Editor and Vim handlers** act below the palette layer. The plugin maps
   `\s` in Vim normal mode to toggling the current tab pin (Ledger Tools owns
-  `\p` for Pomodoro increments). Bob Ledger Tools owns `==` on albums,
-  records, and `bank.md`; vimrc `nnoremap ==` cannot beat Vim's `=` operator.
+  `\p` for Pomodoro increments). Ledger Tools owns `==` on albums, records,
+  and `bank.md`; `=-` toggles the Properties drawer. `nnoremap ==` yields to
+  Vim's `=`.
   Exactly `Ctrl+S` with no Shift, Alt, or Meta inside a Pomodoro block of the first
   `## Pomodoros` section splits (stopping propagation only when it acts),
   with an `editor:save-file` callback fallback; everywhere else the key

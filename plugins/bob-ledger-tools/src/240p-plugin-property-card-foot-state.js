@@ -258,7 +258,9 @@ function propertyCardFootViewContains(view, node) {
 function propertyCardFootEnsureViewMount(view, path) {
   try {
     if (!view || !path) return false;
-    if (propertyCardFootLiveMountsFor(path).length > 0) return true;
+    if (propertyCardFootLiveMountsFor(path).some((entry) =>
+      propertyCardFootViewContains(view, entry.node),
+    )) return true;
     const scopes = [view.dom, view.containerEl, view.contentEl].filter(Boolean);
     if (!scopes.length) return false;
     let found = false;

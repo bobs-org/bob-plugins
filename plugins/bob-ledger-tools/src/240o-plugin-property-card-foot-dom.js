@@ -14,7 +14,7 @@ const PROPERTY_CARD_FOOT_CLASS = "bob-property-card-foot";
 const PROPERTY_CARD_FOOT_DRAWER_CLASS = "bob-property-card-foot-drawer";
 const PROPERTY_CARD_FOOT_WIKILINK_RE = /\[\[([^\]\n]+)\]\]/g;
 const PROPERTY_CARD_FOOT_SAFE_URL_RE = /^(https?:)\/\//i;
-const PROPERTY_CARD_FOOT_TAG_KEYS_RE = /^(tags?|aliases?)$/i;
+const PROPERTY_CARD_FOOT_TAG_KEYS_RE = /^tags?$/i;
 const PROPERTY_CARD_FOOT_TAG_TEXT_RE = /^#[^\s#][^\s]*$/;
 const PROPERTY_CARD_FOOT_LIST_PREVIEW_LIMIT = 6;
 

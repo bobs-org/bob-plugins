@@ -299,6 +299,35 @@ test("orphaned mounts heal on toggle when the foot is still mounted and visible"
   helpers.propertyCardFootResetAll();
 });
 
+test("two-pane toggle heals an orphaned foot in its own pane", () => {
+  helpers.propertyCardFootResetAll();
+  const doc = makeDoc();
+  const scopeA = doc.createElement("div");
+  const scopeB = doc.createElement("div");
+  doc.body.appendChild(scopeA);
+  doc.body.appendChild(scopeB);
+  const viewA = { file: { path: "eat/a.md" }, containerEl: scopeA };
+  const footA = doc.createElement("div");
+  footA.setAttribute("class", "bob-property-card-foot");
+  footA.setAttribute("data-foot-source", "eat/a.md");
+  footA._rect = { x: 0, y: 0, width: 120, height: 24 };
+  scopeA.appendChild(footA);
+  const footB = doc.createElement("div");
+  footB.setAttribute("class", "bob-property-card-foot");
+  footB.setAttribute("data-foot-source", "eat/a.md");
+  footB._rect = { x: 0, y: 0, width: 120, height: 24 };
+  scopeB.appendChild(footB);
+  helpers.propertyCardFootRegisterMount(footB, "eat/a.md");
+  assert.equal(helpers.propertyCardToggleProperties(viewA), true);
+  assert.equal(helpers.propertyCardFootIsOpen("eat/a.md"), true);
+  assert.equal(helpers.propertyCardFootLiveMountsFor("eat/a.md").length, 2, "orphaned pane A is re-registered alongside pane B");
+
+  helpers.propertyCardFootResetAll();
+  footA.setAttribute("data-foot-source", "eat/other.md");
+  assert.equal(helpers.propertyCardToggleProperties(viewA), false, "a visible foot from another path stays inert");
+  helpers.propertyCardFootResetAll();
+});
+
 test("toggle listeners notify adapters and the editor hook starts unset", () => {
   helpers.propertyCardFootResetAll();
   const seen = [];
@@ -384,13 +413,14 @@ test("value shapes render distinctly", () => {
   const doc = makeDoc();
   const calls = {};
   const source = [
-    "---", "link: x", "url: x", "tags: x", "list: x", "yes: x", "no: x",
+    "---", "link: x", "url: x", "tags: x", "aliases: x", "list: x", "yes: x", "no: x",
     "nothing: x", "blank: x", "blank_list: x", "nested: x", "long: x", "---", "",
   ].join("\n");
   const frontmatter = {
     link: "[[eat/smashburger|Smash]]",
     url: "https://example.test/beads",
     tags: ["phase", "#drawer"],
+    aliases: ["recipe", "restaurant"],
     list: ["a", "b", "c", "d", "e", "f", "g"],
     yes: true,
     no: false,
@@ -428,6 +458,8 @@ test("value shapes render distinctly", () => {
   assert.ok(tag, "tag values render searchable chips");
   tag.click();
   assert.equal(calls.searchTag, "phase");
+  assert.equal(rows.aliases.querySelector(".bob-property-card-foot-tag"), null, "aliases render as ordinary chips");
+  assert.equal(rows.aliases.querySelectorAll(".bob-property-card-foot-chip").length, 2);
   const valueText = (row) => row.querySelector(".bob-property-card-foot-value").textContent;
   assert.match(valueText(rows.list), /\+1/, "lists preview six chips then +N");
   assert.equal(valueText(rows.yes), "✓");

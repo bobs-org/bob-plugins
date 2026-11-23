@@ -138,6 +138,22 @@ registered handler receives `(path, { key, mode })` from the drawer's
 `onOpenEditor` action. It remains unset until the property editor registers;
 this API contract does not make `=+` available by itself.
 
+The shared foot kit exposes `propertyCardFormatCreatedStamp(input = {})`,
+returning `{ text, tooltip, state, dateOnly }`, and
+`propertyCardInventory(input = {})`, returning
+`{ state, reason, rows, groups, count, issues, recovery }`. The DOM builder is
+`propertyCardFootBuildEl(doc, spec = {})`. Session state and subscriptions use
+`propertyCardFootIsOpen(path)`, `propertyCardFootToggle(path)`, and
+`propertyCardFootOnToggle(listener)`; the mount registry tracks each live foot
+per view. `propertyCardToggleProperties(view)` and
+`propertyCardCanToggleProperties(view)` implement the guarded `=-` action. The
+`240r` adapter helpers `propertyCardFootAdapterSpec(options = {})`,
+`propertyCardFootAdapterAppend(card, path, doc, spec, handlers, pendingScroll)`,
+`propertyCardFootAdapterTrack(container, path, card, tracked)`,
+`propertyCardFootAdapterBind(plugin, options = {})`, and
+`propertyCardFootAdapterUnbind(plugin, options = {})` share this kit across
+card hosts.
+
 ### Title block kit
 
 `propertyCardSpecies(kind)` names seven species: album, record, day, week,

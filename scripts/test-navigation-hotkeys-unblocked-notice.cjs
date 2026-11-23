@@ -979,7 +979,9 @@ test("keep-moving stylesheet uses only existing tokens inside the scoped notice 
   const noticeBlock = styles.slice(noticeStart, styles.indexOf("/* Vault-wide Depends", noticeStart));
   assert.match(noticeBlock, /--task-status-next/);
   assert.match(noticeBlock, /\.bob-nh-notice-chip\.is-keep-moving/);
-  const pickerStart = styles.indexOf(".bob-successor-group-titlebar");
+  // The first occurrence is nested under the requirements heading. Anchor at
+  // the standalone picker rule so this slice includes its later group styles.
+  const pickerStart = styles.lastIndexOf("\n.bob-successor-group-titlebar {");
   assert.notEqual(pickerStart, -1);
   const pickerBlock = styles.slice(pickerStart, styles.indexOf("@media", pickerStart));
   assert.match(pickerBlock, /\.bob-successor-group\.is-keep_moving/);

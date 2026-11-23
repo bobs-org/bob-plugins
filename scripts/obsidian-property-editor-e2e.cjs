@@ -259,7 +259,12 @@ async function openPropertyEditor(client, filePath, options = {}) {
     return { ok: opened?.ok === true, reason: opened?.reason || null };
   })()`, 30_000);
   if (!result?.ok) throw new Error("openPropertyEditor failed: " + JSON.stringify(result));
-  return waitForEditor(client, (probe) => probe.open && probe.readSettled, "property editor initial read");
+  const wantedKey = options.key || "";
+  return waitForEditor(client, (probe) => {
+    if (!probe?.open || !probe.readSettled) return false;
+    if (!wantedKey) return true;
+    return Array.isArray(probe.rows) && probe.rows.some((row) => row.key === wantedKey && row.selected);
+  }, wantedKey ? `property editor ${wantedKey}` : "property editor initial read");
 }
 
 async function setInput(client, selector, value) {

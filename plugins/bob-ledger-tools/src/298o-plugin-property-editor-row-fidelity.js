@@ -88,6 +88,9 @@ function propertyEditorWantedSelection(modal) {
     const found = propertyEditorSelectionOf(cache, modal && modal.selectedId);
     if (found) return found;
   } catch (_) {}
+  // Opening with a key before cache or report rows exist must keep that key.
+  const requested = modal && typeof modal.requestedKey === "string" ? modal.requestedKey : "";
+  if (requested) return { key: requested, ordinal: 0, line: null };
   return { key: "", ordinal: 0, line: null };
 }
 

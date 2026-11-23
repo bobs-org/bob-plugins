@@ -167152,6 +167152,7 @@ class PropertyEditorModal extends PropertyEditorModalBase {
       ? propertyNotePath(options.filePath || options.path || "")
       : String(options.filePath || options.path || "");
     this.mode = options.mode === "edit" || options.mode === "add" ? options.mode : "browse";
+    this.requestedKey = typeof options.key === "string" ? options.key : "";
     this.report = options.report && typeof options.report === "object" ? options.report : null;
     this.cacheRows = Array.isArray(options.cacheRows) ? options.cacheRows : [];
     this.properties = Array.isArray(options.properties)
@@ -169804,6 +169805,13 @@ Object.assign(PropertyEditorModal.prototype, {
 ,
   propertyEditorMaybeStartModeEdit() {
     if (this.closed || this.editModeStarted || this.mode !== "edit" || !this.report) return;
+    const requested = typeof this.requestedKey === "string" ? this.requestedKey : "";
+    if (requested) {
+      const match = this.editorOrderedRows().find((entry) => entry.row.key === requested);
+      // Wait for the requested key; do not start edit on the first report row.
+      if (!match) return;
+      this.selectedId = match.id;
+    }
     const selected = this.editorSelected();
     if (!selected) return;
     this.editModeStarted = true;
@@ -170875,6 +170883,9 @@ function propertyEditorWantedSelection(modal) {
     const found = propertyEditorSelectionOf(cache, modal && modal.selectedId);
     if (found) return found;
   } catch (_) {}
+  // Opening with a key before cache or report rows exist must keep that key.
+  const requested = modal && typeof modal.requestedKey === "string" ? modal.requestedKey : "";
+  if (requested) return { key: requested, ordinal: 0, line: null };
   return { key: "", ordinal: 0, line: null };
 }
 

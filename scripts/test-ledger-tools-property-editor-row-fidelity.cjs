@@ -82,6 +82,32 @@ test("openPropertyEditor with key and edit mode opens that key's stage", () => {
   assert.deepEqual(opened, ["b"]);
 });
 
+test("wanted selection falls back to the requested open key", () => {
+  assert.deepEqual(H.propertyEditorWantedSelection({
+    properties: [], cacheRows: [], selectedId: "", requestedKey: "keep_me",
+  }), { key: "keep_me", ordinal: 0, line: null });
+});
+
+test("empty cache still opens the requested key's stage after the report arrives", () => {
+  const modal = new H.PropertyEditorModal({}, {
+    filePath: "surfaces.md", key: "keep_me", mode: "edit", cacheRows: [],
+  });
+  assert.equal(modal.selectedId, "");
+  assert.equal(modal.requestedKey, "keep_me");
+  const opened = [];
+  const activated = [];
+  modal.propertyEditorOpenStage = (entry) => { opened.push(entry.row.key); return true; };
+  modal.propertyEditorActivate = (entry) => { activated.push(entry.row.key); };
+  modal.propertyEditorReconcile(report([
+    row({ key: "type", line: 2, role: "identity", reason: "species" }),
+    row({ key: "keep_me", line: 3 }),
+    row({ key: "edit_me", line: 4 }),
+  ]));
+  assert.equal(modal.selectedId, "keep_me::3");
+  assert.deepEqual(opened, ["keep_me"]);
+  assert.deepEqual(activated, []);
+});
+
 test("confirmed overlays replace cached values and drop deleted keys", () => {
   const rows = [row({ key: "a", value: "old" }), row({ key: "b", value: "keep" })];
   const overlay = {

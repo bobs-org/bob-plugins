@@ -292,6 +292,13 @@ Object.assign(PropertyEditorModal.prototype, {
 ,
   propertyEditorMaybeStartModeEdit() {
     if (this.closed || this.editModeStarted || this.mode !== "edit" || !this.report) return;
+    const requested = typeof this.requestedKey === "string" ? this.requestedKey : "";
+    if (requested) {
+      const match = this.editorOrderedRows().find((entry) => entry.row.key === requested);
+      // Wait for the requested key; do not start edit on the first report row.
+      if (!match) return;
+      this.selectedId = match.id;
+    }
     const selected = this.editorSelected();
     if (!selected) return;
     this.editModeStarted = true;

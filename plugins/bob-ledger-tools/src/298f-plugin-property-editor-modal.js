@@ -78,6 +78,7 @@ class PropertyEditorModal extends PropertyEditorModalBase {
       ? propertyNotePath(options.filePath || options.path || "")
       : String(options.filePath || options.path || "");
     this.mode = options.mode === "edit" || options.mode === "add" ? options.mode : "browse";
+    this.requestedKey = typeof options.key === "string" ? options.key : "";
     this.report = options.report && typeof options.report === "object" ? options.report : null;
     this.cacheRows = Array.isArray(options.cacheRows) ? options.cacheRows : [];
     this.properties = Array.isArray(options.properties)

@@ -357,6 +357,7 @@
   "298m-plugin-property-editor-entrypoints.js",
   "298n-plugin-property-editor-write-safety.js",
   "298o-plugin-property-editor-row-fidelity.js",
+  "298p-plugin-property-editor-selection-filter.js",
   "293-keep-inbox-render.js",
   "294-keep-inbox-indicator.js",
   "295-keep-inbox-actions.js",

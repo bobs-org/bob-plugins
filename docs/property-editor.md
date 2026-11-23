@@ -7,7 +7,8 @@ The **Property Editor** opens on any existing Markdown note. It reads the note's
 property report from `bob props show` and sends every edit through the guarded
 `bob props update` writer. Opening, browsing, and painting rows never writes the
 note. The modal groups properties by ownership, keeps duplicate source lines
-separate, and preserves the order Bob reports.
+separate, and preserves Bob's source order within each group. Keyboard movement,
+range selection, and filtering follow the visible grouped rows.
 
 ## Open the editor
 
@@ -59,7 +60,11 @@ These keys act while browsing the rows, not while typing in a value field.
 | `g`, Home / `G`, End | Select the first or last row |
 | Enter / `l` | Edit a loose value, flip a loose checkbox, or hand off a card field |
 | `o` / `O` / Mod+; | Add below, above, or at the end |
-| Ctrl+D / Mod+Backspace | Delete a loose property |
+| Ctrl+D / Mod+Backspace | Delete marked rows together, or the focused row |
+| Space | Mark or unmark the focused row for batch actions |
+| `V` | Start or stop a visual range; `j` / `k` extend it |
+| Shift+↑ / Shift+↓ | Extend a selection range |
+| `/` | Open the incremental key and value filter |
 | `u` / Ctrl+Z | Undo the latest successful property edit |
 | Ctrl+R / Ctrl+Shift+Z | Redo the latest undone edit |
 | `y` / Ctrl+E | Open the property's YAML line in Source mode |
@@ -69,6 +74,22 @@ These keys act while browsing the rows, not while typing in a value field.
 `q` follows Esc's layer and types only in a text control. Ctrl+[ is Esc's alias
 and never types in a field. A stage or add-name draft is canceled one layer at a
 time; it is not silently committed.
+
+The marks gutter shows selection separately from the focused row. Space toggles
+one row; `V` marks a visual range from the current row, and `j` / `k` extend it.
+Pressing `V` again keeps those marks and returns to ordinary movement. Opening
+the filter does not clear marks by itself. Changing its query resets marks and
+the range anchor, so rows hidden by a filter cannot remain selected for deletion.
+Enter or ↓ in the filter returns focus to matching rows; with no matches, the
+editor announces the empty result and keeps a stable keyboard target. Esc clears
+the filter layer before closing the editor. The All actions menu exposes these
+gestures and batch deletion; a reorder action is disabled while a filter query is
+active.
+
+Ctrl+D / Mod+Backspace deletes marked rows together as one undoable update. With
+no marks, it deletes the focused visible row. A selection containing a card,
+identity, derived, or unresolved property is refused as a whole and names the
+locked rows; the editor never partially deletes a mixed selection.
 
 ## Value and add stages
 
@@ -110,7 +131,7 @@ empty note says **No properties yet — o adds the first**. Invalid YAML shows
 Bob's diagnostic and source-line target. Once a capable Bob report arrives,
 the current report—not cached metadata—authorizes mutations.
 
-The current editor supports viewing, value edits, add, delete, undo/redo,
-ownership hand-off, and YAML return. Rename, reorder, multi-select,
-copy/paste, filtering, property-kind changes, and the inline YAML value stage
-are documented with the later native-Properties parity work.
+The editor supports viewing, value edits, add, delete, undo/redo, ownership
+hand-off, YAML return, multi-select, filtering, and batch deletion. Rename,
+reorder, copy/paste, property-kind changes, and the inline YAML value stage are
+the remaining native-Properties parity work.

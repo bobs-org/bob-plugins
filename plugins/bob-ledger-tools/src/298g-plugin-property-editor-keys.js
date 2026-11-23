@@ -36,6 +36,10 @@ function propertyEditorKeyAction(event, context = {}) {
 
     if (inInput) return null;
 
+    if (!ctrl && !meta && !alt && key === "/") return "filter";
+    if (!ctrl && !meta && !alt && (key === " " || event.code === "Space")) return "toggle-mark";
+    if (!ctrl && !meta && !alt && key === "V") return "visual-range";
+
     if (!ctrl && !meta && !alt && (key === "q" || key === "Q")) return "close";
     if (ctrl && !meta && !alt && !shift && (event.code === "BracketLeft" || key === "[")) return "close";
 
@@ -53,11 +57,13 @@ function propertyEditorKeyAction(event, context = {}) {
     if (key === "ArrowDown" && !meta && !alt) {
       if (ctrl && shift) return null;
       if (ctrl) return "down";
+      if (shift) return "range-down";
       if (!shift) return "down";
       return null;
     }
     if (key === "ArrowUp" && !meta && !alt) {
       if (ctrl) return "up";
+      if (shift) return "range-up";
       if (!shift) return "up";
       return null;
     }

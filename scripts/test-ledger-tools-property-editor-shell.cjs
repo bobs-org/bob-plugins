@@ -423,7 +423,7 @@ test("property editor shell CSS distinguishes selected and locked rows", () => {
   assert.match(css, /\.bob-property-editor-modal\s*\{/);
   assert.match(css, /\.bob-property-editor button\.bob-property-row,[\s\S]*?display:\s*flex;[\s\S]*?flex-direction:\s*column;/);
   assert.match(css, /\.bob-property-row-grid\s*\{[\s\S]*?grid-template-columns/);
-  assert.match(css, /@media \(max-width: 420px\) \{[\s\S]*?grid-template-areas:\s*"icon key" "\. value"/);
+  assert.match(css, /@media \(max-width: 420px\) \{[\s\S]*?grid-template-areas:\s*"mark icon key" "\. \. value"/);
   assert.match(css, /\.bob-property-editor button\.bob-property-row:hover/);
   assert.match(css, /\.bob-property-editor button\.bob-property-row\.is-selected/);
   assert.match(css, /\.bob-property-editor button\.bob-property-row\.is-locked/);

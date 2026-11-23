@@ -166166,37 +166166,102 @@ function createPropertyUpdateSession(init = {}, deps = {}) {
     return result;
   }
 
+  // In-flight write guard (write-safety): cancel, close, row clicks, and
+  // selection changes must not invalidate a pending write, so a draft clear
+  // or close that arrives mid-write waits for the outcome instead. History
+  // and overlays belong to the service, so a completed write still records
+  // them after the modal or stage closed. An unknown outcome stays unknown:
+  // it is never retried here.
+  let writeInFlight = null;
+  let closeRequested = false;
+  let pendingGenerationBump = false;
+
+  function writeBusyRefusal() {
+    return {
+      ok: false,
+      code: "write-busy",
+      message: "A property save is already running.",
+      hint: "Wait for it to finish, then try again.",
+    };
+  }
+
+  function pokeChanged() {
+    try {
+      if (typeof deps.onChange === "function") deps.onChange(getState());
+    } catch (_) {}
+  }
+
+  async function runWrite(work) {
+    if (writeInFlight) return writeBusyRefusal();
+    const flight = (async () => work())();
+    writeInFlight = flight;
+    try {
+      return await flight;
+    } finally {
+      if (writeInFlight === flight) writeInFlight = null;
+      if (pendingGenerationBump && !closeRequested) {
+        pendingGenerationBump = false;
+        try { inner.noteGenerationChanged(); } catch (_) {}
+        pokeChanged();
+      }
+      if (closeRequested && writeInFlight === null) {
+        closeRequested = false;
+        try { inner.close(); } catch (_) {}
+      }
+    }
+  }
+
   async function replayHistory(kind) {
     if (!history) {
       return { ok: false, code: "nothing-to-undo", message: "There is no property edit to undo." };
     }
-    const popped = kind === "redo" ? history.popRedo(notePath) : history.popUndo(notePath);
-    if (!popped) {
-      return {
-        ok: false,
-        code: kind === "redo" ? "nothing-to-redo" : "nothing-to-undo",
-        message: kind === "redo" ? "There is no property edit to redo." : "There is no property edit to undo.",
-      };
-    }
-    historyKind = kind;
-    try {
-      inner.rebase(popped.expect);
-      const result = await settle(await inner.applyOps(popped.inverseOps));
-      const consumed = result && result.ok === true && result.changed === true;
-      if (!consumed) {
-        if (kind === "redo") history.restoreRedo(notePath, popped);
-        else history.restoreUndo(notePath, popped);
+    return runWrite(async () => {
+      const popped = kind === "redo" ? history.popRedo(notePath) : history.popUndo(notePath);
+      if (!popped) {
+        return {
+          ok: false,
+          code: kind === "redo" ? "nothing-to-redo" : "nothing-to-undo",
+          message: kind === "redo" ? "There is no property edit to redo." : "There is no property edit to undo.",
+        };
       }
-      return result;
-    } finally {
-      historyKind = "edit";
-    }
+      historyKind = kind;
+      try {
+        inner.rebase(popped.expect);
+        const result = await settle(await inner.applyOps(popped.inverseOps));
+        const consumed = result && result.ok === true && result.changed === true;
+        if (!consumed) {
+          if (kind === "redo") history.restoreRedo(notePath, popped);
+          else history.restoreUndo(notePath, popped);
+        }
+        return result;
+      } finally {
+        historyKind = "edit";
+      }
+    });
+  }
+
+  function getState() {
+    const state = inner.getState();
+    const hist = history ? history.snapshot(notePath) : { undo: 0, redo: 0 };
+    return {
+      ...state,
+      path: notePath,
+      undoAvailable: hist.undo > 0,
+      redoAvailable: hist.redo > 0,
+      history: hist,
+    };
   }
 
   return {
-    setDraft: inner.setDraft,
+    setDraft: (ops) => {
+      if (writeInFlight) return getState();
+      return inner.setDraft(ops);
+    },
     previewNow: inner.previewNow,
-    invalidateEnter: () => inner.setDraft(inner.getState().draftOps),
+    invalidateEnter: () => {
+      if (writeInFlight) return getState();
+      return inner.setDraft(inner.getState().draftOps);
+    },
     apply: async () => {
       if (!inner.getState().expect) {
         return {
@@ -166206,7 +166271,7 @@ function createPropertyUpdateSession(init = {}, deps = {}) {
         };
       }
       historyKind = "edit";
-      return settle(await inner.apply());
+      return runWrite(async () => settle(await inner.apply()));
     },
     applyOps: async (ops) => {
       if (!inner.getState().expect) {
@@ -166217,27 +166282,34 @@ function createPropertyUpdateSession(init = {}, deps = {}) {
         };
       }
       historyKind = "edit";
-      return settle(await inner.applyOps(ops));
+      return runWrite(async () => settle(await inner.applyOps(ops)));
     },
     undo: async () => replayHistory("undo"),
     redo: async () => replayHistory("redo"),
     stopWaiting: inner.stopWaiting,
     stageUndo: inner.stageUndo,
     retrySync: inner.retrySync,
-    noteGenerationChanged: inner.noteGenerationChanged,
-    rebase: inner.rebase,
-    close: inner.close,
-    getState: () => {
-      const state = inner.getState();
-      const hist = history ? history.snapshot(notePath) : { undo: 0, redo: 0 };
-      return {
-        ...state,
-        path: notePath,
-        undoAvailable: hist.undo > 0,
-        redoAvailable: hist.redo > 0,
-        history: hist,
-      };
+    noteGenerationChanged: () => {
+      if (writeInFlight) {
+        pendingGenerationBump = true;
+        return getState();
+      }
+      const snapshot = inner.noteGenerationChanged();
+      pokeChanged();
+      return snapshot;
     },
+    rebase: (expect) => {
+      if (writeInFlight) return getState();
+      return inner.rebase(expect);
+    },
+    close: () => {
+      if (writeInFlight) {
+        closeRequested = true;
+        return getState();
+      }
+      try { inner.close(); } catch (_) {}
+    },
+    getState,
     rememberProperties,
   };
 }
@@ -166393,6 +166465,61 @@ class BobLedgerToolsPropertyUpdateMixin {
     return this.propertyVaultGeneration;
   }
 
+  // A rename, delete, or leaf close turns a mounted props Done button
+  // dead: the excursion record no longer matches the leaf. Clear the
+  // button, restore the leaf's pre-excursion mode where the leaf still
+  // shows a note, and say so instead of leaving the dead button.
+  propertyCleanupStalePropsExcursion(leaf, record, filePath) {
+    try {
+      if (typeof this.albumYamlExcursionClear === "function") this.albumYamlExcursionClear(leaf);
+    } catch (_) {}
+    const viewState = record && record.viewState;
+    try {
+      if (viewState && leaf && typeof leaf.setViewState === "function") {
+        const next = {
+          ...viewState,
+          state: { ...(viewState.state || {}), ...(filePath ? { file: filePath } : {}) },
+        };
+        void Promise.resolve(leaf.setViewState(next)).catch(() => {});
+      }
+    } catch (_) {}
+  }
+
+  propertyCleanupStalePropsExcursions(paths, options = {}) {
+    if (!(this.albumYamlExcursions instanceof Map)) return 0;
+    const opts = options && typeof options === "object" ? options : {};
+    const targets = new Set(
+      (Array.isArray(paths) ? paths : [paths]).map((entry) => propertyNotePath(entry)).filter(Boolean),
+    );
+    if (!targets.size) return 0;
+    let cleaned = 0;
+    for (const [leaf, record] of Array.from(this.albumYamlExcursions.entries())) {
+      if (!record || record.kind !== "props") continue;
+      const ownPath = record.notePath ? propertyNotePath(record.notePath) : "";
+      if (!ownPath || !targets.has(ownPath)) continue;
+      let current = "";
+      try {
+        current = propertyNotePath(leaf && leaf.view && leaf.view.file && leaf.view.file.path);
+      } catch (_) {}
+      this.propertyCleanupStalePropsExcursion(leaf, record, current || opts.restorePath || "");
+      cleaned += 1;
+    }
+    if (cleaned > 0 && opts.notice) {
+      try { new Notice(opts.notice); } catch (_) {}
+    }
+    return cleaned;
+  }
+
+  propertyCloseEditorForPath(path, notice) {
+    const modal = this.propertyEditorModal;
+    if (!modal || modal.closed === true || modal.filePath !== path) return false;
+    try { modal.close(); } catch (_) {}
+    if (notice) {
+      try { new Notice(notice); } catch (_) {}
+    }
+    return true;
+  }
+
   propertyHandleRename(file, oldPath) {
     const from = propertyNotePath(oldPath);
     const to = propertyNotePath(file && file.path);
@@ -166407,6 +166534,13 @@ class BobLedgerToolsPropertyUpdateMixin {
         try { session.close(); } catch (_) {}
       }
     }
+    // Retargeting would strand the session's saved-pane list on the old
+    // path, so the open modal closes with a notice instead.
+    this.propertyCloseEditorForPath(from, "Note renamed — the property editor was closed.");
+    this.propertyCleanupStalePropsExcursions([from], {
+      restorePath: to,
+      notice: "Note renamed — the YAML excursion was closed.",
+    });
   }
 
   propertyHandleDelete(file) {
@@ -166422,16 +166556,28 @@ class BobLedgerToolsPropertyUpdateMixin {
         try { session.close(); } catch (_) {}
       }
     }
+    this.propertyCloseEditorForPath(path, "Note deleted — the property editor was closed.");
+    this.propertyCleanupStalePropsExcursions([path], {
+      notice: "Note deleted — the YAML excursion was closed.",
+    });
   }
 
   propertyHandleModify(file) {
     const path = propertyNotePath(file && file.path);
     if (!path) return;
-    this.propertyBumpGeneration();
     try {
       const source = this.propertySourceInventory(path);
       if (source) this.propertyOverlayStore().observeSource(path, source);
     } catch (_) {}
+    // Bump only the target path that holds a live session: unrelated
+    // vault traffic must not mark other paths' previews stale. Body-only
+    // edits on the same note still revalidate through its own session.
+    if (this.propertySessions instanceof Map) {
+      const session = this.propertySessions.get(path);
+      if (!session) return;
+      this.propertyVaultGeneration = (this.propertyVaultGeneration || 0) + 1;
+      try { session.noteGenerationChanged(); } catch (_) {}
+    }
   }
 
   propertyCacheFrontmatter(path) {
@@ -166487,8 +166633,12 @@ class BobLedgerToolsPropertyUpdateMixin {
       propertyDecodeShowReport,
       { ...options, commandLabel: "bob props show" },
     ).then((outcome) => {
-      if (outcome && outcome.code === "needs-bob") this.propertyCapability = false;
-      else if (outcome && outcome.ok === true && outcome.report) {
+      // Only the typed old-bob outcome clears the capability. An error
+      // envelope without capabilities (a missing note, an I/O failure) is
+      // actionable and read-only; it never marks bob as old for every note.
+      if (outcome && outcome.ok === false && outcome.code === "needs-bob") {
+        this.propertyCapability = false;
+      } else if (outcome && outcome.ok === true && outcome.report && outcome.report.ok === true) {
         this.propertyCapability = propertyHasCapability(outcome.report);
       }
       return outcome;
@@ -167027,6 +167177,7 @@ class PropertyEditorModal extends PropertyEditorModalBase {
           path: this.filePath,
           onChange: () => {
             if (this.closed) return;
+            try { this.propertyEditorSyncLockWait?.(); } catch (_) {}
             try { this.propertyEditorStageSyncPreview?.(); } catch (_) {}
             this.paintPropertyEditor();
           },
@@ -167042,6 +167193,9 @@ class PropertyEditorModal extends PropertyEditorModalBase {
     } catch (_) {
       this.session = null;
     }
+    try {
+      if (typeof propertyEditorRegisterSession === "function") propertyEditorRegisterSession(this);
+    } catch (_) {}
     return this.session;
   }
 
@@ -167229,8 +167383,13 @@ class PropertyEditorModal extends PropertyEditorModalBase {
     if (action === "undo") return this.propertyEditorHistory("undo");
     if (action === "redo") return this.propertyEditorHistory("redo");
     if (action === "equals") {
-      // An open stage or add draft keeps its text: routing never discards
-      // an uncommitted draft.
+      // A pending save refuses routing first: handing off would close the
+      // modal and strand the flight. An open stage or add draft keeps its
+      // text: routing never discards an uncommitted draft.
+      if (this.pendingApply === true) {
+        this.propertyEditorRefuseWhileSaving?.();
+        return;
+      }
       if (this.stage || this.addName) {
         this.announce = "Finish the open edit first — = is reserved while drafting.";
         return this.paintPropertyEditor();
@@ -167248,18 +167407,46 @@ class PropertyEditorModal extends PropertyEditorModalBase {
         } catch (_) {}
         return;
       }
-      this.announce = "Add and filter arrive in later phases; = is reserved here.";
+      const species = typeof propertyEditorNoteKindSpecies === "function"
+        ? propertyEditorNoteKindSpecies(this.noteKind)
+        : null;
+      if (species) {
+        try {
+          await this.onCardHandoff?.({
+            key: selected && selected.row ? selected.row.key : "",
+            editor: "==",
+            owner: species,
+            row: selected ? selected.row : null,
+          });
+        } catch (_) {}
+        return;
+      }
+      this.announce = "This note has no card editor — y opens YAML.";
       return this.paintPropertyEditor();
     }
     if (action === "yaml") {
-      try { this.onYamlEscape?.({ path: this.filePath, key: this.editorSelected()?.row?.key || "" }); } catch (_) {}
+      if (this.pendingApply === true) {
+        this.propertyEditorRefuseWhileSaving?.();
+        return;
+      }
+      // Close the modal first, as the record card does: the Source view
+      // owns the leaf while the excursion runs, and Done reopens the
+      // editor on the preserved key.
+      const key = this.editorSelected()?.row?.key || "";
+      const filePath = this.filePath;
+      try { this.close(); } catch (_) {}
+      try { this.onYamlEscape?.({ path: filePath, filePath, key }); } catch (_) {}
       return;
     }
     void event;
   }
 
   async propertyEditorActivate(entry) {
-    if (!entry || this.pendingApply) return;
+    if (!entry) return;
+    if (this.pendingApply) {
+      this.propertyEditorRefuseWhileSaving?.();
+      return;
+    }
     const row = entry.row;
     const decision = propertyEditorActionForRow(row);
     if (decision.action === "handoff") {
@@ -167272,7 +167459,7 @@ class PropertyEditorModal extends PropertyEditorModalBase {
       this.refusal = {
         code: "card-handoff",
         message: `“${row.key}” lives on the ${this.noteKind} card.`,
-        hint: "Open it from the card — the typed stage for it arrives in a later phase.",
+        hint: "Open it from the card — y opens YAML.",
       };
       this.status = { kind: "refusal", text: this.refusal.message };
       return this.paintPropertyEditor();
@@ -167283,13 +167470,17 @@ class PropertyEditorModal extends PropertyEditorModalBase {
       return this.paintPropertyEditor();
     }
     if (decision.action === "toggle") return this.propertyEditorFlip(entry);
-    this.announce = `“${row.key}” opens a typed stage in the next phase.`;
+    this.announce = `“${row.key}” opens in a typed stage — press Enter.`;
     this.status = { kind: "ready", text: "" };
     return this.paintPropertyEditor();
   }
 
   async propertyEditorFlip(entry) {
-    if (!entry || this.pendingApply) return;
+    if (!entry) return;
+    if (this.pendingApply) {
+      this.propertyEditorRefuseWhileSaving?.();
+      return;
+    }
     const op = propertyEditorToggleOp(entry.row);
     if (!op) return;
     this.status = propertyEditorStatusChecking();
@@ -167311,6 +167502,7 @@ class PropertyEditorModal extends PropertyEditorModalBase {
       this.pendingApply = false;
     }
     if (this.closed) return;
+    this.announce = "";
     if (result && result.ok === true) {
       if (result.report && Array.isArray(result.report.properties)) {
         this.propertyEditorReconcile({ ...this.report, ...result.report });
@@ -167327,7 +167519,11 @@ class PropertyEditorModal extends PropertyEditorModalBase {
   }
 
   async propertyEditorDelete(entry) {
-    if (!entry || this.pendingApply) return;
+    if (!entry) return;
+    if (this.pendingApply) {
+      this.propertyEditorRefuseWhileSaving?.();
+      return;
+    }
     const decision = propertyEditorActionForRow(entry.row);
     if (decision.action !== "toggle" && decision.action !== "edit") {
       this.refusal = {
@@ -167355,6 +167551,7 @@ class PropertyEditorModal extends PropertyEditorModalBase {
       this.pendingApply = false;
     }
     if (this.closed) return;
+    this.announce = "";
     if (result && result.ok === true) {
       if (result.report && Array.isArray(result.report.properties)) {
         this.propertyEditorReconcile({ ...this.report, ...result.report });
@@ -167371,8 +167568,13 @@ class PropertyEditorModal extends PropertyEditorModalBase {
   }
 
   async propertyEditorHistory(kind) {
+    if (this.pendingApply) {
+      this.propertyEditorRefuseWhileSaving?.();
+      return;
+    }
     const session = this.editorEnsureSession();
     if (!session) return;
+    this.pendingApply = true;
     this.status = propertyEditorStatusChecking();
     this.paintPropertyEditor();
     let result = null;
@@ -167380,8 +167582,11 @@ class PropertyEditorModal extends PropertyEditorModalBase {
       result = await (kind === "redo" ? session.redo() : session.undo());
     } catch (error) {
       result = { ok: false, code: "failed", message: error?.message || "History is unavailable." };
+    } finally {
+      this.pendingApply = false;
     }
     if (this.closed) return;
+    this.announce = "";
     if (result && result.ok === true) {
       if (result.report && Array.isArray(result.report.properties)) {
         this.propertyEditorReconcile({ ...this.report, ...result.report });
@@ -167433,6 +167638,9 @@ class PropertyEditorModal extends PropertyEditorModalBase {
     this.closeToken += 1;
     try {
       if (typeof bobCardUnwireCloseKeys === "function") bobCardUnwireCloseKeys(this);
+    } catch (_) {}
+    try {
+      if (typeof propertyEditorUnregisterSession === "function") propertyEditorUnregisterSession(this);
     } catch (_) {}
     try { this.session?.close?.(); } catch (_) {}
     this.session = null;
@@ -168431,6 +168639,18 @@ Object.assign(PropertyEditorModal.prototype, {
     const state = this.session.getState?.();
     this.sessionState = state || this.sessionState;
     if (!state) return;
+    // The shared lock wait surfaces in the status line while it runs;
+    // Esc stops the wait without retrying the uncertain write.
+    if (state.lockWait) {
+      this.status = {
+        kind: "checking",
+        text: typeof propertyEditorLockWaitText === "function"
+          ? propertyEditorLockWaitText(state.lockWait)
+          : "Waiting for another Bob vault maintenance run… · Esc stops waiting",
+      };
+      this.paintPropertyEditor();
+      return;
+    }
     if (state.status === "preview-pending" || state.status === "draft" || state.status === "applying") {
       this.status = state.status === "applying" ? { kind: "checking", text: "Saving…" } : propertyEditorStatusChecking();
       this.paintPropertyEditor();
@@ -168535,10 +168755,14 @@ Object.assign(PropertyEditorModal.prototype, {
     this.status = { kind: "checking", text: "Saving…" };
     this.paintPropertyEditor();
     let result;
-    try { result = await this.session.apply(); }
-    catch (error) { result = { ok: false, code: "failed", message: error?.message || "The property update failed." }; }
+    try {
+      try { result = await this.session.apply(); }
+      catch (error) { result = { ok: false, code: "failed", message: error?.message || "The property update failed." }; }
+    } finally {
+      this.pendingApply = false;
+    }
     if (this.closed || !this.stage || this.stage.id !== stageId || this.stage.revision !== revision) return result;
-    this.pendingApply = false;
+    this.announce = "";
     if (result?.ok === true) {
       if (result.report?.properties) this.propertyEditorReconcile({ ...this.report, ...result.report });
       this.propertyEditorCancelStage({ quiet: true });
@@ -168563,6 +168787,14 @@ Object.assign(PropertyEditorModal.prototype, {
 ,
   propertyEditorCancelStage(options = {}) {
     if (!this.stage) return false;
+    // A pending save refuses the cancel: clearing the draft mid-write
+    // would turn bob's completed write into a superseded no-op and strand
+    // pendingApply. The modal-level close ladder already refuses first;
+    // this guard keeps row clicks and selection changes safe too.
+    if (this.pendingApply === true) {
+      this.propertyEditorRefuseWhileSaving?.();
+      return false;
+    }
     const session = this.session;
     this.stage = null;
     this.pendingStageEnter = null;
@@ -169250,7 +169482,11 @@ Object.assign(PropertyEditorModal.prototype, {
   }
 ,
   propertyEditorStartAdd(where) {
-    if (this.closed || this.pendingApply) return false;
+    if (this.closed) return false;
+    if (this.pendingApply) {
+      this.propertyEditorRefuseWhileSaving?.();
+      return false;
+    }
     if (!this.propertyEditorCanAdd()) {
       this.refusal = {
         code: "unwritable",
@@ -169710,8 +169946,39 @@ function propertyEditorYamlIssueLine(report) {
   return 1;
 }
 
-function propertyEditorEntryLeafFor(plugin, path) {
+function propertyEditorEntryLeafAlive(plugin, leaf) {
+  if (!leaf) return false;
+  try {
+    const live = plugin && plugin.app && plugin.app.workspace
+      && typeof plugin.app.workspace.getLeavesOfType === "function"
+      ? plugin.app.workspace.getLeavesOfType("markdown")
+      : null;
+    if (Array.isArray(live)) return live.includes(leaf);
+  } catch (_) {}
+  return true;
+}
+
+function propertyEditorEntryLeafShows(leaf, target) {
+  try {
+    return propertyEditorEntryNormalizePath(leaf && leaf.view && leaf.view.file && leaf.view.file.path) === target;
+  } catch (_) {
+    return false;
+  }
+}
+
+// The YAML excursion targets the originating leaf first: the leaf the
+// editor was opened from (recorded at open), then the active leaf, then
+// any leaf showing the note.
+function propertyEditorEntryLeafFor(plugin, path, preferred = null) {
   const target = propertyEditorEntryNormalizePath(path);
+  const origin = preferred || (plugin && plugin.propertyEditorOriginLeaf) || null;
+  if (origin && propertyEditorEntryLeafAlive(plugin, origin) && propertyEditorEntryLeafShows(origin, target)) {
+    return origin;
+  }
+  try {
+    const active = plugin && plugin.app && plugin.app.workspace && plugin.app.workspace.activeLeaf;
+    if (active && propertyEditorEntryLeafShows(active, target)) return active;
+  } catch (_) {}
   try {
     const leaves = plugin && plugin.app && plugin.app.workspace
       && typeof plugin.app.workspace.getLeavesOfType === "function"
@@ -169899,6 +170166,12 @@ class BobLedgerToolsPropertyEditorEntrypointsMixin {
     }
     if (!modal) return { ok: false, reason: "open-failed" };
     this.propertyEditorModal = modal;
+    // Record the originating leaf so the YAML excursion can target it.
+    try {
+      this.propertyEditorOriginLeaf = (this.app && this.app.workspace && this.app.workspace.activeLeaf) || null;
+    } catch (_) {
+      this.propertyEditorOriginLeaf = null;
+    }
     const owned = modal;
     const originalClose = typeof modal.close === "function" ? modal.close.bind(modal) : null;
     if (originalClose) {
@@ -169962,8 +170235,15 @@ class BobLedgerToolsPropertyEditorEntrypointsMixin {
 
   async propertyEditorYamlEscape(input = {}) {
     const modal = input.modal || this.propertyEditorModal;
-    const filePath = (modal && modal.filePath)
-      || this.propertyEditorEntryActivePath(input.filePath || input.path || "");
+    // An explicit path wins: the modal closes before the Source view
+    // opens, so a closed modal can no longer supply its own filePath.
+    const explicit = typeof input.filePath === "string" && input.filePath
+      ? input.filePath
+      : (typeof input.path === "string" && input.path ? input.path : "");
+    const filePath = explicit
+      ? propertyEditorEntryNormalizePath(explicit)
+      : (modal && modal.filePath)
+        || this.propertyEditorEntryActivePath(input.filePath || input.path || "");
     const key = typeof input.key === "string"
       ? input.key
       : (modal && modal.editorSelected && modal.editorSelected()?.row?.key) || "";
@@ -170166,6 +170446,145 @@ class BobLedgerToolsPropertyEditorEntrypointsMixin {
       if (host && typeof host.scheduleRefresh === "function") host.scheduleRefresh();
     } catch (_) {}
   }
+}
+// ---- src/298n-plugin-property-editor-write-safety.js ----
+// Property editor write safety, Esc, and YAML escape (write-safety).
+// Outermost modal guards so cancel, close, row clicks, and selection
+// changes refuse visibly while a save runs instead of invalidating it;
+// Esc routes through the close ladder; the shared lock-wait state paints
+// in the status line and Esc stops the wait. Session registration keeps
+// the modal's session visible to generation, rename, and delete events.
+const PROPERTY_EDITOR_SAVING_TEXT = "Saving… — wait for the property save to finish.";
+
+// Card species a note kind can open with `=`. Day and period notes ride
+// the intentions card; ordinary notes have no card editor.
+function propertyEditorNoteKindSpecies(noteKind) {
+  const kind = String(noteKind || "").trim().toLowerCase();
+  if (kind === "record") return "record";
+  if (kind === "album") return "album";
+  if (kind === "bank") return "bank";
+  if (kind === "intentions" || kind === "intention" || kind === "day"
+    || kind === "week" || kind === "quarter" || kind === "year" || kind === "all_time") return "intentions";
+  return null;
+}
+
+function propertyEditorLockWaitOf(modal) {
+  try {
+    const state = modal && modal.session && typeof modal.session.getState === "function"
+      ? modal.session.getState()
+      : null;
+    return (state && state.lockWait) || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function propertyEditorLockWaitText(lockWait) {
+  try {
+    if (typeof guardedUpdateLockWaitText === "function") return guardedUpdateLockWaitText(lockWait);
+  } catch (_) {}
+  return "Waiting for another Bob vault maintenance run… · Esc stops waiting";
+}
+
+const propertyEditorBackOutBeforeSafety = PropertyEditorModal.prototype.propertyEditorBackOut;
+const propertyEditorSelectBeforeSafety = PropertyEditorModal.prototype.propertyEditorSelect;
+const propertyEditorClickBeforeSafety = PropertyEditorModal.prototype.propertyEditorOnClick;
+
+Object.assign(PropertyEditorModal.prototype, {
+  propertyEditorRefuseWhileSaving() {
+    this.announce = PROPERTY_EDITOR_SAVING_TEXT;
+    try { this.paintPropertyEditor(); } catch (_) {}
+  },
+
+  // Esc stops a lock wait without retrying the uncertain write; otherwise
+  // a pending save refuses the whole ladder with a visible notice.
+  propertyEditorStopLockWaitIfWaiting() {
+    const lockWait = propertyEditorLockWaitOf(this);
+    if (!lockWait) return false;
+    try {
+      if (this.session && typeof this.session.stopWaiting === "function") this.session.stopWaiting();
+    } catch (_) {}
+    this.status = { kind: "checking", text: propertyEditorLockWaitText({ ...lockWait, stopping: true }) };
+    this.announce = "";
+    try { this.paintPropertyEditor(); } catch (_) {}
+    return true;
+  },
+
+  // The shared controller's lock-waiting state surfaces in the status
+  // line; the lock ticker repaints through onChange while it runs.
+  propertyEditorSyncLockWait() {
+    if (this.closed || !this.session) return false;
+    const lockWait = propertyEditorLockWaitOf(this);
+    if (!lockWait) return false;
+    this.status = { kind: "checking", text: propertyEditorLockWaitText(lockWait) };
+    this.announce = "";
+    return true;
+  },
+
+  propertyEditorBackOut(event) {
+    if (this.propertyEditorStopLockWaitIfWaiting()) return;
+    if (this.pendingApply === true) {
+      this.propertyEditorRefuseWhileSaving();
+      return;
+    }
+    return propertyEditorBackOutBeforeSafety.call(this, event);
+  },
+
+  propertyEditorSelect(id) {
+    if (this.pendingApply === true) {
+      this.propertyEditorRefuseWhileSaving();
+      return;
+    }
+    return propertyEditorSelectBeforeSafety.call(this, id);
+  },
+
+  propertyEditorOnClick(event) {
+    if (this.pendingApply === true) {
+      this.propertyEditorRefuseWhileSaving();
+      return;
+    }
+    return propertyEditorClickBeforeSafety.call(this, event);
+  },
+
+  // Obsidian binds this scope's Escape to Modal's onEscapeKey at
+  // construction, so a contentEl keydown handler can never preempt the
+  // default close. Overriding onEscapeKey routes Esc through the same
+  // back-out ladder as q and Ctrl+[, exactly like the record card does.
+  onEscapeKey(event) {
+    this.propertyEditorBackOut(event);
+    return false;
+  },
+});
+
+// Register the modal session so vault generation bumps, renames, and
+// deletes reach it; unregister on close so a stale session never
+// outlives its modal.
+function propertyEditorRegisterSession(modal) {
+  try {
+    const plugin = modal && modal.propertyPlugin;
+    const session = modal && modal.session;
+    const path = modal && modal.filePath;
+    if (!plugin || !session || !path) return;
+    if (plugin.propertySessions instanceof Map) {
+      const current = plugin.propertySessions.get(path);
+      if (current && current !== session) {
+        try { current.close(); } catch (_) {}
+      }
+      plugin.propertySessions.set(path, session);
+    }
+  } catch (_) {}
+}
+
+function propertyEditorUnregisterSession(modal) {
+  try {
+    const plugin = modal && modal.propertyPlugin;
+    const session = modal && modal.session;
+    const path = modal && modal.filePath;
+    if (!plugin || !session || !path) return;
+    if (plugin.propertySessions instanceof Map && plugin.propertySessions.get(path) === session) {
+      plugin.propertySessions.delete(path);
+    }
+  } catch (_) {}
 }
 // ---- src/293-keep-inbox-render.js ----
 // Keep inbox render (keep-indicator-view): DOM for the `bob-keep-inbox`
@@ -177002,7 +177421,11 @@ try {
       propertyEditorHandoffSpecies,
       propertyEditorYamlIssueLine,
       propertyEditorEntryLeafFor,
+      propertyEditorEntryLeafAlive,
+      propertyEditorEntryLeafShows,
       propertyEditorEntryReadSource,
+      PROPERTY_EDITOR_SAVING_TEXT,
+      propertyEditorNoteKindSpecies,
     });
   }
 } catch (_) {}

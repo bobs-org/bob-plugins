@@ -117,7 +117,11 @@ try {
       propertyEditorHandoffSpecies,
       propertyEditorYamlIssueLine,
       propertyEditorEntryLeafFor,
+      propertyEditorEntryLeafAlive,
+      propertyEditorEntryLeafShows,
       propertyEditorEntryReadSource,
+      PROPERTY_EDITOR_SAVING_TEXT,
+      propertyEditorNoteKindSpecies,
     });
   }
 } catch (_) {}

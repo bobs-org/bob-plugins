@@ -125,7 +125,11 @@ Object.assign(PropertyEditorModal.prototype, {
   }
 ,
   propertyEditorStartAdd(where) {
-    if (this.closed || this.pendingApply) return false;
+    if (this.closed) return false;
+    if (this.pendingApply) {
+      this.propertyEditorRefuseWhileSaving?.();
+      return false;
+    }
     if (!this.propertyEditorCanAdd()) {
       this.refusal = {
         code: "unwritable",

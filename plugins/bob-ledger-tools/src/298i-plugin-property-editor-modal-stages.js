@@ -373,6 +373,18 @@ Object.assign(PropertyEditorModal.prototype, {
     const state = this.session.getState?.();
     this.sessionState = state || this.sessionState;
     if (!state) return;
+    // The shared lock wait surfaces in the status line while it runs;
+    // Esc stops the wait without retrying the uncertain write.
+    if (state.lockWait) {
+      this.status = {
+        kind: "checking",
+        text: typeof propertyEditorLockWaitText === "function"
+          ? propertyEditorLockWaitText(state.lockWait)
+          : "Waiting for another Bob vault maintenance run… · Esc stops waiting",
+      };
+      this.paintPropertyEditor();
+      return;
+    }
     if (state.status === "preview-pending" || state.status === "draft" || state.status === "applying") {
       this.status = state.status === "applying" ? { kind: "checking", text: "Saving…" } : propertyEditorStatusChecking();
       this.paintPropertyEditor();
@@ -477,10 +489,14 @@ Object.assign(PropertyEditorModal.prototype, {
     this.status = { kind: "checking", text: "Saving…" };
     this.paintPropertyEditor();
     let result;
-    try { result = await this.session.apply(); }
-    catch (error) { result = { ok: false, code: "failed", message: error?.message || "The property update failed." }; }
+    try {
+      try { result = await this.session.apply(); }
+      catch (error) { result = { ok: false, code: "failed", message: error?.message || "The property update failed." }; }
+    } finally {
+      this.pendingApply = false;
+    }
     if (this.closed || !this.stage || this.stage.id !== stageId || this.stage.revision !== revision) return result;
-    this.pendingApply = false;
+    this.announce = "";
     if (result?.ok === true) {
       if (result.report?.properties) this.propertyEditorReconcile({ ...this.report, ...result.report });
       this.propertyEditorCancelStage({ quiet: true });
@@ -505,6 +521,14 @@ Object.assign(PropertyEditorModal.prototype, {
 ,
   propertyEditorCancelStage(options = {}) {
     if (!this.stage) return false;
+    // A pending save refuses the cancel: clearing the draft mid-write
+    // would turn bob's completed write into a superseded no-op and strand
+    // pendingApply. The modal-level close ladder already refuses first;
+    // this guard keeps row clicks and selection changes safe too.
+    if (this.pendingApply === true) {
+      this.propertyEditorRefuseWhileSaving?.();
+      return false;
+    }
     const session = this.session;
     this.stage = null;
     this.pendingStageEnter = null;

@@ -783,7 +783,7 @@ test("body-only generation change during save re-previews and writes nothing", a
   }
 });
 
-test("late apply responses after close are ignored", async () => {
+test("close during an apply defers until the write settles, then records it", async () => {
   const deps = makeSessionDeps();
   const flight = deferred();
   deps.setApplyImpl(() => flight.promise);
@@ -799,9 +799,12 @@ test("late apply responses after close are ignored", async () => {
       unknown: false,
     });
     const result = await pending;
-    assert.equal(result.ok, false);
-    assert.equal(result.code, "superseded");
-    assert.equal(session.getState().history.undo, 0);
+    assert.equal(result.ok, true, "the completed write is not reported as superseded");
+    assert.equal(session.getState().history.undo, 1, "history records the write that finished after close");
+    assert.ok(deps.overlays.get("notes/groceries.md"), "the confirmed overlay still publishes");
+    const after = await session.applyOps(draftOps());
+    assert.equal(after.code, "closed", "the session closes once the deferred write settles");
+    assert.equal(deps.calls.apply, 1, "the deferred close never retries the write");
   } finally {
     session.close();
   }

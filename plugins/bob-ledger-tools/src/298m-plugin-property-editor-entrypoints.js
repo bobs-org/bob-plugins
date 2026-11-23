@@ -68,8 +68,39 @@ function propertyEditorYamlIssueLine(report) {
   return 1;
 }
 
-function propertyEditorEntryLeafFor(plugin, path) {
+function propertyEditorEntryLeafAlive(plugin, leaf) {
+  if (!leaf) return false;
+  try {
+    const live = plugin && plugin.app && plugin.app.workspace
+      && typeof plugin.app.workspace.getLeavesOfType === "function"
+      ? plugin.app.workspace.getLeavesOfType("markdown")
+      : null;
+    if (Array.isArray(live)) return live.includes(leaf);
+  } catch (_) {}
+  return true;
+}
+
+function propertyEditorEntryLeafShows(leaf, target) {
+  try {
+    return propertyEditorEntryNormalizePath(leaf && leaf.view && leaf.view.file && leaf.view.file.path) === target;
+  } catch (_) {
+    return false;
+  }
+}
+
+// The YAML excursion targets the originating leaf first: the leaf the
+// editor was opened from (recorded at open), then the active leaf, then
+// any leaf showing the note.
+function propertyEditorEntryLeafFor(plugin, path, preferred = null) {
   const target = propertyEditorEntryNormalizePath(path);
+  const origin = preferred || (plugin && plugin.propertyEditorOriginLeaf) || null;
+  if (origin && propertyEditorEntryLeafAlive(plugin, origin) && propertyEditorEntryLeafShows(origin, target)) {
+    return origin;
+  }
+  try {
+    const active = plugin && plugin.app && plugin.app.workspace && plugin.app.workspace.activeLeaf;
+    if (active && propertyEditorEntryLeafShows(active, target)) return active;
+  } catch (_) {}
   try {
     const leaves = plugin && plugin.app && plugin.app.workspace
       && typeof plugin.app.workspace.getLeavesOfType === "function"
@@ -257,6 +288,12 @@ class BobLedgerToolsPropertyEditorEntrypointsMixin {
     }
     if (!modal) return { ok: false, reason: "open-failed" };
     this.propertyEditorModal = modal;
+    // Record the originating leaf so the YAML excursion can target it.
+    try {
+      this.propertyEditorOriginLeaf = (this.app && this.app.workspace && this.app.workspace.activeLeaf) || null;
+    } catch (_) {
+      this.propertyEditorOriginLeaf = null;
+    }
     const owned = modal;
     const originalClose = typeof modal.close === "function" ? modal.close.bind(modal) : null;
     if (originalClose) {
@@ -320,8 +357,15 @@ class BobLedgerToolsPropertyEditorEntrypointsMixin {
 
   async propertyEditorYamlEscape(input = {}) {
     const modal = input.modal || this.propertyEditorModal;
-    const filePath = (modal && modal.filePath)
-      || this.propertyEditorEntryActivePath(input.filePath || input.path || "");
+    // An explicit path wins: the modal closes before the Source view
+    // opens, so a closed modal can no longer supply its own filePath.
+    const explicit = typeof input.filePath === "string" && input.filePath
+      ? input.filePath
+      : (typeof input.path === "string" && input.path ? input.path : "");
+    const filePath = explicit
+      ? propertyEditorEntryNormalizePath(explicit)
+      : (modal && modal.filePath)
+        || this.propertyEditorEntryActivePath(input.filePath || input.path || "");
     const key = typeof input.key === "string"
       ? input.key
       : (modal && modal.editorSelected && modal.editorSelected()?.row?.key) || "";

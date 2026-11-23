@@ -154,6 +154,7 @@ class PropertyEditorModal extends PropertyEditorModalBase {
           path: this.filePath,
           onChange: () => {
             if (this.closed) return;
+            try { this.propertyEditorSyncLockWait?.(); } catch (_) {}
             try { this.propertyEditorStageSyncPreview?.(); } catch (_) {}
             this.paintPropertyEditor();
           },
@@ -169,6 +170,9 @@ class PropertyEditorModal extends PropertyEditorModalBase {
     } catch (_) {
       this.session = null;
     }
+    try {
+      if (typeof propertyEditorRegisterSession === "function") propertyEditorRegisterSession(this);
+    } catch (_) {}
     return this.session;
   }
 
@@ -356,8 +360,13 @@ class PropertyEditorModal extends PropertyEditorModalBase {
     if (action === "undo") return this.propertyEditorHistory("undo");
     if (action === "redo") return this.propertyEditorHistory("redo");
     if (action === "equals") {
-      // An open stage or add draft keeps its text: routing never discards
-      // an uncommitted draft.
+      // A pending save refuses routing first: handing off would close the
+      // modal and strand the flight. An open stage or add draft keeps its
+      // text: routing never discards an uncommitted draft.
+      if (this.pendingApply === true) {
+        this.propertyEditorRefuseWhileSaving?.();
+        return;
+      }
       if (this.stage || this.addName) {
         this.announce = "Finish the open edit first — = is reserved while drafting.";
         return this.paintPropertyEditor();
@@ -375,18 +384,46 @@ class PropertyEditorModal extends PropertyEditorModalBase {
         } catch (_) {}
         return;
       }
-      this.announce = "Add and filter arrive in later phases; = is reserved here.";
+      const species = typeof propertyEditorNoteKindSpecies === "function"
+        ? propertyEditorNoteKindSpecies(this.noteKind)
+        : null;
+      if (species) {
+        try {
+          await this.onCardHandoff?.({
+            key: selected && selected.row ? selected.row.key : "",
+            editor: "==",
+            owner: species,
+            row: selected ? selected.row : null,
+          });
+        } catch (_) {}
+        return;
+      }
+      this.announce = "This note has no card editor — y opens YAML.";
       return this.paintPropertyEditor();
     }
     if (action === "yaml") {
-      try { this.onYamlEscape?.({ path: this.filePath, key: this.editorSelected()?.row?.key || "" }); } catch (_) {}
+      if (this.pendingApply === true) {
+        this.propertyEditorRefuseWhileSaving?.();
+        return;
+      }
+      // Close the modal first, as the record card does: the Source view
+      // owns the leaf while the excursion runs, and Done reopens the
+      // editor on the preserved key.
+      const key = this.editorSelected()?.row?.key || "";
+      const filePath = this.filePath;
+      try { this.close(); } catch (_) {}
+      try { this.onYamlEscape?.({ path: filePath, filePath, key }); } catch (_) {}
       return;
     }
     void event;
   }
 
   async propertyEditorActivate(entry) {
-    if (!entry || this.pendingApply) return;
+    if (!entry) return;
+    if (this.pendingApply) {
+      this.propertyEditorRefuseWhileSaving?.();
+      return;
+    }
     const row = entry.row;
     const decision = propertyEditorActionForRow(row);
     if (decision.action === "handoff") {
@@ -399,7 +436,7 @@ class PropertyEditorModal extends PropertyEditorModalBase {
       this.refusal = {
         code: "card-handoff",
         message: `“${row.key}” lives on the ${this.noteKind} card.`,
-        hint: "Open it from the card — the typed stage for it arrives in a later phase.",
+        hint: "Open it from the card — y opens YAML.",
       };
       this.status = { kind: "refusal", text: this.refusal.message };
       return this.paintPropertyEditor();
@@ -410,13 +447,17 @@ class PropertyEditorModal extends PropertyEditorModalBase {
       return this.paintPropertyEditor();
     }
     if (decision.action === "toggle") return this.propertyEditorFlip(entry);
-    this.announce = `“${row.key}” opens a typed stage in the next phase.`;
+    this.announce = `“${row.key}” opens in a typed stage — press Enter.`;
     this.status = { kind: "ready", text: "" };
     return this.paintPropertyEditor();
   }
 
   async propertyEditorFlip(entry) {
-    if (!entry || this.pendingApply) return;
+    if (!entry) return;
+    if (this.pendingApply) {
+      this.propertyEditorRefuseWhileSaving?.();
+      return;
+    }
     const op = propertyEditorToggleOp(entry.row);
     if (!op) return;
     this.status = propertyEditorStatusChecking();
@@ -438,6 +479,7 @@ class PropertyEditorModal extends PropertyEditorModalBase {
       this.pendingApply = false;
     }
     if (this.closed) return;
+    this.announce = "";
     if (result && result.ok === true) {
       if (result.report && Array.isArray(result.report.properties)) {
         this.propertyEditorReconcile({ ...this.report, ...result.report });
@@ -454,7 +496,11 @@ class PropertyEditorModal extends PropertyEditorModalBase {
   }
 
   async propertyEditorDelete(entry) {
-    if (!entry || this.pendingApply) return;
+    if (!entry) return;
+    if (this.pendingApply) {
+      this.propertyEditorRefuseWhileSaving?.();
+      return;
+    }
     const decision = propertyEditorActionForRow(entry.row);
     if (decision.action !== "toggle" && decision.action !== "edit") {
       this.refusal = {
@@ -482,6 +528,7 @@ class PropertyEditorModal extends PropertyEditorModalBase {
       this.pendingApply = false;
     }
     if (this.closed) return;
+    this.announce = "";
     if (result && result.ok === true) {
       if (result.report && Array.isArray(result.report.properties)) {
         this.propertyEditorReconcile({ ...this.report, ...result.report });
@@ -498,8 +545,13 @@ class PropertyEditorModal extends PropertyEditorModalBase {
   }
 
   async propertyEditorHistory(kind) {
+    if (this.pendingApply) {
+      this.propertyEditorRefuseWhileSaving?.();
+      return;
+    }
     const session = this.editorEnsureSession();
     if (!session) return;
+    this.pendingApply = true;
     this.status = propertyEditorStatusChecking();
     this.paintPropertyEditor();
     let result = null;
@@ -507,8 +559,11 @@ class PropertyEditorModal extends PropertyEditorModalBase {
       result = await (kind === "redo" ? session.redo() : session.undo());
     } catch (error) {
       result = { ok: false, code: "failed", message: error?.message || "History is unavailable." };
+    } finally {
+      this.pendingApply = false;
     }
     if (this.closed) return;
+    this.announce = "";
     if (result && result.ok === true) {
       if (result.report && Array.isArray(result.report.properties)) {
         this.propertyEditorReconcile({ ...this.report, ...result.report });
@@ -560,6 +615,9 @@ class PropertyEditorModal extends PropertyEditorModalBase {
     this.closeToken += 1;
     try {
       if (typeof bobCardUnwireCloseKeys === "function") bobCardUnwireCloseKeys(this);
+    } catch (_) {}
+    try {
+      if (typeof propertyEditorUnregisterSession === "function") propertyEditorUnregisterSession(this);
     } catch (_) {}
     try { this.session?.close?.(); } catch (_) {}
     this.session = null;

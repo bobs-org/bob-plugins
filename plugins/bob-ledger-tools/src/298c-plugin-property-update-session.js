@@ -107,37 +107,102 @@ function createPropertyUpdateSession(init = {}, deps = {}) {
     return result;
   }
 
+  // In-flight write guard (write-safety): cancel, close, row clicks, and
+  // selection changes must not invalidate a pending write, so a draft clear
+  // or close that arrives mid-write waits for the outcome instead. History
+  // and overlays belong to the service, so a completed write still records
+  // them after the modal or stage closed. An unknown outcome stays unknown:
+  // it is never retried here.
+  let writeInFlight = null;
+  let closeRequested = false;
+  let pendingGenerationBump = false;
+
+  function writeBusyRefusal() {
+    return {
+      ok: false,
+      code: "write-busy",
+      message: "A property save is already running.",
+      hint: "Wait for it to finish, then try again.",
+    };
+  }
+
+  function pokeChanged() {
+    try {
+      if (typeof deps.onChange === "function") deps.onChange(getState());
+    } catch (_) {}
+  }
+
+  async function runWrite(work) {
+    if (writeInFlight) return writeBusyRefusal();
+    const flight = (async () => work())();
+    writeInFlight = flight;
+    try {
+      return await flight;
+    } finally {
+      if (writeInFlight === flight) writeInFlight = null;
+      if (pendingGenerationBump && !closeRequested) {
+        pendingGenerationBump = false;
+        try { inner.noteGenerationChanged(); } catch (_) {}
+        pokeChanged();
+      }
+      if (closeRequested && writeInFlight === null) {
+        closeRequested = false;
+        try { inner.close(); } catch (_) {}
+      }
+    }
+  }
+
   async function replayHistory(kind) {
     if (!history) {
       return { ok: false, code: "nothing-to-undo", message: "There is no property edit to undo." };
     }
-    const popped = kind === "redo" ? history.popRedo(notePath) : history.popUndo(notePath);
-    if (!popped) {
-      return {
-        ok: false,
-        code: kind === "redo" ? "nothing-to-redo" : "nothing-to-undo",
-        message: kind === "redo" ? "There is no property edit to redo." : "There is no property edit to undo.",
-      };
-    }
-    historyKind = kind;
-    try {
-      inner.rebase(popped.expect);
-      const result = await settle(await inner.applyOps(popped.inverseOps));
-      const consumed = result && result.ok === true && result.changed === true;
-      if (!consumed) {
-        if (kind === "redo") history.restoreRedo(notePath, popped);
-        else history.restoreUndo(notePath, popped);
+    return runWrite(async () => {
+      const popped = kind === "redo" ? history.popRedo(notePath) : history.popUndo(notePath);
+      if (!popped) {
+        return {
+          ok: false,
+          code: kind === "redo" ? "nothing-to-redo" : "nothing-to-undo",
+          message: kind === "redo" ? "There is no property edit to redo." : "There is no property edit to undo.",
+        };
       }
-      return result;
-    } finally {
-      historyKind = "edit";
-    }
+      historyKind = kind;
+      try {
+        inner.rebase(popped.expect);
+        const result = await settle(await inner.applyOps(popped.inverseOps));
+        const consumed = result && result.ok === true && result.changed === true;
+        if (!consumed) {
+          if (kind === "redo") history.restoreRedo(notePath, popped);
+          else history.restoreUndo(notePath, popped);
+        }
+        return result;
+      } finally {
+        historyKind = "edit";
+      }
+    });
+  }
+
+  function getState() {
+    const state = inner.getState();
+    const hist = history ? history.snapshot(notePath) : { undo: 0, redo: 0 };
+    return {
+      ...state,
+      path: notePath,
+      undoAvailable: hist.undo > 0,
+      redoAvailable: hist.redo > 0,
+      history: hist,
+    };
   }
 
   return {
-    setDraft: inner.setDraft,
+    setDraft: (ops) => {
+      if (writeInFlight) return getState();
+      return inner.setDraft(ops);
+    },
     previewNow: inner.previewNow,
-    invalidateEnter: () => inner.setDraft(inner.getState().draftOps),
+    invalidateEnter: () => {
+      if (writeInFlight) return getState();
+      return inner.setDraft(inner.getState().draftOps);
+    },
     apply: async () => {
       if (!inner.getState().expect) {
         return {
@@ -147,7 +212,7 @@ function createPropertyUpdateSession(init = {}, deps = {}) {
         };
       }
       historyKind = "edit";
-      return settle(await inner.apply());
+      return runWrite(async () => settle(await inner.apply()));
     },
     applyOps: async (ops) => {
       if (!inner.getState().expect) {
@@ -158,27 +223,34 @@ function createPropertyUpdateSession(init = {}, deps = {}) {
         };
       }
       historyKind = "edit";
-      return settle(await inner.applyOps(ops));
+      return runWrite(async () => settle(await inner.applyOps(ops)));
     },
     undo: async () => replayHistory("undo"),
     redo: async () => replayHistory("redo"),
     stopWaiting: inner.stopWaiting,
     stageUndo: inner.stageUndo,
     retrySync: inner.retrySync,
-    noteGenerationChanged: inner.noteGenerationChanged,
-    rebase: inner.rebase,
-    close: inner.close,
-    getState: () => {
-      const state = inner.getState();
-      const hist = history ? history.snapshot(notePath) : { undo: 0, redo: 0 };
-      return {
-        ...state,
-        path: notePath,
-        undoAvailable: hist.undo > 0,
-        redoAvailable: hist.redo > 0,
-        history: hist,
-      };
+    noteGenerationChanged: () => {
+      if (writeInFlight) {
+        pendingGenerationBump = true;
+        return getState();
+      }
+      const snapshot = inner.noteGenerationChanged();
+      pokeChanged();
+      return snapshot;
     },
+    rebase: (expect) => {
+      if (writeInFlight) return getState();
+      return inner.rebase(expect);
+    },
+    close: () => {
+      if (writeInFlight) {
+        closeRequested = true;
+        return getState();
+      }
+      try { inner.close(); } catch (_) {}
+    },
+    getState,
     rememberProperties,
   };
 }

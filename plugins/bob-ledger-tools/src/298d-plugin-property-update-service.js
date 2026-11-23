@@ -111,6 +111,61 @@ class BobLedgerToolsPropertyUpdateMixin {
     return this.propertyVaultGeneration;
   }
 
+  // A rename, delete, or leaf close turns a mounted props Done button
+  // dead: the excursion record no longer matches the leaf. Clear the
+  // button, restore the leaf's pre-excursion mode where the leaf still
+  // shows a note, and say so instead of leaving the dead button.
+  propertyCleanupStalePropsExcursion(leaf, record, filePath) {
+    try {
+      if (typeof this.albumYamlExcursionClear === "function") this.albumYamlExcursionClear(leaf);
+    } catch (_) {}
+    const viewState = record && record.viewState;
+    try {
+      if (viewState && leaf && typeof leaf.setViewState === "function") {
+        const next = {
+          ...viewState,
+          state: { ...(viewState.state || {}), ...(filePath ? { file: filePath } : {}) },
+        };
+        void Promise.resolve(leaf.setViewState(next)).catch(() => {});
+      }
+    } catch (_) {}
+  }
+
+  propertyCleanupStalePropsExcursions(paths, options = {}) {
+    if (!(this.albumYamlExcursions instanceof Map)) return 0;
+    const opts = options && typeof options === "object" ? options : {};
+    const targets = new Set(
+      (Array.isArray(paths) ? paths : [paths]).map((entry) => propertyNotePath(entry)).filter(Boolean),
+    );
+    if (!targets.size) return 0;
+    let cleaned = 0;
+    for (const [leaf, record] of Array.from(this.albumYamlExcursions.entries())) {
+      if (!record || record.kind !== "props") continue;
+      const ownPath = record.notePath ? propertyNotePath(record.notePath) : "";
+      if (!ownPath || !targets.has(ownPath)) continue;
+      let current = "";
+      try {
+        current = propertyNotePath(leaf && leaf.view && leaf.view.file && leaf.view.file.path);
+      } catch (_) {}
+      this.propertyCleanupStalePropsExcursion(leaf, record, current || opts.restorePath || "");
+      cleaned += 1;
+    }
+    if (cleaned > 0 && opts.notice) {
+      try { new Notice(opts.notice); } catch (_) {}
+    }
+    return cleaned;
+  }
+
+  propertyCloseEditorForPath(path, notice) {
+    const modal = this.propertyEditorModal;
+    if (!modal || modal.closed === true || modal.filePath !== path) return false;
+    try { modal.close(); } catch (_) {}
+    if (notice) {
+      try { new Notice(notice); } catch (_) {}
+    }
+    return true;
+  }
+
   propertyHandleRename(file, oldPath) {
     const from = propertyNotePath(oldPath);
     const to = propertyNotePath(file && file.path);
@@ -125,6 +180,13 @@ class BobLedgerToolsPropertyUpdateMixin {
         try { session.close(); } catch (_) {}
       }
     }
+    // Retargeting would strand the session's saved-pane list on the old
+    // path, so the open modal closes with a notice instead.
+    this.propertyCloseEditorForPath(from, "Note renamed — the property editor was closed.");
+    this.propertyCleanupStalePropsExcursions([from], {
+      restorePath: to,
+      notice: "Note renamed — the YAML excursion was closed.",
+    });
   }
 
   propertyHandleDelete(file) {
@@ -140,16 +202,28 @@ class BobLedgerToolsPropertyUpdateMixin {
         try { session.close(); } catch (_) {}
       }
     }
+    this.propertyCloseEditorForPath(path, "Note deleted — the property editor was closed.");
+    this.propertyCleanupStalePropsExcursions([path], {
+      notice: "Note deleted — the YAML excursion was closed.",
+    });
   }
 
   propertyHandleModify(file) {
     const path = propertyNotePath(file && file.path);
     if (!path) return;
-    this.propertyBumpGeneration();
     try {
       const source = this.propertySourceInventory(path);
       if (source) this.propertyOverlayStore().observeSource(path, source);
     } catch (_) {}
+    // Bump only the target path that holds a live session: unrelated
+    // vault traffic must not mark other paths' previews stale. Body-only
+    // edits on the same note still revalidate through its own session.
+    if (this.propertySessions instanceof Map) {
+      const session = this.propertySessions.get(path);
+      if (!session) return;
+      this.propertyVaultGeneration = (this.propertyVaultGeneration || 0) + 1;
+      try { session.noteGenerationChanged(); } catch (_) {}
+    }
   }
 
   propertyCacheFrontmatter(path) {
@@ -205,8 +279,12 @@ class BobLedgerToolsPropertyUpdateMixin {
       propertyDecodeShowReport,
       { ...options, commandLabel: "bob props show" },
     ).then((outcome) => {
-      if (outcome && outcome.code === "needs-bob") this.propertyCapability = false;
-      else if (outcome && outcome.ok === true && outcome.report) {
+      // Only the typed old-bob outcome clears the capability. An error
+      // envelope without capabilities (a missing note, an I/O failure) is
+      // actionable and read-only; it never marks bob as old for every note.
+      if (outcome && outcome.ok === false && outcome.code === "needs-bob") {
+        this.propertyCapability = false;
+      } else if (outcome && outcome.ok === true && outcome.report && outcome.report.ok === true) {
         this.propertyCapability = propertyHasCapability(outcome.report);
       }
       return outcome;

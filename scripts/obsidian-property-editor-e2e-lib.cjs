@@ -23,15 +23,26 @@ const HELP_TEXT = [
 ].join("\n");
 
 const ACCEPTANCE_CHECKS = [
-  "project-edit-and-undo-redo",
-  "project-add",
-  "project-delete-and-undo",
-  "day-note-edit",
+  "project-edit-undo-redo-disk-bytes",
+  "project-add-disk-bytes",
+  "project-delete-undo-disk-bytes",
+  "plain-note-add-undo-redo-framing-disk-bytes",
+  "tab-completion-preserves-known-type",
+  "shift-enter-keeps-literal-name-as-text",
+  "day-note-edit-disk-bytes",
   "record-field-handoff",
-  "derived-key-locked",
+  "derived-and-identity-gestures-refused-and-yaml-targets",
+  "checkbox-flip-disk-bytes",
+  "datetime-no-offset-disk-bytes",
+  "datetime-explicit-offset-disk-bytes",
+  "datetime-relative-token-disk-bytes",
+  "tags-without-hash-disk-bytes",
+  "ordered-list-disk-bytes",
+  "null-versus-empty-string-disk-bytes",
+  "prose-link-task-band-when-navigation-is-loaded",
   "old-bob-read-only",
-  "invalid-yaml-recovery",
-  "untouched-frontmatter-bytes-preserved",
+  "invalid-unclosed-and-duplicate-yaml-recovery-targets",
+  "exact-note-bytes-after-every-write",
   "screenshots-light-dark-narrow-wide",
 ];
 
@@ -86,10 +97,12 @@ function fixtureNotes(today = "2026-11-23") {
       "# Keep this comment exactly as authored",
       'type: "[[project]]"',
       'parent: "[[projects]]"',
-      'status: "draft"',
+      'launch_window: "draft"',
       'keep_exact: "keep : and # exactly"',
       "remove_me: temporary",
       "project_digest: sha256:0123456789abcdef",
+      "review_enabled: false",
+      "locked_toggle: false",
       "---",
       "",
       "# Project note",
@@ -131,6 +144,7 @@ function fixtureNotes(today = "2026-11-23") {
       "created: 2026-11-23",
       'day_marker: "day stays : exact #"',
       "review_digest: sha256:fedcba9876543210",
+      "day_remove_me: temporary",
       "---",
       "",
       `# ${today}`,
@@ -143,6 +157,52 @@ function fixtureNotes(today = "2026-11-23") {
       "---",
       "",
       "# Invalid YAML fixture",
+      "",
+    ].join("\n"),
+    "unclosed.md": [
+      "---",
+      'type: "[[note]]"',
+      "broken: [unterminated",
+      "# Unclosed YAML fixture",
+      "",
+    ].join("\n"),
+    "duplicate.md": [
+      "---",
+      'type: "[[note]]"',
+      'title: "first"',
+      'title: "second"',
+      "---",
+      "",
+      "# Duplicate YAML fixture",
+      "",
+    ].join("\n"),
+    "plain.md": [
+      "# Plain note",
+      "",
+      "Body bytes stay outside the new frontmatter block.",
+      "",
+    ].join("\n"),
+    "literal-name.md": [
+      "# Literal name note",
+      "",
+      "Body bytes stay outside the new frontmatter block.",
+      "",
+    ].join("\n"),
+    "value-kinds.md": [
+      "---",
+      'type: "[[note]]"',
+      "enabled: false",
+      'no_offset_at: "2026-11-23T09:30:00"',
+      'offset_at: "2026-11-23T09:30:00-05:00"',
+      'relative_at: "2026-11-23T09:30:00"',
+      "tags: [home]",
+      'steps: ["first", "second"]',
+      "nullable: null",
+      'empty_text: ""',
+      'description: "Plain prose"',
+      "---",
+      "",
+      "# Value kinds",
       "",
     ].join("\n"),
     "old-bob.md": ["---", 'custom: "cached row"', "---", "", "# Old bob", ""].join("\n"),
@@ -170,20 +230,31 @@ function editorProbeSource() {
   return `(() => {
     const editor = document.querySelector(".bob-property-editor");
     if (!editor) return { open: false };
+    const plugin = window.app?.plugins?.plugins?.["bob-ledger-tools"];
+    const report = plugin?.propertyEditorModal?.report || null;
     return {
       open: true,
       heading: editor.querySelector(".bob-property-editor-heading")?.textContent || "",
       rows: Array.from(editor.querySelectorAll("[data-property-row]")).map((row) => ({
         key: row.getAttribute("data-property-key"),
+        id: row.getAttribute("data-property-row"),
+        line: Number((row.getAttribute("data-property-row") || "").split("::").pop()) || null,
         action: row.getAttribute("data-property-action"),
         disabled: row.getAttribute("aria-disabled") === "true",
         selected: row.getAttribute("aria-selected") === "true",
         text: row.textContent || "",
+        diagnostic: row.getAttribute("title") || "",
       })),
+      properties: Array.isArray(report?.properties) ? report.properties.map((row) => ({ key: row.key, line: row.line, kind: row.kind, role: row.role, duplicate: row.duplicate === true, diagnostic: row.diagnostic || "" })) : [],
       banner: editor.querySelector(".bob-property-editor-banner")?.textContent || "",
       recovery: editor.querySelector(".bob-property-editor-banner.is-recovery")?.textContent || "",
       status: editor.querySelector(".bob-property-editor-status")?.textContent || "",
       stage: editor.querySelector("[data-property-stage], [data-property-add]")?.getAttribute("aria-label") || "",
+      stageKind: plugin?.propertyEditorModal?.stage?.kind || null,
+      frontmatterState: report?.frontmatter?.state || "",
+      frontmatterError: report?.frontmatter?.error?.message || "",
+      frontmatterErrorLine: report?.frontmatter?.error?.line || null,
+      ownershipDiagnostics: report?.ownership_diagnostics || [],
     };
   })()`;
 }
@@ -210,13 +281,18 @@ function selfTest() {
   assert.throws(() => parseArgs(["--unknown"]), /Unknown argument/);
 
   const notes = fixtureNotes();
-  for (const pathValue of ["projects/project-note.md", "2026/20261123.md", "projects-album/acceptance.md", "invalid.md", "old-bob.md"]) {
+  for (const pathValue of ["projects/project-note.md", "2026/20261123.md", "projects-album/acceptance.md", "invalid.md", "unclosed.md", "duplicate.md", "plain.md", "literal-name.md", "value-kinds.md", "old-bob.md"]) {
     assert.ok(notes[pathValue], `fixture missing ${pathValue}`);
   }
   assert.match(notes["projects/project-note.md"], /# Keep this comment exactly as authored/);
   assert.match(notes["projects/project-note.md"], /keep_exact: "keep : and # exactly"/);
+  assert.match(notes["projects/project-note.md"], /project_digest: sha256:/);
   assert.match(notes["2026/20261123.md"], /intentions: \[\]/);
   assert.match(notes["invalid.md"], /broken: \[unterminated/);
+  assert.doesNotMatch(notes["unclosed.md"], /\n---\n/);
+  assert.equal((notes["duplicate.md"].match(/^title:/gm) || []).length, 2);
+  assert.doesNotMatch(notes["plain.md"], /^---$/m);
+  assert.match(notes["value-kinds.md"], /offset_at: "2026-11-23T09:30:00-05:00"/);
   assert.deepEqual(ACCEPTANCE_CHECKS, [...new Set(ACCEPTANCE_CHECKS)]);
 
   const fakeBob = path.join(__dirname, "fixtures", "fake-bob.cjs");

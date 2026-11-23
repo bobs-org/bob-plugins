@@ -22,9 +22,15 @@ test("obsidian-property-editor-e2e --self-test", () => {
 test("runner advertises the complete editor acceptance matrix", () => {
   assert.equal(new Set(lib.ACCEPTANCE_CHECKS).size, lib.ACCEPTANCE_CHECKS.length);
   for (const check of [
-    "project-edit-and-undo-redo", "project-add", "project-delete-and-undo", "day-note-edit",
-    "record-field-handoff", "derived-key-locked", "old-bob-read-only", "invalid-yaml-recovery",
-    "untouched-frontmatter-bytes-preserved", "screenshots-light-dark-narrow-wide",
+    "project-edit-undo-redo-disk-bytes", "project-add-disk-bytes", "project-delete-undo-disk-bytes",
+    "plain-note-add-undo-redo-framing-disk-bytes", "tab-completion-preserves-known-type",
+    "shift-enter-keeps-literal-name-as-text", "day-note-edit-disk-bytes", "record-field-handoff",
+    "derived-and-identity-gestures-refused-and-yaml-targets", "checkbox-flip-disk-bytes",
+    "datetime-no-offset-disk-bytes", "datetime-explicit-offset-disk-bytes",
+    "datetime-relative-token-disk-bytes", "tags-without-hash-disk-bytes", "ordered-list-disk-bytes",
+    "null-versus-empty-string-disk-bytes", "prose-link-task-band-when-navigation-is-loaded",
+    "old-bob-read-only", "invalid-unclosed-and-duplicate-yaml-recovery-targets",
+    "exact-note-bytes-after-every-write", "screenshots-light-dark-narrow-wide",
   ]) assert.ok(lib.ACCEPTANCE_CHECKS.includes(check), check);
   assert.equal(typeof runner.run, "function");
   assert.throws(() => lib.parseArgs(["--executable"]), /requires a PATH/);

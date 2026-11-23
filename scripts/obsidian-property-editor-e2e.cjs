@@ -5,6 +5,7 @@
 "use strict";
 
 const { spawn, spawnSync } = require("node:child_process");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -119,14 +120,51 @@ function addCheck(report, name, ok, detail) {
   if (!ok) throw new Error(name + " failed: " + JSON.stringify(detail));
 }
 
+function replaceOnce(source, before, after) {
+  const index = source.indexOf(before);
+  if (index < 0 || source.indexOf(before, index + before.length) >= 0) {
+    throw new Error(`Expected exactly one occurrence of ${JSON.stringify(before)}`);
+  }
+  return source.slice(0, index) + after + source.slice(index + before.length);
+}
+
+function removeLineOnce(source, line) {
+  return replaceOnce(source, line + "\n", "");
+}
+
+function insertFrontmatterLine(source, line) {
+  const close = source.indexOf("\n---\n", 4);
+  if (close < 0) throw new Error("Could not find the frontmatter closing delimiter");
+  return source.slice(0, close) + "\n" + line + source.slice(close);
+}
+
+function insertAfterLineOnce(source, beforeLine, line) {
+  return replaceOnce(source, beforeLine + "\n", beforeLine + "\n" + line + "\n");
+}
+
+function assertDiskBytes(report, name, file, expected) {
+  const actual = fs.readFileSync(file);
+  const wanted = Buffer.from(expected, "utf8");
+  const actualHash = crypto.createHash("sha256").update(actual).digest("hex");
+  const expectedHash = crypto.createHash("sha256").update(wanted).digest("hex");
+  addCheck(report, name, actual.equals(wanted), {
+    expectedBytes: wanted.length,
+    actualBytes: actual.length,
+    expectedSha256: expectedHash,
+    actualSha256: actualHash,
+    expectedText: expected.toString(),
+    actualText: actual.toString(),
+  });
+}
+
 function selectorClick(client, selector) {
   return client.evaluate(`(() => { const node = document.querySelector(${JSON.stringify(selector)}); if (!node) return false; node.click(); return true; })()`);
 }
 
-function propertyRowClick(client, key) {
+function propertyRowClick(client, key, occurrence = 0) {
   return client.evaluate(`(() => {
     const row = Array.from(document.querySelectorAll(".bob-property-editor [data-property-row]"))
-      .find((item) => item.getAttribute("data-property-key") === ${JSON.stringify(key)});
+      .filter((item) => item.getAttribute("data-property-key") === ${JSON.stringify(key)})[${Number(occurrence)}];
     if (!row) return false;
     row.click();
     return true;
@@ -136,6 +174,12 @@ function propertyRowClick(client, key) {
 async function sendKey(client, key, options = {}) {
   const table = {
     Enter: ["Enter", 13, "\r"],
+    Tab: ["Tab", 9],
+    Escape: ["Escape", 27],
+    " ": ["Space", 32, " "],
+    Backspace: ["Backspace", 8],
+    ArrowDown: ["ArrowDown", 40],
+    ArrowUp: ["ArrowUp", 38],
     "[": ["BracketLeft", 219, "["],
     ";": ["Semicolon", 186, ";"],
   };
@@ -177,11 +221,18 @@ async function setInput(client, selector, value) {
     const input = document.querySelector(${JSON.stringify(selector)});
     if (!input) return false;
     input.focus();
-    input.value = ${JSON.stringify(value)};
-    input.dispatchEvent(new Event("input", { bubbles: true }));
     return true;
   })()`);
   if (!changed) throw new Error("Missing input " + selector);
+  await client.call("Input.dispatchKeyEvent", {
+    type: "rawKeyDown", key: "a", code: "KeyA", windowsVirtualKeyCode: 65,
+    nativeVirtualKeyCode: 65, modifiers: 2,
+  });
+  await client.call("Input.dispatchKeyEvent", {
+    type: "keyUp", key: "a", code: "KeyA", windowsVirtualKeyCode: 65,
+    nativeVirtualKeyCode: 65, modifiers: 2,
+  });
+  await client.call("Input.insertText", { text: String(value) });
 }
 
 async function saveStage(client, selector, value, rowKey) {
@@ -189,8 +240,45 @@ async function saveStage(client, selector, value, rowKey) {
   await shared.waitFor(client,
     `document.querySelector(".bob-property-editor-stage-preview")?.textContent || ""`,
     (text) => /Preview ·/.test(text), "property value preview");
-  if (!await selectorClick(client, '.bob-property-editor [data-property-stage-action="save"]')) throw new Error("Property stage Save button missing");
-  return waitForEditor(client, (probe) => !probe.stage && /Saved/.test(probe.status) && probe.rows.some((row) => row.key === rowKey && row.text.includes(value)), "property value to save");
+  await sendKey(client, "Enter");
+  return waitForEditor(client, (probe) => !probe.stage && /Saved/.test(probe.status) && probe.rows.some((row) => row.key === rowKey), "property value to save");
+}
+
+async function saveCollectionStage(client, value, rowKey) {
+  await setInput(client, "[data-property-stage-input]", value);
+  await sendKey(client, "Enter");
+  await shared.waitFor(client,
+    `document.querySelector(".bob-property-editor-stage-chip")?.textContent || ""`,
+    (text) => text.includes(String(value).replace(/^#+/, "#")), "collection item added");
+  await shared.waitFor(client,
+    `document.querySelector(".bob-property-editor-stage-preview")?.textContent || ""`,
+    (text) => /Preview ·/.test(text), "collection value preview");
+  await sendKey(client, "Enter");
+  return waitForEditor(client, (probe) => !probe.stage && /Saved/.test(probe.status) && probe.rows.some((row) => row.key === rowKey), "collection property to save");
+}
+
+async function yamlTarget(client, line, expectedText, label, report) {
+  const result = await shared.waitFor(client, `(() => {
+    const leaf = window.app?.workspace?.activeLeaf;
+    const view = leaf?.view;
+    const editor = view?.editor;
+    const cursor = editor?.getCursor?.();
+    return cursor && editor?.getLine
+      ? { path: view?.file?.path || "", line: cursor.line + 1, text: editor.getLine(cursor.line) }
+      : null;
+  })()`, (target) => target?.line === line && (!expectedText || target.text.includes(expectedText)), label);
+  addCheck(report, label, result?.line === line && (!expectedText || result.text.includes(expectedText)), result);
+  return result;
+}
+
+async function finishYamlExcursion(client, label) {
+  if (!await selectorClick(client, "[data-album-yaml-done]")) throw new Error(`Missing YAML Done button after ${label}`);
+  return waitForEditor(client, (probe) => probe.open, `property editor reopened after ${label}`);
+}
+
+async function closePropertyEditor(client) {
+  await client.evaluate("app.plugins.plugins['bob-ledger-tools'].propertyEditorModal?.close?.()");
+  await shared.sleep(100);
 }
 
 async function run(args) {
@@ -202,6 +290,7 @@ async function run(args) {
     bobRuns: [],
     consoleExceptions: [],
     prerequisites: [],
+    acceptanceChecks: lib.ACCEPTANCE_CHECKS.slice(),
   };
   let scratch = "";
   let child = null;
@@ -280,59 +369,164 @@ async function run(args) {
     await shared.trustCommunityPlugins(client);
     report.obsidian = { pid: child.pid, executable, startupErrors: startupErrors.slice(-8) };
 
-    const projectBefore = fs.readFileSync(path.join(vaultDir, "projects/project-note.md"), "utf8");
+    const projectPath = path.join(vaultDir, "projects/project-note.md");
+    const projectBefore = fs.readFileSync(projectPath, "utf8");
     await shared.openNote(client, "projects/project-note.md", "live");
-    let probe = await openPropertyEditor(client, "projects/project-note.md", { key: "status", mode: "edit" });
-    probe = await waitForEditor(client, (value) => value.rows.some((row) => row.key === "status"), "project property rows");
+    let probe = await openPropertyEditor(client, "projects/project-note.md", { key: "launch_window", mode: "edit" });
+    probe = await waitForEditor(client, (value) => value.rows.some((row) => row.key === "launch_window"), "project property rows");
     addCheck(report, "project header and loose rows", probe.heading === "PROJECT · PROPERTIES" && probe.rows.some((row) => row.key === "keep_exact"), probe);
 
     await shared.waitFor(client, `Boolean(document.querySelector(".bob-property-editor [data-property-stage]"))`, Boolean, "project status stage");
-    await saveStage(client, "[data-property-stage-input]", "ready", "status");
+    await saveStage(client, "[data-property-stage-input]", "ready", "launch_window");
+    const projectReady = replaceOnce(projectBefore, 'launch_window: "draft"', 'launch_window: "ready"');
+    assertDiskBytes(report, "project edit bytes", projectPath, projectReady);
     await sendKey(client, "u");
-    await waitForEditor(client, (value) => value.rows.some((row) => row.key === "status" && /draft/.test(row.text)), "Undo of project edit");
+    await waitForEditor(client, (value) => value.rows.some((row) => row.key === "launch_window" && /draft/.test(row.text)), "Undo of project edit");
+    assertDiskBytes(report, "project edit undo bytes", projectPath, projectBefore);
     await sendKey(client, "r", { ctrl: true });
-    await waitForEditor(client, (value) => value.rows.some((row) => row.key === "status" && /ready/.test(row.text)), "Redo of project edit");
-    addCheck(report, "project edit and undo redo", true, "status returned to draft on Undo and ready on Redo");
+    await waitForEditor(client, (value) => value.rows.some((row) => row.key === "launch_window" && /ready/.test(row.text)), "Redo of project edit");
+    assertDiskBytes(report, "project edit redo bytes", projectPath, projectReady);
 
+    await propertyRowClick(client, "locked_toggle");
     await sendKey(client, "o");
     await shared.waitFor(client, `Boolean(document.querySelector(".bob-property-editor [data-property-add='name']"))`, Boolean, "add-property name stage");
     await setInput(client, "[data-property-add-input]", "added_field");
-    if (!await selectorClick(client, '.bob-property-editor [data-property-add-action="literal"]')) throw new Error("Add property text action missing");
+    await sendKey(client, "Enter", { shift: true });
     await shared.waitFor(client, `Boolean(document.querySelector(".bob-property-editor [data-property-stage]"))`, Boolean, "added property value stage");
     await saveStage(client, "[data-property-stage-input]", "from-editor", "added_field");
-    addCheck(report, "project add", true, "added_field was written through the property value stage");
+    const projectAdded = insertFrontmatterLine(projectReady, 'added_field: "from-editor"');
+    assertDiskBytes(report, "project add bytes", projectPath, projectAdded);
 
     if (!await propertyRowClick(client, "remove_me")) throw new Error("Could not select remove_me");
     await sendKey(client, "d", { ctrl: true });
     await waitForEditor(client, (value) => !value.rows.some((row) => row.key === "remove_me"), "property deletion");
+    const projectDeleted = removeLineOnce(projectAdded, "remove_me: temporary");
+    assertDiskBytes(report, "project delete bytes", projectPath, projectDeleted);
     await sendKey(client, "u");
     await waitForEditor(client, (value) => value.rows.some((row) => row.key === "remove_me"), "Undo of property deletion");
+    assertDiskBytes(report, "project delete undo bytes", projectPath, projectAdded);
     await propertyRowClick(client, "remove_me");
     await sendKey(client, "d", { ctrl: true });
     await waitForEditor(client, (value) => !value.rows.some((row) => row.key === "remove_me"), "final property deletion");
-    addCheck(report, "project delete and undo", true, "delete removed the row and Undo restored it before the final delete");
+    assertDiskBytes(report, "project final delete bytes", projectPath, projectDeleted);
 
-    const projectAfter = fs.readFileSync(path.join(vaultDir, "projects/project-note.md"), "utf8");
-    addCheck(report, "untouched frontmatter bytes preserved",
-      projectAfter.includes("# Keep this comment exactly as authored\n") &&
-        projectAfter.includes('keep_exact: "keep : and # exactly"\n') &&
-        projectAfter.includes("Body bytes stay outside the property edit.\n") &&
-        projectAfter.includes('status: "ready"') &&
-        projectAfter.includes('added_field: "from-editor"') &&
-        !projectAfter.includes("remove_me:"),
-      { before: projectBefore, after: projectAfter });
+    await propertyRowClick(client, "project_digest");
+    probe = await waitForEditor(client, (value) => value.rows.some((row) => row.key === "project_digest"), "derived project property");
+    const derived = probe.rows.find((row) => row.key === "project_digest");
+    const derivedReport = probe.properties.find((row) => row.key === "project_digest");
+    addCheck(report, "derived key locked", derived.action === "locked" && derived.disabled && derivedReport?.role === "derived", { row: derived, report: derivedReport });
+    await sendKey(client, "Enter");
+    await waitForEditor(client, (value) => value.open && !value.stage, "derived Enter refused");
+    assertDiskBytes(report, "derived Enter leaves bytes unchanged", projectPath, projectDeleted);
+    await sendKey(client, "d", { ctrl: true });
+    await waitForEditor(client, (value) => value.open && !value.stage, "derived delete refused");
+    assertDiskBytes(report, "derived delete leaves bytes unchanged", projectPath, projectDeleted);
+    await sendKey(client, " ");
+    await waitForEditor(client, (value) => value.open && !value.stage, "derived checkbox gesture refused");
+    assertDiskBytes(report, "derived checkbox gesture leaves bytes unchanged", projectPath, projectDeleted);
+    await sendKey(client, "y");
+    const derivedLine = projectDeleted.split("\n").findIndex((line) => line.startsWith("project_digest:")) + 1;
+    const derivedTarget = await yamlTarget(client, derivedLine, "project_digest:", "derived YAML key target", report);
+    addCheck(report, "derived YAML line text", derivedTarget.text.startsWith("project_digest:"), derivedTarget);
+    await finishYamlExcursion(client, "derived YAML target");
 
-    await client.evaluate("app.plugins.plugins['bob-ledger-tools'].propertyEditorModal?.close?.()");
+    await propertyRowClick(client, "review_enabled");
+    probe = await waitForEditor(client, (value) => value.rows.some((row) => row.key === "review_enabled"), "derived checkbox row");
+    const derivedCheckbox = probe.properties.find((row) => row.key === "review_enabled");
+    addCheck(report, "derived checkbox remains protected", derivedCheckbox?.kind === "checkbox" && derivedCheckbox?.role === "derived", derivedCheckbox);
+    await sendKey(client, "Enter");
+    await waitForEditor(client, (value) => value.open && !value.stage, "derived checkbox Enter refused");
+    assertDiskBytes(report, "derived checkbox Enter leaves bytes unchanged", projectPath, projectDeleted);
+    await sendKey(client, "d", { ctrl: true });
+    await waitForEditor(client, (value) => value.open && !value.stage, "derived checkbox delete refused");
+    assertDiskBytes(report, "derived checkbox delete leaves bytes unchanged", projectPath, projectDeleted);
+    await sendKey(client, " ");
+    await waitForEditor(client, (value) => value.open && !value.stage, "derived checkbox key refused");
+    assertDiskBytes(report, "derived checkbox key leaves bytes unchanged", projectPath, projectDeleted);
+    await sendKey(client, "y");
+    const checkboxLine = projectDeleted.split("\n").findIndex((line) => line.startsWith("review_enabled:")) + 1;
+    const checkboxTarget = await yamlTarget(client, checkboxLine, "review_enabled:", "derived checkbox YAML target", report);
+    addCheck(report, "derived checkbox YAML line text", checkboxTarget.text.startsWith("review_enabled:"), checkboxTarget);
+    await finishYamlExcursion(client, "derived checkbox YAML target");
+
+    await propertyRowClick(client, "type");
+    probe = await waitForEditor(client, (value) => value.rows.some((row) => row.key === "type"), "identity type row");
+    const identityReport = probe.properties.find((row) => row.key === "type");
+    addCheck(report, "identity key remains protected", identityReport?.role === "identity", identityReport);
+    await sendKey(client, "Enter");
+    await waitForEditor(client, (value) => value.open && !value.stage, "identity Enter refused");
+    assertDiskBytes(report, "identity Enter leaves bytes unchanged", projectPath, projectDeleted);
+    await sendKey(client, "d", { ctrl: true });
+    await waitForEditor(client, (value) => value.open && !value.stage, "identity delete refused");
+    assertDiskBytes(report, "identity delete leaves bytes unchanged", projectPath, projectDeleted);
+    await sendKey(client, " ");
+    await waitForEditor(client, (value) => value.open && !value.stage, "identity checkbox gesture refused");
+    assertDiskBytes(report, "identity checkbox gesture leaves bytes unchanged", projectPath, projectDeleted);
+    await sendKey(client, "y");
+    const identityLine = projectDeleted.split("\n").findIndex((line) => line.startsWith("type:")) + 1;
+    const identityTarget = await yamlTarget(client, identityLine, "type:", "identity YAML key target", report);
+    addCheck(report, "identity YAML line text", identityTarget.text.startsWith("type:"), identityTarget);
+    await finishYamlExcursion(client, "identity YAML target");
+
+    await propertyRowClick(client, "locked_toggle");
+    await sendKey(client, "o");
+    await shared.waitFor(client, `Boolean(document.querySelector(".bob-property-editor [data-property-add='name']"))`, Boolean, "known property completion stage");
+    await setInput(client, "[data-property-add-input]", "tags");
+    await sendKey(client, "Tab");
+    probe = await waitForEditor(client, (value) => value.stageKind === "tags", "Tab accepts known tags type");
+    addCheck(report, "Tab completion chooses known type", probe.stageKind === "tags", probe);
+    await setInput(client, "[data-property-stage-input]", "home");
+    await sendKey(client, "Enter");
+    await shared.waitFor(client, `document.querySelector(".bob-property-editor-stage-chip")?.textContent || ""`, (text) => /#home/.test(text), "completed tags value");
+    await shared.waitFor(client, `document.querySelector(".bob-property-editor-stage-preview")?.textContent || ""`, (text) => /Preview ·/.test(text), "completed tags preview");
+    await sendKey(client, "Enter");
+    await waitForEditor(client, (value) => !value.stage && /Saved/.test(value.status) && value.rows.some((row) => row.key === "tags"), "completed tags property saved");
+    const projectWithTags = insertFrontmatterLine(projectDeleted, "tags: [home]");
+    assertDiskBytes(report, "Tab-completed tags add bytes", projectPath, projectWithTags);
+
+    await closePropertyEditor(client);
     await shared.openNote(client, "2026/20261123.md", "live");
+    const dayPath = path.join(vaultDir, "2026/20261123.md");
+    const dayBefore = fs.readFileSync(dayPath, "utf8");
     probe = await openPropertyEditor(client, "2026/20261123.md", { key: "day_marker" });
     await waitForEditor(client, (value) => value.rows.some((row) => row.key === "day_marker"), "day properties");
     await propertyRowClick(client, "day_marker");
     await sendKey(client, "Enter");
     await shared.waitFor(client, `Boolean(document.querySelector(".bob-property-editor [data-property-stage]"))`, Boolean, "day marker stage");
     await saveStage(client, "[data-property-stage-input]", "day-edited", "day_marker");
-    addCheck(report, "day-note edit", true, "canonical day note value edited through bob props");
+    const dayEdited = replaceOnce(dayBefore, 'day_marker: "day stays : exact #"', 'day_marker: "day-edited"');
+    assertDiskBytes(report, "day-note edit bytes", dayPath, dayEdited);
+    await sendKey(client, "u");
+    await waitForEditor(client, (value) => value.rows.some((row) => row.key === "day_marker" && /day stays/.test(row.text)), "day-note edit undo");
+    assertDiskBytes(report, "day-note edit undo bytes", dayPath, dayBefore);
+    await sendKey(client, "r", { ctrl: true });
+    await waitForEditor(client, (value) => value.rows.some((row) => row.key === "day_marker" && /day-edited/.test(row.text)), "day-note edit redo");
+    assertDiskBytes(report, "day-note edit redo bytes", dayPath, dayEdited);
 
-    await client.evaluate("app.plugins.plugins['bob-ledger-tools'].propertyEditorModal?.close?.()");
+    await propertyRowClick(client, "day_marker");
+    await sendKey(client, "o");
+    await shared.waitFor(client, `Boolean(document.querySelector(".bob-property-editor [data-property-add='name']"))`, Boolean, "day-note add name");
+    await setInput(client, "[data-property-add-input]", "day_extra");
+    await sendKey(client, "Enter", { shift: true });
+    await waitForEditor(client, (value) => value.stageKind === "text", "day-note literal add value stage");
+    await saveStage(client, "[data-property-stage-input]", "day value", "day_extra");
+    const dayAdded = insertAfterLineOnce(dayEdited, 'day_marker: "day-edited"', 'day_extra: "day value"');
+    assertDiskBytes(report, "day-note add bytes", dayPath, dayAdded);
+
+    await propertyRowClick(client, "day_remove_me");
+    await sendKey(client, "d", { ctrl: true });
+    await waitForEditor(client, (value) => !value.rows.some((row) => row.key === "day_remove_me"), "day-note delete");
+    const dayDeleted = removeLineOnce(dayAdded, "day_remove_me: temporary");
+    assertDiskBytes(report, "day-note delete bytes", dayPath, dayDeleted);
+    await sendKey(client, "u");
+    await waitForEditor(client, (value) => value.rows.some((row) => row.key === "day_remove_me"), "day-note delete undo");
+    assertDiskBytes(report, "day-note delete undo bytes", dayPath, dayAdded);
+    await propertyRowClick(client, "day_remove_me");
+    await sendKey(client, "d", { ctrl: true });
+    await waitForEditor(client, (value) => !value.rows.some((row) => row.key === "day_remove_me"), "day-note final delete");
+    assertDiskBytes(report, "day-note final delete bytes", dayPath, dayDeleted);
+
+    await closePropertyEditor(client);
     await shared.openNote(client, "projects-album/acceptance.md", "live");
     probe = await openPropertyEditor(client, "projects-album/acceptance.md", { key: "status" });
     await waitForEditor(client, (value) => value.rows.some((row) => row.key === "status"), "record property rows");
@@ -341,21 +535,154 @@ async function run(args) {
     const handoff = await shared.waitFor(client,
       `Boolean(document.querySelector(".bob-record-card-modal"))`, Boolean, "record field handoff", 25_000);
     addCheck(report, "record-field handoff", handoff === true, "status handed off to the Record Card editor");
+    await client.evaluate("app.plugins.plugins['bob-ledger-tools'].recordCardModal?.close?.()");
 
-    await client.evaluate("app.plugins.plugins['bob-ledger-tools'].propertyEditorModal?.close?.()");
-    await shared.openNote(client, "projects/project-note.md", "live");
-    probe = await openPropertyEditor(client, "projects/project-note.md", { key: "project_digest" });
-    probe = await waitForEditor(client, (value) => value.rows.some((row) => row.key === "project_digest"), "derived project property");
-    const derived = probe.rows.find((row) => row.key === "project_digest");
-    addCheck(report, "derived key locked", derived.action === "locked" && derived.disabled, derived);
+    await closePropertyEditor(client);
+    await shared.openNote(client, "value-kinds.md", "live");
+    const kindsPath = path.join(vaultDir, "value-kinds.md");
+    let kindsExpected = fs.readFileSync(kindsPath, "utf8");
+    probe = await openPropertyEditor(client, "value-kinds.md");
+    probe = await waitForEditor(client, (value) => value.rows.some((row) => row.key === "enabled"), "value-kind rows");
 
-    await client.evaluate("app.plugins.plugins['bob-ledger-tools'].propertyEditorModal?.close?.()");
+    await propertyRowClick(client, "enabled");
+    await sendKey(client, "Enter");
+    await waitForEditor(client, (value) => value.rows.some((row) => value.rows.find((row) => row.key === "enabled")?.text.includes("true")), "checkbox flip");
+    kindsExpected = replaceOnce(kindsExpected, "enabled: false", "enabled: true");
+    assertDiskBytes(report, "checkbox flip bytes", kindsPath, kindsExpected);
+
+    const datetimeCases = [
+      ["no_offset_at", "2026-11-24T10:31:00", '"2026-11-23T09:30:00"', '"2026-11-24T10:31:00"', "datetime without offset"],
+      ["offset_at", "2026-11-24T10:31:00-05:00", '"2026-11-23T09:30:00-05:00"', '"2026-11-24T10:31:00-05:00"', "datetime with -05:00"],
+      ["relative_at", "-3d", '"2026-11-23T09:30:00"', '"2026-11-20T09:30:00"', "relative datetime token"],
+    ];
+    for (const [key, input, before, after, label] of datetimeCases) {
+      await propertyRowClick(client, key);
+      await sendKey(client, "Enter");
+      const stage = await shared.waitFor(client, `Boolean(document.querySelector(".bob-property-editor [data-property-stage]"))`, Boolean, `${label} stage`);
+      if (!stage) throw new Error(`Missing ${label} stage`);
+      probe = await waitForEditor(client, (value) => value.stageKind === "datetime", `${label} kind`);
+      addCheck(report, `${label} uses datetime stage`, probe.stageKind === "datetime", probe);
+      await saveStage(client, "[data-property-stage-input]", input, key);
+      kindsExpected = replaceOnce(kindsExpected, `${key}: ${before}`, `${key}: ${after}`);
+      assertDiskBytes(report, `${label} bytes`, kindsPath, kindsExpected);
+    }
+
+    await propertyRowClick(client, "tags");
+    await sendKey(client, "Enter");
+    probe = await waitForEditor(client, (value) => value.stageKind === "tags", "tags stage");
+    addCheck(report, "tags use tags stage", probe.stageKind === "tags", probe);
+    await saveCollectionStage(client, "##work", "tags");
+    kindsExpected = replaceOnce(kindsExpected, "tags: [home]", 'tags: [home, "work"]');
+    assertDiskBytes(report, "tags omit leading hash bytes", kindsPath, kindsExpected);
+
+    await propertyRowClick(client, "steps");
+    await sendKey(client, "Enter");
+    probe = await waitForEditor(client, (value) => value.stageKind === "list", "ordered-list stage");
+    addCheck(report, "ordered list uses list stage", probe.stageKind === "list", probe);
+    await saveCollectionStage(client, "third", "steps");
+    kindsExpected = replaceOnce(kindsExpected, 'steps: ["first", "second"]', 'steps: ["first", "second", "third"]');
+    assertDiskBytes(report, "ordered list bytes", kindsPath, kindsExpected);
+
+    probe = await waitForEditor(client, (value) => value.rows.some((row) => row.key === "nullable"), "null and empty rows");
+    addCheck(report, "null and empty string display differently",
+      probe.rows.find((row) => row.key === "nullable")?.text !== probe.rows.find((row) => row.key === "empty_text")?.text,
+      { nullable: probe.rows.find((row) => row.key === "nullable"), empty: probe.rows.find((row) => row.key === "empty_text") });
+    await propertyRowClick(client, "nullable");
+    await sendKey(client, "Enter");
+    probe = await waitForEditor(client, (value) => value.stageKind === "text", "null text stage");
+    await sendKey(client, "Escape");
+    await waitForEditor(client, (value) => value.open && !value.stage, "null stage cancel");
+    await propertyRowClick(client, "empty_text");
+    await sendKey(client, "Enter");
+    probe = await waitForEditor(client, (value) => value.stageKind === "text", "empty-string text stage");
+    await sendKey(client, "Escape");
+    await waitForEditor(client, (value) => value.open && !value.stage, "empty-string stage cancel");
+    assertDiskBytes(report, "null and empty-string no-op bytes", kindsPath, kindsExpected);
+
+    const proseLoaded = await client.evaluate(`Boolean(window.app?.plugins?.plugins?.["bob-navigation-hotkeys"]?.api?.proseField?.attach)`);
+    if (proseLoaded) {
+      await propertyRowClick(client, "description");
+      await sendKey(client, "Enter");
+      await waitForEditor(client, (value) => value.stageKind === "text", "prose text stage");
+      const band = await client.evaluate(`Boolean(document.querySelector("[data-property-stage-band]"))`);
+      addCheck(report, "prose stage attaches navigation band", band, { loaded: proseLoaded });
+      await saveStage(client, "[data-property-stage-input]", "See [[projects]] and ((next task", "description");
+      kindsExpected = replaceOnce(kindsExpected, 'description: "Plain prose"', 'description: "See [[projects]] and ((next task"');
+      assertDiskBytes(report, "prose link task text bytes", kindsPath, kindsExpected);
+    } else {
+      report.assertions.push({ name: "prose stage attaches navigation band", status: "skip", detail: "bob-navigation-hotkeys is not loaded in the isolated acceptance vault" });
+    }
+
+    await closePropertyEditor(client);
+    await shared.openNote(client, "plain.md", "live");
+    const plainPath = path.join(vaultDir, "plain.md");
+    const plainBefore = fs.readFileSync(plainPath, "utf8");
+    probe = await openPropertyEditor(client, "plain.md");
+    await waitForEditor(client, (value) => value.open, "empty plain note editor");
+    await sendKey(client, "o");
+    await shared.waitFor(client, `Boolean(document.querySelector(".bob-property-editor [data-property-add='name']"))`, Boolean, "plain note add name");
+    await setInput(client, "[data-property-add-input]", "first_added");
+    await sendKey(client, "Enter", { shift: true });
+    probe = await waitForEditor(client, (value) => value.stageKind === "text", "Shift+Enter literal name type");
+    addCheck(report, "Shift+Enter keeps literal name as text", probe.stageKind === "text", probe);
+    await saveStage(client, "[data-property-stage-input]", "first value", "first_added");
+    const plainAdded = '---\nfirst_added: "first value"\n---\n\n' + plainBefore;
+    assertDiskBytes(report, "first plain-note add bytes", plainPath, plainAdded);
+    await sendKey(client, "u");
+    await waitForEditor(client, (value) => value.open && !value.rows.some((row) => row.key === "first_added"), "plain-note add undo");
+    assertDiskBytes(report, "plain-note undo removes generated framing", plainPath, plainBefore);
+    await sendKey(client, "r", { ctrl: true });
+    await waitForEditor(client, (value) => value.rows.some((row) => row.key === "first_added"), "plain-note add redo");
+    assertDiskBytes(report, "plain-note add redo bytes", plainPath, plainAdded);
+
+    await closePropertyEditor(client);
+    await shared.openNote(client, "literal-name.md", "live");
+    const literalPath = path.join(vaultDir, "literal-name.md");
+    const literalBefore = fs.readFileSync(literalPath, "utf8");
+    await openPropertyEditor(client, "literal-name.md");
+    await sendKey(client, "o");
+    await shared.waitFor(client, `Boolean(document.querySelector(".bob-property-editor [data-property-add='name']"))`, Boolean, "literal-name add stage");
+    await setInput(client, "[data-property-add-input]", "literal_new");
+    await sendKey(client, "Enter", { shift: true });
+    probe = await waitForEditor(client, (value) => value.stageKind === "text", "literal name text stage");
+    addCheck(report, "literal name remains text", probe.stageKind === "text", probe);
+    await saveStage(client, "[data-property-stage-input]", "literal value", "literal_new");
+    assertDiskBytes(report, "literal name add bytes", literalPath,
+      '---\nliteral_new: "literal value"\n---\n\n' + literalBefore);
+
+    await closePropertyEditor(client);
     await shared.openNote(client, "invalid.md", "live");
     probe = await openPropertyEditor(client, "invalid.md", { resetCapability: true });
     probe = await waitForEditor(client, (value) => Boolean(value.recovery), "invalid YAML recovery banner");
-    addCheck(report, "invalid YAML recovery", /Frontmatter doesn't parse/.test(probe.recovery), probe.recovery);
+    addCheck(report, "invalid YAML shows bob diagnostic verbatim",
+      Boolean(probe.frontmatterError) && probe.recovery.includes(probe.frontmatterError), probe);
+    await sendKey(client, "y");
+    const invalidTarget = await yamlTarget(client, probe.frontmatterErrorLine, "broken: [unterminated", "invalid YAML error-line target", report);
+    await finishYamlExcursion(client, "invalid YAML recovery");
 
-    await client.evaluate("app.plugins.plugins['bob-ledger-tools'].propertyEditorModal?.close?.()");
+    await closePropertyEditor(client);
+    await shared.openNote(client, "unclosed.md", "live");
+    probe = await openPropertyEditor(client, "unclosed.md", { resetCapability: true });
+    probe = await waitForEditor(client, (value) => Boolean(value.recovery), "unclosed YAML recovery banner");
+    addCheck(report, "unclosed YAML shows bob diagnostic verbatim",
+      Boolean(probe.frontmatterError) && probe.recovery.includes(probe.frontmatterError), probe);
+    await sendKey(client, "y");
+    const unclosedTarget = await yamlTarget(client, probe.frontmatterErrorLine, "broken: [unterminated", "unclosed YAML error-line target", report);
+    await finishYamlExcursion(client, "unclosed YAML recovery");
+
+    await closePropertyEditor(client);
+    await shared.openNote(client, "duplicate.md", "live");
+    probe = await openPropertyEditor(client, "duplicate.md", { key: "title", resetCapability: true });
+    probe = await waitForEditor(client, (value) => value.properties.filter((row) => row.key === "title").length === 2, "duplicate title rows");
+    const duplicateProperties = probe.properties.filter((row) => row.key === "title");
+    const duplicateLine = duplicateProperties.find((row) => row.duplicate)?.line;
+    addCheck(report, "duplicate YAML shows row diagnostic", duplicateProperties.some((row) => row.diagnostic), duplicateProperties);
+    await propertyRowClick(client, "title", 1);
+    await sendKey(client, "y");
+    const duplicateTarget = await yamlTarget(client, duplicateLine, "title:", "duplicate YAML target", report);
+    addCheck(report, "duplicate y targets duplicate line", duplicateTarget?.line === duplicateLine, duplicateTarget);
+    await finishYamlExcursion(client, "duplicate YAML recovery");
+    await closePropertyEditor(client);
     fs.writeFileSync(oldFlag, "simulate old bob\n");
     await shared.openNote(client, "old-bob.md", "live");
     probe = await openPropertyEditor(client, "old-bob.md", { resetCapability: true });
@@ -391,6 +718,16 @@ async function run(args) {
       { count: updates.length, examples: updates.slice(0, 4).map((row) => row.args) });
     report.pluginErrors = report.consoleExceptions.filter((row) => /bob-ledger-tools|property/i.test(`${row.text} ${row.description} ${row.url}`));
     if (report.pluginErrors.length) throw new Error("Property Editor raised console exceptions: " + JSON.stringify(report.pluginErrors));
+    const proseCheck = report.assertions.find((item) => item.name === "prose stage attaches navigation band");
+    report.coverage = lib.ACCEPTANCE_CHECKS.map((check) => ({
+      check,
+      status: check === "prose-link-task-band-when-navigation-is-loaded"
+        ? (proseCheck?.status || "fail")
+        : "pass",
+      detail: check === "prose-link-task-band-when-navigation-is-loaded"
+        ? (proseCheck?.detail || "")
+        : "All corresponding interaction and byte assertions completed.",
+    }));
     report.pass = true;
     successful = true;
   } catch (error) {

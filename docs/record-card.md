@@ -15,6 +15,10 @@ key. Source mode, embeds, hover popovers, canvas, and mobile keep native
 rendering. The **Record Card editor** is the keyboard-first editor for those
 values.
 
+For note-level loose properties, use the [Property Editor](property-editor.md).
+Its role marks hand record fields back to this editor and keep identity or
+derived values locked with a YAML escape.
+
 Open or close the drawer with its **Properties** disclosure, `=-` after Vim's
 pending `=` operator in Live Preview, the **Toggle card properties** palette
 command, or the same Vault row in Command Mode. The command acts on the active

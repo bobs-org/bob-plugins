@@ -277,6 +277,27 @@ test("empty notes add at the end and mode=add opens the name stage", () => {
   assert.equal(empty.addName.placement.where, "end");
 });
 
+test("mode=edit opens a loose value stage once without flipping a checkbox", () => {
+  const modal = new H.PropertyEditorModal(infosApp(), {
+    filePath: "notes/plain.md", report: report([row()]), key: "title", mode: "edit",
+  });
+  const opened = [];
+  modal.propertyEditorOpenStage = (entry) => { opened.push(entry.row.key); return true; };
+  modal.propertyEditorMaybeStartModeEdit();
+  modal.propertyEditorMaybeStartModeEdit();
+  assert.deepEqual(opened, ["title"]);
+
+  const checkbox = new H.PropertyEditorModal(infosApp(), {
+    filePath: "notes/plain.md", report: report([row({ key: "done", value: false, kind: "checkbox" })]),
+    key: "done", mode: "edit",
+  });
+  let flips = 0;
+  checkbox.propertyEditorFlip = () => { flips += 1; };
+  checkbox.propertyEditorMaybeStartModeEdit();
+  assert.equal(flips, 0);
+  assert.match(checkbox.announce, /press Enter to flip/);
+});
+
 test("name cancellation and value cancellation write nothing", async () => {
   const session = fakeSession({ existing: [row()] });
   const modal = new H.PropertyEditorModal(infosApp(), { filePath: "notes/plain.md", report: report([row()]) });

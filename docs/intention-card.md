@@ -9,6 +9,10 @@ week, quarter, and year notes as the note's title block, in Reading view and
 Live Preview. The **card editor** is the keyboard-first editor for their
 intentions, summary, and reflection.
 
+The generic [Property Editor](property-editor.md) handles loose properties on
+these notes. It routes `intentions`, `summary`, and `reflection` back to the
+card editor and keeps identity or derived values locked.
+
 ## Where the card appears
 
 The card appears only on canonical subjects: `YYYY/YYYYMMDD.md` daily notes,

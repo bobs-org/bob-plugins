@@ -169396,6 +169396,25 @@ Object.assign(PropertyEditorModal.prototype, {
     this.propertyEditorStartAdd("end");
   }
 ,
+  propertyEditorMaybeStartModeEdit() {
+    if (this.closed || this.editModeStarted || this.mode !== "edit" || !this.report) return;
+    const selected = this.editorSelected();
+    if (!selected) return;
+    this.editModeStarted = true;
+    const decision = propertyEditorActionForRow(selected.row);
+    if (decision.action === "edit") {
+      this.propertyEditorOpenStage(selected);
+      return;
+    }
+    if (decision.action === "handoff" || decision.action === "locked") {
+      void this.propertyEditorActivate(selected);
+      return;
+    }
+    // Opening an entry point must not flip a checkbox as a side effect.
+    this.announce = `“${selected.row.key}” is a checkbox; press Enter to flip it.`;
+    this.paintPropertyEditor();
+  }
+,
   propertyEditorPaintOptions() {
     const options = propertyEditorPaintOptionsBeforeAdd.call(this);
     options.addName = this.propertyEditorAddNameView();
@@ -169572,6 +169591,7 @@ Object.assign(PropertyEditorModal.prototype, {
       }
     }
     this.propertyEditorMaybeStartModeAdd();
+    this.propertyEditorMaybeStartModeEdit();
   }
 ,
   onOpen() {
@@ -169596,6 +169616,7 @@ Object.assign(PropertyEditorModal.prototype, {
       this.contentEl?.addEventListener?.("compositionend", this.addCompositionEndListener);
     }
     this.propertyEditorMaybeStartModeAdd();
+    this.propertyEditorMaybeStartModeEdit();
   }
 ,
   onClose() {
@@ -169614,6 +169635,7 @@ Object.assign(PropertyEditorModal.prototype, {
   async propertyEditorInitialRead() {
     await propertyEditorInitialReadBeforeAdd.call(this);
     this.propertyEditorMaybeStartModeAdd();
+    this.propertyEditorMaybeStartModeEdit();
   }
 ,
 });

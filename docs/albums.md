@@ -8,6 +8,11 @@ notes in Reading view and Live Preview. The card takes its accent from the owner
 root area, like the notebook catalog. Project group rows remain headings; only
 resolved album links receive chips. Source mode keeps editable Markdown.
 
+Use the [Property Editor](property-editor.md) for loose note properties. Album
+schema fields and record fields route to their owning `==` editors; the
+`record` map opens the album schema editor rather than being flattened into
+YAML rows.
+
 Each album row shows its total record count, the first nonempty group in the
 schema's declared order (for example **🔖 11 to try**), and an age since the latest
 valid record **created** date. The age tooltip says **Last added**; it does not

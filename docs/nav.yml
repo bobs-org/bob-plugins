@@ -36,6 +36,8 @@
   path: record-card.md
 - title: Day and Period Cards
   path: intention-card.md
+- title: Property Editor
+  path: property-editor.md
 - title: BLOCKS dependency mirrors
   path: blocks-mirrors.md
 - title: Task relations

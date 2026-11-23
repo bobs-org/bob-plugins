@@ -91,6 +91,48 @@ function main() {
     process.stdout.write(JSON.stringify(fixtureCatalog()));
     return;
   }
+  // Small, explicit props fixtures for offline property-editor acceptance
+  // checks. Real-Obsidian acceptance uses the exact BOB_BIN supplied by the
+  // bob-cli checkout; this route only proves the fake executable carries the
+  // JSON invocation through the same stdin/argv boundary.
+  if (argv[0] === "props" && argv[1] === "show") {
+    const fallback = {
+      schema_version: 1, ok: true, path: argv[2] || "note.md", note_kind: "note",
+      capabilities: ["props_v1"], fingerprint: "fake-fingerprint",
+      frontmatter: { state: "ok", start_line: 1, end_line: 3 }, properties: [],
+    };
+    let report = fallback;
+    try {
+      if (process.env.FAKE_BOB_PROPS_SHOW_JSON) report = JSON.parse(process.env.FAKE_BOB_PROPS_SHOW_JSON);
+    } catch (_) {
+      process.stderr.write("fake-bob: invalid FAKE_BOB_PROPS_SHOW_JSON\n");
+      process.exitCode = 2;
+      return;
+    }
+    process.stdout.write(JSON.stringify(report));
+    return;
+  }
+  if (argv[0] === "props" && argv[1] === "update") {
+    const hasStdin = argv.some((arg, index) => (arg === "-i" || arg === "--input") && argv[index + 1] === "-");
+    const raw = hasStdin ? fs.readFileSync(0, "utf8") : "";
+    let envelope = null;
+    try { envelope = JSON.parse(raw); }
+    catch (_) {
+      process.stderr.write("fake-bob: invalid props update envelope\n");
+      process.exitCode = 2;
+      return;
+    }
+    let response = { schema_version: 1, ok: true, fake_bob: true, envelope };
+    try {
+      if (process.env.FAKE_BOB_PROPS_UPDATE_JSON) response = JSON.parse(process.env.FAKE_BOB_PROPS_UPDATE_JSON);
+    } catch (_) {
+      process.stderr.write("fake-bob: invalid FAKE_BOB_PROPS_UPDATE_JSON\n");
+      process.exitCode = 2;
+      return;
+    }
+    process.stdout.write(JSON.stringify(response));
+    return;
+  }
   const env = process.env;
   const sleepMs = Number(env.FAKE_BOB_SLEEP_MS || 0);
   const logFile = env.FAKE_BOB_LOG_FILE;

@@ -85048,14 +85048,63 @@ function propertyCardFootViewContains(view, node) {
   return false;
 }
 
+// Re-register a still-mounted foot the registry lost (teardown, split
+// detach, transient model miss). Only connected feet inside this view whose
+// foot-source matches the view path qualify, so hidden panes and stale
+// mounts can never arm the toggle.
+function propertyCardFootEnsureViewMount(view, path) {
+  try {
+    if (!view || !path) return false;
+    if (propertyCardFootLiveMountsFor(path).length > 0) return true;
+    const scopes = [view.dom, view.containerEl, view.contentEl].filter(Boolean);
+    if (!scopes.length) return false;
+    let found = false;
+    for (const scope of scopes) {
+      let nodes = [];
+      try {
+        nodes = Array.from(scope.querySelectorAll?.(`.${PROPERTY_CARD_FOOT_CLASS}`) || []);
+      } catch (_) {
+        nodes = [];
+      }
+      try {
+        if (scope.matches?.(`.${PROPERTY_CARD_FOOT_CLASS}`)) nodes.unshift(scope);
+      } catch (_) {}
+      for (const node of nodes) {
+        try {
+          if (!node || node.isConnected === false) continue;
+          const rect = typeof node.getBoundingClientRect === "function" ? node.getBoundingClientRect() : null;
+          if (!rect || rect.width <= 0 || rect.height <= 0) continue;
+          if (propertyCardFootPath(node.getAttribute?.("data-foot-source") || "") !== path) continue;
+        } catch (_) {
+          continue;
+        }
+        try {
+          propertyCardFootRegisterMount(node, path);
+          found = true;
+        } catch (_) {}
+      }
+      if (found) break;
+    }
+    return found;
+  } catch (_) {
+    return false;
+  }
+}
+
 // The supplied view must itself contain a live foot for its current path.
 // Another pane showing the same note is not enough to make a local gesture
 // actionable, even though its open state is shared once either pane toggles.
+// An orphaned mount (registry lost but foot still mounted) heals here so the
+// toggle keeps working across teardowns that outlive the DOM.
 function propertyCardCanToggleProperties(view) {
   try {
     if (!view) return false;
     const path = propertyCardFootViewPath(view);
     if (!path) return false;
+    if (propertyCardFootLiveMountsFor(path).some((entry) =>
+      propertyCardFootViewContains(view, entry.node),
+    )) return true;
+    if (!propertyCardFootEnsureViewMount(view, path)) return false;
     return propertyCardFootLiveMountsFor(path).some((entry) =>
       propertyCardFootViewContains(view, entry.node),
     );
@@ -108383,6 +108432,19 @@ function recordSheetSlotIsLive(view, path) {
   }
 }
 
+// A still-mounted foot must stay toggleable: cached decoration returns must
+// not skip mount tracking after a release (teardown, demoted card, transient
+// model miss). True when no live mount needs healing; the rebuild path below
+// re-tracks the adopted header.
+function recordSheetFootMountsLive(path) {
+  try {
+    if (typeof propertyCardFootLiveMountsFor !== "function") return true;
+    return propertyCardFootLiveMountsFor(path).length > 0;
+  } catch (_) {
+    return true;
+  }
+}
+
 // Rail hosts share the sheet's source cache, decorations, refresh, and teardown.
 class BobLedgerToolsRecordWalkRailMixin {
   recordWalkFor(path, sourceText) {
@@ -108510,7 +108572,11 @@ class BobLedgerToolsRecordWalkRailMixin {
       // failed deferred mount can recover without a tight viewport retry.
       // Sticky insert-failed/unstable still rebuilds once so widgets can paint.
       if (previous?.path === path && recordSheetSlotSkipsUpdate(update, this)) {
-        if (recordSheetSlotIsLive(view, path) || previous.slotted === false) {
+        const slotLive = recordSheetSlotIsLive(view, path);
+        // A live slot with no live mount lost its registration (teardown,
+        // demotion, transient model miss): fall through to the rebuild below,
+        // which re-tracks the adopted header.
+        if ((slotLive || previous.slotted === false) && (!slotLive || recordSheetFootMountsLive(path))) {
           return previous.decorations;
         }
         if (!remembered) {
@@ -108525,7 +108591,8 @@ class BobLedgerToolsRecordWalkRailMixin {
       }
       this._recordSheetDecorateStamp.n += 1;
       if (this._recordSheetDecorateStamp.n > 8 && previous?.path === path
-        && !(remembered && previous.slotted)) {
+        && !(remembered && previous.slotted)
+        && !(recordSheetSlotIsLive(view, path) && !recordSheetFootMountsLive(path))) {
         return previous.decorations;
       }
       this._recordSheetDecorating = true;
@@ -108607,7 +108674,8 @@ class BobLedgerToolsRecordWalkRailMixin {
       const adopted = propertyCardAdoptedEntry(view.dom);
       const slotted = Boolean(adopted && adopted.path === path && adopted.mode === "slot" && adopted.node);
       const cached = this.recordSheetEditorCache?.get?.(view);
-      if (slotted && cached?.path === path && cached.signature === slotSignature && cached.anchor === at) {
+      if (slotted && cached?.path === path && cached.signature === slotSignature && cached.anchor === at
+        && recordSheetFootMountsLive(path)) {
         return cached.decorations;
       }
       let header = slotted ? adopted.node : null;

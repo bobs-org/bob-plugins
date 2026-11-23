@@ -1886,3 +1886,40 @@ test("two Reading panes of the same record stay isolated, and Source plus file s
   plugin.recordSheetCleanEditor(view);
   assert.equal(view.sizer.querySelector(".bob-record-sheet"), null);
 });
+
+test("Live Preview re-tracks a still-mounted foot after a release on cached returns", async () => {
+  const { plugin, doc } = fixture();
+  const heading = "---\ntype: [[record]]\nparent: [[eat]]\nstatus: to_try\n---\n# Smashburger\nbody\n";
+  const view = liveView(doc, "eat/smashburger.md", heading, true);
+  plugin.buildRecordSheetDecorations(view);
+  await Promise.resolve();
+  assert.ok(view.dom.querySelector(".bob-property-card-foot"), "live foot mounts with the sheet");
+  const appView = {
+    dom: view.dom,
+    containerEl: view.dom,
+    contentEl: view.dom,
+    file: { path: "eat/smashburger.md" },
+    getMode: () => "source",
+    getState: () => ({ file: "eat/smashburger.md", mode: "source", source: false }),
+  };
+  assert.equal(helpers.propertyCardCanToggleProperties(appView), true, "mounted live foot toggles");
+  // Simulate a teardown/demotion release that leaves the DOM foot mounted.
+  helpers.propertyCardFootReleaseScope(view.dom, "eat/smashburger.md");
+  assert.equal(helpers.propertyCardCanToggleProperties(appView), false, "released mount stops toggling");
+  // A viewport-only update takes a cached early-return path; the mount must heal.
+  plugin.buildRecordSheetDecorations(view, {
+    view,
+    viewportChanged: true,
+    docChanged: false,
+    selectionSet: false,
+    transactions: [],
+    state: view.state,
+    startState: view.state,
+  });
+  await Promise.resolve();
+  assert.equal(
+    helpers.propertyCardCanToggleProperties(appView),
+    true,
+    "cached return re-tracks the still-mounted foot",
+  );
+});

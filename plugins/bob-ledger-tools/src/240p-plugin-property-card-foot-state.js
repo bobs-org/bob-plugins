@@ -251,14 +251,63 @@ function propertyCardFootViewContains(view, node) {
   return false;
 }
 
+// Re-register a still-mounted foot the registry lost (teardown, split
+// detach, transient model miss). Only connected feet inside this view whose
+// foot-source matches the view path qualify, so hidden panes and stale
+// mounts can never arm the toggle.
+function propertyCardFootEnsureViewMount(view, path) {
+  try {
+    if (!view || !path) return false;
+    if (propertyCardFootLiveMountsFor(path).length > 0) return true;
+    const scopes = [view.dom, view.containerEl, view.contentEl].filter(Boolean);
+    if (!scopes.length) return false;
+    let found = false;
+    for (const scope of scopes) {
+      let nodes = [];
+      try {
+        nodes = Array.from(scope.querySelectorAll?.(`.${PROPERTY_CARD_FOOT_CLASS}`) || []);
+      } catch (_) {
+        nodes = [];
+      }
+      try {
+        if (scope.matches?.(`.${PROPERTY_CARD_FOOT_CLASS}`)) nodes.unshift(scope);
+      } catch (_) {}
+      for (const node of nodes) {
+        try {
+          if (!node || node.isConnected === false) continue;
+          const rect = typeof node.getBoundingClientRect === "function" ? node.getBoundingClientRect() : null;
+          if (!rect || rect.width <= 0 || rect.height <= 0) continue;
+          if (propertyCardFootPath(node.getAttribute?.("data-foot-source") || "") !== path) continue;
+        } catch (_) {
+          continue;
+        }
+        try {
+          propertyCardFootRegisterMount(node, path);
+          found = true;
+        } catch (_) {}
+      }
+      if (found) break;
+    }
+    return found;
+  } catch (_) {
+    return false;
+  }
+}
+
 // The supplied view must itself contain a live foot for its current path.
 // Another pane showing the same note is not enough to make a local gesture
 // actionable, even though its open state is shared once either pane toggles.
+// An orphaned mount (registry lost but foot still mounted) heals here so the
+// toggle keeps working across teardowns that outlive the DOM.
 function propertyCardCanToggleProperties(view) {
   try {
     if (!view) return false;
     const path = propertyCardFootViewPath(view);
     if (!path) return false;
+    if (propertyCardFootLiveMountsFor(path).some((entry) =>
+      propertyCardFootViewContains(view, entry.node),
+    )) return true;
+    if (!propertyCardFootEnsureViewMount(view, path)) return false;
     return propertyCardFootLiveMountsFor(path).some((entry) =>
       propertyCardFootViewContains(view, entry.node),
     );

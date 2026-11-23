@@ -79,6 +79,7 @@ class FakeNode {
   remove() { this.parentNode?.removeChild?.(this); }
   addEventListener(type, fn) { const rows = this.listeners.get(type) || []; rows.push(fn); this.listeners.set(type, rows); }
   contains(node) { return node === this || this.children.some((child) => child.contains(node)); }
+  getBoundingClientRect() { return this._rect || { x: 0, y: 0, width: 0, height: 0 }; }
   scrollIntoView(options) { this.scrollCalls.push(options || {}); }
   dispatchEvent(event) {
     const payload = event || {};
@@ -268,6 +269,33 @@ test("toggleProperties acts only on a live matching mount inside the supplied vi
   assert.equal(helpers.propertyCardToggleProperties({ livePath: "eat/b.md", containerEl: doc.body }), true);
   assert.equal(helpers.propertyCardFootIsOpen("eat/b.md"), true);
   release();
+  helpers.propertyCardFootResetAll();
+});
+
+test("orphaned mounts heal on toggle when the foot is still mounted and visible", () => {
+  helpers.propertyCardFootResetAll();
+  const doc = makeDoc();
+  const scope = doc.createElement("div");
+  doc.body.appendChild(scope);
+  const view = { file: { path: "eat/a.md" }, containerEl: scope };
+  // A connected, visible foot with no registry entry (release survived the DOM).
+  const foot = doc.createElement("div");
+  foot.setAttribute("class", "bob-property-card-foot");
+  foot.setAttribute("data-foot-source", "eat/a.md");
+  foot._rect = { x: 0, y: 0, width: 120, height: 24 };
+  scope.appendChild(foot);
+  assert.equal(helpers.propertyCardCanToggleProperties(view), true, "visible mounted foot re-registers");
+  assert.equal(helpers.propertyCardToggleProperties(view), true, "healed mount toggles");
+  assert.equal(helpers.propertyCardFootIsOpen("eat/a.md"), true);
+  // Zero-area and foreign-path feet never arm the toggle.
+  foot._rect = { x: 0, y: 0, width: 0, height: 0 };
+  helpers.propertyCardFootResetAll();
+  assert.equal(helpers.propertyCardCanToggleProperties(view), false, "boxless foot stays inert");
+  foot._rect = { x: 0, y: 0, width: 120, height: 24 };
+  foot.setAttribute("data-foot-source", "eat/other.md");
+  helpers.propertyCardFootResetAll();
+  assert.equal(helpers.propertyCardCanToggleProperties(view), false, "foreign-path foot stays inert");
+  foot.remove();
   helpers.propertyCardFootResetAll();
 });
 

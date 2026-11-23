@@ -369,6 +369,46 @@ BOB_BIN=$HOME/.cargo/bin/bob xvfb-run -a node \
   scripts/obsidian-group-jump-e2e.cjs -r /tmp/group-jump.json -o /tmp/group-jump-shots
 ```
 
+## Card foot walkthrough
+
+`scripts/obsidian-card-foot-e2e.cjs` proves the shared property-card foot and
+drawer in an isolated Obsidian vault with a real bob. It covers album, record,
+day, week, quarter, year, and bank setup feet in Reading and Live Preview,
+including identity-only notes and collapsed record/bank states. It proves the
+disclosure and `=-` toggle the same drawer, normal `==` still opens the
+appropriate editor, palette/Command Mode work without a Vim prefix, cursor and
+selection stay unchanged on `=-`, opening an off-screen foot scrolls it into
+view while collapse does not scroll, `y` rows carry source lines (including
+duplicate and invalid-YAML recovery), nested schema/setup links reach existing
+editors, per-note session survives walk-away and two panes share state with
+unique disclosure IDs, and paint/fold/toggle/collapse write no Markdown and
+spawn no bob. The offline wrapper `scripts/test-obsidian-card-foot-e2e.cjs`
+is part of `npm test`; it checks fixtures, probe syntax, keys, and the runner
+file without launching Obsidian or bob, and is not acceptance. Run the real
+walkthrough on athena from a fresh `/tmp` copy of the working tree under an
+independent Xvfb display:
+
+```bash
+BOB_BIN=<bob-cli-cargo-target>/debug/bob \
+BOB_CLI_DIR=<bob-cli-checkout> \
+xvfb-run -a node scripts/obsidian-card-foot-e2e.cjs \
+  -e /snap/obsidian/current/app/obsidian \
+  -r /tmp/card-foot-e2e.json -o /tmp/card-foot-e2e-shots
+```
+
+It seeds a scratch Git vault with album, record, temporal, bank, duplicate,
+invalid, unclosed, identity-only, and missing-created fixtures, copies the
+built ledger-tools (plus hotkeys and Command Mode for `--scope full`),
+verifies the explicit current bob binary with the same clean-tree or pinned
+provenance gate as the record-card runner, and records the bob-cli source SHA,
+binary SHA256, version, plugin hashes, every writer invocation, note-byte
+hashes, console exceptions, and the full screenshot matrix. Coverage limits:
+`--scope full` requires every species, both modes, the drawer/entry-point
+matrix, and the no-write/no-spawn gates; `--scope foot` proves rendering only
+and its result cannot stand for full acceptance. Review every PNG and the
+report's checks, note-byte hashes, and logged bob invocations. Copy the report
+and screenshots back from athena and retain them through `/sase_artifact`.
+
 ## Focused suites
 
 Navigation Hotkeys, Task Status Cycler, and Block ID Prompt tests are

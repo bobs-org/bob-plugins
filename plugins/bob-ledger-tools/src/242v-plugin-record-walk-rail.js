@@ -29,6 +29,19 @@ function recordSheetSlotIsLive(view, path) {
   }
 }
 
+// A still-mounted foot must stay toggleable: cached decoration returns must
+// not skip mount tracking after a release (teardown, demoted card, transient
+// model miss). True when no live mount needs healing; the rebuild path below
+// re-tracks the adopted header.
+function recordSheetFootMountsLive(path) {
+  try {
+    if (typeof propertyCardFootLiveMountsFor !== "function") return true;
+    return propertyCardFootLiveMountsFor(path).length > 0;
+  } catch (_) {
+    return true;
+  }
+}
+
 // Rail hosts share the sheet's source cache, decorations, refresh, and teardown.
 class BobLedgerToolsRecordWalkRailMixin {
   recordWalkFor(path, sourceText) {
@@ -156,7 +169,11 @@ class BobLedgerToolsRecordWalkRailMixin {
       // failed deferred mount can recover without a tight viewport retry.
       // Sticky insert-failed/unstable still rebuilds once so widgets can paint.
       if (previous?.path === path && recordSheetSlotSkipsUpdate(update, this)) {
-        if (recordSheetSlotIsLive(view, path) || previous.slotted === false) {
+        const slotLive = recordSheetSlotIsLive(view, path);
+        // A live slot with no live mount lost its registration (teardown,
+        // demotion, transient model miss): fall through to the rebuild below,
+        // which re-tracks the adopted header.
+        if ((slotLive || previous.slotted === false) && (!slotLive || recordSheetFootMountsLive(path))) {
           return previous.decorations;
         }
         if (!remembered) {
@@ -171,7 +188,8 @@ class BobLedgerToolsRecordWalkRailMixin {
       }
       this._recordSheetDecorateStamp.n += 1;
       if (this._recordSheetDecorateStamp.n > 8 && previous?.path === path
-        && !(remembered && previous.slotted)) {
+        && !(remembered && previous.slotted)
+        && !(recordSheetSlotIsLive(view, path) && !recordSheetFootMountsLive(path))) {
         return previous.decorations;
       }
       this._recordSheetDecorating = true;
@@ -253,7 +271,8 @@ class BobLedgerToolsRecordWalkRailMixin {
       const adopted = propertyCardAdoptedEntry(view.dom);
       const slotted = Boolean(adopted && adopted.path === path && adopted.mode === "slot" && adopted.node);
       const cached = this.recordSheetEditorCache?.get?.(view);
-      if (slotted && cached?.path === path && cached.signature === slotSignature && cached.anchor === at) {
+      if (slotted && cached?.path === path && cached.signature === slotSignature && cached.anchor === at
+        && recordSheetFootMountsLive(path)) {
         return cached.decorations;
       }
       let header = slotted ? adopted.node : null;

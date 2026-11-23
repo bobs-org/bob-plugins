@@ -351,6 +351,8 @@
   "298h-plugin-property-editor-stages.js",
   "298i-plugin-property-editor-modal-stages.js",
   "298j-plugin-property-editor-prose-field.js",
+  "298k-plugin-property-editor-add.js",
+  "298l-plugin-property-editor-modal-add.js",
   "293-keep-inbox-render.js",
   "294-keep-inbox-indicator.js",
   "295-keep-inbox-actions.js",

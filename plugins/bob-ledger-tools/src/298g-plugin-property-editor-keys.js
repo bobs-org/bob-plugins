@@ -42,6 +42,9 @@ function propertyEditorKeyAction(event, context = {}) {
     if (!ctrl && !meta && !alt && key === "j") return "down";
     if (!ctrl && !meta && !alt && key === "k") return "up";
     if (!ctrl && !meta && !alt && key === "l") return "open";
+    if (!ctrl && !meta && !alt && !shift && key === "o") return "add-below";
+    if (!ctrl && !meta && !alt && (key === "O" || (shift && key === "o"))) return "add-above";
+    if (cmd && !alt && !shift && (key === ";" || event.code === "Semicolon")) return "add-end";
     if (!ctrl && !meta && !alt && key === "g") return "top";
     if (!ctrl && !meta && !alt && key === "G") return "bottom";
     if (!ctrl && !meta && !alt && key === "u") return "undo";
@@ -81,7 +84,7 @@ function propertyEditorKeyAction(event, context = {}) {
 // filter layer, modal.
 function propertyEditorCloseLadder(state = {}) {
   if (state.menuOpen === true) return "menu";
-  if (state.stage) return "stage";
+  if (state.stage || state.addName) return "stage";
   if (state.filterOpen === true) return "filter";
   return "modal";
 }

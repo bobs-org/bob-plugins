@@ -663,6 +663,9 @@ function propertyEditorPaintAll(host, options, doc, modal) {
     host.appendChild(list);
   }
 
+  if (options.addName && typeof propertyEditorPaintNameStage === "function") {
+    try { propertyEditorPaintNameStage(doc, host, options.addName, modal); } catch (_) {}
+  }
   if (options.stage && typeof propertyEditorPaintStage === "function") {
     try { propertyEditorPaintStage(doc, host, options.stage, modal); } catch (_) {}
   }
@@ -681,7 +684,7 @@ function propertyEditorPaintAll(host, options, doc, modal) {
   }
 
   const hints = propertyEditorCreateEl(doc, "div", "bob-property-editor-hints");
-  propertyEditorSetText(hints, "j/k move · Enter/l open · Ctrl+D delete · u undo · = add · y YAML · Esc close");
+  propertyEditorSetText(hints, "j/k move · o/O add · Mod+; end · Enter/l open · Ctrl+D delete · u undo · y YAML · Esc close");
   if (hints) host.appendChild(hints);
 
   if (options.announce) {

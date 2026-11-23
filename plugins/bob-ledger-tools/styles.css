@@ -12954,3 +12954,10 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
   .bob-property-editor-stage-save,
   .bob-property-editor-stage-cancel { border: 1px solid CanvasText; }
 }
+
+/* Property editor add-flow name stage (bob-cli-pf.4.1.4). */
+.bob-property-editor-stage.is-name .bob-property-editor-stage-suggestion {
+  display: inline-flex;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}

@@ -129,7 +129,7 @@ function propertyEditorPaintStage(doc, host, options, modal) {
 function propertyEditorStageLabels(kind) {
   return ({
     text: "Text", number: "Number", date: "Date", datetime: "Date & time",
-    list: "List", tags: "Tags", aliases: "Aliases",
+    list: "List", tags: "Tags", aliases: "Aliases", checkbox: "Checkbox",
   })[kind] || "Value";
 }
 

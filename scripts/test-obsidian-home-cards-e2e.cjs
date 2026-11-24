@@ -2,6 +2,7 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const test = require("node:test");
@@ -20,14 +21,23 @@ test("home-card real-Obsidian runner self-test is offline", () => {
 test("fixtures cover home species, ancestry, inbox, every local project state, and no-goal repair", () => {
   lib.selfTest();
   const fixtures = lib.fixtureNotes();
-  for (const key of ["area", "subarea", "inbox", "wip", "blocked", "scheduled", "done", "canceled", "legacy", "missing"]) {
+  for (const key of [
+    "area", "subarea", "inbox", "nestedInbox", "wip", "blocked", "scheduled", "done",
+    "canceled", "legacy", "missing", "archived", "lateTitle", "deep", "long",
+    "shadowed", "invalidClock", "mixedClock", "capOff", "createdMissing",
+    "createdInvalid", "complete", "nestedPrj", "untyped",
+  ]) {
     assert.ok(fixtures[lib.PATHS[key]], key);
   }
   assert.ok(fixtures[lib.PATHS.subarea].includes('parent: "[[dev]]"'));
   assert.match(fixtures[lib.PATHS.area], /# Development/);
   assert.match(fixtures[lib.PATHS.inbox], /Mac Inbox/);
+  assert.match(fixtures[lib.PATHS.nestedInbox], /Nested Inbox/);
   assert.match(fixtures[lib.PATHS.scheduled], /\[scheduled:: 2026-12-02\]/);
   assert.match(fixtures[lib.PATHS.legacy], /theme: "BUILD"/);
+  assert.match(fixtures[lib.PATHS.complete], /Close this completion fixture/);
+  assert.doesNotMatch(fixtures[lib.PATHS.untyped], /^type:/m);
+  assert.match(fixtures[lib.PATHS.untyped], /aliases:/);
 });
 
 test("card acceptance rejects missing native Properties, wrong species, and wrong lifecycle", () => {
@@ -46,10 +56,13 @@ test("card acceptance rejects missing native Properties, wrong species, and wron
 
 test("screenshot inventory covers both species and terminal project across light/dark and narrow/wide", () => {
   const needs = lib.screenshotNeeds();
-  assert.equal(needs.length, 24);
+  assert.equal(needs.length, 28);
   assert.ok(needs.includes("dev-live-light-wide"));
   assert.ok(needs.includes("root_plan-reading-dark-narrow"));
   assert.ok(needs.includes("done_plan-live-dark-wide"));
+  assert.ok(needs.includes("long_area-live-light-wide-collapsed"));
+  assert.ok(needs.includes("long_area-live-light-wide-drawer"));
+  assert.ok(needs.includes("root_plan-live-light-wide-reduced"));
   assert.equal(new Set(needs).size, needs.length);
 });
 
@@ -61,4 +74,22 @@ test("CLI arguments and the page probe are valid", () => {
   assert.throws(() => lib.parseArgs(["--unknown"]), /Unknown argument/);
   assert.doesNotThrow(() => new Function("return " + runner.PROBE_SOURCE));
   assert.match(runner.PROBE_SOURCE, /bob-home-card/);
+  assert.match(runner.PROBE_SOURCE, /cardWidth/);
+  assert.match(runner.PROBE_SOURCE, /nativePropertiesVisible/);
+  assert.match(runner.PROBE_SOURCE, /drawerOpen/);
+  const runnerSource = fs.readFileSync(path.join(__dirname, "obsidian-home-cards-e2e.cjs"), "utf8");
+  assert.match(runnerSource, /command\.editorCallback\(editor\)/);
+  assert.match(runnerSource, /openBulletPropertyPicker\(editor\)/);
+  assert.match(runnerSource, /lib\.bobConfigYaml\(\)/);
+  assert.match(runnerSource, /XDG_CONFIG_HOME/);
+  assert.doesNotMatch(runnerSource, /missing-test-config\.yml/);
+  assert.match(runnerSource, /async function openCardNote/);
+  assert.match(runnerSource, /workspace\.getLeaf\(true\)/);
+  assert.match(runnerSource, /homeCardSetCollapsed\(notePath, false\)/);
+  const geo = lib.inspectGeometry({
+    cardWidth: 360, cardHeight: 140, collapsed: true, drawerOpen: false,
+    lifecycleVisible: true, nativePropertiesVisible: true,
+  }, { narrow: true, collapsed: true });
+  assert.deepEqual(geo.failures, []);
+  assert.equal(geo.container.width, 360);
 });

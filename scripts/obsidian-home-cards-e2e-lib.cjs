@@ -5,6 +5,10 @@
 const assert = require("node:assert/strict");
 
 const FIXTURE_TODAY = "2026-11-24";
+const FIXTURE_CLOCK = `${FIXTURE_TODAY}T12:00:00`;
+const NARROW_VIEWPORT = 400;
+const WIDE_VIEWPORT = 1400;
+const NARROW_CARD_MAX = 420;
 const HELP_TEXT = [
   "Usage: node scripts/obsidian-home-cards-e2e.cjs [OPTIONS]",
   "",
@@ -22,6 +26,7 @@ const PATHS = Object.freeze({
   area: "dev.md",
   subarea: "tooling_ops.md",
   inbox: "inbox.md",
+  nestedInbox: "nested/inbox.md",
   wip: "root_plan.md",
   blocked: "blocked_plan.md",
   scheduled: "scheduled_plan.md",
@@ -29,6 +34,21 @@ const PATHS = Object.freeze({
   canceled: "canceled_plan.md",
   legacy: "legacy_theme_plan.md",
   missing: "missing_goal.md",
+  archived: "archived_plan.md",
+  lateTitle: "late_title_plan.md",
+  inner: "inner_ops.md",
+  mid: "mid_plan.md",
+  deep: "deep_plan.md",
+  long: "long_area.md",
+  shadowed: "shadow_clock_plan.md",
+  invalidClock: "invalid_clock_plan.md",
+  mixedClock: "mixed_clock_plan.md",
+  capOff: "cap_off_plan.md",
+  createdMissing: "created_missing_plan.md",
+  createdInvalid: "created_invalid_plan.md",
+  complete: "complete_plan.md",
+  nestedPrj: "nested_prj_plan.md",
+  untyped: "plain_note.md",
 });
 
 function yaml(rows, body) {
@@ -41,6 +61,7 @@ function yaml(rows, body) {
 
 function fixtureNotes() {
   const project = (fields, line) => yaml({ type: "[[project]]", parent: "[[dev]]", ...fields }, line);
+  const longSummary = "Engineering work and tools across the whole stack, including local capture, the review walk, and the long-running plugin cards that must stay readable when the summary wraps onto a second line.";
   return {
     [PATHS.area]: yaml({
       type: "[[area]]", parent: "[[area]]", aliases: ["Development"], summary: "Engineering work and tools.",
@@ -53,6 +74,10 @@ function fixtureNotes() {
       type: "[[area]]", parent: "[[area]]", aliases: ["Mac Inbox"],
       summary: "A synthetic inbox route for acceptance.",
     }, "This fixture uses its first alias as the card title.\n"),
+    [PATHS.nestedInbox]: yaml({
+      type: "[[area]]", parent: "[[dev]]", aliases: ["Nested Inbox"],
+      summary: "A nested inbox.md that is not the vault inbox.",
+    }, "Nested inbox files are ordinary areas unless the inbox route says otherwise.\n"),
     [PATHS.wip]: project({ root: true, task_type: "BUILD" },
       "- [ ] #task #prj Ship the root rollout ^prj\n"),
     [PATHS.blocked]: project({},
@@ -66,6 +91,41 @@ function fixtureNotes() {
     [PATHS.legacy]: project({ theme: "BUILD" },
       "- [ ] #task #prj Keep the legacy theme ^prj\n"),
     [PATHS.missing]: project({}, "# Notes without a goal task\n"),
+    [PATHS.archived]: yaml({
+      type: "[[project]]", parent: "[[dev]]", status: "done",
+    }, "# Archived without a live goal\n"),
+    [PATHS.lateTitle]: project({},
+      "- [ ] #task #prj Keep the early goal ^prj\n\n# Late heading after the task\n"),
+    [PATHS.inner]: yaml({
+      type: "[[area]]", parent: "[[dev]]", aliases: ["Inner Ops"],
+    }, "# Inner Ops\n"),
+    [PATHS.mid]: project({ parent: "[[inner_ops]]" },
+      "- [ ] #task #prj Mid ancestry goal ^prj\n"),
+    [PATHS.deep]: yaml({
+      type: "[[project]]", parent: "[[mid_plan]]",
+    }, "- [ ] #task #prj Deep ancestry goal ^prj\n"),
+    [PATHS.long]: yaml({
+      type: "[[area]]", parent: "[[area]]", aliases: ["Long Summary"],
+      summary: longSummary, color: "yellow",
+    }, "# Long Summary\n"),
+    [PATHS.shadowed]: project({
+      offclock: false, offclock_types: ["MEET"],
+    }, "- [ ] #task #prj Shadowed clock policy ^prj\n"),
+    [PATHS.invalidClock]: project({
+      offclock: true, offclock_types: [],
+    }, "- [ ] #task #prj Empty clock list ^prj\n"),
+    [PATHS.mixedClock]: "---\ntype: \"[[project]]\"\nparent: \"[[dev]]\"\noffclock_types: [MEET, 7]\n---\n- [ ] #task #prj Mixed clock list ^prj\n",
+    [PATHS.capOff]: project({ ready_cap: "off" },
+      "- [ ] #task #prj Cap off project ^prj\n"),
+    [PATHS.createdMissing]: project({},
+      "- [ ] #task #prj Missing created stamp ^prj\n"),
+    [PATHS.createdInvalid]: project({ created: "not-a-date" },
+      "- [ ] #task #prj Invalid created stamp ^prj\n"),
+    [PATHS.complete]: project({},
+      "- [ ] #task #prj Close this completion fixture ^prj\n"),
+    [PATHS.nestedPrj]: project({},
+      "- parent note\n  - [x] #task #prj nested example ^prj\n"),
+    [PATHS.untyped]: yaml({ aliases: ["Plain"] }, "# Plain note\n\nThis note is not an Area or Project.\n"),
   };
 }
 
@@ -82,6 +142,22 @@ const EXPECTED = Object.freeze({
   [PATHS.missing]: { kind: "project", title: "Notes without a goal task", lifecycle: "NO ^prj TASK", icon: "target", form: "pennant" },
 });
 
+const EXTRA_EXPECTED = Object.freeze({
+  [PATHS.nestedInbox]: { kind: "area", title: "Nested Inbox", lifecycle: null, icon: "layers", form: "field", forbidPill: "INBOX", crumb: "Development" },
+  [PATHS.archived]: { kind: "project", title: "Archived without a live goal", lifecycle: "DONE", icon: "target", form: "pennant", terminal: true },
+  [PATHS.lateTitle]: { kind: "project", title: "late_title_plan", lifecycle: "WIP", icon: "target", form: "pennant" },
+  [PATHS.deep]: { kind: "project", title: "deep_plan", lifecycle: "WIP", icon: "target", form: "pennant", crumb: "Development" },
+  [PATHS.long]: { kind: "area", title: "Long Summary", lifecycle: null, icon: "layers", form: "field" },
+  [PATHS.shadowed]: { kind: "project", title: "shadow_clock_plan", lifecycle: "WIP", icon: "target", form: "pennant", chip: "off-clock · MEET" },
+  [PATHS.invalidClock]: { kind: "project", title: "invalid_clock_plan", lifecycle: "WIP", icon: "target", form: "pennant", chipCount: 0 },
+  [PATHS.mixedClock]: { kind: "project", title: "mixed_clock_plan", lifecycle: "WIP", icon: "target", form: "pennant", chipCount: 0 },
+  [PATHS.capOff]: { kind: "project", title: "cap_off_plan", lifecycle: "WIP", icon: "target", form: "pennant" },
+  [PATHS.createdMissing]: { kind: "project", title: "created_missing_plan", lifecycle: "WIP", icon: "target", form: "pennant" },
+  [PATHS.createdInvalid]: { kind: "project", title: "created_invalid_plan", lifecycle: "WIP", icon: "target", form: "pennant" },
+  [PATHS.complete]: { kind: "project", title: "complete_plan", lifecycle: "WIP", icon: "target", form: "pennant" },
+  [PATHS.nestedPrj]: { kind: "project", title: "nested_prj_plan", lifecycle: "NO ^prj TASK", icon: "target", form: "pennant" },
+});
+
 function screenshotNeeds() {
   const result = [];
   for (const note of [PATHS.area, PATHS.wip, PATHS.done]) {
@@ -91,6 +167,10 @@ function screenshotNeeds() {
       }
     }
   }
+  result.push("long_area-live-light-wide-collapsed");
+  result.push("long_area-live-light-wide-drawer");
+  result.push("root_plan-live-light-wide-reduced");
+  result.push("long_area-live-dark-narrow-collapsed");
   return result;
 }
 
@@ -114,8 +194,8 @@ function parseArgs(argv) {
   return args;
 }
 
-function cardFailures(probe, notePath, mode) {
-  const expected = EXPECTED[notePath];
+function cardFailures(probe, notePath, mode, catalog = EXPECTED) {
+  const expected = catalog[notePath];
   const failures = [];
   if (!expected) return ["fixture has no expected card contract"];
   if (!probe || probe.path !== notePath) failures.push("active note path is wrong");
@@ -131,26 +211,108 @@ function cardFailures(probe, notePath, mode) {
   if (notePath === PATHS.scheduled && !/in \d+ days?/.test(String(probe?.lifecycleDetail || ""))) failures.push("future project schedule has no relative time");
   if (!expected.lifecycle && probe?.lifecycle) failures.push("area has a project lifecycle row");
   if (expected.pill && !probe?.pills?.includes(expected.pill)) failures.push(`${expected.pill} pill is missing`);
-  if (!expected.pill && probe?.pills?.some((pill) => pill === "ROOT" || pill === "INBOX")) failures.push("unexpected route/root pill is present");
+  if (expected.forbidPill && probe?.pills?.includes(expected.forbidPill)) failures.push(`${expected.forbidPill} pill must not appear`);
+  if (!expected.pill && !expected.forbidPill && probe?.pills?.some((pill) => pill === "ROOT" || pill === "INBOX")) failures.push("unexpected route/root pill is present");
   if (expected.crumb && !probe?.crumbs?.includes(expected.crumb)) failures.push("resolved parent crumb is missing");
-  if (expected.chip && !probe?.chips?.some((chip) => chip.includes(expected.chip))) failures.push("authored legacy-theme chip is missing");
+  if (expected.chip && !probe?.chips?.some((chip) => chip.includes(expected.chip))) failures.push("authored chip is missing");
+  if (Number.isInteger(expected.chipCount) && probe?.chipCount !== expected.chipCount) failures.push("chip count is wrong");
   if (expected.terminal && (probe?.chipCount !== 0 || probe?.metaPresent)) failures.push("terminal project still has its policy/readout row");
   return failures;
 }
 
+function inspectGeometry(probe, expect = {}) {
+  const failures = [];
+  const width = Number(probe?.cardWidth) || 0;
+  const height = Number(probe?.cardHeight) || 0;
+  if (!(width > 0 && height > 0)) failures.push("card has no layout box");
+  if (expect.narrow && !(width > 0 && width <= NARROW_CARD_MAX)) {
+    failures.push(`narrow card container is ${width}px, need <= ${NARROW_CARD_MAX}px`);
+  }
+  if (expect.wide && !(width > NARROW_CARD_MAX)) {
+    failures.push(`wide card container is ${width}px, need > ${NARROW_CARD_MAX}px`);
+  }
+  if (expect.collapsed === true && probe?.collapsed !== true) failures.push("card is not collapsed");
+  if (expect.collapsed === false && probe?.collapsed === true) failures.push("card is collapsed");
+  if (expect.drawerOpen === true && probe?.drawerOpen !== true) failures.push("drawer is not open");
+  if (expect.drawerOpen === false && probe?.drawerOpen === true) failures.push("drawer is open");
+  if (expect.lifecycleVisible === true && !probe?.lifecycleVisible) failures.push("lifecycle is not visible");
+  if (expect.summaryVisible === false && probe?.summaryVisible) failures.push("summary stayed visible while collapsed");
+  if (expect.nativePropertiesVisible !== false && !probe?.nativePropertiesVisible) {
+    failures.push("native Properties are not visible");
+  }
+  return {
+    failures,
+    container: {
+      width,
+      height,
+      x: Number(probe?.cardX) || 0,
+      y: Number(probe?.cardY) || 0,
+      collapsed: probe?.collapsed === true,
+      drawerOpen: probe?.drawerOpen === true,
+      reducedMotion: probe?.reducedMotion === true,
+    },
+  };
+}
+
+const EXISTING_BOB_SERVICES = Object.freeze([
+  "bank", "props", "gmail", "notebooks", "albums", "projects", "areas", "themes", "logs",
+]);
+
+function classifyBobInvocation(row) {
+  const args = Array.isArray(row?.args) ? row.args : [];
+  const command = String(args[0] || "");
+  if (EXISTING_BOB_SERVICES.includes(command)) {
+    return { service: `ledger:${command}`, homeCardTriggered: false, args };
+  }
+  return { service: command ? `unknown:${command}` : "unknown", homeCardTriggered: true, args };
+}
+
+function homeCardTriggeredBob(rows) {
+  return (Array.isArray(rows) ? rows : []).map(classifyBobInvocation).filter((row) => row.homeCardTriggered);
+}
+
+function bobConfigYaml() {
+  return [
+    "timezone: America/New_York",
+    "properties:",
+    "  - name: scheduled",
+    "    values: date",
+    "",
+  ].join("\n");
+}
+
 function selfTest() {
   const notes = fixtureNotes();
-  assert.deepEqual(Object.keys(notes).sort(), Object.keys(EXPECTED).sort());
-  assert.match(notes[PATHS.scheduled], /\[\?\].*\[scheduled:: 2026-12-02\].*\^prj/);
-  assert.match(notes[PATHS.done], /\[x\].*\[completion:: 2026-11-20\].*\^prj/);
-  assert.match(notes[PATHS.canceled], /\[-\].*\[cancelled:: 2026-10-02\].*\^prj/);
-  assert.match(notes[PATHS.wip], /root: true/);
+  assert.ok(Object.keys(notes).includes(PATHS.untyped));
+  for (const key of Object.keys(EXPECTED)) assert.ok(notes[key], key);
+  for (const key of Object.keys(EXTRA_EXPECTED)) assert.ok(notes[key], key);
+  assert.ok(notes[PATHS.subarea].includes('parent: "[[dev]]"'));
+  assert.match(notes[PATHS.area], /# Development/);
+  assert.match(notes[PATHS.inbox], /Mac Inbox/);
+  assert.match(notes[PATHS.nestedInbox], /Nested Inbox/);
+  assert.match(notes[PATHS.scheduled], /\[scheduled:: 2026-12-02\]/);
   assert.match(notes[PATHS.legacy], /theme: "BUILD"/);
-  assert.doesNotMatch(notes[PATHS.missing], /\^prj/);
+  assert.match(notes[PATHS.archived], /status: "done"/);
+  assert.doesNotMatch(notes[PATHS.archived], /\^prj/);
+  assert.match(notes[PATHS.lateTitle], /\^prj[\s\S]*# Late heading after the task/);
+  assert.match(notes[PATHS.deep], /parent: "\[\[mid_plan\]\]"/);
+  assert.match(notes[PATHS.long], /second line/);
+  assert.match(notes[PATHS.shadowed], /offclock_types:/);
+  assert.match(notes[PATHS.invalidClock], /offclock_types:\n/);
+  assert.match(notes[PATHS.mixedClock], /offclock_types: \[MEET, 7\]/);
+  assert.match(notes[PATHS.capOff], /ready_cap: "off"/);
+  assert.doesNotMatch(notes[PATHS.createdMissing], /^created:/m);
+  assert.match(notes[PATHS.createdInvalid], /created: "not-a-date"/);
+  assert.match(notes[PATHS.complete], /Close this completion fixture/);
+  assert.match(notes[PATHS.nestedPrj], /  - \[x\] #task #prj nested example \^prj/);
+  assert.doesNotMatch(notes[PATHS.untyped], /^type:/m);
   const needs = screenshotNeeds();
-  assert.equal(needs.length, 24);
+  assert.equal(needs.length, 28);
   assert.ok(needs.includes("dev-live-light-wide"));
   assert.ok(needs.includes("done_plan-reading-dark-narrow"));
+  assert.ok(needs.includes("long_area-live-light-wide-collapsed"));
+  assert.ok(needs.includes("root_plan-live-light-wide-reduced"));
+  assert.equal(new Set(needs).size, needs.length);
   assert.deepEqual(cardFailures({
     path: PATHS.wip, mode: "live", kind: "project", title: "root_plan", ariaLabel: "Project: root_plan",
     icon: "target", tileForm: "pennant", footPresent: true, nativePropertiesVisible: true,
@@ -161,7 +323,28 @@ function selfTest() {
     ariaLabel: "Project: Notes without a goal task", icon: "target", tileForm: "pennant",
     footPresent: true, nativePropertiesVisible: true, lifecycle: "NO ^prj TASK",
   }, PATHS.missing, "live"), []);
+  assert.deepEqual(cardFailures({
+    path: PATHS.nestedInbox, mode: "live", kind: "area", title: "Nested Inbox",
+    ariaLabel: "Area: Nested Inbox", icon: "layers", tileForm: "field",
+    footPresent: true, nativePropertiesVisible: true, pills: [], crumbs: ["Development"],
+  }, PATHS.nestedInbox, "live", EXTRA_EXPECTED), []);
   assert.ok(cardFailures({ path: PATHS.wip }, PATHS.wip, "live").length > 0);
+  const geo = inspectGeometry({ cardWidth: 360, cardHeight: 120, collapsed: true, drawerOpen: false, lifecycleVisible: true, nativePropertiesVisible: true }, { narrow: true, collapsed: true });
+  assert.deepEqual(geo.failures, []);
+  assert.ok(inspectGeometry({ cardWidth: 800, cardHeight: 120 }, { narrow: true }).failures.length > 0);
+  assert.equal(classifyBobInvocation({ args: ["bank", "report", "-f", "json"] }).homeCardTriggered, false);
+  assert.equal(classifyBobInvocation({ args: ["props", "show", "dev.md"] }).homeCardTriggered, false);
+  assert.equal(classifyBobInvocation({ args: ["plan", "-f", "json"] }).homeCardTriggered, true);
+  assert.equal(homeCardTriggeredBob([
+    { args: ["gmail", "list", "-a", "-f", "json"] },
+    { args: ["capture", "x0"] },
+  ]).length, 1);
+  assert.match(bobConfigYaml(), /^properties:/m);
+  assert.match(bobConfigYaml(), /name: scheduled/);
 }
 
-module.exports = { HELP_TEXT, FIXTURE_TODAY, PATHS, EXPECTED, fixtureNotes, screenshotNeeds, parseArgs, cardFailures, selfTest };
+module.exports = {
+  HELP_TEXT, FIXTURE_TODAY, FIXTURE_CLOCK, NARROW_VIEWPORT, WIDE_VIEWPORT, NARROW_CARD_MAX,
+  PATHS, EXPECTED, EXTRA_EXPECTED, EXISTING_BOB_SERVICES, fixtureNotes, screenshotNeeds, parseArgs,
+  cardFailures, inspectGeometry, classifyBobInvocation, homeCardTriggeredBob, bobConfigYaml, selfTest,
+};

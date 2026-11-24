@@ -362,3 +362,113 @@ test("material, inbox, root, summary, created, and managed grouping stay local",
   assert.equal(project.created.silentMissing, false);
   assert.equal(project.where.created, "foot");
 });
+
+test("nested ^prj tasks never become the project lifecycle", () => {
+  const nested = H.homeCardPrjTask("- note\n  - [x] #task #prj example ^prj\n");
+  assert.equal(nested.kind, "missing");
+  assert.equal(nested.count, 0);
+
+  const nestedUnderHeading = model("p.md", { type: "[[project]]" }, {
+    sourceText: yaml({ type: "\"[[project]]\"" }, "- parent\n  - [x] #task #prj example ^prj\n"),
+  });
+  assert.equal(nestedUnderHeading.lifecycle.kind, "missing");
+  assert.equal(nestedUnderHeading.prj.kind, "missing");
+
+  const topIndented = H.homeCardPrjTask("---\ntype: \"[[project]]\"\n---\n  - [ ] #task #prj x ^prj\n");
+  assert.equal(topIndented.kind, "one");
+  assert.equal(topIndented.mark, " ");
+  assert.equal(typeof topIndented.from, "number");
+  assert.match("---\ntype: \"[[project]]\"\n---\n  - [ ] #task #prj x ^prj\n".slice(topIndented.from, topIndented.to), /\^prj/);
+
+  const fenced = H.homeCardPrjTask("---\ntype: \"[[project]]\"\n---\n```\n- [ ] #task #prj example ^prj\n```\n");
+  assert.equal(fenced.kind, "missing");
+
+  const duplicate = H.homeCardPrjTask("---\ntype: \"[[project]]\"\n---\n- [ ] #task #prj a ^prj\n- [ ] #task #prj b ^prj\n");
+  assert.equal(duplicate.kind, "duplicate");
+  assert.equal(duplicate.count, 2);
+});
+
+test("invalid authored policy shapes stay out of chips and do not claim where-marks", () => {
+  const emptyTypes = model("p.md", {
+    type: "[[project]]",
+    offclock: true,
+    offclock_types: [],
+  }, {
+    sourceText: yaml({ type: "\"[[project]]\"", offclock: true, offclock_types: [] }, "- [ ] #task #prj x ^prj\n"),
+  });
+  assert.deepEqual(emptyTypes.chips, []);
+  assert.equal(emptyTypes.where.offclock, undefined);
+  assert.equal(emptyTypes.where.offclock_types, undefined);
+
+  const mixed = model("p.md", {
+    type: "[[project]]",
+    offclock_types: ["MEET", 7],
+  }, {
+    sourceText: "---\ntype: \"[[project]]\"\noffclock_types: [MEET, 7]\n---\n- [ ] #task #prj x ^prj\n",
+  });
+  assert.deepEqual(mixed.chips, []);
+  assert.equal(mixed.where.offclock_types, undefined);
+
+  const numericType = model("p.md", { type: "[[project]]", task_type: 42 }, {
+    sourceText: yaml({ type: "\"[[project]]\"", task_type: 42 }, "- [ ] #task #prj x ^prj\n"),
+  });
+  assert.deepEqual(numericType.chips, []);
+  assert.equal(numericType.where.task_type, undefined);
+
+  const objectRefresh = model("p.md", { type: "[[project]]", task_refresh: { bad: true } }, {
+    sourceText: "---\ntype: \"[[project]]\"\ntask_refresh:\n  bad: true\n---\n- [ ] #task #prj x ^prj\n",
+  });
+  assert.deepEqual(objectRefresh.chips, []);
+  assert.equal(objectRefresh.where.task_refresh, undefined);
+
+  const shadowed = model("p.md", {
+    type: "[[project]]",
+    offclock: false,
+    offclock_types: ["MEET", "CALL"],
+  }, {
+    sourceText: yaml({
+      type: "\"[[project]]\"",
+      offclock: false,
+      offclock_types: ["MEET", "CALL"],
+    }, "- [ ] #task #prj x ^prj\n"),
+  });
+  assert.equal(shadowed.chips.length, 1);
+  assert.equal(shadowed.chips[0].settingKey, "offclock_types");
+  assert.equal(shadowed.chips[0].warning, true);
+  assert.match(shadowed.chips[0].tooltip, /offclock: false is ignored/);
+  assert.equal(shadowed.where.offclock_types, "chip");
+  assert.equal(shadowed.where.offclock, undefined);
+});
+
+test("live source policy beats stale cached frontmatter and never paints cache-only chips", () => {
+  const source = yaml({ type: "\"[[project]]\"", task_type: "CODE" }, "- [ ] #task #prj x ^prj\n");
+  const card = model("p.md", { type: "[[project]]", task_type: "BUILD" }, {
+    sourceText: source,
+    themeHue: () => "orange",
+  });
+  assert.equal(card.chips.length, 1);
+  assert.equal(card.chips[0].text, "#CODE");
+  assert.equal(card.chips.some((chip) => chip.text === "#BUILD"), false);
+
+  const unclosed = model("p.md", { type: "[[project]]", task_type: "BUILD" }, {
+    sourceText: "---\ntype: \"[[project]]\"\ntask_type: BUILD\n- [ ] #task #prj x ^prj\n",
+  });
+  assert.deepEqual(unclosed.chips, []);
+  assert.equal(unclosed.where.task_type, undefined);
+});
+
+test("the top ancestor crumb pip uses the ancestor hue, not the leaf override", () => {
+  const notes = {
+    "leaf.md": { path: "leaf.md", kind: "project", parent: "[[dev]]", title: "leaf", hue: "blue" },
+    "dev.md": { path: "dev.md", kind: "area", parent: "[[area]]", title: "dev", hue: "green" },
+    "area.md": { path: "area.md", kind: "area", title: "area" },
+  };
+  const card = model("leaf.md", { type: "[[project]]", parent: "[[dev]]" }, {
+    sourceText: yaml({ type: "\"[[project]]\"", parent: "\"[[dev]]\"" }, "- [ ] #task #prj x ^prj\n"),
+    resolveParent: (target) => notes[`${String(target).replace(/\.md$/i, "")}.md`] || null,
+    hue: "blue",
+  });
+  assert.deepEqual(card.crumbs.map((crumb) => crumb.text), ["dev"]);
+  assert.equal(card.crumbs[0].pip, "green");
+  assert.equal(card.hue, "blue");
+});

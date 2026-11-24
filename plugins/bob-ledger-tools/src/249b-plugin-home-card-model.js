@@ -332,6 +332,30 @@ function homeCardSourceLines(source) {
   return lines;
 }
 
+function homeCardListItemIndent(raw) {
+  const match = /^( *)(?:[-+*]|\d+[.)])\s+/.exec(String(raw || ""));
+  return match ? match[1].length : null;
+}
+
+function homeCardPrjIsNested(rows, index, start, fenced) {
+  const currentIndent = homeCardListItemIndent(rows[index] && rows[index].text);
+  if (currentIndent == null) return true;
+  for (let cursor = index - 1; cursor >= start; cursor -= 1) {
+    if (fenced.has(cursor)) continue;
+    const text = String(rows[cursor].text || "");
+    if (!text.trim()) continue;
+    const prevIndent = homeCardListItemIndent(text);
+    if (prevIndent == null) {
+      const leading = (/^ */.exec(text) || [""])[0].length;
+      if (leading <= currentIndent) return false;
+      continue;
+    }
+    if (prevIndent < currentIndent) return true;
+    if (prevIndent === currentIndent) return false;
+  }
+  return false;
+}
+
 function homeCardPrjTask(sourceText) {
   if (typeof sourceText !== "string") return { kind: "pending", mark: null, count: 0 };
   const rows = homeCardSourceLines(sourceText);
@@ -359,7 +383,7 @@ function homeCardPrjTask(sourceText) {
     const isPrj = typeof projectsIsPrjAnchor === "function"
       ? projectsIsPrjAnchor(raw)
       : (raw === "^prj" || raw.endsWith(" ^prj") || raw.endsWith("\t^prj"));
-    if (!top || !isPrj) continue;
+    if (!top || !isPrj || homeCardPrjIsNested(rows, index, start, fenced)) continue;
     const mark = typeof projectsCheckboxMark === "function"
       ? projectsCheckboxMark(raw)
       : ((/^\s*[-+*]\s+\[([^\]]*)\]/.exec(raw) || [])[1] || "");
@@ -474,6 +498,88 @@ function homeCardSummary(frontmatter, kind) {
   return text;
 }
 
+function homeCardCoerceYamlScalar(text) {
+  const raw = String(text == null ? "" : text).trim();
+  if (!raw) return "";
+  if (raw === "true") return true;
+  if (raw === "false") return false;
+  if (raw === "null" || raw === "~") return null;
+  if (/^-?\d+$/.test(raw)) return Number(raw);
+  if ((raw.startsWith("\"") && raw.endsWith("\"")) || (raw.startsWith("'") && raw.endsWith("'"))) {
+    return raw.slice(1, -1);
+  }
+  return raw;
+}
+
+function homeCardParseFlowSequence(text) {
+  const raw = String(text || "").trim();
+  if (!raw.startsWith("[") || !raw.endsWith("]")) return null;
+  const inner = raw.slice(1, -1).trim();
+  if (!inner) return [];
+  return inner.split(",").map((item) => homeCardCoerceYamlScalar(item));
+}
+
+function homeCardParseSourceMapping(sourceText) {
+  if (typeof sourceText !== "string" || typeof propertyCardScanFrontmatter !== "function") return null;
+  let scan = null;
+  try { scan = propertyCardScanFrontmatter(sourceText); } catch (_) { scan = null; }
+  if (!scan || scan.state !== "closed") return null;
+  if (typeof parseYaml === "function" && typeof propertyCardInventoryParserResult === "function") {
+    try {
+      const parsed = propertyCardInventoryParserResult(parseYaml, scan.yaml);
+      if (parsed && parsed.ok && parsed.value && typeof parsed.value === "object" && !Array.isArray(parsed.value)) {
+        return parsed.value;
+      }
+    } catch (_) {}
+  }
+  const mapping = {};
+  const lines = Array.isArray(scan.yamlLines) ? scan.yamlLines : [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (!line || !String(line).trim() || /^\s/.test(line) || /^\s*#/.test(line)) continue;
+    let colon = -1;
+    let key = null;
+    try {
+      colon = typeof propertyCardInventoryColon === "function" ? propertyCardInventoryColon(line) : line.indexOf(":");
+      key = colon >= 0 && typeof propertyCardInventoryKey === "function"
+        ? propertyCardInventoryKey(line.slice(0, colon))
+        : (colon >= 0 ? line.slice(0, colon).trim() : null);
+    } catch (_) {
+      colon = -1;
+      key = null;
+    }
+    if (colon < 0 || !key) continue;
+    const scalar = typeof propertyCardInventoryScalar === "function"
+      ? propertyCardInventoryScalar(line, colon)
+      : String(line.slice(colon + 1) || "").trim();
+    if (scalar !== "" && scalar != null) {
+      const flow = homeCardParseFlowSequence(scalar);
+      mapping[String(key)] = flow || homeCardCoerceYamlScalar(scalar);
+      continue;
+    }
+    const items = [];
+    let cursor = index + 1;
+    while (cursor < lines.length && /^\s+-\s+/.test(lines[cursor] || "")) {
+      items.push(homeCardCoerceYamlScalar(String(lines[cursor]).replace(/^\s+-\s+/, "")));
+      cursor += 1;
+    }
+    mapping[String(key)] = items;
+  }
+  return mapping;
+}
+
+function homeCardPolicyValues(frontmatter, sourceText, authored) {
+  if (!authored) return frontmatter || {};
+  if (typeof sourceText !== "string") return frontmatter || {};
+  const sourceMap = homeCardParseSourceMapping(sourceText);
+  if (!sourceMap) return {};
+  const policy = {};
+  for (const key of authored) {
+    if (Object.prototype.hasOwnProperty.call(sourceMap, key)) policy[key] = sourceMap[key];
+  }
+  return policy;
+}
+
 function homeCardTypeChip(frontmatter, authored, options) {
   if (!authored) return null;
   const hasType = authored.has("task_type");
@@ -482,19 +588,30 @@ function homeCardTypeChip(frontmatter, authored, options) {
   const key = hasType ? "task_type" : "theme";
   const raw = frontmatter ? frontmatter[key] : undefined;
   if (raw === undefined || raw === null) return null;
-  if (typeof raw !== "string" && typeof raw !== "number") return null;
-  const text = String(raw).trim();
-  if (!text) return null;
-  const lowered = text.toLowerCase();
-  if (lowered === "off") {
+  let parsed = null;
+  try {
+    parsed = typeof pomodoroThemeParseSingleNoteDefault === "function"
+      ? pomodoroThemeParseSingleNoteDefault(raw)
+      : (typeof raw === "string" ? { kind: raw.trim().toLowerCase() === "off" ? "off" : "name", name: raw.trim() } : { kind: "invalid" });
+  } catch (_) {
+    parsed = { kind: "invalid" };
+  }
+  if (!parsed || parsed.kind === "invalid") return null;
+  if (parsed.kind === "off") {
     return { id: "type", key, settingKey: key, text: "type off", hue: "", warning: false, tooltip: "Stop parent defaults" };
   }
-  const name = text.replace(/^#/, "");
+  if (parsed.kind !== "name" || !parsed.name) return null;
+  const name = homeCardText(parsed.name).replace(/^#/, "");
+  if (!name) return null;
   let hue = "";
   try {
     if (typeof options.themeHue === "function") {
-      const resolved = options.themeHue(name.toLowerCase(), name);
-      hue = homeCardHueName(resolved && typeof resolved === "object" ? resolved.hue : resolved);
+      const resolved = options.themeHue(name, name);
+      if (resolved && typeof resolved === "object" && Object.prototype.hasOwnProperty.call(resolved, "hue")) {
+        hue = resolved.hue == null ? "" : homeCardHueName(resolved.hue);
+      } else {
+        hue = homeCardHueName(resolved);
+      }
     }
   } catch (_) {}
   return {
@@ -519,16 +636,23 @@ function homeCardClockValue(raw) {
   return null;
 }
 
-function homeCardTypeList(value) {
-  const items = [];
-  const push = (item) => {
-    if (typeof item !== "string") return;
-    const text = item.trim();
-    if (text) items.push(text.replace(/^#/, "").toUpperCase());
-  };
-  if (Array.isArray(value)) value.forEach(push);
-  else push(value);
-  return items;
+function homeCardClockTypeNames(raw) {
+  let parsed = null;
+  try {
+    parsed = typeof pomodoroClockOffclockTypes === "function"
+      ? pomodoroClockOffclockTypes({ offclock_types: raw })
+      : null;
+  } catch (_) {
+    parsed = null;
+  }
+  if (!parsed || parsed.kind !== "valid" || !(parsed.keys instanceof Set) || !parsed.keys.size) return null;
+  const names = [];
+  const values = Array.isArray(raw) ? raw : [raw];
+  for (const item of values) {
+    if (typeof item !== "string" || !item.trim()) continue;
+    names.push(item.trim().replace(/^#/, "").toUpperCase());
+  }
+  return names.length ? names : null;
 }
 
 function homeCardClockChip(frontmatter, authored) {
@@ -536,53 +660,80 @@ function homeCardClockChip(frontmatter, authored) {
   const hasTypes = authored.has("offclock_types");
   const hasBool = authored.has("offclock");
   if (!hasTypes && !hasBool) return null;
-  const types = hasTypes ? homeCardTypeList(frontmatter && frontmatter.offclock_types) : [];
   const flag = hasBool ? homeCardClockValue(frontmatter && frontmatter.offclock) : null;
   const shadowed = hasTypes && hasBool;
   const ignoredKey = hasTypes ? "offclock" : "";
   const ignoredValue = hasBool ? homeCardText(frontmatter && frontmatter.offclock) : "";
-  const decidingKey = hasTypes && types.length ? "offclock_types" : "offclock";
-  let text = "";
-  if (hasTypes && types.length) text = `off-clock · ${types.join(", ")}`;
-  else if (flag === true) text = "off-clock";
-  else if (flag === false) text = "on-clock";
-  else if (hasTypes && !types.length) return null;
-  else return null;
   const tooltip = shadowed
     ? `${ignoredKey}: ${ignoredValue} is ignored — Settings can clean this up`
     : "";
-  return {
-    id: "clock",
-    key: decidingKey,
-    settingKey: decidingKey,
-    text,
-    hue: "",
-    warning: shadowed,
-    tooltip,
-    ignoredKey: shadowed ? ignoredKey : "",
-    ignoredValue: shadowed ? ignoredValue : "",
-  };
+  if (hasTypes) {
+    const names = homeCardClockTypeNames(frontmatter && frontmatter.offclock_types);
+    if (!names) return null;
+    return {
+      id: "clock",
+      key: "offclock_types",
+      settingKey: "offclock_types",
+      text: `off-clock · ${names.join(", ")}`,
+      hue: "",
+      warning: shadowed,
+      tooltip,
+      ignoredKey: shadowed ? ignoredKey : "",
+      ignoredValue: shadowed ? ignoredValue : "",
+    };
+  }
+  if (flag === true || flag === false) {
+    return {
+      id: "clock",
+      key: "offclock",
+      settingKey: "offclock",
+      text: flag === true ? "off-clock" : "on-clock",
+      hue: "",
+      warning: false,
+      tooltip: "",
+      ignoredKey: "",
+      ignoredValue: "",
+    };
+  }
+  return null;
 }
 
 function homeCardRefreshChip(frontmatter, authored) {
   if (!authored || !authored.has("task_refresh")) return null;
   const raw = frontmatter && frontmatter.task_refresh;
   if (raw === undefined || raw === null || raw === false) return null;
-  const text = typeof raw === "number" ? String(raw) : homeCardText(raw).trim();
-  if (!text) return null;
-  const label = /[a-z]/i.test(text) ? text : `${text}d`;
-  return { id: "refresh", key: "task_refresh", settingKey: "task_refresh", text: `review ${label}`, hue: "", warning: false, tooltip: "" };
+  if (typeof raw === "object") return null;
+  if (typeof raw !== "number" && typeof raw !== "string") return null;
+  let parsed = null;
+  try {
+    parsed = typeof freshnessParseNoteRefresh === "function"
+      ? freshnessParseNoteRefresh(raw)
+      : null;
+  } catch (_) {
+    parsed = null;
+  }
+  const days = parsed && Number.isInteger(parsed.days) ? parsed.days : null;
+  if (days == null || parsed.lint) return null;
+  return {
+    id: "refresh",
+    key: "task_refresh",
+    settingKey: "task_refresh",
+    text: `review ${days}d`,
+    hue: "",
+    warning: false,
+    tooltip: "",
+  };
 }
 
 function homeCardAliasChip(frontmatter, authored) {
   if (!authored || !authored.has("project_name_aliases")) return null;
   const raw = frontmatter && frontmatter.project_name_aliases;
+  if (!Array.isArray(raw) || !raw.length) return null;
   const names = [];
-  const push = (item) => {
-    if (typeof item === "string" && item.trim()) names.push(item.trim());
-  };
-  if (Array.isArray(raw)) raw.forEach(push);
-  else push(raw);
+  for (const item of raw) {
+    if (typeof item !== "string" || !item.trim()) return null;
+    names.push(item.trim());
+  }
   if (!names.length) return null;
   const extra = names.length - 1;
   const text = extra > 0 ? `aka ${names[0]} +${extra}` : `aka ${names[0]}`;
@@ -672,9 +823,7 @@ function homeCardCrumbParts(crumbs, material) {
       target,
       tooltip: target,
     };
-    if (index === 0 && material && material.paper === "hue" && material.hue) {
-      part.pip = material.hue;
-    } else if (index === 0 && crumb.hue) {
+    if (index === 0 && crumb.hue) {
       const hue = homeCardHueName(crumb.hue);
       if (hue && hue !== "grey") part.pip = hue;
     }
@@ -692,6 +841,7 @@ function homeCardModel(input = {}) {
     const sourceText = typeof options.sourceText === "string" ? options.sourceText : undefined;
     const sourcePending = sourceText === undefined;
     const authored = homeCardAuthoredKeys(sourceText);
+    const policy = homeCardPolicyValues(frontmatter, sourceText, authored);
     const title = homeCardTitleModel(sourceText, frontmatter, eligible.stem);
     if (!title.text) return null;
     const ancestry = homeCardWalkAncestry(eligible.path, frontmatter, options);
@@ -700,7 +850,7 @@ function homeCardModel(input = {}) {
     const summary = homeCardSummary(frontmatter, eligible.kind);
     const hue = options.hue !== undefined ? options.hue : "";
     const material = homeCardMaterial(eligible.kind, hue, terminal);
-    const chips = sourcePending ? [] : homeCardChips(frontmatter, authored, options, terminal);
+    const chips = sourcePending ? [] : homeCardChips(policy, authored, options, terminal);
     const ready = sourcePending ? null : homeCardReadyModel(options.ready, terminal);
     const inbox = eligible.kind === "area" && homeCardInbox(eligible.path, options);
     const root = eligible.kind === "project" && homeCardIsRoot(frontmatter);

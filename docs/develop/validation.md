@@ -372,6 +372,37 @@ BOB_BIN=$HOME/.cargo/bin/bob xvfb-run -a node \
   scripts/obsidian-group-jump-e2e.cjs -r /tmp/group-jump.json -o /tmp/group-jump-shots
 ```
 
+## Area and Project card walkthrough
+
+The offline wrapper `scripts/test-obsidian-home-cards-e2e.cjs` is part of `npm test`.
+It checks the synthetic fixtures, screenshot inventory, probe syntax, and acceptance
+rules without launching Obsidian, and is not real-app acceptance. Run the real
+walkthrough on athena from a fresh `/tmp` copy of the working tree under an
+independent Xvfb display:
+
+```bash
+xvfb-run -a node scripts/obsidian-home-cards-e2e.cjs \
+  -e /snap/obsidian/current/app/obsidian \
+  -r /tmp/home-cards-e2e.json -o /tmp/home-cards-e2e-shots
+```
+
+It seeds an isolated Git vault with synthetic Area and Project notes only, copies the
+built ledger-tools plus navigation-hotkeys, task-status-cycler, and Tasks, pins
+`2026-11-24` through `BOB_NOW` and an in-page `Date` override, and owns the Obsidian
+process/profile/CDP target. A `bob` shim on `PATH` records every subprocess. The run
+proves both species in Live Preview and Reading, extra fixtures (archived terminal,
+late H1, deep ancestry, long summary, shadowed/invalid clock, cap-off, created
+stamps, nested inbox, nested `^prj`, untyped control), collapse and `-` drawer in both
+modes, Settings/chip handoff to the browse editor, missing-editor inert rendering,
+modifier crumbs, Source/eligibility/rename/delete, injected mount failure with native
+title restore, denied embed/print/mobile contexts, native Properties remaining
+visible, Task Card open/close on `^prj` with `Esc`/`q`/`Ctrl+[`, and Ctrl+Enter on a
+separate completion fixture. Screenshots cover light/dark × wide/narrow (narrow card
+containers at or below the 420 px breakpoint), collapsed, open-drawer, and reduced
+motion, with recorded container geometry and visual verdicts. Review every PNG and
+the report's checks, note-byte hashes, and bob invocation log. Copy the report and
+screenshots back from athena and retain them through `/sase_artifact`.
+
 ## Card foot walkthrough
 
 `scripts/obsidian-card-foot-e2e.cjs` proves the shared property-card foot and

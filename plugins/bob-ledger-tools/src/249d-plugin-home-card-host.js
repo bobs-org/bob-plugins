@@ -171,13 +171,13 @@ class BobLedgerToolsHomeCardMixin {
       const plugins = this.app?.plugins?.plugins;
       const nav = plugins ? plugins["bob-navigation-hotkeys"] : null;
       const route = nav && nav.api && nav.api.inboxRoute ? nav.api.inboxRoute : null;
-      const check = route && typeof route.isInboxNote === "function" ? route.isInboxNote : null;
-      if (check && check.call(route, key) === true) return true;
-    } catch (_) {}
-    try {
-      if (typeof this.isInboxNotePath === "function" && this.isInboxNotePath(key) === true) return true;
-    } catch (_) {}
-    return key === "inbox.md" || key.endsWith("/inbox.md");
+      if (route && typeof route.isInboxNote === "function") {
+        return route.isInboxNote(key) === true;
+      }
+    } catch (_) {
+      return false;
+    }
+    return false;
   }
 
   homeCardHueFor(path) {
@@ -190,6 +190,16 @@ class BobLedgerToolsHomeCardMixin {
   }
 
   homeCardReadyFor(path) {
+    try {
+      const snapshot = typeof this.apiNoteReadySnapshot === "function"
+        ? this.apiNoteReadySnapshot()
+        : (this.api && this.api.noteReady && typeof this.api.noteReady.snapshot === "function"
+          ? this.api.noteReady.snapshot()
+          : null);
+      if (!snapshot || snapshot.available !== true) return null;
+    } catch (_) {
+      return null;
+    }
     try {
       if (typeof this.apiNoteReadyForNote === "function") {
         const entry = this.apiNoteReadyForNote(homeCardPath(path));
@@ -207,17 +217,29 @@ class BobLedgerToolsHomeCardMixin {
   }
 
   homeCardThemeHue(name) {
+    const raw = homeCardText(name).trim();
+    if (!raw) return null;
+    let key = raw;
     try {
-      if (typeof this.taskThemeOf === "function") {
-        const resolved = this.taskThemeOf(name, name);
-        if (resolved && typeof resolved === "object") return resolved;
+      if (typeof pomodoroThemeNormalizeKey === "function") {
+        key = pomodoroThemeNormalizeKey(raw) || raw;
       }
     } catch (_) {}
     try {
+      if (typeof this.pomodoroThemeHueFor === "function") {
+        const resolved = this.pomodoroThemeHueFor(key, raw);
+        if (resolved !== undefined) return resolved;
+      }
+    } catch (_) {}
+    try {
+      const local = this.api && this.api.themes;
+      if (local && typeof local.hueFor === "function") return local.hueFor(key, raw);
+    } catch (_) {}
+    try {
       const plugins = this.app?.plugins?.plugins;
-      const nav = plugins ? plugins["bob-navigation-hotkeys"] : null;
-      const api = nav && nav.api ? nav.api : null;
-      if (api && typeof api.taskThemeOf === "function") return api.taskThemeOf(name, name);
+      const ledger = plugins ? plugins["bob-ledger-tools"] : null;
+      const api = ledger && ledger.api && ledger.api.themes ? ledger.api.themes : null;
+      if (api && typeof api.hueFor === "function") return api.hueFor(key, raw);
     } catch (_) {}
     return null;
   }
@@ -591,7 +613,13 @@ class BobLedgerToolsHomeCardMixin {
 
   homeCardSignature(model, extra = {}) {
     try {
-      return JSON.stringify([model, extra?.footDigest || "", extra?.footOpen === true, extra?.collapsed === true]);
+      return JSON.stringify([
+        model,
+        extra?.footDigest || "",
+        extra?.footOpen === true,
+        extra?.collapsed === true,
+        extra?.editorAvailable === true,
+      ]);
     } catch (_) {
       return "";
     }
@@ -651,7 +679,11 @@ class BobLedgerToolsHomeCardMixin {
     const focusKey = this.homeCardFocusKey(header, doc);
     const extra = typeof this.homeCardFootExtra === "function" ? this.homeCardFootExtra(sourcePath, model) : null;
     const options = { ...this.homeCardOptions(sourcePath, model), footSpec: extra?.footSpec };
-    const signature = this.homeCardSignature(model, { ...extra, collapsed: options.collapsed });
+    const signature = this.homeCardSignature(model, {
+      ...extra,
+      collapsed: options.collapsed,
+      editorAvailable: typeof options.onOpenEditor === "function",
+    });
     if (!header || homeCardNodeSignatures.get(header) !== signature) {
       let fresh = null;
       try {
@@ -734,7 +766,11 @@ class BobLedgerToolsHomeCardMixin {
       const doc = view.dom?.ownerDocument || (typeof document !== "undefined" ? document : null);
       const extra = typeof this.homeCardFootExtra === "function" ? this.homeCardFootExtra(path, model) : null;
       const options = { ...this.homeCardOptions(path, model), footSpec: extra?.footSpec };
-      const signature = this.homeCardSignature(model, { ...extra, collapsed: options.collapsed });
+      const signature = this.homeCardSignature(model, {
+        ...extra,
+        collapsed: options.collapsed,
+        editorAvailable: typeof options.onOpenEditor === "function",
+      });
       const adopted = propertyCardAdoptedEntry(view.dom);
       let header = adopted && adopted.path === path && adopted.mode === "slot" ? adopted.node : null;
       if (!header || homeCardNodeSignatures.get(header) !== signature) {

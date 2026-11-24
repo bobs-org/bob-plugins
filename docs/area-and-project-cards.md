@@ -27,7 +27,8 @@ show a Project lifecycle row or a missing-created-date label.
 
 A Project card uses a pennant tile with the `target` icon and a `PROJECT` kicker. A
 project with `root: true` also shows a `ROOT` pill. Its subtitle comes from the local
-`^prj` task:
+top-level `^prj` task. Nested, fenced, or duplicate `^prj` rows are not the project
+task:
 
 | Project task | Card state |
 | --- | --- |
@@ -45,7 +46,8 @@ task itself.
 
 ## Authored properties and Ready
 
-The card shows only policy values authored on that note, in a fixed order:
+The card shows only policy values authored on that note, in a fixed order, and only
+when the live Markdown source confirms both the key and a valid value:
 
 - `task_type`, or legacy `theme` when no `task_type` is present;
 - `offclock_types` or `offclock`, including an explicit on-clock value and a warning
@@ -53,14 +55,22 @@ The card shows only policy values authored on that note, in a fixed order:
 - `task_refresh` as the review interval;
 - `project_name_aliases` as capture aliases.
 
+An invalid or unsupported shape stays in the native Properties drawer and does not
+become a chip. An `offclock_types` list that is present, even when empty or invalid,
+wins over `offclock` on the same note and does not fall back to the boolean. Type
+names are strings; numeric types and object `task_refresh` values are not chips.
+Stale cached frontmatter never paints a policy the current source does not confirm.
+
 When local Tasks data is available, the right side shows Ready tasks living in the
 note and the cap that applies there, such as `2/5 ready`. Unknown data stays absent; a
-missing snapshot is never shown as zero. Areas can show an inbox pill and Projects can
-show a root pill, but cards do not infer or display inherited policy values.
+missing snapshot is never shown as zero. Areas can show an inbox pill when the inbox
+route API says the note is the inbox, and Projects can show a root pill, but cards do
+not infer inbox status from the filename or display inherited policy values.
 
-The shared Properties foot remains below the card. Its collapsed state is remembered
-per note for the current session. Collapsing an Area hides its summary and property
-chips/readout; a Project keeps its lifecycle line visible.
+The shared Properties foot remains below the card. `-` toggles that drawer and `+`
+opens the Property Editor; home cards do not register `==`. Its collapsed state is
+remembered per note for the current session. Collapsing an Area hides its summary and
+property chips/readout; a Project keeps its lifecycle line visible.
 
 ## Data and display rules
 
@@ -69,10 +79,10 @@ become homes based on their filenames. The untyped type notes, `bank.md`, `_temp
 `done/`, and `_conflicts/` are excluded.
 
 Painting uses the metadata cache, confirmed local Markdown bytes, the local home-hue
-resolver, and the synchronous Ready snapshot. It does not start a Bob process or write
-the vault. If the card cannot safely own its title or source range, the native title
-and heading remain available. Source mode, embeds, hover previews, canvas, print, and
-mobile use Obsidian's ordinary note presentation.
+resolver, the ledger type-hue API, and the synchronous Ready snapshot. It does not
+start a Bob process or write the vault. If the card cannot safely own its title or
+source range, the native title and heading remain available. Source mode, embeds,
+hover previews, canvas, print, and mobile use Obsidian's ordinary note presentation.
 
 For album and Record cards, see [Album Cards](albums.md) and
 [Record Card](record-card.md). For editing YAML properties, see the

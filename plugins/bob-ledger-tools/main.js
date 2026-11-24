@@ -180341,11 +180341,18 @@ function propertyEditorSettingsAllEntries(modal) {
 function propertyEditorSettingsGroups(modal, query = "", includeCollapsed = false) {
   const report = modal && modal.report;
   if (!propertyEditorSettingsSupported(report)) {
-    const rows = propertyEditorSettingsSourceEntries(modal).map((entry) => entry.row);
-    return propertyEditorGroupRows(rows).map((group) => ({
-      ...group,
-      rows: group.rows.filter((entry) => propertyEditorSelectionFilterMatches(entry.row, query)),
-    })).filter((group) => group.rows.length > 0);
+    const byGroup = new Map(PROPERTY_EDITOR_GROUPS.map((group) => [group, {
+      title: PROPERTY_EDITOR_GROUP_TITLES[group], rows: [],
+    }]));
+    for (const entry of propertyEditorSettingsSourceEntries(modal)) {
+      const group = propertyEditorGroupForRow(entry.row);
+      const model = byGroup.get(group);
+      if (model) model.rows.push({ ...entry, group });
+    }
+    return PROPERTY_EDITOR_GROUPS.map((group) => {
+      const model = byGroup.get(group);
+      return { group, ...model, rows: model.rows.filter((entry) => propertyEditorSelectionFilterMatches(entry.row, query)) };
+    }).filter((group) => group.rows.length > 0);
   }
   const entries = propertyEditorSettingsAllEntries(modal);
   const byGroup = new Map([
@@ -180502,7 +180509,6 @@ function propertyEditorSettingsSourceCopyIds(modal, entries) {
   for (const entry of entries) {
     const type = entry && (entry.entryType || entry.row?.propertyEntryType) || "source";
     if (type === "source") {
-      if (!propertyEditorCanMutate(entry.row)) return { ok: false, message: `“${entry.row.key}” cannot be copied as a property.`, hint: "Remove it from the selection." };
       ids.add(entry.id);
       continue;
     }
@@ -180836,6 +180842,7 @@ PropertyEditorModal.prototype.propertyEditorPerform = async function propertyEdi
         });
       } catch (_) { return false; }
     }
+    if (selected && selected.source === true && !this.selectedId) this.selectedId = selected.id;
   }
   return propertyEditorSettingsBasePerform.call(this, action, event);
 };

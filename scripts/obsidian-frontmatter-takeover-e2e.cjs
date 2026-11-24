@@ -287,6 +287,37 @@ async function run(args) {
   let scratch = "";
   let child = null;
   let client = null;
+  let fixtureWatch = null;
+  let fixtureWatchTimer = null;
+  const observeFixtureWatch = (stage) => {
+    if (!fixtureWatch) return;
+    if (stage) fixtureWatch.stage = stage;
+    let content = "";
+    let hash = null;
+    try {
+      content = fs.readFileSync(fixtureWatch.file, "utf8");
+      hash = sha256Text(content);
+    } catch (_) {}
+    if (hash !== fixtureWatch.current) {
+      let firstDifference = null;
+      if (hash && content !== fixtureWatch.expectedText) {
+        let offset = 0;
+        while (offset < content.length && offset < fixtureWatch.expectedText.length
+          && content[offset] === fixtureWatch.expectedText[offset]) offset += 1;
+        firstDifference = {
+          offset,
+          expected: fixtureWatch.expectedText.slice(Math.max(0, offset - 80), offset + 160),
+          actual: content.slice(Math.max(0, offset - 80), offset + 160),
+        };
+      }
+      fixtureWatch.transitions.push({
+        at: new Date().toISOString(), stage: fixtureWatch.stage,
+        from: fixtureWatch.current, to: hash, firstDifference,
+      });
+      fixtureWatch.current = hash;
+    }
+    report.fixtureWatch.final = hash;
+  };
   const check = (name, ok, detail = {}, mandatory = true) => {
     report.checks.push({
       name, surface: lib.surfaceOf(name), status: ok ? "pass" : "fail", mandatory,
@@ -295,11 +326,14 @@ async function run(args) {
     return ok;
   };
   const attempt = async (name, fn) => {
+    observeFixtureWatch("before:" + name);
     try {
       const result = await fn();
       check(name, Boolean(result && result.ok !== false && (result.ok === true || result.ok === undefined || result.failures === undefined || result.failures.length === 0)), result || {});
     } catch (error) {
       check(name, false, { error: String(error && error.stack || error).slice(0, 3000) });
+    } finally {
+      observeFixtureWatch("after:" + name);
     }
   };
 
@@ -346,6 +380,15 @@ async function run(args) {
     const names = Object.keys(notes).sort();
     report.fixtures = { names, expected: Object.fromEntries(names.map((name) => [name, sha256Text(notes[name])])), seeded: hashFixtures(vaultReal, names) };
     report.scratch = { root: scratch, vault: vaultReal, profile: profileDir };
+    fixtureWatch = {
+      file: path.join(vaultReal, P.day), expectedText: notes[P.day],
+      current: report.fixtures.expected[P.day], stage: "startup", transitions: [],
+    };
+    report.fixtureWatch = {
+      path: P.day, expected: fixtureWatch.current, transitions: [], final: fixtureWatch.current,
+    };
+    fixtureWatch.transitions = report.fixtureWatch.transitions;
+    fixtureWatchTimer = setInterval(() => observeFixtureWatch(), 100);
 
     const port = await shared.freePort();
     child = spawn(executable, [
@@ -1113,6 +1156,7 @@ async function run(args) {
     });
 
     const shotCard = async (label, notePath) => {
+      observeFixtureWatch("screenshots:" + label);
       for (const theme of ["light", "dark"]) {
         await shared.setTheme(client, theme);
         for (const [widthName, width] of [["narrow", 720], ["wide", 1400]]) {
@@ -1131,6 +1175,7 @@ async function run(args) {
     await shotCard("album", P.album);
     await shotCard("bank", P.bank);
     for (const theme of ["light", "dark"]) {
+      observeFixtureWatch("ordinary-add-screenshots:" + theme);
       await shared.setTheme(client, theme);
       for (const [widthName, width] of [["narrow", 720], ["wide", 1400]]) {
         await shared.setViewport(client, width, 1000);
@@ -1144,6 +1189,7 @@ async function run(args) {
     }
     await shared.setViewport(client, 1400, 1000);
     await shared.setTheme(client, "light");
+    observeFixtureWatch("fallback-source-day");
     await ctx.page.open(ctx.main, P.day, "source");
     await ctx.page.settle(200);
     await ctx.page.shot("fallback-source-day", ["source", "fallback", "light", "wide"]);
@@ -1211,6 +1257,11 @@ async function run(args) {
       try { child.kill("SIGTERM"); } catch (_) {}
       await sleep(500);
       try { if (child.exitCode == null) child.kill("SIGKILL"); } catch (_) {}
+    }
+    observeFixtureWatch("process-exit");
+    if (fixtureWatchTimer) {
+      clearInterval(fixtureWatchTimer);
+      fixtureWatchTimer = null;
     }
     try {
       fs.mkdirSync(path.dirname(reportPath), { recursive: true });

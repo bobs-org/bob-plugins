@@ -30,6 +30,7 @@ const MODE_STATE = {
 const { sleep, waitFor } = shared;
 const P = lib.PATHS;
 const VIM_PROBE_PATH = "2026/20261119.md";
+const STALE_CACHE_PROBE_PATH = "2026/20261118.md";
 
 function fail(message, code = 1) {
   process.stderr.write(String(message) + "\n");
@@ -770,10 +771,23 @@ async function run(args) {
       return { ok: true, probe };
     });
     await attempt("stale-cache-releases", async () => {
-      await ctx.page.open(ctx.main, P.day, "live");
+      // Keep the external cache edit/restore off the protected fixture. Obsidian
+      // can schedule a later MarkdownView.save after vault.modify, which
+      // reserializes YAML even when this probe restores the file and buffer.
+      const cacheProbeNote = notes[P.day]
+        .replaceAll("2026-11-20", "2026-11-18")
+        .replaceAll("20261120", "20261118")
+        .replace("# 2026-11-18 Fri", "# 2026-11-18 Wed");
+      const created = await ctx.page.ev(`(async () => {
+        if (app.vault.getAbstractFileByPath(${JSON.stringify(STALE_CACHE_PROBE_PATH)})) return false;
+        await app.vault.create(${JSON.stringify(STALE_CACHE_PROBE_PATH)}, ${JSON.stringify(cacheProbeNote)});
+        return true;
+      })()`);
+      if (!created) throw new Error("could not create disposable stale-cache probe note");
+      await ctx.page.open(ctx.main, STALE_CACHE_PROBE_PATH, "live");
       await ctx.page.waitOwned(ctx.main, "live", "stale setup");
       const staleProbe = await ctx.page.ev(`(() => {
-        const file = app.vault.getAbstractFileByPath(${JSON.stringify(P.day)});
+        const file = app.vault.getAbstractFileByPath(${JSON.stringify(STALE_CACHE_PROBE_PATH)});
         const metadataCache = app.metadataCache;
         const originalGetFileCache = metadataCache.getFileCache;
         const originalDescriptor = Object.getOwnPropertyDescriptor(metadataCache, "getFileCache");
@@ -786,7 +800,7 @@ async function run(args) {
           writable: true,
           value(target) {
             const current = originalGetFileCache.call(this, target);
-            if (target?.path === ${JSON.stringify(P.day)} && current?.frontmatter) {
+            if (target?.path === ${JSON.stringify(STALE_CACHE_PROBE_PATH)} && current?.frontmatter) {
               intercepted += 1;
               return {
                 ...current,
@@ -810,17 +824,17 @@ async function run(args) {
         throw new Error("stale cache view was not observed during ownership reconciliation: " + JSON.stringify(staleProbe));
       }
       const cacheProbe = "bob-frontmatter-takeover-refresh";
-      const summaryLine = /^summary: (.+)$/m.exec(notes[P.day]);
+      const summaryLine = /^summary: (.+)$/m.exec(cacheProbeNote);
       if (!summaryLine) throw new Error("day fixture has no summary property to probe");
       const originalSummary = summaryLine[1];
-      const changedNote = notes[P.day].replace(/^summary: .+$/m, `summary: ${cacheProbe}`);
+      const changedNote = cacheProbeNote.replace(/^summary: .+$/m, `summary: ${cacheProbe}`);
       await ctx.page.ev(`(async () => {
-        const file = app.vault.getAbstractFileByPath(${JSON.stringify(P.day)});
+        const file = app.vault.getAbstractFileByPath(${JSON.stringify(STALE_CACHE_PROBE_PATH)});
         await app.vault.modify(file, ${JSON.stringify(changedNote)});
         return true;
       })()`);
       await waitFor(client, `(() => {
-        const file = app.vault.getAbstractFileByPath(${JSON.stringify(P.day)});
+        const file = app.vault.getAbstractFileByPath(${JSON.stringify(STALE_CACHE_PROBE_PATH)});
         const cache = app.metadataCache.getFileCache(file);
         return Boolean(cache && cache.frontmatter
           && cache.frontmatter.type === ${JSON.stringify(expectedType)}
@@ -829,36 +843,36 @@ async function run(args) {
       await waitFor(client, `(() => {
         const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
         return Boolean(plugin
-          && plugin.intentionCardSourceCache?.get?.(${JSON.stringify(P.day)})?.source === ${JSON.stringify(changedNote)}
+          && plugin.intentionCardSourceCache?.get?.(${JSON.stringify(STALE_CACHE_PROBE_PATH)})?.source === ${JSON.stringify(changedNote)}
           && plugin.intentionCardRefreshTimer == null);
       })()`, Boolean, "changed source and completed card refresh", 10_000);
       await ctx.page.ev(`(async () => {
-        const file = app.vault.getAbstractFileByPath(${JSON.stringify(P.day)});
-        await app.vault.modify(file, ${JSON.stringify(notes[P.day])});
+        const file = app.vault.getAbstractFileByPath(${JSON.stringify(STALE_CACHE_PROBE_PATH)});
+        await app.vault.modify(file, ${JSON.stringify(cacheProbeNote)});
         return true;
       })()`);
       const bufferAfterVaultRestore = await ctx.page.ev(
         "window.__bobFrontmatterTakeover.docText(" + JSON.stringify(ctx.main) + ")",
       );
-      const bufferInitiallyRestored = bufferAfterVaultRestore === notes[P.day];
+      const bufferInitiallyRestored = bufferAfterVaultRestore === cacheProbeNote;
       if (!bufferInitiallyRestored) {
         await ctx.page.ev(`(() => {
           const leaf = app.workspace.getLeafById(${JSON.stringify(ctx.main)});
           const cm = leaf && leaf.view && leaf.view.editor && leaf.view.editor.cm;
           if (!cm) return false;
-          cm.dispatch({ changes: { from: 0, to: cm.state.doc.length, insert: ${JSON.stringify(notes[P.day])} } });
-          return cm.state.doc.toString() === ${JSON.stringify(notes[P.day])};
+          cm.dispatch({ changes: { from: 0, to: cm.state.doc.length, insert: ${JSON.stringify(cacheProbeNote)} } });
+          return cm.state.doc.toString() === ${JSON.stringify(cacheProbeNote)};
         })()`);
-        await waitFor(client, `window.__bobFrontmatterTakeover.docText(${JSON.stringify(ctx.main)}) === ${JSON.stringify(notes[P.day])}`,
+        await waitFor(client, `window.__bobFrontmatterTakeover.docText(${JSON.stringify(ctx.main)}) === ${JSON.stringify(cacheProbeNote)}`,
           Boolean, "day editor-buffer restoration after stale-cache probe", 10_000);
       }
       await ctx.page.ev(`(async () => {
-        const file = app.vault.getAbstractFileByPath(${JSON.stringify(P.day)});
-        await app.vault.modify(file, ${JSON.stringify(notes[P.day])});
+        const file = app.vault.getAbstractFileByPath(${JSON.stringify(STALE_CACHE_PROBE_PATH)});
+        await app.vault.modify(file, ${JSON.stringify(cacheProbeNote)});
         return true;
       })()`);
       await waitFor(client, `(() => {
-        const file = app.vault.getAbstractFileByPath(${JSON.stringify(P.day)});
+        const file = app.vault.getAbstractFileByPath(${JSON.stringify(STALE_CACHE_PROBE_PATH)});
         const cache = app.metadataCache.getFileCache(file);
         const frontmatter = cache && cache.frontmatter;
         return {
@@ -872,7 +886,7 @@ async function run(args) {
       await waitFor(client, `(() => {
         const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
         return Boolean(plugin
-          && plugin.intentionCardSourceCache?.get?.(${JSON.stringify(P.day)})?.source === ${JSON.stringify(notes[P.day])}
+          && plugin.intentionCardSourceCache?.get?.(${JSON.stringify(STALE_CACHE_PROBE_PATH)})?.source === ${JSON.stringify(cacheProbeNote)}
           && plugin.intentionCardRefreshTimer == null);
       })()`, Boolean, "restored source and completed card refresh", 10_000);
       await ctx.page.settle(1200);
@@ -880,15 +894,23 @@ async function run(args) {
         "window.__bobFrontmatterTakeover.docText(" + JSON.stringify(ctx.main) + ")",
       );
       const restoredBytes = await ctx.page.ev(
-        "window.__bobFrontmatterTakeover.readNote(" + JSON.stringify(P.day) + ")",
+        "window.__bobFrontmatterTakeover.readNote(" + JSON.stringify(STALE_CACHE_PROBE_PATH) + ")",
       );
-      if (restoredBuffer !== notes[P.day] || restoredBytes !== notes[P.day]) {
+      if (restoredBuffer !== cacheProbeNote || restoredBytes !== cacheProbeNote) {
         throw new Error("stale-cache fixture teardown did not settle: " + JSON.stringify({
-          bufferRestored: restoredBuffer === notes[P.day],
-          bytesRestored: restoredBytes === notes[P.day],
+          bufferRestored: restoredBuffer === cacheProbeNote,
+          bytesRestored: restoredBytes === cacheProbeNote,
         }));
       }
       const restored = await ctx.page.waitOwned(ctx.main, "live", "stale restore");
+      await ctx.page.open(ctx.main, P.day, "live");
+      await ctx.page.settle(400);
+      const deleted = await ctx.page.ev(`(async () => {
+        const file = app.vault.getAbstractFileByPath(${JSON.stringify(STALE_CACHE_PROBE_PATH)});
+        if (file) await app.vault.delete(file);
+        return !app.vault.getAbstractFileByPath(${JSON.stringify(STALE_CACHE_PROBE_PATH)});
+      })()`);
+      if (!deleted) throw new Error("disposable stale-cache probe note was not removed");
       return {
         ok: true,
         staleProbe,

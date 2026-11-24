@@ -180127,16 +180127,46 @@ function propertyEditorSettingsContractShape(contract, noteKind) {
   return contract.prj === undefined || contract.prj === null;
 }
 
+function propertyEditorSettingsPropertiesMatch(report) {
+  if (!report || !Array.isArray(report.properties) || !propertyEditorSettingsObject(report.contract)) return false;
+  for (const setting of report.contract.settings || []) {
+    const matching = report.properties.filter((row) => row && setting.keys.includes(row.key));
+    if (new Set(matching.map((row) => row.key)).size !== matching.length) return false;
+    if (setting.declared !== (matching.length > 0)) return false;
+    if (!setting.declared) continue;
+    let expected;
+    if (setting.id === "clock") {
+      expected = {};
+      for (const key of setting.keys) {
+        const row = matching.find((item) => item.key === key);
+        if (row) expected[key] = row.value;
+      }
+    } else {
+      const row = setting.keys.map((key) => matching.find((item) => item.key === key)).find(Boolean);
+      if (!row) return false;
+      expected = row.value;
+    }
+    try {
+      if (JSON.stringify(setting.value) !== JSON.stringify(expected)) return false;
+    } catch (_) { return false; }
+  }
+  return true;
+}
+
 function propertyEditorSettingsSupported(report) {
   return Boolean(report && typeof report === "object"
+    && report.ok === true
+    && report.frontmatter && ["ok", "absent"].includes(report.frontmatter.state)
     && typeof propertyHasCapability === "function" && propertyHasCapability(report)
     && Array.isArray(report.capabilities) && report.capabilities.includes("props_contract_v1")
-    && propertyEditorSettingsContractShape(report.contract, report.note_kind));
+    && propertyEditorSettingsContractShape(report.contract, report.note_kind)
+    && propertyEditorSettingsPropertiesMatch(report));
 }
 
 function propertyEditorSettingsFallbackHint(report) {
   if (!report || !["area", "project", "bank"].includes(report.note_kind)) return "";
   if (typeof propertyHasCapability !== "function" || !propertyHasCapability(report)) return "";
+  if (!report.frontmatter || !["ok", "absent"].includes(report.frontmatter.state)) return "";
   return propertyEditorSettingsSupported(report) ? "" : "Update bob for typed settings.";
 }
 
@@ -180173,7 +180203,9 @@ function propertyEditorSettingsEntry(setting, report) {
     duplicate: false, opaque: false, settingId: setting.id, settingKeys: setting.keys.slice(),
     settingDeclared: setting.declared, settingValue: propertyCloneJson(setting.value),
     effectiveValue: propertyCloneJson(setting.effective.value), effectiveLabel: effective,
-    help: setting.help, settingDisabled: setting.disabled, issues: setting.issues || [],
+    help: setting.help, settingDisabled: setting.disabled,
+    disabledReason: setting.disabled ? `${setting.label} is disabled for this note.` : "",
+    issues: setting.issues || [],
     warning, isGhost: setting.declared !== true, propertyEntryType: "setting",
   };
   if (warning) row.value += ` · ${warning}`;
@@ -180223,6 +180255,62 @@ function propertyEditorSettingsManagedRow(row, noteKind) {
     || noteKind === "project" && row.key === "scheduled";
 }
 
+function propertyEditorSettingsArchiveTarget(row) {
+  const value = row && row.value;
+  const values = Array.isArray(value) ? value : [value];
+  for (const item of values) {
+    if (typeof item !== "string") continue;
+    const match = item.trim().match(/^\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]$/);
+    if (match && match[1].trim()) return match[1].trim();
+  }
+  return "";
+}
+
+async function propertyEditorSettingsProjectLineNumber(modal, lineText) {
+  if (!modal || typeof lineText !== "string" || !lineText) return 0;
+  const vault = modal.app && modal.app.vault;
+  if (!vault) return 0;
+  let file = null;
+  try { file = vault.getAbstractFileByPath?.(modal.filePath) || { path: modal.filePath }; }
+  catch (_) { file = { path: modal.filePath }; }
+  let source = null;
+  try {
+    if (typeof vault.cachedRead === "function") source = await vault.cachedRead(file);
+    else if (typeof vault.read === "function") source = await vault.read(file);
+  } catch (_) { source = null; }
+  if (typeof source !== "string") return 0;
+  const index = source.split("\n").findIndex((line) => line.replace(/\r$/, "") === lineText);
+  return index < 0 ? 0 : index + 1;
+}
+
+function propertyEditorSettingsDeclaredSource(modal, entry) {
+  if (!modal || !entry || entry.entryType !== "setting" || entry.row.settingDeclared !== true) return null;
+  const rows = Array.isArray(modal.report && modal.report.properties) ? modal.report.properties : [];
+  for (const key of entry.row.settingKeys || []) {
+    const index = rows.findIndex((row) => row && row.key === key);
+    if (index < 0) continue;
+    const row = rows[index];
+    const ordinal = rows.slice(0, index).filter((candidate) => candidate && candidate.key === key).length;
+    return { row, selection: { key, ordinal, line: Number.isInteger(row.line) ? row.line : null } };
+  }
+  return null;
+}
+
+async function propertyEditorSettingsYamlTarget(modal, entry) {
+  if (!entry || entry.source === true || entry.entryType === "source") return null;
+  if (entry.entryType === "setting") {
+    const source = propertyEditorSettingsDeclaredSource(modal, entry);
+    return source
+      ? { key: source.row.key, selection: source.selection, line: source.selection.line || 0 }
+      : { key: "", selection: { key: "", ordinal: 0, line: null }, line: 0 };
+  }
+  if (entry.entryType === "project-task" || entry.entryType === "project-status") {
+    const line = await propertyEditorSettingsProjectLineNumber(modal, entry.row.projectTaskLine);
+    return { key: "", selection: { key: "", ordinal: 0, line: null }, line };
+  }
+  return { key: "", selection: { key: "", ordinal: 0, line: null }, line: 0 };
+}
+
 function propertyEditorSettingsAllEntries(modal) {
   const report = modal && modal.report;
   const base = propertyEditorSettingsSourceEntries(modal);
@@ -180239,9 +180327,12 @@ function propertyEditorSettingsAllEntries(modal) {
       row = { ...row, propertyEntryType: "project-status", projectTaskLine: report.contract.prj.line };
       entry = { ...entry, row, entryType: "project-status", group: "identity" };
       groups.identity.push(entry);
-    } else if (propertyEditorRoleOf(row) === "identity") groups.identity.push(entry);
-    else if (propertyEditorSettingsManagedRow(row, report.note_kind)) groups.managed.push(entry);
-    else if (propertyEditorRoleOf(row) === "card") groups.card.push(entry);
+    } else if (propertyEditorRoleOf(row) === "identity") groups.identity.push({ ...entry, group: "identity" });
+    else if (propertyEditorSettingsManagedRow(row, report.note_kind)) {
+      if (row.key === "done_tasks") row = { ...row, archiveTarget: propertyEditorSettingsArchiveTarget(row) };
+      groups.managed.push({ ...entry, row, group: "managed" });
+    }
+    else if (propertyEditorRoleOf(row) === "card") groups.card.push({ ...entry, group: "card" });
     else groups.properties.push(entry);
   }
   return [...settings, ...project, ...groups.properties, ...groups.card, ...groups.identity, ...groups.managed];
@@ -180291,13 +180382,20 @@ function propertyEditorSettingsFindEntry(modal, id) {
 
 function propertyEditorSettingsActionForRow(row) {
   const kind = row && row.propertyEntryType;
-  if (kind === "setting") return {
-    action: "setting", settingId: row.settingId, declared: row.settingDeclared === true,
-    reason: row.help || "Setting actions are unavailable.",
-  };
+  if (kind === "setting") return row.settingDisabled === true
+    ? { action: "locked", reason: row.disabledReason || `${row.key} is disabled for this note.`, key: row.key }
+    : {
+      action: "setting", settingId: row.settingId, declared: row.settingDeclared === true,
+      reason: row.help || "Setting actions are unavailable.",
+    };
   if (kind === "project-task" || kind === "project-status") {
     if (!row.projectTaskLine) return { action: "locked", reason: "No current ^prj task is available.", key: row.key };
     return { action: "project-task", key: row.key, line: row.projectTaskLine, field: row.projectTaskField || "status" };
+  }
+  if (row && row.key === "done_tasks") {
+    return row.archiveTarget
+      ? { action: "archive", target: row.archiveTarget, key: row.key }
+      : { action: "locked", reason: "The archive link is unavailable.", key: row.key };
   }
   return null;
 }
@@ -180322,7 +180420,6 @@ async function propertyEditorSettingsDelete(modal) {
   if (!modal || modal.closed) return;
   if (modal.pendingApply) return modal.propertyEditorRefuseWhileSaving?.();
   const visible = propertyEditorSelectionFilterEntries(modal);
-  const visibleIds = new Set(visible.map((entry) => entry.id));
   const marks = propertyEditorSelectionFilterMarkedIds(modal);
   const selected = marks.size
     ? visible.filter((entry) => marks.has(entry.id))
@@ -180333,6 +180430,9 @@ async function propertyEditorSettingsDelete(modal) {
   let ghostCount = 0;
   for (const entry of selected) {
     if (entry.entryType === "setting") {
+      if (entry.row.settingDisabled === true) {
+        return propertyEditorSettingsDeleteRefusal(modal, entry.row.disabledReason || `${entry.row.key} is disabled for this note.`);
+      }
       if (entry.row.settingDeclared !== true) { ghostCount += 1; continue; }
       if (entry.row.settingId === "parent") {
         return propertyEditorSettingsDeleteRefusal(modal, "Lives under is required; Bob will not clear this setting.");
@@ -180360,6 +180460,10 @@ async function propertyEditorSettingsDelete(modal) {
     modal.announce = message;
     modal.paintPropertyEditor();
     return;
+  }
+  if (ops.some((op) => op.op === "setting.clear")
+    && !(typeof propertyShowAllowsWrite === "function" && propertyShowAllowsWrite(modal.report))) {
+    return propertyEditorSettingsDeleteRefusal(modal, "Bob cannot safely clear settings from this report — refresh or open YAML to repair the note.");
   }
   const session = modal.editorEnsureSession();
   if (!session) return propertyEditorSettingsNotice(modal, "unavailable", "Property editing is unavailable.");
@@ -180390,7 +180494,6 @@ async function propertyEditorSettingsDelete(modal) {
     modal.status = { kind: "refusal", text: refusal.message };
   }
   modal.paintPropertyEditor();
-  void visibleIds;
 }
 
 function propertyEditorSettingsSourceCopyIds(modal, entries) {
@@ -180439,9 +180542,16 @@ function propertyEditorSettingsGroupToggle(doc, section, model, modal) {
       const managedIds = new Set(propertyEditorSettingsAllEntries(modal).filter((entry) => entry.group === "managed").map((entry) => entry.id));
       propertyEditorSelectionFilterClearMarks(modal);
       if (managedIds.has(modal.selectedId)) {
+        modal.propertyEditorManagedReturnSelectionId = modal.selectedId;
         const first = propertyEditorSettingsVisibleEntries(modal)[0];
         modal.selectedId = first ? first.id : "";
       }
+    } else {
+      const returning = modal.propertyEditorManagedReturnSelectionId;
+      if (returning && propertyEditorSettingsVisibleEntries(modal).some((entry) => entry.id === returning)) {
+        modal.selectedId = returning;
+      }
+      modal.propertyEditorManagedReturnSelectionId = "";
     }
     modal.announce = collapse ? "Bob-managed properties collapsed." : "Bob-managed properties expanded.";
     modal.paintPropertyEditor();
@@ -180548,19 +180658,49 @@ propertyEditorPaintAll = function propertyEditorPaintAllWithSettings(host, optio
   }
 };
 
+const propertyEditorDeleteBeforeSettings = PropertyEditorModal.prototype.propertyEditorDelete;
+const propertyEditorSettingsBaseClipboardCopy = PropertyEditorModal.prototype.propertyEditorClipboardCopy;
 const propertyEditorSettingsBaseActivate = PropertyEditorModal.prototype.propertyEditorActivate;
 Object.assign(PropertyEditorModal.prototype, {
   propertyEditorResolveSettingStage(entry) {
     return { ok: false, message: `${entry?.row?.key || "Setting"} controls are not available yet.` };
   },
-  propertyEditorResolveProjectTask(entry) {
-    return { ok: false, message: entry?.row?.projectTaskLine
-      ? "Project task navigation is not available yet."
-      : "No current ^prj task is available." };
+  async propertyEditorResolveProjectTask(entry) {
+    const taskLine = entry?.row?.projectTaskLine;
+    if (!taskLine) return { ok: false, message: "No current ^prj task is available." };
+    const line = await propertyEditorSettingsProjectLineNumber(this, taskLine);
+    if (!line) return { ok: false, message: "The current ^prj task could not be found in this note." };
+    const plugin = this.propertyPlugin;
+    if (!plugin || typeof plugin.propertyEditorYamlJump !== "function") {
+      return { ok: false, message: "Project task navigation is unavailable." };
+    }
+    let jumped;
+    try { jumped = await plugin.propertyEditorYamlJump(this.filePath, line); }
+    catch (_) { jumped = null; }
+    if (!jumped || jumped.ok !== true) return { ok: false, message: "The current ^prj task could not be opened." };
+    this.close();
+    return { ok: true, line };
   },
   async propertyEditorActivate(entry) {
     const row = entry && entry.row;
     const type = entry && (entry.entryType || row?.propertyEntryType);
+    if (row?.key === "done_tasks") {
+      const target = propertyEditorSettingsArchiveTarget(row);
+      const workspace = this.app?.workspace;
+      if (!target || typeof workspace?.openLinkText !== "function") {
+        this.announce = target ? "Archive navigation is unavailable." : "The archive link is unavailable.";
+        this.status = { kind: "ready", text: this.announce };
+        this.refusal = null;
+        return this.paintPropertyEditor();
+      }
+      try { await workspace.openLinkText(target, this.filePath, false); }
+      catch (_) {
+        this.announce = "The archive link could not be opened.";
+        this.status = { kind: "ready", text: this.announce };
+        return this.paintPropertyEditor();
+      }
+      return;
+    }
     if (type === "setting") {
       const resolved = this.propertyEditorResolveSettingStage(entry);
       if (!resolved || resolved.ok !== true) {
@@ -180579,7 +180719,7 @@ Object.assign(PropertyEditorModal.prototype, {
       return resolved;
     }
     if (type === "project-task" || type === "project-status") {
-      const resolved = this.propertyEditorResolveProjectTask(entry);
+      const resolved = await this.propertyEditorResolveProjectTask(entry);
       if (!resolved || resolved.ok !== true) {
         this.announce = resolved?.message || "Project task navigation is not available yet.";
         this.status = { kind: "ready", text: this.announce };
@@ -180607,6 +180747,9 @@ Object.assign(PropertyEditorModal.prototype, {
     const selected = marked.size
       ? visible.filter((entry) => marked.has(entry.id))
       : visible.filter((entry) => entry.id === this.selectedId);
+    if (marked.size && selected.length !== marked.size) {
+      return this.propertyEditorClipboardNotice("ineligible-selection", "Some marked rows are hidden; reveal them or clear the selection before copying.");
+    }
     const requested = propertyEditorSettingsSourceCopyIds(this, selected);
     if (!requested.ok) return this.propertyEditorClipboardNotice("ineligible-selection", requested.message, requested.hint);
     if (!requested.ids.size) return this.propertyEditorClipboardNotice("empty-selection", "Select a declared property to copy.");
@@ -180625,9 +180768,6 @@ Object.assign(PropertyEditorModal.prototype, {
     }
   },
 });
-
-const propertyEditorDeleteBeforeSettings = PropertyEditorModal.prototype.propertyEditorDelete;
-const propertyEditorSettingsBaseClipboardCopy = PropertyEditorModal.prototype.propertyEditorClipboardCopy;
 
 const propertyEditorSettingsBaseRename = PropertyEditorModal.prototype.propertyEditorStartRename;
 PropertyEditorModal.prototype.propertyEditorStartRename = function propertyEditorStartRenameSettingsGuard() {
@@ -180676,6 +180816,28 @@ propertyEditorSourceMovePlan = function propertyEditorSourceMovePlanOnlySourceEn
   const source = Array.isArray(entries) ? entries.filter((entry) =>
     !entry.entryType || entry.entryType === "source" || entry.source === true) : [];
   return propertyEditorSettingsBaseMovePlan(source, selectedId, direction);
+};
+
+const propertyEditorSettingsBasePerform = PropertyEditorModal.prototype.propertyEditorPerform;
+PropertyEditorModal.prototype.propertyEditorPerform = async function propertyEditorPerformSettingsYaml(action, event) {
+  if (action === "yaml") {
+    if (this.pendingApply === true) return this.propertyEditorRefuseWhileSaving?.();
+    const selected = this.editorSelected();
+    const target = await propertyEditorSettingsYamlTarget(this, selected);
+    if (target) {
+      if (typeof this.onYamlEscape !== "function") {
+        return propertyEditorSettingsNotice(this, "unavailable", "YAML navigation is unavailable.");
+      }
+      const filePath = this.filePath;
+      try { this.close(); } catch (_) {}
+      try {
+        return await this.onYamlEscape({
+          ...target, path: filePath, filePath, modal: this,
+        });
+      } catch (_) { return false; }
+    }
+  }
+  return propertyEditorSettingsBasePerform.call(this, action, event);
 };
 
 // ---- src/293-keep-inbox-render.js ----
@@ -187556,6 +187718,7 @@ try {
       PROPERTY_EDITOR_SETTING_KEYS,
       propertyEditorSettingsContractShape,
       propertyEditorSettingsSupported,
+      propertyEditorSettingsPropertiesMatch,
       propertyEditorSettingsFallbackHint,
       propertyEditorSettingsSettingShape,
       propertyEditorSettingsPrjShape,
@@ -187565,6 +187728,10 @@ try {
       propertyEditorSettingsSourceEntries,
       propertyEditorSettingsCoveredKeys,
       propertyEditorSettingsManagedRow,
+      propertyEditorSettingsArchiveTarget,
+      propertyEditorSettingsProjectLineNumber,
+      propertyEditorSettingsDeclaredSource,
+      propertyEditorSettingsYamlTarget,
       propertyEditorSettingsAllEntries,
       propertyEditorSettingsGroups,
       propertyEditorSettingsVisibleEntries,
@@ -187572,6 +187739,7 @@ try {
       propertyEditorSettingsActionForRow,
       propertyEditorSettingsDelete,
       propertyEditorSettingsSourceCopyIds,
+      propertyEditorSettingsGroupToggle,
       propertyEditorCreateEl,
       propertyEditorSetText,
       propertyEditorRowText,

@@ -278,12 +278,12 @@ function propertyEditorSettingsAllEntries(modal) {
       row = { ...row, propertyEntryType: "project-status", projectTaskLine: report.contract.prj.line };
       entry = { ...entry, row, entryType: "project-status", group: "identity" };
       groups.identity.push(entry);
-    } else if (propertyEditorRoleOf(row) === "identity") groups.identity.push(entry);
+    } else if (propertyEditorRoleOf(row) === "identity") groups.identity.push({ ...entry, group: "identity" });
     else if (propertyEditorSettingsManagedRow(row, report.note_kind)) {
       if (row.key === "done_tasks") row = { ...row, archiveTarget: propertyEditorSettingsArchiveTarget(row) };
-      groups.managed.push({ ...entry, row });
+      groups.managed.push({ ...entry, row, group: "managed" });
     }
-    else if (propertyEditorRoleOf(row) === "card") groups.card.push(entry);
+    else if (propertyEditorRoleOf(row) === "card") groups.card.push({ ...entry, group: "card" });
     else groups.properties.push(entry);
   }
   return [...settings, ...project, ...groups.properties, ...groups.card, ...groups.identity, ...groups.managed];
@@ -670,7 +670,7 @@ Object.assign(PropertyEditorModal.prototype, {
       return resolved;
     }
     if (type === "project-task" || type === "project-status") {
-      const resolved = this.propertyEditorResolveProjectTask(entry);
+      const resolved = await this.propertyEditorResolveProjectTask(entry);
       if (!resolved || resolved.ok !== true) {
         this.announce = resolved?.message || "Project task navigation is not available yet.";
         this.status = { kind: "ready", text: this.announce };

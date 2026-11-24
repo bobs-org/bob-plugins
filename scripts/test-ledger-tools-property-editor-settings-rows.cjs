@@ -155,7 +155,7 @@ test("show and update decoders retain contract, effects, and warnings without ma
 test("area settings use report order and stable IDs; source rows stay in their own groups", () => {
   const show = report("area");
   const modal = modalFor(show);
-  const groups = H.propertyEditorSettingsGroups(modal);
+  const groups = H.propertyEditorSettingsGroups(modal, "", true);
   assert.deepEqual(groups.map((group) => group.group), ["settings", "properties", "identity", "managed"]);
   assert.equal(groups[0].title, "AREA SETTINGS");
   assert.deepEqual(groups[0].rows.map((entry) => entry.row.settingId), AREA_IDS);
@@ -409,7 +409,7 @@ test("clear maps a declared setting to one setting.clear and a ghost to a no-op"
 test("a batch clears settings and unsets loose properties once, while protected rows refuse the whole batch", async () => {
   const show = report("area");
   const modal = modalFor(show);
-  modal.propertyEditorManualMarks = new Set(["setting::color", "created::7"]);
+  modal.propertyEditorManualMarks = new Set(["setting::summary", "created::7"]);
   modal.propertyEditorRangeMarks = new Set();
   let batches = 0;
   let ops = null;
@@ -419,7 +419,7 @@ test("a batch clears settings and unsets loose properties once, while protected 
   modal.propertyEditorReconcile = () => {};
   await H.propertyEditorSettingsDelete(modal);
   assert.equal(batches, 1);
-  assert.deepEqual(ops, [{ op: "setting.clear", setting: "color" }, { op: "prop.unset", key: "created" }]);
+  assert.deepEqual(ops, [{ op: "setting.clear", setting: "summary" }, { op: "prop.unset", key: "created" }]);
 
   const protectedModal = modalFor(show);
   protectedModal.propertyEditorManualMarks = new Set(["created::7", "type::12"]);

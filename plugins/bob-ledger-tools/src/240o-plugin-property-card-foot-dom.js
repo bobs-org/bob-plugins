@@ -148,7 +148,9 @@ function propertyCardFootRowText(row) {
 }
 
 // Lint summary for the foot chip. Causes: invalid created, unparseable or
-// unclosed frontmatter, duplicate keys. The chip never opens the drawer.
+// unclosed frontmatter, duplicate keys, and (when the caller carries them)
+// report-backed contract issues. The chip never opens the drawer; with a
+// first setting and an opener it jumps to =+ instead of toggling anything.
 function propertyCardFootLint(spec = {}) {
   const kinds = [];
   const inventory = spec.inventory && typeof spec.inventory === "object" ? spec.inventory : null;
@@ -163,10 +165,35 @@ function propertyCardFootLint(spec = {}) {
       }
     }
   }
+  const contract = [];
+  if (Array.isArray(spec.contractIssues)) {
+    for (const issue of spec.contractIssues) {
+      if (!issue || typeof issue !== "object") continue;
+      const message = typeof issue.message === "string" ? issue.message.trim() : "";
+      const code = typeof issue.code === "string" ? issue.code.trim() : "";
+      if (message) contract.push({ code, message });
+    }
+  }
+  for (const issue of contract) kinds.push(issue.message);
+  let firstSetting = "";
+  if (contract.length) {
+    try {
+      if (typeof spec.firstSetting === "string" && spec.firstSetting.trim()) {
+        firstSetting = spec.firstSetting.trim();
+      } else if (Array.isArray(spec.contractIssues)) {
+        const named = spec.contractIssues.find((issue) => issue && typeof issue.setting === "string" && issue.setting.trim());
+        firstSetting = named ? named.setting.trim() : "";
+      }
+    } catch (_) {
+      firstSetting = "";
+    }
+  }
   const count = kinds.length;
   return {
     count,
     kinds,
+    contract: contract.length,
+    firstSetting,
     tooltip: count ? `Properties need attention: ${kinds.join("; ")}` : "",
   };
 }
@@ -553,12 +580,35 @@ function propertyCardFootBuildEl(doc, spec = {}) {
     });
     foot.appendChild(disclosure);
 
-    const lint = propertyCardFootLint({ inventory, stamp });
+    const lint = propertyCardFootLint({
+      inventory,
+      stamp,
+      contractIssues: Array.isArray(options.contractIssues) ? options.contractIssues : [],
+      firstSetting: typeof options.firstSetting === "string" ? options.firstSetting : "",
+    });
     if (lint.count > 0) {
-      const chip = propertyCardKitSpan(doc, "bob-property-card-foot-lint-chip", `⚠ ${lint.count}`);
+      // Feature-detected =+ jump: only when the caller carries a first
+      // setting and an opener. Otherwise the chip stays inert text and
+      // never opens the drawer by itself.
+      const opener = lint.firstSetting && typeof handlers?.onOpenSetting === "function"
+        ? handlers.onOpenSetting
+        : null;
+      const chip = opener
+        ? propertyCardKitEl(doc, "button", "bob-property-card-foot-lint-chip")
+        : propertyCardKitSpan(doc, "bob-property-card-foot-lint-chip", `⚠ ${lint.count}`);
+      if (opener) {
+        chip.setAttribute("type", "button");
+        propertyCardKitAppendText(doc, chip, `⚠ ${lint.count}`);
+        chip.setAttribute("aria-label", `${lint.tooltip} — open Settings`);
+        chip.addEventListener?.("click", (event) => {
+          try { event?.preventDefault?.(); } catch (_) {}
+          try { opener(lint.firstSetting); } catch (_) {}
+        });
+      } else {
+        chip.setAttribute("role", "status");
+      }
       chip.setAttribute("title", lint.tooltip);
-      chip.setAttribute("aria-label", lint.tooltip);
-      chip.setAttribute("role", "status");
+      if (!chip.getAttribute("aria-label")) chip.setAttribute("aria-label", lint.tooltip);
       foot.appendChild(chip);
     }
 

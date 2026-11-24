@@ -98,9 +98,45 @@ class BobLedgerToolsHomeCardFootMixin {
     }
   }
 
+  homeCardFootContract(model) {
+    try {
+      const contract = model && typeof model === "object" && model.contract
+        && typeof model.contract === "object" ? model.contract : null;
+      const issues = contract && Array.isArray(contract.issues) ? contract.issues : [];
+      const clean = [];
+      for (const issue of issues) {
+        if (!issue || typeof issue !== "object") continue;
+        const code = typeof issue.code === "string" ? issue.code.trim() : "";
+        const message = typeof issue.message === "string" ? issue.message.trim() : "";
+        if (!code || !message) continue;
+        clean.push({
+          code,
+          severity: typeof issue.severity === "string" && issue.severity ? issue.severity : "warning",
+          message,
+          setting: typeof issue.setting === "string" ? issue.setting : "",
+        });
+      }
+      if (!clean.length) return null;
+      let firstSetting = "";
+      try {
+        firstSetting = typeof contract.firstSetting === "string" ? contract.firstSetting : "";
+        if (!firstSetting) {
+          const named = clean.find((issue) => issue.setting);
+          firstSetting = named ? named.setting : "";
+        }
+      } catch (_) {
+        firstSetting = "";
+      }
+      return { issues: clean, firstSetting };
+    } catch (_) {
+      return null;
+    }
+  }
+
   // One foot computation per paint: signature, mount, and drawer share it.
   // where comes from the pure model so the drawer never claims a field the
   // card does not paint; managed folds the five home housekeeping keys.
+  // contractIssues carries the report row's setting lint for the kit chip.
   homeCardFootSpec(path, model) {
     const filePath = homeCardPath(path);
     const frontmatter = this.homeCardFrontmatter(filePath);
@@ -114,6 +150,8 @@ class BobLedgerToolsHomeCardFootMixin {
     if (!managed) {
       try { managed = homeCardManagedMap(); } catch (_) { managed = {}; }
     }
+    let contract = null;
+    try { contract = this.homeCardFootContract(model); } catch (_) { contract = null; }
     return propertyCardFootAdapterSpec({
       path: filePath,
       kind: (model && model.kind) || "",
@@ -123,6 +161,8 @@ class BobLedgerToolsHomeCardFootMixin {
       nested: {},
       legacy: {},
       managed,
+      contractIssues: contract ? contract.issues : [],
+      firstSetting: contract ? contract.firstSetting : "",
     });
   }
 
@@ -147,6 +187,7 @@ class BobLedgerToolsHomeCardFootMixin {
       jumpYaml: (key, line) => { void this.homeCardJumpYaml(path, key, line); },
       jumpRecovery: () => { void this.homeCardJumpYaml(path, "", 1); },
       openPath: (target, event) => { void this.homeCardOpenPath(target, path, event); },
+      openSetting: (setting) => { void this.homeCardOpenSetting(path, setting || undefined); },
     });
   }
 

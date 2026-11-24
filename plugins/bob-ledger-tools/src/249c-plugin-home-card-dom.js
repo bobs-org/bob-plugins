@@ -110,7 +110,48 @@ function homeCardDomAppendCollapse(slot, doc, model, options) {
   slot.appendChild(button);
 }
 
-function homeCardDomSubtitle(doc, model) {
+function homeCardDomReasonLink(doc, options, link) {
+  const text = String((link && link.text) || "").trim();
+  if (!text) return null;
+  const open = options && options.onLink;
+  const live = typeof open === "function" && String(link.target || "").trim();
+  const node = homeCardDomEl(doc, live ? "a" : "span", "bob-home-card-reason-link internal-link");
+  homeCardDomText(doc, node, text);
+  if (live) {
+    node.setAttribute("href", link.target);
+    node.setAttribute("data-href", link.target);
+    if (typeof node.addEventListener === "function") {
+      node.addEventListener("click", (event) => {
+        try { event?.preventDefault?.(); } catch (_) {}
+        try { open(link.target, event); } catch (_) {}
+      });
+    }
+  }
+  return node;
+}
+
+function homeCardDomReason(doc, model, options, row) {
+  const reason = model && model.subtitle && model.subtitle.reason;
+  const links = reason && Array.isArray(reason.links)
+    ? reason.links.filter((link) => link && String(link.text || "").trim())
+    : [];
+  if (!links.length) return false;
+  const detail = homeCardDomEl(doc, "span", "bob-home-card-lifecycle-detail");
+  const lead = String(reason.lead || "").trim();
+  homeCardDomText(doc, detail, lead ? `· ${lead} ` : "· ");
+  links.forEach((link, index) => {
+    if (index > 0) homeCardDomText(doc, detail, ", ");
+    const node = homeCardDomReasonLink(doc, options, link);
+    if (node) detail.appendChild(node);
+    else homeCardDomText(doc, detail, String(link.text || "").trim());
+  });
+  const tail = String(reason.tail || "").trim();
+  if (tail) homeCardDomText(doc, detail, ` ${tail}`);
+  row.appendChild(detail);
+  return true;
+}
+
+function homeCardDomSubtitle(doc, model, options) {
   const subtitle = model && model.subtitle;
   if (!subtitle || subtitle.pending || !subtitle.text) return null;
   const row = homeCardDomEl(doc, "div", subtitle.kind === "summary"
@@ -126,7 +167,7 @@ function homeCardDomSubtitle(doc, model) {
     const word = homeCardDomEl(doc, "span", "bob-home-card-lifecycle-word");
     homeCardDomText(doc, word, subtitle.word || subtitle.text);
     row.appendChild(word);
-    if (subtitle.detail) {
+    if (!homeCardDomReason(doc, model, options, row) && subtitle.detail) {
       const detail = homeCardDomEl(doc, "span", "bob-home-card-lifecycle-detail");
       homeCardDomText(doc, detail, subtitle.detail);
       row.appendChild(detail);
@@ -138,10 +179,21 @@ function homeCardDomSubtitle(doc, model) {
   return row;
 }
 
+function homeCardDomReportReadout(doc, text, tooltip, key) {
+  const node = homeCardDomEl(doc, "span", "bob-home-card-report");
+  if (key) node.setAttribute("data-home-report", key);
+  if (tooltip) node.setAttribute("title", tooltip);
+  homeCardDomText(doc, node, text);
+  return node;
+}
+
 function homeCardDomMeta(doc, model, options) {
   const chips = Array.isArray(model.chips) ? model.chips : [];
   const ready = model.ready;
-  if (!chips.length && !ready) return null;
+  const report = model.report && typeof model.report === "object" ? model.report : null;
+  const open = report && Number.isInteger(report.open) && report.open >= 0 ? report.open : null;
+  const today = report && Number.isInteger(report.today) && report.today >= 0 ? report.today : null;
+  if (!chips.length && !ready && open == null && today == null) return null;
   const row = homeCardDomEl(doc, "div", HOME_CARD_META_CLASS);
   const cluster = homeCardDomEl(doc, "div", "bob-home-card-chips");
   for (const chip of chips) {
@@ -174,6 +226,18 @@ function homeCardDomMeta(doc, model, options) {
     if (ready.tooltip) readout.setAttribute("title", ready.tooltip);
     homeCardDomText(doc, readout, ready.text);
     row.appendChild(readout);
+  }
+  // Report-backed readouts paint only from a present snapshot: a missing
+  // snapshot leaves them absent, never zero. Areas show direct today only
+  // (decisions:card_structure_counts = no); terminal cards keep no readout.
+  if (open != null && report.kind === "project") {
+    row.appendChild(homeCardDomReportReadout(doc, `${open} open`,
+      `Open tasks in this project: ${open}`, "open"));
+  }
+  if (today != null) {
+    const scope = report.kind === "area" ? "directly in this area" : "in this project";
+    row.appendChild(homeCardDomReportReadout(doc, `${today} today`,
+      `Today tasks ${scope}: ${today}`, "today"));
   }
   return row;
 }
@@ -211,7 +275,7 @@ function homeCardBuildEl(doc, model, options = {}) {
     homeCardDomAppendSettings(block.actions, doc, model, options);
     homeCardDomAppendCollapse(block.actions, doc, model, options);
     card.appendChild(block.element);
-    const subtitle = homeCardDomSubtitle(doc, model);
+    const subtitle = homeCardDomSubtitle(doc, model, options);
     if (subtitle) {
       if (subtitle.classList?.contains?.("bob-home-card-summary")) {
         const wrap = homeCardDomEl(doc, "div", "bob-home-card-collapsible");

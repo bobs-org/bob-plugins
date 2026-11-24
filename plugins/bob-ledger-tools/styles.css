@@ -12352,6 +12352,29 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
 .bob-home-card-ready[data-ready-state="room"] { color: var(--text-muted); }
 .bob-home-card-ready[data-ready-state="full"] { color: var(--text-normal); }
 .bob-home-card-ready[data-ready-state="crowded"] { color: var(--text-warning); }
+/* Report-backed readouts (card-live): same muted tabular row as Ready. */
+.bob-home-card-report {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* Blocked-reason links navigate like crumbs; plain text when no opener. */
+.bob-home-card-reason-link { color: inherit; }
+a.bob-home-card-reason-link { cursor: pointer; }
+/* The recognized ^prj goal line (card-live): slightly larger and medium
+   weight on its own line only, so surrounding blocks never reflow. */
+.bob-home-card-goal {
+  font-size: 1.03em;
+  font-weight: 500;
+}
+button.bob-property-card-foot-lint-chip {
+  font: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  color: inherit;
+}
 .bob-home-card-collapsible {
   display: grid;
   grid-template-rows: 1fr;

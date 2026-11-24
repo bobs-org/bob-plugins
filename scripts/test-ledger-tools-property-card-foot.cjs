@@ -604,3 +604,47 @@ test("managed sub-fold toggles locally without a repaint", () => {
   assert.equal(toggle.getAttribute("aria-expanded"), "false");
   helpers.propertyCardFootResetAll();
 });
+
+test("contract lint chip jumps to the first affected setting and never the drawer", () => {
+  helpers.propertyCardFootResetAll();
+  const doc = makeDoc();
+  const seen = [];
+  const { spec } = buildFoot(doc, { open: false });
+  const built = helpers.propertyCardFootBuildEl(doc, {
+    ...spec,
+    contractIssues: [
+      { code: "note_offclock_shadowed", severity: "warning", message: "offclock: false is ignored because offclock_types decides", setting: "clock" },
+      { code: "task_refresh_invalid", severity: "error", message: "task_refresh is not 1–365 days", setting: "task_refresh" },
+    ],
+    firstSetting: "clock",
+    handlers: { onOpenSetting: (setting) => { seen.push(setting); } },
+  });
+  const { element, disclosure } = built;
+  const chip = element.querySelector(".bob-property-card-foot-lint-chip");
+  assert.ok(chip, "contract issues raise a lint chip");
+  assert.equal(chip.tagName, "BUTTON", "the chip is a control when an opener exists");
+  assert.match(chip.getAttribute("title"), /offclock: false is ignored/);
+  assert.match(chip.getAttribute("title"), /task_refresh is not/);
+  chip.click();
+  assert.deepEqual(seen, ["clock"], "the chip opens =+ on the first affected setting");
+  assert.equal(disclosure.getAttribute("aria-expanded"), "false", "the chip never opens the drawer");
+  helpers.propertyCardFootResetAll();
+});
+
+test("contract lint chip stays inert without an opener or a known setting", () => {
+  helpers.propertyCardFootResetAll();
+  const doc = makeDoc();
+  const { spec } = buildFoot(doc, { open: false });
+  const issues = [{ code: "mystery_code", severity: "warning", message: "something odd" }];
+  const inert = helpers.propertyCardFootBuildEl(doc, { ...spec, contractIssues: issues, firstSetting: "", handlers: {} });
+  const chip = inert.element.querySelector(".bob-property-card-foot-lint-chip");
+  assert.ok(chip);
+  assert.equal(chip.tagName, "SPAN", "no known setting means no jump control");
+  assert.doesNotThrow(() => chip.click());
+  const withOpener = helpers.propertyCardFootBuildEl(doc, {
+    ...spec, contractIssues: issues, firstSetting: "",
+    handlers: { onOpenSetting: () => { throw new Error("must not open without a setting"); } },
+  });
+  assert.equal(withOpener.element.querySelector(".bob-property-card-foot-lint-chip").tagName, "SPAN");
+  helpers.propertyCardFootResetAll();
+});

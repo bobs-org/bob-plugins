@@ -48,6 +48,9 @@ const PATHS = Object.freeze({
   createdInvalid: "created_invalid_plan.md",
   complete: "complete_plan.md",
   nestedPrj: "nested_prj_plan.md",
+  depBlocked: "dep_blocked_plan.md",
+  subBlocked: "sub_blocked_plan.md",
+  doneUndated: "done_undated_plan.md",
   untyped: "plain_note.md",
 });
 
@@ -125,21 +128,30 @@ function fixtureNotes() {
       "- [ ] #task #prj Close this completion fixture ^prj\n"),
     [PATHS.nestedPrj]: project({},
       "- parent note\n  - [x] #task #prj nested example ^prj\n"),
+    [PATHS.depBlocked]: project({},
+      "- [?] #task #prj Wait on the review ^prj\n  - ⛓️ **DEPENDS ON:** [[sase_plan#^abc123]]\n"),
+    [PATHS.subBlocked]: project({ parent: "[[mid_plan]]" },
+      "- [?] #task #prj Wait on the parent ^prj\n"),
+    [PATHS.doneUndated]: project({},
+      "- [x] #task #prj Finish without a date ^prj\n"),
     [PATHS.untyped]: yaml({ aliases: ["Plain"] }, "# Plain note\n\nThis note is not an Area or Project.\n"),
   };
 }
 
 const EXPECTED = Object.freeze({
-  [PATHS.area]: { kind: "area", title: "Development", lifecycle: null, icon: "layers", form: "field" },
-  [PATHS.subarea]: { kind: "area", title: "tooling_ops", lifecycle: null, icon: "layers", form: "field", crumb: "Development" },
-  [PATHS.inbox]: { kind: "area", title: "Mac Inbox", lifecycle: null, icon: "layers", form: "field", pill: "INBOX" },
-  [PATHS.wip]: { kind: "project", title: "root_plan", lifecycle: "WIP", icon: "target", form: "pennant", pill: "ROOT" },
-  [PATHS.blocked]: { kind: "project", title: "blocked_plan", lifecycle: "BLOCKED", icon: "target", form: "pennant" },
-  [PATHS.scheduled]: { kind: "project", title: "scheduled_plan", lifecycle: "SCHEDULED", detail: "starts Dec 2", icon: "target", form: "pennant" },
-  [PATHS.done]: { kind: "project", title: "done_plan", lifecycle: "DONE", detail: "Nov 20", icon: "target", form: "pennant", terminal: true },
-  [PATHS.canceled]: { kind: "project", title: "canceled_plan", lifecycle: "CANCELED", detail: "Oct 2", icon: "target", form: "pennant", terminal: true },
-  [PATHS.legacy]: { kind: "project", title: "legacy_theme_plan", lifecycle: "WIP", icon: "target", form: "pennant", chip: "#BUILD" },
-  [PATHS.missing]: { kind: "project", title: "Notes without a goal task", lifecycle: "NO ^prj TASK", icon: "target", form: "pennant" },
+  [PATHS.area]: { kind: "area", title: "Development", lifecycle: null, icon: "layers", form: "field", goalDecorated: false },
+  [PATHS.subarea]: { kind: "area", title: "tooling_ops", lifecycle: null, icon: "layers", form: "field", crumb: "Development", goalDecorated: false },
+  [PATHS.inbox]: { kind: "area", title: "Mac Inbox", lifecycle: null, icon: "layers", form: "field", pill: "INBOX", goalDecorated: false },
+  [PATHS.wip]: { kind: "project", title: "root_plan", lifecycle: "WIP", icon: "target", form: "pennant", pill: "ROOT", goalDecorated: true },
+  [PATHS.blocked]: { kind: "project", title: "blocked_plan", lifecycle: "BLOCKED", icon: "target", form: "pennant", goalDecorated: true },
+  [PATHS.scheduled]: { kind: "project", title: "scheduled_plan", lifecycle: "SCHEDULED", detail: "starts Dec 2", icon: "target", form: "pennant", goalDecorated: true },
+  [PATHS.done]: { kind: "project", title: "done_plan", lifecycle: "DONE", detail: "Nov 20", icon: "target", form: "pennant", terminal: true, goalDecorated: true },
+  [PATHS.canceled]: { kind: "project", title: "canceled_plan", lifecycle: "CANCELED", detail: "Oct 2", icon: "target", form: "pennant", terminal: true, goalDecorated: true },
+  [PATHS.depBlocked]: { kind: "project", title: "dep_blocked_plan", lifecycle: "BLOCKED", icon: "target", form: "pennant", goalDecorated: true },
+  [PATHS.subBlocked]: { kind: "project", title: "sub_blocked_plan", lifecycle: "BLOCKED", icon: "target", form: "pennant", goalDecorated: true },
+  [PATHS.doneUndated]: { kind: "project", title: "done_undated_plan", lifecycle: "DONE", icon: "target", form: "pennant", terminal: true, goalDecorated: true },
+  [PATHS.legacy]: { kind: "project", title: "legacy_theme_plan", lifecycle: "WIP", icon: "target", form: "pennant", chip: "#BUILD", goalDecorated: true },
+  [PATHS.missing]: { kind: "project", title: "Notes without a goal task", lifecycle: "NO ^prj TASK", icon: "target", form: "pennant", goalDecorated: false },
 });
 
 const EXTRA_EXPECTED = Object.freeze({
@@ -217,6 +229,8 @@ function cardFailures(probe, notePath, mode, catalog = EXPECTED) {
   if (expected.chip && !probe?.chips?.some((chip) => chip.includes(expected.chip))) failures.push("authored chip is missing");
   if (Number.isInteger(expected.chipCount) && probe?.chipCount !== expected.chipCount) failures.push("chip count is wrong");
   if (expected.terminal && (probe?.chipCount !== 0 || probe?.metaPresent)) failures.push("terminal project still has its policy/readout row");
+  if (expected.goalDecorated === true && probe?.goalDecorated !== true) failures.push("recognized ^prj line has no goal decoration");
+  if (expected.goalDecorated === false && probe?.goalDecorated === true) failures.push("goal decoration appears without a recognized ^prj line");
   return failures;
 }
 
@@ -305,6 +319,12 @@ function selfTest() {
   assert.match(notes[PATHS.createdInvalid], /created: "not-a-date"/);
   assert.match(notes[PATHS.complete], /Close this completion fixture/);
   assert.match(notes[PATHS.nestedPrj], /  - \[x\] #task #prj nested example \^prj/);
+  assert.match(notes[PATHS.depBlocked], /\*\*DEPENDS ON:\*\* \[\[sase_plan#\^abc123\]\]/);
+  assert.match(notes[PATHS.depBlocked], /^- \[\?\] #task #prj Wait on the review \^prj$/m);
+  assert.match(notes[PATHS.subBlocked], /parent: "\[\[mid_plan\]\]"/);
+  assert.match(notes[PATHS.subBlocked], /^- \[\?\] #task #prj Wait on the parent \^prj$/m);
+  assert.match(notes[PATHS.doneUndated], /^- \[x\] #task #prj Finish without a date \^prj$/m);
+  assert.doesNotMatch(notes[PATHS.doneUndated], /completion::/);
   assert.doesNotMatch(notes[PATHS.untyped], /^type:/m);
   const needs = screenshotNeeds();
   assert.equal(needs.length, 28);
@@ -316,13 +336,23 @@ function selfTest() {
   assert.deepEqual(cardFailures({
     path: PATHS.wip, mode: "live", kind: "project", title: "root_plan", ariaLabel: "Project: root_plan",
     icon: "target", tileForm: "pennant", footPresent: true, nativePropertiesVisible: true,
-    lifecycle: "WIP", pills: ["ROOT"], chipCount: 0, metaPresent: false,
+    lifecycle: "WIP", pills: ["ROOT"], chipCount: 0, metaPresent: false, goalDecorated: true,
   }, PATHS.wip, "live"), []);
   assert.deepEqual(cardFailures({
     path: PATHS.missing, mode: "live", kind: "project", title: "Notes without a goal task",
     ariaLabel: "Project: Notes without a goal task", icon: "target", tileForm: "pennant",
-    footPresent: true, nativePropertiesVisible: true, lifecycle: "NO ^prj TASK",
+    footPresent: true, nativePropertiesVisible: true, lifecycle: "NO ^prj TASK", goalDecorated: false,
   }, PATHS.missing, "live"), []);
+  assert.deepEqual(cardFailures({
+    path: PATHS.depBlocked, mode: "reading", kind: "project", title: "dep_blocked_plan",
+    ariaLabel: "Project: dep_blocked_plan", icon: "target", tileForm: "pennant",
+    footPresent: true, nativePropertiesVisible: true, lifecycle: "BLOCKED", goalDecorated: true,
+  }, PATHS.depBlocked, "reading"), []);
+  assert.ok(cardFailures({
+    path: PATHS.depBlocked, mode: "reading", kind: "project", title: "dep_blocked_plan",
+    ariaLabel: "Project: dep_blocked_plan", icon: "target", tileForm: "pennant",
+    footPresent: true, nativePropertiesVisible: true, lifecycle: "BLOCKED", goalDecorated: false,
+  }, PATHS.depBlocked, "reading").length > 0, "a missing goal decoration fails acceptance");
   assert.deepEqual(cardFailures({
     path: PATHS.nestedInbox, mode: "live", kind: "area", title: "Nested Inbox",
     ariaLabel: "Area: Nested Inbox", icon: "layers", tileForm: "field",

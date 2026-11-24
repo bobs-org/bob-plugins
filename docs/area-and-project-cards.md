@@ -72,6 +72,27 @@ opens the Property Editor; home cards do not register `==`. Its collapsed state 
 remembered per note for the current session. Collapsing an Area hides its summary and
 property chips/readout; a Project keeps its lifecycle line visible.
 
+## Report-backed live parts
+
+The card subscribes to the already-shared Areas and Projects report services and
+patches itself in place when a fresh snapshot arrives. Painting still starts no
+per-card fetch and no Bob process. A missing or stale snapshot hides only the
+report-backed parts below; the card keeps painting everything local.
+
+- **Blocked reasons:** a dependency-blocked Project names up to two `waits on`
+  links (a `+N` remainder when more wait), and an inherited-blocked Project
+  names its nearest blocked ancestor (`parent project [[sase]] is blocked`).
+  The links navigate like crumbs.
+- **Close dates:** a DONE or CANCELED project without a line date shows the
+  report's `closed_on`. A date on the `^prj` line always wins.
+- **Open and Today readouts:** Projects show `N open` and `N today`; Areas show
+  direct `N today` only. A missing snapshot leaves them absent, never zero.
+  Sub-area and sub-project counts never appear on the card.
+- **Foot lint:** the foot chip counts the row's `contract_issues` alongside the
+  local lint, and its tooltip names each issue. When a first affected setting
+  is known, clicking the chip opens the Property Editor on that setting; the
+  chip never opens the drawer by itself.
+
 ## Data and display rules
 
 The cards use Bob's existing Area and Project type classifiers. Untyped notes do not
@@ -79,10 +100,16 @@ become homes based on their filenames. The untyped type notes, `bank.md`, `_temp
 `done/`, and `_conflicts/` are excluded.
 
 Painting uses the metadata cache, confirmed local Markdown bytes, the local home-hue
-resolver, the ledger type-hue API, and the synchronous Ready snapshot. It does not
-start a Bob process or write the vault. If the card cannot safely own its title or
-source range, the native title and heading remain available. Source mode, embeds,
-hover previews, canvas, print, and mobile use Obsidian's ordinary note presentation.
+resolver, the ledger type-hue API, the synchronous Ready snapshot, and synchronous
+reads of the cached Areas and Projects reports. It does not start a Bob process or
+write the vault. If the card cannot safely own its title or source range, the native
+title and heading remain available. Source mode, embeds, hover previews, canvas,
+print, and mobile use Obsidian's ordinary note presentation.
+
+While a Project card is mounted, the recognized `^prj` line (the first body task
+line before any H2) renders slightly larger and medium weight, in Live Preview
+and Reading view alike. The decoration touches only that line, never moves the
+cursor, and is removed on unmount or in Source mode.
 
 For album and Record cards, see [Album Cards](albums.md) and
 [Record Card](record-card.md). For editing YAML properties, see the

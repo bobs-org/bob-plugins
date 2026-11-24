@@ -405,6 +405,7 @@ function homeCardPrjTask(sourceText) {
     line: hit.line,
     from: hit.from,
     to: hit.to,
+    text: hit.text,
     scheduled: homeCardInlineDate(hit.text, "scheduled"),
     completion: homeCardInlineDate(hit.text, "completion"),
     cancelled: homeCardInlineDate(hit.text, "cancelled"),

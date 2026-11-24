@@ -93,6 +93,12 @@ const PROBE_SOURCE = `(() => {
       ? card.querySelector(".bob-home-card-settings").tagName : null,
     chipCount: card ? card.querySelectorAll(".bob-home-card-chip").length : 0,
     metaPresent: Boolean(card && card.querySelector(".bob-home-card-meta")),
+    goalDecorated: Boolean(searchRoot && searchRoot.querySelector && searchRoot.querySelector(".bob-home-card-goal")),
+    goalLineText: (() => { const node = searchRoot && searchRoot.querySelector && searchRoot.querySelector(".bob-home-card-goal"); return node && String(node.textContent || "").replace(/\s+/g, " ").trim() || null; })(),
+    reasonLinks: card ? Array.from(card.querySelectorAll(".bob-home-card-reason-link")).map((node) => String(node.textContent || "").trim()) : [],
+    reports: card ? Array.from(card.querySelectorAll(".bob-home-card-report")).map((node) => String(node.textContent || "").trim()) : [],
+    lintChip: (() => { const node = foot && foot.querySelector && foot.querySelector(".bob-property-card-foot-lint-chip"); return node && String(node.textContent || "").trim() || null; })(),
+    lintTag: (() => { const node = foot && foot.querySelector && foot.querySelector(".bob-property-card-foot-lint-chip"); return node && node.tagName || null; })(),
     footPresent: Boolean(foot),
     footId: foot && foot.id || null,
     drawerId: drawer && drawer.id || (disclosure && disclosure.getAttribute && disclosure.getAttribute("aria-controls")) || null,
@@ -417,7 +423,18 @@ async function run(args) {
 
     await openCardNote(client, lib.PATHS.area, "source");
     const sourceProbe = await shared.waitFor(client, PROBE_SOURCE, (probe) => probe?.path === lib.PATHS.area && probe?.mode === "source", "source mode", 15_000);
-    check("source-mode-has-no-card", sourceProbe.cardPresent !== true, sourceProbe);
+    check("source-mode-has-no-card", sourceProbe.cardPresent !== true && sourceProbe.goalDecorated !== true, sourceProbe);
+
+    // The goal line decorates on both card surfaces and carries the goal text.
+    await openCardNote(client, lib.PATHS.wip, "reading");
+    const readingGoal = await shared.waitFor(client, PROBE_SOURCE,
+      (probe) => probe?.path === lib.PATHS.wip && probe?.mode === "reading" && probe?.goalDecorated === true,
+      "reading goal decoration", 15_000);
+    check("reading-goal-decorates-prj-line", readingGoal.goalDecorated === true && String(readingGoal.goalLineText || "").includes("Ship the root rollout"), readingGoal);
+    await openCardNote(client, lib.PATHS.missing, "reading");
+    const readingMissing = await shared.waitFor(client, PROBE_SOURCE,
+      (probe) => probe?.path === lib.PATHS.missing && probe?.mode === "reading", "missing goal note", 15_000);
+    check("reading-goal-absent-without-prj", readingMissing.goalDecorated !== true, readingMissing);
 
     await openCardNote(client, lib.PATHS.long, "live");
     await waitForCard(client, lib.PATHS.long, "live");
@@ -819,7 +836,7 @@ async function run(args) {
       if (line < 0 || ch < 0) return { ok: false, line, ch, value: editor.getValue() };
       editor.setCursor({ line, ch });
       editor.focus();
-      return { ok: true, line, ch, text: lines[line] };
+      return { ok: true, line, ch, text: lines[line], goal: Boolean(document.querySelector(".bob-home-card-goal")) };
     })()`);
     await taskReqs.key(client, "Escape");
     await taskReqs.key(client, "i");
@@ -829,7 +846,7 @@ async function run(args) {
     await taskReqs.key(client, "Backspace");
     await taskReqs.key(client, "Escape");
     editProbe = await taskReqs.readEditor(client);
-    check("prj-cursor-integrity", cursor.ok && inserted && editProbe?.doc === notes[taskPath], {
+    check("prj-cursor-integrity", cursor.ok && cursor.goal === true && inserted && editProbe?.doc === notes[taskPath], {
       cursor, inserted, restored: editProbe?.doc === notes[taskPath],
     });
 

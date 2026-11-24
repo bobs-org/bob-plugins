@@ -25,7 +25,8 @@ test("fixtures cover home species, ancestry, inbox, every local project state, a
     "area", "subarea", "inbox", "nestedInbox", "wip", "blocked", "scheduled", "done",
     "canceled", "legacy", "missing", "archived", "lateTitle", "deep", "long",
     "shadowed", "invalidClock", "mixedClock", "capOff", "createdMissing",
-    "createdInvalid", "complete", "nestedPrj", "untyped",
+    "createdInvalid", "complete", "nestedPrj", "depBlocked", "subBlocked",
+    "doneUndated", "untyped",
   ]) {
     assert.ok(fixtures[lib.PATHS[key]], key);
   }
@@ -45,7 +46,7 @@ test("card acceptance rejects missing native Properties, wrong species, and wron
     path: lib.PATHS.blocked, mode: "reading", kind: "project", title: "blocked_plan",
     ariaLabel: "Project: blocked_plan", icon: "target", tileForm: "pennant",
     footPresent: true, nativePropertiesVisible: true, lifecycle: "BLOCKED", pills: [], chips: [],
-    chipCount: 0, metaPresent: false,
+    chipCount: 0, metaPresent: false, goalDecorated: true,
   };
   assert.deepEqual(lib.cardFailures(base, lib.PATHS.blocked, "reading"), []);
   for (const delta of [

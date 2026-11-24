@@ -327,7 +327,7 @@ class BobLedgerToolsHomeCardMixin {
       try { return this.homeCardResolveParent(target, from); } catch (_) { return null; }
     };
     try {
-      return homeCardModel({
+      const model = homeCardModel({
         path: key,
         frontmatter,
         sourceText,
@@ -338,6 +338,17 @@ class BobLedgerToolsHomeCardMixin {
         resolveParent,
         themeHue: (name) => this.homeCardThemeHue(name),
       });
+      if (!model) return null;
+      // Report-backed parts patch in place from the already-cached areas and
+      // projects snapshots. The lookup is a synchronous cache read: paint
+      // never starts a fetch or spawns bob.
+      try {
+        if (typeof this.homeCardLivePatchFor === "function" && typeof homeCardApplyLivePatch === "function") {
+          const live = this.homeCardLivePatchFor(key, eligible.kind, model);
+          if (live) return homeCardApplyLivePatch(model, live);
+        }
+      } catch (_) {}
+      return model;
     } catch (_) {
       return null;
     }
@@ -454,6 +465,9 @@ class BobLedgerToolsHomeCardMixin {
 
   homeCardOnSetup() {
     if (!(this.homeCardCollapsed instanceof Map)) this.homeCardCollapsed = new Map();
+    try {
+      if (typeof this.homeCardLiveSubscribe === "function") this.homeCardLiveSubscribe();
+    } catch (_) {}
     try { this.homeCardFootBind?.(); } catch (_) {}
     this.homeCardDay = this.homeCardTodayText();
     try {
@@ -500,6 +514,9 @@ class BobLedgerToolsHomeCardMixin {
   }
 
   homeCardOnDisposeStart() {
+    try {
+      if (typeof this.homeCardLiveUnsubscribe === "function") this.homeCardLiveUnsubscribe();
+    } catch (_) {}
     try { this.homeCardFootUnbind?.(); } catch (_) {}
     try {
       if (this.homeCardDayTimer && typeof clearInterval === "function") clearInterval(this.homeCardDayTimer);
@@ -580,6 +597,7 @@ class BobLedgerToolsHomeCardMixin {
   // title. Never touches another path's mount in the same scope.
   homeCardRemoveReading(root, scope = root, sourcePath = "") {
     if (!root) return;
+    try { this.homeCardClearGoal?.(root); } catch (_) {}
     try { this.homeCardTrackFoot?.(scope, sourcePath, null); } catch (_) {}
     this.homeCardReleaseAdoption(scope, sourcePath);
     for (const node of Array.from(root.querySelectorAll?.(`.${HOME_CARD_CLASS}`) || [])) {
@@ -723,11 +741,46 @@ class BobLedgerToolsHomeCardMixin {
         return null;
       }
     }
+    this.homeCardPaintGoal(root, model);
     // Native Properties stays visible: no frontmatter or key ownership here.
     this.homeCardRestoreFocus(header, focusKey);
     try { this.homeCardTrackFoot?.(scope || root, sourcePath, header); } catch (_) {}
     try { this.homeCardEnsureSource?.(sourcePath); } catch (_) {}
     return header;
+  }
+
+  homeCardGoalClassName() {
+    try {
+      if (typeof HOME_CARD_LIVE_GOAL_CLASS === "string" && HOME_CARD_LIVE_GOAL_CLASS) return HOME_CARD_LIVE_GOAL_CLASS;
+    } catch (_) {}
+    return "bob-home-card-goal";
+  }
+
+  // Reading-view goal line: one class on the recognized ^prj row, applied
+  // only while a project card is mounted. Stale classes strip first so a
+  // goal that moves, closes, or unmounts never leaves a decorated row.
+  homeCardClearGoal(root) {
+    const goalClass = this.homeCardGoalClassName();
+    try {
+      const stale = root?.querySelectorAll ? Array.from(root.querySelectorAll(`.${goalClass}`)) : [];
+      for (const node of stale) {
+        try {
+          if (node.classList && typeof node.classList.remove === "function") node.classList.remove(goalClass);
+        } catch (_) {}
+      }
+    } catch (_) {}
+  }
+
+  homeCardPaintGoal(root, model) {
+    this.homeCardClearGoal(root);
+    try {
+      if (typeof homeCardGoalLineNode !== "function") return;
+      const node = homeCardGoalLineNode(root, model);
+      if (!node) return;
+      try {
+        if (node.classList && typeof node.classList.add === "function") node.classList.add(this.homeCardGoalClassName());
+      } catch (_) {}
+    } catch (_) {}
   }
 
   homeCardPatchLive(view, adopted, fresh, signature) {
@@ -742,6 +795,31 @@ class BobLedgerToolsHomeCardMixin {
       propertyCardSyncTitleHeading(target, entry.owned);
       this.homeCardRestoreFocus(target, focusKey);
     });
+  }
+
+  // The recognized ^prj goal line keeps a lazily computed line decoration:
+  // no document change, no widget, so the cursor and IME never notice it.
+  // It applies only while a project card is mounted for this view's path.
+  // Returns a finished RangeSet, or null when no goal line decorates.
+  homeCardGoalRange(view, model) {
+    try {
+      if (!Decoration || typeof Decoration.line !== "function") return null;
+      if (typeof homeCardGoalLineFor !== "function") return null;
+      const line = homeCardGoalLineFor(model);
+      if (!line || !view?.state?.doc || typeof view.state.doc.line !== "function") return null;
+      const total = view.state.doc.lines || 0;
+      if (!Number.isInteger(total) || line > total) return null;
+      const at = view.state.doc.line(line);
+      if (!at || !Number.isInteger(at.from)) return null;
+      const goalClass = typeof HOME_CARD_LIVE_GOAL_CLASS === "string"
+        ? HOME_CARD_LIVE_GOAL_CLASS
+        : "bob-home-card-goal";
+      const builder = new RangeSetBuilder();
+      builder.add(at.from, at.from, Decoration.line({ attributes: { class: goalClass } }));
+      return builder.finish();
+    } catch (_) {
+      return null;
+    }
   }
 
   buildHomeCardDecorations(view, update) {
@@ -803,7 +881,7 @@ class BobLedgerToolsHomeCardMixin {
       try { this.homeCardTrackFoot?.(view?.dom, path, header); } catch (_) {}
       if (adoption.mode === "slot") {
         try { this.homeCardEnsureSource?.(path); } catch (_) {}
-        return Decoration.none;
+        return this.homeCardGoalRange(view, model) || Decoration.none;
       }
       // Fallback: inline widget at the end of the first `# ` line. Live
       // Preview adoption is deferred to a microtask; DOM mutations and
@@ -853,6 +931,20 @@ class BobLedgerToolsHomeCardMixin {
         }
       }
       const builder = new RangeSetBuilder();
+      try {
+        if (typeof homeCardGoalLineFor === "function" && typeof Decoration.line === "function") {
+          const goalLine = homeCardGoalLineFor(model);
+          if (goalLine && view.state.doc.lines && goalLine <= view.state.doc.lines) {
+            const goalAt = view.state.doc.line(goalLine);
+            if (goalAt && Number.isInteger(goalAt.from)) {
+              const goalClass = typeof HOME_CARD_LIVE_GOAL_CLASS === "string"
+                ? HOME_CARD_LIVE_GOAL_CLASS
+                : "bob-home-card-goal";
+              builder.add(goalAt.from, goalAt.from, Decoration.line({ attributes: { class: goalClass } }));
+            }
+          }
+        }
+      } catch (_) {}
       builder.add(at, at, Decoration.widget({ widget, side }));
       return builder.finish();
     } catch (_) {

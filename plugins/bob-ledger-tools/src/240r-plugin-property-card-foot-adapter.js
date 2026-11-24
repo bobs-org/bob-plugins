@@ -102,6 +102,10 @@ function propertyCardFootAdapterSpec(options = {}) {
   const nested = options.nested && typeof options.nested === "object" ? options.nested : {};
   const legacy = options.legacy && typeof options.legacy === "object" ? options.legacy : {};
   const managed = options.managed && typeof options.managed === "object" ? options.managed : {};
+  // Report-backed setting lint for the kit chip. Callers that do not carry
+  // it keep the old lint behavior byte-identical (feature-detected).
+  const contractIssues = Array.isArray(options.contractIssues) ? options.contractIssues : [];
+  const firstSetting = typeof options.firstSetting === "string" ? options.firstSetting : "";
   const sourceText = typeof options.sourceText === "string" ? options.sourceText : undefined;
   let inventory = null;
   try {
@@ -144,7 +148,7 @@ function propertyCardFootAdapterSpec(options = {}) {
   } catch (_) {
     stamp = null;
   }
-  return { path, inventory, stamp };
+  return { path, inventory, stamp, contractIssues, firstSetting };
 }
 
 function propertyCardFootAdapterDigest(spec) {
@@ -154,6 +158,7 @@ function propertyCardFootAdapterDigest(spec) {
     // unregistering it repaints open drawers so they gain or lose the
     // Add property / Edit all actions without waiting for vault traffic.
     const hook = typeof propertyCardFootEditorHook === "function" && propertyCardFootEditorHook ? 1 : 0;
+    const contract = Array.isArray(spec?.contractIssues) ? spec.contractIssues : [];
     return JSON.stringify({
       state: spec?.inventory?.state || "",
       stamp: spec?.stamp?.text || "",
@@ -165,6 +170,13 @@ function propertyCardFootAdapterDigest(spec) {
         row.valueState,
         typeof propertyCardFootRowText === "function" ? propertyCardFootRowText(row) : String(row.value),
       ]),
+      contract: contract.map((issue) => [
+        issue && issue.code,
+        issue && issue.severity,
+        issue && issue.message,
+        issue && issue.setting,
+      ]),
+      firstSetting: spec?.firstSetting || "",
     });
   } catch (_) {
     return "";
@@ -247,6 +259,7 @@ function propertyCardFootAdapterHandlers(plugin, path, options = {}) {
       return propertyCardFootAdapterSearchTag(plugin, tag);
     },
     openNested: typeof options.openNested === "function" ? options.openNested : null,
+    onOpenSetting: typeof options.openSetting === "function" ? options.openSetting : null,
     onOpenEditor: typeof propertyCardFootEditorHook === "function" && propertyCardFootEditorHook
       ? (key) => propertyCardFootOpenEditor(path, key)
       : null,
@@ -309,6 +322,8 @@ function propertyCardFootAdapterAppend(card, path, doc, spec, handlers, pendingS
       open,
       inventory: spec?.inventory,
       stamp: spec?.stamp,
+      contractIssues: spec?.contractIssues,
+      firstSetting: spec?.firstSetting,
       handlers: handlers || {},
     });
     if (!built || !built.element) return null;

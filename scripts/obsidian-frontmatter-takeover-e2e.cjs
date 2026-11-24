@@ -747,6 +747,26 @@ async function run(args) {
         await app.vault.modify(file, ${JSON.stringify(notes[P.day])});
         return true;
       })()`);
+      const bufferAfterVaultRestore = await ctx.page.ev(
+        "window.__bobFrontmatterTakeover.docText(" + JSON.stringify(ctx.main) + ")",
+      );
+      const bufferInitiallyRestored = bufferAfterVaultRestore === notes[P.day];
+      if (!bufferInitiallyRestored) {
+        await ctx.page.ev(`(() => {
+          const leaf = app.workspace.getLeafById(${JSON.stringify(ctx.main)});
+          const cm = leaf && leaf.view && leaf.view.editor && leaf.view.editor.cm;
+          if (!cm) return false;
+          cm.dispatch({ changes: { from: 0, to: cm.state.doc.length, insert: ${JSON.stringify(notes[P.day])} } });
+          return cm.state.doc.toString() === ${JSON.stringify(notes[P.day])};
+        })()`);
+        await waitFor(client, `window.__bobFrontmatterTakeover.docText(${JSON.stringify(ctx.main)}) === ${JSON.stringify(notes[P.day])}`,
+          Boolean, "day editor-buffer restoration after stale-cache probe", 10_000);
+      }
+      await ctx.page.ev(`(async () => {
+        const file = app.vault.getAbstractFileByPath(${JSON.stringify(P.day)});
+        await app.vault.modify(file, ${JSON.stringify(notes[P.day])});
+        return true;
+      })()`);
       await waitFor(client, `(() => {
         const file = app.vault.getAbstractFileByPath(${JSON.stringify(P.day)});
         const cache = app.metadataCache.getFileCache(file);
@@ -765,8 +785,30 @@ async function run(args) {
           && plugin.intentionCardSourceCache?.get?.(${JSON.stringify(P.day)})?.source === ${JSON.stringify(notes[P.day])}
           && plugin.intentionCardRefreshTimer == null);
       })()`, Boolean, "restored source and completed card refresh", 10_000);
+      await ctx.page.settle(1200);
+      const restoredBuffer = await ctx.page.ev(
+        "window.__bobFrontmatterTakeover.docText(" + JSON.stringify(ctx.main) + ")",
+      );
+      const restoredBytes = await ctx.page.ev(
+        "window.__bobFrontmatterTakeover.readNote(" + JSON.stringify(P.day) + ")",
+      );
+      if (restoredBuffer !== notes[P.day] || restoredBytes !== notes[P.day]) {
+        throw new Error("stale-cache fixture teardown did not settle: " + JSON.stringify({
+          bufferRestored: restoredBuffer === notes[P.day],
+          bytesRestored: restoredBytes === notes[P.day],
+        }));
+      }
       const restored = await ctx.page.waitOwned(ctx.main, "live", "stale restore");
-      return { ok: true, staleProbe, restored };
+      return {
+        ok: true,
+        staleProbe,
+        fixtureRestore: {
+          bufferInitiallyRestored,
+          bufferRestored: restoredBuffer === notes[P.day],
+          bytesRestored: restoredBytes === notes[P.day],
+        },
+        restored,
+      };
     });
     await attempt("same-pane-file-change", async () => {
       await ctx.page.open(ctx.main, P.day, "live");

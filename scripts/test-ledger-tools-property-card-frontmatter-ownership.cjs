@@ -609,6 +609,61 @@ test("supported card kinds own independent panes; replacement, stale release, an
   assert.ok(!panes[1].scope.classList.contains(OWNS));
 });
 
+test("a detached Reading card acquires after attachment without letting stale callbacks own or release", () => {
+  for (const scenario of ["attached", "still-detached", "replaced", "navigated", "unloaded", "cache-skew"]) {
+    const fx = readingFixture();
+    const frames = [];
+    fx.doc.defaultView.requestAnimationFrame = (callback) => frames.push(callback);
+    fx.scope.isConnected = false;
+    const mount = el(fx.doc, "section", "bob-record-sheet bob-property-card");
+    mount.setAttribute("data-record-source", "note.md");
+    mount.appendChild(el(fx.doc, "footer", "bob-property-card-foot"));
+    fx.scope.appendChild(mount);
+    mount.isConnected = false;
+    let active = true;
+    let frontmatter = { type: "record" };
+    const view = { file: { path: "note.md" }, getMode: () => "preview" };
+    const plugin = new TestPlugin({
+      workspace: { getLeavesOfType: () => [] },
+      vault: { getAbstractFileByPath: (path) => ({ path }) },
+      metadataCache: { getFileCache: () => ({ frontmatter }) },
+    });
+    plugin.propertyCapabilityRoutingReady = () => true;
+    plugin.propertyCapabilityCurrentBobKey = () => "bob";
+    plugin.propertyCapabilityConfirmed = () => true;
+    const options = {
+      scope: fx.scope, view, path: "note.md", kind: "record", mount,
+      sourceText: "---\ntype: record\n---\n", parseYaml: () => ({ type: "record" }),
+      currentPath: () => view.file.path, active: () => active,
+    };
+    assert.equal(H.propertyCardFrontmatterOwnMounted(plugin, options), null, scenario);
+    assert.ok(native(fx.container), "detached paint remains native");
+    assert.equal(frames.length, 1, scenario);
+    if (scenario !== "still-detached") fx.scope.isConnected = mount.isConnected = true;
+    if (scenario === "unloaded") active = false;
+    if (scenario === "cache-skew") frontmatter = { type: "album" };
+    if (scenario === "navigated") view.file.path = "next.md";
+    if (scenario === "replaced" || scenario === "navigated") {
+      fx.scope.removeChild(mount);
+      mount.isConnected = false;
+      const next = el(fx.doc, "section", "bob-record-sheet bob-property-card");
+      next.setAttribute("data-record-source", view.file.path);
+      next.appendChild(el(fx.doc, "footer", "bob-property-card-foot"));
+      fx.scope.appendChild(next);
+      next.isConnected = true;
+      assert.equal(typeof H.propertyCardFrontmatterOwnMounted(plugin, {
+        ...options, path: view.file.path, mount: next,
+      }), "function");
+    }
+    frames.shift()();
+    const expected = ["attached", "replaced", "navigated"].includes(scenario);
+    assert.equal(fx.scope.classList.contains(OWNS), expected, scenario);
+    assert.equal(owned(fx.container), expected, scenario);
+    assert.equal(frames.length, 0, "attachment check never polls or rearms itself");
+    H.propertyCardFrontmatterCoordinatorReleaseKind(plugin, "record");
+  }
+});
+
 test("host register installs the field once; teardown releaseAll is exported", () => {
   const plugin = new TestPlugin({ workspace: { getLeavesOfType: () => [], on: () => ({}) } });
   const field = H.propertyCardFrontmatterOwnershipExtension();

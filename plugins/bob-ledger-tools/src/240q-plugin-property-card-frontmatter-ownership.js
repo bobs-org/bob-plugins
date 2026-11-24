@@ -574,8 +574,25 @@ function propertyCardFrontmatterOwnMounted(plugin, options = {}) {
   const scope = options.scope;
   const kind = options.kind;
   const path = String(options.path || "").replace(/\\/g, "/");
+  // A newer paint supersedes any detached Reading mount awaiting attachment.
+  propertyCardFrontmatterCoordinatorBindings.get(plugin)?.pending?.delete?.(scope);
   if (!propertyCardFrontmatterRecordEligible(plugin, { ...options, scope, path, kind })) {
     propertyCardFrontmatterReleaseMounted(scope, { plugin, kind });
+    // Obsidian can paint a cached Reading preview before reattaching its DOM.
+    // Keep native Properties available now, then check the same mount once at
+    // the next frame. Do not poll, retry other eligibility failures, or let a
+    // detached/stale callback release a newer mount.
+    const win = scope?.ownerDocument?.defaultView;
+    const mount = options.mount;
+    if (options.afterAttach !== true && propertyCardFrontmatterScopeMode(scope) === "reading"
+      && (scope.isConnected === false || mount?.isConnected === false)
+      && mount?.parentNode && scope.contains?.(mount)
+      && typeof win?.requestAnimationFrame === "function") {
+      propertyCardFrontmatterOwnMountedDeferred(plugin, {
+        ...options, afterAttach: true,
+        defer: (callback) => win.requestAnimationFrame(callback),
+      });
+    }
     return null;
   }
   const view = options.view || (propertyCardFrontmatterScopeMode(scope) === "reading"
@@ -614,9 +631,11 @@ function propertyCardFrontmatterOwnMountedDeferred(plugin, options = {}) {
   defer(() => {
     if (current.pending.get(scope) !== token) return;
     current.pending.delete(scope);
+    if (options.afterAttach === true && (scope?.isConnected === false
+      || options.mount?.isConnected === false || !scope?.contains?.(options.mount))) return;
     const currentPath = propertyCardFrontmatterCurrentPath(options.view, { ...options, scope });
     if (currentPath !== path) {
-      propertyCardFrontmatterReleaseMounted(scope, { plugin, kind });
+      propertyCardFrontmatterReleaseMounted(scope, { plugin, kind, path });
       return;
     }
     propertyCardFrontmatterOwnMounted(plugin, options);

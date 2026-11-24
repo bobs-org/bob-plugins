@@ -180,7 +180,7 @@ modal headers. It is never a heading, and outside a card it falls back to
 neutral ink.
 The local Area and Project hosts leave native Properties visible and keep the
 Project's `^prj` line as its editable control; see
-[Area and Project Cards](../../area-and-project-cards.md).
+[Area and Project Cards](https://bobs-org.github.io/reference/plugins/area-and-project-cards/).
 
 `propertyCardOwnTitle(scope, { path, recognizer, view })` hides the view's
 inline title and the recognized source title range. In Live Preview, one

@@ -763,13 +763,6 @@ function buildProjectContentFromTask(content, parsedTask, options = {}) {
   });
 }
 
-function applyProjectCreationFrontmatter(frontmatter, parentLink) {
-  frontmatter.parent = parentLink;
-  frontmatter.type = "[[project]]";
-  frontmatter.status = "wip";
-  return frontmatter;
-}
-
 // Remove a previously captured source task block (parent line plus any child
 // lines). The block is removed at its original location when it still matches
 // exactly there; otherwise it is removed only when it matches exactly at a

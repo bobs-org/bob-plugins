@@ -134,7 +134,6 @@ module.exports.helpers = {
   findProjectSectionRange,
   insertProjectSectionNotes,
   buildProjectContentFromTask,
-  applyProjectCreationFrontmatter,
   removeTaskBlockFromContent,
   getProjectBasenameFromTaskBlockId,
   getProjectBasenameSuffixForIndex,

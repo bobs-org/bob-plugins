@@ -221,7 +221,15 @@ function makeNoteReadyApp({
     },
     workspace: {
       on: (event, handler) => {
-        handlers[event] = handler;
+        // Obsidian fans out to every listener, including the home cards.
+        const previous = handlers[event];
+        handlers[event] =
+          typeof previous === "function"
+            ? (...args) => {
+                previous(...args);
+                handler(...args);
+              }
+            : handler;
         return {};
       },
       offref: () => {},

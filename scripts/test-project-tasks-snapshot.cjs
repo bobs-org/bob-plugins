@@ -82,6 +82,8 @@ test.afterEach(() => {
 
 test("snapshot commands are available only for active Markdown files", () => {
   const plugin = makePlugin(new MockTFile("area/sase_blog.md"));
+  assert.equal(plugin.commands.length, 2);
+  assert.equal(plugin.refreshFile, undefined);
   const commands = plugin.commands.filter((command) =>
     command.id.startsWith("snapshot-note-to-highlights"),
   );

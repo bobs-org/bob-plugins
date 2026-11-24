@@ -5,6 +5,12 @@ const test = require("node:test");
 const { LedgerToolsPlugin, makeFreshnessApp } = require("./ledger-tools-harness.cjs");
 const { periodPartsFixtures } = require("../plugins/bob-ledger-tools/scripts/fixtures/stats/period-parts-fixtures.cjs");
 
+const loadedPlugins = new Set();
+test.afterEach(() => {
+  for (const plugin of loadedPlugins) plugin.onunload();
+  loadedPlugins.clear();
+});
+
 const helpers = LedgerToolsPlugin.helpers;
 const fixtureDir = path.join(__dirname, "..", "plugins/bob-ledger-tools/scripts/fixtures/stats");
 const current = JSON.parse(fs.readFileSync(path.join(fixtureDir, "period-strip-current-week.json"), "utf8"));
@@ -367,6 +373,7 @@ function loadedPlugin() {
     store.set(key, value);
   };
   const plugin = new LedgerToolsPlugin(app, {});
+  loadedPlugins.add(plugin);
   plugin.onload();
   return plugin;
 }

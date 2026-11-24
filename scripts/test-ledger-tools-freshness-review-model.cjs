@@ -432,8 +432,11 @@ test("same-array cache updates and Today changes rebuild the memo", () => {
         originalMarkdown: `- [ ] #task Stamped [fresh:: ${plugin.freshnessTodayText()}]`,
       });
       before.tasks.push(stamped);
-      assert.equal(cacheUpdates.length, 1);
-      cacheUpdates[0]();
+      assert.ok(cacheUpdates.length > 0);
+      const generation = plugin.freshnessTasksGen;
+      for (const handler of cacheUpdates) handler();
+      assert.equal(plugin.freshnessTasksGen, generation + 1,
+        "one cache event invalidates freshness exactly once across all listeners");
       const after = plugin.freshnessEnsureMemo();
       assert.notEqual(after, before);
       assert.equal(after.rows.length, before.rows.length + 1);

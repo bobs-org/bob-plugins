@@ -55,15 +55,33 @@ class BobNavigationHotkeysProjectNoteMixin {
 
     const parentLink = this.getFrontmatterWikiLinkToFile(creatingFile);
     try {
-      await this.app.fileManager.processFrontMatter(
-        createdFile,
-        (frontmatter) => {
-          applyProjectCreationFrontmatter(frontmatter, parentLink);
-        },
-      );
+      // Templater owns every default, including type and status. Use the same
+      // parent-only planner and editor/vault paths as Change parent.
+      const editor = this.getOpenMarkdownEditorForPath(createdFile.path);
+      const withParent = (content) => {
+        const plan = planParentFrontmatterEdit(content, parentLink);
+        if (!plan.ok) {
+          throw new Error(plan.reason);
+        }
+        return plan.content;
+      };
+      if (editor && typeof editor.getValue === "function") {
+        const before = editor.getValue();
+        const after = withParent(before);
+        if (after !== before && !applyEditorContentTransaction(editor, before, after)) {
+          throw new Error("Editor write failed");
+        }
+      } else {
+        await this.app.vault.process(createdFile, withParent);
+      }
     } catch (error) {
       new Notice("Could not set project parent");
       return null;
+    }
+
+    const cache = this.app.metadataCache.getFileCache(createdFile);
+    if (!this.getFrontmatterLinks(cache && cache.frontmatter, "type").includes("project")) {
+      new Notice('Project template should set type: "[[project]]"; check the created note');
     }
 
     return createdFile;

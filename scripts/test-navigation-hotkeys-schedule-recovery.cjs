@@ -55,25 +55,6 @@ test("source task schedule errors are focused and ambiguous fields fail", () => 
   assert.match(ambiguous.scheduleError, /multiple/);
 });
 
-test("project creation frontmatter never stores the task schedule", () => {
-  assert.deepEqual(
-    helpers.applyProjectCreationFrontmatter(
-      {},
-      "[[Parent]]",
-      "2026-07-16",
-    ),
-    {
-      parent: "[[Parent]]",
-      type: "[[project]]",
-      status: "wip",
-    },
-  );
-  assert.deepEqual(
-    helpers.applyProjectCreationFrontmatter({}, "[[Parent]]"),
-    { parent: "[[Parent]]", type: "[[project]]", status: "wip" },
-  );
-});
-
 test("future schedule labels use local date-only boundaries", () => {
   const now = new Date(2026, 6, 10, 23, 45);
   assert.equal(helpers.isFutureInlineScheduledValue("2026-07-09", now), false);

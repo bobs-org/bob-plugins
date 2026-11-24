@@ -458,17 +458,30 @@ async function run(args) {
     });
     await attempt("tab-live", async () => {
       await ctx.page.ev(`(() => { const leaf = app.workspace.getLeafById(${JSON.stringify(ctx.main)}); leaf.view.editor.focus(); return true; })()`);
+      const bufferBefore = await ctx.page.ev("window.__bobFrontmatterTakeover.docText(" + JSON.stringify(ctx.main) + ")");
       const downBefore = await ctx.page.ev("window.__bobFrontmatterTakeover.keyDowns()");
       await ctx.page.keys("Tab");
       const afterTab = await ctx.page.active();
       const downTab = await ctx.page.ev("window.__bobFrontmatterTakeover.keyDowns()");
       await ctx.page.keys("Tab", 8);
       const afterShiftTab = await ctx.page.active();
+      await ctx.page.settle(150);
+      const bufferAfter = await ctx.page.ev("window.__bobFrontmatterTakeover.docText(" + JSON.stringify(ctx.main) + ")");
+      const bufferChanged = bufferAfter !== bufferBefore;
+      if (bufferChanged) {
+        await ctx.page.ev(`(async () => {
+          const file = app.vault.getAbstractFileByPath(${JSON.stringify(P.day)});
+          await app.vault.modify(file, ${JSON.stringify(notes[P.day])});
+          return true;
+        })()`);
+        await waitFor(client, `window.__bobFrontmatterTakeover.readNote(${JSON.stringify(P.day)}) === ${JSON.stringify(notes[P.day])}`,
+          Boolean, "day fixture restoration after Tab probe", 10_000);
+      }
       const failures = [];
       if (!(downTab > downBefore)) failures.push("Tab never reached the page");
       if (afterTab.inProperties) failures.push("Tab entered Properties");
       if (afterShiftTab.inProperties) failures.push("Shift+Tab entered Properties");
-      return { ok: failures.length === 0, afterTab, afterShiftTab, failures };
+      return { ok: failures.length === 0, afterTab, afterShiftTab, bufferChanged, failures };
     });
 
     await attempt("title-slot-anchor-reading", async () => {
@@ -669,20 +682,19 @@ async function run(args) {
             return current;
           },
         });
+        let released = 0;
         try {
-          plugin.constructor.helpers.propertyCardFrontmatterCoordinatorReconcile(plugin);
+          released = plugin.constructor.helpers.propertyCardFrontmatterCoordinatorReconcile(plugin);
         } finally {
           if (originalDescriptor) Object.defineProperty(metadataCache, "getFileCache", originalDescriptor);
           else delete metadataCache.getFileCache;
         }
-        return { expectedType, intercepted };
+        return { expectedType, intercepted, released };
       })()`);
       const expectedType = staleProbe && staleProbe.expectedType;
-      if (!expectedType || staleProbe.intercepted < 1) {
+      if (!expectedType || staleProbe.intercepted < 1 || staleProbe.released < 1) {
         throw new Error("stale cache view was not observed during ownership reconciliation: " + JSON.stringify(staleProbe));
       }
-      await ctx.page.settle(250);
-      const stale = await ctx.page.waitNative(ctx.main, "stale cache");
       const cacheProbe = "bob-frontmatter-takeover-refresh";
       const summaryLine = /^summary: (.+)$/m.exec(notes[P.day]);
       if (!summaryLine) throw new Error("day fixture has no summary property to probe");
@@ -730,7 +742,7 @@ async function run(args) {
           && plugin.intentionCardRefreshTimer == null);
       })()`, Boolean, "restored source and completed card refresh", 10_000);
       const restored = await ctx.page.waitOwned(ctx.main, "live", "stale restore");
-      return { ok: true, stale, restored };
+      return { ok: true, staleProbe, restored };
     });
     await attempt("same-pane-file-change", async () => {
       await ctx.page.open(ctx.main, P.day, "live");

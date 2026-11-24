@@ -79,7 +79,7 @@ const EXPECTED = Object.freeze({
   [PATHS.done]: { kind: "project", title: "done_plan", lifecycle: "DONE", detail: "Nov 20", icon: "target", form: "pennant", terminal: true },
   [PATHS.canceled]: { kind: "project", title: "canceled_plan", lifecycle: "CANCELED", detail: "Oct 2", icon: "target", form: "pennant", terminal: true },
   [PATHS.legacy]: { kind: "project", title: "legacy_theme_plan", lifecycle: "WIP", icon: "target", form: "pennant", chip: "#BUILD" },
-  [PATHS.missing]: { kind: "project", title: "missing_goal", lifecycle: "NO ^prj TASK", icon: "target", form: "pennant" },
+  [PATHS.missing]: { kind: "project", title: "Notes without a goal task", lifecycle: "NO ^prj TASK", icon: "target", form: "pennant" },
 });
 
 function screenshotNeeds() {
@@ -156,6 +156,11 @@ function selfTest() {
     icon: "target", tileForm: "pennant", footPresent: true, nativePropertiesVisible: true,
     lifecycle: "WIP", pills: ["ROOT"], chipCount: 0, metaPresent: false,
   }, PATHS.wip, "live"), []);
+  assert.deepEqual(cardFailures({
+    path: PATHS.missing, mode: "live", kind: "project", title: "Notes without a goal task",
+    ariaLabel: "Project: Notes without a goal task", icon: "target", tileForm: "pennant",
+    footPresent: true, nativePropertiesVisible: true, lifecycle: "NO ^prj TASK",
+  }, PATHS.missing, "live"), []);
   assert.ok(cardFailures({ path: PATHS.wip }, PATHS.wip, "live").length > 0);
 }
 

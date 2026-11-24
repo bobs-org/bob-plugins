@@ -399,6 +399,7 @@ async function runVisualReview(ctx) {
   await openPropertyEditor(client, "projects/project-note.md", { key: "keep_exact" });
   await propertyRowClick(client, "keep_exact");
   await sendKey(client, "j");
+  await propertyRowClick(client, "project_digest");
   await shared.waitFor(client, lib.editorProbeSource(),
     (probe) => probe.rows.some((row) => row.selected && row.action === "locked" && row.lockedClass === true),
     "locked derived row selected for visuals");

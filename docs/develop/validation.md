@@ -418,14 +418,32 @@ add, delete, undo, and redo; Tab completion and Shift+Enter literal names;
 checkbox, datetime, tags, ordered list, and null versus empty-string
 preservation; derived and identity refusals with YAML targets; invalid,
 unclosed, and duplicate YAML recovery; old-bob read-only; and record-field
-handoff. Surface coverage includes two panes of one note with unsaved editor
+handoff. Parity coverage on a dedicated fixture note adds keyboard rename
+(including duplicate and protected-destination refusals) with undo and redo;
+source-order reorder with traveling comments, boundary no-ops, the filter
+lockout, and reduced-motion moves; mark and visual-range batch delete with
+undo plus mixed-protected refusal; incremental filtering with focus return,
+empty results, Esc layering, and marks reset; source-exact copy (comments
+included) with protected-row and opaque cases; overwrite paste with
+New/Replace/Skipped review, stale-preview invalidation, malformed and
+all-skipped blocking, and one undoable batch; the multiline YAML value stage
+(save, malformed drafts, and opaque refusals); local kind conversion with the
+`created`-to-datetime warning and undo; and the separately confirmed vault
+property-type change confined to the scratch vault. Interaction coverage adds
+the menu/stage/filter/modal close ladder, native clipboard inside text
+inputs, two-pane unsaved renames, and unload during paste reads and previews.
+Surface coverage includes two panes of one note with unsaved editor
 text, a stale draft that keeps its preview, history across close and reopen,
 `y` then Done restoring Live Preview and the same key, duplicate occurrence, or
 nearest surviving row, the Esc / `q` / Ctrl+[ close ladder (`q` types in a
 field; Ctrl+[ never does), plugin unload with no late reopen, and every entry
 point (`=+` and Shift+`=` in Live Preview Vim normal, palette **Edit note
 properties**, Command Mode, drawer key-label / Add property / Edit all, and
-`openPropertyEditor`) on ordinary and invalid-YAML notes.
+`openPropertyEditor`) on ordinary and invalid-YAML notes. Screenshot coverage
+adds light/dark and narrow/wide views of the marked rows, filter, rename,
+YAML, paste-preview, and conversion/global-warning states, each with layout
+probes for clipping, overlap, overflow, focus, and selected-versus-marked
+contrast.
 
 The offline wrapper `scripts/test-obsidian-property-editor-e2e.cjs` is part of
 `npm test`. It checks fixtures, fake-bob JSON, probes, coverage mapping, and

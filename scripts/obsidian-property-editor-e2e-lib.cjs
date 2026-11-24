@@ -64,6 +64,27 @@ const ACCEPTANCE_CHECKS = [
   "entry-drawer-edit-all",
   "entry-api-open-property-editor",
   "entry-ordinary-and-invalid-yaml-notes",
+  "parity-rename-undo-disk-bytes",
+  "parity-rename-refusals-keep-draft",
+  "parity-reorder-comments-undo-disk-bytes",
+  "parity-reorder-filter-lockout",
+  "parity-mark-range-delete-undo-disk-bytes",
+  "parity-mixed-protected-delete-refused",
+  "parity-filter-return-empty-ladder",
+  "parity-source-exact-copy",
+  "parity-paste-preview-apply-undo-disk-bytes",
+  "parity-paste-stale-preview-invalidated",
+  "parity-paste-malformed-blocked",
+  "parity-yaml-stage-save-disk-bytes",
+  "parity-yaml-stage-refusals-kept",
+  "parity-kind-convert-undo-disk-bytes",
+  "parity-kind-created-warning",
+  "parity-vault-type-change-confined",
+  "parity-close-ladder-filter-modal",
+  "parity-native-clipboard-in-inputs",
+  "parity-two-pane-unsaved-rename",
+  "parity-unload-paste-no-late-write",
+  "parity-screenshots-views-layout",
   "screenshots-light-dark-narrow-wide",
   "screenshots-layout-probes-light-dark-narrow-wide",
 ];
@@ -240,6 +261,29 @@ function fixtureNotes(today = "2026-11-23") {
       "Body bytes stay outside pane and stale-draft edits.",
       "",
     ].join("\n"),
+    "parity.md": [
+      "---",
+      "# Parity comment travels with alpha",
+      "alpha: one",
+      "beta: two",
+      "# Comment for gamma",
+      "gamma: three",
+      "tags: [home]",
+      'status: "draft"',
+      "details:",
+      "  city: Springfield",
+      '  zip: "12345"',
+      "count: 3",
+      "enabled: true",
+      "created: 2026-11-23",
+      "anchored: &a hello",
+      "---",
+      "",
+      "# Parity",
+      "",
+      "Body stays outside parity edits.",
+      "",
+    ].join("\n"),
     "ordinary.md": [
       "---",
       'type: "[[note]]"',
@@ -287,13 +331,34 @@ function editorProbeSource() {
         action: row.getAttribute("data-property-action"),
         disabled: row.getAttribute("aria-disabled") === "true",
         selected: row.getAttribute("aria-selected") === "true",
+        marked: row.getAttribute("data-property-marked") === "true",
         text: row.textContent || "",
         valueText: row.querySelector(".bob-property-row-value")?.textContent ?? null,
+        gutter: row.querySelector(".bob-property-row-mark")?.textContent ?? null,
         diagnostic: row.getAttribute("title") || "",
         classes: String(row.className || ""),
         selectedClass: row.classList.contains("is-selected"),
         lockedClass: row.classList.contains("is-locked"),
+        markedClass: row.classList.contains("is-marked"),
       })),
+      announce: plugin?.propertyEditorModal?.announce || "",
+      filterOpen: plugin?.propertyEditorModal?.filterOpen === true,
+      filterQuery: editor.querySelector("[data-property-filter-input='true']")?.value || "",
+      filterEmpty: editor.querySelector(".bob-property-editor-filter-empty")?.textContent || "",
+      filterFocused: document.activeElement?.getAttribute?.("data-property-filter-input") === "true",
+      clipboardOpen: Boolean(editor.querySelector("[data-property-clipboard-stage]")),
+      clipboardTitle: editor.querySelector("[data-property-clipboard-stage] .bob-property-editor-stage-title")?.textContent || "",
+      clipboardRows: Array.from(editor.querySelectorAll(".bob-property-editor-clipboard-row")).map((row) => ({
+        key: row.querySelector(".bob-property-editor-clipboard-key")?.textContent || "",
+        state: row.querySelector(".bob-property-editor-clipboard-state")?.textContent || "",
+        reason: row.querySelector(".bob-property-editor-clipboard-reason")?.textContent || "",
+        values: Array.from(row.querySelectorAll(".bob-property-editor-clipboard-value-text")).map((node) => node.textContent || ""),
+        classes: String(row.className || ""),
+      })),
+      clipboardApplyLabel: editor.querySelector("[data-property-clipboard-action='apply']")?.textContent || "",
+      clipboardApplyDisabled: editor.querySelector("[data-property-clipboard-action='apply']")?.disabled !== false,
+      kindWarning: editor.querySelector("[data-property-kind-warning]")?.textContent || "",
+      vaultConfirm: editor.querySelector("[data-property-kind-vault-confirm]")?.textContent || "",
       properties: Array.isArray(report?.properties) ? report.properties.map((row) => ({ key: row.key, line: row.line, kind: row.kind, role: row.role, duplicate: row.duplicate === true, diagnostic: row.diagnostic || "" })) : [],
       banner: editor.querySelector(".bob-property-editor-banner")?.textContent || "",
       recovery: editor.querySelector(".bob-property-editor-banner.is-recovery")?.textContent || "",
@@ -342,6 +407,11 @@ function visualLayoutSource() {
     if (!editor || !modal) return { open: false };
     const selected = editor.querySelector("[data-property-row][aria-selected='true']");
     const locked = editor.querySelector("[data-property-row][aria-disabled='true']");
+    const marked = editor.querySelector("[data-property-row][data-property-marked='true']");
+    const markedGutter = marked?.querySelector?.(".bob-property-row-mark") || null;
+    const unmarkedRow = Array.from(editor.querySelectorAll("[data-property-row]"))
+      .find((row) => row.getAttribute("data-property-marked") !== "true");
+    const unmarkedGutter = unmarkedRow?.querySelector?.(".bob-property-row-mark") || null;
     const loose = Array.from(editor.querySelectorAll("[data-property-row]"))
       .find((row) => row.getAttribute("aria-disabled") !== "true");
     const focused = document.activeElement?.closest?.("[data-property-row]") || null;
@@ -385,6 +455,8 @@ function visualLayoutSource() {
     const selectedStyle = styleOf(selected);
     const lockedStyle = styleOf(locked);
     const looseStyle = styleOf(loose);
+    const markedGutterStyle = styleOf(markedGutter);
+    const unmarkedGutterStyle = styleOf(unmarkedGutter);
     const focusedStyle = styleOf(focused);
     const modalBg = parse(styleOf(modal)?.backgroundColor);
     return {
@@ -401,6 +473,11 @@ function visualLayoutSource() {
       looseColor: looseStyle?.color || "",
       lockedContrast: lockedStyle ? contrast(parse(lockedStyle.color), modalBg || parse(lockedStyle.backgroundColor)) : 0,
       selectedDiffers: Boolean(selectedStyle && looseStyle && selectedStyle.backgroundColor !== looseStyle.backgroundColor),
+      markedGutterColor: markedGutterStyle?.color || "",
+      unmarkedGutterColor: unmarkedGutterStyle?.color || "",
+      markedDiffers: Boolean(markedGutterStyle && unmarkedGutterStyle && markedGutterStyle.color !== unmarkedGutterStyle.color),
+      markedReadable: markedGutterStyle ? contrast(parse(markedGutterStyle.color), modalBg || parse(markedGutterStyle.backgroundColor)) : 0,
+      markedKey: marked?.getAttribute("data-property-key") || "",
       focusOutlineWidth: focusedStyle ? Number.parseFloat(focusedStyle.outlineWidth || "0") : 0,
       focusOutlineStyle: focusedStyle?.outlineStyle || "",
       rowCount: rows.length,
@@ -453,6 +530,27 @@ const COVERAGE_PATTERNS = {
   "entry-drawer-edit-all": [/drawer Edit all/],
   "entry-api-open-property-editor": [/API openPropertyEditor/],
   "entry-ordinary-and-invalid-yaml-notes": [/API openPropertyEditor on an ordinary note/, /API openPropertyEditor on invalid YAML/, /palette opens invalid YAML recovery/],
+  "parity-rename-undo-disk-bytes": [/parity rename bytes/, /parity rename undo bytes/, /parity rename redo bytes/],
+  "parity-rename-refusals-keep-draft": [/parity duplicate rename/, /parity protected rename refused/, /parity rename draft kept/, /parity same-name rename no-op/],
+  "parity-reorder-comments-undo-disk-bytes": [/parity reorder moves comment/, /parity reorder undo bytes/, /parity reorder boundary no-op bytes/, /parity move announces source position/],
+  "parity-reorder-filter-lockout": [/parity reorder under filter refused/, /parity menu disables reorder under filter/],
+  "parity-mark-range-delete-undo-disk-bytes": [/parity range marks rows/, /parity batch delete bytes/, /parity batch delete undo bytes/],
+  "parity-mixed-protected-delete-refused": [/parity mixed protected delete refused/, /parity mixed delete leaves bytes unchanged/],
+  "parity-filter-return-empty-ladder": [/parity filter narrows/, /parity filter Enter returns focus/, /parity empty filter message/, /parity filter Esc clears layer/, /parity filter change clears marks/],
+  "parity-source-exact-copy": [/parity copy announces/, /parity clipboard holds source-exact bytes/, /parity protected row copies/, /parity opaque copy refused/],
+  "parity-paste-preview-apply-undo-disk-bytes": [/parity paste preview labels/, /parity paste apply bytes/, /parity paste undo bytes/],
+  "parity-paste-stale-preview-invalidated": [/parity stale paste keeps draft/],
+  "parity-paste-malformed-blocked": [/parity malformed paste blocked/, /parity all-skipped paste disables apply/],
+  "parity-yaml-stage-save-disk-bytes": [/parity YAML map save bytes/, /parity YAML save undo bytes/],
+  "parity-yaml-stage-refusals-kept": [/parity YAML malformed shows bob error/, /parity opaque YAML save refused/],
+  "parity-kind-convert-undo-disk-bytes": [/parity convert preview names destination/, /parity convert apply bytes/, /parity convert undo bytes/],
+  "parity-kind-created-warning": [/parity created datetime warns/],
+  "parity-vault-type-change-confined": [/parity type manager probed/, /parity vault confirm names/, /parity vault unsupported explains/],
+  "parity-close-ladder-filter-modal": [/parity Esc peels filter before modal/],
+  "parity-native-clipboard-in-inputs": [/parity Mod\+C in input stays native/, /parity Mod\+V in input stays native/],
+  "parity-two-pane-unsaved-rename": [/parity rename saves unsaved pane/],
+  "parity-unload-paste-no-late-write": [/parity unload with paste preview closes without write/],
+  "parity-screenshots-views-layout": [/parity screenshot .* contains the populated editor/, /parity views layout probes/],
   "screenshots-light-dark-narrow-wide": [/screenshots light dark narrow wide/, /screenshot .+ contains the populated editor/],
   "screenshots-layout-probes-light-dark-narrow-wide": [/layout probes every screenshot/, /selected and locked rows are legible/, /selected row is visually distinct/, /values stay inside their rows/],
 };
@@ -510,11 +608,17 @@ function selfTest() {
 
   const notes = fixtureNotes();
   assert.match(notes["projects-album.md"], /  noun: acceptance_fixture\n/);
-  for (const pathValue of ["projects/project-note.md", "2026/20261123.md", "projects-album/acceptance.md", "invalid.md", "unclosed.md", "duplicate.md", "plain.md", "literal-name.md", "value-kinds.md", "old-bob.md", "surfaces.md", "ordinary.md"]) {
+  for (const pathValue of ["projects/project-note.md", "2026/20261123.md", "projects-album/acceptance.md", "invalid.md", "unclosed.md", "duplicate.md", "plain.md", "literal-name.md", "value-kinds.md", "old-bob.md", "surfaces.md", "ordinary.md", "parity.md"]) {
     assert.ok(notes[pathValue], `fixture missing ${pathValue}`);
   }
   assert.match(notes["surfaces.md"], /keep_me: "original"/);
   assert.match(notes["ordinary.md"], /title: "Ordinary note"/);
+  assert.match(notes["parity.md"], /# Parity comment travels with alpha/);
+  assert.match(notes["parity.md"], /# Comment for gamma/);
+  assert.match(notes["parity.md"], /anchored: &a hello/);
+  assert.match(notes["parity.md"], /city: Springfield/);
+  assert.match(notes["parity.md"], /Body stays outside parity edits\./);
+  assert.ok(notes["parity.md"], "fixture missing parity.md");
   assert.match(notes["projects/project-note.md"], /# Keep this comment exactly as authored/);
   assert.match(notes["projects/project-note.md"], /keep_exact: "keep : and # exactly"/);
   assert.match(notes["projects/project-note.md"], /project_digest: sha256:/);
@@ -530,10 +634,20 @@ function selfTest() {
   }
   assert.equal(typeof visualLayoutSource(), "string");
   assert.match(visualLayoutSource(), /selectedDiffers/);
+  assert.match(visualLayoutSource(), /markedDiffers/);
+  assert.match(visualLayoutSource(), /markedReadable/);
   assert.match(visualLayoutSource(), /rowOverlap/);
   assert.match(visualLayoutSource(), /valueOverflow/);
   assert.match(editorProbeSource(), /selectedClass/);
+  assert.match(editorProbeSource(), /markedClass/);
   assert.match(editorProbeSource(), /stagePreview/);
+  assert.match(editorProbeSource(), /filterOpen/);
+  assert.match(editorProbeSource(), /filterEmpty/);
+  assert.match(editorProbeSource(), /clipboardOpen/);
+  assert.match(editorProbeSource(), /clipboardApplyDisabled/);
+  assert.match(editorProbeSource(), /kindWarning/);
+  assert.match(editorProbeSource(), /vaultConfirm/);
+  assert.match(editorProbeSource(), /announce/);
   assert.equal(isStaleRefusalCopy({
     status: "The note changed. Your draft is kept; press Enter to preview it against the current note. — Nothing was written.",
     banner: "",

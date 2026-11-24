@@ -171992,7 +171992,7 @@ PropertyEditorModal.prototype.propertyEditorBackOut = function propertyEditorBac
     this.filterOpen = false;
     this.propertyEditorFilterInputFocused = false;
     if (this.propertyEditorFilterQuery) propertyEditorSelectionFilterSetQuery(this, "");
-    else this.paintPropertyEditor();
+    this.paintPropertyEditor();
     return;
   }
   return propertyEditorBaseBackOutSelectionFilter.call(this, event);
@@ -173092,9 +173092,6 @@ function propertyEditorSourceEntries(sourceText) {
   keyLines.forEach((keyLine, position) => {
     const line = lines[keyLine.lineIndex];
     const regionStart = line.start;
-    const nextKeyStart = position + 1 < keyLines.length
-      ? lines[keyLines[position + 1].lineIndex].start
-      : found.yamlEnd;
     const lastBodyIndex = position + 1 < keyLines.length ? keyLines[position + 1].lineIndex : closeIndex;
     const afterColon = line.text.slice(keyLine.colon + 1);
     const header = propertyEditorSourceBlockHeader(propertyEditorSourceStripComment(afterColon));
@@ -173119,14 +173116,22 @@ function propertyEditorSourceEntries(sourceText) {
     }
     const occurrence = (counts.get(keyLine.key) || 0) + 1;
     counts.set(keyLine.key, occurrence);
-    // The first entry owns every byte from the frontmatter body start, so
-    // its leading comments travel with it exactly like Bob's own
-    // attached-trivia model for `prop.move` / `prop.restore`.
-    const entryStart = position === 0 ? found.yamlStart : regionStart;
-    const leading = position === 0 ? text.slice(entryStart, regionStart) : "";
+    // Bob's attached-trivia model: every byte since the previous entry's end
+    // belongs to this entry, so inter-entry comments and blanks travel with
+    // the following entry exactly like `prop.move` / `prop.restore` (verified
+    // against real bob: adjacent and blank-separated comments move; copying
+    // must retain them rather than silently dropping them). The first entry
+    // owns every byte from the frontmatter body start.
+    const entryStart = position === 0 ? found.yamlStart : entries[position - 1].end;
+    const leading = text.slice(entryStart, regionStart);
     const rawEnd = position + 1 < keyLines.length ? entryEnd : found.yamlEnd;
     const raw = text.slice(entryStart, rawEnd);
-    const trivia = position + 1 < keyLines.length ? text.slice(rawEnd, nextKeyStart) : "";
+    const trivia = "";
+    if (position > 0) {
+      const prev = entries[position - 1];
+      prev.trivia = "";
+      prev.triviaStart = prev.triviaEnd = prev.end;
+    }
     const bodyText = [];
     if (!isBlock) {
       for (let index = keyLine.lineIndex + 1; index < lastBodyIndex; index += 1) {

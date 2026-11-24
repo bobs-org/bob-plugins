@@ -397,7 +397,7 @@ PropertyEditorModal.prototype.propertyEditorBackOut = function propertyEditorBac
     this.filterOpen = false;
     this.propertyEditorFilterInputFocused = false;
     if (this.propertyEditorFilterQuery) propertyEditorSelectionFilterSetQuery(this, "");
-    else this.paintPropertyEditor();
+    this.paintPropertyEditor();
     return;
   }
   return propertyEditorBaseBackOutSelectionFilter.call(this, event);

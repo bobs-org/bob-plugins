@@ -239,3 +239,23 @@ change. Vault type mutation is not a property undo token: `u` undoes this
 note's value, not the vault type. Local conversion and the vault confirmation
 are separate submissions. Changing the vault type does not rewrite other
 notes' values. The editor never writes `.obsidian/types.json` itself.
+
+## Native Properties parity
+
+How each native Properties action maps to the editor. Everything below is
+covered by the disposable-vault real-Obsidian acceptance run
+(`scripts/obsidian-property-editor-e2e.cjs`).
+
+| Native Properties action | Property Editor | Notes |
+| --- | --- | --- |
+| Add property | `o` / `O` / Mod+`;`, or All actions | Name and value are written together; Tab accepts the known type |
+| Edit value | Enter / `l`, or the typed value stage | 250 ms Bob dry-run; Save applies only the matching preview |
+| Rename | `r` | Bob refuses card-owned, identity, and derived destinations; same-name is a no-op |
+| Delete | Ctrl+D / Mod+Backspace, marked rows as one batch | A mixed protected selection is refused as a whole with the locked rows named |
+| Reorder | Alt+J / Alt+K (Alt+↓ / Alt+↑) | Keyboard-only; leading comments travel; disabled while a filter query is active |
+| Select | Space, `V` range, Shift+↑ / Shift+↓ | Marks live in a separate gutter; filter-query edits reset marks |
+| Copy / paste | Mod+C / Mod+V with a New / Replace / Skipped review | One guarded undoable batch; opaque selections are refused, never flattened |
+| Property kinds | `t` conversion stage, map kinds through YAML | Safe conversions preview; ambiguous ones keep an editable field |
+| Global property types | Separate **Change vault property type** confirmation | Names the key, type, and affected-note count; never implicit |
+| Nested maps and YAML | Inline YAML value stage (Enter on a map, or All actions) | Seeded from exact source bytes; Mod+Enter saves through the preview latch |
+| Protected and opaque rows | Locked rows; `y` opens YAML | Identity, derived, and opaque values are never written from the editor |

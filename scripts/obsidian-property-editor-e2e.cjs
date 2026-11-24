@@ -13,6 +13,7 @@ const shared = require("./obsidian-record-card-e2e.cjs");
 const lib = require("./obsidian-property-editor-e2e-lib.cjs");
 const diagnostics = require("./obsidian-property-editor-e2e-diagnostics.cjs");
 const surfaces = require("./obsidian-property-editor-e2e-surfaces.cjs");
+const parity = require("./obsidian-property-editor-e2e-parity.cjs");
 
 const repoRoot = path.resolve(__dirname, "..");
 const ELECTRON_FALLBACK = "/snap/obsidian/current/app/obsidian";
@@ -211,6 +212,7 @@ async function sendKey(client, key, options = {}) {
     ArrowUp: ["ArrowUp", 38],
     "[": ["BracketLeft", 219, "["],
     ";": ["Semicolon", 186, ";"],
+    "/": ["Slash", 191, "/"],
     "=": ["Equal", 187, "="],
     "+": ["Equal", 187, "+"],
   };
@@ -483,7 +485,9 @@ async function run(args) {
 
     await propertyRowClick(client, "keep_exact");
     await sendKey(client, "j");
-    await assertBrowseSelection(client, report, "project_digest", "keyboard navigation focuses selected row");
+    await assertBrowseSelection(client, report, "locked_toggle", "keyboard navigation focuses selected row");
+    await propertyRowClick(client, "project_digest");
+    await assertBrowseSelection(client, report, "project_digest", "keyboard navigation reaches derived row");
     probe = await waitForEditor(client, (value) => value.rows.some((row) => row.key === "project_digest"), "derived project property");
     const derived = probe.rows.find((row) => row.key === "project_digest");
     const derivedReport = probe.properties.find((row) => row.key === "project_digest");
@@ -703,6 +707,14 @@ async function run(args) {
     }
 
     await closePropertyEditor(client);
+
+    await parity.runParityAcceptance({
+      client, report, vaultDir, outDir, shared, sendKey, waitForEditor, openPropertyEditor,
+      addCheck, closePropertyEditor, propertyRowClick, saveStage, setInput, yamlTarget,
+      finishYamlExcursion, selectorClick, assertDiskBytes,
+    });
+
+    await closePropertyEditor(client);
     await shared.openNote(client, "plain.md", "live");
     const plainPath = path.join(vaultDir, "plain.md");
     const plainBefore = fs.readFileSync(plainPath, "utf8");
@@ -850,13 +862,14 @@ async function run(args) {
           && review.selectedDiffers && review.lockedReadable,
         { layout, review });
     }
-    addCheck(report, "screenshots light dark narrow wide", report.screenshots.length === 4,
-      report.screenshots.map(({ name, width, theme, bytes }) => ({ name, width, theme, bytes })));
+    const standardShots = report.screenshots.filter((shot) => /^property-editor-(wide|narrow)-/.test(shot.name || ""));
+    addCheck(report, "screenshots light dark narrow wide", standardShots.length === 4,
+      standardShots.map(({ name, width, theme, bytes }) => ({ name, width, theme, bytes })));
     addCheck(report, "layout probes every screenshot for clipping focus ring selected and locked rows",
-      report.screenshots.every((shot) => shot.review && shot.review.clipped && shot.review.selectedDiffers
+      standardShots.every((shot) => shot.review && shot.review.clipped && shot.review.selectedDiffers
         && shot.review.lockedReadable && shot.review.keyValueOverlap && shot.review.rowOverlap
         && shot.review.valueOverflow),
-      report.screenshots.map((shot) => ({ name: shot.name, review: shot.review })));
+      standardShots.map((shot) => ({ name: shot.name, review: shot.review })));
     report.screenshotInspection = report.screenshots.map((shot) => ({
       name: shot.name,
       sha256: shot.sha256 || "",

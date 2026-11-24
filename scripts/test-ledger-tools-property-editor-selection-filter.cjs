@@ -138,6 +138,19 @@ test("an empty filter layer does not clear marks when Esc dismisses it", () => {
   assert.deepEqual([...H.propertyEditorSelectionFilterMarkedIds(modal)], [entry.id]);
 });
 
+test("Esc with a query repaints the cleared filter layer", () => {
+  const modal = modalFor([row({ key: "a", line: 3 }), row({ key: "b", line: 4 })]);
+  let paints = 0;
+  modal.paintPropertyEditor = () => { paints += 1; };
+  H.propertyEditorSelectionFilterPerform(modal, "filter");
+  H.propertyEditorSelectionFilterSetQuery(modal, "zzz");
+  paints = 0;
+  modal.propertyEditorBackOut();
+  assert.equal(modal.propertyEditorFilterQuery, "");
+  assert.equal(modal.filterOpen, false);
+  assert.equal(paints, 1, "clearing a query repaints the rows and hides the filter layer");
+});
+
 test("a successful multi-delete sends one source-ordered guarded batch and reconciles focus", async () => {
   const properties = [
     row({ key: "zeta", line: 3 }),

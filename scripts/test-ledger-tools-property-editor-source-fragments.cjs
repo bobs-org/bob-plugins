@@ -177,6 +177,24 @@ test("clipboard decoder refuses fences, bodies, duplicates, and opaque input", (
   assert.equal(H.propertyEditorClipboardDecode("a: &x 1\n", stubParseYaml).code, "opaque-anchor");
 });
 
+test("source entries attach inter-entry comments to the following entry like prop.move", () => {
+  const source = "---\nalpha: one\n# Comment for gamma\ngamma: three\n---\n";
+  const result = H.propertyEditorSourceEntries(source);
+  assert.equal(result.ok, true);
+  assert.equal(result.entries[0].raw, "alpha: one\n");
+  assert.equal(result.entries[1].raw, "# Comment for gamma\ngamma: three\n");
+  assert.equal(result.entries[1].leading, "# Comment for gamma\n");
+  assert.equal(result.entries[0].trivia, "");
+  assert.equal(result.entries[1].trivia, "");
+  slicesExact(source, result.entries);
+  const assembled = H.propertyEditorSourceAssembleEntries([result.entries[1]], source, "\n");
+  assert.equal(assembled.ok, true);
+  assert.equal(assembled.yaml, "# Comment for gamma\ngamma: three");
+  const both = H.propertyEditorSourceAssembleEntries(result.entries, source, "\n");
+  assert.equal(both.ok, true);
+  assert.equal(both.yaml, "alpha: one\n# Comment for gamma\ngamma: three");
+});
+
 test("source assembler keeps block bytes and rebuilds flow with braces", () => {
   const source = "---\ntitle: Hello\ncount: 5 # qty\n---\n";
   const entries = H.propertyEditorSourceEntries(source).entries;

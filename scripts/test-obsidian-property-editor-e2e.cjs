@@ -44,6 +44,17 @@ test("runner advertises the complete editor acceptance matrix", () => {
     "entry-palette-edit-note-properties", "entry-command-mode-row",
     "entry-drawer-key-label", "entry-drawer-add-property", "entry-drawer-edit-all",
     "entry-api-open-property-editor", "entry-ordinary-and-invalid-yaml-notes",
+    "parity-rename-undo-disk-bytes", "parity-rename-refusals-keep-draft",
+    "parity-reorder-comments-undo-disk-bytes", "parity-reorder-filter-lockout",
+    "parity-mark-range-delete-undo-disk-bytes", "parity-mixed-protected-delete-refused",
+    "parity-filter-return-empty-ladder", "parity-source-exact-copy",
+    "parity-paste-preview-apply-undo-disk-bytes", "parity-paste-stale-preview-invalidated",
+    "parity-paste-malformed-blocked", "parity-yaml-stage-save-disk-bytes",
+    "parity-yaml-stage-refusals-kept", "parity-kind-convert-undo-disk-bytes",
+    "parity-kind-created-warning", "parity-vault-type-change-confined",
+    "parity-close-ladder-filter-modal", "parity-native-clipboard-in-inputs",
+    "parity-two-pane-unsaved-rename", "parity-unload-paste-no-late-write",
+    "parity-screenshots-views-layout",
     "screenshots-layout-probes-light-dark-narrow-wide",
   ]) assert.ok(lib.ACCEPTANCE_CHECKS.includes(check), check);
   for (const check of lib.ACCEPTANCE_CHECKS) {
@@ -51,9 +62,14 @@ test("runner advertises the complete editor acceptance matrix", () => {
   }
   assert.equal(typeof lib.visualLayoutSource, "function");
   assert.match(lib.visualLayoutSource(), /selectedDiffers/);
+  assert.match(lib.visualLayoutSource(), /markedDiffers/);
   assert.match(lib.fixtureNotes()["surfaces.md"], /keep_me: "original"/);
   assert.match(lib.fixtureNotes()["ordinary.md"], /title: "Ordinary note"/);
+  assert.match(lib.fixtureNotes()["parity.md"], /# Comment for gamma/);
+  assert.match(lib.editorProbeSource(), /clipboardOpen/);
   assert.equal(typeof runner.run, "function");
+  const parity = require("./obsidian-property-editor-e2e-parity.cjs");
+  assert.equal(typeof parity.runParityAcceptance, "function");
   assert.throws(() => lib.parseArgs(["--executable"]), /requires a PATH/);
 });
 

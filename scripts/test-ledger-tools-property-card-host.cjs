@@ -313,7 +313,11 @@ test("workspace events refresh by default, and an adapter handler replaces that 
 test("record file-open and layout-change schedule only its Reading-view mount", () => {
   const plugin = fakePlugin();
   const handlers = new Map();
-  plugin.app.workspace.on = (name, fn) => { handlers.set(name, fn); return { name }; };
+  plugin.app.workspace.on = (name, fn) => {
+    if (!handlers.has(name)) handlers.set(name, []);
+    handlers.get(name).push(fn);
+    return { name };
+  };
   let mounts = 0;
   plugin.scheduleRecordSheetReadingViewMount = () => { mounts += 1; };
   plugin.setupRecordSheet();
@@ -321,26 +325,36 @@ test("record file-open and layout-change schedule only its Reading-view mount", 
   // only the workspace events below are measured.
   plugin.pendingTimers.clear();
   plugin.recordSheetRefreshTimer = null;
-  handlers.get("file-open")();
-  handlers.get("layout-change")();
+  // The ownership coordinator subscribes too; a real emitter retains both
+  // listeners instead of overwriting the adapter's Reading mount callback.
+  for (const name of ["file-open", "layout-change"]) {
+    for (const handler of handlers.get(name)) handler();
+  }
   assert.equal(mounts, 2);
   assert.equal(plugin.recordSheetRefreshTimer == null, true, "no full record refresh on file-open");
   assert.equal(plugin.pendingTimers.size, 0);
   plugin.teardownRecordSheet();
 });
 
-test("album and bank skip editorAttributes and workspace events; record keeps both", () => {
+test("record keeps editorAttributes and mount events alongside one shared ownership subscription", () => {
   const plugin = fakePlugin();
+  plugin.app.workspace.on = (name) => ({ name });
   plugin.setupAlbumHeader();
+  assert.deepEqual(plugin.events.map((event) => event.name).sort(),
+    ["active-leaf-change", "config-changed", "file-open", "layout-change"]);
   plugin.setupRecordSheet();
+  const beforeBank = plugin.events.length;
   plugin.setupBankSetup();
+  assert.equal(plugin.events.length, beforeBank, "bank adds no workspace listeners");
   const album = plugin.createAlbumHeaderExtension();
   const record = plugin.createRecordSheetExtension();
   const bank = plugin.createBankSetupExtension();
   assert.equal(album.options.provide, undefined);
   assert.equal(typeof record.options.provide, "function");
   assert.equal(bank.options.provide, undefined);
-  assert.equal((plugin.events || []).length, 2, "only record listens for layout-change/file-open");
+  assert.deepEqual(plugin.events.map((event) => event.name).sort(),
+    ["active-leaf-change", "config-changed", "file-open", "file-open", "layout-change", "layout-change"],
+    "record adds its mount listeners without rebinding the shared coordinator");
 });
 
 test("a host without editorAttributes does not install the facet", () => {

@@ -247,9 +247,20 @@ function sidebarFailures(probe) {
   const failures = [];
   if (!probe?.hasSidebar) failures.push("File Properties sidebar did not open");
   if (!probe?.hasNative) failures.push("File Properties sidebar has no native properties");
+  if (!probe?.visible) failures.push("File Properties sidebar controls are not visible");
   if (probe?.owned) failures.push("sidebar acquired whole-container ownership");
   if (probe?.inert) failures.push("sidebar native properties are inert or aria-hidden");
   return failures;
+}
+
+// One Escape may only dismiss a menu, Add stage, or filter. Follow the
+// complete close ladder and verify dismissal before the next keyboard case.
+async function dismissEditor({ isOpen, escape }) {
+  for (let step = 0; step < 4; step += 1) {
+    if (!await isOpen()) return;
+    await escape();
+  }
+  if (await isOpen()) throw new Error("property editor stayed open after its close ladder");
 }
 
 function variablesOk(probe, mode) {
@@ -556,7 +567,7 @@ function selfTest() {
 }
 
 module.exports = {
-  HELP_TEXT, REQUIRED_CHECKS, PATHS, PROBE_SOURCE, PAGE_COMMON,
+  HELP_TEXT, REQUIRED_CHECKS, PATHS, PROBE_SOURCE, PAGE_COMMON, dismissEditor,
   parseArgs, surfaceOf, fixtureNotes, canvasFixture, passingReport, computeVerdict,
   ownedFailures, nativeFailures, addEditorFailures, sidebarFailures, variablesOk, screenshotNeeds, selfTest,
 };

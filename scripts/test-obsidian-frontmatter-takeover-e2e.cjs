@@ -138,10 +138,32 @@ test("native UI cannot masquerade as the property editor in Add mode", () => {
 });
 
 test("sidebar acceptance requires present, usable native properties", () => {
-  const usable = { hasSidebar: true, hasNative: true, owned: false, inert: false };
+  const usable = { hasSidebar: true, hasNative: true, visible: true, owned: false, inert: false };
   assert.deepEqual(lib.sidebarFailures(usable), []);
   assert.ok(lib.sidebarFailures(null).length);
   for (const delta of [
-    { hasSidebar: false }, { hasNative: false }, { owned: true }, { inert: true },
+    { hasSidebar: false }, { hasNative: false }, { visible: false }, { owned: true }, { inert: true },
   ]) assert.ok(lib.sidebarFailures({ ...usable, ...delta }).length, JSON.stringify(delta));
+});
+
+test("editor cleanup leaves Add mode and then closes without sending Escape into the note", async () => {
+  for (const initial of [[], ["modal"], ["add", "modal"], ["menu", "add", "filter", "modal"]]) {
+    const layers = [...initial];
+    let presses = 0;
+    await lib.dismissEditor({
+      isOpen: async () => layers.length > 0,
+      escape: async () => { assert.ok(layers.length > 0); layers.shift(); presses += 1; },
+    });
+    assert.equal(presses, initial.length);
+    assert.equal(layers.length, 0);
+  }
+});
+
+test("editor cleanup fails instead of leaking a modal into the next keyboard check", async () => {
+  let presses = 0;
+  await assert.rejects(lib.dismissEditor({
+    isOpen: async () => true,
+    escape: async () => { presses += 1; },
+  }), /stayed open/);
+  assert.equal(presses, 4);
 });

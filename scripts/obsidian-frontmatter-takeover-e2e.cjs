@@ -253,15 +253,10 @@ function makePage(ctx) {
       return row;
     },
     closeEditor: async () => {
-      await ev(`(() => {
-        const editor = document.querySelector(".bob-property-editor");
-        if (!editor) return false;
-        const close = editor.querySelector(".modal-close-button, .bob-property-editor-close, [data-property-close]");
-        if (close) { close.click(); return true; }
-        return false;
-      })()`);
-      await page.keys("Escape");
-      await page.settle(150);
+      await lib.dismissEditor({
+        isOpen: () => ev("Boolean(document.querySelector('.bob-property-editor'))"),
+        escape: () => page.keys("Escape"),
+      });
     },
     writeConfig: (bobPath) => {
       const configDir = path.join(ctx.profileDir, ".config", "bob");
@@ -1176,15 +1171,32 @@ async function run(args) {
       await ctx.page.open(ctx.main, P.day, "live");
       await ctx.page.waitOwned(ctx.main, "live", "sidebar setup");
       const result = await ctx.page.ev(`(async () => {
-        await app.commands.executeCommandById("file-properties:open");
-        await new Promise((resolve) => setTimeout(resolve, 400));
-        const sidebar = document.querySelector(".workspace-leaf-content[data-type='file-properties'], .workspace-leaf-content[data-type='all-properties']");
-        const owned = sidebar ? sidebar.querySelector(".bob-property-card-owns-frontmatter") : null;
-        const input = sidebar ? sidebar.querySelector(".metadata-property-key-input, .metadata-property") : null;
+        const command = app.commands.commands["properties:open-local"];
+        if (!command) return { error: "Show file properties command is not registered" };
+        await app.commands.executeCommandById(command.id);
+        const leaf = app.workspace.getLeavesOfType("file-properties")[0];
+        if (leaf) {
+          await app.workspace.revealLeaf(leaf);
+          if (leaf.loadIfDeferred) await leaf.loadIfDeferred();
+        }
+        const deadline = Date.now() + 5000;
+        let sidebar, input;
+        do {
+          sidebar = document.querySelector(".workspace-leaf-content[data-type='file-properties']");
+          input = sidebar?.querySelector(".metadata-property-key-input");
+          if (input?.getBoundingClientRect().width > 0) break;
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        } while (Date.now() < deadline);
+        const owned = sidebar?.closest(".bob-property-card-owns-frontmatter")
+          || sidebar?.querySelector(".bob-property-card-owns-frontmatter");
+        const rect = input?.getBoundingClientRect();
         return { hasSidebar: Boolean(sidebar), owned: Boolean(owned), hasNative: Boolean(input),
+          command: { id: command.id, name: command.name },
+          visible: Boolean(rect?.width > 0 && rect?.height > 0 && getComputedStyle(input).visibility !== "hidden"),
           inert: Boolean(input?.closest("[inert], [aria-hidden='true']")) };
       })()`);
       const failures = lib.sidebarFailures(result);
+      await shared.collapseSidebars(client);
       return { ok: failures.length === 0, result, failures };
     });
     await attempt("field-focused-helper", async () => {

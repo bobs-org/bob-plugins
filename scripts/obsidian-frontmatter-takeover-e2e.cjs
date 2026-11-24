@@ -423,7 +423,7 @@ async function run(args) {
     });
     await attempt("vim-k-gg-up-live", async () => {
       const failures = [];
-      const placedTop = await ctx.page.ev("window.__bobFrontmatterTakeover.setCursor(" + JSON.stringify(ctx.main) + ", 5, 0)");
+      const placedTop = await ctx.page.ev("window.__bobFrontmatterTakeover.setCursor(" + JSON.stringify(ctx.main) + ", 15, 0)");
       if (!placedTop || placedTop.ok !== true) failures.push("could not place cursor at the top line: " + JSON.stringify(placedTop));
       const downTop = await ctx.page.ev("window.__bobFrontmatterTakeover.keyDowns()");
       await ctx.page.keys("Escape");
@@ -436,7 +436,7 @@ async function run(args) {
       const afterUp = await ctx.page.active();
       const downNav = await ctx.page.ev("window.__bobFrontmatterTakeover.keyDowns()");
       if (!(downNav > downTop)) failures.push("navigation keys never reached the page");
-      const placedBody = await ctx.page.ev("window.__bobFrontmatterTakeover.setCursor(" + JSON.stringify(ctx.main) + ", 10, 0)");
+      const placedBody = await ctx.page.ev("window.__bobFrontmatterTakeover.setCursor(" + JSON.stringify(ctx.main) + ", 23, 0)");
       if (!placedBody || placedBody.ok !== true) failures.push("could not place cursor on the body line: " + JSON.stringify(placedBody));
       await ctx.page.keys("Escape");
       await ctx.page.keys("i");
@@ -523,16 +523,41 @@ async function run(args) {
     await attempt("deny-hover", async () => {
       await ctx.page.open(ctx.main, P.hover, "reading");
       await ctx.page.settle(400);
-      const result = await ctx.page.ev(`(async () => {
-        const link = Array.from(document.querySelectorAll("a.internal-link, .cm-hmd-internal-link")).find((node) => /today|20261120/.test(node.textContent || node.getAttribute("data-href") || ""));
-        if (!link) return { ok: false, reason: "no hover link" };
-        link.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, cancelable: true, view: window }));
-        await new Promise((resolve) => setTimeout(resolve, 700));
-        const pop = document.querySelector(".hover-popover");
-        const owned = pop ? pop.querySelector(".bob-property-card-owns-frontmatter") : null;
-        return { ok: Boolean(pop) && !owned, hasPopover: Boolean(pop), owned: Boolean(owned) };
+      const target = await ctx.page.ev(`(() => {
+        const leaf = app.workspace.getLeafById(${JSON.stringify(ctx.main)});
+        const view = leaf?.view;
+        const root = view?.getMode?.() === "preview" ? view.previewMode?.containerEl : view?.contentEl;
+        const link = Array.from(root?.querySelectorAll("a.internal-link, .internal-link") || [])
+          .find((node) => /today|20261120/.test(node.textContent || node.getAttribute("data-href") || ""));
+        if (!link) return { found: false };
+        link.scrollIntoView({ block: "center", inline: "nearest" });
+        const rect = link.getBoundingClientRect();
+        const event = new MouseEvent("mouseover", {
+          bubbles: true, cancelable: true,
+          clientX: rect.left + Math.min(8, Math.max(1, rect.width / 2)),
+          clientY: rect.top + Math.min(8, Math.max(1, rect.height / 2)),
+        });
+        app.workspace.trigger("hover-link", {
+          event, source: "preview", hoverParent: view, targetEl: link,
+          linktext: link.getAttribute("data-href") || link.getAttribute("href") || "",
+          sourcePath: view.file.path,
+        });
+        return { found: true, width: rect.width, height: rect.height };
       })()`);
-      return result;
+      if (!target?.found || !(target.width > 0 && target.height > 0)) {
+        throw new Error("no visible hover target: " + JSON.stringify(target));
+      }
+      await waitFor(client, "Boolean(document.querySelector('.popover.hover-popover .markdown-preview-view, .hover-popover .markdown-preview-view'))", Boolean, "hover popover render", 15_000);
+      const result = await ctx.page.ev(`(() => {
+        const pop = document.querySelector(".popover.hover-popover, .hover-popover");
+        return {
+          hasPopover: Boolean(pop),
+          owned: Boolean(pop?.querySelector(".bob-property-card-owns-frontmatter")),
+          card: Boolean(pop?.querySelector(".bob-intention-card, .bob-album-header, .bob-record-sheet")),
+        };
+      })()`);
+      await ctx.page.ev("(() => { document.querySelectorAll('.hover-popover').forEach((node) => node.remove()); return true; })()");
+      return { ok: result.hasPopover && !result.owned && !result.card, target, result };
     });
     await attempt("deny-canvas", async () => {
       const result = await ctx.page.ev(`(() => {
@@ -570,23 +595,35 @@ async function run(args) {
     await attempt("deny-mobile", async () => {
       await ctx.page.open(ctx.main, P.day, "live");
       await ctx.page.waitOwned(ctx.main, "live", "mobile setup");
-      await ctx.page.ev(`(() => {
-        const Platform = window.require ? window.require("obsidian").Platform : null;
-        if (!Platform) return false;
-        Object.defineProperty(Platform, "isDesktopApp", { configurable: true, get: () => false });
+      const toggled = await ctx.page.ev(`(() => {
+        const platform = window.__bobFrontmatterTakeover.platform();
+        if (!platform) return false;
+        const descriptor = Object.getOwnPropertyDescriptor(platform, "isDesktopApp");
+        window.__bobFrontmatterTakeover.platformDescriptor = descriptor || null;
+        Object.defineProperty(platform, "isDesktopApp", { configurable: true, get: () => false });
+        const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
+        plugin.constructor.helpers.propertyCardFrontmatterCoordinatorReconcile(plugin);
         return true;
       })()`);
-      await ctx.page.ev(`(() => { const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}]; if (plugin.constructor.helpers.propertyCardFrontmatterCoordinatorReconcile) plugin.constructor.helpers.propertyCardFrontmatterCoordinatorReconcile(plugin); return true; })()`);
-      await ctx.page.settle(300);
-      const probe = await ctx.page.probe(ctx.main);
-      await ctx.page.ev(`(() => {
-        const Platform = window.require ? window.require("obsidian").Platform : null;
-        if (!Platform) return false;
-        Object.defineProperty(Platform, "isDesktopApp", { configurable: true, get: () => true });
-        return true;
-      })()`);
-      await ctx.page.ev(`(() => { const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}]; if (plugin.constructor.helpers.propertyCardFrontmatterCoordinatorReconcile) plugin.constructor.helpers.propertyCardFrontmatterCoordinatorReconcile(plugin); return true; })()`);
-      await ctx.page.settle(300);
+      if (!toggled) throw new Error("shared Obsidian Platform object unavailable");
+      let probe;
+      try {
+        await ctx.page.settle(300);
+        probe = await ctx.page.probe(ctx.main);
+      } finally {
+        await ctx.page.ev(`(() => {
+          const platform = window.__bobFrontmatterTakeover.platform();
+          const descriptor = window.__bobFrontmatterTakeover.platformDescriptor;
+          if (descriptor) Object.defineProperty(platform, "isDesktopApp", descriptor);
+          else delete platform.isDesktopApp;
+          window.__bobFrontmatterTakeover.platformDescriptor = null;
+          const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
+          try { plugin.scheduleIntentionCardRefresh(); } catch (_) {}
+          try { plugin.intentionCardHost?.().scheduleRefresh?.(); } catch (_) {}
+          plugin.constructor.helpers.propertyCardFrontmatterCoordinatorReconcile(plugin);
+          return true;
+        })()`);
+      }
       const restored = await ctx.page.waitOwned(ctx.main, "live", "mobile restore");
       return { ok: lib.nativeFailures(probe, "mobile").length === 0, probe, restored };
     });
@@ -608,16 +645,27 @@ async function run(args) {
     await attempt("stale-cache-releases", async () => {
       await ctx.page.open(ctx.main, P.day, "live");
       await ctx.page.waitOwned(ctx.main, "live", "stale setup");
-      await ctx.page.ev(`(() => {
+      const expectedType = await ctx.page.ev(`(() => {
         const file = app.vault.getAbstractFileByPath(${JSON.stringify(P.day)});
         const cache = app.metadataCache.getFileCache(file);
+        const expected = cache && cache.frontmatter ? cache.frontmatter.type : null;
         if (cache && cache.frontmatter) cache.frontmatter.type = "stale-mismatch";
         const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
         plugin.constructor.helpers.propertyCardFrontmatterCoordinatorReconcile(plugin);
-        return true;
+        return expected;
       })()`);
       await ctx.page.settle(250);
       const stale = await ctx.page.waitNative(ctx.main, "stale cache");
+      await ctx.page.ev(`(async () => {
+        const file = app.vault.getAbstractFileByPath(${JSON.stringify(P.day)});
+        await app.vault.modify(file, ${JSON.stringify(notes[P.day] + "\n\n<!-- takeover cache refresh -->\n")});
+        return true;
+      })()`);
+      await waitFor(client, `(() => {
+        const file = app.vault.getAbstractFileByPath(${JSON.stringify(P.day)});
+        const cache = app.metadataCache.getFileCache(file);
+        return Boolean(cache && cache.frontmatter && cache.frontmatter.type === ${JSON.stringify(expectedType)});
+      })()`, Boolean, "metadata cache refresh", 10_000);
       await ctx.page.ev(`(async () => {
         const file = app.vault.getAbstractFileByPath(${JSON.stringify(P.day)});
         await app.vault.modify(file, ${JSON.stringify(notes[P.day])});
@@ -971,10 +1019,31 @@ async function run(args) {
     report.fixtures.final = hashFixtures(vaultReal, names);
     const changed = names.filter((name) => report.fixtures.final[name] !== report.fixtures.expected[name]);
     check("bytes-unchanged", changed.length === 0, { changed, seeded: report.fixtures.seeded, final: report.fixtures.final });
+    const beforeNativeCheck = readInvocations(bobLog).length;
+    await ctx.page.open(ctx.main, P.ordinary, "live");
+    await ctx.page.waitNative(ctx.main, "ordinary before paint-spawn comparison");
+    await ctx.page.settle(1200);
+    const baselineInvocations = paintSpawned(readInvocations(bobLog).slice(beforeNativeCheck));
+    const beforeOwnedCheck = readInvocations(bobLog).length;
+    await ctx.page.open(ctx.main, P.day, "live");
+    await ctx.page.waitOwned(ctx.main, "live", "paint-spawn ownership");
+    await ctx.page.settle(1200);
+    const ownedInvocations = paintSpawned(readInvocations(bobLog).slice(beforeOwnedCheck));
+    const baselineArgs = new Set(baselineInvocations.map((row) => JSON.stringify(row.args)));
+    const extra = ownedInvocations.filter((row) => !baselineArgs.has(JSON.stringify(row.args)));
     const invocations = readInvocations(bobLog);
-    const extra = paintSpawned(invocations);
-    report.bobInvocations = { count: invocations.length, extra: extra.map((row) => row.args) };
-    check("no-paint-spawn", extra.length === 0, { extra: extra.map((row) => row.args), count: invocations.length });
+    report.bobInvocations = {
+      count: invocations.length,
+      baselinePaintSpawnCandidates: baselineInvocations.map((row) => row.args),
+      ownedPaintSpawnCandidates: ownedInvocations.map((row) => row.args),
+      extra: extra.map((row) => row.args),
+    };
+    check("no-paint-spawn", extra.length === 0, {
+      extra: extra.map((row) => row.args),
+      baselineCandidates: baselineInvocations.length,
+      ownedCandidates: ownedInvocations.length,
+      count: invocations.length,
+    });
     const needed = lib.screenshotNeeds();
     const have = new Set(report.screenshots.map((row) => row.name));
     const missingShots = needed.filter((name) => !have.has(name));

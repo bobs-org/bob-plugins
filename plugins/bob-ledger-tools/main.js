@@ -183238,6 +183238,10 @@ try {
       propertyCardTitleReleaseAll,
       propertyCardHostRegisterTitleOwnership,
       PROPERTY_CARD_OWNS_FRONTMATTER_CLASS,
+      // The real-Obsidian takeover harness uses the same Platform object as
+      // this module to exercise the mobile fail-open gate without reaching
+      // for Electron's isolated window.require("obsidian").
+      propertyCardDesktopPlatform: Platform,
       propertyCardFrontmatterScopeDenied,
       propertyCardFrontmatterFieldCreate,
       propertyCardFrontmatterFieldReduce,

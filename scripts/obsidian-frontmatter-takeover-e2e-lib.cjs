@@ -214,8 +214,13 @@ function ownedFailures(probe, mode) {
   if (!probe.actualOwned) failures.push("actual-ownership query is false");
   if (!probe.containerPresent) failures.push("metadata-container missing from DOM");
   if (probe.containerVisible) failures.push("native Properties still visible");
-  if (!probe.containerInert) failures.push("container is not inert");
-  if (probe.ariaHidden !== "true") failures.push("aria-hidden is " + probe.ariaHidden);
+  // Reading mode removes the native container from layout and the
+  // accessibility tree with display:none. Live Preview keeps the node as the
+  // title-slot anchor, so it also needs inert and aria-hidden while owned.
+  if (mode !== "reading") {
+    if (!probe.containerInert) failures.push("container is not inert");
+    if (probe.ariaHidden !== "true") failures.push("aria-hidden is " + probe.ariaHidden);
+  }
   if (probe.display !== "none") failures.push("computed display is " + probe.display);
   if (!probe.cardPresent) failures.push("supported card is not mounted");
   if (!probe.footPresent) failures.push("card foot is not mounted");
@@ -451,6 +456,7 @@ const PROBE_SOURCE = "(() => {" + PAGE_COMMON + String.raw`
     plugin: () => Boolean(pluginOf()),
     helpers: () => Boolean(helpersOf() && typeof helpersOf().propertyCardFrontmatterOwnMounted === "function"),
     ownPrimitivePresent: () => Boolean(helpersOf() && typeof helpersOf().propertyCardOwnFrontmatter === "function"),
+    platform: () => helpersOf() && helpersOf().propertyCardDesktopPlatform || null,
     active: () => {
       const node = document.activeElement;
       return {
@@ -522,8 +528,10 @@ function selfTest() {
     containerInert: true, ariaHidden: "true", display: "none", cardPresent: true, footPresent: true,
   };
   assert.deepEqual(ownedFailures(owned, "live"), []);
+  assert.deepEqual(ownedFailures({ ...owned, mode: "reading", containerInert: false, ariaHidden: null }, "reading"), []);
   assert.ok(nativeFailures({ ...owned, scopeClass: false, actualOwned: false, containerInert: false, ariaHidden: null }).length === 0);
   assert.ok(ownedFailures({ ...owned, containerVisible: true }, "live").includes("native Properties still visible"));
+  assert.ok(ownedFailures({ ...owned, mode: "reading", containerVisible: true }, "reading").includes("native Properties still visible"));
   const needed = screenshotNeeds();
   assert.ok(needed.includes("day-live-light-wide"));
   assert.ok(needed.includes("ordinary-add-dark-narrow"));

@@ -57,6 +57,7 @@ const REQUIRED_CHECKS = Object.freeze([
   { name: "variables-reading", surface: "reading" },
   { name: "source-toggle-releases", surface: "live" },
   { name: "path-change-releases", surface: "live" },
+  { name: "modify-keeps-ownership-live", surface: "live" },
   { name: "deny-embed", surface: "both" },
   { name: "bytes-unchanged", surface: "both" },
   { name: "screenshots-captured", surface: "both" },
@@ -235,6 +236,9 @@ const PROBE_SOURCE = "(() => {" + PAGE_COMMON + String.raw`
       readingVar: cssVar(scope, "--metadata-display-reading"),
       slotAnchor: slot ? (slot.anchor && slot.anchor.classList.contains("metadata-container") ? "metadata-container" : (slot.anchor ? slot.anchor.className : "append")) : null,
       slotParent: slot ? (slot.parent && slot.parent.classList ? Array.from(slot.parent.classList).join(" ") : null) : null,
+      slotParentConnected: slot ? Boolean(slot.parent && slot.parent.isConnected) : false,
+      slotParentRect: slot ? rectOf(slot.parent) : null,
+      slotAnchorRect: slot ? rectOf(slot.anchor) : null,
       activeTag: active ? String(active.tagName || "").toLowerCase() : null,
       activeInside,
       cursor: view && view.editor && typeof view.editor.getCursor === "function" ? view.editor.getCursor() : null,
@@ -257,10 +261,133 @@ const PROBE_SOURCE = "(() => {" + PAGE_COMMON + String.raw`
       restore: () => { app.commands.executeCommandById = orig; },
     };
   };
+  const registryCommand = (id) => {
+    const registry = (app.commands && app.commands.commands) || {};
+    return registry[id] || Object.values(registry).find((entry) => entry && entry.id === id) || null;
+  };
+  const readManagerHotkeys = (manager, fn, id) => {
+    if (!manager || typeof manager[fn] !== "function") return null;
+    try {
+      const value = manager[fn](id);
+      return value === undefined ? null : value;
+    } catch (_) {
+      return null;
+    }
+  };
+  const commandDetail = (id) => {
+    const command = registryCommand(id);
+    if (!command) return { found: false, id: id };
+    const manager = app.hotkeyManager || null;
+    return {
+      found: true, id: command.id, name: command.name,
+      callbackType: typeof command.callback, checkCallbackType: typeof command.checkCallback,
+      commandHotkeys: command.hotkeys || null,
+      registeredHotkeys: readManagerHotkeys(manager, "getHotkeys", id),
+      defaultHotkeys: readManagerHotkeys(manager, "getDefaultHotkeys", id),
+      obsidianVersion: (/obsidian\/([\d.]+)/i.exec(navigator.userAgent) || [])[1] || "",
+      canSetHotkeys: Boolean(manager && typeof manager.setHotkeys === "function"),
+    };
+  };
+  const dryRunCommand = (id) => {
+    const command = registryCommand(id);
+    if (!command) return { ok: false, reason: "missing" };
+    if (typeof command.checkCallback === "function") {
+      try {
+        return { ok: true, via: "checkCallback", returned: command.checkCallback(true) === true };
+      } catch (error) {
+        return { ok: false, via: "checkCallback", reason: String(error && error.message || error).slice(0, 300) };
+      }
+    }
+    if (typeof command.callback === "function") return { ok: true, via: "callback", returned: null };
+    return { ok: false, reason: "no-callback" };
+  };
+  const bindModSemicolon = (id) => {
+    const manager = app.hotkeyManager || null;
+    if (!manager || typeof manager.setHotkeys !== "function" || typeof manager.getHotkeys !== "function") {
+      return { ok: false, reason: "no-hotkey-manager" };
+    }
+    let current = null;
+    try {
+      current = manager.getHotkeys(id) || [];
+    } catch (error) {
+      return { ok: false, reason: String(error && error.message || error).slice(0, 300) };
+    }
+    const list = Array.isArray(current) ? current.slice() : [];
+    const hasMod = list.some((hotkey) => hotkey && hotkey.key === ";" && Array.isArray(hotkey.modifiers) && hotkey.modifiers.indexOf("Mod") !== -1);
+    if (hasMod) return { ok: true, bound: false, hotkeys: list };
+    try {
+      manager.setHotkeys(id, list.concat([{ modifiers: ["Mod"], key: ";" }]));
+      return { ok: true, bound: true, hotkeys: manager.getHotkeys(id) };
+    } catch (error) {
+      return { ok: false, reason: String(error && error.message || error).slice(0, 300) };
+    }
+  };
+  const modalOpen = () => {
+    const modal = document.querySelector(".modal-container .modal");
+    return Boolean(modal && modal.isConnected);
+  };
+  const setEditorCursor = (leafId, line, ch) => {
+    // editor.setCursor silently no-ops in Live Preview, and focusing after a
+    // selection lets Obsidian restore its own cursor on top of it (the
+    // open-time line-5 offset keeps winning). The proven record-card cursor
+    // helper dispatches a CodeMirror selection instead: focus first, and only
+    // when DOM focus is outside the editor, then dispatch, then verify.
+    const leaf = app.workspace.getLeafById(leafId);
+    const cm = leaf && leaf.view && leaf.view.editor && leaf.view.editor.cm;
+    if (!cm || !cm.dom) return { ok: false, reason: "no-cm" };
+    try {
+      const view = leaf.view.editor;
+      const active = document.activeElement;
+      if ((!active || !cm.dom.contains(active)) && view && typeof view.focus === "function") {
+        try { view.focus(); } catch (_) {}
+      }
+      const docLine = cm.state.doc.line(Math.min(Math.max(line + 1, 1), cm.state.doc.lines));
+      const target = Math.min(docLine.from + (ch || 0), docLine.to);
+      cm.dispatch({ selection: { anchor: target }, scrollIntoView: true });
+      const head = cm.state.selection.main.head;
+      return { ok: head === target, target, actual: head };
+    } catch (error) {
+      return { ok: false, reason: String(error && error.message || error).slice(0, 200) };
+    }
+  };
+  const docText = (leafId) => {
+    const leaf = app.workspace.getLeafById(leafId);
+    const cm = leaf && leaf.view && leaf.view.editor && leaf.view.editor.cm;
+    if (!cm) return null;
+    try {
+      return cm.state.doc.toString();
+    } catch (_) {
+      return null;
+    }
+  };
+  let observedKeyDowns = 0;
+  document.addEventListener("keydown", () => { observedKeyDowns += 1; }, true);
+  const readNote = (notePath) => {
+    const file = app.vault.getAbstractFileByPath(notePath);
+    if (!file) return Promise.resolve(null);
+    return app.vault.read(file);
+  };
+  const rectOf = (node) => {
+    if (!node || typeof node.getBoundingClientRect !== "function") return null;
+    try {
+      const rect = node.getBoundingClientRect();
+      return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+    } catch (_) {
+      return null;
+    }
+  };
   window.__bobFrontmatterProbe = {
     leaf: probeLeaf,
     commands: addPropertyCommands,
     wrapExecute,
+    detail: commandDetail,
+    dryRun: dryRunCommand,
+    bindMod: bindModSemicolon,
+    modalOpen,
+    readNote,
+    setCursor: setEditorCursor,
+    docText,
+    keyDowns: () => observedKeyDowns,
     active: () => {
       const node = document.activeElement;
       return { tag: node ? String(node.tagName || "").toLowerCase() : null, className: node ? String(node.className || "") : "", inProperties: Boolean(node && node.closest && node.closest(".metadata-container")) };

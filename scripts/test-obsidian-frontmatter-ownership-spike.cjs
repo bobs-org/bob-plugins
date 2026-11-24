@@ -72,13 +72,18 @@ test("every page-side source compiles without running", () => {
   }
   assert.match(lib.ADAPTER_SOURCE, /propertyCardOwnFrontmatter/, "the adapter owns through the kit primitive");
   assert.match(lib.PROBE_SOURCE, /Add file property/i, "the probe looks up the Add file property command");
+  assert.match(lib.PROBE_SOURCE, /dryRunCommand/, "the probe dry-runs the registered dispatch");
+  assert.match(lib.PROBE_SOURCE, /bindModSemicolon/, "the probe ensures an explicit Mod+; binding");
+  assert.match(lib.PROBE_SOURCE, /setEditorCursor/, "the probe positions the cursor through cm.dispatch");
+  assert.match(lib.PROBE_SOURCE, /observedKeyDowns/, "the probe counts delivered keydowns");
 });
 
 test("required S1 checks cover both surfaces and the command id", () => {
   const names = lib.REQUIRED_CHECKS.map((row) => row.name);
   for (const name of ["own-live", "own-reading", "vim-k-gg-up-live", "tab-live", "tab-reading",
     "title-slot-anchor-live", "title-slot-anchor-reading", "add-file-property-command",
-    "variables-live", "variables-reading", "source-toggle-releases", "path-change-releases", "deny-embed"]) {
+    "variables-live", "variables-reading", "source-toggle-releases", "path-change-releases",
+    "modify-keeps-ownership-live", "deny-embed"]) {
     assert.ok(names.includes(name), name);
   }
   assert.ok(lib.REQUIRED_CHECKS.some((row) => row.surface === "live"));

@@ -14,7 +14,6 @@ const path = require("node:path");
 
 const lib = require("./obsidian-frontmatter-ownership-spike-lib.cjs");
 const shared = require("./obsidian-record-card-e2e.cjs");
-const { keyEvents } = require("./obsidian-intention-card-e2e-lib.cjs");
 
 const repoRoot = path.resolve(__dirname, "..");
 const ELECTRON_FALLBACK = "/snap/obsidian/current/app/obsidian";
@@ -126,7 +125,18 @@ function makePage(ctx) {
       return result;
     },
     keys: async (key, modifiers = 0) => {
-      for (const event of keyEvents(key, modifiers)) await ctx.client.call("Input.dispatchKeyEvent", event);
+      // Vim-proof payloads matching the proven yank-flash/window-prefix
+      // runners: zeroed virtual key codes, code echoing the key itself, and a
+      // short gap between down and up. The generic keyEvents charCode shape
+      // never reaches CodeMirror Vim or Obsidian hotkeys through CDP.
+      const code = /^[a-z]$/i.test(key) ? "Key" + key.toUpperCase()
+        : (key === "Enter" || key === "Escape" ? key : key);
+      const text = !modifiers && key.length === 1 ? key : key === "Enter" ? "\r" : "";
+      const payload = { key, code, modifiers, windowsVirtualKeyCode: 0, nativeVirtualKeyCode: 0 };
+      if (text) { payload.text = text; payload.unmodifiedText = text; }
+      await ctx.client.call("Input.dispatchKeyEvent", { type: text ? "keyDown" : "rawKeyDown", ...payload });
+      await sleep(24);
+      await ctx.client.call("Input.dispatchKeyEvent", { type: "keyUp", ...payload });
       await sleep(80);
     },
     shot: async (name, tags, width = 1400) => {
@@ -232,6 +242,8 @@ async function run(args) {
       if (params.type === "error") report.consoleErrors.push((params.args || []).map((arg) => arg.value ?? arg.description ?? "").join(" ").slice(0, 1500));
     });
     await client.call("Runtime.enable");
+    const trustAction = await shared.trustCommunityPlugins(client);
+    report.pluginStartup = { trustAction };
     await waitFor(client, "Boolean(app.plugins.plugins['bob-ledger-tools']) && app.workspace.layoutReady", Boolean, "bob-ledger-tools startup", 45_000);
     report.app = await client.evaluate("({ version: (/obsidian\\/([\\d.]+)/i.exec(navigator.userAgent) || [])[1] || '', enabled: Array.from(app.plugins.enabledPlugins || []), manifest: app.plugins.manifests['bob-ledger-tools']?.version || null, helpers: Boolean(app.plugins.plugins['bob-ledger-tools']?.constructor?.helpers?.propertyCardOwnFrontmatter) })");
     check("plugin-loaded", report.app.enabled.includes(PLUGIN_ID) && report.app.helpers && report.app.manifest === report.pluginSource.version, report.app);
@@ -266,11 +278,19 @@ async function run(args) {
       const failures = [];
       if (!probe.containerPresent) failures.push("container left the DOM");
       if (probe.slotAnchor !== "metadata-container") failures.push("title slot anchor is " + probe.slotAnchor);
+      if (!probe.slotParentConnected) failures.push("title slot parent is not connected");
+      if (!(probe.slotParentRect && probe.slotParentRect.height > 0)) failures.push("title slot parent has no geometry");
       return { ok: failures.length === 0, probe, failures };
     });
 
     await attempt("vim-k-gg-up-live", async () => {
-      await ctx.page.ev(`(() => { const leaf = app.workspace.getLeafById(${JSON.stringify(ctx.main)}); const editor = leaf.view.editor; editor.setCursor({ line: 0, ch: 0 }); editor.focus(); return true; })()`);
+      const failures = [];
+      // Live Preview refuses cursor positions inside the frontmatter block
+      // (verified: anchor 0 resolves to offset 64, the first line after the
+      // fence), so the top-of-document checks start at that clamp line.
+      const placedTop = await ctx.page.ev("window.__bobFrontmatterProbe.setCursor(" + JSON.stringify(ctx.main) + ", 5, 0)");
+      if (!placedTop || placedTop.ok !== true) failures.push("could not place cursor at the top line: " + JSON.stringify(placedTop));
+      const downTop = await ctx.page.ev("window.__bobFrontmatterProbe.keyDowns()");
       await ctx.page.keys("Escape");
       await ctx.page.keys("g");
       await ctx.page.keys("g");
@@ -279,45 +299,133 @@ async function run(args) {
       const afterK = await ctx.page.active();
       await ctx.page.keys("ArrowUp");
       const afterUp = await ctx.page.active();
-      await ctx.page.keys("x");
+      const downNav = await ctx.page.ev("window.__bobFrontmatterProbe.keyDowns()");
+      if (!(downNav > downTop)) failures.push("navigation keys never reached the page");
+      // Body insert plus undo: typing must reach the editor buffer (never a
+      // property input). The buffer is the ground truth for typing; the disk
+      // must be identical afterwards, so the passive-write gate stays
+      // meaningful. Undo runs before any autosave can flush the marker.
+      const placedBody = await ctx.page.ev("window.__bobFrontmatterProbe.setCursor(" + JSON.stringify(ctx.main) + ", 10, 0)");
+      if (!placedBody || placedBody.ok !== true) failures.push("could not place cursor on the body line: " + JSON.stringify(placedBody));
+      await ctx.page.keys("Escape");
+      await ctx.page.keys("i");
+      for (const ch of "s1ok") await ctx.page.keys(ch);
+      await ctx.page.keys("Escape");
       const afterType = await ctx.page.active();
+      const bufferText = await ctx.page.ev("window.__bobFrontmatterProbe.docText(" + JSON.stringify(ctx.main) + ")");
+      await ctx.page.keys("u");
+      await ctx.page.settle(1200);
+      const restored = await ctx.page.ev("window.__bobFrontmatterProbe.readNote('alpha.md')");
       const probe = await ctx.page.probe(ctx.main);
-      const failures = [];
       for (const [label, row] of [["gg", afterGg], ["k", afterK], ["up", afterUp], ["type", afterType]]) {
         if (row.inProperties) failures.push(label + " focused a property input");
       }
+      if (!String(bufferText || "").includes("s1ok")) failures.push("inserted body text missing from the editor buffer (typing did not reach the editor)");
+      if (restored !== notes["alpha.md"]) failures.push("undo did not restore alpha.md bytes");
       if (probe.activeInside) failures.push("probe still inside the container");
-      return { ok: failures.length === 0, afterGg, afterK, afterUp, afterType, probe, failures };
+      return { ok: failures.length === 0, afterGg, afterK, afterUp, afterType, withMarker: String(bufferText || "").includes("s1ok"), restored: restored === notes["alpha.md"], probe, failures };
     });
 
     await attempt("tab-live", async () => {
       await ctx.page.ev(`(() => { const leaf = app.workspace.getLeafById(${JSON.stringify(ctx.main)}); leaf.view.editor.focus(); return true; })()`);
+      const downBefore = await ctx.page.ev("window.__bobFrontmatterProbe.keyDowns()");
       await ctx.page.keys("Tab");
       const afterTab = await ctx.page.active();
+      const downTab = await ctx.page.ev("window.__bobFrontmatterProbe.keyDowns()");
       await ctx.page.keys("Tab", 8);
       const afterShiftTab = await ctx.page.active();
+      const downShiftTab = await ctx.page.ev("window.__bobFrontmatterProbe.keyDowns()");
       const failures = [];
+      if (!(downTab > downBefore)) failures.push("Tab never reached the page");
+      if (!(downShiftTab > downTab)) failures.push("Shift+Tab never reached the page");
       if (afterTab.inProperties) failures.push("Tab entered Properties");
       if (afterShiftTab.inProperties) failures.push("Shift+Tab entered Properties");
       return { ok: failures.length === 0, afterTab, afterShiftTab, failures };
     });
 
     await attempt("add-file-property-command", async () => {
+      // Run on an unowned note so the native effect (focus the property key
+      // input) stays observable and no owned scope is disturbed.
+      await ctx.page.open(ctx.main, "beta.md", "live");
+      await ctx.page.settle();
+      const bytesBefore = await ctx.page.ev("window.__bobFrontmatterProbe.readNote('beta.md')");
       const commands = await ctx.page.commands();
-      const exact = (commands || []).find((row) => /add file property/i.test(row.name));
-      const chosen = exact || (commands || [])[0] || null;
-      report.addFilePropertyCommand = chosen;
-      const wrap = await ctx.page.ev("(function() { const wrap = window.__bobFrontmatterProbe.wrapExecute(); window.__bobFrontmatterExecuteWrap = wrap; return { ok: true, commands: window.__bobFrontmatterProbe.commands().length }; })()");
-      await ctx.page.keys(";", 4);
-      await ctx.page.keys(";", 2);
-      const seen = await ctx.page.ev("window.__bobFrontmatterExecuteWrap.seen()");
-      await ctx.page.ev("window.__bobFrontmatterExecuteWrap.restore()");
+      const exact = (commands || []).filter((row) => /add file property/i.test(row.name));
+      if (exact.length === 0) {
+        return { ok: false, commands, failures: ["no Add file property command in the registry (refusing fallback)"] };
+      }
+      const chosen = exact[0];
+      const detail = await ctx.page.ev("window.__bobFrontmatterProbe.detail(" + JSON.stringify(chosen.id) + ")");
+      report.addFilePropertyCommand = { id: chosen.id, name: chosen.name, detail, exactMatches: exact.length };
       const failures = [];
-      if (!chosen || !chosen.id) failures.push("no Add file property command in the registry");
+      if (exact.length !== 1) failures.push("expected exactly one Add file property command, saw " + exact.length);
+      if (!detail || detail.found !== true) failures.push("command missing from the registry at dispatch time");
+      if (detail && detail.callbackType !== "function" && detail.checkCallbackType !== "function") {
+        failures.push("command has neither callback nor checkCallback");
+      }
+      const effective = [].concat(detail?.registeredHotkeys || [], detail?.defaultHotkeys || [], detail?.commandHotkeys || []);
+      const hasModBinding = effective.some((hotkey) => hotkey && hotkey.key === ";"
+        && Array.isArray(hotkey.modifiers)
+        && (hotkey.modifiers.indexOf("Mod") !== -1 || hotkey.modifiers.indexOf("Ctrl") !== -1));
+      if (!hasModBinding) failures.push("no Mod+; binding for " + chosen.id);
+      const dry = await ctx.page.ev("window.__bobFrontmatterProbe.dryRun(" + JSON.stringify(chosen.id) + ")");
+      if (!dry || dry.ok !== true || (dry.via === "checkCallback" && dry.returned !== true)) {
+        failures.push("registered dispatch dry-run failed: " + JSON.stringify(dry));
+      }
+      // Bind explicitly only when the scratch profile lacks a Mod+; binding;
+      // the shipped default already carries one.
+      const bind = hasModBinding
+        ? { ok: true, bound: false, skipped: true }
+        : await ctx.page.ev("window.__bobFrontmatterProbe.bindMod(" + JSON.stringify(chosen.id) + ")");
+      if (!bind || bind.ok !== true) failures.push("could not ensure an explicit Mod+; binding: " + JSON.stringify(bind));
+      // Hotkey-triggered commands bypass executeCommandById (proven: Ctrl+P
+      // opens the palette with no page keydown and no dispatch record), so a
+      // Mod+; press is verified by its native effect: focus must land in the
+      // property key input. The registered dispatch is verified separately
+      // through the wrapped executeCommandById call.
+      const focusBody = async () => {
+        await ctx.page.ev("window.__bobFrontmatterProbe.setCursor(" + JSON.stringify(ctx.main) + ", 6, 0)");
+        await ctx.page.settle(120);
+      };
+      await focusBody();
+      await ctx.page.keys(";", 2);
+      await ctx.page.settle(200);
+      const afterCtrl = await ctx.page.active();
+      const sawCtrlEffect = Boolean(afterCtrl.inProperties
+        && /metadata-property-key-input/.test(afterCtrl.className || ""));
+      await ctx.page.keys("Escape");
+      await ctx.page.settle(150);
+      await focusBody();
+      await ctx.page.keys(";", 4);
+      await ctx.page.settle(200);
+      const afterMeta = await ctx.page.active();
+      const sawMetaEffect = Boolean(afterMeta.inProperties
+        && /metadata-property-key-input/.test(afterMeta.className || ""));
+      await ctx.page.keys("Escape");
+      await ctx.page.settle(150);
+      await ctx.page.ev("(function() { window.__bobFrontmatterExecuteWrap = window.__bobFrontmatterProbe.wrapExecute(); return true; })()");
+      await ctx.page.ev("(async () => { await app.commands.executeCommandById(" + JSON.stringify(chosen.id) + "); return true; })()");
+      const seenDirect = await ctx.page.ev("window.__bobFrontmatterExecuteWrap.seen()");
+      await ctx.page.ev("window.__bobFrontmatterExecuteWrap.restore()");
+      const sawDirect = seenDirect.indexOf(chosen.id) !== -1;
+      if (!sawDirect) failures.push("registered dispatch did not invoke " + chosen.id);
+      if (!sawCtrlEffect) failures.push("Mod+; (Ctrl+; on Linux) did not focus the property key input");
+      await ctx.page.keys("Escape");
+      await ctx.page.settle(150);
+      const after = await ctx.page.ev("(async () => ({ modal: window.__bobFrontmatterProbe.modalOpen(), active: window.__bobFrontmatterProbe.active(), bytes: await window.__bobFrontmatterProbe.readNote('beta.md') }))()");
+      if (after.modal) failures.push("native UI still open after Escape");
+      let restored = null;
+      if (bytesBefore !== after.bytes) {
+        await ctx.page.ev("(async () => { const file = app.vault.getAbstractFileByPath('beta.md'); await app.vault.modify(file, " + JSON.stringify(bytesBefore) + "); return true; })()");
+        await ctx.page.settle(200);
+        restored = await ctx.page.ev("window.__bobFrontmatterProbe.readNote('beta.md')");
+        if (restored !== bytesBefore) failures.push("could not restore beta.md after the command wrote");
+      }
       return {
-        ok: failures.length === 0, command: chosen, commands, wrap, seen,
-        note: "takeover wraps this id; Mod+; dispatch is recorded in seen when the host binds it",
-        failures,
+        ok: failures.length === 0, command: report.addFilePropertyCommand, dry, bind,
+        sawCtrlEffect, sawMetaEffect, sawDirect, bytesUnchanged: bytesBefore === after.bytes,
+        restored: restored === null ? null : restored === bytesBefore,
+        afterActive: after.active, failures,
       };
     });
 
@@ -346,7 +454,45 @@ async function run(args) {
       const failures = [];
       if (probe.scopeClass) failures.push("owns class leaked onto beta.md");
       if (probe.containerInert) failures.push("beta.md container is inert without a new own()");
-      return { ok: failures.length === 0, probe, failures };
+      // Navigate back, re-own, and type in the body: focus must never enter
+      // Properties and the typed text must land in the note. The marker is
+      // undone so the passive-write gate stays meaningful.
+      await ctx.page.open(ctx.main, "alpha.md", "live");
+      await ctx.page.own(ctx.main);
+      await ctx.page.settle(200);
+      const placedNav = await ctx.page.ev("window.__bobFrontmatterProbe.setCursor(" + JSON.stringify(ctx.main) + ", 12, 0)");
+      if (!placedNav || placedNav.ok !== true) failures.push("could not place cursor for navigation typing: " + JSON.stringify(placedNav));
+      await ctx.page.keys("Escape");
+      await ctx.page.keys("i");
+      for (const ch of "navok") await ctx.page.keys(ch);
+      await ctx.page.keys("Escape");
+      const afterType = await ctx.page.active();
+      const bufferText = await ctx.page.ev("window.__bobFrontmatterProbe.docText(" + JSON.stringify(ctx.main) + ")");
+      await ctx.page.keys("u");
+      await ctx.page.settle(1200);
+      const restored = await ctx.page.ev("window.__bobFrontmatterProbe.readNote('alpha.md')");
+      if (afterType.inProperties) failures.push("body typing after navigation entered Properties");
+      if (!String(bufferText || "").includes("navok")) failures.push("typed body text missing from the editor buffer after navigation");
+      if (restored !== notes["alpha.md"]) failures.push("undo did not restore alpha.md bytes after navigation typing");
+      return { ok: failures.length === 0, probe, afterType, typed: String(bufferText || "").includes("navok"), restored: restored === notes["alpha.md"], failures };
+    });
+
+    await attempt("modify-keeps-ownership-live", async () => {
+      await ctx.page.open(ctx.main, "alpha.md", "live");
+      await ctx.page.own(ctx.main);
+      await ctx.page.settle(200);
+      const before = await ctx.page.ev("window.__bobFrontmatterProbe.readNote('alpha.md')");
+      await ctx.page.ev("(async () => { const file = app.vault.getAbstractFileByPath('alpha.md'); await app.vault.modify(file, (await app.vault.read(file)) + '\\nExternal line\\n'); return true; })()");
+      await ctx.page.settle(400);
+      const probe = await ctx.page.probe(ctx.main);
+      const after = await ctx.page.ev("window.__bobFrontmatterProbe.readNote('alpha.md')");
+      const failures = ownedOk(probe, "live");
+      if (after !== before + "\nExternal line\n") failures.push("external modify did not land as expected");
+      await ctx.page.ev("(async () => { const file = app.vault.getAbstractFileByPath('alpha.md'); await app.vault.modify(file, " + JSON.stringify(notes["alpha.md"]) + "); return true; })()");
+      await ctx.page.settle(200);
+      const restored = await ctx.page.ev("window.__bobFrontmatterProbe.readNote('alpha.md')");
+      if (restored !== notes["alpha.md"]) failures.push("could not restore alpha.md after external modify");
+      return { ok: failures.length === 0, probe, restored: restored === notes["alpha.md"], failures };
     });
 
     await attempt("own-reading", async () => {
@@ -371,15 +517,22 @@ async function run(args) {
       const failures = [];
       if (!probe.containerPresent) failures.push("container left the DOM");
       if (probe.slotAnchor !== "metadata-container") failures.push("title slot anchor is " + probe.slotAnchor);
+      if (!probe.slotParentConnected) failures.push("title slot parent is not connected");
+      if (!(probe.slotParentRect && probe.slotParentRect.height > 0)) failures.push("title slot parent has no geometry");
       return { ok: failures.length === 0, probe, failures };
     });
 
     await attempt("tab-reading", async () => {
+      const downBefore = await ctx.page.ev("window.__bobFrontmatterProbe.keyDowns()");
       await ctx.page.keys("Tab");
       const afterTab = await ctx.page.active();
+      const downTab = await ctx.page.ev("window.__bobFrontmatterProbe.keyDowns()");
       await ctx.page.keys("Tab", 8);
       const afterShiftTab = await ctx.page.active();
+      const downShiftTab = await ctx.page.ev("window.__bobFrontmatterProbe.keyDowns()");
       const failures = [];
+      if (!(downTab > downBefore)) failures.push("Tab never reached the page");
+      if (!(downShiftTab > downTab)) failures.push("Shift+Tab never reached the page");
       if (afterTab.inProperties) failures.push("Tab entered Properties");
       if (afterShiftTab.inProperties) failures.push("Shift+Tab entered Properties");
       return { ok: failures.length === 0, afterTab, afterShiftTab, failures };

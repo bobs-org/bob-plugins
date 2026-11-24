@@ -96,6 +96,24 @@ test("screenshot inventory covers the required light/dark × narrow/wide matrix"
   assert.equal(needed.length, 44);
 });
 
+test("screenshot acceptance rejects leaked clones, native fallback, and wrong views", () => {
+  const owned = {
+    path: "record.md", mode: "reading", scopeClass: true, actualOwned: true,
+    containerPresent: true, containerVisible: false, containerCount: 1, visibleContainerCount: 0,
+    display: "none", cardPresent: true, footPresent: true,
+  };
+  assert.deepEqual(lib.screenshotFailures(owned, "record.md", "reading"), []);
+  for (const delta of [
+    { containerCount: 2 }, { visibleContainerCount: 1 }, { actualOwned: false },
+    { containerVisible: true }, { path: "stale.md" }, { mode: "live" },
+  ]) assert.ok(lib.screenshotFailures({ ...owned, ...delta }, "record.md", "reading").length);
+  const bank = { ...owned, path: "bank.md", scopeClass: false, actualOwned: false,
+    containerVisible: true, visibleContainerCount: 1, display: "block" };
+  assert.deepEqual(lib.screenshotFailures(bank, "bank.md", "reading", true), []);
+  assert.ok(lib.screenshotFailures({ ...bank, visibleContainerCount: 0 }, "bank.md", "reading", true).length);
+  assert.ok(lib.screenshotFailures({ ...bank, containerCount: 2 }, "bank.md", "reading", true).length);
+});
+
 test("takeover runner file parses and reuses provenance", () => {
   const runner = path.join(__dirname, "obsidian-frontmatter-takeover-e2e.cjs");
   const checked = spawnSync(process.execPath, ["--check", runner], { encoding: "utf8" });

@@ -243,6 +243,15 @@ function addEditorFailures(probe) {
   return probe.editorAdd ? [] : ["property editor did not enter Add mode"];
 }
 
+function screenshotFailures(probe, notePath, mode, native = false) {
+  const failures = native ? nativeFailures(probe, "screenshot") : ownedFailures(probe, mode);
+  if (probe?.path !== notePath) failures.push("screenshot has the wrong note");
+  if (probe?.mode !== mode) failures.push("screenshot has the wrong mode");
+  if (probe?.containerCount !== 1) failures.push("screenshot must have exactly one native container");
+  if (probe?.visibleContainerCount !== (native ? 1 : 0)) failures.push("screenshot native visibility is wrong");
+  return failures;
+}
+
 function sidebarFailures(probe) {
   const failures = [];
   if (!probe?.hasSidebar) failures.push("File Properties sidebar did not open");
@@ -295,12 +304,15 @@ const PAGE_COMMON = String.raw`
   const liveScopeOf = (view) => (view && view.editor && view.editor.cm ? view.editor.cm.dom : null) || null;
   const liveViewOf = (view) => (view && view.editor && view.editor.cm ? view.editor.cm : null);
   const child = (root, name) => (root ? Array.from(root.children).find((node) => node.classList.contains(name)) || null : null);
-  const nativeContainer = (scope) => {
-    if (!scope) return null;
-    if (scope.classList.contains("cm-editor")) return child(child(child(scope, "cm-scroller"), "cm-sizer"), "metadata-container");
-    if (scope.classList.contains("markdown-preview-view")) return child(child(child(scope, "markdown-preview-sizer"), "mod-header"), "metadata-container");
-    return null;
+  const nativeContainers = (scope) => {
+    if (!scope) return [];
+    const parent = scope.classList.contains("cm-editor")
+      ? child(child(scope, "cm-scroller"), "cm-sizer")
+      : scope.classList.contains("markdown-preview-view")
+        ? child(child(scope, "markdown-preview-sizer"), "mod-header") : null;
+    return Array.from(parent?.children || []).filter((node) => node.classList.contains("metadata-container"));
   };
+  const nativeContainer = (scope) => nativeContainers(scope)[0] || null;
   const cssVar = (node, name) => (node ? getComputedStyle(node).getPropertyValue(name).trim() : "");
   const shown = (node) => Boolean(node && node.isConnected && node.getClientRects().length > 0
     && getComputedStyle(node).display !== "none" && getComputedStyle(node).visibility !== "hidden");
@@ -361,6 +373,8 @@ const PROBE_SOURCE = "(() => {" + PAGE_COMMON + String.raw`
       actualPath: actual && actual.path || null,
       containerPresent: Boolean(container && container.isConnected),
       containerVisible: shown(container),
+      containerCount: nativeContainers(scope).length,
+      visibleContainerCount: nativeContainers(scope).filter(shown).length,
       containerInert: Boolean(container && (container.inert === true || container.hasAttribute("inert"))),
       ariaHidden: container ? container.getAttribute("aria-hidden") : null,
       display: container ? getComputedStyle(container).display : null,
@@ -373,7 +387,7 @@ const PROBE_SOURCE = "(() => {" + PAGE_COMMON + String.raw`
       cardPresent: Boolean(card && card.isConnected),
       cardClass: card ? String(card.className || "") : "",
       footPresent: Boolean(foot && foot.isConnected),
-      drawerOpen: Boolean(drawer && drawer.getAttribute && drawer.getAttribute("aria-hidden") !== "true" && shown(drawer)),
+      drawerOpen: Boolean(drawer && drawer.getAttribute("data-open") === "true" && shown(drawer)),
       drawerKeys,
       editorOpen: Boolean(editor && editor.isConnected),
       editorMode: editor ? (editor.getAttribute("data-property-mode") || editor.getAttribute("data-mode") || "") : "",
@@ -569,5 +583,5 @@ function selfTest() {
 module.exports = {
   HELP_TEXT, REQUIRED_CHECKS, PATHS, PROBE_SOURCE, PAGE_COMMON, dismissEditor,
   parseArgs, surfaceOf, fixtureNotes, canvasFixture, passingReport, computeVerdict,
-  ownedFailures, nativeFailures, addEditorFailures, sidebarFailures, variablesOk, screenshotNeeds, selfTest,
+  ownedFailures, nativeFailures, addEditorFailures, screenshotFailures, sidebarFailures, variablesOk, screenshotNeeds, selfTest,
 };

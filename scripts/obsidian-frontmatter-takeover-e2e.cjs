@@ -968,22 +968,33 @@ async function run(args) {
       return { ok: true, failed, restored };
     });
     await attempt("replaced-container-reapplies", async () => {
-      await ctx.page.open(ctx.main, P.day, "live");
-      await ctx.page.waitOwned(ctx.main, "live", "replace setup");
-      await ctx.page.ev(`(() => {
-        const leaf = app.workspace.getLeafById(${JSON.stringify(ctx.main)});
-        const scope = leaf.view.editor.cm.dom;
-        const scroller = Array.from(scope.children).find((node) => node.classList.contains("cm-scroller"));
-        const sizer = scroller && Array.from(scroller.children).find((node) => node.classList.contains("cm-sizer"));
-        const container = sizer && Array.from(sizer.children).find((node) => node.classList.contains("metadata-container"));
-        if (!container) return false;
-        const clone = container.cloneNode(true);
-        container.replaceWith(clone);
-        return true;
-      })()`);
-      await ctx.page.settle(400);
-      const probe = await ctx.page.waitOwned(ctx.main, "live", "replaced container");
-      return { ok: true, probe };
+      // A clone is not Obsidian's managed metadata node. Keep this destructive
+      // DOM injection out of the pane reused by subsequent checks/screenshots.
+      const probeLeaf = await ctx.page.ev('app.workspace.getLeaf("tab").id');
+      try {
+        await ctx.page.open(probeLeaf, P.day, "live");
+        await ctx.page.waitOwned(probeLeaf, "live", "replace setup");
+        await ctx.page.ev(`(() => {
+          const leaf = app.workspace.getLeafById(${JSON.stringify(probeLeaf)});
+          const scope = leaf.view.editor.cm.dom;
+          const scroller = Array.from(scope.children).find((node) => node.classList.contains("cm-scroller"));
+          const sizer = scroller && Array.from(scroller.children).find((node) => node.classList.contains("cm-sizer"));
+          const container = sizer && Array.from(sizer.children).find((node) => node.classList.contains("metadata-container"));
+          if (!container) return false;
+          const clone = container.cloneNode(true);
+          container.replaceWith(clone);
+          return true;
+        })()`);
+        await ctx.page.settle(400);
+        const probe = await ctx.page.waitOwned(probeLeaf, "live", "replaced container");
+        return { ok: true, probe };
+      } finally {
+        await ctx.page.ev(`(() => {
+          app.workspace.getLeafById(${JSON.stringify(probeLeaf)})?.detach();
+          app.workspace.setActiveLeaf(app.workspace.getLeafById(${JSON.stringify(ctx.main)}), { focus: true });
+          return true;
+        })()`);
+      }
     });
     await attempt("disable-unload-restores", async () => {
       await ctx.page.open(ctx.main, P.day, "live");
@@ -1290,8 +1301,26 @@ async function run(args) {
           await shared.setViewport(client, width, 1000);
           for (const mode of ["live", "reading"]) {
             await ctx.page.open(ctx.main, notePath, mode);
+            if (label === "bank") await ctx.page.waitNative(ctx.main, "bank screenshot");
+            else await ctx.page.waitOwned(ctx.main, mode, label + " screenshot");
+            // Start at the card, not the scroll offset left by the drawer/focus tests.
+            await ctx.page.ev(`(() => {
+              const view = app.workspace.getLeafById(${JSON.stringify(ctx.main)}).view;
+              const scope = view.getMode() === "preview" ? view.previewMode.containerEl : view.editor.cm.dom;
+              const disclosure = scope.querySelector(".bob-property-card-foot-disclosure");
+              if (disclosure?.getAttribute("aria-expanded") === "true") disclosure.click();
+              if (view.getMode() !== "preview") view.editor.scrollTo(0, 0);
+              for (const node of [scope, ...scope.querySelectorAll(".cm-scroller, .markdown-preview-view")]) node.scrollTop = 0;
+              return true;
+            })()`);
             await ctx.page.settle(250);
-            await ctx.page.shot(label + "-" + mode + "-" + theme + "-" + widthName, [label, mode, theme, widthName], width);
+            const before = await ctx.page.probe(ctx.main);
+            const name = label + "-" + mode + "-" + theme + "-" + widthName;
+            const row = await ctx.page.shot(name, [label, mode, theme, widthName], width);
+            const after = await ctx.page.probe(ctx.main);
+            row.captureProbes = { before, after };
+            row.captureFailures = [...lib.screenshotFailures(before, notePath, mode, label === "bank"),
+              ...lib.screenshotFailures(after, notePath, mode, label === "bank")];
           }
         }
       }
@@ -1361,7 +1390,10 @@ async function run(args) {
     const needed = lib.screenshotNeeds();
     const have = new Set(report.screenshots.map((row) => row.name));
     const missingShots = needed.filter((name) => !have.has(name));
-    check("screenshots-captured", missingShots.length === 0 && report.screenshots.length >= needed.length, { missingShots, count: report.screenshots.length });
+    const invalidShots = report.screenshots.filter((row) => row.captureFailures?.length)
+      .map((row) => ({ name: row.name, failures: row.captureFailures }));
+    check("screenshots-captured", missingShots.length === 0 && invalidShots.length === 0 && report.screenshots.length >= needed.length,
+      { missingShots, invalidShots, count: report.screenshots.length });
     check("no-console-exceptions", report.consoleExceptions.length === 0, report.consoleExceptions);
   } catch (error) {
     report.error = error && error.stack ? error.stack : String(error);

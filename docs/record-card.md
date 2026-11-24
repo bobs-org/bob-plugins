@@ -5,7 +5,8 @@ description: "Reference for the record card and its editor on canonical album re
 
 Bob Ledger Tools paints a **record card** (formerly the record sheet) in the
 title slot of a canonical album record (`type: [[record]]`) in desktop Reading
-view and Live Preview: after the inline title, before native Properties. The
+view and Live Preview. When eligible, it replaces the in-document native
+Properties block while keeping its DOM node as the title-slot anchor. The
 **RECORD** kicker names the parent [album card](albums.md) and, once the
 report arrives, the record noun; the sheet tile shows the album emoji else a
 page icon. The title paints from local metadata before any report; fields
@@ -26,15 +27,25 @@ view and only when this card's foot is mounted there. Drawer state is shared by
 panes of the same note for the plugin session; reading properties never writes
 the note. `==` remains the Record Card editor gesture.
 
-Title ownership is independent of row hiding. Whenever the card owns the
-title, the inline title and a matching first-body H1 or walk line hide; a
+Title ownership is independent of row hiding and whole-frontmatter ownership.
+Whenever the card owns the title, the inline title and a matching first-body
+H1 or walk line hide; a
 Live Preview cursor on that line reveals the raw Markdown while the card and
-its rail stay in the slot. Native Properties rows hide only when the card is
-hide-eligible — healthy schema, desktop Obsidian, and the cached report
-carries `record_values_v1`. Properties keeps `parent`, `type`, `created`,
-legacy and unrelated keys, and Add property. Every other case keeps native
-rows visible. Opening the drawer, toggling the foot, or collapsing a record
-never requests a new report and never writes the note.
+its rail stay in the slot. Whole-frontmatter ownership requires a mounted
+card and foot, valid source matching the metadata cache, confirmed `props_v1`
+for the current bob executable, and working property-editor routing. The
+drawer and `+` Property Editor inventory every key, including identity,
+legacy, and unrelated values. **Add file property** opens the Property Editor
+in Add mode on an owned note; the File Properties sidebar stays native.
+See [native access and recovery](property-editor.md#native-properties-and-recovery).
+
+If whole ownership becomes unavailable, native Properties returns with the
+existing per-row fallback: only album-schema rows hide when the schema is
+healthy and the cached report carries `record_values_v1`. Identity, legacy,
+and unrelated rows remain native in that fallback. A failed mount or denied
+context restores native rendering entirely. Opening the drawer, toggling
+the foot, or collapsing a record never requests a new report and never
+writes the note.
 
 ## Record walk position
 

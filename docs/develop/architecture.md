@@ -184,16 +184,28 @@ inline title and the recognized source title range. In Live Preview, one
 `StateField` hides it until a selection touches the range. Reading tags only
 the matching `h1` and `p` elements. A host registers the field with
 `titleOwnership: true`. Ownership is released by the handle, a newer owner,
-Source mode, a file change, or host disposal. Title ownership is separate
-from Properties row ownership. The unit entry points are
+Source mode, a file change, or host disposal. Title ownership, individual
+Properties-row ownership, and whole-frontmatter ownership are independent
+bits. The unit entry points are
 `scripts/test-ledger-tools-property-card-identity.cjs` and
 `scripts/test-ledger-tools-property-card-title-ownership.cjs`.
 `scripts/preview-title-block.cjs` renders the preview matrix.
 
 ### Frontmatter ownership
 
-`propertyCardOwnFrontmatter(scope, { path, view })` is the unwired
-whole-container ownership primitive. It adds
+Album, record, and day/week/quarter/year adapters use
+`propertyCardFrontmatterOwnMounted` to acquire whole-container ownership
+only after their card and foot mount. Identity-only temporal cards qualify;
+bank does not. The coordinator checks the current path and mount generation,
+desktop Live Preview or Reading scope, a closed valid frontmatter mapping
+whose parsed values agree with the cache, confirmed `props_v1` for the
+current bob path, and working property-editor/native-command routing.
+Duplicate keys, invalid or unclosed YAML, stale cache/source evidence,
+detached mounts, and optimistic values without confirmed source fail open.
+Source, embeds, hover popovers, canvas, print, mobile, and non-card notes
+never acquire whole ownership.
+
+The underlying `propertyCardOwnFrontmatter(scope, { path, view })` adds
 `bob-property-card-owns-frontmatter` to the view scope. Live Preview uses
 one kit `StateField` plus `editorAttributes`; Reading uses a
 generation-bound class. Kit CSS sets Obsidian's
@@ -201,13 +213,62 @@ generation-bound class. Kit CSS sets Obsidian's
 hides the exact native paths `propertyCardNativeContainer` uses. The
 container stays in the DOM as the title-slot anchor, with `inert` plus
 `aria-hidden` and a `focusin` guard that returns focus to the editor.
-Ownership drops on release, a newer owner, Source mode, a file change, or
-plugin teardown via `propertyCardFrontmatterReleaseAll()`. Adapters do not
-call it yet. The unit entry point is
-`scripts/test-ledger-tools-property-card-frontmatter-ownership.cjs`.
-`scripts/obsidian-frontmatter-ownership-spike.cjs` is the S1 real-Obsidian
-go/no-go probe, and its offline wrapper is
-`scripts/test-obsidian-frontmatter-ownership-spike.cjs`.
+CSS stays local to owned document scopes; it never hides the File Properties
+sidebar. The foot/drawer retains the complete inventory, including loose,
+identity, legacy, and managed keys.
+
+The coordinator releases before painting invalid state, on card loss or
+failure, source/cache invalidation, unconfirmed capability after a bob-path
+change, denied context, navigation, and disable/unload. Source and file
+changes release in the same CodeMirror transaction. Generation-bound
+handles prevent an older callback from releasing a newer owner, including
+two panes of one note. Container observers reapply ownership only while the
+same valid mount survives. Reading mounts get a guarded attachment recheck;
+title-slot insertion/restoration and header reattachment notify adapters to
+recheck the full gate. These checks handle cached detached Reading previews
+without polling or relaxing eligibility. Teardown releases all handles,
+attributes, listeners, observers, and late callbacks through
+`propertyCardFrontmatterReleaseAll()`.
+
+Loss of whole ownership restores the preexisting per-row hiding; loss of
+the card or entry into a denied context restores native rendering entirely.
+Painting reads local metadata and confirmed source, never starts bob, and
+never writes vault bytes. Edits still use the existing `bob props` or
+species-editor writers. See [native access](https://bobs-org.github.io/reference/plugins/property-editor/#native-properties-and-recovery).
+
+### Capability cache and native entry routing
+
+`298v-plugin-property-capability-routing.js` caches confirmed, absent, and
+unconfirmed capability outcomes per plugin session and resolved bob path.
+Setup, workspace, and configuration events schedule read-only `props show`
+probes against an existing Markdown note, with in-flight deduplication and
+bounded transient retries on later events. A missing note waits for a usable
+one; no probe comes from paint or build functions. Unknown subcommands or a
+successful report without `props_v1` mean absent. Malformed reports and
+transient note/I/O failures stay unconfirmed; an incidental per-note failure
+does not revoke a confirmed path. Path/lifecycle generation checks discard
+obsolete replies, and confirmed results refresh cards.
+
+`propertyCardActualOwnership` queries active ownership for the originating
+view/scope and current path, rather than eligibility or a stale CSS class.
+The registered **Add file property** command
+(`markdown:add-metadata-property`, observed on Obsidian 1.15.1) routes an
+owned scope to `openPropertyEditor({ filePath, mode: "add" })`. Default and
+custom shortcuts and the palette therefore agree. Untouched scopes retain
+the original callback context, arguments, check semantics, and return value.
+Unavailable routing prevents acquisition; a failed opener releases ownership
+before native fallback. `notebookFocusSummaryProperty` uses the same opener
+with `key: "summary"` only for an actually owned scope. Ordinary notebook
+focus and File Properties sidebar actions remain native. Unload restores
+only Bob's own wrapper, preserving any later wrapper installed by another
+plugin.
+
+Focused coverage lives in
+`scripts/test-ledger-tools-property-card-frontmatter-ownership.cjs` and
+`scripts/test-ledger-tools-property-capability-routing.cjs`. The S1 probe is
+`scripts/obsidian-frontmatter-ownership-spike.cjs`; production-adapter
+acceptance uses `scripts/obsidian-frontmatter-takeover-e2e.cjs`, each with an
+offline wrapper. See [the verified matrix](validation.md#frontmatter-takeover).
 
 ### Title slot
 

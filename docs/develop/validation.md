@@ -52,7 +52,10 @@ The offline wrapper `scripts/test-obsidian-frontmatter-ownership-spike.cjs`
 is part of `npm test`. It checks fixtures, the S1 verdict, and page-source
 syntax without launching Obsidian. Run the real go/no-go probe with
 `xvfb-run -a node scripts/obsidian-frontmatter-ownership-spike.cjs`. The
-report records the Add file property command id for `takeover`.
+report records the actual Add file property command, its callback shape,
+effective hotkeys, and observed dispatch. On Obsidian 1.15.1 the command is
+`markdown:add-metadata-property`; another metadata command is not a substitute.
+The [takeover matrix](#frontmatter-takeover) verifies production adapters.
 
 The offline wrapper `scripts/test-obsidian-vim-yank-flash-e2e.cjs` is part of
 `npm test`. It checks the scratch-vault fixture without launching Obsidian;
@@ -484,6 +487,67 @@ pixels. Open and review every PNG, record per-image hashes and verdicts on the
 report, and only then claim visual acceptance. The offline self-test is not
 real-Obsidian acceptance. Copy the report and screenshots back from athena and
 retain them through `/sase_artifact`.
+
+## Frontmatter takeover
+
+`scripts/obsidian-frontmatter-takeover-e2e.cjs` tests production album,
+record, and temporal adapters in a disposable Git vault and owned Obsidian
+profile/process. It never opens the live vault or manually claims ownership.
+Build bob from the current primary checkout and supply it explicitly:
+
+```bash
+BOB_CLI_DIR=<disposable-bob-cli-checkout> \
+BOB_BIN=<disposable-bob-cli-checkout>/target/debug/bob \
+xvfb-run -a node scripts/obsidian-frontmatter-takeover-e2e.cjs \
+  -e /snap/obsidian/current/app/obsidian \
+  -r /tmp/frontmatter-takeover.json -o /tmp/frontmatter-takeover-shots
+```
+
+Use athena's existing isolated execution route when the current host lacks
+Obsidian/Xvfb. Transported CLI builds use the same `BOB_CLI_PROVENANCE` and
+`BOB_CLI_PROVENANCE_SHA256` contract as the property-editor runner above.
+The report records source SHAs, binary and plugin hashes, capability,
+Obsidian version, command invocations, skips, console exceptions, and
+per-image hashes. Its offline wrapper,
+`scripts/test-obsidian-frontmatter-takeover-e2e.cjs`, belongs to `npm test`;
+an offline pass is not real-app acceptance.
+
+The required matrix covers automatic ownership in Live Preview and Reading
+for day, week, record, and album, plus quarter/year and identity-only days.
+It checks Source, navigation, malformed/unclosed YAML, cache skew, denied
+contexts (embeds, hover, canvas, print, mobile), failed mounts, container
+replacement, and disable/unload. Capability cases cover pending, absent,
+failed probes, configured bob-path switches, and late replies after unload.
+Focus checks exercise Vim `k`/`gg`, Up at line zero, Tab/Shift+Tab, and body
+typing after navigation. Mod+`;`, a custom shortcut, and command dispatch
+must open Add mode on an owned document; ordinary/bank notes and the File
+Properties sidebar stay native. Helper focus and failed-opener fallback are
+also required. Container/attribute restoration is probed at the transaction
+or frame boundary so settling waits cannot hide stale ownership.
+
+Protected fixture hashes must remain unchanged during passive rendering;
+invocation logs check for unexpected paint subprocesses. Native fallback
+actions that may write use a separate disposable note. Screenshot capture
+first dismisses every editor layer and resets scroll/drawer state, then
+checks actual ownership, native visibility, and a single metadata container.
+DOM-injection probes run in their own disposable leaf and detach it afterward.
+Capture light/dark × narrow/wide card views in both modes, bank's native
+controls, the ordinary-note Add editor, Source, and malformed fallback.
+Open every PNG, verify its digest/size, and record an individual visual
+verdict. Retain the raw and inspected reports, all images, logs, and exact
+source/bundle/runner provenance through `/sase_artifact`.
+
+The 2026-11-24 acceptance on Obsidian 1.15.1 passed 51/51 checks
+(22 Live Preview, 8 Reading, 21 shared) and all 46 individually reviewed
+captures, with no capture failures or console exceptions. Both desktop
+modes support takeover; no mode-specific per-row-only restriction remains.
+Bank and the denied contexts above retain native access. The tested plugin
+commit is `3824ce558a08174d74addcc6f14687303dfd635a`; CLI source is
+`8d82c621b25d1595ec8a495c30f6087fbc87f524`. The complete retained acceptance
+archive is `file:explicit:85b3b710894edb85fafa6063`; phase `bob-cli-pf.6.1.4`
+records exact binary/bundle hashes and the separate, reproduced baseline
+aggregate-suite exceptions (`bob-cli-n0` and `bob-cli-km`). Those exceptions
+do not represent failures in the real-app takeover matrix.
 
 ## Focused suites
 

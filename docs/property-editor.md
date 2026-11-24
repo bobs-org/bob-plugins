@@ -19,6 +19,9 @@ range selection, and filtering follow the visible grouped rows.
   keep Vim's `+` motion.
 - Run **Edit note properties** from the Command Palette or Command Mode.
 - Press Enter on a focused row in a card's `-` Properties drawer.
+- On a card that owns the in-document Properties block, run Obsidian's
+  **Add file property** command (normally Mod+`;`, or your custom binding)
+  to open this editor directly in Add mode.
 - Sibling plugins can call the Bob Ledger Tools plugin method:
 
   ```js
@@ -242,6 +245,45 @@ change. Vault type mutation is not a property undo token: `u` undoes this
 note's value, not the vault type. Local conversion and the vault confirmation
 are separate submissions. Changing the vault type does not rewrite other
 notes' values. The editor never writes `.obsidian/types.json` itself.
+
+## Native Properties and recovery
+
+Album, record, day, week, quarter, and year cards can replace the entire
+in-document native Properties block in desktop Live Preview and Reading.
+This requires a mounted card and foot, a valid closed frontmatter mapping
+that matches the metadata cache, confirmed `props_v1` for the current bob
+executable, and working native-command routing. Identity-only temporal cards
+qualify. The foot's `-` drawer and this editor expose every top-level key;
+`==` still opens the species editor. The drawer's Enter, Add property, and
+Edit all actions also open this editor.
+
+Obsidian's **Add file property** command routes to Add mode only while the
+originating document actually owns its Properties block. The palette,
+default shortcut, and custom bindings share that route. A failed opener
+releases ownership before falling back to Obsidian's native action. Native
+property-focus helpers likewise use the editor for an owned document and
+keep native focus elsewhere.
+
+The **File Properties sidebar** remains available for native editing even
+when the document card owns Properties. Metadata Menu's native Properties
+context menu is unavailable on the hidden in-document block; use the native
+sidebar or Source when you need native access. Bank retains its native
+Properties block alongside its foot and drawer. Ordinary notes, Source,
+embeds, hover popovers, canvas, print, and mobile never acquire whole-block
+ownership.
+
+Unknown or absent capability, malformed or unclosed YAML, duplicate keys,
+source/cache disagreement, and failed routing leave the native block
+available. Losing whole ownership returns to the card's existing per-row
+hiding; losing the card or entering a denied context restores native
+rendering entirely. Navigation and plugin disable/unload release ownership.
+Hidden controls cannot receive focus, and the native DOM node stays in place
+as the card's title-slot anchor. Painting and drawer toggles never launch
+bob or write the note; capability discovery happens separately on lifecycle
+events. See the [ownership architecture](https://bobs-org.github.io/develop/plugins/architecture/#frontmatter-ownership).
+
+The current Vim family is `==`, `-`, and `+`. The former `=-` and `=+`
+chords fall through to Vim; Reading uses the disclosure and commands.
 
 ## Native Properties parity
 

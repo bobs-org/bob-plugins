@@ -29,8 +29,9 @@ rendering.
 
 ## Title block
 
-The card mounts in Obsidian's title slot, after the hidden inline title and
-before native Properties. Its title block holds:
+The card mounts in Obsidian's title slot, after the hidden inline title.
+Eligible cards replace the in-document native Properties block, whose DOM
+node remains the slot anchor. Its title block holds:
 
 - a leaf tile: the weekday over the date (`FRI` over `20`), or `WEEK` over
   `47`, `QTR` over `Q4`, and `YEAR` over `2026`;
@@ -138,13 +139,23 @@ with intentions, closed within the last seven days, shows a quiet missing
 band (`✦ summary pending · ＋ reflection r`), omitting parts already present.
 Open, future, or older subjects never show it.
 
-The card owns exactly seven keys — `intentions`, `summary`,
-`summary_digest`, `summary_drafted`, `reflection`, `review_digest`,
-`review_drafted` — and only while intentions, summary, or reflection is
-nonempty. An identity-only card leaves every native Properties row visible.
-Ownership releases on failure, mode change, file change, and unload.
-Unrelated Properties stay visible, and the card never spawns `bob`: painting
-reads metadataCache plus confirmed source bytes and fails open.
+Whole-frontmatter ownership is separate from title and individual-row
+ownership. A mounted card and foot can replace the entire native Properties
+block when valid source agrees with the metadata cache, the current bob
+executable has confirmed `props_v1`, and property-editor routing is ready.
+Identity-only day, week, quarter, and year cards qualify too. The `-` drawer
+and `+` [Property Editor](property-editor.md) inventory every key;
+**Add file property** opens that editor in Add mode on an owned note, and
+the File Properties sidebar stays native.
+
+When whole ownership is unavailable, the existing row fallback hides only
+`intentions`, `summary`, `summary_digest`, `summary_drafted`, `reflection`,
+`review_digest`, and `review_drafted`, and only while intentions, summary,
+or reflection is nonempty. Identity-only cards hide no individual rows.
+Invalid or stale source/cache evidence, uncertain capability, or failed
+routing restores the native block. Source, file changes, failed mounts,
+and unload release ownership. Painting reads metadataCache plus confirmed
+source bytes, never spawns `bob`, and never writes the note.
 
 ### Fallback and fail-open
 

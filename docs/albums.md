@@ -65,9 +65,10 @@ formats amount plus cadence as `$9.99 a month`, and adds a quiet
 a 12-dot charge timeline, and any finding as a sentence. Canonical
 `type: [[record]]` notes also show a [record card](record-card.md) at the top
 of the body, before any authored first-level heading; the subscription strip
-docks on that card. When eligible, the card hides only its owned native
-Properties rows; unrelated rows and Add property stay visible, and Source mode
-keeps the native fields. **Edit record** opens the Record Card editor for
+docks on that card. When eligible, the card replaces native Properties;
+its drawer and the Property Editor inventory every key. When whole ownership
+is unavailable, existing per-row hiding remains; Source mode keeps native
+YAML. **Edit record** opens the Record Card editor for
 value edits through bob. A `bob-bank` fence
 with `view: subscriptions` on `subscriptions.md` draws the album summary
 card: monthly and yearly estimates labeled as an estimate of commitments,
@@ -77,7 +78,7 @@ summary surfaces never write the note.
 
 Album notes show an **album card** (formerly the album header) as the note's
 title block. On desktop, in Reading view and Live Preview, it sits in the title
-slot above native Properties: a stack tile with the album `emoji` (else a
+slot: a stack tile with the album `emoji` (else a
 library icon), an `ALBUM · <owners>` kicker whose owner links behave like
 Markdown links (Mod opens a new tab), the title, and the frontmatter `summary`
 as a muted subtitle. The title is a one-line `title:`, else the first H1 before
@@ -92,8 +93,8 @@ When bob's report arrives, `＋ <noun>` and **⊞ Schema** join the kicker row
 and the schema summary line, such as
 `▾ Schema · 5 fields · grouped by Location · dated notes · 104 restaurants`,
 starts expanded with the chip rows shown;
-the native `record` property hides only then. When the album sets a valid
-`walk_by`, the line ends with `· walks by Section` (the field's label), whose
+the native `record` row hides only then in the per-row fallback. When the
+album sets a valid `walk_by`, the line ends with `· walks by Section` (the field's label), whose
 tooltip reads `Record walk: grouped by Section, then title`; it is
 display-only, and records show the matching group row on their walk rail. The `▾` toggle collapses the
 chip rows to that one line (`▸`); they are one per field in declaration order: human labels, kind and flag
@@ -122,6 +123,18 @@ or Command Mode) toggle the same drawer; open state is a per-note session
 toggle shared by every pane on the note. `y` on a focused drawer row jumps to
 that key's exact YAML line. Painting, toggling, and collapsing never spawn bob
 and never write the note.
+
+With a mounted card and foot, valid source matching the metadata cache,
+confirmed `props_v1` for the current bob executable, and working property-editor
+routing, the album card replaces the entire in-document native Properties
+block in desktop Live Preview and Reading. The native node stays as the
+title-slot anchor. Uncertain capability, invalid or stale source/cache,
+or failed routing restores the block with the existing per-row hiding;
+failed mounts and denied contexts restore native rendering entirely.
+`-` shows every property, `+` opens the Property Editor, and `==` keeps
+the album schema editor. **Add file property** routes to Add mode on an
+owned note; the File Properties sidebar remains native. See
+[native access and recovery](property-editor.md#native-properties-and-recovery).
 
 **⊞ Schema** opens the album card editor (formerly the Schema Card) in the Task
 Card idiom: a species badge (the album emoji, else a library icon, in a

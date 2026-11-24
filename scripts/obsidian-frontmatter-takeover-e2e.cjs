@@ -905,15 +905,14 @@ async function run(args) {
         }));
       }
       const restored = await ctx.page.waitOwned(ctx.main, "live", "stale restore");
-      // A prior run's native MarkdownView.save landed about 226 seconds after
-      // the disposable probe edit, 16 seconds after the 210-second wait expired
-      // and a later check opened a protected fixture. Keep waiting with the
-      // disposable note active before any later check can redirect that save.
+      // Prior native MarkdownView.save calls landed 226 and 286 seconds after
+      // the disposable probe edit. Keep waiting with the disposable note active
+      // before any later check can redirect that save.
       await waitFor(client, `(() => {
         const rows = window.__bobFrontmatterTakeoverWriteAudit?.rows || [];
         return rows.slice(${Number(auditStart)}).some((row) =>
           row.stack.some((line) => line.includes("lt.save") || line.includes("lt.writeData")));
-      })()`, Boolean, "deferred native save on disposable stale-cache probe", 270_000);
+      })()`, Boolean, "deferred native save on disposable stale-cache probe", 360_000);
       const staleProbeAudit = await ctx.page.ev(
         `window.__bobFrontmatterTakeoverWriteAudit?.rows.slice(${Number(auditStart)}) || []`,
       );

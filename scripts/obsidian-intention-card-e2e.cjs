@@ -639,8 +639,9 @@ async function displayPhase(ctx) {
     return { inlineTitle: state.title.inlineTitle, h1: state.title.h1Shown };
   };
   const assertRows = (state, notePath, hidden) => {
-    const hiddenKeys = lib.assertOwnedRows(state, { hidden, authoredKeys: authored(notePath) });
-    return { hiddenKeys, rows: state.rows };
+    const frontmatterOwned = hidden === true;
+    const hiddenKeys = lib.assertOwnedRows(state, { hidden, authoredKeys: authored(notePath), frontmatterOwned });
+    return { hiddenKeys, rows: state.rows, frontmatterOwned };
   };
   const mounted = (mode) => (value) => value?.cardCount === 1 && value.card?.slot === slotOf(mode)
     && value.title?.inlineTitle === false && value.title?.levelOne?.length === 1;
@@ -671,7 +672,7 @@ async function displayPhase(ctx) {
   });
   await attempt("display-live-today-owned-rows", () => {
     const result = assertRows(state, plan.paths.today, true);
-    if (JSON.stringify(result.hiddenKeys) !== JSON.stringify(["intentions"])) throw new Error("hidden rows: " + JSON.stringify(result.hiddenKeys));
+    if (!result.frontmatterOwned) throw new Error("today Live Preview did not own the Properties container");
     return result;
   });
   await attempt("display-live-today-parent-line", async () => {
@@ -688,7 +689,7 @@ async function displayPhase(ctx) {
   await attempt("display-reading-today-placement", () => assertTitleSlot(state, { mode: "reading", title: todayTitle, rail: todayRail }));
   await attempt("display-reading-today-owned-rows", () => {
     const result = assertRows(state, plan.paths.today, true);
-    if (JSON.stringify(result.hiddenKeys) !== JSON.stringify(["intentions"])) throw new Error("hidden rows: " + JSON.stringify(result.hiddenKeys));
+    if (!result.frontmatterOwned) throw new Error("today Reading did not own the Properties container");
     return result;
   });
   await shot("intention-card-reading-today-light", "Reading");
@@ -700,7 +701,7 @@ async function displayPhase(ctx) {
     ctx.report.probes[name] = value;
     await attempt(name, () => {
       const result = assertRows(value, plan.paths.stamped, true);
-      if (JSON.stringify(result.hiddenKeys) !== JSON.stringify([...lib.OWNED_KEYS].sort())) throw new Error("hidden rows: " + JSON.stringify(result.hiddenKeys));
+      if (!result.frontmatterOwned) throw new Error("stamped day did not own the Properties container");
       return result;
     });
     return value;
@@ -765,15 +766,15 @@ async function displayPhase(ctx) {
     return { reading: reading.cardCount, source: source.cardCount, live: live.cardCount };
   });
 
-  // An empty note gets the identity-only card: title and rail, every
-  // Properties row visible, nothing owned, and no ghost on a past day.
+  // An empty note gets the identity-only card: title and rail, whole
+  // Properties container owned, no per-row owned class, and no ghost on a past day.
   await attempt("display-empty-identity-card", async () => {
     const results = {};
     for (const mode of ["live", "reading"]) {
       await open(plan.paths.empty, mode);
       const value = await waitCard(plan.paths.empty, mounted(mode));
       assertTitleSlot(value, { mode, title: lib.dayCardTitle(plan.empty), rail: dayRail(plan.empty) });
-      assertRows(value, plan.paths.empty, false);
+      lib.assertOwnedRows(value, { hidden: false, authoredKeys: authored(plan.paths.empty), frontmatterOwned: true });
       if (value.ownedAnywhere !== 0) throw new Error("owned rows on an empty note: " + value.ownedAnywhere);
       if (value.card.ghost) throw new Error("a past empty day shows the ghost");
       if (value.card.intentions.length || value.card.summary || value.card.reflection) throw new Error("bands on an empty note: " + JSON.stringify(value.card));

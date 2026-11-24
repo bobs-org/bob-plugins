@@ -387,9 +387,17 @@ function rowHidden(row) {
   return row.display === "none" || row.visibility === "hidden" || row.rectVisible === false;
 }
 
-function assertOwnedRows(probe, { hidden, authoredKeys }) {
+function assertOwnedRows(probe, { hidden, authoredKeys, frontmatterOwned }) {
   assert.ok(probe && Array.isArray(probe.rows), "native Properties probe is missing");
   assert.ok(probe.properties && probe.properties.present === true, "native Properties container is absent");
+  if (frontmatterOwned) {
+    assert.ok(rowHidden(probe.properties), "native Properties container is visible");
+    for (const key of authoredKeys) {
+      const rows = probe.rows.filter((row) => row.key === key);
+      assert.equal(rows.length, 1, "native Properties key missing or duplicated: " + key);
+    }
+    return probe.rows.filter((row) => rowHidden(row)).map((row) => row.key).sort();
+  }
   assert.ok(!rowHidden(probe.properties), "native Properties container is hidden");
   for (const key of authoredKeys) {
     const rows = probe.rows.filter((row) => row.key === key);
@@ -488,6 +496,9 @@ function selfTest() {
   assert.throws(() => assertOwnedRows({ ...probe, rows: [{ key: "mood", ...concealed }] }, { hidden: true, authoredKeys: [] }), /mood/);
   assert.throws(() => assertOwnedRows({ ...probe, properties: concealed }, { hidden: true, authoredKeys: [] }), /container is hidden/);
   assert.throws(() => assertOwnedRows(probe, { hidden: true, authoredKeys: ["type"] }), /type/);
+  const ownedContainer = { properties: concealed, rows: [{ key: "intentions", ...concealed }, { key: "mood", ...concealed }] };
+  assert.deepEqual(assertOwnedRows(ownedContainer, { hidden: true, authoredKeys: ["intentions", "mood"], frontmatterOwned: true }), ["intentions", "mood"]);
+  assert.throws(() => assertOwnedRows({ ...ownedContainer, properties: shown }, { hidden: true, authoredKeys: [], frontmatterOwned: true }), /container is visible/);
   // Keys: brackets and modified chords never carry text.
   assert.equal(keyEvents("[")[0].code, "BracketLeft");
   assert.equal(keyEvents("[", 2)[0].type, "rawKeyDown");

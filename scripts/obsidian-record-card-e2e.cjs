@@ -933,7 +933,7 @@ function writeAssertion(report, name, status, detail, mandatory = true) {
 function expectVisibility(report, name, probe, expected) {
   const vis = expected && typeof expected === "object"
     ? expected
-    : { titleOwned: expected === true, rowsHidden: expected === true };
+    : { titleOwned: expected === true, rowsHidden: expected === true, frontmatterOwned: expected === true };
   try {
     lib.assertNativeVisibility(probe, vis);
     writeAssertion(report, name, "pass", {
@@ -1106,7 +1106,7 @@ async function run(args) {
       appendCapturedCheck(report, name + "-sheet-title-role-and-text",
         state.sheet?.titleRole === "heading" && state.sheet?.titleLevel === "1" && state.sheet?.title === options.title,
         { title: state.sheet?.title, role: state.sheet?.titleRole, level: state.sheet?.titleLevel, expected: options.title });
-      expectVisibility(report, name + "-title-owned-and-schema-rows-hidden", state, { titleOwned: true, rowsHidden: true });
+      expectVisibility(report, name + "-title-owned-and-schema-rows-hidden", state, { titleOwned: true, rowsHidden: true, frontmatterOwned: true });
       appendCapturedCheck(report, name + "-coverage-each-frontmatter-key-once",
         state.missingCoverage?.length === 0 && state.duplicateCoverage?.length === 0,
         { authoredKeys: state.authoredKeys, coverage: state.coverage, missing: state.missingCoverage, duplicates: state.duplicateCoverage });
@@ -1190,7 +1190,7 @@ async function run(args) {
     (report.probes.clicks ||= []).push(await clickBy(client, '[data-record-sheet-focus="collapse"]'));
     state = await waitFor(client, probeSource("zettels/bead_lifecycle.md"), (value) => value.sheet?.collapsed === true, "sheet collapse");
     report.probes.collapsed = state;
-    expectVisibility(report, "collapsed-sheet-keeps-title-owned-and-schema-rows-hidden", state, { titleOwned: true, rowsHidden: true });
+    expectVisibility(report, "collapsed-sheet-keeps-title-owned-and-schema-rows-hidden", state, { titleOwned: true, rowsHidden: true, frontmatterOwned: true });
     appendCapturedCheck(report, "collapse-button-works", state.sheet?.collapsed === true, state.sheet);
     appendCapturedCheck(report, "collapse-does-not-write-markdown", markdownFilesHash(vaultDir) === beforePassive, state.sheet);
     report.screenshots.push(await capture(client, outDir, "record-sheet-collapsed", 1400, "light", "Live Preview"));
@@ -1356,7 +1356,7 @@ async function run(args) {
     appendCapturedCheck(report, "broken-schema-warning-retains-title",
       state.sheet?.title === "Broken Schema Record" && Boolean(state.sheet.warning) && state.gate?.state === "broken",
       { title: state.sheet?.title, warning: state.sheet?.warning, gate: state.gate });
-    expectVisibility(report, "broken-schema-title-owned-rows-visible", state, { titleOwned: true, rowsHidden: false });
+    expectVisibility(report, "broken-schema-title-owned-rows-visible", state, { titleOwned: true, rowsHidden: false, frontmatterOwned: true });
 
     for (const [name, notePath] of [
       ["bank-month-lookalike", "bank/2026-11.md"],

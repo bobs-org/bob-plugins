@@ -905,12 +905,16 @@ async function run(args) {
         }));
       }
       const restored = await ctx.page.waitOwned(ctx.main, "live", "stale restore");
-      // The latest trace recorded Obsidian's delayed MarkdownView.save 34.5
-      // seconds after the probe edit, about 14 seconds after the main leaf
-      // switched back to the protected note. Keep this disposable note open
-      // beyond that observed delay so the save cannot serialize the protected
-      // note when the main leaf switches back to it.
-      await ctx.page.settle(40_000);
+      // Across both traces, Obsidian's delayed MarkdownView.save landed about
+      // 65-72 seconds after the run started, after this fixed 40-second hold
+      // ended and the main leaf had reopened the protected day. Wait for the
+      // audited native save while this disposable note is still open, so the
+      // mutable MarkdownView.file cannot redirect it to the protected fixture.
+      await waitFor(client, `(() => {
+        const rows = window.__bobFrontmatterTakeoverWriteAudit?.rows || [];
+        return rows.slice(${Number(auditStart)}).some((row) =>
+          row.stack.some((line) => line.includes("lt.save") || line.includes("lt.writeData")));
+      })()`, Boolean, "deferred native save on disposable stale-cache probe", 90_000);
       const staleProbeAudit = await ctx.page.ev(
         `window.__bobFrontmatterTakeoverWriteAudit?.rows.slice(${Number(auditStart)}) || []`,
       );
@@ -918,6 +922,12 @@ async function run(args) {
         row.stack.some((line) => line.includes("lt.save") || line.includes("lt.writeData")));
       const delayedSaveTargets = [...new Set(delayedSaveRows.map((row) => row.path))];
       const delayedSaveOnProbe = delayedSaveTargets.includes(STALE_CACHE_PROBE_PATH);
+      if (!delayedSaveOnProbe || delayedSaveTargets.some((target) => target !== STALE_CACHE_PROBE_PATH)) {
+        throw new Error("deferred native save did not stay on the disposable probe: " + JSON.stringify({
+          delayedSaveTargets,
+          expected: STALE_CACHE_PROBE_PATH,
+        }));
+      }
       const protectedBytes = await ctx.page.ev(
         "window.__bobFrontmatterTakeover.readNote(" + JSON.stringify(P.day) + ")",
       );

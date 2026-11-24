@@ -184,7 +184,12 @@ function propertyCardFormatCreatedStamp(input = {}) {
   const present = options.present === undefined
     ? Object.prototype.hasOwnProperty.call(options, "value") && options.value !== undefined
     : options.present === true;
-  if (!present) return { text: temporal ? "" : "no created date", tooltip: "", state: "missing", dateOnly: false };
+  if (!present) {
+    // Areas omit the missing stamp; temporal cards already do. Projects and
+    // other non-temporal cards keep "no created date".
+    const silent = temporal || kind === "area";
+    return { text: silent ? "" : "no created date", tooltip: "", state: "missing", dateOnly: false };
+  }
 
   const zone = propertyCardZoneName(options.timeZone);
   const parsed = propertyCardParseCreatedDate(options.value, options.sourceScalar, zone);

@@ -101,6 +101,7 @@ function propertyCardFootAdapterSpec(options = {}) {
   const where = options.where && typeof options.where === "object" ? options.where : {};
   const nested = options.nested && typeof options.nested === "object" ? options.nested : {};
   const legacy = options.legacy && typeof options.legacy === "object" ? options.legacy : {};
+  const managed = options.managed && typeof options.managed === "object" ? options.managed : {};
   const sourceText = typeof options.sourceText === "string" ? options.sourceText : undefined;
   let inventory = null;
   try {
@@ -115,6 +116,7 @@ function propertyCardFootAdapterSpec(options = {}) {
         where,
         nested,
         legacy,
+        managed,
       })
       : null;
   } catch (_) {

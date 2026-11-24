@@ -12269,6 +12269,107 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
 .bob-property-card[data-card-kind="quarter"] { --bob-property-card-tint: 10%; }
 .bob-property-card[data-card-kind="year"] { --bob-property-card-tint: 12%; }
 /* Bank keeps its existing chrome. */
+.bob-property-card[data-card-kind="area"] { --bob-property-card-tint: 8%; }
+.bob-property-card[data-card-kind="project"] { --bob-property-card-tint: 5%; }
+.bob-property-card[data-card-kind="project"].is-terminal {
+  --bob-property-card-tint: 2%;
+  --bob-property-card-ink: color-mix(in srgb, var(--bob-property-card-accent) 40%, var(--text-muted));
+}
+.bob-property-card[data-home-hue="neutral"] {
+  --bob-property-card-accent: var(--text-muted);
+  --bob-property-card-tint: 0%;
+}
+.bob-home-card-summary {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+.bob-home-card-lifecycle {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35em 0.5em;
+  letter-spacing: 0.04em;
+  font-variant: small-caps;
+}
+.bob-home-card-lifecycle-icon {
+  display: inline-grid;
+  place-items: center;
+  color: var(--bob-property-card-ink, var(--text-muted));
+}
+.bob-home-card-lifecycle-icon svg { width: 0.9em; height: 0.9em; }
+.bob-home-card-lifecycle-word { font-weight: 650; }
+.bob-home-card-lifecycle-detail {
+  font-variant: normal;
+  letter-spacing: 0;
+  color: var(--text-muted);
+}
+.bob-home-card-lifecycle[data-lifecycle="warning"] { color: var(--text-warning); }
+.bob-home-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.4em 0.75em;
+  margin-block-start: 0.45em;
+  min-width: 0;
+}
+.bob-home-card-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35em;
+  min-width: 0;
+}
+.bob-home-card-chip,
+.bob-home-card-settings,
+.bob-home-card-collapse {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25em;
+  margin: 0;
+  padding: 0.1em 0.5em;
+  border: 1px solid color-mix(in srgb, var(--text-muted) 35%, var(--background-modifier-border));
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.82em;
+  line-height: 1.3;
+}
+.bob-home-card-settings,
+.bob-home-card-collapse {
+  border-color: transparent;
+  cursor: pointer;
+}
+.bob-home-card-chip[data-warning="true"] { color: var(--text-warning); }
+.bob-home-card-ready {
+  margin-inline-start: auto;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.bob-home-card-ready[data-ready-state="room"] { color: var(--text-muted); }
+.bob-home-card-ready[data-ready-state="full"] { color: var(--text-normal); }
+.bob-home-card-ready[data-ready-state="crowded"] { color: var(--text-warning); }
+.bob-home-card-collapsible {
+  display: grid;
+  grid-template-rows: 1fr;
+  min-width: 0;
+  transition: grid-template-rows 160ms ease;
+}
+.bob-home-card-collapsible > * { min-height: 0; overflow: hidden; }
+.bob-home-card.is-collapsed .bob-home-card-collapsible { grid-template-rows: 0fr; }
+.bob-home-card.is-reduced-motion .bob-home-card-collapsible,
+.bob-home-card.is-collapsed.is-reduced-motion .bob-home-card-collapsible { transition: none; }
+@media (prefers-reduced-motion: reduce) {
+  .bob-home-card-collapsible { transition: none; }
+}
+@container bob-property-card (max-width: 420px) {
+  .bob-home-card-meta { flex-direction: column; align-items: stretch; }
+  .bob-home-card-ready { margin-inline-start: 0; }
+  .bob-home-card-settings-label { display: none; }
+}
 
 /* Title block: tile beside a kicker row, title row, and subtitle. Sized from
    the note text so the title reads like the inline title it replaces. */
@@ -12454,6 +12555,39 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
 .bob-property-card-tile-value[data-value-length="4"] { font-size: 0.72em; letter-spacing: -0.02em; }
 /* Plain (bank): a bordered tile around the existing mark. */
 .bob-property-card-tile[data-tile-form="plain"] { background: transparent; }
+/* Field (area): a soft rounded hue swatch. */
+.bob-property-card-tile[data-tile-form="field"] {
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bob-property-card-accent) 28%, var(--background-primary));
+}
+/* Pennant (project): a shallow swallowtail notch on the trailing edge. */
+.bob-property-card-tile[data-tile-form="pennant"] {
+  clip-path: polygon(0 0, calc(100% - 0.42em) 0, 100% 50%, calc(100% - 0.42em) 100%, 0 100%);
+  border-start-end-radius: 0;
+  border-end-end-radius: 0;
+}
+.bob-property-card-tile[data-tile-form="pennant"][data-tile-outline="true"],
+.bob-property-card[data-card-kind="project"].is-terminal .bob-property-card-tile[data-tile-form="pennant"] {
+  background: transparent;
+}
+.bob-property-card-kicker-pip {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-inline-end: 0.35em;
+  border-radius: 50%;
+  background: var(--bob-property-card-accent, var(--text-muted));
+  vertical-align: 0.12em;
+}
+.bob-property-card-kicker-pip[data-root-hue="aqua"] { background: var(--bob-area-aqua, var(--interactive-accent)); }
+.bob-property-card-kicker-pip[data-root-hue="blue"] { background: var(--bob-area-blue, var(--interactive-accent)); }
+.bob-property-card-kicker-pip[data-root-hue="green"] { background: var(--bob-area-green, var(--interactive-accent)); }
+.bob-property-card-kicker-pip[data-root-hue="magenta"] { background: var(--bob-area-magenta, var(--interactive-accent)); }
+.bob-property-card-kicker-pip[data-root-hue="orange"] { background: var(--bob-area-orange, var(--interactive-accent)); }
+.bob-property-card-kicker-pip[data-root-hue="red"] { background: var(--bob-area-red, var(--interactive-accent)); }
+.bob-property-card-kicker-pip[data-root-hue="violet"] { background: var(--bob-area-violet, var(--interactive-accent)); }
+.bob-property-card-kicker-pip[data-root-hue="yellow"] { background: var(--bob-area-yellow, var(--interactive-accent)); }
+.bob-property-card-kicker-pip[data-root-hue="grey"] { background: var(--text-muted); }
 
 /* Docked rail: a hairline, then prev / centred parent / next, plus an
    optional wrapping children strip on period cards. */

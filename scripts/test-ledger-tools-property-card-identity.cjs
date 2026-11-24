@@ -114,9 +114,9 @@ function makeDoc() {
 
 const classes = (node) => node.className.split(/\s+/).filter(Boolean);
 
-test("registry covers seven frozen species with words, tiles, icons, and bands", () => {
+test("registry covers nine frozen species with words, tiles, icons, and bands", () => {
   assert.equal(H.PROPERTY_CARD_KIND_ATTR, "data-card-kind");
-  assert.deepEqual([...H.PROPERTY_CARD_KINDS], ["album", "record", "day", "week", "quarter", "year", "bank"]);
+  assert.deepEqual([...H.PROPERTY_CARD_KINDS], ["album", "record", "day", "week", "quarter", "year", "bank", "area", "project"]);
   const expected = {
     album: ["Album", "stack", "library", "", false],
     record: ["Record", "sheet", "file-text", "", false],
@@ -125,6 +125,8 @@ test("registry covers seven frozen species with words, tiles, icons, and bands",
     quarter: ["Quarter", "leaf", "calendar-range", "QTR", true],
     year: ["Year", "leaf", "calendar-range", "YEAR", true],
     bank: ["Bank", "plain", "landmark", "", false],
+    area: ["Area", "field", "layers", "", false],
+    project: ["Project", "pennant", "target", "", false],
   };
   for (const kind of H.PROPERTY_CARD_KINDS) {
     const species = H.propertyCardSpecies(kind);
@@ -144,6 +146,8 @@ test("accessible names lead with the species word", () => {
   assert.equal(H.propertyCardAccessibleName("week", "  2026-W47 \n"), "Week: 2026-W47");
   assert.equal(H.propertyCardAccessibleName("bank", ""), "Bank");
   assert.equal(H.propertyCardAccessibleName("record", null), "Record");
+  assert.equal(H.propertyCardAccessibleName("area", "love"), "Area: love");
+  assert.equal(H.propertyCardAccessibleName("project", "sase_blog"), "Project: sase_blog");
   assert.equal(H.propertyCardAccessibleName("notebook", "Ideas"), "Ideas");
 });
 
@@ -169,7 +173,7 @@ test("applyIdentity stamps kind, label, and a group role without replacing one",
 
 test("glyph tiles: every form, emoji versus icon fallback, and leaf band/value", () => {
   const doc = makeDoc();
-  const forms = { album: "stack", record: "sheet", bank: "plain", day: "leaf", week: "leaf", quarter: "leaf", year: "leaf" };
+  const forms = { album: "stack", record: "sheet", bank: "plain", day: "leaf", week: "leaf", quarter: "leaf", year: "leaf", area: "field", project: "pennant" };
   for (const [kind, form] of Object.entries(forms)) {
     const tile = H.propertyCardBuildGlyphTile(doc, { kind });
     assert.equal(tile.tagName, "SPAN");
@@ -285,6 +289,18 @@ test("title block: kicker, links, single heading, pill, subtitle, and actions sl
   assert.ok(bare.actions);
   assert.equal(bare.kicker.children.length, 1);
   assert.equal(bare.kicker.textContent, "Bank");
+
+  const pipBlock = H.propertyCardBuildTitleBlock(doc, {
+    kind: "project",
+    title: "sase_blog",
+    kicker: [{ text: "dev", target: "dev.md", pip: "green", tooltip: "dev.md" }, { text: "…", ellipsis: true }],
+  });
+  const pip = pipBlock.kicker.querySelector(".bob-property-card-kicker-pip");
+  assert.equal(pip.getAttribute("data-root-hue"), "green");
+  assert.equal(pip.getAttribute("aria-hidden"), "true");
+  const ellipsis = pipBlock.kicker.querySelectorAll(".bob-property-card-kicker-part")[0];
+  assert.equal(ellipsis.textContent, "…");
+  assert.equal(ellipsis.getAttribute("aria-hidden"), "true");
 });
 
 test("title block keeps markup-looking text literal and fails closed", () => {
@@ -409,7 +425,7 @@ test("identity badge: tile plus species word, never a heading, fails closed", ()
   const doc = makeDoc();
   assert.equal(H.PROPERTY_CARD_IDENTITY_CLASS, "bob-property-card-identity");
   assert.equal(H.PROPERTY_CARD_IDENTITY_WORD_CLASS, "bob-property-card-identity-word");
-  const forms = { album: "stack", record: "sheet", day: "leaf", week: "leaf", quarter: "leaf", year: "leaf", bank: "plain" };
+  const forms = { album: "stack", record: "sheet", day: "leaf", week: "leaf", quarter: "leaf", year: "leaf", bank: "plain", area: "field", project: "pennant" };
   for (const kind of H.PROPERTY_CARD_KINDS) {
     const badge = H.propertyCardBuildIdentityBadge(doc, { kind, emoji: "🍽️", band: "FRI", value: "20" });
     assert.ok(badge, kind);

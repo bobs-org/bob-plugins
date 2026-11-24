@@ -178,8 +178,13 @@ function propertyCardInventoryRows(entries, frontmatter, options = {}) {
     const where = options.where && typeof options.where === "object" ? options.where : {};
     const nested = options.nested && typeof options.nested === "object" ? options.nested : {};
     const legacy = options.legacy && typeof options.legacy === "object" ? options.legacy : {};
+    const managed = options.managed && typeof options.managed === "object" ? options.managed : {};
     const hasMark = Object.prototype.hasOwnProperty.call(where, entry.key) && where[entry.key] != null && where[entry.key] !== "";
-    const group = hasMark ? "card" : propertyCardInventoryManaged(entry.key) ? "managed" : "loose";
+    const adapterManaged = Object.prototype.hasOwnProperty.call(managed, entry.key)
+      && managed[entry.key] != null && managed[entry.key] !== false && managed[entry.key] !== "";
+    const group = hasMark ? "card"
+      : (adapterManaged || propertyCardInventoryManaged(entry.key)) ? "managed"
+        : "loose";
     const hasNested = Object.prototype.hasOwnProperty.call(nested, entry.key);
     const hasLegacy = Object.prototype.hasOwnProperty.call(legacy, entry.key);
     const pendingValue = options.valuePending === true || (cacheAvailable && !hasValue);

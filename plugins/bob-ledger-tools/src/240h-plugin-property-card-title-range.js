@@ -198,6 +198,19 @@ function propertyCardPeriodScaffoldTitle(subject) {
   return "";
 }
 
+// Home (area/project): the first-body H1 whose cleaned text equals the card
+// title. No followers, so the range never consumes a following `^prj` line.
+function propertyCardHomeTitleRecognizer(title) {
+  const want = propertyCardCleanInlineText(title);
+  if (!want) return propertyCardNeverTitleRecognizer("home");
+  return Object.freeze({
+    key: `home:${want}`,
+    requireHeading: true,
+    heading: (cleaned) => propertyCardCleanInlineText(cleaned) === want,
+    follower: () => false,
+  });
+}
+
 // Album: the first H1 whose cleaned text equals the card title. No followers.
 function propertyCardAlbumTitleRecognizer(title) {
   const want = propertyCardCleanInlineText(title);

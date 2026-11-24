@@ -113,17 +113,34 @@ function propertyCardBuildGlyphTile(doc, spec = {}) {
   }
 }
 
+function propertyCardKitKickerPip(doc, part) {
+  const hue = propertyCardKitText(part?.pip).trim();
+  if (!hue) return null;
+  const pip = propertyCardKitEl(doc, "span", "bob-property-card-kicker-pip");
+  pip.setAttribute("aria-hidden", "true");
+  pip.setAttribute("data-root-hue", hue);
+  return pip;
+}
+
 function propertyCardKitKickerPart(doc, part, onLink) {
   const text = propertyCardKitText(part?.text).trim();
   if (!text) return null;
   const target = propertyCardKitText(part?.target).trim();
-  if (!target) return propertyCardKitSpan(doc, "bob-property-card-kicker-part", text);
-  const link = propertyCardKitLink(doc, "bob-property-card-kicker-link", target, part.unresolved === true);
-  propertyCardKitAppendText(doc, link, text);
-  propertyCardKitBindLink(link, (event) => {
-    if (typeof onLink === "function") onLink(target, event);
-  });
-  return link;
+  const node = target
+    ? propertyCardKitLink(doc, "bob-property-card-kicker-link", target, part.unresolved === true)
+    : propertyCardKitEl(doc, "span", "bob-property-card-kicker-part");
+  const pip = propertyCardKitKickerPip(doc, part);
+  if (pip) node.appendChild(pip);
+  propertyCardKitAppendText(doc, node, text);
+  const tooltip = propertyCardKitText(part?.tooltip).trim();
+  if (tooltip) node.setAttribute("title", tooltip);
+  if (part?.ellipsis === true) node.setAttribute("aria-hidden", "true");
+  if (target) {
+    propertyCardKitBindLink(node, (event) => {
+      if (typeof onLink === "function") onLink(target, event);
+    });
+  }
+  return node;
 }
 
 // { element, tile, kicker, heading, pill, subtitle, actions } or null.

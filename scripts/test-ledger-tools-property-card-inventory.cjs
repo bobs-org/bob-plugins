@@ -86,6 +86,28 @@ test("managed grouping follows source order and explicit where marks win", () =>
   assert.equal(result.groups[2].initiallyFolded, true);
 });
 
+test("adapter managed keys fold ordinary leftovers without a global reclassification", () => {
+  const source = "---\ndone_tasks: \"[[done/x]]\"\ntemplate: area\nscheduled: 2026-12-02\ntask_count: 4\nopen_task_count: 2\nsummary: keep\n---";
+  const result = inventory({
+    sourceText: source,
+    frontmatter: { done_tasks: "[[done/x]]", template: "area", scheduled: "2026-12-02", task_count: 4, open_task_count: 2, summary: "keep" },
+    managed: { done_tasks: true, template: true, scheduled: true, task_count: true, open_task_count: true },
+    parseYaml: permissiveYaml,
+  });
+  assert.deepEqual(result.rows.map((row) => [row.key, row.group]), [
+    ["done_tasks", "managed"], ["template", "managed"], ["scheduled", "managed"],
+    ["task_count", "managed"], ["open_task_count", "managed"], ["summary", "loose"],
+  ]);
+  const leftover = inventory({
+    sourceText: "---\ntask_count: 4\nsummary: keep\n---",
+    frontmatter: { task_count: 4, summary: "keep" },
+    parseYaml: permissiveYaml,
+  });
+  assert.deepEqual(leftover.rows.map((row) => [row.key, row.group]), [
+    ["task_count", "loose"], ["summary", "loose"],
+  ]);
+});
+
 test("typed values keep absent, null, empty, false, and zero distinct", () => {
   const source = "---\nabsent: value\nnull_value: null\nempty_string: \"\"\nempty_list: []\nfalse_value: false\nzero_value: 0\n---";
   const result = inventory({ sourceText: source, frontmatter: {

@@ -80,6 +80,8 @@ test("impossible dates are invalid and preserve their raw source", () => {
     text: "added ⚠", tooltip: 'Invalid created value: "2025-02-30T12:00:00Z"', state: "invalid", dateOnly: false,
   });
   assert.equal(format(options({ kind: "album", present: false })).text, "no created date");
+  assert.equal(format(options({ kind: "project", present: false })).text, "no created date");
+  assert.equal(format(options({ kind: "area", present: false })).text, "");
   assert.equal(format(options({ kind: "week", present: false })).text, "");
 });
 

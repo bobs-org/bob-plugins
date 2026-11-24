@@ -164,9 +164,9 @@ card hosts.
 
 ### Title block kit
 
-`propertyCardSpecies(kind)` names seven species: album, record, day, week,
-quarter, year, and bank. Each has a word, tile form, fallback icon, and leaf
-band. `propertyCardApplyIdentity` stamps `data-card-kind` and an accessible
+`propertyCardSpecies(kind)` names nine species: album, record, day, week,
+quarter, year, bank, area, and project. Each has a word, tile form, fallback icon, and leaf
+band. Area uses the `field` tile and Project the `pennant` tile. `propertyCardApplyIdentity` stamps `data-card-kind` and an accessible
 name that starts with the species word. `propertyCardBuildGlyphTile`,
 `propertyCardBuildTitleBlock`, and `propertyCardBuildRail` return plain DOM
 or `null`. Links call the injected `onLink` or `onNavigate`, so adapters

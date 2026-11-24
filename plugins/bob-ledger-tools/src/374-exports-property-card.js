@@ -33,6 +33,7 @@ try {
       propertyCardTitleSourceRange,
       propertyCardSelectionTouches,
       propertyCardPeriodScaffoldTitle,
+      propertyCardHomeTitleRecognizer,
       propertyCardAlbumTitleRecognizer,
       propertyCardDayTitleRecognizer,
       propertyCardPeriodTitleRecognizer,

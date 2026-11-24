@@ -4,7 +4,9 @@
 // kit carry `data-card-kind`; no adapter sets it yet, so current cards keep
 // their exact pixels. Pure data plus one attribute writer. Never throws.
 const PROPERTY_CARD_KIND_ATTR = "data-card-kind";
-const PROPERTY_CARD_KINDS = Object.freeze(["album", "record", "day", "week", "quarter", "year", "bank"]);
+const PROPERTY_CARD_KINDS = Object.freeze([
+  "album", "record", "day", "week", "quarter", "year", "bank", "area", "project",
+]);
 
 const PROPERTY_CARD_SPECIES = Object.freeze({
   album: Object.freeze({ kind: "album", word: "Album", tile: "stack", icon: "library", band: "", temporal: false }),
@@ -14,6 +16,8 @@ const PROPERTY_CARD_SPECIES = Object.freeze({
   quarter: Object.freeze({ kind: "quarter", word: "Quarter", tile: "leaf", icon: "calendar-range", band: "QTR", temporal: true }),
   year: Object.freeze({ kind: "year", word: "Year", tile: "leaf", icon: "calendar-range", band: "YEAR", temporal: true }),
   bank: Object.freeze({ kind: "bank", word: "Bank", tile: "plain", icon: "landmark", band: "", temporal: false }),
+  area: Object.freeze({ kind: "area", word: "Area", tile: "field", icon: "layers", band: "", temporal: false }),
+  project: Object.freeze({ kind: "project", word: "Project", tile: "pennant", icon: "target", band: "", temporal: false }),
 });
 
 // Frozen descriptor { kind, word, tile, icon, band, temporal } or null. The

@@ -13387,6 +13387,10 @@ button.bob-property-card-foot-lint-chip {
   color: var(--text-error);
   background: color-mix(in srgb, var(--text-error) 12%, var(--background-primary));
 }
+.bob-property-editor-banner.is-settings-fallback {
+  color: var(--text-warning);
+  background: color-mix(in srgb, var(--text-warning) 10%, var(--background-primary));
+}
 .bob-property-editor-list {
   display: flex;
   flex-direction: column;
@@ -13399,6 +13403,14 @@ button.bob-property-card-foot-lint-chip {
   font: 650 0.78em/1.2 var(--font-interface);
   letter-spacing: 0.06em;
   text-transform: uppercase;
+}
+.bob-property-editor-group-toggle {
+  appearance: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: start;
+  cursor: pointer;
 }
 /* The button-qualified reset is (0,2,1). Hover/selected/locked/focus
    must keep at least that specificity or background:transparent wins.
@@ -13482,6 +13494,14 @@ button.bob-property-card-foot-lint-chip {
   overflow-wrap: anywhere;
 }
 .bob-property-row.is-selected .bob-property-row-value {
+  color: var(--text-normal);
+}
+.bob-property-row.is-ghost .bob-property-row-value {
+  color: var(--text-faint);
+  font-style: italic;
+}
+.bob-property-row.is-ghost.is-selected .bob-property-row-value,
+.bob-property-row.is-ghost[aria-selected="true"] .bob-property-row-value {
   color: var(--text-normal);
 }
 .bob-property-editor-status {

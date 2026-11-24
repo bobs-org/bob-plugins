@@ -656,21 +656,38 @@ async function run(args) {
       })()`);
       await ctx.page.settle(250);
       const stale = await ctx.page.waitNative(ctx.main, "stale cache");
+      const cacheProbe = "_bobFrontmatterTakeoverCacheProbe";
+      const changedNote = notes[P.day].replace(/^---\r?\n/, `---\n${cacheProbe}: refresh\n`);
       await ctx.page.ev(`(async () => {
         const file = app.vault.getAbstractFileByPath(${JSON.stringify(P.day)});
-        await app.vault.modify(file, ${JSON.stringify(notes[P.day] + "\n\n<!-- takeover cache refresh -->\n")});
+        await app.vault.modify(file, ${JSON.stringify(changedNote)});
         return true;
       })()`);
       await waitFor(client, `(() => {
         const file = app.vault.getAbstractFileByPath(${JSON.stringify(P.day)});
         const cache = app.metadataCache.getFileCache(file);
-        return Boolean(cache && cache.frontmatter && cache.frontmatter.type === ${JSON.stringify(expectedType)});
+        return Boolean(cache && cache.frontmatter
+          && cache.frontmatter.type === ${JSON.stringify(expectedType)}
+          && cache.frontmatter[${JSON.stringify(cacheProbe)}] === "refresh");
       })()`, Boolean, "metadata cache refresh", 10_000);
       await ctx.page.ev(`(async () => {
         const file = app.vault.getAbstractFileByPath(${JSON.stringify(P.day)});
         await app.vault.modify(file, ${JSON.stringify(notes[P.day])});
         return true;
       })()`);
+      await waitFor(client, `(() => {
+        const file = app.vault.getAbstractFileByPath(${JSON.stringify(P.day)});
+        const cache = app.metadataCache.getFileCache(file);
+        return Boolean(cache && cache.frontmatter
+          && cache.frontmatter.type === ${JSON.stringify(expectedType)}
+          && !Object.prototype.hasOwnProperty.call(cache.frontmatter, ${JSON.stringify(cacheProbe)}));
+      })()`, Boolean, "metadata cache restoration", 10_000);
+      await waitFor(client, `(() => {
+        const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
+        return Boolean(plugin
+          && plugin.intentionCardSourceCache?.get?.(${JSON.stringify(P.day)})?.source === ${JSON.stringify(notes[P.day])}
+          && plugin.intentionCardRefreshTimer == null);
+      })()`, Boolean, "restored source and completed card refresh", 10_000);
       const restored = await ctx.page.waitOwned(ctx.main, "live", "stale restore");
       return { ok: true, stale, restored };
     });

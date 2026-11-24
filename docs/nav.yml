@@ -32,6 +32,8 @@
   path: notebook-gestures.md
 - title: Album cards
   path: albums.md
+- title: Area and Project Cards
+  path: area-and-project-cards.md
 - title: Record Card
   path: record-card.md
 - title: Day and Period Cards

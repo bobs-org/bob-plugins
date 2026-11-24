@@ -89,6 +89,10 @@ and putting the cursor on that line in Live Preview reveals it. A differing or
 later H1 stays visible. Source mode shows no card. Embeds, hover previews, and
 mobile keep the inline title and H1 and place the card below the H1.
 
+Typed Area and Project notes use a related local title card. See
+[Area and Project Cards](area-and-project-cards.md) for their hierarchy, lifecycle,
+authored properties, and mount rules.
+
 When bob's report arrives, `＋ <noun>` and **⊞ Schema** join the kicker row
 and the schema summary line, such as
 `▾ Schema · 5 fields · grouped by Location · dated notes · 104 restaurants`,

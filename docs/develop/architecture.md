@@ -178,6 +178,9 @@ returns the glyph tile plus the species word for surfaces that name a species
 without owning the title: the bank card's head row and the card editors'
 modal headers. It is never a heading, and outside a card it falls back to
 neutral ink.
+The local Area and Project hosts leave native Properties visible and keep the
+Project's `^prj` line as its editable control; see
+[Area and Project Cards](../../area-and-project-cards.md).
 
 `propertyCardOwnTitle(scope, { path, recognizer, view })` hides the view's
 inline title and the recognized source title range. In Live Preview, one

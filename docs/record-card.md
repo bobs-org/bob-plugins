@@ -10,7 +10,7 @@ view and Live Preview: after the inline title, before native Properties. The
 report arrives, the record noun; the sheet tile shows the album emoji else a
 page icon. The title paints from local metadata before any report; fields
 and ghosts join inside the same node, and the shared foot below the walk
-rail carries the created stamp plus a `=-` drawer with every frontmatter
+rail carries the created stamp plus a `-` drawer with every frontmatter
 key. Source mode, embeds, hover popovers, canvas, and mobile keep native
 rendering. The **Record Card editor** is the keyboard-first editor for those
 values.
@@ -19,8 +19,8 @@ For note-level loose properties, use the [Property Editor](property-editor.md).
 Its role marks hand record fields back to this editor and keep identity or
 derived values locked with a YAML escape.
 
-Open or close the drawer with its **Properties** disclosure, `=-` after Vim's
-pending `=` operator in Live Preview, the **Toggle card properties** palette
+Open or close the drawer with its **Properties** disclosure, `-` in Live
+Preview Vim normal mode when the editor content has focus, the **Toggle card properties** palette
 command, or the same Vault row in Command Mode. The command acts on the active
 view and only when this card's foot is mounted there. Drawer state is shared by
 panes of the same note for the plugin session; reading properties never writes
@@ -142,7 +142,7 @@ with the species editor opener, never a YAML dump.
 
 The foot follows the walk rail, outside the collapsible body, so the stamp
 stays visible on identity-only, broken-schema, and collapsed cards. The
-disclosure, `=-` in Live Preview Vim normal mode, and **Toggle card
+disclosure, `-` in Live Preview Vim normal mode, and **Toggle card
 properties** (palette or Command Mode) toggle the same drawer; open state is a
 per-note session toggle shared by every pane on the note. `y` on a focused
 drawer row jumps to that key's exact YAML line. Painting, toggling, and
@@ -322,8 +322,8 @@ Done.
 | **Edit record** palette command | Open the editor; non-records say `Open a record note to edit its fields.` |
 | Command Mode Vault row | Run **Edit record** through Obsidian's command route. |
 | Collapse control | Session-collapse or expand this record card. |
-| Properties disclosure (`Toggle properties =-`) | Session-show or hide every frontmatter key in the drawer. |
-| `=-` in Vim normal mode in Live Preview | Toggle the drawer; counts, registers, Source mode, insert and visual modes, and views without a mounted foot keep Vim's reindent. |
+| Properties disclosure (`Toggle properties (-)`) | Session-show or hide every frontmatter key in the drawer. |
+| `-` in Vim normal mode in Live Preview | Toggle the drawer; counts, registers, operator-pending keys, Source mode, insert and visual modes, views without a mounted foot, and focus outside the editor content keep Vim's `-` motion. |
 | **Toggle card properties** (palette or Command Mode) | Toggle the drawer. |
 | `y` on a focused row, ghost, or drawer row | Open this record in Source on that YAML key. |
 | Open album YAML (broken schema) | Open the parent album in Source on the diagnostic line. |

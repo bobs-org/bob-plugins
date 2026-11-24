@@ -300,7 +300,7 @@ const actingVim = Object.freeze({
   insertMode: false,
   visualMode: false,
   replaceMode: false,
-  operator: "indentAuto",
+  operator: null,
   keyBufferEmpty: true,
   countPending: false,
   registerPending: false,
@@ -316,34 +316,34 @@ function plusGateInput(overrides = {}) {
     repeat: false,
     isComposing: false,
     defaultPrevented: false,
-    inEditor: true,
+    inContent: true,
     livePreview: true,
     vim: actingVim,
-    canHandleKey: true,
     arm: { key: "+", canAct: () => true, run: () => {} },
     context: {},
     ...overrides,
   };
 }
 
-test("the + chord acts on clean pending equals, shifted included, and every guard refuses", () => {
-  assert.equal(H.propertyCardSecondKeyGate(plusGateInput()).act, true);
-  assert.equal(H.propertyCardSecondKeyGate(plusGateInput({ shiftKey: false })).act, true);
+test("the + arm acts on a bare normal-mode plus, shifted included, and every guard refuses", () => {
+  assert.equal(H.propertyCardBareKeyGate(plusGateInput()).act, true);
+  assert.equal(H.propertyCardBareKeyGate(plusGateInput({ shiftKey: false })).act, true);
   for (const [name, override] of [
     ["modified", { ctrlKey: true }],
     ["repeat", { repeat: true }],
     ["composing", { isComposing: true }],
-    ["outside-editor", { inEditor: false }],
+    ["not-content", { inContent: false }],
     ["not-live-preview", { livePreview: false }],
     ["no-vim", { vim: { ...actingVim, readable: false } }],
     ["insert", { vim: { ...actingVim, insertMode: true } }],
     ["counted", { vim: { ...actingVim, countPending: true } }],
     ["register", { vim: { ...actingVim, registerPending: true } }],
     ["operator", { vim: { ...actingVim, operator: "delete" } }],
+    ["pending-equals", { vim: { ...actingVim, operator: "indentAuto" } }],
     ["unregistered-arm", { arm: null }],
     ["arm-refuses", { arm: { key: "+", canAct: () => false, run: () => {} } }],
   ]) {
-    assert.equal(H.propertyCardSecondKeyGate(plusGateInput(override)).act, false, name);
+    assert.equal(H.propertyCardBareKeyGate(plusGateInput(override)).act, false, name);
   }
 });
 
@@ -428,7 +428,7 @@ test("drawer body shows Add and Edit-all actions only while the hook is register
   const actions = withHook.element.querySelectorAll('[data-property-foot-action]');
   assert.deepEqual(actions.map((node) => node.getAttribute("data-property-foot-action")), ["add", "edit-all"]);
   assert.equal(actions[0].textContent, "＋ Add property");
-  assert.equal(actions[1].textContent, "✎ Edit all =+");
+  assert.equal(actions[1].textContent, "✎ Edit all (+)");
   const keyButtons = withHook.element.querySelectorAll(".bob-property-card-foot-key-button");
   assert.equal(keyButtons.length, 1, "key label becomes a button while the hook is registered");
 

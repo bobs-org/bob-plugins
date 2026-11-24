@@ -1,5 +1,5 @@
 // Property editor public entry points and props YAML excursion
-// (bob-cli-pf.4.1.5 entrypoints-yaml). One opener for the `+` chord, the
+// (bob-cli-pf.4.1.5 entrypoints-yaml). One opener for the bare `+` key, the
 // palette, Command Mode, drawer actions, and sibling plugins, plus the
 // species hand-offs and the `kind: "props"` YAML excursion with Done return.
 // Pure helpers stay DOM-free; the mixin owns registration and teardown.
@@ -167,10 +167,11 @@ class BobLedgerToolsPropertyEditorEntrypointsMixin {
         callback: () => { void this.openPropertyEditor({}); },
       });
     } catch (_) {}
-    // The `+` arm accepts Shift (event.key is "+") and inherits the shared
-    // normal-mode, Live Preview, count, register, buffer, IME, repeat, and
-    // modifier guards from the second-key gate. Vim's pending `=` operator
-    // is cancelled only when this arm acts, by the shared dispatcher.
+    // The `+` arm accepts Shift (event.key is "+") and unshifted "+". It
+    // runs on a bare Live Preview Vim normal-mode key through the
+    // content-target gate. Counts, registers, a non-empty key buffer, and a
+    // pending operator (including `=`) keep Vim's `+` motion. The
+    // dispatcher does not inject <Esc>.
     try {
       if (typeof this.registerPropertyCardSecondKeyArm === "function") {
         this.registerPropertyCardSecondKeyArm({

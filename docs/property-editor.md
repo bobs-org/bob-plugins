@@ -12,10 +12,13 @@ range selection, and filtering follow the visible grouped rows.
 
 ## Open the editor
 
-- In Live Preview Vim normal mode, type `=+` (`=` followed by Shift+`=` on a
-  US keyboard). The chord works on any Markdown note.
+- In Live Preview Vim normal mode, type `+` (Shift+`=` on a US keyboard, or
+  an unshifted `+`). The key works on any Markdown note when the editor
+  content has focus. Counts, registers, operator-pending keys (including a
+  pending `=`), Source mode, insert and visual modes, and non-Markdown notes
+  keep Vim's `+` motion.
 - Run **Edit note properties** from the Command Palette or Command Mode.
-- Press Enter on a focused row in a card's `=-` Properties drawer.
+- Press Enter on a focused row in a card's `-` Properties drawer.
 - Sibling plugins can call the Bob Ledger Tools plugin method:
 
   ```js

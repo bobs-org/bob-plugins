@@ -438,7 +438,7 @@ async function clickBy(client, selector) {
 }
 
 async function dispatchFootKeys(client) {
-  for (const key of ["=", "-"]) {
+  for (const key of ["-"]) {
     for (const event of lib.keyEvents(key, 0)) await client.call("Input.dispatchKeyEvent", event);
     await sleep(350);
   }
@@ -447,7 +447,7 @@ async function dispatchFootKeys(client) {
 // Vim-operator key payloads matching the proven yank-flash/window-prefix
 // runners: zeroed virtual key codes, code echoing the key itself, ~24ms gaps.
 // CodeMirror Vim operator-pending flows (yy) only prove out with this shape;
-// the generic lib.keyEvents "Equal"/"Minus" codes never arm the =- gate.
+// the generic lib.keyEvents "Equal"/"Minus" codes never arm the - gate.
 function vimCodeFor(key) {
   if (/^[a-z]$/i.test(key)) return "Key" + key.toUpperCase();
   if (key === "Enter" || key === "Escape") return key;
@@ -665,7 +665,7 @@ async function run(args) {
       }
     }
     if (args.scope === "full") {
-      // Disclosure and =- toggle the same drawer; == still resolves the schema editor target.
+      // Disclosure and - toggle the same drawer; == still resolves the schema editor target.
       await openNote(client, "eat/corner-bistro.md", "live");
       const beforeToggle = markdownFilesHash(vaultDir);
       await checkNoSpawnDelta("drawer-open-spawns-nothing", async () => {
@@ -681,8 +681,8 @@ async function run(args) {
       state = await waitFor(client, lib.probeFootSource("eat/corner-bistro.md"), (value) => value?.foot?.ariaExpanded === "false", "drawer closes on disclosure click");
       appendCapturedCheck(report, "drawer-closes-without-markdown-writes", markdownFilesHash(vaultDir) === beforeToggle, state.foot);
       // Focus the Live Preview editor with a real trusted click (Vim normal
-      // mode) so the =- arm gate (in-editor, Live Preview, readable Vim,
-      // pending-equals) can act. CDP key events land on the focused element.
+      // mode) so the - arm gate (content target, Live Preview, readable Vim,
+      // no pending operator) can act. CDP key events land on the focused element.
       const focusLivePreviewEditor = async () => {
         try {
           await clickBy(client, ".markdown-source-view .cm-line");
@@ -714,23 +714,40 @@ async function run(args) {
       let minusOpened = false;
       for (let attempt = 1; attempt <= 3 && !minusOpened; attempt += 1) {
         await checkNoSpawnDelta("minus-toggle-spawns-nothing-attempt-" + attempt, async () => {
-          await vimKey(client, "=");
           await vimKey(client, "-");
         });
         try {
-          state = await waitFor(client, lib.probeFootSource("eat/corner-bistro.md"), (value) => value?.foot?.ariaExpanded === "true", "drawer opens on =- (attempt " + attempt + ")", 10_000);
+          state = await waitFor(client, lib.probeFootSource("eat/corner-bistro.md"), (value) => value?.foot?.ariaExpanded === "true", "drawer opens on - (attempt " + attempt + ")", 10_000);
           minusOpened = true;
         } catch (_) {
           await focusLivePreviewEditor();
         }
       }
-      if (!minusOpened) throw new Error("drawer opens on =- timed out after 3 attempts; focus=" + JSON.stringify(await vimDiagnostics()));
+      if (!minusOpened) throw new Error("drawer opens on - timed out after 3 attempts; focus=" + JSON.stringify(await vimDiagnostics()));
       report.probes.minusOpens = state;
       appendCapturedCheck(report, "minus-opens-same-drawer", state.foot.drawerOpen === "true", state.foot);
       const cursorAfter = await client.evaluate(`(() => { const el = document.activeElement; return el ? { tag: el.tagName, cls: String(el.className || "").slice(0, 200) } : null; })()`);
       const selectionAfter = await client.evaluate(`(() => { const sel = window.getSelection?.(); return sel ? { text: String(sel.toString()).slice(0, 200), ranges: sel.rangeCount } : null; })()`);
       appendCapturedCheck(report, "minus-preserves-cursor-and-selection", JSON.stringify(cursorBefore) === JSON.stringify(cursorAfter) && JSON.stringify(selectionBefore) === JSON.stringify(selectionAfter), { before: { cursorBefore, selectionBefore }, after: { cursorAfter, selectionAfter } });
       checkNoWrite("minus-toggle-writes-nothing");
+      await focusLivePreviewEditor();
+      const drawerBeforeSearch = await client.evaluate(lib.probeFootSource("eat/corner-bistro.md"));
+      await vimKey(client, "/");
+      await waitFor(client, `(() => {
+        const el = document.activeElement;
+        if (!el) return false;
+        const tag = String(el.tagName || "").toLowerCase();
+        if (tag === "input" || tag === "textarea") return true;
+        return Boolean(el.isContentEditable) && !el.classList.contains("cm-content");
+      })()`, Boolean, "vim search prompt has focus", 5_000);
+      await vimKey(client, "a");
+      await vimKey(client, "-");
+      await vimKey(client, "b");
+      await vimKey(client, "Escape");
+      const drawerAfterSearch = await waitFor(client, lib.probeFootSource("eat/corner-bistro.md"), Boolean, "foot still mounted after search prompt");
+      appendCapturedCheck(report, "search-prompt-minus-leaves-drawer",
+        drawerAfterSearch?.foot?.ariaExpanded === drawerBeforeSearch?.foot?.ariaExpanded,
+        { before: drawerBeforeSearch && drawerBeforeSearch.foot, after: drawerAfterSearch && drawerAfterSearch.foot });
       // Normal == still opens the appropriate editor (Record Card modal here);
       // Escape dismisses it and the foot stays mounted.
       await focusLivePreviewEditor();
@@ -928,7 +945,7 @@ async function run(args) {
     await client.call("Emulation.setEmulatedMedia", { features: [] });
     checkNoWrite("final-writes-nothing");
     await checkNoSpawnDelta("final-spawns-nothing", async () => { await sleep(500); });
-    const required = ["ledger-tools-plugin-loaded", "album-reading-foot-mounts-once", "record-live-foot-mounts-once", "bank-live-foot-mounts-once", "minus-opens-same-drawer", "equals-opens-record-editor", "per-note-open-state-survives", "palette-toggle-flips-drawer", "toggle-without-mount-changes-nothing"];
+    const required = ["ledger-tools-plugin-loaded", "album-reading-foot-mounts-once", "record-live-foot-mounts-once", "bank-live-foot-mounts-once", "minus-opens-same-drawer", "search-prompt-minus-leaves-drawer", "equals-opens-record-editor", "per-note-open-state-survives", "palette-toggle-flips-drawer", "toggle-without-mount-changes-nothing"];
     for (const name of required) {
       if (!report.assertions.some((row) => row.name === name)) writeAssertion(report, name, false, "Required check was not executed");
     }

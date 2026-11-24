@@ -300,7 +300,7 @@ async function runSurfaceAcceptance(ctx) {
   await closed();
   addCheck(report, "q closes the modal from browse", true, { closedBy: "q" });
 
-  // Entry points: palette, Command Mode, =+, Shift+=, API, drawer.
+  // Entry points: palette, Command Mode, +, Shift+=-shaped +, API, drawer.
   await shared.openNote(client, "ordinary.md", "live");
   await openPaletteCommand(client, sendKey, setInput, "Edit note properties");
   probe = await waitForEditor(client, (value) => value.open && value.readSettled, "palette opens the editor");
@@ -331,18 +331,26 @@ async function runSurfaceAcceptance(ctx) {
 
   await shared.openNote(client, "ordinary.md", "live");
   await focusLiveEditor(client, sendKey);
-  await vimKey(client, "=");
   await vimKey(client, "+");
-  probe = await waitForEditor(client, (value) => value.open && value.readSettled, "=+ chord opens the editor");
-  addCheck(report, "=+ Live Preview Vim chord", probe.open && probe.filePath === "ordinary.md", probe);
+  probe = await waitForEditor(client, (value) => value.open && value.readSettled, "+ opens the editor");
+  addCheck(report, "+ Live Preview Vim key", probe.open && probe.filePath === "ordinary.md", probe);
+  await closePropertyEditor(client);
+
+  await focusLiveEditor(client, sendKey);
+  await vimKey(client, { key: "+", modifiers: 8, text: "+", unmodifiedText: "=" });
+  probe = await waitForEditor(client, (value) => value.open && value.readSettled, "Shift+=-shaped + opens the editor");
+  addCheck(report, "Shift+= Live Preview Vim key", probe.open && probe.filePath === "ordinary.md", probe);
   await closePropertyEditor(client);
 
   await focusLiveEditor(client, sendKey);
   await vimKey(client, "=");
-  await vimKey(client, { key: "+", modifiers: 8, text: "+", unmodifiedText: "=" });
-  probe = await waitForEditor(client, (value) => value.open && value.readSettled, "Shift+= chord opens the editor");
-  addCheck(report, "Shift+= Live Preview Vim chord", probe.open && probe.filePath === "ordinary.md", probe);
-  await closePropertyEditor(client);
+  await vimKey(client, "+");
+  await shared.sleep(250);
+  probe = await client.evaluate(`(() => {
+    const modal = document.querySelector(".bob-property-editor");
+    return { open: Boolean(modal && modal.getClientRects().length > 0) };
+  })()`);
+  addCheck(report, "pending = then + does not open the editor", probe.open !== true, probe);
 
   probe = await openPropertyEditor(client, "ordinary.md", { key: "title", mode: "browse" });
   addCheck(report, "API openPropertyEditor on an ordinary note", probe.open && probe.rows.some((row) => row.key === "title"), probe);
@@ -382,7 +390,7 @@ async function runSurfaceAcceptance(ctx) {
   }
   await clickSelector(client, ".bob-property-card-foot-edit-all");
   probe = await waitForEditor(client, (value) => value.open && value.readSettled, "drawer Edit all");
-  addCheck(report, "drawer Edit all =+ opens the editor", probe.open, probe);
+  addCheck(report, "drawer Edit all (+) opens the editor", probe.open, probe);
   await closePropertyEditor(client);
 
   // Restore the surfaces note to a known shape is unnecessary: later unload

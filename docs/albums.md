@@ -117,7 +117,7 @@ linted rows.
 
 The foot follows the schema and any rail or mobile hint, including
 identity-only cards that paint before the report arrives. The disclosure,
-`=-` in Live Preview Vim normal mode, and **Toggle card properties** (palette
+`-` in Live Preview Vim normal mode, and **Toggle card properties** (palette
 or Command Mode) toggle the same drawer; open state is a per-note session
 toggle shared by every pane on the note. `y` on a focused drawer row jumps to
 that key's exact YAML line. Painting, toggling, and collapsing never spawn bob

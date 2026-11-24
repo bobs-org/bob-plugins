@@ -121,22 +121,30 @@ hosts are needed. Core unit entry points are
 `scripts/test-ledger-tools-property-card-ownership.cjs`, and
 `scripts/test-ledger-tools-property-card-host.cjs`.
 
-The same capture-phase gate dispatches the property-card second-key arms.
-`=` keeps the species registry route; `-` calls
+The capture-phase gate splits by key. `=` still uses the pending-`indentAuto`
+operator arm, the species registry, and an `<Esc>` injection to cancel the
+pending operator. `-` and `+` use bare arms: they act only in Live Preview Vim
+normal mode when the event targets the editor's `contentDOM` (or a descendant
+that is not an `input`, `textarea`, or `select` and whose closest
+`[contenteditable]` is that same `contentDOM`), with no pending operator, no
+count, no register, and an empty key buffer. `-` calls
 `propertyCardToggleProperties(view)` only when the current view contains a live
-foot for its current note. Extensions may register the future `+` arm on the
-Bob Ledger Tools plugin instance with
+foot for its current note. `+` runs the registered Property Editor arm on any
+Markdown note. Counts, registers, operator-pending keys (including a pending
+`=`), Source mode, insert and visual modes, views without a mounted foot or
+registered editor, and focus outside the editor content keep Vim's `-`/`+`
+motions. Extensions may register the `+` arm on the Bob Ledger Tools plugin
+instance with
 `registerPropertyCardSecondKeyArm({ key: "+", canAct(context), run(context) })`;
-the method returns `false` for invalid or duplicate registrations, and
-`unregisterPropertyCardSecondKeyArm("+")` removes it. The context carries
-`plugin`, `view`, `cm`, `path`, `frontmatter`, `entry`, and `event`. The gate
-shares the clean pending-`indentAuto` checks across arms and falls through when
-an arm is absent or cannot act.
+the method name is historical. It returns `false` for invalid or duplicate
+registrations, and `unregisterPropertyCardSecondKeyArm("+")` removes it. The
+context carries `plugin`, `view`, `cm`, `path`, `frontmatter`, `entry`, and
+`event`. The gate falls through when an arm is absent or cannot act.
 
 The foot kit's editor hook is `propertyCardFootSetEditorHook(handler)`. A
 registered handler receives `(path, { key, mode })` from the drawer's
 `onOpenEditor` action. It remains unset until the property editor registers;
-this API contract does not make `=+` available by itself.
+this API contract does not make `+` available by itself.
 
 The shared foot kit exposes `propertyCardFormatCreatedStamp(input = {})`,
 returning `{ text, tooltip, state, dateOnly }`, and
@@ -146,7 +154,7 @@ returning `{ text, tooltip, state, dateOnly }`, and
 `propertyCardFootIsOpen(path)`, `propertyCardFootToggle(path)`, and
 `propertyCardFootOnToggle(listener)`; the mount registry tracks each live foot
 per view. `propertyCardToggleProperties(view)` and
-`propertyCardCanToggleProperties(view)` implement the guarded `=-` action. The
+`propertyCardCanToggleProperties(view)` implement the guarded `-` action. The
 `240r` adapter helpers `propertyCardFootAdapterSpec(options = {})`,
 `propertyCardFootAdapterAppend(card, path, doc, spec, handlers, pendingScroll)`,
 `propertyCardFootAdapterTrack(container, path, card, tracked)`,

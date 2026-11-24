@@ -491,7 +491,7 @@ function propertyCardFootRenderDrawer(doc, drawerBody, spec) {
         all.setAttribute("class", "bob-property-card-foot-edit-all");
         all.setAttribute("data-property-foot-action", "edit-all");
         all.setAttribute("aria-label", "Edit all properties");
-        propertyCardKitAppendText(doc, all, "✎ Edit all =+");
+        propertyCardKitAppendText(doc, all, "✎ Edit all (+)");
         all.addEventListener?.("click", (event) => {
           try { event.preventDefault?.(); } catch (_) {}
           try {
@@ -533,7 +533,7 @@ function propertyCardFootBuildEl(doc, spec = {}) {
     disclosure.setAttribute("class", "bob-property-card-foot-disclosure");
     disclosure.setAttribute("aria-expanded", open ? "true" : "false");
     disclosure.setAttribute("aria-controls", drawerId);
-    disclosure.setAttribute("title", "Toggle properties =-");
+    disclosure.setAttribute("title", "Toggle properties (-)");
     disclosure.setAttribute("aria-label", `Toggle properties, ${count} ${count === 1 ? "property" : "properties"}`);
     disclosure.setAttribute("data-foot-focus", "foot");
     const chevron = propertyCardKitSpan(doc, "bob-property-card-foot-chevron", "▸");

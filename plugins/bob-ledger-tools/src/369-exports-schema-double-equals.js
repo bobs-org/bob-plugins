@@ -4,8 +4,10 @@ try {
     module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
       schemaDoubleEqualsVimSnapshot,
       propertyCardSecondKeyGate,
+      propertyCardBareKeyGate,
       schemaDoubleEqualsGate,
       schemaDoubleEqualsTargetKind,
+      schemaDoubleEqualsEventInContent,
     });
   }
 } catch (_) {}

@@ -180,18 +180,49 @@ test("Shift with key = still acts", () => {
   });
 });
 
-test("second-key arms share the clean pending-equals gate and keep Shifted plus available", () => {
-  const arm = { reason: "test-arm", canAct: () => true, run() {} };
-  const base = {
-    key: "+", arm, canHandleKey: true, inEditor: true, livePreview: true,
-    vim: actingVim, defaultPrevented: false,
+const actingBareVim = Object.freeze({
+  readable: true,
+  insertMode: false,
+  visualMode: false,
+  replaceMode: false,
+  operator: null,
+  keyBufferEmpty: true,
+  countPending: false,
+  registerPending: false,
+});
+
+function bareGateInput(overrides = {}) {
+  return {
+    key: "-",
+    ctrlKey: false,
+    altKey: false,
+    metaKey: false,
+    shiftKey: false,
+    repeat: false,
+    isComposing: false,
+    defaultPrevented: false,
+    inContent: true,
+    livePreview: true,
+    vim: actingBareVim,
+    arm: { reason: "test-arm", canAct: () => true, run() {} },
+    context: {},
+    ...overrides,
   };
-  assert.deepEqual(helpers.propertyCardSecondKeyGate({ ...base, shiftKey: true }), {
+}
+
+test("bare-key arms act on - and on shifted and unshifted +", () => {
+  assert.deepEqual(helpers.propertyCardBareKeyGate(bareGateInput()), {
     act: true, reason: "test-arm",
   });
-  assert.deepEqual(helpers.propertyCardSecondKeyGate({ ...base, shiftKey: false }), {
+  assert.deepEqual(helpers.propertyCardBareKeyGate(bareGateInput({ key: "+", shiftKey: true })), {
     act: true, reason: "test-arm",
   });
+  assert.deepEqual(helpers.propertyCardBareKeyGate(bareGateInput({ key: "+", shiftKey: false })), {
+    act: true, reason: "test-arm",
+  });
+});
+
+test("bare-key gate names each fall-through", () => {
   for (const [overrides, reason] of [
     [{ ctrlKey: true }, "modified"],
     [{ altKey: true }, "modified"],
@@ -199,20 +230,55 @@ test("second-key arms share the clean pending-equals gate and keep Shifted plus 
     [{ repeat: true }, "repeat"],
     [{ isComposing: true }, "composing"],
     [{ defaultPrevented: true }, "default-prevented"],
-    [{ inEditor: false }, "outside-editor"],
+    [{ inContent: false }, "not-content"],
     [{ livePreview: false }, "not-live-preview"],
-    [{ vim: { ...actingVim, readable: false } }, "no-vim"],
-    [{ vim: { ...actingVim, insertMode: true } }, "not-normal"],
-    [{ vim: { ...actingVim, operator: null } }, "no-pending-equals"],
-    [{ vim: { ...actingVim, keyBufferEmpty: false } }, "no-pending-equals"],
-    [{ vim: { ...actingVim, countPending: true } }, "counted"],
-    [{ vim: { ...actingVim, registerPending: true } }, "register"],
-    [{ canHandleKey: false }, "no-handle-key"],
+    [{ vim: { ...actingBareVim, readable: false } }, "no-vim"],
+    [{ vim: { ...actingBareVim, insertMode: true } }, "not-normal"],
+    [{ vim: { ...actingBareVim, visualMode: true } }, "not-normal"],
+    [{ vim: { ...actingBareVim, replaceMode: true } }, "not-normal"],
+    [{ vim: { ...actingBareVim, operator: "indentAuto" } }, "operator-pending"],
+    [{ vim: { ...actingBareVim, operator: "delete" } }, "operator-pending"],
+    [{ vim: { ...actingBareVim, keyBufferEmpty: false } }, "key-buffer"],
+    [{ vim: { ...actingBareVim, countPending: true } }, "counted"],
+    [{ vim: { ...actingBareVim, registerPending: true } }, "register"],
+    [{ key: "=" }, "not-bare-key"],
   ]) {
-    assert.equal(helpers.propertyCardSecondKeyGate({ ...base, ...overrides }).reason, reason);
+    assert.equal(helpers.propertyCardBareKeyGate(bareGateInput(overrides)).reason, reason);
   }
-  assert.equal(helpers.propertyCardSecondKeyGate({ ...base, arm: null }).reason, "unregistered-arm");
-  assert.equal(helpers.propertyCardSecondKeyGate({ ...base, arm: { ...arm, canAct: () => false } }).reason, "arm-not-actionable");
+  assert.equal(helpers.propertyCardBareKeyGate(bareGateInput({ arm: null })).reason, "unregistered-arm");
+  assert.equal(helpers.propertyCardBareKeyGate(bareGateInput({
+    arm: { reason: "test-arm", canAct: () => false, run() {} },
+  })).reason, "arm-not-actionable");
+});
+
+test("content-target helper accepts the editor contentDOM and refuses inputs and nested editables", () => {
+  const contentDOM = { tagName: "DIV", className: "cm-content" };
+  const view = { editor: { cm: { contentDOM } } };
+  assert.equal(helpers.schemaDoubleEqualsEventInContent({ target: contentDOM }, view), true);
+
+  const line = {
+    tagName: "DIV",
+    closest(sel) { return sel === "[contenteditable]" ? contentDOM : null; },
+  };
+  assert.equal(helpers.schemaDoubleEqualsEventInContent({ target: line }, view), true);
+
+  const searchInput = {
+    tagName: "INPUT",
+    closest(sel) { return sel === "[contenteditable]" ? contentDOM : sel === ".cm-editor" ? { className: "cm-editor" } : null; },
+  };
+  assert.equal(helpers.schemaDoubleEqualsEventInContent({ target: searchInput }, view), false, "Vim search panel");
+
+  const propertyInput = {
+    tagName: "INPUT",
+    closest(sel) { return sel === ".cm-editor" ? { className: "cm-editor" } : null; },
+  };
+  assert.equal(helpers.schemaDoubleEqualsEventInContent({ target: propertyInput }, view), false, "native property input");
+
+  const inlineTitle = {
+    tagName: "DIV",
+    closest(sel) { return sel === "[contenteditable]" ? inlineTitle : sel === ".cm-editor" ? { className: "cm-editor" } : null; },
+  };
+  assert.equal(helpers.schemaDoubleEqualsEventInContent({ target: inlineTitle }, view), false, "inline title");
 });
 
 test("vim snapshot reads a lone pending = and count or register state", () => {
@@ -329,6 +395,15 @@ function makeView(path, options = {}) {
       registerName: null,
     },
   };
+  const contentDOM = options.contentDOM || {
+    tagName: "DIV",
+    className: "cm-content",
+    closest(sel) {
+      return sel === "[contenteditable]" ? contentDOM
+        : sel === ".cm-editor" ? { className: "cm-editor" }
+        : null;
+    },
+  };
   const cm = {
     getCursor() { return { line: 0, ch: 0 }; },
     getValue() { return content; },
@@ -340,17 +415,43 @@ function makeView(path, options = {}) {
           return undefined;
         },
       },
+      contentDOM,
     },
   };
   view.file = { path };
-  view.editor = { cm: { cm } };
+  view.editor = { cm: { cm, contentDOM } };
   view.mountedNodes = [];
   view.containerEl = {
-    contains(el) { return el && (el.className === "cm-editor" || view.mountedNodes.includes(el)); },
+    contains(el) { return el && (el.className === "cm-editor" || el === contentDOM || view.mountedNodes.includes(el)); },
   };
   view.getState = () => ({ source: !live });
   view.cm = cm;
+  view.contentDOM = contentDOM;
   return view;
+}
+
+function bareVimState(overrides = {}) {
+  return {
+    insertMode: false,
+    visualMode: false,
+    replaceMode: false,
+    inputState: {
+      operator: null,
+      keyBuffer: [],
+      prefixRepeat: [],
+      motionRepeat: [],
+      registerName: null,
+    },
+    ...overrides,
+  };
+}
+
+function bareKeyEvent(view, overrides = {}) {
+  return makeKeyEvent({
+    key: "-",
+    target: view.contentDOM,
+    ...overrides,
+  });
 }
 
 function makeHarness(path, options = {}) {
@@ -506,32 +607,38 @@ test("window plus document dispatch of the same event acts once", () => {
   });
 });
 
-test("=- toggles only a foot mounted in the active view and cancels the pending operator", () => {
+test("- toggles only a foot mounted in the active view and injects no Esc", () => {
   helpers.propertyCardFootResetAll();
-  const harness = makeHarness("eat/nagi.md", { frontmatter: { type: "[[record]]" } });
+  const harness = makeHarness("eat/nagi.md", {
+    frontmatter: { type: "[[record]]" },
+    vimState: bareVimState(),
+  });
   const foot = { className: "bob-property-card-foot", isConnected: true };
   harness.view.mountedNodes.push(foot);
   helpers.propertyCardFootRegisterMount(foot, "eat/nagi.md");
   withGlobals(harness.win, harness.doc, () => {
     harness.plugin.setupSchemaDoubleEquals();
-    const event = makeKeyEvent({ key: "-" });
+    const event = bareKeyEvent(harness.view);
     harness.win.dispatch(event);
     assert.deepEqual(event.counts, { preventDefault: 1, stopPropagation: 1, immediate: 1 });
-    assert.deepEqual(harness.handleKeyCalls, [[harness.view.cm, "<Esc>", "mapping"]]);
+    assert.equal(harness.handleKeyCalls.length, 0, "bare minus does not cancel a pending operator");
     assert.equal(helpers.propertyCardFootIsOpen("eat/nagi.md"), true);
     assert.equal(harness.recordCalls.length, 0, "the minus arm does not open the species editor");
   });
   helpers.propertyCardFootResetAll();
 });
 
-test("=- falls through when the active pane has no mounted foot, including a same-path other pane", () => {
+test("- falls through when the active pane has no mounted foot, including a same-path other pane", () => {
   helpers.propertyCardFootResetAll();
-  const harness = makeHarness("eat/nagi.md", { frontmatter: { type: "[[record]]" } });
+  const harness = makeHarness("eat/nagi.md", {
+    frontmatter: { type: "[[record]]" },
+    vimState: bareVimState(),
+  });
   const otherPaneFoot = { className: "bob-property-card-foot", isConnected: true };
   helpers.propertyCardFootRegisterMount(otherPaneFoot, "eat/nagi.md");
   withGlobals(harness.win, harness.doc, () => {
     harness.plugin.setupSchemaDoubleEquals();
-    const event = makeKeyEvent({ key: "-" });
+    const event = bareKeyEvent(harness.view);
     harness.win.dispatch(event);
     assert.deepEqual(event.counts, { preventDefault: 0, stopPropagation: 0, immediate: 0 });
     assert.equal(harness.handleKeyCalls.length, 0);
@@ -540,14 +647,17 @@ test("=- falls through when the active pane has no mounted foot, including a sam
   helpers.propertyCardFootResetAll();
 });
 
-test("unregistered + falls through; a registered shifted and unshifted + arm runs through the shared gate", () => {
-  const harness = makeHarness("eat/nagi.md", { frontmatter: { type: "[[record]]" } });
+test("unregistered + falls through; a registered shifted and unshifted + arm runs with no Esc", () => {
+  const harness = makeHarness("eat/nagi.md", {
+    frontmatter: { type: "[[record]]" },
+    vimState: bareVimState(),
+  });
   const seen = [];
   withGlobals(harness.win, harness.doc, () => {
     harness.plugin.setupSchemaDoubleEquals();
-    const unregistered = makeKeyEvent({ key: "+", shiftKey: true });
+    const unregistered = bareKeyEvent(harness.view, { key: "+", shiftKey: true });
     harness.win.dispatch(unregistered);
-    assert.equal(unregistered.counts.preventDefault, 0, "future plus is absent by default");
+    assert.equal(unregistered.counts.preventDefault, 0, "plus is absent until registered");
     assert.equal(harness.handleKeyCalls.length, 0);
     assert.equal(harness.plugin.registerPropertyCardSecondKeyArm({
       key: "+", canAct: (context) => context.path === "eat/nagi.md",
@@ -555,20 +665,41 @@ test("unregistered + falls through; a registered shifted and unshifted + arm run
     }), true);
     assert.equal(harness.plugin.registerPropertyCardSecondKeyArm({
       key: "+", canAct: () => true, run() {},
-    }), false, "only one future plus arm is registered");
+    }), false, "only one plus arm is registered");
     for (const shiftKey of [true, false]) {
-      const event = makeKeyEvent({ key: "+", shiftKey });
+      const event = bareKeyEvent(harness.view, { key: "+", shiftKey });
       harness.win.dispatch(event);
       assert.deepEqual(event.counts, { preventDefault: 1, stopPropagation: 1, immediate: 1 });
     }
     assert.deepEqual(seen, [["eat/nagi.md", "[[record]]"], ["eat/nagi.md", "[[record]]"]]);
-    assert.deepEqual(harness.handleKeyCalls, [
-      [harness.view.cm, "<Esc>", "mapping"],
-      [harness.view.cm, "<Esc>", "mapping"],
-    ]);
+    assert.equal(harness.handleKeyCalls.length, 0, "bare plus does not inject Esc");
     assert.equal(harness.plugin.unregisterPropertyCardSecondKeyArm("="), false, "built-in arms stay owned here");
     assert.equal(harness.plugin.unregisterPropertyCardSecondKeyArm("+"), true);
   });
+});
+
+test("pending = followed by - or + falls through with no Esc and no arm", () => {
+  helpers.propertyCardFootResetAll();
+  const harness = makeHarness("eat/nagi.md", { frontmatter: { type: "[[record]]" } });
+  const foot = { className: "bob-property-card-foot", isConnected: true };
+  harness.view.mountedNodes.push(foot);
+  helpers.propertyCardFootRegisterMount(foot, "eat/nagi.md");
+  const seen = [];
+  withGlobals(harness.win, harness.doc, () => {
+    harness.plugin.setupSchemaDoubleEquals();
+    assert.equal(harness.plugin.registerPropertyCardSecondKeyArm({
+      key: "+", canAct: () => true, run: () => seen.push("+"),
+    }), true);
+    for (const key of ["-", "+"]) {
+      const event = bareKeyEvent(harness.view, { key });
+      harness.win.dispatch(event);
+      assert.deepEqual(event.counts, { preventDefault: 0, stopPropagation: 0, immediate: 0 }, key);
+    }
+    assert.equal(harness.handleKeyCalls.length, 0);
+    assert.equal(helpers.propertyCardFootIsOpen("eat/nagi.md"), false);
+    assert.deepEqual(seen, []);
+  });
+  helpers.propertyCardFootResetAll();
 });
 
 test("palette command toggles the current Reading view without Vim input", () => {

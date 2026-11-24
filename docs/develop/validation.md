@@ -375,9 +375,10 @@ BOB_BIN=$HOME/.cargo/bin/bob xvfb-run -a node \
 drawer in an isolated Obsidian vault with a real bob. It covers album, record,
 day, week, quarter, year, and bank setup feet in Reading and Live Preview,
 including identity-only notes and collapsed record/bank states. It proves the
-disclosure and `=-` toggle the same drawer, normal `==` still opens the
+disclosure and `-` toggle the same drawer, normal `==` still opens the
 appropriate editor, palette/Command Mode work without a Vim prefix, cursor and
-selection stay unchanged on `=-`, opening an off-screen foot scrolls it into
+selection stay unchanged on `-`, typing `a-b` in Vim's `/` search prompt leaves
+the drawer unchanged, opening an off-screen foot scrolls it into
 view while collapse does not scroll, `y` rows carry source lines (including
 duplicate and invalid-YAML recovery), nested schema/setup links reach existing
 editors, per-note session survives walk-away and two panes share state with
@@ -411,7 +412,7 @@ and screenshots back from athena and retain them through `/sase_artifact`.
 
 ## Property Editor walkthrough
 
-`scripts/obsidian-property-editor-e2e.cjs` proves the generic `=+` Property
+`scripts/obsidian-property-editor-e2e.cjs` proves the generic `+` Property
 Editor in an isolated Obsidian vault with a real bob. Write-path coverage
 includes project, day, plain, and record notes: exact disk bytes after edit,
 add, delete, undo, and redo; Tab completion and Shift+Enter literal names;
@@ -437,8 +438,9 @@ text, a stale draft that keeps its preview, history across close and reopen,
 `y` then Done restoring Live Preview and the same key, duplicate occurrence, or
 nearest surviving row, the Esc / `q` / Ctrl+[ close ladder (`q` types in a
 field; Ctrl+[ never does), plugin unload with no late reopen, and every entry
-point (`=+` and Shift+`=` in Live Preview Vim normal, palette **Edit note
-properties**, Command Mode, drawer key-label / Add property / Edit all, and
+point (`+` and Shift+`=` in Live Preview Vim normal, with `=+` falling
+through, palette **Edit note properties**, Command Mode, drawer key-label /
+Add property / Edit all, and
 `openPropertyEditor`) on ordinary and invalid-YAML notes. Screenshot coverage
 adds light/dark and narrow/wide views of the marked rows, filter, rename,
 YAML, paste-preview, and conversion/global-warning states, each with layout

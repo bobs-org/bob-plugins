@@ -353,7 +353,7 @@ test("closed foot shows disclosure, count, and stamp without building rows", () 
   assert.equal(element.getAttribute("data-property-foot"), "true");
   assert.equal(disclosure.tagName, "BUTTON");
   assert.equal(disclosure.getAttribute("aria-expanded"), "false");
-  assert.equal(disclosure.getAttribute("title"), "Toggle properties =-");
+  assert.equal(disclosure.getAttribute("title"), "Toggle properties (-)");
   const drawerId = disclosure.getAttribute("aria-controls");
   assert.ok(drawerId, "disclosure controls the drawer");
   assert.equal(drawer.getAttribute("id"), drawerId, "unique aria-controls target");

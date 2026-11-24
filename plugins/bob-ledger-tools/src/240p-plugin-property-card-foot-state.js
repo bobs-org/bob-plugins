@@ -187,7 +187,7 @@ function propertyCardFootResetAll() {
   propertyCardFootEditorHook = null;
 }
 
-// Future editor hook for `=+` (editor-core): key labels and Enter invoke it
+// Future editor hook for `+` (editor-core): key labels and Enter invoke it
 // only when registered. Unset in this phase; value links keep navigating.
 function propertyCardFootSetEditorHook(hook) {
   propertyCardFootEditorHook = typeof hook === "function" ? hook : null;

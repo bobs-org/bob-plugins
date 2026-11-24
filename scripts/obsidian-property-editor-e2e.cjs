@@ -19,6 +19,17 @@ const repoRoot = path.resolve(__dirname, "..");
 const ELECTRON_FALLBACK = "/snap/obsidian/current/app/obsidian";
 const TODAY = "2026-11-23";
 const OVERALL_TIMEOUT_MS = 1_200_000;
+
+function localIsoDaysFromNow(days, time) {
+  const d = new Date();
+  d.setHours(12, 0, 0, 0);
+  d.setDate(d.getDate() + days);
+  const yyyy = String(d.getFullYear());
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}T${time}`;
+}
+
 const COMPANION_PLUGINS = ["bob-navigation-hotkeys", "bob-command-mode"];
 
 function fail(message, code = 1) {
@@ -643,7 +654,7 @@ async function run(args) {
     const datetimeCases = [
       ["no_offset_at", "2026-11-24T10:31:00", '"2026-11-23T09:30:00"', '2026-11-24T10:31:00', "datetime without offset"],
       ["offset_at", "2026-11-24T10:31:00-05:00", '"2026-11-23T09:30:00-05:00"', '2026-11-24T10:31:00-05:00', "datetime with -05:00"],
-      ["relative_at", "-3d", '"2026-11-23T09:30:00"', '2026-11-20T09:30:00', "relative datetime token"],
+      ["relative_at", "-3d", '"2026-11-23T09:30:00"', localIsoDaysFromNow(-3, "09:30:00"), "relative datetime token"],
     ];
     for (const [key, input, before, after, label] of datetimeCases) {
       await propertyRowClick(client, key);

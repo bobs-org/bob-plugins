@@ -85107,7 +85107,7 @@ function propertyCardFootRenderDrawer(doc, drawerBody, spec) {
         all.setAttribute("class", "bob-property-card-foot-edit-all");
         all.setAttribute("data-property-foot-action", "edit-all");
         all.setAttribute("aria-label", "Edit all properties");
-        propertyCardKitAppendText(doc, all, "✎ Edit all =+");
+        propertyCardKitAppendText(doc, all, "✎ Edit all (+)");
         all.addEventListener?.("click", (event) => {
           try { event.preventDefault?.(); } catch (_) {}
           try {
@@ -85149,7 +85149,7 @@ function propertyCardFootBuildEl(doc, spec = {}) {
     disclosure.setAttribute("class", "bob-property-card-foot-disclosure");
     disclosure.setAttribute("aria-expanded", open ? "true" : "false");
     disclosure.setAttribute("aria-controls", drawerId);
-    disclosure.setAttribute("title", "Toggle properties =-");
+    disclosure.setAttribute("title", "Toggle properties (-)");
     disclosure.setAttribute("aria-label", `Toggle properties, ${count} ${count === 1 ? "property" : "properties"}`);
     disclosure.setAttribute("data-foot-focus", "foot");
     const chevron = propertyCardKitSpan(doc, "bob-property-card-foot-chevron", "▸");
@@ -85390,7 +85390,7 @@ function propertyCardFootResetAll() {
   propertyCardFootEditorHook = null;
 }
 
-// Future editor hook for `=+` (editor-core): key labels and Enter invoke it
+// Future editor hook for `+` (editor-core): key labels and Enter invoke it
 // only when registered. Unset in this phase; value links keep navigating.
 function propertyCardFootSetEditorHook(hook) {
   propertyCardFootEditorHook = typeof hook === "function" ? hook : null;
@@ -96371,7 +96371,10 @@ class BobLedgerToolsBankSetupCardMixin {
 // Capture-phase == on album notes and bank.md opens the schema/setup card;
 // == on a canonical record note opens its Record Card. A vimrc nnoremap ==
 // never fires: CodeMirror Vim treats = as a complete operator, so the
-// second = reindents instead of matching a mapping.
+// second = reindents instead of matching a mapping. Bare `-` and `+` in
+// Live Preview Vim normal mode toggle the Properties drawer and open the
+// Property Editor; they use a content-target gate and do not wait for a
+// pending `=`.
 
 function schemaDoubleEqualsKeyBufferEmpty(value) {
   if (Array.isArray(value)) return value.length === 0;
@@ -96491,6 +96494,39 @@ function propertyCardSecondKeyGate(input) {
   return { act: true, reason: arm.reason || "second-key-arm" };
 }
 
+function propertyCardBareKeyGate(input) {
+  const snap = (input && input.vim) || { readable: false };
+  if (!input || (input.key !== "-" && input.key !== "+")) {
+    return { act: false, reason: "not-bare-key" };
+  }
+  if (input.ctrlKey || input.altKey || input.metaKey) {
+    return { act: false, reason: "modified" };
+  }
+  if (input.repeat) return { act: false, reason: "repeat" };
+  if (input.isComposing) return { act: false, reason: "composing" };
+  if (input.defaultPrevented) return { act: false, reason: "default-prevented" };
+  if (!input.inContent) return { act: false, reason: "not-content" };
+  if (!input.livePreview) return { act: false, reason: "not-live-preview" };
+  if (!snap.readable) return { act: false, reason: "no-vim" };
+  if (snap.insertMode || snap.visualMode || snap.replaceMode) {
+    return { act: false, reason: "not-normal" };
+  }
+  if (snap.operator != null) return { act: false, reason: "operator-pending" };
+  if (!snap.keyBufferEmpty) return { act: false, reason: "key-buffer" };
+  if (snap.countPending) return { act: false, reason: "counted" };
+  if (snap.registerPending) return { act: false, reason: "register" };
+  const arm = input.arm;
+  if (!arm || typeof arm.run !== "function" || typeof arm.canAct !== "function") {
+    return { act: false, reason: "unregistered-arm" };
+  }
+  try {
+    if (arm.canAct(input.context) !== true) return { act: false, reason: "arm-not-actionable" };
+  } catch (_) {
+    return { act: false, reason: "arm-not-actionable" };
+  }
+  return { act: true, reason: arm.reason || "bare-key-arm" };
+}
+
 // Compatibility helper retained for existing == callers and tests. Runtime
 // key dispatch uses the arm table below, with this arm's same species gate.
 function schemaDoubleEqualsGate(input) {
@@ -96553,6 +96589,32 @@ function schemaDoubleEqualsEventInEditor(event, view) {
     typeof containerEl.contains !== "function" ||
     containerEl.contains(editorEl)
   );
+}
+
+function schemaDoubleEqualsContentDom(view, cm) {
+  try {
+    const fromEditor = view && view.editor && view.editor.cm && view.editor.cm.contentDOM;
+    if (fromEditor) return fromEditor;
+  } catch (_) {}
+  try {
+    if (cm && cm.cm6 && cm.cm6.contentDOM) return cm.cm6.contentDOM;
+  } catch (_) {}
+  return null;
+}
+
+function schemaDoubleEqualsEventInContent(event, view, cm) {
+  const contentDOM = schemaDoubleEqualsContentDom(view, cm);
+  const target = event && event.target;
+  if (!contentDOM || !target) return false;
+  if (target === contentDOM) return true;
+  const tag = String(target.tagName || "").toLowerCase();
+  if (tag === "input" || tag === "textarea" || tag === "select") return false;
+  if (typeof target.closest !== "function") return false;
+  try {
+    return target.closest("[contenteditable]") === contentDOM;
+  } catch (_) {
+    return false;
+  }
 }
 
 function schemaDoubleEqualsResolveCm(view) {
@@ -96696,8 +96758,9 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
     return this.propertyCardSecondKeyArms;
   }
 
-  // The '=' and '-' arms are owned by this plugin. Editor Core may register
-  // the future '+' arm through this instance API; no '+' arm ships here.
+  // The '=' and '-' arms are owned by this plugin. The historical
+  // registerPropertyCardSecondKeyArm("+") API still registers the `+` arm;
+  // that arm now runs on a bare normal-mode `+`, not after a pending `=`.
   registerPropertyCardSecondKeyArm(arm) {
     if (!arm || arm.key !== "+" || typeof arm.canAct !== "function" || typeof arm.run !== "function") {
       return false;
@@ -96813,8 +96876,8 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
         frontmatter = cache.frontmatter;
       }
     } catch (_) {}
-    // The species registry is the sole authority for '='. The other built-in
-    // arm checks the live mount in this view; '+' is future-registered only.
+    // The species registry is the sole authority for '='. '-' checks the
+    // live mount in this view. '+' is the registered Property Editor arm.
     // A runtime miss never mutates a registry or consumes Vim input.
     let entry = null;
     if (key === "=") {
@@ -96846,25 +96909,44 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
     } else {
       arm = this.propertyCardSecondKeyArmRegistry().get("+") || null;
     }
-    const gate = propertyCardSecondKeyGate({
-      key,
-      ctrlKey: Boolean(event && event.ctrlKey),
-      altKey: Boolean(event && event.altKey),
-      metaKey: Boolean(event && event.metaKey),
-      shiftKey: Boolean(event && event.shiftKey),
-      repeat: Boolean(event && event.repeat),
-      isComposing: Boolean(event && event.isComposing),
-      defaultPrevented: Boolean(event && event.defaultPrevented),
-      inEditor: schemaDoubleEqualsEventInEditor(event, view),
-      livePreview: schemaDoubleEqualsLivePreview(view, cm),
-      vim: schemaDoubleEqualsVimSnapshot(cm),
-      canHandleKey: schemaDoubleEqualsCanHandleKey(),
-      arm: arm && {
-        ...arm,
-        canAct: () => arm.canAct(context),
-      },
-      context,
-    });
+    const wrappedArm = arm && {
+      ...arm,
+      canAct: () => arm.canAct(context),
+    };
+    const livePreview = schemaDoubleEqualsLivePreview(view, cm);
+    const vim = schemaDoubleEqualsVimSnapshot(cm);
+    const gate = key === "="
+      ? propertyCardSecondKeyGate({
+        key,
+        ctrlKey: Boolean(event && event.ctrlKey),
+        altKey: Boolean(event && event.altKey),
+        metaKey: Boolean(event && event.metaKey),
+        shiftKey: Boolean(event && event.shiftKey),
+        repeat: Boolean(event && event.repeat),
+        isComposing: Boolean(event && event.isComposing),
+        defaultPrevented: Boolean(event && event.defaultPrevented),
+        inEditor: schemaDoubleEqualsEventInEditor(event, view),
+        livePreview,
+        vim,
+        canHandleKey: schemaDoubleEqualsCanHandleKey(),
+        arm: wrappedArm,
+        context,
+      })
+      : propertyCardBareKeyGate({
+        key,
+        ctrlKey: Boolean(event && event.ctrlKey),
+        altKey: Boolean(event && event.altKey),
+        metaKey: Boolean(event && event.metaKey),
+        shiftKey: Boolean(event && event.shiftKey),
+        repeat: Boolean(event && event.repeat),
+        isComposing: Boolean(event && event.isComposing),
+        defaultPrevented: Boolean(event && event.defaultPrevented),
+        inContent: schemaDoubleEqualsEventInContent(event, view, cm),
+        livePreview,
+        vim,
+        arm: wrappedArm,
+        context,
+      });
     if (!gate.act) return;
     if (this.handledSchemaDoubleEqualsEvents) {
       this.handledSchemaDoubleEqualsEvents.add(event);
@@ -96876,9 +96958,11 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
         event.stopImmediatePropagation();
       }
     } catch (_) {}
-    try {
-      window.CodeMirrorAdapter.Vim.handleKey(cm, "<Esc>", "mapping");
-    } catch (_) {}
+    if (key === "=") {
+      try {
+        window.CodeMirrorAdapter.Vim.handleKey(cm, "<Esc>", "mapping");
+      } catch (_) {}
+    }
     try {
       arm.run(context);
     } catch (_) {}
@@ -171178,7 +171262,7 @@ Object.assign(PropertyEditorModal.prototype, {
 });
 // ---- src/298m-plugin-property-editor-entrypoints.js ----
 // Property editor public entry points and props YAML excursion
-// (bob-cli-pf.4.1.5 entrypoints-yaml). One opener for the `+` chord, the
+// (bob-cli-pf.4.1.5 entrypoints-yaml). One opener for the bare `+` key, the
 // palette, Command Mode, drawer actions, and sibling plugins, plus the
 // species hand-offs and the `kind: "props"` YAML excursion with Done return.
 // Pure helpers stay DOM-free; the mixin owns registration and teardown.
@@ -171346,10 +171430,11 @@ class BobLedgerToolsPropertyEditorEntrypointsMixin {
         callback: () => { void this.openPropertyEditor({}); },
       });
     } catch (_) {}
-    // The `+` arm accepts Shift (event.key is "+") and inherits the shared
-    // normal-mode, Live Preview, count, register, buffer, IME, repeat, and
-    // modifier guards from the second-key gate. Vim's pending `=` operator
-    // is cancelled only when this arm acts, by the shared dispatcher.
+    // The `+` arm accepts Shift (event.key is "+") and unshifted "+". It
+    // runs on a bare Live Preview Vim normal-mode key through the
+    // content-target gate. Counts, registers, a non-empty key buffer, and a
+    // pending operator (including `=`) keep Vim's `+` motion. The
+    // dispatcher does not inject <Esc>.
     try {
       if (typeof this.registerPropertyCardSecondKeyArm === "function") {
         this.registerPropertyCardSecondKeyArm({
@@ -183001,8 +183086,10 @@ try {
     module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
       schemaDoubleEqualsVimSnapshot,
       propertyCardSecondKeyGate,
+      propertyCardBareKeyGate,
       schemaDoubleEqualsGate,
       schemaDoubleEqualsTargetKind,
+      schemaDoubleEqualsEventInContent,
     });
   }
 } catch (_) {}

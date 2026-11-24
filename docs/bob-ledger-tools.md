@@ -79,7 +79,7 @@ note properties: [Property Editor](property-editor.md).
 ## Property-card properties drawer
 
 Album, record, day/period, and bank setup cards expose note frontmatter in a
-read-only **Properties** drawer. Open it with the foot disclosure, `=-` in Live
+read-only **Properties** drawer. Open it with the foot disclosure, `-` in Live
 Preview Vim normal mode, or **Toggle card properties** (palette/Command Mode).
 The command needs a mounted foot in the active view; same-note panes share
 session state. Opening is read-only: no note writes or report refreshes. `==`

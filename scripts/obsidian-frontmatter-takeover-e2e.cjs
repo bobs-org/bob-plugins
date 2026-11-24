@@ -68,6 +68,7 @@ function installVault(vaultDir) {
 }
 
 function writeControl(file, mode, extra = {}) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify({ mode, ...extra, at: new Date().toISOString() }) + "\n");
 }
 
@@ -332,6 +333,7 @@ async function run(args) {
     const bobLog = path.join(profileDir, "bob-invocations.jsonl");
     const controlPath = path.join(profileDir, "bob-control.json");
     fs.mkdirSync(vaultDir, { recursive: true });
+    fs.mkdirSync(profileDir, { recursive: true });
     for (const [name, content] of Object.entries(notes)) shared.writeNote(vaultDir, name, content);
     shared.writeNote(vaultDir, "board.canvas", lib.canvasFixture());
     installVault(vaultDir);

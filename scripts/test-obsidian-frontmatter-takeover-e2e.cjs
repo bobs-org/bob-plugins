@@ -104,3 +104,13 @@ test("takeover runner file parses and reuses provenance", () => {
   assert.equal(typeof proof.findBobProvenance, "function");
   assert.equal(typeof proof.run, "function");
 });
+
+test("runner creates the profile directory before writing bob-control.json", () => {
+  const source = fs.readFileSync(path.join(__dirname, "obsidian-frontmatter-takeover-e2e.cjs"), "utf8");
+  const mkdir = source.indexOf("fs.mkdirSync(profileDir, { recursive: true })");
+  const write = source.indexOf('writeControl(controlPath, "pass")');
+  assert.ok(mkdir >= 0, "mkdirSync(profileDir) is missing");
+  assert.ok(write >= 0, "writeControl(controlPath) is missing");
+  assert.ok(mkdir < write, "profileDir must exist before the first writeControl");
+  assert.match(source, /fs\.mkdirSync\(path\.dirname\(file\), \{ recursive: true \}\)/);
+});

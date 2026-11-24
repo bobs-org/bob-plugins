@@ -905,16 +905,15 @@ async function run(args) {
         }));
       }
       const restored = await ctx.page.waitOwned(ctx.main, "live", "stale restore");
-      // Across both traces, Obsidian's delayed MarkdownView.save landed about
-      // 65-72 seconds after the run started, after this fixed 40-second hold
-      // ended and the main leaf had reopened the protected day. Wait for the
-      // audited native save while this disposable note is still open, so the
-      // mutable MarkdownView.file cannot redirect it to the protected fixture.
+      // In the prior run, the native MarkdownView.save landed about 106 seconds
+      // after this disposable probe was created, beyond the 90-second wait.
+      // Wait longer for the audited save while this disposable note is still
+      // open, so MarkdownView.file cannot redirect it to the protected fixture.
       await waitFor(client, `(() => {
         const rows = window.__bobFrontmatterTakeoverWriteAudit?.rows || [];
         return rows.slice(${Number(auditStart)}).some((row) =>
           row.stack.some((line) => line.includes("lt.save") || line.includes("lt.writeData")));
-      })()`, Boolean, "deferred native save on disposable stale-cache probe", 90_000);
+      })()`, Boolean, "deferred native save on disposable stale-cache probe", 150_000);
       const staleProbeAudit = await ctx.page.ev(
         `window.__bobFrontmatterTakeoverWriteAudit?.rows.slice(${Number(auditStart)}) || []`,
       );

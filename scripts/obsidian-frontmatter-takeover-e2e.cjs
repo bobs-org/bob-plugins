@@ -656,8 +656,11 @@ async function run(args) {
       })()`);
       await ctx.page.settle(250);
       const stale = await ctx.page.waitNative(ctx.main, "stale cache");
-      const cacheProbe = "_bobFrontmatterTakeoverCacheProbe";
-      const changedNote = notes[P.day].replace(/^---\r?\n/, `---\n${cacheProbe}: refresh\n`);
+      const cacheProbe = "bob-frontmatter-takeover-refresh";
+      const summaryLine = /^summary: (.+)$/m.exec(notes[P.day]);
+      if (!summaryLine) throw new Error("day fixture has no summary property to probe");
+      const originalSummary = summaryLine[1];
+      const changedNote = notes[P.day].replace(/^summary: .+$/m, `summary: ${cacheProbe}`);
       await ctx.page.ev(`(async () => {
         const file = app.vault.getAbstractFileByPath(${JSON.stringify(P.day)});
         await app.vault.modify(file, ${JSON.stringify(changedNote)});
@@ -668,7 +671,7 @@ async function run(args) {
         const cache = app.metadataCache.getFileCache(file);
         return Boolean(cache && cache.frontmatter
           && cache.frontmatter.type === ${JSON.stringify(expectedType)}
-          && cache.frontmatter[${JSON.stringify(cacheProbe)}] === "refresh");
+          && cache.frontmatter.summary === ${JSON.stringify(cacheProbe)});
       })()`, Boolean, "metadata cache refresh", 10_000);
       await waitFor(client, `(() => {
         const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
@@ -681,6 +684,13 @@ async function run(args) {
         await app.vault.modify(file, ${JSON.stringify(notes[P.day])});
         return true;
       })()`);
+      await waitFor(client, `(() => {
+        const file = app.vault.getAbstractFileByPath(${JSON.stringify(P.day)});
+        const cache = app.metadataCache.getFileCache(file);
+        return Boolean(cache && cache.frontmatter
+          && cache.frontmatter.type === ${JSON.stringify(expectedType)}
+          && cache.frontmatter.summary === ${JSON.stringify(originalSummary)});
+      })()`, Boolean, "metadata cache restoration", 10_000);
       await waitFor(client, `(() => {
         const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
         return Boolean(plugin

@@ -649,7 +649,7 @@ async function run(args) {
         const file = app.vault.getAbstractFileByPath(${JSON.stringify(P.day)});
         const cache = app.metadataCache.getFileCache(file);
         const expected = cache && cache.frontmatter ? cache.frontmatter.type : null;
-        if (cache && cache.frontmatter) cache.frontmatter.type = "stale-mismatch";
+        if (cache && cache.frontmatter) cache.frontmatter.summary = "stale-mismatch";
         const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
         plugin.constructor.helpers.propertyCardFrontmatterCoordinatorReconcile(plugin);
         return expected;

@@ -687,10 +687,15 @@ async function run(args) {
       await waitFor(client, `(() => {
         const file = app.vault.getAbstractFileByPath(${JSON.stringify(P.day)});
         const cache = app.metadataCache.getFileCache(file);
-        return Boolean(cache && cache.frontmatter
-          && cache.frontmatter.type === ${JSON.stringify(expectedType)}
-          && cache.frontmatter.summary === ${JSON.stringify(originalSummary)});
-      })()`, Boolean, "metadata cache restoration", 10_000);
+        const frontmatter = cache && cache.frontmatter;
+        return {
+          type: frontmatter?.type ?? null,
+          summary: frontmatter?.summary ?? null,
+          keys: frontmatter ? Object.keys(frontmatter) : [],
+        };
+      })()`, (cache) => Boolean(cache
+        && cache.type === expectedType
+        && cache.summary === originalSummary), "metadata cache restoration", 10_000);
       await waitFor(client, `(() => {
         const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
         return Boolean(plugin

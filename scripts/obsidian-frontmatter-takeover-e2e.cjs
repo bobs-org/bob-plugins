@@ -29,6 +29,7 @@ const MODE_STATE = {
 };
 const { sleep, waitFor } = shared;
 const P = lib.PATHS;
+const VIM_PROBE_PATH = "2026/20261119.md";
 
 function fail(message, code = 1) {
   process.stderr.write(String(message) + "\n");
@@ -493,6 +494,21 @@ async function run(args) {
       return { ok: failures.length === 0, probe, failures };
     });
     await attempt("vim-k-gg-up-live", async () => {
+      // Use a disposable day note for the typing probe. Obsidian saves the
+      // editor buffer through MarkdownView.writeData and may reserialize YAML
+      // when that buffer is edited, even after Vim undo restores its text.
+      const vimProbeNote = notes[P.day]
+        .replaceAll("2026-11-20", "2026-11-19")
+        .replaceAll("20261120", "20261119")
+        .replace("# 2026-11-19 Fri", "# 2026-11-19 Thu");
+      const created = await ctx.page.ev(`(async () => {
+        if (app.vault.getAbstractFileByPath(${JSON.stringify(VIM_PROBE_PATH)})) return false;
+        await app.vault.create(${JSON.stringify(VIM_PROBE_PATH)}, ${JSON.stringify(vimProbeNote)});
+        return true;
+      })()`);
+      if (!created) throw new Error("could not create disposable Vim probe note");
+      await ctx.page.open(ctx.main, VIM_PROBE_PATH, "live");
+      await ctx.page.waitOwned(ctx.main, "live", "Vim probe");
       const failures = [];
       const placedTop = await ctx.page.ev("window.__bobFrontmatterTakeover.setCursor(" + JSON.stringify(ctx.main) + ", 15, 0)");
       if (!placedTop || placedTop.ok !== true) failures.push("could not place cursor at the top line: " + JSON.stringify(placedTop));
@@ -518,30 +534,18 @@ async function run(args) {
       await ctx.page.keys("u");
       await ctx.page.settle(1200);
       const bufferAfterUndo = await ctx.page.ev("window.__bobFrontmatterTakeover.docText(" + JSON.stringify(ctx.main) + ")");
-      let restored = await ctx.page.ev("window.__bobFrontmatterTakeover.readNote(" + JSON.stringify(P.day) + ")");
-      const bufferRestored = bufferAfterUndo === notes[P.day];
+      const bufferRestored = bufferAfterUndo === vimProbeNote;
       if (!bufferRestored) {
         failures.push("undo did not restore the live editor buffer");
         await ctx.page.ev(`(() => {
           const leaf = app.workspace.getLeafById(${JSON.stringify(ctx.main)});
           const cm = leaf && leaf.view && leaf.view.editor && leaf.view.editor.cm;
           if (!cm) return false;
-          cm.dispatch({ changes: { from: 0, to: cm.state.doc.length, insert: ${JSON.stringify(notes[P.day])} } });
-          return cm.state.doc.toString() === ${JSON.stringify(notes[P.day])};
+          cm.dispatch({ changes: { from: 0, to: cm.state.doc.length, insert: ${JSON.stringify(vimProbeNote)} } });
+          return cm.state.doc.toString() === ${JSON.stringify(vimProbeNote)};
         })()`);
-        await waitFor(client, `window.__bobFrontmatterTakeover.docText(${JSON.stringify(ctx.main)}) === ${JSON.stringify(notes[P.day])}`,
-          Boolean, "day editor-buffer restoration after Vim probe", 10_000);
-      }
-      if (restored !== notes[P.day]) {
-        failures.push("undo did not restore day bytes");
-        await ctx.page.ev(`(async () => {
-          const file = app.vault.getAbstractFileByPath(${JSON.stringify(P.day)});
-          await app.vault.modify(file, ${JSON.stringify(notes[P.day])});
-          return true;
-        })()`);
-        await waitFor(client, `window.__bobFrontmatterTakeover.readNote(${JSON.stringify(P.day)}) === ${JSON.stringify(notes[P.day])}`,
-          Boolean, "day file restoration after Vim probe", 10_000);
-        restored = await ctx.page.ev("window.__bobFrontmatterTakeover.readNote(" + JSON.stringify(P.day) + ")");
+        await waitFor(client, `window.__bobFrontmatterTakeover.docText(${JSON.stringify(ctx.main)}) === ${JSON.stringify(vimProbeNote)}`,
+          Boolean, "Vim probe editor-buffer restoration", 10_000);
       }
       const probe = await ctx.page.probe(ctx.main);
       for (const [label, row] of [["gg", afterGg], ["k", afterK], ["up", afterUp], ["type", afterType]]) {
@@ -549,7 +553,22 @@ async function run(args) {
       }
       if (!String(bufferText || "").includes("s1ok")) failures.push("inserted body text missing from the editor buffer");
       if (probe.activeInside) failures.push("probe still inside the container");
-      return { ok: failures.length === 0, afterGg, afterK, afterUp, afterType, typed: String(bufferText || "").includes("s1ok"), bufferRestored, restored: restored === notes[P.day], probe, failures };
+
+      // Switching away flushes any delayed Obsidian save to this disposable
+      // note; remove it before the suite checks its protected fixture hashes.
+      await ctx.page.open(ctx.main, P.day, "live");
+      await ctx.page.settle(400);
+      const probeFileText = await ctx.page.ev("window.__bobFrontmatterTakeover.readNote(" + JSON.stringify(VIM_PROBE_PATH) + ")");
+      if (String(probeFileText || "").includes("s1ok")) failures.push("Vim probe save retained inserted body text");
+      const deleted = await ctx.page.ev(`(async () => {
+        const file = app.vault.getAbstractFileByPath(${JSON.stringify(VIM_PROBE_PATH)});
+        if (file) await app.vault.delete(file);
+        return !app.vault.getAbstractFileByPath(${JSON.stringify(VIM_PROBE_PATH)});
+      })()`);
+      if (!deleted) failures.push("disposable Vim probe note was not removed");
+      return { ok: failures.length === 0, path: VIM_PROBE_PATH, afterGg, afterK, afterUp, afterType,
+        typed: String(bufferText || "").includes("s1ok"), bufferRestored, probeFileCleared: !String(probeFileText || "").includes("s1ok"),
+        probeDeleted: deleted, probe, failures };
     });
     await attempt("tab-live", async () => {
       await ctx.page.ev(`(() => { const leaf = app.workspace.getLeafById(${JSON.stringify(ctx.main)}); leaf.view.editor.focus(); return true; })()`);

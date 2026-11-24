@@ -195,6 +195,9 @@ class BobLedgerToolsRecordSheetTitleMixin {
       currentPath: reading?.currentPath || null,
       recognizer,
       onLost: () => this.scheduleRecordSheetRefresh(),
+      onMount: (mount) => this.recordSheetOwnMountedFrontmatter(
+        scope, null, sourcePath, mount, sourceText, reading?.currentPath || (() => ""),
+      ),
     });
     if (adoption.mode !== "slot") {
       try {

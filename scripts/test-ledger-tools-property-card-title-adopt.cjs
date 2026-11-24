@@ -679,6 +679,69 @@ test("propertyCardAdoptPatch swaps children and attributes but keeps the slot cl
   assert.equal(levelOneCount(pane.scope), 1, "the re-adopt re-syncs the patched heading");
 });
 
+test("Reading slot restoration reacquires frontmatter only for a currently eligible mounted card", () => {
+  for (const scenario of ["reinsert", "header-replaced", "parked", "cache-skew", "source", "navigated", "unloaded", "released"]) {
+    const doc = makeDoc();
+    const pane = readingPane(doc);
+    const node = card(doc);
+    node.setAttribute("data-album-source", "eat.md");
+    node.appendChild(el(doc, "footer", "bob-property-card-foot"));
+    let frontmatter = { type: "[[album]]" };
+    let active = true;
+    const view = { file: { path: "eat.md" }, mode: "preview", getMode() { return this.mode; } };
+    const plugin = new TestPlugin({
+      workspace: { getLeavesOfType: () => [] },
+      vault: { getAbstractFileByPath: (path) => ({ path }) },
+      metadataCache: { getFileCache: () => ({ frontmatter }) },
+    });
+    plugin.propertyCapabilityRoutingReady = () => true;
+    plugin.propertyCapabilityCurrentBobKey = () => "bob";
+    plugin.propertyCapabilityConfirmed = () => true;
+    const own = (mount) => H.propertyCardFrontmatterOwnMounted(plugin, {
+      scope: pane.scope, view, path: "eat.md", kind: "album", mount,
+      sourceText: ALBUM, parseYaml: () => ({ type: "[[album]]" }), active: () => active,
+    });
+    const options = {
+      path: "eat.md", kind: "album", currentPath: () => view.file.path,
+      recognizer: H.propertyCardAlbumTitleRecognizer("Restaurants"), onMount: own,
+    };
+    const adoption = H.propertyCardAdoptTitle(pane.scope, node, options);
+    own(node);
+    assert.equal(pane.properties.inert, true, scenario + ": starts owned");
+
+    // Cached Reading paints can run before the slot observer restores a card.
+    // The card may be alone, in a replaced header, or in a virtualized header.
+    if (["header-replaced", "parked"].includes(scenario)) {
+      pane.header.remove();
+      if (scenario === "header-replaced") {
+        const replacement = el(doc, "div", "mod-header");
+        replacement.appendChild(pane.properties);
+        pane.sizer.insertBefore(replacement, pane.sizer.firstChild);
+      }
+    } else node.remove();
+    assert.equal(H.propertyCardAdoptTitle(pane.scope, node, options).mode, "slot");
+    assert.equal(own(node), null, scenario + ": detached paint stays native");
+    assert.equal(pane.properties.inert, false);
+    if (scenario === "cache-skew") frontmatter = { type: "record" };
+    if (scenario === "source") view.mode = "source";
+    if (scenario === "navigated") view.file.path = "other.md";
+    if (scenario === "unloaded") active = false;
+    if (scenario === "released") adoption.release();
+    if (scenario === "parked") {
+      fireSlotObservers(doc, pane.sizer);
+      assert.equal(pane.properties.inert, false, "a parked header stays native");
+      pane.sizer.insertBefore(pane.header, pane.sizer.firstChild);
+    }
+    fireSlotObservers(doc, pane.sizer);
+    const expected = ["reinsert", "header-replaced", "parked"].includes(scenario);
+    assert.equal(pane.scope.classList.contains("bob-property-card-owns-frontmatter"), expected, scenario);
+    assert.equal(pane.properties.inert, expected, scenario);
+    H.propertyCardFrontmatterCoordinatorReleaseKind(plugin, "album");
+    H.propertyCardAdoptReleaseAll();
+    H.propertyCardTitleSlotReleaseAll();
+  }
+});
+
 test("heading helpers, reading-view lookup, and releaseAll", () => {
   const doc = makeDoc();
   const node = card(doc);

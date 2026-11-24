@@ -82083,6 +82083,17 @@ function propertyCardTitleSlotHandle(scope, generation) {
   };
 }
 
+// A Reading paint can see a detached cached card before this observer puts
+// it back. Notify the adapter after the real mount, including a reattached
+// virtualized header, so it can recheck ownership against current evidence.
+function propertyCardTitleSlotNotifyMount(scope, entry) {
+  if (propertyCardTitleSlots.get(scope) !== entry) return;
+  try {
+    if (entry.node.isConnected === false || !scope.contains?.(entry.node)) return;
+    entry.onMount?.(entry.node);
+  } catch (_) {}
+}
+
 // Observer callback: re-resolve, follow a replaced parent, and re-insert.
 function propertyCardTitleSlotCheck(scope, entry) {
   if (propertyCardTitleSlots.get(scope) !== entry) return;
@@ -82107,7 +82118,10 @@ function propertyCardTitleSlotCheck(scope, entry) {
     return;
   }
   if (slot.parent !== entry.parent) propertyCardTitleSlotRetarget(entry, slot);
-  if (propertyCardTitleSlotPositioned(entry.node, slot.parent, slot.anchor)) return;
+  if (propertyCardTitleSlotPositioned(entry.node, slot.parent, slot.anchor)) {
+    propertyCardTitleSlotNotifyMount(scope, entry);
+    return;
+  }
   if (!propertyCardTitleSlotSpend(entry)) {
     propertyCardTitleSlotLose(scope, entry, "unstable");
     return;
@@ -82120,6 +82134,7 @@ function propertyCardTitleSlotCheck(scope, entry) {
   }
   entry.reinserts += 1;
   propertyCardTitleSlotMeasure(entry);
+  propertyCardTitleSlotNotifyMount(scope, entry);
 }
 
 function propertyCardTitleSlotOptions(opts) {
@@ -82129,6 +82144,7 @@ function propertyCardTitleSlotOptions(opts) {
     view: opts.view || null,
     currentPath: typeof opts.currentPath === "function" ? opts.currentPath : null,
     onLost: typeof opts.onLost === "function" ? opts.onLost : null,
+    onMount: typeof opts.onMount === "function" ? opts.onMount : null,
   };
 }
 
@@ -82194,6 +82210,7 @@ function propertyCardMountInTitleSlot(scope, node, options = {}) {
   propertyCardTitleSlots.set(scope, entry);
   propertyCardTitleSlotObserve(scope, entry, slot);
   if (inserted) propertyCardTitleSlotMeasure(entry);
+  propertyCardTitleSlotNotifyMount(scope, entry);
   return propertyCardTitleSlotHandle(scope, generation);
 }
 
@@ -83514,6 +83531,11 @@ function propertyCardAdoptMount(scope, entry) {
       view: entry.view,
       currentPath: entry.currentPath,
       onLost: (reason) => propertyCardAdoptLost(scope, entry, reason),
+      onMount: (node) => {
+        if (!entry.released && propertyCardAdoptions.get(scope) === entry) {
+          propertyCardAdoptCall(entry.onMount, node);
+        }
+      },
     });
   } catch (_) {
     release = null;
@@ -83539,6 +83561,7 @@ function propertyCardAdoptOptions(options) {
     recognizer: opts.recognizer || null,
     currentPath: typeof opts.currentPath === "function" ? opts.currentPath : null,
     onLost: typeof opts.onLost === "function" ? opts.onLost : null,
+    onMount: typeof opts.onMount === "function" ? opts.onMount : null,
     defer: typeof opts.defer === "function" ? opts.defer : propertyCardAdoptDefer,
   };
 }
@@ -83637,6 +83660,7 @@ function propertyCardAdoptKeep(scope, node, opts, existing) {
   const sameNode = existing.node === node && (mountedNode === node || !livePreview);
   if (!(existing.pending || livePreview || sameNode)) return null;
   existing.onLost = opts.onLost;
+  existing.onMount = opts.onMount;
   existing.currentPath = opts.currentPath;
   existing.defer = opts.defer;
   if (opts.view) existing.view = opts.view;
@@ -103435,6 +103459,9 @@ class BobLedgerToolsAlbumHeaderMixin {
       currentPath: reading?.currentPath || null,
       recognizer: propertyCardAlbumTitleRecognizer(card.title),
       onLost: () => this.scheduleAlbumHeaderRefresh(),
+      onMount: (mount) => this.albumHeaderOwnMountedFrontmatter(
+        scope, null, sourcePath, mount, undefined, reading?.currentPath || (() => ""),
+      ),
     });
     if (adoption.mode !== "slot") {
       try {
@@ -112639,6 +112666,9 @@ class BobLedgerToolsRecordSheetTitleMixin {
       currentPath: reading?.currentPath || null,
       recognizer,
       onLost: () => this.scheduleRecordSheetRefresh(),
+      onMount: (mount) => this.recordSheetOwnMountedFrontmatter(
+        scope, null, sourcePath, mount, sourceText, reading?.currentPath || (() => ""),
+      ),
     });
     if (adoption.mode !== "slot") {
       try {
@@ -161962,6 +161992,9 @@ class BobLedgerToolsIntentionCardTitleSlotMixin {
             path, kind: model.kind, view,
             currentPath: typeof options.currentPath === "function" ? options.currentPath : null,
             onLost: (reason) => this.intentionCardSlotLost(scope, generation, reason),
+            onMount: () => {
+              if (mode === "reading" && map.get(scope) === entry) this.intentionCardOwnMountedFrontmatter(entry);
+            },
           });
         } catch (_) { release = null; }
       }

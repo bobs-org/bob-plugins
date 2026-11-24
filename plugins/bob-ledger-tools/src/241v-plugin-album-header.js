@@ -538,6 +538,9 @@ class BobLedgerToolsAlbumHeaderMixin {
       currentPath: reading?.currentPath || null,
       recognizer: propertyCardAlbumTitleRecognizer(card.title),
       onLost: () => this.scheduleAlbumHeaderRefresh(),
+      onMount: (mount) => this.albumHeaderOwnMountedFrontmatter(
+        scope, null, sourcePath, mount, undefined, reading?.currentPath || (() => ""),
+      ),
     });
     if (adoption.mode !== "slot") {
       try {

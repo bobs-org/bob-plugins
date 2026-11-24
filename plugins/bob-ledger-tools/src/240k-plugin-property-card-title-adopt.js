@@ -166,6 +166,11 @@ function propertyCardAdoptMount(scope, entry) {
       view: entry.view,
       currentPath: entry.currentPath,
       onLost: (reason) => propertyCardAdoptLost(scope, entry, reason),
+      onMount: (node) => {
+        if (!entry.released && propertyCardAdoptions.get(scope) === entry) {
+          propertyCardAdoptCall(entry.onMount, node);
+        }
+      },
     });
   } catch (_) {
     release = null;
@@ -191,6 +196,7 @@ function propertyCardAdoptOptions(options) {
     recognizer: opts.recognizer || null,
     currentPath: typeof opts.currentPath === "function" ? opts.currentPath : null,
     onLost: typeof opts.onLost === "function" ? opts.onLost : null,
+    onMount: typeof opts.onMount === "function" ? opts.onMount : null,
     defer: typeof opts.defer === "function" ? opts.defer : propertyCardAdoptDefer,
   };
 }
@@ -289,6 +295,7 @@ function propertyCardAdoptKeep(scope, node, opts, existing) {
   const sameNode = existing.node === node && (mountedNode === node || !livePreview);
   if (!(existing.pending || livePreview || sameNode)) return null;
   existing.onLost = opts.onLost;
+  existing.onMount = opts.onMount;
   existing.currentPath = opts.currentPath;
   existing.defer = opts.defer;
   if (opts.view) existing.view = opts.view;

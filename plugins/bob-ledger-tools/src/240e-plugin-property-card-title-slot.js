@@ -344,6 +344,17 @@ function propertyCardTitleSlotHandle(scope, generation) {
   };
 }
 
+// A Reading paint can see a detached cached card before this observer puts
+// it back. Notify the adapter after the real mount, including a reattached
+// virtualized header, so it can recheck ownership against current evidence.
+function propertyCardTitleSlotNotifyMount(scope, entry) {
+  if (propertyCardTitleSlots.get(scope) !== entry) return;
+  try {
+    if (entry.node.isConnected === false || !scope.contains?.(entry.node)) return;
+    entry.onMount?.(entry.node);
+  } catch (_) {}
+}
+
 // Observer callback: re-resolve, follow a replaced parent, and re-insert.
 function propertyCardTitleSlotCheck(scope, entry) {
   if (propertyCardTitleSlots.get(scope) !== entry) return;
@@ -368,7 +379,10 @@ function propertyCardTitleSlotCheck(scope, entry) {
     return;
   }
   if (slot.parent !== entry.parent) propertyCardTitleSlotRetarget(entry, slot);
-  if (propertyCardTitleSlotPositioned(entry.node, slot.parent, slot.anchor)) return;
+  if (propertyCardTitleSlotPositioned(entry.node, slot.parent, slot.anchor)) {
+    propertyCardTitleSlotNotifyMount(scope, entry);
+    return;
+  }
   if (!propertyCardTitleSlotSpend(entry)) {
     propertyCardTitleSlotLose(scope, entry, "unstable");
     return;
@@ -381,6 +395,7 @@ function propertyCardTitleSlotCheck(scope, entry) {
   }
   entry.reinserts += 1;
   propertyCardTitleSlotMeasure(entry);
+  propertyCardTitleSlotNotifyMount(scope, entry);
 }
 
 function propertyCardTitleSlotOptions(opts) {
@@ -390,6 +405,7 @@ function propertyCardTitleSlotOptions(opts) {
     view: opts.view || null,
     currentPath: typeof opts.currentPath === "function" ? opts.currentPath : null,
     onLost: typeof opts.onLost === "function" ? opts.onLost : null,
+    onMount: typeof opts.onMount === "function" ? opts.onMount : null,
   };
 }
 
@@ -455,6 +471,7 @@ function propertyCardMountInTitleSlot(scope, node, options = {}) {
   propertyCardTitleSlots.set(scope, entry);
   propertyCardTitleSlotObserve(scope, entry, slot);
   if (inserted) propertyCardTitleSlotMeasure(entry);
+  propertyCardTitleSlotNotifyMount(scope, entry);
   return propertyCardTitleSlotHandle(scope, generation);
 }
 

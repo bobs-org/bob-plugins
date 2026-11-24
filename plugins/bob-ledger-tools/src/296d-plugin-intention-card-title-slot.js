@@ -273,6 +273,9 @@ class BobLedgerToolsIntentionCardTitleSlotMixin {
             path, kind: model.kind, view,
             currentPath: typeof options.currentPath === "function" ? options.currentPath : null,
             onLost: (reason) => this.intentionCardSlotLost(scope, generation, reason),
+            onMount: () => {
+              if (mode === "reading" && map.get(scope) === entry) this.intentionCardOwnMountedFrontmatter(entry);
+            },
           });
         } catch (_) { release = null; }
       }

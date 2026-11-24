@@ -254,6 +254,16 @@ test("Source toggle and path change drop the owner in the same transaction", () 
   assert.equal(moved.owner, null, "a file change drops the owner in this transaction");
 });
 
+test("the ownership coordinator registers its Live Preview StateField", () => {
+  const plugin = new TestPlugin({ workspace: {} });
+  const extension = H.propertyCardFrontmatterOwnershipExtension();
+
+  H.propertyCardFrontmatterCoordinatorBind(plugin, "day");
+  H.propertyCardFrontmatterCoordinatorBind(plugin, "record");
+
+  assert.deepEqual(plugin.extensions, [extension], "all card adapters share one registered ownership field");
+});
+
 test("deferred editor ownership: async dispatch, idempotent path, generations, releaseAll", () => {
   const defer = queue();
   const view = fakeView();

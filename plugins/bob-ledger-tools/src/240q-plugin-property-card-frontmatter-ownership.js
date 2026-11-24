@@ -671,6 +671,10 @@ function propertyCardFrontmatterCoordinatorCapabilityChanged(plugin, status) {
 
 function propertyCardFrontmatterCoordinatorBind(plugin, kind) {
   if (!plugin || !kind) return false;
+  // The shared ownership gate dispatches through its own Live Preview
+  // StateField. Register it when the card adapters bind so a mounted card
+  // cannot appear ready while that field is missing and silently stay native.
+  try { propertyCardHostRegisterFrontmatterOwnership(plugin); } catch (_) {}
   let binding = propertyCardFrontmatterCoordinatorBindings.get(plugin);
   if (!binding || !(binding.kinds instanceof Set)) {
     binding = { kinds: new Set(), bound: false, pending: new WeakMap() };

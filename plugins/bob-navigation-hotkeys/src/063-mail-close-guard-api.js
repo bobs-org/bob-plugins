@@ -236,10 +236,16 @@ function mailCloseTargetsFromCloseIdentities(cancelled, completed, sourceWrites)
       const write = sourceWrites instanceof Map ? sourceWrites.get(path) : null;
       if (!path || !write || typeof write.original !== "string") continue;
       const lines = write.original.split(/\r?\n/);
-      let index = Number.isInteger(identity.line) ? identity.line : -1;
-      if (index < 0 || index >= lines.length) {
-        const blockId = normalizeBulletPropertyValue(identity.blockId || "");
-        if (blockId) index = findTaskLineByTrailingBlockId(lines, blockId);
+      const blockId = normalizeBulletPropertyValue(identity && identity.blockId || "");
+      let index = null;
+      if (blockId) {
+        const found = findTaskLineByTrailingBlockId(lines, blockId);
+        if (found === null || found === undefined) continue;
+        index = found;
+      } else {
+        const candidate = Number.isInteger(identity.line) ? identity.line : -1;
+        if (!Number.isInteger(candidate) || candidate < 0 || candidate >= lines.length) continue;
+        index = candidate;
       }
       if (!Number.isInteger(index) || index < 0 || index >= lines.length) continue;
       const lineText = String(lines[index] || "");
@@ -325,6 +331,84 @@ async function confirmMailCloseForApp(app, targets, options = {}) {
   } catch (_error) { return { confirmed: false, guarded: true, token: null }; }
 }
 
+function mailCloseTrimLineText(value) {
+  return String(value || "").trim();
+}
+
+function mailCloseConfirmedIdentities(targets) {
+  const list = [];
+  for (const target of Array.isArray(targets) ? targets : []) {
+    if (!target || typeof target !== "object") continue;
+    const path = mailCloseNormalizePath(target.path);
+    const line = Math.floor(Number(target.line));
+    const after = String(target.after || " ").slice(0, 1);
+    const lineText = typeof target.line_text === "string" ? target.line_text
+      : (typeof target.lineText === "string" ? target.lineText : "");
+    if (!path || !Number.isInteger(line) || line < 1) continue;
+    list.push({ p: path, l: line, t: mailCloseTrimLineText(lineText), a: after });
+  }
+  list.sort((a, b) => String(a.p).localeCompare(String(b.p)) || (a.l - b.l) || String(a.a).localeCompare(String(b.a)) || String(a.t).localeCompare(String(b.t)));
+  return list;
+}
+
+function mailCloseEncodeConfirmedToken(guarded, digest) {
+  try {
+    const payload = { d: String(digest || ""), t: mailCloseConfirmedIdentities(guarded) };
+    const json = JSON.stringify(payload);
+    const b64 = typeof Buffer !== "undefined" && typeof Buffer.from === "function"
+      ? Buffer.from(json, "utf8").toString("base64url")
+      : btoa(unescape(encodeURIComponent(json))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    return `mc1.${b64}`;
+  } catch (_error) {
+    return String(digest || "");
+  }
+}
+
+function mailCloseDecodeConfirmedToken(token) {
+  if (typeof token !== "string" || !token) return null;
+  if (token.startsWith("mc1.")) {
+    try {
+      const b64 = token.slice(4);
+      const json = typeof Buffer !== "undefined" && typeof Buffer.from === "function"
+        ? Buffer.from(b64, "base64url").toString("utf8")
+        : decodeURIComponent(escape(atob(b64.replace(/-/g, "+").replace(/_/g, "/"))));
+      const payload = JSON.parse(json);
+      if (payload && typeof payload === "object" && Array.isArray(payload.t)) return payload;
+    } catch (_error) {
+      return null;
+    }
+    return null;
+  }
+  return { d: token, t: null };
+}
+
+function mailCloseTokenCoversTargets(token, guarded, digest) {
+  if (typeof token !== "string" || !token) return false;
+  if (!Array.isArray(guarded) || guarded.length === 0) return true;
+  if (token === String(digest || "")) return true;
+  const decoded = mailCloseDecodeConfirmedToken(token);
+  if (!decoded || !Array.isArray(decoded.t)) return false;
+  const covered = decoded.t;
+  for (const target of guarded) {
+    const path = mailCloseNormalizePath(target.path);
+    const line = Math.floor(Number(target.line));
+    const after = String(target.after || " ").slice(0, 1);
+    const lineText = typeof target.line_text === "string" ? target.line_text
+      : (typeof target.lineText === "string" ? target.lineText : "");
+    const trimmed = mailCloseTrimLineText(lineText);
+    let ok = false;
+    for (const entry of covered) {
+      if (!entry || typeof entry !== "object") continue;
+      if (mailCloseNormalizePath(entry.p) !== path) continue;
+      if (String(entry.a || " ").slice(0, 1) !== after) continue;
+      if (Number(entry.l) === line) { ok = true; break; }
+      if (mailCloseTrimLineText(entry.t) !== "" && mailCloseTrimLineText(entry.t) === trimmed) { ok = true; break; }
+    }
+    if (!ok) return false;
+  }
+  return true;
+}
+
 function createMailCloseGuardApi(plugin) {
   const classify = async (targets) => {
     try {
@@ -367,9 +451,12 @@ function createMailCloseGuardApi(plugin) {
             row.mail_title = String(mail.title || "").trim() || row.label;
           }
         }
-        const token = model.digest;
+        const digest = model.digest;
+        const token = mailCloseEncodeConfirmedToken(guarded, digest);
         const passed = options && options.context && options.context.mailCloseConfirmed;
-        if (typeof passed === "string" && passed === token) return { confirmed: true, guarded: true, token };
+        if (typeof passed === "string" && mailCloseTokenCoversTargets(passed, guarded, digest)) {
+          return { confirmed: true, guarded: true, token: passed };
+        }
         return await new Promise((resolve) => {
           let modal;
           const finish = (confirmed) => {

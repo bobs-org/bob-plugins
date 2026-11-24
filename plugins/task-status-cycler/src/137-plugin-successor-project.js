@@ -446,6 +446,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
       const selectableOffers = Array.isArray(plan.offers) ? plan.offers : [];
       let selectedKeys = [];
       let closeChoices = [];
+      let successorOfferMailCloseConfirmed = null;
       let reqRequests = null;
       let jumpKey = null;
       let reqJumpKey = null;
@@ -498,6 +499,9 @@ class TaskStatusCyclerSuccessorProjectMixin {
         closeChoices = closeSupported && choices && Array.isArray(choices.closes)
           ? choices.closes
           : [];
+        successorOfferMailCloseConfirmed = choices && choices.context && typeof choices.context.mailCloseConfirmed === "string"
+          ? choices.context.mailCloseConfirmed
+          : null;
         const closeKeySet = new Set(closeChoices.map((close) => String(close.key)));
         selectedKeys = picks.map((pick) => pick && pick.key).filter(Boolean);
         selectedKeys = selectedKeys.filter((key) => !closeKeySet.has(String(key)));
@@ -705,6 +709,9 @@ class TaskStatusCyclerSuccessorProjectMixin {
           noteOutcome.failureReason = "task changed before write";
         }
       }
+      const offerCloseActive = successorOfferMailCloseConfirmed && !active.mailCloseConfirmed
+        ? { ...active, mailCloseConfirmed: successorOfferMailCloseConfirmed }
+        : active;
       let closeResult = null;
       if (closeChoices.length > 0) {
         closeResult = await this.applySuccessorOfferCloseChoices({
@@ -722,7 +729,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
           dependencySnapshotAvailable: closePassDependencySnapshotAvailable,
           markUnblockedLine: this.getFreshnessMarkUnblockedLine(),
           pickerApi,
-          context: active,
+          context: offerCloseActive,
         });
         if (closeResult) removeResolvedOfferCloseRows(plan, closeResult);
       }

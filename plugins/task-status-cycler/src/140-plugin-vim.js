@@ -280,6 +280,7 @@ class TaskStatusCyclerVimMixin {
             successorNoticeBox,
             successorJumpTarget: "return",
             successorJumpBox,
+            openingKeys: ["Control", "Enter"],
           },
         ).then(
           (wrote) =>
@@ -307,6 +308,7 @@ class TaskStatusCyclerVimMixin {
         view.editor,
         activeFile,
         taskStatus,
+        { openingKeys: ["Control", "Enter"] },
       ).catch(() => false);
       return;
     }

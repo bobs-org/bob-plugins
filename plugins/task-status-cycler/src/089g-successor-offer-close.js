@@ -114,12 +114,16 @@ function normalizeSuccessorChoices(result) {
           return request;
         }).filter(Boolean)
       : null;
+    const mailCloseConfirmed = result && result.context && typeof result.context.mailCloseConfirmed === "string"
+      ? result.context.mailCloseConfirmed
+      : null;
     if (disjointPicks.length === 0 && closes.length === 0 && !jump && reqs === null) return null;
     return {
       picks: disjointPicks,
       closes,
       ...(reqs !== null ? { reqs } : {}),
       ...(jump ? { jump } : {}),
+      ...(mailCloseConfirmed ? { context: { mailCloseConfirmed } } : {}),
     };
   } catch (_error) {
     return null;

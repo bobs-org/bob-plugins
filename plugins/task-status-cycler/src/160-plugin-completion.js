@@ -159,6 +159,7 @@ class TaskStatusCyclerCompletionMixin {
       editor,
       activeFile,
       taskStatus,
+      { openingKeys: ["Control", "Enter"] },
     ).catch(() => false);
     return true;
   }

@@ -354,6 +354,34 @@ class BobNavigationHotkeysFreshnessDecayMixin {
           line: cardCtx.line,
         },
         onChoose: (action) => {
+          if (action === "drop") {
+            void (async () => {
+              let applied = false;
+              try {
+                applied = await this.applyFreshnessDecayCardChoice(cardCtx, action);
+              } catch (_error) {
+                applied = false;
+              }
+              if (applied === true) {
+                try {
+                  const modal = this.activeFreshnessDecayCard;
+                  this.activeFreshnessDecayCard = null;
+                  if (modal) {
+                    try { modal.settled = true; } catch (_error) {}
+                    if (typeof modal.close === "function") modal.close();
+                  }
+                } catch (_error) {
+                  this.activeFreshnessDecayCard = null;
+                }
+              } else {
+                try {
+                  const modal = this.activeFreshnessDecayCard;
+                  if (modal) modal.dropDispatched = false;
+                } catch (_error) {}
+              }
+            })();
+            return;
+          }
           this.activeFreshnessDecayCard = null;
           void this.applyFreshnessDecayCardChoice(cardCtx, action);
         },

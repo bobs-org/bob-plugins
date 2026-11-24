@@ -333,6 +333,68 @@ test("checkbox capture intercepts an open-to-done click on a Gmail Task", async 
   assert.equal(editor.getValue(), MAIL_LINE);
 });
 
+test("Live Preview maps a DOM offset through doc.lineAt", () => {
+  const plugin = makePlugin({
+    files: { "job.md": `- [ ] #task A\n- [ ] #task Reply [[mail/2026/lease]]`, "mail/2026/lease.md": MAIL_NOTE },
+    caches: { "mail/2026/lease.md": { frontmatter: { type: "[[mail]]" } } },
+  });
+  const input = { closest: () => null };
+  const view = {
+    editor: {
+      cm: {
+        posAtDOM: () => 25,
+        state: { doc: { lineAt(pos) { assert.equal(pos, 25); return { number: 2 }; } } },
+      },
+    },
+  };
+  assert.equal(plugin.cyclerMailCloseLivePreviewLine(view, input), 1);
+});
+
+test("Reading view adds the section start line", () => {
+  const plugin = makePlugin({
+    files: { "job.md": `# H\n\n- [ ] #task Reply [[mail/2026/lease]]`, "mail/2026/lease.md": MAIL_NOTE },
+    caches: { "mail/2026/lease.md": { frontmatter: { type: "[[mail]]" } } },
+  });
+  const li = { getAttribute: () => "0" };
+  const input = { closest: (sel) => sel === "li.task-list-item" ? li : null };
+  const view = {
+    previewMode: { renderer: { getSectionInfo: () => ({ lineStart: 2 }) } },
+    editor: { getLine: (n) => n === 2 ? "- [ ] #task Reply [[mail/2026/lease]]" : "" },
+  };
+  assert.equal(plugin.cyclerMailCloseLineFromCheckbox(input, view), 2);
+});
+
+test("Ctrl+Enter successor Cancel verdict on a Gmail Task asks exactly once", async () => {
+  let cards = 0;
+  const plugin = makePlugin({
+    files: { "job.md": MAIL_LINE, "mail/2026/lease.md": MAIL_NOTE },
+    caches: { "mail/2026/lease.md": { frontmatter: { type: "[[mail]]" } } },
+    confirmResult: null,
+  });
+  const coveringToken = `mc1.${Buffer.from(JSON.stringify({ d: "test", t: [{ p: "job.md", l: 1, t: MAIL_LINE.trim(), a: "-" }] }), "utf8").toString("base64url")}`;
+  plugin.app.plugins.plugins["bob-navigation-hotkeys"].api.mailCloseGuard.confirm = async (targets, options) => {
+    const passed = options && options.context && options.context.mailCloseConfirmed;
+    if (typeof passed === "string" && passed === coveringToken) {
+      return { confirmed: true, guarded: true, token: passed };
+    }
+    cards += 1;
+    return { confirmed: true, guarded: true, token: coveringToken };
+  };
+  const first = await plugin.confirmCyclerMailClose(
+    [{ path: "job.md", line: 1, lineText: MAIL_LINE, before: " ", after: "-" }],
+    {},
+  );
+  assert.equal(cards, 1);
+  assert.equal(first.confirmed, true);
+  const token = first.token;
+  const second = await plugin.confirmCyclerMailClose(
+    [{ path: "job.md", line: 1, lineText: MAIL_LINE, before: " ", after: "-" }],
+    { context: { mailCloseConfirmed: token } },
+  );
+  assert.equal(cards, 1);
+  assert.equal(second.confirmed, true);
+});
+
 test("keeping an offer-close writes nothing", async () => {
   const plugin = makePlugin({
     files: { "job.md": `${MAIL_LINE} ^yogi`, "mail/2026/lease.md": MAIL_NOTE },

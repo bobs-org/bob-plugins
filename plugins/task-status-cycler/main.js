@@ -15527,12 +15527,16 @@ function normalizeSuccessorChoices(result) {
           return request;
         }).filter(Boolean)
       : null;
+    const mailCloseConfirmed = result && result.context && typeof result.context.mailCloseConfirmed === "string"
+      ? result.context.mailCloseConfirmed
+      : null;
     if (disjointPicks.length === 0 && closes.length === 0 && !jump && reqs === null) return null;
     return {
       picks: disjointPicks,
       closes,
       ...(reqs !== null ? { reqs } : {}),
       ...(jump ? { jump } : {}),
+      ...(mailCloseConfirmed ? { context: { mailCloseConfirmed } } : {}),
     };
   } catch (_error) {
     return null;
@@ -22099,6 +22103,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
       const selectableOffers = Array.isArray(plan.offers) ? plan.offers : [];
       let selectedKeys = [];
       let closeChoices = [];
+      let successorOfferMailCloseConfirmed = null;
       let reqRequests = null;
       let jumpKey = null;
       let reqJumpKey = null;
@@ -22151,6 +22156,9 @@ class TaskStatusCyclerSuccessorProjectMixin {
         closeChoices = closeSupported && choices && Array.isArray(choices.closes)
           ? choices.closes
           : [];
+        successorOfferMailCloseConfirmed = choices && choices.context && typeof choices.context.mailCloseConfirmed === "string"
+          ? choices.context.mailCloseConfirmed
+          : null;
         const closeKeySet = new Set(closeChoices.map((close) => String(close.key)));
         selectedKeys = picks.map((pick) => pick && pick.key).filter(Boolean);
         selectedKeys = selectedKeys.filter((key) => !closeKeySet.has(String(key)));
@@ -22358,6 +22366,9 @@ class TaskStatusCyclerSuccessorProjectMixin {
           noteOutcome.failureReason = "task changed before write";
         }
       }
+      const offerCloseActive = successorOfferMailCloseConfirmed && !active.mailCloseConfirmed
+        ? { ...active, mailCloseConfirmed: successorOfferMailCloseConfirmed }
+        : active;
       let closeResult = null;
       if (closeChoices.length > 0) {
         closeResult = await this.applySuccessorOfferCloseChoices({
@@ -22375,7 +22386,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
           dependencySnapshotAvailable: closePassDependencySnapshotAvailable,
           markUnblockedLine: this.getFreshnessMarkUnblockedLine(),
           pickerApi,
-          context: active,
+          context: offerCloseActive,
         });
         if (closeResult) removeResolvedOfferCloseRows(plan, closeResult);
       }
@@ -24930,6 +24941,7 @@ class TaskStatusCyclerVimMixin {
             successorNoticeBox,
             successorJumpTarget: "return",
             successorJumpBox,
+            openingKeys: ["Control", "Enter"],
           },
         ).then(
           (wrote) =>
@@ -24957,6 +24969,7 @@ class TaskStatusCyclerVimMixin {
         view.editor,
         activeFile,
         taskStatus,
+        { openingKeys: ["Control", "Enter"] },
       ).catch(() => false);
       return;
     }
@@ -26698,6 +26711,7 @@ class TaskStatusCyclerCompletionMixin {
       editor,
       activeFile,
       taskStatus,
+      { openingKeys: ["Control", "Enter"] },
     ).catch(() => false);
     return true;
   }
@@ -30529,6 +30543,12 @@ function cyclerMailClosePublicTarget(target) {
 async function confirmCyclerMailClose(plugin, targets, options = {}) {
   const decision = cyclerMailCloseSyncDecision(plugin, targets);
   if (decision.kind === "allow") return { confirmed: true, guarded: false, token: null };
+  const passedEarly = options && options.context && typeof options.context.mailCloseConfirmed === "string"
+    ? options.context.mailCloseConfirmed
+    : null;
+  if (passedEarly && cyclerMailCloseTokenCoversTargets(passedEarly, decision.targets)) {
+    return { confirmed: true, guarded: true, token: passedEarly };
+  }
   if (decision.kind === "block") {
     cyclerMailCloseNoticeFail();
     cyclerMailCloseReleaseWalk(plugin);
@@ -30542,9 +30562,7 @@ async function confirmCyclerMailClose(plugin, targets, options = {}) {
     }
     return { confirmed: true, guarded: false, token: null };
   }
-  const passed = options && options.context && typeof options.context.mailCloseConfirmed === "string"
-    ? options.context.mailCloseConfirmed
-    : null;
+  const passed = passedEarly;
   const api = cyclerMailCloseNavApi(plugin);
   if (!api) {
     if (await cyclerMailCloseTwinHasGmail(plugin, decision.targets)) {
@@ -30718,7 +30736,8 @@ class TaskStatusCyclerMailCloseMixin {
       lineText: taskStatus.lineText,
       nextSymbol,
     };
-    void this.confirmCyclerMailClose(mailTarget ? [mailTarget] : []).then((result) => {
+    const openingKeys = direction < 0 ? ["Alt", "["] : ["Alt", "]"];
+    void this.confirmCyclerMailClose(mailTarget ? [mailTarget] : [], { openingKeys }).then((result) => {
       if (!result || result.confirmed !== true) return;
       const live = this.getActiveTaskStatus(editor);
       if (!live || live.line !== snapshot.line || live.lineText !== snapshot.lineText) return;
@@ -30815,6 +30834,7 @@ class TaskStatusCyclerMailCloseMixin {
       context: options && options.mailCloseConfirmed
         ? { mailCloseConfirmed: options.mailCloseConfirmed }
         : options && options.context,
+      openingKeys: options && options.openingKeys,
     });
     if (result && result.confirmed === true && result.token && options && typeof options === "object") {
       options.mailCloseConfirmed = result.token;
@@ -30918,21 +30938,31 @@ class TaskStatusCyclerMailCloseMixin {
   }
 
   registerCyclerMailCloseClickGuard() {
-    let doc = null;
+    if (typeof this.registerDomEvent !== "function") return;
+    if (!this.cyclerMailCloseClickBoundDocs) this.cyclerMailCloseClickBoundDocs = new WeakSet();
+    const handler = (event) => this.cyclerMailCloseGuardClick(event);
+    const bind = (doc) => {
+      if (!doc || this.cyclerMailCloseClickBoundDocs.has(doc)) return;
+      this.cyclerMailCloseClickBoundDocs.add(doc);
+      for (const type of ["pointerdown", "mousedown", "touchstart", "click"]) {
+        try {
+          this.registerDomEvent(doc, type, handler, { capture: true, passive: false });
+        } catch (_error) {}
+      }
+    };
+    for (const doc of this.cyclerMailCloseClickDocuments()) bind(doc);
     try {
       const workspace = this.app && this.app.workspace;
-      const el = workspace && workspace.containerEl;
-      doc = el && el.ownerDocument ? el.ownerDocument : (typeof document !== "undefined" ? document : null);
-    } catch (_error) {
-      doc = typeof document !== "undefined" ? document : null;
-    }
-    if (!doc || typeof this.registerDomEvent !== "function") return;
-    const handler = (event) => this.cyclerMailCloseGuardClick(event);
-    for (const type of ["pointerdown", "mousedown", "touchstart", "click"]) {
-      try {
-        this.registerDomEvent(doc, type, handler, { capture: true, passive: false });
-      } catch (_error) {}
-    }
+      if (workspace && typeof workspace.on === "function" && typeof this.registerEvent === "function") {
+        this.registerEvent(workspace.on("window-open", (win) => {
+          try {
+            const doc = win && (win.document || win.doc);
+            if (doc) bind(doc);
+            else for (const fallback of this.cyclerMailCloseClickDocuments()) bind(fallback);
+          } catch (_error) {}
+        }));
+      }
+    } catch (_error) {}
   }
 
   cyclerMailCloseClickIsForeign(input) {
@@ -30948,28 +30978,20 @@ class TaskStatusCyclerMailCloseMixin {
   cyclerMailCloseLineFromCheckbox(input, view) {
     if (!input || typeof input.closest !== "function") return null;
     if (this.cyclerMailCloseClickIsForeign(input)) return null;
+    const live = this.cyclerMailCloseLivePreviewLine(view, input);
+    if (Number.isInteger(live) && live >= 0) return live;
     try {
       const reading = input.closest("li.task-list-item");
       if (reading && typeof reading.getAttribute === "function") {
         const raw = reading.getAttribute("data-line");
-        const line = Number(raw);
-        if (Number.isInteger(line) && line >= 0) return line;
-      }
-    } catch (_error) {}
-    try {
-      const editor = view && view.editor;
-      const cm = editor && (editor.cm || editor);
-      if (cm && typeof cm.posAtDOM === "function") {
-        const pos = cm.posAtDOM(input);
-        if (pos && Number.isInteger(pos.line) && pos.line >= 0) return pos.line;
-      }
-    } catch (_error) {}
-    try {
-      const host = input.closest(".HyperMD-task-line, .cm-task-list-item, .cm-line");
-      if (host && typeof host.getAttribute === "function") {
-        const raw = host.getAttribute("data-line");
-        const line = Number(raw);
-        if (Number.isInteger(line) && line >= 0) return line;
+        const dataLine = Number(raw);
+        if (!Number.isInteger(dataLine) || dataLine < 0) return null;
+        const info = this.cyclerMailCloseReadingSectionInfo(view, reading);
+        const lineStart = info && Number.isInteger(info.lineStart) ? info.lineStart : null;
+        if (lineStart !== null && lineStart >= 0) return lineStart + dataLine;
+        const hasPreview = Boolean(view && view.previewMode);
+        if (!hasPreview) return dataLine;
+        return null;
       }
     } catch (_error) {}
     return null;
@@ -30998,7 +31020,7 @@ class TaskStatusCyclerMailCloseMixin {
       input = null;
     }
     if (!input) return false;
-    const view = this.cyclerMailCloseActiveMarkdownView();
+    const view = this.cyclerMailCloseViewForInput(input);
     if (!view || !view.editor) return false;
     const file = view.file ||
       (this.app.workspace && typeof this.app.workspace.getActiveFile === "function"
@@ -31007,7 +31029,20 @@ class TaskStatusCyclerMailCloseMixin {
     const path = file && file.path;
     if (!path) return false;
     const line = this.cyclerMailCloseLineFromCheckbox(input, view);
-    if (!Number.isInteger(line) || line < 0) return false;
+    if (!Number.isInteger(line) || line < 0) {
+      try {
+        if (this.cyclerMailCloseReadingFallbackShouldBlock(input, view, path)) {
+          try {
+            event.preventDefault();
+            event.stopPropagation();
+            if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+          } catch (_error) {}
+          cyclerMailCloseNoticeFail();
+          return true;
+        }
+      } catch (_error) {}
+      return false;
+    }
     let lineText = "";
     try { lineText = String(view.editor.getLine(line) || ""); } catch (_error) { return false; }
     const taskStatus = getTaskStatusForLine(lineText, line);
@@ -31052,6 +31087,237 @@ class TaskStatusCyclerMailCloseMixin {
     return true;
   }
 }
+// ---- src/187a-mail-close-guard-helpers.js ----
+// Mail Close Card guard helpers for Task Status Cycler (split from 187 to stay under the fragment line limit).
+
+// Top-level token helpers and additional mixin methods; shares one script scope with 187.
+
+function cyclerMailCloseTrimLineText(value) {
+  return String(value || "").trim();
+}
+
+function cyclerMailCloseConfirmedIdentities(targets) {
+  const list = [];
+  for (const target of Array.isArray(targets) ? targets : []) {
+    if (!target || typeof target !== "object") continue;
+    const path = cyclerMailCloseNormalizePath(target.path);
+    const line = Math.floor(Number(target.line));
+    const after = String(target.after || " ").slice(0, 1);
+    const lineText = typeof target.lineText === "string" ? target.lineText
+      : (typeof target.line_text === "string" ? target.line_text : "");
+    if (!path || !Number.isInteger(line) || line < 1) continue;
+    list.push({ p: path, l: line, t: cyclerMailCloseTrimLineText(lineText), a: after });
+  }
+  list.sort((a, b) => String(a.p).localeCompare(String(b.p)) || (a.l - b.l) || String(a.a).localeCompare(String(b.a)) || String(a.t).localeCompare(String(b.t)));
+  return list;
+}
+
+function cyclerMailCloseDecodeConfirmedToken(token) {
+  if (typeof token !== "string" || !token) return null;
+  if (token.startsWith("mc1.")) {
+    try {
+      const b64 = token.slice(4);
+      const json = typeof Buffer !== "undefined" && typeof Buffer.from === "function"
+        ? Buffer.from(b64, "base64url").toString("utf8")
+        : decodeURIComponent(escape(atob(b64.replace(/-/g, "+").replace(/_/g, "/"))));
+      const payload = JSON.parse(json);
+      if (payload && typeof payload === "object" && Array.isArray(payload.t)) return payload;
+    } catch (_error) {
+      return null;
+    }
+    return null;
+  }
+  return { d: token, t: null };
+}
+
+function cyclerMailCloseTokenCoversTargets(token, targets, digest) {
+  if (typeof token !== "string" || !token) return false;
+  if (!Array.isArray(targets) || targets.length === 0) return true;
+  if (digest && token === String(digest)) return true;
+  const decoded = cyclerMailCloseDecodeConfirmedToken(token);
+  if (!decoded || !Array.isArray(decoded.t)) return false;
+  const covered = decoded.t;
+  for (const target of targets) {
+    if (!target || typeof target !== "object") continue;
+    const path = cyclerMailCloseNormalizePath(target.path);
+    const line = Math.floor(Number(target.line));
+    const after = String(target.after || " ").slice(0, 1);
+    const lineText = typeof target.lineText === "string" ? target.lineText
+      : (typeof target.line_text === "string" ? target.line_text : "");
+    const trimmed = cyclerMailCloseTrimLineText(lineText);
+    let ok = false;
+    for (const entry of covered) {
+      if (!entry || typeof entry !== "object") continue;
+      if (cyclerMailCloseNormalizePath(entry.p) !== path) continue;
+      if (String(entry.a || " ").slice(0, 1) !== after) continue;
+      if (Number(entry.l) === line) { ok = true; break; }
+      if (cyclerMailCloseTrimLineText(entry.t) !== "" && cyclerMailCloseTrimLineText(entry.t) === trimmed) { ok = true; break; }
+    }
+    if (!ok) return false;
+  }
+  return true;
+}
+
+TaskStatusCyclerMailCloseMixin.prototype.cyclerMailCloseClickDocuments = function() {
+    const docs = [];
+    const seen = new Set();
+    const push = (doc) => {
+      if (!doc || seen.has(doc)) return;
+      seen.add(doc);
+      docs.push(doc);
+    };
+    try {
+      if (typeof document !== "undefined" && document) push(document);
+    } catch (_error) {}
+    try {
+      const workspace = this.app && this.app.workspace;
+      const el = workspace && workspace.containerEl;
+      const main = el && el.ownerDocument ? el.ownerDocument : null;
+      if (main) push(main);
+      const leaves = workspace && typeof workspace.getLeavesOfType === "function"
+        ? workspace.getLeavesOfType("markdown") || []
+        : [];
+      for (const leaf of leaves) {
+        try {
+          const view = leaf && leaf.view;
+          const container = view && (view.containerEl || view.contentEl);
+          const doc = container && container.ownerDocument ? container.ownerDocument : null;
+          if (doc) push(doc);
+        } catch (_error) {}
+      }
+    } catch (_error) {}
+    return docs;
+  }
+
+TaskStatusCyclerMailCloseMixin.prototype.cyclerMailCloseLivePreviewLine = function(view, input) {
+    if (!view || !input) return null;
+    const candidates = [];
+    try {
+      const editor = view.editor;
+      if (editor) {
+        if (editor.cm) candidates.push(editor.cm);
+        if (editor.editor && editor.editor.cm) candidates.push(editor.editor.cm);
+        candidates.push(editor);
+      }
+      if (view.cm) candidates.push(view.cm);
+    } catch (_error) {}
+    for (const cm of candidates) {
+      try {
+        if (!cm || typeof cm.posAtDOM !== "function") continue;
+        if (!cm.state || !cm.state.doc || typeof cm.state.doc.lineAt !== "function") continue;
+        let pos = null;
+        try {
+          pos = cm.posAtDOM(input);
+        } catch (_error) {
+          pos = null;
+        }
+        if (!Number.isFinite(pos)) {
+          try {
+            pos = cm.posAtDOM(input, 0);
+          } catch (_error) {
+            pos = null;
+          }
+        }
+        if (!Number.isFinite(pos)) continue;
+        const line = cm.state.doc.lineAt(pos);
+        if (line && Number.isFinite(line.number) && line.number >= 1) {
+          return Math.floor(line.number) - 1;
+        }
+      } catch (_error) {}
+    }
+    return null;
+  }
+
+TaskStatusCyclerMailCloseMixin.prototype.cyclerMailCloseReadingSectionInfo = function(view, el) {
+    if (!view || !el) return null;
+    const attempts = [];
+    try {
+      if (view.previewMode && view.previewMode.renderer && typeof view.previewMode.renderer.getSectionInfo === "function") {
+        attempts.push(() => view.previewMode.renderer.getSectionInfo(el));
+      }
+    } catch (_error) {}
+    try {
+      if (view.previewMode && typeof view.previewMode.getSectionInfo === "function") {
+        attempts.push(() => view.previewMode.getSectionInfo(el));
+      }
+    } catch (_error) {}
+    try {
+      if (typeof view.getSectionInfo === "function") attempts.push(() => view.getSectionInfo(el));
+    } catch (_error) {}
+    for (const attempt of attempts) {
+      try {
+        const info = attempt();
+        if (info && typeof info === "object") return info;
+      } catch (_error) {}
+    }
+    return null;
+  }
+
+TaskStatusCyclerMailCloseMixin.prototype.cyclerMailCloseReadingFallbackShouldBlock = function(input, view, path) {
+    try {
+      const li = input && typeof input.closest === "function" ? input.closest("li.task-list-item") : null;
+      if (!li) return false;
+      let text = "";
+      try {
+        text = String((li.textContent !== undefined ? li.textContent : li.innerText) || "");
+      } catch (_error) {
+        text = "";
+      }
+      const links = [];
+      try {
+        const re = /\[\[([^\]]+)\]\]/g;
+        let match;
+        while ((match = re.exec(text))) {
+          const target = String(match[1].split("|")[0].split("#")[0] || "").trim();
+          if (target && !links.includes(target)) links.push(target);
+        }
+      } catch (_error) {}
+      if (links.length === 0) return false;
+      const app = this.app;
+      for (const link of links) {
+        try {
+          if (cyclerMailCloseWarmIsMail(app, path, link) === true) return true;
+        } catch (_error) {}
+      }
+      return false;
+    } catch (_error) {
+      return false;
+    }
+  }
+
+TaskStatusCyclerMailCloseMixin.prototype.cyclerMailCloseViewForInput = function(input) {
+    try {
+      const workspace = this.app && this.app.workspace;
+      if (workspace && typeof workspace.getLeavesOfType === "function") {
+        for (const leaf of workspace.getLeavesOfType("markdown") || []) {
+          try {
+            const view = leaf && leaf.view;
+            const container = view && (view.containerEl || view.contentEl);
+            if (view && container && typeof container.contains === "function" && container.contains(input)) {
+              return view;
+            }
+          } catch (_error) {}
+        }
+      }
+      if (workspace && typeof workspace.iterateAllLeaves === "function") {
+        let found = null;
+        try {
+          workspace.iterateAllLeaves((leaf) => {
+            if (found) return;
+            try {
+              const view = leaf && leaf.view;
+              const container = view && (view.containerEl || view.contentEl);
+              if (view && container && typeof container.contains === "function" && container.contains(input)) {
+                found = view;
+              }
+            } catch (_error) {}
+          });
+        } catch (_error) {}
+        if (found) return found;
+      }
+    } catch (_error) {}
+    return this.cyclerMailCloseActiveMarkdownView();
+  }
 // ---- src/190-plugin-targets.js ----
 class TaskStatusCyclerTargetsMixin {
   getActiveLineTranscludedTaskTarget(editor, sourcePath) {

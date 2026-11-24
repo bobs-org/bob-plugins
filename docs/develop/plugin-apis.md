@@ -426,14 +426,12 @@ Each target is `{ path, line, lineText?, before, after }`: `line` is one-based,
 `before` is an open checkbox status, and `after` is `x`, `X`, or `-`.
 Classification follows the shared Mail Close Card predicate, resolving the task's
 own links and direct link-only children against mail-note frontmatter.
-`mailCloseGuard.confirm(targets, { context? })` resolves to
+`mailCloseGuard.confirm(targets, { context?, openingKeys? })` resolves to
 `{ confirmed, guarded, token }`. It returns immediately with `confirmed: true`
-when no target is a Gmail Task. A guarded close opens one card; only `y` confirms,
-and every other key keeps the source task open. A confirmed `token` binds the exact
-close identities. Pass it to downstream close writers as
-`context.mailCloseConfirmed` so one gesture cannot prompt twice. Both methods
-settle without throwing. The root API remains version 3 because this is an additive
-namespace.
+when no target is a Gmail Task. A guarded close opens one card; only `y` confirms.
+The `token` names confirmed identities and covers subsets when lines shift; pass
+it as `context.mailCloseConfirmed` so one gesture prompts once. Both methods settle
+without throwing. The root API remains version 3 because this is additive.
 
 `inboxRoute` has `isInboxNote(path)`,
 `prompt(request)`, and `commit(request)`.

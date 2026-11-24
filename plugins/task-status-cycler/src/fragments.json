@@ -59,6 +59,7 @@
   "185-gmail-archive-close-notice.js",
   "186-mail-close-model-twin.js",
   "187-mail-close-guard.js",
+  "187a-mail-close-guard-helpers.js",
   "190-plugin-targets.js",
   "192-bank-row-guard.js",
   "193-req-line-guard.js",

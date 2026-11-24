@@ -331,6 +331,12 @@ function cyclerMailClosePublicTarget(target) {
 async function confirmCyclerMailClose(plugin, targets, options = {}) {
   const decision = cyclerMailCloseSyncDecision(plugin, targets);
   if (decision.kind === "allow") return { confirmed: true, guarded: false, token: null };
+  const passedEarly = options && options.context && typeof options.context.mailCloseConfirmed === "string"
+    ? options.context.mailCloseConfirmed
+    : null;
+  if (passedEarly && cyclerMailCloseTokenCoversTargets(passedEarly, decision.targets)) {
+    return { confirmed: true, guarded: true, token: passedEarly };
+  }
   if (decision.kind === "block") {
     cyclerMailCloseNoticeFail();
     cyclerMailCloseReleaseWalk(plugin);
@@ -344,9 +350,7 @@ async function confirmCyclerMailClose(plugin, targets, options = {}) {
     }
     return { confirmed: true, guarded: false, token: null };
   }
-  const passed = options && options.context && typeof options.context.mailCloseConfirmed === "string"
-    ? options.context.mailCloseConfirmed
-    : null;
+  const passed = passedEarly;
   const api = cyclerMailCloseNavApi(plugin);
   if (!api) {
     if (await cyclerMailCloseTwinHasGmail(plugin, decision.targets)) {
@@ -520,7 +524,8 @@ class TaskStatusCyclerMailCloseMixin {
       lineText: taskStatus.lineText,
       nextSymbol,
     };
-    void this.confirmCyclerMailClose(mailTarget ? [mailTarget] : []).then((result) => {
+    const openingKeys = direction < 0 ? ["Alt", "["] : ["Alt", "]"];
+    void this.confirmCyclerMailClose(mailTarget ? [mailTarget] : [], { openingKeys }).then((result) => {
       if (!result || result.confirmed !== true) return;
       const live = this.getActiveTaskStatus(editor);
       if (!live || live.line !== snapshot.line || live.lineText !== snapshot.lineText) return;
@@ -617,6 +622,7 @@ class TaskStatusCyclerMailCloseMixin {
       context: options && options.mailCloseConfirmed
         ? { mailCloseConfirmed: options.mailCloseConfirmed }
         : options && options.context,
+      openingKeys: options && options.openingKeys,
     });
     if (result && result.confirmed === true && result.token && options && typeof options === "object") {
       options.mailCloseConfirmed = result.token;
@@ -720,21 +726,31 @@ class TaskStatusCyclerMailCloseMixin {
   }
 
   registerCyclerMailCloseClickGuard() {
-    let doc = null;
+    if (typeof this.registerDomEvent !== "function") return;
+    if (!this.cyclerMailCloseClickBoundDocs) this.cyclerMailCloseClickBoundDocs = new WeakSet();
+    const handler = (event) => this.cyclerMailCloseGuardClick(event);
+    const bind = (doc) => {
+      if (!doc || this.cyclerMailCloseClickBoundDocs.has(doc)) return;
+      this.cyclerMailCloseClickBoundDocs.add(doc);
+      for (const type of ["pointerdown", "mousedown", "touchstart", "click"]) {
+        try {
+          this.registerDomEvent(doc, type, handler, { capture: true, passive: false });
+        } catch (_error) {}
+      }
+    };
+    for (const doc of this.cyclerMailCloseClickDocuments()) bind(doc);
     try {
       const workspace = this.app && this.app.workspace;
-      const el = workspace && workspace.containerEl;
-      doc = el && el.ownerDocument ? el.ownerDocument : (typeof document !== "undefined" ? document : null);
-    } catch (_error) {
-      doc = typeof document !== "undefined" ? document : null;
-    }
-    if (!doc || typeof this.registerDomEvent !== "function") return;
-    const handler = (event) => this.cyclerMailCloseGuardClick(event);
-    for (const type of ["pointerdown", "mousedown", "touchstart", "click"]) {
-      try {
-        this.registerDomEvent(doc, type, handler, { capture: true, passive: false });
-      } catch (_error) {}
-    }
+      if (workspace && typeof workspace.on === "function" && typeof this.registerEvent === "function") {
+        this.registerEvent(workspace.on("window-open", (win) => {
+          try {
+            const doc = win && (win.document || win.doc);
+            if (doc) bind(doc);
+            else for (const fallback of this.cyclerMailCloseClickDocuments()) bind(fallback);
+          } catch (_error) {}
+        }));
+      }
+    } catch (_error) {}
   }
 
   cyclerMailCloseClickIsForeign(input) {
@@ -750,28 +766,20 @@ class TaskStatusCyclerMailCloseMixin {
   cyclerMailCloseLineFromCheckbox(input, view) {
     if (!input || typeof input.closest !== "function") return null;
     if (this.cyclerMailCloseClickIsForeign(input)) return null;
+    const live = this.cyclerMailCloseLivePreviewLine(view, input);
+    if (Number.isInteger(live) && live >= 0) return live;
     try {
       const reading = input.closest("li.task-list-item");
       if (reading && typeof reading.getAttribute === "function") {
         const raw = reading.getAttribute("data-line");
-        const line = Number(raw);
-        if (Number.isInteger(line) && line >= 0) return line;
-      }
-    } catch (_error) {}
-    try {
-      const editor = view && view.editor;
-      const cm = editor && (editor.cm || editor);
-      if (cm && typeof cm.posAtDOM === "function") {
-        const pos = cm.posAtDOM(input);
-        if (pos && Number.isInteger(pos.line) && pos.line >= 0) return pos.line;
-      }
-    } catch (_error) {}
-    try {
-      const host = input.closest(".HyperMD-task-line, .cm-task-list-item, .cm-line");
-      if (host && typeof host.getAttribute === "function") {
-        const raw = host.getAttribute("data-line");
-        const line = Number(raw);
-        if (Number.isInteger(line) && line >= 0) return line;
+        const dataLine = Number(raw);
+        if (!Number.isInteger(dataLine) || dataLine < 0) return null;
+        const info = this.cyclerMailCloseReadingSectionInfo(view, reading);
+        const lineStart = info && Number.isInteger(info.lineStart) ? info.lineStart : null;
+        if (lineStart !== null && lineStart >= 0) return lineStart + dataLine;
+        const hasPreview = Boolean(view && view.previewMode);
+        if (!hasPreview) return dataLine;
+        return null;
       }
     } catch (_error) {}
     return null;
@@ -800,7 +808,7 @@ class TaskStatusCyclerMailCloseMixin {
       input = null;
     }
     if (!input) return false;
-    const view = this.cyclerMailCloseActiveMarkdownView();
+    const view = this.cyclerMailCloseViewForInput(input);
     if (!view || !view.editor) return false;
     const file = view.file ||
       (this.app.workspace && typeof this.app.workspace.getActiveFile === "function"
@@ -809,7 +817,20 @@ class TaskStatusCyclerMailCloseMixin {
     const path = file && file.path;
     if (!path) return false;
     const line = this.cyclerMailCloseLineFromCheckbox(input, view);
-    if (!Number.isInteger(line) || line < 0) return false;
+    if (!Number.isInteger(line) || line < 0) {
+      try {
+        if (this.cyclerMailCloseReadingFallbackShouldBlock(input, view, path)) {
+          try {
+            event.preventDefault();
+            event.stopPropagation();
+            if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+          } catch (_error) {}
+          cyclerMailCloseNoticeFail();
+          return true;
+        }
+      } catch (_error) {}
+      return false;
+    }
     let lineText = "";
     try { lineText = String(view.editor.getLine(line) || ""); } catch (_error) { return false; }
     const taskStatus = getTaskStatusForLine(lineText, line);

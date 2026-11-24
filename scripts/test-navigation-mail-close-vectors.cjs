@@ -57,7 +57,70 @@ test("Mail Close Card confirms only y and treats q as keep", () => {
   qCard.close = () => {};
   const qEvent = { key: "q", preventDefault() {}, stopPropagation() {} };
   qCard.handleKey(qEvent);
-  assert.equal(kept, 1);
+  assert.equal(kept, 1);});
+
+test("Mail Close Card keeps on Enter, Ctrl+Enter, Esc, and Ctrl+[", () => {
+  const model = { title: "Cancel this email task?", rows: [{ label: "Lease" }], verb: "cancel" };
+  for (const event of [
+    { key: "Enter", preventDefault() {}, stopPropagation() {} },
+    { key: "Enter", ctrlKey: true, preventDefault() {}, stopPropagation() {} },
+    { key: "Escape", preventDefault() {}, stopPropagation() {} },
+    { key: "[", ctrlKey: true, preventDefault() {}, stopPropagation() {} },
+  ]) {
+    let kept = 0;
+    let confirmed = 0;
+    const card = new MailCloseCardModal({}, { model, onKeep: () => { kept += 1; }, onConfirm: () => { confirmed += 1; } });
+    card.close = () => {};
+    card.handleKey(event);
+    assert.equal(kept, 1);
+    assert.equal(confirmed, 0);
+  }
+});
+
+test("Mail Close Card ignores event.repeat", () => {
+  const model = { title: "Complete this email task?", rows: [{ label: "Lease" }], verb: "complete" };
+  let confirmed = 0;
+  let kept = 0;
+  const card = new MailCloseCardModal({}, { model, onKeep: () => { kept += 1; }, onConfirm: () => { confirmed += 1; } });
+  card.close = () => {};
+  card.handleKey({ key: "y", repeat: true, preventDefault() {}, stopPropagation() {} });
+  assert.equal(confirmed, 0);
+  assert.equal(kept, 0);
+});
+
+test("Mail Close Card swallows the opening chord until keyup", () => {
+  const model = { title: "Complete this email task?", rows: [{ label: "Lease" }], verb: "complete" };
+  let confirmed = 0;
+  let kept = 0;
+  const card = new MailCloseCardModal({}, { model, openingKeys: ["Control", "Enter"], onKeep: () => { kept += 1; }, onConfirm: () => { confirmed += 1; } });
+  card.close = () => {};
+  card.contentEl = { querySelector: () => null };
+  card.containerEl = { ownerDocument: { defaultView: { addEventListener() {}, removeEventListener() {}, setTimeout(fn) { fn(); } } } };
+  card.onOpen = card.onOpen.bind(card);
+  // Simulate open wiring without DOM: directly test swallow
+  assert.equal(card.awaitingOpeningChordRelease(), true);
+  card.handleKey({ key: "y", preventDefault() {}, stopPropagation() {} });
+  assert.equal(confirmed, 0);
+  assert.equal(kept, 0);
+  card.releaseOpeningChordKey({ key: "Control" });
+  assert.equal(card.awaitingOpeningChordRelease(), true);
+  card.releaseOpeningChordKey({ key: "Enter" });
+  assert.equal(card.awaitingOpeningChordRelease(), false);
+  card.handleKey({ key: "y", preventDefault() {}, stopPropagation() {} });
+  assert.equal(confirmed, 1);
+});
+
+test("Mail Close Card Ctrl+Enter opens the URL and keeps", () => {
+  const model = { title: "Complete this email task?", rows: [{ label: "Lease", gmail_url: "https://mail.google.com/x" }], verb: "complete" };
+  let kept = 0;
+  let confirmed = 0;
+  let opened = 0;
+  const card = new MailCloseCardModal({}, { model, onKeep: () => { kept += 1; }, onConfirm: () => { confirmed += 1; } });
+  card.close = () => {};
+  card.contentEl = { querySelector: () => ({ click() { opened += 1; } }) };
+  card.handleKey({ key: "Enter", ctrlKey: true, preventDefault() {}, stopPropagation() {} });
+  assert.equal(opened, 1);
+  assert.equal(confirmed, 0);
 });
 
 test("mailCloseGuard carries an exact identity token without prompting twice", async () => {

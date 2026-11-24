@@ -6012,6 +6012,7 @@ class FreshnessDecayCardModal extends Modal {
     this.keepStageActive = false;
     this.keepStage = null;
     this.settled = false;
+    this.dropDispatched = false;
     this.rowEls = [];
     this.rowsEl = null;
   }
@@ -6336,6 +6337,16 @@ class FreshnessDecayCardModal extends Modal {
     if (!row || !row.available) {
       return;
     }
+    if (chosenAction === "drop") {
+      if (this.dropDispatched) return;
+      this.dropDispatched = true;
+      try {
+        if (typeof this.onChoose === "function") {
+          this.onChoose(chosenAction);
+        }
+      } catch (_error) {}
+      return;
+    }
     this.settled = true;
     const callback = this.onChoose;
     this.onChoose = null;
@@ -6641,15 +6652,54 @@ function mailCloseCardWindow(modal) {
   catch (_error) { return typeof window !== "undefined" ? window : null; }
 }
 
+function normalizeMailCloseCardKey(value) {
+  const key = String(value || "").toLowerCase();
+  if (key === "control") return "ctrl";
+  if (key === "altgraph") return "alt";
+  if (key === "meta" || key === "os" || key === "super") return "meta";
+  return key;
+}
+
+function mailCloseCardIsMacOS() {
+  try {
+    if (typeof Platform !== "undefined" && Platform && Platform.isMacOS === true) return true;
+  } catch (_error) {}
+  try {
+    if (typeof obsidian !== "undefined" && obsidian.Platform && obsidian.Platform.isMacOS === true) return true;
+  } catch (_error) {}
+  return false;
+}
+
+function mailCloseCardFooterText(model, hasOpen) {
+  const verb = model && model.verb === "cancel" ? "cancels" : model && model.verb === "close" ? "closes" : "completes";
+  const openKey = mailCloseCardIsMacOS() ? "⌘↵" : "Ctrl+↵";
+  if (hasOpen) return `y ${verb} \u00b7 ${openKey} opens the thread \u00b7 any other key keeps it`;
+  return `y ${verb} \u00b7 any other key keeps it`;
+}
+
 class MailCloseCardModal extends Modal {
   constructor(app, options = {}) {
     super(app);
     this.model = options.model || {};
     this.onConfirm = typeof options.onConfirm === "function" ? options.onConfirm : null;
     this.onKeep = typeof options.onKeep === "function" ? options.onKeep : null;
-    this.openingKeys = new Set(Array.isArray(options.openingKeys) ? options.openingKeys.map((key) => String(key).toLowerCase()) : []);
+    this.openingChordKeys = new Set(
+      (Array.isArray(options.openingKeys) ? options.openingKeys : [])
+        .map(normalizeMailCloseCardKey)
+        .filter(Boolean),
+    );
+    this.openingChordKeyupHandler = null;
     this.settled = false;
     this.confirmButton = null;
+  }
+
+  awaitingOpeningChordRelease() {
+    return this.openingChordKeys instanceof Set && this.openingChordKeys.size > 0;
+  }
+
+  releaseOpeningChordKey(event) {
+    if (!event || !(this.openingChordKeys instanceof Set)) return;
+    this.openingChordKeys.delete(normalizeMailCloseCardKey(event.key));
   }
 
   onOpen() {
@@ -6689,9 +6739,10 @@ class MailCloseCardModal extends Modal {
     }
     const actions = contentEl.createDiv({ cls: "bob-mail-close-actions" });
     const first = sourceRows.find((row) => row && row.gmail_url);
-    if (first && first.gmail_url) {
+    const hasOpen = Boolean(first && first.gmail_url);
+    if (hasOpen) {
       const open = actions.createEl("button", { cls: "mod-ghost bob-mail-close-open", text: "Open in Gmail" });
-      open.createSpan({ cls: "bob-key-card-key", text: "⌘↵" });
+      open.createSpan({ cls: "bob-key-card-key", text: mailCloseCardIsMacOS() ? "⌘↵" : "Ctrl+↵" });
       open.addEventListener("click", (event) => {
         event.preventDefault();
         try { if (typeof obsidian !== "undefined" && typeof obsidian.openExternal === "function") obsidian.openExternal(String(first.gmail_url)); else if (typeof window !== "undefined" && window.open) window.open(String(first.gmail_url), "_blank"); } catch (_error) {}
@@ -6704,14 +6755,19 @@ class MailCloseCardModal extends Modal {
     confirm.createSpan({ cls: "bob-key-card-key", text: "y" });
     confirm.addEventListener("click", () => this.confirmClose());
     this.confirmButton = confirm;
-    contentEl.createDiv({ cls: "bob-mail-close-footer bob-key-card-footer", text: "y confirms · ⌘↵ opens the thread · any other key keeps it open" });
+    contentEl.createDiv({ cls: "bob-mail-close-footer bob-key-card-footer", text: mailCloseCardFooterText(this.model, hasOpen) });
     contentEl.addEventListener("keydown", (event) => this.handleKey(event));
+    this.openingChordKeyupHandler = (event) => this.releaseOpeningChordKey(event);
     const view = mailCloseCardWindow(this);
+    if (view && typeof view.addEventListener === "function") {
+      view.addEventListener("keyup", this.openingChordKeyupHandler, true);
+    }
     if (view && typeof view.setTimeout === "function") view.setTimeout(() => { try { keep.focus(); } catch (_error) {} }, 0);
   }
 
   handleKey(event) {
     if (!event || this.settled) return;
+    if (this.awaitingOpeningChordRelease()) { event.preventDefault(); event.stopPropagation(); return; }
     if (event.repeat || event.isComposing) { event.preventDefault(); event.stopPropagation(); return; }
     const key = String(event.key || "").toLowerCase();
     if (key === "y" && !event.altKey && !event.ctrlKey && !event.metaKey) {
@@ -6721,8 +6777,6 @@ class MailCloseCardModal extends Modal {
       const open = this.contentEl && this.contentEl.querySelector && this.contentEl.querySelector(".bob-mail-close-open");
       if (open) { event.preventDefault(); event.stopPropagation(); open.click(); return; }
     }
-    // Every other key is an explicit keep. The parent modal (when present)
-    // remains open with its original draft and selections.
     event.preventDefault(); event.stopPropagation(); this.keepOpen();
   }
 
@@ -6731,6 +6785,7 @@ class MailCloseCardModal extends Modal {
     this.settled = true;
     const callback = this.onConfirm;
     this.onConfirm = null; this.onKeep = null;
+    this.releaseOpeningChordListener();
     try { if (callback) callback(); } finally { this.close(); }
   }
 
@@ -6739,10 +6794,23 @@ class MailCloseCardModal extends Modal {
     this.settled = true;
     const callback = this.onKeep;
     this.onConfirm = null; this.onKeep = null;
+    this.releaseOpeningChordListener();
     try { if (callback) callback(); } finally { this.close(); }
   }
 
+  releaseOpeningChordListener() {
+    try {
+      const view = mailCloseCardWindow(this);
+      if (this.openingChordKeyupHandler && view && typeof view.removeEventListener === "function") {
+        view.removeEventListener("keyup", this.openingChordKeyupHandler, true);
+      }
+    } catch (_error) {}
+    this.openingChordKeyupHandler = null;
+    if (this.openingChordKeys instanceof Set) this.openingChordKeys.clear();
+  }
+
   onClose() {
+    this.releaseOpeningChordListener();
     if (!this.settled) {
       this.settled = true;
       const callback = this.onKeep;
@@ -6990,10 +7058,16 @@ function mailCloseTargetsFromCloseIdentities(cancelled, completed, sourceWrites)
       const write = sourceWrites instanceof Map ? sourceWrites.get(path) : null;
       if (!path || !write || typeof write.original !== "string") continue;
       const lines = write.original.split(/\r?\n/);
-      let index = Number.isInteger(identity.line) ? identity.line : -1;
-      if (index < 0 || index >= lines.length) {
-        const blockId = normalizeBulletPropertyValue(identity.blockId || "");
-        if (blockId) index = findTaskLineByTrailingBlockId(lines, blockId);
+      const blockId = normalizeBulletPropertyValue(identity && identity.blockId || "");
+      let index = null;
+      if (blockId) {
+        const found = findTaskLineByTrailingBlockId(lines, blockId);
+        if (found === null || found === undefined) continue;
+        index = found;
+      } else {
+        const candidate = Number.isInteger(identity.line) ? identity.line : -1;
+        if (!Number.isInteger(candidate) || candidate < 0 || candidate >= lines.length) continue;
+        index = candidate;
       }
       if (!Number.isInteger(index) || index < 0 || index >= lines.length) continue;
       const lineText = String(lines[index] || "");
@@ -7079,6 +7153,84 @@ async function confirmMailCloseForApp(app, targets, options = {}) {
   } catch (_error) { return { confirmed: false, guarded: true, token: null }; }
 }
 
+function mailCloseTrimLineText(value) {
+  return String(value || "").trim();
+}
+
+function mailCloseConfirmedIdentities(targets) {
+  const list = [];
+  for (const target of Array.isArray(targets) ? targets : []) {
+    if (!target || typeof target !== "object") continue;
+    const path = mailCloseNormalizePath(target.path);
+    const line = Math.floor(Number(target.line));
+    const after = String(target.after || " ").slice(0, 1);
+    const lineText = typeof target.line_text === "string" ? target.line_text
+      : (typeof target.lineText === "string" ? target.lineText : "");
+    if (!path || !Number.isInteger(line) || line < 1) continue;
+    list.push({ p: path, l: line, t: mailCloseTrimLineText(lineText), a: after });
+  }
+  list.sort((a, b) => String(a.p).localeCompare(String(b.p)) || (a.l - b.l) || String(a.a).localeCompare(String(b.a)) || String(a.t).localeCompare(String(b.t)));
+  return list;
+}
+
+function mailCloseEncodeConfirmedToken(guarded, digest) {
+  try {
+    const payload = { d: String(digest || ""), t: mailCloseConfirmedIdentities(guarded) };
+    const json = JSON.stringify(payload);
+    const b64 = typeof Buffer !== "undefined" && typeof Buffer.from === "function"
+      ? Buffer.from(json, "utf8").toString("base64url")
+      : btoa(unescape(encodeURIComponent(json))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    return `mc1.${b64}`;
+  } catch (_error) {
+    return String(digest || "");
+  }
+}
+
+function mailCloseDecodeConfirmedToken(token) {
+  if (typeof token !== "string" || !token) return null;
+  if (token.startsWith("mc1.")) {
+    try {
+      const b64 = token.slice(4);
+      const json = typeof Buffer !== "undefined" && typeof Buffer.from === "function"
+        ? Buffer.from(b64, "base64url").toString("utf8")
+        : decodeURIComponent(escape(atob(b64.replace(/-/g, "+").replace(/_/g, "/"))));
+      const payload = JSON.parse(json);
+      if (payload && typeof payload === "object" && Array.isArray(payload.t)) return payload;
+    } catch (_error) {
+      return null;
+    }
+    return null;
+  }
+  return { d: token, t: null };
+}
+
+function mailCloseTokenCoversTargets(token, guarded, digest) {
+  if (typeof token !== "string" || !token) return false;
+  if (!Array.isArray(guarded) || guarded.length === 0) return true;
+  if (token === String(digest || "")) return true;
+  const decoded = mailCloseDecodeConfirmedToken(token);
+  if (!decoded || !Array.isArray(decoded.t)) return false;
+  const covered = decoded.t;
+  for (const target of guarded) {
+    const path = mailCloseNormalizePath(target.path);
+    const line = Math.floor(Number(target.line));
+    const after = String(target.after || " ").slice(0, 1);
+    const lineText = typeof target.line_text === "string" ? target.line_text
+      : (typeof target.lineText === "string" ? target.lineText : "");
+    const trimmed = mailCloseTrimLineText(lineText);
+    let ok = false;
+    for (const entry of covered) {
+      if (!entry || typeof entry !== "object") continue;
+      if (mailCloseNormalizePath(entry.p) !== path) continue;
+      if (String(entry.a || " ").slice(0, 1) !== after) continue;
+      if (Number(entry.l) === line) { ok = true; break; }
+      if (mailCloseTrimLineText(entry.t) !== "" && mailCloseTrimLineText(entry.t) === trimmed) { ok = true; break; }
+    }
+    if (!ok) return false;
+  }
+  return true;
+}
+
 function createMailCloseGuardApi(plugin) {
   const classify = async (targets) => {
     try {
@@ -7121,9 +7273,12 @@ function createMailCloseGuardApi(plugin) {
             row.mail_title = String(mail.title || "").trim() || row.label;
           }
         }
-        const token = model.digest;
+        const digest = model.digest;
+        const token = mailCloseEncodeConfirmedToken(guarded, digest);
         const passed = options && options.context && options.context.mailCloseConfirmed;
-        if (typeof passed === "string" && passed === token) return { confirmed: true, guarded: true, token };
+        if (typeof passed === "string" && mailCloseTokenCoversTargets(passed, guarded, digest)) {
+          return { confirmed: true, guarded: true, token: passed };
+        }
         return await new Promise((resolve) => {
           let modal;
           const finish = (confirmed) => {
@@ -96413,6 +96568,34 @@ class BobNavigationHotkeysFreshnessDecayMixin {
           line: cardCtx.line,
         },
         onChoose: (action) => {
+          if (action === "drop") {
+            void (async () => {
+              let applied = false;
+              try {
+                applied = await this.applyFreshnessDecayCardChoice(cardCtx, action);
+              } catch (_error) {
+                applied = false;
+              }
+              if (applied === true) {
+                try {
+                  const modal = this.activeFreshnessDecayCard;
+                  this.activeFreshnessDecayCard = null;
+                  if (modal) {
+                    try { modal.settled = true; } catch (_error) {}
+                    if (typeof modal.close === "function") modal.close();
+                  }
+                } catch (_error) {
+                  this.activeFreshnessDecayCard = null;
+                }
+              } else {
+                try {
+                  const modal = this.activeFreshnessDecayCard;
+                  if (modal) modal.dropDispatched = false;
+                } catch (_error) {}
+              }
+            })();
+            return;
+          }
           this.activeFreshnessDecayCard = null;
           void this.applyFreshnessDecayCardChoice(cardCtx, action);
         },

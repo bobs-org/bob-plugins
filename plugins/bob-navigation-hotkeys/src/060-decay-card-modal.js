@@ -66,6 +66,7 @@ class FreshnessDecayCardModal extends Modal {
     this.keepStageActive = false;
     this.keepStage = null;
     this.settled = false;
+    this.dropDispatched = false;
     this.rowEls = [];
     this.rowsEl = null;
   }
@@ -388,6 +389,16 @@ class FreshnessDecayCardModal extends Modal {
     }
     const row = this.decayRows.find((candidate) => candidate && candidate.action === chosenAction);
     if (!row || !row.available) {
+      return;
+    }
+    if (chosenAction === "drop") {
+      if (this.dropDispatched) return;
+      this.dropDispatched = true;
+      try {
+        if (typeof this.onChoose === "function") {
+          this.onChoose(chosenAction);
+        }
+      } catch (_error) {}
       return;
     }
     this.settled = true;

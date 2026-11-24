@@ -1,7 +1,7 @@
 // Property capability routing: session-and-bob-path cache, actual-ownership
 // query, Add file property command wrapper, and owned-scope focus routing
-// (bob-cli-pf.6.1.2). Adapters stay unwired: no test here acquires
-// ownership through a card adapter.
+// (bob-cli-pf.6.1.2); coordinator acquisition and invalidation are covered
+// by test-ledger-tools-property-card-frontmatter-ownership.cjs.
 const assert = require("node:assert/strict");
 const test = require("node:test");
 const Module = require("node:module");

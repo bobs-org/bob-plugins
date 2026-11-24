@@ -66,6 +66,7 @@ class BobLedgerToolsAlbumHeaderMixin {
       ownKeys: (scope, path) => plugin.albumHeaderOwnKeys(scope, path),
       releaseKeys: (scope, path) => plugin.albumHeaderReleaseKeys(scope, path),
       onSetup: () => {
+        try { propertyCardFrontmatterCoordinatorBind?.(plugin, "album"); } catch (_) {}
         if (!(plugin.albumHeaderExpanded instanceof Map)) plugin.albumHeaderExpanded = new Map();
         plugin.albumHeaderUnsubscribe = plugin.apiAlbumSubscribe?.((state) => {
           plugin.albumHeaderLastState = state;
@@ -74,6 +75,7 @@ class BobLedgerToolsAlbumHeaderMixin {
         try { plugin.albumHeaderFootBind?.(); } catch (_) {}
       },
       onDisposeStart: () => {
+        try { propertyCardFrontmatterCoordinatorReleaseKind?.(plugin, "album"); } catch (_) {}
         try { plugin.albumHeaderFootUnbind?.(); } catch (_) {}
         plugin.albumHeaderUnsubscribe?.();
         plugin.albumHeaderUnsubscribe = null;
@@ -325,6 +327,7 @@ class BobLedgerToolsAlbumHeaderMixin {
   // still owned the title.
   albumHeaderRemoveReading(root, scope = root, sourcePath = "") {
     if (!root) return;
+    this.albumHeaderReleaseFrontmatter(scope, sourcePath);
     try { this.albumHeaderTrackFoot?.(scope, sourcePath, null); } catch (_) {}
     this.albumHeaderReleaseAdoption(scope, sourcePath, { preserveFallback: true });
     for (const node of Array.from(root.querySelectorAll?.(`.${ALBUM_HEADER_CLASS}`) || [])) {
@@ -547,6 +550,14 @@ class BobLedgerToolsAlbumHeaderMixin {
     this.albumHeaderRestoreFocus(header, focusKey);
     try { this.albumHeaderTrackFoot?.(scope || root, sourcePath, header); } catch (_) {}
     try { this.albumHeaderEnsureSource?.(sourcePath); } catch (_) {}
+    if (adoption.mode === "slot") {
+      this.albumHeaderOwnMountedFrontmatter(
+        scope, null, sourcePath, header, this.albumHeaderSourceCache?.get?.(sourcePath),
+        reading?.currentPath || (() => ""),
+      );
+    } else {
+      this.albumHeaderReleaseFrontmatter(scope, sourcePath);
+    }
     // Owned Properties rows (record) hide only once the report body paints.
     if (card.body) this.albumHeaderOwnKeys(scope, sourcePath);
     else this.albumHeaderReleaseKeys(scope, sourcePath);
@@ -582,6 +593,29 @@ class BobLedgerToolsAlbumHeaderMixin {
     }
   }
 
+  albumHeaderOwnMountedFrontmatter(scope, view, path, mount, sourceText, currentPath) {
+    if (typeof propertyCardFrontmatterOwnMounted !== "function") return null;
+    const sourceFor = () => {
+      if (view?.state?.doc && typeof view.state.doc.toString === "function") return view.state.doc.toString();
+      return this.albumHeaderSourceCache?.get?.(albumHeaderPath(path));
+    };
+    const current = () => {
+      const text = sourceFor();
+      return Boolean(text && this.albumHeaderCardModelFor(path, this.albumHeaderState(), text));
+    };
+    return propertyCardFrontmatterOwnMounted(this, {
+      scope, view: view?.dom === scope ? view : null, path, kind: "album", mount,
+      sourceText, getSource: sourceFor, currentPath, isCurrent: current,
+      active: () => this.albumHeaderActive === true,
+    });
+  }
+
+  albumHeaderReleaseFrontmatter(scope, path = "") {
+    try {
+      return propertyCardFrontmatterReleaseMounted?.(scope, { plugin: this, kind: "album", path }) || false;
+    } catch (_) { return false; }
+  }
+
   // Patch a slot-mounted Live Preview card outside the CodeMirror update.
   albumHeaderPatchLive(view, adopted, fresh, signature) {
     const target = adopted.node;
@@ -602,6 +636,7 @@ class BobLedgerToolsAlbumHeaderMixin {
       if (!Decoration || !RangeSetBuilder || !WidgetType) return Decoration?.none || null;
       const path = this.albumHeaderLivePath(view);
       if (!path || !view?.state?.doc) {
+        this.albumHeaderReleaseFrontmatter(view?.dom);
         this.albumHeaderSetEditorScope(view, false);
         this.albumHeaderReleaseKeys(view?.dom);
         this.albumHeaderReleaseAdoption(view?.dom);
@@ -613,6 +648,7 @@ class BobLedgerToolsAlbumHeaderMixin {
       const card = this.albumHeaderCardModelFor(path, state, text);
       this.albumHeaderSetEditorScope(view, Boolean(card));
       if (!card) {
+        this.albumHeaderReleaseFrontmatter(view?.dom, path);
         try { this.albumHeaderTrackFoot?.(view?.dom, path, null); } catch (_) {}
         this.albumHeaderReleaseKeys(view?.dom);
         this.albumHeaderReleaseAdoption(view?.dom);
@@ -627,6 +663,7 @@ class BobLedgerToolsAlbumHeaderMixin {
       if (!header || albumHeaderNodeSignatures.get(header) !== signature) {
         const fresh = this.albumHeaderBuildEl(card, options, doc);
         if (!fresh) {
+          this.albumHeaderReleaseFrontmatter(view?.dom, path);
           try { this.albumHeaderTrackFoot?.(view?.dom, path, null); } catch (_) {}
           this.albumHeaderReleaseKeys(view?.dom);
           this.albumHeaderReleaseAdoption(view?.dom);
@@ -652,9 +689,15 @@ class BobLedgerToolsAlbumHeaderMixin {
       if (card.body) this.albumHeaderOwnKeys(view?.dom, path);
       else this.albumHeaderReleaseKeys(view?.dom, path);
       try { this.albumHeaderTrackFoot?.(view?.dom, path, header); } catch (_) {}
-      if (adoption.mode === "slot") return Decoration.none;
+      if (adoption.mode === "slot") {
+        this.albumHeaderOwnMountedFrontmatter(
+          view.dom, view, path, header, text, () => this.albumHeaderLivePath(view) || "",
+        );
+        return Decoration.none;
+      }
 
       // Fallback: today's inline widget at the end of the first `# ` line.
+      const plugin = this;
       const anchor = this.notebookHeaderLiveAnchor?.(text) ?? -1;
       const frontmatterEnd = this.notebookHeaderFrontmatterEnd?.(text) ?? -1;
       const widget = new class extends WidgetType {
@@ -667,6 +710,16 @@ class BobLedgerToolsAlbumHeaderMixin {
         toDOM() {
           header.setAttribute?.("data-cm-widget", "true");
           header.setAttribute?.("data-album-source", path);
+          propertyCardFrontmatterOwnMountedDeferred?.(plugin, {
+            scope: view.dom, view, path, kind: "album", mount: header, sourceText: text,
+            getSource: () => view?.state?.doc?.toString?.() || "",
+            currentPath: () => plugin.albumHeaderLivePath(view) || "",
+            active: () => plugin.albumHeaderActive === true,
+            isCurrent: () => {
+              const source = view?.state?.doc?.toString?.() || "";
+              return Boolean(source && plugin.albumHeaderCardModelFor(path, plugin.albumHeaderState(), source));
+            },
+          });
           return header;
         }
       }();
@@ -685,6 +738,7 @@ class BobLedgerToolsAlbumHeaderMixin {
       builder.add(at, at, Decoration.widget({ widget, side }));
       return builder.finish();
     } catch (_) {
+      this.albumHeaderReleaseFrontmatter(view?.dom);
       return Decoration?.none || null;
     }
   }
@@ -704,6 +758,7 @@ class BobLedgerToolsAlbumHeaderMixin {
   }
 
   albumHeaderCleanEditor(view) {
+    this.albumHeaderReleaseFrontmatter(view?.dom);
     try { this.albumHeaderTrackFoot?.(view?.dom, this.albumHeaderLivePath(view), null); } catch (_) {}
     this.albumHeaderReleaseAdoption(view?.dom);
     this.albumPropertyCardHost().cleanEditor(view, {

@@ -444,6 +444,161 @@ test("propertyCardOwnFrontmatter dispatches by scope", () => {
   defer.flush();
 });
 
+test("source/cache evidence requires a closed duplicate-free matching mapping", () => {
+  const parse = (yaml) => Object.fromEntries(String(yaml).split(/\r?\n/).filter(Boolean).map((line) => {
+    const index = line.indexOf(":");
+    return [line.slice(0, index).trim(), line.slice(index + 1).trim()];
+  }));
+  const source = "---\ntype: album\nsummary: Reading\n---\n# Album\n";
+  assert.equal(H.propertyCardFrontmatterCacheEvidence(source, { type: "album", summary: "Reading", position: { start: 0, end: 4 } }, parse), true);
+  assert.equal(H.propertyCardFrontmatterCacheEvidence(source, { type: "album", summary: "stale" }, parse), false);
+  assert.equal(H.propertyCardFrontmatterCacheEvidence("---\ntype: album\n", { type: "album" }, parse), false);
+  assert.equal(H.propertyCardFrontmatterCacheEvidence("---\ntype: album\ntype: record\n---\n", { type: "record" }, parse), false);
+  assert.equal(H.propertyCardFrontmatterCacheEvidence("# no frontmatter\n", {}, parse), false);
+});
+
+test("mounted card ownership is capability and source gated, then releases on cache invalidation", () => {
+  const callbacks = new Map();
+  const metadataCache = {
+    getFileCache: () => ({ frontmatter: { type: "album", summary: "Reading" } }),
+    on(name, callback) {
+      const list = callbacks.get(name) || [];
+      list.push(callback);
+      callbacks.set(name, list);
+      return { name, callback };
+    },
+  };
+  const plugin = new TestPlugin({
+    workspace: { getLeavesOfType: () => [], on: () => ({}) },
+    vault: { getAbstractFileByPath: (path) => ({ path }), on: () => ({}) },
+    metadataCache,
+  });
+  plugin.propertyCapabilityRoutingReady = () => true;
+  plugin.propertyCapabilityCurrentBobKey = () => "bob:/usr/bin/bob";
+  plugin.propertyCapabilityConfirmed = (key) => key === "bob:/usr/bin/bob";
+  const fx = readingFixture();
+  const mount = el(fx.doc, "section", "bob-album-header bob-property-card");
+  mount.setAttribute("data-album-source", "note.md");
+  mount.appendChild(el(fx.doc, "footer", "bob-property-card-foot"));
+  fx.scope.appendChild(mount);
+  const view = { file: { path: "note.md" }, getMode: () => "preview" };
+  const sourceText = "---\ntype: album\nsummary: Reading\n---\n# Album\n";
+  const parse = (yaml) => Object.fromEntries(String(yaml).split(/\r?\n/).filter(Boolean).map((line) => {
+    const index = line.indexOf(":");
+    return [line.slice(0, index).trim(), line.slice(index + 1).trim()];
+  }));
+  H.propertyCardFrontmatterCoordinatorBind(plugin, "album");
+  const release = H.propertyCardFrontmatterOwnMounted(plugin, {
+    scope: fx.scope, view, path: "note.md", kind: "album", mount, sourceText,
+    currentPath: () => view.file.path,
+    active: () => true,
+    parseYaml: parse,
+  });
+  assert.equal(typeof release, "function");
+  assert.ok(fx.scope.classList.contains(OWNS));
+  assert.ok(owned(fx.container));
+
+  for (const callback of callbacks.get("changed") || []) callback({ path: "note.md" });
+  assert.ok(!fx.scope.classList.contains(OWNS), "metadata invalidation releases ownership synchronously");
+  assert.ok(native(fx.container));
+
+  metadataCache.getFileCache = () => ({ frontmatter: { type: "album", summary: "stale" } });
+  assert.equal(H.propertyCardFrontmatterOwnMounted(plugin, {
+    scope: fx.scope, view, path: "note.md", kind: "album", mount, sourceText,
+    currentPath: () => view.file.path,
+    active: () => true,
+    parseYaml: parse,
+  }), null, "source/cache skew fails open");
+  assert.ok(native(fx.container));
+});
+
+test("supported card kinds own independent panes; replacement, stale release, and unload are generation safe", () => {
+  const frontmatterByPath = new Map();
+  const callbacks = new Map();
+  const metadataCache = {
+    getFileCache: (file) => ({ frontmatter: frontmatterByPath.get(file?.path) || null }),
+    on(name, callback) {
+      const list = callbacks.get(name) || [];
+      list.push(callback);
+      callbacks.set(name, list);
+      return { name, callback };
+    },
+  };
+  const plugin = new TestPlugin({
+    workspace: { getLeavesOfType: () => [], on: () => ({}) },
+    vault: { getAbstractFileByPath: (path) => ({ path }), on: () => ({}) },
+    metadataCache,
+  });
+  plugin.propertyCapabilityRoutingReady = () => true;
+  plugin.propertyCapabilityCurrentBobKey = () => "bob:/usr/bin/bob";
+  plugin.propertyCapabilityConfirmed = () => true;
+  const parse = (yaml) => Object.fromEntries(String(yaml).split(/\r?\n/).filter(Boolean).map((line) => {
+    const index = line.indexOf(":");
+    return [line.slice(0, index).trim(), line.slice(index + 1).trim()];
+  }));
+  const mountFor = (doc, scope, kind, path) => {
+    const cls = kind === "album" ? "bob-album-header" : kind === "record" ? "bob-record-sheet" : "bob-intention-card";
+    const attr = kind === "album" ? "data-album-source" : kind === "record" ? "data-record-source" : "data-intention-source";
+    const mount = el(doc, "section", `${cls} bob-property-card`);
+    mount.setAttribute(attr, path);
+    mount.appendChild(el(doc, "footer", "bob-property-card-foot"));
+    scope.appendChild(mount);
+    return mount;
+  };
+  const acquire = (scope, view, mount, kind, path, sourceText) => H.propertyCardFrontmatterOwnMounted(plugin, {
+    scope, view, mount, kind, path, sourceText,
+    currentPath: () => view.file.path,
+    active: () => true,
+    parseYaml: parse,
+  });
+  const records = [];
+  for (const kind of ["album", "record", "day", "week", "quarter", "year"]) {
+    const path = `${kind}.md`;
+    const sourceText = `---\ntype: ${kind}\n---\n`;
+    frontmatterByPath.set(path, { type: kind });
+    const fx = readingFixture();
+    const view = { file: { path }, getMode: () => "preview" };
+    const mount = mountFor(fx.doc, fx.scope, kind, path);
+    const release = acquire(fx.scope, view, mount, kind, path, sourceText);
+    assert.equal(typeof release, "function", `${kind} can own after its card and foot mount`);
+    assert.ok(fx.scope.classList.contains(OWNS));
+    records.push({ fx, view, mount, release, kind, path, sourceText });
+  }
+
+  const panes = [readingFixture(), readingFixture()];
+  const path = "same.md";
+  const sourceText = "---\ntype: album\n---\n";
+  frontmatterByPath.set(path, { type: "album" });
+  const paneReleases = panes.map((fx) => {
+    const view = { file: { path }, getMode: () => "preview" };
+    return acquire(fx.scope, view, mountFor(fx.doc, fx.scope, "album", path), "album", path, sourceText);
+  });
+  assert.ok(paneReleases.every((release) => typeof release === "function"), "two panes of one note are independent owners");
+  paneReleases[0]();
+  assert.ok(!panes[0].scope.classList.contains(OWNS));
+  assert.ok(panes[1].scope.classList.contains(OWNS));
+
+  const first = records.find((record) => record.kind === "day");
+  const oldRelease = first.release;
+  first.fx.scope.removeChild(first.mount);
+  const replacement = mountFor(first.fx.doc, first.fx.scope, "day", first.path);
+  const newRelease = acquire(first.fx.scope, first.view, replacement, "day", first.path, first.sourceText);
+  assert.equal(typeof newRelease, "function", "a replacement mount reacquires under a new generation");
+  oldRelease();
+  assert.ok(first.fx.scope.classList.contains(OWNS), "an old release cannot clear the replacement owner");
+  H.propertyCardFrontmatterCoordinatorReconcile(plugin);
+  assert.ok(first.fx.scope.classList.contains(OWNS));
+
+  for (const kind of ["album", "record", "day", "week", "quarter", "year"]) {
+    H.propertyCardFrontmatterCoordinatorReleaseKind(plugin, kind);
+  }
+  for (const record of records) {
+    assert.ok(!record.fx.scope.classList.contains(OWNS), `${record.kind} unload releases its scopes`);
+    assert.ok(native(record.fx.container));
+  }
+  assert.ok(!panes[1].scope.classList.contains(OWNS));
+});
+
 test("host register installs the field once; teardown releaseAll is exported", () => {
   const plugin = new TestPlugin({ workspace: { getLeavesOfType: () => [], on: () => ({}) } });
   const field = H.propertyCardFrontmatterOwnershipExtension();

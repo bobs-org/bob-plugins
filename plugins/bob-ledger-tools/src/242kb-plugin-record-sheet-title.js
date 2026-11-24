@@ -37,6 +37,32 @@ class BobLedgerToolsRecordSheetTitleMixin {
     }
   }
 
+  recordSheetOwnMountedFrontmatter(scope, view, path, mount, sourceText, currentPath) {
+    if (typeof propertyCardFrontmatterOwnMounted !== "function") return null;
+    const key = recordSheetPath(path);
+    const sourceFor = () => {
+      if (view?.state?.doc && typeof view.state.doc.toString === "function") return view.state.doc.toString();
+      return this.recordSheetSourceCache?.get?.(key);
+    };
+    const current = () => {
+      const text = sourceFor();
+      return Boolean(text && this.recordSheetCardModelFor(key, text));
+    };
+    return propertyCardFrontmatterOwnMounted(this, {
+      scope, view: view?.dom === scope ? view : null, path: key, kind: "record", mount,
+      sourceText, getSource: sourceFor, currentPath, isCurrent: current,
+      active: () => this.recordSheetActive === true,
+    });
+  }
+
+  recordSheetReleaseFrontmatter(scope, path = "") {
+    try {
+      return propertyCardFrontmatterReleaseMounted?.(scope, {
+        plugin: this, kind: "record", path,
+      }) || false;
+    } catch (_) { return false; }
+  }
+
   recordSheetReleaseAdoption(scope, sourcePath = "", options = {}) {
     try { return propertyCardAdoptRelease(scope, sourcePath || undefined, "record", options); } catch (_) { return false; }
   }
@@ -78,6 +104,7 @@ class BobLedgerToolsRecordSheetTitleMixin {
 
   recordSheetRemoveReading(root, scope = root, sourcePath = "") {
     if (!root) return;
+    this.recordSheetReleaseFrontmatter(scope, sourcePath);
     this.recordSheetReleaseAdoption(scope, sourcePath, { preserveFallback: true });
     try {
       if (typeof propertyCardFootReleaseScope === "function") {
@@ -187,6 +214,9 @@ class BobLedgerToolsRecordSheetTitleMixin {
       root?.classList?.remove?.(RECORD_SHEET_HIDES_CLASS);
     }
     this.recordSheetSetNativeProperties(scope, card.body);
+    this.recordSheetOwnMountedFrontmatter(
+      scope, null, sourcePath, sheet, sourceText, reading?.currentPath || (() => ""),
+    );
     this.recordSheetNotifyOwnership();
     return sheet;
   }

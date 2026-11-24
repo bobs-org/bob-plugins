@@ -98,6 +98,7 @@ class BobLedgerToolsIntentionCardMixin {
   }
 
   intentionCardOnSetup() {
+    try { propertyCardFrontmatterCoordinatorBind?.(this, "day"); } catch (_) {}
     this.intentionCardEnsureMaps();
     try { this.intentionCardFootBind?.(); } catch (_) {}
     this.intentionCardDay = this.intentionCardToday();
@@ -136,6 +137,9 @@ class BobLedgerToolsIntentionCardMixin {
   }
 
   intentionCardOnDisposeStart() {
+    for (const kind of ["day", "week", "quarter", "year"]) {
+      try { propertyCardFrontmatterCoordinatorReleaseKind?.(this, kind); } catch (_) {}
+    }
     try { this.intentionCardFootUnbind?.(); } catch (_) {}
     try { this.intentionCardSlotReleaseAll?.(); } catch (_) {}
     if (this.intentionCardMidnightTimer != null) {

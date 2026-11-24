@@ -143,6 +143,7 @@ class BobLedgerToolsRecordWalkRailMixin {
       const live = this.recordSheetLivePreview(view);
       const path = live ? this.recordSheetLivePath(view) : null;
       if (!live || !view?.state?.doc) {
+        this.recordSheetReleaseFrontmatter?.(view?.dom);
         this.recordSheetSetEditorScope(view, false);
         this.recordSheetReleaseAdoption?.(view?.dom);
         this.recordSheetEditorCache?.delete?.(view);
@@ -150,6 +151,7 @@ class BobLedgerToolsRecordWalkRailMixin {
       }
       const previous = this.recordSheetEditorCache?.get?.(view);
       if (!path) {
+        this.recordSheetReleaseFrontmatter?.(view?.dom);
         const adopted = propertyCardAdoptedEntry(view.dom);
         if (adopted && adopted.mode === "slot") return previous?.decorations || Decoration.none;
         this.recordSheetSetEditorScope(view, false);
@@ -200,7 +202,10 @@ class BobLedgerToolsRecordWalkRailMixin {
         ? this.recordSheetCardModelFor(path, text) : null;
       const walk = card?.body?.walk || this.recordWalkFor(path, text);
       this.recordSheetSetEditorScope(view, Boolean(card));
-      if (!card) this.recordSheetReleaseAdoption?.(view?.dom, path);
+      if (!card) {
+        this.recordSheetReleaseFrontmatter?.(view?.dom, path);
+        this.recordSheetReleaseAdoption?.(view?.dom, path);
+      }
       if (!card && !recordWalkHasRail(walk)) {
         this.recordSheetEditorCache?.delete?.(view);
         this.recordSheetNotifyOwnership();
@@ -215,12 +220,25 @@ class BobLedgerToolsRecordWalkRailMixin {
       const doc = recordSheetDomDoc(view.dom);
       const options = this.recordWalkOptions(path, card?.body);
       const albumPath = card?.identity?.albumPath || walk?.albumPath || "";
+      const plugin = this;
       const widgetFor = (element, kind, signature) => new class extends WidgetType {
         constructor() { super(); this.path = path; this.signature = signature; this.kind = kind; }
         eq(other) { return other?.path === path && other.signature === signature && other.kind === kind; }
         toDOM() {
           element.setAttribute("data-cm-widget", "true");
           element.setAttribute("data-record-source", path);
+          if (kind === "sheet" || kind === "dock") {
+            propertyCardFrontmatterOwnMountedDeferred?.(plugin, {
+              scope: view.dom, view, path, kind: "record", mount: element, sourceText: text,
+              getSource: () => view?.state?.doc?.toString?.() || "",
+              currentPath: () => plugin.recordSheetLivePath(view) || propertyCardLiveCurrentPath(view) || "",
+              active: () => plugin.recordSheetActive === true,
+              isCurrent: () => {
+                const source = view?.state?.doc?.toString?.() || "";
+                return Boolean(source && plugin.recordSheetCardModelFor(path, source));
+              },
+            });
+          }
           return element;
         }
       }();
@@ -244,6 +262,7 @@ class BobLedgerToolsRecordWalkRailMixin {
       };
 
       if (!card) {
+        this.recordSheetReleaseFrontmatter?.(view?.dom, path);
         const signature = JSON.stringify(["rail-only", recordSheetWalkSignature(walk), Boolean(reveal), line?.from, line?.to]);
         const rows = [];
         if (line && !reveal) {
@@ -279,6 +298,7 @@ class BobLedgerToolsRecordWalkRailMixin {
       if (!header || recordSheetNodeSignatures.get(header) !== cardSignature) {
         const fresh = this.recordSheetBuildMounted(card, options, doc, { walk, includeRail, footSpec: footExtra.footSpec });
         if (!fresh) {
+          this.recordSheetReleaseFrontmatter?.(view?.dom, path);
           this.recordSheetReleaseAdoption?.(view?.dom, path);
           this.recordSheetEditorCache?.delete?.(view);
           this.recordSheetNotifyOwnership();
@@ -308,6 +328,9 @@ class BobLedgerToolsRecordWalkRailMixin {
           if (rail) rows.push({ from: line.from, to: line.to, decoration: Decoration.replace({ widget: widgetFor(rail, "walk", slotSignature) }) });
         }
         try { this.recordSheetTrackFoot(view.dom, path, header); } catch (_) {}
+        this.recordSheetOwnMountedFrontmatter?.(
+          view.dom, view, path, header, text, () => this.recordSheetLivePath(view) || propertyCardLiveCurrentPath(view) || "",
+        );
         return cacheAndFinish(rows, slotSignature, card.body || null, true);
       }
 
@@ -332,6 +355,7 @@ class BobLedgerToolsRecordWalkRailMixin {
       }
     } catch (_) {
       this._recordSheetDecorating = false;
+      this.recordSheetReleaseFrontmatter?.(view?.dom);
       return Decoration?.none || null;
     }
   }

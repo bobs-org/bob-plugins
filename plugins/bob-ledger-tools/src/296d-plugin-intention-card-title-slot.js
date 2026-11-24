@@ -112,6 +112,11 @@ class BobLedgerToolsIntentionCardTitleSlotMixin {
   // Slot handle, title handle, keys, and render component. Never onLost.
   intentionCardSlotTeardown(entry) {
     if (!entry) return;
+    try {
+      propertyCardFrontmatterReleaseMounted?.(entry.scope, {
+        plugin: this, kind: entry.kind || "", path: entry.path,
+      });
+    } catch (_) {}
     try { entry.slotRelease?.(); } catch (_) {}
     try { entry.titleRelease?.(); } catch (_) {}
     entry.slotRelease = null;
@@ -151,6 +156,9 @@ class BobLedgerToolsIntentionCardTitleSlotMixin {
   }
 
   intentionCardSlotMarkFallback(scope, mode, path) {
+    try {
+      propertyCardFrontmatterReleaseMounted?.(scope, { plugin: this, kinds: ["day", "week", "quarter", "year"] });
+    } catch (_) {}
     const entry = {
       scope, mode, path: intentionCardFilePath(path), signature: "", node: null, slotRelease: null,
       titleRelease: null, titleKey: "", titlePath: "", fallback: true, generation: this.intentionCardSlotNextGeneration(),
@@ -229,15 +237,21 @@ class BobLedgerToolsIntentionCardTitleSlotMixin {
     const mounted = typeof propertyCardTitleSlotMountedNode === "function" ? propertyCardTitleSlotMountedNode(scope) : null;
     if (existing && !existing.fallback && existing.path === path && existing.mode === mode
       && existing.signature === signature && existing.node && mounted === existing.node) {
+      existing.currentPath = typeof options.currentPath === "function" ? options.currentPath : null;
+      existing.view = mode === "live" ? view : null;
+      existing.kind = model.kind;
       this.intentionCardSlotOwnTitle(existing, view, prepared.recognizer);
       this.intentionCardCommitKeys(scope, path, model);
       try { this.intentionCardTrackFoot?.(scope, path, existing.node); } catch (_) {}
+      this.intentionCardOwnMountedFrontmatter(existing);
       return existing.node;
     }
     const generation = this.intentionCardSlotNextGeneration();
     const entry = {
       scope, mode, path, signature, node: null, slotRelease: null,
       titleRelease: null, titleKey: "", titlePath: "", fallback: false, generation,
+      view: mode === "live" ? view : null, kind: model.kind,
+      currentPath: typeof options.currentPath === "function" ? options.currentPath : null,
     };
     if (existing && !existing.fallback && existing.path === path && existing.mode === mode) {
       entry.titleRelease = existing.titleRelease;
@@ -281,7 +295,23 @@ class BobLedgerToolsIntentionCardTitleSlotMixin {
     this.intentionCardSlotOwnTitle(entry, view, prepared.recognizer);
     this.intentionCardCommitKeys(scope, path, model);
     try { this.intentionCardTrackFoot?.(scope, path, entry.node); } catch (_) {}
+    this.intentionCardOwnMountedFrontmatter(entry);
     return entry.node;
+  }
+
+  intentionCardOwnMountedFrontmatter(entry) {
+    if (!entry || entry.fallback || typeof propertyCardFrontmatterOwnMounted !== "function") return null;
+    const sourceFor = () => {
+      const source = this.intentionCardFootSource?.(entry.path);
+      return typeof source?.source === "string" ? source.source : undefined;
+    };
+    return propertyCardFrontmatterOwnMounted(this, {
+      scope: entry.scope, view: entry.view || null, path: entry.path,
+      kind: entry.kind, mount: entry.node, getSource: sourceFor,
+      currentPath: entry.currentPath || (() => entry.view?.file?.path || ""),
+      active: () => this.intentionCardActive === true,
+      isCurrent: () => typeof sourceFor() === "string",
+    });
   }
 
   // The primitive lost the slot. Only the current generation counts: drop
@@ -350,6 +380,7 @@ class BobLedgerToolsIntentionCardTitleSlotMixin {
   }
 
   intentionCardLiveRelease(view) {
+    try { propertyCardFrontmatterReleaseMounted?.(view?.dom, { plugin: this, kinds: ["day", "week", "quarter", "year"] }); } catch (_) {}
     try { this.intentionCardHost().setEditorScope(view, false); } catch (_) {}
     try { this.intentionCardTrackFoot?.(view?.dom, this.intentionCardLivePath(view), null); } catch (_) {}
     this.intentionCardSlotRelease(view?.dom);
@@ -358,6 +389,7 @@ class BobLedgerToolsIntentionCardTitleSlotMixin {
 
   // Body fallback: today's widget, with keys owned only while content exists.
   intentionCardFallbackDecorations(view, path, source, prepared) {
+    try { propertyCardFrontmatterReleaseMounted?.(view?.dom, { plugin: this, kinds: ["day", "week", "quarter", "year"] }); } catch (_) {}
     const plugin = this;
     const anchor = this.intentionCardLiveAnchor(source, prepared.subject);
     const doc = view.dom?.ownerDocument || (typeof document !== "undefined" ? document : null);
@@ -442,6 +474,7 @@ class BobLedgerToolsIntentionCardTitleSlotMixin {
   }
 
   intentionCardCleanEditor(view) {
+    try { propertyCardFrontmatterReleaseMounted?.(view?.dom, { plugin: this, kinds: ["day", "week", "quarter", "year"] }); } catch (_) {}
     this.intentionCardHost().cleanEditor(view);
     this.intentionCardSlotRelease(view?.dom);
     this.intentionCardRelease(view?.dom);
@@ -498,6 +531,7 @@ class BobLedgerToolsIntentionCardTitleSlotMixin {
   // Today's body layout: after the H1 and nav sections, or prepended inside
   // the first content section of a note without an H1. No title ownership.
   intentionCardPaintReadingBody(root, scope, sourcePath, prepared) {
+    try { propertyCardFrontmatterReleaseMounted?.(scope, { plugin: this, kinds: ["day", "week", "quarter", "year"], path: sourcePath }); } catch (_) {}
     this.intentionCardRemoveNodes(root, sourcePath);
     const noHeading = prepared.placement && prepared.placement.headingLine < 0;
     const anchor = noHeading ? intentionCardDomFirstSection(root)
@@ -530,6 +564,7 @@ class BobLedgerToolsIntentionCardTitleSlotMixin {
   // Remove every display this scope holds for the path: slot entry (title and
   // keys with it), body cards, and keys.
   intentionCardReadingDrop(root, scope, sourcePath = "") {
+    try { propertyCardFrontmatterReleaseMounted?.(scope, { plugin: this, kinds: ["day", "week", "quarter", "year"], path: sourcePath }); } catch (_) {}
     try { this.intentionCardTrackFoot?.(scope, sourcePath, null); } catch (_) {}
     this.intentionCardSlotRelease(scope, { path: sourcePath });
     this.intentionCardRemoveNodes(root, sourcePath);

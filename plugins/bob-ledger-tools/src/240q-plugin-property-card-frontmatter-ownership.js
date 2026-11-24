@@ -1,4 +1,6 @@
-// Property-card kit: whole-container frontmatter ownership (unwired).
+// Property-card kit: whole-container frontmatter ownership. Production
+// adapters acquire through the mount coordinator below, after card and foot
+// mounts succeed and source/cache/capability evidence is current.
 // propertyCardOwnFrontmatter(scope, { path, view }) adds
 // bob-property-card-owns-frontmatter to the view scope. Kit CSS sets
 // Obsidian's --metadata-display-editing / --metadata-display-reading to
@@ -8,7 +10,8 @@
 // Preview uses a lazy StateField plus editorAttributes (modeled on 240i);
 // Reading uses a generation-bound class. Ownership drops on release, a
 // newer owner, Source mode, a file change, plugin disable, or unload.
-// Never throws. Adapters must not call this yet (takeover wires it).
+// Never throws. Adapters must use the coordinator rather than call this
+// directly so invalidation and generation-bound cleanup stay shared.
 const PROPERTY_CARD_OWNS_FRONTMATTER_CLASS = "bob-property-card-owns-frontmatter";
 const PROPERTY_CARD_FRONTMATTER_REGISTERED_FLAG = "_propertyCardFrontmatterOwnershipRegistered";
 const PROPERTY_CARD_FRONTMATTER_OWNS_ATTRS = Object.freeze({ class: PROPERTY_CARD_OWNS_FRONTMATTER_CLASS });
@@ -160,6 +163,12 @@ function propertyCardFrontmatterPaintScope(scope, entry) {
 function propertyCardFrontmatterSyncEditor(view) {
   try {
     if (!view?.dom) return;
+    const mounted = propertyCardFrontmatterMountOwners.get(view.dom);
+    if (mounted && !propertyCardFrontmatterRecordEligible(mounted.plugin, mounted.options)) {
+      propertyCardFrontmatterReleaseMounted(view.dom, {
+        plugin: mounted.plugin, kind: mounted.kind, path: mounted.path,
+      });
+    }
     const value = propertyCardFrontmatterStateField(view.state, propertyCardFrontmatterFieldType);
     const entry = propertyCardFrontmatterEditorOwners.get(view);
     if (value?.owner && entry && !entry.released && value.owner.generation === entry.generation) {
@@ -350,6 +359,13 @@ function propertyCardOwnFrontmatterInReading(scope, options = {}) {
       if (Observer) {
         entry.observer = new Observer(() => {
           if (propertyCardFrontmatterReadingOwners.get(scope) !== entry) return;
+          const mounted = propertyCardFrontmatterMountOwners.get(scope);
+          if (mounted && !propertyCardFrontmatterRecordEligible(mounted.plugin, mounted.options)) {
+            propertyCardFrontmatterReleaseMounted(scope, {
+              plugin: mounted.plugin, kind: mounted.kind, path: mounted.path,
+            });
+            return;
+          }
           propertyCardFrontmatterPaintScope(scope, entry);
         });
         entry.observer.observe(scope, { childList: true, subtree: true });
@@ -381,6 +397,309 @@ function propertyCardOwnFrontmatter(scope, options = {}) {
     if (scope?.classList?.contains("markdown-preview-view")) return propertyCardOwnFrontmatterInReading(scope, options);
   } catch (_) {}
   return null;
+}
+
+const propertyCardFrontmatterMountOwners = new Map();
+const propertyCardFrontmatterCoordinatorBindings = new WeakMap();
+let propertyCardFrontmatterMountGeneration = 0;
+
+function propertyCardFrontmatterStableValue(value) {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? { invalidDate: true } : { date: value.toISOString() };
+  }
+  if (Array.isArray(value)) return value.map(propertyCardFrontmatterStableValue);
+  if (value && typeof value === "object") {
+    const out = {};
+    for (const key of Object.keys(value).sort()) out[key] = propertyCardFrontmatterStableValue(value[key]);
+    return out;
+  }
+  return value;
+}
+
+// Source must contain one closed, duplicate-free YAML mapping whose parsed
+// keys and values match the current note's metadata cache. Obsidian's
+// synthetic frontmatter position is excluded from the cache comparison.
+function propertyCardFrontmatterCacheEvidence(sourceText, cachedFrontmatter, parser = parseYaml) {
+  try {
+    if (typeof sourceText !== "string" || !cachedFrontmatter
+      || typeof cachedFrontmatter !== "object" || Array.isArray(cachedFrontmatter)) return false;
+    if (typeof propertyCardScanFrontmatter !== "function"
+      || typeof propertyCardInventoryParserResult !== "function") return false;
+    const scan = propertyCardScanFrontmatter(sourceText);
+    if (scan?.state !== "closed") return false;
+    const duplicates = typeof propertyCardInventoryTopLevelDuplicates === "function"
+      ? propertyCardInventoryTopLevelDuplicates(scan.entries || []) : [];
+    if (duplicates.length) return false;
+    if (typeof parser !== "function") return false;
+    const parsed = propertyCardInventoryParserResult(parser, scan.yaml);
+    if (!parsed?.ok || parsed.duplicateOnly === true) return false;
+    const source = parsed.value && typeof parsed.value === "object" && !Array.isArray(parsed.value)
+      ? parsed.value : {};
+    const sourceKeys = Object.keys(source).sort();
+    const cacheKeys = typeof propertyCardInventoryCacheKeys === "function"
+      ? propertyCardInventoryCacheKeys(cachedFrontmatter).sort()
+      : Object.keys(cachedFrontmatter).filter((key) => key !== "position").sort();
+    if (sourceKeys.length !== cacheKeys.length
+      || sourceKeys.some((key, index) => key !== cacheKeys[index])) return false;
+    return JSON.stringify(propertyCardFrontmatterStableValue(source))
+      === JSON.stringify(propertyCardFrontmatterStableValue(Object.fromEntries(
+        cacheKeys.map((key) => [key, cachedFrontmatter[key]]),
+      )));
+  } catch (_) {
+    return false;
+  }
+}
+
+function propertyCardFrontmatterMarkdownViewFor(app, scope) {
+  try {
+    for (const leaf of app?.workspace?.getLeavesOfType?.("markdown") || []) {
+      const view = leaf?.view;
+      const preview = view?.previewMode?.containerEl;
+      if (scope && preview && (preview === scope || preview.contains?.(scope))) return view;
+    }
+  } catch (_) {}
+  return null;
+}
+
+function propertyCardFrontmatterScopeMode(scope) {
+  if (scope?.classList?.contains?.("cm-editor")) return "live";
+  if (scope?.classList?.contains?.("markdown-preview-view")) return "reading";
+  return "";
+}
+
+function propertyCardFrontmatterCurrentPath(view, options = {}) {
+  try {
+    if (typeof options.currentPath === "function") return String(options.currentPath() || "");
+    if (typeof options.currentPath === "string") return options.currentPath;
+    if (propertyCardFrontmatterScopeMode(options.scope) === "live") {
+      const info = view?.state?.field?.(editorInfoField, false);
+      return String(info?.file?.path || "");
+    }
+    return String(view?.file?.path || "");
+  } catch (_) {
+    return "";
+  }
+}
+
+function propertyCardFrontmatterCacheFor(plugin, path) {
+  try {
+    const file = plugin?.app?.vault?.getAbstractFileByPath?.(path);
+    if (!file || String(file.path || "").replace(/\\/g, "/") !== path) return null;
+    const cache = plugin.app?.metadataCache?.getFileCache?.(file);
+    const frontmatter = cache?.frontmatter;
+    return frontmatter && typeof frontmatter === "object" && !Array.isArray(frontmatter)
+      ? frontmatter : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function propertyCardFrontmatterCapabilityReady(plugin) {
+  try {
+    if (typeof plugin?.propertyCapabilityRoutingReady !== "function"
+      || plugin.propertyCapabilityRoutingReady() !== true) return false;
+    if (typeof plugin.propertyCapabilityCurrentBobKey !== "function"
+      || typeof plugin.propertyCapabilityConfirmed !== "function") return false;
+    const key = plugin.propertyCapabilityCurrentBobKey();
+    return Boolean(key) && plugin.propertyCapabilityConfirmed(key) === true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function propertyCardFrontmatterMountPath(mount, kind) {
+  const attr = kind === "album" ? "data-album-source"
+    : kind === "record" ? "data-record-source" : "data-intention-source";
+  try { return String(mount?.getAttribute?.(attr) || "").replace(/\\/g, "/"); } catch (_) { return ""; }
+}
+
+function propertyCardFrontmatterRecordEligible(plugin, options = {}) {
+  try {
+    const scope = options.scope;
+    const mode = propertyCardFrontmatterScopeMode(scope);
+    const path = String(options.path || "").replace(/\\/g, "/");
+    const kind = options.kind;
+    const mount = options.mount;
+    if (!scope || !path || !["album", "record", "day", "week", "quarter", "year"].includes(kind)) return false;
+    if (options.active && options.active() !== true) return false;
+    if (typeof propertyCardDesktop === "function" && propertyCardDesktop() !== true) return false;
+    if (propertyCardFrontmatterScopeDenied(scope)) return false;
+    if (mode !== "live" && mode !== "reading") return false;
+    if (scope.isConnected === false || !mount || mount.isConnected === false || !mount.parentNode) return false;
+    if (typeof scope.contains === "function" && !scope.contains(mount)) return false;
+    if (propertyCardFrontmatterMountPath(mount, kind) !== path) return false;
+    if (typeof mount.querySelector !== "function" || !mount.querySelector(".bob-property-card-foot")) return false;
+    if (!propertyCardFrontmatterCapabilityReady(plugin)) return false;
+
+    const view = options.view || (mode === "reading"
+      ? propertyCardFrontmatterMarkdownViewFor(plugin?.app, scope) : null);
+    if (mode === "live") {
+      if (!view || view.dom !== scope || typeof view.state?.field !== "function") return false;
+      if (view.state.field(editorLivePreviewField, false) !== true) return false;
+    } else if (view) {
+      let viewMode = "";
+      try {
+        viewMode = typeof view.getMode === "function" ? String(view.getMode() || "")
+          : view.currentMode && view.previewMode ? (view.currentMode === view.previewMode ? "preview" : "source") : "";
+      } catch (_) { viewMode = ""; }
+      if (viewMode && viewMode !== "preview") return false;
+    }
+    if (propertyCardFrontmatterCurrentPath(view, { ...options, scope }) !== path) return false;
+
+    const source = typeof options.getSource === "function" ? options.getSource() : options.sourceText;
+    const cachedFrontmatter = propertyCardFrontmatterCacheFor(plugin, path);
+    if (typeof source !== "string" || !cachedFrontmatter
+      || !propertyCardFrontmatterCacheEvidence(source, cachedFrontmatter, options.parseYaml || parseYaml)) return false;
+    if (typeof options.isCurrent === "function" && options.isCurrent() !== true) return false;
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function propertyCardFrontmatterReleaseMounted(scope, filters = {}) {
+  const entry = scope ? propertyCardFrontmatterMountOwners.get(scope) : null;
+  if (!entry) return false;
+  if (filters.plugin && entry.plugin !== filters.plugin) return false;
+  if (filters.kind && entry.kind !== filters.kind) return false;
+  if (Array.isArray(filters.kinds) && !filters.kinds.includes(entry.kind)) return false;
+  if (filters.path && entry.path !== String(filters.path).replace(/\\/g, "/")) return false;
+  if (filters.generation && entry.generation !== filters.generation) return false;
+  propertyCardFrontmatterMountOwners.delete(scope);
+  try { entry.primitiveRelease?.(); } catch (_) {}
+  return true;
+}
+
+function propertyCardFrontmatterOwnMounted(plugin, options = {}) {
+  const scope = options.scope;
+  const kind = options.kind;
+  const path = String(options.path || "").replace(/\\/g, "/");
+  if (!propertyCardFrontmatterRecordEligible(plugin, { ...options, scope, path, kind })) {
+    propertyCardFrontmatterReleaseMounted(scope, { plugin, kind });
+    return null;
+  }
+  const view = options.view || (propertyCardFrontmatterScopeMode(scope) === "reading"
+    ? propertyCardFrontmatterMarkdownViewFor(plugin?.app, scope) : null);
+  const existing = propertyCardFrontmatterMountOwners.get(scope);
+  if (existing && existing.plugin === plugin && existing.kind === kind && existing.path === path
+    && existing.view === view && existing.mount === options.mount) {
+    existing.options = { ...options, scope, path, kind, view };
+    return existing.release;
+  }
+  propertyCardFrontmatterReleaseMounted(scope);
+  const primitiveRelease = propertyCardOwnFrontmatter(scope, { path, view });
+  if (typeof primitiveRelease !== "function") return null;
+  const entry = {
+    plugin, kind, path, scope, view, mount: options.mount,
+    options: { ...options, scope, path, kind, view }, primitiveRelease, generation: ++propertyCardFrontmatterMountGeneration,
+    release: null,
+  };
+  entry.release = () => propertyCardFrontmatterReleaseMounted(scope, {
+    plugin, kind, path, generation: entry.generation,
+  });
+  propertyCardFrontmatterMountOwners.set(scope, entry);
+  return entry.release;
+}
+
+function propertyCardFrontmatterOwnMountedDeferred(plugin, options = {}) {
+  const scope = options.scope;
+  const kind = options.kind;
+  const path = String(options.path || "").replace(/\\/g, "/");
+  const defer = typeof options.defer === "function" ? options.defer : propertyCardFrontmatterDefer;
+  const token = ++propertyCardFrontmatterMountGeneration;
+  const current = propertyCardFrontmatterCoordinatorBindings.get(plugin) || {};
+  if (!(current.pending instanceof WeakMap)) current.pending = new WeakMap();
+  propertyCardFrontmatterCoordinatorBindings.set(plugin, current);
+  current.pending.set(scope, token);
+  defer(() => {
+    if (current.pending.get(scope) !== token) return;
+    current.pending.delete(scope);
+    const currentPath = propertyCardFrontmatterCurrentPath(options.view, { ...options, scope });
+    if (currentPath !== path) {
+      propertyCardFrontmatterReleaseMounted(scope, { plugin, kind });
+      return;
+    }
+    propertyCardFrontmatterOwnMounted(plugin, options);
+  });
+  return token;
+}
+
+function propertyCardFrontmatterCoordinatorReleasePath(plugin, path) {
+  const key = String(path || "").replace(/\\/g, "/");
+  let released = 0;
+  for (const [scope, entry] of Array.from(propertyCardFrontmatterMountOwners.entries())) {
+    if (entry.plugin === plugin && (!key || entry.path === key)) {
+      if (propertyCardFrontmatterReleaseMounted(scope, { plugin })) released += 1;
+    }
+  }
+  return released;
+}
+
+function propertyCardFrontmatterCoordinatorReleaseKind(plugin, kind) {
+  let released = 0;
+  for (const [scope, entry] of Array.from(propertyCardFrontmatterMountOwners.entries())) {
+    if (entry.plugin === plugin && entry.kind === kind) {
+      if (propertyCardFrontmatterReleaseMounted(scope, { plugin, kind })) released += 1;
+    }
+  }
+  const binding = propertyCardFrontmatterCoordinatorBindings.get(plugin);
+  binding?.kinds?.delete?.(kind);
+  return released;
+}
+
+function propertyCardFrontmatterCoordinatorReconcile(plugin) {
+  let released = 0;
+  for (const [scope, entry] of Array.from(propertyCardFrontmatterMountOwners.entries())) {
+    if (entry.plugin !== plugin) continue;
+    if (!propertyCardFrontmatterRecordEligible(plugin, entry.options)) {
+      if (propertyCardFrontmatterReleaseMounted(scope, { plugin, kind: entry.kind, path: entry.path })) released += 1;
+    }
+  }
+  return released;
+}
+
+function propertyCardFrontmatterCoordinatorCapabilityChanged(plugin, status) {
+  const released = propertyCardFrontmatterCoordinatorReconcile(plugin);
+  if (status === "confirmed" && propertyCardFrontmatterCapabilityReady(plugin)) {
+    for (const method of ["scheduleAlbumHeaderRefresh", "scheduleRecordSheetRefresh", "scheduleIntentionCardRefresh"]) {
+      try { plugin?.[method]?.(); } catch (_) {}
+    }
+    try { plugin?.intentionCardHost?.().scheduleRefresh?.(); } catch (_) {}
+  }
+  return released;
+}
+
+function propertyCardFrontmatterCoordinatorBind(plugin, kind) {
+  if (!plugin || !kind) return false;
+  let binding = propertyCardFrontmatterCoordinatorBindings.get(plugin);
+  if (!binding || !(binding.kinds instanceof Set)) {
+    binding = { kinds: new Set(), bound: false, pending: new WeakMap() };
+    propertyCardFrontmatterCoordinatorBindings.set(plugin, binding);
+  }
+  binding.kinds.add(kind);
+  if (binding.bound) return true;
+  const bindEvent = (emitter, name, handler) => {
+    try {
+      if (emitter && typeof emitter.on === "function" && typeof plugin.registerEvent === "function") {
+        plugin.registerEvent(emitter.on(name, handler));
+      }
+    } catch (_) {}
+  };
+  const workspace = plugin.app?.workspace;
+  for (const name of ["file-open", "active-leaf-change", "layout-change", "config-changed"]) {
+    bindEvent(workspace, name, () => propertyCardFrontmatterCoordinatorReconcile(plugin));
+  }
+  bindEvent(plugin.app?.metadataCache, "changed", (file) => {
+    propertyCardFrontmatterCoordinatorReleasePath(plugin, file?.path);
+  });
+  bindEvent(plugin.app?.vault, "rename", (_file, oldPath) => {
+    propertyCardFrontmatterCoordinatorReleasePath(plugin, oldPath);
+  });
+  bindEvent(plugin.app?.vault, "delete", (file) => {
+    propertyCardFrontmatterCoordinatorReleasePath(plugin, file?.path);
+  });
+  binding.bound = true;
+  return true;
 }
 
 // The painted owner entry for one scope, or null. The paint map mirrors

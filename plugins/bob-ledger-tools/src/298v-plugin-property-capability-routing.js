@@ -1,7 +1,7 @@
 // Property capability routing: session-and-bob-path capability cache,
 // actual-ownership query, and the native Add file property entry route
-// (bob-cli-pf.6.1.2 capability-routing). Adapters stay unwired: nothing here
-// acquires ownership; it only observes it and routes native entries.
+// (bob-cli-pf.6.1.2 capability-routing). The shared frontmatter coordinator
+// observes confirmed capability changes and reconciles mounted card adapters.
 //
 // The controller caches one outcome per resolved bob path for the plugin
 // session: confirmed (bob answered props_v1), absent (unknown subcommand),
@@ -178,6 +178,7 @@ class BobLedgerToolsPropertyCapabilityRoutingMixin {
     } catch (_) {}
     this.propertyCapabilityByBobPath = new Map();
     this.propertyCapabilityCommandRoute = null;
+    try { propertyCardFrontmatterCoordinatorCapabilityChanged?.(this, "inactive"); } catch (_) {}
   }
 
   propertyCapabilityCurrentBobKey() {
@@ -259,11 +260,13 @@ class BobLedgerToolsPropertyCapabilityRoutingMixin {
       if (classified.status === "confirmed") {
         this.propertyCapabilityByBobPath.set(key, { status: "confirmed", attempts });
         try { this.propertyCapability = true; } catch (_) {}
+        try { propertyCardFrontmatterCoordinatorCapabilityChanged?.(this, "confirmed"); } catch (_) {}
         return "confirmed";
       }
       if (classified.status === "absent") {
         this.propertyCapabilityByBobPath.set(key, { status: "absent", attempts: attempts + 1, reason: classified.reason || "" });
         try { this.propertyCapability = false; } catch (_) {}
+        try { propertyCardFrontmatterCoordinatorCapabilityChanged?.(this, "absent"); } catch (_) {}
         return "absent";
       }
       // Unconfirmed leaves the cache alone: a failed contact attempt is
@@ -366,6 +369,7 @@ class BobLedgerToolsPropertyCapabilityRoutingMixin {
             reason: classified.reason || "",
           });
         } catch (_) {}
+        try { propertyCardFrontmatterCoordinatorCapabilityChanged?.(this, "unconfirmed"); } catch (_) {}
         return "unconfirmed";
       }
       if (this.propertyCapabilityNoteShowOutcome(outcome) === "confirmed") {

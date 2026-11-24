@@ -71,6 +71,7 @@ class BobLedgerToolsRecordSheetMixin {
       workspaceEvents: ["layout-change", "file-open"],
       onWorkspaceEvent: () => plugin.scheduleRecordSheetReadingViewMount(),
       onSetup: () => {
+        try { propertyCardFrontmatterCoordinatorBind?.(plugin, "record"); } catch (_) {}
         if (!(plugin.recordSheetEditorCache instanceof WeakMap)) plugin.recordSheetEditorCache = new WeakMap();
         if (!(plugin.recordSheetCollapsed instanceof Map)) plugin.recordSheetCollapsed = new Map();
         if (!(plugin.recordSheetOverlays instanceof Map)) plugin.recordSheetOverlays = new Map();
@@ -138,6 +139,7 @@ class BobLedgerToolsRecordSheetMixin {
         } catch (_) {}
       },
       onDisposeStart: () => {
+        try { propertyCardFrontmatterCoordinatorReleaseKind?.(plugin, "record"); } catch (_) {}
         try { plugin.recordSheetFootUntoggle?.(); } catch (_) {}
         plugin.recordSheetFootUntoggle = null;
         try { plugin.recordSheetFootUnresolver?.(); } catch (_) {}
@@ -783,6 +785,7 @@ class BobLedgerToolsRecordSheetMixin {
   }
 
   recordSheetCleanEditor(view) {
+    try { propertyCardFrontmatterReleaseMounted?.(view?.dom, { plugin: this, kind: "record" }); } catch (_) {}
     try {
       const cached = this.recordSheetEditorCache?.get?.(view);
       if (typeof propertyCardFootReleaseScope === "function") {

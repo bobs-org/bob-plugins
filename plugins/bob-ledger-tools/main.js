@@ -85538,7 +85538,9 @@ function propertyCardToggleProperties(view) {
   }
 }
 // ---- src/240q-plugin-property-card-frontmatter-ownership.js ----
-// Property-card kit: whole-container frontmatter ownership (unwired).
+// Property-card kit: whole-container frontmatter ownership. Production
+// adapters acquire through the mount coordinator below, after card and foot
+// mounts succeed and source/cache/capability evidence is current.
 // propertyCardOwnFrontmatter(scope, { path, view }) adds
 // bob-property-card-owns-frontmatter to the view scope. Kit CSS sets
 // Obsidian's --metadata-display-editing / --metadata-display-reading to
@@ -85548,7 +85550,8 @@ function propertyCardToggleProperties(view) {
 // Preview uses a lazy StateField plus editorAttributes (modeled on 240i);
 // Reading uses a generation-bound class. Ownership drops on release, a
 // newer owner, Source mode, a file change, plugin disable, or unload.
-// Never throws. Adapters must not call this yet (takeover wires it).
+// Never throws. Adapters must use the coordinator rather than call this
+// directly so invalidation and generation-bound cleanup stay shared.
 const PROPERTY_CARD_OWNS_FRONTMATTER_CLASS = "bob-property-card-owns-frontmatter";
 const PROPERTY_CARD_FRONTMATTER_REGISTERED_FLAG = "_propertyCardFrontmatterOwnershipRegistered";
 const PROPERTY_CARD_FRONTMATTER_OWNS_ATTRS = Object.freeze({ class: PROPERTY_CARD_OWNS_FRONTMATTER_CLASS });
@@ -85700,6 +85703,12 @@ function propertyCardFrontmatterPaintScope(scope, entry) {
 function propertyCardFrontmatterSyncEditor(view) {
   try {
     if (!view?.dom) return;
+    const mounted = propertyCardFrontmatterMountOwners.get(view.dom);
+    if (mounted && !propertyCardFrontmatterRecordEligible(mounted.plugin, mounted.options)) {
+      propertyCardFrontmatterReleaseMounted(view.dom, {
+        plugin: mounted.plugin, kind: mounted.kind, path: mounted.path,
+      });
+    }
     const value = propertyCardFrontmatterStateField(view.state, propertyCardFrontmatterFieldType);
     const entry = propertyCardFrontmatterEditorOwners.get(view);
     if (value?.owner && entry && !entry.released && value.owner.generation === entry.generation) {
@@ -85890,6 +85899,13 @@ function propertyCardOwnFrontmatterInReading(scope, options = {}) {
       if (Observer) {
         entry.observer = new Observer(() => {
           if (propertyCardFrontmatterReadingOwners.get(scope) !== entry) return;
+          const mounted = propertyCardFrontmatterMountOwners.get(scope);
+          if (mounted && !propertyCardFrontmatterRecordEligible(mounted.plugin, mounted.options)) {
+            propertyCardFrontmatterReleaseMounted(scope, {
+              plugin: mounted.plugin, kind: mounted.kind, path: mounted.path,
+            });
+            return;
+          }
           propertyCardFrontmatterPaintScope(scope, entry);
         });
         entry.observer.observe(scope, { childList: true, subtree: true });
@@ -85921,6 +85937,309 @@ function propertyCardOwnFrontmatter(scope, options = {}) {
     if (scope?.classList?.contains("markdown-preview-view")) return propertyCardOwnFrontmatterInReading(scope, options);
   } catch (_) {}
   return null;
+}
+
+const propertyCardFrontmatterMountOwners = new Map();
+const propertyCardFrontmatterCoordinatorBindings = new WeakMap();
+let propertyCardFrontmatterMountGeneration = 0;
+
+function propertyCardFrontmatterStableValue(value) {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? { invalidDate: true } : { date: value.toISOString() };
+  }
+  if (Array.isArray(value)) return value.map(propertyCardFrontmatterStableValue);
+  if (value && typeof value === "object") {
+    const out = {};
+    for (const key of Object.keys(value).sort()) out[key] = propertyCardFrontmatterStableValue(value[key]);
+    return out;
+  }
+  return value;
+}
+
+// Source must contain one closed, duplicate-free YAML mapping whose parsed
+// keys and values match the current note's metadata cache. Obsidian's
+// synthetic frontmatter position is excluded from the cache comparison.
+function propertyCardFrontmatterCacheEvidence(sourceText, cachedFrontmatter, parser = parseYaml) {
+  try {
+    if (typeof sourceText !== "string" || !cachedFrontmatter
+      || typeof cachedFrontmatter !== "object" || Array.isArray(cachedFrontmatter)) return false;
+    if (typeof propertyCardScanFrontmatter !== "function"
+      || typeof propertyCardInventoryParserResult !== "function") return false;
+    const scan = propertyCardScanFrontmatter(sourceText);
+    if (scan?.state !== "closed") return false;
+    const duplicates = typeof propertyCardInventoryTopLevelDuplicates === "function"
+      ? propertyCardInventoryTopLevelDuplicates(scan.entries || []) : [];
+    if (duplicates.length) return false;
+    if (typeof parser !== "function") return false;
+    const parsed = propertyCardInventoryParserResult(parser, scan.yaml);
+    if (!parsed?.ok || parsed.duplicateOnly === true) return false;
+    const source = parsed.value && typeof parsed.value === "object" && !Array.isArray(parsed.value)
+      ? parsed.value : {};
+    const sourceKeys = Object.keys(source).sort();
+    const cacheKeys = typeof propertyCardInventoryCacheKeys === "function"
+      ? propertyCardInventoryCacheKeys(cachedFrontmatter).sort()
+      : Object.keys(cachedFrontmatter).filter((key) => key !== "position").sort();
+    if (sourceKeys.length !== cacheKeys.length
+      || sourceKeys.some((key, index) => key !== cacheKeys[index])) return false;
+    return JSON.stringify(propertyCardFrontmatterStableValue(source))
+      === JSON.stringify(propertyCardFrontmatterStableValue(Object.fromEntries(
+        cacheKeys.map((key) => [key, cachedFrontmatter[key]]),
+      )));
+  } catch (_) {
+    return false;
+  }
+}
+
+function propertyCardFrontmatterMarkdownViewFor(app, scope) {
+  try {
+    for (const leaf of app?.workspace?.getLeavesOfType?.("markdown") || []) {
+      const view = leaf?.view;
+      const preview = view?.previewMode?.containerEl;
+      if (scope && preview && (preview === scope || preview.contains?.(scope))) return view;
+    }
+  } catch (_) {}
+  return null;
+}
+
+function propertyCardFrontmatterScopeMode(scope) {
+  if (scope?.classList?.contains?.("cm-editor")) return "live";
+  if (scope?.classList?.contains?.("markdown-preview-view")) return "reading";
+  return "";
+}
+
+function propertyCardFrontmatterCurrentPath(view, options = {}) {
+  try {
+    if (typeof options.currentPath === "function") return String(options.currentPath() || "");
+    if (typeof options.currentPath === "string") return options.currentPath;
+    if (propertyCardFrontmatterScopeMode(options.scope) === "live") {
+      const info = view?.state?.field?.(editorInfoField, false);
+      return String(info?.file?.path || "");
+    }
+    return String(view?.file?.path || "");
+  } catch (_) {
+    return "";
+  }
+}
+
+function propertyCardFrontmatterCacheFor(plugin, path) {
+  try {
+    const file = plugin?.app?.vault?.getAbstractFileByPath?.(path);
+    if (!file || String(file.path || "").replace(/\\/g, "/") !== path) return null;
+    const cache = plugin.app?.metadataCache?.getFileCache?.(file);
+    const frontmatter = cache?.frontmatter;
+    return frontmatter && typeof frontmatter === "object" && !Array.isArray(frontmatter)
+      ? frontmatter : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function propertyCardFrontmatterCapabilityReady(plugin) {
+  try {
+    if (typeof plugin?.propertyCapabilityRoutingReady !== "function"
+      || plugin.propertyCapabilityRoutingReady() !== true) return false;
+    if (typeof plugin.propertyCapabilityCurrentBobKey !== "function"
+      || typeof plugin.propertyCapabilityConfirmed !== "function") return false;
+    const key = plugin.propertyCapabilityCurrentBobKey();
+    return Boolean(key) && plugin.propertyCapabilityConfirmed(key) === true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function propertyCardFrontmatterMountPath(mount, kind) {
+  const attr = kind === "album" ? "data-album-source"
+    : kind === "record" ? "data-record-source" : "data-intention-source";
+  try { return String(mount?.getAttribute?.(attr) || "").replace(/\\/g, "/"); } catch (_) { return ""; }
+}
+
+function propertyCardFrontmatterRecordEligible(plugin, options = {}) {
+  try {
+    const scope = options.scope;
+    const mode = propertyCardFrontmatterScopeMode(scope);
+    const path = String(options.path || "").replace(/\\/g, "/");
+    const kind = options.kind;
+    const mount = options.mount;
+    if (!scope || !path || !["album", "record", "day", "week", "quarter", "year"].includes(kind)) return false;
+    if (options.active && options.active() !== true) return false;
+    if (typeof propertyCardDesktop === "function" && propertyCardDesktop() !== true) return false;
+    if (propertyCardFrontmatterScopeDenied(scope)) return false;
+    if (mode !== "live" && mode !== "reading") return false;
+    if (scope.isConnected === false || !mount || mount.isConnected === false || !mount.parentNode) return false;
+    if (typeof scope.contains === "function" && !scope.contains(mount)) return false;
+    if (propertyCardFrontmatterMountPath(mount, kind) !== path) return false;
+    if (typeof mount.querySelector !== "function" || !mount.querySelector(".bob-property-card-foot")) return false;
+    if (!propertyCardFrontmatterCapabilityReady(plugin)) return false;
+
+    const view = options.view || (mode === "reading"
+      ? propertyCardFrontmatterMarkdownViewFor(plugin?.app, scope) : null);
+    if (mode === "live") {
+      if (!view || view.dom !== scope || typeof view.state?.field !== "function") return false;
+      if (view.state.field(editorLivePreviewField, false) !== true) return false;
+    } else if (view) {
+      let viewMode = "";
+      try {
+        viewMode = typeof view.getMode === "function" ? String(view.getMode() || "")
+          : view.currentMode && view.previewMode ? (view.currentMode === view.previewMode ? "preview" : "source") : "";
+      } catch (_) { viewMode = ""; }
+      if (viewMode && viewMode !== "preview") return false;
+    }
+    if (propertyCardFrontmatterCurrentPath(view, { ...options, scope }) !== path) return false;
+
+    const source = typeof options.getSource === "function" ? options.getSource() : options.sourceText;
+    const cachedFrontmatter = propertyCardFrontmatterCacheFor(plugin, path);
+    if (typeof source !== "string" || !cachedFrontmatter
+      || !propertyCardFrontmatterCacheEvidence(source, cachedFrontmatter, options.parseYaml || parseYaml)) return false;
+    if (typeof options.isCurrent === "function" && options.isCurrent() !== true) return false;
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function propertyCardFrontmatterReleaseMounted(scope, filters = {}) {
+  const entry = scope ? propertyCardFrontmatterMountOwners.get(scope) : null;
+  if (!entry) return false;
+  if (filters.plugin && entry.plugin !== filters.plugin) return false;
+  if (filters.kind && entry.kind !== filters.kind) return false;
+  if (Array.isArray(filters.kinds) && !filters.kinds.includes(entry.kind)) return false;
+  if (filters.path && entry.path !== String(filters.path).replace(/\\/g, "/")) return false;
+  if (filters.generation && entry.generation !== filters.generation) return false;
+  propertyCardFrontmatterMountOwners.delete(scope);
+  try { entry.primitiveRelease?.(); } catch (_) {}
+  return true;
+}
+
+function propertyCardFrontmatterOwnMounted(plugin, options = {}) {
+  const scope = options.scope;
+  const kind = options.kind;
+  const path = String(options.path || "").replace(/\\/g, "/");
+  if (!propertyCardFrontmatterRecordEligible(plugin, { ...options, scope, path, kind })) {
+    propertyCardFrontmatterReleaseMounted(scope, { plugin, kind });
+    return null;
+  }
+  const view = options.view || (propertyCardFrontmatterScopeMode(scope) === "reading"
+    ? propertyCardFrontmatterMarkdownViewFor(plugin?.app, scope) : null);
+  const existing = propertyCardFrontmatterMountOwners.get(scope);
+  if (existing && existing.plugin === plugin && existing.kind === kind && existing.path === path
+    && existing.view === view && existing.mount === options.mount) {
+    existing.options = { ...options, scope, path, kind, view };
+    return existing.release;
+  }
+  propertyCardFrontmatterReleaseMounted(scope);
+  const primitiveRelease = propertyCardOwnFrontmatter(scope, { path, view });
+  if (typeof primitiveRelease !== "function") return null;
+  const entry = {
+    plugin, kind, path, scope, view, mount: options.mount,
+    options: { ...options, scope, path, kind, view }, primitiveRelease, generation: ++propertyCardFrontmatterMountGeneration,
+    release: null,
+  };
+  entry.release = () => propertyCardFrontmatterReleaseMounted(scope, {
+    plugin, kind, path, generation: entry.generation,
+  });
+  propertyCardFrontmatterMountOwners.set(scope, entry);
+  return entry.release;
+}
+
+function propertyCardFrontmatterOwnMountedDeferred(plugin, options = {}) {
+  const scope = options.scope;
+  const kind = options.kind;
+  const path = String(options.path || "").replace(/\\/g, "/");
+  const defer = typeof options.defer === "function" ? options.defer : propertyCardFrontmatterDefer;
+  const token = ++propertyCardFrontmatterMountGeneration;
+  const current = propertyCardFrontmatterCoordinatorBindings.get(plugin) || {};
+  if (!(current.pending instanceof WeakMap)) current.pending = new WeakMap();
+  propertyCardFrontmatterCoordinatorBindings.set(plugin, current);
+  current.pending.set(scope, token);
+  defer(() => {
+    if (current.pending.get(scope) !== token) return;
+    current.pending.delete(scope);
+    const currentPath = propertyCardFrontmatterCurrentPath(options.view, { ...options, scope });
+    if (currentPath !== path) {
+      propertyCardFrontmatterReleaseMounted(scope, { plugin, kind });
+      return;
+    }
+    propertyCardFrontmatterOwnMounted(plugin, options);
+  });
+  return token;
+}
+
+function propertyCardFrontmatterCoordinatorReleasePath(plugin, path) {
+  const key = String(path || "").replace(/\\/g, "/");
+  let released = 0;
+  for (const [scope, entry] of Array.from(propertyCardFrontmatterMountOwners.entries())) {
+    if (entry.plugin === plugin && (!key || entry.path === key)) {
+      if (propertyCardFrontmatterReleaseMounted(scope, { plugin })) released += 1;
+    }
+  }
+  return released;
+}
+
+function propertyCardFrontmatterCoordinatorReleaseKind(plugin, kind) {
+  let released = 0;
+  for (const [scope, entry] of Array.from(propertyCardFrontmatterMountOwners.entries())) {
+    if (entry.plugin === plugin && entry.kind === kind) {
+      if (propertyCardFrontmatterReleaseMounted(scope, { plugin, kind })) released += 1;
+    }
+  }
+  const binding = propertyCardFrontmatterCoordinatorBindings.get(plugin);
+  binding?.kinds?.delete?.(kind);
+  return released;
+}
+
+function propertyCardFrontmatterCoordinatorReconcile(plugin) {
+  let released = 0;
+  for (const [scope, entry] of Array.from(propertyCardFrontmatterMountOwners.entries())) {
+    if (entry.plugin !== plugin) continue;
+    if (!propertyCardFrontmatterRecordEligible(plugin, entry.options)) {
+      if (propertyCardFrontmatterReleaseMounted(scope, { plugin, kind: entry.kind, path: entry.path })) released += 1;
+    }
+  }
+  return released;
+}
+
+function propertyCardFrontmatterCoordinatorCapabilityChanged(plugin, status) {
+  const released = propertyCardFrontmatterCoordinatorReconcile(plugin);
+  if (status === "confirmed" && propertyCardFrontmatterCapabilityReady(plugin)) {
+    for (const method of ["scheduleAlbumHeaderRefresh", "scheduleRecordSheetRefresh", "scheduleIntentionCardRefresh"]) {
+      try { plugin?.[method]?.(); } catch (_) {}
+    }
+    try { plugin?.intentionCardHost?.().scheduleRefresh?.(); } catch (_) {}
+  }
+  return released;
+}
+
+function propertyCardFrontmatterCoordinatorBind(plugin, kind) {
+  if (!plugin || !kind) return false;
+  let binding = propertyCardFrontmatterCoordinatorBindings.get(plugin);
+  if (!binding || !(binding.kinds instanceof Set)) {
+    binding = { kinds: new Set(), bound: false, pending: new WeakMap() };
+    propertyCardFrontmatterCoordinatorBindings.set(plugin, binding);
+  }
+  binding.kinds.add(kind);
+  if (binding.bound) return true;
+  const bindEvent = (emitter, name, handler) => {
+    try {
+      if (emitter && typeof emitter.on === "function" && typeof plugin.registerEvent === "function") {
+        plugin.registerEvent(emitter.on(name, handler));
+      }
+    } catch (_) {}
+  };
+  const workspace = plugin.app?.workspace;
+  for (const name of ["file-open", "active-leaf-change", "layout-change", "config-changed"]) {
+    bindEvent(workspace, name, () => propertyCardFrontmatterCoordinatorReconcile(plugin));
+  }
+  bindEvent(plugin.app?.metadataCache, "changed", (file) => {
+    propertyCardFrontmatterCoordinatorReleasePath(plugin, file?.path);
+  });
+  bindEvent(plugin.app?.vault, "rename", (_file, oldPath) => {
+    propertyCardFrontmatterCoordinatorReleasePath(plugin, oldPath);
+  });
+  bindEvent(plugin.app?.vault, "delete", (file) => {
+    propertyCardFrontmatterCoordinatorReleasePath(plugin, file?.path);
+  });
+  binding.bound = true;
+  return true;
 }
 
 // The painted owner entry for one scope, or null. The paint map mirrors
@@ -102537,6 +102856,7 @@ class BobLedgerToolsAlbumHeaderMixin {
       ownKeys: (scope, path) => plugin.albumHeaderOwnKeys(scope, path),
       releaseKeys: (scope, path) => plugin.albumHeaderReleaseKeys(scope, path),
       onSetup: () => {
+        try { propertyCardFrontmatterCoordinatorBind?.(plugin, "album"); } catch (_) {}
         if (!(plugin.albumHeaderExpanded instanceof Map)) plugin.albumHeaderExpanded = new Map();
         plugin.albumHeaderUnsubscribe = plugin.apiAlbumSubscribe?.((state) => {
           plugin.albumHeaderLastState = state;
@@ -102545,6 +102865,7 @@ class BobLedgerToolsAlbumHeaderMixin {
         try { plugin.albumHeaderFootBind?.(); } catch (_) {}
       },
       onDisposeStart: () => {
+        try { propertyCardFrontmatterCoordinatorReleaseKind?.(plugin, "album"); } catch (_) {}
         try { plugin.albumHeaderFootUnbind?.(); } catch (_) {}
         plugin.albumHeaderUnsubscribe?.();
         plugin.albumHeaderUnsubscribe = null;
@@ -102796,6 +103117,7 @@ class BobLedgerToolsAlbumHeaderMixin {
   // still owned the title.
   albumHeaderRemoveReading(root, scope = root, sourcePath = "") {
     if (!root) return;
+    this.albumHeaderReleaseFrontmatter(scope, sourcePath);
     try { this.albumHeaderTrackFoot?.(scope, sourcePath, null); } catch (_) {}
     this.albumHeaderReleaseAdoption(scope, sourcePath, { preserveFallback: true });
     for (const node of Array.from(root.querySelectorAll?.(`.${ALBUM_HEADER_CLASS}`) || [])) {
@@ -103018,6 +103340,14 @@ class BobLedgerToolsAlbumHeaderMixin {
     this.albumHeaderRestoreFocus(header, focusKey);
     try { this.albumHeaderTrackFoot?.(scope || root, sourcePath, header); } catch (_) {}
     try { this.albumHeaderEnsureSource?.(sourcePath); } catch (_) {}
+    if (adoption.mode === "slot") {
+      this.albumHeaderOwnMountedFrontmatter(
+        scope, null, sourcePath, header, this.albumHeaderSourceCache?.get?.(sourcePath),
+        reading?.currentPath || (() => ""),
+      );
+    } else {
+      this.albumHeaderReleaseFrontmatter(scope, sourcePath);
+    }
     // Owned Properties rows (record) hide only once the report body paints.
     if (card.body) this.albumHeaderOwnKeys(scope, sourcePath);
     else this.albumHeaderReleaseKeys(scope, sourcePath);
@@ -103053,6 +103383,29 @@ class BobLedgerToolsAlbumHeaderMixin {
     }
   }
 
+  albumHeaderOwnMountedFrontmatter(scope, view, path, mount, sourceText, currentPath) {
+    if (typeof propertyCardFrontmatterOwnMounted !== "function") return null;
+    const sourceFor = () => {
+      if (view?.state?.doc && typeof view.state.doc.toString === "function") return view.state.doc.toString();
+      return this.albumHeaderSourceCache?.get?.(albumHeaderPath(path));
+    };
+    const current = () => {
+      const text = sourceFor();
+      return Boolean(text && this.albumHeaderCardModelFor(path, this.albumHeaderState(), text));
+    };
+    return propertyCardFrontmatterOwnMounted(this, {
+      scope, view: view?.dom === scope ? view : null, path, kind: "album", mount,
+      sourceText, getSource: sourceFor, currentPath, isCurrent: current,
+      active: () => this.albumHeaderActive === true,
+    });
+  }
+
+  albumHeaderReleaseFrontmatter(scope, path = "") {
+    try {
+      return propertyCardFrontmatterReleaseMounted?.(scope, { plugin: this, kind: "album", path }) || false;
+    } catch (_) { return false; }
+  }
+
   // Patch a slot-mounted Live Preview card outside the CodeMirror update.
   albumHeaderPatchLive(view, adopted, fresh, signature) {
     const target = adopted.node;
@@ -103073,6 +103426,7 @@ class BobLedgerToolsAlbumHeaderMixin {
       if (!Decoration || !RangeSetBuilder || !WidgetType) return Decoration?.none || null;
       const path = this.albumHeaderLivePath(view);
       if (!path || !view?.state?.doc) {
+        this.albumHeaderReleaseFrontmatter(view?.dom);
         this.albumHeaderSetEditorScope(view, false);
         this.albumHeaderReleaseKeys(view?.dom);
         this.albumHeaderReleaseAdoption(view?.dom);
@@ -103084,6 +103438,7 @@ class BobLedgerToolsAlbumHeaderMixin {
       const card = this.albumHeaderCardModelFor(path, state, text);
       this.albumHeaderSetEditorScope(view, Boolean(card));
       if (!card) {
+        this.albumHeaderReleaseFrontmatter(view?.dom, path);
         try { this.albumHeaderTrackFoot?.(view?.dom, path, null); } catch (_) {}
         this.albumHeaderReleaseKeys(view?.dom);
         this.albumHeaderReleaseAdoption(view?.dom);
@@ -103098,6 +103453,7 @@ class BobLedgerToolsAlbumHeaderMixin {
       if (!header || albumHeaderNodeSignatures.get(header) !== signature) {
         const fresh = this.albumHeaderBuildEl(card, options, doc);
         if (!fresh) {
+          this.albumHeaderReleaseFrontmatter(view?.dom, path);
           try { this.albumHeaderTrackFoot?.(view?.dom, path, null); } catch (_) {}
           this.albumHeaderReleaseKeys(view?.dom);
           this.albumHeaderReleaseAdoption(view?.dom);
@@ -103123,9 +103479,15 @@ class BobLedgerToolsAlbumHeaderMixin {
       if (card.body) this.albumHeaderOwnKeys(view?.dom, path);
       else this.albumHeaderReleaseKeys(view?.dom, path);
       try { this.albumHeaderTrackFoot?.(view?.dom, path, header); } catch (_) {}
-      if (adoption.mode === "slot") return Decoration.none;
+      if (adoption.mode === "slot") {
+        this.albumHeaderOwnMountedFrontmatter(
+          view.dom, view, path, header, text, () => this.albumHeaderLivePath(view) || "",
+        );
+        return Decoration.none;
+      }
 
       // Fallback: today's inline widget at the end of the first `# ` line.
+      const plugin = this;
       const anchor = this.notebookHeaderLiveAnchor?.(text) ?? -1;
       const frontmatterEnd = this.notebookHeaderFrontmatterEnd?.(text) ?? -1;
       const widget = new class extends WidgetType {
@@ -103138,6 +103500,16 @@ class BobLedgerToolsAlbumHeaderMixin {
         toDOM() {
           header.setAttribute?.("data-cm-widget", "true");
           header.setAttribute?.("data-album-source", path);
+          propertyCardFrontmatterOwnMountedDeferred?.(plugin, {
+            scope: view.dom, view, path, kind: "album", mount: header, sourceText: text,
+            getSource: () => view?.state?.doc?.toString?.() || "",
+            currentPath: () => plugin.albumHeaderLivePath(view) || "",
+            active: () => plugin.albumHeaderActive === true,
+            isCurrent: () => {
+              const source = view?.state?.doc?.toString?.() || "";
+              return Boolean(source && plugin.albumHeaderCardModelFor(path, plugin.albumHeaderState(), source));
+            },
+          });
           return header;
         }
       }();
@@ -103156,6 +103528,7 @@ class BobLedgerToolsAlbumHeaderMixin {
       builder.add(at, at, Decoration.widget({ widget, side }));
       return builder.finish();
     } catch (_) {
+      this.albumHeaderReleaseFrontmatter(view?.dom);
       return Decoration?.none || null;
     }
   }
@@ -103175,6 +103548,7 @@ class BobLedgerToolsAlbumHeaderMixin {
   }
 
   albumHeaderCleanEditor(view) {
+    this.albumHeaderReleaseFrontmatter(view?.dom);
     try { this.albumHeaderTrackFoot?.(view?.dom, this.albumHeaderLivePath(view), null); } catch (_) {}
     this.albumHeaderReleaseAdoption(view?.dom);
     this.albumPropertyCardHost().cleanEditor(view, {
@@ -109120,6 +109494,7 @@ class BobLedgerToolsRecordWalkRailMixin {
       const live = this.recordSheetLivePreview(view);
       const path = live ? this.recordSheetLivePath(view) : null;
       if (!live || !view?.state?.doc) {
+        this.recordSheetReleaseFrontmatter?.(view?.dom);
         this.recordSheetSetEditorScope(view, false);
         this.recordSheetReleaseAdoption?.(view?.dom);
         this.recordSheetEditorCache?.delete?.(view);
@@ -109127,6 +109502,7 @@ class BobLedgerToolsRecordWalkRailMixin {
       }
       const previous = this.recordSheetEditorCache?.get?.(view);
       if (!path) {
+        this.recordSheetReleaseFrontmatter?.(view?.dom);
         const adopted = propertyCardAdoptedEntry(view.dom);
         if (adopted && adopted.mode === "slot") return previous?.decorations || Decoration.none;
         this.recordSheetSetEditorScope(view, false);
@@ -109177,7 +109553,10 @@ class BobLedgerToolsRecordWalkRailMixin {
         ? this.recordSheetCardModelFor(path, text) : null;
       const walk = card?.body?.walk || this.recordWalkFor(path, text);
       this.recordSheetSetEditorScope(view, Boolean(card));
-      if (!card) this.recordSheetReleaseAdoption?.(view?.dom, path);
+      if (!card) {
+        this.recordSheetReleaseFrontmatter?.(view?.dom, path);
+        this.recordSheetReleaseAdoption?.(view?.dom, path);
+      }
       if (!card && !recordWalkHasRail(walk)) {
         this.recordSheetEditorCache?.delete?.(view);
         this.recordSheetNotifyOwnership();
@@ -109192,12 +109571,25 @@ class BobLedgerToolsRecordWalkRailMixin {
       const doc = recordSheetDomDoc(view.dom);
       const options = this.recordWalkOptions(path, card?.body);
       const albumPath = card?.identity?.albumPath || walk?.albumPath || "";
+      const plugin = this;
       const widgetFor = (element, kind, signature) => new class extends WidgetType {
         constructor() { super(); this.path = path; this.signature = signature; this.kind = kind; }
         eq(other) { return other?.path === path && other.signature === signature && other.kind === kind; }
         toDOM() {
           element.setAttribute("data-cm-widget", "true");
           element.setAttribute("data-record-source", path);
+          if (kind === "sheet" || kind === "dock") {
+            propertyCardFrontmatterOwnMountedDeferred?.(plugin, {
+              scope: view.dom, view, path, kind: "record", mount: element, sourceText: text,
+              getSource: () => view?.state?.doc?.toString?.() || "",
+              currentPath: () => plugin.recordSheetLivePath(view) || propertyCardLiveCurrentPath(view) || "",
+              active: () => plugin.recordSheetActive === true,
+              isCurrent: () => {
+                const source = view?.state?.doc?.toString?.() || "";
+                return Boolean(source && plugin.recordSheetCardModelFor(path, source));
+              },
+            });
+          }
           return element;
         }
       }();
@@ -109221,6 +109613,7 @@ class BobLedgerToolsRecordWalkRailMixin {
       };
 
       if (!card) {
+        this.recordSheetReleaseFrontmatter?.(view?.dom, path);
         const signature = JSON.stringify(["rail-only", recordSheetWalkSignature(walk), Boolean(reveal), line?.from, line?.to]);
         const rows = [];
         if (line && !reveal) {
@@ -109256,6 +109649,7 @@ class BobLedgerToolsRecordWalkRailMixin {
       if (!header || recordSheetNodeSignatures.get(header) !== cardSignature) {
         const fresh = this.recordSheetBuildMounted(card, options, doc, { walk, includeRail, footSpec: footExtra.footSpec });
         if (!fresh) {
+          this.recordSheetReleaseFrontmatter?.(view?.dom, path);
           this.recordSheetReleaseAdoption?.(view?.dom, path);
           this.recordSheetEditorCache?.delete?.(view);
           this.recordSheetNotifyOwnership();
@@ -109285,6 +109679,9 @@ class BobLedgerToolsRecordWalkRailMixin {
           if (rail) rows.push({ from: line.from, to: line.to, decoration: Decoration.replace({ widget: widgetFor(rail, "walk", slotSignature) }) });
         }
         try { this.recordSheetTrackFoot(view.dom, path, header); } catch (_) {}
+        this.recordSheetOwnMountedFrontmatter?.(
+          view.dom, view, path, header, text, () => this.recordSheetLivePath(view) || propertyCardLiveCurrentPath(view) || "",
+        );
         return cacheAndFinish(rows, slotSignature, card.body || null, true);
       }
 
@@ -109309,6 +109706,7 @@ class BobLedgerToolsRecordWalkRailMixin {
       }
     } catch (_) {
       this._recordSheetDecorating = false;
+      this.recordSheetReleaseFrontmatter?.(view?.dom);
       return Decoration?.none || null;
     }
   }
@@ -111180,6 +111578,7 @@ class BobLedgerToolsRecordSheetMixin {
       workspaceEvents: ["layout-change", "file-open"],
       onWorkspaceEvent: () => plugin.scheduleRecordSheetReadingViewMount(),
       onSetup: () => {
+        try { propertyCardFrontmatterCoordinatorBind?.(plugin, "record"); } catch (_) {}
         if (!(plugin.recordSheetEditorCache instanceof WeakMap)) plugin.recordSheetEditorCache = new WeakMap();
         if (!(plugin.recordSheetCollapsed instanceof Map)) plugin.recordSheetCollapsed = new Map();
         if (!(plugin.recordSheetOverlays instanceof Map)) plugin.recordSheetOverlays = new Map();
@@ -111247,6 +111646,7 @@ class BobLedgerToolsRecordSheetMixin {
         } catch (_) {}
       },
       onDisposeStart: () => {
+        try { propertyCardFrontmatterCoordinatorReleaseKind?.(plugin, "record"); } catch (_) {}
         try { plugin.recordSheetFootUntoggle?.(); } catch (_) {}
         plugin.recordSheetFootUntoggle = null;
         try { plugin.recordSheetFootUnresolver?.(); } catch (_) {}
@@ -111892,6 +112292,7 @@ class BobLedgerToolsRecordSheetMixin {
   }
 
   recordSheetCleanEditor(view) {
+    try { propertyCardFrontmatterReleaseMounted?.(view?.dom, { plugin: this, kind: "record" }); } catch (_) {}
     try {
       const cached = this.recordSheetEditorCache?.get?.(view);
       if (typeof propertyCardFootReleaseScope === "function") {
@@ -111973,6 +112374,32 @@ class BobLedgerToolsRecordSheetTitleMixin {
     }
   }
 
+  recordSheetOwnMountedFrontmatter(scope, view, path, mount, sourceText, currentPath) {
+    if (typeof propertyCardFrontmatterOwnMounted !== "function") return null;
+    const key = recordSheetPath(path);
+    const sourceFor = () => {
+      if (view?.state?.doc && typeof view.state.doc.toString === "function") return view.state.doc.toString();
+      return this.recordSheetSourceCache?.get?.(key);
+    };
+    const current = () => {
+      const text = sourceFor();
+      return Boolean(text && this.recordSheetCardModelFor(key, text));
+    };
+    return propertyCardFrontmatterOwnMounted(this, {
+      scope, view: view?.dom === scope ? view : null, path: key, kind: "record", mount,
+      sourceText, getSource: sourceFor, currentPath, isCurrent: current,
+      active: () => this.recordSheetActive === true,
+    });
+  }
+
+  recordSheetReleaseFrontmatter(scope, path = "") {
+    try {
+      return propertyCardFrontmatterReleaseMounted?.(scope, {
+        plugin: this, kind: "record", path,
+      }) || false;
+    } catch (_) { return false; }
+  }
+
   recordSheetReleaseAdoption(scope, sourcePath = "", options = {}) {
     try { return propertyCardAdoptRelease(scope, sourcePath || undefined, "record", options); } catch (_) { return false; }
   }
@@ -112014,6 +112441,7 @@ class BobLedgerToolsRecordSheetTitleMixin {
 
   recordSheetRemoveReading(root, scope = root, sourcePath = "") {
     if (!root) return;
+    this.recordSheetReleaseFrontmatter(scope, sourcePath);
     this.recordSheetReleaseAdoption(scope, sourcePath, { preserveFallback: true });
     try {
       if (typeof propertyCardFootReleaseScope === "function") {
@@ -112123,6 +112551,9 @@ class BobLedgerToolsRecordSheetTitleMixin {
       root?.classList?.remove?.(RECORD_SHEET_HIDES_CLASS);
     }
     this.recordSheetSetNativeProperties(scope, card.body);
+    this.recordSheetOwnMountedFrontmatter(
+      scope, null, sourcePath, sheet, sourceText, reading?.currentPath || (() => ""),
+    );
     this.recordSheetNotifyOwnership();
     return sheet;
   }
@@ -160251,6 +160682,7 @@ class BobLedgerToolsIntentionCardMixin {
   }
 
   intentionCardOnSetup() {
+    try { propertyCardFrontmatterCoordinatorBind?.(this, "day"); } catch (_) {}
     this.intentionCardEnsureMaps();
     try { this.intentionCardFootBind?.(); } catch (_) {}
     this.intentionCardDay = this.intentionCardToday();
@@ -160289,6 +160721,9 @@ class BobLedgerToolsIntentionCardMixin {
   }
 
   intentionCardOnDisposeStart() {
+    for (const kind of ["day", "week", "quarter", "year"]) {
+      try { propertyCardFrontmatterCoordinatorReleaseKind?.(this, kind); } catch (_) {}
+    }
     try { this.intentionCardFootUnbind?.(); } catch (_) {}
     try { this.intentionCardSlotReleaseAll?.(); } catch (_) {}
     if (this.intentionCardMidnightTimer != null) {
@@ -161259,6 +161694,11 @@ class BobLedgerToolsIntentionCardTitleSlotMixin {
   // Slot handle, title handle, keys, and render component. Never onLost.
   intentionCardSlotTeardown(entry) {
     if (!entry) return;
+    try {
+      propertyCardFrontmatterReleaseMounted?.(entry.scope, {
+        plugin: this, kind: entry.kind || "", path: entry.path,
+      });
+    } catch (_) {}
     try { entry.slotRelease?.(); } catch (_) {}
     try { entry.titleRelease?.(); } catch (_) {}
     entry.slotRelease = null;
@@ -161298,6 +161738,9 @@ class BobLedgerToolsIntentionCardTitleSlotMixin {
   }
 
   intentionCardSlotMarkFallback(scope, mode, path) {
+    try {
+      propertyCardFrontmatterReleaseMounted?.(scope, { plugin: this, kinds: ["day", "week", "quarter", "year"] });
+    } catch (_) {}
     const entry = {
       scope, mode, path: intentionCardFilePath(path), signature: "", node: null, slotRelease: null,
       titleRelease: null, titleKey: "", titlePath: "", fallback: true, generation: this.intentionCardSlotNextGeneration(),
@@ -161376,15 +161819,21 @@ class BobLedgerToolsIntentionCardTitleSlotMixin {
     const mounted = typeof propertyCardTitleSlotMountedNode === "function" ? propertyCardTitleSlotMountedNode(scope) : null;
     if (existing && !existing.fallback && existing.path === path && existing.mode === mode
       && existing.signature === signature && existing.node && mounted === existing.node) {
+      existing.currentPath = typeof options.currentPath === "function" ? options.currentPath : null;
+      existing.view = mode === "live" ? view : null;
+      existing.kind = model.kind;
       this.intentionCardSlotOwnTitle(existing, view, prepared.recognizer);
       this.intentionCardCommitKeys(scope, path, model);
       try { this.intentionCardTrackFoot?.(scope, path, existing.node); } catch (_) {}
+      this.intentionCardOwnMountedFrontmatter(existing);
       return existing.node;
     }
     const generation = this.intentionCardSlotNextGeneration();
     const entry = {
       scope, mode, path, signature, node: null, slotRelease: null,
       titleRelease: null, titleKey: "", titlePath: "", fallback: false, generation,
+      view: mode === "live" ? view : null, kind: model.kind,
+      currentPath: typeof options.currentPath === "function" ? options.currentPath : null,
     };
     if (existing && !existing.fallback && existing.path === path && existing.mode === mode) {
       entry.titleRelease = existing.titleRelease;
@@ -161428,7 +161877,23 @@ class BobLedgerToolsIntentionCardTitleSlotMixin {
     this.intentionCardSlotOwnTitle(entry, view, prepared.recognizer);
     this.intentionCardCommitKeys(scope, path, model);
     try { this.intentionCardTrackFoot?.(scope, path, entry.node); } catch (_) {}
+    this.intentionCardOwnMountedFrontmatter(entry);
     return entry.node;
+  }
+
+  intentionCardOwnMountedFrontmatter(entry) {
+    if (!entry || entry.fallback || typeof propertyCardFrontmatterOwnMounted !== "function") return null;
+    const sourceFor = () => {
+      const source = this.intentionCardFootSource?.(entry.path);
+      return typeof source?.source === "string" ? source.source : undefined;
+    };
+    return propertyCardFrontmatterOwnMounted(this, {
+      scope: entry.scope, view: entry.view || null, path: entry.path,
+      kind: entry.kind, mount: entry.node, getSource: sourceFor,
+      currentPath: entry.currentPath || (() => entry.view?.file?.path || ""),
+      active: () => this.intentionCardActive === true,
+      isCurrent: () => typeof sourceFor() === "string",
+    });
   }
 
   // The primitive lost the slot. Only the current generation counts: drop
@@ -161497,6 +161962,7 @@ class BobLedgerToolsIntentionCardTitleSlotMixin {
   }
 
   intentionCardLiveRelease(view) {
+    try { propertyCardFrontmatterReleaseMounted?.(view?.dom, { plugin: this, kinds: ["day", "week", "quarter", "year"] }); } catch (_) {}
     try { this.intentionCardHost().setEditorScope(view, false); } catch (_) {}
     try { this.intentionCardTrackFoot?.(view?.dom, this.intentionCardLivePath(view), null); } catch (_) {}
     this.intentionCardSlotRelease(view?.dom);
@@ -161505,6 +161971,7 @@ class BobLedgerToolsIntentionCardTitleSlotMixin {
 
   // Body fallback: today's widget, with keys owned only while content exists.
   intentionCardFallbackDecorations(view, path, source, prepared) {
+    try { propertyCardFrontmatterReleaseMounted?.(view?.dom, { plugin: this, kinds: ["day", "week", "quarter", "year"] }); } catch (_) {}
     const plugin = this;
     const anchor = this.intentionCardLiveAnchor(source, prepared.subject);
     const doc = view.dom?.ownerDocument || (typeof document !== "undefined" ? document : null);
@@ -161589,6 +162056,7 @@ class BobLedgerToolsIntentionCardTitleSlotMixin {
   }
 
   intentionCardCleanEditor(view) {
+    try { propertyCardFrontmatterReleaseMounted?.(view?.dom, { plugin: this, kinds: ["day", "week", "quarter", "year"] }); } catch (_) {}
     this.intentionCardHost().cleanEditor(view);
     this.intentionCardSlotRelease(view?.dom);
     this.intentionCardRelease(view?.dom);
@@ -161645,6 +162113,7 @@ class BobLedgerToolsIntentionCardTitleSlotMixin {
   // Today's body layout: after the H1 and nav sections, or prepended inside
   // the first content section of a note without an H1. No title ownership.
   intentionCardPaintReadingBody(root, scope, sourcePath, prepared) {
+    try { propertyCardFrontmatterReleaseMounted?.(scope, { plugin: this, kinds: ["day", "week", "quarter", "year"], path: sourcePath }); } catch (_) {}
     this.intentionCardRemoveNodes(root, sourcePath);
     const noHeading = prepared.placement && prepared.placement.headingLine < 0;
     const anchor = noHeading ? intentionCardDomFirstSection(root)
@@ -161677,6 +162146,7 @@ class BobLedgerToolsIntentionCardTitleSlotMixin {
   // Remove every display this scope holds for the path: slot entry (title and
   // keys with it), body cards, and keys.
   intentionCardReadingDrop(root, scope, sourcePath = "") {
+    try { propertyCardFrontmatterReleaseMounted?.(scope, { plugin: this, kinds: ["day", "week", "quarter", "year"], path: sourcePath }); } catch (_) {}
     try { this.intentionCardTrackFoot?.(scope, sourcePath, null); } catch (_) {}
     this.intentionCardSlotRelease(scope, { path: sourcePath });
     this.intentionCardRemoveNodes(root, sourcePath);
@@ -175764,8 +176234,8 @@ Object.assign(PropertyEditorModal.prototype, {
 // ---- src/298v-plugin-property-capability-routing.js ----
 // Property capability routing: session-and-bob-path capability cache,
 // actual-ownership query, and the native Add file property entry route
-// (bob-cli-pf.6.1.2 capability-routing). Adapters stay unwired: nothing here
-// acquires ownership; it only observes it and routes native entries.
+// (bob-cli-pf.6.1.2 capability-routing). The shared frontmatter coordinator
+// observes confirmed capability changes and reconciles mounted card adapters.
 //
 // The controller caches one outcome per resolved bob path for the plugin
 // session: confirmed (bob answered props_v1), absent (unknown subcommand),
@@ -175942,6 +176412,7 @@ class BobLedgerToolsPropertyCapabilityRoutingMixin {
     } catch (_) {}
     this.propertyCapabilityByBobPath = new Map();
     this.propertyCapabilityCommandRoute = null;
+    try { propertyCardFrontmatterCoordinatorCapabilityChanged?.(this, "inactive"); } catch (_) {}
   }
 
   propertyCapabilityCurrentBobKey() {
@@ -176023,11 +176494,13 @@ class BobLedgerToolsPropertyCapabilityRoutingMixin {
       if (classified.status === "confirmed") {
         this.propertyCapabilityByBobPath.set(key, { status: "confirmed", attempts });
         try { this.propertyCapability = true; } catch (_) {}
+        try { propertyCardFrontmatterCoordinatorCapabilityChanged?.(this, "confirmed"); } catch (_) {}
         return "confirmed";
       }
       if (classified.status === "absent") {
         this.propertyCapabilityByBobPath.set(key, { status: "absent", attempts: attempts + 1, reason: classified.reason || "" });
         try { this.propertyCapability = false; } catch (_) {}
+        try { propertyCardFrontmatterCoordinatorCapabilityChanged?.(this, "absent"); } catch (_) {}
         return "absent";
       }
       // Unconfirmed leaves the cache alone: a failed contact attempt is
@@ -176130,6 +176603,7 @@ class BobLedgerToolsPropertyCapabilityRoutingMixin {
             reason: classified.reason || "",
           });
         } catch (_) {}
+        try { propertyCardFrontmatterCoordinatorCapabilityChanged?.(this, "unconfirmed"); } catch (_) {}
         return "unconfirmed";
       }
       if (this.propertyCapabilityNoteShowOutcome(outcome) === "confirmed") {
@@ -182772,6 +183246,15 @@ try {
       propertyCardOwnFrontmatterInEditor,
       propertyCardOwnFrontmatterInReading,
       propertyCardOwnFrontmatter,
+      propertyCardFrontmatterCacheEvidence,
+      propertyCardFrontmatterOwnMounted,
+      propertyCardFrontmatterOwnMountedDeferred,
+      propertyCardFrontmatterReleaseMounted,
+      propertyCardFrontmatterCoordinatorBind,
+      propertyCardFrontmatterCoordinatorReleasePath,
+      propertyCardFrontmatterCoordinatorReleaseKind,
+      propertyCardFrontmatterCoordinatorReconcile,
+      propertyCardFrontmatterCoordinatorCapabilityChanged,
       propertyCardFrontmatterPaintedOwner,
       propertyCardFrontmatterActualOwnership,
       propertyCardFrontmatterReleaseScope,

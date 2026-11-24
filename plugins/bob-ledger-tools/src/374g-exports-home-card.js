@@ -1,4 +1,4 @@
-// Test-facing exports for the local Area/Project card model and DOM builder.
+// Test-facing exports for the local Area/Project card model, DOM, host, and foot.
 try {
   if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
     module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
@@ -23,6 +23,14 @@ try {
       homeCardManagedMap,
       homeCardModel,
       homeCardBuildEl,
+      HOME_CARD_HOST_KIND,
+      HOME_CARD_READING_PRIORITY,
+      HOME_CARD_SURFACE_CLASS,
+      homeCardLinkPane,
+      homeCardIsDesktopPlatform,
+      homeCardScopeDenied,
+      BobLedgerToolsHomeCardMixin,
+      BobLedgerToolsHomeCardFootMixin,
     });
   }
 } catch (_) {}

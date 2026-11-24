@@ -200,6 +200,8 @@
   "249a-plugin-bank-walk-index.js",
   "249b-plugin-home-card-model.js",
   "249c-plugin-home-card-dom.js",
+  "249d-plugin-home-card-host.js",
+  "249e-plugin-home-card-foot.js",
   "241b-plugin-notebook-catalog-model.js",
   "241c-plugin-notebook-catalog-dom.js",
   "241d-plugin-notebook-catalog.js",

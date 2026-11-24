@@ -426,6 +426,34 @@ async function run(args) {
     const ctx = { client, report, notes, outDir, profileDir, check, attempt };
     ctx.page = makePage(ctx);
     await ctx.page.install();
+    await ctx.page.ev(`(() => {
+      const audit = { rows: [], restores: [] };
+      const normalizePath = (value) => String(value?.path ?? value ?? "").replace(/\\\\/g, "/");
+      const wrap = (owner, name, pathAt) => {
+        if (!owner || typeof owner[name] !== "function") return;
+        const original = owner[name];
+        const wrapped = function(...args) {
+          const path = normalizePath(pathAt(args));
+          if (path === ${JSON.stringify(P.day)}) {
+            audit.rows.push({
+              api: name,
+              at: new Date().toISOString(),
+              stack: String(new Error().stack || "").split("\\n").slice(2, 12),
+            });
+          }
+          return original.apply(this, args);
+        };
+        owner[name] = wrapped;
+        audit.restores.push(() => { if (owner[name] === wrapped) owner[name] = original; });
+      };
+      wrap(app.vault, "modify", (args) => args[0]);
+      wrap(app.vault, "process", (args) => args[0]);
+      wrap(app.fileManager, "processFrontMatter", (args) => args[0]);
+      wrap(app.vault.adapter, "write", (args) => args[0]);
+      wrap(app.vault.adapter, "writeBinary", (args) => args[0]);
+      window.__bobFrontmatterTakeoverWriteAudit = audit;
+      return { apis: audit.restores.length };
+    })()`);
     ctx.main = await ctx.page.mainLeaf();
     await ctx.page.open(ctx.main, P.day, "live");
     await ctx.page.settle(400);
@@ -1199,6 +1227,7 @@ async function run(args) {
 
     await sleep(400);
     report.fixtures.final = hashFixtures(vaultReal, names);
+    report.vaultWriteAudit = await ctx.page.ev("window.__bobFrontmatterTakeoverWriteAudit?.rows || []");
     const changed = names.filter((name) => report.fixtures.final[name] !== report.fixtures.expected[name]);
     check("bytes-unchanged", changed.length === 0, { changed, seeded: report.fixtures.seeded, final: report.fixtures.final });
     const beforeNativeCheck = readInvocations(bobLog).length;

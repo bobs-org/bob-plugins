@@ -20,7 +20,7 @@ const repoRoot = path.resolve(__dirname, "..");
 const ELECTRON_FALLBACK = "/snap/obsidian/current/app/obsidian";
 const PLUGIN_ID = "bob-ledger-tools";
 const FIXTURE_TODAY = "2026-11-20";
-const OVERALL_TIMEOUT_MS = 1_200_000;
+const OVERALL_TIMEOUT_MS = 600_000;
 const COMMAND_ID = "markdown:add-metadata-property";
 const MODE_STATE = {
   live: { mode: "source", source: false },
@@ -31,6 +31,7 @@ const { sleep, waitFor } = shared;
 const P = lib.PATHS;
 const VIM_PROBE_PATH = "2026/20261119.md";
 const STALE_CACHE_PROBE_PATH = "2026/20261118.md";
+const NATIVE_FALLBACK_PROBE_PATH = "2026/20261117.md";
 
 function fail(message, code = 1) {
   process.stderr.write(String(message) + "\n");
@@ -329,12 +330,19 @@ async function run(args) {
   };
   const attempt = async (name, fn) => {
     observeFixtureWatch("before:" + name);
+    if (client) await client.evaluate(`(() => {
+      const audit = window.__bobFrontmatterTakeoverWriteAudit;
+      if (audit) audit.stage = ${JSON.stringify(name)};
+    })()`);
+    const startedAt = new Date().toISOString();
     try {
       const result = await fn();
       check(name, Boolean(result && result.ok !== false && (result.ok === true || result.ok === undefined || result.failures === undefined || result.failures.length === 0)), result || {});
     } catch (error) {
       check(name, false, { error: String(error && error.stack || error).slice(0, 3000) });
     } finally {
+      const row = report.checks[report.checks.length - 1];
+      if (row?.name === name) Object.assign(row, { startedAt, finishedAt: new Date().toISOString() });
       observeFixtureWatch("after:" + name);
     }
   };
@@ -429,9 +437,9 @@ async function run(args) {
     ctx.page = makePage(ctx);
     await ctx.page.install();
     await ctx.page.ev(`(() => {
-      const audit = { rows: [], restores: [] };
+      const audit = { rows: [], restores: [], stage: "startup" };
       const normalizePath = (value) => String(value?.path ?? value ?? "").replace(/\\\\/g, "/");
-      const trackedPaths = new Set(${JSON.stringify([P.day, VIM_PROBE_PATH, STALE_CACHE_PROBE_PATH])});
+      const trackedPaths = new Set(${JSON.stringify([...names, VIM_PROBE_PATH, STALE_CACHE_PROBE_PATH, NATIVE_FALLBACK_PROBE_PATH])});
       const wrap = (owner, name, pathAt) => {
         if (!owner || typeof owner[name] !== "function") return;
         const original = owner[name];
@@ -439,7 +447,7 @@ async function run(args) {
           const path = normalizePath(pathAt(args));
           if (trackedPaths.has(path)) {
             audit.rows.push({
-              api: name, path,
+              api: name, path, stage: audit.stage,
               at: new Date().toISOString(),
               stack: String(new Error().stack || "").split("\\n").slice(2, 12),
             });
@@ -772,10 +780,8 @@ async function run(args) {
       return { ok: true, probe };
     });
     await attempt("stale-cache-releases", async () => {
-      // Keep the external cache edit/restore off the protected fixture. Obsidian
-      // can schedule a later MarkdownView.save after vault.modify, which
-      // reserializes YAML even when this probe restores the file and buffer.
-      const auditStart = await ctx.page.ev("window.__bobFrontmatterTakeoverWriteAudit?.rows.length || 0");
+      // Deliberate source edits use a disposable note. Passive fixture hashes
+      // must not include the writes this test itself requests.
       const cacheProbeNote = notes[P.day]
         .replaceAll("2026-11-20", "2026-11-18")
         .replaceAll("20261120", "20261118")
@@ -905,27 +911,9 @@ async function run(args) {
         }));
       }
       const restored = await ctx.page.waitOwned(ctx.main, "live", "stale restore");
-      // A prior native MarkdownView.save landed 496 seconds after the last
-      // disposable probe write. Keep waiting with the disposable note active
-      // before any later check can redirect that save, with a bounded margin.
-      await waitFor(client, `(() => {
-        const rows = window.__bobFrontmatterTakeoverWriteAudit?.rows || [];
-        return rows.slice(${Number(auditStart)}).some((row) =>
-          row.stack.some((line) => line.includes("lt.save") || line.includes("lt.writeData")));
-      })()`, Boolean, "deferred native save on disposable stale-cache probe", 600_000);
-      const staleProbeAudit = await ctx.page.ev(
-        `window.__bobFrontmatterTakeoverWriteAudit?.rows.slice(${Number(auditStart)}) || []`,
-      );
-      const delayedSaveRows = staleProbeAudit.filter((row) =>
-        row.stack.some((line) => line.includes("lt.save") || line.includes("lt.writeData")));
-      const delayedSaveTargets = [...new Set(delayedSaveRows.map((row) => row.path))];
-      const delayedSaveOnProbe = delayedSaveTargets.includes(STALE_CACHE_PROBE_PATH);
-      if (!delayedSaveOnProbe || delayedSaveTargets.some((target) => target !== STALE_CACHE_PROBE_PATH)) {
-        throw new Error("deferred native save did not stay on the disposable probe: " + JSON.stringify({
-          delayedSaveTargets,
-          expected: STALE_CACHE_PROBE_PATH,
-        }));
-      }
+      // Do not wait for a native save: this check never requests one. Earlier
+      // runs attributed the later native Add-property fallback to this probe,
+      // so every increased timeout merely postponed the intentional write.
       const protectedBytes = await ctx.page.ev(
         "window.__bobFrontmatterTakeover.readNote(" + JSON.stringify(P.day) + ")",
       );
@@ -948,8 +936,6 @@ async function run(args) {
           bufferRestored: restoredBuffer === cacheProbeNote,
           bytesRestored: restoredBytes === cacheProbeNote,
           protectedBytesRestored: protectedBytes === notes[P.day],
-          delayedSaveOnProbe,
-          delayedSaveTargets,
         },
         restored,
       };
@@ -1142,7 +1128,7 @@ async function run(args) {
       await ctx.page.settle(300);
       const after = await ctx.page.probe(ctx.main);
       const active = await ctx.page.active();
-      if (!after.editorOpen && !active.inEditor) failures.push("Mod+; did not open the property editor");
+      failures.push(...lib.addEditorFailures(after));
       if (active.inProperties && /metadata-property-key-input/.test(active.className || "")) failures.push("Mod+; focused the native key input on an owned note");
       await ctx.page.closeEditor();
       return { ok: failures.length === 0, after, active, command: report.addFilePropertyCommand, failures };
@@ -1154,7 +1140,7 @@ async function run(args) {
       await ctx.page.settle(300);
       const after = await ctx.page.probe(ctx.main);
       const failures = [];
-      if (!after.editorOpen) failures.push("palette dispatch did not open the property editor");
+      failures.push(...lib.addEditorFailures(after));
       await ctx.page.closeEditor();
       return { ok: failures.length === 0, after, failures };
     });
@@ -1167,7 +1153,7 @@ async function run(args) {
       const after = await ctx.page.probe(ctx.main);
       const failures = [];
       if (!bind || bind.ok !== true) failures.push("could not bind Alt+P: " + JSON.stringify(bind));
-      if (!after.editorOpen) failures.push("custom shortcut did not open the property editor");
+      failures.push(...lib.addEditorFailures(after));
       await ctx.page.closeEditor();
       return { ok: failures.length === 0, after, bind, failures };
     });
@@ -1195,9 +1181,11 @@ async function run(args) {
         const sidebar = document.querySelector(".workspace-leaf-content[data-type='file-properties'], .workspace-leaf-content[data-type='all-properties']");
         const owned = sidebar ? sidebar.querySelector(".bob-property-card-owns-frontmatter") : null;
         const input = sidebar ? sidebar.querySelector(".metadata-property-key-input, .metadata-property") : null;
-        return { hasSidebar: Boolean(sidebar), owned: Boolean(owned), hasNative: Boolean(input) };
+        return { hasSidebar: Boolean(sidebar), owned: Boolean(owned), hasNative: Boolean(input),
+          inert: Boolean(input?.closest("[inert], [aria-hidden='true']")) };
       })()`);
-      return { ok: !result.owned, result };
+      const failures = lib.sidebarFailures(result);
+      return { ok: failures.length === 0, result, failures };
     });
     await attempt("field-focused-helper", async () => {
       await ctx.page.open(ctx.main, P.album, "live");
@@ -1217,29 +1205,55 @@ async function run(args) {
       return { ok: failures.length === 0, after, failures };
     });
     await attempt("failed-opener-fallback", async () => {
-      await ctx.page.open(ctx.main, P.day, "live");
-      await ctx.page.waitOwned(ctx.main, "live", "opener setup");
-      const result = await ctx.page.ev(`(async () => {
-        const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
-        const orig = plugin.openPropertyEditor.bind(plugin);
-        plugin.openPropertyEditor = async () => { throw new Error("injected opener failure"); };
-        let opened = false;
-        try { await app.commands.executeCommandById(${JSON.stringify(COMMAND_ID)}); opened = true; } catch (_) {}
-        plugin.openPropertyEditor = orig;
-        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-        const leaf = app.workspace.getLeafById(${JSON.stringify(ctx.main)});
-        const view = leaf && leaf.view;
-        const scope = view && view.editor && view.editor.cm ? view.editor.cm.dom : null;
-        const owned = scope && scope.classList.contains("bob-property-card-owns-frontmatter");
-        return { opened, owned: Boolean(owned) };
+      // Native Add property can reserialize YAML even without a completed edit.
+      // Exercise that intentional native action on its own note and leaf, never
+      // on a passive hash fixture or a view later reused by those fixtures.
+      const probeNote = notes[P.day]
+        .replaceAll("2026-11-20", "2026-11-17")
+        .replaceAll("20261120", "20261117")
+        .replace("# 2026-11-17 Fri", "# 2026-11-17 Tue");
+      const probeLeaf = await ctx.page.ev(`(async () => {
+        await app.vault.create(${JSON.stringify(NATIVE_FALLBACK_PROBE_PATH)}, ${JSON.stringify(probeNote)});
+        return app.workspace.getLeaf("tab").id;
       })()`);
-      await ctx.page.settle(300);
-      const probe = await ctx.page.probe(ctx.main);
-      await ctx.page.closeEditor();
-      const failures = [];
-      if (result.owned) failures.push("owned class remained after opener failure");
-      if (probe.containerInert) failures.push("container stayed inert after opener failure");
-      return { ok: failures.length === 0, result, probe, failures };
+      try {
+        await ctx.page.open(probeLeaf, NATIVE_FALLBACK_PROBE_PATH, "live");
+        await ctx.page.waitOwned(probeLeaf, "live", "opener setup");
+        const result = await ctx.page.ev(`(async () => {
+          const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
+          const original = plugin.openPropertyEditor;
+          plugin.openPropertyEditor = async () => { throw new Error("injected opener failure"); };
+          try {
+            await app.commands.executeCommandById(${JSON.stringify(COMMAND_ID)});
+            await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            const leaf = app.workspace.getLeafById(${JSON.stringify(probeLeaf)});
+            const scope = leaf.view.editor.cm.dom;
+            const container = scope.querySelector(".metadata-container");
+            const active = document.activeElement;
+            return { owned: scope.classList.contains("bob-property-card-owns-frontmatter"),
+              nativeFocused: Boolean(container && active && container.contains(active)) };
+          } finally { plugin.openPropertyEditor = original; }
+        })()`);
+        await ctx.page.settle(300);
+        const probe = await ctx.page.probe(probeLeaf);
+        const failures = lib.nativeFailures(probe, "failed opener");
+        if (!probe.containerVisible) failures.push("native Properties is not visible after opener failure");
+        if (!result.nativeFocused) failures.push("native fallback did not receive focus");
+        await ctx.page.closeEditor();
+        return { ok: failures.length === 0, path: NATIVE_FALLBACK_PROBE_PATH, result, probe, failures };
+      } finally {
+        await ctx.page.ev(`(async () => {
+          const leaf = app.workspace.getLeafById(${JSON.stringify(probeLeaf)});
+          if (leaf) {
+            if (typeof leaf.view.save === "function") await leaf.view.save();
+            leaf.detach();
+          }
+          return true;
+        })()`);
+        await ctx.page.open(ctx.main, P.day, "live");
+        // Retain this disposable note for the final audit; the scratch vault is
+        // removed only after its Obsidian process exits.
+      }
     });
     await attempt("drawer-exposes-every-key", async () => {
       await ctx.page.open(ctx.main, P.day, "live");
@@ -1282,8 +1296,12 @@ async function run(args) {
         await shared.setViewport(client, width, 1000);
         await ctx.page.open(ctx.main, P.ordinary, "live");
         await ctx.page.settle(200);
-        await ctx.page.ev("(async () => { await app.commands.executeCommandById(" + JSON.stringify(COMMAND_ID) + "); return true; })()");
-        await ctx.page.settle(300);
+        await ctx.page.ev(`(async () => {
+          await app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}].openPropertyEditor({ filePath: ${JSON.stringify(P.ordinary)}, mode: "add" });
+          return true;
+        })()`);
+        await waitFor(client, `window.__bobFrontmatterTakeover.leaf(${JSON.stringify(ctx.main)}).editorAdd`,
+          Boolean, "ordinary note property editor Add mode", 10_000);
         await ctx.page.shot("ordinary-add-" + theme + "-" + widthName, ["ordinary", "add", theme, widthName], width);
         await ctx.page.closeEditor();
       }

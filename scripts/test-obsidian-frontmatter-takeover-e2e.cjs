@@ -128,3 +128,20 @@ test("stale-cache probe injects a stale view without mutating Obsidian's cached 
   assert.match(source, /bufferChanged = bufferAfter !== bufferBefore/);
   assert.match(source, /day fixture restoration after Tab probe/);
 });
+
+
+test("native UI cannot masquerade as the property editor in Add mode", () => {
+  assert.ok(lib.addEditorFailures(null).length);
+  assert.ok(lib.addEditorFailures({ editorOpen: false, editorAdd: true }).length);
+  assert.ok(lib.addEditorFailures({ editorOpen: true, editorAdd: false }).length);
+  assert.deepEqual(lib.addEditorFailures({ editorOpen: true, editorAdd: true }), []);
+});
+
+test("sidebar acceptance requires present, usable native properties", () => {
+  const usable = { hasSidebar: true, hasNative: true, owned: false, inert: false };
+  assert.deepEqual(lib.sidebarFailures(usable), []);
+  assert.ok(lib.sidebarFailures(null).length);
+  for (const delta of [
+    { hasSidebar: false }, { hasNative: false }, { owned: true }, { inert: true },
+  ]) assert.ok(lib.sidebarFailures({ ...usable, ...delta }).length, JSON.stringify(delta));
+});

@@ -238,6 +238,20 @@ function nativeFailures(probe, label) {
   return failures;
 }
 
+function addEditorFailures(probe) {
+  if (!probe?.editorOpen) return ["property editor did not open"];
+  return probe.editorAdd ? [] : ["property editor did not enter Add mode"];
+}
+
+function sidebarFailures(probe) {
+  const failures = [];
+  if (!probe?.hasSidebar) failures.push("File Properties sidebar did not open");
+  if (!probe?.hasNative) failures.push("File Properties sidebar has no native properties");
+  if (probe?.owned) failures.push("sidebar acquired whole-container ownership");
+  if (probe?.inert) failures.push("sidebar native properties are inert or aria-hidden");
+  return failures;
+}
+
 function variablesOk(probe, mode) {
   const failures = [];
   if (mode === "live" && probe.editingVar !== "none") failures.push("--metadata-display-editing is " + JSON.stringify(probe.editingVar));
@@ -544,5 +558,5 @@ function selfTest() {
 module.exports = {
   HELP_TEXT, REQUIRED_CHECKS, PATHS, PROBE_SOURCE, PAGE_COMMON,
   parseArgs, surfaceOf, fixtureNotes, canvasFixture, passingReport, computeVerdict,
-  ownedFailures, nativeFailures, variablesOk, screenshotNeeds, selfTest,
+  ownedFailures, nativeFailures, addEditorFailures, sidebarFailures, variablesOk, screenshotNeeds, selfTest,
 };

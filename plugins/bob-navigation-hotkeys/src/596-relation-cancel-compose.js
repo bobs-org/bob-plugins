@@ -270,6 +270,7 @@ function composeRelationSourceCancel(details = {}) {
     planned,
     identity: Object.freeze({
       path: liveSource.path,
+      line: sourceLine,
       blockId:
         (cancelled && cancelled.blockId) ||
         getTrailingBlockId(String(batch.content.split(/\r?\n/)[sourceLine] || "")) ||

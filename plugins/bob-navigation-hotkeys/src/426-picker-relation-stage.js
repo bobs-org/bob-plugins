@@ -527,6 +527,7 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
           if (applyRelationCancelStaleToPicker(this, outcome)) {
             return false;
           }
+          if (outcome.reason === "mail-close-kept-open") return false;
           if (outcome.reason === "changed — reopen" || outcome.reason === "changed") {
             return this.refuseDependencyStale();
           }
@@ -578,6 +579,7 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
         if (applyRelationCancelStaleToPicker(this, outcome)) {
           return false;
         }
+        if (outcome.reason === "mail-close-kept-open") return false;
         if (
           outcome.reason === "changed — reopen" ||
           outcome.reason === "changed"

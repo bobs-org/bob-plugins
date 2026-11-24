@@ -11,6 +11,9 @@
   "051-decay-priority-snapshot.js",
   "052-decay-ladder-step-planner.js",
   "060-decay-card-modal.js",
+  "061-mail-close-model-twin.js",
+  "062-mail-close-card-modal.js",
+  "063-mail-close-guard-api.js",
   "070-recommended-roll-batch.js",
   "080-dependency-identity.js",
   "081-blocks-line-grammar.js",
@@ -295,5 +298,6 @@
   "729-req-line-guard-exports.js",
   "730-task-split-carry-exports.js",
   "731-project-seed-reqs-exports.js",
-  "732-relation-event-target-exports.js"
+  "732-relation-event-target-exports.js",
+  "733-mail-close-exports.js"
 ]

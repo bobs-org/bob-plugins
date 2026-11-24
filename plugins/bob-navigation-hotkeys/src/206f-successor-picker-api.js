@@ -208,6 +208,9 @@ class BobNavigationHotkeysSuccessorPickerMixin {
                 picks,
                 ...(reqs !== null ? { reqs } : {}),
                 ...(kept.length > 0 ? { closes: kept } : {}),
+                ...(result.context && typeof result.context.mailCloseConfirmed === "string"
+                  ? { context: { mailCloseConfirmed: result.context.mailCloseConfirmed } }
+                  : {}),
                 ...(jump ? { jump } : {}),
               });
             } else {

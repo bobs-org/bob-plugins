@@ -330,6 +330,11 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
     if (!event || typeof event !== "object") {
       return;
     }
+    if (this.mailCloseGuardPending === true) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
     if (
       event.key === "Enter" &&
       (event.ctrlKey === true || event.metaKey === true) &&

@@ -409,6 +409,7 @@ The root `bob-navigation-hotkeys.api` is version 3:
 | `proseField` | 2 | Attach the controller that owns USED BEFORE and the LINK band for `[[` notes mode plus `((` tasks mode (list + in-band NAME) in prose prompts. |
 | `notice` | 6 | Show the Unblocked card; v2 `keep_moving`, v3 `relation_successors`, v4 `offer_closes`, v5 a trailing `↗ “S”` jump line, v6 `req_outcomes`/`req_met`. |
 | `successors` | 5 | Ask which offered successor links to add; v2 accepts `keep_moving`, v3 accepts the `relation` group, v4 resolves verdict closes, and v5 stages a `Ctrl+J` jump pin. |
+| `mailCloseGuard` | 1 | Classify task close targets as Gmail Tasks and show the Mail Close Card before a navigation-owned close. |
 | `taskSplit` | 1 | Carry one task requirement into its own task through `carryReq`. |
 | `blocks` | 1 | Open the reverse Blocks stage or remove a dependent. |
 | `relations` | 0 | Remove a LINKS edge (`removeLink`). `openStage` opens the Links direction; the reverse direction settles `{ ok: false }` until both stage directions ship. |
@@ -419,6 +420,20 @@ The root `bob-navigation-hotkeys.api` is version 3:
 | `claimReviewWalkCompletion(editor)` | Root method | Claim completion handoff for a landed review row. |
 | `recordJump(from, to)` | Additive member | Record one origin→destination transition on the same file-aware Vim jump history `Ctrl+O` uses. Synchronous, never throws, returns `true` when recorded. Feature-detect the method; the root `version` stays 3. |
 | `landOnTask(target, options?)` | Additive member | Re-find a task by identity (`{path, blockId?, text?, line?, description?, label?}`). Resolves `{ok, reason?, line?}`. Records a Vim jump and flashes the line. Never stamps or touches the walk. |
+
+`mailCloseGuard.classify(targets)` resolves to the target rows that are Gmail Tasks.
+Each target is `{ path, line, lineText?, before, after }`: `line` is one-based,
+`before` is an open checkbox status, and `after` is `x`, `X`, or `-`.
+Classification follows the shared Mail Close Card predicate, resolving the task's
+own links and direct link-only children against mail-note frontmatter.
+`mailCloseGuard.confirm(targets, { context? })` resolves to
+`{ confirmed, guarded, token }`. It returns immediately with `confirmed: true`
+when no target is a Gmail Task. A guarded close opens one card; only `y` confirms,
+and every other key keeps the source task open. A confirmed `token` binds the exact
+close identities. Pass it to downstream close writers as
+`context.mailCloseConfirmed` so one gesture cannot prompt twice. Both methods
+settle without throwing. The root API remains version 3 because this is an additive
+namespace.
 
 `inboxRoute` has `isInboxNote(path)`,
 `prompt(request)`, and `commit(request)`.
@@ -458,6 +473,9 @@ preimage }` so `Ctrl+Shift+Enter` can retarget through
 the full matching note; `preimage` is the original task line used to
 refuse a changed or missing source before the nested picker. Older rows
 without `task` still retarget without changing a task type.
+When a close verdict is staged, the picker asks `mailCloseGuard` before it
+settles. Keeping the close leaves the picker and its verdicts open; a confirmed
+close adds `context.mailCloseConfirmed` to the result for the downstream writer.
 Destination overrides may carry additive `themeIntent` and
 `preserveSpelling`. Both navigation's
 `normalizeSuccessorDestinationOverride` and the cycler's

@@ -924,6 +924,7 @@ function createDependencyNavApi(plugin) {
     taskSplit: createTaskSplitApi(plugin),
     blocks: createBlocksNavApi(plugin),
     relations: createRelationsNavApi(plugin),
+    mailCloseGuard: createMailCloseGuardApi(plugin),
     walkMode: createWalkModeApi(plugin),
     openReferencePdf(path, options) {
       if (!plugin || typeof plugin.openReferencePdfPath !== "function") {

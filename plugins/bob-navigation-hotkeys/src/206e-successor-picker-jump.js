@@ -314,7 +314,7 @@ function successorJumpApplySelection(modal) {
     }
   }
   const hasReqGroups = (modal.model.groups || []).some((group) => group && group.group === "requirements");
-  modal.settle({
+  const submission = {
     picks: selected.map((key) => {
       const item = { key };
       try {
@@ -330,7 +330,47 @@ function successorJumpApplySelection(modal) {
     ...(hasReqGroups && (reqs.length > 0 || defaultRequirementSubmit || jump != null) ? { reqs } : {}),
     ...(closes.length > 0 ? { closes } : {}),
     ...(jump ? { jump } : {}),
-  });
+  };
+  if (closes.length > 0) {
+    const targets = closes.map((close) => {
+      const row = successorFindRowByKey(modal, close.key);
+      if (!row) return null;
+      const lineText = typeof row.rawLine === "string"
+        ? row.rawLine
+        : row.task && typeof row.task.preimage === "string"
+          ? row.task.preimage
+          : String(row.lineText || row.text || "");
+      const before = getObsidianTaskCheckboxStatus(lineText) || String(row.status || " ").slice(0, 1);
+      const line = Number.isInteger(row.line) ? row.line + 1 : Number(row.task && row.task.line);
+      const path = String(row.notePath || row.path || (row.task && row.task.path) || "");
+      if (!path || !Number.isInteger(line)) return null;
+      return { path, line, lineText, before, after: close.outcome === "cancelled" ? "-" : "x" };
+    }).filter(Boolean);
+    if (targets.length !== closes.length) {
+      modal.statusLine = { text: "Email task close could not be identified; staged choices remain", kind: "refusal" };
+      try { if (typeof modal.renderAll === "function") modal.renderAll(); } catch (_error) {}
+      return true;
+    }
+    if (targets.length > 0) {
+      modal.mailCloseGuardPending = true;
+      void confirmMailCloseForApp(modal.app, targets).then((guarded) => {
+        modal.mailCloseGuardPending = false;
+        if (!guarded.confirmed) {
+          modal.statusLine = { text: "Email task close kept open; staged choices remain", kind: "consequence" };
+          try { if (typeof modal.renderAll === "function") modal.renderAll(); } catch (_error) {}
+          return;
+        }
+        submission.context = { mailCloseConfirmed: guarded.token };
+        modal.settle(submission);
+      }).catch(() => {
+        modal.mailCloseGuardPending = false;
+        modal.statusLine = { text: "Email task close could not be confirmed", kind: "refusal" };
+        try { if (typeof modal.renderAll === "function") modal.renderAll(); } catch (_error) {}
+      });
+      return true;
+    }
+  }
+  modal.settle(submission);
   return true;
 }
 
@@ -341,6 +381,9 @@ function successorJumpSettle(modal, result) {
   const picks = result && Array.isArray(result.picks) ? result.picks : null;
   const reqs = result && Array.isArray(result.reqs) ? result.reqs : null;
   const closes = result && Array.isArray(result.closes) ? result.closes : null;
+  const mailCloseConfirmed = result && result.context && typeof result.context.mailCloseConfirmed === "string"
+    ? result.context.mailCloseConfirmed
+    : null;
   const jump = result && result.jump && typeof result.jump === "object" &&
     typeof result.jump.key === "string" && result.jump.key
     ? { key: result.jump.key }
@@ -350,6 +393,7 @@ function successorJumpSettle(modal, result) {
       picks,
       ...(reqs ? { reqs } : {}),
       ...(closes ? { closes } : {}),
+      ...(mailCloseConfirmed ? { context: { mailCloseConfirmed } } : {}),
       ...(jump ? { jump } : {}),
     };
   } else {

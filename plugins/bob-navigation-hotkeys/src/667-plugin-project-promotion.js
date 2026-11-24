@@ -299,6 +299,7 @@ class BobNavigationHotkeysProjectPromotionMixin {
     }
     let picks = null;
     let promotionCloses = [];
+    let promotionCloseContext = null;
     let promotionJumpKey = null;
     let offerPlan = null;
     let liveLinkedChildIds = new Set();
@@ -364,12 +365,16 @@ class BobNavigationHotkeysProjectPromotionMixin {
             const result = await this.pickSuccessorOffers(model, { retarget: false });
             picks = result && Array.isArray(result.picks) ? result.picks : null;
             promotionCloses = result && Array.isArray(result.closes) ? result.closes : [];
+            promotionCloseContext = result && result.context && typeof result.context === "object"
+              ? result.context
+              : null;
             promotionJumpKey = result && result.jump && typeof result.jump.key === "string"
               ? result.jump.key
               : null;
           } catch (_error) {
             picks = null;
             promotionCloses = [];
+            promotionCloseContext = null;
             promotionJumpKey = null;
           }
         }
@@ -598,7 +603,7 @@ class BobNavigationHotkeysProjectPromotionMixin {
     let promotionCloseReceipt = null;
     if (promotionCloses.length > 0 && offerPlan) {
       try {
-        promotionCloseReceipt = await promotionApplyOfferCloses(this, offerPlan, promotionCloses);
+        promotionCloseReceipt = await promotionApplyOfferCloses(this, offerPlan, promotionCloses, promotionCloseContext);
       } catch (_error) {
         promotionCloseReceipt = null;
       }

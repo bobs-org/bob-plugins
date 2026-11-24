@@ -833,6 +833,12 @@ class BobNavigationHotkeysDecayCancelMixin {
       return false;
     }
 
+    const mailClose = await confirmMailCloseForPlugin(
+      this,
+      mailCloseTargetsFromCancelPlan(filePath, writeContext.content, plan),
+    );
+    if (!mailClose.confirmed) return false;
+
     let finalContent = plan.content;
     if (cancel.rottenLogBody) {
       const target = plan.cancelled[0];

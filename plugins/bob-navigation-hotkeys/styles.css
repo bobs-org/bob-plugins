@@ -149,6 +149,113 @@
   }
 }
 
+.modal.bob-mail-close-modal {
+  width: min(620px, calc(100vw - 32px));
+}
+
+.bob-mail-close-card {
+  padding: 22px;
+}
+
+.bob-mail-close-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.bob-mail-close-icon {
+  display: grid;
+  flex: 0 0 42px;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--text-muted);
+  background: var(--background-modifier-hover);
+}
+
+.bob-mail-close-card.is-warning .bob-mail-close-icon {
+  color: var(--color-orange);
+  background: rgba(var(--color-orange-rgb), .12);
+}
+
+.bob-mail-close-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.bob-mail-close-heading {
+  min-width: 0;
+}
+
+.bob-mail-close-title {
+  font-weight: 650;
+}
+
+.bob-mail-close-subtitle,
+.bob-mail-close-row-note,
+.bob-mail-close-more {
+  color: var(--text-muted);
+  font-size: var(--font-smaller);
+}
+
+.bob-mail-close-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 14px 0;
+  padding-left: 12px;
+  border-left: 2px solid var(--background-modifier-border);
+}
+
+.bob-mail-close-card.is-warning .bob-mail-close-rows {
+  border-left-color: rgba(var(--color-orange-rgb), .42);
+}
+
+.bob-mail-close-row-label {
+  overflow: hidden;
+  color: var(--text-normal);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bob-mail-close-row-turn {
+  color: var(--text-muted);
+  font-size: var(--font-smaller);
+}
+
+.bob-mail-close-row-turn.is-warning {
+  color: var(--color-orange);
+}
+
+.bob-mail-close-consequence {
+  margin: 14px 0;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+.bob-mail-close-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.bob-mail-close-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.bob-mail-close-footer {
+  margin-top: 10px;
+  color: var(--text-faint);
+  font-size: var(--font-smaller);
+  text-align: right;
+}
+
 /* Requirement rows on successor picker API v6. */
 .bob-cnp-successor .bob-successor-group.is-requirements {
   border-left: 3px solid color-mix(in srgb, var(--bob-successor-req-ink, var(--interactive-accent)) 72%, transparent);

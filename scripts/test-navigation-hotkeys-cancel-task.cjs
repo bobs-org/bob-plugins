@@ -522,7 +522,7 @@ test("same-file cancel folds today's Pomodoro prune into one transaction", async
     "- [ ] #task Ship it ^ship",
   ].join("\n");
   const editor = new TransactionEditor(content, { line: 4, ch: 0 });
-  const dailyFile = { path: dailyPath, basename: dailyPath, extension: "md" };
+  const dailyFile = { path: dailyPath, basename: `${year}${month}${day}`, extension: "md" };
   const plugin = new NavigationHotkeysPlugin();
   plugin.app = {
     plugins: { plugins: {} },

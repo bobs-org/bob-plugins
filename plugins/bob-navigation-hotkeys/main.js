@@ -6378,6 +6378,775 @@ class FreshnessDecayCardModal extends Modal {
     this.onStayReason = null;
   }
 }
+// ---- src/061-mail-close-model-twin.js ----
+// Bob Navigation Hotkeys twin of bob-cli's Mail Close Card model.
+// Pure helpers are shared with the vector harness; vault access is injected.
+function mailCloseStripInlineCode(text) {
+  return String(text || "").replace(/`+[^`]*`+/g, "");
+}
+
+function mailCloseLineLinks(line) {
+  const text = mailCloseStripInlineCode(line);
+  const links = [];
+  const re = /(!?)\[\[([^\]]+)\]\]/g;
+  let match;
+  while ((match = re.exec(text))) {
+    if (match[1] === "!") continue;
+    const target = String(match[2].split("|")[0].split("#")[0] || "").trim();
+    if (target) links.push(target);
+  }
+  return links;
+}
+
+function mailCloseLinkOnlyBullet(line) {
+  const text = mailCloseStripInlineCode(line).trim();
+  if (/~~/.test(text) || /!\[\[/.test(text)) return null;
+  const match = /^(?:[-+*]|\d+[.)])[ \t]+(.*)$/.exec(text);
+  if (!match) return null;
+  const body = match[1].trim();
+  const link = /^\[\[([^\]]+)\]\]$/.exec(body);
+  if (!link) return null;
+  const target = String(link[1].split("|")[0].split("#")[0] || "").trim();
+  return target || null;
+}
+
+function mailCloseTaskLinks(line, children, resolve, isMail) {
+  const result = [];
+  const push = (target) => {
+    let resolved = null;
+    try { resolved = typeof resolve === "function" ? resolve(target) : null; } catch (_error) {}
+    const path = typeof resolved === "string" ? resolved : resolved && resolved.path;
+    let mail = false;
+    try { mail = typeof isMail === "function" && isMail(path, resolved) === true; } catch (_error) {}
+    if (mail && path && !result.includes(path)) result.push(path);
+  };
+  for (const target of mailCloseLineLinks(line)) push(target);
+  const childRows = (Array.isArray(children) ? children : []).map((child) => String(child || ""));
+  const indents = childRows.map((child) => {
+    const match = /^(\s*)\S/.exec(child);
+    return match ? match[1].replace(/\t/g, "    ").length : Infinity;
+  }).filter(Number.isFinite);
+  const directIndent = indents.length ? Math.min(...indents) : Infinity;
+  for (const child of childRows) {
+    const match = /^(\s*)/.exec(child);
+    const indent = match ? match[1].replace(/\t/g, "    ").length : 0;
+    if (indent !== directIndent) continue;
+    const target = mailCloseLinkOnlyBullet(child);
+    if (target) push(target);
+  }
+  return result;
+}
+
+function mailCloseFrontmatterIsMail(frontmatter) {
+  if (!frontmatter || typeof frontmatter !== "object") return false;
+  const type = frontmatter.type;
+  return type === "[[mail]]" || (typeof frontmatter.gmail_thread_id === "string" && frontmatter.gmail_thread_id.trim() !== "");
+}
+
+function mailClosePredicate(input = {}) {
+  const line = String(input.line || "");
+  if (!/^\s*(?:[-+*]|\d+[.)])\s+\[[ /?*]\]/.test(line) || !/(?:^|\s)#task(?:\s|$)/.test(line)) {
+    return { gmail_task: false, notes: [] };
+  }
+  const notes = mailCloseTaskLinks(line, input.children, input.resolve, (path, resolved) => {
+    if (typeof input.isMail === "function") return input.isMail(path, resolved) === true;
+    if (resolved && resolved.frontmatter) return mailCloseFrontmatterIsMail(resolved.frontmatter);
+    const fronts = input.notes || {};
+    return mailCloseFrontmatterIsMail(fronts[path]);
+  });
+  return { gmail_task: notes.length > 0, notes };
+}
+
+function mailCloseStatusName(status) {
+  switch (String(status || "")) {
+    case " ": return "Ready";
+    case "*": return "Next";
+    case "/": return "In Progress";
+    case "?": return "Blocked";
+    case "x": case "X": return "Done";
+    case "-": return "Cancelled";
+    default: return "Task";
+  }
+}
+
+function mailCloseVerb(after) {
+  return after === "x" || after === "X" ? "complete" : after === "-" ? "cancel" : null;
+}
+
+function mailCloseNormalizeWho(who) {
+  return String(who || "").split(/\r?\n/)[0].trim().replace(/::/g, ":").trim();
+}
+
+function mailCloseTaskText(line) {
+  const text = String(line || "");
+  const close = text.indexOf("]");
+  const afterBox = close >= 0 ? text.slice(close + 1).trim() : text.trim();
+  return afterBox.split(/\s+/).filter((token) => token !== "#task").join(" ");
+}
+
+function mailCloseDate(raw) {
+  if (!raw) return null;
+  const text = String(raw);
+  const normalized = /^\d{4}-\d\d-\d\d(?:T\d\d:\d\d(?::\d\d(?:\.\d+)?)?)?$/.test(text) ? `${text}Z` : text;
+  const date = new Date(normalized);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function mailCloseFormatAge(sinceRaw, nowRaw) {
+  const since = mailCloseDate(sinceRaw);
+  const now = mailCloseDate(nowRaw);
+  if (!since || !now) return null;
+  const seconds = Math.max(0, Math.floor((now.getTime() - since.getTime()) / 1000));
+  if (seconds < 60) return "now";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
+  return `${Math.floor(seconds / 86400)}d`;
+}
+
+function mailCloseFormatShortDate(raw) {
+  const date = mailCloseDate(raw);
+  if (!date) return null;
+  const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return `${days[date.getUTCDay()]}, ${months[date.getUTCMonth()]} ${date.getUTCDate()}`;
+}
+
+function mailCloseTurnLine(mail, now) {
+  const who = mailCloseNormalizeWho(mail.who);
+  if (mail.turn === "yours") {
+    const age = mailCloseFormatAge(mail.turn_since, now);
+    if (!age) return null;
+    return who ? `↩ ${who} · ${age} — waiting on your reply` : `↩ ${age} — waiting on your reply`;
+  }
+  if (mail.turn === "theirs") {
+    const date = mailCloseFormatShortDate(mail.turn_since);
+    if (date) return who ? `✈ You wrote ${date} — waiting on ${who}` : `✈ You wrote ${date}`;
+    return who ? `✈ Waiting on ${who}` : null;
+  }
+  return null;
+}
+
+function mailCloseChosenMail(mails) {
+  const list = Array.isArray(mails) ? mails : [];
+  return list.find((mail) => mail && mail.turn === "yours") || list[0] || null;
+}
+
+function mailCloseRowLabel(mail, fallback) {
+  const title = String(mail.title || "").trim();
+  const who = mailCloseNormalizeWho(mail.who);
+  const base = title ? `✉️ ${title}` : String(fallback || "").trim();
+  if (!base) return who ? `✉️ ${who}` : "✉️ Email task";
+  return who ? `${base} · ${who}` : base;
+}
+
+function mailCloseByteCompare(left, right) {
+  return Buffer.compare(Buffer.from(String(left)), Buffer.from(String(right)));
+}
+
+function mailCloseMailListCompare(left, right) {
+  const a = Array.isArray(left) ? left : [];
+  const b = Array.isArray(right) ? right : [];
+  for (let index = 0; index < Math.min(a.length, b.length); index += 1) {
+    const result = mailCloseByteCompare(a[index], b[index]);
+    if (result !== 0) return result;
+  }
+  return a.length - b.length;
+}
+
+function mailCloseDigest(targets) {
+  const rows = (Array.isArray(targets) ? targets : []).map((target) => {
+    const mails = Array.isArray(target.mails) ? target.mails.map((mail) => String(mail.note || "")) : [];
+    return { path: String(target.path || ""), line: Math.max(0, Math.floor(Number(target.line) || 0)), before: String(target.before || " ").slice(0, 1), after: String(target.after || " ").slice(0, 1), mails };
+  });
+  rows.sort((a, b) => mailCloseByteCompare(a.path, b.path) || a.line - b.line || mailCloseByteCompare(a.before, b.before) || mailCloseByteCompare(a.after, b.after) || mailCloseMailListCompare(a.mails, b.mails));
+  const canonical = rows.map((row) => `${row.path}:${row.line}:${row.before}:${row.after}:${row.mails.join(",")}`).join("\n");
+  return require("crypto").createHash("sha256").update(canonical, "utf8").digest("hex").slice(0, 12);
+}
+
+function buildMailCloseCopy(targets, options = {}) {
+  const list = Array.isArray(targets) ? targets : [];
+  const now = String(options.now || new Date().toISOString());
+  const other = options.other_open_linkers || {};
+  const verbs = list.map((target) => mailCloseVerb(target.after)).filter(Boolean);
+  const complete = verbs.filter((verb) => verb === "complete").length;
+  const cancel = verbs.length - complete;
+  const mixed = complete > 0 && cancel > 0;
+  const verb = mixed ? "close" : cancel > 0 ? "cancel" : "complete";
+  const title = list.length === 1
+    ? (verb === "cancel" ? "Cancel this email task?" : "Complete this email task?")
+    : mixed ? `Close ${list.length} tasks?` : verb === "cancel" ? `Cancel ${list.length} tasks?` : `Complete ${list.length} tasks?`;
+  const distinctNotes = [...new Set(list.flatMap((target) => (target.mails || []).map((mail) => String(mail.note || ""))))].sort(mailCloseByteCompare);
+  const subtitle = list.length === 1
+    ? `${list[0].path} · ${mailCloseStatusName(list[0].before)} → ${mailCloseStatusName(list[0].after)}`
+    : `${list.length} tasks · ${distinctNotes.length} wired to email`;
+  const rows = list.slice(0, 5).map((target) => {
+    const mail = mailCloseChosenMail(target.mails);
+    const fallback = String(target.task_text || mailCloseTaskText(target.line_text || "")).trim();
+    return {
+      path: target.path,
+      line: target.line,
+      label: mail ? mailCloseRowLabel(mail, fallback) : fallback,
+      turn_line: mail ? mailCloseTurnLine(mail, now) : null,
+      note: mail ? String(mail.note || "") : "",
+    };
+  });
+  const more = Math.max(0, list.length - rows.length);
+  const orphaned = distinctNotes.filter((note) => !(Number(other[note]) > 0));
+  const allMails = list.flatMap((target) => target.mails || []);
+  const yours = orphaned.flatMap((note) => allMails.filter((mail) => mail.note === note && mail.turn === "yours"));
+  const theirs = orphaned.flatMap((note) => allMails.filter((mail) => mail.note === note && mail.turn === "theirs"));
+  const tone = yours.length ? "warning" : "calm";
+  let consequence;
+  if (!orphaned.length) consequence = distinctNotes.length > 1 ? "Another open task still watches these threads." : "Another open task still watches this thread.";
+  else if (yours.length) {
+    if (orphaned.length > 1) consequence = `${orphaned.length} threads are waiting on your reply, and nothing reopens these tasks until they write again.`;
+    else {
+      const who = mailCloseNormalizeWho(yours[0].who);
+      consequence = who ? `${who} is waiting on your reply, and nothing reopens this task until they write again.` : "They are waiting on your reply, and nothing reopens this task until they write again.";
+    }
+  } else if (theirs.length) {
+    if (orphaned.length > 1) consequence = "A reply reopens them.";
+    else {
+      const who = mailCloseNormalizeWho(theirs[0].who);
+      consequence = who ? `A reply from ${who} reopens it.` : "A reply reopens it.";
+    }
+  } else consequence = orphaned.length > 1 ? "Bob stops watching these threads." : "Bob stops watching this thread.";
+  if (options.archive === true && orphaned.length) consequence += orphaned.length > 1 ? " Bob's archive-on-close can then clear them from your Gmail inbox." : " Bob's archive-on-close can then clear it from your Gmail inbox.";
+  return { title, subtitle, tone, verb, rows, more, consequence, digest: mailCloseDigest(list) };
+}
+
+function mailCloseVectorPredicate(vector) {
+  if (vector.task_hidden === true) return { gmail_task: false, notes: [] };
+  const links = vector.link_to_path || {};
+  const result = mailClosePredicate({
+    line: vector.line,
+    children: vector.children,
+    notes: vector.notes,
+    resolve: (target) => {
+      const path = links[target] || (() => {
+        const basename = String(target || "").split("/").pop().replace(/\.md$/i, "").toLowerCase();
+        const matches = (Array.isArray(vector.vault_files) ? vector.vault_files : []).filter((file) => String(file).split("/").pop().replace(/\.md$/i, "").toLowerCase() === basename);
+        return matches.length === 1 ? matches[0] : null;
+      })();
+      if (!path) return null;
+      return { path, frontmatter: vector.notes && vector.notes[path] };
+    },
+    isMail: (_path, file) => mailCloseFrontmatterIsMail(file && file.frontmatter),
+  });
+  return result;
+}
+// ---- src/062-mail-close-card-modal.js ----
+function mailCloseCardWindow(modal) {
+  try { return modal && modal.containerEl && modal.containerEl.ownerDocument && modal.containerEl.ownerDocument.defaultView; }
+  catch (_error) { return typeof window !== "undefined" ? window : null; }
+}
+
+class MailCloseCardModal extends Modal {
+  constructor(app, options = {}) {
+    super(app);
+    this.model = options.model || {};
+    this.onConfirm = typeof options.onConfirm === "function" ? options.onConfirm : null;
+    this.onKeep = typeof options.onKeep === "function" ? options.onKeep : null;
+    this.openingKeys = new Set(Array.isArray(options.openingKeys) ? options.openingKeys.map((key) => String(key).toLowerCase()) : []);
+    this.settled = false;
+    this.confirmButton = null;
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    if (contentEl && typeof contentEl.empty === "function") contentEl.empty();
+    if (this.modalEl && typeof this.modalEl.addClass === "function") this.modalEl.addClass("bob-mail-close-modal");
+    if (this.modalEl && typeof this.modalEl.setAttribute === "function") {
+      this.modalEl.setAttribute("role", "alertdialog");
+      this.modalEl.setAttribute("aria-modal", "true");
+    }
+    if (contentEl && typeof contentEl.addClass === "function") {
+      contentEl.addClass("bob-mail-close-card");
+      contentEl.addClass("bob-key-card");
+      if (this.model.tone === "warning") contentEl.addClass("is-warning");
+    }
+    const header = contentEl.createDiv({ cls: "bob-mail-close-header" });
+    const icon = header.createDiv({ cls: "bob-mail-close-icon" });
+    applyIcon(icon, this.model.tone === "warning" ? "mail-warning" : "mail");
+    const heading = header.createDiv({ cls: "bob-mail-close-heading" });
+    const title = heading.createDiv({ cls: "bob-mail-close-title bob-key-card-title", text: String(this.model.title || "Close this email task?") });
+    const subtitle = heading.createDiv({ cls: "bob-mail-close-subtitle", text: String(this.model.subtitle || "") });
+    if (title && typeof title.setAttribute === "function") title.setAttribute("id", "bob-mail-close-title");
+    const rows = contentEl.createDiv({ cls: "bob-mail-close-rows" });
+    const sourceRows = Array.isArray(this.model.rows) ? this.model.rows.slice(0, 5) : [];
+    for (const row of sourceRows) {
+      const rowEl = rows.createDiv({ cls: "bob-mail-close-row" });
+      rowEl.createDiv({ cls: "bob-mail-close-row-label", text: String(row.label || "Email task") });
+      if (row.turn_line) rowEl.createDiv({ cls: `bob-mail-close-row-turn${this.model.tone === "warning" ? " is-warning" : ""}`, text: String(row.turn_line) });
+      if (sourceRows.length > 1 && row.note) rowEl.createDiv({ cls: "bob-mail-close-row-note", text: String(row.note) });
+    }
+    if (Number(this.model.more) > 0) rows.createDiv({ cls: "bob-mail-close-more", text: `+${Number(this.model.more)} more email tasks` });
+    const consequence = contentEl.createDiv({ cls: "bob-mail-close-consequence", text: String(this.model.consequence || "Bob stops watching this thread.") });
+    if (consequence && typeof consequence.setAttribute === "function") consequence.setAttribute("id", "bob-mail-close-consequence");
+    if (this.modalEl && typeof this.modalEl.setAttribute === "function") {
+      this.modalEl.setAttribute("aria-labelledby", "bob-mail-close-title");
+      this.modalEl.setAttribute("aria-describedby", "bob-mail-close-consequence");
+    }
+    const actions = contentEl.createDiv({ cls: "bob-mail-close-actions" });
+    const first = sourceRows.find((row) => row && row.gmail_url);
+    if (first && first.gmail_url) {
+      const open = actions.createEl("button", { cls: "mod-ghost bob-mail-close-open", text: "Open in Gmail" });
+      open.createSpan({ cls: "bob-key-card-key", text: "⌘↵" });
+      open.addEventListener("click", (event) => {
+        event.preventDefault();
+        try { if (typeof obsidian !== "undefined" && typeof obsidian.openExternal === "function") obsidian.openExternal(String(first.gmail_url)); else if (typeof window !== "undefined" && window.open) window.open(String(first.gmail_url), "_blank"); } catch (_error) {}
+      });
+    }
+    const keep = actions.createEl("button", { cls: "mod-cta bob-mail-close-keep", text: "Keep open" });
+    keep.addEventListener("click", () => this.keepOpen());
+    const confirmText = this.model.verb === "cancel" ? "Cancel anyway" : this.model.verb === "close" ? "Close anyway" : "Complete anyway";
+    const confirm = actions.createEl("button", { cls: "mod-warning bob-mail-close-confirm", text: confirmText });
+    confirm.createSpan({ cls: "bob-key-card-key", text: "y" });
+    confirm.addEventListener("click", () => this.confirmClose());
+    this.confirmButton = confirm;
+    contentEl.createDiv({ cls: "bob-mail-close-footer bob-key-card-footer", text: "y confirms · ⌘↵ opens the thread · any other key keeps it open" });
+    contentEl.addEventListener("keydown", (event) => this.handleKey(event));
+    const view = mailCloseCardWindow(this);
+    if (view && typeof view.setTimeout === "function") view.setTimeout(() => { try { keep.focus(); } catch (_error) {} }, 0);
+  }
+
+  handleKey(event) {
+    if (!event || this.settled) return;
+    if (event.repeat || event.isComposing) { event.preventDefault(); event.stopPropagation(); return; }
+    const key = String(event.key || "").toLowerCase();
+    if (key === "y" && !event.altKey && !event.ctrlKey && !event.metaKey) {
+      event.preventDefault(); event.stopPropagation(); this.confirmClose(); return;
+    }
+    if (key === "enter" && (event.metaKey || event.ctrlKey)) {
+      const open = this.contentEl && this.contentEl.querySelector && this.contentEl.querySelector(".bob-mail-close-open");
+      if (open) { event.preventDefault(); event.stopPropagation(); open.click(); return; }
+    }
+    // Every other key is an explicit keep. The parent modal (when present)
+    // remains open with its original draft and selections.
+    event.preventDefault(); event.stopPropagation(); this.keepOpen();
+  }
+
+  confirmClose() {
+    if (this.settled) return;
+    this.settled = true;
+    const callback = this.onConfirm;
+    this.onConfirm = null; this.onKeep = null;
+    try { if (callback) callback(); } finally { this.close(); }
+  }
+
+  keepOpen() {
+    if (this.settled) return;
+    this.settled = true;
+    const callback = this.onKeep;
+    this.onConfirm = null; this.onKeep = null;
+    try { if (callback) callback(); } finally { this.close(); }
+  }
+
+  onClose() {
+    if (!this.settled) {
+      this.settled = true;
+      const callback = this.onKeep;
+      this.onConfirm = null; this.onKeep = null;
+      try { if (callback) callback(); } catch (_error) {}
+    }
+  }
+}
+// ---- src/063-mail-close-guard-api.js ----
+function mailCloseNormalizePath(value) {
+  return String(value || "").replace(/\\/g, "/").replace(/^\/+/, "");
+}
+
+function mailCloseScalar(value) {
+  if (value === null || value === undefined) return "";
+  if (Array.isArray(value)) return value.length ? mailCloseScalar(value[0]) : "";
+  if (typeof value === "object") return "";
+  return String(value).trim();
+}
+
+function mailCloseParsedFrontmatter(text) {
+  try {
+    const match = /^\uFEFF?---\s*\r?\n([\s\S]*?)\r?\n(?:---|\.\.\.)\s*(?:\r?\n|$)/.exec(String(text || ""));
+    if (!match || typeof parseYaml !== "function") return null;
+    const value = parseYaml(match[1]);
+    return value && typeof value === "object" ? value : null;
+  } catch (_error) { return null; }
+}
+
+function mailCloseVaultFile(app, path) {
+  try {
+    const vault = app && app.vault;
+    const normalized = mailCloseNormalizePath(path);
+    const exact = vault && typeof vault.getAbstractFileByPath === "function"
+      ? vault.getAbstractFileByPath(normalized) || (!/\.md$/i.test(normalized) ? vault.getAbstractFileByPath(`${normalized}.md`) : null)
+      : null;
+    if (exact) return exact;
+    const files = vault && typeof vault.getMarkdownFiles === "function" ? vault.getMarkdownFiles() : [];
+    const basename = normalized.split("/").pop().replace(/\.md$/i, "").toLowerCase();
+    const matches = files.filter((file) => String(file && file.basename || "").toLowerCase() === basename);
+    if (matches.length !== 1) return null;
+    const metadata = app && app.metadataCache;
+    if (metadata && typeof metadata.getFirstLinkpathDest === "function") {
+      const resolved = metadata.getFirstLinkpathDest(normalized, "");
+      if (resolved && matches.some((file) => file.path === resolved.path)) return resolved;
+    }
+    return matches[0];
+  } catch (_error) { return null; }
+}
+
+function mailCloseResolvedLinkFile(app, linkpath, sourcePath) {
+  try {
+    const link = String(linkpath || "").replace(/\\/g, "/").replace(/^\/+/, "");
+    const basename = link.split("/").pop().replace(/\.md$/i, "").toLowerCase();
+    const files = app && app.vault && typeof app.vault.getMarkdownFiles === "function" ? app.vault.getMarkdownFiles() : [];
+    if (!link.includes("/") && files.filter((file) => String(file.basename || "").toLowerCase() === basename).length > 1) return null;
+    const metadata = app && app.metadataCache;
+    const resolved = metadata && typeof metadata.getFirstLinkpathDest === "function"
+      ? metadata.getFirstLinkpathDest(linkpath, sourcePath)
+      : null;
+    return resolved || mailCloseVaultFile(app, linkpath);
+  } catch (_error) { return null; }
+}
+
+async function mailCloseReadFile(app, file) {
+  try {
+    const vault = app && app.vault;
+    if (!vault || !file) return "";
+    if (typeof vault.cachedRead === "function") return String((await vault.cachedRead(file)) || "");
+    if (typeof vault.read === "function") return String((await vault.read(file)) || "");
+  } catch (_error) {}
+  return "";
+}
+
+async function mailCloseFrontmatterForFile(app, file) {
+  try {
+    const metadata = app && app.metadataCache;
+    const cache = metadata && typeof metadata.getFileCache === "function" ? metadata.getFileCache(file) : null;
+    if (cache && cache.frontmatter && typeof cache.frontmatter === "object") return cache.frontmatter;
+  } catch (_error) {}
+  return mailCloseParsedFrontmatter(await mailCloseReadFile(app, file));
+}
+
+async function mailCloseFactsForPath(app, notePath) {
+  const file = mailCloseVaultFile(app, notePath);
+  if (!file) return null;
+  const frontmatter = await mailCloseFrontmatterForFile(app, file);
+  if (!mailCloseFrontmatterIsMail(frontmatter)) return null;
+  const content = await mailCloseReadFile(app, file);
+  return {
+    note: mailCloseNormalizePath(file.path),
+    title: mailCloseScalar(frontmatter.title),
+    who: mailCloseScalar(frontmatter.who),
+    turn: ["yours", "theirs"].includes(mailCloseScalar(frontmatter.turn)) ? mailCloseScalar(frontmatter.turn) : null,
+    turn_since: mailCloseScalar(frontmatter.turn_since) || null,
+    gmail_url: mailCloseScalar(frontmatter.gmail_url),
+    frontmatter,
+    content,
+  };
+}
+
+function mailCloseChildrenAt(lines, taskIndex, contexts = null) {
+  const task = String(lines[taskIndex] || "");
+  const taskIndent = (/^\s*/.exec(task) || [""])[0].replace(/\t/g, "    ").length;
+  const children = [];
+  for (let index = taskIndex + 1; index < lines.length; index += 1) {
+    const line = String(lines[index] || "");
+    const context = Array.isArray(contexts) ? contexts[index] : null;
+    if (context && (context.inFence || context.inFrontmatter)) continue;
+    if (!line.trim()) continue;
+    const indent = (/^\s*/.exec(line) || [""])[0].replace(/\t/g, "    ").length;
+    if (indent <= taskIndent) break;
+    children.push(line);
+  }
+  return children;
+}
+
+async function mailCloseClassifyTargets(app, targets) {
+  const output = [];
+  for (const source of Array.isArray(targets) ? targets : []) {
+    if (!source || typeof source !== "object") continue;
+    const path = mailCloseNormalizePath(source.path);
+    const line = Math.floor(Number(source.line));
+    const before = String(source.before || " ").slice(0, 1);
+    const after = String(source.after || " ").slice(0, 1);
+    if (!path || !Number.isInteger(line) || line < 1 || ![" ", "*", "/", "?"].includes(before) || !["x", "X", "-"].includes(after)) continue;
+    const file = mailCloseVaultFile(app, path);
+    if (!file) continue;
+    const content = await mailCloseReadFile(app, file);
+    const lines = content.split(/\r?\n/);
+    const liveLineText = String(lines[line - 1] || "");
+    if (typeof source.lineText === "string" && source.lineText !== liveLineText) continue;
+    const lineText = liveLineText;
+    const status = typeof getObsidianTaskCheckboxStatus === "function" ? getObsidianTaskCheckboxStatus(lineText) : null;
+    const contexts = getMarkdownLineContexts(content);
+    if (status !== before || !isObsidianTaskAtLine(content, line - 1, contexts, lines)) continue;
+    const children = mailCloseChildrenAt(lines, line - 1, contexts);
+    const resolvedLinks = new Map();
+    const possibleLinks = new Set(mailCloseLineLinks(lineText));
+    for (const child of children) {
+      const link = mailCloseLinkOnlyBullet(child);
+      if (link) possibleLinks.add(link);
+    }
+    const frontmatterByPath = {};
+    for (const link of possibleLinks) {
+      const linkedFile = mailCloseResolvedLinkFile(app, link, file.path);
+      if (!linkedFile) continue;
+      const linkedPath = mailCloseNormalizePath(linkedFile.path);
+      const frontmatter = await mailCloseFrontmatterForFile(app, linkedFile);
+      resolvedLinks.set(link, { path: linkedPath, frontmatter });
+      if (frontmatter) frontmatterByPath[linkedPath] = frontmatter;
+    }
+    const predicate = mailClosePredicate({
+      line: lineText,
+      children,
+      resolve: (link) => resolvedLinks.get(link) || null,
+      notes: frontmatterByPath,
+      isMail: (_path, resolved) => mailCloseFrontmatterIsMail(resolved && resolved.frontmatter),
+    });
+    const mails = [];
+    for (const notePath of predicate.notes) {
+      const facts = await mailCloseFactsForPath(app, notePath);
+      if (facts) mails.push(facts);
+    }
+    if (!mails.length) continue;
+    output.push({ path, line, before, after, line_text: lineText, task_text: mailCloseTaskText(lineText), mails, gmail_task: true });
+  }
+  return output;
+}
+
+async function mailCloseOtherOpenLinkers(app, targets) {
+  const excluded = new Set((targets || []).map((target) => `${target.path}\u0000${target.line}`));
+  const mailPaths = new Set((targets || []).flatMap((target) => target.mails.map((mail) => mail.note)));
+  const sourcesByMail = new Map([...mailPaths].map((path) => [path, new Set()]));
+  for (const target of targets || []) {
+    for (const mail of target.mails || []) sourcesByMail.get(mail.note)?.add(target.path);
+  }
+  try {
+    const resolved = app && app.metadataCache && app.metadataCache.resolvedLinks || {};
+    for (const [source, destinations] of Object.entries(resolved)) {
+      for (const mailPath of mailPaths) if (destinations && Number(destinations[mailPath]) > 0) sourcesByMail.get(mailPath).add(source);
+    }
+  } catch (_error) {}
+  const counts = {};
+  for (const mailPath of mailPaths) {
+    let count = 0;
+    for (const sourcePath of sourcesByMail.get(mailPath) || []) {
+      const file = mailCloseVaultFile(app, sourcePath);
+      if (!file) continue;
+      const content = await mailCloseReadFile(app, file);
+      const lines = content.split(/\r?\n/);
+      const contexts = getMarkdownLineContexts(content);
+      for (let index = 0; index < lines.length; index += 1) {
+        const row = String(lines[index] || "");
+        const context = contexts[index] || {};
+        if (context.inFrontmatter || context.inFence || !/^\s*(?:[-+*]|\d+[.)])\s+\[([ /?*])\]/.test(row) || !/(?:^|\s)#task(?:\s|$)/.test(row)) continue;
+        if (excluded.has(`${mailCloseNormalizePath(file.path)}\u0000${index + 1}`)) continue;
+        const predicate = mailClosePredicate({
+          line: row,
+          children: mailCloseChildrenAt(lines, index, contexts),
+          resolve: (link) => {
+            const linked = mailCloseResolvedLinkFile(app, link, file.path);
+            const path = linked ? mailCloseNormalizePath(linked.path) : null;
+            return path ? { path, frontmatter: mailPaths.has(path) ? { type: "[[mail]]" } : null } : null;
+          },
+          isMail: (path) => mailPaths.has(path),
+        });
+        if (predicate.notes.includes(mailPath)) count += 1;
+      }
+    }
+    counts[mailPath] = count;
+  }
+  return counts;
+}
+
+function mailCloseArchiveOn(app) {
+  try {
+    const fs = requireOptionalNodeModule("fs");
+    if (!fs || typeof fs.readFileSync !== "function" || typeof parseYaml !== "function") return false;
+    const configPath = getBulletPropertyConfigPath({});
+    const config = parseYaml(fs.readFileSync(configPath, "utf8"));
+    return Boolean(config && config.gmail && config.gmail.sync && config.gmail.sync.archive === true);
+  } catch (_error) { return false; }
+}
+
+function mailCloseTargetsFromCancelPlan(path, content, plan) {
+  const lines = String(content || "").split(/\r?\n/);
+  const output = [];
+  for (const entry of Array.isArray(plan && plan.cancelled) ? plan.cancelled : []) {
+    const index = Math.floor(Number(entry && entry.originalLine));
+    const lineText = lines[index];
+    if (typeof lineText !== "string") continue;
+    const before = getObsidianTaskCheckboxStatus(lineText);
+    if (![" ", "*", "/", "?"].includes(before)) continue;
+    output.push({ path, line: index + 1, lineText, before, after: "-" });
+  }
+  return output;
+}
+
+function mailCloseTargetsFromCloseIdentities(cancelled, completed, sourceWrites) {
+  const output = [];
+  for (const [rows, after] of [[cancelled, "-"], [completed, "x"]]) {
+    for (const identity of Array.isArray(rows) ? rows : []) {
+      const path = mailCloseNormalizePath(identity && identity.path);
+      const write = sourceWrites instanceof Map ? sourceWrites.get(path) : null;
+      if (!path || !write || typeof write.original !== "string") continue;
+      const lines = write.original.split(/\r?\n/);
+      let index = Number.isInteger(identity.line) ? identity.line : -1;
+      if (index < 0 || index >= lines.length) {
+        const blockId = normalizeBulletPropertyValue(identity.blockId || "");
+        if (blockId) index = findTaskLineByTrailingBlockId(lines, blockId);
+      }
+      if (!Number.isInteger(index) || index < 0 || index >= lines.length) continue;
+      const lineText = String(lines[index] || "");
+      const before = getObsidianTaskCheckboxStatus(lineText);
+      if (![" ", "*", "/", "?"].includes(before)) continue;
+      output.push({ path, line: index + 1, lineText, before, after });
+    }
+  }
+  return output;
+}
+
+async function mailCloseTargetsDefinitelyHaveNoMailLinks(app, targets) {
+  const vault = app && app.vault;
+  const canReadVault = vault &&
+    (typeof vault.cachedRead === "function" || typeof vault.read === "function") &&
+    (typeof vault.getAbstractFileByPath === "function" || typeof vault.getMarkdownFiles === "function");
+  // Headless callers and unit harnesses without a readable vault cannot hold
+  // Gmail Task notes. A real Obsidian vault must be inspected before allowing
+  // a close while the v1 API is unavailable.
+  if (!canReadVault) return true;
+  for (const source of Array.isArray(targets) ? targets : []) {
+    const path = mailCloseNormalizePath(source && source.path);
+    const line = Math.floor(Number(source && source.line));
+    const file = path && mailCloseVaultFile(app, path);
+    if (!file || !Number.isInteger(line) || line < 1) return false;
+    let content;
+    try {
+      content = typeof vault.cachedRead === "function"
+        ? String((await vault.cachedRead(file)) || "")
+        : String((await vault.read(file)) || "");
+    } catch (_error) { return false; }
+    const lines = content.split(/\r?\n/);
+    const liveLine = lines[line - 1];
+    if (typeof liveLine !== "string" || (typeof source.lineText === "string" && source.lineText !== liveLine)) return false;
+    const contexts = getMarkdownLineContexts(content);
+    if (!isObsidianTaskAtLine(content, line - 1, contexts, lines)) return false;
+    const links = new Set(mailCloseLineLinks(liveLine));
+    for (const child of mailCloseChildrenAt(lines, line - 1, contexts)) {
+      const link = mailCloseLinkOnlyBullet(child);
+      if (link) links.add(link);
+    }
+    // Any linked note could be the mail record. Keep the close blocked until
+    // the API can classify those links and present the confirmation card.
+    if (links.size > 0) return false;
+  }
+  return true;
+}
+
+async function confirmMailCloseForPlugin(plugin, targets, options = {}) {
+  const walk = plugin && plugin.reviewLanding
+    ? { seq: plugin.reviewGestureSeq, epoch: plugin.reviewLandingEpoch }
+    : null;
+  const releaseKeptWalk = () => {
+    if (!walk || !plugin || typeof plugin.settleReviewWalkLock !== "function") return;
+    if (plugin.reviewGestureSeq !== walk.seq || plugin.reviewLandingEpoch !== walk.epoch) return;
+    try { plugin.settleReviewWalkLock(false); } catch (_error) {}
+  };
+  const api = plugin && plugin.api && plugin.api.mailCloseGuard;
+  if (!api || Number(api.version) < 1 || typeof api.confirm !== "function") {
+    // The owner plugin should always expose v1 in Obsidian. Keep vault-backed
+    // closes fail-closed if that contract is broken; test and headless callers
+    // with no vault cannot contain a Gmail Task to guard.
+    if (await mailCloseTargetsDefinitelyHaveNoMailLinks(plugin && plugin.app, targets)) {
+      return { confirmed: true, guarded: false, token: null };
+    }
+    releaseKeptWalk();
+    return { confirmed: false, guarded: true, token: null };
+  }
+  try {
+    const result = await api.confirm(targets, options);
+    if (!result || result.confirmed !== true) releaseKeptWalk();
+    return result;
+  } catch (_error) {
+    releaseKeptWalk();
+    return { confirmed: false, guarded: true, token: null };
+  }
+}
+
+async function confirmMailCloseForApp(app, targets, options = {}) {
+  try {
+    const plugins = app && app.plugins && app.plugins.plugins || {};
+    return await confirmMailCloseForPlugin(plugins["bob-navigation-hotkeys"], targets, options);
+  } catch (_error) { return { confirmed: false, guarded: true, token: null }; }
+}
+
+function createMailCloseGuardApi(plugin) {
+  const classify = async (targets) => {
+    try {
+      const rows = await mailCloseClassifyTargets(plugin && plugin.app, targets);
+      return rows.map((row) => Object.freeze({
+        path: row.path,
+        line: row.line,
+        before: row.before,
+        after: row.after,
+        line_text: row.line_text,
+        task_text: row.task_text,
+        mails: Object.freeze(row.mails.map((mail) => Object.freeze({
+          note: mail.note,
+          title: mail.title,
+          who: mail.who,
+          turn: mail.turn,
+          turn_since: mail.turn_since,
+          gmail_url: mail.gmail_url,
+        }))),
+      }));
+    }
+    catch (_error) { return []; }
+  };
+  return Object.freeze({
+    version: 1,
+    classify,
+    async confirm(targets, options = {}) {
+      try {
+        const app = plugin && plugin.app;
+        const guarded = await mailCloseClassifyTargets(app, targets);
+        if (guarded.length === 0) return { confirmed: true, guarded: false, token: null };
+        const other = await mailCloseOtherOpenLinkers(app, guarded);
+        const copyTargets = guarded.map((target) => ({ ...target, mails: target.mails.map((mail) => ({ ...mail })) }));
+        const model = buildMailCloseCopy(copyTargets, { now: new Date().toISOString(), other_open_linkers: other, archive: mailCloseArchiveOn(app) });
+        for (const row of model.rows) {
+          const target = guarded.find((entry) => entry.path === row.path && entry.line === row.line);
+          const mail = target && mailCloseChosenMail(target.mails);
+          if (mail) {
+            row.gmail_url = mail.gmail_url;
+            row.mail_title = String(mail.title || "").trim() || row.label;
+          }
+        }
+        const token = model.digest;
+        const passed = options && options.context && options.context.mailCloseConfirmed;
+        if (typeof passed === "string" && passed === token) return { confirmed: true, guarded: true, token };
+        return await new Promise((resolve) => {
+          let modal;
+          const finish = (confirmed) => {
+            resolve({ confirmed, guarded: true, token: confirmed ? token : null });
+          };
+          try {
+            modal = new MailCloseCardModal(app, {
+              model,
+              onConfirm: () => finish(true),
+              onKeep: () => {
+                const label = model.rows && model.rows[0] && (model.rows[0].mail_title || model.rows[0].label) || "email task";
+                new Notice(`✉ Kept open · ${label}`, 4000);
+                finish(false);
+              },
+              openingKeys: options.openingKeys,
+            });
+            modal.open();
+          } catch (_error) { finish(false); }
+        });
+      } catch (_error) { return { confirmed: false, guarded: true, token: null }; }
+    },
+  });
+}
 // ---- src/070-recommended-roll-batch.js ----
 
 // Compose the cancel and set-priority plans into one undoable editor
@@ -36876,6 +37645,11 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
     if (!event || typeof event !== "object") {
       return;
     }
+    if (this.mailCloseGuardPending === true) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
     if (
       event.key === "Enter" &&
       (event.ctrlKey === true || event.metaKey === true) &&
@@ -38893,7 +39667,7 @@ function successorJumpApplySelection(modal) {
     }
   }
   const hasReqGroups = (modal.model.groups || []).some((group) => group && group.group === "requirements");
-  modal.settle({
+  const submission = {
     picks: selected.map((key) => {
       const item = { key };
       try {
@@ -38909,7 +39683,47 @@ function successorJumpApplySelection(modal) {
     ...(hasReqGroups && (reqs.length > 0 || defaultRequirementSubmit || jump != null) ? { reqs } : {}),
     ...(closes.length > 0 ? { closes } : {}),
     ...(jump ? { jump } : {}),
-  });
+  };
+  if (closes.length > 0) {
+    const targets = closes.map((close) => {
+      const row = successorFindRowByKey(modal, close.key);
+      if (!row) return null;
+      const lineText = typeof row.rawLine === "string"
+        ? row.rawLine
+        : row.task && typeof row.task.preimage === "string"
+          ? row.task.preimage
+          : String(row.lineText || row.text || "");
+      const before = getObsidianTaskCheckboxStatus(lineText) || String(row.status || " ").slice(0, 1);
+      const line = Number.isInteger(row.line) ? row.line + 1 : Number(row.task && row.task.line);
+      const path = String(row.notePath || row.path || (row.task && row.task.path) || "");
+      if (!path || !Number.isInteger(line)) return null;
+      return { path, line, lineText, before, after: close.outcome === "cancelled" ? "-" : "x" };
+    }).filter(Boolean);
+    if (targets.length !== closes.length) {
+      modal.statusLine = { text: "Email task close could not be identified; staged choices remain", kind: "refusal" };
+      try { if (typeof modal.renderAll === "function") modal.renderAll(); } catch (_error) {}
+      return true;
+    }
+    if (targets.length > 0) {
+      modal.mailCloseGuardPending = true;
+      void confirmMailCloseForApp(modal.app, targets).then((guarded) => {
+        modal.mailCloseGuardPending = false;
+        if (!guarded.confirmed) {
+          modal.statusLine = { text: "Email task close kept open; staged choices remain", kind: "consequence" };
+          try { if (typeof modal.renderAll === "function") modal.renderAll(); } catch (_error) {}
+          return;
+        }
+        submission.context = { mailCloseConfirmed: guarded.token };
+        modal.settle(submission);
+      }).catch(() => {
+        modal.mailCloseGuardPending = false;
+        modal.statusLine = { text: "Email task close could not be confirmed", kind: "refusal" };
+        try { if (typeof modal.renderAll === "function") modal.renderAll(); } catch (_error) {}
+      });
+      return true;
+    }
+  }
+  modal.settle(submission);
   return true;
 }
 
@@ -38920,6 +39734,9 @@ function successorJumpSettle(modal, result) {
   const picks = result && Array.isArray(result.picks) ? result.picks : null;
   const reqs = result && Array.isArray(result.reqs) ? result.reqs : null;
   const closes = result && Array.isArray(result.closes) ? result.closes : null;
+  const mailCloseConfirmed = result && result.context && typeof result.context.mailCloseConfirmed === "string"
+    ? result.context.mailCloseConfirmed
+    : null;
   const jump = result && result.jump && typeof result.jump === "object" &&
     typeof result.jump.key === "string" && result.jump.key
     ? { key: result.jump.key }
@@ -38929,6 +39746,7 @@ function successorJumpSettle(modal, result) {
       picks,
       ...(reqs ? { reqs } : {}),
       ...(closes ? { closes } : {}),
+      ...(mailCloseConfirmed ? { context: { mailCloseConfirmed } } : {}),
       ...(jump ? { jump } : {}),
     };
   } else {
@@ -39251,6 +40069,9 @@ class BobNavigationHotkeysSuccessorPickerMixin {
                 picks,
                 ...(reqs !== null ? { reqs } : {}),
                 ...(kept.length > 0 ? { closes: kept } : {}),
+                ...(result.context && typeof result.context.mailCloseConfirmed === "string"
+                  ? { context: { mailCloseConfirmed: result.context.mailCloseConfirmed } }
+                  : {}),
                 ...(jump ? { jump } : {}),
               });
             } else {
@@ -80122,6 +80943,7 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
           if (applyRelationCancelStaleToPicker(this, outcome)) {
             return false;
           }
+          if (outcome.reason === "mail-close-kept-open") return false;
           if (outcome.reason === "changed — reopen" || outcome.reason === "changed") {
             return this.refuseDependencyStale();
           }
@@ -80173,6 +80995,7 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
         if (applyRelationCancelStaleToPicker(this, outcome)) {
           return false;
         }
+        if (outcome.reason === "mail-close-kept-open") return false;
         if (
           outcome.reason === "changed — reopen" ||
           outcome.reason === "changed"
@@ -90211,6 +91034,7 @@ function createDependencyNavApi(plugin) {
     taskSplit: createTaskSplitApi(plugin),
     blocks: createBlocksNavApi(plugin),
     relations: createRelationsNavApi(plugin),
+    mailCloseGuard: createMailCloseGuardApi(plugin),
     walkMode: createWalkModeApi(plugin),
     openReferencePdf(path, options) {
       if (!plugin || typeof plugin.openReferencePdfPath !== "function") {
@@ -101897,6 +102721,12 @@ class BobNavigationHotkeysDecayCancelMixin {
       return false;
     }
 
+    const mailClose = await confirmMailCloseForPlugin(
+      this,
+      mailCloseTargetsFromCancelPlan(filePath, writeContext.content, plan),
+    );
+    if (!mailClose.confirmed) return false;
+
     let finalContent = plan.content;
     if (cancel.rottenLogBody) {
       const target = plan.cancelled[0];
@@ -104198,6 +105028,8 @@ class BobNavigationHotkeysCancelPropertyMixin {
       planned.push({ group, plan });
     }
 
+    if (!(await confirmMailCloseForPlugin(this, planned.flatMap(({ group, plan }) => mailCloseTargetsFromCancelPlan(group.path, group.content, plan)))).confirmed) return false;
+
     const pruneTargets = [];
     for (const { group, plan } of planned) {
       for (const entry of plan.cancelled) {
@@ -105826,6 +106658,11 @@ class BobNavigationHotkeysCountedRollMixin {
       );
       return false;
     }
+    const mailClose = await confirmMailCloseForPlugin(
+      this,
+      mailCloseTargetsFromCancelPlan(filePath, writeContext.content, plan.cancelPlan),
+    );
+    if (!mailClose.confirmed) return false;
     let finalContent = plan.content;
     let finalCursorLine = cursor.line;
     try {
@@ -106222,7 +107059,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
       new Notice("Could not update task; no tasks were updated");
       return false;
     }
-
+    if (!(await confirmMailCloseForPlugin(this, planned.flatMap(({ group, plan }) => mailCloseTargetsFromCancelPlan(group.path, group.content, plan.cancelPlan)))).confirmed) return false;
     const pruneTargets = [];
     for (const { group, plan } of planned) {
       for (const entry of plan.cancelledEntries || []) {
@@ -110420,6 +111257,13 @@ class BobNavigationHotkeysRelationEditMixin {
       }
       const cancelEffects = commitGate.cancelEffects;
       const closeEffects = commitGate.closeEffects;
+      const mailCloseTargets = mailCloseTargetsFromCloseIdentities(
+        cancelledIdentities,
+        completedIdentities,
+        sourceWrites,
+      );
+      const mailClose = await confirmMailCloseForPlugin(this, mailCloseTargets);
+      if (!mailClose.confirmed) return refuse("mail-close-kept-open");
       const dailyPrep = await this.prepareRelationCancelDailyCleanup(
         sourceWrites, cancelledIdentities, today,
       );
@@ -111987,6 +112831,7 @@ function composeRelationSourceCancel(details = {}) {
     planned,
     identity: Object.freeze({
       path: liveSource.path,
+      line: sourceLine,
       blockId:
         (cancelled && cancelled.blockId) ||
         getTrailingBlockId(String(batch.content.split(/\r?\n/)[sourceLine] || "")) ||
@@ -124013,6 +124858,7 @@ class BobNavigationHotkeysProjectPromotionMixin {
     }
     let picks = null;
     let promotionCloses = [];
+    let promotionCloseContext = null;
     let promotionJumpKey = null;
     let offerPlan = null;
     let liveLinkedChildIds = new Set();
@@ -124078,12 +124924,16 @@ class BobNavigationHotkeysProjectPromotionMixin {
             const result = await this.pickSuccessorOffers(model, { retarget: false });
             picks = result && Array.isArray(result.picks) ? result.picks : null;
             promotionCloses = result && Array.isArray(result.closes) ? result.closes : [];
+            promotionCloseContext = result && result.context && typeof result.context === "object"
+              ? result.context
+              : null;
             promotionJumpKey = result && result.jump && typeof result.jump.key === "string"
               ? result.jump.key
               : null;
           } catch (_error) {
             picks = null;
             promotionCloses = [];
+            promotionCloseContext = null;
             promotionJumpKey = null;
           }
         }
@@ -124312,7 +125162,7 @@ class BobNavigationHotkeysProjectPromotionMixin {
     let promotionCloseReceipt = null;
     if (promotionCloses.length > 0 && offerPlan) {
       try {
-        promotionCloseReceipt = await promotionApplyOfferCloses(this, offerPlan, promotionCloses);
+        promotionCloseReceipt = await promotionApplyOfferCloses(this, offerPlan, promotionCloses, promotionCloseContext);
       } catch (_error) {
         promotionCloseReceipt = null;
       }
@@ -124866,7 +125716,7 @@ function promotionOfferCloseReceiptEmpty(receipt) {
 // Apply returned closes through the cycler and report the receipt with the
 // nav notice v4 card (guarded Undo included). Resolves the receipt, or null
 // when there is nothing to report.
-async function promotionApplyOfferCloses(plugin, offerPlan, closes) {
+async function promotionApplyOfferCloses(plugin, offerPlan, closes, context = null) {
   try {
     const list = Array.isArray(closes) ? closes.filter((close) =>
       close && typeof close.key === "string" && close.key &&
@@ -124884,6 +125734,9 @@ async function promotionApplyOfferCloses(plugin, offerPlan, closes) {
       }),
       expectedLines: promotionExpectedCloseLines(offerPlan),
       rows: promotionSuccessorCloseRows(offerPlan),
+      ...(context && typeof context.mailCloseConfirmed === "string"
+        ? { context: { mailCloseConfirmed: context.mailCloseConfirmed } }
+        : {}),
     });
     if (promotionOfferCloseReceiptEmpty(receipt)) return null;
     return receipt;
@@ -140733,3 +141586,26 @@ try {
     });
   }
 } catch (_error) {}
+// ---- src/733-mail-close-exports.js ----
+Object.assign(module.exports.helpers, {
+  mailCloseLineLinks,
+  mailClosePredicate,
+  mailCloseFrontmatterIsMail,
+  mailCloseStatusName,
+  mailCloseVerb,
+  mailCloseNormalizeWho,
+  mailCloseTaskText,
+  mailCloseFormatAge,
+  mailCloseFormatShortDate,
+  mailCloseTurnLine,
+  mailCloseDigest,
+  buildMailCloseCopy,
+  mailCloseVectorPredicate,
+  MailCloseCardModal,
+  successorJumpApplySelection,
+  createMailCloseGuardApi,
+  mailCloseTargetsFromCancelPlan,
+  mailCloseTargetsFromCloseIdentities,
+  confirmMailCloseForPlugin,
+  confirmMailCloseForApp,
+});

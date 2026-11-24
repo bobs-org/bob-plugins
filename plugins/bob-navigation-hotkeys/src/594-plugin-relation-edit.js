@@ -727,6 +727,13 @@ class BobNavigationHotkeysRelationEditMixin {
       }
       const cancelEffects = commitGate.cancelEffects;
       const closeEffects = commitGate.closeEffects;
+      const mailCloseTargets = mailCloseTargetsFromCloseIdentities(
+        cancelledIdentities,
+        completedIdentities,
+        sourceWrites,
+      );
+      const mailClose = await confirmMailCloseForPlugin(this, mailCloseTargets);
+      if (!mailClose.confirmed) return refuse("mail-close-kept-open");
       const dailyPrep = await this.prepareRelationCancelDailyCleanup(
         sourceWrites, cancelledIdentities, today,
       );

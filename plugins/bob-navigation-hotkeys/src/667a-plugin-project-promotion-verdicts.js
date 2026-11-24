@@ -153,7 +153,7 @@ function promotionOfferCloseReceiptEmpty(receipt) {
 // Apply returned closes through the cycler and report the receipt with the
 // nav notice v4 card (guarded Undo included). Resolves the receipt, or null
 // when there is nothing to report.
-async function promotionApplyOfferCloses(plugin, offerPlan, closes) {
+async function promotionApplyOfferCloses(plugin, offerPlan, closes, context = null) {
   try {
     const list = Array.isArray(closes) ? closes.filter((close) =>
       close && typeof close.key === "string" && close.key &&
@@ -171,6 +171,9 @@ async function promotionApplyOfferCloses(plugin, offerPlan, closes) {
       }),
       expectedLines: promotionExpectedCloseLines(offerPlan),
       rows: promotionSuccessorCloseRows(offerPlan),
+      ...(context && typeof context.mailCloseConfirmed === "string"
+        ? { context: { mailCloseConfirmed: context.mailCloseConfirmed } }
+        : {}),
     });
     if (promotionOfferCloseReceiptEmpty(receipt)) return null;
     return receipt;

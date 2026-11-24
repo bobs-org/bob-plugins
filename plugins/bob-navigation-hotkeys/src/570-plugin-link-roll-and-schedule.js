@@ -152,7 +152,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
       new Notice("Could not update task; no tasks were updated");
       return false;
     }
-
+    if (!(await confirmMailCloseForPlugin(this, planned.flatMap(({ group, plan }) => mailCloseTargetsFromCancelPlan(group.path, group.content, plan.cancelPlan)))).confirmed) return false;
     const pruneTargets = [];
     for (const { group, plan } of planned) {
       for (const entry of plan.cancelledEntries || []) {

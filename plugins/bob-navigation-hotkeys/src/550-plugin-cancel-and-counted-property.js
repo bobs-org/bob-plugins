@@ -36,6 +36,8 @@ class BobNavigationHotkeysCancelPropertyMixin {
       planned.push({ group, plan });
     }
 
+    if (!(await confirmMailCloseForPlugin(this, planned.flatMap(({ group, plan }) => mailCloseTargetsFromCancelPlan(group.path, group.content, plan)))).confirmed) return false;
+
     const pruneTargets = [];
     for (const { group, plan } of planned) {
       for (const entry of plan.cancelled) {

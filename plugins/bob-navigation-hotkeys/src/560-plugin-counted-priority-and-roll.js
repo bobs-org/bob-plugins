@@ -424,6 +424,11 @@ class BobNavigationHotkeysCountedRollMixin {
       );
       return false;
     }
+    const mailClose = await confirmMailCloseForPlugin(
+      this,
+      mailCloseTargetsFromCancelPlan(filePath, writeContext.content, plan.cancelPlan),
+    );
+    if (!mailClose.confirmed) return false;
     let finalContent = plan.content;
     let finalCursorLine = cursor.line;
     try {

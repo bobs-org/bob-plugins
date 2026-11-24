@@ -56,17 +56,29 @@ function closeDescriptor(options = {}) {
 }
 
 function row(key, index, options = {}) {
+  const text = options.text || `Offer task ${index}`;
+  const notePath = options.notePath || `projects/project-${index % 3}.md`;
+  const closeTask = options.close && options.taskContext === true
+    ? {
+      path: notePath,
+      line: index + 1,
+      text: `- [ ] #task ${text}`,
+      displayText: text,
+      status: "Ready",
+      preimage: `- [ ] #task ${text}`,
+    }
+    : null;
   return {
     key,
-    text: options.text || `Offer task ${index}`,
-    notePath: options.notePath || `projects/project-${index % 3}.md`,
+    text,
+    notePath,
     status: options.status || "Ready",
+    ...(options.task || closeTask ? { task: options.task || closeTask } : {}),
     destinationLabel: options.destinationLabel || "BOB",
     needsBlockId: options.needsBlockId === true,
     selectable: options.selectable !== false,
     ...(options.mutedReason ? { mutedReason: options.mutedReason } : {}),
     ...(options.close ? { close: options.close } : {}),
-    ...(options.task ? { task: options.task } : {}),
   };
 }
 
@@ -74,7 +86,10 @@ function verdictModel(count, options = {}) {
   const rows = Array.from({ length: count }, (_, index) => row(
     `verdict:key/${index}`,
     index + 1,
-    { close: closeDescriptor(options.closeOptions || { unblocks: index === 0 ? 1 : 0 }) },
+    {
+      close: closeDescriptor(options.closeOptions || { unblocks: index === 0 ? 1 : 0 }),
+      taskContext: options.taskContext === true,
+    },
   ));
   return {
     title: "Choose successors",
@@ -225,7 +240,7 @@ test("api.successors is v6 and the close descriptor normalizes both cases", () =
 
 test("Ctrl+X stages Done, advances, and the same key returns the row to Leave", async () => {
   const plugin = makePlugin();
-  const { pending, modal } = await openPicker(plugin, verdictModel(3));
+  const { pending, modal } = await openPicker(plugin, verdictModel(3, { taskContext: true }));
   assert.equal(modal.verdicts.size, 0);
   pressVerdict(modal, false);
   assert.deepEqual(Array.from(modal.verdicts.keys()), ["verdict:key/0"]);
@@ -535,7 +550,7 @@ test("two-step Esc discards and stays open; the guarded close arms then closes",
 
 test("no highlight fallback once verdicts exist; Enter applies picks and closes", async () => {
   const plugin = makePlugin({ now: 5000 });
-  const { pending, modal } = await openPicker(plugin, verdictModel(3));
+  const { pending, modal } = await openPicker(plugin, verdictModel(3, { taskContext: true }));
   pressVerdict(modal, false);
   modal.selectedIndex = 2;
   modal.renderResults();
@@ -653,6 +668,7 @@ test("the task-merge card stays pull-in-only", async () => {
 test("zero picks with closes is a commit with footer, status, and aria", async () => {
   const plugin = makePlugin({ now: 5000 });
   const model = verdictModel(2, {
+    taskContext: true,
     closeOptions: {
       completeConsequence: "✓ Completes “Offer task 1” · Ready → Done",
       cancelConsequence: "⊘ Cancels “Offer task 2” · Ready → Cancelled",
@@ -728,7 +744,7 @@ test("the pin survives verdicts and Esc discard, and stages the apply & jump chi
 
 test("pin plus closes commits picks, closes, and jump together", async () => {
   const plugin = makePlugin({ now: 5000 });
-  const { pending, modal } = await openPicker(plugin, jumpVerdictModel(3));
+  const { pending, modal } = await openPicker(plugin, jumpVerdictModel(3, { taskContext: true }));
   pressVerdict(modal, false);
   modal.selectedIndex = 1;
   modal.renderResults();

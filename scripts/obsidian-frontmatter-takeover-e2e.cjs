@@ -431,14 +431,15 @@ async function run(args) {
     await ctx.page.ev(`(() => {
       const audit = { rows: [], restores: [] };
       const normalizePath = (value) => String(value?.path ?? value ?? "").replace(/\\\\/g, "/");
+      const trackedPaths = new Set(${JSON.stringify([P.day, VIM_PROBE_PATH, STALE_CACHE_PROBE_PATH])});
       const wrap = (owner, name, pathAt) => {
         if (!owner || typeof owner[name] !== "function") return;
         const original = owner[name];
         const wrapped = function(...args) {
           const path = normalizePath(pathAt(args));
-          if (path === ${JSON.stringify(P.day)}) {
+          if (trackedPaths.has(path)) {
             audit.rows.push({
-              api: name,
+              api: name, path,
               at: new Date().toISOString(),
               stack: String(new Error().stack || "").split("\\n").slice(2, 12),
             });
@@ -774,6 +775,7 @@ async function run(args) {
       // Keep the external cache edit/restore off the protected fixture. Obsidian
       // can schedule a later MarkdownView.save after vault.modify, which
       // reserializes YAML even when this probe restores the file and buffer.
+      const auditStart = await ctx.page.ev("window.__bobFrontmatterTakeoverWriteAudit?.rows.length || 0");
       const cacheProbeNote = notes[P.day]
         .replaceAll("2026-11-20", "2026-11-18")
         .replaceAll("20261120", "20261118")
@@ -903,6 +905,22 @@ async function run(args) {
         }));
       }
       const restored = await ctx.page.waitOwned(ctx.main, "live", "stale restore");
+      // The previous trace recorded Obsidian's delayed MarkdownView.save about
+      // 16 seconds after vault.modify. Keep this disposable note open until that
+      // save has landed so the editor cannot serialize the protected note when
+      // the main leaf switches back to it.
+      await ctx.page.settle(18_000);
+      const staleProbeAudit = await ctx.page.ev(
+        `window.__bobFrontmatterTakeoverWriteAudit?.rows.slice(${Number(auditStart)}) || []`,
+      );
+      const delayedSaveOnProbe = staleProbeAudit.some((row) => row.path === STALE_CACHE_PROBE_PATH
+        && row.stack.some((line) => line.includes("lt.save") || line.includes("lt.writeData")));
+      const protectedBytes = await ctx.page.ev(
+        "window.__bobFrontmatterTakeover.readNote(" + JSON.stringify(P.day) + ")",
+      );
+      if (protectedBytes !== notes[P.day]) {
+        throw new Error("protected day fixture changed while the disposable stale-cache probe was open");
+      }
       await ctx.page.open(ctx.main, P.day, "live");
       await ctx.page.settle(400);
       const deleted = await ctx.page.ev(`(async () => {
@@ -916,8 +934,10 @@ async function run(args) {
         staleProbe,
         fixtureRestore: {
           bufferInitiallyRestored,
-          bufferRestored: restoredBuffer === notes[P.day],
-          bytesRestored: restoredBytes === notes[P.day],
+          bufferRestored: restoredBuffer === cacheProbeNote,
+          bytesRestored: restoredBytes === cacheProbeNote,
+          protectedBytesRestored: protectedBytes === notes[P.day],
+          delayedSaveOnProbe,
         },
         restored,
       };

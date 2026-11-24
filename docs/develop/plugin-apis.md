@@ -658,9 +658,12 @@ Ledger feature-detects `walkMode.version >= 4` before `b` and `>= 5` before `w`.
   Tasks' `set-status-symbol-to-x` command so recurrence can run; it never
   writes `[x]` directly. It returns
   `{ ok: true, lineDelta, successorNotice }` or
-  `{ ok: false, reason }` and does not stamp the task. With
-  `options.successorJumpTarget === "return"`, a compatible pinned successor is
-  returned as `jump` for the walk owner to follow.
+  `{ ok: false, reason }` and does not stamp the task. An unconfirmed Gmail
+  Task close returns `{ ok: false, reason: "mail-close-kept" }` after the
+  Mail Close Card (nav `api.mailCloseGuard` v1); pass
+  `options.context.mailCloseConfirmed` to skip a second prompt in the same
+  gesture. With `options.successorJumpTarget === "return"`, a compatible
+  pinned successor is returned as `jump` for the walk owner to follow.
 - `completeTaskLineText(lineText, { date }?)` returns a frozen result.
   Completable open tasks return `{ ok: true, unchanged: false, lineText }`
   with the exact local-fallback bytes (`[x]` plus `[completion:: date]`,

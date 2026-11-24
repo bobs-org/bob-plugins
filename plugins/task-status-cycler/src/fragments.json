@@ -51,11 +51,14 @@
   "140-plugin-vim.js",
   "150-plugin-commands.js",
   "160-plugin-completion.js",
+  "161-plugin-completion-links.js",
   "162-plugin-completion-restore.js",
   "170-plugin-pomodoro.js",
   "175-plugin-pomodoro-names.js",
   "180-plugin-editor-edits.js",
   "185-gmail-archive-close-notice.js",
+  "186-mail-close-model-twin.js",
+  "187-mail-close-guard.js",
   "190-plugin-targets.js",
   "192-bank-row-guard.js",
   "193-req-line-guard.js",
@@ -78,5 +81,6 @@
   "199a-req-typing.js",
   "200-install-methods.js",
   "210-exports.js",
-  "211-task-reqs-exports.js"
+  "211-task-reqs-exports.js",
+  "212-mail-close-exports.js"
 ]

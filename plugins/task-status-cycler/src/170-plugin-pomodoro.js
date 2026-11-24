@@ -297,6 +297,14 @@ class TaskStatusCyclerPomodoroMixin {
       return false;
     }
 
+    const writeContext = { editor, activePath: sourcePath, originPath: sourcePath };
+    const earlyRange = getSubBulletBlockRange(lines, context.pomodoroLine, section);
+    const earlyBullets = classifyPomodoroSubBullets(lines, earlyRange);
+    const mail = await this.confirmCyclerMailCloseForPomodoroCascade(
+      editor, sourcePath, context.pomodoroLine, earlyBullets, writeContext,
+    );
+    if (!mail || mail.confirmed !== true) return false;
+
     // Event Task clock close (061-event-task-clock.js): rewrite bare plain
     // links to Event Tasks by the meeting clock before the normal flow, so
     // ended meetings complete and future/past ones defer-and-carry.
@@ -371,6 +379,9 @@ class TaskStatusCyclerPomodoroMixin {
         editor,
         activePath: sourcePath,
         originPath: sourcePath,
+        ...(writeContext.mailCloseConfirmed
+          ? { mailCloseConfirmed: writeContext.mailCloseConfirmed }
+          : {}),
       },
     );
     const closed = completedLinks.closed;
@@ -735,6 +746,9 @@ class TaskStatusCyclerPomodoroMixin {
       editor: context.editor,
       activePath: context.activePath,
       originPath: resolvedTarget.file.path,
+      ...(context && typeof context.mailCloseConfirmed === "string"
+        ? { mailCloseConfirmed: context.mailCloseConfirmed }
+        : {}),
     };
     const childTargets = collectEmbeddedTranscludedTaskTargetsInListItemBlock(
       resolvedTarget.sourceText,

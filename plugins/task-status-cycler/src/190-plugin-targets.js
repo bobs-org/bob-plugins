@@ -270,6 +270,10 @@ class TaskStatusCyclerTargetsMixin {
       } catch (error) {}
       return false;
     }
+    const mail = await this.confirmCyclerMailCloseForResolvedWrite(
+      resolvedTarget, context, forcedNextSymbol,
+    );
+    if (!mail || mail.confirmed !== true) return false;
     // Write through the editor only when the resolved task lives in the active
     // note; all other source notes are written through the vault.
     if (this.fileMatchesPath(resolvedTarget.file, context && context.activePath)) {

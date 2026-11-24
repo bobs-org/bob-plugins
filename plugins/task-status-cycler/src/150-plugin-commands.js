@@ -61,42 +61,10 @@ class TaskStatusCyclerCommandsMixin {
         return true;
       }
 
-      const cycleFile = view.file ||
-        (this.app.workspace && typeof this.app.workspace.getActiveFile === "function"
-          ? this.app.workspace.getActiveFile()
-          : null);
-      const cyclePath = cycleFile && cycleFile.path;
-      const cycleIdentity = cyclePath
-        ? closedTaskIdentity(cyclePath, taskStatus.lineText)
-        : null;
-      const reqCloseOwners = nextSymbol === "x" && cyclePath && editor &&
-          typeof editor.getValue === "function"
-        ? this.captureReqCloseOwnersAtEditorLine(editor, cyclePath, taskStatus.line, taskStatus.lineText)
-        : [];
-      const wrote = this.setActiveCheckboxStatus(editor, taskStatus, nextSymbol);
-      if (wrote && taskStatus.symbol === BLOCKED_TASK_STATUS_SYMBOL) {
-        this.applyBlockedStatusRetirementInEditor(editor, taskStatus.line);
-        void this.recoverProjectResidentsAfterPrjUnblock(editor, activePath);
+      if (this.maybeDeferCyclerMailCloseLocalCycle(editor, view, taskStatus, nextSymbol, direction)) {
+        return true;
       }
-      // `cycler_polish` (bead bob-cli-3k): a cycle into Done joins the same
-      // recover-and-link pass as Ctrl+Enter; a cycle into Cancelled recovers
-      // only (`closeKind: "cancelled"`, never links).
-      if (wrote && (nextSymbol === "x" || nextSymbol === "-")) {
-        if (cyclePath) {
-          const identity = cycleIdentity;
-          if (identity || (nextSymbol === "x" && reqCloseOwners.length > 0)) {
-            const cycleContext = { activePath: cyclePath };
-            if (nextSymbol === "x") cycleContext.reqCloseOwners = reqCloseOwners;
-            if (editor && typeof editor.getValue === "function") {
-              cycleContext.editor = editor;
-            }
-            void this.finalizeCycledClosedTasks(
-              identity ? [{ identity, symbol: nextSymbol }] : [],
-              cycleContext,
-            );
-          }
-        }
-      }
+      this.writeCycledLocalTask(editor, view, taskStatus, nextSymbol);
       return true;
     }
 
@@ -546,6 +514,47 @@ class TaskStatusCyclerCommandsMixin {
     return true;
   }
 
+  writeCycledLocalTask(editor, view, taskStatus, nextSymbol) {
+    const cycleFile = view && view.file ||
+      (this.app.workspace && typeof this.app.workspace.getActiveFile === "function"
+        ? this.app.workspace.getActiveFile()
+        : null);
+    const cyclePath = cycleFile && cycleFile.path;
+    const activePath = cyclePath || "";
+    const cycleIdentity = cyclePath
+      ? closedTaskIdentity(cyclePath, taskStatus.lineText)
+      : null;
+    const reqCloseOwners = nextSymbol === "x" && cyclePath && editor &&
+        typeof editor.getValue === "function"
+      ? this.captureReqCloseOwnersAtEditorLine(editor, cyclePath, taskStatus.line, taskStatus.lineText)
+      : [];
+    const wrote = this.setActiveCheckboxStatus(editor, taskStatus, nextSymbol);
+    if (wrote && taskStatus.symbol === BLOCKED_TASK_STATUS_SYMBOL) {
+      this.applyBlockedStatusRetirementInEditor(editor, taskStatus.line);
+      void this.recoverProjectResidentsAfterPrjUnblock(editor, activePath);
+    }
+    // `cycler_polish` (bead bob-cli-3k): a cycle into Done joins the same
+    // recover-and-link pass as Ctrl+Enter; a cycle into Cancelled recovers
+    // only (`closeKind: "cancelled"`, never links).
+    if (wrote && (nextSymbol === "x" || nextSymbol === "-")) {
+      if (cyclePath) {
+        const identity = cycleIdentity;
+        if (identity || (nextSymbol === "x" && reqCloseOwners.length > 0)) {
+          const cycleContext = { activePath: cyclePath };
+          if (nextSymbol === "x") cycleContext.reqCloseOwners = reqCloseOwners;
+          if (editor && typeof editor.getValue === "function") {
+            cycleContext.editor = editor;
+          }
+          void this.finalizeCycledClosedTasks(
+            identity ? [{ identity, symbol: nextSymbol }] : [],
+            cycleContext,
+          );
+        }
+      }
+    }
+    return wrote;
+  }
+
   getCountedTaskCycleKeydownDirection(event) {
     return getOptionBracketTaskCycleDirection(event);
   }
@@ -665,6 +674,11 @@ class TaskStatusCyclerCommandsMixin {
       }
       return snapshotLine + offset;
     };
+
+    const mail = await this.confirmCyclerMailCloseRange(
+      editor, activePath, lines, startLine, endLine, direction, context, editorLineFor, cursor, isLaneSkippedRangeLine,
+    );
+    if (!mail || mail.confirmed !== true) return false;
 
     for (let line = startLine; line <= endLine; line += 1) {
       if (isLaneSkippedRangeLine(line)) {

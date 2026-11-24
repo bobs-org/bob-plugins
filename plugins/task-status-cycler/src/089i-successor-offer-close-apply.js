@@ -788,6 +788,12 @@ class TaskStatusCyclerOfferCloseApplyMixin {
         finalPlanned.push({ ...row, display: original ? original.display : row.display, offer: original ? original.offer : row.offer });
       }
     }
+    if (finalPlanned.length > 0) {
+      const mail = await this.confirmCyclerMailCloseForOfferCloses(
+        finalPlanned, liveNotes, providedNotes, fullContext,
+      );
+      if (!mail || mail.confirmed !== true) return this.cyclerMailCloseEmptyOfferResult();
+    }
     // Phase 2: guarded root writes (whole-note, editor-first).
     const writeFailures = [];
     const writtenRoots = [];

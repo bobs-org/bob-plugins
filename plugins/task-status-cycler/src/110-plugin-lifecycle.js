@@ -66,6 +66,7 @@ class TaskStatusCyclerPlugin extends Plugin {
     this.registerCyclerReqTyping();
     this.registerPomodoroBulletToggleInputListeners();
     this.registerCountedTaskCycleInputListeners();
+    this.registerCyclerMailCloseClickGuard();
 
     this.addCommand({
       id: "toggle-task-open-done",

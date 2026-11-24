@@ -287,13 +287,27 @@ class BobLedgerToolsPropertyUpdateMixin {
       propertyDecodeShowReport,
       { ...options, commandLabel: "bob props show" },
     ).then((outcome) => {
-      // Only the typed old-bob outcome clears the capability. An error
-      // envelope without capabilities (a missing note, an I/O failure) is
-      // actionable and read-only; it never marks bob as old for every note.
-      if (outcome && outcome.ok === false && outcome.code === "needs-bob") {
-        this.propertyCapability = false;
-      } else if (outcome && outcome.ok === true && outcome.report && outcome.report.ok === true) {
-        this.propertyCapability = propertyHasCapability(outcome.report);
+      // Capability writes go through the routing controller when it is
+      // active: only the typed old-bob outcome records absence, and an
+      // error envelope without capabilities (a missing note, an I/O
+      // failure) is actionable and read-only. When routing is inactive the
+      // controller applies the same legacy single-value behavior.
+      try {
+        if (typeof this.propertyCapabilityNoteShowOutcome === "function") {
+          this.propertyCapabilityNoteShowOutcome(outcome);
+        } else if (outcome && outcome.ok === false && outcome.code === "needs-bob") {
+          this.propertyCapability = false;
+        } else if (outcome && outcome.ok === true && outcome.report && outcome.report.ok === true) {
+          this.propertyCapability = propertyHasCapability(outcome.report);
+        }
+      } catch (_) {
+        try {
+          if (outcome && outcome.ok === false && outcome.code === "needs-bob") {
+            this.propertyCapability = false;
+          } else if (outcome && outcome.ok === true && outcome.report && outcome.report.ok === true) {
+            this.propertyCapability = propertyHasCapability(outcome.report);
+          }
+        } catch (_) {}
       }
       return outcome;
     });

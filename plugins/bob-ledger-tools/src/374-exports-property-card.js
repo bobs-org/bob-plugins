@@ -65,6 +65,9 @@ try {
       propertyCardOwnFrontmatterInEditor,
       propertyCardOwnFrontmatterInReading,
       propertyCardOwnFrontmatter,
+      propertyCardFrontmatterPaintedOwner,
+      propertyCardFrontmatterActualOwnership,
+      propertyCardFrontmatterReleaseScope,
       propertyCardFrontmatterReleaseAll,
       propertyCardHostRegisterFrontmatterOwnership,
     });

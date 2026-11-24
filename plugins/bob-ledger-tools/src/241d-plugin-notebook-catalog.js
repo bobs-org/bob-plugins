@@ -699,7 +699,54 @@ class BobLedgerToolsNotebookCatalogMixin {
     return this.apiNotebookSync({ automatic: false });
   }
 
+  // Owned scopes route to the shared property editor (key "summary");
+  // ordinary notebook views and the File Properties sidebar keep native
+  // behavior. A failed opener releases the scope before the native
+  // fallback so the focused input is visible again. Never awaits: the
+  // opener is asynchronous and this helper stays synchronous.
   notebookFocusSummaryProperty(view, attemptedCommands) {
+    try {
+      const owned = typeof this.propertyCardActualOwnership === "function"
+        ? this.propertyCardActualOwnership({ view })
+        : null;
+      if (owned && owned.owned === true && typeof this.openPropertyEditor === "function") {
+        const scope = owned.scope || null;
+        const openerView = owned.view || null;
+        const plugin = this;
+        const onOpenerFailed = () => {
+          try {
+            if (typeof plugin.propertyCapabilityReleaseOwnedScope === "function") {
+              plugin.propertyCapabilityReleaseOwnedScope(scope, openerView);
+            }
+          } catch (_) {}
+          try {
+            if (typeof plugin.notebookFocusSummaryPropertyNative === "function") {
+              plugin.notebookFocusSummaryPropertyNative(view, true);
+            }
+          } catch (_) {}
+        };
+        void Promise.resolve()
+          .then(() => plugin.openPropertyEditor({ filePath: owned.path, key: "summary" }))
+          .then((outcome) => {
+            if (outcome && outcome.ok === true) return;
+            onOpenerFailed();
+          }, onOpenerFailed);
+        return true;
+      }
+    } catch (_) {}
+    try {
+      if (typeof this.notebookFocusSummaryPropertyNative === "function") {
+        return this.notebookFocusSummaryPropertyNative(view, attemptedCommands);
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  // Native summary focus: DOM inputs first, then the File Properties
+  // sidebar command. Owned scopes never reach here; the router above sends
+  // them to the property editor instead, and the sidebar keeps native
+  // behavior even when the main note is owned.
+  notebookFocusSummaryPropertyNative(view, attemptedCommands) {
     try {
       const roots = [];
       if (view && view.contentEl) {

@@ -383,6 +383,90 @@ function propertyCardOwnFrontmatter(scope, options = {}) {
   return null;
 }
 
+// The painted owner entry for one scope, or null. The paint map mirrors
+// live ownership: own paints synchronously and release unpaints, so the
+// entry carries the same path, generation, and editor view the field
+// dispatch settled. Callers that only hold a MarkdownView (focus helpers,
+// command dispatch) reach the editor entry through the scope.
+function propertyCardFrontmatterPaintedOwner(scope) {
+  try {
+    const painted = propertyCardFrontmatterPainted.get(scope);
+    const entry = painted && painted.entry;
+    if (!entry || entry.released === true) return null;
+    return entry;
+  } catch (_) {
+    return null;
+  }
+}
+
+// Read-only actual-ownership query for capability routing and native
+// entry points (bob-cli-pf.6.1.2). Observes the live owner entry, not card
+// eligibility, a global Boolean, or a stale class: the Live Preview entry
+// must match the field's current owner generation, and the Reading entry
+// must still hold the scope tag. Denied scopes never read as owned.
+function propertyCardFrontmatterActualOwnership(scope, options = {}) {
+  const none = { owned: false };
+  try {
+    if (!scope || typeof scope.classList?.contains !== "function") return none;
+    const path = String(options?.path || "");
+    if (!path) return none;
+    if (propertyCardFrontmatterScopeDenied(scope)) return none;
+    if (scope.classList.contains("cm-editor")) {
+      const entry = propertyCardFrontmatterPaintedOwner(scope);
+      if (!entry) return none;
+      if (entry.path !== path) return none;
+      const candidate = options?.view;
+      const view = candidate && typeof candidate.dispatch === "function" ? candidate : entry.view;
+      if (!view || typeof view.dispatch !== "function") return none;
+      if (view.dom && view.dom !== scope) return none;
+      const field = propertyCardFrontmatterEditorFieldGeneration(view);
+      if (field.installed !== true || field.generation !== entry.generation) return none;
+      return { owned: true, mode: "live", path, generation: entry.generation };
+    }
+    if (scope.classList.contains("markdown-preview-view")) {
+      const entry = propertyCardFrontmatterReadingOwners.get(scope);
+      if (!entry) return none;
+      if (entry.path !== path) return none;
+      if (scope.classList.contains(PROPERTY_CARD_OWNS_FRONTMATTER_CLASS) !== true) return none;
+      return { owned: true, mode: "reading", path, generation: entry.generation };
+    }
+  } catch (_) {
+    return none;
+  }
+  return none;
+}
+
+// Release one scope (and its editor entry) without touching other mounts.
+// Capability routing calls this before a native fallback after a failed
+// opener, so the native input it focuses is visible again. Never throws.
+function propertyCardFrontmatterReleaseScope(scope, view) {
+  let released = false;
+  try {
+    if (view && typeof view.dispatch === "function") {
+      const entry = propertyCardFrontmatterEditorOwners.get(view);
+      if (entry && entry.released !== true && (!scope || view.dom === scope)) {
+        propertyCardFrontmatterEditorRelease(entry);
+        released = true;
+      }
+    }
+  } catch (_) {}
+  try {
+    if (scope && typeof scope.classList?.contains === "function") {
+      const painted = propertyCardFrontmatterPaintedOwner(scope);
+      if (painted) {
+        propertyCardFrontmatterEditorRelease(painted);
+        released = true;
+      }
+      const entry = propertyCardFrontmatterReadingOwners.get(scope);
+      if (entry) {
+        propertyCardFrontmatterReadingDrop(scope, entry);
+        released = true;
+      }
+    }
+  } catch (_) {}
+  return released;
+}
+
 // Release every owned editor and Reading scope (host dispose, plugin unload).
 function propertyCardFrontmatterReleaseAll() {
   for (const view of Array.from(propertyCardFrontmatterOwnedViews)) {

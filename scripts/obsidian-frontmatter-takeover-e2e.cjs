@@ -645,15 +645,42 @@ async function run(args) {
     await attempt("stale-cache-releases", async () => {
       await ctx.page.open(ctx.main, P.day, "live");
       await ctx.page.waitOwned(ctx.main, "live", "stale setup");
-      const expectedType = await ctx.page.ev(`(() => {
+      const staleProbe = await ctx.page.ev(`(() => {
         const file = app.vault.getAbstractFileByPath(${JSON.stringify(P.day)});
-        const cache = app.metadataCache.getFileCache(file);
-        const expected = cache && cache.frontmatter ? cache.frontmatter.type : null;
-        if (cache && cache.frontmatter) cache.frontmatter.summary = "stale-mismatch";
+        const metadataCache = app.metadataCache;
+        const originalGetFileCache = metadataCache.getFileCache;
+        const originalDescriptor = Object.getOwnPropertyDescriptor(metadataCache, "getFileCache");
+        const cache = originalGetFileCache.call(metadataCache, file);
+        const expectedType = cache && cache.frontmatter ? cache.frontmatter.type : null;
         const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
-        plugin.constructor.helpers.propertyCardFrontmatterCoordinatorReconcile(plugin);
-        return expected;
+        let intercepted = 0;
+        Object.defineProperty(metadataCache, "getFileCache", {
+          configurable: true,
+          writable: true,
+          value(target) {
+            const current = originalGetFileCache.call(this, target);
+            if (target?.path === ${JSON.stringify(P.day)} && current?.frontmatter) {
+              intercepted += 1;
+              return {
+                ...current,
+                frontmatter: { ...current.frontmatter, summary: "stale-mismatch" },
+              };
+            }
+            return current;
+          },
+        });
+        try {
+          plugin.constructor.helpers.propertyCardFrontmatterCoordinatorReconcile(plugin);
+        } finally {
+          if (originalDescriptor) Object.defineProperty(metadataCache, "getFileCache", originalDescriptor);
+          else delete metadataCache.getFileCache;
+        }
+        return { expectedType, intercepted };
       })()`);
+      const expectedType = staleProbe && staleProbe.expectedType;
+      if (!expectedType || staleProbe.intercepted < 1) {
+        throw new Error("stale cache view was not observed during ownership reconciliation: " + JSON.stringify(staleProbe));
+      }
       await ctx.page.settle(250);
       const stale = await ctx.page.waitNative(ctx.main, "stale cache");
       const cacheProbe = "bob-frontmatter-takeover-refresh";

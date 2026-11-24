@@ -115,9 +115,12 @@ test("runner creates the profile directory before writing bob-control.json", () 
   assert.match(source, /fs\.mkdirSync\(path\.dirname\(file\), \{ recursive: true \}\)/);
 });
 
-test("stale-cache probe corrupts the existing summary field that the fixture refreshes", () => {
+test("stale-cache probe injects a stale view without mutating Obsidian's cached frontmatter", () => {
   const source = fs.readFileSync(path.join(__dirname, "obsidian-frontmatter-takeover-e2e.cjs"), "utf8");
-  assert.match(source, /cache\.frontmatter\.summary = "stale-mismatch"/);
+  assert.match(source, /Object\.defineProperty\(metadataCache, "getFileCache"/);
+  assert.match(source, /frontmatter: \{ \.\.\.current\.frontmatter, summary: "stale-mismatch" \}/);
+  assert.match(source, /delete metadataCache\.getFileCache/);
+  assert.doesNotMatch(source, /cache\.frontmatter\.summary = "stale-mismatch"/);
   assert.doesNotMatch(source, /cache\.frontmatter\.type = "stale-mismatch"/);
   assert.match(source, /cache\.frontmatter\.summary === \$\{JSON\.stringify\(cacheProbe\)\}/);
 });

@@ -446,15 +446,39 @@ async function run(args) {
       const bufferText = await ctx.page.ev("window.__bobFrontmatterTakeover.docText(" + JSON.stringify(ctx.main) + ")");
       await ctx.page.keys("u");
       await ctx.page.settle(1200);
-      const restored = await ctx.page.ev("window.__bobFrontmatterTakeover.readNote(" + JSON.stringify(P.day) + ")");
+      const bufferAfterUndo = await ctx.page.ev("window.__bobFrontmatterTakeover.docText(" + JSON.stringify(ctx.main) + ")");
+      let restored = await ctx.page.ev("window.__bobFrontmatterTakeover.readNote(" + JSON.stringify(P.day) + ")");
+      const bufferRestored = bufferAfterUndo === notes[P.day];
+      if (!bufferRestored) {
+        failures.push("undo did not restore the live editor buffer");
+        await ctx.page.ev(`(() => {
+          const leaf = app.workspace.getLeafById(${JSON.stringify(ctx.main)});
+          const cm = leaf && leaf.view && leaf.view.editor && leaf.view.editor.cm;
+          if (!cm) return false;
+          cm.dispatch({ changes: { from: 0, to: cm.state.doc.length, insert: ${JSON.stringify(notes[P.day])} } });
+          return cm.state.doc.toString() === ${JSON.stringify(notes[P.day])};
+        })()`);
+        await waitFor(client, `window.__bobFrontmatterTakeover.docText(${JSON.stringify(ctx.main)}) === ${JSON.stringify(notes[P.day])}`,
+          Boolean, "day editor-buffer restoration after Vim probe", 10_000);
+      }
+      if (restored !== notes[P.day]) {
+        failures.push("undo did not restore day bytes");
+        await ctx.page.ev(`(async () => {
+          const file = app.vault.getAbstractFileByPath(${JSON.stringify(P.day)});
+          await app.vault.modify(file, ${JSON.stringify(notes[P.day])});
+          return true;
+        })()`);
+        await waitFor(client, `window.__bobFrontmatterTakeover.readNote(${JSON.stringify(P.day)}) === ${JSON.stringify(notes[P.day])}`,
+          Boolean, "day file restoration after Vim probe", 10_000);
+        restored = await ctx.page.ev("window.__bobFrontmatterTakeover.readNote(" + JSON.stringify(P.day) + ")");
+      }
       const probe = await ctx.page.probe(ctx.main);
       for (const [label, row] of [["gg", afterGg], ["k", afterK], ["up", afterUp], ["type", afterType]]) {
         if (row.inProperties) failures.push(label + " focused a property input");
       }
       if (!String(bufferText || "").includes("s1ok")) failures.push("inserted body text missing from the editor buffer");
-      if (restored !== notes[P.day]) failures.push("undo did not restore day bytes");
       if (probe.activeInside) failures.push("probe still inside the container");
-      return { ok: failures.length === 0, afterGg, afterK, afterUp, afterType, typed: String(bufferText || "").includes("s1ok"), restored: restored === notes[P.day], probe, failures };
+      return { ok: failures.length === 0, afterGg, afterK, afterUp, afterType, typed: String(bufferText || "").includes("s1ok"), bufferRestored, restored: restored === notes[P.day], probe, failures };
     });
     await attempt("tab-live", async () => {
       await ctx.page.ev(`(() => { const leaf = app.workspace.getLeafById(${JSON.stringify(ctx.main)}); leaf.view.editor.focus(); return true; })()`);

@@ -905,16 +905,19 @@ async function run(args) {
         }));
       }
       const restored = await ctx.page.waitOwned(ctx.main, "live", "stale restore");
-      // The previous trace recorded Obsidian's delayed MarkdownView.save about
-      // 16 seconds after vault.modify. Keep this disposable note open until that
-      // save has landed so the editor cannot serialize the protected note when
-      // the main leaf switches back to it.
-      await ctx.page.settle(18_000);
+      // The latest trace recorded Obsidian's delayed MarkdownView.save 34.5
+      // seconds after the probe edit, about 14 seconds after the main leaf
+      // switched back to the protected note. Keep this disposable note open
+      // beyond that observed delay so the save cannot serialize the protected
+      // note when the main leaf switches back to it.
+      await ctx.page.settle(40_000);
       const staleProbeAudit = await ctx.page.ev(
         `window.__bobFrontmatterTakeoverWriteAudit?.rows.slice(${Number(auditStart)}) || []`,
       );
-      const delayedSaveOnProbe = staleProbeAudit.some((row) => row.path === STALE_CACHE_PROBE_PATH
-        && row.stack.some((line) => line.includes("lt.save") || line.includes("lt.writeData")));
+      const delayedSaveRows = staleProbeAudit.filter((row) =>
+        row.stack.some((line) => line.includes("lt.save") || line.includes("lt.writeData")));
+      const delayedSaveTargets = [...new Set(delayedSaveRows.map((row) => row.path))];
+      const delayedSaveOnProbe = delayedSaveTargets.includes(STALE_CACHE_PROBE_PATH);
       const protectedBytes = await ctx.page.ev(
         "window.__bobFrontmatterTakeover.readNote(" + JSON.stringify(P.day) + ")",
       );
@@ -938,6 +941,7 @@ async function run(args) {
           bytesRestored: restoredBytes === cacheProbeNote,
           protectedBytesRestored: protectedBytes === notes[P.day],
           delayedSaveOnProbe,
+          delayedSaveTargets,
         },
         restored,
       };

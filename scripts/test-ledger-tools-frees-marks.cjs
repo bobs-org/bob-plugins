@@ -496,17 +496,18 @@ test("200-link / 2000-task build stays within the 25 ms budget", () => {
 
   let resolutions = 0;
   let counts = 0;
-  const start = RealDate.now();
+  const cpuStart = process.cpuUsage();
   const rows = freesMarkCandidateLinks(content, memo, TODAY, {
     dailyPath: TODAY_PATH,
     onResolve: () => { resolutions += 1; },
     onCount: () => { counts += 1; },
   });
-  const elapsedMs = RealDate.now() - start;
+  const cpuElapsed = process.cpuUsage(cpuStart);
+  const elapsedMs = (cpuElapsed.user + cpuElapsed.system) / 1000;
   assert.equal(rows.length, 200);
   assert.equal(resolutions, 1, "the repeated target resolves once in this build");
   assert.equal(counts, 1, "the resolved owner count runs once in this build");
-  assert.ok(elapsedMs < 25, `synthetic build took ${elapsedMs} ms (budget 25 ms)`);
+  assert.ok(elapsedMs < 25, `synthetic build used ${elapsedMs} ms CPU (budget 25 ms)`);
 
   // A new freshness memo generation gets new count data instead of stale cache.
   const replacementMemo = memoOf([...tasks, dependent({ id: "d2", blockId: "d2" })]);

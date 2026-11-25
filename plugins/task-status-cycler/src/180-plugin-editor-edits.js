@@ -589,13 +589,13 @@ class TaskStatusCyclerEditorEditsMixin {
       return null;
     }
 
-    // Bank rows never promote: refuse before the section planner runs so
-    // demotion pickers and move plans leave them byte-identical.
     if (this.cyclerBankInfoAtCursor(editor)) {
       return { mode: "refuse", message: CYCLER_BANK_ROW_NOTICE };
     }
     if (this.cyclerReqInfoAtCursor(editor)) return { mode: "refuse", message: CYCLER_REQ_LANE_COPY };
     const lines = this.getEditorLineArray(editor);
+    const managed = openLineManagedRefuse(lines.join("\n"), cursor.line);
+    if (managed) return managed;
     return getObsidianTaskToggleRangeDocumentPlan(
       lines,
       cursor.line,

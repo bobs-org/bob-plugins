@@ -453,4 +453,16 @@ test("Vim o and O on a req line open a fresh open-box line", () => {
     assert.deepEqual(above.store.slice(0, 3), ["- [ ] #task Ship", "\t- [ ] ", `\t- [${mark}] req`], mark);
     assert.deepEqual(above.cursor(), { line: 1, ch: 7 });
   }
+  const subtree = makeCm(
+    ["- [ ] #task Ship", "\t- [ ] parent req", "\t\t- child note"],
+    { line: 1, ch: 3 },
+  );
+  plugin.handleVimOpenLineBelow(subtree);
+  assert.deepEqual(subtree.store.slice(0, 4), [
+    "- [ ] #task Ship",
+    "\t- [ ] parent req",
+    "\t\t- child note",
+    "\t- [ ] ",
+  ]);
+  assert.deepEqual(subtree.cursor(), { line: 3, ch: 7 });
 });

@@ -766,60 +766,11 @@ class TaskStatusCyclerVimMixin {
   }
 
   handleVimOpenLineBelow(cm) {
-    if (
-      !cm ||
-      typeof cm.getCursor !== "function" ||
-      typeof cm.getLine !== "function" ||
-      typeof cm.replaceRange !== "function" ||
-      typeof cm.setCursor !== "function"
-    ) {
-      return;
-    }
-
-    const cursor = cm.getCursor();
-    if (!cursor || typeof cursor.line !== "number") {
-      return;
-    }
-
-    const lineText = cm.getLine(cursor.line) || "";
-    const continuationPrefix = getOpenLineBelowPrefix(lineText);
-    const targetLine = cursor.line + 1;
-    const targetCh = continuationPrefix.length;
-
-    cm.replaceRange("\n" + continuationPrefix, {
-      line: cursor.line,
-      ch: lineText.length,
-    });
-    cm.setCursor(targetLine, targetCh);
-    this.enterVimInsertMode(cm);
+    this.applyVimOpenLine(cm, "below");
   }
 
   handleVimOpenLineAbove(cm) {
-    if (
-      !cm ||
-      typeof cm.getCursor !== "function" ||
-      typeof cm.getLine !== "function" ||
-      typeof cm.replaceRange !== "function" ||
-      typeof cm.setCursor !== "function"
-    ) {
-      return;
-    }
-
-    const cursor = cm.getCursor();
-    if (!cursor || typeof cursor.line !== "number") {
-      return;
-    }
-
-    const lineText = cm.getLine(cursor.line) || "";
-    const continuationPrefix = getOpenLineBelowPrefix(lineText);
-    const targetCh = continuationPrefix.length;
-
-    cm.replaceRange(continuationPrefix + "\n", {
-      line: cursor.line,
-      ch: 0,
-    });
-    cm.setCursor(cursor.line, targetCh);
-    this.enterVimInsertMode(cm);
+    this.applyVimOpenLine(cm, "above");
   }
 
   handleVimOpenChildBulletLineBelow(cm) {

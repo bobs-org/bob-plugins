@@ -18508,6 +18508,7 @@ class TaskStatusCyclerPlugin extends Plugin {
 
     this.registerChildBulletInputListeners();
     this.registerCyclerReqTyping();
+    this.registerOpenLineScaffoldPrune();
     this.registerPomodoroBulletToggleInputListeners();
     this.registerCountedTaskCycleInputListeners();
     this.registerCyclerMailCloseClickGuard();
@@ -25427,60 +25428,11 @@ class TaskStatusCyclerVimMixin {
   }
 
   handleVimOpenLineBelow(cm) {
-    if (
-      !cm ||
-      typeof cm.getCursor !== "function" ||
-      typeof cm.getLine !== "function" ||
-      typeof cm.replaceRange !== "function" ||
-      typeof cm.setCursor !== "function"
-    ) {
-      return;
-    }
-
-    const cursor = cm.getCursor();
-    if (!cursor || typeof cursor.line !== "number") {
-      return;
-    }
-
-    const lineText = cm.getLine(cursor.line) || "";
-    const continuationPrefix = getOpenLineBelowPrefix(lineText);
-    const targetLine = cursor.line + 1;
-    const targetCh = continuationPrefix.length;
-
-    cm.replaceRange("\n" + continuationPrefix, {
-      line: cursor.line,
-      ch: lineText.length,
-    });
-    cm.setCursor(targetLine, targetCh);
-    this.enterVimInsertMode(cm);
+    this.applyVimOpenLine(cm, "below");
   }
 
   handleVimOpenLineAbove(cm) {
-    if (
-      !cm ||
-      typeof cm.getCursor !== "function" ||
-      typeof cm.getLine !== "function" ||
-      typeof cm.replaceRange !== "function" ||
-      typeof cm.setCursor !== "function"
-    ) {
-      return;
-    }
-
-    const cursor = cm.getCursor();
-    if (!cursor || typeof cursor.line !== "number") {
-      return;
-    }
-
-    const lineText = cm.getLine(cursor.line) || "";
-    const continuationPrefix = getOpenLineBelowPrefix(lineText);
-    const targetCh = continuationPrefix.length;
-
-    cm.replaceRange(continuationPrefix + "\n", {
-      line: cursor.line,
-      ch: 0,
-    });
-    cm.setCursor(cursor.line, targetCh);
-    this.enterVimInsertMode(cm);
+    this.applyVimOpenLine(cm, "above");
   }
 
   handleVimOpenChildBulletLineBelow(cm) {
@@ -25585,6 +25537,183 @@ class TaskStatusCyclerVimMixin {
     cm.setCursor(targetLine, col);
   }
 
+}
+// ---- src/141-plugin-open-line.js ----
+class TaskStatusCyclerOpenLineMixin {
+  getCodeMirrorContents(cm) {
+    if (!cm) return "";
+    if (typeof cm.getValue === "function") {
+      return String(cm.getValue() || "");
+    }
+    const lines = [];
+    const last =
+      typeof cm.lastLine === "function"
+        ? cm.lastLine()
+        : typeof cm.lineCount === "function"
+          ? cm.lineCount() - 1
+          : -1;
+    if (last < 0 && typeof cm.getLine === "function") {
+      let index = 0;
+      while (typeof cm.getLine(index) === "string") {
+        lines.push(cm.getLine(index));
+        index += 1;
+      }
+      return lines.join("\n");
+    }
+    for (let index = 0; index <= last; index += 1) {
+      lines.push(typeof cm.getLine === "function" ? cm.getLine(index) || "" : "");
+    }
+    return lines.join("\n");
+  }
+
+  getCodeMirrorLineCount(cm) {
+    if (!cm) return 0;
+    if (typeof cm.lineCount === "function") return cm.lineCount();
+    if (typeof cm.lastLine === "function") return cm.lastLine() + 1;
+    const contents = this.getCodeMirrorContents(cm);
+    return taskReqDocument(contents).texts.length;
+  }
+
+  applyOpenLinePlanToCodeMirror(cm, plan) {
+    if (!plan || plan.kind !== "insert" || !cm || typeof cm.replaceRange !== "function") {
+      return false;
+    }
+    const inserted = plan.lines.join("\n");
+    const lineCount = this.getCodeMirrorLineCount(cm);
+    if (plan.insertBeforeLine >= lineCount) {
+      const last = Math.max(lineCount - 1, 0);
+      const lastText = typeof cm.getLine === "function" ? cm.getLine(last) || "" : "";
+      cm.replaceRange(`\n${inserted}`, { line: last, ch: lastText.length });
+    } else {
+      cm.replaceRange(`${inserted}\n`, { line: plan.insertBeforeLine, ch: 0 });
+    }
+    if (typeof cm.setCursor === "function") {
+      cm.setCursor(plan.cursorLine, plan.cursorCh);
+    }
+    return true;
+  }
+
+  recordOpenLineJump(plan, path) {
+    if (!plan || !plan.recordJump || !path) return;
+    const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
+    const api = plugins && plugins["bob-navigation-hotkeys"] && plugins["bob-navigation-hotkeys"].api;
+    if (!api || typeof api.recordJump !== "function") return;
+    try {
+      api.recordJump(
+        { path, line: plan.originLine, ch: plan.originCh || 0 },
+        { path, line: plan.cursorLine, ch: plan.cursorCh },
+      );
+    } catch (_error) {
+      // Jump history is best-effort; the insert still lands.
+    }
+  }
+
+  armOpenLineScaffold(cm, plan, path) {
+    this.disarmOpenLineScaffold();
+    if (!plan || plan.kind !== "insert" || !plan.scaffold) return;
+    this.openLineScaffold = {
+      cm,
+      path: path || null,
+      scaffold: plan.scaffold,
+    };
+    const onMode = (args) => {
+      const mode = args && args.mode;
+      if (mode && mode !== "insert" && mode !== "replace") {
+        this.flushOpenLineScaffold("insert-leave");
+      }
+    };
+    const onBlur = () => this.flushOpenLineScaffold("blur");
+    this.openLineScaffold.onMode = onMode;
+    this.openLineScaffold.onBlur = onBlur;
+    if (cm && typeof cm.on === "function") {
+      cm.on("vim-mode-change", onMode);
+      cm.on("blur", onBlur);
+    }
+  }
+
+  disarmOpenLineScaffold() {
+    const pending = this.openLineScaffold;
+    if (!pending) return;
+    const cm = pending.cm;
+    if (cm && typeof cm.off === "function") {
+      if (pending.onMode) cm.off("vim-mode-change", pending.onMode);
+      if (pending.onBlur) cm.off("blur", pending.onBlur);
+    }
+    this.openLineScaffold = null;
+  }
+
+  flushOpenLineScaffold(_reason) {
+    const pending = this.openLineScaffold;
+    if (!pending) return false;
+    const view = this.app && this.app.workspace
+      ? this.app.workspace.getActiveViewOfType(MarkdownView)
+      : null;
+    const file = view && view.file;
+    if (pending.path && file && file.path !== pending.path) {
+      this.disarmOpenLineScaffold();
+      return false;
+    }
+    const cm = pending.cm;
+    if (!cm || typeof cm.getLine !== "function" || typeof cm.replaceRange !== "function") {
+      this.disarmOpenLineScaffold();
+      return false;
+    }
+    const contents = this.getCodeMirrorContents(cm);
+    const pruned = pruneOpenLineScaffold(contents, pending.scaffold);
+    this.disarmOpenLineScaffold();
+    if (pruned === null) return false;
+    const last = this.getCodeMirrorLineCount(cm) - 1;
+    const lastText = last >= 0 ? cm.getLine(last) || "" : "";
+    cm.replaceRange(pruned, { line: 0, ch: 0 }, { line: Math.max(last, 0), ch: lastText.length });
+    return true;
+  }
+
+  registerOpenLineScaffoldPrune() {
+    if (!this.app || !this.app.workspace || typeof this.app.workspace.on !== "function") {
+      return false;
+    }
+    this.registerEvent(
+      this.app.workspace.on("active-leaf-change", () => this.flushOpenLineScaffold("leaf")),
+    );
+    this.registerEvent(
+      this.app.workspace.on("file-open", () => this.flushOpenLineScaffold("file-open")),
+    );
+    return true;
+  }
+
+  applyVimOpenLine(cm, direction) {
+    if (
+      !cm ||
+      typeof cm.getCursor !== "function" ||
+      typeof cm.getLine !== "function" ||
+      typeof cm.replaceRange !== "function" ||
+      typeof cm.setCursor !== "function"
+    ) {
+      return;
+    }
+    const cursor = cm.getCursor();
+    if (!cursor || typeof cursor.line !== "number") {
+      return;
+    }
+    const contents = this.getCodeMirrorContents(cm);
+    const today =
+      typeof this.getCreatedDateString === "function"
+        ? this.getCreatedDateString()
+        : formatLocalDate();
+    const plan = planOpenLine(contents, cursor.line, direction, today);
+    if (!plan || plan.kind === "refuse") {
+      if (plan && plan.notice) new Notice(plan.notice);
+      return;
+    }
+    if (!this.applyOpenLinePlanToCodeMirror(cm, plan)) return;
+    const view = this.app && this.app.workspace
+      ? this.app.workspace.getActiveViewOfType(MarkdownView)
+      : null;
+    const path = (view && view.file && view.file.path) || null;
+    this.recordOpenLineJump(plan, path);
+    this.armOpenLineScaffold(cm, plan, path);
+    this.enterVimInsertMode(cm);
+  }
 }
 // ---- src/150-plugin-commands.js ----
 class TaskStatusCyclerCommandsMixin {
@@ -29528,13 +29657,13 @@ class TaskStatusCyclerEditorEditsMixin {
       return null;
     }
 
-    // Bank rows never promote: refuse before the section planner runs so
-    // demotion pickers and move plans leave them byte-identical.
     if (this.cyclerBankInfoAtCursor(editor)) {
       return { mode: "refuse", message: CYCLER_BANK_ROW_NOTICE };
     }
     if (this.cyclerReqInfoAtCursor(editor)) return { mode: "refuse", message: CYCLER_REQ_LANE_COPY };
     const lines = this.getEditorLineArray(editor);
+    const managed = openLineManagedRefuse(lines.join("\n"), cursor.line);
+    if (managed) return managed;
     return getObsidianTaskToggleRangeDocumentPlan(
       lines,
       cursor.line,
@@ -39519,6 +39648,567 @@ class TaskStatusCyclerReqTypingMixin {
     }
   }
 }
+// ---- src/199b-open-line-plan.js ----
+// Pure o / O open-line planner (bob-cli-q4.2). Built on the RQ/RL twins;
+// no Obsidian, no clock, no `this`. Non-task lines keep getOpenLineBelowPrefix
+// bytes. A new Ready task is `{indent}- [ ] #task  [created::YYYY-MM-DD]`
+// with the caret after `#task `.
+
+const OPEN_LINE_GROUP_TITLES = Object.freeze([
+  "Next & In Progress",
+  "Blocked",
+  "Done & Canceled",
+]);
+const OPEN_LINE_MANAGED_NOTICE = "Managed line · not a task";
+const OPEN_LINE_PRJ_NO_TASKS_NOTICE = "No ## Tasks section — cannot open a task on ^prj";
+const OPEN_LINE_TASKS_TITLE = "Tasks";
+
+function openLineToday(today) {
+  return typeof today === "string" && /^\d{4}-\d{2}-\d{2}$/.test(today)
+    ? today
+    : formatLocalDate();
+}
+
+function formatOpenLineTaskLine(indent, today) {
+  return `${indent}- [ ] #task  [created::${openLineToday(today)}]`;
+}
+
+function openLineTaskCursorCh(indent) {
+  return `${indent}- [ ] #task `.length;
+}
+
+function openLineReqLine(indent) {
+  return `${indent}- [ ] `;
+}
+
+function openLineBulletLine(indent) {
+  return `${indent}- `;
+}
+
+function openLineIsStatusGroupHeading(line) {
+  const heading = taskBlockAtxHeading(line);
+  return Boolean(
+    heading &&
+      heading.level >= 3 &&
+      OPEN_LINE_GROUP_TITLES.includes(taskReqTrim(heading.title)),
+  );
+}
+
+function openLineIsTasksHeading(line) {
+  const heading = taskBlockAtxHeading(line);
+  return Boolean(
+    heading && heading.level === 2 && taskReqTrim(heading.title) === OPEN_LINE_TASKS_TITLE,
+  );
+}
+
+function openLineFencedSet(doc) {
+  return taskReqFencedLines(doc.texts, 0, doc.texts.length);
+}
+
+function openLineFrontmatterEnd(doc) {
+  return taskReqFrontmatterEnd(doc.texts);
+}
+
+function openLineIsPlainContext(doc, lineIndex) {
+  const frontmatterEnd = openLineFrontmatterEnd(doc);
+  if (frontmatterEnd !== null && lineIndex <= frontmatterEnd) return true;
+  if (openLineFencedSet(doc).has(lineIndex)) return true;
+  const line = doc.texts[lineIndex] || "";
+  if (taskBlockAtxHeading(line)) return true;
+  if (doc.blank[lineIndex]) return true;
+  return doc.bodies[lineIndex] === null;
+}
+
+function openLineSubtreeEnd(doc, lineIndex) {
+  const indent = doc.indents[lineIndex];
+  let end = lineIndex;
+  for (let index = lineIndex + 1; index < doc.texts.length; index += 1) {
+    if (doc.blank[index]) continue;
+    if (doc.indents[index] > indent) {
+      end = index;
+      continue;
+    }
+    break;
+  }
+  return end;
+}
+
+function openLineTaskLastLine(doc, task) {
+  return taskBlockLastLineIn(doc, task);
+}
+
+function openLineOwningTask(doc, tasks, lineIndex) {
+  let owner = null;
+  for (const task of tasks) {
+    if (task.lineIndex > lineIndex) break;
+    const last = openLineTaskLastLine(doc, task);
+    if (lineIndex >= task.lineIndex && lineIndex <= last) owner = task;
+  }
+  return owner;
+}
+
+function openLineTaskAt(tasks, lineIndex) {
+  return tasks.find((task) => task.lineIndex === lineIndex) || null;
+}
+
+function openLineParentTask(doc, tasks, task) {
+  let parent = null;
+  for (const candidate of tasks) {
+    if (candidate.lineIndex >= task.lineIndex) break;
+    const last = openLineTaskLastLine(doc, candidate);
+    if (task.lineIndex <= last) parent = candidate;
+  }
+  return parent;
+}
+
+function openLineTasksSection(doc) {
+  const fenced = openLineFencedSet(doc);
+  let headingLine = null;
+  for (let index = 0; index < doc.texts.length; index += 1) {
+    if (fenced.has(index)) continue;
+    if (openLineIsTasksHeading(doc.texts[index])) {
+      headingLine = index;
+      break;
+    }
+  }
+  if (headingLine === null) return null;
+  let endLine = doc.texts.length;
+  const heading = taskBlockAtxHeading(doc.texts[headingLine]);
+  const level = heading ? heading.level : 2;
+  for (let index = headingLine + 1; index < doc.texts.length; index += 1) {
+    if (fenced.has(index)) continue;
+    const next = taskBlockAtxHeading(doc.texts[index]);
+    if (next && next.level <= level) {
+      endLine = index;
+      break;
+    }
+  }
+  let firstGroupLine = null;
+  for (let index = headingLine + 1; index < endLine; index += 1) {
+    if (fenced.has(index)) continue;
+    if (openLineIsStatusGroupHeading(doc.texts[index])) {
+      firstGroupLine = index;
+      break;
+    }
+  }
+  return {
+    headingLine,
+    endLine,
+    firstGroupLine,
+    intakeEnd: firstGroupLine === null ? endLine : firstGroupLine,
+  };
+}
+
+function openLineEnclosingGroup(doc, lineIndex) {
+  const fenced = openLineFencedSet(doc);
+  let groupLine = null;
+  for (let index = lineIndex; index >= 0; index -= 1) {
+    if (fenced.has(index)) continue;
+    const heading = taskBlockAtxHeading(doc.texts[index]);
+    if (!heading) continue;
+    if (openLineIsStatusGroupHeading(doc.texts[index])) {
+      groupLine = index;
+      break;
+    }
+    if (heading.level <= 2) break;
+  }
+  return groupLine;
+}
+
+function openLineChildCovering(block, lineIndex) {
+  for (const child of block.children) {
+    if (lineIndex >= child.lineIndex && lineIndex <= child.endIndex) return child;
+  }
+  return null;
+}
+
+function openLineIsReqLine(line, globalFilter) {
+  return taskReqCheckboxMarkWithoutFilter(line, globalFilter) !== null;
+}
+
+function openLineManagedRefuse(contents, lineIndex) {
+  const classified = openLineClassify(contents, lineIndex);
+  if (!classified || classified.kind !== "managed") return null;
+  return { mode: "refuse", message: OPEN_LINE_MANAGED_NOTICE };
+}
+
+function openLineClassify(contents, lineIndex) {
+  const text = String(contents == null ? "" : contents);
+  const doc = taskReqDocument(text);
+  if (lineIndex < 0 || lineIndex >= doc.texts.length) return { kind: "plain", doc };
+  if (openLineIsPlainContext(doc, lineIndex)) return { kind: "plain", doc };
+  const tasks = taskReqNoteTasks(text);
+  const headline = openLineTaskAt(tasks, lineIndex);
+  if (headline) {
+    if (taskBlockIsPrjParent(text, headline)) {
+      return { kind: "prj", doc, task: headline, tasks };
+    }
+    if (openLineParentTask(doc, tasks, headline)) {
+      return { kind: "nested-task", doc, task: headline, tasks };
+    }
+    if (openLineEnclosingGroup(doc, lineIndex) !== null) {
+      return { kind: "grouped-task", doc, task: headline, tasks };
+    }
+    return { kind: "root-task", doc, task: headline, tasks };
+  }
+  const owner = openLineOwningTask(doc, tasks, lineIndex);
+  if (owner) {
+    const block = taskBlockRead(text, owner);
+    const covering = openLineChildCovering(block, lineIndex);
+    if (
+      covering &&
+      (covering.zone === "cancel-log" ||
+        covering.zone === "managed-links" ||
+        covering.zone === "logs")
+    ) {
+      return { kind: "managed", doc, task: owner, tasks, child: covering };
+    }
+    const line = doc.texts[lineIndex];
+    if (openLineIsReqLine(line, TASK_BLOCK_DEFAULT_FILTER)) {
+      return { kind: "req", doc, task: owner, tasks };
+    }
+    if (covering && covering.zone === "drawers" && covering.lineIndex === lineIndex) {
+      return { kind: "drawer", doc, task: owner, tasks, child: covering };
+    }
+    return { kind: "note", doc, task: owner, tasks, child: covering };
+  }
+  return { kind: "item", doc, tasks };
+}
+
+function openLineShiftOrigin(originLine, insertBeforeLine, insertedCount) {
+  return insertBeforeLine <= originLine ? originLine + insertedCount : originLine;
+}
+
+function openLineInsertPlan(options) {
+  const {
+    originLine,
+    insertBeforeLine,
+    lines,
+    cursorCh,
+    recordJump,
+    scaffoldKind,
+    createdDrawer,
+    notice,
+  } = options;
+  const inserted = Array.isArray(lines) ? lines.filter((line) => line !== null) : [lines];
+  const cursorLine = insertBeforeLine + (inserted.length - 1);
+  return {
+    kind: "insert",
+    insertBeforeLine,
+    lines: inserted,
+    cursorLine,
+    cursorCh,
+    originLine: openLineShiftOrigin(originLine, insertBeforeLine, inserted.length),
+    originCh: 0,
+    recordJump: Boolean(recordJump),
+    notice: notice || null,
+    createdDrawer: Boolean(createdDrawer),
+    scaffold: {
+      kind: scaffoldKind,
+      lineIndex: cursorLine,
+      emptyText: inserted[inserted.length - 1],
+      drawerLineIndex: createdDrawer ? insertBeforeLine : null,
+      drawerEmptyText: createdDrawer ? inserted[0] : null,
+    },
+  };
+}
+
+function openLineLegacyPlan(doc, originLine, direction) {
+  const lineText = doc.texts[originLine] || "";
+  const prefix = getOpenLineBelowPrefix(lineText);
+  if (direction === "above") {
+    return openLineInsertPlan({
+      originLine,
+      insertBeforeLine: originLine,
+      lines: [prefix],
+      cursorCh: prefix.length,
+      scaffoldKind: "legacy",
+    });
+  }
+  return openLineInsertPlan({
+    originLine,
+    insertBeforeLine: originLine + 1,
+    lines: [prefix],
+    cursorCh: prefix.length,
+    scaffoldKind: "legacy",
+  });
+}
+
+function openLineAfterSubtreePlan(doc, originLine, direction, lineText, cursorCh, scaffoldKind) {
+  if (direction === "above") {
+    return openLineInsertPlan({
+      originLine,
+      insertBeforeLine: originLine,
+      lines: [lineText],
+      cursorCh,
+      scaffoldKind,
+    });
+  }
+  return openLineInsertPlan({
+    originLine,
+    insertBeforeLine: openLineSubtreeEnd(doc, originLine) + 1,
+    lines: [lineText],
+    cursorCh,
+    scaffoldKind,
+  });
+}
+
+function openLineNewTaskPlan(originLine, insertBeforeLine, indent, today, recordJump) {
+  const line = formatOpenLineTaskLine(indent, today);
+  return openLineInsertPlan({
+    originLine,
+    insertBeforeLine,
+    lines: [line],
+    cursorCh: openLineTaskCursorCh(indent),
+    recordJump,
+    scaffoldKind: "task",
+  });
+}
+
+function openLineNoteSlotPlan(contents, originLine, task) {
+  const text = String(contents == null ? "" : contents);
+  let working = text;
+  let workingTask = task;
+  let createdDrawer = false;
+  let home = taskBlockNoteHome(working, workingTask);
+  if (home.home === "new-notes") {
+    const ensured = taskBlockEnsureNotesDrawer(working, workingTask);
+    if (!ensured) {
+      return { kind: "refuse", notice: OPEN_LINE_MANAGED_NOTICE };
+    }
+    working = ensured.updated;
+    createdDrawer = Boolean(ensured.created);
+    const shifted = task.lineIndex;
+    workingTask = taskBlockFindTask(working, shifted) || Object.assign({}, task, {
+      blockEnd: task.blockEnd + (working.length - text.length),
+    });
+    home = taskBlockNoteHome(working, workingTask);
+  }
+  const doc = taskReqDocument(working);
+  let insertBeforeLine;
+  let indent;
+  if (home.home === "notes" && home.drawer) {
+    const insertion = taskBlockDrawerInsertion(working, home.drawer);
+    indent = insertion.indentation;
+    insertBeforeLine = doc.texts.length;
+    for (let index = 0; index <= doc.texts.length; index += 1) {
+      if (taskBlockLineOffset(doc, index) >= insertion.offset) {
+        insertBeforeLine = index;
+        break;
+      }
+    }
+  } else if (home.home === "loose" && home.slot) {
+    insertBeforeLine = home.slot.lineIndex;
+    indent = home.slot.indent;
+  } else {
+    const slot = taskBlockInsertionSlot(working, workingTask, "authored");
+    insertBeforeLine = slot.lineIndex;
+    indent = slot.indent;
+  }
+  const noteLine = openLineBulletLine(indent);
+  if (createdDrawer) {
+    const drawerDoc = taskReqDocument(working);
+    const drawers = taskBlockDrawers(working, workingTask);
+    const notes = drawers.find((entry) => entry.key === TASK_BLOCK_NOTES_KEY);
+    if (notes) {
+      // The header is already in `working`; inserting it again would duplicate
+      // it. Rebuild from the original text instead, emitting header + note.
+      const originalDoc = taskReqDocument(text);
+      const headerOffset = taskBlockDrawerHeaderOffset(text, task, true);
+      let headerLine = originalDoc.texts.length;
+      for (let index = 0; index <= originalDoc.texts.length; index += 1) {
+        if (taskBlockLineOffset(originalDoc, index) >= headerOffset) {
+          headerLine = index;
+          break;
+        }
+      }
+      return openLineInsertPlan({
+        originLine,
+        insertBeforeLine: headerLine,
+        lines: [drawerDoc.texts[notes.lineIndex], noteLine],
+        cursorCh: noteLine.length,
+        scaffoldKind: "note",
+        createdDrawer: true,
+      });
+    }
+  }
+  return openLineInsertPlan({
+    originLine,
+    insertBeforeLine,
+    lines: [noteLine],
+    cursorCh: noteLine.length,
+    scaffoldKind: "note",
+    createdDrawer,
+  });
+}
+
+function planOpenLine(contents, lineIndex, direction, today) {
+  const text = String(contents == null ? "" : contents);
+  const dir = direction === "above" ? "above" : "below";
+  const date = openLineToday(today);
+  const classified = openLineClassify(text, lineIndex);
+  const originLine = lineIndex;
+  switch (classified.kind) {
+    case "plain":
+      return openLineLegacyPlan(classified.doc, originLine, dir);
+    case "prj": {
+      const section = openLineTasksSection(classified.doc);
+      if (!section) {
+        return { kind: "refuse", notice: OPEN_LINE_PRJ_NO_TASKS_NOTICE };
+      }
+      return openLineNewTaskPlan(originLine, section.intakeEnd, "", date, true);
+    }
+    case "grouped-task": {
+      const section = openLineTasksSection(classified.doc);
+      const groupLine = openLineEnclosingGroup(classified.doc, originLine);
+      const insertBefore = section
+        ? section.intakeEnd
+        : groupLine !== null
+          ? groupLine
+          : classified.task.lineIndex;
+      return openLineNewTaskPlan(
+        originLine,
+        insertBefore,
+        classified.task.indentation,
+        date,
+        true,
+      );
+    }
+    case "root-task": {
+      if (dir === "above") {
+        return openLineNewTaskPlan(
+          originLine,
+          originLine,
+          classified.task.indentation,
+          date,
+          false,
+        );
+      }
+      const last = taskBlockLastLineIn(classified.doc, classified.task);
+      return openLineNewTaskPlan(
+        originLine,
+        last + 1,
+        classified.task.indentation,
+        date,
+        false,
+      );
+    }
+    case "nested-task": {
+      const indent = classified.task.indentation;
+      const line = formatOpenLineTaskLine(indent, date);
+      if (dir === "above") {
+        return openLineInsertPlan({
+          originLine,
+          insertBeforeLine: originLine,
+          lines: [line],
+          cursorCh: openLineTaskCursorCh(indent),
+          scaffoldKind: "task",
+        });
+      }
+      const last = taskBlockLastLineIn(classified.doc, classified.task);
+      return openLineInsertPlan({
+        originLine,
+        insertBeforeLine: last + 1,
+        lines: [line],
+        cursorCh: openLineTaskCursorCh(indent),
+        scaffoldKind: "task",
+      });
+    }
+    case "req": {
+      const indent = taskReqLeadingWhitespace(classified.doc.texts[originLine] || "");
+      const line = openLineReqLine(indent);
+      return openLineAfterSubtreePlan(
+        classified.doc,
+        originLine,
+        dir,
+        line,
+        line.length,
+        "req",
+      );
+    }
+    case "drawer":
+    case "note": {
+      const indent = taskReqLeadingWhitespace(classified.doc.texts[originLine] || "");
+      const line = openLineBulletLine(indent);
+      return openLineAfterSubtreePlan(
+        classified.doc,
+        originLine,
+        dir,
+        line,
+        line.length,
+        "note",
+      );
+    }
+    case "managed":
+      return openLineNoteSlotPlan(text, originLine, classified.task);
+    case "item": {
+      const lineText = classified.doc.texts[originLine] || "";
+      const prefix = getOpenLineBelowPrefix(lineText);
+      if (dir === "above") {
+        return openLineInsertPlan({
+          originLine,
+          insertBeforeLine: originLine,
+          lines: [prefix],
+          cursorCh: prefix.length,
+          scaffoldKind: "legacy",
+        });
+      }
+      return openLineInsertPlan({
+        originLine,
+        insertBeforeLine: openLineSubtreeEnd(classified.doc, originLine) + 1,
+        lines: [prefix],
+        cursorCh: prefix.length,
+        scaffoldKind: "legacy",
+      });
+    }
+    default:
+      return openLineLegacyPlan(classified.doc, originLine, dir);
+  }
+}
+
+function openLineJoin(contents, lines) {
+  const ending = taskBlockDocumentLineEnding(contents);
+  return lines.join(ending);
+}
+
+function applyOpenLinePlanToLines(lines, plan) {
+  if (!plan || plan.kind !== "insert") return lines.slice();
+  const next = lines.slice();
+  const insertAt = Math.max(0, Math.min(plan.insertBeforeLine, next.length));
+  next.splice(insertAt, 0, ...plan.lines);
+  return next;
+}
+
+function openLineScaffoldIsEmpty(lineText, emptyText) {
+  return String(lineText || "") === String(emptyText || "");
+}
+
+function pruneOpenLineScaffold(contents, scaffold) {
+  if (!scaffold || typeof scaffold.lineIndex !== "number") return null;
+  const doc = taskReqDocument(contents);
+  const lineIndex = scaffold.lineIndex;
+  if (lineIndex < 0 || lineIndex >= doc.texts.length) return null;
+  if (!openLineScaffoldIsEmpty(doc.texts[lineIndex], scaffold.emptyText)) return null;
+  const next = doc.texts.slice();
+  next.splice(lineIndex, 1);
+  let drawerIndex = scaffold.drawerLineIndex;
+  if (typeof drawerIndex === "number" && drawerIndex >= 0) {
+    if (lineIndex < drawerIndex) drawerIndex -= 1;
+    if (
+      drawerIndex < next.length &&
+      openLineScaffoldIsEmpty(next[drawerIndex], scaffold.drawerEmptyText)
+    ) {
+      const indent = taskReqIndentLength(next[drawerIndex]);
+      const nextLine = next[drawerIndex + 1];
+      const hasChild =
+        nextLine !== undefined &&
+        !taskReqIsBlank(nextLine) &&
+        taskReqIndentLength(nextLine) > indent;
+      if (!hasChild) next.splice(drawerIndex, 1);
+    }
+  }
+  return openLineJoin(contents, next);
+}
 // ---- src/200-install-methods.js ----
 function installTaskStatusCyclerMixins(pluginClass, mixins) {
   const installedNames = new Set(
@@ -39551,6 +40241,7 @@ installTaskStatusCyclerMixins(TaskStatusCyclerPlugin, [
   TaskStatusCyclerRelationSuccessorRuntimeMixin,
   TaskStatusCyclerSuccessorParkedMixin,
   TaskStatusCyclerVimMixin,
+  TaskStatusCyclerOpenLineMixin,
   TaskStatusCyclerCommandsMixin,
   TaskStatusCyclerCompletionMixin,
   TaskStatusCyclerCompletionLinksMixin,
@@ -39875,6 +40566,14 @@ module.exports.helpers = {
   getLineIndentation,
   getOpenLineBelowPrefix,
   getChildBulletOpenLinePrefix,
+  planOpenLine,
+  applyOpenLinePlanToLines,
+  pruneOpenLineScaffold,
+  openLineClassify,
+  openLineManagedRefuse,
+  formatOpenLineTaskLine,
+  OPEN_LINE_MANAGED_NOTICE,
+  OPEN_LINE_PRJ_NO_TASKS_NOTICE,
   hasProjectBlockedResidentTag,
   mapOriginalLineToRemaining,
   moveDemotionPickerSelection,

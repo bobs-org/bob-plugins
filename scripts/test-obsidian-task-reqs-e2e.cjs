@@ -53,6 +53,7 @@ test("gesture scenarios cover every shipped Obsidian gesture", () => {
     "Alt+] on a pending req refuses",
     "Ctrl+Enter on a req refuses",
     "Ctrl+Shift+] on a req refuses",
+    "Ctrl+Shift+] on a BLOCKS line refuses",
     "Alt+N on a req refuses",
     "Alt+F on a req refuses",
     "Ctrl+Shift+Enter on a carried stub refuses",

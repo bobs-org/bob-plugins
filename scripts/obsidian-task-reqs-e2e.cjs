@@ -76,6 +76,13 @@ const KEY_CODES = {
 const CTRL = 2;
 const ALT = 1;
 const SHIFT = 8;
+const E2E_TODAY = (() => {
+  const date = new Date();
+  const year = String(date.getFullYear()).padStart(4, "0");
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+})();
 
 // Each case: a start document with the caret, the keystrokes, and the
 // document and caret expected afterwards. `autopair` is the vault setting.
@@ -119,6 +126,55 @@ const VIM_CASES = [
     caret: [1, 4],
     keys: ["Escape", "O"],
     expect: { doc: "- [ ] #task Ship\n\t- [ ] \n\t- [>] carried [[#^abc|A]]", caret: [1, 7] },
+  },
+  {
+    name: "vim o on a headline with children opens after the block",
+    autopair: true,
+    doc: "- [ ] #task Ship\n\t- [ ] req\n\t- NOTES\n\t\t- filed",
+    caret: [0, 8],
+    keys: ["Escape", "o"],
+    expect: {
+      doc: `- [ ] #task Ship\n\t- [ ] req\n\t- NOTES\n\t\t- filed\n- [ ] #task  [created::${E2E_TODAY}]`,
+      caret: [4, 12],
+    },
+  },
+  {
+    name: "vim o in a status group opens at intake",
+    autopair: true,
+    doc: "## Tasks\n- [ ] #task Intake\n### Next & In Progress\n- [ ] #task Grouped",
+    caret: [3, 8],
+    keys: ["Escape", "o"],
+    expect: {
+      doc: `## Tasks\n- [ ] #task Intake\n- [ ] #task  [created::${E2E_TODAY}]\n### Next & In Progress\n- [ ] #task Grouped`,
+      caret: [2, 12],
+    },
+  },
+  {
+    name: "vim o on a nested task opens a sibling after the subtree",
+    autopair: true,
+    doc: "- [ ] #task Parent\n\t- [ ] #task Nested\n\t\t- [ ] req",
+    caret: [1, 10],
+    keys: ["Escape", "o"],
+    expect: {
+      doc: `- [ ] #task Parent\n\t- [ ] #task Nested\n\t\t- [ ] req\n\t- [ ] #task  [created::${E2E_TODAY}]`,
+      caret: [3, 13],
+    },
+  },
+  {
+    name: "vim o on a drawer header opens a sibling after the drawer",
+    autopair: true,
+    doc: "- [ ] #task Ship\n\t- NOTES\n\t\t- filed",
+    caret: [1, 4],
+    keys: ["Escape", "o"],
+    expect: { doc: "- [ ] #task Ship\n\t- NOTES\n\t\t- filed\n\t- ", caret: [3, 3] },
+  },
+  {
+    name: "vim o empty scaffold prunes on Escape",
+    autopair: true,
+    doc: "- [ ] #task Ship",
+    caret: [0, 8],
+    keys: ["Escape", "o", "Escape"],
+    expect: { doc: "- [ ] #task Ship" },
   },
 ];
 const TOGGLE_START = "- [ ] #task Ship\n\t- loose a\n\t- note to req";
@@ -274,6 +330,17 @@ const GUARDS_CASES = [
     caret: [5, 8],
     keys: [{ key: "]", modifiers: CTRL | SHIFT }],
     expect: { doc: GESTURE_DOC, caret: [5, 8], notice: LANE_COPY },
+  },
+  {
+    name: "Ctrl+Shift+] on a BLOCKS line refuses",
+    doc: "- [ ] #task Ship\n\t- 🧱 **BLOCKS:** [[#^blk|Blk]]",
+    caret: [1, 8],
+    keys: [{ key: "]", modifiers: CTRL | SHIFT }],
+    expect: {
+      doc: "- [ ] #task Ship\n\t- 🧱 **BLOCKS:** [[#^blk|Blk]]",
+      caret: [1, 8],
+      notice: "Managed line · not a task",
+    },
   },
   {
     name: "Alt+N on a req refuses with the lane copy",

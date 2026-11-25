@@ -7,7 +7,6 @@
 const BANK_SETUP_CLASS = "bob-bank-setup";
 const BANK_SETUP_SURFACE_CLASS = "bob-bank-setup-surface";
 const BANK_SETUP_HUB_PATH = "bank.md";
-const BANK_SETUP_DEFAULT_EXPANDED = true;
 const BANK_SETUP_MONEY_GROUP = "Money moves";
 
 function bankSetupText(value) {
@@ -69,6 +68,9 @@ function bankSetupStatusTone(status) {
   }
   if (status === "delta") {
     return { icon: "✗", word: "delta", tone: "bad" };
+  }
+  if (status === "gap") {
+    return { icon: "⚠", word: "gap", tone: "warn" };
   }
   return { icon: "·", word: status || "unknown", tone: "muted" };
 }
@@ -224,6 +226,7 @@ function bankSetupPlural(count, one, many) {
 
 // Collapsed grammar: the account label (or "+ N more"), the visible category
 // count with a hidden tail, and the rule count. Money never appears here.
+// The badge/tile carries the bank mark, so the clause drops its leading emoji.
 function bankSetupCollapsedLine(model) {
   if (!model) {
     return "Setup";
@@ -232,8 +235,8 @@ function bankSetupCollapsedLine(model) {
   const accountText = accounts.length === 0
     ? "no accounts"
     : accounts.length === 1
-      ? `🏦 ${accounts[0].label}`
-      : `🏦 ${accounts[0].label} + ${accounts.length - 1} more`;
+      ? `${accounts[0].label}`
+      : `${accounts[0].label} + ${accounts.length - 1} more`;
   const visible = bankSetupCount(model.visibleCount) || 0;
   const hidden = bankSetupCount(model.hiddenCount) || 0;
   const categoryText = hidden > 0
@@ -242,6 +245,114 @@ function bankSetupCollapsedLine(model) {
   const rules = bankSetupCount(model.ruleCount) || 0;
   const ruleText = rules === 0 ? "no rules" : bankSetupPlural(rules, "rule", "rules");
   return `${accountText} · ${categoryText} · ${ruleText}`;
+}
+
+// Blocking problems drive a health-aware session fold. Only error findings
+// force the card open; warnings and account status ride the attention chip.
+function bankSetupFoldProblems(input) {
+  const state = input && typeof input.state === "string" ? input.state : "";
+  if (state === "valid") {
+    return "";
+  }
+  if (!state) {
+    return "";
+  }
+  const findings = Array.isArray(input && input.findings) ? input.findings : [];
+  const errors = findings
+    .filter((entry) => entry && entry.severity === "error" && typeof entry.message === "string" && entry.message)
+    .map((entry) => entry.message)
+    .sort();
+  return `${state}:${JSON.stringify(errors)}`;
+}
+
+// Foldable states render the shared fold row. Bodyless states (loading,
+// unsupported, refresh-failed, mobile, and missing without a starter) render
+// a static row without fold attributes so `_` falls through to Vim.
+function bankSetupIsFoldable(input) {
+  const state = input && typeof input.state === "string" ? input.state : "";
+  if (state === "valid" || state === "invalid") {
+    return true;
+  }
+  if (state === "missing") {
+    return Boolean(input && typeof input.starter === "string" && input.starter);
+  }
+  return false;
+}
+
+function bankSetupAccountDescriptor(account) {
+  if (!account) {
+    return "";
+  }
+  const label = account.label || account.alias || "account";
+  const hint = typeof account.hint === "string" && account.hint ? ` — ${account.hint}` : "";
+  return `${label} ${account.status || "unknown"}${hint}`;
+}
+
+// Attention order: invalid errors first, then warnings, then the worst
+// non-balanced account (delta, then stale, then gap). `+N` counts the
+// remaining items. Money never appears here.
+function bankSetupAttention(input) {
+  const findings = Array.isArray(input && input.findings) ? input.findings : [];
+  const accounts = Array.isArray(input && input.accounts) ? input.accounts : [];
+  const errors = findings.filter((entry) => entry && entry.severity === "error");
+  const warnings = findings.filter((entry) => entry && entry.severity === "warning");
+  const badAccounts = accounts.filter((account) => account
+    && (account.status === "delta" || account.status === "stale" || account.status === "gap"));
+  const rank = { delta: 0, stale: 1, gap: 2 };
+  badAccounts.sort((a, b) => (rank[a.status] ?? 9) - (rank[b.status] ?? 9));
+  const errorMessages = errors
+    .map((entry) => entry.message || entry.label || "")
+    .filter(Boolean);
+  const warningMessages = warnings
+    .map((entry) => entry.message || entry.label || "")
+    .filter(Boolean);
+  const accountTitles = badAccounts.map(bankSetupAccountDescriptor).filter(Boolean);
+  if (errors.length > 0) {
+    const count = errors.length;
+    const remaining = warnings.length + badAccounts.length;
+    return {
+      icon: "✗",
+      word: `${count} ${count === 1 ? "problem" : "problems"}`,
+      tone: "error",
+      title: [...errorMessages, ...warningMessages, ...accountTitles].join(" · ")
+        || `${count} ${count === 1 ? "problem" : "problems"} in bank`,
+      ...(remaining > 0 ? { count: remaining } : {}),
+    };
+  }
+  const state = input && typeof input.state === "string" ? input.state : "";
+  if (state === "invalid") {
+    const remaining = warnings.length + badAccounts.length;
+    return {
+      icon: "✗",
+      word: "invalid",
+      tone: "error",
+      title: [...warningMessages, ...accountTitles].join(" · ") || "The bank config is invalid.",
+      ...(remaining > 0 ? { count: remaining } : {}),
+    };
+  }
+  if (warnings.length > 0) {
+    const count = warnings.length;
+    return {
+      icon: "⚠",
+      word: `${count} ${count === 1 ? "warning" : "warnings"}`,
+      tone: "warn",
+      title: [...warningMessages, ...accountTitles].join(" · "),
+      ...(badAccounts.length > 0 ? { count: badAccounts.length } : {}),
+    };
+  }
+  if (badAccounts.length > 0) {
+    const worst = badAccounts[0];
+    const tone = bankSetupStatusTone(worst.status);
+    const remaining = badAccounts.length - 1;
+    return {
+      icon: tone.icon,
+      word: tone.word,
+      tone: tone.tone,
+      title: accountTitles.join(" · "),
+      ...(remaining > 0 ? { count: remaining } : {}),
+    };
+  }
+  return null;
 }
 
 function bankSetupModel(report, options = {}) {
@@ -291,7 +402,7 @@ function bankSetupModel(report, options = {}) {
   const model = {
     state,
     desktop,
-    expanded: state === "invalid" ? true : expanded,
+    expanded,
     stale: options.stale === true,
     refreshing: options.refreshing === true,
     errorCode: error && typeof error.code === "string" ? error.code : null,
@@ -322,6 +433,9 @@ function bankSetupModel(report, options = {}) {
     today: (report && bankSetupText(report.today)) || null,
   };
   model.collapsedLine = bankSetupCollapsedLine(model);
+  model.foldable = bankSetupIsFoldable(model);
+  model.problems = bankSetupFoldProblems(model);
+  model.attention = bankSetupAttention(model);
   model.signature = bankSetupModelSignature(model);
   return model;
 }
@@ -397,7 +511,7 @@ function bankSetupSignature(model, extra = {}) {
 }
 
 // Repaint signature: collapsed grammar, section and tile identity, counts,
-// state, and freshness. Money and row text never participate.
+// state, freshness, and the attention spec. Money and row text never participate.
 function bankSetupModelSignature(model) {
   if (!model) {
     return "none";
@@ -436,5 +550,6 @@ function bankSetupModelSignature(model) {
     rules,
     findings,
     staleDays: model.staleAfterDays,
+    attention: model.attention || null,
   });
 }

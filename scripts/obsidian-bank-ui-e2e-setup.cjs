@@ -781,9 +781,10 @@ function runSelfTest() {
     if (!bank.waitingMonthNote().includes("$6.45 Corner Cafe")) throw new Error("waiting month missing row");
     const bankBadge = { first: true, kind: "bank", word: "Bank", wordShown: true, tileForm: "plain", tileHidden: true, glyph: "🏦", visible: true };
     const expandedDefault = bank.assertLiveDefault({
-      header: true, headerCount: 1, headerAria: "Bank setup", expanded: "true",
+      header: true, headerCount: 1, headerAria: "Bank setup", expanded: "false",
       cardKind: "bank", headerHeadings: 0, badge: bankBadge,
-      collapsed: "🏦 WF Checking · 9 categories · 1 hidden · no rules",
+      collapsed: "▸ Setup · WF Checking · 9 categories · 1 hidden · no rules",
+      foldKind: "bank", foldControlsResolved: true,
     });
     if (!expandedDefault.ok) throw new Error(`collapsed helper failed: ${expandedDefault.reason}`);
     if (bank.assertLiveDefault({ header: false }).ok) throw new Error("missing header must fail");
@@ -1035,12 +1036,34 @@ async function runE2e(parsed) {
     await openNote(client, "bank.md", "live");
     let live = await waitFor(client, probe(), (value) => value && value.header, "live setup header", 25000).catch((error) => ({ error: error.message }));
     const liveCheck = bank.assertLiveDefault(live);
-    record("live-header-expanded-default", liveCheck.ok, liveCheck.reason || jsonDetail(live));
+    record("live-header-collapsed-default", liveCheck.ok, liveCheck.reason || jsonDetail(live));
     record("live-header-once", live && live.headerCount === 1, jsonDetail(live));
     const hideLive = bank.assertScopedHide(live, true);
     record("live-scoped-hide", hideLive.ok, hideLive.reason);
     record("paint-never-writes", hashFile(hubPath) === paintHashBefore, "bank.md hash after live paint");
     record("edit-command-registered", Boolean(live && live.commands && live.commands.editSetup), jsonDetail(live && live.commands));
+    record("live-fold-ids-live", Boolean(live && live.foldKind === "bank" && live.foldControlsResolved), jsonDetail(live));
+
+    await setViewport(client, 375, 812);
+    await setDark(client, false);
+    const collapsedLight = path.join(outDir, "setup-collapsed-375-light.png");
+    await capturePage(client, collapsedLight, { scroll: ".bob-bank-setup" });
+    report.screenshots.push(collapsedLight);
+    await setDark(client, true);
+    const collapsedDark = path.join(outDir, "setup-collapsed-375-dark.png");
+    await capturePage(client, collapsedDark, { scroll: ".bob-bank-setup" });
+    report.screenshots.push(collapsedDark);
+    await setDark(client, false);
+    const collapsedIdentity = bank.assertBankIdentity(live);
+    record("live-collapsed-bank-badge", collapsedIdentity.ok && live.shownAria === "Bank setup", collapsedIdentity.reason || jsonDetail(live));
+
+    await client.evaluate(`(() => {
+      const toggle = document.querySelector(".bob-bank-setup-toggle");
+      if (toggle && toggle.getAttribute("aria-expanded") !== "true") toggle.click();
+      return Boolean(toggle);
+    })()`);
+    live = await waitFor(client, probe(), (value) => value && value.expanded === "true", "expanded header", 8000).catch((error) => ({ error: error.message }));
+    record("live-header-expands", Boolean(live && live.expanded === "true"), jsonDetail(live));
 
     const tileKeys = (live && live.tiles || []).map((tile) => tile.key);
     record("live-tiles-present", tileKeys.includes("coffee") && tileKeys.includes("housing") && tileKeys.includes("kids") && tileKeys.includes("misc"), jsonDetail(live && live.tiles));
@@ -1051,7 +1074,6 @@ async function runE2e(parsed) {
     const derived = (live && live.tiles || []).find((tile) => tile.key === "groceries" || tile.key === "dining");
     record("live-derived-keycap", Boolean(derived && derived.derived), jsonDetail(derived));
 
-    await setViewport(client, 375, 812);
     await setDark(client, false);
     const expandedLight = path.join(outDir, "setup-expanded-375-light.png");
     await capturePage(client, expandedLight, { scroll: ".bob-bank-setup" });
@@ -1062,30 +1084,42 @@ async function runE2e(parsed) {
     report.screenshots.push(expandedDark);
     await setDark(client, false);
 
+    const priorVimMode = await client.evaluate('window.app.vault.getConfig("vimMode") === true');
+    await client.evaluate('window.app.vault.setConfig("vimMode", true)');
+    await openNote(client, "bank.md", "live");
+    await sleep(700);
+    const foldDispatch = { key: "_", code: "Minus", windowsVirtualKeyCode: 189, nativeVirtualKeyCode: 189, modifiers: 8 };
+    const dispatchKey = async (parts) => {
+      await client.call("Input.dispatchKeyEvent", { type: "keyDown", ...parts });
+      await client.call("Input.dispatchKeyEvent", { type: "keyUp", code: parts.code, key: parts.key,
+        windowsVirtualKeyCode: parts.windowsVirtualKeyCode, nativeVirtualKeyCode: parts.nativeVirtualKeyCode });
+    };
     await client.evaluate(`(() => {
-      const toggle = document.querySelector(".bob-bank-setup-toggle");
-      if (toggle) toggle.click();
-      return Boolean(toggle);
+      const view = window.app.workspace.activeLeaf.view;
+      const editor = view && view.editor;
+      if (editor && editor.setCursor) editor.setCursor({ line: 0, ch: 0 });
+      if (editor && editor.focus) editor.focus();
+      return true;
     })()`);
-    live = await waitFor(client, probe(), (value) => value && value.expanded === "false", "collapsed header", 8000).catch((error) => ({ error: error.message }));
-    record("live-header-collapses", Boolean(live && live.expanded === "false"), jsonDetail(live));
-    const collapsedIdentity = bank.assertBankIdentity(live);
-    record("live-collapsed-bank-badge", collapsedIdentity.ok && live.shownAria === "Bank setup", collapsedIdentity.reason || jsonDetail(live));
-    const collapsedLight = path.join(outDir, "setup-collapsed-375-light.png");
-    await capturePage(client, collapsedLight, { scroll: ".bob-bank-setup" });
-    report.screenshots.push(collapsedLight);
-    await setDark(client, true);
-    const collapsedDark = path.join(outDir, "setup-collapsed-375-dark.png");
-    await capturePage(client, collapsedDark, { scroll: ".bob-bank-setup" });
-    report.screenshots.push(collapsedDark);
-    await setDark(client, false);
-
-    await client.evaluate(`(() => {
-      const toggle = document.querySelector(".bob-bank-setup-toggle");
-      if (toggle && toggle.getAttribute("aria-expanded") !== "true") toggle.click();
-      return Boolean(toggle);
-    })()`);
-    live = await waitFor(client, probe(), (value) => value && value.expanded === "true", "restored expanded header", 8000).catch((error) => ({ error: error.message }));
+    await sleep(300);
+    await dispatchKey(foldDispatch);
+    const foldedByKey = await waitFor(client, probe(), (value) => value && value.expanded === "false", "bank Setup collapsed by bare _", 8000).catch((error) => ({ error: error.message }));
+    await dispatchKey(foldDispatch);
+    const expandedByKey = await waitFor(client, probe(), (value) => value && value.expanded === "true", "bank Setup expanded by bare _", 8000).catch((error) => ({ error: error.message }));
+    const focusAfterKey = await client.evaluate(`(() => {
+      const active = document.activeElement;
+      return Boolean(active && active.closest && active.closest(".cm-editor"));
+    })()`).catch(() => false);
+    record("fold-key-round-trip", Boolean(foldedByKey && foldedByKey.expanded === "false" && expandedByKey && expandedByKey.expanded === "true" && focusAfterKey), jsonDetail({ foldedByKey, expandedByKey, focusAfterKey }));
+    await dispatchKey({ key: "2", code: "Digit2", windowsVirtualKeyCode: 50, nativeVirtualKeyCode: 50 });
+    await dispatchKey(foldDispatch);
+    const countedMotion = await client.evaluate(`(() => {
+      const view = window.app.workspace.activeLeaf.view;
+      return { line: view && view.editor && view.editor.getCursor && view.editor.getCursor().line,
+        expanded: view && view.containerEl.querySelector(".bob-bank-setup-toggle")?.getAttribute("aria-expanded") || null };
+    })()`).catch((error) => ({ error: String(error) }));
+    record("fold-vim-counted-motion", Boolean(countedMotion && countedMotion.expanded === "true"), jsonDetail(countedMotion));
+    await client.evaluate(`window.app.vault.setConfig("vimMode", ${JSON.stringify(priorVimMode === true)})`);
     await setViewport(client, 1280, 900);
 
     await openNote(client, "bank.md", "preview");
@@ -1094,6 +1128,11 @@ async function runE2e(parsed) {
     const readingIdentity = bank.assertBankIdentity(reading);
     record("reading-bank-badge", readingIdentity.ok && reading.shownAria === "Bank setup", readingIdentity.reason || jsonDetail(reading));
     record("reading-header-follows-h1", Boolean(reading && reading.shownAfterH1), jsonDetail(reading && { shownAfterH1: reading.shownAfterH1, h1: reading.h1 }));
+    await client.evaluate('window.app.commands.executeCommandById("bob-ledger-tools:toggle-card-details")');
+    const readingToggled = await waitFor(client, probe(), (value) => value && value.expanded === "true", "Toggle card details opens in Reading", 8000).catch((error) => ({ error: error.message }));
+    record("fold-command-reading", Boolean(readingToggled && readingToggled.expanded === "true"), jsonDetail(readingToggled));
+    await client.evaluate('window.app.commands.executeCommandById("bob-ledger-tools:toggle-card-details")');
+    await waitFor(client, probe(), (value) => value && value.expanded === "false", "Toggle card details closes in Reading", 8000).catch(() => ({}));
 
     await rewriteHub(client, vaultDir, bank.invalidHubNote());
     await openNote(client, "bank.md", "live");
@@ -1104,6 +1143,18 @@ async function runE2e(parsed) {
     const invalidCheck = bank.assertInvalidHeader(invalid);
     record("invalid-auto-expand", invalidCheck.ok, invalidCheck.reason || jsonDetail(invalid));
     record("invalid-located-findings", Boolean(invalid && invalid.findings && invalid.findings.filter((item) => item.line).length >= 1), jsonDetail(invalid && invalid.findings));
+    await client.evaluate(`(() => {
+      const toggle = document.querySelector(".bob-bank-setup-toggle");
+      if (toggle) toggle.click();
+      return Boolean(toggle);
+    })()`);
+    const invalidCollapsed = await waitFor(client, probe(), (value) => value && value.expanded === "false", "invalid holds an explicit collapse", 8000).catch((error) => ({ error: error.message }));
+    record("invalid-holds-collapse", Boolean(invalidCollapsed && invalidCollapsed.expanded === "false"), jsonDetail(invalidCollapsed));
+    await client.evaluate(`(() => {
+      const toggle = document.querySelector(".bob-bank-setup-toggle");
+      if (toggle && toggle.getAttribute("aria-expanded") !== "true") toggle.click();
+      return Boolean(toggle);
+    })()`);
     const queueReady = /bank: has \d+ problems? — see Setup above/.test(String(invalid && invalid.queueText || ""))
       ? invalid
       : await waitFor(client, probe(), (value) => /bank: has \d+ problems? — see Setup above/.test(String(value && value.queueText || "")), "invalid queue pointer", 12000).catch((error) => ({ error: error.message, queueText: invalid && invalid.queueText }));

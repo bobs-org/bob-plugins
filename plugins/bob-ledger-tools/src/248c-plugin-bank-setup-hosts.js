@@ -71,6 +71,14 @@ class BobLedgerToolsBankSetupMixin {
         if (!(plugin.bankSetupSurfaces instanceof Set)) plugin.bankSetupSurfaces = new Set();
         if (!(plugin.bankSetupLintCache instanceof Map)) plugin.bankSetupLintCache = new Map();
         try { plugin.bankSetupFootBind?.(); } catch (_) {}
+        plugin.bankSetupFoldUnregister = typeof propertyCardRegisterFoldKind === "function"
+          ? propertyCardRegisterFoldKind(plugin, "bank", {
+            toggle(path) {
+              plugin.bankSetupToggleExpanded(path);
+              return true;
+            },
+          })
+          : null;
         if (plugin.bankSetupDesktop()) {
           try {
             plugin.bankSetupUnsubscribe = plugin.apiBankSubscribe
@@ -88,6 +96,15 @@ class BobLedgerToolsBankSetupMixin {
         }
       },
       onDisposeStart: () => {
+        try {
+          if (typeof plugin.bankSetupFoldUnregister === "function") plugin.bankSetupFoldUnregister();
+        } catch (_) {}
+        plugin.bankSetupFoldUnregister = null;
+        try {
+          for (const path of plugin.bankSetupExpanded?.keys?.() || []) {
+            try { propertyCardFoldClearPendingReveal?.(path); } catch (_) {}
+          }
+        } catch (_) {}
         try { plugin.bankSetupFootUnbind?.(); } catch (_) {}
         try {
           if (typeof plugin.bankSetupUnsubscribe === "function") plugin.bankSetupUnsubscribe();
@@ -168,22 +185,100 @@ class BobLedgerToolsBankSetupMixin {
     } catch (error) {}
   }
 
+  bankSetupExpandedMap() {
+    if (!(this.bankSetupExpanded instanceof Map)) this.bankSetupExpanded = new Map();
+    return this.bankSetupExpanded;
+  }
+
+  bankSetupIsExpanded(sourcePath, model) {
+    const key = bankSetupHubPath(sourcePath);
+    const map = this.bankSetupExpandedMap();
+    let probe = model;
+    try {
+      if (!probe) {
+        const entry = this.bankSetupEntry();
+        probe = bankSetupModel(entry.report, {
+          error: entry.error,
+          stale: entry.stale,
+          refreshing: entry.refreshing,
+          desktop: this.bankSetupDesktop(),
+          expanded: false,
+          lastGoodAt: this.bankSetupLastGoodAt,
+          lastGoodLabel: bankSetupClockLabel(this.bankSetupLastGoodAt),
+        });
+      }
+    } catch (_) {
+      probe = model || null;
+    }
+    const problems = probe && typeof probe.problems === "string"
+      ? probe.problems
+      : bankSetupFoldProblems(probe || { state: "valid", findings: [] });
+    let stored = key ? map.get(key) : null;
+    if (typeof stored === "boolean") {
+      stored = { open: stored === true, problems: "" };
+    }
+    const restamped = typeof propertyCardFoldRestamp === "function"
+      ? propertyCardFoldRestamp(stored, problems)
+      : stored;
+    if (key && restamped !== stored && restamped) {
+      map.set(key, restamped);
+    }
+    let foldDefault = false;
+    try {
+      foldDefault = propertyCardSpecies?.("bank")?.foldDefault === true;
+    } catch (_) {
+      foldDefault = false;
+    }
+    return typeof propertyCardFoldResolve === "function"
+      ? propertyCardFoldResolve({ choice: restamped, problems, foldDefault })
+      : Boolean(restamped && restamped.open);
+  }
+
+  bankSetupSetExpanded(sourcePath, expanded, problems) {
+    const key = bankSetupHubPath(sourcePath);
+    if (!key) {
+      return;
+    }
+    let signature = problems;
+    if (typeof signature !== "string") {
+      try {
+        signature = this.bankSetupModelFor(sourcePath)?.problems || "";
+      } catch (_) {
+        signature = "";
+      }
+    }
+    const choice = typeof propertyCardFoldChoice === "function"
+      ? propertyCardFoldChoice(expanded === true, signature || "")
+      : { open: expanded === true, problems: signature || "" };
+    this.bankSetupExpandedMap().set(key, choice);
+    this.refreshBankSetupReading();
+    this.refreshBankSetupEditors();
+  }
+
   bankSetupModelFor(sourcePath) {
     try {
       const entry = this.bankSetupEntry();
-      const expandedMap = this.bankSetupExpanded instanceof Map
-        ? this.bankSetupExpanded
-        : new Map();
-      const key = bankSetupHubPath(sourcePath);
-      return bankSetupModel(entry.report, {
+      const desktop = this.bankSetupDesktop();
+      const lastGoodLabel = bankSetupClockLabel(this.bankSetupLastGoodAt);
+      const baseOptions = {
         error: entry.error,
         stale: entry.stale,
         refreshing: entry.refreshing,
-        desktop: this.bankSetupDesktop(),
-        expanded: (key && expandedMap.has(key)) ? expandedMap.get(key) === true : BANK_SETUP_DEFAULT_EXPANDED,
+        desktop,
         lastGoodAt: this.bankSetupLastGoodAt,
-        lastGoodLabel: bankSetupClockLabel(this.bankSetupLastGoodAt),
-      });
+        lastGoodLabel,
+      };
+      let probe = null;
+      try {
+        probe = bankSetupModel(entry.report, { ...baseOptions, expanded: false });
+      } catch (_) {
+        probe = null;
+      }
+      const expanded = this.bankSetupIsExpanded(sourcePath, probe);
+      if (probe && probe.expanded === expanded) {
+        return probe;
+      }
+      return bankSetupModel(entry.report, { ...baseOptions, expanded });
     } catch (error) {
       return null;
     }
@@ -195,22 +290,28 @@ class BobLedgerToolsBankSetupMixin {
       if (!key) {
         return;
       }
-      if (!(this.bankSetupExpanded instanceof Map)) {
-        this.bankSetupExpanded = new Map();
-      }
       const model = this.bankSetupModelFor(sourcePath);
-      this.bankSetupExpanded.set(key, model && model.expanded === true ? false : true);
-      this.refreshBankSetupReading();
-      this.refreshBankSetupEditors();
+      const open = Boolean(model && model.expanded);
+      const problems = model && typeof model.problems === "string" ? model.problems : "";
+      this.bankSetupSetExpanded(sourcePath, !open, problems);
     } catch (error) {}
   }
 
-  bankSetupOptions(sourcePath, model) {
+  bankSetupOptions(sourcePath, model, surface = "reading") {
     const self = this;
+    let keyLive = false;
+    try {
+      keyLive = typeof propertyCardFoldKeyLive === "function"
+        ? propertyCardFoldKeyLive(self, surface) === true
+        : false;
+    } catch (_) {
+      keyLive = false;
+    }
     return {
       sourcePath,
       expanded: Boolean(model && model.expanded),
       desktop: this.bankSetupDesktop(),
+      keyLive,
       handlers: {
         onToggle: () => self.bankSetupToggleExpanded(sourcePath),
         onYaml: () => {
@@ -384,7 +485,7 @@ class BobLedgerToolsBankSetupMixin {
 
   bankSetupBuildReading(model, options, doc) {
     try {
-      const header = bankSetupBuildEl(model, options.handlers, doc);
+      const header = bankSetupBuildEl(model, options, doc);
       if (!header) {
         return null;
       }
@@ -601,7 +702,7 @@ class BobLedgerToolsBankSetupMixin {
     const doc = (typeof notebookDomDoc === "function" ? notebookDomDoc(view.dom) : null)
       || (typeof document !== "undefined" ? document : null);
     const extra = typeof this.bankSetupFootExtra === "function" ? this.bankSetupFootExtra(livePath) : null;
-    const options = { ...this.bankSetupOptions(livePath, model), footExtra: extra };
+    const options = { ...this.bankSetupOptions(livePath, model, "live-preview"), footExtra: extra };
     const header = this.bankSetupBuildReading(model, options, doc);
     if (!header) {
       try { this.bankSetupTrackFoot?.(view?.dom, livePath, null); } catch (_) {}

@@ -434,17 +434,20 @@ function decodedReport(overrides = {}) {
 
 test("collapsed grammar covers one vs several accounts, hidden counts, and rule plurals", () => {
   const one = H.bankSetupModel(decodedReport(), { desktop: true, expanded: false });
-  assert.equal(one.collapsedLine, "🏦 WF Checking · 3 categories · 1 hidden · 1 rule");
+  assert.equal(one.collapsedLine, "WF Checking · 3 categories · 1 hidden · 1 rule");
   assert.equal(one.state, "valid");
+  assert.equal(one.foldable, true);
+  assert.equal(one.problems, "");
+  assert.equal(one.attention, null);
   const none = H.bankSetupModel(decodedReport({ accounts: [], categories: [], rules: [], free_hotkeys: [] }), { desktop: true });
   assert.equal(none.collapsedLine, "no accounts · 0 categories · no rules");
   const two = H.bankSetupModel(decodedReport({
     accounts: [configAccount(), configAccount({ alias: "savings", label: "WF Savings", default: false })],
   }), { desktop: true });
-  assert.equal(two.collapsedLine, "🏦 WF Checking + 1 more · 3 categories · 1 hidden · 1 rule");
+  assert.equal(two.collapsedLine, "WF Checking + 1 more · 3 categories · 1 hidden · 1 rule");
 });
 
-test("invalid configs auto-expand and label every finding with its line", () => {
+test("invalid configs no longer force expansion but expose problems and attention", () => {
   const report = decodedReport({
     ok: false,
     state: "invalid",
@@ -455,9 +458,71 @@ test("invalid configs auto-expand and label every finding with its line", () => 
   });
   const collapsed = H.bankSetupModel(report, { desktop: true, expanded: false });
   assert.equal(collapsed.state, "invalid");
-  assert.equal(collapsed.expanded, true);
+  assert.equal(collapsed.expanded, false);
+  assert.equal(collapsed.foldable, true);
+  assert.equal(collapsed.problems, 'invalid:["hotkey taken"]');
   assert.equal(collapsed.errorCount, 1);
   assert.equal(collapsed.findings[0].label, "line 14 · bank.categories.cafe.hotkey · hotkey taken");
+  assert.deepEqual(
+    { icon: collapsed.attention.icon, word: collapsed.attention.word, tone: collapsed.attention.tone },
+    { icon: "✗", word: "1 problem", tone: "error" },
+  );
+  const open = H.bankSetupModel(report, { desktop: true, expanded: true });
+  assert.equal(open.expanded, true);
+});
+
+test("fold health resolves through the kit: healthy collapsed, broken open, choice stamped", () => {
+  assert.equal(H.bankSetupFoldProblems({ state: "valid", findings: [] }), "");
+  assert.equal(
+    H.bankSetupFoldProblems({ state: "invalid", findings: [{ severity: "error", message: "hotkey taken" }] }),
+    'invalid:["hotkey taken"]',
+  );
+  assert.equal(H.bankSetupIsFoldable({ state: "valid" }), true);
+  assert.equal(H.bankSetupIsFoldable({ state: "invalid" }), true);
+  assert.equal(H.bankSetupIsFoldable({ state: "missing", starter: "bank:\n  accounts: {}" }), true);
+  assert.equal(H.bankSetupIsFoldable({ state: "missing", starter: null }), false);
+  assert.equal(H.bankSetupIsFoldable({ state: "loading" }), false);
+  assert.equal(H.propertyCardFoldResolve({ choice: undefined, problems: "", foldDefault: false }), false);
+  assert.equal(H.propertyCardFoldResolve({
+    choice: { open: false, problems: 'invalid:["hotkey taken"]' },
+    problems: 'invalid:["hotkey taken"]',
+    foldDefault: false,
+  }), false);
+  assert.equal(H.propertyCardFoldResolve({
+    choice: { open: false, problems: 'invalid:["a"]' },
+    problems: 'invalid:["b"]',
+    foldDefault: false,
+  }), true);
+});
+
+test("gap status rides a warning tone and attention prefers errors, warnings, then accounts", () => {
+  assert.deepEqual(H.bankSetupStatusTone("gap"), { icon: "⚠", word: "gap", tone: "warn" });
+  const warnings = H.bankSetupModel(decodedReport({
+    findings: [{ code: "dead", severity: "warning", path: "bank.md", line: null, key_path: "bank.rules.0", message: "read-time dead", hint: "digits" }],
+  }), { desktop: true, expanded: false });
+  assert.equal(warnings.attention.icon, "⚠");
+  assert.match(warnings.attention.word, /warning/);
+  const stale = H.bankSetupModel(decodedReport({
+    accounts: [configAccount({ status: "stale", hint: "old" })],
+  }), { desktop: true, expanded: false });
+  assert.equal(stale.attention.word, "stale");
+  assert.equal(stale.attention.tone, "warn");
+  assert.match(stale.attention.title, /WF Checking/);
+  const mixed = H.bankSetupModel(decodedReport({
+    state: "invalid",
+    ok: false,
+    findings: [
+      { code: "a", severity: "error", path: "bank.md", line: 1, key_path: "bank.a", message: "first", hint: null },
+      { code: "b", severity: "error", path: "bank.md", line: 2, key_path: "bank.b", message: "second", hint: null },
+      { code: "c", severity: "warning", path: "bank.md", line: null, key_path: "bank.c", message: "careful", hint: null },
+    ],
+    accounts: [configAccount({ status: "stale", hint: "old" })],
+  }), { desktop: true, expanded: false });
+  assert.equal(mixed.attention.word, "2 problems");
+  assert.equal(mixed.attention.count, 2);
+  assert.doesNotMatch(JSON.stringify(mixed.attention), /\$/);
+  const signature = JSON.parse(H.bankSetupModelSignature(mixed));
+  assert.deepEqual(signature.attention, mixed.attention);
 });
 
 test("state selection covers mobile, unsupported, loading, refresh failures, and missing", () => {
@@ -596,17 +661,33 @@ function paintModel(report, options = {}) {
 test("valid header paints collapsed and expanded states with jumps and accessible names", () => {
   const collapsed = paintModel(decodedReport(), { expanded: false });
   assert.match(collapsed.el.textContent, /WF Checking/);
-  assert.equal(collapsed.el.querySelector(".bob-bank-setup-body"), null);
-  assert.equal(collapsed.el.querySelector(".bob-bank-setup-toggle").getAttribute("aria-expanded"), "false");
+  assert.doesNotMatch(collapsed.el.textContent, /🏦 WF Checking/);
+  const collapsedBody = collapsed.el.querySelector(".bob-bank-setup-body");
+  assert.ok(collapsedBody);
+  assert.equal(collapsedBody.getAttribute("hidden"), "");
+  assert.equal(collapsedBody.childNodes.length, 0);
+  const collapsedToggle = collapsed.el.querySelector(".bob-bank-setup-toggle");
+  assert.equal(collapsedToggle.getAttribute("aria-expanded"), "false");
+  assert.equal(collapsedToggle.getAttribute("data-card-fold"), "bank");
+  assert.equal(collapsedToggle.getAttribute("aria-keyshortcuts"), "_");
+  assert.equal(collapsedToggle.getAttribute("title"), "Toggle bank setup (_)");
+  assert.equal(collapsedToggle.getAttribute("data-bank-setup-focus"), "toggle");
+  const bodyId = collapsedToggle.getAttribute("aria-controls");
+  assert.ok(bodyId);
+  assert.equal(collapsed.el.querySelector(`[id="${bodyId}"]`), collapsedBody);
   assert.equal(collapsed.calls.toggle, 0);
   assert.equal(collapsed.calls.yaml, 0);
   const expanded = paintModel(decodedReport(), { expanded: true });
   assert.equal(expanded.el.querySelector(".bob-bank-setup-toggle").getAttribute("aria-expanded"), "true");
+  assert.match(expanded.el.querySelector(".bob-bank-setup-toggle").textContent, /▾ Setup · WF Checking/);
   assert.ok(expanded.el.querySelector(".bob-bank-category-tile"));
   assert.ok(expanded.el.querySelector(".bob-bank-setup-tiles"));
   // Header tiles never match the card's click selector.
   assert.equal(expanded.el.querySelectorAll("button[data-category-key]").length, 0);
   assert.ok(expanded.el.querySelectorAll("button[data-bank-setup-category]").length > 0);
+  // Single rule numbering: one list with a muted tabular gutter, no double markers.
+  assert.equal(expanded.el.querySelectorAll(".bob-bank-setup-rules").length, 1);
+  assert.ok(expanded.el.querySelector(".bob-bank-setup-rule-index"));
   // No vault bytes move during paint: handlers stay silent.
   assert.deepEqual(expanded.calls, { toggle: 0, yaml: 0, jumps: [], starter: 0, retry: 0 });
   const tile = expanded.el.querySelector('button[data-bank-setup-category="coffee"]');
@@ -617,16 +698,39 @@ test("valid header paints collapsed and expanded states with jumps and accessibl
   assert.equal(rule.getAttribute("data-bank-setup-line"), "30");
 });
 
+test("fold rows carry unique live ids, stale rides outside, and bodyless carries no fold", () => {
+  const first = paintModel(decodedReport(), { expanded: false });
+  const second = paintModel(decodedReport(), { expanded: false });
+  const firstId = first.el.querySelector(".bob-bank-setup-toggle").getAttribute("aria-controls");
+  const secondId = second.el.querySelector(".bob-bank-setup-toggle").getAttribute("aria-controls");
+  assert.ok(firstId && secondId && firstId !== secondId);
+  const staleReport = decodedReport();
+  const staleCollapsed = paintModel(staleReport, { expanded: false, stale: true, lastGoodLabel: "3:41 PM" });
+  const staleLine = staleCollapsed.el.querySelector(".bob-bank-setup-status[role=\"status\"]");
+  assert.ok(staleLine);
+  assert.match(staleLine.textContent, /Updating · last good values from 3:41 PM/);
+  assert.equal(staleCollapsed.el.querySelector(".bob-bank-setup-body").getAttribute("hidden"), "");
+  const staleExpanded = paintModel(staleReport, { expanded: true, stale: true, lastGoodLabel: "3:41 PM" });
+  assert.ok(staleExpanded.el.querySelector(".bob-bank-setup-body"));
+  assert.ok(staleExpanded.el.querySelector(".bob-bank-setup-body").querySelector(".bob-bank-setup-tiles"));
+  const bodyless = paintModel(null, {});
+  assert.equal(bodyless.el.querySelector("[data-card-fold]"), null);
+  assert.equal(bodyless.el.querySelector(".bob-bank-setup-toggle"), null);
+  assert.match(bodyless.el.textContent, /loading/);
+});
+
 // The bank card wears its species: data-card-kind="bank" and a badge (the
 // bank mark in a plain tile, then the word Bank) leading the head row. The
 // aria-label stays exactly "Bank setup", which already leads with the word.
+// Foldable states render the shared fold row below the head; bodyless states
+// render a static row without fold attributes.
 function assertBankIdentity(el, label) {
   assert.equal(el.getAttribute("data-card-kind"), "bank", `${label}: data-card-kind`);
   assert.equal(el.getAttribute("aria-label"), "Bank setup", `${label}: aria-label`);
   assert.equal(el.getAttribute("role"), null, `${label}: no role is added`);
   assert.equal(el.querySelectorAll("[aria-level]").length, 0, `${label}: never a heading`);
   const head = el.querySelector(".bob-bank-setup-head");
-  const [badge, toggle] = head.childNodes.filter((node) => node.nodeType === 1);
+  const badge = head.childNodes.filter((node) => node.nodeType === 1)[0];
   assert.equal(badge.getAttribute("class"), "bob-property-card-identity", `${label}: badge leads the head row`);
   assert.equal(badge.getAttribute("data-card-kind"), "bank");
   const [tile, word] = badge.childNodes.filter((node) => node.nodeType === 1);
@@ -635,8 +739,19 @@ function assertBankIdentity(el, label) {
   assert.equal(tile.textContent, "🏦");
   assert.equal(word.getAttribute("class"), "bob-property-card-identity-word");
   assert.equal(word.textContent, "Bank");
-  assert.equal(toggle.getAttribute("class"), "bob-bank-setup-toggle", `${label}: the Setup toggle follows the badge`);
-  assert.match(toggle.textContent, /^[▾▸] Setup$/);
+  const fold = el.querySelector(".bob-bank-setup-toggle");
+  if (fold) {
+    assert.equal(fold.getAttribute("data-card-fold"), "bank", `${label}: fold kind`);
+    assert.equal(fold.getAttribute("aria-keyshortcuts"), "_", `${label}: key hint`);
+    assert.equal(fold.getAttribute("title"), "Toggle bank setup (_)", `${label}: tooltip`);
+    assert.equal(fold.getAttribute("data-bank-setup-focus"), "toggle", `${label}: focus key`);
+    assert.match(fold.textContent, /^[▾▸] Setup · /, `${label}: fold grammar`);
+    const bodyId = fold.getAttribute("aria-controls");
+    assert.ok(bodyId, `${label}: live body id`);
+    assert.ok(el.querySelector(`[id="${bodyId}"]`), `${label}: controls resolves`);
+  } else {
+    assert.equal(el.querySelector("[data-card-fold]"), null, `${label}: bodyless carries no fold`);
+  }
 }
 
 test("every Setup state wears the bank species badge without changing the toggle or label", () => {
@@ -650,13 +765,14 @@ test("every Setup state wears the bank species badge without changing the toggle
     missing: paintModel(decodedReport({ ok: false, state: "missing", categories: [], accounts: [], rules: [], starter: "bank:\n  accounts: {}" }), {}),
   };
   for (const [label, painted] of Object.entries(states)) assertBankIdentity(painted.el, label);
-  // The collapsed line keeps its own bank mark; the body never gains a badge.
-  assert.match(states.collapsed.el.querySelector(".bob-bank-setup-collapsed").textContent, /^🏦 WF Checking/);
+  // The badge carries the bank mark; the collapsed clause drops its emoji.
+  assert.match(states.collapsed.el.querySelector(".bob-bank-setup-toggle").textContent, /▸ Setup · WF Checking/);
+  assert.doesNotMatch(states.collapsed.el.querySelector(".bob-bank-setup-toggle").textContent, /🏦 WF Checking/);
   assert.equal(states.expanded.el.querySelector(".bob-bank-setup-body").querySelectorAll(".bob-property-card-identity").length, 0);
   assert.equal(states.expanded.el.querySelectorAll(".bob-property-card-identity").length, 1);
 });
 
-test("invalid header auto-expands with a live-region banner and a last-good note", () => {
+test("invalid header stays toggleable with a live-region banner and a last-good note", () => {
   const report = decodedReport({
     ok: false,
     state: "invalid",
@@ -666,12 +782,19 @@ test("invalid header auto-expands with a live-region banner and a last-good note
     ],
   });
   const { el } = paintModel(report, { lastGoodLabel: "2:14 PM" });
+  const toggle = el.querySelector(".bob-bank-setup-toggle");
+  assert.equal(toggle.getAttribute("aria-expanded"), "true");
+  assert.match(toggle.textContent, /✗ 1 problem/);
   const banner = el.querySelector(".bob-bank-setup-banner");
   assert.equal(banner.getAttribute("role"), "alert");
   assert.match(banner.textContent, /1 problem in bank:/);
   const finding = el.querySelector(".bob-bank-setup-finding-text");
   assert.equal(finding.getAttribute("data-bank-setup-line"), "14");
   assert.match(el.textContent, /last good · 2:14 PM/);
+  const collapsed = paintModel(report, { expanded: false, lastGoodLabel: "2:14 PM" });
+  assert.equal(collapsed.el.querySelector(".bob-bank-setup-toggle").getAttribute("aria-expanded"), "false");
+  assert.ok(collapsed.el.querySelector(".bob-bank-setup-banner") === null);
+  assert.ok(collapsed.el.querySelector(".bob-bank-setup-toggle").textContent.includes("1 problem"));
 });
 
 test("missing, unsupported, mobile, and failed states paint their lines", () => {
@@ -829,28 +952,59 @@ test("hub mounts once per surface, survives repaint, and leaves other notes alon
   assert.ok(!preview.classList.contains("bob-bank-setup-surface"));
 });
 
-test("setup header starts expanded and collapses per hub in view state", () => {
+test("setup header rests collapsed when healthy and toggles per hub in view state", () => {
   const plugin = makeSetupPlugin(null, {});
   plugin.setupBankSetup();
   seedReport(plugin, decodedReport());
   const { el, preview } = hubSurface();
   plugin.paintBankSetupReading(el, "bank.md");
   const toggle = preview.querySelector(".bob-bank-setup-toggle");
-  assert.equal(toggle.getAttribute("aria-expanded"), "true");
-  assert.equal(toggle.textContent, "▾ Setup");
+  assert.equal(toggle.getAttribute("aria-expanded"), "false");
+  assert.match(toggle.textContent, /▸ Setup · WF Checking/);
+  assert.equal(toggle.getAttribute("data-card-fold"), "bank");
   const body = preview.querySelector(".bob-bank-setup-body");
   assert.ok(body);
-  assert.ok(body.querySelector(".bob-bank-category-tile"));
+  assert.equal(body.getAttribute("hidden"), "");
+  assert.equal(body.querySelector(".bob-bank-category-tile"), null);
+  const bodyId = toggle.getAttribute("aria-controls");
+  assert.equal(preview.querySelector(`[id="${bodyId}"]`), body);
+  plugin.bankSetupToggleExpanded("bank.md");
+  plugin.paintBankSetupReading(el, "bank.md");
+  const expanded = preview.querySelector(".bob-bank-setup-toggle");
+  assert.equal(expanded.getAttribute("aria-expanded"), "true");
+  assert.ok(preview.querySelector(".bob-bank-setup-body"));
+  assert.ok(preview.querySelector(".bob-bank-setup-body").querySelector(".bob-bank-category-tile"));
   plugin.bankSetupToggleExpanded("bank.md");
   plugin.paintBankSetupReading(el, "bank.md");
   const collapsed = preview.querySelector(".bob-bank-setup-toggle");
   assert.equal(collapsed.getAttribute("aria-expanded"), "false");
-  assert.equal(preview.querySelector(".bob-bank-setup-body"), null);
+  assert.equal(preview.querySelector(".bob-bank-setup-body").getAttribute("hidden"), "");
+  plugin.teardownBankSetup();
+});
+
+test("invalid setup opens by default, holds an explicit collapse, and resurfaces on new findings", () => {
+  const plugin = makeSetupPlugin(null, {});
+  plugin.setupBankSetup();
+  const invalid = decodedReport({
+    ok: false,
+    state: "invalid",
+    findings: [{ code: "dup", severity: "error", path: "bank.md", line: 14, key_path: "bank.a", message: "first", hint: null }],
+  });
+  seedReport(plugin, invalid);
+  const { el, preview } = hubSurface();
+  plugin.paintBankSetupReading(el, "bank.md");
+  assert.equal(preview.querySelector(".bob-bank-setup-toggle").getAttribute("aria-expanded"), "true");
   plugin.bankSetupToggleExpanded("bank.md");
   plugin.paintBankSetupReading(el, "bank.md");
-  const restored = preview.querySelector(".bob-bank-setup-toggle");
-  assert.equal(restored.getAttribute("aria-expanded"), "true");
-  assert.ok(preview.querySelector(".bob-bank-setup-body"));
+  assert.equal(preview.querySelector(".bob-bank-setup-toggle").getAttribute("aria-expanded"), "false");
+  const changed = decodedReport({
+    ok: false,
+    state: "invalid",
+    findings: [{ code: "dup", severity: "error", path: "bank.md", line: 14, key_path: "bank.a", message: "second", hint: null }],
+  });
+  seedReport(plugin, changed);
+  plugin.paintBankSetupReading(el, "bank.md");
+  assert.equal(preview.querySelector(".bob-bank-setup-toggle").getAttribute("aria-expanded"), "true");
   plugin.teardownBankSetup();
 });
 

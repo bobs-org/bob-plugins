@@ -411,13 +411,25 @@ function bankSetupIdentityBadge(doc) {
   return propertyCardBuildIdentityBadge(doc, { kind: "bank", emoji: "🏦" });
 }
 
-// `bankSetupBuildEl(model, handlers, doc)`: the whole Setup header. `model`
-// is a `bankSetupModel`; `handlers` carries onToggle, onYaml,
-// onJump(line), onCopyStarter, onRetry. All report strings enter as text.
-function bankSetupBuildEl(model, handlers, doc) {
+// `bankSetupBuildEl(model, options, doc)`: the whole Setup header. `model`
+// is a `bankSetupModel`; `options` carries sourcePath, keyLive, and
+// `handlers` (onToggle, onYaml, onJump(line), onCopyStarter, onRetry).
+// Older callers pass handlers directly; they get bank.md with no keycap.
+// Foldable states (valid, invalid, missing with a starter) render the
+// shared fold row; bodyless states render a static row without fold
+// attributes so `_` falls through to Vim. All report strings enter as text.
+function bankSetupBuildEl(model, optionsOrHandlers, doc) {
   if (!model) {
     return null;
   }
+  const options = optionsOrHandlers && typeof optionsOrHandlers === "object" && optionsOrHandlers.handlers
+    ? optionsOrHandlers
+    : { handlers: optionsOrHandlers || {}, sourcePath: BANK_SETUP_HUB_PATH, keyLive: false };
+  const handlers = options.handlers || {};
+  const sourcePath = typeof options.sourcePath === "string" && options.sourcePath
+    ? options.sourcePath
+    : (model.path || BANK_SETUP_HUB_PATH);
+  const keyLive = options.keyLive === true;
   const root = bankSetupEl(doc, "section", `${BANK_SETUP_CLASS} bob-property-card is-${model.state}`, null, {
     "data-bank-setup": "true",
     "data-bank-setup-state": model.state,
@@ -436,79 +448,17 @@ function bankSetupBuildEl(model, handlers, doc) {
   if (badge) {
     head.appendChild(badge);
   }
-  const disclosure = bankSetupEl(doc, "button", "bob-bank-setup-toggle", model.expanded ? "▾ Setup" : "▸ Setup", {
-    type: "button",
-    "data-bank-setup-focus": "toggle",
-    "aria-expanded": model.expanded ? "true" : "false",
-    "aria-controls": "bob-bank-setup-body",
-  });
-  if (disclosure) {
-    bankSetupListen(disclosure, () => {
-      if (handlers && typeof handlers.onToggle === "function") {
-        handlers.onToggle();
-      }
-    });
-    head.appendChild(disclosure);
-  }
-  if (model.state === "mobile") {
-    bankSetupAppend(head, "span", "bob-bank-setup-collapsed", "drawn by bob on desktop", null);
+  const foldable = typeof model.foldable === "boolean" ? model.foldable : bankSetupIsFoldable(model);
+  const paintYaml = (container) => {
     const yaml = bankSetupYamlButton(doc, handlers);
-    if (yaml) {
-      head.appendChild(yaml);
+    if (yaml && container && typeof container.appendChild === "function") {
+      container.appendChild(yaml);
     }
-    return root;
-  }
-  if (model.state === "loading") {
-    bankSetupAppend(head, "span", "bob-bank-setup-collapsed", "Setup · loading…", { role: "status" });
-    return root;
-  }
-  if (model.state === "unsupported") {
-    bankSetupAppend(head, "span", "bob-bank-setup-collapsed", "Setup needs a newer bob — run bob update", { role: "status" });
-    const yaml = bankSetupYamlButton(doc, handlers);
-    if (yaml) {
-      head.appendChild(yaml);
+  };
+  const paintEdit = (container) => {
+    if (!(model.desktop && (model.state === "valid" || model.state === "invalid"))) {
+      return;
     }
-    return root;
-  }
-  if (model.state === "missing") {
-    bankSetupAppend(head, "span", "bob-bank-setup-collapsed", "Setup · no bank: mapping yet", null);
-    const yaml = bankSetupYamlButton(doc, handlers);
-    if (yaml) {
-      head.appendChild(yaml);
-    }
-    if (model.expanded && model.starter) {
-      const body = bankSetupEl(doc, "div", "bob-bank-setup-body", null, null);
-      if (body) {
-        root.appendChild(body);
-        bankSetupAppend(body, "p", "bob-bank-setup-empty", "Copy the starter block into bank.md frontmatter, then edit it in Source mode.", null);
-        const copy = bankSetupEl(doc, "button", "bob-bank-setup-copy", "Copy starter", { type: "button" });
-        if (copy) {
-          bankSetupListen(copy, () => {
-            if (handlers && typeof handlers.onCopyStarter === "function") {
-              handlers.onCopyStarter();
-            }
-          });
-          body.appendChild(copy);
-        }
-      }
-    }
-    return root;
-  }
-  if (model.state === "refresh-failed") {
-    bankSetupAppend(head, "span", "bob-bank-setup-collapsed", model.errorMessage || "Setup · refresh failed", { role: "alert" });
-    const retry = bankSetupEl(doc, "button", "bob-bank-retry", "Retry", { type: "button" });
-    if (retry) {
-      bankSetupListen(retry, () => {
-        if (handlers && typeof handlers.onRetry === "function") {
-          handlers.onRetry();
-        }
-      });
-      head.appendChild(retry);
-    }
-    return root;
-  }
-  bankSetupAppend(head, "span", "bob-bank-setup-collapsed", model.collapsedLine, null);
-  if (model.desktop && (model.state === "valid" || model.state === "invalid")) {
     const edit = bankSetupEl(doc, "button", "bob-bank-setup-edit", "⊞ Edit", {
       type: "button",
       "data-bank-setup-focus": "edit",
@@ -518,23 +468,118 @@ function bankSetupBuildEl(model, handlers, doc) {
       bankSetupListen(edit, () => {
         if (handlers && typeof handlers.onEdit === "function") handlers.onEdit();
       });
-      head.appendChild(edit);
+      container.appendChild(edit);
+    }
+  };
+  const paintStatic = (text, attrs, withRetry) => {
+    const wrap = bankSetupEl(doc, "div", "bob-bank-setup-static", null, null);
+    if (!wrap) {
+      return;
+    }
+    root.appendChild(wrap);
+    bankSetupAppend(wrap, "span", "bob-bank-setup-collapsed", text, attrs || null);
+    if (withRetry) {
+      const retry = bankSetupEl(doc, "button", "bob-bank-retry", "Retry", { type: "button" });
+      if (retry) {
+        bankSetupListen(retry, () => {
+          if (handlers && typeof handlers.onRetry === "function") {
+            handlers.onRetry();
+          }
+        });
+        wrap.appendChild(retry);
+      }
+    }
+  };
+  if (!foldable) {
+    if (model.state === "mobile") {
+      paintEdit(head);
+      paintYaml(head);
+      paintStatic("drawn by bob on desktop", null, false);
+      return root;
+    }
+    if (model.state === "loading") {
+      paintStatic("Setup · loading…", { role: "status" }, false);
+      return root;
+    }
+    if (model.state === "unsupported") {
+      paintYaml(head);
+      paintStatic("Setup needs a newer bob — run bob update", { role: "status" }, false);
+      return root;
+    }
+    if (model.state === "missing") {
+      paintYaml(head);
+      paintStatic("Setup · no bank: mapping yet", null, false);
+      return root;
+    }
+    if (model.state === "refresh-failed") {
+      paintStatic(model.errorMessage || "Setup · refresh failed", { role: "alert" }, true);
+      return root;
+    }
+    paintStatic(model.collapsedLine || "Setup", null, false);
+    return root;
+  }
+  paintEdit(head);
+  paintYaml(head);
+  const summary = model.state === "missing" ? "no bank: mapping yet" : (model.collapsedLine || "Setup");
+  let bodyId = null;
+  try {
+    bodyId = typeof propertyCardFoldNextId === "function" ? propertyCardFoldNextId() : "bob-bank-setup-body";
+  } catch (_) {
+    bodyId = "bob-bank-setup-body";
+  }
+  let fold = null;
+  try {
+    fold = typeof propertyCardBuildFoldRow === "function"
+      ? propertyCardBuildFoldRow(doc, {
+        kind: "bank",
+        path: sourcePath,
+        noun: "Setup",
+        summary,
+        open: model.expanded === true,
+        bodyId,
+        className: "bob-bank-setup-toggle",
+        attention: model.attention || null,
+        keyLive,
+        tooltip: "Toggle bank setup (_)",
+        onToggle: () => {
+          if (handlers && typeof handlers.onToggle === "function") {
+            handlers.onToggle();
+          }
+        },
+      })
+      : null;
+  } catch (_) {
+    fold = null;
+  }
+  if (!fold || !fold.element) {
+    const fallback = bankSetupEl(doc, "button", "bob-bank-setup-toggle", model.expanded ? "▾ Setup" : "▸ Setup", {
+      type: "button",
+      "data-bank-setup-focus": "toggle",
+      "aria-expanded": model.expanded ? "true" : "false",
+      "aria-controls": bodyId,
+    });
+    if (fallback) {
+      bankSetupListen(fallback, () => {
+        if (handlers && typeof handlers.onToggle === "function") {
+          handlers.onToggle();
+        }
+      });
+      root.appendChild(fallback);
+    }
+  } else {
+    try {
+      fold.element.setAttribute("data-bank-setup-focus", "toggle");
+    } catch (_) {}
+    root.appendChild(fold.element);
+    if (fold.bodyId) {
+      bodyId = fold.bodyId;
     }
   }
-  const yaml = bankSetupYamlButton(doc, handlers);
-  if (yaml) {
-    head.appendChild(yaml);
-  }
-  if (!model.expanded) {
-    return root;
-  }
-  const body = bankSetupEl(doc, "div", "bob-bank-setup-body", null, null);
-  if (!body) {
-    return root;
-  }
-  root.appendChild(body);
   if (model.stale) {
-    const note = bankSetupAppend(body, "div", "bob-bank-setup-status", "Updating · last good values shown", { role: "status" });
+    const staleText = model.lastGoodLabel
+      ? `Updating · last good values from ${model.lastGoodLabel}`
+      : "Updating · last good values shown";
+    const note = bankSetupAppend(root, "div", "bob-bank-setup-status", staleText, { role: "status" });
     if (note && model.errorMessage) {
       const retry = bankSetupEl(doc, "button", "bob-bank-retry", "Retry", { type: "button" });
       if (retry) {
@@ -546,6 +591,30 @@ function bankSetupBuildEl(model, handlers, doc) {
         note.appendChild(retry);
       }
     }
+  }
+  const body = bankSetupEl(doc, "div", "bob-bank-setup-body", null, { id: bodyId });
+  if (!body) {
+    return root;
+  }
+  root.appendChild(body);
+  if (model.expanded !== true) {
+    try {
+      body.setAttribute("hidden", "");
+    } catch (_) {}
+    return root;
+  }
+  if (model.state === "missing") {
+    bankSetupAppend(body, "p", "bob-bank-setup-empty", "Copy the starter block into bank.md frontmatter, then edit it in Source mode.", null);
+    const copy = bankSetupEl(doc, "button", "bob-bank-setup-copy", "Copy starter", { type: "button" });
+    if (copy) {
+      bankSetupListen(copy, () => {
+        if (handlers && typeof handlers.onCopyStarter === "function") {
+          handlers.onCopyStarter();
+        }
+      });
+      body.appendChild(copy);
+    }
+    return root;
   }
   bankSetupPaintFindings(body, model, doc, handlers);
   bankSetupPaintAccounts(body, model, doc, handlers);

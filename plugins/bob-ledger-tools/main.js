@@ -93226,7 +93226,6 @@ class BobLedgerToolsBankCategoryMixin {
 const BANK_SETUP_CLASS = "bob-bank-setup";
 const BANK_SETUP_SURFACE_CLASS = "bob-bank-setup-surface";
 const BANK_SETUP_HUB_PATH = "bank.md";
-const BANK_SETUP_DEFAULT_EXPANDED = true;
 const BANK_SETUP_MONEY_GROUP = "Money moves";
 
 function bankSetupText(value) {
@@ -93288,6 +93287,9 @@ function bankSetupStatusTone(status) {
   }
   if (status === "delta") {
     return { icon: "✗", word: "delta", tone: "bad" };
+  }
+  if (status === "gap") {
+    return { icon: "⚠", word: "gap", tone: "warn" };
   }
   return { icon: "·", word: status || "unknown", tone: "muted" };
 }
@@ -93443,6 +93445,7 @@ function bankSetupPlural(count, one, many) {
 
 // Collapsed grammar: the account label (or "+ N more"), the visible category
 // count with a hidden tail, and the rule count. Money never appears here.
+// The badge/tile carries the bank mark, so the clause drops its leading emoji.
 function bankSetupCollapsedLine(model) {
   if (!model) {
     return "Setup";
@@ -93451,8 +93454,8 @@ function bankSetupCollapsedLine(model) {
   const accountText = accounts.length === 0
     ? "no accounts"
     : accounts.length === 1
-      ? `🏦 ${accounts[0].label}`
-      : `🏦 ${accounts[0].label} + ${accounts.length - 1} more`;
+      ? `${accounts[0].label}`
+      : `${accounts[0].label} + ${accounts.length - 1} more`;
   const visible = bankSetupCount(model.visibleCount) || 0;
   const hidden = bankSetupCount(model.hiddenCount) || 0;
   const categoryText = hidden > 0
@@ -93461,6 +93464,114 @@ function bankSetupCollapsedLine(model) {
   const rules = bankSetupCount(model.ruleCount) || 0;
   const ruleText = rules === 0 ? "no rules" : bankSetupPlural(rules, "rule", "rules");
   return `${accountText} · ${categoryText} · ${ruleText}`;
+}
+
+// Blocking problems drive a health-aware session fold. Only error findings
+// force the card open; warnings and account status ride the attention chip.
+function bankSetupFoldProblems(input) {
+  const state = input && typeof input.state === "string" ? input.state : "";
+  if (state === "valid") {
+    return "";
+  }
+  if (!state) {
+    return "";
+  }
+  const findings = Array.isArray(input && input.findings) ? input.findings : [];
+  const errors = findings
+    .filter((entry) => entry && entry.severity === "error" && typeof entry.message === "string" && entry.message)
+    .map((entry) => entry.message)
+    .sort();
+  return `${state}:${JSON.stringify(errors)}`;
+}
+
+// Foldable states render the shared fold row. Bodyless states (loading,
+// unsupported, refresh-failed, mobile, and missing without a starter) render
+// a static row without fold attributes so `_` falls through to Vim.
+function bankSetupIsFoldable(input) {
+  const state = input && typeof input.state === "string" ? input.state : "";
+  if (state === "valid" || state === "invalid") {
+    return true;
+  }
+  if (state === "missing") {
+    return Boolean(input && typeof input.starter === "string" && input.starter);
+  }
+  return false;
+}
+
+function bankSetupAccountDescriptor(account) {
+  if (!account) {
+    return "";
+  }
+  const label = account.label || account.alias || "account";
+  const hint = typeof account.hint === "string" && account.hint ? ` — ${account.hint}` : "";
+  return `${label} ${account.status || "unknown"}${hint}`;
+}
+
+// Attention order: invalid errors first, then warnings, then the worst
+// non-balanced account (delta, then stale, then gap). `+N` counts the
+// remaining items. Money never appears here.
+function bankSetupAttention(input) {
+  const findings = Array.isArray(input && input.findings) ? input.findings : [];
+  const accounts = Array.isArray(input && input.accounts) ? input.accounts : [];
+  const errors = findings.filter((entry) => entry && entry.severity === "error");
+  const warnings = findings.filter((entry) => entry && entry.severity === "warning");
+  const badAccounts = accounts.filter((account) => account
+    && (account.status === "delta" || account.status === "stale" || account.status === "gap"));
+  const rank = { delta: 0, stale: 1, gap: 2 };
+  badAccounts.sort((a, b) => (rank[a.status] ?? 9) - (rank[b.status] ?? 9));
+  const errorMessages = errors
+    .map((entry) => entry.message || entry.label || "")
+    .filter(Boolean);
+  const warningMessages = warnings
+    .map((entry) => entry.message || entry.label || "")
+    .filter(Boolean);
+  const accountTitles = badAccounts.map(bankSetupAccountDescriptor).filter(Boolean);
+  if (errors.length > 0) {
+    const count = errors.length;
+    const remaining = warnings.length + badAccounts.length;
+    return {
+      icon: "✗",
+      word: `${count} ${count === 1 ? "problem" : "problems"}`,
+      tone: "error",
+      title: [...errorMessages, ...warningMessages, ...accountTitles].join(" · ")
+        || `${count} ${count === 1 ? "problem" : "problems"} in bank`,
+      ...(remaining > 0 ? { count: remaining } : {}),
+    };
+  }
+  const state = input && typeof input.state === "string" ? input.state : "";
+  if (state === "invalid") {
+    const remaining = warnings.length + badAccounts.length;
+    return {
+      icon: "✗",
+      word: "invalid",
+      tone: "error",
+      title: [...warningMessages, ...accountTitles].join(" · ") || "The bank config is invalid.",
+      ...(remaining > 0 ? { count: remaining } : {}),
+    };
+  }
+  if (warnings.length > 0) {
+    const count = warnings.length;
+    return {
+      icon: "⚠",
+      word: `${count} ${count === 1 ? "warning" : "warnings"}`,
+      tone: "warn",
+      title: [...warningMessages, ...accountTitles].join(" · "),
+      ...(badAccounts.length > 0 ? { count: badAccounts.length } : {}),
+    };
+  }
+  if (badAccounts.length > 0) {
+    const worst = badAccounts[0];
+    const tone = bankSetupStatusTone(worst.status);
+    const remaining = badAccounts.length - 1;
+    return {
+      icon: tone.icon,
+      word: tone.word,
+      tone: tone.tone,
+      title: accountTitles.join(" · "),
+      ...(remaining > 0 ? { count: remaining } : {}),
+    };
+  }
+  return null;
 }
 
 function bankSetupModel(report, options = {}) {
@@ -93510,7 +93621,7 @@ function bankSetupModel(report, options = {}) {
   const model = {
     state,
     desktop,
-    expanded: state === "invalid" ? true : expanded,
+    expanded,
     stale: options.stale === true,
     refreshing: options.refreshing === true,
     errorCode: error && typeof error.code === "string" ? error.code : null,
@@ -93541,6 +93652,9 @@ function bankSetupModel(report, options = {}) {
     today: (report && bankSetupText(report.today)) || null,
   };
   model.collapsedLine = bankSetupCollapsedLine(model);
+  model.foldable = bankSetupIsFoldable(model);
+  model.problems = bankSetupFoldProblems(model);
+  model.attention = bankSetupAttention(model);
   model.signature = bankSetupModelSignature(model);
   return model;
 }
@@ -93616,7 +93730,7 @@ function bankSetupSignature(model, extra = {}) {
 }
 
 // Repaint signature: collapsed grammar, section and tile identity, counts,
-// state, and freshness. Money and row text never participate.
+// state, freshness, and the attention spec. Money and row text never participate.
 function bankSetupModelSignature(model) {
   if (!model) {
     return "none";
@@ -93655,6 +93769,7 @@ function bankSetupModelSignature(model) {
     rules,
     findings,
     staleDays: model.staleAfterDays,
+    attention: model.attention || null,
   });
 }
 // ---- src/248b-plugin-bank-setup-dom.js ----
@@ -94071,13 +94186,25 @@ function bankSetupIdentityBadge(doc) {
   return propertyCardBuildIdentityBadge(doc, { kind: "bank", emoji: "🏦" });
 }
 
-// `bankSetupBuildEl(model, handlers, doc)`: the whole Setup header. `model`
-// is a `bankSetupModel`; `handlers` carries onToggle, onYaml,
-// onJump(line), onCopyStarter, onRetry. All report strings enter as text.
-function bankSetupBuildEl(model, handlers, doc) {
+// `bankSetupBuildEl(model, options, doc)`: the whole Setup header. `model`
+// is a `bankSetupModel`; `options` carries sourcePath, keyLive, and
+// `handlers` (onToggle, onYaml, onJump(line), onCopyStarter, onRetry).
+// Older callers pass handlers directly; they get bank.md with no keycap.
+// Foldable states (valid, invalid, missing with a starter) render the
+// shared fold row; bodyless states render a static row without fold
+// attributes so `_` falls through to Vim. All report strings enter as text.
+function bankSetupBuildEl(model, optionsOrHandlers, doc) {
   if (!model) {
     return null;
   }
+  const options = optionsOrHandlers && typeof optionsOrHandlers === "object" && optionsOrHandlers.handlers
+    ? optionsOrHandlers
+    : { handlers: optionsOrHandlers || {}, sourcePath: BANK_SETUP_HUB_PATH, keyLive: false };
+  const handlers = options.handlers || {};
+  const sourcePath = typeof options.sourcePath === "string" && options.sourcePath
+    ? options.sourcePath
+    : (model.path || BANK_SETUP_HUB_PATH);
+  const keyLive = options.keyLive === true;
   const root = bankSetupEl(doc, "section", `${BANK_SETUP_CLASS} bob-property-card is-${model.state}`, null, {
     "data-bank-setup": "true",
     "data-bank-setup-state": model.state,
@@ -94096,79 +94223,17 @@ function bankSetupBuildEl(model, handlers, doc) {
   if (badge) {
     head.appendChild(badge);
   }
-  const disclosure = bankSetupEl(doc, "button", "bob-bank-setup-toggle", model.expanded ? "▾ Setup" : "▸ Setup", {
-    type: "button",
-    "data-bank-setup-focus": "toggle",
-    "aria-expanded": model.expanded ? "true" : "false",
-    "aria-controls": "bob-bank-setup-body",
-  });
-  if (disclosure) {
-    bankSetupListen(disclosure, () => {
-      if (handlers && typeof handlers.onToggle === "function") {
-        handlers.onToggle();
-      }
-    });
-    head.appendChild(disclosure);
-  }
-  if (model.state === "mobile") {
-    bankSetupAppend(head, "span", "bob-bank-setup-collapsed", "drawn by bob on desktop", null);
+  const foldable = typeof model.foldable === "boolean" ? model.foldable : bankSetupIsFoldable(model);
+  const paintYaml = (container) => {
     const yaml = bankSetupYamlButton(doc, handlers);
-    if (yaml) {
-      head.appendChild(yaml);
+    if (yaml && container && typeof container.appendChild === "function") {
+      container.appendChild(yaml);
     }
-    return root;
-  }
-  if (model.state === "loading") {
-    bankSetupAppend(head, "span", "bob-bank-setup-collapsed", "Setup · loading…", { role: "status" });
-    return root;
-  }
-  if (model.state === "unsupported") {
-    bankSetupAppend(head, "span", "bob-bank-setup-collapsed", "Setup needs a newer bob — run bob update", { role: "status" });
-    const yaml = bankSetupYamlButton(doc, handlers);
-    if (yaml) {
-      head.appendChild(yaml);
+  };
+  const paintEdit = (container) => {
+    if (!(model.desktop && (model.state === "valid" || model.state === "invalid"))) {
+      return;
     }
-    return root;
-  }
-  if (model.state === "missing") {
-    bankSetupAppend(head, "span", "bob-bank-setup-collapsed", "Setup · no bank: mapping yet", null);
-    const yaml = bankSetupYamlButton(doc, handlers);
-    if (yaml) {
-      head.appendChild(yaml);
-    }
-    if (model.expanded && model.starter) {
-      const body = bankSetupEl(doc, "div", "bob-bank-setup-body", null, null);
-      if (body) {
-        root.appendChild(body);
-        bankSetupAppend(body, "p", "bob-bank-setup-empty", "Copy the starter block into bank.md frontmatter, then edit it in Source mode.", null);
-        const copy = bankSetupEl(doc, "button", "bob-bank-setup-copy", "Copy starter", { type: "button" });
-        if (copy) {
-          bankSetupListen(copy, () => {
-            if (handlers && typeof handlers.onCopyStarter === "function") {
-              handlers.onCopyStarter();
-            }
-          });
-          body.appendChild(copy);
-        }
-      }
-    }
-    return root;
-  }
-  if (model.state === "refresh-failed") {
-    bankSetupAppend(head, "span", "bob-bank-setup-collapsed", model.errorMessage || "Setup · refresh failed", { role: "alert" });
-    const retry = bankSetupEl(doc, "button", "bob-bank-retry", "Retry", { type: "button" });
-    if (retry) {
-      bankSetupListen(retry, () => {
-        if (handlers && typeof handlers.onRetry === "function") {
-          handlers.onRetry();
-        }
-      });
-      head.appendChild(retry);
-    }
-    return root;
-  }
-  bankSetupAppend(head, "span", "bob-bank-setup-collapsed", model.collapsedLine, null);
-  if (model.desktop && (model.state === "valid" || model.state === "invalid")) {
     const edit = bankSetupEl(doc, "button", "bob-bank-setup-edit", "⊞ Edit", {
       type: "button",
       "data-bank-setup-focus": "edit",
@@ -94178,23 +94243,118 @@ function bankSetupBuildEl(model, handlers, doc) {
       bankSetupListen(edit, () => {
         if (handlers && typeof handlers.onEdit === "function") handlers.onEdit();
       });
-      head.appendChild(edit);
+      container.appendChild(edit);
+    }
+  };
+  const paintStatic = (text, attrs, withRetry) => {
+    const wrap = bankSetupEl(doc, "div", "bob-bank-setup-static", null, null);
+    if (!wrap) {
+      return;
+    }
+    root.appendChild(wrap);
+    bankSetupAppend(wrap, "span", "bob-bank-setup-collapsed", text, attrs || null);
+    if (withRetry) {
+      const retry = bankSetupEl(doc, "button", "bob-bank-retry", "Retry", { type: "button" });
+      if (retry) {
+        bankSetupListen(retry, () => {
+          if (handlers && typeof handlers.onRetry === "function") {
+            handlers.onRetry();
+          }
+        });
+        wrap.appendChild(retry);
+      }
+    }
+  };
+  if (!foldable) {
+    if (model.state === "mobile") {
+      paintEdit(head);
+      paintYaml(head);
+      paintStatic("drawn by bob on desktop", null, false);
+      return root;
+    }
+    if (model.state === "loading") {
+      paintStatic("Setup · loading…", { role: "status" }, false);
+      return root;
+    }
+    if (model.state === "unsupported") {
+      paintYaml(head);
+      paintStatic("Setup needs a newer bob — run bob update", { role: "status" }, false);
+      return root;
+    }
+    if (model.state === "missing") {
+      paintYaml(head);
+      paintStatic("Setup · no bank: mapping yet", null, false);
+      return root;
+    }
+    if (model.state === "refresh-failed") {
+      paintStatic(model.errorMessage || "Setup · refresh failed", { role: "alert" }, true);
+      return root;
+    }
+    paintStatic(model.collapsedLine || "Setup", null, false);
+    return root;
+  }
+  paintEdit(head);
+  paintYaml(head);
+  const summary = model.state === "missing" ? "no bank: mapping yet" : (model.collapsedLine || "Setup");
+  let bodyId = null;
+  try {
+    bodyId = typeof propertyCardFoldNextId === "function" ? propertyCardFoldNextId() : "bob-bank-setup-body";
+  } catch (_) {
+    bodyId = "bob-bank-setup-body";
+  }
+  let fold = null;
+  try {
+    fold = typeof propertyCardBuildFoldRow === "function"
+      ? propertyCardBuildFoldRow(doc, {
+        kind: "bank",
+        path: sourcePath,
+        noun: "Setup",
+        summary,
+        open: model.expanded === true,
+        bodyId,
+        className: "bob-bank-setup-toggle",
+        attention: model.attention || null,
+        keyLive,
+        tooltip: "Toggle bank setup (_)",
+        onToggle: () => {
+          if (handlers && typeof handlers.onToggle === "function") {
+            handlers.onToggle();
+          }
+        },
+      })
+      : null;
+  } catch (_) {
+    fold = null;
+  }
+  if (!fold || !fold.element) {
+    const fallback = bankSetupEl(doc, "button", "bob-bank-setup-toggle", model.expanded ? "▾ Setup" : "▸ Setup", {
+      type: "button",
+      "data-bank-setup-focus": "toggle",
+      "aria-expanded": model.expanded ? "true" : "false",
+      "aria-controls": bodyId,
+    });
+    if (fallback) {
+      bankSetupListen(fallback, () => {
+        if (handlers && typeof handlers.onToggle === "function") {
+          handlers.onToggle();
+        }
+      });
+      root.appendChild(fallback);
+    }
+  } else {
+    try {
+      fold.element.setAttribute("data-bank-setup-focus", "toggle");
+    } catch (_) {}
+    root.appendChild(fold.element);
+    if (fold.bodyId) {
+      bodyId = fold.bodyId;
     }
   }
-  const yaml = bankSetupYamlButton(doc, handlers);
-  if (yaml) {
-    head.appendChild(yaml);
-  }
-  if (!model.expanded) {
-    return root;
-  }
-  const body = bankSetupEl(doc, "div", "bob-bank-setup-body", null, null);
-  if (!body) {
-    return root;
-  }
-  root.appendChild(body);
   if (model.stale) {
-    const note = bankSetupAppend(body, "div", "bob-bank-setup-status", "Updating · last good values shown", { role: "status" });
+    const staleText = model.lastGoodLabel
+      ? `Updating · last good values from ${model.lastGoodLabel}`
+      : "Updating · last good values shown";
+    const note = bankSetupAppend(root, "div", "bob-bank-setup-status", staleText, { role: "status" });
     if (note && model.errorMessage) {
       const retry = bankSetupEl(doc, "button", "bob-bank-retry", "Retry", { type: "button" });
       if (retry) {
@@ -94206,6 +94366,30 @@ function bankSetupBuildEl(model, handlers, doc) {
         note.appendChild(retry);
       }
     }
+  }
+  const body = bankSetupEl(doc, "div", "bob-bank-setup-body", null, { id: bodyId });
+  if (!body) {
+    return root;
+  }
+  root.appendChild(body);
+  if (model.expanded !== true) {
+    try {
+      body.setAttribute("hidden", "");
+    } catch (_) {}
+    return root;
+  }
+  if (model.state === "missing") {
+    bankSetupAppend(body, "p", "bob-bank-setup-empty", "Copy the starter block into bank.md frontmatter, then edit it in Source mode.", null);
+    const copy = bankSetupEl(doc, "button", "bob-bank-setup-copy", "Copy starter", { type: "button" });
+    if (copy) {
+      bankSetupListen(copy, () => {
+        if (handlers && typeof handlers.onCopyStarter === "function") {
+          handlers.onCopyStarter();
+        }
+      });
+      body.appendChild(copy);
+    }
+    return root;
   }
   bankSetupPaintFindings(body, model, doc, handlers);
   bankSetupPaintAccounts(body, model, doc, handlers);
@@ -94287,6 +94471,14 @@ class BobLedgerToolsBankSetupMixin {
         if (!(plugin.bankSetupSurfaces instanceof Set)) plugin.bankSetupSurfaces = new Set();
         if (!(plugin.bankSetupLintCache instanceof Map)) plugin.bankSetupLintCache = new Map();
         try { plugin.bankSetupFootBind?.(); } catch (_) {}
+        plugin.bankSetupFoldUnregister = typeof propertyCardRegisterFoldKind === "function"
+          ? propertyCardRegisterFoldKind(plugin, "bank", {
+            toggle(path) {
+              plugin.bankSetupToggleExpanded(path);
+              return true;
+            },
+          })
+          : null;
         if (plugin.bankSetupDesktop()) {
           try {
             plugin.bankSetupUnsubscribe = plugin.apiBankSubscribe
@@ -94304,6 +94496,15 @@ class BobLedgerToolsBankSetupMixin {
         }
       },
       onDisposeStart: () => {
+        try {
+          if (typeof plugin.bankSetupFoldUnregister === "function") plugin.bankSetupFoldUnregister();
+        } catch (_) {}
+        plugin.bankSetupFoldUnregister = null;
+        try {
+          for (const path of plugin.bankSetupExpanded?.keys?.() || []) {
+            try { propertyCardFoldClearPendingReveal?.(path); } catch (_) {}
+          }
+        } catch (_) {}
         try { plugin.bankSetupFootUnbind?.(); } catch (_) {}
         try {
           if (typeof plugin.bankSetupUnsubscribe === "function") plugin.bankSetupUnsubscribe();
@@ -94384,22 +94585,100 @@ class BobLedgerToolsBankSetupMixin {
     } catch (error) {}
   }
 
+  bankSetupExpandedMap() {
+    if (!(this.bankSetupExpanded instanceof Map)) this.bankSetupExpanded = new Map();
+    return this.bankSetupExpanded;
+  }
+
+  bankSetupIsExpanded(sourcePath, model) {
+    const key = bankSetupHubPath(sourcePath);
+    const map = this.bankSetupExpandedMap();
+    let probe = model;
+    try {
+      if (!probe) {
+        const entry = this.bankSetupEntry();
+        probe = bankSetupModel(entry.report, {
+          error: entry.error,
+          stale: entry.stale,
+          refreshing: entry.refreshing,
+          desktop: this.bankSetupDesktop(),
+          expanded: false,
+          lastGoodAt: this.bankSetupLastGoodAt,
+          lastGoodLabel: bankSetupClockLabel(this.bankSetupLastGoodAt),
+        });
+      }
+    } catch (_) {
+      probe = model || null;
+    }
+    const problems = probe && typeof probe.problems === "string"
+      ? probe.problems
+      : bankSetupFoldProblems(probe || { state: "valid", findings: [] });
+    let stored = key ? map.get(key) : null;
+    if (typeof stored === "boolean") {
+      stored = { open: stored === true, problems: "" };
+    }
+    const restamped = typeof propertyCardFoldRestamp === "function"
+      ? propertyCardFoldRestamp(stored, problems)
+      : stored;
+    if (key && restamped !== stored && restamped) {
+      map.set(key, restamped);
+    }
+    let foldDefault = false;
+    try {
+      foldDefault = propertyCardSpecies?.("bank")?.foldDefault === true;
+    } catch (_) {
+      foldDefault = false;
+    }
+    return typeof propertyCardFoldResolve === "function"
+      ? propertyCardFoldResolve({ choice: restamped, problems, foldDefault })
+      : Boolean(restamped && restamped.open);
+  }
+
+  bankSetupSetExpanded(sourcePath, expanded, problems) {
+    const key = bankSetupHubPath(sourcePath);
+    if (!key) {
+      return;
+    }
+    let signature = problems;
+    if (typeof signature !== "string") {
+      try {
+        signature = this.bankSetupModelFor(sourcePath)?.problems || "";
+      } catch (_) {
+        signature = "";
+      }
+    }
+    const choice = typeof propertyCardFoldChoice === "function"
+      ? propertyCardFoldChoice(expanded === true, signature || "")
+      : { open: expanded === true, problems: signature || "" };
+    this.bankSetupExpandedMap().set(key, choice);
+    this.refreshBankSetupReading();
+    this.refreshBankSetupEditors();
+  }
+
   bankSetupModelFor(sourcePath) {
     try {
       const entry = this.bankSetupEntry();
-      const expandedMap = this.bankSetupExpanded instanceof Map
-        ? this.bankSetupExpanded
-        : new Map();
-      const key = bankSetupHubPath(sourcePath);
-      return bankSetupModel(entry.report, {
+      const desktop = this.bankSetupDesktop();
+      const lastGoodLabel = bankSetupClockLabel(this.bankSetupLastGoodAt);
+      const baseOptions = {
         error: entry.error,
         stale: entry.stale,
         refreshing: entry.refreshing,
-        desktop: this.bankSetupDesktop(),
-        expanded: (key && expandedMap.has(key)) ? expandedMap.get(key) === true : BANK_SETUP_DEFAULT_EXPANDED,
+        desktop,
         lastGoodAt: this.bankSetupLastGoodAt,
-        lastGoodLabel: bankSetupClockLabel(this.bankSetupLastGoodAt),
-      });
+        lastGoodLabel,
+      };
+      let probe = null;
+      try {
+        probe = bankSetupModel(entry.report, { ...baseOptions, expanded: false });
+      } catch (_) {
+        probe = null;
+      }
+      const expanded = this.bankSetupIsExpanded(sourcePath, probe);
+      if (probe && probe.expanded === expanded) {
+        return probe;
+      }
+      return bankSetupModel(entry.report, { ...baseOptions, expanded });
     } catch (error) {
       return null;
     }
@@ -94411,22 +94690,28 @@ class BobLedgerToolsBankSetupMixin {
       if (!key) {
         return;
       }
-      if (!(this.bankSetupExpanded instanceof Map)) {
-        this.bankSetupExpanded = new Map();
-      }
       const model = this.bankSetupModelFor(sourcePath);
-      this.bankSetupExpanded.set(key, model && model.expanded === true ? false : true);
-      this.refreshBankSetupReading();
-      this.refreshBankSetupEditors();
+      const open = Boolean(model && model.expanded);
+      const problems = model && typeof model.problems === "string" ? model.problems : "";
+      this.bankSetupSetExpanded(sourcePath, !open, problems);
     } catch (error) {}
   }
 
-  bankSetupOptions(sourcePath, model) {
+  bankSetupOptions(sourcePath, model, surface = "reading") {
     const self = this;
+    let keyLive = false;
+    try {
+      keyLive = typeof propertyCardFoldKeyLive === "function"
+        ? propertyCardFoldKeyLive(self, surface) === true
+        : false;
+    } catch (_) {
+      keyLive = false;
+    }
     return {
       sourcePath,
       expanded: Boolean(model && model.expanded),
       desktop: this.bankSetupDesktop(),
+      keyLive,
       handlers: {
         onToggle: () => self.bankSetupToggleExpanded(sourcePath),
         onYaml: () => {
@@ -94600,7 +94885,7 @@ class BobLedgerToolsBankSetupMixin {
 
   bankSetupBuildReading(model, options, doc) {
     try {
-      const header = bankSetupBuildEl(model, options.handlers, doc);
+      const header = bankSetupBuildEl(model, options, doc);
       if (!header) {
         return null;
       }
@@ -94817,7 +95102,7 @@ class BobLedgerToolsBankSetupMixin {
     const doc = (typeof notebookDomDoc === "function" ? notebookDomDoc(view.dom) : null)
       || (typeof document !== "undefined" ? document : null);
     const extra = typeof this.bankSetupFootExtra === "function" ? this.bankSetupFootExtra(livePath) : null;
-    const options = { ...this.bankSetupOptions(livePath, model), footExtra: extra };
+    const options = { ...this.bankSetupOptions(livePath, model, "live-preview"), footExtra: extra };
     const header = this.bankSetupBuildReading(model, options, doc);
     if (!header) {
       try { this.bankSetupTrackFoot?.(view?.dom, livePath, null); } catch (_) {}
@@ -193012,11 +193297,15 @@ try {
       bankDecodeConfig,
       bankConfigUnsupported,
       bankSetupStateKind,
+      bankSetupStatusTone,
       bankSetupCollapsedLine,
       bankSetupModel,
       bankSetupModelSignature,
       bankSetupSignature,
       bankSetupTile,
+      bankSetupFoldProblems,
+      bankSetupIsFoldable,
+      bankSetupAttention,
       bankSetupLintMarks,
       bankSetupLintDeltas,
       bankSetupMapFindingLines,

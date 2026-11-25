@@ -1195,8 +1195,18 @@ function SETUP_UI_PROBE() {
     const surface = viewRoot.querySelector(".bob-bank-setup-surface") || document.querySelector(".bob-bank-setup-surface");
     const hubNote = document.querySelector(".bob-bank-hub-note");
     const toggle = header && header.querySelector(".bob-bank-setup-toggle");
-    const collapsed = header && header.querySelector(".bob-bank-setup-collapsed");
+    const collapsedEl = header && header.querySelector(".bob-bank-setup-collapsed");
+    const foldSummary = toggle && toggle.querySelector(".bob-property-card-fold-summary");
+    const collapsed = collapsedEl || foldSummary || toggle;
     const banner = header && header.querySelector(".bob-bank-setup-banner");
+    const foldKind = toggle && toggle.getAttribute("data-card-fold") || "";
+    const foldControls = toggle && toggle.getAttribute("aria-controls") || "";
+    const foldControlsResolved = Boolean(foldControls && header && header.querySelector(`[id="${foldControls}"]`));
+    const foldKey = toggle && toggle.getAttribute("aria-keyshortcuts") || "";
+    const foldTitle = toggle && toggle.getAttribute("title") || "";
+    const attention = toggle && toggle.querySelector(".bob-property-card-fold-attention");
+    const keycap = toggle && toggle.querySelector(".bob-property-card-fold-keycap");
+    const body = header && header.querySelector(".bob-bank-setup-body");
     const tiles = Array.from((header || viewRoot).querySelectorAll("[data-bank-setup-category]")).map((el) => ({
       key: el.getAttribute("data-bank-setup-category") || "",
       label: textOf(el),
@@ -1262,6 +1272,15 @@ function SETUP_UI_PROBE() {
       hubNote: Boolean(hubNote),
       expanded: toggle ? toggle.getAttribute("aria-expanded") : null,
       collapsed: textOf(collapsed),
+      foldKind,
+      foldControls,
+      foldControlsResolved,
+      foldKey,
+      foldTitle,
+      attentionText: textOf(attention),
+      keycapText: textOf(keycap),
+      bodyHidden: body ? body.hasAttribute("hidden") : null,
+      bodyChildren: body ? body.childNodes.length : 0,
       banner: textOf(banner),
       bannerRole: banner && banner.getAttribute("role") || "",
       bannerLive: banner && (banner.getAttribute("aria-live") || banner.getAttribute("role") || ""),
@@ -1326,11 +1345,13 @@ function assertLiveDefault(probe) {
   if (probe.headerAria !== "Bank setup") return { ok: false, reason: `aria-label ${probe.headerAria}` };
   const identity = assertBankIdentity(probe);
   if (!identity.ok) return identity;
-  if (probe.expanded !== "true") return { ok: false, reason: `aria-expanded ${probe.expanded}` };
+  if (probe.expanded !== "false") return { ok: false, reason: `aria-expanded ${probe.expanded}` };
   const line = String(probe.collapsed || "");
-  if (!/🏦/.test(line) || !/categor/.test(line) || !/no rules/.test(line)) {
+  if (/🏦 WF Checking/.test(line) || !/Setup ·/.test(line) || !/categor/.test(line) || !/no rules/.test(line)) {
     return { ok: false, reason: `collapsed grammar: ${line}` };
   }
+  if (probe.foldKind !== "bank") return { ok: false, reason: `fold kind ${probe.foldKind}` };
+  if (!probe.foldControlsResolved) return { ok: false, reason: "aria-controls dangles" };
   return { ok: true, reason: line };
 }
 

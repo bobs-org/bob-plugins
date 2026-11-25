@@ -351,7 +351,10 @@ test("bank setup appends the foot after BuildEl, including collapsed, and hides 
   assert.equal(model.expanded, false);
   const header = plugin.bankSetupBuildReading(model, { ...plugin.bankSetupOptions("bank.md", model) }, doc);
   assert.ok(header.querySelector(FOOT), "collapsed setup keeps the foot");
-  assert.equal(header.querySelector(".bob-bank-setup-body"), null);
+  const collapsedBody = header.querySelector(".bob-bank-setup-body");
+  assert.ok(collapsedBody, "collapsed setup keeps an empty hidden body shell for aria-controls");
+  assert.equal(collapsedBody.getAttribute("hidden"), "");
+  assert.equal(collapsedBody.children.length, 0);
   assert.equal(lastClass(header), "bob-property-card-foot");
   assert.match(header.querySelector(".bob-property-card-foot-stamp").textContent, /no created date|created/);
   const helper = helpers.bankSetupBuildEl(model, {}, doc);

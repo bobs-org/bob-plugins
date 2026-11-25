@@ -3,6 +3,7 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const test = require("node:test");
@@ -62,6 +63,7 @@ test("toggle, conversion, and look cover wrap, refusal, titles, and themes", () 
   assert.ok(toggle.includes("legacy drawer"));
   assert.ok(toggle.includes("reserved title"));
   assert.ok(conversion.AREA.includes("**API Design**"));
+  assert.ok(conversion.AREA.includes("**API  Design**"));
   assert.ok(conversion.AREA.includes("**C++ Notes**"));
   assert.ok(conversion.AREA.includes("**Q1: Goals**"));
   assert.ok(conversion.AREA.includes("**Café**"));
@@ -70,5 +72,19 @@ test("toggle, conversion, and look cover wrap, refusal, titles, and themes", () 
   const lookNames = look.CASES.map((entry) => entry.name).join("\n");
   assert.ok(lookNames.includes("light live"));
   assert.ok(lookNames.includes("dark reading"));
+  const lookSource = fs.readFileSync(path.join(__dirname, "obsidian-task-drawers-look-e2e.cjs"), "utf8");
+  for (const assertion of [
+    "foldedOpen.folded, true",
+    "foldedOpen.after, /2/",
+    "drawer count refresh after an edit",
+    "refoldedOpen.after, /3/",
+    "native delimiters restore their resting appearance",
+    "drawer descendants keep ordinary note typography",
+    "settings off removes every owned drawer attribute",
+    "settings off does not change Markdown",
+    "tray width",
+  ]) {
+    assert.ok(lookSource.includes(assertion), assertion);
+  }
   assert.ok(REQ_CASES[0].keys.includes("["));
 });

@@ -7804,6 +7804,16 @@ body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"] > s
   font-weight: 600;
   text-decoration: none;
 }
+/* A completed owner decorates all descendant text in reading view. Place an
+   opaque title-only inline box above that ancestor decoration so the drawer
+   title stays clean while the owning task keeps its native strike. */
+body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"] > p:first-of-type > strong:first-child,
+body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"] > strong:first-child {
+  display: inline-block;
+  position: relative;
+  z-index: 1;
+  background-color: var(--background-primary);
+}
 body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"][data-bob-drawer-empty="true"] > p:first-of-type,
 body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"][data-bob-drawer-owner-state="done"] > p:first-of-type,
 body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"][data-bob-drawer-owner-state="cancelled"] > p:first-of-type,
@@ -7817,8 +7827,7 @@ body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"][dat
   filter: grayscale(1);
   opacity: 0.58;
 }
-body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"].is-collapsed > p:first-of-type::after,
-body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"].is-collapsed > strong:first-child::after {
+body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"].is-collapsed::after {
   content: " · " attr(data-bob-drawer-count);
   color: var(--text-muted);
   font-size: 0.82em;

@@ -126,6 +126,34 @@ test("unicode and CRLF coordinates preserve endings and stay bounded", () => {
   assert.equal(missing.contents.endsWith("\n"), false, "a missing final newline stays missing");
 });
 
+test("settle keeps bold and legacy drawer subtrees byte-for-byte with a moved task", () => {
+  const input = [
+    "---",
+    "type: [[area]]",
+    "---",
+    "## Tasks",
+    "",
+    "- [ ] #task Future [scheduled:: 2026-11-26] ^future",
+    "  - **API Design**",
+    "    - bold detail",
+    "  - FUTURE WORK",
+    "    - legacy detail",
+    "- [ ] #task Stay ^stay",
+    "",
+  ].join("\n");
+  const result = helpers.taskSettleNote("Areas/home.md", input, TODAY, classification(), DAILY);
+  assert.equal(result.changed, true);
+  assert.match(result.contents, /### Blocked/);
+  assert.ok(result.contents.includes([
+    "- [?] #task Future [scheduled:: 2026-11-26] ^future",
+    "  - **API Design**",
+    "    - bold detail",
+    "  - FUTURE WORK",
+    "    - legacy detail",
+  ].join("\n")), result.contents);
+  assert.ok(result.contents.includes("- [ ] #task Stay ^stay"));
+});
+
 test("settle does not mutate its inputs", () => {
   const input = "- [ ] #task Future [scheduled:: 2026-11-26]\n";
   const cls = classification();

@@ -39,14 +39,32 @@ function pageRows() {
     .filter((el) => el.getBoundingClientRect().height);
   const reading = [...root.querySelectorAll('li[data-bob-drawer="true"]')]
     .filter((el) => el.getBoundingClientRect().height);
+  const isLive = live.length > 0;
+  const textStyle = (needle) => {
+    const selector = isLive ? ".cm-line" : ".markdown-preview-view p";
+    const el = [...root.querySelectorAll(selector)].find((candidate) => candidate.textContent.includes(needle));
+    if (!el) return null;
+    const cs = getComputedStyle(el);
+    return { fontWeight: cs.fontWeight, color: cs.color };
+  };
   const rows = (live.length ? live : reading).map((row) => {
     const marker = row.querySelector(".cm-formatting-list");
     const glyph = marker
       ? getComputedStyle(marker, "::before")
       : getComputedStyle(row, "::before");
+    const glyphAfter = marker ? getComputedStyle(marker, "::after") : getComputedStyle(row, "::after");
     const title = row.getAttribute("title") || "";
     const strong = row.querySelector(".cm-strong, strong") || row.querySelector("p");
     const strongCs = strong ? getComputedStyle(strong) : null;
+    const owner = !isLive && row.parentElement && row.parentElement.parentElement;
+    const ownerText = owner && (owner.querySelector(":scope > p") || owner);
+    const ownerDecoration = ownerText ? getComputedStyle(ownerText).textDecorationLine : "";
+    const childSelector = isLive ? ".cm-line" : "p";
+    const child = isLive
+      ? [...root.querySelectorAll(childSelector)].find((el) => el.textContent.includes("Review the endpoint"))
+      : [...row.querySelectorAll(childSelector)].find((el) => el.textContent.includes("Review the endpoint"));
+    const childVisible = child ? child.getBoundingClientRect().height > 0 : false;
+    const fontSize = parseFloat(getComputedStyle(row).fontSize) || 16;
     return {
       key: row.dataset.bobDrawerKey,
       count: row.dataset.bobDrawerCount,
@@ -58,12 +76,23 @@ function pageRows() {
       live: Boolean(marker),
       width: parseFloat(glyph.width),
       height: parseFloat(glyph.height),
+      expectedSlot: fontSize * 0.95,
       mask: glyph.webkitMaskImage || glyph.maskImage || glyph.mask,
       ink: glyph.backgroundColor,
       display: glyph.display,
+      markerColor: marker ? getComputedStyle(marker).color : "",
+      markerBefore: marker ? getComputedStyle(marker, "::before").content : "",
+      markerAfter: glyphAfter.content,
+      markerClass: marker && marker.className,
       fontWeight: strongCs ? String(strongCs.fontWeight) : "",
       color: strongCs ? strongCs.color : "",
       decoration: strongCs ? strongCs.textDecorationLine : "",
+      titleBackground: strongCs ? strongCs.backgroundColor : "",
+      titlePosition: strongCs ? strongCs.position : "",
+      titleZIndex: strongCs ? strongCs.zIndex : "",
+      ownerChecked: Boolean(owner && owner.classList.contains("is-checked")),
+      ownerDecoration,
+      childVisible,
       folded: row.classList.contains("is-collapsed")
         || Boolean(row.querySelector(".cm-fold-indicator.is-collapsed")),
       after: getComputedStyle(row, "::after").content,
@@ -71,7 +100,53 @@ function pageRows() {
   });
   const reqs = [...root.querySelectorAll('[data-bob-req="true"]')]
     .filter((el) => el.getBoundingClientRect().height).length;
-  return { rows, reqs, live: live.length > 0 };
+  return {
+    rows,
+    reqs,
+    live: isLive,
+    nestedNote: textStyle("Review the endpoint"),
+    ordinaryNote: textStyle("ordinary note beside the tray"),
+  };
+}
+
+function delimiterState() {
+  const root = window.app.workspace.activeLeaf.view.contentEl;
+  const line = [...root.querySelectorAll('.cm-line[data-bob-drawer-key="API DESIGN"]')][0];
+  if (!line) return null;
+  const markers = [...line.querySelectorAll(".cm-formatting-strong")].map((el) => {
+    const cs = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    const visible = cs.display !== "none" && cs.visibility !== "hidden"
+      && Number(cs.opacity) > 0 && cs.color !== "rgba(0, 0, 0, 0)";
+    return {
+      text: el.textContent,
+      color: cs.color,
+      opacity: cs.opacity,
+      display: cs.display,
+      visibility: cs.visibility,
+      width: rect.width,
+      visible,
+    };
+  });
+  return {
+    active: line.classList.contains("cm-active") || line.classList.contains("cm-activeLine"),
+    markers,
+  };
+}
+
+async function toggleReadingFold(client) {
+  const target = await evaluate(client, () => {
+    const row = [...window.app.workspace.activeLeaf.view.contentEl.querySelectorAll('li[data-bob-drawer-key="API DESIGN"]')][0];
+    const control = row && row.querySelector(".collapse-indicator, .collapse-icon");
+    if (!control) return null;
+    const rect = control.getBoundingClientRect();
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, width: rect.width, height: rect.height };
+  });
+  assert.ok(target && target.width > 0 && target.height > 0, "reading view exposes Obsidian's native fold control");
+  await client.call("Input.dispatchMouseEvent", { type: "mouseMoved", x: target.x, y: target.y });
+  await client.call("Input.dispatchMouseEvent", { type: "mousePressed", x: target.x, y: target.y, button: "left", clickCount: 1 });
+  await client.call("Input.dispatchMouseEvent", { type: "mouseReleased", x: target.x, y: target.y, button: "left", clickCount: 1 });
+  await pause(450);
 }
 
 async function captureShot(client, args, entry) {
@@ -145,63 +220,140 @@ async function run(client, entry, { setDoc, setMode, waitFor, args }) {
   for (const row of state.rows) {
     assert.equal(row.decoration, "none");
     assert.ok(Number(row.fontWeight) >= 600 || row.fontWeight === "bold", row.key);
-    if (row.display !== "none" && Number.isFinite(row.width) && row.width > 0) {
-      assert.ok(Math.abs(row.width - 0.95 * 16) < 6 || row.width > 8, "tray occupies the ~0.95em marker slot");
-    }
+    assert.ok(Math.abs(row.width - row.expectedSlot) < 3, row.key + " tray width " + row.width + " is not 0.95em (" + row.expectedSlot + ")");
+    assert.ok(row.height >= row.expectedSlot * 0.68 && row.height <= row.expectedSlot * 0.95, row.key + " tray height " + row.height);
   }
   assert.notEqual(open.mask, "none");
+  assert.ok(state.nestedNote && state.ordinaryNote, "nested and ordinary notes are present");
+  assert.deepEqual(state.nestedNote, state.ordinaryNote, "drawer descendants keep ordinary note typography");
+  if (entry.mode === "reading") {
+    assert.equal(done.ownerChecked, true, "the strike-leak case has a native checked owner");
+    assert.match(done.ownerDecoration, /line-through/, "the completed owner retains its native strike");
+    assert.equal(done.titlePosition, "relative");
+    assert.equal(done.titleZIndex, "1");
+    assert.notEqual(done.titleBackground, "rgba(0, 0, 0, 0)", "title shield paints above ancestor decoration");
+  }
   await captureShot(client, args, entry);
 
   if (entry.mode === "live") {
-    await evaluate(client, () => {
-      const view = window.app.workspace.activeLeaf.view;
-      view.editor.setCursor({ line: 3, ch: 4 });
-      view.editor.focus();
-    });
-    await pause(400);
-    await client.evaluate(`window.app.commands.executeCommandById("editor:toggle-fold")`);
-    await pause(500);
-    const folded = await evaluate(client, pageRows);
-    const foldedOpen = folded.rows.find((row) => row.key === "API DESIGN");
-    assert.ok(foldedOpen, "folded drawer still marked");
-    if (foldedOpen.folded || (foldedOpen.after && foldedOpen.after.includes("2"))) {
-      assert.ok(true);
-    } else {
-      assert.equal(foldedOpen.count, "2", "folded drawer keeps its note count");
-    }
+    const resting = await evaluate(client, delimiterState);
+    assert.ok(resting && resting.markers.length >= 2, "native bold delimiters are present");
     await evaluate(client, () => {
       const view = window.app.workspace.activeLeaf.view;
       view.editor.setCursor({ line: 3, ch: 8 });
       view.editor.focus();
     });
     await pause(400);
-    const revealed = await evaluate(client, () => {
-      const line = [...window.app.workspace.activeLeaf.view.contentEl.querySelectorAll('.cm-line[data-bob-drawer="true"]')]
-        .find((el) => (el.getAttribute("data-bob-drawer-key") || "") === "API DESIGN");
-      if (!line) return null;
-      const marker = line.querySelector(".cm-formatting-list");
-      const before = marker ? getComputedStyle(marker, "::before") : null;
-      return {
-        color: marker ? getComputedStyle(marker).color : "",
-        beforeDisplay: before ? before.display : "",
-        active: line.classList.contains("cm-active") || line.classList.contains("cm-activeLine"),
-      };
+    const revealed = await evaluate(client, delimiterState);
+    assert.equal(revealed.active, true, "the drawer header owns the caret");
+    assert.ok(revealed.markers.every((marker) => marker.visible), JSON.stringify(revealed));
+    await evaluate(client, () => {
+      const view = window.app.workspace.activeLeaf.view;
+      view.editor.setCursor({ line: 16, ch: 0 });
+      view.editor.focus();
     });
-    assert.ok(revealed, "caret line is still a drawer");
+    await pause(400);
+    const restored = await evaluate(client, delimiterState);
+    assert.ok(restored.markers.every((marker) => !marker.visible), JSON.stringify(restored));
+    assert.deepEqual(
+      restored.markers.map(({ text, color, opacity, display, visibility }) => ({ text, color, opacity, display, visibility })),
+      resting.markers.map(({ text, color, opacity, display, visibility }) => ({ text, color, opacity, display, visibility })),
+      "native delimiters restore their resting appearance when the caret leaves",
+    );
+    await evaluate(client, () => {
+      const view = window.app.workspace.activeLeaf.view;
+      view.editor.setCursor({ line: 3, ch: 8 });
+      view.editor.focus();
+    });
+    await pause(150);
+    await client.evaluate(`window.app.commands.executeCommandById("editor:toggle-fold")`);
+  } else {
+    await toggleReadingFold(client);
   }
+
+  await pause(450);
+  const folded = await evaluate(client, pageRows);
+  const foldedOpen = folded.rows.find((row) => row.key === "API DESIGN");
+  assert.ok(foldedOpen, "folded drawer still marked");
+  assert.equal(foldedOpen.folded, true, "native folding hides the drawer's child rows");
+  assert.equal(foldedOpen.childVisible, false, "nested note is actually folded away");
+  assert.match(foldedOpen.after, /2/, "the source-backed folded count is visible: " + foldedOpen.after);
+
+  if (entry.mode === "live") {
+    await client.evaluate(`window.app.commands.executeCommandById("editor:toggle-fold")`);
+  } else {
+    await toggleReadingFold(client);
+  }
+  await pause(450);
+  const unfolded = await evaluate(client, pageRows);
+  const unfoldedOpen = unfolded.rows.find((row) => row.key === "API DESIGN");
+  assert.ok(unfoldedOpen && !unfoldedOpen.folded, "native unfold restores the drawer");
+  assert.equal(unfoldedOpen.childVisible, true);
+
+  const tab = String.fromCharCode(9);
+  const authLine = tab + tab + "- Check the auth";
+  const editedSource = SOURCE.replace(authLine, authLine + "\n" + tab + tab + "- Added after first render");
+  if (entry.mode === "reading") {
+    await evaluate(client, async () => {
+      const view = window.app.workspace.activeLeaf.view;
+      await view.setState({ ...view.getState(), mode: "source", source: false }, { history: false });
+    });
+    await pause(300);
+  }
+  await setDoc(client, editedSource, [16, 0]);
+  if (entry.mode === "reading") {
+    await evaluate(client, async () => {
+      const view = window.app.workspace.activeLeaf.view;
+      await view.save();
+      await view.setState({ ...view.getState(), mode: "preview" }, { history: false });
+    });
+  }
+  await waitFor(client, "(" + pageRows.toString() + ")()", (next) => {
+    const row = next && next.rows && next.rows.find((candidate) => candidate.key === "API DESIGN");
+    return row && row.count === "3";
+  }, "drawer count refresh after an edit", 10000);
+  if (entry.mode === "live") {
+    await evaluate(client, () => {
+      const view = window.app.workspace.activeLeaf.view;
+      view.editor.setCursor({ line: 3, ch: 8 });
+      view.editor.focus();
+    });
+    await client.evaluate(`window.app.commands.executeCommandById("editor:toggle-fold")`);
+  } else {
+    await toggleReadingFold(client);
+  }
+  await pause(450);
+  const refolded = await evaluate(client, pageRows);
+  const refoldedOpen = refolded.rows.find((row) => row.key === "API DESIGN");
+  assert.ok(refoldedOpen && refoldedOpen.folded, "native fold reapplies after the edit");
+  assert.equal(refoldedOpen.count, "3");
+  assert.match(refoldedOpen.after, /3/, "the refreshed folded count is visible");
+  if (entry.mode === "live") {
+    await client.evaluate(`window.app.commands.executeCommandById("editor:toggle-fold")`);
+  } else {
+    await toggleReadingFold(client);
+  }
+  await pause(300);
 
   const pluginOn = await evaluate(client, () => window.app.plugins.plugins["bob-ledger-tools"].taskDrawerMarksEnabled !== false);
   assert.equal(pluginOn, true);
-  await evaluate(client, () => window.app.plugins.plugins["bob-ledger-tools"].toggleTaskDrawerMarks());
-  await pause(600);
-  const off = await evaluate(client, pageRows);
-  assert.equal(off.rows.length, 0, "toggle clears drawer attributes");
-  const before = await evaluate(client, async () => {
+  const beforeOff = await evaluate(client, async () => {
     const view = window.app.workspace.activeLeaf.view;
     if (view.getMode && view.getMode() === "source") await view.save();
     return window.app.vault.read(view.file);
   });
-  assert.ok(before.includes("- **API Design**"), "toggle does not rewrite Markdown");
+  assert.equal(beforeOff, editedSource, "the editor saved the direct drawer note");
+  await evaluate(client, () => window.app.plugins.plugins["bob-ledger-tools"].toggleTaskDrawerMarks());
+  await pause(600);
+  const off = await evaluate(client, pageRows);
+  assert.equal(off.rows.length, 0, "toggle clears drawer attributes");
+  const ownedAttrs = await evaluate(client, () => window.app.workspace.activeLeaf.view.contentEl.querySelectorAll('[data-bob-drawer="true"]').length);
+  assert.equal(ownedAttrs, 0, "settings off removes every owned drawer attribute");
+  const before = await evaluate(client, async () => {
+    const view = window.app.workspace.activeLeaf.view;
+    return window.app.vault.read(view.file);
+  });
+  assert.equal(before, beforeOff, "settings off does not change Markdown");
   await evaluate(client, () => window.app.plugins.plugins["bob-ledger-tools"].toggleTaskDrawerMarks());
   await waitFor(client, `(${pageRows.toString()})().rows.length`, (length) => length >= 4, "toggle re-annotates", 5000);
 }

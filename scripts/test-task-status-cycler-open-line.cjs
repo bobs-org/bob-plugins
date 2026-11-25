@@ -20,6 +20,8 @@ const {
   openLineClassify,
   openLineManagedRefuse,
   formatOpenLineTaskLine,
+  drawerTypingEligible,
+  drawerTypingExpansion,
   OPEN_LINE_MANAGED_NOTICE,
   OPEN_LINE_PRJ_NO_TASKS_NOTICE,
 } = helpers;
@@ -242,6 +244,30 @@ test("nested task, drawer header, and drawer child open siblings after the subtr
     insertBeforeLine: lineIndex(text, "deeper filed") + 1,
     lines: ["\t\t- "],
   });
+});
+
+test("o opens a drawer sibling that accepts the drawer star expansion", () => {
+  const text = [
+    "- [ ] #task Ship",
+    "\t- **API Design**",
+    "\t\t- Keep the bold subtree",
+    "\t- FUTURE WORK",
+    "\t\t- Keep the legacy subtree",
+  ].join("\n");
+  const header = lineIndex(text, "API Design");
+  const plan = planOpenLine(text, header, "below", TODAY);
+  const opened = apply(text, plan);
+  const lines = linesOf(opened);
+  assert.equal(lines[plan.cursorLine], "\t- ");
+  assert.equal(drawerTypingEligible(opened, plan.cursorLine), true);
+  const before = lines[plan.cursorLine].slice(0, plan.cursorCh);
+  const after = lines[plan.cursorLine].slice(plan.cursorCh);
+  assert.deepEqual(drawerTypingExpansion(before, after), { secondInsert: "***" });
+  lines[plan.cursorLine] = before + "*" + "***" + after;
+  const typed = lines.join("\n");
+  assert.ok(typed.includes("\t- ****"), "the newly opened sibling accepts the native star expansion");
+  assert.ok(typed.includes("\t- **API Design**\n\t\t- Keep the bold subtree"));
+  assert.ok(typed.includes("\t- FUTURE WORK\n\t\t- Keep the legacy subtree"));
 });
 
 test("each managed line redirects to the owner's note slot", () => {

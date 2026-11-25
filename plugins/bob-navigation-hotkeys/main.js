@@ -13574,9 +13574,9 @@ function getProjectReversalBlockId(noteBasename, parentBasename) {
 function formatProjectReversalSectionTitle(headerText) {
   // bob-task-drawer-bold-writes-v1: reversal keeps the authored heading bytes
   // verbatim (bold titles lossless; legacy Title Case only for legacy input).
-  const collapsed = String(headerText || "").trim().replace(/\s+/g, " ");
-  if (!collapsed) return null;
-  const resolved = drawer_for_heading(collapsed);
+  const title = String(headerText || "").trim();
+  if (!title) return null;
+  const resolved = drawer_for_heading(title);
   if (!resolved.ok) return null;
   return resolved.title;
 }
@@ -13584,8 +13584,8 @@ function formatProjectReversalSectionTitle(headerText) {
 // The named drawer refusal for a project-note heading, or null when the
 // heading maps to a drawer title.
 function projectReversalSectionRefusal(headerText) {
-  const collapsed = String(headerText || "").trim().replace(/\s+/g, " ");
-  const resolved = drawer_for_heading(collapsed);
+  const title = String(headerText || "").trim();
+  const resolved = drawer_for_heading(title);
   return resolved.ok ? null : resolved.refusal;
 }
 

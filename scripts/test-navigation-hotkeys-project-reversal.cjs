@@ -468,6 +468,14 @@ test("formatProjectReversalSectionTitle keeps authored titles verbatim and rejec
     helpers.formatProjectReversalSectionTitle("What Is Sase?"),
     "What Is Sase?",
   );
+  assert.equal(
+    helpers.formatProjectReversalSectionTitle("  API  Design\t"),
+    "API  Design",
+  );
+  assert.equal(
+    helpers.formatProjectReversalSectionTitle("Café\tDesign"),
+    "Café\tDesign",
+  );
   assert.equal(helpers.formatProjectReversalSectionTitle("Options:"), null);
   assert.equal(helpers.formatProjectReversalSectionTitle("Tasks"), null);
   assert.equal(helpers.formatProjectReversalSectionTitle(""), null);
@@ -488,7 +496,7 @@ test("a punctuated WHAT IS SASE? section reverses to the same drawer key", () =>
 });
 
 test("bold titles round-trip byte for byte through promotion and reversal", () => {
-  for (const title of ["API Design", "C++ Notes", "Q1: Goals", "Café", "iOS / OAuth 2.0"]) {
+  for (const title of ["API Design", "API  Design", "Café\tDesign", "C++ Notes", "Q1: Goals", "Café", "iOS / OAuth 2.0"]) {
     const seeded = helpers.buildProjectSeedFromChildBullets(
       [`  - **${title}**`, "    - Draft note"],
       "2026-08-12",
@@ -521,6 +529,47 @@ test("bold titles round-trip byte for byte through promotion and reversal", () =
     });
     assert.equal(reversed.valid, true, `${title}: ${reversed.error || "reversal failed"}`);
     assert.ok(reversed.lines.includes(`\t- **${title}**`), title);
+  }
+});
+
+test("drawer title whitespace and empty sections survive LF and CRLF promotion and reversal", () => {
+  for (const lineEnding of ["\n", "\r\n"]) {
+    const seeded = helpers.buildProjectSeedFromChildBullets(
+      [
+        "  - **API  Design**",
+        "    - Keep the spacing",
+        "  - **Café\tDesign**",
+        "    - Keep the tab",
+        "  - **Empty  Drawer**",
+      ],
+      "2026-08-12",
+    );
+    assert.deepEqual(seeded.sections, [
+      { title: "API  Design", noteLines: ["- Keep the spacing"] },
+      { title: "Café\tDesign", noteLines: ["- Keep the tab"] },
+      { title: "Empty  Drawer", noteLines: [] },
+    ]);
+
+    const base = workedExampleProjectNote({ lineEnding });
+    const inserted = helpers.insertProjectSectionNotes(base, seeded.sections);
+    assert.equal(inserted.createdCount, 3);
+    for (const title of ["API  Design", "Café\tDesign", "Empty  Drawer"]) {
+      assert.ok(inserted.content.includes(`## ${title}`), JSON.stringify({ lineEnding, title }));
+    }
+    assert.ok(inserted.content.includes(["## API  Design", "", "- Keep the spacing"].join(lineEnding)));
+    assert.ok(inserted.content.includes(["## Café\tDesign", "", "- Keep the tab"].join(lineEnding)));
+
+    const reversed = helpers.buildTaskBlockFromProjectNote(inserted.content, {
+      noteBasename: "Health_gym_habit",
+      parentBasename: "Health",
+      now: new Date("2026-08-12T12:00:00Z"),
+    });
+    assert.equal(reversed.valid, true, reversed.error || "whitespace title reversal failed");
+    assert.ok(reversed.lines.includes("\t- **API  Design**"));
+    assert.ok(reversed.lines.includes("\t- **Café\tDesign**"));
+    assert.ok(reversed.lines.includes("\t- **Empty  Drawer**"));
+    assert.ok(reversed.lines.includes("\t\t- Keep the spacing"));
+    assert.ok(reversed.lines.includes("\t\t- Keep the tab"));
   }
 });
 

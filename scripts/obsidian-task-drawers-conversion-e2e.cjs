@@ -30,6 +30,8 @@ const AREA = [
   "- [ ] #task Ship drawers ^ship",
   "\t- **API Design**",
   "\t\t- Review the endpoint",
+  "\t- **API  Design**",
+  "\t\t- Preserve the authored spacing",
   "\t- **C++ Notes**",
   "\t\t- Keep the ABI",
   "\t- **Q1: Goals**",
@@ -58,6 +60,10 @@ const PROJECT = [
   "## API Design",
   "",
   "- Review the endpoint",
+  "",
+  "## API  Design",
+  "",
+  "- Preserve the authored spacing",
   "",
   "## C++ Notes",
   "",
@@ -224,7 +230,7 @@ async function vaultSnapshot(client) {
 }
 
 function assertTitles(content, label) {
-  for (const title of ["API Design", "C++ Notes", "Q1: Goals", "Café", "Empty"]) {
+  for (const title of ["API Design", "API  Design", "C++ Notes", "Q1: Goals", "Café", "Empty"]) {
     assert.ok(content.includes("## " + title), label + " missing ## " + title);
   }
   assert.ok(content.includes("- Review the endpoint"), label + " missing API Design note");
@@ -272,6 +278,7 @@ async function runReverse(client, helpers) {
   const after = await vaultSnapshot(client);
   const parent = after.contents["Engineering.md"];
   assert.ok(parent.includes("- **API Design**"), parent);
+  assert.ok(parent.includes("- **API  Design**"), parent);
   assert.ok(parent.includes("- **C++ Notes**"), parent);
   assert.ok(parent.includes("- **Q1: Goals**"), parent);
   assert.ok(parent.includes("- **Café**"), parent);

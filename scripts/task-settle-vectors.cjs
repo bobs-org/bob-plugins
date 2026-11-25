@@ -8,19 +8,31 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const PLUGINS_DIR = path.join(__dirname, "..", "plugins");
-// bob-cli's canonical fixtures, present when this checkout is a linked repo
-// inside a bob-cli workspace.
-const CANONICAL_DIR = path.join(
-  __dirname,
-  "..",
-  "..",
-  "..",
-  "..",
-  "tests",
-  "fixtures",
-  "task_settle",
-);
 const TASK_SETTLE_FIXTURE_FILES = Object.freeze(["README.md", "vectors.json"]);
+
+function isLinkedPluginCheckout() {
+  const normalized = path.resolve(__dirname).split(path.sep).join("/");
+  return normalized.includes("/sase/repos/linked/");
+}
+
+// Walk up from this scripts/ directory looking for bob-cli's canonical
+// fixtures. A linked checkout lives under <workspace>/sase/repos/linked/;
+// a standalone plugin checkout has no bob-cli tree beside it.
+function resolveCanonicalDir() {
+  let dir = path.resolve(__dirname);
+  for (let i = 0; i < 12; i += 1) {
+    const candidate = path.join(dir, "tests", "fixtures", "task_settle");
+    if (TASK_SETTLE_FIXTURE_FILES.every((name) => fs.existsSync(path.join(candidate, name)))) {
+      return candidate;
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+
+const CANONICAL_DIR = resolveCanonicalDir();
 
 function fixtureDir(pluginId) {
   return path.join(PLUGINS_DIR, pluginId, "scripts", "fixtures", "task_settle");
@@ -100,6 +112,8 @@ function assertSettleCase(helpers, testCase, vectors) {
 module.exports = {
   CANONICAL_DIR,
   TASK_SETTLE_FIXTURE_FILES,
+  isLinkedPluginCheckout,
+  resolveCanonicalDir,
   fixtureDir,
   readFixture,
   textOf,

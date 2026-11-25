@@ -3,16 +3,11 @@ title: "Cross-plugin APIs"
 description: "Reference for the versioned runtime interfaces shared by Bob plugins."
 ---
 
-Plugins communicate through a loaded plugin's `api` object,
-available under `app.plugins.plugins["<plugin-id>"]`. They do not
-import one another's generated `main.js` files. Consumers should
-feature-detect both the provider and the method or namespace they need; an
-unloaded plugin is not a usable dependency.
-
-API objects are additive compatibility surfaces. Check a namespace's own
-`version` when it has one instead of assuming every namespace
-changes with the root version. Guard cross-plugin calls and handle failure
-results.
+Plugins communicate through a loaded plugin's `api` at
+`app.plugins.plugins["<plugin-id>"]` and never import another plugin's
+`main.js`. Feature-detect the provider and method; an unloaded plugin is
+not a dependency. APIs are additive: check a namespace `version` when
+present, and handle failed calls.
 
 ## Block ID Prompt
 
@@ -61,7 +56,7 @@ ledger, or `Number.MAX_SAFE_INTEGER` when the task has no rank.
 
 | Namespace | Version | Purpose |
 | --- | ---: | --- |
-| `taskSettle` | 1 | Settle the current note buffer synchronously, apply a guarded editor transaction, or defer one task's settle until idle. |
+| `taskSettle` | 1 | Pure settle, guarded editor apply, and idle pending scheduler. |
 | `stats` | 2 | Append validated review events; `host`, `fetch`, and `bobPath` support Stats and consumers. |
 | `logs` | 1 | Read the cached `bob logs list --format json` phrase catalog; `snapshot()` includes the session overlay, `noteUsed(kind, text)` records a successful local write, and `onChange` subscribes to refreshes. |
 | `themes` | 1 | Share the Pomodoro theme catalog; `hueFor`, `componentsOf`, `historyRows`, and `similarTo` are synchronous, `fetch` and `snapshot` serve the cached `bob themes list` report, `hide`/`unhide`/`color`/`rename` spawn bob with `--via`, and `onChange` subscribes to updates. |
@@ -85,119 +80,7 @@ ledger, or `Number.MAX_SAFE_INTEGER` when the task has no rank.
 
 ### `taskSettle` v1
 
-Read the namespace at each call from
-`app.plugins.plugins["bob-ledger-tools"]?.api?.taskSettle`. It is a frozen
-version-1 object with these synchronous methods:
-
-```ts
-settleNote(request: {
-  path: string;
-  contents: string;
-  today: string;                 // local YYYY-MM-DD, explicit for pure calls
-  dailyPath?: string;
-  tasksSettings?: object;
-}): { contents: string; changed: boolean; lineMap: Record<string, number>; warnings: string[] }
-
-applyToEditor(editor, path: string, options?: {
-  expected?: string;             // required preimage for a staged write
-  contents?: string;             // staged post-gesture text; omitted means current buffer
-  identity?: { blockId?: string; line?: number; text?: string };
-  cursor?: { line: number; ch: number };
-  selection?: { from: { line: number; ch: number }; to: { line: number; ch: number } };
-  joinHistory?: boolean;
-  today?: string;
-  dailyPath?: string;
-  tasksSettings?: object;
-}): {
-  contents: string; changed: boolean; applied: boolean;
-  lineMap: Record<string, number>; jumpTarget: object | null;
-  cursor: { line: number; ch: number } | null; reason: string | null;
-  warnings: string[]; historyJoined: boolean | null;
-}
-
-schedulePending(request: {
-  editor; path: string; identity: { blockId?: string; line?: number; text?: string }
-}): { scheduled: boolean; reset?: boolean; generation?: number; pending?: number; reason?: string }
-
-flushPending(): Array<{ path: string; generation: number; result: object }>
-```
-
-`settleNote` is the no-I/O transform. `today` is explicit in pure calls;
-editor and scheduler calls take one local-date and Tasks-settings snapshot at
-apply time. The transform applies the local future-schedule Blocked rule,
-eligible status groups, and badges. It does not tidy children, unblock tasks,
-resolve dependencies, complete requirements, or perform vault-wide or
-clock-driven reconciliation. The authoritative task-status rules are in
-[bob-cli's task-status-hooks contract](https://bobs-org.github.io/task-status-hooks/).
-
-All line indexes are zero-based. `ch` is a zero-based UTF-16 column, matching
-Obsidian's editor positions. `lineMap` maps surviving input lines to their
-output lines after semantic moves; removed lines are omitted. It is a plain
-object, so its numeric input keys appear as strings. An identity's `line` is a
-hint. Resolution prefers a unique `blockId`; without one it uses exact `text`
-at the hinted line, then an unambiguous exact-text match in the same path. A
-missing or ambiguous identity is dropped; settling never creates a block ID.
-
-For an already-written gesture, call `applyToEditor(editor, path, { identity })`
-to settle the current buffer. For a staged gesture, pass `expected` as the
-editor's current preimage and `contents` as the complete post-gesture buffer;
-the provider applies gesture plus settle as one guarded transaction. The
-optional cursor is in current-editor coordinates and is mapped into staged
-contents before the settle map is applied. The identity is resolved against
-the staged settle input. Selection positions are in the settle-input
-coordinates. A stale preimage, missing Markdown view, path mismatch, or
-unavailable editor returns a non-writing outcome; the consumer should then
-perform its existing gesture write. The provider never switches to another
-editor or writes the vault.
-
-When the affected task's block moves, the approved stay policy keeps a cursor
-inside that task at its physical line (clamped to the document) and returns a
-`jumpTarget` for the task's new line. A cursor elsewhere follows its surviving
-content through `lineMap`. The provider does not record a navigation jump; the
-consumer owns its focus contract and records the returned target once.
-
-`schedulePending` resets the 500 ms timer when the same task is scheduled
-again, using the newest identity snapshot. It retains no document text and
-settles the live buffer at fire time. It keeps a short content fingerprint to
-decide whether the buffer changed after the last scheduled tap; a changed
-buffer disables history joining so later typing is not swallowed into the
-gesture's undo event. Work flushes when the cursor leaves the
-pending task line, on `active-leaf-change`, `file-open`, editor blur, and before
-each Ledger Tools command. Consumers that read task positions at command entry
-must call `flushPending()` first. Two editor instances for one path are treated
-as an unsafe shared-buffer conflict and their delayed writes are dropped.
-Unload cancels every timer and listener owned by the provider. The parent
-gesture phases wire their own keymaps to this API; publication here does not
-mean every task-changing keymap already settles.
-
-For consumers, look up and feature-detect at call time. Missing, older, or
-throwing providers leave the existing gesture write in place:
-
-```js
-const settle = app.plugins.plugins["bob-ledger-tools"]?.api?.taskSettle;
-if (settle?.version === 1 && typeof settle.applyToEditor === "function") {
-  try {
-    const result = settle.applyToEditor(editor, path, options);
-    if (result?.applied) return result;
-  } catch (_error) {
-    // Fall through to the consumer's existing gesture write.
-  }
-}
-return applyExistingGestureWrite();
-```
-
-Staged apply is one editor transaction and one undo step. For an
-already-applied gesture, a consumer can pass `joinHistory: true` only when its
-gesture is the preceding editor change. The scheduler makes that request only
-when the buffer still matches its last scheduled tap. It reports
-`historyJoined: true` only when CM6 `undoDepth()` confirms the settle joined an
-existing event, `false` when a separate event is observed, and `null` when
-history depth is unavailable. The tested `editor.transaction` fallback is a
-separate event: undo settle regrouping first, then undo the original gesture.
-Consumers must not assume a join when the result reports `false` or `null`.
-The scratch-vault Obsidian check observed that same two-step order through CM6
-when `historyJoined` was `false`: undo restores the post-gesture text first,
-then the original text; redo reapplies the gesture, then the settle.
+See [Task settle v1](task-settle.md).
 
 `logs.fetch({ force? })` resolves `{ status, catalog, fetchedAt }`, where
 `status` is `ok`, `stale`, `unavailable`, `unsupported`, or `error`. A cached

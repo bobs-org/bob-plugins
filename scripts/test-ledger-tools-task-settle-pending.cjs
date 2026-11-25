@@ -336,6 +336,42 @@ test("pending flush applies the current live editor and drops a buffer after it 
   assert.equal(switched.transactions.length, 0, "the switched-to note receives no stale write");
 });
 
+test("deleted-task timer and explicit flush produce no writes", () => {
+  const timers = new FakeTimers();
+  const editor = new TestEditor(AREA_INPUT);
+  const app = makeApp([{ editor, path: AREA }]);
+  const plugin = new LedgerToolsPlugin(app);
+  plugin.taskSettlePendingScheduler = makeScheduler(timers, (entry) => plugin.taskSettleApplyPending(entry));
+  const outcome = plugin.taskSettleApplyPending({
+    editor,
+    path: AREA,
+    identity: { blockId: "deleted", line: 8 },
+  });
+  assert.equal(outcome.applied, false);
+  assert.equal(outcome.reason, "identity");
+  assert.equal(editor.transactions.length, 0);
+  assert.equal(editor.getValue(), AREA_INPUT);
+
+  plugin.taskSettleApi().schedulePending({
+    editor,
+    path: AREA,
+    identity: { blockId: "deleted", line: 8 },
+  });
+  timers.fire(timers.last());
+  assert.equal(editor.transactions.length, 0, "a deleted-task timer flush does not write");
+
+  plugin.taskSettleApi().schedulePending({
+    editor,
+    path: AREA,
+    identity: { blockId: "deleted", line: 8 },
+  });
+  const flushed = plugin.taskSettleFlushPending();
+  assert.equal(flushed.length, 1);
+  assert.equal(flushed[0].result.applied, false);
+  assert.equal(flushed[0].result.reason, "identity");
+  assert.equal(editor.transactions.length, 0, "an explicit deleted-task flush does not write");
+});
+
 test("pending work drops when the live task identity disappears or becomes ambiguous", () => {
   const timers = new FakeTimers();
   const editor = new TestEditor(AREA_INPUT);

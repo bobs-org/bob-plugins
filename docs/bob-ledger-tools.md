@@ -563,15 +563,14 @@ An older bob without `periods` logs one `console.warn` per session. A
 one Notice per local day: `Period notes could not be created — <message>`.
 
 **Open this week's note** opens `GGGG/GGGG-Www.md` for the current week,
-running ensure first when missing. Without adoption it shows the `bob periods
-migrate` Notice instead of opening anything.
+running ensure first when missing.
 
 A clicked dangling period link (a Templater frontmatter stub) is filled by
 `bob periods ensure -d <first day>`; `api.periodNotes` v2 lets
 bob-navigation-hotkeys do the same.
 
-Agent instruction callouts (`> [!agent]- ...`) render as one folded line: no
-tinted background, small muted title, expanded body in normal text colour.
+Agent instruction callouts (`> [!agent]- ...`) render as one folded line
+with a small muted title.
 
 ## Command-mode run refresh
 
@@ -595,7 +594,7 @@ instead of a palette color.
 
 ## Task settle provider
 
-The [`taskSettle` API](https://bobs-org.github.io/develop/plugins/plugin-apis/#tasksettle-v1) provides guarded, scheduled task settling.
+See [`taskSettle` v1](https://bobs-org.github.io/develop/plugins/task-settle/) for the settle, apply, and pending API.
 
 ## Notebooks
 

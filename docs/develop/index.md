@@ -11,6 +11,7 @@ documentation inventory, test suites, and deployment workflow.
 - [Architecture](architecture.md) — plugin layout, source fragments, and generated references.
 - [Validation](validation.md) — build, inventory, test, and manifest checks.
 - [Cross-plugin APIs](plugin-apis.md) — versioned runtime interfaces between plugins.
+- [Task settle v1](task-settle.md) — frozen ledger-tools settle provider contract.
 
 ## Maintenance tasks
 

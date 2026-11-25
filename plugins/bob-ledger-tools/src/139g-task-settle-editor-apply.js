@@ -79,17 +79,20 @@ function taskSettleFindIdentityLine(lines, identity) {
   if (!identity || typeof identity !== "object" || !Array.isArray(lines)) return null;
   const blockId = typeof identity.blockId === "string" ? identity.blockId.trim() : "";
   const text = identity.text == null ? null : String(identity.text);
+  // A supplied block ID is authoritative: unique match wins, absent or
+  // duplicate means unresolved. Never fall through to a line hint or text.
   if (blockId) {
     const matches = [];
     for (let index = 0; index < lines.length; index += 1) {
       if (taskSettleLineBlockId(lines[index]) === blockId) matches.push(index);
     }
-    if (matches.length === 1) return matches[0];
-    if (matches.length > 1) return null;
+    return matches.length === 1 ? matches[0] : null;
   }
+  // A line number alone is never identity. Exact text at the hinted line,
+  // else an unambiguous exact-text match in the same path.
   const hinted = Number.isInteger(identity.line) ? identity.line : Math.floor(Number(identity.line));
-  if (Number.isInteger(hinted) && hinted >= 0 && hinted < lines.length) {
-    if (text == null || lines[hinted] === text) return hinted;
+  if (text != null && Number.isInteger(hinted) && hinted >= 0 && hinted < lines.length) {
+    if (lines[hinted] === text) return hinted;
   }
   if (text == null) return null;
   const textMatches = [];
@@ -325,6 +328,17 @@ function taskSettleApplyToEditor(editor, path, options = {}, host = null) {
   }
 
   const live = String(editor.getValue());
+  const stagedContentsSupplied = Object.prototype.hasOwnProperty.call(opts, "contents")
+    && opts.contents != null;
+  // Staged contents require an explicit matching preimage. Current-buffer
+  // calls omit `contents` and keep working without `expected`.
+  if (stagedContentsSupplied && opts.expected == null) {
+    return taskSettleIdleOutcome({
+      contents: live,
+      cursor: typeof editor.getCursor === "function" ? editor.getCursor() : null,
+      reason: "preimage",
+    });
+  }
   const expected = opts.expected != null ? String(opts.expected) : live;
   if (live !== expected) {
     return taskSettleIdleOutcome({

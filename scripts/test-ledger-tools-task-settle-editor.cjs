@@ -225,6 +225,7 @@ test("settle helpers needed for editor-apply are exported", () => {
     "taskSettleClassificationFromTasksSettings",
     "taskSettleGuardEditorPath",
     "taskSettleApplyToEditor",
+    "taskSettleFindIdentityLine",
     "taskSettlePlanCursor",
     "taskSettlePlanContentEdits",
   ]) {
@@ -302,6 +303,118 @@ test("path guard: missing view, mismatched path, and inactive matching editor", 
   const result = apply(inactive, AREA, { app, identity: { blockId: "design", line: 8, text: "- [/] #task Finish the design ^design" } });
   assert.equal(result.applied, true, "inactive leaf that owns the editor still applies");
   assert.notEqual(inactive.getValue(), AREA_INPUT);
+});
+
+test("identity resolution: supplied block ID is authoritative; a line is never identity", () => {
+  const replacement = ["- [ ] #task Replacement ^replacement"];
+  assert.equal(
+    helpers.taskSettleFindIdentityLine(replacement, { blockId: "deleted", line: 0 }),
+    null,
+    "absent supplied block ID does not fall through to a stale hint",
+  );
+  const withMatch = [
+    "- [ ] #task Other ^other",
+    "- [ ] #task Replacement ^replacement",
+  ];
+  assert.equal(
+    helpers.taskSettleFindIdentityLine(withMatch, {
+      blockId: "deleted",
+      line: 0,
+      text: "- [ ] #task Replacement ^replacement",
+    }),
+    null,
+    "absent supplied block ID does not fall through even when fallback text matches elsewhere",
+  );
+  const duplicate = [
+    "- [ ] #task First ^dup",
+    "- [ ] #task Second ^dup",
+  ];
+  assert.equal(
+    helpers.taskSettleFindIdentityLine(duplicate, { blockId: "dup", line: 0 }),
+    null,
+    "duplicate block ID is unresolved",
+  );
+  const moved = [
+    "- [ ] #task Later ^design",
+    "- [ ] #task Early ^idea",
+  ];
+  assert.equal(
+    helpers.taskSettleFindIdentityLine(moved, { blockId: "design", line: 9 }),
+    0,
+    "a unique moved block ID still resolves",
+  );
+  const uniqueText = AREA_INPUT.split("\n");
+  assert.equal(
+    helpers.taskSettleFindIdentityLine(uniqueText, {
+      text: "- [/] #task Finish the design ^design",
+    }),
+    8,
+    "text-only unique identity resolves",
+  );
+  const ambiguous = [
+    "- [ ] #task Twin ^a",
+    "- [ ] #task Twin ^a",
+  ];
+  assert.equal(
+    helpers.taskSettleFindIdentityLine(ambiguous, {
+      line: 3,
+      text: "- [ ] #task Twin ^a",
+    }),
+    null,
+    "ambiguous text without a valid hint is unresolved",
+  );
+  assert.equal(
+    helpers.taskSettleFindIdentityLine(uniqueText, { line: 8 }),
+    null,
+    "a line number alone is never identity",
+  );
+});
+
+test("staged contents require an explicit matching preimage; current-buffer calls do not", () => {
+  const authored = "Authored text\n";
+  const snapshot = "Old snapshot\n";
+  const missing = new SettleEditor(authored, { line: 0, ch: 0 });
+  const beforeCursor = missing.getCursor();
+  const missingResult = apply(missing, "Areas/stale.md", { contents: snapshot });
+  assert.equal(missingResult.applied, false);
+  assert.equal(missingResult.reason, "preimage");
+  assert.equal(missing.getValue(), authored);
+  assert.deepEqual(missing.getCursor(), beforeCursor);
+  assert.equal(missing.undoGroups, 0);
+  assert.deepEqual(missing.setValueCalls, []);
+  assert.equal(missing.transactions.length, 0);
+  assert.deepEqual(missing.scrollToCalls, []);
+
+  const stale = new SettleEditor(authored, { line: 0, ch: 0 });
+  const staleResult = apply(stale, "Areas/stale.md", {
+    contents: snapshot,
+    expected: "not the live buffer\n",
+  });
+  assert.equal(staleResult.applied, false);
+  assert.equal(staleResult.reason, "preimage");
+  assert.equal(stale.getValue(), authored);
+  assert.equal(stale.transactions.length, 0);
+
+  const matching = new SettleEditor(AREA_INPUT.replace(
+    "- [/] #task Finish the design ^design",
+    "- [ ] #task Finish the design ^design",
+  ), { line: 8, ch: 0 });
+  const live = matching.getValue();
+  const matchingResult = apply(matching, AREA, {
+    contents: AREA_INPUT,
+    expected: live,
+    identity: { blockId: "design", line: 8, text: "- [/] #task Finish the design ^design" },
+  });
+  assert.equal(matchingResult.applied, true);
+  assert.notEqual(matching.getValue(), live);
+  assert.notEqual(matching.getValue(), AREA_INPUT);
+
+  const current = new SettleEditor(AREA_INPUT, { line: 8, ch: 0 });
+  const currentResult = apply(current, AREA, {
+    identity: { blockId: "design", line: 8, text: "- [/] #task Finish the design ^design" },
+  });
+  assert.equal(currentResult.applied, true);
+  assert.notEqual(current.getValue(), AREA_INPUT);
 });
 
 test("stale preimage yields no write, cursor, or history", () => {

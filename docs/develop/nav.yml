@@ -4,6 +4,8 @@
   path: validation.md
 - title: Cross-plugin APIs
   path: plugin-apis.md
+- title: Task settle v1
+  path: task-settle.md
 - title: Dependency-line migration
   path: dependency-migration.md
 - title: Deployment

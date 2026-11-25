@@ -212,8 +212,48 @@ async function main() {
     ) {
       throw new Error(`taskSettle real undo assertion failed: ${JSON.stringify(result)}`);
     }
+
+    const refusal = await client.evaluate(
+      `(() => {
+        const app = window.app;
+        const plugin = app.plugins.plugins["bob-ledger-tools"];
+        const leaf = app.workspace.getLeaf(false);
+        const editor = leaf.view?.editor;
+        if (!editor || typeof editor.getValue !== "function") throw new Error("CM6 editor unavailable");
+        const before = editor.getValue();
+        const staged = plugin.api.taskSettle.applyToEditor(editor, ${JSON.stringify(NOTE_PATH)}, {
+          contents: "Old snapshot\\n",
+        });
+        const afterStaged = editor.getValue();
+        const pending = plugin.api.taskSettle.schedulePending({
+          editor,
+          path: ${JSON.stringify(NOTE_PATH)},
+          identity: { blockId: "deleted", line: 0 },
+        });
+        const flushed = plugin.api.taskSettle.flushPending();
+        return {
+          stagedApplied: staged && staged.applied,
+          stagedReason: staged && staged.reason,
+          stagedUnchanged: afterStaged === before,
+          pendingScheduled: pending && pending.scheduled,
+          flushApplied: Array.isArray(flushed) && flushed.some((entry) => entry && entry.result && entry.result.applied),
+          afterFlushUnchanged: editor.getValue() === before,
+        };
+      })()`,
+      10_000,
+    );
+    if (
+      !refusal ||
+      refusal.stagedApplied !== false ||
+      refusal.stagedReason !== "preimage" ||
+      refusal.stagedUnchanged !== true ||
+      refusal.flushApplied !== false ||
+      refusal.afterFlushUnchanged !== true
+    ) {
+      throw new Error(`taskSettle deleted-task/preimage refusal failed: ${JSON.stringify(refusal)}`);
+    }
     passed = true;
-    console.log(JSON.stringify({ pass: true, result }));
+    console.log(JSON.stringify({ pass: true, result, refusal }));
   } finally {
     if (client) client.close();
     if (child.exitCode == null && child.signalCode == null) child.kill("SIGTERM");

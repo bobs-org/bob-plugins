@@ -780,11 +780,19 @@ class TaskStatusCyclerCompletionMixin {
       ? this.captureReqCloseOwnersForResolvedTarget(resolvedTarget, context)
       : [];
 
+    const sameNote = this.fileMatchesPath(
+      resolvedTarget.file,
+      context && context.activePath,
+    );
     const wrote = await this.replaceResolvedTranscludedTaskLine(
       resolvedTarget,
       context,
       nextSymbol,
-      { allowAnyStatus: true },
+      {
+        allowAnyStatus: true,
+        settlePolicy: TASK_SETTLE_WRITE_POLICY.deferred,
+        settleNonEditor: true,
+      },
     );
 
     if (wrote && sourceSymbol === BLOCKED_TASK_STATUS_SYMBOL) {
@@ -798,6 +806,23 @@ class TaskStatusCyclerCompletionMixin {
         await this.recoverProjectResidentsAfterPrjUnblock(
           sameNote ? context && context.editor : null,
           targetPath,
+        );
+      }
+    }
+
+    if (wrote && sameNote && context && context.editor) {
+      const settleIdentity = this.snapshotTaskSettleIdentity(null, resolvedTarget.line, {
+        blockId: resolvedTarget.blockId,
+      });
+      if (options && options.deferSettleSchedule) {
+        if (Array.isArray(options.settleIdentities)) {
+          options.settleIdentities.push(settleIdentity);
+        }
+      } else {
+        this.scheduleTaskCycleSettle(
+          context.editor,
+          resolvedTarget.file.path,
+          settleIdentity,
         );
       }
     }

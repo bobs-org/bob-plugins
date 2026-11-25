@@ -49,6 +49,9 @@ class TestEditor extends Cm6MappingEditor {
   constructor(text, cursor = { line: 8, ch: 6 }) {
     super(text, cursor);
   }
+  replaceRange(text, from, to) {
+    this.transaction({ changes: [{ from, to, text: String(text) }] });
+  }
   getScrollInfo() { return { left: 0, top: 0, clientHeight: 400 }; }
 }
 
@@ -75,6 +78,7 @@ function makeApp(editors) {
     workspace,
     events,
     leaves,
+    commands: { commands: {}, executeCommandById: () => false },
     plugins: { plugins: {} },
     internalPlugins: { plugins: { "daily-notes": { instance: { options: {} } } } },
     vault: { getAbstractFileByPath: () => null },
@@ -129,6 +133,130 @@ function makeLivePair(options = {}) {
   attachNavJumps(app, jumps);
   return { editor, app, timers, ledger, cycler: makeCycler(app), jumps };
 }
+
+function viewFor(app) {
+  return app.leaves[0] && app.leaves[0].view;
+}
+
+test("single Alt+] leaves the status byte immediate and settles the note after idle", () => {
+  const { editor, cycler, timers, app } = makeLivePair({
+    cursor: { line: 7, ch: 6 },
+  });
+  const view = viewFor(app);
+  const before = editor.getValue();
+
+  assert.equal(cycler.handleCycleCommand(false, editor, view, 1), true);
+  const cycled = editor.getValue();
+  assert.notEqual(cycled, before);
+  assert.match(editor.getLine(7), /^- \[\/] #task An idea/);
+  assert.doesNotMatch(cycled, /### Next & In Progress/);
+  assert.equal(timers.last().delay, 500);
+
+  timers.fire(timers.last());
+  assert.match(editor.getValue(), /### Next & In Progress/);
+  assert.match(editor.getValue(), /- \[\/] #task An idea to pick up later \^idea/);
+});
+
+test("rapid same-row cycles rearm one pending settle without changing the target", () => {
+  const { editor, cycler, timers, app } = makeLivePair({
+    cursor: { line: 7, ch: 6 },
+  });
+  const view = viewFor(app);
+
+  assert.equal(cycler.handleCycleCommand(false, editor, view, 1), true);
+  const firstTimer = timers.last();
+  assert.equal(cycler.handleCycleCommand(false, editor, view, 1), true);
+  const secondTimer = timers.last();
+  assert.notEqual(firstTimer, secondTimer);
+  assert.equal(firstTimer.cleared, true);
+  assert.match(editor.getLine(7), /^- \[\*\] #task An idea/);
+  assert.doesNotMatch(editor.getValue(), /### Next & In Progress/);
+
+  timers.fire(firstTimer, true);
+  assert.doesNotMatch(editor.getValue(), /### Next & In Progress/);
+  timers.fire(secondTimer);
+  assert.match(editor.getValue(), /### Next & In Progress/);
+  assert.match(editor.getValue(), /- \[\*\] #task An idea to pick up later \^idea/);
+});
+
+test("counted cycles defer writes and schedule one settle after the whole range", async () => {
+  const text = [
+    "---",
+    "type: [[area]]",
+    "---",
+    "## Tasks",
+    "",
+    "- [ ] #task First ^first",
+    "- [ ] #task Second ^second",
+    "- [ ] #task Third ^third",
+    "",
+  ].join("\n");
+  const { editor, cycler, timers, app } = makeLivePair({
+    text,
+    cursor: { line: 5, ch: 0 },
+  });
+  cycler.confirmCyclerMailCloseRange = async () => ({ confirmed: true });
+  let schedules = 0;
+  const schedule = cycler.scheduleTaskCycleSettle.bind(cycler);
+  cycler.scheduleTaskCycleSettle = (...args) => {
+    schedules += 1;
+    return schedule(...args);
+  };
+
+  assert.equal(await cycler.cycleTaskStatusRange(editor, { path: AREA }, 1, 2), true);
+  assert.equal(schedules, 1);
+  assert.equal(timers.timers.filter((timer) => !timer.cleared).length, 1);
+  for (const line of [5, 6, 7]) assert.match(editor.getLine(line), /^- \[\/] #task/);
+  assert.doesNotMatch(editor.getValue(), /### Next & In Progress/);
+
+  timers.fire(timers.last());
+  assert.match(editor.getValue(), /### Next & In Progress/);
+  for (const task of ["First", "Second", "Third"]) {
+    assert.match(editor.getValue(), new RegExp(`- \\[\\/\\] #task ${task}`));
+  }
+});
+
+test("a cycle whose delayed settle sees a different note keeps the new note untouched", () => {
+  const { editor, cycler, timers, app, jumps } = makeLivePair({
+    cursor: { line: 7, ch: 6 },
+  });
+  assert.equal(cycler.handleCycleCommand(false, editor, viewFor(app), 1), true);
+  const cycled = editor.getValue();
+  app.leaves[0].view.file.path = OTHER;
+
+  timers.fire(timers.last());
+  assert.equal(editor.getValue(), cycled);
+  assert.equal(jumps.length, 0);
+});
+
+test("cycle writes survive when the pending-settle provider is missing or too old", () => {
+  const editor = new TestEditor(AREA_INPUT, { line: 7, ch: 6 });
+  const app = makeApp([{ editor, path: AREA }]);
+  const cycler = makeCycler(app);
+  assert.equal(cycler.handleCycleCommand(false, editor, viewFor(app), 1), true);
+  assert.match(editor.getLine(7), /^- \[\/] #task An idea/);
+
+  app.plugins.plugins["bob-ledger-tools"] = {
+    api: { taskSettle: { version: 0, applyToEditor() { return { applied: true }; } } },
+  };
+  assert.equal(cycler.handleCycleCommand(false, editor, viewFor(app), 1), true);
+  assert.match(editor.getLine(7), /^- \[\*\] #task An idea/);
+});
+
+test("other command boundaries flush only when executing, not during checks", () => {
+  const { cycler, editor } = makeLivePair();
+  let calls = 0;
+  cycler.flushPendingTaskSettle = () => {
+    calls += 1;
+    return [];
+  };
+  let ran = 0;
+  cycler.runTaskSettleAwareCommand(true, editor, () => { ran += 1; });
+  assert.equal(calls, 0, "checking never flushes pending note writes");
+  cycler.runTaskSettleAwareCommand(false, editor, () => { ran += 1; });
+  assert.equal(calls, 1);
+  assert.equal(ran, 2);
+});
 
 test("write policy and identity snapshots stay explicit", () => {
   assert.deepEqual(helpers.TASK_SETTLE_WRITE_POLICY, {

@@ -420,8 +420,16 @@ class TaskStatusCyclerTargetsMixin {
       // Compose the flipped target with a pure settle inside the same vault
       // callback so the note is written once. The read/modify fallback below
       // reuses this same composer. Missing providers keep flipped bytes.
-      if (vaultSettlePolicy === "immediate") {
+      if (
+        vaultSettlePolicy === TASK_SETTLE_WRITE_POLICY.immediate ||
+        (vaultSettlePolicy === TASK_SETTLE_WRITE_POLICY.deferred &&
+          options && options.settleNonEditor === true)
+      ) {
         try {
+          // Delayed cycles stay delayed in a live editor. A target written
+          // through vault.process has no gesture cursor to protect, so its
+          // full-note settle composes into this same write instead of leaving
+          // transient structure debt behind.
           return this.settleComposedTargetContents(
             resolvedTarget.file && resolvedTarget.file.path,
             nextSourceText,

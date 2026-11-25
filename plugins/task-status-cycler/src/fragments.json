@@ -53,6 +53,7 @@
   "142-plugin-task-settle.js",
   "143-plugin-close-settle.js",
   "144-plugin-structure-settle.js",
+  "145-plugin-cycle-settle.js",
   "150-plugin-commands.js",
   "160-plugin-completion.js",
   "161-plugin-completion-links.js",

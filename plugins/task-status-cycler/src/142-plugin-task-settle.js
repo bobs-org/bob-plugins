@@ -1,8 +1,7 @@
-// Call-time taskSettle consumer bridge (bob-cli-q4.9.1.1 settle-bridge).
-// Looks up ledger-tools at each call, flushes pending work, applies a guarded
-// staged or live-buffer settle, settles a pure target buffer, snapshots
-// identity, and records the stay-cursor jump exactly once. Production
-// gestures do not start settling from this fragment.
+// Call-time taskSettle consumer bridge (bob-cli-q4.9.1.1 settle-bridge and
+// q4.9.1.4 cycle-settle). Looks up ledger-tools at each call, flushes pending
+// work, applies a guarded staged or live-buffer settle, settles a pure target
+// buffer, snapshots identity, and records the stay-cursor jump exactly once.
 
 const TASK_SETTLE_WRITE_POLICY = Object.freeze({
   immediate: "immediate",
@@ -67,6 +66,41 @@ class TaskStatusCyclerTaskSettleMixin {
     return normalizeTaskSettleWritePolicy(policy);
   }
 
+  taskSettleIdentityAtEditorLine(editor, line, extra = {}) {
+    if (!editor || typeof editor.getLine !== "function" || !Number.isInteger(line)) {
+      return null;
+    }
+    let lineText = null;
+    try {
+      lineText = editor.getLine(line);
+    } catch (_error) {
+      lineText = null;
+    }
+    if (typeof lineText !== "string") return null;
+    return this.snapshotTaskSettleIdentity(lineText, line, extra);
+  }
+
+  scheduleTaskCycleSettle(editor, path, identity) {
+    if (!editor || !path || !identity || this.taskSettleShuttingDown) {
+      return { scheduled: false, reason: "context" };
+    }
+    const livePath = this.taskSettleLiveEditorPath(editor);
+    if (livePath && livePath !== path) {
+      return { scheduled: false, reason: "path" };
+    }
+    return this.schedulePendingTaskSettle({ editor, path, identity });
+  }
+
+  flushPendingTaskSettleBeforeCommand(editor, checking = false) {
+    if (checking === true || this.taskSettleShuttingDown) return [];
+    return this.flushPendingTaskSettle({ editor });
+  }
+
+  runTaskSettleAwareCommand(checking, editor, callback) {
+    this.flushPendingTaskSettleBeforeCommand(editor, checking);
+    return typeof callback === "function" ? callback() : false;
+  }
+
   snapshotTaskSettleIdentity(lineText, line, extra) {
     return snapshotTaskSettleIdentity(lineText, line, extra);
   }
@@ -121,7 +155,10 @@ class TaskStatusCyclerTaskSettleMixin {
   }
 
   recordTaskSettleResultJump(path, generation, result, guard = {}) {
-    if (!result || result.applied !== true || !result.jumpTarget || !result.cursor) return false;
+    if (
+      this.taskSettleShuttingDown ||
+      !result || result.applied !== true || !result.jumpTarget || !result.cursor
+    ) return false;
     const expectedPath = guard.path || path;
     if (guard.generation != null && generation != null && guard.generation !== generation) {
       return false;
@@ -200,6 +237,7 @@ class TaskStatusCyclerTaskSettleMixin {
   }
 
   flushPendingTaskSettle(options = {}) {
+    if (this.taskSettleShuttingDown) return [];
     const settle = this.resolveTaskSettleApi();
     if (!settle || typeof settle.flushPending !== "function") return [];
     try {
@@ -232,6 +270,7 @@ class TaskStatusCyclerTaskSettleMixin {
     const req = request && typeof request === "object" ? request : {};
     const consumer = typeof req.onSettled === "function" ? req.onSettled : null;
     const onSettled = (delivery) => {
+      if (this.taskSettleShuttingDown) return;
       if (delivery) {
         this.recordTaskSettleResultJump(
           delivery.path,

@@ -18488,14 +18488,16 @@ class TaskStatusCyclerPlugin extends Plugin {
       id: "open-child-bullet-line-below",
       name: "Open child bullet line below",
       editorCheckCallback: (checking, editor, view) =>
-        this.handleOpenChildBulletLineCommand(checking, editor, view, "below"),
+        this.runTaskSettleAwareCommand(checking, editor, () =>
+          this.handleOpenChildBulletLineCommand(checking, editor, view, "below")),
     });
 
     this.addCommand({
       id: "open-child-bullet-line-above",
       name: "Open child bullet line above",
       editorCheckCallback: (checking, editor, view) =>
-        this.handleOpenChildBulletLineCommand(checking, editor, view, "above"),
+        this.runTaskSettleAwareCommand(checking, editor, () =>
+          this.handleOpenChildBulletLineCommand(checking, editor, view, "above")),
     });
 
     this.addCommand({
@@ -18503,7 +18505,8 @@ class TaskStatusCyclerPlugin extends Plugin {
       name: "Toggle Pomodoro placeholder/sub-bullet",
       hotkeys: [{ modifiers: ["Ctrl", "Alt"], key: "]" }],
       editorCheckCallback: (checking, editor, view) =>
-        this.handlePomodoroBulletToggleCommand(checking, editor, view),
+        this.runTaskSettleAwareCommand(checking, editor, () =>
+          this.handlePomodoroBulletToggleCommand(checking, editor, view)),
     });
 
     this.registerChildBulletInputListeners();
@@ -18518,27 +18521,32 @@ class TaskStatusCyclerPlugin extends Plugin {
       id: "toggle-task-open-done",
       name: "Toggle task open/done",
       editorCheckCallback: (checking, editor, view) =>
-        this.handleToggleOpenDoneCommand(checking, editor, view),
+        this.runTaskSettleAwareCommand(checking, editor, () =>
+          this.handleToggleOpenDoneCommand(checking, editor, view)),
     });
 
     this.addCommand({
       id: "toggle-task-checkbox-marker",
       name: "Toggle task checkbox marker",
       editorCheckCallback: (checking, editor, view) =>
-        this.handleToggleCheckboxMarkerCommand(checking, editor, view),
+        this.runTaskSettleAwareCommand(checking, editor, () =>
+          this.handleToggleCheckboxMarkerCommand(checking, editor, view)),
     });
 
     this.addCommand({
       id: "toggle-obsidian-task",
       name: "Toggle Obsidian task",
       editorCheckCallback: (checking, editor, view) =>
-        this.handleToggleObsidianTaskCommand(checking, editor, view),
+        this.runTaskSettleAwareCommand(checking, editor, () =>
+          this.handleToggleObsidianTaskCommand(checking, editor, view)),
     });
 
     this.addCommand({
       id: "toggle-task-drawer",
       name: "Toggle Drawer",
-      editorCheckCallback: (checking, editor) => this.cyclerDrawerToggleRoute(editor, checking),
+      editorCheckCallback: (checking, editor) =>
+        this.runTaskSettleAwareCommand(checking, editor, () =>
+          this.cyclerDrawerToggleRoute(editor, checking)),
     });
 
     // Normalize Tasks-generated dependency IDs to block IDs after Tasks writes
@@ -18586,6 +18594,7 @@ class TaskStatusCyclerPlugin extends Plugin {
   }
 
   onunload() {
+    this.taskSettleShuttingDown = true;
     if (this.pendingPomodoroCenterDeferred) {
       cancelDeferred(this.pendingPomodoroCenterDeferred);
       this.pendingPomodoroCenterDeferred = null;
@@ -24678,33 +24687,42 @@ class TaskStatusCyclerVimMixin {
       return false;
     }
 
-    vim.defineAction("taskStatusCyclerOpenNextLineLink", (cm, actionArgs) =>
-      this.handleVimEnterLinkOrFallthrough(cm, actionArgs),
-    );
-    vim.defineAction("taskStatusCyclerToggleTaskOpenDone", (cm) =>
-      this.handleVimTaskToggleOpenDone(cm),
-    );
-    vim.defineAction("taskStatusCyclerToggleOpenDone", (cm) =>
-      this.handleVimTaskToggleOpenDone(cm),
-    );
-    vim.defineAction("taskStatusCyclerToggleCheckboxMarker", () =>
-      this.handleVimToggleCheckboxMarker(),
-    );
-    vim.defineAction("taskStatusCyclerToggleObsidianTask", (cm, actionArgs) =>
-      this.handleVimToggleObsidianTask(cm, actionArgs),
-    );
-    vim.defineAction("taskStatusCyclerOpenLineBelow", (cm) =>
-      this.handleVimOpenLineBelow(cm),
-    );
-    vim.defineAction("taskStatusCyclerOpenLineAbove", (cm) =>
-      this.handleVimOpenLineAbove(cm),
-    );
-    vim.defineAction("taskStatusCyclerOpenPreviousLineLink", (cm, actionArgs) =>
-      this.handleVimBackspaceLinkOrFallthrough(cm, actionArgs),
-    );
-    vim.defineAction("taskStatusCyclerTogglePomodoroMoveOnly", (cm, actionArgs) =>
-      this.handleVimTogglePomodoroMoveOnly(cm, actionArgs),
-    );
+    vim.defineAction("taskStatusCyclerOpenNextLineLink", (cm, actionArgs) => {
+      this.flushPendingTaskSettleBeforeCommand();
+      return this.handleVimEnterLinkOrFallthrough(cm, actionArgs);
+    });
+    vim.defineAction("taskStatusCyclerToggleTaskOpenDone", (cm) => {
+      this.flushPendingTaskSettleBeforeCommand();
+      return this.handleVimTaskToggleOpenDone(cm);
+    });
+    vim.defineAction("taskStatusCyclerToggleOpenDone", (cm) => {
+      this.flushPendingTaskSettleBeforeCommand();
+      return this.handleVimTaskToggleOpenDone(cm);
+    });
+    vim.defineAction("taskStatusCyclerToggleCheckboxMarker", () => {
+      this.flushPendingTaskSettleBeforeCommand();
+      return this.handleVimToggleCheckboxMarker();
+    });
+    vim.defineAction("taskStatusCyclerToggleObsidianTask", (cm, actionArgs) => {
+      this.flushPendingTaskSettleBeforeCommand();
+      return this.handleVimToggleObsidianTask(cm, actionArgs);
+    });
+    vim.defineAction("taskStatusCyclerOpenLineBelow", (cm) => {
+      this.flushPendingTaskSettleBeforeCommand();
+      return this.handleVimOpenLineBelow(cm);
+    });
+    vim.defineAction("taskStatusCyclerOpenLineAbove", (cm) => {
+      this.flushPendingTaskSettleBeforeCommand();
+      return this.handleVimOpenLineAbove(cm);
+    });
+    vim.defineAction("taskStatusCyclerOpenPreviousLineLink", (cm, actionArgs) => {
+      this.flushPendingTaskSettleBeforeCommand();
+      return this.handleVimBackspaceLinkOrFallthrough(cm, actionArgs);
+    });
+    vim.defineAction("taskStatusCyclerTogglePomodoroMoveOnly", (cm, actionArgs) => {
+      this.flushPendingTaskSettleBeforeCommand();
+      return this.handleVimTogglePomodoroMoveOnly(cm, actionArgs);
+    });
     vim.mapCommand("<CR>", "action", "taskStatusCyclerOpenNextLineLink", {}, {
       context: "normal",
     });
@@ -24744,12 +24762,14 @@ class TaskStatusCyclerVimMixin {
   }
 
   registerVimNavigationMappings(vim) {
-    vim.defineAction("taskStatusCyclerHalfPageDownSkipQueries", (cm) =>
-      this.handleVimHalfPageSkipQueries(cm, 1),
-    );
-    vim.defineAction("taskStatusCyclerHalfPageUpSkipQueries", (cm) =>
-      this.handleVimHalfPageSkipQueries(cm, -1),
-    );
+    vim.defineAction("taskStatusCyclerHalfPageDownSkipQueries", (cm) => {
+      this.flushPendingTaskSettleBeforeCommand();
+      return this.handleVimHalfPageSkipQueries(cm, 1);
+    });
+    vim.defineAction("taskStatusCyclerHalfPageUpSkipQueries", (cm) => {
+      this.flushPendingTaskSettleBeforeCommand();
+      return this.handleVimHalfPageSkipQueries(cm, -1);
+    });
 
     vim.mapCommand(
       "<C-d>",
@@ -25767,11 +25787,10 @@ class TaskStatusCyclerOpenLineMixin {
   }
 }
 // ---- src/142-plugin-task-settle.js ----
-// Call-time taskSettle consumer bridge (bob-cli-q4.9.1.1 settle-bridge).
-// Looks up ledger-tools at each call, flushes pending work, applies a guarded
-// staged or live-buffer settle, settles a pure target buffer, snapshots
-// identity, and records the stay-cursor jump exactly once. Production
-// gestures do not start settling from this fragment.
+// Call-time taskSettle consumer bridge (bob-cli-q4.9.1.1 settle-bridge and
+// q4.9.1.4 cycle-settle). Looks up ledger-tools at each call, flushes pending
+// work, applies a guarded staged or live-buffer settle, settles a pure target
+// buffer, snapshots identity, and records the stay-cursor jump exactly once.
 
 const TASK_SETTLE_WRITE_POLICY = Object.freeze({
   immediate: "immediate",
@@ -25836,6 +25855,41 @@ class TaskStatusCyclerTaskSettleMixin {
     return normalizeTaskSettleWritePolicy(policy);
   }
 
+  taskSettleIdentityAtEditorLine(editor, line, extra = {}) {
+    if (!editor || typeof editor.getLine !== "function" || !Number.isInteger(line)) {
+      return null;
+    }
+    let lineText = null;
+    try {
+      lineText = editor.getLine(line);
+    } catch (_error) {
+      lineText = null;
+    }
+    if (typeof lineText !== "string") return null;
+    return this.snapshotTaskSettleIdentity(lineText, line, extra);
+  }
+
+  scheduleTaskCycleSettle(editor, path, identity) {
+    if (!editor || !path || !identity || this.taskSettleShuttingDown) {
+      return { scheduled: false, reason: "context" };
+    }
+    const livePath = this.taskSettleLiveEditorPath(editor);
+    if (livePath && livePath !== path) {
+      return { scheduled: false, reason: "path" };
+    }
+    return this.schedulePendingTaskSettle({ editor, path, identity });
+  }
+
+  flushPendingTaskSettleBeforeCommand(editor, checking = false) {
+    if (checking === true || this.taskSettleShuttingDown) return [];
+    return this.flushPendingTaskSettle({ editor });
+  }
+
+  runTaskSettleAwareCommand(checking, editor, callback) {
+    this.flushPendingTaskSettleBeforeCommand(editor, checking);
+    return typeof callback === "function" ? callback() : false;
+  }
+
   snapshotTaskSettleIdentity(lineText, line, extra) {
     return snapshotTaskSettleIdentity(lineText, line, extra);
   }
@@ -25890,7 +25944,10 @@ class TaskStatusCyclerTaskSettleMixin {
   }
 
   recordTaskSettleResultJump(path, generation, result, guard = {}) {
-    if (!result || result.applied !== true || !result.jumpTarget || !result.cursor) return false;
+    if (
+      this.taskSettleShuttingDown ||
+      !result || result.applied !== true || !result.jumpTarget || !result.cursor
+    ) return false;
     const expectedPath = guard.path || path;
     if (guard.generation != null && generation != null && guard.generation !== generation) {
       return false;
@@ -25969,6 +26026,7 @@ class TaskStatusCyclerTaskSettleMixin {
   }
 
   flushPendingTaskSettle(options = {}) {
+    if (this.taskSettleShuttingDown) return [];
     const settle = this.resolveTaskSettleApi();
     if (!settle || typeof settle.flushPending !== "function") return [];
     try {
@@ -26001,6 +26059,7 @@ class TaskStatusCyclerTaskSettleMixin {
     const req = request && typeof request === "object" ? request : {};
     const consumer = typeof req.onSettled === "function" ? req.onSettled : null;
     const onSettled = (delivery) => {
+      if (this.taskSettleShuttingDown) return;
       if (delivery) {
         this.recordTaskSettleResultJump(
           delivery.path,
@@ -26429,6 +26488,65 @@ class TaskStatusCyclerStructureSettleMixin {
     return true;
   }
 }
+// ---- src/145-plugin-cycle-settle.js ----
+// Cycle writes and delayed settle bridge (bob-cli-q4.9.1.4).
+// Status changes stay on the current line during the cycle burst. One pending
+// note settle follows the completed gesture, including counted ranges.
+class TaskStatusCyclerCycleSettleMixin {
+  writeCycledLocalTask(editor, view, taskStatus, nextSymbol) {
+    const cycleFile = view && view.file ||
+      (this.app.workspace && typeof this.app.workspace.getActiveFile === "function"
+        ? this.app.workspace.getActiveFile()
+        : null);
+    const cyclePath = cycleFile && cycleFile.path;
+    const activePath = cyclePath || "";
+    const cycleIdentity = cyclePath
+      ? closedTaskIdentity(cyclePath, taskStatus.lineText)
+      : null;
+    const reqCloseOwners = nextSymbol === "x" && cyclePath && editor &&
+        typeof editor.getValue === "function"
+      ? this.captureReqCloseOwnersAtEditorLine(editor, cyclePath, taskStatus.line, taskStatus.lineText)
+      : [];
+    const wrote = this.setActiveCheckboxStatus(editor, taskStatus, nextSymbol, {
+      settlePolicy: TASK_SETTLE_WRITE_POLICY.deferred,
+    });
+    if (wrote && taskStatus.symbol === BLOCKED_TASK_STATUS_SYMBOL) {
+      this.applyBlockedStatusRetirementInEditor(editor, taskStatus.line);
+      void this.recoverProjectResidentsAfterPrjUnblock(editor, activePath);
+    }
+    // A cycle into Done joins the existing recover-and-link pass; a cycle into
+    // Cancelled recovers only. Neither transition settles through the
+    // immediate-close policy.
+    if (wrote && (nextSymbol === "x" || nextSymbol === "-")) {
+      if (cyclePath) {
+        const identity = cycleIdentity;
+        if (identity || (nextSymbol === "x" && reqCloseOwners.length > 0)) {
+          const cycleContext = { activePath: cyclePath };
+          if (nextSymbol === "x") cycleContext.reqCloseOwners = reqCloseOwners;
+          if (editor && typeof editor.getValue === "function") {
+            cycleContext.editor = editor;
+          }
+          void this.finalizeCycledClosedTasks(
+            identity ? [{ identity, symbol: nextSymbol }] : [],
+            cycleContext,
+          );
+        }
+      }
+    }
+    if (wrote && cyclePath) {
+      const identity = this.taskSettleIdentityAtEditorLine(
+        editor,
+        taskStatus.line,
+      );
+      this.scheduleTaskCycleSettle(editor, cyclePath, identity);
+    }
+    return wrote;
+  }
+
+  getCountedTaskCycleKeydownDirection(event) {
+    return getOptionBracketTaskCycleDirection(event);
+  }
+}
 // ---- src/150-plugin-commands.js ----
 class TaskStatusCyclerCommandsMixin {
   handleCycleCommand(checking, editor, view, direction) {
@@ -26445,6 +26563,7 @@ class TaskStatusCyclerCommandsMixin {
         : "");
     if (this.cyclerBankInfoAtCursor(editor, cycleBankPath || "")) {
       if (!checking) {
+        this.flushPendingTaskSettleBeforeCommand(editor);
         new Notice(CYCLER_BANK_ROW_NOTICE);
       }
       return true;
@@ -26452,8 +26571,10 @@ class TaskStatusCyclerCommandsMixin {
     const cycleReqInfo = this.cyclerReqInfoAtCursor(editor);
     if (cycleReqInfo) {
       if (direction < 0) {
+        this.flushPendingTaskSettleBeforeCommand(editor, checking);
         return this.cyclerReqHandleDrop(checking, editor, view, cycleReqInfo);
       }
+      this.flushPendingTaskSettleBeforeCommand(editor, checking);
       return this.cyclerReqHandleRestore(checking, editor, view, cycleReqInfo);
     }
 
@@ -26474,6 +26595,7 @@ class TaskStatusCyclerCommandsMixin {
         )
       ) {
         if (!checking) {
+          this.flushPendingTaskSettleBeforeCommand(editor);
           new Notice(
             projectBlockedResidentNotice(
               editor.getValue(),
@@ -26486,6 +26608,7 @@ class TaskStatusCyclerCommandsMixin {
       }
       const nextSymbol = this.getAdjacentSymbol(taskStatus.symbol, direction);
       if (!nextSymbol) {
+        this.flushPendingTaskSettleBeforeCommand(editor, checking);
         return false;
       }
 
@@ -26516,6 +26639,8 @@ class TaskStatusCyclerCommandsMixin {
       if (checking) {
         return true;
       }
+
+      this.flushPendingTaskSettleBeforeCommand(editor);
 
       let lane = null;
       try {
@@ -26590,6 +26715,8 @@ class TaskStatusCyclerCommandsMixin {
     if (checking) {
       return true;
     }
+
+    this.flushPendingTaskSettleBeforeCommand(editor);
 
     return this.toggleActivePlainBulletFormat(editor, bulletToggle);
   }
@@ -26697,6 +26824,8 @@ class TaskStatusCyclerCommandsMixin {
       this.handledChildBulletEvents.add(event);
     }
 
+    this.flushPendingTaskSettleBeforeCommand(view.editor);
+
     event.preventDefault();
     event.stopPropagation();
     if (typeof event.stopImmediatePropagation === "function") {
@@ -26801,6 +26930,8 @@ class TaskStatusCyclerCommandsMixin {
       this.handledPomodoroBulletToggleEvents.add(event);
     }
 
+    this.flushPendingTaskSettleBeforeCommand(view.editor);
+
     event.preventDefault();
     event.stopPropagation();
     if (typeof event.stopImmediatePropagation === "function") {
@@ -26884,6 +27015,8 @@ class TaskStatusCyclerCommandsMixin {
         this.handledCountedTaskCycleEvents.add(event);
       }
 
+      this.flushPendingTaskSettleBeforeCommand(view.editor);
+
       event.preventDefault();
       event.stopPropagation();
       if (typeof event.stopImmediatePropagation === "function") {
@@ -26946,55 +27079,15 @@ class TaskStatusCyclerCommandsMixin {
     return true;
   }
 
-  writeCycledLocalTask(editor, view, taskStatus, nextSymbol) {
-    const cycleFile = view && view.file ||
-      (this.app.workspace && typeof this.app.workspace.getActiveFile === "function"
-        ? this.app.workspace.getActiveFile()
-        : null);
-    const cyclePath = cycleFile && cycleFile.path;
-    const activePath = cyclePath || "";
-    const cycleIdentity = cyclePath
-      ? closedTaskIdentity(cyclePath, taskStatus.lineText)
-      : null;
-    const reqCloseOwners = nextSymbol === "x" && cyclePath && editor &&
-        typeof editor.getValue === "function"
-      ? this.captureReqCloseOwnersAtEditorLine(editor, cyclePath, taskStatus.line, taskStatus.lineText)
-      : [];
-    const wrote = this.setActiveCheckboxStatus(editor, taskStatus, nextSymbol);
-    if (wrote && taskStatus.symbol === BLOCKED_TASK_STATUS_SYMBOL) {
-      this.applyBlockedStatusRetirementInEditor(editor, taskStatus.line);
-      void this.recoverProjectResidentsAfterPrjUnblock(editor, activePath);
-    }
-    // `cycler_polish` (bead bob-cli-3k): a cycle into Done joins the same
-    // recover-and-link pass as Ctrl+Enter; a cycle into Cancelled recovers
-    // only (`closeKind: "cancelled"`, never links).
-    if (wrote && (nextSymbol === "x" || nextSymbol === "-")) {
-      if (cyclePath) {
-        const identity = cycleIdentity;
-        if (identity || (nextSymbol === "x" && reqCloseOwners.length > 0)) {
-          const cycleContext = { activePath: cyclePath };
-          if (nextSymbol === "x") cycleContext.reqCloseOwners = reqCloseOwners;
-          if (editor && typeof editor.getValue === "function") {
-            cycleContext.editor = editor;
-          }
-          void this.finalizeCycledClosedTasks(
-            identity ? [{ identity, symbol: nextSymbol }] : [],
-            cycleContext,
-          );
-        }
-      }
-    }
-    return wrote;
-  }
-
-  getCountedTaskCycleKeydownDirection(event) {
-    return getOptionBracketTaskCycleDirection(event);
-  }
-
   async cycleTaskStatusRange(editor, activeFile, direction, repeat) {
     if (!editor || typeof editor.getCursor !== "function") {
       return false;
     }
+
+    // A counted range is a new command boundary. Settle any older cycle
+    // before taking its fixed line-index snapshot; the range itself settles
+    // only once after every line has been processed.
+    this.flushPendingTaskSettleBeforeCommand(editor);
 
     const cursor = editor.getCursor();
     if (!cursor || typeof cursor.line !== "number") {
@@ -27042,6 +27135,7 @@ class TaskStatusCyclerCommandsMixin {
       : null;
     const seenResolvedTargets = new Set();
     let changed = false;
+    const cycleSettleIdentities = [];
     let projectBlockedSkipped = false;
     let projectBlockedNotice = null;
     let startDepLineUntargeted = false;
@@ -27154,7 +27248,9 @@ class TaskStatusCyclerCommandsMixin {
         let wrote;
         if (line === startLine) {
           const lineCountBeforeWrite = this.getEditorLineCount(editor);
-          wrote = this.setActiveCheckboxStatus(editor, taskStatus, nextSymbol);
+          wrote = this.setActiveCheckboxStatus(editor, taskStatus, nextSymbol, {
+            settlePolicy: TASK_SETTLE_WRITE_POLICY.deferred,
+          });
           const addedLines = Math.max(
             0,
             this.getEditorLineCount(editor) - lineCountBeforeWrite,
@@ -27164,11 +27260,22 @@ class TaskStatusCyclerCommandsMixin {
           }
         } else {
           const mappedTaskStatus = { ...taskStatus, line: editorLineFor(line) };
-          wrote = this.setCheckboxStatusLocalForLine(editor, mappedTaskStatus, nextSymbol);
+          wrote = this.setCheckboxStatusLocalForLine(
+            editor,
+            mappedTaskStatus,
+            nextSymbol,
+            { settlePolicy: TASK_SETTLE_WRITE_POLICY.deferred },
+          );
         }
 
         if (wrote) {
           changed = true;
+          const changedLine = editorLineFor(line);
+          const settleIdentity = this.taskSettleIdentityAtEditorLine(
+            editor,
+            changedLine,
+          );
+          if (settleIdentity) cycleSettleIdentities.push(settleIdentity);
           if (taskStatus.symbol === BLOCKED_TASK_STATUS_SYMBOL) {
             this.applyBlockedStatusRetirementInEditor(editor, editorLineFor(line));
           }
@@ -27246,7 +27353,11 @@ class TaskStatusCyclerCommandsMixin {
         resolvedTarget,
         context,
         direction,
-        { deferFinalize: true },
+        {
+          deferFinalize: true,
+          deferSettleSchedule: true,
+          settleIdentities: cycleSettleIdentities,
+        },
       );
       if (wrote) {
         changed = true;
@@ -27300,6 +27411,14 @@ class TaskStatusCyclerCommandsMixin {
         activePath,
         reqCloseOwners: context && context.reqCloseOwners || [],
       });
+    }
+
+    if (changed && activePath && cycleSettleIdentities.length > 0) {
+      this.scheduleTaskCycleSettle(
+        editor,
+        activePath,
+        cycleSettleIdentities[0],
+      );
     }
 
     return changed;
@@ -28175,11 +28294,19 @@ class TaskStatusCyclerCompletionMixin {
       ? this.captureReqCloseOwnersForResolvedTarget(resolvedTarget, context)
       : [];
 
+    const sameNote = this.fileMatchesPath(
+      resolvedTarget.file,
+      context && context.activePath,
+    );
     const wrote = await this.replaceResolvedTranscludedTaskLine(
       resolvedTarget,
       context,
       nextSymbol,
-      { allowAnyStatus: true },
+      {
+        allowAnyStatus: true,
+        settlePolicy: TASK_SETTLE_WRITE_POLICY.deferred,
+        settleNonEditor: true,
+      },
     );
 
     if (wrote && sourceSymbol === BLOCKED_TASK_STATUS_SYMBOL) {
@@ -28193,6 +28320,23 @@ class TaskStatusCyclerCompletionMixin {
         await this.recoverProjectResidentsAfterPrjUnblock(
           sameNote ? context && context.editor : null,
           targetPath,
+        );
+      }
+    }
+
+    if (wrote && sameNote && context && context.editor) {
+      const settleIdentity = this.snapshotTaskSettleIdentity(null, resolvedTarget.line, {
+        blockId: resolvedTarget.blockId,
+      });
+      if (options && options.deferSettleSchedule) {
+        if (Array.isArray(options.settleIdentities)) {
+          options.settleIdentities.push(settleIdentity);
+        }
+      } else {
+        this.scheduleTaskCycleSettle(
+          context.editor,
+          resolvedTarget.file.path,
+          settleIdentity,
         );
       }
     }
@@ -32580,8 +32724,16 @@ class TaskStatusCyclerTargetsMixin {
       // Compose the flipped target with a pure settle inside the same vault
       // callback so the note is written once. The read/modify fallback below
       // reuses this same composer. Missing providers keep flipped bytes.
-      if (vaultSettlePolicy === "immediate") {
+      if (
+        vaultSettlePolicy === TASK_SETTLE_WRITE_POLICY.immediate ||
+        (vaultSettlePolicy === TASK_SETTLE_WRITE_POLICY.deferred &&
+          options && options.settleNonEditor === true)
+      ) {
         try {
+          // Delayed cycles stay delayed in a live editor. A target written
+          // through vault.process has no gesture cursor to protect, so its
+          // full-note settle composes into this same write instead of leaving
+          // transient structure debt behind.
           return this.settleComposedTargetContents(
             resolvedTarget.file && resolvedTarget.file.path,
             nextSourceText,
@@ -41760,6 +41912,7 @@ installTaskStatusCyclerMixins(TaskStatusCyclerPlugin, [
   TaskStatusCyclerTaskSettleMixin,
   TaskStatusCyclerCloseSettleMixin,
   TaskStatusCyclerStructureSettleMixin,
+  TaskStatusCyclerCycleSettleMixin,
   TaskStatusCyclerCommandsMixin,
   TaskStatusCyclerCompletionMixin,
   TaskStatusCyclerCompletionLinksMixin,

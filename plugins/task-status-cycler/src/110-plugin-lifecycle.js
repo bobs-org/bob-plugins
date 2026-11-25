@@ -44,14 +44,16 @@ class TaskStatusCyclerPlugin extends Plugin {
       id: "open-child-bullet-line-below",
       name: "Open child bullet line below",
       editorCheckCallback: (checking, editor, view) =>
-        this.handleOpenChildBulletLineCommand(checking, editor, view, "below"),
+        this.runTaskSettleAwareCommand(checking, editor, () =>
+          this.handleOpenChildBulletLineCommand(checking, editor, view, "below")),
     });
 
     this.addCommand({
       id: "open-child-bullet-line-above",
       name: "Open child bullet line above",
       editorCheckCallback: (checking, editor, view) =>
-        this.handleOpenChildBulletLineCommand(checking, editor, view, "above"),
+        this.runTaskSettleAwareCommand(checking, editor, () =>
+          this.handleOpenChildBulletLineCommand(checking, editor, view, "above")),
     });
 
     this.addCommand({
@@ -59,7 +61,8 @@ class TaskStatusCyclerPlugin extends Plugin {
       name: "Toggle Pomodoro placeholder/sub-bullet",
       hotkeys: [{ modifiers: ["Ctrl", "Alt"], key: "]" }],
       editorCheckCallback: (checking, editor, view) =>
-        this.handlePomodoroBulletToggleCommand(checking, editor, view),
+        this.runTaskSettleAwareCommand(checking, editor, () =>
+          this.handlePomodoroBulletToggleCommand(checking, editor, view)),
     });
 
     this.registerChildBulletInputListeners();
@@ -74,27 +77,32 @@ class TaskStatusCyclerPlugin extends Plugin {
       id: "toggle-task-open-done",
       name: "Toggle task open/done",
       editorCheckCallback: (checking, editor, view) =>
-        this.handleToggleOpenDoneCommand(checking, editor, view),
+        this.runTaskSettleAwareCommand(checking, editor, () =>
+          this.handleToggleOpenDoneCommand(checking, editor, view)),
     });
 
     this.addCommand({
       id: "toggle-task-checkbox-marker",
       name: "Toggle task checkbox marker",
       editorCheckCallback: (checking, editor, view) =>
-        this.handleToggleCheckboxMarkerCommand(checking, editor, view),
+        this.runTaskSettleAwareCommand(checking, editor, () =>
+          this.handleToggleCheckboxMarkerCommand(checking, editor, view)),
     });
 
     this.addCommand({
       id: "toggle-obsidian-task",
       name: "Toggle Obsidian task",
       editorCheckCallback: (checking, editor, view) =>
-        this.handleToggleObsidianTaskCommand(checking, editor, view),
+        this.runTaskSettleAwareCommand(checking, editor, () =>
+          this.handleToggleObsidianTaskCommand(checking, editor, view)),
     });
 
     this.addCommand({
       id: "toggle-task-drawer",
       name: "Toggle Drawer",
-      editorCheckCallback: (checking, editor) => this.cyclerDrawerToggleRoute(editor, checking),
+      editorCheckCallback: (checking, editor) =>
+        this.runTaskSettleAwareCommand(checking, editor, () =>
+          this.cyclerDrawerToggleRoute(editor, checking)),
     });
 
     // Normalize Tasks-generated dependency IDs to block IDs after Tasks writes
@@ -142,6 +150,7 @@ class TaskStatusCyclerPlugin extends Plugin {
   }
 
   onunload() {
+    this.taskSettleShuttingDown = true;
     if (this.pendingPomodoroCenterDeferred) {
       cancelDeferred(this.pendingPomodoroCenterDeferred);
       this.pendingPomodoroCenterDeferred = null;

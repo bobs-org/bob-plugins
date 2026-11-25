@@ -9,33 +9,42 @@ class TaskStatusCyclerVimMixin {
       return false;
     }
 
-    vim.defineAction("taskStatusCyclerOpenNextLineLink", (cm, actionArgs) =>
-      this.handleVimEnterLinkOrFallthrough(cm, actionArgs),
-    );
-    vim.defineAction("taskStatusCyclerToggleTaskOpenDone", (cm) =>
-      this.handleVimTaskToggleOpenDone(cm),
-    );
-    vim.defineAction("taskStatusCyclerToggleOpenDone", (cm) =>
-      this.handleVimTaskToggleOpenDone(cm),
-    );
-    vim.defineAction("taskStatusCyclerToggleCheckboxMarker", () =>
-      this.handleVimToggleCheckboxMarker(),
-    );
-    vim.defineAction("taskStatusCyclerToggleObsidianTask", (cm, actionArgs) =>
-      this.handleVimToggleObsidianTask(cm, actionArgs),
-    );
-    vim.defineAction("taskStatusCyclerOpenLineBelow", (cm) =>
-      this.handleVimOpenLineBelow(cm),
-    );
-    vim.defineAction("taskStatusCyclerOpenLineAbove", (cm) =>
-      this.handleVimOpenLineAbove(cm),
-    );
-    vim.defineAction("taskStatusCyclerOpenPreviousLineLink", (cm, actionArgs) =>
-      this.handleVimBackspaceLinkOrFallthrough(cm, actionArgs),
-    );
-    vim.defineAction("taskStatusCyclerTogglePomodoroMoveOnly", (cm, actionArgs) =>
-      this.handleVimTogglePomodoroMoveOnly(cm, actionArgs),
-    );
+    vim.defineAction("taskStatusCyclerOpenNextLineLink", (cm, actionArgs) => {
+      this.flushPendingTaskSettleBeforeCommand();
+      return this.handleVimEnterLinkOrFallthrough(cm, actionArgs);
+    });
+    vim.defineAction("taskStatusCyclerToggleTaskOpenDone", (cm) => {
+      this.flushPendingTaskSettleBeforeCommand();
+      return this.handleVimTaskToggleOpenDone(cm);
+    });
+    vim.defineAction("taskStatusCyclerToggleOpenDone", (cm) => {
+      this.flushPendingTaskSettleBeforeCommand();
+      return this.handleVimTaskToggleOpenDone(cm);
+    });
+    vim.defineAction("taskStatusCyclerToggleCheckboxMarker", () => {
+      this.flushPendingTaskSettleBeforeCommand();
+      return this.handleVimToggleCheckboxMarker();
+    });
+    vim.defineAction("taskStatusCyclerToggleObsidianTask", (cm, actionArgs) => {
+      this.flushPendingTaskSettleBeforeCommand();
+      return this.handleVimToggleObsidianTask(cm, actionArgs);
+    });
+    vim.defineAction("taskStatusCyclerOpenLineBelow", (cm) => {
+      this.flushPendingTaskSettleBeforeCommand();
+      return this.handleVimOpenLineBelow(cm);
+    });
+    vim.defineAction("taskStatusCyclerOpenLineAbove", (cm) => {
+      this.flushPendingTaskSettleBeforeCommand();
+      return this.handleVimOpenLineAbove(cm);
+    });
+    vim.defineAction("taskStatusCyclerOpenPreviousLineLink", (cm, actionArgs) => {
+      this.flushPendingTaskSettleBeforeCommand();
+      return this.handleVimBackspaceLinkOrFallthrough(cm, actionArgs);
+    });
+    vim.defineAction("taskStatusCyclerTogglePomodoroMoveOnly", (cm, actionArgs) => {
+      this.flushPendingTaskSettleBeforeCommand();
+      return this.handleVimTogglePomodoroMoveOnly(cm, actionArgs);
+    });
     vim.mapCommand("<CR>", "action", "taskStatusCyclerOpenNextLineLink", {}, {
       context: "normal",
     });
@@ -75,12 +84,14 @@ class TaskStatusCyclerVimMixin {
   }
 
   registerVimNavigationMappings(vim) {
-    vim.defineAction("taskStatusCyclerHalfPageDownSkipQueries", (cm) =>
-      this.handleVimHalfPageSkipQueries(cm, 1),
-    );
-    vim.defineAction("taskStatusCyclerHalfPageUpSkipQueries", (cm) =>
-      this.handleVimHalfPageSkipQueries(cm, -1),
-    );
+    vim.defineAction("taskStatusCyclerHalfPageDownSkipQueries", (cm) => {
+      this.flushPendingTaskSettleBeforeCommand();
+      return this.handleVimHalfPageSkipQueries(cm, 1);
+    });
+    vim.defineAction("taskStatusCyclerHalfPageUpSkipQueries", (cm) => {
+      this.flushPendingTaskSettleBeforeCommand();
+      return this.handleVimHalfPageSkipQueries(cm, -1);
+    });
 
     vim.mapCommand(
       "<C-d>",

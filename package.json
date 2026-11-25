@@ -16,6 +16,7 @@
     "docs:inventory:check": "node scripts/docs-inventory.mjs --check",
     "docs:check": "bash scripts/docs-check.sh",
     "test:e2e:task-settle-undo": "xvfb-run -a node scripts/test-obsidian-task-settle-undo.cjs",
+    "test:e2e:task-cycle-settle": "xvfb-run -a node scripts/test-obsidian-task-cycle-settle-e2e.cjs",
     "smoke:obsidian": "node scripts/obsidian-startup-smoke.cjs"
   }
 }

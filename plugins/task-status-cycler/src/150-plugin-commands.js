@@ -13,6 +13,7 @@ class TaskStatusCyclerCommandsMixin {
         : "");
     if (this.cyclerBankInfoAtCursor(editor, cycleBankPath || "")) {
       if (!checking) {
+        this.flushPendingTaskSettleBeforeCommand(editor);
         new Notice(CYCLER_BANK_ROW_NOTICE);
       }
       return true;
@@ -20,8 +21,10 @@ class TaskStatusCyclerCommandsMixin {
     const cycleReqInfo = this.cyclerReqInfoAtCursor(editor);
     if (cycleReqInfo) {
       if (direction < 0) {
+        this.flushPendingTaskSettleBeforeCommand(editor, checking);
         return this.cyclerReqHandleDrop(checking, editor, view, cycleReqInfo);
       }
+      this.flushPendingTaskSettleBeforeCommand(editor, checking);
       return this.cyclerReqHandleRestore(checking, editor, view, cycleReqInfo);
     }
 
@@ -42,6 +45,7 @@ class TaskStatusCyclerCommandsMixin {
         )
       ) {
         if (!checking) {
+          this.flushPendingTaskSettleBeforeCommand(editor);
           new Notice(
             projectBlockedResidentNotice(
               editor.getValue(),
@@ -54,6 +58,7 @@ class TaskStatusCyclerCommandsMixin {
       }
       const nextSymbol = this.getAdjacentSymbol(taskStatus.symbol, direction);
       if (!nextSymbol) {
+        this.flushPendingTaskSettleBeforeCommand(editor, checking);
         return false;
       }
 
@@ -84,6 +89,8 @@ class TaskStatusCyclerCommandsMixin {
       if (checking) {
         return true;
       }
+
+      this.flushPendingTaskSettleBeforeCommand(editor);
 
       let lane = null;
       try {
@@ -158,6 +165,8 @@ class TaskStatusCyclerCommandsMixin {
     if (checking) {
       return true;
     }
+
+    this.flushPendingTaskSettleBeforeCommand(editor);
 
     return this.toggleActivePlainBulletFormat(editor, bulletToggle);
   }
@@ -265,6 +274,8 @@ class TaskStatusCyclerCommandsMixin {
       this.handledChildBulletEvents.add(event);
     }
 
+    this.flushPendingTaskSettleBeforeCommand(view.editor);
+
     event.preventDefault();
     event.stopPropagation();
     if (typeof event.stopImmediatePropagation === "function") {
@@ -369,6 +380,8 @@ class TaskStatusCyclerCommandsMixin {
       this.handledPomodoroBulletToggleEvents.add(event);
     }
 
+    this.flushPendingTaskSettleBeforeCommand(view.editor);
+
     event.preventDefault();
     event.stopPropagation();
     if (typeof event.stopImmediatePropagation === "function") {
@@ -452,6 +465,8 @@ class TaskStatusCyclerCommandsMixin {
         this.handledCountedTaskCycleEvents.add(event);
       }
 
+      this.flushPendingTaskSettleBeforeCommand(view.editor);
+
       event.preventDefault();
       event.stopPropagation();
       if (typeof event.stopImmediatePropagation === "function") {
@@ -514,55 +529,15 @@ class TaskStatusCyclerCommandsMixin {
     return true;
   }
 
-  writeCycledLocalTask(editor, view, taskStatus, nextSymbol) {
-    const cycleFile = view && view.file ||
-      (this.app.workspace && typeof this.app.workspace.getActiveFile === "function"
-        ? this.app.workspace.getActiveFile()
-        : null);
-    const cyclePath = cycleFile && cycleFile.path;
-    const activePath = cyclePath || "";
-    const cycleIdentity = cyclePath
-      ? closedTaskIdentity(cyclePath, taskStatus.lineText)
-      : null;
-    const reqCloseOwners = nextSymbol === "x" && cyclePath && editor &&
-        typeof editor.getValue === "function"
-      ? this.captureReqCloseOwnersAtEditorLine(editor, cyclePath, taskStatus.line, taskStatus.lineText)
-      : [];
-    const wrote = this.setActiveCheckboxStatus(editor, taskStatus, nextSymbol);
-    if (wrote && taskStatus.symbol === BLOCKED_TASK_STATUS_SYMBOL) {
-      this.applyBlockedStatusRetirementInEditor(editor, taskStatus.line);
-      void this.recoverProjectResidentsAfterPrjUnblock(editor, activePath);
-    }
-    // `cycler_polish` (bead bob-cli-3k): a cycle into Done joins the same
-    // recover-and-link pass as Ctrl+Enter; a cycle into Cancelled recovers
-    // only (`closeKind: "cancelled"`, never links).
-    if (wrote && (nextSymbol === "x" || nextSymbol === "-")) {
-      if (cyclePath) {
-        const identity = cycleIdentity;
-        if (identity || (nextSymbol === "x" && reqCloseOwners.length > 0)) {
-          const cycleContext = { activePath: cyclePath };
-          if (nextSymbol === "x") cycleContext.reqCloseOwners = reqCloseOwners;
-          if (editor && typeof editor.getValue === "function") {
-            cycleContext.editor = editor;
-          }
-          void this.finalizeCycledClosedTasks(
-            identity ? [{ identity, symbol: nextSymbol }] : [],
-            cycleContext,
-          );
-        }
-      }
-    }
-    return wrote;
-  }
-
-  getCountedTaskCycleKeydownDirection(event) {
-    return getOptionBracketTaskCycleDirection(event);
-  }
-
   async cycleTaskStatusRange(editor, activeFile, direction, repeat) {
     if (!editor || typeof editor.getCursor !== "function") {
       return false;
     }
+
+    // A counted range is a new command boundary. Settle any older cycle
+    // before taking its fixed line-index snapshot; the range itself settles
+    // only once after every line has been processed.
+    this.flushPendingTaskSettleBeforeCommand(editor);
 
     const cursor = editor.getCursor();
     if (!cursor || typeof cursor.line !== "number") {
@@ -610,6 +585,7 @@ class TaskStatusCyclerCommandsMixin {
       : null;
     const seenResolvedTargets = new Set();
     let changed = false;
+    const cycleSettleIdentities = [];
     let projectBlockedSkipped = false;
     let projectBlockedNotice = null;
     let startDepLineUntargeted = false;
@@ -722,7 +698,9 @@ class TaskStatusCyclerCommandsMixin {
         let wrote;
         if (line === startLine) {
           const lineCountBeforeWrite = this.getEditorLineCount(editor);
-          wrote = this.setActiveCheckboxStatus(editor, taskStatus, nextSymbol);
+          wrote = this.setActiveCheckboxStatus(editor, taskStatus, nextSymbol, {
+            settlePolicy: TASK_SETTLE_WRITE_POLICY.deferred,
+          });
           const addedLines = Math.max(
             0,
             this.getEditorLineCount(editor) - lineCountBeforeWrite,
@@ -732,11 +710,22 @@ class TaskStatusCyclerCommandsMixin {
           }
         } else {
           const mappedTaskStatus = { ...taskStatus, line: editorLineFor(line) };
-          wrote = this.setCheckboxStatusLocalForLine(editor, mappedTaskStatus, nextSymbol);
+          wrote = this.setCheckboxStatusLocalForLine(
+            editor,
+            mappedTaskStatus,
+            nextSymbol,
+            { settlePolicy: TASK_SETTLE_WRITE_POLICY.deferred },
+          );
         }
 
         if (wrote) {
           changed = true;
+          const changedLine = editorLineFor(line);
+          const settleIdentity = this.taskSettleIdentityAtEditorLine(
+            editor,
+            changedLine,
+          );
+          if (settleIdentity) cycleSettleIdentities.push(settleIdentity);
           if (taskStatus.symbol === BLOCKED_TASK_STATUS_SYMBOL) {
             this.applyBlockedStatusRetirementInEditor(editor, editorLineFor(line));
           }
@@ -814,7 +803,11 @@ class TaskStatusCyclerCommandsMixin {
         resolvedTarget,
         context,
         direction,
-        { deferFinalize: true },
+        {
+          deferFinalize: true,
+          deferSettleSchedule: true,
+          settleIdentities: cycleSettleIdentities,
+        },
       );
       if (wrote) {
         changed = true;
@@ -868,6 +861,14 @@ class TaskStatusCyclerCommandsMixin {
         activePath,
         reqCloseOwners: context && context.reqCloseOwners || [],
       });
+    }
+
+    if (changed && activePath && cycleSettleIdentities.length > 0) {
+      this.scheduleTaskCycleSettle(
+        editor,
+        activePath,
+        cycleSettleIdentities[0],
+      );
     }
 
     return changed;

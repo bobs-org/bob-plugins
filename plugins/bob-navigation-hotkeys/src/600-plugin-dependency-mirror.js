@@ -455,6 +455,12 @@ class BobNavigationHotkeysDependencyMirrorMixin {
   // line and the field, and a deleted line clears the field. Malformed lines
   // are left alone. `options.registry` overrides the Tasks registry (tests).
   async mirrorDependencyHandEdit(editor, parentPath, oldContent, editedLine, removedText, options = {}) {
+    if (
+      typeof this.dependencyMirrorEditorShowsPath === "function" &&
+      !this.dependencyMirrorEditorShowsPath(editor, parentPath)
+    ) {
+      return Object.freeze({ mirrored: false, reason: "note-switched" });
+    }
     const content =
       editor && typeof editor.getValue === "function"
         ? String(editor.getValue() || "")
@@ -912,21 +918,32 @@ class BobNavigationHotkeysDependencyMirrorMixin {
 
   async fireDependencyHandEditMirror(snapshot) {
     try {
+      if (
+        typeof this.dependencyMirrorEditorShowsPath === "function" &&
+        !this.dependencyMirrorEditorShowsPath(snapshot.editor, snapshot.parentPath)
+      ) {
+        return;
+      }
       const cursor = snapshot.editor ? getEditorCursor(snapshot.editor) : null;
       if (cursor && cursor.line === snapshot.editedLine) {
         // Still on the edited line: re-arm until the cursor leaves, keeping
         // the first-change baseline and refreshing the removed text against
         // the latest content.
         if (typeof snapshot.editor.getValue === "function") {
-          const latest = String(snapshot.editor.getValue() || "");
-          if (!this.dependencyMirrorByPath) {
-            this.dependencyMirrorByPath = new Map();
+          if (
+            typeof this.dependencyMirrorEditorShowsPath !== "function" ||
+            this.dependencyMirrorEditorShowsPath(snapshot.editor, snapshot.parentPath)
+          ) {
+            const latest = String(snapshot.editor.getValue() || "");
+            if (!this.dependencyMirrorByPath) {
+              this.dependencyMirrorByPath = new Map();
+            }
+            this.dependencyMirrorByPath.set(snapshot.parentPath, latest);
+            snapshot.removedText =
+              snapshot.oldContent === undefined
+                ? ""
+                : findRemovedLineText(snapshot.oldContent, latest);
           }
-          this.dependencyMirrorByPath.set(snapshot.parentPath, latest);
-          snapshot.removedText =
-            snapshot.oldContent === undefined
-              ? ""
-              : findRemovedLineText(snapshot.oldContent, latest);
         }
         this.pendingDependencyMirror = setTimeout(() => {
           this.pendingDependencyMirror = null;
@@ -958,13 +975,18 @@ class BobNavigationHotkeysDependencyMirrorMixin {
         this.pendingDependencyMirrorSnapshot = null;
       }
       if (snapshot.editor && typeof snapshot.editor.getValue === "function") {
-        if (!this.dependencyMirrorByPath) {
-          this.dependencyMirrorByPath = new Map();
+        if (
+          typeof this.dependencyMirrorEditorShowsPath !== "function" ||
+          this.dependencyMirrorEditorShowsPath(snapshot.editor, snapshot.parentPath)
+        ) {
+          if (!this.dependencyMirrorByPath) {
+            this.dependencyMirrorByPath = new Map();
+          }
+          this.dependencyMirrorByPath.set(
+            snapshot.parentPath,
+            String(snapshot.editor.getValue() || ""),
+          );
         }
-        this.dependencyMirrorByPath.set(
-          snapshot.parentPath,
-          String(snapshot.editor.getValue() || ""),
-        );
       }
     }
   }

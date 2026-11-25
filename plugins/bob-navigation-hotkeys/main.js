@@ -92543,6 +92543,9 @@ class BobNavigationHotkeysPlugin extends Plugin {
     this.registerEvent(
       this.app.workspace.on("file-open", (file) => {
         this.trackOpenedFile(file);
+        if (typeof this.cancelPendingDependencyHandEditMirrorIfNoteChanged === "function") {
+          this.cancelPendingDependencyHandEditMirrorIfNoteChanged();
+        }
         if (typeof this.scheduleHighlightsHints === "function") {
           this.scheduleHighlightsHints();
         }
@@ -92559,6 +92562,9 @@ class BobNavigationHotkeysPlugin extends Plugin {
     this.registerEvent(
       this.app.workspace.on("active-leaf-change", () => {
         this.refreshDashScrollCaptureTarget();
+        if (typeof this.cancelPendingDependencyHandEditMirrorIfNoteChanged === "function") {
+          this.cancelPendingDependencyHandEditMirrorIfNoteChanged();
+        }
         if (typeof this.scheduleHighlightsHints === "function") {
           this.scheduleHighlightsHints();
         }
@@ -111812,6 +111818,12 @@ class BobNavigationHotkeysRelationHandEditMixin {
     if (!editor || typeof editor.getValue !== "function" || !path) {
       return Object.freeze({ mirrored: false, reason: "editor-unavailable" });
     }
+    if (
+      typeof this.dependencyMirrorEditorShowsPath === "function" &&
+      !this.dependencyMirrorEditorShowsPath(editor, path)
+    ) {
+      return Object.freeze({ mirrored: false, reason: "note-switched" });
+    }
     const before = String(oldContent || "");
     const after = String(editor.getValue() || "");
     if (!taskRelationLinesChanged(before, after).linksChanged) {
@@ -111960,6 +111972,12 @@ class BobNavigationHotkeysRelationHandEditMixin {
     const path = normalizeVaultRelativePath(parentPath || "");
     if (!editor || typeof editor.getValue !== "function" || !path) {
       return Object.freeze({ mirrored: false, reason: "editor-unavailable" });
+    }
+    if (
+      typeof this.dependencyMirrorEditorShowsPath === "function" &&
+      !this.dependencyMirrorEditorShowsPath(editor, path)
+    ) {
+      return Object.freeze({ mirrored: false, reason: "note-switched" });
     }
     const api = relationMentionIndexApi(this.app);
     if (!api) {
@@ -114427,6 +114445,12 @@ class BobNavigationHotkeysDependencyMirrorMixin {
   // line and the field, and a deleted line clears the field. Malformed lines
   // are left alone. `options.registry` overrides the Tasks registry (tests).
   async mirrorDependencyHandEdit(editor, parentPath, oldContent, editedLine, removedText, options = {}) {
+    if (
+      typeof this.dependencyMirrorEditorShowsPath === "function" &&
+      !this.dependencyMirrorEditorShowsPath(editor, parentPath)
+    ) {
+      return Object.freeze({ mirrored: false, reason: "note-switched" });
+    }
     const content =
       editor && typeof editor.getValue === "function"
         ? String(editor.getValue() || "")
@@ -114884,21 +114908,32 @@ class BobNavigationHotkeysDependencyMirrorMixin {
 
   async fireDependencyHandEditMirror(snapshot) {
     try {
+      if (
+        typeof this.dependencyMirrorEditorShowsPath === "function" &&
+        !this.dependencyMirrorEditorShowsPath(snapshot.editor, snapshot.parentPath)
+      ) {
+        return;
+      }
       const cursor = snapshot.editor ? getEditorCursor(snapshot.editor) : null;
       if (cursor && cursor.line === snapshot.editedLine) {
         // Still on the edited line: re-arm until the cursor leaves, keeping
         // the first-change baseline and refreshing the removed text against
         // the latest content.
         if (typeof snapshot.editor.getValue === "function") {
-          const latest = String(snapshot.editor.getValue() || "");
-          if (!this.dependencyMirrorByPath) {
-            this.dependencyMirrorByPath = new Map();
+          if (
+            typeof this.dependencyMirrorEditorShowsPath !== "function" ||
+            this.dependencyMirrorEditorShowsPath(snapshot.editor, snapshot.parentPath)
+          ) {
+            const latest = String(snapshot.editor.getValue() || "");
+            if (!this.dependencyMirrorByPath) {
+              this.dependencyMirrorByPath = new Map();
+            }
+            this.dependencyMirrorByPath.set(snapshot.parentPath, latest);
+            snapshot.removedText =
+              snapshot.oldContent === undefined
+                ? ""
+                : findRemovedLineText(snapshot.oldContent, latest);
           }
-          this.dependencyMirrorByPath.set(snapshot.parentPath, latest);
-          snapshot.removedText =
-            snapshot.oldContent === undefined
-              ? ""
-              : findRemovedLineText(snapshot.oldContent, latest);
         }
         this.pendingDependencyMirror = setTimeout(() => {
           this.pendingDependencyMirror = null;
@@ -114930,15 +114965,138 @@ class BobNavigationHotkeysDependencyMirrorMixin {
         this.pendingDependencyMirrorSnapshot = null;
       }
       if (snapshot.editor && typeof snapshot.editor.getValue === "function") {
-        if (!this.dependencyMirrorByPath) {
-          this.dependencyMirrorByPath = new Map();
+        if (
+          typeof this.dependencyMirrorEditorShowsPath !== "function" ||
+          this.dependencyMirrorEditorShowsPath(snapshot.editor, snapshot.parentPath)
+        ) {
+          if (!this.dependencyMirrorByPath) {
+            this.dependencyMirrorByPath = new Map();
+          }
+          this.dependencyMirrorByPath.set(
+            snapshot.parentPath,
+            String(snapshot.editor.getValue() || ""),
+          );
         }
-        this.dependencyMirrorByPath.set(
-          snapshot.parentPath,
-          String(snapshot.editor.getValue() || ""),
-        );
       }
     }
+  }
+}
+// ---- src/600a-dependency-mirror-guard.js ----
+// Mirror note-switch guard (bob-cli-py): the debounced hand-edit mirror
+// must never read or write across notes. The ]s walk reuses one editor for
+// the next row, so a pending pass armed in note A can fire while that same
+// editor shows note B. Every guarded path drops the pass when the editor no
+// longer shows the snapshot's parent path; reconcile heals what is dropped.
+class BobNavigationHotkeysDependencyMirrorGuardMixin {
+  dependencyMirrorPathForEditor(editor) {
+    if (!editor) {
+      return null;
+    }
+    try {
+      const workspace = this.app && this.app.workspace;
+      if (workspace && typeof workspace.getLeavesOfType === "function") {
+        const leaves = workspace.getLeavesOfType("markdown") || [];
+        for (const leaf of leaves) {
+          const view = leaf && leaf.view;
+          if (
+            view &&
+            view.editor === editor &&
+            view.file &&
+            view.file.path
+          ) {
+            return normalizeVaultRelativePath(view.file.path);
+          }
+        }
+      }
+    } catch (_leavesError) {
+      // Best-effort: fall through to the active view.
+    }
+    try {
+      if (typeof this.getActiveMarkdownView === "function") {
+        const activeView = this.getActiveMarkdownView();
+        if (
+          activeView &&
+          activeView.editor === editor &&
+          activeView.file &&
+          activeView.file.path
+        ) {
+          return normalizeVaultRelativePath(activeView.file.path);
+        }
+      }
+    } catch (_activeViewError) {
+      // Best-effort: unknown means the caller decides.
+    }
+    return null;
+  }
+
+  dependencyMirrorEditorShowsPath(editor, parentPath) {
+    const expected = normalizeVaultRelativePath(parentPath || "");
+    if (!expected || !editor) {
+      return false;
+    }
+    const current = this.dependencyMirrorPathForEditor(editor);
+    if (current === null) {
+      return true;
+    }
+    return current === expected;
+  }
+
+  cancelPendingDependencyHandEditMirror() {
+    if (this.pendingDependencyMirror) {
+      clearTimeout(this.pendingDependencyMirror);
+      this.pendingDependencyMirror = null;
+    }
+    this.pendingDependencyMirrorSnapshot = null;
+  }
+
+  cancelPendingDependencyHandEditMirrorIfNoteChanged() {
+    const snapshot = this.pendingDependencyMirrorSnapshot;
+    if (!snapshot || !snapshot.parentPath || !snapshot.editor) {
+      return false;
+    }
+    let known = false;
+    let current = null;
+    try {
+      const workspace = this.app && this.app.workspace;
+      if (workspace && typeof workspace.getLeavesOfType === "function") {
+        const leaves = workspace.getLeavesOfType("markdown") || [];
+        for (const leaf of leaves) {
+          const view = leaf && leaf.view;
+          if (
+            view &&
+            view.editor === snapshot.editor &&
+            view.file &&
+            view.file.path
+          ) {
+            current = normalizeVaultRelativePath(view.file.path);
+            known = true;
+            break;
+          }
+        }
+      }
+      if (!known && typeof this.getActiveMarkdownView === "function") {
+        const activeView = this.getActiveMarkdownView();
+        if (
+          activeView &&
+          activeView.editor === snapshot.editor &&
+          activeView.file &&
+          activeView.file.path
+        ) {
+          current = normalizeVaultRelativePath(activeView.file.path);
+          known = true;
+        }
+      }
+    } catch (_lookupError) {
+      return false;
+    }
+    if (!known) {
+      return false;
+    }
+    if (current === normalizeVaultRelativePath(snapshot.parentPath)) {
+      return false;
+    }
+    this.cancelPendingDependencyHandEditMirror();
+    return true;
   }
 }
 // ---- src/610-plugin-jumps-and-counted-keys.js ----
@@ -136485,6 +136643,7 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysRelationFollowUpsMixin,
   BobNavigationHotkeysRelationStageMixin,
   BobNavigationHotkeysDependencyMirrorMixin,
+  BobNavigationHotkeysDependencyMirrorGuardMixin,
   BobNavigationHotkeysJumpKeyMixin,
   BobNavigationHotkeysCountedTaskMoveMixin,
   BobNavigationHotkeysPomodoroSplitMixin,

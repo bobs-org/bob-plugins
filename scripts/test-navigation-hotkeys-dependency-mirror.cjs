@@ -422,3 +422,192 @@ test("counted N! on only a Depends-On line refuses without writing", async () =>
   assert.equal(editor.transactions.length, 0);
   assert.match(notices.at(-1), /Dependencies use plain links/);
 });
+
+test("mirror fire drops the pass when the walk switches notes inside the debounce window", async () => {
+  const aOld = [
+    "- [ ] #task P ^p",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]]",
+    "- [ ] #task A ^a",
+  ].join("\n");
+  const bContent = [
+    "- [ ] #task Q ^q",
+    "  - ⛓️ **DEPENDS ON:** [[#^z]]",
+    "- [ ] #task Z ^z",
+  ].join("\n");
+  const editor = new TransactionEditor(bContent, { line: 0, ch: 0 });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = { workspace: {} };
+  plugin.getActiveMarkdownView = () => ({
+    editor,
+    file: { path: "B.md" },
+  });
+  plugin.app.workspace.getLeavesOfType = () => [
+    { view: { editor, file: { path: "B.md" } } },
+  ];
+  plugin.dependencyMirrorByPath = new Map([["A.md", aOld]]);
+  const snapshot = {
+    editor,
+    parentPath: "A.md",
+    oldContent: aOld,
+    editedLine: 1,
+    ownerLine: 1,
+    baselineEditedLine: 1,
+    removedText: "",
+  };
+  await plugin.fireDependencyHandEditMirror(snapshot);
+  assert.equal(plugin.pendingDependencyMirror || null, null);
+  assert.equal(plugin.pendingDependencyMirrorSnapshot || null, null);
+  assert.equal(editor.getValue(), bContent);
+  assert.equal(plugin.dependencyMirrorByPath.get("A.md"), aOld);
+});
+
+test("mirror mention drops the pass when the editor shows another note", async () => {
+  const aOld = [
+    "- [ ] #task P ^p",
+    "- [ ] #task A ^a",
+  ].join("\n");
+  const bContent = [
+    "- [ ] #task Q mentions [[T#^t]] ^q",
+    "- [ ] #task T ^t",
+  ].join("\n");
+  const editor = new TransactionEditor(bContent, { line: 0, ch: 0 });
+  const plugin = new NavigationHotkeysPlugin();
+  let scanCalls = 0;
+  plugin.app = {
+    workspace: {},
+    plugins: {
+      plugins: {
+        "bob-ledger-tools": {
+          api: {
+            relationIndex: {
+              version: 2,
+              scanMentions: () => {
+                scanCalls += 1;
+                return [];
+              },
+            },
+          },
+        },
+      },
+    },
+  };
+  plugin.getActiveMarkdownView = () => ({
+    editor,
+    file: { path: "B.md" },
+  });
+  plugin.app.workspace.getLeavesOfType = () => [
+    { view: { editor, file: { path: "B.md" } } },
+  ];
+  const result = await plugin.mirrorMentionHandEdit(editor, "A.md", aOld, {
+    linesEnabled: true,
+    mentionsEnabled: true,
+  });
+  assert.equal(result.reason, "note-switched");
+  assert.equal(result.mirrored, false);
+  assert.equal(scanCalls, 0);
+  assert.equal(editor.getValue(), bContent);
+});
+
+test("mirror dependency drops the pass when the editor shows another note", async () => {
+  const aOld = [
+    "- [ ] #task P ^p",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]]",
+    "- [ ] #task A ^a",
+  ].join("\n");
+  const bContent = [
+    "- [ ] #task Q ^q",
+    "  - ⛓️ **DEPENDS ON:** [[#^z]]",
+    "- [ ] #task Z ^z",
+  ].join("\n");
+  const editor = new TransactionEditor(bContent, { line: 0, ch: 0 });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = { workspace: {} };
+  plugin.getActiveMarkdownView = () => ({
+    editor,
+    file: { path: "B.md" },
+  });
+  plugin.app.workspace.getLeavesOfType = () => [
+    { view: { editor, file: { path: "B.md" } } },
+  ];
+  const result = await plugin.mirrorDependencyHandEdit(
+    editor,
+    "A.md",
+    aOld,
+    1,
+    "",
+    {},
+  );
+  assert.equal(result.reason, "note-switched");
+  assert.equal(result.mirrored, false);
+  assert.equal(editor.getValue(), bContent);
+});
+
+test("mirror leaf change cancels the pending pass before the editor swaps buffers", () => {
+  const aOld = [
+    "- [ ] #task P ^p",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]]",
+    "- [ ] #task A ^a",
+  ].join("\n");
+  const bContent = [
+    "- [ ] #task Q ^q",
+  ].join("\n");
+  const editor = new TransactionEditor(bContent, { line: 0, ch: 0 });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = { workspace: {} };
+  plugin.getActiveMarkdownView = () => ({
+    editor,
+    file: { path: "B.md" },
+  });
+  plugin.app.workspace.getLeavesOfType = () => [
+    { view: { editor, file: { path: "B.md" } } },
+  ];
+  plugin.dependencyMirrorByPath = new Map([["A.md", aOld]]);
+  plugin.pendingDependencyMirrorSnapshot = {
+    editor,
+    parentPath: "A.md",
+    oldContent: aOld,
+    editedLine: 1,
+    removedText: "",
+  };
+  plugin.pendingDependencyMirror = setTimeout(() => {}, 400);
+  const cancelled = plugin.cancelPendingDependencyHandEditMirrorIfNoteChanged();
+  assert.equal(cancelled, true);
+  assert.equal(plugin.pendingDependencyMirror || null, null);
+  assert.equal(plugin.pendingDependencyMirrorSnapshot || null, null);
+  assert.equal(plugin.dependencyMirrorByPath.get("A.md"), aOld);
+});
+
+test("BLOCKS mirror still works after a note switch", async () => {
+  const content = [
+    "- [ ] #task Q ^q",
+    "  - ⛓️ **DEPENDS ON:** [[#^z]]",
+    "- [ ] #task Z ^z",
+  ].join("\n");
+  const editor = new TransactionEditor(content, { line: 1, ch: 2 });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: { getActiveFile: () => ({ path: "B.md" }) },
+  };
+  plugin.getActiveMarkdownView = () => ({
+    editor,
+    file: { path: "B.md" },
+  });
+  plugin.app.workspace.getLeavesOfType = () => [
+    { view: { editor, file: { path: "B.md" } } },
+  ];
+  const snapshot = {
+    editor,
+    parentPath: "B.md",
+    oldContent: content,
+    editedLine: 1,
+    removedText: "",
+  };
+  await plugin.fireDependencyHandEditMirror(snapshot);
+  assert.notEqual(plugin.pendingDependencyMirror, null);
+  clearTimeout(plugin.pendingDependencyMirror);
+  plugin.pendingDependencyMirror = null;
+  editor.setCursor({ line: 2, ch: 0 });
+  await plugin.fireDependencyHandEditMirror(snapshot);
+  assert.equal(plugin.pendingDependencyMirror, null);
+  assert.match(editor.getValue(), /- \[\?\] #task Q \[dependsOn:: B__z\] \^q$/m);
+});

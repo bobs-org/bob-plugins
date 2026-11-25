@@ -582,6 +582,9 @@ class BobNavigationHotkeysPlugin extends Plugin {
     this.registerEvent(
       this.app.workspace.on("file-open", (file) => {
         this.trackOpenedFile(file);
+        if (typeof this.cancelPendingDependencyHandEditMirrorIfNoteChanged === "function") {
+          this.cancelPendingDependencyHandEditMirrorIfNoteChanged();
+        }
         if (typeof this.scheduleHighlightsHints === "function") {
           this.scheduleHighlightsHints();
         }
@@ -598,6 +601,9 @@ class BobNavigationHotkeysPlugin extends Plugin {
     this.registerEvent(
       this.app.workspace.on("active-leaf-change", () => {
         this.refreshDashScrollCaptureTarget();
+        if (typeof this.cancelPendingDependencyHandEditMirrorIfNoteChanged === "function") {
+          this.cancelPendingDependencyHandEditMirrorIfNoteChanged();
+        }
         if (typeof this.scheduleHighlightsHints === "function") {
           this.scheduleHighlightsHints();
         }

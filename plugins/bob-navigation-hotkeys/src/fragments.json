@@ -212,6 +212,7 @@
   "596-relation-cancel-compose.js",
   "597-relation-complete-compose.js",
   "600-plugin-dependency-mirror.js",
+  "600a-dependency-mirror-guard.js",
   "610-plugin-jumps-and-counted-keys.js",
   "615-plugin-counted-task-move.js",
   "620-plugin-dash-and-vim-jumps.js",

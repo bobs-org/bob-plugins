@@ -167,6 +167,12 @@ class BobNavigationHotkeysRelationHandEditMixin {
     if (!editor || typeof editor.getValue !== "function" || !path) {
       return Object.freeze({ mirrored: false, reason: "editor-unavailable" });
     }
+    if (
+      typeof this.dependencyMirrorEditorShowsPath === "function" &&
+      !this.dependencyMirrorEditorShowsPath(editor, path)
+    ) {
+      return Object.freeze({ mirrored: false, reason: "note-switched" });
+    }
     const before = String(oldContent || "");
     const after = String(editor.getValue() || "");
     if (!taskRelationLinesChanged(before, after).linksChanged) {
@@ -315,6 +321,12 @@ class BobNavigationHotkeysRelationHandEditMixin {
     const path = normalizeVaultRelativePath(parentPath || "");
     if (!editor || typeof editor.getValue !== "function" || !path) {
       return Object.freeze({ mirrored: false, reason: "editor-unavailable" });
+    }
+    if (
+      typeof this.dependencyMirrorEditorShowsPath === "function" &&
+      !this.dependencyMirrorEditorShowsPath(editor, path)
+    ) {
+      return Object.freeze({ mirrored: false, reason: "note-switched" });
     }
     const api = relationMentionIndexApi(this.app);
     if (!api) {

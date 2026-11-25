@@ -663,17 +663,13 @@ test("splitRequirementCarry opens a cross-note carry with one guarded Undo", asy
     harness.plugin.setActiveView({ file, editor: destinationEditor });
     return true;
   };
-  harness.plugin.getActiveMarkdownView = () => ({
-    file: harness.files.get("projects/launch.md"),
-    editor: destinationEditor,
-  });
   const result = await harness.plugin.splitRequirementCarry(
     editor,
     { path: "2026/20261103.md" },
     source,
     { line: 1, ch: 2 },
   );
-  assert.equal(result, true);
+  assert.equal(result, true, notices[notices.length - 1]);
   assert.equal(harness.undoNotices.length, 1);
   assert.equal(harness.undoNotices[0][2].actionLabel, "Undo split");
   assert.equal(harness.undoNotices[0][1].length, 2);

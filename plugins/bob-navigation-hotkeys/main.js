@@ -26475,6 +26475,73 @@ function navSettledLineText(cm, staged, options = {}) {
   return navResolveWrittenTaskLineText(String(cm.getValue() || ""), staged);
 }
 
+// Prepare every changed note from its complete post-gesture bytes. Closed
+// notes use these exact bytes in their guarded vault.process write; editor
+// notes still pass the staged bytes to applyToEditor at persistence time.
+function prepareNavSettledChangeMap(plugin, changes, options = {}) {
+  const prepared = new Map();
+  const entries = changes instanceof Map ? changes.entries() : Object.entries(changes || {});
+  for (const [path, change] of entries) {
+    if (!change || typeof change.before !== "string" || typeof change.after !== "string") {
+      continue;
+    }
+    let outcome = null;
+    try {
+      if (plugin && typeof plugin.prepareNavSettledFilePostimage === "function") {
+        outcome = plugin.prepareNavSettledFilePostimage(path, change.after, options);
+      }
+    } catch (_error) {
+      outcome = null;
+    }
+    const staged = String(change.after);
+    prepared.set(path, Object.freeze({
+      before: String(change.before),
+      after: outcome && outcome.contents != null ? String(outcome.contents) : staged,
+      settleInput: staged,
+      lineMap: outcome && outcome.lineMap ? outcome.lineMap : Object.freeze({}),
+      provider: outcome && outcome.provider ? outcome.provider : "none",
+    }));
+  }
+  return prepared;
+}
+
+// Resolve a task anchor against final bytes. A supplied block ID remains
+// authoritative; only ID-less anchors can use an exact-text fallback.
+function navResolveSettledTaskAnchor(contents, anchor) {
+  if (!anchor || typeof anchor !== "object") return null;
+  const lines = splitMarkdownContent(String(contents || "")).lines;
+  const hinted = Math.floor(Number(anchor.line || 0)) - 1;
+  const identity = {
+    line: Number.isInteger(hinted) && hinted >= 0 ? hinted : 0,
+    ...(typeof anchor.blockId === "string" && anchor.blockId.trim()
+      ? { blockId: anchor.blockId.trim() }
+      : {}),
+    ...(typeof anchor.text === "string" && anchor.text.length > 0
+      ? { text: anchor.text }
+      : {}),
+  };
+  const resolved = resolveNavTaskIdentity(lines, identity);
+  if (!resolved || !Number.isInteger(resolved.line) || resolved.line < 0) return null;
+  const text = String(lines[resolved.line] || "");
+  const blockId = navTaskSettleLineBlockId(text);
+  return Object.freeze({
+    path: String(anchor.path || ""),
+    line: resolved.line + 1,
+    blockId,
+    text,
+  });
+}
+
+// Settle line maps are zero-based; move and split receipts expose 1-based
+// lines. Removed lines have no mapping and remain unchanged for callers to
+// resolve by task identity where possible.
+function navMapSettledOneBasedLine(lineMap, line) {
+  const original = Math.floor(Number(line));
+  if (!Number.isInteger(original) || original < 1) return line;
+  const mapped = mapNavLineThroughSettle(lineMap, original - 1);
+  return Number.isInteger(mapped) ? mapped + 1 : original;
+}
+
 class BobNavigationHotkeysTaskSettleIntegrationMixin {
   applyNavTaskSettleToCurrentEditor(editor, path, options = {}) {
     if (!editor || typeof editor.getValue !== "function" ||
@@ -120490,80 +120557,6 @@ class BobNavigationHotkeysNotesMoveMixin {
     });
   }
 
-  async writeTaskMoveChange(path, change, file, session, finalCursor = null) {
-    const sourceEditor =
-      path === session.sourcePath ? session.editor : null;
-    const editor = sourceEditor || this.getOpenMarkdownEditorForPath(path);
-    if (editor && typeof editor.getValue === "function") {
-      if (String(editor.getValue() || "") !== change.before) {
-        throw new Error(`Task move preimage changed: ${path}`);
-      }
-      let applied = false;
-      try {
-        applied = applyEditorContentTransaction(
-          editor,
-          change.before,
-          change.after,
-          finalCursor,
-        );
-      } catch (error) {
-        if (String(editor.getValue() || "") === change.after) {
-          error.taskMoveAppliedEntry = Object.freeze({
-            path,
-            file,
-            editor,
-            change,
-          });
-        }
-        throw error;
-      }
-      if (!applied || String(editor.getValue() || "") !== change.after) {
-        const error = new Error(`Task move editor transaction failed: ${path}`);
-        if (String(editor.getValue() || "") === change.after) {
-          error.taskMoveAppliedEntry = Object.freeze({ path, file, editor, change });
-        }
-        throw error;
-      }
-      return Object.freeze({ path, file, editor, change });
-    }
-
-    const vault = this.app && this.app.vault;
-    if (!vault || typeof vault.process !== "function") {
-      throw new Error("Vault content updates are unavailable");
-    }
-    let transformed = false;
-    try {
-      await vault.process(file, (content) => {
-        if (String(content || "") !== change.before) {
-          throw new Error(`Task move preimage changed: ${path}`);
-        }
-        transformed = true;
-        return change.after;
-      });
-    } catch (error) {
-      try {
-        if (
-          typeof vault.cachedRead === "function" &&
-          String((await vault.cachedRead(file)) || "") === change.after
-        ) {
-          error.taskMoveAppliedEntry = Object.freeze({
-            path,
-            file,
-            editor: null,
-            change,
-          });
-        }
-      } catch (ignoredError) {
-        // The original process error remains authoritative.
-      }
-      throw error;
-    }
-    if (!transformed) {
-      throw new Error(`Task move file transaction failed: ${path}`);
-    }
-    return Object.freeze({ path, file, editor: null, change });
-  }
-
   async rollbackTaskMoveChanges(written) {
     const failedPaths = [];
     for (const entry of (Array.isArray(written) ? written : []).slice().reverse()) {
@@ -121039,6 +121032,124 @@ class BobNavigationHotkeysCopyCardMixin {
     return this.writeTextToClipboard(task.blockId, "block ID");
   }
 }
+// ---- src/642-task-move-write.js ----
+// The move/split write primitive lives in its own fragment so persistence
+// guards stay easy to audit independently of picker and move discovery code.
+Object.assign(BobNavigationHotkeysNotesMoveMixin.prototype, {
+  async writeTaskMoveChange(path, change, file, session, finalCursor = null) {
+    const sourceEditor =
+      path === session.sourcePath ? session.editor : null;
+    const editor = sourceEditor || this.getOpenMarkdownEditorForPath(path);
+    if (editor && typeof editor.getValue === "function") {
+      if (String(editor.getValue() || "") !== change.before) {
+        throw new Error(`Task move preimage changed: ${path}`);
+      }
+      let applied = false;
+      let settleOutcome = null;
+      let actualAfter = String(change.after);
+      try {
+        if (
+          session &&
+          session.settleNav === true &&
+          typeof this.applyNavSettledEditorWrite === "function"
+        ) {
+          settleOutcome = this.applyNavSettledEditorWrite(editor, path, {
+            expected: change.before,
+            contents: typeof change.settleInput === "string"
+              ? change.settleInput
+              : change.after,
+            today: session.settleToday,
+            dailyPath: session.dailyPath,
+          });
+          applied = Boolean(settleOutcome && settleOutcome.applied === true);
+          actualAfter = settleOutcome && settleOutcome.contents != null
+            ? String(settleOutcome.contents)
+            : String(editor.getValue() || "");
+        } else {
+          applied = applyEditorContentTransaction(
+            editor,
+            change.before,
+            change.after,
+            finalCursor,
+          );
+        }
+      } catch (error) {
+        const live = String(editor.getValue() || "");
+        if (live !== change.before) {
+          error.taskMoveAppliedEntry = Object.freeze({
+            path,
+            file,
+            editor,
+            change: Object.freeze({ before: change.before, after: live }),
+          });
+        }
+        throw error;
+      }
+      if (!applied || String(editor.getValue() || "") !== actualAfter) {
+        const error = new Error(`Task move editor transaction failed: ${path}`);
+        const live = String(editor.getValue() || "");
+        if (live !== change.before) {
+          error.taskMoveAppliedEntry = Object.freeze({
+            path,
+            file,
+            editor,
+            change: Object.freeze({ before: change.before, after: live }),
+          });
+        }
+        throw error;
+      }
+      return Object.freeze({
+        path,
+        file,
+        editor,
+        change: Object.freeze({ before: change.before, after: actualAfter }),
+        settleOutcome,
+      });
+    }
+
+    const vault = this.app && this.app.vault;
+    if (!vault || typeof vault.process !== "function") {
+      throw new Error("Vault content updates are unavailable");
+    }
+    let transformed = false;
+    try {
+      await vault.process(file, (content) => {
+        if (String(content || "") !== change.before) {
+          throw new Error(`Task move preimage changed: ${path}`);
+        }
+        transformed = true;
+        return change.after;
+      });
+    } catch (error) {
+      try {
+        if (
+          typeof vault.cachedRead === "function" &&
+          String((await vault.cachedRead(file)) || "") === change.after
+        ) {
+          error.taskMoveAppliedEntry = Object.freeze({
+            path,
+            file,
+            editor: null,
+            change,
+          });
+        }
+      } catch (_ignoredError) {
+        // The original process error remains authoritative.
+      }
+      throw error;
+    }
+    if (!transformed) {
+      throw new Error(`Task move file transaction failed: ${path}`);
+    }
+    return Object.freeze({
+      path,
+      file,
+      editor: null,
+      change: Object.freeze({ before: change.before, after: change.after }),
+      settleOutcome: null,
+    });
+  },
+});
 // ---- src/650-plugin-move-commit.js ----
 // gesture-retype: note moves relocate the live link when the inherited
 // type changes, and Pomodoro renames retype linked tasks. Pure helpers
@@ -123835,7 +123946,7 @@ class BobNavigationHotkeysTaskSplitMixin {
       return false;
     }
     if (plan.cursor.path === sourceFile.path) {
-      return this.applyTaskSplitSameNote(editor, sourceFile, sourceContent, cursor, plan);
+      return this.applyTaskSplitSameNote(editor, sourceFile, sourceContent, cursor, plan, today);
     }
     return this.applyTaskSplitCrossNote(
       editor,
@@ -123844,6 +123955,7 @@ class BobNavigationHotkeysTaskSplitMixin {
       cursor,
       plan,
       files,
+      today,
     );
   }
 
@@ -123963,7 +124075,7 @@ class BobNavigationHotkeysTaskSplitMixin {
     return true;
   }
 
-  applyTaskSplitSameNote(editor, sourceFile, sourceContent, cursor, plan) {
+  applyTaskSplitSameNote(editor, sourceFile, sourceContent, cursor, plan, today) {
     const after = plan.files[sourceFile.path];
     if (typeof after !== "string") {
       new Notice("Split planned no change");
@@ -123971,18 +124083,58 @@ class BobNavigationHotkeysTaskSplitMixin {
     }
     const landingLine = Math.max(0, (plan.cursor.line || 1) - 1);
     let applied = false;
+    let settleOutcome = null;
     try {
-      applied = applyEditorContentTransaction(editor, sourceContent, after, {
-        line: landingLine,
-        ch: 0,
-      });
+      if (typeof this.applyNavSettledEditorWrite === "function") {
+        settleOutcome = this.applyNavSettledEditorWrite(
+          editor,
+          sourceFile.path,
+          { expected: sourceContent, contents: after, today },
+        );
+        applied = Boolean(settleOutcome && settleOutcome.applied === true);
+      } else {
+        applied = applyEditorContentTransaction(editor, sourceContent, after, {
+          line: landingLine,
+          ch: 0,
+        });
+      }
     } catch (error) {
       new Notice("Split failed to apply");
       return false;
     }
-    if (!applied || String(editor.getValue() || "") !== after) {
+    const settledContents = String(editor.getValue() || "");
+    const expectedAfter = settleOutcome ? settleOutcome.contents : after;
+    if (!applied || settledContents !== expectedAfter) {
       new Notice("Split failed to apply");
       return false;
+    }
+    const stagedLines = taskSplitLines(after);
+    const stagedTaskLine = Math.max(0, (plan.cursor.line || 1) - 1);
+    const stagedTaskText = String(stagedLines[stagedTaskLine] || "");
+    const taskAnchor = navResolveSettledTaskAnchor(settledContents, {
+      path: sourceFile.path,
+      line: stagedTaskLine + 1,
+      blockId: navTaskSettleLineBlockId(stagedTaskText),
+      text: stagedTaskText,
+    });
+    if (!taskAnchor) {
+      if (typeof this.applyNavSettledRestoreWrite === "function") {
+        this.applyNavSettledRestoreWrite(editor, sourceFile.path, {
+          expected: settledContents,
+          contents: sourceContent,
+          restore: true,
+        });
+      }
+      new Notice("Split task anchor could not be resolved; the split was rolled back");
+      return false;
+    }
+    const finalLandingLine = taskAnchor.line - 1;
+    if (typeof editor.setCursor === "function") {
+      try {
+        editor.setCursor(finalLandingLine, 0);
+      } catch (_cursorError) {
+        // Focus is best-effort after the write.
+      }
     }
     try {
       if (typeof this.ensureVimJumpHistory === "function") {
@@ -123995,7 +124147,7 @@ class BobNavigationHotkeysTaskSplitMixin {
           line: cursor.line,
           ch: cursor.ch || 0,
         },
-        { path: sourceFile.path, line: landingLine, ch: 0 },
+        { path: sourceFile.path, line: finalLandingLine, ch: 0 },
       );
     } catch (error) {
       // The Vim jump context is a nicety; the write already landed.
@@ -124011,6 +124163,7 @@ class BobNavigationHotkeysTaskSplitMixin {
     cursor,
     plan,
     plannedFiles,
+    today,
   ) {
     const destinationPath = plan.cursor.path;
     const destinationAfter = plan.files[destinationPath];
@@ -124025,6 +124178,7 @@ class BobNavigationHotkeysTaskSplitMixin {
       sourcePath: sourceFile.path,
       sourceEditor: editor,
       before: plannedFiles || {},
+      today,
     });
     if (!persisted.ok) {
       new Notice(persisted.message || "Split failed to apply");
@@ -124059,7 +124213,9 @@ class BobNavigationHotkeysTaskSplitMixin {
         },
         {
           path: destinationPath,
-          line: Math.max(0, (plan.cursor.line || 1) - 1),
+          line: Math.max(0, (persisted.anchor && persisted.anchor.line
+            ? persisted.anchor.line
+            : plan.cursor.line || 1) - 1),
           ch: 0,
         },
       );
@@ -124091,7 +124247,9 @@ class BobNavigationHotkeysTaskSplitMixin {
             : null;
         if (destinationEditor && typeof destinationEditor.setCursor === "function") {
           destinationEditor.setCursor(
-            Math.max(0, (plan.cursor.line || 1) - 1),
+            Math.max(0, (persisted.anchor && persisted.anchor.line
+              ? persisted.anchor.line
+              : plan.cursor.line || 1) - 1),
             0,
           );
         }
@@ -124526,6 +124684,10 @@ class BobNavigationHotkeysInboxRouteMixin {
       typeof this.getFreshnessApi === "function"
         ? this.getFreshnessApi()
         : null;
+    const dailyPath = scheduledRecoveryDailyPaths(
+      Array.from(snapshots, ([path, content]) => ({ path, content })),
+      today,
+    ).current;
     const plan = planTaskMoveAcrossFiles({
       sourcePath,
       destinationPath,
@@ -124544,10 +124706,7 @@ class BobNavigationHotkeysInboxRouteMixin {
       noteIndex: createScheduledRecoveryNoteIndex(
         Array.from(snapshots, ([path, content]) => ({ path, content })),
       ),
-      dailyPath: scheduledRecoveryDailyPaths(
-        Array.from(snapshots, ([path, content]) => ({ path, content })),
-        today,
-      ).current,
+      dailyPath,
     });
     if (!plan.valid) {
       return { ok: false, reason: `${plan.error}; nothing was moved` };
@@ -124607,19 +124766,16 @@ class BobNavigationHotkeysInboxRouteMixin {
       }
     }
 
-    const sourceChange = plan.changes.get(sourcePath);
-    const sourceLines = splitMarkdownContent(sourceChange.after).lines;
-    const sourceLine = Math.min(
-      plan.nextSourceLine,
-      Math.max(sourceLines.length - 1, 0),
-    );
-    const finalCursor = {
-      line: sourceLine,
-      ch: Math.min(
-        Math.max(numericOrDefault(cursor.ch, 0), 0),
-        String(sourceLines[sourceLine] || "").length,
-      ),
-    };
+    // Settle only after the move plus ledger cleanup and type relocation have
+    // produced their complete postimages. Keep one local date for every note.
+    const settleToday = formatProjectTaskCreatedDate(today);
+    const settledChanges = prepareNavSettledChangeMap(this, plan.changes, {
+      today: settleToday,
+      dailyPath,
+    });
+    if (settledChanges.size !== plan.changes.size) {
+      return { ok: false, reason: "Could not prepare task move notes; nothing was moved" };
+    }
     const auxiliaryPaths = Array.from(plan.changes.keys())
       .filter(
         (path) =>
@@ -124631,11 +124787,17 @@ class BobNavigationHotkeysInboxRouteMixin {
       ...auxiliaryPaths,
       sourcePath,
     ];
-    const sessionLike = { sourcePath, editor };
+    const sessionLike = {
+      sourcePath,
+      editor,
+      settleNav: true,
+      settleToday,
+      dailyPath,
+    };
     const written = [];
     try {
       for (const path of writeOrder) {
-        const change = plan.changes.get(path);
+        const change = settledChanges.get(path);
         if (!change || change.before === change.after) {
           continue;
         }
@@ -124657,7 +124819,7 @@ class BobNavigationHotkeysInboxRouteMixin {
             change,
             file,
             sessionLike,
-            path === sourcePath ? finalCursor : null,
+            null,
           ),
         );
       }
@@ -124682,17 +124844,76 @@ class BobNavigationHotkeysInboxRouteMixin {
       };
     }
 
+    const destinationRecord = written.find((entry) => entry.path === destinationPath);
+    const destinationContents = destinationRecord
+      ? destinationRecord.change.after
+      : String(settledChanges.get(destinationPath).after || "");
+    const destinationAnchor = navResolveSettledTaskAnchor(destinationContents, {
+      path: destinationPath,
+      line: plan.destinationLine + 1,
+      blockId: plan.destinationBlockId,
+      text: plan.destinationAnchorText,
+    });
+    if (!destinationAnchor) {
+      const failedRollbacks = await this.rollbackTaskMoveChanges(written);
+      return {
+        ok: false,
+        reason: failedRollbacks.length > 0
+          ? `Task move anchor could not be resolved; review ${failedRollbacks.join(", ")}`
+          : "Task move anchor could not be resolved; completed writes were rolled back",
+      };
+    }
+    const sourceRecord = written.find((entry) => entry.path === sourcePath);
+    const sourceChange = settledChanges.get(sourcePath);
+    const sourceContents = sourceRecord
+      ? sourceRecord.change.after
+      : String(sourceChange.after || "");
+    const sourceLines = splitMarkdownContent(sourceContents).lines;
+    const mappedSourceLine = navMapSettledOneBasedLine(
+      sourceChange.lineMap,
+      plan.nextSourceLine + 1,
+    ) - 1;
+    const sourceLine = sourceRecord && sourceRecord.settleOutcome &&
+      sourceRecord.settleOutcome.cursor &&
+      Number.isInteger(sourceRecord.settleOutcome.cursor.line)
+      ? sourceRecord.settleOutcome.cursor.line
+      : mappedSourceLine;
+    const finalCursor = {
+      line: Math.max(0, Math.min(sourceLine, Math.max(sourceLines.length - 1, 0))),
+      ch: Math.min(
+        Math.max(numericOrDefault(cursor.ch, 0), 0),
+        String(sourceLines[Math.max(0, Math.min(sourceLine, Math.max(sourceLines.length - 1, 0)))] || "").length,
+      ),
+    };
+    const finalChanges = new Map();
+    for (const [path, change] of settledChanges.entries()) {
+      const record = written.find((entry) => entry.path === path);
+      finalChanges.set(path, Object.freeze({
+        before: change.before,
+        after: record ? record.change.after : change.after,
+      }));
+    }
+    const finalPlan = Object.freeze({
+      ...plan,
+      changes: finalChanges,
+      nextSourceLine: finalCursor.line,
+      destinationLine: destinationAnchor.line - 1,
+      destinationAnchorText: destinationAnchor.text,
+      destinationBlockId: destinationAnchor.blockId,
+    });
+
     const destinationName =
       destinationFile.basename ||
       getVaultPathBasenameWithoutExtension(destinationFile.path);
     return {
       ok: true,
       reason: null,
-      plan,
+      plan: finalPlan,
       destinationFile,
       destinationName,
-      nextSourceLine: sourceLine,
+      nextSourceLine: finalCursor.line,
       finalCursor,
+      destinationAnchor,
       relocated: noteMoveRelocated,
     };
   }
@@ -125080,6 +125301,7 @@ class BobNavigationHotkeysInboxRouteMixin {
         count,
         destinationName: result.destinationName,
         destinationPath,
+        destinationAnchor: result.destinationAnchor || null,
         notice: formatInboxRouteMoveNotice({
           count,
           destinationName: result.destinationName,
@@ -125122,7 +125344,16 @@ class BobNavigationHotkeysTaskSplitPersistMixin {
     }
     const input = context && typeof context === "object" ? context : {};
     const sourcePath = String(input.sourcePath || "");
-    const session = { sourcePath, editor: input.sourceEditor || null };
+    const settleToday = String(
+      input.today || formatProjectTaskCreatedDate(new Date()),
+    );
+    const session = {
+      sourcePath,
+      editor: input.sourceEditor || null,
+      settleNav: true,
+      settleToday,
+      dailyPath: input.dailyPath,
+    };
     const before =
       input.before && typeof input.before === "object" ? input.before : {};
     const postimages = (plan && plan.files) || {};
@@ -125135,6 +125366,19 @@ class BobNavigationHotkeysTaskSplitPersistMixin {
             : 1;
       return rank(left) - rank(right) || (left < right ? -1 : left > right ? 1 : 0);
     });
+    const stagedChanges = new Map();
+    for (const entry of ordered) {
+      const hasPreimage = Object.prototype.hasOwnProperty.call(before, entry);
+      stagedChanges.set(entry, Object.freeze({
+        before: hasPreimage ? String(before[entry]) : "",
+        after: String(postimages[entry]),
+      }));
+    }
+    const settledChanges = prepareNavSettledChangeMap(
+      this,
+      stagedChanges,
+      { today: settleToday, dailyPath: input.dailyPath },
+    );
     // Upfront: a changed path that already exists must be a Markdown note.
     // No write has happened yet, so this refusal leaves nothing behind.
     for (const entry of ordered) {
@@ -125149,16 +125393,23 @@ class BobNavigationHotkeysTaskSplitPersistMixin {
           message: `Split destination is not a Markdown note: ${entry}`,
         };
       }
+      const hasPreimage = Object.prototype.hasOwnProperty.call(before, entry);
+      if ((file && !hasPreimage) || (!file && hasPreimage)) {
+        return {
+          ok: false,
+          code: "split_write_failed",
+          message: "Split destination changed; nothing was written",
+        };
+      }
     }
     const written = [];
     try {
       for (const entry of ordered) {
-        const after = String(postimages[entry]);
+        const change = settledChanges.get(entry);
         const hadPreimage = Object.prototype.hasOwnProperty.call(
           before,
           entry,
         );
-        const beforeContent = hadPreimage ? String(before[entry]) : "";
         const file =
           typeof vault.getAbstractFileByPath === "function"
             ? vault.getAbstractFileByPath(entry)
@@ -125175,7 +125426,7 @@ class BobNavigationHotkeysTaskSplitPersistMixin {
           written.push(
             await this.writeTaskMoveChange(
               entry,
-              { before: beforeContent, after },
+              change,
               file,
               session,
             ),
@@ -125187,16 +125438,113 @@ class BobNavigationHotkeysTaskSplitPersistMixin {
           if (typeof vault.create !== "function") {
             throw new Error("Vault content updates are unavailable");
           }
-          const created = await vault.create(entry, after);
+          const created = await vault.create(entry, change.after);
           written.push({
             path: entry,
             file: created,
             editor: null,
-            change: { before: "", after },
+            change: { before: "", after: change.after },
             created: true,
+            settleOutcome: null,
           });
         }
       }
+
+      const finalContents = new Map();
+      const lineMaps = {};
+      for (const entry of ordered) {
+        const staged = settledChanges.get(entry);
+        const record = written.find((item) => item.path === entry);
+        finalContents.set(entry, record ? record.change.after : staged.after);
+        lineMaps[entry] = record && record.settleOutcome &&
+          record.settleOutcome.lineMap
+          ? record.settleOutcome.lineMap
+          : staged.lineMap;
+      }
+      const plannedTasks = Array.isArray(plan && plan.tasks) ? plan.tasks : [];
+      const stagedAnchors = plannedTasks.map((task) => {
+        const path = String(task && task.path || "");
+        const line = Math.floor(Number(task && task.line));
+        const stagedLines = splitMarkdownContent(String(postimages[path] || "")).lines;
+        const text = line > 0 ? String(stagedLines[line - 1] || "") : "";
+        const blockId = task && typeof task.block_id === "string"
+          ? task.block_id
+          : navTaskSettleLineBlockId(text);
+        return { path, line, blockId, text };
+      });
+      if (stagedAnchors.length === 0 && plan && plan.cursor) {
+        const path = String(plan.cursor.path || "");
+        const line = Math.floor(Number(plan.cursor.line));
+        const stagedLines = splitMarkdownContent(String(postimages[path] || "")).lines;
+        const text = line > 0 ? String(stagedLines[line - 1] || "") : "";
+        stagedAnchors.push({
+          path,
+          line,
+          blockId: navTaskSettleLineBlockId(text),
+          text,
+        });
+      }
+      const anchors = stagedAnchors.map((anchor) =>
+        navResolveSettledTaskAnchor(
+          String(finalContents.get(anchor.path) || ""),
+          anchor,
+        ),
+      );
+      if (anchors.some((anchor) => !anchor)) {
+        throw new Error("Split task anchor could not be resolved after settling");
+      }
+      const cursorPlanTask = plannedTasks.find((task) =>
+        task && plan && plan.cursor &&
+          task.path === plan.cursor.path && task.line === plan.cursor.line,
+      );
+      const cursorPlanIndex = cursorPlanTask
+        ? plannedTasks.indexOf(cursorPlanTask)
+        : -1;
+      const cursorAnchor = anchors[cursorPlanIndex] || anchors[0] || null;
+      const moveMap = input.moveMap && typeof input.moveMap === "object"
+        ? {
+            ...input.moveMap,
+            moves: (Array.isArray(input.moveMap.moves) ? input.moveMap.moves : [])
+              .map((move) => ({
+                ...move,
+                to: navMapSettledOneBasedLine(
+                  lineMaps[String(input.moveMap.destinationPath || "")],
+                  move.to,
+                ),
+              })),
+          }
+        : null;
+      const tasks = plannedTasks.map((task, index) => ({
+        ...task,
+        path: anchors[index].path,
+        line: anchors[index].line,
+        block_id: anchors[index].blockId,
+        text: anchors[index].text,
+      }));
+      const records = new Map(written.map((entry) => [entry.path, entry]));
+      const restores = ordered.map((entry) => {
+        const record = records.get(entry);
+        return {
+          path: entry,
+          before: record
+            ? String(record.change.before)
+            : stagedChanges.get(entry).before,
+          after: record
+            ? String(record.change.after)
+            : String(finalContents.get(entry) || ""),
+          created: record ? record.created === true : false,
+        };
+      });
+      return {
+        ok: true,
+        written,
+        restores,
+        anchor: cursorAnchor,
+        anchors: Object.freeze(anchors),
+        tasks: Object.freeze(tasks),
+        moveMap,
+        lineMaps: Object.freeze(lineMaps),
+      };
     } catch (error) {
       const partial = error && error.taskMoveAppliedEntry;
       if (
@@ -125245,23 +125593,6 @@ class BobNavigationHotkeysTaskSplitPersistMixin {
           (error && error.message) || "Split failed to apply",
       };
     }
-    return {
-      ok: true,
-      written,
-      restores: ordered.map((entry) => {
-        const record = written.find((item) => item.path === entry);
-        return {
-          path: entry,
-          before: record
-            ? String(record.change.before)
-            : Object.prototype.hasOwnProperty.call(before, entry)
-              ? String(before[entry])
-              : "",
-          after: String(postimages[entry]),
-          created: record ? record.created === true : false,
-        };
-      }),
-    };
   }
 
   // `api.taskSplit` v1 implementation: carry the requirement at the 1-based
@@ -125432,17 +125763,28 @@ class BobNavigationHotkeysTaskSplitPersistMixin {
       sourcePath: notePath,
       sourceEditor,
       before: files,
+      today,
+      moveMap: planned.moveMap,
     });
     if (!persisted.ok) {
       return persisted;
     }
     return {
       ok: true,
-      task: planned.task,
-      moveMap: planned.moveMap,
+      task: persisted.anchor
+        ? {
+            ...planned.task,
+            path: persisted.anchor.path,
+            line: persisted.anchor.line,
+            blockId: persisted.anchor.blockId,
+          }
+        : planned.task,
+      moveMap: persisted.moveMap || planned.moveMap,
       restores: persisted.restores,
       notice: planned.plan.notice,
-      cursor: planned.plan.cursor,
+      cursor: persisted.anchor
+        ? { path: persisted.anchor.path, line: persisted.anchor.line }
+        : planned.plan.cursor,
     };
   }
 }
@@ -143580,5 +143922,8 @@ Object.assign(module.exports.helpers, {
   navTaskSettleIdentityAtLine,
   navResolveWrittenTaskLineText,
   navSettledLineText,
+  prepareNavSettledChangeMap,
+  navResolveSettledTaskAnchor,
+  navMapSettledOneBasedLine,
   applyNavGesturePostimage,
 });

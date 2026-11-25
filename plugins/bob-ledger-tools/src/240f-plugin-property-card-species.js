@@ -30,13 +30,18 @@ function propertyCardSpecies(kind) {
     : null;
 }
 
-// "<Word>: <title>" (Album: Restaurants), the bare word for an empty title,
+// "<Word>: <title>" (Album: Restaurants), the bare word for an empty title
+// or when the title folds equal to the species word (Bank, not Bank: Bank),
 // or the title alone for an unknown kind.
 function propertyCardAccessibleName(kind, title) {
   const text = String(title === null || title === undefined ? "" : title).replace(/\s+/g, " ").trim();
   const species = propertyCardSpecies(kind);
   if (!species) return text;
-  return text ? `${species.word}: ${text}` : species.word;
+  if (!text) return species.word;
+  try {
+    if (text.toLowerCase() === species.word.toLowerCase()) return species.word;
+  } catch (_) {}
+  return `${species.word}: ${text}`;
 }
 
 // Stamp identity on a card root: data-card-kind, an accessible name that

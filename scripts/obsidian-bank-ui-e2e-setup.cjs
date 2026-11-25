@@ -779,25 +779,30 @@ function runSelfTest() {
     if (/\nbank:/.test(missingFm)) throw new Error("missing hub still has bank:");
     if (!bank.unrelatedBankNote().includes("bank: leftover-string")) throw new Error("unrelated note missing bank property");
     if (!bank.waitingMonthNote().includes("$6.45 Corner Cafe")) throw new Error("waiting month missing row");
-    const bankBadge = { first: true, kind: "bank", word: "Bank", wordShown: true, tileForm: "plain", tileHidden: true, glyph: "🏦", visible: true };
+    const bankTitle = { leads: true, kind: "bank", word: "Bank", wordShown: true, title: "Bank", tileForm: "plain", tileHidden: true, glyph: "🏦", visible: true };
     const expandedDefault = bank.assertLiveDefault({
-      header: true, headerCount: 1, headerAria: "Bank setup", expanded: "false",
-      cardKind: "bank", headerHeadings: 0, badge: bankBadge,
-      collapsed: "▸ Setup · WF Checking · 9 categories · 1 hidden · no rules",
+      header: true, headerCount: 1, headerAria: "Bank", expanded: "false",
+      cardKind: "bank", headerHeadings: 0, title: bankTitle,
+      toggleText: "▸ Setup · WF Checking · 9 categories · 1 hidden · no rules",
       foldKind: "bank", foldControlsResolved: true,
     });
     if (!expandedDefault.ok) throw new Error(`collapsed helper failed: ${expandedDefault.reason}`);
     if (bank.assertLiveDefault({ header: false }).ok) throw new Error("missing header must fail");
-    const identityProbe = { header: true, cardKind: "bank", headerHeadings: 0, badge: bankBadge };
+    const identityProbe = { header: true, cardKind: "bank", headerHeadings: 0, title: bankTitle };
     if (!bank.assertBankIdentity(identityProbe).ok) throw new Error("bank identity helper rejected a good probe");
+    const slotProbe = { ...identityProbe, slotMounted: true, headerHeadings: 1 };
+    if (!bank.assertBankIdentity(slotProbe).ok) throw new Error("bank identity helper rejected a good slot probe");
     for (const [label, broken] of [
       ["no kind", { ...identityProbe, cardKind: "" }],
       ["heading", { ...identityProbe, headerHeadings: 1 }],
-      ["no badge", { ...identityProbe, badge: null }],
-      ["badge not first", { ...identityProbe, badge: { ...bankBadge, first: false } }],
-      ["wrong word", { ...identityProbe, badge: { ...bankBadge, word: "Album" } }],
-      ["wrong tile", { ...identityProbe, badge: { ...bankBadge, tileForm: "stack" } }],
-      ["hidden badge", { ...identityProbe, badge: { ...bankBadge, visible: false } }],
+      ["slot without owned heading", { ...slotProbe, headerHeadings: 0 }],
+      ["body with owned heading", { ...identityProbe, headerHeadings: 1, slotMounted: false }],
+      ["no title", { ...identityProbe, title: null }],
+      ["title not first", { ...identityProbe, title: { ...bankTitle, leads: false } }],
+      ["wrong word", { ...identityProbe, title: { ...bankTitle, word: "Album" } }],
+      ["wrong title", { ...identityProbe, title: { ...bankTitle, title: "Cash" } }],
+      ["wrong tile", { ...identityProbe, title: { ...bankTitle, tileForm: "stack" } }],
+      ["hidden title", { ...identityProbe, title: { ...bankTitle, visible: false } }],
     ]) {
       if (bank.assertBankIdentity(broken).ok) throw new Error(`bank identity helper accepted ${label}`);
     }
@@ -1055,7 +1060,11 @@ async function runE2e(parsed) {
     report.screenshots.push(collapsedDark);
     await setDark(client, false);
     const collapsedIdentity = bank.assertBankIdentity(live);
-    record("live-collapsed-bank-badge", collapsedIdentity.ok && live.shownAria === "Bank setup", collapsedIdentity.reason || jsonDetail(live));
+    record("live-collapsed-bank-title", collapsedIdentity.ok && live.shownAria === "Bank", collapsedIdentity.reason || jsonDetail(live));
+    record("live-title-slot", Boolean(live && live.slotMounted), jsonDetail(live && { slotMounted: live.slotMounted }));
+    record("live-title-hides-h1", Boolean(live && live.editorHasH1 && !live.h1Visible), jsonDetail(live && { editorHasH1: live.editorHasH1, h1Visible: live.h1Visible }));
+    record("live-title-no-double", Boolean(live && live.title && live.title.title === "Bank" && live.title.glyph === "🏦" && !live.h1Visible), jsonDetail(live && live.title));
+    record("live-title-crumb", Boolean(live && live.title && live.title.crumbHref === "cash.md"), jsonDetail(live && live.title));
 
     await client.evaluate(`(() => {
       const toggle = document.querySelector(".bob-bank-setup-toggle");
@@ -1119,6 +1128,78 @@ async function runE2e(parsed) {
         expanded: view && view.containerEl.querySelector(".bob-bank-setup-toggle")?.getAttribute("aria-expanded") || null };
     })()`).catch((error) => ({ error: String(error) }));
     record("fold-vim-counted-motion", Boolean(countedMotion && countedMotion.expanded === "true"), jsonDetail(countedMotion));
+    // Cursor reveal: the hidden H1 returns under a Live Preview cursor. The
+    // fixture H1 line is fixed, so no editor read is needed to find it. Vim
+    // normal mode remaps programmatic cursors, so reveal runs with it off.
+    await client.evaluate(`window.app.vault.setConfig("vimMode", false)`).catch(() => false);
+    await sleep(300);
+    const h1Line = bank.liveHubNote().split("\n").findIndex((line) => /^#[ \t]+\S/.test(line));
+    await client.evaluate(`(() => {
+      const view = window.app.workspace.activeLeaf.view;
+      if (${JSON.stringify(h1Line)} >= 0 && view && view.editor && view.editor.setCursor) {
+        view.editor.setCursor({ line: ${JSON.stringify(h1Line)}, ch: 3 });
+      }
+      if (view && view.editor && view.editor.focus) view.editor.focus();
+      return true;
+    })()`).catch(() => false);
+    const revealed = await waitFor(client, probe(), (value) => value && value.lpH1Revealed === true, "H1 revealed under cursor", 8000).catch((error) => ({ error: error.message }));
+    const revealDiag = await client.evaluate(`(() => {
+      const view = window.app.workspace.activeLeaf.view;
+      const cursor = view && view.editor && view.editor.getCursor ? view.editor.getCursor() : null;
+      const lines = Array.from(document.querySelectorAll(".cm-content .cm-line.HyperMD-header, .cm-content .cm-line.HyperMD-header-1")).map((el) => String(el.textContent || "").slice(0, 80));
+      return { cursor, headerLines: lines };
+    })()`).catch((error) => ({ error: String(error) }));
+    record("title-reveal-under-cursor", Boolean(h1Line >= 0 && revealed && revealed.lpH1Revealed), jsonDetail({ h1Line, revealed, revealDiag }));
+    await client.evaluate(`(() => {
+      const view = window.app.workspace.activeLeaf.view;
+      if (view && view.editor && view.editor.setCursor) view.editor.setCursor({ line: 0, ch: 0 });
+      return true;
+    })()`).catch(() => false);
+    await waitFor(client, probe(), (value) => value && value.lpH1Revealed === false, "H1 hidden after cursor leaves", 8000).catch(() => ({}));
+    await client.evaluate(`window.app.vault.setConfig("vimMode", true)`).catch(() => false);
+    await sleep(300);
+    // j/k/gg never trap around the slot card.
+    const motionStart = await client.evaluate(`(() => {
+      const view = window.app.workspace.activeLeaf.view;
+      if (view && view.editor && view.editor.setCursor) view.editor.setCursor({ line: 0, ch: 0 });
+      if (view && view.editor && view.editor.focus) view.editor.focus();
+      return view && view.editor && view.editor.getCursor ? view.editor.getCursor().line : -1;
+    })()`).catch(() => -1);
+    await dispatchKey({ key: "g", code: "KeyG", windowsVirtualKeyCode: 71, nativeVirtualKeyCode: 71 });
+    await dispatchKey({ key: "g", code: "KeyG", windowsVirtualKeyCode: 71, nativeVirtualKeyCode: 71 });
+    await dispatchKey({ key: "j", code: "KeyJ", windowsVirtualKeyCode: 74, nativeVirtualKeyCode: 74 });
+    await dispatchKey({ key: "j", code: "KeyJ", windowsVirtualKeyCode: 74, nativeVirtualKeyCode: 74 });
+    await sleep(400);
+    const motionEnd = await client.evaluate(`(() => {
+      const view = window.app.workspace.activeLeaf.view;
+      const editor = view && view.editor;
+      return { line: editor && editor.getCursor ? editor.getCursor().line : -1,
+        focused: Boolean(document.activeElement && document.activeElement.closest && document.activeElement.closest(".cm-editor")) };
+    })()`).catch((error) => ({ error: String(error) }));
+    record("title-motion-no-trap", Boolean(motionEnd && motionEnd.line > motionStart && motionEnd.focused), jsonDetail({ motionStart, motionEnd }));
+    // LP -> Source -> LP leaves no residue: the slot card releases and the
+    // native H1 returns, then the card remounts exactly once.
+    await client.evaluate(`(() => {
+      const leaf = window.app.workspace.activeLeaf;
+      const state = Object.assign({}, leaf.view.getState?.() || {}, { mode: "source", source: true });
+      return leaf.view.setState(state, { history: false });
+    })()`).catch((error) => ({ error: String(error) }));
+    await sleep(900);
+    const sourced = await client.evaluate(probe()).catch((error) => ({ error: error.message }));
+    record("title-source-releases", Boolean(sourced && !sourced.slotMounted && sourced.editorHasH1), jsonDetail(sourced && { slotMounted: sourced.slotMounted, editorHasH1: sourced.editorHasH1, headerCount: sourced.headerCount }));
+    await client.evaluate(`(() => {
+      const leaf = window.app.workspace.activeLeaf;
+      const state = Object.assign({}, leaf.view.getState?.() || {}, { mode: "source", source: false });
+      return leaf.view.setState(state, { history: false });
+    })()`).catch((error) => ({ error: String(error) }));
+    const remounted = await waitFor(client, probe(), (value) => value && value.slotMounted === true && value.headerCount === 1, "slot card remounts after Source", 15000).catch((error) => ({ error: error.message }));
+    record("title-source-remounts", Boolean(remounted && remounted.slotMounted && remounted.headerCount === 1 && !remounted.h1Visible), jsonDetail(remounted));
+    // `-` still works from the slot: the shared foot drawer toggles.
+    await dispatchKey({ key: "-", code: "Minus", windowsVirtualKeyCode: 189, nativeVirtualKeyCode: 189 });
+    const footOpened = await waitFor(client, probe(), (value) => value && value.footOpen === true, "foot opens with bare -", 8000).catch((error) => ({ error: error.message }));
+    await dispatchKey({ key: "-", code: "Minus", windowsVirtualKeyCode: 189, nativeVirtualKeyCode: 189 });
+    const footClosed = await waitFor(client, probe(), (value) => value && value.footOpen === false, "foot closes with bare -", 8000).catch((error) => ({ error: error.message }));
+    record("foot-key-from-slot", Boolean(footOpened && footOpened.footOpen && footClosed && footClosed.footOpen === false), jsonDetail({ footOpened, footClosed }));
     await client.evaluate(`window.app.vault.setConfig("vimMode", ${JSON.stringify(priorVimMode === true)})`);
     await setViewport(client, 1280, 900);
 
@@ -1126,13 +1207,16 @@ async function runE2e(parsed) {
     const reading = await waitFor(client, probe(), (value) => value && value.header, "reading setup header", 15000).catch((error) => ({ error: error.message }));
     record("reading-header-once", Boolean(reading && reading.headerCount === 1), jsonDetail(reading));
     const readingIdentity = bank.assertBankIdentity(reading);
-    record("reading-bank-badge", readingIdentity.ok && reading.shownAria === "Bank setup", readingIdentity.reason || jsonDetail(reading));
-    record("reading-header-follows-h1", Boolean(reading && reading.shownAfterH1), jsonDetail(reading && { shownAfterH1: reading.shownAfterH1, h1: reading.h1 }));
+    record("reading-bank-title", readingIdentity.ok && reading.shownAria === "Bank", readingIdentity.reason || jsonDetail(reading));
+    record("reading-title-slot", Boolean(reading && reading.slotMounted && !reading.h1Visible), jsonDetail(reading && { slotMounted: reading.slotMounted, h1Visible: reading.h1Visible, h1: reading.h1 }));
+    // The fold session is shared across panes: the command flips whatever the
+    // card shows, so the check records a flip rather than a fixed direction.
+    const readingBefore = reading && reading.expanded;
     await client.evaluate('window.app.commands.executeCommandById("bob-ledger-tools:toggle-card-details")');
-    const readingToggled = await waitFor(client, probe(), (value) => value && value.expanded === "true", "Toggle card details opens in Reading", 8000).catch((error) => ({ error: error.message }));
-    record("fold-command-reading", Boolean(readingToggled && readingToggled.expanded === "true"), jsonDetail(readingToggled));
+    const readingToggled = await waitFor(client, probe(), (value) => value && value.expanded !== readingBefore, "Toggle card details flips in Reading", 8000).catch((error) => ({ error: error.message }));
+    record("fold-command-reading", Boolean(readingToggled && readingToggled.expanded !== readingBefore), jsonDetail({ readingBefore, readingToggled }));
     await client.evaluate('window.app.commands.executeCommandById("bob-ledger-tools:toggle-card-details")');
-    await waitFor(client, probe(), (value) => value && value.expanded === "false", "Toggle card details closes in Reading", 8000).catch(() => ({}));
+    await waitFor(client, probe(), (value) => value && value.expanded === readingBefore, "Toggle card details flips back in Reading", 8000).catch(() => ({}));
 
     await rewriteHub(client, vaultDir, bank.invalidHubNote());
     await openNote(client, "bank.md", "live");

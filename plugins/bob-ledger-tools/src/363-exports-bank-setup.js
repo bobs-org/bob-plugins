@@ -24,6 +24,11 @@ try {
       bankSetupLintMarks,
       bankSetupLintDeltas,
       bankSetupMapFindingLines,
+      bankSetupFirstHeading,
+      bankSetupIdentityModel,
+      bankSetupIdentityDigest,
+      bankSetupFallbackIdentity,
+      bankSetupTitleBlock,
       bankSetupBuildEl,
       bankSharedCategoryTile,
     });

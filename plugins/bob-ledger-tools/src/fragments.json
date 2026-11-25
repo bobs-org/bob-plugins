@@ -195,6 +195,7 @@
   "248b-plugin-bank-setup-dom.js",
   "248c-plugin-bank-setup-hosts.js",
   "248ca-plugin-bank-setup-foot.js",
+  "248cb-plugin-bank-setup-title.js",
   "248d-plugin-bank-config-update.js",
   "248e-plugin-bank-config-update-service.js",
   "248f-plugin-bank-category-new-model.js",

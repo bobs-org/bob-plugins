@@ -1,7 +1,8 @@
-// Report-driven Bank Setup headers in Reading view and Live Preview, plus
+// Report-driven Bank Setup card in Reading view and Live Preview, plus
 // Source-mode config lint. The only editor decorations are widgets; no
-// Markdown or frontmatter is rewritten. One header per hub surface, mounted
-// after the first H1 exactly where the album header mounts.
+// Markdown or frontmatter is rewritten. The card owns the note top through
+// the title-slot adopter glue (240k); embeds, popovers, mobile, and failed
+// mounts keep today's body placement after the first H1.
 
 function bankSetupClockLabel(timestamp) {
   try {
@@ -34,6 +35,7 @@ class BobLedgerToolsBankSetupMixin {
       kind: "bank",
       readingPriority: 47,
       allowEmbedDisplay: true,
+      titleOwnership: true,
       fields: {
         active: "bankSetupActive",
         reading: "bankSetupReading",
@@ -58,11 +60,19 @@ class BobLedgerToolsBankSetupMixin {
       ),
       paintReading: (el, path) => plugin.paintBankSetupReading(el, path),
       removeReading: (root, scope, path) => plugin.bankSetupRemoveReading(root, scope, path),
+      onResolveSurface: (widget, root) => {
+        if (!root) plugin.bankSetupRemoveStrays(widget.el, widget.path);
+      },
       afterRefreshReading: () => plugin.bankSetupSyncSurfaces(),
       livePath: (view) => plugin.bankSetupLivePath(view),
       sourcePath: (view) => plugin.bankSetupSourcePath(view),
       viewPath: (view) => plugin.bankSetupLivePath(view) || plugin.bankSetupSourcePath(view),
-      buildDecorations: (view) => plugin.buildBankSetupDecorations(view),
+      buildDecorations: (view, update) => plugin.buildBankSetupDecorations(view, update),
+      shouldRebuild: (update) => {
+        if (!editorLivePreviewField || !update?.startState || !update?.state) return false;
+        try { return update.startState.field(editorLivePreviewField) !== update.state.field(editorLivePreviewField); }
+        catch (_) { return false; }
+      },
       cleanEditor: (view) => plugin.bankSetupCleanEditor(view),
       ownKeys: (scope, path) => plugin.bankSetupOwnKeys(scope, path),
       releaseKeys: (scope, path) => plugin.bankSetupReleaseKeys(scope, path),
@@ -307,8 +317,15 @@ class BobLedgerToolsBankSetupMixin {
     } catch (_) {
       keyLive = false;
     }
+    let hue = null;
+    try {
+      hue = typeof self.bankSetupTitleHue === "function" ? self.bankSetupTitleHue(sourcePath) : null;
+    } catch (_) {
+      hue = null;
+    }
     return {
       sourcePath,
+      hue,
       expanded: Boolean(model && model.expanded),
       desktop: this.bankSetupDesktop(),
       keyLive,
@@ -321,7 +338,8 @@ class BobLedgerToolsBankSetupMixin {
             void self.bankSetupJumpYaml(sourcePath, model && model.line);
           }
         },
-        onEdit: () => { void self.openBankSetupCard({ sourcePath }); },
+        onSetup: () => { void self.openBankSetupCard({ sourcePath }); },
+        onKicker: (target, event) => { void self.bankSetupKickerOpen(target, sourcePath, event); },
         onJump: (line) => {
           void self.bankSetupJumpYaml(
             sourcePath,
@@ -442,6 +460,7 @@ class BobLedgerToolsBankSetupMixin {
     if (!root) {
       return;
     }
+    this.bankSetupReleaseAdoption(scope, sourcePath, { preserveFallback: true });
     try { this.bankSetupTrackFoot?.(scope, sourcePath, null); } catch (_) {}
     for (const node of Array.from(root.querySelectorAll?.(`.${BANK_SETUP_CLASS}`) || [])) {
       if (!this.bankSetupNodeBelongs(node, root)) {
@@ -497,9 +516,8 @@ class BobLedgerToolsBankSetupMixin {
         ? this.bankSetupFootSignature(model, extra, options)
         : model.signature);
       try {
-        const hue = typeof this.bankCardRootHue === "function"
-          ? this.bankCardRootHue(options.sourcePath)
-          : null;
+        const hue = (options && options.hue)
+          || (typeof this.bankCardRootHue === "function" ? this.bankCardRootHue(options.sourcePath) : null);
         if (hue) {
           header.setAttribute?.("data-root-hue", hue);
         }
@@ -511,76 +529,112 @@ class BobLedgerToolsBankSetupMixin {
     }
   }
 
+  // Body placement (fallback): today's spot right after the first non-code
+  // H1, else the start of the root. A node already there stays put.
+  bankSetupPlaceInBody(root, header) {
+    const anchor = this.bankSetupReadingAnchor(root);
+    if (anchor?.parentNode?.insertBefore) {
+      if (header.parentNode === anchor.parentNode && anchor.nextSibling === header) return true;
+      anchor.parentNode.insertBefore(header, anchor.nextSibling || null);
+      return true;
+    }
+    if (header.parentNode === root && root.firstChild === header) return true;
+    if (root.insertBefore) root.insertBefore(header, root.firstChild || null);
+    else root.prepend?.(header);
+    return true;
+  }
+
   paintBankSetupReading(el, sourcePath) {
     const root = this.bankSetupReadingRoot(el);
     const scope = this.bankSetupReadingScope(root);
     if (!root || !bankSetupIsHubPath(sourcePath)) {
       return null;
     }
-    let model = null;
+    // Remove old reading chrome stranded in editor callout chunks, while
+    // leaving the legitimate slot mount and other sources alone.
+    this.bankSetupRemoveStrays(root, sourcePath);
+    let card = null;
     try {
-      model = this.bankSetupModelFor(sourcePath);
-    } catch (error) {
-      model = null;
+      card = this.bankSetupCardFor(sourcePath);
+    } catch (_) {
+      card = null;
+    }
+    const reading = scope?.classList?.contains?.("markdown-preview-view")
+      ? propertyCardReadingViewFor(this.app, scope)
+      : null;
+    const leafPath = reading ? reading.currentPath() : "";
+    // A stale binding for a note this leaf no longer shows paints nothing.
+    if (!card || !card.model || (leafPath && leafPath !== sourcePath)) {
+      this.bankSetupRemoveReading(root, scope, sourcePath);
+      return null;
     }
     const doc = (typeof notebookDomDoc === "function" ? notebookDomDoc(root) : null)
       || (typeof document !== "undefined" ? document : null);
-    const old = Array.from(root.querySelectorAll?.(`.${BANK_SETUP_CLASS}`) || [])
-      .find((node) => this.bankSetupNodeBelongs(node, root));
+    const adopted = typeof propertyCardAdoptedEntry === "function" ? propertyCardAdoptedEntry(scope) : null;
+    const slotNode = adopted && adopted.path === sourcePath && adopted.mode === "slot" ? adopted.node : null;
+    const bodyNodes = this.bankSetupBodyNodes(root, sourcePath, slotNode);
+    let header = slotNode || bodyNodes[0] || null;
     const active = doc?.activeElement;
-    const focusKey = active && old?.contains?.(active)
+    const focusKey = active && header?.contains?.(active)
       ? active.getAttribute?.("data-bank-setup-focus") : "";
-    const extra = typeof this.bankSetupFootExtra === "function" ? this.bankSetupFootExtra(sourcePath) : null;
-    const signature = typeof this.bankSetupFootSignature === "function"
-      ? this.bankSetupFootSignature(model, extra, { expanded: Boolean(model && model.expanded), desktop: this.bankSetupDesktop() })
-      : (model && model.signature);
-    if (old && model && old.getAttribute?.("data-bank-setup-signature") === signature
-      && old.getAttribute?.("data-bank-setup-source") === bankSetupHubPath(sourcePath)) {
-      try { this.bankSetupTrackFoot?.(scope, sourcePath, old); } catch (_) {}
-      this.bankSetupOwnKeys(scope, sourcePath);
-      return old;
+    const extra = typeof this.bankSetupFootExtra === "function"
+      ? this.bankSetupFootExtra(sourcePath, this.bankSetupFootCard(card))
+      : null;
+    const options = {
+      ...this.bankSetupOptions(sourcePath, card.model, "reading"),
+      footExtra: extra,
+      identity: card.identity,
+    };
+    const signature = JSON.stringify([typeof this.bankSetupFootSignature === "function"
+      ? this.bankSetupFootSignature(card.model, extra, options)
+      : (card.model && card.model.signature), bankSetupIdentityDigest(card.identity)]);
+    if (!header || bankSetupNodeSignatures.get(header) !== signature) {
+      let fresh = null;
+      try {
+        fresh = this.bankSetupBuildReading(card.model, options, doc);
+      } catch (_) {
+        fresh = null;
+      }
+      if (!fresh) {
+        this.bankSetupRemoveReading(root, scope, sourcePath);
+        return null;
+      }
+      // The body joins (or the title changes) inside the same node.
+      header = header ? this.bankSetupPatchAdopted(header, fresh) : fresh;
+      bankSetupNodeSignatures.set(header, signature);
     }
-    this.bankSetupRemoveReading(root, scope, sourcePath);
-    if (!model) {
-      return null;
+    for (const node of bodyNodes) {
+      if (node === header) continue;
+      try {
+        node.remove?.();
+      } catch (_) {
+        try { node.parentNode?.removeChild?.(node); } catch (_) {}
+      }
     }
     try {
       scope?.classList?.add?.(BANK_SETUP_SURFACE_CLASS);
       this.bankSetupSurfaces?.add?.(scope);
-    } catch (error) {}
-    const options = { ...this.bankSetupOptions(sourcePath, model), footExtra: extra };
-    let header = null;
-    try {
-      header = this.bankSetupBuildReading(model, options, doc);
-    } catch (error) {
-      header = null;
-    }
-    if (!header) {
-      try { this.bankSetupTrackFoot?.(scope, sourcePath, null); } catch (_) {}
-      this.bankSetupReleaseKeys(scope);
+    } catch (_) {}
+    const desktop = this.bankSetupDesktop();
+    const adoption = desktop
+      ? this.bankSetupAdoptTitle(scope, header, sourcePath, card.identity, {
+        view: reading?.view || null,
+        currentPath: reading?.currentPath || null,
+      })
+      : { mode: "fallback", release: () => {} };
+    if (adoption.mode !== "slot") {
       try {
-        scope?.classList?.remove?.(BANK_SETUP_SURFACE_CLASS);
-      } catch (error) {}
-      return null;
-    }
-    const anchor = this.bankSetupReadingAnchor(root);
-    try {
-      if (anchor?.parentNode?.insertBefore) {
-        anchor.parentNode.insertBefore(header, anchor.nextSibling || null);
-      } else if (root.insertBefore) {
-        root.insertBefore(header, root.firstChild || null);
-      } else {
-        root.prepend?.(header);
+        this.bankSetupPlaceInBody(root, header);
+      } catch (_) {
+        this.bankSetupRemoveReading(root, scope, sourcePath);
+        return null;
       }
-    } catch (error) {
-      this.bankSetupReleaseKeys(scope);
-      return null;
     }
     if (focusKey) {
       try {
         const next = header.querySelector?.(`[data-bank-setup-focus="${focusKey}"]`);
         next?.focus?.({ preventScroll: true });
-      } catch (error) {}
+      } catch (_) {}
     }
     this.bankSetupOwnKeys(scope, sourcePath);
     try { this.bankSetupTrackFoot?.(scope, sourcePath, header); } catch (_) {}
@@ -671,7 +725,9 @@ class BobLedgerToolsBankSetupMixin {
         return Decoration?.none || null;
       }
       if (!view?.state?.doc) {
+        this.bankSetupReleaseAdoptionOnScope(view);
         this.bankSetupSetEditorScope(view, false);
+        this.bankSetupReleaseKeys(view?.dom);
         return Decoration.none;
       }
       const livePath = this.bankSetupLivePath(view);
@@ -680,9 +736,17 @@ class BobLedgerToolsBankSetupMixin {
       }
       const lint = this.bankSetupLintState(view);
       if (!lint) {
+        this.bankSetupReleaseAdoptionOnScope(view);
         this.bankSetupSetEditorScope(view, false);
+        this.bankSetupReleaseKeys(view?.dom);
         return Decoration.none;
       }
+      // Source mode: the slot card, title ownership, keys, and foot release
+      // explicitly, so a mode flip never leaves a hidden H1 or a stranded
+      // slot card. Lint marks still paint through the branch below.
+      this.bankSetupReleaseAdoptionOnScope(view);
+      this.bankSetupReleaseKeys(view?.dom);
+      try { this.bankSetupTrackFoot?.(view?.dom, this.bankSetupSourcePath(view), null); } catch (_) {}
       return this.bankSetupLintDecorations(view, lint);
     } catch (error) {
       return Decoration?.none || null;
@@ -692,47 +756,73 @@ class BobLedgerToolsBankSetupMixin {
   bankSetupLiveDecorations(view, livePath) {
     const text = view.state.doc.toString();
     try { this.bankSetupRememberSource?.(livePath, text); } catch (_) {}
-    const model = this.bankSetupModelFor(livePath);
-    this.bankSetupSetEditorScope(view, Boolean(model));
-    if (!model) {
+    let card = null;
+    try {
+      card = this.bankSetupCardFor(livePath, text);
+    } catch (_) {
+      card = null;
+    }
+    this.bankSetupSetEditorScope(view, Boolean(card && card.model));
+    if (!card || !card.model) {
       try { this.bankSetupTrackFoot?.(view?.dom, livePath, null); } catch (_) {}
+      this.bankSetupReleaseAdoption(view?.dom, livePath);
       this.bankSetupReleaseKeys(view?.dom);
       return Decoration.none;
     }
     const doc = (typeof notebookDomDoc === "function" ? notebookDomDoc(view.dom) : null)
       || (typeof document !== "undefined" ? document : null);
-    const extra = typeof this.bankSetupFootExtra === "function" ? this.bankSetupFootExtra(livePath) : null;
-    const options = { ...this.bankSetupOptions(livePath, model, "live-preview"), footExtra: extra };
-    const header = this.bankSetupBuildReading(model, options, doc);
-    if (!header) {
-      try { this.bankSetupTrackFoot?.(view?.dom, livePath, null); } catch (_) {}
-      this.bankSetupReleaseKeys(view?.dom);
-      return Decoration.none;
+    const adopted = typeof propertyCardAdoptedEntry === "function" ? propertyCardAdoptedEntry(view.dom) : null;
+    let header = adopted && adopted.path === livePath && adopted.mode === "slot" ? adopted.node : null;
+    const extra = typeof this.bankSetupFootExtra === "function"
+      ? this.bankSetupFootExtra(livePath, this.bankSetupFootCard(card))
+      : null;
+    const options = {
+      ...this.bankSetupOptions(livePath, card.model, "live-preview"),
+      footSpec: extra?.footSpec,
+      identity: card.identity,
+    };
+    const signature = JSON.stringify([typeof this.bankSetupFootSignature === "function"
+      ? this.bankSetupFootSignature(card.model, extra, options)
+      : (card.model && card.model.signature), bankSetupIdentityDigest(card.identity)]);
+    if (!header || bankSetupNodeSignatures.get(header) !== signature) {
+      const fresh = this.bankSetupBuildReading(card.model, options, doc);
+      if (!fresh) {
+        try { this.bankSetupTrackFoot?.(view?.dom, livePath, null); } catch (_) {}
+        this.bankSetupReleaseAdoption(view?.dom, livePath);
+        this.bankSetupReleaseKeys(view?.dom);
+        return Decoration.none;
+      }
+      if (header) this.bankSetupPatchLive(view, adopted, fresh, signature);
+      else {
+        header = fresh;
+        bankSetupNodeSignatures.set(header, signature);
+      }
     }
+    const desktop = this.bankSetupDesktop();
+    const adoption = desktop
+      ? this.bankSetupAdoptTitle(view.dom, header, livePath, card.identity, {
+        view,
+        currentPath: () => propertyCardLiveCurrentPath(view),
+      })
+      : { mode: "fallback", release: () => {} };
     // Native Properties live under the CodeMirror editor (view.dom), not the
     // .markdown-source-view that carries the surface class.
     this.bankSetupOwnKeys(view?.dom, livePath);
     try { this.bankSetupTrackFoot?.(view?.dom, livePath, header); } catch (_) {}
+    if (adoption.mode === "slot") {
+      return Decoration.none;
+    }
+
+    // Fallback: today's inline widget at the end of the first `# ` line.
     const anchor = this.notebookHeaderLiveAnchor?.(text) ?? -1;
     const frontmatterEnd = this.notebookHeaderFrontmatterEnd?.(text) ?? -1;
-    const footSignature = typeof this.bankSetupFootSignature === "function"
-      ? this.bankSetupFootSignature(model, extra, {
-        expanded: options.expanded,
-        desktop: options.desktop,
-      })
-      : bankSetupSignature(model, {
-        expanded: options.expanded,
-        desktop: options.desktop,
-      });
     const widget = new class extends WidgetType {
       constructor() {
         super();
         this.path = livePath;
-        this.signature = footSignature;
+        this.signature = signature;
       }
-      eq(other) {
-        return Boolean(other && other.path === this.path && other.signature === this.signature);
-      }
+      eq(other) { return Boolean(other && other.path === this.path && other.signature === this.signature); }
       toDOM() {
         header.setAttribute?.("data-cm-widget", "true");
         header.setAttribute?.("data-bank-setup-source", livePath);
@@ -828,6 +918,7 @@ class BobLedgerToolsBankSetupMixin {
 
   bankSetupCleanEditor(view) {
     try { this.bankSetupTrackFoot?.(view?.dom, this.bankSetupLivePath(view), null); } catch (_) {}
+    this.bankSetupReleaseAdoptionOnScope(view);
     this.bankPropertyCardHost().cleanEditor(view, {
       unmark: (scope) => {
         scope?.classList?.remove?.(BANK_SETUP_SURFACE_CLASS);

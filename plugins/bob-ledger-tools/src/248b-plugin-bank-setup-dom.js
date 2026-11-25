@@ -403,19 +403,86 @@ function bankSetupPaintFindings(body, model, doc, handlers) {
   }
 }
 
-// The bank card's species badge: the bank mark in a plain tile and the word
-// Bank. The card keeps its exact "Bank setup" aria-label, which already
-// leads with the species word, so it never calls propertyCardApplyIdentity.
-function bankSetupIdentityBadge(doc) {
-  if (typeof propertyCardBuildIdentityBadge !== "function") return null;
-  return propertyCardBuildIdentityBadge(doc, { kind: "bank", emoji: "🏦" });
+// Fallback identity when the host passes no identity (older callers, offline
+// previews): the hub title with no crumbs or subtitle.
+function bankSetupFallbackIdentity(model) {
+  const path = (model && model.path) || BANK_SETUP_HUB_PATH;
+  const stem = String(path.split("/").pop() || "bank.md").replace(/\.md$/i, "") || "bank";
+  return {
+    kind: "bank",
+    path,
+    stem,
+    title: "Bank",
+    emoji: "🏦",
+    heading: "🏦 Bank",
+    summary: "",
+    owners: [],
+    ancestryBroken: false,
+    ancestryMessage: "",
+  };
 }
 
-// `bankSetupBuildEl(model, options, doc)`: the whole Setup header. `model`
-// is a `bankSetupModel`; `options` carries sourcePath, keyLive, and
-// `handlers` (onToggle, onYaml, onJump(line), onCopyStarter, onRetry).
-// Older callers pass handlers directly; they get bank.md with no keycap.
-// Foldable states (valid, invalid, missing with a starter) render the
+// The title block: kit tile/kicker/title/subtitle with the Setup and YAML
+// actions in the kicker row. Pure: kicker navigation arrives as
+// handlers.onKicker(target, event). A click on Setup never toggles the fold:
+// it is a separate button from the fold row below.
+function bankSetupTitleBlock(doc, identity, spec = {}) {
+  try {
+    if (!identity || !doc) return null;
+    const handlers = spec.handlers || {};
+    const block = propertyCardBuildTitleBlock(doc, {
+      kind: "bank",
+      title: identity.title,
+      subtitle: identity.summary || "",
+      tile: { emoji: identity.emoji || "🏦" },
+      kicker: (identity.owners || []).map((owner) => ({
+        text: owner.title || owner.stem || "",
+        target: owner.path,
+      })),
+      onLink: (target, event) => {
+        if (typeof handlers.onKicker === "function") handlers.onKicker(target, event);
+      },
+    });
+    if (!block) return null;
+    for (const link of Array.from(block.element.querySelectorAll?.(".bob-property-card-kicker-link") || [])) {
+      try {
+        link.setAttribute("data-bank-setup-focus", `crumb:${link.getAttribute?.("data-href") || ""}`);
+      } catch (_) {}
+    }
+    if (spec.showSetup === true) {
+      const setup = bankSetupEl(doc, "button", "bob-bank-setup-edit", "⊞ Setup", {
+        type: "button",
+        "data-bank-setup-focus": "edit",
+        "aria-label": "Edit bank setup",
+      });
+      if (setup) {
+        bankSetupListen(setup, () => {
+          if (typeof handlers.onSetup === "function") handlers.onSetup();
+        });
+        block.actions.appendChild(setup);
+      }
+    }
+    if (spec.showYaml === true) {
+      const yaml = bankSetupYamlButton(doc, handlers);
+      if (yaml && block.actions.appendChild) block.actions.appendChild(yaml);
+    }
+    if (identity.ancestryMessage) {
+      const note = bankSetupEl(doc, "p", "bob-bank-setup-ancestry-note", identity.ancestryMessage, { role: "note" });
+      if (note && block.element.appendChild) block.element.appendChild(note);
+    }
+    return block.element;
+  } catch (_) {
+    return null;
+  }
+}
+
+// `bankSetupBuildEl(model, options, doc)`: the whole Setup card. `model`
+// is a `bankSetupModel`; `options` carries sourcePath, keyLive, identity,
+// and `handlers` (onToggle, onSetup, onYaml, onKicker, onJump(line),
+// onCopyStarter, onRetry). Older callers pass handlers directly; they get
+// bank.md with the fallback identity and no keycap. Every state paints the
+// kit title block first (demoted until the host's adoption owns the title);
+// foldable states (valid, invalid, missing with a starter) render the
 // shared fold row; bodyless states render a static row without fold
 // attributes so `_` falls through to Vim. All report strings enter as text.
 function bankSetupBuildEl(model, optionsOrHandlers, doc) {
@@ -430,47 +497,30 @@ function bankSetupBuildEl(model, optionsOrHandlers, doc) {
     ? options.sourcePath
     : (model.path || BANK_SETUP_HUB_PATH);
   const keyLive = options.keyLive === true;
+  const identity = options.identity && typeof options.identity === "object" && options.identity.title
+    ? options.identity
+    : bankSetupFallbackIdentity(model);
+  const showSetup = model.desktop === true && (model.state === "valid" || model.state === "invalid");
+  const showYaml = model.state === "invalid" || model.state === "missing"
+    || model.state === "unsupported" || model.state === "mobile";
   const root = bankSetupEl(doc, "section", `${BANK_SETUP_CLASS} bob-property-card is-${model.state}`, null, {
     "data-bank-setup": "true",
     "data-bank-setup-state": model.state,
-    "data-card-kind": "bank",
-    "aria-label": "Bank setup",
   });
-  if (!root) {
-    return null;
-  }
-  const head = bankSetupEl(doc, "div", "bob-bank-setup-head", null, null);
-  if (!head || typeof root.appendChild !== "function") {
+  if (!root || typeof root.appendChild !== "function") {
     return root;
   }
-  root.appendChild(head);
-  const badge = bankSetupIdentityBadge(doc);
-  if (badge) {
-    head.appendChild(badge);
+  try {
+    propertyCardApplyIdentity(root, { kind: "bank", title: identity.title });
+  } catch (_) {}
+  const title = bankSetupTitleBlock(doc, identity, { showSetup, showYaml, handlers });
+  if (title) {
+    root.appendChild(title);
   }
+  try {
+    propertyCardDemoteTitleHeading(root);
+  } catch (_) {}
   const foldable = typeof model.foldable === "boolean" ? model.foldable : bankSetupIsFoldable(model);
-  const paintYaml = (container) => {
-    const yaml = bankSetupYamlButton(doc, handlers);
-    if (yaml && container && typeof container.appendChild === "function") {
-      container.appendChild(yaml);
-    }
-  };
-  const paintEdit = (container) => {
-    if (!(model.desktop && (model.state === "valid" || model.state === "invalid"))) {
-      return;
-    }
-    const edit = bankSetupEl(doc, "button", "bob-bank-setup-edit", "⊞ Edit", {
-      type: "button",
-      "data-bank-setup-focus": "edit",
-      "aria-label": "Edit bank setup",
-    });
-    if (edit) {
-      bankSetupListen(edit, () => {
-        if (handlers && typeof handlers.onEdit === "function") handlers.onEdit();
-      });
-      container.appendChild(edit);
-    }
-  };
   const paintStatic = (text, attrs, withRetry) => {
     const wrap = bankSetupEl(doc, "div", "bob-bank-setup-static", null, null);
     if (!wrap) {
@@ -492,8 +542,6 @@ function bankSetupBuildEl(model, optionsOrHandlers, doc) {
   };
   if (!foldable) {
     if (model.state === "mobile") {
-      paintEdit(head);
-      paintYaml(head);
       paintStatic("drawn by bob on desktop", null, false);
       return root;
     }
@@ -502,12 +550,10 @@ function bankSetupBuildEl(model, optionsOrHandlers, doc) {
       return root;
     }
     if (model.state === "unsupported") {
-      paintYaml(head);
       paintStatic("Setup needs a newer bob — run bob update", { role: "status" }, false);
       return root;
     }
     if (model.state === "missing") {
-      paintYaml(head);
       paintStatic("Setup · no bank: mapping yet", null, false);
       return root;
     }
@@ -518,8 +564,6 @@ function bankSetupBuildEl(model, optionsOrHandlers, doc) {
     paintStatic(model.collapsedLine || "Setup", null, false);
     return root;
   }
-  paintEdit(head);
-  paintYaml(head);
   const summary = model.state === "missing" ? "no bank: mapping yet" : (model.collapsedLine || "Setup");
   let bodyId = null;
   try {

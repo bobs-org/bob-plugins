@@ -44,6 +44,8 @@ try {
       propertyCardBuildRail,
       propertyCardCleanInlineText,
       propertyCardCleanHeadingText,
+      propertyCardSplitLeadingEmoji,
+      propertyCardBankTitleRecognizer,
       propertyCardTitleSourceRangeFromLines,
       propertyCardTitleSourceRange,
       propertyCardSelectionTouches,

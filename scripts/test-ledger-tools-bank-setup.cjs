@@ -155,6 +155,13 @@ class Element {
     }
     return this.attrs.has(name) ? this.attrs.get(name) : null;
   }
+  getAttributeNames() { return [...this.attrs.keys()]; }
+  removeAttribute(name) {
+    this.attrs.delete(name);
+    if (name === "class") {
+      this.className = "";
+    }
+  }
   appendChild(node) {
     if (node.parentNode && node.parentNode.removeChild) {
       node.parentNode.removeChild(node);
@@ -719,26 +726,25 @@ test("fold rows carry unique live ids, stale rides outside, and bodyless carries
   assert.match(bodyless.el.textContent, /loading/);
 });
 
-// The bank card wears its species: data-card-kind="bank" and a badge (the
-// bank mark in a plain tile, then the word Bank) leading the head row. The
-// aria-label stays exactly "Bank setup", which already leads with the word.
-// Foldable states render the shared fold row below the head; bodyless states
-// render a static row without fold attributes.
+// The bank card wears its species through the kit title block (tile, kicker,
+// title, subtitle): data-card-kind="bank", an aria-label that folds
+// "Bank: Bank" to the bare word, and role="group". The heading stays demoted
+// until the host's adoption owns it. Foldable states render the shared fold
+// row below the title; bodyless states render a static row without fold
+// attributes.
 function assertBankIdentity(el, label) {
   assert.equal(el.getAttribute("data-card-kind"), "bank", `${label}: data-card-kind`);
-  assert.equal(el.getAttribute("aria-label"), "Bank setup", `${label}: aria-label`);
-  assert.equal(el.getAttribute("role"), null, `${label}: no role is added`);
+  assert.equal(el.getAttribute("aria-label"), "Bank", `${label}: aria-label`);
+  assert.equal(el.getAttribute("role"), "group", `${label}: the card is a group`);
   assert.equal(el.querySelectorAll("[aria-level]").length, 0, `${label}: never a heading`);
-  const head = el.querySelector(".bob-bank-setup-head");
-  const badge = head.childNodes.filter((node) => node.nodeType === 1)[0];
-  assert.equal(badge.getAttribute("class"), "bob-property-card-identity", `${label}: badge leads the head row`);
-  assert.equal(badge.getAttribute("data-card-kind"), "bank");
-  const [tile, word] = badge.childNodes.filter((node) => node.nodeType === 1);
-  assert.equal(tile.getAttribute("data-tile-form"), "plain");
-  assert.equal(tile.getAttribute("aria-hidden"), "true");
-  assert.equal(tile.textContent, "🏦");
-  assert.equal(word.getAttribute("class"), "bob-property-card-identity-word");
-  assert.equal(word.textContent, "Bank");
+  const block = el.querySelector(".bob-property-card-title-block");
+  assert.ok(block, `${label}: the kit title block leads`);
+  const tile = block.querySelector(".bob-property-card-tile");
+  assert.equal(tile.getAttribute("data-tile-form"), "plain", `${label}: plain tile`);
+  assert.equal(tile.getAttribute("aria-hidden"), "true", `${label}: tile is decorative`);
+  assert.equal(tile.textContent, "🏦", `${label}: the tile carries the bank mark`);
+  assert.match(block.querySelector(".bob-property-card-kicker").textContent, /Bank/, `${label}: species word`);
+  assert.equal(block.querySelector(".bob-property-card-title").textContent, "Bank", `${label}: title`);
   const fold = el.querySelector(".bob-bank-setup-toggle");
   if (fold) {
     assert.equal(fold.getAttribute("data-card-fold"), "bank", `${label}: fold kind`);
@@ -754,7 +760,7 @@ function assertBankIdentity(el, label) {
   }
 }
 
-test("every Setup state wears the bank species badge without changing the toggle or label", () => {
+test("every Setup state paints the title block without changing the toggle or label", () => {
   const states = {
     collapsed: paintModel(decodedReport(), { expanded: false }),
     expanded: paintModel(decodedReport(), { expanded: true }),
@@ -765,11 +771,11 @@ test("every Setup state wears the bank species badge without changing the toggle
     missing: paintModel(decodedReport({ ok: false, state: "missing", categories: [], accounts: [], rules: [], starter: "bank:\n  accounts: {}" }), {}),
   };
   for (const [label, painted] of Object.entries(states)) assertBankIdentity(painted.el, label);
-  // The badge carries the bank mark; the collapsed clause drops its emoji.
+  // The tile carries the bank mark; the collapsed clause drops its emoji.
   assert.match(states.collapsed.el.querySelector(".bob-bank-setup-toggle").textContent, /▸ Setup · WF Checking/);
   assert.doesNotMatch(states.collapsed.el.querySelector(".bob-bank-setup-toggle").textContent, /🏦 WF Checking/);
-  assert.equal(states.expanded.el.querySelector(".bob-bank-setup-body").querySelectorAll(".bob-property-card-identity").length, 0);
-  assert.equal(states.expanded.el.querySelectorAll(".bob-property-card-identity").length, 1);
+  assert.equal(states.expanded.el.querySelectorAll(".bob-property-card-title-block").length, 1);
+  assert.equal(states.expanded.el.querySelector(".bob-bank-setup-body").querySelectorAll(".bob-property-card-title-block").length, 0);
 });
 
 test("invalid header stays toggleable with a live-region banner and a last-good note", () => {
@@ -1319,14 +1325,20 @@ test("valid bank YAML Done restores the prior view and reopens the card selectio
   assert.equal(leaf.view.file.path, "daily.md");
 });
 
-test("Setup header shows Edit on desktop valid/invalid states and degrades without it on mobile", () => {
+test("Setup card shows Setup on desktop valid/invalid and YAML where Source repair is primary", () => {
   const doc = new Document();
-  const valid = H.bankSetupModel(configReport(), { desktop: true });
-  assert.ok(H.bankSetupBuildEl(valid, {}, doc).querySelector(".bob-bank-setup-edit"));
-  const invalid = H.bankSetupModel(configReport({ ok: false, state: "invalid" }), { desktop: true });
-  assert.ok(H.bankSetupBuildEl(invalid, {}, doc).querySelector(".bob-bank-setup-edit"));
-  const mobile = H.bankSetupModel(configReport(), { desktop: false });
-  assert.equal(H.bankSetupBuildEl(mobile, {}, doc).querySelector(".bob-bank-setup-edit"), null);
+  const valid = H.bankSetupBuildEl(H.bankSetupModel(configReport(), { desktop: true }), {}, doc);
+  assert.equal(valid.querySelector(".bob-bank-setup-edit").textContent, "⊞ Setup");
+  assert.equal(valid.querySelector(".bob-bank-setup-yaml"), null);
+  const invalid = H.bankSetupBuildEl(H.bankSetupModel(configReport({ ok: false, state: "invalid" }), { desktop: true }), {}, doc);
+  assert.ok(invalid.querySelector(".bob-bank-setup-edit"));
+  assert.ok(invalid.querySelector(".bob-bank-setup-yaml"));
+  const missing = H.bankSetupBuildEl(H.bankSetupModel(configReport({ ok: false, state: "missing", starter: "bank:\n  accounts: {}" }), { desktop: true }), {}, doc);
+  assert.equal(missing.querySelector(".bob-bank-setup-edit"), null);
+  assert.ok(missing.querySelector(".bob-bank-setup-yaml"));
+  const mobile = H.bankSetupBuildEl(H.bankSetupModel(configReport(), { desktop: false }), {}, doc);
+  assert.equal(mobile.querySelector(".bob-bank-setup-edit"), null);
+  assert.ok(mobile.querySelector(".bob-bank-setup-yaml"));
 });
 
 // --- Bank Setup card (setup-card-more): Accounts, Rules, Checks. ---

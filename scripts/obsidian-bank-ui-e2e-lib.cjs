@@ -1201,7 +1201,7 @@ function SETUP_UI_PROBE() {
     const banner = header && header.querySelector(".bob-bank-setup-banner");
     const foldKind = toggle && toggle.getAttribute("data-card-fold") || "";
     const foldControls = toggle && toggle.getAttribute("aria-controls") || "";
-    const foldControlsResolved = Boolean(foldControls && header && header.querySelector(`[id="${foldControls}"]`));
+    const foldControlsResolved = Boolean(foldControls && header && header.querySelector('[id="' + foldControls + '"]'));
     const foldKey = toggle && toggle.getAttribute("aria-keyshortcuts") || "";
     const foldTitle = toggle && toggle.getAttribute("title") || "";
     const attention = toggle && toggle.querySelector(".bob-property-card-fold-attention");
@@ -1236,11 +1236,24 @@ function SETUP_UI_PROBE() {
     const boxed = (el) => { const box = el.getBoundingClientRect(); return box.width > 0 && box.height > 0; };
     const shownHeader = Array.from(viewRoot.querySelectorAll(".bob-bank-setup")).find(boxed) || header;
     const shownAfterH1 = Boolean(shownHeader && shownHeader.previousElementSibling && /bank/i.test(textOf(shownHeader.previousElementSibling)));
-    const head = shownHeader && shownHeader.querySelector(".bob-bank-setup-head");
-    const badge = head && head.querySelector(".bob-property-card-identity");
-    const badgeTile = badge && badge.querySelector(".bob-property-card-tile");
-    const badgeWord = badge && badge.querySelector(".bob-property-card-identity-word");
-    const badgeBox = badge ? badge.getBoundingClientRect() : null;
+    const slotMounted = Boolean(shownHeader && shownHeader.classList && shownHeader.classList.contains("bob-property-card-title-slot"));
+    const titleBlock = shownHeader && shownHeader.querySelector(".bob-property-card-title-block");
+    const tile = titleBlock && titleBlock.querySelector(".bob-property-card-tile");
+    const species = titleBlock && titleBlock.querySelector(".bob-property-card-kicker-species");
+    const titleEl = titleBlock && titleBlock.querySelector(".bob-property-card-title");
+    const subtitle = titleBlock && titleBlock.querySelector(".bob-property-card-subtitle");
+    const setupBtn = titleBlock && titleBlock.querySelector(".bob-bank-setup-edit");
+    const yamlBtn = titleBlock && titleBlock.querySelector(".bob-bank-setup-yaml");
+    const crumb = titleBlock && titleBlock.querySelector(".bob-property-card-kicker-link");
+    const footDisclosure = shownHeader && shownHeader.querySelector(".bob-property-card-foot-disclosure");
+    const toggleText = textOf(toggle);
+    const lpH1Revealed = Array.from(document.querySelectorAll(".cm-content .cm-line")).some((el) => String(el.textContent || "").includes("🏦 Bank"));
+    const bankH1s = Array.from(viewRoot.querySelectorAll("h1")).concat(Array.from(document.querySelectorAll(".inline-title")));
+    const h1Visible = bankH1s.filter((el) => /Bank/.test(el.textContent || "")).some((el) => {
+      const box = el.getBoundingClientRect();
+      return box.width > 0 && box.height > 0;
+    });
+    const editorText = (() => { try { return view && view.editor && view.editor.getValue ? view.editor.getValue() : ""; } catch (_) { return ""; } })();
     const modal = plugin && plugin.bankSetupCardModal;
     const sessionState = modal && modal.session && typeof modal.session.getState === "function" ? modal.session.getState() : null;
     return {
@@ -1257,16 +1270,28 @@ function SETUP_UI_PROBE() {
       cardKind: shownHeader && shownHeader.getAttribute("data-card-kind") || "",
       shownAria: shownHeader && shownHeader.getAttribute("aria-label") || "",
       shownAfterH1,
+      slotMounted,
+      h1Visible,
+      editorHasH1: /#[ \t]+🏦 Bank/.test(editorText),
       headerHeadings: shownHeader ? shownHeader.querySelectorAll('[aria-level="1"]').length : 0,
-      badge: badge ? {
-        first: Boolean(head && head.firstElementChild === badge),
-        kind: badge.getAttribute("data-card-kind") || "",
-        word: textOf(badgeWord),
-        wordShown: Boolean(badgeWord && window.getComputedStyle(badgeWord).textTransform === "uppercase"),
-        tileForm: badgeTile && badgeTile.getAttribute("data-tile-form") || "",
-        tileHidden: Boolean(badgeTile && badgeTile.getAttribute("aria-hidden") === "true"),
-        glyph: textOf(badgeTile),
-        visible: Boolean(badgeBox && badgeBox.width > 0 && badgeBox.height > 0),
+      footOpen: footDisclosure ? footDisclosure.getAttribute("aria-expanded") === "true" : null,
+      toggleText,
+      lpH1Revealed,
+      title: titleBlock ? {
+        leads: Boolean(titleBlock.parentNode === shownHeader && shownHeader.firstElementChild === titleBlock),
+        kind: shownHeader && shownHeader.getAttribute("data-card-kind") || "",
+        word: textOf(species),
+        wordShown: Boolean(species && window.getComputedStyle(species).textTransform === "uppercase"),
+        title: textOf(titleEl),
+        subtitle: textOf(subtitle),
+        tileForm: tile && tile.getAttribute("data-tile-form") || "",
+        tileHidden: Boolean(tile && tile.getAttribute("aria-hidden") === "true"),
+        glyph: textOf(tile),
+        setup: textOf(setupBtn),
+        yaml: Boolean(yamlBtn),
+        crumb: textOf(crumb),
+        crumbHref: crumb && crumb.getAttribute("data-href") || "",
+        visible: boxed(titleBlock),
       } : null,
       surface: Boolean(surface),
       hubNote: Boolean(hubNote),
@@ -1319,35 +1344,42 @@ function SETUP_UI_PROBE() {
   } })()`;
 }
 
-// The bank card wears its species: data-card-kind="bank", no heading, and a
-// visible badge (the bank mark in a plain tile, then the uppercased word Bank)
-// leading the head row. The aria-label stays "Bank setup" (checked by callers).
+// The bank card wears its species through the kit title block: data-card-kind
+// is "bank", no heading (demoted until adoption owns it), and a visible title
+// block (plain 🏦 tile, uppercased Bank species word, Bank title) leading the
+// card. The aria-label is the bare word "Bank" (checked by callers).
 function assertBankIdentity(probe) {
   if (!probe || !probe.header) return { ok: false, reason: "setup header missing" };
   if (probe.cardKind !== "bank") return { ok: false, reason: `data-card-kind ${probe.cardKind}` };
-  if (probe.headerHeadings) return { ok: false, reason: `aria-level=1 count ${probe.headerHeadings}` };
-  const badge = probe.badge;
-  if (!badge) return { ok: false, reason: "species badge missing" };
-  if (!badge.first) return { ok: false, reason: "badge does not lead the head row" };
-  if (badge.kind !== "bank" || badge.word !== "Bank" || !badge.wordShown) {
-    return { ok: false, reason: `badge word ${badge.kind}/${badge.word}/${badge.wordShown}` };
+  // A slot-mounted card owns the title, so the kit heading is promoted to
+  // exactly one level-one heading; a body-placed card stays demoted.
+  const wantHeadings = probe.slotMounted === true ? 1 : 0;
+  if (probe.headerHeadings !== wantHeadings) {
+    return { ok: false, reason: `aria-level=1 count ${probe.headerHeadings} (slot ${probe.slotMounted === true})` };
   }
-  if (badge.tileForm !== "plain" || !badge.tileHidden || badge.glyph !== "🏦") {
-    return { ok: false, reason: `badge tile ${badge.tileForm}/${badge.tileHidden}/${badge.glyph}` };
+  const title = probe.title;
+  if (!title) return { ok: false, reason: "title block missing" };
+  if (!title.leads) return { ok: false, reason: "title block does not lead the card" };
+  if (title.kind !== "bank" || title.word !== "Bank" || !title.wordShown) {
+    return { ok: false, reason: `species word ${title.kind}/${title.word}/${title.wordShown}` };
   }
-  if (!badge.visible) return { ok: false, reason: "badge has no visible box" };
-  return { ok: true, reason: "bank badge leads the head row" };
+  if (title.title !== "Bank") return { ok: false, reason: `card title ${title.title}` };
+  if (title.tileForm !== "plain" || !title.tileHidden || title.glyph !== "🏦") {
+    return { ok: false, reason: `title tile ${title.tileForm}/${title.tileHidden}/${title.glyph}` };
+  }
+  if (!title.visible) return { ok: false, reason: "title block has no visible box" };
+  return { ok: true, reason: "bank title block leads the card" };
 }
 
 function assertLiveDefault(probe) {
   if (!probe || !probe.header) return { ok: false, reason: "setup header missing" };
   if (probe.headerCount !== 1) return { ok: false, reason: `header count ${probe.headerCount}` };
-  if (probe.headerAria !== "Bank setup") return { ok: false, reason: `aria-label ${probe.headerAria}` };
+  if (probe.headerAria !== "Bank") return { ok: false, reason: `aria-label ${probe.headerAria}` };
   const identity = assertBankIdentity(probe);
   if (!identity.ok) return identity;
   if (probe.expanded !== "false") return { ok: false, reason: `aria-expanded ${probe.expanded}` };
-  const line = String(probe.collapsed || "");
-  if (/🏦 WF Checking/.test(line) || !/Setup ·/.test(line) || !/categor/.test(line) || !/no rules/.test(line)) {
+  const line = String(probe.toggleText || "");
+  if (/🏦 WF Checking/.test(line) || !/▸ Setup ·/.test(line) || !/categor/.test(line) || !/no rules/.test(line)) {
     return { ok: false, reason: `collapsed grammar: ${line}` };
   }
   if (probe.foldKind !== "bank") return { ok: false, reason: `fold kind ${probe.foldKind}` };

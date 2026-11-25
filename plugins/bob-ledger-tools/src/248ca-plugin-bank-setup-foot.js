@@ -55,7 +55,33 @@ class BobLedgerToolsBankSetupFootMixin {
     });
   }
 
-  bankSetupFootSpec(path) {
+  // Truthful where-marks: only what the card actually painted. The Setup body
+  // (bank mapping) marks only when it painted (expanded); the per-row bank
+  // key hide in native Properties stays regardless.
+  bankSetupFootWhere(card) {
+    const identity = (card && card.identity) || {};
+    const where = { type: "tile", created: "foot" };
+    if (Array.isArray(identity.owners) && identity.owners.length) where.parent = "kicker";
+    if (identity.summary) where.summary = "subtitle";
+    if (card && card.bodyPainted === true) where.bank = "setup";
+    return where;
+  }
+
+  // The foot's view of a painted card: identity for the where-marks and
+  // whether the Setup body (the bank mapping) actually painted.
+  bankSetupFootCard(card) {
+    try {
+      const model = card && card.model ? card.model : null;
+      return {
+        identity: (card && card.identity) || null,
+        bodyPainted: Boolean(model) && model.expanded === true,
+      };
+    } catch (_) {
+      return { identity: null, bodyPainted: false };
+    }
+  }
+
+  bankSetupFootSpec(path, card) {
     const filePath = bankSetupHubPath(path) || BANK_SETUP_HUB_PATH;
     const nested = {};
     if (this.bankSetupDesktop?.() !== false) nested.bank = "setup";
@@ -64,14 +90,14 @@ class BobLedgerToolsBankSetupFootMixin {
       kind: "bank",
       sourceText: this.bankSetupSourceCache?.get?.(filePath),
       frontmatter: propertyCardFootAdapterFrontmatter(this, filePath),
-      where: { bank: "card", created: "foot" },
+      where: this.bankSetupFootWhere(card),
       nested,
     });
   }
 
-  bankSetupFootExtra(path) {
+  bankSetupFootExtra(path, card) {
     let spec = null;
-    try { spec = this.bankSetupFootSpec(path); } catch (_) { spec = null; }
+    try { spec = this.bankSetupFootSpec(path, card); } catch (_) { spec = null; }
     if (!spec) {
       spec = {
         path: bankSetupHubPath(path) || BANK_SETUP_HUB_PATH,

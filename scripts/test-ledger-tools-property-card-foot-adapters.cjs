@@ -359,11 +359,28 @@ test("bank setup appends the foot after BuildEl, including collapsed, and hides 
   assert.match(header.querySelector(".bob-property-card-foot-stamp").textContent, /no created date|created/);
   const helper = helpers.bankSetupBuildEl(model, {}, doc);
   assert.equal(helper.querySelector(FOOT), null, "the BuildEl helper stays foot-free");
-  const spec = plugin.bankSetupFootSpec("bank.md");
-  assert.equal(spec.inventory.rows.find((row) => row.key === "bank")?.mark, "card");
+  const collapsedCard = plugin.bankSetupFootCard({ identity: null, model });
+  assert.equal(collapsedCard.bodyPainted, false);
+  const spec = plugin.bankSetupFootSpec("bank.md", collapsedCard);
+  assert.equal(spec.inventory.rows.find((row) => row.key === "bank")?.mark, null,
+    "a collapsed body paints no bank mapping");
   assert.equal(spec.inventory.rows.find((row) => row.key === "bank")?.nested, "setup");
+  assert.equal(spec.inventory.rows.find((row) => row.key === "created")?.mark, "foot");
+  const paintedCard = plugin.bankSetupFootCard({
+    identity: { title: "Bank", summary: "Bank hub", owners: [{ path: "cash.md", title: "Cash" }] },
+    model: { ...model, expanded: true },
+  });
+  const painted = plugin.bankSetupFootSpec("bank.md", paintedCard);
+  assert.equal(painted.inventory.rows.find((row) => row.key === "bank")?.mark, "setup");
+  assert.deepEqual(plugin.bankSetupFootWhere(paintedCard), {
+    type: "tile",
+    parent: "kicker",
+    summary: "subtitle",
+    bank: "setup",
+    created: "foot",
+  });
   plugin.bankSetupDesktop = () => false;
-  const mobile = plugin.bankSetupFootSpec("bank.md");
+  const mobile = plugin.bankSetupFootSpec("bank.md", collapsedCard);
   assert.equal(mobile.inventory.rows.find((row) => row.key === "bank")?.nested, null);
 
   const { preview, properties } = readingProperties(doc, ["bank", "title", "aliases"]);

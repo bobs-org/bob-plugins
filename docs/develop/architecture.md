@@ -206,9 +206,9 @@ keep modifier keys and jump history. Kit CSS applies only under
 the narrow-width container. Days and periods use `--bob-day-accent`, never
 an area hue. `propertyCardBuildIdentityBadge(doc, { kind, emoji, icon })`
 returns the glyph tile plus the species word for surfaces that name a species
-without owning the title: the bank card's head row and the card editors'
-modal headers. It is never a heading, and outside a card it falls back to
-neutral ink.
+without owning the title: the card editors' modal headers. (The bank card
+owned its title in bank-title and no longer uses the badge.) It is never a
+heading, and outside a card it falls back to neutral ink.
 The local Area and Project hosts leave native Properties visible and keep the
 Project's `^prj` line as its editable control; see
 [Area and Project Cards](https://bobs-org.github.io/reference/plugins/area-and-project-cards/).

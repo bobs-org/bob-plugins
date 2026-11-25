@@ -282,3 +282,36 @@ function propertyCardPeriodTitleRecognizer(subject, options = {}) {
     },
   });
 }
+
+// Split a leading emoji grapheme cluster (Extended_Pictographic with VS16,
+// skin-tone, and ZWJ sequences, plus regional-indicator pairs) from the
+// remainder: "# 🏦 Bank" -> { emoji: "🏦", rest: "Bank" }. Pure: no DOM.
+// Returns { emoji: "", rest: trimmed input } when nothing leads.
+function propertyCardSplitLeadingEmoji(value) {
+  const text = String(value === null || value === undefined ? "" : value).trim();
+  if (!text) return { emoji: "", rest: "" };
+  const pattern = /^(?:\p{Extended_Pictographic}\uFE0F?(?:\u{1F3FB}-\u{1F3FF})?(?:\u200D\p{Extended_Pictographic}\uFE0F?(?:\u{1F3FB}-\u{1F3FF})?)*|\p{Regional_Indicator}{2}|[#*0-9]\uFE0F?\u20E3)/u;
+  let emoji = "";
+  try {
+    const match = pattern.exec(text);
+    if (match) emoji = match[0];
+  } catch (_) {
+    emoji = "";
+  }
+  if (!emoji) return { emoji: "", rest: text };
+  return { emoji, rest: text.slice(emoji.length).trim() };
+}
+
+// Bank: the first H1 whose cleaned text equals the raw heading (emoji
+// included, e.g. "🏦 Bank") owns the title. No followers, so the range never
+// consumes a following prose or fence line.
+function propertyCardBankTitleRecognizer(rawHeading) {
+  const want = propertyCardCleanInlineText(rawHeading);
+  if (!want) return propertyCardNeverTitleRecognizer("bank");
+  return Object.freeze({
+    key: `bank:${want}`,
+    requireHeading: true,
+    heading: (cleaned) => propertyCardCleanInlineText(cleaned) === want,
+    follower: () => false,
+  });
+}

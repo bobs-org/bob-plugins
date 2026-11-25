@@ -296,6 +296,17 @@ class BobLedgerToolsBankCardsMixin {
   }
 
   bankCardRootHue(path) {
+    // The real hue walk first (like the title-slot card), so fences match
+    // the card; the bank.md color and the "magenta" literal stay as fallback.
+    try {
+      if (typeof notebookHostHueName === "function") {
+        const cache = typeof propertyCardSettledMetadataCache === "function"
+          ? propertyCardSettledMetadataCache(this.app)
+          : this.app?.metadataCache;
+        const walked = notebookHostHueName(path, cache, this.app?.vault);
+        if (walked && BANK_CARD_HUES.includes(walked)) return walked;
+      }
+    } catch (_) {}
     const candidatePaths = [path, "bank.md"];
     for (const candidate of candidatePaths) {
       try {

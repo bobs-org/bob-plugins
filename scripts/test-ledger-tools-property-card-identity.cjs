@@ -493,8 +493,9 @@ test("identity badge CSS: own accent and ink fallbacks, kicker type, and forced 
   assert.match(word, /letter-spacing: 0\.08em;/);
   assert.match(word, /color: var\(--bob-property-card-identity-ink\);/);
   assert.match(section, /@media \(forced-colors: active\) \{\s*\.bob-property-card-identity-word \{ color: CanvasText; \}/);
-  // The bank head row centres its items; the editors' badges sit above the title.
-  assert.match(section, /\.bob-bank-setup\[data-card-kind="bank"\] > \.bob-bank-setup-head \{ align-items: center; \}/);
+  // The bank head row is retired (the title block owns the note top); the
+  // editors' badges sit above the title.
+  assert.doesNotMatch(section, /\.bob-bank-setup-head/);
   assert.match(section, /\.bob-record-card-header > \.bob-property-card-identity,\s*\.bob-album-schema-dialog-header > \.bob-property-card-identity \{/);
   // No hex colours in the trailing kit sections (stylesheet contract tests).
   assert.doesNotMatch(section, /#[0-9a-f]{3,8}\b/i);
@@ -511,8 +512,10 @@ test("preview adopted kinds: the bank card leaves the pixel gate for structural 
   const doc = previewDocument();
   const card = preview.buildCard("bank", H, LedgerToolsPlugin, doc, true, null);
   assert.equal(card.getAttribute("data-card-kind"), "bank");
-  assert.equal(card.getAttribute("aria-label"), "Bank setup");
-  assert.equal(card.querySelectorAll(".bob-property-card-identity").length, 1);
-  assert.equal(card.querySelector(".bob-property-card-identity-word").textContent, "Bank");
-  assert.equal(card.querySelector(".bob-property-card-tile").getAttribute("data-tile-form"), "plain");
+  assert.equal(card.getAttribute("aria-label"), "Bank");
+  assert.equal(card.querySelectorAll(".bob-property-card-identity").length, 0);
+  const block = card.querySelector(".bob-property-card-title-block");
+  assert.ok(block, "the title block carries the species word");
+  assert.match(block.querySelector(".bob-property-card-kicker").textContent, /Bank/);
+  assert.equal(block.querySelector(".bob-property-card-tile").getAttribute("data-tile-form"), "plain");
 });

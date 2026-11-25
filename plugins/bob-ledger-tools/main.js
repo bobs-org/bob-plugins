@@ -85819,20 +85819,20 @@ const PROPERTY_CARD_KINDS = Object.freeze([
 ]);
 
 const PROPERTY_CARD_SPECIES = Object.freeze({
-  album: Object.freeze({ kind: "album", word: "Album", tile: "stack", icon: "library", band: "", temporal: false }),
-  record: Object.freeze({ kind: "record", word: "Record", tile: "sheet", icon: "file-text", band: "", temporal: false }),
+  album: Object.freeze({ kind: "album", word: "Album", tile: "stack", icon: "library", band: "", temporal: false, foldDefault: true }),
+  record: Object.freeze({ kind: "record", word: "Record", tile: "sheet", icon: "file-text", band: "", temporal: false, foldDefault: true }),
   day: Object.freeze({ kind: "day", word: "Day", tile: "leaf", icon: "calendar", band: "", temporal: true }),
   week: Object.freeze({ kind: "week", word: "Week", tile: "leaf", icon: "calendar-range", band: "WEEK", temporal: true }),
   quarter: Object.freeze({ kind: "quarter", word: "Quarter", tile: "leaf", icon: "calendar-range", band: "QTR", temporal: true }),
   year: Object.freeze({ kind: "year", word: "Year", tile: "leaf", icon: "calendar-range", band: "YEAR", temporal: true }),
-  bank: Object.freeze({ kind: "bank", word: "Bank", tile: "plain", icon: "landmark", band: "", temporal: false }),
-  area: Object.freeze({ kind: "area", word: "Area", tile: "field", icon: "layers", band: "", temporal: false }),
-  project: Object.freeze({ kind: "project", word: "Project", tile: "pennant", icon: "target", band: "", temporal: false }),
+  bank: Object.freeze({ kind: "bank", word: "Bank", tile: "plain", icon: "landmark", band: "", temporal: false, foldDefault: false }),
+  area: Object.freeze({ kind: "area", word: "Area", tile: "field", icon: "layers", band: "", temporal: false, foldDefault: true }),
+  project: Object.freeze({ kind: "project", word: "Project", tile: "pennant", icon: "target", band: "", temporal: false, foldDefault: true }),
 });
 
-// Frozen descriptor { kind, word, tile, icon, band, temporal } or null. The
-// word is title case; CSS uppercases the kicker so screen readers still read
-// a word. A day's band is its weekday, which the adapter supplies.
+// Frozen descriptor { kind, word, tile, icon, band, temporal, foldDefault? }
+// or null. The word is title case; CSS uppercases the kicker so screen readers
+// still read a word. A day's band is its weekday, which the adapter supplies.
 function propertyCardSpecies(kind) {
   if (typeof kind !== "string") return null;
   return Object.prototype.hasOwnProperty.call(PROPERTY_CARD_SPECIES, kind)
@@ -90564,6 +90564,271 @@ function propertyCardFootAdapterUnbind(plugin, options = {}) {
   if (options.tracked instanceof Set) options.tracked.clear();
   options.cache?.clear?.();
   options.flights?.clear?.();
+}
+// ---- src/240s-plugin-property-card-fold.js ----
+// Shared property-card fold state, view-local target registry, and disclosure
+// row. Fold state belongs to a session, never to frontmatter or settings.
+function propertyCardFoldPath(value) {
+  try {
+    if (typeof propertyCardFootPath === "function") return propertyCardFootPath(value);
+  } catch (_) {}
+  return typeof value === "string" ? value.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/$/, "") : "";
+}
+
+function propertyCardFoldChoice(open, problems = "") {
+  return { open: open === true, problems: typeof problems === "string" ? problems : "" };
+}
+
+// Healthy paint clears a stale problem stamp without changing the user's
+// open/closed choice. The adapter writes this returned value to its session Map.
+function propertyCardFoldRestamp(choice, problems = "") {
+  if (!choice || typeof choice !== "object" || problems !== "") return choice;
+  if (choice.problems === "") return choice;
+  return propertyCardFoldChoice(choice.open, "");
+}
+
+// A new or changed blocking problem resurfaces the fold. An explicit choice
+// for the current signature always wins, including a request to close it.
+function propertyCardFoldResolve({ choice, problems = "", foldDefault = false } = {}) {
+  const signature = typeof problems === "string" ? problems : "";
+  if (!signature) {
+    return choice && typeof choice.open === "boolean" ? choice.open : foldDefault === true;
+  }
+  return choice && choice.problems === signature && typeof choice.open === "boolean"
+    ? choice.open
+    : true;
+}
+
+const propertyCardFoldKinds = new Map();
+const propertyCardFoldPendingReveal = new Set();
+let propertyCardFoldId = 0;
+
+function propertyCardRegisterFoldKind(plugin, kind, spec = {}) {
+  if (!plugin || typeof kind !== "string" || !kind || typeof spec.toggle !== "function") return () => {};
+  const entry = { plugin, toggle: spec.toggle };
+  propertyCardFoldKinds.set(kind, entry);
+  return () => {
+    if (propertyCardFoldKinds.get(kind) !== entry) return false;
+    propertyCardFoldKinds.delete(kind);
+    return true;
+  };
+}
+
+function propertyCardFoldNextId() {
+  propertyCardFoldId += 1;
+  return `bob-property-fold-${propertyCardFoldId}`;
+}
+
+function propertyCardFoldScopes(view) {
+  const scopes = [];
+  for (const scope of [view?.dom, view?.containerEl, view?.contentEl]) {
+    if (!scope || scopes.includes(scope)) continue;
+    scopes.push(scope);
+  }
+  return scopes;
+}
+
+function propertyCardFoldVisible(node) {
+  if (!node || node.isConnected === false || typeof node.getBoundingClientRect !== "function") return false;
+  try {
+    const rect = node.getBoundingClientRect();
+    return Boolean(rect && (Number(rect.width) > 0 || Number(rect.height) > 0));
+  } catch (_) {
+    return false;
+  }
+}
+
+function propertyCardFoldTarget(view) {
+  const path = propertyCardFoldPath(typeof propertyCardFootViewPath === "function"
+    ? propertyCardFootViewPath(view) : "");
+  if (!path) return null;
+  const seen = new Set();
+  for (const scope of propertyCardFoldScopes(view)) {
+    let nodes = [];
+    try {
+      if (scope.matches?.("[data-card-fold]")) nodes.push(scope);
+      nodes.push(...Array.from(scope.querySelectorAll?.("[data-card-fold]") || []));
+    } catch (_) {
+      nodes = [];
+    }
+    for (const node of nodes) {
+      if (!node || seen.has(node)) continue;
+      seen.add(node);
+      const kind = node.getAttribute?.("data-card-fold") || "";
+      const source = propertyCardFoldPath(node.getAttribute?.("data-card-fold-source") || "");
+      const expanded = node.getAttribute?.("aria-expanded");
+      if (!kind || !propertyCardFoldKinds.has(kind) || source !== path) continue;
+      if (expanded !== "true" && expanded !== "false") continue;
+      if (node.disabled === true || node.getAttribute?.("aria-disabled") === "true") continue;
+      if (!propertyCardFoldVisible(node)) continue;
+      return { element: node, kind, path, open: expanded === "true", registration: propertyCardFoldKinds.get(kind) };
+    }
+  }
+  return null;
+}
+
+function propertyCardCanToggleDetails(view) {
+  return Boolean(propertyCardFoldTarget(view));
+}
+
+function propertyCardToggleDetails(view) {
+  const target = propertyCardFoldTarget(view);
+  if (!target || typeof target.registration?.toggle !== "function") return false;
+  if (!target.open) propertyCardFoldPendingReveal.add(target.path);
+  else propertyCardFoldPendingReveal.delete(target.path);
+  try {
+    const result = target.registration.toggle(target.path, view);
+    if (result === false) {
+      propertyCardFoldPendingReveal.delete(target.path);
+      return false;
+    }
+    return true;
+  } catch (_) {
+    propertyCardFoldPendingReveal.delete(target.path);
+    return false;
+  }
+}
+
+function propertyCardFoldConsumePendingReveal(path, open) {
+  const key = propertyCardFoldPath(path);
+  if (!key || open !== true || !propertyCardFoldPendingReveal.has(key)) return false;
+  propertyCardFoldPendingReveal.delete(key);
+  return true;
+}
+
+function propertyCardFoldClearPendingReveal(path) {
+  const key = propertyCardFoldPath(path);
+  return key ? propertyCardFoldPendingReveal.delete(key) : false;
+}
+
+function propertyCardFoldKeyLive(plugin, surface) {
+  const livePreview = surface === "live-preview" || surface?.livePreview === true;
+  if (!livePreview) return false;
+  try {
+    return Platform?.isDesktopApp === true
+      && plugin?.app?.vault?.getConfig?.("vimMode") === true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function propertyCardFoldElement(doc, tag, className) {
+  if (!doc || typeof doc.createElement !== "function") return null;
+  const node = doc.createElement(tag);
+  if (className) node.setAttribute("class", className);
+  return node;
+}
+
+function propertyCardFoldSetText(node, text) {
+  if (!node) return;
+  node.textContent = text === null || text === undefined ? "" : String(text);
+}
+
+function propertyCardFoldAddKeycap(button, doc, keyLive) {
+  const existing = button.querySelector?.(".bob-property-card-fold-keycap");
+  if (!keyLive) {
+    existing?.remove?.();
+    return null;
+  }
+  if (existing) return existing;
+  const keycap = propertyCardFoldElement(doc, "kbd", "bob-property-card-fold-keycap");
+  if (!keycap) return null;
+  propertyCardFoldSetText(keycap, "_");
+  keycap.setAttribute("aria-hidden", "true");
+  button.appendChild(keycap);
+  return keycap;
+}
+
+function propertyCardDecorateFoldControl(button, spec = {}) {
+  if (!button || typeof button.setAttribute !== "function") return false;
+  const kind = typeof spec.kind === "string" ? spec.kind : "";
+  const path = propertyCardFoldPath(spec.path);
+  if (!kind || !path) return false;
+  try {
+    button.classList?.add?.("bob-property-card-fold");
+    if (spec.compact === true) button.classList?.add?.("bob-property-card-fold-compact");
+    button.setAttribute("type", "button");
+    button.setAttribute("data-card-fold", kind);
+    button.setAttribute("data-card-fold-source", path);
+    button.setAttribute("aria-expanded", spec.open === true ? "true" : "false");
+    button.setAttribute("aria-controls", spec.bodyId || propertyCardFoldNextId());
+    button.setAttribute("aria-keyshortcuts", "_");
+    button.setAttribute("title", String(spec.tooltip || "Toggle card details (_)"));
+    propertyCardFoldAddKeycap(button, button.ownerDocument, spec.keyLive === true);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function propertyCardFoldAppendNode(button, doc, node, separator) {
+  if (!node) return;
+  if (separator) button.appendChild(doc.createTextNode(" · "));
+  button.appendChild(node);
+}
+
+// Shared full-width row. The caller owns the body shell and assigns bodyId to
+// it, so aria-controls always resolves even while that shell is empty/hidden.
+function propertyCardBuildFoldRow(doc, spec = {}) {
+  const path = propertyCardFoldPath(spec.path);
+  const bodyId = spec.bodyId || propertyCardFoldNextId();
+  const button = propertyCardFoldElement(doc, "button", ["bob-property-card-fold", spec.className || ""].filter(Boolean).join(" "));
+  if (!button || !path) return { element: null, bodyId };
+  const open = spec.open === true;
+  propertyCardDecorateFoldControl(button, {
+    kind: spec.kind,
+    path,
+    open,
+    bodyId,
+    tooltip: spec.tooltip,
+    keyLive: false,
+  });
+
+  const chevron = propertyCardFoldElement(doc, "span", "bob-property-card-fold-chevron");
+  propertyCardFoldSetText(chevron, open ? "▾" : "▸");
+  chevron?.setAttribute?.("aria-hidden", "true");
+  if (chevron) button.appendChild(chevron);
+  button.appendChild(doc.createTextNode(" "));
+
+  const noun = propertyCardFoldElement(doc, "span", "bob-property-card-fold-noun");
+  propertyCardFoldSetText(noun, spec.noun || "Details");
+  propertyCardFoldAppendNode(button, doc, noun, false);
+
+  if (spec.summary) {
+    const summary = propertyCardFoldElement(doc, "span", "bob-property-card-fold-summary");
+    propertyCardFoldSetText(summary, spec.summary);
+    propertyCardFoldAppendNode(button, doc, summary, true);
+  }
+
+  const extras = Array.isArray(spec.extras) ? spec.extras : spec.extras ? [spec.extras] : [];
+  for (const extra of extras) propertyCardFoldAppendNode(button, doc, extra, true);
+
+  const attention = spec.attention;
+  if (attention && (attention.icon || attention.word)) {
+    const chip = propertyCardFoldElement(doc, "span", `bob-property-card-fold-attention${attention.tone ? ` is-${attention.tone}` : ""}`);
+    const text = [attention.icon, attention.word, Number.isInteger(attention.count) && attention.count > 0 ? `+${attention.count}` : ""]
+      .filter(Boolean).join(" ");
+    propertyCardFoldSetText(chip, text);
+    if (attention.title) chip?.setAttribute?.("title", String(attention.title));
+    button.appendChild(doc.createTextNode(" "));
+    if (chip) button.appendChild(chip);
+  }
+
+  if (spec.keyLive === true) button.appendChild(doc.createTextNode(" "));
+  propertyCardFoldAddKeycap(button, doc, spec.keyLive === true);
+  button.addEventListener?.("click", (event) => {
+    event?.preventDefault?.();
+    spec.onToggle?.(!open);
+  });
+
+  if (propertyCardFoldConsumePendingReveal(path, open)) {
+    const reveal = () => {
+      try { button.scrollIntoView?.({ block: "nearest" }); } catch (_) {}
+    };
+    if (typeof queueMicrotask === "function") queueMicrotask(reveal);
+    else Promise.resolve().then(reveal);
+  }
+  return { element: button, bodyId };
 }
 // ---- src/245-plugin-bank-category-card-model.js ----
 // Pure Category card view model, key table, session, and end-of-run summary
@@ -100199,10 +100464,10 @@ class BobLedgerToolsBankSetupCardMixin {
 // Capture-phase == on album notes and bank.md opens the schema/setup card;
 // == on a canonical record note opens its Record Card. A vimrc nnoremap ==
 // never fires: CodeMirror Vim treats = as a complete operator, so the
-// second = reindents instead of matching a mapping. Bare `-` and `+` in
-// Live Preview Vim normal mode toggle the Properties drawer and open the
-// Property Editor; they use a content-target gate and do not wait for a
-// pending `=`.
+// second = reindents instead of matching a mapping. Bare `-`, `_`, and `+`
+// in Live Preview Vim normal mode toggle Properties, fold the mounted card
+// section, and open the Property Editor. They use a content-target gate and
+// do not wait for a pending `=`.
 
 function schemaDoubleEqualsKeyBufferEmpty(value) {
   if (Array.isArray(value)) return value.length === 0;
@@ -100324,7 +100589,7 @@ function propertyCardSecondKeyGate(input) {
 
 function propertyCardBareKeyGate(input) {
   const snap = (input && input.vim) || { readable: false };
-  if (!input || (input.key !== "-" && input.key !== "+")) {
+  if (!input || (input.key !== "-" && input.key !== "+" && input.key !== "_")) {
     return { act: false, reason: "not-bare-key" };
   }
   if (input.ctrlKey || input.altKey || input.metaKey) {
@@ -100653,6 +100918,22 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
         this.propertyCardToggleCommandRegistered = true;
       } catch (_) {}
     }
+    if (this.propertyCardDetailsToggleCommandRegistered !== true) {
+      try {
+        this.addCommand({
+          id: "toggle-card-details",
+          name: "Toggle card details",
+          callback: () => {
+            if (this.schemaDoubleEqualsActive === false) return false;
+            const view = schemaDoubleEqualsActiveView(this);
+            return typeof propertyCardToggleDetails === "function"
+              ? propertyCardToggleDetails(view)
+              : false;
+          },
+        });
+        this.propertyCardDetailsToggleCommandRegistered = true;
+      } catch (_) {}
+    }
     const keydownHandler = (event) => this.handleSchemaDoubleEqualsKeydown(event);
     const windowObject = typeof window === "undefined" ? null : window;
     const documentObject = typeof document === "undefined" ? null : document;
@@ -100688,7 +100969,7 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
       return;
     }
     const key = event && event.key;
-    if (key !== "=" && key !== "-" && key !== "+") return;
+    if (key !== "=" && key !== "-" && key !== "+" && key !== "_") return;
     const view = schemaDoubleEqualsActiveView(this);
     const cm = schemaDoubleEqualsResolveCm(view);
     let frontmatter = {};
@@ -100705,7 +100986,8 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
       }
     } catch (_) {}
     // The species registry is the sole authority for '='. '-' checks the
-    // live mount in this view. '+' is the registered Property Editor arm.
+    // live mount in this view. '_' targets a registered fold; '+' is the
+    // registered Property Editor arm.
     // A runtime miss never mutates a registry or consumes Vim input.
     let entry = null;
     if (key === "=") {
@@ -100733,6 +101015,14 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
         canAct: () => typeof propertyCardCanToggleProperties === "function"
           && propertyCardCanToggleProperties(view),
         run: () => { if (typeof propertyCardToggleProperties === "function") propertyCardToggleProperties(view); },
+      };
+    } else if (key === "_") {
+      arm = {
+        key,
+        reason: "details-toggle",
+        canAct: () => typeof propertyCardCanToggleDetails === "function"
+          && propertyCardCanToggleDetails(view),
+        run: () => { if (typeof propertyCardToggleDetails === "function") propertyCardToggleDetails(view); },
       };
     } else {
       arm = this.propertyCardSecondKeyArmRegistry().get("+") || null;
@@ -109305,6 +109595,7 @@ function albumHeaderCardSignature(card, extra = {}) {
     hue: extra.hue || "",
     body: card.body ? albumHeaderSignature(card.body, extra) : null,
     expanded: extra.expanded === true,
+    keyLive: extra.keyLive === true,
     desktop: extra.desktop !== false,
   });
 }
@@ -109332,6 +109623,7 @@ function albumHeaderSignature(model, extra = {}) {
     records: model.records,
     schemaInvalid: model.schemaInvalid,
     expanded: extra.expanded === true,
+    keyLive: extra.keyLive === true,
     desktop: extra.desktop !== false,
   });
 }
@@ -109446,10 +109738,37 @@ function albumHeaderYamlLine(model, target = {}) {
   return firstField ? firstField.line : null;
 }
 
-// Every schema starts expanded; the summary toggle collapses it to one line
-// for the rest of the session.
-function albumHeaderDefaultExpanded(model) {
-  return true;
+// Blocking schema issues drive a health-aware session fold. Paths are part of
+// each message so a replacement diagnostic gets its own signature; warnings
+// remain attention only and never force the schema open.
+function albumHeaderFoldProblems(model) {
+  if (!model?.schemaInvalid) return "";
+  const errors = (model.issues || [])
+    .filter((issue) => issue?.severity === "error")
+    .map((issue) => albumHeaderIssueText(issue))
+    .sort();
+  return `schema-invalid:${JSON.stringify(errors)}`;
+}
+
+function albumHeaderFoldAttention(model) {
+  const errors = (model?.issues || []).filter((issue) => issue?.severity === "error");
+  if (model?.schemaInvalid) {
+    const count = Math.max(errors.length, 1);
+    return {
+      icon: "✗",
+      word: `${count} ${count === 1 ? "problem" : "problems"}`,
+      tone: "error",
+      title: errors.map((issue) => albumHeaderIssueText(issue)).filter(Boolean).join(" · ") || "The album schema is invalid.",
+    };
+  }
+  const warnings = (model?.issues || []).filter((issue) => issue?.severity === "warning");
+  if (!warnings.length) return null;
+  return {
+    icon: "⚠",
+    word: `${warnings.length} ${warnings.length === 1 ? "warning" : "warnings"}`,
+    tone: "warn",
+    title: warnings.map((issue) => albumHeaderIssueText(issue)).filter(Boolean).join(" · "),
+  };
 }
 
 // The folded schema line for a healthy schema:
@@ -109554,13 +109873,15 @@ function albumSchemaPaintIssue(doc, issue, options) {
   return item;
 }
 
-function albumSchemaPaintChips(doc, model, options) {
+function albumSchemaPaintChips(doc, model, options, bodyId) {
   const card = notebookCreateEl(doc, "div", "bob-album-schema-card");
   if (!card) return null;
-  const stem = String(model.stem || "album");
-  card.setAttribute("id", `bob-album-schema-chips-${stem}`);
+  card.setAttribute("id", bodyId || propertyCardFoldNextId());
   card.setAttribute("aria-label", "Record schema");
-  if (options?.expanded !== true) card.setAttribute("hidden", "");
+  if (options?.expanded !== true) {
+    card.setAttribute("hidden", "");
+    return card;
+  }
   if (model.emptySchema && !model.schemaInvalid) {
     const empty = notebookCreateEl(doc, "p", "bob-album-schema-empty");
     notebookSetText(empty, albumHeaderSummaryText(model));
@@ -109590,47 +109911,51 @@ function albumSchemaPaintChips(doc, model, options) {
 
 // Display-only `· walks by Section` on the folded line: the album's record
 // walk follows that field's groups, then titles.
-function albumSchemaPaintWalksBy(doc, summary, model) {
+function albumSchemaPaintWalksBy(doc, model) {
   const label = String(model?.walkByLabel || model?.walkBy || "").trim();
   if (!label || !doc || typeof doc.createTextNode !== "function") return null;
   const pill = notebookCreateEl(doc, "span", "bob-album-schema-walks-by");
   if (!pill) return null;
   pill.setAttribute("title", `Record walk: grouped by ${label}, then title`);
   notebookSetText(pill, `walks by ${label}`);
-  summary.appendChild(doc.createTextNode(" · "));
-  summary.appendChild(pill);
   return pill;
 }
 
 function albumSchemaPaintSummary(doc, model, options) {
-  const summary = notebookCreateEl(doc, "button", "bob-album-schema-summary");
-  if (!summary) return null;
   const expanded = options?.expanded === true;
-  summary.setAttribute("type", "button");
-  summary.setAttribute("aria-expanded", expanded ? "true" : "false");
-  summary.setAttribute("data-album-header-focus", "summary");
   const healthy = !model.schemaInvalid && !model.emptySchema;
-  if (model.schemaInvalid) {
-    const cls = `${summary.getAttribute("class") || ""} is-error`.trim();
-    summary.setAttribute("class", cls);
-  }
-  if (healthy) summary.setAttribute("data-schema-fold", expanded ? "open" : "folded");
-  const text = healthy ? albumHeaderFoldText(model) : albumHeaderSummaryText(model);
-  notebookSetText(summary, `${expanded ? "▾" : "▸"} ${text}`);
-  if (healthy && model.walkBy) albumSchemaPaintWalksBy(doc, summary, model);
-  summary.addEventListener("click", (event) => {
-    event.preventDefault?.();
-    options?.handlers?.toggleSchema?.(!expanded);
+  const foldText = albumHeaderFoldText(model);
+  const summaryText = healthy
+    ? foldText.replace(/^Schema\s*·\s*/, "")
+    : albumHeaderSummaryText(model);
+  const extras = healthy && model.walkBy ? albumSchemaPaintWalksBy(doc, model) : null;
+  const className = `bob-album-schema-summary${model.schemaInvalid ? " is-error" : ""}`;
+  const fold = propertyCardBuildFoldRow(doc, {
+    kind: "album",
+    path: options?.sourcePath,
+    noun: "Schema",
+    summary: summaryText,
+    open: expanded,
+    bodyId: propertyCardFoldNextId(),
+    className,
+    attention: albumHeaderFoldAttention(model),
+    extras,
+    keyLive: options?.keyLive === true,
+    tooltip: "Toggle album schema (_)",
+    onToggle: (next) => options?.handlers?.toggleSchema?.(next),
   });
-  return summary;
+  const summary = fold?.element;
+  if (!summary) return null;
+  summary.setAttribute("data-album-header-focus", "summary");
+  summary.setAttribute("data-schema-fold", expanded ? "open" : "folded");
+  return { element: summary, bodyId: fold.bodyId };
 }
 
 function albumSchemaHeaderAppend(header, model, options, doc) {
   if (!header || !model || !doc) return;
-  const summary = albumSchemaPaintSummary(doc, model, options);
-  const chips = albumSchemaPaintChips(doc, model, options);
-  if (summary && chips?.id) summary.setAttribute("aria-controls", chips.id);
-  if (summary) header.appendChild(summary);
+  const fold = albumSchemaPaintSummary(doc, model, options);
+  const chips = albumSchemaPaintChips(doc, model, options, fold?.bodyId);
+  if (fold?.element) header.appendChild(fold.element);
   if (chips) header.appendChild(chips);
   if (options?.desktop === false) {
     const hint = notebookCreateEl(doc, "p", "bob-album-schema-mobile-hint");
@@ -109709,6 +110034,14 @@ class BobLedgerToolsAlbumHeaderMixin {
       onSetup: () => {
         try { propertyCardFrontmatterCoordinatorBind?.(plugin, "album"); } catch (_) {}
         if (!(plugin.albumHeaderExpanded instanceof Map)) plugin.albumHeaderExpanded = new Map();
+        plugin.albumHeaderFoldUnregister = propertyCardRegisterFoldKind(plugin, "album", {
+          toggle(path) {
+            const body = plugin.albumHeaderCardModelFor(path)?.body || plugin.albumHeaderModelFor(path);
+            const open = plugin.albumHeaderIsExpanded(path, body);
+            plugin.albumHeaderSetExpanded(path, !open, albumHeaderFoldProblems(body));
+            return true;
+          },
+        });
         plugin.albumHeaderUnsubscribe = plugin.apiAlbumSubscribe?.((state) => {
           plugin.albumHeaderLastState = state;
           plugin.scheduleAlbumHeaderRefresh();
@@ -109716,6 +110049,11 @@ class BobLedgerToolsAlbumHeaderMixin {
         try { plugin.albumHeaderFootBind?.(); } catch (_) {}
       },
       onDisposeStart: () => {
+        plugin.albumHeaderFoldUnregister?.();
+        plugin.albumHeaderFoldUnregister = null;
+        for (const path of plugin.albumHeaderExpanded?.keys?.() || []) {
+          propertyCardFoldClearPendingReveal(path);
+        }
         try { propertyCardFrontmatterCoordinatorReleaseKind?.(plugin, "album"); } catch (_) {}
         try { plugin.albumHeaderFootUnbind?.(); } catch (_) {}
         plugin.albumHeaderUnsubscribe?.();
@@ -109750,13 +110088,23 @@ class BobLedgerToolsAlbumHeaderMixin {
   albumHeaderIsExpanded(path, model) {
     const key = albumHeaderPath(path);
     const map = this.albumHeaderExpandedMap();
-    if (key && map.has(key)) return map.get(key) === true;
-    return albumHeaderDefaultExpanded(model);
+    const currentModel = model || this.albumHeaderCardModelFor(key)?.body || this.albumHeaderModelFor(key);
+    const problems = albumHeaderFoldProblems(currentModel);
+    const stored = key ? map.get(key) : null;
+    const choice = propertyCardFoldRestamp(stored, problems);
+    if (key && choice !== stored && choice) map.set(key, choice);
+    return propertyCardFoldResolve({
+      choice,
+      problems,
+      foldDefault: propertyCardSpecies("album")?.foldDefault,
+    });
   }
 
-  albumHeaderSetExpanded(path, expanded) {
+  albumHeaderSetExpanded(path, expanded, problems) {
     const key = albumHeaderPath(path);
-    if (key) this.albumHeaderExpandedMap().set(key, expanded === true);
+    const currentModel = this.albumHeaderCardModelFor(key)?.body || this.albumHeaderModelFor(key);
+    const signature = typeof problems === "string" ? problems : albumHeaderFoldProblems(currentModel);
+    if (key) this.albumHeaderExpandedMap().set(key, propertyCardFoldChoice(expanded, signature));
     this.refreshAlbumHeaderReading();
     this.refreshAlbumHeaderEditors();
   }
@@ -109771,9 +110119,11 @@ class BobLedgerToolsAlbumHeaderMixin {
     }
   }
 
-  albumHeaderOptions(sourcePath, state, model) {
+  albumHeaderOptions(sourcePath, state, model, surface = "reading") {
     const desktop = this.albumHeaderDesktop();
     const expanded = this.albumHeaderIsExpanded(sourcePath, model);
+    const problems = albumHeaderFoldProblems(model);
+    const keyLive = propertyCardFoldKeyLive(this, surface);
     return {
       sourcePath,
       hue: notebookHostHueName(sourcePath, typeof propertyCardSettledMetadataCache === "function"
@@ -109783,10 +110133,12 @@ class BobLedgerToolsAlbumHeaderMixin {
       vault: this.app?.vault,
       desktop,
       expanded,
+      problems,
+      keyLive,
       handlers: {
         openPath: (path, event) => { void this.albumHeaderOpenPath(path, sourcePath, event); },
         copyCapture: (item) => this.albumHeaderCopyCapture(item),
-        toggleSchema: (next) => this.albumHeaderSetExpanded(sourcePath, next),
+        toggleSchema: (next) => this.albumHeaderSetExpanded(sourcePath, next, problems),
         openSchemaCard: (item) => (typeof this.openAlbumSchemaEntry === "function" ? this.openAlbumSchemaEntry({ filePath: sourcePath }) : this.openAlbumSchemaCard?.(item, sourcePath)),
         jumpYaml: (line) => { void this.albumHeaderJumpYaml(sourcePath, line); },
       },
@@ -110155,7 +110507,7 @@ class BobLedgerToolsAlbumHeaderMixin {
     let header = slotNode || bodyNodes[0] || null;
     const focusKey = this.albumHeaderFocusKey(header, doc);
     const extra = typeof this.albumHeaderFootExtra === "function" ? this.albumHeaderFootExtra(sourcePath, card) : null;
-    const options = { ...this.albumHeaderOptions(sourcePath, state, card.body), footSpec: extra?.footSpec };
+    const options = { ...this.albumHeaderOptions(sourcePath, state, card.body, "reading"), footSpec: extra?.footSpec };
     const signature = JSON.stringify([albumHeaderCardSignature(card, options), extra?.footDigest || "", extra?.footOpen === true]);
     if (!header || albumHeaderNodeSignatures.get(header) !== signature) {
       let fresh = null;
@@ -110304,7 +110656,7 @@ class BobLedgerToolsAlbumHeaderMixin {
       }
       const doc = notebookDomDoc(view.dom) || (typeof document !== "undefined" ? document : null);
       const extra = typeof this.albumHeaderFootExtra === "function" ? this.albumHeaderFootExtra(path, card) : null;
-      const options = { ...this.albumHeaderOptions(path, state, card.body), footSpec: extra?.footSpec };
+      const options = { ...this.albumHeaderOptions(path, state, card.body, "live-preview"), footSpec: extra?.footSpec };
       const signature = JSON.stringify([albumHeaderCardSignature(card, options), extra?.footDigest || "", extra?.footOpen === true]);
       const adopted = propertyCardAdoptedEntry(view.dom);
       let header = adopted && adopted.path === path && adopted.mode === "slot" ? adopted.node : null;
@@ -191864,7 +192216,8 @@ try {
       albumHeaderKindText,
       albumHeaderPresentField,
       albumHeaderYamlLine,
-      albumHeaderDefaultExpanded,
+      albumHeaderFoldProblems,
+      albumHeaderFoldAttention,
       albumHeaderIsDesktopPlatform,
       albumSchemaCardTitle,
       albumSchemaCardHeadingText,
@@ -192747,6 +193100,19 @@ try {
       propertyCardReadingScope,
       propertyCardNodeBelongs,
       createPropertyCardHost,
+      propertyCardFoldChoice,
+      propertyCardFoldRestamp,
+      propertyCardFoldResolve,
+      propertyCardRegisterFoldKind,
+      propertyCardFoldTarget,
+      propertyCardCanToggleDetails,
+      propertyCardToggleDetails,
+      propertyCardFoldConsumePendingReveal,
+      propertyCardFoldClearPendingReveal,
+      propertyCardFoldNextId,
+      propertyCardFoldKeyLive,
+      propertyCardBuildFoldRow,
+      propertyCardDecorateFoldControl,
       PROPERTY_CARD_BUILTIN_KINDS,
       propertyCardGateKinds,
       // Identity kit (bob-cli-o6 identity-kit): species, builders, title

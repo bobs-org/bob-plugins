@@ -79,13 +79,15 @@ function albumSchemaPaintIssue(doc, issue, options) {
   return item;
 }
 
-function albumSchemaPaintChips(doc, model, options) {
+function albumSchemaPaintChips(doc, model, options, bodyId) {
   const card = notebookCreateEl(doc, "div", "bob-album-schema-card");
   if (!card) return null;
-  const stem = String(model.stem || "album");
-  card.setAttribute("id", `bob-album-schema-chips-${stem}`);
+  card.setAttribute("id", bodyId || propertyCardFoldNextId());
   card.setAttribute("aria-label", "Record schema");
-  if (options?.expanded !== true) card.setAttribute("hidden", "");
+  if (options?.expanded !== true) {
+    card.setAttribute("hidden", "");
+    return card;
+  }
   if (model.emptySchema && !model.schemaInvalid) {
     const empty = notebookCreateEl(doc, "p", "bob-album-schema-empty");
     notebookSetText(empty, albumHeaderSummaryText(model));
@@ -115,47 +117,51 @@ function albumSchemaPaintChips(doc, model, options) {
 
 // Display-only `· walks by Section` on the folded line: the album's record
 // walk follows that field's groups, then titles.
-function albumSchemaPaintWalksBy(doc, summary, model) {
+function albumSchemaPaintWalksBy(doc, model) {
   const label = String(model?.walkByLabel || model?.walkBy || "").trim();
   if (!label || !doc || typeof doc.createTextNode !== "function") return null;
   const pill = notebookCreateEl(doc, "span", "bob-album-schema-walks-by");
   if (!pill) return null;
   pill.setAttribute("title", `Record walk: grouped by ${label}, then title`);
   notebookSetText(pill, `walks by ${label}`);
-  summary.appendChild(doc.createTextNode(" · "));
-  summary.appendChild(pill);
   return pill;
 }
 
 function albumSchemaPaintSummary(doc, model, options) {
-  const summary = notebookCreateEl(doc, "button", "bob-album-schema-summary");
-  if (!summary) return null;
   const expanded = options?.expanded === true;
-  summary.setAttribute("type", "button");
-  summary.setAttribute("aria-expanded", expanded ? "true" : "false");
-  summary.setAttribute("data-album-header-focus", "summary");
   const healthy = !model.schemaInvalid && !model.emptySchema;
-  if (model.schemaInvalid) {
-    const cls = `${summary.getAttribute("class") || ""} is-error`.trim();
-    summary.setAttribute("class", cls);
-  }
-  if (healthy) summary.setAttribute("data-schema-fold", expanded ? "open" : "folded");
-  const text = healthy ? albumHeaderFoldText(model) : albumHeaderSummaryText(model);
-  notebookSetText(summary, `${expanded ? "▾" : "▸"} ${text}`);
-  if (healthy && model.walkBy) albumSchemaPaintWalksBy(doc, summary, model);
-  summary.addEventListener("click", (event) => {
-    event.preventDefault?.();
-    options?.handlers?.toggleSchema?.(!expanded);
+  const foldText = albumHeaderFoldText(model);
+  const summaryText = healthy
+    ? foldText.replace(/^Schema\s*·\s*/, "")
+    : albumHeaderSummaryText(model);
+  const extras = healthy && model.walkBy ? albumSchemaPaintWalksBy(doc, model) : null;
+  const className = `bob-album-schema-summary${model.schemaInvalid ? " is-error" : ""}`;
+  const fold = propertyCardBuildFoldRow(doc, {
+    kind: "album",
+    path: options?.sourcePath,
+    noun: "Schema",
+    summary: summaryText,
+    open: expanded,
+    bodyId: propertyCardFoldNextId(),
+    className,
+    attention: albumHeaderFoldAttention(model),
+    extras,
+    keyLive: options?.keyLive === true,
+    tooltip: "Toggle album schema (_)",
+    onToggle: (next) => options?.handlers?.toggleSchema?.(next),
   });
-  return summary;
+  const summary = fold?.element;
+  if (!summary) return null;
+  summary.setAttribute("data-album-header-focus", "summary");
+  summary.setAttribute("data-schema-fold", expanded ? "open" : "folded");
+  return { element: summary, bodyId: fold.bodyId };
 }
 
 function albumSchemaHeaderAppend(header, model, options, doc) {
   if (!header || !model || !doc) return;
-  const summary = albumSchemaPaintSummary(doc, model, options);
-  const chips = albumSchemaPaintChips(doc, model, options);
-  if (summary && chips?.id) summary.setAttribute("aria-controls", chips.id);
-  if (summary) header.appendChild(summary);
+  const fold = albumSchemaPaintSummary(doc, model, options);
+  const chips = albumSchemaPaintChips(doc, model, options, fold?.bodyId);
+  if (fold?.element) header.appendChild(fold.element);
   if (chips) header.appendChild(chips);
   if (options?.desktop === false) {
     const hint = notebookCreateEl(doc, "p", "bob-album-schema-mobile-hint");

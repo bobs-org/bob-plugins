@@ -395,7 +395,7 @@ function buildAlbumCard(doc) {
   assert.ok(model, "albumHeaderCardModel returned a model");
   assert.equal(model.walkBy || model.body?.walkBy, "section", "album model carries walk_by");
   const plugin = Object.create(LedgerToolsPlugin.prototype);
-  const card = plugin.albumHeaderBuildEl(model, { desktop: true, expanded: false, hue: "violet", handlers: {} }, doc);
+  const card = plugin.albumHeaderBuildEl(model, { sourcePath: "z.md", desktop: true, expanded: false, hue: "violet", handlers: {} }, doc);
   assert.ok(card, "albumHeaderBuildEl returned a card");
   return { card };
 }

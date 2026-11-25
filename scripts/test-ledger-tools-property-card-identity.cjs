@@ -114,25 +114,24 @@ function makeDoc() {
 
 const classes = (node) => node.className.split(/\s+/).filter(Boolean);
 
-test("registry covers nine frozen species with words, tiles, icons, and bands", () => {
+test("registry covers nine frozen species with presentation and fold defaults", () => {
   assert.equal(H.PROPERTY_CARD_KIND_ATTR, "data-card-kind");
   assert.deepEqual([...H.PROPERTY_CARD_KINDS], ["album", "record", "day", "week", "quarter", "year", "bank", "area", "project"]);
   const expected = {
-    album: ["Album", "stack", "library", "", false],
-    record: ["Record", "sheet", "file-text", "", false],
-    day: ["Day", "leaf", "calendar", "", true],
-    week: ["Week", "leaf", "calendar-range", "WEEK", true],
-    quarter: ["Quarter", "leaf", "calendar-range", "QTR", true],
-    year: ["Year", "leaf", "calendar-range", "YEAR", true],
-    bank: ["Bank", "plain", "landmark", "", false],
-    area: ["Area", "field", "layers", "", false],
-    project: ["Project", "pennant", "target", "", false],
+    album: { kind: "album", word: "Album", tile: "stack", icon: "library", band: "", temporal: false, foldDefault: true },
+    record: { kind: "record", word: "Record", tile: "sheet", icon: "file-text", band: "", temporal: false, foldDefault: true },
+    day: { kind: "day", word: "Day", tile: "leaf", icon: "calendar", band: "", temporal: true },
+    week: { kind: "week", word: "Week", tile: "leaf", icon: "calendar-range", band: "WEEK", temporal: true },
+    quarter: { kind: "quarter", word: "Quarter", tile: "leaf", icon: "calendar-range", band: "QTR", temporal: true },
+    year: { kind: "year", word: "Year", tile: "leaf", icon: "calendar-range", band: "YEAR", temporal: true },
+    bank: { kind: "bank", word: "Bank", tile: "plain", icon: "landmark", band: "", temporal: false, foldDefault: false },
+    area: { kind: "area", word: "Area", tile: "field", icon: "layers", band: "", temporal: false, foldDefault: true },
+    project: { kind: "project", word: "Project", tile: "pennant", icon: "target", band: "", temporal: false, foldDefault: true },
   };
   for (const kind of H.PROPERTY_CARD_KINDS) {
     const species = H.propertyCardSpecies(kind);
     assert.ok(Object.isFrozen(species), `${kind} is frozen`);
-    const [word, tile, icon, band, temporal] = expected[kind];
-    assert.deepEqual({ ...species }, { kind, word, tile, icon, band, temporal });
+    assert.deepEqual({ ...species }, expected[kind]);
     assert.throws(() => { "use strict"; species.word = "x"; });
   }
   for (const value of ["notebook", "", "ALBUM", "toString", null, undefined, 3]) {

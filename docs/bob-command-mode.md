@@ -12,7 +12,7 @@ Bob Command Mode runs bob commands from Obsidian with safe-write guards and run 
 | --- | --- |
 | Name | Bob Command Mode |
 | ID | `bob-command-mode` |
-| Version | 0.4.0 |
+| Version | 0.5.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | Yes |
 | Description | Run catalog-validated bob commands from Obsidian chips and Command Mode with safe-write guards and run history. |

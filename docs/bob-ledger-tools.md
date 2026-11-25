@@ -16,7 +16,7 @@ note properties: [Property Editor](property-editor.md).
 | --- | --- |
 | Name | Bob Ledger Tools |
 | ID | `bob-ledger-tools` |
-| Version | 1.160.0 |
+| Version | 1.161.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
 | Description | Render Bob’s task and Pomodoro information in Obsidian: planning and freshness marks, dependencies, relations, calendar events, task types, and ledger navigation. Report-driven cards cover bank subscriptions, Stats, Reading Board, albums, projects, and areas. Snippets, session toggles, and versioned APIs connect these views to Bob and other Bob plugins. |
@@ -61,6 +61,7 @@ note properties: [Property Editor](property-editor.md).
 | Toggle bank marks | `toggle-bank-marks` | — |
 | Toggle blocked-reason marks | `toggle-block-marks` | — |
 | Toggle calendar event painting | `toggle-calendar-event-painting` | — |
+| Toggle card details | `toggle-card-details` | — |
 | Toggle card properties | `toggle-card-properties` | — |
 | Toggle dependency chips | `toggle-dependency-chips` | — |
 | Toggle inherited task types | `toggle-inherited-task-types` | — |
@@ -77,14 +78,11 @@ note properties: [Property Editor](property-editor.md).
 | Toggle unblocked hand-off glyph | `toggle-unblocked-glyph` | — |
 <!-- END GENERATED: commands -->
 
-## Property-card properties drawer
+## Property-card keys
 
-Album, record, day/period, and bank setup cards expose note frontmatter in a
-read-only **Properties** drawer. Open it with the foot disclosure, `-` in Live
-Preview Vim normal mode, or **Toggle card properties** (palette/Command Mode).
-The command needs a mounted foot in the active view; same-note panes share
-session state. Opening is read-only: no note writes or report refreshes. `==`
-editing is unchanged.
+In Live Preview Vim normal mode, `_` folds the card; otherwise use **Toggle
+card details**. `-` toggles Properties, `==` edits the species, and `+` opens
+Property Editor.
 
 ## Bank cards and the bank badge
 

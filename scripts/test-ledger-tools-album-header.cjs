@@ -263,8 +263,29 @@ test("broken schema remains visible and disables the capture route with its diag
   assert.equal(button.disabled, true);
   assert.match(root.querySelector(".bob-album-schema-summary").textContent, /record\.fields is invalid/);
   assert.equal(root.querySelector(".bob-album-schema-summary").getAttribute("aria-expanded"), "true");
+  assert.equal(root.querySelector(".bob-album-schema-summary").querySelector(".bob-property-card-fold-attention").textContent, "✗ 1 problem");
   assert.equal(root.querySelector(".bob-album-schema-empty"), null);
   assert.equal(root.querySelector(".bob-album-schema-issue").textContent, "record.fields is invalid");
+});
+
+test("schema fold choices follow blocking issue signatures; warnings only add attention", () => {
+  const { plugin } = fixture();
+  const broken = { schemaInvalid: true, issues: [{ severity: "error", path: "record.fields", message: "bad type" }] };
+  const changed = { schemaInvalid: true, issues: [{ severity: "error", path: "record.fields", message: "missing field" }] };
+  const signature = helpers.albumHeaderFoldProblems(broken);
+  assert.ok(signature);
+  plugin.albumHeaderSetExpanded("eat.md", false, signature);
+  assert.equal(plugin.albumHeaderIsExpanded("eat.md", broken), false,
+    "an explicit choice for the current problem signature works");
+  assert.equal(plugin.albumHeaderIsExpanded("eat.md", changed), true,
+    "a changed blocking message resurfaces the fold");
+
+  const warning = { schemaInvalid: false, issues: [{ severity: "warning", message: "unusual field" }] };
+  plugin.albumHeaderSetExpanded("eat.md", false, "");
+  assert.equal(helpers.albumHeaderFoldProblems(warning), "");
+  assert.equal(plugin.albumHeaderIsExpanded("eat.md", warning), false,
+    "warnings do not force a collapsed schema open");
+  assert.equal(helpers.albumHeaderFoldAttention(warning).word, "1 warning");
 });
 
 test("rendering is idempotent, keeps schema labels as text, scopes Properties, and clears on type change", () => {
@@ -518,6 +539,11 @@ test("healthy schema summary starts expanded and collapses per album in view sta
   assert.equal(summary.textContent,
     "▾ Schema · 2 fields · grouped by Status, sub-grouped by Location · dated notes · 104 restaurants");
   assert.equal(summary.getAttribute("data-schema-fold"), "open");
+  const bodyId = summary.getAttribute("aria-controls");
+  assert.equal(root.querySelectorAll(`[id="${bodyId}"]`).length, 1, "the fold controls an existing body shell");
+  assert.equal(summary.getAttribute("aria-keyshortcuts"), "_");
+  assert.equal(summary.getAttribute("title"), "Toggle album schema (_)");
+  assert.equal(summary.querySelector(".bob-property-card-fold-keycap"), null, "Reading has no Vim keycap");
   assert.equal(root.querySelector(".bob-album-schema-card").getAttribute("hidden"), null);
   assert.equal(root.querySelectorAll(".bob-album-schema-field").length, 2);
   summary.fire("click");
@@ -527,13 +553,16 @@ test("healthy schema summary starts expanded and collapses per album in view sta
   assert.match(folded.textContent, /^▸ Schema · 2 fields · /);
   assert.equal(folded.getAttribute("data-schema-fold"), "folded");
   assert.equal(root.querySelector(".bob-album-schema-card").getAttribute("hidden"), "");
+  assert.equal(root.querySelectorAll(".bob-album-schema-field").length, 0, "the collapsed body is an empty shell");
   const other = node(doc, "div", "markdown-preview-view");
   plugin.paintAlbumHeaderReading(other, "eat.md");
   assert.equal(other.querySelector(".bob-album-schema-summary").getAttribute("aria-expanded"), "false",
     "the per-session toggle is per album, not per pane");
-  assert.equal(helpers.albumHeaderDefaultExpanded({ schemaInvalid: false, emptySchema: false }), true);
-  assert.equal(helpers.albumHeaderDefaultExpanded({ emptySchema: true }), true);
-  assert.equal(helpers.albumHeaderDefaultExpanded({ schemaInvalid: true }), true);
+  assert.notEqual(other.querySelector(".bob-album-schema-summary").getAttribute("aria-controls"), bodyId,
+    "two panes never reuse the body id");
+  assert.equal(helpers.propertyCardSpecies("album").foldDefault, true);
+  assert.equal(helpers.propertyCardFoldResolve({ foldDefault: true }), true);
+  assert.equal(helpers.propertyCardFoldResolve({ problems: "schema-invalid", foldDefault: false }), true);
   const model = { fields: [{}], records: 1, noun: "restaurant", singular: "restaurant", groupingClause: "", datedNotes: false };
   assert.equal(helpers.albumHeaderFoldText(model), "Schema · 1 field · 1 restaurant");
   assert.equal(helpers.albumHeaderSummaryText({ ...model, schemaLabel: "Restaurant", datedNotes: true, groupingClause: "grouped by Status" }),

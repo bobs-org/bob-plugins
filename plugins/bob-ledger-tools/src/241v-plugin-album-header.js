@@ -68,6 +68,14 @@ class BobLedgerToolsAlbumHeaderMixin {
       onSetup: () => {
         try { propertyCardFrontmatterCoordinatorBind?.(plugin, "album"); } catch (_) {}
         if (!(plugin.albumHeaderExpanded instanceof Map)) plugin.albumHeaderExpanded = new Map();
+        plugin.albumHeaderFoldUnregister = propertyCardRegisterFoldKind(plugin, "album", {
+          toggle(path) {
+            const body = plugin.albumHeaderCardModelFor(path)?.body || plugin.albumHeaderModelFor(path);
+            const open = plugin.albumHeaderIsExpanded(path, body);
+            plugin.albumHeaderSetExpanded(path, !open, albumHeaderFoldProblems(body));
+            return true;
+          },
+        });
         plugin.albumHeaderUnsubscribe = plugin.apiAlbumSubscribe?.((state) => {
           plugin.albumHeaderLastState = state;
           plugin.scheduleAlbumHeaderRefresh();
@@ -75,6 +83,11 @@ class BobLedgerToolsAlbumHeaderMixin {
         try { plugin.albumHeaderFootBind?.(); } catch (_) {}
       },
       onDisposeStart: () => {
+        plugin.albumHeaderFoldUnregister?.();
+        plugin.albumHeaderFoldUnregister = null;
+        for (const path of plugin.albumHeaderExpanded?.keys?.() || []) {
+          propertyCardFoldClearPendingReveal(path);
+        }
         try { propertyCardFrontmatterCoordinatorReleaseKind?.(plugin, "album"); } catch (_) {}
         try { plugin.albumHeaderFootUnbind?.(); } catch (_) {}
         plugin.albumHeaderUnsubscribe?.();
@@ -109,13 +122,23 @@ class BobLedgerToolsAlbumHeaderMixin {
   albumHeaderIsExpanded(path, model) {
     const key = albumHeaderPath(path);
     const map = this.albumHeaderExpandedMap();
-    if (key && map.has(key)) return map.get(key) === true;
-    return albumHeaderDefaultExpanded(model);
+    const currentModel = model || this.albumHeaderCardModelFor(key)?.body || this.albumHeaderModelFor(key);
+    const problems = albumHeaderFoldProblems(currentModel);
+    const stored = key ? map.get(key) : null;
+    const choice = propertyCardFoldRestamp(stored, problems);
+    if (key && choice !== stored && choice) map.set(key, choice);
+    return propertyCardFoldResolve({
+      choice,
+      problems,
+      foldDefault: propertyCardSpecies("album")?.foldDefault,
+    });
   }
 
-  albumHeaderSetExpanded(path, expanded) {
+  albumHeaderSetExpanded(path, expanded, problems) {
     const key = albumHeaderPath(path);
-    if (key) this.albumHeaderExpandedMap().set(key, expanded === true);
+    const currentModel = this.albumHeaderCardModelFor(key)?.body || this.albumHeaderModelFor(key);
+    const signature = typeof problems === "string" ? problems : albumHeaderFoldProblems(currentModel);
+    if (key) this.albumHeaderExpandedMap().set(key, propertyCardFoldChoice(expanded, signature));
     this.refreshAlbumHeaderReading();
     this.refreshAlbumHeaderEditors();
   }
@@ -130,9 +153,11 @@ class BobLedgerToolsAlbumHeaderMixin {
     }
   }
 
-  albumHeaderOptions(sourcePath, state, model) {
+  albumHeaderOptions(sourcePath, state, model, surface = "reading") {
     const desktop = this.albumHeaderDesktop();
     const expanded = this.albumHeaderIsExpanded(sourcePath, model);
+    const problems = albumHeaderFoldProblems(model);
+    const keyLive = propertyCardFoldKeyLive(this, surface);
     return {
       sourcePath,
       hue: notebookHostHueName(sourcePath, typeof propertyCardSettledMetadataCache === "function"
@@ -142,10 +167,12 @@ class BobLedgerToolsAlbumHeaderMixin {
       vault: this.app?.vault,
       desktop,
       expanded,
+      problems,
+      keyLive,
       handlers: {
         openPath: (path, event) => { void this.albumHeaderOpenPath(path, sourcePath, event); },
         copyCapture: (item) => this.albumHeaderCopyCapture(item),
-        toggleSchema: (next) => this.albumHeaderSetExpanded(sourcePath, next),
+        toggleSchema: (next) => this.albumHeaderSetExpanded(sourcePath, next, problems),
         openSchemaCard: (item) => (typeof this.openAlbumSchemaEntry === "function" ? this.openAlbumSchemaEntry({ filePath: sourcePath }) : this.openAlbumSchemaCard?.(item, sourcePath)),
         jumpYaml: (line) => { void this.albumHeaderJumpYaml(sourcePath, line); },
       },
@@ -514,7 +541,7 @@ class BobLedgerToolsAlbumHeaderMixin {
     let header = slotNode || bodyNodes[0] || null;
     const focusKey = this.albumHeaderFocusKey(header, doc);
     const extra = typeof this.albumHeaderFootExtra === "function" ? this.albumHeaderFootExtra(sourcePath, card) : null;
-    const options = { ...this.albumHeaderOptions(sourcePath, state, card.body), footSpec: extra?.footSpec };
+    const options = { ...this.albumHeaderOptions(sourcePath, state, card.body, "reading"), footSpec: extra?.footSpec };
     const signature = JSON.stringify([albumHeaderCardSignature(card, options), extra?.footDigest || "", extra?.footOpen === true]);
     if (!header || albumHeaderNodeSignatures.get(header) !== signature) {
       let fresh = null;
@@ -663,7 +690,7 @@ class BobLedgerToolsAlbumHeaderMixin {
       }
       const doc = notebookDomDoc(view.dom) || (typeof document !== "undefined" ? document : null);
       const extra = typeof this.albumHeaderFootExtra === "function" ? this.albumHeaderFootExtra(path, card) : null;
-      const options = { ...this.albumHeaderOptions(path, state, card.body), footSpec: extra?.footSpec };
+      const options = { ...this.albumHeaderOptions(path, state, card.body, "live-preview"), footSpec: extra?.footSpec };
       const signature = JSON.stringify([albumHeaderCardSignature(card, options), extra?.footDigest || "", extra?.footOpen === true]);
       const adopted = propertyCardAdoptedEntry(view.dom);
       let header = adopted && adopted.path === path && adopted.mode === "slot" ? adopted.node : null;

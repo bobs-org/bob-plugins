@@ -604,6 +604,18 @@ async function waitFor(client, expression, predicate, label, timeoutMs = 12_000)
   throw new Error(`timed out waiting for ${label}: ${JSON.stringify(last).slice(0, 400)}`);
 }
 
+async function dispatchTrustedKey(client, parts) {
+  await client.call("Input.dispatchKeyEvent", { type: "keyDown", ...parts });
+  await client.call("Input.dispatchKeyEvent", {
+    type: "keyUp",
+    code: parts.code,
+    key: parts.key,
+    windowsVirtualKeyCode: parts.windowsVirtualKeyCode,
+    nativeVirtualKeyCode: parts.nativeVirtualKeyCode,
+    modifiers: parts.modifiers || 0,
+  });
+}
+
 async function openNote(client, file, mode) {
   const state = markdownViewState(mode);
   return client.evaluate(
@@ -1278,6 +1290,101 @@ async function run(args) {
     const eatShot = path.join(outDir, "album-records-reading.png");
     await capturePage(client, eatShot);
     report.screenshots.push(eatShot);
+    const priorVimMode = await client.evaluate('window.app.vault.getConfig("vimMode") === true');
+    await client.evaluate('window.app.vault.setConfig("vimMode", true)');
+    await openNote(client, "eat.md", "live");
+    await sleep(700);
+    const foldReady = await client.evaluate(`(() => {
+      const view = window.app.workspace.activeLeaf.view;
+      const editor = view.editor;
+      const summary = view.containerEl.querySelector(".bob-album-schema-summary");
+      const cm = editor?.cm?.cm;
+      const vim = cm?.state?.vim;
+      const text = editor?.getValue?.() || "";
+      const lines = text.split("\\n");
+      const line = Math.max(0, lines.findIndex((item) => /^# Eat$/.test(item.trim())));
+      if (editor?.setCursor) editor.setCursor({ line, ch: 0 });
+      editor?.focus?.();
+      return { expanded: summary?.getAttribute("aria-expanded") || null,
+        keycap: Boolean(summary?.querySelector(".bob-property-card-fold-keycap")),
+        vim: vim ? (vim.insertMode ? "insert" : vim.visualMode ? "visual" : "normal") : "missing",
+        line, text };
+    })()`);
+    const foldDispatch = { key: "_", code: "Minus", windowsVirtualKeyCode: 189, nativeVirtualKeyCode: 189, modifiers: 8 };
+    await dispatchTrustedKey(client, foldDispatch);
+    const foldedByKey = await waitFor(client, `(() => {
+      const view = window.app.workspace.activeLeaf.view;
+      return view.containerEl.querySelector(".bob-album-schema-summary")?.getAttribute("aria-expanded") || null;
+    })()`, (value) => value === "false", "album Schema collapsed by bare _");
+    await dispatchTrustedKey(client, foldDispatch);
+    const expandedByKey = await waitFor(client, `(() => {
+      const view = window.app.workspace.activeLeaf.view;
+      const summary = view.containerEl.querySelector(".bob-album-schema-summary");
+      return { expanded: summary?.getAttribute("aria-expanded") || null,
+        focusedInEditor: Boolean(document.activeElement?.closest?.(".cm-editor")) };
+    })()`, (value) => value?.expanded === "true", "album Schema expanded by bare _");
+    const motionCount = await client.evaluate(`(() => {
+      const view = window.app.workspace.activeLeaf.view;
+      const editor = view.editor;
+      const before = editor.getCursor().line;
+      return { before, text: editor.getValue() };
+    })()`);
+    await dispatchTrustedKey(client, { key: "2", code: "Digit2", windowsVirtualKeyCode: 50, nativeVirtualKeyCode: 50 });
+    await dispatchTrustedKey(client, foldDispatch);
+    const countedMotion = await client.evaluate(`(() => {
+      const view = window.app.workspace.activeLeaf.view;
+      return { line: view.editor.getCursor().line,
+        expanded: view.containerEl.querySelector(".bob-album-schema-summary")?.getAttribute("aria-expanded") || null };
+    })()`);
+    await client.evaluate(`(() => {
+      const view = window.app.workspace.activeLeaf.view;
+      view.editor.setValue(${JSON.stringify(foldReady?.text || "")});
+      view.editor.setCursor({ line: ${Number(foldReady?.line || 0)}, ch: 0 });
+      view.editor.focus();
+      return true;
+    })()`);
+    const beforeDelete = await client.evaluate(`(() => {
+      const view = window.app.workspace.activeLeaf.view;
+      return { text: view.editor.getValue(), line: view.editor.getCursor().line };
+    })()`);
+    await dispatchTrustedKey(client, { key: "d", code: "KeyD", windowsVirtualKeyCode: 68, nativeVirtualKeyCode: 68 });
+    await dispatchTrustedKey(client, foldDispatch);
+    const deleteMotion = await client.evaluate(`(() => {
+      const view = window.app.workspace.activeLeaf.view;
+      return { changed: view.editor.getValue() !== ${JSON.stringify(beforeDelete?.text || "")},
+        expanded: view.containerEl.querySelector(".bob-album-schema-summary")?.getAttribute("aria-expanded") || null };
+    })()`);
+    await client.evaluate(`(() => {
+      const view = window.app.workspace.activeLeaf.view;
+      view.editor.setValue(${JSON.stringify(beforeDelete?.text || "")});
+      view.editor.setCursor({ line: ${Number(beforeDelete?.line || 0)}, ch: 0 });
+      view.editor.focus();
+      return true;
+    })()`);
+    record("fold-key-round-trip", foldReady?.expanded === "true" && foldReady?.keycap && foldReady?.vim === "normal"
+      && foldedByKey === "false" && expandedByKey?.expanded === "true" && expandedByKey?.focusedInEditor,
+      JSON.stringify({ ready: { expanded: foldReady?.expanded, keycap: foldReady?.keycap, vim: foldReady?.vim }, foldedByKey, expandedByKey }));
+    record("fold-vim-motions", countedMotion?.line > motionCount?.before && countedMotion?.expanded === "true"
+      && deleteMotion?.changed && deleteMotion?.expanded === "true",
+      JSON.stringify({ motionCount, countedMotion, deleteMotion }));
+
+    await openNote(client, "eat.md", "preview");
+    await sleep(600);
+    const readingCommandState = await client.evaluate(`(() => {
+      const command = "bob-ledger-tools:toggle-card-details";
+      const result = window.app.commands.executeCommandById(command);
+      const summary = window.app.workspace.activeLeaf.view.containerEl.querySelector(".bob-album-schema-summary");
+      return { result, expanded: summary?.getAttribute("aria-expanded") || null,
+        keycap: Boolean(summary?.querySelector(".bob-property-card-fold-keycap")) };
+    })()`);
+    const readingCommandClosed = await waitFor(client, `(() => window.app.workspace.activeLeaf.view.containerEl.querySelector(".bob-album-schema-summary")?.getAttribute("aria-expanded") || null)()`,
+      (value) => value === "false", "Toggle card details in Reading");
+    await client.evaluate('window.app.commands.executeCommandById("bob-ledger-tools:toggle-card-details")');
+    const readingCommandOpen = await waitFor(client, `(() => window.app.workspace.activeLeaf.view.containerEl.querySelector(".bob-album-schema-summary")?.getAttribute("aria-expanded") || null)()`,
+      (value) => value === "true", "Toggle card details opens in Reading");
+    record("fold-command-reading", readingCommandClosed === "false" && readingCommandOpen === "true" && readingCommandState?.keycap === false,
+      JSON.stringify({ readingCommandState, readingCommandClosed, readingCommandOpen }));
+    await client.evaluate(`window.app.vault.setConfig("vimMode", ${JSON.stringify(priorVimMode === true)})`);
     await openNote(client, "eat.md", "live");
     await sleep(700);
     const recordsLive = await client.evaluate(probe);

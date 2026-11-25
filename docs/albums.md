@@ -96,8 +96,10 @@ authored properties, and mount rules.
 When bob's report arrives, `＋ <noun>` and **⊞ Schema** join the kicker row
 and the schema summary line, such as
 `▾ Schema · 5 fields · grouped by Location · dated notes · 104 restaurants`,
-starts expanded with the chip rows shown;
-the native `record` row hides only then in the per-row fallback. When the
+starts expanded with the chip rows shown. In Live Preview Vim normal mode, `_`
+folds or opens this section; **Toggle card details** also works in Reading and
+outside Vim. The native `record` row hides only then in the per-row fallback.
+When the
 album sets a valid `walk_by`, the line ends with `· walks by Section` (the field's label), whose
 tooltip reads `Record walk: grouped by Section, then title`; it is
 display-only, and records show the matching group row on their walk rail. The `▾` toggle collapses the

@@ -108,10 +108,37 @@ function albumHeaderYamlLine(model, target = {}) {
   return firstField ? firstField.line : null;
 }
 
-// Every schema starts expanded; the summary toggle collapses it to one line
-// for the rest of the session.
-function albumHeaderDefaultExpanded(model) {
-  return true;
+// Blocking schema issues drive a health-aware session fold. Paths are part of
+// each message so a replacement diagnostic gets its own signature; warnings
+// remain attention only and never force the schema open.
+function albumHeaderFoldProblems(model) {
+  if (!model?.schemaInvalid) return "";
+  const errors = (model.issues || [])
+    .filter((issue) => issue?.severity === "error")
+    .map((issue) => albumHeaderIssueText(issue))
+    .sort();
+  return `schema-invalid:${JSON.stringify(errors)}`;
+}
+
+function albumHeaderFoldAttention(model) {
+  const errors = (model?.issues || []).filter((issue) => issue?.severity === "error");
+  if (model?.schemaInvalid) {
+    const count = Math.max(errors.length, 1);
+    return {
+      icon: "✗",
+      word: `${count} ${count === 1 ? "problem" : "problems"}`,
+      tone: "error",
+      title: errors.map((issue) => albumHeaderIssueText(issue)).filter(Boolean).join(" · ") || "The album schema is invalid.",
+    };
+  }
+  const warnings = (model?.issues || []).filter((issue) => issue?.severity === "warning");
+  if (!warnings.length) return null;
+  return {
+    icon: "⚠",
+    word: `${warnings.length} ${warnings.length === 1 ? "warning" : "warnings"}`,
+    tone: "warn",
+    title: warnings.map((issue) => albumHeaderIssueText(issue)).filter(Boolean).join(" · "),
+  };
 }
 
 // The folded schema line for a healthy schema:

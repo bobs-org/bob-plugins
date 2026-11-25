@@ -129,7 +129,12 @@ test("header acceptance requires the title-slot card, its identity, and one visi
   assert.match(notes["h1less-album.md"], /\ntitle: Bites\n/, "the post-tidy fixture carries title: and no H1");
   const source = require("node:fs").readFileSync(path.join(__dirname, "obsidian-album-ui-e2e.cjs"), "utf8");
   for (const name of ["reading-h1-hidden", "live-title-blanks-collapse-and-reveal", "schema-expanded-default", "card-identity",
+    "fold-key-round-trip", "fold-vim-motions", "fold-command-reading",
     "post-tidy-title-hides-nothing", "-title-block-before-report", "-body-joins-same-node"]) {
     assert.ok(source.includes(name), name);
   }
+  assert.match(source, /Input\.dispatchKeyEvent/);
+  assert.match(source, /Digit2/);
+  assert.match(source, /KeyD/);
+  assert.match(source, /toggle-card-details/);
 });

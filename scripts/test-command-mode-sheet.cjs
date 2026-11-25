@@ -181,6 +181,10 @@ test("unavailable rows stay visible with reasons", () => {
   const surfaces = helpers.cmSheetSurfaceRows(() => false);
   assert.ok(surfaces.every((row) => row.unavailable));
   assert.match(surfaces[0].unavailable, /Enable /);
+  const detailsIndex = surfaces.findIndex((row) => row.surfaceId === "bob-ledger-tools:toggle-card-details");
+  assert.equal(surfaces[detailsIndex].title, "Toggle card details");
+  assert.equal(surfaces[detailsIndex - 1].surfaceId, "bob-ledger-tools:toggle-card-properties",
+    "details sits beside the existing Properties command");
   const open = helpers.cmSheetSurfaceRows((id) => id === "bob-ledger-tools:open-today-daily-note");
   assert.equal(open[0].unavailable, null);
   assert.ok(open[1].unavailable);

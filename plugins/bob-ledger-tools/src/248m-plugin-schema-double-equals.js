@@ -1,10 +1,10 @@
 // Capture-phase == on album notes and bank.md opens the schema/setup card;
 // == on a canonical record note opens its Record Card. A vimrc nnoremap ==
 // never fires: CodeMirror Vim treats = as a complete operator, so the
-// second = reindents instead of matching a mapping. Bare `-` and `+` in
-// Live Preview Vim normal mode toggle the Properties drawer and open the
-// Property Editor; they use a content-target gate and do not wait for a
-// pending `=`.
+// second = reindents instead of matching a mapping. Bare `-`, `_`, and `+`
+// in Live Preview Vim normal mode toggle Properties, fold the mounted card
+// section, and open the Property Editor. They use a content-target gate and
+// do not wait for a pending `=`.
 
 function schemaDoubleEqualsKeyBufferEmpty(value) {
   if (Array.isArray(value)) return value.length === 0;
@@ -126,7 +126,7 @@ function propertyCardSecondKeyGate(input) {
 
 function propertyCardBareKeyGate(input) {
   const snap = (input && input.vim) || { readable: false };
-  if (!input || (input.key !== "-" && input.key !== "+")) {
+  if (!input || (input.key !== "-" && input.key !== "+" && input.key !== "_")) {
     return { act: false, reason: "not-bare-key" };
   }
   if (input.ctrlKey || input.altKey || input.metaKey) {
@@ -455,6 +455,22 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
         this.propertyCardToggleCommandRegistered = true;
       } catch (_) {}
     }
+    if (this.propertyCardDetailsToggleCommandRegistered !== true) {
+      try {
+        this.addCommand({
+          id: "toggle-card-details",
+          name: "Toggle card details",
+          callback: () => {
+            if (this.schemaDoubleEqualsActive === false) return false;
+            const view = schemaDoubleEqualsActiveView(this);
+            return typeof propertyCardToggleDetails === "function"
+              ? propertyCardToggleDetails(view)
+              : false;
+          },
+        });
+        this.propertyCardDetailsToggleCommandRegistered = true;
+      } catch (_) {}
+    }
     const keydownHandler = (event) => this.handleSchemaDoubleEqualsKeydown(event);
     const windowObject = typeof window === "undefined" ? null : window;
     const documentObject = typeof document === "undefined" ? null : document;
@@ -490,7 +506,7 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
       return;
     }
     const key = event && event.key;
-    if (key !== "=" && key !== "-" && key !== "+") return;
+    if (key !== "=" && key !== "-" && key !== "+" && key !== "_") return;
     const view = schemaDoubleEqualsActiveView(this);
     const cm = schemaDoubleEqualsResolveCm(view);
     let frontmatter = {};
@@ -507,7 +523,8 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
       }
     } catch (_) {}
     // The species registry is the sole authority for '='. '-' checks the
-    // live mount in this view. '+' is the registered Property Editor arm.
+    // live mount in this view. '_' targets a registered fold; '+' is the
+    // registered Property Editor arm.
     // A runtime miss never mutates a registry or consumes Vim input.
     let entry = null;
     if (key === "=") {
@@ -535,6 +552,14 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
         canAct: () => typeof propertyCardCanToggleProperties === "function"
           && propertyCardCanToggleProperties(view),
         run: () => { if (typeof propertyCardToggleProperties === "function") propertyCardToggleProperties(view); },
+      };
+    } else if (key === "_") {
+      arm = {
+        key,
+        reason: "details-toggle",
+        canAct: () => typeof propertyCardCanToggleDetails === "function"
+          && propertyCardCanToggleDetails(view),
+        run: () => { if (typeof propertyCardToggleDetails === "function") propertyCardToggleDetails(view); },
       };
     } else {
       arm = this.propertyCardSecondKeyArmRegistry().get("+") || null;

@@ -13278,6 +13278,91 @@ button.bob-property-card-foot-lint-chip {
 }
 /* Property-card identity badge (bob-cli-o6 collection-cards): end. */
 
+/* Shared property-card fold row (bob-cli-q6.1 fold-core). */
+.bob-property-card .bob-property-card-fold:not(.clickable-icon) {
+  box-sizing: border-box;
+  display: flex !important;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.15em 0.38em;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  margin-block-start: 0.55em;
+  padding: 0.15em 0.25em;
+  border: 0 !important;
+  border-radius: var(--radius-s, 4px);
+  background: transparent !important;
+  box-shadow: none !important;
+  color: var(--text-muted);
+  font: var(--font-ui-small, 13px)/1.4 var(--font-interface);
+  text-align: start;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.bob-property-card .bob-property-card-fold:not(.clickable-icon):hover {
+  background: color-mix(in srgb, var(--bob-property-card-accent, var(--text-muted)) 6%, transparent) !important;
+  color: var(--text-normal);
+}
+.bob-property-card .bob-property-card-fold:not(.clickable-icon):focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+}
+.bob-property-card-fold-chevron {
+  flex: none;
+  color: var(--bob-property-card-accent, var(--text-muted));
+}
+.bob-property-card-fold-noun {
+  color: var(--text-normal);
+  font-weight: 600;
+}
+.bob-property-card-fold-summary { color: var(--text-muted); }
+.bob-property-card-fold-attention {
+  display: inline-flex;
+  flex: none;
+  align-items: baseline;
+  gap: 0.2em;
+  margin-inline-start: auto;
+  color: var(--text-warning);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.bob-property-card-fold-attention.is-error { color: var(--text-error, var(--text-warning)); }
+.bob-property-card-fold-keycap {
+  flex: none;
+  margin-inline-start: 0.2em;
+  padding: 0 0.25em;
+  border-radius: 3px;
+  background: var(--background-modifier-border);
+  color: var(--text-muted);
+  font: inherit;
+  opacity: 0;
+  pointer-events: none;
+  user-select: none;
+  transition: opacity 120ms ease;
+}
+.bob-property-card .bob-property-card-fold:not(.clickable-icon):hover .bob-property-card-fold-keycap,
+.bob-property-card .bob-property-card-fold:not(.clickable-icon):focus-visible .bob-property-card-fold-keycap {
+  opacity: 0.7;
+}
+.bob-property-card .bob-property-card-fold-compact {
+  display: inline-flex !important;
+  width: auto;
+  max-width: 100%;
+  margin: 0;
+  padding: 0.1em 0.2em;
+  vertical-align: middle;
+}
+@media (forced-colors: active) {
+  .bob-property-card-fold-chevron,
+  .bob-property-card-fold-noun,
+  .bob-property-card-fold-summary,
+  .bob-property-card-fold-attention,
+  .bob-property-card-fold-keycap { color: CanvasText; }
+  .bob-property-card-fold-keycap { border: 1px solid CanvasText; }
+}
+
 /* Property editor typed values (bob-cli-pf.4.1.3). */
 .bob-property-editor-stage {
   display: grid;

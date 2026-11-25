@@ -9,20 +9,20 @@ const PROPERTY_CARD_KINDS = Object.freeze([
 ]);
 
 const PROPERTY_CARD_SPECIES = Object.freeze({
-  album: Object.freeze({ kind: "album", word: "Album", tile: "stack", icon: "library", band: "", temporal: false }),
-  record: Object.freeze({ kind: "record", word: "Record", tile: "sheet", icon: "file-text", band: "", temporal: false }),
+  album: Object.freeze({ kind: "album", word: "Album", tile: "stack", icon: "library", band: "", temporal: false, foldDefault: true }),
+  record: Object.freeze({ kind: "record", word: "Record", tile: "sheet", icon: "file-text", band: "", temporal: false, foldDefault: true }),
   day: Object.freeze({ kind: "day", word: "Day", tile: "leaf", icon: "calendar", band: "", temporal: true }),
   week: Object.freeze({ kind: "week", word: "Week", tile: "leaf", icon: "calendar-range", band: "WEEK", temporal: true }),
   quarter: Object.freeze({ kind: "quarter", word: "Quarter", tile: "leaf", icon: "calendar-range", band: "QTR", temporal: true }),
   year: Object.freeze({ kind: "year", word: "Year", tile: "leaf", icon: "calendar-range", band: "YEAR", temporal: true }),
-  bank: Object.freeze({ kind: "bank", word: "Bank", tile: "plain", icon: "landmark", band: "", temporal: false }),
-  area: Object.freeze({ kind: "area", word: "Area", tile: "field", icon: "layers", band: "", temporal: false }),
-  project: Object.freeze({ kind: "project", word: "Project", tile: "pennant", icon: "target", band: "", temporal: false }),
+  bank: Object.freeze({ kind: "bank", word: "Bank", tile: "plain", icon: "landmark", band: "", temporal: false, foldDefault: false }),
+  area: Object.freeze({ kind: "area", word: "Area", tile: "field", icon: "layers", band: "", temporal: false, foldDefault: true }),
+  project: Object.freeze({ kind: "project", word: "Project", tile: "pennant", icon: "target", band: "", temporal: false, foldDefault: true }),
 });
 
-// Frozen descriptor { kind, word, tile, icon, band, temporal } or null. The
-// word is title case; CSS uppercases the kicker so screen readers still read
-// a word. A day's band is its weekday, which the adapter supplies.
+// Frozen descriptor { kind, word, tile, icon, band, temporal, foldDefault? }
+// or null. The word is title case; CSS uppercases the kicker so screen readers
+// still read a word. A day's band is its weekday, which the adapter supplies.
 function propertyCardSpecies(kind) {
   if (typeof kind !== "string") return null;
   return Object.prototype.hasOwnProperty.call(PROPERTY_CARD_SPECIES, kind)

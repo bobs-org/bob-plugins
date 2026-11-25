@@ -210,7 +210,7 @@ function bareGateInput(overrides = {}) {
   };
 }
 
-test("bare-key arms act on - and on shifted and unshifted +", () => {
+test("bare-key arms act on -, _, and shifted or unshifted +", () => {
   assert.deepEqual(helpers.propertyCardBareKeyGate(bareGateInput()), {
     act: true, reason: "test-arm",
   });
@@ -218,6 +218,9 @@ test("bare-key arms act on - and on shifted and unshifted +", () => {
     act: true, reason: "test-arm",
   });
   assert.deepEqual(helpers.propertyCardBareKeyGate(bareGateInput({ key: "+", shiftKey: false })), {
+    act: true, reason: "test-arm",
+  });
+  assert.deepEqual(helpers.propertyCardBareKeyGate(bareGateInput({ key: "_", shiftKey: true })), {
     act: true, reason: "test-arm",
   });
 });
@@ -717,6 +720,82 @@ test("palette command toggles the current Reading view without Vim input", () =>
     assert.equal(harness.handleKeyCalls.length, 0, "palette use does not touch Vim input");
   });
   helpers.propertyCardFootResetAll();
+});
+
+function foldControl(path, open = false) {
+  const attrs = new Map([
+    ["data-card-fold", "album"],
+    ["data-card-fold-source", path],
+    ["aria-expanded", open ? "true" : "false"],
+  ]);
+  return {
+    isConnected: true,
+    disabled: false,
+    getAttribute(name) { return attrs.has(name) ? attrs.get(name) : null; },
+    setAttribute(name, value) { attrs.set(name, String(value)); },
+    getBoundingClientRect() { return { width: 10, height: 10 }; },
+  };
+}
+
+function foldScope(control) {
+  return { querySelectorAll(selector) { return selector === "[data-card-fold]" ? [control] : []; } };
+}
+
+test("shifted bare _ toggles only a registered fold in the active Live Preview view", () => {
+  const harness = makeHarness("eat.md", { frontmatter: { type: "[[album]]" }, vimState: bareVimState() });
+  const control = foldControl("eat.md");
+  harness.view.dom = foldScope(control);
+  let calls = 0;
+  const unregister = helpers.propertyCardRegisterFoldKind(harness.plugin, "album", {
+    toggle(path, view) {
+      calls += 1;
+      assert.equal(path, "eat.md");
+      assert.equal(view, harness.view);
+      control.setAttribute("aria-expanded", "true");
+      return true;
+    },
+  });
+  try {
+    withGlobals(harness.win, harness.doc, () => {
+      harness.plugin.setupSchemaDoubleEquals();
+      const event = bareKeyEvent(harness.view, { key: "_", shiftKey: true });
+      harness.win.dispatch(event);
+      assert.deepEqual(event.counts, { preventDefault: 1, stopPropagation: 1, immediate: 1 });
+      assert.equal(calls, 1);
+      assert.equal(harness.handleKeyCalls.length, 0, "fold toggling does not inject a Vim motion");
+    });
+  } finally {
+    unregister();
+  }
+});
+
+test("Toggle card details works in Reading and returns false when no fold is mounted", () => {
+  const empty = makeHarness("eat.md", { live: false, frontmatter: { type: "[[album]]" } });
+  withGlobals(empty.win, empty.doc, () => {
+    empty.plugin.setupSchemaDoubleEquals();
+    const command = empty.plugin.commands.find((item) => item.id === "toggle-card-details");
+    assert.equal(command.name, "Toggle card details");
+    assert.equal(command.callback(), false);
+  });
+
+  const harness = makeHarness("eat.md", { live: false, frontmatter: { type: "[[album]]" } });
+  const control = foldControl("eat.md");
+  harness.view.dom = foldScope(control);
+  let calls = 0;
+  const unregister = helpers.propertyCardRegisterFoldKind(harness.plugin, "album", {
+    toggle(path) { calls += 1; assert.equal(path, "eat.md"); return true; },
+  });
+  try {
+    withGlobals(harness.win, harness.doc, () => {
+      harness.plugin.setupSchemaDoubleEquals();
+      const command = harness.plugin.commands.find((item) => item.id === "toggle-card-details");
+      assert.equal(command.callback(), true);
+      assert.equal(calls, 1);
+      assert.equal(harness.handleKeyCalls.length, 0);
+    });
+  } finally {
+    unregister();
+  }
 });
 
 test("teardown clears future arms and makes the palette command inert", () => {

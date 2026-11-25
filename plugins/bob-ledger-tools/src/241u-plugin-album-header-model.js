@@ -364,6 +364,7 @@ function albumHeaderCardSignature(card, extra = {}) {
     hue: extra.hue || "",
     body: card.body ? albumHeaderSignature(card.body, extra) : null,
     expanded: extra.expanded === true,
+    keyLive: extra.keyLive === true,
     desktop: extra.desktop !== false,
   });
 }
@@ -391,6 +392,7 @@ function albumHeaderSignature(model, extra = {}) {
     records: model.records,
     schemaInvalid: model.schemaInvalid,
     expanded: extra.expanded === true,
+    keyLive: extra.keyLive === true,
     desktop: extra.desktop !== false,
   });
 }

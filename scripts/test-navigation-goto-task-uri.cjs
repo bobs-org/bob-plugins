@@ -389,6 +389,92 @@ test("refindGoToTaskLine uses planned, block-id, unique digest, and clamped sour
   );
 });
 
+test("refindGoToTaskLine falls back to a unique non-task block after the task lookup misses", async () => {
+  const heading = "## Intention rollovers ^intention-rollovers";
+  const bullet = "- a notebook note ^note-bullet";
+  const fencedId = "hidden ^fenced-id";
+  const fenced = ["```", fencedId, "```"];
+  const headingDigest = await helpers.bobLineDigest(heading);
+  const uniqueTask = "- [ ] #task Unique ^u";
+  const uniqueTaskDigest = await helpers.bobLineDigest(uniqueTask);
+  const movedTask = "- [ ] #task Moved ^moved";
+
+  assert.deepEqual(
+    await helpers.refindGoToTaskLine(["# Inserted", heading], {
+      line: 1,
+      ref: "1:deadbeef",
+      block: "intention-rollovers",
+    }),
+    { line: 1, source: "block-id-any" },
+  );
+
+  assert.deepEqual(
+    await helpers.refindGoToTaskLine(["# Inserted", bullet], {
+      line: 1,
+      ref: "1:deadbeef",
+      block: "note-bullet",
+    }),
+    { line: 1, source: "block-id-any" },
+  );
+
+  assert.deepEqual(
+    await helpers.refindGoToTaskLine(["# Inserted", heading, ...fenced], {
+      line: 1,
+      ref: "1:deadbeef",
+      block: "intention-rollovers",
+    }),
+    { line: 1, source: "block-id-any" },
+  );
+
+  assert.deepEqual(
+    await helpers.refindGoToTaskLine(["# Inserted", ...fenced], {
+      line: 1,
+      ref: `1:${headingDigest}`,
+      block: "fenced-id",
+    }),
+    { line: 0, source: "clamped" },
+  );
+
+  assert.deepEqual(
+    await helpers.refindGoToTaskLine(
+      [
+        "# Inserted",
+        heading,
+        heading.replace("Intention rollovers", "Another heading"),
+        uniqueTask,
+      ],
+      { line: 1, ref: `1:${uniqueTaskDigest}`, block: "intention-rollovers" },
+    ),
+    { line: 3, source: "digest" },
+  );
+
+  assert.deepEqual(
+    await helpers.refindGoToTaskLine(
+      ["# Inserted", heading, heading],
+      { line: 1, ref: `1:${headingDigest}`, block: "intention-rollovers" },
+    ),
+    { line: 0, source: "clamped" },
+  );
+
+  assert.deepEqual(
+    await helpers.refindGoToTaskLine(
+      ["# Inserted", movedTask, heading.replace("intention-rollovers", "moved")],
+      { line: 1, ref: "1:deadbeef", block: "moved" },
+    ),
+    { line: 1, source: "block-id" },
+  );
+
+  assert.equal(
+    helpers.findAnyLineByBlockId(["# Inserted", heading], "intention-rollovers"),
+    1,
+  );
+  assert.equal(
+    helpers.findAnyLineByBlockId(["# Inserted", heading, heading], "intention-rollovers"),
+    null,
+  );
+  assert.equal(helpers.findAnyLineByBlockId([...fenced], "fenced-id"), null);
+});
+
 test("handleGoToTaskUri notices each malformed parameter", async () => {
   const { plugin, params } = createGoToTaskHarness();
   const malformed = [
@@ -467,6 +553,27 @@ test("handleGoToTaskUri prefers the open buffer over cachedRead", async () => {
       path: `${harness.vaultBase}/dev.md`,
       line: "1",
       ref: `1:${digest}`,
+    }),
+    true,
+  );
+  assert.deepEqual(harness.editor.getCursor(), { line: 1, ch: 0 });
+  assert.equal(notices.length, 0);
+});
+
+test("handleGoToTaskUri re-finds a unique heading block after an insert above it", async () => {
+  const heading = "## Intention rollovers ^intention-rollovers";
+  const digest = await helpers.bobLineDigest(heading);
+  const harness = createGoToTaskHarness({
+    content: ["# Inserted", heading].join("\n"),
+    stubOpen: true,
+  });
+  notices.length = 0;
+  assert.equal(
+    await harness.plugin.handleGoToTaskUri({
+      path: `${harness.vaultBase}/dev.md`,
+      line: "1",
+      ref: `1:${digest}`,
+      block: "intention-rollovers",
     }),
     true,
   );

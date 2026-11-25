@@ -36,7 +36,10 @@ text. It tries these locations in order:
 
 1. The planned line (`line − 1`) when it is in range and its digest
    matches `ref`.
-2. The task line carrying `^block`, when `block` is supplied.
+2. The task line carrying `^block`, when `block` is supplied. If that
+   misses, the unique unfenced line carrying the same `^block` (a heading,
+   bullet, paragraph, or other non-task block). Zero or several such hits
+   fall through.
 3. The only task line whose digest matches `ref`.
 4. The planned line clamped to the file, with a notice that the note changed.
 

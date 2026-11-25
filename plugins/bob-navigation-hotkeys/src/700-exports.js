@@ -299,6 +299,7 @@ module.exports.helpers = {
   toggleLineTransclusions,
   toggleLineRangeTransclusions,
   findTaskLineByBlockId,
+  findAnyLineByBlockId,
   adjustCursorChForTransclusionChanges,
   deferToNextFrame,
   cancelDeferred,

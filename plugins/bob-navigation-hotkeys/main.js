@@ -129112,6 +129112,31 @@ function clampGoToTaskLine(planned, lineCount) {
   return Math.min(Math.max(raw, 0), lineCount - 1);
 }
 
+function findAnyLineByBlockId(lines, blockId) {
+  const sourceLines = Array.isArray(lines) ? lines : [];
+  const id = normalizeBulletPropertyValue(blockId);
+  if (!id) {
+    return null;
+  }
+
+  const contexts = getMarkdownLineContextsForLines(sourceLines);
+  const matches = [];
+  for (let line = 0; line < sourceLines.length; line += 1) {
+    const context = contexts[line];
+    if (context && (context.inFence || context.inFrontmatter)) {
+      continue;
+    }
+    if (getTrailingBlockId(String(sourceLines[line] || "")) !== id) {
+      continue;
+    }
+    matches.push(line);
+    if (matches.length > 1) {
+      return null;
+    }
+  }
+  return matches.length === 1 ? matches[0] : null;
+}
+
 async function refindGoToTaskLine(lines, options) {
   const sourceLines = Array.isArray(lines) ? lines : [];
   const info = options && typeof options === "object" ? options : {};
@@ -129136,6 +129161,10 @@ async function refindGoToTaskLine(lines, options) {
     const blockIdLine = findTaskLineByBlockId(sourceLines, block);
     if (blockIdLine !== null) {
       return Object.freeze({ line: blockIdLine, source: "block-id" });
+    }
+    const anyLine = findAnyLineByBlockId(sourceLines, block);
+    if (anyLine !== null) {
+      return Object.freeze({ line: anyLine, source: "block-id-any" });
     }
   }
 
@@ -141433,6 +141462,7 @@ module.exports.helpers = {
   toggleLineTransclusions,
   toggleLineRangeTransclusions,
   findTaskLineByBlockId,
+  findAnyLineByBlockId,
   adjustCursorChForTransclusionChanges,
   deferToNextFrame,
   cancelDeferred,

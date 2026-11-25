@@ -52,7 +52,8 @@ class BobLedgerToolsRecordWalkRailMixin {
       sourceText: source,
       report: this.recordSheetState()?.report,
       frontmatter: this.recordSheetFrontmatter(path),
-      metadataCache: this.app?.metadataCache,
+      metadataCache: typeof propertyCardSettledMetadataCache === "function"
+        ? propertyCardSettledMetadataCache(this.app) : this.app?.metadataCache,
       vault: this.app?.vault,
     });
     recordWalkRequestSync(this, walk);

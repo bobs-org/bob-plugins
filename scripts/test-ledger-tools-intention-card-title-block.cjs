@@ -634,6 +634,81 @@ test("an identity-only card owns no Properties rows", async () => {
   assert.equal(w.plugin.intentionCardKeySlots.size, 0);
 });
 
+test("a re-parse gap keeps a Live Preview day card mounted", async () => {
+  const w = await world([DAY], { [DAY]: { intentions: ["Ship"] } });
+  H.propertyCardSettledCacheReset();
+  const pane = livePane(w.doc, w, DAY);
+  w.plugin.buildIntentionCardDecorations(pane.view);
+  await flush();
+  const card = pane.sizer.querySelector(".bob-intention-card");
+  assert.ok(card, "the day card mounts before the gap");
+  const file = w.app.vault.getAbstractFileByPath(DAY);
+  assert.ok(H.propertyCardSettledFileCache(w.app, file), "the live cache is recorded");
+
+  const liveRelease = [];
+  const origLive = w.plugin.intentionCardLiveRelease.bind(w.plugin);
+  w.plugin.intentionCardLiveRelease = (view) => {
+    liveRelease.push(true);
+    return origLive(view);
+  };
+  const falseScopes = [];
+  const host = w.plugin.intentionCardHost();
+  const origScope = host.setEditorScope.bind(host);
+  host.setEditorScope = (view, enabled, extras) => {
+    if (enabled === false) falseScopes.push(true);
+    return origScope(view, enabled, extras);
+  };
+  const origGet = w.app.metadataCache.getFileCache;
+  w.app.metadataCache.getFileCache = () => null;
+  try {
+    w.plugin.buildIntentionCardDecorations(pane.view);
+    await flush();
+    assert.equal(liveRelease.length, 0, "a re-parse gap does not live-release the card");
+    assert.equal(falseScopes.length, 0, "a re-parse gap does not setEditorScope(false)");
+    assert.ok(pane.sizer.querySelector(".bob-intention-card"), "the slot card stays mounted");
+  } finally {
+    w.app.metadataCache.getFileCache = origGet;
+    w.plugin.intentionCardLiveRelease = origLive;
+    host.setEditorScope = origScope;
+    H.propertyCardSettledCacheReset();
+  }
+});
+
+test("a metadata change keeps a source hold so Live Preview ownership does not fail open", async () => {
+  const w = await world([DAY], { [DAY]: { intentions: ["Ship"] } });
+  const pane = livePane(w.doc, w, DAY);
+  w.plugin.buildIntentionCardDecorations(pane.view);
+  await flush();
+  assert.ok(pane.sizer.querySelector(".bob-intention-card"), "the day card mounts before metadata changes");
+  assert.equal(typeof w.plugin.intentionCardFootSource(DAY)?.source, "string");
+  const liveRelease = [];
+  const origLive = w.plugin.intentionCardLiveRelease.bind(w.plugin);
+  w.plugin.intentionCardLiveRelease = (view) => {
+    liveRelease.push(true);
+    return origLive(view);
+  };
+  const falseScopes = [];
+  const host = w.plugin.intentionCardHost();
+  const origScope = host.setEditorScope.bind(host);
+  host.setEditorScope = (view, enabled, extras) => {
+    if (enabled === false) falseScopes.push(true);
+    return origScope(view, enabled, extras);
+  };
+  try {
+    w.plugin.intentionCardOnMetadata(w.files.get(DAY));
+    assert.equal(w.plugin.intentionCardSourceCache.has(DAY), false, "the model cache still clears for a reread");
+    assert.equal(typeof w.plugin.intentionCardFootSource(DAY)?.source, "string",
+      "the ownership gate still sees the last confirmed source");
+    w.plugin.buildIntentionCardDecorations(pane.view);
+    assert.equal(liveRelease.length, 0, "a body-only metadata change does not live-release the card");
+    assert.equal(falseScopes.length, 0, "a body-only metadata change does not setEditorScope(false)");
+    assert.ok(pane.sizer.querySelector(".bob-intention-card"), "the slot card stays mounted");
+  } finally {
+    w.plugin.intentionCardLiveRelease = origLive;
+    host.setEditorScope = origScope;
+  }
+});
+
 test("a null slot falls back to the body widget without title ownership; sticky until the path changes", async () => {
   const w = await world([DAY, WEEK], { [DAY]: { intentions: ["Ship"] } });
   const pane = livePane(w.doc, w, DAY);

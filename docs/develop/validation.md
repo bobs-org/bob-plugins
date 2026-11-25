@@ -563,7 +563,9 @@ contexts (embeds, hover, canvas, print, mobile), failed mounts, container
 replacement, and disable/unload. Capability cases cover pending, absent,
 failed probes, configured bob-path switches, and late replies after unload.
 Focus checks exercise Vim `k`/`gg`, Up at line zero, Tab/Shift+Tab, and body
-typing after navigation. Mod+`;`, a custom shortcut, and command dispatch
+typing after navigation. Live Preview body typing across autosave and a
+150 ms simulated re-parse must keep ownership on a record and a day note
+(`live-autosave-keeps-ownership`, `live-slow-reparse-keeps-card`). Mod+`;`, a custom shortcut, and command dispatch
 must open Add mode on an owned document; ordinary/bank notes and the File
 Properties sidebar stay native. Helper focus and failed-opener fallback are
 also required. Container/attribute restoration is probed at the transaction

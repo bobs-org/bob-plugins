@@ -237,7 +237,10 @@ current bob path, and working property-editor/native-command routing.
 Duplicate keys, invalid or unclosed YAML, stale cache/source evidence,
 detached mounts, and optimistic values without confirmed source fail open.
 Source, embeds, hover popovers, canvas, print, mobile, and non-card notes
-never acquire whole ownership.
+never acquire whole ownership. A metadata `changed` event re-checks
+evidence and releases only mounts whose source no longer matches the new
+cache. During Obsidian's post-save re-parse, card painters and the gate
+read the last confirmed cache for at most 2 s.
 
 The underlying `propertyCardOwnFrontmatter(scope, { path, view })` adds
 `bob-property-card-owns-frontmatter` to the view scope. Live Preview uses

@@ -38910,6 +38910,7 @@ BobLedgerToolsPlugin.prototype.teardownLedgerToolsSurfaces = function () {
     try { propertyCardAdoptReleaseAll(); } catch (_) {}
     try { propertyCardTitleSlotReleaseAll(); } catch (_) {}
     try { propertyCardFrontmatterReleaseAll(); } catch (_) {}
+    try { propertyCardSettledCacheReset(); } catch (_) {}
     try {
       this.teardownAlbumRecords(); this.teardownAreasCatalog(); this.teardownProjectsCatalog(); this.teardownAlbumCatalog(); this.teardownNotebookCatalog(); this.teardownAreasData(); this.teardownNotebookData(); this.teardownAlbumData(); this.teardownProjectsData();
     } catch (error) {
@@ -84475,6 +84476,7 @@ function createPropertyCardHost(options) {
       editors();
       editorScopes();
       keySlots();
+      try { propertyCardSettledCacheBind?.(plugin); } catch (_) {}
       if (!registered) {
         try {
           plugin.registerMarkdownPostProcessor?.(
@@ -84547,6 +84549,7 @@ function createPropertyCardHost(options) {
       editors().clear();
       editorScopes().clear();
       extrasLive = false;
+      try { propertyCardSettledCacheReset?.(); } catch (_) {}
       try { options.onDisposeEnd?.(); } catch (_) {}
       return controller;
     },
@@ -88798,10 +88801,12 @@ function propertyCardToggleProperties(view) {
 // The node stays in the DOM (it is the title-slot anchor) with inert plus
 // aria-hidden, and a focusin guard returns focus to the editor. Live
 // Preview uses a lazy StateField plus editorAttributes (modeled on 240i);
-// Reading uses a generation-bound class. Ownership drops on release, a
-// newer owner, Source mode, a file change, plugin disable, or unload.
-// Never throws. Adapters must use the coordinator rather than call this
-// directly so invalidation and generation-bound cleanup stay shared.
+// Reading uses a generation-bound class. A metadata change re-checks
+// evidence and releases only mounts whose source no longer matches the
+// cache. Ownership also drops on release, a newer owner, Source mode,
+// rename/delete, plugin disable, or unload. Never throws. Adapters must
+// use the coordinator rather than call this directly so invalidation and
+// generation-bound cleanup stay shared.
 const PROPERTY_CARD_OWNS_FRONTMATTER_CLASS = "bob-property-card-owns-frontmatter";
 const PROPERTY_CARD_FRONTMATTER_REGISTERED_FLAG = "_propertyCardFrontmatterOwnershipRegistered";
 const PROPERTY_CARD_FRONTMATTER_OWNS_ATTRS = Object.freeze({ class: PROPERTY_CARD_OWNS_FRONTMATTER_CLASS });
@@ -89275,7 +89280,9 @@ function propertyCardFrontmatterCacheFor(plugin, path) {
   try {
     const file = plugin?.app?.vault?.getAbstractFileByPath?.(path);
     if (!file || String(file.path || "").replace(/\\/g, "/") !== path) return null;
-    const cache = plugin.app?.metadataCache?.getFileCache?.(file);
+    const cache = typeof propertyCardSettledFileCache === "function"
+      ? propertyCardSettledFileCache(plugin.app, file)
+      : plugin.app?.metadataCache?.getFileCache?.(file);
     const frontmatter = cache?.frontmatter;
     return frontmatter && typeof frontmatter === "object" && !Array.isArray(frontmatter)
       ? frontmatter : null;
@@ -89444,6 +89451,19 @@ function propertyCardFrontmatterCoordinatorReleasePath(plugin, path) {
   return released;
 }
 
+function propertyCardFrontmatterCoordinatorRecheckPath(plugin, path) {
+  const key = String(path || "").replace(/\\/g, "/");
+  if (!key) return 0;
+  let released = 0;
+  for (const [scope, entry] of Array.from(propertyCardFrontmatterMountOwners.entries())) {
+    if (entry.plugin !== plugin || entry.path !== key) continue;
+    if (!propertyCardFrontmatterRecordEligible(plugin, entry.options)) {
+      if (propertyCardFrontmatterReleaseMounted(scope, { plugin, kind: entry.kind, path: entry.path })) released += 1;
+    }
+  }
+  return released;
+}
+
 function propertyCardFrontmatterCoordinatorReleaseKind(plugin, kind) {
   let released = 0;
   for (const [scope, entry] of Array.from(propertyCardFrontmatterMountOwners.entries())) {
@@ -89503,7 +89523,7 @@ function propertyCardFrontmatterCoordinatorBind(plugin, kind) {
     bindEvent(workspace, name, () => propertyCardFrontmatterCoordinatorReconcile(plugin));
   }
   bindEvent(plugin.app?.metadataCache, "changed", (file) => {
-    propertyCardFrontmatterCoordinatorReleasePath(plugin, file?.path);
+    propertyCardFrontmatterCoordinatorRecheckPath(plugin, file?.path);
   });
   bindEvent(plugin.app?.vault, "rename", (_file, oldPath) => {
     propertyCardFrontmatterCoordinatorReleasePath(plugin, oldPath);
@@ -89625,6 +89645,118 @@ function propertyCardHostRegisterFrontmatterOwnership(plugin) {
     return false;
   }
 }
+// ---- src/240qa-plugin-property-card-settled-cache.js ----
+// Last-confirmed metadata cache for property-card painters. Obsidian's
+// getFileCache returns null between a vault write and the following
+// `changed` event while the note re-parses. Card painters and the
+// ownership gate read this hold instead of treating that gap as "not a
+// card". Evidence still compares current source against a cache Obsidian
+// produced; a real frontmatter change still mismatches and fails open.
+// Never monkeypatches app.metadataCache.
+const PROPERTY_CARD_SETTLED_CACHE_HOLD_MS = 2000;
+const PROPERTY_CARD_SETTLED_CACHE_BOUND_FLAG = "_propertyCardSettledCacheBound";
+const propertyCardSettledCaches = new Map();
+const propertyCardSettledCacheFacades = new WeakMap();
+
+function propertyCardSettledCachePath(file) {
+  try { return String(file?.path || "").replace(/\\/g, "/"); } catch (_) { return ""; }
+}
+
+function propertyCardSettledCacheRemember(file, cache) {
+  const path = propertyCardSettledCachePath(file);
+  if (!path || cache == null) return;
+  propertyCardSettledCaches.set(path, { file, cache, pendingSince: null });
+}
+
+function propertyCardSettledCacheDrop(path) {
+  const key = String(path || "").replace(/\\/g, "/");
+  if (key) propertyCardSettledCaches.delete(key);
+}
+
+function propertyCardSettledFileCache(app, file) {
+  try {
+    if (!file) return null;
+    const live = app?.metadataCache?.getFileCache?.(file);
+    if (live != null) {
+      propertyCardSettledCacheRemember(file, live);
+      return live;
+    }
+    const path = propertyCardSettledCachePath(file);
+    const entry = path ? propertyCardSettledCaches.get(path) : null;
+    if (!entry) return null;
+    if (entry.file !== file) return null;
+    if (app?.vault?.getAbstractFileByPath?.(file.path) !== file) return null;
+    const now = Date.now();
+    if (entry.pendingSince == null) entry.pendingSince = now;
+    if (now - entry.pendingSince > PROPERTY_CARD_SETTLED_CACHE_HOLD_MS) return null;
+    return entry.cache;
+  } catch (_) {
+    return null;
+  }
+}
+
+function propertyCardSettledMetadataCache(app) {
+  const real = app?.metadataCache;
+  if (!real) return real;
+  const existing = propertyCardSettledCacheFacades.get(real);
+  if (existing) return existing;
+  const facade = new Proxy(real, {
+    get(target, prop, receiver) {
+      if (prop === "getFileCache") {
+        return (file) => propertyCardSettledFileCache(app, file);
+      }
+      if (prop === "getCache") {
+        return (path) => {
+          try {
+            const file = app?.vault?.getAbstractFileByPath?.(path);
+            return file ? propertyCardSettledFileCache(app, file) : null;
+          } catch (_) {
+            return null;
+          }
+        };
+      }
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  propertyCardSettledCacheFacades.set(real, facade);
+  return facade;
+}
+
+function propertyCardSettledCacheBind(plugin) {
+  if (!plugin || plugin[PROPERTY_CARD_SETTLED_CACHE_BOUND_FLAG] === true) return false;
+  plugin[PROPERTY_CARD_SETTLED_CACHE_BOUND_FLAG] = true;
+  const bindEvent = (emitter, name, handler) => {
+    try {
+      if (emitter && typeof emitter.on === "function" && typeof plugin.registerEvent === "function") {
+        plugin.registerEvent(emitter.on(name, handler));
+      }
+    } catch (_) {}
+  };
+  bindEvent(plugin.app?.metadataCache, "changed", (file, _data, cache) => {
+    try {
+      const recorded = cache != null ? cache : plugin.app?.metadataCache?.getFileCache?.(file);
+      propertyCardSettledCacheRemember(file, recorded);
+    } catch (_) {}
+  });
+  bindEvent(plugin.app?.vault, "modify", (file) => {
+    try {
+      const live = plugin.app?.metadataCache?.getFileCache?.(file);
+      if (live != null) propertyCardSettledCacheRemember(file, live);
+    } catch (_) {}
+  });
+  bindEvent(plugin.app?.vault, "rename", (_file, oldPath) => {
+    propertyCardSettledCacheDrop(oldPath);
+  });
+  bindEvent(plugin.app?.vault, "delete", (file) => {
+    propertyCardSettledCacheDrop(file?.path);
+  });
+  return true;
+}
+
+function propertyCardSettledCacheReset() {
+  propertyCardSettledCaches.clear();
+}
 // ---- src/240r-plugin-property-card-foot-adapter.js ----
 // Shared property-card foot adapter helpers (bob-cli-pf adapters).
 // Album, day/week/quarter/year, and bank setup reuse these so each mixin
@@ -89644,7 +89776,11 @@ function propertyCardFootAdapterFrontmatter(plugin, path) {
   try {
     const key = propertyCardFootAdapterPath(path);
     const file = plugin?.app?.vault?.getAbstractFileByPath?.(key);
-    const cache = file ? plugin.app?.metadataCache?.getFileCache?.(file) : null;
+    const cache = file
+      ? (typeof propertyCardSettledFileCache === "function"
+        ? propertyCardSettledFileCache(plugin.app, file)
+        : plugin.app?.metadataCache?.getFileCache?.(file))
+      : null;
     const fm = cache?.frontmatter;
     base = fm && typeof fm === "object" && !Array.isArray(fm) ? fm : {};
   } catch (_) {
@@ -103558,16 +103694,13 @@ const HOME_CARD_SURFACE_CLASS = "bob-home-card-surface";
 const homeCardNodeSignatures = new WeakMap();
 
 let HomeCardObsidianKeymap = null;
-try {
-  HomeCardObsidianKeymap = require("obsidian").Keymap || null;
-} catch (_) {
-  HomeCardObsidianKeymap = null;
-}
+try { HomeCardObsidianKeymap = require("obsidian").Keymap || null; } catch (_) { HomeCardObsidianKeymap = null; }
 
 function homeCardDefer(callback) {
   if (typeof queueMicrotask === "function") queueMicrotask(callback);
   else Promise.resolve().then(callback);
 }
+const homeCardSettledCache = (app) => (typeof propertyCardSettledMetadataCache === "function" ? propertyCardSettledMetadataCache(app) : app?.metadataCache);
 
 // Modifier-aware like a Markdown link: Mod opens a tab, Mod+Alt a split,
 // middle-click a tab.
@@ -103728,7 +103861,7 @@ class BobLedgerToolsHomeCardMixin {
   homeCardHueFor(path) {
     try {
       if (typeof notebookHostHueName === "function") {
-        return notebookHostHueName(homeCardPath(path), this.app?.metadataCache, this.app?.vault) || "";
+        return notebookHostHueName(homeCardPath(path), homeCardSettledCache(this.app), this.app?.vault) || "";
       }
     } catch (_) {}
     return "";
@@ -103795,7 +103928,7 @@ class BobLedgerToolsHomeCardMixin {
     const source = homeCardPath(fromPath);
     let file = null;
     try {
-      const cache = this.app?.metadataCache;
+      const cache = homeCardSettledCache(this.app);
       if (cache && typeof cache.getFirstLinkpathDest === "function") {
         file = cache.getFirstLinkpathDest(raw, source) || null;
       }
@@ -103804,7 +103937,7 @@ class BobLedgerToolsHomeCardMixin {
     }
     if (!file && typeof notebookResolveLinkFile === "function") {
       try {
-        file = notebookResolveLinkFile(raw, source, this.app?.metadataCache, this.app?.vault) || null;
+        file = notebookResolveLinkFile(raw, source, homeCardSettledCache(this.app), this.app?.vault) || null;
       } catch (_) {
         file = null;
       }
@@ -103813,7 +103946,7 @@ class BobLedgerToolsHomeCardMixin {
     if (!path) return null;
     let frontmatter = {};
     try {
-      const cache = this.app?.metadataCache;
+      const cache = homeCardSettledCache(this.app);
       const entry = file && cache && typeof cache.getFileCache === "function" ? cache.getFileCache(file) : null;
       const fm = entry && entry.frontmatter ? entry.frontmatter : null;
       if (fm && typeof fm === "object" && !Array.isArray(fm)) frontmatter = fm;
@@ -103837,7 +103970,7 @@ class BobLedgerToolsHomeCardMixin {
     let hue = "";
     try {
       if (typeof notebookHostHueName === "function") {
-        hue = notebookHostHueName(path, this.app?.metadataCache, this.app?.vault) || "";
+        hue = notebookHostHueName(path, homeCardSettledCache(this.app), this.app?.vault) || "";
       }
     } catch (_) {}
     return { path, stem, title, kind, hue, parent: frontmatter.parent, frontmatter };
@@ -109218,8 +109351,10 @@ class BobLedgerToolsAlbumHeaderMixin {
     const expanded = this.albumHeaderIsExpanded(sourcePath, model);
     return {
       sourcePath,
-      hue: notebookHostHueName(sourcePath, this.app?.metadataCache, this.app?.vault),
-      metadataCache: this.app?.metadataCache,
+      hue: notebookHostHueName(sourcePath, typeof propertyCardSettledMetadataCache === "function"
+        ? propertyCardSettledMetadataCache(this.app) : this.app?.metadataCache, this.app?.vault),
+      metadataCache: typeof propertyCardSettledMetadataCache === "function"
+        ? propertyCardSettledMetadataCache(this.app) : this.app?.metadataCache,
       vault: this.app?.vault,
       desktop,
       expanded,
@@ -109241,7 +109376,8 @@ class BobLedgerToolsAlbumHeaderMixin {
       return albumHeaderModel(report, sourcePath, {
         sourceText,
         sourcePath,
-        metadataCache: this.app?.metadataCache,
+        metadataCache: typeof propertyCardSettledMetadataCache === "function"
+          ? propertyCardSettledMetadataCache(this.app) : this.app?.metadataCache,
         vault: this.app?.vault,
       });
     } catch (_) {
@@ -109256,7 +109392,8 @@ class BobLedgerToolsAlbumHeaderMixin {
       return albumHeaderCardModel(current?.report || null, sourcePath, {
         sourceText,
         sourcePath,
-        metadataCache: this.app?.metadataCache,
+        metadataCache: typeof propertyCardSettledMetadataCache === "function"
+          ? propertyCardSettledMetadataCache(this.app) : this.app?.metadataCache,
         vault: this.app?.vault,
       });
     } catch (_) {
@@ -115699,7 +115836,8 @@ class BobLedgerToolsRecordWalkRailMixin {
       sourceText: source,
       report: this.recordSheetState()?.report,
       frontmatter: this.recordSheetFrontmatter(path),
-      metadataCache: this.app?.metadataCache,
+      metadataCache: typeof propertyCardSettledMetadataCache === "function"
+        ? propertyCardSettledMetadataCache(this.app) : this.app?.metadataCache,
       vault: this.app?.vault,
     });
     recordWalkRequestSync(this, walk);
@@ -118062,7 +118200,11 @@ class BobLedgerToolsRecordSheetMixin {
     let base = null;
     try {
       const file = this.app?.vault?.getAbstractFileByPath?.(path);
-      const cache = file ? this.app?.metadataCache?.getFileCache?.(file) : null;
+      const cache = file
+        ? (typeof propertyCardSettledFileCache === "function"
+          ? propertyCardSettledFileCache(this.app, file)
+          : this.app?.metadataCache?.getFileCache?.(file))
+        : null;
       base = cache && cache.frontmatter && typeof cache.frontmatter === "object" ? cache.frontmatter : null;
     } catch (_) {
       base = null;
@@ -118080,7 +118222,11 @@ class BobLedgerToolsRecordSheetMixin {
   recordSheetCache(path) {
     try {
       const file = this.app?.vault?.getAbstractFileByPath?.(path);
-      return file ? this.app?.metadataCache?.getFileCache?.(file) : null;
+      return file
+        ? (typeof propertyCardSettledFileCache === "function"
+          ? propertyCardSettledFileCache(this.app, file)
+          : this.app?.metadataCache?.getFileCache?.(file))
+        : null;
     } catch (_) {
       return null;
     }
@@ -118094,7 +118240,8 @@ class BobLedgerToolsRecordSheetMixin {
       frontmatter: this.recordSheetFrontmatter(filePath),
       report: this.recordSheetState()?.report || null,
       desktop: this.recordSheetDesktop(),
-      metadataCache: this.app?.metadataCache,
+      metadataCache: typeof propertyCardSettledMetadataCache === "function"
+        ? propertyCardSettledMetadataCache(this.app) : this.app?.metadataCache,
       vault: this.app?.vault,
     });
   }
@@ -118178,7 +118325,8 @@ class BobLedgerToolsRecordSheetMixin {
   recordSheetHue(path) {
     try {
       return typeof notebookHostHueName === "function"
-        ? notebookHostHueName(path, this.app?.metadataCache, this.app?.vault)
+        ? notebookHostHueName(path, typeof propertyCardSettledMetadataCache === "function"
+          ? propertyCardSettledMetadataCache(this.app) : this.app?.metadataCache, this.app?.vault)
         : "";
     } catch (_) {
       return "";
@@ -118232,7 +118380,8 @@ class BobLedgerToolsRecordSheetMixin {
       heading,
       clock: { now: new Date(), today: this.recordSheetDay || undefined },
       overlay: this.recordSheetOverlays?.get?.(recordSheetPath(path)) || null,
-      metadataCache: this.app?.metadataCache,
+      metadataCache: typeof propertyCardSettledMetadataCache === "function"
+        ? propertyCardSettledMetadataCache(this.app) : this.app?.metadataCache,
       vault: this.app?.vault,
       collapsed: this.recordSheetIsCollapsed(path),
       hue: this.recordSheetHue(path),
@@ -118659,7 +118808,8 @@ class BobLedgerToolsRecordSheetTitleMixin {
         frontmatter,
         heading,
         sourceText: currentSource,
-        metadataCache: this.app?.metadataCache,
+        metadataCache: typeof propertyCardSettledMetadataCache === "function"
+          ? propertyCardSettledMetadataCache(this.app) : this.app?.metadataCache,
         vault: this.app?.vault,
         desktop: this.recordSheetDesktop(),
         cache,
@@ -167148,11 +167298,16 @@ function intentionCardDomTargetExists(plugin, target, sourcePath) {
   let file = null;
   try {
     if (typeof notebookResolveLinkFile === "function") {
-      file = notebookResolveLinkFile(linkPath, sourcePath, plugin.app?.metadataCache, plugin.app?.vault);
+      file = notebookResolveLinkFile(linkPath, sourcePath,
+        typeof propertyCardSettledMetadataCache === "function"
+          ? propertyCardSettledMetadataCache(plugin.app) : plugin.app?.metadataCache,
+        plugin.app?.vault);
     }
   } catch (_) {}
   try {
-    const actual = plugin.app?.metadataCache?.getFirstLinkpathDest?.(linkPath, sourcePath);
+    const metadataCache = typeof propertyCardSettledMetadataCache === "function"
+      ? propertyCardSettledMetadataCache(plugin.app) : plugin.app?.metadataCache;
+    const actual = metadataCache?.getFirstLinkpathDest?.(linkPath, sourcePath);
     if (actual?.path) file = actual;
   } catch (_) {}
   if (!file?.path) return { ok: false, reason: "missing-file" };
@@ -167161,7 +167316,11 @@ function intentionCardDomTargetExists(plugin, target, sourcePath) {
   if (!actualFile) return { ok: false, reason: "missing-file" };
   if (!fragment) return { ok: true, file: actualFile };
   let cache = null;
-  try { cache = plugin.app?.metadataCache?.getFileCache?.(actualFile); } catch (_) {}
+  try {
+    cache = typeof propertyCardSettledFileCache === "function"
+      ? propertyCardSettledFileCache(plugin.app, actualFile)
+      : plugin.app?.metadataCache?.getFileCache?.(actualFile);
+  } catch (_) {}
   if (!cache) return { ok: true, file: actualFile };
   if (fragment.startsWith("^")) {
     const block = fragment.slice(1);
@@ -167645,6 +167804,7 @@ class BobLedgerToolsIntentionCardMixin {
     if (!(this.intentionCardSourceFlights instanceof Map)) this.intentionCardSourceFlights = new Map();
     if (!(this.intentionCardSourceEpochs instanceof Map)) this.intentionCardSourceEpochs = new Map();
     if (!(this.intentionCardUnconfirmedSource instanceof Map)) this.intentionCardUnconfirmedSource = new Map();
+    if (!(this.intentionCardSourceHold instanceof Map)) this.intentionCardSourceHold = new Map();
     if (!(this.intentionCardKeySlots instanceof Map)) this.intentionCardKeySlots = new Map();
     if (!Number.isInteger(this.intentionCardSourceGeneration)) this.intentionCardSourceGeneration = 0;
   }
@@ -167681,6 +167841,7 @@ class BobLedgerToolsIntentionCardMixin {
   intentionCardOnDisposeEnd() {
     this.intentionCardSourceCache?.clear?.();
     this.intentionCardUnconfirmedSource?.clear?.();
+    this.intentionCardSourceHold?.clear?.();
     this.intentionCardSourceEpochs?.clear?.();
     this.intentionCardKeySlots?.clear?.();
     this.intentionCardDay = "";
@@ -167711,7 +167872,9 @@ class BobLedgerToolsIntentionCardMixin {
 
   // Metadata settles the path's applied overlay (match, still-prior, or
   // conflict), invalidates its source epoch, and re-reads at once so the next
-  // paint finds confirmed source instead of flashing native Properties.
+  // paint finds confirmed source. The last confirmed source stays in a hold
+  // for the ownership gate until that reread lands, so a body-only `changed`
+  // cannot fail-open native Properties in the gap.
   intentionCardOnMetadata(file) {
     if (!this.intentionCardActive) return;
     const path = intentionCardFilePath(file?.path);
@@ -167722,7 +167885,10 @@ class BobLedgerToolsIntentionCardMixin {
       }
     } catch (_) {}
     try { this.intentionCardEditorModal?.intentionOnMetadata?.(path); } catch (_) {}
+    this.intentionCardEnsureMaps();
+    const previous = this.intentionCardSourceCache?.get?.(path);
     this.intentionCardInvalidateSource(path);
+    if (previous) this.intentionCardSourceHold.set(path, previous);
     void this.intentionCardEnsureSource(path);
     this.intentionCardHost().scheduleRefresh();
   }
@@ -167730,7 +167896,12 @@ class BobLedgerToolsIntentionCardMixin {
   intentionCardCache(path) {
     try {
       const file = this.app?.vault?.getAbstractFileByPath?.(path);
-      return file ? { file, cache: this.app?.metadataCache?.getFileCache?.(file) || null } : null;
+      const cache = file
+        ? (typeof propertyCardSettledFileCache === "function"
+          ? propertyCardSettledFileCache(this.app, file)
+          : this.app?.metadataCache?.getFileCache?.(file))
+        : null;
+      return file ? { file, cache: cache || null } : null;
     } catch (_) { return null; }
   }
 
@@ -167768,6 +167939,7 @@ class BobLedgerToolsIntentionCardMixin {
       const entry = { path: key, source, frontmatter: evidence.frontmatter };
       this.intentionCardSourceCache.set(key, entry);
       this.intentionCardUnconfirmedSource.delete(key);
+      this.intentionCardSourceHold.delete(key);
       this.intentionCardHost().scheduleRefresh();
       return entry;
     })().finally(() => {
@@ -167806,6 +167978,7 @@ class BobLedgerToolsIntentionCardMixin {
     }
     const entry = { path: key, source: sourceText, frontmatter: evidence.frontmatter };
     this.intentionCardSourceCache.set(key, entry);
+    this.intentionCardSourceHold?.delete?.(key);
     return entry;
   }
 
@@ -168309,7 +168482,11 @@ class BobLedgerToolsIntentionCardGroupRailMixin {
       const subject = typeof intentionCardLinkSubject === "function" ? intentionCardLinkSubject(link, this.intentionCardToday()) : null;
       let path = subject?.path || "";
       if (!path) {
-        try { path = this.app?.metadataCache?.getFirstLinkpathDest?.(link, intentionCardNavText(sourcePath))?.path || ""; } catch (_) { path = ""; }
+        try {
+          const cache = typeof propertyCardSettledMetadataCache === "function"
+            ? propertyCardSettledMetadataCache(this.app) : this.app?.metadataCache;
+          path = cache?.getFirstLinkpathDest?.(link, intentionCardNavText(sourcePath))?.path || "";
+        } catch (_) { path = ""; }
       }
       let exists = false;
       try { exists = Boolean(path && this.app?.vault?.getAbstractFileByPath?.(path)); } catch (_) { exists = false; }
@@ -169256,6 +169433,7 @@ class BobLedgerToolsIntentionCardFootMixin {
     const key = intentionCardFilePath(path);
     return this.intentionCardSourceCache?.get?.(key)
       || this.intentionCardUnconfirmedSource?.get?.(key)
+      || this.intentionCardSourceHold?.get?.(key)
       || null;
   }
 
@@ -192198,8 +192376,14 @@ try {
       propertyCardFrontmatterReleaseMounted,
       propertyCardFrontmatterCoordinatorBind,
       propertyCardFrontmatterCoordinatorReleasePath,
+      propertyCardFrontmatterCoordinatorRecheckPath,
       propertyCardFrontmatterCoordinatorReleaseKind,
       propertyCardFrontmatterCoordinatorReconcile,
+      PROPERTY_CARD_SETTLED_CACHE_HOLD_MS,
+      propertyCardSettledFileCache,
+      propertyCardSettledMetadataCache,
+      propertyCardSettledCacheBind,
+      propertyCardSettledCacheReset,
       propertyCardFrontmatterCoordinatorCapabilityChanged,
       propertyCardFrontmatterPaintedOwner,
       propertyCardFrontmatterActualOwnership,

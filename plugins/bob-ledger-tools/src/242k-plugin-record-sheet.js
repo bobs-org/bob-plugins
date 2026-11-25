@@ -259,7 +259,11 @@ class BobLedgerToolsRecordSheetMixin {
     let base = null;
     try {
       const file = this.app?.vault?.getAbstractFileByPath?.(path);
-      const cache = file ? this.app?.metadataCache?.getFileCache?.(file) : null;
+      const cache = file
+        ? (typeof propertyCardSettledFileCache === "function"
+          ? propertyCardSettledFileCache(this.app, file)
+          : this.app?.metadataCache?.getFileCache?.(file))
+        : null;
       base = cache && cache.frontmatter && typeof cache.frontmatter === "object" ? cache.frontmatter : null;
     } catch (_) {
       base = null;
@@ -277,7 +281,11 @@ class BobLedgerToolsRecordSheetMixin {
   recordSheetCache(path) {
     try {
       const file = this.app?.vault?.getAbstractFileByPath?.(path);
-      return file ? this.app?.metadataCache?.getFileCache?.(file) : null;
+      return file
+        ? (typeof propertyCardSettledFileCache === "function"
+          ? propertyCardSettledFileCache(this.app, file)
+          : this.app?.metadataCache?.getFileCache?.(file))
+        : null;
     } catch (_) {
       return null;
     }
@@ -291,7 +299,8 @@ class BobLedgerToolsRecordSheetMixin {
       frontmatter: this.recordSheetFrontmatter(filePath),
       report: this.recordSheetState()?.report || null,
       desktop: this.recordSheetDesktop(),
-      metadataCache: this.app?.metadataCache,
+      metadataCache: typeof propertyCardSettledMetadataCache === "function"
+        ? propertyCardSettledMetadataCache(this.app) : this.app?.metadataCache,
       vault: this.app?.vault,
     });
   }
@@ -375,7 +384,8 @@ class BobLedgerToolsRecordSheetMixin {
   recordSheetHue(path) {
     try {
       return typeof notebookHostHueName === "function"
-        ? notebookHostHueName(path, this.app?.metadataCache, this.app?.vault)
+        ? notebookHostHueName(path, typeof propertyCardSettledMetadataCache === "function"
+          ? propertyCardSettledMetadataCache(this.app) : this.app?.metadataCache, this.app?.vault)
         : "";
     } catch (_) {
       return "";
@@ -429,7 +439,8 @@ class BobLedgerToolsRecordSheetMixin {
       heading,
       clock: { now: new Date(), today: this.recordSheetDay || undefined },
       overlay: this.recordSheetOverlays?.get?.(recordSheetPath(path)) || null,
-      metadataCache: this.app?.metadataCache,
+      metadataCache: typeof propertyCardSettledMetadataCache === "function"
+        ? propertyCardSettledMetadataCache(this.app) : this.app?.metadataCache,
       vault: this.app?.vault,
       collapsed: this.recordSheetIsCollapsed(path),
       hue: this.recordSheetHue(path),

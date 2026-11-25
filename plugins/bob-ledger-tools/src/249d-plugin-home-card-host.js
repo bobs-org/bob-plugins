@@ -13,16 +13,13 @@ const HOME_CARD_SURFACE_CLASS = "bob-home-card-surface";
 const homeCardNodeSignatures = new WeakMap();
 
 let HomeCardObsidianKeymap = null;
-try {
-  HomeCardObsidianKeymap = require("obsidian").Keymap || null;
-} catch (_) {
-  HomeCardObsidianKeymap = null;
-}
+try { HomeCardObsidianKeymap = require("obsidian").Keymap || null; } catch (_) { HomeCardObsidianKeymap = null; }
 
 function homeCardDefer(callback) {
   if (typeof queueMicrotask === "function") queueMicrotask(callback);
   else Promise.resolve().then(callback);
 }
+const homeCardSettledCache = (app) => (typeof propertyCardSettledMetadataCache === "function" ? propertyCardSettledMetadataCache(app) : app?.metadataCache);
 
 // Modifier-aware like a Markdown link: Mod opens a tab, Mod+Alt a split,
 // middle-click a tab.
@@ -183,7 +180,7 @@ class BobLedgerToolsHomeCardMixin {
   homeCardHueFor(path) {
     try {
       if (typeof notebookHostHueName === "function") {
-        return notebookHostHueName(homeCardPath(path), this.app?.metadataCache, this.app?.vault) || "";
+        return notebookHostHueName(homeCardPath(path), homeCardSettledCache(this.app), this.app?.vault) || "";
       }
     } catch (_) {}
     return "";
@@ -250,7 +247,7 @@ class BobLedgerToolsHomeCardMixin {
     const source = homeCardPath(fromPath);
     let file = null;
     try {
-      const cache = this.app?.metadataCache;
+      const cache = homeCardSettledCache(this.app);
       if (cache && typeof cache.getFirstLinkpathDest === "function") {
         file = cache.getFirstLinkpathDest(raw, source) || null;
       }
@@ -259,7 +256,7 @@ class BobLedgerToolsHomeCardMixin {
     }
     if (!file && typeof notebookResolveLinkFile === "function") {
       try {
-        file = notebookResolveLinkFile(raw, source, this.app?.metadataCache, this.app?.vault) || null;
+        file = notebookResolveLinkFile(raw, source, homeCardSettledCache(this.app), this.app?.vault) || null;
       } catch (_) {
         file = null;
       }
@@ -268,7 +265,7 @@ class BobLedgerToolsHomeCardMixin {
     if (!path) return null;
     let frontmatter = {};
     try {
-      const cache = this.app?.metadataCache;
+      const cache = homeCardSettledCache(this.app);
       const entry = file && cache && typeof cache.getFileCache === "function" ? cache.getFileCache(file) : null;
       const fm = entry && entry.frontmatter ? entry.frontmatter : null;
       if (fm && typeof fm === "object" && !Array.isArray(fm)) frontmatter = fm;
@@ -292,7 +289,7 @@ class BobLedgerToolsHomeCardMixin {
     let hue = "";
     try {
       if (typeof notebookHostHueName === "function") {
-        hue = notebookHostHueName(path, this.app?.metadataCache, this.app?.vault) || "";
+        hue = notebookHostHueName(path, homeCardSettledCache(this.app), this.app?.vault) || "";
       }
     } catch (_) {}
     return { path, stem, title, kind, hue, parent: frontmatter.parent, frontmatter };

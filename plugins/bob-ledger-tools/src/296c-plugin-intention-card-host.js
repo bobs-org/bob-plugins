@@ -118,6 +118,7 @@ class BobLedgerToolsIntentionCardMixin {
     if (!(this.intentionCardSourceFlights instanceof Map)) this.intentionCardSourceFlights = new Map();
     if (!(this.intentionCardSourceEpochs instanceof Map)) this.intentionCardSourceEpochs = new Map();
     if (!(this.intentionCardUnconfirmedSource instanceof Map)) this.intentionCardUnconfirmedSource = new Map();
+    if (!(this.intentionCardSourceHold instanceof Map)) this.intentionCardSourceHold = new Map();
     if (!(this.intentionCardKeySlots instanceof Map)) this.intentionCardKeySlots = new Map();
     if (!Number.isInteger(this.intentionCardSourceGeneration)) this.intentionCardSourceGeneration = 0;
   }
@@ -154,6 +155,7 @@ class BobLedgerToolsIntentionCardMixin {
   intentionCardOnDisposeEnd() {
     this.intentionCardSourceCache?.clear?.();
     this.intentionCardUnconfirmedSource?.clear?.();
+    this.intentionCardSourceHold?.clear?.();
     this.intentionCardSourceEpochs?.clear?.();
     this.intentionCardKeySlots?.clear?.();
     this.intentionCardDay = "";
@@ -184,7 +186,9 @@ class BobLedgerToolsIntentionCardMixin {
 
   // Metadata settles the path's applied overlay (match, still-prior, or
   // conflict), invalidates its source epoch, and re-reads at once so the next
-  // paint finds confirmed source instead of flashing native Properties.
+  // paint finds confirmed source. The last confirmed source stays in a hold
+  // for the ownership gate until that reread lands, so a body-only `changed`
+  // cannot fail-open native Properties in the gap.
   intentionCardOnMetadata(file) {
     if (!this.intentionCardActive) return;
     const path = intentionCardFilePath(file?.path);
@@ -195,7 +199,10 @@ class BobLedgerToolsIntentionCardMixin {
       }
     } catch (_) {}
     try { this.intentionCardEditorModal?.intentionOnMetadata?.(path); } catch (_) {}
+    this.intentionCardEnsureMaps();
+    const previous = this.intentionCardSourceCache?.get?.(path);
     this.intentionCardInvalidateSource(path);
+    if (previous) this.intentionCardSourceHold.set(path, previous);
     void this.intentionCardEnsureSource(path);
     this.intentionCardHost().scheduleRefresh();
   }
@@ -203,7 +210,12 @@ class BobLedgerToolsIntentionCardMixin {
   intentionCardCache(path) {
     try {
       const file = this.app?.vault?.getAbstractFileByPath?.(path);
-      return file ? { file, cache: this.app?.metadataCache?.getFileCache?.(file) || null } : null;
+      const cache = file
+        ? (typeof propertyCardSettledFileCache === "function"
+          ? propertyCardSettledFileCache(this.app, file)
+          : this.app?.metadataCache?.getFileCache?.(file))
+        : null;
+      return file ? { file, cache: cache || null } : null;
     } catch (_) { return null; }
   }
 
@@ -241,6 +253,7 @@ class BobLedgerToolsIntentionCardMixin {
       const entry = { path: key, source, frontmatter: evidence.frontmatter };
       this.intentionCardSourceCache.set(key, entry);
       this.intentionCardUnconfirmedSource.delete(key);
+      this.intentionCardSourceHold.delete(key);
       this.intentionCardHost().scheduleRefresh();
       return entry;
     })().finally(() => {
@@ -279,6 +292,7 @@ class BobLedgerToolsIntentionCardMixin {
     }
     const entry = { path: key, source: sourceText, frontmatter: evidence.frontmatter };
     this.intentionCardSourceCache.set(key, entry);
+    this.intentionCardSourceHold?.delete?.(key);
     return entry;
   }
 

@@ -69,6 +69,8 @@ const REQUIRED_CHECKS = Object.freeze([
   { name: "deny-malformed", surface: "both" },
   { name: "deny-unclosed", surface: "both" },
   { name: "stale-cache-releases", surface: "live" },
+  { name: "live-autosave-keeps-ownership", surface: "live" },
+  { name: "live-slow-reparse-keeps-card", surface: "live" },
   { name: "same-pane-file-change", surface: "live" },
   { name: "injected-mount-failure", surface: "live" },
   { name: "replaced-container-reapplies", surface: "live" },
@@ -478,6 +480,169 @@ const PROBE_SOURCE = "(() => {" + PAGE_COMMON + String.raw`
   };
   let observedKeyDowns = 0;
   document.addEventListener("keydown", () => { observedKeyDowns += 1; }, true);
+  const SLOT = "bob-property-card-title-slot";
+  let autosaveSampler = null;
+  const sampleOwnedFrame = (leafId) => {
+    const leaf = app.workspace.getLeafById(leafId);
+    const view = leaf && leaf.view;
+    const file = view && view.file;
+    const editor = liveScopeOf(view);
+    const sizer = child(child(editor, "cm-scroller"), "cm-sizer");
+    const container = nativeContainer(editor);
+    const slotCard = sizer ? Array.from(sizer.children || []).find((node) => node.classList && node.classList.contains(SLOT)) || null : null;
+    const inline = sizer ? child(sizer, "inline-title") : null;
+    const helpers = helpersOf();
+    let liveCache = null;
+    let settledCache = null;
+    try { liveCache = file ? app.metadataCache.getFileCache(file) : null; } catch (_) { liveCache = null; }
+    try {
+      settledCache = file && helpers && typeof helpers.propertyCardSettledFileCache === "function"
+        ? helpers.propertyCardSettledFileCache(app, file) : null;
+    } catch (_) { settledCache = null; }
+    return {
+      t: typeof performance !== "undefined" && performance.now ? performance.now() : Date.now(),
+      containerVisible: shown(container),
+      owns: Boolean(editor && editor.classList.contains(OWNS)),
+      slotCard: Boolean(slotCard && slotCard.isConnected),
+      inlineVisible: shown(inline),
+      liveCache: liveCache != null,
+      settledCache: settledCache != null,
+      cardText: slotCard ? String(slotCard.innerText || "") : "",
+    };
+  };
+  const startAutosaveSampler = (leafId) => {
+    stopAutosaveSampler();
+    const leaf = app.workspace.getLeafById(leafId);
+    const editor = liveScopeOf(leaf && leaf.view);
+    if (!editor) return { ok: false, reason: "no-editor" };
+    const samples = [];
+    const failures = [];
+    let baselineCardText = null;
+    const snapshot = () => {
+      const row = sampleOwnedFrame(leafId);
+      samples.push(row);
+      if (baselineCardText == null && row.slotCard) baselineCardText = row.cardText;
+      if (row.containerVisible) failures.push({ kind: "native-visible", t: row.t });
+      if (!row.owns) failures.push({ kind: "owner-class-missing", t: row.t });
+      if (!row.slotCard) failures.push({ kind: "slot-card-absent", t: row.t });
+      if (row.inlineVisible) failures.push({ kind: "inline-title-visible", t: row.t });
+      if (baselineCardText != null && row.cardText !== baselineCardText) {
+        failures.push({ kind: "card-text-changed", t: row.t });
+      }
+    };
+    let raf = 0;
+    const tick = () => { snapshot(); raf = requestAnimationFrame(tick); };
+    const observer = new MutationObserver(snapshot);
+    observer.observe(editor, { attributes: true, attributeFilter: ["class"], childList: true, subtree: true });
+    snapshot();
+    raf = requestAnimationFrame(tick);
+    autosaveSampler = { samples, failures, raf, observer, leafId };
+    return { ok: true };
+  };
+  const stopAutosaveSampler = () => {
+    if (!autosaveSampler) return { samples: [], failures: [], count: 0 };
+    try { cancelAnimationFrame(autosaveSampler.raf); } catch (_) {}
+    try { autosaveSampler.observer.disconnect(); } catch (_) {}
+    const result = {
+      samples: autosaveSampler.samples,
+      failures: autosaveSampler.failures,
+      count: autosaveSampler.samples.length,
+    };
+    autosaveSampler = null;
+    return result;
+  };
+  let slowReparse = null;
+  const installSlowReparse = (notePath, delayMs) => {
+    restoreSlowReparse();
+    const metadataCache = app.metadataCache;
+    const vault = app.vault;
+    const originalGet = metadataCache.getFileCache.bind(metadataCache);
+    const originalDescriptor = Object.getOwnPropertyDescriptor(metadataCache, "getFileCache");
+    const originalTrigger = typeof metadataCache.trigger === "function" ? metadataCache.trigger.bind(metadataCache) : null;
+    let holding = false;
+    let holdFile = null;
+    Object.defineProperty(metadataCache, "getFileCache", {
+      configurable: true,
+      writable: true,
+      value(file) {
+        if (holding && file && file.path === notePath) return null;
+        return originalGet(file);
+      },
+    });
+    if (originalTrigger) {
+      metadataCache.trigger = function trigger(name, ...args) {
+        if (name === "changed" && holding && args[0] && args[0].path === notePath) return;
+        return originalTrigger(name, ...args);
+      };
+    }
+    const modifyRef = vault.on("modify", (file) => {
+      if (!file || file.path !== notePath || holding) return;
+      holding = true;
+      holdFile = file;
+      setTimeout(() => {
+        holding = false;
+        try {
+          if (originalTrigger) originalTrigger("changed", holdFile, "", originalGet(holdFile));
+        } catch (_) {}
+      }, delayMs || 150);
+    });
+    slowReparse = {
+      restore() {
+        try { vault.offref(modifyRef); } catch (_) {}
+        try {
+          if (originalDescriptor) Object.defineProperty(metadataCache, "getFileCache", originalDescriptor);
+          else delete metadataCache.getFileCache;
+        } catch (_) {}
+        if (originalTrigger) {
+          try { metadataCache.trigger = originalTrigger; } catch (_) {}
+        }
+      },
+    };
+    return { ok: true, path: notePath, delayMs: delayMs || 150 };
+  };
+  const restoreSlowReparse = () => {
+    if (!slowReparse) return false;
+    try { slowReparse.restore(); } catch (_) {}
+    slowReparse = null;
+    return true;
+  };
+  let changedWait = null;
+  const stopChangedWait = () => {
+    if (!changedWait) return false;
+    try { app.metadataCache.offref(changedWait.ref); } catch (_) {}
+    changedWait = null;
+    return true;
+  };
+  const startChangedWait = (notePath) => {
+    stopChangedWait();
+    const target = String(notePath || "");
+    const state = { seen: false, path: target, ref: null };
+    state.ref = app.metadataCache.on("changed", (file) => {
+      if (!file || file.path !== target) return;
+      state.seen = true;
+      try { app.metadataCache.offref(state.ref); } catch (_) {}
+    });
+    changedWait = state;
+    return { ok: true, path: target };
+  };
+  const changedWaitSeen = () => Boolean(changedWait && changedWait.seen);
+  const waitChanged = (notePath, timeoutMs) => new Promise((resolve, reject) => {
+    const deadline = Date.now() + (timeoutMs || 15000);
+    const ref = app.metadataCache.on("changed", (file) => {
+      if (!file || file.path !== notePath) return;
+      try { app.metadataCache.offref(ref); } catch (_) {}
+      resolve(true);
+    });
+    const tick = () => {
+      if (Date.now() >= deadline) {
+        try { app.metadataCache.offref(ref); } catch (_) {}
+        reject(new Error("changed timeout for " + notePath));
+        return;
+      }
+      setTimeout(tick, 50);
+    };
+    tick();
+  });
   const readNote = (notePath) => {
     const file = app.vault.getAbstractFileByPath(notePath);
     if (!file) return Promise.resolve(null);
@@ -492,6 +657,14 @@ const PROBE_SOURCE = "(() => {" + PAGE_COMMON + String.raw`
     setCursor: setEditorCursor,
     docText,
     keyDowns: () => observedKeyDowns,
+    startAutosaveSampler,
+    stopAutosaveSampler,
+    installSlowReparse,
+    restoreSlowReparse,
+    startChangedWait,
+    stopChangedWait,
+    changedWaitSeen,
+    waitChanged,
     plugin: () => Boolean(pluginOf()),
     helpers: () => Boolean(helpersOf() && typeof helpersOf().propertyCardFrontmatterOwnMounted === "function"),
     ownPrimitivePresent: () => Boolean(helpersOf() && typeof helpersOf().propertyCardOwnFrontmatter === "function"),
@@ -562,6 +735,10 @@ function selfTest() {
   assert.match(PROBE_SOURCE, /propertyCardFrontmatterActualOwnership/);
   assert.doesNotMatch(PROBE_SOURCE, /propertyCardOwnFrontmatter\(/);
   assert.match(PROBE_SOURCE, /add file property/i);
+  assert.match(PROBE_SOURCE, /startAutosaveSampler/);
+  assert.match(PROBE_SOURCE, /installSlowReparse/);
+  assert.match(PROBE_SOURCE, /startChangedWait/);
+  assert.match(PROBE_SOURCE, /waitChanged/);
   const owned = {
     mode: "live", scopeClass: true, actualOwned: true, containerPresent: true, containerVisible: false,
     containerInert: true, ariaHidden: "true", display: "none", cardPresent: true, footPresent: true,

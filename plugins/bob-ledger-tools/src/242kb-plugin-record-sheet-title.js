@@ -26,7 +26,8 @@ class BobLedgerToolsRecordSheetTitleMixin {
         frontmatter,
         heading,
         sourceText: currentSource,
-        metadataCache: this.app?.metadataCache,
+        metadataCache: typeof propertyCardSettledMetadataCache === "function"
+          ? propertyCardSettledMetadataCache(this.app) : this.app?.metadataCache,
         vault: this.app?.vault,
         desktop: this.recordSheetDesktop(),
         cache,

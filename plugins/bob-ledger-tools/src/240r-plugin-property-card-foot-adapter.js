@@ -16,7 +16,11 @@ function propertyCardFootAdapterFrontmatter(plugin, path) {
   try {
     const key = propertyCardFootAdapterPath(path);
     const file = plugin?.app?.vault?.getAbstractFileByPath?.(key);
-    const cache = file ? plugin.app?.metadataCache?.getFileCache?.(file) : null;
+    const cache = file
+      ? (typeof propertyCardSettledFileCache === "function"
+        ? propertyCardSettledFileCache(plugin.app, file)
+        : plugin.app?.metadataCache?.getFileCache?.(file))
+      : null;
     const fm = cache?.frontmatter;
     base = fm && typeof fm === "object" && !Array.isArray(fm) ? fm : {};
   } catch (_) {

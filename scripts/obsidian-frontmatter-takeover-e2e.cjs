@@ -32,10 +32,44 @@ const P = lib.PATHS;
 const VIM_PROBE_PATH = "2026/20261119.md";
 const STALE_CACHE_PROBE_PATH = "2026/20261118.md";
 const NATIVE_FALLBACK_PROBE_PATH = "2026/20261117.md";
+const AUTOSAVE_DAY_PATH = "2026/20261116.md";
+const AUTOSAVE_RECORD_PATH = "eat/autosave-probe.md";
+const SLOW_DAY_PATH = "2026/20261115.md";
+const SLOW_RECORD_PATH = "eat/slow-reparse-probe.md";
 
 function fail(message, code = 1) {
   process.stderr.write(String(message) + "\n");
   process.exit(code);
+}
+
+function slimSampler(sampled) {
+  const samples = Array.isArray(sampled && sampled.samples) ? sampled.samples : [];
+  const failures = Array.isArray(sampled && sampled.failures) ? sampled.failures : [];
+  const kinds = {};
+  for (const row of failures) {
+    const kind = row && row.kind || "unknown";
+    if (!kinds[kind]) kinds[kind] = { count: 0, firstT: row.t, lastT: row.t };
+    kinds[kind].count += 1;
+    kinds[kind].lastT = row.t;
+  }
+  const pick = (row) => (row ? {
+    t: row.t,
+    containerVisible: row.containerVisible,
+    owns: row.owns,
+    slotCard: row.slotCard,
+    inlineVisible: row.inlineVisible,
+    liveCache: row.liveCache,
+    settledCache: row.settledCache,
+    cardText: String(row.cardText || "").slice(0, 160),
+  } : null);
+  return {
+    count: Number(sampled && sampled.count) || samples.length,
+    kinds,
+    uniqueCardTexts: new Set(samples.map((row) => row && row.cardText)).size,
+    first: pick(samples[0]),
+    last: pick(samples[samples.length - 1]),
+    failures: failures.slice(0, 12),
+  };
 }
 
 function pluginProvenance() {
@@ -935,6 +969,143 @@ async function run(args) {
         restored,
       };
     });
+
+    const disposableDayNote = (iso, id, weekday) => notes[P.day]
+      .replaceAll("2026-11-20", iso)
+      .replaceAll("20261120", id)
+      .replace("# " + iso + " Fri", "# " + iso + " " + weekday);
+    const disposableRecordNote = (title, sentinel) => notes[P.record]
+      .replace('title: "Corner Bistro"', 'title: ' + JSON.stringify(title))
+      .replace("Record body sentinel", sentinel);
+    const waitAlbumSyncIdle = async () => {
+      await ctx.page.ev(`(async () => {
+        const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
+        const deadline = Date.now() + 10000;
+        while (Date.now() < deadline) {
+          if (plugin && (plugin.albumSyncDebounceTimer || plugin.albumSyncBusy || plugin.albumSyncFlight || plugin.albumUpdateFlight)) {
+            try { if (plugin.albumSyncFlight) await plugin.albumSyncFlight; } catch (_) {}
+            try { if (plugin.albumUpdateFlight) await plugin.albumUpdateFlight; } catch (_) {}
+            await new Promise((resolve) => setTimeout(resolve, 50));
+            continue;
+          }
+          break;
+        }
+        return {
+          busy: Boolean(plugin && plugin.albumSyncBusy),
+          flight: Boolean(plugin && plugin.albumSyncFlight),
+          debounce: Boolean(plugin && plugin.albumSyncDebounceTimer),
+        };
+      })()`);
+    };
+    const restoreFixtureNotes = async () => {
+      await ctx.page.ev(`(async () => {
+        const notes = ${JSON.stringify(notes)};
+        for (const [notePath, text] of Object.entries(notes)) {
+          const file = app.vault.getAbstractFileByPath(notePath);
+          if (file) await app.vault.modify(file, text);
+        }
+        return true;
+      })()`);
+    };
+    const restoreAlbumFixture = async () => {
+      await waitAlbumSyncIdle();
+      await restoreFixtureNotes();
+      await waitAlbumSyncIdle();
+      await restoreFixtureNotes();
+    };
+    const runLiveKeepCard = async (notePath, noteText, { slow = false, record = false } = {}) => {
+      const created = await ctx.page.ev(`(async () => {
+        if (app.vault.getAbstractFileByPath(${JSON.stringify(notePath)})) return false;
+        await app.vault.create(${JSON.stringify(notePath)}, ${JSON.stringify(noteText)});
+        return true;
+      })()`);
+      if (!created) throw new Error("could not create disposable probe note " + notePath);
+      await ctx.page.open(ctx.main, notePath, "live");
+      await ctx.page.waitOwned(ctx.main, "live", notePath + " setup");
+      const started = await ctx.page.ev(
+        "window.__bobFrontmatterTakeover.startAutosaveSampler(" + JSON.stringify(ctx.main) + ")",
+      );
+      if (!started || started.ok !== true) throw new Error("could not start autosave sampler: " + JSON.stringify(started));
+      const waiting = await ctx.page.ev(
+        "window.__bobFrontmatterTakeover.startChangedWait(" + JSON.stringify(notePath) + ")",
+      );
+      if (!waiting || waiting.ok !== true) throw new Error("could not start changed wait: " + JSON.stringify(waiting));
+      try {
+        if (slow) {
+          const installed = await ctx.page.ev(
+            "window.__bobFrontmatterTakeover.installSlowReparse(" + JSON.stringify(notePath) + ", 150)",
+          );
+          if (!installed || installed.ok !== true) {
+            throw new Error("could not install slow reparse: " + JSON.stringify(installed));
+          }
+        }
+        const placed = await ctx.page.ev(
+          "window.__bobFrontmatterTakeover.setCursor(" + JSON.stringify(ctx.main) + ", 999, 0)",
+        );
+        if (!placed || placed.ok !== true) throw new Error("could not place cursor: " + JSON.stringify(placed));
+        await ctx.page.keys("Escape");
+        await ctx.page.keys("i");
+        for (const ch of " probe") await ctx.page.keys(ch);
+        const deadline = Date.now() + 15000;
+        while (Date.now() < deadline) {
+          const seen = await ctx.page.ev("window.__bobFrontmatterTakeover.changedWaitSeen()");
+          if (seen) break;
+          await sleep(50);
+        }
+        const seen = await ctx.page.ev("window.__bobFrontmatterTakeover.changedWaitSeen()");
+        if (!seen) throw new Error("changed timeout for " + notePath);
+        await ctx.page.settle(300);
+      } finally {
+        try { await ctx.page.ev("window.__bobFrontmatterTakeover.stopChangedWait()"); } catch (_) {}
+        if (slow) {
+          try { await ctx.page.ev("window.__bobFrontmatterTakeover.restoreSlowReparse()"); } catch (_) {}
+        }
+      }
+      const sampled = slimSampler(await ctx.page.ev("window.__bobFrontmatterTakeover.stopAutosaveSampler()"));
+      const failures = Array.isArray(sampled && sampled.failures) ? sampled.failures.slice() : [{ kind: "sampler-missing" }];
+      if (!sampled || sampled.count < 1) failures.push({ kind: "no-samples" });
+      if (record) await restoreAlbumFixture();
+      await ctx.page.open(ctx.main, record ? P.record : P.day, "live");
+      await ctx.page.settle(200);
+      const deleted = await ctx.page.ev(`(async () => {
+        const file = app.vault.getAbstractFileByPath(${JSON.stringify(notePath)});
+        if (file) await app.vault.delete(file);
+        return !app.vault.getAbstractFileByPath(${JSON.stringify(notePath)});
+      })()`);
+      if (!deleted) throw new Error("disposable probe note was not removed: " + notePath);
+      if (record) {
+        await restoreAlbumFixture();
+        await ctx.page.settle(400);
+      }
+      return { ok: failures.length === 0, path: notePath, sampled, failures };
+    };
+
+    await attempt("live-autosave-keeps-ownership", async () => {
+      const day = await runLiveKeepCard(
+        AUTOSAVE_DAY_PATH,
+        disposableDayNote("2026-11-16", "20261116", "Mon"),
+      );
+      const record = await runLiveKeepCard(
+        AUTOSAVE_RECORD_PATH,
+        disposableRecordNote("Autosave Probe", "Autosave record body sentinel"),
+        { record: true },
+      );
+      return { ok: day.ok && record.ok, day, record };
+    });
+    await attempt("live-slow-reparse-keeps-card", async () => {
+      const day = await runLiveKeepCard(
+        SLOW_DAY_PATH,
+        disposableDayNote("2026-11-15", "20261115", "Sun"),
+        { slow: true },
+      );
+      const record = await runLiveKeepCard(
+        SLOW_RECORD_PATH,
+        disposableRecordNote("Slow Reparse Probe", "Slow reparse record body sentinel"),
+        { slow: true, record: true },
+      );
+      return { ok: day.ok && record.ok, day, record };
+    });
+
     await attempt("same-pane-file-change", async () => {
       await ctx.page.open(ctx.main, P.day, "live");
       await ctx.page.waitOwned(ctx.main, "live", "file-change setup");

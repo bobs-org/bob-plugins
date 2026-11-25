@@ -1923,3 +1923,60 @@ test("Live Preview re-tracks a still-mounted foot after a release on cached retu
     "cached return re-tracks the still-mounted foot",
   );
 });
+
+test("a re-parse gap keeps a slotted Live Preview card mounted", async () => {
+  const { plugin, doc, app } = fixture();
+  helpers.propertyCardSettledCacheReset();
+  const heading = "---\ntype: [[record]]\nparent: [[eat]]\nstatus: to_try\n---\n# Smashburger\nbody\n";
+  const view = liveView(doc, "eat/smashburger.md", heading, true);
+  plugin.buildRecordSheetDecorations(view);
+  await Promise.resolve();
+  const card = view.sizer.querySelector(".bob-record-sheet");
+  assert.ok(card, "slot card mounts before the gap");
+  const file = app.vault.getAbstractFileByPath("eat/smashburger.md");
+  assert.ok(helpers.propertyCardSettledFileCache(app, file), "the live cache is recorded");
+
+  const falseScopes = [];
+  const origScope = plugin.recordSheetSetEditorScope.bind(plugin);
+  plugin.recordSheetSetEditorScope = (target, enabled, extras) => {
+    if (enabled === false) falseScopes.push(true);
+    return origScope(target, enabled, extras);
+  };
+  const frontmatter = [];
+  const origFrontmatter = plugin.recordSheetReleaseFrontmatter.bind(plugin);
+  plugin.recordSheetReleaseFrontmatter = (...args) => {
+    frontmatter.push(args);
+    return origFrontmatter(...args);
+  };
+  const adoption = [];
+  const origAdoption = plugin.recordSheetReleaseAdoption.bind(plugin);
+  plugin.recordSheetReleaseAdoption = (...args) => {
+    adoption.push(args);
+    return origAdoption(...args);
+  };
+
+  const origGet = app.metadataCache.getFileCache;
+  app.metadataCache.getFileCache = () => null;
+  try {
+    const effect = plugin.recordPropertyCardHost().ensureRefreshEffect();
+    plugin.buildRecordSheetDecorations(view, {
+      view,
+      docChanged: false,
+      selectionSet: false,
+      transactions: [{ effects: [effect.of()] }],
+      state: view.state,
+      startState: view.state,
+    });
+    await Promise.resolve();
+    assert.equal(falseScopes.length, 0, "a re-parse gap does not setEditorScope(false)");
+    assert.equal(frontmatter.length, 0, "a re-parse gap does not release frontmatter");
+    assert.equal(adoption.length, 0, "a re-parse gap does not release adoption");
+    assert.equal(view.sizer.querySelector(".bob-record-sheet"), card);
+  } finally {
+    app.metadataCache.getFileCache = origGet;
+    plugin.recordSheetSetEditorScope = origScope;
+    plugin.recordSheetReleaseFrontmatter = origFrontmatter;
+    plugin.recordSheetReleaseAdoption = origAdoption;
+    helpers.propertyCardSettledCacheReset();
+  }
+});

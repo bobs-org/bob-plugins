@@ -8,10 +8,12 @@
 // The node stays in the DOM (it is the title-slot anchor) with inert plus
 // aria-hidden, and a focusin guard returns focus to the editor. Live
 // Preview uses a lazy StateField plus editorAttributes (modeled on 240i);
-// Reading uses a generation-bound class. Ownership drops on release, a
-// newer owner, Source mode, a file change, plugin disable, or unload.
-// Never throws. Adapters must use the coordinator rather than call this
-// directly so invalidation and generation-bound cleanup stay shared.
+// Reading uses a generation-bound class. A metadata change re-checks
+// evidence and releases only mounts whose source no longer matches the
+// cache. Ownership also drops on release, a newer owner, Source mode,
+// rename/delete, plugin disable, or unload. Never throws. Adapters must
+// use the coordinator rather than call this directly so invalidation and
+// generation-bound cleanup stay shared.
 const PROPERTY_CARD_OWNS_FRONTMATTER_CLASS = "bob-property-card-owns-frontmatter";
 const PROPERTY_CARD_FRONTMATTER_REGISTERED_FLAG = "_propertyCardFrontmatterOwnershipRegistered";
 const PROPERTY_CARD_FRONTMATTER_OWNS_ATTRS = Object.freeze({ class: PROPERTY_CARD_OWNS_FRONTMATTER_CLASS });
@@ -485,7 +487,9 @@ function propertyCardFrontmatterCacheFor(plugin, path) {
   try {
     const file = plugin?.app?.vault?.getAbstractFileByPath?.(path);
     if (!file || String(file.path || "").replace(/\\/g, "/") !== path) return null;
-    const cache = plugin.app?.metadataCache?.getFileCache?.(file);
+    const cache = typeof propertyCardSettledFileCache === "function"
+      ? propertyCardSettledFileCache(plugin.app, file)
+      : plugin.app?.metadataCache?.getFileCache?.(file);
     const frontmatter = cache?.frontmatter;
     return frontmatter && typeof frontmatter === "object" && !Array.isArray(frontmatter)
       ? frontmatter : null;
@@ -654,6 +658,19 @@ function propertyCardFrontmatterCoordinatorReleasePath(plugin, path) {
   return released;
 }
 
+function propertyCardFrontmatterCoordinatorRecheckPath(plugin, path) {
+  const key = String(path || "").replace(/\\/g, "/");
+  if (!key) return 0;
+  let released = 0;
+  for (const [scope, entry] of Array.from(propertyCardFrontmatterMountOwners.entries())) {
+    if (entry.plugin !== plugin || entry.path !== key) continue;
+    if (!propertyCardFrontmatterRecordEligible(plugin, entry.options)) {
+      if (propertyCardFrontmatterReleaseMounted(scope, { plugin, kind: entry.kind, path: entry.path })) released += 1;
+    }
+  }
+  return released;
+}
+
 function propertyCardFrontmatterCoordinatorReleaseKind(plugin, kind) {
   let released = 0;
   for (const [scope, entry] of Array.from(propertyCardFrontmatterMountOwners.entries())) {
@@ -713,7 +730,7 @@ function propertyCardFrontmatterCoordinatorBind(plugin, kind) {
     bindEvent(workspace, name, () => propertyCardFrontmatterCoordinatorReconcile(plugin));
   }
   bindEvent(plugin.app?.metadataCache, "changed", (file) => {
-    propertyCardFrontmatterCoordinatorReleasePath(plugin, file?.path);
+    propertyCardFrontmatterCoordinatorRecheckPath(plugin, file?.path);
   });
   bindEvent(plugin.app?.vault, "rename", (_file, oldPath) => {
     propertyCardFrontmatterCoordinatorReleasePath(plugin, oldPath);

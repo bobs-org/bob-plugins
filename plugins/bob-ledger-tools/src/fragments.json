@@ -181,6 +181,7 @@
   "240o-plugin-property-card-foot-dom.js",
   "240p-plugin-property-card-foot-state.js",
   "240q-plugin-property-card-frontmatter-ownership.js",
+  "240qa-plugin-property-card-settled-cache.js",
   "240r-plugin-property-card-foot-adapter.js",
   "245-plugin-bank-category-card-model.js",
   "246-plugin-bank-category-card-write.js",

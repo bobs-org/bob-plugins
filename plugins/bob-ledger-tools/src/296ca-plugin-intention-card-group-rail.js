@@ -350,7 +350,11 @@ class BobLedgerToolsIntentionCardGroupRailMixin {
       const subject = typeof intentionCardLinkSubject === "function" ? intentionCardLinkSubject(link, this.intentionCardToday()) : null;
       let path = subject?.path || "";
       if (!path) {
-        try { path = this.app?.metadataCache?.getFirstLinkpathDest?.(link, intentionCardNavText(sourcePath))?.path || ""; } catch (_) { path = ""; }
+        try {
+          const cache = typeof propertyCardSettledMetadataCache === "function"
+            ? propertyCardSettledMetadataCache(this.app) : this.app?.metadataCache;
+          path = cache?.getFirstLinkpathDest?.(link, intentionCardNavText(sourcePath))?.path || "";
+        } catch (_) { path = ""; }
       }
       let exists = false;
       try { exists = Boolean(path && this.app?.vault?.getAbstractFileByPath?.(path)); } catch (_) { exists = false; }

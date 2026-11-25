@@ -26,6 +26,7 @@ class BobLedgerToolsIntentionCardFootMixin {
     const key = intentionCardFilePath(path);
     return this.intentionCardSourceCache?.get?.(key)
       || this.intentionCardUnconfirmedSource?.get?.(key)
+      || this.intentionCardSourceHold?.get?.(key)
       || null;
   }
 

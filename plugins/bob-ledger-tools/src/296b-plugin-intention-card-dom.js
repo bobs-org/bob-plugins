@@ -50,11 +50,16 @@ function intentionCardDomTargetExists(plugin, target, sourcePath) {
   let file = null;
   try {
     if (typeof notebookResolveLinkFile === "function") {
-      file = notebookResolveLinkFile(linkPath, sourcePath, plugin.app?.metadataCache, plugin.app?.vault);
+      file = notebookResolveLinkFile(linkPath, sourcePath,
+        typeof propertyCardSettledMetadataCache === "function"
+          ? propertyCardSettledMetadataCache(plugin.app) : plugin.app?.metadataCache,
+        plugin.app?.vault);
     }
   } catch (_) {}
   try {
-    const actual = plugin.app?.metadataCache?.getFirstLinkpathDest?.(linkPath, sourcePath);
+    const metadataCache = typeof propertyCardSettledMetadataCache === "function"
+      ? propertyCardSettledMetadataCache(plugin.app) : plugin.app?.metadataCache;
+    const actual = metadataCache?.getFirstLinkpathDest?.(linkPath, sourcePath);
     if (actual?.path) file = actual;
   } catch (_) {}
   if (!file?.path) return { ok: false, reason: "missing-file" };
@@ -63,7 +68,11 @@ function intentionCardDomTargetExists(plugin, target, sourcePath) {
   if (!actualFile) return { ok: false, reason: "missing-file" };
   if (!fragment) return { ok: true, file: actualFile };
   let cache = null;
-  try { cache = plugin.app?.metadataCache?.getFileCache?.(actualFile); } catch (_) {}
+  try {
+    cache = typeof propertyCardSettledFileCache === "function"
+      ? propertyCardSettledFileCache(plugin.app, actualFile)
+      : plugin.app?.metadataCache?.getFileCache?.(actualFile);
+  } catch (_) {}
   if (!cache) return { ok: true, file: actualFile };
   if (fragment.startsWith("^")) {
     const block = fragment.slice(1);

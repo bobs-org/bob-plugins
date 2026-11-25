@@ -467,10 +467,26 @@ test("source/cache evidence requires a closed duplicate-free matching mapping", 
   assert.equal(H.propertyCardFrontmatterCacheEvidence("# no frontmatter\n", {}, parse), false);
 });
 
-test("mounted card ownership is capability and source gated, then releases on cache invalidation", () => {
+function coordinatorWorld(frontmatter = { type: "album", summary: "Reading" }) {
   const callbacks = new Map();
+  const files = new Map();
+  const fileFor = (path) => {
+    const key = String(path || "");
+    if (!files.has(key)) files.set(key, { path: key });
+    return files.get(key);
+  };
+  let cacheValue = { frontmatter };
   const metadataCache = {
-    getFileCache: () => ({ frontmatter: { type: "album", summary: "Reading" } }),
+    getFileCache: (file) => (file ? cacheValue : null),
+    on(name, callback) {
+      const list = callbacks.get(name) || [];
+      list.push(callback);
+      callbacks.set(name, list);
+      return { name, callback };
+    },
+  };
+  const vault = {
+    getAbstractFileByPath: (path) => fileFor(path),
     on(name, callback) {
       const list = callbacks.get(name) || [];
       list.push(callback);
@@ -480,46 +496,137 @@ test("mounted card ownership is capability and source gated, then releases on ca
   };
   const plugin = new TestPlugin({
     workspace: { getLeavesOfType: () => [], on: () => ({}) },
-    vault: { getAbstractFileByPath: (path) => ({ path }), on: () => ({}) },
+    vault,
     metadataCache,
   });
   plugin.propertyCapabilityRoutingReady = () => true;
   plugin.propertyCapabilityCurrentBobKey = () => "bob:/usr/bin/bob";
   plugin.propertyCapabilityConfirmed = (key) => key === "bob:/usr/bin/bob";
-  const fx = readingFixture();
-  const mount = el(fx.doc, "section", "bob-album-header bob-property-card");
-  mount.setAttribute("data-album-source", "note.md");
-  mount.appendChild(el(fx.doc, "footer", "bob-property-card-foot"));
-  fx.scope.appendChild(mount);
-  const view = { file: { path: "note.md" }, getMode: () => "preview" };
-  const sourceText = "---\ntype: album\nsummary: Reading\n---\n# Album\n";
   const parse = (yaml) => Object.fromEntries(String(yaml).split(/\r?\n/).filter(Boolean).map((line) => {
     const index = line.indexOf(":");
     return [line.slice(0, index).trim(), line.slice(index + 1).trim()];
   }));
-  H.propertyCardFrontmatterCoordinatorBind(plugin, "album");
-  const release = H.propertyCardFrontmatterOwnMounted(plugin, {
+  H.propertyCardSettledCacheReset();
+  return { plugin, callbacks, metadataCache, vault, fileFor, parse, setCache: (value) => { cacheValue = value; } };
+}
+
+function albumMount(fx, path = "note.md") {
+  const mount = el(fx.doc, "section", "bob-album-header bob-property-card");
+  mount.setAttribute("data-album-source", path);
+  mount.appendChild(el(fx.doc, "footer", "bob-property-card-foot"));
+  fx.scope.appendChild(mount);
+  return mount;
+}
+
+test("mounted card ownership is capability and source gated, then a matching cache change keeps it", () => {
+  const world = coordinatorWorld();
+  const fx = readingFixture();
+  const mount = albumMount(fx);
+  const view = { file: { path: "note.md" }, getMode: () => "preview" };
+  const sourceText = "---\ntype: album\nsummary: Reading\n---\n# Album\n";
+  H.propertyCardFrontmatterCoordinatorBind(world.plugin, "album");
+  const release = H.propertyCardFrontmatterOwnMounted(world.plugin, {
     scope: fx.scope, view, path: "note.md", kind: "album", mount, sourceText,
     currentPath: () => view.file.path,
     active: () => true,
-    parseYaml: parse,
+    parseYaml: world.parse,
   });
   assert.equal(typeof release, "function");
   assert.ok(fx.scope.classList.contains(OWNS));
   assert.ok(owned(fx.container));
 
-  for (const callback of callbacks.get("changed") || []) callback({ path: "note.md" });
-  assert.ok(!fx.scope.classList.contains(OWNS), "metadata invalidation releases ownership synchronously");
-  assert.ok(native(fx.container));
+  for (const callback of world.callbacks.get("changed") || []) callback(world.fileFor("note.md"));
+  assert.ok(fx.scope.classList.contains(OWNS), "a body-only cache change keeps ownership");
+  assert.ok(owned(fx.container), "the native container stays inert");
+});
 
-  metadataCache.getFileCache = () => ({ frontmatter: { type: "album", summary: "stale" } });
-  assert.equal(H.propertyCardFrontmatterOwnMounted(plugin, {
+test("a changed event whose cache no longer matches the source releases synchronously", () => {
+  const world = coordinatorWorld();
+  const fx = readingFixture();
+  const mount = albumMount(fx);
+  const view = { file: { path: "note.md" }, getMode: () => "preview" };
+  const sourceText = "---\ntype: album\nsummary: Reading\n---\n# Album\n";
+  H.propertyCardFrontmatterCoordinatorBind(world.plugin, "album");
+  assert.equal(typeof H.propertyCardFrontmatterOwnMounted(world.plugin, {
     scope: fx.scope, view, path: "note.md", kind: "album", mount, sourceText,
     currentPath: () => view.file.path,
     active: () => true,
-    parseYaml: parse,
+    parseYaml: world.parse,
+  }), "function");
+  world.setCache({ frontmatter: { type: "album", summary: "stale" } });
+  for (const callback of world.callbacks.get("changed") || []) callback(world.fileFor("note.md"));
+  assert.ok(!fx.scope.classList.contains(OWNS), "source/cache skew releases synchronously");
+  assert.ok(native(fx.container));
+
+  assert.equal(H.propertyCardFrontmatterOwnMounted(world.plugin, {
+    scope: fx.scope, view, path: "note.md", kind: "album", mount, sourceText,
+    currentPath: () => view.file.path,
+    active: () => true,
+    parseYaml: world.parse,
   }), null, "source/cache skew fails open");
   assert.ok(native(fx.container));
+});
+
+test("rename and delete still release ownership unconditionally", () => {
+  const world = coordinatorWorld();
+  const fx = readingFixture();
+  const mount = albumMount(fx);
+  const view = { file: { path: "note.md" }, getMode: () => "preview" };
+  const sourceText = "---\ntype: album\nsummary: Reading\n---\n# Album\n";
+  H.propertyCardFrontmatterCoordinatorBind(world.plugin, "album");
+  H.propertyCardFrontmatterOwnMounted(world.plugin, {
+    scope: fx.scope, view, path: "note.md", kind: "album", mount, sourceText,
+    currentPath: () => view.file.path, active: () => true, parseYaml: world.parse,
+  });
+  for (const callback of world.callbacks.get("rename") || []) callback(world.fileFor("other.md"), "note.md");
+  assert.ok(!fx.scope.classList.contains(OWNS), "rename releases the old path");
+  assert.ok(native(fx.container));
+
+  H.propertyCardFrontmatterOwnMounted(world.plugin, {
+    scope: fx.scope, view, path: "note.md", kind: "album", mount, sourceText,
+    currentPath: () => view.file.path, active: () => true, parseYaml: world.parse,
+  });
+  for (const callback of world.callbacks.get("delete") || []) callback(world.fileFor("note.md"));
+  assert.ok(!fx.scope.classList.contains(OWNS), "delete releases ownership");
+  assert.ok(native(fx.container));
+});
+
+test("a Reading mount whose adapter source cache was already dropped fails open", () => {
+  const world = coordinatorWorld();
+  const fx = readingFixture();
+  const mount = albumMount(fx);
+  const view = { file: { path: "note.md" }, getMode: () => "preview" };
+  let source = "---\ntype: album\nsummary: Reading\n---\n# Album\n";
+  H.propertyCardFrontmatterCoordinatorBind(world.plugin, "album");
+  assert.equal(typeof H.propertyCardFrontmatterOwnMounted(world.plugin, {
+    scope: fx.scope, view, path: "note.md", kind: "album", mount,
+    getSource: () => source,
+    currentPath: () => view.file.path, active: () => true, parseYaml: world.parse,
+  }), "function");
+  source = undefined;
+  for (const callback of world.callbacks.get("changed") || []) callback(world.fileFor("note.md"));
+  assert.ok(!fx.scope.classList.contains(OWNS), "a dropped adapter source fails open");
+  assert.ok(native(fx.container));
+});
+
+test("eligibility holds while getFileCache returns null inside the hold window", () => {
+  const world = coordinatorWorld();
+  const fx = readingFixture();
+  const mount = albumMount(fx);
+  const view = { file: { path: "note.md" }, getMode: () => "preview" };
+  const sourceText = "---\ntype: album\nsummary: Reading\n---\n# Album\n";
+  H.propertyCardFrontmatterCoordinatorBind(world.plugin, "album");
+  H.propertyCardSettledCacheBind(world.plugin);
+  assert.equal(typeof H.propertyCardFrontmatterOwnMounted(world.plugin, {
+    scope: fx.scope, view, path: "note.md", kind: "album", mount, sourceText,
+    currentPath: () => view.file.path, active: () => true, parseYaml: world.parse,
+  }), "function");
+  world.setCache(null);
+  const released = H.propertyCardFrontmatterCoordinatorRecheckPath(world.plugin, "note.md");
+  assert.equal(released, 0, "a re-parse gap does not release a recorded cache");
+  assert.ok(fx.scope.classList.contains(OWNS));
+  assert.ok(owned(fx.container));
+  H.propertyCardSettledCacheReset();
 });
 
 test("supported card kinds own independent panes; replacement, stale release, and unload are generation safe", () => {

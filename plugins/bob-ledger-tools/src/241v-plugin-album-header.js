@@ -135,8 +135,10 @@ class BobLedgerToolsAlbumHeaderMixin {
     const expanded = this.albumHeaderIsExpanded(sourcePath, model);
     return {
       sourcePath,
-      hue: notebookHostHueName(sourcePath, this.app?.metadataCache, this.app?.vault),
-      metadataCache: this.app?.metadataCache,
+      hue: notebookHostHueName(sourcePath, typeof propertyCardSettledMetadataCache === "function"
+        ? propertyCardSettledMetadataCache(this.app) : this.app?.metadataCache, this.app?.vault),
+      metadataCache: typeof propertyCardSettledMetadataCache === "function"
+        ? propertyCardSettledMetadataCache(this.app) : this.app?.metadataCache,
       vault: this.app?.vault,
       desktop,
       expanded,
@@ -158,7 +160,8 @@ class BobLedgerToolsAlbumHeaderMixin {
       return albumHeaderModel(report, sourcePath, {
         sourceText,
         sourcePath,
-        metadataCache: this.app?.metadataCache,
+        metadataCache: typeof propertyCardSettledMetadataCache === "function"
+          ? propertyCardSettledMetadataCache(this.app) : this.app?.metadataCache,
         vault: this.app?.vault,
       });
     } catch (_) {
@@ -173,7 +176,8 @@ class BobLedgerToolsAlbumHeaderMixin {
       return albumHeaderCardModel(current?.report || null, sourcePath, {
         sourceText,
         sourcePath,
-        metadataCache: this.app?.metadataCache,
+        metadataCache: typeof propertyCardSettledMetadataCache === "function"
+          ? propertyCardSettledMetadataCache(this.app) : this.app?.metadataCache,
         vault: this.app?.vault,
       });
     } catch (_) {

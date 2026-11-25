@@ -119,6 +119,7 @@ BobLedgerToolsPlugin.prototype.teardownLedgerToolsSurfaces = function () {
     try { propertyCardAdoptReleaseAll(); } catch (_) {}
     try { propertyCardTitleSlotReleaseAll(); } catch (_) {}
     try { propertyCardFrontmatterReleaseAll(); } catch (_) {}
+    try { propertyCardSettledCacheReset(); } catch (_) {}
     try {
       this.teardownAlbumRecords(); this.teardownAreasCatalog(); this.teardownProjectsCatalog(); this.teardownAlbumCatalog(); this.teardownNotebookCatalog(); this.teardownAreasData(); this.teardownNotebookData(); this.teardownAlbumData(); this.teardownProjectsData();
     } catch (error) {

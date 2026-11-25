@@ -197,6 +197,7 @@ function createPropertyCardHost(options) {
       editors();
       editorScopes();
       keySlots();
+      try { propertyCardSettledCacheBind?.(plugin); } catch (_) {}
       if (!registered) {
         try {
           plugin.registerMarkdownPostProcessor?.(
@@ -269,6 +270,7 @@ function createPropertyCardHost(options) {
       editors().clear();
       editorScopes().clear();
       extrasLive = false;
+      try { propertyCardSettledCacheReset?.(); } catch (_) {}
       try { options.onDisposeEnd?.(); } catch (_) {}
       return controller;
     },

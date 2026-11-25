@@ -711,11 +711,15 @@ function splitProjectNoteForReversal(content) {
         bodyLines.length === 0
       ) {
         // Generated `[!projects]` catalog only: drop the heading.
-      } else if (bodyLines.length > 0) {
+      } else {
+        // bob-task-drawer-bold-writes-v1: eligible empty H2 sections are
+        // preserved as empty drawers; ineligible headings refuse by name.
         const title = formatProjectReversalSectionTitle(headerText);
         if (!title) {
+          const refusal = projectReversalSectionRefusal(headerText);
+          const suffix = refusal ? ` (${refusal})` : "";
           return emptyProjectNoteReversalSplit(
-            `Section "${sectionLabel}" cannot be converted into a task bullet`,
+            `Section "${sectionLabel}" cannot be converted into a task bullet${suffix}`,
             splitExtra,
           );
         }
@@ -863,7 +867,9 @@ function buildTaskBlockFromProjectNote(content, options = {}) {
   const lines = [taskLine, ...indentedDependency, ...indentedTasks];
   let sectionCount = 0;
   for (const section of split.sections) {
-    lines.push(`\t- ${section.title}`);
+    // bob-task-drawer-bold-writes-v1: reversal bullets keep the authored
+    // title verbatim inside bold markers, never uppercased.
+    lines.push(`\t- **${section.title}**`);
     lines.push(...indentProjectReversalLines(section.noteLines, 2));
     sectionCount += 1;
   }

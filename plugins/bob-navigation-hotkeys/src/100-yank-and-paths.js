@@ -687,15 +687,21 @@ function getProjectReversalBlockId(noteBasename, parentBasename) {
 }
 
 function formatProjectReversalSectionTitle(headerText) {
-  const title = String(headerText || "")
-    .trim()
-    .replace(/\s+/g, " ")
-    .toUpperCase();
-  if (!isTaskSplitDrawerTitle(title)) {
-    return null;
-  }
+  // bob-task-drawer-bold-writes-v1: reversal keeps the authored heading bytes
+  // verbatim (bold titles lossless; legacy Title Case only for legacy input).
+  const collapsed = String(headerText || "").trim().replace(/\s+/g, " ");
+  if (!collapsed) return null;
+  const resolved = drawer_for_heading(collapsed);
+  if (!resolved.ok) return null;
+  return resolved.title;
+}
 
-  return title;
+// The named drawer refusal for a project-note heading, or null when the
+// heading maps to a drawer title.
+function projectReversalSectionRefusal(headerText) {
+  const collapsed = String(headerText || "").trim().replace(/\s+/g, " ");
+  const resolved = drawer_for_heading(collapsed);
+  return resolved.ok ? null : resolved.refusal;
 }
 
 function parseProjectLifecycleTaskBody(lineText) {

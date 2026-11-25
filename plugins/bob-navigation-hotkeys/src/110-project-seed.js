@@ -547,6 +547,8 @@ function findProjectSectionRange(lines, title) {
 function insertProjectSectionNotes(content, sections) {
   const text = String(content || "");
   const sectionList = Array.isArray(sections) ? sections : [];
+  // bob-task-drawer-bold-writes-v1: eligible empty sections are preserved;
+  // only untitled entries are dropped.
   const validSections = sectionList
     .map((section) => ({
       title: String(section && section.title ? section.title : "").trim(),
@@ -556,7 +558,7 @@ function insertProjectSectionNotes(content, sections) {
           )
         : [],
     }))
-    .filter((section) => section.title && section.noteLines.length > 0);
+    .filter((section) => Boolean(section.title));
 
   if (validSections.length === 0) {
     return Object.freeze({ content: text, insertedCount: 0, createdCount: 0 });
@@ -583,6 +585,7 @@ function insertProjectSectionNotes(content, sections) {
   matches.sort((left, right) => right.headerIndex - left.headerIndex);
 
   for (const match of matches) {
+    if (!match.noteLines.length) continue;
     const bodyEmpty = match.bodyEndExclusive === match.headerIndex + 1;
     const insertion = bodyEmpty
       ? ["", ...match.noteLines]

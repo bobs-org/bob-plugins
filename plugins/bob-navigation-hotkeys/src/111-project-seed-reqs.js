@@ -19,8 +19,18 @@
 // new fragment so `110-project-seed.js` stays under its line cap.
 
 function projectSeedReqNotesKey(title) {
+  // Bold markers are not part of the identity key: `**Requirements**` is the
+  // Notes role, just like legacy `REQUIREMENTS`.
   try {
-    const key = drawer_key(String(title || "").trim());
+    const raw = String(title || "");
+    let key = null;
+    try {
+      const parsed = drawer_body_title(raw.trim());
+      if (parsed) key = drawer_key(parsed.title);
+    } catch (_inner) {
+      key = null;
+    }
+    if (key === null) key = drawer_key(raw.trim());
     return key === TASK_BLOCK_NOTES_KEY || key === "REQUIREMENTS" ? TASK_BLOCK_NOTES_KEY : key;
   } catch (_error) {
     const normalized = String(title || "")
@@ -200,6 +210,19 @@ function buildProjectSeedFromChildBulletsReqs(childLines, createdDateString) {
     pushSectionNoteLines("Notes", nextLines);
   };
 
+  // bob-task-drawer-bold-writes-v1: explicitly authored empty drawers are
+  // preserved as empty sections, even with no note lines.
+  const pushEmptySection = (title) => {
+    const trimmedTitle = String(title || "").trim();
+    if (!trimmedTitle) return;
+    const normalizedTitle = normalizeProjectSectionTitle(trimmedTitle);
+    if (!sectionEntryByTitle.get(normalizedTitle)) {
+      const entry = { title: trimmedTitle, noteLines: [] };
+      sectionEntryByTitle.set(normalizedTitle, entry);
+      sectionEntries.push(entry);
+    }
+  };
+
   // Classify nested direct children of one promoted outer row so NOTES filing
   // can tell reqs from direct notes. Returns { hasChildReqs, directNotes,
   // notesDrawerEntries, otherNested } where each is a list of { lineIndex }
@@ -291,7 +314,8 @@ function buildProjectSeedFromChildBulletsReqs(childLines, createdDateString) {
   };
 
   const renderNotesDrawer = (entryLines) => {
-    const out = ["  - NOTES"];
+    // bob-task-drawer-bold-writes-v1: new task-child drawers are bold.
+    const out = ["  - **Notes**"];
     const nonblank = entryLines.filter((line) => String(line || "").trim() !== "");
     if (nonblank.length === 0) {
       return [];
@@ -617,6 +641,23 @@ function buildProjectSeedFromChildBulletsReqs(childLines, createdDateString) {
     if (parsedChild.status === null) {
       const baseIndent = projectSeedReqShallowestNestedIndent(lines, start, end, directChildIndentLength);
       const sectionTitle = parseProjectSectionBulletTitle(parsedChild.body);
+      if (sectionTitle && baseIndent === null) {
+        // Explicitly authored empty drawer: bold markers make intent
+        // unambiguous, so preserve as an empty section. Legacy ALL-CAPS
+        // without nested content stays a loose note (existing behavior).
+        let marker = null;
+        try {
+          const parsed = drawer_body_title(String(parsedChild.body || ""));
+          marker = parsed ? parsed.marker : null;
+        } catch (_error) {
+          marker = null;
+        }
+        if (marker === "bold") {
+          if (projectSeedReqIsNotesDrawerTitle(parsedChild.body)) pushEmptySection("Notes");
+          else pushEmptySection(sectionTitle);
+          continue;
+        }
+      }
       if (sectionTitle && baseIndent !== null) {
         if (projectSeedReqIsNotesDrawerTitle(parsedChild.body)) {
           const drawerNotes = [];

@@ -13547,15 +13547,21 @@ function getProjectReversalBlockId(noteBasename, parentBasename) {
 }
 
 function formatProjectReversalSectionTitle(headerText) {
-  const title = String(headerText || "")
-    .trim()
-    .replace(/\s+/g, " ")
-    .toUpperCase();
-  if (!isTaskSplitDrawerTitle(title)) {
-    return null;
-  }
+  // bob-task-drawer-bold-writes-v1: reversal keeps the authored heading bytes
+  // verbatim (bold titles lossless; legacy Title Case only for legacy input).
+  const collapsed = String(headerText || "").trim().replace(/\s+/g, " ");
+  if (!collapsed) return null;
+  const resolved = drawer_for_heading(collapsed);
+  if (!resolved.ok) return null;
+  return resolved.title;
+}
 
-  return title;
+// The named drawer refusal for a project-note heading, or null when the
+// heading maps to a drawer title.
+function projectReversalSectionRefusal(headerText) {
+  const collapsed = String(headerText || "").trim().replace(/\s+/g, " ");
+  const resolved = drawer_for_heading(collapsed);
+  return resolved.ok ? null : resolved.refusal;
 }
 
 function parseProjectLifecycleTaskBody(lineText) {
@@ -16390,6 +16396,8 @@ function findProjectSectionRange(lines, title) {
 function insertProjectSectionNotes(content, sections) {
   const text = String(content || "");
   const sectionList = Array.isArray(sections) ? sections : [];
+  // bob-task-drawer-bold-writes-v1: eligible empty sections are preserved;
+  // only untitled entries are dropped.
   const validSections = sectionList
     .map((section) => ({
       title: String(section && section.title ? section.title : "").trim(),
@@ -16399,7 +16407,7 @@ function insertProjectSectionNotes(content, sections) {
           )
         : [],
     }))
-    .filter((section) => section.title && section.noteLines.length > 0);
+    .filter((section) => Boolean(section.title));
 
   if (validSections.length === 0) {
     return Object.freeze({ content: text, insertedCount: 0, createdCount: 0 });
@@ -16426,6 +16434,7 @@ function insertProjectSectionNotes(content, sections) {
   matches.sort((left, right) => right.headerIndex - left.headerIndex);
 
   for (const match of matches) {
+    if (!match.noteLines.length) continue;
     const bodyEmpty = match.bodyEndExclusive === match.headerIndex + 1;
     const insertion = bodyEmpty
       ? ["", ...match.noteLines]
@@ -16803,8 +16812,18 @@ function getProjectBasenameFromTaskBlockId(sourceBasename, blockId) {
 // new fragment so `110-project-seed.js` stays under its line cap.
 
 function projectSeedReqNotesKey(title) {
+  // Bold markers are not part of the identity key: `**Requirements**` is the
+  // Notes role, just like legacy `REQUIREMENTS`.
   try {
-    const key = drawer_key(String(title || "").trim());
+    const raw = String(title || "");
+    let key = null;
+    try {
+      const parsed = drawer_body_title(raw.trim());
+      if (parsed) key = drawer_key(parsed.title);
+    } catch (_inner) {
+      key = null;
+    }
+    if (key === null) key = drawer_key(raw.trim());
     return key === TASK_BLOCK_NOTES_KEY || key === "REQUIREMENTS" ? TASK_BLOCK_NOTES_KEY : key;
   } catch (_error) {
     const normalized = String(title || "")
@@ -16984,6 +17003,19 @@ function buildProjectSeedFromChildBulletsReqs(childLines, createdDateString) {
     pushSectionNoteLines("Notes", nextLines);
   };
 
+  // bob-task-drawer-bold-writes-v1: explicitly authored empty drawers are
+  // preserved as empty sections, even with no note lines.
+  const pushEmptySection = (title) => {
+    const trimmedTitle = String(title || "").trim();
+    if (!trimmedTitle) return;
+    const normalizedTitle = normalizeProjectSectionTitle(trimmedTitle);
+    if (!sectionEntryByTitle.get(normalizedTitle)) {
+      const entry = { title: trimmedTitle, noteLines: [] };
+      sectionEntryByTitle.set(normalizedTitle, entry);
+      sectionEntries.push(entry);
+    }
+  };
+
   // Classify nested direct children of one promoted outer row so NOTES filing
   // can tell reqs from direct notes. Returns { hasChildReqs, directNotes,
   // notesDrawerEntries, otherNested } where each is a list of { lineIndex }
@@ -17075,7 +17107,8 @@ function buildProjectSeedFromChildBulletsReqs(childLines, createdDateString) {
   };
 
   const renderNotesDrawer = (entryLines) => {
-    const out = ["  - NOTES"];
+    // bob-task-drawer-bold-writes-v1: new task-child drawers are bold.
+    const out = ["  - **Notes**"];
     const nonblank = entryLines.filter((line) => String(line || "").trim() !== "");
     if (nonblank.length === 0) {
       return [];
@@ -17401,6 +17434,23 @@ function buildProjectSeedFromChildBulletsReqs(childLines, createdDateString) {
     if (parsedChild.status === null) {
       const baseIndent = projectSeedReqShallowestNestedIndent(lines, start, end, directChildIndentLength);
       const sectionTitle = parseProjectSectionBulletTitle(parsedChild.body);
+      if (sectionTitle && baseIndent === null) {
+        // Explicitly authored empty drawer: bold markers make intent
+        // unambiguous, so preserve as an empty section. Legacy ALL-CAPS
+        // without nested content stays a loose note (existing behavior).
+        let marker = null;
+        try {
+          const parsed = drawer_body_title(String(parsedChild.body || ""));
+          marker = parsed ? parsed.marker : null;
+        } catch (_error) {
+          marker = null;
+        }
+        if (marker === "bold") {
+          if (projectSeedReqIsNotesDrawerTitle(parsedChild.body)) pushEmptySection("Notes");
+          else pushEmptySection(sectionTitle);
+          continue;
+        }
+      }
       if (sectionTitle && baseIndent !== null) {
         if (projectSeedReqIsNotesDrawerTitle(parsedChild.body)) {
           const drawerNotes = [];
@@ -45048,11 +45098,15 @@ function splitProjectNoteForReversal(content) {
         bodyLines.length === 0
       ) {
         // Generated `[!projects]` catalog only: drop the heading.
-      } else if (bodyLines.length > 0) {
+      } else {
+        // bob-task-drawer-bold-writes-v1: eligible empty H2 sections are
+        // preserved as empty drawers; ineligible headings refuse by name.
         const title = formatProjectReversalSectionTitle(headerText);
         if (!title) {
+          const refusal = projectReversalSectionRefusal(headerText);
+          const suffix = refusal ? ` (${refusal})` : "";
           return emptyProjectNoteReversalSplit(
-            `Section "${sectionLabel}" cannot be converted into a task bullet`,
+            `Section "${sectionLabel}" cannot be converted into a task bullet${suffix}`,
             splitExtra,
           );
         }
@@ -45200,7 +45254,9 @@ function buildTaskBlockFromProjectNote(content, options = {}) {
   const lines = [taskLine, ...indentedDependency, ...indentedTasks];
   let sectionCount = 0;
   for (const section of split.sections) {
-    lines.push(`\t- ${section.title}`);
+    // bob-task-drawer-bold-writes-v1: reversal bullets keep the authored
+    // title verbatim inside bold markers, never uppercased.
+    lines.push(`\t- **${section.title}**`);
     lines.push(...indentProjectReversalLines(section.noteLines, 2));
     sectionCount += 1;
   }
@@ -137879,8 +137935,9 @@ function taskReqGlyph(state) {
 // every `offset` are UTF-16 offsets into the note.
 
 const TASK_BLOCK_NOTES_KEY = "NOTES";
-// Creation stays legacy throughout the reader rollout.
-const TASK_BLOCK_NOTES_TITLE = "NOTES";
+// Writers emit bold drawer headers (bob-task-drawer-bold-writes-v1); the
+// identity key stays ALL-CAPS while the creation title is `Notes`.
+const TASK_BLOCK_NOTES_TITLE = "Notes";
 const TASK_BLOCK_NOTES_SECTION_TITLE = "Notes";
 // Drawer slots read the block with the default filter, as bob-cli does.
 const TASK_BLOCK_DEFAULT_FILTER = "#task";
@@ -138321,7 +138378,18 @@ function taskBlockNotesDrawer(contents, task) {
   return taskBlockDrawers(contents, task).find((drawer) => drawer.key === TASK_BLOCK_NOTES_KEY) || null;
 }
 
-// `task_block_layout::notes_create_title`.
+// `capture_drawers::drawer_header_body`: the body of a created drawer header.
+function taskBlockDrawerHeaderBody(title) {
+  return `**${String(title || "")}**`;
+}
+
+// `capture_drawers::drawer_header_line`: a created drawer header line.
+function taskBlockDrawerHeaderLine(indent, title) {
+  return `${String(indent || "")}- ${taskBlockDrawerHeaderBody(title)}`;
+}
+
+// `task_block_layout::notes_create_title`: Title Case `Notes` on a `^prj`
+// owner, else the bold drawer title `Notes`.
 function taskBlockNotesCreateTitle(contents, task) {
   return taskBlockIsPrjParent(contents, task) ? TASK_BLOCK_NOTES_SECTION_TITLE : TASK_BLOCK_NOTES_TITLE;
 }
@@ -138343,7 +138411,7 @@ function taskBlockEnsureNotesDrawer(contents, task) {
     return drawer ? { updated, drawer, created: true } : null;
   }
   const doc = taskReqDocument(text);
-  const header = `${taskBlockChildIndentIn(doc, task)}- ${TASK_BLOCK_NOTES_TITLE}`;
+  const header = taskBlockDrawerHeaderLine(taskBlockChildIndentIn(doc, task), TASK_BLOCK_NOTES_TITLE);
   const headerOffset = taskBlockDrawerHeaderOffset(text, task, true);
   const addition = taskBlockInsertionTextPreservingLineEndings(text, headerOffset, header);
   const updatedTask = Object.assign({}, task, {
@@ -141798,8 +141866,12 @@ try {
       taskReqRowKey,
       taskReqGlyph,
       TASK_BLOCK_NOTES_TITLE,
+      TASK_BLOCK_NOTES_SECTION_TITLE,
       TASK_BLOCK_ZONES,
       TASK_BLOCK_CHILD_KINDS,
+      taskBlockDrawerHeaderBody,
+      taskBlockDrawerHeaderLine,
+      taskBlockNotesCreateTitle,
       taskBlockClassifyChild,
       taskBlockZoneOf,
       taskBlockRead,

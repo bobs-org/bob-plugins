@@ -686,7 +686,7 @@ test("a Bob-written drawer promotes to a title-case section and reverses to the 
     now: new Date("2026-08-12T12:00:00Z"),
   });
   assert.equal(reversed.valid, true, reversed.error || "project reversal failed");
-  assert.ok(reversed.lines.includes("\t- API DESIGN"));
+  assert.ok(reversed.lines.includes("\t- **Api Design**"));
   assert.ok(reversed.lines.includes("\t\t- Must stay backward compatible"));
 });
 
@@ -736,7 +736,7 @@ test("a punctuated WHAT IS SASE? drawer promotes to title case and reverses to t
     now: new Date("2026-08-12T12:00:00Z"),
   });
   assert.equal(reversed.valid, true, reversed.error || "project reversal failed");
-  assert.ok(reversed.lines.includes("\t- WHAT IS SASE?"));
+  assert.ok(reversed.lines.includes("\t- **What Is Sase?**"));
   assert.ok(reversed.lines.includes("\t\t- Why does capture need it?"));
 
   // Excluded forms never become sections.
@@ -1270,7 +1270,7 @@ test("promotion: a row that owns child reqs files its direct notes into NOTES (w
   assert.deepEqual(result.taskLines, [
     "- [ ] #task Outer req [created::2026-08-12]",
     "  - [ ] Child req",
-    "  - NOTES",
+    "  - **Notes**",
     "    - Direct note of the outer row",
   ]);
   assert.deepEqual(result.sections, []);

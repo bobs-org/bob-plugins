@@ -130,7 +130,7 @@ for (const entry of PLUGINS_UNDER_TEST) {
   });
 }
 
-test("bold Notes is reused verbatim and new Notes writers stay legacy", () => {
+test("bold Notes is reused verbatim and new Notes writers are bold", () => {
   const contents = [
     "- [ ] #task Parent ^parent",
     "  - [ ] requirement",
@@ -153,8 +153,47 @@ test("bold Notes is reused verbatim and new Notes writers stay legacy", () => {
   const freshTask = cycler.taskBlockFindTask(noNotes, 0);
   const created = cycler.taskBlockEnsureNotesDrawer(noNotes, freshTask);
   assert.ok(created);
-  assert.match(created.updated, /^  - NOTES$/m);
-  assert.doesNotMatch(created.updated, /\*\*NOTES\*\*/);
+  assert.match(created.updated, /^  - \*\*Notes\*\*$/m);
+  assert.doesNotMatch(created.updated, /^  - NOTES$/m);
+
+  // Existing legacy headers are reused verbatim, never respelled on write.
+  const legacyContents = [
+    "- [ ] #task Parent ^parent",
+    "  - [ ] requirement",
+    "  - NOTES",
+    "    - existing note",
+    "  - loose note",
+    "",
+  ].join("\n");
+  const legacyTask = cycler.taskBlockFindTask(legacyContents, 0);
+  const legacyFiled = cycler.taskBlockFileIntoNotes(legacyContents, 0, [{ lines: ["  - filed note\n"], indent: "  " }]);
+  assert.ok(legacyFiled);
+  assert.match(legacyFiled.updated, /^  - NOTES$/m);
+  assert.doesNotMatch(legacyFiled.updated, /\*\*Notes\*\*/);
+  assert.equal((legacyFiled.updated.match(/^  - NOTES$/mg) || []).length, 1);
+
+  // Mixed-case bold headers are reused verbatim; first-note birth creates
+  // exactly one bold home and never duplicates it.
+  const mixedContents = [
+    "- [ ] #task Parent ^parent",
+    "  - [ ] requirement",
+    "  - **notes**",
+    "    - existing note",
+    "",
+  ].join("\n");
+  const mixedTask = cycler.taskBlockFindTask(mixedContents, 0);
+  const mixedFiled = cycler.taskBlockFileIntoNotes(mixedContents, 0, [{ lines: ["  - filed note\n"], indent: "  " }]);
+  assert.ok(mixedFiled);
+  assert.match(mixedFiled.updated, /^  - \*\*notes\*\*$/m);
+  assert.equal((mixedFiled.updated.match(/\*\*notes\*\*/g) || []).length, 1);
+
+  const born = cycler.taskBlockEnsureNotesDrawer(noNotes, freshTask);
+  assert.ok(born);
+  assert.equal((born.updated.match(/\*\*Notes\*\*/g) || []).length, 1);
+  const bornTask = cycler.taskBlockFindTask(born.updated, 0);
+  const bornFiled = cycler.taskBlockFileIntoNotes(born.updated, 0, [{ lines: ["  - another\n"], indent: "  " }]);
+  assert.ok(bornFiled);
+  assert.equal((bornFiled.updated.match(/\*\*Notes\*\*/g) || []).length, 1);
 });
 
 test("bold drawer blocks requirement conversion with the drawer-specific refusal", () => {

@@ -98,9 +98,9 @@ function expectedRestoredGymHabitBlock() {
     "\t- [ ] #task Buy shoes [created::2026-08-01]",
     "\t\t- Check the outlet store",
     "\t- [x] #task Sign up [created::2026-08-01]",
-    "\t- REQUIREMENTS",
+    "\t- **Requirements**",
     "\t\t- Must be within walking distance",
-    "\t- OPEN QUESTIONS",
+    "\t- **Open Questions**",
     "\t\t- Morning or evening?",
     "\t- 🗓️ **SCHEDULE LOG**",
     "\t\t- _2026-08-05 — 2026-08-01 → 2026-09-01 — 🎲 auto_",
@@ -438,23 +438,39 @@ test("getProjectReversalBlockId inverts the forward basename helper", () => {
   assert.equal(helpers.getProjectReversalBlockId("Ship It Project", "Health"), null);
 });
 
-test("formatProjectReversalSectionTitle uppercases titles and rejects unsafe ones", () => {
+test("formatProjectReversalSectionTitle keeps authored titles verbatim and rejects unsafe ones", () => {
   assert.equal(
     helpers.formatProjectReversalSectionTitle("Future Work"),
-    "FUTURE WORK",
+    "Future Work",
   );
   assert.equal(
     helpers.formatProjectReversalSectionTitle("Api Design"),
-    "API DESIGN",
+    "Api Design",
   );
-  assert.equal(helpers.formatProjectReversalSectionTitle("Q&A: notes!"), null);
+  assert.equal(
+    helpers.formatProjectReversalSectionTitle("API Design"),
+    "API Design",
+  );
+  assert.equal(
+    helpers.formatProjectReversalSectionTitle("C++ Notes"),
+    "C++ Notes",
+  );
+  assert.equal(helpers.formatProjectReversalSectionTitle("Café"), "Café");
+  assert.equal(
+    helpers.formatProjectReversalSectionTitle("iOS / OAuth 2.0"),
+    "iOS / OAuth 2.0",
+  );
+  assert.equal(
+    helpers.formatProjectReversalSectionTitle("Q&A: notes!"),
+    "Q&A: notes!",
+  );
   assert.equal(
     helpers.formatProjectReversalSectionTitle("What Is Sase?"),
-    "WHAT IS SASE?",
+    "What Is Sase?",
   );
-  assert.equal(helpers.formatProjectReversalSectionTitle("Options:"), "OPTIONS:");
-  assert.equal(helpers.formatProjectReversalSectionTitle("NOTE: X"), null);
-  assert.equal(helpers.formatProjectReversalSectionTitle("KEY:: VALUE"), null);
+  assert.equal(helpers.formatProjectReversalSectionTitle("Options:"), null);
+  assert.equal(helpers.formatProjectReversalSectionTitle("Tasks"), null);
+  assert.equal(helpers.formatProjectReversalSectionTitle(""), null);
   assert.equal(helpers.formatProjectReversalSectionTitle("OPTIONS::"), null);
 });
 
@@ -467,8 +483,59 @@ test("a punctuated WHAT IS SASE? section reverses to the same drawer key", () =>
     parentBasename: "Health",
   });
   assert.equal(reversed.valid, true, reversed.error || "project reversal failed");
-  assert.ok(reversed.lines.includes("\t- WHAT IS SASE?"));
+  assert.ok(reversed.lines.includes("\t- **What Is Sase?**"));
   assert.ok(reversed.lines.includes("\t\t- Why does capture need it?"));
+});
+
+test("bold titles round-trip byte for byte through promotion and reversal", () => {
+  for (const title of ["API Design", "C++ Notes", "Q1: Goals", "Café", "iOS / OAuth 2.0"]) {
+    const seeded = helpers.buildProjectSeedFromChildBullets(
+      [`  - **${title}**`, "    - Draft note"],
+      "2026-08-12",
+    );
+    assert.deepEqual(seeded.sections, [{ title, noteLines: ["- Draft note"] }], title);
+    const promoted = helpers.buildProjectContentFromTask(
+      [
+        "---",
+        'parent: "[[Engineering]]"',
+        'template: "[[new_project]]"',
+        'type: "[[project]]"',
+        "status: wip",
+        "created: 2026-08-12T09:00:00-04:00",
+        "---",
+        "",
+        "- [ ] #task #prj (REPLACE WITH PROJECT COMPLETION CRITERIA) #hide ^prj",
+        "",
+        "## Tasks",
+        "",
+        "- [ ] #task (REPLACE WITH TASK DESCRIPTION) [created::<date>]",
+      ].join("\n"),
+      { description: "Ship it", priority: null },
+      { sections: seeded.sections },
+    );
+    assert.match(promoted.content, new RegExp(`## ${title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\n\\n- Draft note`), title);
+    const reversed = helpers.buildTaskBlockFromProjectNote(promoted.content, {
+      noteBasename: "Engineering_api",
+      parentBasename: "Engineering",
+      now: new Date("2026-08-12T12:00:00Z"),
+    });
+    assert.equal(reversed.valid, true, `${title}: ${reversed.error || "reversal failed"}`);
+    assert.ok(reversed.lines.includes(`\t- **${title}**`), title);
+  }
+});
+
+test("empty eligible sections round-trip as empty drawers", () => {
+  const seeded = helpers.buildProjectSeedFromChildBullets(["  - **API Design**"], "2026-08-12");
+  assert.deepEqual(seeded.sections, [{ title: "API Design", noteLines: [] }]);
+  const inserted = helpers.insertProjectSectionNotes("## Tasks\n", seeded.sections);
+  assert.match(inserted.content, /## API Design/);
+  const reversed = helpers.buildTaskBlockFromProjectNote(
+    ["---", 'parent: "[[Health]]"', 'template: "[[new_project]]"', 'type: "[[project]]"', "status: wip", "created: 2026-08-01T09:00:00-04:00", "---", "", "- [ ] #task #prj Build a habit [p::1] #hide ^prj", "", "## Tasks", "", "- [ ] #task Buy shoes [created::2026-08-01]", "", "## API Design", ""].join("\n"),
+    { noteBasename: "Health_habit", parentBasename: "Health", now: new Date("2026-08-12T12:00:00Z") },
+  );
+  assert.equal(reversed.valid, true, reversed.error || "reversal failed");
+  assert.ok(reversed.lines.includes("\t- **API Design**"));
+  assert.equal(reversed.sectionCount, 1);
 });
 
 test("splitProjectNoteForReversal treats TASKS as the task section and keeps section order", () => {
@@ -497,7 +564,7 @@ test("splitProjectNoteForReversal treats TASKS as the task section and keeps sec
   );
   assert.deepEqual(
     split.sections.map((section) => section.title),
-    ["FUTURE WORK", "API DESIGN"],
+    ["Future Work", "Api Design"],
   );
 
   const emptyRequirements = helpers.buildTaskBlockFromProjectNote(
@@ -507,27 +574,40 @@ test("splitProjectNoteForReversal treats TASKS as the task section and keeps sec
     { noteBasename: "Health_gym_habit", parentBasename: "Health" },
   );
   assert.equal(emptyRequirements.valid, true);
-  assert.equal(emptyRequirements.sectionCount, 1);
+  assert.equal(emptyRequirements.sectionCount, 2);
   assert.deepEqual(
     emptyRequirements.lines.filter((line) => line.startsWith("\t- ")),
     [
       "\t- [ ] #task Buy shoes [created::2026-08-01]",
       "\t- [x] #task Sign up [created::2026-08-01]",
-      "\t- OPEN QUESTIONS",
+      "\t- **Requirements**",
+      "\t- **Open Questions**",
       "\t- 🗓️ **SCHEDULE LOG**",
     ],
   );
 
   const rejectedTitle = helpers.buildTaskBlockFromProjectNote(
     workedExampleProjectNote({
-      extraSections: ["## Q&A: notes!", "", "- Something"],
+      extraSections: ["## Options:", "", "- Something"],
     }),
     { noteBasename: "Health_gym_habit", parentBasename: "Health" },
   );
   assert.equal(rejectedTitle.valid, false);
   assert.equal(
     rejectedTitle.error,
-    'Section "Q&A: notes!" cannot be converted into a task bullet',
+    'Section "Options:" cannot be converted into a task bullet (not_a_drawer_title)',
+  );
+
+  const reservedTitle = helpers.buildTaskBlockFromProjectNote(
+    workedExampleProjectNote({
+      extraSections: ["## Tasks", "", "- Something"],
+    }),
+    { noteBasename: "Health_gym_habit", parentBasename: "Health" },
+  );
+  assert.equal(reservedTitle.valid, true);
+  assert.ok(
+    reservedTitle.lines.some((line) => line.includes("- Something")),
+    "Tasks content merges into the task section",
   );
 });
 

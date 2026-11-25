@@ -34443,8 +34443,9 @@ function taskReqGlyph(state) {
 // every `offset` are UTF-16 offsets into the note.
 
 const TASK_BLOCK_NOTES_KEY = "NOTES";
-// Creation stays legacy throughout the reader rollout.
-const TASK_BLOCK_NOTES_TITLE = "NOTES";
+// Writers emit bold drawer headers (bob-task-drawer-bold-writes-v1); the
+// identity key stays ALL-CAPS while the creation title is `Notes`.
+const TASK_BLOCK_NOTES_TITLE = "Notes";
 const TASK_BLOCK_NOTES_SECTION_TITLE = "Notes";
 // Drawer slots read the block with the default filter, as bob-cli does.
 const TASK_BLOCK_DEFAULT_FILTER = "#task";
@@ -34885,7 +34886,18 @@ function taskBlockNotesDrawer(contents, task) {
   return taskBlockDrawers(contents, task).find((drawer) => drawer.key === TASK_BLOCK_NOTES_KEY) || null;
 }
 
-// `task_block_layout::notes_create_title`.
+// `capture_drawers::drawer_header_body`: the body of a created drawer header.
+function taskBlockDrawerHeaderBody(title) {
+  return `**${String(title || "")}**`;
+}
+
+// `capture_drawers::drawer_header_line`: a created drawer header line.
+function taskBlockDrawerHeaderLine(indent, title) {
+  return `${String(indent || "")}- ${taskBlockDrawerHeaderBody(title)}`;
+}
+
+// `task_block_layout::notes_create_title`: Title Case `Notes` on a `^prj`
+// owner, else the bold drawer title `Notes`.
 function taskBlockNotesCreateTitle(contents, task) {
   return taskBlockIsPrjParent(contents, task) ? TASK_BLOCK_NOTES_SECTION_TITLE : TASK_BLOCK_NOTES_TITLE;
 }
@@ -34907,7 +34919,7 @@ function taskBlockEnsureNotesDrawer(contents, task) {
     return drawer ? { updated, drawer, created: true } : null;
   }
   const doc = taskReqDocument(text);
-  const header = `${taskBlockChildIndentIn(doc, task)}- ${TASK_BLOCK_NOTES_TITLE}`;
+  const header = taskBlockDrawerHeaderLine(taskBlockChildIndentIn(doc, task), TASK_BLOCK_NOTES_TITLE);
   const headerOffset = taskBlockDrawerHeaderOffset(text, task, true);
   const addition = taskBlockInsertionTextPreservingLineEndings(text, headerOffset, header);
   const updatedTask = Object.assign({}, task, {
@@ -40688,8 +40700,12 @@ Object.assign(module.exports.helpers, {
   taskReqRowKey,
   taskReqGlyph,
   TASK_BLOCK_NOTES_TITLE,
+  TASK_BLOCK_NOTES_SECTION_TITLE,
   TASK_BLOCK_ZONES,
   TASK_BLOCK_CHILD_KINDS,
+  taskBlockDrawerHeaderBody,
+  taskBlockDrawerHeaderLine,
+  taskBlockNotesCreateTitle,
   taskBlockClassifyChild,
   taskBlockZoneOf,
   taskBlockRead,

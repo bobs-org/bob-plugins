@@ -1,4 +1,4 @@
-// Test exports for the pure task-settle twin (bob-cli-q4.8.1.1 pure-twin).
+// Test exports for the task-settle twin (pure-twin + editor-apply).
 try {
   if (module.exports && module.exports.helpers) {
     Object.assign(module.exports.helpers, {
@@ -13,6 +13,26 @@ try {
       taskSettleIsLegacyBadgeMarker,
       taskSettleLogicalLines,
       taskSettleTextValue,
+      taskSettleDefaultStatusTypes,
+      taskSettleDefaultTasksSettings,
+      taskSettleNormalizeTasksSettings,
+      taskSettleReadTasksSettings,
+      taskSettleClassificationFromTasksSettings,
+      taskSettleCaptureContext,
+      taskSettleIsMarkdownView,
+      taskSettleFindMarkdownViewForEditor,
+      taskSettleGuardEditorPath,
+      taskSettleSplitEditorText,
+      taskSettleAlignEditorLines,
+      taskSettlePlanEditorChanges,
+      taskSettlePlanContentEdits,
+      taskSettleIsWholeDocumentReplacement,
+      taskSettleFindIdentityLine,
+      taskSettleTaskBlockRange,
+      taskSettlePlanCursor,
+      taskSettleApplyToEditor,
+      TASK_SETTLE_API_VERSION,
+      BobLedgerToolsTaskSettleMixin,
     });
   }
 } catch (error) {

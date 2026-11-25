@@ -22674,6 +22674,943 @@ function taskSettleTextValue(value) {
   if (value.final_newline) result += ending;
   return result;
 }
+// ---- src/139e-task-settle-context.js ----
+// Tasks classification and daily-path adapters for task settle
+// (bob-cli-q4.8.1.2 editor-apply). Snapshot only: no file reads, no daily
+// file creation, and never the Tasks cache task list. Dates stay explicit
+// in pure calls; editor/scheduler boundaries use these helpers.
+
+const TASK_SETTLE_TASKS_PLUGIN_ID = "obsidian-tasks-plugin";
+
+function taskSettleDefaultStatusTypes() {
+  return [
+    { symbol: " ", type: "TODO" },
+    { symbol: "*", type: "ON_HOLD" },
+    { symbol: "/", type: "IN_PROGRESS" },
+    { symbol: "?", type: "ON_HOLD" },
+    { symbol: "x", type: "DONE" },
+    { symbol: "X", type: "DONE" },
+    { symbol: "-", type: "CANCELLED" },
+    { symbol: "P", type: "TODO" },
+  ];
+}
+
+function taskSettleDefaultTasksSettings() {
+  return {
+    globalFilter: "#task",
+    statusTypes: taskSettleDefaultStatusTypes(),
+  };
+}
+
+function taskSettleStatusTypeName(value) {
+  if (value === "DONE") return "DONE";
+  if (value === "CANCELLED") return "CANCELLED";
+  if (value === "NON_TASK") return "NON_TASK";
+  if (value === "EMPTY") return "EMPTY";
+  if (value === "IN_PROGRESS") return "IN_PROGRESS";
+  if (value === "ON_HOLD") return "ON_HOLD";
+  return "TODO";
+}
+
+function taskSettleNormalizeTasksSettings(value) {
+  const defaults = taskSettleDefaultTasksSettings();
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return defaults;
+  }
+  const globalFilter =
+    typeof value.globalFilter === "string" ? value.globalFilter : defaults.globalFilter;
+  if (Array.isArray(value.statusTypes) && value.statusTypes.length > 0) {
+    const statusTypes = [];
+    for (const entry of value.statusTypes) {
+      if (!entry || typeof entry !== "object") continue;
+      const symbol = typeof entry.symbol === "string" ? entry.symbol : "";
+      const chars = Array.from(symbol);
+      if (chars.length !== 1) continue;
+      statusTypes.push({ symbol: chars[0], type: taskSettleStatusTypeName(entry.type) });
+    }
+    if (statusTypes.length > 0) {
+      return { globalFilter, statusTypes };
+    }
+  }
+  const statusTypes = [];
+  const seen = new Set();
+  const collections = value.statusSettings && typeof value.statusSettings === "object"
+    ? value.statusSettings
+    : {};
+  for (const collection of ["coreStatuses", "customStatuses"]) {
+    const statuses = Array.isArray(collections[collection]) ? collections[collection] : [];
+    for (const status of statuses) {
+      if (!status || typeof status !== "object") continue;
+      const symbol = typeof status.symbol === "string" ? status.symbol : "";
+      const chars = Array.from(symbol);
+      if (chars.length !== 1 || seen.has(chars[0])) continue;
+      seen.add(chars[0]);
+      statusTypes.push({
+        symbol: chars[0],
+        type: taskSettleStatusTypeName(status.type),
+      });
+    }
+  }
+  if (statusTypes.length === 0) {
+    return { globalFilter, statusTypes: defaults.statusTypes };
+  }
+  return { globalFilter, statusTypes };
+}
+
+function taskSettleReadTasksSettings(app) {
+  try {
+    const plugins = app && app.plugins && app.plugins.plugins;
+    const holder = plugins && plugins[TASK_SETTLE_TASKS_PLUGIN_ID];
+    if (!holder) return taskSettleDefaultTasksSettings();
+    const value = holder.settings || holder.data || holder;
+    return taskSettleNormalizeTasksSettings(value);
+  } catch (_error) {
+    return taskSettleDefaultTasksSettings();
+  }
+}
+
+function taskSettleClassificationFromTasksSettings(settings) {
+  const normalized = taskSettleNormalizeTasksSettings(settings);
+  return taskSettleFromStatusTypes(normalized.globalFilter, normalized.statusTypes);
+}
+
+function taskSettleCaptureContext(app, options = {}) {
+  const opts = options && typeof options === "object" ? options : {};
+  const now = opts.now instanceof Date ? opts.now : new Date();
+  const today = opts.today != null ? String(opts.today) : formatLocalDate(now);
+  const dailyOptions =
+    opts.dailyOptions && typeof opts.dailyOptions === "object"
+      ? opts.dailyOptions
+      : getDailyNotesOptions(app);
+  const dailyPath =
+    opts.dailyPath != null
+      ? normalizeVaultPath(opts.dailyPath)
+      : todayDailyPath(now, dailyOptions);
+  const settings =
+    opts.tasksSettings != null
+      ? taskSettleNormalizeTasksSettings(opts.tasksSettings)
+      : taskSettleReadTasksSettings(app);
+  return {
+    today,
+    dailyPath,
+    classification: taskSettleClassificationFromTasksSettings(settings),
+    settings,
+  };
+}
+
+function taskSettleIsMarkdownView(view) {
+  if (!view) return false;
+  try {
+    if (typeof MarkdownView === "function" && view instanceof MarkdownView) return true;
+  } catch (_error) {
+    // instanceof can throw across realms.
+  }
+  if (typeof view.getViewType === "function") {
+    try {
+      if (view.getViewType() === "markdown") return true;
+    } catch (_error) {
+      return false;
+    }
+  }
+  return false;
+}
+
+function taskSettleViewPath(view) {
+  const file = view && view.file;
+  if (file && typeof file.path === "string") {
+    return normalizeVaultPath(file.path);
+  }
+  return "";
+}
+
+function taskSettleEditorMatchesView(editor, view) {
+  if (!editor || !view) return false;
+  if (view.editor === editor) return true;
+  const viewEditor = view.editor;
+  if (!viewEditor) return false;
+  if (viewEditor.cm === editor) return true;
+  if (editor.cm && (editor.cm === viewEditor || editor.cm === viewEditor.cm)) return true;
+  if (editor.cmView && (editor.cmView === viewEditor.cmView || editor.cmView === viewEditor.cm)) {
+    return true;
+  }
+  return false;
+}
+
+function taskSettleIterateMarkdownLeaves(app, visit) {
+  const workspace = app && app.workspace;
+  if (!workspace) return;
+  if (typeof workspace.iterateAllLeaves === "function") {
+    try {
+      workspace.iterateAllLeaves((leaf) => visit(leaf));
+      return;
+    } catch (_error) {
+      // Fall through to getLeavesOfType.
+    }
+  }
+  if (typeof workspace.getLeavesOfType === "function") {
+    const leaves = workspace.getLeavesOfType("markdown") || [];
+    for (const leaf of leaves) visit(leaf);
+  }
+}
+
+function taskSettleFindMarkdownViewForEditor(app, editor) {
+  if (!app || !editor) return null;
+  let match = null;
+  taskSettleIterateMarkdownLeaves(app, (leaf) => {
+    if (match || !leaf) return;
+    const view = leaf.view;
+    if (!taskSettleIsMarkdownView(view) || !view.editor) return;
+    if (taskSettleEditorMatchesView(editor, view)) match = view;
+  });
+  return match;
+}
+
+function taskSettleGuardEditorPath(app, editor, path) {
+  const expected = normalizeVaultPath(path);
+  if (!expected) {
+    return { ok: false, view: null, path: "", reason: "path" };
+  }
+  const view = taskSettleFindMarkdownViewForEditor(app, editor);
+  if (!view) {
+    return { ok: false, view: null, path: expected, reason: "view" };
+  }
+  const viewPath = taskSettleViewPath(view);
+  if (!viewPath || !sameVaultPath(viewPath, expected)) {
+    return { ok: false, view, path: viewPath, reason: "path" };
+  }
+  return { ok: true, view, path: viewPath, reason: null };
+}
+// ---- src/139f-task-settle-editor-diff.js ----
+// Minimal editor edits for task settle (bob-cli-q4.8.1.2 editor-apply).
+//
+// Navigation's `181-editor-line-diff.js` is the reference for preserving
+// stable content and viewport. Settle's semantic `lineMap` stays separate:
+// these helpers align raw lines so the transaction touches only changed
+// hunks and never replaces the whole document with setValue.
+
+const TASK_SETTLE_EDITOR_DIFF_MAX_EDITS = 2000;
+
+function taskSettleSplitEditorText(content) {
+  const text = String(content == null ? "" : content);
+  const lineEnding = text.includes("\r\n") ? "\r\n" : "\n";
+  return { lines: text.split(/\r?\n/), lineEnding };
+}
+
+function taskSettleEditorMyersPairs(oldKeys, newKeys, maxEdits) {
+  const oldCount = oldKeys.length;
+  const newCount = newKeys.length;
+  if (oldCount === 0 || newCount === 0) return [];
+  const limit = Math.min(oldCount + newCount, maxEdits);
+  const mid = limit + 1;
+  const furthest = new Array(2 * limit + 3).fill(0);
+  const snapshots = [];
+  let edits = -1;
+  for (let d = 0; d <= limit && edits < 0; d += 1) {
+    for (let k = -d; k <= d; k += 2) {
+      let x;
+      if (k === -d || (k !== d && furthest[mid + k - 1] < furthest[mid + k + 1])) {
+        x = furthest[mid + k + 1];
+      } else {
+        x = furthest[mid + k - 1] + 1;
+      }
+      let y = x - k;
+      while (x < oldCount && y < newCount && oldKeys[x] === newKeys[y]) {
+        x += 1;
+        y += 1;
+      }
+      furthest[mid + k] = x;
+      if (x >= oldCount && y >= newCount) edits = d;
+    }
+    snapshots.push(furthest.slice(mid - d, mid + d + 1));
+  }
+  if (edits < 0) return null;
+
+  const pairs = [];
+  let x = oldCount;
+  let y = newCount;
+  for (let d = edits; d > 0; d -= 1) {
+    const previous = snapshots[d - 1];
+    const k = x - y;
+    const previousK =
+      k === -d || (k !== d && previous[k - 1 + d - 1] < previous[k + 1 + d - 1])
+        ? k + 1
+        : k - 1;
+    const previousX = previous[previousK + d - 1];
+    const previousY = previousX - previousK;
+    const snakeX = previousK === k + 1 ? previousX : previousX + 1;
+    while (x > snakeX) {
+      x -= 1;
+      y -= 1;
+      pairs.push([x, y]);
+    }
+    x = previousX;
+    y = previousY;
+  }
+  while (x > 0) {
+    x -= 1;
+    y -= 1;
+    pairs.push([x, y]);
+  }
+  return pairs.reverse();
+}
+
+function taskSettleAlignEditorLines(oldLines, newLines) {
+  const oldCount = oldLines.length;
+  const newCount = newLines.length;
+  const shared = Math.min(oldCount, newCount);
+  let prefix = 0;
+  while (prefix < shared && oldLines[prefix] === newLines[prefix]) prefix += 1;
+  let suffix = 0;
+  while (
+    suffix < shared - prefix &&
+    oldLines[oldCount - 1 - suffix] === newLines[newCount - 1 - suffix]
+  ) {
+    suffix += 1;
+  }
+
+  const pairs = [];
+  for (let index = 0; index < prefix; index += 1) pairs.push([index, index]);
+  const oldKeys = oldLines.slice(prefix, oldCount - suffix);
+  const newKeys = newLines.slice(prefix, newCount - suffix);
+  const middle = taskSettleEditorMyersPairs(
+    oldKeys,
+    newKeys,
+    TASK_SETTLE_EDITOR_DIFF_MAX_EDITS,
+  );
+  for (const [oldIndex, newIndex] of middle || []) {
+    pairs.push([prefix + oldIndex, prefix + newIndex]);
+  }
+  for (let index = suffix; index > 0; index -= 1) {
+    pairs.push([oldCount - index, newCount - index]);
+  }
+  return pairs;
+}
+
+function taskSettlePlanEditorChanges(oldLines, newLines, pairs, lineEnding = "\n") {
+  const changes = [];
+  const endOfLine = (line) => ({ line, ch: String(oldLines[line]).length });
+  const pushGap = (oldStart, oldEnd, newStart, newEnd) => {
+    const text = newLines.slice(newStart, newEnd).join(lineEnding);
+    if (oldStart < oldEnd && newStart < newEnd) {
+      changes.push({ from: { line: oldStart, ch: 0 }, to: endOfLine(oldEnd - 1), text });
+    } else if (newStart < newEnd) {
+      if (oldStart > 0) {
+        changes.push({
+          from: endOfLine(oldStart - 1),
+          to: endOfLine(oldStart - 1),
+          text: `${lineEnding}${text}`,
+        });
+      } else {
+        changes.push({
+          from: { line: 0, ch: 0 },
+          to: { line: 0, ch: 0 },
+          text: `${text}${lineEnding}`,
+        });
+      }
+    } else if (oldStart < oldEnd) {
+      if (oldEnd < oldLines.length) {
+        changes.push({ from: { line: oldStart, ch: 0 }, to: { line: oldEnd, ch: 0 }, text: "" });
+      } else if (oldStart > 0) {
+        changes.push({ from: endOfLine(oldStart - 1), to: endOfLine(oldEnd - 1), text: "" });
+      } else {
+        changes.push({ from: { line: 0, ch: 0 }, to: endOfLine(oldEnd - 1), text: "" });
+      }
+    }
+  };
+
+  let oldNext = 0;
+  let newNext = 0;
+  for (const [oldIndex, newIndex] of [...pairs, [oldLines.length, newLines.length]]) {
+    if (
+      oldIndex === 0 &&
+      newIndex > 0 &&
+      oldIndex < oldLines.length &&
+      oldLines[0] !== newLines[newIndex]
+    ) {
+      changes.push({
+        from: { line: 0, ch: 0 },
+        to: endOfLine(0),
+        text: newLines.slice(0, newIndex + 1).join(lineEnding),
+      });
+      oldNext = 1;
+      newNext = newIndex + 1;
+      continue;
+    }
+    pushGap(oldNext, oldIndex, newNext, newIndex);
+    if (oldIndex < oldLines.length && oldLines[oldIndex] !== newLines[newIndex]) {
+      changes.push({
+        from: { line: oldIndex, ch: 0 },
+        to: endOfLine(oldIndex),
+        text: newLines[newIndex],
+      });
+    }
+    oldNext = oldIndex + 1;
+    newNext = newIndex + 1;
+  }
+  return changes;
+}
+
+function taskSettleMapPositionThroughAlignment(position, oldLines, newLines, pairs) {
+  const lastNewLine = Math.max(newLines.length - 1, 0);
+  const clampCh = (line, ch) => Math.min(Math.max(0, ch), String(newLines[line] || "").length);
+  const oldLine = Math.max(0, Math.min(position.line, Math.max(oldLines.length - 1, 0)));
+  const ch = position.ch;
+
+  let low = 0;
+  let high = pairs.length;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (pairs[middle][0] < oldLine) low = middle + 1;
+    else high = middle;
+  }
+  const next = low < pairs.length ? pairs[low] : null;
+  if (next && next[0] === oldLine) {
+    const before = String(oldLines[oldLine]);
+    const after = String(newLines[next[1]]);
+    if (before === after) {
+      return { line: next[1], ch: Math.min(ch, after.length) };
+    }
+    const shared = Math.min(before.length, after.length);
+    let prefix = 0;
+    while (prefix < shared && before[prefix] === after[prefix]) prefix += 1;
+    let suffix = 0;
+    while (
+      suffix < shared - prefix &&
+      before[before.length - 1 - suffix] === after[after.length - 1 - suffix]
+    ) {
+      suffix += 1;
+    }
+    let mapped = Math.min(ch, after.length);
+    if (ch <= prefix) mapped = ch;
+    else if (ch >= before.length - suffix) mapped = ch + (after.length - before.length);
+    return { line: next[1], ch: Math.max(0, Math.min(mapped, after.length)) };
+  }
+
+  const previous = low > 0 ? pairs[low - 1] : [-1, -1];
+  const newStart = previous[1] + 1;
+  const newEnd = next ? next[1] : newLines.length;
+  if (newStart < newEnd) {
+    const line = newStart + Math.min(oldLine - (previous[0] + 1), newEnd - newStart - 1);
+    return { line, ch: clampCh(line, ch) };
+  }
+  return { line: Math.min(newEnd, lastNewLine), ch: 0 };
+}
+
+function taskSettleIsWholeDocumentReplacement(changes, oldLines) {
+  if (!Array.isArray(changes) || changes.length !== 1 || !Array.isArray(oldLines)) {
+    return false;
+  }
+  if (oldLines.length <= 1) return false;
+  const change = changes[0];
+  const last = oldLines.length - 1;
+  return (
+    change.from &&
+    change.to &&
+    change.from.line === 0 &&
+    change.from.ch === 0 &&
+    change.to.line === last &&
+    change.to.ch === String(oldLines[last]).length
+  );
+}
+
+function taskSettlePlanContentEdits(oldText, newText) {
+  const original = taskSettleSplitEditorText(oldText);
+  const next = taskSettleSplitEditorText(newText);
+  if (original.lines.join("\n") === next.lines.join("\n") && String(oldText) === String(newText)) {
+    return { changes: [], pairs: [], oldLines: original.lines, newLines: next.lines, lineEnding: next.lineEnding };
+  }
+  const pairs = taskSettleAlignEditorLines(original.lines, next.lines);
+  const changes = taskSettlePlanEditorChanges(
+    original.lines,
+    next.lines,
+    pairs,
+    next.lineEnding,
+  );
+  return {
+    changes,
+    pairs,
+    oldLines: original.lines,
+    newLines: next.lines,
+    lineEnding: next.lineEnding,
+  };
+}
+// ---- src/139g-task-settle-editor-apply.js ----
+// Synchronous editor application for task settle (bob-cli-q4.8.1.2).
+//
+// Cursor policy is stay: when the cursor sits in the affected task's block
+// and that block moves, the caret keeps its physical line index and the
+// return value carries a jump target for the task's new location. Other
+// carets follow settle's semantic lineMap. Selections and removed lines
+// clamp into the document.
+//
+// History: staged gesture+settle is one editor.transaction. An already-
+// applied write joins through editor.cm.dispatch with userEvent "input"
+// and no isolateHistory so CM6 can merge within the history delay. When
+// editor.cm is missing, editor.transaction is a separate undo event
+// (regroup, then the original write); that fallback is the observed
+// behavior, not a join via annotations.
+
+function taskSettleNormalizePos(position) {
+  if (!position || typeof position !== "object") return null;
+  const line = Math.floor(Number(position.line));
+  const ch = Math.floor(Number(position.ch));
+  if (!Number.isInteger(line) || !Number.isInteger(ch)) return null;
+  return { line: Math.max(0, line), ch: Math.max(0, ch) };
+}
+
+function taskSettleClampPos(position, lines) {
+  const last = Math.max((lines && lines.length ? lines.length : 1) - 1, 0);
+  const line = Math.max(0, Math.min(position.line, last));
+  const ch = Math.max(0, Math.min(position.ch, String(lines[line] || "").length));
+  return { line, ch };
+}
+
+function taskSettleLineIndent(line) {
+  const text = String(line);
+  let index = 0;
+  while (text[index] === " " || text[index] === "\t") index += 1;
+  return index;
+}
+
+function taskSettleTaskBlockRange(lines, headlineIndex) {
+  if (!Array.isArray(lines) || headlineIndex < 0 || headlineIndex >= lines.length) {
+    return null;
+  }
+  const indent = taskSettleLineIndent(lines[headlineIndex]);
+  let end = headlineIndex + 1;
+  while (end < lines.length) {
+    const line = lines[end];
+    if (String(line).trim() === "") {
+      let look = end + 1;
+      while (look < lines.length && String(lines[look]).trim() === "") look += 1;
+      if (look < lines.length && taskSettleLineIndent(lines[look]) > indent) {
+        end = look;
+        continue;
+      }
+      break;
+    }
+    if (taskSettleLineIndent(line) > indent) {
+      end += 1;
+      continue;
+    }
+    break;
+  }
+  return { start: headlineIndex, end };
+}
+
+function taskSettleLineBlockId(line) {
+  let leading = 0;
+  const text = String(line);
+  while (text[leading] === " " || text[leading] === "\t") leading += 1;
+  const markerEnd = tsAfterListMarker(text, leading);
+  if (markerEnd == null) return tsTrailingBlockId(text);
+  let checkboxStart = markerEnd;
+  while (text[checkboxStart] === " " || text[checkboxStart] === "\t") checkboxStart += 1;
+  if (text[checkboxStart] !== "[") return tsTrailingBlockId(text);
+  const close = text.indexOf("]", checkboxStart + 1);
+  if (close === -1) return tsTrailingBlockId(text);
+  return tsTrailingBlockId(text.slice(close + 1));
+}
+
+function taskSettleFindIdentityLine(lines, identity) {
+  if (!identity || typeof identity !== "object" || !Array.isArray(lines)) return null;
+  const blockId = typeof identity.blockId === "string" ? identity.blockId.trim() : "";
+  const text = identity.text == null ? null : String(identity.text);
+  if (blockId) {
+    const matches = [];
+    for (let index = 0; index < lines.length; index += 1) {
+      if (taskSettleLineBlockId(lines[index]) === blockId) matches.push(index);
+    }
+    if (matches.length === 1) return matches[0];
+    if (matches.length > 1) return null;
+  }
+  const hinted = Number.isInteger(identity.line) ? identity.line : Math.floor(Number(identity.line));
+  if (Number.isInteger(hinted) && hinted >= 0 && hinted < lines.length) {
+    if (text == null || lines[hinted] === text) return hinted;
+  }
+  if (text == null) return null;
+  const textMatches = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    if (lines[index] === text) textMatches.push(index);
+  }
+  return textMatches.length === 1 ? textMatches[0] : null;
+}
+
+function taskSettleLookupLineMap(lineMap, oldLine) {
+  if (!lineMap || typeof lineMap !== "object") return null;
+  if (Object.prototype.hasOwnProperty.call(lineMap, oldLine)) {
+    const mapped = lineMap[oldLine];
+    return Number.isInteger(mapped) ? mapped : null;
+  }
+  const asString = String(oldLine);
+  if (Object.prototype.hasOwnProperty.call(lineMap, asString)) {
+    const mapped = lineMap[asString];
+    return Number.isInteger(mapped) ? mapped : null;
+  }
+  return null;
+}
+
+function taskSettleFallbackMappedLine(lineMap, oldLine, newLineCount) {
+  const last = Math.max(newLineCount - 1, 0);
+  let bestOld = -1;
+  let bestNew = null;
+  for (const [rawOld, rawNew] of Object.entries(lineMap || {})) {
+    const from = Number(rawOld);
+    const to = Number(rawNew);
+    if (!Number.isInteger(from) || !Number.isInteger(to) || from > oldLine) continue;
+    if (from > bestOld) {
+      bestOld = from;
+      bestNew = to;
+    }
+  }
+  if (bestNew == null) return 0;
+  return Math.max(0, Math.min(bestNew, last));
+}
+
+function taskSettleMapFollowPos(position, lineMap, oldLines, newLines) {
+  const clamped = taskSettleClampPos(position, oldLines);
+  const mapped = taskSettleLookupLineMap(lineMap, clamped.line);
+  if (mapped != null) {
+    const line = Math.max(0, Math.min(mapped, Math.max(newLines.length - 1, 0)));
+    const oldText = String(oldLines[clamped.line] || "");
+    const newText = String(newLines[line] || "");
+    let ch = clamped.ch;
+    if (oldText === newText) {
+      ch = Math.min(ch, newText.length);
+    } else {
+      const shared = Math.min(oldText.length, newText.length);
+      let prefix = 0;
+      while (prefix < shared && oldText[prefix] === newText[prefix]) prefix += 1;
+      if (ch <= prefix) ch = Math.min(ch, newText.length);
+      else ch = Math.min(newText.length, prefix);
+    }
+    return { line, ch: Math.max(0, ch) };
+  }
+  const line = taskSettleFallbackMappedLine(lineMap, clamped.line, newLines.length);
+  return { line, ch: 0 };
+}
+
+function taskSettleMapStayPos(position, newLines) {
+  return taskSettleClampPos(position, newLines);
+}
+
+function taskSettleCursorBelongsToBlock(cursorLine, block) {
+  return Boolean(block && cursorLine >= block.start && cursorLine < block.end);
+}
+
+function taskSettlePlanCursor(options) {
+  const {
+    cursor,
+    selection,
+    identity,
+    lineMap,
+    inputLines,
+    outputLines,
+    path,
+  } = options;
+  const lastOut = Math.max(outputLines.length - 1, 0);
+  const identityLine = taskSettleFindIdentityLine(inputLines, identity);
+  const block = identityLine != null ? taskSettleTaskBlockRange(inputLines, identityLine) : null;
+  const mappedIdentityLine =
+    identityLine != null ? taskSettleLookupLineMap(lineMap, identityLine) : null;
+  const blockMoved =
+    identityLine != null && mappedIdentityLine != null && mappedIdentityLine !== identityLine;
+
+  const from = taskSettleNormalizePos(selection && selection.from) || taskSettleNormalizePos(cursor);
+  const to = taskSettleNormalizePos(selection && selection.to) || from;
+  if (!from) {
+    return {
+      cursor: { line: 0, ch: 0 },
+      selection: { from: { line: 0, ch: 0 }, to: { line: 0, ch: 0 } },
+      jumpTarget: null,
+    };
+  }
+
+  const collapsed = from.line === to.line && from.ch === to.ch;
+  const stay =
+    collapsed &&
+    blockMoved &&
+    taskSettleCursorBelongsToBlock(from.line, block);
+
+  const mappedFrom = stay
+    ? taskSettleMapStayPos(from, outputLines)
+    : taskSettleMapFollowPos(from, lineMap, inputLines, outputLines);
+  const mappedTo = stay
+    ? mappedFrom
+    : taskSettleMapFollowPos(to, lineMap, inputLines, outputLines);
+
+  let jumpTarget = null;
+  if (stay && mappedIdentityLine != null) {
+    const jumpLine = Math.max(0, Math.min(mappedIdentityLine, lastOut));
+    const jumpText = String(outputLines[jumpLine] || "");
+    jumpTarget = {
+      path: String(path || ""),
+      line: jumpLine,
+      ch: Math.min(from.ch, jumpText.length),
+      blockId: identity && typeof identity.blockId === "string" ? identity.blockId : taskSettleLineBlockId(jumpText),
+      text: jumpText,
+    };
+  }
+
+  return {
+    cursor: mappedFrom,
+    selection: { from: mappedFrom, to: mappedTo },
+    jumpTarget,
+  };
+}
+
+function taskSettleOffsetOf(position, lines, lineEnding) {
+  let offset = 0;
+  const line = Math.max(0, Math.min(position.line, Math.max(lines.length - 1, 0)));
+  for (let index = 0; index < line; index += 1) {
+    offset += String(lines[index]).length + lineEnding.length;
+  }
+  return offset + Math.max(0, Math.min(position.ch, String(lines[line] || "").length));
+}
+
+function taskSettleViewportWouldHide(editor, cursor, scroll) {
+  if (!scroll || typeof scroll.top !== "number") return false;
+  const lineHeight =
+    typeof editor.getLineHeight === "function"
+      ? Number(editor.getLineHeight()) || 20
+      : 20;
+  const height = typeof scroll.clientHeight === "number" ? scroll.clientHeight : 400;
+  const first = Math.floor(scroll.top / lineHeight);
+  const last = first + Math.max(1, Math.floor(height / lineHeight));
+  return cursor.line < first || cursor.line > last;
+}
+
+function taskSettleDispatchApply(editor, plan, options = {}) {
+  const joinHistory = options.joinHistory === true;
+  const changes = plan.changes || [];
+  const selection = plan.selection;
+  const oldLines = plan.oldLines || [];
+  const lineEnding = plan.lineEnding || "\n";
+
+  const cm = editor.cm;
+  if (cm && typeof cm.dispatch === "function" && changes.length > 0) {
+    const cmChanges = changes.map((change) => ({
+      from: taskSettleOffsetOf(change.from, oldLines, lineEnding),
+      to: taskSettleOffsetOf(change.to || change.from, oldLines, lineEnding),
+      insert: String(change.text == null ? "" : change.text),
+    }));
+    const spec = {
+      changes: cmChanges,
+      userEvent: joinHistory ? "input" : "bob.taskSettle",
+    };
+    if (selection) {
+      spec.selection = {
+        anchor: taskSettleOffsetOf(selection.from, plan.newLines, lineEnding),
+        head: taskSettleOffsetOf(selection.to || selection.from, plan.newLines, lineEnding),
+      };
+    }
+    cm.dispatch(spec);
+    return { historyJoined: joinHistory, via: "cm.dispatch" };
+  }
+
+  if (typeof editor.transaction === "function") {
+    const transaction = { changes };
+    if (selection) transaction.selection = { from: selection.from, to: selection.to };
+    editor.transaction(transaction);
+    return {
+      historyJoined: false,
+      via: "editor.transaction",
+    };
+  }
+
+  if (typeof editor.replaceRange !== "function") {
+    return { historyJoined: false, via: null };
+  }
+  const descending = [...changes].sort(
+    (left, right) => right.from.line - left.from.line || right.from.ch - left.from.ch,
+  );
+  for (const change of descending) {
+    editor.replaceRange(change.text, change.from, change.to || change.from);
+  }
+  if (selection && typeof editor.setCursor === "function") {
+    editor.setCursor(selection.from.line, selection.from.ch);
+  }
+  return { historyJoined: false, via: "replaceRange" };
+}
+
+function taskSettleIdleOutcome(fields) {
+  return {
+    contents: fields.contents,
+    changed: false,
+    applied: false,
+    lineMap: fields.lineMap || {},
+    jumpTarget: null,
+    cursor: fields.cursor || null,
+    reason: fields.reason,
+    warnings: fields.warnings || [],
+    historyJoined: null,
+  };
+}
+
+function taskSettleApplyToEditor(editor, path, options = {}, host = null) {
+  const opts = options && typeof options === "object" ? options : {};
+  const app = opts.app || (host && host.app) || null;
+  if (!editor || typeof editor.getValue !== "function") {
+    return taskSettleIdleOutcome({ contents: "", reason: "editor" });
+  }
+
+  const live = String(editor.getValue());
+  const expected = opts.expected != null ? String(opts.expected) : live;
+  if (live !== expected) {
+    return taskSettleIdleOutcome({
+      contents: live,
+      cursor: typeof editor.getCursor === "function" ? editor.getCursor() : null,
+      reason: "preimage",
+    });
+  }
+
+  const guard = taskSettleGuardEditorPath(app, editor, path);
+  if (!guard.ok) {
+    return taskSettleIdleOutcome({
+      contents: live,
+      cursor: typeof editor.getCursor === "function" ? editor.getCursor() : null,
+      reason: guard.reason,
+    });
+  }
+
+  const context = opts.context || taskSettleCaptureContext(app, opts);
+  const settleInput = opts.contents != null ? String(opts.contents) : live;
+  const settled = taskSettleNote(
+    normalizeVaultPath(path),
+    settleInput,
+    context.today,
+    context.classification,
+    context.dailyPath,
+  );
+
+  const inputSplit = taskSettleSplitEditorText(settleInput);
+  const outputSplit = taskSettleSplitEditorText(settled.contents);
+  const liveSplit = taskSettleSplitEditorText(live);
+
+  let cursor = taskSettleNormalizePos(opts.cursor);
+  if (!cursor && typeof editor.getCursor === "function") {
+    cursor = taskSettleNormalizePos(editor.getCursor());
+  }
+  if (!cursor) cursor = { line: 0, ch: 0 };
+
+  let identity = opts.identity && typeof opts.identity === "object" ? { ...opts.identity } : null;
+  if (settleInput !== live && cursor) {
+    const livePairs = taskSettleAlignEditorLines(liveSplit.lines, inputSplit.lines);
+    cursor = taskSettleMapPositionThroughAlignment(
+      cursor,
+      liveSplit.lines,
+      inputSplit.lines,
+      livePairs,
+    );
+    if (identity && Number.isInteger(identity.line)) {
+      const mappedIdentity = taskSettleMapPositionThroughAlignment(
+        { line: identity.line, ch: 0 },
+        liveSplit.lines,
+        inputSplit.lines,
+        livePairs,
+      );
+      identity = { ...identity, line: mappedIdentity.line };
+    }
+  }
+
+  const selection = opts.selection && typeof opts.selection === "object"
+    ? {
+        from: taskSettleNormalizePos(opts.selection.from) || cursor,
+        to: taskSettleNormalizePos(opts.selection.to) || cursor,
+      }
+    : { from: cursor, to: cursor };
+
+  const plannedCursor = taskSettlePlanCursor({
+    cursor,
+    selection,
+    identity,
+    lineMap: settled.lineMap,
+    inputLines: inputSplit.lines,
+    outputLines: outputSplit.lines,
+    path: normalizeVaultPath(path),
+  });
+
+  if (!settled.changed && settleInput === live) {
+    return {
+      contents: live,
+      changed: false,
+      applied: false,
+      lineMap: settled.lineMap,
+      jumpTarget: null,
+      cursor: taskSettleClampPos(cursor, liveSplit.lines),
+      reason: "noop",
+      warnings: settled.warnings || [],
+      historyJoined: null,
+    };
+  }
+
+  if (live === settled.contents) {
+    return {
+      contents: live,
+      changed: false,
+      applied: false,
+      lineMap: settled.lineMap,
+      jumpTarget: null,
+      cursor: taskSettleClampPos(cursor, liveSplit.lines),
+      reason: "noop",
+      warnings: settled.warnings || [],
+      historyJoined: null,
+    };
+  }
+
+  const edits = taskSettlePlanContentEdits(live, settled.contents);
+  const scroll =
+    typeof editor.getScrollInfo === "function" ? editor.getScrollInfo() : null;
+  const joinHistory =
+    opts.joinHistory === true ||
+    (opts.joinHistory !== false && settleInput === live);
+
+  const dispatched = taskSettleDispatchApply(
+    editor,
+    {
+      changes: edits.changes,
+      selection: plannedCursor.selection,
+      oldLines: edits.oldLines,
+      newLines: edits.newLines,
+      lineEnding: edits.lineEnding,
+    },
+    { joinHistory },
+  );
+
+  if (dispatched.via == null) {
+    return taskSettleIdleOutcome({
+      contents: live,
+      cursor: typeof editor.getCursor === "function" ? editor.getCursor() : null,
+      reason: "editor",
+      warnings: settled.warnings || [],
+      lineMap: settled.lineMap,
+    });
+  }
+
+  if (
+    scroll &&
+    typeof editor.scrollTo === "function" &&
+    !taskSettleViewportWouldHide(editor, plannedCursor.cursor, scroll)
+  ) {
+    try {
+      editor.scrollTo(scroll.left, scroll.top);
+    } catch (_error) {
+      // Viewport restoration is best-effort.
+    }
+  }
+
+  return {
+    contents: typeof editor.getValue === "function" ? String(editor.getValue()) : settled.contents,
+    changed: settled.changed || settleInput !== live,
+    applied: true,
+    lineMap: settled.lineMap,
+    jumpTarget: plannedCursor.jumpTarget,
+    cursor: plannedCursor.cursor,
+    reason: null,
+    warnings: settled.warnings || [],
+    historyJoined: dispatched.historyJoined,
+  };
+}
 // ---- src/139-unblocked-glyph.js ----
 // --- Unblocked hand-off glyph: pure mark-core ---------------------------
 // Owned by the epic plan `plan:202610/successor_links.md`
@@ -39833,6 +40770,54 @@ class BobLedgerToolsNotebooksMixin {
     } catch (_error) {
       return { ok: false, code: "failed", message: "bob notebooks create failed." };
     }
+  }
+}
+// ---- src/176-plugin-task-settle-api.js ----
+// Guarded editor adapter for task settle (bob-cli-q4.8.1.2 editor-apply).
+// Follows the versioned-namespace shape of `174-plugin-task-merge-api.js`.
+// The frozen `taskSettle` v1 object is built here but is NOT published on
+// `this.api` until pending-api lands schedulePending/flushPending.
+
+const TASK_SETTLE_API_VERSION = 1;
+
+class BobLedgerToolsTaskSettleMixin {
+  taskSettleCaptureContext(options = {}) {
+    return taskSettleCaptureContext(this.app, options);
+  }
+
+  taskSettleApplyToEditor(editor, path, options = {}) {
+    return taskSettleApplyToEditor(editor, path, options, this);
+  }
+
+  // Built for pending-api to publish; unpublished on the root api in this phase.
+  taskSettleApi() {
+    if (!this.taskSettleApiValue) {
+      const plugin = this;
+      this.taskSettleApiValue = Object.freeze({
+        version: TASK_SETTLE_API_VERSION,
+        applyToEditor: (editor, path, options) =>
+          plugin.taskSettleApplyToEditor(editor, path, options),
+        settleNote: (request) => plugin.taskSettleNote(request),
+      });
+    }
+    return this.taskSettleApiValue;
+  }
+
+  taskSettleNote(request) {
+    const req = request && typeof request === "object" ? request : {};
+    const context = this.taskSettleCaptureContext({
+      today: req.today,
+      dailyPath: req.dailyPath,
+      tasksSettings: req.tasksSettings,
+      now: req.now,
+    });
+    return taskSettleNote(
+      normalizeVaultPath(req.path),
+      String(req.contents == null ? "" : req.contents),
+      context.today,
+      context.classification,
+      context.dailyPath,
+    );
   }
 }
 // ---- src/180-plugin-plan-and-ready.js ----
@@ -186917,6 +187902,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsDependencyModelMixin,
   BobLedgerToolsRelationLabelsMixin,
   BobLedgerToolsTaskMergeMixin,
+  BobLedgerToolsTaskSettleMixin,
   BobLedgerToolsNotebooksMixin,
   BobLedgerToolsAttachmentsMixin,
   BobLedgerToolsRelationIndexMixin,
@@ -190023,7 +191009,7 @@ try {
   // Test exports are best-effort.
 }
 // ---- src/351-exports-task-settle.js ----
-// Test exports for the pure task-settle twin (bob-cli-q4.8.1.1 pure-twin).
+// Test exports for the task-settle twin (pure-twin + editor-apply).
 try {
   if (module.exports && module.exports.helpers) {
     Object.assign(module.exports.helpers, {
@@ -190038,6 +191024,26 @@ try {
       taskSettleIsLegacyBadgeMarker,
       taskSettleLogicalLines,
       taskSettleTextValue,
+      taskSettleDefaultStatusTypes,
+      taskSettleDefaultTasksSettings,
+      taskSettleNormalizeTasksSettings,
+      taskSettleReadTasksSettings,
+      taskSettleClassificationFromTasksSettings,
+      taskSettleCaptureContext,
+      taskSettleIsMarkdownView,
+      taskSettleFindMarkdownViewForEditor,
+      taskSettleGuardEditorPath,
+      taskSettleSplitEditorText,
+      taskSettleAlignEditorLines,
+      taskSettlePlanEditorChanges,
+      taskSettlePlanContentEdits,
+      taskSettleIsWholeDocumentReplacement,
+      taskSettleFindIdentityLine,
+      taskSettleTaskBlockRange,
+      taskSettlePlanCursor,
+      taskSettleApplyToEditor,
+      TASK_SETTLE_API_VERSION,
+      BobLedgerToolsTaskSettleMixin,
     });
   }
 } catch (error) {

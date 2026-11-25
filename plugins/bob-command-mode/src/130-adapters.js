@@ -48,9 +48,19 @@ function cmAdapterRefMeet(run, text) {
   const filed = source.match(/^(?:Filed|Replaced) meeting notes as ([^\r\n]+)/im);
   if (!filed) return null;
   const note = filed[1].trim();
-  const event = source.match(/^relation\s+.*\s+(\S+#\^[A-Za-z0-9-]+)\s*$/im);
+  const relationLine = source.match(/^relation\s+.*$/im);
+  let eventRef = null;
+  if (relationLine) {
+    const wikilink = relationLine[0].match(/\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/);
+    if (wikilink) {
+      eventRef = wikilink[1].trim();
+    } else {
+      const bare = relationLine[0].match(/(\S+#\^[A-Za-z0-9-]+)/);
+      if (bare) eventRef = bare[1];
+    }
+  }
   const actions = [cmAdapterAction("open-vault-note", "Open note", { path: note })];
-  if (event) actions.push(cmAdapterAction("open-event", "Open event", { eventRef: event[1] }));
+  if (eventRef) actions.push(cmAdapterAction("open-event", "Open event", { eventRef }));
   return {
     outcome: "completed",
     summary: "Filed meeting notes · " + note,

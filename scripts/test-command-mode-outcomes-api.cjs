@@ -330,12 +330,34 @@ test("catalog outcome adapters cover command-specific results and actions", () =
     0,
     "Filed meeting notes as ref/meetings/261124_cedar_review.md\n" +
       "task      job#^read-cedar (next)\n" +
-      "relation  notes from 20261124#^cedar-review\n",
+      "relation  notes from [[20261124#^cedar-review]]\n",
   );
   assert.equal(meeting.outcome, "completed");
   assert.deepEqual(meeting.actions, [
     { id: "open-vault-note", label: "Open note", path: "ref/meetings/261124_cedar_review.md" },
     { id: "open-event", label: "Open event", eventRef: "20261124#^cedar-review" },
+  ]);
+  const meetingBare = classifyAdapter(
+    "ref-meet",
+    0,
+    "Filed meeting notes as ref/meetings/261124_cedar_review.md\n" +
+      "task      job#^read-cedar (next)\n" +
+      "relation  notes from 20261124#^cedar-review\n",
+  );
+  assert.deepEqual(meetingBare.actions, [
+    { id: "open-vault-note", label: "Open note", path: "ref/meetings/261124_cedar_review.md" },
+    { id: "open-event", label: "Open event", eventRef: "20261124#^cedar-review" },
+  ]);
+  const meetingPathAlias = classifyAdapter(
+    "ref-meet",
+    0,
+    "Filed meeting notes as ref/meetings/261124_cedar_review.md\n" +
+      "task      job#^read-cedar (next)\n" +
+      "relation  notes from [[2026/20261124#^cedar-review|Cedar review]]\n",
+  );
+  assert.deepEqual(meetingPathAlias.actions, [
+    { id: "open-vault-note", label: "Open note", path: "ref/meetings/261124_cedar_review.md" },
+    { id: "open-event", label: "Open event", eventRef: "2026/20261124#^cedar-review" },
   ]);
   assert.deepEqual(classifyAdapter("ref-meet", 0, "Would file meeting notes as ref/meetings/261124_cedar_review.md\n"), {
     outcome: "completed", summary: "Would file meeting notes as ref/meetings/261124_cedar_review.md",

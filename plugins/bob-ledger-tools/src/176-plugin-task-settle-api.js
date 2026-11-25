@@ -1,7 +1,6 @@
-// Guarded editor adapter for task settle (bob-cli-q4.8.1.2 editor-apply).
+// Complete public task settle provider (bob-cli-q4.8.1.3 pending-api).
 // Follows the versioned-namespace shape of `174-plugin-task-merge-api.js`.
-// The frozen `taskSettle` v1 object is built here but is NOT published on
-// `this.api` until pending-api lands schedulePending/flushPending.
+// The complete frozen taskSettle v1 namespace is published by the root API.
 
 const TASK_SETTLE_API_VERSION = 1;
 
@@ -14,7 +13,6 @@ class BobLedgerToolsTaskSettleMixin {
     return taskSettleApplyToEditor(editor, path, options, this);
   }
 
-  // Built for pending-api to publish; unpublished on the root api in this phase.
   taskSettleApi() {
     if (!this.taskSettleApiValue) {
       const plugin = this;
@@ -23,6 +21,8 @@ class BobLedgerToolsTaskSettleMixin {
         applyToEditor: (editor, path, options) =>
           plugin.taskSettleApplyToEditor(editor, path, options),
         settleNote: (request) => plugin.taskSettleNote(request),
+        schedulePending: (request) => plugin.taskSettleSchedulePending(request),
+        flushPending: () => plugin.taskSettleFlushPending(),
       });
     }
     return this.taskSettleApiValue;

@@ -16,7 +16,7 @@ note properties: [Property Editor](property-editor.md).
 | --- | --- |
 | Name | Bob Ledger Tools |
 | ID | `bob-ledger-tools` |
-| Version | 1.159.1 |
+| Version | 1.160.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
 | Description | Render Bob’s task and Pomodoro information in Obsidian: planning and freshness marks, dependencies, relations, calendar events, task types, and ledger navigation. Report-driven cards cover bank subscriptions, Stats, Reading Board, albums, projects, and areas. Snippets, session toggles, and versioned APIs connect these views to Bob and other Bob plugins. |
@@ -592,6 +592,10 @@ in today's ledger. Day strip and Stats say **Time by type** / **Types**; JSON
 still uses the `theme` dimension. Exempt types such as PLAN, and grey-area
 types, have no hue, so their `#TYPE` uses muted ink (`--bob-type-ink-muted`)
 instead of a palette color.
+
+## Task settle provider
+
+The [`taskSettle` API](https://bobs-org.github.io/develop/plugins/plugin-apis/#tasksettle-v1) provides guarded, scheduled task settling.
 
 ## Notebooks
 

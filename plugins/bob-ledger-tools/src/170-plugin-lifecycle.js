@@ -1,5 +1,6 @@
 class BobLedgerToolsPlugin extends Plugin {
   onload() {
+    this.taskSettleInstallPendingLifecycle();
     this.initializeRelationIndex();
     this.vimMappingsRegistered = false;
     this.pendingCenterDeferred = null;
@@ -226,6 +227,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.statsAppendQueue = Promise.resolve();
     this.api = Object.freeze({
       version: 3,
+      taskSettle: this.taskSettleApi(),
       caps: () => loadPlanCaps().caps,
       planBudget: (options = {}) => this.planBudgetForCallers(options),
       todayKeys: () => this.todayKeys(),
@@ -694,9 +696,11 @@ class BobLedgerToolsPlugin extends Plugin {
     this.setupBankCards(); this.setupBankBadge(); this.setupBankMarks(); this.setupBankSetup(); this.setupBankSetupCard(); this.setupSchemaDoubleEquals?.();
     this.setupNotebookCatalog(); this.setupAlbumCatalog(); this.setupProjectsCatalog(); this.setupAreasCatalog(); this.setupAlbumRecords(); this.setupNotebookHeader(); this.setupAlbumHeader(); this.setupHomeCard(); this.setupRecordSheet?.(); this.setupIntentionCard?.(); this.setupIntentionUpdate?.(); this.setupIntentionCardEditor?.(); this.setupIntentionCardNavigation?.(); this.setupRecordUpdate?.(); this.setupPropertyUpdate?.(); this.setupRecordCard?.(); this.setupPropertyEditorEntrypoints?.(); this.setupPropertyEditorSettingsEntrypoints?.(); this.setupPropertyCapabilityRouting?.(); this.setupSubscriptionSurfaces(); this.setupAlbumSchemaEntrypoints?.(); this.setupAlbumYamlExcursion?.();
     this.setupReadingBoardBlock();
+    this.taskSettleWrapRegisteredCommands();
   }
 
   onunload() {
+    this.taskSettleDisposePendingLifecycle();
     this.teardownLedgerToolsSurfaces();
   }
 }

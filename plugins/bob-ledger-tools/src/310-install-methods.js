@@ -117,6 +117,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsRelationLabelsMixin,
   BobLedgerToolsTaskMergeMixin,
   BobLedgerToolsTaskSettleMixin,
+  BobLedgerToolsTaskSettlePendingMixin,
   BobLedgerToolsNotebooksMixin,
   BobLedgerToolsAttachmentsMixin,
   BobLedgerToolsRelationIndexMixin,

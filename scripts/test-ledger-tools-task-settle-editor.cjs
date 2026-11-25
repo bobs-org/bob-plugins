@@ -60,6 +60,9 @@ Module._load = function loadWithObsidianStubs(request, parent, isMain) {
       keymap: { of: (value) => value },
     };
   }
+  if (request === "@codemirror/commands") {
+    return { undoDepth: (state) => state.undoGroups };
+  }
   return originalLoad.call(this, request, parent, isMain);
 };
 
@@ -114,6 +117,7 @@ class SettleEditor extends Cm6MappingEditor {
     if (options.withCm) {
       const editor = this;
       this.cm = {
+        state: { get undoGroups() { return editor.undoGroups; } },
         dispatch(spec) {
           editor.lastUserEvent = spec && spec.userEvent;
           const joined =
@@ -434,6 +438,7 @@ test("already-applied write joins through cm.dispatch; transaction fallback is a
   withCm.undoGroups = 1;
   const joined = apply(withCm, AREA, {
     identity: { blockId: "design", line: 8, text: "- [/] #task Finish the design ^design" },
+    joinHistory: true,
   });
   assert.equal(joined.applied, true);
   assert.equal(joined.historyJoined, true);
@@ -444,6 +449,7 @@ test("already-applied write joins through cm.dispatch; transaction fallback is a
   fallback.undoGroups = 1;
   const separate = apply(fallback, AREA, {
     identity: { blockId: "design", line: 8, text: "- [/] #task Finish the design ^design" },
+    joinHistory: true,
   });
   assert.equal(separate.applied, true);
   assert.equal(separate.historyJoined, false);
@@ -454,7 +460,7 @@ test("already-applied write joins through cm.dispatch; transaction fallback is a
   );
 });
 
-test("mixin applyToEditor is installed and the public namespace stays unpublished", () => {
+test("mixin applyToEditor is installed and the complete public namespace is available", () => {
   const editor = new SettleEditor(AREA_INPUT, { line: 8, ch: 0 });
   const app = makeApp({ editor, path: AREA });
   const plugin = new LedgerToolsPlugin(app);
@@ -465,16 +471,19 @@ test("mixin applyToEditor is installed and the public namespace stays unpublishe
   });
   assert.equal(result.applied, true);
   assert.equal(plugin.api, undefined, "root api is not installed until onload");
-  const unpublished = plugin.taskSettleApi();
-  assert.equal(unpublished.version, 1);
-  assert.equal(typeof unpublished.applyToEditor, "function");
+  const namespace = plugin.taskSettleApi();
+  assert.equal(namespace.version, 1);
+  assert.equal(Object.isFrozen(namespace), true);
+  for (const name of ["settleNote", "applyToEditor", "schedulePending", "flushPending"]) {
+    assert.equal(typeof namespace[name], "function", name);
+  }
   const source = require("node:fs").readFileSync(
     require("node:path").join(__dirname, "../plugins/bob-ledger-tools/src/170-plugin-lifecycle.js"),
     "utf8",
   );
   assert.equal(
-    /taskSettle:\s*this\.taskSettleApi/.test(source),
-    false,
-    "onload does not publish taskSettle on this.api",
+    /taskSettle:\s*this\.taskSettleApi\(\)/.test(source),
+    true,
+    "onload publishes taskSettle on this.api",
   );
 });

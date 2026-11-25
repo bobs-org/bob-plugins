@@ -1034,4 +1034,4 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { runSmoke };
+module.exports = { runSmoke, CdpClient, freePort, seedProfileVault };

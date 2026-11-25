@@ -267,8 +267,15 @@ function taskSettleDispatchApply(editor, plan, options = {}) {
         head: taskSettleOffsetOf(selection.to || selection.from, plan.newLines, lineEnding),
       };
     }
+    const historyDepthBefore = joinHistory ? taskSettleHistoryDepth(cm) : null;
     cm.dispatch(spec);
-    return { historyJoined: joinHistory, via: "cm.dispatch" };
+    const historyDepthAfter = joinHistory ? taskSettleHistoryDepth(cm) : null;
+    const historyJoined = !joinHistory
+      ? false
+      : historyDepthBefore == null || historyDepthAfter == null
+        ? null
+        : historyDepthBefore > 0 && historyDepthAfter === historyDepthBefore;
+    return { historyJoined, via: "cm.dispatch" };
   }
 
   if (typeof editor.transaction === "function") {
@@ -424,9 +431,7 @@ function taskSettleApplyToEditor(editor, path, options = {}, host = null) {
   const edits = taskSettlePlanContentEdits(live, settled.contents);
   const scroll =
     typeof editor.getScrollInfo === "function" ? editor.getScrollInfo() : null;
-  const joinHistory =
-    opts.joinHistory === true ||
-    (opts.joinHistory !== false && settleInput === live);
+  const joinHistory = opts.joinHistory === true;
 
   const dispatched = taskSettleDispatchApply(
     editor,

@@ -31,8 +31,14 @@ try {
       taskSettleTaskBlockRange,
       taskSettlePlanCursor,
       taskSettleApplyToEditor,
+      taskSettlePendingIdentityKey,
+      taskSettleCreatePendingScheduler,
+      taskSettlePendingBufferFingerprint,
+      taskSettleHistoryDepth,
+      TASK_SETTLE_PENDING_DELAY_MS,
       TASK_SETTLE_API_VERSION,
       BobLedgerToolsTaskSettleMixin,
+      BobLedgerToolsTaskSettlePendingMixin,
     });
   }
 } catch (error) {

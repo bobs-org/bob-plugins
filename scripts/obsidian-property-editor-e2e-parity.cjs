@@ -421,7 +421,7 @@ async function runMixedProtectedDeleteAcceptance(ctx) {
 async function runCopyAcceptance(ctx, baseBytes) {
   const {
     client, report, vaultDir, shared, sendKey, waitForEditor, openPropertyEditor,
-    addCheck, closePropertyEditor, propertyRowClick, assertDiskBytes,
+    addCheck, closePropertyEditor, propertyRowClick, assertDiskBytes, selectorClick,
   } = ctx;
   const parityPath = path.join(vaultDir, "parity.md");
   const projectPath = path.join(vaultDir, "projects/project-note.md");
@@ -481,7 +481,16 @@ async function runCopyAcceptance(ctx, baseBytes) {
   await shared.openNote(client, "projects/project-note.md", "live");
   const projectBefore = fs.readFileSync(projectPath, "utf8");
   await openPropertyEditor(client, "projects/project-note.md", { key: "project_digest" });
-  await waitForEditor(client, (value) => value.rows.some((row) => row.key === "project_digest"), "protected copy rows");
+  let probe = await waitForEditor(client,
+    (value) => value.rows.some((row) => row.key === "keep_exact"), "protected copy rows");
+  if (!probe.rows.some((row) => row.key === "project_digest")) {
+    if (!await selectorClick(client, '.bob-property-editor [data-property-group-toggle="managed"]')) {
+      throw new Error("Could not expand Bob-managed properties for protected copy");
+    }
+    probe = await waitForEditor(client,
+      (value) => value.rows.some((row) => row.key === "project_digest"),
+      "expanded Bob-managed properties for protected copy");
+  }
   await propertyRowClick(client, "project_digest");
   await sendKey(client, " ");
   await waitForEditor(client, (value) => value.rows.some((row) => row.key === "project_digest" && row.marked), "protected marked");

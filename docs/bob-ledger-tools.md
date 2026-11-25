@@ -67,6 +67,7 @@ note properties: [Property Editor](property-editor.md).
 | Toggle mail link marks | `toggle-mail-link-marks` | — |
 | Toggle root marks | `toggle-root-marks` | — |
 | Toggle task date marks | `toggle-date-marks` | — |
+| Toggle task drawer marks | `toggle-task-drawer-marks` | — |
 | Toggle task freshness marks | `toggle-freshness-marks` | — |
 | Toggle task link marks | `toggle-task-link-marks` | — |
 | Toggle task priority marks | `toggle-priority-marks` | — |

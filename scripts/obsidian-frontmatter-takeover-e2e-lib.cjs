@@ -400,6 +400,33 @@ const PROBE_SOURCE = "(() => {" + PAGE_COMMON + String.raw`
       ? (scope.querySelector(".bob-album-header, .bob-record-sheet, .bob-intention-card, .bob-bank-setup") || null)
       : null;
     const foot = card && card.querySelector ? card.querySelector(".bob-property-card-foot") : null;
+    const bankGate = path === "bank.md" && helpers && plugin ? (() => {
+      const source = mode === "live"
+        ? String(liveViewOf(view)?.state?.doc?.toString?.() || "")
+        : String(plugin.bankSetupSourceCache?.get?.("bank.md") || "");
+      const cached = app.metadataCache.getFileCache(file)?.frontmatter || null;
+      const livePath = mode === "live"
+        ? (typeof plugin.notebookHeaderLivePath === "function" ? plugin.notebookHeaderLivePath(liveViewOf(view)) : null)
+        : null;
+      let cacheEvidence = false;
+      try { cacheEvidence = helpers.propertyCardFrontmatterCacheEvidence(source, cached); } catch (_) {}
+      let modelCurrent = false;
+      try { modelCurrent = Boolean(plugin.bankSetupCardFor("bank.md", source)?.model); } catch (_) {}
+      return {
+        active: plugin.bankSetupActive === true,
+        desktop: helpers.propertyCardDesktopPlatform?.isDesktopApp,
+        scopeDenied: helpers.propertyCardFrontmatterScopeDenied?.(scope) === true,
+        livePath,
+        mountPath: card?.getAttribute?.("data-bank-setup-source") || null,
+        mountConnected: Boolean(card?.isConnected),
+        scopeContainsMount: Boolean(scope?.contains?.(card)),
+        footPresent: Boolean(foot),
+        cacheEvidence,
+        cachedKeys: cached && typeof cached === "object" ? Object.keys(cached).sort() : [],
+        sourceLength: source.length,
+        modelCurrent,
+      };
+    })() : null;
     const drawer = foot && foot.querySelector ? foot.querySelector(".bob-property-card-foot-drawer") : null;
     const drawerKeys = drawer ? Array.from(drawer.querySelectorAll("[data-property-key]")).map((node) => node.getAttribute("data-property-key")).filter(Boolean) : [];
     const editor = document.querySelector(".bob-property-editor");
@@ -437,6 +464,7 @@ const PROBE_SOURCE = "(() => {" + PAGE_COMMON + String.raw`
         || /add/i.test(editor.getAttribute("data-property-mode") || "")
       )),
       capability,
+      bankGate,
       activeTag: active ? String(active.tagName || "").toLowerCase() : null,
       activeInside,
       activeClass: active ? String(active.className || "") : "",
@@ -503,7 +531,11 @@ const PROBE_SOURCE = "(() => {" + PAGE_COMMON + String.raw`
       }
       const docLine = cm.state.doc.line(Math.min(Math.max(line + 1, 1), cm.state.doc.lines));
       const target = Math.min(docLine.from + (ch || 0), docLine.to);
-      cm.dispatch({ selection: { anchor: target }, scrollIntoView: true });
+      if (view && typeof view.setCursor === "function") {
+        view.setCursor({ line, ch: ch || 0 });
+      } else {
+        cm.dispatch({ selection: { anchor: target }, scrollIntoView: true });
+      }
       const head = cm.state.selection.main.head;
       return { ok: head === target, target, actual: head };
     } catch (error) {

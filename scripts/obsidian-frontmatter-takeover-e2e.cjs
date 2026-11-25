@@ -761,7 +761,10 @@ async function run(args) {
           containerVisible: Boolean(container && container.getClientRects().length
             && getComputedStyle(container).display !== "none") };
       })()`);
-      return { ok: result.hasEmbed && !result.owned && result.containerPresent && result.containerVisible, result };
+      // Embedded notes keep Obsidian's existing preview behavior: they do not
+      // mount a separate property card or acquire whole-container ownership.
+      // Obsidian itself can omit the native Properties block from embed layout.
+      return { ok: result.hasEmbed && !result.hasCard && !result.owned && result.containerPresent, result };
     });
     await attempt("deny-hover", async () => {
       await ctx.page.open(ctx.main, P.hover, "reading");
@@ -1656,8 +1659,8 @@ async function run(args) {
             const row = await ctx.page.shot(name, [label, mode, theme, widthName], width);
             const after = await ctx.page.probe(ctx.main);
             row.captureProbes = { before, after };
-            row.captureFailures = [...lib.screenshotFailures(before, notePath, mode, label === "bank"),
-              ...lib.screenshotFailures(after, notePath, mode, label === "bank")];
+            row.captureFailures = [...lib.screenshotFailures(before, notePath, mode),
+              ...lib.screenshotFailures(after, notePath, mode)];
           }
         }
       }

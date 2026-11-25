@@ -10,8 +10,8 @@ const path = require("node:path");
 const lib = require("./obsidian-property-editor-e2e-lib.cjs");
 const { clipboardRead, clipboardWrite } = require("./obsidian-property-editor-e2e-parity.cjs");
 
-const AREA = "areas/settings-acceptance.md";
-const PROJECT = "projects/settings-acceptance.md";
+const AREA = "settings-acceptance-area.md";
+const PROJECT = "settings-acceptance-project.md";
 const TOP_PROJECT = "projects/top-level-settings.md";
 const BANK = "bank.md";
 
@@ -29,6 +29,45 @@ function verifyFixtures(ctx, report, runBob) {
     "the editable Stats root fixture must be a subproject");
   assert.equal(contracts[TOP_PROJECT].settings.find((row) => row.id === "root").disabled, true);
   assert.equal(contracts[AREA].settings.find((row) => row.id === "ready_cap").declared, false);
+
+  // Capture names collide only between routable capture targets. Prove with
+  // the same bob that the fixtures produce the cross-note warning (and that
+  // a dry run never writes) before Obsidian is asked to show it inline.
+  const projectPath = path.join(ctx.vaultDir, PROJECT);
+  const projectBefore = fs.readFileSync(projectPath, "utf8");
+  const shown = runBob(ctx, ["props", "show", PROJECT, "-f", "json"]);
+  const envelope = {
+    schema_version: 1,
+    expect: shown.report?.fingerprint,
+    ops: [{ op: "setting.set", setting: "project_name_aliases", value: ["Garden"] }],
+  };
+  const preview = runBob(ctx, ["props", "update", PROJECT, "-f", "json", "-i", "-", "-d"], JSON.stringify(envelope));
+  report.bobRuns.push(preview);
+  const warnings = Array.isArray(preview.report?.warnings) ? preview.report.warnings : [];
+  assert.equal(preview.exitCode, 0, `Capture names preflight must preview: ${preview.stderr}`);
+  assert.equal(preview.report?.ok, true, "Capture names collision is a warning, not a refusal");
+  assert.ok(warnings.some((warning) => warning?.code === "project_name_aliases_conflict"),
+    `Garden must collide with the area fixture: ${JSON.stringify(warnings)}`);
+  assert.equal(fs.readFileSync(projectPath, "utf8"), projectBefore, "Capture names preflight is a dry run");
+}
+
+// The ^prj handoff opens navigation's Task Card, which reads a bullet-property
+// config from the XDG config home. Give Obsidian a hermetic one so the card
+// can open in the scratch profile; bob keeps its own BOB_CONFIG_FILE.
+function seedTaskCardConfig(profileDir) {
+  const configHome = path.join(profileDir, "nav-config");
+  fs.mkdirSync(path.join(configHome, "bob"), { recursive: true });
+  fs.writeFileSync(path.join(configHome, "bob", "config.yml"), [
+    "timezone: America/New_York",
+    "",
+    "properties:",
+    "  - name: scheduled",
+    "    values: date",
+    "  - name: dependsOn",
+    "    values: local_task_id",
+    "",
+  ].join("\n"));
+  return configHome;
 }
 
 function rowById(probe, id) {
@@ -326,15 +365,21 @@ async function simpleSettingsAcceptance(ctx) {
   await selectSetting(ctx, "root");
   await ctx.sendKey(ctx.client, "Enter");
   probe = await ctx.waitForEditor(ctx.client,
-    (value) => lib.yamlHasScalar(fs.readFileSync(projectPath, "utf8"), "root", "true")
-      && rowById(value, "setting::root")?.selected === true,
+    (value) => !value.pendingApply && /Saved/.test(value.status)
+      && lib.yamlHasScalar(fs.readFileSync(projectPath, "utf8"), "root", "true")
+      && rowById(value, "setting::root")?.selected === true
+      && /root · true/.test(rowById(value, "setting::root")?.valueText || ""),
     "Stats root enabled on nested project");
   const rootSet = fs.readFileSync(projectPath, "utf8");
   ctx.addCheck(ctx.report, "settings invalid and warning values Stats root writes true",
     /^root:\s*true\s*$/m.test(rootSet) && !/^root:\s*false\s*$/m.test(rootSet), { rootSet });
+  // Disk replacement precedes the response and final repaint. Wait above for
+  // the confirmed contract/save guard before issuing a separate second toggle.
   await ctx.sendKey(ctx.client, "Enter");
   probe = await ctx.waitForEditor(ctx.client,
-    (value) => fs.readFileSync(projectPath, "utf8") === projectBefore
+    (value) => !value.pendingApply && /Saved/.test(value.status)
+      && fs.readFileSync(projectPath, "utf8") === projectBefore
+      && rowById(value, "setting::root")?.classes.includes("is-ghost") === true
       && rowById(value, "setting::root")?.selected === true,
     "Stats root clear to absence");
   ctx.assertDiskBytes(ctx.report, "settings Stats root toggle back clears key", projectPath, projectBefore);
@@ -497,12 +542,24 @@ async function aliasWarningAcceptance(ctx) {
   // its cross-note collision while still allowing this explicit override.
   await ctx.setInput(ctx.client, "[data-property-stage-input]", "Garden");
   await ctx.sendKey(ctx.client, "Enter");
-  await ctx.shared.waitFor(ctx.client,
-    `document.querySelector(".bob-property-editor-stage-preview")?.textContent || ""`,
-    (text) => /Preview ·/.test(text), "Capture names collision preview", 10_000);
-  const warning = await ctx.client.evaluate(`document.querySelector(".bob-property-editor-stage")?.textContent || ""`);
+  // The local "Preview ·" copy paints before Bob answers; read the warning
+  // only after Bob's dry-run is ready for exactly this [Garden] draft.
+  const settled = await ctx.waitForEditor(ctx.client,
+    (value) => lib.stagePreviewSettled(value)
+      && JSON.parse(value.stageSession.currentOps)[0]?.value?.join?.("|") === "Garden",
+    "Capture names collision preview settled by Bob", 20_000);
+  let warning = "";
+  try {
+    warning = await ctx.shared.waitFor(ctx.client,
+      `document.querySelector(".bob-property-editor-stage")?.textContent || ""`,
+      (text) => /ambiguous|claimed by more than one/i.test(text), "Capture names collision painted", 5_000);
+  } catch (_) {
+    warning = await ctx.client.evaluate(`document.querySelector(".bob-property-editor-stage")?.textContent || ""`);
+  }
   ctx.addCheck(ctx.report, "settings invalid and warning values alias collision is shown inline",
-    /Garden/i.test(warning) && /also|collision|another|already|shared|ambiguous/i.test(warning), { warning });
+    settled.stageSession.warnings.includes("project_name_aliases_conflict")
+      && /garden/i.test(warning) && /ambiguous|claimed by more than one/i.test(warning),
+    { warning, session: settled.stageSession, status: settled.status });
   await ctx.sendKey(ctx.client, "Enter");
   await ctx.waitForEditor(ctx.client,
     (value) => !value.stage && /Saved/.test(value.status), "Capture names warning does not block save");
@@ -537,68 +594,108 @@ async function capabilityAcceptance(ctx) {
     { banner: probe.banner, settingRows: oldSettings, rows: probe.rows });
   await ctx.closePropertyEditor(ctx.client);
   fs.rmSync(ctx.oldFlag, { force: true });
+  await ctx.client.evaluate(`(() => {
+    const plugin = app.plugins.plugins["bob-ledger-tools"];
+    if (plugin) plugin.propertyCapability = null;
+  })()`);
 }
 
 async function screenshotAcceptance(ctx) {
   const notePath = path.join(ctx.vaultDir, AREA);
   const before = fs.readFileSync(notePath, "utf8");
-  let probe = await ctx.openPropertyEditor(ctx.client, AREA, { focusSettings: true, resetCapability: true });
-  const specifications = [
-    [1400, "light", "settings-populated"], [1400, "dark", "settings-populated"],
-    [390, "light", "settings-populated"], [390, "dark", "settings-populated"],
-  ];
-  for (const [width, theme, prefix] of specifications) {
-    await ctx.shared.setTheme(ctx.client, theme);
-    await ctx.shared.setViewport(ctx.client, width, 900);
-    const layout = await ctx.client.evaluate(lib.visualLayoutSource());
-    const shot = await ctx.shared.capture(ctx.client, ctx.outDir,
-      `${prefix}-${width}-${theme}`, width, theme, "Live Preview · Area settings");
-    shot.layout = layout;
-    ctx.report.screenshots.push(shot);
-    ctx.addCheck(ctx.report, "settings screenshots light dark narrow wide populated settings layout",
-      layout.open === true && !layout.clipped && !layout.keyValueOverlap && !layout.rowOverlap
-        && !layout.valueOverflow && fs.existsSync(shot.path) && shot.bytes > 0,
-      { name: shot.name, width, theme, layout, sha256: shot.sha256 });
+  const projectBefore = fs.readFileSync(path.join(ctx.vaultDir, PROJECT), "utf8");
+  const specifications = [[1400, "light"], [1400, "dark"], [390, "light"], [390, "dark"]];
+  for (const [file, species] of [[AREA, "area"], [PROJECT, "project"]]) {
+    await ctx.openPropertyEditor(ctx.client, file, { focusSettings: true, resetCapability: true });
+    for (const [width, theme] of specifications) {
+      await ctx.shared.setTheme(ctx.client, theme);
+      await ctx.shared.setViewport(ctx.client, width, 900);
+      const layout = await ctx.client.evaluate(lib.visualLayoutSource());
+      const shot = await ctx.shared.capture(ctx.client, ctx.outDir,
+        `settings-${species}-populated-${width}-${theme}`, width, theme, `Live Preview · ${species} settings`);
+      shot.layout = layout;
+      ctx.report.screenshots.push(shot);
+      ctx.addCheck(ctx.report, "settings screenshots light dark narrow wide populated settings layout",
+        layout.open === true && !layout.clipped && !layout.keyValueOverlap && !layout.rowOverlap
+          && !layout.valueOverflow && lib.headerLayoutLegible(layout)
+          && fs.existsSync(shot.path) && shot.bytes > 0,
+        { name: shot.name, width, theme, layout, sha256: shot.sha256 });
+    }
+    await ctx.shared.setViewport(ctx.client, 1400, 900);
+    await ctx.closePropertyEditor(ctx.client);
   }
 
-  await ctx.shared.setViewport(ctx.client, 1400, 900);
-  await selectSetting(ctx, "summary");
-  await ctx.sendKey(ctx.client, "Enter");
-  await ctx.shared.waitFor(ctx.client,
-    `Boolean(document.querySelector('.bob-property-editor [data-property-stage][data-setting-id="summary"]'))`,
-    Boolean, "Summary screenshot stage", 10_000);
-  for (const [width, theme] of [[1400, "light"], [1400, "dark"], [390, "light"], [390, "dark"]]) {
-    await ctx.shared.setTheme(ctx.client, theme);
-    await ctx.shared.setViewport(ctx.client, width, 900);
-    await ctx.client.evaluate(`(() => {
-      const stage = document.querySelector(".bob-property-editor-stage");
-      stage?.scrollIntoView({ block: "center", behavior: "instant" });
-      stage?.querySelector("[data-property-stage-input]")?.focus({ preventScroll: true });
-    })()`);
-    const layout = await ctx.client.evaluate(lib.visualLayoutSource());
-    const stage = await ctx.client.evaluate(`(() => ({
-      setting: document.querySelector(".bob-property-editor-stage")?.getAttribute("data-setting-id") || "",
-      clipped: Array.from(document.querySelectorAll(".bob-property-editor-stage *")).some((node) => {
-        const rect = node.getBoundingClientRect();
-        return rect.width > 0 && (rect.left < 0 || rect.right > innerWidth + 1);
-      }),
-      focus: Boolean(document.querySelector(".bob-property-editor-stage :focus")),
-      visible: (() => {
-        const rect = document.querySelector(".bob-property-editor-stage")?.getBoundingClientRect();
-        return Boolean(rect && rect.top >= 0 && rect.bottom <= innerHeight);
-      })(),
-    }))()`);
-    const shot = await ctx.shared.capture(ctx.client, ctx.outDir,
-      `settings-summary-stage-${width}-${theme}`, width, theme, "Live Preview · Summary stage");
-    shot.layout = layout;
-    shot.stage = stage;
-    ctx.report.screenshots.push(shot);
-    ctx.addCheck(ctx.report, "settings screenshots light dark narrow wide simple stage layout",
-      stage.setting === "summary" && !stage.clipped && stage.visible && stage.focus
-        && fs.existsSync(shot.path) && shot.bytes > 0,
-      { name: shot.name, width, theme, stage, layout, sha256: shot.sha256 });
+  // Each simple stage is captured with a valid changed draft whose Bob
+  // preview has settled, so candidate effects are on screen; Esc then
+  // cancels it and the note bytes must be unchanged.
+  const drafts = {
+    summary: "Settings acceptance area, reviewed in the stage screenshot",
+    ready_cap: "8",
+    task_refresh: "14",
+    project_name_aliases: "Orchard",
+  };
+  await ctx.openPropertyEditor(ctx.client, AREA, { focusSettings: true });
+  for (const [setting, draft] of Object.entries(drafts)) {
+    await selectSetting(ctx, setting);
+    await ctx.sendKey(ctx.client, "Enter");
+    await ctx.shared.waitFor(ctx.client,
+      `Boolean(document.querySelector('.bob-property-editor [data-property-stage][data-setting-id="${setting}"]'))`,
+      Boolean, `${setting} screenshot stage`, 10_000);
+    await ctx.setInput(ctx.client, "[data-property-stage-input]", draft);
+    const settled = await ctx.waitForEditor(ctx.client,
+      (value) => lib.stagePreviewSettled(value), `${setting} screenshot draft previewed by Bob`, 20_000);
+    for (const [width, theme] of specifications) {
+      await ctx.shared.setTheme(ctx.client, theme);
+      await ctx.shared.setViewport(ctx.client, width, 900);
+      await ctx.client.evaluate(`(() => {
+        const stage = document.querySelector(".bob-property-editor-stage");
+        stage?.scrollIntoView({ block: "center", behavior: "instant" });
+        stage?.querySelector("[data-property-stage-input]")?.focus({ preventScroll: true });
+      })()`);
+      const layout = await ctx.client.evaluate(lib.visualLayoutSource());
+      const stage = await ctx.client.evaluate(`(() => ({
+        setting: document.querySelector(".bob-property-editor-stage")?.getAttribute("data-setting-id") || "",
+        clipped: Array.from(document.querySelectorAll(".bob-property-editor-stage *")).some((node) => {
+          const rect = node.getBoundingClientRect();
+          return rect.width > 0 && (rect.left < 0 || rect.right > innerWidth + 1);
+        }),
+        focus: Boolean(document.querySelector(".bob-property-editor-stage :focus")),
+        input: document.querySelector(".bob-property-editor-stage [data-property-stage-input]")?.value || "",
+        preview: (() => {
+          const stage = document.querySelector(".bob-property-editor-stage")?.getBoundingClientRect();
+          const node = document.querySelector(".bob-property-editor-stage .bob-property-editor-stage-preview");
+          const rect = node?.getBoundingClientRect();
+          return {
+            text: node?.textContent || "",
+            inside: Boolean(stage && rect && rect.height > 0 && rect.top >= stage.top - 1 && rect.bottom <= stage.bottom + 1),
+          };
+        })(),
+        visible: (() => {
+          const stage = document.querySelector(".bob-property-editor-stage");
+          const rect = stage?.getBoundingClientRect();
+          return Boolean(rect && rect.top >= 0 && rect.bottom <= innerHeight
+            && stage.scrollHeight <= stage.clientHeight + 2);
+        })(),
+      }))()`);
+      const shot = await ctx.shared.capture(ctx.client, ctx.outDir,
+        `settings-${setting}-stage-${width}-${theme}`, width, theme, `Live Preview · ${setting} stage`);
+      shot.layout = layout;
+      shot.stage = stage;
+      shot.session = settled.stageSession;
+      ctx.report.screenshots.push(shot);
+      ctx.addCheck(ctx.report, "settings screenshots light dark narrow wide simple stage layout",
+        stage.setting === setting && !stage.clipped && stage.visible && stage.focus
+          && stage.input.includes(draft) && /Preview ·/.test(stage.preview.text) && stage.preview.inside
+          && fs.existsSync(shot.path) && shot.bytes > 0,
+        { name: shot.name, width, theme, stage, session: settled.stageSession, layout, sha256: shot.sha256 });
+    }
+    await ctx.sendKey(ctx.client, "Escape");
+    await ctx.waitForEditor(ctx.client, (value) => !value.stage, `${setting} screenshot draft canceled`);
+    ctx.assertDiskBytes(ctx.report, `settings ${setting} screenshot draft cancel leaves exact bytes`, notePath, before);
+    await ctx.shared.setViewport(ctx.client, 1400, 900);
   }
-  await ctx.sendKey(ctx.client, "Escape");
+  ctx.assertDiskBytes(ctx.report, "settings project repaint resize open and cancel leave exact bytes",
+    path.join(ctx.vaultDir, PROJECT), projectBefore);
   await ctx.shared.setTheme(ctx.client, "light");
   await ctx.shared.setViewport(ctx.client, 1400, 900);
   await ctx.closePropertyEditor(ctx.client);
@@ -606,6 +703,12 @@ async function screenshotAcceptance(ctx) {
 }
 
 async function runSettingsAcceptance(ctx) {
+  // Each scenario drives separate user gestures. Disk bytes and a report
+  // repaint may appear before the write guard clears; do not send the next
+  // gesture into that intentionally protected interval.
+  const waitForEditor = ctx.waitForEditor;
+  ctx = { ...ctx, waitForEditor: (client, predicate, label, timeoutMs) =>
+    waitForEditor(client, (probe) => !probe.pendingApply && predicate(probe), label, timeoutMs) };
   // The preceding generic scenario simulates an old bob. Its shim flag has
   // been removed, but the modal's cached capability result must be reset too.
   await ctx.closePropertyEditor(ctx.client);
@@ -616,13 +719,13 @@ async function runSettingsAcceptance(ctx) {
   })()`);
   ctx.addCheck(ctx.report, "settings capability fallbacks settings entrypoint is active", report.active, report);
   await entrypointAcceptance(ctx);
+  await screenshotAcceptance(ctx);
   await settingHistoryAcceptance(ctx);
   await simpleSettingsAcceptance(ctx);
   await aliasWarningAcceptance(ctx);
   await projectTaskAcceptance(ctx);
   await genericParityAcceptance(ctx);
   await capabilityAcceptance(ctx);
-  await screenshotAcceptance(ctx);
   await ctx.closePropertyEditor(ctx.client);
 }
 
@@ -642,7 +745,15 @@ function selfTest() {
     "settings-screenshots-light-dark-narrow-wide",
   ];
   for (const check of checks) assert.ok(lib.ACCEPTANCE_CHECKS.includes(check), check);
+  const scratch = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "settings-self-test-"));
+  try {
+    const configHome = seedTaskCardConfig(scratch);
+    assert.match(fs.readFileSync(path.join(configHome, "bob", "config.yml"), "utf8"), /^properties:$/m,
+      "the Task Card handoff needs a hermetic navigation config");
+  } finally {
+    fs.rmSync(scratch, { recursive: true, force: true });
+  }
   assert.equal(typeof runSettingsAcceptance, "function");
 }
 
-module.exports = { runSettingsAcceptance, verifyFixtures, selfTest };
+module.exports = { runSettingsAcceptance, seedTaskCardConfig, verifyFixtures, selfTest };

@@ -47,6 +47,9 @@ function propertyEditorPaintStage(doc, host, options, modal) {
   propertyEditorSetText(label, options.collection ? "Add value" : `New ${options.label.toLowerCase()} value`);
   panel.appendChild(label);
   const inputKey = `property-stage-${options.stageId}`;
+  // A collection stage's input is its "Add value" draft: repaint it from the
+  // item draft, never the (empty) scalar value, so typed text stays visible.
+  const inputValue = options.collection ? String(options.itemDraft || "") : options.value;
   let input = options.keptInput || null;
   if (!input) {
     if (options.kind === "text") {
@@ -59,9 +62,9 @@ function propertyEditorPaintStage(doc, host, options, modal) {
       input.setAttribute("type", "text");
       input.setAttribute("inputmode", options.kind === "number" ? "decimal" : "text");
     }
-    input.value = options.value;
-  } else if (!options.composing && String(input.value == null ? "" : input.value) !== options.value) {
-    input.value = options.value;
+    input.value = inputValue;
+  } else if (!options.composing && String(input.value == null ? "" : input.value) !== inputValue) {
+    input.value = inputValue;
   }
   input.setAttribute("id", inputId);
   input.setAttribute("data-property-stage-input", inputKey);

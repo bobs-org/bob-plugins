@@ -208,6 +208,34 @@ test("stage painter retains the focused input, caret, and prose band across prev
   assert.deepEqual([second.input.selectionStart, second.input.selectionEnd], [2, 4]);
 });
 
+test("collection stages repaint the typed item draft, never the empty scalar value", () => {
+  const { doc } = fakeDom();
+  const modal = { propertyEditorStageAddItem() {} };
+  const options = {
+    stageId: 9, key: "project_name_aliases", kind: "list", label: "List", value: "",
+    items: ["Garden"], itemDraft: "Orchard", collection: true, suggestions: [], disabled: false,
+    composing: false, prose: true, previewText: "Preview · 2 values · Enter saves",
+  };
+  const first = H.propertyEditorPaintStage(doc, doc.createElement("div"), options, modal);
+  assert.equal(first.input.value, "Orchard", "a fresh input shows the pending item");
+  // A preview, theme, or resize repaint keeps the same input and its text.
+  const kept = H.propertyEditorPaintStage(doc, doc.createElement("div"), {
+    ...options, keptInput: first.input, keptBand: first.band,
+  }, modal);
+  assert.strictEqual(kept.input, first.input);
+  assert.equal(kept.input.value, "Orchard");
+  // Adding the item clears the draft, and the input follows it.
+  const added = H.propertyEditorPaintStage(doc, doc.createElement("div"), {
+    ...options, items: ["Garden", "Orchard"], itemDraft: "", keptInput: first.input, keptBand: first.band,
+  }, modal);
+  assert.equal(added.input.value, "");
+  // Scalar stages still paint their value.
+  const text = H.propertyEditorPaintStage(doc, doc.createElement("div"), {
+    ...options, kind: "text", label: "Text", value: "hello", items: [], itemDraft: "ignored", collection: false,
+  }, modal);
+  assert.equal(text.input.value, "hello");
+});
+
 test("Enter latches to the exact preview and an edit invalidates the latch", async () => {
   const modal = new H.PropertyEditorModal({}, { filePath: "notes/groceries.md", report: report() });
   const session = fakeSession();

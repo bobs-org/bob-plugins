@@ -134,27 +134,38 @@ async function propertyEditorProjectTaskHandoff(modal, line, taskLine) {
   const filePath = modal && modal.filePath;
   if (!app || !filePath) return { ok: false, message: "Project task navigation is unavailable." };
   const workspace = app.workspace;
-  let leaf = null;
-  try {
-    if (typeof propertyEditorEntryLeafFor === "function") {
-      leaf = propertyEditorEntryLeafFor(plugin || { app }, filePath);
+  // Only a leaf that shows this project counts: the shared leaf lookup falls
+  // back to the most recent pane for other callers, and validating the ^prj
+  // line against an unrelated note would refuse instead of navigating.
+  const showingLeaf = () => {
+    let found = null;
+    try {
+      if (typeof propertyEditorEntryLeafFor === "function") {
+        found = propertyEditorEntryLeafFor(plugin || { app }, filePath);
+      }
+    } catch (_) {
+      found = null;
     }
-  } catch (_) {
-    leaf = null;
-  }
+    try {
+      const target = typeof propertyEditorEntryNormalizePath === "function"
+        ? propertyEditorEntryNormalizePath(filePath)
+        : filePath;
+      if (found && typeof propertyEditorEntryLeafShows === "function") {
+        return propertyEditorEntryLeafShows(found, target) ? found : null;
+      }
+      return found && found.view && found.view.file && found.view.file.path === filePath ? found : null;
+    } catch (_) {
+      return null;
+    }
+  };
+  let leaf = showingLeaf();
   if (!leaf) {
     try {
       if (workspace && typeof workspace.openLinkText === "function") {
         await workspace.openLinkText(filePath.replace(/\.md$/i, ""), filePath, false);
       }
     } catch (_) {}
-    try {
-      if (typeof propertyEditorEntryLeafFor === "function") {
-        leaf = propertyEditorEntryLeafFor(plugin || { app }, filePath);
-      }
-    } catch (_) {
-      leaf = null;
-    }
+    leaf = showingLeaf();
   }
   if (!leaf) return { ok: false, message: "The current ^prj task could not be opened." };
   const editor = leaf.view && leaf.view.editor;

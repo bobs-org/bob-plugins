@@ -335,6 +335,27 @@ test("settings and virtual rows paint as non-source rows with a faint, legible g
   assert.notEqual(button.getAttribute("aria-disabled"), "true");
 });
 
+test("expanded managed rows show Bob's reason or writer; other rows add no label", () => {
+  const modal = modalFor(report("area"));
+  const doc = { createElement: (tag) => new FakeElement(tag) };
+  const paint = (id) => {
+    const host = new FakeElement("div");
+    H.propertyEditorPaintRow(doc, host, H.propertyEditorSettingsAllEntries(modal).find((entry) => entry.id === id), false, modal);
+    const button = host.lastElementChild;
+    const value = button.querySelector(".bob-property-row-value");
+    const reason = button.querySelector(".bob-property-row-reason");
+    return { button, value: value?.textContent || "", reason: reason?.textContent || "" };
+  };
+  const retired = paint("task_count::15");
+  assert.match(retired.reason, /nothing maintains it/);
+  assert.match(retired.value, /^8/, "the source value stays first");
+  assert.match(retired.button.getAttribute("title"), /nothing maintains it/);
+  assert.equal(retired.button.getAttribute("data-property-action"), "edit", "retired counts stay deletable");
+  assert.equal(paint("done_tasks::14").reason, "Written by ledger");
+  assert.equal(paint("template::13").reason, "", "a loose template has no writer label");
+  assert.equal(paint("created::7").reason, "", "ordinary properties are unchanged");
+});
+
 test("done_tasks opens its archive link without mutating the property", async () => {
   const modal = modalFor(report("area"));
   const entry = H.propertyEditorSettingsFindEntry(modal, "done_tasks::14");
@@ -567,4 +588,45 @@ test("degraded old-Bob and damaged-frontmatter reports keep generic rows without
   assert.equal(H.propertyEditorDegradedFor({ report: damaged }).mode, "recovery");
   assert.equal(H.propertyEditorSettingsFindEntry(damagedModal, "setting::color"), null);
   assert.equal(damagedModal.propertyEditorPaintOptions().settingsFallbackHint, "");
+});
+
+test("declared setting copy writes its hidden source keys through the fresh-report reconcile", async () => {
+  // theme and both clock keys are merged into setting rows, so they are never
+  // visible rows; the copy must still resolve them after its reconcile.
+  const show = report("area");
+  const fragments = [
+    { key: "theme", occurrence: 1, raw: "theme: Drafting # keep this spelling" },
+    { key: "offclock", occurrence: 1, raw: "offclock: false" },
+    { key: "offclock_types", occurrence: 1, raw: "offclock_types: [writing] # shadowed" },
+  ];
+  const copy = async (selectedId, snapshotReport = show) => {
+    const modal = modalFor(show);
+    modal.selectedId = selectedId;
+    let written = null;
+    let notice = null;
+    modal.propertyEditorClipboardApi = () => ({ writeText: async (text) => { written = text; } });
+    modal.propertyEditorClipboardNotice = (...args) => { notice = args; return false; };
+    modal.propertyEditorClipboardSnapshot = async () => ({
+      ok: true, report: snapshotReport, entries: fragments, source: "", lineEnding: "\n",
+    });
+    const result = await modal.propertyEditorClipboardCopy();
+    return { modal, result, written, notice };
+  };
+  const clock = await copy("setting::clock");
+  assert.equal(clock.result, true, JSON.stringify(clock.notice));
+  assert.equal(clock.written, "offclock: false\noffclock_types: [writing] # shadowed");
+  assert.match(clock.modal.announce, /Copied 2 properties/);
+  assert.equal(clock.modal.propertyEditorClipboardCopyIds, undefined, "the explicit copy request is scoped to one copy");
+  assert.equal(H.propertyEditorSelectionFilterMarkedIds(clock.modal).size, 0, "copy never leaves marks behind");
+  const type = await copy("setting::task_type");
+  assert.equal(type.written, "theme: Drafting # keep this spelling");
+  assert.match(type.modal.announce, /Copied 1 property/);
+
+  // If the fresh report no longer declares the setting, nothing is copied.
+  const cleared = { ...show, properties: show.properties.filter((row) => row.key !== "theme"),
+    contract: { ...show.contract, settings: show.contract.settings.map((setting) => setting.id === "task_type"
+      ? { ...setting, declared: false } : setting) } };
+  const stale = await copy("setting::task_type", cleared);
+  assert.equal(stale.result, false);
+  assert.equal(stale.written, null);
 });

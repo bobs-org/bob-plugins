@@ -107,17 +107,20 @@ value is always submitted as the strict mode object, and generic edits to an
 actual clock key use that key's `prop.*` op.
 
 Settings and project-task rows cannot be renamed, reordered, or kind-changed.
-Copying a declared setting copies its actual source bytes; copying a ghost is
-a no-op with a teaching message. Batch deletion maps declared settings to
+Copying a declared setting copies its actual source bytes, including keys
+merged into the row (legacy `theme`, both clock keys); copying a ghost is a
+no-op with a teaching message. Batch deletion maps declared settings to
 `setting.clear` ops and refuses a mixed protected selection as a whole.
 
 Projects add **ON THE `^PRJ` LINE**: goal, starts, and depends-on rows that
-navigate to the current `^prj` task's Task Card. A missing or archived task
+navigate to the current `^prj` task's Task Card, opening the project note
+first when no pane shows it. A missing or archived task
 reports absence without creating anything; project `status` navigates only.
 Navigation never writes task fields or frontmatter dates. The collapsed
-Bob-managed group keeps its count, with source rows, writer labels, and YAML
-access on expand; template stays editable and retired counts stay deletable
-with their explanation, while `done_tasks` offers its archive link.
+Bob-managed group keeps its count, with source rows and YAML access on
+expand. Each expanded row shows Bob's reason, or its writer, under the
+value. Template stays editable, and retired counts stay deletable with Bob's
+"nothing maintains it" explanation. `done_tasks` offers its archive link.
 
 Without `props_contract_v1`, the editor renders the landed generic properties
 with **Update bob for typed settings**. Without `props_v1`, cached rows stay
@@ -363,7 +366,7 @@ The same run loads `scripts/obsidian-property-editor-e2e-settings.cjs` for the
 area/project contract matrix: `+`, `==`, Settings, and policy-chip focus;
 ghost override, clear, undo, and redo; Stats root and project-task navigation;
 managed and loose-row parity; capability fallback; and light/dark, wide/narrow
-captures of populated settings and the Summary stage.
+captures of populated settings and all four simple stages.
 
 | Native Properties action | Property Editor | Notes |
 | --- | --- | --- |

@@ -492,15 +492,37 @@ and independent old-Bob and missing-contract fallbacks. Warning cases save
 and undo long summaries and colliding Capture names; copy cases preserve
 legacy theme and both clock keys, while a ghost leaves the clipboard alone.
 The run also deletes and restores retired counts, exercises IME Enter on a
-Summary draft, and visits every rendered policy chip. It adds screenshots
-of populated settings and the Summary stage in light/dark and wide/narrow
-layouts. The offline wrapper verifies these fixtures and registers all
-settings coverage in the report; it does not replace the real application
-run or screenshot inspection. Before launching Obsidian, the supplied Bob
-must recognize the fixture's exact `#task … ^prj` line and its nested/top-level
-Stats root distinction. Bank routing probes the setup modal separately from
-the persistent inline bank panel. Stage screenshots scroll the controls into
+Summary draft, and visits every rendered policy chip.
+
+The area and project fixtures live at the vault root with unique stems
+(`settings-acceptance-area.md`, `settings-acceptance-project.md`), because
+Capture names only collide between routable capture targets. Before
+launching Obsidian, the supplied Bob must recognize the fixture's exact
+`#task … ^prj` line and its nested/top-level Stats root distinction, and a
+dry run of `Garden` on the project must return
+`project_name_aliases_conflict` without writing. Bank routing probes the
+setup modal separately from the persistent inline bank panel. Consecutive
+Stats root toggles await the confirmed contract and completed save, since
+file replacement precedes that response.
+
+Warnings are read only after Bob's guarded preview is ready for exactly the
+draft the stage currently builds. The local `Preview ·` line paints before
+Bob answers, so it is never treated as Bob's verdict.
+
+Screenshots cover populated area and project settings, plus all four simple
+stages (Summary, Ready cap, Review, Capture names), in light/dark and
+wide/narrow layouts. Each stage is captured holding a valid changed draft
+with its Bob preview settled. Esc then cancels it, and the note bytes must
+be unchanged. Header probes require the badge, titles, and actions not to
+overlap or leave the header, and the title column to stay readable. Narrow
+modals wrap the actions onto their own row. Stage screenshots require
+visible controls and the preview inside an uncompressed stage, and long
+settings values must wrap inside their rows. Controls are scrolled into
 view after each resize; an offscreen stage is not visual acceptance.
+
+The offline wrapper verifies these fixtures and registers all settings
+coverage in the report. It does not replace the real application run or
+screenshot inspection.
 
 The offline wrapper `scripts/test-obsidian-property-editor-e2e.cjs` is part of
 `npm test`. It checks fixtures, fake-bob JSON, probes, coverage mapping, and

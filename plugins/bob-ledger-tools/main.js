@@ -178322,6 +178322,9 @@ function propertyEditorPaintStage(doc, host, options, modal) {
   propertyEditorSetText(label, options.collection ? "Add value" : `New ${options.label.toLowerCase()} value`);
   panel.appendChild(label);
   const inputKey = `property-stage-${options.stageId}`;
+  // A collection stage's input is its "Add value" draft: repaint it from the
+  // item draft, never the (empty) scalar value, so typed text stays visible.
+  const inputValue = options.collection ? String(options.itemDraft || "") : options.value;
   let input = options.keptInput || null;
   if (!input) {
     if (options.kind === "text") {
@@ -178334,9 +178337,9 @@ function propertyEditorPaintStage(doc, host, options, modal) {
       input.setAttribute("type", "text");
       input.setAttribute("inputmode", options.kind === "number" ? "decimal" : "text");
     }
-    input.value = options.value;
-  } else if (!options.composing && String(input.value == null ? "" : input.value) !== options.value) {
-    input.value = options.value;
+    input.value = inputValue;
+  } else if (!options.composing && String(input.value == null ? "" : input.value) !== inputValue) {
+    input.value = inputValue;
   }
   input.setAttribute("id", inputId);
   input.setAttribute("data-property-stage-input", inputKey);
@@ -183745,9 +183748,18 @@ Object.assign(PropertyEditorModal.prototype, {
       if (this.closed || token !== this.propertyEditorClipboardToken) return false;
       if (!snapshot.ok) return this.propertyEditorClipboardNotice(snapshot.code, snapshot.message, snapshot.hint);
       this.propertyEditorReconcile(snapshot.report);
-      const marked = typeof propertyEditorSelectionFilterMarkedIds === "function"
-        ? propertyEditorSelectionFilterMarkedIds(this)
-        : new Set();
+      // A caller may name exact source rows (declared settings copy keys
+      // that are not visible rows); resolve them against the fresh report.
+      const explicit = typeof this.propertyEditorClipboardCopyIds === "function"
+        ? this.propertyEditorClipboardCopyIds(snapshot.report)
+        : null;
+      if (explicit && explicit.ok === false) return this.propertyEditorClipboardNotice(explicit.code || "ineligible-selection", explicit.message, explicit.hint);
+      const marked = explicit && explicit.ids instanceof Set
+        ? explicit.ids
+        : typeof propertyEditorSelectionFilterMarkedIds === "function"
+          ? propertyEditorSelectionFilterMarkedIds(this)
+          : new Set();
+      if (explicit && marked.size === 0) return this.propertyEditorClipboardNotice("empty-selection", "Select a declared property to copy.");
       const selection = propertyEditorClipboardSelection(snapshot.entries, snapshot.report.properties, marked, this.selectedId);
       if (!selection.ok) return this.propertyEditorClipboardNotice(selection.code, selection.message, selection.hint);
       const assembled = propertyEditorSourceAssembleEntries(selection.entries, snapshot.source, snapshot.lineEnding);
@@ -186265,7 +186277,26 @@ propertyEditorPaintRow = function propertyEditorPaintSettingsRow(doc, host, entr
     const description = [entry.row.help, entry.row.reason, entry.row.warning].filter(Boolean).join(" ");
     if (description) button.setAttribute("aria-description", description);
   } catch (_) {}
+  // Expanded Bob-managed rows keep their writer/reason label visible: Bob's
+  // reason (a retired count says nothing maintains it), else the writer.
+  try {
+    if (entry.group !== "managed") return;
+    const label = propertyEditorSettingsManagedLabel(entry.row);
+    const value = label ? button.querySelector?.(".bob-property-row-value") : null;
+    if (!value) return;
+    const note = propertyEditorCreateEl(doc, "span", "bob-property-row-reason");
+    propertyEditorSetText(note, label);
+    if (note) value.appendChild(note);
+    if (!button.getAttribute?.("title")) button.setAttribute("title", label);
+  } catch (_) {}
 };
+
+function propertyEditorSettingsManagedLabel(row) {
+  const reason = row && typeof row.reason === "string" ? row.reason.trim() : "";
+  if (reason) return reason;
+  const owner = row && typeof row.owner === "string" ? row.owner.trim() : "";
+  return owner && owner !== "props" ? `Written by ${owner}` : "";
+}
 
 const propertyEditorSettingsBasePaintAll = propertyEditorPaintAll;
 propertyEditorPaintAll = function propertyEditorPaintAllWithSettings(host, options, doc, modal) {
@@ -186387,17 +186418,26 @@ Object.assign(PropertyEditorModal.prototype, {
     const requested = propertyEditorSettingsSourceCopyIds(this, selected);
     if (!requested.ok) return this.propertyEditorClipboardNotice("ineligible-selection", requested.message, requested.hint);
     if (!requested.ids.size) return this.propertyEditorClipboardNotice("empty-selection", "Select a declared property to copy.");
-    const oldManual = this.propertyEditorManualMarks;
-    const oldRange = this.propertyEditorRangeMarks;
-    const oldAnchor = this.propertyEditorRangeAnchorId;
-    this.propertyEditorManualMarks = new Set(requested.ids);
-    this.propertyEditorRangeMarks = new Set();
-    this.propertyEditorRangeAnchorId = "";
+    // Declared settings copy source keys that are not visible rows (theme,
+    // both clock keys), so marks would not survive the copy's fresh-report
+    // reconcile. Name the exact source rows again against that report.
+    const previous = this.propertyEditorClipboardCopyIds;
+    this.propertyEditorClipboardCopyIds = () => {
+      const fresh = propertyEditorSettingsAllEntries(this);
+      const current = [];
+      for (const entry of selected) {
+        const match = fresh.find((candidate) => candidate.id === entry.id);
+        if (!match) {
+          return { ok: false, code: "stale-selection", message: "The note changed while copying; select the property again.", hint: "Nothing was copied." };
+        }
+        current.push(match);
+      }
+      const ids = propertyEditorSettingsSourceCopyIds(this, current);
+      return ids.ok ? { ok: true, ids: ids.ids } : { ok: false, code: "ineligible-selection", message: ids.message, hint: ids.hint };
+    };
     try { return await propertyEditorSettingsBaseClipboardCopy.call(this); }
     finally {
-      this.propertyEditorManualMarks = oldManual;
-      this.propertyEditorRangeMarks = oldRange;
-      this.propertyEditorRangeAnchorId = oldAnchor;
+      this.propertyEditorClipboardCopyIds = previous;
       if (!this.closed) this.paintPropertyEditor();
     }
   },
@@ -187419,27 +187459,38 @@ async function propertyEditorProjectTaskHandoff(modal, line, taskLine) {
   const filePath = modal && modal.filePath;
   if (!app || !filePath) return { ok: false, message: "Project task navigation is unavailable." };
   const workspace = app.workspace;
-  let leaf = null;
-  try {
-    if (typeof propertyEditorEntryLeafFor === "function") {
-      leaf = propertyEditorEntryLeafFor(plugin || { app }, filePath);
+  // Only a leaf that shows this project counts: the shared leaf lookup falls
+  // back to the most recent pane for other callers, and validating the ^prj
+  // line against an unrelated note would refuse instead of navigating.
+  const showingLeaf = () => {
+    let found = null;
+    try {
+      if (typeof propertyEditorEntryLeafFor === "function") {
+        found = propertyEditorEntryLeafFor(plugin || { app }, filePath);
+      }
+    } catch (_) {
+      found = null;
     }
-  } catch (_) {
-    leaf = null;
-  }
+    try {
+      const target = typeof propertyEditorEntryNormalizePath === "function"
+        ? propertyEditorEntryNormalizePath(filePath)
+        : filePath;
+      if (found && typeof propertyEditorEntryLeafShows === "function") {
+        return propertyEditorEntryLeafShows(found, target) ? found : null;
+      }
+      return found && found.view && found.view.file && found.view.file.path === filePath ? found : null;
+    } catch (_) {
+      return null;
+    }
+  };
+  let leaf = showingLeaf();
   if (!leaf) {
     try {
       if (workspace && typeof workspace.openLinkText === "function") {
         await workspace.openLinkText(filePath.replace(/\.md$/i, ""), filePath, false);
       }
     } catch (_) {}
-    try {
-      if (typeof propertyEditorEntryLeafFor === "function") {
-        leaf = propertyEditorEntryLeafFor(plugin || { app }, filePath);
-      }
-    } catch (_) {
-      leaf = null;
-    }
+    leaf = showingLeaf();
   }
   if (!leaf) return { ok: false, message: "The current ^prj task could not be opened." };
   const editor = leaf.view && leaf.view.editor;

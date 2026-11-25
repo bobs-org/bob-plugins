@@ -448,7 +448,7 @@ async function run(args) {
       vaultReal,
     ], {
       cwd: os.tmpdir(),
-      env: { ...bobEnvironment(ctx), TMPDIR: "/tmp" },
+      env: { ...bobEnvironment(ctx), TMPDIR: "/tmp", XDG_CONFIG_HOME: settings.seedTaskCardConfig(profileDir) },
       stdio: ["ignore", "ignore", "pipe"],
     });
     const startupErrors = [];

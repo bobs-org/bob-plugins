@@ -326,3 +326,44 @@ test("lifecycle diagnostics preserve receiver, return values, and thrown open er
   assert.equal(window.__bobPropertyEditorLifecycle[0].method, "open");
   assert.match(window.__bobPropertyEditorLifecycle[1].error, /mount failed/);
 });
+
+test("settings preview waits require Bob's settled preview for the current stage draft", () => {
+  const garden = [{ op: "setting.set", setting: "project_name_aliases", value: ["Garden"] }];
+  const probeWith = (state, ops) => {
+    const editor = { querySelector: () => null, querySelectorAll: () => [] };
+    const document = {
+      activeElement: null,
+      querySelector: (selector) => (selector === ".bob-property-editor" ? editor : null),
+      querySelectorAll: () => [],
+    };
+    const modal = {
+      stage: { settingId: "project_name_aliases" },
+      session: { getState: () => state },
+      propertyEditorBuildCurrentStage: () => (ops ? { ok: true, changed: true, ops } : { ok: false }),
+    };
+    const window = { app: { plugins: { plugins: { "bob-ledger-tools": { propertyEditorModal: modal } } } } };
+    return vm.runInNewContext(lib.editorProbeSource(), { window, document });
+  };
+  const ready = { status: "preview-ready", canApply: true, busy: false, draftOps: garden,
+    preview: { warnings: [{ code: "project_name_aliases_conflict" }] } };
+  const settled = probeWith(ready, garden);
+  assert.equal(lib.stagePreviewSettled(settled), true);
+  assert.deepEqual(settled.stageSession.warnings, ["project_name_aliases_conflict"]);
+  assert.equal(lib.stagePreviewSettled(probeWith({ ...ready, status: "preview-pending", busy: true, canApply: false }, garden)), false,
+    "local Preview copy while Bob is still checking");
+  assert.equal(lib.stagePreviewSettled(probeWith(ready, [{ ...garden[0], value: ["Garden", "Orchard"] }])), false,
+    "preview for an older draft");
+  assert.equal(lib.stagePreviewSettled(probeWith({ ...ready, status: "draft", canApply: false }, garden)), false,
+    "invalidated preview");
+  assert.equal(lib.stagePreviewSettled(probeWith(ready, null)), false, "invalid current draft");
+
+  const settingsSource = fs.readFileSync(path.join(__dirname, "obsidian-property-editor-e2e-settings.cjs"), "utf8");
+  const alias = settingsSource.slice(settingsSource.indexOf("async function aliasWarningAcceptance"),
+    settingsSource.indexOf("alias collision is shown inline"));
+  assert.match(alias, /lib\.stagePreviewSettled\(value\)/);
+  assert.doesNotMatch(alias, /\(text\) => \/Preview ·\/\.test\(text\)/);
+  const shots = settingsSource.slice(settingsSource.indexOf("async function screenshotAcceptance"));
+  assert.match(shots, /lib\.stagePreviewSettled\(value\)/);
+  assert.match(shots, /lib\.headerLayoutLegible\(layout\)/);
+  assert.match(shots, /screenshot draft cancel leaves exact bytes/);
+});

@@ -343,9 +343,18 @@ Object.assign(PropertyEditorModal.prototype, {
       if (this.closed || token !== this.propertyEditorClipboardToken) return false;
       if (!snapshot.ok) return this.propertyEditorClipboardNotice(snapshot.code, snapshot.message, snapshot.hint);
       this.propertyEditorReconcile(snapshot.report);
-      const marked = typeof propertyEditorSelectionFilterMarkedIds === "function"
-        ? propertyEditorSelectionFilterMarkedIds(this)
-        : new Set();
+      // A caller may name exact source rows (declared settings copy keys
+      // that are not visible rows); resolve them against the fresh report.
+      const explicit = typeof this.propertyEditorClipboardCopyIds === "function"
+        ? this.propertyEditorClipboardCopyIds(snapshot.report)
+        : null;
+      if (explicit && explicit.ok === false) return this.propertyEditorClipboardNotice(explicit.code || "ineligible-selection", explicit.message, explicit.hint);
+      const marked = explicit && explicit.ids instanceof Set
+        ? explicit.ids
+        : typeof propertyEditorSelectionFilterMarkedIds === "function"
+          ? propertyEditorSelectionFilterMarkedIds(this)
+          : new Set();
+      if (explicit && marked.size === 0) return this.propertyEditorClipboardNotice("empty-selection", "Select a declared property to copy.");
       const selection = propertyEditorClipboardSelection(snapshot.entries, snapshot.report.properties, marked, this.selectedId);
       if (!selection.ok) return this.propertyEditorClipboardNotice(selection.code, selection.message, selection.hint);
       const assembled = propertyEditorSourceAssembleEntries(selection.entries, snapshot.source, snapshot.lineEnding);

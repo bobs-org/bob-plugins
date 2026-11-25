@@ -72,7 +72,14 @@ async function captureParityView(ctx, view) {
       if (!stage) return false;
       stage.scrollIntoView({ block: "center", behavior: "instant" });
       const rect = stage.getBoundingClientRect();
-      return rect.top >= 0 && rect.bottom <= innerHeight;
+      const controls = Array.from(stage.querySelectorAll("button, input, textarea"));
+      return rect.top >= 0 && rect.bottom <= innerHeight
+        && stage.scrollHeight <= stage.clientHeight + 2
+        && controls.length > 0 && controls.every((control) => {
+          const box = control.getBoundingClientRect();
+          return box.width > 0 && box.height > 0 && box.top >= rect.top
+            && box.bottom <= rect.bottom && box.left >= rect.left && box.right <= rect.right;
+        });
     })()`);
     const shot = await shared.capture(client, outDir, `property-editor-parity-${view}-${width}-${theme}`, width, theme, "Live Preview");
     report.screenshots.push(shot);

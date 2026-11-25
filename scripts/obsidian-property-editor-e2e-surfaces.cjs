@@ -402,11 +402,20 @@ async function runSurfaceAcceptance(ctx) {
 }
 
 async function runVisualReview(ctx) {
-  const { client, report, shared, addCheck, openPropertyEditor, propertyRowClick, sendKey } = ctx;
+  const { client, report, shared, addCheck, openPropertyEditor, propertyRowClick, sendKey, selectorClick, waitForEditor } = ctx;
   await shared.openNote(client, "projects/project-note.md", "live");
-  await openPropertyEditor(client, "projects/project-note.md", { key: "keep_exact" });
+  const opened = await openPropertyEditor(client, "projects/project-note.md", { key: "keep_exact" });
   await propertyRowClick(client, "keep_exact");
   await sendKey(client, "j");
+  // On a contract project the derived digest lives in the folded Bob-managed
+  // group; expand it (the fold is the shipped default) before selecting it.
+  if (!opened.rows.some((row) => row.key === "project_digest")) {
+    if (!await selectorClick(client, '.bob-property-editor [data-property-group-toggle="managed"]')) {
+      throw new Error("Could not expand Bob-managed properties for visuals");
+    }
+    await waitForEditor(client, (value) => value.rows.some((row) => row.key === "project_digest"),
+      "expanded Bob-managed properties for visuals");
+  }
   await propertyRowClick(client, "project_digest");
   await shared.waitFor(client, lib.editorProbeSource(),
     (probe) => probe.rows.some((row) => row.selected && row.action === "locked" && row.lockedClass === true),

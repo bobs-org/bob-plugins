@@ -161,7 +161,7 @@ function fixtureNotes(today = "2026-11-23") {
       "Body bytes stay outside the property edit.",
       "",
     ].join("\n"),
-    "areas/settings-acceptance.md": [
+    "settings-acceptance-area.md": [
       "---",
       'type: "[[area]]"',
       'parent: "[[projects]]"',
@@ -185,7 +185,7 @@ function fixtureNotes(today = "2026-11-23") {
       "Body bytes stay outside settings edits.",
       "",
     ].join("\n"),
-    "projects/settings-acceptance.md": [
+    "settings-acceptance-project.md": [
       "---",
       'type: "[[project]]"',
       'parent: "[[projects/top-level-settings]]"',
@@ -219,7 +219,7 @@ function fixtureNotes(today = "2026-11-23") {
     "bank.md": [
       "---",
       'type: "[[bank]]"',
-      'parent: "[[areas/settings-acceptance]]"',
+      'parent: "[[settings-acceptance-area]]"',
       'created: "2026-01-02"',
       "---",
       "",
@@ -395,6 +395,7 @@ function editorProbeSource() {
     return {
       open: true,
       readSettled: Boolean(report || plugin?.propertyEditorModal?.refusal),
+      pendingApply: plugin?.propertyEditorModal?.pendingApply === true,
       focusedRow: document.activeElement?.getAttribute?.("data-property-row") || "",
       heading: editor.querySelector(".bob-property-editor-heading")?.textContent || "",
       rows: Array.from(editor.querySelectorAll("[data-property-row]")).map((row) => ({
@@ -440,6 +441,28 @@ function editorProbeSource() {
       stageKind: plugin?.propertyEditorModal?.stage?.kind || null,
       stageInput: document.querySelector("[data-property-stage-input], [data-property-add-input]")?.value || "",
       stagePreview: editor.querySelector(".bob-property-editor-stage-preview")?.textContent || "",
+      // Bob's guarded dry-run for the stage: local "Preview ·" copy appears
+      // before Bob answers, so warnings are only final once this preview
+      // is ready for exactly the draft the stage currently builds.
+      stageSession: (() => {
+        const modal = plugin?.propertyEditorModal;
+        if (!modal?.stage) return null;
+        let state = null;
+        try { state = modal.session?.getState?.() || null; } catch (_) { state = null; }
+        let built = null;
+        try { built = modal.propertyEditorBuildCurrentStage?.() || null; } catch (_) { built = null; }
+        const encode = (value) => { try { return JSON.stringify(value); } catch (_) { return null; } };
+        return {
+          status: state?.status || "",
+          canApply: state?.canApply === true,
+          busy: state?.busy === true,
+          draftOps: encode(Array.isArray(state?.draftOps) ? state.draftOps : null),
+          currentOps: built && built.ok === true && Array.isArray(built.ops) ? encode(built.ops) : null,
+          warnings: Array.isArray(state?.preview?.warnings)
+            ? state.preview.warnings.map((warning) => String(warning?.code || ""))
+            : [],
+        };
+      })(),
       focusTag: document.activeElement?.tagName || "",
       focusClass: String(document.activeElement?.className || ""),
       inInput: Boolean(document.activeElement?.closest?.("input,textarea,[contenteditable='true']")),
@@ -486,7 +509,7 @@ function visualLayoutSource() {
       .find((row) => row.getAttribute("data-property-marked") !== "true");
     const unmarkedGutter = unmarkedRow?.querySelector?.(".bob-property-row-mark") || null;
     const loose = Array.from(editor.querySelectorAll("[data-property-row]"))
-      .find((row) => row.getAttribute("aria-disabled") !== "true");
+      .find((row) => row.getAttribute("aria-disabled") !== "true" && row.getAttribute("aria-selected") !== "true");
     const focused = document.activeElement?.closest?.("[data-property-row]") || null;
     const styleOf = (node) => node ? getComputedStyle(node) : null;
     const boxOf = (node) => {
@@ -516,15 +539,31 @@ function visualLayoutSource() {
     });
     const valueOverflow = rows.some((row) => {
       const rowBox = boxOf(row);
-      const valueBox = boxOf(row.querySelector(".bob-property-row-value"));
+      const value = row.querySelector(".bob-property-row-value");
+      const valueBox = boxOf(value);
       if (!rowBox || !valueBox || valueBox.height === 0) return false;
-      return valueBox.bottom > rowBox.bottom + 2 || valueBox.right > rowBox.right + 2
+      return value.scrollWidth > value.clientWidth + 2
+        || valueBox.bottom > rowBox.bottom + 2 || valueBox.right > rowBox.right + 2
         || valueBox.left < rowBox.left - 2;
     });
     const clipped = valueOverflow || rows.some((row) => {
       const rect = row.getBoundingClientRect();
       return rect.right > modalBox.right + 2 || rect.left < modalBox.left - 2;
     });
+    // Header geometry: badge, titles, and actions never overlap or leave the
+    // header, and the titles keep a readable column on narrow modals.
+    const header = editor.querySelector(".bob-property-editor-header");
+    const headerBox = boxOf(header);
+    const headerParts = header ? Array.from(header.children).map(boxOf).filter((box) => box && box.width > 0) : [];
+    const titlesBox = boxOf(header?.querySelector(".bob-property-editor-titles"));
+    const headerLayout = {
+      present: Boolean(header),
+      overlap: headerParts.some((box, index) => headerParts.slice(index + 1).some((other) => boxesOverlap(box, other))),
+      clipped: Boolean(headerBox) && headerParts.some((box) => box.left < headerBox.left - 2 || box.right > headerBox.right + 2),
+      titlesWidth: titlesBox ? Math.round(titlesBox.width) : 0,
+      titleOverflow: Array.from(header?.querySelectorAll(".bob-property-editor-titles > *") || [])
+        .some((node) => node.scrollWidth > node.clientWidth + 2),
+    };
     const selectedStyle = styleOf(selected);
     const lockedStyle = styleOf(locked);
     const looseStyle = styleOf(loose);
@@ -538,6 +577,7 @@ function visualLayoutSource() {
       keyValueOverlap,
       rowOverlap,
       valueOverflow,
+      header: headerLayout,
       selectedDisplay: selectedStyle?.display || "",
       selectedBackground: selectedStyle?.backgroundColor || "",
       looseBackground: looseStyle?.backgroundColor || "",
@@ -640,6 +680,24 @@ function isStaleRefusalCopy(value) {
   return /note changed|draft is kept|preview again|preview it against|stale|vault changed/i.test(copy);
 }
 
+// True only when Bob's guarded dry-run answered for exactly the draft the
+// open stage builds now: a pending, stale, refused, or invalidated preview
+// (including the local "Preview ·" copy painted before Bob answers) is not.
+function stagePreviewSettled(probe) {
+  const state = probe?.stageSession;
+  return Boolean(state && state.status === "preview-ready" && state.canApply === true
+    && state.busy !== true && typeof state.currentOps === "string" && state.currentOps !== "[]"
+    && state.currentOps === state.draftOps);
+}
+
+// The settings header keeps badge, titles, and actions apart and inside the
+// header, with a title column wide enough to read (no one-word lines).
+function headerLayoutLegible(layout, minimumTitleWidth = 150) {
+  const header = layout?.header;
+  return Boolean(header && header.present === true && header.overlap === false && header.clipped === false
+    && header.titleOverflow === false && Number(header.titlesWidth) >= minimumTitleWidth);
+}
+
 function yamlHasScalar(text, key, value) {
   const escapedKey = String(key).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const escapedValue = String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -688,7 +746,7 @@ function selfTest() {
 
   const notes = fixtureNotes();
   assert.match(notes["projects-album.md"], /  noun: acceptance_fixture\n/);
-  for (const pathValue of ["projects/project-note.md", "areas/settings-acceptance.md", "projects/settings-acceptance.md", "projects/top-level-settings.md", "bank.md", "2026/20261123.md", "projects-album/acceptance.md", "invalid.md", "unclosed.md", "duplicate.md", "plain.md", "literal-name.md", "value-kinds.md", "old-bob.md", "surfaces.md", "ordinary.md", "parity.md"]) {
+  for (const pathValue of ["projects/project-note.md", "settings-acceptance-area.md", "settings-acceptance-project.md", "projects/top-level-settings.md", "bank.md", "2026/20261123.md", "projects-album/acceptance.md", "invalid.md", "unclosed.md", "duplicate.md", "plain.md", "literal-name.md", "value-kinds.md", "old-bob.md", "surfaces.md", "ordinary.md", "parity.md"]) {
     assert.ok(notes[pathValue], `fixture missing ${pathValue}`);
   }
   assert.match(notes["surfaces.md"], /keep_me: "original"/);
@@ -728,6 +786,24 @@ function selfTest() {
   assert.match(editorProbeSource(), /kindWarning/);
   assert.match(editorProbeSource(), /vaultConfirm/);
   assert.match(editorProbeSource(), /announce/);
+  assert.match(editorProbeSource(), /stageSession/);
+  assert.match(visualLayoutSource(), /titlesWidth/);
+  const garden = JSON.stringify([{ op: "setting.set", setting: "project_name_aliases", value: ["Garden"] }]);
+  const ready = { status: "preview-ready", canApply: true, busy: false, draftOps: garden, currentOps: garden, warnings: ["project_name_aliases_conflict"] };
+  assert.equal(stagePreviewSettled({ stageSession: ready }), true);
+  assert.equal(stagePreviewSettled({ stageSession: { ...ready, status: "preview-pending", busy: true } }), false, "pending preview");
+  assert.equal(stagePreviewSettled({ stageSession: { ...ready, currentOps: JSON.stringify([]) , draftOps: "[]" } }), false, "unchanged draft");
+  assert.equal(stagePreviewSettled({ stageSession: { ...ready, draftOps: JSON.stringify([{ op: "setting.set", setting: "project_name_aliases", value: ["Gard"] }]) } }), false, "stale preview");
+  assert.equal(stagePreviewSettled({ stageSession: { ...ready, status: "draft", canApply: false } }), false, "invalidated preview");
+  assert.equal(stagePreviewSettled({ stageSession: { ...ready, status: "refused", canApply: false } }), false, "refused preview");
+  assert.equal(stagePreviewSettled({ stageSession: { ...ready, currentOps: null } }), false, "invalid current draft");
+  assert.equal(stagePreviewSettled({ stagePreview: "Preview · 1 value · Enter saves", stageSession: null }), false, "local preview copy only");
+  const header = { present: true, overlap: false, clipped: false, titleOverflow: false, titlesWidth: 229 };
+  assert.equal(headerLayoutLegible({ header }), true);
+  assert.equal(headerLayoutLegible({ header: { ...header, titlesWidth: 64 } }), false, "crowded title column");
+  assert.equal(headerLayoutLegible({ header: { ...header, overlap: true } }), false, "overlapping actions");
+  assert.equal(headerLayoutLegible({ header: { ...header, titleOverflow: true } }), false, "overflowing title");
+  assert.equal(headerLayoutLegible({}), false, "missing header");
   assert.equal(isStaleRefusalCopy({
     status: "The note changed. Your draft is kept; press Enter to preview it against the current note. — Nothing was written.",
     banner: "",
@@ -777,10 +853,12 @@ module.exports = {
   coverageFromAssertions,
   editorProbeSource,
   fixtureNotes,
+  headerLayoutLegible,
   isStaleRefusalCopy,
   parseArgs,
   selfTest,
   showFixture,
+  stagePreviewSettled,
   visualLayoutSource,
   yamlHasScalar,
 };

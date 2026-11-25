@@ -603,7 +603,26 @@ propertyEditorPaintRow = function propertyEditorPaintSettingsRow(doc, host, entr
     const description = [entry.row.help, entry.row.reason, entry.row.warning].filter(Boolean).join(" ");
     if (description) button.setAttribute("aria-description", description);
   } catch (_) {}
+  // Expanded Bob-managed rows keep their writer/reason label visible: Bob's
+  // reason (a retired count says nothing maintains it), else the writer.
+  try {
+    if (entry.group !== "managed") return;
+    const label = propertyEditorSettingsManagedLabel(entry.row);
+    const value = label ? button.querySelector?.(".bob-property-row-value") : null;
+    if (!value) return;
+    const note = propertyEditorCreateEl(doc, "span", "bob-property-row-reason");
+    propertyEditorSetText(note, label);
+    if (note) value.appendChild(note);
+    if (!button.getAttribute?.("title")) button.setAttribute("title", label);
+  } catch (_) {}
 };
+
+function propertyEditorSettingsManagedLabel(row) {
+  const reason = row && typeof row.reason === "string" ? row.reason.trim() : "";
+  if (reason) return reason;
+  const owner = row && typeof row.owner === "string" ? row.owner.trim() : "";
+  return owner && owner !== "props" ? `Written by ${owner}` : "";
+}
 
 const propertyEditorSettingsBasePaintAll = propertyEditorPaintAll;
 propertyEditorPaintAll = function propertyEditorPaintAllWithSettings(host, options, doc, modal) {
@@ -725,17 +744,26 @@ Object.assign(PropertyEditorModal.prototype, {
     const requested = propertyEditorSettingsSourceCopyIds(this, selected);
     if (!requested.ok) return this.propertyEditorClipboardNotice("ineligible-selection", requested.message, requested.hint);
     if (!requested.ids.size) return this.propertyEditorClipboardNotice("empty-selection", "Select a declared property to copy.");
-    const oldManual = this.propertyEditorManualMarks;
-    const oldRange = this.propertyEditorRangeMarks;
-    const oldAnchor = this.propertyEditorRangeAnchorId;
-    this.propertyEditorManualMarks = new Set(requested.ids);
-    this.propertyEditorRangeMarks = new Set();
-    this.propertyEditorRangeAnchorId = "";
+    // Declared settings copy source keys that are not visible rows (theme,
+    // both clock keys), so marks would not survive the copy's fresh-report
+    // reconcile. Name the exact source rows again against that report.
+    const previous = this.propertyEditorClipboardCopyIds;
+    this.propertyEditorClipboardCopyIds = () => {
+      const fresh = propertyEditorSettingsAllEntries(this);
+      const current = [];
+      for (const entry of selected) {
+        const match = fresh.find((candidate) => candidate.id === entry.id);
+        if (!match) {
+          return { ok: false, code: "stale-selection", message: "The note changed while copying; select the property again.", hint: "Nothing was copied." };
+        }
+        current.push(match);
+      }
+      const ids = propertyEditorSettingsSourceCopyIds(this, current);
+      return ids.ok ? { ok: true, ids: ids.ids } : { ok: false, code: "ineligible-selection", message: ids.message, hint: ids.hint };
+    };
     try { return await propertyEditorSettingsBaseClipboardCopy.call(this); }
     finally {
-      this.propertyEditorManualMarks = oldManual;
-      this.propertyEditorRangeMarks = oldRange;
-      this.propertyEditorRangeAnchorId = oldAnchor;
+      this.propertyEditorClipboardCopyIds = previous;
       if (!this.closed) this.paintPropertyEditor();
     }
   },

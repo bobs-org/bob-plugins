@@ -474,3 +474,40 @@ test("a closed project still navigates to its ^prj line", async () => {
   assert.equal(fix.modal.closed, true);
   assert.deepEqual(fix.writes, []);
 });
+
+test("a project not shown in any pane opens before its ^prj line is validated", async () => {
+  // The editor was opened by path while another note (the bank) holds the
+  // recent pane: the handoff must navigate rather than read the wrong note.
+  const fix = handoffModal({ leaves: [] });
+  const bankEditor = { getValue: () => "# Bank\n", setCursor() { throw new Error("wrong note"); }, focus() {} };
+  const pane = { view: { file: { path: "bank.md" }, editor: bankEditor } };
+  const workspace = fix.modal.app.workspace;
+  workspace.activeLeaf = pane;
+  workspace.getMostRecentLeaf = () => pane;
+  workspace.getLeavesOfType = () => [pane];
+  workspace.openLinkText = async (...args) => {
+    fix.openedLinks.push(args);
+    pane.view = fix.leaf.view;
+  };
+  await fix.modal.propertyEditorActivate(H.propertyEditorSettingsFindEntry(fix.modal, "project-task::goal"));
+  assert.equal(fix.openedLinks.length, 1, "the project note is opened first");
+  assert.equal(fix.openedLinks[0][1], fix.modal.filePath);
+  assert.deepEqual(fix.cursors, [{ line: 3, ch: 0 }]);
+  assert.equal(fix.picked.length, 1);
+  assert.equal(fix.picked[0][0], fix.editor);
+  assert.equal(fix.modal.closed, true);
+  assert.deepEqual(fix.writes, []);
+});
+
+test("a project that still cannot be shown refuses without touching another note", async () => {
+  const fix = handoffModal({ leaves: [] });
+  const pane = { view: { file: { path: "bank.md" }, editor: { getValue: () => "# Bank\n", setCursor() { throw new Error("wrong note"); } } } };
+  fix.modal.app.workspace.activeLeaf = pane;
+  fix.modal.app.workspace.getMostRecentLeaf = () => pane;
+  await fix.modal.propertyEditorActivate(H.propertyEditorSettingsFindEntry(fix.modal, "project-task::goal"));
+  assert.equal(fix.openedLinks.length, 1);
+  assert.match(fix.modal.announce, /could not be opened/);
+  assert.equal(fix.picked.length, 0);
+  assert.equal(fix.modal.closed, false);
+  assert.deepEqual(fix.writes, []);
+});

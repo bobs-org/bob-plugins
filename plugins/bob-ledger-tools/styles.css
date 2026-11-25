@@ -13552,6 +13552,9 @@ button.bob-property-card-foot-lint-chip {
 /* Property editor typed values (bob-cli-pf.4.1.3). */
 .bob-property-editor-stage {
   display: grid;
+  /* Scroll the editor, rather than compressing a scrollable paste stage to
+     its padding when the property list already fills the modal. */
+  flex-shrink: 0;
   gap: 0.55em;
   margin-block: 0.75em;
   padding: 0.8em;
@@ -13761,12 +13764,16 @@ button.bob-property-card-foot-lint-chip {
   overflow: auto;
   font-family: var(--font-interface);
 }
+/* The titles keep a readable column; on a narrow modal the actions wrap to
+   their own row instead of squeezing the heading into one-word lines. */
 .bob-property-editor-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   gap: 0.65em;
   min-width: 0;
 }
+.bob-property-editor-header > .bob-property-editor-titles { flex: 1 1 12rem; }
 .bob-property-editor-actions {
   display: flex;
   flex: none;
@@ -13907,6 +13914,7 @@ button.bob-property-card-foot-lint-chip {
   color: inherit;
   font: inherit;
   text-align: start;
+  white-space: normal;
   cursor: pointer;
   overflow: visible;
   min-height: min-content;
@@ -13973,6 +13981,14 @@ button.bob-property-card-foot-lint-chip {
 }
 .bob-property-row.is-ghost .bob-property-row-value {
   color: var(--text-faint);
+  font-style: italic;
+}
+/* Expanded Bob-managed rows: Bob's reason or writer under the value. */
+.bob-property-row-reason {
+  display: block;
+  margin-top: 0.15em;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
   font-style: italic;
 }
 .bob-property-row.is-ghost.is-selected .bob-property-row-value,

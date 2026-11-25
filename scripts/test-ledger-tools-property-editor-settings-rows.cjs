@@ -453,7 +453,8 @@ test("a batch clears settings and unsets loose properties once, while protected 
   protectedModal.editorEnsureSession = () => ({ applyOps: async () => { protectedWrites += 1; } });
   await H.propertyEditorSettingsDelete(protectedModal);
   assert.equal(protectedWrites, 0);
-  assert.match(protectedModal.refusal.message, /Identity is fixed/);
+  assert.match(protectedModal.refusal.message, /Cannot delete selection/);
+  assert.match(protectedModal.refusal.message, /locked properties:.*type/);
 });
 
 test("disabled settings and project virtual rows are read-only through direct delete", async () => {

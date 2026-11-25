@@ -383,6 +383,9 @@ async function propertyEditorSettingsDelete(modal) {
     ? visible.filter((entry) => marks.has(entry.id))
     : visible.filter((entry) => entry.id === modal.selectedId);
   if (!selected.length) return;
+  if (selected.length > 1 && selected.every((entry) => entry.entryType === "source")) {
+    return propertyEditorSettingsBaseBatchDelete(modal);
+  }
   const ops = [];
   const cleared = new Set();
   let ghostCount = 0;

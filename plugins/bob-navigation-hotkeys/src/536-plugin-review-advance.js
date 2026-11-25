@@ -66,6 +66,7 @@ function createReviewWalkApi(plugin) {
     version: 2,
     capture(editor) {
       try {
+        flushNavTaskSettlePlugin(plugin);
         if (!plugin || typeof plugin.captureReviewGesture !== "function") {
           return null;
         }

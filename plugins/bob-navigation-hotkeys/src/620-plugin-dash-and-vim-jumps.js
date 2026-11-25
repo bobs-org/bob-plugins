@@ -315,8 +315,9 @@ class BobNavigationHotkeysVimJumpMixin {
       return false;
     }
 
-    vim.defineAction("bobNavigationToggleCurrentTabPin", () =>
-      this.toggleCurrentTabPin(),
+    vim.defineAction(
+      "bobNavigationToggleCurrentTabPin",
+      wrapNavFunctionForSettleFlush(this, () => this.toggleCurrentTabPin()),
     );
     vim.mapCommand(
       "\\s",
@@ -478,11 +479,17 @@ class BobNavigationHotkeysVimJumpMixin {
     this.vimJumpBridgeJumpList = jumpList;
 
     try {
-      targetVim.defineAction("bobNavigationJumpBack", (cm, actionArgs) =>
-        this.handleVimJumpBack(cm, actionArgs),
+      targetVim.defineAction(
+        "bobNavigationJumpBack",
+        wrapNavFunctionForSettleFlush(this, (cm, actionArgs) =>
+          this.handleVimJumpBack(cm, actionArgs),
+        ),
       );
-      targetVim.defineAction("bobNavigationJumpForward", (cm, actionArgs) =>
-        this.handleVimJumpForward(cm, actionArgs),
+      targetVim.defineAction(
+        "bobNavigationJumpForward",
+        wrapNavFunctionForSettleFlush(this, (cm, actionArgs) =>
+          this.handleVimJumpForward(cm, actionArgs),
+        ),
       );
       // Map only <C-o>/<C-i> in normal mode. Insert-mode <C-o>
       // (one-normal-command), visual mode, and plain Tab are untouched.

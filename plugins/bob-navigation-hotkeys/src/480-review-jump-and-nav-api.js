@@ -877,11 +877,8 @@ async function openMarkdownFileWithLeafReuse(plugin, file, failureNotice) {
   }
 }
 
-// nav api v3: frozen, never throws. Feature-detect members (`api.notice?.version`,
-// `api.successors?.version`, `api.recordJump`). Dependency calls return Promises
-// of `{ok, reason?}`. Checklist claim declines with null or a settled Promise.
-// `reviewWalk` is capture/continue v2. `recordJump(from, to)` is additive on
-// the same file-aware Vim jump history Ctrl+O uses; version stays 3.
+// nav api v3: frozen, never throws. Feature-detect members; dependency calls
+// return Promises of `{ok, reason?}`. `recordJump` is additive; version stays 3.
 function createDependencyNavApi(plugin) {
   const shape = (result) =>
     result && typeof result === "object" && "ok" in result
@@ -940,6 +937,7 @@ function createDependencyNavApi(plugin) {
       );
     },
     openFileInActiveLeaf(file) {
+      flushNavTaskSettlePlugin(plugin);
       if (!plugin || !plugin.app || !plugin.app.workspace) {
         return Promise.resolve({ ok: false, reason: "unavailable" });
       }
@@ -955,12 +953,14 @@ function createDependencyNavApi(plugin) {
       });
     },
     openDependencyStage(ref) {
+      flushNavTaskSettlePlugin(plugin);
       if (!plugin || typeof plugin.openDependencyStageForRef !== "function") {
         return Promise.resolve({ ok: false, reason: "unavailable" });
       }
       return settle(() => plugin.openDependencyStageForRef(ref || {}));
     },
     removeDependency(parentRef, target) {
+      flushNavTaskSettlePlugin(plugin);
       if (!plugin || typeof plugin.removeDependencyByRef !== "function") {
         return Promise.resolve({ ok: false, reason: "unavailable" });
       }
@@ -970,6 +970,7 @@ function createDependencyNavApi(plugin) {
     },
     claimReviewWalkCompletion(editor) {
       try {
+        flushNavTaskSettlePlugin(plugin);
         if (!plugin || typeof plugin.claimReviewWalkCtrlEnter !== "function") {
           return null;
         }

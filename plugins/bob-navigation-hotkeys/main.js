@@ -25369,6 +25369,1017 @@ function mapCountedLineThroughCleanup(oldLine, beforeContent, afterContent) {
   }
   return Math.max(0, Math.min(at, afterLines.length - 1));
 }
+// ---- src/181a-nav-task-settle.js ----
+// Navigation consumer of bob-ledger-tools.api.taskSettle v1.
+//
+// Pure helpers: feature detection, typed outcomes, identity, line-map
+// composition, cursor stay/jump planning, command wrapping, and
+// postimage preparation. The mixin in `181b-plugin-task-settle.js`
+// owns editor/file writes and flush. Later phases call these instead
+// of copying grouping into nav. Rollback/restore never settles.
+
+const NAV_TASK_SETTLE_PLUGIN_ID = "bob-ledger-tools";
+const NAV_TASK_SETTLE_API_VERSION = 1;
+
+const NAV_TASK_SETTLE_FLUSH_ROUTES = Object.freeze({
+  commands:
+    "Obsidian addCommand callback/editorCallback; checkCallback and editorCheckCallback only when checking !== true",
+  vim: "registerVimMappings defineAction wrappers",
+  physical: Object.freeze([
+    "handleOpenTaskJumpPhysicalKeydown",
+    "handleCountedBulletPropertyPhysicalKeydown",
+    "handleCountedLaneTogglePhysicalKeydown",
+    "handleCountedTransclusionTogglePhysicalKeydown",
+    "handleCountedTaskMovePhysicalKeydown",
+    "handleReviewRefreshPhysicalKeydown",
+    "handleTaskSplitPhysicalKeydown",
+    "handlePomodoroSplitPhysicalKeydown",
+  ]),
+  publicApi: Object.freeze([
+    "reviewWalk.capture",
+    "claimReviewWalkCompletion",
+    "openDependencyStage",
+    "removeDependency",
+    "openFileInActiveLeaf",
+  ]),
+  skipped: Object.freeze([
+    "checkCallback when checking === true",
+    "arbitrary typing / every keydown",
+    "recordJump",
+  ]),
+});
+
+function lookupNavTaskSettleApi(app) {
+  try {
+    const plugins = app && app.plugins && app.plugins.plugins;
+    const holder = plugins ? plugins[NAV_TASK_SETTLE_PLUGIN_ID] : null;
+    const settle = holder && holder.api ? holder.api.taskSettle : null;
+    if (!settle || settle.version !== NAV_TASK_SETTLE_API_VERSION) {
+      return null;
+    }
+    if (typeof settle.settleNote !== "function") return null;
+    if (typeof settle.applyToEditor !== "function") return null;
+    if (typeof settle.flushPending !== "function") return null;
+    return settle;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function freezeNavSettleOutcome(fields) {
+  const jump = fields && fields.jumpTarget && typeof fields.jumpTarget === "object"
+    ? Object.freeze({ ...fields.jumpTarget })
+    : null;
+  const cursor = fields && fields.cursor && typeof fields.cursor === "object"
+    ? Object.freeze({
+        line: Number(fields.cursor.line) || 0,
+        ch: Number(fields.cursor.ch) || 0,
+      })
+    : null;
+  const lineMap = {};
+  if (fields && fields.lineMap && typeof fields.lineMap === "object") {
+    for (const [key, value] of Object.entries(fields.lineMap)) {
+      if (Number.isInteger(value)) lineMap[key] = value;
+    }
+  }
+  return Object.freeze({
+    kind: String(fields && fields.kind || "idle"),
+    applied: fields && fields.applied === true,
+    changed: fields && fields.changed === true,
+    contents: String(fields && fields.contents != null ? fields.contents : ""),
+    lineMap: Object.freeze(lineMap),
+    jumpTarget: jump,
+    cursor,
+    reason: fields && fields.reason != null ? String(fields.reason) : null,
+    warnings: Object.freeze(
+      Array.isArray(fields && fields.warnings) ? fields.warnings.map(String) : [],
+    ),
+    historyJoined:
+      fields && fields.historyJoined == null ? null : fields.historyJoined,
+    provider: String(fields && fields.provider || "none"),
+  });
+}
+
+function navTaskSettleIdleOutcome(fields) {
+  return freezeNavSettleOutcome({ kind: "idle", applied: false, ...fields });
+}
+
+function navTaskSettleRefusedOutcome(fields) {
+  return freezeNavSettleOutcome({ kind: "refused", applied: false, ...fields });
+}
+
+function navTaskSettleFallbackOutcome(fields) {
+  return freezeNavSettleOutcome({ kind: "fallback", ...fields });
+}
+
+function navTaskSettleAppliedOutcome(fields) {
+  return freezeNavSettleOutcome({ kind: "applied", applied: true, ...fields });
+}
+
+function navTaskSettleRestoreOutcome(fields) {
+  return freezeNavSettleOutcome({ kind: "restore", applied: true, ...fields });
+}
+
+function navTaskSettleLineBlockId(line) {
+  const id = getTrailingBlockId(String(line || ""));
+  return id ? String(id) : "";
+}
+
+function navTaskSettleLineIndent(line) {
+  const text = String(line || "");
+  let index = 0;
+  while (text[index] === " " || text[index] === "\t") index += 1;
+  return index;
+}
+
+function navTaskSettleTaskBlockRange(lines, headlineIndex) {
+  if (!Array.isArray(lines) || headlineIndex < 0 || headlineIndex >= lines.length) {
+    return null;
+  }
+  const indent = navTaskSettleLineIndent(lines[headlineIndex]);
+  let end = headlineIndex + 1;
+  while (end < lines.length) {
+    const line = lines[end];
+    if (String(line).trim() === "") {
+      let look = end + 1;
+      while (look < lines.length && String(lines[look]).trim() === "") look += 1;
+      if (look < lines.length && navTaskSettleLineIndent(lines[look]) > indent) {
+        end = look;
+        continue;
+      }
+      break;
+    }
+    if (navTaskSettleLineIndent(line) > indent) {
+      end += 1;
+      continue;
+    }
+    break;
+  }
+  return { start: headlineIndex, end };
+}
+
+// Zero-based identity against settle-input lines. A supplied block ID is
+// authoritative: unique match wins, absent or duplicate is unresolved even
+// when fallback text matches. A line number alone is never identity.
+function resolveNavTaskIdentity(lines, identity) {
+  if (!identity || typeof identity !== "object" || !Array.isArray(lines)) {
+    return Object.freeze({ line: null, reason: "identity" });
+  }
+  const blockId =
+    typeof identity.blockId === "string" ? identity.blockId.trim() : "";
+  const text = identity.text == null ? null : String(identity.text);
+  if (blockId) {
+    const matches = [];
+    for (let index = 0; index < lines.length; index += 1) {
+      if (navTaskSettleLineBlockId(lines[index]) === blockId) matches.push(index);
+    }
+    if (matches.length === 1) {
+      return Object.freeze({ line: matches[0], reason: null, source: "blockId" });
+    }
+    return Object.freeze({
+      line: null,
+      reason: matches.length === 0 ? "missing" : "ambiguous",
+      source: "blockId",
+    });
+  }
+  const hinted = Number.isInteger(identity.line)
+    ? identity.line
+    : Math.floor(Number(identity.line));
+  if (
+    text != null &&
+    Number.isInteger(hinted) &&
+    hinted >= 0 &&
+    hinted < lines.length &&
+    lines[hinted] === text
+  ) {
+    return Object.freeze({ line: hinted, reason: null, source: "hint" });
+  }
+  if (text == null) {
+    return Object.freeze({ line: null, reason: "identity" });
+  }
+  const textMatches = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    if (lines[index] === text) textMatches.push(index);
+  }
+  if (textMatches.length === 1) {
+    return Object.freeze({ line: textMatches[0], reason: null, source: "text" });
+  }
+  return Object.freeze({
+    line: null,
+    reason: textMatches.length === 0 ? "missing" : "ambiguous",
+    source: "text",
+  });
+}
+
+function navTaskSettleLookupLineMap(lineMap, oldLine) {
+  if (!lineMap || typeof lineMap !== "object") return null;
+  if (Object.prototype.hasOwnProperty.call(lineMap, oldLine)) {
+    const mapped = lineMap[oldLine];
+    return Number.isInteger(mapped) ? mapped : null;
+  }
+  const asString = String(oldLine);
+  if (Object.prototype.hasOwnProperty.call(lineMap, asString)) {
+    const mapped = lineMap[asString];
+    return Number.isInteger(mapped) ? mapped : null;
+  }
+  return null;
+}
+
+function mapNavLineThroughSettle(lineMap, oldLine) {
+  return navTaskSettleLookupLineMap(lineMap, oldLine);
+}
+
+function navTaskSettleFallbackMappedLine(lineMap, oldLine, newLineCount) {
+  const last = Math.max(newLineCount - 1, 0);
+  let bestOld = -1;
+  let bestNew = null;
+  for (const [rawOld, rawNew] of Object.entries(lineMap || {})) {
+    const from = Number(rawOld);
+    const to = Number(rawNew);
+    if (!Number.isInteger(from) || !Number.isInteger(to) || from > oldLine) continue;
+    if (from > bestOld) {
+      bestOld = from;
+      bestNew = to;
+    }
+  }
+  if (bestNew == null) return 0;
+  return Math.max(0, Math.min(bestNew, last));
+}
+
+// `first` maps original/gesture lines onto staged settle input; `second`
+// maps that staged input onto settled output. Missing mappings drop.
+function composeNavLineMaps(first, second) {
+  const out = {};
+  const left = first && typeof first === "object" ? first : {};
+  const keys = Object.keys(left);
+  if (keys.length === 0) {
+    const right = second && typeof second === "object" ? second : {};
+    for (const [key, value] of Object.entries(right)) {
+      if (Number.isInteger(value)) out[key] = value;
+    }
+    return Object.freeze(out);
+  }
+  for (const [from, mid] of Object.entries(left)) {
+    if (!Number.isInteger(mid)) continue;
+    const mapped = navTaskSettleLookupLineMap(second, mid);
+    if (mapped != null) out[from] = mapped;
+  }
+  return Object.freeze(out);
+}
+
+function navTaskSettleClampPos(position, lines) {
+  const last = Math.max((lines && lines.length ? lines.length : 1) - 1, 0);
+  const line = Math.max(0, Math.min(position.line, last));
+  const ch = Math.max(0, Math.min(position.ch, String(lines[line] || "").length));
+  return { line, ch };
+}
+
+function navTaskSettleNormalizePos(position) {
+  if (!position || typeof position !== "object") return null;
+  const line = Math.floor(Number(position.line));
+  const ch = Math.floor(Number(position.ch));
+  if (!Number.isInteger(line) || !Number.isInteger(ch)) return null;
+  return { line: Math.max(0, line), ch: Math.max(0, ch) };
+}
+
+function navTaskSettlePlanCursor(options) {
+  const {
+    cursor,
+    identity,
+    lineMap,
+    inputLines,
+    outputLines,
+    path,
+  } = options || {};
+  const lastOut = Math.max((outputLines && outputLines.length ? outputLines.length : 1) - 1, 0);
+  const resolved = resolveNavTaskIdentity(inputLines, identity);
+  const identityLine = resolved.line;
+  const block =
+    identityLine != null ? navTaskSettleTaskBlockRange(inputLines, identityLine) : null;
+  const mappedIdentityLine =
+    identityLine != null ? navTaskSettleLookupLineMap(lineMap, identityLine) : null;
+  const blockMoved =
+    identityLine != null &&
+    mappedIdentityLine != null &&
+    mappedIdentityLine !== identityLine;
+  const from = navTaskSettleNormalizePos(cursor) || { line: 0, ch: 0 };
+  const stay =
+    blockMoved &&
+    block &&
+    from.line >= block.start &&
+    from.line < block.end;
+  const mapped = stay
+    ? navTaskSettleClampPos(from, outputLines)
+    : (() => {
+        const hit = navTaskSettleLookupLineMap(lineMap, from.line);
+        if (hit != null) {
+          return navTaskSettleClampPos({ line: hit, ch: from.ch }, outputLines);
+        }
+        if (lineMap && Object.keys(lineMap).length > 0) {
+          return navTaskSettleClampPos(
+            {
+              line: navTaskSettleFallbackMappedLine(
+                lineMap,
+                from.line,
+                outputLines.length,
+              ),
+              ch: 0,
+            },
+            outputLines,
+          );
+        }
+        return navTaskSettleClampPos(from, outputLines);
+      })();
+  let jumpTarget = null;
+  if (stay && mappedIdentityLine != null) {
+    const jumpLine = Math.max(0, Math.min(mappedIdentityLine, lastOut));
+    const jumpText = String(outputLines[jumpLine] || "");
+    jumpTarget = {
+      path: String(path || ""),
+      line: jumpLine,
+      ch: Math.min(from.ch, jumpText.length),
+      blockId:
+        identity && typeof identity.blockId === "string" && identity.blockId.trim()
+          ? identity.blockId.trim()
+          : navTaskSettleLineBlockId(jumpText),
+      text: jumpText,
+    };
+  }
+  return Object.freeze({
+    cursor: Object.freeze(mapped),
+    jumpTarget: jumpTarget ? Object.freeze(jumpTarget) : null,
+    stay: stay === true,
+  });
+}
+
+function prepareNavSettledPostimage(app, path, contents, options = {}) {
+  const text = String(contents == null ? "" : contents);
+  const settle = lookupNavTaskSettleApi(app);
+  if (!settle) {
+    return navTaskSettleFallbackOutcome({
+      contents: text,
+      reason: "provider",
+      provider: "none",
+    });
+  }
+  try {
+    const request = {
+      path: String(path || ""),
+      contents: text,
+    };
+    if (typeof options.today === "string" && options.today) {
+      request.today = options.today;
+    }
+    if (typeof options.dailyPath === "string" && options.dailyPath) {
+      request.dailyPath = options.dailyPath;
+    }
+    if (options.tasksSettings) request.tasksSettings = options.tasksSettings;
+    const result = settle.settleNote(request);
+    const next = result && result.contents != null ? String(result.contents) : text;
+    return freezeNavSettleOutcome({
+      kind: result && result.changed ? "applied" : "idle",
+      applied: false,
+      changed: Boolean(result && result.changed),
+      contents: next,
+      lineMap: result && result.lineMap ? result.lineMap : {},
+      reason: result && result.changed ? null : "noop",
+      warnings: result && result.warnings,
+      provider: "v1",
+    });
+  } catch (_error) {
+    return navTaskSettleFallbackOutcome({
+      contents: text,
+      reason: "error",
+      provider: "error",
+    });
+  }
+}
+
+function navEditorMatchesView(editor, view) {
+  if (!editor || !view) return false;
+  if (view.editor === editor) return true;
+  const viewEditor = view.editor;
+  if (!viewEditor) return false;
+  if (viewEditor.cm === editor) return true;
+  if (editor.cm && (editor.cm === viewEditor || editor.cm === viewEditor.cm)) {
+    return true;
+  }
+  return false;
+}
+
+function navFindMarkdownViewForEditor(app, editor) {
+  if (!app || !editor) return null;
+  const workspace = app.workspace;
+  if (!workspace) return null;
+  let match = null;
+  const visit = (leaf) => {
+    if (match || !leaf) return;
+    const view = leaf.view;
+    if (!view) return;
+    const isMarkdown =
+      (typeof view.getViewType === "function" && view.getViewType() === "markdown") ||
+      Boolean(view.editor && view.file);
+    if (!isMarkdown || !view.editor) return;
+    if (navEditorMatchesView(editor, view)) match = view;
+  };
+  if (typeof workspace.iterateAllLeaves === "function") {
+    try {
+      workspace.iterateAllLeaves(visit);
+    } catch (_error) {
+      match = null;
+    }
+  }
+  if (!match && typeof workspace.getLeavesOfType === "function") {
+    const leaves = workspace.getLeavesOfType("markdown") || [];
+    for (const leaf of leaves) visit(leaf);
+  }
+  return match;
+}
+
+function navGuardEditorPath(app, editor, path) {
+  const expected = normalizeVaultRelativePath(path);
+  if (!expected) {
+    return { ok: false, reason: "path", path: "" };
+  }
+  const view = navFindMarkdownViewForEditor(app, editor);
+  if (!view) {
+    return { ok: false, reason: "view", path: expected };
+  }
+  const viewPath = view.file && typeof view.file.path === "string"
+    ? normalizeVaultRelativePath(view.file.path)
+    : "";
+  if (!viewPath || viewPath !== expected) {
+    return { ok: false, reason: "path", path: viewPath };
+  }
+  return { ok: true, reason: null, path: viewPath, view };
+}
+
+function wrapNavCommandForSettleFlush(plugin, command) {
+  if (!command || typeof command !== "object") return command;
+  const wrapped = { ...command };
+  const flush = () => {
+    if (plugin && typeof plugin.flushPendingNavSettles === "function") {
+      plugin.flushPendingNavSettles();
+    }
+  };
+  for (const name of ["callback", "editorCallback"]) {
+    const callback = wrapped[name];
+    if (typeof callback !== "function") continue;
+    wrapped[name] = function navSettleFlushCommand(...args) {
+      flush();
+      return callback.apply(this, args);
+    };
+  }
+  for (const name of ["checkCallback", "editorCheckCallback"]) {
+    const callback = wrapped[name];
+    if (typeof callback !== "function") continue;
+    wrapped[name] = function navSettleFlushCheckCommand(checking, ...args) {
+      if (checking !== true) flush();
+      return callback.call(this, checking, ...args);
+    };
+  }
+  return wrapped;
+}
+
+function flushNavTaskSettlePlugin(plugin) {
+  if (plugin && typeof plugin.flushPendingNavSettles === "function") {
+    plugin.flushPendingNavSettles();
+  }
+}
+
+function wrapNavFunctionForSettleFlush(plugin, fn) {
+  if (typeof fn !== "function") return fn;
+  return function navSettleFlushWrapped(...args) {
+    if (plugin && typeof plugin.flushPendingNavSettles === "function") {
+      plugin.flushPendingNavSettles();
+    }
+    return fn.apply(this, args);
+  };
+}
+
+function navSettleJumpLocations(path, outcome) {
+  if (!outcome || !outcome.jumpTarget) return null;
+  const target = outcome.jumpTarget;
+  const destPath =
+    typeof target.path === "string" && target.path
+      ? target.path
+      : String(path || "");
+  if (!destPath) return null;
+  const origin = outcome.cursor && Number.isInteger(outcome.cursor.line)
+    ? {
+        path: destPath,
+        line: outcome.cursor.line,
+        ch: Number.isInteger(outcome.cursor.ch) ? outcome.cursor.ch : 0,
+      }
+    : null;
+  const destination = {
+    path: destPath,
+    line: Number.isInteger(target.line) ? target.line : 0,
+    ch: Number.isInteger(target.ch) ? target.ch : 0,
+  };
+  if (!origin) return { origin: null, destination };
+  return { origin, destination };
+}
+
+function consumeNavSettleFlushResults(plugin, results) {
+  const list = Array.isArray(results) ? results : [];
+  const consumed = [];
+  for (const entry of list) {
+    if (!entry || typeof entry !== "object") continue;
+    const result = entry.result && typeof entry.result === "object" ? entry.result : entry;
+    const path = typeof entry.path === "string" ? entry.path : "";
+    const jump = navSettleJumpLocations(path, result);
+    if (
+      jump &&
+      jump.origin &&
+      jump.destination &&
+      plugin &&
+      typeof plugin.recordJump === "function"
+    ) {
+      try {
+        plugin.recordJump(jump.origin, jump.destination);
+      } catch (_error) {
+        // Jump recording is best-effort; the write already landed.
+      }
+    }
+    consumed.push(
+      Object.freeze({
+        path,
+        generation: Number.isInteger(entry.generation) ? entry.generation : null,
+        result,
+        jump,
+      }),
+    );
+  }
+  return Object.freeze(consumed);
+}
+// ---- src/181b-plugin-task-settle.js ----
+// Navigation settle mixin: guarded editor/file application, command-entry
+// flush, and exact restore. Later phases call these instead of copying
+// grouping into nav. `applyEditorContentTransaction` stays a low-level
+// helper and is never an unconditional settle hook.
+
+function navTaskSettleReadCursor(editor) {
+  if (!editor) return null;
+  if (typeof getEditorCursor === "function") {
+    try {
+      const cursor = getEditorCursor(editor);
+      if (cursor) return cursor;
+    } catch (_error) {
+      // Fall through to editor.getCursor.
+    }
+  }
+  if (typeof editor.getCursor === "function") {
+    try {
+      return editor.getCursor();
+    } catch (_error) {
+      return null;
+    }
+  }
+  return null;
+}
+
+function navTaskSettleReadLive(editor) {
+  if (!editor || typeof editor.getValue !== "function") return "";
+  try {
+    return String(editor.getValue());
+  } catch (_error) {
+    return "";
+  }
+}
+
+function navTaskSettleViewportWouldHide(editor, cursor, scroll) {
+  if (!scroll || typeof scroll.top !== "number" || !cursor) return false;
+  const lineHeight =
+    typeof editor.getLineHeight === "function"
+      ? Number(editor.getLineHeight()) || 20
+      : 20;
+  const height = typeof scroll.clientHeight === "number" ? scroll.clientHeight : 400;
+  const first = Math.floor(scroll.top / lineHeight);
+  const last = first + Math.max(1, Math.floor(height / lineHeight));
+  return cursor.line < first || cursor.line > last;
+}
+
+function navTaskSettleRestoreViewport(editor, cursor) {
+  if (!editor || typeof editor.scrollTo !== "function") return;
+  const scroll =
+    typeof editor.getScrollInfo === "function" ? editor.getScrollInfo() : null;
+  if (!scroll) return;
+  if (navTaskSettleViewportWouldHide(editor, cursor, scroll)) return;
+  try {
+    editor.scrollTo(scroll.left, scroll.top);
+  } catch (_error) {
+    // Viewport restoration is best-effort.
+  }
+}
+
+function navTaskSettleCursorForStaged(cursor, liveText, stagedText) {
+  const from = navTaskSettleNormalizePos(cursor) || { line: 0, ch: 0 };
+  if (liveText === stagedText) return from;
+  const liveLines = splitMarkdownContent(liveText).lines;
+  const stagedLines = splitMarkdownContent(stagedText).lines;
+  const pairs = alignEditorLines(liveLines, stagedLines);
+  return mapEditorPositionThroughLineAlignment(from, liveLines, stagedLines, pairs);
+}
+
+function navTaskSettleIdentityForStaged(identity, liveText, stagedText) {
+  if (!identity || typeof identity !== "object") return identity || null;
+  if (liveText === stagedText || !Number.isInteger(identity.line)) return identity;
+  const mapped = navTaskSettleCursorForStaged(
+    { line: identity.line, ch: 0 },
+    liveText,
+    stagedText,
+  );
+  return { ...identity, line: mapped.line };
+}
+
+function navTaskSettleApplyExact(editor, expected, contents, cursor, annotation) {
+  const live = navTaskSettleReadLive(editor);
+  if (live !== expected) return false;
+  if (live === contents) return true;
+  return applyEditorContentTransaction(
+    editor,
+    expected,
+    contents,
+    cursor || null,
+    annotation || null,
+  );
+}
+
+class BobNavigationHotkeysTaskSettleMixin {
+  lookupNavTaskSettle() {
+    return lookupNavTaskSettleApi(this.app);
+  }
+
+  navTaskSettleToday(options = {}) {
+    if (typeof options.today === "string" && options.today) return options.today;
+    return formatProjectTaskCreatedDate(new Date());
+  }
+
+  consumeNavSettleOutcome(path, outcome) {
+    consumeNavSettleFlushResults(this, [{ path, result: outcome }]);
+    return outcome;
+  }
+
+  prepareNavSettledFilePostimage(path, contents, options = {}) {
+    return prepareNavSettledPostimage(this.app, path, contents, {
+      today: this.navTaskSettleToday(options),
+      dailyPath: options.dailyPath,
+      tasksSettings: options.tasksSettings,
+    });
+  }
+
+  flushPendingNavSettles() {
+    if (this._navTaskSettleFlushing === true) return Object.freeze([]);
+    this._navTaskSettleFlushing = true;
+    try {
+      const settle = this.lookupNavTaskSettle();
+      if (!settle) return Object.freeze([]);
+      let results;
+      try {
+        results = settle.flushPending();
+      } catch (_error) {
+        return Object.freeze([]);
+      }
+      return consumeNavSettleFlushResults(this, results);
+    } finally {
+      this._navTaskSettleFlushing = false;
+    }
+  }
+
+  installNavTaskSettleCommandFlush() {
+    const registry = this.app && this.app.commands && this.app.commands.commands;
+    if (!registry) return 0;
+    if (!(this._navTaskSettleCommandsWrapped instanceof WeakSet)) {
+      this._navTaskSettleCommandsWrapped = new WeakSet();
+    }
+    const entries = registry instanceof Map
+      ? [...registry.entries()]
+      : Object.entries(registry);
+    const pluginId =
+      this.manifest && this.manifest.id ? this.manifest.id : "bob-navigation-hotkeys";
+    const prefix = `${pluginId}:`;
+    let wrappedCount = 0;
+    for (const [key, command] of entries) {
+      if (!command || typeof command !== "object") continue;
+      if (this._navTaskSettleCommandsWrapped.has(command)) continue;
+      const id = typeof command.id === "string" ? command.id : String(key);
+      if (!String(key).startsWith(prefix) && !id.startsWith(prefix)) continue;
+      try {
+        const wrapped = wrapNavCommandForSettleFlush(this, command);
+        for (const name of [
+          "callback",
+          "editorCallback",
+          "checkCallback",
+          "editorCheckCallback",
+        ]) {
+          if (typeof wrapped[name] === "function") command[name] = wrapped[name];
+        }
+        this._navTaskSettleCommandsWrapped.add(command);
+        wrappedCount += 1;
+      } catch (_error) {
+        // A read-only registry row keeps its original behavior.
+      }
+    }
+    return wrappedCount;
+  }
+
+  applyNavSettledRestoreWrite(editor, path, options = {}) {
+    const live = navTaskSettleReadLive(editor);
+    const expected = options.expected != null ? String(options.expected) : live;
+    const contents = options.contents != null ? String(options.contents) : live;
+    const guard = navGuardEditorPath(this.app, editor, path);
+    if (!guard.ok) {
+      return navTaskSettleRefusedOutcome({
+        contents: live,
+        cursor: navTaskSettleReadCursor(editor),
+        reason: guard.reason,
+        provider: "none",
+      });
+    }
+    if (live !== expected) {
+      return navTaskSettleRefusedOutcome({
+        contents: live,
+        cursor: navTaskSettleReadCursor(editor),
+        reason: "preimage",
+        provider: "none",
+      });
+    }
+    const cursor = navTaskSettleNormalizePos(options.cursor) || navTaskSettleReadCursor(editor);
+    const scroll =
+      typeof editor.getScrollInfo === "function" ? editor.getScrollInfo() : null;
+    const wrote = navTaskSettleApplyExact(
+      editor,
+      expected,
+      contents,
+      cursor,
+      options.annotation || null,
+    );
+    if (!wrote) {
+      return navTaskSettleRefusedOutcome({
+        contents: live,
+        cursor: navTaskSettleReadCursor(editor),
+        reason: "editor",
+        provider: "none",
+      });
+    }
+    const after = navTaskSettleReadLive(editor);
+    const afterLines = splitMarkdownContent(after).lines;
+    const finalCursor = navTaskSettleClampPos(
+      cursor || { line: 0, ch: 0 },
+      afterLines,
+    );
+    if (scroll) navTaskSettleRestoreViewport(editor, finalCursor);
+    return navTaskSettleRestoreOutcome({
+      contents: after,
+      changed: after !== expected,
+      cursor: finalCursor,
+      provider: "none",
+    });
+  }
+
+  applyNavSettledAnnotatedWrite(editor, path, options = {}) {
+    if (options.restore === true) {
+      return this.applyNavSettledRestoreWrite(editor, path, options);
+    }
+    const live = navTaskSettleReadLive(editor);
+    const expected = options.expected != null ? String(options.expected) : live;
+    const staged = options.contents != null ? String(options.contents) : live;
+    const guard = navGuardEditorPath(this.app, editor, path);
+    if (!guard.ok) {
+      return navTaskSettleRefusedOutcome({
+        contents: live,
+        cursor: navTaskSettleReadCursor(editor),
+        reason: guard.reason,
+        provider: "none",
+      });
+    }
+    if (live !== expected) {
+      return navTaskSettleRefusedOutcome({
+        contents: live,
+        cursor: navTaskSettleReadCursor(editor),
+        reason: "preimage",
+        provider: "none",
+      });
+    }
+    const prepared = this.prepareNavSettledFilePostimage(path, staged, options);
+    const next = prepared.contents;
+    const liveCursor = navTaskSettleNormalizePos(options.cursor) || navTaskSettleReadCursor(editor);
+    const stagedCursor = navTaskSettleCursorForStaged(liveCursor, live, staged);
+    const stagedIdentity = navTaskSettleIdentityForStaged(
+      options.identity,
+      live,
+      staged,
+    );
+    const inputLines = splitMarkdownContent(staged).lines;
+    const outputLines = splitMarkdownContent(next).lines;
+    const composed = composeNavLineMaps(options.lineMap, prepared.lineMap);
+    const planned = navTaskSettlePlanCursor({
+      cursor: stagedCursor,
+      identity: stagedIdentity,
+      lineMap: composed,
+      inputLines,
+      outputLines,
+      path,
+    });
+    const scroll =
+      typeof editor.getScrollInfo === "function" ? editor.getScrollInfo() : null;
+    const wrote = navTaskSettleApplyExact(
+      editor,
+      expected,
+      next,
+      planned.cursor,
+      options.annotation || null,
+    );
+    if (!wrote) {
+      return navTaskSettleRefusedOutcome({
+        contents: navTaskSettleReadLive(editor),
+        cursor: navTaskSettleReadCursor(editor),
+        reason: "editor",
+        provider: prepared.provider,
+      });
+    }
+    const after = navTaskSettleReadLive(editor);
+    if (scroll) navTaskSettleRestoreViewport(editor, planned.cursor);
+    const outcome = freezeNavSettleOutcome({
+      kind: prepared.provider === "v1" ? (prepared.changed ? "applied" : "idle") : "fallback",
+      applied: after !== expected,
+      changed: after !== expected,
+      contents: after,
+      lineMap: composed,
+      jumpTarget: planned.jumpTarget,
+      cursor: planned.cursor,
+      reason: prepared.reason,
+      warnings: prepared.warnings,
+      provider: prepared.provider,
+    });
+    return this.consumeNavSettleOutcome(path, outcome);
+  }
+
+  applyNavSettledEditorWrite(editor, path, options = {}) {
+    if (options.restore === true) {
+      return this.applyNavSettledRestoreWrite(editor, path, options);
+    }
+    if (options.annotation) {
+      return this.applyNavSettledAnnotatedWrite(editor, path, options);
+    }
+    const live = navTaskSettleReadLive(editor);
+    const expected = options.expected != null ? String(options.expected) : live;
+    const contents = options.contents != null ? String(options.contents) : live;
+    const guard = navGuardEditorPath(this.app, editor, path);
+    if (!guard.ok) {
+      return navTaskSettleRefusedOutcome({
+        contents: live,
+        cursor: navTaskSettleReadCursor(editor),
+        reason: guard.reason,
+        provider: "none",
+      });
+    }
+    if (live !== expected) {
+      return navTaskSettleRefusedOutcome({
+        contents: live,
+        cursor: navTaskSettleReadCursor(editor),
+        reason: "preimage",
+        provider: "none",
+      });
+    }
+    const settle = this.lookupNavTaskSettle();
+    const liveCursor = navTaskSettleNormalizePos(options.cursor) || navTaskSettleReadCursor(editor);
+    if (!settle) {
+      return this._applyNavSettledFallbackWrite(editor, path, {
+        expected,
+        contents,
+        cursor: liveCursor,
+        identity: options.identity,
+        lineMap: options.lineMap,
+        reason: "provider",
+      });
+    }
+    let result;
+    try {
+      result = settle.applyToEditor(editor, path, {
+        expected,
+        contents,
+        identity: options.identity,
+        cursor: liveCursor,
+        selection: options.selection,
+        today: this.navTaskSettleToday(options),
+        dailyPath: options.dailyPath,
+        tasksSettings: options.tasksSettings,
+        app: this.app,
+      });
+    } catch (_error) {
+      const afterThrow = navTaskSettleReadLive(editor);
+      if (afterThrow !== expected) {
+        return freezeNavSettleOutcome({
+          kind: "applied",
+          applied: true,
+          changed: true,
+          contents: afterThrow,
+          cursor: navTaskSettleReadCursor(editor),
+          reason: "error",
+          provider: "error",
+        });
+      }
+      return this._applyNavSettledFallbackWrite(editor, path, {
+        expected,
+        contents,
+        cursor: liveCursor,
+        identity: options.identity,
+        lineMap: options.lineMap,
+        reason: "error",
+      });
+    }
+    const after = navTaskSettleReadLive(editor);
+    if (result && result.applied === true) {
+      const composed = composeNavLineMaps(options.lineMap, result.lineMap);
+      const outcome = navTaskSettleAppliedOutcome({
+        contents: after,
+        changed: result.changed === true || after !== expected,
+        lineMap: composed,
+        jumpTarget: result.jumpTarget,
+        cursor: result.cursor,
+        warnings: result.warnings,
+        historyJoined: result.historyJoined,
+        provider: "v1",
+      });
+      return this.consumeNavSettleOutcome(path, outcome);
+    }
+    const reason = result && result.reason ? String(result.reason) : "idle";
+    if (reason === "noop") {
+      return navTaskSettleIdleOutcome({
+        contents: after,
+        cursor: result && result.cursor ? result.cursor : liveCursor,
+        lineMap: result && result.lineMap ? result.lineMap : {},
+        reason: "noop",
+        warnings: result && result.warnings,
+        provider: "v1",
+      });
+    }
+    if (after !== expected) {
+      return freezeNavSettleOutcome({
+        kind: "applied",
+        applied: true,
+        changed: true,
+        contents: after,
+        cursor: navTaskSettleReadCursor(editor),
+        reason,
+        provider: "v1",
+      });
+    }
+    return navTaskSettleRefusedOutcome({
+      contents: after,
+      cursor: result && result.cursor ? result.cursor : liveCursor,
+      reason,
+      provider: "v1",
+    });
+  }
+
+  _applyNavSettledFallbackWrite(editor, path, options) {
+    const expected = String(options.expected || "");
+    const contents = String(options.contents || "");
+    const liveCursor = options.cursor || { line: 0, ch: 0 };
+    const inputLines = splitMarkdownContent(contents).lines;
+    const identityMap = options.lineMap && typeof options.lineMap === "object"
+      ? options.lineMap
+      : {};
+    const planned = navTaskSettlePlanCursor({
+      cursor: liveCursor,
+      identity: options.identity,
+      lineMap: identityMap,
+      inputLines,
+      outputLines: inputLines,
+      path,
+    });
+    const scroll =
+      typeof editor.getScrollInfo === "function" ? editor.getScrollInfo() : null;
+    const wrote = navTaskSettleApplyExact(
+      editor,
+      expected,
+      contents,
+      planned.cursor,
+      null,
+    );
+    if (!wrote) {
+      return navTaskSettleRefusedOutcome({
+        contents: navTaskSettleReadLive(editor),
+        cursor: navTaskSettleReadCursor(editor),
+        reason: "editor",
+        provider: "none",
+      });
+    }
+    const after = navTaskSettleReadLive(editor);
+    if (scroll) navTaskSettleRestoreViewport(editor, planned.cursor);
+    return navTaskSettleFallbackOutcome({
+      applied: after !== expected,
+      changed: after !== expected,
+      contents: after,
+      cursor: planned.cursor,
+      reason: options.reason || "provider",
+      provider: options.reason === "error" ? "error" : "none",
+    });
+  }
+}
 // ---- src/182-reload-history.js ----
 // Disk reloads stay out of the undo history.
 //
@@ -91245,11 +92256,8 @@ async function openMarkdownFileWithLeafReuse(plugin, file, failureNotice) {
   }
 }
 
-// nav api v3: frozen, never throws. Feature-detect members (`api.notice?.version`,
-// `api.successors?.version`, `api.recordJump`). Dependency calls return Promises
-// of `{ok, reason?}`. Checklist claim declines with null or a settled Promise.
-// `reviewWalk` is capture/continue v2. `recordJump(from, to)` is additive on
-// the same file-aware Vim jump history Ctrl+O uses; version stays 3.
+// nav api v3: frozen, never throws. Feature-detect members; dependency calls
+// return Promises of `{ok, reason?}`. `recordJump` is additive; version stays 3.
 function createDependencyNavApi(plugin) {
   const shape = (result) =>
     result && typeof result === "object" && "ok" in result
@@ -91308,6 +92316,7 @@ function createDependencyNavApi(plugin) {
       );
     },
     openFileInActiveLeaf(file) {
+      flushNavTaskSettlePlugin(plugin);
       if (!plugin || !plugin.app || !plugin.app.workspace) {
         return Promise.resolve({ ok: false, reason: "unavailable" });
       }
@@ -91323,12 +92332,14 @@ function createDependencyNavApi(plugin) {
       });
     },
     openDependencyStage(ref) {
+      flushNavTaskSettlePlugin(plugin);
       if (!plugin || typeof plugin.openDependencyStageForRef !== "function") {
         return Promise.resolve({ ok: false, reason: "unavailable" });
       }
       return settle(() => plugin.openDependencyStageForRef(ref || {}));
     },
     removeDependency(parentRef, target) {
+      flushNavTaskSettlePlugin(plugin);
       if (!plugin || typeof plugin.removeDependencyByRef !== "function") {
         return Promise.resolve({ ok: false, reason: "unavailable" });
       }
@@ -91338,6 +92349,7 @@ function createDependencyNavApi(plugin) {
     },
     claimReviewWalkCompletion(editor) {
       try {
+        flushNavTaskSettlePlugin(plugin);
         if (!plugin || typeof plugin.claimReviewWalkCtrlEnter !== "function") {
           return null;
         }
@@ -92777,6 +93789,7 @@ class BobNavigationHotkeysPlugin extends Plugin {
       });
     }
 
+    this.installNavTaskSettleCommandFlush();
     this.register(() => {
       if (this.pendingDependencyMirror) {
         clearTimeout(this.pendingDependencyMirror);
@@ -98228,6 +99241,7 @@ function createReviewWalkApi(plugin) {
     version: 2,
     capture(editor) {
       try {
+        flushNavTaskSettlePlugin(plugin);
         if (!plugin || typeof plugin.captureReviewGesture !== "function") {
           return null;
         }
@@ -100524,6 +101538,169 @@ function collectReviewAnswerKeys(origin, handledRefs, stored, todayText, exclusi
     });
   }
 }
+// ---- src/538a-nav-settle-identity.js ----
+// Settle-aware identity forwarding for review queue rows, resume anchors,
+// and recorded jumps. Queue/resume lines stay 1-based; editor/settle maps
+// stay 0-based. A supplied block ID is authoritative and never falls back
+// to a stale line number.
+
+function navReviewEntryBlockId(entry) {
+  if (!entry || typeof entry !== "object") return "";
+  if (typeof entry.blockId === "string" && entry.blockId.trim()) {
+    return entry.blockId.trim();
+  }
+  return navTaskSettleLineBlockId(entry.originalMarkdown || entry.text || "");
+}
+
+function navSettleQueueLineToZero(line) {
+  if (!Number.isInteger(line)) return null;
+  return Math.max(0, line - 1);
+}
+
+function mapNavJumpLocationThroughSettle(location, lineMap, contents) {
+  if (!location || typeof location !== "object") return null;
+  const path = typeof location.path === "string" ? location.path : "";
+  if (!path) return null;
+  const lines = splitMarkdownContent(contents == null ? "" : contents).lines;
+  const identity = {
+    blockId: typeof location.blockId === "string" ? location.blockId : "",
+    text: location.text == null ? null : String(location.text),
+    line: Number.isInteger(location.line) ? location.line : undefined,
+  };
+  const resolved = resolveNavTaskIdentity(lines, identity);
+  let line = resolved.line;
+  if (line == null) {
+    line = mapNavLineThroughSettle(lineMap, identity.line);
+  }
+  if (line == null) return null;
+  const text = String(lines[line] || "");
+  const ch = Number.isInteger(location.ch)
+    ? Math.max(0, Math.min(location.ch, text.length))
+    : 0;
+  return Object.freeze({
+    path,
+    line,
+    ch,
+    ...(identity.blockId ? { blockId: identity.blockId } : {}),
+    text,
+  });
+}
+
+function mapReviewQueueEntryThroughSettle(entry, contents, lineMap) {
+  if (!entry || typeof entry !== "object") return null;
+  const lines = splitMarkdownContent(contents == null ? "" : contents).lines;
+  const blockId = navReviewEntryBlockId(entry);
+  const text =
+    typeof entry.originalMarkdown === "string"
+      ? entry.originalMarkdown
+      : typeof entry.text === "string"
+        ? entry.text
+        : null;
+  const zero = navSettleQueueLineToZero(entry.line);
+  const resolved = resolveNavTaskIdentity(lines, {
+    blockId,
+    text,
+    line: zero,
+  });
+  let line = resolved.line;
+  if (line == null && !blockId) {
+    line = mapNavLineThroughSettle(lineMap, zero);
+  }
+  if (line == null) return null;
+  const nextText = String(lines[line] || "");
+  return Object.freeze({
+    ...entry,
+    line: line + 1,
+    originalMarkdown: nextText,
+    ...(blockId ? { blockId } : {}),
+  });
+}
+
+function mapReviewResumeRefThroughSettle(ref, contents, lineMap) {
+  if (!ref || typeof ref !== "object") return null;
+  const lines = splitMarkdownContent(contents == null ? "" : contents).lines;
+  const blockId =
+    typeof ref.blockId === "string" && ref.blockId.trim()
+      ? ref.blockId.trim()
+      : navTaskSettleLineBlockId(ref.text || "");
+  const text = ref.text == null ? null : String(ref.text);
+  const zero = navSettleQueueLineToZero(ref.line);
+  const resolved = resolveNavTaskIdentity(lines, {
+    blockId,
+    text,
+    line: zero,
+  });
+  let line = resolved.line;
+  if (line == null && !blockId) {
+    line = mapNavLineThroughSettle(lineMap, zero);
+  }
+  if (line == null) return null;
+  const nextText = String(lines[line] || "");
+  return Object.freeze({
+    ...ref,
+    line: line + 1,
+    text: nextText,
+    ...(blockId ? { blockId } : {}),
+  });
+}
+
+const resolveReviewQueueLineBeforeSettle = resolveReviewQueueLine;
+resolveReviewQueueLine = function resolveReviewQueueLineWithBlockId(content, entry) {
+  const blockId =
+    entry && typeof entry.blockId === "string" ? entry.blockId.trim() : "";
+  if (blockId) {
+    const { lines } = splitMarkdownContent(String(content || ""));
+    const matches = [];
+    for (let index = 0; index < lines.length; index += 1) {
+      if (navTaskSettleLineBlockId(lines[index]) === blockId) matches.push(index);
+    }
+    if (matches.length === 1) {
+      return Object.freeze({ ok: true, line: matches[0], source: "blockId" });
+    }
+    return Object.freeze({ ok: false, reason: "stale" });
+  }
+  return resolveReviewQueueLineBeforeSettle(content, entry);
+};
+
+const reviewResumeRefBeforeSettle = reviewResumeRef;
+reviewResumeRef = function reviewResumeRefWithSettleIdentity(entry) {
+  const ref = reviewResumeRefBeforeSettle(entry);
+  if (!ref) return ref;
+  const blockId = navReviewEntryBlockId(entry);
+  if (!blockId) return ref;
+  return Object.freeze({ ...ref, blockId });
+};
+
+const findReviewResumeIndexBeforeSettle = findReviewResumeIndex;
+findReviewResumeIndex = function findReviewResumeIndexWithSettleIdentity(list, ref) {
+  try {
+    const rows = Array.isArray(list) ? list : null;
+    if (!rows || !ref || typeof ref !== "object") {
+      return findReviewResumeIndexBeforeSettle(list, ref);
+    }
+    const blockId =
+      typeof ref.blockId === "string" && ref.blockId.trim()
+        ? ref.blockId.trim()
+        : "";
+    if (!blockId) {
+      return findReviewResumeIndexBeforeSettle(list, ref);
+    }
+    const refPath = typeof ref.path === "string" ? ref.path : "";
+    if (!refPath) return -1;
+    const hits = [];
+    for (let index = 0; index < rows.length; index += 1) {
+      const entry = rows[index];
+      if (!entry || typeof entry !== "object") continue;
+      if (String(entry.path || "") !== refPath) continue;
+      const entryId = navReviewEntryBlockId(entry);
+      if (entryId === blockId) hits.push(index);
+    }
+    if (hits.length === 1) return hits[0];
+    return -1;
+  } catch (_error) {
+    return -1;
+  }
+};
 // ---- src/539-plugin-review-walk-return.js ----
 // Review-walk return to the current review task: `]s` / `[s` (and the
 // same commands via Ctrl+Alt+J/K or the footer click) away from the
@@ -102550,6 +103727,7 @@ class BobNavigationHotkeysDecayCancelMixin {
     if (!view || !this.isVimNormalModeEditor(view.editor, view)) {
       return false;
     }
+    this.flushPendingNavSettles();
     const cm = this.resolveVimCodeMirror(view.editor, view);
     const pendingRepeat = getPendingVimRepeat(cm);
     if (this.handledReviewRefreshEvents) {
@@ -115714,6 +116892,7 @@ class BobNavigationHotkeysJumpKeyMixin {
     if (!view || !this.isVimNormalModeEditor(view.editor, view)) {
       return false;
     }
+    this.flushPendingNavSettles();
     const cm = this.resolveVimCodeMirror(view.editor, view);
     const pendingRepeat = getPendingVimRepeat(cm);
     if (!pendingRepeat.explicit) {
@@ -115829,6 +117008,7 @@ class BobNavigationHotkeysJumpKeyMixin {
     if (!view || !this.isVimNormalModeEditor(view.editor, view)) {
       return false;
     }
+    this.flushPendingNavSettles();
     const cm = this.resolveVimCodeMirror(view.editor, view);
     const pendingRepeat = getPendingVimRepeat(cm);
     if (this.handledCountedLaneToggleEvents) {
@@ -115878,6 +117058,7 @@ class BobNavigationHotkeysJumpKeyMixin {
       return false;
     }
 
+    this.flushPendingNavSettles();
     const cm = this.resolveVimCodeMirror(view.editor, view);
     const pendingRepeat = getPendingVimRepeat(cm);
 
@@ -115988,6 +117169,7 @@ class BobNavigationHotkeysJumpKeyMixin {
       return false;
     }
 
+    this.flushPendingNavSettles();
     const cm = this.resolveVimCodeMirror(view.editor, view);
     // Still read, reset, and pass an explicit repeat. The shared route also
     // resolves a count for the command path; this reset is then a no-op on
@@ -116210,6 +117392,7 @@ class BobNavigationHotkeysCountedTaskMoveMixin {
     if (!view || !this.isVimNormalModeEditor(view.editor, view)) {
       return false;
     }
+    this.flushPendingNavSettles();
     const cm = this.resolveVimCodeMirror(view.editor, view);
     const pendingRepeat = getPendingVimRepeat(cm);
     if (this.handledCountedTaskMoveEvents) {
@@ -116557,8 +117740,9 @@ class BobNavigationHotkeysVimJumpMixin {
       return false;
     }
 
-    vim.defineAction("bobNavigationToggleCurrentTabPin", () =>
-      this.toggleCurrentTabPin(),
+    vim.defineAction(
+      "bobNavigationToggleCurrentTabPin",
+      wrapNavFunctionForSettleFlush(this, () => this.toggleCurrentTabPin()),
     );
     vim.mapCommand(
       "\\s",
@@ -116720,11 +117904,17 @@ class BobNavigationHotkeysVimJumpMixin {
     this.vimJumpBridgeJumpList = jumpList;
 
     try {
-      targetVim.defineAction("bobNavigationJumpBack", (cm, actionArgs) =>
-        this.handleVimJumpBack(cm, actionArgs),
+      targetVim.defineAction(
+        "bobNavigationJumpBack",
+        wrapNavFunctionForSettleFlush(this, (cm, actionArgs) =>
+          this.handleVimJumpBack(cm, actionArgs),
+        ),
       );
-      targetVim.defineAction("bobNavigationJumpForward", (cm, actionArgs) =>
-        this.handleVimJumpForward(cm, actionArgs),
+      targetVim.defineAction(
+        "bobNavigationJumpForward",
+        wrapNavFunctionForSettleFlush(this, (cm, actionArgs) =>
+          this.handleVimJumpForward(cm, actionArgs),
+        ),
       );
       // Map only <C-o>/<C-i> in normal mode. Insert-mode <C-o>
       // (one-normal-command), visual mode, and plain Tab are untouched.
@@ -121642,6 +122832,7 @@ class BobNavigationHotkeysPomodoroSplitMixin {
     if (!resolvePomodoroSplitEntry(content, cursor.line)) {
       return false;
     }
+    this.flushPendingNavSettles();
     if (this.handledPomodoroSplitEvents) {
       this.handledPomodoroSplitEvents.add(event);
     }
@@ -122161,6 +123352,7 @@ class BobNavigationHotkeysTaskSplitMixin {
     if (!view || !this.isVimNormalModeEditor(view.editor, view)) {
       return false;
     }
+    this.flushPendingNavSettles();
     const cm = this.resolveVimCodeMirror(view.editor, view);
     const pendingRepeat = getPendingVimRepeat(cm);
     if (this.handledTaskSplitEvents) {
@@ -136702,6 +137894,7 @@ function installBobNavigationHotkeysMixins(pluginClass, mixins) {
 }
 
 installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
+  BobNavigationHotkeysTaskSettleMixin,
   BobNavigationHotkeysReqLineGuardMixin,
   BobNavigationHotkeysTransclusionLinkMixin,
   BobNavigationHotkeysQuickRollMixin,
@@ -142069,4 +143262,30 @@ Object.assign(module.exports.helpers, {
   mailCloseTargetsFromCloseIdentities,
   confirmMailCloseForPlugin,
   confirmMailCloseForApp,
+});
+// ---- src/734-nav-task-settle-exports.js ----
+Object.assign(module.exports.helpers, {
+  NAV_TASK_SETTLE_PLUGIN_ID,
+  NAV_TASK_SETTLE_API_VERSION,
+  NAV_TASK_SETTLE_FLUSH_ROUTES,
+  lookupNavTaskSettleApi,
+  freezeNavSettleOutcome,
+  navTaskSettleIdleOutcome,
+  navTaskSettleRefusedOutcome,
+  navTaskSettleFallbackOutcome,
+  navTaskSettleAppliedOutcome,
+  navTaskSettleRestoreOutcome,
+  resolveNavTaskIdentity,
+  mapNavLineThroughSettle,
+  composeNavLineMaps,
+  navTaskSettlePlanCursor,
+  prepareNavSettledPostimage,
+  wrapNavCommandForSettleFlush,
+  wrapNavFunctionForSettleFlush,
+  consumeNavSettleFlushResults,
+  navGuardEditorPath,
+  navReviewEntryBlockId,
+  mapNavJumpLocationThroughSettle,
+  mapReviewQueueEntryThroughSettle,
+  mapReviewResumeRefThroughSettle,
 });

@@ -713,6 +713,7 @@ class BobNavigationHotkeysPlugin extends Plugin {
       });
     }
 
+    this.installNavTaskSettleCommandFlush();
     this.register(() => {
       if (this.pendingDependencyMirror) {
         clearTimeout(this.pendingDependencyMirror);

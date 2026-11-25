@@ -440,6 +440,7 @@ class BobNavigationHotkeysTaskSplitMixin {
     if (!view || !this.isVimNormalModeEditor(view.editor, view)) {
       return false;
     }
+    this.flushPendingNavSettles();
     const cm = this.resolveVimCodeMirror(view.editor, view);
     const pendingRepeat = getPendingVimRepeat(cm);
     if (this.handledTaskSplitEvents) {

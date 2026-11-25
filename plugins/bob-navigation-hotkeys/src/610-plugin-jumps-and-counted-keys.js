@@ -509,6 +509,7 @@ class BobNavigationHotkeysJumpKeyMixin {
     if (!view || !this.isVimNormalModeEditor(view.editor, view)) {
       return false;
     }
+    this.flushPendingNavSettles();
     const cm = this.resolveVimCodeMirror(view.editor, view);
     const pendingRepeat = getPendingVimRepeat(cm);
     if (!pendingRepeat.explicit) {
@@ -624,6 +625,7 @@ class BobNavigationHotkeysJumpKeyMixin {
     if (!view || !this.isVimNormalModeEditor(view.editor, view)) {
       return false;
     }
+    this.flushPendingNavSettles();
     const cm = this.resolveVimCodeMirror(view.editor, view);
     const pendingRepeat = getPendingVimRepeat(cm);
     if (this.handledCountedLaneToggleEvents) {
@@ -673,6 +675,7 @@ class BobNavigationHotkeysJumpKeyMixin {
       return false;
     }
 
+    this.flushPendingNavSettles();
     const cm = this.resolveVimCodeMirror(view.editor, view);
     const pendingRepeat = getPendingVimRepeat(cm);
 
@@ -783,6 +786,7 @@ class BobNavigationHotkeysJumpKeyMixin {
       return false;
     }
 
+    this.flushPendingNavSettles();
     const cm = this.resolveVimCodeMirror(view.editor, view);
     // Still read, reset, and pass an explicit repeat. The shared route also
     // resolves a count for the command path; this reset is then a no-op on

@@ -739,6 +739,7 @@ class BobNavigationHotkeysPomodoroSplitMixin {
     if (!resolvePomodoroSplitEntry(content, cursor.line)) {
       return false;
     }
+    this.flushPendingNavSettles();
     if (this.handledPomodoroSplitEvents) {
       this.handledPomodoroSplitEvents.add(event);
     }

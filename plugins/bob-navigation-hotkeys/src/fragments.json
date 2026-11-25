@@ -44,6 +44,8 @@
   "170-open-task-jump.js",
   "180-editor-transactions.js",
   "181-editor-line-diff.js",
+  "181a-nav-task-settle.js",
+  "181b-plugin-task-settle.js",
   "182-reload-history.js",
   "183-log-recall-model.js",
   "184-log-recall-band.js",
@@ -182,6 +184,7 @@
   "536b-plugin-review-walk-follow.js",
   "537-plugin-review-move-park.js",
   "538-review-walk-identity.js",
+  "538a-nav-settle-identity.js",
   "539-plugin-review-walk-return.js",
   "541-walk-landing.js",
   "542-lane-walk-model.js",
@@ -300,5 +303,6 @@
   "730-task-split-carry-exports.js",
   "731-project-seed-reqs-exports.js",
   "732-relation-event-target-exports.js",
-  "733-mail-close-exports.js"
+  "733-mail-close-exports.js",
+  "734-nav-task-settle-exports.js"
 ]

@@ -161,6 +161,12 @@ pager in place, and `Esc` returns to the list with the query intact. While a
 report, preview, or help run is in flight, the sheet footer shows a running line
 until its output opens.
 
+When the cursor is on an identified Event Task in a canonical daily note's
+`## Events` section, FOR THIS NOTE also offers **File meeting notes from
+clipboard**, with the event title as its subtitle. `Shift+Enter` previews the
+outline and destination; `Ctrl+Enter` files the notes. The row is hidden when
+the active bob catalog does not include `ref meet`.
+
 Click a row to run it. `Ctrl`/`Cmd`+click marks it instead. With marks
 pending, a click toggles that row's mark and never runs it.
 

@@ -28,6 +28,7 @@ function cmSheetArticleType(type) {
 function cmSheetCaptureContext(app) {
   const context = {
     notePath: null, noteKind: null, clipboardUrl: null,
+    meetingEvent: null,
     originLeaf: null, originView: null, originEditor: null, originCursor: null,
   };
   try {
@@ -58,6 +59,25 @@ function cmSheetCaptureContext(app) {
         frontmatter = null;
       }
       context.noteKind = cmSheetNoteKind(frontmatter && frontmatter.type, cmSheetArticleType(frontmatter && frontmatter.type));
+      const navPlugin = app && app.plugins && app.plugins.plugins
+        ? app.plugins.plugins["bob-navigation-hotkeys"]
+        : null;
+      const taskScope = navPlugin && navPlugin.api && navPlugin.api.taskScope;
+      let lines = null;
+      try {
+        const value = context.originEditor && typeof context.originEditor.getValue === "function"
+          ? context.originEditor.getValue()
+          : null;
+        if (typeof value === "string") lines = value.split(/\r?\n/);
+      } catch (error) {
+        lines = null;
+      }
+      context.meetingEvent = cmSheetEventTaskAtCursor(
+        file.path,
+        lines,
+        context.originCursor && context.originCursor.line,
+        taskScope,
+      );
     }
   } catch (error) {
     // No active note: the sheet still opens with catalog rows.

@@ -525,6 +525,84 @@ function cmSheetNoteKind(frontmatterType, isArticle) {
   return "note";
 }
 
+function cmSheetCanonicalDailyNoteDay(path) {
+  const normalized = String(path || "").replace(/\\/g, "/");
+  const match = /^(?:(.*)\/)?(\d{4})\/(\d{8})\.md$/i.exec(normalized);
+  if (!match || match[2] !== match[3].slice(0, 4)) return null;
+  const year = Number(match[2]);
+  const month = Number(match[3].slice(4, 6));
+  const date = Number(match[3].slice(6, 8));
+  const parsed = new Date(0);
+  parsed.setHours(12, 0, 0, 0);
+  parsed.setFullYear(year, month - 1, date);
+  if (parsed.getFullYear() !== year || parsed.getMonth() !== month - 1 || parsed.getDate() !== date) return null;
+  return `${match[3].slice(0, 4)}-${match[3].slice(4, 6)}-${match[3].slice(6, 8)}`;
+}
+
+function cmSheetEventsSectionRange(lines) {
+  const source = Array.isArray(lines) ? lines : [];
+  const hasFrontmatter = String(source[0] || "").trim() === "---";
+  let frontmatter = hasFrontmatter;
+  let fence = null;
+  let start = null;
+  for (let index = 0; index < source.length; index += 1) {
+    const line = String(source[index] || "");
+    if (frontmatter) {
+      if (index === 0) continue;
+      if (line.trim() === "---") frontmatter = false;
+      continue;
+    }
+    const fenceMatch = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+    if (fence) {
+      if (fenceMatch && fenceMatch[1][0] === fence.char && fenceMatch[1].length >= fence.length) fence = null;
+      continue;
+    }
+    if (fenceMatch) {
+      fence = { char: fenceMatch[1][0], length: fenceMatch[1].length };
+      continue;
+    }
+    if (start === null) {
+      if (/^##[ \t]+Events[ \t]*$/.test(line)) start = index + 1;
+    } else if (/^##[ \t]+/.test(line)) {
+      return { start, end: index };
+    }
+  }
+  return start === null ? null : { start, end: source.length };
+}
+
+function cmSheetEventTaskAtCursor(notePath, lines, cursorLine, taskScope) {
+  const day = cmSheetCanonicalDailyNoteDay(notePath);
+  const source = Array.isArray(lines) ? lines : [];
+  if (!day || !Number.isInteger(cursorLine) || !taskScope ||
+    !(Number(taskScope.version) >= 1) || typeof taskScope.at !== "function") return null;
+  const section = cmSheetEventsSectionRange(source);
+  if (!section || cursorLine < section.start || cursorLine >= section.end) return null;
+  let scope = null;
+  try { scope = taskScope.at({ lines: source, line: cursorLine }); }
+  catch (error) { return null; }
+  const ownerLine = scope && scope.ownerLine;
+  if (!Number.isInteger(ownerLine) || ownerLine < section.start || ownerLine >= section.end ||
+    !Array.isArray(scope.lines) || !scope.lines.includes(cursorLine)) return null;
+  const line = String(source[ownerLine] || "");
+  const task = /^[ \t]*- \[(.)\][ \t]*(?:#task[ \t]*)?\*\*(\d{4})-(\d{4})\*\*(?=$|[ \t])/.exec(line);
+  if (!task) return null;
+  const validTime = (value) => Number(value.slice(0, 2)) < 24 && Number(value.slice(2)) < 60;
+  if (!validTime(task[2]) || !validTime(task[3])) return null;
+  const id = /(?:^|\s)\^([A-Za-z0-9-]+)\s*$/.exec(line);
+  if (!id) return null;
+  let title = line.slice(task[0].length).replace(/\s+\^[A-Za-z0-9-]+\s*$/, "").trim();
+  for (;;) {
+    const before = title;
+    title = title.replace(/\s+\[[A-Za-z][A-Za-z0-9_-]*::[^\]]*\]\s*$/, "").trimEnd();
+    title = title.replace(/(?:\s+#[A-Za-z][A-Za-z0-9_/-]*)+\s*$/, "").trimEnd();
+    if (title === before) break;
+  }
+  return {
+    eventRef: `${day.replace(/-/g, "")}#^${id[1]}`,
+    title: title || `${task[2]}-${task[3]} meeting`,
+  };
+}
+
 // Context-filled argv rows: complete argv (never auto-filled on a plain row
 // run), each naming the entry it fills. Only rows whose entry exists in the
 // catalog are returned.
@@ -534,7 +612,7 @@ function cmSheetContextRows(catalog, context) {
     if (entry && entry.id) byId.set(entry.id, entry);
   }
   const rows = [];
-  const fill = (entryId, userArgs, tagline) => {
+  const fill = (entryId, userArgs, tagline, title) => {
     const entry = byId.get(entryId);
     if (!entry) return;
     rows.push({
@@ -547,7 +625,7 @@ function cmSheetContextRows(catalog, context) {
       basePath: [...entry.path],
       fixed: (entry.fixed || []).map(String),
       aliases: [],
-      title: entry.title || entryId,
+      title: title || entry.title || entryId,
       about: tagline || (entry.about || "").split("\n")[0],
       tagline: tagline || null,
       keywords: Array.isArray(entry.keywords) ? [...entry.keywords] : [],
@@ -565,6 +643,10 @@ function cmSheetContextRows(catalog, context) {
   };
   const note = context && context.notePath;
   const kind = (context && context.noteKind) || null;
+  const event = context && context.meetingEvent;
+  if (event && event.eventRef) {
+    fill("ref-meet", [event.eventRef, "-c"], event.title || "Meeting Event Task", "File meeting notes from clipboard");
+  }
   if (note) {
     if (kind === "ref") {
       fill("ref-today", [note], "Pull into today's Pomodoro");

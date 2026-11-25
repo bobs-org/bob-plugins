@@ -408,10 +408,9 @@ in a dashed off-clock tail and off-clock sessions get a dashed edge. Total sums
 session minutes, so overlapping sessions count twice; neither occupied nor free
 time. Values: [Bob Stats page](https://bobs-org.github.io/stats/). The `★` type
 line of the plan block renders the same pills. The read-only
-`bob-reading-board` block renders a Reading / Next / Ready / Snoozed kanban of
-the reading queue drawn entirely from `bob ref list` JSON — wake dates and
-waiting-on reasons come from `bob`, never vault text — with the Highlights PDF
-hand-off and the Open Reading Board command.
+`bob-reading-board` shows Reading / Next / Ready / Snoozed lanes from
+`bob ref list` JSON. `bob` supplies wake dates and waiting-on reasons. Cards offer the
+Highlights PDF hand-off; meeting refs (`ref_type: meetings`) use `🤝 Meeting`.
 
 `🪢 **LINKS:**` and `🪢 **LINKED FROM:**` rows are relation metadata. Their
 wikilinks are excluded from the live plan Task Link count. Both rows render as

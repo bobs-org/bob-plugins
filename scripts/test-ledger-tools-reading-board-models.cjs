@@ -202,6 +202,12 @@ test("kind names, title code spans, and render signatures are deterministic", ()
     label: "Podcast",
     text: "🎙️ Podcast",
   });
+  assert.deepEqual(readingBoardKind("meetings"), {
+    type: "meetings",
+    icon: "🤝",
+    label: "Meeting",
+    text: "🤝 Meeting",
+  });
   assert.equal(readingBoardKind(null).text, "🔖 Ref");
   assert.deepEqual(readingBoardTitleParts("Read `foo` then ``bar`baz``"), [
     { type: "text", text: "Read " },

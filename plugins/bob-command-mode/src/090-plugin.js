@@ -473,6 +473,12 @@ class BobCommandModePlugin extends Plugin {
         try { await workspace.openLinkText(String(action.path), "", false); return { ok: true }; }
         catch (error) { return { ok: false, reason: String((error && error.message) || error) }; }
       }
+      case "open-event": {
+        const workspace = this.app && this.app.workspace;
+        if (!action.eventRef || !workspace || typeof workspace.openLinkText !== "function") return { ok: false, reason: "event opener unavailable" };
+        try { await workspace.openLinkText(String(action.eventRef), "", false); return { ok: true }; }
+        catch (error) { return { ok: false, reason: String((error && error.message) || error) }; }
+      }
       case "open-settings": {
         try {
           const setting = this.app && this.app.setting;

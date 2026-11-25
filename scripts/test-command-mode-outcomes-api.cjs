@@ -325,6 +325,22 @@ test("catalog outcome adapters cover command-specific results and actions", () =
   assert.equal(ingested.outcome, "completed");
   assert.deepEqual(ingested.actions[0], { id: "open-vault-note", label: "Open note", path: "ref/papers/A Paper.md" });
 
+  const meeting = classifyAdapter(
+    "ref-meet",
+    0,
+    "Filed meeting notes as ref/meetings/261124_cedar_review.md\n" +
+      "task      job#^read-cedar (next)\n" +
+      "relation  notes from 20261124#^cedar-review\n",
+  );
+  assert.equal(meeting.outcome, "completed");
+  assert.deepEqual(meeting.actions, [
+    { id: "open-vault-note", label: "Open note", path: "ref/meetings/261124_cedar_review.md" },
+    { id: "open-event", label: "Open event", eventRef: "20261124#^cedar-review" },
+  ]);
+  assert.deepEqual(classifyAdapter("ref-meet", 0, "Would file meeting notes as ref/meetings/261124_cedar_review.md\n"), {
+    outcome: "completed", summary: "Would file meeting notes as ref/meetings/261124_cedar_review.md",
+  });
+
   assert.deepEqual(classifyAdapter("ref-scan", 0, "3 held\n"), { outcome: "attention", summary: "3 PDF writes held" });
   assert.deepEqual(classifyAdapter("ref-scan", 0, "pdf_markers_held: 3\n"), { outcome: "attention", summary: "3 PDF writes held" });
   assert.deepEqual(classifyAdapter("ref-scan", 1, "Still queued: paper.pdf\n"), { outcome: "attention", summary: "Intake is still queued" });
@@ -361,6 +377,17 @@ test("catalog outcome adapters cover command-specific results and actions", () =
   assert.deepEqual(classifyAdapter("gkeep-pull", 0, '{"pulled":0}'), {
     outcome: "completed", summary: "Keep inbox already empty",
   });
+});
+
+test("meeting toast action opens its Event Task link", async () => {
+  const app = makeApp();
+  let opened = null;
+  app.workspace.openLinkText = async (...args) => { opened = args; };
+  const plugin = new BobCommandModePlugin(app);
+  assert.deepEqual(await plugin.commandModeRunToastAction({
+    id: "open-event", eventRef: "20261124#^cedar-review",
+  }), { ok: true });
+  assert.deepEqual(opened, ["20261124#^cedar-review", "", false]);
 });
 
 test("toast classes have distinct timing and newer failures replace older cards", () => {

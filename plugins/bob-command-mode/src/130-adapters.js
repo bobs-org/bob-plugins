@@ -42,6 +42,22 @@ function cmAdapterRefCreate(run, text) {
   return null;
 }
 
+function cmAdapterRefMeet(run, text) {
+  if (run.exitCode !== 0) return null;
+  const source = String((text && text.stdout) || "");
+  const filed = source.match(/^(?:Filed|Replaced) meeting notes as ([^\r\n]+)/im);
+  if (!filed) return null;
+  const note = filed[1].trim();
+  const event = source.match(/^relation\s+.*\s+(\S+#\^[A-Za-z0-9-]+)\s*$/im);
+  const actions = [cmAdapterAction("open-vault-note", "Open note", { path: note })];
+  if (event) actions.push(cmAdapterAction("open-event", "Open event", { eventRef: event[1] }));
+  return {
+    outcome: "completed",
+    summary: "Filed meeting notes · " + note,
+    actions,
+  };
+}
+
 function cmAdapterRefScan(run, text) {
   const report = cmAdapterJson(text);
   let held = report && report.summary ? Number(report.summary.held) || 0 : 0;
@@ -180,6 +196,7 @@ function cmAdapterGcalSync(run, text) {
 }
 
 cmRegisterOutcomeAdapter("ref-create", cmAdapterRefCreate);
+cmRegisterOutcomeAdapter("ref-meet", cmAdapterRefMeet);
 cmRegisterOutcomeAdapter("ref-scan", cmAdapterRefScan);
 cmRegisterOutcomeAdapter("vault-sync", cmAdapterVaultSync);
 cmRegisterOutcomeAdapter("json-write", cmAdapterJsonWrite);

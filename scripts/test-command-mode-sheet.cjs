@@ -239,6 +239,79 @@ test("context rows fill For this note and From clipboard", () => {
   assert.equal(helpers.cmSheetContextRows({ entries: [] }, { notePath: "x.md", noteKind: "ref" }).length, 0);
 });
 
+test("meeting context is limited to identified Event Tasks in canonical daily Events", () => {
+  const lines = [
+    "---",
+    "type: daily",
+    "---",
+    "## Events",
+    "- [ ] **0930-1000** Cedar review #MEET ^cedar-review",
+    "  - agenda item",
+    "## Pomodoros",
+    "- [ ] (",
+  ];
+  const taskScope = {
+    version: 1,
+    at({ line }) {
+      if (line === 4 || line === 5) return { ownerLine: 4, lines: [4, 5] };
+      return null;
+    },
+  };
+  const event = helpers.cmSheetEventTaskAtCursor("Calendar/2026/20261124.md", lines, 5, taskScope);
+  assert.deepEqual(event, { eventRef: "20261124#^cedar-review", title: "Cedar review" });
+  assert.equal(helpers.cmSheetEventTaskAtCursor("Calendar/2026/20261124.md", lines, 7, taskScope), null);
+  assert.equal(helpers.cmSheetEventTaskAtCursor("Calendar/2027/20261124.md", lines, 4, taskScope), null);
+  assert.equal(helpers.cmSheetEventTaskAtCursor("Calendar/2026/20261124.md", ["## Events", "- [ ] Follow-up ^not-timed"], 1, taskScope), null);
+});
+
+test("capture context reads the navigation task scope at the active cursor", () => {
+  const lines = [
+    "---", "metadata: text with ## Events", "---",
+    "## Events", "- [ ] **0930-1000** Cedar review ^cedar-review", "  - agenda item",
+    "## Pomodoros", "- [ ] (",
+  ];
+  const taskScope = {
+    version: 1,
+    at({ line }) {
+      if (line === 5) return { ownerLine: 4, lines: [4, 5] };
+      return null;
+    },
+  };
+  const contextAt = (line) => {
+    const app = makeApp();
+    const view = {
+      file: { path: "Calendar/2026/20261124.md" },
+      editor: { getCursor: () => ({ line, ch: 0 }), getValue: () => lines.join("\n") },
+    };
+    app.workspace.getActiveViewOfType = () => view;
+    app.metadataCache.getFileCache = () => ({ frontmatter: {} });
+    app.plugins.plugins["bob-navigation-hotkeys"] = { api: { taskScope } };
+    return helpers.cmSheetCaptureContext(app);
+  };
+  assert.deepEqual(contextAt(5).meetingEvent, {
+    eventRef: "20261124#^cedar-review", title: "Cedar review",
+  });
+  assert.equal(contextAt(7).meetingEvent, null);
+});
+
+test("meeting context row uses the ref-meet catalog entry and stays hidden on older catalogs", () => {
+  const catalog = sheetCatalog();
+  const meetingEntry = {
+    id: "ref-meet", path: ["ref", "meet"], fixed: [], title: "File meeting notes",
+    about: "File notes for an Event Task", section: "vault", keywords: ["meeting", "notes"],
+    effect: "writes", network: false, presentation: "action", policy: "preview-first",
+    preview: ["--dry-run"], confirm: null, budget_secs: 300,
+    args: [{ name: "EVENT", slot: "text", required: false, repeat: true }],
+    exit_codes: [], adapter: "ref-meet", hosts: [], invalidates: ["references", "tasks"],
+  };
+  const context = { meetingEvent: { eventRef: "20261124#^cedar-review", title: "Cedar review" } };
+  const row = helpers.cmSheetContextRows({ ...catalog, entries: [...catalog.entries, meetingEntry] }, context)[0];
+  assert.equal(row.title, "File meeting notes from clipboard");
+  assert.equal(row.about, "Cedar review");
+  assert.deepEqual(helpers.cmSheetRowArgv(row), ["ref", "meet", "20261124#^cedar-review", "-c"]);
+  assert.equal(helpers.cmSheetContextRows(catalog, context).length, 0);
+});
+
 test("note kinds follow frontmatter type with the article rule", () => {
   assert.equal(helpers.cmSheetNoteKind("[[ref]]", false), "ref");
   assert.equal(helpers.cmSheetNoteKind(["done", "[[Project]]"], false), "project");

@@ -7814,15 +7814,25 @@ body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"] > s
   font-weight: 600;
   text-decoration: none;
 }
-/* A completed owner decorates all descendant text in reading view. Place an
-   opaque title-only inline box above that ancestor decoration so the drawer
-   title stays clean while the owning task keeps its native strike. */
-body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"] > p:first-of-type > strong:first-child,
-body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"] > strong {
-  display: inline-block;
-  position: relative;
-  z-index: 1;
-  background-color: var(--background-primary);
+/* Obsidian paints a checked owner's text decoration across descendant rows,
+   after child backgrounds and stacking contexts. Scope that strike to the
+   owner's own title and its drawer notes so the true-case header stays legible
+   without changing the rest of the completed task's appearance. */
+body.bob-task-drawer-marks .markdown-preview-view li.task-list-item[data-task="x"]:has(> ul > li[data-bob-drawer-owner-state="done"]),
+body.bob-task-drawer-marks .markdown-preview-view li.task-list-item[data-task="X"]:has(> ul > li[data-bob-drawer-owner-state="done"]) {
+  text-decoration: none !important;
+}
+body.bob-task-drawer-marks .markdown-preview-view li.task-list-item[data-task="x"]:has(> ul > li[data-bob-drawer-owner-state="done"]) > :not(ul):not(ol),
+body.bob-task-drawer-marks .markdown-preview-view li.task-list-item[data-task="X"]:has(> ul > li[data-bob-drawer-owner-state="done"]) > :not(ul):not(ol),
+body.bob-task-drawer-marks .markdown-preview-view li.task-list-item[data-task="x"]:has(> ul > li[data-bob-drawer-owner-state="done"]) > ul > li:not([data-bob-drawer]),
+body.bob-task-drawer-marks .markdown-preview-view li.task-list-item[data-task="X"]:has(> ul > li[data-bob-drawer-owner-state="done"]) > ul > li:not([data-bob-drawer]),
+body.bob-task-drawer-marks .markdown-preview-view li.task-list-item[data-task="x"]:has(> ul > li[data-bob-drawer-owner-state="done"]) > ul > li[data-bob-drawer="true"] > ul,
+body.bob-task-drawer-marks .markdown-preview-view li.task-list-item[data-task="X"]:has(> ul > li[data-bob-drawer-owner-state="done"]) > ul > li[data-bob-drawer="true"] > ul {
+  text-decoration: line-through !important;
+}
+body.bob-task-drawer-marks .markdown-preview-view li.task-list-item[data-task="x"]:has(> ul > li[data-bob-drawer-owner-state="done"]) > ul > li[data-bob-drawer="true"],
+body.bob-task-drawer-marks .markdown-preview-view li.task-list-item[data-task="X"]:has(> ul > li[data-bob-drawer-owner-state="done"]) > ul > li[data-bob-drawer="true"] {
+  text-decoration: none !important;
 }
 body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"][data-bob-drawer-empty="true"] > p:first-of-type,
 body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"][data-bob-drawer-owner-state="done"] > p:first-of-type,

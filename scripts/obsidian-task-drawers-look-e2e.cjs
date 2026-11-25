@@ -71,8 +71,12 @@ function pageRows() {
     const strong = row.querySelector(".cm-strong, strong") || row.querySelector("p");
     const strongCs = strong ? getComputedStyle(strong) : null;
     const owner = !isLive && row.parentElement && row.parentElement.parentElement;
-    const ownerText = owner && (owner.querySelector(":scope > p") || owner);
+    const ownerText = owner && [...owner.children].find((child) =>
+      !["UL", "OL", "INPUT"].includes(child.tagName) && child.textContent.trim(),
+    );
     const ownerDecoration = ownerText ? getComputedStyle(ownerText).textDecorationLine : "";
+    const ownerContainerDecoration = owner ? getComputedStyle(owner).textDecorationLine : "";
+    const nestedList = row.querySelector(":scope > ul, :scope > ol");
     const child = isLive
       ? findTextElement(root, ".cm-line", "Review the endpoint")
       : findTextElement(row, "*", "Review the endpoint");
@@ -137,6 +141,7 @@ function pageRows() {
       titleBackground: strongCs ? strongCs.backgroundColor : "",
       titlePosition: strongCs ? strongCs.position : "",
       titleZIndex: strongCs ? strongCs.zIndex : "",
+      ownerContainerDecoration,
       titleNodeTag: strong && strong.tagName ? strong.tagName : "",
       titleNodeHtml: strong && strong.outerHTML ? strong.outerHTML : "",
       titleAncestors: (() => {
@@ -153,6 +158,8 @@ function pageRows() {
       )),
       ownerChecked: Boolean(owner && owner.classList.contains("is-checked")),
       ownerDecoration,
+      ownerTextHtml: ownerText && ownerText.outerHTML ? ownerText.outerHTML.slice(0, 500) : "",
+      nestedListDecoration: nestedList ? getComputedStyle(nestedList).textDecorationLine : "",
       childVisible,
       folded: row.classList.contains("is-collapsed")
         || Boolean(row.querySelector(".cm-fold-indicator.is-collapsed")),
@@ -290,6 +297,9 @@ async function run(client, entry, { setDoc, setMode, waitFor, args }) {
       fontWeight: row.fontWeight,
       decoration: row.decoration,
       ownerDecoration: row.ownerDecoration,
+      ownerTextHtml: row.ownerTextHtml,
+      ownerContainerDecoration: row.ownerContainerDecoration,
+      nestedListDecoration: row.nestedListDecoration,
       titleBackground: row.titleBackground,
       titlePosition: row.titlePosition,
       titleZIndex: row.titleZIndex,
@@ -346,10 +356,10 @@ async function run(client, entry, { setDoc, setMode, waitFor, args }) {
   assert.deepEqual(state.nestedNote, state.ordinaryNote, "drawer descendants keep ordinary note typography");
   if (entry.mode === "reading") {
     assert.equal(done.ownerChecked, true, "the strike-leak case has a native checked owner");
-    assert.match(done.ownerDecoration, /line-through/, "the completed owner retains its native strike");
-    assert.equal(done.titlePosition, "relative");
-    assert.equal(done.titleZIndex, "1");
-    assert.notEqual(done.titleBackground, "rgba(0, 0, 0, 0)", "title shield paints above ancestor decoration");
+    assert.equal(done.ownerContainerDecoration, "none", "the owner decoration stops before its drawer header");
+    assert.match(done.ownerDecoration, /line-through/, "the completed owner title retains its native strike");
+    assert.match(done.nestedListDecoration, /line-through/, "drawer notes retain the completed owner's strike");
+    assert.equal(done.decoration, "none", "the drawer title is not struck through");
   }
   if (entry.mode === "live") {
     const resting = await evaluate(client, delimiterState);

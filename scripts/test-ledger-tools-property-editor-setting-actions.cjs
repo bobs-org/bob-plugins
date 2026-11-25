@@ -494,3 +494,83 @@ test("confirmed merge never copies a dry-run candidate contract onto the live re
   });
   assert.equal(confirmed.fingerprint, "sha256:after");
 });
+
+function fakeDom() {
+  class Element {
+    constructor(tag, doc) {
+      this.tagName = tag.toUpperCase();
+      this.ownerDocument = doc;
+      this.parentNode = null;
+      this.children = [];
+      this.attrs = new Map();
+      this.value = "";
+      this.disabled = false;
+      this.selectionStart = 0;
+      this.selectionEnd = 0;
+      this._text = "";
+    }
+    setAttribute(name, value) { this.attrs.set(name, String(value)); }
+    getAttribute(name) { return this.attrs.get(name) ?? null; }
+    appendChild(node) { return this.insertBefore(node, null); }
+    insertBefore(node, anchor) {
+      if (node.parentNode) node.parentNode.removeChild(node);
+      node.parentNode = this;
+      const index = anchor ? this.children.indexOf(anchor) : -1;
+      if (index >= 0) this.children.splice(index, 0, node);
+      else this.children.push(node);
+      return node;
+    }
+    removeChild(node) {
+      const index = this.children.indexOf(node);
+      if (index >= 0) this.children.splice(index, 1);
+      node.parentNode = null;
+      return node;
+    }
+    get firstChild() { return this.children[0] || null; }
+    set textContent(value) { this._text = String(value); }
+    get textContent() { return this._text || this.children.map((child) => child.textContent).join(""); }
+    focus() { this.ownerDocument.activeElement = this; }
+    setSelectionRange(start, end) { this.selectionStart = start; this.selectionEnd = end; }
+  }
+  return { activeElement: null, createElement(tag) { return new Element(tag, this); } };
+}
+
+test("a generic setting stage paints its notes above the preview and Save/Cancel", () => {
+  const doc = fakeDom();
+  const painted = H.propertyEditorPaintStage(doc, doc.createElement("div"), {
+    stageId: 4, key: "project_name_aliases", kind: "list", label: "List", value: "",
+    items: ["Garden"], itemDraft: "", collection: true, suggestions: [], disabled: false,
+    composing: false, prose: false, previewText: "Preview · 1 value · Enter saves",
+    settingId: "project_name_aliases", settingStage: "list", previewExtras: "set on this note",
+  }, { propertyEditorStageAddItem() {} });
+  const classes = painted.panel.children.map((child) => String(child.getAttribute("class") || ""));
+  const note = classes.findIndex((name) => name.includes("bob-property-editor-stage-note"));
+  const preview = classes.findIndex((name) => name.includes("bob-property-editor-stage-preview"));
+  const actions = classes.findIndex((name) => name.includes("bob-property-editor-stage-actions"));
+  assert.ok(note >= 0 && preview >= 0 && actions >= 0, classes.join(" | "));
+  assert.ok(note < preview && preview < actions, classes.join(" | "));
+  assert.equal(actions, classes.length - 1, "Save/Cancel stay the last row of the stage");
+});
+
+test("Review shows its residence scope once even when Bob's effect repeats it", async () => {
+  const show = report("area");
+  const modal = modalFor(show);
+  const session = previewSession({
+    properties: show.properties,
+    contract: show.contract,
+    effects: [{ setting: "task_refresh", kind: "scope", message: "Applies to tasks living in this note only" }],
+  });
+  modal.session = session;
+  modal.editorEnsureSession = () => session;
+  modal.propertyEditorResolveSettingStage(H.propertyEditorSettingsFindEntry(modal, "setting::task_refresh"));
+  assert.equal(modal.stage.settingStage, "review");
+  modal.stage.value = "14";
+  modal.propertyEditorStageInputChanged(inputFor(modal.stage, "14"));
+  await session.previewNow();
+  modal.propertyEditorStageSyncPreview();
+  const view = modal.propertyEditorStageView();
+  const painted = [view.helpNote, view.previewExtras, view.previewText].join(" | ");
+  assert.equal((painted.match(/Applies to tasks living in this note only/g) || []).length, 1, painted);
+  assert.match(view.helpNote, /Applies to tasks living in this note only/);
+  assert.match(view.previewExtras, /Bob setting/);
+});

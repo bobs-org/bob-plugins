@@ -187185,7 +187185,15 @@ function propertyEditorSettingMatchesWarning(warning, settingId) {
   return Boolean(warning.key && Array.isArray(keys) && keys.includes(warning.key));
 }
 
-function propertyEditorSettingPreviewText(preview, settingId) {
+// Compare stage notes without case or trailing punctuation, so Bob's effect
+// message and the stage's own help line count as the same sentence.
+function propertyEditorSettingNoteKey(text) {
+  return String(text == null ? "" : text).trim().replace(/[.\s]+$/u, "").toLowerCase();
+}
+
+// `omit` lists notes the stage already shows (its help line); matching parts
+// and repeats are dropped so one sentence never paints twice.
+function propertyEditorSettingPreviewText(preview, settingId, omit = []) {
   if (!preview || typeof preview !== "object") return "";
   const parts = [];
   const settings = preview.contract && Array.isArray(preview.contract.settings) ? preview.contract.settings : [];
@@ -187201,7 +187209,13 @@ function propertyEditorSettingPreviewText(preview, settingId) {
     if (!warning || typeof warning.message !== "string" || !warning.message) continue;
     if (!settingId || propertyEditorSettingMatchesWarning(warning, settingId)) parts.push(warning.message);
   }
-  return parts.filter(Boolean).join(" · ");
+  const seen = new Set((Array.isArray(omit) ? omit : [omit]).map(propertyEditorSettingNoteKey).filter(Boolean));
+  return parts.filter((part) => {
+    const key = propertyEditorSettingNoteKey(part);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).join(" · ");
 }
 
 function propertyEditorSettingStageChanged(settingId, current, next) {
@@ -187382,28 +187396,46 @@ function propertyEditorSettingOpenDraft(modal, entry, handler) {
   return { ok: true, stage };
 }
 
-function propertyEditorPaintSettingNotes(doc, panel, options) {
+// The first preview or actions child of a painted stage. Setting notes go
+// before it so a generic painter's notes sit with the control, as on the
+// dedicated stages, never below Save/Cancel.
+function propertyEditorSettingNotesAnchor(panel) {
+  try {
+    const children = panel && panel.children ? Array.from(panel.children) : [];
+    return children.find((child) => /\bbob-property-editor-stage-(?:preview|actions)\b/.test(
+      String((child && (child.className || (typeof child.getAttribute === "function" && child.getAttribute("class")))) || ""),
+    )) || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function propertyEditorPaintSettingNotes(doc, panel, options, anchor = null) {
   if (!doc || !panel || !options) return;
+  const place = (node) => {
+    if (anchor && anchor.parentNode === panel && typeof panel.insertBefore === "function") panel.insertBefore(node, anchor);
+    else panel.appendChild(node);
+  };
   if (options.counter) {
     const counter = propertyEditorCreateEl(doc, "div", "bob-property-editor-stage-counter");
     propertyEditorSetText(counter, options.counter);
     if (options.warnLong) counter.classList?.add?.("is-long");
-    panel.appendChild(counter);
+    place(counter);
   }
   if (options.effectLine) {
     const effect = propertyEditorCreateEl(doc, "div", "bob-property-editor-stage-note is-effect");
     propertyEditorSetText(effect, options.effectLine);
-    panel.appendChild(effect);
+    place(effect);
   }
   if (options.helpNote) {
     const help = propertyEditorCreateEl(doc, "div", "bob-property-editor-stage-note");
     propertyEditorSetText(help, options.helpNote);
-    panel.appendChild(help);
+    place(help);
   }
   if (options.previewExtras) {
     const extras = propertyEditorCreateEl(doc, "div", "bob-property-editor-stage-note is-diagnostic");
     propertyEditorSetText(extras, options.previewExtras);
-    panel.appendChild(extras);
+    place(extras);
   }
 }
 
@@ -187583,7 +187615,7 @@ propertyEditorPaintStage = function propertyEditorPaintStageWithSettings(doc, ho
   if (painted && painted.panel && options && options.settingId) {
     try { painted.panel.setAttribute("data-setting-id", options.settingId); } catch (_) {}
     painted.panel.classList?.add?.("is-setting");
-    propertyEditorPaintSettingNotes(doc, painted.panel, options);
+    propertyEditorPaintSettingNotes(doc, painted.panel, options, propertyEditorSettingNotesAnchor(painted.panel));
   }
   return painted;
 };
@@ -187719,7 +187751,7 @@ Object.assign(PropertyEditorModal.prototype, {
     if (["color", "task_type", "clock"].includes(stage.settingId)) view.prose = false;
     const state = this.session && typeof this.session.getState === "function" ? this.session.getState() : this.sessionState;
     if (state && state.preview && state.preview.dry_run !== false && state.status === "preview-ready") {
-      view.previewExtras = propertyEditorSettingPreviewText(state.preview, stage.settingId);
+      view.previewExtras = propertyEditorSettingPreviewText(state.preview, stage.settingId, [view.helpNote]);
     }
     return view;
   },
@@ -187738,7 +187770,7 @@ Object.assign(PropertyEditorModal.prototype, {
     if (!this.stage || !this.stage.settingId) return base;
     const extras = [];
     if (built && built.warnLong === true) extras.push(`Over ${PROPERTY_EDITOR_SUMMARY_LIMIT} characters — Bob will warn without blocking.`);
-    if (this.stage.settingStage === "review") extras.push(PROPERTY_EDITOR_REVIEW_HELP);
+    // Review's residence scope is the stage help line; it is not repeated here.
     return [base, ...extras].filter(Boolean).join(" · ");
   },
 

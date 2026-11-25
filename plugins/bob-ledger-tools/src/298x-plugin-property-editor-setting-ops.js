@@ -128,7 +128,15 @@ function propertyEditorSettingMatchesWarning(warning, settingId) {
   return Boolean(warning.key && Array.isArray(keys) && keys.includes(warning.key));
 }
 
-function propertyEditorSettingPreviewText(preview, settingId) {
+// Compare stage notes without case or trailing punctuation, so Bob's effect
+// message and the stage's own help line count as the same sentence.
+function propertyEditorSettingNoteKey(text) {
+  return String(text == null ? "" : text).trim().replace(/[.\s]+$/u, "").toLowerCase();
+}
+
+// `omit` lists notes the stage already shows (its help line); matching parts
+// and repeats are dropped so one sentence never paints twice.
+function propertyEditorSettingPreviewText(preview, settingId, omit = []) {
   if (!preview || typeof preview !== "object") return "";
   const parts = [];
   const settings = preview.contract && Array.isArray(preview.contract.settings) ? preview.contract.settings : [];
@@ -144,7 +152,13 @@ function propertyEditorSettingPreviewText(preview, settingId) {
     if (!warning || typeof warning.message !== "string" || !warning.message) continue;
     if (!settingId || propertyEditorSettingMatchesWarning(warning, settingId)) parts.push(warning.message);
   }
-  return parts.filter(Boolean).join(" · ");
+  const seen = new Set((Array.isArray(omit) ? omit : [omit]).map(propertyEditorSettingNoteKey).filter(Boolean));
+  return parts.filter((part) => {
+    const key = propertyEditorSettingNoteKey(part);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).join(" · ");
 }
 
 function propertyEditorSettingStageChanged(settingId, current, next) {

@@ -9614,6 +9614,9 @@ button.bob-album-yaml-done {
   gap: var(--bob-schema-slot-gap);
   margin-block: 0;
 }
+.bob-album-schema-dialog-body .bob-album-schema-field-main {
+  flex: 1 1 0;
+}
 .bob-album-schema-dialog-body .bob-album-schema-field:not(.is-ghost):not(:has(.bob-album-schema-grip)) {
   padding-inline-start: calc(
     var(--bob-schema-row-pad) + var(--bob-schema-grip) + var(--bob-schema-slot-gap)

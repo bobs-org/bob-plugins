@@ -1339,19 +1339,33 @@ async function run(args) {
     await client.evaluate(`(() => {
       const view = window.app.workspace.activeLeaf.view;
       view.editor.setValue(${JSON.stringify(foldReady?.text || "")});
-      view.editor.setCursor({ line: ${Number(foldReady?.line || 0)}, ch: 0 });
+      view.editor.setCursor({ line: ${Number(foldReady?.line || 0)}, ch: 3 });
       view.editor.focus();
       return true;
     })()`);
+    await sleep(100);
     const beforeDelete = await client.evaluate(`(() => {
       const view = window.app.workspace.activeLeaf.view;
       return { text: view.editor.getValue(), line: view.editor.getCursor().line };
     })()`);
+    await dispatchTrustedKey(client, { key: "Escape", code: "Escape", windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 });
     await dispatchTrustedKey(client, { key: "d", code: "KeyD", windowsVirtualKeyCode: 68, nativeVirtualKeyCode: 68 });
+    const pendingDelete = await client.evaluate(`(() => {
+      const vim = window.app.workspace.activeLeaf.view.editor?.cm?.cm?.state?.vim;
+      const input = vim?.inputState;
+      return { operator: input?.operator ?? null, keyBuffer: input?.keyBuffer ?? null,
+        prefixRepeat: input?.prefixRepeat ?? null, motionRepeat: input?.motionRepeat ?? null,
+        mode: vim?.insertMode ? "insert" : vim?.visualMode ? "visual" : "normal" };
+    })()`);
     await dispatchTrustedKey(client, foldDispatch);
     const deleteMotion = await client.evaluate(`(() => {
       const view = window.app.workspace.activeLeaf.view;
+      const vim = view.editor?.cm?.cm?.state?.vim;
+      const input = vim?.inputState;
       return { changed: view.editor.getValue() !== ${JSON.stringify(beforeDelete?.text || "")},
+        text: view.editor.getValue().split("\\n").slice(12, 18).join("\\n"),
+        operator: input?.operator ?? null, keyBuffer: input?.keyBuffer ?? null,
+        mode: vim?.insertMode ? "insert" : vim?.visualMode ? "visual" : "normal",
         expanded: view.containerEl.querySelector(".bob-album-schema-summary")?.getAttribute("aria-expanded") || null };
     })()`);
     await client.evaluate(`(() => {
@@ -1366,24 +1380,36 @@ async function run(args) {
       JSON.stringify({ ready: { expanded: foldReady?.expanded, keycap: foldReady?.keycap, vim: foldReady?.vim }, foldedByKey, expandedByKey }));
     record("fold-vim-motions", countedMotion?.line > motionCount?.before && countedMotion?.expanded === "true"
       && deleteMotion?.changed && deleteMotion?.expanded === "true",
-      JSON.stringify({ motionCount, countedMotion, deleteMotion }));
+      JSON.stringify({ motionCount: { before: motionCount?.before }, countedMotion, pendingDelete, deleteMotion }));
 
     await openNote(client, "eat.md", "preview");
     await sleep(600);
     const readingCommandState = await client.evaluate(`(() => {
       const command = "bob-ledger-tools:toggle-card-details";
       const result = window.app.commands.executeCommandById(command);
-      const summary = window.app.workspace.activeLeaf.view.containerEl.querySelector(".bob-album-schema-summary");
+      const view = window.app.workspace.activeLeaf.view;
+      const scope = view.previewMode?.containerEl || view.containerEl.querySelector(".markdown-preview-view");
+      const summary = scope?.querySelector(".bob-album-schema-summary");
       return { result, expanded: summary?.getAttribute("aria-expanded") || null,
         keycap: Boolean(summary?.querySelector(".bob-property-card-fold-keycap")) };
     })()`);
-    const readingCommandClosed = await waitFor(client, `(() => window.app.workspace.activeLeaf.view.containerEl.querySelector(".bob-album-schema-summary")?.getAttribute("aria-expanded") || null)()`,
+    const readingSummaryExpr = `(() => {
+      const view = window.app.workspace.activeLeaf.view;
+      const scope = view.previewMode?.containerEl || view.containerEl.querySelector(".markdown-preview-view");
+      return scope?.querySelector(".bob-album-schema-summary") || null;
+    })()`;
+    const readingCommandClosed = await waitFor(client, `(() => (${readingSummaryExpr})?.getAttribute("aria-expanded") || null)()`,
       (value) => value === "false", "Toggle card details in Reading");
+    const readingCommandAfterClose = await client.evaluate(`(() => {
+      const summary = (${readingSummaryExpr});
+      return { expanded: summary?.getAttribute("aria-expanded") || null,
+        keycap: Boolean(summary?.querySelector(".bob-property-card-fold-keycap")) };
+    })()`);
     await client.evaluate('window.app.commands.executeCommandById("bob-ledger-tools:toggle-card-details")');
-    const readingCommandOpen = await waitFor(client, `(() => window.app.workspace.activeLeaf.view.containerEl.querySelector(".bob-album-schema-summary")?.getAttribute("aria-expanded") || null)()`,
+    const readingCommandOpen = await waitFor(client, `(() => (${readingSummaryExpr})?.getAttribute("aria-expanded") || null)()`,
       (value) => value === "true", "Toggle card details opens in Reading");
-    record("fold-command-reading", readingCommandClosed === "false" && readingCommandOpen === "true" && readingCommandState?.keycap === false,
-      JSON.stringify({ readingCommandState, readingCommandClosed, readingCommandOpen }));
+    record("fold-command-reading", readingCommandClosed === "false" && readingCommandOpen === "true" && readingCommandAfterClose?.keycap === false,
+      JSON.stringify({ readingCommandState, readingCommandClosed, readingCommandAfterClose, readingCommandOpen }));
     await client.evaluate(`window.app.vault.setConfig("vimMode", ${JSON.stringify(priorVimMode === true)})`);
     await openNote(client, "eat.md", "live");
     await sleep(700);
@@ -1417,6 +1443,8 @@ async function run(args) {
         const header = card();
         return node && header ? node.getBoundingClientRect().top - header.getBoundingClientRect().bottom : null;
       };
+      editor.setCursor({ line: 0, ch: 0 });
+      await settle();
       const opened = h1Lines();
       const hiddenGap = gap();
       const blankLineIsEmpty = lines[blankLine] === "";

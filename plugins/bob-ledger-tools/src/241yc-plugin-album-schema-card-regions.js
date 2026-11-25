@@ -876,7 +876,18 @@ function albumSchemaCardPaintHints(card, model, options, doc) {
   albumSchemaRegionEmpty(host);
   host.setAttribute("class", "bob-album-schema-hints bob-album-schema-dialog-footer bob-key-card-footer");
   const strip = notebookCreateEl(doc, "div", "bob-album-schema-hint-strip");
-  for (const item of albumSchemaCardHintItems(model, options)) {
+  if (options?.editable === true) {
+    const more = albumSchemaCardButton(doc, strip, "⋯", {
+      action: "more",
+      className: "bob-album-schema-more-toggle is-quiet",
+      ariaLabel: "All actions",
+    });
+    more.setAttribute("aria-expanded", options.moreOpen === true ? "true" : "false");
+  }
+  const hintItems = albumSchemaCardHintItems(model, options);
+  const closeIndex = hintItems.findIndex((item) => item?.action === "close");
+  if (closeIndex > 0) hintItems.unshift(hintItems.splice(closeIndex, 1)[0]);
+  for (const item of hintItems) {
     const row = notebookCreateEl(doc, "span", "bob-album-schema-hint");
     const keyTexts = Array.isArray(item.keys) ? item.keys : [item.keys];
     for (const text of keyTexts) {
@@ -890,14 +901,6 @@ function albumSchemaCardPaintHints(card, model, options, doc) {
     notebookSetText(label, item.label);
     row.appendChild(label);
     strip.appendChild(row);
-  }
-  if (options?.editable === true) {
-    const more = albumSchemaCardButton(doc, strip, "⋯", {
-      action: "more",
-      className: "bob-album-schema-more-toggle is-quiet",
-      ariaLabel: "All actions",
-    });
-    more.setAttribute("aria-expanded", options.moreOpen === true ? "true" : "false");
   }
   host.appendChild(strip);
   if (options?.editable === true) {

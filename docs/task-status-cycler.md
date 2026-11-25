@@ -27,6 +27,7 @@ Task Status Cycler changes task and Pomodoro states in Bob's workflow.
 | Cycle task status forward | `cycle-task-status-forward` | — |
 | Open child bullet line above | `open-child-bullet-line-above` | — |
 | Open child bullet line below | `open-child-bullet-line-below` | — |
+| Toggle Drawer | `toggle-task-drawer` | — |
 | Toggle Obsidian task | `toggle-obsidian-task` | — |
 | Toggle Pomodoro placeholder/sub-bullet | `toggle-pomodoro-bullet` | Ctrl+Alt+] |
 | Toggle task checkbox marker | `toggle-task-checkbox-marker` | — |

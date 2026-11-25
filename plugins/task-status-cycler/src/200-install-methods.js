@@ -46,6 +46,7 @@ installTaskStatusCyclerMixins(TaskStatusCyclerPlugin, [
   TaskStatusCyclerReqDropMixin,
   TaskStatusCyclerReqToggleMixin,
   TaskStatusCyclerReqTypingMixin,
+  TaskStatusCyclerDrawerTypingMixin,
   TaskStatusCyclerReqCloseApplyMixin,
   TaskStatusCyclerReqCloseIntegrationMixin,
   TaskStatusCyclerReqCloseIdlessMixin,

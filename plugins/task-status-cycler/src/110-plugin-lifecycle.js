@@ -64,6 +64,7 @@ class TaskStatusCyclerPlugin extends Plugin {
 
     this.registerChildBulletInputListeners();
     this.registerCyclerReqTyping();
+    this.registerCyclerDrawerTyping();
     this.registerOpenLineScaffoldPrune();
     this.registerPomodoroBulletToggleInputListeners();
     this.registerCountedTaskCycleInputListeners();
@@ -88,6 +89,12 @@ class TaskStatusCyclerPlugin extends Plugin {
       name: "Toggle Obsidian task",
       editorCheckCallback: (checking, editor, view) =>
         this.handleToggleObsidianTaskCommand(checking, editor, view),
+    });
+
+    this.addCommand({
+      id: "toggle-task-drawer",
+      name: "Toggle Drawer",
+      editorCheckCallback: (checking, editor) => this.cyclerDrawerToggleRoute(editor, checking),
     });
 
     // Normalize Tasks-generated dependency IDs to block IDs after Tasks writes

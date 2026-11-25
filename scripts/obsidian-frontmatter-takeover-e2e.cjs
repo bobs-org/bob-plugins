@@ -503,7 +503,11 @@ async function run(args) {
       await ctx.page.open(ctx.main, notePath, mode);
       await ctx.page.settle(250);
       const probe = await ctx.page.waitOwned(ctx.main, mode, name);
-      return { ok: true, probe };
+      const failures = [];
+      if (notePath === P.bank && probe.slotAnchor !== "metadata-container") {
+        failures.push("bank title-slot anchor is " + probe.slotAnchor);
+      }
+      return { ok: failures.length === 0, probe, failures };
     });
     await ownCase("own-day-live", P.day, "live");
     await ownCase("own-day-reading", P.day, "reading");
@@ -513,6 +517,26 @@ async function run(args) {
     await ownCase("own-record-reading", P.record, "reading");
     await ownCase("own-album-live", P.album, "live");
     await ownCase("own-album-reading", P.album, "reading");
+    await attempt("bank-cache-parity", async () => {
+      await ctx.page.open(ctx.main, P.bank, "live");
+      await ctx.page.settle(350);
+      const result = await ctx.page.ev(`(async () => {
+        const file = app.vault.getAbstractFileByPath(${JSON.stringify(P.bank)});
+        const source = file ? await app.vault.read(file) : null;
+        const cache = file ? app.metadataCache.getFileCache(file)?.frontmatter : null;
+        const helpers = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}]?.constructor?.helpers;
+        return {
+          hasSource: typeof source === "string", hasCache: Boolean(cache),
+          cache: cache ? { keys: Object.keys(cache).sort(), createdType: typeof cache.created,
+            bankType: typeof cache.bank, type: cache.type, parent: cache.parent } : null,
+          evidence: Boolean(helpers?.propertyCardFrontmatterCacheEvidence?.(source, cache)),
+        };
+      })()`);
+      return { ok: result.hasSource && result.hasCache && result.evidence, result,
+        failures: result.evidence ? [] : ["bank.md parsed source and Obsidian cache did not match"] };
+    });
+    await ownCase("own-bank-live", P.bank, "live");
+    await ownCase("own-bank-reading", P.bank, "reading");
     await ownCase("own-quarter-live", P.quarter, "live");
     await ownCase("own-year-live", P.year, "live");
     await ownCase("own-identity-day-live", P.identity, "live");
@@ -610,6 +634,8 @@ async function run(args) {
         probeDeleted: deleted, probe, failures };
     });
     await attempt("tab-live", async () => {
+      await ctx.page.open(ctx.main, P.bank, "live");
+      await ctx.page.waitOwned(ctx.main, "live", "bank tab-live setup");
       await ctx.page.ev(`(() => { const leaf = app.workspace.getLeafById(${JSON.stringify(ctx.main)}); leaf.view.editor.focus(); return true; })()`);
       const bufferBefore = await ctx.page.ev("window.__bobFrontmatterTakeover.docText(" + JSON.stringify(ctx.main) + ")");
       const downBefore = await ctx.page.ev("window.__bobFrontmatterTakeover.keyDowns()");
@@ -623,18 +649,62 @@ async function run(args) {
       const bufferChanged = bufferAfter !== bufferBefore;
       if (bufferChanged) {
         await ctx.page.ev(`(async () => {
-          const file = app.vault.getAbstractFileByPath(${JSON.stringify(P.day)});
-          await app.vault.modify(file, ${JSON.stringify(notes[P.day])});
+          const file = app.vault.getAbstractFileByPath(${JSON.stringify(P.bank)});
+          await app.vault.modify(file, ${JSON.stringify(notes[P.bank])});
           return true;
         })()`);
-        await waitFor(client, `window.__bobFrontmatterTakeover.readNote(${JSON.stringify(P.day)}) === ${JSON.stringify(notes[P.day])}`,
-          Boolean, "day fixture restoration after Tab probe", 10_000);
+        await waitFor(client, `window.__bobFrontmatterTakeover.readNote(${JSON.stringify(P.bank)}) === ${JSON.stringify(notes[P.bank])}`,
+          Boolean, "bank fixture restoration after Tab probe", 10_000);
       }
       const failures = [];
       if (!(downTab > downBefore)) failures.push("Tab never reached the page");
       if (afterTab.inProperties) failures.push("Tab entered Properties");
       if (afterShiftTab.inProperties) failures.push("Shift+Tab entered Properties");
       return { ok: failures.length === 0, afterTab, afterShiftTab, bufferChanged, failures };
+    });
+
+    await attempt("bank-vim-k-gg-live", async () => {
+      await ctx.page.open(ctx.main, P.bank, "live");
+      await ctx.page.waitOwned(ctx.main, "live", "bank Vim guard setup");
+      const placed = await ctx.page.ev(
+        "window.__bobFrontmatterTakeover.setCursor(" + JSON.stringify(ctx.main) + ", 10, 0)",
+      );
+      const downBefore = await ctx.page.ev("window.__bobFrontmatterTakeover.keyDowns()");
+      await ctx.page.keys("Escape");
+      await ctx.page.keys("g");
+      await ctx.page.keys("g");
+      await ctx.page.keys("k");
+      await ctx.page.keys("ArrowUp");
+      const downAfter = await ctx.page.ev("window.__bobFrontmatterTakeover.keyDowns()");
+      const active = await ctx.page.active();
+      const probe = await ctx.page.probe(ctx.main);
+      const failures = [];
+      if (!placed || placed.ok !== true) failures.push("could not place the bank editor cursor");
+      if (!(downAfter > downBefore)) failures.push("Vim navigation keys never reached the editor");
+      if (active.inProperties || probe.activeInside) failures.push("gg/k/Up reached hidden native Properties");
+      return { ok: failures.length === 0, placed, active, probe, failures };
+    });
+    await attempt("bank-focusin-guard", async () => {
+      await ctx.page.open(ctx.main, P.bank, "live");
+      const owned = await ctx.page.waitOwned(ctx.main, "live", "bank focus guard setup");
+      const focus = await ctx.page.ev(`(() => {
+        const leaf = app.workspace.getLeafById(${JSON.stringify(ctx.main)});
+        const scope = leaf?.view?.editor?.cm?.dom;
+        const container = scope?.querySelector(".metadata-container");
+        if (!scope || !container) return { found: false };
+        const event = new Event("focusin", { bubbles: true, cancelable: true });
+        container.dispatchEvent(event);
+        return { found: true, prevented: event.defaultPrevented,
+          activeInside: Boolean(document.activeElement && container.contains(document.activeElement)),
+          inert: Boolean(container.inert || container.hasAttribute("inert")),
+          ariaHidden: container.getAttribute("aria-hidden") };
+      })()`);
+      const after = await ctx.page.probe(ctx.main);
+      const failures = [];
+      if (!focus.found || !focus.inert || focus.ariaHidden !== "true") failures.push("native Properties guard state is incomplete");
+      if (focus.activeInside || after.activeInside) failures.push("focus entered hidden native Properties");
+      if (!after.actualOwned || !owned.actualOwned) failures.push("focus guard dropped bank ownership");
+      return { ok: failures.length === 0, focus, owned, after, failures };
     });
 
     await attempt("title-slot-anchor-reading", async () => {
@@ -652,6 +722,8 @@ async function run(args) {
       return { ok: failures.length === 0, probe, failures };
     });
     await attempt("tab-reading", async () => {
+      await ctx.page.open(ctx.main, P.bank, "reading");
+      await ctx.page.waitOwned(ctx.main, "reading", "bank tab-reading setup");
       const downBefore = await ctx.page.ev("window.__bobFrontmatterTakeover.keyDowns()");
       await ctx.page.keys("Tab");
       const afterTab = await ctx.page.active();
@@ -665,7 +737,7 @@ async function run(args) {
     });
 
     await attempt("source-toggle-releases", async () => {
-      await ctx.page.open(ctx.main, P.day, "live");
+      await ctx.page.open(ctx.main, P.bank, "live");
       await ctx.page.waitOwned(ctx.main, "live", "source setup");
       await ctx.page.setMode(ctx.main, "source");
       await ctx.page.settle(250);
@@ -679,12 +751,17 @@ async function run(args) {
       await ctx.page.open(ctx.main, P.embedder, "reading");
       await ctx.page.settle(500);
       const result = await ctx.page.ev(`(() => {
-        const embed = document.querySelector(".markdown-embed, .internal-embed");
-        const owned = embed ? embed.querySelector(".bob-property-card-owns-frontmatter") : null;
-        const card = embed ? embed.querySelector(".bob-intention-card, .bob-album-header, .bob-record-sheet") : null;
-        return { hasEmbed: Boolean(embed), owned: Boolean(owned), card: Boolean(card) };
+        const embeds = Array.from(document.querySelectorAll(".markdown-embed, .internal-embed"));
+        const embed = embeds.find((node) => node.textContent.includes("Synthetic bank ownership fixture."));
+        const scope = embed?.querySelector(".markdown-preview-view");
+        const container = scope?.querySelector(".metadata-container");
+        const owned = embed?.querySelector(".bob-property-card-owns-frontmatter");
+        return { hasEmbed: Boolean(embed), hasCard: Boolean(embed?.querySelector(".bob-bank-setup")),
+          owned: Boolean(owned), containerPresent: Boolean(container),
+          containerVisible: Boolean(container && container.getClientRects().length
+            && getComputedStyle(container).display !== "none") };
       })()`);
-      return { ok: result.hasEmbed && !result.owned && !result.card, result };
+      return { ok: result.hasEmbed && !result.owned && result.containerPresent && result.containerVisible, result };
     });
     await attempt("deny-hover", async () => {
       await ctx.page.open(ctx.main, P.hover, "reading");
@@ -694,7 +771,7 @@ async function run(args) {
         const view = leaf?.view;
         const root = view?.getMode?.() === "preview" ? view.previewMode?.containerEl : view?.contentEl;
         const link = Array.from(root?.querySelectorAll("a.internal-link, .internal-link") || [])
-          .find((node) => /today|20261120/.test(node.textContent || node.getAttribute("data-href") || ""));
+          .find((node) => /bank/i.test(node.textContent || node.getAttribute("data-href") || ""));
         if (!link) return { found: false };
         link.scrollIntoView({ block: "center", inline: "nearest" });
         const rect = link.getBoundingClientRect();
@@ -716,14 +793,19 @@ async function run(args) {
       await waitFor(client, "Boolean(document.querySelector('.popover.hover-popover .markdown-preview-view, .hover-popover .markdown-preview-view'))", Boolean, "hover popover render", 15_000);
       const result = await ctx.page.ev(`(() => {
         const pop = document.querySelector(".popover.hover-popover, .hover-popover");
+        const scope = pop?.querySelector(".markdown-preview-view");
+        const container = scope?.querySelector(".metadata-container");
         return {
           hasPopover: Boolean(pop),
           owned: Boolean(pop?.querySelector(".bob-property-card-owns-frontmatter")),
-          card: Boolean(pop?.querySelector(".bob-intention-card, .bob-album-header, .bob-record-sheet")),
+          card: Boolean(pop?.querySelector(".bob-bank-setup")),
+          containerPresent: Boolean(container),
+          containerVisible: Boolean(container && container.getClientRects().length
+            && getComputedStyle(container).display !== "none"),
         };
       })()`);
       await ctx.page.ev("(() => { document.querySelectorAll('.hover-popover').forEach((node) => node.remove()); return true; })()");
-      return { ok: result.hasPopover && !result.owned && !result.card, target, result };
+      return { ok: result.hasPopover && !result.owned && result.containerPresent && result.containerVisible, target, result };
     });
     await attempt("deny-canvas", async () => {
       const result = await ctx.page.ev(`(() => {
@@ -732,11 +814,18 @@ async function run(args) {
         host.className = "canvas-node";
         const scope = document.createElement("div");
         scope.className = "markdown-preview-view";
+        const mount = document.createElement("section");
+        mount.className = "bob-bank-setup bob-property-card";
+        mount.setAttribute("data-bank-setup-source", ${JSON.stringify(P.bank)});
+        mount.appendChild(document.createElement("footer")).className = "bob-property-card-foot";
+        scope.appendChild(mount);
         host.appendChild(scope);
         document.body.appendChild(host);
         const denied = helpers.propertyCardFrontmatterScopeDenied(scope);
         const handle = helpers.propertyCardFrontmatterOwnMounted(app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}], {
-          scope, path: ${JSON.stringify(P.day)}, kind: "day", mount: scope, view: null, getSource: () => "",
+          scope, path: ${JSON.stringify(P.bank)}, kind: "bank", mount, view: null,
+          sourceText: ${JSON.stringify("---\\nparent: \"[[cash]]\"\\ntype: \"[[area]]\"\\n---\\n")},
+          getSource: () => ${JSON.stringify("---\\nparent: \"[[cash]]\"\\ntype: \"[[area]]\"\\n---\\n")},
         });
         host.remove();
         return { denied, handle: handle == null };
@@ -750,16 +839,26 @@ async function run(args) {
         host.className = "print";
         const scope = document.createElement("div");
         scope.className = "markdown-preview-view";
+        const mount = document.createElement("section");
+        mount.className = "bob-bank-setup bob-property-card";
+        mount.setAttribute("data-bank-setup-source", ${JSON.stringify(P.bank)});
+        mount.appendChild(document.createElement("footer")).className = "bob-property-card-foot";
+        scope.appendChild(mount);
         host.appendChild(scope);
         document.body.appendChild(host);
         const denied = helpers.propertyCardFrontmatterScopeDenied(scope);
+        const handle = helpers.propertyCardFrontmatterOwnMounted(app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}], {
+          scope, path: ${JSON.stringify(P.bank)}, kind: "bank", mount, view: null,
+          sourceText: ${JSON.stringify("---\\nparent: \"[[cash]]\"\\ntype: \"[[area]]\"\\n---\\n")},
+          getSource: () => ${JSON.stringify("---\\nparent: \"[[cash]]\"\\ntype: \"[[area]]\"\\n---\\n")},
+        });
         host.remove();
-        return { denied };
+        return { denied, handle: handle == null };
       })()`);
-      return { ok: result.denied === true, result };
+      return { ok: result.denied === true && result.handle === true, result };
     });
     await attempt("deny-mobile", async () => {
-      await ctx.page.open(ctx.main, P.day, "live");
+      await ctx.page.open(ctx.main, P.bank, "live");
       await ctx.page.waitOwned(ctx.main, "live", "mobile setup");
       const toggled = await ctx.page.ev(`(() => {
         const platform = window.__bobFrontmatterTakeover.platform();
@@ -784,8 +883,8 @@ async function run(args) {
           else delete platform.isDesktopApp;
           window.__bobFrontmatterTakeover.platformDescriptor = null;
           const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
-          try { plugin.scheduleIntentionCardRefresh(); } catch (_) {}
-          try { plugin.intentionCardHost?.().scheduleRefresh?.(); } catch (_) {}
+          try { plugin.scheduleBankSetupRefresh(); } catch (_) {}
+          try { plugin.bankPropertyCardHost?.().scheduleRefresh?.(); } catch (_) {}
           plugin.constructor.helpers.propertyCardFrontmatterCoordinatorReconcile(plugin);
           return true;
         })()`);
@@ -794,12 +893,32 @@ async function run(args) {
       return { ok: lib.nativeFailures(probe, "mobile").length === 0, probe, restored };
     });
     await attempt("deny-malformed", async () => {
-      await ctx.page.open(ctx.main, P.malformedDay, "live");
-      await ctx.page.settle(500);
-      const live = await ctx.page.waitNative(ctx.main, "malformed live");
-      await ctx.page.open(ctx.main, P.malformedDay, "reading");
-      await ctx.page.settle(400);
-      const reading = await ctx.page.waitNative(ctx.main, "malformed reading");
+      await ctx.page.open(ctx.main, P.bank, "live");
+      await ctx.page.waitOwned(ctx.main, "live", "malformed bank setup");
+      const malformed = notes[P.bank].replace(
+        'summary: "Synthetic bank ownership fixture."',
+        "summary: [unclosed",
+      );
+      let live = null;
+      let reading = null;
+      try {
+        await ctx.page.ev(`(async () => {
+          const file = app.vault.getAbstractFileByPath(${JSON.stringify(P.bank)});
+          await app.vault.modify(file, ${JSON.stringify(malformed)});
+          return true;
+        })()`);
+        live = await ctx.page.waitNative(ctx.main, "malformed bank Live Preview");
+        await ctx.page.open(ctx.main, P.bank, "reading");
+        reading = await ctx.page.waitNative(ctx.main, "malformed bank Reading");
+      } finally {
+        await ctx.page.ev(`(async () => {
+          const file = app.vault.getAbstractFileByPath(${JSON.stringify(P.bank)});
+          if (file) await app.vault.modify(file, ${JSON.stringify(notes[P.bank])});
+          return true;
+        })()`);
+        await ctx.page.open(ctx.main, P.bank, "live");
+        await ctx.page.waitOwned(ctx.main, "live", "malformed bank restore");
+      }
       return { ok: true, live, reading };
     });
     await attempt("deny-unclosed", async () => {
@@ -968,6 +1087,45 @@ async function run(args) {
         },
         restored,
       };
+    });
+
+    await attempt("bank-cache-skew-releases", async () => {
+      await ctx.page.open(ctx.main, P.bank, "live");
+      await ctx.page.waitOwned(ctx.main, "live", "bank cache-skew setup");
+      const skewed = notes[P.bank].replace(
+        'summary: "Synthetic bank ownership fixture."',
+        'summary: "Cache-skewed bank fixture."',
+      );
+      const evidence = await ctx.page.ev(`(() => {
+        const file = app.vault.getAbstractFileByPath(${JSON.stringify(P.bank)});
+        const cache = app.metadataCache.getFileCache(file)?.frontmatter;
+        const helper = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}]?.constructor?.helpers?.propertyCardFrontmatterCacheEvidence;
+        return Boolean(helper && !helper(${JSON.stringify(skewed)}, cache));
+      })()`);
+      const skewApplied = await ctx.page.ev(`(() => {
+        const leaf = app.workspace.getLeafById(${JSON.stringify(ctx.main)});
+        const cm = leaf?.view?.editor?.cm;
+        if (!cm) return false;
+        cm.dispatch({ changes: { from: 0, to: cm.state.doc.length, insert: ${JSON.stringify(skewed)} } });
+        return cm.state.doc.toString() === ${JSON.stringify(skewed)};
+      })()`);
+      const native = await ctx.page.waitNative(ctx.main, "bank source/cache skew");
+      const restoredBuffer = await ctx.page.ev(`(() => {
+        const leaf = app.workspace.getLeafById(${JSON.stringify(ctx.main)});
+        const cm = leaf?.view?.editor?.cm;
+        if (!cm) return false;
+        cm.dispatch({ changes: { from: 0, to: cm.state.doc.length, insert: ${JSON.stringify(notes[P.bank])} } });
+        return cm.state.doc.toString() === ${JSON.stringify(notes[P.bank])};
+      })()`);
+      const owned = await ctx.page.waitOwned(ctx.main, "live", "bank source/cache restore");
+      const bytes = await ctx.page.ev(
+        "window.__bobFrontmatterTakeover.readNote(" + JSON.stringify(P.bank) + ")",
+      );
+      const failures = [];
+      if (!evidence) failures.push("the bank source/cache skew fixture did not fail parity");
+      if (!skewApplied) failures.push("could not apply the skewed Live Preview source");
+      if (!restoredBuffer || bytes !== notes[P.bank]) failures.push("bank source bytes changed during cache-skew check");
+      return { ok: failures.length === 0, evidence, skewApplied, native, restoredBuffer, owned, bytes, failures };
     });
 
     const disposableDayNote = (iso, id, weekday) => notes[P.day]
@@ -1168,7 +1326,7 @@ async function run(args) {
       }
     });
     await attempt("disable-unload-restores", async () => {
-      await ctx.page.open(ctx.main, P.day, "live");
+      await ctx.page.open(ctx.main, P.bank, "live");
       await ctx.page.waitOwned(ctx.main, "live", "disable setup");
       await ctx.page.ev("app.plugins.disablePlugin(" + JSON.stringify(PLUGIN_ID) + ")");
       await waitFor(client, "!app.plugins.plugins[" + JSON.stringify(PLUGIN_ID) + "]", Boolean, "ledger-tools disabled");
@@ -1177,7 +1335,7 @@ async function run(args) {
         const container = document.querySelector(".metadata-container");
         return {
           owns: document.querySelectorAll(".bob-property-card-owns-frontmatter").length,
-          cards: document.querySelectorAll(".bob-intention-card, .bob-album-header, .bob-record-sheet").length,
+          cards: document.querySelectorAll(".bob-intention-card, .bob-album-header, .bob-record-sheet, .bob-bank-setup").length,
           inert: Boolean(container && (container.inert === true || container.hasAttribute("inert"))),
           ariaHidden: container ? container.getAttribute("aria-hidden") : null,
           present: Boolean(container),
@@ -1191,7 +1349,7 @@ async function run(args) {
       await ctx.page.ev("app.plugins.enablePlugin(" + JSON.stringify(PLUGIN_ID) + ")");
       await waitFor(client, "Boolean(app.plugins.plugins[" + JSON.stringify(PLUGIN_ID) + "])", Boolean, "ledger-tools enabled", 30_000);
       await ctx.page.install();
-      await ctx.page.open(ctx.main, P.day, "live");
+      await ctx.page.open(ctx.main, P.bank, "live");
       const on = await ctx.page.waitOwned(ctx.main, "live", "re-enable");
       return { ok: failures.length === 0, off, on, failures };
     });
@@ -1228,7 +1386,7 @@ async function run(args) {
         plugin.propertyCapabilityGeneration = (plugin.propertyCapabilityGeneration || 0) + 1;
         return plugin.schedulePropertyCapabilityProbe("pending");
       })()`);
-      await ctx.page.open(ctx.main, P.day, "live");
+      await ctx.page.open(ctx.main, P.bank, "live");
       await ctx.page.settle(400);
       const pending = await ctx.page.probe(ctx.main);
       const failures = lib.nativeFailures(pending, "pending");
@@ -1240,7 +1398,7 @@ async function run(args) {
     });
     await attempt("absent-old-bob-native", async () => {
       await switchBob("old", "absent");
-      await ctx.page.open(ctx.main, P.day, "live");
+      await ctx.page.open(ctx.main, P.bank, "live");
       await ctx.page.settle(400);
       const probe = await ctx.page.waitNative(ctx.main, "old bob");
       await restoreBob();
@@ -1248,7 +1406,7 @@ async function run(args) {
     });
     await attempt("failed-probe-native", async () => {
       await switchBob("fail", "unconfirmed");
-      await ctx.page.open(ctx.main, P.week, "live");
+      await ctx.page.open(ctx.main, P.bank, "live");
       await ctx.page.settle(400);
       const probe = await ctx.page.waitNative(ctx.main, "failed probe");
       await restoreBob();
@@ -1256,12 +1414,15 @@ async function run(args) {
     });
     await attempt("path-switch-native", async () => {
       await switchBob("fail", "unconfirmed");
-      await ctx.page.open(ctx.main, P.album, "live");
+      await ctx.page.open(ctx.main, P.bank, "live");
       await ctx.page.settle(400);
       const switched = await ctx.page.waitNative(ctx.main, "path switch");
+      await ctx.page.open(ctx.main, P.ordinary, "live");
+      const ordinary = await ctx.page.waitNative(ctx.main, "path switch ordinary");
       await restoreBob();
+      await ctx.page.open(ctx.main, P.bank, "live");
       const restored = await ctx.page.waitOwned(ctx.main, "live", "path restore");
-      return { ok: true, switched, restored };
+      return { ok: true, switched, ordinary, restored };
     });
     await attempt("late-after-unload-native", async () => {
       writeControl(controlPath, "hold");
@@ -1284,7 +1445,7 @@ async function run(args) {
       await waitFor(client, "Boolean(app.plugins.plugins[" + JSON.stringify(PLUGIN_ID) + "])", Boolean, "late enable", 30_000);
       await ctx.page.install();
       await restoreBob();
-      await ctx.page.open(ctx.main, P.day, "live");
+      await ctx.page.open(ctx.main, P.bank, "live");
       const owned = await ctx.page.waitOwned(ctx.main, "live", "late restore");
       return { ok: leftovers.owns === 0 && leftovers.inert === false, leftovers, owned };
     });
@@ -1334,14 +1495,20 @@ async function run(args) {
       await ctx.page.closeEditor();
       return { ok: failures.length === 0, after, bind, failures };
     });
-    await attempt("bank-native", async () => {
+    await attempt("bank-add-file-property", async () => {
       await ctx.page.open(ctx.main, P.bank, "live");
-      await ctx.page.settle(400);
-      const live = await ctx.page.waitNative(ctx.main, "bank live");
-      await ctx.page.open(ctx.main, P.bank, "reading");
-      await ctx.page.settle(300);
-      const reading = await ctx.page.waitNative(ctx.main, "bank reading");
-      return { ok: true, live, reading };
+      await ctx.page.waitOwned(ctx.main, "live", "bank Add file property setup");
+      const command = await ctx.page.ev(`(() => {
+        const commands = Object.values(app.commands?.commands || {});
+        return commands.find((entry) => /add file property/i.test(String(entry.name || "")))?.id || null;
+      })()`);
+      if (!command) throw new Error("Add file property command is unavailable");
+      await ctx.page.ev(`(async () => { await app.commands.executeCommandById(${JSON.stringify(command)}); return true; })()`);
+      await ctx.page.settle(250);
+      const probe = await ctx.page.probe(ctx.main);
+      const failures = lib.addEditorFailures(probe);
+      if (failures.length === 0) await ctx.page.closeEditor();
+      return { ok: failures.length === 0, command, probe, failures };
     });
     await attempt("ordinary-native", async () => {
       await ctx.page.open(ctx.main, P.ordinary, "live");
@@ -1349,9 +1516,9 @@ async function run(args) {
       const probe = await ctx.page.waitNative(ctx.main, "ordinary");
       return { ok: true, probe };
     });
-    await attempt("sidebar-native", async () => {
-      await ctx.page.open(ctx.main, P.day, "live");
-      await ctx.page.waitOwned(ctx.main, "live", "sidebar setup");
+    await attempt("bank-sidebar-native", async () => {
+      await ctx.page.open(ctx.main, P.bank, "live");
+      await ctx.page.waitOwned(ctx.main, "live", "bank sidebar setup");
       const result = await ctx.page.ev(`(async () => {
         const command = app.commands.commands["properties:open-local"];
         if (!command) return { error: "Show file properties command is not registered" };
@@ -1472,8 +1639,7 @@ async function run(args) {
           await shared.setViewport(client, width, 1000);
           for (const mode of ["live", "reading"]) {
             await ctx.page.open(ctx.main, notePath, mode);
-            if (label === "bank") await ctx.page.waitNative(ctx.main, "bank screenshot");
-            else await ctx.page.waitOwned(ctx.main, mode, label + " screenshot");
+            await ctx.page.waitOwned(ctx.main, mode, label + " screenshot");
             // Start at the card, not the scroll offset left by the drawer/focus tests.
             await ctx.page.ev(`(() => {
               const view = app.workspace.getLeafById(${JSON.stringify(ctx.main)}).view;

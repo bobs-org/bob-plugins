@@ -257,11 +257,19 @@ test("Source toggle and path change drop the owner in the same transaction", () 
 test("the ownership coordinator registers its Live Preview StateField", () => {
   const plugin = new TestPlugin({ workspace: {} });
   const extension = H.propertyCardFrontmatterOwnershipExtension();
+  let bankRefreshes = 0;
+  plugin.propertyCapabilityRoutingReady = () => true;
+  plugin.propertyCapabilityCurrentBobKey = () => "bob:/usr/bin/bob";
+  plugin.propertyCapabilityConfirmed = () => true;
+  plugin.scheduleBankSetupRefresh = () => { bankRefreshes += 1; };
 
   H.propertyCardFrontmatterCoordinatorBind(plugin, "day");
   H.propertyCardFrontmatterCoordinatorBind(plugin, "record");
+  H.propertyCardFrontmatterCoordinatorBind(plugin, "bank");
+  H.propertyCardFrontmatterCoordinatorCapabilityChanged(plugin, "confirmed");
 
   assert.deepEqual(plugin.extensions, [extension], "all card adapters share one registered ownership field");
+  assert.equal(bankRefreshes, 1, "a newly confirmed property capability repaints the bank card");
 });
 
 test("deferred editor ownership: async dispatch, idempotent path, generations, releaseAll", () => {
@@ -654,8 +662,10 @@ test("supported card kinds own independent panes; replacement, stale release, an
     return [line.slice(0, index).trim(), line.slice(index + 1).trim()];
   }));
   const mountFor = (doc, scope, kind, path) => {
-    const cls = kind === "album" ? "bob-album-header" : kind === "record" ? "bob-record-sheet" : "bob-intention-card";
-    const attr = kind === "album" ? "data-album-source" : kind === "record" ? "data-record-source" : "data-intention-source";
+    const cls = kind === "album" ? "bob-album-header" : kind === "record" ? "bob-record-sheet"
+      : kind === "bank" ? "bob-bank-setup" : "bob-intention-card";
+    const attr = kind === "album" ? "data-album-source" : kind === "record" ? "data-record-source"
+      : kind === "bank" ? "data-bank-setup-source" : "data-intention-source";
     const mount = el(doc, "section", `${cls} bob-property-card`);
     mount.setAttribute(attr, path);
     mount.appendChild(el(doc, "footer", "bob-property-card-foot"));
@@ -669,7 +679,7 @@ test("supported card kinds own independent panes; replacement, stale release, an
     parseYaml: parse,
   });
   const records = [];
-  for (const kind of ["album", "record", "day", "week", "quarter", "year"]) {
+  for (const kind of ["album", "record", "day", "week", "quarter", "year", "bank"]) {
     const path = `${kind}.md`;
     const sourceText = `---\ntype: ${kind}\n---\n`;
     frontmatterByPath.set(path, { type: kind });
@@ -706,7 +716,7 @@ test("supported card kinds own independent panes; replacement, stale release, an
   H.propertyCardFrontmatterCoordinatorReconcile(plugin);
   assert.ok(first.fx.scope.classList.contains(OWNS));
 
-  for (const kind of ["album", "record", "day", "week", "quarter", "year"]) {
+  for (const kind of ["album", "record", "day", "week", "quarter", "year", "bank"]) {
     H.propertyCardFrontmatterCoordinatorReleaseKind(plugin, kind);
   }
   for (const record of records) {

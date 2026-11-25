@@ -227,10 +227,10 @@ bits. The unit entry points are
 
 ### Frontmatter ownership
 
-Album, record, and day/week/quarter/year adapters use
+Album, record, day/week/quarter/year, and bank adapters use
 `propertyCardFrontmatterOwnMounted` to acquire whole-container ownership
 only after their card and foot mount. Identity-only temporal cards qualify;
-bank does not. The coordinator checks the current path and mount generation,
+bank ownership applies to `bank.md`. The coordinator checks the current path and mount generation,
 desktop Live Preview or Reading scope, a closed valid frontmatter mapping
 whose parsed values agree with the cache, confirmed `props_v1` for the
 current bob path, and working property-editor/native-command routing.

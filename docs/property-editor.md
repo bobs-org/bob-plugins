@@ -338,10 +338,10 @@ keep native focus elsewhere.
 The **File Properties sidebar** remains available for native editing even
 when the document card owns Properties. Metadata Menu's native Properties
 context menu is unavailable on the hidden in-document block; use the native
-sidebar or Source when you need native access. Bank retains its native
-Properties block alongside its foot and drawer. Ordinary notes, Source,
-embeds, hover popovers, canvas, print, and mobile never acquire whole-block
-ownership.
+sidebar or Source when you need native access. The bank card can own the
+in-document block on `bank.md` under the same source/cache and capability
+checks as the other property cards. Ordinary notes, Source, embeds, hover
+popovers, canvas, print, and mobile never acquire whole-block ownership.
 
 Unknown or absent capability, malformed or unclosed YAML, duplicate keys,
 source/cache disagreement, and failed routing leave the native block

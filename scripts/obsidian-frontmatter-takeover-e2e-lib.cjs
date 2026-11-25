@@ -13,8 +13,8 @@ const HELP_TEXT = [
   "Usage: node scripts/obsidian-frontmatter-takeover-e2e.cjs [OPTIONS]",
   "",
   "Prove production whole-container frontmatter ownership on album, record,",
-  "day, week, quarter, and year cards in a disposable Obsidian vault. Bank,",
-  "embeds, hover, canvas, print, mobile, Source, and ordinary notes keep",
+  "day, week, quarter, year, and bank cards in a disposable Obsidian vault.",
+  "Denied contexts, canvas, print, mobile, Source, and ordinary notes keep",
   "native Properties. Needs BOB_BIN and BOB_CLI_DIR. Run the real matrix",
   "under xvfb-run -a on Linux. --self-test never launches Obsidian.",
   "",
@@ -56,6 +56,9 @@ const REQUIRED_CHECKS = Object.freeze([
   { name: "own-record-reading", surface: "reading" },
   { name: "own-album-live", surface: "live" },
   { name: "own-album-reading", surface: "reading" },
+  { name: "bank-cache-parity", surface: "both" },
+  { name: "own-bank-live", surface: "live" },
+  { name: "own-bank-reading", surface: "reading" },
   { name: "own-quarter-live", surface: "live" },
   { name: "own-year-live", surface: "live" },
   { name: "own-identity-day-live", surface: "live" },
@@ -69,6 +72,7 @@ const REQUIRED_CHECKS = Object.freeze([
   { name: "deny-malformed", surface: "both" },
   { name: "deny-unclosed", surface: "both" },
   { name: "stale-cache-releases", surface: "live" },
+  { name: "bank-cache-skew-releases", surface: "live" },
   { name: "live-autosave-keeps-ownership", surface: "live" },
   { name: "live-slow-reparse-keeps-card", surface: "live" },
   { name: "same-pane-file-change", surface: "live" },
@@ -83,12 +87,14 @@ const REQUIRED_CHECKS = Object.freeze([
   { name: "mod-semicolon-add-owned", surface: "live" },
   { name: "palette-add-owned", surface: "live" },
   { name: "custom-shortcut-add-owned", surface: "live" },
-  { name: "bank-native", surface: "both" },
+  { name: "bank-add-file-property", surface: "live" },
+  { name: "bank-sidebar-native", surface: "both" },
   { name: "ordinary-native", surface: "both" },
-  { name: "sidebar-native", surface: "both" },
   { name: "field-focused-helper", surface: "live" },
   { name: "failed-opener-fallback", surface: "live" },
   { name: "vim-k-gg-up-live", surface: "live" },
+  { name: "bank-vim-k-gg-live", surface: "live" },
+  { name: "bank-focusin-guard", surface: "live" },
   { name: "tab-live", surface: "live" },
   { name: "tab-reading", surface: "reading" },
   { name: "title-slot-anchor-live", surface: "live" },
@@ -125,12 +131,44 @@ const PATHS = Object.freeze({
 
 function fixtureNotes() {
   const notes = foot.fixtureNotes();
+  notes[PATHS.bank] = [
+    "---",
+    'parent: "[[cash]]"',
+    'type: "[[area]]"',
+    'summary: "Synthetic bank ownership fixture."',
+    "created: 2026-11-11T11:31:42-05:00",
+    "bank:",
+    "  accounts:",
+    "    checking:",
+    '      label: "Example Checking"',
+    "      kind: checking",
+    "      start: 2026-11-11",
+    "  categories:",
+    "    coffee: { label: Coffee, hotkey: c, group: Everyday }",
+    '    housing: { label: Housing, hotkey: "1", group: Bills }',
+    "  rules:",
+    '    - match: "EXAMPLE TRANSFER"',
+    '      payee: "Example transfer"',
+    "      cat: housing",
+    "---",
+    "",
+    "# 🏦 Bank",
+    "",
+    "A disposable fixture for native Properties ownership.",
+    "",
+    "```bob-bank",
+    "view: queue",
+    "```",
+    "",
+  ].join("\n");
   notes[PATHS.embedder] = [
     "# Embedder",
     "",
-    "See [[2026/20261120]] for the hover and embed target.",
+    "See [[2026/20261120]] and [[bank]] for the hover and embed targets.",
     "",
     "![[2026/20261120]]",
+    "",
+    "![[bank]]",
     "",
   ].join("\n");
   notes[PATHS.hover] = [
@@ -140,7 +178,7 @@ function fixtureNotes() {
     "",
     "# Hover host",
     "",
-    "Peek [[2026/20261120|today]] without opening it.",
+    "Peek [[bank|the bank]] without opening it.",
     "",
   ].join("\n");
   notes[PATHS.malformedDay] = [
@@ -359,7 +397,7 @@ const PROBE_SOURCE = "(() => {" + PAGE_COMMON + String.raw`
       } catch (_) { return null; }
     })();
     const card = scope && scope.querySelector
-      ? (scope.querySelector(".bob-album-header, .bob-record-sheet, .bob-intention-card") || null)
+      ? (scope.querySelector(".bob-album-header, .bob-record-sheet, .bob-intention-card, .bob-bank-setup") || null)
       : null;
     const foot = card && card.querySelector ? card.querySelector(".bob-property-card-foot") : null;
     const drawer = foot && foot.querySelector ? foot.querySelector(".bob-property-card-foot-drawer") : null;
@@ -707,10 +745,15 @@ function selfTest() {
   assert.match(notes[PATHS.album], /type: "\[\[album\]\]"/);
   assert.match(notes[PATHS.record], /type: "\[\[record\]\]"/);
   assert.match(notes[PATHS.day], /type: "\[\[day\]\]"/);
-  assert.match(notes[PATHS.bank], /bank:/);
+  assert.match(notes[PATHS.bank], /created: 2026-11-11T11:31:42-05:00/);
+  assert.match(notes[PATHS.bank], /start: 2026-11-11/);
+  assert.match(notes[PATHS.bank], /hotkey: "1"/);
+  assert.match(notes[PATHS.bank], /coffee: \{ label: Coffee, hotkey: c, group: Everyday \}/);
+  assert.match(notes[PATHS.bank], /parent: "\[\[cash\]\]"/);
+  assert.match(notes[PATHS.bank], /type: "\[\[area\]\]"/);
   assert.ok(!notes[PATHS.identity].includes("created:"), "identity-only day must stay quiet");
   assert.ok(notes[PATHS.embedder].includes("![[2026/20261120]]"));
-  assert.ok(notes[PATHS.hover].includes("[[2026/20261120|today]]"));
+  assert.ok(notes[PATHS.hover].includes("[[bank|the bank]]"));
   assert.match(notes[PATHS.malformedDay], /\nintentions: 7\n/);
   assert.equal(computeVerdict(passingReport()).verdict, "GO");
   const liveFail = passingReport();

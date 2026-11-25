@@ -4,28 +4,6 @@
 // the title-slot adopter glue (240k); embeds, popovers, mobile, and failed
 // mounts keep today's body placement after the first H1.
 
-function bankSetupClockLabel(timestamp) {
-  try {
-    if (!Number.isFinite(timestamp)) {
-      return null;
-    }
-    const date = new Date(timestamp);
-    if (Number.isNaN(date.getTime())) {
-      return null;
-    }
-    let hours = date.getHours();
-    const minutes = String(date.getMinutes()).padStart(2, "0");
-    const suffix = hours >= 12 ? "PM" : "AM";
-    hours = hours % 12;
-    if (hours === 0) {
-      hours = 12;
-    }
-    return `${hours}:${minutes} ${suffix}`;
-  } catch (error) {
-    return null;
-  }
-}
-
 class BobLedgerToolsBankSetupMixin {
   bankPropertyCardHost() {
     if (this._bankPropertyCardHost) return this._bankPropertyCardHost;
@@ -80,6 +58,7 @@ class BobLedgerToolsBankSetupMixin {
         if (!(plugin.bankSetupExpanded instanceof Map)) plugin.bankSetupExpanded = new Map();
         if (!(plugin.bankSetupSurfaces instanceof Set)) plugin.bankSetupSurfaces = new Set();
         if (!(plugin.bankSetupLintCache instanceof Map)) plugin.bankSetupLintCache = new Map();
+        try { propertyCardFrontmatterCoordinatorBind?.(plugin, "bank"); } catch (_) {}
         try { plugin.bankSetupFootBind?.(); } catch (_) {}
         plugin.bankSetupFoldUnregister = typeof propertyCardRegisterFoldKind === "function"
           ? propertyCardRegisterFoldKind(plugin, "bank", {
@@ -115,6 +94,7 @@ class BobLedgerToolsBankSetupMixin {
             try { propertyCardFoldClearPendingReveal?.(path); } catch (_) {}
           }
         } catch (_) {}
+        try { propertyCardFrontmatterCoordinatorReleaseKind?.(plugin, "bank"); } catch (_) {}
         try { plugin.bankSetupFootUnbind?.(); } catch (_) {}
         try {
           if (typeof plugin.bankSetupUnsubscribe === "function") plugin.bankSetupUnsubscribe();
@@ -457,6 +437,7 @@ class BobLedgerToolsBankSetupMixin {
   }
 
   bankSetupRemoveReading(root, scope = root, sourcePath = "") {
+    this.bankSetupReleaseFrontmatter(scope, sourcePath);
     if (!root) {
       return;
     }
@@ -623,12 +604,19 @@ class BobLedgerToolsBankSetupMixin {
       })
       : { mode: "fallback", release: () => {} };
     if (adoption.mode !== "slot") {
+      this.bankSetupReleaseFrontmatter(scope, sourcePath);
       try {
         this.bankSetupPlaceInBody(root, header);
       } catch (_) {
         this.bankSetupRemoveReading(root, scope, sourcePath);
         return null;
       }
+    } else {
+      this.bankSetupOwnMountedFrontmatter(
+        scope, reading?.view || null, sourcePath, header,
+        this.bankSetupSourceCache?.get?.(bankSetupHubPath(sourcePath)),
+        reading?.currentPath || (() => sourcePath),
+      );
     }
     if (focusKey) {
       try {
@@ -725,6 +713,7 @@ class BobLedgerToolsBankSetupMixin {
         return Decoration?.none || null;
       }
       if (!view?.state?.doc) {
+        this.bankSetupReleaseFrontmatter(view?.dom);
         this.bankSetupReleaseAdoptionOnScope(view);
         this.bankSetupSetEditorScope(view, false);
         this.bankSetupReleaseKeys(view?.dom);
@@ -736,6 +725,7 @@ class BobLedgerToolsBankSetupMixin {
       }
       const lint = this.bankSetupLintState(view);
       if (!lint) {
+        this.bankSetupReleaseFrontmatter(view?.dom);
         this.bankSetupReleaseAdoptionOnScope(view);
         this.bankSetupSetEditorScope(view, false);
         this.bankSetupReleaseKeys(view?.dom);
@@ -745,10 +735,12 @@ class BobLedgerToolsBankSetupMixin {
       // explicitly, so a mode flip never leaves a hidden H1 or a stranded
       // slot card. Lint marks still paint through the branch below.
       this.bankSetupReleaseAdoptionOnScope(view);
+      this.bankSetupReleaseFrontmatter(view?.dom);
       this.bankSetupReleaseKeys(view?.dom);
       try { this.bankSetupTrackFoot?.(view?.dom, this.bankSetupSourcePath(view), null); } catch (_) {}
       return this.bankSetupLintDecorations(view, lint);
     } catch (error) {
+      try { this.bankSetupReleaseFrontmatter(view?.dom); } catch (_) {}
       return Decoration?.none || null;
     }
   }
@@ -764,6 +756,7 @@ class BobLedgerToolsBankSetupMixin {
     }
     this.bankSetupSetEditorScope(view, Boolean(card && card.model));
     if (!card || !card.model) {
+      this.bankSetupReleaseFrontmatter(view?.dom, livePath);
       try { this.bankSetupTrackFoot?.(view?.dom, livePath, null); } catch (_) {}
       this.bankSetupReleaseAdoption(view?.dom, livePath);
       this.bankSetupReleaseKeys(view?.dom);
@@ -787,6 +780,7 @@ class BobLedgerToolsBankSetupMixin {
     if (!header || bankSetupNodeSignatures.get(header) !== signature) {
       const fresh = this.bankSetupBuildReading(card.model, options, doc);
       if (!fresh) {
+        this.bankSetupReleaseFrontmatter(view?.dom, livePath);
         try { this.bankSetupTrackFoot?.(view?.dom, livePath, null); } catch (_) {}
         this.bankSetupReleaseAdoption(view?.dom, livePath);
         this.bankSetupReleaseKeys(view?.dom);
@@ -810,8 +804,11 @@ class BobLedgerToolsBankSetupMixin {
     this.bankSetupOwnKeys(view?.dom, livePath);
     try { this.bankSetupTrackFoot?.(view?.dom, livePath, header); } catch (_) {}
     if (adoption.mode === "slot") {
+      this.bankSetupOwnMountedFrontmatter(view.dom, view, livePath, header, text,
+        () => this.bankSetupLivePath(view) || "");
       return Decoration.none;
     }
+    this.bankSetupReleaseFrontmatter(view?.dom, livePath);
 
     // Fallback: today's inline widget at the end of the first `# ` line.
     const anchor = this.notebookHeaderLiveAnchor?.(text) ?? -1;
@@ -826,6 +823,17 @@ class BobLedgerToolsBankSetupMixin {
       toDOM() {
         header.setAttribute?.("data-cm-widget", "true");
         header.setAttribute?.("data-bank-setup-source", livePath);
+        propertyCardFrontmatterOwnMountedDeferred?.(plugin, {
+          scope: view.dom, view, path: livePath, kind: "bank", mount: header, sourceText: text,
+          getSource: () => view?.state?.doc?.toString?.() || "",
+          currentPath: () => plugin.bankSetupLivePath(view) || "",
+          active: () => plugin.bankSetupActive === true,
+          isCurrent: () => {
+            const source = view?.state?.doc?.toString?.() || "";
+            const card = source && plugin.bankSetupCardFor(livePath, source);
+            return Boolean(card && card.model);
+          },
+        });
         return header;
       }
     }();

@@ -58,16 +58,18 @@ test("required takeover checks cover both surfaces, denials, and command routing
   const names = lib.REQUIRED_CHECKS.map((row) => row.name);
   for (const name of [
     "own-day-live", "own-day-reading", "own-week-live", "own-record-live", "own-album-reading",
+    "bank-cache-parity", "own-bank-live", "own-bank-reading", "bank-add-file-property", "bank-sidebar-native",
     "own-quarter-live", "own-year-live", "own-identity-day-live",
     "source-toggle-releases", "deny-embed", "deny-hover", "deny-canvas", "deny-print", "deny-mobile",
-    "deny-malformed", "deny-unclosed", "stale-cache-releases",
+    "deny-malformed", "deny-unclosed", "stale-cache-releases", "bank-cache-skew-releases",
     "live-autosave-keeps-ownership", "live-slow-reparse-keeps-card",
     "same-pane-file-change",
     "injected-mount-failure", "replaced-container-reapplies", "disable-unload-restores",
     "pending-capability-native", "absent-old-bob-native", "failed-probe-native", "path-switch-native",
     "late-after-unload-native", "mod-semicolon-add-owned", "palette-add-owned", "custom-shortcut-add-owned",
-    "bank-native", "ordinary-native", "sidebar-native", "field-focused-helper", "failed-opener-fallback",
-    "vim-k-gg-up-live", "tab-live", "title-slot-anchor-live", "drawer-exposes-every-key",
+    "ordinary-native", "field-focused-helper", "failed-opener-fallback",
+    "vim-k-gg-up-live", "bank-vim-k-gg-live", "bank-focusin-guard", "tab-live", "tab-reading",
+    "title-slot-anchor-live", "drawer-exposes-every-key",
     "bytes-unchanged", "no-paint-spawn", "screenshots-captured",
   ]) {
     assert.ok(names.includes(name), name);
@@ -109,11 +111,10 @@ test("screenshot acceptance rejects leaked clones, native fallback, and wrong vi
     { containerCount: 2 }, { visibleContainerCount: 1 }, { actualOwned: false },
     { containerVisible: true }, { path: "stale.md" }, { mode: "live" },
   ]) assert.ok(lib.screenshotFailures({ ...owned, ...delta }, "record.md", "reading").length);
-  const bank = { ...owned, path: "bank.md", scopeClass: false, actualOwned: false,
-    containerVisible: true, visibleContainerCount: 1, display: "block" };
-  assert.deepEqual(lib.screenshotFailures(bank, "bank.md", "reading", true), []);
-  assert.ok(lib.screenshotFailures({ ...bank, visibleContainerCount: 0 }, "bank.md", "reading", true).length);
-  assert.ok(lib.screenshotFailures({ ...bank, containerCount: 2 }, "bank.md", "reading", true).length);
+  const bank = { ...owned, path: "bank.md" };
+  assert.deepEqual(lib.screenshotFailures(bank, "bank.md", "reading"), []);
+  assert.ok(lib.screenshotFailures({ ...bank, visibleContainerCount: 1, containerVisible: true }, "bank.md", "reading").length);
+  assert.ok(lib.screenshotFailures({ ...bank, containerCount: 2 }, "bank.md", "reading").length);
 });
 
 test("takeover runner file parses and reuses provenance", () => {
@@ -146,7 +147,7 @@ test("stale-cache probe injects a stale view without mutating Obsidian's cached 
   assert.doesNotMatch(source, /cache\.frontmatter\.type = "stale-mismatch"/);
   assert.match(source, /cache\.frontmatter\.summary === \$\{JSON\.stringify\(cacheProbe\)\}/);
   assert.match(source, /bufferChanged = bufferAfter !== bufferBefore/);
-  assert.match(source, /day fixture restoration after Tab probe/);
+  assert.match(source, /bank fixture restoration after Tab probe/);
 });
 
 

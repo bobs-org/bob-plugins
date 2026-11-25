@@ -4,4 +4,6 @@ Object.assign(module.exports.helpers, {
   snapshotTaskSettleIdentity,
   taskSettleJumpKey,
   closeSettleNormalizePolicyForWrite,
+  structureSettleJoinLines,
+  structureSettleAbandonReason,
 });

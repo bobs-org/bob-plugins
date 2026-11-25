@@ -504,7 +504,7 @@ test("Vim o/O apply as one replaceRange and undo restores the original", () => {
   assert.equal(editor.getValue(), original);
 });
 
-test("empty-scaffold prune on insert-leave, blur, and path-mismatched leaf switch", () => {
+test("empty-scaffold prune on insert-leave, blur, and editor reuse", () => {
   const plugin = makePlugin("Daily.md");
   const text = "- [ ] #task Ship";
   const editor = wrapEditor(text, { line: 0, ch: 8 });
@@ -521,6 +521,18 @@ test("empty-scaffold prune on insert-leave, blur, and path-mismatched leaf switc
 
   plugin.applyVimOpenLine(editor, "below");
   plugin.app.workspace.getActiveViewOfType = () => ({ file: { path: "Other.md" } });
+  // Safety is the stored cm/path, not the currently active file: a split
+  // pane still prunes the original editor.
+  assert.equal(plugin.flushOpenLineScaffold("leaf"), true);
+  assert.equal(editor.getValue(), text);
+  editor.setCursor(0, 8);
+
+  plugin.app.workspace.getActiveViewOfType = () => ({ file: { path: "Daily.md" } });
+  plugin.applyVimOpenLine(editor, "below");
+  const reusedView = { editor, file: { path: "Other.md" }, getViewType: () => "markdown" };
+  plugin.app.workspace.iterateAllLeaves = (visit) => visit({ view: reusedView });
+  plugin.app.workspace.getLeavesOfType = (type) =>
+    type === "markdown" ? [{ view: reusedView }] : [];
   assert.equal(plugin.flushOpenLineScaffold("leaf"), false);
   assert.equal(editor.getValue(), `${text}\n${NEW_TASK}`);
 });

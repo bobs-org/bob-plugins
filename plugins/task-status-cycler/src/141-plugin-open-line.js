@@ -67,11 +67,12 @@ class TaskStatusCyclerOpenLineMixin {
     }
   }
 
-  armOpenLineScaffold(cm, plan, path) {
+  armOpenLineScaffold(cm, plan, path, editor) {
     this.disarmOpenLineScaffold();
     if (!plan || plan.kind !== "insert" || !plan.scaffold) return;
     this.openLineScaffold = {
       cm,
+      editor: editor || cm,
       path: path || null,
       scaffold: plan.scaffold,
     };
@@ -101,30 +102,73 @@ class TaskStatusCyclerOpenLineMixin {
     this.openLineScaffold = null;
   }
 
+  openLineScaffoldLivePath(pending) {
+    if (!pending) return null;
+    const editor = pending.editor || pending.cm;
+    return this.taskSettleLiveEditorPath(editor) || this.taskSettleLiveEditorPath(pending.cm);
+  }
+
+  openLineScaffoldTaskIdentity(cm, scaffold) {
+    if (!scaffold || scaffold.kind !== "task") return null;
+    if (!cm || typeof cm.getLine !== "function") return null;
+    const lineIndex = scaffold.lineIndex;
+    if (!Number.isInteger(lineIndex) || lineIndex < 0) return null;
+    const lineCount = this.getCodeMirrorLineCount(cm);
+    if (lineIndex >= lineCount) return null;
+    const lineText = cm.getLine(lineIndex);
+    if (typeof lineText !== "string") return null;
+    if (typeof openLineScaffoldIsEmpty === "function" &&
+        openLineScaffoldIsEmpty(lineText, scaffold.emptyText)) {
+      return null;
+    }
+    if (typeof isProperObsidianTaskLine === "function" && !isProperObsidianTaskLine(lineText)) {
+      return null;
+    }
+    return this.snapshotTaskSettleIdentity(lineText, lineIndex);
+  }
+
   flushOpenLineScaffold(_reason) {
     const pending = this.openLineScaffold;
     if (!pending) return false;
-    const view = this.app && this.app.workspace
-      ? this.app.workspace.getActiveViewOfType(MarkdownView)
-      : null;
-    const file = view && view.file;
-    if (pending.path && file && file.path !== pending.path) {
-      this.disarmOpenLineScaffold();
+    // Disarm first so duplicate insert-leave/blur/leaf callbacks are inert.
+    this.disarmOpenLineScaffold();
+    const storedPath = pending.path || null;
+    const livePath = this.openLineScaffoldLivePath(pending);
+    if (storedPath && livePath && livePath !== storedPath) {
       return false;
     }
     const cm = pending.cm;
     if (!cm || typeof cm.getLine !== "function" || typeof cm.replaceRange !== "function") {
-      this.disarmOpenLineScaffold();
       return false;
     }
     const contents = this.getCodeMirrorContents(cm);
     const pruned = pruneOpenLineScaffold(contents, pending.scaffold);
-    this.disarmOpenLineScaffold();
-    if (pruned === null) return false;
-    const last = this.getCodeMirrorLineCount(cm) - 1;
-    const lastText = last >= 0 ? cm.getLine(last) || "" : "";
-    cm.replaceRange(pruned, { line: 0, ch: 0 }, { line: Math.max(last, 0), ch: lastText.length });
-    return true;
+    if (pruned !== null) {
+      const last = this.getCodeMirrorLineCount(cm) - 1;
+      const lastText = last >= 0 ? cm.getLine(last) || "" : "";
+      cm.replaceRange(pruned, { line: 0, ch: 0 }, { line: Math.max(last, 0), ch: lastText.length });
+      return true;
+    }
+    const editor = pending.editor && typeof pending.editor.getValue === "function"
+      ? pending.editor
+      : (typeof cm.getValue === "function" ? cm : null);
+    const settlePath = storedPath || livePath;
+    if (!editor || !settlePath || !this.resolveTaskSettleApi()) return false;
+    const identity = this.openLineScaffoldTaskIdentity(cm, pending.scaffold);
+    if (!identity) return false;
+    let result;
+    try {
+      result = this.applyTaskSettleToEditor(editor, settlePath, {
+        identity,
+        joinHistory: true,
+        today: typeof this.getCreatedDateString === "function"
+          ? this.getCreatedDateString()
+          : undefined,
+      });
+    } catch (_error) {
+      return false;
+    }
+    return !!(result && result.applied === true);
   }
 
   registerOpenLineScaffoldPrune() {
@@ -170,7 +214,7 @@ class TaskStatusCyclerOpenLineMixin {
       : null;
     const path = (view && view.file && view.file.path) || null;
     this.recordOpenLineJump(plan, path);
-    this.armOpenLineScaffold(cm, plan, path);
+    this.armOpenLineScaffold(cm, plan, path, view && view.editor);
     this.enterVimInsertMode(cm);
   }
 }

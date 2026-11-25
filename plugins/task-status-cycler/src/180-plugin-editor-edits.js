@@ -51,10 +51,10 @@ class TaskStatusCyclerEditorEditsMixin {
     }
 
     if (plan.mode === "replaceLines") {
-      return this.applyObsidianTaskReplaceLinesPlan(editor, plan);
+      return this.applyObsidianTaskReplaceLinesPlan(editor, plan, view);
     }
 
-    return this.applyObsidianTaskReplacePlan(editor, plan);
+    return this.applyObsidianTaskReplacePlan(editor, plan, view);
   }
 
   getEditorSnapshotText(editor) {
@@ -159,39 +159,6 @@ class TaskStatusCyclerEditorEditsMixin {
     } finally {
       modal.submitting = false;
     }
-  }
-
-  applyObsidianTaskReplacePlan(editor, plan) {
-    editor.replaceRange(
-      plan.lineText,
-      { line: plan.line, ch: 0 },
-      { line: plan.line, ch: plan.sourceLineText.length },
-    );
-
-    if (typeof editor.setCursor === "function") {
-      editor.setCursor({ line: plan.cursorLine, ch: plan.cursorCh });
-    }
-
-    return true;
-  }
-
-  applyObsidianTaskMovePlan(editor, plan, view = null) {
-    const oldLines = this.getEditorLineArray(editor);
-    this.applyDocumentLineReplacement(editor, oldLines, plan.nextLines);
-
-    if (typeof editor.setCursor === "function") {
-      const targetLine = plan.cursorLine;
-      const lineText =
-        typeof editor.getLine === "function"
-          ? editor.getLine(targetLine) || ""
-          : "";
-      const targetCh = Math.max(0, Math.min(plan.cursorCh, lineText.length));
-      editor.setCursor({ line: targetLine, ch: targetCh });
-
-      this.centerEditorLineInView(editor, targetLine, targetCh, view);
-    }
-
-    return true;
   }
 
   centerEditorLineInView(editor, line, ch, markdownView = null) {

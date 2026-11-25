@@ -233,18 +233,6 @@ class TaskStatusCyclerCompletionMixin {
     return pending.repeat;
   }
 
-  applyObsidianTaskReplaceLinesPlan(editor, plan) {
-    this.applyDocumentLineReplacement(
-      editor, this.getEditorLineArray(editor), plan.nextLines,
-    );
-    if (typeof editor.setCursor === "function") {
-      const line = Math.max(0, Math.min(plan.cursorLine, plan.nextLines.length - 1));
-      const ch = Math.max(0, Math.min(plan.cursorCh, plan.nextLines[line].length));
-      editor.setCursor({ line, ch });
-    }
-    return true;
-  }
-
   // Cross-plugin Done line rewrite (api v3): return a guarded result so
   // complete-label writers cannot turn a closed or recurring task into Done.
   completeTaskLineText(lineText, options = {}) {

@@ -386,7 +386,7 @@ async function runSelectionFilterDeleteAcceptance(ctx, baseBytes) {
 async function runMixedProtectedDeleteAcceptance(ctx) {
   const {
     client, report, shared, sendKey, waitForEditor, openPropertyEditor,
-    addCheck, closePropertyEditor, propertyRowClick, assertDiskBytes,
+    addCheck, closePropertyEditor, propertyRowClick, assertDiskBytes, selectorClick,
   } = ctx;
   const projectPath = path.join(ctx.vaultDir, "projects/project-note.md");
   const projectBefore = fs.readFileSync(projectPath, "utf8");
@@ -394,7 +394,15 @@ async function runMixedProtectedDeleteAcceptance(ctx) {
   await closePropertyEditor(client);
   await shared.openNote(client, "projects/project-note.md", "live");
   await openPropertyEditor(client, "projects/project-note.md", { key: "keep_exact" });
-  await waitForEditor(client, (value) => value.rows.some((row) => row.key === "keep_exact"), "protected delete rows");
+  let probe = await waitForEditor(client, (value) => value.rows.some((row) => row.key === "keep_exact"), "protected delete rows");
+  if (!probe.rows.some((row) => row.key === "project_digest")) {
+    if (!await selectorClick(client, '.bob-property-editor [data-property-group-toggle="managed"]')) {
+      throw new Error("Could not expand Bob-managed properties for protected selection");
+    }
+    probe = await waitForEditor(client,
+      (value) => value.rows.some((row) => row.key === "project_digest"),
+      "expanded Bob-managed properties for protected selection");
+  }
   if (!await propertyRowClick(client, "project_digest")) throw new Error("Could not focus project_digest for protected selection");
   await sendKey(client, " ");
   await waitForEditor(client, (value) => (value.rows || []).filter((row) => row.marked).length === 1, "first protected selection mark");
@@ -402,7 +410,7 @@ async function runMixedProtectedDeleteAcceptance(ctx) {
   await sendKey(client, " ");
   await waitForEditor(client, (value) => (value.rows || []).filter((row) => row.marked).length === 2, "mixed marks");
   await sendKey(client, "d", { ctrl: true });
-  const probe = await waitForEditor(client, (value) => value.open && !value.stage
+  probe = await waitForEditor(client, (value) => value.open && !value.stage
     && /project_digest/.test(`${value.status} ${value.announce}`), "mixed protected refusal");
   addCheck(report, "parity mixed protected delete refused names locked rows",
     /project_digest/.test(`${probe.status} ${probe.announce}`), { status: probe.status, announce: probe.announce });

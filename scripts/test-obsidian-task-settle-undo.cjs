@@ -389,9 +389,21 @@ async function main() {
       })())()`,
       15_000,
     );
-    await client.call("Input.dispatchKeyEvent", { type: "keyDown", ...escapeKey }, 5000);
+    await client.call("Input.dispatchKeyEvent", { type: "rawKeyDown", ...escapeKey }, 5000);
     await client.call("Input.dispatchKeyEvent", { type: "keyUp", ...escapeKey }, 5000);
     await client.evaluate("new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))", 5000);
+    const normalMode = await client.evaluate(
+      `(() => {
+        const editor = window.app.workspace.getLeaf(false).view.editor;
+        const cm = editor.cm?.cm;
+        const vim = window.CodeMirrorAdapter?.Vim;
+        if (!vim || typeof vim.handleKey !== "function") throw new Error("Obsidian Vim key handler is unavailable");
+        vim.handleKey(cm, "Esc", "key");
+        return window.app.plugins.plugins["task-status-cycler"].getCurrentVimMode(cm);
+      })()`,
+      5000,
+    );
+    if (normalMode === "insert") throw new Error(`Escape did not leave Vim insert mode: ${normalMode}`);
     await client.evaluate(
       `(() => (async () => {
         const app = window.app;
@@ -416,8 +428,18 @@ async function main() {
       `(() => window.app.workspace.getLeaf(false).view.editor.getValue())()`,
       5000,
     );
-    await client.call("Input.dispatchKeyEvent", { type: "keyDown", ...escapeKey }, 5000);
+    await client.call("Input.dispatchKeyEvent", { type: "rawKeyDown", ...escapeKey }, 5000);
     await client.call("Input.dispatchKeyEvent", { type: "keyUp", ...escapeKey }, 5000);
+    await client.evaluate(
+      `(() => {
+        const editor = window.app.workspace.getLeaf(false).view.editor;
+        const cm = editor.cm?.cm;
+        const vim = window.CodeMirrorAdapter?.Vim;
+        if (!vim || typeof vim.handleKey !== "function") throw new Error("Obsidian Vim key handler is unavailable");
+        vim.handleKey(cm, "Esc", "key");
+      })()`,
+      5000,
+    );
     const scaffold = await client.evaluate(
       `(() => (async () => {
         await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));

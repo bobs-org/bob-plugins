@@ -365,6 +365,12 @@ async function main() {
       throw new Error(`in-place promotion undo assertion failed: ${JSON.stringify(promotion)}`);
     }
 
+    const escapeKey = {
+      key: "Escape",
+      code: "Escape",
+      windowsVirtualKeyCode: 27,
+      nativeVirtualKeyCode: 27,
+    };
     await client.evaluate(
       `(() => (async () => {
         const app = window.app;
@@ -377,10 +383,30 @@ async function main() {
         const before = editor.getValue();
         const anchor = before.split(/\\r?\\n/).findIndex((item) => item.includes("^anchor"));
         editor.setCursor({ line: anchor, ch: 0 });
-        app.commands.executeCommandById("task-status-cycler:open-child-bullet-line-below");
+        const cm = editor.cm?.cm;
+        if (cm && typeof cm.focus === "function") cm.focus();
+        return true;
+      })())()`,
+      15_000,
+    );
+    await client.call("Input.dispatchKeyEvent", { type: "keyDown", ...escapeKey }, 5000);
+    await client.call("Input.dispatchKeyEvent", { type: "keyUp", ...escapeKey }, 5000);
+    await client.evaluate("new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))", 5000);
+    await client.evaluate(
+      `(() => (async () => {
+        const app = window.app;
+        const editor = app.workspace.getLeaf(false).view.editor;
+        const cm = editor.cm?.cm;
         const plugin = app.plugins.plugins["task-status-cycler"];
+        app.commands.executeCommandById("task-status-cycler:open-child-bullet-line-below");
         if (!plugin.openLineScaffold || plugin.openLineScaffold.scaffold.kind !== "task") {
-          throw new Error("o did not create a task scaffold");
+          throw new Error("o did not create a task scaffold: " + JSON.stringify({
+            vimMode: plugin.getCurrentVimMode(cm),
+            activePath: app.workspace.getActiveFile()?.path || null,
+            cursor: cm?.getCursor?.() || null,
+            taskStatus: plugin.getActiveTaskStatus(editor),
+            scaffold: plugin.openLineScaffold,
+          }));
         }
       })())()`,
       15_000,
@@ -390,12 +416,6 @@ async function main() {
       `(() => window.app.workspace.getLeaf(false).view.editor.getValue())()`,
       5000,
     );
-    const escapeKey = {
-      key: "Escape",
-      code: "Escape",
-      windowsVirtualKeyCode: 27,
-      nativeVirtualKeyCode: 27,
-    };
     await client.call("Input.dispatchKeyEvent", { type: "keyDown", ...escapeKey }, 5000);
     await client.call("Input.dispatchKeyEvent", { type: "keyUp", ...escapeKey }, 5000);
     const scaffold = await client.evaluate(

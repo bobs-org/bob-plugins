@@ -481,6 +481,19 @@ YAML, paste-preview, and conversion/global-warning states, each with layout
 probes for clipping, overlap, overflow, focus, and selected-versus-marked
 contrast.
 
+Area/project settings have a separate scenario module,
+`scripts/obsidian-property-editor-e2e-settings.cjs`, called by the same real
+Obsidian runner. It uses contract-shaped area, project, top-level project, and
+bank fixtures. It checks Settings and chip focus, `+`/`==` routing (including
+the bank hybrid), ready-cap ghost → override → clear with exact undo/redo
+bytes, Summary and Review stages, Stats root set/clear and top-level refusal,
+project-task navigation without scheduling writes, managed/loose-row parity,
+and independent old-Bob and missing-contract fallbacks. It adds screenshots
+of populated settings and the Summary stage in light/dark and wide/narrow
+layouts. The offline wrapper verifies these fixtures and registers all
+settings coverage in the report; it does not replace the real application
+run or screenshot inspection.
+
 The offline wrapper `scripts/test-obsidian-property-editor-e2e.cjs` is part of
 `npm test`. It checks fixtures, fake-bob JSON, probes, coverage mapping, and
 the runner file without launching Obsidian or bob, and is not acceptance.

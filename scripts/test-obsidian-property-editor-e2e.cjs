@@ -12,6 +12,12 @@ const vm = require("node:vm");
 const diagnostics = require("./obsidian-property-editor-e2e-diagnostics.cjs");
 const lib = require("./obsidian-property-editor-e2e-lib.cjs");
 const runner = require("./obsidian-property-editor-e2e.cjs");
+const settings = runner.settings;
+
+test("area/project settings acceptance offline self-test", () => {
+  assert.equal(typeof settings.runSettingsAcceptance, "function");
+  settings.selfTest();
+});
 
 test("obsidian-property-editor-e2e --self-test", () => {
   const result = spawnSync(process.execPath, [path.join(__dirname, "obsidian-property-editor-e2e.cjs"), "--self-test"], {
@@ -44,6 +50,10 @@ test("runner advertises the complete editor acceptance matrix", () => {
     "entry-palette-edit-note-properties", "entry-command-mode-row",
     "entry-drawer-key-label", "entry-drawer-add-property", "entry-drawer-edit-all",
     "entry-api-open-property-editor", "entry-ordinary-and-invalid-yaml-notes",
+    "settings-entrypoints-focus-correct-setting", "settings-ghost-set-clear-undo-redo-bytes",
+    "settings-invalid-and-warning-values", "settings-project-task-handoffs-no-schedule-write",
+    "settings-managed-generic-property-parity", "settings-capability-fallbacks",
+    "settings-screenshots-light-dark-narrow-wide",
     "parity-rename-undo-disk-bytes", "parity-rename-refusals-keep-draft",
     "parity-reorder-comments-undo-disk-bytes", "parity-reorder-filter-lockout",
     "parity-mark-range-delete-undo-disk-bytes", "parity-mixed-protected-delete-refused",
@@ -68,6 +78,10 @@ test("runner advertises the complete editor acceptance matrix", () => {
   assert.match(lib.fixtureNotes()["parity.md"], /# Comment for gamma/);
   assert.match(lib.editorProbeSource(), /clipboardOpen/);
   assert.equal(typeof runner.run, "function");
+  const settingsSource = fs.readFileSync(path.join(__dirname, "obsidian-property-editor-e2e-settings.cjs"), "utf8");
+  const runnerSource = fs.readFileSync(path.join(__dirname, "obsidian-property-editor-e2e.cjs"), "utf8");
+  assert.match(settingsSource, /async function runSettingsAcceptance/);
+  assert.match(runnerSource, /runSettingsAcceptance\(surfaceCtx\)/);
   const parity = require("./obsidian-property-editor-e2e-parity.cjs");
   assert.equal(typeof parity.runParityAcceptance, "function");
   assert.throws(() => lib.parseArgs(["--executable"]), /requires a PATH/);

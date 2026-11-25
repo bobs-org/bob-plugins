@@ -14,6 +14,7 @@ const lib = require("./obsidian-property-editor-e2e-lib.cjs");
 const diagnostics = require("./obsidian-property-editor-e2e-diagnostics.cjs");
 const surfaces = require("./obsidian-property-editor-e2e-surfaces.cjs");
 const parity = require("./obsidian-property-editor-e2e-parity.cjs");
+const settings = require("./obsidian-property-editor-e2e-settings.cjs");
 
 const repoRoot = path.resolve(__dirname, "..");
 const ELECTRON_FALLBACK = "/snap/obsidian/current/app/obsidian";
@@ -97,7 +98,7 @@ function installPlugin(vaultDir) {
   fs.writeFileSync(path.join(vaultDir, ".obsidian", "appearance.json"), JSON.stringify({ cssTheme: "", theme: "moonstone" }, null, 2));
 }
 
-function writeBobShim(shimDir, logPath, oldFlag) {
+function writeBobShim(shimDir, logPath, oldFlag, noContractFlag) {
   fs.mkdirSync(shimDir, { recursive: true });
   const file = path.join(shimDir, "bob");
   fs.writeFileSync(file, `#!/usr/bin/env node
@@ -117,8 +118,17 @@ if (args[0] === "props" && args[1] === "show" && fs.existsSync(${JSON.stringify(
 const result = spawnSync(process.env.BOB_PROPERTY_EDITOR_REAL, args, {
   encoding: "utf8", env: process.env, input, timeout: 90000, maxBuffer: 32 * 1024 * 1024,
 });
-append({event:"finish", args, exitCode:result.status, stdout:result.stdout, stderr:result.stderr});
-if (result.stdout) process.stdout.write(result.stdout);
+let stdout = result.stdout;
+if (args[0] === "props" && args[1] === "show" && fs.existsSync(${JSON.stringify(noContractFlag)})) {
+  try {
+    const report = JSON.parse(String(stdout || ""));
+    if (Array.isArray(report.capabilities)) report.capabilities = report.capabilities.filter((value) => value !== "props_contract_v1");
+    delete report.contract;
+    stdout = JSON.stringify(report) + "\\n";
+  } catch (_) {}
+}
+append({event:"finish", args, exitCode:result.status, stdout, stderr:result.stderr});
+if (stdout) process.stdout.write(stdout);
 if (result.stderr) process.stderr.write(result.stderr);
 process.exit(result.status == null ? 1 : result.status);
 `);
@@ -135,6 +145,7 @@ function bobEnvironment(ctx) {
     BOB_CONFIG_FILE: path.join(ctx.profileDir, "missing-test-config.yml"),
     BOB_PROPERTY_EDITOR_LOG: ctx.bobLog,
     BOB_PROPERTY_EDITOR_OLD_FLAG: ctx.oldFlag,
+    BOB_PROPERTY_EDITOR_NO_CONTRACT_FLAG: ctx.noContractFlag,
     BOB_PROPERTY_EDITOR_REAL: ctx.bob.path,
     PATH: ctx.shimDir + path.delimiter + (process.env.PATH || ""),
     NO_COLOR: "1",
@@ -262,7 +273,7 @@ async function openPropertyEditor(client, filePath, options = {}) {
     const plugin = window.app?.plugins?.plugins?.["bob-ledger-tools"];
     if (!plugin || typeof plugin.openPropertyEditor !== "function") return { ok: false, reason: "plugin-api-missing" };
     if (${options.resetCapability === true ? "true" : "false"}) plugin.propertyCapability = null;
-    const opened = await plugin.openPropertyEditor(${JSON.stringify({ filePath, ...(options.key ? { key: options.key } : {}), ...(options.mode ? { mode: options.mode } : {}) })});
+    const opened = await plugin.openPropertyEditor(${JSON.stringify({ filePath, ...(options.key ? { key: options.key } : {}), ...(options.setting ? { setting: options.setting } : {}), ...(options.focusSettings === true ? { focusSettings: true } : {}), ...(options.mode ? { mode: options.mode } : {}) })});
     window.__bobPropertyEditorLastOpen = {
       filePath: ${JSON.stringify(filePath)}, ok: opened?.ok === true,
       reason: opened?.reason || null, message: opened?.message || null,
@@ -273,8 +284,11 @@ async function openPropertyEditor(client, filePath, options = {}) {
   })()`, 30_000);
   if (!result?.ok) throw new Error("openPropertyEditor failed: " + JSON.stringify(result));
   const wantedKey = options.key || "";
+  const wantedSetting = options.setting ? `setting::${options.setting}` : "";
   return waitForEditor(client, (probe) => {
     if (!probe?.open || !probe.readSettled) return false;
+    if (wantedSetting) return Array.isArray(probe.rows) && probe.rows.some((row) => row.id === wantedSetting && row.selected);
+    if (options.focusSettings === true) return Array.isArray(probe.rows) && probe.rows.some((row) => row.id?.startsWith("setting::") && row.selected);
     if (!wantedKey) return true;
     return Array.isArray(probe.rows) && probe.rows.some((row) => row.key === wantedKey && row.selected);
   }, wantedKey ? `property editor ${wantedKey}` : "property editor initial read");
@@ -394,11 +408,12 @@ async function run(args) {
     installPlugin(vaultDir);
     const bobLog = path.join(profileDir, "bob-invocations.jsonl");
     const oldFlag = path.join(profileDir, "simulate-old-bob");
-    writeBobShim(shimDir, bobLog, oldFlag);
+    const noContractFlag = path.join(profileDir, "simulate-no-contract");
+    writeBobShim(shimDir, bobLog, oldFlag, noContractFlag);
     shared.initScratchGit(vaultDir);
     const vaultReal = fs.realpathSync(vaultDir);
     shared.seedProfile(profileDir, vaultReal);
-    ctx = { bob, vaultDir, profileDir, shimDir, bobLog, oldFlag };
+    ctx = { bob, vaultDir, profileDir, shimDir, bobLog, oldFlag, noContractFlag };
 
     const showProject = runBob(ctx, ["props", "show", "projects/project-note.md", "-f", "json"]);
     report.bobRuns.push(showProject);
@@ -720,7 +735,7 @@ async function run(args) {
     await closePropertyEditor(client);
 
     await parity.runParityAcceptance({
-      client, report, vaultDir, outDir, shared, sendKey, waitForEditor, openPropertyEditor,
+      client, report, vaultDir, outDir, bobLog, oldFlag, noContractFlag, shared, sendKey, waitForEditor, openPropertyEditor,
       addCheck, closePropertyEditor, propertyRowClick, saveStage, setInput, yamlTarget,
       finishYamlExcursion, selectorClick, assertDiskBytes,
     });
@@ -817,10 +832,11 @@ async function run(args) {
     fs.rmSync(oldFlag, { force: true });
 
     const surfaceCtx = {
-      client, report, vaultDir, shared, sendKey, waitForEditor, openPropertyEditor,
+      client, report, vaultDir, outDir, shared, sendKey, waitForEditor, openPropertyEditor,
       addCheck, closePropertyEditor, propertyRowClick, saveStage, setInput, yamlTarget,
-      finishYamlExcursion, selectorClick,
+      finishYamlExcursion, selectorClick, assertDiskBytes,
     };
+    await settings.runSettingsAcceptance(surfaceCtx);
     await surfaces.runSurfaceAcceptance(surfaceCtx);
     await surfaces.runVisualReview(surfaceCtx);
     await shared.collapseSidebars(client);
@@ -969,4 +985,4 @@ async function main(argv) {
 }
 
 if (require.main === module) void main(process.argv.slice(2));
-module.exports = { run, openPropertyEditor, parseArgs: lib.parseArgs };
+module.exports = { run, openPropertyEditor, parseArgs: lib.parseArgs, settings };

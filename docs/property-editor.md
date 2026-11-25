@@ -358,6 +358,12 @@ How each native Properties action maps to the editor. Everything below is
 covered by the disposable-vault real-Obsidian acceptance run
 (`scripts/obsidian-property-editor-e2e.cjs`).
 
+The same run loads `scripts/obsidian-property-editor-e2e-settings.cjs` for the
+area/project contract matrix: `+`, `==`, Settings, and policy-chip focus;
+ghost override, clear, undo, and redo; Stats root and project-task navigation;
+managed and loose-row parity; capability fallback; and light/dark, wide/narrow
+captures of populated settings and the Summary stage.
+
 | Native Properties action | Property Editor | Notes |
 | --- | --- | --- |
 | Add property | `o` / `O` / Mod+`;`, or All actions | Name and value are written together; Tab accepts the known type |

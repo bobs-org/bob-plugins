@@ -13,6 +13,7 @@ class BlockIdPromptPomodoroLinksMixin {
     if (this.promptOpen) {
       return;
     }
+    this.flushTaskSettlePending();
     if (typeof this.blockIdReqRefuseAtEditor === "function" && this.blockIdReqRefuseAtEditor(editor)) {
       return;
     }
@@ -686,6 +687,26 @@ class BlockIdPromptPomodoroLinksMixin {
       ) {
         new Notice(`Task link stopped: ${source.sourcePath} changed before update`);
         return false;
+      }
+
+      const postGesture = applyTextEdits(taskContent, allEdits);
+      if (
+        applySettledGestureToEditor(
+          this,
+          source.editor,
+          source.sourcePath,
+          taskContent,
+          postGesture,
+          planTaskIdentityFromPlan(plan),
+        )
+      ) {
+        return this.finishPomodoroLinkWithInboxRoute(
+          source,
+          plan,
+          pomodoroPlan,
+          routeGate,
+          id,
+        );
       }
 
       this.suppressEditorScans();

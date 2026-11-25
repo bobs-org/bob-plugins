@@ -341,6 +341,7 @@ class BlockIdPromptPlugin extends Plugin {
   }
 
   async completeTaskLinkWithExistingId(source, task) {
+    this.flushTaskSettlePending();
     if (source.pomodoroTarget || this.taskWikilinkPomodoroContext(source)) {
       return this.taskWikilinkPomodoroCommit(source, task, {
         id: task.existingId,

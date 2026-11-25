@@ -23,6 +23,10 @@ class BlockIdPromptTargetPlansAndRewritesMixin {
     return true;
   }
 
+  flushTaskSettlePending() {
+    return flushTaskSettlePending(this.app);
+  }
+
   // Apply a planTargetTaskUpdate() plan as one guarded target-note write: for
   // the active source note, every discrete edit is applied to the live editor
   // (so unrelated document state is left untouched); for any other note, an
@@ -30,7 +34,9 @@ class BlockIdPromptTargetPlansAndRewritesMixin {
   // complete postimage is written in a single vault.modify call. Re-reads and
   // matches `expectedContent` first so a target that changed since the plan
   // was built is never silently overwritten. Disagreeing live buffers refuse
-  // instead of guessing.
+  // instead of guessing. When taskSettle v1 is present, the post-gesture
+  // contents are settled in that same editor transaction or vault write;
+  // missing, old, or throwing providers keep the pre-settle gesture write.
   async applyTargetTaskPlan(file, source, plan, expectedContent, options = {}) {
     const noticePrefix = options.noticePrefix || "Task link stopped";
     const quiet = options.quiet === true;
@@ -65,7 +71,13 @@ class BlockIdPromptTargetPlansAndRewritesMixin {
       return false;
     }
 
+    const identity = planTaskIdentityFromPlan(plan);
+    const today = taskSettleTodayText(this.now());
+
     if (file.path === source.sourcePath) {
+      if (applySettledGestureToEditor(this, source.editor, file.path, content, plan.content, identity)) {
+        return true;
+      }
       if (!applyTaskPlanToEditor(this, source.editor, content, plan)) {
         if (!quiet) {
           new Notice(`${noticePrefix}: active note could not be modified`);
@@ -76,6 +88,9 @@ class BlockIdPromptTargetPlansAndRewritesMixin {
     }
 
     if (targetEditor && typeof targetEditor.replaceRange === "function") {
+      if (applySettledGestureToEditor(this, targetEditor, file.path, content, plan.content, identity)) {
+        return true;
+      }
       if (!applyTaskPlanToEditor(this, targetEditor, content, plan)) {
         if (!quiet) {
           new Notice(`${noticePrefix}: ${file.path} changed before update`);
@@ -86,7 +101,8 @@ class BlockIdPromptTargetPlansAndRewritesMixin {
     }
 
     try {
-      await this.app.vault.modify(file, plan.content);
+      const settled = settleClosedNoteContents(this.app, file.path, plan.content, today);
+      await this.app.vault.modify(file, settled);
       return true;
     } catch (error) {
       console.error("Block ID Prompt failed to modify task note", error);

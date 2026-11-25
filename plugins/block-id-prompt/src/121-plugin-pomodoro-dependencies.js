@@ -69,6 +69,7 @@ class BlockIdPromptPomodoroDependencyMixin {
   }
 
   async consumeBlockedTaskPomodoroLink(source, targetFile, options = {}) {
+    this.flushTaskSettlePending();
     const editor = source && source.editor;
     const targetPath = options.targetPath || source.sourcePath;
     const targetLineNumber = Number.isInteger(options.targetLine)

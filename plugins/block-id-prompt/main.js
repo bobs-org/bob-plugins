@@ -14836,6 +14836,7 @@ class BlockIdPromptPlugin extends Plugin {
   }
 
   async completeTaskLinkWithExistingId(source, task) {
+    this.flushTaskSettlePending();
     if (source.pomodoroTarget || this.taskWikilinkPomodoroContext(source)) {
       return this.taskWikilinkPomodoroCommit(source, task, {
         id: task.existingId,
@@ -15014,6 +15015,7 @@ class BlockIdPromptPlugin extends Plugin {
 // ---- src/110-plugin-block-id-submit.js ----
 class BlockIdPromptBlockIdSubmitMixin {
   async submitBlockId(source, newId) {
+    this.flushTaskSettlePending();
     if (source.kind === "direct-add") {
       return this.submitDirectBlockAdd(source, newId);
     }
@@ -15316,6 +15318,7 @@ class BlockIdPromptPomodoroLinksMixin {
     if (this.promptOpen) {
       return;
     }
+    this.flushTaskSettlePending();
     if (typeof this.blockIdReqRefuseAtEditor === "function" && this.blockIdReqRefuseAtEditor(editor)) {
       return;
     }
@@ -15991,6 +15994,26 @@ class BlockIdPromptPomodoroLinksMixin {
         return false;
       }
 
+      const postGesture = applyTextEdits(taskContent, allEdits);
+      if (
+        applySettledGestureToEditor(
+          this,
+          source.editor,
+          source.sourcePath,
+          taskContent,
+          postGesture,
+          planTaskIdentityFromPlan(plan),
+        )
+      ) {
+        return this.finishPomodoroLinkWithInboxRoute(
+          source,
+          plan,
+          pomodoroPlan,
+          routeGate,
+          id,
+        );
+      }
+
       this.suppressEditorScans();
       const sorted = [...allEdits].sort((left, right) => right.start - left.start);
       for (const edit of sorted) {
@@ -16294,6 +16317,7 @@ class BlockIdPromptPomodoroDependencyMixin {
   }
 
   async consumeBlockedTaskPomodoroLink(source, targetFile, options = {}) {
+    this.flushTaskSettlePending();
     const editor = source && source.editor;
     const targetPath = options.targetPath || source.sourcePath;
     const targetLineNumber = Number.isInteger(options.targetLine)
@@ -18044,6 +18068,7 @@ class BlockIdPromptTaskWikilinkPomodoroMixin {
   }
 
   async taskWikilinkPomodoroCommit(source, task, options = {}) {
+    this.flushTaskSettlePending();
     const id = options.id || task.existingId;
     const prepared = await this.taskWikilinkPomodoroPrepare(source, task, {
       ...options,
@@ -19766,6 +19791,10 @@ class BlockIdPromptTargetPlansAndRewritesMixin {
     return true;
   }
 
+  flushTaskSettlePending() {
+    return flushTaskSettlePending(this.app);
+  }
+
   // Apply a planTargetTaskUpdate() plan as one guarded target-note write: for
   // the active source note, every discrete edit is applied to the live editor
   // (so unrelated document state is left untouched); for any other note, an
@@ -19773,7 +19802,9 @@ class BlockIdPromptTargetPlansAndRewritesMixin {
   // complete postimage is written in a single vault.modify call. Re-reads and
   // matches `expectedContent` first so a target that changed since the plan
   // was built is never silently overwritten. Disagreeing live buffers refuse
-  // instead of guessing.
+  // instead of guessing. When taskSettle v1 is present, the post-gesture
+  // contents are settled in that same editor transaction or vault write;
+  // missing, old, or throwing providers keep the pre-settle gesture write.
   async applyTargetTaskPlan(file, source, plan, expectedContent, options = {}) {
     const noticePrefix = options.noticePrefix || "Task link stopped";
     const quiet = options.quiet === true;
@@ -19808,7 +19839,13 @@ class BlockIdPromptTargetPlansAndRewritesMixin {
       return false;
     }
 
+    const identity = planTaskIdentityFromPlan(plan);
+    const today = taskSettleTodayText(this.now());
+
     if (file.path === source.sourcePath) {
+      if (applySettledGestureToEditor(this, source.editor, file.path, content, plan.content, identity)) {
+        return true;
+      }
       if (!applyTaskPlanToEditor(this, source.editor, content, plan)) {
         if (!quiet) {
           new Notice(`${noticePrefix}: active note could not be modified`);
@@ -19819,6 +19856,9 @@ class BlockIdPromptTargetPlansAndRewritesMixin {
     }
 
     if (targetEditor && typeof targetEditor.replaceRange === "function") {
+      if (applySettledGestureToEditor(this, targetEditor, file.path, content, plan.content, identity)) {
+        return true;
+      }
       if (!applyTaskPlanToEditor(this, targetEditor, content, plan)) {
         if (!quiet) {
           new Notice(`${noticePrefix}: ${file.path} changed before update`);
@@ -19829,7 +19869,8 @@ class BlockIdPromptTargetPlansAndRewritesMixin {
     }
 
     try {
-      await this.app.vault.modify(file, plan.content);
+      const settled = settleClosedNoteContents(this.app, file.path, plan.content, today);
+      await this.app.vault.modify(file, settled);
       return true;
     } catch (error) {
       console.error("Block ID Prompt failed to modify task note", error);
@@ -20196,6 +20237,87 @@ class BlockIdPromptTargetPlansAndRewritesMixin {
     return true;
   }
 
+}
+// ---- src/141-plugin-target-settle.js ----
+// Tier-1 settle for Ctrl+Shift+Enter target-note writes (bob-cli-q4.11).
+// Looks up bob-ledger-tools `taskSettle` v1 at call time. Missing, older,
+// or throwing providers leave the existing gesture write in place so
+// reconcile can heal on its next tick.
+
+function lookupTaskSettle(app) {
+  try {
+    const plugins = app && app.plugins;
+    const byId = plugins && plugins.plugins ? plugins.plugins["bob-ledger-tools"] : null;
+    const holder =
+      byId ||
+      (plugins && typeof plugins.getPlugin === "function"
+        ? plugins.getPlugin("bob-ledger-tools")
+        : null);
+    const settle = holder && holder.api && holder.api.taskSettle;
+    if (!settle || settle.version !== 1) return null;
+    return settle;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function flushTaskSettlePending(app) {
+  const settle = lookupTaskSettle(app);
+  if (!settle || typeof settle.flushPending !== "function") return [];
+  try {
+    const flushed = settle.flushPending();
+    return Array.isArray(flushed) ? flushed : [];
+  } catch (_error) {
+    return [];
+  }
+}
+
+function taskSettleTodayText(now) {
+  return formatCalendarDate(localTodayParts(now));
+}
+
+function settleClosedNoteContents(app, path, contents, today) {
+  const settle = lookupTaskSettle(app);
+  if (!settle || typeof settle.settleNote !== "function") return contents;
+  try {
+    const result = settle.settleNote({
+      path,
+      contents,
+      today,
+    });
+    if (result && typeof result.contents === "string") return result.contents;
+  } catch (_error) {
+    // Provider skew or exception leaves the existing gesture write intact.
+  }
+  return contents;
+}
+
+function planTaskIdentityFromPlan(plan) {
+  if (!plan || !Array.isArray(plan.edits) || plan.edits.length === 0) return null;
+  const first = plan.edits[0];
+  if (!first || typeof first.replacement !== "string") return null;
+  const identity = { text: first.replacement };
+  const blockId = typeof getTrailingBlockId === "function" ? getTrailingBlockId(first.replacement) : null;
+  if (blockId) identity.blockId = blockId;
+  return identity;
+}
+
+function applySettledGestureToEditor(plugin, editor, path, expected, contents, identity) {
+  const settle = lookupTaskSettle(plugin && plugin.app);
+  if (!settle || typeof settle.applyToEditor !== "function") return false;
+  try {
+    const now = plugin && typeof plugin.now === "function" ? plugin.now() : new Date();
+    const options = {
+      expected,
+      contents,
+      today: taskSettleTodayText(now),
+    };
+    if (identity) options.identity = identity;
+    const result = settle.applyToEditor(editor, path, options);
+    return Boolean(result && result.applied);
+  } catch (_error) {
+    return false;
+  }
 }
 // ---- src/150-plugin-reference-files.js ----
 class BlockIdPromptReferenceFilesMixin {
@@ -22549,6 +22671,12 @@ module.exports.helpers = {
   taskLinksFieldAt,
   taskWikilinkNamingPlanForContent,
   applyTaskPlanToEditor,
+  applySettledGestureToEditor,
+  flushTaskSettlePending,
+  lookupTaskSettle,
+  planTaskIdentityFromPlan,
+  settleClosedNoteContents,
+  taskSettleTodayText,
   taskWikilinkAlreadyNamedLine,
   taskLineTextAt,
   normalizePomodoroLinkPickerChoice,

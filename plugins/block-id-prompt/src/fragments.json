@@ -37,6 +37,7 @@
   "132-plugin-task-links-api.js",
   "132a-task-links-term-cache.js",
   "140-plugin-target-plans-and-rewrites.js",
+  "141-plugin-target-settle.js",
   "150-plugin-reference-files.js",
   "155-block-rename-writes.js",
   "157-block-rename-follow.js",

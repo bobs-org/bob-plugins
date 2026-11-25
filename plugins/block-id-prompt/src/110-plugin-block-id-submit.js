@@ -1,5 +1,6 @@
 class BlockIdPromptBlockIdSubmitMixin {
   async submitBlockId(source, newId) {
+    this.flushTaskSettlePending();
     if (source.kind === "direct-add") {
       return this.submitDirectBlockAdd(source, newId);
     }

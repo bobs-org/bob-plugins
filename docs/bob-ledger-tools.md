@@ -594,7 +594,7 @@ instead of a palette color.
 
 ## Task settle provider
 
-See [`taskSettle` v1](https://bobs-org.github.io/develop/plugins/task-settle/) for the settle, apply, and pending API.
+See [`taskSettle` v1](https://bobs-org.github.io/develop/plugins/task-settle/) for the settle, apply, and pending API. Closed notes that a consumer writes through `vault.modify` or `vault.process` call `settleNote` and store the returned contents in that same write. Block ID Prompt's `Ctrl+Shift+Enter` target updates do this. Ledger Tools itself has no target-task status writers: Pomodoro close lives in Task Status Cycler.
 
 ## Notebooks
 

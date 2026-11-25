@@ -445,6 +445,7 @@ class BlockIdPromptTaskWikilinkPomodoroMixin {
   }
 
   async taskWikilinkPomodoroCommit(source, task, options = {}) {
+    this.flushTaskSettlePending();
     const id = options.id || task.existingId;
     const prepared = await this.taskWikilinkPomodoroPrepare(source, task, {
       ...options,

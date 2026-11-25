@@ -102,7 +102,9 @@ is supplied returns a non-writing outcome with no cursor, scroll, or history
 change. A stale preimage, missing Markdown view, path mismatch, or
 unavailable editor also returns a non-writing outcome; the consumer should
 then perform its existing gesture write. The provider never switches to
-another editor or writes the vault.
+another editor or writes the vault. Closed notes are settled with
+`settleNote` and written through the caller's existing `vault.modify` or
+`vault.process` path in that same write.
 
 ## Cursor stay and jump
 

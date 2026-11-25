@@ -286,7 +286,12 @@ function makePlugin({ rows, activePath, cursorLine = 0, inbox = null }) {
   const workspace = {
     getActiveFile: () => fileMap.get(currentPath) || null,
     getActiveViewOfType: () => viewFor(currentPath),
-    getLeavesOfType: () => [],
+    getLeavesOfType: (type) =>
+      type === "markdown"
+        ? [...editors.entries()].map(([path, editor]) => ({
+            view: { file: fileMap.get(path), editor },
+          }))
+        : [],
     getLeaf: () => ({
       openFile: async (file) => {
         currentPath = file.path;

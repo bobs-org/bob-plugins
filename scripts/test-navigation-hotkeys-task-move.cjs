@@ -1267,7 +1267,15 @@ test("runtime task move groups open-editor source and destination changes", asyn
         throw new Error("open editors should not use vault.process");
       },
     },
-    workspace: {},
+    workspace: {
+      getLeavesOfType: (type) =>
+        type === "markdown"
+          ? [
+              { view: { file: sourceFile, editor: sourceEditor } },
+              { view: { file: destinationFile, editor: destinationEditor } },
+            ]
+          : [],
+    },
   };
   plugin.getActiveMarkdownView = () => ({ file: sourceFile, editor: sourceEditor });
   plugin.getOpenMarkdownEditorForPath = (path) =>
@@ -1702,7 +1710,15 @@ test("runtime counted move into a count-only section focuses the first moved tas
         throw new Error("open editors should not use vault.process");
       },
     },
-    workspace: {},
+    workspace: {
+      getLeavesOfType: (type) =>
+        type === "markdown"
+          ? [
+              { view: { file: sourceFile, editor: sourceEditor } },
+              { view: { file: destinationFile, editor: destinationEditor } },
+            ]
+          : [],
+    },
   };
   plugin.getActiveMarkdownView = () => ({ file: sourceFile, editor: sourceEditor });
   plugin.getOpenMarkdownEditorForPath = (path) =>

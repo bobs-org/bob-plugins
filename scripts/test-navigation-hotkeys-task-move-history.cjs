@@ -47,6 +47,12 @@ function createTaskMoveVimHistoryHarness(options = {}) {
     workspace: {
       getActiveFile: () => activeFile,
       getActiveViewOfType: () => ({ file: activeFile, editor: activeEditor }),
+      getLeavesOfType: (type) =>
+        type === "markdown"
+          ? [...editors.entries()].map(([path, editor]) => ({
+              view: { file: fileMap.get(path), editor },
+            }))
+          : [],
     },
   };
   plugin.getActiveMarkdownView = () => ({ file: activeFile, editor: activeEditor });

@@ -230,10 +230,35 @@ function findBlocksChildren(lines, taskLine) {
 }
 
 // Insert slot for a new BLOCKS line: after the Depends-On subtree when there
-// is one, else the Depends-On slot (Rule 5). Reuses the Depends-On insert
-// line, which already skips a first-child Cancel Log.
+// is one, else the Depends-On slot (`docs/task-dependencies.md` §14). Reuses
+// the Depends-On insert line, which already skips a first-child Cancel Log.
+// Any Depends-On verdict but `not-a-line` counts, mirroring Rust's
+// `dependency_child_of`.
 function blocksInsertLine(lines, parentLine) {
-  return getDependencyInsertLine(lines, parentLine);
+  const sourceLines = Array.isArray(lines)
+    ? lines
+    : String(lines || "").split(/\r?\n/);
+  const parentIndex = Math.floor(Number(parentLine));
+  if (Number.isFinite(parentIndex) && parentIndex >= 0) {
+    const block = findCurrentBulletChildBlock(sourceLines, parentIndex);
+    for (
+      let index = block.startLine;
+      index < block.endLineExclusive;
+      index += 1
+    ) {
+      if (findNearestParentListItem(sourceLines, index) !== parentIndex) {
+        continue;
+      }
+      const parsed = parseDependencyLine(String(sourceLines[index] || ""), {
+        isDirectChildOfTask: true,
+      });
+      if (parsed.verdict !== "not-a-line") {
+        return findCurrentBulletChildBlock(sourceLines, index)
+          .endLineExclusive;
+      }
+    }
+  }
+  return getDependencyInsertLine(sourceLines, parentLine);
 }
 
 // Shared Blocks-line edit planner. The input links are canonical wikilink

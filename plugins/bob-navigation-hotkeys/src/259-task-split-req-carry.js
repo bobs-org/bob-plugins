@@ -299,6 +299,29 @@ function taskSplitWithNewline(line) {
   return text.endsWith("\n") ? text : `${text}\n`;
 }
 
+// Insert a managed back-link line into a fresh task block at the
+// managed-link zone slot, so a fresh split is already tidy-clean.
+// `fallbackIndent` covers a childless block, whose slot indent has no child
+// to copy. Mirrors `carry::insert_managed_back_link`.
+function taskSplitInsertManagedBackLink(scratch, backLink, fallbackIndent) {
+  let updated = String(scratch == null ? "" : scratch);
+  const task = taskBlockFindTask(updated, 0, {});
+  if (!task) {
+    return updated;
+  }
+  const slot = taskBlockInsertionSlot(updated, task, "managed-link", {});
+  const block = taskBlockRead(updated, task, {});
+  const indent =
+    block.children.length > 0 ? slot.indent : String(fallbackIndent || "");
+  if (!backLink) {
+    return updated;
+  }
+  const line = formatLinkedFromLine(indent, [
+    { link: backLink, label: TASK_MENTION_LABEL },
+  ]);
+  return `${updated.slice(0, slot.offset)}${line}\n${updated.slice(slot.offset)}`;
+}
+
 // Build the new task block for a carried req: the task line plus its rebased
 // subtree, the back-link in the managed zone, and the notes filed by the
 // NOTES rule. Returns `{lines, moves}` where `moves` pairs 0-based offsets
@@ -309,18 +332,8 @@ function taskSplitCarriedBlock(taskLine, children, backLink, fallbackIndent) {
     scratch += taskSplitWithNewline(child);
   }
   const original = scratch;
-  const task = taskBlockFindTask(scratch, 0, {});
-  if (task) {
-    const slot = taskBlockInsertionSlot(scratch, task, "managed-link", {});
-    const block = taskBlockRead(scratch, task, {});
-    const indent =
-      block.children.length > 0 ? slot.indent : String(fallbackIndent || "");
-    if (backLink) {
-      const line = formatLinkedFromLine(indent, [
-        { link: backLink, label: TASK_MENTION_LABEL },
-      ]);
-      scratch = `${scratch.slice(0, slot.offset)}${line}\n${scratch.slice(slot.offset)}`;
-    }
+  if (backLink) {
+    scratch = taskSplitInsertManagedBackLink(scratch, backLink, fallbackIndent);
   }
   const tidyTask = taskBlockFindTask(scratch, 0, {});
   const tidy = tidyTask ? taskBlockPlanTidy(scratch, tidyTask, {}) : null;

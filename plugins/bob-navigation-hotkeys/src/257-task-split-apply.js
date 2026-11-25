@@ -514,7 +514,6 @@ function planSplitBullets(files, request, options) {
     });
     const baseIndent = taskSplitOwnerIndent(sourceLines[owner.line] || "");
     const taskLine = `${baseIndent}- [ ] #task ${title} [created:: ${today}] ^${id}\n`;
-    const childIndent = `${baseIndent}  `;
     const children = taskSplitRebaseChildren(
       candidate.childLines,
       candidate.indent,
@@ -562,16 +561,26 @@ function planSplitBullets(files, request, options) {
       continue;
     }
     if (backLink) {
-      const mention = formatLinkedFromLine(childIndent, [
-        { link: backLink, label: TASK_MENTION_LABEL },
-      ]);
-      children.push(`${mention}\n`);
-    }
-    plannedMoves.push(null);
-    plannedTasks.push(planned);
-    generated.push(taskLine);
-    for (const child of children) {
-      generated.push(child);
+      // A plain split's back-link lands in the managed-link zone, as the
+      // req-carry path does, so the fresh block is already tidy-clean.
+      const unit = taskSplitNestingUnit(sourceLines, candidate);
+      const scratch = taskSplitInsertManagedBackLink(
+        `${taskLine}${children.join("")}`,
+        backLink,
+        `${baseIndent}${unit}`,
+      );
+      plannedMoves.push(null);
+      plannedTasks.push(planned);
+      for (const placed of taskSplitLines(scratch)) {
+        generated.push(placed);
+      }
+    } else {
+      plannedMoves.push(null);
+      plannedTasks.push(planned);
+      generated.push(taskLine);
+      for (const child of children) {
+        generated.push(child);
+      }
     }
   }
 

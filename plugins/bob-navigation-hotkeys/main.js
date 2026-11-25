@@ -9367,10 +9367,35 @@ function findBlocksChildren(lines, taskLine) {
 }
 
 // Insert slot for a new BLOCKS line: after the Depends-On subtree when there
-// is one, else the Depends-On slot (Rule 5). Reuses the Depends-On insert
-// line, which already skips a first-child Cancel Log.
+// is one, else the Depends-On slot (`docs/task-dependencies.md` §14). Reuses
+// the Depends-On insert line, which already skips a first-child Cancel Log.
+// Any Depends-On verdict but `not-a-line` counts, mirroring Rust's
+// `dependency_child_of`.
 function blocksInsertLine(lines, parentLine) {
-  return getDependencyInsertLine(lines, parentLine);
+  const sourceLines = Array.isArray(lines)
+    ? lines
+    : String(lines || "").split(/\r?\n/);
+  const parentIndex = Math.floor(Number(parentLine));
+  if (Number.isFinite(parentIndex) && parentIndex >= 0) {
+    const block = findCurrentBulletChildBlock(sourceLines, parentIndex);
+    for (
+      let index = block.startLine;
+      index < block.endLineExclusive;
+      index += 1
+    ) {
+      if (findNearestParentListItem(sourceLines, index) !== parentIndex) {
+        continue;
+      }
+      const parsed = parseDependencyLine(String(sourceLines[index] || ""), {
+        isDirectChildOfTask: true,
+      });
+      if (parsed.verdict !== "not-a-line") {
+        return findCurrentBulletChildBlock(sourceLines, index)
+          .endLineExclusive;
+      }
+    }
+  }
+  return getDependencyInsertLine(sourceLines, parentLine);
 }
 
 // Shared Blocks-line edit planner. The input links are canonical wikilink
@@ -55822,7 +55847,6 @@ function planSplitBullets(files, request, options) {
     });
     const baseIndent = taskSplitOwnerIndent(sourceLines[owner.line] || "");
     const taskLine = `${baseIndent}- [ ] #task ${title} [created:: ${today}] ^${id}\n`;
-    const childIndent = `${baseIndent}  `;
     const children = taskSplitRebaseChildren(
       candidate.childLines,
       candidate.indent,
@@ -55870,16 +55894,26 @@ function planSplitBullets(files, request, options) {
       continue;
     }
     if (backLink) {
-      const mention = formatLinkedFromLine(childIndent, [
-        { link: backLink, label: TASK_MENTION_LABEL },
-      ]);
-      children.push(`${mention}\n`);
-    }
-    plannedMoves.push(null);
-    plannedTasks.push(planned);
-    generated.push(taskLine);
-    for (const child of children) {
-      generated.push(child);
+      // A plain split's back-link lands in the managed-link zone, as the
+      // req-carry path does, so the fresh block is already tidy-clean.
+      const unit = taskSplitNestingUnit(sourceLines, candidate);
+      const scratch = taskSplitInsertManagedBackLink(
+        `${taskLine}${children.join("")}`,
+        backLink,
+        `${baseIndent}${unit}`,
+      );
+      plannedMoves.push(null);
+      plannedTasks.push(planned);
+      for (const placed of taskSplitLines(scratch)) {
+        generated.push(placed);
+      }
+    } else {
+      plannedMoves.push(null);
+      plannedTasks.push(planned);
+      generated.push(taskLine);
+      for (const child of children) {
+        generated.push(child);
+      }
     }
   }
 
@@ -56480,6 +56514,29 @@ function taskSplitWithNewline(line) {
   return text.endsWith("\n") ? text : `${text}\n`;
 }
 
+// Insert a managed back-link line into a fresh task block at the
+// managed-link zone slot, so a fresh split is already tidy-clean.
+// `fallbackIndent` covers a childless block, whose slot indent has no child
+// to copy. Mirrors `carry::insert_managed_back_link`.
+function taskSplitInsertManagedBackLink(scratch, backLink, fallbackIndent) {
+  let updated = String(scratch == null ? "" : scratch);
+  const task = taskBlockFindTask(updated, 0, {});
+  if (!task) {
+    return updated;
+  }
+  const slot = taskBlockInsertionSlot(updated, task, "managed-link", {});
+  const block = taskBlockRead(updated, task, {});
+  const indent =
+    block.children.length > 0 ? slot.indent : String(fallbackIndent || "");
+  if (!backLink) {
+    return updated;
+  }
+  const line = formatLinkedFromLine(indent, [
+    { link: backLink, label: TASK_MENTION_LABEL },
+  ]);
+  return `${updated.slice(0, slot.offset)}${line}\n${updated.slice(slot.offset)}`;
+}
+
 // Build the new task block for a carried req: the task line plus its rebased
 // subtree, the back-link in the managed zone, and the notes filed by the
 // NOTES rule. Returns `{lines, moves}` where `moves` pairs 0-based offsets
@@ -56490,18 +56547,8 @@ function taskSplitCarriedBlock(taskLine, children, backLink, fallbackIndent) {
     scratch += taskSplitWithNewline(child);
   }
   const original = scratch;
-  const task = taskBlockFindTask(scratch, 0, {});
-  if (task) {
-    const slot = taskBlockInsertionSlot(scratch, task, "managed-link", {});
-    const block = taskBlockRead(scratch, task, {});
-    const indent =
-      block.children.length > 0 ? slot.indent : String(fallbackIndent || "");
-    if (backLink) {
-      const line = formatLinkedFromLine(indent, [
-        { link: backLink, label: TASK_MENTION_LABEL },
-      ]);
-      scratch = `${scratch.slice(0, slot.offset)}${line}\n${scratch.slice(slot.offset)}`;
-    }
+  if (backLink) {
+    scratch = taskSplitInsertManagedBackLink(scratch, backLink, fallbackIndent);
   }
   const tidyTask = taskBlockFindTask(scratch, 0, {});
   const tidy = tidyTask ? taskBlockPlanTidy(scratch, tidyTask, {}) : null;

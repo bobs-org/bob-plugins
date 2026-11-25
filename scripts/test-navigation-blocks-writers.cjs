@@ -258,6 +258,23 @@ test("BW17 planner output follows BK21 Unicode code-point ordering", () => {
   assert.equal(plan.nextContent, "- [ ] #task Owner ^owner\n\t- 🧱 **BLOCKS:** [[#^b]] • [[Cash#^a]] • [[cash#^c]] • [[zeta#^e]] • [[élan#^d]]");
 });
 
+test("new BLOCKS line lands after an existing Depends-On subtree (docs/task-dependencies.md §14)", () => {
+  const content = [
+    "- [ ] #task Owner ^owner",
+    "\t- ⛓️ **DEPENDS ON:** [[#^dep]]",
+    "\t- a loose note",
+  ].join("\n");
+  const plan = helpers.planBlocksLineEdit(content, 0, ["[[#^child]]"]);
+  assert.equal(plan.ok, true);
+  assert.equal(plan.changed, true);
+  assert.equal(plan.nextContent, [
+    "- [ ] #task Owner ^owner",
+    "\t- ⛓️ **DEPENDS ON:** [[#^dep]]",
+    "\t- 🧱 **BLOCKS:** [[#^child]]",
+    "\t- a loose note",
+  ].join("\n"));
+});
+
 test("duplicate BLOCKS children merge their known dependents and preserve CRLF", () => {
   const content = "- [ ] #task Owner ^owner\r\n\t- 🧱 **BLOCKS:** [[#^a]]\r\n\t- 🧱 **BLOCKS:** [[#^b]]\r\n";
   const plan = helpers.planBlocksLineEdit(content, 0, ["[[#^a]]", "[[#^b]]"]);

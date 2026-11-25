@@ -7739,6 +7739,12 @@ body.bob-task-drawer-marks .cm-line[data-bob-drawer="true"] .cm-formatting-list 
   position: relative;
   color: transparent;
 }
+/* Obsidian gives its generated list-bullet child its own ink. Hide that
+   native dot alongside the source hyphen so only the tray occupies this slot. */
+body.bob-task-drawer-marks .cm-line[data-bob-drawer="true"] .cm-formatting-list .list-bullet {
+  color: transparent;
+  opacity: 0;
+}
 body.bob-task-drawer-marks .cm-line[data-bob-drawer="true"] .cm-formatting-list::before {
   content: "";
   position: absolute;
@@ -7754,6 +7760,10 @@ body.bob-task-drawer-marks .cm-line[data-bob-drawer="true"] .cm-formatting-list:
 /* The caret line keeps Obsidian's native source-marker reveal. */
 body.bob-task-drawer-marks .cm-line[data-bob-drawer="true"]:is(.cm-active, .cm-activeLine) .cm-formatting-list {
   color: var(--text-normal);
+}
+body.bob-task-drawer-marks .cm-line[data-bob-drawer="true"]:is(.cm-active, .cm-activeLine) .cm-formatting-list .list-bullet {
+  color: var(--text-normal);
+  opacity: 1;
 }
 body.bob-task-drawer-marks .cm-line[data-bob-drawer="true"]:is(.cm-active, .cm-activeLine) .cm-formatting-list::before {
   display: none;
@@ -7799,7 +7809,7 @@ body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"]::be
   mask: var(--bob-drawer-mask) center / contain no-repeat;
 }
 body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"] > p:first-of-type,
-body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"] > strong:first-child {
+body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"] > strong {
   color: var(--text-normal);
   font-weight: 600;
   text-decoration: none;
@@ -7808,7 +7818,7 @@ body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"] > s
    opaque title-only inline box above that ancestor decoration so the drawer
    title stays clean while the owning task keeps its native strike. */
 body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"] > p:first-of-type > strong:first-child,
-body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"] > strong:first-child {
+body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"] > strong {
   display: inline-block;
   position: relative;
   z-index: 1;
@@ -7817,9 +7827,9 @@ body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"] > s
 body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"][data-bob-drawer-empty="true"] > p:first-of-type,
 body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"][data-bob-drawer-owner-state="done"] > p:first-of-type,
 body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"][data-bob-drawer-owner-state="cancelled"] > p:first-of-type,
-body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"][data-bob-drawer-empty="true"] > strong:first-child,
-body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"][data-bob-drawer-owner-state="done"] > strong:first-child,
-body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"][data-bob-drawer-owner-state="cancelled"] > strong:first-child {
+body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"][data-bob-drawer-empty="true"] > strong,
+body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"][data-bob-drawer-owner-state="done"] > strong,
+body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"][data-bob-drawer-owner-state="cancelled"] > strong {
   color: var(--text-muted);
 }
 body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"][data-bob-drawer-owner-state="done"]::before,

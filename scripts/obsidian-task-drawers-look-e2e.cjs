@@ -39,21 +39,33 @@ function pageRows() {
     .filter((el) => el.getBoundingClientRect().height);
   const reading = [...root.querySelectorAll('li[data-bob-drawer="true"]')]
     .filter((el) => el.getBoundingClientRect().height);
-  const isLive = live.length > 0;
+  const activeMode = typeof view.getMode === "function" ? view.getMode() : "";
+  const isLive = activeMode ? activeMode === "source" && live.length > 0 : live.length > 0;
+  const findTextElement = (scope, selector, needle) => {
+    const matches = [...scope.querySelectorAll(selector)].filter((candidate) => candidate.textContent.includes(needle));
+    return matches.find((candidate) => ![...candidate.children].some((child) => child.textContent.includes(needle)))
+      || matches[matches.length - 1]
+      || null;
+  };
   const textStyle = (needle) => {
-    const selector = isLive ? ".cm-line" : ".markdown-preview-view p";
-    const el = [...root.querySelectorAll(selector)].find((candidate) => candidate.textContent.includes(needle));
+    const selector = isLive ? ".cm-line" : "*";
+    const el = findTextElement(root, selector, needle);
     if (!el) return null;
     const cs = getComputedStyle(el);
     return { fontWeight: cs.fontWeight, color: cs.color };
   };
-  const rows = (live.length ? live : reading).map((row) => {
+  const rows = (isLive ? live : reading).map((row) => {
     const marker = row.querySelector(".cm-formatting-list");
     const glyph = marker
       ? getComputedStyle(marker, "::before")
       : getComputedStyle(row, "::before");
     const glyphAfter = marker ? getComputedStyle(marker, "::after") : getComputedStyle(row, "::after");
     const nativeMarker = marker ? getComputedStyle(marker, "::marker") : getComputedStyle(row, "::marker");
+    const nativeBullet = marker && marker.querySelector(".list-bullet");
+    const nativeBulletStyle = nativeBullet ? getComputedStyle(nativeBullet) : null;
+    const nativeBulletAfter = nativeBullet ? getComputedStyle(nativeBullet, "::after") : null;
+    const rowMarker = getComputedStyle(row, "::marker");
+    const rowBefore = getComputedStyle(row, "::before");
     const markerRect = marker ? marker.getBoundingClientRect() : null;
     const title = row.getAttribute("title") || "";
     const strong = row.querySelector(".cm-strong, strong") || row.querySelector("p");
@@ -61,10 +73,9 @@ function pageRows() {
     const owner = !isLive && row.parentElement && row.parentElement.parentElement;
     const ownerText = owner && (owner.querySelector(":scope > p") || owner);
     const ownerDecoration = ownerText ? getComputedStyle(ownerText).textDecorationLine : "";
-    const childSelector = isLive ? ".cm-line" : "p";
     const child = isLive
-      ? [...root.querySelectorAll(childSelector)].find((el) => el.textContent.includes("Review the endpoint"))
-      : [...row.querySelectorAll(childSelector)].find((el) => el.textContent.includes("Review the endpoint"));
+      ? findTextElement(root, ".cm-line", "Review the endpoint")
+      : findTextElement(row, "*", "Review the endpoint");
     const childVisible = child ? child.getBoundingClientRect().height > 0 : false;
     const fontSize = parseFloat(getComputedStyle(row).fontSize) || 16;
     return {
@@ -87,11 +98,31 @@ function pageRows() {
       markerAfter: glyphAfter.content,
       markerText: marker ? marker.textContent : "",
       markerHtml: marker ? marker.outerHTML : "",
+      nativeBullet: {
+        text: nativeBullet ? nativeBullet.textContent : "",
+        color: nativeBulletStyle ? nativeBulletStyle.color : "",
+        textFill: nativeBulletStyle ? nativeBulletStyle.webkitTextFillColor : "",
+        before: nativeBullet ? getComputedStyle(nativeBullet, "::before").content : "",
+        after: nativeBulletAfter ? nativeBulletAfter.content : "",
+        afterColor: nativeBulletAfter ? nativeBulletAfter.color : "",
+      },
       nativeMarker: {
         content: nativeMarker.content,
         color: nativeMarker.color,
         fontSize: nativeMarker.fontSize,
         display: nativeMarker.display,
+      },
+      rowMarker: {
+        content: rowMarker.content,
+        color: rowMarker.color,
+        fontSize: rowMarker.fontSize,
+        display: rowMarker.display,
+      },
+      rowBefore: {
+        content: rowBefore.content,
+        color: rowBefore.color,
+        width: rowBefore.width,
+        display: rowBefore.display,
       },
       markerRect: markerRect && {
         left: markerRect.left,
@@ -106,6 +137,20 @@ function pageRows() {
       titleBackground: strongCs ? strongCs.backgroundColor : "",
       titlePosition: strongCs ? strongCs.position : "",
       titleZIndex: strongCs ? strongCs.zIndex : "",
+      titleNodeTag: strong && strong.tagName ? strong.tagName : "",
+      titleNodeHtml: strong && strong.outerHTML ? strong.outerHTML : "",
+      titleAncestors: (() => {
+        const ancestors = [];
+        for (let node = strong, depth = 0; node && depth < 5; node = node.parentElement, depth += 1) {
+          ancestors.push({ tag: node.tagName || "", className: node.className || "", id: node.id || "" });
+        }
+        return ancestors;
+      })(),
+      rowHtml: row.outerHTML ? row.outerHTML.slice(0, 1400) : "",
+      shieldMatches: Boolean(strong && strong.matches && strong.matches(
+        '.markdown-preview-view li[data-bob-drawer="true"] > p:first-of-type > strong:first-child, '
+          + '.markdown-preview-view li[data-bob-drawer="true"] > strong',
+      )),
       ownerChecked: Boolean(owner && owner.classList.contains("is-checked")),
       ownerDecoration,
       childVisible,
@@ -120,6 +165,7 @@ function pageRows() {
     rows,
     reqs,
     live: isLive,
+    activeMode,
     nestedNote: textStyle("Review the endpoint"),
     ordinaryNote: textStyle("ordinary note beside the tray"),
   };
@@ -218,6 +264,9 @@ async function run(client, entry, { setDoc, setMode, waitFor, args }) {
   const evidence = {
     theme: entry.theme,
     mode: entry.mode,
+    activeMode: state.activeMode,
+    live: state.live,
+    reqs: state.reqs,
     rows: state.rows.map((row) => ({
       key: row.key,
       count: row.count,
@@ -227,23 +276,39 @@ async function run(client, entry, { setDoc, setMode, waitFor, args }) {
       width: row.width,
       height: row.height,
       expectedSlot: row.expectedSlot,
+      mask: row.mask,
       markerText: row.markerText,
       markerHtml: row.markerHtml,
       markerColor: row.markerColor,
       markerBefore: row.markerBefore,
       markerAfter: row.markerAfter,
       nativeMarker: row.nativeMarker,
+      nativeBullet: row.nativeBullet,
+      rowMarker: row.rowMarker,
+      rowBefore: row.rowBefore,
       markerRect: row.markerRect,
       fontWeight: row.fontWeight,
       decoration: row.decoration,
       ownerDecoration: row.ownerDecoration,
       titleBackground: row.titleBackground,
+      titlePosition: row.titlePosition,
+      titleZIndex: row.titleZIndex,
+      titleNodeTag: row.titleNodeTag,
+      titleNodeHtml: row.titleNodeHtml,
+      titleAncestors: row.titleAncestors,
+      rowHtml: row.rowHtml,
+      shieldMatches: row.shieldMatches,
       folded: row.folded,
       after: row.after,
     })),
     nestedNote: state.nestedNote,
     ordinaryNote: state.ordinaryNote,
   };
+  // Keep real Obsidian output even when a later style assertion fails. This
+  // lets the acceptance report pair all four screenshots with native-marker
+  // geometry from the same run.
+  try {
+  await captureShot(client, args, entry);
   assert.ok(state.rows.length >= 4, "expected open, empty, done, and cancelled drawers");
   assert.ok(state.reqs >= 1, "a requirement should sit beside the drawers");
   const byKey = Object.fromEntries(state.rows.map((row) => [row.key, row]));
@@ -269,7 +334,15 @@ async function run(client, entry, { setDoc, setMode, waitFor, args }) {
     assert.ok(row.height >= row.expectedSlot * 0.68 && row.height <= row.expectedSlot * 0.95, row.key + " tray height " + row.height);
   }
   assert.notEqual(open.mask, "none");
-  assert.ok(state.nestedNote && state.ordinaryNote, "nested and ordinary notes are present");
+  assert.ok(
+    state.nestedNote && state.ordinaryNote,
+    "nested and ordinary notes are present: " + JSON.stringify({
+      activeMode: state.activeMode,
+      live: state.live,
+      nestedNote: state.nestedNote,
+      ordinaryNote: state.ordinaryNote,
+    }),
+  );
   assert.deepEqual(state.nestedNote, state.ordinaryNote, "drawer descendants keep ordinary note typography");
   if (entry.mode === "reading") {
     assert.equal(done.ownerChecked, true, "the strike-leak case has a native checked owner");
@@ -278,11 +351,15 @@ async function run(client, entry, { setDoc, setMode, waitFor, args }) {
     assert.equal(done.titleZIndex, "1");
     assert.notEqual(done.titleBackground, "rgba(0, 0, 0, 0)", "title shield paints above ancestor decoration");
   }
-  await captureShot(client, args, entry);
-
   if (entry.mode === "live") {
     const resting = await evaluate(client, delimiterState);
-    assert.ok(resting && resting.markers.length >= 2, "native bold delimiters are present");
+    const sourceLine = await evaluate(client, () => {
+      const view = window.app.workspace.activeLeaf.view;
+      return view.editor && typeof view.editor.getValue === "function"
+        ? view.editor.getValue().split(/\r?\n/)[3] || ""
+        : "";
+    });
+    assert.match(sourceLine, /- \*\*API Design\*\*/, "the saved drawer title keeps native bold delimiters");
     await evaluate(client, () => {
       const view = window.app.workspace.activeLeaf.view;
       view.editor.setCursor({ line: 3, ch: 8 });
@@ -291,7 +368,7 @@ async function run(client, entry, { setDoc, setMode, waitFor, args }) {
     await pause(400);
     const revealed = await evaluate(client, delimiterState);
     assert.equal(revealed.active, true, "the drawer header owns the caret");
-    assert.ok(revealed.markers.every((marker) => marker.visible), JSON.stringify(revealed));
+    assert.ok(revealed.markers.length >= 2 && revealed.markers.every((marker) => marker.visible), JSON.stringify({ sourceLine, resting, revealed }));
     await evaluate(client, () => {
       const view = window.app.workspace.activeLeaf.view;
       view.editor.setCursor({ line: 16, ch: 0 });
@@ -406,6 +483,10 @@ async function run(client, entry, { setDoc, setMode, waitFor, args }) {
   await evaluate(client, () => window.app.plugins.plugins["bob-ledger-tools"].toggleTaskDrawerMarks());
   await waitFor(client, `(${pageRows.toString()})().rows.length`, (length) => length >= 4, "toggle re-annotates", 5000);
   return JSON.stringify(evidence);
+  } catch (error) {
+    error.message = (error.message || String(error)) + "\nTask drawer diagnostics: " + JSON.stringify(evidence);
+    throw error;
+  }
 }
 
 module.exports = { CASES, SOURCE, run };

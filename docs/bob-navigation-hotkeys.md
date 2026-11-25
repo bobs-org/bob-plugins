@@ -127,7 +127,7 @@ including `type` and `status`. A notice warns if cached `type` lacks `[[project]
 
 ## Task Card
 
-`Ctrl+Shift+P` opens Task Card with priority previews. `Esc`, `q`, or `Ctrl+[` closes without writing; no setting is needed. Inbox answers that write ask the task's destination, then move there. See [Task Card](task-card.md) for details.
+`Ctrl+Shift+P` opens Task Card with priority previews; `Esc`, `q`, or `Ctrl+[` closes without writing. Writing answers on inbox tasks ask for a destination, then move there. See [Task Card](task-card.md).
 
 On album or record notes without a task, Task Link, dependency, or relation target, it opens Schema Card (Record Card on records), including title and blank rows. It resolves direct album or record-parent notes only; task targets keep Task Card priority.
 
@@ -146,13 +146,10 @@ The card swallows its opening chord until keyup, ignores repeats, and keeps on a
 
 ## Navigation and counts
 
-`Ctrl+Shift+J/K` navigates Ready, In Progress, and Next `#task` lines while
-skipping Blocked `[?]` tasks — except on an open current or future Pomodoro
-entry, where the same chord instead moves that Pomodoro and its contents
-among adjacent future Pomodoros (the current slot keeps its time range;
-crossing the current/history boundary or the last future Pomodoro is refused
-with a notice). A counted chord moves a Pomodoro N positions
-atomically, or jumps to the Nth circular navigation target elsewhere.
+`Ctrl+Shift+J/K` navigates Ready, In Progress, and Next `#task` lines, skipping
+Blocked `[?]` tasks. On an open current or future Pomodoro entry, it moves that
+Pomodoro among adjacent future entries; boundary and last-entry moves refuse.
+Counts move a Pomodoro N positions or jump to the Nth circular task elsewhere.
 
 Normal-mode Enter on a link records a file-aware jump in a 100-entry session
 history shared with native jumps: `Ctrl+O` returns to the origin, `Ctrl+I`
@@ -193,19 +190,14 @@ project blocking (`#prj_is_blocked`) is repaired by the next
 
 ## Deleting the current file
 
-`Ctrl+Shift+D` deletes a note created in the last 24 hours at once, including
-a future journal note made by following `next`. It asks for `y` before
-trashing an established note (or one with no `created:` stamp), today's or
-past journal notes, bob-managed references, the done archive, templates,
-notes that other notes name as their parent, non-Markdown files, and any
-file within five seconds of the previous delete. An old blank note with no
-backlinks and no children does not ask.
-
-The confirmation names why it is asking. `y` / `Y` moves the captured file
-to trash; any other key, including Enter, Space, Escape, and a second
-`Ctrl+Shift+D`, keeps it. While the confirmation is open, another Delete
-current file call does nothing. Trashed files follow Obsidian's Deleted
-files setting.
+`Ctrl+Shift+D` immediately deletes notes created in the last 24 hours,
+including future journal notes. It asks before trashing established or
+unstamped notes, current or past journals, Bob-managed files, templates, notes
+named as a parent, non-Markdown files, and files deleted within five seconds
+of the previous one. Old blank notes without backlinks or children do not ask.
+The confirmation explains why: `y` / `Y` trashes the captured file; other keys
+keep it. While open, another delete call does nothing. Obsidian's Deleted files
+setting controls trash behavior.
 
 ## Pomodoro gestures
 

@@ -250,6 +250,8 @@ class BobNavigationHotkeysPropertyDependencyMixin {
               }),
           decayRottenLogBody: context.decayRottenLogBody,
           decayRottenLogDateText: context.decayRottenLogDateText,
+          settleNav: context.settleNav === true,
+          settleNavIdentity: context.settleNavIdentity,
           noticeOverride: context.noticeOverride,
           schedulingWorkLog: schedulingWorkLogForPriority,
           buildNotice: (outcome) =>
@@ -303,6 +305,8 @@ class BobNavigationHotkeysPropertyDependencyMixin {
             }),
         decayRottenLogBody: context.decayRottenLogBody,
         decayRottenLogDateText: context.decayRottenLogDateText,
+        settleNav: context.settleNav === true,
+        settleNavIdentity: context.settleNavIdentity,
         noticeOverride: context.noticeOverride,
         schedulingWorkLog: schedulingWorkLogForPriority,
         buildNotice: (outcome) =>

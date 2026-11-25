@@ -33,12 +33,19 @@ class BobNavigationHotkeysDecayCardWriterMixin {
         return false;
       }
       const line = String(splitMarkdownContent(content).lines[cardCtx.line] || "");
-      if (!applyEditorContentTransaction(
-        cardCtx.cm,
-        live.content,
-        content,
-        { line: cardCtx.line, ch: Math.min(Math.max(cardCtx.invokeCh || 0, 0), line.length) },
-      )) {
+      const settled = this.applyNavSettledEditorWrite(cardCtx.cm, cardCtx.filePath, {
+        expected: live.content,
+        contents: content,
+        cursor: {
+          line: cardCtx.line,
+          ch: Math.min(Math.max(cardCtx.invokeCh || 0, 0), line.length),
+        },
+        identity: cardCtx.advance === true
+          ? null
+          : navTaskSettleIdentityAtLine(content, cardCtx.line),
+        today: cardCtx.dateText,
+      });
+      if (!settled || settled.applied !== true) {
         new Notice("Could not update task; no tasks were updated");
         return false;
       }
@@ -123,6 +130,9 @@ class BobNavigationHotkeysDecayCardWriterMixin {
           ),
           decayRottenLogDateText: cardCtx.dateText,
           noticeOverride: noticeText,
+          settleNav: true,
+          settleNavIdentity: cardCtx.advance !== true,
+          today: cardCtx.dateText,
         },
       );
       if (!ok) return false;

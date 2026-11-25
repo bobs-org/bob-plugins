@@ -292,6 +292,10 @@ class BobNavigationHotkeysChecklistWalkMixin {
       new Notice(`Not completed — ${result && result.reason ? result.reason : "not-closed"}`);
       return false;
     }
+    this.applyNavTaskSettleToCurrentEditor(cm, filePath, {
+      joinHistory: true,
+      today: todayText,
+    });
     // Successor-link line from the cycler's additive `successorNotice`:
     // appended to whichever walk toast reports this close, keeping the
     // gesture's single toast (no second notification).

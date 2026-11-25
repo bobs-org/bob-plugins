@@ -286,6 +286,15 @@ class BobNavigationHotkeysProjectSubtreeWritersMixin {
       line: effectiveCursorLine,
       ch: Math.min(Math.max(cursor.ch, 0), nextLine.length),
     };
+    const applyContent = (contents, position) => applyNavGesturePostimage(
+      this,
+      cm,
+      writeContext.filePath,
+      writeContext.content,
+      contents,
+      position,
+      options,
+    );
 
     let scheduleLogOutcome = null;
     let workLogWritten = false;
@@ -324,12 +333,7 @@ class BobNavigationHotkeysProjectSubtreeWritersMixin {
         ? getScheduleLogWriteOutcome(preplannedScheduleLog, preplannedScheduleLog.valid)
         : null;
       const finalContent = inserted.content;
-      if (finalContent !== writeContext.content && !applyEditorContentTransaction(
-        cm,
-        writeContext.content,
-        finalContent,
-        finalCursor,
-      )) {
+      if (finalContent !== writeContext.content && !applyContent(finalContent, finalCursor)) {
         new Notice("Could not update bullet property");
         return false;
       }
@@ -355,7 +359,7 @@ class BobNavigationHotkeysProjectSubtreeWritersMixin {
       finalContent = mutable.join(folded.lineEnding);
       if (finalContent !== writeContext.content) {
         if (
-          !applyEditorContentTransaction(cm, writeContext.content, finalContent, finalCursor)
+          !applyContent(finalContent, finalCursor)
         ) {
           new Notice("Could not update bullet property");
           return false;
@@ -365,7 +369,7 @@ class BobNavigationHotkeysProjectSubtreeWritersMixin {
         (preplannedScheduleLog && preplannedScheduleLog.valid)
       ) {
         if (
-          !applyEditorContentTransaction(cm, writeContext.content, finalContent, finalCursor)
+          !applyContent(finalContent, finalCursor)
         ) {
           new Notice("Could not update bullet property");
           return false;
@@ -402,7 +406,7 @@ class BobNavigationHotkeysProjectSubtreeWritersMixin {
         : null;
       if (finalContent !== writeContext.content) {
         if (
-          !applyEditorContentTransaction(cm, writeContext.content, finalContent, finalCursor)
+          !applyContent(finalContent, finalCursor)
         ) {
           new Notice("Could not update bullet property");
           return false;
@@ -423,6 +427,7 @@ class BobNavigationHotkeysProjectSubtreeWritersMixin {
         (preplannedScheduleLog && preplannedScheduleLog.valid);
       if (wantsWrite) {
         if (
+          options.settleNav !== true &&
           typeof cm.transaction === "function" &&
           preplannedScheduleLog &&
           preplannedScheduleLog.valid
@@ -444,6 +449,21 @@ class BobNavigationHotkeysProjectSubtreeWritersMixin {
             preplannedScheduleLog,
             preplannedScheduleLog.valid,
           );
+        } else if (options.settleNav === true) {
+          const original = splitMarkdownContent(writeContext.content);
+          const mutable = original.lines.slice();
+          if (hasTaskLineChange) mutable[cursor.line] = nextLine;
+          if (preplannedScheduleLog && preplannedScheduleLog.valid) {
+            applyScheduleLogEntryToLines(mutable, preplannedScheduleLog);
+          }
+          const finalContent = mutable.join(original.lineEnding);
+          if (!applyContent(finalContent, finalCursor)) {
+            new Notice("Could not update bullet property");
+            return false;
+          }
+          scheduleLogOutcome = preplannedScheduleLog
+            ? getScheduleLogWriteOutcome(preplannedScheduleLog, preplannedScheduleLog.valid)
+            : null;
         } else if (
           hasTaskLineChange &&
           !replaceEditorLine(cm, cursor.line, lineText, nextLine)
@@ -480,11 +500,13 @@ class BobNavigationHotkeysProjectSubtreeWritersMixin {
       removedPomodoroLinkCount = dailyCleanupPlan.removedLinkCount;
     }
 
-    setEditorCursorSafely(
-      cm,
-      effectiveCursorLine,
-      Math.min(Math.max(cursor.ch, 0), nextLine.length),
-    );
+    if (options.settleNav !== true) {
+      setEditorCursorSafely(
+        cm,
+        effectiveCursorLine,
+        Math.min(Math.max(cursor.ch, 0), nextLine.length),
+      );
+    }
     const firstEdit = Array.isArray(edits) ? edits[0] : null;
     const noticeText =
       options.noticeText ||

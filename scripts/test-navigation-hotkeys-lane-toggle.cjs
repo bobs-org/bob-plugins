@@ -8,6 +8,7 @@ const {
   TransactionEditor,
   runCardAction,
   createLinkPickerHarness,
+  createBulletPropertyPickerHarness,
 } = require("./navigation-hotkeys-harness.cjs");
 
 test("planTaskLaneBatch commits every Ready target to Next", () => {
@@ -188,6 +189,43 @@ test("describeLaneRow covers task, counted, and link sessions", () => {
   assert.equal(linkRow.detail, "lane · release to Ready");
   assert.equal(linkRow.kind, "link");
   assert.equal(linkRow.needsReason, true);
+});
+
+test("Task Card lane answers stage the full note through task settle", async () => {
+  const harness = createBulletPropertyPickerHarness({
+    content: "- [ ] #task Ship it ^a1",
+    cursor: { line: 0, ch: 5 },
+    file: { path: "Areas/Plan.md", basename: "Plan", extension: "md" },
+  });
+  assert.equal(harness.open({ baseDate: new Date(2026, 10, 25) }), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  const calls = [];
+  const apply = harness.plugin.applyNavSettledEditorWrite.bind(harness.plugin);
+  harness.plugin.applyNavSettledEditorWrite = (editor, path, options) => {
+    calls.push({ path, ...options });
+    return apply(editor, path, options);
+  };
+
+  assert.equal(
+    await harness.plugin.applyLaneToggleFromPicker(picker, {
+      dateText: "2026-11-25",
+      stampText: "2026-11-25 12:00",
+      now: new Date(2026, 10, 25, 12, 0),
+    }),
+    true,
+  );
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].path, "Areas/Plan.md");
+  assert.equal(calls[0].expected, "- [ ] #task Ship it ^a1");
+  assert.equal(calls[0].contents, "- [*] #task Ship it ^a1");
+  assert.deepEqual(calls[0].identity, {
+    line: 0,
+    text: "- [*] #task Ship it ^a1",
+    blockId: "a1",
+  });
+  assert.equal(calls[0].today, "2026-11-25");
+  assert.equal(harness.editor.content, calls[0].contents);
+  assert.equal(harness.editor.undoGroups, 1);
 });
 
 test("toggleTaskLane commits Ready to Next and reports lane budgets", async () => {

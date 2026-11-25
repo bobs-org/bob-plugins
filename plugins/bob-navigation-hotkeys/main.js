@@ -26013,6 +26013,9 @@ class BobNavigationHotkeysTaskSettleMixin {
 
   navTaskSettleToday(options = {}) {
     if (typeof options.today === "string" && options.today) return options.today;
+    if (options.today instanceof Date) {
+      return formatBulletPropertyDate(getLocalDateStart(options.today));
+    }
     return formatProjectTaskCreatedDate(new Date());
   }
 
@@ -26263,6 +26266,7 @@ class BobNavigationHotkeysTaskSettleMixin {
         identity: options.identity,
         cursor: liveCursor,
         selection: options.selection,
+        joinHistory: options.joinHistory === true,
         today: this.navTaskSettleToday(options),
         dailyPath: options.dailyPath,
         tasksSettings: options.tasksSettings,
@@ -26377,6 +26381,65 @@ class BobNavigationHotkeysTaskSettleMixin {
       cursor: planned.cursor,
       reason: options.reason || "provider",
       provider: options.reason === "error" ? "error" : "none",
+    });
+  }
+}
+// ---- src/181c-nav-task-settle-integration.js ----
+function navTaskSettleIdentityAtLine(contents, line) {
+  const index = Math.floor(Number(line));
+  if (!Number.isInteger(index) || index < 0) return null;
+  const lines = splitMarkdownContent(String(contents || "")).lines;
+  if (index >= lines.length) return null;
+  const text = String(lines[index] || "");
+  if (!isObsidianTaskLine(text)) return null;
+  const blockId = navTaskSettleLineBlockId(text);
+  return Object.freeze({ line: index, text, ...(blockId ? { blockId } : {}) });
+}
+
+function applyNavGesturePostimage(plugin, editor, path, expected, contents, cursor, options = {}) {
+  if (options.settleNav === true &&
+      plugin && typeof plugin.applyNavSettledEditorWrite === "function") {
+    const identity = options.settleNavIdentity === false
+      ? null
+      : navTaskSettleIdentityAtLine(contents, cursor && cursor.line);
+    const outcome = plugin.applyNavSettledEditorWrite(editor, path, {
+      expected,
+      contents,
+      cursor,
+      identity,
+      today: typeof options.settleToday === "string" ? options.settleToday : options.today,
+    });
+    return Boolean(outcome && outcome.applied === true);
+  }
+  return applyEditorContentTransaction(editor, expected, contents, cursor || null);
+}
+
+class BobNavigationHotkeysTaskSettleIntegrationMixin {
+  applyNavTaskSettleToCurrentEditor(editor, path, options = {}) {
+    if (!editor || typeof editor.getValue !== "function" ||
+        typeof this.applyNavSettledEditorWrite !== "function") {
+      return navTaskSettleRefusedOutcome({
+        contents: "",
+        reason: "editor",
+        provider: "none",
+      });
+    }
+    const contents = String(editor.getValue() || "");
+    const cursor = navTaskSettleNormalizePos(
+      options.cursor || navTaskSettleReadCursor(editor),
+    );
+    const identity = options.identity || (cursor
+      ? navTaskSettleIdentityAtLine(contents, cursor.line)
+      : null);
+    return this.applyNavSettledEditorWrite(editor, path, {
+      expected: contents,
+      contents,
+      cursor,
+      identity,
+      joinHistory: options.joinHistory === true,
+      today: options.today,
+      dailyPath: options.dailyPath,
+      tasksSettings: options.tasksSettings,
     });
   }
 }
@@ -50259,6 +50322,15 @@ class BobNavigationHotkeysProjectSubtreeWritersMixin {
       line: effectiveCursorLine,
       ch: Math.min(Math.max(cursor.ch, 0), nextLine.length),
     };
+    const applyContent = (contents, position) => applyNavGesturePostimage(
+      this,
+      cm,
+      writeContext.filePath,
+      writeContext.content,
+      contents,
+      position,
+      options,
+    );
 
     let scheduleLogOutcome = null;
     let workLogWritten = false;
@@ -50297,12 +50369,7 @@ class BobNavigationHotkeysProjectSubtreeWritersMixin {
         ? getScheduleLogWriteOutcome(preplannedScheduleLog, preplannedScheduleLog.valid)
         : null;
       const finalContent = inserted.content;
-      if (finalContent !== writeContext.content && !applyEditorContentTransaction(
-        cm,
-        writeContext.content,
-        finalContent,
-        finalCursor,
-      )) {
+      if (finalContent !== writeContext.content && !applyContent(finalContent, finalCursor)) {
         new Notice("Could not update bullet property");
         return false;
       }
@@ -50328,7 +50395,7 @@ class BobNavigationHotkeysProjectSubtreeWritersMixin {
       finalContent = mutable.join(folded.lineEnding);
       if (finalContent !== writeContext.content) {
         if (
-          !applyEditorContentTransaction(cm, writeContext.content, finalContent, finalCursor)
+          !applyContent(finalContent, finalCursor)
         ) {
           new Notice("Could not update bullet property");
           return false;
@@ -50338,7 +50405,7 @@ class BobNavigationHotkeysProjectSubtreeWritersMixin {
         (preplannedScheduleLog && preplannedScheduleLog.valid)
       ) {
         if (
-          !applyEditorContentTransaction(cm, writeContext.content, finalContent, finalCursor)
+          !applyContent(finalContent, finalCursor)
         ) {
           new Notice("Could not update bullet property");
           return false;
@@ -50375,7 +50442,7 @@ class BobNavigationHotkeysProjectSubtreeWritersMixin {
         : null;
       if (finalContent !== writeContext.content) {
         if (
-          !applyEditorContentTransaction(cm, writeContext.content, finalContent, finalCursor)
+          !applyContent(finalContent, finalCursor)
         ) {
           new Notice("Could not update bullet property");
           return false;
@@ -50396,6 +50463,7 @@ class BobNavigationHotkeysProjectSubtreeWritersMixin {
         (preplannedScheduleLog && preplannedScheduleLog.valid);
       if (wantsWrite) {
         if (
+          options.settleNav !== true &&
           typeof cm.transaction === "function" &&
           preplannedScheduleLog &&
           preplannedScheduleLog.valid
@@ -50417,6 +50485,21 @@ class BobNavigationHotkeysProjectSubtreeWritersMixin {
             preplannedScheduleLog,
             preplannedScheduleLog.valid,
           );
+        } else if (options.settleNav === true) {
+          const original = splitMarkdownContent(writeContext.content);
+          const mutable = original.lines.slice();
+          if (hasTaskLineChange) mutable[cursor.line] = nextLine;
+          if (preplannedScheduleLog && preplannedScheduleLog.valid) {
+            applyScheduleLogEntryToLines(mutable, preplannedScheduleLog);
+          }
+          const finalContent = mutable.join(original.lineEnding);
+          if (!applyContent(finalContent, finalCursor)) {
+            new Notice("Could not update bullet property");
+            return false;
+          }
+          scheduleLogOutcome = preplannedScheduleLog
+            ? getScheduleLogWriteOutcome(preplannedScheduleLog, preplannedScheduleLog.valid)
+            : null;
         } else if (
           hasTaskLineChange &&
           !replaceEditorLine(cm, cursor.line, lineText, nextLine)
@@ -50453,11 +50536,13 @@ class BobNavigationHotkeysProjectSubtreeWritersMixin {
       removedPomodoroLinkCount = dailyCleanupPlan.removedLinkCount;
     }
 
-    setEditorCursorSafely(
-      cm,
-      effectiveCursorLine,
-      Math.min(Math.max(cursor.ch, 0), nextLine.length),
-    );
+    if (options.settleNav !== true) {
+      setEditorCursorSafely(
+        cm,
+        effectiveCursorLine,
+        Math.min(Math.max(cursor.ch, 0), nextLine.length),
+      );
+    }
     const firstEdit = Array.isArray(edits) ? edits[0] : null;
     const noticeText =
       options.noticeText ||
@@ -94545,36 +94630,59 @@ class BobNavigationHotkeysTransclusionLinkMixin {
   // Write one planned link-picker note change: through the open editor when
   // one exists, otherwise through vault.process with a preimage guard, as
   // writeTaskMoveChange does. Throws when the preimage changed.
-  async writeLinkPickerNoteChange(path, file, before, after, cleanupPlan = null, beforeCleanup = null) {
+  async writeLinkPickerNoteChange(path, file, before, after, cleanupPlan = null, beforeCleanup = null, settleNav = false, settleToday = null) {
     const editor = this.getOpenMarkdownEditorForPath(path);
     if (editor && typeof editor.getValue === "function") {
       if (String(editor.getValue() || "") !== before) {
         throw new Error(`Task Link preimage changed: ${path}`);
       }
-      const applied = applyEditorContentTransaction(
-        editor, before, after,
-        cleanupPlan ? pomodoroCleanupCursor(editor, cleanupPlan, beforeCleanup) : null,
-      );
-      if (!applied || String(editor.getValue() || "") !== after) {
+      let writtenAfter = after;
+      if (settleNav && typeof this.applyNavSettledEditorWrite === "function") {
+        const outcome = this.applyNavSettledEditorWrite(editor, path, {
+          expected: before,
+          contents: after,
+          cursor: cleanupPlan
+            ? pomodoroCleanupCursor(editor, cleanupPlan, beforeCleanup)
+            : getEditorCursor(editor),
+          today: settleToday,
+        });
+        if (!outcome || outcome.applied !== true) {
+          throw new Error(`Task Link editor transaction failed: ${path}`);
+        }
+        writtenAfter = outcome.contents;
+      } else {
+        const applied = applyEditorContentTransaction(
+          editor, before, after,
+          cleanupPlan ? pomodoroCleanupCursor(editor, cleanupPlan, beforeCleanup) : null,
+        );
+        if (!applied) {
+          throw new Error(`Task Link editor transaction failed: ${path}`);
+        }
+      }
+      if (String(editor.getValue() || "") !== writtenAfter) {
         throw new Error(`Task Link editor transaction failed: ${path}`);
       }
-      return;
+      return writtenAfter;
     }
     const vault = this.app && this.app.vault;
     if (!vault || typeof vault.process !== "function" || !file) {
       throw new Error("Vault content updates are unavailable");
     }
+    const writtenAfter = settleNav && typeof this.prepareNavSettledFilePostimage === "function"
+      ? this.prepareNavSettledFilePostimage(path, after, { today: settleToday }).contents
+      : after;
     let transformed = false;
     await vault.process(file, (content) => {
       if (String(content || "") !== before) {
         throw new Error(`Task Link preimage changed: ${path}`);
       }
       transformed = true;
-      return after;
+      return writtenAfter;
     });
     if (!transformed) {
       throw new Error(`Task Link file transaction failed: ${path}`);
     }
+    return writtenAfter;
   }
 
   // Apply one picked property value to every task behind the picker's Task
@@ -94872,14 +94980,8 @@ class BobNavigationHotkeysTransclusionLinkMixin {
 // ---- src/510-plugin-link-commit-and-lane.js ----
 class BobNavigationHotkeysLinkCommitLaneMixin {
 
-  // Shared preimage, write, rollback and prune core for link-picker commits.
-  // Every preimage is re-verified before the first write; any mismatch refuses
-  // the whole operation with `{ ok: false }`. Write order is targets, then
-  // the daily note; target writes roll back when one fails. A prune failure
-  // after durable target writes is reported via `pomodoroPruneFailed` and
-  // dropped — like writeDeferredPomodoroCleanup — never rolled back. Callers
-  // own the notices. `planned` entries carry `{ group, plan }` where `plan`
-  // has the postimage in `plan.content`.
+  // Preimage-checked commit core; targets write first and roll back on
+  // failure. Deferred cleanup is reported separately. Entries carry plan.content.
   async commitLinkPickerNoteWrites(
     planned,
     options = {},
@@ -94937,19 +95039,21 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
           after = dailyCleanupPlan.content;
         }
         if (after !== group.content) {
-          await this.writeLinkPickerNoteChange(
+          const writtenAfter = await this.writeLinkPickerNoteChange(
             group.path,
             group.file,
             group.content,
             after,
             group.path === foldedDailyPath ? dailyCleanupPlan : null,
             plan.content,
+            options.settleNav === true,
+            options.settleToday,
           );
           written.push({
             path: group.path,
             file: group.file,
             before: group.content,
-            after,
+            after: typeof writtenAfter === "string" ? writtenAfter : after,
           });
         }
       }
@@ -95780,11 +95884,19 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
     }
     const lines = splitMarkdownContent(finalContent).lines;
     const finalLine = String(lines[finalCursorLine] || "");
-    const applied = applyEditorContentTransaction(cm, content, finalContent, {
-      line: finalCursorLine,
-      ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
+    const settled = this.applyNavSettledEditorWrite(cm, filePath, {
+      expected: content,
+      contents: finalContent,
+      cursor: {
+        line: finalCursorLine,
+        ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
+      },
+      identity: reviewOrigin
+        ? null
+        : navTaskSettleIdentityAtLine(finalContent, finalCursorLine),
+      today: options.dateText || this.laneReleaseDateText({}),
     });
-    if (!applied) {
+    if (!settled || settled.applied !== true) {
       new Notice("Could not update task; no tasks were updated");
       return false;
     }
@@ -96235,6 +96347,8 @@ class BobNavigationHotkeysLaneReviewMixin {
       pomodoroSnapshot,
       dailyCleanupPlan,
       foldedDailyPath,
+      settleNav: true,
+      settleToday: options.dateText || this.laneReleaseDateText({}),
     });
     if (!commit.ok) {
       new Notice("A linked note changed; no tasks were updated");
@@ -96918,14 +97032,22 @@ class BobNavigationHotkeysLaneReviewMixin {
     }
     if (plan.content !== content) {
       const nextLines = plan.content.split(/\r?\n/);
-      const applied = applyEditorContentTransaction(cm, content, plan.content, {
-        line: cursor.line,
-        ch: Math.min(
-          Math.max(cursor.ch, 0),
-          String(nextLines[cursor.line] || "").length,
-        ),
+      const settled = this.applyNavSettledEditorWrite(cm, filePath, {
+        expected: content,
+        contents: plan.content,
+        cursor: {
+          line: cursor.line,
+          ch: Math.min(
+            Math.max(cursor.ch, 0),
+            String(nextLines[cursor.line] || "").length,
+          ),
+        },
+        identity: options.advance === true
+          ? null
+          : navTaskSettleIdentityAtLine(plan.content, cursor.line),
+        today: options.dateText,
       });
-      if (!applied) {
+      if (!settled || settled.applied !== true) {
         new Notice("Could not update task; no tasks were updated");
         return false;
       }
@@ -97122,7 +97244,10 @@ class BobNavigationHotkeysTaskLinkLaneMixin {
       }
       let commit = null;
       try {
-        commit = await this.commitLinkPickerNoteWrites(planned, {});
+        commit = await this.commitLinkPickerNoteWrites(planned, {
+          settleNav: true,
+          settleToday: request.dateText || this.getFreshnessDateText(),
+        });
       } catch (error) {
         return fail("error", "Could not update task; no tasks were updated");
       }
@@ -98063,6 +98188,9 @@ class BobNavigationHotkeysFreshnessDecayMixin {
           baseDate: getLocalDateStart(new Date()),
           precomputedRoll: { date: pick.date, offset: pick.offset },
           scheduleReasonOverride: pick.reason,
+          settleNav: true,
+          settleNavIdentity: cardCtx.advance !== true,
+          today: cardCtx.dateText,
         },
       );
       if (!ok) {
@@ -98161,16 +98289,20 @@ class BobNavigationHotkeysFreshnessDecayMixin {
       const lines = split.lines.slice();
       lines[cardCtx.line] = nextLine;
       applyScheduleLogEntryToLines(lines, logPlan);
-      const applied = applyEditorContentTransaction(
-        cardCtx.cm,
-        live.content,
-        lines.join(split.lineEnding),
-        {
+      const content = lines.join(split.lineEnding);
+      const settled = this.applyNavSettledEditorWrite(cardCtx.cm, cardCtx.filePath, {
+        expected: live.content,
+        contents: content,
+        cursor: {
           line: cardCtx.line,
           ch: Math.min(cardCtx.invokeCh, nextLine.length),
         },
-      );
-      if (!applied) {
+        identity: cardCtx.advance === true
+          ? null
+          : navTaskSettleIdentityAtLine(content, cardCtx.line),
+        today: cardCtx.dateText,
+      });
+      if (!settled || settled.applied !== true) {
         new Notice("Could not update task; no tasks were updated");
         return false;
       }
@@ -98475,7 +98607,10 @@ async function refreshTaskFreshnessOnLinks(cm, cursor, content, options = {}) {
       }
     }
     if (planned.length > 0) {
-      const commit = await this.commitLinkPickerNoteWrites(planned, {});
+      const commit = await this.commitLinkPickerNoteWrites(planned, {
+        settleNav: true,
+        settleToday: options.dateText,
+      });
       if (!commit.ok) {
         new Notice(
           commit.partial
@@ -98819,6 +98954,10 @@ class BobNavigationHotkeysChecklistWalkMixin {
       new Notice(`Not completed — ${result && result.reason ? result.reason : "not-closed"}`);
       return false;
     }
+    this.applyNavTaskSettleToCurrentEditor(cm, filePath, {
+      joinHistory: true,
+      today: todayText,
+    });
     // Successor-link line from the cycler's additive `successorNotice`:
     // appended to whichever walk toast reports this close, keeping the
     // gesture's single toast (no second notification).
@@ -103497,16 +103636,18 @@ class BobNavigationHotkeysDecayCancelMixin {
       const lines = split.lines.slice();
       lines[cardCtx.line] = nextLine;
       applyScheduleLogEntryToLines(lines, logPlan);
-      const applied = applyEditorContentTransaction(
-        cardCtx.cm,
-        live.content,
-        lines.join(split.lineEnding),
-        {
+      const content = lines.join(split.lineEnding);
+      const settled = this.applyNavSettledEditorWrite(cardCtx.cm, cardCtx.filePath, {
+        expected: live.content,
+        contents: content,
+        cursor: {
           line: cardCtx.line,
           ch: freshnessDecayRewordCursorCh(nextLine),
         },
-      );
-      if (!applied) {
+        identity: navTaskSettleIdentityAtLine(content, cardCtx.line),
+        today: cardCtx.dateText,
+      });
+      if (!settled || settled.applied !== true) {
         new Notice("Could not update task; no tasks were updated");
         return false;
       }
@@ -103628,13 +103769,16 @@ class BobNavigationHotkeysDecayCancelMixin {
             String(nextLines[cursorLine] || "").length,
           ),
         );
-        const applied = applyEditorContentTransaction(
-          cardCtx.cm,
-          live.content,
-          plan.content,
-          { line: cursorLine, ch: cursorCh },
-        );
-        if (!applied) {
+        const settled = this.applyNavSettledEditorWrite(cardCtx.cm, cardCtx.filePath, {
+          expected: live.content,
+          contents: plan.content,
+          cursor: { line: cursorLine, ch: cursorCh },
+          identity: cardCtx.advance === true
+            ? null
+            : navTaskSettleIdentityAtLine(plan.content, cardCtx.line),
+          today: cardCtx.dateText,
+        });
+        if (!settled || settled.applied !== true) {
           new Notice("Could not update task; no tasks were updated");
           return false;
         }
@@ -103842,6 +103986,8 @@ class BobNavigationHotkeysDecayCancelMixin {
         pomodoroSnapshot,
         dailyCleanupPlan,
         foldedDailyPath,
+        settleNav: true,
+        settleToday: options.dateText || this.laneReleaseDateText({}),
       });
       if (!commit.ok) {
         new Notice("A linked note changed; no tasks were updated");
@@ -104018,16 +104164,21 @@ class BobNavigationHotkeysDecayCancelMixin {
     }
     const lines = splitMarkdownContent(finalContent).lines;
     const finalLine = String(lines[finalCursorLine] || "");
-    const applied = applyEditorContentTransaction(
-      editor,
-      writeContext.content,
-      finalContent,
-      {
-        line: finalCursorLine,
-        ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
-      },
-    );
-    if (!applied) {
+    const settled = finalContent === writeContext.content
+      ? { applied: true }
+      : this.applyNavSettledEditorWrite(editor, filePath, {
+          expected: writeContext.content,
+          contents: finalContent,
+          cursor: {
+            line: finalCursorLine,
+            ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
+          },
+          identity: picker.reviewOrigin || picker.reviewSettleDeferred === true
+            ? null
+            : navTaskSettleIdentityAtLine(finalContent, finalCursorLine),
+          today: options.dateText || this.laneReleaseDateText({}),
+        });
+    if (!settled || settled.applied !== true) {
       new Notice("Could not update task; no tasks were updated");
       return false;
     }
@@ -104288,14 +104439,22 @@ class BobNavigationHotkeysDecayCancelMixin {
     const finalLine =
       splitMarkdownContent(finalContent).lines[finalCursorLine] || "";
     try {
-      if (
-        finalContent !== writeContext.content &&
-        !applyEditorContentTransaction(editor, writeContext.content, finalContent, {
-          line: finalCursorLine,
-          ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
-        })
-      ) {
-        throw new Error("Editor cannot apply a cancel transaction");
+      if (finalContent !== writeContext.content) {
+        const settled = this.applyNavSettledEditorWrite(editor, filePath, {
+          expected: writeContext.content,
+          contents: finalContent,
+          cursor: {
+            line: finalCursorLine,
+            ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
+          },
+          identity: picker.reviewSettleDeferred === true
+            ? null
+            : navTaskSettleIdentityAtLine(finalContent, finalCursorLine),
+          today: cancel.dateText,
+        });
+        if (!settled || settled.applied !== true) {
+          throw new Error("Editor cannot apply a cancel transaction");
+        }
       }
     } catch (error) {
       new Notice("Could not update task; no tasks were updated");
@@ -104368,12 +104527,19 @@ class BobNavigationHotkeysDecayCardWriterMixin {
         return false;
       }
       const line = String(splitMarkdownContent(content).lines[cardCtx.line] || "");
-      if (!applyEditorContentTransaction(
-        cardCtx.cm,
-        live.content,
-        content,
-        { line: cardCtx.line, ch: Math.min(Math.max(cardCtx.invokeCh || 0, 0), line.length) },
-      )) {
+      const settled = this.applyNavSettledEditorWrite(cardCtx.cm, cardCtx.filePath, {
+        expected: live.content,
+        contents: content,
+        cursor: {
+          line: cardCtx.line,
+          ch: Math.min(Math.max(cardCtx.invokeCh || 0, 0), line.length),
+        },
+        identity: cardCtx.advance === true
+          ? null
+          : navTaskSettleIdentityAtLine(content, cardCtx.line),
+        today: cardCtx.dateText,
+      });
+      if (!settled || settled.applied !== true) {
         new Notice("Could not update task; no tasks were updated");
         return false;
       }
@@ -104458,6 +104624,9 @@ class BobNavigationHotkeysDecayCardWriterMixin {
           ),
           decayRottenLogDateText: cardCtx.dateText,
           noticeOverride: noticeText,
+          settleNav: true,
+          settleNavIdentity: cardCtx.advance !== true,
+          today: cardCtx.dateText,
         },
       );
       if (!ok) return false;
@@ -106462,12 +106631,8 @@ class BobNavigationHotkeysBracketModeIndicatorMixin {
 // ---- src/550-plugin-cancel-and-counted-property.js ----
 class BobNavigationHotkeysCancelPropertyMixin {
 
-  // Link-session cancels plan every target note with the pure planner and
-  // commit through the shared `commitLinkPickerNoteWrites` core: every
-  // preimage is re-verified before the first write, targets write first, the
-  // daily-note prune folds into the daily note's own write when it is a
-  // target note, target writes roll back when one fails, and a failed prune
-  // is reported but never rolled back.
+  // Link-session cancels use the shared preimage-checked commit core;
+  // targets roll back on failure, while deferred prune failures are reported.
   async applyTaskCancelFromLinkPicker(picker, cancel) {
     const linkSession = picker.linkSession;
     const resolved = Array.isArray(linkSession.resolved)
@@ -106549,6 +106714,8 @@ class BobNavigationHotkeysCancelPropertyMixin {
       pomodoroSnapshot,
       dailyCleanupPlan,
       foldedDailyPath,
+      settleNav: true,
+      settleToday: cancel.dateText,
     });
     if (!commit.ok) {
       new Notice("A linked note changed; no tasks were updated");
@@ -108376,13 +108543,9 @@ class BobNavigationHotkeysCountedRollMixin {
 }
 // ---- src/570-plugin-link-roll-and-schedule.js ----
 class BobNavigationHotkeysLinkRollScheduleMixin {
-  // Commit one composed recommended-roll write across every note behind the
-  // picker's Task Links: each note group is planned with
-  // `planRecommendedRollBatch` (cancel first, then set-priority), the union
-  // of cancelled block IDs and future-scheduled lines is pruned from today's
-  // open Pomodoros in one pass, and cancelled identities run dependent
-  // recovery. Every preimage is re-verified before the first write; any
-  // mismatch refuses the whole operation.
+  // Compose recommended-roll writes across linked notes. Cancelled and
+  // future-scheduled links prune from today's daily note; cancelled tasks
+  // recover dependents after guarded target writes land.
   async applyLinkRecommendedRoll(picker, options = {}) {
     const linkSession = picker.linkSession;
     const cached = picker.linkRollBatch;
@@ -109231,14 +109394,17 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
     try {
       if (
         finalContent !== writeContext.content &&
-        !applyEditorContentTransaction(
+        !applyNavGesturePostimage(
+          this,
           cm,
+          filePath,
           writeContext.content,
           finalContent,
           {
             line: finalCursorLine,
             ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
           },
+          options,
         )
       ) {
         throw new Error("Editor cannot replace note content");
@@ -109628,6 +109794,8 @@ class BobNavigationHotkeysPropertyDependencyMixin {
               }),
           decayRottenLogBody: context.decayRottenLogBody,
           decayRottenLogDateText: context.decayRottenLogDateText,
+          settleNav: context.settleNav === true,
+          settleNavIdentity: context.settleNavIdentity,
           noticeOverride: context.noticeOverride,
           schedulingWorkLog: schedulingWorkLogForPriority,
           buildNotice: (outcome) =>
@@ -109681,6 +109849,8 @@ class BobNavigationHotkeysPropertyDependencyMixin {
             }),
         decayRottenLogBody: context.decayRottenLogBody,
         decayRottenLogDateText: context.decayRottenLogDateText,
+        settleNav: context.settleNav === true,
+        settleNavIdentity: context.settleNavIdentity,
         noticeOverride: context.noticeOverride,
         schedulingWorkLog: schedulingWorkLogForPriority,
         buildNotice: (outcome) =>
@@ -137924,6 +138094,7 @@ function installBobNavigationHotkeysMixins(pluginClass, mixins) {
 
 installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysTaskSettleMixin,
+  BobNavigationHotkeysTaskSettleIntegrationMixin,
   BobNavigationHotkeysReqLineGuardMixin,
   BobNavigationHotkeysTransclusionLinkMixin,
   BobNavigationHotkeysQuickRollMixin,
@@ -143318,4 +143489,6 @@ Object.assign(module.exports.helpers, {
   mapNavJumpLocationThroughSettle,
   mapReviewQueueEntryThroughSettle,
   mapReviewResumeRefThroughSettle,
+  navTaskSettleIdentityAtLine,
+  applyNavGesturePostimage,
 });

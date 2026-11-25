@@ -95,8 +95,22 @@ class BobNavigationHotkeysTaskSettleMixin {
     return lookupNavTaskSettleApi(this.app);
   }
 
+  navTaskSettlePreferredView(editor) {
+    try {
+      const view = typeof this.getActiveMarkdownView === "function"
+        ? this.getActiveMarkdownView()
+        : null;
+      return navEditorMatchesView(editor, view) ? view : null;
+    } catch (_error) {
+      return null;
+    }
+  }
+
   navTaskSettleToday(options = {}) {
     if (typeof options.today === "string" && options.today) return options.today;
+    if (options.today instanceof Date) {
+      return formatBulletPropertyDate(getLocalDateStart(options.today));
+    }
     return formatProjectTaskCreatedDate(new Date());
   }
 
@@ -172,7 +186,9 @@ class BobNavigationHotkeysTaskSettleMixin {
     const live = navTaskSettleReadLive(editor);
     const expected = options.expected != null ? String(options.expected) : live;
     const contents = options.contents != null ? String(options.contents) : live;
-    const guard = navGuardEditorPath(this.app, editor, path);
+    const guard = navGuardEditorPath(
+      this.app, editor, path, this.navTaskSettlePreferredView(editor),
+    );
     if (!guard.ok) {
       return navTaskSettleRefusedOutcome({
         contents: live,
@@ -229,7 +245,9 @@ class BobNavigationHotkeysTaskSettleMixin {
     const live = navTaskSettleReadLive(editor);
     const expected = options.expected != null ? String(options.expected) : live;
     const staged = options.contents != null ? String(options.contents) : live;
-    const guard = navGuardEditorPath(this.app, editor, path);
+    const guard = navGuardEditorPath(
+      this.app, editor, path, this.navTaskSettlePreferredView(editor),
+    );
     if (!guard.ok) {
       return navTaskSettleRefusedOutcome({
         contents: live,
@@ -310,7 +328,9 @@ class BobNavigationHotkeysTaskSettleMixin {
     const live = navTaskSettleReadLive(editor);
     const expected = options.expected != null ? String(options.expected) : live;
     const contents = options.contents != null ? String(options.contents) : live;
-    const guard = navGuardEditorPath(this.app, editor, path);
+    const guard = navGuardEditorPath(
+      this.app, editor, path, this.navTaskSettlePreferredView(editor),
+    );
     if (!guard.ok) {
       return navTaskSettleRefusedOutcome({
         contents: live,
@@ -347,6 +367,7 @@ class BobNavigationHotkeysTaskSettleMixin {
         identity: options.identity,
         cursor: liveCursor,
         selection: options.selection,
+        joinHistory: options.joinHistory === true,
         today: this.navTaskSettleToday(options),
         dailyPath: options.dailyPath,
         tasksSettings: options.tasksSettings,

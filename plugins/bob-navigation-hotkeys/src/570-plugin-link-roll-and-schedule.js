@@ -1,11 +1,7 @@
 class BobNavigationHotkeysLinkRollScheduleMixin {
-  // Commit one composed recommended-roll write across every note behind the
-  // picker's Task Links: each note group is planned with
-  // `planRecommendedRollBatch` (cancel first, then set-priority), the union
-  // of cancelled block IDs and future-scheduled lines is pruned from today's
-  // open Pomodoros in one pass, and cancelled identities run dependent
-  // recovery. Every preimage is re-verified before the first write; any
-  // mismatch refuses the whole operation.
+  // Compose recommended-roll writes across linked notes. Cancelled and
+  // future-scheduled links prune from today's daily note; cancelled tasks
+  // recover dependents after guarded target writes land.
   async applyLinkRecommendedRoll(picker, options = {}) {
     const linkSession = picker.linkSession;
     const cached = picker.linkRollBatch;
@@ -854,14 +850,17 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
     try {
       if (
         finalContent !== writeContext.content &&
-        !applyEditorContentTransaction(
+        !applyNavGesturePostimage(
+          this,
           cm,
+          filePath,
           writeContext.content,
           finalContent,
           {
             line: finalCursorLine,
             ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
           },
+          options,
         )
       ) {
         throw new Error("Editor cannot replace note content");

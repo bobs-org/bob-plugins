@@ -727,6 +727,9 @@ class BobNavigationHotkeysFreshnessDecayMixin {
           baseDate: getLocalDateStart(new Date()),
           precomputedRoll: { date: pick.date, offset: pick.offset },
           scheduleReasonOverride: pick.reason,
+          settleNav: true,
+          settleNavIdentity: cardCtx.advance !== true,
+          today: cardCtx.dateText,
         },
       );
       if (!ok) {
@@ -825,16 +828,20 @@ class BobNavigationHotkeysFreshnessDecayMixin {
       const lines = split.lines.slice();
       lines[cardCtx.line] = nextLine;
       applyScheduleLogEntryToLines(lines, logPlan);
-      const applied = applyEditorContentTransaction(
-        cardCtx.cm,
-        live.content,
-        lines.join(split.lineEnding),
-        {
+      const content = lines.join(split.lineEnding);
+      const settled = this.applyNavSettledEditorWrite(cardCtx.cm, cardCtx.filePath, {
+        expected: live.content,
+        contents: content,
+        cursor: {
           line: cardCtx.line,
           ch: Math.min(cardCtx.invokeCh, nextLine.length),
         },
-      );
-      if (!applied) {
+        identity: cardCtx.advance === true
+          ? null
+          : navTaskSettleIdentityAtLine(content, cardCtx.line),
+        today: cardCtx.dateText,
+      });
+      if (!settled || settled.applied !== true) {
         new Notice("Could not update task; no tasks were updated");
         return false;
       }

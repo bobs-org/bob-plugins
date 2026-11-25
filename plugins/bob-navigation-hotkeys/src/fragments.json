@@ -46,6 +46,7 @@
   "181-editor-line-diff.js",
   "181a-nav-task-settle.js",
   "181b-plugin-task-settle.js",
+  "181c-nav-task-settle-integration.js",
   "182-reload-history.js",
   "183-log-recall-model.js",
   "184-log-recall-band.js",

@@ -287,7 +287,10 @@ async function refreshTaskFreshnessOnLinks(cm, cursor, content, options = {}) {
       }
     }
     if (planned.length > 0) {
-      const commit = await this.commitLinkPickerNoteWrites(planned, {});
+      const commit = await this.commitLinkPickerNoteWrites(planned, {
+        settleNav: true,
+        settleToday: options.dateText,
+      });
       if (!commit.ok) {
         new Notice(
           commit.partial

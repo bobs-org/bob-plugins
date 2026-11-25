@@ -395,8 +395,9 @@ function navEditorMatchesView(editor, view) {
   return false;
 }
 
-function navFindMarkdownViewForEditor(app, editor) {
+function navFindMarkdownViewForEditor(app, editor, preferredView = null) {
   if (!app || !editor) return null;
+  if (navEditorMatchesView(editor, preferredView)) return preferredView;
   const workspace = app.workspace;
   if (!workspace) return null;
   let match = null;
@@ -421,15 +422,23 @@ function navFindMarkdownViewForEditor(app, editor) {
     const leaves = workspace.getLeavesOfType("markdown") || [];
     for (const leaf of leaves) visit(leaf);
   }
+  if (!match && typeof workspace.getActiveViewOfType === "function") {
+    try {
+      visit({ view: workspace.getActiveViewOfType(MarkdownView) });
+    } catch (_error) {
+      match = null;
+    }
+  }
+  if (!match && workspace.activeLeaf) visit(workspace.activeLeaf);
   return match;
 }
 
-function navGuardEditorPath(app, editor, path) {
+function navGuardEditorPath(app, editor, path, preferredView = null) {
   const expected = normalizeVaultRelativePath(path);
   if (!expected) {
     return { ok: false, reason: "path", path: "" };
   }
-  const view = navFindMarkdownViewForEditor(app, editor);
+  const view = navFindMarkdownViewForEditor(app, editor, preferredView);
   if (!view) {
     return { ok: false, reason: "view", path: expected };
   }

@@ -166,6 +166,8 @@ class BobNavigationHotkeysLaneReviewMixin {
       pomodoroSnapshot,
       dailyCleanupPlan,
       foldedDailyPath,
+      settleNav: true,
+      settleToday: options.dateText || this.laneReleaseDateText({}),
     });
     if (!commit.ok) {
       new Notice("A linked note changed; no tasks were updated");
@@ -849,14 +851,22 @@ class BobNavigationHotkeysLaneReviewMixin {
     }
     if (plan.content !== content) {
       const nextLines = plan.content.split(/\r?\n/);
-      const applied = applyEditorContentTransaction(cm, content, plan.content, {
-        line: cursor.line,
-        ch: Math.min(
-          Math.max(cursor.ch, 0),
-          String(nextLines[cursor.line] || "").length,
-        ),
+      const settled = this.applyNavSettledEditorWrite(cm, filePath, {
+        expected: content,
+        contents: plan.content,
+        cursor: {
+          line: cursor.line,
+          ch: Math.min(
+            Math.max(cursor.ch, 0),
+            String(nextLines[cursor.line] || "").length,
+          ),
+        },
+        identity: options.advance === true
+          ? null
+          : navTaskSettleIdentityAtLine(plan.content, cursor.line),
+        today: options.dateText,
       });
-      if (!applied) {
+      if (!settled || settled.applied !== true) {
         new Notice("Could not update task; no tasks were updated");
         return false;
       }

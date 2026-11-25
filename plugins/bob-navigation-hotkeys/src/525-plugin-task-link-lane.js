@@ -157,7 +157,10 @@ class BobNavigationHotkeysTaskLinkLaneMixin {
       }
       let commit = null;
       try {
-        commit = await this.commitLinkPickerNoteWrites(planned, {});
+        commit = await this.commitLinkPickerNoteWrites(planned, {
+          settleNav: true,
+          settleToday: request.dateText || this.getFreshnessDateText(),
+        });
       } catch (error) {
         return fail("error", "Could not update task; no tasks were updated");
       }

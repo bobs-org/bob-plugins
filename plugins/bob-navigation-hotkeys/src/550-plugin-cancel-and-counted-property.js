@@ -1,11 +1,7 @@
 class BobNavigationHotkeysCancelPropertyMixin {
 
-  // Link-session cancels plan every target note with the pure planner and
-  // commit through the shared `commitLinkPickerNoteWrites` core: every
-  // preimage is re-verified before the first write, targets write first, the
-  // daily-note prune folds into the daily note's own write when it is a
-  // target note, target writes roll back when one fails, and a failed prune
-  // is reported but never rolled back.
+  // Link-session cancels use the shared preimage-checked commit core;
+  // targets roll back on failure, while deferred prune failures are reported.
   async applyTaskCancelFromLinkPicker(picker, cancel) {
     const linkSession = picker.linkSession;
     const resolved = Array.isArray(linkSession.resolved)
@@ -87,6 +83,8 @@ class BobNavigationHotkeysCancelPropertyMixin {
       pomodoroSnapshot,
       dailyCleanupPlan,
       foldedDailyPath,
+      settleNav: true,
+      settleToday: cancel.dateText,
     });
     if (!commit.ok) {
       new Notice("A linked note changed; no tasks were updated");

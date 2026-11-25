@@ -622,36 +622,59 @@ class BobNavigationHotkeysTransclusionLinkMixin {
   // Write one planned link-picker note change: through the open editor when
   // one exists, otherwise through vault.process with a preimage guard, as
   // writeTaskMoveChange does. Throws when the preimage changed.
-  async writeLinkPickerNoteChange(path, file, before, after, cleanupPlan = null, beforeCleanup = null) {
+  async writeLinkPickerNoteChange(path, file, before, after, cleanupPlan = null, beforeCleanup = null, settleNav = false, settleToday = null) {
     const editor = this.getOpenMarkdownEditorForPath(path);
     if (editor && typeof editor.getValue === "function") {
       if (String(editor.getValue() || "") !== before) {
         throw new Error(`Task Link preimage changed: ${path}`);
       }
-      const applied = applyEditorContentTransaction(
-        editor, before, after,
-        cleanupPlan ? pomodoroCleanupCursor(editor, cleanupPlan, beforeCleanup) : null,
-      );
-      if (!applied || String(editor.getValue() || "") !== after) {
+      let writtenAfter = after;
+      if (settleNav && typeof this.applyNavSettledEditorWrite === "function") {
+        const outcome = this.applyNavSettledEditorWrite(editor, path, {
+          expected: before,
+          contents: after,
+          cursor: cleanupPlan
+            ? pomodoroCleanupCursor(editor, cleanupPlan, beforeCleanup)
+            : getEditorCursor(editor),
+          today: settleToday,
+        });
+        if (!outcome || outcome.applied !== true) {
+          throw new Error(`Task Link editor transaction failed: ${path}`);
+        }
+        writtenAfter = outcome.contents;
+      } else {
+        const applied = applyEditorContentTransaction(
+          editor, before, after,
+          cleanupPlan ? pomodoroCleanupCursor(editor, cleanupPlan, beforeCleanup) : null,
+        );
+        if (!applied) {
+          throw new Error(`Task Link editor transaction failed: ${path}`);
+        }
+      }
+      if (String(editor.getValue() || "") !== writtenAfter) {
         throw new Error(`Task Link editor transaction failed: ${path}`);
       }
-      return;
+      return writtenAfter;
     }
     const vault = this.app && this.app.vault;
     if (!vault || typeof vault.process !== "function" || !file) {
       throw new Error("Vault content updates are unavailable");
     }
+    const writtenAfter = settleNav && typeof this.prepareNavSettledFilePostimage === "function"
+      ? this.prepareNavSettledFilePostimage(path, after, { today: settleToday }).contents
+      : after;
     let transformed = false;
     await vault.process(file, (content) => {
       if (String(content || "") !== before) {
         throw new Error(`Task Link preimage changed: ${path}`);
       }
       transformed = true;
-      return after;
+      return writtenAfter;
     });
     if (!transformed) {
       throw new Error(`Task Link file transaction failed: ${path}`);
     }
+    return writtenAfter;
   }
 
   // Apply one picked property value to every task behind the picker's Task

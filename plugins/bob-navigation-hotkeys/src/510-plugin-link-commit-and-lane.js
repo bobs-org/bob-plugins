@@ -1,13 +1,7 @@
 class BobNavigationHotkeysLinkCommitLaneMixin {
 
-  // Shared preimage, write, rollback and prune core for link-picker commits.
-  // Every preimage is re-verified before the first write; any mismatch refuses
-  // the whole operation with `{ ok: false }`. Write order is targets, then
-  // the daily note; target writes roll back when one fails. A prune failure
-  // after durable target writes is reported via `pomodoroPruneFailed` and
-  // dropped — like writeDeferredPomodoroCleanup — never rolled back. Callers
-  // own the notices. `planned` entries carry `{ group, plan }` where `plan`
-  // has the postimage in `plan.content`.
+  // Preimage-checked commit core; targets write first and roll back on
+  // failure. Deferred cleanup is reported separately. Entries carry plan.content.
   async commitLinkPickerNoteWrites(
     planned,
     options = {},
@@ -65,19 +59,21 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
           after = dailyCleanupPlan.content;
         }
         if (after !== group.content) {
-          await this.writeLinkPickerNoteChange(
+          const writtenAfter = await this.writeLinkPickerNoteChange(
             group.path,
             group.file,
             group.content,
             after,
             group.path === foldedDailyPath ? dailyCleanupPlan : null,
             plan.content,
+            options.settleNav === true,
+            options.settleToday,
           );
           written.push({
             path: group.path,
             file: group.file,
             before: group.content,
-            after,
+            after: typeof writtenAfter === "string" ? writtenAfter : after,
           });
         }
       }
@@ -908,11 +904,19 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
     }
     const lines = splitMarkdownContent(finalContent).lines;
     const finalLine = String(lines[finalCursorLine] || "");
-    const applied = applyEditorContentTransaction(cm, content, finalContent, {
-      line: finalCursorLine,
-      ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
+    const settled = this.applyNavSettledEditorWrite(cm, filePath, {
+      expected: content,
+      contents: finalContent,
+      cursor: {
+        line: finalCursorLine,
+        ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
+      },
+      identity: reviewOrigin
+        ? null
+        : navTaskSettleIdentityAtLine(finalContent, finalCursorLine),
+      today: options.dateText || this.laneReleaseDateText({}),
     });
-    if (!applied) {
+    if (!settled || settled.applied !== true) {
       new Notice("Could not update task; no tasks were updated");
       return false;
     }

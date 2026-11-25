@@ -140,16 +140,18 @@ class BobNavigationHotkeysDecayCancelMixin {
       const lines = split.lines.slice();
       lines[cardCtx.line] = nextLine;
       applyScheduleLogEntryToLines(lines, logPlan);
-      const applied = applyEditorContentTransaction(
-        cardCtx.cm,
-        live.content,
-        lines.join(split.lineEnding),
-        {
+      const content = lines.join(split.lineEnding);
+      const settled = this.applyNavSettledEditorWrite(cardCtx.cm, cardCtx.filePath, {
+        expected: live.content,
+        contents: content,
+        cursor: {
           line: cardCtx.line,
           ch: freshnessDecayRewordCursorCh(nextLine),
         },
-      );
-      if (!applied) {
+        identity: navTaskSettleIdentityAtLine(content, cardCtx.line),
+        today: cardCtx.dateText,
+      });
+      if (!settled || settled.applied !== true) {
         new Notice("Could not update task; no tasks were updated");
         return false;
       }
@@ -271,13 +273,16 @@ class BobNavigationHotkeysDecayCancelMixin {
             String(nextLines[cursorLine] || "").length,
           ),
         );
-        const applied = applyEditorContentTransaction(
-          cardCtx.cm,
-          live.content,
-          plan.content,
-          { line: cursorLine, ch: cursorCh },
-        );
-        if (!applied) {
+        const settled = this.applyNavSettledEditorWrite(cardCtx.cm, cardCtx.filePath, {
+          expected: live.content,
+          contents: plan.content,
+          cursor: { line: cursorLine, ch: cursorCh },
+          identity: cardCtx.advance === true
+            ? null
+            : navTaskSettleIdentityAtLine(plan.content, cardCtx.line),
+          today: cardCtx.dateText,
+        });
+        if (!settled || settled.applied !== true) {
           new Notice("Could not update task; no tasks were updated");
           return false;
         }
@@ -485,6 +490,8 @@ class BobNavigationHotkeysDecayCancelMixin {
         pomodoroSnapshot,
         dailyCleanupPlan,
         foldedDailyPath,
+        settleNav: true,
+        settleToday: options.dateText || this.laneReleaseDateText({}),
       });
       if (!commit.ok) {
         new Notice("A linked note changed; no tasks were updated");
@@ -661,16 +668,21 @@ class BobNavigationHotkeysDecayCancelMixin {
     }
     const lines = splitMarkdownContent(finalContent).lines;
     const finalLine = String(lines[finalCursorLine] || "");
-    const applied = applyEditorContentTransaction(
-      editor,
-      writeContext.content,
-      finalContent,
-      {
-        line: finalCursorLine,
-        ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
-      },
-    );
-    if (!applied) {
+    const settled = finalContent === writeContext.content
+      ? { applied: true }
+      : this.applyNavSettledEditorWrite(editor, filePath, {
+          expected: writeContext.content,
+          contents: finalContent,
+          cursor: {
+            line: finalCursorLine,
+            ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
+          },
+          identity: picker.reviewOrigin || picker.reviewSettleDeferred === true
+            ? null
+            : navTaskSettleIdentityAtLine(finalContent, finalCursorLine),
+          today: options.dateText || this.laneReleaseDateText({}),
+        });
+    if (!settled || settled.applied !== true) {
       new Notice("Could not update task; no tasks were updated");
       return false;
     }
@@ -931,14 +943,22 @@ class BobNavigationHotkeysDecayCancelMixin {
     const finalLine =
       splitMarkdownContent(finalContent).lines[finalCursorLine] || "";
     try {
-      if (
-        finalContent !== writeContext.content &&
-        !applyEditorContentTransaction(editor, writeContext.content, finalContent, {
-          line: finalCursorLine,
-          ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
-        })
-      ) {
-        throw new Error("Editor cannot apply a cancel transaction");
+      if (finalContent !== writeContext.content) {
+        const settled = this.applyNavSettledEditorWrite(editor, filePath, {
+          expected: writeContext.content,
+          contents: finalContent,
+          cursor: {
+            line: finalCursorLine,
+            ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
+          },
+          identity: picker.reviewSettleDeferred === true
+            ? null
+            : navTaskSettleIdentityAtLine(finalContent, finalCursorLine),
+          today: cancel.dateText,
+        });
+        if (!settled || settled.applied !== true) {
+          throw new Error("Editor cannot apply a cancel transaction");
+        }
       }
     } catch (error) {
       new Notice("Could not update task; no tasks were updated");

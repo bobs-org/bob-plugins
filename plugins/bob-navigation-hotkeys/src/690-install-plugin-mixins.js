@@ -19,6 +19,7 @@ function installBobNavigationHotkeysMixins(pluginClass, mixins) {
 
 installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysTaskSettleMixin,
+  BobNavigationHotkeysTaskSettleIntegrationMixin,
   BobNavigationHotkeysReqLineGuardMixin,
   BobNavigationHotkeysTransclusionLinkMixin,
   BobNavigationHotkeysQuickRollMixin,

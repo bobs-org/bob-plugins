@@ -1131,7 +1131,15 @@ test("SA22 LINKED FROM renders the starts-after display inverse", () => {
 test("MN click opens the source at its occurrence line and column, with Mod-click using a new pane", async () => {
   const opened = [];
   const cursor = [];
-  const sourceView = { file: { path: "sources.md" }, editor: { setCursor: (...args) => cursor.push(["cursor", ...args]), focus: () => cursor.push(["focus"]) } };
+  let resolveFocused;
+  const focused = new Promise((resolve) => { resolveFocused = resolve; });
+  const sourceView = {
+    file: { path: "sources.md" },
+    editor: {
+      setCursor: (...args) => cursor.push(["cursor", ...args]),
+      focus: () => { cursor.push(["focus"]); resolveFocused(); },
+    },
+  };
   const app = makeApp([]);
   app.workspace.openLinkText = (...args) => { opened.push(args); return Promise.resolve(); };
   app.workspace.getLeavesOfType = () => [{ view: sourceView }];
@@ -1139,7 +1147,15 @@ test("MN click opens the source at its occurrence line and column, with Mod-clic
   const plugin = new LedgerToolsPlugin(app, {});
   const chip = { kind: "mention", path: "sources.md", linktext: "sources#^s", occurrences: [{ line: 4, ch: 22 }] };
   assert.equal(plugin.relationOpenMention(chip, "target.md", { metaKey: true }), true);
-  await new Promise((resolve) => setTimeout(resolve, 5));
+  let timeout;
+  try {
+    await Promise.race([
+      focused,
+      new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error("mention source did not focus")), 1000); }),
+    ]);
+  } finally {
+    clearTimeout(timeout);
+  }
   assert.deepEqual(opened, [["sources#^s", "target.md", true]]);
   assert.deepEqual(cursor, [["cursor", 3, 22], ["focus"]]);
 });

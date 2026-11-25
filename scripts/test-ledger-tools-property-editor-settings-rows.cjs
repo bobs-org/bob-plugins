@@ -361,12 +361,12 @@ test("setting activation and unsupported direct actions never issue generic writ
   let writes = 0;
   modal.editorEnsureSession = () => ({ applyOps: async () => { writes += 1; return { ok: true }; } });
   await modal.propertyEditorActivate(entry);
-  assert.match(modal.announce, /not available yet/);
+  assert.equal(modal.stage && modal.stage.settingId, "color");
+  assert.equal(writes, 0);
   assert.equal(await modal.propertyEditorStartRename(), false);
   assert.equal(await modal.propertyEditorStartConvert(), false);
   assert.equal(await modal.propertyEditorMoveFocused("up"), false);
   assert.equal(writes, 0);
-  assert.equal(modal.stage, null);
 });
 
 test("clear maps a declared setting to one setting.clear and a ghost to a no-op", async () => {

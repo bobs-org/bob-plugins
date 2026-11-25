@@ -13203,6 +13203,35 @@ button.bob-property-card-foot-lint-chip {
   font-size: var(--font-ui-small);
   overflow-wrap: anywhere;
 }
+.bob-property-editor-stage-counter {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  font-variant-numeric: tabular-nums;
+}
+.bob-property-editor-stage-counter.is-long { color: var(--text-warning, var(--text-accent)); }
+.bob-property-editor-stage-note.is-effect { color: var(--text-muted); }
+.bob-property-editor-stage-stepper {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45em;
+  align-items: center;
+}
+.bob-property-editor-stage-input.is-summary,
+.bob-property-editor-stage-input.is-stepper { min-height: 0; resize: none; }
+.bob-property-editor-stage-input.is-stepper { width: 5.5em; text-align: center; }
+.bob-property-editor-stage-step,
+.bob-property-editor-stage-off {
+  min-width: 2.4em;
+  padding: 0.4em 0.65em;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font: inherit;
+}
+.bob-property-editor-stage-off[aria-pressed="true"] {
+  border-color: var(--interactive-accent);
+}
 .bob-property-editor-stage-actions { justify-content: flex-end; gap: 0.5em; }
 .bob-property-editor-stage.is-clipboard { max-height: min(70vh, 42em); overflow: auto; }
 .bob-property-editor-clipboard-list { display: grid; gap: 0.5em; }

@@ -146,6 +146,18 @@ registered handler receives `(path, { key, mode })` from the drawer's
 `onOpenEditor` action. It remains unset until the property editor registers;
 this API contract does not make `+` available by itself.
 
+Property Editor setting stages share that modal and the guarded props
+session. `propertyEditorResolveSettingStage(entry)` is the replacement
+seam: it returns `{ ok, stage?, toggle?, message? }` from the handler
+registered for `entry.row.settingId`. Simple stages live in
+`298x`/`298y` (summary, ready cap, review, capture names, stats-root
+toggle, and temporary generic parent/color/type/clock). Hue, default
+type, clock-policy, and Lives-under phases replace only their own
+handler through `propertyEditorRegisterSettingStageHandler(id, handler)`
+and keep this dispatch, the `setting.set`/`setting.clear` ops, and
+confirmed-contract adoption. A dry-run `contract` is preview copy only
+and never becomes the modal report, overlay, or card cache.
+
 The shared foot kit exposes `propertyCardFormatCreatedStamp(input = {})`,
 returning `{ text, tooltip, state, dateOnly }`, and
 `propertyCardInventory(input = {})`, returning

@@ -180848,6 +180848,802 @@ PropertyEditorModal.prototype.propertyEditorPerform = async function propertyEdi
   return propertyEditorSettingsBasePerform.call(this, action, event);
 };
 
+// ---- src/298x-plugin-property-editor-setting-ops.js ----
+// Setting set/clear ops, clock translation, preview copy, and confirmed
+// contract adoption. Later hue/type/clock/parent phases replace handlers
+// through propertyEditorRegisterSettingStageHandler only.
+const PROPERTY_EDITOR_SETTING_STAGE_HANDLERS = Object.create(null);
+const PROPERTY_EDITOR_SUMMARY_LIMIT = 140;
+const PROPERTY_EDITOR_READY_CAP_MIN = 1;
+const PROPERTY_EDITOR_READY_CAP_MAX = 999;
+const PROPERTY_EDITOR_REVIEW_MIN = 1;
+const PROPERTY_EDITOR_REVIEW_MAX = 365;
+const PROPERTY_EDITOR_STATS_ROOT_HELP = "Past and future time regroup here, and leaf-project successor offers change.";
+const PROPERTY_EDITOR_REVIEW_HELP = "Applies to tasks living in this note only.";
+
+function propertyEditorSettingClone(value) {
+  if (typeof propertyCloneJson === "function") return propertyCloneJson(value);
+  try { return JSON.parse(JSON.stringify(value)); } catch (_) { return value; }
+}
+
+function propertyEditorSettingIdOf(entryOrStage) {
+  return entryOrStage && (entryOrStage.settingId || entryOrStage.row && entryOrStage.row.settingId) || "";
+}
+
+function propertyEditorSettingSetOp(setting, value) {
+  return { op: "setting.set", setting, value };
+}
+
+function propertyEditorSettingClearOp(setting) {
+  return { op: "setting.clear", setting };
+}
+
+function propertyEditorSettingSeedValue(entry) {
+  const row = entry && entry.row;
+  if (!row) return null;
+  if (row.settingDeclared === true) return propertyEditorSettingClone(row.settingValue);
+  return propertyEditorSettingClone(row.effectiveValue);
+}
+
+function propertyEditorSettingSummaryValue(raw) {
+  const text = raw == null ? "" : String(raw);
+  if (/[\r\n]/.test(text)) return { ok: false, message: "Summary must be one line." };
+  return { ok: true, value: text, warnLong: text.length > PROPERTY_EDITOR_SUMMARY_LIMIT };
+}
+
+function propertyEditorSettingReadyCapValue(raw) {
+  if (raw === false || raw === null || raw === undefined) return { ok: true, value: "off", off: true };
+  if (typeof raw === "boolean") return raw ? { ok: false, message: "Ready cap is 1–999 or off." } : { ok: true, value: "off", off: true };
+  const text = String(raw).trim().toLowerCase();
+  if (text === "off" || text === "") return { ok: true, value: "off", off: true };
+  const count = typeof raw === "number" ? raw : Number(text);
+  if (Number.isInteger(count) && count >= PROPERTY_EDITOR_READY_CAP_MIN && count <= PROPERTY_EDITOR_READY_CAP_MAX) {
+    return { ok: true, value: count, off: false };
+  }
+  return { ok: false, message: "Ready cap is 1–999 or off." };
+}
+
+function propertyEditorSettingReviewValue(raw) {
+  const count = typeof raw === "number" ? raw : Number(String(raw == null ? "" : raw).trim());
+  if (Number.isInteger(count) && count >= PROPERTY_EDITOR_REVIEW_MIN && count <= PROPERTY_EDITOR_REVIEW_MAX) {
+    return { ok: true, value: count };
+  }
+  return { ok: false, message: "Review is 1–365 days." };
+}
+
+function propertyEditorSettingClockObject(raw) {
+  if (raw && typeof raw === "object" && !Array.isArray(raw) && typeof raw.mode === "string") {
+    const mode = raw.mode;
+    if (mode === "inherit" || mode === "on" || mode === "off") return { ok: true, value: { mode } };
+    if (mode === "types") {
+      const types = Array.isArray(raw.types) ? raw.types.map((item) => String(item || "").trim()).filter(Boolean) : [];
+      if (!types.length) return { ok: false, message: "Clock types need at least one type name." };
+      return { ok: true, value: { mode: "types", types } };
+    }
+    return { ok: false, message: "Clock mode must be inherit, on, off, or types." };
+  }
+  if (typeof raw === "string" || typeof raw === "number") {
+    const text = String(raw).trim();
+    const lower = text.toLowerCase();
+    if (!text || lower === "inherit") return { ok: true, value: { mode: "inherit" } };
+    if (lower === "on") return { ok: true, value: { mode: "on" } };
+    if (lower === "off") return { ok: true, value: { mode: "off" } };
+    const types = text.split(/[,\s]+/).map((item) => item.trim()).filter(Boolean);
+    if (!types.length) return { ok: false, message: "Clock values use inherit, on, off, or a type list." };
+    return { ok: true, value: { mode: "types", types } };
+  }
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    if (Array.isArray(raw.offclock_types) && raw.offclock_types.length) {
+      return { ok: true, value: { mode: "types", types: raw.offclock_types.map((item) => String(item)) } };
+    }
+    if (raw.offclock === true) return { ok: true, value: { mode: "off" } };
+    if (raw.offclock === false) return { ok: true, value: { mode: "on" } };
+  }
+  if (raw == null) return { ok: true, value: { mode: "inherit" } };
+  return { ok: false, message: "Clock values use inherit, on, off, or a type list — never a scalar setting.set." };
+}
+
+function propertyEditorSettingClockSeedText(raw) {
+  const parsed = propertyEditorSettingClockObject(raw);
+  if (!parsed.ok) return "";
+  if (parsed.value.mode === "types") return parsed.value.types.join(", ");
+  return parsed.value.mode;
+}
+
+function propertyEditorSettingAliasItems(raw) {
+  if (Array.isArray(raw)) return raw.map((item) => item == null ? "" : String(item));
+  if (raw == null || raw === "") return [];
+  return [String(raw)];
+}
+
+function propertyEditorSettingReadyCapEffectLine(entry, capValue, plugin, path) {
+  let count = null;
+  try {
+    const note = plugin && typeof plugin.apiNoteReadyForNote === "function"
+      ? plugin.apiNoteReadyForNote(path)
+      : null;
+    if (note && Number.isInteger(note.count)) count = note.count;
+  } catch (_) { count = null; }
+  if (!Number.isInteger(count)) return "";
+  if (capValue === "off" || capValue == null) return `${count} ready · cap off`;
+  const cap = Number(capValue);
+  if (!Number.isInteger(cap)) return `${count} ready`;
+  if (count > cap) return `${count} ready · cap ${cap} → over by ${count - cap}`;
+  return `${count} ready · cap ${cap} → room for ${Math.max(0, cap - count)}`;
+}
+
+function propertyEditorSettingMatchesWarning(warning, settingId) {
+  if (!warning || typeof warning !== "object") return false;
+  if (warning.setting === settingId) return true;
+  const keys = typeof PROPERTY_EDITOR_SETTING_KEYS === "object" ? PROPERTY_EDITOR_SETTING_KEYS[settingId] : null;
+  return Boolean(warning.key && Array.isArray(keys) && keys.includes(warning.key));
+}
+
+function propertyEditorSettingPreviewText(preview, settingId) {
+  if (!preview || typeof preview !== "object") return "";
+  const parts = [];
+  const settings = preview.contract && Array.isArray(preview.contract.settings) ? preview.contract.settings : [];
+  const setting = settings.find((item) => item && item.id === settingId);
+  if (setting && setting.effective && typeof setting.effective.label === "string" && setting.effective.label) {
+    parts.push(setting.effective.label);
+  }
+  for (const effect of Array.isArray(preview.effects) ? preview.effects : []) {
+    if (!effect || typeof effect.message !== "string" || !effect.message) continue;
+    if (!settingId || effect.setting === settingId || !effect.setting) parts.push(effect.message);
+  }
+  for (const warning of Array.isArray(preview.warnings) ? preview.warnings : []) {
+    if (!warning || typeof warning.message !== "string" || !warning.message) continue;
+    if (!settingId || propertyEditorSettingMatchesWarning(warning, settingId)) parts.push(warning.message);
+  }
+  return parts.filter(Boolean).join(" · ");
+}
+
+function propertyEditorSettingStageChanged(settingId, current, next) {
+  try { return JSON.stringify(current) !== JSON.stringify(next); } catch (_) { return current !== next; }
+}
+
+function propertyEditorSettingStageBuild(entry, stage, draft) {
+  const settingId = stage && stage.settingId || propertyEditorSettingIdOf(entry);
+  if (!settingId) return { ok: false, message: "This setting cannot be edited here." };
+  const current = propertyEditorSettingSeedValue(entry);
+  let parsed;
+  if (settingId === "summary") parsed = propertyEditorSettingSummaryValue(draft && draft.value);
+  else if (settingId === "ready_cap") {
+    parsed = stage && stage.off === true
+      ? propertyEditorSettingReadyCapValue("off")
+      : propertyEditorSettingReadyCapValue(draft && Object.prototype.hasOwnProperty.call(draft, "value") ? draft.value : current);
+  } else if (settingId === "task_refresh") parsed = propertyEditorSettingReviewValue(draft && draft.value);
+  else if (settingId === "project_name_aliases") {
+    const items = Array.isArray(draft && draft.items) ? draft.items.slice() : propertyEditorSettingAliasItems(current);
+    const extra = String((draft && draft.itemDraft) || "").trim();
+    if (extra) items.push(extra);
+    parsed = { ok: true, value: items };
+  } else if (settingId === "clock") {
+    parsed = propertyEditorSettingClockObject(draft && Object.prototype.hasOwnProperty.call(draft, "value") ? draft.value : current);
+  } else if (settingId === "root") {
+    parsed = { ok: true, value: true };
+  } else {
+    parsed = { ok: true, value: draft && Object.prototype.hasOwnProperty.call(draft, "value") ? String(draft.value) : (current == null ? "" : String(current)) };
+  }
+  if (!parsed || parsed.ok !== true) return parsed || { ok: false, message: "Enter a valid value." };
+  const changed = propertyEditorSettingStageChanged(settingId, current, parsed.value);
+  return {
+    ok: true,
+    value: parsed.value,
+    warnLong: parsed.warnLong === true,
+    changed,
+    ops: changed ? [propertyEditorSettingSetOp(settingId, parsed.value)] : [],
+  };
+}
+
+function propertyEditorSettingRootOps(entry) {
+  const row = entry && entry.row;
+  if (!row) return { ok: false, message: "Stats root is unavailable." };
+  if (row.settingDisabled === true) {
+    return { ok: false, message: row.disabledReason || "Stats root is disabled on a top-level project." };
+  }
+  if (row.settingDeclared === true && row.settingValue === true) {
+    return { ok: true, ops: [propertyEditorSettingClearOp("root")], clearing: true };
+  }
+  return { ok: true, ops: [propertyEditorSettingSetOp("root", true)], clearing: false };
+}
+
+function propertyEditorNeedsContractRefresh(report) {
+  return Boolean(report && ["area", "project", "bank"].includes(report.note_kind)
+    && Array.isArray(report.capabilities) && report.capabilities.includes("props_v1"));
+}
+
+function propertyEditorMergeConfirmedReport(current, incoming) {
+  if (!incoming || incoming.dry_run === true) return current || incoming;
+  const next = { ...(current || {}), ...incoming };
+  delete next.dry_run;
+  if (typeof incoming.fingerprint_after === "string" && incoming.fingerprint_after) {
+    next.fingerprint = incoming.fingerprint_after;
+  }
+  delete next.fingerprint_after;
+  if (Object.prototype.hasOwnProperty.call(incoming, "contract")) {
+    next.contract = incoming.contract;
+    next._contractPending = false;
+  } else if (propertyEditorNeedsContractRefresh(next)) {
+    delete next.contract;
+    next._contractPending = true;
+  }
+  return next;
+}
+
+function propertyEditorAdoptConfirmedContract(modal, result) {
+  if (!modal || modal.closed || !result || result.ok !== true || !result.report) return;
+  if (result.report.dry_run === true) return;
+  if (!modal.report) return;
+  const next = propertyEditorMergeConfirmedReport(modal.report, result.report);
+  modal.contractPending = next._contractPending === true;
+  delete next._contractPending;
+  if (typeof modal.propertyEditorReconcile === "function") modal.propertyEditorReconcile(next);
+  if (modal.contractPending && typeof modal.propertyEditorRefreshContract === "function") {
+    void modal.propertyEditorRefreshContract();
+  }
+}
+
+function propertyEditorRegisterSettingStageHandler(settingId, handler) {
+  if (typeof settingId !== "string" || !settingId || !handler || typeof handler !== "object") return false;
+  PROPERTY_EDITOR_SETTING_STAGE_HANDLERS[settingId] = handler;
+  return true;
+}
+
+function propertyEditorSettingStageHandler(settingId) {
+  return settingId && PROPERTY_EDITOR_SETTING_STAGE_HANDLERS[settingId] || null;
+}
+
+function propertyEditorSettingGenericSeed(entry) {
+  const seeded = propertyEditorSettingSeedValue(entry);
+  return { value: seeded == null ? "" : String(seeded), items: [] };
+}
+
+propertyEditorRegisterSettingStageHandler("summary", { kind: "summary", wireKind: "text" });
+propertyEditorRegisterSettingStageHandler("ready_cap", { kind: "ready-cap", wireKind: "number" });
+propertyEditorRegisterSettingStageHandler("task_refresh", { kind: "review", wireKind: "number" });
+propertyEditorRegisterSettingStageHandler("project_name_aliases", { kind: "list", wireKind: "list" });
+propertyEditorRegisterSettingStageHandler("root", { kind: "toggle", wireKind: "checkbox" });
+propertyEditorRegisterSettingStageHandler("parent", { kind: "generic-text", wireKind: "text", prose: true });
+propertyEditorRegisterSettingStageHandler("color", { kind: "generic-text", wireKind: "text" });
+propertyEditorRegisterSettingStageHandler("task_type", { kind: "generic-text", wireKind: "text" });
+propertyEditorRegisterSettingStageHandler("clock", { kind: "generic-clock", wireKind: "text" });
+// ---- src/298y-plugin-property-editor-setting-stages.js ----
+// Simple setting stages and one-gesture clear/toggle through the shared
+// property session. propertyEditorResolveSettingStage is the replacement
+// seam: hue, type, clock-policy, and parent phases register their own
+// handlers and leave this dispatch intact.
+function propertyEditorSettingStageIdentity(modal, entry) {
+  return {
+    id: (modal.stageSeq || 0) + 1,
+    rowId: entry.id,
+    key: entry.row.key,
+    settingId: entry.row.settingId,
+    settingKeys: Array.isArray(entry.row.settingKeys) ? entry.row.settingKeys.slice() : [],
+    line: entry.row.line,
+    revision: 0,
+    previewText: "",
+    suggestionIndex: -1,
+    itemDraft: "",
+  };
+}
+
+function propertyEditorSettingOpenDraft(modal, entry, handler) {
+  if (typeof modal.propertyEditorCancelStage === "function") modal.propertyEditorCancelStage({ quiet: true });
+  const seeded = propertyEditorSettingSeedValue(entry);
+  const base = propertyEditorSettingStageIdentity(modal, entry);
+  modal.stageSeq = base.id;
+  const stage = {
+    ...base,
+    kind: handler.wireKind || "text",
+    wireKind: handler.wireKind || "text",
+    settingStage: handler.kind,
+    prose: handler.prose === true,
+    value: "",
+    items: [],
+    off: false,
+    suggestionCatalog: [],
+  };
+  if (handler.kind === "list") {
+    stage.items = propertyEditorSettingAliasItems(seeded);
+    stage.value = "";
+    stage.suggestionCatalog = typeof propertyEditorSuggestValues === "function"
+      ? propertyEditorSuggestValues(modal.app, "project_name_aliases", modal.filePath)
+      : [];
+  } else if (handler.kind === "ready-cap") {
+    const parsed = propertyEditorSettingReadyCapValue(seeded);
+    stage.off = parsed.ok === true ? parsed.off === true : false;
+    stage.value = parsed.ok === true && parsed.off !== true ? String(parsed.value) : "";
+  } else if (handler.kind === "review") {
+    const parsed = propertyEditorSettingReviewValue(seeded);
+    stage.value = parsed.ok === true ? String(parsed.value) : "";
+  } else if (handler.kind === "generic-clock") {
+    stage.value = propertyEditorSettingClockSeedText(seeded);
+  } else {
+    stage.value = seeded == null ? "" : String(seeded);
+    if (handler.kind === "generic-text" && typeof propertyEditorSuggestValues === "function") {
+      const key = entry.row.settingKeys && entry.row.settingKeys[0] || entry.row.settingId;
+      stage.suggestionCatalog = propertyEditorSuggestValues(modal.app, key, modal.filePath);
+    }
+  }
+  modal.stage = stage;
+  modal.pendingStageEnter = null;
+  modal.stageComposing = false;
+  modal.stageNeedsPreview = false;
+  modal.refusal = null;
+  modal.announce = "";
+  modal.status = { kind: "ready", text: "" };
+  return { ok: true, stage };
+}
+
+function propertyEditorPaintSettingNotes(doc, panel, options) {
+  if (!doc || !panel || !options) return;
+  if (options.counter) {
+    const counter = propertyEditorCreateEl(doc, "div", "bob-property-editor-stage-counter");
+    propertyEditorSetText(counter, options.counter);
+    if (options.warnLong) counter.classList?.add?.("is-long");
+    panel.appendChild(counter);
+  }
+  if (options.effectLine) {
+    const effect = propertyEditorCreateEl(doc, "div", "bob-property-editor-stage-note is-effect");
+    propertyEditorSetText(effect, options.effectLine);
+    panel.appendChild(effect);
+  }
+  if (options.helpNote) {
+    const help = propertyEditorCreateEl(doc, "div", "bob-property-editor-stage-note");
+    propertyEditorSetText(help, options.helpNote);
+    panel.appendChild(help);
+  }
+  if (options.previewExtras) {
+    const extras = propertyEditorCreateEl(doc, "div", "bob-property-editor-stage-note is-diagnostic");
+    propertyEditorSetText(extras, options.previewExtras);
+    panel.appendChild(extras);
+  }
+}
+
+function propertyEditorPaintSummaryStage(doc, host, options, modal) {
+  const panel = propertyEditorCreateEl(doc, "section", "bob-property-editor-stage is-setting is-summary");
+  panel.setAttribute("data-property-stage", options.stageId);
+  panel.setAttribute("data-setting-id", options.settingId || "summary");
+  panel.setAttribute("aria-label", "Edit Summary");
+  const title = propertyEditorCreateEl(doc, "div", "bob-property-editor-stage-title");
+  propertyEditorSetText(title, "summary · Summary");
+  panel.appendChild(title);
+  const label = propertyEditorCreateEl(doc, "label", "bob-property-editor-stage-label");
+  const inputId = `bob-property-editor-stage-input-${options.stageId}`;
+  label.setAttribute("for", inputId);
+  propertyEditorSetText(label, "Summary");
+  panel.appendChild(label);
+  let input = options.keptInput || null;
+  if (!input) {
+    // bob-text: literal one-line area/project summary
+    input = propertyEditorCreateEl(doc, "input", "bob-property-editor-stage-input is-summary");
+    input.setAttribute("type", "text");
+    input.value = options.value;
+  } else if (!options.composing && String(input.value == null ? "" : input.value) !== options.value) {
+    input.value = options.value;
+  }
+  input.setAttribute("id", inputId);
+  input.setAttribute("data-property-stage-input", `property-stage-${options.stageId}`);
+  input.setAttribute("data-property-stage-id", String(options.stageId));
+  input.setAttribute("data-property-stage-kind", "text");
+  input.setAttribute("aria-label", "Summary");
+  if (options.disabled) input.disabled = true;
+  panel.appendChild(input);
+  propertyEditorPaintSettingNotes(doc, panel, options);
+  const preview = propertyEditorCreateEl(doc, "div", "bob-property-editor-stage-preview");
+  preview.setAttribute("role", "status");
+  propertyEditorSetText(preview, options.previewText || "");
+  panel.appendChild(preview);
+  propertyEditorPaintSettingActions(doc, panel, options);
+  host.appendChild(panel);
+  return { panel, input, band: null };
+}
+
+function propertyEditorPaintSettingActions(doc, panel, options) {
+  const actions = propertyEditorCreateEl(doc, "div", "bob-property-editor-stage-actions");
+  actions.setAttribute("role", "group");
+  const save = propertyEditorCreateEl(doc, "button", "bob-property-editor-stage-save");
+  save.setAttribute("type", "button");
+  save.setAttribute("data-property-stage-action", "save");
+  save.disabled = options.disabled === true;
+  propertyEditorSetText(save, "Save");
+  actions.appendChild(save);
+  const cancel = propertyEditorCreateEl(doc, "button", "bob-property-editor-stage-cancel");
+  cancel.setAttribute("type", "button");
+  cancel.setAttribute("data-property-stage-action", "cancel");
+  propertyEditorSetText(cancel, "Cancel");
+  actions.appendChild(cancel);
+  panel.appendChild(actions);
+}
+
+function propertyEditorPaintStepperStage(doc, host, options, modal) {
+  const setting = options.settingStage === "review" ? "review" : "ready-cap";
+  const panel = propertyEditorCreateEl(doc, "section", `bob-property-editor-stage is-setting is-${setting}`);
+  panel.setAttribute("data-property-stage", options.stageId);
+  panel.setAttribute("data-setting-id", options.settingId || "");
+  panel.setAttribute("aria-label", `Edit ${options.key}`);
+  const title = propertyEditorCreateEl(doc, "div", "bob-property-editor-stage-title");
+  propertyEditorSetText(title, `${options.settingId} · ${options.key}`);
+  panel.appendChild(title);
+  const controls = propertyEditorCreateEl(doc, "div", "bob-property-editor-stage-stepper");
+  const minus = propertyEditorCreateEl(doc, "button", "bob-property-editor-stage-step");
+  minus.setAttribute("type", "button");
+  minus.setAttribute("data-property-stage-action", "step-down");
+  minus.setAttribute("aria-label", "Decrease");
+  propertyEditorSetText(minus, "−");
+  controls.appendChild(minus);
+  let input = options.keptInput || null;
+  if (!input) {
+    // bob-text: none numeric setting stepper
+    input = propertyEditorCreateEl(doc, "input", "bob-property-editor-stage-input is-stepper");
+    input.setAttribute("type", "text");
+    input.setAttribute("inputmode", "numeric");
+    input.value = options.off ? "off" : options.value;
+  } else if (!options.composing) {
+    const next = options.off ? "off" : options.value;
+    if (String(input.value == null ? "" : input.value) !== next) input.value = next;
+  }
+  input.setAttribute("id", `bob-property-editor-stage-input-${options.stageId}`);
+  input.setAttribute("data-property-stage-input", `property-stage-${options.stageId}`);
+  input.setAttribute("data-property-stage-id", String(options.stageId));
+  input.setAttribute("data-property-stage-kind", "number");
+  input.setAttribute("aria-label", options.key);
+  if (options.disabled) input.disabled = true;
+  controls.appendChild(input);
+  const plus = propertyEditorCreateEl(doc, "button", "bob-property-editor-stage-step");
+  plus.setAttribute("type", "button");
+  plus.setAttribute("data-property-stage-action", "step-up");
+  plus.setAttribute("aria-label", "Increase");
+  propertyEditorSetText(plus, "+");
+  controls.appendChild(plus);
+  if (setting === "ready-cap") {
+    const off = propertyEditorCreateEl(doc, "button", "bob-property-editor-stage-off");
+    off.setAttribute("type", "button");
+    off.setAttribute("data-property-stage-action", "toggle-off");
+    off.setAttribute("aria-pressed", options.off ? "true" : "false");
+    propertyEditorSetText(off, "off");
+    controls.appendChild(off);
+  }
+  panel.appendChild(controls);
+  propertyEditorPaintSettingNotes(doc, panel, options);
+  const preview = propertyEditorCreateEl(doc, "div", "bob-property-editor-stage-preview");
+  preview.setAttribute("role", "status");
+  propertyEditorSetText(preview, options.previewText || "");
+  panel.appendChild(preview);
+  propertyEditorPaintSettingActions(doc, panel, options);
+  host.appendChild(panel);
+  return { panel, input, band: null };
+}
+
+function propertyEditorInstallSettingSession(session, modal) {
+  if (!session || session._settingSessionWrapped) return session;
+  const originalApplyOps = typeof session.applyOps === "function" ? session.applyOps.bind(session) : null;
+  const originalApply = typeof session.apply === "function" ? session.apply.bind(session) : null;
+  const originalUndo = typeof session.undo === "function" ? session.undo.bind(session) : null;
+  const originalRedo = typeof session.redo === "function" ? session.redo.bind(session) : null;
+  async function adopt(result) {
+    propertyEditorAdoptConfirmedContract(modal, result);
+    return result;
+  }
+  if (originalApplyOps) {
+    session.applyOps = async function applyOpsWithSettingPreview(ops) {
+      const settingOps = Array.isArray(ops) && ops.some((op) => op && (op.op === "setting.set" || op.op === "setting.clear"));
+      if (settingOps && typeof session.setDraft === "function" && typeof session.previewNow === "function" && originalApply) {
+        session.setDraft(ops);
+        const preview = await session.previewNow();
+        if (!preview || preview.ok !== true) return preview || { ok: false, message: "The property preview was refused." };
+        const settingId = ops.find((op) => op && (op.op === "setting.set" || op.op === "setting.clear"))?.setting;
+        const text = propertyEditorSettingPreviewText(preview.report, settingId);
+        if (text) {
+          modal.announce = text;
+          if (modal.stage) modal.stage.previewText = [modal.stage.previewText, text].filter(Boolean).join(" · ");
+        }
+        return adopt(await originalApply());
+      }
+      return adopt(await originalApplyOps(ops));
+    };
+  }
+  if (originalApply) session.apply = async function applyWithConfirmedContract() { return adopt(await originalApply()); };
+  if (originalUndo) session.undo = async function undoWithConfirmedContract() { return adopt(await originalUndo()); };
+  if (originalRedo) session.redo = async function redoWithConfirmedContract() { return adopt(await originalRedo()); };
+  session._settingSessionWrapped = true;
+  return session;
+}
+
+const propertyEditorEnsureSessionBeforeSettings = PropertyEditorModal.prototype.editorEnsureSession;
+PropertyEditorModal.prototype.editorEnsureSession = function editorEnsureSessionWithSettingContract() {
+  const session = propertyEditorEnsureSessionBeforeSettings.call(this);
+  return propertyEditorInstallSettingSession(session, this);
+};
+
+const propertyEditorPaintStageBeforeSettings = propertyEditorPaintStage;
+propertyEditorPaintStage = function propertyEditorPaintStageWithSettings(doc, host, options, modal) {
+  if (options && options.settingStage === "summary") return propertyEditorPaintSummaryStage(doc, host, options, modal);
+  if (options && (options.settingStage === "ready-cap" || options.settingStage === "review")) {
+    return propertyEditorPaintStepperStage(doc, host, options, modal);
+  }
+  const painted = propertyEditorPaintStageBeforeSettings(doc, host, options, modal);
+  if (painted && painted.panel && options && options.settingId) {
+    try { painted.panel.setAttribute("data-setting-id", options.settingId); } catch (_) {}
+    painted.panel.classList?.add?.("is-setting");
+    propertyEditorPaintSettingNotes(doc, painted.panel, options);
+  }
+  return painted;
+};
+
+const propertyEditorActivateBeforeSettingActions = PropertyEditorModal.prototype.propertyEditorActivate;
+const propertyEditorStageViewBeforeSettingActions = PropertyEditorModal.prototype.propertyEditorStageView;
+const propertyEditorBuildBeforeSettingActions = PropertyEditorModal.prototype.propertyEditorBuildCurrentStage;
+const propertyEditorPreviewTextBeforeSettingActions = PropertyEditorModal.prototype.propertyEditorStagePreviewText;
+const propertyEditorSyncPreviewBeforeSettingActions = PropertyEditorModal.prototype.propertyEditorStageSyncPreview;
+const propertyEditorInputBeforeSettingActions = PropertyEditorModal.prototype.propertyEditorStageInputChanged;
+const propertyEditorKeyBeforeSettingActions = PropertyEditorModal.prototype.propertyEditorOnKeyDown;
+const propertyEditorClickBeforeSettingActions = PropertyEditorModal.prototype.propertyEditorOnClick;
+const propertyEditorResolveBeforeSettingActions = PropertyEditorModal.prototype.propertyEditorResolveSettingStage;
+const propertyEditorReconcileBeforeSettingActions = PropertyEditorModal.prototype.propertyEditorReconcile;
+
+Object.assign(PropertyEditorModal.prototype, {
+  propertyEditorReconcile(report) {
+    if (!report || report.dry_run === true) return;
+    const next = { ...report };
+    delete next.dry_run;
+    return propertyEditorReconcileBeforeSettingActions.call(this, next);
+  },
+
+  propertyEditorResolveSettingStage(entry) {
+    if (!entry || this.closed || this.pendingApply) {
+      return { ok: false, message: "Setting controls are not available." };
+    }
+    const settingId = entry.row && entry.row.settingId;
+    const handler = propertyEditorSettingStageHandler(settingId);
+    if (!handler) {
+      return propertyEditorResolveBeforeSettingActions.call(this, entry);
+    }
+    if (entry.row.settingDisabled === true) {
+      return { ok: false, message: entry.row.disabledReason || `${entry.row.key} is disabled for this note.` };
+    }
+    if (handler.kind === "toggle") return { ok: true, toggle: true, settingId };
+    return propertyEditorSettingOpenDraft(this, entry, handler);
+  },
+
+  async propertyEditorActivate(entry) {
+    const type = entry && (entry.entryType || entry.row && entry.row.propertyEntryType);
+    if (type === "setting" && entry.row && entry.row.settingId === "root") {
+      return this.propertyEditorToggleStatsRoot(entry);
+    }
+    return propertyEditorActivateBeforeSettingActions.call(this, entry);
+  },
+
+  async propertyEditorToggleStatsRoot(entry) {
+    if (this.closed || this.pendingApply) return this.propertyEditorRefuseWhileSaving?.();
+    const planned = propertyEditorSettingRootOps(entry);
+    if (!planned.ok) {
+      this.announce = planned.message;
+      this.status = { kind: "refusal", text: planned.message };
+      this.refusal = { code: "locked", message: planned.message };
+      this.paintPropertyEditor();
+      return planned;
+    }
+    this.announce = PROPERTY_EDITOR_STATS_ROOT_HELP;
+    const session = this.editorEnsureSession();
+    if (!session || typeof session.applyOps !== "function") {
+      return propertyEditorSettingsNotice(this, "unavailable", "Property editing is unavailable.");
+    }
+    this.pendingApply = true;
+    this.status = propertyEditorStatusChecking();
+    this.paintPropertyEditor();
+    let result;
+    try { result = await session.applyOps(planned.ops); }
+    catch (error) { result = { ok: false, message: error?.message || "The property update failed." }; }
+    finally { this.pendingApply = false; }
+    if (this.closed) return result;
+    if (result && result.ok === true) {
+      this.refusal = null;
+      this.status = propertyEditorStatusSaved();
+    } else {
+      const refusal = propertyEditorStatusRefusal(result && result.report && result.report.error ? result.report.error : result || {});
+      this.refusal = refusal;
+      this.status = { kind: "refusal", text: refusal.message };
+    }
+    this.paintPropertyEditor();
+    return result;
+  },
+
+  async propertyEditorClearCurrentSetting() {
+    const stage = this.stage;
+    const settingId = stage && stage.settingId;
+    if (!settingId) return false;
+    const entry = this.propertyEditorStageFindRow(stage);
+    if (!entry || entry.row.settingDeclared !== true) {
+      this.announce = "Already using the inherited value.";
+      this.status = { kind: "ready", text: this.announce };
+      this.paintPropertyEditor();
+      return false;
+    }
+    if (settingId === "parent") {
+      this.refusal = { code: "locked", message: "Lives under is required; Bob will not clear this setting." };
+      this.status = { kind: "refusal", text: this.refusal.message };
+      this.paintPropertyEditor();
+      return false;
+    }
+    this.propertyEditorCancelStage({ quiet: true });
+    this.selectedId = entry.id;
+    return propertyEditorSettingsDelete(this);
+  },
+
+  propertyEditorStageView() {
+    const view = propertyEditorStageViewBeforeSettingActions.call(this);
+    const stage = this.stage;
+    if (!view || !stage || !stage.settingId) return view;
+    view.settingId = stage.settingId;
+    view.settingStage = stage.settingStage;
+    view.key = stage.key;
+    view.helpNote = stage.settingStage === "review" ? PROPERTY_EDITOR_REVIEW_HELP : "";
+    view.off = stage.off === true;
+    if (stage.settingStage === "summary") {
+      const length = String(stage.value || "").length;
+      view.counter = `${length}/${PROPERTY_EDITOR_SUMMARY_LIMIT}`;
+      view.warnLong = length > PROPERTY_EDITOR_SUMMARY_LIMIT;
+      view.prose = false;
+      view.collection = false;
+      view.kind = "text";
+    }
+    if (stage.settingStage === "ready-cap") {
+      view.effectLine = propertyEditorSettingReadyCapEffectLine(
+        this.propertyEditorStageFindRow(stage),
+        stage.off ? "off" : stage.value,
+        this.propertyPlugin,
+        this.filePath,
+      );
+      view.prose = false;
+    }
+    if (stage.settingId === "parent") view.prose = true;
+    if (["color", "task_type", "clock"].includes(stage.settingId)) view.prose = false;
+    const state = this.session && typeof this.session.getState === "function" ? this.session.getState() : this.sessionState;
+    if (state && state.preview && state.preview.dry_run !== false && state.status === "preview-ready") {
+      view.previewExtras = propertyEditorSettingPreviewText(state.preview, stage.settingId);
+    }
+    return view;
+  },
+
+  propertyEditorBuildCurrentStage() {
+    if (this.stage && this.stage.settingId) {
+      const entry = this.propertyEditorStageFindRow();
+      if (!entry) return { ok: false, message: "The setting is no longer available." };
+      return propertyEditorSettingStageBuild(entry, this.stage, this.propertyEditorCurrentStageDraft());
+    }
+    return propertyEditorBuildBeforeSettingActions.call(this);
+  },
+
+  propertyEditorStagePreviewText(built) {
+    const base = propertyEditorPreviewTextBeforeSettingActions.call(this, built);
+    if (!this.stage || !this.stage.settingId) return base;
+    const extras = [];
+    if (built && built.warnLong === true) extras.push(`Over ${PROPERTY_EDITOR_SUMMARY_LIMIT} characters — Bob will warn without blocking.`);
+    if (this.stage.settingStage === "review") extras.push(PROPERTY_EDITOR_REVIEW_HELP);
+    return [base, ...extras].filter(Boolean).join(" · ");
+  },
+
+  propertyEditorStageSyncPreview() {
+    return propertyEditorSyncPreviewBeforeSettingActions.call(this);
+  },
+
+  propertyEditorStageInputChanged(input) {
+    if (this.stage && this.stage.settingStage === "ready-cap") {
+      const text = String(input && input.value || "").trim().toLowerCase();
+      this.stage.off = text === "off";
+    }
+    return propertyEditorInputBeforeSettingActions.call(this, input);
+  },
+
+  propertyEditorStepSetting(delta) {
+    if (!this.stage) return false;
+    if (this.stage.settingStage === "ready-cap") {
+      if (this.stage.off) {
+        this.stage.off = false;
+        this.stage.value = String(PROPERTY_EDITOR_READY_CAP_MIN);
+      } else {
+        const current = Number(this.stage.value) || PROPERTY_EDITOR_READY_CAP_MIN;
+        const next = Math.min(PROPERTY_EDITOR_READY_CAP_MAX, Math.max(PROPERTY_EDITOR_READY_CAP_MIN, current + delta));
+        this.stage.value = String(next);
+      }
+    } else if (this.stage.settingStage === "review") {
+      const current = Number(this.stage.value) || PROPERTY_EDITOR_REVIEW_MIN;
+      this.stage.value = String(Math.min(PROPERTY_EDITOR_REVIEW_MAX, Math.max(PROPERTY_EDITOR_REVIEW_MIN, current + delta)));
+    } else return false;
+    this.stage.revision += 1;
+    this.pendingStageEnter = null;
+    this.propertyEditorStageInputChanged({
+      value: this.stage.off ? "off" : this.stage.value,
+      getAttribute: (name) => name === "data-property-stage-kind" ? this.stage.kind : String(this.stage.id),
+    });
+    return true;
+  },
+
+  propertyEditorToggleReadyCapOff() {
+    if (!this.stage || this.stage.settingStage !== "ready-cap") return false;
+    this.stage.off = this.stage.off !== true;
+    if (this.stage.off) this.stage.value = "off";
+    else if (!this.stage.value || this.stage.value === "off") this.stage.value = String(PROPERTY_EDITOR_READY_CAP_MIN);
+    this.stage.revision += 1;
+    this.pendingStageEnter = null;
+    this.propertyEditorStageInputChanged({
+      value: this.stage.off ? "off" : this.stage.value,
+      getAttribute: (name) => name === "data-property-stage-kind" ? this.stage.kind : String(this.stage.id),
+    });
+    return true;
+  },
+
+  propertyEditorOnClick(event) {
+    const action = event?.target?.closest?.("[data-property-stage-action]")?.getAttribute?.("data-property-stage-action");
+    if (this.stage && action === "step-up") {
+      event?.preventDefault?.();
+      return this.propertyEditorStepSetting(1);
+    }
+    if (this.stage && action === "step-down") {
+      event?.preventDefault?.();
+      return this.propertyEditorStepSetting(-1);
+    }
+    if (this.stage && action === "toggle-off") {
+      event?.preventDefault?.();
+      return this.propertyEditorToggleReadyCapOff();
+    }
+    return propertyEditorClickBeforeSettingActions.call(this, event);
+  },
+
+  propertyEditorOnKeyDown(event) {
+    if (this.stage && this.stage.settingId) {
+      const inInput = Boolean(event?.target?.closest?.("[data-property-stage-input]"));
+      const ctrl = event.ctrlKey === true;
+      const meta = event.metaKey === true;
+      const alt = event.altKey === true;
+      if ((ctrl || meta) && !alt && (event.key === "d" || event.key === "D")) {
+        event.preventDefault?.();
+        event.stopPropagation?.();
+        void this.propertyEditorClearCurrentSetting();
+        return;
+      }
+      if (!ctrl && !meta && !alt && this.stage.settingStage === "ready-cap" && !inInput && (event.key === "o" || event.key === "O")) {
+        event.preventDefault?.();
+        this.propertyEditorToggleReadyCapOff();
+        return;
+      }
+      if (!ctrl && !meta && !alt && !inInput && (this.stage.settingStage === "ready-cap" || this.stage.settingStage === "review")) {
+        if (event.key === "ArrowUp" || event.key === "+") {
+          event.preventDefault?.();
+          this.propertyEditorStepSetting(1);
+          return;
+        }
+        if (event.key === "ArrowDown" || event.key === "-") {
+          event.preventDefault?.();
+          this.propertyEditorStepSetting(-1);
+          return;
+        }
+      }
+    }
+    return propertyEditorKeyBeforeSettingActions.call(this, event);
+  },
+
+  async propertyEditorRefreshContract() {
+    if (this.closed || this._contractRefreshPending) return;
+    if (!this.propertyPlugin || typeof this.propertyPlugin.apiPropertyShow !== "function") return;
+    this._contractRefreshPending = true;
+    this.status = { kind: "checking", text: "Refreshing settings…" };
+    this.paintPropertyEditor();
+    let result = null;
+    try { result = await this.propertyPlugin.apiPropertyShow(this.filePath); }
+    catch (_) { result = null; }
+    this._contractRefreshPending = false;
+    if (this.closed) return;
+    if (result && result.ok === true && result.report) {
+      this.contractPending = false;
+      this.propertyEditorReconcile(result.report);
+      if (!this.stage) this.status = propertyEditorStatusSaved();
+    }
+    this.paintPropertyEditor();
+  },
+});
 // ---- src/293-keep-inbox-render.js ----
 // Keep inbox render (keep-indicator-view): DOM for the `bob-keep-inbox`
 // status-bar item. Pure DOM helpers plus one paint entry point; no spawn,
@@ -187875,6 +188671,31 @@ try {
       propertyEditorConvertCountKeyUses,
       propertyEditorConvertVaultConfirmText,
       propertyEditorPaintConvertStage,
+      PROPERTY_EDITOR_SETTING_STAGE_HANDLERS,
+      PROPERTY_EDITOR_SUMMARY_LIMIT,
+      PROPERTY_EDITOR_READY_CAP_MIN,
+      PROPERTY_EDITOR_READY_CAP_MAX,
+      PROPERTY_EDITOR_REVIEW_MIN,
+      PROPERTY_EDITOR_REVIEW_MAX,
+      PROPERTY_EDITOR_STATS_ROOT_HELP,
+      PROPERTY_EDITOR_REVIEW_HELP,
+      propertyEditorSettingSetOp,
+      propertyEditorSettingClearOp,
+      propertyEditorSettingSeedValue,
+      propertyEditorSettingSummaryValue,
+      propertyEditorSettingReadyCapValue,
+      propertyEditorSettingReviewValue,
+      propertyEditorSettingClockObject,
+      propertyEditorSettingClockSeedText,
+      propertyEditorSettingAliasItems,
+      propertyEditorSettingReadyCapEffectLine,
+      propertyEditorSettingPreviewText,
+      propertyEditorSettingStageBuild,
+      propertyEditorSettingRootOps,
+      propertyEditorMergeConfirmedReport,
+      propertyEditorAdoptConfirmedContract,
+      propertyEditorRegisterSettingStageHandler,
+      propertyEditorSettingStageHandler,
     });
   }
 } catch (_) {}

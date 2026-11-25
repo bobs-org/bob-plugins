@@ -512,7 +512,12 @@ async function run(args) {
     await propertyRowClick(client, "keep_exact");
     await sendKey(client, "j");
     await assertBrowseSelection(client, report, "locked_toggle", "keyboard navigation focuses selected row");
-    await propertyRowClick(client, "project_digest");
+    if (!await selectorClick(client, '.bob-property-editor [data-property-group-toggle="managed"]')) {
+      throw new Error("Could not expand Bob-managed properties");
+    }
+    await waitForEditor(client, (value) => value.rows.some((row) => row.key === "project_digest"), "expanded Bob-managed properties");
+    await propertyRowClick(client, "type");
+    await sendKey(client, "j");
     await assertBrowseSelection(client, report, "project_digest", "keyboard navigation reaches derived row");
     probe = await waitForEditor(client, (value) => value.rows.some((row) => row.key === "project_digest"), "derived project property");
     const derived = probe.rows.find((row) => row.key === "project_digest");

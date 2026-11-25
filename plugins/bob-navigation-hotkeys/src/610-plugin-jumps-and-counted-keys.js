@@ -31,6 +31,7 @@ class BobNavigationHotkeysJumpKeyMixin {
         writeContext.filePath,
         lineText,
         scheduledField.value,
+        options,
       );
     }
     const shouldRecover = propertyName === "scheduled";
@@ -102,19 +103,38 @@ class BobNavigationHotkeysJumpKeyMixin {
       }
     }
 
-    if (
-      nextLine !== lineText &&
-      !replaceEditorLine(cm, cursor.line, lineText, nextLine)
-    ) {
-      new Notice("Could not delete bullet property");
-      return null;
+    if (nextLine !== lineText) {
+      const source = splitMarkdownContent(writeContext.content);
+      const postLines = source.lines.slice();
+      postLines[cursor.line] = nextLine;
+      const finalContent = postLines.join(source.lineEnding);
+      if (
+        !applyNavGesturePostimage(
+          this,
+          cm,
+          writeContext.filePath,
+          writeContext.content,
+          finalContent,
+          {
+            line: cursor.line,
+            ch: Math.min(Math.max(cursor.ch, 0), nextLine.length),
+          },
+          options,
+        )
+      ) {
+        new Notice("Could not delete bullet property");
+        return null;
+      }
     }
 
-    setEditorCursorSafely(
-      cm,
-      cursor.line,
-      Math.min(Math.max(cursor.ch, 0), nextLine.length),
-    );
+    if (options.settleNav !== true) {
+      setEditorCursorSafely(
+        cm,
+        cursor.line,
+        Math.min(Math.max(cursor.ch, 0), nextLine.length),
+      );
+    }
+    const settledLine = navSettledLineText(cm, nextLine, options);
     new Notice(
       `${name} ✗ removed${scheduledRecoveryNoticeSuffix({
         ready: recoveryOutcome === "ready" ? 1 : 0,
@@ -124,7 +144,7 @@ class BobNavigationHotkeysJumpKeyMixin {
         deferred: recoveryOutcome === "deferred" ? 1 : 0,
       })}`,
     );
-    return { deleted: true, line: nextLine };
+    return { deleted: true, line: settledLine };
   }
 
   insertBlankLine(cm, direction) {

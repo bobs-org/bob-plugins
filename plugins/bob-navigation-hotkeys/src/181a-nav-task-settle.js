@@ -396,8 +396,8 @@ function navEditorMatchesView(editor, view) {
 }
 
 function navFindMarkdownViewForEditor(app, editor, preferredView = null) {
-  if (!app || !editor) return null;
   if (navEditorMatchesView(editor, preferredView)) return preferredView;
+  if (!app || !editor) return null;
   const workspace = app.workspace;
   if (!workspace) return null;
   let match = null;

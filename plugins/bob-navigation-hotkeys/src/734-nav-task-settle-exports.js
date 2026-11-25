@@ -23,5 +23,7 @@ Object.assign(module.exports.helpers, {
   mapReviewQueueEntryThroughSettle,
   mapReviewResumeRefThroughSettle,
   navTaskSettleIdentityAtLine,
+  navResolveWrittenTaskLineText,
+  navSettledLineText,
   applyNavGesturePostimage,
 });

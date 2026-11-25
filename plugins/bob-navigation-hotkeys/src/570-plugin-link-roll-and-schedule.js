@@ -215,9 +215,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
     }
 
     const commit = await this.commitLinkPickerNoteWrites(planned, {
-      pomodoroSnapshot,
-      dailyCleanupPlan,
-      foldedDailyPath,
+      pomodoroSnapshot, dailyCleanupPlan, foldedDailyPath, settleNav: true, settleToday: dateText,
     });
     if (!commit.ok) {
       new Notice("A linked note changed; no tasks were updated");
@@ -333,6 +331,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
     filePath,
     session,
     name,
+    options = {},
   ) {
     const writeContext = this.getCountedTaskWriteContext(
       cm,
@@ -405,18 +404,11 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
       return null;
     }
     const finalLine = splitMarkdownContent(plan.content).lines[plan.cursorLine] || "";
+    const finalCursor = { line: plan.cursorLine, ch: Math.min(Math.max(cursor.ch, 0), finalLine.length) };
     try {
       if (
         plan.changed &&
-        !applyEditorContentTransaction(
-          cm,
-          writeContext.content,
-          finalPlannedContent,
-          {
-            line: plan.cursorLine,
-            ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
-          },
-        )
+        !applyNavGesturePostimage(this, cm, filePath, writeContext.content, plan.content, finalCursor, { ...options, today: new Date() })
       ) {
         throw new Error("Editor cannot apply a counted property transaction");
       }
@@ -446,7 +438,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
         deferred: plan.deferredRecoveryTaskCount,
       })}`,
     );
-    return { deleted: true, line: finalLine };
+    return { deleted: true, line: navSettledLineText(cm, finalLine, options) };
   }
 
   async applyCountedLocalTaskDependency(
@@ -568,14 +560,12 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
       );
       plan = withCountedPomodoroCursorMapped(plan, plan.content, countedPomodoroPrep.commitContent);
     }
-    const finalLine = splitMarkdownContent(plan.content).lines[plan.cursorLine] || "";
+    const liveLine = getEditorLine(cm, cursor.line) ?? "";
+    const liveCursor = { line: cursor.line, ch: Math.min(Math.max(cursor.ch, 0), liveLine.length) };
     try {
       if (
         plan.changed &&
-        !applyEditorContentTransaction(cm, writeContext.content, plan.content, {
-          line: plan.cursorLine,
-          ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
-        }, BLOCKS_MACHINE_WRITE_ANNOTATION)
+        !applyNavGesturePostimage(this, cm, normalizedPath, writeContext.content, plan.content, liveCursor, { settleNav: true, annotation: BLOCKS_MACHINE_WRITE_ANNOTATION })
       ) {
         throw new Error("counted-dependency-transaction");
       }

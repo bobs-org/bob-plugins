@@ -119,13 +119,7 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
   // failure after durable target writes is reported and dropped — like
   // writeDeferredPomodoroCleanup — never rolled back. On success the priority
   // notice card reports the cross-note outcome with a via-Task-Links count.
-  async commitLinkPickerPlans(
-    picker,
-    linkSession,
-    planned,
-    baseDate,
-    notice = {},
-  ) {
+  async commitLinkPickerPlans(picker, linkSession, planned, baseDate, notice = {}, settle = {}) {
     const pruneTargets = [];
     for (const { group, plan } of planned) {
       if (plan.futureScheduledTaskLines.length === 0) {
@@ -179,9 +173,8 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
     // Shared preimage, write, rollback and prune core below, so scheduled,
     // priority and cancel commits share one implementation.
     const commit = await this.commitLinkPickerNoteWrites(planned, {
-      pomodoroSnapshot,
-      dailyCleanupPlan,
-      foldedDailyPath,
+      pomodoroSnapshot, dailyCleanupPlan, foldedDailyPath,
+      settleNav: settle.settleNav === true, settleToday: settle.settleToday,
     });
     if (!commit.ok) {
       new Notice("A linked note changed; no tasks were updated");

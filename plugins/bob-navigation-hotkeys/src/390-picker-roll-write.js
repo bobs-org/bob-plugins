@@ -414,6 +414,7 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
         liveScheduledDirect,
         recommendation.date,
         {
+          settleNav: true,
           today: this.valueBaseDate,
           scheduleLog: buildPriorityRollScheduleLog({
             source: "scheduled",
@@ -491,6 +492,7 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
         recommendation.schedulesName,
         recommendation.date,
         {
+          settleNav: true,
           filePath: this.filePath,
           expectedLine: this.lineText,
           today: this.valueBaseDate,
@@ -586,6 +588,7 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
           },
           scheduleReasonOverride: recommendation.reason,
           schedulingWorkLog: writeSchedulingWorkLog,
+          settleNav: true,
           noticeRoll: {
             kind: "decay",
             fromLevel: getPriorityRollCurrentLabel(recommendation),
@@ -653,6 +656,7 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
             offset: recommendation.offset,
           },
           schedulingWorkLog: writeSchedulingWorkLog,
+          settleNav: true,
         },
       );
     };

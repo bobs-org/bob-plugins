@@ -855,18 +855,11 @@ class BobNavigationHotkeysCancelPropertyMixin {
     }
 
     const finalLine = splitMarkdownContent(finalContent).lines[finalCursorLine] || "";
+    const finalCursor = { line: finalCursorLine, ch: Math.min(Math.max(cursor.ch, 0), finalLine.length) };
     try {
       if (
         finalContent !== writeContext.content &&
-        !applyEditorContentTransaction(
-          cm,
-          writeContext.content,
-          finalContent,
-          {
-            line: finalCursorLine,
-            ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
-          },
-        )
+        !applyNavGesturePostimage(this, cm, filePath, writeContext.content, finalContent, finalCursor, { ...options, today })
       ) {
         throw new Error("Editor cannot apply a counted property transaction");
       }

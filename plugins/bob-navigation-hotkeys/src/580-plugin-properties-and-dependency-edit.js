@@ -6,6 +6,7 @@ class BobNavigationHotkeysPropertyDependencyMixin {
     filePath,
     expectedLine,
     expectedValue,
+    options = {},
   ) {
     const writeContext = this.getProjectScheduledWriteContext(
       cm,
@@ -80,14 +81,17 @@ class BobNavigationHotkeysPropertyDependencyMixin {
     try {
       if (
         plan.changed &&
-        !applyEditorContentTransaction(
+        !applyNavGesturePostimage(
+          this,
           cm,
+          filePath,
           writeContext.content,
           finalContent,
           {
             line: plan.cursorLine,
             ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
           },
+          options,
         )
       ) {
         throw new Error("Editor cannot replace note content");
@@ -131,7 +135,7 @@ class BobNavigationHotkeysPropertyDependencyMixin {
         deferred: plan.deferredRecoveryTaskCount,
       })}${deletedScheduleSubtreeSuffix}`,
     );
-    return { deleted: true, line: finalLine };
+    return { deleted: true, line: navSettledLineText(cm, finalLine, options) };
   }
 
 

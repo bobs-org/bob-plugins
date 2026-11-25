@@ -463,6 +463,7 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
         this.filePath,
         this.lineText,
         item.currentValue,
+        { settleNav: true },
       );
       if (!direct || direct.deleted !== true) {
         if (direct && direct.line) {
@@ -486,6 +487,7 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
               this.filePath,
               this.taskSession,
               propertyName,
+              { settleNav: true },
             )
           : item.target.kind === "project-inline"
             ? await this.plugin.deleteProjectNoteScheduledValue(
@@ -494,12 +496,14 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
                 this.filePath,
                 this.lineText,
                 item.currentValue,
+                { settleNav: true },
               )
             : this.plugin.deleteBulletPropertyValue(
                 this.editor,
                 this.cursor,
                 propertyName,
                 {
+                  settleNav: true,
                   filePath: this.filePath,
                   expectedLine: this.lineText,
                 },
@@ -582,6 +586,7 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
           this.selectedPropertyItem.property,
           item.priorityLevel,
           {
+            settleNav: true,
             propertyContext: this.propertyContext,
             baseDate: this.valueBaseDate,
             random: this.priorityRandom,
@@ -597,7 +602,7 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
         this.lineText,
         this.selectedPropertyItem.currentValue,
         item.value,
-        { scheduleLog: options.scheduleLog, schedulingWorkLog: schedulingWorkLogDirect },
+        { settleNav: true, scheduleLog: options.scheduleLog, schedulingWorkLog: schedulingWorkLogDirect },
       );
     }
 
@@ -620,6 +625,7 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
         item,
         {
           ...options,
+          settleNav: true,
           schedulingWorkLog,
         },
       );
@@ -653,6 +659,7 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
             this.selectedPropertyItem.property,
             item.priorityLevel,
             {
+              settleNav: true,
               baseDate: this.valueBaseDate,
               random: this.priorityRandom,
               schedulingWorkLog: writeSchedulingWorkLog,
@@ -671,7 +678,7 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
           this.taskSession,
           this.selectedPropertyItem.property.name,
           item.value,
-          { scheduleLog: options.scheduleLog, schedulingWorkLog: writeSchedulingWorkLog },
+          { settleNav: true, scheduleLog: options.scheduleLog, schedulingWorkLog: writeSchedulingWorkLog },
         );
       }
 
@@ -684,6 +691,7 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
           this.selectedPropertyItem.property,
           item.priorityLevel,
           {
+            settleNav: true,
             propertyContext: this.propertyContext,
             baseDate: this.valueBaseDate,
             random: this.priorityRandom,
@@ -701,7 +709,7 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
           this.lineText,
           this.selectedPropertyItem.currentValue,
           item.value,
-          { scheduleLog: options.scheduleLog, schedulingWorkLog: writeSchedulingWorkLog },
+          { settleNav: true, scheduleLog: options.scheduleLog, schedulingWorkLog: writeSchedulingWorkLog },
         );
       }
 
@@ -711,6 +719,7 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
         this.selectedPropertyItem.property.name,
         item.value,
         {
+          settleNav: true,
           filePath: this.filePath,
           expectedLine: this.lineText,
           scheduleLog: options.scheduleLog,

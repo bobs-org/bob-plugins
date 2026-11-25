@@ -25768,8 +25768,8 @@ function navEditorMatchesView(editor, view) {
 }
 
 function navFindMarkdownViewForEditor(app, editor, preferredView = null) {
-  if (!app || !editor) return null;
   if (navEditorMatchesView(editor, preferredView)) return preferredView;
+  if (!app || !editor) return null;
   const workspace = app.workspace;
   if (!workspace) return null;
   let match = null;
@@ -26411,6 +26411,32 @@ class BobNavigationHotkeysTaskSettleMixin {
   }
 }
 // ---- src/181c-nav-task-settle-integration.js ----
+// Resolve a staged task line to its settled text by identity: a surviving
+// block ID wins, otherwise an unambiguous exact-text match. Falls back to
+// the staged text when the identity is gone or ambiguous, so cards that
+// stay open keep a usable line. Regrouping moves lines; it never rewrites
+// identity, so the resolved text is the final contents' own line.
+function navResolveWrittenTaskLineText(settledContents, stagedLineText) {
+  const staged = String(stagedLineText || "");
+  const lines = splitMarkdownContent(String(settledContents || "")).lines;
+  if (!staged) return staged;
+  const blockId = navTaskSettleLineBlockId(staged);
+  if (blockId) {
+    const matches = [];
+    for (let index = 0; index < lines.length; index += 1) {
+      if (navTaskSettleLineBlockId(lines[index]) === blockId) matches.push(index);
+    }
+    if (matches.length === 1) return String(lines[matches[0]]);
+    return staged;
+  }
+  const exact = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    if (lines[index] === staged) exact.push(index);
+  }
+  if (exact.length === 1) return String(lines[exact[0]]);
+  return staged;
+}
+
 function navTaskSettleIdentityAtLine(contents, line) {
   const index = Math.floor(Number(line));
   if (!Number.isInteger(index) || index < 0) return null;
@@ -26434,10 +26460,19 @@ function applyNavGesturePostimage(plugin, editor, path, expected, contents, curs
       cursor,
       identity,
       today: typeof options.settleToday === "string" ? options.settleToday : options.today,
+      annotation: options.annotation,
     });
     return Boolean(outcome && outcome.applied === true);
   }
-  return applyEditorContentTransaction(editor, expected, contents, cursor || null);
+  return applyEditorContentTransaction(editor, expected, contents, cursor || null, options.annotation);
+}
+
+// Card line refresh: resolve a staged task line to the settled bytes by
+// identity, so a card that stays open reads final contents. Falls back to the
+// staged text whenever settling is off or the identity is gone or ambiguous.
+function navSettledLineText(cm, staged, options = {}) {
+  if (!options || options.settleNav !== true || !cm || typeof cm.getValue !== "function") return staged;
+  return navResolveWrittenTaskLineText(String(cm.getValue() || ""), staged);
 }
 
 class BobNavigationHotkeysTaskSettleIntegrationMixin {
@@ -78348,6 +78383,7 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
         liveScheduledDirect,
         recommendation.date,
         {
+          settleNav: true,
           today: this.valueBaseDate,
           scheduleLog: buildPriorityRollScheduleLog({
             source: "scheduled",
@@ -78425,6 +78461,7 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
         recommendation.schedulesName,
         recommendation.date,
         {
+          settleNav: true,
           filePath: this.filePath,
           expectedLine: this.lineText,
           today: this.valueBaseDate,
@@ -78520,6 +78557,7 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
           },
           scheduleReasonOverride: recommendation.reason,
           schedulingWorkLog: writeSchedulingWorkLog,
+          settleNav: true,
           noticeRoll: {
             kind: "decay",
             fromLevel: getPriorityRollCurrentLabel(recommendation),
@@ -78587,6 +78625,7 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
             offset: recommendation.offset,
           },
           schedulingWorkLog: writeSchedulingWorkLog,
+          settleNav: true,
         },
       );
     };
@@ -88273,6 +88312,7 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
         this.filePath,
         this.lineText,
         item.currentValue,
+        { settleNav: true },
       );
       if (!direct || direct.deleted !== true) {
         if (direct && direct.line) {
@@ -88296,6 +88336,7 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
               this.filePath,
               this.taskSession,
               propertyName,
+              { settleNav: true },
             )
           : item.target.kind === "project-inline"
             ? await this.plugin.deleteProjectNoteScheduledValue(
@@ -88304,12 +88345,14 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
                 this.filePath,
                 this.lineText,
                 item.currentValue,
+                { settleNav: true },
               )
             : this.plugin.deleteBulletPropertyValue(
                 this.editor,
                 this.cursor,
                 propertyName,
                 {
+                  settleNav: true,
                   filePath: this.filePath,
                   expectedLine: this.lineText,
                 },
@@ -88392,6 +88435,7 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
           this.selectedPropertyItem.property,
           item.priorityLevel,
           {
+            settleNav: true,
             propertyContext: this.propertyContext,
             baseDate: this.valueBaseDate,
             random: this.priorityRandom,
@@ -88407,7 +88451,7 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
         this.lineText,
         this.selectedPropertyItem.currentValue,
         item.value,
-        { scheduleLog: options.scheduleLog, schedulingWorkLog: schedulingWorkLogDirect },
+        { settleNav: true, scheduleLog: options.scheduleLog, schedulingWorkLog: schedulingWorkLogDirect },
       );
     }
 
@@ -88430,6 +88474,7 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
         item,
         {
           ...options,
+          settleNav: true,
           schedulingWorkLog,
         },
       );
@@ -88463,6 +88508,7 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
             this.selectedPropertyItem.property,
             item.priorityLevel,
             {
+              settleNav: true,
               baseDate: this.valueBaseDate,
               random: this.priorityRandom,
               schedulingWorkLog: writeSchedulingWorkLog,
@@ -88481,7 +88527,7 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
           this.taskSession,
           this.selectedPropertyItem.property.name,
           item.value,
-          { scheduleLog: options.scheduleLog, schedulingWorkLog: writeSchedulingWorkLog },
+          { settleNav: true, scheduleLog: options.scheduleLog, schedulingWorkLog: writeSchedulingWorkLog },
         );
       }
 
@@ -88494,6 +88540,7 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
           this.selectedPropertyItem.property,
           item.priorityLevel,
           {
+            settleNav: true,
             propertyContext: this.propertyContext,
             baseDate: this.valueBaseDate,
             random: this.priorityRandom,
@@ -88511,7 +88558,7 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
           this.lineText,
           this.selectedPropertyItem.currentValue,
           item.value,
-          { scheduleLog: options.scheduleLog, schedulingWorkLog: writeSchedulingWorkLog },
+          { settleNav: true, scheduleLog: options.scheduleLog, schedulingWorkLog: writeSchedulingWorkLog },
         );
       }
 
@@ -88521,6 +88568,7 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
         this.selectedPropertyItem.property.name,
         item.value,
         {
+          settleNav: true,
           filePath: this.filePath,
           expectedLine: this.lineText,
           scheduleLog: options.scheduleLog,
@@ -94775,6 +94823,7 @@ class BobNavigationHotkeysTransclusionLinkMixin {
       planned,
       baseDate,
       { header: `${name} ✗ removed` },
+      { settleNav: true, settleToday: formatBulletPropertyDate(baseDate) },
     );
     return committed === true ? { deleted: true } : null;
   }
@@ -94862,6 +94911,7 @@ class BobNavigationHotkeysTransclusionLinkMixin {
         scheduleLog: options.scheduleLog,
         schedulingWorkLog: options.schedulingWorkLog || options.workLog,
       },
+      { settleNav: true, settleToday: formatBulletPropertyDate(baseDate) },
     );
   }
 
@@ -95000,6 +95050,7 @@ class BobNavigationHotkeysTransclusionLinkMixin {
         rolledDates,
         schedulingWorkLog: options.schedulingWorkLog || options.workLog,
       },
+      { settleNav: true, settleToday: formatBulletPropertyDate(baseDate) },
     );
   }
 }
@@ -95125,13 +95176,7 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
   // failure after durable target writes is reported and dropped — like
   // writeDeferredPomodoroCleanup — never rolled back. On success the priority
   // notice card reports the cross-note outcome with a via-Task-Links count.
-  async commitLinkPickerPlans(
-    picker,
-    linkSession,
-    planned,
-    baseDate,
-    notice = {},
-  ) {
+  async commitLinkPickerPlans(picker, linkSession, planned, baseDate, notice = {}, settle = {}) {
     const pruneTargets = [];
     for (const { group, plan } of planned) {
       if (plan.futureScheduledTaskLines.length === 0) {
@@ -95185,9 +95230,8 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
     // Shared preimage, write, rollback and prune core below, so scheduled,
     // priority and cancel commits share one implementation.
     const commit = await this.commitLinkPickerNoteWrites(planned, {
-      pomodoroSnapshot,
-      dailyCleanupPlan,
-      foldedDailyPath,
+      pomodoroSnapshot, dailyCleanupPlan, foldedDailyPath,
+      settleNav: settle.settleNav === true, settleToday: settle.settleToday,
     });
     if (!commit.ok) {
       new Notice("A linked note changed; no tasks were updated");
@@ -107512,18 +107556,11 @@ class BobNavigationHotkeysCancelPropertyMixin {
     }
 
     const finalLine = splitMarkdownContent(finalContent).lines[finalCursorLine] || "";
+    const finalCursor = { line: finalCursorLine, ch: Math.min(Math.max(cursor.ch, 0), finalLine.length) };
     try {
       if (
         finalContent !== writeContext.content &&
-        !applyEditorContentTransaction(
-          cm,
-          writeContext.content,
-          finalContent,
-          {
-            line: finalCursorLine,
-            ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
-          },
-        )
+        !applyNavGesturePostimage(this, cm, filePath, writeContext.content, finalContent, finalCursor, { ...options, today })
       ) {
         throw new Error("Editor cannot apply a counted property transaction");
       }
@@ -108119,14 +108156,17 @@ class BobNavigationHotkeysCountedRollMixin {
     try {
       if (
         finalContent !== writeContext.content &&
-        !applyEditorContentTransaction(
+        !applyNavGesturePostimage(
+          this,
           cm,
+          filePath,
           writeContext.content,
           finalContent,
           {
             line: finalCursorLine,
             ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
           },
+          { ...options, today: baseDate },
         )
       ) {
         throw new Error("Editor cannot apply a counted priority transaction");
@@ -108428,10 +108468,18 @@ class BobNavigationHotkeysCountedRollMixin {
     try {
       if (
         finalContent !== writeContext.content &&
-        !applyEditorContentTransaction(editor, writeContext.content, finalContent, {
-          line: finalCursorLine,
-          ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
-        })
+        !applyNavGesturePostimage(
+          this,
+          editor,
+          filePath,
+          writeContext.content,
+          finalContent,
+          {
+            line: finalCursorLine,
+            ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
+          },
+          { ...options, today: baseDate },
+        )
       ) {
         throw new Error("Editor cannot apply a counted roll transaction");
       }
@@ -108785,9 +108833,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
     }
 
     const commit = await this.commitLinkPickerNoteWrites(planned, {
-      pomodoroSnapshot,
-      dailyCleanupPlan,
-      foldedDailyPath,
+      pomodoroSnapshot, dailyCleanupPlan, foldedDailyPath, settleNav: true, settleToday: dateText,
     });
     if (!commit.ok) {
       new Notice("A linked note changed; no tasks were updated");
@@ -108903,6 +108949,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
     filePath,
     session,
     name,
+    options = {},
   ) {
     const writeContext = this.getCountedTaskWriteContext(
       cm,
@@ -108975,18 +109022,11 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
       return null;
     }
     const finalLine = splitMarkdownContent(plan.content).lines[plan.cursorLine] || "";
+    const finalCursor = { line: plan.cursorLine, ch: Math.min(Math.max(cursor.ch, 0), finalLine.length) };
     try {
       if (
         plan.changed &&
-        !applyEditorContentTransaction(
-          cm,
-          writeContext.content,
-          finalPlannedContent,
-          {
-            line: plan.cursorLine,
-            ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
-          },
-        )
+        !applyNavGesturePostimage(this, cm, filePath, writeContext.content, plan.content, finalCursor, { ...options, today: new Date() })
       ) {
         throw new Error("Editor cannot apply a counted property transaction");
       }
@@ -109016,7 +109056,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
         deferred: plan.deferredRecoveryTaskCount,
       })}`,
     );
-    return { deleted: true, line: finalLine };
+    return { deleted: true, line: navSettledLineText(cm, finalLine, options) };
   }
 
   async applyCountedLocalTaskDependency(
@@ -109138,14 +109178,12 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
       );
       plan = withCountedPomodoroCursorMapped(plan, plan.content, countedPomodoroPrep.commitContent);
     }
-    const finalLine = splitMarkdownContent(plan.content).lines[plan.cursorLine] || "";
+    const liveLine = getEditorLine(cm, cursor.line) ?? "";
+    const liveCursor = { line: cursor.line, ch: Math.min(Math.max(cursor.ch, 0), liveLine.length) };
     try {
       if (
         plan.changed &&
-        !applyEditorContentTransaction(cm, writeContext.content, plan.content, {
-          line: plan.cursorLine,
-          ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
-        }, BLOCKS_MACHINE_WRITE_ANNOTATION)
+        !applyNavGesturePostimage(this, cm, normalizedPath, writeContext.content, plan.content, liveCursor, { settleNav: true, annotation: BLOCKS_MACHINE_WRITE_ANNOTATION })
       ) {
         throw new Error("counted-dependency-transaction");
       }
@@ -109576,6 +109614,7 @@ class BobNavigationHotkeysPropertyDependencyMixin {
     filePath,
     expectedLine,
     expectedValue,
+    options = {},
   ) {
     const writeContext = this.getProjectScheduledWriteContext(
       cm,
@@ -109650,14 +109689,17 @@ class BobNavigationHotkeysPropertyDependencyMixin {
     try {
       if (
         plan.changed &&
-        !applyEditorContentTransaction(
+        !applyNavGesturePostimage(
+          this,
           cm,
+          filePath,
           writeContext.content,
           finalContent,
           {
             line: plan.cursorLine,
             ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
           },
+          options,
         )
       ) {
         throw new Error("Editor cannot replace note content");
@@ -109701,7 +109743,7 @@ class BobNavigationHotkeysPropertyDependencyMixin {
         deferred: plan.deferredRecoveryTaskCount,
       })}${deletedScheduleSubtreeSuffix}`,
     );
-    return { deleted: true, line: finalLine };
+    return { deleted: true, line: navSettledLineText(cm, finalLine, options) };
   }
 
 
@@ -116610,6 +116652,7 @@ class BobNavigationHotkeysJumpKeyMixin {
         writeContext.filePath,
         lineText,
         scheduledField.value,
+        options,
       );
     }
     const shouldRecover = propertyName === "scheduled";
@@ -116681,19 +116724,38 @@ class BobNavigationHotkeysJumpKeyMixin {
       }
     }
 
-    if (
-      nextLine !== lineText &&
-      !replaceEditorLine(cm, cursor.line, lineText, nextLine)
-    ) {
-      new Notice("Could not delete bullet property");
-      return null;
+    if (nextLine !== lineText) {
+      const source = splitMarkdownContent(writeContext.content);
+      const postLines = source.lines.slice();
+      postLines[cursor.line] = nextLine;
+      const finalContent = postLines.join(source.lineEnding);
+      if (
+        !applyNavGesturePostimage(
+          this,
+          cm,
+          writeContext.filePath,
+          writeContext.content,
+          finalContent,
+          {
+            line: cursor.line,
+            ch: Math.min(Math.max(cursor.ch, 0), nextLine.length),
+          },
+          options,
+        )
+      ) {
+        new Notice("Could not delete bullet property");
+        return null;
+      }
     }
 
-    setEditorCursorSafely(
-      cm,
-      cursor.line,
-      Math.min(Math.max(cursor.ch, 0), nextLine.length),
-    );
+    if (options.settleNav !== true) {
+      setEditorCursorSafely(
+        cm,
+        cursor.line,
+        Math.min(Math.max(cursor.ch, 0), nextLine.length),
+      );
+    }
+    const settledLine = navSettledLineText(cm, nextLine, options);
     new Notice(
       `${name} ✗ removed${scheduledRecoveryNoticeSuffix({
         ready: recoveryOutcome === "ready" ? 1 : 0,
@@ -116703,7 +116765,7 @@ class BobNavigationHotkeysJumpKeyMixin {
         deferred: recoveryOutcome === "deferred" ? 1 : 0,
       })}`,
     );
-    return { deleted: true, line: nextLine };
+    return { deleted: true, line: settledLine };
   }
 
   insertBlankLine(cm, direction) {
@@ -143516,5 +143578,7 @@ Object.assign(module.exports.helpers, {
   mapReviewQueueEntryThroughSettle,
   mapReviewResumeRefThroughSettle,
   navTaskSettleIdentityAtLine,
+  navResolveWrittenTaskLineText,
+  navSettledLineText,
   applyNavGesturePostimage,
 });

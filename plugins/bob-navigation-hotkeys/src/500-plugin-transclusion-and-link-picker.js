@@ -741,6 +741,7 @@ class BobNavigationHotkeysTransclusionLinkMixin {
       planned,
       baseDate,
       { header: `${name} ✗ removed` },
+      { settleNav: true, settleToday: formatBulletPropertyDate(baseDate) },
     );
     return committed === true ? { deleted: true } : null;
   }
@@ -828,6 +829,7 @@ class BobNavigationHotkeysTransclusionLinkMixin {
         scheduleLog: options.scheduleLog,
         schedulingWorkLog: options.schedulingWorkLog || options.workLog,
       },
+      { settleNav: true, settleToday: formatBulletPropertyDate(baseDate) },
     );
   }
 
@@ -966,6 +968,7 @@ class BobNavigationHotkeysTransclusionLinkMixin {
         rolledDates,
         schedulingWorkLog: options.schedulingWorkLog || options.workLog,
       },
+      { settleNav: true, settleToday: formatBulletPropertyDate(baseDate) },
     );
   }
 }

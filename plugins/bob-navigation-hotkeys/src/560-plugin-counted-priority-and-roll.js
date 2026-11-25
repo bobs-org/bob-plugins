@@ -222,14 +222,17 @@ class BobNavigationHotkeysCountedRollMixin {
     try {
       if (
         finalContent !== writeContext.content &&
-        !applyEditorContentTransaction(
+        !applyNavGesturePostimage(
+          this,
           cm,
+          filePath,
           writeContext.content,
           finalContent,
           {
             line: finalCursorLine,
             ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
           },
+          { ...options, today: baseDate },
         )
       ) {
         throw new Error("Editor cannot apply a counted priority transaction");
@@ -531,10 +534,18 @@ class BobNavigationHotkeysCountedRollMixin {
     try {
       if (
         finalContent !== writeContext.content &&
-        !applyEditorContentTransaction(editor, writeContext.content, finalContent, {
-          line: finalCursorLine,
-          ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
-        })
+        !applyNavGesturePostimage(
+          this,
+          editor,
+          filePath,
+          writeContext.content,
+          finalContent,
+          {
+            line: finalCursorLine,
+            ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
+          },
+          { ...options, today: baseDate },
+        )
       ) {
         throw new Error("Editor cannot apply a counted roll transaction");
       }

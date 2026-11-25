@@ -25767,8 +25767,9 @@ function navEditorMatchesView(editor, view) {
   return false;
 }
 
-function navFindMarkdownViewForEditor(app, editor) {
+function navFindMarkdownViewForEditor(app, editor, preferredView = null) {
   if (!app || !editor) return null;
+  if (navEditorMatchesView(editor, preferredView)) return preferredView;
   const workspace = app.workspace;
   if (!workspace) return null;
   let match = null;
@@ -25793,15 +25794,23 @@ function navFindMarkdownViewForEditor(app, editor) {
     const leaves = workspace.getLeavesOfType("markdown") || [];
     for (const leaf of leaves) visit(leaf);
   }
+  if (!match && typeof workspace.getActiveViewOfType === "function") {
+    try {
+      visit({ view: workspace.getActiveViewOfType(MarkdownView) });
+    } catch (_error) {
+      match = null;
+    }
+  }
+  if (!match && workspace.activeLeaf) visit(workspace.activeLeaf);
   return match;
 }
 
-function navGuardEditorPath(app, editor, path) {
+function navGuardEditorPath(app, editor, path, preferredView = null) {
   const expected = normalizeVaultRelativePath(path);
   if (!expected) {
     return { ok: false, reason: "path", path: "" };
   }
-  const view = navFindMarkdownViewForEditor(app, editor);
+  const view = navFindMarkdownViewForEditor(app, editor, preferredView);
   if (!view) {
     return { ok: false, reason: "view", path: expected };
   }
@@ -26011,6 +26020,17 @@ class BobNavigationHotkeysTaskSettleMixin {
     return lookupNavTaskSettleApi(this.app);
   }
 
+  navTaskSettlePreferredView(editor) {
+    try {
+      const view = typeof this.getActiveMarkdownView === "function"
+        ? this.getActiveMarkdownView()
+        : null;
+      return navEditorMatchesView(editor, view) ? view : null;
+    } catch (_error) {
+      return null;
+    }
+  }
+
   navTaskSettleToday(options = {}) {
     if (typeof options.today === "string" && options.today) return options.today;
     if (options.today instanceof Date) {
@@ -26091,7 +26111,9 @@ class BobNavigationHotkeysTaskSettleMixin {
     const live = navTaskSettleReadLive(editor);
     const expected = options.expected != null ? String(options.expected) : live;
     const contents = options.contents != null ? String(options.contents) : live;
-    const guard = navGuardEditorPath(this.app, editor, path);
+    const guard = navGuardEditorPath(
+      this.app, editor, path, this.navTaskSettlePreferredView(editor),
+    );
     if (!guard.ok) {
       return navTaskSettleRefusedOutcome({
         contents: live,
@@ -26148,7 +26170,9 @@ class BobNavigationHotkeysTaskSettleMixin {
     const live = navTaskSettleReadLive(editor);
     const expected = options.expected != null ? String(options.expected) : live;
     const staged = options.contents != null ? String(options.contents) : live;
-    const guard = navGuardEditorPath(this.app, editor, path);
+    const guard = navGuardEditorPath(
+      this.app, editor, path, this.navTaskSettlePreferredView(editor),
+    );
     if (!guard.ok) {
       return navTaskSettleRefusedOutcome({
         contents: live,
@@ -26229,7 +26253,9 @@ class BobNavigationHotkeysTaskSettleMixin {
     const live = navTaskSettleReadLive(editor);
     const expected = options.expected != null ? String(options.expected) : live;
     const contents = options.contents != null ? String(options.contents) : live;
-    const guard = navGuardEditorPath(this.app, editor, path);
+    const guard = navGuardEditorPath(
+      this.app, editor, path, this.navTaskSettlePreferredView(editor),
+    );
     if (!guard.ok) {
       return navTaskSettleRefusedOutcome({
         contents: live,

@@ -360,13 +360,15 @@ project note. The generated `[!projects]` callout and a `## Projects` heading
 containing only it are never copied. If backlink rewriting fails, the restored
 task remains and the project note is kept with a notice.
 
-When promoting a task, an unchecked, ALL-CAPS direct child bullet becomes a
-title-cased `##` section only when it has its own nested list items. The
-converter reuses a matching heading case-insensitively or appends a new one;
-it copies descendants as notes rather than `#task` lines. Other eligible
-child bullets become tasks. Managed Schedule Log and Work Log subtrees move
-under the new `^prj` task in source order. If child content cannot be moved
-losslessly, the source task is kept and a notice explains the partial result.
+When promoting a task, a bold drawer becomes a `##` keeping its title, empty
+included; a legacy ALL-CAPS child still title-cases only with nested items.
+Reversal writes `- **Title**`. The converter reuses a matching heading
+case-insensitively or appends a new one; it copies descendants as notes rather
+than `#task` lines. Other eligible child bullets become tasks. Managed logs
+move under the new `^prj` task in source order. If child content cannot be
+moved losslessly, the source task is kept and a notice explains the partial
+result.
+
 Task Card Depends on and Schedule edits on a `^prj` with sub-projects cascade
 top-down with preimage-checked writes and report
 `· N sub-projects Blocked / Ready again / not updated`.

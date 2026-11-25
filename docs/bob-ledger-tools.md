@@ -300,6 +300,8 @@ Marks are display-only; session toggles restore source rendering:
 - Requirements wear constant-width, owner-colored diamonds: hollow pending,
   filled met, faded moot/excluded, slashed dropped, arrow carried. Clicks teach;
   toggle restores checkboxes.
+- Drawer trays: **Toggle task drawer marks** (default on) is display-only
+  ([contract](https://bobs-org.github.io/task-drawers/)).
 - The task type mark renders each explicit `[type:: NAME]` field (and legacy
   `[theme:: NAME]` field) on a task line as one readable `#TYPE` mark in Live
   Preview, Reading view, and Tasks/Dataview task rows. The pill text is

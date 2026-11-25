@@ -389,6 +389,27 @@ rest of the line. Vim insert mode types and deletes through the same extension;
 normal mode is untouched. Paste, templates, and programmatic edits never
 trigger it.
 
+### Drawer typing and Toggle Drawer
+
+On an empty non-checkbox bullet directly under a real `#task`, typing `*`
+expands to `- ****` with the caret between the delimiter pairs, for `-`, `+`,
+`*`, and numbered markers, whether or not Obsidian's `autoPairMarkdown` would
+pair the star. The typed star is its own input step and the completion is a
+second, history-isolated step, so one Undo returns the literal `- *`. A `*`
+typed at the end of a valid title, immediately before the closing `**`, steps
+over both stars. Enter there opens a nested note bullet at the drawer's child
+indent. Backspace inside empty `****` deletes all four stars and keeps the
+list marker. The assist never fires in fences, quotes, frontmatter, on a
+checkbox, or deeper than a task's direct children. Vim insert mode uses the
+same adapter; Vim normal-mode `*` is unchanged.
+
+**Toggle Drawer** (no default hotkey) wraps or unwraps an eligible direct
+child bullet, preserving title bytes and descendants. A legacy ALL-CAPS drawer
+becomes `- **NOTES**` without recasing; unwrapping a bold header yields its
+plain title. Checkbox lines, managed lines, reserved names, invalid or
+trailing-colon titles, and deeper positions show an actionable notice and
+write nothing. See the [task drawer contract](https://bobs-org.github.io/task-drawers/).
+
 ### o and O continuation
 
 Vim `o` opens a real sibling after the current line's whole subtree; `O` opens
@@ -446,6 +467,8 @@ every list.
   writes.
 - [Bob Navigation Hotkeys](bob-navigation-hotkeys.md) — the review walk and
   lane toggle this plugin hands off to.
-- [Bob Ledger Tools](bob-ledger-tools.md) — the freshness stamper and
-  successor-reporting surfaces.
+- [Bob Ledger Tools](bob-ledger-tools.md) — the freshness stamper,
+  successor-reporting surfaces, and drawer trays.
+- [Task drawers](https://bobs-org.github.io/task-drawers/) — dual-read
+  headers, Notes home, and the limited title round-trip.
 - [Cross-plugin APIs](https://bobs-org.github.io/develop/plugins/plugin-apis/) — the completion and blocked-dependent interface.

@@ -1054,6 +1054,7 @@ module.exports = {
   waitFor,
   waitForGone,
   parseArgs,
+  runCase,
   runE2e,
   runGestureCase,
   selfTest,

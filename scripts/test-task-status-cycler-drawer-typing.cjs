@@ -115,7 +115,10 @@ function makeFakeCm() {
         return type;
       },
     },
-    Prec: { high: (extension) => ({ kind: "prec-high", extension }) },
+    Prec: {
+      high: (extension) => ({ kind: "prec-high", extension }),
+      highest: (extension) => ({ kind: "prec-highest", extension }),
+    },
     isolateHistory: { of: (value) => ({ kind: "isolateHistory", value }) },
   };
 }
@@ -125,7 +128,9 @@ function makeFakeCm() {
 function makeFakeView(cm, initial, caret) {
   const extension = drawerTypingBuild(cm);
   assert.ok(Array.isArray(extension) && extension.length === 2);
-  const handler = extension.find((entry) => entry && entry.kind === "inputHandler").fn;
+  const input = extension.find((entry) => entry && entry.kind === "prec-highest");
+  assert.ok(input && input.extension && input.extension.kind === "inputHandler");
+  const handler = input.extension.fn;
   const keys = extension.find((entry) => entry && entry.kind === "prec-high").extension.bindings;
   const backspace = keys.find((binding) => binding.key === "Backspace");
   const enter = keys.find((binding) => binding.key === "Enter");
@@ -209,6 +214,13 @@ function makeFakeView(cm, initial, caret) {
   };
   return view;
 }
+
+test("star inputHandler uses Prec.highest so autoPairMarkdown cannot win first", () => {
+  const extension = drawerTypingBuild(makeFakeCm());
+  assert.equal(extension[0].kind, "prec-highest");
+  assert.equal(extension[0].extension.kind, "inputHandler");
+  assert.equal(extension[1].kind, "prec-high");
+});
 
 test("builds nothing when a CodeMirror piece is missing", () => {
   const cm = makeFakeCm();
@@ -431,8 +443,12 @@ test("Toggle Drawer refuses with a notice and no write", () => {
   assert.equal(planDrawerToggle(`${TASK}\n  - `, 1, 4).ok, false);
   // Managed lines refuse.
   assert.equal(planDrawerToggle(`${TASK}\n  - **DEPENDS ON** x`, 1, 5).ok, false);
-  // Deeper positions refuse.
+  // Deeper positions refuse, including through the command route.
   assert.equal(planDrawerToggle(`${TASK}\n  - note\n    - deep`, 2, 8).ok, false);
+  const deeper = toggleAt(`${TASK}\n  - note\n    - deep`, 2, 8);
+  assert.equal(deeper.handled, true);
+  assert.equal(deeper.text, `${TASK}\n  - note\n    - deep`);
+  assert.match(notices[0], /direct child/);
   // A refusal leaves the note untouched through the route too.
   const before = `${TASK}\n  - TASKS`;
   const refused = toggleAt(before, 1, 5);

@@ -428,6 +428,10 @@ function drawerTypingBuild(cm) {
   ) {
     return null;
   }
+  // Real Obsidian `autoPairMarkdown` is another inputHandler. Without
+  // highest precedence it wins, types `- **`, and the assist never runs
+  // (reproduced 2026-11-25 on Obsidian 1.15.1).
+  const inputPrec = typeof cm.Prec.highest === "function" ? cm.Prec.highest : cm.Prec.high;
 
   const lineParts = (state, from, to) => {
     const line = state.doc.lineAt(from);
@@ -561,13 +565,15 @@ function drawerTypingBuild(cm) {
   };
 
   return [
-    cm.EditorView.inputHandler.of((view, from, to, text, insert) => {
-      try {
-        return handleInput(view, from, to, text, insert);
-      } catch (error) {
-        return false;
-      }
-    }),
+    inputPrec(
+      cm.EditorView.inputHandler.of((view, from, to, text, insert) => {
+        try {
+          return handleInput(view, from, to, text, insert);
+        } catch (error) {
+          return false;
+        }
+      }),
+    ),
     cm.Prec.high(
       cm.keymap.of([
         {
@@ -621,6 +627,23 @@ class TaskStatusCyclerDrawerTypingMixin {
       }
       const owned = drawerTypingOwnerTask(value, lineIndex);
       if (!owned) {
+        // Nested list items inside a task block are still Toggle Drawer
+        // positions: refuse with a notice instead of falling through.
+        const nested = taskReqListItem(lines[lineIndex] || "");
+        if (!nested) {
+          return null;
+        }
+        try {
+          const doc = taskReqDocument(value);
+          const tasks = taskReqScanIn(doc, taskReqOptions(null));
+          for (const task of tasks) {
+            if (lineIndex > task.lineIndex && lineIndex <= taskReqBlockLastLine(doc, task)) {
+              return "deeper";
+            }
+          }
+        } catch (error) {
+          return null;
+        }
         return null;
       }
       if (recognize_drawer_header(value, owned.task, lineIndex)) {

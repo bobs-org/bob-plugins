@@ -410,6 +410,7 @@ The root `bob-navigation-hotkeys.api` is version 3:
 | `notice` | 6 | Show the Unblocked card; v2 `keep_moving`, v3 `relation_successors`, v4 `offer_closes`, v5 a trailing `↗ “S”` jump line, v6 `req_outcomes`/`req_met`. |
 | `successors` | 5 | Ask which offered successor links to add; v2 accepts `keep_moving`, v3 accepts the `relation` group, v4 resolves verdict closes, and v5 stages a `Ctrl+J` jump pin. |
 | `mailCloseGuard` | 1 | Classify task close targets as Gmail Tasks and show the Mail Close Card before a navigation-owned close. |
+| `parentPicker` | 1 | Restricted home picker as a choose-only API: `list(sourcePath, query?, limit?)` ranks homes through the Change parent model and `choose(sourcePath, { candidatePath? })` validates headlessly or opens the panel choose-only. Never writes; bob validates the committed `setting.set parent`. |
 | `taskSplit` | 1 | Carry one task requirement into its own task through `carryReq`. |
 | `blocks` | 1 | Open the reverse Blocks stage or remove a dependent. |
 | `relations` | 0 | Remove a LINKS edge (`removeLink`). `openStage` opens the Links direction; the reverse direction settles `{ ok: false }` until both stage directions ship. |

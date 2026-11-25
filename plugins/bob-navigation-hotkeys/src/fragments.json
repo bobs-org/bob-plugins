@@ -306,5 +306,6 @@
   "731-project-seed-reqs-exports.js",
   "732-relation-event-target-exports.js",
   "733-mail-close-exports.js",
-  "734-nav-task-settle-exports.js"
+  "734-nav-task-settle-exports.js",
+  "735-parent-picker-choose.js"
 ]

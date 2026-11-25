@@ -184,6 +184,13 @@ unclosed frontmatter, duplicate `parent:` keys, unquotable names, and
 why, and Enter re-checks the live vault before writing, so a stale pick is
 refused with the same wording. It never creates a note. One undo reverts the write in an open editor.
 
+The same ranking model is also available choose-only through
+`api.parentPicker` v1 (`docs/develop/plugin-apis.md`): `list(sourcePath,
+query?, limit?)` for the Property Editor's Lives under stage and
+`choose(sourcePath, { candidatePath? })`, which validates a headless pick or
+opens the panel without writing. The editor commits through bob's
+`setting.set parent`, never through this API.
+
 Root-parent grouping is computed from the new tree at read time. Inherited
 project blocking (`#prj_is_blocked`) is repaired by the next
 `bob task reconcile`.

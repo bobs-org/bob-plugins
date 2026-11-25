@@ -101,10 +101,16 @@ past 140 without blocking). Ready cap is a count stepper from 1 to 999
 or `off` (`o` toggles in the control). Review takes 1–365 days and applies to
 tasks living in the note. Capture names reuse the ordered List stage with
 Bob's duplicate and collision warnings. Stats root toggles between `true` and
-absence, and stays disabled on top-level projects. Parent, hue, default type,
-and clock reuse generic stages for now, with Bob validating; a logical clock
-value is always submitted as the strict mode object, and generic edits to an
-actual clock key use that key's `prop.*` op.
+absence, and stays disabled on top-level projects. Lives under opens a
+dedicated home picker: type to rank homes (kind and hue pips, with the
+refusal text for ineligible homes), pick with the mouse or ↑/↓, and Enter
+applies only on a current dry-run preview showing bob's consequence lines.
+After apply the stage runs exactly the catalog syncs bob named and reports
+`✓ Moved · N catalogs refreshed · u undo`; a sync failure keeps the write
+and names the failed catalog. Undo restores the parent and re-runs the same
+syncs. Hue, default type, and clock reuse generic stages for now, with Bob
+validating; a logical clock value is always submitted as the strict mode
+object, and generic edits to an actual clock key use that key's `prop.*` op.
 
 Settings and project-task rows cannot be renamed, reordered, or kind-changed.
 Copying a declared setting copies its actual source bytes, including keys

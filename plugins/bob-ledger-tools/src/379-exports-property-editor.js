@@ -266,6 +266,17 @@ try {
       propertyEditorSettingsConsumeFocus,
       propertyEditorProjectTaskHandoff,
       propertyEditorHomeKindMatch,
+      propertyEditorParentStemOf,
+      propertyEditorParentLinkFor,
+      propertyEditorParentApi,
+      propertyEditorParentHueFor,
+      propertyEditorParentListCandidates,
+      propertyEditorParentSeedQuery,
+      propertyEditorParentSyncNames,
+      propertyEditorParentRunSyncs,
+      propertyEditorParentSyncReport,
+      propertyEditorParentStageBuild,
+      propertyEditorPaintParentStage,
     });
   }
 } catch (_) {}

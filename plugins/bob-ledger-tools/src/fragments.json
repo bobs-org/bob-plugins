@@ -389,6 +389,7 @@
   "298x-plugin-property-editor-setting-ops.js",
   "298y-plugin-property-editor-setting-stages.js",
   "298z-plugin-property-editor-settings-entrypoints.js",
+  "298aa-plugin-property-editor-parent-stage.js",
   "293-keep-inbox-render.js",
   "294-keep-inbox-indicator.js",
   "295-keep-inbox-actions.js",

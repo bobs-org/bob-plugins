@@ -53,7 +53,10 @@ applyToEditor(editor, path: string, options?: {
 }
 
 schedulePending(request: {
-  editor; path: string; identity: { blockId?: string; line?: number; text?: string }
+  editor; path: string; identity: { blockId?: string; line?: number; text?: string };
+  onSettled?: (delivery: {
+    path: string; generation: number; result: object
+  }) => void;
 }): { scheduled: boolean; reset?: boolean; generation?: number; pending?: number; reason?: string }
 
 flushPending(): Array<{ path: string; generation: number; result: object }>
@@ -123,6 +126,19 @@ task positions at command entry must call it first. Two editor instances for
 one path are treated as an unsafe shared-buffer conflict and their delayed
 writes are dropped. Unload cancels every timer and listener owned by the
 provider.
+
+The optional `onSettled` callback is an additive v1 request field, not a new
+method or namespace. After a successful apply it runs once with the final
+path, generation, and apply result, for the idle timer and for
+explicit or lifecycle flushes alike. Rearming a burst replaces it with the
+newest gesture's callback. Cancel, a stale identity or path, provider unload,
+and shared-buffer conflicts never report a successful movement. Observer
+exceptions are caught after the write: they never replay it or change its
+result. The callback is an observer, not a second writer; the provider still
+owns cursor and scroll mapping. Older v1 providers that ignore the field keep
+settling without throwing. Updated ledger-tools supplies this pending-jump
+delivery so a consumer can record `jumpTarget` onto navigation `recordJump`
+exactly once.
 
 ## Undo
 

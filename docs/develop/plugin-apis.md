@@ -56,7 +56,7 @@ ledger, or `Number.MAX_SAFE_INTEGER` when the task has no rank.
 
 | Namespace | Version | Purpose |
 | --- | ---: | --- |
-| `taskSettle` | 1 | Pure settle, guarded editor apply, and idle pending scheduler. |
+| `taskSettle` | 1 | Pure settle, guarded editor apply, idle pending scheduler, and optional `onSettled` observer. |
 | `stats` | 2 | Append validated review events; `host`, `fetch`, and `bobPath` support Stats and consumers. |
 | `logs` | 1 | Read the cached `bob logs list --format json` phrase catalog; `snapshot()` includes the session overlay, `noteUsed(kind, text)` records a successful local write, and `onChange` subscribes to refreshes. |
 | `themes` | 1 | Share the Pomodoro theme catalog; `hueFor`, `componentsOf`, `historyRows`, and `similarTo` are synchronous, `fetch` and `snapshot` serve the cached `bob themes list` report, `hide`/`unhide`/`color`/`rename` spawn bob with `--via`, and `onChange` subscribes to updates. |

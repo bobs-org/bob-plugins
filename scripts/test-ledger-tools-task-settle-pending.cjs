@@ -535,3 +535,156 @@ test("ledger-tools command wrappers flush only when a command executes", () => {
   assert.equal(callbacks, 2);
   plugin.taskSettleDisposePendingLifecycle();
 });
+
+test("onSettled fires once after a successful timer apply and rearm replaces it", () => {
+  const timers = new FakeTimers();
+  const editor = new TestEditor(AREA_INPUT);
+  const app = makeApp([{ editor, path: AREA }]);
+  const plugin = new LedgerToolsPlugin(app);
+  plugin.taskSettlePendingScheduler = makeScheduler(timers, (entry) => plugin.taskSettleApplyPending(entry));
+  const first = [];
+  const second = [];
+  const taskIdentity = identity("design", 8, "- [/] #task Finish the design ^design");
+  plugin.taskSettleApi().schedulePending({
+    editor,
+    path: AREA,
+    identity: taskIdentity,
+    onSettled: (delivery) => first.push(delivery),
+  });
+  const firstTimer = timers.last();
+  const reset = plugin.taskSettleApi().schedulePending({
+    editor,
+    path: AREA,
+    identity: taskIdentity,
+    onSettled: (delivery) => second.push(delivery),
+  });
+  assert.equal(reset.reset, true);
+  timers.fire(firstTimer, true);
+  assert.equal(first.length, 0, "the replaced callback never observes a successful apply");
+  timers.fire(timers.last());
+  assert.equal(first.length, 0);
+  assert.equal(second.length, 1);
+  assert.equal(second[0].path, AREA);
+  assert.equal(second[0].generation, reset.generation);
+  assert.equal(second[0].result.applied, true);
+  assert.ok(second[0].result.jumpTarget);
+});
+
+test("onSettled fires once for an explicit flush and a stale timer cannot repeat it", () => {
+  const timers = new FakeTimers();
+  const editor = new TestEditor(AREA_INPUT);
+  const app = makeApp([{ editor, path: AREA }]);
+  const plugin = new LedgerToolsPlugin(app);
+  plugin.taskSettlePendingScheduler = makeScheduler(timers, (entry) => plugin.taskSettleApplyPending(entry));
+  const deliveries = [];
+  plugin.taskSettleApi().schedulePending({
+    editor,
+    path: AREA,
+    identity: identity("design", 8, "- [/] #task Finish the design ^design"),
+    onSettled: (delivery) => deliveries.push(delivery),
+  });
+  const timer = timers.last();
+  const flushed = plugin.taskSettleApi().flushPending();
+  assert.equal(flushed[0].result.applied, true);
+  assert.equal(deliveries.length, 1, "flush and callback share one successful delivery");
+  timers.fire(timer, true);
+  assert.equal(deliveries.length, 1, "a drained timer does not deliver again");
+});
+
+test("onSettled stays silent for identity, path, shared-buffer, unload, and callback throw", () => {
+  const timers = new FakeTimers();
+  const editor = new TestEditor(AREA_INPUT);
+  const app = makeApp([{ editor, path: AREA }]);
+  const plugin = new LedgerToolsPlugin(app);
+  plugin.taskSettlePendingScheduler = makeScheduler(timers, (entry) => plugin.taskSettleApplyPending(entry));
+  const deliveries = [];
+  const boom = () => {
+    deliveries.push("called");
+    throw new Error("observer boom");
+  };
+
+  plugin.taskSettleApi().schedulePending({
+    editor,
+    path: AREA,
+    identity: identity("deleted", 8, "- [/] missing"),
+    onSettled: (delivery) => deliveries.push(delivery),
+  });
+  timers.fire(timers.last());
+  assert.equal(deliveries.length, 0, "an unresolved identity is not a successful movement");
+  assert.equal(editor.transactions.length, 0);
+
+  plugin.taskSettleApi().schedulePending({
+    editor,
+    path: AREA,
+    identity: identity("design", 8, "- [/] #task Finish the design ^design"),
+    onSettled: (delivery) => deliveries.push(delivery),
+  });
+  const switchedTimer = timers.last();
+  app.leaves[0].view.file.path = OTHER;
+  timers.fire(switchedTimer);
+  assert.equal(deliveries.length, 0, "a switched note is not a successful movement");
+  assert.equal(editor.getValue(), AREA_INPUT);
+
+  const first = new TestEditor(AREA_INPUT);
+  const second = new TestEditor(AREA_INPUT);
+  const sharedApp = makeApp([{ editor: first, path: AREA }, { editor: second, path: AREA }]);
+  const shared = new LedgerToolsPlugin(sharedApp);
+  const sharedTimers = new FakeTimers();
+  shared.taskSettlePendingScheduler = makeScheduler(
+    sharedTimers,
+    (entry) => shared.taskSettleApplyPending(entry),
+  );
+  shared.taskSettleApi().schedulePending({
+    editor: first,
+    path: AREA,
+    identity: identity("design", 8, "- [/] #task Finish the design ^design"),
+    onSettled: (delivery) => deliveries.push(delivery),
+  });
+  const refused = shared.taskSettleApi().schedulePending({
+    editor: second,
+    path: AREA,
+    identity: identity("review", 10, "- [*] #task Review the implementation ^review"),
+    onSettled: (delivery) => deliveries.push(delivery),
+  });
+  assert.equal(refused.reason, "shared-path");
+  assert.equal(deliveries.length, 0, "a shared-buffer conflict never delivers");
+
+  plugin.taskSettlePendingScheduler = makeScheduler(timers, (entry) => plugin.taskSettleApplyPending(entry));
+  app.leaves[0].view.file.path = AREA;
+  plugin.taskSettleApi().schedulePending({
+    editor,
+    path: AREA,
+    identity: identity("design", 8, "- [/] #task Finish the design ^design"),
+    onSettled: boom,
+  });
+  const liveTimer = timers.last();
+  const flushed = plugin.taskSettleFlushPending();
+  assert.equal(flushed[0].result.applied, true, "a throwing observer leaves the write result intact");
+  assert.deepEqual(deliveries, ["called"]);
+  assert.notEqual(editor.getValue(), AREA_INPUT);
+  const settled = editor.getValue();
+  timers.fire(liveTimer, true);
+  assert.equal(editor.getValue(), settled, "observer throw does not replay the write");
+
+  const unloadEditor = new TestEditor(AREA_INPUT);
+  const unloadApp = makeApp([{ editor: unloadEditor, path: AREA }]);
+  const unloadPlugin = new LedgerToolsPlugin(unloadApp);
+  const unloadTimers = new FakeTimers();
+  const unloadDeliveries = [];
+  unloadPlugin.taskSettlePendingScheduler = makeScheduler(
+    unloadTimers,
+    (entry) => unloadPlugin.taskSettleApplyPending(entry),
+  );
+  unloadPlugin.taskSettleApi().schedulePending({
+    editor: unloadEditor,
+    path: AREA,
+    identity: identity("design", 8, "- [/] #task Finish the design ^design"),
+    onSettled: (delivery) => unloadDeliveries.push(delivery),
+  });
+  const unloadTimer = unloadTimers.last();
+  unloadPlugin.taskSettleDisposePendingLifecycle();
+  unloadTimers.fire(unloadTimer, true);
+  assert.equal(unloadDeliveries.length, 0, "unload never reports a successful movement");
+  assert.equal(unloadEditor.getValue(), AREA_INPUT);
+});
+

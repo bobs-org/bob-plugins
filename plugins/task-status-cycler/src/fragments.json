@@ -50,6 +50,7 @@
   "139-plugin-successor-parked.js",
   "140-plugin-vim.js",
   "141-plugin-open-line.js",
+  "142-plugin-task-settle.js",
   "150-plugin-commands.js",
   "160-plugin-completion.js",
   "161-plugin-completion-links.js",
@@ -86,5 +87,6 @@
   "200-install-methods.js",
   "210-exports.js",
   "211-task-reqs-exports.js",
-  "212-mail-close-exports.js"
+  "212-mail-close-exports.js",
+  "213-task-settle-exports.js"
 ]

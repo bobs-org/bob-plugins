@@ -23632,8 +23632,9 @@ function taskSettleApplyToEditor(editor, path, options = {}, host = null) {
 }
 // ---- src/139h-task-settle-pending.js ----
 // Provider-owned delayed settle scheduler (bob-cli-q4.8.1.3 pending-api).
-// Entries keep only editor identity, path, task identity, generation, and timer;
-// settle always reads the editor's current buffer when the work drains.
+// Entries keep only editor identity, path, task identity, generation, timer,
+// and an optional onSettled observer; settle always reads the editor's current
+// buffer when the work drains and never retains document text.
 
 const TASK_SETTLE_PENDING_DELAY_MS = 500;
 let taskSettleCodeMirrorUndoDepth = null;
@@ -23747,6 +23748,25 @@ function taskSettleCreatePendingScheduler(options = {}) {
     };
   }
 
+  function normalizeOnSettled(value) {
+    return typeof value === "function" ? value : null;
+  }
+
+  function deliverSettled(entry, outcome) {
+    if (!entry || !outcome || !outcome.result || outcome.result.applied !== true) return;
+    const callback = entry.onSettled;
+    if (typeof callback !== "function") return;
+    try {
+      callback({
+        path: outcome.path,
+        generation: outcome.generation,
+        result: outcome.result,
+      });
+    } catch (_error) {
+      // Observer errors never replay the write or change its result.
+    }
+  }
+
   function remove(entry) {
     if (!entry) return;
     if (pending.get(entry.editor) === entry) pending.delete(entry.editor);
@@ -23769,11 +23789,13 @@ function taskSettleCreatePendingScheduler(options = {}) {
     } catch (_error) {
       result = { applied: false, changed: false, reason: "error" };
     }
-    return {
+    const outcome = {
       path: entry.path,
       generation: entry.generation,
       result: result == null ? { applied: false, changed: false, reason: "context" } : result,
     };
+    deliverSettled(entry, outcome);
+    return outcome;
   }
 
   function arm(entry) {
@@ -23789,11 +23811,12 @@ function taskSettleCreatePendingScheduler(options = {}) {
     }
   }
 
-  function schedule(editor, path, identity) {
+  function schedule(editor, path, identity, onSettled) {
     if (disposed) return { scheduled: false, reason: "disposed", pending: pending.size };
     const normalizedPath = normalizeVaultPath(path);
     const snapshot = taskSettleCloneIdentity(identity);
     const identityKey = taskSettlePendingIdentityKey(snapshot);
+    const observer = normalizeOnSettled(onSettled);
     if (!editor || !normalizedPath || !identityKey) {
       return { scheduled: false, reason: "identity", pending: pending.size };
     }
@@ -23808,6 +23831,7 @@ function taskSettleCreatePendingScheduler(options = {}) {
       existing.identity = snapshot;
       existing.bufferFingerprint = taskSettlePendingBufferFingerprint(editor);
       existing.generation = ++generation;
+      existing.onSettled = observer;
       if (!arm(existing)) return { scheduled: false, reason: "timer", pending: pending.size };
       return { scheduled: true, reset: true, generation: existing.generation, pending: pending.size };
     }
@@ -23833,6 +23857,7 @@ function taskSettleCreatePendingScheduler(options = {}) {
       identity: snapshot,
       generation: ++generation,
       bufferFingerprint: taskSettlePendingBufferFingerprint(editor),
+      onSettled: observer,
       timer: null,
     };
     pending.set(editor, entry);
@@ -23939,6 +23964,7 @@ class BobLedgerToolsTaskSettlePendingMixin {
         req.editor,
         req.path,
         req.identity,
+        req.onSettled,
       );
     } catch (_error) {
       return { scheduled: false, reason: "error" };

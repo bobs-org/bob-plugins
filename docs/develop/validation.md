@@ -496,7 +496,11 @@ Summary draft, and visits every rendered policy chip. It adds screenshots
 of populated settings and the Summary stage in light/dark and wide/narrow
 layouts. The offline wrapper verifies these fixtures and registers all
 settings coverage in the report; it does not replace the real application
-run or screenshot inspection.
+run or screenshot inspection. Before launching Obsidian, the supplied Bob
+must recognize the fixture's exact `#task … ^prj` line and its nested/top-level
+Stats root distinction. Bank routing probes the setup modal separately from
+the persistent inline bank panel. Stage screenshots scroll the controls into
+view after each resize; an offscreen stage is not visual acceptance.
 
 The offline wrapper `scripts/test-obsidian-property-editor-e2e.cjs` is part of
 `npm test`. It checks fixtures, fake-bob JSON, probes, coverage mapping, and

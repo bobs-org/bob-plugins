@@ -66,6 +66,14 @@ async function captureParityView(ctx, view) {
     await shared.setViewport(client, width, 900);
     await shared.sleep(150);
     await waitForEditor(client, (value) => value.open === true, `${view} view holds for screenshot`);
+    const stageView = ["paste", "yaml", "convert"].includes(view);
+    const stageVisible = !stageView || await client.evaluate(`(() => {
+      const stage = document.querySelector("[data-property-clipboard-stage], [data-property-kind-stage], [data-property-stage]");
+      if (!stage) return false;
+      stage.scrollIntoView({ block: "center", behavior: "instant" });
+      const rect = stage.getBoundingClientRect();
+      return rect.top >= 0 && rect.bottom <= innerHeight;
+    })()`);
     const shot = await shared.capture(client, outDir, `property-editor-parity-${view}-${width}-${theme}`, width, theme, "Live Preview");
     report.screenshots.push(shot);
     const visible = await client.evaluate(`(() => {
@@ -100,6 +108,8 @@ async function captureParityView(ctx, view) {
     addCheck(report, `parity screenshot ${view} ${shot.name} contains the populated editor`,
       visible.visible && visible.rows > 0 && /PROPERTIES/.test(visible.heading || ""),
       { ...visible, imageWidth: shot.width, imageHeight: shot.height });
+    if (stageView) addCheck(report, `parity screenshot ${view} ${shot.name} shows the stage controls`,
+      stageVisible, { stageVisible });
     addCheck(report, `parity screenshot ${view} ${shot.name} marked selected and locked rows are legible`,
       review.clipped && review.keyValueOverlap && review.rowOverlap && review.valueOverflow
         && review.selectedDiffers && review.markedDiffers && review.markedReadable && review.lockedReadable,

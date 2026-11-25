@@ -129,10 +129,11 @@ function fixtureNotes(today = "2026-11-23") {
   const dayPath = `${year}/${year}${month}${day}.md`;
   return {
     "root.md": "# Root\n",
+    "area.md": "---\nparent: \"[[root]]\"\n---\n# Areas\n",
     "projects.md": [
       "---",
       'type: "[[area]]"',
-      'parent: "[[root]]"',
+      'parent: "[[area]]"',
       "---",
       "",
       "# Projects",
@@ -187,7 +188,8 @@ function fixtureNotes(today = "2026-11-23") {
     "projects/settings-acceptance.md": [
       "---",
       'type: "[[project]]"',
-      'parent: "[[areas/settings-acceptance]]"',
+      'parent: "[[projects/top-level-settings]]"',
+      "status: wip",
       'theme: "Writing"',
       "offclock: false",
       "offclock_types: [writing]",
@@ -196,7 +198,7 @@ function fixtureNotes(today = "2026-11-23") {
       "",
       "# Settings acceptance project",
       "",
-      "- [ ] Prepare the settings rollout #prj ^settings-prj",
+      "- [ ] #task #prj Prepare the settings rollout ^prj",
       "",
       "Project body bytes stay outside settings edits.",
       "",
@@ -204,12 +206,14 @@ function fixtureNotes(today = "2026-11-23") {
     "projects/top-level-settings.md": [
       "---",
       'type: "[[project]]"',
+      'parent: "[[projects]]"',
+      "status: wip",
       'theme: "Writing"',
       "---",
       "",
       "# Top-level settings project",
       "",
-      "- [ ] Prepare the root settings rollout #prj ^top-settings-prj",
+      "- [ ] #task #prj Prepare the root settings rollout ^prj",
       "",
     ].join("\n"),
     "bank.md": [

@@ -434,6 +434,7 @@ async function run(args) {
     if (showDay.exitCode !== 0 || showDay.report?.ok !== true) {
       throw new Error("Current bob could not read the day fixture: " + JSON.stringify(showDay));
     }
+    settings.verifyFixtures(ctx, report, runBob);
     const albums = runBob(ctx, ["albums", "sync", "-f", "json"]);
     report.bobRuns.push(albums);
     if (albums.exitCode !== 0 || albums.report?.ok !== true) throw new Error("Could not prepare the record fixture: " + JSON.stringify(albums));

@@ -15,6 +15,22 @@ const PROJECT = "projects/settings-acceptance.md";
 const TOP_PROJECT = "projects/top-level-settings.md";
 const BANK = "bank.md";
 
+function verifyFixtures(ctx, report, runBob) {
+  const contracts = {};
+  for (const file of [AREA, PROJECT, TOP_PROJECT, BANK]) {
+    const result = runBob(ctx, ["props", "show", file, "-f", "json"]);
+    report.bobRuns.push(result);
+    assert.equal(result.exitCode, 0, `${file} must be readable by the supplied bob`);
+    assert.ok(result.report?.capabilities?.includes("props_contract_v1"), `${file} needs the settings contract`);
+    contracts[file] = result.report.contract;
+  }
+  assert.equal(contracts[PROJECT].prj.line, "- [ ] #task #prj Prepare the settings rollout ^prj");
+  assert.equal(contracts[PROJECT].settings.find((row) => row.id === "root").disabled, false,
+    "the editable Stats root fixture must be a subproject");
+  assert.equal(contracts[TOP_PROJECT].settings.find((row) => row.id === "root").disabled, true);
+  assert.equal(contracts[AREA].settings.find((row) => row.id === "ready_cap").declared, false);
+}
+
 function rowById(probe, id) {
   return (Array.isArray(probe?.rows) ? probe.rows : []).find((row) => row.id === id) || null;
 }
@@ -124,13 +140,14 @@ async function entrypointAcceptance(ctx) {
   await ctx.sendKey(ctx.client, "=");
   await ctx.sendKey(ctx.client, "=");
   const bankEditor = await ctx.shared.waitFor(ctx.client,
-    `Boolean(document.querySelector(".bob-bank-setup"))`, Boolean, "bank == setup card", 15_000);
+    `Boolean(document.querySelector(".bob-bank-setup-card-modal"))`, Boolean, "bank == setup card", 15_000);
   const propertyEditor = await ctx.client.evaluate(`Boolean(document.querySelector(".bob-property-editor"))`);
   ctx.addCheck(ctx.report, "settings entrypoint focus bank double equals keeps bank card",
     bankEditor && !propertyEditor,
     { bankEditor, propertyEditor });
   await ctx.sendKey(ctx.client, "Escape");
-  await ctx.shared.waitFor(ctx.client, `!document.querySelector(".bob-bank-setup")`, Boolean, "bank card closed", 10_000);
+  // The inline .bob-bank-setup panel remains mounted after the modal closes.
+  await ctx.shared.waitFor(ctx.client, `!document.querySelector(".bob-bank-setup-card-modal")`, Boolean, "bank card closed", 10_000);
 }
 
 async function settingHistoryAcceptance(ctx) {
@@ -339,7 +356,7 @@ async function simpleSettingsAcceptance(ctx) {
 async function projectTaskAcceptance(ctx) {
   const projectPath = path.join(ctx.vaultDir, PROJECT);
   const before = fs.readFileSync(projectPath, "utf8");
-  const taskLine = "- [ ] Prepare the settings rollout #prj ^settings-prj";
+  const taskLine = "- [ ] #task #prj Prepare the settings rollout ^prj";
   const expectedLine = before.split("\n").indexOf(taskLine);
   const fields = ["goal", "starts", "depends_on", "status"];
   const outcomes = [];
@@ -354,7 +371,7 @@ async function projectTaskAcceptance(ctx) {
     await ctx.waitForEditor(ctx.client, (value) => rowById(value, id)?.selected === true, `selected project task ${field}`);
     await ctx.sendKey(ctx.client, "Enter");
     await ctx.shared.waitFor(ctx.client, `!document.querySelector(".bob-property-editor")`, Boolean, `${field} leaves property editor`, 12_000);
-    const state = await ctx.client.evaluate(`(() => {
+    const state = await ctx.shared.waitFor(ctx.client, `(() => {
       const leaf = app.workspace.activeLeaf;
       const editor = leaf?.view?.editor;
       const cursor = editor?.getCursor?.("from") || null;
@@ -362,15 +379,23 @@ async function projectTaskAcceptance(ctx) {
         path: leaf?.view?.file?.path || null,
         cursor,
         line: cursor ? editor.getLine(cursor.line) : null,
-        taskCard: Boolean(document.querySelector(".bob-task-card, .bob-task-card-modal, [data-task-card]")),
+        taskCard: Boolean(document.querySelector(".bob-task-card-root")),
+        pickerAvailable: typeof app.plugins.plugins["bob-navigation-hotkeys"]?.openBulletPropertyPicker === "function",
         propertyEditor: Boolean(document.querySelector(".bob-property-editor")),
       };
-    })()`);
+    })()`, (value) => value.path === PROJECT && value.line === taskLine && !value.propertyEditor
+      && (!value.pickerAvailable || value.taskCard), `${field} finishes the project task handoff`, 12_000);
     outcomes.push({ field, row: row?.id, state });
     ctx.addCheck(ctx.report, `settings project task handoffs ${field} reaches current prj task`,
-      state.path === PROJECT && state.line === taskLine && state.propertyEditor === false,
+      state.path === PROJECT && state.line === taskLine && state.propertyEditor === false
+        && (!state.pickerAvailable || state.taskCard),
       { field, expectedLine, row, state });
     ctx.assertDiskBytes(ctx.report, `settings project task handoffs ${field} does not write task fields or dates`, projectPath, before);
+    if (state.taskCard) {
+      await ctx.sendKey(ctx.client, "Escape");
+      await ctx.shared.waitFor(ctx.client, `!document.querySelector(".bob-task-card-root")`, Boolean,
+        `${field} task card closed`, 10_000);
+    }
   }
   const scheduledKeys = ["scheduled", "due", "start", "deadline"];
   ctx.addCheck(ctx.report, "settings project task handoffs create no scheduling frontmatter",
@@ -517,7 +542,7 @@ async function capabilityAcceptance(ctx) {
 async function screenshotAcceptance(ctx) {
   const notePath = path.join(ctx.vaultDir, AREA);
   const before = fs.readFileSync(notePath, "utf8");
-  let probe = await ctx.openPropertyEditor(ctx.client, AREA, { focusSettings: true });
+  let probe = await ctx.openPropertyEditor(ctx.client, AREA, { focusSettings: true, resetCapability: true });
   const specifications = [
     [1400, "light", "settings-populated"], [1400, "dark", "settings-populated"],
     [390, "light", "settings-populated"], [390, "dark", "settings-populated"],
@@ -545,6 +570,11 @@ async function screenshotAcceptance(ctx) {
   for (const [width, theme] of [[1400, "light"], [1400, "dark"], [390, "light"], [390, "dark"]]) {
     await ctx.shared.setTheme(ctx.client, theme);
     await ctx.shared.setViewport(ctx.client, width, 900);
+    await ctx.client.evaluate(`(() => {
+      const stage = document.querySelector(".bob-property-editor-stage");
+      stage?.scrollIntoView({ block: "center", behavior: "instant" });
+      stage?.querySelector("[data-property-stage-input]")?.focus({ preventScroll: true });
+    })()`);
     const layout = await ctx.client.evaluate(lib.visualLayoutSource());
     const stage = await ctx.client.evaluate(`(() => ({
       setting: document.querySelector(".bob-property-editor-stage")?.getAttribute("data-setting-id") || "",
@@ -553,6 +583,10 @@ async function screenshotAcceptance(ctx) {
         return rect.width > 0 && (rect.left < 0 || rect.right > innerWidth + 1);
       }),
       focus: Boolean(document.querySelector(".bob-property-editor-stage :focus")),
+      visible: (() => {
+        const rect = document.querySelector(".bob-property-editor-stage")?.getBoundingClientRect();
+        return Boolean(rect && rect.top >= 0 && rect.bottom <= innerHeight);
+      })(),
     }))()`);
     const shot = await ctx.shared.capture(ctx.client, ctx.outDir,
       `settings-summary-stage-${width}-${theme}`, width, theme, "Live Preview · Summary stage");
@@ -560,7 +594,8 @@ async function screenshotAcceptance(ctx) {
     shot.stage = stage;
     ctx.report.screenshots.push(shot);
     ctx.addCheck(ctx.report, "settings screenshots light dark narrow wide simple stage layout",
-      stage.setting === "summary" && !stage.clipped && fs.existsSync(shot.path) && shot.bytes > 0,
+      stage.setting === "summary" && !stage.clipped && stage.visible && stage.focus
+        && fs.existsSync(shot.path) && shot.bytes > 0,
       { name: shot.name, width, theme, stage, layout, sha256: shot.sha256 });
   }
   await ctx.sendKey(ctx.client, "Escape");
@@ -595,7 +630,9 @@ function selfTest() {
   const notes = lib.fixtureNotes();
   assert.doesNotMatch(notes[AREA], /^ready_cap:/m, "Ready cap stays absent so it renders as a ghost");
   assert.match(notes[AREA], /theme: "Writing"/);
-  assert.match(notes[PROJECT], /#prj \^settings-prj/);
+  assert.match(notes[PROJECT], /^- \[ \] #task #prj .+ \^prj$/m);
+  assert.match(notes[PROJECT], /parent: "\[\[projects\/top-level-settings\]\]"/);
+  assert.match(notes[PROJECT], /^status: wip$/m);
   assert.match(notes[TOP_PROJECT], /type: "\[\[project\]\]"/);
   assert.match(notes[BANK], /type: "\[\[bank\]\]"/);
   const checks = [
@@ -608,4 +645,4 @@ function selfTest() {
   assert.equal(typeof runSettingsAcceptance, "function");
 }
 
-module.exports = { runSettingsAcceptance, selfTest };
+module.exports = { runSettingsAcceptance, verifyFixtures, selfTest };

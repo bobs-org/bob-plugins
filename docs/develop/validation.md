@@ -488,7 +488,11 @@ bank fixtures. It checks Settings and chip focus, `+`/`==` routing (including
 the bank hybrid), ready-cap ghost → override → clear with exact undo/redo
 bytes, Summary and Review stages, Stats root set/clear and top-level refusal,
 project-task navigation without scheduling writes, managed/loose-row parity,
-and independent old-Bob and missing-contract fallbacks. It adds screenshots
+and independent old-Bob and missing-contract fallbacks. Warning cases save
+and undo long summaries and colliding Capture names; copy cases preserve
+legacy theme and both clock keys, while a ghost leaves the clipboard alone.
+The run also deletes and restores retired counts, exercises IME Enter on a
+Summary draft, and visits every rendered policy chip. It adds screenshots
 of populated settings and the Summary stage in light/dark and wide/narrow
 layouts. The offline wrapper verifies these fixtures and registers all
 settings coverage in the report; it does not replace the real application

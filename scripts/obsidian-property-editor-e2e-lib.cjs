@@ -169,6 +169,7 @@ function fixtureNotes(today = "2026-11-23") {
       "offclock: false",
       "offclock_types: [writing]",
       "project_name_aliases: [Garden]",
+      "task_refresh: 7",
       'created: "2026-01-02"',
       'aliases: ["Home", "Garden"]',
       "tags: [home]",

@@ -480,7 +480,9 @@ async function runCopyAcceptance(ctx, baseBytes) {
   await closePropertyEditor(client);
   await shared.openNote(client, "projects/project-note.md", "live");
   const projectBefore = fs.readFileSync(projectPath, "utf8");
-  await openPropertyEditor(client, "projects/project-note.md", { key: "project_digest" });
+  // The opener waits for a requested key to be selected. Start on a visible
+  // loose row so we can expand the managed group before selecting its digest.
+  await openPropertyEditor(client, "projects/project-note.md", { key: "keep_exact" });
   let probe = await waitForEditor(client,
     (value) => value.rows.some((row) => row.key === "keep_exact"), "protected copy rows");
   if (!probe.rows.some((row) => row.key === "project_digest")) {
@@ -1019,5 +1021,7 @@ async function runParityAcceptance(ctx) {
 }
 
 module.exports = {
+  clipboardRead,
+  clipboardWrite,
   runParityAcceptance,
 };

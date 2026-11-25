@@ -854,6 +854,7 @@ async function run(args) {
 
     const surfaceCtx = {
       client, report, vaultDir, outDir, shared, sendKey, waitForEditor, openPropertyEditor,
+      bobLog, oldFlag, noContractFlag,
       addCheck, closePropertyEditor, propertyRowClick, saveStage, setInput, yamlTarget,
       finishYamlExcursion, selectorClick, assertDiskBytes,
     };

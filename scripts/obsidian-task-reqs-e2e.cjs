@@ -956,7 +956,8 @@ async function runE2e(args, options = {}) {
   };
   const report = {
     executable,
-    sourceSha: spawnSync("git", ["rev-parse", "HEAD"], { cwd: ROOT, encoding: "utf8" }).stdout.trim(),
+    sourceSha: process.env.BOB_TASK_DRAWER_SOURCE_SHA
+      || spawnSync("git", ["rev-parse", "HEAD"], { cwd: ROOT, encoding: "utf8" }).stdout.trim(),
     cases, pass: false,
   };
   try {
@@ -988,7 +989,10 @@ async function runE2e(args, options = {}) {
     };
     for (const group of args.only ? [args.only] : defaultGroups) {
       for (const entry of groups[group].cases) {
-        try { await groups[group].run(client, entry); record(entry.name, "pass"); }
+        try {
+          const detail = await groups[group].run(client, entry);
+          record(entry.name, "pass", typeof detail === "string" ? detail : "");
+        }
         catch (error) { record(entry.name, "fail", error && error.message ? error.message : String(error)); }
       }
     }

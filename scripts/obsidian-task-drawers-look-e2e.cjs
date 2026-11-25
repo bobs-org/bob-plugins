@@ -53,6 +53,8 @@ function pageRows() {
       ? getComputedStyle(marker, "::before")
       : getComputedStyle(row, "::before");
     const glyphAfter = marker ? getComputedStyle(marker, "::after") : getComputedStyle(row, "::after");
+    const nativeMarker = marker ? getComputedStyle(marker, "::marker") : getComputedStyle(row, "::marker");
+    const markerRect = marker ? marker.getBoundingClientRect() : null;
     const title = row.getAttribute("title") || "";
     const strong = row.querySelector(".cm-strong, strong") || row.querySelector("p");
     const strongCs = strong ? getComputedStyle(strong) : null;
@@ -83,6 +85,20 @@ function pageRows() {
       markerColor: marker ? getComputedStyle(marker).color : "",
       markerBefore: marker ? getComputedStyle(marker, "::before").content : "",
       markerAfter: glyphAfter.content,
+      markerText: marker ? marker.textContent : "",
+      markerHtml: marker ? marker.outerHTML : "",
+      nativeMarker: {
+        content: nativeMarker.content,
+        color: nativeMarker.color,
+        fontSize: nativeMarker.fontSize,
+        display: nativeMarker.display,
+      },
+      markerRect: markerRect && {
+        left: markerRect.left,
+        right: markerRect.right,
+        width: markerRect.width,
+        height: markerRect.height,
+      },
       markerClass: marker && marker.className,
       fontWeight: strongCs ? String(strongCs.fontWeight) : "",
       color: strongCs ? strongCs.color : "",
@@ -199,6 +215,35 @@ async function run(client, entry, { setDoc, setMode, waitFor, args }) {
   await client.call("Input.dispatchMouseEvent", { type: "mouseMoved", x: 2, y: 2 });
   await pause(200);
   const state = await evaluate(client, pageRows);
+  const evidence = {
+    theme: entry.theme,
+    mode: entry.mode,
+    rows: state.rows.map((row) => ({
+      key: row.key,
+      count: row.count,
+      empty: row.empty,
+      ownerState: row.ownerState,
+      title: row.title,
+      width: row.width,
+      height: row.height,
+      expectedSlot: row.expectedSlot,
+      markerText: row.markerText,
+      markerHtml: row.markerHtml,
+      markerColor: row.markerColor,
+      markerBefore: row.markerBefore,
+      markerAfter: row.markerAfter,
+      nativeMarker: row.nativeMarker,
+      markerRect: row.markerRect,
+      fontWeight: row.fontWeight,
+      decoration: row.decoration,
+      ownerDecoration: row.ownerDecoration,
+      titleBackground: row.titleBackground,
+      folded: row.folded,
+      after: row.after,
+    })),
+    nestedNote: state.nestedNote,
+    ordinaryNote: state.ordinaryNote,
+  };
   assert.ok(state.rows.length >= 4, "expected open, empty, done, and cancelled drawers");
   assert.ok(state.reqs >= 1, "a requirement should sit beside the drawers");
   const byKey = Object.fromEntries(state.rows.map((row) => [row.key, row]));
@@ -260,6 +305,7 @@ async function run(client, entry, { setDoc, setMode, waitFor, args }) {
       resting.markers.map(({ text, color, opacity, display, visibility }) => ({ text, color, opacity, display, visibility })),
       "native delimiters restore their resting appearance when the caret leaves",
     );
+    evidence.delimiters = { resting: resting.markers, revealed: revealed.markers, restored: restored.markers };
     await evaluate(client, () => {
       const view = window.app.workspace.activeLeaf.view;
       view.editor.setCursor({ line: 3, ch: 8 });
@@ -278,6 +324,7 @@ async function run(client, entry, { setDoc, setMode, waitFor, args }) {
   assert.equal(foldedOpen.folded, true, "native folding hides the drawer's child rows");
   assert.equal(foldedOpen.childVisible, false, "nested note is actually folded away");
   assert.match(foldedOpen.after, /2/, "the source-backed folded count is visible: " + foldedOpen.after);
+  evidence.folded = { folded: foldedOpen.folded, childVisible: foldedOpen.childVisible, count: foldedOpen.count, after: foldedOpen.after };
 
   if (entry.mode === "live") {
     await client.evaluate(`window.app.commands.executeCommandById("editor:toggle-fold")`);
@@ -289,6 +336,7 @@ async function run(client, entry, { setDoc, setMode, waitFor, args }) {
   const unfoldedOpen = unfolded.rows.find((row) => row.key === "API DESIGN");
   assert.ok(unfoldedOpen && !unfoldedOpen.folded, "native unfold restores the drawer");
   assert.equal(unfoldedOpen.childVisible, true);
+  evidence.unfolded = { folded: unfoldedOpen.folded, childVisible: unfoldedOpen.childVisible };
 
   const tab = String.fromCharCode(9);
   const authLine = tab + tab + "- Check the auth";
@@ -328,6 +376,7 @@ async function run(client, entry, { setDoc, setMode, waitFor, args }) {
   assert.ok(refoldedOpen && refoldedOpen.folded, "native fold reapplies after the edit");
   assert.equal(refoldedOpen.count, "3");
   assert.match(refoldedOpen.after, /3/, "the refreshed folded count is visible");
+  evidence.refolded = { folded: refoldedOpen.folded, count: refoldedOpen.count, after: refoldedOpen.after };
   if (entry.mode === "live") {
     await client.evaluate(`window.app.commands.executeCommandById("editor:toggle-fold")`);
   } else {
@@ -356,6 +405,7 @@ async function run(client, entry, { setDoc, setMode, waitFor, args }) {
   assert.equal(before, beforeOff, "settings off does not change Markdown");
   await evaluate(client, () => window.app.plugins.plugins["bob-ledger-tools"].toggleTaskDrawerMarks());
   await waitFor(client, `(${pageRows.toString()})().rows.length`, (length) => length >= 4, "toggle re-annotates", 5000);
+  return JSON.stringify(evidence);
 }
 
 module.exports = { CASES, SOURCE, run };

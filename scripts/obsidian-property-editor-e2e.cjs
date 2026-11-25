@@ -539,7 +539,14 @@ async function run(args) {
     addCheck(report, "derived YAML line text", derivedTarget.text.startsWith("project_digest:"), derivedTarget);
     await finishYamlExcursion(client, "derived YAML target");
 
-    await propertyRowClick(client, "review_enabled");
+    probe = await waitForEditor(client, (value) => value.open && value.readSettled, "project properties after derived YAML target");
+    if (!probe.rows.some((row) => row.key === "review_enabled")) {
+      if (!await selectorClick(client, '.bob-property-editor [data-property-group-toggle="managed"]')) {
+        throw new Error("Could not expand Bob-managed properties for derived checkbox");
+      }
+      probe = await waitForEditor(client, (value) => value.rows.some((row) => row.key === "review_enabled"), "expanded derived checkbox properties");
+    }
+    if (!await propertyRowClick(client, "review_enabled")) throw new Error("Could not select review_enabled");
     probe = await waitForEditor(client, (value) => value.rows.some((row) => row.key === "review_enabled"), "derived checkbox row");
     const derivedCheckbox = probe.properties.find((row) => row.key === "review_enabled");
     addCheck(report, "derived checkbox remains protected", derivedCheckbox?.kind === "checkbox" && derivedCheckbox?.role === "derived", derivedCheckbox);

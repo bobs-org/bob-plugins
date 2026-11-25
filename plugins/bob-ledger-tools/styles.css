@@ -7680,6 +7680,158 @@ body.bob-task-tag-marks li.task-list-item[data-bob-req="true"] > p > input.task-
   }
 }
 
+/* Task drawer marks (bob-task-drawer-render-v1): a quiet tray occupies the
+   existing list-marker slot. The line and list item stay native Markdown;
+   only the source-backed header row receives attributes. */
+body.bob-task-drawer-marks [data-bob-drawer="true"] {
+  --bob-drawer-ink: color-mix(in srgb, var(--text-normal) 45%, var(--text-muted));
+  --bob-drawer-mask: var(--bob-drawer-glyph);
+}
+
+body.bob-task-drawer-marks {
+  --bob-drawer-glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.45' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2 3.4h12v7.1l-2 2.1H4l-2-2.1zM3 7.5h10'/%3E%3C/svg%3E");
+  --bob-drawer-glyph-empty: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.45' stroke-dasharray='1.25 1.05' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2 3.4h12v7.1l-2 2.1H4l-2-2.1zM3 7.5h10'/%3E%3C/svg%3E");
+}
+
+body.bob-task-drawer-marks [data-bob-drawer="true"][data-bob-type-hue="blue"] {
+  --bob-drawer-ink: color-mix(in srgb, var(--bob-type-ink-blue) 55%, var(--text-muted));
+}
+body.bob-task-drawer-marks [data-bob-drawer="true"][data-bob-type-hue="orange"] {
+  --bob-drawer-ink: color-mix(in srgb, var(--bob-type-ink-orange) 55%, var(--text-muted));
+}
+body.bob-task-drawer-marks [data-bob-drawer="true"][data-bob-type-hue="aqua"] {
+  --bob-drawer-ink: color-mix(in srgb, var(--bob-type-ink-aqua) 55%, var(--text-muted));
+}
+body.bob-task-drawer-marks [data-bob-drawer="true"][data-bob-type-hue="yellow"] {
+  --bob-drawer-ink: color-mix(in srgb, var(--bob-type-ink-yellow) 55%, var(--text-muted));
+}
+body.bob-task-drawer-marks [data-bob-drawer="true"][data-bob-type-hue="magenta"] {
+  --bob-drawer-ink: color-mix(in srgb, var(--bob-type-ink-magenta) 55%, var(--text-muted));
+}
+body.bob-task-drawer-marks [data-bob-drawer="true"][data-bob-type-hue="green"] {
+  --bob-drawer-ink: color-mix(in srgb, var(--bob-type-ink-green) 55%, var(--text-muted));
+}
+body.bob-task-drawer-marks [data-bob-drawer="true"][data-bob-type-hue="violet"] {
+  --bob-drawer-ink: color-mix(in srgb, var(--bob-type-ink-violet) 55%, var(--text-muted));
+}
+body.bob-task-drawer-marks [data-bob-drawer="true"][data-bob-type-hue="red"] {
+  --bob-drawer-ink: color-mix(in srgb, var(--bob-type-ink-red) 55%, var(--text-muted));
+}
+body.bob-task-drawer-marks [data-bob-drawer="true"][data-bob-type-state="muted"] {
+  --bob-drawer-ink: var(--bob-type-ink-muted);
+}
+body.bob-task-drawer-marks [data-bob-drawer="true"][data-bob-type-state="unconfigured"] {
+  --bob-drawer-ink: var(--text-muted);
+}
+body.bob-task-drawer-marks [data-bob-drawer="true"][data-bob-type-state="repair"] {
+  --bob-drawer-ink: color-mix(in srgb, var(--bob-hue-orange) 55%, var(--text-muted));
+}
+body.bob-task-drawer-marks [data-bob-drawer="true"][data-bob-drawer-empty="true"] {
+  --bob-drawer-ink: var(--text-muted);
+  --bob-drawer-mask: var(--bob-drawer-glyph-empty);
+}
+body.bob-task-drawer-marks [data-bob-drawer="true"][data-bob-drawer-owner-state="done"],
+body.bob-task-drawer-marks [data-bob-drawer="true"][data-bob-drawer-owner-state="cancelled"] {
+  --bob-drawer-ink: var(--text-muted);
+}
+
+body.bob-task-drawer-marks .cm-line[data-bob-drawer="true"] .cm-formatting-list {
+  position: relative;
+  color: transparent;
+}
+body.bob-task-drawer-marks .cm-line[data-bob-drawer="true"] .cm-formatting-list::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: -0.05em;
+  top: 50%;
+  width: 0.95em;
+  height: 0.78em;
+  transform: translateY(-50%);
+  background-color: var(--bob-drawer-ink);
+  -webkit-mask: var(--bob-drawer-mask) center / contain no-repeat;
+  mask: var(--bob-drawer-mask) center / contain no-repeat;
+}
+/* The caret line keeps Obsidian's native source-marker reveal. */
+body.bob-task-drawer-marks .cm-line[data-bob-drawer="true"]:is(.cm-active, .cm-activeLine) .cm-formatting-list {
+  color: var(--text-normal);
+}
+body.bob-task-drawer-marks .cm-line[data-bob-drawer="true"]:is(.cm-active, .cm-activeLine) .cm-formatting-list::before {
+  display: none;
+}
+body.bob-task-drawer-marks .cm-line[data-bob-drawer="true"] .cm-strong {
+  font-weight: 600;
+  text-decoration: none;
+}
+body.bob-task-drawer-marks .cm-line[data-bob-drawer="true"][data-bob-drawer-empty="true"] .cm-strong,
+body.bob-task-drawer-marks .cm-line[data-bob-drawer="true"][data-bob-drawer-owner-state="done"] .cm-strong,
+body.bob-task-drawer-marks .cm-line[data-bob-drawer="true"][data-bob-drawer-owner-state="cancelled"] .cm-strong {
+  color: var(--text-muted);
+}
+body.bob-task-drawer-marks .cm-line[data-bob-drawer="true"][data-bob-drawer-owner-state="done"] .cm-formatting-list::before,
+body.bob-task-drawer-marks .cm-line[data-bob-drawer="true"][data-bob-drawer-owner-state="cancelled"] .cm-formatting-list::before {
+  filter: grayscale(1);
+  opacity: 0.58;
+}
+body.bob-task-drawer-marks .cm-line[data-bob-drawer="true"]:has(.cm-fold-indicator.is-collapsed)::after,
+body.bob-task-drawer-marks .cm-line[data-bob-drawer="true"].is-collapsed::after {
+  content: " · " attr(data-bob-drawer-count);
+  color: var(--text-muted);
+  font-size: 0.82em;
+  font-variant-numeric: tabular-nums;
+  font-weight: 400;
+}
+
+body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"] {
+  position: relative;
+}
+body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"]::marker {
+  color: transparent;
+}
+body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"]::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: -1.05em;
+  top: 0.47em;
+  width: 0.95em;
+  height: 0.78em;
+  background-color: var(--bob-drawer-ink);
+  -webkit-mask: var(--bob-drawer-mask) center / contain no-repeat;
+  mask: var(--bob-drawer-mask) center / contain no-repeat;
+}
+body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"] > p:first-of-type,
+body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"] > strong:first-child {
+  color: var(--text-normal);
+  font-weight: 600;
+  text-decoration: none;
+}
+body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"][data-bob-drawer-empty="true"] > p:first-of-type,
+body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"][data-bob-drawer-owner-state="done"] > p:first-of-type,
+body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"][data-bob-drawer-owner-state="cancelled"] > p:first-of-type,
+body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"][data-bob-drawer-empty="true"] > strong:first-child,
+body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"][data-bob-drawer-owner-state="done"] > strong:first-child,
+body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"][data-bob-drawer-owner-state="cancelled"] > strong:first-child {
+  color: var(--text-muted);
+}
+body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"][data-bob-drawer-owner-state="done"]::before,
+body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"][data-bob-drawer-owner-state="cancelled"]::before {
+  filter: grayscale(1);
+  opacity: 0.58;
+}
+body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"].is-collapsed > p:first-of-type::after,
+body.bob-task-drawer-marks .markdown-preview-view li[data-bob-drawer="true"].is-collapsed > strong:first-child::after {
+  content: " · " attr(data-bob-drawer-count);
+  color: var(--text-muted);
+  font-size: 0.82em;
+  font-variant-numeric: tabular-nums;
+  font-weight: 400;
+}
+
+@media (forced-colors: active) {
+  body.bob-task-drawer-marks [data-bob-drawer="true"] {
+    --bob-drawer-ink: CanvasText !important;
+  }
+}
+
 /* Keep inbox indicator (keep-indicator-view): calm intake item beside the
    review footer. The review footer keeps `margin-right: auto`; this item
    never flexes so the footer shrinks first. */

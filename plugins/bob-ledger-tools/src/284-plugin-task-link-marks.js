@@ -24,6 +24,7 @@ class BobLedgerToolsTaskLinkMarksMixin {
     this.setupFreshnessMarks();
     this.setupTaskTagMarks();
     this.setupTaskReqMarks();
+    this.setupTaskDrawerMarks();
     this.setupPriorityMarks();
     this.setupDateMarks();
     this.setupProgressMarks();

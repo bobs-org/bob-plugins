@@ -91,6 +91,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsFreshnessMarkRenderMixin,
   BobLedgerToolsTaskTagMarksMixin,
   BobLedgerToolsTaskReqMarksMixin,
+  BobLedgerToolsTaskDrawerMarksMixin,
   BobLedgerToolsNoReplyPillsMixin,
   BobLedgerToolsTaskTagStageLabelsMixin,
   BobLedgerToolsTaskTagTypeMixin,

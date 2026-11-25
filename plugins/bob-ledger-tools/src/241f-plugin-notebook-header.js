@@ -31,16 +31,18 @@ class BobLedgerToolsNotebookHeaderMixin {
   async loadNotebookChipsSetting() {
     const epoch = this.notebookHeaderEpoch || 0;
     try {
-      if (typeof this.loadData !== "function") {
+      if (typeof this.loadLedgerToolsPluginData !== "function" && typeof this.loadData !== "function") {
         this.notebookChipsEnabledFlag = true;
         return true;
       }
-      const stored = await this.loadData();
+      const stored = typeof this.loadLedgerToolsPluginData === "function"
+        ? await this.loadLedgerToolsPluginData()
+        : await this.loadData();
       if (this.notebookHeaderActive === false || (this.notebookHeaderEpoch || 0) !== epoch) {
         return this.notebookChipsEnabledFlag;
       }
       if (stored && typeof stored === "object") {
-        this.notebookPluginData = { ...stored };
+        this.notebookPluginData = stored;
       } else {
         this.notebookPluginData = {};
       }
@@ -74,10 +76,10 @@ class BobLedgerToolsNotebookHeaderMixin {
     const nextEnabled = enabled !== false;
     this.notebookChipsEnabledFlag = nextEnabled;
     try {
-      if (typeof this.saveData === "function") {
-        const base = this.notebookPluginData && typeof this.notebookPluginData === "object"
-          ? this.notebookPluginData
-          : {};
+      if (typeof this.saveLedgerToolsPluginDataPatch === "function") {
+        this.notebookPluginData = await this.saveLedgerToolsPluginDataPatch({ notebookChips: nextEnabled });
+      } else if (typeof this.saveData === "function") {
+        const base = this.notebookPluginData && typeof this.notebookPluginData === "object" ? this.notebookPluginData : {};
         const next = { ...base, notebookChips: nextEnabled };
         this.notebookPluginData = next;
         await this.saveData(next);
@@ -139,6 +141,18 @@ class BobLedgerToolsNotebookHeaderMixin {
                 .onChange(async (value) => {
                   await plugin.saveNotebookChipsSetting(value !== false);
                 }));
+            }
+            if (typeof plugin.saveTaskDrawerMarksSetting === "function") {
+              const drawerSetting = new Setting(containerEl)
+                .setName("Task drawer marks")
+                .setDesc("Show tray marks and note counts on task drawers in Live Preview and Reading view.");
+              if (drawerSetting && typeof drawerSetting.addToggle === "function") {
+                drawerSetting.addToggle((toggle) => toggle
+                  .setValue(plugin.taskDrawerMarksEnabled !== false)
+                  .onChange(async (value) => {
+                    await plugin.saveTaskDrawerMarksSetting(value !== false);
+                  }));
+              }
             }
           } catch (error) {
             // Settings display is best-effort.
@@ -218,7 +232,7 @@ class BobLedgerToolsNotebookHeaderMixin {
       this.notebookHeaderActive = true;
       this.notebookHeaderEpoch = (this.notebookHeaderEpoch || 0) + 1;
       this.notebookChipsEnabledFlag = true;
-      this.notebookPluginData = {};
+      this.notebookPluginData = this.ledgerToolsPluginData || {};
       if (!(this.notebookHeaderReadingWidgets instanceof Set)) {
         this.notebookHeaderReadingWidgets = new Set();
       }

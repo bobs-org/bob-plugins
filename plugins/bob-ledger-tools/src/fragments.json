@@ -260,6 +260,8 @@
   "260-plugin-freshness-mark-render.js",
   "264-plugin-task-tag-marks.js",
   "264-plugin-task-reqs.js",
+  "264-plugin-task-drawer-model.js",
+  "264-plugin-task-drawer-marks.js",
   "264b-plugin-no-reply-pills.js",
   "264a-plugin-task-tag-stage-labels.js",
   "264-plugin-task-tag-type.js",

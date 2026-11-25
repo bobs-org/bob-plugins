@@ -41,6 +41,11 @@ class BobLedgerToolsTaskTagTypeMixin {
             } catch (error) {
               // Ledger marks are best-effort.
             }
+            try {
+              this.taskDrawerRefreshRenderedRows();
+            } catch (error) {
+              // Drawer owner ink is best-effort.
+            }
           });
         }
       } catch (error) {
@@ -65,6 +70,11 @@ class BobLedgerToolsTaskTagTypeMixin {
                 this.refreshLedgerTypeMarkEditors();
               } catch (error) {
                 // Ledger marks are best-effort.
+              }
+              try {
+                this.taskDrawerRefreshRenderedRows();
+              } catch (error) {
+                // Drawer owner ink is best-effort.
               }
             }),
           );
@@ -332,6 +342,11 @@ class BobLedgerToolsTaskTagTypeMixin {
         this.refreshTaskTagMarkEditors();
       } catch (error) {
         // Editor refresh is best-effort.
+      }
+      try {
+        this.taskDrawerRefreshRenderedRows();
+      } catch (error) {
+        // Drawer owner ink is best-effort.
       }
       try {
         new Notice(

@@ -219,6 +219,10 @@ const {
   TASK_REQ_MAX_DEPTH,
   TASK_REQ_TEACHING_COPY,
   taskReqForest,
+  taskDrawerForest,
+  taskDrawerForestForDoc,
+  taskDrawerFencedLines,
+  TASK_DRAWER_MARK_ATTRS,
   checklistTagTokens,
   checklistKindForText,
   checklistTagConflict,
@@ -522,6 +526,164 @@ test("RQ vectors copied from bob-cli: requirement ownership, depth, and derived 
       example.id,
     );
   }
+});
+
+test("task drawer model uses contextual headers, direct notes, and real owner state", () => {
+  const source = [
+    "---",
+    "- [ ] #task Frontmatter fake",
+    "---",
+    "- [ ] #task Upgrade Postgres [type:: BUILD]",
+    "  - **API Design**",
+    "    - Endpoint shape",
+    "      - Nested detail",
+    "    - Schema",
+    "    - [ ] Checkbox requirement",
+    "  - **Empty**",
+    "    ```",
+    "    - fenced fake note",
+    "    ```",
+    "  - **LINKS**",
+    "  - **SCHEDULE LOG**",
+    "  - **NOTE:**",
+    "    - bold lead detail",
+    "- [x] #task Done owner",
+    "  - **Same**",
+    "    - One note",
+    "- [-] #task Cancelled owner",
+    "  - **Same**",
+    "> - [ ] #task Quoted fake",
+    ">   - **Quoted drawer**",
+  ].join("\n");
+  const rows = taskDrawerForest(source);
+  assert.deepEqual(rows.map((row) => ({
+    title: row.title,
+    key: row.key,
+    count: row.count,
+    empty: row.empty,
+    ownerName: row.ownerName,
+    ownerState: row.ownerState,
+  })), [
+    { title: "API Design", key: "API DESIGN", count: 2, empty: false, ownerName: "Upgrade Postgres", ownerState: "open" },
+    { title: "Empty", key: "EMPTY", count: 0, empty: true, ownerName: "Upgrade Postgres", ownerState: "open" },
+    { title: "Same", key: "SAME", count: 1, empty: false, ownerName: "Done owner", ownerState: "done" },
+    { title: "Same", key: "SAME", count: 0, empty: true, ownerName: "Cancelled owner", ownerState: "cancelled" },
+  ]);
+  assert.ok(taskDrawerFencedLines(source).size >= 3);
+  const doc = makeDoc(source.split("\n"));
+  assert.equal(taskDrawerForestForDoc(doc), taskDrawerForestForDoc(doc), "immutable source document identity is memoized");
+  assert.notEqual(taskDrawerForestForDoc(doc), taskDrawerForest(source), "each model is source-backed and cached per document");
+});
+
+test("task drawer Live Preview marks source rows with owner ink and accessible count labels", () => {
+  const source = [
+    "- [ ] #task Upgrade Postgres [type:: BUILD]",
+    "  - **API Design**",
+    "    - Endpoint shape",
+  ];
+  const plugin = pluginWithTaskTag();
+  plugin.taskDrawerMarksActive = true;
+  plugin.taskDrawerMarksEnabled = true;
+  plugin.taskTagIdentityForLine = (line, path) => {
+    assert.equal(line, source[0]);
+    assert.equal(path, "project.md");
+    return { type: "BUILD", hue: "blue", state: "explicit", inherited: false };
+  };
+  const built = plugin.buildTaskDrawerDecorations(makeView({ lines: source, path: "project.md" }));
+  assert.equal(built.adds.length, 1);
+  const attrs = built.adds[0].value.attributes;
+  assert.equal(attrs["data-bob-drawer"], "true");
+  assert.equal(attrs["data-bob-drawer-key"], "API DESIGN");
+  assert.equal(attrs["data-bob-drawer-count"], "1");
+  assert.equal(attrs["data-bob-drawer-empty"], "false");
+  assert.equal(attrs["data-bob-drawer-owner-state"], "open");
+  assert.equal(attrs["data-bob-type-hue"], "blue");
+  assert.equal(attrs.title, "Drawer · API Design · 1 note · in Upgrade Postgres");
+  assert.equal(attrs["aria-label"], attrs.title);
+  assert.equal(plugin.buildTaskDrawerDecorations(makeView({ lines: source, live: false })).adds.length, 0);
+  plugin.taskDrawerMarksEnabled = false;
+  assert.equal(plugin.buildTaskDrawerDecorations(makeView({ lines: source })).adds.length, 0);
+});
+
+test("task drawer Reading view restores labels and owned attributes without adding DOM", () => {
+  const fx = fakeRenderTree();
+  const li = fx.makeEl("li");
+  li.setAttribute("data-line", "1");
+  li.setAttribute("title", "Native title");
+  li.setAttribute("aria-label", "Native accessible label");
+  li.setAttribute("data-bob-type-hue", "green");
+  fx.root.appendChild(li);
+  const source = [
+    "- [x] #task Upgrade Postgres",
+    "  - **Café**",
+    "    - One note",
+  ].join("\n");
+  const plugin = pluginWithTaskTag();
+  plugin.taskDrawerMarksActive = true;
+  plugin.taskDrawerMarksEnabled = true;
+  plugin.taskDrawerRenderedOriginals = new WeakMap();
+  plugin.taskDrawerRenderedModels = new WeakMap();
+  plugin.taskTagIdentityForLine = () => ({ type: "BUILD", hue: "blue", state: "explicit", inherited: false });
+  plugin.renderTaskDrawersIn(fx.root, {
+    sourcePath: "project.md",
+    getSectionInfo: () => ({ text: source, lineStart: 0, lineEnd: 2 }),
+  });
+  assert.equal(li.getAttribute("data-bob-drawer"), "true");
+  assert.equal(li.getAttribute("data-bob-drawer-key"), "CAFÉ");
+  assert.equal(li.getAttribute("data-bob-drawer-count"), "1");
+  assert.equal(li.getAttribute("data-bob-drawer-owner-state"), "done");
+  assert.equal(li.getAttribute("data-bob-type-hue"), "blue");
+  assert.equal(li.getAttribute("title"), "Drawer · Café · 1 note · in Upgrade Postgres");
+  assert.equal(li.getAttribute("aria-label"), li.getAttribute("title"));
+  assert.equal(fx.root.childNodes.length, 1, "the renderer decorates the existing list item");
+
+  plugin.markGateDocuments = () => [{ querySelectorAll: () => [li] }];
+  plugin.taskDrawerRefreshRenderedRows(false);
+  for (const name of TASK_DRAWER_MARK_ATTRS.slice(0, 5)) assert.equal(li.getAttribute(name), null, name);
+  assert.equal(li.getAttribute("title"), "Native title");
+  assert.equal(li.getAttribute("aria-label"), "Native accessible label");
+  assert.equal(li.getAttribute("data-bob-type-hue"), "green", "pre-existing type ink is restored");
+  assert.equal(fx.root.childNodes.length, 1);
+
+  plugin.taskDrawerRefreshRenderedRows(true);
+  assert.equal(li.getAttribute("data-bob-drawer"), "true", "cached source mapping re-applies when enabled");
+  plugin.renderTaskDrawersIn(fx.root, null);
+  assert.equal(li.getAttribute("data-bob-drawer"), null, "a stale postprocessor context clears owned attrs");
+  assert.equal(li.getAttribute("title"), "Native title");
+  assert.equal(source, "- [x] #task Upgrade Postgres\n  - **Café**\n    - One note");
+});
+
+test("task drawer marks default on and persist their setting without losing plugin data", async () => {
+  const plugin = new LedgerToolsPlugin(makeSurfaceApp(), {});
+  let saved = null;
+  plugin.loadData = async () => ({ notebookChips: false, unrelated: 7 });
+  plugin.saveData = async (value) => { saved = value; };
+  plugin.markGateDocuments = () => [];
+  plugin.refreshTaskTagMarkEditors = () => {};
+  plugin.setupTaskDrawerMarks();
+  await plugin.loadTaskDrawerMarksSetting();
+  assert.equal(plugin.taskDrawerMarksEnabled, true, "missing setting defaults on");
+  assert.ok(plugin.commands.some((command) => command.id === "toggle-task-drawer-marks"));
+  await plugin.saveTaskDrawerMarksSetting(false);
+  assert.equal(plugin.taskDrawerMarksEnabled, false);
+  assert.equal(saved.taskDrawerMarks, false);
+  assert.equal(saved.notebookChips, false);
+  assert.equal(saved.unrelated, 7);
+  await plugin.toggleTaskDrawerMarks();
+  assert.equal(saved.taskDrawerMarks, true);
+  assert.equal(plugin.taskDrawerMarksEnabled, true);
+});
+
+test("task drawer styles use a masked tray, source-backed states, and folded counts", () => {
+  const css = fs.readFileSync(path.join(__dirname, "..", "plugins", "bob-ledger-tools", "styles.css"), "utf8");
+  assert.ok(css.includes("--bob-drawer-glyph-empty"));
+  assert.ok(css.includes('data-bob-drawer-owner-state="cancelled"'));
+  assert.ok(css.includes(".cm-formatting-list::before"));
+  assert.ok(css.includes(".cm-fold-indicator.is-collapsed"));
+  assert.ok(css.includes('li[data-bob-drawer="true"].is-collapsed'));
+  assert.ok(css.includes("font-variant-numeric: tabular-nums"));
+  assert.ok(!css.includes("data-bob-drawer-key.*::before"));
+  assert.ok(TASK_DRAWER_MARK_ATTRS.includes("aria-label"));
 });
 
 test("requirement Live Preview draws owner ink, state and depth, and reveals its marker", () => {

@@ -25,5 +25,8 @@ Object.assign(module.exports.helpers, {
   navTaskSettleIdentityAtLine,
   navResolveWrittenTaskLineText,
   navSettledLineText,
+  prepareNavSettledChangeMap,
+  navResolveSettledTaskAnchor,
+  navMapSettledOneBasedLine,
   applyNavGesturePostimage,
 });

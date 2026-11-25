@@ -24,7 +24,16 @@ class BobNavigationHotkeysTaskSplitPersistMixin {
     }
     const input = context && typeof context === "object" ? context : {};
     const sourcePath = String(input.sourcePath || "");
-    const session = { sourcePath, editor: input.sourceEditor || null };
+    const settleToday = String(
+      input.today || formatProjectTaskCreatedDate(new Date()),
+    );
+    const session = {
+      sourcePath,
+      editor: input.sourceEditor || null,
+      settleNav: true,
+      settleToday,
+      dailyPath: input.dailyPath,
+    };
     const before =
       input.before && typeof input.before === "object" ? input.before : {};
     const postimages = (plan && plan.files) || {};
@@ -37,6 +46,19 @@ class BobNavigationHotkeysTaskSplitPersistMixin {
             : 1;
       return rank(left) - rank(right) || (left < right ? -1 : left > right ? 1 : 0);
     });
+    const stagedChanges = new Map();
+    for (const entry of ordered) {
+      const hasPreimage = Object.prototype.hasOwnProperty.call(before, entry);
+      stagedChanges.set(entry, Object.freeze({
+        before: hasPreimage ? String(before[entry]) : "",
+        after: String(postimages[entry]),
+      }));
+    }
+    const settledChanges = prepareNavSettledChangeMap(
+      this,
+      stagedChanges,
+      { today: settleToday, dailyPath: input.dailyPath },
+    );
     // Upfront: a changed path that already exists must be a Markdown note.
     // No write has happened yet, so this refusal leaves nothing behind.
     for (const entry of ordered) {
@@ -51,16 +73,23 @@ class BobNavigationHotkeysTaskSplitPersistMixin {
           message: `Split destination is not a Markdown note: ${entry}`,
         };
       }
+      const hasPreimage = Object.prototype.hasOwnProperty.call(before, entry);
+      if ((file && !hasPreimage) || (!file && hasPreimage)) {
+        return {
+          ok: false,
+          code: "split_write_failed",
+          message: "Split destination changed; nothing was written",
+        };
+      }
     }
     const written = [];
     try {
       for (const entry of ordered) {
-        const after = String(postimages[entry]);
+        const change = settledChanges.get(entry);
         const hadPreimage = Object.prototype.hasOwnProperty.call(
           before,
           entry,
         );
-        const beforeContent = hadPreimage ? String(before[entry]) : "";
         const file =
           typeof vault.getAbstractFileByPath === "function"
             ? vault.getAbstractFileByPath(entry)
@@ -77,7 +106,7 @@ class BobNavigationHotkeysTaskSplitPersistMixin {
           written.push(
             await this.writeTaskMoveChange(
               entry,
-              { before: beforeContent, after },
+              change,
               file,
               session,
             ),
@@ -89,16 +118,113 @@ class BobNavigationHotkeysTaskSplitPersistMixin {
           if (typeof vault.create !== "function") {
             throw new Error("Vault content updates are unavailable");
           }
-          const created = await vault.create(entry, after);
+          const created = await vault.create(entry, change.after);
           written.push({
             path: entry,
             file: created,
             editor: null,
-            change: { before: "", after },
+            change: { before: "", after: change.after },
             created: true,
+            settleOutcome: null,
           });
         }
       }
+
+      const finalContents = new Map();
+      const lineMaps = {};
+      for (const entry of ordered) {
+        const staged = settledChanges.get(entry);
+        const record = written.find((item) => item.path === entry);
+        finalContents.set(entry, record ? record.change.after : staged.after);
+        lineMaps[entry] = record && record.settleOutcome &&
+          record.settleOutcome.lineMap
+          ? record.settleOutcome.lineMap
+          : staged.lineMap;
+      }
+      const plannedTasks = Array.isArray(plan && plan.tasks) ? plan.tasks : [];
+      const stagedAnchors = plannedTasks.map((task) => {
+        const path = String(task && task.path || "");
+        const line = Math.floor(Number(task && task.line));
+        const stagedLines = splitMarkdownContent(String(postimages[path] || "")).lines;
+        const text = line > 0 ? String(stagedLines[line - 1] || "") : "";
+        const blockId = task && typeof task.block_id === "string"
+          ? task.block_id
+          : navTaskSettleLineBlockId(text);
+        return { path, line, blockId, text };
+      });
+      if (stagedAnchors.length === 0 && plan && plan.cursor) {
+        const path = String(plan.cursor.path || "");
+        const line = Math.floor(Number(plan.cursor.line));
+        const stagedLines = splitMarkdownContent(String(postimages[path] || "")).lines;
+        const text = line > 0 ? String(stagedLines[line - 1] || "") : "";
+        stagedAnchors.push({
+          path,
+          line,
+          blockId: navTaskSettleLineBlockId(text),
+          text,
+        });
+      }
+      const anchors = stagedAnchors.map((anchor) =>
+        navResolveSettledTaskAnchor(
+          String(finalContents.get(anchor.path) || ""),
+          anchor,
+        ),
+      );
+      if (anchors.some((anchor) => !anchor)) {
+        throw new Error("Split task anchor could not be resolved after settling");
+      }
+      const cursorPlanTask = plannedTasks.find((task) =>
+        task && plan && plan.cursor &&
+          task.path === plan.cursor.path && task.line === plan.cursor.line,
+      );
+      const cursorPlanIndex = cursorPlanTask
+        ? plannedTasks.indexOf(cursorPlanTask)
+        : -1;
+      const cursorAnchor = anchors[cursorPlanIndex] || anchors[0] || null;
+      const moveMap = input.moveMap && typeof input.moveMap === "object"
+        ? {
+            ...input.moveMap,
+            moves: (Array.isArray(input.moveMap.moves) ? input.moveMap.moves : [])
+              .map((move) => ({
+                ...move,
+                to: navMapSettledOneBasedLine(
+                  lineMaps[String(input.moveMap.destinationPath || "")],
+                  move.to,
+                ),
+              })),
+          }
+        : null;
+      const tasks = plannedTasks.map((task, index) => ({
+        ...task,
+        path: anchors[index].path,
+        line: anchors[index].line,
+        block_id: anchors[index].blockId,
+        text: anchors[index].text,
+      }));
+      const records = new Map(written.map((entry) => [entry.path, entry]));
+      const restores = ordered.map((entry) => {
+        const record = records.get(entry);
+        return {
+          path: entry,
+          before: record
+            ? String(record.change.before)
+            : stagedChanges.get(entry).before,
+          after: record
+            ? String(record.change.after)
+            : String(finalContents.get(entry) || ""),
+          created: record ? record.created === true : false,
+        };
+      });
+      return {
+        ok: true,
+        written,
+        restores,
+        anchor: cursorAnchor,
+        anchors: Object.freeze(anchors),
+        tasks: Object.freeze(tasks),
+        moveMap,
+        lineMaps: Object.freeze(lineMaps),
+      };
     } catch (error) {
       const partial = error && error.taskMoveAppliedEntry;
       if (
@@ -147,23 +273,6 @@ class BobNavigationHotkeysTaskSplitPersistMixin {
           (error && error.message) || "Split failed to apply",
       };
     }
-    return {
-      ok: true,
-      written,
-      restores: ordered.map((entry) => {
-        const record = written.find((item) => item.path === entry);
-        return {
-          path: entry,
-          before: record
-            ? String(record.change.before)
-            : Object.prototype.hasOwnProperty.call(before, entry)
-              ? String(before[entry])
-              : "",
-          after: String(postimages[entry]),
-          created: record ? record.created === true : false,
-        };
-      }),
-    };
   }
 
   // `api.taskSplit` v1 implementation: carry the requirement at the 1-based
@@ -334,17 +443,28 @@ class BobNavigationHotkeysTaskSplitPersistMixin {
       sourcePath: notePath,
       sourceEditor,
       before: files,
+      today,
+      moveMap: planned.moveMap,
     });
     if (!persisted.ok) {
       return persisted;
     }
     return {
       ok: true,
-      task: planned.task,
-      moveMap: planned.moveMap,
+      task: persisted.anchor
+        ? {
+            ...planned.task,
+            path: persisted.anchor.path,
+            line: persisted.anchor.line,
+            blockId: persisted.anchor.blockId,
+          }
+        : planned.task,
+      moveMap: persisted.moveMap || planned.moveMap,
       restores: persisted.restores,
       notice: planned.plan.notice,
-      cursor: planned.plan.cursor,
+      cursor: persisted.anchor
+        ? { path: persisted.anchor.path, line: persisted.anchor.line }
+        : planned.plan.cursor,
     };
   }
 }

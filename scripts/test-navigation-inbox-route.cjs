@@ -604,6 +604,60 @@ function replaceSourceLine(editor, line, next) {
   editor.replaceRange(next, { line, ch: 0 }, { line, ch: current.length });
 }
 
+function attachRouteSettle(plugin, seen) {
+  const settleContents = (contents) => {
+    const lines = String(contents || "").split(/\r?\n/);
+    if (lines.includes("<!-- task-settled -->")) {
+      const lineMap = {};
+      lines.forEach((_, index) => { lineMap[index] = index; });
+      return { contents: lines.join("\n"), changed: false, lineMap, warnings: [] };
+    }
+    const frontmatterEnd = lines[0] === "---" ? lines.indexOf("---", 1) : -1;
+    const insertAt = frontmatterEnd >= 0 ? frontmatterEnd + 1 : 0;
+    const output = lines.slice();
+    output.splice(insertAt, 0, "<!-- task-settled -->");
+    const lineMap = {};
+    lines.forEach((_, index) => {
+      lineMap[index] = index < insertAt ? index : index + 1;
+    });
+    return { contents: output.join("\n"), changed: true, lineMap, warnings: [] };
+  };
+  plugin.app.plugins = { plugins: {
+    "bob-ledger-tools": { api: { taskSettle: {
+      version: 1,
+      settleNote(request) {
+        seen.push({ path: request.path, contents: request.contents });
+        return settleContents(request.contents);
+      },
+      applyToEditor(editor, _path, options) {
+        const live = String(editor.getValue() || "");
+        if (live !== String(options.expected)) {
+          return { applied: false, contents: live, reason: "preimage" };
+        }
+        const result = settleContents(options.contents);
+        const last = Math.max(0, live.split(/\r?\n/).length - 1);
+        editor.transaction({ changes: [{
+          from: { line: 0, ch: 0 },
+          to: { line: last, ch: String(live.split(/\r?\n/)[last] || "").length },
+          text: result.contents,
+        }] });
+        return {
+          applied: true,
+          changed: result.contents !== live,
+          contents: result.contents,
+          lineMap: result.lineMap,
+          cursor: null,
+          jumpTarget: null,
+          reason: null,
+          warnings: [],
+          provider: "v1",
+        };
+      },
+      flushPending() { return []; },
+    } } },
+  } };
+}
+
 test("commitInboxRoute moves the verified task with its children", async () => {
   const { plugin, store, editor, opened, sourceContent } = routedCommitFixture();
   const discovery = helpers.discoverMovableObsidianTaskTargets(sourceContent, 5, 0);
@@ -640,6 +694,41 @@ test("commitInboxRoute moves the verified task with its children", async () => {
   assert.match(store.get("Daily/2026-10-06.md"), /\[\[Health#\^abc\]\]/);
   // A routed move never opens the destination.
   assert.deepEqual(opened, []);
+});
+
+test("commitInboxRoute settles the complete routed batch before its guarded writes", async () => {
+  const { plugin, store, editor, sourceContent } = routedCommitFixture();
+  const seen = [];
+  attachRouteSettle(plugin, seen);
+  const discovery = helpers.discoverMovableObsidianTaskTargets(sourceContent, 5, 0);
+  const expected = helpers.captureInboxRouteExpected(discovery.targets);
+  replaceSourceLine(editor, 5, "- [ ] #task Triage me [p::2] ^abc");
+  const result = await plugin.commitInboxRoute({
+    editor,
+    sourcePath: "mac_inbox.md",
+    startLine: 5,
+    expected,
+    destinationPath: "Health.md",
+  });
+  assert.equal(result.ok, true, result.reason);
+  assert.deepEqual(seen.map((entry) => entry.path).sort(), [
+    "Daily/2026-10-06.md",
+    "Health.md",
+    "mac_inbox.md",
+  ]);
+  const stagedDestination = seen.find((entry) => entry.path === "Health.md");
+  assert.match(stagedDestination.contents, /Triage me \[p::2\]/);
+  assert.match(stagedDestination.contents, /\^abc/);
+  assert.match(store.get("Health.md"), /<!-- task-settled -->/);
+  assert.match(store.get("Health.md"), /Triage me \[p::2\]/);
+  assert.equal(result.destinationAnchor.blockId, "abc");
+  assert.equal(
+    store.get("Health.md").split(/\r?\n/)[result.destinationAnchor.line - 1],
+    result.destinationAnchor.text,
+  );
+  assert.match(editor.getValue(), /<!-- task-settled -->/);
+  assert.doesNotMatch(editor.getValue(), /Triage me/);
+  assert.match(store.get("Daily/2026-10-06.md"), /\[\[Health#\^abc\]\]/);
 });
 
 test("commitInboxRoute into a blocked project tags the moved task", async () => {

@@ -665,7 +665,7 @@ class BobNavigationHotkeysTaskSplitMixin {
       return false;
     }
     if (plan.cursor.path === sourceFile.path) {
-      return this.applyTaskSplitSameNote(editor, sourceFile, sourceContent, cursor, plan);
+      return this.applyTaskSplitSameNote(editor, sourceFile, sourceContent, cursor, plan, today);
     }
     return this.applyTaskSplitCrossNote(
       editor,
@@ -674,6 +674,7 @@ class BobNavigationHotkeysTaskSplitMixin {
       cursor,
       plan,
       files,
+      today,
     );
   }
 
@@ -793,7 +794,7 @@ class BobNavigationHotkeysTaskSplitMixin {
     return true;
   }
 
-  applyTaskSplitSameNote(editor, sourceFile, sourceContent, cursor, plan) {
+  applyTaskSplitSameNote(editor, sourceFile, sourceContent, cursor, plan, today) {
     const after = plan.files[sourceFile.path];
     if (typeof after !== "string") {
       new Notice("Split planned no change");
@@ -801,18 +802,58 @@ class BobNavigationHotkeysTaskSplitMixin {
     }
     const landingLine = Math.max(0, (plan.cursor.line || 1) - 1);
     let applied = false;
+    let settleOutcome = null;
     try {
-      applied = applyEditorContentTransaction(editor, sourceContent, after, {
-        line: landingLine,
-        ch: 0,
-      });
+      if (typeof this.applyNavSettledEditorWrite === "function") {
+        settleOutcome = this.applyNavSettledEditorWrite(
+          editor,
+          sourceFile.path,
+          { expected: sourceContent, contents: after, today },
+        );
+        applied = Boolean(settleOutcome && settleOutcome.applied === true);
+      } else {
+        applied = applyEditorContentTransaction(editor, sourceContent, after, {
+          line: landingLine,
+          ch: 0,
+        });
+      }
     } catch (error) {
       new Notice("Split failed to apply");
       return false;
     }
-    if (!applied || String(editor.getValue() || "") !== after) {
+    const settledContents = String(editor.getValue() || "");
+    const expectedAfter = settleOutcome ? settleOutcome.contents : after;
+    if (!applied || settledContents !== expectedAfter) {
       new Notice("Split failed to apply");
       return false;
+    }
+    const stagedLines = taskSplitLines(after);
+    const stagedTaskLine = Math.max(0, (plan.cursor.line || 1) - 1);
+    const stagedTaskText = String(stagedLines[stagedTaskLine] || "");
+    const taskAnchor = navResolveSettledTaskAnchor(settledContents, {
+      path: sourceFile.path,
+      line: stagedTaskLine + 1,
+      blockId: navTaskSettleLineBlockId(stagedTaskText),
+      text: stagedTaskText,
+    });
+    if (!taskAnchor) {
+      if (typeof this.applyNavSettledRestoreWrite === "function") {
+        this.applyNavSettledRestoreWrite(editor, sourceFile.path, {
+          expected: settledContents,
+          contents: sourceContent,
+          restore: true,
+        });
+      }
+      new Notice("Split task anchor could not be resolved; the split was rolled back");
+      return false;
+    }
+    const finalLandingLine = taskAnchor.line - 1;
+    if (typeof editor.setCursor === "function") {
+      try {
+        editor.setCursor(finalLandingLine, 0);
+      } catch (_cursorError) {
+        // Focus is best-effort after the write.
+      }
     }
     try {
       if (typeof this.ensureVimJumpHistory === "function") {
@@ -825,7 +866,7 @@ class BobNavigationHotkeysTaskSplitMixin {
           line: cursor.line,
           ch: cursor.ch || 0,
         },
-        { path: sourceFile.path, line: landingLine, ch: 0 },
+        { path: sourceFile.path, line: finalLandingLine, ch: 0 },
       );
     } catch (error) {
       // The Vim jump context is a nicety; the write already landed.
@@ -841,6 +882,7 @@ class BobNavigationHotkeysTaskSplitMixin {
     cursor,
     plan,
     plannedFiles,
+    today,
   ) {
     const destinationPath = plan.cursor.path;
     const destinationAfter = plan.files[destinationPath];
@@ -855,6 +897,7 @@ class BobNavigationHotkeysTaskSplitMixin {
       sourcePath: sourceFile.path,
       sourceEditor: editor,
       before: plannedFiles || {},
+      today,
     });
     if (!persisted.ok) {
       new Notice(persisted.message || "Split failed to apply");
@@ -889,7 +932,9 @@ class BobNavigationHotkeysTaskSplitMixin {
         },
         {
           path: destinationPath,
-          line: Math.max(0, (plan.cursor.line || 1) - 1),
+          line: Math.max(0, (persisted.anchor && persisted.anchor.line
+            ? persisted.anchor.line
+            : plan.cursor.line || 1) - 1),
           ch: 0,
         },
       );
@@ -921,7 +966,9 @@ class BobNavigationHotkeysTaskSplitMixin {
             : null;
         if (destinationEditor && typeof destinationEditor.setCursor === "function") {
           destinationEditor.setCursor(
-            Math.max(0, (plan.cursor.line || 1) - 1),
+            Math.max(0, (persisted.anchor && persisted.anchor.line
+              ? persisted.anchor.line
+              : plan.cursor.line || 1) - 1),
             0,
           );
         }

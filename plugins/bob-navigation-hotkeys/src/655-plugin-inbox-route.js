@@ -274,6 +274,10 @@ class BobNavigationHotkeysInboxRouteMixin {
       typeof this.getFreshnessApi === "function"
         ? this.getFreshnessApi()
         : null;
+    const dailyPath = scheduledRecoveryDailyPaths(
+      Array.from(snapshots, ([path, content]) => ({ path, content })),
+      today,
+    ).current;
     const plan = planTaskMoveAcrossFiles({
       sourcePath,
       destinationPath,
@@ -292,10 +296,7 @@ class BobNavigationHotkeysInboxRouteMixin {
       noteIndex: createScheduledRecoveryNoteIndex(
         Array.from(snapshots, ([path, content]) => ({ path, content })),
       ),
-      dailyPath: scheduledRecoveryDailyPaths(
-        Array.from(snapshots, ([path, content]) => ({ path, content })),
-        today,
-      ).current,
+      dailyPath,
     });
     if (!plan.valid) {
       return { ok: false, reason: `${plan.error}; nothing was moved` };
@@ -355,19 +356,16 @@ class BobNavigationHotkeysInboxRouteMixin {
       }
     }
 
-    const sourceChange = plan.changes.get(sourcePath);
-    const sourceLines = splitMarkdownContent(sourceChange.after).lines;
-    const sourceLine = Math.min(
-      plan.nextSourceLine,
-      Math.max(sourceLines.length - 1, 0),
-    );
-    const finalCursor = {
-      line: sourceLine,
-      ch: Math.min(
-        Math.max(numericOrDefault(cursor.ch, 0), 0),
-        String(sourceLines[sourceLine] || "").length,
-      ),
-    };
+    // Settle only after the move plus ledger cleanup and type relocation have
+    // produced their complete postimages. Keep one local date for every note.
+    const settleToday = formatProjectTaskCreatedDate(today);
+    const settledChanges = prepareNavSettledChangeMap(this, plan.changes, {
+      today: settleToday,
+      dailyPath,
+    });
+    if (settledChanges.size !== plan.changes.size) {
+      return { ok: false, reason: "Could not prepare task move notes; nothing was moved" };
+    }
     const auxiliaryPaths = Array.from(plan.changes.keys())
       .filter(
         (path) =>
@@ -379,11 +377,17 @@ class BobNavigationHotkeysInboxRouteMixin {
       ...auxiliaryPaths,
       sourcePath,
     ];
-    const sessionLike = { sourcePath, editor };
+    const sessionLike = {
+      sourcePath,
+      editor,
+      settleNav: true,
+      settleToday,
+      dailyPath,
+    };
     const written = [];
     try {
       for (const path of writeOrder) {
-        const change = plan.changes.get(path);
+        const change = settledChanges.get(path);
         if (!change || change.before === change.after) {
           continue;
         }
@@ -405,7 +409,7 @@ class BobNavigationHotkeysInboxRouteMixin {
             change,
             file,
             sessionLike,
-            path === sourcePath ? finalCursor : null,
+            null,
           ),
         );
       }
@@ -430,17 +434,76 @@ class BobNavigationHotkeysInboxRouteMixin {
       };
     }
 
+    const destinationRecord = written.find((entry) => entry.path === destinationPath);
+    const destinationContents = destinationRecord
+      ? destinationRecord.change.after
+      : String(settledChanges.get(destinationPath).after || "");
+    const destinationAnchor = navResolveSettledTaskAnchor(destinationContents, {
+      path: destinationPath,
+      line: plan.destinationLine + 1,
+      blockId: plan.destinationBlockId,
+      text: plan.destinationAnchorText,
+    });
+    if (!destinationAnchor) {
+      const failedRollbacks = await this.rollbackTaskMoveChanges(written);
+      return {
+        ok: false,
+        reason: failedRollbacks.length > 0
+          ? `Task move anchor could not be resolved; review ${failedRollbacks.join(", ")}`
+          : "Task move anchor could not be resolved; completed writes were rolled back",
+      };
+    }
+    const sourceRecord = written.find((entry) => entry.path === sourcePath);
+    const sourceChange = settledChanges.get(sourcePath);
+    const sourceContents = sourceRecord
+      ? sourceRecord.change.after
+      : String(sourceChange.after || "");
+    const sourceLines = splitMarkdownContent(sourceContents).lines;
+    const mappedSourceLine = navMapSettledOneBasedLine(
+      sourceChange.lineMap,
+      plan.nextSourceLine + 1,
+    ) - 1;
+    const sourceLine = sourceRecord && sourceRecord.settleOutcome &&
+      sourceRecord.settleOutcome.cursor &&
+      Number.isInteger(sourceRecord.settleOutcome.cursor.line)
+      ? sourceRecord.settleOutcome.cursor.line
+      : mappedSourceLine;
+    const finalCursor = {
+      line: Math.max(0, Math.min(sourceLine, Math.max(sourceLines.length - 1, 0))),
+      ch: Math.min(
+        Math.max(numericOrDefault(cursor.ch, 0), 0),
+        String(sourceLines[Math.max(0, Math.min(sourceLine, Math.max(sourceLines.length - 1, 0)))] || "").length,
+      ),
+    };
+    const finalChanges = new Map();
+    for (const [path, change] of settledChanges.entries()) {
+      const record = written.find((entry) => entry.path === path);
+      finalChanges.set(path, Object.freeze({
+        before: change.before,
+        after: record ? record.change.after : change.after,
+      }));
+    }
+    const finalPlan = Object.freeze({
+      ...plan,
+      changes: finalChanges,
+      nextSourceLine: finalCursor.line,
+      destinationLine: destinationAnchor.line - 1,
+      destinationAnchorText: destinationAnchor.text,
+      destinationBlockId: destinationAnchor.blockId,
+    });
+
     const destinationName =
       destinationFile.basename ||
       getVaultPathBasenameWithoutExtension(destinationFile.path);
     return {
       ok: true,
       reason: null,
-      plan,
+      plan: finalPlan,
       destinationFile,
       destinationName,
-      nextSourceLine: sourceLine,
+      nextSourceLine: finalCursor.line,
       finalCursor,
+      destinationAnchor,
       relocated: noteMoveRelocated,
     };
   }
@@ -828,6 +891,7 @@ class BobNavigationHotkeysInboxRouteMixin {
         count,
         destinationName: result.destinationName,
         destinationPath,
+        destinationAnchor: result.destinationAnchor || null,
         notice: formatInboxRouteMoveNotice({
           count,
           destinationName: result.destinationName,

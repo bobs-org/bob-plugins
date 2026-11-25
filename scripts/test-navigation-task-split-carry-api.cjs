@@ -115,6 +115,57 @@ function openSource(harness, filePath, content, cursor) {
   return editor;
 }
 
+function attachSettle(harness, observations = {}) {
+  observations.notes = observations.notes || [];
+  observations.editorCalls = observations.editorCalls || [];
+  const settleContents = (contents) => {
+    const text = String(contents || "");
+    const lines = text.split(/\r?\n/);
+    const marker = "<!-- task-settled -->";
+    const existing = lines.indexOf(marker);
+    if (existing >= 0) {
+      const lineMap = {};
+      lines.forEach((_, index) => { lineMap[index] = index; });
+      return { contents: text, changed: false, lineMap, warnings: [] };
+    }
+    lines.unshift(marker);
+    const lineMap = {};
+    for (let index = 0; index < lines.length - 1; index += 1) {
+      lineMap[index] = index + 1;
+    }
+    return { contents: lines.join("\n"), changed: true, lineMap, warnings: [] };
+  };
+  harness.plugin.app.plugins = { plugins: {
+    "bob-ledger-tools": { api: { taskSettle: {
+      version: 1,
+      settleNote(request) {
+        observations.notes.push({ path: request.path, contents: request.contents });
+        return settleContents(request.contents);
+      },
+      applyToEditor(editor, path, options) {
+        observations.editorCalls.push({ path, expected: options.expected, contents: options.contents });
+        const live = String(editor.getValue() || "");
+        if (live !== String(options.expected)) {
+          return { applied: false, changed: false, contents: live, lineMap: {}, cursor: options.cursor, jumpTarget: null, reason: "preimage" };
+        }
+        const settled = settleContents(options.contents);
+        const lastLine = Math.max(0, live.split(/\r?\n/).length - 1);
+        const cursor = options.cursor || null;
+        const mappedCursor = cursor && Number.isInteger(settled.lineMap[cursor.line])
+          ? { ...cursor, line: settled.lineMap[cursor.line] }
+          : cursor;
+        editor.transaction({
+          changes: [{ from: { line: 0, ch: 0 }, to: { line: lastLine, ch: String(live.split(/\r?\n/)[lastLine] || "").length }, text: settled.contents }],
+          selection: mappedCursor ? { from: mappedCursor, to: mappedCursor } : undefined,
+        });
+        return { applied: true, changed: settled.contents !== live, contents: settled.contents, lineMap: settled.lineMap, cursor: mappedCursor, jumpTarget: null, reason: null, warnings: [], provider: "v1" };
+      },
+      flushPending() { return []; },
+    } } },
+  } };
+  return observations;
+}
+
 test("the SHA-256 twin matches node crypto, including unicode", () => {
   const cases = [
     "",
@@ -386,6 +437,53 @@ test("taskSplitCarryReq persists a same-note carry and returns restores", async 
   assert.ok(editor.content.includes("- [>] [[#^handles-supported|"));
 });
 
+test("taskSplitCarryReq settles its complete postimage and returns the final anchor", async () => {
+  const harness = carryPlugin({ "db.md": SOURCE });
+  const editor = openSource(harness, "db.md", SOURCE, { line: 1, ch: 2 });
+  const observations = attachSettle(harness);
+  const lines = SOURCE.split("\n");
+  const result = await harness.plugin.taskSplitCarryReq({
+    notePath: "db.md",
+    line: 2,
+    expectedLine: digest(lines[1]),
+  });
+  assert.equal(result.ok, true, result.message);
+  assert.equal(observations.editorCalls.length, 1);
+  assert.match(observations.editorCalls[0].contents, /\[>\].*Handles supported inputs/);
+  assert.match(observations.editorCalls[0].contents, /#task Handles supported inputs/);
+  assert.equal(result.task.line, 5);
+  assert.equal(result.cursor.line, 5);
+  assert.deepEqual(result.moveMap.moves, [{ from: 3, to: 7 }]);
+  assert.match(editor.content, /^<!-- task-settled -->/);
+  assert.equal(result.restores[0].after, editor.content);
+});
+
+test("split settles a newly created note before vault.create and returns settled receipts", async () => {
+  const harness = carryPlugin({ "source.md": SOURCE });
+  const observations = attachSettle(harness);
+  const staged = [
+    "- [ ] #task New work [created:: 2026-11-25] ^new-work",
+    "  - follow-up",
+  ].join("\n");
+  const plan = {
+    files: { "new.md": staged },
+    tasks: [{ path: "new.md", line: 1, block_id: "new-work", title: "New work" }],
+    cursor: { path: "new.md", line: 1 },
+  };
+  const persisted = await harness.plugin.persistTaskSplitPostimages(plan, {
+    sourcePath: "source.md",
+    before: {},
+    today: TODAY,
+  });
+  assert.equal(persisted.ok, true, persisted.message);
+  assert.equal(observations.notes.length, 1);
+  assert.equal(observations.notes[0].contents, staged);
+  assert.match(harness.files.get("new.md").content, /^<!-- task-settled -->/);
+  assert.equal(persisted.anchor.line, 2);
+  assert.equal(persisted.anchor.blockId, "new-work");
+  assert.equal(persisted.restores[0].after, harness.files.get("new.md").content);
+});
+
 test("taskSplitCarryReq persists a daily-note carry destination-first", async () => {
   const source = [
     "- [ ] #task Deploy the release [created:: 2026-11-03] ^deploy [root:: projects/launch]",
@@ -469,6 +567,7 @@ test("persistTaskSplitPostimages rolls back the destination when the source fail
   const harness = carryPlugin(files, {
     failPaths: new Set(["2026/20261103.md"]),
   });
+  attachSettle(harness);
   const persisted = await harness.plugin.persistTaskSplitPostimages(plan, {
     sourcePath: "2026/20261103.md",
     sourceEditor: null,

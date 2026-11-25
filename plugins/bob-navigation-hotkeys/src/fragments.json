@@ -224,6 +224,7 @@
   "640-plugin-notes-and-task-move.js",
   "641-album-record-link-guard.js",
   "641-plugin-copy-card.js",
+  "642-task-move-write.js",
   "650-plugin-move-commit.js",
   "651-pomodoro-bullet-type-move-commit.js",
   "652-pomodoro-split.js",

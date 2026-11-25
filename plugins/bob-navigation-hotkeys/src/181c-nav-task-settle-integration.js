@@ -62,6 +62,73 @@ function navSettledLineText(cm, staged, options = {}) {
   return navResolveWrittenTaskLineText(String(cm.getValue() || ""), staged);
 }
 
+// Prepare every changed note from its complete post-gesture bytes. Closed
+// notes use these exact bytes in their guarded vault.process write; editor
+// notes still pass the staged bytes to applyToEditor at persistence time.
+function prepareNavSettledChangeMap(plugin, changes, options = {}) {
+  const prepared = new Map();
+  const entries = changes instanceof Map ? changes.entries() : Object.entries(changes || {});
+  for (const [path, change] of entries) {
+    if (!change || typeof change.before !== "string" || typeof change.after !== "string") {
+      continue;
+    }
+    let outcome = null;
+    try {
+      if (plugin && typeof plugin.prepareNavSettledFilePostimage === "function") {
+        outcome = plugin.prepareNavSettledFilePostimage(path, change.after, options);
+      }
+    } catch (_error) {
+      outcome = null;
+    }
+    const staged = String(change.after);
+    prepared.set(path, Object.freeze({
+      before: String(change.before),
+      after: outcome && outcome.contents != null ? String(outcome.contents) : staged,
+      settleInput: staged,
+      lineMap: outcome && outcome.lineMap ? outcome.lineMap : Object.freeze({}),
+      provider: outcome && outcome.provider ? outcome.provider : "none",
+    }));
+  }
+  return prepared;
+}
+
+// Resolve a task anchor against final bytes. A supplied block ID remains
+// authoritative; only ID-less anchors can use an exact-text fallback.
+function navResolveSettledTaskAnchor(contents, anchor) {
+  if (!anchor || typeof anchor !== "object") return null;
+  const lines = splitMarkdownContent(String(contents || "")).lines;
+  const hinted = Math.floor(Number(anchor.line || 0)) - 1;
+  const identity = {
+    line: Number.isInteger(hinted) && hinted >= 0 ? hinted : 0,
+    ...(typeof anchor.blockId === "string" && anchor.blockId.trim()
+      ? { blockId: anchor.blockId.trim() }
+      : {}),
+    ...(typeof anchor.text === "string" && anchor.text.length > 0
+      ? { text: anchor.text }
+      : {}),
+  };
+  const resolved = resolveNavTaskIdentity(lines, identity);
+  if (!resolved || !Number.isInteger(resolved.line) || resolved.line < 0) return null;
+  const text = String(lines[resolved.line] || "");
+  const blockId = navTaskSettleLineBlockId(text);
+  return Object.freeze({
+    path: String(anchor.path || ""),
+    line: resolved.line + 1,
+    blockId,
+    text,
+  });
+}
+
+// Settle line maps are zero-based; move and split receipts expose 1-based
+// lines. Removed lines have no mapping and remain unchanged for callers to
+// resolve by task identity where possible.
+function navMapSettledOneBasedLine(lineMap, line) {
+  const original = Math.floor(Number(line));
+  if (!Number.isInteger(original) || original < 1) return line;
+  const mapped = mapNavLineThroughSettle(lineMap, original - 1);
+  return Number.isInteger(mapped) ? mapped + 1 : original;
+}
+
 class BobNavigationHotkeysTaskSettleIntegrationMixin {
   applyNavTaskSettleToCurrentEditor(editor, path, options = {}) {
     if (!editor || typeof editor.getValue !== "function" ||

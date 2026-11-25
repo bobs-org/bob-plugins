@@ -20527,6 +20527,2153 @@ function taskReqInfoAtLine(contents, lineIndex) {
     return null;
   }
 }
+// ---- src/139a-task-settle-model.js ----
+// Pure task-settle model twin (bob-cli-q4.8.1.1 pure-twin).
+//
+// Ports bob-cli's Rust settle helpers into ledger-tools: status
+// classification (`task_status_groups::TaskClassification::from_status_types`),
+// conservative Markdown helpers (`src/native/markdown.rs`), area/project
+// frontmatter eligibility, inline-field scanning (`task_fields.rs`), task-line
+// parsing (`task_status_hooks::parse`), and stale `[unblocked::]` pruning
+// (`freshness::placement::prune_unblocked`).
+//
+// The canonical contract is `tests/fixtures/task_settle/vectors.json` in
+// bob-cli. Byte-identical fixture copies live under
+// `scripts/fixtures/task_settle/`.
+
+const TS_BADGE_CHIPS = [
+  ["\u26AA", "open"],
+  ["\uD83D\uDD35", "next/wip"],
+  ["\uD83D\uDD34", "blocked"],
+  ["\uD83D\uDFE2", "done/canceled"],
+];
+
+const TS_TITLE_ACTIVE = "Next & In Progress";
+const TS_TITLE_BLOCKED = "Blocked";
+const TS_TITLE_CLOSED = "Done & Canceled";
+
+const TS_LEGACY_GROUP_MARKER_PREFIX = "bob:task-status-group:v1:";
+
+const TS_TASKS_KEYS = new Set([
+  "priority",
+  "start",
+  "created",
+  "scheduled",
+  "due",
+  "completion",
+  "cancelled",
+  "repeat",
+  "onCompletion",
+  "id",
+  "dependsOn",
+]);
+
+// --- Status buckets ---------------------------------------------------------
+
+function tsBucketDestination(bucket) {
+  if (bucket === "active") return "active";
+  if (bucket === "blocked") return "blocked";
+  if (bucket === "closed") return "closed";
+  return "intake";
+}
+
+function tsBucketIsGroupable(bucket) {
+  return bucket !== "ready" && bucket !== "other_open" && bucket !== "unknown";
+}
+
+function tsDestinationGroup(destination) {
+  if (destination === "active") return "active";
+  if (destination === "blocked") return "blocked";
+  if (destination === "closed") return "closed";
+  return null;
+}
+
+function tsDestinationLabel(destination) {
+  if (destination === "active") return "next_and_in_progress";
+  if (destination === "blocked") return "blocked";
+  if (destination === "closed") return "done_and_canceled";
+  return "intake";
+}
+
+function tsGroupKindTitle(kind) {
+  if (kind === "active") return TS_TITLE_ACTIVE;
+  if (kind === "blocked") return TS_TITLE_BLOCKED;
+  return TS_TITLE_CLOSED;
+}
+
+function tsGroupKindFromTitle(title) {
+  if (title === TS_TITLE_ACTIVE) return "active";
+  if (title === TS_TITLE_BLOCKED) return "blocked";
+  if (title === TS_TITLE_CLOSED) return "closed";
+  return null;
+}
+
+function tsGroupKindFromMarkerId(id) {
+  if (id === "active") return "active";
+  if (id === "blocked") return "blocked";
+  if (id === "closed") return "closed";
+  return null;
+}
+
+const TS_SKIP_CODES = [
+  "h6_container",
+  "ambiguous_boundary",
+  "ownership_collision",
+  "malformed_ownership",
+  "duplicate_group_heading",
+  "renamed_marked_heading",
+  "authored_heading_in_group",
+  "misplaced_badge_row",
+  "nested_under_ordinary_item",
+  "unsupported_ordered_list",
+];
+
+function tsSkipMessage(code, title, line) {
+  if (code === "h6_container") {
+    return `H6 heading ${JSON.stringify(title)} at line ${line} cannot have child status groups`;
+  }
+  if (code === "ambiguous_boundary") {
+    return `ambiguous Markdown boundary in ${JSON.stringify(title)} at line ${line}; skipped grouping`;
+  }
+  if (code === "ownership_collision") {
+    return `status-group heading in ${JSON.stringify(title)} at line ${line} contains non-task content`;
+  }
+  if (code === "malformed_ownership") {
+    return `malformed task-status-group marker in ${JSON.stringify(title)} at line ${line}`;
+  }
+  if (code === "duplicate_group_heading") {
+    return `duplicate status-group heading in ${JSON.stringify(title)} at line ${line}`;
+  }
+  if (code === "renamed_marked_heading") {
+    return `renamed marked status-group heading in ${JSON.stringify(title)} at line ${line}`;
+  }
+  if (code === "authored_heading_in_group") {
+    return `authored child heading inside a managed status group in ${JSON.stringify(title)} at line ${line}`;
+  }
+  if (code === "misplaced_badge_row") {
+    return `status badge row inside a managed status group in ${JSON.stringify(title)} at line ${line}`;
+  }
+  if (code === "nested_under_ordinary_item") {
+    return `task nested under an ordinary list item in ${JSON.stringify(title)} at line ${line} is structurally ineligible`;
+  }
+  return `ordered-list task root in ${JSON.stringify(title)} at line ${line} is unsupported in v1`;
+}
+
+// --- TaskClassification -----------------------------------------------------
+
+function taskSettleFromStatusTypes(globalFilter, statusTypes, symbols) {
+  const next = (symbols && symbols.next) || "*";
+  const wip = (symbols && symbols.wip) || "/";
+  const blocked = (symbols && symbols.blocked) || "?";
+  const ready = (symbols && symbols.ready) || " ";
+  const buckets = new Map();
+  const open = new Set();
+  for (const entry of statusTypes || []) {
+    const symbol = entry.symbol;
+    const type = entry.type;
+    if (type !== "DONE" && type !== "CANCELLED" && type !== "NON_TASK" && type !== "EMPTY") {
+      open.add(symbol);
+    }
+    let bucket;
+    if (symbol === next || symbol === wip) {
+      bucket = "active";
+    } else if (symbol === blocked) {
+      bucket = "blocked";
+    } else if (symbol === ready) {
+      bucket = "ready";
+    } else if (type === "DONE" || type === "CANCELLED") {
+      bucket = "closed";
+    } else if (type === "NON_TASK" || type === "EMPTY") {
+      bucket = "unknown";
+    } else {
+      bucket = "other_open";
+    }
+    buckets.set(symbol, bucket);
+  }
+  if (!buckets.has("x")) buckets.set("x", "closed");
+  if (!buckets.has("X")) buckets.set("X", "closed");
+  for (const [symbol, bucket] of [
+    [next, "active"],
+    [wip, "active"],
+    [blocked, "blocked"],
+    [ready, "ready"],
+  ]) {
+    if (!buckets.has(symbol)) {
+      buckets.set(symbol, bucket);
+      open.add(symbol);
+    }
+  }
+  return { globalFilter: String(globalFilter == null ? "" : globalFilter), buckets, open };
+}
+
+function tsMatchesFilter(classification, body) {
+  return (
+    classification.globalFilter === "" || String(body).includes(classification.globalFilter)
+  );
+}
+
+function tsIsOpenStatus(classification, symbol) {
+  return classification.open.has(symbol);
+}
+
+function tsMatchesTaskFilter(classification, body) {
+  if (classification.globalFilter === "") return true;
+  return String(body)
+    .split(/\s+/)
+    .some((token) => token === classification.globalFilter);
+}
+
+function tsBucketOf(classification, symbol) {
+  return classification.buckets.get(symbol) || "unknown";
+}
+
+// --- Conservative Markdown helpers (src/native/markdown.rs) ----------------
+
+function tsFenceMarker(line) {
+  const indentation = (line.match(/^ */) || [""])[0].length;
+  if (indentation > 3) return null;
+  const rest = line.slice(indentation);
+  const character = rest[0];
+  if (character !== "`" && character !== "~") return null;
+  let length = 0;
+  while (rest[length] === character) length += 1;
+  if (length < 3) return null;
+  return { character, length };
+}
+
+function tsClosesFence(line, open) {
+  const marker = tsFenceMarker(line);
+  if (!marker) return false;
+  if (marker.character !== open.character || marker.length < open.length) return false;
+  return line.trimStart().slice(marker.length).trim() === "";
+}
+
+function tsFencedLines(lines, start, end) {
+  const masked = new Set();
+  let open = null;
+  for (let index = start; index < end; index += 1) {
+    const line = lines[index];
+    if (open) {
+      masked.add(index);
+      if (tsClosesFence(line, open)) open = null;
+    } else {
+      const marker = tsFenceMarker(line);
+      if (marker) {
+        masked.add(index);
+        open = marker;
+      }
+    }
+  }
+  return masked;
+}
+
+function tsStrictlyClosedFrontmatterEnd(lines) {
+  if ((lines[0] == null ? "" : lines[0].replace(/\r$/, "")) !== "---") return null;
+  for (let index = 1; index < lines.length; index += 1) {
+    if (lines[index].replace(/\r$/, "") === "---") return index;
+  }
+  return null;
+}
+
+function tsMarkdownIndentedLine(line) {
+  const spaces = (line.match(/^ */) || [""])[0].length;
+  if (spaces > 3) return null;
+  return line.slice(spaces);
+}
+
+function tsStripClosingAtxHashes(title) {
+  const trimmed = title.trimEnd();
+  const withoutHashes = trimmed.replace(/#+$/, "");
+  if (withoutHashes.length === trimmed.length) return trimmed;
+  if (withoutHashes === "" || /\s$/.test(withoutHashes)) return withoutHashes.trimEnd();
+  return trimmed;
+}
+
+function tsAtxHeading(line) {
+  const rest0 = tsMarkdownIndentedLine(line);
+  if (rest0 == null) return null;
+  let hashes = 0;
+  while (rest0[hashes] === "#") hashes += 1;
+  if (hashes < 1 || hashes > 6) return null;
+  const after = rest0[hashes];
+  if (after !== undefined && !/\s/.test(after)) return null;
+  return { level: hashes, title: tsStripClosingAtxHashes(rest0.slice(hashes).trim()) };
+}
+
+function tsSplitLineEnding(line) {
+  if (line.endsWith("\r\n")) return [line.slice(0, -2), "\r\n"];
+  if (line.endsWith("\n")) return [line.slice(0, -1), "\n"];
+  return [line, ""];
+}
+
+function tsSetextUnderline(line) {
+  const rest = tsMarkdownIndentedLine(line);
+  if (rest == null) return null;
+  const trimmed = rest.trimEnd();
+  if (trimmed === "") return null;
+  const marker = trimmed[0];
+  if (marker !== "=" && marker !== "-") return null;
+  for (const character of trimmed) {
+    if (character !== marker) return null;
+  }
+  return marker === "=" ? 1 : 2;
+}
+
+function tsStandaloneHtmlComment(line) {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith("<!--") || !trimmed.endsWith("-->")) return null;
+  return trimmed.slice(4, -3).trim();
+}
+
+function tsHtmlCommentOpens(line) {
+  return line.trimStart().startsWith("<!--");
+}
+
+function tsHtmlCommentCloses(line) {
+  return line.includes("-->");
+}
+
+function tsIsBlockquoteLine(line) {
+  const rest = tsMarkdownIndentedLine(line);
+  return rest != null && rest.startsWith(">");
+}
+
+function tsIsIndentedCodeLine(line) {
+  if (line.trim() === "") return false;
+  return (line.match(/^ */) || [""])[0].length >= 4;
+}
+
+// --- Badge rows -------------------------------------------------------------
+
+function tsIsBadgeSpan(span, emoji, label) {
+  if (!span.startsWith(emoji)) return false;
+  const afterEmoji = span.slice(emoji.length);
+  if (!afterEmoji.startsWith(" ")) return false;
+  const rest = afterEmoji.slice(1);
+  let digits = 0;
+  while (digits < rest.length && rest[digits] >= "0" && rest[digits] <= "9") digits += 1;
+  if (digits === 0) return false;
+  const afterDigits = rest.slice(digits);
+  if (!afterDigits.startsWith(" ")) return false;
+  return afterDigits.slice(1) === label;
+}
+
+function tsIsBadgeAnchor(anchor) {
+  if (anchor === "" || !anchor.startsWith("#")) return false;
+  return !/[\s)]/.test(anchor);
+}
+
+function tsIsBadgeChip(chip, emoji, label) {
+  if (chip.startsWith("[")) {
+    const rest = chip.slice(1);
+    if (!rest.startsWith("`")) return false;
+    const end = rest.indexOf("`", 1);
+    if (end === -1) return false;
+    const span = rest.slice(1, end);
+    if (!tsIsBadgeSpan(span, emoji, label)) return false;
+    const after = rest.slice(end + 1);
+    if (!after.startsWith("](") || !after.endsWith(")")) return false;
+    return tsIsBadgeAnchor(after.slice(2, -1));
+  }
+  if (!chip.startsWith("`") || !chip.endsWith("`")) return false;
+  return tsIsBadgeSpan(chip.slice(1, -1), emoji, label);
+}
+
+function taskSettleIsBadgeRow(line) {
+  const trimmed = String(line).replace(/[\s\uFEFF\xA0]+$/, "");
+  const chips = trimmed.split(" \u00B7 ");
+  if (chips.length !== 4) return false;
+  for (let index = 0; index < 4; index += 1) {
+    if (!tsIsBadgeChip(chips[index], TS_BADGE_CHIPS[index][0], TS_BADGE_CHIPS[index][1])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function taskSettleIsLegacyBadgeMarker(line) {
+  const inner = tsStandaloneHtmlComment(String(line));
+  return inner != null && inner.startsWith("bob:task-status-badges:");
+}
+
+// --- Inline fields (src/native/task_fields.rs) ------------------------------
+
+const TS_INLINE_FIELD_RE = /\[([A-Za-z][A-Za-z0-9_-]*)\s*::\s*([^\]\n]*)\]|\(([A-Za-z][A-Za-z0-9_-]*)\s*::\s*([^)\n]*)\)/gd;
+
+function tsAllInlineFields(line) {
+  const fields = [];
+  TS_INLINE_FIELD_RE.lastIndex = 0;
+  for (const match of String(line).matchAll(TS_INLINE_FIELD_RE)) {
+    const whole = match[0];
+    const start = match.index;
+    const end = start + whole.length;
+    let key;
+    let raw;
+    let rawStart;
+    if (match[1] !== undefined) {
+      key = match[1];
+      raw = match[2] || "";
+      rawStart = match.indices[2][0];
+    } else {
+      key = match[3];
+      raw = match[4] || "";
+      rawStart = match.indices[4][0];
+    }
+    let leading = 0;
+    while (raw[leading] === " " || raw[leading] === "\t") leading += 1;
+    let trailing = 0;
+    while (
+      trailing < raw.length - leading &&
+      (raw[raw.length - 1 - trailing] === " " || raw[raw.length - 1 - trailing] === "\t")
+    ) {
+      trailing += 1;
+    }
+    fields.push({
+      start,
+      end,
+      valueStart: rawStart + leading,
+      valueEnd: rawStart + raw.length - trailing,
+      key,
+      value: raw.slice(leading, raw.length - trailing),
+    });
+  }
+  return fields;
+}
+
+function tsInlineFields(line, key) {
+  return tsAllInlineFields(line).filter((field) => field.key === key);
+}
+
+function tsIsStrictCalendarDate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const year = Number(value.slice(0, 4));
+  const month = Number(value.slice(5, 7));
+  const day = Number(value.slice(8, 10));
+  if (month < 1 || month > 12 || day < 1 || day > 31) return false;
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return (
+    date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+  );
+}
+
+// --- Task-line parsing (task_status_hooks::parse) ---------------------------
+
+function tsIsBlockIdByte(code) {
+  return (
+    (code >= 48 && code <= 57) ||
+    (code >= 65 && code <= 90) ||
+    (code >= 97 && code <= 122) ||
+    code === 45
+  );
+}
+
+function tsAfterListMarker(line, index) {
+  const first = line[index];
+  if (first === "-" || first === "*" || first === "+") {
+    const next = line[index + 1];
+    if (next !== undefined && /\s/.test(next)) return index + 1;
+    return null;
+  }
+  let digits = 0;
+  while (line[index + digits] >= "0" && line[index + digits] <= "9") digits += 1;
+  if (digits === 0) return null;
+  const punct = line[index + digits];
+  if (punct !== "." && punct !== ")") return null;
+  const next = line[index + digits + 1];
+  if (next === undefined || !/\s/.test(next)) return null;
+  return index + digits + 1;
+}
+
+function tsTrailingBlockId(body) {
+  const tokens = String(body).trim().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return null;
+  const token = tokens[tokens.length - 1];
+  if (!token.startsWith("^")) return null;
+  const id = token.slice(1);
+  if (id === "") return null;
+  for (let index = 0; index < id.length; index += 1) {
+    if (!tsIsBlockIdByte(id.charCodeAt(index))) return null;
+  }
+  return id;
+}
+
+function tsValidTaskIdentity(value) {
+  if (value === "") return false;
+  return /^[A-Za-z0-9_-]+$/.test(value);
+}
+
+function tsParseTaskDependencies(value) {
+  if (value === "" || value.includes("\t")) return null;
+  const out = [];
+  for (const part of value.split(",")) {
+    const trimmed = part.replace(/^ +| +$/g, "");
+    if (!tsValidTaskIdentity(trimmed)) return null;
+    out.push(trimmed);
+  }
+  return out;
+}
+
+function tsValidTaskDate(value) {
+  if (value.length !== 10 || value[4] !== "-" || value[7] !== "-") return false;
+  for (let index = 0; index < 10; index += 1) {
+    if (index === 4 || index === 7) continue;
+    const character = value[index];
+    if (character < "0" || character > "9") return false;
+  }
+  return true;
+}
+
+function tsParseTaskDate(value) {
+  if (!tsValidTaskDate(value)) return null;
+  if (!tsIsStrictCalendarDate(value)) return null;
+  return value;
+}
+
+function tsTrailingDataviewField(state) {
+  let end = state.replace(/[\s\uFEFF\xA0]+$/, "").length;
+  let trimmedEnd = state.slice(0, end);
+  if (trimmedEnd.endsWith(",")) {
+    end -= 1;
+    end = state.slice(0, end).replace(/[\s\uFEFF\xA0]+$/, "").length;
+    trimmedEnd = state.slice(0, end);
+  }
+  if (end === 0) return null;
+  const close = trimmedEnd[trimmedEnd.length - 1];
+  let open = null;
+  if (close === "]") open = "[";
+  else if (close === ")") open = "(";
+  else return null;
+  const withoutClose = trimmedEnd.slice(0, -1);
+  const start = withoutClose.lastIndexOf(open);
+  if (start === -1) return null;
+  const inner = withoutClose.slice(start + 1).trim();
+  const split = inner.indexOf("::");
+  if (split === -1) return null;
+  const key = inner.slice(0, split);
+  const value = inner.slice(split + 2);
+  if (key !== key.trim()) return null;
+  return { start, key: key.trim(), value: value.trim() };
+}
+
+function tsTrailingTaskTagStart(state) {
+  const trimmed = state.replace(/[\s\uFEFF\xA0]+$/, "");
+  let start = 0;
+  const match = /\s[^\s]*$/.exec(trimmed);
+  if (match) start = match.index + 1;
+  const tag = trimmed.slice(start);
+  if (!tag.startsWith("#")) return null;
+  const value = tag.slice(1);
+  if (value === "") return null;
+  if (/[\s!@#$%^&*(),.?":{}|<>]/.test(value)) return null;
+  return start;
+}
+
+function tsTaskMetadata(body, blockId) {
+  const metadata = { taskId: null, dependsOn: [], scheduled: null };
+  let state = body;
+  if (blockId != null) {
+    const suffix = `^${blockId}`;
+    const trimmed = state.replace(/[\s\uFEFF\xA0]+$/, "");
+    if (trimmed.endsWith(suffix)) {
+      state = trimmed.slice(0, -suffix.length).replace(/[\s\uFEFF\xA0]+$/, "");
+    }
+  }
+  for (let round = 0; round < 20; round += 1) {
+    const field = tsTrailingDataviewField(state);
+    if (field) {
+      let recognized = false;
+      if (field.key === "id" && tsValidTaskIdentity(field.value)) {
+        metadata.taskId = field.value;
+        recognized = true;
+      } else if (field.key === "dependsOn") {
+        const dependencies = tsParseTaskDependencies(field.value);
+        if (dependencies) {
+          metadata.dependsOn = dependencies;
+          recognized = true;
+        }
+      } else if (field.key === "priority") {
+        recognized = ["highest", "high", "medium", "low", "lowest"].includes(field.value);
+      } else if (field.key === "scheduled") {
+        const scheduled = tsParseTaskDate(field.value);
+        if (scheduled) {
+          metadata.scheduled = scheduled;
+          recognized = true;
+        }
+      } else if (
+        ["start", "created", "due", "completion", "cancelled"].includes(field.key)
+      ) {
+        recognized = tsValidTaskDate(field.value);
+      } else if (field.key === "repeat") {
+        recognized =
+          field.value !== "" && /^[A-Za-z0-9, !]+$/.test(field.value);
+      } else if (field.key === "onCompletion") {
+        recognized = field.value !== "" && /^[A-Za-z]+$/.test(field.value);
+      }
+      if (!recognized) break;
+      state = state.slice(0, field.start).replace(/[\s\uFEFF\xA0]+$/, "");
+      continue;
+    }
+    const tagStart = tsTrailingTaskTagStart(state);
+    if (tagStart != null) {
+      state = state.slice(0, tagStart).replace(/[\s\uFEFF\xA0]+$/, "");
+      continue;
+    }
+    break;
+  }
+  return metadata;
+}
+
+// --- Freshness pruning ------------------------------------------------------
+
+function tsReadFreshness(line, today) {
+  let fresh = null;
+  for (const field of tsInlineFields(line, "fresh")) {
+    if (!tsIsStrictCalendarDate(field.value)) continue;
+    if (field.value > today) continue;
+    if (fresh == null || field.value > fresh) fresh = field.value;
+  }
+  let unblocked = null;
+  for (const field of tsInlineFields(line, "unblocked")) {
+    if (!tsIsStrictCalendarDate(field.value)) continue;
+    if (unblocked == null || field.value > unblocked) unblocked = field.value;
+  }
+  return { fresh, unblocked };
+}
+
+function tsRemoveNamedField(text, key) {
+  const ranges = tsInlineFields(text, key)
+    .map((field) => [field.start, field.end])
+    .sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  if (ranges.length === 0) return text;
+  let output = "";
+  let cursor = 0;
+  for (const [start, end] of ranges) {
+    const before = text.slice(cursor, start);
+    output += before.replace(/[ \t]+$/, "");
+    let next = end;
+    while (text[next] === " " || text[next] === "\t") next += 1;
+    if (output !== "" && next < text.length) output += " ";
+    cursor = next;
+  }
+  output += text.slice(cursor);
+  if (/^[ \t]*$/.test(text.slice(cursor))) output = output.replace(/[ \t]+$/, "");
+  return output;
+}
+
+function tsPruneUnblocked(line, today) {
+  const read = tsReadFreshness(line, today);
+  if (read.fresh != null && read.unblocked != null && read.fresh > read.unblocked) {
+    return tsRemoveNamedField(line, "unblocked");
+  }
+  return null;
+}
+
+// --- Frontmatter + eligibility ----------------------------------------------
+
+function tsTrimCr(value) {
+  return value.endsWith("\r") ? value.slice(0, -1) : value;
+}
+
+function tsParseFrontmatter(contents) {
+  const rawLines = String(contents).split("\n");
+  if (rawLines.length === 0) return null;
+  let first = tsTrimCr(rawLines[0]);
+  if (first.charCodeAt(0) === 0xfeff) first = first.slice(1);
+  if (first !== "---") return null;
+  const lines = [];
+  for (let index = 1; index < rawLines.length; index += 1) {
+    const line = tsTrimCr(rawLines[index]);
+    if (line === "---") return { lines, bodyStartLine: index + 1 };
+    lines.push(line);
+  }
+  return null;
+}
+
+function tsTrimYamlScalar(value) {
+  const trimmed = value.trim();
+  if (trimmed.length >= 2) {
+    const first = trimmed[0];
+    const last = trimmed[trimmed.length - 1];
+    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+      return trimmed.slice(1, -1);
+    }
+  }
+  return trimmed;
+}
+
+function tsWikilinkTypeName(value) {
+  if (value.startsWith("[[") && value.endsWith("]]")) return value.slice(2, -2);
+  return null;
+}
+
+function tsYamlTypeName(item) {
+  const unquoted = tsTrimYamlScalar(String(item).trim()).trim();
+  if (unquoted === "") return null;
+  const linked = tsWikilinkTypeName(unquoted);
+  if (linked != null) return linked;
+  const inner = unquoted.replace(/^[\[\]"']+|[\[\]"']+$/g, "").trim();
+  if (inner === "") return null;
+  return inner;
+}
+
+function tsFlowListTypeNames(raw) {
+  let inner = String(raw).trim();
+  if (inner.startsWith("[")) inner = inner.slice(1);
+  if (inner.endsWith("]")) inner = inner.slice(0, -1);
+  const names = [];
+  for (const part of inner.split(",")) {
+    const name = tsYamlTypeName(part);
+    if (name != null) names.push(name);
+  }
+  return names;
+}
+
+function tsBlockListTypeNames(frontmatter) {
+  const names = [];
+  let inList = false;
+  for (const line of frontmatter.lines) {
+    if (!inList) {
+      if (!line.startsWith("type")) continue;
+      const rest = line.slice(4);
+      if (!rest.startsWith(":")) continue;
+      if (rest.slice(1).trim() !== "") return names;
+      inList = true;
+      continue;
+    }
+    const trimmed = line.replace(/^[ \t]+/, "");
+    if (trimmed === "") continue;
+    let item = null;
+    if (trimmed.startsWith("- ")) item = trimmed.slice(2);
+    else if (trimmed.startsWith("-")) item = trimmed.slice(1);
+    else break;
+    const name = tsYamlTypeName(item);
+    if (name != null) names.push(name);
+  }
+  return names;
+}
+
+function tsFrontmatterTopLevelValue(frontmatter, key) {
+  for (const line of frontmatter.lines) {
+    if (line.startsWith(" ") || line.startsWith("\t")) continue;
+    if (!line.startsWith(key)) continue;
+    const rest = line.slice(key.length);
+    if (!rest.startsWith(":")) continue;
+    return rest.slice(1).trim();
+  }
+  return null;
+}
+
+function tsFrontmatterTypeNames(frontmatter) {
+  const raw = tsFrontmatterTopLevelValue(frontmatter, "type");
+  if (raw != null) {
+    const trimmed = raw.trim();
+    if (trimmed !== "") {
+      if (trimmed.startsWith("[")) return tsFlowListTypeNames(trimmed);
+      const single = tsYamlTypeName(trimmed);
+      return single == null ? [] : [single];
+    }
+  }
+  return tsBlockListTypeNames(frontmatter);
+}
+
+function tsFrontmatterHasType(frontmatter, expected) {
+  const linked = tsWikilinkTypeName(expected);
+  const expectedName = linked == null ? expected : linked;
+  return tsFrontmatterTypeNames(frontmatter).some((name) => name === expectedName);
+}
+
+function tsNoteKind(contents) {
+  const frontmatter = tsParseFrontmatter(contents);
+  if (!frontmatter) return "other";
+  if (!tsFrontmatterHasType(frontmatter, "[[album]]")) {
+    if (tsFrontmatterHasType(frontmatter, "[[area]]")) return "area";
+    if (tsFrontmatterHasType(frontmatter, "[[project]]")) return "project";
+  }
+  return "other";
+}
+
+function taskSettleParseDayFileDate(fileName) {
+  let base = String(fileName);
+  if (base.endsWith(".md")) base = base.slice(0, -3);
+  if (base.endsWith("_day")) base = base.slice(0, -4);
+  if (base.length !== 8 || !/^\d{8}$/.test(base)) return null;
+  const text = `${base.slice(0, 4)}-${base.slice(4, 6)}-${base.slice(6, 8)}`;
+  if (!tsIsStrictCalendarDate(text)) return null;
+  return text;
+}
+
+function taskSettleCanonicalDailyDate(relativePath) {
+  const parts = String(relativePath).split("/");
+  if (parts.length !== 2) return null;
+  const [yearText, fileName] = parts;
+  if (yearText.length !== 4 || !/^\d{4}$/.test(yearText)) return null;
+  if (fileName.length !== 11 || !fileName.endsWith(".md")) return null;
+  const date = taskSettleParseDayFileDate(fileName);
+  if (!date) return null;
+  if (!date.startsWith(yearText)) return null;
+  return date;
+}
+
+function taskSettleGroupingEligible(relativePath, contents, dailyRelativePath) {
+  const kind = tsNoteKind(contents);
+  if (kind !== "area" && kind !== "project") return false;
+  if (taskSettleCanonicalDailyDate(relativePath) != null) return false;
+  return String(relativePath) !== String(dailyRelativePath);
+}
+
+// --- Logical lines ----------------------------------------------------------
+
+function taskSettleLogicalLines(contents) {
+  const text = String(contents);
+  if (text === "") return [""];
+  const parts = text.split("\n");
+  if (parts.length > 0 && parts[parts.length - 1] === "") parts.pop();
+  return parts.map((part) => (part.endsWith("\r") ? part.slice(0, -1) : part));
+}
+
+function tsSplitSegments(contents) {
+  const text = String(contents);
+  if (text === "") return [""];
+  const out = [];
+  let start = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] === "\n") {
+      out.push(text.slice(start, index + 1));
+      start = index + 1;
+    }
+  }
+  if (start < text.length) out.push(text.slice(start));
+  return out;
+}
+// ---- src/139b-task-settle-groups-parse.js ----
+// Pure task-settle grouping parser twin (bob-cli-q4.8.1.1 pure-twin).
+//
+// Ports `task_status_groups::{mod,parse}` heading-tree discovery, child
+// classification, and direct-piece parsing. Emission lives in
+// `139c-task-settle-groups-emit.js`; the transform entry in
+// `139d-task-settle-transform.js`.
+
+function tsSourceLines(contents) {
+  const text = String(contents);
+  const lines = [];
+  let start = 0;
+  let index = 0;
+  for (let offset = 0; offset < text.length; offset += 1) {
+    if (text[offset] !== "\n") continue;
+    const end = offset + 1;
+    const raw = text.slice(start, end);
+    const [content, ending] = tsSplitLineEnding(raw);
+    lines.push({ index: index++, byteStart: start, byteEnd: end, content, ending });
+    start = end;
+  }
+  if (start < text.length) {
+    lines.push({
+      index: index++,
+      byteStart: start,
+      byteEnd: text.length,
+      content: text.slice(start),
+      ending: "",
+    });
+  }
+  return lines;
+}
+
+function tsHeadingMask(lines) {
+  const logical = lines.map((line) => line.content);
+  const masked = new Set();
+  const frontmatterEnd = tsStrictlyClosedFrontmatterEnd(logical);
+  let scanStart = 0;
+  if (frontmatterEnd != null) {
+    for (let index = 0; index <= frontmatterEnd; index += 1) masked.add(index);
+    scanStart = frontmatterEnd + 1;
+  }
+  for (const index of tsFencedLines(logical, scanStart, lines.length)) masked.add(index);
+  let index = scanStart;
+  while (index < lines.length) {
+    if (masked.has(index)) {
+      index += 1;
+      continue;
+    }
+    const content = lines[index].content;
+    if (tsHtmlCommentOpens(content)) {
+      masked.add(index);
+      if (!tsHtmlCommentCloses(content)) {
+        index += 1;
+        while (index < lines.length) {
+          masked.add(index);
+          const closes = tsHtmlCommentCloses(lines[index].content);
+          index += 1;
+          if (closes) break;
+        }
+        continue;
+      }
+    }
+    index += 1;
+  }
+  return masked;
+}
+
+function tsDiscoverHeadings(lines, mask) {
+  const headings = [];
+  let previousPlain = null;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (mask.has(index)) {
+      previousPlain = null;
+      continue;
+    }
+    if (line.content.trim() === "") {
+      previousPlain = null;
+      continue;
+    }
+    if (tsIsBlockquoteLine(line.content) || tsIsIndentedCodeLine(line.content)) {
+      previousPlain = null;
+      continue;
+    }
+    const atx = tsAtxHeading(line.content);
+    if (atx) {
+      headings.push({
+        level: atx.level,
+        title: atx.title,
+        headingLine: index + 1,
+        headingStart: line.byteStart,
+        headingEnd: line.byteEnd,
+      });
+      previousPlain = null;
+      continue;
+    }
+    const underline = tsSetextUnderline(line.content);
+    if (underline != null && previousPlain != null) {
+      headings.push({
+        level: underline,
+        title: lines[previousPlain].content.trim(),
+        headingLine: previousPlain + 1,
+        headingStart: lines[previousPlain].byteStart,
+        headingEnd: line.byteEnd,
+      });
+      previousPlain = null;
+      continue;
+    }
+    if (tsParseListItem(line.content)) {
+      previousPlain = null;
+      continue;
+    }
+    previousPlain = index;
+  }
+  return headings;
+}
+
+function tsBuildTree(contentsLength, flats) {
+  const ends = new Array(flats.length).fill(contentsLength);
+  for (let index = 0; index < flats.length; index += 1) {
+    const heading = flats[index];
+    const next = flats.slice(index + 1).find((candidate) => candidate.level <= heading.level);
+    if (next) ends[index] = next.headingStart;
+  }
+  return tsNestHeadings(flats, ends, 0, flats.length, []);
+}
+
+function tsNestHeadings(flats, ends, start, end, parentAncestry) {
+  const nodes = [];
+  let index = start;
+  while (index < end) {
+    const heading = flats[index];
+    let childEnd = index + 1;
+    while (childEnd < end && flats[childEnd].level > heading.level) childEnd += 1;
+    const ancestry = [...parentAncestry, heading.title];
+    const children = tsNestHeadings(flats, ends, index + 1, childEnd, ancestry);
+    nodes.push({
+      level: heading.level,
+      title: heading.title,
+      headingLine: heading.headingLine,
+      headingStart: heading.headingStart,
+      headingEnd: heading.headingEnd,
+      bodyStart: heading.headingEnd,
+      bodyEnd: ends[index],
+      sectionStart: heading.headingStart,
+      sectionEnd: ends[index],
+      ancestry,
+      children,
+    });
+    index = childEnd;
+  }
+  return nodes;
+}
+
+function tsLineRangeForBytes(lines, start, end) {
+  if (start >= end) return { start: 0, end: 0 };
+  let rangeStart = lines.length;
+  for (let index = 0; index < lines.length; index += 1) {
+    if (lines[index].byteEnd > start) {
+      rangeStart = index;
+      break;
+    }
+  }
+  let rangeEnd = lines.length;
+  for (let index = 0; index < lines.length; index += 1) {
+    if (lines[index].byteStart >= end) {
+      rangeEnd = index;
+      break;
+    }
+  }
+  return { start: rangeStart, end: rangeEnd };
+}
+
+function tsIsTasksTitle(title) {
+  return String(title).toLowerCase() === "tasks";
+}
+
+// --- List items -------------------------------------------------------------
+
+function tsLeadingWs(line) {
+  let count = 0;
+  while (line[count] === " " || line[count] === "\t") count += 1;
+  return count;
+}
+
+function tsParseListMarker(rest) {
+  const first = rest[0];
+  if (first === "-" || first === "*" || first === "+") {
+    return { after: rest.slice(1), ordered: false };
+  }
+  let digits = 0;
+  while (rest[digits] >= "0" && rest[digits] <= "9") digits += 1;
+  if (digits === 0) return null;
+  const punct = rest[digits];
+  if (punct !== "." && punct !== ")") return null;
+  return { after: rest.slice(digits + 1), ordered: true };
+}
+
+function tsParseCheckbox(rest) {
+  if (!rest.startsWith("[")) return null;
+  const chars = Array.from(rest.slice(1));
+  if (chars.length === 0) return null;
+  const symbol = chars[0];
+  const afterSymbol = rest.slice(1 + symbol.length);
+  if (!afterSymbol.startsWith("]")) return null;
+  const afterClose = afterSymbol.slice(1);
+  if (afterClose !== "" && !/^\s/.test(afterClose)) return null;
+  return { symbol, body: afterClose.replace(/^\s+/, "") };
+}
+
+function tsParseListItem(content) {
+  const line = String(content);
+  const indent = tsLeadingWs(line);
+  const rest = line.slice(indent);
+  const marker = tsParseListMarker(rest);
+  if (!marker) return null;
+  if (marker.after === "" || !/\s/.test(marker.after[0])) return null;
+  const checkbox = tsParseCheckbox(marker.after.replace(/^\s+/, ""));
+  return {
+    indent,
+    ordered: marker.ordered,
+    checkbox: checkbox ? checkbox.symbol : null,
+    body: checkbox ? checkbox.body : marker.after.replace(/^\s+/, ""),
+  };
+}
+
+// --- Subtrees ---------------------------------------------------------------
+
+function tsCollectSubtree(lines, start, limit, indent) {
+  let index = start + 1;
+  let last = start;
+  let inFence = null;
+  while (index < limit) {
+    const content = lines[index].content;
+    if (inFence) {
+      last = index;
+      if (tsClosesFence(content, inFence)) inFence = null;
+      index += 1;
+      continue;
+    }
+    if (content.trim() === "") {
+      let nextNonblank = -1;
+      for (let candidate = index + 1; candidate < limit; candidate += 1) {
+        if (lines[candidate].content.trim() !== "") {
+          nextNonblank = candidate;
+          break;
+        }
+      }
+      if (nextNonblank !== -1 && tsLeadingWs(lines[nextNonblank].content) > indent) {
+        last = index;
+        index += 1;
+        continue;
+      }
+      break;
+    }
+    const lineIndent = tsLeadingWs(content);
+    if (lineIndent > indent) {
+      last = index;
+      const marker = tsFenceMarker(content);
+      if (marker) inFence = marker;
+      index += 1;
+      continue;
+    }
+    if (
+      tsAtxHeading(content) ||
+      tsSetextUnderline(content) != null ||
+      tsParseListItem(content) ||
+      tsIsBlockquoteLine(content) ||
+      tsFenceMarker(content)
+    ) {
+      break;
+    }
+    return { error: "ambiguous_boundary" };
+  }
+  if (inFence) return { error: "ambiguous_boundary" };
+  return { end: last + 1 };
+}
+
+// --- Markers, badges, spans -------------------------------------------------
+
+function tsParseGroupMarker(content) {
+  const inner = tsStandaloneHtmlComment(String(content));
+  if (inner == null) return null;
+  if (!inner.startsWith(TS_LEGACY_GROUP_MARKER_PREFIX)) return null;
+  const id = inner.slice(TS_LEGACY_GROUP_MARKER_PREFIX.length);
+  const kind = tsGroupKindFromMarkerId(id);
+  if (kind) return { ok: true, kind };
+  return { ok: false };
+}
+
+function tsGroupMarkerState(node, lines) {
+  const body = tsLineRangeForBytes(lines, node.bodyStart, node.bodyEnd);
+  let first = -1;
+  for (let index = body.start; index < body.end; index += 1) {
+    if (lines[index].content.trim() !== "") {
+      first = index;
+      break;
+    }
+  }
+  if (first === -1) return { state: "missing" };
+  const parsed = tsParseGroupMarker(lines[first].content);
+  if (!parsed) return { state: "missing" };
+  if (!parsed.ok) return { state: "malformed" };
+  if (tsGroupKindFromTitle(node.title) === parsed.kind) return { state: "valid", kind: parsed.kind };
+  return { state: "mismatch" };
+}
+
+function tsExclusiveSpans(node) {
+  const spans = [];
+  let cursor = node.bodyStart;
+  for (const child of node.children) {
+    if (child.sectionStart > cursor) spans.push([cursor, child.sectionStart]);
+    cursor = child.sectionEnd;
+  }
+  if (cursor < node.bodyEnd) spans.push([cursor, node.bodyEnd]);
+  return spans;
+}
+
+function tsStrayMarkerInExclusive(node, lines) {
+  for (const [start, end] of tsExclusiveSpans(node)) {
+    const range = tsLineRangeForBytes(lines, start, end);
+    for (let index = range.start; index < range.end; index += 1) {
+      if (tsParseGroupMarker(lines[index].content)) return "malformed_ownership";
+    }
+  }
+  return null;
+}
+
+function tsBadgeRowInSpan(lines, start, end) {
+  const range = tsLineRangeForBytes(lines, start, end);
+  for (let index = range.start; index < range.end; index += 1) {
+    if (taskSettleIsBadgeRow(lines[index].content) || taskSettleIsLegacyBadgeMarker(lines[index].content)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function tsGroupBodyStart(node, lines) {
+  const body = tsLineRangeForBytes(lines, node.bodyStart, node.bodyEnd);
+  for (let index = body.start; index < body.end; index += 1) {
+    if (lines[index].content.trim() === "") continue;
+    if (tsParseGroupMarker(lines[index].content)) return lines[index].byteEnd;
+    return node.bodyStart;
+  }
+  return node.bodyStart;
+}
+
+function tsFlushOther(contents, pieces, cursor, next) {
+  if (cursor.value < next) {
+    pieces.push({ kind: "other", raw: contents.slice(cursor.value, next) });
+    cursor.value = next;
+  }
+}
+
+function tsMatchingTask(item, classification) {
+  if (item.checkbox == null) return null;
+  if (!tsMatchesFilter(classification, item.body)) return null;
+  return tsBucketOf(classification, item.checkbox);
+}
+
+function tsWarnNestedTasks(lines, start, end, classification, container, warnings) {
+  for (let index = start; index < end; index += 1) {
+    const item = tsParseListItem(lines[index].content);
+    if (!item || item.checkbox == null) continue;
+    if (!tsMatchesFilter(classification, item.body)) continue;
+    warnings.push({
+      originalHeadingLine: container.headingLine,
+      headingAncestry: [...container.ancestry],
+      code: "nested_under_ordinary_item",
+      message: tsSkipMessage("nested_under_ordinary_item", container.title, lines[index].index + 1),
+    });
+  }
+}
+
+function tsParseDirectPieces(ctx, spanStart, spanEnd, container, warnings, failOnAmbiguous, allowBadges) {
+  const { contents, lines, mask, classification } = ctx;
+  if (spanStart >= spanEnd) return { ok: true, pieces: [] };
+  const lineRange = tsLineRangeForBytes(lines, spanStart, spanEnd);
+  const pieces = [];
+  const cursor = { value: spanStart };
+  let index = lineRange.start;
+  while (index < lineRange.end) {
+    const line = lines[index];
+    if (line.byteStart < spanStart) {
+      index += 1;
+      continue;
+    }
+    if (line.byteStart >= spanEnd) break;
+    if (
+      taskSettleIsLegacyBadgeMarker(line.content) ||
+      (!mask.has(index) && taskSettleIsBadgeRow(line.content))
+    ) {
+      if (!allowBadges) return { ok: false, code: "misplaced_badge_row" };
+      tsFlushOther(contents, pieces, cursor, line.byteStart);
+      const end = Math.min(line.byteEnd, spanEnd);
+      pieces.push({ kind: "badges" });
+      cursor.value = end;
+      index += 1;
+      continue;
+    }
+    if (mask.has(index)) {
+      index += 1;
+      continue;
+    }
+    if (
+      tsIsBlockquoteLine(line.content) ||
+      tsIsIndentedCodeLine(line.content) ||
+      tsHtmlCommentOpens(line.content) ||
+      tsFenceMarker(line.content) ||
+      tsAtxHeading(line.content)
+    ) {
+      index += 1;
+      continue;
+    }
+    const item = tsParseListItem(line.content);
+    if (item) {
+      const subtree = tsCollectSubtree(lines, index, lineRange.end, item.indent);
+      if (subtree.error) {
+        if (subtree.error === "ambiguous_boundary" && !failOnAmbiguous) {
+          index += 1;
+          continue;
+        }
+        return { ok: false, code: subtree.error };
+      }
+      const endLine = subtree.end;
+      const byteStart = lines[index].byteStart;
+      const byteEnd = Math.min(lines[endLine - 1].byteEnd, spanEnd);
+      const bucket = tsMatchingTask(item, classification);
+      if (bucket) {
+        tsFlushOther(contents, pieces, cursor, byteStart);
+        const movable = !item.ordered;
+        if (item.ordered) {
+          warnings.push({
+            originalHeadingLine: container.headingLine,
+            headingAncestry: [...container.ancestry],
+            code: "unsupported_ordered_list",
+            message: tsSkipMessage("unsupported_ordered_list", container.title, line.index + 1),
+          });
+        }
+        pieces.push({
+          kind: "task",
+          startLine: line.index + 1,
+          raw: contents.slice(byteStart, byteEnd),
+          bucket,
+          movable,
+        });
+        cursor.value = byteEnd;
+        index = endLine;
+        continue;
+      }
+      tsWarnNestedTasks(lines, index + 1, endLine, classification, container, warnings);
+      index = endLine;
+      continue;
+    }
+    index += 1;
+  }
+  tsFlushOther(contents, pieces, cursor, spanEnd);
+  return { ok: true, pieces };
+}
+
+function tsAdoptableGroupBody(node, ctx) {
+  if (node.children.length > 0) return false;
+  const bodyStart = tsGroupBodyStart(node, ctx.lines);
+  const parsed = tsParseDirectPieces(ctx, bodyStart, node.bodyEnd, node, [], false, false);
+  if (!parsed.ok) return false;
+  return parsed.pieces.every((piece) => {
+    if (piece.kind === "task") return piece.movable;
+    if (piece.kind === "other") return piece.raw.trim() === "";
+    return false;
+  });
+}
+
+function tsClassifyChildren(node, ctx) {
+  const items = [];
+  let fail = null;
+  const warnings = [];
+  const seenGroups = new Map();
+  const stray = tsStrayMarkerInExclusive(node, ctx.lines);
+  if (stray) fail = stray;
+  for (const child of node.children) {
+    if (tsIsTasksTitle(child.title)) {
+      items.push({ kind: "nested", node: child });
+      continue;
+    }
+    const groupKind = tsGroupKindFromTitle(child.title);
+    if (groupKind) {
+      if (tsBadgeRowInSpan(ctx.lines, child.bodyStart, child.bodyEnd)) {
+        fail = "misplaced_badge_row";
+      }
+      if (child.children.length > 0) {
+        fail = "authored_heading_in_group";
+        continue;
+      }
+      const marker = tsGroupMarkerState(child, ctx.lines);
+      if (marker.state === "valid" && marker.kind !== groupKind) {
+        fail = "renamed_marked_heading";
+        continue;
+      }
+      if (marker.state === "mismatch") {
+        fail = "renamed_marked_heading";
+        continue;
+      }
+      if (marker.state === "malformed") {
+        fail = "malformed_ownership";
+        continue;
+      }
+      if (marker.state === "valid" || marker.state === "missing") {
+        if (tsAdoptableGroupBody(child, ctx)) {
+          if (seenGroups.has(groupKind)) fail = "duplicate_group_heading";
+          else seenGroups.set(groupKind, child.headingLine);
+          items.push({ kind: "group", group: groupKind, node: child });
+        } else if (!tsBadgeRowInSpan(ctx.lines, child.bodyStart, child.bodyEnd)) {
+          fail = "ownership_collision";
+        }
+      }
+      continue;
+    }
+    const marker = tsGroupMarkerState(child, ctx.lines);
+    if (marker.state !== "missing") {
+      fail = "renamed_marked_heading";
+    } else {
+      items.push({ kind: "authored", node: child });
+    }
+  }
+  return { fail, warnings, items };
+}
+
+function tsParseContainerRegions(node, ctx, classified) {
+  const itemWarnings = [];
+  let intake = [];
+  for (const [start, end] of tsExclusiveSpans(node)) {
+    const parsed = tsParseDirectPieces(ctx, start, end, node, itemWarnings, true, true);
+    if (!parsed.ok) return { ok: false, code: parsed.code };
+    intake = intake.concat(parsed.pieces);
+  }
+  const hasBadges = intake.some((piece) => piece.kind === "badges");
+  const groups = new Map();
+  for (const item of classified.items) {
+    if (item.kind !== "group") continue;
+    const bodyStart = tsGroupBodyStart(item.node, ctx.lines);
+    const parsed = tsParseDirectPieces(ctx, bodyStart, item.node.bodyEnd, node, itemWarnings, true, false);
+    if (!parsed.ok) return { ok: false, code: parsed.code };
+    groups.set(item.group, { pieces: parsed.pieces });
+  }
+  return { ok: true, intake, groups, itemWarnings, hasBadges };
+}
+// ---- src/139c-task-settle-groups-emit.js ----
+// Pure task-settle grouping emission twin (bob-cli-q4.8.1.1 pure-twin).
+//
+// Ports `task_status_groups::emit` grouping plans, badge rendering, body
+// emission, and section-end rules plus the `transform` container rewrite.
+
+function tsGroupingPlan(parsed) {
+  const recovered = [];
+  const groups = new Map([
+    ["active", []],
+    ["blocked", []],
+    ["closed", []],
+  ]);
+  const movedBlocks = [];
+  const documentTasks = [];
+  for (const piece of parsed.intake) {
+    if (piece.kind === "task") documentTasks.push(["intake", piece]);
+  }
+  for (const kind of ["active", "blocked", "closed"]) {
+    const group = parsed.groups.get(kind);
+    if (!group) continue;
+    for (const piece of group.pieces) {
+      if (piece.kind === "task") documentTasks.push([kind, piece]);
+    }
+  }
+  for (const [source, task] of documentTasks) {
+    const sourceDestination =
+      source === "intake" ? "intake" : source === "active" ? "active" : source === "blocked" ? "blocked" : "closed";
+    const dest = task.movable ? tsBucketDestination(task.bucket) : sourceDestination;
+    if (dest !== sourceDestination) {
+      movedBlocks.push({ originalLine: task.startLine, destination: tsDestinationLabel(dest) });
+    }
+    const group = tsDestinationGroup(dest);
+    if (group) {
+      groups.get(group).push(task);
+    } else if (sourceDestination !== "intake" && task.movable) {
+      recovered.push(task);
+    }
+  }
+  const intakeStaying = [];
+  for (const piece of parsed.intake) {
+    if (piece.kind === "task" && piece.movable) {
+      if (tsBucketDestination(piece.bucket) === "intake") intakeStaying.push(piece);
+    } else if (piece.kind === "task" || piece.kind === "other") {
+      intakeStaying.push(piece);
+    }
+  }
+  const counts = [
+    groups.get("active").length,
+    groups.get("blocked").length,
+    groups.get("closed").length,
+  ];
+  const openCount =
+    intakeStaying.filter((piece) => piece.kind === "task").length + recovered.length;
+  return { intakeStaying, recovered, groups, openCount, counts, movedBlocks };
+}
+
+function tsEncodeAnchorSegment(segment) {
+  let encoded = "";
+  for (const character of String(segment)) {
+    const code = character.codePointAt(0);
+    const ascii = code < 128;
+    const special =
+      ascii &&
+      (code < 32 ||
+        character === " " ||
+        character === "(" ||
+        character === ")" ||
+        character === "<" ||
+        character === ">" ||
+        character === '"' ||
+        character === "%" ||
+        character === "\\");
+    if (special) {
+      encoded += `%${code.toString(16).toUpperCase().padStart(2, "0")}`;
+    } else {
+      encoded += character;
+    }
+  }
+  return encoded;
+}
+
+function tsRenderAnchor(segments) {
+  let anchor = "";
+  for (const segment of segments) {
+    anchor += `#${tsEncodeAnchorSegment(segment)}`;
+  }
+  return anchor;
+}
+
+function tsRenderBadges(node, plan, newline) {
+  const counts = [
+    [plan.openCount, null],
+    [plan.counts[0], "active"],
+    [plan.counts[1], "blocked"],
+    [plan.counts[2], "closed"],
+  ];
+  const linked = !node.ancestry.some((segment) => segment.includes("#"));
+  const row = TS_BADGE_CHIPS.map(([emoji, label], index) => {
+    const [count, group] = counts[index];
+    const text = `\`${emoji} ${count} ${label}\``;
+    if (!linked || (group != null && count === 0)) return text;
+    let anchor;
+    if (group) {
+      anchor = tsRenderAnchor([...node.ancestry, tsGroupKindTitle(group)]);
+    } else {
+      anchor = tsRenderAnchor(node.ancestry);
+    }
+    return `[${text}](${anchor})`;
+  }).join(" \u00B7 ");
+  return `${row}${newline}${newline}`;
+}
+
+function tsTrimLeadingBlankEdges(raw, newline) {
+  let out = raw;
+  while (out.startsWith(newline)) out = out.slice(newline.length);
+  return out;
+}
+
+function tsPushTask(buf, raw, newline) {
+  buf.value += raw;
+  if (!raw.endsWith("\n")) buf.value += newline;
+}
+
+function tsPushBlock(buf, part, newline) {
+  if (!part) return;
+  if (buf.value !== "") tsEnsureTrailingBlank(buf, newline);
+  buf.value += part;
+}
+
+function tsEnsureTrailingBlank(buf, newline) {
+  const double = `${newline}${newline}`;
+  if (buf.value.endsWith(double)) return;
+  if (buf.value.endsWith(newline)) buf.value += newline;
+  else if (buf.value !== "") buf.value += `${newline}${newline}`;
+}
+
+function tsEnsureSingleTrailingNewline(buf, newline) {
+  if (buf.value === "") return;
+  if (!buf.value.endsWith("\n")) buf.value += newline;
+}
+
+function tsCollapseInternalBlankRuns(buf, newline) {
+  const triple = `${newline}${newline}${newline}`;
+  const double = `${newline}${newline}`;
+  while (buf.value.includes(triple)) buf.value = buf.value.split(triple).join(double);
+}
+
+function tsEmitIntake(plan, newline) {
+  const buf = { value: "" };
+  let lastWasTask = false;
+  let insertedRecovered = false;
+  for (const piece of plan.intakeStaying) {
+    if (piece.kind === "other") {
+      if (lastWasTask && !insertedRecovered && plan.recovered.length > 0) {
+        for (const task of plan.recovered) tsPushTask(buf, task.raw, newline);
+        insertedRecovered = true;
+      }
+      buf.value += piece.raw;
+      lastWasTask = false;
+    } else if (piece.kind === "task") {
+      tsPushTask(buf, piece.raw, newline);
+      lastWasTask = true;
+    }
+  }
+  if (!insertedRecovered) {
+    if (!lastWasTask && plan.recovered.length > 0 && buf.value !== "") {
+      tsEnsureSingleTrailingNewline(buf, newline);
+    }
+    for (const task of plan.recovered) tsPushTask(buf, task.raw, newline);
+  }
+  tsCollapseInternalBlankRuns(buf, newline);
+  return buf.value;
+}
+
+function tsEmitGroup(level, kind, plan, newline) {
+  const hashes = "#".repeat(level);
+  let buf = `${hashes} ${tsGroupKindTitle(kind)}${newline}${newline}`;
+  const tasks = plan.groups.get(kind) || [];
+  const holder = { value: buf };
+  for (const task of tasks) tsPushTask(holder, task.raw, newline);
+  return holder.value;
+}
+
+function tsSplitPreservedLines(value) {
+  const out = [];
+  let start = 0;
+  for (let offset = 0; offset < value.length; offset += 1) {
+    if (value[offset] !== "\n") continue;
+    const end = offset + 1;
+    const raw = value.slice(start, end);
+    out.push(tsSplitLineEnding(raw));
+    start = end;
+  }
+  if (start < value.length) out.push(tsSplitLineEnding(value.slice(start)));
+  return out;
+}
+
+function tsTrailingWhitespaceRun(section) {
+  const lines = tsSplitPreservedLines(section);
+  const raws = [];
+  let cursor = 0;
+  for (const [content, ending] of lines) {
+    const length = content.length + ending.length;
+    raws.push(section.slice(cursor, cursor + length));
+    cursor += length;
+  }
+  let start = section.length;
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    if (lines[index][0].trim() !== "") break;
+    start -= raws[index].length;
+  }
+  return section.slice(start);
+}
+
+function tsStripTrailingWhitespaceLines(emitted) {
+  const lines = tsSplitPreservedLines(emitted);
+  if (lines.length === 0) return emitted;
+  const raws = [];
+  let cursor = 0;
+  for (const [content, ending] of lines) {
+    const length = content.length + ending.length;
+    raws.push(emitted.slice(cursor, cursor + length));
+    cursor += length;
+  }
+  let end = emitted.length;
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    if (lines[index][0].trim() !== "") break;
+    end -= raws[index].length;
+  }
+  return emitted.slice(0, end);
+}
+
+function tsApplySectionEndRule(emitted, original) {
+  const run = tsTrailingWhitespaceRun(original);
+  const newlineIndex = run.indexOf("\n");
+  const trailing = newlineIndex === -1 ? run : run.slice(0, newlineIndex + 1);
+  return tsStripTrailingWhitespaceLines(emitted) + trailing;
+}
+
+function tsSectionNewline(node, lines) {
+  const headingRange = tsLineRangeForBytes(lines, node.headingStart, node.headingEnd);
+  for (let index = headingRange.end - 1; index >= headingRange.start; index -= 1) {
+    const ending = lines[index].ending;
+    if (ending === "\r\n" || ending === "\n") return ending;
+  }
+  const bodyRange = tsLineRangeForBytes(lines, node.bodyStart, node.bodyEnd);
+  for (let index = bodyRange.start; index < bodyRange.end; index += 1) {
+    const ending = lines[index].ending;
+    if (ending === "\r\n" || ending === "\n") return ending;
+  }
+  return "\n";
+}
+
+function tsApplyFinalNewline(output, original) {
+  const originalNl = original.endsWith("\n");
+  const outputNl = output.value.endsWith("\n");
+  if (originalNl && !outputNl) {
+    output.value += original.endsWith("\r\n") ? "\r\n" : "\n";
+  } else if (!originalNl && outputNl) {
+    if (output.value.endsWith("\r\n")) output.value = output.value.slice(0, -2);
+    else output.value = output.value.slice(0, -1);
+  }
+}
+
+function tsWarning(node, code) {
+  return {
+    originalHeadingLine: node.headingLine,
+    headingAncestry: [...node.ancestry],
+    code,
+    message: tsSkipMessage(code, node.title, node.headingLine),
+  };
+}
+
+function tsWarningAt(node, code, line) {
+  return {
+    originalHeadingLine: node.headingLine,
+    headingAncestry: [...node.ancestry],
+    code,
+    message: tsSkipMessage(code, node.title, line),
+  };
+}
+
+function tsApplyChildRewrites(section, node, childRewrites) {
+  const base = node.sectionStart;
+  const edits = [];
+  for (const child of node.children) {
+    const rewrite = childRewrites.get(child.headingStart);
+    if (rewrite) edits.push([child.sectionStart - base, child.sectionEnd - base, rewrite.section]);
+  }
+  edits.sort((a, b) => a[0] - b[0]);
+  let out = section;
+  for (let index = edits.length - 1; index >= 0; index -= 1) {
+    const [start, end, replacement] = edits[index];
+    out = out.slice(0, start) + replacement + out.slice(end);
+  }
+  return out;
+}
+
+function tsEmitGroupedBody(node, contents, classified, plan, childRewrites, newline, emitDecorations, headingHasLineEnding) {
+  let body = "";
+  const intake = tsEmitIntake(plan, newline);
+  if (emitDecorations) body += tsRenderBadges(node, plan, newline);
+  const holder = { value: body };
+  if (intake.trim() !== "") {
+    const part = emitDecorations ? tsTrimLeadingBlankEdges(intake, newline) : intake;
+    const current = { value: holder.value };
+    tsPushBlock(current, part, newline);
+    holder.value = current.value;
+  }
+  body = holder.value;
+  const authored = classified.items.filter((item) => item.kind === "authored" || item.kind === "nested");
+  for (const child of authored) {
+    const rewrite = childRewrites.get(child.node.headingStart);
+    const part = rewrite ? rewrite.section : contents.slice(child.node.sectionStart, child.node.sectionEnd);
+    const current = { value: body };
+    tsPushBlock(current, part, newline);
+    body = current.value;
+  }
+  if (emitDecorations) {
+    for (const kind of ["active", "blocked", "closed"]) {
+      const tasks = plan.groups.get(kind) || [];
+      if (tasks.length === 0) continue;
+      const part = tsEmitGroup(node.level + 1, kind, plan, newline);
+      const current = { value: body };
+      tsPushBlock(current, part, newline);
+      body = current.value;
+    }
+  }
+  if (body === "") return "";
+  if (emitDecorations && headingHasLineEnding) return body;
+  if (!body.startsWith("\n") && !body.startsWith("\r\n")) body = newline + body;
+  return body;
+}
+
+function tsRewriteContainer(node, ctx) {
+  const original = ctx.contents.slice(node.sectionStart, node.sectionEnd);
+  const headingRaw = ctx.contents.slice(node.headingStart, node.headingEnd);
+  if (node.level >= 6) {
+    return { section: original, groupedSections: [], warnings: [tsWarning(node, "h6_container")] };
+  }
+  const classified = tsClassifyChildren(node, ctx);
+  let warnings = [...classified.warnings];
+  let groupedSections = [];
+  const childRewrites = new Map();
+  for (const child of node.children) {
+    const isGroupingChild = classified.items.some(
+      (item) =>
+        (item.kind === "authored" || item.kind === "nested") &&
+        item.node.headingStart === child.headingStart,
+    );
+    if (!isGroupingChild) continue;
+    const rewritten = tsRewriteContainer(child, ctx);
+    groupedSections = groupedSections.concat(rewritten.groupedSections);
+    warnings = warnings.concat(rewritten.warnings);
+    childRewrites.set(child.headingStart, rewritten);
+  }
+  if (classified.fail) {
+    const section = tsApplyChildRewrites(original, node, childRewrites);
+    warnings = [tsWarning(node, classified.fail), ...warnings];
+    return { section, groupedSections, warnings };
+  }
+  const parsed = tsParseContainerRegions(node, ctx, classified);
+  if (!parsed.ok) {
+    const section = tsApplyChildRewrites(original, node, childRewrites);
+    warnings = [tsWarning(node, parsed.code), ...warnings];
+    return { section, groupedSections, warnings };
+  }
+  warnings = warnings.concat(parsed.itemWarnings);
+  const newline = tsSectionNewline(node, ctx.lines);
+  const shouldDecorate = [...parsed.intake, ...[...parsed.groups.values()].flatMap((group) => group.pieces)]
+    .filter((piece) => piece.kind === "task")
+    .some((task) => tsBucketIsGroupable(task.bucket) && task.movable);
+  const hasBadges = parsed.hasBadges;
+  const hasGroups = classified.items.some((item) => item.kind === "group");
+  if (!shouldDecorate && !hasBadges && !hasGroups) {
+    const section = tsApplyChildRewrites(original, node, childRewrites);
+    return { section, groupedSections, warnings };
+  }
+  const plan = tsGroupingPlan(parsed);
+  const body = tsEmitGroupedBody(
+    node,
+    ctx.contents,
+    classified,
+    plan,
+    childRewrites,
+    newline,
+    shouldDecorate,
+    headingRaw.endsWith("\n"),
+  );
+  const rawSection = `${headingRaw}${body}`;
+  const section = tsApplySectionEndRule(rawSection, original);
+  if (section !== original) {
+    groupedSections = [
+      {
+        originalHeadingLine: node.headingLine,
+        headingAncestry: [...node.ancestry],
+        open: plan.openCount,
+        nextAndInProgress: plan.counts[0],
+        blocked: plan.counts[1],
+        doneAndCanceled: plan.counts[2],
+        movedBlockCount: plan.movedBlocks.length,
+        movedBlocks: plan.movedBlocks.map((block) => ({ ...block })),
+      },
+      ...groupedSections,
+    ];
+  }
+  return { section, groupedSections, warnings };
+}
+
+function tsVisitTasksRoots(nodes, ctx, groupedSections, warnings, replacements) {
+  for (const node of nodes) {
+    if (tsIsTasksTitle(node.title)) {
+      const rewritten = tsRewriteContainer(node, ctx);
+      for (const section of rewritten.groupedSections) groupedSections.push(section);
+      for (const warning of rewritten.warnings) warnings.push(warning);
+      if (ctx.contents.slice(node.sectionStart, node.sectionEnd) !== rewritten.section) {
+        replacements.push([node.sectionStart, node.sectionEnd, rewritten.section]);
+      }
+    } else {
+      tsVisitTasksRoots(node.children, ctx, groupedSections, warnings, replacements);
+    }
+  }
+}
+
+function taskSettleTransform(contents, classification) {
+  const text = String(contents);
+  const lines = tsSourceLines(text);
+  if (lines.length === 0) {
+    return { contents: text, changed: false, groupedSections: [], warnings: [] };
+  }
+  const mask = tsHeadingMask(lines);
+  const flats = tsDiscoverHeadings(lines, mask);
+  const tree = tsBuildTree(text.length, flats);
+  const groupedSections = [];
+  const warnings = [];
+  const replacements = [];
+  const ctx = { contents: text, lines, mask, classification };
+  tsVisitTasksRoots(tree, ctx, groupedSections, warnings, replacements);
+  replacements.sort((a, b) => a[0] - b[0]);
+  let output = text;
+  for (let index = replacements.length - 1; index >= 0; index -= 1) {
+    const [start, end, replacement] = replacements[index];
+    output = output.slice(0, start) + replacement + output.slice(end);
+  }
+  const holder = { value: output };
+  tsApplyFinalNewline(holder, text);
+  output = holder.value;
+  return { contents: output, changed: output !== text, groupedSections, warnings };
+}
+
+function taskSettleReservedGroupHeadingLines(contents) {
+  const text = String(contents);
+  const lines = tsSourceLines(text);
+  if (lines.length === 0) return new Set();
+  const mask = tsHeadingMask(lines);
+  const flats = tsDiscoverHeadings(lines, mask);
+  const tree = tsBuildTree(text.length, flats);
+  const reserved = new Set();
+  const visit = (nodes, underTasks) => {
+    for (const node of nodes) {
+      if (underTasks && tsGroupKindFromTitle(node.title)) reserved.add(node.headingLine - 1);
+      visit(node.children, underTasks || tsIsTasksTitle(node.title));
+    }
+  };
+  visit(tree, false);
+  return reserved;
+}
+// ---- src/139d-task-settle-transform.js ----
+// Pure task-settle transform twin (bob-cli-q4.8.1.1 pure-twin).
+//
+// Ports `src/native/task_settle.rs`: the local future-schedule Blocked rule,
+// the grouping transform application, and the surviving-line map (raw Myers
+// matches first, exact-text fallback, then the stable task-line key).
+
+function tsTaskLineKey(line, classification) {
+  const text = String(line);
+  let leading = 0;
+  while (text[leading] === " " || text[leading] === "\t") leading += 1;
+  const markerEnd = tsAfterListMarker(text, leading);
+  if (markerEnd == null) return null;
+  let checkboxStart = markerEnd;
+  while (text[checkboxStart] === " " || text[checkboxStart] === "\t") checkboxStart += 1;
+  if (text[checkboxStart] !== "[") return null;
+  const close = text.indexOf("]", checkboxStart + 1);
+  if (close === -1) return null;
+  const statusText = text.slice(checkboxStart + 1, close);
+  const symbols = Array.from(statusText);
+  if (symbols.length !== 1) return null;
+  const afterCheckbox = text.slice(close + 1);
+  const body = afterCheckbox.replace(/^\s+/, "");
+  if (!tsMatchesTaskFilter(classification, body)) return null;
+  const tokens = body.split(/\s+/).filter(Boolean);
+  const stable = [];
+  let skipping = false;
+  for (const token of tokens) {
+    if (skipping) {
+      if (token.includes("]")) skipping = false;
+      continue;
+    }
+    if (token.startsWith("[unblocked::")) {
+      if (!token.includes("]")) skipping = true;
+      continue;
+    }
+    stable.push(token);
+  }
+  return `${text.slice(0, checkboxStart)}[?] ${stable.join(" ")}`;
+}
+
+function tsMyersMaxD(n, m) {
+  return Math.floor((n + m + 1) / 2) + 1;
+}
+
+function tsMyersCommonPrefix(before, ob, oe, after, nb, ne) {
+  let advance = 0;
+  while (ob + advance < oe && nb + advance < ne && before[ob + advance] === after[nb + advance]) {
+    advance += 1;
+  }
+  return advance;
+}
+
+function tsMyersCommonSuffix(before, ob, oe, after, nb, ne) {
+  let advance = 0;
+  while (oe - advance - 1 >= ob && ne - advance - 1 >= nb && before[oe - advance - 1] === after[ne - advance - 1]) {
+    advance += 1;
+  }
+  return advance;
+}
+
+// Faithful port of similar 2.7.0's Myers divide-and-conquer (`conquer` +
+// `find_middle_snake`), which is what Rust's `capture_diff_slices` uses for
+// the surviving-line map. Only Equal runs are collected.
+function tsMyersFindMiddleSnake(before, ob, n, after, nb, m, vf, voff, vb, voff) {
+  const delta = n - m;
+  const odd = (delta & 1) === 1;
+  vf[1 + voff] = 0;
+  vb[1 + voff] = 0;
+  const dMax = tsMyersMaxD(n, m);
+  for (let d = 0; d < dMax; d += 1) {
+    for (let k = d; k >= -d; k -= 2) {
+      let x;
+      if (k === -d || (k !== d && vf[k - 1 + voff] < vf[k + 1 + voff])) {
+        x = vf[k + 1 + voff];
+      } else {
+        x = vf[k - 1 + voff] + 1;
+      }
+      const y = x - k;
+      const x0 = x;
+      const y0 = y;
+      if (x < n && y >= 0 && y < m) {
+        x += tsMyersCommonPrefix(before, ob + x, ob + n, after, nb + y, nb + m);
+      }
+      vf[k + voff] = x;
+      if (odd && Math.abs(k - delta) <= d - 1) {
+        if (vf[k + voff] + vb[-(k - delta) + voff] >= n) {
+          return [x0 + ob, y0 + nb];
+        }
+      }
+    }
+    for (let k = d; k >= -d; k -= 2) {
+      let x;
+      if (k === -d || (k !== d && vb[k - 1 + voff] < vb[k + 1 + voff])) {
+        x = vb[k + 1 + voff];
+      } else {
+        x = vb[k - 1 + voff] + 1;
+      }
+      let y = x - k;
+      if (x < n && y >= 0 && y < m) {
+        const advance = tsMyersCommonSuffix(
+          before,
+          ob,
+          ob + n - x,
+          after,
+          nb,
+          nb + m - y,
+        );
+        x += advance;
+        y += advance;
+      }
+      vb[k + voff] = x;
+      if (!odd && Math.abs(k - delta) <= d) {
+        if (vb[k + voff] + vf[-(k - delta) + voff] >= n) {
+          return [n - x + ob, m - y + nb];
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function tsMyersConquer(before, ob, oe, after, nb, ne, vf, voff, vb, voff, runs) {
+  const prefix = tsMyersCommonPrefix(before, ob, oe, after, nb, ne);
+  if (prefix > 0) runs.push({ oldIndex: ob, newIndex: nb, length: prefix });
+  ob += prefix;
+  nb += prefix;
+  const suffix = tsMyersCommonSuffix(before, ob, oe, after, nb, ne);
+  const suffixOld = oe - suffix;
+  const suffixNew = ne - suffix;
+  oe -= suffix;
+  ne -= suffix;
+  const oldEmpty = ob >= oe;
+  const newEmpty = nb >= ne;
+  if (!oldEmpty || !newEmpty) {
+    if (newEmpty) {
+      // deletion: no equal run
+    } else if (oldEmpty) {
+      // insertion: no equal run
+    } else {
+      const middle = tsMyersFindMiddleSnake(before, ob, oe - ob, after, nb, ne - nb, vf, voff, vb, voff);
+      if (middle) {
+        const [xStart, yStart] = middle;
+        tsMyersConquer(before, ob, xStart, after, nb, yStart, vf, voff, vb, voff, runs);
+        tsMyersConquer(before, xStart, oe, after, yStart, ne, vf, voff, vb, voff, runs);
+      }
+    }
+  }
+  if (suffix > 0) runs.push({ oldIndex: suffixOld, newIndex: suffixNew, length: suffix });
+}
+
+function tsMyersEqualRuns(before, after) {
+  const n = before.length;
+  const m = after.length;
+  if (n === 0 || m === 0) return [];
+  const maxD = tsMyersMaxD(n, m);
+  const vf = new Array(2 * maxD).fill(0);
+  const vb = new Array(2 * maxD).fill(0);
+  const runs = [];
+  tsMyersConquer(before, 0, n, after, 0, m, vf, maxD, vb, maxD, runs);
+  runs.sort((a, b) => a.oldIndex - b.oldIndex || a.newIndex - b.newIndex);
+  const merged = [];
+  for (const run of runs) {
+    const last = merged[merged.length - 1];
+    if (last && last.oldIndex + last.length === run.oldIndex && last.newIndex + last.length === run.newIndex) {
+      last.length += run.length;
+    } else {
+      merged.push({ ...run });
+    }
+  }
+  return merged;
+}
+
+function tsMapSurvivingLines(beforeText, afterText, classification) {
+  const before = taskSettleLogicalLines(beforeText);
+  const after = taskSettleLogicalLines(afterText);
+  const mapped = new Map();
+  const used = new Set();
+  for (const run of tsMyersEqualRuns(before, after)) {
+    for (let offset = 0; offset < run.length; offset += 1) {
+      mapped.set(run.oldIndex + offset, run.newIndex + offset);
+      used.add(run.newIndex + offset);
+    }
+  }
+  const keyCache = new Map();
+  const keyOf = (index) => {
+    if (!keyCache.has(index)) keyCache.set(index, tsTaskLineKey(before[index], classification));
+    return keyCache.get(index);
+  };
+  const afterKeyCache = new Map();
+  const afterKeyOf = (index) => {
+    if (!afterKeyCache.has(index)) {
+      afterKeyCache.set(index, tsTaskLineKey(after[index], classification));
+    }
+    return afterKeyCache.get(index);
+  };
+  for (let oldIndex = 0; oldIndex < before.length; oldIndex += 1) {
+    if (mapped.has(oldIndex)) continue;
+    const line = before[oldIndex];
+    let best = -1;
+    let bestDistance = Infinity;
+    for (let newIndex = 0; newIndex < after.length; newIndex += 1) {
+      if (used.has(newIndex) || after[newIndex] !== line) continue;
+      const distance = Math.abs(newIndex - oldIndex);
+      if (distance < bestDistance || (distance === bestDistance && newIndex < best)) {
+        best = newIndex;
+        bestDistance = distance;
+      }
+    }
+    let rewritten = -1;
+    const key = keyOf(oldIndex);
+    if (key != null) {
+      let bestKey = -1;
+      let bestKeyDistance = Infinity;
+      for (let newIndex = 0; newIndex < after.length; newIndex += 1) {
+        if (used.has(newIndex)) continue;
+        if (afterKeyOf(newIndex) !== key) continue;
+        const distance = Math.abs(newIndex - oldIndex);
+        if (distance < bestKeyDistance || (distance === bestKeyDistance && newIndex < bestKey)) {
+          bestKey = newIndex;
+          bestKeyDistance = distance;
+        }
+      }
+      rewritten = bestKey;
+    }
+    const chosen = best !== -1 ? best : rewritten;
+    if (chosen !== -1) {
+      mapped.set(oldIndex, chosen);
+      used.add(chosen);
+    }
+  }
+  const out = {};
+  for (const [oldIndex, newIndex] of [...mapped.entries()].sort((a, b) => a[0] - b[0])) {
+    out[oldIndex] = newIndex;
+  }
+  return out;
+}
+
+function taskSettleLocalSchedules(contents, today, classification) {
+  const text = String(contents);
+  const lines = taskSettleLogicalLines(text);
+  const segments = tsSplitSegments(text);
+  if (lines.length === 0 || segments.length === 0 || lines.length !== segments.length) {
+    return text;
+  }
+  let changed = false;
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    const line = lines[lineIndex];
+    let leading = 0;
+    while (line[leading] === " " || line[leading] === "\t") leading += 1;
+    const markerEnd = tsAfterListMarker(line, leading);
+    if (markerEnd == null) continue;
+    let checkboxStart = markerEnd;
+    while (line[checkboxStart] === " " || line[checkboxStart] === "\t") checkboxStart += 1;
+    if (line[checkboxStart] !== "[") continue;
+    const close = line.indexOf("]", checkboxStart + 1);
+    if (close === -1) continue;
+    const symbols = Array.from(line.slice(checkboxStart + 1, close));
+    if (symbols.length !== 1) continue;
+    const status = symbols[0];
+    if (!tsIsOpenStatus(classification, status)) continue;
+    const afterCheckbox = line.slice(close + 1);
+    if (afterCheckbox !== "" && !/^\s/.test(afterCheckbox)) continue;
+    const body = afterCheckbox.replace(/^\s+/, "");
+    if (!tsMatchesTaskFilter(classification, body)) continue;
+    const blockId = tsTrailingBlockId(body);
+    const metadata = tsTaskMetadata(body, blockId);
+    if (!(metadata.scheduled != null && metadata.scheduled > today)) continue;
+    let rewritten = line;
+    if (status !== "?") {
+      rewritten = `${rewritten.slice(0, checkboxStart + 1)}?${rewritten.slice(checkboxStart + 1 + status.length)}`;
+    }
+    const pruned = tsPruneUnblocked(rewritten, today);
+    if (pruned != null) rewritten = pruned;
+    if (rewritten !== line) {
+      const segment = segments[lineIndex];
+      let ending = "";
+      if (segment.endsWith("\r\n")) ending = "\r\n";
+      else if (segment.endsWith("\n")) ending = "\n";
+      segments[lineIndex] = `${rewritten}${ending}`;
+      changed = true;
+    }
+  }
+  if (!changed) return text;
+  return segments.join("");
+}
+
+function taskSettleNote(relativePath, contents, today, classification, dailyPath) {
+  const text = String(contents);
+  const scheduled = taskSettleLocalSchedules(text, today, classification);
+  let transformed;
+  if (taskSettleGroupingEligible(relativePath, scheduled, dailyPath)) {
+    transformed = taskSettleTransform(scheduled, classification);
+  } else {
+    transformed = { contents: scheduled, changed: false, groupedSections: [], warnings: [] };
+  }
+  const lineMap = tsMapSurvivingLines(text, transformed.contents, classification);
+  return {
+    contents: transformed.contents,
+    changed: transformed.contents !== text,
+    lineMap,
+    groupedSections: transformed.groupedSections,
+    warnings: transformed.warnings,
+  };
+}
+
+function taskSettleTextValue(value) {
+  const lines = value.lines || [];
+  const ending = value.ending || "\n";
+  let result = lines.join(ending);
+  if (value.final_newline) result += ending;
+  return result;
+}
 // ---- src/139-unblocked-glyph.js ----
 // --- Unblocked hand-off glyph: pure mark-core ---------------------------
 // Owned by the epic plan `plan:202610/successor_links.md`
@@ -187867,6 +190014,27 @@ try {
       taskReqCarriesGlobalFilter,
       taskReqForest,
       taskReqInfoAtLine,
+    });
+  }
+} catch (error) {
+  // Test exports are best-effort.
+}
+// ---- src/351-exports-task-settle.js ----
+// Test exports for the pure task-settle twin (bob-cli-q4.8.1.1 pure-twin).
+try {
+  if (module.exports && module.exports.helpers) {
+    Object.assign(module.exports.helpers, {
+      taskSettleFromStatusTypes,
+      taskSettleNote,
+      taskSettleTransform,
+      taskSettleLocalSchedules,
+      taskSettleGroupingEligible,
+      taskSettleCanonicalDailyDate,
+      taskSettleParseDayFileDate,
+      taskSettleIsBadgeRow,
+      taskSettleIsLegacyBadgeMarker,
+      taskSettleLogicalLines,
+      taskSettleTextValue,
     });
   }
 } catch (error) {

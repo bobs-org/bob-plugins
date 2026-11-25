@@ -34,7 +34,7 @@ class StubRangeSetBuilder {
 }
 
 const StubDecoration = {
-  none: { _decorationNone: true },
+  none: { _decorationNone: true, adds: [] },
   replace: (spec) => ({ _decorationReplace: true, ...spec }),
   line: (spec) => ({ _decorationLine: true, ...spec }),
 };

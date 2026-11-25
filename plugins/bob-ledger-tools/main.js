@@ -127240,6 +127240,71 @@ class BobLedgerToolsTaskReqMarksMixin {
 
 const TASK_DRAWER_DOC_MODELS = new WeakMap();
 
+function taskDrawerVisualColumns(text) {
+  let columns = 0;
+  for (const character of String(text || "")) columns += character === "\t" ? 2 : 1;
+  return columns;
+}
+
+function taskDrawerStripColumns(line, columns) {
+  const text = String(line || "");
+  let index = 0;
+  let removed = 0;
+  while (index < text.length && removed < columns && (text[index] === " " || text[index] === "\t")) {
+    removed += text[index] === "\t" ? 2 : 1;
+    index += 1;
+  }
+  return text.slice(index);
+}
+
+function taskDrawerFenceContext(spans, index) {
+  const line = spans[index] && spans[index].text || "";
+  const item = drawer_list_item(line);
+  if (item) {
+    return {
+      logical: item.body,
+      baseIndent: taskDrawerVisualColumns(line.slice(0, item.bodyFrom)),
+    };
+  }
+  const indent = drawer_indent_columns(line);
+  for (let parentIndex = index - 1; parentIndex >= 0; parentIndex -= 1) {
+    const parentLine = spans[parentIndex] && spans[parentIndex].text || "";
+    const parent = drawer_list_item(parentLine);
+    if (!parent || parent.indentColumns >= indent) continue;
+    const baseIndent = taskDrawerVisualColumns(parentLine.slice(0, parent.bodyFrom));
+    if (indent >= baseIndent) {
+      return { logical: taskDrawerStripColumns(line, baseIndent), baseIndent };
+    }
+  }
+  return { logical: line, baseIndent: 0 };
+}
+
+function taskDrawerFencedLines(contents) {
+  try {
+    const spans = drawer_line_spans(String(contents == null ? "" : contents));
+    const fenced = new Set();
+    let open = null;
+    for (let index = 0; index < spans.length; index += 1) {
+      if (open) {
+        fenced.add(index);
+        const logical = taskDrawerStripColumns(spans[index].text, open.baseIndent);
+        const marker = drawer_fence_marker(logical);
+        if (marker && marker.character === open.character && marker.length >= open.length
+          && !logical.trim().slice(marker.length)) open = null;
+        continue;
+      }
+      const context = taskDrawerFenceContext(spans, index);
+      const marker = drawer_fence_marker(context.logical);
+      if (!marker) continue;
+      fenced.add(index);
+      open = { ...marker, baseIndent: context.baseIndent };
+    }
+    return fenced;
+  } catch (error) {
+    return new Set();
+  }
+}
+
 function taskDrawerOwnerState(line) {
   try {
     const item = taskReqListItem(line);
@@ -127280,7 +127345,7 @@ function taskDrawerForest(contents) {
     const spans = drawer_line_spans(text);
     const lines = spans.map((span) => span.text);
     const frontmatterEnd = taskReqFrontmatterEnd(lines);
-    const fenced = drawer_fenced_lines(spans);
+    const fenced = taskDrawerFencedLines(text);
     const rows = [];
     for (let ownerIndex = 0; ownerIndex < lines.length; ownerIndex += 1) {
       if ((frontmatterEnd !== null && ownerIndex <= frontmatterEnd) || fenced.has(ownerIndex)) continue;
@@ -127337,6 +127402,7 @@ try {
     Object.assign(module.exports.helpers, {
       taskDrawerOwnerState,
       taskDrawerDirectNoteCount,
+      taskDrawerFencedLines,
       taskDrawerForest,
       taskDrawerForestForDoc,
     });
@@ -187801,6 +187867,23 @@ try {
       taskReqCarriesGlobalFilter,
       taskReqForest,
       taskReqInfoAtLine,
+    });
+  }
+} catch (error) {
+  // Test exports are best-effort.
+}
+// ---- src/351-exports-task-drawers.js ----
+// Task drawer model and rendering helpers, exported after the plugin surface.
+try {
+  if (module.exports && module.exports.helpers) {
+    Object.assign(module.exports.helpers, {
+      taskDrawerOwnerState,
+      taskDrawerDirectNoteCount,
+      taskDrawerFencedLines,
+      taskDrawerForest,
+      taskDrawerForestForDoc,
+      TASK_DRAWER_MARK_ATTRS,
+      BobLedgerToolsTaskDrawerMarksMixin,
     });
   }
 } catch (error) {

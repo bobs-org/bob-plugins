@@ -385,6 +385,7 @@
   "340-dashboard-views-and-plan-block.js",
   "350-exports.js",
   "351-exports-task-reqs.js",
+  "351-exports-task-drawers.js",
   "357-exports-bank-category-ui.js",
   "351-exports-prj-hide.js",
   "352-exports-album.js",

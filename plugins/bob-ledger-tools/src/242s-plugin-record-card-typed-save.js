@@ -61,14 +61,17 @@ Object.assign(RecordCardModal.prototype, {
               this.stageItemDraft = "";
             }
             this.stagePreview = null;
+            this.stageNote = "";
             this.stageCaret = null;
             if (this.session) { try { this.session.setDraft([]); } catch (_) {} }
             this.statusKind = "saved";
           } else {
             this.stage = null;
+      this.stageNote = "";
           }
         } else {
           this.stage = null;
+      this.stageNote = "";
         }
         this.paintRecordCard();
         return result;
@@ -76,6 +79,7 @@ Object.assign(RecordCardModal.prototype, {
       const wasTyped = Boolean(this.stage && this.stage.kind !== "choices");
       if (wasTyped) {
         this.stage = null;
+      this.stageNote = "";
         this.stageDraftText = "";
         this.stageList = [];
         this.stageItemDraft = "";
@@ -106,6 +110,7 @@ Object.assign(RecordCardModal.prototype, {
           }
         }
         this.stage = null;
+      this.stageNote = "";
         this.statusKind = result.report && result.report.consequence ? "consequence" : "";
         this.consequence = (result.report && result.report.consequence) || "";
         this.paintRecordCard();
@@ -113,6 +118,7 @@ Object.assign(RecordCardModal.prototype, {
       }
       if (this.stage && this.stage.kind !== "choices") {
         this.stage = null;
+      this.stageNote = "";
         this.stageDraftText = "";
         this.stageList = [];
         this.stageItemDraft = "";
@@ -152,6 +158,7 @@ Object.assign(RecordCardModal.prototype, {
 ,
   recordCancelStageSilent() {
     this.stage = null;
+      this.stageNote = "";
     this.choiceFilter = "";
     this.choiceDigitPrefix = "";
     this.selectedChoice = "";
@@ -161,6 +168,7 @@ Object.assign(RecordCardModal.prototype, {
     this.stageList = [];
     this.stageItemDraft = "";
     this.stagePreview = null;
+    this.stageNote = "";
     this.stageEnterSeq = 0;
     this.recordInvalidatePendingTab();
     if (this.session && !this.closed) {
@@ -577,6 +585,7 @@ Object.assign(RecordCardModal.prototype, {
       if (!stillThere) {
         this.recordInvalidatePendingTab();
         this.stage = null;
+      this.stageNote = "";
         this.stageDraftText = "";
         this.stageList = [];
         this.stageItemDraft = "";
@@ -590,6 +599,7 @@ Object.assign(RecordCardModal.prototype, {
         if (nextTarget && captured.kind && nextTarget.stageKind !== captured.kind) {
           this.recordInvalidatePendingTab();
           this.stage = null;
+      this.stageNote = "";
           this.stageDraftText = "";
           this.stageList = [];
           this.stageItemDraft = "";
@@ -611,6 +621,7 @@ Object.assign(RecordCardModal.prototype, {
       }
     } else if (!options.keepStage) {
       this.stage = null;
+      this.stageNote = "";
       this.stageDraftText = "";
       this.stageList = [];
       this.stageItemDraft = "";

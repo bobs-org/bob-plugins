@@ -106,8 +106,7 @@ function propertyEditorPaintSummaryStage(doc, host, options, modal) {
   let input = options.keptInput || null;
   if (!input) {
     // bob-text: literal one-line area/project summary
-    input = propertyEditorCreateEl(doc, "input", "bob-property-editor-stage-input is-summary");
-    input.setAttribute("type", "text");
+    input = propertyEditorCreateEl(doc, "textarea", "bob-property-editor-stage-input is-summary");
     input.value = options.value;
   } else if (!options.composing && String(input.value == null ? "" : input.value) !== options.value) {
     input.value = options.value;
@@ -119,6 +118,17 @@ function propertyEditorPaintSummaryStage(doc, host, options, modal) {
   input.setAttribute("aria-label", "Summary");
   if (options.disabled) input.disabled = true;
   panel.appendChild(input);
+  if (typeof bobSoftLineAttach === "function") {
+    try {
+      bobSoftLineAttach(input, {
+        onFold: () => {
+          try { if (modal && modal.stage) modal.stage.summaryFoldNote = "Line breaks became spaces — a summary is one line."; } catch (_) {}
+          try { modal?.paintPropertyEditor?.(); } catch (_) {}
+        },
+      });
+    } catch (_) {}
+  }
+  try { if (typeof bobSoftLineAutosize === "function") bobSoftLineAutosize(input); } catch (_) {}
   propertyEditorPaintSettingNotes(doc, panel, options);
   const preview = propertyEditorCreateEl(doc, "div", "bob-property-editor-stage-preview");
   preview.setAttribute("role", "status");
@@ -377,6 +387,7 @@ Object.assign(PropertyEditorModal.prototype, {
       view.prose = false;
       view.collection = false;
       view.kind = "text";
+      if (stage.summaryFoldNote) view.helpNote = String(stage.summaryFoldNote);
     }
     if (stage.settingStage === "ready-cap") {
       view.effectLine = propertyEditorSettingReadyCapEffectLine(

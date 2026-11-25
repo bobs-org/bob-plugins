@@ -9121,6 +9121,20 @@ body.bob-task-tag-marks a.tag.bob-no-reply-pill::before {
   overflow-y: auto;
   line-height: 1.5;
 }
+/* Soft-line one-line fields: the Intention and Summary stages wrap and grow
+   like the Record Card text stage. The two-class selector outranks the
+   generic input min-height/resize rule above. */
+.bob-intention-stage-input.is-line {
+  min-height: calc(1.5em + 0.9em + 2px);
+  height: auto;
+  resize: none;
+  field-sizing: content;
+  overflow-y: auto;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: min(40vh, 11.5em);
+}
 .bob-intention-stage-note { color: var(--text-faint); font-size: 0.82em; }
 /* nav's LINK band host under the stage field; it takes no grid row while
    the band and its unresolved-link hint are both hidden. */
@@ -12083,42 +12097,54 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
 }
 .bob-record-card-body { margin-top: 0.55em; }
 .bob-record-card-fields { display: flex; flex-direction: column; gap: 0.2em; }
-.bob-record-card-row {
+.bob-record-card .bob-record-card-row {
   display: grid;
   grid-template-columns: minmax(6em, 32%) 1fr;
   gap: 0.5em;
   align-items: baseline;
   width: 100%;
+  height: auto;
+  min-height: var(--input-height, 2.2em);
   margin: 0;
   padding: 0.35em 0.45em;
   border: 1px solid transparent;
   border-radius: 6px;
   background: transparent;
+  box-shadow: none;
   color: inherit;
   font: inherit;
+  line-height: 1.4;
   text-align: start;
+  white-space: normal;
   cursor: pointer;
 }
-.bob-record-card-row:hover {
+.bob-record-card .bob-record-card-row:hover {
   background: var(--background-modifier-hover);
 }
-.bob-record-card-row.is-selected,
-.bob-record-card-row[aria-current="true"] {
+.bob-record-card .bob-record-card-row.is-selected,
+.bob-record-card .bob-record-card-row[aria-current="true"] {
   border-color: var(--interactive-accent);
   background: color-mix(in srgb, var(--interactive-accent) 10%, var(--background-primary));
 }
-.bob-record-card-row:focus-visible,
-.bob-record-card-choice:focus-visible,
-.bob-record-card-action:focus-visible,
-.bob-record-card-more-toggle:focus-visible,
-.bob-record-card-choice-filter:focus-visible {
+.bob-record-card .bob-record-card-row:focus-visible,
+.bob-record-card .bob-record-card-choice:focus-visible,
+.bob-record-card .bob-record-card-action:focus-visible,
+.bob-record-card .bob-record-card-more-toggle:focus-visible,
+.bob-record-card .bob-record-card-choice-filter:focus-visible {
   outline: 2px solid var(--interactive-accent);
   outline-offset: 2px;
 }
 .bob-record-card-label { font-weight: 600; overflow-wrap: anywhere; }
 .bob-record-card-required { margin-inline-start: 0.15em; color: var(--text-warning); }
-.bob-record-card-value { min-width: 0; overflow-wrap: anywhere; }
-.bob-record-card-row.is-ghost .bob-record-card-value { color: var(--text-faint); }
+.bob-record-card .bob-record-card-value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+.bob-record-card .bob-record-card-row.is-ghost .bob-record-card-value { color: var(--text-faint); }
 .bob-record-card-empty,
 .bob-record-card-choice-empty,
 .bob-record-card-stage-note {
@@ -12152,19 +12178,22 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
   font-variant-numeric: tabular-nums;
 }
 .bob-record-card-choice-list { display: flex; flex-direction: column; gap: 0.15em; }
-.bob-record-card-choice {
+.bob-record-card .bob-record-card-choice {
   display: flex;
   align-items: center;
   gap: 0.45em;
   width: 100%;
+  height: auto;
   margin: 0;
   padding: 0.3em 0.45em;
   border: 1px solid transparent;
   border-radius: 6px;
   background: transparent;
+  box-shadow: none;
   color: inherit;
   font: inherit;
   text-align: start;
+  white-space: normal;
   cursor: pointer;
 }
 .bob-record-card-choice.is-current {
@@ -12236,20 +12265,158 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
   color: var(--text-muted);
   font-size: 0.82em;
 }
-.bob-record-card-action {
+.bob-record-card .bob-record-card-action {
   margin: 0;
   padding: 0.25em 0.5em;
   border: 1px solid var(--background-modifier-border);
   border-radius: 6px;
   background: var(--background-primary);
+  box-shadow: none;
   color: inherit;
   font: inherit;
   font-size: 0.86em;
   cursor: pointer;
 }
-.bob-record-card-action:disabled {
+.bob-record-card .bob-record-card-action:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+}
+/* Soft-line field base: one stored line that wraps across as many visual
+   lines as it needs, grows to about six lines, then scrolls. Never scrolls
+   sideways and has no resize grip. */
+textarea.bob-soft-line {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: calc(1.5em + 0.9em + 2px);
+  height: auto;
+  resize: none;
+  field-sizing: content;
+  overflow-y: auto;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: min(40vh, 11.5em);
+}
+/* The open stage joins its row as one accent-outlined unit. */
+.bob-record-card .bob-record-card-row.is-editing {
+  border-color: var(--interactive-accent);
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.bob-record-card .bob-record-card-row.is-editing .bob-record-card-value { display: none; }
+.bob-record-card .bob-record-card-row.is-editing + .bob-record-card-stage {
+  margin-top: calc(-1 * 0.2em);
+  border: 1px solid var(--interactive-accent);
+  border-top: 0;
+  border-radius: 0 0 6px 6px;
+  background: color-mix(in srgb, var(--interactive-accent) 5%, var(--background-primary));
+  padding: 0.2em 0.55em 0.6em;
+  display: grid;
+  gap: 0.45em;
+}
+.bob-record-card .bob-record-card-stage-host {
+  border: 1px solid var(--interactive-accent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--interactive-accent) 5%, var(--background-primary));
+  padding: 0.2em 0.55em 0.6em;
+}
+.bob-record-card .bob-record-card-stage-input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 0.45em 0.6em;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: var(--background-primary);
+  color: inherit;
+  font: inherit;
+}
+.bob-record-card .bob-record-card-stage-input:not(textarea) { height: var(--input-height, 2.2em); }
+.bob-record-card .bob-record-card-stage-input:focus-visible {
+  border-color: var(--interactive-accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--interactive-accent) 25%, transparent);
+  outline: none;
+}
+.bob-record-card .is-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.bob-record-card .bob-record-card-stage-hint {
+  margin: 0;
+  color: var(--text-faint);
+  font-size: 0.82em;
+}
+.bob-record-card .bob-record-card-stage-hint.is-note { color: var(--text-muted); }
+.bob-record-card .bob-record-card-stage-preview,
+.bob-record-card .bob-record-card-stage-warning {
+  margin: 0;
+  padding-inline-start: 0.5em;
+  border-inline-start: 2px solid var(--interactive-accent);
+  font-size: 0.86em;
+}
+.bob-record-card .bob-record-card-stage-warning {
+  border-inline-start-color: var(--text-warning);
+  color: var(--text-warning);
+}
+.bob-record-card .bob-record-card-suggest-list {
+  max-height: min(40vh, 16em);
+  overflow-y: auto;
+}
+.bob-record-card .bob-record-card-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3em;
+}
+.bob-record-card .bob-record-card-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  max-width: 100%;
+  padding: 0.2em 0.2em 0.2em 0.7em;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 999px;
+  background: var(--background-primary);
+}
+.bob-record-card .bob-record-card-chip-text { min-width: 0; overflow-wrap: anywhere; }
+.bob-record-card .bob-record-card-chip-edit,
+.bob-record-card .bob-record-card-chip-remove {
+  height: auto;
+  min-height: 0;
+  padding: 0.1em 0.45em;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.86em;
+  cursor: pointer;
+}
+.bob-record-card .bob-record-card-chip-edit:hover,
+.bob-record-card .bob-record-card-chip-remove:hover { color: var(--text-normal); }
+.bob-record-card .bob-record-card-link-band:not(:has(> :not(.is-hidden):not(:empty))) { display: none; }
+.bob-record-card .bob-record-card-stage-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.4em;
+}
+@media (forced-colors: active) {
+  .bob-record-card .bob-record-card-row,
+  .bob-record-card .bob-record-card-choice,
+  .bob-record-card .bob-record-card-stage,
+  .bob-record-card .bob-record-card-stage-host,
+  .bob-record-card .bob-record-card-stage-input,
+  .bob-record-card .bob-record-card-chip,
+  .bob-record-card .bob-record-card-action { border: 1px solid CanvasText; }
 }
 .bob-record-card-live.sr-only {
   position: absolute;
@@ -12263,17 +12430,18 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
   border: 0;
 }
 @media (max-width: 375px) {
-  .bob-record-card-row {
+  .bob-record-card .bob-record-card-row {
     display: block;
     margin: 0.2em 0;
   }
-  .bob-record-card-label { display: block; }
-  .bob-record-card-value { display: block; margin-top: 0.15em; }
-  .bob-record-card-action,
-  .bob-record-card-choice,
-  .bob-record-card-row {
+  .bob-record-card .bob-record-card-label { display: block; }
+  .bob-record-card .bob-record-card-value { display: block; margin-top: 0.15em; }
+  .bob-record-card .bob-record-card-action,
+  .bob-record-card .bob-record-card-choice,
+  .bob-record-card .bob-record-card-row {
     min-height: 2.2em;
   }
+  .bob-record-card .bob-record-card-stage-actions > button { flex: 1 1 auto; min-width: 7em; }
 }
 @media (prefers-reduced-motion: reduce) {
   .bob-record-card,
@@ -12283,8 +12451,8 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
   }
 }
 @media (prefers-color-scheme: dark) {
-  .bob-record-card-row.is-selected,
-  .bob-record-card-choice.is-selected {
+  .bob-record-card .bob-record-card-row.is-selected,
+  .bob-record-card .bob-record-card-choice.is-selected {
     background: color-mix(in srgb, var(--interactive-accent) 16%, var(--background-primary));
   }
 }
@@ -13464,6 +13632,20 @@ button.bob-property-card-foot-lint-chip {
 }
 .bob-property-editor-stage-input.is-summary,
 .bob-property-editor-stage-input.is-stepper { min-height: 0; resize: none; }
+/* Soft-line Area and Project Summary: wraps and grows like the other
+   one-line card fields. The three-class selector outranks the min-height
+   reset above. */
+.bob-property-editor-stage-input.is-summary.bob-soft-line {
+  min-height: calc(1.5em + 1em + 2px);
+  height: auto;
+  resize: none;
+  field-sizing: content;
+  overflow-y: auto;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: min(40vh, 11.5em);
+}
 .bob-property-editor-stage-input.is-stepper { width: 5.5em; text-align: center; }
 .bob-property-editor-stage-step,
 .bob-property-editor-stage-off {

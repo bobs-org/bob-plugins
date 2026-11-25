@@ -219,13 +219,15 @@ replaces it, and an outcome such as Saved or Undone stays only until the next mo
 open; only explicit cancel or save
 leaves the stage. Summary editing explains "agent drafted this; your edit
 makes it yours" before the intentional edit. At four or more intentions the
-card shows "Three is plenty — what can go?" without refusing. Pasted
-newlines collapse to spaces with a quiet note. The Summary and Reflection
-stages show the current summary read-only above the field; the reflection
-textarea grows with its content, with Enter to save, Shift+Enter for a
-newline, and Ctrl/Cmd+Enter to save and close. Clearing an existing intention
-removes it, clearing summary or reflection unsets it, and a blank Add writes
-nothing.
+card shows "Three is plenty — what can go?" without refusing. The
+Intention and Summary fields are soft-line fields: one stored line that
+wraps across as many visual lines as it needs, grows to about six lines,
+then scrolls, and folds pasted line breaks to spaces with a quiet note.
+The Summary and Reflection stages show the current summary read-only
+above the field; the reflection textarea grows with its content, with
+Enter to save, Shift+Enter for a newline, and Ctrl/Cmd+Enter to save
+and close. Clearing an existing intention removes it, clearing summary
+or reflection unsets it, and a blank Add writes nothing.
 
 Typing `[[` in the intention, summary, or reflection field opens Bob
 Navigation Hotkeys' LINK band under the field. Links resolve against the

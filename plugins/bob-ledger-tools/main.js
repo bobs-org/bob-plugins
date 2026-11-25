@@ -71183,6 +71183,207 @@ function bobCardUnwireCloseKeys(modal) {
     } catch (_) {}
   } catch (_) {}
 }
+// ---- src/241xd-plugin-soft-line-field.js ----
+// Shared soft-line field: a one-line value that wraps across as many visual
+// lines as it needs. Pasted or dropped line breaks fold to spaces with a
+// quiet note; the stored value never holds a break. DOM-free at load: every
+// DOM call sits in try/catch and fails open.
+function bobSoftLineFold(text) {
+  try {
+    const raw = String(text === null || text === undefined ? "" : text);
+    const value = raw.replace(/(?:[ \t]*(?:\r\n|[\r\n\u2028\u2029]))+[ \t]*/g, " ");
+    return { value, folded: value !== raw };
+  } catch (_) {
+    return { value: String(text === null || text === undefined ? "" : text), folded: false };
+  }
+}
+
+function bobSoftLinePasteText(text) {
+  try {
+    const raw = String(text === null || text === undefined ? "" : text);
+    if (!/[\r\n\u2028\u2029]/.test(raw)) return { value: raw, folded: false };
+    const trimmed = raw.trim();
+    const folded = bobSoftLineFold(trimmed);
+    return { value: folded.value, folded: true };
+  } catch (_) {
+    return { value: String(text === null || text === undefined ? "" : text), folded: false };
+  }
+}
+
+function bobSoftLineHasBreak(text) {
+  try {
+    return /[\r\n\u2028\u2029]/.test(String(text === null || text === undefined ? "" : text));
+  } catch (_) {
+    return false;
+  }
+}
+
+function bobSoftLineInsertFallback(textarea, value) {
+  try {
+    const current = String(textarea.value === null || textarea.value === undefined ? "" : textarea.value);
+    let start = current.length;
+    let end = current.length;
+    try {
+      if (Number.isInteger(textarea.selectionStart)) start = textarea.selectionStart;
+      if (Number.isInteger(textarea.selectionEnd)) end = textarea.selectionEnd;
+    } catch (_) {}
+    start = Math.max(0, Math.min(start, current.length));
+    end = Math.max(0, Math.min(end, current.length));
+    if (start > end) { const tmp = start; start = end; end = tmp; }
+    // Prefer setRangeText so the browser fires the right undo grouping.
+    try {
+      if (typeof textarea.setRangeText === "function") {
+        textarea.setRangeText(value, start, end, "end");
+        try { textarea.dispatchEvent?.(new Event("input", { bubbles: true })); } catch (_) {
+          try {
+            const doc = textarea.ownerDocument;
+            const event = doc && typeof doc.createEvent === "function" ? doc.createEvent("Event") : null;
+            if (event && typeof event.initEvent === "function") {
+              event.initEvent("input", true, true);
+              textarea.dispatchEvent?.(event);
+            }
+          } catch (_) {}
+        }
+        return true;
+      }
+    } catch (_) {}
+    const next = `${current.slice(0, start)}${value}${current.slice(end)}`;
+    const caret = start + String(value).length;
+    try { textarea.value = next; } catch (_) { return false; }
+    try { if (typeof textarea.setSelectionRange === "function") textarea.setSelectionRange(caret, caret); } catch (_) {}
+    try { textarea.dispatchEvent?.({ type: "input", bubbles: true, target: textarea }); } catch (_) {}
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function bobSoftLineAttach(textarea, options = {}) {
+  try {
+    if (!textarea || typeof textarea.addEventListener !== "function") return textarea;
+    try {
+      if (textarea.getAttribute?.("data-soft-line") === "true") return textarea;
+    } catch (_) {}
+    const skip = options && typeof options.skip === "function" ? options.skip : null;
+    const onFold = options && typeof options.onFold === "function" ? options.onFold : null;
+    try { textarea.setAttribute?.("data-soft-line", "true"); } catch (_) {}
+    try { textarea.classList?.add?.("bob-soft-line"); } catch (_) {
+      try {
+        const prior = textarea.getAttribute?.("class") || "";
+        textarea.setAttribute?.("class", `${prior} bob-soft-line`.trim());
+      } catch (_) {}
+    }
+    try { textarea.setAttribute?.("rows", "1"); } catch (_) {}
+    try { textarea.rows = 1; } catch (_) {}
+    try { textarea.setAttribute?.("wrap", "soft"); } catch (_) {}
+    try { textarea.setAttribute?.("enterkeyhint", "done"); } catch (_) {}
+    // Do not set aria-multiline: the field is one line that wraps.
+    try {
+      textarea.addEventListener("beforeinput", (event) => {
+        try {
+          if (skip && skip() === true) return;
+          const kind = event && event.inputType;
+          if (kind === "insertLineBreak" || kind === "insertParagraph") event.preventDefault?.();
+        } catch (_) {}
+      });
+    } catch (_) {}
+    try {
+      textarea.addEventListener("paste", (event) => {
+        try {
+          if (skip && skip() === true) return;
+          let text = "";
+          try {
+            text = event.clipboardData?.getData?.("text/plain")
+              || event.clipboardData?.getData?.("text")
+              || "";
+          } catch (_) {}
+          if (!bobSoftLineHasBreak(text)) return;
+          try { event.preventDefault?.(); } catch (_) {}
+          const folded = bobSoftLinePasteText(text);
+          let done = false;
+          try {
+            const doc = textarea.ownerDocument;
+            if (doc && typeof doc.execCommand === "function" && doc.execCommand("insertText", false, folded.value) === true) done = true;
+          } catch (_) {}
+          if (!done) {
+            try {
+              const view = textarea.ownerDocument && textarea.ownerDocument.defaultView;
+              if (view && typeof view.execCommand === "function" && view.execCommand("insertText", false, folded.value) === true) done = true;
+            } catch (_) {}
+          }
+          try {
+            if (!done && typeof document !== "undefined" && typeof document.execCommand === "function"
+              && document.execCommand("insertText", false, folded.value) === true) done = true;
+          } catch (_) {}
+          if (!done) done = bobSoftLineInsertFallback(textarea, folded.value);
+          try { if (onFold) onFold("paste"); } catch (_) {}
+        } catch (_) {}
+      });
+    } catch (_) {}
+    try {
+      textarea.addEventListener("input", () => {
+        try {
+          if (skip && skip() === true) { try { bobSoftLineAutosize(textarea); } catch (_) {} return; }
+          const current = String(textarea.value === null || textarea.value === undefined ? "" : textarea.value);
+          if (!bobSoftLineHasBreak(current)) {
+            try { bobSoftLineAutosize(textarea); } catch (_) {}
+            return;
+          }
+          let caret = null;
+          try { if (Number.isInteger(textarea.selectionStart)) caret = textarea.selectionStart; } catch (_) {}
+          const folded = bobSoftLineFold(current);
+          let nextCaret = folded.value.length;
+          try {
+            if (Number.isInteger(caret)) nextCaret = bobSoftLineFold(current.slice(0, caret)).value.length;
+          } catch (_) {}
+          try { textarea.value = folded.value; } catch (_) {}
+          try {
+            if (typeof textarea.setSelectionRange === "function") {
+              textarea.setSelectionRange(Math.min(nextCaret, folded.value.length), Math.min(nextCaret, folded.value.length));
+            }
+          } catch (_) {}
+          try { if (onFold) onFold("input"); } catch (_) {}
+          try { bobSoftLineAutosize(textarea); } catch (_) {}
+        } catch (_) {}
+      });
+    } catch (_) {}
+    return textarea;
+  } catch (_) {
+    return textarea;
+  }
+}
+
+function bobSoftLineAutosize(textarea) {
+  try {
+    if (!textarea || !textarea.style) return null;
+    try {
+      if (typeof CSS !== "undefined" && typeof CSS.supports === "function" && CSS.supports("field-sizing", "content") === true) {
+        try { textarea.style.height = ""; } catch (_) {}
+        return "css";
+      }
+    } catch (_) {}
+    let start = null;
+    let end = null;
+    try {
+      if (Number.isInteger(textarea.selectionStart)) start = textarea.selectionStart;
+      if (Number.isInteger(textarea.selectionEnd)) end = textarea.selectionEnd;
+    } catch (_) {}
+    try { textarea.style.height = "auto"; } catch (_) {}
+    let extra = 0;
+    try { extra = Math.max(0, Number(textarea.offsetHeight || 0) - Number(textarea.clientHeight || 0)); } catch (_) {}
+    let content = 0;
+    try { content = Number(textarea.scrollHeight || 0); } catch (_) {}
+    try { textarea.style.height = `${Math.max(0, content + extra)}px`; } catch (_) { return null; }
+    try {
+      if (Number.isInteger(start) && Number.isInteger(end) && typeof textarea.setSelectionRange === "function") {
+        textarea.setSelectionRange(start, end);
+      }
+    } catch (_) {}
+    return "js";
+  } catch (_) {
+    return null;
+  }
+}
 // ---- src/241z-plugin-album-update.js ----
 // Album schema update wire helpers. `bob albums update` is the only
 // writer of album schema YAML; these helpers build its argv and envelope
@@ -121357,7 +121558,8 @@ function recordCardPaintHeader(card, sheetModel, options, doc) {
 }
 
 function recordCardPaintRow(doc, target, selectedKey, options) {
-  const row = recordCardEl(doc, "button", `bob-record-card-row${target.ghost ? " is-ghost" : ""}`);
+  const editing = Boolean(options && options.stage && options.stage.field === target.key && options.stage.kind !== "choices");
+  const row = recordCardEl(doc, "button", `bob-record-card-row${target.ghost ? " is-ghost" : ""}${editing ? " is-editing" : ""}`);
   row.setAttribute("type", "button");
   row.setAttribute("role", "option");
   row.setAttribute("data-target-key", target.key);
@@ -121554,6 +121756,8 @@ function recordCardPaintStage(card, options, doc) {
         },
         reportField: options.reportField || null,
         preview: options.stagePreview || null,
+        stageNote: options.stageNote || "",
+        softLine: options.softLine || null,
         plugin: options.plugin || null,
         recordPath: options.recordPath || "",
         applying: options.status?.pendingApply === true,
@@ -122877,7 +123081,7 @@ function recordCardStageLabel(kind, target) {
 }
 
 function recordCardStageHintText(kind, field, reportField) {
-  if (kind === "text") return "Enter saves; newlines are refused.";
+  if (kind === "text") return "";
   if (kind === "suggest") {
     const count = recordCardSuggestValues(reportField, field).length;
     return count ? `Pick a suggestion or type freely · ${count} ranked` : "Type freely; bob validates.";
@@ -122900,7 +123104,7 @@ function recordCardPaintStageInput(doc, host, options) {
   const attrs = recordCardStageInputAttrs(kind);
   const labelText = recordCardStageLabel(kind, target);
   const kept = options.keptInput || null;
-  const label = recordCardEl(doc, "label", "bob-record-card-stage-label");
+  const label = recordCardEl(doc, "label", "bob-record-card-stage-label is-visually-hidden");
   recordCardText(label, labelText);
   label.setAttribute("for", `bob-record-card-input-${target.key}`);
   recordCardStagePut(host, label, kept);
@@ -122914,7 +123118,6 @@ function recordCardPaintStageInput(doc, host, options) {
   } else if (kind === "text") {
     // bob-text: prose S15 text/suggest stages; link stage uses field mode
     input = recordCardEl(doc, "textarea", "bob-record-card-stage-input bob-record-card-text");
-    input.setAttribute("rows", "3");
     input.value = value;
   } else {
     // bob-text: mixed S15 prose text/suggest/list and literal date/number/URL stages
@@ -122928,12 +123131,36 @@ function recordCardPaintStageInput(doc, host, options) {
   input.setAttribute("data-record-input", `stage-${kind}`);
   input.setAttribute("data-target-key", target.key);
   input.setAttribute("aria-label", labelText);
+  if (kind === "text") {
+    try { input.setAttribute?.("placeholder", `${labelText}…`); } catch (_) {}
+    try { input.placeholder = `${labelText}…`; } catch (_) {}
+    try {
+      if (typeof bobSoftLineAttach === "function" && options && options.softLine) {
+        bobSoftLineAttach(input, options.softLine);
+      }
+    } catch (_) {}
+  }
   if (kind === "suggest") recordCardStageComboboxAria(input, target.key, options.bandOpen === true);
   if (!kept) host.appendChild(input);
+  try {
+    if (typeof bobSoftLineAttach === "function" && kind === "text" && kept && options && options.softLine) {
+      bobSoftLineAttach(input, options.softLine);
+    }
+  } catch (_) {}
   recordCardStageBandHost(doc, host, options);
-  const hint = recordCardEl(doc, "p", "bob-record-card-stage-hint");
-  recordCardText(hint, recordCardStageHintText(kind, target.field, options.reportField));
-  host.appendChild(hint);
+  if (options && options.stageNote) {
+    const note = recordCardEl(doc, "p", "bob-record-card-stage-hint is-note");
+    try { note.setAttribute?.("role", "status"); } catch (_) {}
+    recordCardText(note, String(options.stageNote));
+    host.appendChild(note);
+  } else {
+    const hintText = recordCardStageHintText(kind, target.field, options.reportField);
+    if (hintText) {
+      const hint = recordCardEl(doc, "p", "bob-record-card-stage-hint");
+      recordCardText(hint, hintText);
+      host.appendChild(hint);
+    }
+  }
   if (kind === "suggest") {
     const values = recordCardSuggestValues(options.reportField, target.field);
     const visible = recordCardFilterSuggest(values, draft.text || "");
@@ -123040,21 +123267,20 @@ function recordCardPaintStageActions(doc, host, options) {
   bar.setAttribute("role", "group");
   bar.setAttribute("aria-label", "Stage actions");
   const defs = [
-    { action: "save-stage", text: "Save", ariaLabel: "Save" },
-    { action: "save-next", text: "Save + next", ariaLabel: "Save and open next field" },
-    { action: "save-prev", text: "Save + prev", ariaLabel: "Save and open previous field" },
     { action: "cancel-stage", text: "Cancel", ariaLabel: "Cancel" },
+    { action: "save-stage", text: "Save", ariaLabel: "Save", cta: true },
   ];
   for (const def of defs) {
     const button = recordCardButton(doc, bar, def.text, {
       action: def.action,
       targetKey: target && target.key,
-      className: "bob-record-card-action",
+      className: def.cta ? "bob-record-card-action mod-cta" : "bob-record-card-action",
       ariaLabel: def.ariaLabel,
       disabled: options.applying === true && def.action !== "cancel-stage",
     });
     if (button && def.action === "save-stage") button.setAttribute("data-record-input", "stage-save");
   }
+  host.appendChild(bar);
   return bar;
 }
 
@@ -123109,6 +123335,7 @@ Object.assign(RecordCardModal.prototype, {
       ? recordCardChoiceList(choiceTarget.field, choiceReportField)
       : [];
     const visibleChoices = recordCardFilterChoices(allChoices, this.choiceFilter, this.choiceDigitPrefix);
+    const modal = this;
     return {
       selectedKey: this.selectedKey,
       targets: this.recordTargets(),
@@ -123126,6 +123353,22 @@ Object.assign(RecordCardModal.prototype, {
       stageItemDraft: this.stageItemDraft,
       draftItemDraft: this.stageItemDraft,
       stagePreview: this.stagePreview,
+      stageNote: this.stageNote || "",
+      softLine: {
+        skip() {
+          try { return modal.recordProseBinding?.handle?.isNaming?.() === true; } catch (_) { return false; }
+        },
+        onFold() {
+          try {
+            const current = stageTarget || modal.recordSelected();
+            const label = (current && (current.label || current.key)) || "Field";
+            modal.stageNote = `Line breaks became spaces — ${label} is one line.`;
+          } catch (_) {
+            try { modal.stageNote = "Line breaks became spaces — this field is one line."; } catch (_) {}
+          }
+          try { modal.paintRecordCard(); } catch (_) {}
+        },
+      },
       stageCaret: this.stageCaret,
       composing: this.composing,
       linkBandOpen: typeof this.recordProseLinkOpen === "function" ? this.recordProseLinkOpen() : false,
@@ -123261,6 +123504,7 @@ Object.assign(RecordCardModal.prototype, {
     this.stage = { kind: resolved, field: fieldKey };
     this.menuOpen = false;
     this.stagePreview = null;
+    this.stageNote = "";
     this.stageEnterSeq = 0;
     if (resolved === "choices") {
       this.choiceFilter = options.filter || "";
@@ -123305,6 +123549,13 @@ Object.assign(RecordCardModal.prototype, {
       this.consequence = "";
     }
     this.paintRecordCard();
+    try {
+      const card = this.contentEl?.querySelector?.(".bob-record-card");
+      const inline = card?.querySelector?.("[data-record-card-stage]") || null;
+      if (inline && typeof inline.scrollIntoView === "function") {
+        try { inline.scrollIntoView({ block: "nearest" }); } catch (_) {}
+      }
+    } catch (_) {}
     return true;
   }
 ,
@@ -123320,6 +123571,7 @@ Object.assign(RecordCardModal.prototype, {
     this.stageList = [];
     this.stageItemDraft = "";
     this.stagePreview = null;
+    this.stageNote = "";
     this.stageEnterSeq = 0;
     if (this.session && !this.closed) {
       try { this.session.setDraft([]); } catch (_) {}
@@ -123804,14 +124056,17 @@ Object.assign(RecordCardModal.prototype, {
               this.stageItemDraft = "";
             }
             this.stagePreview = null;
+            this.stageNote = "";
             this.stageCaret = null;
             if (this.session) { try { this.session.setDraft([]); } catch (_) {} }
             this.statusKind = "saved";
           } else {
             this.stage = null;
+      this.stageNote = "";
           }
         } else {
           this.stage = null;
+      this.stageNote = "";
         }
         this.paintRecordCard();
         return result;
@@ -123819,6 +124074,7 @@ Object.assign(RecordCardModal.prototype, {
       const wasTyped = Boolean(this.stage && this.stage.kind !== "choices");
       if (wasTyped) {
         this.stage = null;
+      this.stageNote = "";
         this.stageDraftText = "";
         this.stageList = [];
         this.stageItemDraft = "";
@@ -123849,6 +124105,7 @@ Object.assign(RecordCardModal.prototype, {
           }
         }
         this.stage = null;
+      this.stageNote = "";
         this.statusKind = result.report && result.report.consequence ? "consequence" : "";
         this.consequence = (result.report && result.report.consequence) || "";
         this.paintRecordCard();
@@ -123856,6 +124113,7 @@ Object.assign(RecordCardModal.prototype, {
       }
       if (this.stage && this.stage.kind !== "choices") {
         this.stage = null;
+      this.stageNote = "";
         this.stageDraftText = "";
         this.stageList = [];
         this.stageItemDraft = "";
@@ -123895,6 +124153,7 @@ Object.assign(RecordCardModal.prototype, {
 ,
   recordCancelStageSilent() {
     this.stage = null;
+      this.stageNote = "";
     this.choiceFilter = "";
     this.choiceDigitPrefix = "";
     this.selectedChoice = "";
@@ -123904,6 +124163,7 @@ Object.assign(RecordCardModal.prototype, {
     this.stageList = [];
     this.stageItemDraft = "";
     this.stagePreview = null;
+    this.stageNote = "";
     this.stageEnterSeq = 0;
     this.recordInvalidatePendingTab();
     if (this.session && !this.closed) {
@@ -124320,6 +124580,7 @@ Object.assign(RecordCardModal.prototype, {
       if (!stillThere) {
         this.recordInvalidatePendingTab();
         this.stage = null;
+      this.stageNote = "";
         this.stageDraftText = "";
         this.stageList = [];
         this.stageItemDraft = "";
@@ -124333,6 +124594,7 @@ Object.assign(RecordCardModal.prototype, {
         if (nextTarget && captured.kind && nextTarget.stageKind !== captured.kind) {
           this.recordInvalidatePendingTab();
           this.stage = null;
+      this.stageNote = "";
           this.stageDraftText = "";
           this.stageList = [];
           this.stageItemDraft = "";
@@ -124354,6 +124616,7 @@ Object.assign(RecordCardModal.prototype, {
       }
     } else if (!options.keepStage) {
       this.stage = null;
+      this.stageNote = "";
       this.stageDraftText = "";
       this.stageList = [];
       this.stageItemDraft = "";
@@ -124576,6 +124839,31 @@ const recordCardOnCloseBeforeProse = RecordCardModal.prototype.onClose;
 Object.assign(RecordCardModal.prototype, {
   paintRecordCard() {
     recordCardPaintBeforeProse.call(this);
+    try {
+      const card = this.contentEl?.querySelector?.(".bob-record-card");
+      const input = card?.querySelector?.("[data-record-card-stage] [data-record-input='stage-text']")
+        || card?.querySelector?.("[data-record-card-stage-host] [data-record-input='stage-text']");
+      if (input && input.tagName === "TEXTAREA" && typeof bobSoftLineAttach === "function") {
+        try {
+          bobSoftLineAttach(input, {
+            skip: () => {
+              try { return this.recordProseBinding?.handle?.isNaming?.() === true; } catch (_) { return false; }
+            },
+            onFold: () => {
+              try {
+                const target = this.stage ? recordCardTargetByKey(this.recordTargets(), this.stage.field) : this.recordSelected();
+                const label = (target && (target.label || target.key)) || "Field";
+                this.stageNote = `Line breaks became spaces — ${label} is one line.`;
+              } catch (_) {
+                try { this.stageNote = "Line breaks became spaces — this field is one line."; } catch (_) {}
+              }
+              try { this.paintRecordCard(); } catch (_) {}
+            },
+          });
+        } catch (_) {}
+        try { if (typeof bobSoftLineAutosize === "function") bobSoftLineAutosize(input); } catch (_) {}
+      }
+    } catch (_) {}
     this.recordSyncProseField();
   }
 ,
@@ -172017,6 +172305,7 @@ class IntentionCardModal extends IntentionCardModalBase {
   intentionOpenStage(kind, fieldKey) {
     const target = intentionCardEditorTargetByKey(this.intentionTargets(), fieldKey || this.selectedKey);
     if (!target || !kind || !this.writable || this.pendingApply) return false;
+    this.stageNote = "";
     if (kind === "summary" && this.fields && this.fields.summaryState === "agent" && !this.stageExplained) {
       this.stageExplained = true;
       this.stageNote = INTENTION_CARD_EDITOR_SUMMARY_EXPLAINER;
@@ -172173,7 +172462,15 @@ class IntentionCardModal extends IntentionCardModalBase {
       } else {
         try { intentionCardEditorPaintAll(card, options, doc, this); } catch (_) {}
       }
-      try { intentionCardEditorAutogrow(card?.querySelector?.("[data-intention-input]")); } catch (_) {}
+      try {
+        const live = card?.querySelector?.("[data-intention-input]");
+        if (live && live.tagName === "TEXTAREA" && live.getAttribute?.("data-intention-input") !== "reflection"
+          && typeof bobSoftLineAutosize === "function") {
+          try { bobSoftLineAutosize(live); } catch (_) {}
+        } else {
+          intentionCardEditorAutogrow(live);
+        }
+      } catch (_) {}
       this.intentionRestoreFocus(caret);
     } finally {
       this.intentionProsePainting = false;
@@ -172476,6 +172773,14 @@ class IntentionCardModal extends IntentionCardModalBase {
 
   intentionOnStageInput(event) {
     if (this.stage) this.stageDraft = String(event?.target?.value || "");
+    try {
+      const target = event?.target;
+      if (target && target.tagName === "TEXTAREA" && target.getAttribute?.("data-intention-input") !== "reflection"
+        && typeof bobSoftLineAutosize === "function") {
+        bobSoftLineAutosize(target);
+        return;
+      }
+    } catch (_) {}
     intentionCardEditorAutogrow(event?.target);
   }
 }
@@ -172527,35 +172832,11 @@ function intentionCardEditorFocus(modal, caret = null) {
   return false;
 }
 
-// Pasted line breaks collapse to spaces in the one-line intention input, with
-// a quiet note. Reflection and summary paste natively.
+// Retired: pasted line breaks in the one-line intention and summary stages now
+// fold through the shared soft-line field (`bobSoftLineAttach`), so a paste is
+// never handled twice. Kept as a no-op so existing callers stay green.
 function intentionCardEditorPaste(modal, event) {
-  try {
-    const target = event && event.target;
-    if (!modal || !modal.stage || modal.stage.kind !== "intention") return false;
-    if (!target || target.getAttribute?.("data-intention-input") !== "intention") return false;
-    // While the in-band NAME stage is active, paste belongs to its ID line;
-    // proseField consumes insertFromPaste in beforeinput after this event.
-    if (typeof intentionCardEditorProseIsNaming === "function" && intentionCardEditorProseIsNaming(modal)) return false;
-    let text = "";
-    try { text = event.clipboardData?.getData?.("text/plain") || event.clipboardData?.getData?.("text") || ""; } catch (_) {}
-    if (!/[\r\n\u2028\u2029]/.test(text)) return false;
-    event.preventDefault?.();
-    const { value } = intentionCardNormalizeIntentionLine(text);
-    const current = String(target.value || "");
-    const start = Number.isInteger(target.selectionStart) ? target.selectionStart : current.length;
-    const end = Number.isInteger(target.selectionEnd) ? target.selectionEnd : current.length;
-    const next = current.slice(0, start) + value + current.slice(end);
-    target.value = next;
-    const caret = start + value.length;
-    if (typeof target.setSelectionRange === "function") target.setSelectionRange(caret, caret);
-    modal.stageDraft = next;
-    modal.stageNote = INTENTION_CARD_EDITOR_PASTE_NOTE;
-    modal.paintIntentionCard();
-    return true;
-  } catch (_) {
-    return false;
-  }
+  return false;
 }
 
 // An empty-op dry run reads malformed frontmatter as `ok` with warnings and
@@ -173092,7 +173373,6 @@ function intentionCardEditorBuildEl(options, doc, modal) {
   try {
     host.addEventListener?.("click", (event) => modal?.intentionOnClick?.(event));
     host.addEventListener?.("keydown", (event) => modal?.intentionOnKeyDown?.(event));
-    host.addEventListener?.("paste", (event) => intentionCardEditorPaste(modal, event));
     host.addEventListener?.("input", (event) => {
       if (event?.target?.hasAttribute?.("data-intention-input")) modal?.intentionOnStageInput?.(event);
     });
@@ -173209,13 +173489,60 @@ function intentionCardEditorPaintAll(host, options, doc, modal) {
     // bob-text: prose S14 intention, summary, and reflection stages
     const input = reflection
       ? intentionCardEditorCreateEl(doc, "textarea", "bob-intention-stage-input is-reflection")
-      : intentionCardEditorCreateEl(doc, "input", "bob-intention-stage-input");
+      : intentionCardEditorCreateEl(doc, "textarea", "bob-intention-stage-input is-line");
     if (input) {
       input.setAttribute("data-intention-input", options.stage.kind);
       if (reflection) input.setAttribute("rows", "3");
       input.setAttribute("aria-label", stageName);
       input.value = String(options.stageDraft || "");
       stageHost.appendChild(input);
+      if (!reflection && typeof bobSoftLineAttach === "function") {
+        try {
+          bobSoftLineAttach(input, {
+            skip: () => {
+              try { return intentionCardEditorProseIsNaming(modal) === true; } catch (_) { return false; }
+            },
+            onFold: () => {
+              // Update the note in place where possible, so one Ctrl+Z still
+              // undoes the paste (a repaint rebuilds the stage input and
+              // would drop its native undo history).
+              let note = null;
+              try {
+                note = options.stage.kind === "summary"
+                  ? "Line breaks became spaces — a summary is one line."
+                  : INTENTION_CARD_EDITOR_PASTE_NOTE;
+              } catch (_) { note = ""; }
+              try { modal.stageNote = note; } catch (_) {}
+              try {
+                const live = input && input.parentNode ? input : null;
+                if (live) modal.stageDraft = String(live.value ?? "");
+              } catch (_) {}
+              try {
+                const host = input && input.parentNode ? input.parentNode : null;
+                let node = null;
+                try { node = host?.querySelector?.(".bob-intention-stage-note"); } catch (_) {}
+                if (host && node) {
+                  try { intentionCardEditorSetText(node, note); } catch (_) {}
+                  return;
+                }
+                if (host && typeof intentionCardEditorCreateEl === "function") {
+                  const doc = host.ownerDocument || (typeof document !== "undefined" ? document : null);
+                  const fresh = intentionCardEditorCreateEl(doc, "p", "bob-intention-stage-note");
+                  if (fresh) {
+                    intentionCardEditorSetText(fresh, note);
+                    const save = host.querySelector?.("[data-intention-action='save-stage']");
+                    if (save && typeof host.insertBefore === "function") host.insertBefore(fresh, save);
+                    else host.appendChild(fresh);
+                    return;
+                  }
+                }
+              } catch (_) {}
+              try { modal.paintIntentionCard(); } catch (_) {}
+            },
+          });
+        } catch (_) {}
+        try { if (typeof bobSoftLineAutosize === "function") bobSoftLineAutosize(input); } catch (_) {}
+      }
     }
     // nav's LINK band paints here, directly under the field (S14).
     if (input && options.proseBand) {
@@ -173390,6 +173717,9 @@ function intentionCardEditorSyncProse(modal) {
 // Offer a stage key to the band before the card's own Enter handling.
 // Consumed keys (row moves, accepts, drills, the held-Enter swallow) never
 // reach the card, so Enter or Ctrl+Enter with the band open never saves.
+// Mirror the Record Card guard: when the band was open and declines an Enter
+// (Shift+Enter in a textarea), treat it as consumed — close the band and
+// never save a half-typed link.
 function intentionCardEditorProseKey(modal, event) {
   const handle = intentionCardEditorProseHandle(modal);
   if (!handle || !modal.stage || !event) return false;
@@ -173397,8 +173727,14 @@ function intentionCardEditorProseKey(modal, event) {
     const target = event.target;
     if (target && typeof target.hasAttribute === "function" && !target.hasAttribute("data-intention-input")) return false;
   } catch (_) {}
+  let wasOpen = false;
+  try { wasOpen = handle.isLinkOpen?.() === true; } catch (_) { wasOpen = false; }
   let consumed = false;
   try { consumed = handle.handleKeydown(event) === true; } catch (_) { consumed = false; }
+  // Reflection keeps Shift+Enter a native newline, so the guard skips it;
+  // in the one-line stages a declined Enter would otherwise save a half-typed
+  // link.
+  if (!consumed && wasOpen && event.key === "Enter" && modal.stage?.kind !== "reflection") consumed = true;
   if (!consumed) return false;
   try { event.preventDefault?.(); } catch (_) {}
   try { event.stopPropagation?.(); } catch (_) {}
@@ -178119,7 +178455,13 @@ Object.assign(PropertyEditorModal.prototype, {
           this.propertyEditorPickStageSuggestion(view.selectedSuggestion);
           return;
         }
-        if (this.stage.kind === "text" && event.shiftKey) return;
+        if (this.stage.kind === "text" && event.shiftKey) {
+          // Soft-line inputs save like Enter; only the generic multi-line
+          // Text stage keeps Shift+Enter as a new line.
+          let softLine = false;
+          try { softLine = Boolean(event.target?.closest?.("[data-soft-line]")); } catch (_) { softLine = false; }
+          if (!softLine) return;
+        }
         event.preventDefault?.();
         event.stopPropagation?.();
         if (["list", "tags", "aliases"].includes(this.stage.kind) && String(this.stage.itemDraft || "").trim()) {
@@ -186037,8 +186379,7 @@ function propertyEditorPaintSummaryStage(doc, host, options, modal) {
   let input = options.keptInput || null;
   if (!input) {
     // bob-text: literal one-line area/project summary
-    input = propertyEditorCreateEl(doc, "input", "bob-property-editor-stage-input is-summary");
-    input.setAttribute("type", "text");
+    input = propertyEditorCreateEl(doc, "textarea", "bob-property-editor-stage-input is-summary");
     input.value = options.value;
   } else if (!options.composing && String(input.value == null ? "" : input.value) !== options.value) {
     input.value = options.value;
@@ -186050,6 +186391,17 @@ function propertyEditorPaintSummaryStage(doc, host, options, modal) {
   input.setAttribute("aria-label", "Summary");
   if (options.disabled) input.disabled = true;
   panel.appendChild(input);
+  if (typeof bobSoftLineAttach === "function") {
+    try {
+      bobSoftLineAttach(input, {
+        onFold: () => {
+          try { if (modal && modal.stage) modal.stage.summaryFoldNote = "Line breaks became spaces — a summary is one line."; } catch (_) {}
+          try { modal?.paintPropertyEditor?.(); } catch (_) {}
+        },
+      });
+    } catch (_) {}
+  }
+  try { if (typeof bobSoftLineAutosize === "function") bobSoftLineAutosize(input); } catch (_) {}
   propertyEditorPaintSettingNotes(doc, panel, options);
   const preview = propertyEditorCreateEl(doc, "div", "bob-property-editor-stage-preview");
   preview.setAttribute("role", "status");
@@ -186308,6 +186660,7 @@ Object.assign(PropertyEditorModal.prototype, {
       view.prose = false;
       view.collection = false;
       view.kind = "text";
+      if (stage.summaryFoldNote) view.helpNote = String(stage.summaryFoldNote);
     }
     if (stage.settingStage === "ready-cap") {
       view.effectLine = propertyEditorSettingReadyCapEffectLine(
@@ -192913,6 +193266,18 @@ try {
     });
   }
 } catch (_) {}
+// ---- src/370a-exports-soft-line-field.js ----
+// Test-facing exports for the shared soft-line field helper.
+try {
+  if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
+    module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
+      bobSoftLineFold,
+      bobSoftLinePasteText,
+      bobSoftLineAttach,
+      bobSoftLineAutosize,
+    });
+  }
+} catch (_) {}
 // ---- src/370-exports-record-sheet.js ----
 // Test-facing exports for the read-only record sheet.
 try {
@@ -193051,6 +193416,7 @@ try {
       recordCardProseFieldApi,
       recordCardNumberHint,
       recordCardStageHintText,
+      recordCardPaintRow,
       recordCardPaintTypedStage,
       albumYamlExcursionOwnPath,
       RecordCardModal,
@@ -193855,6 +194221,7 @@ try {
       propertyEditorSettingReadyCapEffectLine,
       propertyEditorSettingPreviewText,
       propertyEditorSettingStageBuild,
+      propertyEditorPaintSummaryStage,
       propertyEditorSettingRootOps,
       propertyEditorMergeConfirmedReport,
       propertyEditorAdoptConfirmedContract,

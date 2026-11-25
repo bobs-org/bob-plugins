@@ -128,7 +128,8 @@ function recordCardPaintHeader(card, sheetModel, options, doc) {
 }
 
 function recordCardPaintRow(doc, target, selectedKey, options) {
-  const row = recordCardEl(doc, "button", `bob-record-card-row${target.ghost ? " is-ghost" : ""}`);
+  const editing = Boolean(options && options.stage && options.stage.field === target.key && options.stage.kind !== "choices");
+  const row = recordCardEl(doc, "button", `bob-record-card-row${target.ghost ? " is-ghost" : ""}${editing ? " is-editing" : ""}`);
   row.setAttribute("type", "button");
   row.setAttribute("role", "option");
   row.setAttribute("data-target-key", target.key);
@@ -325,6 +326,8 @@ function recordCardPaintStage(card, options, doc) {
         },
         reportField: options.reportField || null,
         preview: options.stagePreview || null,
+        stageNote: options.stageNote || "",
+        softLine: options.softLine || null,
         plugin: options.plugin || null,
         recordPath: options.recordPath || "",
         applying: options.status?.pendingApply === true,

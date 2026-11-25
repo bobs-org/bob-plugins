@@ -279,6 +279,22 @@ test("the sourcePath getter follows [ / ] travel to the new subject", async () =
   modal.close();
 });
 
+test("Shift+Enter with the band open never saves a half-typed link", async () => {
+  const { api } = fakeProseApi();
+  const { modal, calls: bob } = setup({ intentions: ["One"] }, api);
+  await flush();
+  modal.intentionOnKeyDown(key("i", null));
+  assert.equal(modal.stage.kind, "intention");
+  modal.intentionProse.handle.handleKeydown = () => false;
+  api.open = true;
+  const shift = key("Enter", input(modal), { shiftKey: true });
+  modal.intentionOnKeyDown(shift);
+  assert.equal(shift.defaultPrevented, true, "a declined Enter is consumed");
+  assert.ok(modal.stage, "the stage stays open");
+  assert.equal(applies(bob).length, 0, "nothing saved");
+  modal.close();
+});
+
 test("the band sees stage keys first; an open band is the first back-out rung", async () => {
   const { api, calls } = fakeProseApi();
   const { modal, calls: bob } = setup({ intentions: ["One"] }, api);

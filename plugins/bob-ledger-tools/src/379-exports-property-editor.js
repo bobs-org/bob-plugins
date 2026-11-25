@@ -253,6 +253,7 @@ try {
       propertyEditorSettingReadyCapEffectLine,
       propertyEditorSettingPreviewText,
       propertyEditorSettingStageBuild,
+      propertyEditorPaintSummaryStage,
       propertyEditorSettingRootOps,
       propertyEditorMergeConfirmedReport,
       propertyEditorAdoptConfirmedContract,

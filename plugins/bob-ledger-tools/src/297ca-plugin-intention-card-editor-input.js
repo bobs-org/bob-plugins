@@ -45,35 +45,11 @@ function intentionCardEditorFocus(modal, caret = null) {
   return false;
 }
 
-// Pasted line breaks collapse to spaces in the one-line intention input, with
-// a quiet note. Reflection and summary paste natively.
+// Retired: pasted line breaks in the one-line intention and summary stages now
+// fold through the shared soft-line field (`bobSoftLineAttach`), so a paste is
+// never handled twice. Kept as a no-op so existing callers stay green.
 function intentionCardEditorPaste(modal, event) {
-  try {
-    const target = event && event.target;
-    if (!modal || !modal.stage || modal.stage.kind !== "intention") return false;
-    if (!target || target.getAttribute?.("data-intention-input") !== "intention") return false;
-    // While the in-band NAME stage is active, paste belongs to its ID line;
-    // proseField consumes insertFromPaste in beforeinput after this event.
-    if (typeof intentionCardEditorProseIsNaming === "function" && intentionCardEditorProseIsNaming(modal)) return false;
-    let text = "";
-    try { text = event.clipboardData?.getData?.("text/plain") || event.clipboardData?.getData?.("text") || ""; } catch (_) {}
-    if (!/[\r\n\u2028\u2029]/.test(text)) return false;
-    event.preventDefault?.();
-    const { value } = intentionCardNormalizeIntentionLine(text);
-    const current = String(target.value || "");
-    const start = Number.isInteger(target.selectionStart) ? target.selectionStart : current.length;
-    const end = Number.isInteger(target.selectionEnd) ? target.selectionEnd : current.length;
-    const next = current.slice(0, start) + value + current.slice(end);
-    target.value = next;
-    const caret = start + value.length;
-    if (typeof target.setSelectionRange === "function") target.setSelectionRange(caret, caret);
-    modal.stageDraft = next;
-    modal.stageNote = INTENTION_CARD_EDITOR_PASTE_NOTE;
-    modal.paintIntentionCard();
-    return true;
-  } catch (_) {
-    return false;
-  }
+  return false;
 }
 
 // An empty-op dry run reads malformed frontmatter as `ok` with warnings and

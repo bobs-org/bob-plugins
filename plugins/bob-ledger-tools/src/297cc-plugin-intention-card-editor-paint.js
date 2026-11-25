@@ -12,7 +12,6 @@ function intentionCardEditorBuildEl(options, doc, modal) {
   try {
     host.addEventListener?.("click", (event) => modal?.intentionOnClick?.(event));
     host.addEventListener?.("keydown", (event) => modal?.intentionOnKeyDown?.(event));
-    host.addEventListener?.("paste", (event) => intentionCardEditorPaste(modal, event));
     host.addEventListener?.("input", (event) => {
       if (event?.target?.hasAttribute?.("data-intention-input")) modal?.intentionOnStageInput?.(event);
     });
@@ -129,13 +128,60 @@ function intentionCardEditorPaintAll(host, options, doc, modal) {
     // bob-text: prose S14 intention, summary, and reflection stages
     const input = reflection
       ? intentionCardEditorCreateEl(doc, "textarea", "bob-intention-stage-input is-reflection")
-      : intentionCardEditorCreateEl(doc, "input", "bob-intention-stage-input");
+      : intentionCardEditorCreateEl(doc, "textarea", "bob-intention-stage-input is-line");
     if (input) {
       input.setAttribute("data-intention-input", options.stage.kind);
       if (reflection) input.setAttribute("rows", "3");
       input.setAttribute("aria-label", stageName);
       input.value = String(options.stageDraft || "");
       stageHost.appendChild(input);
+      if (!reflection && typeof bobSoftLineAttach === "function") {
+        try {
+          bobSoftLineAttach(input, {
+            skip: () => {
+              try { return intentionCardEditorProseIsNaming(modal) === true; } catch (_) { return false; }
+            },
+            onFold: () => {
+              // Update the note in place where possible, so one Ctrl+Z still
+              // undoes the paste (a repaint rebuilds the stage input and
+              // would drop its native undo history).
+              let note = null;
+              try {
+                note = options.stage.kind === "summary"
+                  ? "Line breaks became spaces — a summary is one line."
+                  : INTENTION_CARD_EDITOR_PASTE_NOTE;
+              } catch (_) { note = ""; }
+              try { modal.stageNote = note; } catch (_) {}
+              try {
+                const live = input && input.parentNode ? input : null;
+                if (live) modal.stageDraft = String(live.value ?? "");
+              } catch (_) {}
+              try {
+                const host = input && input.parentNode ? input.parentNode : null;
+                let node = null;
+                try { node = host?.querySelector?.(".bob-intention-stage-note"); } catch (_) {}
+                if (host && node) {
+                  try { intentionCardEditorSetText(node, note); } catch (_) {}
+                  return;
+                }
+                if (host && typeof intentionCardEditorCreateEl === "function") {
+                  const doc = host.ownerDocument || (typeof document !== "undefined" ? document : null);
+                  const fresh = intentionCardEditorCreateEl(doc, "p", "bob-intention-stage-note");
+                  if (fresh) {
+                    intentionCardEditorSetText(fresh, note);
+                    const save = host.querySelector?.("[data-intention-action='save-stage']");
+                    if (save && typeof host.insertBefore === "function") host.insertBefore(fresh, save);
+                    else host.appendChild(fresh);
+                    return;
+                  }
+                }
+              } catch (_) {}
+              try { modal.paintIntentionCard(); } catch (_) {}
+            },
+          });
+        } catch (_) {}
+        try { if (typeof bobSoftLineAutosize === "function") bobSoftLineAutosize(input); } catch (_) {}
+      }
     }
     // nav's LINK band paints here, directly under the field (S14).
     if (input && options.proseBand) {

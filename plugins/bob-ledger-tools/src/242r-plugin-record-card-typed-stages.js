@@ -13,6 +13,7 @@ Object.assign(RecordCardModal.prototype, {
       ? recordCardChoiceList(choiceTarget.field, choiceReportField)
       : [];
     const visibleChoices = recordCardFilterChoices(allChoices, this.choiceFilter, this.choiceDigitPrefix);
+    const modal = this;
     return {
       selectedKey: this.selectedKey,
       targets: this.recordTargets(),
@@ -30,6 +31,22 @@ Object.assign(RecordCardModal.prototype, {
       stageItemDraft: this.stageItemDraft,
       draftItemDraft: this.stageItemDraft,
       stagePreview: this.stagePreview,
+      stageNote: this.stageNote || "",
+      softLine: {
+        skip() {
+          try { return modal.recordProseBinding?.handle?.isNaming?.() === true; } catch (_) { return false; }
+        },
+        onFold() {
+          try {
+            const current = stageTarget || modal.recordSelected();
+            const label = (current && (current.label || current.key)) || "Field";
+            modal.stageNote = `Line breaks became spaces — ${label} is one line.`;
+          } catch (_) {
+            try { modal.stageNote = "Line breaks became spaces — this field is one line."; } catch (_) {}
+          }
+          try { modal.paintRecordCard(); } catch (_) {}
+        },
+      },
       stageCaret: this.stageCaret,
       composing: this.composing,
       linkBandOpen: typeof this.recordProseLinkOpen === "function" ? this.recordProseLinkOpen() : false,
@@ -165,6 +182,7 @@ Object.assign(RecordCardModal.prototype, {
     this.stage = { kind: resolved, field: fieldKey };
     this.menuOpen = false;
     this.stagePreview = null;
+    this.stageNote = "";
     this.stageEnterSeq = 0;
     if (resolved === "choices") {
       this.choiceFilter = options.filter || "";
@@ -209,6 +227,13 @@ Object.assign(RecordCardModal.prototype, {
       this.consequence = "";
     }
     this.paintRecordCard();
+    try {
+      const card = this.contentEl?.querySelector?.(".bob-record-card");
+      const inline = card?.querySelector?.("[data-record-card-stage]") || null;
+      if (inline && typeof inline.scrollIntoView === "function") {
+        try { inline.scrollIntoView({ block: "nearest" }); } catch (_) {}
+      }
+    } catch (_) {}
     return true;
   }
 ,
@@ -224,6 +249,7 @@ Object.assign(RecordCardModal.prototype, {
     this.stageList = [];
     this.stageItemDraft = "";
     this.stagePreview = null;
+    this.stageNote = "";
     this.stageEnterSeq = 0;
     if (this.session && !this.closed) {
       try { this.session.setDraft([]); } catch (_) {}

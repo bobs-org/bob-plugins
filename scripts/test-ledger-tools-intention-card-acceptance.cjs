@@ -123,21 +123,18 @@ test("an opened stage owns focus with the caret at the end; a repaint keeps the 
   assert.equal(doc.activeElement, row, "browse mode focuses the selected row, never an input");
 });
 
-test("pasted line breaks collapse to spaces in the intention input with a quiet note", () => {
+test("intention paste is owned by the shared soft-line fold; the retired path stays native", () => {
   const doc = { activeElement: null };
   const input = fakeInput(doc, { "data-intention-input": "intention" }, "Read ");
-  let prevented = false;
-  let painted = 0;
-  const modal = { stage: { kind: "intention" }, stageDraft: "Read ", stageNote: "", paintIntentionCard: () => { painted += 1; } };
-  const event = { target: input, clipboardData: { getData: () => "one chapter\nslowly" }, preventDefault: () => { prevented = true; } };
-  assert.equal(H.intentionCardEditorPaste(modal, event), true);
-  assert.ok(prevented);
-  assert.equal(input.value, "Read one chapter slowly");
-  assert.equal(modal.stageDraft, "Read one chapter slowly");
-  assert.equal(modal.stageNote, H.INTENTION_CARD_EDITOR_PASTE_NOTE);
-  assert.equal(painted, 1);
-  const plain = { target: input, clipboardData: { getData: () => "plain" }, preventDefault: () => assert.fail("plain paste stays native") };
-  assert.equal(H.intentionCardEditorPaste(modal, plain), false);
+  const modal = { stage: { kind: "intention" }, stageDraft: "Read ", stageNote: "", paintIntentionCard: () => assert.fail("retired paste never repaints") };
+  const event = { target: input, clipboardData: { getData: () => "one chapter\nslowly" }, preventDefault: () => assert.fail("retired paste stays native") };
+  assert.equal(H.intentionCardEditorPaste(modal, event), false);
+  assert.equal(input.value, "Read ", "the retired path never touches the field");
+  assert.equal(modal.stageNote, "");
+  // The shared fold produces the same one-line draft with the intention note.
+  const folded = H.bobSoftLinePasteText("one chapter\nslowly");
+  assert.deepEqual(folded, { value: "one chapter slowly", folded: true });
+  assert.equal(H.INTENTION_CARD_EDITOR_PASTE_NOTE, "Line breaks became spaces — an intention is one line.");
   modal.stage = { kind: "reflection" };
   assert.equal(H.intentionCardEditorPaste(modal, event), false, "reflection pastes natively");
 });

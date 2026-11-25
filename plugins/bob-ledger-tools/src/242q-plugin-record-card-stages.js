@@ -162,7 +162,7 @@ function recordCardStageLabel(kind, target) {
 }
 
 function recordCardStageHintText(kind, field, reportField) {
-  if (kind === "text") return "Enter saves; newlines are refused.";
+  if (kind === "text") return "";
   if (kind === "suggest") {
     const count = recordCardSuggestValues(reportField, field).length;
     return count ? `Pick a suggestion or type freely · ${count} ranked` : "Type freely; bob validates.";
@@ -185,7 +185,7 @@ function recordCardPaintStageInput(doc, host, options) {
   const attrs = recordCardStageInputAttrs(kind);
   const labelText = recordCardStageLabel(kind, target);
   const kept = options.keptInput || null;
-  const label = recordCardEl(doc, "label", "bob-record-card-stage-label");
+  const label = recordCardEl(doc, "label", "bob-record-card-stage-label is-visually-hidden");
   recordCardText(label, labelText);
   label.setAttribute("for", `bob-record-card-input-${target.key}`);
   recordCardStagePut(host, label, kept);
@@ -199,7 +199,6 @@ function recordCardPaintStageInput(doc, host, options) {
   } else if (kind === "text") {
     // bob-text: prose S15 text/suggest stages; link stage uses field mode
     input = recordCardEl(doc, "textarea", "bob-record-card-stage-input bob-record-card-text");
-    input.setAttribute("rows", "3");
     input.value = value;
   } else {
     // bob-text: mixed S15 prose text/suggest/list and literal date/number/URL stages
@@ -213,12 +212,36 @@ function recordCardPaintStageInput(doc, host, options) {
   input.setAttribute("data-record-input", `stage-${kind}`);
   input.setAttribute("data-target-key", target.key);
   input.setAttribute("aria-label", labelText);
+  if (kind === "text") {
+    try { input.setAttribute?.("placeholder", `${labelText}…`); } catch (_) {}
+    try { input.placeholder = `${labelText}…`; } catch (_) {}
+    try {
+      if (typeof bobSoftLineAttach === "function" && options && options.softLine) {
+        bobSoftLineAttach(input, options.softLine);
+      }
+    } catch (_) {}
+  }
   if (kind === "suggest") recordCardStageComboboxAria(input, target.key, options.bandOpen === true);
   if (!kept) host.appendChild(input);
+  try {
+    if (typeof bobSoftLineAttach === "function" && kind === "text" && kept && options && options.softLine) {
+      bobSoftLineAttach(input, options.softLine);
+    }
+  } catch (_) {}
   recordCardStageBandHost(doc, host, options);
-  const hint = recordCardEl(doc, "p", "bob-record-card-stage-hint");
-  recordCardText(hint, recordCardStageHintText(kind, target.field, options.reportField));
-  host.appendChild(hint);
+  if (options && options.stageNote) {
+    const note = recordCardEl(doc, "p", "bob-record-card-stage-hint is-note");
+    try { note.setAttribute?.("role", "status"); } catch (_) {}
+    recordCardText(note, String(options.stageNote));
+    host.appendChild(note);
+  } else {
+    const hintText = recordCardStageHintText(kind, target.field, options.reportField);
+    if (hintText) {
+      const hint = recordCardEl(doc, "p", "bob-record-card-stage-hint");
+      recordCardText(hint, hintText);
+      host.appendChild(hint);
+    }
+  }
   if (kind === "suggest") {
     const values = recordCardSuggestValues(options.reportField, target.field);
     const visible = recordCardFilterSuggest(values, draft.text || "");
@@ -325,21 +348,20 @@ function recordCardPaintStageActions(doc, host, options) {
   bar.setAttribute("role", "group");
   bar.setAttribute("aria-label", "Stage actions");
   const defs = [
-    { action: "save-stage", text: "Save", ariaLabel: "Save" },
-    { action: "save-next", text: "Save + next", ariaLabel: "Save and open next field" },
-    { action: "save-prev", text: "Save + prev", ariaLabel: "Save and open previous field" },
     { action: "cancel-stage", text: "Cancel", ariaLabel: "Cancel" },
+    { action: "save-stage", text: "Save", ariaLabel: "Save", cta: true },
   ];
   for (const def of defs) {
     const button = recordCardButton(doc, bar, def.text, {
       action: def.action,
       targetKey: target && target.key,
-      className: "bob-record-card-action",
+      className: def.cta ? "bob-record-card-action mod-cta" : "bob-record-card-action",
       ariaLabel: def.ariaLabel,
       disabled: options.applying === true && def.action !== "cancel-stage",
     });
     if (button && def.action === "save-stage") button.setAttribute("data-record-input", "stage-save");
   }
+  host.appendChild(bar);
   return bar;
 }
 

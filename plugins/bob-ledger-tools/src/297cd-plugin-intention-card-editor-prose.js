@@ -117,6 +117,9 @@ function intentionCardEditorSyncProse(modal) {
 // Offer a stage key to the band before the card's own Enter handling.
 // Consumed keys (row moves, accepts, drills, the held-Enter swallow) never
 // reach the card, so Enter or Ctrl+Enter with the band open never saves.
+// Mirror the Record Card guard: when the band was open and declines an Enter
+// (Shift+Enter in a textarea), treat it as consumed — close the band and
+// never save a half-typed link.
 function intentionCardEditorProseKey(modal, event) {
   const handle = intentionCardEditorProseHandle(modal);
   if (!handle || !modal.stage || !event) return false;
@@ -124,8 +127,14 @@ function intentionCardEditorProseKey(modal, event) {
     const target = event.target;
     if (target && typeof target.hasAttribute === "function" && !target.hasAttribute("data-intention-input")) return false;
   } catch (_) {}
+  let wasOpen = false;
+  try { wasOpen = handle.isLinkOpen?.() === true; } catch (_) { wasOpen = false; }
   let consumed = false;
   try { consumed = handle.handleKeydown(event) === true; } catch (_) { consumed = false; }
+  // Reflection keeps Shift+Enter a native newline, so the guard skips it;
+  // in the one-line stages a declined Enter would otherwise save a half-typed
+  // link.
+  if (!consumed && wasOpen && event.key === "Enter" && modal.stage?.kind !== "reflection") consumed = true;
   if (!consumed) return false;
   try { event.preventDefault?.(); } catch (_) {}
   try { event.stopPropagation?.(); } catch (_) {}

@@ -95,8 +95,9 @@ what will apply and where it comes from. Every accepted batch is one undoable
 history item, and the confirmed post-apply contract replaces the rows — a
 candidate preview never leaks into cards or overlays.
 
-Summary edits one line with a live `N/140` count (Bob refuses multiline and
-warns past 140 without blocking). Ready cap is a count stepper from 1 to 999
+Summary edits one line in a wrapping soft-line field with a live `N/140`
+count (pasted line breaks fold to spaces with a quiet note; Bob warns
+past 140 without blocking). Ready cap is a count stepper from 1 to 999
 or `off` (`o` toggles in the control). Review takes 1–365 days and applies to
 tasks living in the note. Capture names reuse the ordered List stage with
 Bob's duplicate and collision warnings. Stats root toggles between `true` and

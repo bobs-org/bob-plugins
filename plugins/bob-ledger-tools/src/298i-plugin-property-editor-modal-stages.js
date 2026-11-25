@@ -645,7 +645,13 @@ Object.assign(PropertyEditorModal.prototype, {
           this.propertyEditorPickStageSuggestion(view.selectedSuggestion);
           return;
         }
-        if (this.stage.kind === "text" && event.shiftKey) return;
+        if (this.stage.kind === "text" && event.shiftKey) {
+          // Soft-line inputs save like Enter; only the generic multi-line
+          // Text stage keeps Shift+Enter as a new line.
+          let softLine = false;
+          try { softLine = Boolean(event.target?.closest?.("[data-soft-line]")); } catch (_) { softLine = false; }
+          if (!softLine) return;
+        }
         event.preventDefault?.();
         event.stopPropagation?.();
         if (["list", "tags", "aliases"].includes(this.stage.kind) && String(this.stage.itemDraft || "").trim()) {

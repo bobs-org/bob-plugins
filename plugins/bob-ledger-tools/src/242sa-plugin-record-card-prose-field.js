@@ -52,6 +52,31 @@ const recordCardOnCloseBeforeProse = RecordCardModal.prototype.onClose;
 Object.assign(RecordCardModal.prototype, {
   paintRecordCard() {
     recordCardPaintBeforeProse.call(this);
+    try {
+      const card = this.contentEl?.querySelector?.(".bob-record-card");
+      const input = card?.querySelector?.("[data-record-card-stage] [data-record-input='stage-text']")
+        || card?.querySelector?.("[data-record-card-stage-host] [data-record-input='stage-text']");
+      if (input && input.tagName === "TEXTAREA" && typeof bobSoftLineAttach === "function") {
+        try {
+          bobSoftLineAttach(input, {
+            skip: () => {
+              try { return this.recordProseBinding?.handle?.isNaming?.() === true; } catch (_) { return false; }
+            },
+            onFold: () => {
+              try {
+                const target = this.stage ? recordCardTargetByKey(this.recordTargets(), this.stage.field) : this.recordSelected();
+                const label = (target && (target.label || target.key)) || "Field";
+                this.stageNote = `Line breaks became spaces — ${label} is one line.`;
+              } catch (_) {
+                try { this.stageNote = "Line breaks became spaces — this field is one line."; } catch (_) {}
+              }
+              try { this.paintRecordCard(); } catch (_) {}
+            },
+          });
+        } catch (_) {}
+        try { if (typeof bobSoftLineAutosize === "function") bobSoftLineAutosize(input); } catch (_) {}
+      }
+    } catch (_) {}
     this.recordSyncProseField();
   }
 ,

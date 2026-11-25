@@ -308,6 +308,7 @@ class IntentionCardModal extends IntentionCardModalBase {
   intentionOpenStage(kind, fieldKey) {
     const target = intentionCardEditorTargetByKey(this.intentionTargets(), fieldKey || this.selectedKey);
     if (!target || !kind || !this.writable || this.pendingApply) return false;
+    this.stageNote = "";
     if (kind === "summary" && this.fields && this.fields.summaryState === "agent" && !this.stageExplained) {
       this.stageExplained = true;
       this.stageNote = INTENTION_CARD_EDITOR_SUMMARY_EXPLAINER;
@@ -464,7 +465,15 @@ class IntentionCardModal extends IntentionCardModalBase {
       } else {
         try { intentionCardEditorPaintAll(card, options, doc, this); } catch (_) {}
       }
-      try { intentionCardEditorAutogrow(card?.querySelector?.("[data-intention-input]")); } catch (_) {}
+      try {
+        const live = card?.querySelector?.("[data-intention-input]");
+        if (live && live.tagName === "TEXTAREA" && live.getAttribute?.("data-intention-input") !== "reflection"
+          && typeof bobSoftLineAutosize === "function") {
+          try { bobSoftLineAutosize(live); } catch (_) {}
+        } else {
+          intentionCardEditorAutogrow(live);
+        }
+      } catch (_) {}
       this.intentionRestoreFocus(caret);
     } finally {
       this.intentionProsePainting = false;
@@ -767,6 +776,14 @@ class IntentionCardModal extends IntentionCardModalBase {
 
   intentionOnStageInput(event) {
     if (this.stage) this.stageDraft = String(event?.target?.value || "");
+    try {
+      const target = event?.target;
+      if (target && target.tagName === "TEXTAREA" && target.getAttribute?.("data-intention-input") !== "reflection"
+        && typeof bobSoftLineAutosize === "function") {
+        bobSoftLineAutosize(target);
+        return;
+      }
+    } catch (_) {}
     intentionCardEditorAutogrow(event?.target);
   }
 }

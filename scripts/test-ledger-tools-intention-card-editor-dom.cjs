@@ -151,6 +151,41 @@ test("reduced motion skips the animation; a refused move never animates as succe
   assert.equal(modal.selectedKey, "intention:0", "a refused move keeps the selection where it was");
 });
 
+test("intention and summary stages are soft-line textareas that fold pastes", async () => {
+  const { modal } = setup({ intentions: ["One"], summary: "Shipped." });
+  await flush();
+  modal.intentionOpenStage("intention", "intention:0");
+  const one = input(modal);
+  assert.equal(one.tagName, "TEXTAREA");
+  assert.ok(one.className.split(/\s+/).includes("is-line"));
+  assert.equal(one.getAttribute("data-soft-line"), "true");
+  one.value = "One";
+  one.setSelectionRange(3, 3);
+  const pasted = one.dispatch("paste", {
+    clipboardData: { getData: () => "x\ny" },
+    preventDefault() { this.defaultPrevented = true; },
+  });
+  assert.equal(pasted.defaultPrevented, true);
+  assert.equal(one.value, "Onex y");
+  assert.equal(modal.stageNote, H.INTENTION_CARD_EDITOR_PASTE_NOTE);
+  modal.intentionOpenStage("summary", "summary");
+  const summary = input(modal);
+  assert.equal(summary.tagName, "TEXTAREA");
+  assert.ok(summary.className.split(/\s+/).includes("is-line"));
+  assert.equal(summary.getAttribute("data-soft-line"), "true");
+  assert.equal(modal.stageNote, "", "a stage change clears the note");
+  summary.value = "Shipped.";
+  summary.setSelectionRange(8, 8);
+  const summaryPasted = summary.dispatch("paste", {
+    clipboardData: { getData: () => "a\nb" },
+    preventDefault() { this.defaultPrevented = true; },
+  });
+  assert.equal(summaryPasted.defaultPrevented, true);
+  assert.equal(summary.value, "Shipped.a b");
+  assert.equal(modal.stageNote, "Line breaks became spaces — a summary is one line.");
+  modal.close();
+});
+
 test("the summary row shows its provenance in words", async () => {
   const summary = "Agent text.";
   const { modal } = setup({ intentions: ["One"], summary, summary_digest: simulatorDigest(summary), summary_drafted: "2026-11-18" });

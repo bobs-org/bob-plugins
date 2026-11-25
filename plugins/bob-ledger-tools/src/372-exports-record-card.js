@@ -63,6 +63,7 @@ try {
       recordCardProseFieldApi,
       recordCardNumberHint,
       recordCardStageHintText,
+      recordCardPaintRow,
       recordCardPaintTypedStage,
       albumYamlExcursionOwnPath,
       RecordCardModal,

@@ -256,13 +256,24 @@ test("typed painters use card actions, labelled controls, and text nodes", () =>
     kind: "text", target, draft: { text: "hello", list: [], itemDraft: "" },
     reportField: null, preview: { consequence: "Claim a → b", warnings: [{ message: "near" }] },
     plugin: null, recordPath: "eat/smashburger.md", applying: false,
+    softLine: { skip: () => false, onFold: () => {} },
   });
   assert.ok(input);
   assert.match(host.textContent, /Claim text/);
-  assert.match(host.textContent, /Enter saves/);
+  assert.doesNotMatch(host.textContent, /Enter saves/);
   assert.match(host.textContent, /Claim a → b/);
   assert.match(host.textContent, /near/);
   assert.equal(host.innerHTML, undefined);
+  // The text stage is a soft-line field: one stored line, no standing hint.
+  assert.equal(input.tagName, "TEXTAREA");
+  assert.equal(input.getAttribute("data-soft-line"), "true");
+  assert.equal(input.getAttribute("rows"), "1");
+  assert.equal(input.getAttribute("placeholder"), "Claim text…");
+  const actions = host.querySelectorAll("[data-record-action]").map((node) => node.getAttribute("data-record-action"));
+  assert.deepEqual(actions, ["cancel-stage", "save-stage"]);
+  const save = host.querySelectorAll("[data-record-input='stage-save']");
+  assert.equal(save.length, 1);
+  assert.ok((save[0].getAttribute("class") || "").split(/\s+/).includes("mod-cta"));
   const listHost = doc.createElement("div");
   helpers.recordCardPaintTypedStage(doc, listHost, {
     kind: "list", target: { key: "tags", label: "Tags", field: byKey("tags") },
@@ -271,6 +282,33 @@ test("typed painters use card actions, labelled controls, and text nodes", () =>
   });
   assert.match(listHost.textContent, /a,b/);
   assert.match(listHost.textContent, /Add item/);
+});
+
+test("the fold note replaces the text hint and the open row parks as editing", () => {
+  const doc = makeDoc();
+  const byKey = (key) => typedAlbum().fields.find((field) => field.key === key);
+  const target = { key: "claim", label: "Claim", field: byKey("claim") };
+  const host = doc.createElement("div");
+  helpers.recordCardPaintTypedStage(doc, host, {
+    kind: "text", target, draft: { text: "hello", list: [], itemDraft: "" },
+    reportField: null, preview: null, stageNote: "Line breaks became spaces — Claim is one line.",
+    plugin: null, recordPath: "eat/smashburger.md", applying: false,
+    softLine: { skip: () => false, onFold: () => {} },
+  });
+  assert.match(host.textContent, /Line breaks became spaces/);
+  assert.doesNotMatch(host.textContent, /Invalid entries are refused/);
+  const note = host.querySelectorAll("p").find((node) => (node.getAttribute("class") || "").includes("is-note"));
+  assert.ok(note, "the note carries is-note");
+  assert.equal(note.getAttribute("role"), "status");
+  // The open row parks as editing so the stage can join it; other rows stay plain.
+  const plain = helpers.recordCardPaintRow(doc, { key: "claim", label: "Claim" }, "claim", {});
+  assert.ok(!(plain.getAttribute("class") || "").split(/\s+/).includes("is-editing"));
+  const editing = helpers.recordCardPaintRow(doc, { key: "claim", label: "Claim" }, "claim",
+    { stage: { kind: "text", field: "claim" } });
+  assert.ok((editing.getAttribute("class") || "").split(/\s+/).includes("is-editing"));
+  const choiceEditing = helpers.recordCardPaintRow(doc, { key: "claim", label: "Claim" }, "claim",
+    { stage: { kind: "choices", field: "claim" } });
+  assert.ok(!(choiceEditing.getAttribute("class") || "").split(/\s+/).includes("is-editing"));
 });
 
 test("draft equality keeps explicit empty, zero, and raw text distinct", () => {
@@ -291,6 +329,16 @@ test("digits teach on non-choices, shift clamps, and = climbs with fallback", ()
   assert.equal(helpers.recordCardShiftAnnouncement({ label: "Status", key: "status" }, 0, 2), "Status, field 1 of 2");
   const teach = helpers.RECORD_CARD_DIGIT_TEACH;
   assert.equal(teach, "Digits pick a choice on choice fields");
+});
+
+test("a folded paste saves one line with no line break", () => {
+  const byKey = (key) => typedAlbum().fields.find((field) => field.key === key);
+  const claimTarget = { key: "claim", label: "Claim", required: true, kind: "text", stageKind: "text", field: byKey("claim") };
+  const folded = helpers.bobSoftLinePasteText("good\nburgers\r\ncranford");
+  assert.equal(folded.value, "good burgers cranford");
+  const built = helpers.recordCardBuildOps(claimTarget, { text: folded.value, list: [], itemDraft: "" });
+  assert.deepEqual(built.ops, [{ op: "field.set", field: "claim", value: "good burgers cranford" }]);
+  assert.ok(!/[\r\n\u2028\u2029]/.test(built.ops[0].value), "no stored line break");
 });
 
 test("list preserves literal commas and empty optional unsets", () => {

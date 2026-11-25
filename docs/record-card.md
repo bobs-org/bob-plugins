@@ -209,10 +209,15 @@ Digits here pick a choice; on the album card editor they jump to field N.
 
 Stages expand inline under their field with labelled controls, combobox
 and listbox relationships, visible focus, and text-only user strings.
+While a stage is open, its row and the stage form one accent-outlined
+unit: the row stays the header and hides its value (the field already
+shows the whole value), and the in-stage buttons shrink to Cancel and
+Save. Save + next and Save + prev live on Tab, Shift+Tab, and All
+actions.
 
 | Stage | Behavior |
 | --- | --- |
-| Text | Auto-growing textarea. Pasted newlines are preserved for bob to refuse; Enter saves, never inserts a newline. Typing `[[` opens the LINK band; `((` opens its tasks mode. |
+| Text | Soft-line field: one stored line that wraps across as many visual lines as it needs, grows to about six lines, then scrolls. Enter and Shift+Enter save; pasted line breaks fold to spaces with a quiet note. Long values clamp to three lines in the field list until opened. Typing `[[` opens the LINK band; `((` opens its tasks mode. |
 | Suggest | Combobox over the full ranked `fields[].values` with rank and counts while filtering. Arrows or Ctrl+N / Ctrl+P step through candidates. Picking an existing suggestion applies it directly; free typing previews, including bob's `record_value_near` warning. Typing never implicitly picks. Typing `[[` or `((` opens the LINK band, which owns the arrows until it closes. |
 | Date | Text input accepting `today`, `t`, `yesterday`, and ISO. The parsed echo comes from bob's preview. Browse `t` keeps its direct route. |
 | Number | Text input with numeric inputmode and schema min/max hints. Incomplete tokens are preserved for bob; no `parseFloat`, empty-to-zero, NaN, or clamping. |
@@ -250,8 +255,9 @@ of emitting a scalar `field.set`. Tab includes a nonempty pending list
 item before preview so typed input is never lost. Scalar kind rules govern
 each item.
 
-Save, Save + next/previous, Cancel, and picker/list controls live in the
-stage. Hints stay contextual; YAML stays available through its action.
+Cancel, Save, and picker/list controls live in the stage; Save + next
+and Save + prev live on Tab, Shift+Tab, and All actions. Hints stay
+contextual; YAML stays available through its action.
 
 ### Save and advance
 

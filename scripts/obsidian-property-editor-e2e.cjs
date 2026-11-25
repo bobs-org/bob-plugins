@@ -218,7 +218,16 @@ function propertyRowClick(client, key, occurrence = 0) {
     const row = Array.from(document.querySelectorAll(".bob-property-editor [data-property-row]"))
       .filter((item) => item.getAttribute("data-property-key") === ${JSON.stringify(key)})[${Number(occurrence)}];
     if (!row) return false;
+    const host = row.closest(".bob-property-editor");
+    // HTMLElement.click() dispatches the row handler but does not reliably
+    // move Chromium's keyboard target as a real pointer click does. The
+    // editor routes browse keys from its selected row, so mirror that focus
+    // handoff before and after the repaint.
+    row.focus();
     row.click();
+    const selected = host?.querySelector('[data-property-row][aria-selected="true"]');
+    if (!selected || selected.getAttribute("data-property-key") !== ${JSON.stringify(key)}) return false;
+    selected.focus();
     return true;
   })()`);
 }

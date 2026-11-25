@@ -395,9 +395,10 @@ async function runMixedProtectedDeleteAcceptance(ctx) {
   await shared.openNote(client, "projects/project-note.md", "live");
   await openPropertyEditor(client, "projects/project-note.md", { key: "keep_exact" });
   await waitForEditor(client, (value) => value.rows.some((row) => row.key === "keep_exact"), "protected delete rows");
-  await propertyRowClick(client, "project_digest");
+  if (!await propertyRowClick(client, "project_digest")) throw new Error("Could not focus project_digest for protected selection");
   await sendKey(client, " ");
-  await propertyRowClick(client, "keep_exact");
+  await waitForEditor(client, (value) => (value.rows || []).filter((row) => row.marked).length === 1, "first protected selection mark");
+  if (!await propertyRowClick(client, "keep_exact")) throw new Error("Could not focus keep_exact for protected selection");
   await sendKey(client, " ");
   await waitForEditor(client, (value) => (value.rows || []).filter((row) => row.marked).length === 2, "mixed marks");
   await sendKey(client, "d", { ctrl: true });

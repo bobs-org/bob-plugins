@@ -220,6 +220,18 @@ function recordSheetRenderToolbar(slot, model, options, doc) {
     collapse.setAttribute("aria-expanded", model.collapsed ? "false" : "true");
     collapse.setAttribute("aria-label", model.collapsed ? "Expand record details" : "Collapse record details");
     recordSheetText(collapse, model.collapsed ? "▸" : "▾");
+    if (typeof propertyCardDecorateFoldControl === "function") {
+      const bodyId = typeof propertyCardFoldNextId === "function" ? propertyCardFoldNextId() : "";
+      propertyCardDecorateFoldControl(collapse, {
+        kind: "record",
+        path: options?.sourcePath || "",
+        open: model.collapsed !== true,
+        bodyId,
+        tooltip: "Toggle record details (_)",
+        keyLive: options?.keyLive === true,
+        compact: true,
+      });
+    }
     collapse.addEventListener?.("click", (event) => {
       event.preventDefault?.();
       options?.handlers?.toggleCollapsed?.(!model.collapsed);
@@ -341,6 +353,13 @@ function recordSheetBuildEl(model, options = {}, doc) {
   sheet.appendChild(block.element);
   if (!body) return sheet;
   recordSheetRenderToolbar(block.actions, body, options, host);
+  const appendFoldShell = () => {
+    const foldId = sheet.querySelector?.(".bob-record-sheet-collapse")?.getAttribute?.("aria-controls");
+    if (foldId && typeof propertyCardFoldHiddenBody === "function") {
+      const shell = propertyCardFoldHiddenBody(host, foldId);
+      if (shell) sheet.appendChild(shell);
+    }
+  };
   if (body.broken) {
     const warning = recordSheetEl(host, "p", "bob-record-sheet-warning");
     if (warning) {
@@ -360,6 +379,7 @@ function recordSheetBuildEl(model, options = {}, doc) {
       recordSheetBindYamlJump(jump, () => options?.handlers?.jumpAlbumYaml?.(body.warningLine), "schema");
       sheet.appendChild(jump);
     }
+    appendFoldShell();
     return sheet;
   }
   if (body.collapsed) {
@@ -373,6 +393,7 @@ function recordSheetBuildEl(model, options = {}, doc) {
       }
       sheet.appendChild(summary);
     }
+    appendFoldShell();
     return sheet;
   }
   if (body.rows && body.rows.length) {
@@ -386,6 +407,7 @@ function recordSheetBuildEl(model, options = {}, doc) {
   // The created stamp and every remaining property live in the shared foot
   // below the walk rail; it is appended by recordSheetBuildMounted so it
   // also covers identity-only, broken-schema, and collapsed returns.
+  appendFoldShell();
   return sheet;
 }
 

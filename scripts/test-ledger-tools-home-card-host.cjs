@@ -227,6 +227,42 @@ test("collapse state is a per-normalized-path session map shared across panes", 
   assert.equal(plugin.homeCardIsCollapsed("./love.md"), true, "keys normalize like model paths");
   plugin.homeCardSetCollapsed("love.md", false);
   assert.equal(plugin.homeCardIsCollapsed("love.md"), false);
+  plugin.homeCardCollapsed = new Map([["love.md", true]]);
+  assert.equal(plugin.homeCardIsCollapsed("love.md"), true, "boolean true still means collapsed");
+  plugin.homeCardSetCollapsed("love.md", true);
+  assert.deepEqual(plugin.homeCardCollapsed.get("love.md"), { open: false, problems: "" });
+});
+
+test("home setup registers area and project folds on one toggle", () => {
+  const plugin = makeHostPlugin();
+  const seen = [];
+  plugin.homeCardIsCollapsed = () => false;
+  plugin.homeCardSetCollapsed = (path, next) => seen.push([path, next]);
+  const unregister = H.homeCardRegisterFolds(plugin);
+  const attrs = new Map([
+    ["data-card-fold", "area"],
+    ["data-card-fold-source", "love.md"],
+    ["aria-expanded", "true"],
+  ]);
+  const control = {
+    isConnected: true,
+    disabled: false,
+    getAttribute(name) { return attrs.has(name) ? attrs.get(name) : null; },
+    getBoundingClientRect() { return { width: 10, height: 10 }; },
+  };
+  const view = {
+    file: { path: "love.md" },
+    dom: { querySelectorAll(selector) { return selector === "[data-card-fold]" ? [control] : []; } },
+  };
+  assert.equal(H.propertyCardToggleDetails(view), true);
+  assert.deepEqual(seen, [["love.md", true]]);
+  attrs.set("data-card-fold", "project");
+  attrs.set("data-card-fold-source", "sase_blog.md");
+  view.file.path = "sase_blog.md";
+  assert.equal(H.propertyCardToggleDetails(view), true);
+  assert.deepEqual(seen, [["love.md", true], ["sase_blog.md", true]]);
+  unregister();
+  assert.equal(H.propertyCardCanToggleDetails(view), false);
 });
 
 test("where-marks stay truthful and housekeeping folds into managed", () => {

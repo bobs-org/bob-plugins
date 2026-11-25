@@ -196,12 +196,14 @@ class BobLedgerToolsHomeCardFootMixin {
   }
 
   // Append the shared foot after content, outside the collapsible body.
-  homeCardAppendFoot(card, path, model, doc, footSpec) {
+  homeCardAppendFoot(card, path, model, doc, footSpec, options) {
     const key = homeCardPath(path);
     if (!card || !key) return null;
     const spec = footSpec || this.homeCardFootSpec(key, model);
     return propertyCardFootAdapterAppend(
-      card, key, doc, spec, this.homeCardFootHandlers(key), this.homeCardFootPendingScroll,
+      card, key, doc,
+      spec && options?.keyLive === true ? { ...spec, keyLive: true } : spec,
+      this.homeCardFootHandlers(key), this.homeCardFootPendingScroll,
     );
   }
 }

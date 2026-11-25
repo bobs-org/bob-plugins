@@ -352,17 +352,11 @@ class BobLedgerToolsHomeCardMixin {
   }
 
   homeCardIsCollapsed(path) {
-    const key = homeCardPath(path);
-    const map = this.homeCardCollapsed instanceof Map ? this.homeCardCollapsed : new Map();
-    this.homeCardCollapsed = map;
-    return key && map.has(key) ? map.get(key) === true : false;
+    return homeCardFoldIsCollapsed(this, path);
   }
 
   homeCardSetCollapsed(path, collapsed) {
-    const key = homeCardPath(path);
-    if (!(this.homeCardCollapsed instanceof Map)) this.homeCardCollapsed = new Map();
-    if (key) this.homeCardCollapsed.set(key, collapsed === true);
-    this.scheduleHomeCardRefresh();
+    homeCardFoldSetCollapsed(this, path, collapsed);
   }
 
   // Policy chips route by setting id; an empty key focuses first settings.
@@ -389,7 +383,7 @@ class BobLedgerToolsHomeCardMixin {
     }
   }
 
-  homeCardOptions(sourcePath, model) {
+  homeCardOptions(sourcePath, model, surface = "reading") {
     const editor = typeof this.openPropertyEditor === "function"
       ? (request) => this.homeCardOpenEditorRequest(request?.filePath || sourcePath, request?.key)
       : undefined;
@@ -397,6 +391,7 @@ class BobLedgerToolsHomeCardMixin {
       sourcePath,
       collapsed: this.homeCardIsCollapsed(sourcePath),
       reducedMotion: this.homeCardReducedMotion(),
+      keyLive: typeof propertyCardFoldKeyLive === "function" ? propertyCardFoldKeyLive(this, surface) : false,
       onToggleCollapse: (next) => this.homeCardSetCollapsed(sourcePath, next),
       onOpenEditor: editor,
       onLink: (target, event) => { void this.homeCardOpenPath(target, sourcePath, event); },
@@ -463,6 +458,7 @@ class BobLedgerToolsHomeCardMixin {
 
   homeCardOnSetup() {
     if (!(this.homeCardCollapsed instanceof Map)) this.homeCardCollapsed = new Map();
+    this.homeCardFoldUnregister = homeCardRegisterFolds(this);
     try {
       if (typeof this.homeCardLiveSubscribe === "function") this.homeCardLiveSubscribe();
     } catch (_) {}
@@ -515,7 +511,7 @@ class BobLedgerToolsHomeCardMixin {
     try {
       if (typeof this.homeCardLiveUnsubscribe === "function") this.homeCardLiveUnsubscribe();
     } catch (_) {}
-    try { this.homeCardFootUnbind?.(); } catch (_) {}
+    try { this.homeCardFoldUnregister?.(); this.homeCardFoldUnregister = null; this.homeCardFootUnbind?.(); } catch (_) {}
     try {
       if (this.homeCardDayTimer && typeof clearInterval === "function") clearInterval(this.homeCardDayTimer);
     } catch (_) {}
@@ -635,6 +631,7 @@ class BobLedgerToolsHomeCardMixin {
         extra?.footOpen === true,
         extra?.collapsed === true,
         extra?.editorAvailable === true,
+        extra?.keyLive === true,
       ]);
     } catch (_) {
       return "";
@@ -653,7 +650,7 @@ class BobLedgerToolsHomeCardMixin {
       card.setAttribute?.("data-home-source", model.path);
     } catch (_) {}
     try {
-      this.homeCardAppendFoot?.(card, model.path, model, doc, footSpec);
+      this.homeCardAppendFoot?.(card, model.path, model, doc, footSpec, options);
     } catch (_) {}
     return card;
   }
@@ -698,7 +695,7 @@ class BobLedgerToolsHomeCardMixin {
     const signature = this.homeCardSignature(model, {
       ...extra,
       collapsed: options.collapsed,
-      editorAvailable: typeof options.onOpenEditor === "function",
+      editorAvailable: typeof options.onOpenEditor === "function", keyLive: options.keyLive === true,
     });
     if (!header || homeCardNodeSignatures.get(header) !== signature) {
       let fresh = null;
@@ -841,11 +838,11 @@ class BobLedgerToolsHomeCardMixin {
       }
       const doc = view.dom?.ownerDocument || (typeof document !== "undefined" ? document : null);
       const extra = typeof this.homeCardFootExtra === "function" ? this.homeCardFootExtra(path, model) : null;
-      const options = { ...this.homeCardOptions(path, model), footSpec: extra?.footSpec };
+      const options = { ...this.homeCardOptions(path, model, "live-preview"), footSpec: extra?.footSpec };
       const signature = this.homeCardSignature(model, {
         ...extra,
         collapsed: options.collapsed,
-        editorAvailable: typeof options.onOpenEditor === "function",
+        editorAvailable: typeof options.onOpenEditor === "function", keyLive: options.keyLive === true,
       });
       const adopted = propertyCardAdoptedEntry(view.dom);
       let header = adopted && adopted.path === path && adopted.mode === "slot" ? adopted.node : null;

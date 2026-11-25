@@ -16,7 +16,7 @@ note properties: [Property Editor](property-editor.md).
 | --- | --- |
 | Name | Bob Ledger Tools |
 | ID | `bob-ledger-tools` |
-| Version | 1.164.0 |
+| Version | 1.165.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
 | Description | Render Bob’s task and Pomodoro information in Obsidian: planning and freshness marks, dependencies, relations, calendar events, task types, and ledger navigation. Report-driven cards cover bank subscriptions, Stats, Reading Board, albums, projects, and areas. Snippets, session toggles, and versioned APIs connect these views to Bob and other Bob plugins. |
@@ -80,7 +80,7 @@ note properties: [Property Editor](property-editor.md).
 
 ## Property-card keys
 
-In Live Preview Vim normal mode, `_` folds the card; otherwise use **Toggle
+Vim `_` folds Schema, record, area, and project details. Otherwise **Toggle
 card details**. `-` toggles Properties, `==` edits the species, and `+` opens
 Property Editor.
 

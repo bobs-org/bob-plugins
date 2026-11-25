@@ -328,6 +328,7 @@ function propertyCardFootAdapterAppend(card, path, doc, spec, handlers, pendingS
       stamp: spec?.stamp,
       contractIssues: spec?.contractIssues,
       firstSetting: spec?.firstSetting,
+      keyLive: spec?.keyLive === true,
       handlers: handlers || {},
     });
     if (!built || !built.element) return null;

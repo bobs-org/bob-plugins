@@ -200,6 +200,7 @@ function recordSheetCardSignature(card, extra = {}) {
       ? recordSheetSignature(card.body, extra) : null,
     walk: recordSheetWalkSignature(extra.walk || (card.body && card.body.walk) || null),
     collapsed: extra.collapsed === true,
+    keyLive: extra.keyLive === true,
     footOpen: extra.footOpen === true,
     footDigest: extra.footDigest == null ? null : String(extra.footDigest),
     overlay: extra.overlay || null,

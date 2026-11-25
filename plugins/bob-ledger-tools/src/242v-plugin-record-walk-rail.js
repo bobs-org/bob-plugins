@@ -62,7 +62,7 @@ class BobLedgerToolsRecordWalkRailMixin {
   }
 
   recordWalkOptions(path, model) {
-    const options = this.recordSheetOptions(path, model);
+    const options = this.recordSheetOptions(path, model, "live-preview");
     options.handlers.walkOpen = (target, direction, event) => {
       void this.recordWalkOpen(target, direction, path, event);
     };

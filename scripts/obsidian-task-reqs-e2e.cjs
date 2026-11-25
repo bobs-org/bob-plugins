@@ -72,6 +72,7 @@ const KEY_CODES = {
   "[": { code: "BracketLeft", vk: 219 },
   "]": { code: "BracketRight", vk: 221 },
   "-": { code: "Minus", vk: 189 },
+  "_": { code: "Minus", vk: 189 },
 };
 const CTRL = 2;
 const ALT = 1;

@@ -11,6 +11,24 @@ function propertyCardFoldChoice(open, problems = "") {
   return { open: open === true, problems: typeof problems === "string" ? problems : "" };
 }
 
+// Session maps used to store a boolean collapsed flag. true means shut.
+function propertyCardFoldChoiceFromStored(stored) {
+  if (stored && typeof stored === "object" && typeof stored.open === "boolean") return stored;
+  if (stored === true) return propertyCardFoldChoice(false, "");
+  if (stored === false) return propertyCardFoldChoice(true, "");
+  return null;
+}
+
+function propertyCardFoldHiddenBody(doc, bodyId) {
+  const id = typeof bodyId === "string" ? bodyId : "";
+  if (!id) return null;
+  const shell = propertyCardFoldElement(doc, "div", "bob-property-card-fold-shell");
+  if (!shell) return null;
+  shell.setAttribute("id", id);
+  shell.setAttribute("hidden", "");
+  return shell;
+}
+
 // Healthy paint clears a stale problem stamp without changing the user's
 // open/closed choice. The adapter writes this returned value to its session Map.
 function propertyCardFoldRestamp(choice, problems = "") {
@@ -156,19 +174,32 @@ function propertyCardFoldSetText(node, text) {
   node.textContent = text === null || text === undefined ? "" : String(text);
 }
 
-function propertyCardFoldAddKeycap(button, doc, keyLive) {
+function propertyCardFoldAddKeycap(button, doc, keyLive, key = "_") {
   const existing = button.querySelector?.(".bob-property-card-fold-keycap");
   if (!keyLive) {
     existing?.remove?.();
     return null;
   }
-  if (existing) return existing;
+  if (existing) {
+    propertyCardFoldSetText(existing, key);
+    return existing;
+  }
   const keycap = propertyCardFoldElement(doc, "kbd", "bob-property-card-fold-keycap");
   if (!keycap) return null;
-  propertyCardFoldSetText(keycap, "_");
+  propertyCardFoldSetText(keycap, key);
   keycap.setAttribute("aria-hidden", "true");
   button.appendChild(keycap);
   return keycap;
+}
+
+function propertyCardFoldRevealIfPending(button, path, open) {
+  if (!button || !propertyCardFoldConsumePendingReveal(path, open === true)) return false;
+  const reveal = () => {
+    try { button.scrollIntoView?.({ block: "nearest" }); } catch (_) {}
+  };
+  if (typeof queueMicrotask === "function") queueMicrotask(reveal);
+  else Promise.resolve().then(reveal);
+  return true;
 }
 
 function propertyCardDecorateFoldControl(button, spec = {}) {
@@ -187,6 +218,7 @@ function propertyCardDecorateFoldControl(button, spec = {}) {
     button.setAttribute("aria-keyshortcuts", "_");
     button.setAttribute("title", String(spec.tooltip || "Toggle card details (_)"));
     propertyCardFoldAddKeycap(button, button.ownerDocument, spec.keyLive === true);
+    propertyCardFoldRevealIfPending(button, path, spec.open === true);
     return true;
   } catch (_) {
     return false;
@@ -252,13 +284,5 @@ function propertyCardBuildFoldRow(doc, spec = {}) {
     event?.preventDefault?.();
     spec.onToggle?.(!open);
   });
-
-  if (propertyCardFoldConsumePendingReveal(path, open)) {
-    const reveal = () => {
-      try { button.scrollIntoView?.({ block: "nearest" }); } catch (_) {}
-    };
-    if (typeof queueMicrotask === "function") queueMicrotask(reveal);
-    else Promise.resolve().then(reveal);
-  }
   return { element: button, bodyId };
 }

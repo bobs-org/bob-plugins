@@ -95,6 +95,56 @@ function homeCardDomAppendSettings(slot, doc, model, options) {
   slot.appendChild(node);
 }
 
+function homeCardFoldIsCollapsed(plugin, path) {
+  const key = homeCardPath(path);
+  const map = plugin.homeCardCollapsed instanceof Map ? plugin.homeCardCollapsed : new Map();
+  plugin.homeCardCollapsed = map;
+  const stored = key && map.has(key) ? map.get(key) : null;
+  const choice = typeof propertyCardFoldRestamp === "function"
+    ? propertyCardFoldRestamp(
+      typeof propertyCardFoldChoiceFromStored === "function" ? propertyCardFoldChoiceFromStored(stored) : null,
+      "",
+    )
+    : (typeof propertyCardFoldChoiceFromStored === "function" ? propertyCardFoldChoiceFromStored(stored) : null);
+  if (key && choice && choice !== stored) map.set(key, choice);
+  const open = typeof propertyCardFoldResolve === "function"
+    ? propertyCardFoldResolve({
+      choice,
+      problems: "",
+      foldDefault: typeof propertyCardSpecies === "function" ? propertyCardSpecies("area")?.foldDefault : true,
+    })
+    : stored !== true;
+  return open !== true;
+}
+
+function homeCardFoldSetCollapsed(plugin, path, collapsed) {
+  const key = homeCardPath(path);
+  if (!(plugin.homeCardCollapsed instanceof Map)) plugin.homeCardCollapsed = new Map();
+  if (key) {
+    plugin.homeCardCollapsed.set(key, typeof propertyCardFoldChoice === "function"
+      ? propertyCardFoldChoice(collapsed !== true, "")
+      : collapsed === true);
+  }
+  plugin.scheduleHomeCardRefresh?.();
+}
+
+function homeCardRegisterFolds(plugin) {
+  if (typeof propertyCardRegisterFoldKind !== "function") return () => {};
+  const toggle = (path) => {
+    plugin.homeCardSetCollapsed(path, !plugin.homeCardIsCollapsed(path));
+    return true;
+  };
+  const unArea = propertyCardRegisterFoldKind(plugin, "area", { toggle });
+  const unProject = propertyCardRegisterFoldKind(plugin, "project", { toggle });
+  return () => {
+    unArea?.();
+    unProject?.();
+    for (const path of plugin.homeCardCollapsed?.keys?.() || []) {
+      try { propertyCardFoldClearPendingReveal?.(path); } catch (_) {}
+    }
+  };
+}
+
 function homeCardDomAppendCollapse(slot, doc, model, options) {
   if (!slot) return;
   const collapsed = options?.collapsed === true;
@@ -103,6 +153,17 @@ function homeCardDomAppendCollapse(slot, doc, model, options) {
   button.setAttribute("aria-expanded", collapsed ? "false" : "true");
   button.setAttribute("aria-label", collapsed ? "Expand card details" : "Collapse card details");
   homeCardDomText(doc, button, collapsed ? "▸" : "▾");
+  if (typeof propertyCardDecorateFoldControl === "function") {
+    propertyCardDecorateFoldControl(button, {
+      kind: model.kind,
+      path: options?.sourcePath || model.path || "",
+      open: collapsed !== true,
+      bodyId: typeof propertyCardFoldNextId === "function" ? propertyCardFoldNextId() : "",
+      tooltip: "Toggle card details (_)",
+      keyLive: options?.keyLive === true,
+      compact: true,
+    });
+  }
   button.addEventListener?.("click", (event) => {
     try { event?.preventDefault?.(); } catch (_) {}
     try { options?.onToggleCollapse?.(!collapsed); } catch (_) {}
@@ -292,6 +353,11 @@ function homeCardBuildEl(doc, model, options = {}) {
       const wrap = homeCardDomEl(doc, "div", "bob-home-card-collapsible");
       wrap.appendChild(meta);
       card.appendChild(wrap);
+    }
+    const foldId = card.querySelector?.(".bob-home-card-collapse")?.getAttribute?.("aria-controls");
+    if (foldId && typeof propertyCardFoldHiddenBody === "function") {
+      const shell = propertyCardFoldHiddenBody(doc, foldId);
+      if (shell) card.appendChild(shell);
     }
     return card;
   } catch (_) {

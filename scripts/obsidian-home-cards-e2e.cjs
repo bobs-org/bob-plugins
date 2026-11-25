@@ -468,6 +468,27 @@ async function run(args) {
     await taskReqs.key(client, "-");
     const drawerClosed = await shared.waitFor(client, PROBE_SOURCE, (probe) => probe?.drawerOpen !== true, "drawer closes on -", 12_000);
     check("minus-closes-drawer", drawerClosed.drawerOpen !== true, drawerClosed);
+    await taskReqs.key(client, "Escape");
+    await taskReqs.key(client, { key: "_", modifiers: taskReqs.SHIFT });
+    const folded = await shared.waitFor(client, PROBE_SOURCE, (probe) => probe?.collapsed === true, "area folds on _", 12_000);
+    check("underscore-collapses-area", folded.collapsed === true && folded.footPresent, folded);
+    await taskReqs.key(client, { key: "_", modifiers: taskReqs.SHIFT });
+    const unfolded = await shared.waitFor(client, PROBE_SOURCE, (probe) => probe?.collapsed !== true, "area expands on _", 12_000);
+    check("underscore-expands-area", unfolded.collapsed !== true, unfolded);
+    await openCardNote(client, lib.PATHS.wip, "live");
+    await waitForCard(client, lib.PATHS.wip, "live");
+    await ensureMainWindow(client);
+    await client.evaluate(`(() => {
+      const editor = document.querySelector(".markdown-source-view .cm-content");
+      if (editor && editor.focus) editor.focus();
+      return Boolean(editor);
+    })()`);
+    await taskReqs.key(client, "Escape");
+    await taskReqs.key(client, { key: "_", modifiers: taskReqs.SHIFT });
+    const foldedProject = await shared.waitFor(client, PROBE_SOURCE, (probe) => probe?.path === lib.PATHS.wip && probe?.collapsed === true, "project folds on _", 12_000);
+    check("underscore-collapses-project", foldedProject.collapsed === true && foldedProject.lifecycleVisible === true, foldedProject);
+    await taskReqs.key(client, { key: "_", modifiers: taskReqs.SHIFT });
+    await shared.waitFor(client, PROBE_SOURCE, (probe) => probe?.path === lib.PATHS.wip && probe?.collapsed !== true, "project expands on _", 12_000);
     await openCardNote(client, lib.PATHS.long, "reading");
     await waitForCard(client, lib.PATHS.long, "reading");
     await clickSelector(client, ".bob-property-card-foot [aria-expanded], .bob-property-card-foot button");

@@ -123,7 +123,9 @@ class BobLedgerToolsAlbumHeaderFootMixin {
     const path = albumHeaderPath(options?.sourcePath || card?.identity?.path || card?.path);
     const spec = options?.footSpec || this.albumHeaderFootSpec(path, card);
     return propertyCardFootAdapterAppend(
-      header, path, doc, spec, this.albumHeaderFootHandlers(path), this.albumHeaderFootPendingScroll,
+      header, path, doc,
+      spec && options?.keyLive === true ? { ...spec, keyLive: true } : spec,
+      this.albumHeaderFootHandlers(path), this.albumHeaderFootPendingScroll,
     );
   }
 }

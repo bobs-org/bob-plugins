@@ -16,6 +16,8 @@ try {
       propertyCardNodeBelongs,
       createPropertyCardHost,
       propertyCardFoldChoice,
+      propertyCardFoldChoiceFromStored,
+      propertyCardFoldHiddenBody,
       propertyCardFoldRestamp,
       propertyCardFoldResolve,
       propertyCardRegisterFoldKind,

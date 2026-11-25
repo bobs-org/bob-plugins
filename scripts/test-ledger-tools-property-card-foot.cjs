@@ -157,6 +157,7 @@ function footSpec(doc, overrides = {}) {
     inventory,
     stamp,
     handlers: overrides.handlers || {},
+    keyLive: overrides.keyLive === true,
   };
 }
 
@@ -354,6 +355,8 @@ test("closed foot shows disclosure, count, and stamp without building rows", () 
   assert.equal(disclosure.tagName, "BUTTON");
   assert.equal(disclosure.getAttribute("aria-expanded"), "false");
   assert.equal(disclosure.getAttribute("title"), "Toggle properties (-)");
+  assert.equal(disclosure.getAttribute("aria-keyshortcuts"), null);
+  assert.equal(disclosure.querySelector(".bob-property-card-fold-keycap"), null);
   const drawerId = disclosure.getAttribute("aria-controls");
   assert.ok(drawerId, "disclosure controls the drawer");
   assert.equal(drawer.getAttribute("id"), drawerId, "unique aria-controls target");
@@ -361,6 +364,16 @@ test("closed foot shows disclosure, count, and stamp without building rows", () 
   assert.equal(drawer.querySelectorAll(".bob-property-card-foot-list").length, 0, "closed drawer builds no rows");
   assert.match(element.querySelector(".bob-property-card-foot-stamp").textContent, /no created date/);
   assert.equal(element.querySelector(".bob-property-card-foot-lint-chip"), null, "clean foot has no lint chip");
+  helpers.propertyCardFootResetAll();
+});
+
+test("foot disclosure gains a - keycap when keyLive", () => {
+  helpers.propertyCardFootResetAll();
+  const doc = makeDoc();
+  const { built } = buildFoot(doc, { open: false, keyLive: true });
+  const disclosure = built.disclosure;
+  assert.equal(disclosure.getAttribute("aria-keyshortcuts"), "-");
+  assert.equal(disclosure.querySelector(".bob-property-card-fold-keycap").textContent, "-");
   helpers.propertyCardFootResetAll();
 });
 

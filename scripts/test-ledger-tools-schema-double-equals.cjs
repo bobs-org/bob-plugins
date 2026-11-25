@@ -722,9 +722,9 @@ test("palette command toggles the current Reading view without Vim input", () =>
   helpers.propertyCardFootResetAll();
 });
 
-function foldControl(path, open = false) {
+function foldControl(path, open = false, kind = "album") {
   const attrs = new Map([
-    ["data-card-fold", "album"],
+    ["data-card-fold", kind],
     ["data-card-fold-source", path],
     ["aria-expanded", open ? "true" : "false"],
   ]);
@@ -766,6 +766,50 @@ test("shifted bare _ toggles only a registered fold in the active Live Preview v
     });
   } finally {
     unregister();
+  }
+});
+
+test("shifted bare _ toggles record, area, and project folds", () => {
+  for (const [kind, path, frontmatter] of [
+    ["record", "eat/nagi.md", { type: "[[record]]" }],
+    ["area", "love.md", { type: "[[area]]" }],
+    ["project", "sase_blog.md", { type: "[[project]]" }],
+  ]) {
+    const harness = makeHarness(path, { frontmatter, vimState: bareVimState() });
+    const control = foldControl(path, false, kind);
+    harness.view.dom = foldScope(control);
+    let calls = 0;
+    const unregister = helpers.propertyCardRegisterFoldKind(harness.plugin, kind, {
+      toggle(next) { calls += 1; assert.equal(next, path); return true; },
+    });
+    try {
+      withGlobals(harness.win, harness.doc, () => {
+        harness.plugin.setupSchemaDoubleEquals();
+        const event = bareKeyEvent(harness.view, { key: "_", shiftKey: true });
+        harness.win.dispatch(event);
+        assert.equal(calls, 1, kind);
+        assert.deepEqual(event.counts, { preventDefault: 1, stopPropagation: 1, immediate: 1 }, kind);
+        assert.equal(harness.handleKeyCalls.length, 0, kind);
+      });
+    } finally {
+      unregister();
+    }
+  }
+});
+
+test("shifted bare _ falls through on day and period notes", () => {
+  for (const [path, frontmatter] of [
+    ["2026-11-17.md", { type: "[[day]]" }],
+    ["2026-W47.md", { type: "[[week]]" }],
+  ]) {
+    const harness = makeHarness(path, { frontmatter, vimState: bareVimState() });
+    withGlobals(harness.win, harness.doc, () => {
+      harness.plugin.setupSchemaDoubleEquals();
+      const event = bareKeyEvent(harness.view, { key: "_", shiftKey: true });
+      harness.win.dispatch(event);
+      assert.deepEqual(event.counts, { preventDefault: 0, stopPropagation: 0, immediate: 0 }, path);
+      assert.equal(harness.handleKeyCalls.length, 0, path);
+    });
   }
 });
 

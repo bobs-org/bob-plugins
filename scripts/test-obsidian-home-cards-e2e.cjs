@@ -87,6 +87,8 @@ test("CLI arguments and the page probe are valid", () => {
   assert.match(runnerSource, /async function openCardNote/);
   assert.match(runnerSource, /workspace\.getLeaf\(true\)/);
   assert.match(runnerSource, /homeCardSetCollapsed\(notePath, false\)/);
+  assert.match(runnerSource, /underscore-collapses-area/);
+  assert.match(runnerSource, /underscore-collapses-project/);
   const geo = lib.inspectGeometry({
     cardWidth: 360, cardHeight: 140, collapsed: true, drawerOpen: false,
     lifecycleVisible: true, nativePropertiesVisible: true,

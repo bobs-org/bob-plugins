@@ -159,10 +159,9 @@ per-note session toggle shared by every pane on the note. `y` on a focused
 drawer row jumps to that key's exact YAML line. Painting, toggling, and
 collapsing never spawn bob and never write the note.
 
-The card starts expanded. Collapse is a session toggle per record path:
-the title stays visible, followed by one line with the selected choice chips
-(group field first) and `· N fields`. Drawer and collapse choices are not
-stored in frontmatter or plugin settings.
+The card starts expanded. Collapse is a per-path session toggle: title plus
+choice chips (group field first) and `· N fields`. `_` folds it (`Toggle
+record details (_)`). Drawer and collapse stay out of frontmatter and settings.
 
 On a `subscriptions/*.md` record the existing subscription money line,
 charge timeline, and finding sentence dock as a trailing band of this
@@ -338,7 +337,7 @@ Done.
 | `Ctrl+Shift+P` on a record where the Task Card has no target | Open the Record Card editor; tasks, links, and dependency rows keep priority. |
 | **Edit record** palette command | Open the editor; non-records say `Open a record note to edit its fields.` |
 | Command Mode Vault row | Run **Edit record** through Obsidian's command route. |
-| Collapse control | Session-collapse or expand this record card. |
+| Collapse control / `_` | Session-collapse or expand this record card. |
 | Properties disclosure (`Toggle properties (-)`) | Session-show or hide every frontmatter key in the drawer. |
 | `-` in Vim normal mode in Live Preview | Toggle the drawer; counts, registers, operator-pending keys, Source mode, insert and visual modes, views without a mounted foot, and focus outside the editor content keep Vim's `-` motion. |
 | **Toggle card properties** (palette or Command Mode) | Toggle the drawer. |

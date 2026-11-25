@@ -220,7 +220,14 @@ test("collapsed cards keep kicker, title, and lifecycle while hiding summary and
   assert.ok(area.querySelector(".bob-property-card-kicker"));
   assert.ok(area.querySelector(".bob-home-card-summary"));
   assert.ok(area.querySelector(".bob-home-card-meta"));
-  assert.equal(area.querySelector(".bob-home-card-collapse").getAttribute("aria-expanded"), "false");
+  const collapse = area.querySelector(".bob-home-card-collapse");
+  assert.equal(collapse.getAttribute("aria-expanded"), "false");
+  assert.equal(collapse.getAttribute("data-card-fold"), "area");
+  assert.equal(collapse.getAttribute("title"), "Toggle card details (_)");
+  assert.equal(collapse.getAttribute("aria-keyshortcuts"), "_");
+  const foldId = collapse.getAttribute("aria-controls");
+  assert.ok(foldId);
+  assert.equal(area.querySelectorAll(`[id="${foldId}"]`).length, 1);
 
   const project = H.homeCardBuildEl(doc, projectModel(), { collapsed: true, reducedMotion: true });
   assert.ok(project.classList.contains("is-collapsed"));
@@ -280,4 +287,14 @@ test("builder fails closed and CSS keeps field, pennant, pip, and collapse token
   assert.match(css, /\.bob-home-card\.is-collapsed \.bob-home-card-collapsible/);
   assert.match(css, /\.bob-home-card\.is-reduced-motion \.bob-home-card-collapsible/);
   assert.match(css, /\.bob-home-card-settings-label \{ display: none; \}/);
+  assert.match(css, /:not\(\.bob-property-card-fold-compact\)/);
+});
+
+test("project collapse is a compact fold with a live keycap", () => {
+  const doc = makeDoc();
+  const card = H.homeCardBuildEl(doc, projectModel(), { collapsed: false, keyLive: true });
+  const collapse = card.querySelector(".bob-home-card-collapse");
+  assert.equal(collapse.getAttribute("data-card-fold"), "project");
+  assert.equal(collapse.classList.contains("bob-property-card-fold-compact"), true);
+  assert.equal(collapse.querySelector(".bob-property-card-fold-keycap").textContent, "_");
 });

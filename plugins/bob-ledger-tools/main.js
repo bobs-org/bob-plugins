@@ -89048,10 +89048,14 @@ function propertyCardFootBuildEl(doc, spec = {}) {
     disclosure.setAttribute("title", "Toggle properties (-)");
     disclosure.setAttribute("aria-label", `Toggle properties, ${count} ${count === 1 ? "property" : "properties"}`);
     disclosure.setAttribute("data-foot-focus", "foot");
+    if (options.keyLive === true) disclosure.setAttribute("aria-keyshortcuts", "-");
     const chevron = propertyCardKitSpan(doc, "bob-property-card-foot-chevron", "▸");
     chevron.setAttribute("aria-hidden", "true");
     disclosure.appendChild(chevron);
     propertyCardKitAppendText(doc, disclosure, ` Properties · ${count}`);
+    if (typeof propertyCardFoldAddKeycap === "function") {
+      propertyCardFoldAddKeycap(disclosure, doc, options.keyLive === true, "-");
+    }
     disclosure.addEventListener?.("click", (event) => {
       try { event.preventDefault?.(); } catch (_) {}
       let next = !open;
@@ -90754,6 +90758,7 @@ function propertyCardFootAdapterAppend(card, path, doc, spec, handlers, pendingS
       stamp: spec?.stamp,
       contractIssues: spec?.contractIssues,
       firstSetting: spec?.firstSetting,
+      keyLive: spec?.keyLive === true,
       handlers: handlers || {},
     });
     if (!built || !built.element) return null;
@@ -90818,6 +90823,24 @@ function propertyCardFoldPath(value) {
 
 function propertyCardFoldChoice(open, problems = "") {
   return { open: open === true, problems: typeof problems === "string" ? problems : "" };
+}
+
+// Session maps used to store a boolean collapsed flag. true means shut.
+function propertyCardFoldChoiceFromStored(stored) {
+  if (stored && typeof stored === "object" && typeof stored.open === "boolean") return stored;
+  if (stored === true) return propertyCardFoldChoice(false, "");
+  if (stored === false) return propertyCardFoldChoice(true, "");
+  return null;
+}
+
+function propertyCardFoldHiddenBody(doc, bodyId) {
+  const id = typeof bodyId === "string" ? bodyId : "";
+  if (!id) return null;
+  const shell = propertyCardFoldElement(doc, "div", "bob-property-card-fold-shell");
+  if (!shell) return null;
+  shell.setAttribute("id", id);
+  shell.setAttribute("hidden", "");
+  return shell;
 }
 
 // Healthy paint clears a stale problem stamp without changing the user's
@@ -90965,19 +90988,32 @@ function propertyCardFoldSetText(node, text) {
   node.textContent = text === null || text === undefined ? "" : String(text);
 }
 
-function propertyCardFoldAddKeycap(button, doc, keyLive) {
+function propertyCardFoldAddKeycap(button, doc, keyLive, key = "_") {
   const existing = button.querySelector?.(".bob-property-card-fold-keycap");
   if (!keyLive) {
     existing?.remove?.();
     return null;
   }
-  if (existing) return existing;
+  if (existing) {
+    propertyCardFoldSetText(existing, key);
+    return existing;
+  }
   const keycap = propertyCardFoldElement(doc, "kbd", "bob-property-card-fold-keycap");
   if (!keycap) return null;
-  propertyCardFoldSetText(keycap, "_");
+  propertyCardFoldSetText(keycap, key);
   keycap.setAttribute("aria-hidden", "true");
   button.appendChild(keycap);
   return keycap;
+}
+
+function propertyCardFoldRevealIfPending(button, path, open) {
+  if (!button || !propertyCardFoldConsumePendingReveal(path, open === true)) return false;
+  const reveal = () => {
+    try { button.scrollIntoView?.({ block: "nearest" }); } catch (_) {}
+  };
+  if (typeof queueMicrotask === "function") queueMicrotask(reveal);
+  else Promise.resolve().then(reveal);
+  return true;
 }
 
 function propertyCardDecorateFoldControl(button, spec = {}) {
@@ -90996,6 +91032,7 @@ function propertyCardDecorateFoldControl(button, spec = {}) {
     button.setAttribute("aria-keyshortcuts", "_");
     button.setAttribute("title", String(spec.tooltip || "Toggle card details (_)"));
     propertyCardFoldAddKeycap(button, button.ownerDocument, spec.keyLive === true);
+    propertyCardFoldRevealIfPending(button, path, spec.open === true);
     return true;
   } catch (_) {
     return false;
@@ -91061,14 +91098,6 @@ function propertyCardBuildFoldRow(doc, spec = {}) {
     event?.preventDefault?.();
     spec.onToggle?.(!open);
   });
-
-  if (propertyCardFoldConsumePendingReveal(path, open)) {
-    const reveal = () => {
-      try { button.scrollIntoView?.({ block: "nearest" }); } catch (_) {}
-    };
-    if (typeof queueMicrotask === "function") queueMicrotask(reveal);
-    else Promise.resolve().then(reveal);
-  }
   return { element: button, bodyId };
 }
 // ---- src/245-plugin-bank-category-card-model.js ----
@@ -104716,6 +104745,56 @@ function homeCardDomAppendSettings(slot, doc, model, options) {
   slot.appendChild(node);
 }
 
+function homeCardFoldIsCollapsed(plugin, path) {
+  const key = homeCardPath(path);
+  const map = plugin.homeCardCollapsed instanceof Map ? plugin.homeCardCollapsed : new Map();
+  plugin.homeCardCollapsed = map;
+  const stored = key && map.has(key) ? map.get(key) : null;
+  const choice = typeof propertyCardFoldRestamp === "function"
+    ? propertyCardFoldRestamp(
+      typeof propertyCardFoldChoiceFromStored === "function" ? propertyCardFoldChoiceFromStored(stored) : null,
+      "",
+    )
+    : (typeof propertyCardFoldChoiceFromStored === "function" ? propertyCardFoldChoiceFromStored(stored) : null);
+  if (key && choice && choice !== stored) map.set(key, choice);
+  const open = typeof propertyCardFoldResolve === "function"
+    ? propertyCardFoldResolve({
+      choice,
+      problems: "",
+      foldDefault: typeof propertyCardSpecies === "function" ? propertyCardSpecies("area")?.foldDefault : true,
+    })
+    : stored !== true;
+  return open !== true;
+}
+
+function homeCardFoldSetCollapsed(plugin, path, collapsed) {
+  const key = homeCardPath(path);
+  if (!(plugin.homeCardCollapsed instanceof Map)) plugin.homeCardCollapsed = new Map();
+  if (key) {
+    plugin.homeCardCollapsed.set(key, typeof propertyCardFoldChoice === "function"
+      ? propertyCardFoldChoice(collapsed !== true, "")
+      : collapsed === true);
+  }
+  plugin.scheduleHomeCardRefresh?.();
+}
+
+function homeCardRegisterFolds(plugin) {
+  if (typeof propertyCardRegisterFoldKind !== "function") return () => {};
+  const toggle = (path) => {
+    plugin.homeCardSetCollapsed(path, !plugin.homeCardIsCollapsed(path));
+    return true;
+  };
+  const unArea = propertyCardRegisterFoldKind(plugin, "area", { toggle });
+  const unProject = propertyCardRegisterFoldKind(plugin, "project", { toggle });
+  return () => {
+    unArea?.();
+    unProject?.();
+    for (const path of plugin.homeCardCollapsed?.keys?.() || []) {
+      try { propertyCardFoldClearPendingReveal?.(path); } catch (_) {}
+    }
+  };
+}
+
 function homeCardDomAppendCollapse(slot, doc, model, options) {
   if (!slot) return;
   const collapsed = options?.collapsed === true;
@@ -104724,6 +104803,17 @@ function homeCardDomAppendCollapse(slot, doc, model, options) {
   button.setAttribute("aria-expanded", collapsed ? "false" : "true");
   button.setAttribute("aria-label", collapsed ? "Expand card details" : "Collapse card details");
   homeCardDomText(doc, button, collapsed ? "▸" : "▾");
+  if (typeof propertyCardDecorateFoldControl === "function") {
+    propertyCardDecorateFoldControl(button, {
+      kind: model.kind,
+      path: options?.sourcePath || model.path || "",
+      open: collapsed !== true,
+      bodyId: typeof propertyCardFoldNextId === "function" ? propertyCardFoldNextId() : "",
+      tooltip: "Toggle card details (_)",
+      keyLive: options?.keyLive === true,
+      compact: true,
+    });
+  }
   button.addEventListener?.("click", (event) => {
     try { event?.preventDefault?.(); } catch (_) {}
     try { options?.onToggleCollapse?.(!collapsed); } catch (_) {}
@@ -104913,6 +105003,11 @@ function homeCardBuildEl(doc, model, options = {}) {
       const wrap = homeCardDomEl(doc, "div", "bob-home-card-collapsible");
       wrap.appendChild(meta);
       card.appendChild(wrap);
+    }
+    const foldId = card.querySelector?.(".bob-home-card-collapse")?.getAttribute?.("aria-controls");
+    if (foldId && typeof propertyCardFoldHiddenBody === "function") {
+      const shell = propertyCardFoldHiddenBody(doc, foldId);
+      if (shell) card.appendChild(shell);
     }
     return card;
   } catch (_) {
@@ -105274,17 +105369,11 @@ class BobLedgerToolsHomeCardMixin {
   }
 
   homeCardIsCollapsed(path) {
-    const key = homeCardPath(path);
-    const map = this.homeCardCollapsed instanceof Map ? this.homeCardCollapsed : new Map();
-    this.homeCardCollapsed = map;
-    return key && map.has(key) ? map.get(key) === true : false;
+    return homeCardFoldIsCollapsed(this, path);
   }
 
   homeCardSetCollapsed(path, collapsed) {
-    const key = homeCardPath(path);
-    if (!(this.homeCardCollapsed instanceof Map)) this.homeCardCollapsed = new Map();
-    if (key) this.homeCardCollapsed.set(key, collapsed === true);
-    this.scheduleHomeCardRefresh();
+    homeCardFoldSetCollapsed(this, path, collapsed);
   }
 
   // Policy chips route by setting id; an empty key focuses first settings.
@@ -105311,7 +105400,7 @@ class BobLedgerToolsHomeCardMixin {
     }
   }
 
-  homeCardOptions(sourcePath, model) {
+  homeCardOptions(sourcePath, model, surface = "reading") {
     const editor = typeof this.openPropertyEditor === "function"
       ? (request) => this.homeCardOpenEditorRequest(request?.filePath || sourcePath, request?.key)
       : undefined;
@@ -105319,6 +105408,7 @@ class BobLedgerToolsHomeCardMixin {
       sourcePath,
       collapsed: this.homeCardIsCollapsed(sourcePath),
       reducedMotion: this.homeCardReducedMotion(),
+      keyLive: typeof propertyCardFoldKeyLive === "function" ? propertyCardFoldKeyLive(this, surface) : false,
       onToggleCollapse: (next) => this.homeCardSetCollapsed(sourcePath, next),
       onOpenEditor: editor,
       onLink: (target, event) => { void this.homeCardOpenPath(target, sourcePath, event); },
@@ -105385,6 +105475,7 @@ class BobLedgerToolsHomeCardMixin {
 
   homeCardOnSetup() {
     if (!(this.homeCardCollapsed instanceof Map)) this.homeCardCollapsed = new Map();
+    this.homeCardFoldUnregister = homeCardRegisterFolds(this);
     try {
       if (typeof this.homeCardLiveSubscribe === "function") this.homeCardLiveSubscribe();
     } catch (_) {}
@@ -105437,7 +105528,7 @@ class BobLedgerToolsHomeCardMixin {
     try {
       if (typeof this.homeCardLiveUnsubscribe === "function") this.homeCardLiveUnsubscribe();
     } catch (_) {}
-    try { this.homeCardFootUnbind?.(); } catch (_) {}
+    try { this.homeCardFoldUnregister?.(); this.homeCardFoldUnregister = null; this.homeCardFootUnbind?.(); } catch (_) {}
     try {
       if (this.homeCardDayTimer && typeof clearInterval === "function") clearInterval(this.homeCardDayTimer);
     } catch (_) {}
@@ -105557,6 +105648,7 @@ class BobLedgerToolsHomeCardMixin {
         extra?.footOpen === true,
         extra?.collapsed === true,
         extra?.editorAvailable === true,
+        extra?.keyLive === true,
       ]);
     } catch (_) {
       return "";
@@ -105575,7 +105667,7 @@ class BobLedgerToolsHomeCardMixin {
       card.setAttribute?.("data-home-source", model.path);
     } catch (_) {}
     try {
-      this.homeCardAppendFoot?.(card, model.path, model, doc, footSpec);
+      this.homeCardAppendFoot?.(card, model.path, model, doc, footSpec, options);
     } catch (_) {}
     return card;
   }
@@ -105620,7 +105712,7 @@ class BobLedgerToolsHomeCardMixin {
     const signature = this.homeCardSignature(model, {
       ...extra,
       collapsed: options.collapsed,
-      editorAvailable: typeof options.onOpenEditor === "function",
+      editorAvailable: typeof options.onOpenEditor === "function", keyLive: options.keyLive === true,
     });
     if (!header || homeCardNodeSignatures.get(header) !== signature) {
       let fresh = null;
@@ -105763,11 +105855,11 @@ class BobLedgerToolsHomeCardMixin {
       }
       const doc = view.dom?.ownerDocument || (typeof document !== "undefined" ? document : null);
       const extra = typeof this.homeCardFootExtra === "function" ? this.homeCardFootExtra(path, model) : null;
-      const options = { ...this.homeCardOptions(path, model), footSpec: extra?.footSpec };
+      const options = { ...this.homeCardOptions(path, model, "live-preview"), footSpec: extra?.footSpec };
       const signature = this.homeCardSignature(model, {
         ...extra,
         collapsed: options.collapsed,
-        editorAvailable: typeof options.onOpenEditor === "function",
+        editorAvailable: typeof options.onOpenEditor === "function", keyLive: options.keyLive === true,
       });
       const adopted = propertyCardAdoptedEntry(view.dom);
       let header = adopted && adopted.path === path && adopted.mode === "slot" ? adopted.node : null;
@@ -106116,12 +106208,14 @@ class BobLedgerToolsHomeCardFootMixin {
   }
 
   // Append the shared foot after content, outside the collapsible body.
-  homeCardAppendFoot(card, path, model, doc, footSpec) {
+  homeCardAppendFoot(card, path, model, doc, footSpec, options) {
     const key = homeCardPath(path);
     if (!card || !key) return null;
     const spec = footSpec || this.homeCardFootSpec(key, model);
     return propertyCardFootAdapterAppend(
-      card, key, doc, spec, this.homeCardFootHandlers(key), this.homeCardFootPendingScroll,
+      card, key, doc,
+      spec && options?.keyLive === true ? { ...spec, keyLive: true } : spec,
+      this.homeCardFootHandlers(key), this.homeCardFootPendingScroll,
     );
   }
 }
@@ -111430,7 +111524,9 @@ class BobLedgerToolsAlbumHeaderFootMixin {
     const path = albumHeaderPath(options?.sourcePath || card?.identity?.path || card?.path);
     const spec = options?.footSpec || this.albumHeaderFootSpec(path, card);
     return propertyCardFootAdapterAppend(
-      header, path, doc, spec, this.albumHeaderFootHandlers(path), this.albumHeaderFootPendingScroll,
+      header, path, doc,
+      spec && options?.keyLive === true ? { ...spec, keyLive: true } : spec,
+      this.albumHeaderFootHandlers(path), this.albumHeaderFootPendingScroll,
     );
   }
 }
@@ -117152,7 +117248,7 @@ class BobLedgerToolsRecordWalkRailMixin {
   }
 
   recordWalkOptions(path, model) {
-    const options = this.recordSheetOptions(path, model);
+    const options = this.recordSheetOptions(path, model, "live-preview");
     options.handlers.walkOpen = (target, direction, event) => {
       void this.recordWalkOpen(target, direction, path, event);
     };
@@ -118831,6 +118927,7 @@ function recordSheetCardSignature(card, extra = {}) {
       ? recordSheetSignature(card.body, extra) : null,
     walk: recordSheetWalkSignature(extra.walk || (card.body && card.body.walk) || null),
     collapsed: extra.collapsed === true,
+    keyLive: extra.keyLive === true,
     footOpen: extra.footOpen === true,
     footDigest: extra.footDigest == null ? null : String(extra.footDigest),
     overlay: extra.overlay || null,
@@ -119061,6 +119158,18 @@ function recordSheetRenderToolbar(slot, model, options, doc) {
     collapse.setAttribute("aria-expanded", model.collapsed ? "false" : "true");
     collapse.setAttribute("aria-label", model.collapsed ? "Expand record details" : "Collapse record details");
     recordSheetText(collapse, model.collapsed ? "▸" : "▾");
+    if (typeof propertyCardDecorateFoldControl === "function") {
+      const bodyId = typeof propertyCardFoldNextId === "function" ? propertyCardFoldNextId() : "";
+      propertyCardDecorateFoldControl(collapse, {
+        kind: "record",
+        path: options?.sourcePath || "",
+        open: model.collapsed !== true,
+        bodyId,
+        tooltip: "Toggle record details (_)",
+        keyLive: options?.keyLive === true,
+        compact: true,
+      });
+    }
     collapse.addEventListener?.("click", (event) => {
       event.preventDefault?.();
       options?.handlers?.toggleCollapsed?.(!model.collapsed);
@@ -119182,6 +119291,13 @@ function recordSheetBuildEl(model, options = {}, doc) {
   sheet.appendChild(block.element);
   if (!body) return sheet;
   recordSheetRenderToolbar(block.actions, body, options, host);
+  const appendFoldShell = () => {
+    const foldId = sheet.querySelector?.(".bob-record-sheet-collapse")?.getAttribute?.("aria-controls");
+    if (foldId && typeof propertyCardFoldHiddenBody === "function") {
+      const shell = propertyCardFoldHiddenBody(host, foldId);
+      if (shell) sheet.appendChild(shell);
+    }
+  };
   if (body.broken) {
     const warning = recordSheetEl(host, "p", "bob-record-sheet-warning");
     if (warning) {
@@ -119201,6 +119317,7 @@ function recordSheetBuildEl(model, options = {}, doc) {
       recordSheetBindYamlJump(jump, () => options?.handlers?.jumpAlbumYaml?.(body.warningLine), "schema");
       sheet.appendChild(jump);
     }
+    appendFoldShell();
     return sheet;
   }
   if (body.collapsed) {
@@ -119214,6 +119331,7 @@ function recordSheetBuildEl(model, options = {}, doc) {
       }
       sheet.appendChild(summary);
     }
+    appendFoldShell();
     return sheet;
   }
   if (body.rows && body.rows.length) {
@@ -119227,6 +119345,7 @@ function recordSheetBuildEl(model, options = {}, doc) {
   // The created stamp and every remaining property live in the shared foot
   // below the walk rail; it is appended by recordSheetBuildMounted so it
   // also covers identity-only, broken-schema, and collapsed returns.
+  appendFoldShell();
   return sheet;
 }
 
@@ -119321,6 +119440,14 @@ class BobLedgerToolsRecordSheetMixin {
         try { propertyCardFrontmatterCoordinatorBind?.(plugin, "record"); } catch (_) {}
         if (!(plugin.recordSheetEditorCache instanceof WeakMap)) plugin.recordSheetEditorCache = new WeakMap();
         if (!(plugin.recordSheetCollapsed instanceof Map)) plugin.recordSheetCollapsed = new Map();
+        plugin.recordSheetFoldUnregister = typeof propertyCardRegisterFoldKind === "function"
+          ? propertyCardRegisterFoldKind(plugin, "record", {
+            toggle(path) {
+              plugin.recordSheetSetCollapsed(path, !plugin.recordSheetIsCollapsed(path));
+              return true;
+            },
+          })
+          : null;
         if (!(plugin.recordSheetOverlays instanceof Map)) plugin.recordSheetOverlays = new Map();
         if (!(plugin.recordSheetOverlayTimers instanceof Map)) plugin.recordSheetOverlayTimers = new Map();
         if (!(plugin.recordSheetSourceCache instanceof Map)) plugin.recordSheetSourceCache = new Map();
@@ -119386,6 +119513,11 @@ class BobLedgerToolsRecordSheetMixin {
         } catch (_) {}
       },
       onDisposeStart: () => {
+        try { plugin.recordSheetFoldUnregister?.(); } catch (_) {}
+        plugin.recordSheetFoldUnregister = null;
+        for (const path of plugin.recordSheetCollapsed?.keys?.() || []) {
+          try { propertyCardFoldClearPendingReveal?.(path); } catch (_) {}
+        }
         try { propertyCardFrontmatterCoordinatorReleaseKind?.(plugin, "record"); } catch (_) {}
         try { plugin.recordSheetFootUntoggle?.(); } catch (_) {}
         plugin.recordSheetFootUntoggle = null;
@@ -119565,12 +119697,29 @@ class BobLedgerToolsRecordSheetMixin {
     const key = recordSheetPath(path);
     const map = this.recordSheetCollapsed instanceof Map ? this.recordSheetCollapsed : new Map();
     this.recordSheetCollapsed = map;
-    return key && map.has(key) ? map.get(key) === true : false;
+    const stored = key && map.has(key) ? map.get(key) : null;
+    const choice = typeof propertyCardFoldRestamp === "function"
+      ? propertyCardFoldRestamp(propertyCardFoldChoiceFromStored(stored), "")
+      : (typeof propertyCardFoldChoiceFromStored === "function" ? propertyCardFoldChoiceFromStored(stored) : null);
+    if (key && choice && choice !== stored) map.set(key, choice);
+    const open = typeof propertyCardFoldResolve === "function"
+      ? propertyCardFoldResolve({
+        choice,
+        problems: "",
+        foldDefault: typeof propertyCardSpecies === "function" ? propertyCardSpecies("record")?.foldDefault : true,
+      })
+      : stored !== true;
+    return open !== true;
   }
 
   recordSheetSetCollapsed(path, collapsed) {
     const key = recordSheetPath(path);
-    if (key) this.recordSheetCollapsed.set(key, collapsed === true);
+    if (!(this.recordSheetCollapsed instanceof Map)) this.recordSheetCollapsed = new Map();
+    if (key) {
+      this.recordSheetCollapsed.set(key, typeof propertyCardFoldChoice === "function"
+        ? propertyCardFoldChoice(collapsed !== true, "")
+        : collapsed === true);
+    }
     this.scheduleRecordSheetRefresh();
   }
 
@@ -119699,10 +119848,11 @@ class BobLedgerToolsRecordSheetMixin {
     return model;
   }
 
-  recordSheetOptions(path, model) {
+  recordSheetOptions(path, model, surface = "reading") {
     return {
       sourcePath: path,
       hue: model?.hue || this.recordSheetHue(path),
+      keyLive: typeof propertyCardFoldKeyLive === "function" ? propertyCardFoldKeyLive(this, surface) : false,
       handlers: {
         openPath: (target, event) => { void this.recordSheetOpenPath(target, path, event); },
         hoverLink: (event, targetEl, linktext) => this.recordSheetHoverLink(event, targetEl, linktext, path),
@@ -120538,6 +120688,7 @@ class BobLedgerToolsRecordSheetFootMixin {
         open,
         inventory: spec.inventory,
         stamp: spec.stamp,
+        keyLive: options?.keyLive === true,
         handlers: this.recordSheetFootHandlers(path),
       });
       if (!built || !built.element) return null;
@@ -193799,6 +193950,8 @@ try {
       propertyCardNodeBelongs,
       createPropertyCardHost,
       propertyCardFoldChoice,
+      propertyCardFoldChoiceFromStored,
+      propertyCardFoldHiddenBody,
       propertyCardFoldRestamp,
       propertyCardFoldResolve,
       propertyCardRegisterFoldKind,
@@ -194066,6 +194219,9 @@ try {
       homeCardGoalLineExpectedText,
       homeCardGoalLineNode,
       homeCardBuildEl,
+      homeCardFoldIsCollapsed,
+      homeCardFoldSetCollapsed,
+      homeCardRegisterFolds,
       HOME_CARD_HOST_KIND,
       HOME_CARD_READING_PRIORITY,
       HOME_CARD_SURFACE_CLASS,

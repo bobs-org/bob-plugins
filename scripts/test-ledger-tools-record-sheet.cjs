@@ -702,6 +702,42 @@ test("collapsed summary leads with the group choice and keeps per-path foot stat
   assert.equal(helpers.propertyCardFootIsOpen("movies/heat.md"), false, "a different note starts closed");
 });
 
+test("record collapse Map accepts booleans and registers the record fold", () => {
+  const { plugin } = fixture();
+  plugin.recordSheetCollapsed = new Map([["eat/smashburger.md", true]]);
+  assert.equal(plugin.recordSheetIsCollapsed("eat/smashburger.md"), true);
+  plugin.recordSheetSetCollapsed("eat/smashburger.md", false);
+  assert.deepEqual(plugin.recordSheetCollapsed.get("eat/smashburger.md"), { open: true, problems: "" });
+  assert.equal(plugin.recordSheetIsCollapsed("eat/smashburger.md"), false);
+  const seen = [];
+  plugin.recordSheetIsCollapsed = () => false;
+  plugin.recordSheetSetCollapsed = (path, next) => seen.push([path, next]);
+  const unregister = helpers.propertyCardRegisterFoldKind(plugin, "record", {
+    toggle(path) {
+      plugin.recordSheetSetCollapsed(path, !plugin.recordSheetIsCollapsed(path));
+      return true;
+    },
+  });
+  const control = {
+    isConnected: true,
+    disabled: false,
+    getAttribute(name) {
+      return name === "data-card-fold" ? "record"
+        : name === "data-card-fold-source" ? "eat/smashburger.md"
+        : name === "aria-expanded" ? "true"
+        : null;
+    },
+    getBoundingClientRect() { return { width: 10, height: 10 }; },
+  };
+  const view = {
+    file: { path: "eat/smashburger.md" },
+    dom: { querySelectorAll(selector) { return selector === "[data-card-fold]" ? [control] : []; } },
+  };
+  assert.equal(helpers.propertyCardToggleDetails(view), true);
+  assert.deepEqual(seen, [["eat/smashburger.md", true]]);
+  unregister();
+});
+
 test("DOM keeps HTML-looking values as text, rejects dangerous URLs, and exposes YAML jumps", async () => {
   const world = fixture({
     sources: {
@@ -722,6 +758,12 @@ test("DOM keeps HTML-looking values as text, rejects dangerous URLs, and exposes
   assert.equal(sheet.getAttribute("aria-label"), "Record: Smashburger");
   const collapse = sheet.querySelector(".bob-record-sheet-collapse");
   assert.equal(collapse.getAttribute("aria-expanded"), "true");
+  assert.equal(collapse.getAttribute("data-card-fold"), "record");
+  assert.equal(collapse.getAttribute("title"), "Toggle record details (_)");
+  assert.equal(collapse.getAttribute("aria-keyshortcuts"), "_");
+  const foldId = collapse.getAttribute("aria-controls");
+  assert.ok(foldId);
+  assert.equal(sheet.querySelectorAll(`[id="${foldId}"]`).length, 1);
   const status = sheet.querySelector("[data-record-key=\"status\"]");
   assert.equal(status.getAttribute("tabindex"), "0");
   const leaf = {

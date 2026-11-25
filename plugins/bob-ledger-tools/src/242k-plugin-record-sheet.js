@@ -74,6 +74,14 @@ class BobLedgerToolsRecordSheetMixin {
         try { propertyCardFrontmatterCoordinatorBind?.(plugin, "record"); } catch (_) {}
         if (!(plugin.recordSheetEditorCache instanceof WeakMap)) plugin.recordSheetEditorCache = new WeakMap();
         if (!(plugin.recordSheetCollapsed instanceof Map)) plugin.recordSheetCollapsed = new Map();
+        plugin.recordSheetFoldUnregister = typeof propertyCardRegisterFoldKind === "function"
+          ? propertyCardRegisterFoldKind(plugin, "record", {
+            toggle(path) {
+              plugin.recordSheetSetCollapsed(path, !plugin.recordSheetIsCollapsed(path));
+              return true;
+            },
+          })
+          : null;
         if (!(plugin.recordSheetOverlays instanceof Map)) plugin.recordSheetOverlays = new Map();
         if (!(plugin.recordSheetOverlayTimers instanceof Map)) plugin.recordSheetOverlayTimers = new Map();
         if (!(plugin.recordSheetSourceCache instanceof Map)) plugin.recordSheetSourceCache = new Map();
@@ -139,6 +147,11 @@ class BobLedgerToolsRecordSheetMixin {
         } catch (_) {}
       },
       onDisposeStart: () => {
+        try { plugin.recordSheetFoldUnregister?.(); } catch (_) {}
+        plugin.recordSheetFoldUnregister = null;
+        for (const path of plugin.recordSheetCollapsed?.keys?.() || []) {
+          try { propertyCardFoldClearPendingReveal?.(path); } catch (_) {}
+        }
         try { propertyCardFrontmatterCoordinatorReleaseKind?.(plugin, "record"); } catch (_) {}
         try { plugin.recordSheetFootUntoggle?.(); } catch (_) {}
         plugin.recordSheetFootUntoggle = null;
@@ -318,12 +331,29 @@ class BobLedgerToolsRecordSheetMixin {
     const key = recordSheetPath(path);
     const map = this.recordSheetCollapsed instanceof Map ? this.recordSheetCollapsed : new Map();
     this.recordSheetCollapsed = map;
-    return key && map.has(key) ? map.get(key) === true : false;
+    const stored = key && map.has(key) ? map.get(key) : null;
+    const choice = typeof propertyCardFoldRestamp === "function"
+      ? propertyCardFoldRestamp(propertyCardFoldChoiceFromStored(stored), "")
+      : (typeof propertyCardFoldChoiceFromStored === "function" ? propertyCardFoldChoiceFromStored(stored) : null);
+    if (key && choice && choice !== stored) map.set(key, choice);
+    const open = typeof propertyCardFoldResolve === "function"
+      ? propertyCardFoldResolve({
+        choice,
+        problems: "",
+        foldDefault: typeof propertyCardSpecies === "function" ? propertyCardSpecies("record")?.foldDefault : true,
+      })
+      : stored !== true;
+    return open !== true;
   }
 
   recordSheetSetCollapsed(path, collapsed) {
     const key = recordSheetPath(path);
-    if (key) this.recordSheetCollapsed.set(key, collapsed === true);
+    if (!(this.recordSheetCollapsed instanceof Map)) this.recordSheetCollapsed = new Map();
+    if (key) {
+      this.recordSheetCollapsed.set(key, typeof propertyCardFoldChoice === "function"
+        ? propertyCardFoldChoice(collapsed !== true, "")
+        : collapsed === true);
+    }
     this.scheduleRecordSheetRefresh();
   }
 
@@ -452,10 +482,11 @@ class BobLedgerToolsRecordSheetMixin {
     return model;
   }
 
-  recordSheetOptions(path, model) {
+  recordSheetOptions(path, model, surface = "reading") {
     return {
       sourcePath: path,
       hue: model?.hue || this.recordSheetHue(path),
+      keyLive: typeof propertyCardFoldKeyLive === "function" ? propertyCardFoldKeyLive(this, surface) : false,
       handlers: {
         openPath: (target, event) => { void this.recordSheetOpenPath(target, path, event); },
         hoverLink: (event, targetEl, linktext) => this.recordSheetHoverLink(event, targetEl, linktext, path),

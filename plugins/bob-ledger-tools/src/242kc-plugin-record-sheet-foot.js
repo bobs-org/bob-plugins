@@ -208,6 +208,7 @@ class BobLedgerToolsRecordSheetFootMixin {
         open,
         inventory: spec.inventory,
         stamp: spec.stamp,
+        keyLive: options?.keyLive === true,
         handlers: this.recordSheetFootHandlers(path),
       });
       if (!built || !built.element) return null;

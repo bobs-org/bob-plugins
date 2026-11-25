@@ -245,3 +245,47 @@ test("fold keycap appears only for desktop Live Preview Vim", () => {
   assert.equal(helpers.propertyCardFoldKeyLive(plugin, "reading"), false);
   assert.equal(helpers.propertyCardFoldKeyLive({ app: { vault: { getConfig: () => false } } }, "live-preview"), false);
 });
+
+test("stored boolean collapse maps to an open/closed choice", () => {
+  assert.deepEqual(helpers.propertyCardFoldChoiceFromStored(true), { open: false, problems: "" });
+  assert.deepEqual(helpers.propertyCardFoldChoiceFromStored(false), { open: true, problems: "" });
+  assert.deepEqual(helpers.propertyCardFoldChoiceFromStored({ open: false, problems: "x" }), { open: false, problems: "x" });
+  assert.equal(helpers.propertyCardFoldChoiceFromStored(null), null);
+});
+
+test("compact decorate stamps fold attrs, a hidden shell, and a hover keycap", async () => {
+  const doc = foldDoc();
+  const host = root(doc);
+  const button = doc.createElement("button");
+  host.appendChild(button);
+  const bodyId = helpers.propertyCardFoldNextId();
+  assert.equal(helpers.propertyCardDecorateFoldControl(button, {
+    kind: "record", path: "eat/nagi.md", open: false, bodyId, compact: true,
+    tooltip: "Toggle record details (_)", keyLive: true,
+  }), true);
+  assert.equal(button.getAttribute("data-card-fold"), "record");
+  assert.equal(button.getAttribute("data-card-fold-source"), "eat/nagi.md");
+  assert.equal(button.getAttribute("aria-expanded"), "false");
+  assert.equal(button.getAttribute("aria-controls"), bodyId);
+  assert.equal(button.getAttribute("aria-keyshortcuts"), "_");
+  assert.equal(button.getAttribute("title"), "Toggle record details (_)");
+  assert.equal(button.classList.contains("bob-property-card-fold-compact"), true);
+  assert.equal(button.querySelector(".bob-property-card-fold-keycap").textContent, "_");
+  const shell = helpers.propertyCardFoldHiddenBody(doc, bodyId);
+  host.appendChild(shell);
+  assert.equal(shell.getAttribute("hidden"), "");
+  assert.equal(host.querySelectorAll(`[id="${bodyId}"]`).length, 1);
+
+  const unregister = helpers.propertyCardRegisterFoldKind({}, "record", {
+    toggle() { button.setAttribute("aria-expanded", "true"); return true; },
+  });
+  assert.equal(helpers.propertyCardToggleDetails({ file: { path: "eat/nagi.md" }, dom: host }), true);
+  const openButton = doc.createElement("button");
+  host.appendChild(openButton);
+  helpers.propertyCardDecorateFoldControl(openButton, {
+    kind: "record", path: "eat/nagi.md", open: true, bodyId: helpers.propertyCardFoldNextId(), compact: true,
+  });
+  await Promise.resolve();
+  assert.deepEqual(openButton.scrolls, [{ block: "nearest" }]);
+  unregister();
+});

@@ -265,6 +265,18 @@ function freePort() {
 
 function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
+async function dispatchTrustedKey(client, parts) {
+  await client.call("Input.dispatchKeyEvent", { type: "keyDown", ...parts });
+  await client.call("Input.dispatchKeyEvent", {
+    type: "keyUp",
+    code: parts.code,
+    key: parts.key,
+    windowsVirtualKeyCode: parts.windowsVirtualKeyCode,
+    nativeVirtualKeyCode: parts.nativeVirtualKeyCode,
+    modifiers: parts.modifiers || 0,
+  });
+}
+
 async function withTimeout(promise, ms, label) {
   let timer;
   try {
@@ -1195,6 +1207,22 @@ async function run(args) {
     appendCapturedCheck(report, "collapse-does-not-write-markdown", markdownFilesHash(vaultDir) === beforePassive, state.sheet);
     report.screenshots.push(await capture(client, outDir, "record-sheet-collapsed", 1400, "light", "Live Preview"));
     (report.probes.clicks ||= []).push(await clickBy(client, '[data-record-sheet-focus="collapse"]'));
+    state = await waitFor(client, probeSource("zettels/bead_lifecycle.md"), (value) => value.sheet?.collapsed !== true, "sheet expand");
+    if (args.scope === "full") {
+      await client.evaluate(`(() => {
+        const editor = window.app.workspace.activeLeaf?.view?.editor;
+        editor?.focus?.();
+        return Boolean(editor);
+      })()`);
+      await dispatchTrustedKey(client, { key: "Escape", code: "Escape", windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 });
+      const foldDispatch = { key: "_", code: "Minus", windowsVirtualKeyCode: 189, nativeVirtualKeyCode: 189, modifiers: 8 };
+      await dispatchTrustedKey(client, foldDispatch);
+      state = await waitFor(client, probeSource("zettels/bead_lifecycle.md"), (value) => value.sheet?.collapsed === true, "sheet collapse by _");
+      appendCapturedCheck(report, "underscore-collapses-record", state.sheet?.collapsed === true, state.sheet);
+      await dispatchTrustedKey(client, foldDispatch);
+      state = await waitFor(client, probeSource("zettels/bead_lifecycle.md"), (value) => value.sheet?.collapsed !== true, "sheet expand by _");
+      appendCapturedCheck(report, "underscore-expands-record", state.sheet?.collapsed !== true, state.sheet);
+    }
 
     await setTheme(client, "dark");
     await setViewport(client, 1400, 1000);

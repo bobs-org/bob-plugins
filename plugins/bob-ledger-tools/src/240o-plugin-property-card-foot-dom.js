@@ -563,10 +563,14 @@ function propertyCardFootBuildEl(doc, spec = {}) {
     disclosure.setAttribute("title", "Toggle properties (-)");
     disclosure.setAttribute("aria-label", `Toggle properties, ${count} ${count === 1 ? "property" : "properties"}`);
     disclosure.setAttribute("data-foot-focus", "foot");
+    if (options.keyLive === true) disclosure.setAttribute("aria-keyshortcuts", "-");
     const chevron = propertyCardKitSpan(doc, "bob-property-card-foot-chevron", "▸");
     chevron.setAttribute("aria-hidden", "true");
     disclosure.appendChild(chevron);
     propertyCardKitAppendText(doc, disclosure, ` Properties · ${count}`);
+    if (typeof propertyCardFoldAddKeycap === "function") {
+      propertyCardFoldAddKeycap(disclosure, doc, options.keyLive === true, "-");
+    }
     disclosure.addEventListener?.("click", (event) => {
       try { event.preventDefault?.(); } catch (_) {}
       let next = !open;

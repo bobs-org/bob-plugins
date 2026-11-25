@@ -65,7 +65,7 @@ test("first note becoming a req scoops loose notes into NOTES with the notice", 
   assert.equal(handled, true);
   assert.equal(
     editor.getValue(),
-    "- [ ] #task Ship\n\t- [ ] note to req\n\t- NOTES\n\t\t- loose a\n\t\t- loose b",
+    "- [ ] #task Ship\n\t- [ ] note to req\n\t- **Notes**\n\t\t- loose a\n\t\t- loose b",
   );
   assert.equal(editor.replaceRangeCalls(), 1);
   // Same offset into the item body: the caret sat 5 into "note to req", so
@@ -82,7 +82,7 @@ test("first-req notice counts one note and none", () => {
   const { editor } = press(text, { line: 1, ch: 4 });
   assert.equal(editor.getValue(), "- [ ] #task Ship\n\t- [ ] only note");
   // NOTES is born only when a note lands in it.
-  assert.ok(!editor.getValue().includes("NOTES"));
+  assert.ok(!editor.getValue().includes("**Notes**"));
   assert.deepEqual(notices, ["◇ First requirement"]);
 });
 
@@ -109,7 +109,7 @@ test("a nested note becomes a req in place", () => {
 test("a depth-1 req becomes a note filed into NOTES; a nested req in place", () => {
   const text = ["- [ ] #task Ship", "\t- [ ] req one", "\t- [ ] req two"].join("\n");
   const { editor } = press(text, { line: 1, ch: 8 });
-  assert.equal(editor.getValue(), "- [ ] #task Ship\n\t- [ ] req two\n\t- NOTES\n\t\t- req one");
+  assert.equal(editor.getValue(), "- [ ] #task Ship\n\t- [ ] req two\n\t- **Notes**\n\t\t- req one");
   assert.equal(editor.replaceRangeCalls(), 1);
   assert.equal(editor.getCursor().line, 3);
   assert.deepEqual(notices, []);
@@ -240,7 +240,7 @@ test("Vim Ctrl+] routes through the same toggle", () => {
   viewFor(plugin, editor);
   notices.length = 0;
   plugin.handleVimToggleCheckboxMarker();
-  assert.equal(editor.getValue(), "- [ ] #task Ship\n\t- [ ] note to req\n\t- NOTES\n\t\t- loose");
+  assert.equal(editor.getValue(), "- [ ] #task Ship\n\t- [ ] note to req\n\t- **Notes**\n\t\t- loose");
   assert.equal(editor.replaceRangeCalls(), 1);
   assert.deepEqual(notices, ["◇ First requirement · filed 1 note under NOTES"]);
 
@@ -249,7 +249,7 @@ test("Vim Ctrl+] routes through the same toggle", () => {
   viewFor(plugin, second);
   notices.length = 0;
   plugin.handleVimToggleCheckboxMarker();
-  assert.match(second.getValue(), /NOTES\n\t\t- loose\n\t\t- note to req/);
+  assert.match(second.getValue(), /\*\*Notes\*\*\n\t\t- loose\n\t\t- note to req/);
   assert.deepEqual(notices, []);
 });
 

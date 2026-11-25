@@ -288,7 +288,7 @@ test("creating a notes drawer before a work-log origin shifts origin by two", ()
   assert.equal(plan.lines.length, 2);
   assert.equal(plan.originLine, origin + 2);
   const applied = apply(text, plan);
-  assert.match(applied, /\t- NOTES\n\t\t- \n\t- 🛠️/);
+  assert.match(applied, /\t- \*\*Notes\*\*\n\t\t- \n\t- 🛠️/);
 });
 
 test("grouped headlines open at ## Tasks intake; O matches o; intake stays after its block", () => {

@@ -8,6 +8,11 @@ const Module = require("node:module");
 const test = require("node:test");
 const fs = require("node:fs");
 const path = require("node:path");
+const {
+  cpuBudgetDiagnostic,
+  isWithinCpuBudget,
+  sampleCpuWork,
+} = require("./cpu-work-perf-support.cjs");
 
 const RealDate = Date;
 const FROZEN_NOW = new RealDate(2026, 10, 3, 10, 0, 0);
@@ -1065,8 +1070,8 @@ test("liveness — a source-text fill refreshes link pills", async () => {
 });
 
 // Performance: a synthetic 200-link ledger and 50 Event rows keeps one
-// Live Preview build under about 25 ms.
-test("perf — one build over a 200-link ledger stays under 25 ms", () => {
+// Live Preview build under about 25 ms CPU.
+test("perf — one build over a 200-link ledger stays under 25 ms CPU", () => {
   const { plugin } = makePlugin();
   plugin.calendarEventsPaintEnabled = true;
   const events = [];
@@ -1087,12 +1092,16 @@ test("perf — one build over a 200-link ledger stays under 25 ms", () => {
   const view = makeView(text, TODAY_PATH);
   const warm = plugin.buildEventLinkTimeDecorations(view);
   assert.ok(warm.adds.length === 200, `every synthetic link pills (got ${warm.adds.length})`);
-  const start = process.hrtime.bigint();
+  const { cpuSamples, wallSamples } = sampleCpuWork(
+    () => () => plugin.buildEventLinkTimeDecorations(view),
+    { warmups: 3, samples: 7 },
+  );
   const built = plugin.buildEventLinkTimeDecorations(view);
-  const ms = Number(process.hrtime.bigint() - start) / 1e6;
   assert.equal(built.adds.length, 200);
-  console.log(`event-link-times build: ${ms.toFixed(1)} ms`);
-  assert.ok(ms < 25, `one build under 25 ms (took ${ms.toFixed(1)} ms)`);
+  assert.ok(
+    isWithinCpuBudget(cpuSamples, 25),
+    cpuBudgetDiagnostic("event-link-times build", cpuSamples, wallSamples, 25),
+  );
 });
 
 test("widget — identity follows time, state, clock, buffer, and tooltip", () => {

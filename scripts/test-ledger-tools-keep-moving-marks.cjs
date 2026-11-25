@@ -1,8 +1,8 @@
 // KB/KT/LP vectors from docs/keep-moving-marks.md.
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { performance } = require("node:perf_hooks");
 const { helpers: h } = require("./ledger-tools-harness.cjs");
+const { cpuTimeMs } = require("./cpu-work-perf-support.cjs");
 
 const TODAY = "2026-11-02";
 const DAY_PATH = "2026/20261102.md";
@@ -293,9 +293,9 @@ test("KT1–KT8: tooltip, accessible element, config cache, and bounded counting
   const largeSource = note(residents);
   const largeCtx = ctxFor(largeSource);
   const closing = largeCtx.memo.tasks.find((task) => taskBlockId(task) === "x");
-  const started = performance.now();
+  const started = cpuTimeMs();
   const large = h.keepMovingMarkCount(closing, { path: PROJECT_PATH, text: largeSource }, largeCtx);
-  const elapsed = performance.now() - started;
+  const elapsed = cpuTimeMs() - started;
   assert.equal(large.count, residents.length);
-  assert.ok(elapsed < 1000, `1500 resident count took ${elapsed.toFixed(1)} ms`);
+  assert.ok(elapsed < 1000, `1500 resident count took ${elapsed.toFixed(1)} ms CPU`);
 });

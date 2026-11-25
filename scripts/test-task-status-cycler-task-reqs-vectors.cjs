@@ -198,11 +198,11 @@ test("a created NOTES drawer lands first among the drawers", () => {
   const task = taskBlockFindTask(contents, 0);
   const ensured = taskBlockEnsureNotesDrawer(contents, task);
   assert.ok(ensured && ensured.created);
-  assert.equal(ensured.drawer.title, "NOTES");
+  assert.equal(ensured.drawer.title, "Notes");
   assert.deepEqual(linesOf(ensured.updated), [
     "- [ ] #task A ^a",
     "\t- [ ] req",
-    "\t- NOTES",
+    "\t- **Notes**",
     "\t- FUTURE WORK",
     "\t\t- later",
     "\t- \u{1f6e0}️ **WORK LOG**",
@@ -214,14 +214,14 @@ test("a created NOTES drawer lands first among the drawers", () => {
 test("a note without a final newline keeps that state", () => {
   const contents = "- [ ] #task A ^a\n\t- loose\n\t- [ ] first req";
   const plan = taskBlockPlanTidy(contents, taskBlockFindTask(contents, 0));
-  assert.equal(plan.updated, "- [ ] #task A ^a\n\t- [ ] first req\n\t- NOTES\n\t\t- loose");
+  assert.equal(plan.updated, "- [ ] #task A ^a\n\t- [ ] first req\n\t- **Notes**\n\t\t- loose");
   assert.deepEqual([plan.moves, plan.notesFiled, plan.notesCreated], [0, 1, true]);
 });
 
 test("tidy keeps a CRLF note CRLF and a done owner's block untouched", () => {
   const contents = ["- [ ] #task A ^a", "\t- loose", "\t- [ ] first req", ""].join("\r\n");
   const plan = taskBlockPlanTidy(contents, taskBlockFindTask(contents, 0));
-  assert.equal(plan.updated, ["- [ ] #task A ^a", "\t- [ ] first req", "\t- NOTES", "\t\t- loose", ""].join("\r\n"));
+  assert.equal(plan.updated, ["- [ ] #task A ^a", "\t- [ ] first req", "\t- **Notes**", "\t\t- loose", ""].join("\r\n"));
   const done = contents.replace("- [ ]", "- [x]");
   assert.equal(taskBlockPlanTidy(done, taskBlockFindTask(done, 0)), null);
 });
@@ -242,7 +242,7 @@ test("the first-req scoop files only the owner's loose notes and creates NOTES o
     "\t- [ ] req",
     "\t\t- req note",
     "\t- [ ] #task Nested ^n",
-    "\t- NOTES",
+    "\t- **Notes**",
     "\t\t- loose one",
   ]);
   assert.equal(taskBlockScoopLooseNotes("- [ ] #task A ^a\n\t- [ ] req\n", 0), null);
@@ -351,7 +351,7 @@ test("the toggle reports firstReq only when a note becomes its owner's first req
   const first = taskReqToggle(fresh, at(fresh, 2));
   assert.equal(first.ok, true);
   assert.deepEqual([first.direction, first.depth, first.firstReq, first.scooped, first.notesCreated], ["note-to-req", 1, true, 1, true]);
-  assert.deepEqual(linesOf(first.updated), ["- [ ] #task Fresh ^f", "\t- [ ] second note", "\t- NOTES", "\t\t- first note"]);
+  assert.deepEqual(linesOf(first.updated), ["- [ ] #task Fresh ^f", "\t- [ ] second note", "\t- **Notes**", "\t\t- first note"]);
   assert.equal(first.lineIndex, 1);
   const owned = ["- [ ] #task Owned ^o", "\t- [ ] existing req", "\t- a note", ""].join("\n");
   const second = taskReqToggle(owned, at(owned, 2));
@@ -391,7 +391,7 @@ test("writers keep a missing final newline and every untouched line ending", () 
   const bare = "- [ ] #task A ^a\n\t- [ ] req";
   assert.equal(taskReqDrop(bare, at(bare, 1), "2026-11-21", "why").updated,
     "- [ ] #task A ^a\n\t- [-] req\n\t\t- ❌ **CANCEL LOG**\n\t\t\t- *2026-11-21* — why");
-  assert.equal(taskReqToggle(bare, at(bare, 1)).updated, "- [ ] #task A ^a\n\t- NOTES\n\t\t- req");
+  assert.equal(taskReqToggle(bare, at(bare, 1)).updated, "- [ ] #task A ^a\n\t- **Notes**\n\t\t- req");
   assert.equal(taskReqInsert(bare, at(bare, 0), ["- [ ] two"]).updated, "- [ ] #task A ^a\n\t- [ ] req\n\t- [ ] two");
   const mixed = "- [ ] #task A ^a\r\n\t- [ ] req\n\t- note\r\n";
   const dropped = taskReqDrop(mixed, at(mixed, 1), "2026-11-21", "why");

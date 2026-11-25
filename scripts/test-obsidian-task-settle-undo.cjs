@@ -4,7 +4,6 @@
 
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
-const os = require("node:os");
 const path = require("node:path");
 const { CdpClient, freePort, seedProfileVault } = require("./obsidian-startup-smoke.cjs");
 
@@ -58,7 +57,10 @@ async function waitForOwnedTarget(port, vaultPath, child) {
 
 async function main() {
   if (!fs.existsSync(OBSIDIAN)) throw new Error(`Obsidian Electron app is missing: ${OBSIDIAN}`);
-  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "bob-task-settle-undo-"));
+  // Chromium's singleton socket must fit in UNIX's short socket-path limit.
+  // SASE sets TMPDIR to a long per-agent path, so keep both the scratch profile
+  // and Chromium's own temp files under /tmp.
+  const scratch = fs.mkdtempSync(path.join("/tmp", "bob-task-settle-undo-"));
   const vault = path.join(scratch, "vault");
   const profile = path.join(scratch, "profile");
   fs.mkdirSync(path.join(vault, ".obsidian", "plugins", "bob-ledger-tools"), { recursive: true });
@@ -80,6 +82,8 @@ async function main() {
   const vaultRealPath = fs.realpathSync(vault);
   seedProfileVault(profile, vaultRealPath);
   const port = await freePort();
+  const childEnv = { ...process.env, BOB_DIR: vaultRealPath, TMPDIR: "/tmp" };
+  delete childEnv.ELECTRON_RUN_AS_NODE;
   const child = spawn(OBSIDIAN, [
     "--no-sandbox",
     `--user-data-dir=${profile}`,
@@ -88,7 +92,7 @@ async function main() {
     vaultRealPath,
   ], {
     cwd: vaultRealPath,
-    env: { ...process.env, BOB_DIR: vaultRealPath },
+    env: childEnv,
     stdio: "ignore",
   });
   let client = null;
@@ -97,6 +101,10 @@ async function main() {
     client = await waitForOwnedTarget(port, vaultRealPath, child);
     await client.evaluate(
       `(() => (async () => {
+        const deadline = Date.now() + 15_000;
+        while (!window.app?.plugins && Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
         const plugins = window.app?.plugins;
         if (!plugins) throw new Error("plugin manager unavailable");
         if (!plugins.isEnabled()) await plugins.setEnable(true);
@@ -120,7 +128,12 @@ async function main() {
     const result = await client.evaluate(
       `(() => (async () => {
         const app = window.app;
-        const file = app.vault.getAbstractFileByPath(${JSON.stringify(NOTE_PATH)});
+        const fileDeadline = Date.now() + 15_000;
+        let file = app.vault.getAbstractFileByPath(${JSON.stringify(NOTE_PATH)});
+        while (!file && Date.now() < fileDeadline) {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          file = app.vault.getAbstractFileByPath(${JSON.stringify(NOTE_PATH)});
+        }
         if (!file) throw new Error("fixture note missing");
         const leaf = app.workspace.getLeaf(false);
         await leaf.openFile(file, { state: { mode: "source" } });
@@ -146,9 +159,36 @@ async function main() {
         });
         const settledBuffer = editor.getValue();
         if (typeof editor.undo !== "function") throw new Error("Obsidian Editor.undo unavailable");
+        if (typeof editor.redo !== "function") throw new Error("Obsidian Editor.redo unavailable");
         editor.undo();
         await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-        const undoBuffer = editor.getValue();
+        const firstUndoBuffer = editor.getValue();
+        let secondUndoBuffer = null;
+        let firstRedoBuffer = null;
+        let secondRedoBuffer = null;
+        if (firstUndoBuffer !== before) {
+          editor.undo();
+          await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+          secondUndoBuffer = editor.getValue();
+          editor.redo();
+          await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+          firstRedoBuffer = editor.getValue();
+          editor.redo();
+          await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+          secondRedoBuffer = editor.getValue();
+        } else {
+          editor.redo();
+          await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+          firstRedoBuffer = editor.getValue();
+        }
+        const undoRestoredOriginal = firstUndoBuffer === before || secondUndoBuffer === before;
+        const redoRestoredSettled = firstRedoBuffer === settledBuffer || secondRedoBuffer === settledBuffer;
+        const undoSequenceMatches = settle.historyJoined === true
+          ? firstUndoBuffer === before && firstRedoBuffer === settledBuffer
+          : settle.historyJoined === false
+            ? firstUndoBuffer === gestureBuffer && secondUndoBuffer === before &&
+              firstRedoBuffer === gestureBuffer && secondRedoBuffer === settledBuffer
+            : undoRestoredOriginal && redoRestoredSettled;
         return {
           version: plugin.api.taskSettle.version,
           applied: settle.applied,
@@ -156,7 +196,10 @@ async function main() {
           historyJoined: settle.historyJoined,
           gestureBufferChanged: gestureBuffer !== before,
           settledBufferChanged: settledBuffer !== gestureBuffer,
-          undoRestoredOriginal: undoBuffer === before,
+          firstUndoRestoredGesture: firstUndoBuffer === gestureBuffer,
+          undoRestoredOriginal,
+          redoRestoredSettled,
+          undoSequenceMatches,
           reason: settle.reason,
         };
       })())()`,
@@ -164,7 +207,8 @@ async function main() {
     );
     if (
       !result || result.version !== 1 || !result.applied || !result.changed ||
-      !result.gestureBufferChanged || !result.settledBufferChanged || !result.undoRestoredOriginal
+      !result.gestureBufferChanged || !result.settledBufferChanged ||
+      !result.undoRestoredOriginal || !result.redoRestoredSettled || !result.undoSequenceMatches
     ) {
       throw new Error(`taskSettle real undo assertion failed: ${JSON.stringify(result)}`);
     }

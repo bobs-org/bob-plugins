@@ -195,6 +195,9 @@ existing event, `false` when a separate event is observed, and `null` when
 history depth is unavailable. The tested `editor.transaction` fallback is a
 separate event: undo settle regrouping first, then undo the original gesture.
 Consumers must not assume a join when the result reports `false` or `null`.
+The scratch-vault Obsidian check observed that same two-step order through CM6
+when `historyJoined` was `false`: undo restores the post-gesture text first,
+then the original text; redo reapplies the gesture, then the settle.
 
 `logs.fetch({ force? })` resolves `{ status, catalog, fetchedAt }`, where
 `status` is `ok`, `stale`, `unavailable`, `unsupported`, or `error`. A cached

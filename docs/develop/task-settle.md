@@ -146,13 +146,20 @@ exactly once.
 
 Staged apply is one editor transaction and one undo step. For an
 already-applied gesture, a consumer can pass `joinHistory: true` only when its
-gesture is the preceding editor change. The scheduler makes that request only
-when the buffer still matches its last scheduled tap. It reports
-`historyJoined: true` only when CM6 `undoDepth()` confirms the settle joined an
-existing event, `false` when a separate event is observed, and `null` when
-history depth is unavailable. The tested `editor.transaction` fallback is a
-separate event: undo settle regrouping first, then undo the original gesture.
-Consumers must not assume a join when the result reports `false` or `null`.
-The scratch-vault Obsidian check observed that same two-step order through CM6
-when `historyJoined` was `false`: undo restores the post-gesture text first,
-then the original text; redo reapplies the gesture, then the settle.
+gesture is the preceding editor change. The provider dispatches that settle with
+`userEvent: "input.type.compose"`, which Obsidian's bundled CM6 history joins to
+the preceding edit. The scheduler requests a join only when the buffer still
+matches its last scheduled tap. It reports `historyJoined: true` only when CM6
+`undoDepth()` confirms the settle joined an existing event, `false` when a
+separate event is observed, and `null` when history depth is unavailable. The
+tested `editor.transaction` fallback is a separate event: undo settle regrouping
+first, then undo the original gesture. Consumers must not assume a join when
+the result reports `false` or `null`.
+
+`scripts/test-obsidian-task-settle-undo.cjs` measures the joined provider, staged
+promotion, nonempty `o` scaffold, and Tasks-backed recurring close in disposable
+real Obsidian vaults. The joined provider, promotion, and close each restore the
+original buffer with the first undo and the settled buffer with the first redo.
+The scaffold check verifies that settle is not a separate history event. The
+delayed-cycle count and Ctrl+O ordering are measured by
+`scripts/test-obsidian-task-cycle-settle-e2e.cjs`.

@@ -53,6 +53,14 @@ function dailySource(lines) {
   return ["## Tasks", "", ...lines].join("\n");
 }
 
+function localDateOffset(offsetDays) {
+  const date = new Date();
+  date.setHours(12, 0, 0, 0);
+  date.setDate(date.getDate() + offsetDays);
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
 test("completeTaskAtCursor settles the closed note before finalizing", async () => {
   const path = "Areas/home.md";
   const source = [
@@ -135,6 +143,76 @@ test("recurring close locates the [x] row, not the spawned next occurrence", asy
   });
   assert.ok(Number.isInteger(located));
   assert.match(editor.getLine(located), /^- \[x\] /);
+});
+
+test("future recurring spawns block; today and past spawns stay open for id and idless tasks", async () => {
+  const today = localDateOffset(0);
+  for (const withId of [true, false]) {
+    for (const scenario of [
+      { name: "future", scheduled: localDateOffset(1), expected: "?" },
+      { name: "today", scheduled: today, expected: " " },
+      { name: "past", scheduled: localDateOffset(-1), expected: " " },
+    ]) {
+      const originalLine = `- [ ] #task Water plants [repeat:: every week]${withId ? " ^plants" : ""}`;
+      const spawnLine = `- [ ] #task Water plants [repeat:: every week] [scheduled:: ${scenario.scheduled}]`;
+      const closedLine = originalLine.replace("- [ ]", "- [x]");
+      const source = [
+        "---",
+        "type: [[area]]",
+        "---",
+        "## Tasks",
+        "",
+        originalLine,
+        "",
+      ].join("\n");
+      const path = `Areas/recurring-${withId ? "id" : "idless"}-${scenario.name}.md`;
+      const harness = createInMemoryObsidianApp({ [path]: source });
+      const editor = createTextEditor(source, { line: 5, ch: 4 });
+      const plugin = new TaskStatusCyclerPlugin();
+      const attached = attachActiveMarkdownView(plugin, harness, editor, path);
+      attachViewLeaves(harness, attached.view);
+      attachRealTaskSettle(harness);
+      installTasksCloseCommand(plugin, editor, { spawnText: spawnLine });
+
+      const result = await plugin.completeTaskAtCursor(editor);
+      assert.equal(result.ok, true, `${withId ? "id" : "idless"} ${scenario.name}`);
+      assert.equal(result.lineDelta, 1);
+      const after = editor.getValue();
+      const expectedSpawn = spawnLine.replace("- [ ]", `- [${scenario.expected}]`);
+      assert.match(after, new RegExp(`^${expectedSpawn.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"));
+      if (scenario.expected === "?") {
+        assert.match(after, /### Blocked/);
+      } else {
+        assert.doesNotMatch(after, /### Blocked/);
+      }
+
+      const located = plugin.locateSettledClosedTask(editor, {
+        blockId: withId ? "plants" : null,
+        closedText: closedLine,
+        hintLine: after.split("\n").findIndex((line) => line === closedLine),
+      });
+      assert.ok(Number.isInteger(located), `${withId ? "id" : "idless"} ${scenario.name} closed row found`);
+      assert.equal(editor.getLine(located), closedLine, "the locator returns the closed row, never the spawn");
+      assert.equal(plugin.settleTargetContents(path, after).changed, false, "settled output is idempotent");
+    }
+  }
+});
+
+test("ineligible daily note closes without grouping", async () => {
+  const source = dailySource(["- [ ] #task Ordinary daily task"]);
+  const harness = createInMemoryObsidianApp({ [DAILY]: source });
+  const editor = createTextEditor(source, { line: 2, ch: 4 });
+  const plugin = new TaskStatusCyclerPlugin();
+  const attached = attachActiveMarkdownView(plugin, harness, editor, DAILY);
+  attachViewLeaves(harness, attached.view);
+  attachRealTaskSettle(harness);
+  installTasksCloseCommand(plugin, editor);
+
+  const result = await plugin.completeTaskAtCursor(editor);
+  assert.equal(result.ok, true);
+  assert.match(editor.getValue(), /^- \[x\] #task Ordinary daily task/m);
+  assert.doesNotMatch(editor.getValue(), /^### (?:Blocked|Next & In Progress|Done & Canceled)$/m);
+  assert.equal(plugin.settleTargetContents(DAILY, editor.getValue()).changed, false);
 });
 
 test("idless rows verify by exact text and survive settle", async () => {

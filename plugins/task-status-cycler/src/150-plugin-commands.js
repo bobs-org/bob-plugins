@@ -721,14 +721,17 @@ class TaskStatusCyclerCommandsMixin {
         if (wrote) {
           changed = true;
           const changedLine = editorLineFor(line);
+          if (taskStatus.symbol === BLOCKED_TASK_STATUS_SYMBOL) {
+            this.applyBlockedStatusRetirementInEditor(editor, editorLineFor(line));
+          }
+          // Retiring a Blocked schedule rewrites this row (and may insert a
+          // Schedule Log line). Snapshot the identity from that post-retire
+          // text so an idless row is not armed with stale source bytes.
           const settleIdentity = this.taskSettleIdentityAtEditorLine(
             editor,
             changedLine,
           );
           if (settleIdentity) cycleSettleIdentities.push(settleIdentity);
-          if (taskStatus.symbol === BLOCKED_TASK_STATUS_SYMBOL) {
-            this.applyBlockedStatusRetirementInEditor(editor, editorLineFor(line));
-          }
           if (activePath && (nextSymbol === "x" || nextSymbol === "-")) {
             const identity = closedTaskIdentity(activePath, lineText);
             if (identity) {

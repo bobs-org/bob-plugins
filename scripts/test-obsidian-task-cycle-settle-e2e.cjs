@@ -7,6 +7,7 @@ const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 const { CdpClient, freePort, seedProfileVault } = require("./obsidian-startup-smoke.cjs");
+const { helpers: navJumpHelpers } = require("./navigation-hotkeys-harness.cjs");
 
 const repoRoot = path.resolve(__dirname, "..");
 const OBSIDIAN = process.env.OBSIDIAN_BIN || "/snap/obsidian/current/app/obsidian";
@@ -189,8 +190,8 @@ async function main() {
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       const secondUndo = editor.getValue();
       const undoSteps = firstUndo === singleGesture ? 2 : firstUndo === original ? 1 : 0;
-      if (!undoSteps || (undoSteps === 2 && secondUndo !== original)) {
-        throw new Error("delayed cycle settle undo sequence was not cycle then settle");
+      if (undoSteps !== 1) {
+        throw new Error("delayed cycle settle must undo to the original buffer in one step");
       }
       editor.redo();
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
@@ -201,8 +202,9 @@ async function main() {
         await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
         secondRedo = editor.getValue();
       }
-      const redoSettled = firstRedo === singleSettled || secondRedo === singleSettled;
-      if (!redoSettled) throw new Error("redo did not restore the settled cycle");
+      const redoSteps = firstRedo === singleSettled ? 1 : secondRedo === singleSettled ? 2 : 0;
+      const redoSettled = redoSteps === 1;
+      if (!redoSettled) throw new Error("delayed cycle settle must redo to the settled buffer in one step");
 
       await dispatchCycle("double");
       const firstDoubleStatus = symbolFor("double");
@@ -250,6 +252,9 @@ async function main() {
       return {
         singleStatus,
         singleUndoSteps: undoSteps,
+        singleRedoSteps: redoSteps,
+        singleFirstUndoRestoredOriginal: firstUndo === original,
+        singleFirstRedoRestoredSettled: firstRedo === singleSettled,
         singleJump,
         doubleStatus,
         cursorLeaveFlushed: true,
@@ -258,6 +263,31 @@ async function main() {
         oldTaskLineBeforeCursorFlush: leaveLine,
       };
     })())()`, 20_000);
+
+    // Apply nav's exported history helpers to the recorded pair. The task is
+    // `from`, the physical-line stay cursor is `to`, so the first Ctrl+O must
+    // land on the moved task.
+    const jumpHistory = navJumpHelpers.createVimJumpHistory();
+    const jumpRecorded = navJumpHelpers.recordVimJumpTransition(
+      jumpHistory,
+      result.singleJump.from,
+      result.singleJump.to,
+    );
+    const tipRefreshed = navJumpHelpers.refreshVimJumpCurrentLocation(
+      jumpHistory,
+      result.singleJump.to,
+    );
+    const historyTip = navJumpHelpers.getVimJumpCurrentIndex(jumpHistory);
+    const firstCtrlOLocation = historyTip > 0 ? jumpHistory.entries[historyTip - 1] : null;
+    const ctrlOOrderVerified = jumpRecorded && !tipRefreshed && firstCtrlOLocation &&
+      firstCtrlOLocation.path === result.singleJump.from.path &&
+      firstCtrlOLocation.line === result.singleJump.from.line &&
+      firstCtrlOLocation.ch === result.singleJump.from.ch;
+    if (!ctrlOOrderVerified) {
+      throw new Error(`cycle settle jump does not return to moved task on first Ctrl+O: ${JSON.stringify({ result: result.singleJump, entries: jumpHistory.entries })}`);
+    }
+    result.ctrlOOrderVerified = true;
+    result.firstCtrlOLocation = firstCtrlOLocation;
 
     passed = true;
     console.log(JSON.stringify({ pass: true, result }));

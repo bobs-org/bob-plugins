@@ -534,7 +534,7 @@ function createCompleteAtCursorPlugin(editor, { path = "gtd_daily.md" } = {}) {
   return plugin;
 }
 
-function installTasksCloseCommand(plugin, editor, { insertAbove = false } = {}) {
+function installTasksCloseCommand(plugin, editor, { insertAbove = false, spawnText = null } = {}) {
   const doneCommand = "obsidian-tasks-plugin:set-status-symbol-to-x";
   const executed = [];
   plugin.app.commands = {
@@ -544,8 +544,10 @@ function installTasksCloseCommand(plugin, editor, { insertAbove = false } = {}) 
       const cursor = editor.getCursor();
       const current = editor.getLine(cursor.line);
       const closed = current.replace(/\[[^\]\n]\]/, "[x]");
-      const replacement = insertAbove
-        ? `${current.replace(/\[[^\]\n]\]/, "[ ]")}\n${closed}`
+      const replacement = spawnText
+        ? `${String(spawnText)}\n${closed}`
+        : insertAbove
+          ? `${current.replace(/\[[^\]\n]\]/, "[ ]")}\n${closed}`
         : closed;
       editor.replaceRange(
         replacement,

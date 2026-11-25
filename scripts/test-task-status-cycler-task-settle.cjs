@@ -216,6 +216,49 @@ test("counted cycles defer writes and schedule one settle after the whole range"
   }
 });
 
+test("counted idless Blocked recurrence snapshots identity after future schedule retirement", async () => {
+  const text = [
+    "---",
+    "type: [[area]]",
+    "---",
+    "## Tasks",
+    "",
+    "### Blocked",
+    `- [?] #task Water plants [repeat:: every week] [scheduled:: ${new Date(Date.now() + 86_400_000).toISOString().slice(0, 10)}]`,
+    "",
+  ].join("\n");
+  const { editor, cycler, timers, app, ledger } = makeLivePair({
+    text,
+    cursor: { line: 6, ch: 0 },
+  });
+  let scheduledIdentity = null;
+  const schedule = cycler.scheduleTaskCycleSettle.bind(cycler);
+  cycler.scheduleTaskCycleSettle = (targetEditor, path, identity) => {
+    scheduledIdentity = identity;
+    return schedule(targetEditor, path, identity);
+  };
+  let pendingOutcome = null;
+  const applyPending = ledger.taskSettleApplyPending.bind(ledger);
+  ledger.taskSettleApplyPending = (entry) => {
+    pendingOutcome = applyPending(entry);
+    return pendingOutcome;
+  };
+
+  assert.equal(await cycler.cycleTaskStatusRange(editor, { path: AREA }, 1, 0), true);
+  assert.match(editor.getLine(6), /^- \[ \] #task Water plants \[repeat:: every week\]$/);
+  assert.equal(scheduledIdentity.text, editor.getLine(6));
+  assert.equal(timers.timers.filter((timer) => !timer.cleared).length, 1);
+  assert.match(editor.getValue(), /### Blocked/);
+
+  timers.fire(timers.last());
+  assert.equal(pendingOutcome.applied, true, JSON.stringify(pendingOutcome));
+  assert.equal(pendingOutcome.changed, true, JSON.stringify(pendingOutcome));
+  const settled = editor.getValue();
+  assert.doesNotMatch(settled, /### Blocked/);
+  assert.match(settled, /^- \[ \] #task Water plants \[repeat:: every week\]$/m);
+  assert.doesNotMatch(settled, /\[scheduled::/);
+});
+
 test("a cycle whose delayed settle sees a different note keeps the new note untouched", () => {
   const { editor, cycler, timers, app, jumps } = makeLivePair({
     cursor: { line: 7, ch: 6 },

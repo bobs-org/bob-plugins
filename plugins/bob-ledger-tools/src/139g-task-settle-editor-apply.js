@@ -262,7 +262,7 @@ function taskSettleDispatchApply(editor, plan, options = {}) {
     }));
     const spec = {
       changes: cmChanges,
-      userEvent: joinHistory ? "input" : "bob.taskSettle",
+      userEvent: joinHistory ? "input.type.compose" : "bob.taskSettle",
     };
     if (selection) {
       spec.selection = {

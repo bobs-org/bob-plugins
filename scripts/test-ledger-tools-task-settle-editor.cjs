@@ -123,7 +123,9 @@ class SettleEditor extends Cm6MappingEditor {
           const joined =
             editor.joinable &&
             spec &&
-            spec.userEvent === "input" &&
+            (spec.userEvent == null ||
+              /^(input\.type|delete)($|\.)/.test(spec.userEvent) ||
+              spec.userEvent === "input.type.compose") &&
             editor.undoGroups > 0;
           const changes = (spec.changes || []).map((change) => ({
             from: editor.positionOf(change.from),
@@ -546,7 +548,7 @@ test("CRLF coordinates stay CRLF and still apply hunks", () => {
   assert.equal(editor.getValue().includes("\n") || true, true);
 });
 
-test("already-applied write joins through cm.dispatch; transaction fallback is a second undo", () => {
+test("joined apply requests CM6's always-join compose event; transaction fallback is a second undo", () => {
   const withCm = new SettleEditor(AREA_INPUT, { line: 8, ch: 0 }, { withCm: true, joinable: true });
   withCm.undoGroups = 1;
   const joined = apply(withCm, AREA, {
@@ -555,7 +557,7 @@ test("already-applied write joins through cm.dispatch; transaction fallback is a
   });
   assert.equal(joined.applied, true);
   assert.equal(joined.historyJoined, true);
-  assert.equal(withCm.lastUserEvent, "input");
+  assert.equal(withCm.lastUserEvent, "input.type.compose");
   assert.equal(withCm.undoGroups, 1, "CM6 join keeps one undo group");
 
   const fallback = new SettleEditor(AREA_INPUT, { line: 8, ch: 0 });

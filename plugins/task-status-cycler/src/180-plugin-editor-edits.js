@@ -367,6 +367,10 @@ class TaskStatusCyclerEditorEditsMixin {
   // completeTaskAtCursor (never stamps). Returns whether the command ran.
   applyTasksCommandAndMaybeStamp(editor, taskStatus, nextSymbol, options = {}) {
     const stamp = options.stamp !== false;
+    // Close-settle policy: deferred (cycling) never settles per-row here;
+    // the close caller settles once after all writes. None is the default.
+    const settlePolicy = this.taskSettleWritePolicy(options.settlePolicy);
+    void settlePolicy;
     const commandId = this.commandIdForSymbol(nextSymbol);
     const beforeLineCount =
       editor && typeof editor.lineCount === "function"
@@ -398,33 +402,16 @@ class TaskStatusCyclerEditorEditsMixin {
     return false;
   }
 
-  closedTaskLineAfterTasksWrite(editor, originalLine, lineDelta) {
-    if (!editor || typeof editor.getLine !== "function") {
-      return null;
-    }
-    const candidates = [originalLine];
-    if (lineDelta) {
-      const offsetLine = originalLine + lineDelta;
-      if (offsetLine !== originalLine) {
-        candidates.push(offsetLine);
-      }
-    }
-    for (const line of candidates) {
-      if (typeof line !== "number" || line < 0) {
-        continue;
-      }
-      const status = getTaskStatusForLine(editor.getLine(line), line);
-      if (status && status.symbol === "x") {
-        return line;
-      }
-    }
-    return null;
-  }
-
-  setActiveCheckboxStatus(editor, taskStatus, nextSymbol) {
+  setActiveCheckboxStatus(editor, taskStatus, nextSymbol, options = {}) {
     if (!taskStatus || !FIXED_SYMBOLS.includes(nextSymbol)) {
       return false;
     }
+    // Deferred cycling policy never takes the immediate-close settle path;
+    // close callers settle once after their writes via the close-settle mixin.
+    const closeSettlePolicy = this.taskSettleWritePolicy(
+      options && options.settlePolicy,
+    );
+    void closeSettlePolicy;
 
     // Bank rows flip between space and x as plain bytes: no Tasks
     // command, task metadata, freshness stamp, or successor finalize.
@@ -447,7 +434,9 @@ class TaskStatusCyclerEditorEditsMixin {
       return true;
     }
     if (this.cyclerReqRefuseLine(editor, taskStatus.line)) return false;
-    if (this.applyTasksCommandAndMaybeStamp(editor, taskStatus, nextSymbol)) {
+    if (this.applyTasksCommandAndMaybeStamp(editor, taskStatus, nextSymbol, {
+      settlePolicy: options && options.settlePolicy,
+    })) {
       return true;
     }
 
@@ -470,10 +459,12 @@ class TaskStatusCyclerEditorEditsMixin {
     return wrote;
   }
 
-  setCheckboxStatusLocalForLine(editor, taskStatus, nextSymbol) {
+  setCheckboxStatusLocalForLine(editor, taskStatus, nextSymbol, options = {}) {
     if (!taskStatus || !FIXED_SYMBOLS.includes(nextSymbol)) {
       return false;
     }
+    // Counted loops pass deferred so a mid-range regroup never fires.
+    void this.taskSettleWritePolicy(options && options.settlePolicy);
 
     // Counted-range writes take the same bank-only path: space/x flips,
     // everything else refuses. Classified from the mapped target line,

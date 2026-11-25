@@ -31,6 +31,7 @@ installTaskStatusCyclerMixins(TaskStatusCyclerPlugin, [
   TaskStatusCyclerVimMixin,
   TaskStatusCyclerOpenLineMixin,
   TaskStatusCyclerTaskSettleMixin,
+  TaskStatusCyclerCloseSettleMixin,
   TaskStatusCyclerCommandsMixin,
   TaskStatusCyclerCompletionMixin,
   TaskStatusCyclerCompletionLinksMixin,

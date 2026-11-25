@@ -337,19 +337,44 @@ class TaskStatusCyclerCompletionMixin {
     if (!mail || mail.confirmed !== true) {
       return { ok: false, reason: "mail-close-kept" };
     }
+    const closeSettleIdentity = this.closeSettleSnapshotForTaskStatus(taskStatus);
     const beforeLineCount = this.getEditorLineCount(editor);
 
     if (
       !this.applyTasksCommandAndMaybeStamp(editor, taskStatus, "x", {
         stamp: false,
+        settlePolicy: "immediate",
       })
     ) {
       return { ok: false, reason: "not-closed" };
     }
 
     const lineDelta = this.getEditorLineCount(editor) - beforeLineCount;
-    if (this.closedTaskLineAfterTasksWrite(editor, taskStatus.line, lineDelta) === null) {
+    const verifiedClose = this.verifyClosedTaskAfterTasksWrite(
+      editor,
+      taskStatus.line,
+      lineDelta,
+    );
+    if (!verifiedClose) {
       return { ok: false, reason: "not-closed" };
+    }
+
+    // Full-note settle before successor finalization: future recurring
+    // spawns and group/badge moves land in one post-Tasks apply. The
+    // reported lineDelta stays about the Tasks rewrite itself.
+    if (closeSettleIdentity) {
+      const closeSettleResult = this.settleCloseInActiveEditor(
+        editor,
+        activePath,
+        closeSettleIdentity,
+      );
+      if (closeSettleResult && closeSettleResult.applied) {
+        this.locateSettledClosedTask(editor, {
+          blockId: closeSettleIdentity.blockId || null,
+          closedText: verifiedClose.text,
+          hintLine: verifiedClose.line,
+        });
+      }
     }
 
     // Successor notice is returned, never shown here: nav's walk caller
@@ -436,11 +461,26 @@ class TaskStatusCyclerCompletionMixin {
     const reqCloseOwners = closing
       ? this.captureReqCloseOwnersForResolvedTarget(resolvedTarget, context)
       : [];
+    const singleSettleIdentity = closing
+      ? this.snapshotTaskSettleIdentity(
+        resolvedTarget.taskStatus.lineText,
+        resolvedTarget.line,
+        { blockId: resolvedTarget.blockId },
+      )
+      : null;
     const wrote = await this.replaceResolvedTranscludedTaskLine(
       resolvedTarget,
       context,
+      null,
+      { settlePolicy: closing ? "immediate" : "none" },
     );
     if (wrote && closing) {
+      if (
+        singleSettleIdentity &&
+        this.fileMatchesPath(resolvedTarget.file, activePath)
+      ) {
+        this.settleCloseInActiveEditor(editor, activePath, singleSettleIdentity);
+      }
       await this.finalizeClosedTasks([identity], { ...context, reqCloseOwners });
     }
     return wrote;
@@ -495,6 +535,9 @@ class TaskStatusCyclerCompletionMixin {
       }
     }
 
+    const propagateSettleIdentity = closing
+      ? this.closeSettleSnapshotForTaskStatus(taskStatus)
+      : null;
     const wrote = this.toggleActiveCheckboxOpenDone(editor, taskStatus);
     if (!wrote) {
       return false;
@@ -508,6 +551,12 @@ class TaskStatusCyclerCompletionMixin {
       reqCloseOwners,
       options,
     );
+    // Settle the active note after local and same-note transcluded writes,
+    // before successor finalization and walk continuation. Successor and
+    // walk focus resolve last and win over the generic settle cursor.
+    if (closing && wrote && editor && activePath && propagateSettleIdentity) {
+      this.settleCloseInActiveEditor(editor, activePath, propagateSettleIdentity);
+    }
     const identities = [localIdentity, targetIdentity].filter(Boolean);
     if (identities.length || (closing && reqCloseOwners.length > 0)) {
       // Walk landings pass `successorNoticeTarget: "return"` with a
@@ -599,6 +648,7 @@ class TaskStatusCyclerCompletionMixin {
           resolvedTarget,
           context,
           "x",
+          { settlePolicy: "immediate" },
         );
       }
     } else if (isTranscludedReopenableStatus(resolvedTarget.taskStatus)) {
@@ -606,7 +656,7 @@ class TaskStatusCyclerCompletionMixin {
         resolvedTarget,
         context,
         " ",
-        { forcedStatusPredicate: isTranscludedReopenableStatus },
+        { forcedStatusPredicate: isTranscludedReopenableStatus, settlePolicy: "none" },
       );
     }
     if (!wrote) {

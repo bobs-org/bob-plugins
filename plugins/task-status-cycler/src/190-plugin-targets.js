@@ -323,6 +323,45 @@ class TaskStatusCyclerTargetsMixin {
       return false;
     }
 
+    // Close-settle: compose the planned bytes with a staged settle in one
+    // editor transaction. Falls back to the plain line write when the
+    // provider is missing or the preimage is stale.
+    const settlePolicy = this.taskSettleWritePolicy(options && options.settlePolicy);
+    if (
+      settlePolicy === "immediate" &&
+      (forcedNextSymbol === "x" || forcedNextSymbol == null) &&
+      typeof editor.getValue === "function"
+    ) {
+      try {
+        const before = String(editor.getValue());
+        const beforeLines = before.split("\n");
+        if (
+          Number.isInteger(resolvedTarget.line) &&
+          resolvedTarget.line >= 0 &&
+          resolvedTarget.line < beforeLines.length &&
+          (beforeLines[resolvedTarget.line] || "") === currentLineText
+        ) {
+          const plannedLines = beforeLines.slice();
+          plannedLines[resolvedTarget.line] = nextLineText;
+          const planned = plannedLines.join("\n");
+          const staged = this.applyTaskSettleToEditor(
+            editor,
+            resolvedTarget.file && resolvedTarget.file.path,
+            {
+              expected: before,
+              contents: planned,
+              identity: this.snapshotTaskSettleIdentity(nextLineText, resolvedTarget.line, {
+                blockId: resolvedTarget.blockId,
+                text: nextLineText,
+              }),
+            },
+          );
+          if (staged && staged.applied) return true;
+        }
+      } catch (_error) {
+        // Fall through to the plain line write below.
+      }
+    }
     editor.replaceRange(
       nextLineText,
       { line: resolvedTarget.line, ch: 0 },
@@ -340,18 +379,27 @@ class TaskStatusCyclerTargetsMixin {
       return false;
     }
 
+    const vaultSettlePolicy = this.taskSettleWritePolicy(options && options.settlePolicy);
     let changed = false;
     const updateSourceText = (sourceText) => {
+      // Re-resolve the block ID against the live target text: async
+      // confirmation may have moved the row since resolution.
+      const liveLine = typeof this.resolveLiveTranscludedCloseLine === "function"
+        ? this.resolveLiveTranscludedCloseLine(sourceText, resolvedTarget.blockId, resolvedTarget.line)
+        : resolvedTarget.line;
+      if (!Number.isInteger(liveLine)) {
+        return sourceText;
+      }
       const currentLineText = getLineTextFromSourceText(
         sourceText,
-        resolvedTarget.line,
+        liveLine,
       );
       const nextLineText = this.getNextTranscludedTaskLineText(
         currentLineText,
-        resolvedTarget.line,
+        liveLine,
         resolvedTarget.blockId,
         forcedNextSymbol,
-        this.isPomodoroLedgerLineInSourceText(sourceText, resolvedTarget.line)
+        this.isPomodoroLedgerLineInSourceText(sourceText, liveLine)
           ? { ...options, skipFreshnessStamp: true }
           : options,
       );
@@ -361,7 +409,7 @@ class TaskStatusCyclerTargetsMixin {
 
       const nextSourceText = replaceLineInSourceText(
         sourceText,
-        resolvedTarget.line,
+        liveLine,
         nextLineText,
       );
       if (nextSourceText === null) {
@@ -369,6 +417,19 @@ class TaskStatusCyclerTargetsMixin {
       }
 
       changed = true;
+      // Compose the flipped target with a pure settle inside the same vault
+      // callback so the note is written once. The read/modify fallback below
+      // reuses this same composer. Missing providers keep flipped bytes.
+      if (vaultSettlePolicy === "immediate") {
+        try {
+          return this.settleComposedTargetContents(
+            resolvedTarget.file && resolvedTarget.file.path,
+            nextSourceText,
+          );
+        } catch (_error) {
+          return nextSourceText;
+        }
+      }
       return nextSourceText;
     };
 

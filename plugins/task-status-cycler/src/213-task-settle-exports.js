@@ -3,4 +3,5 @@ Object.assign(module.exports.helpers, {
   normalizeTaskSettleWritePolicy,
   snapshotTaskSettleIdentity,
   taskSettleJumpKey,
+  closeSettleNormalizePolicyForWrite,
 });

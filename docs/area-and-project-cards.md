@@ -68,7 +68,8 @@ route API says the note is the inbox, and Projects can show a root pill, but car
 not infer inbox status from the filename or display inherited policy values.
 
 The shared Properties foot remains below the card. `-` toggles that drawer and `+`
-opens the Property Editor; home cards do not register `==`. Its collapsed state is
+opens the Property Editor; `==` on an area or project note opens the editor on
+the first settings row, and a policy chip opens it on its own setting. Its collapsed state is
 remembered per note for the current session. Collapsing an Area hides its summary and
 property chips/readout; a Project keeps its lifecycle line visible.
 

@@ -217,19 +217,44 @@ test("project task rows carry current line text and become unavailable without a
   assert.equal(H.propertyEditorActionForRow(goal.row).action, "locked");
 });
 
-test("project virtual rows jump to the exact current ^prj line without changing it", async () => {
+test("project virtual rows hand off to the Task Card at the current ^prj line", async () => {
   const modal = modalFor(report("project"));
   const text = ["---", "type: project", "---", "- [ ] Ship the first slice #prj ^project-task", ""].join("\n");
-  let opened = null;
-  modal.app = { vault: {
-    getAbstractFileByPath: (path) => ({ path }),
-    cachedRead: async () => text,
-  } };
-  modal.propertyPlugin = { propertyEditorYamlJump: async (...args) => { opened = args; return { ok: true }; } };
+  const cursors = [];
+  const picked = [];
+  const writes = [];
+  const editor = {
+    getValue: () => text,
+    setCursor: (pos) => { cursors.push(pos); },
+    scrollIntoView() {},
+    focus() {},
+  };
+  const leaf = { view: { file: { path: "notes/project.md" }, editor } };
+  modal.app = {
+    vault: {
+      getAbstractFileByPath: (path) => ({ path }),
+      cachedRead: async () => text,
+      modify: async () => { writes.push("modify"); },
+    },
+    workspace: {
+      activeLeaf: leaf,
+      getLeavesOfType: () => [leaf],
+      getMostRecentLeaf: () => leaf,
+      setActiveLeaf: () => {},
+      openLinkText: async () => { throw new Error("already open"); },
+    },
+    plugins: { plugins: { "bob-navigation-hotkeys": {
+      openBulletPropertyPicker: async (...args) => { picked.push(args); return true; },
+    } } },
+  };
+  modal.propertyPlugin = { app: modal.app };
   modal.close = () => { modal.closed = true; };
   await modal.propertyEditorActivate(H.propertyEditorSettingsFindEntry(modal, "project-task::goal"));
-  assert.deepEqual(opened, ["notes/project.md", 4]);
+  assert.deepEqual(cursors, [{ line: 3, ch: 0 }]);
+  assert.equal(picked.length, 1);
+  assert.equal(picked[0][0], editor);
   assert.equal(modal.closed, true);
+  assert.deepEqual(writes, [], "navigation never writes");
   assert.equal(modal.report.contract.prj.line, "- [ ] Ship the first slice #prj ^project-task");
 
   const absent = modalFor(report("project"));

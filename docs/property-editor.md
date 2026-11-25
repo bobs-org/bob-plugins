@@ -29,6 +29,8 @@ range selection, and filtering follow the visible grouped rows.
   await ledgerTools.openPropertyEditor({
     filePath: "Projects/roadmap.md", // optional; defaults to the active note
     key: "status",                   // optional initial row
+    setting: "clock",                // optional setting id (aliases like theme map too)
+    focusSettings: true,             // optional: land on the first settings row
     mode: "browse",                  // browse, edit, or add
   });
   ```
@@ -37,7 +39,16 @@ An explicit `filePath` wins over the active note. The editor refuses missing
 files and non-Markdown targets. `mode: "edit"` opens the requested loose
 property's value stage or hands a card property to its owner. A checkbox stays
 selected so opening the editor never flips it as a side effect.
-`mode: "add"` starts the property-name stage.
+`mode: "add"` starts the property-name stage. A `setting` request selects that
+settings row once the report arrives, even when the setting is a ghost; a raw
+caller key such as `theme`, `offclock`, or `offclock_types` maps onto its
+logical setting in browse mode. On a degraded report the request selects the
+corresponding real property when present, otherwise a safe first row.
+
+On area and project notes, `==` and the card Settings control open the editor
+on the first settings row; a policy chip opens it on its own setting. `+`
+opens the editor on any Markdown note: on `bank.md` it shows the area
+settings, while `==` there keeps opening the bank card editor.
 
 ## Ownership and rows
 
@@ -46,15 +57,71 @@ fingerprint decide what each row can do.
 
 | Group | What it contains | Enter |
 | --- | --- | --- |
+| Area/Project settings | Typed settings in Bob's contract order (summary, lives under, hue, default type, clock, caps, review, capture names; projects add stats root) | Open that setting's control |
+| On the `^prj` line | Project goal, starts, and depends-on navigation rows | Open the current project task's Task Card |
 | Loose | Values with no other Bob owner, including `created` | Edit the value here |
 | On the `<Kind>` card | Fields owned by a record, album, bank, or day/period card | Hand off to that card's `==` editor |
-| Identity | Note identity such as `type`, `parent`, or an album title | Locked; `y` opens YAML |
+| Identity | Note identity such as `type`, or a project `status` | Locked, except project `status`, which navigates to `^prj`; `y` opens YAML |
 | Bob-managed | Derived and generated values | Locked with Bob's writer/reason; `y` opens YAML |
 
 Locked rows stay locked for every action, including delete and type-specific
 gestures. Unknown ownership is also locked until Bob reports a role. A card
 field on a note without that card's editor explains the route instead of
 pretending to edit it here.
+
+## Area and project settings
+
+On area, project, and bank notes with a current `props_contract_v1` report,
+the editor groups typed settings before ordinary properties. Area and bank
+notes show **AREA SETTINGS** (summary, lives under, hue, default type, clock,
+ready cap, review, capture names); projects show **PROJECT SETTINGS** (lives
+under, hue, default type, clock, stats root, ready cap, review, capture
+names). Each row names its label, YAML keys, and effective or declared value,
+with `set` only when the note declares it. `theme` merges into Default type
+and both clock keys merge into Clock, so those source entries never appear
+again as loose rows.
+
+A ghost — a setting the note does not declare — is faint and italic but
+legible, and shows Bob's effective label and help. A missing required parent
+is a warning, never an inherited value. Ready cap and Review point at the Bob
+setting rather than parent inheritance; Default type `off` stops parent
+defaults and an explicit grey stays a mute.
+
+Enter on a ghost opens an override draft seeded from the reported effective
+value; opening never writes. Dedicated saves go through `setting.set` and
+Ctrl+D clears through `setting.clear`, each dry-run first with the candidate
+contract's effective label and `effects` rendered inline so a clear explains
+what will apply and where it comes from. Every accepted batch is one undoable
+history item, and the confirmed post-apply contract replaces the rows — a
+candidate preview never leaks into cards or overlays.
+
+Summary edits one line with a live `N/140` count (Bob refuses multiline and
+warns past 140 without blocking). Ready cap is a count stepper from 1 to 999
+or `off` (`o` toggles in the control). Review takes 1–365 days and applies to
+tasks living in the note. Capture names reuse the ordered List stage with
+Bob's duplicate and collision warnings. Stats root toggles between `true` and
+absence, and stays disabled on top-level projects. Parent, hue, default type,
+and clock reuse generic stages for now, with Bob validating; a logical clock
+value is always submitted as the strict mode object, and generic edits to an
+actual clock key use that key's `prop.*` op.
+
+Settings and project-task rows cannot be renamed, reordered, or kind-changed.
+Copying a declared setting copies its actual source bytes; copying a ghost is
+a no-op with a teaching message. Batch deletion maps declared settings to
+`setting.clear` ops and refuses a mixed protected selection as a whole.
+
+Projects add **ON THE `^PRJ` LINE**: goal, starts, and depends-on rows that
+navigate to the current `^prj` task's Task Card. A missing or archived task
+reports absence without creating anything; project `status` navigates only.
+Navigation never writes task fields or frontmatter dates. The collapsed
+Bob-managed group keeps its count, with source rows, writer labels, and YAML
+access on expand; template stays editable and retired counts stay deletable
+with their explanation, while `done_tasks` offers its archive link.
+
+Without `props_contract_v1`, the editor renders the landed generic properties
+with **Update bob for typed settings**. Without `props_v1`, cached rows stay
+read-only with YAML recovery. Malformed YAML, duplicates, missing
+fingerprints, and unresolved ownership keep their existing safety behavior.
 
 ## Browse keys
 
@@ -78,7 +145,7 @@ These keys act while browsing the rows, not while typing in a value field.
 | Ctrl+R / Ctrl+Shift+Z | Redo the latest undone edit |
 | `y` / Ctrl+E | Open the property's YAML line in Source mode |
 | Mod+C / Mod+V | Copy marked properties or the focused property; paste a YAML mapping |
-| `=` | Open the note's owning `==` card editor when one is available |
+| `=` | Open the note's owning `==` card editor when one is available; on an area or project note, focus the settings group in place |
 | Esc / `q` / Ctrl+[ | Back out one layer, then close |
 
 `q` follows Esc's layer and types only in a text control. Ctrl+[ is Esc's alias

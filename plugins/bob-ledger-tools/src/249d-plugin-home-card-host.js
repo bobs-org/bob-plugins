@@ -368,15 +368,16 @@ class BobLedgerToolsHomeCardMixin {
     this.scheduleHomeCardRefresh();
   }
 
-  // Small callback seam for the later editor-settings phase: policy chips
-  // route here by setting id, and today this opens the landed browse modal.
+  // Policy chips route by setting id; an empty key focuses first settings.
   homeCardOpenSetting(filePath, key) {
     const target = homeCardPath(filePath);
     if (!target) return { ok: false, reason: "missing-path" };
     try {
-      if (typeof this.openPropertyEditor === "function") {
-        return this.openPropertyEditor({ filePath: target, key: key || undefined, mode: "browse" });
-      }
+      if (typeof this.openPropertyEditor !== "function") return { ok: false, reason: "editor-unavailable" };
+      const setting = typeof propertyEditorSettingIdForKey === "function" ? propertyEditorSettingIdForKey(key || "") || "" : "";
+      if (!key) return this.openPropertyEditor({ filePath: target, focusSettings: true, mode: "browse" });
+      if (setting) return this.openPropertyEditor({ filePath: target, setting, mode: "browse" });
+      return this.openPropertyEditor({ filePath: target, key, mode: "browse" });
     } catch (_) {}
     return { ok: false, reason: "editor-unavailable" };
   }

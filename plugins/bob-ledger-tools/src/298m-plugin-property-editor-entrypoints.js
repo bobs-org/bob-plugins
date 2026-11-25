@@ -279,6 +279,20 @@ class BobLedgerToolsPropertyEditorEntrypointsMixin {
     const key = typeof options.key === "string" ? options.key : "";
     const selection = options.selection && typeof options.selection === "object" ? options.selection : null;
     const mode = options.mode === "add" || options.mode === "edit" ? options.mode : "browse";
+    // A raw key that names a setting (theme, offclock, offclock_types, or a
+    // setting id) becomes a setting-focus request in browse mode, so drawer
+    // and foot callers land on the settings row instead of a stale source
+    // id. An explicit setting option always wins; add/edit keep the key.
+    let setting = typeof options.setting === "string" ? options.setting : "";
+    if (!setting && mode === "browse" && !(selection && typeof selection.key === "string" && selection.key)
+      && key && typeof propertyEditorSettingIdForKey === "function") {
+      try {
+        setting = propertyEditorSettingIdForKey(key) || "";
+      } catch (_) {
+        setting = "";
+      }
+    }
+    const focusSettings = options.focusSettings === true;
     let modal = null;
     try {
       modal = openPropertyEditor(this.app, {
@@ -288,6 +302,8 @@ class BobLedgerToolsPropertyEditorEntrypointsMixin {
         selection,
         mode,
         cacheRows,
+        setting,
+        focusSettings,
         noteKind: typeof options.noteKind === "string" ? options.noteKind : undefined,
         onCardHandoff: (info = {}) => this.propertyEditorHandoff({ ...info, modal: info.modal || null }),
         onYamlEscape: (info = {}) => this.propertyEditorYamlEscape({ ...info, modal: info.modal || null }),

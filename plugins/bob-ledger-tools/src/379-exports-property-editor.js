@@ -258,6 +258,13 @@ try {
       propertyEditorAdoptConfirmedContract,
       propertyEditorRegisterSettingStageHandler,
       propertyEditorSettingStageHandler,
+      PROPERTY_EDITOR_SETTING_KEY_ALIASES,
+      propertyEditorSettingIdForKey,
+      propertyEditorSettingsFocusEntry,
+      propertyEditorSettingsFocusFirst,
+      propertyEditorSettingsConsumeFocus,
+      propertyEditorProjectTaskHandoff,
+      propertyEditorHomeKindMatch,
     });
   }
 } catch (_) {}

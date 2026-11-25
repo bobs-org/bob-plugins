@@ -35696,7 +35696,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.setupWorkspaceScrollGuard();
     this.setupNotebookData(); this.setupAlbumData(); this.setupProjectsData(); this.setupAreasData(); this.setupBankData(); this.setupBankActions(); this.setupBankWalk();
     this.setupBankCards(); this.setupBankBadge(); this.setupBankMarks(); this.setupBankSetup(); this.setupBankSetupCard(); this.setupSchemaDoubleEquals?.();
-    this.setupNotebookCatalog(); this.setupAlbumCatalog(); this.setupProjectsCatalog(); this.setupAreasCatalog(); this.setupAlbumRecords(); this.setupNotebookHeader(); this.setupAlbumHeader(); this.setupHomeCard(); this.setupRecordSheet?.(); this.setupIntentionCard?.(); this.setupIntentionUpdate?.(); this.setupIntentionCardEditor?.(); this.setupIntentionCardNavigation?.(); this.setupRecordUpdate?.(); this.setupPropertyUpdate?.(); this.setupRecordCard?.(); this.setupPropertyEditorEntrypoints?.(); this.setupPropertyCapabilityRouting?.(); this.setupSubscriptionSurfaces(); this.setupAlbumSchemaEntrypoints?.(); this.setupAlbumYamlExcursion?.();
+    this.setupNotebookCatalog(); this.setupAlbumCatalog(); this.setupProjectsCatalog(); this.setupAreasCatalog(); this.setupAlbumRecords(); this.setupNotebookHeader(); this.setupAlbumHeader(); this.setupHomeCard(); this.setupRecordSheet?.(); this.setupIntentionCard?.(); this.setupIntentionUpdate?.(); this.setupIntentionCardEditor?.(); this.setupIntentionCardNavigation?.(); this.setupRecordUpdate?.(); this.setupPropertyUpdate?.(); this.setupRecordCard?.(); this.setupPropertyEditorEntrypoints?.(); this.setupPropertyEditorSettingsEntrypoints?.(); this.setupPropertyCapabilityRouting?.(); this.setupSubscriptionSurfaces(); this.setupAlbumSchemaEntrypoints?.(); this.setupAlbumYamlExcursion?.();
     this.setupReadingBoardBlock();
   }
 
@@ -35822,7 +35822,7 @@ BobLedgerToolsPlugin.prototype.teardownLedgerToolsSurfaces = function () {
     } catch (error) {
       // Reading Board data teardown is best-effort.
     }
-    try { this.teardownRecordCard?.(); this.teardownPropertyEditorEntrypoints?.(); this.teardownRecordUpdate?.(); this.teardownPropertyCapabilityRouting?.(); this.teardownPropertyUpdate?.(); this.teardownRecordSheet?.(); this.teardownIntentionCardNavigation?.(); this.teardownIntentionCardEditor?.(); this.teardownIntentionUpdate?.(); this.teardownIntentionCard?.(); this.teardownSubscriptionSurfaces(); this.teardownHomeCard(); this.teardownAlbumHeader(); this.teardownNotebookHeader(); this.teardownAlbumYamlExcursion?.(); this.teardownAlbumSchemaEntrypoints?.(); } catch (error) {}
+    try { this.teardownRecordCard?.(); this.teardownPropertyEditorEntrypoints?.(); this.teardownPropertyEditorSettingsEntrypoints?.(); this.teardownRecordUpdate?.(); this.teardownPropertyCapabilityRouting?.(); this.teardownPropertyUpdate?.(); this.teardownRecordSheet?.(); this.teardownIntentionCardNavigation?.(); this.teardownIntentionCardEditor?.(); this.teardownIntentionUpdate?.(); this.teardownIntentionCard?.(); this.teardownSubscriptionSurfaces(); this.teardownHomeCard(); this.teardownAlbumHeader(); this.teardownNotebookHeader(); this.teardownAlbumYamlExcursion?.(); this.teardownAlbumSchemaEntrypoints?.(); } catch (error) {}
     try { propertyCardAdoptReleaseAll(); } catch (_) {}
     try { propertyCardTitleSlotReleaseAll(); } catch (_) {}
     try { propertyCardFrontmatterReleaseAll(); } catch (_) {}
@@ -100781,15 +100781,16 @@ class BobLedgerToolsHomeCardMixin {
     this.scheduleHomeCardRefresh();
   }
 
-  // Small callback seam for the later editor-settings phase: policy chips
-  // route here by setting id, and today this opens the landed browse modal.
+  // Policy chips route by setting id; an empty key focuses first settings.
   homeCardOpenSetting(filePath, key) {
     const target = homeCardPath(filePath);
     if (!target) return { ok: false, reason: "missing-path" };
     try {
-      if (typeof this.openPropertyEditor === "function") {
-        return this.openPropertyEditor({ filePath: target, key: key || undefined, mode: "browse" });
-      }
+      if (typeof this.openPropertyEditor !== "function") return { ok: false, reason: "editor-unavailable" };
+      const setting = typeof propertyEditorSettingIdForKey === "function" ? propertyEditorSettingIdForKey(key || "") || "" : "";
+      if (!key) return this.openPropertyEditor({ filePath: target, focusSettings: true, mode: "browse" });
+      if (setting) return this.openPropertyEditor({ filePath: target, setting, mode: "browse" });
+      return this.openPropertyEditor({ filePath: target, key, mode: "browse" });
     } catch (_) {}
     return { ok: false, reason: "editor-unavailable" };
   }
@@ -171386,6 +171387,14 @@ class PropertyEditorModal extends PropertyEditorModalBase {
     const requestedKey = (fromSelection && fromSelection.key)
       || (typeof options.key === "string" ? options.key : "");
     this.requestedKey = requestedKey;
+    // A setting-focus request survives the initial async report and works
+    // for ghosts: reconcile consumes it once a report arrives. See
+    // 298z settings-entrypoints for the alias map and consume logic.
+    this.requestedSetting = typeof propertyEditorSettingIdForKey === "function"
+      ? propertyEditorSettingIdForKey(options.setting || "")
+      : "";
+    this.focusSettings = options.focusSettings === true;
+    this.propertyEditorSettingFocusDone = false;
     this.requestedSelection = fromSelection
       ? { ...fromSelection, key: fromSelection.key || requestedKey }
       : (requestedKey ? { key: requestedKey, ordinal: 0, line: null } : null);
@@ -171429,6 +171438,18 @@ class PropertyEditorModal extends PropertyEditorModalBase {
           this.selectedId = propertyEditorRowId(match, idx);
         }
       }
+    }
+    // A requested setting pre-selects its declared source row while the
+    // report loads; reconcile moves it onto the settings row (or, when
+    // degraded, the corresponding real property).
+    if (this.requestedSetting && typeof PROPERTY_EDITOR_SETTING_KEYS === "object" && PROPERTY_EDITOR_SETTING_KEYS) {
+      try {
+        const keys = PROPERTY_EDITOR_SETTING_KEYS[this.requestedSetting] || [];
+        const matchIndex = initialRows.findIndex((row) => row && keys.includes(row.key));
+        if (matchIndex >= 0 && typeof propertyEditorRowId === "function") {
+          this.selectedId = propertyEditorRowId(initialRows[matchIndex], matchIndex);
+        }
+      } catch (_) {}
     }
   }
 
@@ -171746,6 +171767,30 @@ class PropertyEditorModal extends PropertyEditorModalBase {
           });
         } catch (_) {}
         return;
+      }
+      // Area and project notes own no card editor: browse `=` focuses the
+      // settings group in place instead of closing and reopening. The
+      // request survives a pending report and applies on arrival.
+      if (this.noteKind === "area" || this.noteKind === "project") {
+        this.focusSettings = true;
+        this.propertyEditorSettingFocusDone = false;
+        let focused = false;
+        try {
+          if (typeof propertyEditorSettingsSupported === "function"
+            && propertyEditorSettingsSupported(this.report)
+            && typeof propertyEditorSettingsFocusFirst === "function") {
+            focused = propertyEditorSettingsFocusFirst(this) === true;
+          }
+        } catch (_) {
+          focused = false;
+        }
+        if (focused) {
+          this.focusSettings = false;
+          this.propertyEditorSettingFocusDone = true;
+          return;
+        }
+        this.announce = "Reading properties — settings focus when ready.";
+        return this.paintPropertyEditor();
       }
       const species = typeof propertyEditorNoteKindSpecies === "function"
         ? propertyEditorNoteKindSpecies(this.noteKind)
@@ -174605,6 +174650,20 @@ class BobLedgerToolsPropertyEditorEntrypointsMixin {
     const key = typeof options.key === "string" ? options.key : "";
     const selection = options.selection && typeof options.selection === "object" ? options.selection : null;
     const mode = options.mode === "add" || options.mode === "edit" ? options.mode : "browse";
+    // A raw key that names a setting (theme, offclock, offclock_types, or a
+    // setting id) becomes a setting-focus request in browse mode, so drawer
+    // and foot callers land on the settings row instead of a stale source
+    // id. An explicit setting option always wins; add/edit keep the key.
+    let setting = typeof options.setting === "string" ? options.setting : "";
+    if (!setting && mode === "browse" && !(selection && typeof selection.key === "string" && selection.key)
+      && key && typeof propertyEditorSettingIdForKey === "function") {
+      try {
+        setting = propertyEditorSettingIdForKey(key) || "";
+      } catch (_) {
+        setting = "";
+      }
+    }
+    const focusSettings = options.focusSettings === true;
     let modal = null;
     try {
       modal = openPropertyEditor(this.app, {
@@ -174614,6 +174673,8 @@ class BobLedgerToolsPropertyEditorEntrypointsMixin {
         selection,
         mode,
         cacheRows,
+        setting,
+        focusSettings,
         noteKind: typeof options.noteKind === "string" ? options.noteKind : undefined,
         onCardHandoff: (info = {}) => this.propertyEditorHandoff({ ...info, modal: info.modal || null }),
         onYamlEscape: (info = {}) => this.propertyEditorYamlEscape({ ...info, modal: info.modal || null }),
@@ -180624,6 +180685,11 @@ PropertyEditorModal.prototype.propertyEditorReconcile = function propertyEditorR
     && propertyEditorSettingsFindEntry(this, selectedBefore).source !== true);
   propertyEditorSettingsBaseReconcile.call(this, report);
   if (selectedWasSynthetic && propertyEditorSettingsFindEntry(this, selectedBefore)) this.selectedId = selectedBefore;
+  // A setting-focus request from open (==, Settings, a policy chip, or a
+  // mapped key) applies once on the first report, then never yanks again.
+  try {
+    if (typeof propertyEditorSettingsConsumeFocus === "function") propertyEditorSettingsConsumeFocus(this);
+  } catch (_) {}
   const visible = propertyEditorSelectionFilterEntries(this);
   if (!visible.some((entry) => entry.id === this.selectedId)) this.selectedId = visible[0]?.id || "";
   this.paintPropertyEditor();
@@ -180672,19 +180738,26 @@ Object.assign(PropertyEditorModal.prototype, {
   propertyEditorResolveSettingStage(entry) {
     return { ok: false, message: `${entry?.row?.key || "Setting"} controls are not available yet.` };
   },
+  // Project-task rows navigate to the actual current ^prj through the
+  // navigation-hotkeys Task Card: the contract line is validated against
+  // current source (a stale line refuses instead of landing elsewhere) and
+  // the cursor falls back when the Task Card is unavailable. Status rows
+  // navigate only; an absent or archived ^prj reports absence and creates
+  // nothing. No route here writes task fields or frontmatter dates.
   async propertyEditorResolveProjectTask(entry) {
     const taskLine = entry?.row?.projectTaskLine;
     if (!taskLine) return { ok: false, message: "No current ^prj task is available." };
     const line = await propertyEditorSettingsProjectLineNumber(this, taskLine);
     if (!line) return { ok: false, message: "The current ^prj task could not be found in this note." };
-    const plugin = this.propertyPlugin;
-    if (!plugin || typeof plugin.propertyEditorYamlJump !== "function") {
+    if (typeof propertyEditorProjectTaskHandoff !== "function") {
       return { ok: false, message: "Project task navigation is unavailable." };
     }
-    let jumped;
-    try { jumped = await plugin.propertyEditorYamlJump(this.filePath, line); }
-    catch (_) { jumped = null; }
-    if (!jumped || jumped.ok !== true) return { ok: false, message: "The current ^prj task could not be opened." };
+    let handoff = null;
+    try { handoff = await propertyEditorProjectTaskHandoff(this, line, taskLine); }
+    catch (_) { handoff = null; }
+    if (!handoff || handoff.ok !== true) {
+      return { ok: false, message: (handoff && handoff.message) || "The current ^prj task could not be opened." };
+    }
     this.close();
     return { ok: true, line };
   },
@@ -181644,6 +181717,262 @@ Object.assign(PropertyEditorModal.prototype, {
     this.paintPropertyEditor();
   },
 });
+// ---- src/298z-plugin-property-editor-settings-entrypoints.js ----
+// Settings entry points: area/project registry kinds, setting-focus
+// requests, and project-task handoffs. `==` on an area/project note and the
+// card Settings control open the Property Editor on the settings group; a
+// policy chip selects its own setting. Project Goal/Starts/Depends-on rows
+// navigate to the current ^prj task through the navigation-hotkeys Task
+// Card, falling back to the cursor when that plugin is unavailable. Painting
+// and navigation cause no writes.
+const PROPERTY_EDITOR_SETTING_KEY_ALIASES = Object.freeze({
+  theme: "task_type",
+  offclock: "clock",
+  offclock_types: "clock",
+});
+
+function propertyEditorSettingKnownIds() {
+  try {
+    const ids = new Set();
+    for (const order of Object.values(PROPERTY_EDITOR_SETTING_ORDER || {})) {
+      for (const id of Array.isArray(order) ? order : []) ids.add(id);
+    }
+    return ids;
+  } catch (_) {
+    return new Set();
+  }
+}
+
+// Map a caller key onto its logical setting id: legacy aliases (theme,
+// offclock, offclock_types) resolve to their setting, and a real setting id
+// passes through unchanged. Anything else is not a setting.
+function propertyEditorSettingIdForKey(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (Object.hasOwn(PROPERTY_EDITOR_SETTING_KEY_ALIASES, text)) {
+    return PROPERTY_EDITOR_SETTING_KEY_ALIASES[text];
+  }
+  try {
+    if (propertyEditorSettingKnownIds().has(text)) return text;
+  } catch (_) {}
+  return "";
+}
+
+// Select a settings entry by id. Uses visible entries so a filtered-out row
+// is never selected from a hidden group.
+function propertyEditorSettingsFocusEntry(modal, settingId) {
+  if (!modal || modal.closed || !settingId) return false;
+  try {
+    if (typeof propertyEditorSettingsSupported === "function"
+      && !propertyEditorSettingsSupported(modal.report)) return false;
+    const entries = typeof propertyEditorSettingsVisibleEntries === "function"
+      ? propertyEditorSettingsVisibleEntries(modal)
+      : [];
+    const match = entries.find((entry) => entry && entry.id === `setting::${settingId}`);
+    if (!match) return false;
+    modal.selectedId = match.id;
+    modal.announce = "";
+    modal.paintPropertyEditor();
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+// Select the first visible settings row. `==` and the card Settings control
+// land here; a policy chip selects its own setting instead.
+function propertyEditorSettingsFocusFirst(modal) {
+  if (!modal || modal.closed) return false;
+  try {
+    if (typeof propertyEditorSettingsSupported === "function"
+      && !propertyEditorSettingsSupported(modal.report)) return false;
+    const entries = typeof propertyEditorSettingsVisibleEntries === "function"
+      ? propertyEditorSettingsVisibleEntries(modal)
+      : [];
+    const match = entries.find((entry) => entry && entry.entryType === "setting");
+    if (!match) return false;
+    modal.selectedId = match.id;
+    modal.announce = "";
+    modal.paintPropertyEditor();
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+// Consume the one-shot settings focus request exactly once, on the first
+// report that arrives after open. A requested setting selects its row even
+// when it is a ghost; a bare first-settings request selects the first
+// settings row. On a degraded report the request selects the corresponding
+// real property when present and otherwise leaves the safe first row.
+function propertyEditorSettingsConsumeFocus(modal) {
+  if (!modal || modal.closed || modal.propertyEditorSettingFocusDone === true) return false;
+  modal.propertyEditorSettingFocusDone = true;
+  const wanted = typeof modal.requestedSetting === "string" ? modal.requestedSetting : "";
+  try {
+    if (typeof propertyEditorSettingsSupported === "function"
+      && propertyEditorSettingsSupported(modal.report)) {
+      if (wanted) return propertyEditorSettingsFocusEntry(modal, wanted);
+      if (modal.focusSettings === true) return propertyEditorSettingsFocusFirst(modal);
+      return false;
+    }
+  } catch (_) {
+    return false;
+  }
+  if (!wanted) return false;
+  try {
+    const keys = (typeof PROPERTY_EDITOR_SETTING_KEYS === "object" && PROPERTY_EDITOR_SETTING_KEYS
+      && Array.isArray(PROPERTY_EDITOR_SETTING_KEYS[wanted]))
+      ? PROPERTY_EDITOR_SETTING_KEYS[wanted]
+      : [];
+    if (!keys.length) return false;
+    const rows = Array.isArray(modal.report && modal.report.properties) && modal.report.properties.length
+      ? modal.report.properties
+      : (Array.isArray(modal.properties) && modal.properties.length ? modal.properties : modal.cacheRows || []);
+    for (let index = 0; index < rows.length; index += 1) {
+      const row = rows[index];
+      if (row && typeof row.key === "string" && keys.includes(row.key)
+        && typeof propertyEditorRowId === "function") {
+        modal.selectedId = propertyEditorRowId(row, index);
+        modal.paintPropertyEditor();
+        return true;
+      }
+    }
+  } catch (_) {}
+  return false;
+}
+
+// Navigate to the note holding the current ^prj task, validate its source
+// line, and hand off to the navigation-hotkeys Task Card at that line. The
+// contract line is text, never a numeric index: a stale line that no longer
+// matches current source refuses instead of landing on another task. When
+// the Task Card is unavailable the cursor still lands on the validated line.
+// Nothing here writes task fields or frontmatter dates.
+async function propertyEditorProjectTaskHandoff(modal, line, taskLine) {
+  const plugin = modal && modal.propertyPlugin;
+  const app = (plugin && plugin.app) || (modal && modal.app);
+  const filePath = modal && modal.filePath;
+  if (!app || !filePath) return { ok: false, message: "Project task navigation is unavailable." };
+  const workspace = app.workspace;
+  let leaf = null;
+  try {
+    if (typeof propertyEditorEntryLeafFor === "function") {
+      leaf = propertyEditorEntryLeafFor(plugin || { app }, filePath);
+    }
+  } catch (_) {
+    leaf = null;
+  }
+  if (!leaf) {
+    try {
+      if (workspace && typeof workspace.openLinkText === "function") {
+        await workspace.openLinkText(filePath.replace(/\.md$/i, ""), filePath, false);
+      }
+    } catch (_) {}
+    try {
+      if (typeof propertyEditorEntryLeafFor === "function") {
+        leaf = propertyEditorEntryLeafFor(plugin || { app }, filePath);
+      }
+    } catch (_) {
+      leaf = null;
+    }
+  }
+  if (!leaf) return { ok: false, message: "The current ^prj task could not be opened." };
+  const editor = leaf.view && leaf.view.editor;
+  try {
+    if (editor && typeof editor.getValue === "function") {
+      const lines = String(editor.getValue()).split("\n");
+      const actual = String(lines[line - 1] || "").replace(/\r$/, "");
+      if (actual !== taskLine) {
+        return { ok: false, message: "The current ^prj task could not be found in this note." };
+      }
+    }
+  } catch (_) {}
+  try {
+    if (editor && typeof editor.setCursor === "function") editor.setCursor({ line: line - 1, ch: 0 });
+  } catch (_) {}
+  try {
+    if (editor && typeof editor.scrollIntoView === "function") {
+      editor.scrollIntoView({ from: { line: line - 1, ch: 0 }, to: { line: line - 1, ch: 0 } }, true);
+    }
+  } catch (_) {}
+  let picker = null;
+  try {
+    const plugins = app.plugins && app.plugins.plugins;
+    picker = plugins && plugins["bob-navigation-hotkeys"];
+  } catch (_) {
+    picker = null;
+  }
+  if (picker && typeof picker.openBulletPropertyPicker === "function" && editor) {
+    try {
+      await picker.openBulletPropertyPicker(editor, {});
+    } catch (_) {}
+    try {
+      if (typeof editor.focus === "function") editor.focus();
+    } catch (_) {}
+    return { ok: true, line };
+  }
+  try {
+    if (workspace && typeof workspace.setActiveLeaf === "function") workspace.setActiveLeaf(leaf, { focus: true });
+  } catch (_) {}
+  try {
+    if (editor && typeof editor.focus === "function") editor.focus();
+  } catch (_) {}
+  return { ok: true, line, fallback: "cursor" };
+}
+
+function propertyEditorHomeKindMatch(kind) {
+  return ({ path, frontmatter } = {}) => {
+    try {
+      if (typeof homeCardEligible !== "function") return false;
+      const eligible = homeCardEligible(path, frontmatter);
+      return Boolean(eligible) && eligible.kind === kind;
+    } catch (_) {
+      return false;
+    }
+  };
+}
+
+class BobLedgerToolsPropertyEditorSettingsEntrypointsMixin {
+  setupPropertyEditorSettingsEntrypoints() {
+    if (this.propertyEditorSettingsEntrypointsActive === true) return;
+    this.propertyEditorSettingsEntrypointsActive = true;
+    try {
+      if (typeof this.ensurePropertyCardBuiltins === "function") this.ensurePropertyCardBuiltins();
+    } catch (_) {}
+    try {
+      if (typeof this.registerPropertyCard === "function") {
+        this.registerPropertyCard({
+          kind: "area",
+          match: propertyEditorHomeKindMatch("area"),
+          open: ({ path } = {}) => {
+            if (typeof this.openPropertyEditor === "function") {
+              void this.openPropertyEditor({ filePath: path, focusSettings: true });
+            }
+          },
+        });
+        this.registerPropertyCard({
+          kind: "project",
+          match: propertyEditorHomeKindMatch("project"),
+          open: ({ path } = {}) => {
+            if (typeof this.openPropertyEditor === "function") {
+              void this.openPropertyEditor({ filePath: path, focusSettings: true });
+            }
+          },
+        });
+      }
+    } catch (_) {}
+  }
+
+  teardownPropertyEditorSettingsEntrypoints() {
+    this.propertyEditorSettingsEntrypointsActive = false;
+    try {
+      if (typeof this.unregisterPropertyCard === "function") this.unregisterPropertyCard("area");
+    } catch (_) {}
+    try {
+      if (typeof this.unregisterPropertyCard === "function") this.unregisterPropertyCard("project");
+    } catch (_) {}
+  }
+}
 // ---- src/293-keep-inbox-render.js ----
 // Keep inbox render (keep-indicator-view): DOM for the `bob-keep-inbox`
 // status-bar item. Pure DOM helpers plus one paint entry point; no spawn,
@@ -183840,6 +184169,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsIntentionCardEditorMixin,
   BobLedgerToolsIntentionCardNavigationMixin,
   BobLedgerToolsPropertyEditorEntrypointsMixin,
+  BobLedgerToolsPropertyEditorSettingsEntrypointsMixin,
   BobLedgerToolsPropertyUpdateMixin,
   BobLedgerToolsPropertyCapabilityRoutingMixin,
   BobLedgerToolsEventLinkTimesMixin,
@@ -188696,6 +189026,13 @@ try {
       propertyEditorAdoptConfirmedContract,
       propertyEditorRegisterSettingStageHandler,
       propertyEditorSettingStageHandler,
+      PROPERTY_EDITOR_SETTING_KEY_ALIASES,
+      propertyEditorSettingIdForKey,
+      propertyEditorSettingsFocusEntry,
+      propertyEditorSettingsFocusFirst,
+      propertyEditorSettingsConsumeFocus,
+      propertyEditorProjectTaskHandoff,
+      propertyEditorHomeKindMatch,
     });
   }
 } catch (_) {}

@@ -158,6 +158,25 @@ and keep this dispatch, the `setting.set`/`setting.clear` ops, and
 confirmed-contract adoption. A dry-run `contract` is preview copy only
 and never becomes the modal report, overlay, or card cache.
 
+Settings entry points live in `298z`: area and project register through the
+existing `registerPropertyCard` lifecycle after the bank/album/record
+builtins and the intentions (temporal) extension, with bank precedence and
+teardown intact. `openPropertyEditor` accepts `setting` (a setting id, with
+`theme`/`offclock`/`offclock_types` aliases mapped through
+`propertyEditorSettingIdForKey`) and `focusSettings`; the modal keeps the
+request in `requestedSetting`/`focusSettings` and consumes it once in
+reconcile (`propertyEditorSettingsConsumeFocus`), selecting the settings row
+even for ghosts and the corresponding real property on degraded reports.
+`==`, card Settings, and policy chips all route through that request, and
+browse `=` inside an area/project editor focuses the settings group instead
+of reopening. Project task rows hand off through
+`propertyEditorProjectTaskHandoff(modal, line, taskLine)`: it navigates to
+the note, validates the exact contract line text against current source,
+then calls the navigation-hotkeys Task Card
+(`openBulletPropertyPicker(editor, {})`) at that line, falling back to the
+cursor when the plugin is unavailable. Later hue/type/clock/parent phases
+extend the stage handlers and this entry seam without another modal fork.
+
 The shared foot kit exposes `propertyCardFormatCreatedStamp(input = {})`,
 returning `{ text, tooltip, state, dateOnly }`, and
 `propertyCardInventory(input = {})`, returning

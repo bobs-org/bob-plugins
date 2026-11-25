@@ -574,6 +574,11 @@ PropertyEditorModal.prototype.propertyEditorReconcile = function propertyEditorR
     && propertyEditorSettingsFindEntry(this, selectedBefore).source !== true);
   propertyEditorSettingsBaseReconcile.call(this, report);
   if (selectedWasSynthetic && propertyEditorSettingsFindEntry(this, selectedBefore)) this.selectedId = selectedBefore;
+  // A setting-focus request from open (==, Settings, a policy chip, or a
+  // mapped key) applies once on the first report, then never yanks again.
+  try {
+    if (typeof propertyEditorSettingsConsumeFocus === "function") propertyEditorSettingsConsumeFocus(this);
+  } catch (_) {}
   const visible = propertyEditorSelectionFilterEntries(this);
   if (!visible.some((entry) => entry.id === this.selectedId)) this.selectedId = visible[0]?.id || "";
   this.paintPropertyEditor();
@@ -622,19 +627,26 @@ Object.assign(PropertyEditorModal.prototype, {
   propertyEditorResolveSettingStage(entry) {
     return { ok: false, message: `${entry?.row?.key || "Setting"} controls are not available yet.` };
   },
+  // Project-task rows navigate to the actual current ^prj through the
+  // navigation-hotkeys Task Card: the contract line is validated against
+  // current source (a stale line refuses instead of landing elsewhere) and
+  // the cursor falls back when the Task Card is unavailable. Status rows
+  // navigate only; an absent or archived ^prj reports absence and creates
+  // nothing. No route here writes task fields or frontmatter dates.
   async propertyEditorResolveProjectTask(entry) {
     const taskLine = entry?.row?.projectTaskLine;
     if (!taskLine) return { ok: false, message: "No current ^prj task is available." };
     const line = await propertyEditorSettingsProjectLineNumber(this, taskLine);
     if (!line) return { ok: false, message: "The current ^prj task could not be found in this note." };
-    const plugin = this.propertyPlugin;
-    if (!plugin || typeof plugin.propertyEditorYamlJump !== "function") {
+    if (typeof propertyEditorProjectTaskHandoff !== "function") {
       return { ok: false, message: "Project task navigation is unavailable." };
     }
-    let jumped;
-    try { jumped = await plugin.propertyEditorYamlJump(this.filePath, line); }
-    catch (_) { jumped = null; }
-    if (!jumped || jumped.ok !== true) return { ok: false, message: "The current ^prj task could not be opened." };
+    let handoff = null;
+    try { handoff = await propertyEditorProjectTaskHandoff(this, line, taskLine); }
+    catch (_) { handoff = null; }
+    if (!handoff || handoff.ok !== true) {
+      return { ok: false, message: (handoff && handoff.message) || "The current ^prj task could not be opened." };
+    }
     this.close();
     return { ok: true, line };
   },

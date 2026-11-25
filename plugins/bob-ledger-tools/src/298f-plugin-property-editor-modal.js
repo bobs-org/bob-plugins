@@ -84,6 +84,14 @@ class PropertyEditorModal extends PropertyEditorModalBase {
     const requestedKey = (fromSelection && fromSelection.key)
       || (typeof options.key === "string" ? options.key : "");
     this.requestedKey = requestedKey;
+    // A setting-focus request survives the initial async report and works
+    // for ghosts: reconcile consumes it once a report arrives. See
+    // 298z settings-entrypoints for the alias map and consume logic.
+    this.requestedSetting = typeof propertyEditorSettingIdForKey === "function"
+      ? propertyEditorSettingIdForKey(options.setting || "")
+      : "";
+    this.focusSettings = options.focusSettings === true;
+    this.propertyEditorSettingFocusDone = false;
     this.requestedSelection = fromSelection
       ? { ...fromSelection, key: fromSelection.key || requestedKey }
       : (requestedKey ? { key: requestedKey, ordinal: 0, line: null } : null);
@@ -127,6 +135,18 @@ class PropertyEditorModal extends PropertyEditorModalBase {
           this.selectedId = propertyEditorRowId(match, idx);
         }
       }
+    }
+    // A requested setting pre-selects its declared source row while the
+    // report loads; reconcile moves it onto the settings row (or, when
+    // degraded, the corresponding real property).
+    if (this.requestedSetting && typeof PROPERTY_EDITOR_SETTING_KEYS === "object" && PROPERTY_EDITOR_SETTING_KEYS) {
+      try {
+        const keys = PROPERTY_EDITOR_SETTING_KEYS[this.requestedSetting] || [];
+        const matchIndex = initialRows.findIndex((row) => row && keys.includes(row.key));
+        if (matchIndex >= 0 && typeof propertyEditorRowId === "function") {
+          this.selectedId = propertyEditorRowId(initialRows[matchIndex], matchIndex);
+        }
+      } catch (_) {}
     }
   }
 
@@ -444,6 +464,30 @@ class PropertyEditorModal extends PropertyEditorModalBase {
           });
         } catch (_) {}
         return;
+      }
+      // Area and project notes own no card editor: browse `=` focuses the
+      // settings group in place instead of closing and reopening. The
+      // request survives a pending report and applies on arrival.
+      if (this.noteKind === "area" || this.noteKind === "project") {
+        this.focusSettings = true;
+        this.propertyEditorSettingFocusDone = false;
+        let focused = false;
+        try {
+          if (typeof propertyEditorSettingsSupported === "function"
+            && propertyEditorSettingsSupported(this.report)
+            && typeof propertyEditorSettingsFocusFirst === "function") {
+            focused = propertyEditorSettingsFocusFirst(this) === true;
+          }
+        } catch (_) {
+          focused = false;
+        }
+        if (focused) {
+          this.focusSettings = false;
+          this.propertyEditorSettingFocusDone = true;
+          return;
+        }
+        this.announce = "Reading properties — settings focus when ready.";
+        return this.paintPropertyEditor();
       }
       const species = typeof propertyEditorNoteKindSpecies === "function"
         ? propertyEditorNoteKindSpecies(this.noteKind)

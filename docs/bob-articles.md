@@ -12,7 +12,7 @@ Bob Articles formats reading notes and presents article metadata in Obsidian.
 | --- | --- |
 | Name | Bob Articles |
 | ID | `bob-articles` |
-| Version | 0.2.1 |
+| Version | 0.3.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
 | Description | Format Bob article notes with bob on save, when leaving, or on command, and preview article adoption. |
@@ -55,6 +55,22 @@ settings live under **Settings → Bob Articles**:
 
 Neither registered command has a default hotkey; run them from the command
 palette or bind them in Obsidian's hotkey settings.
+
+## Read-only Prose snapshot API
+
+The plugin exposes the cached Bob Prose plan at
+`app.plugins.getPlugin("bob-articles")?.api?.prose`, namespace version 1.
+Feature-detect `version === 1` before using it. `snapshot(path)` returns
+`null` until Bob has remembered a plan for that vault-relative path; reading
+the snapshot never starts Bob. A snapshot is frozen and contains `path`, a
+monotonic `generation`, `status` (`ready` or `refused`), Bob's `outline` and
+`findings`, `refusal` (`{ code, message }` or `null`), and `numbering`.
+Refused plans preserve Bob's message and findings, and can have a null outline.
+
+`subscribe(fn)` calls `fn(path)` after each remembered plan or forgotten path
+and returns an unsubscribe function. Read the snapshot again inside the callback.
+Late plans do not replace a newer cached generation. The Prose Card consumes this
+API without spawning Bob or writing the note.
 
 ## Related
 

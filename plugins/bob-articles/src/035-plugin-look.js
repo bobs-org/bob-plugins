@@ -155,14 +155,123 @@ BobArticlesPlugin.prototype.articleRefreshReadingViews = function articleRefresh
   }
 };
 
+function articleProseDeepFreeze(value) {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
+  for (const child of Object.values(value)) articleProseDeepFreeze(child);
+  return Object.freeze(value);
+}
+
+function articleProseFrozenCopy(value) {
+  if (value === null || value === undefined) return value === undefined ? null : null;
+  try {
+    return articleProseDeepFreeze(JSON.parse(JSON.stringify(value)));
+  } catch (_) {
+    return null;
+  }
+}
+
+BobArticlesPlugin.prototype.articleSetupProseApi = function articleSetupProseApi() {
+  if (!(this.articleProseSnapshots instanceof Map)) this.articleProseSnapshots = new Map();
+  if (!(this.articleProseGenerations instanceof Map)) this.articleProseGenerations = new Map();
+  if (!(this.articleProseRequestGenerations instanceof Map)) this.articleProseRequestGenerations = new Map();
+  if (!(this.articleProseListeners instanceof Set)) this.articleProseListeners = new Set();
+  this.api = this.api || {};
+  const plugin = this;
+  this.api.prose = Object.freeze({
+    version: 1,
+    snapshot(path) {
+      if (typeof path !== "string" || !path) return null;
+      return plugin.articleProseSnapshots.get(path) || null;
+    },
+    subscribe(fn) {
+      if (typeof fn !== "function") return () => {};
+      plugin.articleProseListeners.add(fn);
+      let active = true;
+      return () => {
+        if (!active) return;
+        active = false;
+        plugin.articleProseListeners.delete(fn);
+      };
+    },
+  });
+};
+
+BobArticlesPlugin.prototype.articleDisposeProseApi = function articleDisposeProseApi() {
+  const paths = new Set([
+    ...((this.articleProseSnapshots && this.articleProseSnapshots.keys()) || []),
+    ...((this.articleOutlines && this.articleOutlines.keys()) || []),
+  ]);
+  for (const path of paths) this.articleForgetPlan(path);
+  this.articleProseListeners?.clear?.();
+  if (this.api && this.api.prose) delete this.api.prose;
+};
+
+BobArticlesPlugin.prototype.articleBeginProseRequest = function articleBeginProseRequest(path) {
+  if (!path) return 0;
+  if (!(this.articleProseRequestGenerations instanceof Map)) this.articleProseRequestGenerations = new Map();
+  const generation = (this.articleProseRequestGenerations.get(path) || 0) + 1;
+  this.articleProseRequestGenerations.set(path, generation);
+  return generation;
+};
+
+BobArticlesPlugin.prototype.articleProseRequestIsCurrent = function articleProseRequestIsCurrent(path, generation) {
+  return generation === undefined || generation === null
+    || !this.articleProseRequestGenerations
+    || this.articleProseRequestGenerations.get(path) === generation;
+};
+
+BobArticlesPlugin.prototype.articleProseNotify = function articleProseNotify(path) {
+  for (const listener of Array.from(this.articleProseListeners || [])) {
+    try { listener(path); } catch (_) { /* A consumer cannot interrupt Bob's formatter. */ }
+  }
+};
+
+BobArticlesPlugin.prototype.articleForgetPlan = function articleForgetPlan(path) {
+  if (!path) return false;
+  if (!(this.articleProseRequestGenerations instanceof Map)) this.articleProseRequestGenerations = new Map();
+  this.articleProseRequestGenerations.set(path, (this.articleProseRequestGenerations.get(path) || 0) + 1);
+  this.articleOutlines?.delete?.(path);
+  this.articleProseSnapshots?.delete?.(path);
+  this.articleProseGenerations?.set?.(path, (this.articleProseGenerations.get(path) || 0) + 1);
+  this.articleLookGeneration?.delete?.(path);
+  this.articleReadingRenderGeneration?.delete?.(path);
+  this.articleProseNotify(path);
+  return true;
+};
+
 BobArticlesPlugin.prototype.articleRememberPlan = function articleRememberPlan(path, plan, options = {}) {
-  if (!path || !plan || !plan.outline) return;
-  if (!this.articleOutlines) this.articleOutlines = new Map();
-  if (!this.articleLookGeneration) this.articleLookGeneration = new Map();
-  this.articleOutlines.set(path, articleOutlineForCurrentBuffer(plan.outline, Boolean(options.applied)));
-  this.articleLookGeneration.set(path, (this.articleLookGeneration.get(path) || 0) + 1);
-  this.articleRefreshSecnoViews(path);
-  this.articleRefreshReadingViews(path);
+  if (!path || !plan || typeof plan !== "object") return false;
+  if (!this.articleProseRequestIsCurrent(path, options.requestGeneration)) return false;
+  if (!(this.articleProseSnapshots instanceof Map)) this.articleProseSnapshots = new Map();
+  if (!(this.articleProseGenerations instanceof Map)) this.articleProseGenerations = new Map();
+  const hasOutline = plan.outline && typeof plan.outline === "object";
+  if (hasOutline) {
+    if (!this.articleOutlines) this.articleOutlines = new Map();
+    if (!this.articleLookGeneration) this.articleLookGeneration = new Map();
+    this.articleOutlines.set(path, articleOutlineForCurrentBuffer(plan.outline, Boolean(options.applied)));
+    this.articleLookGeneration.set(path, (this.articleLookGeneration.get(path) || 0) + 1);
+    this.articleRefreshSecnoViews(path);
+    this.articleRefreshReadingViews(path);
+  }
+  const generation = (this.articleProseGenerations.get(path) || 0) + 1;
+  this.articleProseGenerations.set(path, generation);
+  const refused = plan.status === "skipped" || plan.status === "error";
+  const reason = plan.reason && typeof plan.reason === "object" ? plan.reason : {};
+  const refusal = refused ? {
+    code: String(reason.code || plan.code || plan.status),
+    message: String(reason.message || plan.notice || plan.message || "Bob declined to format this prose note."),
+  } : null;
+  this.articleProseSnapshots.set(path, Object.freeze({
+    path,
+    generation,
+    status: refused ? "refused" : "ready",
+    outline: articleProseFrozenCopy(plan.outline),
+    findings: articleProseFrozenCopy(Array.isArray(plan.findings) ? plan.findings : []),
+    refusal: refusal ? articleProseFrozenCopy(refusal) : null,
+    numbering: typeof plan.outline?.numbering === "boolean" ? plan.outline.numbering : null,
+  }));
+  this.articleProseNotify(path);
+  return true;
 };
 
 BobArticlesPlugin.prototype.articleEnsureOutline = function articleEnsureOutline(snapshot, options = {}) {
@@ -178,10 +287,11 @@ BobArticlesPlugin.prototype.articleEnsureOutline = function articleEnsureOutline
 };
 
 BobArticlesPlugin.prototype.articleRefreshOutlineFromBuffer = async function articleRefreshOutlineFromBuffer(path, text, view) {
+  const requestGeneration = this.articleBeginProseRequest(path);
   const result = await this.articleRunPlan("format", path, text);
   if (!result.ok || !result.plan) return;
+  this.articleRememberPlan(path, result.plan, { applied: false, requestGeneration });
   if (result.plan.status === "skipped" || result.plan.status === "error") return;
-  this.articleRememberPlan(path, result.plan, { applied: false });
   if (view) this.articleRefreshStatusBar(view);
 };
 
@@ -252,13 +362,15 @@ BobArticlesPlugin.prototype.articleFireStaleHint = async function articleFireSta
     return;
   }
   const text = liveView.editor.getValue();
+  const requestGeneration = this.articleBeginProseRequest(path);
   const result = await this.articleRunPlan("format", path, text);
   const settled = articleNoteStaleHintResult(this.articleLookState, path, decision.version);
   if (settled.reschedule) this.articleArmStaleHintTimer(path, liveView);
   if (!settled.accept) return;
-  if (!result.ok || !result.plan || result.plan.status === "skipped" || result.plan.status === "error") return;
+  if (!result.ok || !result.plan) return;
   if (liveView.editor.getValue() !== text) return;
-  this.articleRememberPlan(path, result.plan, { applied: false });
+  this.articleRememberPlan(path, result.plan, { applied: false, requestGeneration });
+  if (result.plan.status === "skipped" || result.plan.status === "error") return;
   this.articleRefreshStatusBar(liveView);
 };
 

@@ -11,9 +11,14 @@ class BobArticlesPlugin extends Plugin {
     this.articleSaveCommand = null;
     this.articleOutlines = new Map();
     this.articleLookGeneration = new Map();
+    this.articleProseSnapshots = new Map();
+    this.articleProseGenerations = new Map();
+    this.articleProseRequestGenerations = new Map();
+    this.articleProseListeners = new Set();
     this.articleLookState = articleCreateLookState();
     this.articleStaleTimers = new Map();
     this.articleStatusEl = null;
+    this.articleSetupProseApi();
 
     this.addSettingTab(new BobArticlesSettingTab(this.app, this));
     this.addCommand({
@@ -66,6 +71,7 @@ class BobArticlesPlugin extends Plugin {
       this.articleSaveCommand.command.callback = this.articleSaveCommand.original;
     }
     for (const timer of this.articleLeaveTimers || []) clearTimeout(timer);
+    this.articleDisposeProseApi();
     this.articleTeardownLook();
     const workspace = this.app && this.app.workspace;
     if (workspace && typeof workspace.getLeavesOfType === "function") {
@@ -135,7 +141,10 @@ class BobArticlesPlugin extends Plugin {
       element.classList.toggle("bob-article", Boolean(isArticle));
       const serif = Boolean(isArticle) && (!this.settings || this.settings.articleTypeface !== "theme");
       element.classList.toggle("bob-article-serif", serif);
-      if (!isArticle && view.file && this.articleOutlines) this.articleOutlines.delete(view.file.path);
+      if (!isArticle && view.file && (this.articleOutlines?.has(view.file.path)
+        || this.articleProseSnapshots?.has(view.file.path))) {
+        this.articleForgetPlan(view.file.path);
+      }
     }
   }
 
@@ -195,6 +204,7 @@ class BobArticlesPlugin extends Plugin {
     if (!articleHasArticleType(this.articleFrontmatter(view.file))) return false;
     const path = view.file.path;
     if (this.articleUndoBlocked.has(path)) return false;
+    const requestGeneration = this.articleBeginProseRequest(path);
     const sent = view.editor.getValue();
     const result = await this.articleRunPlan("format", path, sent);
     if (!result.ok) {
@@ -203,6 +213,7 @@ class BobArticlesPlugin extends Plugin {
     }
     const plan = result.plan;
     if (plan.status === "skipped" || plan.status === "error") {
+      this.articleRememberPlan(path, plan, { requestGeneration });
       this.articleReportRefusal(path, plan);
       return false;
     }
@@ -221,7 +232,7 @@ class BobArticlesPlugin extends Plugin {
     }
     if (formatted !== sent && !this.articleDispatchChanges(view, sent, formatted, changes)) return false;
     if (formatted !== sent) this.articleFormatHistory.set(path, { before: sent, after: formatted });
-    this.articleRememberPlan(path, plan, { applied: formatted !== sent });
+    this.articleRememberPlan(path, plan, { applied: formatted !== sent, requestGeneration });
     await this.articleApplyInbound(plan);
     if (plan.status === "changed") this.articleShowNotice(articleNoticeText(plan));
     return formatted !== sent;
@@ -249,6 +260,7 @@ class BobArticlesPlugin extends Plugin {
   async articleAdoptActive(view) {
     if (!view || !view.file || !view.editor) return;
     const path = view.file.path;
+    const requestGeneration = this.articleBeginProseRequest(path);
     const sent = view.editor.getValue();
     const result = await this.articleRunPlan("adopt", path, sent);
     if (!result.ok) {
@@ -257,6 +269,7 @@ class BobArticlesPlugin extends Plugin {
     }
     const plan = result.plan;
     if (plan.status === "skipped" || plan.status === "error") {
+      this.articleRememberPlan(path, plan, { requestGeneration });
       this.articleReportRefusal(path, plan, { always: true });
       return;
     }
@@ -270,10 +283,10 @@ class BobArticlesPlugin extends Plugin {
       this.articleReportRunFailure({ code: "bad-shape", message: "bob returned edits that could not be applied." });
       return;
     }
-    new BobArticleAdoptModal(this.app, this, view, sent, formatted, changes, plan).open();
+    new BobArticleAdoptModal(this.app, this, view, sent, formatted, changes, plan, requestGeneration).open();
   }
 
-  async articleCommitAdoption(view, sent, formatted, changes, plan) {
+  async articleCommitAdoption(view, sent, formatted, changes, plan, requestGeneration) {
     if (!view || !view.editor || view.editor.getValue() !== sent) {
       this.articleShowNotice("The note changed while the preview was open. Reopen the preview to convert it.");
       return false;
@@ -282,7 +295,7 @@ class BobArticlesPlugin extends Plugin {
       if (!this.articleDispatchChanges(view, sent, formatted, changes)) return false;
       this.articleFormatHistory.set(view.file.path, { before: sent, after: formatted });
     }
-    this.articleRememberPlan(view.file.path, plan, { applied: formatted !== sent });
+    this.articleRememberPlan(view.file.path, plan, { applied: formatted !== sent, requestGeneration });
     await this.articleApplyInbound(plan);
     if (plan.status === "changed") this.articleShowNotice(articleNoticeText(plan));
     if (typeof view.save === "function") {
@@ -342,6 +355,7 @@ class BobArticlesPlugin extends Plugin {
     if (!vault || typeof vault.read !== "function" || typeof vault.process !== "function") return;
     if (this.articleUndoBlocked && this.articleUndoBlocked.has(file.path)) return;
     if (!articleHasArticleType(this.articleFrontmatter(file))) return;
+    const requestGeneration = this.articleBeginProseRequest(file.path);
     let sent;
     if (previousView && typeof previousView.save === "function") {
       try { await previousView.save(); } catch (error) { /* Read the saved file and keep the leave path best-effort. */ }
@@ -354,6 +368,7 @@ class BobArticlesPlugin extends Plugin {
     }
     const plan = result.plan;
     if (plan.status === "skipped" || plan.status === "error") {
+      this.articleRememberPlan(file.path, plan, { requestGeneration });
       this.articleReportRefusal(file.path, plan);
       return;
     }
@@ -373,7 +388,7 @@ class BobArticlesPlugin extends Plugin {
       }
     }
     if (applied || formatted === sent) {
-      this.articleRememberPlan(file.path, plan, { applied });
+      this.articleRememberPlan(file.path, plan, { applied, requestGeneration });
       await this.articleApplyInbound(plan);
     }
     if (plan.status === "changed" && (applied || formatted === sent)) {

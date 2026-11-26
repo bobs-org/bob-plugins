@@ -38,6 +38,24 @@ optional intent is dropped. The namespace version stays 1.
 | --- | ---: | --- |
 | `taskLinks` | 1 | `fieldAt()` returns UTF-16 prose-field ranges; `open()` returns an indexed session with `rank`, `linkFor`, `suggestions`, `validate`, `name`, `onChange`, and `close`. Subject tasks are guarded. `name()` rechecks identity and IDs, writes open editors after a preimage check or closed notes through `vault.process`, and returns `{ ok, link, notePath, id }` on success. |
 
+## Bob Prose
+
+Bob Articles keeps the plugin id `bob-articles` and exposes
+`app.plugins.getPlugin("bob-articles")?.api?.prose`, namespace version 1.
+Check `version === 1` before using it. `snapshot(path)` is a read-only lookup:
+it never starts Bob and returns `null` until Bob Articles has remembered a
+plan for that vault-relative path. A frozen snapshot contains `path`,
+monotonic `generation`, `status` (`ready` or `refused`), Bob's `outline` and
+`findings`, `refusal` (`{ code, message }` or `null`), and `numbering`.
+Refused plans keep Bob's message and findings; their outline may be `null`.
+The outline and findings are frozen copies of Bob's JSON values.
+
+`subscribe(fn)` calls `fn(path)` after each remembered plan or forgotten
+path and returns an unsubscribe function. A consumer reads the snapshot again
+inside its callback; responses older than a newer request are discarded before
+they can replace the cached generation. The Prose Card uses one subscription
+and only filters and rounds these values.
+
 ## Bob Ledger Tools
 
 The root `bob-ledger-tools.api` is version 3. It shares live

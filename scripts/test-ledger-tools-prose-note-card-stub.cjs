@@ -90,7 +90,15 @@ class MiniNode {
   querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
   querySelectorAll(selector) {
     const className = selector.startsWith(".") ? selector.slice(1) : "";
-    return tree(this).slice(1).filter((node) => className && node.classList.contains(className));
+    const attribute = /^\[([^=\]]+)(?:=['"]([^'"]+)['"])?\]$/.exec(selector);
+    return tree(this).slice(1).filter((node) => {
+      if (className) return node.classList.contains(className);
+      if (attribute) {
+        const value = node.getAttribute(attribute[1]);
+        return attribute[2] === undefined ? value !== null : value === attribute[2];
+      }
+      return false;
+    });
   }
 }
 
@@ -227,6 +235,84 @@ test("numbering accepts only literal booleans and defaults an absent property to
   assert.equal(H.proseNoteCardNumbering({ section_numbers: null }).state, "invalid");
 });
 
+test("the readout filters Bob's leaf stubs, rounds only displayed words, and keeps numbering off", () => {
+  const doc = miniDocument();
+  const model = H.proseNoteCardModel({ path: "notes/Measures.md", frontmatter: { type: "[[prose]]", title: "Measures" } });
+  const card = H.proseNoteCardBuildEl(doc, model, { expanded: true });
+  const calls = [];
+  const snapshot = {
+    path: model.path,
+    generation: 1,
+    status: "ready",
+    numbering: false,
+    outline: {
+      numbering: false,
+      words: 309,
+      sections: [
+        { number: null, depth: 1, title: "Overview", words: 10, stub: true, line: 2 },
+        { number: null, depth: 2, title: "Draft", words: 0, stub: true, line: 3 },
+        { number: null, depth: 2, title: "Written", words: 42, stub: false, line: 6 },
+      ],
+    },
+    findings: [{ severity: "warning", line: 8, message: "pseudo-footnote: <script>" }],
+    refusal: null,
+  };
+  assert.equal(H.proseNoteCardPaintSnapshot(card, snapshot, {
+    available: true,
+    expanded: true,
+    onToggleOutline: () => calls.push("expand"),
+    onJumpSection: (_section, index) => calls.push(index),
+    onJumpFinding: (line) => calls.push(line),
+  }), true);
+  const nodes = tree(card);
+  const measures = nodes.find((node) => node.getAttribute("data-prose-measures") === "true");
+  assert.deepEqual(nodes.filter((node) => node.classList?.contains("bob-prose-note-card-measure")).map((node) => node.textContent), [
+    "≈ 310 words", "1 min read", "3 sections", "1 to write",
+  ]);
+  assert.match(measures.textContent, /≈ 310 words/);
+  assert.equal(nodes.filter((node) => node.classList?.contains("bob-prose-note-card-outline-number")).length, 0);
+  const outlineRows = nodes.filter((node) => node.classList?.contains("bob-prose-note-card-outline-row"));
+  assert.equal(outlineRows.length, 3);
+  assert.equal(outlineRows[0].querySelector(".bob-prose-note-card-outline-title").textContent, "Overview");
+  assert.equal(outlineRows[0].querySelector(".bob-prose-note-card-outline-measure").textContent, "≈ 10 words");
+  assert.equal(outlineRows[1].querySelector(".bob-prose-note-card-outline-measure").textContent, "to write");
+  const finding = nodes.find((node) => node.classList?.contains("bob-prose-note-card-finding"));
+  assert.equal(finding.textContent, "warning · line 8 · pseudo-footnote: <script>");
+  outlineRows[2].dispatch("click");
+  finding.dispatch("click");
+  nodes.find((node) => node.classList?.contains("bob-prose-note-card-unwritten")).dispatch("click");
+  assert.deepEqual(calls, [2, 8, "expand"]);
+});
+
+test("missing or old APIs omit the row, a live API reserves it, and refusals show Bob's message", () => {
+  const doc = miniDocument();
+  const model = H.proseNoteCardModel({ path: "notes/Quiet.md", frontmatter: { type: "[[prose]]", title: "Quiet" } });
+  const card = H.proseNoteCardBuildEl(doc, model);
+  H.proseNoteCardPaintSnapshot(card, null, { pending: false });
+  const row = tree(card).find((node) => node.getAttribute("data-prose-measure-row") === "true");
+  assert.equal(row.getAttribute("data-state"), "none");
+  H.proseNoteCardPaintSnapshot(card, null, { pending: true });
+  assert.equal(row.getAttribute("data-state"), "waiting");
+  H.proseNoteCardPaintSnapshot(card, {
+    status: "refused", numbering: null, outline: null, findings: [],
+    refusal: { code: "holds-tasks", message: "Bob refuses this note because it holds a task." },
+  }, { pending: false });
+  assert.equal(row.getAttribute("data-state"), "ready");
+  const measures = tree(card).find((node) => node.getAttribute("data-prose-measures") === "true");
+  assert.equal(measures.textContent, "Bob refuses this note because it holds a task.");
+  assert.doesNotMatch(measures.textContent, /0 words|0 sections|0 to write/);
+});
+
+test("outline jumps trust a matching Bob heading and otherwise pair metadata headings by order", () => {
+  const source = "---\ntype: [[prose]]\n---\n# Title\n## 1.1 Draft\n## Another\n";
+  assert.equal(H.proseNoteCardSectionLine({ line: 5, title: "Draft" }, 0, source, []), 4);
+  assert.equal(H.proseNoteCardSectionLine({ line: 5, title: "Different" }, 1, source, [
+    { heading: "Title", position: { start: { line: 3 } } },
+    { heading: "Another", position: { start: { line: 5 } } },
+  ]), 5);
+  assert.equal(H.proseNoteCardSectionLine({ line: 6, title: "Missing" }, 9, source, []), null);
+});
+
 test("the prose == registration is preview-gated, focuses title, and reads plugin data once", async () => {
   let loads = 0;
   let registrations = [];
@@ -260,4 +346,36 @@ test("the prose == registration is preview-gated, focuses title, and reads plugi
   assert.equal(loads, 1);
   plugin.proseNoteCardOnDisposeStart();
   assert.deepEqual(unregistered, ["prose"]);
+});
+
+test("the Prose Card subscribes once to api.prose v1 and only reads snapshots", () => {
+  let currentApi = null;
+  let subscriptions = 0;
+  let unsubscribes = 0;
+  let reads = 0;
+  let refreshes = 0;
+  let listener = null;
+  const api = {
+    version: 1,
+    snapshot(path) { reads += 1; return { path, status: "ready" }; },
+    subscribe(fn) { subscriptions += 1; listener = fn; return () => { unsubscribes += 1; }; },
+  };
+  const plugin = Object.create(H.BobLedgerToolsProseNoteCardMixin.prototype);
+  Object.assign(plugin, {
+    app: { plugins: { getPlugin: () => currentApi ? { api: { prose: currentApi } } : null } },
+    scheduleProseNoteCardRefresh() { refreshes += 1; },
+    proseNoteCardActive: true,
+  });
+  assert.equal(plugin.proseNoteCardSnapshot("notes.md"), null);
+  currentApi = { ...api, version: 2 };
+  assert.equal(plugin.proseNoteCardSnapshot("notes.md"), null);
+  currentApi = api;
+  assert.equal(plugin.proseNoteCardSnapshot("notes.md").path, "notes.md");
+  assert.equal(plugin.proseNoteCardSnapshot("notes.md").path, "notes.md");
+  assert.equal(subscriptions, 1);
+  assert.equal(reads, 2);
+  listener("notes.md");
+  assert.equal(refreshes, 1);
+  plugin.proseNoteCardUnbindApiSubscription();
+  assert.equal(unsubscribes, 1);
 });

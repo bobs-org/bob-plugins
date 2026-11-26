@@ -5,6 +5,7 @@ const PROSE_NOTE_CARD_HOST_KIND = "prose";
 const PROSE_NOTE_CARD_MOUNT_ATTR = "data-prose-source";
 const PROSE_NOTE_CARD_READING_PRIORITY = 48;
 const PROSE_NOTE_CARD_SURFACE_MARK = "bob-prose-note-card-surface";
+const PROSE_NOTE_CARD_SNAPSHOT_WAIT_MS = 1600;
 const proseNoteCardNodeSignatures = new WeakMap();
 const PROSE_NOTE_CARD_NUMBERING_COMMAND = "bob-articles:toggle-section-numbers";
 
@@ -114,6 +115,8 @@ class BobLedgerToolsProseNoteCardMixin {
       }) === true;
     } catch (_) { this.proseNoteCardPropertyRegistered = false; }
     try { this.proseNoteCardFootBind(); } catch (_) {}
+    this.proseNoteCardBindProviderEvents();
+    this.proseNoteCardEnsureApiSubscription();
     const epoch = this.proseNoteCardEpoch;
     try {
       Promise.resolve(propertyCardPreviewLoad(this)).then(() => {
@@ -135,6 +138,7 @@ class BobLedgerToolsProseNoteCardMixin {
     this.proseNoteCardPropertyRegistered = false;
     try { propertyCardFrontmatterCoordinatorReleaseKind?.(this, PROSE_NOTE_CARD_HOST_KIND); } catch (_) {}
     try { this.proseNoteCardFootUnbind(); } catch (_) {}
+    this.proseNoteCardUnbindApiSubscription();
   }
 
   proseNoteCardOnDisposeEnd() {
@@ -142,6 +146,11 @@ class BobLedgerToolsProseNoteCardMixin {
     this.proseNoteCardSourceCache?.clear?.();
     this.proseNoteCardSourceFlights?.clear?.();
     this.proseNoteCardFootTracked?.clear?.();
+    this.proseNoteCardSnapshotSettled?.clear?.();
+    for (const path of Array.from(this.proseNoteCardSnapshotTimers?.keys?.() || [])) {
+      this.proseNoteCardClearSnapshotWait(path);
+    }
+    this.proseNoteCardPluginEventsBound = false;
   }
 
   proseNoteCardDesktop() {
@@ -200,6 +209,110 @@ class BobLedgerToolsProseNoteCardMixin {
     } catch (_) { return false; }
   }
 
+  proseNoteCardProviderApi() {
+    try {
+      const api = this.app?.plugins?.getPlugin?.("bob-articles")?.api?.prose;
+      return api && api.version === 1 && typeof api.snapshot === "function"
+        && typeof api.subscribe === "function" ? api : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  proseNoteCardEnsureApiSubscription() {
+    const api = this.proseNoteCardProviderApi();
+    if (this.proseNoteCardSubscribedApi === api) return api;
+    this.proseNoteCardUnbindApiSubscription();
+    if (!api) return null;
+    try {
+      const unsubscribe = api.subscribe((path) => {
+        if (this.proseNoteCardActive !== true || this.proseNoteCardSubscribedApi !== api
+          || typeof path !== "string") return;
+        this.proseNoteCardClearSnapshotWait(path);
+        let snapshot = null;
+        try { snapshot = api.snapshot(path); } catch (_) {}
+        if (snapshot) this.proseNoteCardSnapshotSettled?.delete?.(path);
+        else this.proseNoteCardSnapshotSettled?.add?.(path);
+        this.scheduleProseNoteCardRefresh();
+      });
+      if (typeof unsubscribe === "function") {
+        this.proseNoteCardSubscribedApi = api;
+        this.proseNoteCardApiUnsubscribe = unsubscribe;
+      }
+      return api;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  proseNoteCardUnbindApiSubscription() {
+    try { this.proseNoteCardApiUnsubscribe?.(); } catch (_) {}
+    this.proseNoteCardApiUnsubscribe = null;
+    this.proseNoteCardSubscribedApi = null;
+    for (const path of Array.from(this.proseNoteCardSnapshotTimers?.keys?.() || [])) {
+      this.proseNoteCardClearSnapshotWait(path);
+    }
+    this.proseNoteCardSnapshotSettled?.clear?.();
+  }
+
+  proseNoteCardClearSnapshotWait(path) {
+    const timers = this.proseNoteCardSnapshotTimers;
+    if (!(timers instanceof Map) || !timers.has(path)) return;
+    try { clearTimeout(timers.get(path)); } catch (_) {}
+    timers.delete(path);
+  }
+
+  proseNoteCardScheduleSnapshotWait(path, api) {
+    if (!path) return;
+    if (!(this.proseNoteCardSnapshotSettled instanceof Set)) this.proseNoteCardSnapshotSettled = new Set();
+    if (!(this.proseNoteCardSnapshotTimers instanceof Map)) this.proseNoteCardSnapshotTimers = new Map();
+    if (this.proseNoteCardSnapshotSettled.has(path) || this.proseNoteCardSnapshotTimers.has(path)) return;
+    const timer = setTimeout(() => {
+      this.proseNoteCardSnapshotTimers.delete(path);
+      if (this.proseNoteCardActive !== true || this.proseNoteCardSubscribedApi !== api) return;
+      let snapshot = null;
+      try { snapshot = api.snapshot(path); } catch (_) {}
+      if (snapshot) return;
+      this.proseNoteCardSnapshotSettled.add(path);
+      this.scheduleProseNoteCardRefresh();
+    }, PROSE_NOTE_CARD_SNAPSHOT_WAIT_MS);
+    this.proseNoteCardSnapshotTimers.set(path, timer);
+  }
+
+  proseNoteCardBindProviderEvents() {
+    if (this.proseNoteCardPluginEventsBound) return;
+    this.proseNoteCardPluginEventsBound = true;
+    const plugins = this.app?.plugins;
+    if (!plugins || typeof plugins.on !== "function" || typeof this.registerEvent !== "function") return;
+    for (const eventName of ["plugin-loaded", "plugin-unloaded"]) {
+      try {
+        this.registerEvent(plugins.on(eventName, () => {
+          this.proseNoteCardEnsureApiSubscription();
+          this.scheduleProseNoteCardRefresh();
+        }));
+      } catch (_) {}
+    }
+  }
+
+  proseNoteCardSnapshot(path) {
+    const key = proseNoteCardPath(path);
+    const api = this.proseNoteCardEnsureApiSubscription();
+    if (!key || !api) return null;
+    try {
+      const snapshot = api.snapshot(key);
+      if (snapshot && snapshot.path === key) {
+        this.proseNoteCardClearSnapshotWait(key);
+        this.proseNoteCardSnapshotSettled?.delete?.(key);
+        return snapshot;
+      }
+      this.proseNoteCardScheduleSnapshotWait(key, api);
+      return null;
+    } catch (_) {
+      this.proseNoteCardScheduleSnapshotWait(key, api);
+      return null;
+    }
+  }
+
   proseNoteCardToggleNumbering() {
     if (!this.proseNoteCardNumberingCommandAvailable()) return false;
     try {
@@ -209,13 +322,20 @@ class BobLedgerToolsProseNoteCardMixin {
 
   proseNoteCardOpenOptions(path, model, surface) {
     const sourcePath = proseNoteCardPath(path);
+    const api = this.proseNoteCardEnsureApiSubscription();
+    const snapshot = this.proseNoteCardSnapshot(sourcePath);
     return {
       expanded: this.proseNoteCardIsExpanded(sourcePath),
       keyLive: propertyCardFoldKeyLive(this, surface),
       numberingCommandAvailable: this.proseNoteCardNumberingCommandAvailable(),
+      proseApiAvailable: Boolean(api),
+      snapshot,
+      snapshotPending: Boolean(api && !snapshot && !this.proseNoteCardSnapshotSettled?.has?.(sourcePath)),
       reducedMotion: propertyCardFootReducedMotion?.() === true,
       onToggleOutline: (next) => this.proseNoteCardSetExpanded(sourcePath, next),
       onToggleNumbering: () => this.proseNoteCardToggleNumbering(),
+      onJumpSection: (section, index) => this.proseNoteCardJumpSection(sourcePath, section, index),
+      onJumpFinding: (line) => this.proseNoteCardJumpFinding(sourcePath, line),
       onLink: (target, event) => { void this.homeCardOpenPath?.(target, sourcePath, event); },
     };
   }
@@ -229,6 +349,8 @@ class BobLedgerToolsProseNoteCardMixin {
         options?.expanded === true,
         options?.keyLive === true,
         options?.numberingCommandAvailable === true,
+        options?.proseApiAvailable === true,
+        options?.snapshot || null,
       ]);
     } catch (_) { return ""; }
   }
@@ -238,6 +360,15 @@ class BobLedgerToolsProseNoteCardMixin {
     if (!card) return null;
     card.setAttribute(PROSE_NOTE_CARD_MOUNT_ATTR, model.path);
     if (options.reducedMotion) card.classList?.add?.("is-reduced-motion");
+    try {
+      proseNoteCardPaintSnapshot(card, options.snapshot, {
+        pending: options.snapshotPending === true,
+        expanded: options.expanded === true,
+        onToggleOutline: options.onToggleOutline,
+        onJumpSection: options.onJumpSection,
+        onJumpFinding: options.onJumpFinding,
+      });
+    } catch (_) {}
     try { this.proseNoteCardAppendFoot(card, model.path, model, doc, footSpec, options); } catch (_) {}
     return card;
   }
@@ -396,6 +527,14 @@ class BobLedgerToolsProseNoteCardMixin {
     const anotherOwner = Array.from(this.proseNoteCardReading || []).some((item) => item.surface === root && item.path !== path);
     if (!anotherOwner) scope?.classList?.remove?.(PROSE_NOTE_CARD_SURFACE_MARK);
     if (!anotherOwner) this.proseNoteCardSurfaceScopes?.delete?.(scope);
+  }
+
+  proseNoteCardJumpSection(path, section, index) {
+    return proseNoteCardJumpToSection(this, path, section, index);
+  }
+
+  proseNoteCardJumpFinding(path, line) {
+    return proseNoteCardJumpToLine(this, path, line);
   }
 
   proseNoteCardRemoveStrays(root, sourcePath) {

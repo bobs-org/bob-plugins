@@ -62,6 +62,76 @@ function articlePlan(overrides = {}) {
   };
 }
 
+test("api.prose v1 returns frozen copies, notifies subscribers, and forgets cached plans", () => {
+  const plugin = new BobArticlesPlugin({}, {});
+  plugin.articleSetupProseApi();
+  const api = plugin.api.prose;
+  assert.equal(api.version, 1);
+  assert.equal(api.snapshot("article.md"), null);
+
+  const notices = [];
+  const unsubscribe = api.subscribe((path) => notices.push(path));
+  let spawnCalls = 0;
+  plugin.articleRunPlan = () => { spawnCalls += 1; };
+  const outline = {
+    numbering: false,
+    words: 1234,
+    sections: [{ line: 2, depth: 1, title: "Start", stub: true }],
+  };
+  const findings = [{ code: "deep-section", severity: "info", line: 4, message: "Too deep" }];
+  assert.equal(plugin.articleRememberPlan("article.md", {
+    status: "changed", outline, findings, reason: null,
+  }), true);
+  const snapshot = api.snapshot("article.md");
+  assert.equal(snapshot.status, "ready");
+  assert.equal(snapshot.numbering, false);
+  assert.deepEqual(snapshot.outline, outline);
+  assert.deepEqual(snapshot.findings, findings);
+  assert.equal(Object.isFrozen(snapshot), true);
+  assert.equal(Object.isFrozen(snapshot.outline.sections), true);
+  assert.equal(Object.isFrozen(snapshot.findings[0]), true);
+  outline.sections[0].title = "mutated";
+  findings[0].message = "mutated";
+  assert.equal(snapshot.outline.sections[0].title, "Start");
+  assert.equal(snapshot.findings[0].message, "Too deep");
+  assert.equal(api.snapshot("article.md"), snapshot);
+  assert.deepEqual(notices, ["article.md"]);
+  assert.equal(spawnCalls, 0);
+
+  plugin.articleForgetPlan("article.md");
+  assert.equal(api.snapshot("article.md"), null);
+  assert.deepEqual(notices, ["article.md", "article.md"]);
+  unsubscribe();
+  plugin.articleRememberPlan("article.md", { status: "unchanged", outline: { words: 1, sections: [] }, findings: [] });
+  assert.deepEqual(notices, ["article.md", "article.md"]);
+});
+
+test("api.prose reports Bob refusals and rejects a late older plan", () => {
+  const plugin = new BobArticlesPlugin({}, {});
+  plugin.articleSetupProseApi();
+  const oldRequest = plugin.articleBeginProseRequest("article.md");
+  const newRequest = plugin.articleBeginProseRequest("article.md");
+  assert.equal(plugin.articleRememberPlan("article.md", {
+    status: "changed", outline: { numbering: true, words: 870, sections: [] }, findings: [],
+  }, { requestGeneration: newRequest }), true);
+  assert.equal(plugin.articleRememberPlan("article.md", {
+    status: "changed", outline: { numbering: true, words: 200, sections: [] }, findings: [],
+  }, { requestGeneration: oldRequest }), false);
+  assert.equal(plugin.api.prose.snapshot("article.md").outline.words, 870);
+
+  const refusalRequest = plugin.articleBeginProseRequest("refused.md");
+  plugin.articleRememberPlan("refused.md", {
+    status: "skipped",
+    reason: { code: "holds-tasks", message: "Bob's refusal text." },
+    findings: [{ severity: "warning", line: 5, message: "Move the task." }],
+  }, { requestGeneration: refusalRequest });
+  const refusal = plugin.api.prose.snapshot("refused.md");
+  assert.equal(refusal.status, "refused");
+  assert.deepEqual(refusal.refusal, { code: "holds-tasks", message: "Bob's refusal text." });
+  assert.equal(refusal.outline, null);
+  assert.equal(refusal.findings.length, 1);
+});
+
 test("article detection accepts scalar and list frontmatter values", () => {
   assert.equal(helpers.articleHasArticleType({ type: "[[article]]" }), true);
   assert.equal(helpers.articleHasArticleType({ type: ["project", "article"] }), true);

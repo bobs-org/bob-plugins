@@ -9,7 +9,7 @@ function articleDefaultSettings() {
 }
 
 class BobArticleAdoptModal extends Modal {
-  constructor(app, plugin, view, sent, formatted, changes, plan) {
+  constructor(app, plugin, view, sent, formatted, changes, plan, requestGeneration) {
     super(app);
     this.plugin = plugin;
     this.view = view;
@@ -17,6 +17,7 @@ class BobArticleAdoptModal extends Modal {
     this.formatted = formatted;
     this.changes = changes;
     this.plan = plan;
+    this.requestGeneration = requestGeneration;
   }
 
   onOpen() {
@@ -54,6 +55,7 @@ class BobArticleAdoptModal extends Modal {
         this.formatted,
         this.changes,
         this.plan,
+        this.requestGeneration,
       );
       if (committed) this.close();
       else convert.disabled = false;

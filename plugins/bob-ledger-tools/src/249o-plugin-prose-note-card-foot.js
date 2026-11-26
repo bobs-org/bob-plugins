@@ -124,7 +124,7 @@ class BobLedgerToolsProseNoteCardFootMixin {
     const key = proseNoteCardPath(path);
     if (!card || !key) return null;
     const spec = footSpec || this.proseNoteCardFootSpec(key, model);
-    return propertyCardFootAdapterAppend(
+    const built = propertyCardFootAdapterAppend(
       card,
       key,
       doc,
@@ -132,5 +132,28 @@ class BobLedgerToolsProseNoteCardFootMixin {
       this.proseNoteCardFootHandlers(key),
       this.proseNoteCardFootPendingScroll,
     );
+    if (!built?.element) return built;
+    const findings = Array.isArray(options.snapshot?.findings) ? options.snapshot.findings : [];
+    const count = options.snapshot ? findings.length : null;
+    const lint = doc.createElement(count > 0 ? "button" : "span");
+    lint.setAttribute("class", "bob-prose-note-card-lint-slot");
+    lint.setAttribute("data-prose-lint", "true");
+    lint.setAttribute("data-state", count === null
+      ? options.proseApiAvailable === true ? "waiting" : "none"
+      : count > 0 ? "ready" : "none");
+    lint.setAttribute("aria-live", "polite");
+    lint.setAttribute("aria-hidden", count > 0 ? "false" : "true");
+    if (count > 0) {
+      lint.setAttribute("type", "button");
+      lint.setAttribute("aria-label", `${count} findings. Expand the Prose outline.`);
+      lint.setAttribute("title", `${count} Bob finding${count === 1 ? "" : "s"} · click to expand Findings`);
+      lint.appendChild(doc.createTextNode(`⚠ ${count}`));
+      lint.addEventListener?.("click", (event) => {
+        try { event?.preventDefault?.(); } catch (_) {}
+        try { options.onToggleOutline?.(true); } catch (_) {}
+      });
+    }
+    try { built.element.insertBefore(lint, built.drawer || null); } catch (_) { built.element.appendChild(lint); }
+    return built;
   }
 }

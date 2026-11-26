@@ -25,12 +25,27 @@ unnumbered, and other values show a warning. It runs the Bob Prose toggle
 command when registered; otherwise it stays inert. The foot carries the
 authored `created` stamp and the Properties drawer.
 
-The measure row comes from Bob Prose's read-only outline snapshot:
-approximate words and reading time, the exact section count, and the
-sections still to write. Parts without a snapshot are omitted, never
-zeroed. A `§` chip shows section numbering and toggles it through Bob
-Prose. The card is folded by default; `_` expands a bounded outline whose
-rows jump to their sections, followed by the findings list.
+The measure row comes from Bob Prose's read-only `api.prose` v1 snapshot.
+The card uses Bob's word total, rounds it to the nearest 10 below 1,000 and
+the nearest 100 from 1,000 up, and estimates reading time at 230 words per
+minute. It shows the exact section count and counts only stub sections with no
+deeper section as `N to write`; an umbrella heading with written subsections
+is not counted. Missing parts are omitted rather than shown as zero. Word
+counts are approximate because they include heading text.
+
+If Bob Prose is absent, disabled, or exposes an older API, the card stays
+identity-only and hides the measure row. With API v1 loaded, the row reserves
+its height while a snapshot is pending. A refusal shows Bob's message instead
+of empty measures. The foot lint chip counts Bob's findings. The card is folded
+by default; `_` or a `to write` chip expands a bounded outline, followed by
+findings. Outline rows show Bob's number only when numbering is on, the
+de-numbered title, and `≈ words` or `to write`. A jump checks Bob's saved line
+against the current buffer heading, then pairs by order with metadata-cache
+headings if the line no longer matches. Findings jump to their reported lines.
+
+A `§` chip reads local `section_numbers` and invokes the Bob Prose toggle
+command when that command is registered. The card never computes counts,
+numbers, or stubs, starts Bob, or writes the vault.
 
 ## Keys
 

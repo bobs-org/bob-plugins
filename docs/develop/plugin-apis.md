@@ -264,103 +264,36 @@ routing planners are pinned by
 bob-cli. See the [Pomodoro themes contract](https://bobs-org.github.io/pomodoro-themes/)
 for the shared catalog, hue, and menu rules.
 
-The v1 namespace also exposes synchronous task-theme helpers:
+The `themes` v1 namespace also exposes synchronous task-type helpers:
 `suggestFor({ path, line, text? })`, `taskThemeOf(text)`,
-`setTaskTheme(text, name)`, `clearTaskTheme(text)`, and `isKnownTheme(key)`,
-plus the additive
-task-type routing surface: `effectiveTypeFor(request)`,
-`typeComponentsOf(name)`, `typeAgrees(taskKey, entryName)`,
-`agreeEntry(input)`, `settleClosed(name, worked)`, and
-`agreeLedgerEntries({ path, content, entryLines? })`,
-`planRetype(options)`, `planLanding(options)`, `planSplit(options)`,
-`mergeNames(base, others)`,
-`narrowClosed(name, workedKeys)`, `shed(name, beforeKeys, afterKeys)`,
-`planPlacement(options)`, and
-`planRelocation(options)`. `suggestFor` uses a
-vault-relative `path`, a one-based integer line number, and optional full live
-Markdown text. When `text` is omitted it reads that line only from an open
-editor whose path matches; it returns `null` when the path/line cannot be read
-or no rule suggests a theme. It never substitutes another active note or
-stale Tasks metadata. Suggestions contain the Rust `ThemeRef` shape and
-`source`/`label`; only note suggestions have `from`, and task-field suggestions
-always have `inherited`, including `null`. A valid task `[root:: NOTE]` field
-starts the note-default walk at that note; a field needing repair falls back
-to the task's own residence. A repaired theme field adds
-`repair: "duplicate" | "invalid"` only when a suggestion remains. After the
-note walk finds nothing, the cascade falls through to `plan.default_type`
-(source `default`, label `default type`); `off` stops the note walk but still
-falls through to the default. A note whose `task_type:` and legacy `theme:`
-defaults disagree reports a `type_default_conflict` warning through the same
-channel as `theme_default_invalid`, and `task_type:` wins. `from`
-contains the declaring note's path, lowercase stem, `area`/`project` kind,
-root-area hue when available, and the residence-to-declarer path chain.
-Rust-compatible serialized `ThemeRef` values omit `known` when true and omit
-`configured` when the catalog has no configured vocabulary.
+`setTaskTheme(text, name)`, `clearTaskTheme(text)`, `isKnownTheme(key)`,
+`effectiveTypeFor(request)`, and the pure agreement and routing planners.
 
-`taskThemeOf` returns `{ state: "none" }`,
-`{ state: "set", value, key, fields }`, or
-`{ state: "repair", repair, fields }`; field spans use JavaScript UTF-16
-offsets. The parser accepts the `type` and `theme` keys in both
-`[key:: value]` and `(key:: value)` forms with Rust's spacing and name rules;
-two or more type-ish fields on one line are the `duplicate` repair state.
-`setTaskTheme` emits `[type:: NAME]` and removes both spellings; the two
-setters return rewritten strings and do not write the vault.
-`effectiveTypeFor(request)` runs the same cascade as `suggestFor` (field,
-reading task, note defaults, then `plan.default_type`) and returns the full
-suggestion or `null`. It accepts `{ path, line, text?, asIfOpen? }`; completed
-and cancelled tasks return `null` by default, while `asIfOpen: true` resolves
-their stored or inherited type using the same cascade as an open task. This is
-for writers that need the task's pre-close type. `typeComponentsOf(name)`
-returns `{ name, key, isType }` rows per D4. `typeAgrees(taskKey, entryName)`
-answers the D5 invariant; a missing type always agrees. `agreeEntry({ name,
-open?, children, sources? })` mirrors the shared name agreement rule and
-returns `{ name, added, removed, unrepaired }`; each child is `{ kind:
-"live" | "worked" | "unknown" | "prose", key?, name? }`. `settleClosed(name,
-worked)` returns the closed session name based on worked `{ key, name }` rows.
-`agreeLedgerEntries({ path, content, entryLines? })` asynchronously classifies
-the direct children of the selected open entries (all open entries when
-`entryLines` is omitted; otherwise one-based ledger lines), resolves task
-blocks through the metadata cache and cached or open-editor note text, then
-returns `{ content, changed, entries, unrepaired }`. It changes only name
-tails in the returned text and never writes a file; unresolved, ambiguous, or
-untyped links are reported as unknown and prevent unsupported types from being
-dropped. `planLanding({ effective, inherited,
-destination, retype?, selector?, tabPick?, sources? })` returns `container`,
-`consistent`, `merge`, `set`, or `clear` per R2. `merge` preserves the task
-type and returns the merged destination name; `retype: true` takes the
-explicit task-field path. MEET uses that path regardless of `retype`.
-`planRetype({ effective, effectiveName?, inherited, destination, selector?,
-tabPick?, sources? })` remains as a v1 alias for `planLanding` with
-`retype: true`. `planSplit({ name, open, linkKeys, splitSelectors?, sources? })`
-partitions an open merged Pomodoro by type per R4, returning `ok` with the
-remaining name and one created entry per split type (each with its moved
-link indices, name-ordered, still created when empty) or an `error` with a
-`split_*` code; a null or empty selector set splits every merged-in type.
-`mergeNames(base, others)` joins components
-in order and keeps the first spelling of duplicates. `narrowClosed(name,
-workedKeys)` narrows a closed merged Pomodoro to the worked type components,
-retaining labels and source order. `shed(name, beforeKeys, afterKeys)` removes
-merged-in types whose last Task Link left, while retaining the base type,
-labels, and unlinked types. `effective` and `inherited` accept
-suggestion objects or keys.
-`planPlacement({ type, typeName?, entries, alreadyQueued?, exempt? })`
-returns `entry`, `create`, `alreadyQueued`, or `noType` per D7, and
-`planRelocation({ entries, liveLink, type, typeName?, sources? })` returns
-`unchanged`, `renameEntry`, `appendComponent`, `moveTo`, `renamePlaceholder`,
-or `createBelow` per D8. Vocabulary, exempt, and inventory come from the
-configured-rows snapshot and plan config; only `exempt` accepts an explicit
-placement override. None of the
-routing methods spawns bob, writes the vault, or throws: unusable input
-resolves to `null` (`typeComponentsOf` resolves to `[]`, `typeAgrees` to
-`true`).
+`suggestFor` uses a vault-relative path, one-based line, and optional live note
+text. Without `text`, it reads only a matching open editor. It returns the
+Rust-compatible `ThemeRef` plus `source` and `label`, or `null`; it never
+substitutes another note or stale Tasks metadata. `taskThemeOf` returns
+`{ state: "none" }`, `{ state: "set", value, key, fields }`, or
+`{ state: "repair", repair, fields }`; spans are UTF-16 offsets. The parser
+accepts `type` and legacy `theme` fields in bracket or parenthesis form.
+`setTaskTheme` writes canonical `[type:: NAME]` text in its returned string
+and removes both spellings; these helpers never write the vault.
 
-`isKnownTheme(key)` is synchronous and read-only. It checks the cached theme
-catalog and today's Pomodoro names, preferring an open daily editor so unsaved
-components count immediately. Hidden names remain known. Suggestion warnings
-such as invalid note defaults are available from the exported pure resolver
-helper for contract tests; `suggestFor` returns only a suggestion or `null`,
-not a command-response envelope. All additions are additive under
-`themes` v1; the root API remains v3.
+`effectiveTypeFor({ path, line, text?, asIfOpen? })` applies the same
+suggestion cascade. Done and cancelled tasks return `null` unless
+`asIfOpen: true` requests their stored or inherited type. `typeComponentsOf`
+returns `{ name, key, isType }` rows; `typeAgrees` checks the shared entry
+invariant. `agreeEntry` returns `{ name, added, removed, unrepaired }`;
+`settleClosed` narrows a closed entry to its worked components.
+`agreeLedgerEntries({ path, content, entryLines? })` asynchronously returns
+reconciled text and entry reports without writing; unresolved or ambiguous
+links remain unknown and prevent type removal.
+
+The pure planners are `planLanding`, its v1 alias `planRetype`, `planSplit`,
+`mergeNames`, `narrowClosed`, `shed`, `planPlacement`, and `planRelocation`.
+They return the selected type or placement action, split partitions, or an
+unusable-input result without spawning Bob or writing. Full cascade, parser,
+and planner rules are in the [Pomodoro Themes contract](https://bobs-org.github.io/pomodoro-themes/).
 
 Explicit `[theme:: NAME]` / `(theme:: NAME)` fields render as PT13 pills in
 Live Preview, Reading view, and Tasks/Dataview task rows through the same
@@ -434,213 +367,76 @@ The `token` names confirmed identities and covers subsets when lines shift; pass
 it as `context.mailCloseConfirmed` so one gesture prompts once. Both methods settle
 without throwing. The root API remains version 3 because this is additive.
 
-`inboxRoute` has `isInboxNote(path)`,
-`prompt(request)`, and `commit(request)`.
-`quickRoll` has `keyLabel` (`Alt+P`) and
-`preview({ content | lines, line, tier })`. `preview` is synchronous
-and never throws: it plans the same recommendation `Alt+P` would use
-and returns the frozen `{ ok, kind, line, compact, detail, parts }` preview
-(`kind` is `roll`, `decay`, `cancel`, or `assign`; unprioritized tasks
-now preview), or `{ ok: false, reason }` for PRE/POST rows and lines
-with no recommendation. `parts` is additive (`keyLabel`, `verb`, `fromLabel`,
-`toLabel`, `step`, `limit`); joining it rebuilds `compact` exactly (`roll` and
-`assign` join `toLabel`, `decay` joins `fromLabel→toLabel`, a limited roll adds
-`step/limit`). With a null plugin (after unload) it returns
-`{ ok: false, reason: "unavailable" }`; the root api `version` stays 3.
-`taskLinkLane.matches({ content, line, path })` is synchronous;
-`toggle(args)` performs the Next/In Progress change and resolves
-to a result object. `logRecall.attach({ inputEl, kind, bandHost, density,
-arrowKeys, ownKeys })` returns `handleKeydown`, `backOut`, `isRecalling`,
-`setKind`, and `detach`; standalone modals set `ownKeys: true`, while picker
-pipelines set it to false and call `handleKeydown` once. Passing additive
-`links: true` (plus `sourcePath`) returns a `proseField` handle instead: the
-same keys, plus `isLinkOpen()`, `rebind`, and `setSourcePath`. Older nav
-ignores `links` and attaches recall only. `logRecall.noteUsed`
-forwards a successful local write to Ledger Tools `logs.noteUsed`. Feature-detect
-`api.proseField` with `Number(api.proseField.version) >= 1`. `proseField.attach`
-takes `inputEl`, `bandHost`, `sourcePath` (`string | null | () => string | null`),
-`recall`, `links`, `tasks` (defaults to `links`), `subjects`, `mode` (`inline` | `field`), `minOffset`, `density`, `ownKeys`,
-and `scope`. v2 adds `isTaskOpen()`, `isNaming()`, and `setSubjects(next)`; `isLinkOpen()` covers both modes. The root api version stays 3. Enter and Tab accept a row while the
-LINK band is open and never submit the prompt; only an Enter accept swallows
-the held Enter. Hosts whose listeners run first (the Record Card) attach with
-`ownKeys: false`, call `backOut()` as their first Esc rung, and offer every key
-to `handleKeydown` first. Completion only inserts text. `successors.pick(model)` resolves to a result
-with a `picks` array or `null` when no choice is made. Selectable
-rows may carry additive `task: { path, line, text, displayText, status,
-preimage }` so `Ctrl+Shift+Enter` can retarget through
-`pomodoroLinkPicker.pick({ task })`. `line` is one-based and `text` is
-the full matching note; `preimage` is the original task line used to
-refuse a changed or missing source before the nested picker. Older rows
-without `task` still retarget without changing a task type.
-When a close verdict is staged, the picker asks `mailCloseGuard` before it
-settles. Keeping the close leaves the picker and its verdicts open; a confirmed
-close adds `context.mailCloseConfirmed` to the result for the downstream writer.
-Destination overrides may carry additive `themeIntent` and
-`preserveSpelling`. Both navigation's
-`normalizeSuccessorDestinationOverride` and the cycler's
-`normalizeSuccessorPickDestination` keep a valid intent, drop a
-malformed one without rejecting the destination. Marked-row retargets run one picker per target
-in displayed order and publish overrides only when every pick succeeds.
-The context transport and nested picker never mutate a task field. For a
-successor's default destination, the cycler resolves the task's effective
-type with `effectiveTypeFor` and asks `planPlacement` to keep a matching
-open Pomodoro, select another matching entry, or create the typed entry.
-Strict-cap refusal leaves a requested successor unlinked. Default placement
-does not edit the task field. An explicit retarget carries a valid deliberate
-`themeIntent`; the cycler revalidates `shown` against a fresh
-`effectiveTypeFor` and delegates to `planLanding`. The default merge updates
-the destination Pomodoro name alongside the new Task Link; Alt+Enter delegates
-to `setTaskTheme`/`clearTaskTheme` after status recovery and before
-block-ID/freshness assembly. Untouched preselection, missing or changed
-suggestions, and stale or refused destinations skip the type and name change.
-`successors` v2 (keep-moving, `docs/task-dependencies.md` §12.13 and
-§12.15 in bob-cli) adds a fourth group, `keep_moving`, which offers a
-leaf project's ready tasks when a close drains its last planned task. A
-group may carry a `caption` (the why line) and a `tag` (the contrast tag,
-right-aligned on the heading), and its `folded` counts gain `blocked` and
-`scheduled`. A `keep_moving` group folds into one
-`2 blocked · 1 scheduled later · 1 hidden` line. Rows may carry a `lane`
-(`Pending`, `Next`, `Ready`, or `Blocked`); every group shows the lane name
-and derives it from `status` when `lane` is absent, so a raw status symbol is
-never displayed. When every group is `keep_moving` the title (if the model
-omits one) is `Keep ‹N› moving` / `Keep 2 projects moving` and the header icon
-is `skip-forward`. Unknown groups are still dropped and v1 models render
-exactly as before. Callers must offer `keep_moving` groups only when
-`api.successors?.version >= 2`, because an older navigation drops the group.
-`successors` v3 (relation successors, `docs/task-dependencies.md` §12.13 and
-§12.18 in bob-cli) adds a fifth group, `relation`. A relation group carries
-`header`, `caption`, `tag`, and `foldText`; `after: {notePath, blockId, text}`;
-`event: "parked"|"done"`; and `label`. `folded` may include `alreadyStarted`
-and `waitsFor`. A row on any group may carry `suffix` (several triggers) and
-`reason` (a second reason). The relation group uses a neutral left accent and
-the `link-2` icon; when every group is `relation` the modal title is the model
-title (or `‹Label› “‹T›”` / `‹Label› k tasks`) and the header icon is
-`link-2`. Unknown groups are still dropped and v1/v2 models render exactly as
-before. Callers must offer `relation` groups only when
-`api.successors?.version >= 3`.
-`successors` v4 (offer verdicts, `docs/task-dependencies.md` §12.22 in
-bob-cli) keeps every v3 group and adds per-row verdicts. A model may carry
-`close: { supported: true }` and each row an engine-authored `close`
-descriptor (`complete`, `cancel`, `why`, `completeConsequence`,
-`cancelConsequence`, `scopeNote`, `unblocks`); the normalizer keeps row
-`close` only when the model carries support, so v3-shaped models render
-exactly as before. `pick(model)` resolves
-`{ picks: [{ key, destination? }], closes: [{ key, outcome: "done" |
-"cancelled", reason? }] }` or `null`. `null` still means no commit (Esc,
-discard, click-outside, unload, or a second picker); zero picks with at
-least one close is a commit, never `null`. Closes are re-filtered to keys
-whose descriptor allows that outcome and never overlap picks. The card
-stages one verdict per row (Leave, Pull in, Done, Cancel) with `Ctrl+X` /
-`Ctrl+Shift+X` on literal Control, an optional inline Cancel reason, a
-two-step Esc, hover buttons, and the `pull in {a} · ✓ {b} done · ⊘ {c}
-cancel` footer; the task-merge card never receives `close` and stays
-pull-in-only. Callers attach `close` descriptors only when
-`api.successors?.version >= 4`.
-`successors` v5 adds opt-in `jump: { supported: true }` to v4
-(`docs/task-dependencies.md` §12.24); only exact `true` survives
-normalization. Ctrl+J pins the highlighted keyed, selectable row without
-moving it; muted rows, folds, and empty lists refuse. Pins suppress highlight
-fallback and permit `{ picks: [], jump: { key } }`. Invalid pins drop; a result
-is non-null only with picks, closes, or a valid jump. Supported cards show a
-solid `Jump` capsule, hover button, `jump target` suffix, Ctrl+J chip, and
-truncated `· ↗ “S”` summary. Opt in at `api.successors?.version >= 5`.
-`taskSplit` v1 carries one task requirement into its own task.
-`carryReq({ notePath, line, expectedLine?, expectedOwnerPreimage? })`
-resolves to `{ ok: true, task, moveMap, restores, notice, cursor }` or
-`{ ok: false, code, message, failedPaths? }`. `line` and the returned
-`task.line` are one-based; `task` is `{ path, line, blockId, text }` and
-`moveMap` is `{ sourcePath, destinationPath, moves }` with one-based line
-moves. `restores` holds exact before/after snapshots plus `created` flags
-for every changed file, so one guarded Undo restores the whole batch.
-`expectedLine` is the digest of the requirement line the caller saw and
-`expectedOwnerPreimage` is the exact owner-block text it saw; both refuse
-as `split_stale_ref` when the note moved underneath the caller. Missing or
-non-requirement targets refuse as `split_owner_missing` or `not_a_req`;
-an unavailable writer refuses as `split_unavailable`. The API never
-navigates and never shows an Undo notice: the standalone `Ctrl+Shift+T`
-command owns its notice and landing, and the close card owns the batch
-receipt. Feature-detect the namespace with
-`Number(api.taskSplit?.version) >= 1`.
 
-`successors` v6 adds `requirements` groups before ordinary successor groups
-(`docs/task-dependencies.md` §12.25 in bob-cli). A group has
-`group: "requirements"`, `kind: "requirements"`, snapshot-bound `owner`,
-canonical `copy` and `folded`, plus rows with the `offer`, `req`, and
-`consequences` objects from bob. Requirement-only models need no ordinary
-offer, close descriptor, or destination. The normalizer preserves these
-objects and adapts each row to the picker shell at one boundary.
+`inboxRoute.isInboxNote(path)` is synchronous and never throws. `prompt(request)`
+resolves `{ kind: "move", path, name }`, `{ kind: "stay" }`, or
+`{ kind: "cancel" }`; `commit(request)` resolves
+`{ ok, name, count, notice, handledRefs, reason }`. Neither promise rejects.
+After unload, prompt resolves `stay` and commit resolves unavailable.
+The shared route rules are in the [Task Dependencies contract](https://bobs-org.github.io/task-dependencies/) §9.
 
-Requirement rows use `Ctrl+X` for Met, `Ctrl+Shift+X` for Drop with the
-optional `Why drop it? (optional)` Log Recall field, `Ctrl+Shift+T` for Carry,
-and `Space`/`Tab` for Carry plus pull-in (`Tab` advances). Repeating a choice
-returns the row to Met. A structural choice folds its descendants while
-retaining their staged choices; conflicting descendant choices remain visible
-with the canonical ancestor message and block submission until resolved.
-`Ctrl+A` never selects requirement rows. `Ctrl+J` pins a requirement row for
-navigation only. The footer shows `reqs ✓N ⊘N →N`.
+`quickRoll` provides `keyLabel` (`Alt+P`) and
+`preview({ content | lines, line, tier })`. The synchronous, non-throwing
+preview returns `{ ok, kind, line, compact, detail, parts }` or
+`{ ok: false, reason }`; `parts` reconstruct `compact`, and kinds are `roll`,
+`decay`, `cancel`, and `assign`. Unprioritized tasks preview; PRE/POST rows
+and lines without a recommendation refuse. After unload it returns unavailable.
 
-`pick(model)` adds `reqs: [{ key, verdict, reason? }]` to the existing result;
-`verdict` is `met`, `drop`, `carry`, or `carry_pulled`. Default Met is
-unstaged, while explicit Met remains a keyed result for validation. A req-only
-or pin-only result is non-null and may carry an empty `picks` array. Callers
-must offer requirement groups only when `api.successors?.version >= 6`; older
-pickers continue to receive v5 models.
-`blocks.openStage(ref)` and
-`blocks.removeDependent(ownerRef, target)` resolve to result
-objects. `relations.removeLink(sourceRef, targetRef)` removes the
-authored LINKS edge from the source and best-effort-updates the
-target's LINKED FROM mirror; `relations.openStage({path, line,
-direction})` opens the owner's Links stage for `direction: "to"` (or an
-absent direction) and settles `{ ok: false, reason: "unavailable" }`
-otherwise. Callers
-feature-detect `api.relations?.version >= 1` before showing chip
-controls. `notice.showUnblocked(model)` presents the Unblocked card.
-`notice` v2 reads an optional `keep_moving` row array (the same row shape as
-`unblocked`, with `trigger: "last_planned"` and an `offer.project`). Only
-picked rows (those with a `link`) are shown. When every row is keep-moving the
-card reads `Keep ‹N› moving` with ⏭ in the glyph slot and the class
-`is-keep-moving`; in a mixed card the keep-moving rows follow the dependency
-rows with a `keeps ‹N› moving` chip and count as linked. A card with nothing
-picked is silent. Callers add `keep_moving` rows only when
-`api.notice?.version >= 2`.
-`notice` v3 reads optional `relation_successors` and `relation_held` rows plus
-`relation_check`. An all-relation card uses `‹Label› “‹T›”` as its title, 🪢
-in the glyph slot, and the class `is-relation`. Mixed cards add a
-`‹label› “‹T›”` chip; relation picks count as linked. The receipt reads
-`✓ ‹T›` for done and `‹T› parked` for parked. Held-only and unavailable
-checks use the muted copy from §12.18. Older payloads still render as before.
-Callers add relation rows only when `api.notice?.version >= 3`.
-`notice` v4 additionally reads `offer_closes` (`outcome`, `text`, `message`, and
-`recovered` rows), `offer_close_refused` (`count`, `rows: [{text, why}]`), and
-`undo: { restores: [{path, before, after}] }`. It renders Done / Cancel receipts,
-`↳` tickler rows, a refusal line, and a guarded `Undo closes` action. The action
-restores only when every note still matches the recorded postimage. Older payloads
-retain the v3 rendering. v5 appends a trailing `↗ “S”` from `jump.label`
-(`api.notice?.version >= 5`). v6 reads `req_outcomes` (`verdict`, `receipt`,
-`row_key`) and `req_met` (`owner_key`, `count`, `receipt`) from the
-requirement close apply service. A req-only card shows those receipts and a
-guarded `Undo` action from `undo.restores`. Mixed cards keep `Undo closes`
-and append the requirement receipts. Older payloads still render as before.
-Callers add requirement receipts when `api.notice?.version >= 6`.
+`taskLinkLane.matches({ content, line, path })` is synchronous and
+`toggle(args)` settles to a result object. `logRecall.attach(...)` provides
+`handleKeydown`, `backOut`, `isRecalling`, `setKind`, and `detach`; its
+`noteUsed(kind, text)` forwards successful writes to Ledger Tools. With
+`links: true`, it delegates to `proseField`. `proseField.attach` accepts
+`inputEl`, `bandHost`, `sourcePath`, `recall`, `links`, `tasks`, `subjects`,
+`mode`, `minOffset`, `density`, `ownKeys`, and `scope`. Its v2 handle adds
+`isTaskOpen`, `isNaming`, and `setSubjects`; completion inserts text only.
+Feature-detect `api.proseField.version >= 1`.
 
-`cancel` v1 exposes the pure `planCancel(content, targets, {date, reason})` planner.
-Each target is `{line, rawLine}` from the source shown to the user. It wraps the Task
-Card cancel planner and fixes the blank-reason fallback to `🤷 no reason given`; blank
-reasons write that fallback only when the task already has a Cancel Log. Callers write
-the returned content through their own transaction.
+`successors.pick(model)` resolves to a picker result or `null`. Rows may carry
+snapshot-bound task identities for nested retargeting; that picker never edits
+a task field. Additive destination `themeIntent` is retained only when valid,
+then revalidated against a fresh type suggestion before a caller changes the
+task or Pomodoro name. Successor versions 2–6 add keep-moving and relation
+groups, close verdicts, jump pins, and requirement outcomes. Results can carry
+`picks`, `closes`, `jump`, or `reqs`; close-only, jump-only, and requirement-
+only commits are non-null. Offer each group only when the corresponding
+`api.successors.version` is supported. The [Task Dependencies contract](https://bobs-org.github.io/task-dependencies/)
+defines group and receipt behavior (sections 12.13, 12.15, 12.18, 12.22,
+12.24, and 12.25).
 
-Async navigation methods settle to result objects or `null` rather
-than rejecting. `taskLinkLane.matches` is synchronous and
-`toggle` settles its result. `reviewWalk.capture` returns
-`null` when there is no current landing;
-`reviewWalk.continue` resolves its advance result. v2 parks then lands when
-`outcome.follow` is set (`{ok, advanced: false, parked, landed}`); stale
-origins still land, and without `follow` v1 is unchanged.
+`taskSplit.carryReq({ notePath, line, expectedLine?, expectedOwnerPreimage? })`
+resolves `{ ok: true, task, moveMap, restores, notice, cursor }` or
+`{ ok: false, code, message, failedPaths? }`; it never rejects. The one-based
+`task.line` is in `{ path, line, blockId, text }`; `moveMap` contains source and
+destination paths plus one-based line moves. `restores` holds exact before /
+after snapshots and `created` flags for guarded Undo. The expected line digest
+and exact owner preimage refuse stale requests as `split_stale_ref`; missing
+owners (`split_owner_missing`), non-requirements (`not_a_req`), and unavailable
+writes (`split_unavailable`) return typed refusals. It does not navigate or
+show a notice. Feature-detect `Number(api.taskSplit?.version) >= 1`.
 
-The persisted family rides additive nav `api.walkMode` (root `version` stays 3):
-v4 `current()`/`select("b")` and `setAttention` for `"s"`/`"b"`; v5 adds `"w"`;
-v6 paints selected-family attention as letter ink and off-family as a dot.
-Ledger feature-detects `walkMode.version >= 4` before `b` and `>= 5` before `w`.
+`blocks.openStage(ref)` and `blocks.removeDependent(ownerRef, target)` settle
+to result objects. `relations.removeLink(sourceRef, targetRef)` removes the
+authored edge and best-effort updates its mirror;
+`relations.openStage({ path, line, direction })` opens the owner's Links stage
+for `to` and otherwise returns unavailable. `notice.showUnblocked(model)`
+handles successor receipts; versions 2–6 add keep-moving, relation, close,
+jump, and requirement outcomes. Their payload details follow the same Task
+Dependencies contract.
+
+`cancel` v1 exposes the pure `planCancel(content, targets, { date, reason })`.
+Targets
+contain the source `line` and `rawLine`; blank reasons use `🤷 no reason given`
+only when a Cancel Log already exists. Callers write its returned content
+through their own transaction.
+
+Navigation methods settle to result objects or `null`, not rejected promises.
+`reviewWalk.capture(editor)` returns `null` without a current landing;
+`continue(origin, outcome)` resolves the advance result, with v2 parking then
+landing on `outcome.follow`. The additive `walkMode` namespace persists the
+selected family and attention: v4 adds bank walk, v5 lane walk, and v6 paints
+selected-family attention as letter ink and other attention as a dot. Feature-
+detect the required `walkMode.version` before using each family.
 
 ## Task Status Cycler
 

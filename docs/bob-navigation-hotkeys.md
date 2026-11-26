@@ -127,16 +127,12 @@ including `type` and `status`. A notice warns if cached `type` lacks `[[project]
 
 ## Task Card
 
-`Ctrl+Shift+P` opens Task Card with priority previews; `Esc`, `q`, or `Ctrl+[` closes without writing. Writing answers on inbox tasks ask for a destination, then move there. See [Task Card](task-card.md).
-
-On album or record notes without a task, Task Link, dependency, or relation target, it opens Schema Card (Record Card on records), including title and blank rows. It resolves direct album or record-parent notes only; task targets keep Task Card priority.
-
-`Ctrl+Shift+B` is `Ctrl+Shift+P` then `b` (Depends on). `Ctrl+Shift+Alt+B` is
-`Ctrl+Shift+P` then `⇧B` (Blocks). `Ctrl+Shift+L` / `Ctrl+Shift+Alt+L` open
-Links / Linked from. A Task Link opens the linked task's stage; a Depends-On,
-BLOCKS, LINKS, LINKED FROM, or requirement line opens the owner's. `Alt+N`,
-`Alt+F`, `Ctrl+Alt+F`, `Alt+P`, and `Ctrl+Shift+M` refuse a requirement with
-the lane copy. Any writing gesture closes the card.
+`Ctrl+Shift+P` opens the Task Card with priority previews. `Ctrl+Shift+B` opens
+Depends on, `Ctrl+Shift+Alt+B` opens Blocks, and `Ctrl+Shift+L` /
+`Ctrl+Shift+Alt+L` open Links / Linked from. On a Task Link, a stage targets
+the linked task; on dependency, relation, or requirement lines it targets the
+owner. On album or record notes without a task target, the matching Schema or
+Record Card opens. See [Task Card](task-card.md).
 
 ## Mail Close Card
 

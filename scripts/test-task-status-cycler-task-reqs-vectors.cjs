@@ -157,7 +157,8 @@ test("child kinds detect requirements before authored notes and honor a custom f
   assert.deepEqual(taskBlockClassifyChild("\t- [ ] #task nested", null), { type: "authored" });
   assert.deepEqual(taskBlockClassifyChild("\t- [ ] #task nested", true), { type: "nested-task", open: true });
   assert.deepEqual(taskBlockClassifyChild("\t- [x] #task closed", false), { type: "nested-task", open: false });
-  assert.deepEqual(taskBlockClassifyChild("\t- NOTES", null), { type: "drawer", title: "NOTES" });
+  assert.deepEqual(taskBlockClassifyChild("\t- NOTES", null), { type: "authored" });
+  assert.deepEqual(taskBlockClassifyChild("\t- **Notes**", null), { type: "drawer", title: "Notes" });
   assert.deepEqual(taskBlockClassifyChild("> - [ ] quoted", null), { type: "authored" });
   assert.deepEqual(taskBlockClassifyChild("\t- [ ] #todo real", null, "#todo"), { type: "authored" });
   assert.deepEqual(taskBlockClassifyChild("\t- [ ] plain", null, "#todo"), { type: "requirement", mark: "open" });
@@ -176,8 +177,10 @@ test("zones name every task child kind", () => {
     ["\t- [-] dropped requirement", "reqs"],
     ["\t- a plain note", "authored"],
     ["\t- [ ] #task nested task", "authored"],
-    ["\t- NOTES", "drawers"],
-    ["\t- FUTURE WORK", "drawers"],
+    ["\t- **Notes**", "drawers"],
+    ["\t- **Future Work**", "drawers"],
+    ["\t- NOTES", "authored"],
+    ["\t- FUTURE WORK", "authored"],
     ["\t- \u{1f6e0}️ **WORK LOG**", "logs"],
     ["\t- \u{1f5d3}️ **SCHEDULE LOG**", "logs"],
     ["\t- \u{1f940} **ROTTEN LOG**", "logs"],
@@ -186,11 +189,11 @@ test("zones name every task child kind", () => {
   }
 });
 
-test("a created NOTES drawer lands first among the drawers", () => {
+test("a created Notes drawer lands first among the drawers", () => {
   const contents = [
     "- [ ] #task A ^a",
     "\t- [ ] req",
-    "\t- FUTURE WORK",
+    "\t- **Future Work**",
     "\t\t- later",
     "\t- \u{1f6e0}️ **WORK LOG**",
     "",
@@ -203,12 +206,12 @@ test("a created NOTES drawer lands first among the drawers", () => {
     "- [ ] #task A ^a",
     "\t- [ ] req",
     "\t- **Notes**",
-    "\t- FUTURE WORK",
+    "\t- **Future Work**",
     "\t\t- later",
     "\t- \u{1f6e0}️ **WORK LOG**",
   ]);
   assert.equal(taskBlockDrawerHeaderOffset(contents, task, false), contents.indexOf("\t- \u{1f6e0}"));
-  assert.equal(taskBlockDrawerHeaderOffset(contents, task, true), contents.indexOf("\t- FUTURE"));
+  assert.equal(taskBlockDrawerHeaderOffset(contents, task, true), contents.indexOf("\t- **Future"));
 });
 
 test("a note without a final newline keeps that state", () => {
@@ -269,7 +272,7 @@ const OWNER = [
   "\t- [x] Hand-ticked",
   "\t- loose note",
   "\t\t- note under a note",
-  "\t- NOTES",
+  "\t- **Notes**",
   "\t\t- filed entry",
   "",
 ].join("\n");

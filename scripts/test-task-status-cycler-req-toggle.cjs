@@ -130,13 +130,13 @@ test("every writer refusal shows its message and writes nothing", () => {
     },
     {
       name: "note in a drawer",
-      text: ["- [ ] #task Ship", "\t- NOTES", "\t\t- in drawer"].join("\n"),
+      text: ["- [ ] #task Ship", "\t- **Notes**", "\t\t- in drawer"].join("\n"),
       cursor: { line: 2, ch: 4 },
       message: "Drawers hold notes — put the requirement directly under the task",
     },
     {
       name: "the drawer title itself",
-      text: ["- [ ] #task Ship", "\t- NOTES", "\t\t- in drawer"].join("\n"),
+      text: ["- [ ] #task Ship", "\t- **Notes**", "\t\t- in drawer"].join("\n"),
       cursor: { line: 1, ch: 4 },
       message: "Only a note can become a requirement",
     },

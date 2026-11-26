@@ -62,7 +62,7 @@ test("cursor on a nested line splits its first-level note", () => {
 test("cursor on a drawer entry stays inside its drawer", () => {
   const content = [
     "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade",
-    "  - FUTURE WORK",
+    "  - **Future Work**",
     "    - Try logical replication",
     "",
   ].join("\n");
@@ -176,7 +176,7 @@ test("task lines open an unmarked picker over all splittable notes", () => {
   const content = [
     "- [ ] #task Upgrade Postgres to 17 ^upgrade",
     "  - Ping Alice",
-    "  - FUTURE WORK",
+    "  - **Future Work**",
     "    - Try logical replication",
     "",
   ].join("\n");
@@ -199,13 +199,13 @@ test("drawer titles open a picker scoped to that drawer", () => {
   const content = [
     "- [ ] #task Upgrade Postgres to 17 ^upgrade",
     "  - Ping Alice",
-    "  - FUTURE WORK",
+    "  - **Future Work**",
     "    - Try logical replication",
     "    - Upgrade test fixture",
     "",
   ].join("\n");
   const described = helpers.describeTaskSplitGesture(content, { cursorLine: 2 });
-  assert.deepEqual(described.picker, { scope: "drawer", title: "FUTURE WORK" });
+  assert.deepEqual(described.picker, { scope: "drawer", title: "Future Work" });
   const listed = helpers.listTaskSplitCandidates({ "db.md": content }, {
     ownerPath: "db.md",
     ownerLine: 1,

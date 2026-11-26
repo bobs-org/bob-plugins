@@ -112905,7 +112905,8 @@ class BobLedgerToolsNotebookCardMixin {
     try { card = notebookCardBuildEl(doc, model, options); } catch (_) {}
     if (!card) return null;
     try { card.setAttribute("data-notebook-source", model.path); } catch (_) {}
-    try { this.notebookCardAppendFoot?.(card, model.path, model, doc, footSpec, options); } catch (_) {}
+    // The foot is appended once by notebookCardBuildEl through
+    // options.appendFoot; a second append here doubled every foot.
     return card;
   }
 

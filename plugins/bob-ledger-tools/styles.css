@@ -12159,6 +12159,7 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
   border-radius: 3px;
   background: color-mix(in srgb, var(--text-warning) 18%, transparent);
   color: var(--text-warning);
+  white-space: nowrap;
 }
 .bob-property-card .bob-property-card-foot-drawer {
   display: grid;

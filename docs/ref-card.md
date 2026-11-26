@@ -41,7 +41,7 @@ Highlights API on macOS when available, and through Obsidian elsewhere. The **Li
 button opens a declared companion `audio:` file through Obsidian. Neither action builds
 a shell command from frontmatter.
 
-Reading state comes from one shared `bob ref list` snapshot. It will patch the lane,
+Reading state comes from one shared `bob ref list` snapshot. It patches the lane,
 Today marker, annotation counts, reread version, identifiers, and diagnostics into the
 card's existing slots. A missing or stale report leaves the local identity card intact.
 The preview build reserves the readout area only when the note declares PDF or audio;

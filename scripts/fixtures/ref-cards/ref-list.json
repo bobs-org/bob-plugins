@@ -2,65 +2,209 @@
   "coverage": {
     "ref_dir": "ref"
   },
-  "generated_at": "2026-11-26T00:00:00Z",
+  "generated_at": "2026-11-26T15:00:00-05:00",
   "ok": true,
-  "rows": [
+  "refs": [
     {
-      "path": "ref/agentic-coding-ci.md",
-      "ref_type": "blogs",
-      "status": "read",
-      "reading_state": "read",
-      "author": "Sachin Malhotra",
-      "published": "2026-09-14",
-      "source_pdf": "lib/agentic-coding-ci.pdf",
-      "audio": "lib/agentic-coding-ci.mp3",
       "annotation_count": 5,
+      "audio": "lib/agentic-coding-ci.mp3",
+      "author": "Sachin Malhotra",
+      "blocked": false,
+      "blocked_by": [],
+      "capture": null,
       "comment_count": 2,
+      "diagnostics": [],
+      "earlier": [],
+      "finished": "2026-10-23",
+      "identity": {
+        "arxiv": null,
+        "doi": "10.5555/example",
+        "keys": [
+          "doi"
+        ]
+      },
+      "link": "[[ref/ref-finished-blog|Agentic coding is straining CI]]",
+      "origin": "library",
+      "parent": "sase",
+      "path": "ref/ref-finished-blog.md",
+      "published": "2026-09-14",
+      "reading": null,
+      "reading_state": "finished",
+      "ref_type": "blogs",
+      "snapshot": {
+        "highlights_count": 5,
+        "synced_at": "2026-10-23T12:00:00"
+      },
+      "source_pdf": "lib/agentic-coding-ci.pdf",
+      "status": "read",
       "status_sync": "ok",
       "task": {
-        "path": "done/sase_pypi_releases_done.md",
+        "archived": false,
         "block_id": "ref-agentic-coding-ci",
         "link": "[[done/sase_pypi_releases_done#^ref-agentic-coding-ci]]",
-        "mark": "x"
-      }
+        "mark": "x",
+        "path": "done/sase_pypi_releases_done.md",
+        "priority": null,
+        "scheduled": null
+      },
+      "title": "Agentic coding is straining CI"
     },
     {
-      "path": "ref/shrinking-sase.md",
+      "annotation_count": null,
+      "audio": null,
+      "author": null,
+      "blocked": false,
+      "blocked_by": [],
+      "capture": null,
+      "comment_count": null,
+      "diagnostics": [],
+      "earlier": [],
+      "finished": null,
+      "identity": null,
+      "link": "[[ref/ref-next-chat|Shrinking SASE agent instruction files]]",
+      "origin": "library",
+      "parent": "memory",
+      "path": "ref/ref-next-chat.md",
+      "published": null,
+      "reading": null,
+      "reading_state": "queued",
       "ref_type": "chat",
+      "snapshot": null,
+      "source_pdf": null,
       "status": "next",
-      "reading_state": "ready",
       "status_sync": "ok",
       "task": {
-        "path": "memory.md",
+        "archived": false,
         "block_id": "ref-shrinking-sase",
         "link": "[[memory#^ref-shrinking-sase]]",
-        "mark": " "
-      }
-    },
-    {
-      "path": "ref/memory-router.md",
-      "ref_type": "chat",
-      "status": "open",
-      "reading_state": "ready",
-      "blocked": true,
-      "status_sync": "ok"
-    },
-    {
-      "path": "ref/attention-is-all-you-need.md",
-      "ref_type": "papers",
-      "status": "next",
-      "reading_state": "ready",
-      "identity": {
-        "arxiv": "1706.03762"
+        "mark": " ",
+        "path": "memory.md",
+        "priority": "high",
+        "scheduled": null
       },
-      "status_sync": "ok"
+      "title": "Shrinking SASE agent instruction files"
     },
     {
-      "path": "ref/outlive.md",
-      "ref_type": "books",
-      "status": "legacy",
+      "annotation_count": 0,
+      "audio": null,
+      "author": null,
+      "blocked": true,
+      "blocked_by": [
+        {
+          "date": "2026-12-03",
+          "kind": "local_schedule"
+        }
+      ],
+      "capture": null,
+      "comment_count": 0,
+      "diagnostics": [],
+      "earlier": [],
+      "finished": null,
+      "identity": null,
+      "link": "[[ref/ref-blocked-paper|Scheduled reading blocked on review]]",
+      "origin": "library",
+      "parent": null,
+      "path": "ref/ref-blocked-paper.md",
+      "published": null,
+      "reading": null,
+      "reading_state": "queued",
+      "ref_type": "papers",
+      "snapshot": null,
+      "source_pdf": null,
+      "status": "ready",
+      "status_sync": "ok",
+      "task": {
+        "archived": false,
+        "block_id": null,
+        "link": "[[ref/papers/scheduled-reading|Scheduled reading blocked on review]]",
+        "mark": " ",
+        "path": "daily/2026-11-27.md",
+        "priority": null,
+        "scheduled": "2026-12-03"
+      },
+      "title": "Scheduled reading blocked on review"
+    },
+    {
+      "annotation_count": 12,
+      "audio": null,
+      "author": "Vaswani et al.",
+      "blocked": false,
+      "blocked_by": [],
+      "capture": null,
+      "comment_count": 4,
+      "diagnostics": [],
+      "earlier": [
+        {
+          "kind": "reading",
+          "label": "v1",
+          "target": "ref/papers/attention-is-all-you-need__v1"
+        },
+        {
+          "kind": "replaced",
+          "label": "replaced capture",
+          "target": "ref_history/attention-flyby"
+        }
+      ],
+      "finished": null,
+      "identity": {
+        "arxiv": "1706.03762",
+        "doi": null,
+        "keys": [
+          "arxiv"
+        ]
+      },
+      "link": "[[ref/ref-arxiv-paper|Attention Is All You Need]]",
+      "origin": "library",
+      "parent": null,
+      "path": "ref/ref-arxiv-paper.md",
+      "published": "2017-06",
+      "reading": 2,
       "reading_state": "started",
-      "status_sync": "ok"
+      "ref_type": "papers",
+      "snapshot": {
+        "highlights_count": 12,
+        "synced_at": "2026-11-20T09:00:00"
+      },
+      "source_pdf": "lib/attention-is-all-you-need.pdf",
+      "status": "next",
+      "status_sync": "ok",
+      "task": {
+        "archived": false,
+        "block_id": "ref-attention",
+        "link": "[[memory#^ref-attention]]",
+        "mark": " ",
+        "path": "memory.md",
+        "priority": null,
+        "scheduled": null
+      },
+      "title": "Attention Is All You Need"
+    },
+    {
+      "annotation_count": null,
+      "audio": null,
+      "author": null,
+      "blocked": false,
+      "blocked_by": null,
+      "capture": null,
+      "comment_count": null,
+      "diagnostics": [],
+      "earlier": null,
+      "finished": null,
+      "identity": null,
+      "link": "[[ref/ref-legacy-book|Outlive]]",
+      "origin": "library",
+      "parent": null,
+      "path": "ref/ref-legacy-book.md",
+      "published": null,
+      "reading": null,
+      "reading_state": "started",
+      "ref_type": "zorg",
+      "snapshot": null,
+      "source_pdf": null,
+      "status": "legacy",
+      "status_sync": "ok",
+      "task": null,
+      "title": "Outlive"
     }
   ],
   "schema_version": 1

@@ -13076,12 +13076,6 @@ button.bob-property-card-foot-lint-chip {
 .bob-ref-card.is-collapsed .bob-ref-card-details,
 .bob-ref-card.is-collapsed .bob-property-card-foot { display: none !important; }
 @container bob-property-card (max-width: 420px) {
-  .bob-ref-card-lane[data-state="waiting"] {
-    display: inline-block;
-    min-inline-size: 4.5em;
-    min-block-size: 1.1em;
-    visibility: hidden;
-  }
   .bob-ref-card-byline { max-inline-size: 100%; }
   .bob-ref-card-access-row { align-items: flex-start; }
 }
@@ -13094,6 +13088,90 @@ button.bob-property-card-foot-lint-chip {
   .bob-ref-card .bob-home-card-collapsible { transition: none; }
 }
 /* Ref Card (bob-cli-qp ref-card): end. */
+
+/* Ref Card (bob-cli-qp ref-readouts): start. Report-backed lane, version,
+   identifier, annotation, and lint patches. Slots keep their shape while
+   waiting so arrival never adds a line or shifts layout. */
+.bob-ref-card-lane[data-state="ready"] { color: var(--text-muted); }
+.bob-ref-card-lane[data-lane="reading"],
+.bob-ref-card-lane[data-lane="next"] { color: var(--text-accent, var(--interactive-accent)); }
+.bob-ref-card-lane-chip,
+.bob-ref-card-version-chip {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+}
+.bob-ref-card-lane-chip:hover,
+.bob-ref-card-version-chip:hover,
+.bob-ref-card-lane-chip:focus-visible,
+.bob-ref-card-version-chip:focus-visible { color: var(--text-normal); text-decoration: underline; }
+.bob-ref-card-today {
+  display: inline-block;
+  margin-inline-start: 0.45em;
+  padding: 0 0.45em;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 0.92em;
+  line-height: 1.5;
+}
+.bob-ref-card-version-chip {
+  border: 1px solid color-mix(in srgb, var(--text-muted) 38%, transparent);
+  border-radius: 999px;
+  padding: 0 0.45em;
+}
+.bob-ref-card-identifier {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.bob-ref-card-identifier:hover,
+.bob-ref-card-identifier:focus-visible { color: var(--text-normal); text-decoration: underline; }
+.bob-ref-card-annotations-chip {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  cursor: pointer;
+}
+.bob-ref-card-annotations-chip:hover,
+.bob-ref-card-annotations-chip:focus-visible { color: var(--text-normal); text-decoration: underline; }
+.bob-ref-card-lint-slot[data-state="ready"] { display: block; }
+.bob-ref-card-lint-line {
+  display: block;
+  color: var(--text-muted);
+  font-size: 0.82em;
+}
+.bob-ref-card-lint-line::before { content: "⚠ "; }
+.bob-ref-card[data-tone="read"] { color: var(--text-muted); }
+.bob-ref-card[data-tone="read"] .bob-property-card-title { color: var(--text-normal); }
+@container bob-property-card (max-width: 420px) {
+  .bob-ref-card-lane[data-state="waiting"] {
+    display: inline-block;
+    flex-basis: 100%;
+    min-block-size: 1.1em;
+    visibility: hidden;
+  }
+  .bob-ref-card-lane[data-state="ready"] { flex-basis: 100%; }
+}
+@media (forced-colors: active) {
+  .bob-ref-card-lane[data-lane="reading"],
+  .bob-ref-card-lane[data-lane="next"] { color: ButtonText; }
+  .bob-ref-card-version-chip { border-color: ButtonText; }
+  .bob-ref-card-lane-chip:hover,
+  .bob-ref-card-version-chip:hover,
+  .bob-ref-card-identifier:hover,
+  .bob-ref-card-annotations-chip:hover { color: CanvasText; }
+}
+/* Ref Card (bob-cli-qp ref-readouts): end. */
 
 /* Notebook Card (bob-cli-qm notebook-card): start. Title identity and local fields. */
 .bob-property-card[data-card-kind="notebook"] { --bob-property-card-tint: 3%; }

@@ -243,6 +243,7 @@ class BobLedgerToolsRefNoteCardMixin {
     try { this.refNoteCardFoldUnregister?.(); } catch (_) {}
     this.refNoteCardFoldUnregister = null;
     try { this.refNoteCardFootUnbind?.(); } catch (_) {}
+    try { this.refNoteCardReadoutsUnbind?.(); } catch (_) {}
     this.refNoteCardUnregisterTitleKey();
   }
 
@@ -258,6 +259,7 @@ class BobLedgerToolsRefNoteCardMixin {
   refNoteCardCleanEditor(view) {
     const scope = view?.dom || null;
     const path = refNoteCardPath(this.refNoteCardLivePath(view) || "");
+    try { this.refNoteCardReadoutUnsubscribePath?.(path); } catch (_) {}
     try { this.refNoteCardTrackFoot?.(scope, path, null); } catch (_) {}
     try { propertyCardAdoptRelease?.(scope, path || undefined, REF_NOTE_CARD_HOST_KIND, { preserveFallback: true }); } catch (_) {}
     try { propertyCardFrontmatterReleaseMounted?.(scope, { plugin: this, kind: REF_NOTE_CARD_HOST_KIND, path }); } catch (_) {}
@@ -314,6 +316,14 @@ class BobLedgerToolsRefNoteCardMixin {
 
   refNoteCardSignature(model, extra, options) {
     try {
+      let readoutDigest = "none";
+      try {
+        if (typeof this.refNoteCardReadoutFor === "function" && model && model.path) {
+          readoutDigest = refNoteCardReadoutDigest(this.refNoteCardReadoutFor(model.path, model));
+        }
+      } catch (_) {
+        readoutDigest = "readout";
+      }
       return JSON.stringify([
         model,
         extra?.footDigest || "",
@@ -322,8 +332,19 @@ class BobLedgerToolsRefNoteCardMixin {
         options?.keyLive === true,
         options?.pdfMode || "",
         typeof this.openPropertyEditor === "function",
+        readoutDigest,
       ]);
     } catch (_) { return ""; }
+  }
+
+  refNoteCardModelWithTone(model, readout) {
+    try {
+      const tone = readout && typeof readout.tone === "string" ? readout.tone : "";
+      if (!tone || !model || model.tone === tone) return model;
+      return { ...model, tone };
+    } catch (_) {
+      return model;
+    }
   }
 
   refNoteCardReadingView(scope) {
@@ -395,7 +416,9 @@ class BobLedgerToolsRefNoteCardMixin {
     }
     const extra = this.refNoteCardFootExtra(path, model);
     const options = this.refNoteCardReadOptions(path, model, false);
-    const signature = this.refNoteCardSignature(model, extra, options);
+    const readout = this.refNoteCardReadoutFor?.(path, model) || null;
+    const viewModel = this.refNoteCardModelWithTone(model, readout);
+    const signature = this.refNoteCardSignature(viewModel, extra, options);
     const adopted = propertyCardAdoptedEntry(scope);
     const slotNode = adopted && adopted.path === path && adopted.kind === REF_NOTE_CARD_HOST_KIND
       && adopted.mode === "slot" ? adopted.node : null;
@@ -403,7 +426,7 @@ class BobLedgerToolsRefNoteCardMixin {
     let card = slotNode || bodyNodes[0] || null;
     const focus = this.refNoteCardFocusKey(card, doc);
     if (!card || refNoteCardNodeSignatures.get(card) !== signature) {
-      const fresh = this.refNoteCardBuildMounted(model, options, doc, extra?.footSpec);
+      const fresh = this.refNoteCardBuildMounted(viewModel, options, doc, extra?.footSpec);
       if (!fresh) {
         this.refNoteCardRemoveReading(root, scope, path);
         return null;
@@ -441,6 +464,12 @@ class BobLedgerToolsRefNoteCardMixin {
     scope.classList?.add?.(REF_NOTE_CARD_HOST_SURFACE_CLASS);
     this.refNoteCardSurfaceScopes?.add?.(scope);
     this.refNoteCardTrackFoot?.(scope, path, card);
+    try { this.refNoteCardReadoutSubscribe?.(path); } catch (_) {}
+    try {
+      this.refNoteCardPaintReadouts?.(card, path, doc, {
+        scope, view: reading?.view || null, collapsed: options.collapsed === true, model: viewModel,
+      });
+    } catch (_) {}
     this.refNoteCardRestoreFocus(card, focus);
     void this.refNoteCardEnsureSource?.(path);
     return card;
@@ -448,6 +477,7 @@ class BobLedgerToolsRefNoteCardMixin {
 
   refNoteCardRemoveReading(root, scope = root, sourcePath = "") {
     const path = refNoteCardPath(sourcePath);
+    try { this.refNoteCardReadoutUnsubscribePath?.(path); } catch (_) {}
     if (!root && !scope) return;
     try { this.refNoteCardTrackFoot?.(scope, path, null); } catch (_) {}
     try { propertyCardAdoptRelease?.(scope, path || undefined, REF_NOTE_CARD_HOST_KIND, { preserveFallback: true }); } catch (_) {}
@@ -521,12 +551,14 @@ class BobLedgerToolsRefNoteCardMixin {
     const doc = view.dom?.ownerDocument || (typeof document !== "undefined" ? document : null);
     const extra = this.refNoteCardFootExtra(path, model);
     const options = this.refNoteCardReadOptions(path, model, propertyCardFoldKeyLive?.(this, "live-preview") === true);
-    const signature = this.refNoteCardSignature(model, extra, options);
+    const readout = this.refNoteCardReadoutFor?.(path, model) || null;
+    const viewModel = this.refNoteCardModelWithTone(model, readout);
+    const signature = this.refNoteCardSignature(viewModel, extra, options);
     const adopted = propertyCardAdoptedEntry(view.dom);
     let card = adopted && adopted.path === path && adopted.kind === REF_NOTE_CARD_HOST_KIND && adopted.mode === "slot"
       ? adopted.node : null;
     if (!card || refNoteCardNodeSignatures.get(card) !== signature) {
-      const fresh = this.refNoteCardBuildMounted(model, options, doc, extra?.footSpec);
+      const fresh = this.refNoteCardBuildMounted(viewModel, options, doc, extra?.footSpec);
       if (!fresh) {
         this.refNoteCardCleanEditor(view);
         return Decoration.none;
@@ -548,6 +580,12 @@ class BobLedgerToolsRefNoteCardMixin {
       ),
     });
     this.refNoteCardTrackFoot?.(view.dom, path, card);
+    try { this.refNoteCardReadoutSubscribe?.(path); } catch (_) {}
+    try {
+      this.refNoteCardPaintReadouts?.(card, path, doc, {
+        scope: view.dom, view, editor: view.editor, collapsed: options.collapsed, model: viewModel,
+      });
+    } catch (_) {}
     if (adoption.mode === "slot") {
       void this.refNoteCardOwnMounted(view.dom, view, path, card, sourceText, currentPath);
       return Decoration.none;

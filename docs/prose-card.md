@@ -17,6 +17,14 @@ icon). The title reads `title:`, then the first alias, then the verbatim
 file stem; the optional one-line `summary:` dek shows in italics. Absence
 of a dek is normal: no ghost, no nag.
 
+When the file stem supplies the title, its tooltip says `Title from the file
+name — press == to set one`. The title uses Bob Prose's heading face only
+while that plugin's look class is active. The `§` chip reads local
+`section_numbers`: an absent key or `true` is numbered, `false` is
+unnumbered, and other values show a warning. It runs the Bob Prose toggle
+command when registered; otherwise it stays inert. The foot carries the
+authored `created` stamp and the Properties drawer.
+
 The measure row comes from Bob Prose's read-only outline snapshot:
 approximate words and reading time, the exact section count, and the
 sections still to write. Parts without a snapshot are omitted, never

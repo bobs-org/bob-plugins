@@ -40382,7 +40382,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.setupWorkspaceScrollGuard();
     this.setupNotebookData(); this.setupAlbumData(); this.setupProjectsData(); this.setupAreasData(); this.setupBankData(); this.setupBankActions(); this.setupBankWalk();
     this.setupBankCards(); this.setupBankBadge(); this.setupBankMarks(); this.setupBankSetup(); this.setupBankSetupCard(); this.setupSchemaDoubleEquals?.();
-    this.setupNotebookCatalog(); this.setupAlbumCatalog(); this.setupProjectsCatalog(); this.setupAreasCatalog(); this.setupAlbumRecords(); this.setupNotebookHeader(); this.setupAlbumHeader(); this.setupHomeCard(); this.setupRecordSheet?.(); this.setupIntentionCard?.(); this.setupIntentionUpdate?.(); this.setupIntentionCardEditor?.(); this.setupIntentionCardNavigation?.(); this.setupRecordUpdate?.(); this.setupPropertyUpdate?.(); this.setupRecordCard?.(); this.setupPropertyEditorEntrypoints?.(); this.setupPropertyEditorSettingsEntrypoints?.(); this.setupPropertyCapabilityRouting?.(); this.setupSubscriptionSurfaces(); this.setupAlbumSchemaEntrypoints?.(); this.setupAlbumYamlExcursion?.();
+    this.setupNotebookCatalog(); this.setupAlbumCatalog(); this.setupProjectsCatalog(); this.setupAreasCatalog(); this.setupAlbumRecords(); this.setupNotebookHeader(); this.setupAlbumHeader(); this.setupHomeCard(); this.setupProseNoteCard?.(); this.setupRecordSheet?.(); this.setupIntentionCard?.(); this.setupIntentionUpdate?.(); this.setupIntentionCardEditor?.(); this.setupIntentionCardNavigation?.(); this.setupRecordUpdate?.(); this.setupPropertyUpdate?.(); this.setupRecordCard?.(); this.setupPropertyEditorEntrypoints?.(); this.setupPropertyEditorSettingsEntrypoints?.(); this.setupPropertyCapabilityRouting?.(); this.setupSubscriptionSurfaces(); this.setupAlbumSchemaEntrypoints?.(); this.setupAlbumYamlExcursion?.();
     this.setupNotebookCard?.();
     this.setupReadingBoardBlock();
     this.taskSettleWrapRegisteredCommands();
@@ -40514,7 +40514,7 @@ BobLedgerToolsPlugin.prototype.teardownLedgerToolsSurfaces = function () {
     } catch (error) {
       // Reading Board data teardown is best-effort.
     }
-    try { this.teardownRecordCard?.(); this.teardownPropertyEditorEntrypoints?.(); this.teardownPropertyEditorSettingsEntrypoints?.(); this.teardownRecordUpdate?.(); this.teardownPropertyCapabilityRouting?.(); this.teardownPropertyUpdate?.(); this.teardownRecordSheet?.(); this.teardownIntentionCardNavigation?.(); this.teardownIntentionCardEditor?.(); this.teardownIntentionUpdate?.(); this.teardownIntentionCard?.(); this.teardownSubscriptionSurfaces(); this.teardownNotebookCard?.(); this.teardownHomeCard(); this.teardownAlbumHeader(); this.teardownNotebookHeader(); this.teardownAlbumYamlExcursion?.(); this.teardownAlbumSchemaEntrypoints?.(); } catch (error) {}
+    try { this.teardownRecordCard?.(); this.teardownPropertyEditorEntrypoints?.(); this.teardownPropertyEditorSettingsEntrypoints?.(); this.teardownRecordUpdate?.(); this.teardownPropertyCapabilityRouting?.(); this.teardownPropertyUpdate?.(); this.teardownRecordSheet?.(); this.teardownIntentionCardNavigation?.(); this.teardownIntentionCardEditor?.(); this.teardownIntentionUpdate?.(); this.teardownIntentionCard?.(); this.teardownSubscriptionSurfaces(); this.teardownNotebookCard?.(); this.teardownProseNoteCard?.(); this.teardownHomeCard(); this.teardownAlbumHeader(); this.teardownNotebookHeader(); this.teardownAlbumYamlExcursion?.(); this.teardownAlbumSchemaEntrypoints?.(); } catch (error) {}
     try { propertyCardAdoptReleaseAll(); } catch (_) {}
     try { propertyCardTitleSlotReleaseAll(); } catch (_) {}
     try { propertyCardFrontmatterReleaseAll(); } catch (_) {}
@@ -91476,7 +91476,7 @@ function propertyCardFrontmatterCoordinatorReconcile(plugin) {
 function propertyCardFrontmatterCoordinatorCapabilityChanged(plugin, status) {
   const released = propertyCardFrontmatterCoordinatorReconcile(plugin);
   if (status === "confirmed" && propertyCardFrontmatterCapabilityReady(plugin)) {
-    for (const method of ["scheduleAlbumHeaderRefresh", "scheduleRecordSheetRefresh", "scheduleIntentionCardRefresh", "scheduleBankSetupRefresh", "scheduleHomeCardRefresh"]) {
+    for (const method of ["scheduleAlbumHeaderRefresh", "scheduleRecordSheetRefresh", "scheduleIntentionCardRefresh", "scheduleBankSetupRefresh", "scheduleHomeCardRefresh", "scheduleProseNoteCardRefresh"]) {
       try { plugin?.[method]?.(); } catch (_) {}
     }
     try { plugin?.intentionCardHost?.().scheduleRefresh?.(); } catch (_) {}
@@ -92614,15 +92614,34 @@ function propertyCardPreviewRemember(plugin, data) {
 }
 
 async function propertyCardPreviewLoad(plugin) {
+  if (!plugin || typeof plugin !== "object") return [];
+  if (plugin.propertyCardPreviewLoaded === true) {
+    return Array.isArray(plugin.propertyCardPreviewKinds) ? plugin.propertyCardPreviewKinds : [];
+  }
+  if (plugin.propertyCardPreviewLoadPromise) return plugin.propertyCardPreviewLoadPromise;
+  const load = (async () => {
+    let stored = null;
+    try {
+      if (plugin.ledgerToolsPluginDataLoaded === true
+        && plugin.ledgerToolsPluginData && typeof plugin.ledgerToolsPluginData === "object") {
+        stored = plugin.ledgerToolsPluginData;
+      } else if (typeof plugin.loadLedgerToolsPluginData === "function") {
+        stored = await plugin.loadLedgerToolsPluginData();
+      } else if (typeof plugin.loadData === "function") {
+        stored = await plugin.loadData();
+      }
+    } catch (_) {
+      stored = null;
+    }
+    const kinds = propertyCardPreviewRemember(plugin, stored);
+    plugin.propertyCardPreviewLoaded = true;
+    return kinds;
+  })();
+  plugin.propertyCardPreviewLoadPromise = load;
   try {
-    const stored = typeof plugin?.loadLedgerToolsPluginData === "function"
-      ? await plugin.loadLedgerToolsPluginData()
-      : typeof plugin?.loadData === "function"
-        ? await plugin.loadData()
-        : null;
-    return propertyCardPreviewRemember(plugin, stored);
-  } catch (_) {
-    return propertyCardPreviewRemember(plugin, null);
+    return await load;
+  } finally {
+    if (plugin.propertyCardPreviewLoadPromise === load) plugin.propertyCardPreviewLoadPromise = null;
   }
 }
 
@@ -110192,47 +110211,964 @@ class BobLedgerToolsNotebookCardFootMixin {
 // chips, children, and findings in place. Kit seeds: the readout row marker.
 const NOTEBOOK_CARD_READOUT_SLOT = "notebook-readouts";
 // ---- src/249l-plugin-prose-note-card-model.js ----
-// Prose Card model (bob-cli-qm prose-card): REGION.
-// The species phase derives the view model here from local data: the
-// dual-spelling detection (from kit), the title precedence and stem-fallback
-// flag, the tile initial or pilcrow, the dek, the numbering state, created,
-// and the crumbs and hue from the home-card resolver. Kit seeds: the
-// species kind and the verbatim stem fallback helper.
+// Prose Card model (bob-cli-qm prose-card): local identity only. Measures
+// and findings arrive later through Bob Prose's read-only outline seam.
 const PROSE_NOTE_CARD_KIND = "prose";
 
 function proseNoteCardStem(path) {
   try {
     const text = String(path === null || path === undefined ? "" : path).replace(/\\/g, "/");
     const base = text.split("/").pop() || "";
-    // Verbatim: no humanizing, no case folding. The tooltip invites ==.
     return base.replace(/\.md$/i, "");
   } catch (_) {
     return "";
   }
 }
+
+function proseNoteCardPath(value) {
+  try {
+    const raw = value && typeof value.path === "string" ? value.path : value;
+    return typeof raw === "string" ? raw.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/$/, "") : "";
+  } catch (_) {
+    return "";
+  }
+}
+
+function proseNoteCardOneLine(value) {
+  if (value === null || value === undefined) return "";
+  try {
+    const line = String(value).split(/\r?\n/, 1)[0].trim();
+    return typeof propertyCardCleanInlineText === "function" ? propertyCardCleanInlineText(line) : line;
+  } catch (_) {
+    return "";
+  }
+}
+
+function proseNoteCardTitleParts(frontmatter, path) {
+  const fm = frontmatter && typeof frontmatter === "object" && !Array.isArray(frontmatter) ? frontmatter : {};
+  const explicit = proseNoteCardOneLine(fm.title);
+  if (explicit) return { text: explicit, source: "title", fromStem: false };
+  let alias = "";
+  try {
+    alias = typeof propertyCardFirstAlias === "function"
+      ? propertyCardFirstAlias(fm.aliases)
+      : proseNoteCardOneLine(Array.isArray(fm.aliases) ? fm.aliases[0] : fm.aliases);
+  } catch (_) {}
+  if (alias) return { text: alias, source: "alias", fromStem: false };
+  return { text: proseNoteCardStem(path), source: "stem", fromStem: true };
+}
+
+function proseNoteCardInitial(title) {
+  try {
+    const first = Array.from(String(title || "").trim())[0] || "";
+    return /[\p{L}\p{N}]/u.test(first) ? first.toUpperCase() : "";
+  } catch (_) {
+    return "";
+  }
+}
+
+function proseNoteCardNumbering(frontmatter) {
+  const fm = frontmatter && typeof frontmatter === "object" && !Array.isArray(frontmatter) ? frontmatter : {};
+  if (!Object.prototype.hasOwnProperty.call(fm, "section_numbers") || fm.section_numbers === true) {
+    return Object.freeze({ state: "numbered", numbered: true });
+  }
+  if (fm.section_numbers === false) return Object.freeze({ state: "unnumbered", numbered: false });
+  return Object.freeze({ state: "invalid", numbered: null });
+}
+
+function proseNoteCardModel(input = {}) {
+  try {
+    const options = input && typeof input === "object" ? input : {};
+    const path = proseNoteCardPath(options.path);
+    const frontmatter = options.frontmatter && typeof options.frontmatter === "object" && !Array.isArray(options.frontmatter)
+      ? options.frontmatter : {};
+    if (!path || typeof propertyCardNoteSpecies !== "function"
+      || propertyCardNoteSpecies({ path, frontmatter }) !== PROSE_NOTE_CARD_KIND) return null;
+
+    const title = proseNoteCardTitleParts(frontmatter, path);
+    if (!title.text) return null;
+    const ancestry = typeof homeCardWalkAncestry === "function"
+      ? homeCardWalkAncestry(path, frontmatter, { resolveParent: options.resolveParent })
+      : { crumbs: [] };
+    const crumbs = typeof homeCardCrumbParts === "function"
+      ? homeCardCrumbParts(ancestry?.crumbs, {})
+      : [];
+    const hue = crumbs.find((part) => part && part.pip)?.pip || "";
+    const summary = proseNoteCardOneLine(frontmatter.summary);
+    const hasCreated = Object.prototype.hasOwnProperty.call(frontmatter, "created");
+    const numbering = proseNoteCardNumbering(frontmatter);
+    return Object.freeze({
+      path,
+      kind: PROSE_NOTE_CARD_KIND,
+      frontmatter,
+      title: Object.freeze({ ...title, initial: proseNoteCardInitial(title.text) }),
+      initial: proseNoteCardInitial(title.text),
+      dek: summary,
+      summary,
+      numbering,
+      created: hasCreated ? frontmatter.created : null,
+      createdPresent: hasCreated,
+      crumbs: Object.freeze(Array.isArray(crumbs) ? crumbs.slice() : []),
+      hue,
+      ancestry: Object.freeze({
+        broken: ancestry?.broken === true,
+        cyclic: ancestry?.cyclic === true,
+        truncated: ancestry?.truncated === true,
+      }),
+    });
+  } catch (_) {
+    return null;
+  }
+}
 // ---- src/249m-plugin-prose-note-card-dom.js ----
-// Prose Card DOM (bob-cli-qm prose-card): REGION.
-// The species phase builds the quiet title page here: the folio tile with
-// the initial, the kicker, numbering chip, title, dek, a reserved measure
-// row, and an empty outline region for prose-seam. Kit seeds: the surface
-// class.
+// Prose Card DOM (bob-cli-qm prose-card): a quiet title page plus reserved
+// Bob Prose readout slots. All note-provided content is appended as text.
 const PROSE_NOTE_CARD_SURFACE_CLASS = "bob-prose-note-card";
+
+function proseNoteCardDomEl(doc, tag, className) {
+  const node = doc.createElement(tag);
+  if (className) node.setAttribute("class", className);
+  return node;
+}
+
+function proseNoteCardDomText(doc, node, value) {
+  const text = value === null || value === undefined ? "" : String(value);
+  if (text) node.appendChild(doc.createTextNode(text));
+  return node;
+}
+
+function proseNoteCardNumberingNode(doc, model, options) {
+  const numbering = model?.numbering || { state: "numbered" };
+  const valid = numbering.state === "numbered" || numbering.state === "unnumbered";
+  const live = valid && options.numberingCommandAvailable === true
+    && typeof options.onToggleNumbering === "function";
+  const node = proseNoteCardDomEl(doc, live ? "button" : "span", "bob-prose-note-card-numbering");
+  const text = numbering.state === "invalid" ? "§ ⚠" : `§ ${numbering.state || "numbered"}`;
+  proseNoteCardDomText(doc, node, text);
+  node.setAttribute("data-numbering-state", numbering.state || "numbered");
+  node.setAttribute("aria-label", numbering.state === "invalid"
+    ? "Invalid section_numbers value"
+    : `Section numbering: ${numbering.state || "numbered"}`);
+  if (numbering.state === "invalid") {
+    node.setAttribute("title", "Allowed values: true or false (default: true).");
+  } else {
+    node.setAttribute("title", live
+      ? "Toggle section numbering through Bob Prose"
+      : "Section numbering · Bob Prose command unavailable");
+  }
+  if (live) {
+    node.setAttribute("type", "button");
+    node.addEventListener?.("click", (event) => {
+      try { event?.preventDefault?.(); } catch (_) {}
+      try { options.onToggleNumbering(event); } catch (_) {}
+    });
+  }
+  return node;
+}
+
+// Returns a card root with an empty measures slot and outline shell. The
+// Bob Prose seam fills those regions later without replacing the title page.
+function proseNoteCardBuildEl(doc, model, options = {}) {
+  try {
+    if (!doc || typeof doc.createElement !== "function" || typeof doc.createTextNode !== "function"
+      || !model || model.kind !== PROSE_NOTE_CARD_KIND || !model.title?.text
+      || typeof propertyCardBuildTitleBlock !== "function") return null;
+    const card = proseNoteCardDomEl(doc, "section", `${PROSE_NOTE_CARD_SURFACE_CLASS} bob-property-card`);
+    if (options.expanded !== true) card.classList?.add?.("is-collapsed");
+    card.setAttribute("data-prose-kind", "prose");
+    if (typeof propertyCardApplyIdentity === "function") {
+      propertyCardApplyIdentity(card, { kind: "prose", title: model.title.text });
+    }
+
+    const block = propertyCardBuildTitleBlock(doc, {
+      kind: "prose",
+      title: model.title.text,
+      kicker: Array.isArray(model.crumbs) ? model.crumbs : [],
+      tile: { value: model.initial || "", icon: "pilcrow" },
+      subtitle: model.dek || "",
+      onLink: (target, event) => {
+        try { options.onLink?.(target, event); } catch (_) {}
+      },
+    });
+    if (!block) return null;
+    if (model.title.fromStem === true) {
+      block.heading.setAttribute("title", "Title from the file name — press == to set one");
+    }
+    if (block.subtitle) block.subtitle.classList?.add?.("bob-prose-note-card-dek");
+    block.actions.appendChild(proseNoteCardNumberingNode(doc, model, options));
+    card.appendChild(block.element);
+
+    const measureRow = proseNoteCardDomEl(doc, "div", "bob-prose-note-card-measure-row");
+    measureRow.setAttribute("aria-live", "polite");
+    measureRow.setAttribute("data-prose-measure-row", "true");
+    const measureSlot = proseNoteCardDomEl(doc, "div", "bob-prose-note-card-measures");
+    measureSlot.setAttribute("data-prose-measures", "true");
+    measureRow.appendChild(measureSlot);
+    card.appendChild(measureRow);
+
+    const fold = typeof propertyCardBuildFoldRow === "function"
+      ? propertyCardBuildFoldRow(doc, {
+        kind: PROSE_NOTE_CARD_HOST_KIND,
+        path: model.path,
+        noun: "Outline",
+        open: options.expanded === true,
+        keyLive: options.keyLive === true,
+        tooltip: "Toggle the Prose outline (_)",
+        onToggle: (next) => { try { options.onToggleOutline?.(next === true); } catch (_) {} },
+      })
+      : { element: null, bodyId: "" };
+    if (fold.element) card.appendChild(fold.element);
+    const outline = proseNoteCardDomEl(doc, "div", "bob-prose-note-card-outline");
+    outline.setAttribute("data-prose-outline", "true");
+    outline.setAttribute("data-prose-outline-slot", PROSE_NOTE_CARD_OUTLINE_SLOT);
+    if (fold.bodyId) outline.setAttribute("id", fold.bodyId);
+    if (options.expanded !== true) outline.setAttribute("hidden", "");
+    card.appendChild(outline);
+    return card;
+  } catch (_) {
+    return null;
+  }
+}
 // ---- src/249n-plugin-prose-note-card-host.js ----
-// Prose Card host (bob-cli-qm prose-card): REGION.
-// The species phase mounts here on createPropertyCardHost behind the gate
-// and precedence, with coordinator kind "prose" and the mount-source
-// attribute below. It owns the inline title only through
-// propertyCardNeverTitleRecognizer, wires the foot, the _ fold (default
-// folded), and == (focus-or-add on title). Kit seeds: the coordinator kind
-// and mount attribute, mirroring 240q.
+// Prose Card host (bob-cli-qm prose-card). Identity paints from local data;
+// the title slot and native-Properties coordinator remain independently
+// fail-open. This adapter never formats or writes note content.
 const PROSE_NOTE_CARD_HOST_KIND = "prose";
 const PROSE_NOTE_CARD_MOUNT_ATTR = "data-prose-source";
+const PROSE_NOTE_CARD_READING_PRIORITY = 48;
+const PROSE_NOTE_CARD_SURFACE_MARK = "bob-prose-note-card-surface";
+const proseNoteCardNodeSignatures = new WeakMap();
+const PROSE_NOTE_CARD_NUMBERING_COMMAND = "bob-articles:toggle-section-numbers";
+
+function proseNoteCardFrontmatterFromText(sourceText) {
+  if (typeof sourceText !== "string") return null;
+  const match = /^---\s*\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(sourceText);
+  if (!match) return null;
+  try {
+    const parsed = typeof parseYaml === "function" ? parseYaml(match[1]) : null;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function proseNoteCardScopeDenied(scope, root) {
+  if (typeof propertyCardScopeIsEmbed === "function" && propertyCardScopeIsEmbed(scope || root)) return true;
+  for (const node of [scope, root]) {
+    try {
+      if (node?.closest?.(".hover-popover, .canvas-node, .canvas-node-content, .print")) return true;
+    } catch (_) { return true; }
+  }
+  return false;
+}
+
+class BobLedgerToolsProseNoteCardMixin {
+  proseNoteCardHost() {
+    if (this._proseNoteCardHost) return this._proseNoteCardHost;
+    const plugin = this;
+    this._proseNoteCardHost = createPropertyCardHost({
+      plugin,
+      kind: PROSE_NOTE_CARD_HOST_KIND,
+      readingPriority: PROSE_NOTE_CARD_READING_PRIORITY,
+      allowEmbedDisplay: false,
+      titleOwnership: true,
+      fields: {
+        active: "proseNoteCardActive",
+        reading: "proseNoteCardReading",
+        readingPending: "proseNoteCardReadingPending",
+        readingTimers: "proseNoteCardReadingTimers",
+        editors: "proseNoteCardEditors",
+        editorScopes: "proseNoteCardEditorScopes",
+        refreshTimer: "proseNoteCardRefreshTimer",
+      },
+      setTimeout: (fn, ms) => (typeof plugin.albumSetTimeout === "function"
+        ? plugin.albumSetTimeout(fn, ms) : setTimeout(fn, ms)),
+      clearTimeout: (id) => { try { plugin.albumClearTimeout?.(id); } catch (_) {} },
+      pathOf: proseNoteCardPath,
+      acceptReading: (el, ctx) => {
+        const path = proseNoteCardPath(ctx?.sourcePath);
+        const fm = plugin.proseNoteCardFrontmatter(path);
+        return Boolean(el && path && !notebookInsideCode?.(el)
+          && !proseNoteCardScopeDenied(el, el)
+          && propertyCardNoteSpecies({ path, frontmatter: fm }) === PROSE_NOTE_CARD_KIND);
+      },
+      paintReading: (el, path) => plugin.paintProseNoteCardReading(el, path),
+      removeReading: (root, scope, path) => plugin.proseNoteCardRemoveReading(root, scope, path),
+      onResolveSurface: (widget, root) => {
+        if (!root) plugin.proseNoteCardRemoveStrays(widget.el, widget.path);
+      },
+      afterRefreshReading: () => plugin.proseNoteCardSyncSurfaces(),
+      livePath: (view) => plugin.proseNoteCardLivePath(view),
+      sourcePath: (view) => plugin.proseNoteCardSourcePath(view),
+      viewPath: (view) => plugin.proseNoteCardLivePath(view) || plugin.proseNoteCardSourcePath(view),
+      buildDecorations: (view) => plugin.buildProseNoteCardDecorations(view),
+      shouldRebuild: (update) => {
+        if (!editorLivePreviewField || !update?.startState || !update?.state) return false;
+        try { return update.startState.field(editorLivePreviewField) !== update.state.field(editorLivePreviewField); }
+        catch (_) { return false; }
+      },
+      cleanEditor: (view) => plugin.proseNoteCardCleanEditor(view),
+      workspaceEvents: ["layout-change", "file-open", "active-leaf-change"],
+      onSetup: () => plugin.proseNoteCardOnSetup(),
+      onDisposeStart: () => plugin.proseNoteCardOnDisposeStart(),
+      onDisposeEnd: () => plugin.proseNoteCardOnDisposeEnd(),
+    });
+    return this._proseNoteCardHost;
+  }
+
+  setupProseNoteCard() { this.proseNoteCardHost().setup(); }
+  teardownProseNoteCard() { this.proseNoteCardHost().dispose(); }
+
+  proseNoteCardOnSetup() {
+    this.proseNoteCardActive = true;
+    this.proseNoteCardEpoch = (this.proseNoteCardEpoch || 0) + 1;
+    if (!(this.proseNoteCardExpanded instanceof Map)) this.proseNoteCardExpanded = new Map();
+    if (!(this.proseNoteCardSurfaceScopes instanceof Set)) this.proseNoteCardSurfaceScopes = new Set();
+    try { propertyCardFrontmatterCoordinatorBind?.(this, PROSE_NOTE_CARD_HOST_KIND); } catch (_) {}
+    try {
+      this.proseNoteCardFoldUnregister = propertyCardRegisterFoldKind(this, PROSE_NOTE_CARD_HOST_KIND, {
+        toggle: (path) => {
+          this.proseNoteCardSetExpanded(path, !this.proseNoteCardIsExpanded(path));
+          return true;
+        },
+      });
+    } catch (_) { this.proseNoteCardFoldUnregister = null; }
+    try {
+      this.proseNoteCardPropertyRegistered = this.registerPropertyCard?.({
+        kind: PROSE_NOTE_CARD_HOST_KIND,
+        match: ({ path, frontmatter } = {}) => propertyCardKindLive(this, PROSE_NOTE_CARD_KIND)
+          && propertyCardNoteSpecies({ path, frontmatter }) === PROSE_NOTE_CARD_KIND,
+        open: ({ path } = {}) => {
+          if (typeof this.openPropertyEditor === "function") {
+            void this.openPropertyEditor({ filePath: path, key: "title" });
+          }
+        },
+      }) === true;
+    } catch (_) { this.proseNoteCardPropertyRegistered = false; }
+    try { this.proseNoteCardFootBind(); } catch (_) {}
+    const epoch = this.proseNoteCardEpoch;
+    try {
+      Promise.resolve(propertyCardPreviewLoad(this)).then(() => {
+        if (this.proseNoteCardActive === true && this.proseNoteCardEpoch === epoch) {
+          this.scheduleProseNoteCardRefresh();
+        }
+      });
+    } catch (_) {}
+  }
+
+  proseNoteCardOnDisposeStart() {
+    this.proseNoteCardActive = false;
+    this.proseNoteCardEpoch = (this.proseNoteCardEpoch || 0) + 1;
+    try { this.proseNoteCardFoldUnregister?.(); } catch (_) {}
+    this.proseNoteCardFoldUnregister = null;
+    if (this.proseNoteCardPropertyRegistered) {
+      try { this.unregisterPropertyCard?.(PROSE_NOTE_CARD_HOST_KIND); } catch (_) {}
+    }
+    this.proseNoteCardPropertyRegistered = false;
+    try { propertyCardFrontmatterCoordinatorReleaseKind?.(this, PROSE_NOTE_CARD_HOST_KIND); } catch (_) {}
+    try { this.proseNoteCardFootUnbind(); } catch (_) {}
+  }
+
+  proseNoteCardOnDisposeEnd() {
+    this.proseNoteCardExpanded?.clear?.();
+    this.proseNoteCardSourceCache?.clear?.();
+    this.proseNoteCardSourceFlights?.clear?.();
+    this.proseNoteCardFootTracked?.clear?.();
+  }
+
+  proseNoteCardDesktop() {
+    try { return Platform?.isDesktopApp === true; } catch (_) { return false; }
+  }
+
+  proseNoteCardFrontmatter(path) {
+    try { return this.homeCardFrontmatter?.(proseNoteCardPath(path)) || {}; } catch (_) { return {}; }
+  }
+
+  proseNoteCardModelFor(path, sourceText) {
+    const key = proseNoteCardPath(path);
+    if (!key || !propertyCardKindLive(this, PROSE_NOTE_CARD_KIND)) return null;
+    const fromSource = proseNoteCardFrontmatterFromText(sourceText);
+    const frontmatter = fromSource || this.proseNoteCardFrontmatter(key);
+    return proseNoteCardModel({
+      path: key,
+      frontmatter,
+      resolveParent: (target, fromPath) => this.homeCardResolveParent?.(target, fromPath) || null,
+    });
+  }
+
+  proseNoteCardExpandedMap() {
+    if (!(this.proseNoteCardExpanded instanceof Map)) this.proseNoteCardExpanded = new Map();
+    return this.proseNoteCardExpanded;
+  }
+
+  proseNoteCardIsExpanded(path) {
+    const key = proseNoteCardPath(path);
+    const stored = key ? this.proseNoteCardExpandedMap().get(key) : null;
+    const choice = typeof propertyCardFoldRestamp === "function"
+      ? propertyCardFoldRestamp(propertyCardFoldChoiceFromStored(stored), "")
+      : propertyCardFoldChoiceFromStored(stored);
+    if (key && choice && choice !== stored) this.proseNoteCardExpandedMap().set(key, choice);
+    return propertyCardFoldResolve({
+      choice,
+      problems: "",
+      foldDefault: propertyCardSpecies(PROSE_NOTE_CARD_KIND)?.foldDefault,
+    });
+  }
+
+  proseNoteCardSetExpanded(path, expanded) {
+    const key = proseNoteCardPath(path);
+    if (!key) return false;
+    this.proseNoteCardExpandedMap().set(key, propertyCardFoldChoice(expanded === true, ""));
+    this.scheduleProseNoteCardRefresh();
+    return true;
+  }
+
+  proseNoteCardNumberingCommandAvailable() {
+    try {
+      const commands = this.app?.commands;
+      if (commands?.commands && commands.commands[PROSE_NOTE_CARD_NUMBERING_COMMAND]) return true;
+      return typeof commands?.findCommand === "function"
+        ? Boolean(commands.findCommand(PROSE_NOTE_CARD_NUMBERING_COMMAND)) : false;
+    } catch (_) { return false; }
+  }
+
+  proseNoteCardToggleNumbering() {
+    if (!this.proseNoteCardNumberingCommandAvailable()) return false;
+    try {
+      return this.app?.commands?.executeCommandById?.(PROSE_NOTE_CARD_NUMBERING_COMMAND) !== false;
+    } catch (_) { return false; }
+  }
+
+  proseNoteCardOpenOptions(path, model, surface) {
+    const sourcePath = proseNoteCardPath(path);
+    return {
+      expanded: this.proseNoteCardIsExpanded(sourcePath),
+      keyLive: propertyCardFoldKeyLive(this, surface),
+      numberingCommandAvailable: this.proseNoteCardNumberingCommandAvailable(),
+      reducedMotion: propertyCardFootReducedMotion?.() === true,
+      onToggleOutline: (next) => this.proseNoteCardSetExpanded(sourcePath, next),
+      onToggleNumbering: () => this.proseNoteCardToggleNumbering(),
+      onLink: (target, event) => { void this.homeCardOpenPath?.(target, sourcePath, event); },
+    };
+  }
+
+  proseNoteCardSignature(model, extra, options) {
+    try {
+      return JSON.stringify([
+        model,
+        extra?.footDigest || "",
+        extra?.footOpen === true,
+        options?.expanded === true,
+        options?.keyLive === true,
+        options?.numberingCommandAvailable === true,
+      ]);
+    } catch (_) { return ""; }
+  }
+
+  proseNoteCardBuildMounted(model, options, doc, footSpec) {
+    const card = proseNoteCardBuildEl(doc, model, options);
+    if (!card) return null;
+    card.setAttribute(PROSE_NOTE_CARD_MOUNT_ATTR, model.path);
+    if (options.reducedMotion) card.classList?.add?.("is-reduced-motion");
+    try { this.proseNoteCardAppendFoot(card, model.path, model, doc, footSpec, options); } catch (_) {}
+    return card;
+  }
+
+  proseNoteCardOwnMounted(scope, view, path, mount, sourceText, currentPath) {
+    if (typeof propertyCardFrontmatterOwnMounted !== "function") return null;
+    const plugin = this;
+    const sourceFor = () => {
+      try {
+        if (view?.state?.doc && typeof view.state.doc.toString === "function") return view.state.doc.toString();
+      } catch (_) {}
+      return plugin.proseNoteCardSourceCache?.get?.(proseNoteCardPath(path));
+    };
+    return propertyCardFrontmatterOwnMounted(plugin, {
+      scope,
+      view: view && view.dom === scope ? view : null,
+      path: proseNoteCardPath(path),
+      kind: PROSE_NOTE_CARD_HOST_KIND,
+      mount,
+      sourceText,
+      getSource: sourceFor,
+      currentPath,
+      isCurrent: () => {
+        const text = sourceFor();
+        return Boolean(plugin.proseNoteCardActive === true
+          && propertyCardKindLive(plugin, PROSE_NOTE_CARD_KIND)
+          && plugin.proseNoteCardModelFor(path, text));
+      },
+      active: () => plugin.proseNoteCardActive === true,
+    });
+  }
+
+  proseNoteCardReleaseFrontmatter(scope, path) {
+    try { return propertyCardFrontmatterReleaseMounted?.(scope, { plugin: this, kind: PROSE_NOTE_CARD_HOST_KIND, path }); }
+    catch (_) { return false; }
+  }
+
+  proseNoteCardReadingRoot(el) {
+    try { return propertyCardReadingRoot(el); } catch (_) { return null; }
+  }
+
+  proseNoteCardReadingScope(root) {
+    try { return propertyCardReadingScope(root); } catch (_) { return root; }
+  }
+
+  proseNoteCardReadingView(scope) {
+    try { return propertyCardReadingViewFor(this.app, scope); } catch (_) { return null; }
+  }
+
+  proseNoteCardReadingAnchor(root) {
+    try {
+      return Array.from(root?.querySelectorAll?.("h1") || []).find((node) => !notebookInsideCode(node)) || null;
+    } catch (_) { return null; }
+  }
+
+  proseNoteCardReadingCards(root, path) {
+    const key = proseNoteCardPath(path);
+    return Array.from(root?.querySelectorAll?.(`.${PROSE_NOTE_CARD_SURFACE_CLASS}`) || []).filter((node) => {
+      if (!propertyCardNodeBelongs(node, root)) return false;
+      const owner = proseNoteCardPath(node.getAttribute?.(PROSE_NOTE_CARD_MOUNT_ATTR));
+      return !key || !owner || owner === key;
+    });
+  }
+
+  paintProseNoteCardReading(el, sourcePath) {
+    const path = proseNoteCardPath(sourcePath);
+    const root = this.proseNoteCardReadingRoot(el);
+    const scope = this.proseNoteCardReadingScope(root);
+    if (!root || !scope || !path || !this.proseNoteCardDesktop()
+      || !propertyCardKindLive(this, PROSE_NOTE_CARD_KIND)
+      || proseNoteCardScopeDenied(scope, root)) {
+      this.proseNoteCardRemoveReading(root, scope, path);
+      return null;
+    }
+    let sourceText = this.proseNoteCardSourceCache?.get?.(path);
+    const model = this.proseNoteCardModelFor(path, sourceText);
+    const reading = scope.classList?.contains?.("markdown-preview-view")
+      ? this.proseNoteCardReadingView(scope) : null;
+    const leafPath = reading?.currentPath?.() || "";
+    if (!model || (leafPath && proseNoteCardPath(leafPath) !== path)) {
+      this.proseNoteCardRemoveReading(root, scope, path);
+      return null;
+    }
+    const doc = root.ownerDocument || (typeof document !== "undefined" ? document : null);
+    if (!doc || typeof doc.createElement !== "function") {
+      this.proseNoteCardRemoveReading(root, scope, path);
+      return null;
+    }
+    const extra = this.proseNoteCardFootExtra(path, model);
+    const options = { ...this.proseNoteCardOpenOptions(path, model, "reading"), sourcePath: path };
+    const signature = this.proseNoteCardSignature(model, extra, options);
+    const adopted = propertyCardAdoptedEntry(scope);
+    const slotNode = adopted && adopted.path === path && adopted.kind === PROSE_NOTE_CARD_HOST_KIND
+      && adopted.mode === "slot" ? adopted.node : null;
+    const bodyNodes = this.proseNoteCardReadingCards(root, path).filter((node) => node !== slotNode);
+    let card = slotNode || bodyNodes[0] || null;
+    if (!card || proseNoteCardNodeSignatures.get(card) !== signature) {
+      const fresh = this.proseNoteCardBuildMounted(model, options, doc, extra?.footSpec);
+      if (!fresh) {
+        this.proseNoteCardRemoveReading(root, scope, path);
+        return null;
+      }
+      card = card ? propertyCardAdoptPatch(card, fresh) : fresh;
+      proseNoteCardNodeSignatures.set(card, signature);
+    }
+    for (const node of bodyNodes) {
+      if (node !== card) {
+        try { node.remove?.(); } catch (_) {}
+      }
+    }
+    const plugin = this;
+    const adoption = propertyCardAdoptTitle(scope, card, {
+      path,
+      kind: PROSE_NOTE_CARD_HOST_KIND,
+      view: reading?.view || null,
+      currentPath: reading?.currentPath || null,
+      recognizer: propertyCardNeverTitleRecognizer(PROSE_NOTE_CARD_KIND),
+      onLost: () => this.scheduleProseNoteCardRefresh(),
+      onMount: (mount) => {
+        const text = plugin.proseNoteCardSourceCache?.get?.(path) || sourceText;
+        plugin.proseNoteCardOwnMounted(scope, reading?.view || null, path, mount, text, reading?.currentPath || (() => ""));
+      },
+    });
+    if (adoption.mode === "slot") {
+      sourceText = this.proseNoteCardSourceCache?.get?.(path) || sourceText;
+      this.proseNoteCardOwnMounted(scope, reading?.view || null, path, card, sourceText, reading?.currentPath || (() => ""));
+    } else {
+      this.proseNoteCardReleaseFrontmatter(scope, path);
+      propertyCardDemoteTitleHeading(card);
+      const anchor = this.proseNoteCardReadingAnchor(root);
+      try {
+        if (anchor?.parentNode?.insertBefore) anchor.parentNode.insertBefore(card, anchor);
+        else if (root.insertBefore) root.insertBefore(card, root.firstChild || null);
+        else root.prepend?.(card);
+      } catch (_) {
+        this.proseNoteCardRemoveReading(root, scope, path);
+        return null;
+      }
+    }
+    scope.classList?.add?.(PROSE_NOTE_CARD_SURFACE_MARK);
+    this.proseNoteCardSurfaceScopes?.add?.(scope);
+    this.proseNoteCardTrackFoot(scope, path, card);
+    void this.proseNoteCardEnsureSource(path);
+    return card;
+  }
+
+  proseNoteCardRemoveReading(root, scope = root, sourcePath = "") {
+    const path = proseNoteCardPath(sourcePath);
+    if (!root && !scope) return;
+    try { this.proseNoteCardTrackFoot(scope, path, null); } catch (_) {}
+    try { propertyCardAdoptRelease(scope, path || undefined, PROSE_NOTE_CARD_HOST_KIND, { preserveFallback: true }); } catch (_) {}
+    try { this.proseNoteCardReleaseFrontmatter(scope, path); } catch (_) {}
+    for (const node of this.proseNoteCardReadingCards(root, path)) {
+      try { node.remove?.(); } catch (_) { node.parentNode?.removeChild?.(node); }
+    }
+    const anotherOwner = Array.from(this.proseNoteCardReading || []).some((item) => item.surface === root && item.path !== path);
+    if (!anotherOwner) scope?.classList?.remove?.(PROSE_NOTE_CARD_SURFACE_MARK);
+    if (!anotherOwner) this.proseNoteCardSurfaceScopes?.delete?.(scope);
+  }
+
+  proseNoteCardRemoveStrays(root, sourcePath) {
+    for (const node of Array.from(root?.querySelectorAll?.(`.${PROSE_NOTE_CARD_SURFACE_CLASS}`) || [])) {
+      if (node.getAttribute?.("data-cm-widget") !== "true") continue;
+      if (!node.closest?.(".cm-widgetBuffer, .cm-content")) continue;
+      if (proseNoteCardPath(node.getAttribute?.(PROSE_NOTE_CARD_MOUNT_ATTR)) !== proseNoteCardPath(sourcePath)) continue;
+      try { node.remove?.(); } catch (_) {}
+    }
+  }
+
+  proseNoteCardLivePath(view) {
+    if (this.proseNoteCardActive !== true || !this.proseNoteCardDesktop()
+      || !propertyCardKindLive(this, PROSE_NOTE_CARD_KIND)) return null;
+    try { if (view?.dom?.closest?.(".markdown-embed, .internal-embed, .hover-popover, .canvas-node, .print")) return null; }
+    catch (_) { return null; }
+    try { return this.notebookCatalogLivePath?.(view) || null; } catch (_) { return null; }
+  }
+
+  proseNoteCardSourcePath(view) {
+    if (this.proseNoteCardActive !== true || !this.proseNoteCardDesktop()) return null;
+    try {
+      if (view?.dom?.closest?.(".markdown-embed, .internal-embed, .hover-popover, .canvas-node, .print")) return null;
+    } catch (_) { return null; }
+    try {
+      const info = view?.state?.field?.(editorInfoField, false);
+      return typeof info?.file?.path === "string" && info.file.path ? info.file.path : null;
+    } catch (_) { return null; }
+  }
+
+  proseNoteCardLiveCurrentPath(view) {
+    return this.proseNoteCardLivePath(view) || "";
+  }
+
+  proseNoteCardFallbackAnchor(text) {
+    try {
+      const anchor = notebookHeaderLiveAnchor(text);
+      if (Number.isInteger(anchor) && anchor >= 0) return { line: anchor, after: false };
+    } catch (_) {}
+    try {
+      const end = notebookHeaderFrontmatterEnd(text);
+      if (Number.isInteger(end) && end >= 0) return { line: end + 1, after: false };
+    } catch (_) {}
+    return null;
+  }
+
+  buildProseNoteCardDecorations(view) {
+    const path = this.proseNoteCardLivePath(view);
+    if (!path) {
+      this.proseNoteCardCleanEditor(view);
+      return Decoration?.none || null;
+    }
+    let text = "";
+    try { text = view.state.doc.toString(); } catch (_) {}
+    if (!text) {
+      this.proseNoteCardCleanEditor(view);
+      return Decoration?.none || null;
+    }
+    this.proseNoteCardRememberSource(path, text);
+    const model = this.proseNoteCardModelFor(path, text);
+    this.proseNoteCardSetEditorScope(view, Boolean(model));
+    if (!model) {
+      try { propertyCardAdoptRelease(view.dom, path, PROSE_NOTE_CARD_HOST_KIND, { preserveFallback: true }); } catch (_) {}
+      try { this.proseNoteCardReleaseFrontmatter(view.dom, path); } catch (_) {}
+      try { this.proseNoteCardTrackFoot(view.dom, path, null); } catch (_) {}
+      return Decoration?.none || null;
+    }
+    if (!Decoration || !WidgetType || !RangeSetBuilder) return Decoration?.none || null;
+    const doc = view.dom?.ownerDocument || (typeof document !== "undefined" ? document : null);
+    const extra = this.proseNoteCardFootExtra(path, model);
+    const options = { ...this.proseNoteCardOpenOptions(path, model, "live-preview"), sourcePath: path };
+    const signature = this.proseNoteCardSignature(model, extra, options);
+    const adopted = propertyCardAdoptedEntry(view.dom);
+    let card = adopted && adopted.path === path && adopted.kind === PROSE_NOTE_CARD_HOST_KIND
+      && adopted.mode === "slot" ? adopted.node : null;
+    if (!card || proseNoteCardNodeSignatures.get(card) !== signature) {
+      const fresh = this.proseNoteCardBuildMounted(model, options, doc, extra?.footSpec);
+      if (!fresh) {
+        this.proseNoteCardCleanEditor(view);
+        return Decoration.none;
+      }
+      if (card) this.proseNoteCardPatchLive(view, adopted, fresh, signature);
+      else {
+        card = fresh;
+        proseNoteCardNodeSignatures.set(card, signature);
+      }
+    }
+    const plugin = this;
+    const adoption = propertyCardAdoptTitle(view.dom, card, {
+      path,
+      kind: PROSE_NOTE_CARD_HOST_KIND,
+      view,
+      recognizer: propertyCardNeverTitleRecognizer(PROSE_NOTE_CARD_KIND),
+      currentPath: () => plugin.proseNoteCardLiveCurrentPath(view),
+      onLost: () => this.scheduleProseNoteCardRefresh(),
+      onMount: (mount) => {
+        const source = view?.state?.doc?.toString?.() || text;
+        plugin.proseNoteCardOwnMounted(view.dom, view, path, mount, source, () => plugin.proseNoteCardLiveCurrentPath(view));
+      },
+    });
+    try { this.proseNoteCardTrackFoot(view.dom, path, card); } catch (_) {}
+    if (adoption.mode === "slot") {
+      try {
+        this.proseNoteCardOwnMounted(view.dom, view, path, card, text, () => this.proseNoteCardLiveCurrentPath(view));
+      } catch (_) {}
+      try { propertyCardFrontmatterCoordinatorReconcile?.(this); } catch (_) {}
+      return Decoration.none;
+    }
+    this.proseNoteCardReleaseFrontmatter(view.dom, path);
+    propertyCardDemoteTitleHeading(card);
+    card.setAttribute?.("data-cm-widget", "true");
+    const anchor = this.proseNoteCardFallbackAnchor(text);
+    let at = 0;
+    if (anchor && view.state.doc?.line) {
+      try {
+        const line = view.state.doc.line(anchor.line + 1);
+        at = anchor.after ? line.to : line.from;
+      } catch (_) {}
+    }
+    const widget = new class extends WidgetType {
+      constructor() { super(); this.path = path; this.signature = signature; }
+      eq(other) { return Boolean(other && other.path === this.path && other.signature === this.signature); }
+      toDOM() {
+        card.setAttribute?.("data-cm-widget", "true");
+        card.setAttribute?.(PROSE_NOTE_CARD_MOUNT_ATTR, path);
+        return card;
+      }
+    }();
+    const builder = new RangeSetBuilder();
+    builder.add(at, at, Decoration.widget({ widget, side: -1 }));
+    return builder.finish();
+  }
+
+  proseNoteCardPatchLive(view, adopted, fresh, signature) {
+    const target = adopted?.node;
+    const generation = adopted?.generation;
+    proseNoteCardDefer(() => {
+      const current = propertyCardAdoptedEntry(view?.dom);
+      if (!current || current.node !== target || current.generation !== generation) return;
+      propertyCardAdoptPatch(target, fresh);
+      proseNoteCardNodeSignatures.set(target, signature);
+      propertyCardSyncTitleHeading(target, current.owned === true);
+      try { this.proseNoteCardTrackFoot(view.dom, current.path, target); } catch (_) {}
+    });
+  }
+
+  proseNoteCardSetEditorScope(view, enabled) {
+    try {
+      return this.proseNoteCardHost().setEditorScope(view, enabled, {
+        scopeOf: (root) => root?.closest?.(".markdown-source-view") || root,
+        mark: (scope) => scope?.classList?.add?.(PROSE_NOTE_CARD_SURFACE_MARK),
+        unmark: (scope) => scope?.classList?.remove?.(PROSE_NOTE_CARD_SURFACE_MARK),
+      });
+    } catch (_) { return null; }
+  }
+
+  proseNoteCardCleanEditor(view) {
+    const path = this.proseNoteCardLivePath(view) || this.proseNoteCardSourcePath(view) || "";
+    try { this.proseNoteCardTrackFoot(view?.dom, path, null); } catch (_) {}
+    try { propertyCardAdoptRelease(view?.dom, path || undefined, PROSE_NOTE_CARD_HOST_KIND, { preserveFallback: true }); } catch (_) {}
+    try { this.proseNoteCardReleaseFrontmatter(view?.dom, path); } catch (_) {}
+    try {
+      return this.proseNoteCardHost().cleanEditor(view, {
+        unmark: (scope) => scope?.classList?.remove?.(PROSE_NOTE_CARD_SURFACE_MARK),
+      });
+    } catch (_) { return null; }
+  }
+
+  proseNoteCardRemoveStrayScope(scope) {
+    try {
+      if (!scope?.querySelectorAll) return;
+      for (const node of scope.querySelectorAll(`.${PROSE_NOTE_CARD_SURFACE_CLASS}`)) {
+        node.remove?.();
+      }
+    } catch (_) {}
+  }
+
+  proseNoteCardSyncSurfaces() {
+    try {
+      for (const scope of this.proseNoteCardSurfaceScopes || []) {
+        if (!scope?.querySelector?.(`.${PROSE_NOTE_CARD_SURFACE_CLASS}`)) {
+          scope.classList?.remove?.(PROSE_NOTE_CARD_SURFACE_MARK);
+        }
+      }
+    } catch (_) {}
+  }
+
+  scheduleProseNoteCardRefresh() {
+    try { this.proseNoteCardHost().scheduleRefresh(); } catch (_) {}
+  }
+
+  refreshProseNoteCardReading() {
+    try { this.proseNoteCardHost().refreshReading(); } catch (_) {}
+  }
+
+  refreshProseNoteCardEditors() {
+    try { this.proseNoteCardHost().refreshEditors(); } catch (_) {}
+  }
+}
+
+function proseNoteCardDefer(callback) {
+  if (typeof queueMicrotask === "function") queueMicrotask(callback);
+  else Promise.resolve().then(callback);
+}
 // ---- src/249o-plugin-prose-note-card-foot.js ----
-// Prose Card foot (bob-cli-qm prose-card): REGION.
-// The species phase wires the kit foot here: created (silent when missing),
-// the lint chip with the findings count, and the Properties drawer. Kit
-// seeds: the species kind for foot routing.
+// Prose Card shared foot adapter. Source reads are local vault reads only;
+// the adapter never starts Bob or mutates a note.
 const PROSE_NOTE_CARD_FOOT_KIND = "prose";
+
+class BobLedgerToolsProseNoteCardFootMixin {
+  proseNoteCardFootBind() {
+    if (!(this.proseNoteCardSourceCache instanceof Map)) this.proseNoteCardSourceCache = new Map();
+    if (!(this.proseNoteCardSourceFlights instanceof Map)) this.proseNoteCardSourceFlights = new Map();
+    if (!(this.proseNoteCardFootTracked instanceof Set)) this.proseNoteCardFootTracked = new Set();
+    if (!(this.proseNoteCardFootPendingScroll instanceof Set)) this.proseNoteCardFootPendingScroll = new Set();
+    propertyCardFootAdapterBind(this, {
+      pendingKey: "proseNoteCardFootPendingScroll",
+      untoggleKey: "proseNoteCardFootUntoggle",
+      unresolverKey: "proseNoteCardFootUnresolver",
+      refresh: () => this.scheduleProseNoteCardRefresh(),
+      livePath: (view) => this.proseNoteCardLivePath(view) || "",
+    });
+    try {
+      const cache = this.app?.metadataCache;
+      if (cache && typeof cache.on === "function" && typeof this.registerEvent === "function"
+        && !this.proseNoteCardFootMetaBound) {
+        this.proseNoteCardFootMetaBound = true;
+        this.registerEvent(cache.on("changed", (file) => {
+          const path = proseNoteCardPath(file?.path);
+          if (!path) return;
+          this.proseNoteCardSourceCache?.delete?.(path);
+          this.proseNoteCardSourceFlights?.delete?.(path);
+          this.scheduleProseNoteCardRefresh();
+        }));
+      }
+    } catch (_) {}
+    try {
+      const vault = this.app?.vault;
+      if (vault && typeof vault.on === "function" && typeof this.registerEvent === "function"
+        && !this.proseNoteCardFootVaultBound) {
+        this.proseNoteCardFootVaultBound = true;
+        this.registerEvent(vault.on("rename", (file, oldPath) => {
+          try { propertyCardFootRenamePath?.(oldPath, file?.path); } catch (_) {}
+          const previous = proseNoteCardPath(oldPath);
+          if (previous) {
+            this.proseNoteCardSourceCache?.delete?.(previous);
+            this.proseNoteCardSourceFlights?.delete?.(previous);
+            this.proseNoteCardExpanded?.delete?.(previous);
+          }
+          this.scheduleProseNoteCardRefresh();
+        }));
+        this.registerEvent(vault.on("delete", (file) => {
+          try { propertyCardFootReleasePath?.(file?.path); } catch (_) {}
+          const path = proseNoteCardPath(file?.path);
+          this.proseNoteCardSourceCache?.delete?.(path);
+          this.proseNoteCardSourceFlights?.delete?.(path);
+          this.proseNoteCardExpanded?.delete?.(path);
+          this.scheduleProseNoteCardRefresh();
+        }));
+      }
+    } catch (_) {}
+  }
+
+  proseNoteCardFootUnbind() {
+    propertyCardFootAdapterUnbind(this, {
+      pendingKey: "proseNoteCardFootPendingScroll",
+      untoggleKey: "proseNoteCardFootUntoggle",
+      unresolverKey: "proseNoteCardFootUnresolver",
+      tracked: this.proseNoteCardFootTracked,
+      cache: this.proseNoteCardSourceCache,
+      flights: this.proseNoteCardSourceFlights,
+    });
+    this.proseNoteCardFootMetaBound = false;
+    this.proseNoteCardFootVaultBound = false;
+  }
+
+  proseNoteCardRememberSource(path, text) {
+    if (!(this.proseNoteCardSourceCache instanceof Map)) this.proseNoteCardSourceCache = new Map();
+    return propertyCardFootAdapterRememberSource(this.proseNoteCardSourceCache, path, text);
+  }
+
+  proseNoteCardEnsureSource(path) {
+    if (!(this.proseNoteCardSourceCache instanceof Map)) this.proseNoteCardSourceCache = new Map();
+    if (!(this.proseNoteCardSourceFlights instanceof Map)) this.proseNoteCardSourceFlights = new Map();
+    return propertyCardFootAdapterEnsureSource(this, path, {
+      cache: this.proseNoteCardSourceCache,
+      flights: this.proseNoteCardSourceFlights,
+      active: () => this.proseNoteCardActive !== false,
+      refresh: () => this.scheduleProseNoteCardRefresh(),
+    });
+  }
+
+  proseNoteCardFootSpec(path, model) {
+    const filePath = proseNoteCardPath(path);
+    const frontmatter = model?.frontmatter && typeof model.frontmatter === "object"
+      ? model.frontmatter : propertyCardFootAdapterFrontmatter(this, filePath);
+    return propertyCardFootAdapterSpec({
+      path: filePath,
+      kind: PROSE_NOTE_CARD_FOOT_KIND,
+      sourceText: this.proseNoteCardSourceCache?.get?.(filePath),
+      frontmatter,
+      where: { title: "title", summary: "dek" },
+    });
+  }
+
+  proseNoteCardFootExtra(path, model) {
+    const spec = this.proseNoteCardFootSpec(path, model)
+      || { path: proseNoteCardPath(path), inventory: propertyCardFootAdapterPendingInventory(), stamp: null };
+    return propertyCardFootAdapterExtra(path, spec);
+  }
+
+  proseNoteCardFootHandlers(path) {
+    const filePath = proseNoteCardPath(path);
+    return propertyCardFootAdapterHandlers(this, filePath, {
+      pendingScroll: this.proseNoteCardFootPendingScroll,
+      refresh: () => this.scheduleProseNoteCardRefresh(),
+      hoverSource: "bob-prose-note-card",
+      jumpYaml: (key, line) => { void this.homeCardJumpYaml?.(filePath, key, line); },
+      jumpRecovery: () => { void this.homeCardJumpYaml?.(filePath, "", 1); },
+      openPath: (target, event) => { void this.homeCardOpenPath?.(target, filePath, event); },
+    });
+  }
+
+  proseNoteCardTrackFoot(container, path, card) {
+    return propertyCardFootAdapterTrack(container, path, card, this.proseNoteCardFootTracked);
+  }
+
+  proseNoteCardAppendFoot(card, path, model, doc, footSpec, options = {}) {
+    const key = proseNoteCardPath(path);
+    if (!card || !key) return null;
+    const spec = footSpec || this.proseNoteCardFootSpec(key, model);
+    return propertyCardFootAdapterAppend(
+      card,
+      key,
+      doc,
+      spec && options.keyLive === true ? { ...spec, keyLive: true } : spec,
+      this.proseNoteCardFootHandlers(key),
+      this.proseNoteCardFootPendingScroll,
+    );
+  }
+}
 // ---- src/249p-plugin-prose-note-card-outline.js ----
 // Prose Card outline (bob-cli-qm prose-seam): REGION.
 // After bob-cli-qj.3, the seam phase paints here from Bob Prose's read-only
@@ -195826,6 +196762,8 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsHomeCardLiveMixin,
   BobLedgerToolsNotebookCardMixin,
   BobLedgerToolsNotebookCardFootMixin,
+  BobLedgerToolsProseNoteCardMixin,
+  BobLedgerToolsProseNoteCardFootMixin,
   BobLedgerToolsRecordSheetMixin,
   BobLedgerToolsRecordSheetTitleMixin,
   BobLedgerToolsRecordSheetFootMixin,
@@ -200354,6 +201292,25 @@ try {
       propertyCardInventory,
       propertyCardScanFrontmatter,
       propertyCardInventoryTypedValue,
+      PROSE_NOTE_CARD_KIND,
+      PROSE_NOTE_CARD_SURFACE_CLASS,
+      PROSE_NOTE_CARD_HOST_KIND,
+      PROSE_NOTE_CARD_MOUNT_ATTR,
+      PROSE_NOTE_CARD_FOOT_KIND,
+      PROSE_NOTE_CARD_OUTLINE_SLOT,
+      PROSE_NOTE_CARD_NUMBERING_COMMAND,
+      proseNoteCardStem,
+      proseNoteCardPath,
+      proseNoteCardOneLine,
+      proseNoteCardTitleParts,
+      proseNoteCardInitial,
+      proseNoteCardNumbering,
+      proseNoteCardModel,
+      proseNoteCardBuildEl,
+      proseNoteCardNumberingNode,
+      proseNoteCardFrontmatterFromText,
+      proseNoteCardDefer,
+      BobLedgerToolsProseNoteCardMixin,
     });
   }
 } catch (_) {}

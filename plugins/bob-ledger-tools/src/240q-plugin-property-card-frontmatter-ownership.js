@@ -747,7 +747,7 @@ function propertyCardFrontmatterCoordinatorReconcile(plugin) {
 function propertyCardFrontmatterCoordinatorCapabilityChanged(plugin, status) {
   const released = propertyCardFrontmatterCoordinatorReconcile(plugin);
   if (status === "confirmed" && propertyCardFrontmatterCapabilityReady(plugin)) {
-    for (const method of ["scheduleAlbumHeaderRefresh", "scheduleRecordSheetRefresh", "scheduleIntentionCardRefresh", "scheduleBankSetupRefresh", "scheduleHomeCardRefresh"]) {
+    for (const method of ["scheduleAlbumHeaderRefresh", "scheduleRecordSheetRefresh", "scheduleIntentionCardRefresh", "scheduleBankSetupRefresh", "scheduleHomeCardRefresh", "scheduleProseNoteCardRefresh"]) {
       try { plugin?.[method]?.(); } catch (_) {}
     }
     try { plugin?.intentionCardHost?.().scheduleRefresh?.(); } catch (_) {}

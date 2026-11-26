@@ -118,7 +118,7 @@ BobLedgerToolsPlugin.prototype.teardownLedgerToolsSurfaces = function () {
     } catch (error) {
       // Reading Board data teardown is best-effort.
     }
-    try { this.teardownRecordCard?.(); this.teardownPropertyEditorEntrypoints?.(); this.teardownPropertyEditorSettingsEntrypoints?.(); this.teardownRecordUpdate?.(); this.teardownPropertyCapabilityRouting?.(); this.teardownPropertyUpdate?.(); this.teardownRecordSheet?.(); this.teardownIntentionCardNavigation?.(); this.teardownIntentionCardEditor?.(); this.teardownIntentionUpdate?.(); this.teardownIntentionCard?.(); this.teardownSubscriptionSurfaces(); this.teardownNotebookCard?.(); this.teardownHomeCard(); this.teardownAlbumHeader(); this.teardownNotebookHeader(); this.teardownAlbumYamlExcursion?.(); this.teardownAlbumSchemaEntrypoints?.(); } catch (error) {}
+    try { this.teardownRecordCard?.(); this.teardownPropertyEditorEntrypoints?.(); this.teardownPropertyEditorSettingsEntrypoints?.(); this.teardownRecordUpdate?.(); this.teardownPropertyCapabilityRouting?.(); this.teardownPropertyUpdate?.(); this.teardownRecordSheet?.(); this.teardownIntentionCardNavigation?.(); this.teardownIntentionCardEditor?.(); this.teardownIntentionUpdate?.(); this.teardownIntentionCard?.(); this.teardownSubscriptionSurfaces(); this.teardownNotebookCard?.(); this.teardownProseNoteCard?.(); this.teardownHomeCard(); this.teardownAlbumHeader(); this.teardownNotebookHeader(); this.teardownAlbumYamlExcursion?.(); this.teardownAlbumSchemaEntrypoints?.(); } catch (error) {}
     try { propertyCardAdoptReleaseAll(); } catch (_) {}
     try { propertyCardTitleSlotReleaseAll(); } catch (_) {}
     try { propertyCardFrontmatterReleaseAll(); } catch (_) {}

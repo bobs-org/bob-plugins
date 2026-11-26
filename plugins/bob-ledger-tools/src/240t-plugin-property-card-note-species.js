@@ -195,15 +195,34 @@ function propertyCardPreviewRemember(plugin, data) {
 }
 
 async function propertyCardPreviewLoad(plugin) {
+  if (!plugin || typeof plugin !== "object") return [];
+  if (plugin.propertyCardPreviewLoaded === true) {
+    return Array.isArray(plugin.propertyCardPreviewKinds) ? plugin.propertyCardPreviewKinds : [];
+  }
+  if (plugin.propertyCardPreviewLoadPromise) return plugin.propertyCardPreviewLoadPromise;
+  const load = (async () => {
+    let stored = null;
+    try {
+      if (plugin.ledgerToolsPluginDataLoaded === true
+        && plugin.ledgerToolsPluginData && typeof plugin.ledgerToolsPluginData === "object") {
+        stored = plugin.ledgerToolsPluginData;
+      } else if (typeof plugin.loadLedgerToolsPluginData === "function") {
+        stored = await plugin.loadLedgerToolsPluginData();
+      } else if (typeof plugin.loadData === "function") {
+        stored = await plugin.loadData();
+      }
+    } catch (_) {
+      stored = null;
+    }
+    const kinds = propertyCardPreviewRemember(plugin, stored);
+    plugin.propertyCardPreviewLoaded = true;
+    return kinds;
+  })();
+  plugin.propertyCardPreviewLoadPromise = load;
   try {
-    const stored = typeof plugin?.loadLedgerToolsPluginData === "function"
-      ? await plugin.loadLedgerToolsPluginData()
-      : typeof plugin?.loadData === "function"
-        ? await plugin.loadData()
-        : null;
-    return propertyCardPreviewRemember(plugin, stored);
-  } catch (_) {
-    return propertyCardPreviewRemember(plugin, null);
+    return await load;
+  } finally {
+    if (plugin.propertyCardPreviewLoadPromise === load) plugin.propertyCardPreviewLoadPromise = null;
   }
 }
 

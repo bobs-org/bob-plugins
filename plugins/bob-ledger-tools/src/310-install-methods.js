@@ -66,6 +66,8 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsHomeCardLiveMixin,
   BobLedgerToolsNotebookCardMixin,
   BobLedgerToolsNotebookCardFootMixin,
+  BobLedgerToolsProseNoteCardMixin,
+  BobLedgerToolsProseNoteCardFootMixin,
   BobLedgerToolsRecordSheetMixin,
   BobLedgerToolsRecordSheetTitleMixin,
   BobLedgerToolsRecordSheetFootMixin,

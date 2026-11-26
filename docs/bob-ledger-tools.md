@@ -40,6 +40,7 @@ Cards: [Album cards](albums.md), [Record Card](record-card.md),
 | Edit note properties | `edit-note-properties` | — |
 | Edit record | `edit-record` | — |
 | Expand Bob snippet | `expand-ledger-time-range-snippet` | — |
+| Go to the Snoozed row | `go-to-snoozed-row` | — |
 | Go to today's Task Link | `go-to-today-task-link` | — |
 | Jump to current Pomodoro line | `jump-to-current-pomodoro` | Ctrl+9 |
 | Open Reading Board | `open-reading-board` | — |
@@ -67,6 +68,7 @@ Cards: [Album cards](albums.md), [Record Card](record-card.md),
 | Toggle inherited task types | `toggle-inherited-task-types` | — |
 | Toggle mail link marks | `toggle-mail-link-marks` | — |
 | Toggle root marks | `toggle-root-marks` | — |
+| Toggle snooze marks | `toggle-snooze-marks` | — |
 | Toggle task date marks | `toggle-date-marks` | — |
 | Toggle task drawer marks | `toggle-task-drawer-marks` | — |
 | Toggle task freshness marks | `toggle-freshness-marks` | — |

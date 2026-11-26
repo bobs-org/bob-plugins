@@ -610,7 +610,17 @@ class BobLedgerToolsSnoozedTodayMixin {
     }
     const becameReady = !wasReady && this.isSnoozedCacheReady(clock);
     const changed = plannedChanged || becameReady;
-    if (changed || detailsChanged || dateOrPathChanged) {
+    // A minute rollover changes no membership or details, but the
+    // definition clocks still rerender: their tooltips carry a live
+    // countdown.
+    const previousMinutes = Number.isInteger(previous.nowMinutes)
+      ? previous.nowMinutes
+      : null;
+    const minutesChanged =
+      Number.isInteger(built.clockSnapshot.nowMinutes) &&
+      previousMinutes !== null &&
+      previousMinutes !== built.clockSnapshot.nowMinutes;
+    if (changed || detailsChanged || dateOrPathChanged || minutesChanged) {
       try {
         const workspace = this.app && this.app.workspace;
         if (plannedChanged || becameReady) {
@@ -622,6 +632,16 @@ class BobLedgerToolsSnoozedTodayMixin {
           this.scheduleFreshnessMarksRefresh();
           if (typeof this.scheduleLiveWidgetRefresh === "function") {
             this.scheduleLiveWidgetRefresh();
+          }
+        }
+        // Row-detail changes (retiming, Asleep-to-Due, Blocked
+        // transitions, wake-history edits) and minute ticks rerender
+        // the snooze display surfaces even when membership is
+        // unchanged: the landed membership-only fan-out above is not
+        // enough for paint.
+        if (detailsChanged || dateOrPathChanged || minutesChanged) {
+          if (typeof this.scheduleSnoozeMarksRefresh === "function") {
+            this.scheduleSnoozeMarksRefresh();
           }
         }
       } catch (error) {

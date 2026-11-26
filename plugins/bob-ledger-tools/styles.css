@@ -3290,6 +3290,129 @@ body.bob-today-marks-off .bob-today-mark {
   display: none;
 }
 
+/* Snooze definition clocks (definition-marks phase): one alarm clock
+   after the identity glyph on snoozed task definitions. Display-only;
+   nothing ever writes it. Contract: bob-cli `docs/snooze-marks.md`.
+   The host is an empty `span.bob-snooze-mark`; CSS `::before` draws
+   the Lucide `alarm-clock` glyph from `--bob-snooze-mark-glyph`
+   through a mask tinted `currentColor`, and `::after` shows the time
+   from `attr(data-bob-snooze-time)` with tabular numbers, so copying
+   a line never picks up the clock and a theme snippet can swap the
+   glyph with no code change. Asleep is indigo (a blue/purple mix),
+   Due is amber with one gentle transition pulse, Blocked is muted.
+   Shape plus words carry every state; color is never the only cue.
+   The box matches the Today mark metrics, so the clock never changes
+   line height. */
+
+body {
+  --bob-snooze-mark-glyph: "⏰";
+}
+
+.bob-snooze-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.2em;
+  height: 1.2em;
+  margin-inline: 0.06em 0.3em;
+  border-radius: 999px;
+  font-size: 0.85em;
+  line-height: 1;
+  vertical-align: -0.14em;
+  user-select: none;
+  cursor: default;
+  transition: background-color 120ms ease;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+.bob-snooze-mark::before {
+  content: var(--bob-snooze-mark-glyph, "⏰");
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+  font-variant-emoji: emoji;
+  line-height: 1;
+  -webkit-mask: none;
+  mask: none;
+}
+
+.bob-snooze-mark::after {
+  content: attr(data-bob-snooze-time);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  margin-inline-start: 0.2em;
+}
+
+/* Tones: asleep indigo, due amber, blocked muted. */
+
+.bob-snooze-mark--asleep {
+  color: color-mix(in srgb, var(--text-accent, #7c8aff) 72%, var(--text-muted, #8b8fa3));
+}
+
+.bob-snooze-mark--due {
+  color: var(--text-warning, #e8a13c);
+}
+
+.bob-snooze-mark--blocked {
+  color: var(--text-muted, #8b8fa3);
+}
+
+/* Hover: a capsule tinted with the line's own status accent. */
+
+.bob-snooze-mark:hover {
+  background-color: color-mix(in srgb, var(--task-status-accent, var(--text-muted)) 14%, transparent);
+}
+
+/* Due pulse: one gentle transition when the row flips Asleep-to-Due.
+   The widget only carries `is-pulsing` on the transition frame, and
+   `eq` keeps the DOM across rebuilds, so it never replays on
+   scrolling, rerender, or startup. */
+
+.bob-snooze-mark.is-pulsing {
+  animation: bob-snooze-mark-due 600ms ease-out 1;
+}
+
+@keyframes bob-snooze-mark-due {
+  from {
+    opacity: 0.45;
+    scale: 0.85;
+  }
+  to {
+    opacity: 1;
+    scale: 1;
+  }
+}
+
+/* Toggle gate: opt-out, so clocks survive popout windows where plugin
+   body classes may be absent. JS gating (the decoration builder and
+   the post-processor check the flag) stays the source of truth. */
+
+body.bob-snooze-marks-off .bob-snooze-mark {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bob-snooze-mark, .bob-snooze-mark.is-pulsing {
+    animation: none;
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .bob-snooze-mark {
+    outline: 1px solid CanvasText;
+  }
+  .bob-snooze-mark:hover {
+    background-color: Canvas;
+    outline: 1px solid CanvasText;
+  }
+}
+
+/* Daily-view suppression (reading): canonical daily notes never carry
+   definition clocks; their `## Snoozed` rows paint separately. */
+.bob-daily-note-view .bob-snooze-mark {
+  display: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .bob-progress-mark {
     animation: none;

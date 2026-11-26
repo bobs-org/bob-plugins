@@ -68,6 +68,7 @@
   "142a-pomodoro-home-colors.js",
   "142b-plan-today-roots.js",
   "143-today-marks.js",
+  "143a-snooze-definition-model.js",
   "144-relation-line-grammar.js",
   "145-relation-index-model.js",
   "145a-relation-inverse-phrase.js",
@@ -349,6 +350,9 @@
   "275-plugin-today-marks.js",
   "276-plugin-today-marks-reading.js",
   "277-plugin-today-marks-reading-clicks.js",
+  "277a-plugin-snooze-marks.js",
+  "277b-plugin-snooze-marks-reading.js",
+  "277c-plugin-snooze-marks-jump.js",
   "278-plugin-relation-model.js",
   "280-plugin-dependency-render.js",
   "281-plugin-blocks-render.js",
@@ -481,5 +485,6 @@
   "379-exports-property-editor.js",
   "380-snooze-model-exports.js",
   "381-snoozed-cache-exports.js",
-  "382-snooze-waker-exports.js"
+  "382-snooze-waker-exports.js",
+  "383-snooze-definition-exports.js"
 ]

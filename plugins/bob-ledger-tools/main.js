@@ -35056,6 +35056,507 @@ if (WidgetType && typeof WidgetType === "function") {
     }
   };
 }
+// ---- src/143a-snooze-definition-model.js ----
+// --- Snooze definition marks: pure display model --------------------------
+// Owned by the display contract `docs/snooze-marks.md` in bob-cli
+// (child epic `plan:202611/snooze_display_marks.md`, phase
+// `definition-marks`). Pure helpers only: the SM-D vector model (clock
+// vs tomato vs neutral, tone, visible text, tooltip), the `HHMM`
+// formatter, the countdown text, the tooltip builder, the
+// listener-free DOM builder, the Live Preview widget, and the
+// lazily-defined refresh StateEffect.
+//
+// The mark is truthful, never guessing: a snoozed-only task earns a
+// clock, a live ledger link wins and keeps the tomato, and every
+// other input stays neutral. The runtime adapter in
+// `277a-plugin-snooze-marks.js` supplies the vector-shaped facts from
+// the live Today and snoozed caches; this file never touches Obsidian
+// state and never throws: bad input yields the neutral model.
+
+// The task statuses that may carry a snooze clock: open and
+// committed Next, In Progress, and Blocked. Ready, done, and
+// cancelled tasks never wear a clock, even with a live Snoozed row.
+const SNOOZE_DEFINITION_OPEN_STATUSES = Object.freeze(["*", "/", "?"]);
+
+// The Snoozed row states that paint a definition clock. Anything
+// else (`none` with an ignored reason, history, missing facts) is
+// neutral: ignored rows never create a clock.
+const SNOOZE_DEFINITION_CLOCK_STATES = Object.freeze([
+  "asleep",
+  "due",
+  "blocked",
+]);
+
+// `HHMM` target plus explicit clock into display text and minutes.
+// Returns null for a malformed target. Never throws.
+function snoozeDefinitionTargetMinutes(target) {
+  try {
+    if (typeof target !== "string" || !/^\d{4}$/.test(target)) {
+      return null;
+    }
+    const hours = Number(target.slice(0, 2));
+    const minutes = Number(target.slice(2, 4));
+    if (hours > 23 || minutes > 59) {
+      return null;
+    }
+    return hours * 60 + minutes;
+  } catch (error) {
+    return null;
+  }
+}
+
+// `HHMM` plus explicit clock into `HH:MM`, or null. Never throws.
+function snoozeDefinitionColonTime(target) {
+  try {
+    if (typeof target !== "string" || !/^\d{4}$/.test(target)) {
+      return null;
+    }
+    const hours = Number(target.slice(0, 2));
+    const minutes = Number(target.slice(2, 4));
+    if (hours > 23 || minutes > 59) {
+      return null;
+    }
+    return target.slice(0, 2) + ":" + target.slice(2, 4);
+  } catch (error) {
+    return null;
+  }
+}
+
+// `HH:MM` clock text into minutes since midnight, or null. Never
+// throws.
+function snoozeDefinitionNowMinutes(now) {
+  try {
+    if (typeof now !== "string") {
+      return null;
+    }
+    const match = /^(\d{1,2}):(\d{2})$/.exec(now.trim());
+    if (!match) {
+      return null;
+    }
+    const hours = Number(match[1]);
+    const minutes = Number(match[2]);
+    if (hours > 23 || minutes > 59) {
+      return null;
+    }
+    return hours * 60 + minutes;
+  } catch (error) {
+    return null;
+  }
+}
+
+// A non-negative minute gap into countdown words (`2h 30m`, `45m`,
+// `1h`, `0m`). Never throws.
+function snoozeDefinitionCountdownText(gapMinutes) {
+  try {
+    const gap =
+      typeof gapMinutes === "number" && Number.isFinite(gapMinutes)
+        ? Math.max(0, Math.floor(gapMinutes))
+        : 0;
+    const hours = Math.floor(gap / 60);
+    const minutes = gap % 60;
+    if (hours <= 0) {
+      return "in " + minutes + "m";
+    }
+    if (minutes <= 0) {
+      return "in " + hours + "h";
+    }
+    return "in " + hours + "h " + minutes + "m";
+  } catch (error) {
+    return "in 0m";
+  }
+}
+
+// The navigation hint line for tooltips (`mac`, `other`; omitted on
+// `mobile`). Never throws and never contains `::`.
+function snoozeDefinitionHintLine(platform) {
+  try {
+    const raw =
+      typeof platform === "string" ? platform.trim().toLowerCase() : "";
+    if (raw === "mobile") {
+      return "";
+    }
+    if (raw === "mac" || raw === "macos") {
+      return "\u2318-click to open the Snoozed row";
+    }
+    return "Ctrl-click to open the Snoozed row";
+  } catch (error) {
+    return "Ctrl-click to open the Snoozed row";
+  }
+}
+
+// The two-line tooltip for a clock: state words on line one, the
+// navigation hint on line two. Due ends in `due \u2014 waking`;
+// Blocked ends in `waits on prerequisites`. Never contains `::`.
+// Never throws.
+function snoozeDefinitionTooltip(state, colonTime, countdownText, platform) {
+  try {
+    const time = typeof colonTime === "string" ? colonTime : "";
+    let first = "Snoozed until " + time;
+    if (state === "due") {
+      first += " \u00b7 due \u2014 waking";
+    } else if (state === "blocked") {
+      first += " \u00b7 waits on prerequisites";
+    } else {
+      first +=
+        " \u00b7 " +
+        (typeof countdownText === "string" && countdownText
+          ? countdownText
+          : "in 0m");
+    }
+    const hint = snoozeDefinitionHintLine(platform);
+    const tooltip = hint ? first + "\n" + hint : first;
+    return String(tooltip).replace(/:{2,}/g, ":");
+  } catch (error) {
+    return "Snoozed";
+  }
+}
+
+// The SM-D display model for one vector-shaped input: `{ mark:
+// 'clock' | 'tomato' | 'none', text, tone: 'indigo' | 'amber' |
+// 'muted' | null, tooltip, navigates_to: 'snoozed-row' | 'task-link'
+// | null }`. `options.platform` selects the hint line (`other`
+// default). Mirrors the canonical `marks.json` `definition` group
+// verbatim: precedence is Today tomato first, then the planned
+// Snoozed clock, then absent. Never throws.
+function snoozeDefinitionMarkForVector(input, options) {
+  try {
+    const value =
+      input && typeof input === "object" ? input : {};
+    const task =
+      value.task && typeof value.task === "object" ? value.task : {};
+    const snooze =
+      value.snooze && typeof value.snooze === "object"
+        ? value.snooze
+        : {};
+    const host =
+      value.host && typeof value.host === "object" ? value.host : {};
+    const toggles =
+      value.toggles && typeof value.toggles === "object"
+        ? value.toggles
+        : {};
+    let platform = "other";
+    try {
+      const raw =
+        options && typeof options.platform === "string"
+          ? options.platform.trim().toLowerCase()
+          : "";
+      if (raw === "mac" || raw === "macos" || raw === "mobile") {
+        platform = raw === "macos" ? "mac" : raw;
+      }
+    } catch (error) {
+      platform = "other";
+    }
+    const neutral = Object.freeze({
+      mark: "none",
+      navigates_to: null,
+      text: null,
+      tone: null,
+      tooltip: null,
+    });
+    // A live dedicated Task Link wins: the clock leaves and the
+    // tomato stays.
+    if (value.today_link === true) {
+      return Object.freeze({
+        mark: "tomato",
+        navigates_to: "task-link",
+        text: "\u{1F345}",
+        tone: null,
+        tooltip: null,
+      });
+    }
+    // Both toggles share the identity slot: either toggle off hides
+    // the clock while source text stays readable.
+    if (toggles.snooze_marks !== true || toggles.today_marks !== true) {
+      return neutral;
+    }
+    if (value.cache_ready !== true) {
+      return neutral;
+    }
+    // Canonical daily notes never carry definition clocks, and neither
+    // does content rendered inside one.
+    if (host.is_daily === true || host.rendered_in_daily === true) {
+      return neutral;
+    }
+    // Only exact `#task` lines outside code and fences qualify.
+    if (
+      task.is_task !== true ||
+      task.in_code === true ||
+      task.in_fence === true ||
+      task.duplicate_id === true
+    ) {
+      return neutral;
+    }
+    if (
+      SNOOZE_DEFINITION_OPEN_STATUSES.indexOf(task.status) === -1
+    ) {
+      return neutral;
+    }
+    const state = snooze.state;
+    if (SNOOZE_DEFINITION_CLOCK_STATES.indexOf(state) === -1) {
+      return neutral;
+    }
+    const colonTime = snoozeDefinitionColonTime(snooze.target);
+    if (!colonTime) {
+      return neutral;
+    }
+    if (state === "due") {
+      return Object.freeze({
+        mark: "clock",
+        navigates_to: "snoozed-row",
+        text: "\u23F0 " + colonTime + " \u00b7 due",
+        tone: "amber",
+        tooltip: snoozeDefinitionTooltip(state, colonTime, null, platform),
+      });
+    }
+    if (state === "blocked") {
+      return Object.freeze({
+        mark: "clock",
+        navigates_to: "snoozed-row",
+        text: "\u23F0 " + colonTime,
+        tone: "muted",
+        tooltip: snoozeDefinitionTooltip(state, colonTime, null, platform),
+      });
+    }
+    const targetMinutes = snoozeDefinitionTargetMinutes(snooze.target);
+    const nowMinutes = snoozeDefinitionNowMinutes(value.now);
+    const gap =
+      targetMinutes !== null && nowMinutes !== null
+        ? Math.max(0, targetMinutes - nowMinutes)
+        : 0;
+    return Object.freeze({
+      mark: "clock",
+      navigates_to: "snoozed-row",
+      text: "\u23F0 " + colonTime,
+      tone: "indigo",
+      tooltip: snoozeDefinitionTooltip(
+        state,
+        colonTime,
+        snoozeDefinitionCountdownText(gap),
+        platform,
+      ),
+    });
+  } catch (error) {
+    return Object.freeze({
+      mark: "none",
+      navigates_to: null,
+      text: null,
+      tone: null,
+      tooltip: null,
+    });
+  }
+}
+
+// Whether the mousedown used the jump modifier on the primary
+// button: `metaKey` on macOS, `ctrlKey` elsewhere. Shared with the
+// Today slot so both marks jump alike. Never throws.
+function snoozeMarkModifierPressed(event, isMac) {
+  try {
+    if (!event || typeof event !== "object") {
+      return false;
+    }
+    if (
+      event.button !== undefined &&
+      event.button !== null &&
+      event.button !== 0
+    ) {
+      return false;
+    }
+    return isMac
+      ? Boolean(event.metaKey)
+      : Boolean(event.ctrlKey);
+  } catch (error) {
+    return false;
+  }
+}
+
+// Listener-free mark element, so copying a line never copies the
+// clock: an empty `span.bob-snooze-mark` (plus
+// `bob-snooze-mark--<tone>`) with `role=img`, an accessible label,
+// a top-positioned Obsidian tooltip, `data-bob-snooze-key`, and
+// `data-bob-snooze-time` (the `HH:MM` the time rides in on through
+// `::after`). It has no text and no `title`. `doc` provides
+// `createElement` so tests can pass a fake document. Never throws:
+// bad input yields null.
+function buildSnoozeMarkElement(doc, options) {
+  try {
+    if (!doc || typeof doc.createElement !== "function") {
+      return null;
+    }
+    const opts =
+      options && typeof options === "object" ? options : {};
+    const key = typeof opts.key === "string" ? opts.key : "";
+    if (key === "") {
+      return null;
+    }
+    const time = typeof opts.time === "string" ? opts.time : "";
+    if (!/^\d{2}:\d{2}$/.test(time)) {
+      return null;
+    }
+    const tone = opts.tone === "amber" || opts.tone === "muted"
+      ? opts.tone
+      : "indigo";
+    const rawTooltip =
+      typeof opts.tooltip === "string" ? opts.tooltip : "";
+    const tooltip =
+      rawTooltip.trim() !== "" ? rawTooltip : "Snoozed";
+    const span = doc.createElement("span");
+    span.setAttribute(
+      "class",
+      "bob-snooze-mark bob-snooze-mark--" +
+        tone +
+        (opts.pulse === true ? " is-pulsing" : ""),
+    );
+    span.setAttribute("role", "img");
+    span.setAttribute("aria-label", tooltip);
+    span.setAttribute("data-tooltip-position", "top");
+    span.setAttribute("data-bob-snooze-key", key);
+    span.setAttribute("data-bob-snooze-time", time);
+    try {
+      span.textContent = "";
+    } catch (error) {
+      // An empty host still renders.
+    }
+    return span;
+  } catch (error) {
+    return null;
+  }
+}
+
+// Live Preview widget for one snooze clock. `eq` compares the
+// class, key, time, tone, and tooltip only: the pulse and the jump
+// callback are deliberately excluded, so a later rebuild never
+// swaps the DOM and never replays the due pulse, while a tooltip
+// or retime change (Asleep countdown, retiming) swaps it quietly.
+// `toDOM` builds the element and adds one `mousedown` listener: it
+// always calls `preventDefault`; with the modifier pressed it calls
+// `onJump(key)`, otherwise it moves the cursor to the title start
+// and focuses. Defined only when `WidgetType` exists; otherwise null
+// and the extension is not registered.
+let SnoozeMarkWidget = null;
+if (WidgetType && typeof WidgetType === "function") {
+  SnoozeMarkWidget = class extends WidgetType {
+    constructor(key, time, tone, tooltip, pulse, onJump) {
+      super();
+      this.key = typeof key === "string" ? key : String(key || "");
+      this.time =
+        typeof time === "string" && /^\d{2}:\d{2}$/.test(time)
+          ? time
+          : "";
+      this.tone =
+        tone === "amber" || tone === "muted" ? tone : "indigo";
+      const rawTooltip =
+        typeof tooltip === "string" ? tooltip : "";
+      this.tooltip =
+        rawTooltip.trim() !== "" ? rawTooltip : "Snoozed";
+      this.pulse = pulse === true;
+      this.onJump = typeof onJump === "function" ? onJump : null;
+    }
+
+    eq(other) {
+      return (
+        Boolean(other) &&
+        other instanceof SnoozeMarkWidget &&
+        other.key === this.key &&
+        other.time === this.time &&
+        other.tone === this.tone &&
+        other.tooltip === this.tooltip
+      );
+    }
+
+    toDOM(view) {
+      const dom = buildSnoozeMarkElement(
+        typeof document !== "undefined" ? document : null,
+        {
+          key: this.key,
+          time: this.time,
+          tone: this.tone,
+          tooltip: this.tooltip,
+          pulse: this.pulse,
+        },
+      );
+      // In tests `document` is undefined and the caller passes a fake
+      // doc via `buildSnoozeMarkElement` directly; never throw here.
+      if (!dom) {
+        const fallback =
+          typeof document !== "undefined" && document
+            ? document.createElement("span")
+            : null;
+        return fallback;
+      }
+      try {
+        dom.addEventListener("mousedown", (event) => {
+          try {
+            if (event && typeof event.preventDefault === "function") {
+              event.preventDefault();
+            }
+            let isMac = false;
+            try {
+              isMac = Boolean(Platform && Platform.isMacOS);
+            } catch (error) {
+              isMac = false;
+            }
+            if (snoozeMarkModifierPressed(event, isMac)) {
+              if (this.onJump) {
+                try {
+                  this.onJump(this.key);
+                } catch (error) {
+                  // A jump failure never breaks the editor.
+                }
+              }
+              return;
+            }
+            let anchor = null;
+            try {
+              anchor =
+                view && typeof view.posAtDOM === "function"
+                  ? view.posAtDOM(dom)
+                  : null;
+            } catch (error) {
+              anchor = null;
+            }
+            if (
+              typeof anchor === "number" &&
+              view &&
+              typeof view.dispatch === "function"
+            ) {
+              view.dispatch({ selection: { anchor } });
+            }
+            if (view && typeof view.focus === "function") {
+              view.focus();
+            }
+          } catch (error) {
+            // Placing the cursor is best-effort; the mark renders.
+          }
+        });
+      } catch (error) {
+        // A listener-free mark still renders.
+      }
+      return dom;
+    }
+  };
+}
+
+// Snooze marks (definition-marks phase): a StateEffect the snoozed
+// refresh fan-out dispatches so Live Preview clocks rebuild without
+// a doc change, covering countdown changes, Asleep-to-Due flips,
+// retiming with unchanged membership, Blocked transitions, toggle
+// changes, and midnight. Defined lazily on first dispatch so
+// requiring the module never adds a second eager
+// `StateEffect.define()` call.
+let snoozeMarksRefresh = null;
+function ensureSnoozeMarksRefresh() {
+  if (snoozeMarksRefresh) {
+    return snoozeMarksRefresh;
+  }
+  try {
+    if (StateEffect && typeof StateEffect.define === "function") {
+      snoozeMarksRefresh = StateEffect.define();
+    }
+  } catch (error) {
+    snoozeMarksRefresh = null;
+  }
+  return snoozeMarksRefresh;
+}
 // ---- src/144-relation-line-grammar.js ----
 // Task relation rows are inert metadata, never Pomodoro Task Links or plan
 // budget items. Recognize empty and malformed shapes too, so their wikilinks
@@ -164997,6 +165498,1756 @@ class BobLedgerToolsTodayMarksReadingClicksMixin {
     }
   }
 }
+// ---- src/277a-plugin-snooze-marks.js ----
+// Snooze definition clocks in Live Preview (definition-marks phase).
+// The snoozed cache is the sole membership source: this mixin only
+// decorates exact task lines in Live Preview and opens today's daily
+// note for an explicit click or command. It shares the Today slot,
+// so a live ledger link always wins and the clock never renders
+// beside a tomato. Contract: bob-cli `docs/snooze-marks.md`.
+//
+// Guards mirror the Today surface (`143`, `275`): non-daily hosts
+// only, exact `#task` token plus trailing unique id, no inline
+// code or fences, open status, ready cache. A snoozed-only task
+// works when the Today cache holds no ids for that note: Today
+// membership is consulted only for precedence, never for
+// eligibility.
+
+// Duplicate-id memo, keyed on the immutable CodeMirror doc. The
+// stored value is `{ signature, duplicates }`, where `signature` is
+// the sorted snoozed id list for the host note joined with `\n`.
+const SNOOZE_MARK_DUPLICATE_MEMO =
+  typeof WeakMap === "function" ? new WeakMap() : new Map();
+
+class BobLedgerToolsSnoozeMarksMixin {
+  snoozeMarksNow() {
+    try {
+      return new Date();
+    } catch (error) {
+      return new Date();
+    }
+  }
+
+  setupSnoozeMarks() {
+    try {
+      if (typeof this.snoozeMarksEnabled !== "boolean") {
+        this.snoozeMarksEnabled = true;
+      }
+      if (typeof this.snoozeJumpInFlight !== "boolean") {
+        this.snoozeJumpInFlight = false;
+      }
+      if (!(this.snoozeDueSeen instanceof Map)) {
+        try {
+          this.snoozeDueSeen = new Map();
+        } catch (error) {
+          this.snoozeDueSeen = null;
+        }
+      }
+      this.applyMarkGateClass(
+        "bob-snooze-marks-off",
+        !this.snoozeMarksEnabled,
+      );
+      this.registerMarkGatePopoutSync(
+        "bob-snooze-marks-off",
+        () => !this.snoozeMarksEnabled,
+      );
+      try {
+        if (typeof this.addCommand === "function") {
+          this.addCommand({
+            id: "toggle-snooze-marks",
+            name: "Toggle snooze marks",
+            callback: () => this.toggleSnoozeMarks(),
+          });
+          this.addCommand({
+            id: "go-to-snoozed-row",
+            name: "Go to the Snoozed row",
+            editorCallback: (editor, view) =>
+              this.goToSnoozedRow(editor, view),
+          });
+        }
+      } catch (error) {
+        // Commands are best-effort on limited test hosts.
+      }
+      try {
+        const extension = this.createSnoozeMarkExtension();
+        if (
+          extension &&
+          typeof this.registerEditorExtension === "function"
+        ) {
+          this.registerEditorExtension(extension);
+        }
+      } catch (error) {
+        // Live Preview marks are best-effort.
+      }
+      try {
+        if (typeof this.setupSnoozeMarksReading === "function") {
+          this.setupSnoozeMarksReading();
+        }
+      } catch (error) {
+        // Reading-view wiring is best-effort.
+      }
+      this.scheduleSnoozeMarksRefresh();
+    } catch (error) {
+      // Setup never breaks plugin startup.
+    }
+  }
+
+  snoozeMarksAvailable() {
+    try {
+      return Boolean(
+        ViewPlugin &&
+          Decoration &&
+          WidgetType &&
+          RangeSetBuilder &&
+          editorInfoField &&
+          editorLivePreviewField &&
+          SnoozeMarkWidget &&
+          ensureSnoozeMarksRefresh(),
+      );
+    } catch (error) {
+      return false;
+    }
+  }
+
+  createSnoozeMarkExtension() {
+    try {
+      if (
+        !this.snoozeMarksAvailable() ||
+        !ViewPlugin ||
+        typeof ViewPlugin.fromClass !== "function" ||
+        !Prec ||
+        typeof Prec.highest !== "function"
+      ) {
+        return null;
+      }
+      const plugin = this;
+      const MarkPluginClass = class {
+        constructor(view) {
+          try {
+            this.decorations = plugin.buildSnoozeMarkDecorations(view);
+          } catch (error) {
+            this.decorations = Decoration.none;
+          }
+        }
+
+        update(update) {
+          try {
+            if (plugin.snoozeMarkShouldRebuild(update)) {
+              this.decorations =
+                plugin.buildSnoozeMarkDecorations(update.view);
+            }
+          } catch (error) {
+            // A failed rebuild leaves the last valid decorations in place.
+          }
+        }
+      };
+      return Prec.highest(
+        ViewPlugin.fromClass(MarkPluginClass, {
+          decorations: (value) => value.decorations,
+        }),
+      );
+    } catch (error) {
+      return null;
+    }
+  }
+
+  snoozeMarkShouldRebuild(update) {
+    try {
+      if (!update || typeof update !== "object") {
+        return false;
+      }
+      if (update.docChanged || update.viewportChanged) {
+        return true;
+      }
+      const refresh = ensureSnoozeMarksRefresh();
+      const transactions = update.transactions || [];
+      for (const transaction of transactions) {
+        const effects =
+          transaction && transaction.effects !== undefined
+            ? transaction.effects
+            : null;
+        const list = Array.isArray(effects) ? effects : effects ? [effects] : [];
+        for (const effect of list) {
+          if (
+            effect === refresh ||
+            (refresh &&
+              effect &&
+              typeof effect.is === "function" &&
+              effect.is(refresh))
+          ) {
+            return true;
+          }
+        }
+      }
+      if (editorLivePreviewField && update.startState && update.state) {
+        try {
+          if (
+            update.startState.field(editorLivePreviewField) !==
+            update.state.field(editorLivePreviewField)
+          ) {
+            return true;
+          }
+        } catch (error) {
+          // Field comparison is best-effort.
+        }
+      }
+      if (editorInfoField && update.startState && update.state) {
+        try {
+          const before = update.startState.field(editorInfoField);
+          const after = update.state.field(editorInfoField);
+          const beforePath =
+            before && before.file ? before.file.path : null;
+          const afterPath =
+            after && after.file ? after.file.path : null;
+          if (beforePath !== afterPath) {
+            return true;
+          }
+        } catch (error) {
+          // Field comparison is best-effort.
+        }
+      }
+      // selectionSet is deliberately ignored: the mark stays visible
+      // under the caret and never changes Vim motion positions.
+      return false;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  snoozeIdsForHostPath(hostPath) {
+    try {
+      const cache = this.snoozedCache;
+      if (
+        !cache ||
+        !(cache.byKey instanceof Map) ||
+        typeof hostPath !== "string" ||
+        !hostPath
+      ) {
+        return new Set();
+      }
+      const prefix = hostPath + "#";
+      const out = new Set();
+      for (const key of cache.byKey.keys()) {
+        try {
+          if (typeof key === "string" && key.startsWith(prefix)) {
+            out.add(key.slice(prefix.length));
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      return out;
+    } catch (error) {
+      return new Set();
+    }
+  }
+
+  snoozeSnapshotForKey(key) {
+    try {
+      const cache = this.snoozedCache;
+      if (!cache || !(cache.byKey instanceof Map)) {
+        return null;
+      }
+      return cache.byKey.get(key) || null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  snoozeDuePulse(key, state) {
+    try {
+      if (!(this.snoozeDueSeen instanceof Map)) {
+        return false;
+      }
+      const previous = this.snoozeDueSeen.get(key);
+      // First sighting never pulses: the pulse must not replay on
+      // startup, on scroll, or on rerender, only on the live
+      // Asleep-to-Due transition frame.
+      if (previous === undefined) {
+        this.snoozeDueSeen.set(key, state);
+        return false;
+      }
+      this.snoozeDueSeen.set(key, state);
+      return previous !== "due" && state === "due";
+    } catch (error) {
+      return false;
+    }
+  }
+
+  snoozeMarkDesiredSnapshot(key, nowMinutes) {
+    try {
+      const snapshot = this.snoozeSnapshotForKey(key);
+      if (!snapshot || typeof snapshot !== "object") {
+        return null;
+      }
+      const state = snapshot.state;
+      if (
+        state !== "asleep" &&
+        state !== "due" &&
+        state !== "blocked"
+      ) {
+        return null;
+      }
+      const time =
+        typeof snapshot.hhmm === "string" &&
+        /^\d{2}:\d{2}$/.test(snapshot.hhmm)
+          ? snapshot.hhmm
+          : snoozeDefinitionColonTime(
+              typeof snapshot.minutes === "number"
+                ? String(Math.floor(snapshot.minutes / 60)).padStart(2, "0") +
+                  String(snapshot.minutes % 60).padStart(2, "0")
+                : null,
+            );
+      if (!time) {
+        return null;
+      }
+      const tone =
+        state === "due" ? "amber" : state === "blocked" ? "muted" : "indigo";
+      let tooltip = null;
+      try {
+        const gap =
+          state === "asleep" &&
+          Number.isInteger(snapshot.minutes) &&
+          Number.isInteger(nowMinutes)
+            ? Math.max(0, snapshot.minutes - nowMinutes)
+            : 0;
+        tooltip = snoozeDefinitionTooltip(
+          state,
+          time,
+          state === "asleep"
+            ? snoozeDefinitionCountdownText(gap)
+            : null,
+          this.snoozeMarkPlatform(),
+        );
+      } catch (error) {
+        tooltip = snoozeDefinitionTooltip(state, time, null, "other");
+      }
+      return { state, time, tone, tooltip };
+    } catch (error) {
+      return null;
+    }
+  }
+
+  snoozeMarkPlatform() {
+    try {
+      if (Platform && Platform.isMobile) {
+        return "mobile";
+      }
+      if (Platform && Platform.isMacOS) {
+        return "mac";
+      }
+    } catch (error) {
+      // Non-Mac default.
+    }
+    return "other";
+  }
+
+  buildSnoozeMarkDecorations(view, now) {
+    try {
+      if (!this.snoozeMarksEnabled) {
+        return Decoration.none;
+      }
+      if (!view || !view.state) {
+        return Decoration.none;
+      }
+      if (
+        !Decoration ||
+        !RangeSetBuilder ||
+        !SnoozeMarkWidget ||
+        !editorInfoField ||
+        !editorLivePreviewField
+      ) {
+        return Decoration.none;
+      }
+      let live = false;
+      let info = null;
+      try {
+        live = view.state.field(editorLivePreviewField) === true;
+        info = view.state.field(editorInfoField);
+      } catch (error) {
+        return Decoration.none;
+      }
+      if (!live) {
+        return Decoration.none;
+      }
+      const filePath =
+        info && info.file && typeof info.file.path === "string"
+          ? info.file.path
+          : "";
+      if (!filePath || PLAN_DAILY_PATH_RE.test(filePath)) {
+        return Decoration.none;
+      }
+      let clock = null;
+      try {
+        clock = now instanceof Date ? now : this.snoozeMarksNow();
+      } catch (error) {
+        clock = new Date();
+      }
+      if (!(clock instanceof Date)) {
+        clock = new Date();
+      }
+      if (
+        typeof this.isSnoozedCacheReady !== "function" ||
+        !this.isSnoozedCacheReady(clock)
+      ) {
+        return Decoration.none;
+      }
+      const path = /\.md$/i.test(filePath) ? filePath : filePath + ".md";
+      let ids = null;
+      try {
+        ids = this.snoozeIdsForHostPath(path);
+      } catch (error) {
+        ids = new Set();
+      }
+      if (!(ids instanceof Set) || ids.size === 0) {
+        return Decoration.none;
+      }
+
+      let tree = null;
+      try {
+        if (typeof syntaxTree === "function") {
+          tree = syntaxTree(view.state);
+        } else if (
+          syntaxTree &&
+          typeof syntaxTree.resolveInner === "function"
+        ) {
+          tree = syntaxTree;
+        }
+      } catch (error) {
+        tree = null;
+      }
+      // Without a syntax tree we cannot distinguish inline/fenced code,
+      // so stay neutral until the Live Preview parser is ready.
+      if (!tree || typeof tree.resolveInner !== "function") {
+        return Decoration.none;
+      }
+
+      const doc = view.state.doc;
+      if (
+        !doc ||
+        typeof doc.lineAt !== "function" ||
+        !Number.isInteger(doc.lines) ||
+        doc.lines < 1
+      ) {
+        return Decoration.none;
+      }
+      const nowMinutes =
+        clock.getHours() * 60 + clock.getMinutes();
+      const visible = (view.visibleRanges || []).slice();
+      const candidates = [];
+      const seenLines = new Set();
+      for (const range of visible) {
+        if (!range || typeof range.from !== "number") {
+          continue;
+        }
+        let position = Math.max(0, range.from);
+        const end =
+          typeof range.to === "number"
+            ? Math.min(range.to, doc.length)
+            : doc.length;
+        let guard = 0;
+        while (position <= end && guard < 10000) {
+          guard += 1;
+          let line = null;
+          try {
+            line = doc.lineAt(position);
+          } catch (error) {
+            break;
+          }
+          if (!line || typeof line.text !== "string") {
+            break;
+          }
+          if (!seenLines.has(line.from)) {
+            seenLines.add(line.from);
+            if (line.text.indexOf("#task") !== -1) {
+              let trailing = null;
+              try {
+                trailing = todayMarkTrailingBlockId(line.text);
+              } catch (error) {
+                trailing = null;
+              }
+              if (!trailing || !ids.has(trailing)) {
+                // Not in this note's snoozed id set: skip before the
+                // candidate parse.
+              } else {
+                const candidate = todayMarkLineCandidate(line.text);
+                if (candidate) {
+                  candidates.push({ line, candidate });
+                }
+              }
+            }
+          }
+          if (
+            typeof line.to !== "number" ||
+            line.to >= end ||
+            line.to < position
+          ) {
+            break;
+          }
+          position = line.to + 1;
+        }
+      }
+      if (candidates.length === 0) {
+        return Decoration.none;
+      }
+
+      const builder = new RangeSetBuilder();
+      const idsArray = Array.from(ids);
+      let duplicateIds = null;
+      const ensureDuplicates = () => {
+        if (duplicateIds) {
+          return duplicateIds;
+        }
+        const signature = idsArray.slice().sort().join("\n");
+        try {
+          const cached = SNOOZE_MARK_DUPLICATE_MEMO.get(doc);
+          if (
+            cached &&
+            cached.signature === signature &&
+            cached.duplicates instanceof Set
+          ) {
+            duplicateIds = cached.duplicates;
+            return duplicateIds;
+          }
+        } catch (error) {
+          // A failed memo read recomputes below.
+        }
+        const allLines = todayMarkAllDocLines(doc);
+        let list = [];
+        try {
+          list = todayMarkDuplicateIds(allLines, idsArray);
+        } catch (error) {
+          list = [];
+        }
+        duplicateIds = new Set(Array.isArray(list) ? list : []);
+        try {
+          SNOOZE_MARK_DUPLICATE_MEMO.set(doc, {
+            signature,
+            duplicates: duplicateIds,
+          });
+        } catch (error) {
+          // Memo storage is best-effort.
+        }
+        return duplicateIds;
+      };
+      let todayRank = null;
+      try {
+        todayRank =
+          this.todayCache && this.todayCache.rank instanceof Map
+            ? this.todayCache.rank
+            : null;
+      } catch (error) {
+        todayRank = null;
+      }
+      for (const item of candidates) {
+        try {
+          const line = item.line;
+          const candidate = item.candidate;
+          if (
+            freshnessMarkPosInCode(
+              tree,
+              line.from + candidate.tagFrom + 1,
+            )
+          ) {
+            continue;
+          }
+          const key = path + "#" + candidate.blockId;
+          // A live dedicated Task Link wins: the clock leaves and the
+          // tomato stays, including during cache transitions.
+          if (todayRank && todayRank.has(key)) {
+            continue;
+          }
+          const desired = this.snoozeMarkDesiredSnapshot(key, nowMinutes);
+          if (!desired) {
+            continue;
+          }
+          const dups = ensureDuplicates();
+          if (dups.has(candidate.blockId)) {
+            continue;
+          }
+          const widget = new SnoozeMarkWidget(
+            key,
+            desired.time,
+            desired.tone,
+            desired.tooltip,
+            this.snoozeDuePulse(key, desired.state),
+            (clickedKey) => {
+              void this.jumpSnoozedRow(clickedKey);
+            },
+          );
+          builder.add(
+            line.from + candidate.insertCh,
+            line.from + candidate.insertCh,
+            Decoration.widget({ widget, side: -1 }),
+          );
+        } catch (error) {
+          continue;
+        }
+      }
+      return builder.finish();
+    } catch (error) {
+      try {
+        return Decoration.none;
+      } catch (inner) {
+        return null;
+      }
+    }
+  }
+
+  refreshSnoozeMarkEditors() {
+    try {
+      const refresh = ensureSnoozeMarksRefresh();
+      const workspace = this.app && this.app.workspace;
+      if (
+        !refresh ||
+        !workspace ||
+        typeof workspace.getLeavesOfType !== "function"
+      ) {
+        return;
+      }
+      let leaves = [];
+      try {
+        leaves = workspace.getLeavesOfType("markdown") || [];
+      } catch (error) {
+        leaves = [];
+      }
+      for (const leaf of leaves) {
+        try {
+          const leafPath =
+            leaf && leaf.view && leaf.view.file &&
+            typeof leaf.view.file.path === "string"
+              ? leaf.view.file.path
+              : "";
+          if (leafPath && PLAN_DAILY_PATH_RE.test(leafPath)) {
+            continue;
+          }
+          const cm =
+            leaf && leaf.view && leaf.view.editor
+              ? leaf.view.editor.cm
+              : null;
+          if (cm && typeof cm.dispatch === "function") {
+            cm.dispatch({ effects: refresh.of(null) });
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+    } catch (error) {
+      // Editor refresh is best-effort.
+    }
+  }
+
+  scheduleSnoozeMarksRefresh() {
+    try {
+      if (
+        this.snoozeMarksTimer !== null &&
+        this.snoozeMarksTimer !== undefined
+      ) {
+        return;
+      }
+      const schedule =
+        typeof window !== "undefined" &&
+        window &&
+        typeof window.setTimeout === "function"
+          ? window.setTimeout
+          : typeof setTimeout === "function"
+            ? setTimeout
+            : null;
+      if (!schedule) {
+        this.applySnoozeMarksRefresh();
+        return;
+      }
+      this.snoozeMarksTimer = schedule(() => {
+        this.snoozeMarksTimer = null;
+        this.applySnoozeMarksRefresh();
+      }, 16);
+    } catch (error) {
+      this.applySnoozeMarksRefresh();
+    }
+  }
+
+  applySnoozeMarksRefresh() {
+    try {
+      this.refreshSnoozeMarkEditors();
+    } catch (error) {
+      // Editor refresh is best-effort.
+    }
+    try {
+      if (typeof this.sweepSnoozeMarksReading === "function") {
+        this.sweepSnoozeMarksReading();
+      }
+    } catch (error) {
+      // Reading sweep is best-effort.
+    }
+  }
+
+  toggleSnoozeMarks() {
+    try {
+      this.snoozeMarksEnabled = !this.snoozeMarksEnabled;
+      const enabled = this.snoozeMarksEnabled;
+      this.applyMarkGateClass("bob-snooze-marks-off", !enabled);
+      this.applySnoozeMarksRefresh();
+      try {
+        new Notice(enabled ? "Snooze marks on" : "Snooze marks off");
+      } catch (error) {
+        // Notice is best-effort.
+      }
+      return enabled;
+    } catch (error) {
+      return this.snoozeMarksEnabled;
+    }
+  }
+
+}
+// ---- src/277b-plugin-snooze-marks-reading.js ----
+// Snooze definition clocks in rendered views (definition-marks phase).
+// Exact source mapping or neutral; never title-matches, never writes.
+// Split from `277a-plugin-snooze-marks.js` to keep each fragment at or
+// below 1000 lines. Shares the plugin scope, so helpers across
+// fragments resolve. Contract: bob-cli `docs/snooze-marks.md`.
+
+class BobLedgerToolsSnoozeMarksReadingMixin {
+  snoozeMarkHasClass(node, name) {
+    try {
+      if (!node || !name) {
+        return false;
+      }
+      if (node.classList && typeof node.classList.contains === "function") {
+        return node.classList.contains(name);
+      }
+      const raw =
+        typeof node.getAttribute === "function"
+          ? node.getAttribute("class") || ""
+          : typeof node.className === "string"
+            ? node.className
+            : "";
+      return String(raw).split(/\s+/).indexOf(name) !== -1;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  snoozeMarkRowKey(node) {
+    try {
+      if (node && node.dataset && typeof node.dataset.bobSnoozeKey === "string") {
+        return node.dataset.bobSnoozeKey;
+      }
+      if (node && typeof node.getAttribute === "function") {
+        return node.getAttribute("data-bob-snooze-key") || "";
+      }
+    } catch (error) {
+      // Best-effort.
+    }
+    return "";
+  }
+
+  snoozeMarkStampRow(li, key) {
+    try {
+      if (!li || !key) {
+        return;
+      }
+      if (li.dataset) {
+        li.dataset.bobSnoozeKey = key;
+      }
+      if (typeof li.setAttribute === "function") {
+        li.setAttribute("data-bob-snooze-key", key);
+      }
+    } catch (error) {
+      // Stamping is best-effort.
+    }
+  }
+
+  snoozeMarkOwnMark(li) {
+    try {
+      if (!li || typeof li.querySelectorAll !== "function") {
+        return null;
+      }
+      const found = li.querySelectorAll(
+        ":scope > span.bob-snooze-mark, :scope span.bob-snooze-mark",
+      );
+      const list =
+        found && typeof found.length === "number"
+          ? Array.prototype.slice.call(found)
+          : [];
+      for (const node of list) {
+        try {
+          let owner = node;
+          let guard = 0;
+          while (owner && guard < 50) {
+            guard += 1;
+            const tag = String(
+              (owner && (owner.tagName || owner.nodeName)) || "",
+            ).toUpperCase();
+            if (tag === "LI") {
+              break;
+            }
+            owner = owner.parentNode || null;
+          }
+          if (owner === li) {
+            return node;
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      return null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  snoozeMarkDesiredForRow(li, key, nowMinutes, clock) {
+    try {
+      if (!this.snoozeMarksEnabled) {
+        return null;
+      }
+      const moment =
+        clock instanceof Date
+          ? clock
+          : typeof this.snoozeMarksNow === "function"
+            ? this.snoozeMarksNow()
+            : new Date();
+      if (
+        typeof this.isSnoozedCacheReady !== "function" ||
+        !this.isSnoozedCacheReady(moment)
+      ) {
+        return null;
+      }
+      if (typeof this.todayMarkHasDailyAncestor === "function") {
+        try {
+          if (this.todayMarkHasDailyAncestor(li)) {
+            return null;
+          }
+        } catch (error) {
+          // Ancestor scan is best-effort.
+        }
+      }
+      let status = null;
+      try {
+        status =
+          typeof this.todayMarkRenderedStatus === "function"
+            ? this.todayMarkRenderedStatus(li)
+            : null;
+      } catch (error) {
+        status = null;
+      }
+      const open =
+        typeof this.todayMarkStatusIsOpen === "function"
+          ? this.todayMarkStatusIsOpen(status)
+          : status === " " ||
+            status === "*" ||
+            status === "/" ||
+            status === "?";
+      if (!open) {
+        return null;
+      }
+      // A live dedicated Task Link wins: the clock leaves and the
+      // tomato stays.
+      try {
+        if (
+          this.todayCache &&
+          this.todayCache.rank instanceof Map &&
+          this.todayCache.rank.has(key)
+        ) {
+          return null;
+        }
+      } catch (error) {
+        // Precedence check is best-effort.
+      }
+      if (typeof this.snoozeMarkDesiredSnapshot !== "function") {
+        return null;
+      }
+      const minutes =
+        Number.isInteger(nowMinutes)
+          ? nowMinutes
+          : moment.getHours() * 60 + moment.getMinutes();
+      return this.snoozeMarkDesiredSnapshot(key, minutes);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  snoozeMarkApplyToRow(li, key, desired) {
+    try {
+      const existing = this.snoozeMarkOwnMark(li);
+      if (!desired) {
+        if (existing && existing.parentNode) {
+          existing.parentNode.removeChild(existing);
+        }
+        return;
+      }
+      if (existing) {
+        try {
+          existing.setAttribute("aria-label", desired.tooltip);
+        } catch (error) {
+          // Tooltip update is best-effort.
+        }
+        try {
+          if (existing.dataset) {
+            existing.dataset.bobSnoozeKey = key;
+            existing.dataset.bobSnoozeTime = desired.time;
+          }
+        } catch (error) {
+          // Dataset update is best-effort.
+        }
+        try {
+          existing.setAttribute("data-bob-snooze-key", key);
+          existing.setAttribute("data-bob-snooze-time", desired.time);
+        } catch (error) {
+          // Attribute update is best-effort.
+        }
+        try {
+          existing.setAttribute(
+            "class",
+            "bob-snooze-mark bob-snooze-mark--" + desired.tone,
+          );
+        } catch (error) {
+          // Class update is best-effort.
+        }
+        return;
+      }
+      const doc =
+        (li && li.ownerDocument) ||
+        (typeof document !== "undefined" ? document : null);
+      const mark = buildSnoozeMarkElement(doc, {
+        key,
+        time: desired.time,
+        tone: desired.tone,
+        tooltip: desired.tooltip,
+        pulse: false,
+      });
+      if (!mark) {
+        return;
+      }
+      let anchor = null;
+      try {
+        anchor =
+          typeof this.todayMarkInsertAnchor === "function"
+            ? this.todayMarkInsertAnchor(li)
+            : null;
+      } catch (error) {
+        anchor = null;
+      }
+      if (anchor) {
+        try {
+          if (typeof this.todayMarkInsertAfter === "function") {
+            this.todayMarkInsertAfter(anchor, mark);
+            return;
+          }
+          const parent = anchor.parentNode;
+          const next = anchor.nextSibling;
+          if (parent && typeof parent.insertBefore === "function") {
+            parent.insertBefore(mark, next);
+            return;
+          }
+        } catch (error) {
+          // Insertion is best-effort.
+        }
+      }
+      if (li && typeof li.appendChild === "function") {
+        li.appendChild(mark);
+      }
+    } catch (error) {
+      // Insertion never throws.
+    }
+  }
+
+  snoozeMarkRenderRow(li, el, ctx, info, lines, nowMinutes, clock) {
+    try {
+      const sourceLine =
+        typeof this.todayMarkResolveSourceLine === "function"
+          ? this.todayMarkResolveSourceLine(li, el, info, lines)
+          : null;
+      if (typeof sourceLine !== "string") {
+        return;
+      }
+      const candidate = todayMarkLineCandidate(sourceLine);
+      if (!candidate) {
+        return;
+      }
+      let inCode = false;
+      try {
+        inCode = todayMarkPosInInlineCode(sourceLine, candidate.tagFrom);
+      } catch (error) {
+        inCode = false;
+      }
+      if (inCode) {
+        return;
+      }
+      let rowStatus = null;
+      try {
+        rowStatus =
+          typeof this.todayMarkRenderedStatus === "function"
+            ? this.todayMarkRenderedStatus(li)
+            : null;
+      } catch (error) {
+        rowStatus = null;
+      }
+      const open =
+        typeof this.todayMarkStatusIsOpen === "function"
+          ? this.todayMarkStatusIsOpen(candidate.status) &&
+            this.todayMarkStatusIsOpen(rowStatus)
+          : false;
+      if (!open) {
+        return;
+      }
+      const duplicates = todayMarkDuplicateIds(lines, [candidate.blockId]);
+      if (duplicates.indexOf(candidate.blockId) !== -1) {
+        return;
+      }
+      const path =
+        typeof this.todayMarkHostPath === "function"
+          ? this.todayMarkHostPath(ctx && ctx.sourcePath)
+          : "";
+      if (!path) {
+        return;
+      }
+      // A stamped tomato owns the slot: the clock never renders
+      // beside it.
+      try {
+        if (
+          typeof this.todayMarkOwnMark === "function" &&
+          this.todayMarkOwnMark(li)
+        ) {
+          return;
+        }
+      } catch (error) {
+        // Ownership check is best-effort.
+      }
+      const key = path + "#" + candidate.blockId;
+      this.snoozeMarkStampRow(li, key);
+      const desired = this.snoozeMarkDesiredForRow(li, key, nowMinutes, clock);
+      this.snoozeMarkApplyToRow(li, key, desired);
+    } catch (error) {
+      // One bad row never breaks the processor.
+    }
+  }
+
+  renderSnoozeMarksIn(el, ctx) {
+    try {
+      if (!el || !ctx) {
+        return;
+      }
+      if (typeof this.snoozeMarksEnabled !== "boolean") {
+        this.snoozeMarksEnabled = true;
+      }
+      const sourcePath = typeof ctx.sourcePath === "string" ? ctx.sourcePath : "";
+      if (!sourcePath || PLAN_DAILY_PATH_RE.test(sourcePath)) {
+        return;
+      }
+      const info =
+        typeof this.todayMarkSectionInfo === "function"
+          ? this.todayMarkSectionInfo(el, ctx)
+          : null;
+      if (!info) {
+        return;
+      }
+      const text =
+        typeof this.todayMarkSourceText === "function"
+          ? this.todayMarkSourceText(info, sourcePath)
+          : null;
+      if (typeof text === "string") {
+        this.renderSnoozeMarksInWithText(el, ctx, info, text);
+        return;
+      }
+      if (text && typeof text.then === "function") {
+        const self = this;
+        Promise.resolve(text)
+          .then((source) => {
+            try {
+              if (typeof source === "string") {
+                self.renderSnoozeMarksInWithText(el, ctx, info, source);
+              }
+            } catch (error) {
+              // Async completion is best-effort.
+            }
+          })
+          .catch(() => {});
+      }
+    } catch (error) {
+      // Rendered-view marks never throw.
+    }
+  }
+
+  renderSnoozeMarksInWithText(el, ctx, info, text) {
+    try {
+      let clock = null;
+      try {
+        clock =
+          typeof this.snoozeMarksNow === "function"
+            ? this.snoozeMarksNow()
+            : new Date();
+      } catch (error) {
+        clock = new Date();
+      }
+      if (!(clock instanceof Date)) {
+        clock = new Date();
+      }
+      const nowMinutes = clock.getHours() * 60 + clock.getMinutes();
+      const lines =
+        typeof this.todayMarkSplitLines === "function"
+          ? this.todayMarkSplitLines(text)
+          : String(text || "").split(/\r?\n/);
+      const rows =
+        typeof this.todayMarkCandidateRows === "function"
+          ? this.todayMarkCandidateRows(el)
+          : [];
+      for (const li of rows || []) {
+        try {
+          this.snoozeMarkRenderRow(li, el, ctx, info, lines, nowMinutes, clock);
+        } catch (error) {
+          continue;
+        }
+      }
+    } catch (error) {
+      // Rendered-view marks never throw.
+    }
+  }
+
+  snoozeMarksReadingDocuments() {
+    try {
+      if (typeof this.todayMarksReadingDocuments === "function") {
+        return this.todayMarksReadingDocuments();
+      }
+    } catch (error) {
+      // Fall through to the local enumeration.
+    }
+    const docs = [];
+    const seen = new Set();
+    const add = (doc) => {
+      if (doc && !seen.has(doc)) {
+        seen.add(doc);
+        docs.push(doc);
+      }
+    };
+    try {
+      if (typeof document !== "undefined") {
+        add(document);
+      }
+    } catch (error) {
+      // The main document is optional on test hosts.
+    }
+    return docs;
+  }
+
+  snoozeMarkStampedRows(doc) {
+    try {
+      if (doc && typeof doc.querySelectorAll === "function") {
+        const found = doc.querySelectorAll("li[data-bob-snooze-key]");
+        if (found && typeof found.length === "number") {
+          return Array.prototype.slice.call(found);
+        }
+      }
+      const rows = [];
+      const walk =
+        typeof this.todayMarkWalkElements === "function"
+          ? (root, visit) => this.todayMarkWalkElements(root, visit)
+          : null;
+      if (!walk) {
+        return rows;
+      }
+      walk(doc && (doc.body || doc), (node) => {
+        try {
+          const tag = String(
+            (node && (node.tagName || node.nodeName)) || "",
+          ).toUpperCase();
+          if (tag === "LI" && this.snoozeMarkRowKey(node)) {
+            rows.push(node);
+          }
+        } catch (error) {
+          // Row scan is best-effort.
+        }
+      });
+      return rows;
+    } catch (error) {
+      return [];
+    }
+  }
+
+  sweepSnoozeMarksReading() {
+    try {
+      let clock = null;
+      try {
+        clock =
+          typeof this.snoozeMarksNow === "function"
+            ? this.snoozeMarksNow()
+            : new Date();
+      } catch (error) {
+        clock = new Date();
+      }
+      if (!(clock instanceof Date)) {
+        clock = new Date();
+      }
+      const nowMinutes = clock.getHours() * 60 + clock.getMinutes();
+      for (const doc of this.snoozeMarksReadingDocuments()) {
+        for (const li of this.snoozeMarkStampedRows(doc)) {
+          try {
+            const key = this.snoozeMarkRowKey(li);
+            if (!key) {
+              continue;
+            }
+            this.snoozeMarkApplyToRow(
+              li,
+              key,
+              this.snoozeMarkDesiredForRow(li, key, nowMinutes, clock),
+            );
+          } catch (error) {
+            continue;
+          }
+        }
+      }
+    } catch (error) {
+      // Sweep is best-effort.
+    }
+  }
+
+  snoozeMarksBindReadingClicks(doc) {
+    try {
+      if (!doc) {
+        return;
+      }
+      if (!this.snoozeMarksClickDocs) {
+        this.snoozeMarksClickDocs =
+          typeof WeakSet === "function" ? new WeakSet() : new Set();
+      }
+      if (this.snoozeMarksClickDocs.has(doc)) {
+        return;
+      }
+      this.snoozeMarksClickDocs.add(doc);
+      const handler = (event) => this.handleSnoozeMarkReadingClick(event);
+      if (typeof this.registerDomEvent === "function") {
+        this.registerDomEvent(doc, "click", handler, { capture: true });
+        return;
+      }
+      if (typeof doc.addEventListener === "function") {
+        doc.addEventListener("click", handler, true);
+      }
+    } catch (error) {
+      // Click binding is best-effort.
+    }
+  }
+
+  setupSnoozeMarksReading() {
+    try {
+      if (
+        typeof this.registerMarkdownPostProcessor === "function" &&
+        typeof this.renderSnoozeMarksIn === "function"
+      ) {
+        this.registerMarkdownPostProcessor(
+          (el, ctx) => this.renderSnoozeMarksIn(el, ctx),
+          61,
+        );
+      }
+    } catch (error) {
+      // Rendered-view marks are best-effort.
+    }
+    try {
+      if (typeof document !== "undefined") {
+        this.snoozeMarksBindReadingClicks(document);
+      }
+      for (const doc of this.snoozeMarksReadingDocuments()) {
+        this.snoozeMarksBindReadingClicks(doc);
+      }
+      const workspace = this.app && this.app.workspace;
+      if (
+        workspace &&
+        typeof workspace.on === "function" &&
+        typeof this.registerEvent === "function"
+      ) {
+        this.registerEvent(
+          workspace.on("window-open", (win, openedWindow) => {
+            try {
+              let doc = null;
+              const candidates = [
+                openedWindow && openedWindow.document,
+                win && win.document,
+                win && win.doc,
+              ];
+              for (const candidate of candidates) {
+                if (candidate) {
+                  doc = candidate;
+                  break;
+                }
+              }
+              this.snoozeMarksBindReadingClicks(doc);
+            } catch (error) {
+              // Popout click binding is best-effort.
+            }
+          }),
+        );
+      }
+    } catch (error) {
+      // Click setup never throws.
+    }
+  }
+
+  handleSnoozeMarkReadingClick(event) {
+    try {
+      if (!event) {
+        return;
+      }
+      let node = event.target || event.srcElement || null;
+      let mark = null;
+      let guard = 0;
+      while (node && guard < 40) {
+        guard += 1;
+        if (this.snoozeMarkHasClass(node, "bob-snooze-mark")) {
+          mark = node;
+          break;
+        }
+        node = node.parentNode || node.parentElement || null;
+      }
+      if (!mark) {
+        return;
+      }
+      try {
+        let ancestor = mark.parentNode || mark.parentElement || null;
+        let depth = 0;
+        while (ancestor && depth < 40) {
+          depth += 1;
+          if (this.snoozeMarkHasClass(ancestor, "cm-editor")) {
+            return;
+          }
+          ancestor = ancestor.parentNode || ancestor.parentElement || null;
+        }
+      } catch (error) {
+        // Ancestor scan is best-effort.
+      }
+      let isMac = false;
+      try {
+        isMac = Boolean(Platform && Platform.isMacOS);
+      } catch (error) {
+        isMac = false;
+      }
+      if (!snoozeMarkModifierPressed(event, isMac)) {
+        return;
+      }
+      try {
+        if (typeof event.preventDefault === "function") {
+          event.preventDefault();
+        }
+        if (typeof event.stopPropagation === "function") {
+          event.stopPropagation();
+        }
+      } catch (error) {
+        // Event cancellation is best-effort.
+      }
+      const key = this.snoozeMarkRowKey(mark);
+      if (key && typeof this.goToSnoozedRow === "function") {
+        void this.goToSnoozedRow(key);
+      }
+    } catch (error) {
+      // Delegated clicks never throw.
+    }
+  }
+}
+// ---- src/277c-plugin-snooze-marks-jump.js ----
+// Snooze definition jumps: exact row and section navigation ----------
+// Split from `277a-plugin-snooze-marks.js` to keep each fragment at or
+// below 1000 lines. `jumpToDailyNoteLine` is the shared row/section
+// jump helper the later display phases reuse: woken pills jump to
+// struck history rows and the plan chip jumps to the `## Snoozed`
+// heading through this same path. Contract: bob-cli
+// `docs/snooze-marks.md`.
+
+class BobLedgerToolsSnoozeMarksJumpMixin {
+  snoozeMarksTaskAtCursor(editor, markdownView) {
+    try {
+      if (
+        !editor ||
+        typeof editor.getCursor !== "function" ||
+        typeof editor.getLine !== "function"
+      ) {
+        return null;
+      }
+      const cursor = editor.getCursor();
+      if (!cursor || !Number.isInteger(cursor.line)) {
+        return null;
+      }
+      const lineText = editor.getLine(cursor.line);
+      if (typeof lineText !== "string" || lineText.indexOf("#task") === -1) {
+        return null;
+      }
+      const ranges = taskTagMarkRanges(lineText);
+      const blockId = todayMarkTrailingBlockId(lineText);
+      if (!ranges.length || !blockId) {
+        return null;
+      }
+      const cm = getEditorViewFromEditor(editor);
+      if (!cm || !cm.state) {
+        return null;
+      }
+      let tree = null;
+      try {
+        tree = typeof syntaxTree === "function" ? syntaxTree(cm.state) : null;
+      } catch (error) {
+        tree = null;
+      }
+      if (!tree || typeof tree.resolveInner !== "function") {
+        return null;
+      }
+      const line = cm.state.doc.line(cursor.line + 1);
+      if (
+        freshnessMarkPosInCode(tree, line.from + ranges[0].from + 1)
+      ) {
+        return null;
+      }
+      let candidate = null;
+      try {
+        candidate = todayMarkLineCandidate(lineText);
+      } catch (error) {
+        candidate = null;
+      }
+      if (!candidate) {
+        return { ambiguous: true };
+      }
+      const duplicates = todayMarkDuplicateIds(
+        todayMarkAllDocLines(cm.state.doc),
+        [blockId],
+      );
+      if (duplicates.indexOf(blockId) !== -1) {
+        return { ambiguous: true };
+      }
+      const view =
+        markdownView ||
+        (typeof getActiveMarkdownView === "function"
+          ? getActiveMarkdownView(this.app)
+          : null);
+      const filePath =
+        view && view.file && typeof view.file.path === "string"
+          ? view.file.path
+          : "";
+      if (!filePath) {
+        return null;
+      }
+      if (PLAN_DAILY_PATH_RE.test(filePath)) {
+        return { ambiguous: true };
+      }
+      const path = /\.md$/i.test(filePath) ? filePath : filePath + ".md";
+      return { key: path + "#" + blockId };
+    } catch (error) {
+      return null;
+    }
+  }
+
+  goToSnoozedRow(editor, markdownView) {
+    try {
+      if (typeof editor === "string") {
+        void this.jumpSnoozedRow(editor);
+        return true;
+      }
+      const task = this.snoozeMarksTaskAtCursor(editor, markdownView);
+      if (!task) {
+        new Notice("No task on this line");
+        return false;
+      }
+      let clock = null;
+      try {
+        clock = this.snoozeMarksNow();
+      } catch (error) {
+        clock = new Date();
+      }
+      if (!(clock instanceof Date)) {
+        clock = new Date();
+      }
+      if (
+        task.ambiguous ||
+        typeof this.isSnoozedCacheReady !== "function" ||
+        !this.isSnoozedCacheReady(clock) ||
+        !this.snoozeSnapshotForKey(task.key)
+      ) {
+        new Notice("Not snoozed for today");
+        return false;
+      }
+      void this.jumpSnoozedRow(task.key);
+      return true;
+    } catch (error) {
+      try {
+        new Notice("No task on this line");
+      } catch (inner) {
+        // Keep command failures quiet on test hosts.
+      }
+      return false;
+    }
+  }
+
+  snoozeMarksFindRowLine(content, blockId, hintLine) {
+    try {
+      if (typeof content !== "string" || typeof blockId !== "string") {
+        return null;
+      }
+      const lines = content.split(/\r?\n/);
+      const caret = "^" + blockId;
+      if (Number.isInteger(hintLine) && hintLine >= 0 && hintLine < lines.length) {
+        try {
+          if (
+            String(lines[hintLine]).indexOf(caret) !== -1 &&
+            todayMarkTrailingBlockId(String(lines[hintLine])) !== null
+          ) {
+            return hintLine;
+          }
+        } catch (error) {
+          // A stale hint rescans below.
+        }
+      }
+      // Exact row mapping first: the shared Snoozed parser resolves
+      // the active row for this identity, so a moved row is found at
+      // its current line.
+      try {
+        if (snoozeModel && typeof snoozeModel.parseSection === "function") {
+          const parsed = snoozeModel.parseSection(content);
+          const rows = parsed && Array.isArray(parsed.rows)
+            ? parsed.rows
+            : [];
+          for (const row of rows) {
+            try {
+              if (
+                row &&
+                row.kind === "active" &&
+                row.blockId === blockId &&
+                Number.isInteger(row.line)
+              ) {
+                return row.line - 1;
+              }
+            } catch (error) {
+              continue;
+            }
+          }
+        }
+      } catch (error) {
+        // Parser failures fall through to the caret scan.
+      }
+      for (let index = 0; index < lines.length; index += 1) {
+        try {
+          if (String(lines[index]).indexOf(caret) === -1) {
+            continue;
+          }
+          if (todayMarkTrailingBlockId(String(lines[index])) === blockId) {
+            return index;
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      return null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // Shared daily-note jump used by the definition clock, and later by
+  // woken pills and the plan chip: open (or reuse) the daily leaf,
+  // move the cursor to an exact 0-based line, center, and focus.
+  // `notices.vanished` names the teaching Notice when the line is
+  // gone; the jump never lands on a stale unrelated line. Returns
+  // true only when the cursor moved.
+  async jumpToDailyNoteLine(dailyPath, lineNumber, ch, notices) {
+    try {
+      if (
+        typeof dailyPath !== "string" ||
+        !dailyPath ||
+        !Number.isInteger(lineNumber) ||
+        lineNumber < 0
+      ) {
+        return false;
+      }
+      const column = Number.isInteger(ch) && ch >= 0 ? ch : 0;
+      let markdownView = null;
+      const existing = findOpenMarkdownLeafByPath(this.app, dailyPath);
+      if (existing) {
+        markdownView = await activateMarkdownLeaf(this.app, existing, {
+          path: dailyPath,
+        });
+      } else {
+        const opened = await openTodayDailyNoteWithState(this.app);
+        markdownView = opened && opened.view ? opened.view : null;
+      }
+      if (!markdownView || !markdownView.editor) {
+        new Notice("Could not open daily note");
+        return false;
+      }
+      let content = null;
+      try {
+        if (typeof markdownView.editor.getValue === "function") {
+          content = markdownView.editor.getValue();
+        } else {
+          const cm = getEditorViewFromEditor(markdownView.editor);
+          if (cm && cm.state && cm.state.doc) {
+            content = cm.state.doc.toString();
+          }
+        }
+      } catch (error) {
+        content = null;
+      }
+      if (typeof content !== "string") {
+        new Notice(
+          (notices && notices.vanished) ||
+            "This task's Snoozed row is no longer in today's note",
+        );
+        return false;
+      }
+      const lines = content.split(/\r?\n/);
+      if (lineNumber >= lines.length) {
+        new Notice(
+          (notices && notices.vanished) ||
+            "This task's Snoozed row is no longer in today's note",
+        );
+        return false;
+      }
+      const cursor = { line: lineNumber, ch: column };
+      try {
+        if (typeof markdownView.editor.setCursor === "function") {
+          markdownView.editor.setCursor(cursor);
+        } else {
+          const cm = getEditorViewFromEditor(markdownView.editor);
+          const line =
+            cm && cm.state && cm.state.doc
+              ? cm.state.doc.line(lineNumber + 1)
+              : null;
+          if (line && cm && typeof cm.dispatch === "function") {
+            cm.dispatch({
+              selection: { anchor: line.from + column },
+            });
+          }
+        }
+      } catch (error) {
+        // Cursor placement is best-effort.
+      }
+      let centered = false;
+      try {
+        centered = centerEditorViewOnPosition(
+          getEditorViewFromEditor(markdownView.editor),
+          lineNumber,
+          column,
+        );
+      } catch (error) {
+        centered = false;
+      }
+      if (!centered) {
+        try {
+          scrollEditorIntoView(markdownView.editor, lineNumber, column);
+        } catch (error) {
+          // Scrolling is best-effort.
+        }
+      }
+      try {
+        focusEditor(markdownView.editor);
+      } catch (error) {
+        // Focus is best-effort.
+      }
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  async jumpSnoozedRow(key) {
+    if (this.snoozeJumpInFlight) {
+      return false;
+    }
+    this.snoozeJumpInFlight = true;
+    try {
+      let clock = null;
+      try {
+        clock = this.snoozeMarksNow();
+      } catch (error) {
+        clock = new Date();
+      }
+      if (!(clock instanceof Date)) {
+        clock = new Date();
+      }
+      if (
+        typeof key !== "string" ||
+        !key ||
+        typeof this.isSnoozedCacheReady !== "function" ||
+        !this.isSnoozedCacheReady(clock)
+      ) {
+        return false;
+      }
+      const snapshot = this.snoozeSnapshotForKey(key);
+      if (!snapshot) {
+        new Notice("This task's Snoozed row is no longer in today's note");
+        return false;
+      }
+      const dailyPath =
+        this.snoozedCache &&
+        typeof this.snoozedCache.dailyPath === "string"
+          ? this.snoozedCache.dailyPath
+          : "";
+      if (!dailyPath) {
+        return false;
+      }
+      const hash = key.lastIndexOf("#");
+      const blockId = hash === -1 ? "" : key.slice(hash + 1);
+      if (!blockId) {
+        return false;
+      }
+      // Revalidate the target against the open note: the cached line
+      // is only a hint, and a moved row is rescanned before jumping.
+      let content = null;
+      try {
+        const existing = findOpenMarkdownLeafByPath(this.app, dailyPath);
+        if (existing && existing.view && existing.view.editor) {
+          if (typeof existing.view.editor.getValue === "function") {
+            content = existing.view.editor.getValue();
+          } else {
+            const cm = getEditorViewFromEditor(existing.view.editor);
+            if (cm && cm.state && cm.state.doc) {
+              content = cm.state.doc.toString();
+            }
+          }
+        } else if (
+          this.app &&
+          this.app.vault &&
+          typeof this.app.vault.cachedRead === "function"
+        ) {
+          const file =
+            typeof this.app.vault.getAbstractFileByPath === "function"
+              ? this.app.vault.getAbstractFileByPath(dailyPath)
+              : { path: dailyPath };
+          content = await this.app.vault.cachedRead(file);
+        }
+      } catch (error) {
+        content = null;
+      }
+      if (typeof content !== "string") {
+        new Notice("This task's Snoozed row is no longer in today's note");
+        return false;
+      }
+      const hintLine =
+        Number.isInteger(snapshot.line) && snapshot.line > 0
+          ? snapshot.line - 1
+          : null;
+      const lineNumber = this.snoozeMarksFindRowLine(
+        content,
+        blockId,
+        hintLine,
+      );
+      if (lineNumber === null) {
+        new Notice("This task's Snoozed row is no longer in today's note");
+        return false;
+      }
+      const text = content.split(/\r?\n/)[lineNumber] || "";
+      let column = text.indexOf("^" + blockId);
+      if (column < 0) {
+        column = 0;
+      }
+      return await this.jumpToDailyNoteLine(
+        dailyPath,
+        lineNumber,
+        column,
+        {
+          vanished:
+            "This task's Snoozed row is no longer in today's note",
+        },
+      );
+    } catch (error) {
+      return false;
+    } finally {
+      this.snoozeJumpInFlight = false;
+    }
+  }
+}
 // ---- src/278-plugin-relation-model.js ----
 class BobLedgerToolsRelationModelMixin {
   // Feature-detect nav `api.relations` v1. The real namespace ships at
@@ -171476,7 +173727,17 @@ class BobLedgerToolsSnoozedTodayMixin {
     }
     const becameReady = !wasReady && this.isSnoozedCacheReady(clock);
     const changed = plannedChanged || becameReady;
-    if (changed || detailsChanged || dateOrPathChanged) {
+    // A minute rollover changes no membership or details, but the
+    // definition clocks still rerender: their tooltips carry a live
+    // countdown.
+    const previousMinutes = Number.isInteger(previous.nowMinutes)
+      ? previous.nowMinutes
+      : null;
+    const minutesChanged =
+      Number.isInteger(built.clockSnapshot.nowMinutes) &&
+      previousMinutes !== null &&
+      previousMinutes !== built.clockSnapshot.nowMinutes;
+    if (changed || detailsChanged || dateOrPathChanged || minutesChanged) {
       try {
         const workspace = this.app && this.app.workspace;
         if (plannedChanged || becameReady) {
@@ -171488,6 +173749,16 @@ class BobLedgerToolsSnoozedTodayMixin {
           this.scheduleFreshnessMarksRefresh();
           if (typeof this.scheduleLiveWidgetRefresh === "function") {
             this.scheduleLiveWidgetRefresh();
+          }
+        }
+        // Row-detail changes (retiming, Asleep-to-Due, Blocked
+        // transitions, wake-history edits) and minute ticks rerender
+        // the snooze display surfaces even when membership is
+        // unchanged: the landed membership-only fan-out above is not
+        // enough for paint.
+        if (detailsChanged || dateOrPathChanged || minutesChanged) {
+          if (typeof this.scheduleSnoozeMarksRefresh === "function") {
+            this.scheduleSnoozeMarksRefresh();
           }
         }
       } catch (error) {
@@ -200499,6 +202770,9 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsTodayMarksMixin,
   BobLedgerToolsTodayMarksReadingMixin,
   BobLedgerToolsTodayMarksReadingClicksMixin,
+  BobLedgerToolsSnoozeMarksMixin,
+  BobLedgerToolsSnoozeMarksReadingMixin,
+  BobLedgerToolsSnoozeMarksJumpMixin,
   BobLedgerToolsTaskLinkMarksMixin,
   BobLedgerToolsTaskLinkMarksResolveMixin,
   BobLedgerToolsTaskLinkMarksReadingMixin,
@@ -205727,4 +208001,20 @@ Object.assign(module.exports.helpers, {
   snoozeWakeUnsupportedFailure,
   snoozeWakeMinuteKey,
   snoozeWakeNoticeText,
+});
+// ---- src/383-snooze-definition-exports.js ----
+Object.assign(module.exports.helpers, {
+  SNOOZE_DEFINITION_OPEN_STATUSES,
+  SNOOZE_DEFINITION_CLOCK_STATES,
+  snoozeDefinitionMarkForVector,
+  snoozeDefinitionCountdownText,
+  snoozeDefinitionColonTime,
+  snoozeDefinitionNowMinutes,
+  snoozeDefinitionTooltip,
+  snoozeDefinitionHintLine,
+  snoozeDefinitionTargetMinutes,
+  snoozeMarkModifierPressed,
+  buildSnoozeMarkElement,
+  SnoozeMarkWidget,
+  ensureSnoozeMarksRefresh,
 });

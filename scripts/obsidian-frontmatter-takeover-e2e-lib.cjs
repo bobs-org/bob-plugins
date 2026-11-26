@@ -400,7 +400,7 @@ const PROBE_SOURCE = "(() => {" + PAGE_COMMON + String.raw`
       ? (scope.querySelector(".bob-album-header, .bob-record-sheet, .bob-intention-card, .bob-bank-setup") || null)
       : null;
     const foot = card && card.querySelector ? card.querySelector(".bob-property-card-foot") : null;
-    const bankGate = path === "bank.md" && helpers && plugin ? (() => {
+    const bankGate = file?.path === "bank.md" && helpers && plugin ? (() => {
       const source = mode === "live"
         ? String(liveViewOf(view)?.state?.doc?.toString?.() || "")
         : String(plugin.bankSetupSourceCache?.get?.("bank.md") || "");

@@ -218,6 +218,7 @@ class BobLedgerToolsNotebookCardMixin {
     this.notebookCardFoldUnregister = this.notebookCardRegisterFolds();
     try { propertyCardFrontmatterCoordinatorBind?.(this, NOTEBOOK_CARD_HOST_KIND); } catch (_) {}
     try { this.notebookCardFootBind?.(); } catch (_) {}
+    try { this.notebookCardReadoutsBind?.(); } catch (_) {}
     this.notebookCardRegisterSummaryKey();
     try {
       if (!this.notebookCardPreviewLoadStarted) {
@@ -252,6 +253,7 @@ class BobLedgerToolsNotebookCardMixin {
     try { this.notebookCardFoldUnregister?.(); } catch (_) {}
     this.notebookCardFoldUnregister = null;
     try { this.notebookCardFootUnbind?.(); } catch (_) {}
+    try { this.notebookCardReadoutsUnbind?.(); } catch (_) {}
     this.notebookCardUnregisterSummaryKey();
   }
 
@@ -305,12 +307,23 @@ class BobLedgerToolsNotebookCardMixin {
       return JSON.stringify([
         model,
         extra?.footDigest || "",
+        extra?.readoutDigest || "",
         extra?.footOpen === true,
         extra?.collapsed === true,
         extra?.editorAvailable === true,
         extra?.keyLive === true,
       ]);
     } catch (_) { return ""; }
+  }
+
+  notebookCardReadoutDigestFor(path, collapsed) {
+    try {
+      if (typeof this.notebookCardReadoutFor !== "function") return "none";
+      if (typeof notebookCardReadoutDigest !== "function") return "readout";
+      return notebookCardReadoutDigest(this.notebookCardReadoutFor(path, { collapsed: collapsed === true }));
+    } catch (_) {
+      return "readout";
+    }
   }
 
   notebookCardFocusKey(node, doc) {
@@ -403,6 +416,7 @@ class BobLedgerToolsNotebookCardMixin {
     };
     const signature = this.notebookCardSignature(model, {
       ...extra,
+      readoutDigest: this.notebookCardReadoutDigestFor(path, options.collapsed),
       collapsed: options.collapsed,
       editorAvailable: typeof this.openPropertyEditor === "function",
     });
@@ -454,6 +468,11 @@ class BobLedgerToolsNotebookCardMixin {
     }
     scope?.classList?.add?.(NOTEBOOK_CARD_HOST_SURFACE_CLASS);
     this.notebookCardTrackFoot?.(scope || root, path, card);
+    try {
+      this.notebookCardPaintReadouts?.(card, path, doc, {
+        scope, view: reading?.view || null, collapsed: options.collapsed,
+      });
+    } catch (_) {}
     this.notebookCardRestoreFocus(card, focusKey);
     void this.notebookCardEnsureSource?.(path);
     return card;
@@ -530,6 +549,7 @@ class BobLedgerToolsNotebookCardMixin {
       };
       const signature = this.notebookCardSignature(model, {
         ...extra,
+        readoutDigest: this.notebookCardReadoutDigestFor(path, options.collapsed),
         collapsed: options.collapsed,
         editorAvailable: typeof this.openPropertyEditor === "function",
         keyLive: options.keyLive,
@@ -565,6 +585,11 @@ class BobLedgerToolsNotebookCardMixin {
         },
       });
       this.notebookCardTrackFoot?.(view.dom, path, card);
+      try {
+        this.notebookCardPaintReadouts?.(card, path, doc, {
+          scope: view.dom, view, editor: view.editor, collapsed: options.collapsed,
+        });
+      } catch (_) {}
       if (adoption.mode === "slot") {
         void this.notebookCardOwnMountedFrontmatter(view.dom, view, path, card, sourceText, currentPath);
         this.notebookCardEnsureSource(path);

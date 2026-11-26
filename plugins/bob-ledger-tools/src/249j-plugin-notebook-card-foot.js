@@ -94,6 +94,17 @@ class BobLedgerToolsNotebookCardFootMixin {
     for (const key of Object.keys(frontmatter)) {
       if (/^zorg_/i.test(key) || /^generated_from_zorg/i.test(key)) managed[key] = true;
     }
+    // Report-backed warnings join the kit lint chip. Errors stay a visible
+    // pill in the readout slot; the chip only names warnings.
+    let contractIssues = [];
+    try {
+      const readout = typeof this.notebookCardReadoutFor === "function"
+        ? this.notebookCardReadoutFor(filePath) : null;
+      contractIssues = typeof notebookCardReadoutFootWarnings === "function"
+        ? notebookCardReadoutFootWarnings(readout) : [];
+    } catch (_) {
+      contractIssues = [];
+    }
     return propertyCardFootAdapterSpec({
       path: filePath,
       kind: "notebook",
@@ -101,6 +112,7 @@ class BobLedgerToolsNotebookCardFootMixin {
       frontmatter,
       where: model?.where || {},
       managed,
+      contractIssues,
     });
   }
 

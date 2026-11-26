@@ -18,14 +18,17 @@ humanized stem); a matching H1 hides at render time. The `summary:` scope
 line shows in full when present; a missing summary shows a quiet
 `＋ Add summary` ghost that opens focus-or-add on `summary`.
 
-The right readout shows the direct note count and the newest authored
-`[created::]` date when the shared notebook report has arrived. Missing
-report data is omitted, never zeroed. Section chips jump to their `##`
-headings; child notebooks open like crumbs. Hard errors show a visible pill
-that jumps to the first error line; warnings join the foot lint chip. The
-kit foot carries `created` (silent when missing), the quiet `@stem` capture
-route (click copies), and the Properties drawer, where zorg importer keys
-fold under Managed.
+The readout line below the summary shows the direct note count and the
+newest authored `[created::]` date when the shared notebook report has
+arrived; while folded it also names the section count. Missing report data
+is omitted, never zeroed. Section chips jump to their `##` headings: past
+eight, a `+N` chip reveals the rest for the session, and a heading the
+report no longer matches stays inert until the report catches up. Child
+notebooks open like crumbs. Hard errors show a visible pill that jumps to
+the first error line; warnings join the foot lint chip. The kit foot
+carries `created` (silent when missing), the quiet `@stem` capture route
+(click copies), and the Properties drawer, where zorg importer keys fold
+under Managed.
 
 ## Keys
 

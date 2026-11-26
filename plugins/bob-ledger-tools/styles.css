@@ -13040,6 +13040,74 @@ button.bob-property-card-foot-lint-chip {
 }
 /* Notebook Card (bob-cli-qm notebook-card): end. */
 
+/* Notebook Card readouts (bob-cli-qm notebook-readouts): start. Report-backed
+   rows patch the reserved slot in place. The waiting row reserves its height
+   so arrival never shifts layout; a fresh report without this path's row
+   collapses the slot. Nothing here paints placeholder numbers. */
+.bob-notebook-card-readouts[data-state="none"] { display: none; }
+.bob-notebook-card-readouts[data-state="waiting"] { min-height: 1.4em; visibility: hidden; }
+.bob-notebook-card-readouts[data-state="ready"] { min-height: 0; visibility: visible; }
+.bob-notebook-card-readout {
+  margin-block-start: 0.35em;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.bob-notebook-card-sections,
+.bob-notebook-card-children,
+.bob-notebook-card-findings { margin-block-start: 0.35em; }
+.bob-notebook-card-sections:empty,
+.bob-notebook-card-children:empty,
+.bob-notebook-card-findings:empty { display: none; }
+.bob-notebook-card-section-chip,
+.bob-notebook-card-child-chip,
+.bob-notebook-card-sections-more {
+  display: inline-flex;
+  align-items: center;
+  margin: 0 0.35em 0.35em 0;
+  padding: 0.1em 0.55em;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.bob-notebook-card-section-chip:hover,
+.bob-notebook-card-child-chip:hover,
+.bob-notebook-card-sections-more:hover,
+.bob-notebook-card-section-chip:focus-visible,
+.bob-notebook-card-child-chip:focus-visible,
+.bob-notebook-card-sections-more:focus-visible { color: var(--text-normal); }
+.bob-notebook-card-section-chip.is-inert {
+  border-style: dashed;
+  cursor: default;
+  opacity: 0.75;
+}
+.bob-notebook-card-child-chip::before { content: ""; }
+.bob-notebook-card-error-pill {
+  display: inline-flex;
+  align-items: center;
+  margin: 0 0.35em 0.35em 0;
+  padding: 0.1em 0.55em;
+  border: 1px solid color-mix(in srgb, var(--text-error, var(--text-normal)) 45%, var(--background-modifier-border));
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-error, var(--text-normal));
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.bob-notebook-card-error-pill:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+}
+@container bob-property-card (max-width: 420px) {
+  .bob-notebook-card-sections,
+  .bob-notebook-card-children { overflow: hidden; }
+}
+/* Notebook Card readouts (bob-cli-qm notebook-readouts): end. */
+
 /* Prose Card (bob-cli-qm prose-card): start.
    A quiet title page; Bob Prose's typography is inherited only on views
    carrying its .bob-article look class. */

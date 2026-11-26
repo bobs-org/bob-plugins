@@ -39,6 +39,8 @@ test("fixtures cover home species, ancestry, inbox, every local project state, a
   assert.match(fixtures[lib.PATHS.complete], /Close this completion fixture/);
   assert.match(fixtures[lib.PATHS.long], /Another body line keeps the fixture readable/);
   assert.match(fixtures[lib.PATHS.long], /Cursor probe target area body line/);
+  assert.match(fixtures[lib.PATHS.long], /Area body line four/);
+  assert.match(fixtures[lib.PATHS.wip], /Project body line three/);
   assert.doesNotMatch(fixtures[lib.PATHS.untyped], /^type:/m);
   assert.match(fixtures[lib.PATHS.untyped], /aliases:/);
 });
@@ -81,6 +83,9 @@ test("CLI arguments and the page probe are valid", () => {
   assert.match(runner.PROBE_SOURCE, /cardWidth/);
   assert.match(runner.PROBE_SOURCE, /nativePropertiesVisible/);
   assert.match(runner.PROBE_SOURCE, /drawerOpen/);
+  assert.doesNotThrow(() => new Function("return " + runner.CURSOR_PROBE_SOURCE));
+  assert.match(runner.CURSOR_PROBE_SOURCE, /coordsAtPos\(head, 1\)/);
+  assert.match(runner.CURSOR_PROBE_SOURCE, /cm-vimCursorLayer \.cm-fat-cursor\.cm-cursor-primary/);
   const runnerSource = fs.readFileSync(path.join(__dirname, "obsidian-home-cards-e2e.cjs"), "utf8");
   assert.match(runnerSource, /command\.editorCallback\(editor\)/);
   assert.match(runnerSource, /openBulletPropertyPicker\(editor\)/);
@@ -95,12 +100,25 @@ test("CLI arguments and the page probe are valid", () => {
   for (const name of [
     "minus-open-cursor-tracks-text", "minus-close-cursor-tracks-text",
     "underscore-collapse-cursor-tracks-text", "underscore-expand-cursor-tracks-text",
-    "underscore-project-cursor-tracks-text",
+    "underscore-project-cursor-tracks-text", "underscore-project-collapse-cursor-tracks-text",
+    "underscore-project-expand-cursor-tracks-text",
   ]) assert.ok(runnerSource.includes(name), `${name} cursor check is present`);
   assert.match(runner.CURSOR_PROBE_SOURCE, /coordsAtPos\(head, 1\)/);
   assert.match(runner.CURSOR_PROBE_SOURCE, /\.cm-vimCursorLayer \.cm-fat-cursor\.cm-cursor-primary/);
   assert.match(runner.CURSOR_PROBE_SOURCE, /cardHeight/);
+  assert.match(runner.CURSOR_PROBE_SOURCE, /cursorPresent/);
   assert.match(runnerSource, /requestAnimationFrame\(\(\) => requestAnimationFrame/);
+  for (const check of [
+    "area-cursor-starts-on-body-line",
+    "minus-open-cursor-tracks-text",
+    "minus-close-cursor-tracks-text",
+    "underscore-collapse-cursor-tracks-text",
+    "underscore-expand-cursor-tracks-text",
+    "project-cursor-starts-on-body-line",
+    "underscore-project-cursor-tracks-text",
+    "underscore-project-collapse-cursor-tracks-text",
+    "underscore-project-expand-cursor-tracks-text",
+  ]) assert.ok(runnerSource.includes(check), `runner includes ${check}`);
   const geo = lib.inspectGeometry({
     cardWidth: 360, cardHeight: 140, collapsed: true, drawerOpen: false,
     lifecycleVisible: true, nativePropertiesVisible: true,

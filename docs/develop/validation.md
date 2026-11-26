@@ -409,7 +409,9 @@ the editor head is unchanged, the card height changed, and the painted block cur
 within 2 px of `coordsAtPos(head, 1)`. The report records the checks
 `minus-open-cursor-tracks-text`, `minus-close-cursor-tracks-text`,
 `underscore-collapse-cursor-tracks-text`, `underscore-expand-cursor-tracks-text`, and
-`underscore-project-cursor-tracks-text`.
+`underscore-project-cursor-tracks-text` and `underscore-project-expand-cursor-tracks-text`.
+It also checks Project `_` collapse/expand. Each step keeps the same editor head,
+changes card height, and leaves the drawn block cursor within 2 px of the text.
 
 ## Card foot walkthrough
 

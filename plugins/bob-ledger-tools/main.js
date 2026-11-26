@@ -85541,7 +85541,8 @@ function propertyCardHostCleanEditor(controller, options, editors, editorScopes,
 // (childList on the slot parent, the Reading sizer, and the Live Preview
 // source view's class list; never subtree, so CodeMirror content edits never
 // reach it). A ResizeObserver asks CodeMirror to re-measure after the card's
-// height changes. A re-insertion budget self-releases a slot that another
+// height changes and repaints codemirror-vim's cursor in Live Preview. A
+// re-insertion budget self-releases a slot that another
 // writer keeps fighting over, and onLost(reason) tells the adapter to remount
 // or fall back. Explicit releases never call onLost.
 const PROPERTY_CARD_TITLE_SLOT_CLASS = "bob-property-card-title-slot";
@@ -85695,12 +85696,29 @@ function propertyCardTitleSlotEditorExtension() {
   return [];
 }
 
+// The card sits outside .cm-content, so its height can move the text without
+// giving CodeMirror a geometry update that would repaint codemirror-vim's
+// absolute-positioned block cursor. Queue the cursor plugin's own redraw;
+// this does not dispatch a transaction or alter selection/history.
+function propertyCardTitleSlotRedrawCursor(view) {
+  try {
+    const blockCursor = view?.cm?.state?.vimPlugin?.blockCursor;
+    const scheduleRedraw = blockCursor?.scheduleRedraw;
+    if (typeof scheduleRedraw !== "function") return false;
+    scheduleRedraw.call(blockCursor);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 // Re-measure the host after an insertion or a size change: CodeMirror's
 // requestMeasure in Live Preview, the Reading renderer's updateHeader (its
 // cached .mod-header height drives scroll restore and virtualization).
 function propertyCardTitleSlotMeasure(entry) {
   const view = entry?.view;
   if (!view) return;
+  if (entry.mode === "live") propertyCardTitleSlotRedrawCursor(view);
   try {
     const now = propertyCardTitleSlotNow();
     if (!entry.measureBudget || now - entry.measureBudget.windowStart > PROPERTY_CARD_TITLE_SLOT_MEASURE_WINDOW_MS) {
@@ -196631,6 +196649,7 @@ try {
       propertyCardTitleSlotMountedNode,
       propertyCardTitleSlotLiveCount,
       propertyCardTitleSlotStats,
+      propertyCardTitleSlotRedrawCursor,
       propertyCardTitleSlotEditorExtension,
       propertyCardTitleSlotOnEditorUpdate,
     });

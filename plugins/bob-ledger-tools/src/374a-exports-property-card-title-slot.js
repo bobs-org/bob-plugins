@@ -12,6 +12,7 @@ try {
       propertyCardTitleSlotMountedNode,
       propertyCardTitleSlotLiveCount,
       propertyCardTitleSlotStats,
+      propertyCardTitleSlotRedrawCursor,
       propertyCardTitleSlotEditorExtension,
       propertyCardTitleSlotOnEditorUpdate,
     });

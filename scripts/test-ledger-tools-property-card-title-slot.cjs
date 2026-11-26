@@ -442,30 +442,79 @@ test("a throwing onLost is swallowed and explicit releases never call it", () =>
   assert.equal(calls, 1);
 });
 
-test("the ResizeObserver re-measures Live Preview and never throws elsewhere", () => {
+test("Live Preview insertions and height changes redraw the Vim cursor", () => {
   const doc = makeDoc();
   const live = liveScope(doc);
-  const view = { measures: 0, requestMeasure() { this.measures += 1; } };
+  let height = 100;
+  let redraws = 0;
+  const view = {
+    cm: { state: { vimPlugin: { blockCursor: { scheduleRedraw() { redraws += 1; } } } } },
+    measures: 0,
+    requestMeasure() { this.measures += 1; },
+  };
   const node = card(doc);
+  node.getBoundingClientRect = () => rect(0, height);
   helpers.propertyCardMountInTitleSlot(live.scope, node, { path: "alpha.md", view });
   assert.equal(view.measures, 1, "one measure after the Live Preview insertion");
+  assert.equal(redraws, 1, "the cursor redraw is queued after insertion");
   const resize = doc.resize[0];
   assert.equal(resize.targets[0].target, node);
   resize.fire();
+  assert.equal(redraws, 1, "same-height observations do not redraw");
+  height = 140;
   resize.fire();
-  assert.equal(view.measures, 3);
+  assert.equal(redraws, 2, "a height change redraws the cursor");
+  height = 180;
+  resize.fire();
+  assert.equal(redraws, 3, "each real height change redraws the cursor");
 
   const reading = readingScope(doc);
-  const readingView = { measures: 0, requestMeasure() { this.measures += 1; } };
+  let readingRedraws = 0;
+  const readingView = {
+    cm: { state: { vimPlugin: { blockCursor: { scheduleRedraw() { readingRedraws += 1; } } } } },
+    measures: 0,
+    updateHeader() { this.measures += 1; },
+  };
   helpers.propertyCardMountInTitleSlot(reading.scope, card(doc), { view: readingView });
   assert.doesNotThrow(() => doc.resize[1].fire());
-  assert.equal(readingView.measures, 0, "Reading never asks CodeMirror to measure");
+  assert.equal(readingView.measures, 2, "Reading updates its header after insertion and the observer callback");
+  assert.equal(readingRedraws, 0, "Reading never redraws a CodeMirror cursor");
   const noView = liveScope(doc);
   helpers.propertyCardMountInTitleSlot(noView.scope, card(doc), {});
   assert.doesNotThrow(() => doc.resize[2].fire());
   const throwing = liveScope(doc);
   helpers.propertyCardMountInTitleSlot(throwing.scope, card(doc), { view: { requestMeasure() { throw new Error("gone"); } } });
   assert.doesNotThrow(() => doc.resize[3].fire());
+});
+
+test("cursor redraw is safe when Vim hooks are absent or broken", () => {
+  assert.equal(helpers.propertyCardTitleSlotRedrawCursor(null), false);
+  assert.equal(helpers.propertyCardTitleSlotRedrawCursor({}), false);
+  assert.equal(helpers.propertyCardTitleSlotRedrawCursor({ cm: { state: {} } }), false);
+  assert.equal(helpers.propertyCardTitleSlotRedrawCursor({
+    cm: { state: { vimPlugin: { blockCursor: { scheduleRedraw() { throw new Error("gone"); } } } } },
+  }), false);
+
+  const doc = makeDoc();
+  const parts = liveScope(doc);
+  const node = card(doc);
+  const view = { cm: { state: { vimPlugin: { blockCursor: {} } } } };
+  assert.doesNotThrow(() => helpers.propertyCardMountInTitleSlot(parts.scope, node, { view }));
+  assert.equal(node.parentNode, parts.sizer, "a missing redraw hook does not prevent mounting");
+});
+
+test("observer re-insertion redraws the Live Preview Vim cursor", () => {
+  const doc = makeDoc();
+  const parts = liveScope(doc);
+  let redraws = 0;
+  const view = { cm: { state: { vimPlugin: { blockCursor: { scheduleRedraw() { redraws += 1; } } } } } };
+  const node = card(doc);
+  helpers.propertyCardMountInTitleSlot(parts.scope, node, { path: "alpha.md", view });
+  assert.equal(redraws, 1);
+  node.remove();
+  doc.mutation[0].fire();
+  assert.equal(node.parentNode, parts.sizer);
+  assert.equal(redraws, 2);
 });
 
 test("hosts without observers still mount and release", () => {

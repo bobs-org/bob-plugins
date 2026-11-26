@@ -82,7 +82,7 @@ function fixtureNotes() {
       summary: "A nested inbox.md that is not the vault inbox.",
     }, "Nested inbox files are ordinary areas unless the inbox route says otherwise.\n"),
     [PATHS.wip]: project({ root: true, task_type: "BUILD" },
-      "- [ ] #task #prj Ship the root rollout ^prj\n"),
+      "- [ ] #task #prj Ship the root rollout ^prj\n\nProject body line one.\nProject body line two.\nProject body line three.\n"),
     [PATHS.blocked]: project({},
       "- [?] #task #prj Wait for the review ^prj\n"),
     [PATHS.scheduled]: project({},
@@ -110,7 +110,7 @@ function fixtureNotes() {
     [PATHS.long]: yaml({
       type: "[[area]]", parent: "[[area]]", aliases: ["Long Summary"],
       summary: longSummary, color: "yellow",
-    }, "# Long Summary\n\nA plain body line below the card.\nAnother body line keeps the fixture readable.\nCursor probe target area body line.\n"),
+    }, "# Long Summary\n\nArea body line one.\nArea body line two.\nArea body line three.\nArea body line four.\nA plain body line below the card.\nAnother body line keeps the fixture readable.\nCursor probe target area body line.\n"),
     [PATHS.shadowed]: project({
       offclock: false, offclock_types: ["MEET"],
     }, "- [ ] #task #prj Shadowed clock policy ^prj\n"),
@@ -309,6 +309,8 @@ function selfTest() {
   assert.match(notes[PATHS.archived], /status: "done"/);
   assert.doesNotMatch(notes[PATHS.archived], /\^prj/);
   assert.match(notes[PATHS.lateTitle], /\^prj[\s\S]*# Late heading after the task/);
+  assert.match(notes[PATHS.long], /Area body line four/);
+  assert.match(notes[PATHS.wip], /Project body line three/);
   assert.match(notes[PATHS.deep], /parent: "\[\[mid_plan\]\]"/);
   assert.match(notes[PATHS.long], /second line/);
   assert.match(notes[PATHS.long], /A plain body line below the card/);

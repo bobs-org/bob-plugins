@@ -343,7 +343,11 @@ then remounts or falls back. Explicit releases never call `onLost`.
 
 In Live Preview, an editor update listener stops CodeMirror from dropping a
 scroll target while the card pushes the text below the pane. When a card
-above the visible area changes height, the text on screen stays still.
+above the visible area changes height, the text on screen stays still. Each
+Live Preview insertion and resize also queues codemirror-vim's block-cursor
+redraw: the title-slot card is outside `.cm-content`, so moving its height can
+move the text without a CodeMirror geometry change that would repaint the
+cursor. The redraw does not change the selection or create an undo entry.
 Plugin teardown calls `propertyCardTitleSlotReleaseAll()`, which leaves no
 slot node or observer behind.
 

@@ -7689,8 +7689,8 @@ body.bob-task-drawer-marks [data-bob-drawer="true"] {
 }
 
 body.bob-task-drawer-marks {
-  --bob-drawer-glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.45' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2 3.4h12v7.1l-2 2.1H4l-2-2.1zM3 7.5h10'/%3E%3C/svg%3E");
-  --bob-drawer-glyph-empty: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.45' stroke-dasharray='1.25 1.05' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2 3.4h12v7.1l-2 2.1H4l-2-2.1zM3 7.5h10'/%3E%3C/svg%3E");
+  --bob-drawer-glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='2.06' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2 3.4h12v7.1l-2 2.1H4l-2-2.1zM3 7.5h10'/%3E%3C/svg%3E");
+  --bob-drawer-glyph-empty: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='2.06' stroke-dasharray='1.25 1.05' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2 3.4h12v7.1l-2 2.1H4l-2-2.1zM3 7.5h10'/%3E%3C/svg%3E");
 }
 
 body.bob-task-drawer-marks [data-bob-drawer="true"][data-bob-type-hue="blue"] {

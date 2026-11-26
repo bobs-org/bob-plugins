@@ -222,7 +222,6 @@ class BobLedgerToolsNotebookHeaderLiveMixin {
         return false;
       }
       const root = view.dom;
-      const filePath = this.notebookHeaderLivePath(view);
       if (filePath && typeof notebookCardMountedInSurface === "function"
         && notebookCardMountedInSurface(root, filePath)) return false;
       let state = null;

@@ -59,6 +59,41 @@ function cyclerReqTypingAbsorb(arm, text, from, to) {
   return none;
 }
 
+// A new direct child of a task becomes a requirement even when `o` placed
+// its blank bullet after authored notes or drawers. The shared writer moves
+// it into the reqs zone and performs the first-req scoop in the same write.
+function cyclerReqTypingRehomePlan(contents, lineIndex, before, after) {
+  try {
+    if (!cyclerReqTypingExpansion(before, after)) return null;
+    const text = String(contents == null ? "" : contents);
+    const doc = taskReqDocument(text);
+    const line = doc.texts[lineIndex];
+    const item = taskReqListItem(line || "");
+    if (!item) return null;
+    const parentLine = taskReqDocParent(doc, lineIndex);
+    if (parentLine === null) return null;
+    const owner = taskBlockFindTask(text, parentLine);
+    if (!owner || owner.lineIndex !== parentLine) return null;
+
+    const emptyBullet = line.slice(0, item.bodyFrom);
+    const syntheticLines = doc.texts.slice();
+    syntheticLines[lineIndex] = emptyBullet;
+    const synthetic = syntheticLines.join(taskBlockDocumentLineEnding(text));
+    const result = taskReqToggle(synthetic, { lineIndex, preimage: emptyBullet });
+    if (!result || result.ok !== true || result.direction !== "note-to-req") return null;
+    const landed = taskReqDocument(result.updated).texts[result.lineIndex] || "";
+    return {
+      updated: result.updated,
+      lineIndex: result.lineIndex,
+      cursorCh: landed.length,
+      firstReq: result.firstReq,
+      scooped: result.scooped,
+    };
+  } catch (error) {
+    return null;
+  }
+}
+
 // True when the line sits in frontmatter or a fenced code block, where the
 // assist never fires. Only evaluated after a cheap line prefilter matched.
 function cyclerReqTypingBlockedLine(text, lineIndex) {
@@ -170,10 +205,17 @@ function cyclerReqTypingBuild(cm) {
       return false;
     }
     const { line, before, after } = lineParts(state, from, to);
+    const originalText = state.doc.toString();
     const plan = cyclerReqTypingExpansion(before, after);
-    if (!plan || cyclerReqTypingBlockedLine(state.doc.toString(), line.number - 1)) {
+    if (!plan || cyclerReqTypingBlockedLine(originalText, line.number - 1)) {
       return false;
     }
+    const rehome = cyclerReqTypingRehomePlan(
+      originalText,
+      line.number - 1,
+      before,
+      after,
+    );
     // The space lands as its own ordinary input transaction, then the
     // expansion is a second, history-isolated transaction.
     view.dispatch(
@@ -183,6 +225,24 @@ function cyclerReqTypingBuild(cm) {
     );
     const head = singleEmptyCaret(view.state);
     if (head === null) {
+      return true;
+    }
+    if (rehome) {
+      const lines = rehome.updated.split(/\r?\n/);
+      const separatorLength = rehome.updated.includes("\r\n") ? 2 : 1;
+      let target = 0;
+      for (let index = 0; index < rehome.lineIndex; index += 1) {
+        target += lines[index].length + separatorLength;
+      }
+      target += rehome.cursorCh;
+      const current = view.state.doc.toString();
+      view.dispatch({
+        changes: { from: 0, to: current.length, insert: rehome.updated },
+        selection: { anchor: target },
+        effects: [setArm.of({ pos: target, stage: "bracket" })],
+        annotations: [cm.isolateHistory.of("full")],
+        userEvent: "input.type",
+      });
       return true;
     }
     view.dispatch({

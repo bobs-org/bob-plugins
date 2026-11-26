@@ -136,6 +136,7 @@ Object.assign(module.exports.helpers, {
   cyclerReqToggleLandingCh,
   cyclerReqToggleKind,
   cyclerReqTypingExpansion,
+  cyclerReqTypingRehomePlan,
   cyclerReqTypingBackspace,
   cyclerReqTypingAbsorb,
   cyclerReqTypingBlockedLine,

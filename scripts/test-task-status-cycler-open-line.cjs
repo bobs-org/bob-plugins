@@ -15,6 +15,7 @@ const {
 
 const {
   planOpenLine,
+  planOpenTaskNote,
   applyOpenLinePlanToLines,
   pruneOpenLineScaffold,
   openLineClassify,
@@ -23,6 +24,7 @@ const {
   drawerTypingEligible,
   drawerTypingExpansion,
   OPEN_LINE_MANAGED_NOTICE,
+  OPEN_LINE_NO_TASK_NOTICE,
   OPEN_LINE_PRJ_NO_TASKS_NOTICE,
 } = helpers;
 
@@ -268,6 +270,90 @@ test("o opens a drawer sibling that accepts the drawer star expansion", () => {
   assert.ok(typed.includes("\t- ****"), "the newly opened sibling accepts the native star expansion");
   assert.ok(typed.includes("\t- **API Design**\n\t\t- Keep the bold subtree"));
   assert.ok(typed.includes("\t- FUTURE WORK\n\t\t- Keep the legacy subtree"));
+});
+
+test("Ctrl+Shift+O uses the zero-req task's loose tail slot", () => {
+  const text = [
+    "- [ ] #task Ship",
+    "\t- **Notes**",
+    "\t\t- existing note",
+    "\t- 🛠️ **WORK LOG**",
+  ].join("\n");
+  const taskLine = lineIndex(text, "#task Ship");
+  const plan = planOpenTaskNote(text, taskLine);
+  assertInsert(plan, {
+    insertBeforeLine: lineIndex(text, "WORK LOG"),
+    lines: ["\t- "],
+    scaffoldKind: "note",
+  });
+  assert.equal(plan.createdDrawer, false);
+  assert.match(apply(text, plan), /\t- \*\*Notes\*\*\n\t\t- existing note\n\t- \n\t- 🛠️/);
+});
+
+test("Ctrl+Shift+O creates a req owner's Notes drawer with its first note", () => {
+  const text = "- [ ] #task Ship\n\t- [ ] req\n\t- 🛠️ **WORK LOG**";
+  const plan = planOpenTaskNote(text, 0);
+  assert.equal(plan.createdDrawer, true);
+  assert.deepEqual(plan.lines, ["\t- **Notes**", "\t\t- "]);
+  const opened = apply(text, plan);
+  assert.match(opened, /\t- \*\*Notes\*\*\n\t\t- \n\t- 🛠️/);
+  assert.equal(pruneOpenLineScaffold(opened, plan.scaffold), text);
+});
+
+test("Ctrl+Shift+O routes every ^prj note to a column-zero ## Notes section", () => {
+  const existing = [
+    "---",
+    "type: \"[[project]]\"",
+    "---",
+    "- [ ] #task #prj Project ^prj",
+    "",
+    "## Tasks",
+    "- [ ] #task Row",
+    "",
+    "## Notes",
+    "",
+    "- existing",
+  ].join("\n");
+  const existingPlan = planOpenTaskNote(existing, lineIndex(existing, "^prj"));
+  assert.deepEqual(existingPlan.lines, ["- "]);
+  assert.match(apply(existing, existingPlan), /## Notes\n\n- existing\n- $/);
+
+  const missing = [
+    "---",
+    "type: \"[[project]]\"",
+    "---",
+    "- [ ] #task #prj Project ^prj",
+    "",
+    "## Tasks",
+    "- [ ] #task Row",
+  ].join("\n");
+  const missingPlan = planOpenTaskNote(missing, lineIndex(missing, "^prj"));
+  assert.equal(missingPlan.createdDrawer, true);
+  const opened = apply(missing, missingPlan);
+  assert.match(opened, /\n\n## Notes\n- \n$/);
+  assert.equal(pruneOpenLineScaffold(opened, missingPlan.scaffold), missing);
+});
+
+test("Ctrl+Shift+O command opens at the task home and refuses outside tasks", () => {
+  const plugin = makePlugin("Daily.md");
+  const text = "- [ ] #task Ship\n\t- [ ] req";
+  const editor = wrapEditor(text, { line: 1, ch: 5 });
+  const view = Object.assign(new MarkdownView(), {
+    editor,
+    file: { path: "Daily.md" },
+  });
+  assert.equal(plugin.handleOpenTaskNoteCommand(false, editor, view), true);
+  assert.match(editor.getValue(), /\t- \*\*Notes\*\*\n\t\t- $/);
+  assert.equal(plugin.flushOpenLineScaffold("blur"), true);
+  assert.equal(editor.getValue(), text);
+
+  const outside = wrapEditor("plain prose", { line: 0, ch: 2 });
+  const outsideView = Object.assign(new MarkdownView(), {
+    editor: outside,
+    file: { path: "Daily.md" },
+  });
+  assert.equal(plugin.handleOpenTaskNoteCommand(false, outside, outsideView), false);
+  assert.equal(notices.at(-1), OPEN_LINE_NO_TASK_NOTICE);
 });
 
 test("each managed line redirects to the owner's note slot", () => {

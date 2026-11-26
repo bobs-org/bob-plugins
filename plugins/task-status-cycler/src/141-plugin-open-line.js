@@ -42,7 +42,8 @@ class TaskStatusCyclerOpenLineMixin {
     if (plan.insertBeforeLine >= lineCount) {
       const last = Math.max(lineCount - 1, 0);
       const lastText = typeof cm.getLine === "function" ? cm.getLine(last) || "" : "";
-      cm.replaceRange(`\n${inserted}`, { line: last, ch: lastText.length });
+      const finalEnding = plan.trailingNewline ? "\n" : "";
+      cm.replaceRange(`\n${inserted}${finalEnding}`, { line: last, ch: lastText.length });
     } else {
       cm.replaceRange(`${inserted}\n`, { line: plan.insertBeforeLine, ch: 0 });
     }
@@ -216,5 +217,39 @@ class TaskStatusCyclerOpenLineMixin {
     this.recordOpenLineJump(plan, path);
     this.armOpenLineScaffold(cm, plan, path, view && view.editor);
     this.enterVimInsertMode(cm);
+  }
+
+  handleOpenTaskNoteCommand(checking, editor, view) {
+    if (!(view instanceof MarkdownView)) return false;
+    const editorCm = editor && editor.cm && editor.cm.cm;
+    const viewCm = view.editMode && view.editMode.editor && view.editMode.editor.cm
+      ? view.editMode.editor.cm.cm
+      : null;
+    const cm = editorCm || viewCm || editor;
+    if (
+      !cm ||
+      typeof cm.getCursor !== "function" ||
+      typeof cm.getLine !== "function" ||
+      typeof cm.replaceRange !== "function" ||
+      typeof cm.setCursor !== "function"
+    ) {
+      return false;
+    }
+    const cursor = cm.getCursor();
+    if (!cursor || !Number.isInteger(cursor.line)) return false;
+    const plan = planOpenTaskNote(this.getCodeMirrorContents(cm), cursor.line);
+    if (!plan || plan.kind !== "insert") {
+      if (!checking && plan && plan.notice) new Notice(plan.notice);
+      return false;
+    }
+    if (checking) return true;
+    if (!this.applyOpenLinePlanToCodeMirror(cm, plan)) return false;
+    const path = view.file && view.file.path ? view.file.path : null;
+    this.armOpenLineScaffold(cm, plan, path, view.editor);
+    const mode = typeof this.getCurrentVimMode === "function"
+      ? this.getCurrentVimMode(cm)
+      : "normal";
+    if (mode !== "insert" && mode !== "replace") this.enterVimInsertMode(cm);
+    return true;
   }
 }

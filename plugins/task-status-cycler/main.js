@@ -18501,6 +18501,15 @@ class TaskStatusCyclerPlugin extends Plugin {
     });
 
     this.addCommand({
+      id: "open-task-note",
+      name: "Open note in task",
+      hotkeys: [{ modifiers: ["Ctrl", "Shift"], key: "O" }],
+      editorCheckCallback: (checking, editor, view) =>
+        this.runTaskSettleAwareCommand(checking, editor, () =>
+          this.handleOpenTaskNoteCommand(checking, editor, view)),
+    });
+
+    this.addCommand({
       id: "toggle-pomodoro-bullet",
       name: "Toggle Pomodoro placeholder/sub-bullet",
       hotkeys: [{ modifiers: ["Ctrl", "Alt"], key: "]" }],
@@ -25610,7 +25619,8 @@ class TaskStatusCyclerOpenLineMixin {
     if (plan.insertBeforeLine >= lineCount) {
       const last = Math.max(lineCount - 1, 0);
       const lastText = typeof cm.getLine === "function" ? cm.getLine(last) || "" : "";
-      cm.replaceRange(`\n${inserted}`, { line: last, ch: lastText.length });
+      const finalEnding = plan.trailingNewline ? "\n" : "";
+      cm.replaceRange(`\n${inserted}${finalEnding}`, { line: last, ch: lastText.length });
     } else {
       cm.replaceRange(`${inserted}\n`, { line: plan.insertBeforeLine, ch: 0 });
     }
@@ -25784,6 +25794,40 @@ class TaskStatusCyclerOpenLineMixin {
     this.recordOpenLineJump(plan, path);
     this.armOpenLineScaffold(cm, plan, path, view && view.editor);
     this.enterVimInsertMode(cm);
+  }
+
+  handleOpenTaskNoteCommand(checking, editor, view) {
+    if (!(view instanceof MarkdownView)) return false;
+    const editorCm = editor && editor.cm && editor.cm.cm;
+    const viewCm = view.editMode && view.editMode.editor && view.editMode.editor.cm
+      ? view.editMode.editor.cm.cm
+      : null;
+    const cm = editorCm || viewCm || editor;
+    if (
+      !cm ||
+      typeof cm.getCursor !== "function" ||
+      typeof cm.getLine !== "function" ||
+      typeof cm.replaceRange !== "function" ||
+      typeof cm.setCursor !== "function"
+    ) {
+      return false;
+    }
+    const cursor = cm.getCursor();
+    if (!cursor || !Number.isInteger(cursor.line)) return false;
+    const plan = planOpenTaskNote(this.getCodeMirrorContents(cm), cursor.line);
+    if (!plan || plan.kind !== "insert") {
+      if (!checking && plan && plan.notice) new Notice(plan.notice);
+      return false;
+    }
+    if (checking) return true;
+    if (!this.applyOpenLinePlanToCodeMirror(cm, plan)) return false;
+    const path = view.file && view.file.path ? view.file.path : null;
+    this.armOpenLineScaffold(cm, plan, path, view.editor);
+    const mode = typeof this.getCurrentVimMode === "function"
+      ? this.getCurrentVimMode(cm)
+      : "normal";
+    if (mode !== "insert" && mode !== "replace") this.enterVimInsertMode(cm);
+    return true;
   }
 }
 // ---- src/142-plugin-task-settle.js ----
@@ -35865,6 +35909,12 @@ function taskBlockNoteHome(contents, task, options) {
   const resolved = taskReqOptions(options);
   const doc = taskReqDocument(contents);
   const block = taskBlockReadIn(doc, task, resolved.globalFilter);
+  // The project's `^prj` task always files notes in the project `## Notes`
+  // section, including before it owns its first requirement.
+  if (taskBlockIsPrjParent(contents, task)) {
+    const drawer = taskBlockNotesDrawer(contents, task);
+    return drawer ? { home: "notes", drawer } : { home: "new-notes" };
+  }
   if (!taskBlockOwnsReqs(block)) return { home: "loose", slot: taskBlockInsertionSlotIn(doc, task, "authored", resolved) };
   const drawer = taskBlockNotesDrawer(contents, task);
   return drawer ? { home: "notes", drawer } : { home: "new-notes" };
@@ -40388,6 +40438,41 @@ function cyclerReqTypingAbsorb(arm, text, from, to) {
   return none;
 }
 
+// A new direct child of a task becomes a requirement even when `o` placed
+// its blank bullet after authored notes or drawers. The shared writer moves
+// it into the reqs zone and performs the first-req scoop in the same write.
+function cyclerReqTypingRehomePlan(contents, lineIndex, before, after) {
+  try {
+    if (!cyclerReqTypingExpansion(before, after)) return null;
+    const text = String(contents == null ? "" : contents);
+    const doc = taskReqDocument(text);
+    const line = doc.texts[lineIndex];
+    const item = taskReqListItem(line || "");
+    if (!item) return null;
+    const parentLine = taskReqDocParent(doc, lineIndex);
+    if (parentLine === null) return null;
+    const owner = taskBlockFindTask(text, parentLine);
+    if (!owner || owner.lineIndex !== parentLine) return null;
+
+    const emptyBullet = line.slice(0, item.bodyFrom);
+    const syntheticLines = doc.texts.slice();
+    syntheticLines[lineIndex] = emptyBullet;
+    const synthetic = syntheticLines.join(taskBlockDocumentLineEnding(text));
+    const result = taskReqToggle(synthetic, { lineIndex, preimage: emptyBullet });
+    if (!result || result.ok !== true || result.direction !== "note-to-req") return null;
+    const landed = taskReqDocument(result.updated).texts[result.lineIndex] || "";
+    return {
+      updated: result.updated,
+      lineIndex: result.lineIndex,
+      cursorCh: landed.length,
+      firstReq: result.firstReq,
+      scooped: result.scooped,
+    };
+  } catch (error) {
+    return null;
+  }
+}
+
 // True when the line sits in frontmatter or a fenced code block, where the
 // assist never fires. Only evaluated after a cheap line prefilter matched.
 function cyclerReqTypingBlockedLine(text, lineIndex) {
@@ -40499,10 +40584,17 @@ function cyclerReqTypingBuild(cm) {
       return false;
     }
     const { line, before, after } = lineParts(state, from, to);
+    const originalText = state.doc.toString();
     const plan = cyclerReqTypingExpansion(before, after);
-    if (!plan || cyclerReqTypingBlockedLine(state.doc.toString(), line.number - 1)) {
+    if (!plan || cyclerReqTypingBlockedLine(originalText, line.number - 1)) {
       return false;
     }
+    const rehome = cyclerReqTypingRehomePlan(
+      originalText,
+      line.number - 1,
+      before,
+      after,
+    );
     // The space lands as its own ordinary input transaction, then the
     // expansion is a second, history-isolated transaction.
     view.dispatch(
@@ -40512,6 +40604,24 @@ function cyclerReqTypingBuild(cm) {
     );
     const head = singleEmptyCaret(view.state);
     if (head === null) {
+      return true;
+    }
+    if (rehome) {
+      const lines = rehome.updated.split(/\r?\n/);
+      const separatorLength = rehome.updated.includes("\r\n") ? 2 : 1;
+      let target = 0;
+      for (let index = 0; index < rehome.lineIndex; index += 1) {
+        target += lines[index].length + separatorLength;
+      }
+      target += rehome.cursorCh;
+      const current = view.state.doc.toString();
+      view.dispatch({
+        changes: { from: 0, to: current.length, insert: rehome.updated },
+        selection: { anchor: target },
+        effects: [setArm.of({ pos: target, stage: "bracket" })],
+        annotations: [cm.isolateHistory.of("full")],
+        userEvent: "input.type",
+      });
       return true;
     }
     view.dispatch({
@@ -40598,6 +40708,7 @@ const OPEN_LINE_GROUP_TITLES = Object.freeze([
   "Done & Canceled",
 ]);
 const OPEN_LINE_MANAGED_NOTICE = "Managed line · not a task";
+const OPEN_LINE_NO_TASK_NOTICE = "Put the cursor in a task block to open a task note";
 const OPEN_LINE_PRJ_NO_TASKS_NOTICE = "No ## Tasks section — cannot open a task on ^prj";
 const OPEN_LINE_TASKS_TITLE = "Tasks";
 
@@ -40673,6 +40784,13 @@ function openLineSubtreeEnd(doc, lineIndex) {
 
 function openLineTaskLastLine(doc, task) {
   return taskBlockLastLineIn(doc, task);
+}
+
+function openLineLineIndexAtOffset(doc, offset) {
+  for (let index = 0; index <= doc.texts.length; index += 1) {
+    if (taskBlockLineOffset(doc, index) >= offset) return index;
+  }
+  return doc.texts.length;
 }
 
 function openLineOwningTask(doc, tasks, lineIndex) {
@@ -40827,6 +40945,9 @@ function openLineInsertPlan(options) {
     scaffoldKind,
     createdDrawer,
     notice,
+    scaffoldDrawerLineIndex,
+    scaffoldDrawerEmptyText,
+    trailingNewline,
   } = options;
   const inserted = Array.isArray(lines) ? lines.filter((line) => line !== null) : [lines];
   const cursorLine = insertBeforeLine + (inserted.length - 1);
@@ -40841,12 +40962,17 @@ function openLineInsertPlan(options) {
     recordJump: Boolean(recordJump),
     notice: notice || null,
     createdDrawer: Boolean(createdDrawer),
+    trailingNewline: Boolean(trailingNewline),
     scaffold: {
       kind: scaffoldKind,
       lineIndex: cursorLine,
       emptyText: inserted[inserted.length - 1],
-      drawerLineIndex: createdDrawer ? insertBeforeLine : null,
-      drawerEmptyText: createdDrawer ? inserted[0] : null,
+      drawerLineIndex: createdDrawer
+        ? (Number.isInteger(scaffoldDrawerLineIndex) ? scaffoldDrawerLineIndex : insertBeforeLine)
+        : null,
+      drawerEmptyText: createdDrawer
+        ? (typeof scaffoldDrawerEmptyText === "string" ? scaffoldDrawerEmptyText : inserted[0])
+        : null,
     },
   };
 }
@@ -40926,14 +41052,14 @@ function openLineNoteSlotPlan(contents, originLine, task) {
   let insertBeforeLine;
   let indent;
   if (home.home === "notes" && home.drawer) {
-    const insertion = taskBlockDrawerInsertion(working, home.drawer);
-    indent = insertion.indentation;
-    insertBeforeLine = doc.texts.length;
-    for (let index = 0; index <= doc.texts.length; index += 1) {
-      if (taskBlockLineOffset(doc, index) >= insertion.offset) {
-        insertBeforeLine = index;
-        break;
-      }
+    if (taskBlockIsPrjParent(working, workingTask)) {
+      const insertion = taskBlockH2InsertPosition(working, home.drawer);
+      indent = "";
+      insertBeforeLine = openLineLineIndexAtOffset(doc, insertion.offset);
+    } else {
+      const insertion = taskBlockDrawerInsertion(working, home.drawer);
+      indent = insertion.indentation;
+      insertBeforeLine = openLineLineIndexAtOffset(doc, insertion.offset);
     }
   } else if (home.home === "loose" && home.slot) {
     insertBeforeLine = home.slot.lineIndex;
@@ -40945,6 +41071,38 @@ function openLineNoteSlotPlan(contents, originLine, task) {
   }
   const noteLine = openLineBulletLine(indent);
   if (createdDrawer) {
+    if (taskBlockIsPrjParent(working, workingTask) && home.drawer) {
+      // The shared helper added a project H2 section at the end of `working`.
+      // Insert its header and note as one scaffold in the original note,
+      // keeping trailing blank lines and the final newline intact.
+      const originalDoc = taskReqDocument(text);
+      const sectionLine = home.drawer.lineIndex;
+      const insertBeforeLine = Math.min(sectionLine, originalDoc.texts.length);
+      const leadingBlanks = Math.max(0, sectionLine - originalDoc.texts.length);
+      const lines = [
+        ...Array(leadingBlanks).fill(""),
+        doc.texts[sectionLine],
+        noteLine,
+      ];
+      const appendsAtEnd = insertBeforeLine >= originalDoc.texts.length;
+      const plan = openLineInsertPlan({
+        originLine,
+        insertBeforeLine,
+        lines,
+        cursorCh: noteLine.length,
+        scaffoldKind: "note",
+        createdDrawer: true,
+        scaffoldDrawerLineIndex: insertBeforeLine + leadingBlanks,
+        scaffoldDrawerEmptyText: doc.texts[sectionLine],
+        trailingNewline: appendsAtEnd,
+      });
+      plan.scaffold.originalText = text;
+      plan.scaffold.expectedEmptyText = applyOpenLinePlanToLines(
+        originalDoc.texts,
+        plan,
+      ).join(taskBlockDocumentLineEnding(text));
+      return plan;
+    }
     const drawerDoc = taskReqDocument(working);
     const drawers = taskBlockDrawers(working, workingTask);
     const notes = drawers.find((entry) => entry.key === TASK_BLOCK_NOTES_KEY);
@@ -41104,6 +41262,17 @@ function planOpenLine(contents, lineIndex, direction, today) {
   }
 }
 
+function planOpenTaskNote(contents, lineIndex) {
+  const text = String(contents == null ? "" : contents);
+  const doc = taskReqDocument(text);
+  const tasks = taskReqNoteTasks(text);
+  const exact = openLineTaskAt(tasks, lineIndex);
+  const task = exact || openLineOwningTask(doc, tasks, lineIndex);
+  return task
+    ? openLineNoteSlotPlan(text, lineIndex, task)
+    : { kind: "refuse", notice: OPEN_LINE_NO_TASK_NOTICE };
+}
+
 function openLineJoin(contents, lines) {
   const ending = taskBlockDocumentLineEnding(contents);
   return lines.join(ending);
@@ -41114,6 +41283,7 @@ function applyOpenLinePlanToLines(lines, plan) {
   const next = lines.slice();
   const insertAt = Math.max(0, Math.min(plan.insertBeforeLine, next.length));
   next.splice(insertAt, 0, ...plan.lines);
+  if (plan.trailingNewline && insertAt + plan.lines.length >= lines.length) next.push("");
   return next;
 }
 
@@ -41122,6 +41292,13 @@ function openLineScaffoldIsEmpty(lineText, emptyText) {
 }
 
 function pruneOpenLineScaffold(contents, scaffold) {
+  if (
+    scaffold &&
+    typeof scaffold.expectedEmptyText === "string" &&
+    String(contents) === scaffold.expectedEmptyText
+  ) {
+    return scaffold.originalText;
+  }
   if (!scaffold || typeof scaffold.lineIndex !== "number") return null;
   const doc = taskReqDocument(contents);
   const lineIndex = scaffold.lineIndex;
@@ -42247,7 +42424,9 @@ module.exports.helpers = {
   openLineClassify,
   openLineManagedRefuse,
   formatOpenLineTaskLine,
+  planOpenTaskNote,
   OPEN_LINE_MANAGED_NOTICE,
+  OPEN_LINE_NO_TASK_NOTICE,
   OPEN_LINE_PRJ_NO_TASKS_NOTICE,
   hasProjectBlockedResidentTag,
   mapOriginalLineToRemaining,
@@ -42461,6 +42640,7 @@ Object.assign(module.exports.helpers, {
   cyclerReqToggleLandingCh,
   cyclerReqToggleKind,
   cyclerReqTypingExpansion,
+  cyclerReqTypingRehomePlan,
   cyclerReqTypingBackspace,
   cyclerReqTypingAbsorb,
   cyclerReqTypingBlockedLine,

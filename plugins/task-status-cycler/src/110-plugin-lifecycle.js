@@ -57,6 +57,15 @@ class TaskStatusCyclerPlugin extends Plugin {
     });
 
     this.addCommand({
+      id: "open-task-note",
+      name: "Open note in task",
+      hotkeys: [{ modifiers: ["Ctrl", "Shift"], key: "O" }],
+      editorCheckCallback: (checking, editor, view) =>
+        this.runTaskSettleAwareCommand(checking, editor, () =>
+          this.handleOpenTaskNoteCommand(checking, editor, view)),
+    });
+
+    this.addCommand({
       id: "toggle-pomodoro-bullet",
       name: "Toggle Pomodoro placeholder/sub-bullet",
       hotkeys: [{ modifiers: ["Ctrl", "Alt"], key: "]" }],

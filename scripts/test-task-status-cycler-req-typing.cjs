@@ -16,6 +16,7 @@ const {
   cyclerReqTypingBackspace,
   cyclerReqTypingAbsorb,
   cyclerReqTypingBlockedLine,
+  cyclerReqTypingRehomePlan,
   cyclerReqTypingBuild,
   getOpenLineBelowPrefix,
 } = helpers;
@@ -85,6 +86,87 @@ test("fences and frontmatter block the assist", () => {
   assert.equal(cyclerReqTypingBlockedLine("---\n- [\n---\nbody", 1), true);
   assert.equal(cyclerReqTypingBlockedLine("---\nkey: v\n---\n- [", 3), false);
   assert.equal(cyclerReqTypingBlockedLine("- ```\n  - [\n  ```", 1), true);
+});
+
+test("typing a req on a direct child after a drawer rehomes it and scoops loose notes", () => {
+  const text = [
+    "- [ ] #task Ship",
+    "\t- loose note",
+    "\t- **FUTURE WORK**",
+    "\t\t- drawer note",
+    "\t- [",
+  ].join("\n");
+  const plan = cyclerReqTypingRehomePlan(text, 4, "\t- [", "");
+  assert.ok(plan);
+  assert.equal(plan.firstReq, true);
+  assert.equal(plan.scooped, 1);
+  assert.equal(plan.updated, [
+    "- [ ] #task Ship",
+    "\t- [ ] ",
+    "\t- **Notes**",
+    "\t\t- loose note",
+    "\t- **FUTURE WORK**",
+    "\t\t- drawer note",
+  ].join("\n"));
+});
+
+test("typing a req on a direct child after an existing req keeps the reqs zone", () => {
+  const text = [
+    "- [ ] #task Ship",
+    "\t- [ ] existing req",
+    "\t- **Notes**",
+    "\t\t- filed note",
+    "\t- [",
+  ].join("\n");
+  const plan = cyclerReqTypingRehomePlan(text, 4, "\t- [", "");
+  assert.ok(plan);
+  assert.equal(plan.firstReq, false);
+  assert.equal(plan.updated, [
+    "- [ ] #task Ship",
+    "\t- [ ] existing req",
+    "\t- [ ] ",
+    "\t- **Notes**",
+    "\t\t- filed note",
+  ].join("\n"));
+});
+
+test("the typing adapter applies a direct-child rehome as one isolated expansion", () => {
+  const text = [
+    "- [ ] #task Ship",
+    "\t- loose note",
+    "\t- **FUTURE WORK**",
+    "\t\t- drawer note",
+    "\t- [",
+  ].join("\n");
+  const plan = cyclerReqTypingRehomePlan(text, 4, "\t- [", "");
+  const view = makeFakeView(makeFakeCm(), text, text.length);
+  assert.equal(view.type(" "), true);
+  assert.equal(view.text, plan.updated);
+  const expectedLines = plan.updated.split("\n");
+  const expectedHead = expectedLines
+    .slice(0, plan.lineIndex)
+    .reduce((sum, line) => sum + line.length + 1, 0) + expectedLines[plan.lineIndex].length;
+  assert.equal(view.head, expectedHead);
+  assert.equal(view.transactions.length, 2);
+  assert.deepEqual(view.transactions[1].annotations, [
+    { kind: "isolateHistory", value: "full" },
+  ]);
+  const expanded = view.text;
+  assert.equal(view.type("]"), true);
+  assert.equal(view.type(" "), true);
+  assert.equal(view.text, expanded);
+});
+
+test("the typing adapter leaves checklists inside a drawer in place", () => {
+  const text = [
+    "- [ ] #task Ship",
+    "\t- **Notes**",
+    "\t\t- [",
+  ].join("\n");
+  assert.equal(cyclerReqTypingRehomePlan(text, 2, "\t\t- [", ""), null);
+  const view = makeFakeView(makeFakeCm(), text, text.length);
+  assert.equal(view.type(" "), true);
+  assert.equal(view.text, "- [ ] #task Ship\n\t- **Notes**\n\t\t- [ ] ");
 });
 
 // --- Fake CodeMirror -------------------------------------------------------

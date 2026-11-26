@@ -9,6 +9,7 @@ const OPEN_LINE_GROUP_TITLES = Object.freeze([
   "Done & Canceled",
 ]);
 const OPEN_LINE_MANAGED_NOTICE = "Managed line · not a task";
+const OPEN_LINE_NO_TASK_NOTICE = "Put the cursor in a task block to open a task note";
 const OPEN_LINE_PRJ_NO_TASKS_NOTICE = "No ## Tasks section — cannot open a task on ^prj";
 const OPEN_LINE_TASKS_TITLE = "Tasks";
 
@@ -84,6 +85,13 @@ function openLineSubtreeEnd(doc, lineIndex) {
 
 function openLineTaskLastLine(doc, task) {
   return taskBlockLastLineIn(doc, task);
+}
+
+function openLineLineIndexAtOffset(doc, offset) {
+  for (let index = 0; index <= doc.texts.length; index += 1) {
+    if (taskBlockLineOffset(doc, index) >= offset) return index;
+  }
+  return doc.texts.length;
 }
 
 function openLineOwningTask(doc, tasks, lineIndex) {
@@ -238,6 +246,9 @@ function openLineInsertPlan(options) {
     scaffoldKind,
     createdDrawer,
     notice,
+    scaffoldDrawerLineIndex,
+    scaffoldDrawerEmptyText,
+    trailingNewline,
   } = options;
   const inserted = Array.isArray(lines) ? lines.filter((line) => line !== null) : [lines];
   const cursorLine = insertBeforeLine + (inserted.length - 1);
@@ -252,12 +263,17 @@ function openLineInsertPlan(options) {
     recordJump: Boolean(recordJump),
     notice: notice || null,
     createdDrawer: Boolean(createdDrawer),
+    trailingNewline: Boolean(trailingNewline),
     scaffold: {
       kind: scaffoldKind,
       lineIndex: cursorLine,
       emptyText: inserted[inserted.length - 1],
-      drawerLineIndex: createdDrawer ? insertBeforeLine : null,
-      drawerEmptyText: createdDrawer ? inserted[0] : null,
+      drawerLineIndex: createdDrawer
+        ? (Number.isInteger(scaffoldDrawerLineIndex) ? scaffoldDrawerLineIndex : insertBeforeLine)
+        : null,
+      drawerEmptyText: createdDrawer
+        ? (typeof scaffoldDrawerEmptyText === "string" ? scaffoldDrawerEmptyText : inserted[0])
+        : null,
     },
   };
 }
@@ -337,14 +353,14 @@ function openLineNoteSlotPlan(contents, originLine, task) {
   let insertBeforeLine;
   let indent;
   if (home.home === "notes" && home.drawer) {
-    const insertion = taskBlockDrawerInsertion(working, home.drawer);
-    indent = insertion.indentation;
-    insertBeforeLine = doc.texts.length;
-    for (let index = 0; index <= doc.texts.length; index += 1) {
-      if (taskBlockLineOffset(doc, index) >= insertion.offset) {
-        insertBeforeLine = index;
-        break;
-      }
+    if (taskBlockIsPrjParent(working, workingTask)) {
+      const insertion = taskBlockH2InsertPosition(working, home.drawer);
+      indent = "";
+      insertBeforeLine = openLineLineIndexAtOffset(doc, insertion.offset);
+    } else {
+      const insertion = taskBlockDrawerInsertion(working, home.drawer);
+      indent = insertion.indentation;
+      insertBeforeLine = openLineLineIndexAtOffset(doc, insertion.offset);
     }
   } else if (home.home === "loose" && home.slot) {
     insertBeforeLine = home.slot.lineIndex;
@@ -356,6 +372,38 @@ function openLineNoteSlotPlan(contents, originLine, task) {
   }
   const noteLine = openLineBulletLine(indent);
   if (createdDrawer) {
+    if (taskBlockIsPrjParent(working, workingTask) && home.drawer) {
+      // The shared helper added a project H2 section at the end of `working`.
+      // Insert its header and note as one scaffold in the original note,
+      // keeping trailing blank lines and the final newline intact.
+      const originalDoc = taskReqDocument(text);
+      const sectionLine = home.drawer.lineIndex;
+      const insertBeforeLine = Math.min(sectionLine, originalDoc.texts.length);
+      const leadingBlanks = Math.max(0, sectionLine - originalDoc.texts.length);
+      const lines = [
+        ...Array(leadingBlanks).fill(""),
+        doc.texts[sectionLine],
+        noteLine,
+      ];
+      const appendsAtEnd = insertBeforeLine >= originalDoc.texts.length;
+      const plan = openLineInsertPlan({
+        originLine,
+        insertBeforeLine,
+        lines,
+        cursorCh: noteLine.length,
+        scaffoldKind: "note",
+        createdDrawer: true,
+        scaffoldDrawerLineIndex: insertBeforeLine + leadingBlanks,
+        scaffoldDrawerEmptyText: doc.texts[sectionLine],
+        trailingNewline: appendsAtEnd,
+      });
+      plan.scaffold.originalText = text;
+      plan.scaffold.expectedEmptyText = applyOpenLinePlanToLines(
+        originalDoc.texts,
+        plan,
+      ).join(taskBlockDocumentLineEnding(text));
+      return plan;
+    }
     const drawerDoc = taskReqDocument(working);
     const drawers = taskBlockDrawers(working, workingTask);
     const notes = drawers.find((entry) => entry.key === TASK_BLOCK_NOTES_KEY);
@@ -515,6 +563,17 @@ function planOpenLine(contents, lineIndex, direction, today) {
   }
 }
 
+function planOpenTaskNote(contents, lineIndex) {
+  const text = String(contents == null ? "" : contents);
+  const doc = taskReqDocument(text);
+  const tasks = taskReqNoteTasks(text);
+  const exact = openLineTaskAt(tasks, lineIndex);
+  const task = exact || openLineOwningTask(doc, tasks, lineIndex);
+  return task
+    ? openLineNoteSlotPlan(text, lineIndex, task)
+    : { kind: "refuse", notice: OPEN_LINE_NO_TASK_NOTICE };
+}
+
 function openLineJoin(contents, lines) {
   const ending = taskBlockDocumentLineEnding(contents);
   return lines.join(ending);
@@ -525,6 +584,7 @@ function applyOpenLinePlanToLines(lines, plan) {
   const next = lines.slice();
   const insertAt = Math.max(0, Math.min(plan.insertBeforeLine, next.length));
   next.splice(insertAt, 0, ...plan.lines);
+  if (plan.trailingNewline && insertAt + plan.lines.length >= lines.length) next.push("");
   return next;
 }
 
@@ -533,6 +593,13 @@ function openLineScaffoldIsEmpty(lineText, emptyText) {
 }
 
 function pruneOpenLineScaffold(contents, scaffold) {
+  if (
+    scaffold &&
+    typeof scaffold.expectedEmptyText === "string" &&
+    String(contents) === scaffold.expectedEmptyText
+  ) {
+    return scaffold.originalText;
+  }
   if (!scaffold || typeof scaffold.lineIndex !== "number") return null;
   const doc = taskReqDocument(contents);
   const lineIndex = scaffold.lineIndex;

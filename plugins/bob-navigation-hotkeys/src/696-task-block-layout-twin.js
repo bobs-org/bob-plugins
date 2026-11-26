@@ -513,6 +513,12 @@ function taskBlockNoteHome(contents, task, options) {
   const resolved = taskReqOptions(options);
   const doc = taskReqDocument(contents);
   const block = taskBlockReadIn(doc, task, resolved.globalFilter);
+  // The project's `^prj` task always files notes in the project `## Notes`
+  // section, including before it owns its first requirement.
+  if (taskBlockIsPrjParent(contents, task)) {
+    const drawer = taskBlockNotesDrawer(contents, task);
+    return drawer ? { home: "notes", drawer } : { home: "new-notes" };
+  }
   if (!taskBlockOwnsReqs(block)) return { home: "loose", slot: taskBlockInsertionSlotIn(doc, task, "authored", resolved) };
   const drawer = taskBlockNotesDrawer(contents, task);
   return drawer ? { home: "notes", drawer } : { home: "new-notes" };

@@ -25874,7 +25874,7 @@ function navSettleJumpLocations(path, outcome) {
       ? target.path
       : String(path || "");
   if (!destPath) return null;
-  const origin = outcome.cursor && Number.isInteger(outcome.cursor.line)
+  const cursor = outcome.cursor && Number.isInteger(outcome.cursor.line)
     ? {
         path: destPath,
         line: outcome.cursor.line,
@@ -25886,19 +25886,23 @@ function navSettleJumpLocations(path, outcome) {
     line: Number.isInteger(target.line) ? target.line : 0,
     ch: Number.isInteger(target.ch) ? target.ch : 0,
   };
-  if (!origin) return { origin: null, destination };
-  return { origin, destination };
+  if (!cursor) return { origin: null, destination };
+  // recordJump follows Vim's from -> to direction. Ctrl+O should return
+  // from the task's new settled line to the physical stay cursor.
+  return { origin: destination, destination: cursor };
 }
 
-function consumeNavSettleFlushResults(plugin, results) {
+function consumeNavSettleFlushResults(plugin, results, options = {}) {
   const list = Array.isArray(results) ? results : [];
   const consumed = [];
+  const recordJump = options.recordJump !== false;
   for (const entry of list) {
     if (!entry || typeof entry !== "object") continue;
     const result = entry.result && typeof entry.result === "object" ? entry.result : entry;
     const path = typeof entry.path === "string" ? entry.path : "";
     const jump = navSettleJumpLocations(path, result);
     if (
+      recordJump &&
       jump &&
       jump.origin &&
       jump.destination &&
@@ -26064,7 +26068,8 @@ class BobNavigationHotkeysTaskSettleMixin {
       } catch (_error) {
         return Object.freeze([]);
       }
-      return consumeNavSettleFlushResults(this, results);
+      // The pending scheduler's onSettled observer records this jump already.
+      return consumeNavSettleFlushResults(this, results, { recordJump: false });
     } finally {
       this._navTaskSettleFlushing = false;
     }
@@ -26570,6 +26575,85 @@ class BobNavigationHotkeysTaskSettleIntegrationMixin {
       tasksSettings: options.tasksSettings,
     });
   }
+}
+// ---- src/181d-nav-settled-writer.js ----
+// Shared final-write helpers for navigation dependency and relation writers.
+// Callers stage the complete gesture before handing it to taskSettle.
+function navApplySettledEditorPostimage(plugin, editor, path, expected, contents, options = {}) {
+  const before = String(expected == null ? "" : expected);
+  const staged = String(contents == null ? "" : contents);
+  if (plugin && typeof plugin.applyNavSettledEditorWrite === "function") {
+    let outcome = null;
+    try {
+      outcome = plugin.applyNavSettledEditorWrite(editor, path, {
+        expected: before,
+        contents: staged,
+        cursor: options.cursor || null,
+        identity: options.identity || null,
+        annotation: options.annotation || null,
+        today: options.today,
+      });
+    } catch (_error) {
+      outcome = null;
+    }
+    const live = editor && typeof editor.getValue === "function"
+      ? String(editor.getValue() || "")
+      : staged;
+    return Object.freeze({
+      ok: Boolean(outcome && outcome.applied === true),
+      contents: outcome && typeof outcome.contents === "string" ? outcome.contents : live,
+      outcome,
+    });
+  }
+  const ok = applyEditorContentTransaction(
+    editor,
+    before,
+    staged,
+    options.cursor || null,
+    options.annotation || null,
+  );
+  return Object.freeze({
+    ok,
+    contents: editor && typeof editor.getValue === "function"
+      ? String(editor.getValue() || "")
+      : staged,
+    outcome: null,
+  });
+}
+
+function navPrepareSettledFilePostimage(plugin, path, contents, options = {}) {
+  const staged = String(contents == null ? "" : contents);
+  try {
+    const prepared = plugin && typeof plugin.prepareNavSettledFilePostimage === "function"
+      ? plugin.prepareNavSettledFilePostimage(path, staged, options)
+      : null;
+    if (prepared && typeof prepared.contents === "string") {
+      return prepared;
+    }
+  } catch (_error) {
+    // A failed or unavailable provider preserves the existing gesture write.
+  }
+  return Object.freeze({ contents: staged, changed: false, lineMap: Object.freeze({}), provider: "none" });
+}
+
+async function navApplySettledVaultPostimage(plugin, vault, file, path, expected, contents, options = {}) {
+  const before = String(expected == null ? "" : expected);
+  const prepared = navPrepareSettledFilePostimage(plugin, path, contents, options);
+  let applied = false;
+  try {
+    await vault.process(file, (data) => {
+      if (String(data || "") !== before) return data;
+      applied = true;
+      return prepared.contents;
+    });
+  } catch (_error) {
+    applied = false;
+  }
+  return Object.freeze({
+    ok: applied,
+    contents: prepared.contents,
+    provider: prepared.provider || "none",
+  });
 }
 // ---- src/182-reload-history.js ----
 // Disk reloads stay out of the undo history.
@@ -49860,7 +49944,6 @@ class BobNavigationHotkeysProjectSubtreeMixin {
       return null;
     }
   }
-
   // Write one planned pass: one preimage-checked write per descendant note
   // (open editor transaction, else `vault.process`). A stale or failing
   // note is skipped and counted (PDG14); N is never rolled back. Never
@@ -49902,25 +49985,34 @@ class BobNavigationHotkeysProjectSubtreeMixin {
               : null;
           if (editor && typeof editor.getValue === "function") {
             if (String(editor.getValue() || "") === before) {
-              if (
-                applyEditorContentTransaction(editor, before, after) &&
-                String(editor.getValue() || "") === after
-              ) {
+              const result = navApplySettledEditorPostimage(
+                this,
+                editor,
+                path,
+                before,
+                after,
+                {
+                  annotation: BLOCKS_MACHINE_WRITE_ANNOTATION,
+                  today: pass && pass.today,
+                },
+              );
+              if (result.ok) {
                 done = true;
               }
             }
           } else if (vault && typeof vault.process === "function") {
             const file = fileByPath.get(path);
             if (file) {
-              let transformed = false;
-              await vault.process(file, (content) => {
-                if (String(content || "") !== before) {
-                  throw new Error(`Sub-project preimage changed: ${path}`);
-                }
-                transformed = true;
-                return after;
-              });
-              done = transformed;
+              const result = await navApplySettledVaultPostimage(
+                this,
+                vault,
+                file,
+                path,
+                before,
+                after,
+                { today: pass && pass.today },
+              );
+              done = result.ok;
             }
           }
         } catch (_error) {
@@ -49937,7 +50029,6 @@ class BobNavigationHotkeysProjectSubtreeMixin {
     }
     return Object.freeze({ written: written.length, skipped: skipped.length });
   }
-
   // Plan and write the pass for one `^prj` edit. Returns null when no pass
   // applies, else `{blocked, recovered, written, skipped, pomodoroTargets,
   // laneStatuses}`. A write failure is reported in counts, never thrown.
@@ -80930,7 +81021,14 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
     if (String(this.editor.getValue() || "") !== originalContent) {
       return this.refuseDependencyStale();
     }
-    if (!applyEditorContentTransaction(this.editor, originalContent, working, null, BLOCKS_MACHINE_WRITE_ANNOTATION)) {
+    if (!navApplySettledEditorPostimage(
+      this.plugin,
+      this.editor,
+      ownerPath,
+      originalContent,
+      working,
+      { annotation: BLOCKS_MACHINE_WRITE_ANNOTATION, today },
+    ).ok) {
       new Notice("Could not update counted dependencies; no tasks were updated");
       return false;
     }
@@ -81234,9 +81332,14 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
       getNavigationPomodoroThemesApi(this.plugin && this.plugin.app),
     );
     working = vaultPomodoroPrep.commitContent;
-    if (
-      !applyEditorContentTransaction(this.editor, originalContent, working, null, BLOCKS_MACHINE_WRITE_ANNOTATION)
-    ) {
+    if (!navApplySettledEditorPostimage(
+      this.plugin,
+      this.editor,
+      ownerPath,
+      originalContent,
+      working,
+      { annotation: BLOCKS_MACHINE_WRITE_ANNOTATION, today: new Date() },
+    ).ok) {
       new Notice("Could not update counted dependencies; no tasks were updated");
       return false;
     }
@@ -87091,7 +87194,14 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
       }
     }
     if (batchPlan.changed) {
-      if (!applyEditorContentTransaction(this.editor, originalContent, batchCommitContent, null, BLOCKS_MACHINE_WRITE_ANNOTATION)) {
+      if (!navApplySettledEditorPostimage(
+        this.plugin,
+        this.editor,
+        filePath,
+        originalContent,
+        batchCommitContent,
+        { annotation: BLOCKS_MACHINE_WRITE_ANNOTATION, today: new Date() },
+      ).ok) {
         new Notice("Could not update bullet property");
         return false;
       }
@@ -110296,15 +110406,19 @@ class BobNavigationHotkeysPropertyDependencyMixin {
             }
           }
           // Stamped above (the hand-edit mirror never stamps freshness).
-          const committed = applyEditorContentTransaction(
+          const committed = navApplySettledEditorPostimage(
+            this,
             editor,
+            parentPath,
             content,
             nextContent,
-            null,
-            BLOCKS_MACHINE_WRITE_ANNOTATION,
+            {
+              annotation: BLOCKS_MACHINE_WRITE_ANNOTATION,
+              today: args.today || new Date(),
+            },
           );
-          return committed
-            ? { ok: true }
+          return committed.ok
+            ? { ok: true, contents: committed.contents }
             : { ok: false, reason: "commit-failed" };
         },
       });
@@ -111499,7 +111613,7 @@ class BobNavigationHotkeysBlocksEditMixin {
     return null;
   }
 
-  async writeBlocksEditNote(filePath, preimage, nextContent) {
+  async writeBlocksEditNote(filePath, preimage, nextContent, options = {}) {
     const path = normalizeVaultRelativePath(filePath || "");
     const before = String(preimage || "");
     const after = String(nextContent || "");
@@ -111514,14 +111628,26 @@ class BobNavigationHotkeysBlocksEditMixin {
       if (String(editor.getValue() || "") !== before) {
         return Object.freeze({ ok: false, reason: "changed" });
       }
-      const committed = applyEditorContentTransaction(
-        editor,
-        before,
-        after,
-        null,
-        BLOCKS_MACHINE_WRITE_ANNOTATION,
-      );
-      return committed
+      const committed = options.settle === true
+        ? navApplySettledEditorPostimage(
+            this,
+            editor,
+            path,
+            before,
+            after,
+            {
+              annotation: BLOCKS_MACHINE_WRITE_ANNOTATION,
+              today: options.today,
+            },
+          )
+        : { ok: applyEditorContentTransaction(
+            editor,
+            before,
+            after,
+            null,
+            BLOCKS_MACHINE_WRITE_ANNOTATION,
+          ) };
+      return committed.ok
         ? Object.freeze({ ok: true, reason: null, via: "editor" })
         : Object.freeze({ ok: false, reason: "commit-failed" });
     }
@@ -111532,6 +111658,20 @@ class BobNavigationHotkeysBlocksEditMixin {
         : null;
     if (!file || !vault || typeof vault.process !== "function") {
       return Object.freeze({ ok: false, reason: "target-unavailable" });
+    }
+    if (options.settle === true) {
+      const committed = await navApplySettledVaultPostimage(
+        this,
+        vault,
+        file,
+        path,
+        before,
+        after,
+        { today: options.today },
+      );
+      return committed.ok
+        ? Object.freeze({ ok: true, reason: null, via: "vault", contents: committed.contents })
+        : Object.freeze({ ok: false, reason: "changed" });
     }
     let applied = false;
     try {
@@ -111921,6 +112061,7 @@ class BobNavigationHotkeysBlocksEditMixin {
           write.path,
           write.original,
           write.nextContent,
+          { settle: write.foldedDependents, today },
         );
         if (!result.ok) {
           return refuse(stale, stale);
@@ -111943,6 +112084,7 @@ class BobNavigationHotkeysBlocksEditMixin {
           write.path,
           write.original,
           write.nextContent,
+          { settle: true, today },
         );
         const refs = (write.tPlans || []).map((entry) => refOf(write, entry));
         if (result.ok) {
@@ -112330,7 +112472,7 @@ class BobNavigationHotkeysRelationEditMixin {
     return null;
   }
 
-  async writeRelationEditNote(filePath, preimage, nextContent) {
+  async writeRelationEditNote(filePath, preimage, nextContent, options = {}) {
     const path = normalizeVaultRelativePath(filePath || "");
     const before = String(preimage || "");
     const after = String(nextContent || "");
@@ -112345,14 +112487,26 @@ class BobNavigationHotkeysRelationEditMixin {
       if (String(editor.getValue() || "") !== before) {
         return Object.freeze({ ok: false, reason: "changed" });
       }
-      const committed = applyEditorContentTransaction(
-        editor,
-        before,
-        after,
-        null,
-        RELATIONS_MACHINE_WRITE_ANNOTATION,
-      );
-      return committed
+      const committed = options.settle === true
+        ? navApplySettledEditorPostimage(
+            this,
+            editor,
+            path,
+            before,
+            after,
+            {
+              annotation: RELATIONS_MACHINE_WRITE_ANNOTATION,
+              today: options.today,
+            },
+          )
+        : { ok: applyEditorContentTransaction(
+            editor,
+            before,
+            after,
+            null,
+            RELATIONS_MACHINE_WRITE_ANNOTATION,
+          ) };
+      return committed.ok
         ? Object.freeze({ ok: true, reason: null, via: "editor" })
         : Object.freeze({ ok: false, reason: "commit-failed" });
     }
@@ -112363,6 +112517,20 @@ class BobNavigationHotkeysRelationEditMixin {
         : null;
     if (!file || !vault || typeof vault.process !== "function") {
       return Object.freeze({ ok: false, reason: "target-unavailable" });
+    }
+    if (options.settle === true) {
+      const committed = await navApplySettledVaultPostimage(
+        this,
+        vault,
+        file,
+        path,
+        before,
+        after,
+        { today: options.today },
+      );
+      return committed.ok
+        ? Object.freeze({ ok: true, reason: null, via: "vault", contents: committed.contents })
+        : Object.freeze({ ok: false, reason: "changed" });
     }
     let applied = false;
     try {
@@ -113063,11 +113231,17 @@ class BobNavigationHotkeysRelationEditMixin {
       }
 
       const failed = [];
+      const settlePaths = new Set(
+        [...cancelledIdentities, ...completedIdentities]
+          .map((identity) => normalizeVaultRelativePath(identity && identity.path))
+          .filter(Boolean),
+      );
       for (const write of sourceWrites.values()) {
         const result = await this.writeRelationEditNote(
           write.path,
           write.original,
           write.nextContent,
+          { settle: settlePaths.has(write.path), today },
         );
         if (!result.ok) {
           failed.push(write.path);
@@ -115740,7 +115914,15 @@ class BobNavigationHotkeysDependencyMirrorMixin {
     );
     const nextContent = folded.content;
     if (nextContent !== originalContent) {
-      if (!applyEditorContentTransaction(cm, originalContent, nextContent, null, BLOCKS_MACHINE_WRITE_ANNOTATION)) {
+      const committed = navApplySettledEditorPostimage(
+        this,
+        cm,
+        filePath,
+        originalContent,
+        nextContent,
+        { annotation: BLOCKS_MACHINE_WRITE_ANNOTATION, today },
+      );
+      if (!committed.ok) {
         new Notice("Could not update bullet property");
         return false;
       }
@@ -116004,15 +116186,25 @@ class BobNavigationHotkeysDependencyMirrorMixin {
     }
     const finalLines = working.split(/\r?\n/);
     const anchor = Math.max(0, Math.min(cursor.line, finalLines.length - 1));
-    if (
-      !applyEditorContentTransaction(cm, originalContent, working, {
-        line: anchor,
-        ch: Math.min(
-          Math.max(cursor.ch, 0),
-          String(finalLines[anchor] || "").length,
-        ),
-      }, BLOCKS_MACHINE_WRITE_ANNOTATION)
-    ) {
+    const committed = navApplySettledEditorPostimage(
+      this,
+      cm,
+      parentPath,
+      originalContent,
+      working,
+      {
+        cursor: {
+          line: anchor,
+          ch: Math.min(
+            Math.max(cursor.ch, 0),
+            String(finalLines[anchor] || "").length,
+          ),
+        },
+        annotation: BLOCKS_MACHINE_WRITE_ANNOTATION,
+        today,
+      },
+    );
+    if (!committed.ok) {
       new Notice("Could not delete task dependencies; no tasks were updated");
       return null;
     }
@@ -116133,102 +116325,7 @@ class BobNavigationHotkeysDependencyMirrorMixin {
   // R9 half of the hand-edit mirror: drop the linkless line(s) and the field,
   // then recover immediately (ADJ-8) when no open prerequisite remains.
   async applyDependencyHandEditClear(editor, parentPath, plan, options = {}) {
-    const content = String(editor.getValue() || "");
-    const { lines, lineEnding } = splitMarkdownContent(content);
-    const owning = plan.owning;
-    if (!Number.isInteger(owning) || owning < 0 || owning >= lines.length) {
-      return Object.freeze({ mirrored: false });
-    }
-    if (isBlockquotedMarkdownLine(lines[owning])) {
-      return Object.freeze({ mirrored: false });
-    }
-    const next = lines.slice();
-    if (plan.kind === "clear-empty" && Array.isArray(plan.emptyLines)) {
-      const dels = plan.emptyLines
-        .filter((line) => line !== owning)
-        .sort((a, b) => b - a);
-      for (const line of dels) {
-        if (line >= 0 && line < next.length) {
-          next.splice(line, 1);
-        }
-      }
-    }
-    let parentText = deleteBulletProperty(String(next[owning] || ""), "dependsOn").line;
-    const registry =
-      options.registry || (await readTasksStatusRegistry(this.app));
-    const preview = next.slice();
-    preview[owning] = parentText;
-    const previewContent = preview.join(lineEnding);
-    const recoveryToday = options.today || new Date();
-    // The snapshot costs a whole-vault read, so build it only for a `[?]`
-    // dependent: recovery can never fire otherwise (same gate as
-    // `needsDependencyRecoverySnapshot`; adds never reach this clear path).
-    const clearNeedsSnapshot =
-      getObsidianTaskCheckboxStatus(String(lines[owning] || "")) === "?";
-    let recoverySnapshot = options.vaultContents !== undefined ? options.vaultContents : null;
-    if (options.vaultContents === undefined && clearNeedsSnapshot && typeof this.readDependencyRecoveryVaultContents === "function") {
-      try {
-        recoverySnapshot = await this.readDependencyRecoveryVaultContents(parentPath, previewContent);
-      } catch (_snapshotError) {
-        recoverySnapshot = null;
-      }
-    }
-    const recoveryNotes = [];
-    if (recoverySnapshot instanceof Map) {
-      for (const [filePath, fileContent] of recoverySnapshot) {
-        const normalized = normalizeVaultRelativePath(filePath);
-        if (!normalized) {
-          continue;
-        }
-        recoveryNotes.push({
-          path: normalized,
-          content: normalized === normalizeVaultRelativePath(parentPath) ? previewContent : String(fileContent || ""),
-        });
-      }
-    } else if (recoverySnapshot && typeof recoverySnapshot === "object") {
-      for (const filePath of Object.keys(recoverySnapshot)) {
-        const normalized = normalizeVaultRelativePath(filePath);
-        if (!normalized) {
-          continue;
-        }
-        recoveryNotes.push({
-          path: normalized,
-          content: normalized === normalizeVaultRelativePath(parentPath) ? previewContent : String(recoverySnapshot[filePath] || ""),
-        });
-      }
-    }
-    if (!recoveryNotes.some((note) => normalizeVaultRelativePath(note.path) === normalizeVaultRelativePath(parentPath))) {
-      recoveryNotes.push({ path: parentPath, content: previewContent });
-    }
-    const recoveryIndex = buildScheduledRecoveryIndex(
-      recoveryNotes,
-      registry,
-      recoveryToday,
-    );
-    const metadata = getScheduledRecoveryMetadata(
-      recoveryIndex,
-      parentPath,
-      owning,
-    );
-    const reconciled = reconcileBlockedScheduledTaskLine(parentText, metadata);
-    parentText = reconciled.line;
-    // The hand-edit mirror never stamps freshness.
-    next[owning] = parentText;
-    const nextContent = next.join(lineEnding);
-    if (nextContent === content) {
-      return Object.freeze({ mirrored: false });
-    }
-    const cursor = getEditorCursor(editor);
-    if (
-      !applyEditorContentTransaction(editor, content, nextContent, {
-        line: cursor ? cursor.line : owning,
-        ch: cursor ? cursor.ch : 0,
-      })
-    ) {
-      new Notice("Could not mirror dependency edit");
-      return Object.freeze({ mirrored: false });
-    }
-    return Object.freeze({ mirrored: true });
+    return navApplyDependencyHandEditClear(this, editor, parentPath, plan, options);
   }
 
   // CM6 update-listener entry for the hand-edit mirror: reads the real
@@ -116684,6 +116781,90 @@ class BobNavigationHotkeysDependencyMirrorGuardMixin {
     this.cancelPendingDependencyHandEditMirror();
     return true;
   }
+}
+// ---- src/600b-dependency-hand-edit-settle.js ----
+// R9 half of the hand-edit mirror: drop linkless Depends-On lines and settle
+// the complete guarded postimage before applying it as one annotated write.
+async function navApplyDependencyHandEditClear(plugin, editor, parentPath, plan, options = {}) {
+  const content = String(editor.getValue() || "");
+  const { lines, lineEnding } = splitMarkdownContent(content);
+  const owning = plan.owning;
+  if (!Number.isInteger(owning) || owning < 0 || owning >= lines.length) {
+    return Object.freeze({ mirrored: false });
+  }
+  if (isBlockquotedMarkdownLine(lines[owning])) {
+    return Object.freeze({ mirrored: false });
+  }
+  const next = lines.slice();
+  if (plan.kind === "clear-empty" && Array.isArray(plan.emptyLines)) {
+    const dels = plan.emptyLines.filter((line) => line !== owning).sort((a, b) => b - a);
+    for (const line of dels) {
+      if (line >= 0 && line < next.length) next.splice(line, 1);
+    }
+  }
+  let parentText = deleteBulletProperty(String(next[owning] || ""), "dependsOn").line;
+  const registry = options.registry || (await readTasksStatusRegistry(plugin.app));
+  const preview = next.slice();
+  preview[owning] = parentText;
+  const previewContent = preview.join(lineEnding);
+  const recoveryToday = options.today || new Date();
+  const clearNeedsSnapshot = getObsidianTaskCheckboxStatus(String(lines[owning] || "")) === "?";
+  let recoverySnapshot = options.vaultContents !== undefined ? options.vaultContents : null;
+  if (options.vaultContents === undefined && clearNeedsSnapshot &&
+      typeof plugin.readDependencyRecoveryVaultContents === "function") {
+    try {
+      recoverySnapshot = await plugin.readDependencyRecoveryVaultContents(parentPath, previewContent);
+    } catch (_snapshotError) {
+      recoverySnapshot = null;
+    }
+  }
+  const recoveryNotes = [];
+  if (recoverySnapshot instanceof Map) {
+    for (const [filePath, fileContent] of recoverySnapshot) {
+      const normalized = normalizeVaultRelativePath(filePath);
+      if (!normalized) continue;
+      recoveryNotes.push({
+        path: normalized,
+        content: normalized === normalizeVaultRelativePath(parentPath) ? previewContent : String(fileContent || ""),
+      });
+    }
+  } else if (recoverySnapshot && typeof recoverySnapshot === "object") {
+    for (const filePath of Object.keys(recoverySnapshot)) {
+      const normalized = normalizeVaultRelativePath(filePath);
+      if (!normalized) continue;
+      recoveryNotes.push({
+        path: normalized,
+        content: normalized === normalizeVaultRelativePath(parentPath) ? previewContent : String(recoverySnapshot[filePath] || ""),
+      });
+    }
+  }
+  if (!recoveryNotes.some((note) => normalizeVaultRelativePath(note.path) === normalizeVaultRelativePath(parentPath))) {
+    recoveryNotes.push({ path: parentPath, content: previewContent });
+  }
+  const recoveryIndex = buildScheduledRecoveryIndex(recoveryNotes, registry, recoveryToday);
+  const metadata = getScheduledRecoveryMetadata(recoveryIndex, parentPath, owning);
+  parentText = reconcileBlockedScheduledTaskLine(parentText, metadata).line;
+  next[owning] = parentText;
+  const nextContent = next.join(lineEnding);
+  if (nextContent === content) return Object.freeze({ mirrored: false });
+  const cursor = getEditorCursor(editor);
+  const committed = navApplySettledEditorPostimage(
+    plugin,
+    editor,
+    parentPath,
+    content,
+    nextContent,
+    {
+      cursor: { line: cursor ? cursor.line : owning, ch: cursor ? cursor.ch : 0 },
+      annotation: BLOCKS_MACHINE_WRITE_ANNOTATION,
+      today: recoveryToday,
+    },
+  );
+  if (!committed.ok) {
+    new Notice("Could not mirror dependency edit");
+    return Object.freeze({ mirrored: false });
+  }
+  return Object.freeze({ mirrored: true });
 }
 // ---- src/610-plugin-jumps-and-counted-keys.js ----
 class BobNavigationHotkeysJumpKeyMixin {
@@ -140301,6 +140482,12 @@ function taskBlockNoteHome(contents, task, options) {
   const resolved = taskReqOptions(options);
   const doc = taskReqDocument(contents);
   const block = taskBlockReadIn(doc, task, resolved.globalFilter);
+  // The project's `^prj` task always files notes in the project `## Notes`
+  // section, including before it owns its first requirement.
+  if (taskBlockIsPrjParent(contents, task)) {
+    const drawer = taskBlockNotesDrawer(contents, task);
+    return drawer ? { home: "notes", drawer } : { home: "new-notes" };
+  }
   if (!taskBlockOwnsReqs(block)) return { home: "loose", slot: taskBlockInsertionSlotIn(doc, task, "authored", resolved) };
   const drawer = taskBlockNotesDrawer(contents, task);
   return drawer ? { home: "notes", drawer } : { home: "new-notes" };

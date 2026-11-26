@@ -577,6 +577,7 @@ test("Ctrl+Shift+] refuses managed lines and still refuses reqs and bank rows fi
 
 test("Vim o/O apply as one replaceRange and undo restores the original", () => {
   const plugin = makePlugin();
+  plugin.getCreatedDateString = () => TODAY;
   const text = "- [ ] #task Ship\n\t- [ ] req\n\t- a note";
   const editor = wrapEditor(text, { line: 0, ch: 8 });
   const original = editor.getValue();
@@ -592,6 +593,7 @@ test("Vim o/O apply as one replaceRange and undo restores the original", () => {
 
 test("empty-scaffold prune on insert-leave, blur, and editor reuse", () => {
   const plugin = makePlugin("Daily.md");
+  plugin.getCreatedDateString = () => TODAY;
   const text = "- [ ] #task Ship";
   const editor = wrapEditor(text, { line: 0, ch: 8 });
   plugin.applyVimOpenLine(editor, "below");

@@ -215,6 +215,7 @@
   "249a-plugin-bank-walk-index.js",
   "249b-plugin-home-card-model.js",
   "249c-plugin-home-card-dom.js",
+  "249ca-plugin-home-card-property-editor-routing.js",
   "249d-plugin-home-card-host.js",
   "249da-plugin-home-card-ownership.js",
   "249db-plugin-bank-area-arbitration.js",

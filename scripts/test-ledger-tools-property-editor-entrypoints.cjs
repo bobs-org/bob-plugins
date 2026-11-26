@@ -372,6 +372,23 @@ test("setup registers the palette command, the + arm, and the drawer hook", () =
   assert.equal(cleared.onEditAll, null);
 });
 
+test("bare + routes the Bank Area home to its first Settings row with the bank wire kind", () => {
+  const inst = makeEntrypoints(makeApp({
+    files: ["bank.md"], activePath: "bank.md", frontmatter: { type: "[[area]]" },
+  }));
+  const calls = [];
+  inst.openPropertyEditor = (options) => { calls.push(options); return { ok: true }; };
+  try {
+    inst.setupPropertyEditorEntrypoints();
+    const arm = inst.propertyCardSecondKeyArmRegistry().get("+");
+    assert.ok(arm, "the production + arm is registered");
+    arm.run({ path: "bank.md" });
+    assert.deepEqual(calls, [{ filePath: "bank.md", noteKind: "bank", focusSettings: true }]);
+  } finally {
+    inst.teardownPropertyEditorEntrypoints();
+  }
+});
+
 test("drawer opener actions route through the editor hook with add/browse modes", async () => {
   const inst = makeEntrypoints(makeApp());
   try {

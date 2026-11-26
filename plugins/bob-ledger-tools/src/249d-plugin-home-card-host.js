@@ -37,29 +37,6 @@ function homeCardLinkPane(event) {
   return pane || false;
 }
 
-function homeCardIsDesktopPlatform(platform) {
-  try {
-    const host = platform === undefined ? Platform : platform;
-    return Boolean(host && host.isDesktopApp === true);
-  } catch (_) {
-    return false;
-  }
-}
-
-// bank.md can expose the Area home settings surface while retaining the bank
-// note kind used by the Rust props contract.
-function homeCardPropertyEditorNoteKind(path, frontmatter) {
-  try {
-    const eligible = homeCardEligible(path, frontmatter);
-    if (!eligible) return "";
-    if (eligible.kind === "area" && typeof bankSetupIsHubPath === "function"
-      && bankSetupIsHubPath(path) === true) return "bank";
-    return eligible.kind;
-  } catch (_) {
-    return "";
-  }
-}
-
 function homeCardScopeDenied(scope, root) {
   for (const node of [scope, root]) {
     if (!node || typeof node.closest !== "function") continue;

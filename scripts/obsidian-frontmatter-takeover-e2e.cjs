@@ -357,7 +357,7 @@ function makePage(ctx) {
     },
     keys: async (key, modifiers = 0) => {
       const code = /^[a-z]$/i.test(key) ? "Key" + key.toUpperCase()
-        : (key === "Enter" || key === "Escape" ? key : key);
+        : key === "[" ? "BracketLeft" : (key === "Enter" || key === "Escape" ? key : key);
       const text = !modifiers && key.length === 1 ? key : key === "Enter" ? "\r" : "";
       const payload = { key, code, modifiers, windowsVirtualKeyCode: 0, nativeVirtualKeyCode: 0 };
       if (text) { payload.text = text; payload.unmodifiedText = text; }
@@ -780,7 +780,7 @@ async function run(args) {
     await ctx.page.settle(400);
     await ctx.page.waitCapability("confirmed");
 
-    const ownCase = (name, notePath, mode) => attempt(name, async () => {
+    const ownCase = (name, notePath, mode, expectedHomeCard = null) => attempt(name, async () => {
       await ctx.page.open(ctx.main, notePath, mode);
       await ctx.page.settle(250);
       const probe = await ctx.page.waitOwned(ctx.main, mode, name);
@@ -788,6 +788,7 @@ async function run(args) {
       if (notePath === P.bank && probe.slotAnchor !== "metadata-container") {
         failures.push("bank title-slot anchor is " + probe.slotAnchor);
       }
+      if (expectedHomeCard) failures.push(...lib.homeCardFailures(probe, expectedHomeCard));
       return { ok: failures.length === 0, probe, failures };
     });
     await ownCase("own-day-live", P.day, "live");
@@ -798,6 +799,40 @@ async function run(args) {
     await ownCase("own-record-reading", P.record, "reading");
     await ownCase("own-album-live", P.album, "live");
     await ownCase("own-album-reading", P.album, "reading");
+    await ctx.page.ev(`(() => {
+      const key = "bob-navigation-hotkeys";
+      const plugins = app.plugins.plugins;
+      const original = plugins[key];
+      window.__bobFrontmatterTakeoverInboxRoute = { key, original, hadOriginal: Object.prototype.hasOwnProperty.call(plugins, key) };
+      plugins[key] = { api: { inboxRoute: { isInboxNote: (path) => path === ${JSON.stringify(P.inbox)} } } };
+      return true;
+    })()`);
+    await ownCase("own-area-live", P.area, "live", { kind: "area" });
+    await ownCase("own-area-reading", P.area, "reading", { kind: "area" });
+    await ownCase("own-subarea-live", P.subarea, "live", { kind: "area" });
+    await ownCase("own-subarea-reading", P.subarea, "reading", { kind: "area" });
+    await ownCase("own-inbox-live", P.inbox, "live", { kind: "area", inbox: true });
+    await ownCase("own-inbox-reading", P.inbox, "reading", { kind: "area", inbox: true });
+    await ownCase("own-project-live", P.project, "live", { kind: "project", terminal: false });
+    await ownCase("own-project-reading", P.project, "reading", { kind: "project", terminal: false });
+    await ownCase("own-project-terminal-live", P.projectTerminal, "live", { kind: "project", terminal: true });
+    await ownCase("own-project-terminal-reading", P.projectTerminal, "reading", { kind: "project", terminal: true });
+    await attempt("excluded-home-cards-native", async () => {
+      const paths = [P.untypedArea, P.untypedProject, P.excludedTemplate, P.excludedDone, P.excludedConflict];
+      const rows = [];
+      const failures = [];
+      for (const mode of ["live", "reading"]) for (const notePath of paths) {
+        await ctx.page.open(ctx.main, notePath, mode);
+        const probe = await ctx.page.waitNative(ctx.main, "excluded home-card fixture " + notePath + " " + mode);
+        const rowFailures = lib.nativeFailures(probe, notePath + " " + mode);
+        if (probe.path !== notePath) rowFailures.push("wrong exclusion note remained open");
+        if (probe.visibleContainerCount !== 1) rowFailures.push("native Properties are not visible");
+        if (probe.cardCount !== 0 || probe.homeCardCount !== 0 || probe.cardPresent) rowFailures.push("excluded note acquired a home card");
+        failures.push(...rowFailures);
+        rows.push({ path: notePath, mode, probe, failures: rowFailures });
+      }
+      return { ok: failures.length === 0, rows, failures };
+    });
     await attempt("foreign-refresh-keeps-ownership", async () => {
       let extraLeaves = [];
       try {
@@ -968,6 +1003,191 @@ async function run(args) {
       await ctx.page.stopOpenerWatch("bank");
       await ctx.page.ev(`app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}]?.bankSetupCardModal?.close?.()`);
       return { ok: failures.length === 0, plus: plusEvidence, bank: { modal: bankModal, opener: bankOpener }, failures };
+    });
+    await attempt("home-card-gestures-live", async () => {
+      const failures = [];
+      const cases = [
+        { path: P.area, kind: "area", title: "Area" },
+        { path: P.project, kind: "project", title: "Project" },
+      ];
+      const openSettings = async (row, label) => {
+        await ctx.page.open(ctx.main, row.path, "live");
+        const owned = await ctx.page.waitOwned(ctx.main, "live", label + " setup");
+        const watch = await ctx.page.startOpenerWatch("property");
+        if (!watch?.installed) failures.push(label + ": could not observe the Property Editor opener");
+        await ctx.page.keys("=");
+        await ctx.page.keys("=");
+        const modal = await ctx.page.waitModal("property", "bob-property-editor-modal", label + " == Settings", 15_000);
+        const opener = await ctx.page.waitOpener("property", label + " settings opener");
+        failures.push(...lib.modalLifecycleFailures(modal, "bob-property-editor-modal", opener));
+        if (modal.noteKind !== row.kind || !modal.hasSettingsGroup) failures.push(label + ": == did not open the species Settings editor");
+        await ctx.page.stopOpenerWatch("property");
+        return { owned, modal, opener };
+      };
+      const rows = [];
+      for (const row of cases) {
+        await ctx.page.open(ctx.main, row.path, "live");
+        let probe = await ctx.page.waitOwned(ctx.main, "live", row.title + " gesture setup");
+        failures.push(...lib.homeCardFailures(probe, { kind: row.kind }));
+        await ctx.page.keys("-");
+        await waitFor(client, `window.__bobFrontmatterTakeover.probe(${JSON.stringify(ctx.main)}).drawerOpen`, Boolean,
+          row.title + " drawer opens on -", 10_000);
+        const drawerOpen = await ctx.page.probe(ctx.main);
+        if (!drawerOpen.drawerOpen) failures.push(row.title + ": - did not open the Properties drawer");
+        await ctx.page.keys("-");
+        await waitFor(client, `!window.__bobFrontmatterTakeover.probe(${JSON.stringify(ctx.main)}).drawerOpen`, Boolean,
+          row.title + " drawer closes on -", 10_000);
+        await ctx.page.keys("_", 8);
+        await waitFor(client, `window.__bobFrontmatterTakeover.probe(${JSON.stringify(ctx.main)}).homeCardCollapsed`, Boolean,
+          row.title + " card folds on _", 10_000);
+        const folded = await ctx.page.probe(ctx.main);
+        if (!folded.homeCardCollapsed || !folded.footPresent) failures.push(row.title + ": _ did not fold the card while keeping its foot");
+        await ctx.page.keys("_", 8);
+        await waitFor(client, `!window.__bobFrontmatterTakeover.probe(${JSON.stringify(ctx.main)}).homeCardCollapsed`, Boolean,
+          row.title + " card expands on _", 10_000);
+        const expanded = await ctx.page.probe(ctx.main);
+        if (expanded.homeCardCollapsed) failures.push(row.title + ": _ did not restore the card details");
+        const sourceLines = notes[row.path].split("\n");
+        const visibleBodyIndex = sourceLines.findIndex((line) => row.kind === "area"
+          ? line === "Visible Area body text."
+          : line.includes("#task #prj Launch the rollout ^prj"));
+        const cursorStartIndex = row.kind === "area"
+          ? sourceLines.findIndex((line) => line === "# Hidden Area Heading")
+          : visibleBodyIndex;
+        const cursorPlaced = await ctx.page.ev("window.__bobFrontmatterTakeover.setCursor(" + JSON.stringify(ctx.main) + ", " + cursorStartIndex + ", 0)");
+        await ctx.page.keys("Escape");
+        await ctx.page.keys("g");
+        await ctx.page.keys("g");
+        await ctx.page.keys("k");
+        await ctx.page.keys("ArrowUp");
+        const cursorAfter = await ctx.page.ev(`(() => {
+          const cm = app.workspace.getLeafById(${JSON.stringify(ctx.main)})?.view?.editor?.cm;
+          if (!cm) return null;
+          const line = cm.state.doc.lineAt(cm.state.selection.main.head);
+          return { lineNumber: line.number - 1, lineText: line.text };
+        })()`);
+        const vimProbe = await ctx.page.probe(ctx.main);
+        if (!cursorPlaced?.ok || visibleBodyIndex < 0 || cursorAfter?.lineNumber < visibleBodyIndex
+          || cursorAfter?.lineText === "---" || String(cursorAfter?.lineText || "").startsWith("#")) {
+          failures.push(row.title + ": k/gg/Up landed in hidden YAML/title content instead of visible body text");
+        }
+        if (vimProbe.activeInside) failures.push(row.title + ": Vim navigation focused hidden native Properties");
+
+        const settings = await openSettings(row, row.title);
+        await ctx.page.keys("Escape");
+        await waitFor(client, `!document.querySelector(".bob-property-editor")`, Boolean,
+          row.title + " Settings close on Esc", 10_000);
+
+        await ctx.page.open(ctx.main, row.path, "live");
+        await ctx.page.waitOwned(ctx.main, "live", row.title + " generic editor setup");
+        await ctx.page.keys("+");
+        const generic = await ctx.page.waitModal("property", "bob-property-editor-modal", row.title + " bare + editor", 15_000);
+        if (generic.noteKind !== row.kind || generic.editorMode !== "browse") failures.push(row.title + ": bare + did not open the generic Property Editor");
+        await ctx.page.keys("Escape");
+        await waitFor(client, `!document.querySelector(".bob-property-editor")`, Boolean,
+          row.title + " generic editor close", 10_000);
+
+        const closeResults = [];
+        for (const close of [
+          { name: "q", key: "q", modifiers: 0 },
+          { name: "Ctrl+[", key: "[", modifiers: 2 },
+        ]) {
+          const opened = await openSettings(row, row.title + " " + close.name);
+          const focused = await ctx.page.ev(`(() => {
+            const root = document.querySelector(".bob-property-editor");
+            if (!root) return false;
+            root.tabIndex = -1;
+            root.focus();
+            return document.activeElement === root;
+          })()`);
+          if (!focused) failures.push(row.title + ": could not focus panel chrome for " + close.name);
+          await ctx.page.keys(close.key, close.modifiers);
+          const closed = await waitFor(client, `!document.querySelector(".bob-property-editor")`, Boolean,
+            row.title + " Settings close on " + close.name, 10_000);
+          if (!closed) failures.push(row.title + ": Settings did not close on " + close.name);
+          closeResults.push({ key: close.name, focused, closed, opened: opened.modal });
+        }
+        rows.push({ path: row.path, owned: probe, drawerOpen, folded, expanded,
+          vim: { cursorPlaced, cursorAfter, visibleBodyIndex }, settings, closeResults, generic });
+      }
+      return { ok: failures.length === 0, rows, failures };
+    });
+    await attempt("project-prj-line-integrity-live", async () => {
+      await ctx.page.open(ctx.main, P.project, "live");
+      const owned = await ctx.page.waitOwned(ctx.main, "live", "project ^prj integrity setup");
+      const original = notes[P.project];
+      const prjLine = original.split("\n").find((line) => line.includes("^prj")) || "";
+      const expectedHash = crypto.createHash("sha256").update(prjLine).digest("hex");
+      const selected = await ctx.page.ev(`(() => {
+        const leaf = app.workspace.getLeafById(${JSON.stringify(ctx.main)});
+        const cm = leaf?.view?.editor?.cm;
+        if (!cm) return { ok: false, reason: "CodeMirror missing" };
+        cm.focus();
+        const lineNumber = Array.from({ length: cm.state.doc.lines }, (_, index) => index + 1)
+          .find((index) => cm.state.doc.line(index).text.includes("^prj"));
+        if (!lineNumber) return { ok: false, reason: "^prj line missing" };
+        const line = cm.state.doc.line(lineNumber);
+        cm.dispatch({ selection: { anchor: line.from, head: line.to } });
+        return { ok: true, lineNumber, text: cm.state.doc.sliceString(line.from, line.to),
+          selection: cm.state.selection.main.toJSON(), selectedText: cm.state.sliceDoc(cm.state.selection.main.from, cm.state.selection.main.to) };
+      })()`);
+      const selectionWorks = selected?.ok === true && selected.text === prjLine && selected.selectedText === prjLine;
+      const before = await ctx.page.probe(ctx.main);
+      const failures = [];
+      if (!selectionWorks) failures.push("cursor selection did not cover the exact ^prj line");
+      failures.push(...lib.homeCardFailures(before, { kind: "project", terminal: false }));
+      let ime = { covered: false, reason: "CDP IME composition was not attempted" };
+      let compositionError = null;
+      try {
+        await client.call("Input.imeSetComposition", { text: "仮", selectionStart: 1, selectionEnd: 1 });
+        const composed = await ctx.page.ev(`(() => {
+          const cm = app.workspace.getLeafById(${JSON.stringify(ctx.main)})?.view?.editor?.cm;
+          if (!cm) return null;
+          const pos = cm.state.selection.main.head;
+          return { text: cm.state.doc.lineAt(pos).text, lineNumber: cm.state.doc.lineAt(pos).number, doc: cm.state.doc.toString() };
+        })()`);
+        ime = { covered: Boolean(composed && composed.doc !== original && composed.lineNumber === selected.lineNumber), composed };
+        if (!ime.covered) ime.reason = "Input.imeSetComposition did not compose on the selected ^prj line";
+      } catch (error) {
+        compositionError = String(error?.message || error);
+        ime = { covered: false, reason: compositionError };
+      } finally {
+        await ctx.page.ev(`(() => {
+          const cm = app.workspace.getLeafById(${JSON.stringify(ctx.main)})?.view?.editor?.cm;
+          if (!cm) return false;
+          cm.dispatch({ changes: { from: 0, to: cm.state.doc.length, insert: ${JSON.stringify(original)} } });
+          return cm.state.doc.toString() === ${JSON.stringify(original)};
+        })()`);
+      }
+      if (!ime.covered) failures.push("IME composition could not be verified on the ^prj line: " + ime.reason);
+      const lineNo = original.split("\n").findIndex((line) => line === "Scratch line beside the project id.");
+      const scratchPlaced = await ctx.page.ev("window.__bobFrontmatterTakeover.setCursor(" + JSON.stringify(ctx.main) + ", " + lineNo + ", 0)");
+      if (!scratchPlaced?.ok) failures.push("could not place the caret on the adjacent scratch line");
+      await ctx.page.keys("x");
+      const afterTyping = await ctx.page.ev(`(() => {
+        const cm = app.workspace.getLeafById(${JSON.stringify(ctx.main)})?.view?.editor?.cm;
+        if (!cm) return null;
+        return { doc: cm.state.doc.toString(), line: cm.state.doc.toString().split("\\n").find((row) => row.includes("^prj")) || "" };
+      })()`);
+      const after = await ctx.page.probe(ctx.main);
+      const afterHash = crypto.createHash("sha256").update(afterTyping?.line || "").digest("hex");
+      if (afterTyping?.line !== prjLine || afterHash !== expectedHash) failures.push("typing on the adjacent scratch line changed ^prj bytes");
+      failures.push(...lib.homeCardFailures(after, { kind: "project", terminal: false }));
+      if (!after?.actualOwned || after?.visibleContainerCount !== 0) failures.push("project takeover was lost during the ^prj edit gesture");
+      if (before?.cardRect && after?.cardRect && Object.keys(before.cardRect).some((key) => Math.abs(before.cardRect[key] - after.cardRect[key]) > 1)) {
+        failures.push("Project Card moved during the ^prj selection/edit probe");
+      }
+      await ctx.page.ev(`(() => {
+        const cm = app.workspace.getLeafById(${JSON.stringify(ctx.main)})?.view?.editor?.cm;
+        if (!cm) return false;
+        cm.dispatch({ changes: { from: 0, to: cm.state.doc.length, insert: ${JSON.stringify(original)} } });
+        return cm.state.doc.toString() === ${JSON.stringify(original)};
+      })()`);
+      await ctx.page.settle(300);
+      const restoredText = await ctx.page.ev("window.__bobFrontmatterTakeover.docText(" + JSON.stringify(ctx.main) + ")");
+      if (restoredText !== original) failures.push("temporary scratch edit was not restored");
+      return { ok: failures.length === 0, path: P.project, prjLine, expectedHash, selected, selectionWorks,
+        ime, compositionError, scratchPlaced, afterTyping, before, after, restored: restoredText === original, failures };
     });
     await ownCase("own-quarter-live", P.quarter, "live");
     await ownCase("own-year-live", P.year, "live");
@@ -1882,6 +2102,19 @@ async function run(args) {
             failures.push("Bank Card scope does not have exactly one card and one Properties foot in " + mode);
           }
         }
+        for (const notePath of [P.area, P.project]) for (const mode of ["live", "reading"]) {
+          await ctx.page.open(ctx.main, notePath, mode);
+          const probe = await ctx.page.waitNative(ctx.main, "contractless " + notePath + " " + mode);
+          probes.push(probe);
+          failures.push(...lib.nativeFailures(probe, notePath + " " + mode));
+          if (probe.capability?.status !== "confirmed" || probe.capability?.contract !== "absent") {
+            failures.push(notePath + " did not record confirmed props_contract_v1 absence in " + mode);
+          }
+          if (probe.homeCardCount !== 0 || probe.cardCount !== 0) {
+            failures.push(notePath + " home card did not fail open in " + mode);
+          }
+          if (probe.visibleContainerCount !== 1) failures.push(notePath + " native Properties are not visible in " + mode);
+        }
       } finally {
         await restoreBob();
       }
@@ -2146,7 +2379,8 @@ async function run(args) {
     };
     const screenshotCards = report.profile === "bank"
       ? [["bank", P.bank]]
-      : [["day", P.day], ["week", P.week], ["record", P.record], ["album", P.album], ["bank", P.bank]];
+      : [["day", P.day], ["week", P.week], ["record", P.record], ["album", P.album], ["bank", P.bank],
+        ["area", P.area], ["inbox", P.inbox], ["project", P.project], ["project-terminal", P.projectTerminal]];
     for (const [label, notePath] of screenshotCards) await shotCard(label, notePath);
     if (report.profile !== "bank") for (const theme of ["light", "dark"]) {
       observeFixtureWatch("ordinary-add-screenshots:" + theme);
@@ -2184,6 +2418,18 @@ async function run(args) {
       catch (_) {}
     }
   } finally {
+    if (ctxRef?.page) {
+      try {
+        await ctxRef.page.ev(`(() => {
+          const saved = window.__bobFrontmatterTakeoverInboxRoute;
+          if (!saved) return false;
+          if (saved.hadOriginal) app.plugins.plugins[saved.key] = saved.original;
+          else delete app.plugins.plugins[saved.key];
+          delete window.__bobFrontmatterTakeoverInboxRoute;
+          return true;
+        })()`);
+      } catch (_) {}
+    }
     await sleep(400);
     await finalCheck("bytes-unchanged", async () => {
       if (!vaultReal || !Array.isArray(fixtureNames) || !report.fixtures || !ctxRef?.page) {
@@ -2208,17 +2454,29 @@ async function run(args) {
       const ownedProbe = await ctxRef.page.probe(ctxRef.main);
       const ownedInvocations = paintSpawned(readInvocations(bobLogPath).slice(beforeOwnedCheck));
       const baselineArgs = new Set(baselineInvocations.map((row) => JSON.stringify(row.args)));
-      const extra = ownedInvocations.filter((row) => !baselineArgs.has(JSON.stringify(row.args)));
+      const homeCardPaint = [];
+      if (report.profile !== "bank") for (const notePath of [P.area, P.inbox, P.project, P.projectTerminal]) {
+        const beforeHome = readInvocations(bobLogPath).length;
+        await ctxRef.page.open(ctxRef.main, notePath, "live");
+        await ctxRef.page.settle(1200);
+        const probe = await ctxRef.page.probe(ctxRef.main);
+        const invocations = paintSpawned(readInvocations(bobLogPath).slice(beforeHome));
+        if (invocations.length) homeCardPaint.push({ path: notePath, invocations: invocations.map((row) => row.args), probe });
+      }
+      const extra = [
+        ...ownedInvocations.filter((row) => !baselineArgs.has(JSON.stringify(row.args))),
+        ...homeCardPaint.flatMap((row) => row.invocations.map((args) => ({ args, path: row.path }))),
+      ];
       const invocations = readInvocations(bobLogPath);
       report.bobInvocations = {
         count: invocations.length,
         baselinePaintSpawnCandidates: baselineInvocations.map((row) => row.args),
         ownedPaintSpawnCandidates: ownedInvocations.map((row) => row.args),
-        extra: extra.map((row) => row.args), ownedProbe,
+        homeCardPaint, extra: extra.map((row) => row.args), ownedProbe,
       };
       return { ok: extra.length === 0, extra: extra.map((row) => row.args),
         baselineCandidates: baselineInvocations.length, ownedCandidates: ownedInvocations.length,
-        count: invocations.length, ownedProbe };
+        homeCardPaint, count: invocations.length, ownedProbe };
     });
     await finalCheck("screenshots-captured", async () => {
       const needed = lib.screenshotNeeds(report.profile);

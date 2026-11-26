@@ -12,8 +12,8 @@ const spike = require("./obsidian-frontmatter-ownership-spike-lib.cjs");
 const HELP_TEXT = [
   "Usage: node scripts/obsidian-frontmatter-takeover-e2e.cjs [OPTIONS]",
   "",
-  "Prove production whole-container frontmatter ownership on album, record,",
-  "day, week, quarter, year, and bank cards in a disposable Obsidian vault.",
+  "Prove production whole-container frontmatter ownership on Area, Project,",
+  "album, record, temporal, and bank cards in a disposable Obsidian vault.",
   "Denied contexts, canvas, print, mobile, Source, and ordinary notes keep",
   "native Properties. Needs BOB_BIN and BOB_CLI_DIR. Run the real matrix",
   "under xvfb-run -a on Linux. --self-test never launches Obsidian.",
@@ -67,6 +67,19 @@ const REQUIRED_CHECKS = Object.freeze([
   { name: "own-bank-live", surface: "live" },
   { name: "own-bank-reading", surface: "reading" },
   { name: "bank-props-v1-only-owned", surface: "both" },
+  { name: "own-area-live", surface: "live" },
+  { name: "own-area-reading", surface: "reading" },
+  { name: "own-subarea-live", surface: "live" },
+  { name: "own-subarea-reading", surface: "reading" },
+  { name: "own-inbox-live", surface: "live" },
+  { name: "own-inbox-reading", surface: "reading" },
+  { name: "own-project-live", surface: "live" },
+  { name: "own-project-reading", surface: "reading" },
+  { name: "own-project-terminal-live", surface: "live" },
+  { name: "own-project-terminal-reading", surface: "reading" },
+  { name: "excluded-home-cards-native", surface: "both" },
+  { name: "home-card-gestures-live", surface: "live" },
+  { name: "project-prj-line-integrity-live", surface: "live" },
   { name: "bank-pane-path-lifecycle", surface: "live" },
   { name: "bank-generic-editor-gestures", surface: "live" },
   { name: "own-quarter-live", surface: "live" },
@@ -161,6 +174,16 @@ const PATHS = Object.freeze({
   album: "eat.md",
   record: "eat/corner-bistro.md",
   bank: "bank.md",
+  area: "work.md",
+  subarea: "work/tools.md",
+  inbox: "inbox.md",
+  project: "work/launch.md",
+  projectTerminal: "work/retired.md",
+  untypedArea: "area.md",
+  untypedProject: "project.md",
+  excludedTemplate: "_templates/work.md",
+  excludedDone: "done/work.md",
+  excludedConflict: "_conflicts/work.md",
   ordinary: "ordinary.md",
   invalid: "invalid.md",
   unclosed: "unclosed.md",
@@ -171,6 +194,45 @@ const PATHS = Object.freeze({
 
 function fixtureNotes() {
   const notes = foot.fixtureNotes();
+  const area = (parent, body, title = "Work Acceptance", summary = "Synthetic Area ownership fixture.") => [
+    "---",
+    'type: "[[area]]"',
+    `parent: "[[${parent}]]"`,
+    `aliases: ["${title}"]`,
+    `summary: "${summary}"`,
+    "date: 2026-11-20",
+    "created: 2026-11-11T11:31:42-05:00",
+    "---",
+    "",
+    "# Hidden Area Heading",
+    "",
+    body,
+    "",
+  ].join("\n");
+  const project = (task, terminal = false) => [
+    "---",
+    'type: "[[project]]"',
+    'parent: "[[work]]"',
+    'summary: "Synthetic Project ownership fixture."',
+    "created: 2026-11-11T11:31:42-05:00",
+    "---",
+    "",
+    task,
+    "Scratch line beside the project id.",
+    "",
+    terminal ? "Terminal project body." : "Active project body.",
+    "",
+  ].join("\n");
+  notes[PATHS.area] = area("area", "Visible Area body text.");
+  notes[PATHS.subarea] = area("work", "Visible sub-area body text.", "Tools", "Synthetic sub-area fixture.");
+  notes[PATHS.inbox] = area("area", "Visible inbox body text.", "Inbox Acceptance", "Synthetic inbox fixture.");
+  notes[PATHS.project] = project("- [ ] #task #prj Launch the rollout ^prj");
+  notes[PATHS.projectTerminal] = project("- [x] #task #prj Finish the rollout [completion:: 2026-11-20] ^prj", true);
+  notes[PATHS.untypedArea] = ["---", 'aliases: ["Area"]', "---", "", "Native untyped area.", ""].join("\n");
+  notes[PATHS.untypedProject] = ["---", 'aliases: ["Project"]', "---", "", "Native untyped project.", ""].join("\n");
+  notes[PATHS.excludedTemplate] = area("area", "Template remains native.");
+  notes[PATHS.excludedDone] = area("area", "Archived Area remains native.");
+  notes[PATHS.excludedConflict] = area("area", "Conflict copy remains native.");
   notes[PATHS.bank] = [
     "---",
     'parent: "[[cash]]"',
@@ -309,6 +371,19 @@ function ownedFailures(probe, mode) {
   return failures;
 }
 
+function homeCardFailures(probe, expected = {}) {
+  const failures = [];
+  if (!probe) return ["missing home-card probe"];
+  if (probe.homeCardCount !== 1) failures.push("expected exactly one home card");
+  if (probe.homeCardTitleCount !== 1) failures.push("expected exactly one home-card title");
+  if (probe.homeCardFootCount !== 1) failures.push("expected exactly one Properties foot");
+  if (expected.kind && probe.homeCardKind !== expected.kind) failures.push("home-card kind is " + probe.homeCardKind);
+  if (expected.inbox === true && probe.homeCardInboxPill !== true) failures.push("inbox card is missing the INBOX pill");
+  if (expected.terminal === true && probe.homeCardTerminal !== true) failures.push("terminal Project card is not marked terminal");
+  if (expected.terminal === false && probe.homeCardTerminal === true) failures.push("active Project card is marked terminal");
+  return failures;
+}
+
 function nativeFailures(probe, label) {
   const failures = [];
   if (!probe) return [label + ": missing probe"];
@@ -331,6 +406,13 @@ function screenshotFailures(probe, notePath, mode, native = false) {
   if (probe?.mode !== mode) failures.push("screenshot has the wrong mode");
   if (probe?.containerCount !== 1) failures.push("screenshot must have exactly one native container");
   if (probe?.visibleContainerCount !== (native ? 1 : 0)) failures.push("screenshot native visibility is wrong");
+  const homeKinds = new Map([
+    [PATHS.area, { kind: "area" }], [PATHS.subarea, { kind: "area" }],
+    [PATHS.inbox, { kind: "area", inbox: true }], [PATHS.project, { kind: "project", terminal: false }],
+    [PATHS.projectTerminal, { kind: "project", terminal: true }],
+  ]);
+  const expectedHome = homeKinds.get(notePath);
+  if (expectedHome) failures.push(...homeCardFailures(probe, expectedHome));
   return failures;
 }
 
@@ -570,7 +652,7 @@ const PROBE_SOURCE = "(() => {" + PAGE_COMMON + String.raw`
     const bankCard = file?.path === "bank.md" && scope?.querySelector
       ? scope.querySelector('.bob-bank-setup[data-bank-setup-source="bank.md"]') : null;
     const card = scope && scope.querySelector
-      ? (scope.querySelector(".bob-album-header, .bob-record-sheet, .bob-intention-card, .bob-bank-setup") || null)
+      ? (scope.querySelector(".bob-home-card, .bob-album-header, .bob-record-sheet, .bob-intention-card, .bob-bank-setup") || null)
       : null;
     const foot = card && card.querySelector ? card.querySelector(".bob-property-card-foot") : null;
     const adopted = (() => {
@@ -642,6 +724,18 @@ const PROBE_SOURCE = "(() => {" + PAGE_COMMON + String.raw`
       slotAnchorRect: slot ? rectOf(slot.anchor) : null,
       cardPresent: Boolean(card && card.isConnected),
       cardClass: card ? String(card.className || "") : "",
+      cardRect: rectOf(card),
+      homeCardCount: scope?.querySelectorAll?.(".bob-home-card")?.length || 0,
+      homeCardKind: card?.getAttribute?.("data-home-kind") || null,
+      homeCardTerminal: Boolean(card?.classList?.contains("is-terminal")),
+      homeCardInboxPill: Boolean(card?.querySelector?.('[data-home-pill="inbox"]')),
+      homeCardTitleCount: card?.querySelectorAll?.(".bob-property-card-title[role='heading'][aria-level='1']")?.length || 0,
+      homeCardFootCount: card?.querySelectorAll?.(".bob-property-card-foot")?.length || 0,
+      homeCardTitle: String(card?.querySelector?.(".bob-property-card-title[role='heading']")?.textContent || "").trim(),
+      homeCardCollapsed: Boolean(card?.classList?.contains("is-collapsed")),
+      cardCount: scope?.querySelectorAll?.(".bob-home-card, .bob-album-header, .bob-record-sheet, .bob-intention-card, .bob-bank-setup")?.length || 0,
+      titleCount: scope?.querySelectorAll?.(".bob-property-card-title[role='heading'][aria-level='1']")?.length || 0,
+      footCount: scope?.querySelectorAll?.(".bob-property-card-foot")?.length || 0,
       footPresent: Boolean(foot && foot.isConnected),
       drawerOpen: Boolean(drawer && drawer.getAttribute("data-open") === "true" && shown(drawer)),
       drawerKeys,
@@ -947,7 +1041,7 @@ const PROBE_SOURCE = "(() => {" + PAGE_COMMON + String.raw`
 })()`;
 
 function screenshotNeeds(profile = "full") {
-  const cards = profile === "bank" ? ["bank"] : ["day", "week", "record", "album", "bank"];
+  const cards = profile === "bank" ? ["bank"] : ["day", "week", "record", "album", "bank", "area", "inbox", "project", "project-terminal"];
   const modes = ["live", "reading"];
   const themes = ["light", "dark"];
   const widths = ["narrow", "wide"];
@@ -979,6 +1073,17 @@ function selfTest() {
   assert.match(notes[PATHS.bank], /coffee: \{ label: Coffee, hotkey: c, group: Everyday \}/);
   assert.match(notes[PATHS.bank], /parent: "\[\[cash\]\]"/);
   assert.doesNotMatch(notes[PATHS.bank], /^type\s*:/m, "the bank fixture is an untyped hub");
+  for (const fixture of [PATHS.area, PATHS.subarea, PATHS.inbox, PATHS.project, PATHS.projectTerminal]) {
+    assert.match(notes[fixture], /created: 2026-11-11T11:31:42-05:00/);
+    assert.match(notes[fixture], /parent: "\[\[[^\]]+\]\]"/);
+  }
+  assert.match(notes[PATHS.project], /^- \[ \] #task #prj .* \^prj$/m);
+  assert.match(notes[PATHS.projectTerminal], /^- \[x\] #task #prj .* \^prj$/m);
+  for (const fixture of [PATHS.excludedTemplate, PATHS.excludedDone, PATHS.excludedConflict]) {
+    assert.match(notes[fixture], /type: "\[\[area\]\]"/);
+  }
+  assert.doesNotMatch(notes[PATHS.untypedArea], /type:/);
+  assert.doesNotMatch(notes[PATHS.untypedProject], /type:/);
   assert.ok(!notes[PATHS.identity].includes("created:"), "identity-only day must stay quiet");
   assert.ok(notes[PATHS.embedder].includes("![[2026/20261120]]"));
   assert.ok(notes[PATHS.hover].includes("[[bank|the bank]]"));
@@ -1028,10 +1133,17 @@ function selfTest() {
   assert.ok(nativeFailures({ ...owned, scopeClass: false, actualOwned: false, containerInert: false, ariaHidden: null }).length === 0);
   assert.ok(ownedFailures({ ...owned, containerVisible: true }, "live").includes("native Properties still visible"));
   assert.ok(ownedFailures({ ...owned, mode: "reading", containerVisible: true }, "reading").includes("native Properties still visible"));
+  assert.deepEqual(homeCardFailures({ homeCardCount: 1, homeCardTitleCount: 1, homeCardFootCount: 1,
+    homeCardKind: "project", homeCardTerminal: true }, { kind: "project", terminal: true }), []);
+  assert.ok(homeCardFailures({ homeCardCount: 2, homeCardTitleCount: 2, homeCardFootCount: 1,
+    homeCardKind: "area" }, { kind: "area" }).some((failure) => failure.includes("exactly one home card")));
+  assert.ok(homeCardFailures({ homeCardCount: 1, homeCardTitleCount: 1, homeCardFootCount: 1,
+    homeCardKind: "area", homeCardInboxPill: false }, { kind: "area", inbox: true })
+    .some((failure) => failure.includes("INBOX pill")));
   const needed = screenshotNeeds();
   assert.ok(needed.includes("day-live-light-wide"));
   assert.ok(needed.includes("ordinary-add-dark-narrow"));
-  assert.equal(needed.length, 5 * 2 * 2 * 2 + 2 * 2);
+  assert.equal(needed.length, 9 * 2 * 2 * 2 + 2 * 2);
   assert.equal(screenshotNeeds("bank").length, 2 * 2 * 2);
   assert.ok(screenshotNeeds("bank").every((name) => name.startsWith("bank-")));
   assert.deepEqual(modalLifecycleFailures({ present: true, closed: false, connected: true,
@@ -1050,7 +1162,7 @@ module.exports = {
   HELP_TEXT, REQUIRED_CHECKS, BANK_PROFILE_PRODUCT_CHECKS, BANK_PROFILE_REQUIRED_CHECKS,
   PATHS, PROBE_SOURCE, PAGE_COMMON, dismissEditor,
   parseArgs, surfaceOf, requiredChecksForProfile, isBankProfileCheck, fixtureNotes, canvasFixture, passingReport, computeVerdict,
-  ownedFailures, nativeFailures, addEditorFailures, screenshotFailures, sidebarFailures, variablesOk, screenshotNeeds, selfTest,
+  ownedFailures, homeCardFailures, nativeFailures, addEditorFailures, screenshotFailures, sidebarFailures, variablesOk, screenshotNeeds, selfTest,
   modalLifecycleFailures,
   modalProbeSource, openerWatchSource,
 };

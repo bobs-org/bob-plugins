@@ -138,31 +138,7 @@ class BobLedgerToolsHomeCardOwnershipMixin {
   }
 
   homeCardReleaseAdoption(scope, sourcePath = "") {
-    let mounted = null;
-    try { mounted = propertyCardAdoptedEntry?.(scope) || null; } catch (_) {}
-    if (mounted?.kind === HOME_CARD_HOST_KIND && mounted.path === "bank.md") {
-      try { propertyCardHomeBankAreaRelease(scope, mounted.path, mounted.node, this); } catch (_) {}
-    }
     try { return propertyCardAdoptRelease(scope, sourcePath || undefined, HOME_CARD_HOST_KIND, { preserveFallback: true }); } catch (_) { return false; }
-  }
-
-  homeCardRegisterBankAreaMount(scope, sourcePath, kind, mount) {
-    try { return propertyCardHomeBankAreaRegister(this, scope, sourcePath, kind, mount); } catch (_) { return null; }
-  }
-
-  homeCardReleaseBankAreaMount(scope, sourcePath, mount) {
-    try { return propertyCardHomeBankAreaRelease(scope, sourcePath, mount, this); } catch (_) { return false; }
-  }
-
-  homeCardReleaseBankAreaMounts(scope, sourcePath = "") {
-    const key = homeCardPath(sourcePath);
-    let released = 0;
-    for (const node of Array.from(scope?.querySelectorAll?.(`.${HOME_CARD_CLASS}[data-home-source]`) || [])) {
-      const path = homeCardPath(node.getAttribute?.("data-home-source") || "");
-      if (key && key !== path) continue;
-      if (this.homeCardReleaseBankAreaMount(scope, path, node)) released += 1;
-    }
-    return released;
   }
 
   // Path-bound Reading removal: releases this path's title/H1 in the same
@@ -179,7 +155,6 @@ class BobLedgerToolsHomeCardOwnershipMixin {
       if (!propertyCardNodeBelongs(node, root)) continue;
       const ownedPath = homeCardPath(node.getAttribute?.("data-home-source") || "");
       if (sourcePath && ownedPath && ownedPath !== homeCardPath(sourcePath)) continue;
-      try { this.homeCardReleaseBankAreaMount(scope, ownedPath, node); } catch (_) {}
       try { node.remove?.(); } catch (_) { node.parentNode?.removeChild?.(node); }
     }
     try { this.homeCardReleaseKeys?.(scope, sourcePath); } catch (_) {}
@@ -218,7 +193,6 @@ class BobLedgerToolsHomeCardOwnershipMixin {
   homeCardCleanEditor(view) {
     try { this.homeCardTrackFoot?.(view?.dom, this.homeCardLivePath(view), null); } catch (_) {}
     try { this.homeCardReleaseAdoption(view?.dom); } catch (_) {}
-    try { this.homeCardReleaseBankAreaMounts?.(view?.dom); } catch (_) {}
     try { this.homeCardReleaseFrontmatter?.(view?.dom, this.homeCardLivePath(view)); } catch (_) {}
     try {
       return this.homePropertyCardHost().cleanEditor(view, {

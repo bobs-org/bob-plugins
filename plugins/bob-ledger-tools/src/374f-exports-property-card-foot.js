@@ -47,7 +47,6 @@ try {
       propertyCardFootAdapterHoverLink,
       propertyCardFootAdapterHandlers,
       propertyCardFootAdapterTrack,
-      propertyCardFootAdapterPruneDisconnected,
       propertyCardFootAdapterAppend,
       propertyCardFootAdapterBind,
       propertyCardFootAdapterUnbind,

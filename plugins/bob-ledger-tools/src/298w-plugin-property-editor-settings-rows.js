@@ -3,7 +3,6 @@
 // authorize generic YAML operations.
 const PROPERTY_EDITOR_SETTING_ORDER = Object.freeze({
   area: ["summary", "parent", "color", "task_type", "clock", "ready_cap", "task_refresh", "project_name_aliases"],
-  bank: ["summary", "parent", "color", "task_type", "clock", "ready_cap", "task_refresh", "project_name_aliases"],
   project: ["parent", "color", "task_type", "clock", "root", "ready_cap", "task_refresh", "project_name_aliases"],
 });
 const PROPERTY_EDITOR_SETTING_KEYS = Object.freeze({
@@ -115,7 +114,7 @@ function propertyEditorSettingsSupported(report) {
 }
 
 function propertyEditorSettingsFallbackHint(report) {
-  if (!report || !["area", "project", "bank"].includes(report.note_kind)) return "";
+  if (!report || !["area", "project"].includes(report.note_kind)) return "";
   if (typeof propertyHasCapability !== "function" || !propertyHasCapability(report)) return "";
   if (!report.frontmatter || !["ok", "absent"].includes(report.frontmatter.state)) return "";
   return propertyEditorSettingsSupported(report) ? "" : "Update bob for typed settings.";

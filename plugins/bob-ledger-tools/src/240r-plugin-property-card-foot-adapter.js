@@ -276,41 +276,12 @@ function propertyCardFootAdapterHandlers(plugin, path, options = {}) {
   };
 }
 
-function propertyCardFootAdapterPruneDisconnected(path) {
-  const key = propertyCardFootAdapterPath(path);
-  if (!key) return 0;
-  let released = 0;
-  try {
-    const mounts = typeof propertyCardFootMounts !== "undefined" ? propertyCardFootMounts : null;
-    if (!mounts || typeof mounts.values !== "function") return 0;
-    for (const entry of Array.from(mounts.values())) {
-      if (!entry || entry.path !== key) continue;
-      let connected = true;
-      try {
-        connected = entry.node ? entry.node.isConnected !== false : false;
-      } catch (_) {
-        connected = true;
-      }
-      if (connected) continue;
-      try {
-        if (typeof propertyCardFootUnregisterMount === "function" && propertyCardFootUnregisterMount(entry.id)) released += 1;
-      } catch (_) {}
-    }
-  } catch (_) {}
-  return released;
-}
-
 function propertyCardFootAdapterTrack(container, path, card, tracked) {
   const key = propertyCardFootAdapterPath(path);
-  // Pane-local lifecycle: each adapter releases only disconnected stale
-  // mounts for the path, never a connected live mount owned by another
-  // adapter in the same pane. Unmounting one pane never touches another
-  // pane because disconnected nodes have no scope; connected mounts in
-  // other scopes are left intact. A newly connected Area foot must
-  // register before Bank yields, so a yielding Bank card without a foot
-  // preserves the Area registration instead of releasing the scope.
   try {
-    propertyCardFootAdapterPruneDisconnected(key);
+    if (typeof propertyCardFootReleaseScope === "function") {
+      propertyCardFootReleaseScope(container || null, key);
+    }
   } catch (_) {}
   if (!card || !key) return null;
   if (tracked instanceof Set) tracked.add(key);

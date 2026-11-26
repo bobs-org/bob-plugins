@@ -945,7 +945,7 @@ test("every adapter mounted release call is filtered by kind or kinds", () => {
   }
 });
 
-test("area, project, and bank hub require the typed settings contract; albums keep generic ownership", () => {
+test("area and project require the typed settings contract; bank and albums need only props_v1", () => {
   for (const kind of ["area", "project"]) {
     const world = homeWorld();
     world.contract = "absent";
@@ -982,12 +982,8 @@ test("area, project, and bank hub require the typed settings contract; albums ke
     sourceText: "---\ntype: bank\n---\n# Bank\n",
     currentPath: () => bankView.file.path, active: () => true, parseYaml: bankWorld.parse,
   };
-  assert.equal(H.propertyCardFrontmatterOwnMounted(bankWorld.plugin, bankArgs), null,
-    "bank.md stays native without props_contract_v1");
-  assert.ok(native(bankFx.container));
-  bankWorld.contract = "confirmed";
   assert.equal(typeof H.propertyCardFrontmatterOwnMounted(bankWorld.plugin, bankArgs), "function",
-    "bank.md may own only after the typed settings contract is confirmed");
+    "bank.md owns on props_v1 without props_contract_v1");
 });
 
 test("area mounts need the home source path and a connected foot", () => {
@@ -1086,7 +1082,7 @@ test("the contract gate is species specific and coordinator confirmation refresh
   assert.equal(H.propertyCardFrontmatterContractReady(incapable, "project"), false);
   assert.equal(H.propertyCardFrontmatterContractReady(legacy, "area"), false, "a missing query reads as not ready");
   assert.equal(H.propertyCardFrontmatterContractReady(incapable, "album"), true, "existing species keep generic ownership");
-  assert.equal(H.propertyCardFrontmatterContractReady(incapable, "bank"), true, "bank keeps its pre-takeover gate");
+  assert.equal(H.propertyCardFrontmatterContractReady(incapable, "bank"), true, "bank uses props_v1 without the area/project contract");
   assert.equal(
     H.propertyCardFrontmatterMountPath({ getAttribute: () => "note.md" }, "area"),
     "note.md",

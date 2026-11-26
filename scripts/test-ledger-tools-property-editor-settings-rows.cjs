@@ -178,7 +178,7 @@ test("area settings use report order and stable IDs; source rows stay in their o
   assert.equal(options.badgeKind, "area");
 });
 
-test("bank keeps its card handoff row alongside the Area settings hybrid", () => {
+test("bank ignores the old hybrid settings contract and keeps its card handoff row", () => {
   const show = report("bank", { properties: [
     row("summary", 3, { value: "A calm area" }), row("theme", 4, { value: "Drafting" }),
     row("offclock", 5, { value: false, kind: "checkbox" }), row("offclock_types", 6, { value: ["writing"], kind: "list" }),
@@ -186,8 +186,10 @@ test("bank keeps its card handoff row alongside the Area settings hybrid", () =>
     row("created", 8),
   ] });
   const modal = modalFor(show);
+  assert.equal(H.propertyEditorSettingsSupported(show), false, "bank has no typed settings even when old bob reports them");
+  assert.equal(H.propertyEditorSettingsFallbackHint(show), "", "bank does not ask for an area settings contract");
   const groups = H.propertyEditorSettingsGroups(modal);
-  assert.equal(groups[0].title, "AREA SETTINGS");
+  assert.ok(!groups.some((group) => group.group === "settings"), "the generic editor renders no bank settings group");
   const bankGroup = groups.find((group) => group.group === "card");
   assert.equal(bankGroup.rows[0].row.key, "bank");
   assert.equal(H.propertyEditorActionForRow(bankGroup.rows[0].row).action, "handoff");

@@ -98,8 +98,8 @@ report-backed parts below; the card keeps painting everything local.
 ## Data and display rules
 
 The cards use Bob's existing Area and Project type classifiers. Untyped notes do not
-become homes based on their filenames. The untyped type notes, `bank.md`, `_templates/`,
-`done/`, and `_conflicts/` are excluded.
+become homes based on their filenames. The untyped type notes and `bank.md` (the Bank
+Setup hub, not an Area home), `_templates/`, `done/`, and `_conflicts/` are excluded.
 
 Painting uses the metadata cache, confirmed local Markdown bytes, the local home-hue
 resolver, the ledger type-hue API, the synchronous Ready snapshot, and synchronous

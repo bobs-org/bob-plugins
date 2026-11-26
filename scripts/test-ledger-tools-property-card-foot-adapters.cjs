@@ -267,6 +267,50 @@ test("album adapter unbind releases its path and leaves other notes open", () =>
   helpers.propertyCardFootResetAll();
 });
 
+test("a closing album pane preserves its peer foot and can reopen the same note", () => {
+  helpers.propertyCardFootResetAll();
+  const doc = makeDoc();
+  const path = "eat.md";
+  const tracked = new Set();
+  const mount = (scope) => {
+    const card = node(doc, "section", "bob-album-header");
+    card.appendChild(node(doc, "footer", "bob-property-card-foot"));
+    scope.appendChild(card);
+    return card;
+  };
+  const firstPane = node(doc, "div", "markdown-preview-view");
+  const peerPane = node(doc, "div", "markdown-preview-view");
+  doc.body.appendChild(firstPane);
+  doc.body.appendChild(peerPane);
+  const firstCard = mount(firstPane);
+  const peerCard = mount(peerPane);
+  const track = (scope, card) => helpers.propertyCardFootAdapterTrack(scope, path, card, tracked);
+  track(firstPane, firstCard);
+  track(peerPane, peerCard);
+  assert.equal(helpers.propertyCardFootLiveMountsFor(path).length, 2);
+
+  firstCard.remove();
+  firstPane.remove();
+  track(firstPane, null);
+  const peerView = { dom: peerPane, file: { path } };
+  assert.equal(helpers.propertyCardFootMountsFor(path).length, 1, "closing prunes only the detached pane mount");
+  assert.equal(helpers.propertyCardCanToggleProperties(peerView), true, "the other pane remains actionable");
+  assert.equal(helpers.propertyCardToggleProperties(peerView), true);
+  assert.equal(helpers.propertyCardFootIsOpen(path), true);
+
+  const reopenedPane = node(doc, "div", "markdown-preview-view");
+  doc.body.appendChild(reopenedPane);
+  const reopenedCard = mount(reopenedPane);
+  track(reopenedPane, reopenedCard);
+  const reopenedView = { dom: reopenedPane, file: { path } };
+  assert.equal(helpers.propertyCardFootLiveMountsFor(path).length, 2, "reopening registers one fresh foot beside the live peer");
+  assert.equal(helpers.propertyCardCanToggleProperties(peerView), true);
+  assert.equal(helpers.propertyCardCanToggleProperties(reopenedView), true);
+  assert.equal(helpers.propertyCardToggleProperties(reopenedView), true);
+  assert.equal(helpers.propertyCardFootIsOpen(path), false, "both panes share the note's disclosure state");
+  helpers.propertyCardFootResetAll();
+});
+
 test("album EnsureSource stays quiet without vault.read", () => {
   const { plugin } = albumPlugin();
   assert.equal(helpers.propertyCardFootAdapterCanRead(plugin), false);

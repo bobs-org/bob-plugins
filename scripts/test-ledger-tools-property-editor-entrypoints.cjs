@@ -372,7 +372,7 @@ test("setup registers the palette command, the + arm, and the drawer hook", () =
   assert.equal(cleared.onEditAll, null);
 });
 
-test("bare + routes the Bank Area home to its first Settings row with the bank wire kind", () => {
+test("bare + opens the generic Property Editor on bank.md", () => {
   const inst = makeEntrypoints(makeApp({
     files: ["bank.md"], activePath: "bank.md", frontmatter: { type: "[[area]]" },
   }));
@@ -383,7 +383,7 @@ test("bare + routes the Bank Area home to its first Settings row with the bank w
     const arm = inst.propertyCardSecondKeyArmRegistry().get("+");
     assert.ok(arm, "the production + arm is registered");
     arm.run({ path: "bank.md" });
-    assert.deepEqual(calls, [{ filePath: "bank.md", noteKind: "bank", focusSettings: true }]);
+    assert.deepEqual(calls, [{ filePath: "bank.md" }]);
   } finally {
     inst.teardownPropertyEditorEntrypoints();
   }

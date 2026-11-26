@@ -493,10 +493,10 @@ contrast.
 
 Area/project settings have a separate scenario module,
 `scripts/obsidian-property-editor-e2e-settings.cjs`, called by the same real
-Obsidian runner. It uses contract-shaped area, project, top-level project, and
-bank fixtures. It checks Settings and chip focus, `+`/`==` routing (including
-the bank hybrid), ready-cap ghost → override → clear with exact undo/redo
-bytes, Summary and Review stages, Stats root set/clear and top-level refusal,
+Obsidian runner. It uses contract-shaped area, project, and top-level project
+fixtures. It checks Settings and chip focus, `+`/`==` routing, ready-cap ghost
+→ override → clear with exact undo/redo bytes, Summary and Review stages,
+Stats root set/clear and top-level refusal,
 project-task navigation without scheduling writes, managed/loose-row parity,
 and independent old-Bob and missing-contract fallbacks. Warning cases save
 and undo long summaries and colliding Capture names; copy cases preserve

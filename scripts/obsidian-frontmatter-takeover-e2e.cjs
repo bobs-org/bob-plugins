@@ -893,214 +893,49 @@ async function run(args) {
     });
     await ownCase("own-bank-live", P.bank, "live");
     await ownCase("own-bank-reading", P.bank, "reading");
-    const bankAreaArbitrationCase = (name, mode) => attempt(name, async () => {
-      await ctx.page.open(ctx.main, P.bank, mode);
-      await ctx.page.settle(600);
-      await ctx.page.waitOwned(ctx.main, mode, name);
-      const probe = await ctx.page.probe(ctx.main);
-      const bank = probe.bankGate || {};
-      const failures = [];
-      if (bank.titleOwnerKind !== "home") failures.push("Area is not the pane's title-slot owner: " + bank.titleOwnerKind);
-      if (!bank.areaCardPresent || !bank.areaCardFootPresent) failures.push("connected Area card/foot is missing");
-      if (!bank.bankCardPresent || !bank.bankCardInBody) failures.push("bank setup card did not remain in the body");
-      if (!bank.bankSetupBodyPresent) failures.push("bank setup body is missing");
-      if (!bank.bankEditPresent) failures.push("bank Edit control is missing");
-      if (!bank.bankFootSuppressedAfterAreaFoot) failures.push("bank foot did not yield to the connected Area foot");
-      if (bank.resolvedKind !== "bank" || bank.registryKinds[0] !== "bank") {
-        failures.push("the bank card is no longer first in the double-equals registry");
-      }
-      const drawer = await ctx.page.ev(`(() => {
-        const leaf = app.workspace.getLeafById(${JSON.stringify(ctx.main)});
-        const view = leaf?.view;
-        const scope = view?.getMode?.() === "preview" ? view.previewMode?.containerEl : view?.editor?.cm?.dom;
-        const disclosure = scope?.querySelector?.('.bob-home-card[data-home-source="bank.md"] .bob-property-card-foot-disclosure');
-        if (!disclosure) return false;
-        disclosure.click();
-        return true;
-      })()`);
-      if (!drawer) failures.push("Area Properties drawer disclosure is missing");
-      const nestedAvailable = await waitFor(client, `(() => {
-        const leaf = app.workspace.getLeafById(${JSON.stringify(ctx.main)});
-        const view = leaf?.view;
-        const scope = view?.getMode?.() === "preview" ? view.previewMode?.containerEl : view?.editor?.cm?.dom;
-        return Boolean(scope?.querySelector?.('.bob-home-card[data-home-source="bank.md"] [data-property-key="bank"] .bob-property-card-foot-nested'));
-      })()`, Boolean, "Area drawer bank setup opener", 10_000);
-      if (!nestedAvailable) failures.push("Area Properties drawer lost the nested bank setup opener");
-      const openerWatch = await ctx.page.startOpenerWatch("bank");
-      if (!openerWatch?.installed) failures.push("could not observe the production Bank Setup opener");
-      const nested = await ctx.page.ev(`(() => {
-        const leaf = app.workspace.getLeafById(${JSON.stringify(ctx.main)});
-        const view = leaf?.view;
-        const scope = view?.getMode?.() === "preview" ? view.previewMode?.containerEl : view?.editor?.cm?.dom;
-        const button = scope?.querySelector?.('.bob-home-card[data-home-source="bank.md"] [data-property-key="bank"] .bob-property-card-foot-nested');
-        if (!button) return false;
-        button.click();
-        return true;
-      })()`);
-      if (!nested) failures.push("Area Properties drawer bank opener did not click");
-      const nestedEditor = await ctx.page.waitModal("bank", "bob-bank-setup-card-modal", "Area bank nested editor", 10_000);
-      const nestedOpener = await ctx.page.waitOpener("bank", "Area drawer Bank Setup opener");
-      failures.push(...lib.modalLifecycleFailures(nestedEditor, "bob-bank-setup-card-modal", nestedOpener));
-      const nestedOpenOutcome = { modal: nestedEditor, opener: nestedOpener };
-      await ctx.page.stopOpenerWatch("bank");
-      await ctx.page.ev(`app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}]?.bankSetupCardModal?.close?.()`);
-      await ctx.page.settle(100);
-      const setupState = () => ctx.page.ev(`(() => {
-        const leaf = app.workspace.getLeafById(${JSON.stringify(ctx.main)});
-        const view = leaf?.view;
-        const scope = view?.getMode?.() === "preview" ? view.previewMode?.containerEl : view?.editor?.cm?.dom;
-        const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
-        const card = scope?.querySelector?.('.bob-bank-setup[data-bank-setup-source="bank.md"]');
-        const body = card?.querySelector('.bob-bank-setup-body');
-        const mark = scope?.querySelector?.('.bob-home-card[data-home-source="bank.md"] [data-property-key="bank"] .bob-property-card-foot-mark');
-        return { expanded: plugin?.bankSetupModelFor?.("bank.md")?.expanded === true,
-          bodyVisible: Boolean(body && !body.hasAttribute("hidden")), mark: mark?.textContent || null };
-      })()`);
-      let current = await setupState();
-      if (current.expanded) {
-        await ctx.page.ev(`(() => {
-          const leaf = app.workspace.getLeafById(${JSON.stringify(ctx.main)});
-          const view = leaf?.view;
-          const scope = view?.getMode?.() === "preview" ? view.previewMode?.containerEl : view?.editor?.cm?.dom;
-          scope?.querySelector?.('.bob-bank-setup[data-bank-setup-source="bank.md"] .bob-bank-setup-toggle')?.click();
-        })()`);
-        current = await waitFor(client, `(() => {
-          const leaf = app.workspace.getLeafById(${JSON.stringify(ctx.main)});
-          const view = leaf?.view;
-          const scope = view?.getMode?.() === "preview" ? view.previewMode?.containerEl : view?.editor?.cm?.dom;
-          const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
-          const mark = scope?.querySelector?.('.bob-home-card[data-home-source="bank.md"] [data-property-key="bank"] .bob-property-card-foot-mark');
-          return { expanded: plugin?.bankSetupModelFor?.("bank.md")?.expanded === true, mark: mark?.textContent || null };
-        })()`, (value) => value?.expanded === false && value.mark === null,
-        "collapsed bank body where-mark", 10_000);
-      } else if (current.mark !== null) {
-        failures.push("Area where-mark claims a folded bank setup body");
-      }
-      const toggle = await ctx.page.ev(`(() => {
-        const leaf = app.workspace.getLeafById(${JSON.stringify(ctx.main)});
-        const view = leaf?.view;
-        const scope = view?.getMode?.() === "preview" ? view.previewMode?.containerEl : view?.editor?.cm?.dom;
-        const button = scope?.querySelector?.('.bob-bank-setup[data-bank-setup-source="bank.md"] .bob-bank-setup-toggle');
-        if (!button) return false;
-        button.click();
-        return true;
-      })()`);
-      if (!toggle) failures.push("bank setup body fold control is missing");
-      const expanded = await waitFor(client, `(() => {
-        const leaf = app.workspace.getLeafById(${JSON.stringify(ctx.main)});
-        const view = leaf?.view;
-        const scope = view?.getMode?.() === "preview" ? view.previewMode?.containerEl : view?.editor?.cm?.dom;
-        const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
-        const card = scope?.querySelector?.('.bob-bank-setup[data-bank-setup-source="bank.md"]');
-        const body = card?.querySelector('.bob-bank-setup-body');
-        const mark = scope?.querySelector?.('.bob-home-card[data-home-source="bank.md"] [data-property-key="bank"] .bob-property-card-foot-mark');
-        return { expanded: plugin?.bankSetupModelFor?.("bank.md")?.expanded === true,
-          bodyVisible: Boolean(body && !body.hasAttribute("hidden")), mark: mark?.textContent || null };
-      })()`, (value) => value?.expanded === true && value.bodyVisible === true && value.mark === "setup",
-      "expanded bank body and Area where-mark", 10_000);
-      if (!expanded || expanded.mark !== "setup") failures.push("Area where-mark did not follow the visible bank setup body");
-      const editWatch = await ctx.page.startOpenerWatch("bank");
-      if (!editWatch?.installed) failures.push("could not observe the production Bank Edit opener");
-      const edit = await ctx.page.ev(`(() => {
-        const leaf = app.workspace.getLeafById(${JSON.stringify(ctx.main)});
-        const view = leaf?.view;
-        const scope = view?.getMode?.() === "preview" ? view.previewMode?.containerEl : view?.editor?.cm?.dom;
-        const button = scope?.querySelector?.('.bob-bank-setup[data-bank-setup-source="bank.md"] button.bob-bank-setup-edit');
-        if (!button) return false;
-        button.click();
-        return true;
-      })()`);
-      if (!edit) failures.push("bank Edit control did not click");
-      const editEditor = await ctx.page.waitModal("bank", "bob-bank-setup-card-modal", "bank Edit setup editor", 10_000);
-      const editOpener = await ctx.page.waitOpener("bank", "Bank Edit opener");
-      failures.push(...lib.modalLifecycleFailures(editEditor, "bob-bank-setup-card-modal", editOpener));
-      await ctx.page.stopOpenerWatch("bank");
-      await ctx.page.ev(`app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}]?.bankSetupCardModal?.close?.()`);
-      if (mode === "live") {
-        await ctx.page.ev(`app.workspace.getLeafById(${JSON.stringify(ctx.main)})?.view?.editor?.focus?.()`);
-        await ctx.page.keys("=");
-        await ctx.page.keys("=");
-        const equalsWatch = await ctx.page.startOpenerWatch("bank");
-        if (!equalsWatch?.installed) failures.push("could not observe the production == Bank Setup opener");
-        const doubleEquals = await ctx.page.waitModal("bank", "bob-bank-setup-card-modal", "bank-first double-equals editor", 10_000);
-        const equalsOpener = await ctx.page.waitOpener("bank", "== Bank Setup opener");
-        failures.push(...lib.modalLifecycleFailures(doubleEquals, "bob-bank-setup-card-modal", equalsOpener));
-        await ctx.page.stopOpenerWatch("bank");
-        await ctx.page.ev(`app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}]?.bankSetupCardModal?.close?.()`);
-      }
-      return { ok: failures.length === 0, probe, expanded, nestedOpenOutcome, editEditor, failures };
-    });
-    await bankAreaArbitrationCase("bank-area-live-arbitration", "live");
-    await bankAreaArbitrationCase("bank-area-reading-arbitration", "reading");
     await attempt("bank-pane-path-lifecycle", async () => {
       const failures = [];
+      const assertSingleOwner = async (leafId, label) => {
+        const probe = await ctx.page.waitOwned(leafId, "live", label);
+        const bank = probe.bankGate || {};
+        if (bank.titleOwnerKind !== "bank") failures.push(label + ": Bank Card does not own the title slot");
+        if (!bank.bankCardPresent || !bank.bankCardInTitleSlot) failures.push(label + ": Bank Card is not mounted in the title slot");
+        if (!bank.bankFootPresent || bank.cardCount !== 1 || bank.footCount !== 1) {
+          failures.push(label + ": expected one Bank Card and one Properties foot");
+        }
+        return probe;
+      };
       await ctx.page.open(ctx.main, P.bank, "live");
-      const first = await ctx.page.waitOwned(ctx.main, "live", "first bank pane");
+      const first = await assertSingleOwner(ctx.main, "first bank pane");
       const secondLeaf = await ctx.page.ev('app.workspace.getLeaf("split", "vertical").id');
       try {
         await ctx.page.open(secondLeaf, P.bank, "live");
-        const second = await ctx.page.waitOwned(secondLeaf, "live", "second bank pane");
-        if (!first.bankGate?.areaOwnerGeneration || !second.bankGate?.areaOwnerGeneration
-          || first.bankGate.areaOwnerGeneration === second.bankGate.areaOwnerGeneration) {
-          failures.push("two bank panes did not get independent Area mount generations");
-        }
+        const second = await assertSingleOwner(secondLeaf, "second bank pane");
         await ctx.page.open(secondLeaf, P.ordinary, "live");
         const secondNative = await ctx.page.waitNative(secondLeaf, "second pane path change");
-        const firstStillOwned = await ctx.page.waitOwned(ctx.main, "live", "first pane survives other path change");
-        if (!firstStillOwned.bankGate?.bankFootSuppressedAfterAreaFoot) {
-          failures.push("changing the second pane path disturbed the first pane's bank foot arbitration");
-        }
+        const firstStillOwned = await assertSingleOwner(ctx.main, "first pane survives other path change");
         await ctx.page.open(secondLeaf, P.bank, "live");
-        const secondRestored = await ctx.page.waitOwned(secondLeaf, "live", "second pane bank restore");
+        const secondRestored = await assertSingleOwner(secondLeaf, "second pane bank restore");
         await ctx.page.ev(`(() => {
           const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
-          plugin.scheduleHomeCardRefresh?.();
-          plugin.scheduleHomeCardRefresh?.();
           plugin.scheduleBankSetupRefresh?.();
           plugin.scheduleBankSetupRefresh?.();
           return true;
         })()`);
         await ctx.page.settle(500);
-        const repeated = await ctx.page.waitOwned(secondLeaf, "live", "repeated bank refreshes");
-        const areaFootCount = await ctx.page.ev(`(() => {
-          const leaf = app.workspace.getLeafById(${JSON.stringify(secondLeaf)});
-          const scope = leaf?.view?.editor?.cm?.dom;
-          return scope?.querySelectorAll?.('.bob-home-card[data-home-source="bank.md"] .bob-property-card-foot').length || 0;
-        })()`);
-        if (areaFootCount !== 1) failures.push("repeated refresh callbacks duplicated or lost the Area foot");
+        const repeated = await assertSingleOwner(secondLeaf, "repeated bank refreshes");
         await ctx.page.ev(`app.workspace.getLeafById(${JSON.stringify(secondLeaf)})?.detach?.()`);
         await ctx.page.settle(300);
-        const firstAfterClose = await ctx.page.waitOwned(ctx.main, "live", "first bank pane after sibling close");
-        if (!firstAfterClose.bankGate?.bankFootSuppressedAfterAreaFoot) failures.push("closing one bank pane changed the surviving pane's foot owner");
-        await ctx.page.ev(`(() => {
-          const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
-          plugin.homeCardActive = false;
-          plugin.scheduleHomeCardRefresh?.();
-          plugin.scheduleBankSetupRefresh?.();
-          return true;
-        })()`);
-        const native = await ctx.page.waitNative(ctx.main, "Area mount loss on bank.md");
-        if (native.bankGate?.areaCardPresent || !native.bankGate?.bankFootPresent
-          || native.bankGate?.bankCardPresent !== true || native.containerVisible !== true) {
-          failures.push("Area loss did not restore native Properties and the surviving bank foot/body");
-        }
-        await ctx.page.ev(`(() => {
-          const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
-          plugin.homeCardActive = true;
-          plugin.scheduleHomeCardRefresh?.();
-          plugin.scheduleBankSetupRefresh?.();
-          return true;
-        })()`);
-        const restored = await ctx.page.waitOwned(ctx.main, "live", "Area mount restoration");
+        const firstAfterClose = await assertSingleOwner(ctx.main, "first bank pane after sibling close");
         return { ok: failures.length === 0, first, second, secondNative, firstStillOwned,
-          secondRestored, repeated, areaFootCount, firstAfterClose, native, restored, failures };
+          secondRestored, repeated, firstAfterClose, failures };
       } finally {
         await ctx.page.ev(`app.workspace.getLeafById(${JSON.stringify(secondLeaf)})?.detach?.()`);
       }
     });
-    await attempt("bank-area-settings-gestures", async () => {
+    await attempt("bank-generic-editor-gestures", async () => {
       await ctx.page.open(ctx.main, P.bank, "live");
-      await ctx.page.waitOwned(ctx.main, "live", "Area Settings gesture setup");
+      await ctx.page.waitOwned(ctx.main, "live", "Bank generic editor setup");
       const failures = [];
       const waitPropertyRead = async (label) => {
         await waitFor(client, `(() => {
@@ -1112,40 +947,27 @@ async function run(args) {
       const plusWatch = await ctx.page.startOpenerWatch("property");
       if (!plusWatch?.installed) failures.push("could not observe the production property editor opener");
       await ctx.page.keys("+");
-      await ctx.page.waitModal("property", "bob-property-editor-modal", "bare + Area Settings", 15_000);
+      await ctx.page.waitModal("property", "bob-property-editor-modal", "bare + generic Property Editor", 15_000);
       const plusOpener = await ctx.page.waitOpener("property", "bare + property editor opener");
       const plus = await waitPropertyRead("bare + property report");
       failures.push(...lib.modalLifecycleFailures(plus, "bob-property-editor-modal", plusOpener));
-      failures.push(...lib.bankSettingsFailures(plus));
+      if (plus.noteKind !== "bank" || plus.editorMode !== "browse" || plus.hasSettingsGroup || plus.heading) {
+        failures.push("bare + did not open a generic bank Property Editor without Area settings");
+      }
       const plusEvidence = { modal: plus, opener: plusOpener };
       await ctx.page.stopOpenerWatch("property");
       await ctx.page.closeEditor();
-      const chipWatch = await ctx.page.startOpenerWatch("property");
-      if (!chipWatch?.installed) failures.push("could not observe the production settings-chip opener");
-      const clicked = await ctx.page.ev(`(() => {
-        const leaf = app.workspace.getLeafById(${JSON.stringify(ctx.main)});
-        const view = leaf?.view;
-        const scope = view?.getMode?.() === "preview" ? view.previewMode?.containerEl : view?.editor?.cm?.dom;
-        const chip = scope?.querySelector?.('.bob-home-card[data-home-source="bank.md"] .bob-home-card-chip[data-home-chip="task_type"]');
-        if (!chip) return false;
-        chip.click();
-        return true;
-      })()`);
-      if (!clicked) failures.push("Area task_type policy chip is missing");
-      await ctx.page.waitModal("property", "bob-property-editor-modal", "Area task_type chip setting", 15_000);
-      const chipOpener = await ctx.page.waitOpener("property", "Area settings-chip opener");
-      const chip = await waitPropertyRead("Area task_type settings report");
-      failures.push(...lib.modalLifecycleFailures(chip, "bob-property-editor-modal", chipOpener));
-      if (chip.noteKind !== "bank" || chip.viewMode !== "live" || chip.editorMode !== "browse"
-        || chip.requestedSetting !== "task_type" || chip.selectedId !== "setting::task_type"
-        || chip.selectedRowGroup !== "settings" || chip.selectedRowConnected !== true
-        || chip.hasSettingsGroup !== true || chip.heading !== true) {
-        failures.push("Area policy chip did not focus its own task_type setting");
-      }
-      const chipEvidence = { modal: chip, opener: chipOpener };
-      await ctx.page.stopOpenerWatch("property");
-      await ctx.page.closeEditor();
-      return { ok: failures.length === 0, plus: plusEvidence, chip: chipEvidence, failures };
+
+      const bankWatch = await ctx.page.startOpenerWatch("bank");
+      if (!bankWatch?.installed) failures.push("could not observe the production Bank Setup handoff");
+      await ctx.page.keys("=");
+      await ctx.page.keys("=");
+      const bankModal = await ctx.page.waitModal("bank", "bob-bank-setup-card-modal", "bank == handoff", 15_000);
+      const bankOpener = await ctx.page.waitOpener("bank", "bank == Bank Setup handoff");
+      failures.push(...lib.modalLifecycleFailures(bankModal, "bob-bank-setup-card-modal", bankOpener));
+      await ctx.page.stopOpenerWatch("bank");
+      await ctx.page.ev(`app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}]?.bankSetupCardModal?.close?.()`);
+      return { ok: failures.length === 0, plus: plusEvidence, bank: { modal: bankModal, opener: bankOpener }, failures };
     });
     await ownCase("own-quarter-live", P.quarter, "live");
     await ownCase("own-year-live", P.year, "live");
@@ -1280,8 +1102,9 @@ async function run(args) {
     await attempt("bank-vim-k-gg-live", async () => {
       await ctx.page.open(ctx.main, P.bank, "live");
       await ctx.page.waitOwned(ctx.main, "live", "bank Vim guard setup");
+      const visibleBodyLine = notes[P.bank].split("\n").findIndex((line) => line.startsWith("A disposable fixture"));
       const placed = await ctx.page.ev(
-        "window.__bobFrontmatterTakeover.setCursor(" + JSON.stringify(ctx.main) + ", 10, 0)",
+        "window.__bobFrontmatterTakeover.setCursor(" + JSON.stringify(ctx.main) + ", " + visibleBodyLine + ", 0)",
       );
       const downBefore = await ctx.page.ev("window.__bobFrontmatterTakeover.keyDowns()");
       await ctx.page.keys("Escape");
@@ -1293,7 +1116,7 @@ async function run(args) {
       const active = await ctx.page.active();
       const probe = await ctx.page.probe(ctx.main);
       const failures = [];
-      if (!placed || placed.ok !== true) failures.push("could not place the bank editor cursor");
+      if (visibleBodyLine < 0 || !placed || placed.ok !== true) failures.push("could not place the bank editor cursor on visible body text");
       if (!(downAfter > downBefore)) failures.push("Vim navigation keys never reached the editor");
       if (active.inProperties || probe.activeInside) failures.push("gg/k/Up reached hidden native Properties");
       return { ok: failures.length === 0, placed, active, probe, failures };
@@ -2033,7 +1856,7 @@ async function run(args) {
       await restoreBob();
       return { ok: true, probe };
     });
-    await attempt("bank-contractless-native", async () => {
+    await attempt("bank-props-v1-only-owned", async () => {
       const probes = [];
       const failures = [];
       let state = null;
@@ -2042,24 +1865,21 @@ async function run(args) {
         state = await ctx.page.waitContract("absent", 25_000);
         for (const mode of ["live", "reading"]) {
           await ctx.page.open(ctx.main, P.bank, mode);
-          const probe = await ctx.page.waitNative(ctx.main, "bank without props_contract_v1 " + mode);
+          const probe = await ctx.page.waitOwned(ctx.main, mode, "bank with props_v1 and no props_contract_v1 " + mode);
           probes.push(probe);
           const bank = probe.bankGate || {};
-          failures.push(...lib.nativeFailures(probe, "bank contractless " + mode));
+          failures.push(...lib.ownedFailures(probe, mode));
           if (probe.capability?.status !== "confirmed" || probe.capability?.contract !== "absent") {
             failures.push("the contractless probe did not retain props_v1 while recording contract absence");
           }
-          if (probe.containerVisible !== true) failures.push("native Properties are not visible in " + mode);
-          if (bank.areaCardPresent && !bank.areaCardFootPresent) {
-            failures.push("Area card has no connected Properties foot in " + mode);
+          if (bank.titleOwnerKind !== "bank" || !bank.bankCardInTitleSlot) {
+            failures.push("Bank Card did not own the title slot in " + mode);
           }
           if (!bank.bankCardPresent || !bank.bankSetupBodyPresent || !bank.bankEditPresent) {
             failures.push("bank setup body/Edit did not remain available in " + mode);
           }
-          const connectedFeet = Number(bank.areaCardFootPresent === true) + Number(bank.bankFootPresent === true);
-          if (connectedFeet !== 1) failures.push("contractless bank scope does not have exactly one connected Properties foot in " + mode);
-          if (bank.areaCardFootPresent && !bank.bankFootSuppressedAfterAreaFoot) {
-            failures.push("bank foot did not yield to the connected Area foot in " + mode);
+          if (!bank.bankFootPresent || bank.cardCount !== 1 || bank.footCount !== 1) {
+            failures.push("Bank Card scope does not have exactly one card and one Properties foot in " + mode);
           }
         }
       } finally {

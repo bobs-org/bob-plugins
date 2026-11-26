@@ -243,7 +243,6 @@ class BobLedgerToolsBankSetupMixin {
     this.bankSetupExpandedMap().set(key, choice);
     this.refreshBankSetupReading();
     this.refreshBankSetupEditors();
-    try { this.scheduleHomeCardRefresh?.(); } catch (_) {}
   }
 
   bankSetupModelFor(sourcePath) {
@@ -504,9 +503,7 @@ class BobLedgerToolsBankSetupMixin {
           header.setAttribute?.("data-root-hue", hue);
         }
       } catch (error) {}
-      if (options.suppressBankFoot !== true) {
-        this.bankSetupAppendFoot?.(header, options.sourcePath, doc, extra?.footSpec);
-      }
+      this.bankSetupAppendFoot?.(header, options.sourcePath, doc, extra?.footSpec);
       return header;
     } catch (error) {
       return null;
@@ -569,9 +566,6 @@ class BobLedgerToolsBankSetupMixin {
       footExtra: extra,
       identity: card.identity,
     };
-    const arbitration = bankSetupAreaArbitration(scope, sourcePath);
-    options.bankAreaGeneration = arbitration.generation;
-    options.suppressBankFoot = arbitration.suppressBankFoot;
     const signature = JSON.stringify([typeof this.bankSetupFootSignature === "function"
       ? this.bankSetupFootSignature(card.model, extra, options)
       : (card.model && card.model.signature), bankSetupIdentityDigest(card.identity)]);
@@ -780,9 +774,6 @@ class BobLedgerToolsBankSetupMixin {
       footSpec: extra?.footSpec,
       identity: card.identity,
     };
-    const arbitration = bankSetupAreaArbitration(view?.dom, livePath);
-    options.bankAreaGeneration = arbitration.generation;
-    options.suppressBankFoot = arbitration.suppressBankFoot;
     const signature = JSON.stringify([typeof this.bankSetupFootSignature === "function"
       ? this.bankSetupFootSignature(card.model, extra, options)
       : (card.model && card.model.signature), bankSetupIdentityDigest(card.identity)]);

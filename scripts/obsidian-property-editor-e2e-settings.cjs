@@ -15,12 +15,11 @@ const PROJECT = "settings-acceptance-project.md";
 const LOVE = "love.md";
 const BODY = "body.md";
 const TOP_PROJECT = "projects/top-level-settings.md";
-const BANK = "bank.md";
 const STAGE_SHOTS = [[1400, "light"], [1400, "dark"], [390, "light"], [390, "dark"]];
 
 function verifyFixtures(ctx, report, runBob) {
   const contracts = {};
-  for (const file of [AREA, PROJECT, LOVE, BODY, TOP_PROJECT, BANK]) {
+  for (const file of [AREA, PROJECT, LOVE, BODY, TOP_PROJECT]) {
     const result = runBob(ctx, ["props", "show", file, "-f", "json"]);
     report.bobRuns.push(result);
     assert.equal(result.exitCode, 0, `${file} must be readable by the supplied bob`);
@@ -174,25 +173,6 @@ async function entrypointAcceptance(ctx) {
     }
   }
 
-  probe = await openByKeys(ctx, BANK, ["+"], null, "bank plus");
-  const areaSettings = await ctx.client.evaluate(`Boolean(document.querySelector('[data-property-group="settings"] .bob-property-editor-group-title')?.textContent.includes("AREA SETTINGS"))`);
-  ctx.addCheck(ctx.report, "settings entrypoint focus bank plus keeps Area settings hybrid",
-    probe.open && areaSettings,
-    { heading: probe.heading, areaSettings });
-  await ctx.closePropertyEditor(ctx.client);
-
-  await ctx.shared.openNote(ctx.client, BANK, "live");
-  await ctx.sendKey(ctx.client, "=");
-  await ctx.sendKey(ctx.client, "=");
-  const bankEditor = await ctx.shared.waitFor(ctx.client,
-    `Boolean(document.querySelector(".bob-bank-setup-card-modal"))`, Boolean, "bank == setup card", 15_000);
-  const propertyEditor = await ctx.client.evaluate(`Boolean(document.querySelector(".bob-property-editor"))`);
-  ctx.addCheck(ctx.report, "settings entrypoint focus bank double equals keeps bank card",
-    bankEditor && !propertyEditor,
-    { bankEditor, propertyEditor });
-  await ctx.sendKey(ctx.client, "Escape");
-  // The inline .bob-bank-setup panel remains mounted after the modal closes.
-  await ctx.shared.waitFor(ctx.client, `!document.querySelector(".bob-bank-setup-card-modal")`, Boolean, "bank card closed", 10_000);
 }
 
 async function settingHistoryAcceptance(ctx) {
@@ -919,7 +899,6 @@ function selfTest() {
   assert.match(notes[PROJECT], /parent: "\[\[projects\/top-level-settings\]\]"/);
   assert.match(notes[PROJECT], /^status: wip$/m);
   assert.match(notes[TOP_PROJECT], /type: "\[\[project\]\]"/);
-  assert.match(notes[BANK], /type: "\[\[bank\]\]"/);
   const checks = [
     "settings-entrypoints-focus-correct-setting", "settings-ghost-set-clear-undo-redo-bytes",
     "settings-invalid-and-warning-values", "settings-project-task-handoffs-no-schedule-write",

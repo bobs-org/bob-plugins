@@ -18,37 +18,15 @@ function bankSetupClockLabel(timestamp) {
   }
 }
 
-function bankSetupAreaFrontmatterEligible(plugin, path) {
-  try {
-    const key = bankSetupHubPath(path);
-    const frontmatter = typeof plugin?.homeCardFrontmatter === "function"
-      ? plugin.homeCardFrontmatter(key) : null;
-    return key === "bank.md" && homeCardEligible?.(key, frontmatter)?.kind === "area";
-  } catch (_) {
-    return false;
-  }
-}
-
 Object.assign(BobLedgerToolsBankSetupMixin.prototype, {
   bankSetupOwnMountedFrontmatter(scope, view, path, mount, sourceText, currentPath) {
     if (typeof propertyCardFrontmatterOwnMounted !== "function") return null;
     const key = bankSetupHubPath(path);
-    const areaEligible = bankSetupAreaFrontmatterEligible(this, key);
-    if (areaEligible || propertyCardHomeBankAreaCurrent?.(scope, key)) {
-      this.bankSetupReleaseFrontmatter(scope, key);
-      return null;
-    }
     const sourceFor = () => {
       if (view?.state?.doc && typeof view.state.doc.toString === "function") return view.state.doc.toString();
       return this.bankSetupSourceCache?.get?.(key);
     };
     const current = () => {
-      // A live Area mount owns whole frontmatter; a surviving Bank body
-      // must not conceal Area loss by claiming it. Stale Bank callbacks
-      // never release the replacement Area owner.
-      try {
-        if (propertyCardHomeBankAreaCurrent?.(scope, key)) return false;
-      } catch (_) {}
       const text = sourceFor();
       const card = text && this.bankSetupCardFor(key, text);
       return Boolean(card && card.model);
@@ -70,22 +48,8 @@ Object.assign(BobLedgerToolsBankSetupMixin.prototype, {
   bankSetupOwnMountedFrontmatterDeferred(scope, view, path, mount, sourceText, currentPath) {
     if (typeof propertyCardFrontmatterOwnMountedDeferred !== "function") return null;
     const key = bankSetupHubPath(path);
-    // The deferred attachment must honor the same Area arbitration as the
-    // synchronous mount. Otherwise an Area mount that disappears before the
-    // next frame lets the surviving Bank card reacquire whole ownership.
-    if (bankSetupAreaFrontmatterEligible(this, key)
-      || propertyCardHomeBankAreaCurrent?.(scope, key)) {
-      this.bankSetupReleaseFrontmatter(scope, key);
-      return null;
-    }
     const sourceFor = () => view?.state?.doc?.toString?.() || this.bankSetupSourceCache?.get?.(key);
     const current = () => {
-      // Re-check Area arbitration at fire time: an Area mount that
-      // attached after scheduling must keep whole ownership. A stale Bank
-      // callback cannot release the replacement owner's state.
-      try {
-        if (propertyCardHomeBankAreaCurrent?.(scope, key)) return false;
-      } catch (_) {}
       const text = sourceFor();
       const card = text && this.bankSetupCardFor(key, text);
       return Boolean(card && card.model);

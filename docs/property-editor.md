@@ -47,8 +47,8 @@ corresponding real property when present, otherwise a safe first row.
 
 On area and project notes, `==` and the card Settings control open the editor
 on the first settings row; a policy chip opens it on its own setting. `+`
-opens the editor on any Markdown note: on `bank.md` it shows the area
-settings, while `==` there keeps opening the bank card editor.
+opens the generic Property Editor on any Markdown note. Bank has no typed
+settings group: its `bank` property row hands off to Bank Setup with `==`.
 
 ## Ownership and rows
 
@@ -71,10 +71,10 @@ pretending to edit it here.
 
 ## Area and project settings
 
-On area, project, and bank notes with a current `props_contract_v1` report,
-the editor groups typed settings before ordinary properties. Area and bank
-notes show **AREA SETTINGS** (summary, lives under, hue, default type, clock,
-ready cap, review, capture names); projects show **PROJECT SETTINGS** (lives
+On area and project notes with a current `props_contract_v1` report,
+the editor groups typed settings before ordinary properties. Area notes show
+**AREA SETTINGS** (summary, lives under, hue, default type, clock, ready cap,
+review, capture names); projects show **PROJECT SETTINGS** (lives
 under, hue, default type, clock, stats root, ready cap, review, capture
 names). Each row names its label, YAML keys, and effective or declared value,
 with `set` only when the note declares it. `theme` merges into Default type

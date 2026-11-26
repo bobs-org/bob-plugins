@@ -91216,12 +91216,11 @@ function propertyCardFrontmatterCapabilityReady(plugin) {
 
 // Species-specific contract requirement (bob-cli-pl.9.1.1 / .9.1.2):
 // area/project cards and the bank hub need confirmed `props_contract_v1`
-// evidence for the current bob path. Other existing species keep working on
-// the generic `props_v1` capability alone.
+// evidence for the current bob path. Bank, album, record, and temporal cards
+// use the generic `props_v1` capability alone.
 function propertyCardFrontmatterContractReady(plugin, kind, path) {
   try {
-    const bankHub = kind === "bank" && String(path || "").replace(/\\/g, "/") === "bank.md";
-    if (kind !== "area" && kind !== "project" && !bankHub) return true;
+    if (kind !== "area" && kind !== "project") return true;
     if (typeof plugin?.propertyCapabilityContractConfirmed !== "function") return false;
     return plugin.propertyCapabilityContractConfirmed() === true;
   } catch (_) {
@@ -91995,41 +91994,12 @@ function propertyCardFootAdapterHandlers(plugin, path, options = {}) {
   };
 }
 
-function propertyCardFootAdapterPruneDisconnected(path) {
-  const key = propertyCardFootAdapterPath(path);
-  if (!key) return 0;
-  let released = 0;
-  try {
-    const mounts = typeof propertyCardFootMounts !== "undefined" ? propertyCardFootMounts : null;
-    if (!mounts || typeof mounts.values !== "function") return 0;
-    for (const entry of Array.from(mounts.values())) {
-      if (!entry || entry.path !== key) continue;
-      let connected = true;
-      try {
-        connected = entry.node ? entry.node.isConnected !== false : false;
-      } catch (_) {
-        connected = true;
-      }
-      if (connected) continue;
-      try {
-        if (typeof propertyCardFootUnregisterMount === "function" && propertyCardFootUnregisterMount(entry.id)) released += 1;
-      } catch (_) {}
-    }
-  } catch (_) {}
-  return released;
-}
-
 function propertyCardFootAdapterTrack(container, path, card, tracked) {
   const key = propertyCardFootAdapterPath(path);
-  // Pane-local lifecycle: each adapter releases only disconnected stale
-  // mounts for the path, never a connected live mount owned by another
-  // adapter in the same pane. Unmounting one pane never touches another
-  // pane because disconnected nodes have no scope; connected mounts in
-  // other scopes are left intact. A newly connected Area foot must
-  // register before Bank yields, so a yielding Bank card without a foot
-  // preserves the Area registration instead of releasing the scope.
   try {
-    propertyCardFootAdapterPruneDisconnected(key);
+    if (typeof propertyCardFootReleaseScope === "function") {
+      propertyCardFootReleaseScope(container || null, key);
+    }
   } catch (_) {}
   if (!card || !key) return null;
   if (tracked instanceof Set) tracked.add(key);
@@ -96034,7 +96004,6 @@ class BobLedgerToolsBankSetupMixin {
     this.bankSetupExpandedMap().set(key, choice);
     this.refreshBankSetupReading();
     this.refreshBankSetupEditors();
-    try { this.scheduleHomeCardRefresh?.(); } catch (_) {}
   }
 
   bankSetupModelFor(sourcePath) {
@@ -96295,9 +96264,7 @@ class BobLedgerToolsBankSetupMixin {
           header.setAttribute?.("data-root-hue", hue);
         }
       } catch (error) {}
-      if (options.suppressBankFoot !== true) {
-        this.bankSetupAppendFoot?.(header, options.sourcePath, doc, extra?.footSpec);
-      }
+      this.bankSetupAppendFoot?.(header, options.sourcePath, doc, extra?.footSpec);
       return header;
     } catch (error) {
       return null;
@@ -96360,9 +96327,6 @@ class BobLedgerToolsBankSetupMixin {
       footExtra: extra,
       identity: card.identity,
     };
-    const arbitration = bankSetupAreaArbitration(scope, sourcePath);
-    options.bankAreaGeneration = arbitration.generation;
-    options.suppressBankFoot = arbitration.suppressBankFoot;
     const signature = JSON.stringify([typeof this.bankSetupFootSignature === "function"
       ? this.bankSetupFootSignature(card.model, extra, options)
       : (card.model && card.model.signature), bankSetupIdentityDigest(card.identity)]);
@@ -96571,9 +96535,6 @@ class BobLedgerToolsBankSetupMixin {
       footSpec: extra?.footSpec,
       identity: card.identity,
     };
-    const arbitration = bankSetupAreaArbitration(view?.dom, livePath);
-    options.bankAreaGeneration = arbitration.generation;
-    options.suppressBankFoot = arbitration.suppressBankFoot;
     const signature = JSON.stringify([typeof this.bankSetupFootSignature === "function"
       ? this.bankSetupFootSignature(card.model, extra, options)
       : (card.model && card.model.signature), bankSetupIdentityDigest(card.identity)]);
@@ -96814,37 +96775,15 @@ function bankSetupClockLabel(timestamp) {
   }
 }
 
-function bankSetupAreaFrontmatterEligible(plugin, path) {
-  try {
-    const key = bankSetupHubPath(path);
-    const frontmatter = typeof plugin?.homeCardFrontmatter === "function"
-      ? plugin.homeCardFrontmatter(key) : null;
-    return key === "bank.md" && homeCardEligible?.(key, frontmatter)?.kind === "area";
-  } catch (_) {
-    return false;
-  }
-}
-
 Object.assign(BobLedgerToolsBankSetupMixin.prototype, {
   bankSetupOwnMountedFrontmatter(scope, view, path, mount, sourceText, currentPath) {
     if (typeof propertyCardFrontmatterOwnMounted !== "function") return null;
     const key = bankSetupHubPath(path);
-    const areaEligible = bankSetupAreaFrontmatterEligible(this, key);
-    if (areaEligible || propertyCardHomeBankAreaCurrent?.(scope, key)) {
-      this.bankSetupReleaseFrontmatter(scope, key);
-      return null;
-    }
     const sourceFor = () => {
       if (view?.state?.doc && typeof view.state.doc.toString === "function") return view.state.doc.toString();
       return this.bankSetupSourceCache?.get?.(key);
     };
     const current = () => {
-      // A live Area mount owns whole frontmatter; a surviving Bank body
-      // must not conceal Area loss by claiming it. Stale Bank callbacks
-      // never release the replacement Area owner.
-      try {
-        if (propertyCardHomeBankAreaCurrent?.(scope, key)) return false;
-      } catch (_) {}
       const text = sourceFor();
       const card = text && this.bankSetupCardFor(key, text);
       return Boolean(card && card.model);
@@ -96866,22 +96805,8 @@ Object.assign(BobLedgerToolsBankSetupMixin.prototype, {
   bankSetupOwnMountedFrontmatterDeferred(scope, view, path, mount, sourceText, currentPath) {
     if (typeof propertyCardFrontmatterOwnMountedDeferred !== "function") return null;
     const key = bankSetupHubPath(path);
-    // The deferred attachment must honor the same Area arbitration as the
-    // synchronous mount. Otherwise an Area mount that disappears before the
-    // next frame lets the surviving Bank card reacquire whole ownership.
-    if (bankSetupAreaFrontmatterEligible(this, key)
-      || propertyCardHomeBankAreaCurrent?.(scope, key)) {
-      this.bankSetupReleaseFrontmatter(scope, key);
-      return null;
-    }
     const sourceFor = () => view?.state?.doc?.toString?.() || this.bankSetupSourceCache?.get?.(key);
     const current = () => {
-      // Re-check Area arbitration at fire time: an Area mount that
-      // attached after scheduling must keep whole ownership. A stale Bank
-      // callback cannot release the replacement owner's state.
-      try {
-        if (propertyCardHomeBankAreaCurrent?.(scope, key)) return false;
-      } catch (_) {}
       const text = sourceFor();
       const card = text && this.bankSetupCardFor(key, text);
       return Boolean(card && card.model);
@@ -97048,22 +96973,6 @@ class BobLedgerToolsBankSetupFootMixin {
   }
 
   bankSetupTrackFoot(container, path, header) {
-    // The foot registry is shared by adapters for one pane/path. When the
-    // Area card owns bank.md's foot, a Bank Setup repaint without its own
-    // foot must leave that Area registration intact; releasing the whole
-    // scope here would make the next arbitration pass restore both feet.
-    // Prune only disconnected stale mounts so a replaced Bank foot does
-    // not linger while the connected Area foot survives in this pane.
-    try {
-      if (bankSetupAreaArbitration?.(container, path)?.suppressBankFoot === true) {
-        try {
-          if (typeof propertyCardFootAdapterPruneDisconnected === "function") {
-            propertyCardFootAdapterPruneDisconnected(path);
-          }
-        } catch (_) {}
-        return null;
-      }
-    } catch (_) {}
     return propertyCardFootAdapterTrack(container, path, header, this.bankSetupFootTracked);
   }
 
@@ -97079,8 +96988,7 @@ class BobLedgerToolsBankSetupFootMixin {
     const base = typeof bankSetupSignature === "function"
       ? bankSetupSignature(model, options)
       : (model && model.signature);
-    const arbitration = `${Number(options?.bankAreaGeneration) || 0}:${options?.suppressBankFoot === true}`;
-    return [base, extra?.footDigest || "", extra?.footOpen === true, arbitration].join("::");
+    return [base, extra?.footDigest || "", extra?.footOpen === true].join("::");
   }
 }
 // ---- src/248cb-plugin-bank-setup-title.js ----
@@ -97388,13 +97296,6 @@ class BobLedgerToolsBankSetupTitleMixin {
   // onLost reschedules so a lost slot recovers through the next refresh.
   bankSetupAdoptTitle(scope, header, sourcePath, identity, extra = {}) {
     try {
-      if (propertyCardHomeBankAreaCurrent?.(scope, bankSetupHubPath(sourcePath))) {
-        // A current Area mount owns the pane's title arbitration. The bank
-        // card remains in the body and keeps its setup/editor controls.
-        this.bankSetupReleaseAdoption(scope, sourcePath, { preserveFallback: true });
-        this.bankSetupReleaseFrontmatter?.(scope, sourcePath);
-        return { mode: "fallback", release: () => {} };
-      }
       return propertyCardAdoptTitle(scope, header, {
         path: bankSetupHubPath(sourcePath),
         kind: "bank",
@@ -105691,7 +105592,8 @@ class BobLedgerToolsBankWalkMixin {
 
 const HOME_CARD_MAX_CRUMBS = 4;
 const HOME_CARD_MAX_HOPS = 8;
-const HOME_CARD_TYPE_NOTES = Object.freeze(["area.md", "project.md"]);
+// bank.md is a dedicated setup hub, not an Area home.
+const HOME_CARD_TYPE_NOTES = Object.freeze(["area.md", "project.md", "bank.md"]);
 const HOME_CARD_MONTHS = Object.freeze([
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
@@ -106979,25 +106881,12 @@ function homeCardBuildEl(doc, model, options = {}) {
   }
 }
 // ---- src/249ca-plugin-home-card-property-editor-routing.js ----
-// Keep the Bank Area's editor surface while preserving the Rust props wire kind.
 function homeCardIsDesktopPlatform(platform) {
   try {
     const host = platform === undefined ? Platform : platform;
     return Boolean(host && host.isDesktopApp === true);
   } catch (_) {
     return false;
-  }
-}
-
-function homeCardPropertyEditorNoteKind(path, frontmatter) {
-  try {
-    const eligible = homeCardEligible(path, frontmatter);
-    if (!eligible) return "";
-    if (eligible.kind === "area" && typeof bankSetupIsHubPath === "function"
-      && bankSetupIsHubPath(path) === true) return "bank";
-    return eligible.kind;
-  } catch (_) {
-    return "";
   }
 }
 // ---- src/249d-plugin-home-card-host.js ----
@@ -107363,9 +107252,9 @@ class BobLedgerToolsHomeCardMixin {
     try {
       if (typeof this.openPropertyEditor !== "function") return { ok: false, reason: "editor-unavailable" };
       const frontmatter = this.homeCardFrontmatter(target);
-      const kind = homeCardPropertyEditorNoteKind(target, frontmatter);
+      const kind = homeCardEligible(target, frontmatter)?.kind || "";
       const setting = typeof propertyEditorSettingIdForKey === "function" ? propertyEditorSettingIdForKey(key || "") || "" : "";
-      const noteKind = kind === "area" || kind === "project" || kind === "bank" ? { noteKind: kind } : {};
+      const noteKind = kind === "area" || kind === "project" ? { noteKind: kind } : {};
       if (!key) return this.openPropertyEditor({ filePath: target, ...noteKind, focusSettings: true, mode: "browse" });
       if (setting) return this.openPropertyEditor({ filePath: target, ...noteKind, setting, mode: "browse" });
       return this.openPropertyEditor({ filePath: target, ...noteKind, key, mode: "browse" });
@@ -107703,7 +107592,6 @@ class BobLedgerToolsHomeCardMixin {
       recognizer: propertyCardHomeTitleRecognizer(model.title?.text),
       onLost: () => this.scheduleHomeCardRefresh(),
       onMount: (mount) => {
-        plugin.homeCardRegisterBankAreaMount?.(scope, sourcePath, model.kind, mount);
         void ownFrontmatter(mount);
       },
     });
@@ -107727,7 +107615,6 @@ class BobLedgerToolsHomeCardMixin {
     this.homeCardPaintGoal(root, model);
     this.homeCardRestoreFocus(header, focusKey);
     try { this.homeCardTrackFoot?.(scope || root, sourcePath, header); } catch (_) {}
-    try { this.homeCardRegisterBankAreaMount?.(scope, sourcePath, model.kind, header); } catch (_) {}
     try { this.homeCardEnsureSource?.(sourcePath); } catch (_) {}
     return header;
   }
@@ -107811,7 +107698,6 @@ class BobLedgerToolsHomeCardMixin {
       const path = this.homeCardLivePath(view);
       if (!path || !view?.state?.doc) {
         this.homeCardReleaseAdoption(view?.dom);
-        try { this.homeCardReleaseBankAreaMounts?.(view?.dom); } catch (_) {}
         try { this.homeCardReleaseFrontmatter?.(view?.dom, this.homeCardLivePath(view)); } catch (_) {}
         try { this.homeCardReleaseKeys?.(view?.dom, this.homeCardLivePath(view)); } catch (_) {}
         this.homeCardSetEditorScope(view, false);
@@ -107824,7 +107710,6 @@ class BobLedgerToolsHomeCardMixin {
       this.homeCardSetEditorScope(view, Boolean(model));
       if (!model) {
         this.homeCardReleaseAdoption(view?.dom);
-        try { this.homeCardReleaseBankAreaMounts?.(view?.dom, path); } catch (_) {}
         try { this.homeCardReleaseFrontmatter?.(view?.dom, path); } catch (_) {}
         try { this.homeCardReleaseKeys?.(view?.dom, path); } catch (_) {}
         try { this.homeCardTrackFoot?.(view?.dom, path, null); } catch (_) {}
@@ -107868,7 +107753,6 @@ class BobLedgerToolsHomeCardMixin {
         currentPath: () => propertyCardLiveCurrentPath(view),
         onLost: () => this.scheduleHomeCardRefresh(),
         onMount: (mount) => {
-          this.homeCardRegisterBankAreaMount?.(view.dom, path, model.kind, mount);
           try {
             this.homeCardOwnMountedFrontmatter?.(
               view.dom, view, path, mount, model.kind, view?.state?.doc?.toString?.() || text,
@@ -107917,9 +107801,6 @@ class BobLedgerToolsHomeCardMixin {
         toDOM() {
           header.setAttribute?.("data-cm-widget", "true");
           header.setAttribute?.("data-home-source", path);
-          homeCardDefer(() => {
-            try { plugin.homeCardRegisterBankAreaMount?.(view.dom, path, model.kind, header); } catch (_) {}
-          });
           try {
             propertyCardFrontmatterOwnMountedDeferred?.(plugin, {
               scope: view.dom, view, path, kind: model.kind, mount: header, sourceText: text,
@@ -107935,7 +107816,6 @@ class BobLedgerToolsHomeCardMixin {
           return header;
         }
         destroy() {
-          try { plugin.homeCardReleaseBankAreaMount?.(view.dom, path, header); } catch (_) {}
         }
       }();
       let at = 0;
@@ -108136,31 +108016,7 @@ class BobLedgerToolsHomeCardOwnershipMixin {
   }
 
   homeCardReleaseAdoption(scope, sourcePath = "") {
-    let mounted = null;
-    try { mounted = propertyCardAdoptedEntry?.(scope) || null; } catch (_) {}
-    if (mounted?.kind === HOME_CARD_HOST_KIND && mounted.path === "bank.md") {
-      try { propertyCardHomeBankAreaRelease(scope, mounted.path, mounted.node, this); } catch (_) {}
-    }
     try { return propertyCardAdoptRelease(scope, sourcePath || undefined, HOME_CARD_HOST_KIND, { preserveFallback: true }); } catch (_) { return false; }
-  }
-
-  homeCardRegisterBankAreaMount(scope, sourcePath, kind, mount) {
-    try { return propertyCardHomeBankAreaRegister(this, scope, sourcePath, kind, mount); } catch (_) { return null; }
-  }
-
-  homeCardReleaseBankAreaMount(scope, sourcePath, mount) {
-    try { return propertyCardHomeBankAreaRelease(scope, sourcePath, mount, this); } catch (_) { return false; }
-  }
-
-  homeCardReleaseBankAreaMounts(scope, sourcePath = "") {
-    const key = homeCardPath(sourcePath);
-    let released = 0;
-    for (const node of Array.from(scope?.querySelectorAll?.(`.${HOME_CARD_CLASS}[data-home-source]`) || [])) {
-      const path = homeCardPath(node.getAttribute?.("data-home-source") || "");
-      if (key && key !== path) continue;
-      if (this.homeCardReleaseBankAreaMount(scope, path, node)) released += 1;
-    }
-    return released;
   }
 
   // Path-bound Reading removal: releases this path's title/H1 in the same
@@ -108177,7 +108033,6 @@ class BobLedgerToolsHomeCardOwnershipMixin {
       if (!propertyCardNodeBelongs(node, root)) continue;
       const ownedPath = homeCardPath(node.getAttribute?.("data-home-source") || "");
       if (sourcePath && ownedPath && ownedPath !== homeCardPath(sourcePath)) continue;
-      try { this.homeCardReleaseBankAreaMount(scope, ownedPath, node); } catch (_) {}
       try { node.remove?.(); } catch (_) { node.parentNode?.removeChild?.(node); }
     }
     try { this.homeCardReleaseKeys?.(scope, sourcePath); } catch (_) {}
@@ -108216,7 +108071,6 @@ class BobLedgerToolsHomeCardOwnershipMixin {
   homeCardCleanEditor(view) {
     try { this.homeCardTrackFoot?.(view?.dom, this.homeCardLivePath(view), null); } catch (_) {}
     try { this.homeCardReleaseAdoption(view?.dom); } catch (_) {}
-    try { this.homeCardReleaseBankAreaMounts?.(view?.dom); } catch (_) {}
     try { this.homeCardReleaseFrontmatter?.(view?.dom, this.homeCardLivePath(view)); } catch (_) {}
     try {
       return this.homePropertyCardHost().cleanEditor(view, {
@@ -108224,85 +108078,6 @@ class BobLedgerToolsHomeCardOwnershipMixin {
       });
     } catch (_) {}
   }
-}
-// ---- src/249db-plugin-bank-area-arbitration.js ----
-// Pane-local Area/Bank arbitration for bank.md. The Area mount token binds
-// every decision to one scope, path, DOM mount, and generation; bank refreshes
-// can never infer ownership from a vault-wide flag or a surviving body card.
-const propertyCardHomeBankAreaOwners = new WeakMap();
-let propertyCardHomeBankAreaGeneration = 0;
-
-function propertyCardHomeBankAreaRegister(plugin, scope, path, kind, mount) {
-  try {
-    const key = String(path || "").replace(/\\/g, "/");
-    if (!plugin || key !== "bank.md" || kind !== "area" || !scope || !mount) return null;
-    if (String(mount.getAttribute?.("data-home-source") || "").replace(/\\/g, "/") !== key) return null;
-    const current = propertyCardHomeBankAreaOwners.get(scope);
-    if (current && current.plugin === plugin && current.path === key && current.kind === kind && current.mount === mount) {
-      return current.generation;
-    }
-    const entry = { plugin, scope, path: key, kind, mount, generation: ++propertyCardHomeBankAreaGeneration };
-    propertyCardHomeBankAreaOwners.set(scope, entry);
-    try { plugin.scheduleBankSetupRefresh?.(); } catch (_) {}
-    return entry.generation;
-  } catch (_) {
-    return null;
-  }
-}
-
-function propertyCardHomeBankAreaRelease(scope, path = "", mount = null, plugin = null) {
-  try {
-    const entry = scope ? propertyCardHomeBankAreaOwners.get(scope) : null;
-    if (!entry) return false;
-    const key = String(path || "").replace(/\\/g, "/");
-    if (key && entry.path !== key) return false;
-    if (mount && entry.mount !== mount) return false;
-    if (plugin && entry.plugin !== plugin) return false;
-    if (propertyCardHomeBankAreaOwners.get(scope) !== entry) return false;
-    propertyCardHomeBankAreaOwners.delete(scope);
-    try { entry.plugin.scheduleBankSetupRefresh?.(); } catch (_) {}
-    return true;
-  } catch (_) {
-    return false;
-  }
-}
-
-function propertyCardHomeBankAreaCurrent(scope, path) {
-  try {
-    const key = String(path || "").replace(/\\/g, "/");
-    const entry = scope ? propertyCardHomeBankAreaOwners.get(scope) : null;
-    if (!entry || key !== "bank.md" || entry.path !== key || entry.kind !== "area") return null;
-    if (entry.plugin?.homeCardActive !== true || !entry.mount || entry.mount.isConnected === false) return null;
-    if (typeof scope.contains === "function" && !scope.contains(entry.mount)) return null;
-    if (String(entry.mount.getAttribute?.("data-home-source") || "").replace(/\\/g, "/") !== key) return null;
-    if (propertyCardHomeBankAreaOwners.get(scope) !== entry) return null;
-    return entry;
-  } catch (_) {
-    return null;
-  }
-}
-
-function propertyCardHomeBankAreaFootReady(entry) {
-  try {
-    if (!entry || propertyCardHomeBankAreaCurrent(entry.scope, entry.path) !== entry) return false;
-    const foot = entry.mount.querySelector?.(".bob-property-card-foot");
-    if (!foot || foot.isConnected === false || !entry.scope.contains?.(foot)) return false;
-    if (!foot.querySelector?.("button.bob-property-card-foot-disclosure")) return false;
-    const mounted = propertyCardFootMountByNode?.get?.(foot);
-    if (!mounted || mounted.path !== entry.path || propertyCardFootMounts?.get?.(mounted.id) !== mounted) return false;
-    return true;
-  } catch (_) {
-    return false;
-  }
-}
-
-function bankSetupAreaArbitration(scope, path) {
-  const owner = propertyCardHomeBankAreaCurrent(scope, path);
-  return {
-    owner,
-    generation: owner ? owner.generation : 0,
-    suppressBankFoot: Boolean(owner && propertyCardHomeBankAreaFootReady(owner)),
-  };
 }
 // ---- src/249e-plugin-home-card-foot.js ----
 // Home-card shared-foot adapter (bob-cli-pl.4.1 mount-foot). Truthful
@@ -108512,20 +108287,7 @@ class BobLedgerToolsHomeCardFootMixin {
   }
 
   homeCardTrackFoot(container, path, card) {
-    const mounted = propertyCardFootAdapterTrack(container, path, card, this.homeCardFootTracked);
-    // Bank Setup can paint before the Area foot is registered. Once this
-    // connected Area foot is ready, repaint Bank Setup so it yields its
-    // duplicate foot in this pane, including when native Properties remains
-    // visible because the settings contract is unavailable.
-    if (card && homeCardPath(path) === "bank.md") {
-      try {
-        const area = propertyCardHomeBankAreaCurrent?.(container, "bank.md");
-        if (area?.mount === card && propertyCardHomeBankAreaFootReady?.(area)) {
-          this.scheduleBankSetupRefresh?.();
-        }
-      } catch (_) {}
-    }
-    return mounted;
+    return propertyCardFootAdapterTrack(container, path, card, this.homeCardFootTracked);
   }
 
   // Append the shared foot after content, outside the collapsible body.
@@ -183214,22 +182976,12 @@ function propertyEditorEntryLeafFor(plugin, path, preferred = null) {
   }
 }
 
-// Bare + opens the first Area Settings row only on the eligible Area home
-// surface of bank.md. Other notes keep the ordinary Property Editor route.
+// Bare + opens the generic Property Editor. Card-specific settings are
+// reached through their own row and handoff.
 function propertyEditorEntryBarePlusOptions(plugin, path) {
   const target = propertyEditorEntryNormalizePath(path);
   if (!target) return {};
-  const options = { filePath: target };
-  try {
-    const frontmatter = typeof plugin?.propertyCacheFrontmatter === "function"
-      ? plugin.propertyCacheFrontmatter(target)
-      : null;
-    if (typeof homeCardPropertyEditorNoteKind === "function"
-      && homeCardPropertyEditorNoteKind(target, frontmatter) === "bank") {
-      return { ...options, noteKind: "bank", focusSettings: true };
-    }
-  } catch (_) {}
-  return options;
+  return { filePath: target };
 }
 
 function propertyEditorEntryReadSource(plugin, path) {
@@ -189097,7 +188849,6 @@ class BobLedgerToolsPropertyCapabilityRoutingMixin {
 // authorize generic YAML operations.
 const PROPERTY_EDITOR_SETTING_ORDER = Object.freeze({
   area: ["summary", "parent", "color", "task_type", "clock", "ready_cap", "task_refresh", "project_name_aliases"],
-  bank: ["summary", "parent", "color", "task_type", "clock", "ready_cap", "task_refresh", "project_name_aliases"],
   project: ["parent", "color", "task_type", "clock", "root", "ready_cap", "task_refresh", "project_name_aliases"],
 });
 const PROPERTY_EDITOR_SETTING_KEYS = Object.freeze({
@@ -189209,7 +188960,7 @@ function propertyEditorSettingsSupported(report) {
 }
 
 function propertyEditorSettingsFallbackHint(report) {
-  if (!report || !["area", "project", "bank"].includes(report.note_kind)) return "";
+  if (!report || !["area", "project"].includes(report.note_kind)) return "";
   if (typeof propertyHasCapability !== "function" || !propertyHasCapability(report)) return "";
   if (!report.frontmatter || !["ok", "absent"].includes(report.frontmatter.state)) return "";
   return propertyEditorSettingsSupported(report) ? "" : "Update bob for typed settings.";
@@ -190151,7 +189902,7 @@ function propertyEditorSettingRootOps(entry) {
 }
 
 function propertyEditorNeedsContractRefresh(report) {
-  return Boolean(report && ["area", "project", "bank"].includes(report.note_kind)
+  return Boolean(report && ["area", "project"].includes(report.note_kind)
     && Array.isArray(report.capabilities) && report.capabilities.includes("props_v1"));
 }
 
@@ -198850,7 +198601,6 @@ try {
       propertyCardFootAdapterHoverLink,
       propertyCardFootAdapterHandlers,
       propertyCardFootAdapterTrack,
-      propertyCardFootAdapterPruneDisconnected,
       propertyCardFootAdapterAppend,
       propertyCardFootAdapterBind,
       propertyCardFootAdapterUnbind,
@@ -198903,11 +198653,6 @@ try {
       homeCardIsDesktopPlatform,
       homeCardScopeDenied,
       homeCardFallbackKeys,
-      propertyCardHomeBankAreaRegister,
-      propertyCardHomeBankAreaRelease,
-      propertyCardHomeBankAreaCurrent,
-      propertyCardHomeBankAreaFootReady,
-      bankSetupAreaArbitration,
       BobLedgerToolsHomeCardMixin,
       BobLedgerToolsHomeCardOwnershipMixin,
       BobLedgerToolsHomeCardFootMixin,

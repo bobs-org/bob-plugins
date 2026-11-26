@@ -513,12 +513,11 @@ function propertyCardFrontmatterCapabilityReady(plugin) {
 
 // Species-specific contract requirement (bob-cli-pl.9.1.1 / .9.1.2):
 // area/project cards and the bank hub need confirmed `props_contract_v1`
-// evidence for the current bob path. Other existing species keep working on
-// the generic `props_v1` capability alone.
+// evidence for the current bob path. Bank, album, record, and temporal cards
+// use the generic `props_v1` capability alone.
 function propertyCardFrontmatterContractReady(plugin, kind, path) {
   try {
-    const bankHub = kind === "bank" && String(path || "").replace(/\\/g, "/") === "bank.md";
-    if (kind !== "area" && kind !== "project" && !bankHub) return true;
+    if (kind !== "area" && kind !== "project") return true;
     if (typeof plugin?.propertyCapabilityContractConfirmed !== "function") return false;
     return plugin.propertyCapabilityContractConfirmed() === true;
   } catch (_) {

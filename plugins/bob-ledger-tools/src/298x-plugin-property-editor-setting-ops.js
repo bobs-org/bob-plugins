@@ -212,7 +212,7 @@ function propertyEditorSettingRootOps(entry) {
 }
 
 function propertyEditorNeedsContractRefresh(report) {
-  return Boolean(report && ["area", "project", "bank"].includes(report.note_kind)
+  return Boolean(report && ["area", "project"].includes(report.note_kind)
     && Array.isArray(report.capabilities) && report.capabilities.includes("props_v1"));
 }
 

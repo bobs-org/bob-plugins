@@ -66,11 +66,9 @@ const REQUIRED_CHECKS = Object.freeze([
   { name: "bank-cache-parity", surface: "both" },
   { name: "own-bank-live", surface: "live" },
   { name: "own-bank-reading", surface: "reading" },
-  { name: "bank-area-live-arbitration", surface: "live" },
-  { name: "bank-area-reading-arbitration", surface: "reading" },
-  { name: "bank-contractless-native", surface: "both" },
+  { name: "bank-props-v1-only-owned", surface: "both" },
   { name: "bank-pane-path-lifecycle", surface: "live" },
-  { name: "bank-area-settings-gestures", surface: "live" },
+  { name: "bank-generic-editor-gestures", surface: "live" },
   { name: "own-quarter-live", surface: "live" },
   { name: "own-year-live", surface: "live" },
   { name: "own-identity-day-live", surface: "live" },
@@ -126,13 +124,12 @@ const REQUIRED_CHECKS = Object.freeze([
 // prevent the Bank invariants and captures from running.
 const BANK_PROFILE_PRODUCT_CHECKS = Object.freeze([
   "bank-cache-parity", "own-bank-live", "own-bank-reading",
-  "bank-area-live-arbitration", "bank-area-reading-arbitration",
-  "bank-pane-path-lifecycle", "bank-area-settings-gestures",
+  "bank-pane-path-lifecycle", "bank-generic-editor-gestures",
   "variables-live", "tab-live", "bank-vim-k-gg-live", "bank-focusin-guard",
   "variables-reading", "tab-reading", "source-toggle-releases",
   "bank-cache-skew-releases", "disable-unload-restores",
   "pending-capability-native", "absent-old-bob-native", "failed-probe-native",
-  "bank-contractless-native", "path-switch-native", "late-after-unload-native",
+  "bank-props-v1-only-owned", "path-switch-native", "late-after-unload-native",
   "bank-add-file-property", "bank-sidebar-native",
 ]);
 const BANK_PROFILE_REQUIRED_NAMES = new Set([
@@ -177,7 +174,6 @@ function fixtureNotes() {
   notes[PATHS.bank] = [
     "---",
     'parent: "[[cash]]"',
-    'type: "[[area]]"',
     'summary: "Synthetic bank ownership fixture."',
     'task_type: "CASH"',
     "created: 2026-11-11T11:31:42-05:00",
@@ -366,20 +362,6 @@ function modalLifecycleFailures(modal, expectedClass, opener) {
     if (opener.error) failures.push("production opener rejected: " + opener.error);
     if (opener.outcome?.ok !== true) failures.push("production opener refused: " + JSON.stringify(opener.outcome || null));
     if (opener.outcome?.modalPresent !== true) failures.push("production opener did not return the live modal");
-  }
-  return failures;
-}
-
-function bankSettingsFailures(modal) {
-  const failures = [];
-  if (modal?.noteKind !== "bank") failures.push("property report note_kind is " + JSON.stringify(modal?.noteKind));
-  if (modal?.viewMode !== "live") failures.push("bare + ran in " + JSON.stringify(modal?.viewMode) + " mode");
-  if (modal?.editorMode !== "browse") failures.push("property editor opened in " + JSON.stringify(modal?.editorMode) + " mode");
-  if (modal?.hasSettingsGroup !== true) failures.push("property report has no Settings group");
-  if (modal?.heading !== true) failures.push("property editor does not render AREA SETTINGS");
-  if (modal?.selectedId !== "setting::summary") failures.push("first Settings row is " + JSON.stringify(modal?.selectedId));
-  if (modal?.selectedRowGroup !== "settings" || modal?.selectedRowConnected !== true) {
-    failures.push("selected row is not a connected row in the Settings group");
   }
   return failures;
 }
@@ -585,12 +567,10 @@ const PROBE_SOURCE = "(() => {" + PAGE_COMMON + String.raw`
         };
       } catch (_) { return null; }
     })();
-    const homeCard = file?.path === "bank.md" && scope?.querySelector
-      ? scope.querySelector('.bob-home-card[data-home-source="bank.md"]') : null;
     const bankCard = file?.path === "bank.md" && scope?.querySelector
       ? scope.querySelector('.bob-bank-setup[data-bank-setup-source="bank.md"]') : null;
     const card = scope && scope.querySelector
-      ? (homeCard || scope.querySelector(".bob-album-header, .bob-record-sheet, .bob-intention-card, .bob-bank-setup") || null)
+      ? (scope.querySelector(".bob-album-header, .bob-record-sheet, .bob-intention-card, .bob-bank-setup") || null)
       : null;
     const foot = card && card.querySelector ? card.querySelector(".bob-property-card-foot") : null;
     const adopted = (() => {
@@ -608,7 +588,6 @@ const PROBE_SOURCE = "(() => {" + PAGE_COMMON + String.raw`
       try { cacheEvidence = helpers.propertyCardFrontmatterCacheEvidence(source, cached); } catch (_) {}
       let modelCurrent = false;
       try { modelCurrent = Boolean(plugin.bankSetupCardFor("bank.md", source)?.model); } catch (_) {}
-      const areaFoot = homeCard?.querySelector?.(".bob-property-card-foot") || null;
       const bankFoot = bankCard?.querySelector?.(".bob-property-card-foot") || null;
       return {
         active: plugin.bankSetupActive === true,
@@ -617,25 +596,20 @@ const PROBE_SOURCE = "(() => {" + PAGE_COMMON + String.raw`
         livePath,
         titleOwnerKind: adopted?.kind || null,
         titleOwnerGeneration: adopted?.generation || null,
-        areaOwnerGeneration: helpers.propertyCardHomeBankAreaCurrent?.(scope, file.path)?.generation || null,
-        areaCardPresent: Boolean(homeCard?.isConnected),
-        areaCardFootPresent: Boolean(areaFoot?.isConnected),
         bankCardPresent: Boolean(bankCard?.isConnected),
-        bankCardInBody: Boolean(bankCard?.isConnected && !bankCard.classList?.contains("bob-property-card-title-slot")),
-        bankCardParentClass: bankCard?.parentElement?.className || null,
+        bankCardInTitleSlot: Boolean(bankCard?.isConnected && bankCard.classList?.contains("bob-property-card-title-slot")),
         bankSetupBodyPresent: Boolean(bankCard?.querySelector?.(".bob-bank-setup-body")),
         bankEditPresent: Boolean(bankCard?.querySelector?.("button.bob-bank-setup-edit")),
-        bankNestedPresent: Boolean(homeCard?.querySelector?.('[data-property-key="bank"] .bob-property-card-foot-nested')),
-        bankWhereMark: homeCard?.querySelector?.('[data-property-key="bank"] .bob-property-card-foot-mark')?.textContent || null,
         registryKinds: typeof plugin.propertyCardKinds === "function" ? plugin.propertyCardKinds() : [],
         resolvedKind: typeof plugin.resolvePropertyCard === "function"
           ? plugin.resolvePropertyCard({ path: file.path, frontmatter: cached })?.kind || null : null,
         bankFootPresent: Boolean(bankFoot?.isConnected),
-        bankFootSuppressedAfterAreaFoot: Boolean(areaFoot?.isConnected && !bankFoot?.isConnected),
+        cardCount: scope?.querySelectorAll?.(".bob-home-card, .bob-bank-setup")?.length || 0,
+        footCount: scope?.querySelectorAll?.(".bob-property-card-foot")?.length || 0,
         mountPath: bankCard?.getAttribute?.("data-bank-setup-source") || null,
         mountConnected: Boolean(bankCard?.isConnected),
         scopeContainsMount: Boolean(scope?.contains?.(bankCard)),
-        footPresent: Boolean(areaFoot?.isConnected || foot?.isConnected),
+        footPresent: Boolean(foot?.isConnected),
         cacheEvidence,
         cachedKeys: cached && typeof cached === "object" ? Object.keys(cached).sort() : [],
         sourceLength: source.length,
@@ -1004,7 +978,7 @@ function selfTest() {
   assert.match(notes[PATHS.bank], /hotkey: "1"/);
   assert.match(notes[PATHS.bank], /coffee: \{ label: Coffee, hotkey: c, group: Everyday \}/);
   assert.match(notes[PATHS.bank], /parent: "\[\[cash\]\]"/);
-  assert.match(notes[PATHS.bank], /type: "\[\[area\]\]"/);
+  assert.doesNotMatch(notes[PATHS.bank], /^type\s*:/m, "the bank fixture is an untyped hub");
   assert.ok(!notes[PATHS.identity].includes("created:"), "identity-only day must stay quiet");
   assert.ok(notes[PATHS.embedder].includes("![[2026/20261120]]"));
   assert.ok(notes[PATHS.hover].includes("[[bank|the bank]]"));
@@ -1026,7 +1000,7 @@ function selfTest() {
   const parsed = parseArgs(["-e", "/opt/obsidian", "-o", "/tmp/shots", "-r", "/tmp/report.json", "--profile", "bank", "--self-test"]);
   assert.ok(parsed.selfTest && parsed.executable === "/opt/obsidian" && parsed.profile === "bank");
   assert.throws(() => parseArgs(["--profile", "album"]), /must be full or bank/);
-  assert.ok(requiredChecksForProfile("bank").some((row) => row.name === "bank-area-settings-gestures"));
+  assert.ok(requiredChecksForProfile("bank").some((row) => row.name === "bank-generic-editor-gestures"));
   assert.ok(!requiredChecksForProfile("bank").some((row) => row.name === "own-day-live"));
   assert.equal(computeVerdict(passingReport("bank")).verdict, "GO");
   const missingBank = passingReport("bank");
@@ -1061,18 +1035,12 @@ function selfTest() {
   assert.equal(screenshotNeeds("bank").length, 2 * 2 * 2);
   assert.ok(screenshotNeeds("bank").every((name) => name.startsWith("bank-")));
   assert.deepEqual(modalLifecycleFailures({ present: true, closed: false, connected: true,
-    ownerDocumentPresent: true, ownerDocumentIsCurrent: true, classes: ["bob-bank-setup-card-modal"] },
+    ownerDocumentPresent: true, ownerDocumentIsCurrent: true, visible: true, activeInside: true,
+    classes: ["bob-bank-setup-card-modal"] },
   "bob-bank-setup-card-modal", { called: true, pending: false, outcome: { ok: true, modalPresent: true } }), []);
   assert.ok(modalLifecycleFailures({ present: true, closed: false, connected: false,
-    ownerDocumentPresent: true, ownerDocumentIsCurrent: true, classes: [] },
+    ownerDocumentPresent: true, ownerDocumentIsCurrent: true, visible: true, activeInside: true, classes: [] },
   "bob-bank-setup-card-modal", { called: false }).length > 0);
-  const settingsModal = { noteKind: "bank", viewMode: "live", editorMode: "browse", hasSettingsGroup: true,
-    heading: true, selectedId: "setting::summary", selectedRowGroup: "settings", selectedRowConnected: true };
-  assert.deepEqual(bankSettingsFailures(settingsModal), []);
-  assert.ok(bankSettingsFailures({ ...settingsModal, noteKind: "area" }).length > 0);
-  assert.ok(bankSettingsFailures({ ...settingsModal, selectedId: "setting::task_type" }).length > 0);
-  assert.ok(bankSettingsFailures({ ...settingsModal, hasSettingsGroup: false }).length > 0);
-  assert.ok(bankSettingsFailures({ ...settingsModal, viewMode: "reading" }).length > 0);
   assert.equal(typeof spike.PROBE_SOURCE, "string");
   assert.equal(foot.FIXTURE_TODAY, "2026-11-20");
   return true;
@@ -1083,6 +1051,6 @@ module.exports = {
   PATHS, PROBE_SOURCE, PAGE_COMMON, dismissEditor,
   parseArgs, surfaceOf, requiredChecksForProfile, isBankProfileCheck, fixtureNotes, canvasFixture, passingReport, computeVerdict,
   ownedFailures, nativeFailures, addEditorFailures, screenshotFailures, sidebarFailures, variablesOk, screenshotNeeds, selfTest,
-  modalLifecycleFailures, bankSettingsFailures,
+  modalLifecycleFailures,
   modalProbeSource, openerWatchSource,
 };

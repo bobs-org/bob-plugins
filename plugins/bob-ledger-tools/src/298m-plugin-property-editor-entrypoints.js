@@ -132,22 +132,12 @@ function propertyEditorEntryLeafFor(plugin, path, preferred = null) {
   }
 }
 
-// Bare + opens the first Area Settings row only on the eligible Area home
-// surface of bank.md. Other notes keep the ordinary Property Editor route.
+// Bare + opens the generic Property Editor. Card-specific settings are
+// reached through their own row and handoff.
 function propertyEditorEntryBarePlusOptions(plugin, path) {
   const target = propertyEditorEntryNormalizePath(path);
   if (!target) return {};
-  const options = { filePath: target };
-  try {
-    const frontmatter = typeof plugin?.propertyCacheFrontmatter === "function"
-      ? plugin.propertyCacheFrontmatter(target)
-      : null;
-    if (typeof homeCardPropertyEditorNoteKind === "function"
-      && homeCardPropertyEditorNoteKind(target, frontmatter) === "bank") {
-      return { ...options, noteKind: "bank", focusSettings: true };
-    }
-  } catch (_) {}
-  return options;
+  return { filePath: target };
 }
 
 function propertyEditorEntryReadSource(plugin, path) {

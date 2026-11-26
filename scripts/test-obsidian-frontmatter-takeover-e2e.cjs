@@ -61,8 +61,7 @@ test("required takeover checks cover both surfaces, denials, and command routing
   for (const name of [
     "own-day-live", "own-day-reading", "own-week-live", "own-record-live", "own-album-reading",
     "bank-cache-parity", "own-bank-live", "own-bank-reading", "bank-add-file-property", "bank-sidebar-native",
-    "bank-area-live-arbitration", "bank-area-reading-arbitration",
-    "bank-contractless-native", "bank-pane-path-lifecycle", "bank-area-settings-gestures",
+    "bank-props-v1-only-owned", "bank-pane-path-lifecycle", "bank-generic-editor-gestures",
     "own-quarter-live", "own-year-live", "own-identity-day-live",
     "foreign-refresh-keeps-ownership",
     "source-toggle-releases", "deny-embed", "deny-hover", "deny-canvas", "deny-print", "deny-mobile",
@@ -89,8 +88,8 @@ test("Bank profile isolates its acceptance checks and retains the final invarian
   const names = lib.BANK_PROFILE_REQUIRED_CHECKS.map((row) => row.name);
   for (const name of [
     "plugin-loaded", "bank-cache-parity", "own-bank-live", "own-bank-reading",
-    "bank-area-live-arbitration", "bank-area-reading-arbitration", "bank-pane-path-lifecycle",
-    "bank-area-settings-gestures", "bank-cache-skew-releases", "bank-contractless-native",
+    "bank-pane-path-lifecycle", "bank-generic-editor-gestures", "bank-cache-skew-releases",
+    "bank-props-v1-only-owned",
     "source-toggle-releases", "bank-add-file-property", "bank-sidebar-native",
     "disable-unload-restores", "pending-capability-native", "bytes-unchanged",
     "no-paint-spawn", "screenshots-captured", "no-console-exceptions",
@@ -100,11 +99,11 @@ test("Bank profile isolates its acceptance checks and retains the final invarian
   assert.ok(!names.includes("own-album-live"));
   assert.equal(lib.computeVerdict(lib.passingReport("bank")).verdict, "GO");
   const missingBank = lib.passingReport("bank");
-  missingBank.checks = missingBank.checks.filter((row) => row.name !== "bank-area-live-arbitration");
-  assert.deepEqual(lib.computeVerdict(missingBank).missing, ["bank-area-live-arbitration"]);
+  missingBank.checks = missingBank.checks.filter((row) => row.name !== "bank-props-v1-only-owned");
+  assert.deepEqual(lib.computeVerdict(missingBank).missing, ["bank-props-v1-only-owned"]);
 });
 
-test("Bank modal and Settings assertions use owner lifecycle, opener result, and actual selected row", () => {
+test("Bank modal lifecycle probe covers visibility, focus, and its generic editor report", () => {
   const modal = {
     present: true, closed: false, connected: true, ownerDocumentPresent: true,
     ownerDocumentIsCurrent: true, visible: true, activeInside: true,
@@ -122,16 +121,8 @@ test("Bank modal and Settings assertions use owner lifecycle, opener result, and
   assert.match(lib.modalProbeSource("bank"), /getBoundingClientRect/);
   assert.match(lib.modalProbeSource("bank"), /containerConnected/);
   assert.match(lib.modalProbeSource("bank"), /rootClass/);
-  const settings = {
-    noteKind: "bank", viewMode: "live", editorMode: "browse", hasSettingsGroup: true,
-    heading: true, selectedId: "setting::summary", selectedRowGroup: "settings", selectedRowConnected: true,
-  };
-  assert.deepEqual(lib.bankSettingsFailures(settings), []);
-  for (const delta of [
-    { noteKind: "area" }, { viewMode: "reading" }, { editorMode: "add" },
-    { hasSettingsGroup: false }, { heading: false }, { selectedId: "setting::task_type" },
-    { selectedRowGroup: "properties" }, { selectedRowConnected: false },
-  ]) assert.ok(lib.bankSettingsFailures({ ...settings, ...delta }).length, JSON.stringify(delta));
+  assert.match(lib.modalProbeSource("property"), /hasSettingsGroup/);
+  assert.match(lib.modalProbeSource("property"), /selectedRowGroup/);
 });
 
 test("ownership and native restoration probes reject the opposite state", () => {

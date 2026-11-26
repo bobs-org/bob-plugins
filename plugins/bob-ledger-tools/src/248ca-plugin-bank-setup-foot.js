@@ -134,22 +134,6 @@ class BobLedgerToolsBankSetupFootMixin {
   }
 
   bankSetupTrackFoot(container, path, header) {
-    // The foot registry is shared by adapters for one pane/path. When the
-    // Area card owns bank.md's foot, a Bank Setup repaint without its own
-    // foot must leave that Area registration intact; releasing the whole
-    // scope here would make the next arbitration pass restore both feet.
-    // Prune only disconnected stale mounts so a replaced Bank foot does
-    // not linger while the connected Area foot survives in this pane.
-    try {
-      if (bankSetupAreaArbitration?.(container, path)?.suppressBankFoot === true) {
-        try {
-          if (typeof propertyCardFootAdapterPruneDisconnected === "function") {
-            propertyCardFootAdapterPruneDisconnected(path);
-          }
-        } catch (_) {}
-        return null;
-      }
-    } catch (_) {}
     return propertyCardFootAdapterTrack(container, path, header, this.bankSetupFootTracked);
   }
 
@@ -165,7 +149,6 @@ class BobLedgerToolsBankSetupFootMixin {
     const base = typeof bankSetupSignature === "function"
       ? bankSetupSignature(model, options)
       : (model && model.signature);
-    const arbitration = `${Number(options?.bankAreaGeneration) || 0}:${options?.suppressBankFoot === true}`;
-    return [base, extra?.footDigest || "", extra?.footOpen === true, arbitration].join("::");
+    return [base, extra?.footDigest || "", extra?.footOpen === true].join("::");
   }
 }

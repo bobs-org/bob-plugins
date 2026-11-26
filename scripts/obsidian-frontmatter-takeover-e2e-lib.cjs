@@ -355,6 +355,8 @@ function modalLifecycleFailures(modal, expectedClass, opener) {
   if (!modal?.connected) failures.push("modal root is disconnected");
   if (!modal?.ownerDocumentPresent) failures.push("modal has no owning document");
   if (modal?.ownerDocumentIsCurrent !== true) failures.push("modal belongs to a different Obsidian document");
+  if (modal?.visible !== true) failures.push("modal root is not visible");
+  if (modal?.activeInside !== true) failures.push("focus is outside the modal");
   if (expectedClass && !(modal?.classes || []).includes(expectedClass)) {
     failures.push("modal class is missing: " + expectedClass);
   }
@@ -396,17 +398,33 @@ function modalProbeSource(kind) {
     const selectedGroup = selectedRow?.closest?.("[data-property-group]") || null;
     const title = root?.querySelector?.("[data-property-group='settings'] .bob-property-editor-group-title") || null;
     const activeView = app.workspace?.activeLeaf?.view || null;
+    const currentDocument = activeView?.containerEl?.ownerDocument
+      || app.workspace?.containerEl?.ownerDocument || document;
+    const activeElement = ownerDocument?.activeElement || null;
+    let visible = false;
+    try {
+      const style = ownerDocument?.defaultView?.getComputedStyle?.(root);
+      const rect = root?.getBoundingClientRect?.();
+      visible = Boolean(root?.isConnected === true && style?.display !== "none"
+        && style?.visibility !== "hidden" && Number(rect?.width) > 0 && Number(rect?.height) > 0);
+    } catch (_) {}
+    const activeInside = Boolean(activeElement && nodes.some((node) => node === activeElement || node.contains?.(activeElement)));
     const viewMode = !activeView ? ""
       : activeView.getMode?.() === "preview" ? "reading"
         : activeView.getState?.()?.source ? "source" : "live";
     return {
       kind: ${JSON.stringify(kind)}, present: Boolean(modal), closed: modal?.closed === true,
       connected: nodes.some((node) => node.isConnected === true),
-      ownerDocumentPresent: Boolean(ownerDocument), ownerDocumentIsCurrent: ownerDocument === document,
-      ownerDocumentURL: ownerDocument?.location?.href || "",
+      ownerDocumentPresent: Boolean(ownerDocument), ownerDocumentIsCurrent: ownerDocument === currentDocument,
+      ownerDocumentURL: ownerDocument?.location?.href || "", currentDocumentURL: currentDocument?.location?.href || "",
+      visible, activeInside, activeElementTag: activeElement?.tagName || "",
       classes: [...new Set(nodes.flatMap((node) => Array.from(node.classList || [])))],
       noteKind: modal?.report?.note_kind || modal?.noteKind || "",
       editorMode: modal?.mode || "", viewMode, selectedId,
+      statusKind: modal?.status?.kind || "", reportReady: Boolean(modal?.report?.ok === true),
+      reportNoteKind: modal?.report?.note_kind || "", reportCapabilities: modal?.report?.capabilities || [],
+      contractKind: modal?.report?.contract?.kind || "", focusSettings: modal?.focusSettings === true,
+      propertyEditorSettingFocusDone: modal?.propertyEditorSettingFocusDone === true,
       requestedSetting: modal?.requestedSetting || "",
       selectedRowGroup: selectedGroup?.getAttribute?.("data-property-group") || "",
       selectedRowConnected: Boolean(selectedRow?.isConnected),

@@ -1102,11 +1102,19 @@ async function run(args) {
       await ctx.page.open(ctx.main, P.bank, "live");
       await ctx.page.waitOwned(ctx.main, "live", "Area Settings gesture setup");
       const failures = [];
+      const waitPropertyRead = async (label) => {
+        await waitFor(client, `(() => {
+          const modal = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}]?.propertyEditorModal;
+          return Boolean(modal && !modal.closed && !["reading", "checking"].includes(modal.status?.kind));
+        })()`, Boolean, label, 15_000);
+        return ctx.page.modal("property");
+      };
       const plusWatch = await ctx.page.startOpenerWatch("property");
       if (!plusWatch?.installed) failures.push("could not observe the production property editor opener");
       await ctx.page.keys("+");
-      const plus = await ctx.page.waitModal("property", "bob-property-editor-modal", "bare + Area Settings", 15_000);
+      await ctx.page.waitModal("property", "bob-property-editor-modal", "bare + Area Settings", 15_000);
       const plusOpener = await ctx.page.waitOpener("property", "bare + property editor opener");
+      const plus = await waitPropertyRead("bare + property report");
       failures.push(...lib.modalLifecycleFailures(plus, "bob-property-editor-modal", plusOpener));
       failures.push(...lib.bankSettingsFailures(plus));
       const plusEvidence = { modal: plus, opener: plusOpener };
@@ -1124,8 +1132,9 @@ async function run(args) {
         return true;
       })()`);
       if (!clicked) failures.push("Area task_type policy chip is missing");
-      const chip = await ctx.page.waitModal("property", "bob-property-editor-modal", "Area task_type chip setting", 15_000);
+      await ctx.page.waitModal("property", "bob-property-editor-modal", "Area task_type chip setting", 15_000);
       const chipOpener = await ctx.page.waitOpener("property", "Area settings-chip opener");
+      const chip = await waitPropertyRead("Area task_type settings report");
       failures.push(...lib.modalLifecycleFailures(chip, "bob-property-editor-modal", chipOpener));
       if (chip.noteKind !== "bank" || chip.viewMode !== "live" || chip.editorMode !== "browse"
         || chip.requestedSetting !== "task_type" || chip.selectedId !== "setting::task_type"

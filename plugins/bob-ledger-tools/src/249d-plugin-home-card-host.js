@@ -46,6 +46,20 @@ function homeCardIsDesktopPlatform(platform) {
   }
 }
 
+// bank.md can expose the Area home settings surface while retaining the bank
+// note kind used by the Rust props contract.
+function homeCardPropertyEditorNoteKind(path, frontmatter) {
+  try {
+    const eligible = homeCardEligible(path, frontmatter);
+    if (!eligible) return "";
+    if (eligible.kind === "area" && typeof bankSetupIsHubPath === "function"
+      && bankSetupIsHubPath(path) === true) return "bank";
+    return eligible.kind;
+  } catch (_) {
+    return "";
+  }
+}
+
 function homeCardScopeDenied(scope, root) {
   for (const node of [scope, root]) {
     if (!node || typeof node.closest !== "function") continue;
@@ -368,7 +382,10 @@ class BobLedgerToolsHomeCardMixin {
     if (!target) return { ok: false, reason: "missing-path" };
     try {
       if (typeof this.openPropertyEditor !== "function") return { ok: false, reason: "editor-unavailable" };
-      const kind = homeCardEligible(target, this.homeCardFrontmatter(target))?.kind, setting = typeof propertyEditorSettingIdForKey === "function" ? propertyEditorSettingIdForKey(key || "") || "" : "", noteKind = kind === "area" || kind === "project" ? { noteKind: kind } : {};
+      const frontmatter = this.homeCardFrontmatter(target);
+      const kind = homeCardPropertyEditorNoteKind(target, frontmatter);
+      const setting = typeof propertyEditorSettingIdForKey === "function" ? propertyEditorSettingIdForKey(key || "") || "" : "";
+      const noteKind = kind === "area" || kind === "project" || kind === "bank" ? { noteKind: kind } : {};
       if (!key) return this.openPropertyEditor({ filePath: target, ...noteKind, focusSettings: true, mode: "browse" });
       if (setting) return this.openPropertyEditor({ filePath: target, ...noteKind, setting, mode: "browse" });
       return this.openPropertyEditor({ filePath: target, ...noteKind, key, mode: "browse" });

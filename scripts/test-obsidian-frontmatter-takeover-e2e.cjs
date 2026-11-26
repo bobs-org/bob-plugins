@@ -107,14 +107,19 @@ test("Bank profile isolates its acceptance checks and retains the final invarian
 test("Bank modal and Settings assertions use owner lifecycle, opener result, and actual selected row", () => {
   const modal = {
     present: true, closed: false, connected: true, ownerDocumentPresent: true,
-    ownerDocumentIsCurrent: true, classes: ["modal", "bob-bank-setup-card-modal"],
+    ownerDocumentIsCurrent: true, visible: true, activeInside: true,
+    classes: ["modal", "bob-bank-setup-card-modal"],
   };
   const opener = { called: true, pending: false, outcome: { ok: true, modalPresent: true } };
   assert.deepEqual(lib.modalLifecycleFailures(modal, "bob-bank-setup-card-modal", opener), []);
   assert.ok(lib.modalLifecycleFailures({ ...modal, connected: false }, "bob-bank-setup-card-modal", opener).length);
+  assert.ok(lib.modalLifecycleFailures({ ...modal, visible: false }, "bob-bank-setup-card-modal", opener).length);
+  assert.ok(lib.modalLifecycleFailures({ ...modal, activeInside: false }, "bob-bank-setup-card-modal", opener).length);
   assert.ok(lib.modalLifecycleFailures(modal, "bob-bank-setup-card-modal", { called: true,
     pending: false, outcome: { ok: false, reason: "refused", modalPresent: false } }).length);
   assert.match(lib.modalProbeSource("bank"), /ownerDocumentIsCurrent/);
+  assert.match(lib.modalProbeSource("bank"), /activeInside/);
+  assert.match(lib.modalProbeSource("bank"), /getBoundingClientRect/);
   assert.match(lib.modalProbeSource("bank"), /containerConnected/);
   assert.match(lib.modalProbeSource("bank"), /rootClass/);
   const settings = {

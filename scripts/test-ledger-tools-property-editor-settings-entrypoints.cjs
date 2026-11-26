@@ -278,6 +278,19 @@ test("policy chips and Settings route through homeCardOpenSetting by setting id"
   assert.deepEqual(host.homeCardOpenSetting("", "clock"), { ok: false, reason: "missing-path" });
 });
 
+test("Bank Area Settings and policy chips retain the bank note kind", () => {
+  const calls = [];
+  const host = Object.create(LedgerToolsPlugin.prototype);
+  host.homeCardFrontmatter = (path) => path === "bank.md" ? { type: "area" } : {};
+  host.openPropertyEditor = (options) => { calls.push(options); return { ok: true }; };
+  assert.deepEqual(host.homeCardOpenSetting("bank.md", undefined), { ok: true });
+  assert.deepEqual(host.homeCardOpenSetting("bank.md", "theme"), { ok: true });
+  assert.deepEqual(calls, [
+    { filePath: "bank.md", noteKind: "bank", focusSettings: true, mode: "browse" },
+    { filePath: "bank.md", noteKind: "bank", setting: "task_type", mode: "browse" },
+  ]);
+});
+
 function entrypointsHarness({ files = ["notes/project.md"], activePath = "notes/project.md" } = {}) {
   const inst = Object.create(LedgerToolsPlugin.prototype);
   const vaultFiles = new Map(files.map((path) => [path, "---\ntitle: x\n---\nbody\n"]));

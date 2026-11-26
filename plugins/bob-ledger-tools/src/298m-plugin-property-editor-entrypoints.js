@@ -132,6 +132,24 @@ function propertyEditorEntryLeafFor(plugin, path, preferred = null) {
   }
 }
 
+// Bare + opens the first Area Settings row only on the eligible Area home
+// surface of bank.md. Other notes keep the ordinary Property Editor route.
+function propertyEditorEntryBarePlusOptions(plugin, path) {
+  const target = propertyEditorEntryNormalizePath(path);
+  if (!target) return {};
+  const options = { filePath: target };
+  try {
+    const frontmatter = typeof plugin?.propertyCacheFrontmatter === "function"
+      ? plugin.propertyCacheFrontmatter(target)
+      : null;
+    if (typeof homeCardPropertyEditorNoteKind === "function"
+      && homeCardPropertyEditorNoteKind(target, frontmatter) === "bank") {
+      return { ...options, noteKind: "bank", focusSettings: true };
+    }
+  } catch (_) {}
+  return options;
+}
+
 function propertyEditorEntryReadSource(plugin, path) {
   const key = propertyEditorEntryNormalizePath(path);
   if (!key) return Promise.resolve(null);
@@ -179,9 +197,10 @@ class BobLedgerToolsPropertyEditorEntrypointsMixin {
           reason: "property-editor",
           canAct: (context = {}) => propertyEditorEntryIsMarkdownPath(context && context.path),
           run: (context = {}) => {
-            void this.openPropertyEditor(
-              context && context.path ? { filePath: context.path } : {},
-            );
+            const options = context && context.path
+              ? propertyEditorEntryBarePlusOptions(this, context.path)
+              : {};
+            void this.openPropertyEditor(options);
           },
         });
       }

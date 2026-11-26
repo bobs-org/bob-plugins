@@ -403,6 +403,40 @@ test("tracking a ready Area foot refreshes Bank arbitration", () => {
   assert.equal(H.bankSetupAreaArbitration(scope, "bank.md").suppressBankFoot, true);
 });
 
+test("a yielding Bank Setup repaint preserves the ready Area foot registration", () => {
+  const doc = makeDoc();
+  const scope = doc.createElement("div");
+  const plugin = {
+    homeCardActive: true,
+    homeCardFootTracked: new Set(),
+    bankSetupFootTracked: new Set(),
+    scheduleBankSetupRefresh() {},
+  };
+  const areaMount = doc.createElement("section");
+  areaMount.setAttribute("class", `${H.HOME_CARD_CLASS} bob-property-card`);
+  areaMount.setAttribute("data-home-source", "bank.md");
+  const areaFoot = doc.createElement("div");
+  areaFoot.setAttribute("class", "bob-property-card-foot");
+  const disclosure = doc.createElement("button");
+  disclosure.setAttribute("class", "bob-property-card-foot-disclosure");
+  areaFoot.appendChild(disclosure);
+  areaMount.appendChild(areaFoot);
+  scope.appendChild(areaMount);
+
+  H.propertyCardHomeBankAreaRegister(plugin, scope, "bank.md", "area", areaMount);
+  H.BobLedgerToolsHomeCardFootMixin.prototype.homeCardTrackFoot.call(plugin, scope, "bank.md", areaMount);
+  const area = H.propertyCardHomeBankAreaCurrent(scope, "bank.md");
+  assert.equal(H.propertyCardHomeBankAreaFootReady(area), true);
+
+  const yieldingBankCard = doc.createElement("section");
+  H.BobLedgerToolsBankSetupFootMixin.prototype.bankSetupTrackFoot.call(
+    plugin, scope, "bank.md", yieldingBankCard,
+  );
+  assert.equal(H.propertyCardHomeBankAreaFootReady(area), true,
+    "a no-foot Bank Setup render cannot unregister the Area foot it yields to");
+  assert.equal(H.bankSetupAreaArbitration(scope, "bank.md").suppressBankFoot, true);
+});
+
 test("the Area foot preserves the bank setup handoff and truthful body mark", () => {
   const mixin = H.BobLedgerToolsHomeCardFootMixin.prototype;
   const plugin = Object.create(mixin);

@@ -134,6 +134,13 @@ class BobLedgerToolsBankSetupFootMixin {
   }
 
   bankSetupTrackFoot(container, path, header) {
+    // The foot registry is shared by adapters for one pane/path. When the
+    // Area card owns bank.md's foot, a Bank Setup repaint without its own
+    // foot must leave that Area registration intact; releasing the whole
+    // scope here would make the next arbitration pass restore both feet.
+    try {
+      if (bankSetupAreaArbitration?.(container, path)?.suppressBankFoot === true) return null;
+    } catch (_) {}
     return propertyCardFootAdapterTrack(container, path, header, this.bankSetupFootTracked);
   }
 

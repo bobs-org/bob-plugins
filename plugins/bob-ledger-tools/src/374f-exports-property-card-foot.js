@@ -50,6 +50,7 @@ try {
       propertyCardFootAdapterAppend,
       propertyCardFootAdapterBind,
       propertyCardFootAdapterUnbind,
+      BobLedgerToolsBankSetupFootMixin,
     });
   }
 } catch (_) {}

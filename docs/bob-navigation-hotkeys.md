@@ -181,7 +181,7 @@ why, and Enter re-checks the live vault before writing, so a stale pick is
 refused with the same wording. It never creates a note. One undo reverts the write in an open editor.
 
 The same ranking model is also available choose-only through
-`api.parentPicker` v1 (`docs/develop/plugin-apis.md`): `list(sourcePath,
+`api.parentPicker` v1 ([Cross-plugin API reference](https://bobs-org.github.io/develop/plugins/plugin-apis/)): `list(sourcePath,
 query?, limit?)` for the Property Editor's Lives under stage and
 `choose(sourcePath, { candidatePath? })`, which validates a headless pick or
 opens the panel without writing. The editor commits through bob's

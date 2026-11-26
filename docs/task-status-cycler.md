@@ -182,7 +182,7 @@ covered the typed title and the scaffold: the second step removed/restored the
 scaffold and its settle together. Missing or older Bob Ledger Tools APIs leave
 the gesture in place for later reconcile; stale editor paths and unresolved
 tasks are dropped without applying old note bytes. See the [task settle
-contract](develop/task-settle.md) and
+contract](https://bobs-org.github.io/develop/plugins/task-settle/) and
 [task-status-hooks](https://bobs-org.github.io/task-status-hooks/).
 
 Depends-On ⛓️ **DEPENDS ON:** lines are never struck, restored, reformatted,

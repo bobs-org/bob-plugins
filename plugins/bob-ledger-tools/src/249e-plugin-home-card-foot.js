@@ -205,7 +205,20 @@ class BobLedgerToolsHomeCardFootMixin {
   }
 
   homeCardTrackFoot(container, path, card) {
-    return propertyCardFootAdapterTrack(container, path, card, this.homeCardFootTracked);
+    const mounted = propertyCardFootAdapterTrack(container, path, card, this.homeCardFootTracked);
+    // Bank Setup can paint before the Area foot is registered. Once this
+    // connected Area foot is ready, repaint Bank Setup so it yields its
+    // duplicate foot in this pane, including when native Properties remains
+    // visible because the settings contract is unavailable.
+    if (card && homeCardPath(path) === "bank.md") {
+      try {
+        const area = propertyCardHomeBankAreaCurrent?.(container, "bank.md");
+        if (area?.mount === card && propertyCardHomeBankAreaFootReady?.(area)) {
+          this.scheduleBankSetupRefresh?.();
+        }
+      } catch (_) {}
+    }
+    return mounted;
   }
 
   // Append the shared foot after content, outside the collapsible body.

@@ -377,6 +377,32 @@ test("chip handoff uses one adapter callback and renders inert text without the 
   });
 });
 
+test("tracking a ready Area foot refreshes Bank arbitration", () => {
+  const doc = makeDoc();
+  const scope = doc.createElement("div");
+  const plugin = { homeCardActive: true, refreshes: 0, scheduleBankSetupRefresh() { this.refreshes += 1; } };
+  const mount = doc.createElement("section");
+  mount.setAttribute("class", `${H.HOME_CARD_CLASS} bob-property-card`);
+  mount.setAttribute("data-home-source", "bank.md");
+  const foot = doc.createElement("div");
+  foot.setAttribute("class", "bob-property-card-foot");
+  const disclosure = doc.createElement("button");
+  disclosure.setAttribute("class", "bob-property-card-foot-disclosure");
+  foot.appendChild(disclosure);
+  mount.appendChild(foot);
+  scope.appendChild(mount);
+
+  H.propertyCardHomeBankAreaRegister(plugin, scope, "bank.md", "area", mount);
+  const beforeTrack = plugin.refreshes;
+  H.BobLedgerToolsHomeCardFootMixin.prototype.homeCardTrackFoot.call(plugin, scope, "bank.md", mount);
+
+  const area = H.propertyCardHomeBankAreaCurrent(scope, "bank.md");
+  assert.equal(H.propertyCardHomeBankAreaFootReady(area), true);
+  assert.equal(plugin.refreshes, beforeTrack + 1,
+    "Bank Setup must repaint after the Area foot becomes a registered mount");
+  assert.equal(H.bankSetupAreaArbitration(scope, "bank.md").suppressBankFoot, true);
+});
+
 test("the Area foot preserves the bank setup handoff and truthful body mark", () => {
   const mixin = H.BobLedgerToolsHomeCardFootMixin.prototype;
   const plugin = Object.create(mixin);

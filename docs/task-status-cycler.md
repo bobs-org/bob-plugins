@@ -171,12 +171,19 @@ The pending settle runs early when the cursor leaves the cycled task, the active
 note changes, the editor blurs, or another Bob command runs. When the settled task
 moves away from the cursor's line, the cursor stays on its physical line and the
 recorded jump makes the first Ctrl+O return to the moved task. The real-Obsidian
-checks verify one undo/redo step for the staged promotion, Tasks-backed recurring
-close, and delayed single cycle. The nonempty `o` scaffold check verifies that its
-settle does not add an undo step. Missing or older Bob Ledger Tools APIs leave the
-gesture in place for later reconcile; stale editor paths and unresolved tasks are
-dropped without applying old note bytes. See the [task settle contract](develop/task-settle.md)
-and [task-status-hooks](https://bobs-org.github.io/task-status-hooks/).
+cycle fixture moved the task from line 13 to line 5 while the cursor stayed at
+line 5; nav's jump-history check confirmed line 13 as the first Ctrl+O target.
+The cycle settled after the 500 ms idle delay (the fixture checked at 650 ms),
+and one undo/redo restored the original/settled buffers. Promotion and a
+Tasks-backed recurring close also measured one undo/redo each. The recurring
+fixture's 2026-12-02 spawn landed as `[?]` under `### Blocked`, while its closed
+2026-11-25 row remained the close target. For nonempty `o`, two undo/redo steps
+covered the typed title and the scaffold: the second step removed/restored the
+scaffold and its settle together. Missing or older Bob Ledger Tools APIs leave
+the gesture in place for later reconcile; stale editor paths and unresolved
+tasks are dropped without applying old note bytes. See the [task settle
+contract](develop/task-settle.md) and
+[task-status-hooks](https://bobs-org.github.io/task-status-hooks/).
 
 Depends-On ⛓️ **DEPENDS ON:** lines are never struck, restored, reformatted,
 or tree-closed: `Ctrl+Enter` on one closes or reopens the linked prerequisite

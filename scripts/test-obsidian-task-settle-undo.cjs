@@ -65,14 +65,32 @@ const TASKS_DATA = {
   taskFormat: "dataview",
   statusSettings: {
     coreStatuses: [
-      { symbol: " ", name: "Ready", type: "TODO" },
-      { symbol: "x", name: "Done", type: "DONE" },
+      {
+        symbol: " ", name: "Ready", nextStatusSymbol: "x",
+        availableAsCommand: true, type: "TODO",
+      },
+      {
+        symbol: "x", name: "Done", nextStatusSymbol: " ",
+        availableAsCommand: true, type: "DONE",
+      },
     ],
     customStatuses: [
-      { symbol: "*", name: "Next", type: "ON_HOLD" },
-      { symbol: "?", name: "Blocked", type: "TODO" },
-      { symbol: "/", name: "In Progress", type: "IN_PROGRESS" },
-      { symbol: "-", name: "Canceled", type: "CANCELLED" },
+      {
+        symbol: "*", name: "Next", nextStatusSymbol: "x",
+        availableAsCommand: true, type: "ON_HOLD",
+      },
+      {
+        symbol: "?", name: "Blocked", nextStatusSymbol: " ",
+        availableAsCommand: true, type: "ON_HOLD",
+      },
+      {
+        symbol: "/", name: "In Progress", nextStatusSymbol: "x",
+        availableAsCommand: true, type: "IN_PROGRESS",
+      },
+      {
+        symbol: "-", name: "Canceled", nextStatusSymbol: " ",
+        availableAsCommand: true, type: "CANCELLED",
+      },
     ],
   },
 };
@@ -398,19 +416,35 @@ async function main() {
         const cm = editor.cm?.cm;
         const vim = window.CodeMirrorAdapter?.Vim;
         if (!vim || typeof vim.handleKey !== "function") throw new Error("Obsidian Vim key handler is unavailable");
-        vim.handleKey(cm, "Esc", "key");
+        vim.handleKey(cm, "<Esc>", "mapping");
         return window.app.plugins.plugins["task-status-cycler"].getCurrentVimMode(cm);
       })()`,
       5000,
     );
-    if (normalMode === "insert") throw new Error(`Escape did not leave Vim insert mode: ${normalMode}`);
+    if (["insert", "visual", "visual-block", "visual-line", "replace"].includes(normalMode)) {
+      throw new Error(`Escape did not leave Vim insert mode: ${normalMode}`);
+    }
+    const openLineKey = {
+      key: "o",
+      code: "KeyO",
+      windowsVirtualKeyCode: 79,
+      nativeVirtualKeyCode: 79,
+      text: "o",
+      unmodifiedText: "o",
+    };
+    const scaffoldBefore = await client.evaluate(
+      `(() => window.app.workspace.getLeaf(false).view.editor.getValue())()`,
+      5000,
+    );
+    await client.call("Input.dispatchKeyEvent", { type: "keyDown", ...openLineKey }, 5000);
+    await client.call("Input.dispatchKeyEvent", { type: "keyUp", ...openLineKey }, 5000);
     await client.evaluate(
       `(() => (async () => {
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
         const app = window.app;
         const editor = app.workspace.getLeaf(false).view.editor;
         const cm = editor.cm?.cm;
         const plugin = app.plugins.plugins["task-status-cycler"];
-        app.commands.executeCommandById("task-status-cycler:open-child-bullet-line-below");
         if (!plugin.openLineScaffold || plugin.openLineScaffold.scaffold.kind !== "task") {
           throw new Error("o did not create a task scaffold: " + JSON.stringify({
             vimMode: plugin.getCurrentVimMode(cm),
@@ -436,7 +470,7 @@ async function main() {
         const cm = editor.cm?.cm;
         const vim = window.CodeMirrorAdapter?.Vim;
         if (!vim || typeof vim.handleKey !== "function") throw new Error("Obsidian Vim key handler is unavailable");
-        vim.handleKey(cm, "Esc", "key");
+        vim.handleKey(cm, "<Esc>", "mapping");
       })()`,
       5000,
     );
@@ -450,18 +484,33 @@ async function main() {
         editor.undo();
         await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
         const firstUndo = editor.getValue();
+        editor.undo();
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const secondUndo = editor.getValue();
         editor.redo();
         await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
         const firstRedo = editor.getValue();
+        editor.redo();
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const secondRedo = editor.getValue();
+        const emptyScaffoldSettled = settled.replace("Scaffolded task", "");
         return {
+          undoSteps: secondUndo === ${JSON.stringify(scaffoldBefore)} ? 2 : 0,
+          redoSteps: secondRedo === settled ? 2 : 0,
+          firstUndoRestoredEmptyScaffold: firstUndo === emptyScaffoldSettled,
+          secondUndoRestoredOriginal: secondUndo === ${JSON.stringify(scaffoldBefore)},
+          firstRedoRestoredEmptyScaffold: firstRedo === emptyScaffoldSettled,
+          secondRedoRestoredSettled: secondRedo === settled,
           settleIsSeparateUndo: firstUndo === ${JSON.stringify(preSettle)},
-          firstRedoRestoredSettled: firstRedo === settled,
           settled,
         };
       })())()`,
       15_000,
     );
-    if (!scaffold || scaffold.settleIsSeparateUndo || !scaffold.firstRedoRestoredSettled ||
+    if (!scaffold || scaffold.undoSteps !== 2 || scaffold.redoSteps !== 2 ||
+        !scaffold.firstUndoRestoredEmptyScaffold || !scaffold.secondUndoRestoredOriginal ||
+        !scaffold.firstRedoRestoredEmptyScaffold || !scaffold.secondRedoRestoredSettled ||
+        scaffold.settleIsSeparateUndo ||
         !scaffold.settled.includes("#task Scaffolded task")) {
       throw new Error(`nonempty o scaffold history assertion failed: ${JSON.stringify(scaffold)}`);
     }

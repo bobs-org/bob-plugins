@@ -41,7 +41,9 @@ try {
       homeCardLinkPane,
       homeCardIsDesktopPlatform,
       homeCardScopeDenied,
+      homeCardFallbackKeys,
       BobLedgerToolsHomeCardMixin,
+      BobLedgerToolsHomeCardOwnershipMixin,
       BobLedgerToolsHomeCardFootMixin,
     });
   }

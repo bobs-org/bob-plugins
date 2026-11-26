@@ -339,12 +339,11 @@ test("title adoption never consumes ^prj and the source task offsets survive the
 });
 
 test("painting introduces no writes and no card-triggered subprocesses", () => {
-  const scrubbed = `${codeOnly(hostSrc)}\n${codeOnly(footSrc)}`;
+  const ownSrc = fs.readFileSync(path.join(SRC, "249da-plugin-home-card-ownership.js"), "utf8");
+  const scrubbed = `${codeOnly(hostSrc)}\n${codeOnly(ownSrc)}\n${codeOnly(footSrc)}`;
   for (const banned of [
     "processFrontMatter(",
-    "propertyCardFrontmatterOwnMounted(",
     "propertyCardOwnFrontmatter(",
-    "propertyCardFrontmatterOwnMountedDeferred(",
     "apiAlbumSubscribe(",
     "vault.modify(",
     "vault.create(",
@@ -355,6 +354,11 @@ test("painting introduces no writes and no card-triggered subprocesses", () => {
   ]) {
     assert.equal(scrubbed.includes(banned), false, banned);
   }
+  // Whole-frontmatter ownership is sanctioned only through the shared
+  // coordinator behind evidence checks, never the raw primitive: the host
+  // reaches it through the optional-chained ownership wrapper.
+  assert.ok(codeOnly(hostSrc).includes("homeCardOwnMountedFrontmatter"), "host owns through the wrapper");
+  assert.equal(codeOnly(ownSrc).includes("propertyCardFrontmatterOwnMounted(plugin,"), true);
   assert.match(hostSrc, /allowEmbedDisplay:\s*false/);
   const writes = [];
   const fakeVault = {
@@ -386,10 +390,12 @@ test("painting introduces no writes and no card-triggered subprocesses", () => {
 
 function makeHostPlugin(extra = {}) {
   const plugin = Object.create(H.BobLedgerToolsHomeCardMixin.prototype);
-  const foot = H.BobLedgerToolsHomeCardFootMixin.prototype;
-  for (const name of Object.getOwnPropertyNames(foot)) {
-    if (name === "constructor") continue;
-    plugin[name] = foot[name];
+  for (const mixinName of ["BobLedgerToolsHomeCardOwnershipMixin", "BobLedgerToolsHomeCardFootMixin"]) {
+    const proto = H[mixinName].prototype;
+    for (const name of Object.getOwnPropertyNames(proto)) {
+      if (name === "constructor") continue;
+      plugin[name] = proto[name];
+    }
   }
   plugin.scheduleHomeCardRefresh = extra.scheduleHomeCardRefresh || (() => {});
   plugin.registerEvent = (value) => value;
@@ -590,4 +596,138 @@ test("source cache drops on metadata, rename, and delete, then delayed reads ref
   plugin.homeCardRememberSource("gone.md", "drop");
   vaultListeners.delete({ path: "gone.md" });
   assert.equal(plugin.homeCardSourceCache.has("gone.md"), false);
+});
+
+// --- Frontmatter ownership (bob-cli-pl.9.1.1 home-ownership) ---
+
+function homeRowScope(doc, mode = "live") {
+  const live = mode === "live";
+  const scope = doc.createElement("div");
+  scope.setAttribute("class", live ? "cm-editor" : "markdown-preview-view");
+  const scroller = doc.createElement("div");
+  scroller.setAttribute("class", live ? "cm-scroller" : "markdown-preview-sizer");
+  const sizer = doc.createElement("div");
+  sizer.setAttribute("class", live ? "cm-sizer" : "mod-header");
+  const container = doc.createElement("div");
+  container.setAttribute("class", "metadata-container");
+  for (const key of ["task_type", "bank", "summary"]) {
+    const row = doc.createElement("div");
+    row.setAttribute("class", "metadata-property");
+    row.setAttribute("data-property-key", key);
+    container.appendChild(row);
+  }
+  sizer.appendChild(container);
+  scroller.appendChild(sizer);
+  scope.appendChild(scroller);
+  return { scope, container };
+}
+
+function homeRowTagged(container, key) {
+  const row = container.querySelector(`[data-property-key="${key}"]`);
+  return Boolean(row) && row.classList.contains("bob-property-card-owned-property");
+}
+
+test("fallback rows claim only values the connected card represents", () => {
+  assert.deepEqual(
+    H.homeCardFallbackKeys({
+      chips: [{ key: "task_type" }, { key: "offclock_types" }, { key: "" }],
+      subtitle: { kind: "summary", text: "Lovely" },
+      created: { present: true },
+    }),
+    ["task_type", "offclock_types", "summary", "created"],
+  );
+  assert.deepEqual(H.homeCardFallbackKeys({ chips: [], subtitle: { kind: "lifecycle", text: "WIP" } }), []);
+  assert.deepEqual(H.homeCardFallbackKeys({ subtitle: { kind: "summary", text: "   " } }), []);
+  assert.deepEqual(H.homeCardFallbackKeys({ created: { present: false } }), []);
+  assert.deepEqual(H.homeCardFallbackKeys(null), []);
+  assert.deepEqual(H.homeCardFallbackKeys("area"), []);
+
+  const doc = makeDoc();
+  const { scope, container } = homeRowScope(doc);
+  const home = Object.create(H.BobLedgerToolsHomeCardOwnershipMixin.prototype);
+  home.homeCardDesktop = () => true;
+  home.homeCardSourceCache = new Map();
+  home.homeCardKeySlots = new Map();
+  home.homeCardCardModelFor = () => ({
+    kind: "area", path: "note.md",
+    chips: [{ key: "task_type" }],
+    subtitle: { kind: "summary", text: "Lovely" },
+    created: { present: true },
+  });
+  const release = home.homeCardOwnKeys(scope, "note.md");
+  assert.equal(typeof release, "function");
+  assert.equal(homeRowTagged(container, "task_type"), true);
+  assert.equal(homeRowTagged(container, "summary"), true);
+  assert.equal(homeRowTagged(container, "bank"), false, "unrepresented keys stay native");
+  assert.equal(release(), undefined);
+  assert.equal(homeRowTagged(container, "task_type"), false, "release restores native rows");
+
+  home.homeCardCardModelFor = () => null;
+  assert.equal(home.homeCardOwnKeys(scope, "note.md"), null, "card loss owns no rows");
+  assert.equal(home.homeCardKeySlots.size, 0);
+
+  home.homeCardDesktop = () => false;
+  home.homeCardCardModelFor = () => ({ kind: "area", path: "note.md", chips: [{ key: "task_type" }] });
+  assert.equal(home.homeCardOwnKeys(scope, "note.md"), null, "denied contexts own no rows");
+});
+
+test("whole ownership suppresses the row fallback; loss restores native and rows", () => {
+  const doc = makeDoc();
+  const { scope, container } = homeRowScope(doc, "reading");
+  const mount = doc.createElement("section");
+  mount.setAttribute("class", `${H.HOME_CARD_CLASS} bob-property-card`);
+  mount.setAttribute("data-home-source", "note.md");
+  const foot = doc.createElement("footer");
+  foot.setAttribute("class", "bob-property-card-foot");
+  mount.appendChild(foot);
+  scope.appendChild(mount);
+
+  const sourceText = "---\ntype: area\nsummary: Lovely\n---\n# Area\n";
+  const home = Object.create(H.BobLedgerToolsHomeCardOwnershipMixin.prototype);
+  home.app = {
+    vault: { getAbstractFileByPath: (path) => ({ path }), on: () => ({}) },
+    metadataCache: {
+      getFileCache: () => ({ frontmatter: { type: "area", summary: "Lovely" } }),
+      on: () => ({}),
+    },
+    workspace: { getLeavesOfType: () => [], on: () => ({}) },
+  };
+  home.registerEvent = (value) => value;
+  home.propertyCapabilityRoutingReady = () => true;
+  home.propertyCapabilityCurrentBobKey = () => "path:bob";
+  home.propertyCapabilityConfirmed = () => true;
+  home.propertyCapabilityContractConfirmed = () => true;
+  home.homeCardActive = true;
+  home.homeCardDesktop = () => true;
+  home.homeCardSourceCache = new Map([["note.md", sourceText]]);
+  home.homeCardKeySlots = new Map();
+  home.homeCardCardModelFor = () => ({
+    kind: "area", path: "note.md",
+    chips: [{ key: "task_type" }],
+    subtitle: { kind: "summary", text: "Lovely" },
+    created: { present: true },
+  });
+  const parse = (yamlText) => Object.fromEntries(String(yamlText).split(/\r?\n/).filter(Boolean).map((line) => {
+    const index = line.indexOf(":");
+    return [line.slice(0, index).trim(), line.slice(index + 1).trim()];
+  }));
+  assert.equal(home.homeCardBindFrontmatterOwnership(), true);
+  const releaseWhole = H.propertyCardFrontmatterOwnMounted(home, {
+    scope, view: { file: { path: "note.md" }, getMode: () => "preview" },
+    path: "note.md", kind: "area", mount, sourceText,
+    currentPath: () => "note.md", active: () => true, parseYaml: parse,
+  });
+  assert.equal(typeof releaseWhole, "function", "the connected home mount acquires");
+
+  assert.equal(home.homeCardOwnKeys(scope, "note.md"), null, "whole ownership suppresses row fallback");
+  assert.equal(homeRowTagged(container, "task_type"), false);
+
+  assert.equal(home.homeCardReleaseFrontmatterKinds(), 1);
+  assert.equal(container.getAttribute("aria-hidden"), null, "loss restores native Properties");
+
+  const releaseRows = home.homeCardOwnKeys(scope, "note.md");
+  assert.equal(typeof releaseRows, "function", "rows return once whole ownership is gone");
+  assert.equal(homeRowTagged(container, "task_type"), true);
+  assert.equal(home.homeCardReleaseKeys(scope, "note.md"), true);
+  assert.equal(homeRowTagged(container, "task_type"), false);
 });

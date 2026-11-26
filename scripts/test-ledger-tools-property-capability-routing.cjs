@@ -330,8 +330,10 @@ function makePlugin(app, { bobPath = "/fixture/bin/bob", setupRouting = true } =
     plugin.setupPropertyCapabilityRouting();
     plugin.propertySpawnJson = realSpawn;
     plugin.propertyCapabilityFlight = null;
+    plugin.propertyCapabilityContractFlight = null;
     plugin.propertyCapabilityByBobPath.clear();
     plugin.propertyCapabilityProbePending = "";
+    plugin.propertyCapabilityContractProbePending = "";
   }
   return plugin;
 }
@@ -783,7 +785,7 @@ test("a later foreign wrapper survives our teardown", () => {
 
 // --- Focus-helper routing ---
 
-test("owned views route summary focus to the editor with key summary", async () => {
+test("owned views route summary focus to the editor with setting summary", async () => {
   const app = makeApp({ files: ["note.md"], activePath: "note.md" });
   const plugin = makePlugin(app);
   try {
@@ -793,7 +795,7 @@ test("owned views route summary focus to the editor with key summary", async () 
     const result = plugin.notebookFocusSummaryProperty(app.__activeView);
     assert.equal(result, true);
     await flushMicrotasks();
-    assert.deepEqual(openerCalls, [{ filePath: "note.md", key: "summary" }]);
+    assert.deepEqual(openerCalls, [{ filePath: "note.md", setting: "summary" }]);
   } finally {
     plugin.teardownPropertyCapabilityRouting();
     plugin.teardownPropertyUpdate();
@@ -816,6 +818,173 @@ test("a failed summary opener releases the scope before native fallback", async 
     assert.equal(plugin.propertyCardActualOwnership({}).owned, false);
     assert.equal(nativeCalls.length, 1);
     assert.equal(nativeCalls[0].attempted, true, "the fallback skips the command loop");
+  } finally {
+    plugin.teardownPropertyCapabilityRouting();
+    plugin.teardownPropertyUpdate();
+  }
+});
+
+// --- Typed settings contract evidence (props_contract_v1, bob-cli-pl.9.1.1) ---
+
+function catalogReport(features = ["props_v1", "props_contract_v1"]) {
+  return {
+    schema_version: 1, ok: true, protocol: 1, bob_version: "0.0.0-test",
+    features, sections: [], roots: [], aliases: [], entries: [], excluded: [],
+  };
+}
+
+const catalogJson = (features) => (callback) => callback(null, JSON.stringify(catalogReport(features)), "");
+
+function routedStub(catalogHandler, showHandler) {
+  const calls = [];
+  const execFile = (command, args, options, callback) => {
+    calls.push({ command, args });
+    ((args[0] === "__catalog" ? catalogHandler : showHandler) || (() => {}))(callback);
+  };
+  return { calls, execFile };
+}
+
+function typedShowReport() {
+  return showReport({ note_kind: "area", capabilities: ["props_v1", "props_contract_v1"] });
+}
+
+test("contract helpers: catalog argv, decode, classify, and report evidence", () => {
+  assert.deepEqual(H.propertyCapabilityCatalogArgs(), ["__catalog", "--protocol", "1"]);
+  assert.equal(H.PROPERTY_CAPABILITY_CONTRACT, "props_contract_v1");
+
+  const decoded = H.propertyDecodeCatalogReport(JSON.stringify(catalogReport()), "", 0);
+  assert.equal(decoded.ok, true);
+  assert.deepEqual(decoded.report.features, ["props_v1", "props_contract_v1"]);
+
+  assert.equal(H.propertyDecodeCatalogReport("not json", "", 0).ok, false);
+  assert.equal(H.propertyDecodeCatalogReport(JSON.stringify({ ok: true, protocol: 1 }), "", 0).ok, false);
+
+  assert.deepEqual(H.propertyCapabilityClassifyCatalogOutcome(decoded), { status: "confirmed" });
+  assert.deepEqual(
+    H.propertyCapabilityClassifyCatalogOutcome({ ok: true, report: catalogReport(["props_v1"]) }),
+    { status: "absent", reason: "missing-contract" },
+  );
+  assert.equal(H.propertyCapabilityClassifyCatalogOutcome({ ok: false, code: "spawn-failed" }).status, "unconfirmed");
+
+  assert.equal(H.propertyCapabilityReportHasContract(typedShowReport()), true);
+  assert.equal(H.propertyCapabilityReportHasContract(showReport()), false, "ordinary notes omit the contract");
+  assert.equal(H.propertyCapabilityReportHasContract(null), false);
+  assert.equal(H.propertyCapabilityReportHasContract({ capabilities: [] }), false);
+});
+
+test("contract probe confirms, deduplicates in flight, and never needs a note", async () => {
+  const app = makeApp({ files: [], activePath: null });
+  const plugin = makePlugin(app);
+  try {
+    const stub = routedStub(catalogJson(), showJson(showReport()));
+    assert.deepEqual(Object.keys(app.vault.getAbstractFileByPath("missing.md") || {}), []);
+    assert.equal(plugin.schedulePropertyCapabilityProbe("setup", { execFile: stub.execFile }), "no-note");
+    assert.equal(plugin.schedulePropertyCapabilityContractProbe("setup", { execFile: stub.execFile }), "probing");
+    assert.equal(plugin.schedulePropertyCapabilityContractProbe("setup", { execFile: stub.execFile }), "in-flight");
+    assert.equal(stub.calls.length, 1);
+    assert.deepEqual(stub.calls[0].args, ["__catalog", "--protocol", "1"]);
+    await flushMicrotasks();
+    assert.equal(plugin.propertyCapabilityState().contract, "confirmed");
+    assert.equal(plugin.propertyCapabilityState().status, "unknown", "the catalog never decides props_v1");
+    assert.equal(plugin.__refreshes(), 1, "confirmation schedules card refreshes");
+    assert.equal(plugin.schedulePropertyCapabilityContractProbe("file-open", { execFile: stub.execFile }), "confirmed");
+    assert.equal(stub.calls.length, 1, "confirmed contracts never re-probe");
+  } finally {
+    plugin.teardownPropertyCapabilityRouting();
+    plugin.teardownPropertyUpdate();
+  }
+});
+
+test("contract absence records old binaries and a later catalog detects upgrades", async () => {
+  const app = makeApp({ files: ["note.md"], activePath: "note.md" });
+  const plugin = makePlugin(app);
+  try {
+    const oldStub = routedStub(catalogJson(["props_v1"]), showJson(showReport()));
+    assert.equal(plugin.schedulePropertyCapabilityContractProbe("setup", { execFile: oldStub.execFile }), "probing");
+    await flushMicrotasks();
+    assert.equal(plugin.propertyCapabilityState().contract, "absent");
+    // Absence re-probes: an upgraded binary is detected on a later event.
+    const newStub = routedStub(catalogJson(), showJson(showReport()));
+    assert.equal(plugin.schedulePropertyCapabilityContractProbe("file-open", { execFile: newStub.execFile }), "probing");
+    await flushMicrotasks();
+    assert.equal(plugin.propertyCapabilityState().contract, "confirmed");
+  } finally {
+    plugin.teardownPropertyCapabilityRouting();
+    plugin.teardownPropertyUpdate();
+  }
+});
+
+test("contract probe failures retry to a bound; stale, switched, and torn-down probes discard", async () => {
+  const app = makeApp({ files: ["note.md"], activePath: "note.md" });
+  let bobPath = "/fixture/bin/bob";
+  const plugin = makePlugin(app, { bobPath });
+  plugin.apiStatsBobPath = () => ({ path: bobPath, source: "candidate" });
+  try {
+    const stub = routedStub(badJson, showJson(showReport()));
+    for (let attempt = 1; attempt <= H.PROPERTY_CAPABILITY_MAX_PROBE_ATTEMPTS; attempt += 1) {
+      assert.equal(plugin.schedulePropertyCapabilityContractProbe(`event-${attempt}`, { execFile: stub.execFile }), "probing");
+      await flushMicrotasks();
+      assert.equal(plugin.propertyCapabilityState().contract, "unconfirmed");
+    }
+    assert.equal(stub.calls.length, H.PROPERTY_CAPABILITY_MAX_PROBE_ATTEMPTS);
+    assert.equal(plugin.schedulePropertyCapabilityContractProbe("another-event", { execFile: stub.execFile }), "exhausted");
+    assert.equal(stub.calls.length, H.PROPERTY_CAPABILITY_MAX_PROBE_ATTEMPTS, "no repaint retry loop");
+
+    assert.equal(plugin.propertyCapabilitySettleContractProbe("other:key", 999, { ok: false }), "stale");
+
+    plugin.propertyCapabilityByBobPath.clear();
+    const holdStub = routedStub(() => {}, showJson(showReport()));
+    assert.equal(plugin.schedulePropertyCapabilityContractProbe("setup", { execFile: holdStub.execFile }), "probing");
+    const flight = plugin.propertyCapabilityContractFlight;
+    assert.ok(flight);
+    bobPath = "/fixture/bin/bob-b";
+    assert.equal(plugin.propertyCapabilitySettleContractProbe(flight.key, flight.generation, {
+      ok: true, report: catalogReport(),
+    }), "path-changed");
+    assert.equal(plugin.propertyCapabilityState().contract, "unknown");
+
+    plugin.teardownPropertyCapabilityRouting();
+    assert.equal(plugin.propertyCapabilitySettleContractProbe(flight.key, flight.generation, {
+      ok: true, report: catalogReport(),
+    }), "inactive");
+  } finally {
+    plugin.teardownPropertyUpdate();
+  }
+});
+
+test("typed-note shows confirm the contract; ordinary notes never downgrade it", () => {
+  const app = makeApp({ files: ["note.md"], activePath: "note.md" });
+  const plugin = makePlugin(app);
+  try {
+    assert.equal(plugin.propertyCapabilityState().contract, "unknown");
+    assert.equal(plugin.propertyCapabilityNoteShowOutcome({ ok: true, report: typedShowReport() }), "confirmed");
+    assert.equal(plugin.propertyCapabilityState().contract, "confirmed");
+    assert.equal(plugin.propertyCapabilityState().status, "confirmed");
+    // An ordinary note's report omits the contract: it preserves the
+    // confirmed contract instead of establishing absence.
+    assert.equal(plugin.propertyCapabilityNoteShowOutcome({ ok: true, report: showReport() }), "confirmed");
+    assert.equal(plugin.propertyCapabilityState().contract, "confirmed");
+    // needs-bob is binary-level evidence, so it records contract absence.
+    assert.equal(plugin.propertyCapabilityNoteShowOutcome({ ok: false, code: "needs-bob" }), "absent");
+    assert.equal(plugin.propertyCapabilityState().contract, "absent");
+  } finally {
+    plugin.teardownPropertyCapabilityRouting();
+    plugin.teardownPropertyUpdate();
+  }
+});
+
+test("the combined scheduler probes both capabilities from one lifecycle event", async () => {
+  const app = makeApp({ files: ["note.md"], activePath: "note.md" });
+  const plugin = makePlugin(app);
+  try {
+    const stub = routedStub(catalogJson(), showJson(showReport()));
+    assert.deepEqual(plugin.schedulePropertyCapabilityProbes("setup", { execFile: stub.execFile }), {
+      show: "probing", contract: "probing",
+    });
+    assert.equal(stub.calls.length, 2);
+    await flushMicrotasks();
+    assert.equal(plugin.propertyCapabilityState().status, "confirmed");
+    assert.equal(plugin.propertyCapabilityState().contract, "confirmed");
   } finally {
     plugin.teardownPropertyCapabilityRouting();
     plugin.teardownPropertyUpdate();

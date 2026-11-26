@@ -511,10 +511,26 @@ function propertyCardFrontmatterCapabilityReady(plugin) {
   }
 }
 
+// Species-specific contract requirement (bob-cli-pl.9.1.1): area/project
+// whole-frontmatter ownership additionally needs confirmed
+// `props_contract_v1` evidence for the current bob path. Existing species
+// keep working on the generic `props_v1` capability alone, and bank stays
+// on its pre-takeover gate until the bank-arbitration phase.
+function propertyCardFrontmatterContractReady(plugin, kind) {
+  try {
+    if (kind !== "area" && kind !== "project") return true;
+    if (typeof plugin?.propertyCapabilityContractConfirmed !== "function") return false;
+    return plugin.propertyCapabilityContractConfirmed() === true;
+  } catch (_) {
+    return false;
+  }
+}
+
 function propertyCardFrontmatterMountPath(mount, kind) {
   const attr = kind === "album" ? "data-album-source"
     : kind === "record" ? "data-record-source"
-      : kind === "bank" ? "data-bank-setup-source" : "data-intention-source";
+      : kind === "bank" ? "data-bank-setup-source"
+        : kind === "area" || kind === "project" ? "data-home-source" : "data-intention-source";
   try { return String(mount?.getAttribute?.(attr) || "").replace(/\\/g, "/"); } catch (_) { return ""; }
 }
 
@@ -525,7 +541,7 @@ function propertyCardFrontmatterRecordEligible(plugin, options = {}) {
     const path = String(options.path || "").replace(/\\/g, "/");
     const kind = options.kind;
     const mount = options.mount;
-    if (!scope || !path || !["album", "record", "day", "week", "quarter", "year", "bank"].includes(kind)) return false;
+    if (!scope || !path || !["album", "record", "day", "week", "quarter", "year", "bank", "area", "project"].includes(kind)) return false;
     if (options.active && options.active() !== true) return false;
     if (typeof propertyCardDesktop === "function" && propertyCardDesktop() !== true) return false;
     if (propertyCardFrontmatterScopeDenied(scope)) return false;
@@ -535,6 +551,9 @@ function propertyCardFrontmatterRecordEligible(plugin, options = {}) {
     if (propertyCardFrontmatterMountPath(mount, kind) !== path) return false;
     if (typeof mount.querySelector !== "function" || !mount.querySelector(".bob-property-card-foot")) return false;
     if (!propertyCardFrontmatterCapabilityReady(plugin)) return false;
+    // Area/project mounts additionally need the typed settings contract;
+    // without it the mount keeps native Properties (fail open).
+    if (!propertyCardFrontmatterContractReady(plugin, kind)) return false;
 
     const view = options.view || (mode === "reading"
       ? propertyCardFrontmatterMarkdownViewFor(plugin?.app, scope) : null);
@@ -727,7 +746,7 @@ function propertyCardFrontmatterCoordinatorReconcile(plugin) {
 function propertyCardFrontmatterCoordinatorCapabilityChanged(plugin, status) {
   const released = propertyCardFrontmatterCoordinatorReconcile(plugin);
   if (status === "confirmed" && propertyCardFrontmatterCapabilityReady(plugin)) {
-    for (const method of ["scheduleAlbumHeaderRefresh", "scheduleRecordSheetRefresh", "scheduleIntentionCardRefresh", "scheduleBankSetupRefresh"]) {
+    for (const method of ["scheduleAlbumHeaderRefresh", "scheduleRecordSheetRefresh", "scheduleIntentionCardRefresh", "scheduleBankSetupRefresh", "scheduleHomeCardRefresh"]) {
       try { plugin?.[method]?.(); } catch (_) {}
     }
     try { plugin?.intentionCardHost?.().scheduleRefresh?.(); } catch (_) {}

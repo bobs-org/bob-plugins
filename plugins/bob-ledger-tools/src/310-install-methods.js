@@ -60,6 +60,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsAlbumHeaderMixin,
   BobLedgerToolsAlbumHeaderFootMixin,
   BobLedgerToolsHomeCardMixin,
+  BobLedgerToolsHomeCardOwnershipMixin,
   BobLedgerToolsHomeCardFootMixin,
   BobLedgerToolsHomeCardLiveMixin,
   BobLedgerToolsRecordSheetMixin,

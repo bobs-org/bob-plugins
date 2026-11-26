@@ -1,10 +1,12 @@
-// Home-card host (bob-cli-pl.4.1 mount-foot). One shared adapter mounts the
-// pure Area/Project presentation in desktop Live Preview and Reading through
-// the shared host and title kit, with the property foot and local
-// invalidation. Native Properties stays wholly visible: this adapter never
-// calls propertyCardFrontmatterOwnMounted, propertyCardOwnFrontmatter, or
-// any whole-block/per-key Properties hiding. Painting reads only the
-// metadata cache, confirmed source bytes, the local home resolver, and
+// Home-card host (bob-cli-pl.4.1 mount-foot, bob-cli-pl.9.1.1 ownership).
+// One shared adapter mounts the pure Area/Project presentation in desktop
+// Live Preview and Reading through the shared host and title kit, with the
+// property foot and local invalidation. Mounted cards acquire
+// whole-frontmatter ownership through the shared frontmatter coordinator
+// (249da) once card, foot, source/cache, capability, and contract evidence
+// are current; otherwise native Properties stays visible (fail open) with
+// the row-level fallback for card-represented values. Painting reads only
+// the metadata cache, confirmed source bytes, the local home resolver, and
 // api.noteReady. It never subscribes to report services, never starts a
 // per-card fetch, and never spawns bob or writes the vault.
 const HOME_CARD_HOST_KIND = "home";
@@ -93,10 +95,11 @@ class BobLedgerToolsHomeCardMixin {
         catch (_) { return false; }
       },
       cleanEditor: (view) => plugin.homeCardCleanEditor(view),
-      // Intentionally no ownKeys/releaseKeys ownership of Properties rows
-      // and no frontmatter coordinator: native Properties stays visible.
-      ownKeys: () => null,
-      releaseKeys: () => false,
+      // Row-level fallback ownership for card-represented values; whole
+      // frontmatter goes through the shared coordinator (249da), and both
+      // release on card loss so native Properties returns (fail open).
+      ownKeys: (scope, path) => plugin.homeCardOwnKeys(scope, path),
+      releaseKeys: (scope, path) => plugin.homeCardReleaseKeys(scope, path),
       workspaceEvents: ["layout-change", "file-open", "active-leaf-change"],
       onSetup: () => plugin.homeCardOnSetup(),
       onDisposeStart: () => plugin.homeCardOnDisposeStart(),
@@ -462,6 +465,7 @@ class BobLedgerToolsHomeCardMixin {
     try {
       if (typeof this.homeCardLiveSubscribe === "function") this.homeCardLiveSubscribe();
     } catch (_) {}
+    try { this.homeCardBindFrontmatterOwnership?.(); } catch (_) {}
     try { this.homeCardFootBind?.(); } catch (_) {}
     this.homeCardDay = this.homeCardTodayText();
     try {
@@ -511,6 +515,7 @@ class BobLedgerToolsHomeCardMixin {
     try {
       if (typeof this.homeCardLiveUnsubscribe === "function") this.homeCardLiveUnsubscribe();
     } catch (_) {}
+    try { this.homeCardReleaseFrontmatterKinds?.(); } catch (_) {}
     try { this.homeCardFoldUnregister?.(); this.homeCardFoldUnregister = null; this.homeCardFootUnbind?.(); } catch (_) {}
     try {
       if (this.homeCardDayTimer && typeof clearInterval === "function") clearInterval(this.homeCardDayTimer);
@@ -580,39 +585,6 @@ class BobLedgerToolsHomeCardMixin {
       const ownedPath = homeCardPath(node.getAttribute?.("data-home-source") || "");
       return !path || !ownedPath || ownedPath === path;
     });
-  }
-
-  homeCardReleaseAdoption(scope, sourcePath = "") {
-    try { return propertyCardAdoptRelease(scope, sourcePath || undefined, HOME_CARD_HOST_KIND, { preserveFallback: true }); } catch (_) { return false; }
-  }
-
-  // Path-bound Reading removal: releases this path's title/H1 in the same
-  // frame so a failed mount, path change, or unload never leaves a hidden
-  // title. Never touches another path's mount in the same scope.
-  homeCardRemoveReading(root, scope = root, sourcePath = "") {
-    if (!root) return;
-    try { this.homeCardClearGoal?.(root); } catch (_) {}
-    try { this.homeCardTrackFoot?.(scope, sourcePath, null); } catch (_) {}
-    this.homeCardReleaseAdoption(scope, sourcePath);
-    for (const node of Array.from(root.querySelectorAll?.(`.${HOME_CARD_CLASS}`) || [])) {
-      if (!propertyCardNodeBelongs(node, root)) continue;
-      const ownedPath = homeCardPath(node.getAttribute?.("data-home-source") || "");
-      if (sourcePath && ownedPath && ownedPath !== homeCardPath(sourcePath)) continue;
-      try { node.remove?.(); } catch (_) { node.parentNode?.removeChild?.(node); }
-    }
-    try { this.homeCardReleaseKeys?.(scope, sourcePath); } catch (_) {}
-    const anotherOwner = Array.from(this.homeCardReading || []).some((item) =>
-      item.surface === root && item.path !== sourcePath);
-    if (!anotherOwner) scope?.classList?.remove?.(HOME_CARD_SURFACE_CLASS);
-  }
-
-  homeCardRemoveStrays(root, sourcePath) {
-    for (const node of Array.from(root?.querySelectorAll?.(`.${HOME_CARD_CLASS}`) || [])) {
-      if (node.getAttribute?.("data-cm-widget") === "true") continue;
-      if (!node.closest?.(".cm-widgetBuffer, .cm-content")) continue;
-      if (homeCardPath(node.getAttribute?.("data-home-source")) !== homeCardPath(sourcePath)) continue;
-      try { node.remove?.(); } catch (_) {}
-    }
   }
 
   homeCardCardModelFor(sourcePath, sourceText) {
@@ -717,6 +689,15 @@ class BobLedgerToolsHomeCardMixin {
       }
     }
     scope?.classList?.add?.(HOME_CARD_SURFACE_CLASS);
+    const plugin = this;
+    const ownFrontmatter = (mount) => {
+      try {
+        return plugin.homeCardOwnMountedFrontmatter?.(
+          scope, reading?.view || null, sourcePath, mount, model.kind,
+          plugin.homeCardSourceCache?.get?.(sourcePath), reading?.currentPath || (() => ""),
+        );
+      } catch (_) { return null; }
+    };
     const adoption = propertyCardAdoptTitle(scope, header, {
       path: sourcePath,
       kind: HOME_CARD_HOST_KIND,
@@ -724,6 +705,7 @@ class BobLedgerToolsHomeCardMixin {
       currentPath: reading?.currentPath || null,
       recognizer: propertyCardHomeTitleRecognizer(model.title?.text),
       onLost: () => this.scheduleHomeCardRefresh(),
+      onMount: (mount) => { void ownFrontmatter(mount); },
     });
     if (adoption.mode !== "slot") {
       try {
@@ -735,9 +717,14 @@ class BobLedgerToolsHomeCardMixin {
         this.homeCardRemoveReading(root, scope, sourcePath);
         return null;
       }
+      try { this.homeCardReleaseFrontmatter?.(scope, sourcePath); } catch (_) {}
+    } else {
+      void ownFrontmatter(header);
     }
+    // Row-level fallback claims only card-represented values while whole
+    // ownership is unavailable; both release with the card (fail open).
+    try { this.homeCardOwnKeys?.(scope, sourcePath); } catch (_) {}
     this.homeCardPaintGoal(root, model);
-    // Native Properties stays visible: no frontmatter or key ownership here.
     this.homeCardRestoreFocus(header, focusKey);
     try { this.homeCardTrackFoot?.(scope || root, sourcePath, header); } catch (_) {}
     try { this.homeCardEnsureSource?.(sourcePath); } catch (_) {}
@@ -823,6 +810,8 @@ class BobLedgerToolsHomeCardMixin {
       const path = this.homeCardLivePath(view);
       if (!path || !view?.state?.doc) {
         this.homeCardReleaseAdoption(view?.dom);
+        try { this.homeCardReleaseFrontmatter?.(view?.dom, this.homeCardLivePath(view)); } catch (_) {}
+        try { this.homeCardReleaseKeys?.(view?.dom, this.homeCardLivePath(view)); } catch (_) {}
         this.homeCardSetEditorScope(view, false);
         try { this.homeCardTrackFoot?.(view?.dom, this.homeCardLivePath(view), null); } catch (_) {}
         return Decoration.none;
@@ -833,6 +822,8 @@ class BobLedgerToolsHomeCardMixin {
       this.homeCardSetEditorScope(view, Boolean(model));
       if (!model) {
         this.homeCardReleaseAdoption(view?.dom);
+        try { this.homeCardReleaseFrontmatter?.(view?.dom, path); } catch (_) {}
+        try { this.homeCardReleaseKeys?.(view?.dom, path); } catch (_) {}
         try { this.homeCardTrackFoot?.(view?.dom, path, null); } catch (_) {}
         return Decoration.none;
       }
@@ -855,6 +846,8 @@ class BobLedgerToolsHomeCardMixin {
         }
         if (!fresh) {
           this.homeCardReleaseAdoption(view?.dom);
+          try { this.homeCardReleaseFrontmatter?.(view?.dom, path); } catch (_) {}
+          try { this.homeCardReleaseKeys?.(view?.dom, path); } catch (_) {}
           try { this.homeCardTrackFoot?.(view?.dom, path, null); } catch (_) {}
           return Decoration.none;
         }
@@ -872,9 +865,17 @@ class BobLedgerToolsHomeCardMixin {
         currentPath: () => propertyCardLiveCurrentPath(view),
         onLost: () => this.scheduleHomeCardRefresh(),
       });
-      // Native Properties stays visible: no frontmatter or key ownership.
       try { this.homeCardTrackFoot?.(view?.dom, path, header); } catch (_) {}
       if (adoption.mode === "slot") {
+        try {
+          this.homeCardOwnMountedFrontmatter?.(
+            view.dom, view, path, header, model.kind, text,
+            () => this.homeCardLivePath(view) || "",
+          );
+        } catch (_) {}
+        // Row-level fallback claims only card-represented values while
+        // whole ownership is unavailable (fail open otherwise).
+        try { this.homeCardOwnKeys?.(view?.dom, path); } catch (_) {}
         try { this.homeCardEnsureSource?.(path); } catch (_) {}
         return this.homeCardGoalRange(view, model) || Decoration.none;
       }
@@ -904,6 +905,18 @@ class BobLedgerToolsHomeCardMixin {
         toDOM() {
           header.setAttribute?.("data-cm-widget", "true");
           header.setAttribute?.("data-home-source", path);
+          try {
+            propertyCardFrontmatterOwnMountedDeferred?.(plugin, {
+              scope: view.dom, view, path, kind: model.kind, mount: header, sourceText: text,
+              getSource: () => view?.state?.doc?.toString?.() || "",
+              currentPath: () => plugin.homeCardLivePath(view) || "",
+              active: () => plugin.homeCardActive === true,
+              isCurrent: () => {
+                const source = view?.state?.doc?.toString?.() || "";
+                return Boolean(source && plugin.homeCardCardModelFor(path, source));
+              },
+            });
+          } catch (_) {}
           return header;
         }
       }();
@@ -946,34 +959,6 @@ class BobLedgerToolsHomeCardMixin {
       try { this.homeCardReleaseAdoption(view?.dom); } catch (_) {}
       return Decoration?.none || null;
     }
-  }
-
-  homeCardSetEditorScope(view, enabled) {
-    try {
-      return this.homePropertyCardHost().setEditorScope(view, enabled, {
-        scopeOf: (root) => {
-          try {
-            return root.closest?.(".markdown-source-view") || root.closest?.(".markdown-preview-view") || root;
-          } catch (_) {
-            return root;
-          }
-        },
-        mark: (scope) => { scope?.classList?.add?.(HOME_CARD_SURFACE_CLASS); },
-        unmark: (scope) => { scope?.classList?.remove?.(HOME_CARD_SURFACE_CLASS); },
-      });
-    } catch (_) {
-      return null;
-    }
-  }
-
-  homeCardCleanEditor(view) {
-    try { this.homeCardTrackFoot?.(view?.dom, this.homeCardLivePath(view), null); } catch (_) {}
-    try { this.homeCardReleaseAdoption(view?.dom); } catch (_) {}
-    try {
-      return this.homePropertyCardHost().cleanEditor(view, {
-        unmark: (scope) => { scope?.classList?.remove?.(HOME_CARD_SURFACE_CLASS); },
-      });
-    } catch (_) {}
   }
 
   createHomeCardExtension() {

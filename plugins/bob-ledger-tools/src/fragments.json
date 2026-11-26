@@ -215,6 +215,7 @@
   "249b-plugin-home-card-model.js",
   "249c-plugin-home-card-dom.js",
   "249d-plugin-home-card-host.js",
+  "249da-plugin-home-card-ownership.js",
   "249e-plugin-home-card-foot.js",
   "249f-plugin-home-card-live.js",
   "241b-plugin-notebook-catalog-model.js",

@@ -90023,10 +90023,26 @@ function propertyCardFrontmatterCapabilityReady(plugin) {
   }
 }
 
+// Species-specific contract requirement (bob-cli-pl.9.1.1): area/project
+// whole-frontmatter ownership additionally needs confirmed
+// `props_contract_v1` evidence for the current bob path. Existing species
+// keep working on the generic `props_v1` capability alone, and bank stays
+// on its pre-takeover gate until the bank-arbitration phase.
+function propertyCardFrontmatterContractReady(plugin, kind) {
+  try {
+    if (kind !== "area" && kind !== "project") return true;
+    if (typeof plugin?.propertyCapabilityContractConfirmed !== "function") return false;
+    return plugin.propertyCapabilityContractConfirmed() === true;
+  } catch (_) {
+    return false;
+  }
+}
+
 function propertyCardFrontmatterMountPath(mount, kind) {
   const attr = kind === "album" ? "data-album-source"
     : kind === "record" ? "data-record-source"
-      : kind === "bank" ? "data-bank-setup-source" : "data-intention-source";
+      : kind === "bank" ? "data-bank-setup-source"
+        : kind === "area" || kind === "project" ? "data-home-source" : "data-intention-source";
   try { return String(mount?.getAttribute?.(attr) || "").replace(/\\/g, "/"); } catch (_) { return ""; }
 }
 
@@ -90037,7 +90053,7 @@ function propertyCardFrontmatterRecordEligible(plugin, options = {}) {
     const path = String(options.path || "").replace(/\\/g, "/");
     const kind = options.kind;
     const mount = options.mount;
-    if (!scope || !path || !["album", "record", "day", "week", "quarter", "year", "bank"].includes(kind)) return false;
+    if (!scope || !path || !["album", "record", "day", "week", "quarter", "year", "bank", "area", "project"].includes(kind)) return false;
     if (options.active && options.active() !== true) return false;
     if (typeof propertyCardDesktop === "function" && propertyCardDesktop() !== true) return false;
     if (propertyCardFrontmatterScopeDenied(scope)) return false;
@@ -90047,6 +90063,9 @@ function propertyCardFrontmatterRecordEligible(plugin, options = {}) {
     if (propertyCardFrontmatterMountPath(mount, kind) !== path) return false;
     if (typeof mount.querySelector !== "function" || !mount.querySelector(".bob-property-card-foot")) return false;
     if (!propertyCardFrontmatterCapabilityReady(plugin)) return false;
+    // Area/project mounts additionally need the typed settings contract;
+    // without it the mount keeps native Properties (fail open).
+    if (!propertyCardFrontmatterContractReady(plugin, kind)) return false;
 
     const view = options.view || (mode === "reading"
       ? propertyCardFrontmatterMarkdownViewFor(plugin?.app, scope) : null);
@@ -90239,7 +90258,7 @@ function propertyCardFrontmatterCoordinatorReconcile(plugin) {
 function propertyCardFrontmatterCoordinatorCapabilityChanged(plugin, status) {
   const released = propertyCardFrontmatterCoordinatorReconcile(plugin);
   if (status === "confirmed" && propertyCardFrontmatterCapabilityReady(plugin)) {
-    for (const method of ["scheduleAlbumHeaderRefresh", "scheduleRecordSheetRefresh", "scheduleIntentionCardRefresh", "scheduleBankSetupRefresh"]) {
+    for (const method of ["scheduleAlbumHeaderRefresh", "scheduleRecordSheetRefresh", "scheduleIntentionCardRefresh", "scheduleBankSetupRefresh", "scheduleHomeCardRefresh"]) {
       try { plugin?.[method]?.(); } catch (_) {}
     }
     try { plugin?.intentionCardHost?.().scheduleRefresh?.(); } catch (_) {}
@@ -105641,13 +105660,15 @@ function homeCardBuildEl(doc, model, options = {}) {
   }
 }
 // ---- src/249d-plugin-home-card-host.js ----
-// Home-card host (bob-cli-pl.4.1 mount-foot). One shared adapter mounts the
-// pure Area/Project presentation in desktop Live Preview and Reading through
-// the shared host and title kit, with the property foot and local
-// invalidation. Native Properties stays wholly visible: this adapter never
-// calls propertyCardFrontmatterOwnMounted, propertyCardOwnFrontmatter, or
-// any whole-block/per-key Properties hiding. Painting reads only the
-// metadata cache, confirmed source bytes, the local home resolver, and
+// Home-card host (bob-cli-pl.4.1 mount-foot, bob-cli-pl.9.1.1 ownership).
+// One shared adapter mounts the pure Area/Project presentation in desktop
+// Live Preview and Reading through the shared host and title kit, with the
+// property foot and local invalidation. Mounted cards acquire
+// whole-frontmatter ownership through the shared frontmatter coordinator
+// (249da) once card, foot, source/cache, capability, and contract evidence
+// are current; otherwise native Properties stays visible (fail open) with
+// the row-level fallback for card-represented values. Painting reads only
+// the metadata cache, confirmed source bytes, the local home resolver, and
 // api.noteReady. It never subscribes to report services, never starts a
 // per-card fetch, and never spawns bob or writes the vault.
 const HOME_CARD_HOST_KIND = "home";
@@ -105736,10 +105757,11 @@ class BobLedgerToolsHomeCardMixin {
         catch (_) { return false; }
       },
       cleanEditor: (view) => plugin.homeCardCleanEditor(view),
-      // Intentionally no ownKeys/releaseKeys ownership of Properties rows
-      // and no frontmatter coordinator: native Properties stays visible.
-      ownKeys: () => null,
-      releaseKeys: () => false,
+      // Row-level fallback ownership for card-represented values; whole
+      // frontmatter goes through the shared coordinator (249da), and both
+      // release on card loss so native Properties returns (fail open).
+      ownKeys: (scope, path) => plugin.homeCardOwnKeys(scope, path),
+      releaseKeys: (scope, path) => plugin.homeCardReleaseKeys(scope, path),
       workspaceEvents: ["layout-change", "file-open", "active-leaf-change"],
       onSetup: () => plugin.homeCardOnSetup(),
       onDisposeStart: () => plugin.homeCardOnDisposeStart(),
@@ -106105,6 +106127,7 @@ class BobLedgerToolsHomeCardMixin {
     try {
       if (typeof this.homeCardLiveSubscribe === "function") this.homeCardLiveSubscribe();
     } catch (_) {}
+    try { this.homeCardBindFrontmatterOwnership?.(); } catch (_) {}
     try { this.homeCardFootBind?.(); } catch (_) {}
     this.homeCardDay = this.homeCardTodayText();
     try {
@@ -106154,6 +106177,7 @@ class BobLedgerToolsHomeCardMixin {
     try {
       if (typeof this.homeCardLiveUnsubscribe === "function") this.homeCardLiveUnsubscribe();
     } catch (_) {}
+    try { this.homeCardReleaseFrontmatterKinds?.(); } catch (_) {}
     try { this.homeCardFoldUnregister?.(); this.homeCardFoldUnregister = null; this.homeCardFootUnbind?.(); } catch (_) {}
     try {
       if (this.homeCardDayTimer && typeof clearInterval === "function") clearInterval(this.homeCardDayTimer);
@@ -106223,39 +106247,6 @@ class BobLedgerToolsHomeCardMixin {
       const ownedPath = homeCardPath(node.getAttribute?.("data-home-source") || "");
       return !path || !ownedPath || ownedPath === path;
     });
-  }
-
-  homeCardReleaseAdoption(scope, sourcePath = "") {
-    try { return propertyCardAdoptRelease(scope, sourcePath || undefined, HOME_CARD_HOST_KIND, { preserveFallback: true }); } catch (_) { return false; }
-  }
-
-  // Path-bound Reading removal: releases this path's title/H1 in the same
-  // frame so a failed mount, path change, or unload never leaves a hidden
-  // title. Never touches another path's mount in the same scope.
-  homeCardRemoveReading(root, scope = root, sourcePath = "") {
-    if (!root) return;
-    try { this.homeCardClearGoal?.(root); } catch (_) {}
-    try { this.homeCardTrackFoot?.(scope, sourcePath, null); } catch (_) {}
-    this.homeCardReleaseAdoption(scope, sourcePath);
-    for (const node of Array.from(root.querySelectorAll?.(`.${HOME_CARD_CLASS}`) || [])) {
-      if (!propertyCardNodeBelongs(node, root)) continue;
-      const ownedPath = homeCardPath(node.getAttribute?.("data-home-source") || "");
-      if (sourcePath && ownedPath && ownedPath !== homeCardPath(sourcePath)) continue;
-      try { node.remove?.(); } catch (_) { node.parentNode?.removeChild?.(node); }
-    }
-    try { this.homeCardReleaseKeys?.(scope, sourcePath); } catch (_) {}
-    const anotherOwner = Array.from(this.homeCardReading || []).some((item) =>
-      item.surface === root && item.path !== sourcePath);
-    if (!anotherOwner) scope?.classList?.remove?.(HOME_CARD_SURFACE_CLASS);
-  }
-
-  homeCardRemoveStrays(root, sourcePath) {
-    for (const node of Array.from(root?.querySelectorAll?.(`.${HOME_CARD_CLASS}`) || [])) {
-      if (node.getAttribute?.("data-cm-widget") === "true") continue;
-      if (!node.closest?.(".cm-widgetBuffer, .cm-content")) continue;
-      if (homeCardPath(node.getAttribute?.("data-home-source")) !== homeCardPath(sourcePath)) continue;
-      try { node.remove?.(); } catch (_) {}
-    }
   }
 
   homeCardCardModelFor(sourcePath, sourceText) {
@@ -106360,6 +106351,15 @@ class BobLedgerToolsHomeCardMixin {
       }
     }
     scope?.classList?.add?.(HOME_CARD_SURFACE_CLASS);
+    const plugin = this;
+    const ownFrontmatter = (mount) => {
+      try {
+        return plugin.homeCardOwnMountedFrontmatter?.(
+          scope, reading?.view || null, sourcePath, mount, model.kind,
+          plugin.homeCardSourceCache?.get?.(sourcePath), reading?.currentPath || (() => ""),
+        );
+      } catch (_) { return null; }
+    };
     const adoption = propertyCardAdoptTitle(scope, header, {
       path: sourcePath,
       kind: HOME_CARD_HOST_KIND,
@@ -106367,6 +106367,7 @@ class BobLedgerToolsHomeCardMixin {
       currentPath: reading?.currentPath || null,
       recognizer: propertyCardHomeTitleRecognizer(model.title?.text),
       onLost: () => this.scheduleHomeCardRefresh(),
+      onMount: (mount) => { void ownFrontmatter(mount); },
     });
     if (adoption.mode !== "slot") {
       try {
@@ -106378,9 +106379,14 @@ class BobLedgerToolsHomeCardMixin {
         this.homeCardRemoveReading(root, scope, sourcePath);
         return null;
       }
+      try { this.homeCardReleaseFrontmatter?.(scope, sourcePath); } catch (_) {}
+    } else {
+      void ownFrontmatter(header);
     }
+    // Row-level fallback claims only card-represented values while whole
+    // ownership is unavailable; both release with the card (fail open).
+    try { this.homeCardOwnKeys?.(scope, sourcePath); } catch (_) {}
     this.homeCardPaintGoal(root, model);
-    // Native Properties stays visible: no frontmatter or key ownership here.
     this.homeCardRestoreFocus(header, focusKey);
     try { this.homeCardTrackFoot?.(scope || root, sourcePath, header); } catch (_) {}
     try { this.homeCardEnsureSource?.(sourcePath); } catch (_) {}
@@ -106466,6 +106472,8 @@ class BobLedgerToolsHomeCardMixin {
       const path = this.homeCardLivePath(view);
       if (!path || !view?.state?.doc) {
         this.homeCardReleaseAdoption(view?.dom);
+        try { this.homeCardReleaseFrontmatter?.(view?.dom, this.homeCardLivePath(view)); } catch (_) {}
+        try { this.homeCardReleaseKeys?.(view?.dom, this.homeCardLivePath(view)); } catch (_) {}
         this.homeCardSetEditorScope(view, false);
         try { this.homeCardTrackFoot?.(view?.dom, this.homeCardLivePath(view), null); } catch (_) {}
         return Decoration.none;
@@ -106476,6 +106484,8 @@ class BobLedgerToolsHomeCardMixin {
       this.homeCardSetEditorScope(view, Boolean(model));
       if (!model) {
         this.homeCardReleaseAdoption(view?.dom);
+        try { this.homeCardReleaseFrontmatter?.(view?.dom, path); } catch (_) {}
+        try { this.homeCardReleaseKeys?.(view?.dom, path); } catch (_) {}
         try { this.homeCardTrackFoot?.(view?.dom, path, null); } catch (_) {}
         return Decoration.none;
       }
@@ -106498,6 +106508,8 @@ class BobLedgerToolsHomeCardMixin {
         }
         if (!fresh) {
           this.homeCardReleaseAdoption(view?.dom);
+          try { this.homeCardReleaseFrontmatter?.(view?.dom, path); } catch (_) {}
+          try { this.homeCardReleaseKeys?.(view?.dom, path); } catch (_) {}
           try { this.homeCardTrackFoot?.(view?.dom, path, null); } catch (_) {}
           return Decoration.none;
         }
@@ -106515,9 +106527,17 @@ class BobLedgerToolsHomeCardMixin {
         currentPath: () => propertyCardLiveCurrentPath(view),
         onLost: () => this.scheduleHomeCardRefresh(),
       });
-      // Native Properties stays visible: no frontmatter or key ownership.
       try { this.homeCardTrackFoot?.(view?.dom, path, header); } catch (_) {}
       if (adoption.mode === "slot") {
+        try {
+          this.homeCardOwnMountedFrontmatter?.(
+            view.dom, view, path, header, model.kind, text,
+            () => this.homeCardLivePath(view) || "",
+          );
+        } catch (_) {}
+        // Row-level fallback claims only card-represented values while
+        // whole ownership is unavailable (fail open otherwise).
+        try { this.homeCardOwnKeys?.(view?.dom, path); } catch (_) {}
         try { this.homeCardEnsureSource?.(path); } catch (_) {}
         return this.homeCardGoalRange(view, model) || Decoration.none;
       }
@@ -106547,6 +106567,18 @@ class BobLedgerToolsHomeCardMixin {
         toDOM() {
           header.setAttribute?.("data-cm-widget", "true");
           header.setAttribute?.("data-home-source", path);
+          try {
+            propertyCardFrontmatterOwnMountedDeferred?.(plugin, {
+              scope: view.dom, view, path, kind: model.kind, mount: header, sourceText: text,
+              getSource: () => view?.state?.doc?.toString?.() || "",
+              currentPath: () => plugin.homeCardLivePath(view) || "",
+              active: () => plugin.homeCardActive === true,
+              isCurrent: () => {
+                const source = view?.state?.doc?.toString?.() || "";
+                return Boolean(source && plugin.homeCardCardModelFor(path, source));
+              },
+            });
+          } catch (_) {}
           return header;
         }
       }();
@@ -106591,6 +106623,189 @@ class BobLedgerToolsHomeCardMixin {
     }
   }
 
+  createHomeCardExtension() {
+    return this.homePropertyCardHost().createExtension();
+  }
+
+  refreshHomeCardReading() {
+    this.homePropertyCardHost().refreshReading();
+  }
+
+  refreshHomeCardEditors() {
+    this.homePropertyCardHost().refreshEditors();
+  }
+
+  scheduleHomeCardRefresh() {
+    this.homePropertyCardHost().scheduleRefresh();
+  }
+}
+// ---- src/249da-plugin-home-card-ownership.js ----
+// Home-card mount ownership (bob-cli-pl.9.1.1 home-ownership). Release
+// lifecycle plus shared frontmatter-coordinator acquisition and the
+// row-level fallback for the Area/Project cards. Whole-frontmatter
+// ownership goes through propertyCardFrontmatterOwnMounted only after the
+// connected card and foot mount, with current source/cache evidence, the
+// typed settings contract, and working editor/native-command routing; any
+// loss releases every owned scope in the same frame (fail open). The
+// row-level fallback claims only values the connected card represents.
+// Painting never spawns bob and never writes: evidence probes run from the
+// capability controller's lifecycle schedule only.
+function homeCardFallbackKeys(model) {
+  const keys = [];
+  const seen = new Set();
+  const add = (key) => {
+    if (typeof key !== "string" || !key || seen.has(key)) return;
+    seen.add(key);
+    keys.push(key);
+  };
+  try {
+    if (!model || typeof model !== "object") return keys;
+    // Policy chips open their own setting in the Property Editor, so the
+    // native row for each painted chip key hides while the card owns it.
+    for (const chip of Array.isArray(model.chips) ? model.chips : []) {
+      add(chip && chip.key);
+    }
+    // The area summary subtitle and the created foot row show authored
+    // values with an editor route; unknown, loose, and invalid-policy keys
+    // stay native.
+    const subtitle = model.subtitle && typeof model.subtitle === "object" ? model.subtitle : null;
+    if (subtitle && subtitle.kind === "summary" && String(subtitle.text || "").trim()) add("summary");
+    if (model.created && model.created.present === true) add("created");
+  } catch (_) {}
+  return keys;
+}
+
+class BobLedgerToolsHomeCardOwnershipMixin {
+  homeCardBindFrontmatterOwnership() {
+    try { propertyCardFrontmatterCoordinatorBind?.(this, "area"); } catch (_) {}
+    try { propertyCardFrontmatterCoordinatorBind?.(this, "project"); } catch (_) {}
+    return true;
+  }
+
+  homeCardReleaseFrontmatterKinds() {
+    let released = 0;
+    try { released += propertyCardFrontmatterCoordinatorReleaseKind?.(this, "area") || 0; } catch (_) {}
+    try { released += propertyCardFrontmatterCoordinatorReleaseKind?.(this, "project") || 0; } catch (_) {}
+    return released;
+  }
+
+  // Acquire whole-frontmatter ownership for one connected home mount. The
+  // coordinator checks the card and foot, current path and mount, desktop
+  // Live Preview/Reading, closed valid YAML with matching source/cache
+  // values, current props_v1 plus the typed settings contract, and working
+  // editor/native-command routing. Returns a generation-bound release
+  // handle, or null when any evidence is missing (native stays visible).
+  homeCardOwnMountedFrontmatter(scope, view, path, mount, kind, sourceText, currentPath) {
+    if (typeof propertyCardFrontmatterOwnMounted !== "function") return null;
+    const plugin = this;
+    const sourceFor = () => {
+      if (view?.state?.doc && typeof view.state.doc.toString === "function") return view.state.doc.toString();
+      return plugin.homeCardSourceCache?.get?.(homeCardPath(path));
+    };
+    const current = () => {
+      const text = sourceFor();
+      return Boolean(text && plugin.homeCardCardModelFor(path, text));
+    };
+    return propertyCardFrontmatterOwnMounted(plugin, {
+      scope,
+      view: view && view.dom === scope ? view : null,
+      path,
+      kind,
+      mount,
+      sourceText,
+      getSource: sourceFor,
+      currentPath,
+      isCurrent: current,
+      active: () => plugin.homeCardActive === true,
+    });
+  }
+
+  homeCardReleaseFrontmatter(scope, path = "") {
+    try {
+      return propertyCardFrontmatterReleaseMounted?.(scope, { plugin: this, path }) || false;
+    } catch (_) { return false; }
+  }
+
+  // Row-level fallback: claim only values the connected card represents,
+  // and only while whole-frontmatter ownership is unavailable for this
+  // scope. On card loss or a denied context, remove all row ownership.
+  homeCardOwnKeys(scope, sourcePath = "") {
+    const path = homeCardPath(sourcePath);
+    try {
+      if (!(this.homeCardKeySlots instanceof Map)) this.homeCardKeySlots = new Map();
+      if (!path || this.homeCardDesktop?.() !== true) {
+        propertyCardSlotRelease(this.homeCardKeySlots, scope, path);
+        return null;
+      }
+      // Whole ownership already hides the container; rows add nothing.
+      let wholeOwned = false;
+      try {
+        const mounted = typeof propertyCardFrontmatterMountOwners !== "undefined"
+          ? propertyCardFrontmatterMountOwners.get(scope)
+          : null;
+        wholeOwned = Boolean(mounted && mounted.plugin === this && mounted.path === path
+          && (mounted.kind === "area" || mounted.kind === "project"));
+      } catch (_) {
+        wholeOwned = false;
+      }
+      if (wholeOwned) {
+        propertyCardSlotRelease(this.homeCardKeySlots, scope, path);
+        return null;
+      }
+      const model = this.homeCardCardModelFor(path, this.homeCardSourceCache?.get?.(path));
+      const keys = homeCardFallbackKeys(model);
+      if (!keys.length) {
+        propertyCardSlotRelease(this.homeCardKeySlots, scope, path);
+        return null;
+      }
+      return propertyCardSlotOwn(this.homeCardKeySlots, scope, path, propertyCardOwnKeys(scope, keys));
+    } catch (_) {
+      try { propertyCardSlotRelease(this.homeCardKeySlots, scope, path); } catch (_) {}
+      return null;
+    }
+  }
+
+  homeCardReleaseKeys(scope, sourcePath = "") {
+    try {
+      return propertyCardSlotRelease(this.homeCardKeySlots, scope, homeCardPath(sourcePath));
+    } catch (_) { return false; }
+  }
+
+  homeCardReleaseAdoption(scope, sourcePath = "") {
+    try { return propertyCardAdoptRelease(scope, sourcePath || undefined, HOME_CARD_HOST_KIND, { preserveFallback: true }); } catch (_) { return false; }
+  }
+
+  // Path-bound Reading removal: releases this path's title/H1 in the same
+  // frame so a failed mount, path change, or unload never leaves a hidden
+  // title. Also releases whole-frontmatter and row ownership for the path.
+  // Never touches another path's mount in the same scope.
+  homeCardRemoveReading(root, scope = root, sourcePath = "") {
+    if (!root) return;
+    try { this.homeCardClearGoal?.(root); } catch (_) {}
+    try { this.homeCardTrackFoot?.(scope, sourcePath, null); } catch (_) {}
+    this.homeCardReleaseAdoption(scope, sourcePath);
+    try { this.homeCardReleaseFrontmatter?.(scope, sourcePath); } catch (_) {}
+    for (const node of Array.from(root.querySelectorAll?.(`.${HOME_CARD_CLASS}`) || [])) {
+      if (!propertyCardNodeBelongs(node, root)) continue;
+      const ownedPath = homeCardPath(node.getAttribute?.("data-home-source") || "");
+      if (sourcePath && ownedPath && ownedPath !== homeCardPath(sourcePath)) continue;
+      try { node.remove?.(); } catch (_) { node.parentNode?.removeChild?.(node); }
+    }
+    try { this.homeCardReleaseKeys?.(scope, sourcePath); } catch (_) {}
+    const anotherOwner = Array.from(this.homeCardReading || []).some((item) =>
+      item.surface === root && item.path !== sourcePath);
+    if (!anotherOwner) scope?.classList?.remove?.(HOME_CARD_SURFACE_CLASS);
+  }
+
+  homeCardRemoveStrays(root, sourcePath) {
+    for (const node of Array.from(root?.querySelectorAll?.(`.${HOME_CARD_CLASS}`) || [])) {
+      if (node.getAttribute?.("data-cm-widget") === "true") continue;
+      if (!node.closest?.(".cm-widgetBuffer, .cm-content")) continue;
+      if (homeCardPath(node.getAttribute?.("data-home-source")) !== homeCardPath(sourcePath)) continue;
+      try { node.remove?.(); } catch (_) {}
+    }
+  }
+
   homeCardSetEditorScope(view, enabled) {
     try {
       return this.homePropertyCardHost().setEditorScope(view, enabled, {
@@ -106612,27 +106827,12 @@ class BobLedgerToolsHomeCardMixin {
   homeCardCleanEditor(view) {
     try { this.homeCardTrackFoot?.(view?.dom, this.homeCardLivePath(view), null); } catch (_) {}
     try { this.homeCardReleaseAdoption(view?.dom); } catch (_) {}
+    try { this.homeCardReleaseFrontmatter?.(view?.dom, this.homeCardLivePath(view)); } catch (_) {}
     try {
       return this.homePropertyCardHost().cleanEditor(view, {
         unmark: (scope) => { scope?.classList?.remove?.(HOME_CARD_SURFACE_CLASS); },
       });
     } catch (_) {}
-  }
-
-  createHomeCardExtension() {
-    return this.homePropertyCardHost().createExtension();
-  }
-
-  refreshHomeCardReading() {
-    this.homePropertyCardHost().refreshReading();
-  }
-
-  refreshHomeCardEditors() {
-    this.homePropertyCardHost().refreshEditors();
-  }
-
-  scheduleHomeCardRefresh() {
-    this.homePropertyCardHost().scheduleRefresh();
   }
 }
 // ---- src/249e-plugin-home-card-foot.js ----
@@ -109232,11 +109432,12 @@ class BobLedgerToolsNotebookCatalogMixin {
     return this.apiNotebookSync({ automatic: false });
   }
 
-  // Owned scopes route to the shared property editor (key "summary");
-  // ordinary notebook views and the File Properties sidebar keep native
-  // behavior. A failed opener releases the scope before the native
-  // fallback so the focused input is visible again. Never awaits: the
-  // opener is asynchronous and this helper stays synchronous.
+  // Owned scopes route to the shared property editor (setting "summary",
+  // including its ghost row when the area has none yet); ordinary notebook
+  // views and the File Properties sidebar keep native behavior. A failed
+  // opener releases the scope before the native fallback so the focused
+  // input is visible again. Never awaits: the opener is asynchronous and
+  // this helper stays synchronous.
   notebookFocusSummaryProperty(view, attemptedCommands) {
     try {
       const owned = typeof this.propertyCardActualOwnership === "function"
@@ -109259,7 +109460,7 @@ class BobLedgerToolsNotebookCatalogMixin {
           } catch (_) {}
         };
         void Promise.resolve()
-          .then(() => plugin.openPropertyEditor({ filePath: owned.path, key: "summary" }))
+          .then(() => plugin.openPropertyEditor({ filePath: owned.path, setting: "summary" }))
           .then((outcome) => {
             if (outcome && outcome.ok === true) return;
             onOpenerFailed();
@@ -185655,8 +185856,9 @@ Object.assign(PropertyEditorModal.prototype, {
 // ---- src/298v-plugin-property-capability-routing.js ----
 // Property capability routing: session-and-bob-path capability cache,
 // actual-ownership query, and the native Add file property entry route
-// (bob-cli-pf.6.1.2 capability-routing). The shared frontmatter coordinator
-// observes confirmed capability changes and reconciles mounted card adapters.
+// (bob-cli-pf.6.1.2 capability-routing, bob-cli-pl.9.1.1 contract evidence).
+// The shared frontmatter coordinator observes confirmed capability changes
+// and reconciles mounted card adapters.
 //
 // The controller caches one outcome per resolved bob path for the plugin
 // session: confirmed (bob answered props_v1), absent (unknown subcommand),
@@ -185665,6 +185867,17 @@ Object.assign(PropertyEditorModal.prototype, {
 // `bob props show` runs scheduled from setup and workspace lifecycle events
 // only, never from paint or build functions, with one in-flight probe per
 // key, bounded retries, and stale/path-changed results discarded.
+//
+// Area/project whole-frontmatter ownership additionally needs the typed
+// settings contract (`props_contract_v1`). Contract evidence is tracked per
+// bob path beside the generic outcome: a successful `bob __catalog
+// --protocol 1` whose features include the contract confirms it, a
+// successful catalog without the feature records absence (an old binary),
+// and failures stay unconfirmed. A valid typed-note `props show` report that
+// carries the contract is also positive evidence. An ordinary note's show
+// report deliberately omits the settings capability, so it never establishes
+// absence and never downgrades a confirmed contract. The catalog probe needs
+// no open note and runs from the same lifecycle events (never paint).
 //
 // The Add file property command wrapper (S1 id
 // `markdown:add-metadata-property`) routes currently owned document scopes
@@ -185677,6 +185890,9 @@ Object.assign(PropertyEditorModal.prototype, {
 const PROPERTY_CAPABILITY_COMMAND_ID = "markdown:add-metadata-property";
 const PROPERTY_CAPABILITY_COMMAND_NAME = "Add file property";
 const PROPERTY_CAPABILITY_MAX_PROBE_ATTEMPTS = 3;
+// Typed settings contract required for area/project whole-frontmatter
+// ownership (bob-cli-pl.9.1.1). The catalog advertises it in `features`.
+const PROPERTY_CAPABILITY_CONTRACT = "props_contract_v1";
 
 // Normalize one resolved bob path to its session cache key. Never throws.
 function propertyCapabilityBobKey(resolved) {
@@ -185722,6 +185938,65 @@ function propertyCapabilityProbeArgs(notePath) {
     if (typeof propertyShowArgs === "function") return propertyShowArgs(notePath);
   } catch (_) {}
   return ["props", "show", String(notePath || ""), "-f", "json"];
+}
+
+// The contract probe needs no open note: a read-only catalog read scheduled
+// from the same lifecycle events. Painting never spawns.
+function propertyCapabilityCatalogArgs() {
+  return ["__catalog", "--protocol", "1"];
+}
+
+// Decode one `bob __catalog --protocol 1` run. Only a well-formed catalog
+// document counts; anything else is a transient probe failure. The decoded
+// catalog rides the shared outcome envelope's `report` slot (the spawn
+// wrapper forwards only that slot alongside ok/exitCode).
+function propertyDecodeCatalogReport(stdout, stderr = "", exitCode = null) {
+  let body = null;
+  try {
+    body = typeof propertyParseJson === "function" ? propertyParseJson(stdout) : JSON.parse(stdout);
+  } catch (error) {
+    return typeof propertyDecodeFailure === "function"
+      ? propertyDecodeFailure("bad-json", "bob __catalog returned invalid JSON.", stderr, exitCode)
+      : { ok: false, code: "bad-json" };
+  }
+  if (!body || typeof body !== "object" || body.ok !== true || body.protocol !== 1 || !Array.isArray(body.features)) {
+    return typeof propertyDecodeFailure === "function"
+      ? propertyDecodeFailure("bad-shape", "bob __catalog returned an incomplete catalog.", stderr, exitCode)
+      : { ok: false, code: "bad-shape" };
+  }
+  return { ok: true, report: body, exitCode };
+}
+
+// Classify one catalog probe outcome. A successful catalog whose features
+// include the contract confirms it; a successful catalog without the
+// feature means an old binary (absence). Failures stay unconfirmed and keep
+// native available without revoking a confirmed path.
+function propertyCapabilityClassifyCatalogOutcome(outcome) {
+  try {
+    if (!outcome || typeof outcome !== "object") return { status: "unconfirmed", reason: "no-outcome" };
+    if (outcome.ok === true && outcome.report && typeof outcome.report === "object") {
+      const features = Array.isArray(outcome.report.features) ? outcome.report.features : [];
+      return features.includes(PROPERTY_CAPABILITY_CONTRACT)
+        ? { status: "confirmed" }
+        : { status: "absent", reason: "missing-contract" };
+    }
+    return { status: "unconfirmed", reason: typeof outcome.code === "string" && outcome.code ? outcome.code : "probe-failed" };
+  } catch (_) {
+    return { status: "unconfirmed", reason: "classify-failed" };
+  }
+}
+
+// Positive contract evidence from an already obtained show report: only a
+// typed-note report carries the contract. Ordinary notes omit it, so this
+// reads as true only, never as absence.
+function propertyCapabilityReportHasContract(report) {
+  try {
+    return Boolean(report && typeof report === "object"
+      && Array.isArray(report.capabilities)
+      && report.capabilities.includes(PROPERTY_CAPABILITY_CONTRACT));
+  } catch (_) {
+    return false;
+  }
 }
 
 // Pick the usable open Markdown note for the probe without manufacturing
@@ -185791,6 +186066,18 @@ function propertyCapabilityCommandTarget(app) {
 }
 
 class BobLedgerToolsPropertyCapabilityRoutingMixin {
+  // Schedule both probes from one lifecycle event: the show probe needs an
+  // open note, the contract probe does not. Each deduplicates and bounds
+  // its own retries; either may stay unconfirmed without affecting the
+  // other. Never called from paint or build functions.
+  schedulePropertyCapabilityProbes(reason, options = {}) {
+    let show = "error";
+    let contract = "error";
+    try { show = this.schedulePropertyCapabilityProbe(reason, options); } catch (_) { show = "error"; }
+    try { contract = this.schedulePropertyCapabilityContractProbe(reason, options); } catch (_) { contract = "error"; }
+    return { show, contract };
+  }
+
   setupPropertyCapabilityRouting() {
     if (this.propertyCapabilityRoutingActive === true) return;
     this.propertyCapabilityRoutingActive = true;
@@ -185798,15 +186085,17 @@ class BobLedgerToolsPropertyCapabilityRoutingMixin {
     this.propertyCapabilityByBobPath = new Map();
     this.propertyCapabilityFlight = null;
     this.propertyCapabilityProbePending = "";
+    this.propertyCapabilityContractFlight = null;
+    this.propertyCapabilityContractProbePending = "";
     this.propertyCapabilityCommandRoute = null;
     try {
       const workspace = this.app && this.app.workspace;
       if (workspace && typeof workspace.on === "function" && typeof this.registerEvent === "function") {
         this.registerEvent(workspace.on("active-leaf-change", () => {
-          try { this.schedulePropertyCapabilityProbe("active-leaf-change"); } catch (_) {}
+          try { this.schedulePropertyCapabilityProbes("active-leaf-change"); } catch (_) {}
         }));
         this.registerEvent(workspace.on("file-open", () => {
-          try { this.schedulePropertyCapabilityProbe("file-open"); } catch (_) {}
+          try { this.schedulePropertyCapabilityProbes("file-open"); } catch (_) {}
         }));
       }
     } catch (_) {}
@@ -185814,12 +186103,12 @@ class BobLedgerToolsPropertyCapabilityRoutingMixin {
       const workspace = this.app && this.app.workspace;
       if (workspace && typeof workspace.onLayoutReady === "function") {
         workspace.onLayoutReady(() => {
-          try { this.schedulePropertyCapabilityProbe("layout-ready"); } catch (_) {}
+          try { this.schedulePropertyCapabilityProbes("layout-ready"); } catch (_) {}
         });
       }
     } catch (_) {}
     try { this.propertyCapabilityInstallCommandRoute(); } catch (_) {}
-    try { this.schedulePropertyCapabilityProbe("setup"); } catch (_) {}
+    try { this.schedulePropertyCapabilityProbes("setup"); } catch (_) {}
   }
 
   teardownPropertyCapabilityRouting() {
@@ -185827,6 +186116,8 @@ class BobLedgerToolsPropertyCapabilityRoutingMixin {
     this.propertyCapabilityGeneration = (this.propertyCapabilityGeneration || 0) + 1;
     this.propertyCapabilityFlight = null;
     this.propertyCapabilityProbePending = "";
+    this.propertyCapabilityContractFlight = null;
+    this.propertyCapabilityContractProbePending = "";
     try { this.propertyCapabilityRestoreCommandRoute(); } catch (_) {}
     try {
       if (this.propertyCapabilityByBobPath instanceof Map) this.propertyCapabilityByBobPath.clear();
@@ -185845,27 +186136,62 @@ class BobLedgerToolsPropertyCapabilityRoutingMixin {
     }
   }
 
+  // Ensure one cache entry per resolved bob path. Contract evidence rides
+  // beside the generic outcome with its own retry budget: unknown by
+  // default, confirmed by catalog or typed-note evidence, absent only from
+  // binary-level evidence (a catalog without the feature, needs-bob).
+  propertyCapabilityEntry(key) {
+    try {
+      const lookup = typeof key === "string" && key ? key : this.propertyCapabilityCurrentBobKey();
+      if (!(this.propertyCapabilityByBobPath instanceof Map)) this.propertyCapabilityByBobPath = new Map();
+      let entry = this.propertyCapabilityByBobPath.get(lookup);
+      if (!entry || typeof entry !== "object") {
+        entry = { status: "unknown", contract: "unknown", attempts: 0, contractAttempts: 0, reason: "" };
+        this.propertyCapabilityByBobPath.set(lookup, entry);
+      }
+      if (entry.contract !== "confirmed" && entry.contract !== "absent" && entry.contract !== "unconfirmed") {
+        entry.contract = "unknown";
+      }
+      if (!Number.isInteger(entry.contractAttempts)) entry.contractAttempts = 0;
+      return { entry, key: lookup };
+    } catch (_) {
+      return { entry: null, key: "" };
+    }
+  }
+
   propertyCapabilityState(key) {
     try {
       const lookup = typeof key === "string" && key ? key : this.propertyCapabilityCurrentBobKey();
       const entry = this.propertyCapabilityByBobPath instanceof Map
         ? this.propertyCapabilityByBobPath.get(lookup)
         : null;
-      if (!entry) return { status: "unknown", attempts: 0, reason: "", key: lookup };
+      if (!entry) return { status: "unknown", contract: "unknown", attempts: 0, contractAttempts: 0, reason: "", key: lookup };
       return {
         status: entry.status || "unknown",
+        contract: entry.contract || "unknown",
         attempts: entry.attempts || 0,
+        contractAttempts: entry.contractAttempts || 0,
         reason: entry.reason || "",
         key: lookup,
       };
     } catch (_) {
-      return { status: "unknown", attempts: 0, reason: "", key: "" };
+      return { status: "unknown", contract: "unknown", attempts: 0, contractAttempts: 0, reason: "", key: "" };
     }
   }
 
   propertyCapabilityConfirmed(key) {
     try {
       return this.propertyCapabilityState(key).status === "confirmed";
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // Contract evidence for area/project whole-frontmatter ownership. Reads
+  // only the per-path cache; ordinary-note reports never write absence.
+  propertyCapabilityContractConfirmed(key) {
+    try {
+      return this.propertyCapabilityState(key).contract === "confirmed";
     } catch (_) {
       return false;
     }
@@ -185892,8 +186218,10 @@ class BobLedgerToolsPropertyCapabilityRoutingMixin {
   // mirror the legacy single value the editor display reads; unconfirmed
   // per-note failures never touch the cache, so they cannot revoke a
   // confirmed path. Probe attempts are counted by the settle path, not
-  // here. When routing is inactive the legacy single-value behavior
-  // applies unchanged.
+  // here. A typed-note report carrying the contract also confirms contract
+  // evidence; an ordinary note's report never establishes absence and never
+  // downgrades a confirmed contract. When routing is inactive the legacy
+  // single-value behavior applies unchanged.
   propertyCapabilityNoteShowOutcome(outcome) {
     try {
       if (this.propertyCapabilityRoutingActive !== true) {
@@ -185906,27 +186234,44 @@ class BobLedgerToolsPropertyCapabilityRoutingMixin {
         }
         return "legacy";
       }
-      const key = this.propertyCapabilityCurrentBobKey();
+      const ensured = typeof this.propertyCapabilityEntry === "function"
+        ? this.propertyCapabilityEntry()
+        : { entry: null, key: this.propertyCapabilityCurrentBobKey() };
+      const key = ensured.key;
+      const entry = ensured.entry || { status: "unknown", contract: "unknown", attempts: 0, contractAttempts: 0, reason: "" };
+      if (!ensured.entry && this.propertyCapabilityByBobPath instanceof Map) {
+        this.propertyCapabilityByBobPath.set(key, entry);
+      }
       const classified = propertyCapabilityClassifyProbe(outcome);
-      const prev = this.propertyCapabilityByBobPath instanceof Map
-        ? this.propertyCapabilityByBobPath.get(key)
+      const report = outcome && outcome.ok === true && outcome.report && typeof outcome.report === "object"
+        ? outcome.report
         : null;
-      const attempts = (prev && prev.attempts) || 0;
+      // needs-bob is binary-level evidence (an old binary without props),
+      // so it records contract absence too. Any other report shape leaves
+      // contract evidence alone.
+      if (outcome && outcome.ok === false && outcome.code === "needs-bob") {
+        entry.contract = "absent";
+      } else if (report && report.ok === true && propertyCapabilityReportHasContract(report)) {
+        entry.contract = "confirmed";
+      }
       if (classified.status === "confirmed") {
-        this.propertyCapabilityByBobPath.set(key, { status: "confirmed", attempts });
+        entry.status = "confirmed";
         try { this.propertyCapability = true; } catch (_) {}
         try { propertyCardFrontmatterCoordinatorCapabilityChanged?.(this, "confirmed"); } catch (_) {}
         return "confirmed";
       }
       if (classified.status === "absent") {
-        this.propertyCapabilityByBobPath.set(key, { status: "absent", attempts: attempts + 1, reason: classified.reason || "" });
+        entry.status = "absent";
+        entry.attempts = (entry.attempts || 0) + 1;
+        entry.reason = classified.reason || "";
         try { this.propertyCapability = false; } catch (_) {}
         try { propertyCardFrontmatterCoordinatorCapabilityChanged?.(this, "absent"); } catch (_) {}
         return "absent";
       }
-      // Unconfirmed leaves the cache alone: a failed contact attempt is
-      // not evidence, and incidental shows must never revoke a confirmed
-      // path. The settle path counts probe attempts separately.
+      // Unconfirmed leaves the generic cache alone: a failed contact
+      // attempt is not evidence, and incidental shows must never revoke a
+      // confirmed path. The settle path counts probe attempts separately.
+      // Contract evidence recorded above persists regardless.
       return "unconfirmed";
     } catch (_) {
       return "error";
@@ -186015,14 +186360,18 @@ class BobLedgerToolsPropertyCapabilityRoutingMixin {
       const classified = propertyCapabilityClassifyProbe(outcome);
       if (classified.status === "unconfirmed") {
         try {
-          const entry = this.propertyCapabilityByBobPath instanceof Map
-            ? this.propertyCapabilityByBobPath.get(key)
-            : null;
-          this.propertyCapabilityByBobPath.set(key, {
-            status: "unconfirmed",
-            attempts: ((entry && entry.attempts) || 0) + 1,
-            reason: classified.reason || "",
-          });
+          const ensured = typeof this.propertyCapabilityEntry === "function"
+            ? this.propertyCapabilityEntry(key)
+            : { entry: null };
+          const entry = ensured.entry || { status: "unknown", contract: "unknown", attempts: 0, contractAttempts: 0, reason: "" };
+          if (!ensured.entry && this.propertyCapabilityByBobPath instanceof Map) {
+            this.propertyCapabilityByBobPath.set(key, entry);
+          }
+          // Preserve contract evidence: a failed show probe is not contract
+          // evidence either way.
+          entry.status = "unconfirmed";
+          entry.attempts = (entry.attempts || 0) + 1;
+          entry.reason = classified.reason || "";
         } catch (_) {}
         try { propertyCardFrontmatterCoordinatorCapabilityChanged?.(this, "unconfirmed"); } catch (_) {}
         return "unconfirmed";
@@ -186034,6 +186383,102 @@ class BobLedgerToolsPropertyCapabilityRoutingMixin {
         return "confirmed";
       }
       return this.propertyCapabilityState(key).status;
+    } catch (_) {
+      return "error";
+    }
+  }
+
+  // Schedule one read-only catalog probe from a lifecycle event. Needs no
+  // open note and never runs from paint or build functions. Deduplicates
+  // one in-flight probe per bob path, bounds retries, and discards stale,
+  // superseded, unloaded, and path-changed results. Returns a short
+  // disposition for tests.
+  schedulePropertyCapabilityContractProbe(reason, options = {}) {
+    try {
+      if (this.propertyCapabilityRoutingActive !== true) return "inactive";
+      if (this.propertyUpdateActive === false) return "unloaded";
+      const ensured = typeof this.propertyCapabilityEntry === "function"
+        ? this.propertyCapabilityEntry()
+        : { entry: null, key: this.propertyCapabilityCurrentBobKey() };
+      const key = ensured.key;
+      const entry = ensured.entry || { status: "unknown", contract: "unknown", attempts: 0, contractAttempts: 0, reason: "" };
+      if (!ensured.entry && this.propertyCapabilityByBobPath instanceof Map) {
+        this.propertyCapabilityByBobPath.set(key, entry);
+      }
+      if (entry.contract === "confirmed") return "confirmed";
+      // Absence re-probes like the generic probe: an upgraded binary is
+      // detected on a later lifecycle event.
+      if (entry.contract === "unconfirmed" && entry.contractAttempts >= PROPERTY_CAPABILITY_MAX_PROBE_ATTEMPTS) {
+        return "exhausted";
+      }
+      const flight = this.propertyCapabilityContractFlight;
+      if (flight && flight.key === key && flight.generation === this.propertyCapabilityGeneration) return "in-flight";
+      const generation = this.propertyCapabilityGeneration;
+      const spawnOptions = options && typeof options === "object" ? options : {};
+      let pending = null;
+      try {
+        pending = this.propertySpawnJson(
+          propertyCapabilityCatalogArgs(),
+          propertyDecodeCatalogReport,
+          { ...spawnOptions, commandLabel: "bob __catalog" },
+        );
+      } catch (error) {
+        pending = Promise.resolve({
+          ok: false,
+          code: "spawn-failed",
+          message: String((error && error.message) || error),
+        });
+      }
+      const flightRecord = { key, generation, promise: Promise.resolve(pending) };
+      this.propertyCapabilityContractFlight = flightRecord;
+      void flightRecord.promise.then((outcome) => {
+        try { this.propertyCapabilitySettleContractProbe(key, generation, outcome); } catch (_) {}
+        return undefined;
+      }, () => {
+        try { this.propertyCapabilitySettleContractProbe(key, generation, { ok: false, code: "probe-failed" }); } catch (_) {}
+      });
+      return "probing";
+    } catch (_) {
+      return "error";
+    }
+  }
+
+  // Settle one catalog probe. Stale generations, superseded flights,
+  // unloaded plugins, and path changes discard the result; a confirmed
+  // contract schedules card refreshes so home mounts can acquire.
+  propertyCapabilitySettleContractProbe(key, generation, outcome) {
+    try {
+      if (this.propertyCapabilityRoutingActive !== true) return "inactive";
+      if (generation !== this.propertyCapabilityGeneration) return "stale";
+      const flight = this.propertyCapabilityContractFlight;
+      if (!flight || flight.key !== key || flight.generation !== generation) return "superseded";
+      this.propertyCapabilityContractFlight = null;
+      if (key !== this.propertyCapabilityCurrentBobKey()) return "path-changed";
+      const classified = propertyCapabilityClassifyCatalogOutcome(outcome);
+      const ensured = typeof this.propertyCapabilityEntry === "function"
+        ? this.propertyCapabilityEntry(key)
+        : { entry: null };
+      const entry = ensured.entry || { status: "unknown", contract: "unknown", attempts: 0, contractAttempts: 0, reason: "" };
+      if (!ensured.entry && this.propertyCapabilityByBobPath instanceof Map) {
+        this.propertyCapabilityByBobPath.set(key, entry);
+      }
+      if (classified.status === "confirmed") {
+        entry.contract = "confirmed";
+        try {
+          if (typeof this.propertyEditorRefreshDrawers === "function") this.propertyEditorRefreshDrawers();
+        } catch (_) {}
+        try { propertyCardFrontmatterCoordinatorCapabilityChanged?.(this, "confirmed"); } catch (_) {}
+        return "confirmed";
+      }
+      if (classified.status === "absent") {
+        entry.contract = "absent";
+        entry.contractAttempts = (entry.contractAttempts || 0) + 1;
+        try { propertyCardFrontmatterCoordinatorCapabilityChanged?.(this, "absent"); } catch (_) {}
+        return "absent";
+      }
+      entry.contract = "unconfirmed";
+      entry.contractAttempts = (entry.contractAttempts || 0) + 1;
+      return "unconfirmed";
     } catch (_) {
       return "error";
     }
@@ -191486,6 +191931,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsAlbumHeaderMixin,
   BobLedgerToolsAlbumHeaderFootMixin,
   BobLedgerToolsHomeCardMixin,
+  BobLedgerToolsHomeCardOwnershipMixin,
   BobLedgerToolsHomeCardFootMixin,
   BobLedgerToolsHomeCardLiveMixin,
   BobLedgerToolsRecordSheetMixin,
@@ -195881,6 +196327,8 @@ try {
       propertyCardOwnFrontmatterInReading,
       propertyCardOwnFrontmatter,
       propertyCardFrontmatterCacheEvidence,
+      propertyCardFrontmatterContractReady,
+      propertyCardFrontmatterMountPath,
       propertyCardFrontmatterOwnMounted,
       propertyCardFrontmatterOwnMountedDeferred,
       propertyCardFrontmatterReleaseMounted,
@@ -196089,7 +196537,9 @@ try {
       homeCardLinkPane,
       homeCardIsDesktopPlatform,
       homeCardScopeDenied,
+      homeCardFallbackKeys,
       BobLedgerToolsHomeCardMixin,
+      BobLedgerToolsHomeCardOwnershipMixin,
       BobLedgerToolsHomeCardFootMixin,
     });
   }
@@ -196316,9 +196766,14 @@ try {
       PROPERTY_CAPABILITY_COMMAND_ID,
       PROPERTY_CAPABILITY_COMMAND_NAME,
       PROPERTY_CAPABILITY_MAX_PROBE_ATTEMPTS,
+      PROPERTY_CAPABILITY_CONTRACT,
       propertyCapabilityBobKey,
       propertyCapabilityClassifyProbe,
       propertyCapabilityProbeArgs,
+      propertyCapabilityCatalogArgs,
+      propertyDecodeCatalogReport,
+      propertyCapabilityClassifyCatalogOutcome,
+      propertyCapabilityReportHasContract,
       propertyCapabilityEligibleNotePath,
       propertyCapabilityCommandTarget,
       propertyNotePath,

@@ -791,6 +791,203 @@ test("host register installs the field once; teardown releaseAll is exported", (
   assert.equal(typeof H.propertyCardFrontmatterReleaseAll, "function");
 });
 
+// --- Area/project home-card ownership (bob-cli-pl.9.1.1 home-ownership) ---
+
+function homeWorld(frontmatter = { type: "area", summary: "Lovely" }) {
+  const world = coordinatorWorld(frontmatter);
+  world.contract = "confirmed";
+  world.plugin.propertyCapabilityContractConfirmed = () => world.contract === "confirmed";
+  return world;
+}
+
+function homeMount(fx, path = "note.md") {
+  const mount = el(fx.doc, "section", `${H.HOME_CARD_CLASS} bob-property-card`);
+  mount.setAttribute("data-home-source", path);
+  mount.appendChild(el(fx.doc, "footer", "bob-property-card-foot"));
+  fx.scope.appendChild(mount);
+  return mount;
+}
+
+function areaSource() {
+  return "---\ntype: area\nsummary: Lovely\n---\n# Area\n";
+}
+
+function homeOwnArgs(world, fx, view, mount, sourceText, kind = "area") {
+  return {
+    scope: fx.scope, view, path: "note.md", kind, mount, sourceText,
+    currentPath: () => view.file.path,
+    active: () => true,
+    parseYaml: world.parse,
+  };
+}
+
+test("area and project mounts acquire through the shared coordinator with contract evidence", () => {
+  for (const kind of ["area", "project"]) {
+    const world = homeWorld(kind === "area"
+      ? { type: "area", summary: "Lovely" }
+      : { type: "project" });
+    const sourceText = kind === "area" ? areaSource() : "---\ntype: project\n---\n# Project\n- [ ] #task #prj ^prj\n";
+    const fx = readingFixture();
+    const mount = homeMount(fx);
+    const view = { file: { path: "note.md" }, getMode: () => "preview" };
+    H.propertyCardFrontmatterCoordinatorBind(world.plugin, kind);
+    const release = H.propertyCardFrontmatterOwnMounted(world.plugin, homeOwnArgs(world, fx, view, mount, sourceText, kind));
+    assert.equal(typeof release, "function", `${kind} acquires`);
+    assert.ok(fx.scope.classList.contains(OWNS));
+    assert.ok(owned(fx.container));
+    assert.equal(release(), true);
+  }
+});
+
+test("area and project mounts fail open without contract evidence; album and bank keep generic ownership", () => {
+  for (const kind of ["area", "project"]) {
+    const world = homeWorld();
+    world.contract = "absent";
+    const fx = readingFixture();
+    const mount = homeMount(fx);
+    const view = { file: { path: "note.md" }, getMode: () => "preview" };
+    assert.equal(
+      H.propertyCardFrontmatterOwnMounted(world.plugin, homeOwnArgs(world, fx, view, mount, areaSource(), kind)),
+      null,
+      `${kind} stays native without the contract`,
+    );
+    assert.ok(!fx.scope.classList.contains(OWNS));
+    assert.ok(native(fx.container));
+  }
+  const album = coordinatorWorld();
+  const albumFx = readingFixture();
+  const albumView = { file: { path: "note.md" }, getMode: () => "preview" };
+  assert.equal(typeof H.propertyCardFrontmatterOwnMounted(album.plugin, {
+    scope: albumFx.scope, view: albumView, path: "note.md", kind: "album", mount: albumMount(albumFx),
+    sourceText: "---\ntype: album\nsummary: Reading\n---\n# Album\n",
+    currentPath: () => albumView.file.path, active: () => true, parseYaml: album.parse,
+  }), "function", "album keeps working on props_v1 alone");
+  const bankWorld = coordinatorWorld({ type: "bank" });
+  const bankFx = readingFixture();
+  const bankMount = el(bankFx.doc, "section", "bob-bank-setup bob-property-card");
+  bankMount.setAttribute("data-bank-setup-source", "note.md");
+  bankMount.appendChild(el(bankFx.doc, "footer", "bob-property-card-foot"));
+  bankFx.scope.appendChild(bankMount);
+  const bankView = { file: { path: "note.md" }, getMode: () => "preview" };
+  assert.equal(typeof H.propertyCardFrontmatterOwnMounted(bankWorld.plugin, {
+    scope: bankFx.scope, view: bankView, path: "note.md", kind: "bank", mount: bankMount,
+    sourceText: "---\ntype: bank\n---\n# Bank\n",
+    currentPath: () => bankView.file.path, active: () => true, parseYaml: bankWorld.parse,
+  }), "function", "bank keeps its pre-takeover gate until the bank-arbitration phase");
+});
+
+test("area mounts need the home source path and a connected foot", () => {
+  const view = { file: { path: "note.md" }, getMode: () => "preview" };
+  const wrongSource = homeWorld();
+  const wrongFx = readingFixture();
+  const wrongMount = homeMount(wrongFx, "other.md");
+  assert.equal(
+    H.propertyCardFrontmatterOwnMounted(wrongSource.plugin, homeOwnArgs(wrongSource, wrongFx, view, wrongMount, areaSource())),
+    null,
+    "source-path skew fails open",
+  );
+  const noFoot = homeWorld();
+  const noFootFx = readingFixture();
+  const bare = el(noFootFx.doc, "section", `${H.HOME_CARD_CLASS} bob-property-card`);
+  bare.setAttribute("data-home-source", "note.md");
+  noFootFx.scope.appendChild(bare);
+  assert.equal(
+    H.propertyCardFrontmatterOwnMounted(noFoot.plugin, homeOwnArgs(noFoot, noFootFx, view, bare, areaSource())),
+    null,
+    "a missing foot fails open",
+  );
+  const duplicate = homeWorld({ type: "area", summary: "Lovely" });
+  duplicate.setCache({ frontmatter: { type: "area", summary: "Lovely" } });
+  const dupFx = readingFixture();
+  const dupMount = homeMount(dupFx);
+  assert.equal(
+    H.propertyCardFrontmatterOwnMounted(duplicate.plugin, homeOwnArgs(
+      duplicate, dupFx, view, dupMount, "---\ntype: area\nsummary: one\nsummary: two\n---\n# Area\n",
+    )),
+    null,
+    "duplicate YAML keys fail open",
+  );
+  const unclosed = homeWorld();
+  const unclosedFx = readingFixture();
+  const unclosedMount = homeMount(unclosedFx);
+  assert.equal(
+    H.propertyCardFrontmatterOwnMounted(unclosed.plugin, homeOwnArgs(
+      unclosed, unclosedFx, view, unclosedMount, "---\ntype: area\nsummary: Lovely\n# Area\n",
+    )),
+    null,
+    "unclosed frontmatter fails open",
+  );
+  const skew = homeWorld();
+  skew.setCache({ frontmatter: { type: "area", summary: "stale" } });
+  const skewFx = readingFixture();
+  const skewMount = homeMount(skewFx);
+  assert.equal(
+    H.propertyCardFrontmatterOwnMounted(skew.plugin, homeOwnArgs(skew, skewFx, view, skewMount, areaSource())),
+    null,
+    "source/cache skew fails open",
+  );
+});
+
+test("area and project mounts in split panes own independently; replacement and release are path bound", () => {
+  const world = homeWorld();
+  const firstFx = readingFixture();
+  const firstView = { file: { path: "note.md" }, getMode: () => "preview" };
+  const first = homeMount(firstFx);
+  const secondFx = readingFixture();
+  const secondView = { file: { path: "note.md" }, getMode: () => "preview" };
+  const second = homeMount(secondFx);
+  H.propertyCardFrontmatterCoordinatorBind(world.plugin, "area");
+  const firstRelease = H.propertyCardFrontmatterOwnMounted(world.plugin, homeOwnArgs(world, firstFx, firstView, first, areaSource()));
+  const secondRelease = H.propertyCardFrontmatterOwnMounted(world.plugin, homeOwnArgs(world, secondFx, secondView, second, areaSource()));
+  assert.equal(typeof firstRelease, "function");
+  assert.equal(typeof secondRelease, "function");
+  assert.ok(firstFx.scope.classList.contains(OWNS));
+  assert.ok(secondFx.scope.classList.contains(OWNS));
+  assert.equal(firstRelease(), true);
+  assert.ok(!firstFx.scope.classList.contains(OWNS));
+  assert.ok(native(firstFx.container));
+  assert.ok(secondFx.scope.classList.contains(OWNS), "releasing one pane never disturbs the other");
+  assert.equal(secondRelease(), true);
+
+  const replacedFx = readingFixture();
+  const replacedView = { file: { path: "note.md" }, getMode: () => "preview" };
+  const before = homeMount(replacedFx);
+  const beforeRelease = H.propertyCardFrontmatterOwnMounted(world.plugin, homeOwnArgs(world, replacedFx, replacedView, before, areaSource()));
+  assert.equal(typeof beforeRelease, "function");
+  const after = homeMount(replacedFx);
+  const afterRelease = H.propertyCardFrontmatterOwnMounted(world.plugin, homeOwnArgs(world, replacedFx, replacedView, after, areaSource()));
+  assert.equal(typeof afterRelease, "function", "mount replacement acquires");
+  assert.equal(beforeRelease(), false, "a stale handle never clears the newer mount");
+  assert.ok(replacedFx.scope.classList.contains(OWNS));
+  assert.equal(afterRelease(), true);
+});
+
+test("the contract gate is species specific and coordinator confirmation refreshes home mounts", () => {
+  const capable = { propertyCapabilityContractConfirmed: () => true };
+  const incapable = { propertyCapabilityContractConfirmed: () => false };
+  const legacy = {};
+  assert.equal(H.propertyCardFrontmatterContractReady(capable, "area"), true);
+  assert.equal(H.propertyCardFrontmatterContractReady(capable, "project"), true);
+  assert.equal(H.propertyCardFrontmatterContractReady(incapable, "area"), false);
+  assert.equal(H.propertyCardFrontmatterContractReady(incapable, "project"), false);
+  assert.equal(H.propertyCardFrontmatterContractReady(legacy, "area"), false, "a missing query reads as not ready");
+  assert.equal(H.propertyCardFrontmatterContractReady(incapable, "album"), true, "existing species keep generic ownership");
+  assert.equal(H.propertyCardFrontmatterContractReady(incapable, "bank"), true, "bank keeps its pre-takeover gate");
+  assert.equal(
+    H.propertyCardFrontmatterMountPath({ getAttribute: () => "note.md" }, "area"),
+    "note.md",
+    "area mounts read the home source attribute",
+  );
+
+  const world = homeWorld();
+  let homeRefreshes = 0;
+  world.plugin.scheduleHomeCardRefresh = () => { homeRefreshes += 1; };
+  world.plugin.propertyCapabilityRoutingReady = () => true;
+  world.plugin.propertyCapabilityConfirmed = () => true;
+  H.propertyCardFrontmatterCoordinatorCapabilityChanged(world.plugin, "confirmed");
+  assert.equal(homeRefreshes, 1, "confirmed evidence refreshes home mounts for acquisition");
+});
+
 test("kit CSS sets Obsidian visibility variables and a direct-child fallback", () => {
   const css = fs.readFileSync(path.join(__dirname, "../plugins/bob-ledger-tools/styles.css"), "utf8");
   assert.match(css, /\.cm-editor\.bob-property-card-owns-frontmatter,\s*\n\.markdown-preview-view\.bob-property-card-owns-frontmatter \{/);

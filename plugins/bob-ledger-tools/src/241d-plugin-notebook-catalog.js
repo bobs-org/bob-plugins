@@ -699,11 +699,12 @@ class BobLedgerToolsNotebookCatalogMixin {
     return this.apiNotebookSync({ automatic: false });
   }
 
-  // Owned scopes route to the shared property editor (key "summary");
-  // ordinary notebook views and the File Properties sidebar keep native
-  // behavior. A failed opener releases the scope before the native
-  // fallback so the focused input is visible again. Never awaits: the
-  // opener is asynchronous and this helper stays synchronous.
+  // Owned scopes route to the shared property editor (setting "summary",
+  // including its ghost row when the area has none yet); ordinary notebook
+  // views and the File Properties sidebar keep native behavior. A failed
+  // opener releases the scope before the native fallback so the focused
+  // input is visible again. Never awaits: the opener is asynchronous and
+  // this helper stays synchronous.
   notebookFocusSummaryProperty(view, attemptedCommands) {
     try {
       const owned = typeof this.propertyCardActualOwnership === "function"
@@ -726,7 +727,7 @@ class BobLedgerToolsNotebookCatalogMixin {
           } catch (_) {}
         };
         void Promise.resolve()
-          .then(() => plugin.openPropertyEditor({ filePath: owned.path, key: "summary" }))
+          .then(() => plugin.openPropertyEditor({ filePath: owned.path, setting: "summary" }))
           .then((outcome) => {
             if (outcome && outcome.ok === true) return;
             onOpenerFailed();

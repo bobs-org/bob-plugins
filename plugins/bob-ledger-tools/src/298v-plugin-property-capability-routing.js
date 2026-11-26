@@ -1,7 +1,8 @@
 // Property capability routing: session-and-bob-path capability cache,
 // actual-ownership query, and the native Add file property entry route
-// (bob-cli-pf.6.1.2 capability-routing). The shared frontmatter coordinator
-// observes confirmed capability changes and reconciles mounted card adapters.
+// (bob-cli-pf.6.1.2 capability-routing, bob-cli-pl.9.1.1 contract evidence).
+// The shared frontmatter coordinator observes confirmed capability changes
+// and reconciles mounted card adapters.
 //
 // The controller caches one outcome per resolved bob path for the plugin
 // session: confirmed (bob answered props_v1), absent (unknown subcommand),
@@ -10,6 +11,17 @@
 // `bob props show` runs scheduled from setup and workspace lifecycle events
 // only, never from paint or build functions, with one in-flight probe per
 // key, bounded retries, and stale/path-changed results discarded.
+//
+// Area/project whole-frontmatter ownership additionally needs the typed
+// settings contract (`props_contract_v1`). Contract evidence is tracked per
+// bob path beside the generic outcome: a successful `bob __catalog
+// --protocol 1` whose features include the contract confirms it, a
+// successful catalog without the feature records absence (an old binary),
+// and failures stay unconfirmed. A valid typed-note `props show` report that
+// carries the contract is also positive evidence. An ordinary note's show
+// report deliberately omits the settings capability, so it never establishes
+// absence and never downgrades a confirmed contract. The catalog probe needs
+// no open note and runs from the same lifecycle events (never paint).
 //
 // The Add file property command wrapper (S1 id
 // `markdown:add-metadata-property`) routes currently owned document scopes
@@ -22,6 +34,9 @@
 const PROPERTY_CAPABILITY_COMMAND_ID = "markdown:add-metadata-property";
 const PROPERTY_CAPABILITY_COMMAND_NAME = "Add file property";
 const PROPERTY_CAPABILITY_MAX_PROBE_ATTEMPTS = 3;
+// Typed settings contract required for area/project whole-frontmatter
+// ownership (bob-cli-pl.9.1.1). The catalog advertises it in `features`.
+const PROPERTY_CAPABILITY_CONTRACT = "props_contract_v1";
 
 // Normalize one resolved bob path to its session cache key. Never throws.
 function propertyCapabilityBobKey(resolved) {
@@ -67,6 +82,65 @@ function propertyCapabilityProbeArgs(notePath) {
     if (typeof propertyShowArgs === "function") return propertyShowArgs(notePath);
   } catch (_) {}
   return ["props", "show", String(notePath || ""), "-f", "json"];
+}
+
+// The contract probe needs no open note: a read-only catalog read scheduled
+// from the same lifecycle events. Painting never spawns.
+function propertyCapabilityCatalogArgs() {
+  return ["__catalog", "--protocol", "1"];
+}
+
+// Decode one `bob __catalog --protocol 1` run. Only a well-formed catalog
+// document counts; anything else is a transient probe failure. The decoded
+// catalog rides the shared outcome envelope's `report` slot (the spawn
+// wrapper forwards only that slot alongside ok/exitCode).
+function propertyDecodeCatalogReport(stdout, stderr = "", exitCode = null) {
+  let body = null;
+  try {
+    body = typeof propertyParseJson === "function" ? propertyParseJson(stdout) : JSON.parse(stdout);
+  } catch (error) {
+    return typeof propertyDecodeFailure === "function"
+      ? propertyDecodeFailure("bad-json", "bob __catalog returned invalid JSON.", stderr, exitCode)
+      : { ok: false, code: "bad-json" };
+  }
+  if (!body || typeof body !== "object" || body.ok !== true || body.protocol !== 1 || !Array.isArray(body.features)) {
+    return typeof propertyDecodeFailure === "function"
+      ? propertyDecodeFailure("bad-shape", "bob __catalog returned an incomplete catalog.", stderr, exitCode)
+      : { ok: false, code: "bad-shape" };
+  }
+  return { ok: true, report: body, exitCode };
+}
+
+// Classify one catalog probe outcome. A successful catalog whose features
+// include the contract confirms it; a successful catalog without the
+// feature means an old binary (absence). Failures stay unconfirmed and keep
+// native available without revoking a confirmed path.
+function propertyCapabilityClassifyCatalogOutcome(outcome) {
+  try {
+    if (!outcome || typeof outcome !== "object") return { status: "unconfirmed", reason: "no-outcome" };
+    if (outcome.ok === true && outcome.report && typeof outcome.report === "object") {
+      const features = Array.isArray(outcome.report.features) ? outcome.report.features : [];
+      return features.includes(PROPERTY_CAPABILITY_CONTRACT)
+        ? { status: "confirmed" }
+        : { status: "absent", reason: "missing-contract" };
+    }
+    return { status: "unconfirmed", reason: typeof outcome.code === "string" && outcome.code ? outcome.code : "probe-failed" };
+  } catch (_) {
+    return { status: "unconfirmed", reason: "classify-failed" };
+  }
+}
+
+// Positive contract evidence from an already obtained show report: only a
+// typed-note report carries the contract. Ordinary notes omit it, so this
+// reads as true only, never as absence.
+function propertyCapabilityReportHasContract(report) {
+  try {
+    return Boolean(report && typeof report === "object"
+      && Array.isArray(report.capabilities)
+      && report.capabilities.includes(PROPERTY_CAPABILITY_CONTRACT));
+  } catch (_) {
+    return false;
+  }
 }
 
 // Pick the usable open Markdown note for the probe without manufacturing
@@ -136,6 +210,18 @@ function propertyCapabilityCommandTarget(app) {
 }
 
 class BobLedgerToolsPropertyCapabilityRoutingMixin {
+  // Schedule both probes from one lifecycle event: the show probe needs an
+  // open note, the contract probe does not. Each deduplicates and bounds
+  // its own retries; either may stay unconfirmed without affecting the
+  // other. Never called from paint or build functions.
+  schedulePropertyCapabilityProbes(reason, options = {}) {
+    let show = "error";
+    let contract = "error";
+    try { show = this.schedulePropertyCapabilityProbe(reason, options); } catch (_) { show = "error"; }
+    try { contract = this.schedulePropertyCapabilityContractProbe(reason, options); } catch (_) { contract = "error"; }
+    return { show, contract };
+  }
+
   setupPropertyCapabilityRouting() {
     if (this.propertyCapabilityRoutingActive === true) return;
     this.propertyCapabilityRoutingActive = true;
@@ -143,15 +229,17 @@ class BobLedgerToolsPropertyCapabilityRoutingMixin {
     this.propertyCapabilityByBobPath = new Map();
     this.propertyCapabilityFlight = null;
     this.propertyCapabilityProbePending = "";
+    this.propertyCapabilityContractFlight = null;
+    this.propertyCapabilityContractProbePending = "";
     this.propertyCapabilityCommandRoute = null;
     try {
       const workspace = this.app && this.app.workspace;
       if (workspace && typeof workspace.on === "function" && typeof this.registerEvent === "function") {
         this.registerEvent(workspace.on("active-leaf-change", () => {
-          try { this.schedulePropertyCapabilityProbe("active-leaf-change"); } catch (_) {}
+          try { this.schedulePropertyCapabilityProbes("active-leaf-change"); } catch (_) {}
         }));
         this.registerEvent(workspace.on("file-open", () => {
-          try { this.schedulePropertyCapabilityProbe("file-open"); } catch (_) {}
+          try { this.schedulePropertyCapabilityProbes("file-open"); } catch (_) {}
         }));
       }
     } catch (_) {}
@@ -159,12 +247,12 @@ class BobLedgerToolsPropertyCapabilityRoutingMixin {
       const workspace = this.app && this.app.workspace;
       if (workspace && typeof workspace.onLayoutReady === "function") {
         workspace.onLayoutReady(() => {
-          try { this.schedulePropertyCapabilityProbe("layout-ready"); } catch (_) {}
+          try { this.schedulePropertyCapabilityProbes("layout-ready"); } catch (_) {}
         });
       }
     } catch (_) {}
     try { this.propertyCapabilityInstallCommandRoute(); } catch (_) {}
-    try { this.schedulePropertyCapabilityProbe("setup"); } catch (_) {}
+    try { this.schedulePropertyCapabilityProbes("setup"); } catch (_) {}
   }
 
   teardownPropertyCapabilityRouting() {
@@ -172,6 +260,8 @@ class BobLedgerToolsPropertyCapabilityRoutingMixin {
     this.propertyCapabilityGeneration = (this.propertyCapabilityGeneration || 0) + 1;
     this.propertyCapabilityFlight = null;
     this.propertyCapabilityProbePending = "";
+    this.propertyCapabilityContractFlight = null;
+    this.propertyCapabilityContractProbePending = "";
     try { this.propertyCapabilityRestoreCommandRoute(); } catch (_) {}
     try {
       if (this.propertyCapabilityByBobPath instanceof Map) this.propertyCapabilityByBobPath.clear();
@@ -190,27 +280,62 @@ class BobLedgerToolsPropertyCapabilityRoutingMixin {
     }
   }
 
+  // Ensure one cache entry per resolved bob path. Contract evidence rides
+  // beside the generic outcome with its own retry budget: unknown by
+  // default, confirmed by catalog or typed-note evidence, absent only from
+  // binary-level evidence (a catalog without the feature, needs-bob).
+  propertyCapabilityEntry(key) {
+    try {
+      const lookup = typeof key === "string" && key ? key : this.propertyCapabilityCurrentBobKey();
+      if (!(this.propertyCapabilityByBobPath instanceof Map)) this.propertyCapabilityByBobPath = new Map();
+      let entry = this.propertyCapabilityByBobPath.get(lookup);
+      if (!entry || typeof entry !== "object") {
+        entry = { status: "unknown", contract: "unknown", attempts: 0, contractAttempts: 0, reason: "" };
+        this.propertyCapabilityByBobPath.set(lookup, entry);
+      }
+      if (entry.contract !== "confirmed" && entry.contract !== "absent" && entry.contract !== "unconfirmed") {
+        entry.contract = "unknown";
+      }
+      if (!Number.isInteger(entry.contractAttempts)) entry.contractAttempts = 0;
+      return { entry, key: lookup };
+    } catch (_) {
+      return { entry: null, key: "" };
+    }
+  }
+
   propertyCapabilityState(key) {
     try {
       const lookup = typeof key === "string" && key ? key : this.propertyCapabilityCurrentBobKey();
       const entry = this.propertyCapabilityByBobPath instanceof Map
         ? this.propertyCapabilityByBobPath.get(lookup)
         : null;
-      if (!entry) return { status: "unknown", attempts: 0, reason: "", key: lookup };
+      if (!entry) return { status: "unknown", contract: "unknown", attempts: 0, contractAttempts: 0, reason: "", key: lookup };
       return {
         status: entry.status || "unknown",
+        contract: entry.contract || "unknown",
         attempts: entry.attempts || 0,
+        contractAttempts: entry.contractAttempts || 0,
         reason: entry.reason || "",
         key: lookup,
       };
     } catch (_) {
-      return { status: "unknown", attempts: 0, reason: "", key: "" };
+      return { status: "unknown", contract: "unknown", attempts: 0, contractAttempts: 0, reason: "", key: "" };
     }
   }
 
   propertyCapabilityConfirmed(key) {
     try {
       return this.propertyCapabilityState(key).status === "confirmed";
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // Contract evidence for area/project whole-frontmatter ownership. Reads
+  // only the per-path cache; ordinary-note reports never write absence.
+  propertyCapabilityContractConfirmed(key) {
+    try {
+      return this.propertyCapabilityState(key).contract === "confirmed";
     } catch (_) {
       return false;
     }
@@ -237,8 +362,10 @@ class BobLedgerToolsPropertyCapabilityRoutingMixin {
   // mirror the legacy single value the editor display reads; unconfirmed
   // per-note failures never touch the cache, so they cannot revoke a
   // confirmed path. Probe attempts are counted by the settle path, not
-  // here. When routing is inactive the legacy single-value behavior
-  // applies unchanged.
+  // here. A typed-note report carrying the contract also confirms contract
+  // evidence; an ordinary note's report never establishes absence and never
+  // downgrades a confirmed contract. When routing is inactive the legacy
+  // single-value behavior applies unchanged.
   propertyCapabilityNoteShowOutcome(outcome) {
     try {
       if (this.propertyCapabilityRoutingActive !== true) {
@@ -251,27 +378,44 @@ class BobLedgerToolsPropertyCapabilityRoutingMixin {
         }
         return "legacy";
       }
-      const key = this.propertyCapabilityCurrentBobKey();
+      const ensured = typeof this.propertyCapabilityEntry === "function"
+        ? this.propertyCapabilityEntry()
+        : { entry: null, key: this.propertyCapabilityCurrentBobKey() };
+      const key = ensured.key;
+      const entry = ensured.entry || { status: "unknown", contract: "unknown", attempts: 0, contractAttempts: 0, reason: "" };
+      if (!ensured.entry && this.propertyCapabilityByBobPath instanceof Map) {
+        this.propertyCapabilityByBobPath.set(key, entry);
+      }
       const classified = propertyCapabilityClassifyProbe(outcome);
-      const prev = this.propertyCapabilityByBobPath instanceof Map
-        ? this.propertyCapabilityByBobPath.get(key)
+      const report = outcome && outcome.ok === true && outcome.report && typeof outcome.report === "object"
+        ? outcome.report
         : null;
-      const attempts = (prev && prev.attempts) || 0;
+      // needs-bob is binary-level evidence (an old binary without props),
+      // so it records contract absence too. Any other report shape leaves
+      // contract evidence alone.
+      if (outcome && outcome.ok === false && outcome.code === "needs-bob") {
+        entry.contract = "absent";
+      } else if (report && report.ok === true && propertyCapabilityReportHasContract(report)) {
+        entry.contract = "confirmed";
+      }
       if (classified.status === "confirmed") {
-        this.propertyCapabilityByBobPath.set(key, { status: "confirmed", attempts });
+        entry.status = "confirmed";
         try { this.propertyCapability = true; } catch (_) {}
         try { propertyCardFrontmatterCoordinatorCapabilityChanged?.(this, "confirmed"); } catch (_) {}
         return "confirmed";
       }
       if (classified.status === "absent") {
-        this.propertyCapabilityByBobPath.set(key, { status: "absent", attempts: attempts + 1, reason: classified.reason || "" });
+        entry.status = "absent";
+        entry.attempts = (entry.attempts || 0) + 1;
+        entry.reason = classified.reason || "";
         try { this.propertyCapability = false; } catch (_) {}
         try { propertyCardFrontmatterCoordinatorCapabilityChanged?.(this, "absent"); } catch (_) {}
         return "absent";
       }
-      // Unconfirmed leaves the cache alone: a failed contact attempt is
-      // not evidence, and incidental shows must never revoke a confirmed
-      // path. The settle path counts probe attempts separately.
+      // Unconfirmed leaves the generic cache alone: a failed contact
+      // attempt is not evidence, and incidental shows must never revoke a
+      // confirmed path. The settle path counts probe attempts separately.
+      // Contract evidence recorded above persists regardless.
       return "unconfirmed";
     } catch (_) {
       return "error";
@@ -360,14 +504,18 @@ class BobLedgerToolsPropertyCapabilityRoutingMixin {
       const classified = propertyCapabilityClassifyProbe(outcome);
       if (classified.status === "unconfirmed") {
         try {
-          const entry = this.propertyCapabilityByBobPath instanceof Map
-            ? this.propertyCapabilityByBobPath.get(key)
-            : null;
-          this.propertyCapabilityByBobPath.set(key, {
-            status: "unconfirmed",
-            attempts: ((entry && entry.attempts) || 0) + 1,
-            reason: classified.reason || "",
-          });
+          const ensured = typeof this.propertyCapabilityEntry === "function"
+            ? this.propertyCapabilityEntry(key)
+            : { entry: null };
+          const entry = ensured.entry || { status: "unknown", contract: "unknown", attempts: 0, contractAttempts: 0, reason: "" };
+          if (!ensured.entry && this.propertyCapabilityByBobPath instanceof Map) {
+            this.propertyCapabilityByBobPath.set(key, entry);
+          }
+          // Preserve contract evidence: a failed show probe is not contract
+          // evidence either way.
+          entry.status = "unconfirmed";
+          entry.attempts = (entry.attempts || 0) + 1;
+          entry.reason = classified.reason || "";
         } catch (_) {}
         try { propertyCardFrontmatterCoordinatorCapabilityChanged?.(this, "unconfirmed"); } catch (_) {}
         return "unconfirmed";
@@ -379,6 +527,102 @@ class BobLedgerToolsPropertyCapabilityRoutingMixin {
         return "confirmed";
       }
       return this.propertyCapabilityState(key).status;
+    } catch (_) {
+      return "error";
+    }
+  }
+
+  // Schedule one read-only catalog probe from a lifecycle event. Needs no
+  // open note and never runs from paint or build functions. Deduplicates
+  // one in-flight probe per bob path, bounds retries, and discards stale,
+  // superseded, unloaded, and path-changed results. Returns a short
+  // disposition for tests.
+  schedulePropertyCapabilityContractProbe(reason, options = {}) {
+    try {
+      if (this.propertyCapabilityRoutingActive !== true) return "inactive";
+      if (this.propertyUpdateActive === false) return "unloaded";
+      const ensured = typeof this.propertyCapabilityEntry === "function"
+        ? this.propertyCapabilityEntry()
+        : { entry: null, key: this.propertyCapabilityCurrentBobKey() };
+      const key = ensured.key;
+      const entry = ensured.entry || { status: "unknown", contract: "unknown", attempts: 0, contractAttempts: 0, reason: "" };
+      if (!ensured.entry && this.propertyCapabilityByBobPath instanceof Map) {
+        this.propertyCapabilityByBobPath.set(key, entry);
+      }
+      if (entry.contract === "confirmed") return "confirmed";
+      // Absence re-probes like the generic probe: an upgraded binary is
+      // detected on a later lifecycle event.
+      if (entry.contract === "unconfirmed" && entry.contractAttempts >= PROPERTY_CAPABILITY_MAX_PROBE_ATTEMPTS) {
+        return "exhausted";
+      }
+      const flight = this.propertyCapabilityContractFlight;
+      if (flight && flight.key === key && flight.generation === this.propertyCapabilityGeneration) return "in-flight";
+      const generation = this.propertyCapabilityGeneration;
+      const spawnOptions = options && typeof options === "object" ? options : {};
+      let pending = null;
+      try {
+        pending = this.propertySpawnJson(
+          propertyCapabilityCatalogArgs(),
+          propertyDecodeCatalogReport,
+          { ...spawnOptions, commandLabel: "bob __catalog" },
+        );
+      } catch (error) {
+        pending = Promise.resolve({
+          ok: false,
+          code: "spawn-failed",
+          message: String((error && error.message) || error),
+        });
+      }
+      const flightRecord = { key, generation, promise: Promise.resolve(pending) };
+      this.propertyCapabilityContractFlight = flightRecord;
+      void flightRecord.promise.then((outcome) => {
+        try { this.propertyCapabilitySettleContractProbe(key, generation, outcome); } catch (_) {}
+        return undefined;
+      }, () => {
+        try { this.propertyCapabilitySettleContractProbe(key, generation, { ok: false, code: "probe-failed" }); } catch (_) {}
+      });
+      return "probing";
+    } catch (_) {
+      return "error";
+    }
+  }
+
+  // Settle one catalog probe. Stale generations, superseded flights,
+  // unloaded plugins, and path changes discard the result; a confirmed
+  // contract schedules card refreshes so home mounts can acquire.
+  propertyCapabilitySettleContractProbe(key, generation, outcome) {
+    try {
+      if (this.propertyCapabilityRoutingActive !== true) return "inactive";
+      if (generation !== this.propertyCapabilityGeneration) return "stale";
+      const flight = this.propertyCapabilityContractFlight;
+      if (!flight || flight.key !== key || flight.generation !== generation) return "superseded";
+      this.propertyCapabilityContractFlight = null;
+      if (key !== this.propertyCapabilityCurrentBobKey()) return "path-changed";
+      const classified = propertyCapabilityClassifyCatalogOutcome(outcome);
+      const ensured = typeof this.propertyCapabilityEntry === "function"
+        ? this.propertyCapabilityEntry(key)
+        : { entry: null };
+      const entry = ensured.entry || { status: "unknown", contract: "unknown", attempts: 0, contractAttempts: 0, reason: "" };
+      if (!ensured.entry && this.propertyCapabilityByBobPath instanceof Map) {
+        this.propertyCapabilityByBobPath.set(key, entry);
+      }
+      if (classified.status === "confirmed") {
+        entry.contract = "confirmed";
+        try {
+          if (typeof this.propertyEditorRefreshDrawers === "function") this.propertyEditorRefreshDrawers();
+        } catch (_) {}
+        try { propertyCardFrontmatterCoordinatorCapabilityChanged?.(this, "confirmed"); } catch (_) {}
+        return "confirmed";
+      }
+      if (classified.status === "absent") {
+        entry.contract = "absent";
+        entry.contractAttempts = (entry.contractAttempts || 0) + 1;
+        try { propertyCardFrontmatterCoordinatorCapabilityChanged?.(this, "absent"); } catch (_) {}
+        return "absent";
+      }
+      entry.contract = "unconfirmed";
+      entry.contractAttempts = (entry.contractAttempts || 0) + 1;
+      return "unconfirmed";
     } catch (_) {
       return "error";
     }

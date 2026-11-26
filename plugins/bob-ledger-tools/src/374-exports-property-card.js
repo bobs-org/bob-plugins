@@ -88,6 +88,8 @@ try {
       propertyCardOwnFrontmatterInReading,
       propertyCardOwnFrontmatter,
       propertyCardFrontmatterCacheEvidence,
+      propertyCardFrontmatterContractReady,
+      propertyCardFrontmatterMountPath,
       propertyCardFrontmatterOwnMounted,
       propertyCardFrontmatterOwnMountedDeferred,
       propertyCardFrontmatterReleaseMounted,

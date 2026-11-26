@@ -31,11 +31,18 @@ Object.assign(BobLedgerToolsBankSetupMixin.prototype, {
       const card = text && this.bankSetupCardFor(key, text);
       return Boolean(card && card.model);
     };
-    return propertyCardFrontmatterOwnMounted(this, {
+    const options = {
       scope, view: view?.dom === scope ? view : null, path: key, kind: "bank", mount,
       sourceText, getSource: sourceFor, currentPath, isCurrent: current,
       active: () => this.bankSetupActive === true,
-    });
+    };
+    const release = propertyCardFrontmatterOwnMounted(this, options);
+    // Reading mounts synchronously, but its source/cache evidence can settle
+    // just after the title-slot repaint. Recheck once the frame has attached
+    // the same card so a transiently ineligible first check does not strand
+    // native Properties visible after recovery.
+    this.bankSetupOwnMountedFrontmatterDeferred(scope, view, path, mount, sourceText, currentPath);
+    return release;
   },
 
   bankSetupOwnMountedFrontmatterDeferred(scope, view, path, mount, sourceText, currentPath) {
@@ -47,13 +54,20 @@ Object.assign(BobLedgerToolsBankSetupMixin.prototype, {
       const card = text && this.bankSetupCardFor(key, text);
       return Boolean(card && card.model);
     };
+    const win = scope?.ownerDocument?.defaultView;
+    const defer = typeof win?.requestAnimationFrame === "function"
+      ? (callback) => win.requestAnimationFrame(callback)
+      : (callback) => setTimeout(callback, 0);
     // Title-slot adoption mounts after the CodeMirror update. Acquire only
     // after that mount is attached, including when eligibility has returned.
+    // A frame-bound check also lets the settled source/cache and title-slot
+    // insertion from this update finish before the fail-open gate is sampled.
     return propertyCardFrontmatterOwnMountedDeferred(this, {
       scope, view: view?.dom === scope ? view : null, path: key, kind: "bank", mount,
       sourceText, getSource: sourceFor, currentPath, isCurrent: current,
       active: () => this.bankSetupActive === true,
       afterAttach: true,
+      defer,
     });
   },
 

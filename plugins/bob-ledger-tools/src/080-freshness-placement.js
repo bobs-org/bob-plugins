@@ -692,7 +692,9 @@ function freshnessReturnedByFromLine(line, todayText, options = {}) {
 // Record an automatic Blocked → Ready recovery when it needs to re-enter
 // review. The existing freshness group is kept exactly as written and this
 // never creates a fresh stamp. Extra scope flags let callers exclude daily
-// notes and Today-linked tasks, which cannot be inferred from a line alone.
+// notes, Today-linked, and snoozed-today tasks, which cannot be inferred
+// from a line alone. A snoozed Blocked-to-Ready row takes no automatic
+// field (`docs/freshness.md` SP14).
 function freshnessMarkUnblockedLine(line, options = {}) {
   try {
     const text = String(line || "");
@@ -711,7 +713,8 @@ function freshnessMarkUnblockedLine(line, options = {}) {
       Boolean(settings.recurring) ||
       Boolean(settings.hidden) ||
       Boolean(settings.isDailyNote) ||
-      Boolean(settings.isToday)
+      Boolean(settings.isToday) ||
+      Boolean(settings.isSnoozedToday)
     ) {
       return text;
     }

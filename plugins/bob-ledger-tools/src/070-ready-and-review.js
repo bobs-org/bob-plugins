@@ -119,7 +119,7 @@ function dashboardLaneSectionVisible(task, list, todayDay, lane) {
 // `{ section, lane, cap, over, today }` with integers when available.
 // Throws when `isToday` throws so callers degrade to unavailable rather
 // than a partially gated zero.
-function dashboardLaneBudgetFromTasks(tasks, today, caps, lane, isToday) {
+function dashboardLaneBudgetFromTasks(tasks, today, caps, lane, isToday, isSnoozed) {
   if (lane !== "pending" && lane !== "next") {
     throw new Error(`unknown lane: ${lane}`);
   }
@@ -128,10 +128,17 @@ function dashboardLaneBudgetFromTasks(tasks, today, caps, lane, isToday) {
   const todayDay = planDayNumber(today === undefined ? new Date() : today);
   const isTodayPredicate =
     typeof isToday === "function" ? isToday : () => false;
+  // The dashboard PENDING/NEXT sections exclude planned-today
+  // (`isToday || isSnoozedToday`, `docs/plan.md` "Snoozed forecast").
+  // The whole-lane count keeps its usual lane predicate with Today
+  // included, so it never swings during the day.
+  const isSnoozedPredicate =
+    typeof isSnoozed === "function" ? isSnoozed : () => false;
   const cap = lane === "pending" ? effective.maxPending : effective.maxNext;
   const whole = laneBudgetFromTasks(list, today, effective, lane);
   let section = 0;
   let todayInLane = 0;
+  let snoozedInLane = 0;
   for (const task of list) {
     if (!dashboardLaneSectionVisible(task, list, todayDay, lane)) {
       continue;
@@ -146,6 +153,16 @@ function dashboardLaneBudgetFromTasks(tasks, today, caps, lane, isToday) {
       todayInLane += 1;
       continue;
     }
+    let snoozedFlag = false;
+    try {
+      snoozedFlag = Boolean(isSnoozedPredicate(task));
+    } catch (error) {
+      throw error;
+    }
+    if (snoozedFlag) {
+      snoozedInLane += 1;
+      continue;
+    }
     section += 1;
   }
   return {
@@ -154,6 +171,7 @@ function dashboardLaneBudgetFromTasks(tasks, today, caps, lane, isToday) {
     count: section,
     laneCount: whole.count,
     today: todayInLane,
+    snoozed: snoozedInLane,
     cap,
     over: whole.over,
   };
@@ -251,17 +269,28 @@ function dashboardLaneBadgeModel(budget, lane) {
 // throwing predicate discards the partial gated scan and recomputes the
 // legacy ungated pool (`review: 0`, `gated: false`), so a failure
 // halfway through a batch never leaves a partially gated chip or walk.
-function readyLaneScanFromTasks(tasks, today, isToday, isReviewBucket) {
+function readyLaneScanFromTasks(tasks, today, isToday, isReviewBucket, isSnoozed, skipIndices) {
   const list = Array.isArray(tasks) ? tasks : [];
   const todayDay = planDayNumber(today === undefined ? new Date() : today);
   const isTodayPredicate =
     typeof isToday === "function" ? isToday : () => false;
+  const isSnoozedPredicate =
+    typeof isSnoozed === "function" ? isSnoozed : () => false;
+  // Optional Set of claimed input indices (the lane walk's Pending/Next
+  // entries and drops): skipped entirely so callers that tally those
+  // lanes themselves never double-count them here.
+  const skip =
+    skipIndices instanceof Set ? skipIndices : null;
   const gated = typeof isReviewBucket === "function";
   const scan = (useGate) => {
     const members = [];
     let todayCount = 0;
+    let snoozedCount = 0;
     let reviewCount = 0;
     for (let index = 0; index < list.length; index += 1) {
+      if (skip && skip.has(index)) {
+        continue;
+      }
       const task = list[index];
       if (!readyTaskVisible(task, todayDay)) {
         continue;
@@ -277,6 +306,16 @@ function readyLaneScanFromTasks(tasks, today, isToday, isReviewBucket) {
       }
       if (todayFlag) {
         todayCount += 1;
+        continue;
+      }
+      let snoozedFlag = false;
+      try {
+        snoozedFlag = Boolean(isSnoozedPredicate(task));
+      } catch (error) {
+        throw error;
+      }
+      if (snoozedFlag) {
+        snoozedCount += 1;
         continue;
       }
       if (useGate) {
@@ -297,6 +336,7 @@ function readyLaneScanFromTasks(tasks, today, isToday, isReviewBucket) {
       failed: false,
       members,
       today: todayCount,
+      snoozed: snoozedCount,
       review: useGate ? reviewCount : 0,
       gated: useGate,
     };
@@ -305,6 +345,7 @@ function readyLaneScanFromTasks(tasks, today, isToday, isReviewBucket) {
     Object.freeze({
       members: Object.freeze(result.members.slice()),
       today: result.today,
+      snoozed: result.snoozed,
       review: result.review,
       gated: result.gated,
     });
@@ -318,12 +359,12 @@ function readyLaneScanFromTasks(tasks, today, isToday, isReviewBucket) {
   return freeze(gatedResult);
 }
 
-function readyCountFromTasks(tasks, today, isToday, isReviewBucket) {
-  return readyLaneScanFromTasks(tasks, today, isToday, isReviewBucket)
+function readyCountFromTasks(tasks, today, isToday, isReviewBucket, isSnoozed) {
+  return readyLaneScanFromTasks(tasks, today, isToday, isReviewBucket, isSnoozed)
     .members.length;
 }
 
-function readyBudgetFromTasks(tasks, today, caps, isToday, isReviewBucket) {
+function readyBudgetFromTasks(tasks, today, caps, isToday, isReviewBucket, isSnoozed) {
   const effective = effectivePlanCaps(caps);
   const cap = planReadyCapOrDefault(effective.maxReady, READY_FALLBACK_CAP);
   const count = readyCountFromTasks(
@@ -331,6 +372,7 @@ function readyBudgetFromTasks(tasks, today, caps, isToday, isReviewBucket) {
     today,
     isToday,
     isReviewBucket,
+    isSnoozed,
   );
   return { count, cap, over: count > cap };
 }

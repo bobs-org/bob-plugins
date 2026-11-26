@@ -221,6 +221,13 @@ class BobLedgerToolsPlugin extends Plugin {
     // Synchronous daily-note cache; api never awaits it, and it starts false.
     this.todayCache = emptyTodayCache();
     this.todayCacheGen = 0;
+    // Sibling snoozed planned-today cache (Asleep/Due/Blocked rows in
+    // today's Snoozed section); api never awaits it either.
+    this.snoozedCache = emptySnoozedCache();
+    this.snoozedCacheGen = 0;
+    this.snoozedEnteredAt = new Map();
+    this.snoozedRevalidateAt = 0;
+    this.snoozedRefreshTimer = null;
     this.laneWalkMemo = null;
     this.todayEnteredAt = new Map();
     this.todayRevalidateAt = 0;
@@ -233,6 +240,18 @@ class BobLedgerToolsPlugin extends Plugin {
       todayKeys: () => this.todayKeys(),
       isToday: (task) => this.isTodayTask(task),
       todayRank: (task) => this.todayRankOfTask(task),
+      // Planned-today exclusion set (`docs/plan.md`, "Snoozed forecast"):
+      // true for today's live-or-blocked Snoozed rows only. Additive:
+      // `isToday` keeps its ledger-derived meaning.
+      isSnoozedToday: (task) => this.isSnoozedTodayTask(task),
+      isPlannedToday: (task) => this.isPlannedTodayTask(task),
+      snoozed: Object.freeze({
+        version: 1,
+        rows: () => this.snoozedRows(),
+        plannedKeys: () => this.snoozedPlannedKeys(),
+        nextWakeAt: () => this.snoozedNextWakeAt(),
+        ready: (now) => this.isSnoozedCacheReady(now),
+      }),
       nextBudget: () => {
         const { caps } = loadPlanCaps();
         return laneBudgetFromTasks(
@@ -455,6 +474,7 @@ class BobLedgerToolsPlugin extends Plugin {
         metadataCache.on("changed", (file, data) => {
           this.schedulePlanBlockRerender();
           this.refreshTodayCacheForChangedFile(file, data);
+          this.refreshSnoozedCacheForChangedFile(file, data);
           this.refreshFreshnessForChangedFile(file, data);
           this.refreshNoteReadyForChangedFile(file);
           this.refreshProgressMarksForChangedFile(file);
@@ -473,12 +493,16 @@ class BobLedgerToolsPlugin extends Plugin {
       this.registerEvent(
         metadataCache.on("deleted", (file) => {
           this.refreshNoteReadyForDeletedPath(file && file.path);
+          if (file && this.snoozedAffectsPath(file.path)) {
+            this.scheduleSnoozedRefresh(new Date());
+          }
           this.scheduleDashboardCollectionsRefresh();
         }),
       );
       this.registerEvent(
         metadataCache.on("resolved", () => {
           this.refreshTodayCacheFromDaily();
+          this.scheduleSnoozedRefresh(new Date());
           this.scheduleDashboardCollectionsRefresh();
           if (!this.noteReadyResolvedSeen) {
             this.noteReadyResolvedSeen = true;
@@ -497,6 +521,13 @@ class BobLedgerToolsPlugin extends Plugin {
       for (const event of ["create", "delete", "rename"]) {
         this.registerEvent(
           vault.on(event, (file) => this.refreshTodayCacheForVaultEvent(file)),
+        );
+      }
+      for (const event of ["create", "delete", "rename"]) {
+        this.registerEvent(
+          vault.on(event, (file, oldPath) =>
+            this.refreshSnoozedCacheForVaultEvent(file, oldPath),
+          ),
         );
       }
       for (const event of ["create", "modify", "delete", "rename"]) {
@@ -524,14 +555,16 @@ class BobLedgerToolsPlugin extends Plugin {
     try {
       if (typeof this.registerDomEvent === "function") {
         if (typeof window !== "undefined" && window) {
-          this.registerDomEvent(window, "focus", () =>
-            this.revalidateTodayCache(),
-          );
+          this.registerDomEvent(window, "focus", () => {
+            this.revalidateTodayCache();
+            this.revalidateSnoozedCache();
+          });
         }
         if (typeof document !== "undefined" && document) {
           this.registerDomEvent(document, "visibilitychange", () => {
             if (document.visibilityState === "visible") {
               this.revalidateTodayCache();
+              this.revalidateSnoozedCache();
             }
           });
         }
@@ -558,6 +591,10 @@ class BobLedgerToolsPlugin extends Plugin {
       this.registerInterval(
         window.setInterval(() => {
           const rolled = this.refreshTodayCacheForRollover();
+          const snoozedRolled = this.refreshSnoozedCacheForRollover();
+          if (!snoozedRolled && this.snoozedCacheNeedsMinuteRefresh()) {
+            this.scheduleSnoozedRefresh(new Date());
+          }
           this.refreshFreshnessForRollover();
           const capsChanged = this.checkReadyCapsAndDay(new Date());
           if (!rolled && !capsChanged) {
@@ -623,6 +660,10 @@ class BobLedgerToolsPlugin extends Plugin {
           // may reuse the same array object, and the freshness memo
           // must still rebuild on the next read.
           this.freshnessTasksGen = (this.freshnessTasksGen || 0) + 1;
+          // Target task edits arrive through the Tasks cache: a status
+          // or identity change can move a row into or out of the
+          // snoozed exclusion set without touching the daily note.
+          this.scheduleSnoozedRefresh(new Date());
           this.schedulePlanBlockRerender();
           this.scheduleLiveWidgetRefresh();
         }),
@@ -652,6 +693,7 @@ class BobLedgerToolsPlugin extends Plugin {
       this.refreshDailyScrollCaptureTarget();
       this.captureActiveDailyLocation();
       this.refreshTodayCacheFromDaily();
+      void this.refreshSnoozedCacheFromDaily();
       try {
         void this.refreshPomodoroThemesJournal("startup");
       } catch (error) {}

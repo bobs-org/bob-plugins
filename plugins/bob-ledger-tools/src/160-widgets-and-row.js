@@ -305,6 +305,7 @@ function freshnessRowFromTask(task, index, context) {
         laneVisible: false,
         isDailyNote: false,
         isToday: false,
+        isSnoozedToday: false,
         scheduled: null,
         due: null,
         start: null,
@@ -362,6 +363,18 @@ function freshnessRowFromTask(task, index, context) {
           : false;
     } catch (error) {
       isToday = false;
+    }
+    // Planned-today snoozed membership: today's live-or-blocked Snoozed
+    // rows (`docs/freshness.md` §4). Readers that mean workable now keep
+    // Today; review, lane, and dashboard exclusions use the union.
+    let isSnoozedToday = false;
+    try {
+      isSnoozedToday =
+        typeof safeContext.isSnoozed === "function"
+          ? Boolean(safeContext.isSnoozed(task))
+          : false;
+    } catch (error) {
+      isSnoozedToday = false;
     }
     let scheduled = null;
     try {
@@ -530,6 +543,7 @@ function freshnessRowFromTask(task, index, context) {
       laneVisible,
       isDailyNote,
       isToday,
+      isSnoozedToday,
       scheduled,
       due,
       start,
@@ -554,6 +568,7 @@ function freshnessRowFromTask(task, index, context) {
       laneVisible: false,
       isDailyNote: false,
       isToday: false,
+      isSnoozedToday: false,
       scheduled: null,
       due: null,
       start: null,

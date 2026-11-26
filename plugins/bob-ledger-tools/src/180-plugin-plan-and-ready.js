@@ -266,6 +266,7 @@ class BobLedgerToolsPlanAndReadyMixin {
           now,
           (task) => this.isTodayTask(task),
           gate,
+          (task) => this.isSnoozedTodayTask(task),
         );
       } catch (error) {
         return unavailable;
@@ -353,6 +354,7 @@ class BobLedgerToolsPlanAndReadyMixin {
           caps,
           normalized,
           (task) => this.isTodayTask(task),
+          (task) => this.isSnoozedTodayTask(task),
         );
       } catch (error) {
         return unavailable;
@@ -923,12 +925,22 @@ class BobLedgerToolsPlanAndReadyMixin {
         return { available: false, reason: "today" };
       }
       const { gate, gateMemo } = this.readyReviewGate(now);
+      let snoozedStamp = null;
+      try {
+        snoozedStamp =
+          typeof this.snoozedCacheStamp === "function"
+            ? this.snoozedCacheStamp()
+            : null;
+      } catch (error) {
+        snoozedStamp = "error";
+      }
       const memo = this.laneWalkMemo;
       if (
         memo &&
         memo.tasks === tasks &&
         memo.dateText === dateText &&
         memo.todayGen === this.todayCacheGen &&
+        memo.snoozedStamp === snoozedStamp &&
         memo.gateMemo === gateMemo
       ) {
         return memo.result;
@@ -939,7 +951,10 @@ class BobLedgerToolsPlanAndReadyMixin {
           tasks,
           now,
           (task) => this.isTodayTask(task),
-          { isReviewBucket: gate },
+          {
+            isReviewBucket: gate,
+            isSnoozed: (task) => this.isSnoozedTodayTask(task),
+          },
         );
       } catch (error) {
         return { available: false, reason: "error" };
@@ -954,6 +969,7 @@ class BobLedgerToolsPlanAndReadyMixin {
         tasks,
         dateText,
         todayGen: this.todayCacheGen,
+        snoozedStamp,
         gateMemo,
         result,
       };

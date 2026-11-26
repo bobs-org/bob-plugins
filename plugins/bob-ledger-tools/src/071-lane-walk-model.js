@@ -100,7 +100,8 @@ function laneWalkEntryFromTask(task, index, list, todayDay, todayFlag, lane) {
 // `{ key, path, line, lineNumber, originalMarkdown, text, blockId, lane,
 // laneLabel, created, rank, total, laneRank, laneTotal }` and `counts` is
 // `{ pending, next, ready, total, todayPending, todayNext, todayReady,
-// reviewReady }`. Per PENDING / NEXT lane, `entries.length` equals
+// snoozed, reviewReady }` (`snoozed` tallies planned-today rows dropped
+// from every lane). Per PENDING / NEXT lane, `entries.length` equals
 // `dashboardLaneBudgetFromTasks(...).section`; READY `entries.length`
 // equals `readyCountFromTasks(...)` on the same snapshot. Throws only
 // when `isToday` throws.
@@ -109,6 +110,12 @@ function laneWalkQueueFromTasks(tasks, now, isToday, options = {}) {
   const todayDay = planDayNumber(now === undefined ? new Date() : now);
   const isTodayPredicate =
     typeof isToday === "function" ? isToday : () => false;
+  // Planned-today snoozed rows leave the `]w` walk with the same
+  // exclusion as Today (`docs/walks.md`, "w — lanes").
+  const isSnoozedPredicate =
+    options && typeof options.isSnoozed === "function"
+      ? options.isSnoozed
+      : () => false;
   const isReviewBucket =
     options && typeof options.isReviewBucket === "function"
       ? options.isReviewBucket
@@ -117,6 +124,10 @@ function laneWalkQueueFromTasks(tasks, now, isToday, options = {}) {
   const claimed = new Set();
   let todayPending = 0;
   let todayNext = 0;
+  // Pending/Next snoozed drops are claimed here so the READY scan
+  // below never re-sees them: the loop tally plus the scan's Ready
+  // tally partition the held tasks with no double count.
+  let snoozedLaneDropped = 0;
   for (let index = 0; index < list.length; index += 1) {
     const task = list[index];
     let lane = null;
@@ -141,6 +152,17 @@ function laneWalkQueueFromTasks(tasks, now, isToday, options = {}) {
       }
       continue;
     }
+    let snoozedFlag = false;
+    try {
+      snoozedFlag = Boolean(isSnoozedPredicate(task));
+    } catch (error) {
+      throw error;
+    }
+    if (snoozedFlag) {
+      claimed.add(index);
+      snoozedLaneDropped += 1;
+      continue;
+    }
     const entry = laneWalkEntryFromTask(
       task,
       index,
@@ -155,11 +177,16 @@ function laneWalkQueueFromTasks(tasks, now, isToday, options = {}) {
     claimed.add(index);
     built.push(entry);
   }
+  // Claimed Pending/Next entries and snoozed drops skip the READY
+  // scan: walked entries carry no today/review tallies by construction,
+  // and the loop tally below owns the snoozed lane drops.
   const scan = readyLaneScanFromTasks(
     list,
     now,
     isTodayPredicate,
     isReviewBucket,
+    isSnoozedPredicate,
+    claimed,
   );
   for (const index of scan.members) {
     if (claimed.has(index)) {
@@ -210,6 +237,7 @@ function laneWalkQueueFromTasks(tasks, now, isToday, options = {}) {
       todayPending,
       todayNext,
       todayReady: scan.today,
+      snoozed: snoozedLaneDropped + (scan.snoozed || 0),
       reviewReady: scan.review,
     }),
   });

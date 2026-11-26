@@ -6126,7 +6126,7 @@ function dashboardLaneSectionVisible(task, list, todayDay, lane) {
 // `{ section, lane, cap, over, today }` with integers when available.
 // Throws when `isToday` throws so callers degrade to unavailable rather
 // than a partially gated zero.
-function dashboardLaneBudgetFromTasks(tasks, today, caps, lane, isToday) {
+function dashboardLaneBudgetFromTasks(tasks, today, caps, lane, isToday, isSnoozed) {
   if (lane !== "pending" && lane !== "next") {
     throw new Error(`unknown lane: ${lane}`);
   }
@@ -6135,10 +6135,17 @@ function dashboardLaneBudgetFromTasks(tasks, today, caps, lane, isToday) {
   const todayDay = planDayNumber(today === undefined ? new Date() : today);
   const isTodayPredicate =
     typeof isToday === "function" ? isToday : () => false;
+  // The dashboard PENDING/NEXT sections exclude planned-today
+  // (`isToday || isSnoozedToday`, `docs/plan.md` "Snoozed forecast").
+  // The whole-lane count keeps its usual lane predicate with Today
+  // included, so it never swings during the day.
+  const isSnoozedPredicate =
+    typeof isSnoozed === "function" ? isSnoozed : () => false;
   const cap = lane === "pending" ? effective.maxPending : effective.maxNext;
   const whole = laneBudgetFromTasks(list, today, effective, lane);
   let section = 0;
   let todayInLane = 0;
+  let snoozedInLane = 0;
   for (const task of list) {
     if (!dashboardLaneSectionVisible(task, list, todayDay, lane)) {
       continue;
@@ -6153,6 +6160,16 @@ function dashboardLaneBudgetFromTasks(tasks, today, caps, lane, isToday) {
       todayInLane += 1;
       continue;
     }
+    let snoozedFlag = false;
+    try {
+      snoozedFlag = Boolean(isSnoozedPredicate(task));
+    } catch (error) {
+      throw error;
+    }
+    if (snoozedFlag) {
+      snoozedInLane += 1;
+      continue;
+    }
     section += 1;
   }
   return {
@@ -6161,6 +6178,7 @@ function dashboardLaneBudgetFromTasks(tasks, today, caps, lane, isToday) {
     count: section,
     laneCount: whole.count,
     today: todayInLane,
+    snoozed: snoozedInLane,
     cap,
     over: whole.over,
   };
@@ -6258,17 +6276,28 @@ function dashboardLaneBadgeModel(budget, lane) {
 // throwing predicate discards the partial gated scan and recomputes the
 // legacy ungated pool (`review: 0`, `gated: false`), so a failure
 // halfway through a batch never leaves a partially gated chip or walk.
-function readyLaneScanFromTasks(tasks, today, isToday, isReviewBucket) {
+function readyLaneScanFromTasks(tasks, today, isToday, isReviewBucket, isSnoozed, skipIndices) {
   const list = Array.isArray(tasks) ? tasks : [];
   const todayDay = planDayNumber(today === undefined ? new Date() : today);
   const isTodayPredicate =
     typeof isToday === "function" ? isToday : () => false;
+  const isSnoozedPredicate =
+    typeof isSnoozed === "function" ? isSnoozed : () => false;
+  // Optional Set of claimed input indices (the lane walk's Pending/Next
+  // entries and drops): skipped entirely so callers that tally those
+  // lanes themselves never double-count them here.
+  const skip =
+    skipIndices instanceof Set ? skipIndices : null;
   const gated = typeof isReviewBucket === "function";
   const scan = (useGate) => {
     const members = [];
     let todayCount = 0;
+    let snoozedCount = 0;
     let reviewCount = 0;
     for (let index = 0; index < list.length; index += 1) {
+      if (skip && skip.has(index)) {
+        continue;
+      }
       const task = list[index];
       if (!readyTaskVisible(task, todayDay)) {
         continue;
@@ -6284,6 +6313,16 @@ function readyLaneScanFromTasks(tasks, today, isToday, isReviewBucket) {
       }
       if (todayFlag) {
         todayCount += 1;
+        continue;
+      }
+      let snoozedFlag = false;
+      try {
+        snoozedFlag = Boolean(isSnoozedPredicate(task));
+      } catch (error) {
+        throw error;
+      }
+      if (snoozedFlag) {
+        snoozedCount += 1;
         continue;
       }
       if (useGate) {
@@ -6304,6 +6343,7 @@ function readyLaneScanFromTasks(tasks, today, isToday, isReviewBucket) {
       failed: false,
       members,
       today: todayCount,
+      snoozed: snoozedCount,
       review: useGate ? reviewCount : 0,
       gated: useGate,
     };
@@ -6312,6 +6352,7 @@ function readyLaneScanFromTasks(tasks, today, isToday, isReviewBucket) {
     Object.freeze({
       members: Object.freeze(result.members.slice()),
       today: result.today,
+      snoozed: result.snoozed,
       review: result.review,
       gated: result.gated,
     });
@@ -6325,12 +6366,12 @@ function readyLaneScanFromTasks(tasks, today, isToday, isReviewBucket) {
   return freeze(gatedResult);
 }
 
-function readyCountFromTasks(tasks, today, isToday, isReviewBucket) {
-  return readyLaneScanFromTasks(tasks, today, isToday, isReviewBucket)
+function readyCountFromTasks(tasks, today, isToday, isReviewBucket, isSnoozed) {
+  return readyLaneScanFromTasks(tasks, today, isToday, isReviewBucket, isSnoozed)
     .members.length;
 }
 
-function readyBudgetFromTasks(tasks, today, caps, isToday, isReviewBucket) {
+function readyBudgetFromTasks(tasks, today, caps, isToday, isReviewBucket, isSnoozed) {
   const effective = effectivePlanCaps(caps);
   const cap = planReadyCapOrDefault(effective.maxReady, READY_FALLBACK_CAP);
   const count = readyCountFromTasks(
@@ -6338,6 +6379,7 @@ function readyBudgetFromTasks(tasks, today, caps, isToday, isReviewBucket) {
     today,
     isToday,
     isReviewBucket,
+    isSnoozed,
   );
   return { count, cap, over: count > cap };
 }
@@ -6916,7 +6958,8 @@ function laneWalkEntryFromTask(task, index, list, todayDay, todayFlag, lane) {
 // `{ key, path, line, lineNumber, originalMarkdown, text, blockId, lane,
 // laneLabel, created, rank, total, laneRank, laneTotal }` and `counts` is
 // `{ pending, next, ready, total, todayPending, todayNext, todayReady,
-// reviewReady }`. Per PENDING / NEXT lane, `entries.length` equals
+// snoozed, reviewReady }` (`snoozed` tallies planned-today rows dropped
+// from every lane). Per PENDING / NEXT lane, `entries.length` equals
 // `dashboardLaneBudgetFromTasks(...).section`; READY `entries.length`
 // equals `readyCountFromTasks(...)` on the same snapshot. Throws only
 // when `isToday` throws.
@@ -6925,6 +6968,12 @@ function laneWalkQueueFromTasks(tasks, now, isToday, options = {}) {
   const todayDay = planDayNumber(now === undefined ? new Date() : now);
   const isTodayPredicate =
     typeof isToday === "function" ? isToday : () => false;
+  // Planned-today snoozed rows leave the `]w` walk with the same
+  // exclusion as Today (`docs/walks.md`, "w — lanes").
+  const isSnoozedPredicate =
+    options && typeof options.isSnoozed === "function"
+      ? options.isSnoozed
+      : () => false;
   const isReviewBucket =
     options && typeof options.isReviewBucket === "function"
       ? options.isReviewBucket
@@ -6933,6 +6982,10 @@ function laneWalkQueueFromTasks(tasks, now, isToday, options = {}) {
   const claimed = new Set();
   let todayPending = 0;
   let todayNext = 0;
+  // Pending/Next snoozed drops are claimed here so the READY scan
+  // below never re-sees them: the loop tally plus the scan's Ready
+  // tally partition the held tasks with no double count.
+  let snoozedLaneDropped = 0;
   for (let index = 0; index < list.length; index += 1) {
     const task = list[index];
     let lane = null;
@@ -6957,6 +7010,17 @@ function laneWalkQueueFromTasks(tasks, now, isToday, options = {}) {
       }
       continue;
     }
+    let snoozedFlag = false;
+    try {
+      snoozedFlag = Boolean(isSnoozedPredicate(task));
+    } catch (error) {
+      throw error;
+    }
+    if (snoozedFlag) {
+      claimed.add(index);
+      snoozedLaneDropped += 1;
+      continue;
+    }
     const entry = laneWalkEntryFromTask(
       task,
       index,
@@ -6971,11 +7035,16 @@ function laneWalkQueueFromTasks(tasks, now, isToday, options = {}) {
     claimed.add(index);
     built.push(entry);
   }
+  // Claimed Pending/Next entries and snoozed drops skip the READY
+  // scan: walked entries carry no today/review tallies by construction,
+  // and the loop tally below owns the snoozed lane drops.
   const scan = readyLaneScanFromTasks(
     list,
     now,
     isTodayPredicate,
     isReviewBucket,
+    isSnoozedPredicate,
+    claimed,
   );
   for (const index of scan.members) {
     if (claimed.has(index)) {
@@ -7026,6 +7095,7 @@ function laneWalkQueueFromTasks(tasks, now, isToday, options = {}) {
       todayPending,
       todayNext,
       todayReady: scan.today,
+      snoozed: snoozedLaneDropped + (scan.snoozed || 0),
       reviewReady: scan.review,
     }),
   });
@@ -7820,7 +7890,9 @@ function freshnessReturnedByFromLine(line, todayText, options = {}) {
 // Record an automatic Blocked → Ready recovery when it needs to re-enter
 // review. The existing freshness group is kept exactly as written and this
 // never creates a fresh stamp. Extra scope flags let callers exclude daily
-// notes and Today-linked tasks, which cannot be inferred from a line alone.
+// notes, Today-linked, and snoozed-today tasks, which cannot be inferred
+// from a line alone. A snoozed Blocked-to-Ready row takes no automatic
+// field (`docs/freshness.md` SP14).
 function freshnessMarkUnblockedLine(line, options = {}) {
   try {
     const text = String(line || "");
@@ -7839,7 +7911,8 @@ function freshnessMarkUnblockedLine(line, options = {}) {
       Boolean(settings.recurring) ||
       Boolean(settings.hidden) ||
       Boolean(settings.isDailyNote) ||
-      Boolean(settings.isToday)
+      Boolean(settings.isToday) ||
+      Boolean(settings.isSnoozedToday)
     ) {
       return text;
     }
@@ -8331,16 +8404,16 @@ function freshnessDecayLimitFor(decay, lane) {
 // counted keeps under `config`: enabled decay, a rung limit of
 // "ask at L", keeps at or over L, and the due tier for that lane
 // (PENDING for pending, NEXT for next, ROTTEN/TICKLER for ready).
-// Unblock ticklers, PROJECTS, recurring, checklist, and Today-linked
+// Unblock ticklers, PROJECTS, recurring, checklist, and planned-today
 // rows never decide. The annotation means a choice is due, not
 // permission to execute an action. Mirrors `decide_for` in
 // `src/native/freshness/state.rs`.
-function freshnessDecideFor(lane, tier, keeps, config, returnedBy, isToday) {
+function freshnessDecideFor(lane, tier, keeps, config, returnedBy, isPlannedToday) {
   try {
     if (returnedBy === "unblocked") {
       return false;
     }
-    if (isToday === true) {
+    if (isPlannedToday === true) {
       return false;
     }
     if (
@@ -8872,7 +8945,7 @@ function freshnessApplyRecurringOverlay(row, today, evaluated) {
   if (!safe.laneVisible) {
     return evaluated;
   }
-  if (safe.isDailyNote || safe.isToday) {
+  if (safe.isDailyNote || safe.isToday || safe.isSnoozedToday) {
     return evaluated;
   }
   const occurs = freshnessOccursOn(safe);
@@ -8995,16 +9068,21 @@ function freshnessEvaluateWithoutRecurring(row, todayText, config) {
     Boolean(safe.laneVisible) &&
     !safe.recurring &&
     !safe.isDailyNote &&
-    !safe.isToday;
+    !safe.isToday &&
+    !safe.isSnoozedToday;
 
   // Checklist visibility shares the established lane predicate, with
   // recurring, daily-note, and Today exclusions deliberately lifted.
+  // Planned-today snoozed rows never enter PRE/POST (`docs/freshness.md`
+  // §4); a ledger-linked PRE/POST row retains its checklist exception
+  // because the snooze row classifies `already_linked` instead.
   // The status must be the symbol actually written on the task line.
   const checklistScheduled = freshnessEvaluateValidScheduled(safe.scheduled);
   const checklistScope =
     checklist !== null &&
     [" ", "*", "/", "?"].includes(writtenSymbol) &&
     Boolean(safe.laneVisible) &&
+    !safe.isSnoozedToday &&
     !(checklistScheduled !== null && checklistScheduled > today);
 
   // Ordinary lane due arithmetic uses the lane interval only.
@@ -9032,7 +9110,8 @@ function freshnessEvaluateWithoutRecurring(row, todayText, config) {
     Boolean(safe.laneVisible) &&
     !safe.recurring &&
     !safe.isDailyNote &&
-    !safe.isToday;
+    !safe.isToday &&
+    !safe.isSnoozedToday;
 
   // Effective resurfacing date: whichever came last from the inline
   // schedule and the recorded automatic unblock. A scheduled date wins
@@ -9141,7 +9220,7 @@ function freshnessEvaluateWithoutRecurring(row, todayText, config) {
 
   // A choice is due — never permission to act — for a due row at
   // or over its rung's keep limit. Unblock ticklers, PROJECTS,
-  // recurring, checklist, and Today-linked rows never decide.
+  // recurring, checklist, and planned-today rows never decide.
   // Mirrors the `decide` computation in `evaluate` in
   // `src/native/freshness/state.rs`.
   const keeps = read.keeps;
@@ -9151,7 +9230,7 @@ function freshnessEvaluateWithoutRecurring(row, todayText, config) {
     keeps,
     config,
     returnedBy,
-    safe.isToday,
+    safe.isToday === true || safe.isSnoozedToday === true,
   );
 
   // Lane rows use the lane due date; an unwalked lane falls back to
@@ -39237,6 +39316,7 @@ function freshnessRowFromTask(task, index, context) {
         laneVisible: false,
         isDailyNote: false,
         isToday: false,
+        isSnoozedToday: false,
         scheduled: null,
         due: null,
         start: null,
@@ -39294,6 +39374,18 @@ function freshnessRowFromTask(task, index, context) {
           : false;
     } catch (error) {
       isToday = false;
+    }
+    // Planned-today snoozed membership: today's live-or-blocked Snoozed
+    // rows (`docs/freshness.md` §4). Readers that mean workable now keep
+    // Today; review, lane, and dashboard exclusions use the union.
+    let isSnoozedToday = false;
+    try {
+      isSnoozedToday =
+        typeof safeContext.isSnoozed === "function"
+          ? Boolean(safeContext.isSnoozed(task))
+          : false;
+    } catch (error) {
+      isSnoozedToday = false;
     }
     let scheduled = null;
     try {
@@ -39462,6 +39554,7 @@ function freshnessRowFromTask(task, index, context) {
       laneVisible,
       isDailyNote,
       isToday,
+      isSnoozedToday,
       scheduled,
       due,
       start,
@@ -39486,6 +39579,7 @@ function freshnessRowFromTask(task, index, context) {
       laneVisible: false,
       isDailyNote: false,
       isToday: false,
+      isSnoozedToday: false,
       scheduled: null,
       due: null,
       start: null,
@@ -39768,6 +39862,13 @@ class BobLedgerToolsPlugin extends Plugin {
     // Synchronous daily-note cache; api never awaits it, and it starts false.
     this.todayCache = emptyTodayCache();
     this.todayCacheGen = 0;
+    // Sibling snoozed planned-today cache (Asleep/Due/Blocked rows in
+    // today's Snoozed section); api never awaits it either.
+    this.snoozedCache = emptySnoozedCache();
+    this.snoozedCacheGen = 0;
+    this.snoozedEnteredAt = new Map();
+    this.snoozedRevalidateAt = 0;
+    this.snoozedRefreshTimer = null;
     this.laneWalkMemo = null;
     this.todayEnteredAt = new Map();
     this.todayRevalidateAt = 0;
@@ -39780,6 +39881,18 @@ class BobLedgerToolsPlugin extends Plugin {
       todayKeys: () => this.todayKeys(),
       isToday: (task) => this.isTodayTask(task),
       todayRank: (task) => this.todayRankOfTask(task),
+      // Planned-today exclusion set (`docs/plan.md`, "Snoozed forecast"):
+      // true for today's live-or-blocked Snoozed rows only. Additive:
+      // `isToday` keeps its ledger-derived meaning.
+      isSnoozedToday: (task) => this.isSnoozedTodayTask(task),
+      isPlannedToday: (task) => this.isPlannedTodayTask(task),
+      snoozed: Object.freeze({
+        version: 1,
+        rows: () => this.snoozedRows(),
+        plannedKeys: () => this.snoozedPlannedKeys(),
+        nextWakeAt: () => this.snoozedNextWakeAt(),
+        ready: (now) => this.isSnoozedCacheReady(now),
+      }),
       nextBudget: () => {
         const { caps } = loadPlanCaps();
         return laneBudgetFromTasks(
@@ -40002,6 +40115,7 @@ class BobLedgerToolsPlugin extends Plugin {
         metadataCache.on("changed", (file, data) => {
           this.schedulePlanBlockRerender();
           this.refreshTodayCacheForChangedFile(file, data);
+          this.refreshSnoozedCacheForChangedFile(file, data);
           this.refreshFreshnessForChangedFile(file, data);
           this.refreshNoteReadyForChangedFile(file);
           this.refreshProgressMarksForChangedFile(file);
@@ -40020,12 +40134,16 @@ class BobLedgerToolsPlugin extends Plugin {
       this.registerEvent(
         metadataCache.on("deleted", (file) => {
           this.refreshNoteReadyForDeletedPath(file && file.path);
+          if (file && this.snoozedAffectsPath(file.path)) {
+            this.scheduleSnoozedRefresh(new Date());
+          }
           this.scheduleDashboardCollectionsRefresh();
         }),
       );
       this.registerEvent(
         metadataCache.on("resolved", () => {
           this.refreshTodayCacheFromDaily();
+          this.scheduleSnoozedRefresh(new Date());
           this.scheduleDashboardCollectionsRefresh();
           if (!this.noteReadyResolvedSeen) {
             this.noteReadyResolvedSeen = true;
@@ -40044,6 +40162,13 @@ class BobLedgerToolsPlugin extends Plugin {
       for (const event of ["create", "delete", "rename"]) {
         this.registerEvent(
           vault.on(event, (file) => this.refreshTodayCacheForVaultEvent(file)),
+        );
+      }
+      for (const event of ["create", "delete", "rename"]) {
+        this.registerEvent(
+          vault.on(event, (file, oldPath) =>
+            this.refreshSnoozedCacheForVaultEvent(file, oldPath),
+          ),
         );
       }
       for (const event of ["create", "modify", "delete", "rename"]) {
@@ -40071,14 +40196,16 @@ class BobLedgerToolsPlugin extends Plugin {
     try {
       if (typeof this.registerDomEvent === "function") {
         if (typeof window !== "undefined" && window) {
-          this.registerDomEvent(window, "focus", () =>
-            this.revalidateTodayCache(),
-          );
+          this.registerDomEvent(window, "focus", () => {
+            this.revalidateTodayCache();
+            this.revalidateSnoozedCache();
+          });
         }
         if (typeof document !== "undefined" && document) {
           this.registerDomEvent(document, "visibilitychange", () => {
             if (document.visibilityState === "visible") {
               this.revalidateTodayCache();
+              this.revalidateSnoozedCache();
             }
           });
         }
@@ -40105,6 +40232,10 @@ class BobLedgerToolsPlugin extends Plugin {
       this.registerInterval(
         window.setInterval(() => {
           const rolled = this.refreshTodayCacheForRollover();
+          const snoozedRolled = this.refreshSnoozedCacheForRollover();
+          if (!snoozedRolled && this.snoozedCacheNeedsMinuteRefresh()) {
+            this.scheduleSnoozedRefresh(new Date());
+          }
           this.refreshFreshnessForRollover();
           const capsChanged = this.checkReadyCapsAndDay(new Date());
           if (!rolled && !capsChanged) {
@@ -40170,6 +40301,10 @@ class BobLedgerToolsPlugin extends Plugin {
           // may reuse the same array object, and the freshness memo
           // must still rebuild on the next read.
           this.freshnessTasksGen = (this.freshnessTasksGen || 0) + 1;
+          // Target task edits arrive through the Tasks cache: a status
+          // or identity change can move a row into or out of the
+          // snoozed exclusion set without touching the daily note.
+          this.scheduleSnoozedRefresh(new Date());
           this.schedulePlanBlockRerender();
           this.scheduleLiveWidgetRefresh();
         }),
@@ -40199,6 +40334,7 @@ class BobLedgerToolsPlugin extends Plugin {
       this.refreshDailyScrollCaptureTarget();
       this.captureActiveDailyLocation();
       this.refreshTodayCacheFromDaily();
+      void this.refreshSnoozedCacheFromDaily();
       try {
         void this.refreshPomodoroThemesJournal("startup");
       } catch (error) {}
@@ -40565,6 +40701,13 @@ BobLedgerToolsPlugin.prototype.teardownLedgerToolsSurfaces = function () {
       }
     } catch (error) {
       // Body class cleanup is best-effort.
+    }
+    try {
+      if (typeof this.disposeSnoozedCache === "function") {
+        this.disposeSnoozedCache();
+      }
+    } catch (error) {
+      // Snoozed timer cleanup is best-effort.
     }
     cancelDeferred(this.pendingCenterDeferred);
     this.pendingCenterDeferred = null;
@@ -42553,6 +42696,7 @@ class BobLedgerToolsPlanAndReadyMixin {
           now,
           (task) => this.isTodayTask(task),
           gate,
+          (task) => this.isSnoozedTodayTask(task),
         );
       } catch (error) {
         return unavailable;
@@ -42640,6 +42784,7 @@ class BobLedgerToolsPlanAndReadyMixin {
           caps,
           normalized,
           (task) => this.isTodayTask(task),
+          (task) => this.isSnoozedTodayTask(task),
         );
       } catch (error) {
         return unavailable;
@@ -43210,12 +43355,22 @@ class BobLedgerToolsPlanAndReadyMixin {
         return { available: false, reason: "today" };
       }
       const { gate, gateMemo } = this.readyReviewGate(now);
+      let snoozedStamp = null;
+      try {
+        snoozedStamp =
+          typeof this.snoozedCacheStamp === "function"
+            ? this.snoozedCacheStamp()
+            : null;
+      } catch (error) {
+        snoozedStamp = "error";
+      }
       const memo = this.laneWalkMemo;
       if (
         memo &&
         memo.tasks === tasks &&
         memo.dateText === dateText &&
         memo.todayGen === this.todayCacheGen &&
+        memo.snoozedStamp === snoozedStamp &&
         memo.gateMemo === gateMemo
       ) {
         return memo.result;
@@ -43226,7 +43381,10 @@ class BobLedgerToolsPlanAndReadyMixin {
           tasks,
           now,
           (task) => this.isTodayTask(task),
-          { isReviewBucket: gate },
+          {
+            isReviewBucket: gate,
+            isSnoozed: (task) => this.isSnoozedTodayTask(task),
+          },
         );
       } catch (error) {
         return { available: false, reason: "error" };
@@ -43241,6 +43399,7 @@ class BobLedgerToolsPlanAndReadyMixin {
         tasks,
         dateText,
         todayGen: this.todayCacheGen,
+        snoozedStamp,
         gateMemo,
         result,
       };
@@ -46416,6 +46575,10 @@ class BobLedgerToolsFreshnessApiMixin {
       todayDay,
       noteRefreshRawFor: (path) => self.noteFreshnessRawFor(path),
       isToday: (task) => self.isTodayTask(task),
+      isSnoozed: (task) =>
+        typeof self.isSnoozedTodayTask === "function"
+          ? self.isSnoozedTodayTask(task)
+          : false,
     };
   }
 
@@ -46552,20 +46715,32 @@ class BobLedgerToolsFreshnessApiMixin {
   // Snapshot key for Today membership and readiness: the cache's
   // date, daily path, and link keys. Any Today change (link, unlink,
   // daily rebuild, rollover) invalidates the memo, because rows bake
-  // the membership in at build time.
+  // the membership in at build time. The snoozed planned-today stamp
+  // rides along: rows bake that membership in too, and a snoozed-only
+  // change must rebuild even when the Today key set is unchanged.
   freshnessTodayStamp() {
     try {
       const cache = this.todayCache;
       if (!cache || !(cache.rank instanceof Map)) {
-        return JSON.stringify([null, null, null]);
+        return JSON.stringify([null, null, null, null]);
+      }
+      let snoozedStamp = null;
+      try {
+        snoozedStamp =
+          typeof this.snoozedCacheStamp === "function"
+            ? this.snoozedCacheStamp()
+            : null;
+      } catch (error) {
+        snoozedStamp = "error";
       }
       return JSON.stringify([
         cache.date || null,
         cache.dailyPath || null,
         Array.isArray(cache.keys) ? cache.keys : [],
+        snoozedStamp,
       ]);
     } catch (error) {
-      return JSON.stringify(["error", "error", "error"]);
+      return JSON.stringify(["error", "error", "error", "error"]);
     }
   }
 
@@ -164430,7 +164605,7 @@ class BobLedgerToolsTodayLocationMixin {
           caps,
           sourcePath,
           app: this.app,
-          isToday: (task) => this.isTodayTask(task),
+          isToday: (task) => this.isTodayTask(task), isSnoozed: (task) => this.isSnoozedTodayTask(task),
           isReviewBucket: planGate,
           review: planReview,
           nextDashboard,
@@ -164885,6 +165060,841 @@ class BobLedgerToolsTodayLocationMixin {
       Math.floor(numericOrDefault(this.dailyLocationRestoreToken, 0)) + 1;
   }
 
+}
+// ---- src/290a-snoozed-today-cache.js ----
+// --- Snoozed Today cache (planned-today) -----------------------------------
+// Sibling to the ledger-derived Today cache in `290-plugin-today-and-location.js`.
+// While Today holds dedicated Task Links under today's open Pomodoros, this
+// cache holds the snoozed reader's `planned` set for today: resolved Asleep,
+// Due, and Blocked rows in today's `## Snoozed` section
+// (`docs/snooze.md`, "Rows, time, and identity"). Their union with Today is
+// `planned-today` (`docs/plan.md`, "Snoozed forecast").
+//
+// Today stays ledger-derived: snoozed identities never enter `todayCache`
+// (`decisions:today-is-read-from-the-ledger`). Planned-today applies only at
+// review and lane-walk exclusion sites (`docs/freshness.md` §4,
+// `docs/walks.md`); whole-lane NEXT/PENDING meters keep Today included.
+//
+// The pure classifier lives in the shared twin (`snoozeModel.classifyRows`);
+// this fragment builds its per-row facts from Obsidian state (daily-note
+// text, the Tasks cache, `getFirstLinkpathDest`, and the Today key set) and
+// owns the cache lifecycle: rebuild, debounce, stale-generation discard,
+// target-aware invalidation, midnight rollover, and minute transitions.
+
+function emptySnoozedCache() {
+  return {
+    date: null,
+    dailyPath: null,
+    zone: null,
+    nowMinutes: null,
+    rows: [],
+    byKey: new Map(),
+    planned: [],
+    blocked: [],
+    nextWakeAt: null,
+    detailsSignature: "",
+  };
+}
+
+function snoozedNoteDateFromDailyPath(dailyPath) {
+  const match = /(^|\/)(\d{4})\/(\d{4})(\d{2})(\d{2})\.md$/.exec(
+    String(dailyPath || ""),
+  );
+  if (!match) {
+    return null;
+  }
+  return `${match[2]}-${match[4]}-${match[5]}`;
+}
+
+function snoozedTodayTextFromClock(clock) {
+  const date = clock instanceof Date ? clock : new Date();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
+function snoozedNowMinutesFromClock(clock) {
+  const date = clock instanceof Date ? clock : new Date();
+  return date.getHours() * 60 + date.getMinutes();
+}
+
+function snoozedLocalZoneName() {
+  try {
+    const zone =
+      typeof Intl !== "undefined" &&
+      typeof Intl.DateTimeFormat === "function"
+        ? Intl.DateTimeFormat().resolvedOptions().timeZone
+        : null;
+    return typeof zone === "string" && zone ? zone : "UTC";
+  } catch (error) {
+    return "UTC";
+  }
+}
+
+// Today-style lookup key (`"<vault path with .md>#<block id>"`, no caret)
+// so `isSnoozedToday(task)` reuses the exact `todayCacheKey` shape.
+function snoozedCacheKey(task) {
+  if (!task || typeof task !== "object") {
+    return null;
+  }
+  const rawPath = planTaskPath(task);
+  if (typeof rawPath !== "string" || !rawPath) {
+    return null;
+  }
+  const blockId = planTaskBlockId(task);
+  if (!blockId) {
+    return null;
+  }
+  const path = /\.md$/i.test(rawPath) ? rawPath : `${rawPath}.md`;
+  return `${path}#${blockId}`;
+}
+
+// Best-effort Event Task flag for cache facts. `bob snooze add` refuses
+// Event targets, so a resolved snoozed row should never point at one;
+// hand-authored rows that do are detected here by their MEET marker and
+// classified `event_task` (ignored) instead of entering planned-today.
+function snoozedIsEventTask(task) {
+  try {
+    const line =
+      (task &&
+        typeof task.originalMarkdown === "string" &&
+        task.originalMarkdown) ||
+      (task && typeof task.description === "string" && task.description) ||
+      "";
+    return /(^|\s)MEET(\s|$)/.test(line);
+  } catch (error) {
+    return false;
+  }
+}
+
+// Build the `classifyRows` input plus per-row metadata from daily-note
+// content and Obsidian state. `todayKeySet` holds Today-style keys
+// (`"path.md#id"`, caretless); a snoozed identity whose caretless form is
+// present has a live dedicated ledger link and classifies
+// `already_linked`, never planned.
+function snoozedBuildClassifyInput(options = {}) {
+  const content = typeof options.content === "string" ? options.content : "";
+  const dailyPath = typeof options.dailyPath === "string" ? options.dailyPath : "";
+  const tasks = Array.isArray(options.tasks) ? options.tasks : [];
+  const resolve =
+    typeof options.resolve === "function" ? options.resolve : null;
+  const todayKeySet =
+    options.todayKeySet instanceof Set ? options.todayKeySet : new Set();
+  const clock = options.clock instanceof Date ? options.clock : new Date();
+  const zone =
+    typeof options.zone === "string" && options.zone
+      ? options.zone
+      : snoozedLocalZoneName();
+  const section =
+    typeof snoozeParseSection === "function"
+      ? snoozeParseSection(content)
+      : null;
+  const activeRows =
+    section && Array.isArray(section.rows)
+      ? section.rows.filter((row) => row && row.kind === "active")
+      : [];
+  const byPathBlock = new Map();
+  const duplicates = new Set();
+  for (const task of tasks) {
+    if (!task || typeof task !== "object") {
+      continue;
+    }
+    const rawPath = planTaskPath(task);
+    if (typeof rawPath !== "string" || !rawPath) {
+      continue;
+    }
+    const blockId = planTaskBlockId(task);
+    if (!blockId) {
+      continue;
+    }
+    const path = /\.md$/i.test(rawPath) ? rawPath : `${rawPath}.md`;
+    const key = `${path}\u0000${blockId}`;
+    if (byPathBlock.has(key)) {
+      duplicates.add(key);
+      continue;
+    }
+    byPathBlock.set(key, task);
+  }
+  const rows = [];
+  const meta = [];
+  for (const row of activeRows) {
+    let resolution = "missing";
+    let route = null;
+    let fact = null;
+    if (row && typeof row.target === "string" && row.blockId) {
+      // An empty target is the daily note itself, mirroring
+      // `todayResolveLinkKey`; only non-empty targets go through the
+      // vault link resolver.
+      let resolved = row.target === "" ? dailyPath : null;
+      if (resolved === null && resolve) {
+        try {
+          const file = resolve(row.target, dailyPath);
+          resolved =
+            file && typeof file.path === "string" ? file.path : null;
+        } catch (error) {
+          resolved = null;
+        }
+      }
+      if (typeof resolved === "string" && resolved) {
+        const withExtension = /\.md$/i.test(resolved)
+          ? resolved
+          : `${resolved}.md`;
+        const key = `${withExtension}\u0000${row.blockId || ""}`;
+        if (duplicates.has(key)) {
+          resolution = "ambiguous";
+        } else if (byPathBlock.has(key)) {
+          resolution = "found";
+          route = withExtension;
+          fact = byPathBlock.get(key);
+        } else {
+          resolution = "missing";
+        }
+      } else {
+        resolution = "missing";
+      }
+    }
+    let status = null;
+    let isTask = false;
+    let isEvent = false;
+    let liveLink = false;
+    if (fact) {
+      const symbol = planTaskStatusSymbol(fact);
+      status = typeof symbol === "string" && symbol ? symbol[0] : null;
+      const statusType =
+        fact.status && typeof fact.status === "object"
+          ? fact.status.type
+          : null;
+      isTask = statusType !== "NON_TASK";
+      isEvent = snoozedIsEventTask(fact);
+      if (route && row.blockId && typeof snoozeIdentityKey === "function") {
+        const identity = snoozeIdentityKey(route, row.blockId);
+        const caretless =
+          typeof identity === "string" ? identity.replace("#^", "#") : null;
+        liveLink =
+          typeof caretless === "string" && todayKeySet.has(caretless);
+      }
+    }
+    rows.push({
+      line: row.line,
+      minutes: Number.isInteger(row.minutes) ? row.minutes : null,
+      history: false,
+      malformed: false,
+      resolution,
+      route,
+      block: row.blockId,
+      status,
+      is_task: isTask,
+      is_event: isEvent,
+      live_link: liveLink,
+    });
+    meta.push({ row, route, fact, resolution });
+  }
+  return {
+    section,
+    rows,
+    meta,
+    classifierInput: {
+      today: snoozedTodayTextFromClock(clock),
+      note_date: snoozedNoteDateFromDailyPath(dailyPath) || "",
+      now_minutes: snoozedNowMinutesFromClock(clock),
+      zone,
+      rows,
+    },
+    clockSnapshot: {
+      date: snoozedTodayTextFromClock(clock),
+      nowMinutes: snoozedNowMinutesFromClock(clock),
+      zone,
+    },
+  };
+}
+
+function snoozedSnapshotRows(classified, meta, section) {
+  const states = classified && Array.isArray(classified.rows)
+    ? classified.rows
+    : [];
+  // Membership is the classifier's planned set only (Asleep, Due,
+  // Blocked): ignored rows (Ready, history, duplicate, already-linked,
+  // previous-day, …) are reported in `rows()` for provenance but never
+  // enter the exclusion set.
+  const plannedSet = new Set(
+    classified && Array.isArray(classified.planned)
+      ? classified.planned
+      : [],
+  );
+  const rows = [];
+  const byKey = new Map();
+  for (let index = 0; index < states.length; index += 1) {
+    const state = states[index] || {};
+    const item = meta[index] || {};
+    const row = item.row || {};
+    const key =
+      state.identity && typeof state.identity === "string"
+        ? state.identity.replace("#^", "#")
+        : null;
+    const snapshot = Object.freeze({
+      key,
+      identity: typeof state.identity === "string" ? state.identity : null,
+      line: Number.isInteger(state.line) ? state.line : row.line || null,
+      minutes: Number.isInteger(state.minutes) ? state.minutes : null,
+      hhmm: typeof state.hhmm === "string" ? state.hhmm : null,
+      target: typeof row.target === "string" ? row.target : null,
+      blockId: typeof row.blockId === "string" ? row.blockId : null,
+      route: typeof state.route === "string" ? state.route : null,
+      state: typeof state.state === "string" ? state.state : "missing",
+      history: false,
+      wokeAt: null,
+      children: Number.isInteger(row.children) ? row.children : 0,
+      childrenText:
+        typeof row.childrenText === "string" ? row.childrenText : "",
+      source: typeof row.subtree === "string" ? row.subtree : "",
+    });
+    rows.push(snapshot);
+    if (
+      key &&
+      typeof state.identity === "string" &&
+      plannedSet.has(state.identity) &&
+      !byKey.has(key)
+    ) {
+      byKey.set(key, snapshot);
+    }
+  }
+  // Struck history rows are provenance, never membership, but the
+  // `snoozed.rows()` surface reports them so readers never re-parse
+  // Markdown for `woke_at`.
+  if (section && Array.isArray(section.rows)) {
+    for (const row of section.rows) {
+      if (!row || row.kind !== "history") {
+        continue;
+      }
+      const historySnapshot = Object.freeze({
+        key: null,
+        identity: null,
+        line: row.line || null,
+        minutes: Number.isInteger(row.minutes) ? row.minutes : null,
+        hhmm: typeof row.hhmm === "string" ? row.hhmm : null,
+        target: typeof row.target === "string" ? row.target : null,
+        blockId: typeof row.blockId === "string" ? row.blockId : null,
+        route: null,
+        state: "woken",
+        history: true,
+        wokeAt: typeof row.wokeHhmm === "string" ? row.wokeHhmm : null,
+        children: Number.isInteger(row.children) ? row.children : 0,
+        childrenText:
+          typeof row.childrenText === "string" ? row.childrenText : "",
+        source: typeof row.subtree === "string" ? row.subtree : "",
+      });
+      rows.push(historySnapshot);
+    }
+  }
+  rows.sort((left, right) => (left.line || 0) - (right.line || 0));
+  return { rows: Object.freeze(rows), byKey };
+}
+
+function snoozedDetailsSignature(rows) {
+  try {
+    return JSON.stringify(
+      (Array.isArray(rows) ? rows : []).map((row) => [
+        row ? row.key : null,
+        row ? row.identity : null,
+        row ? row.state : null,
+        row ? row.minutes : null,
+        row ? row.wokeAt : null,
+      ]),
+    );
+  } catch (error) {
+    return "";
+  }
+}
+
+class BobLedgerToolsSnoozedTodayMixin {
+  snoozedRoutesInCache() {
+    try {
+      const cache = this.snoozedCache;
+      const rows = cache && Array.isArray(cache.rows) ? cache.rows : [];
+      const routes = new Set();
+      for (const row of rows) {
+        if (row && typeof row.route === "string" && row.route) {
+          routes.add(row.route);
+        }
+      }
+      return routes;
+    } catch (error) {
+      return new Set();
+    }
+  }
+
+  snoozedAffectsPath(path) {
+    try {
+      const changed = typeof path === "string" ? path : "";
+      if (!changed) {
+        return false;
+      }
+      const daily =
+        typeof this.currentTodayDailyPath === "function"
+          ? this.currentTodayDailyPath(new Date())
+          : null;
+      if (daily && sameVaultPath(changed, daily)) {
+        return true;
+      }
+      const cache = this.snoozedCache;
+      if (
+        cache &&
+        typeof cache.dailyPath === "string" &&
+        cache.dailyPath &&
+        sameVaultPath(changed, cache.dailyPath)
+      ) {
+        return true;
+      }
+      const routes = this.snoozedRoutesInCache();
+      const withExtension = /\.md$/i.test(changed) ? changed : `${changed}.md`;
+      if (routes.has(withExtension) || routes.has(changed)) {
+        return true;
+      }
+      if (this.todayCache && this.todayCache.idsByPath instanceof Map) {
+        const ids =
+          this.todayCache.idsByPath.get(withExtension) ||
+          this.todayCache.idsByPath.get(changed);
+        if (ids instanceof Set && ids.size > 0) {
+          return true;
+        }
+      }
+      return false;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  // Rebuild the cache from daily-note text. Returns true when planned
+  // membership, history detail, or readiness changed; a membership
+  // change refreshes every open Tasks query and the plan widgets even
+  // when the Today key set is unchanged, because review, lane, and
+  // dashboard readers branch on this set too.
+  rebuildSnoozedCache(content, dailyPath, now = new Date(), options = {}) {
+    if (!this.snoozedCache || !(this.snoozedCache.byKey instanceof Map)) {
+      this.snoozedCache = emptySnoozedCache();
+    }
+    if (!(this.snoozedEnteredAt instanceof Map)) {
+      this.snoozedEnteredAt = new Map();
+    }
+    const clock = now instanceof Date ? now : new Date();
+    const wasReady = this.isSnoozedCacheReady(clock);
+    const previous = this.snoozedCache;
+    const previousPlanned = Array.isArray(previous.planned)
+      ? previous.planned
+      : [];
+    const previousSignature =
+      typeof previous.detailsSignature === "string"
+        ? previous.detailsSignature
+        : "";
+    const previousDate = previous.date;
+    const previousPath = previous.dailyPath;
+    const zone =
+      options && typeof options.zone === "string" && options.zone
+        ? options.zone
+        : snoozedLocalZoneName();
+    let tasks = null;
+    try {
+      tasks = planBlockTasks(this.app);
+    } catch (error) {
+      tasks = null;
+    }
+    const todayKeySet = new Set(
+      this.todayCache && this.todayCache.rank instanceof Map
+        ? Array.from(this.todayCache.rank.keys())
+        : [],
+    );
+    const built = snoozedBuildClassifyInput({
+      content,
+      dailyPath,
+      tasks: Array.isArray(tasks) ? tasks : [],
+      resolve: (target, daily) => this.resolveTodayLink(target, daily),
+      todayKeySet,
+      clock,
+      zone,
+    });
+    let classified = null;
+    try {
+      classified = snoozeModel.classifyRows(built.classifierInput);
+    } catch (error) {
+      classified = { rows: [], planned: [], blocked: [], nextWakeAt: null };
+    }
+    const snapshot = snoozedSnapshotRows(classified, built.meta, built.section);
+    const planned = Array.isArray(classified.planned)
+      ? classified.planned.slice().sort()
+      : [];
+    const blocked = Array.isArray(classified.blocked)
+      ? classified.blocked.slice().sort()
+      : [];
+    const nextWakeAt =
+      classified && typeof classified.nextWakeAt === "string"
+        ? classified.nextWakeAt
+        : null;
+    const detailsSignature = snoozedDetailsSignature(snapshot.rows);
+    const dateOrPathChanged =
+      previousDate !== built.clockSnapshot.date ||
+      !sameVaultPath(previousPath || "", dailyPath);
+    const plannedChanged =
+      previousPlanned.length !== planned.length ||
+      previousPlanned.some((key, index) => key !== planned[index]);
+    const detailsChanged = detailsSignature !== previousSignature;
+    if (!dateOrPathChanged && !wasReady) {
+      // First build for an unchanged day still stamps entries below.
+    }
+    if (wasReady && !dateOrPathChanged) {
+      const previousSet = new Set(previousPlanned);
+      for (const key of planned) {
+        if (!previousSet.has(key)) {
+          this.snoozedEnteredAt.set(key, clock.getTime());
+        }
+      }
+    } else {
+      this.snoozedEnteredAt.clear();
+      for (const key of planned) {
+        this.snoozedEnteredAt.set(key, clock.getTime());
+      }
+    }
+    for (const [key, stamped] of Array.from(this.snoozedEnteredAt.entries())) {
+      if (!planned.includes(key) || clock.getTime() - stamped > 2000) {
+        this.snoozedEnteredAt.delete(key);
+      }
+    }
+    this.snoozedCache = {
+      date: built.clockSnapshot.date,
+      dailyPath,
+      zone: built.clockSnapshot.zone,
+      nowMinutes: built.clockSnapshot.nowMinutes,
+      rows: snapshot.rows,
+      byKey: snapshot.byKey,
+      planned,
+      blocked,
+      nextWakeAt,
+      detailsSignature,
+    };
+    if (typeof this.snoozedCacheGen === "number") {
+      this.snoozedCacheGen += 1;
+    } else {
+      this.snoozedCacheGen = 1;
+    }
+    const becameReady = !wasReady && this.isSnoozedCacheReady(clock);
+    const changed = plannedChanged || becameReady;
+    if (changed || detailsChanged || dateOrPathChanged) {
+      try {
+        const workspace = this.app && this.app.workspace;
+        if (plannedChanged || becameReady) {
+          if (workspace && typeof workspace.trigger === "function") {
+            workspace.trigger(TODAY_RELOAD_EVENT);
+          }
+          this.schedulePlanBlockRerender();
+          this.scheduleFreshnessStatusBar();
+          this.scheduleFreshnessMarksRefresh();
+          if (typeof this.scheduleLiveWidgetRefresh === "function") {
+            this.scheduleLiveWidgetRefresh();
+          }
+        }
+      } catch (error) {
+        // The cache is still correct; only the live refresh is skipped.
+      }
+    }
+    return changed;
+  }
+
+  snoozedCacheStamp() {
+    try {
+      const cache = this.snoozedCache;
+      if (!cache || !(cache.byKey instanceof Map)) {
+        return JSON.stringify([null, null, null, null]);
+      }
+      return JSON.stringify([
+        cache.date || null,
+        cache.dailyPath || null,
+        Array.isArray(cache.planned) ? cache.planned : [],
+        cache.nextWakeAt || null,
+      ]);
+    } catch (error) {
+      return JSON.stringify(["error", "error", "error", "error"]);
+    }
+  }
+
+  isSnoozedCacheReady(now = new Date()) {
+    try {
+      const clock = now instanceof Date ? now : new Date();
+      const expectedDate = snoozedTodayTextFromClock(clock);
+      const expectedPath =
+        typeof this.currentTodayDailyPath === "function"
+          ? this.currentTodayDailyPath(clock)
+          : null;
+      if (!expectedPath) {
+        return false;
+      }
+      const cache = this.snoozedCache;
+      if (!cache || !(cache.byKey instanceof Map)) {
+        return false;
+      }
+      if (cache.date !== expectedDate) {
+        return false;
+      }
+      if (!sameVaultPath(cache.dailyPath || "", expectedPath)) {
+        return false;
+      }
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  // True only for today's live-or-blocked Snoozed rows (Asleep, Due,
+  // Blocked). Missing, unresolved, ignored, and history inputs are
+  // neutral, and an unavailable cache never invents membership.
+  isSnoozedTodayTask(task) {
+    try {
+      const key = snoozedCacheKey(task);
+      if (!key) {
+        return false;
+      }
+      const cache = this.snoozedCache;
+      if (!cache || !(cache.byKey instanceof Map)) {
+        return false;
+      }
+      return cache.byKey.has(key);
+    } catch (error) {
+      return false;
+    }
+  }
+
+  isPlannedTodayTask(task) {
+    try {
+      if (
+        typeof this.isTodayTask === "function" &&
+        this.isTodayTask(task) === true
+      ) {
+        return true;
+      }
+      return this.isSnoozedTodayTask(task);
+    } catch (error) {
+      return false;
+    }
+  }
+
+  snoozedRows() {
+    try {
+      const cache = this.snoozedCache;
+      if (!cache || !Array.isArray(cache.rows)) {
+        return [];
+      }
+      return cache.rows.map((row) => ({ ...row }));
+    } catch (error) {
+      return [];
+    }
+  }
+
+  snoozedPlannedKeys() {
+    try {
+      const cache = this.snoozedCache;
+      return Array.isArray(cache.planned) ? cache.planned.slice() : [];
+    } catch (error) {
+      return [];
+    }
+  }
+
+  snoozedNextWakeAt() {
+    try {
+      const cache = this.snoozedCache;
+      return cache && typeof cache.nextWakeAt === "string"
+        ? cache.nextWakeAt
+        : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  snoozedCacheNeedsMinuteRefresh(now = new Date()) {
+    try {
+      const clock = now instanceof Date ? now : new Date();
+      if (!this.isSnoozedCacheReady(clock)) {
+        return true;
+      }
+      const cache = this.snoozedCache;
+      return (
+        !cache ||
+        cache.nowMinutes !== snoozedNowMinutesFromClock(clock)
+      );
+    } catch (error) {
+      return false;
+    }
+  }
+
+  refreshSnoozedCacheFromDaily(now = new Date()) {
+    const clock = now instanceof Date ? now : new Date();
+    const dailyPath =
+      typeof this.currentTodayDailyPath === "function"
+        ? this.currentTodayDailyPath(clock)
+        : null;
+    if (!dailyPath) {
+      return Promise.resolve(false);
+    }
+    const gen = (this.snoozedCacheGen = (this.snoozedCacheGen || 0) + 1);
+    return Promise.resolve(this.readPlanBlockContent(dailyPath)).then(
+      (content) => {
+        if (gen !== this.snoozedCacheGen) {
+          return false;
+        }
+        if (typeof content !== "string") {
+          return this.rebuildSnoozedCache("", dailyPath, clock);
+        }
+        return this.rebuildSnoozedCache(content, dailyPath, clock);
+      },
+    );
+  }
+
+  scheduleSnoozedRefresh(now = new Date(), delayMs = 300) {
+    try {
+      if (
+        this.snoozedRefreshTimer !== null &&
+        this.snoozedRefreshTimer !== undefined
+      ) {
+        return false;
+      }
+      const clock = now instanceof Date ? now : new Date();
+      const delay =
+        Number.isInteger(delayMs) && delayMs >= 0 ? delayMs : 300;
+      const schedule =
+        typeof window !== "undefined" &&
+        typeof window.setTimeout === "function"
+          ? window.setTimeout
+          : setTimeout;
+      const clear =
+        typeof window !== "undefined" &&
+        typeof window.clearTimeout === "function"
+          ? window.clearTimeout
+          : clearTimeout;
+      this.snoozedRefreshTimer = schedule(() => {
+        this.snoozedRefreshTimer = null;
+        try {
+          void this.refreshSnoozedCacheFromDaily(clock);
+        } catch (error) {
+          // Best-effort refresh only.
+        }
+      }, delay);
+      void clear;
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  cancelSnoozedRefresh() {
+    try {
+      if (
+        this.snoozedRefreshTimer !== null &&
+        this.snoozedRefreshTimer !== undefined &&
+        typeof clearTimeout === "function"
+      ) {
+        clearTimeout(this.snoozedRefreshTimer);
+      }
+    } catch (error) {
+      // Best-effort cleanup only.
+    }
+    this.snoozedRefreshTimer = null;
+  }
+
+  disposeSnoozedCache() {
+    this.cancelSnoozedRefresh();
+  }
+
+  refreshSnoozedCacheForChangedFile(file, data, now = new Date()) {
+    const clock = now instanceof Date ? now : new Date();
+    const changedPath =
+      file && typeof file.path === "string" ? file.path : null;
+    if (!changedPath) {
+      return false;
+    }
+    const daily =
+      typeof this.currentTodayDailyPath === "function"
+        ? this.currentTodayDailyPath(clock)
+        : null;
+    if (daily && sameVaultPath(changedPath, daily)) {
+      if (typeof data === "string") {
+        this.snoozedCacheGen = (this.snoozedCacheGen || 0) + 1;
+        this.rebuildSnoozedCache(data, changedPath, clock);
+        return true;
+      }
+      this.scheduleSnoozedRefresh(clock);
+      return true;
+    }
+    if (this.snoozedAffectsPath(changedPath)) {
+      this.scheduleSnoozedRefresh(clock);
+      return true;
+    }
+    return false;
+  }
+
+  refreshSnoozedCacheForVaultEvent(file, oldPath, now = new Date()) {
+    const clock = now instanceof Date ? now : new Date();
+    const workspace = this.app && this.app.workspace;
+    if (workspace && workspace.layoutReady === false) {
+      return false;
+    }
+    const changedPath =
+      file && typeof file.path === "string" ? file.path : null;
+    const previousPath = typeof oldPath === "string" ? oldPath : null;
+    if (
+      (changedPath && this.snoozedAffectsPath(changedPath)) ||
+      (previousPath && this.snoozedAffectsPath(previousPath))
+    ) {
+      this.scheduleSnoozedRefresh(clock);
+      return true;
+    }
+    return false;
+  }
+
+  refreshSnoozedCacheForRollover(now = new Date()) {
+    const clock = now instanceof Date ? now : new Date();
+    const dailyPath =
+      typeof this.currentTodayDailyPath === "function"
+        ? this.currentTodayDailyPath(clock)
+        : null;
+    if (!dailyPath) {
+      return false;
+    }
+    if (
+      this.snoozedCache &&
+      sameVaultPath(this.snoozedCache.dailyPath || "", dailyPath) &&
+      this.snoozedCache.date === snoozedTodayTextFromClock(clock)
+    ) {
+      return false;
+    }
+    this.scheduleSnoozedRefresh(clock, 0);
+    return true;
+  }
+
+  revalidateSnoozedCache(now = new Date()) {
+    const clock = now instanceof Date ? now : new Date();
+    const nowMs = clock.getTime();
+    const workspace = this.app && this.app.workspace;
+    if (workspace && workspace.layoutReady === false) {
+      return false;
+    }
+    const last =
+      typeof this.snoozedRevalidateAt === "number"
+        ? this.snoozedRevalidateAt
+        : 0;
+    if (last && Math.abs(nowMs - last) < 1000) {
+      return false;
+    }
+    this.snoozedRevalidateAt = nowMs;
+    if (this.refreshSnoozedCacheForRollover(clock)) {
+      return true;
+    }
+    if (!this.isSnoozedCacheReady(clock)) {
+      void this.refreshSnoozedCacheFromDaily(clock);
+      return true;
+    }
+    if (this.snoozedCacheNeedsMinuteRefresh(clock)) {
+      this.scheduleSnoozedRefresh(clock);
+      return true;
+    }
+    return false;
+  }
 }
 // ---- src/291-plugin-gcal-events.js ----
 // Google Calendar Event Tasks: create-triggered sync plus read-time painting.
@@ -193358,6 +194368,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsCommandModeRefreshMixin,
   BobLedgerToolsKeepInboxMixin,
   BobLedgerToolsTodayLocationMixin,
+  BobLedgerToolsSnoozedTodayMixin,
   BobLedgerToolsTodayMarksMixin,
   BobLedgerToolsTodayMarksReadingMixin,
   BobLedgerToolsTodayMarksReadingClicksMixin,
@@ -195151,60 +196162,15 @@ function planBlockTasks(app) {
   return null;
 }
 
-// Daily NEXT/PENDING presentation uses the dashboard section budget.
-// A supplied budget (including unavailable nulls) is used as-is and
-// never replaced with an ungated whole-lane fallback. Standalone
-// callers without a prepared budget compute the same section through
-// dashboardLaneBudgetFromTasks when Tasks data is present.
-function unavailablePlanDashboardBudget(effective, lane) {
-  return {
-    section: null,
-    lane: null,
-    count: null,
-    laneCount: null,
-    cap: lane === "next" ? effective.maxNext : effective.maxPending,
-    over: false,
-    today: null,
-  };
-}
-
-function resolvePlanDashboardBudget(
-  supplied,
-  taskList,
-  day,
-  effective,
-  lane,
-  isTodayPredicate,
-  hasTasks,
-) {
-  if (supplied !== undefined) {
-    if (!supplied || typeof supplied !== "object") {
-      return unavailablePlanDashboardBudget(effective, lane);
-    }
-    return supplied;
-  }
-  if (!hasTasks) {
-    return unavailablePlanDashboardBudget(effective, lane);
-  }
-  try {
-    return dashboardLaneBudgetFromTasks(
-      taskList,
-      day,
-      effective,
-      lane,
-      isTodayPredicate,
-    );
-  } catch (error) {
-    return unavailablePlanDashboardBudget(effective, lane);
-  }
-}
-
 // Synchronous view-model for the ```bob-plan block. Never throws: missing
 // content, caps, or Tasks all degrade to `–` placeholders, never an error.
 // `isToday` is the caller's Today predicate over cached Tasks tasks
 // (the plugin passes its synchronous cache); it still feeds READY.
-// READY is the shared live current backlog (Today excluded); it never
-// changes what the ledger's PLAN status means.
+// `isSnoozed` is the sibling planned-today predicate: the dashboard
+// PENDING/NEXT sections and READY exclude the union, while whole-lane
+// `next`/`pending` keep Today included. READY is the shared live current
+// backlog (planned-today excluded); it never changes what the ledger's
+// PLAN status means.
 // Daily NEXT/PENDING badges and their cap lints follow dashboard section
 // counts. Whole-lane `next`/`pending` remain available to callers. Optional
 // `nextDashboard` / `pendingDashboard` are guarded budgets from the paint path.
@@ -195216,6 +196182,7 @@ function planBlockModel({
   sourcePath,
   app,
   isToday,
+  isSnoozed,
   isReviewBucket,
   review,
   nextDashboard,
@@ -195237,6 +196204,8 @@ function planBlockModel({
   const hasTasks = Array.isArray(tasks);
   const isTodayPredicate =
     typeof isToday === "function" ? isToday : () => false;
+  const isSnoozedPredicate =
+    typeof isSnoozed === "function" ? isSnoozed : () => false;
   const taskList = hasTasks ? tasks : [];
   const day = today === undefined ? new Date() : today;
   let next;
@@ -195259,6 +196228,7 @@ function planBlockModel({
     "next",
     isTodayPredicate,
     hasTasks,
+    isSnoozedPredicate,
   );
   const pendingDash = resolvePlanDashboardBudget(
     pendingDashboard,
@@ -195268,6 +196238,7 @@ function planBlockModel({
     "pending",
     isTodayPredicate,
     hasTasks,
+    isSnoozedPredicate,
   );
   const nextModel = dashboardLaneBadgeModel(nextDash, "next");
   const pendingModel = dashboardLaneBadgeModel(pendingDash, "pending");
@@ -195280,6 +196251,7 @@ function planBlockModel({
         effective,
         isTodayPredicate,
         isReviewBucket,
+        isSnoozedPredicate,
       );
     } catch (error) {
       ready = null;
@@ -195409,6 +196381,58 @@ function planBlockModel({
   };
 }
 
+// ---- src/340a-plan-dashboard-section.js ----
+// Daily NEXT/PENDING presentation uses the dashboard section budget.
+// A supplied budget (including unavailable nulls) is used as-is and
+// never replaced with an ungated whole-lane fallback. Standalone
+// callers without a prepared budget compute the same section through
+// dashboardLaneBudgetFromTasks when Tasks data is present. The section
+// excludes planned-today (`isToday || isSnoozed`); the whole-lane count
+// keeps its usual lane predicate (`docs/plan.md`, "Snoozed forecast").
+function unavailablePlanDashboardBudget(effective, lane) {
+  return {
+    section: null,
+    lane: null,
+    count: null,
+    laneCount: null,
+    cap: lane === "next" ? effective.maxNext : effective.maxPending,
+    over: false,
+    today: null,
+  };
+}
+
+function resolvePlanDashboardBudget(
+  supplied,
+  taskList,
+  day,
+  effective,
+  lane,
+  isTodayPredicate,
+  hasTasks,
+  isSnoozedPredicate,
+) {
+  if (supplied !== undefined) {
+    if (!supplied || typeof supplied !== "object") {
+      return unavailablePlanDashboardBudget(effective, lane);
+    }
+    return supplied;
+  }
+  if (!hasTasks) {
+    return unavailablePlanDashboardBudget(effective, lane);
+  }
+  try {
+    return dashboardLaneBudgetFromTasks(
+      taskList,
+      day,
+      effective,
+      lane,
+      isTodayPredicate,
+      typeof isSnoozedPredicate === "function" ? isSnoozedPredicate : () => false,
+    );
+  } catch (error) {
+    return unavailablePlanDashboardBudget(effective, lane);
+  }
+}
 // ---- src/350-exports.js ----
 module.exports = BobLedgerToolsPlugin;
 
@@ -198408,3 +199432,16 @@ try {
 } catch (_) {}
 // ---- src/380-snooze-model-exports.js ----
 Object.assign(module.exports.helpers, { snoozeModel });
+// ---- src/381-snoozed-cache-exports.js ----
+Object.assign(module.exports.helpers, {
+  emptySnoozedCache,
+  snoozedNoteDateFromDailyPath,
+  snoozedTodayTextFromClock,
+  snoozedNowMinutesFromClock,
+  snoozedLocalZoneName,
+  snoozedCacheKey,
+  snoozedIsEventTask,
+  snoozedBuildClassifyInput,
+  snoozedSnapshotRows,
+  snoozedDetailsSignature,
+});

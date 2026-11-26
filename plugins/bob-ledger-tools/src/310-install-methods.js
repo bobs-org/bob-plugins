@@ -148,6 +148,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsCommandModeRefreshMixin,
   BobLedgerToolsKeepInboxMixin,
   BobLedgerToolsTodayLocationMixin,
+  BobLedgerToolsSnoozedTodayMixin,
   BobLedgerToolsTodayMarksMixin,
   BobLedgerToolsTodayMarksReadingMixin,
   BobLedgerToolsTodayMarksReadingClicksMixin,

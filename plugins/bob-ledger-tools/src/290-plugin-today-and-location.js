@@ -542,7 +542,7 @@ class BobLedgerToolsTodayLocationMixin {
           caps,
           sourcePath,
           app: this.app,
-          isToday: (task) => this.isTodayTask(task),
+          isToday: (task) => this.isTodayTask(task), isSnoozed: (task) => this.isSnoozedTodayTask(task),
           isReviewBucket: planGate,
           review: planReview,
           nextDashboard,

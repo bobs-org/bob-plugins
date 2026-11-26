@@ -312,6 +312,13 @@ BobLedgerToolsPlugin.prototype.teardownLedgerToolsSurfaces = function () {
     } catch (error) {
       // Body class cleanup is best-effort.
     }
+    try {
+      if (typeof this.disposeSnoozedCache === "function") {
+        this.disposeSnoozedCache();
+      }
+    } catch (error) {
+      // Snoozed timer cleanup is best-effort.
+    }
     cancelDeferred(this.pendingCenterDeferred);
     this.pendingCenterDeferred = null;
     this.dailyNavigationActionId += 1;

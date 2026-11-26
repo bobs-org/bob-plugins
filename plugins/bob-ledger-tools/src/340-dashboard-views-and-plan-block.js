@@ -737,60 +737,15 @@ function planBlockTasks(app) {
   return null;
 }
 
-// Daily NEXT/PENDING presentation uses the dashboard section budget.
-// A supplied budget (including unavailable nulls) is used as-is and
-// never replaced with an ungated whole-lane fallback. Standalone
-// callers without a prepared budget compute the same section through
-// dashboardLaneBudgetFromTasks when Tasks data is present.
-function unavailablePlanDashboardBudget(effective, lane) {
-  return {
-    section: null,
-    lane: null,
-    count: null,
-    laneCount: null,
-    cap: lane === "next" ? effective.maxNext : effective.maxPending,
-    over: false,
-    today: null,
-  };
-}
-
-function resolvePlanDashboardBudget(
-  supplied,
-  taskList,
-  day,
-  effective,
-  lane,
-  isTodayPredicate,
-  hasTasks,
-) {
-  if (supplied !== undefined) {
-    if (!supplied || typeof supplied !== "object") {
-      return unavailablePlanDashboardBudget(effective, lane);
-    }
-    return supplied;
-  }
-  if (!hasTasks) {
-    return unavailablePlanDashboardBudget(effective, lane);
-  }
-  try {
-    return dashboardLaneBudgetFromTasks(
-      taskList,
-      day,
-      effective,
-      lane,
-      isTodayPredicate,
-    );
-  } catch (error) {
-    return unavailablePlanDashboardBudget(effective, lane);
-  }
-}
-
 // Synchronous view-model for the ```bob-plan block. Never throws: missing
 // content, caps, or Tasks all degrade to `–` placeholders, never an error.
 // `isToday` is the caller's Today predicate over cached Tasks tasks
 // (the plugin passes its synchronous cache); it still feeds READY.
-// READY is the shared live current backlog (Today excluded); it never
-// changes what the ledger's PLAN status means.
+// `isSnoozed` is the sibling planned-today predicate: the dashboard
+// PENDING/NEXT sections and READY exclude the union, while whole-lane
+// `next`/`pending` keep Today included. READY is the shared live current
+// backlog (planned-today excluded); it never changes what the ledger's
+// PLAN status means.
 // Daily NEXT/PENDING badges and their cap lints follow dashboard section
 // counts. Whole-lane `next`/`pending` remain available to callers. Optional
 // `nextDashboard` / `pendingDashboard` are guarded budgets from the paint path.
@@ -802,6 +757,7 @@ function planBlockModel({
   sourcePath,
   app,
   isToday,
+  isSnoozed,
   isReviewBucket,
   review,
   nextDashboard,
@@ -823,6 +779,8 @@ function planBlockModel({
   const hasTasks = Array.isArray(tasks);
   const isTodayPredicate =
     typeof isToday === "function" ? isToday : () => false;
+  const isSnoozedPredicate =
+    typeof isSnoozed === "function" ? isSnoozed : () => false;
   const taskList = hasTasks ? tasks : [];
   const day = today === undefined ? new Date() : today;
   let next;
@@ -845,6 +803,7 @@ function planBlockModel({
     "next",
     isTodayPredicate,
     hasTasks,
+    isSnoozedPredicate,
   );
   const pendingDash = resolvePlanDashboardBudget(
     pendingDashboard,
@@ -854,6 +813,7 @@ function planBlockModel({
     "pending",
     isTodayPredicate,
     hasTasks,
+    isSnoozedPredicate,
   );
   const nextModel = dashboardLaneBadgeModel(nextDash, "next");
   const pendingModel = dashboardLaneBadgeModel(pendingDash, "pending");
@@ -866,6 +826,7 @@ function planBlockModel({
         effective,
         isTodayPredicate,
         isReviewBucket,
+        isSnoozedPredicate,
       );
     } catch (error) {
       ready = null;

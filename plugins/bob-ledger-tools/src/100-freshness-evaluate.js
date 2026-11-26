@@ -252,7 +252,7 @@ function freshnessApplyRecurringOverlay(row, today, evaluated) {
   if (!safe.laneVisible) {
     return evaluated;
   }
-  if (safe.isDailyNote || safe.isToday) {
+  if (safe.isDailyNote || safe.isToday || safe.isSnoozedToday) {
     return evaluated;
   }
   const occurs = freshnessOccursOn(safe);
@@ -375,16 +375,21 @@ function freshnessEvaluateWithoutRecurring(row, todayText, config) {
     Boolean(safe.laneVisible) &&
     !safe.recurring &&
     !safe.isDailyNote &&
-    !safe.isToday;
+    !safe.isToday &&
+    !safe.isSnoozedToday;
 
   // Checklist visibility shares the established lane predicate, with
   // recurring, daily-note, and Today exclusions deliberately lifted.
+  // Planned-today snoozed rows never enter PRE/POST (`docs/freshness.md`
+  // §4); a ledger-linked PRE/POST row retains its checklist exception
+  // because the snooze row classifies `already_linked` instead.
   // The status must be the symbol actually written on the task line.
   const checklistScheduled = freshnessEvaluateValidScheduled(safe.scheduled);
   const checklistScope =
     checklist !== null &&
     [" ", "*", "/", "?"].includes(writtenSymbol) &&
     Boolean(safe.laneVisible) &&
+    !safe.isSnoozedToday &&
     !(checklistScheduled !== null && checklistScheduled > today);
 
   // Ordinary lane due arithmetic uses the lane interval only.
@@ -412,7 +417,8 @@ function freshnessEvaluateWithoutRecurring(row, todayText, config) {
     Boolean(safe.laneVisible) &&
     !safe.recurring &&
     !safe.isDailyNote &&
-    !safe.isToday;
+    !safe.isToday &&
+    !safe.isSnoozedToday;
 
   // Effective resurfacing date: whichever came last from the inline
   // schedule and the recorded automatic unblock. A scheduled date wins
@@ -521,7 +527,7 @@ function freshnessEvaluateWithoutRecurring(row, todayText, config) {
 
   // A choice is due — never permission to act — for a due row at
   // or over its rung's keep limit. Unblock ticklers, PROJECTS,
-  // recurring, checklist, and Today-linked rows never decide.
+  // recurring, checklist, and planned-today rows never decide.
   // Mirrors the `decide` computation in `evaluate` in
   // `src/native/freshness/state.rs`.
   const keeps = read.keeps;
@@ -531,7 +537,7 @@ function freshnessEvaluateWithoutRecurring(row, todayText, config) {
     keeps,
     config,
     returnedBy,
-    safe.isToday,
+    safe.isToday === true || safe.isSnoozedToday === true,
   );
 
   // Lane rows use the lane due date; an unwalked lane falls back to

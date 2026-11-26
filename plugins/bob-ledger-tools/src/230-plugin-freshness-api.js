@@ -170,6 +170,10 @@ class BobLedgerToolsFreshnessApiMixin {
       todayDay,
       noteRefreshRawFor: (path) => self.noteFreshnessRawFor(path),
       isToday: (task) => self.isTodayTask(task),
+      isSnoozed: (task) =>
+        typeof self.isSnoozedTodayTask === "function"
+          ? self.isSnoozedTodayTask(task)
+          : false,
     };
   }
 
@@ -306,20 +310,32 @@ class BobLedgerToolsFreshnessApiMixin {
   // Snapshot key for Today membership and readiness: the cache's
   // date, daily path, and link keys. Any Today change (link, unlink,
   // daily rebuild, rollover) invalidates the memo, because rows bake
-  // the membership in at build time.
+  // the membership in at build time. The snoozed planned-today stamp
+  // rides along: rows bake that membership in too, and a snoozed-only
+  // change must rebuild even when the Today key set is unchanged.
   freshnessTodayStamp() {
     try {
       const cache = this.todayCache;
       if (!cache || !(cache.rank instanceof Map)) {
-        return JSON.stringify([null, null, null]);
+        return JSON.stringify([null, null, null, null]);
+      }
+      let snoozedStamp = null;
+      try {
+        snoozedStamp =
+          typeof this.snoozedCacheStamp === "function"
+            ? this.snoozedCacheStamp()
+            : null;
+      } catch (error) {
+        snoozedStamp = "error";
       }
       return JSON.stringify([
         cache.date || null,
         cache.dailyPath || null,
         Array.isArray(cache.keys) ? cache.keys : [],
+        snoozedStamp,
       ]);
     } catch (error) {
-      return JSON.stringify(["error", "error", "error"]);
+      return JSON.stringify(["error", "error", "error", "error"]);
     }
   }
 

@@ -339,6 +339,7 @@
   "284a-plugin-task-link-marks-resolve.js",
   "285-plugin-task-link-marks-reading.js",
   "290-plugin-today-and-location.js",
+  "290a-snoozed-today-cache.js",
   "291-plugin-gcal-events.js",
   "291a-plugin-gcal-readiness.js",
   "291g-plugin-gmail-sync.js",
@@ -407,6 +408,7 @@
   "320-plan-lane-and-config.js",
   "330-note-ready-model.js",
   "340-dashboard-views-and-plan-block.js",
+  "340a-plan-dashboard-section.js",
   "350-exports.js",
   "351-exports-task-reqs.js",
   "351-exports-task-settle.js",
@@ -453,5 +455,6 @@
   "377-exports-intention-card-navigation.js",
   "378-exports-nav-groups.js",
   "379-exports-property-editor.js",
-  "380-snooze-model-exports.js"
+  "380-snooze-model-exports.js",
+  "381-snoozed-cache-exports.js"
 ]

@@ -253,16 +253,16 @@ function freshnessDecayLimitFor(decay, lane) {
 // counted keeps under `config`: enabled decay, a rung limit of
 // "ask at L", keeps at or over L, and the due tier for that lane
 // (PENDING for pending, NEXT for next, ROTTEN/TICKLER for ready).
-// Unblock ticklers, PROJECTS, recurring, checklist, and Today-linked
+// Unblock ticklers, PROJECTS, recurring, checklist, and planned-today
 // rows never decide. The annotation means a choice is due, not
 // permission to execute an action. Mirrors `decide_for` in
 // `src/native/freshness/state.rs`.
-function freshnessDecideFor(lane, tier, keeps, config, returnedBy, isToday) {
+function freshnessDecideFor(lane, tier, keeps, config, returnedBy, isPlannedToday) {
   try {
     if (returnedBy === "unblocked") {
       return false;
     }
-    if (isToday === true) {
+    if (isPlannedToday === true) {
       return false;
     }
     if (

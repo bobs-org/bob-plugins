@@ -108,6 +108,11 @@ function propertyCardFoldTarget(view) {
       const source = propertyCardFoldPath(node.getAttribute?.("data-card-fold-source") || "");
       const expanded = node.getAttribute?.("aria-expanded");
       if (!kind || !propertyCardFoldKinds.has(kind) || source !== path) continue;
+      // With cabinets live, `_` owns only the compact, card-details control.
+      // Cabinet disclosures are routed by semantic kind through the cabinet
+      // router, never by whichever header happens to appear first in the DOM.
+      if (propertyCardCabinetsGateLive?.() === true
+        && node.getAttribute?.("data-card-fold-role") !== "details") continue;
       if (expanded !== "true" && expanded !== "false") continue;
       if (node.disabled === true || node.getAttribute?.("aria-disabled") === "true") continue;
       if (!propertyCardFoldVisible(node)) continue;
@@ -213,6 +218,11 @@ function propertyCardDecorateFoldControl(button, spec = {}) {
     button.setAttribute("type", "button");
     button.setAttribute("data-card-fold", kind);
     button.setAttribute("data-card-fold-source", path);
+    if (propertyCardCabinetsGateLive?.() === true) {
+      button.setAttribute("data-card-fold-role", spec.role || (spec.compact === true ? "details" : "cabinet"));
+    } else {
+      button.removeAttribute?.("data-card-fold-role");
+    }
     button.setAttribute("aria-expanded", spec.open === true ? "true" : "false");
     button.setAttribute("aria-controls", spec.bodyId || propertyCardFoldNextId());
     button.setAttribute("aria-keyshortcuts", "_");

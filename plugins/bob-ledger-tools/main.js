@@ -40303,6 +40303,9 @@ function freshnessMemoReviewChanged(
 // ---- src/170-plugin-lifecycle.js ----
 class BobLedgerToolsPlugin extends Plugin {
   onload() {
+    // Start the cabinet-owned plugin-data read before any property-card host
+    // registers. The module gate stays closed until the data resolves.
+    this.propertyCardCabinetsReady = propertyCardCabinetsLoad(this);
     this.taskSettleInstallPendingLifecycle();
     this.initializeRelationIndex();
     this.vimMappingsRegistered = false;
@@ -41052,6 +41055,9 @@ class BobLedgerToolsPlugin extends Plugin {
   }
 
   onunload() {
+    propertyCardCabinetsUnload(this);
+    propertyCardCabinetProvidersReleasePlugin(this);
+    propertyCardCabinetStateReleasePlugin(this);
     this.taskSettleDisposePendingLifecycle();
     this.teardownLedgerToolsSurfaces();
   }
@@ -94557,6 +94563,7 @@ function propertyCardFootAdapterAppend(card, path, doc, spec, handlers, pendingS
 }
 
 function propertyCardFootAdapterBind(plugin, options = {}) {
+  try { propertyCardCabinetStateBind?.(plugin); } catch (_) {}
   const pendingKey = options.pendingKey;
   const untoggleKey = options.untoggleKey;
   const unresolverKey = options.unresolverKey;
@@ -94700,6 +94707,11 @@ function propertyCardFoldTarget(view) {
       const source = propertyCardFoldPath(node.getAttribute?.("data-card-fold-source") || "");
       const expanded = node.getAttribute?.("aria-expanded");
       if (!kind || !propertyCardFoldKinds.has(kind) || source !== path) continue;
+      // With cabinets live, `_` owns only the compact, card-details control.
+      // Cabinet disclosures are routed by semantic kind through the cabinet
+      // router, never by whichever header happens to appear first in the DOM.
+      if (propertyCardCabinetsGateLive?.() === true
+        && node.getAttribute?.("data-card-fold-role") !== "details") continue;
       if (expanded !== "true" && expanded !== "false") continue;
       if (node.disabled === true || node.getAttribute?.("aria-disabled") === "true") continue;
       if (!propertyCardFoldVisible(node)) continue;
@@ -94805,6 +94817,11 @@ function propertyCardDecorateFoldControl(button, spec = {}) {
     button.setAttribute("type", "button");
     button.setAttribute("data-card-fold", kind);
     button.setAttribute("data-card-fold-source", path);
+    if (propertyCardCabinetsGateLive?.() === true) {
+      button.setAttribute("data-card-fold-role", spec.role || (spec.compact === true ? "details" : "cabinet"));
+    } else {
+      button.removeAttribute?.("data-card-fold-role");
+    }
     button.setAttribute("aria-expanded", spec.open === true ? "true" : "false");
     button.setAttribute("aria-controls", spec.bodyId || propertyCardFoldNextId());
     button.setAttribute("aria-keyshortcuts", "_");
@@ -95225,6 +95242,620 @@ function refCardPreviewLive(plugin) {
   try {
     if (!plugin || typeof plugin !== "object") return false;
     return plugin.refCardPreview === true;
+  } catch (_) {
+    return false;
+  }
+}
+// ---- src/240w-plugin-cabinet-gate.js ----
+// Cabinet-owned preview switch. The absent setting keeps every existing card
+// byte-identical until the cabinets go-live phase explicitly opens the gate.
+// The gate reads only bob-ledger-tools plugin data and never inspects DOM.
+const PROPERTY_CARD_CABINETS_PREVIEW_KEY = "cabinetsPreview";
+let propertyCardCabinetsLive = false;
+let propertyCardCabinetsOwner = null;
+
+function propertyCardCabinetsFromData(data) {
+  try {
+    if (!data || typeof data !== "object" || Array.isArray(data)) return false;
+    return data[PROPERTY_CARD_CABINETS_PREVIEW_KEY] === true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function propertyCardCabinetsRemember(plugin, data) {
+  const live = propertyCardCabinetsFromData(data);
+  propertyCardCabinetsLive = live;
+  propertyCardCabinetsOwner = plugin && typeof plugin === "object" ? plugin : null;
+  try {
+    if (plugin && typeof plugin === "object") {
+      plugin.propertyCardCabinetsLive = live;
+      plugin.propertyCardCabinetsLoaded = true;
+    }
+  } catch (_) {}
+  return live;
+}
+
+async function propertyCardCabinetsLoad(plugin) {
+  if (!plugin || typeof plugin !== "object") return false;
+  try {
+    if (plugin.propertyCardCabinetsLoaded === true) {
+      propertyCardCabinetsLive = plugin.propertyCardCabinetsLive === true;
+      return propertyCardCabinetsLive;
+    }
+    if (plugin.propertyCardCabinetsLoadPromise) return await plugin.propertyCardCabinetsLoadPromise;
+  } catch (_) {
+    return false;
+  }
+  // A newly loaded instance must never inherit the previous instance's gate
+  // while its own plugin data is still resolving.
+  propertyCardCabinetsLive = false;
+  propertyCardCabinetsOwner = plugin;
+  try { plugin.propertyCardCabinetsLive = false; } catch (_) {}
+  const load = (async () => {
+    let stored = null;
+    try {
+      if (plugin.ledgerToolsPluginDataLoaded === true
+        && plugin.ledgerToolsPluginData && typeof plugin.ledgerToolsPluginData === "object") {
+        stored = plugin.ledgerToolsPluginData;
+      } else if (typeof plugin.loadLedgerToolsPluginData === "function") {
+        stored = await plugin.loadLedgerToolsPluginData();
+      } else if (typeof plugin.loadData === "function") {
+        stored = await plugin.loadData();
+      }
+    } catch (_) {
+      stored = null;
+    }
+    return propertyCardCabinetsRemember(plugin, stored);
+  })();
+  try { plugin.propertyCardCabinetsLoadPromise = load; } catch (_) {}
+  try {
+    return await load;
+  } catch (_) {
+    return propertyCardCabinetsRemember(plugin, null);
+  } finally {
+    try {
+      if (plugin.propertyCardCabinetsLoadPromise === load) plugin.propertyCardCabinetsLoadPromise = null;
+    } catch (_) {}
+  }
+}
+
+function propertyCardCabinetsGateLive() {
+  return propertyCardCabinetsLive === true;
+}
+
+function propertyCardCabinetsUnload(plugin) {
+  if (!plugin || propertyCardCabinetsOwner !== plugin) return false;
+  propertyCardCabinetsLive = false;
+  propertyCardCabinetsOwner = null;
+  try {
+    plugin.propertyCardCabinetsLive = false;
+    plugin.propertyCardCabinetsLoaded = false;
+    plugin.propertyCardCabinetsLoadPromise = null;
+  } catch (_) {}
+  return true;
+}
+
+// Tests reset the module flag without mutating stored plugin data.
+function propertyCardCabinetsSetGateForTests(live) {
+  propertyCardCabinetsLive = live === true;
+  return propertyCardCabinetsLive;
+}
+// ---- src/240wa-plugin-cabinet-model.js ----
+// Frozen cabinet vocabulary and the canonical top-to-bottom stack order.
+// Numbers count upward from the bottom extra, so they stay useful when one
+// host owns only a subset of the family.
+const PROPERTY_CARD_CABINET_KINDS = Object.freeze({
+  areas: Object.freeze({ noun: "Areas", role: "content", rank: 10, defaultOpen: false }),
+  projects: Object.freeze({ noun: "Projects", role: "content", rank: 20, defaultOpen: false }),
+  notebooks: Object.freeze({ noun: "Notebooks", role: "content", rank: 30, defaultOpen: false }),
+  albums: Object.freeze({ noun: "Albums", role: "content", rank: 40, defaultOpen: false }),
+  records: Object.freeze({ noun: "Records", role: "content", rank: 50, defaultOpen: true }),
+  outline: Object.freeze({ noun: "Outline", role: "content", rank: 60, defaultOpen: "healthy-closed" }),
+  schema: Object.freeze({ noun: "Schema", role: "config", rank: 70, defaultOpen: "healthy-closed" }),
+  setup: Object.freeze({ noun: "Setup", role: "config", rank: 80, defaultOpen: "healthy-closed" }),
+  properties: Object.freeze({ noun: "Properties", role: "properties", rank: 100, defaultOpen: false }),
+});
+
+const PROPERTY_CARD_CABINET_FOLD_KINDS = Object.freeze({
+  album: "schema",
+  bank: "setup",
+  prose: "outline",
+});
+
+function propertyCardCabinetKindForFold(foldKind) {
+  return typeof foldKind === "string" && Object.prototype.hasOwnProperty.call(PROPERTY_CARD_CABINET_FOLD_KINDS, foldKind)
+    ? PROPERTY_CARD_CABINET_FOLD_KINDS[foldKind]
+    : null;
+}
+
+function propertyCardCabinetOrder(kinds) {
+  const input = Array.isArray(kinds) ? kinds : [];
+  const seen = new Set();
+  const valid = [];
+  for (const item of input) {
+    const kind = typeof item === "string" ? item : item?.kind;
+    if (!Object.prototype.hasOwnProperty.call(PROPERTY_CARD_CABINET_KINDS, kind) || seen.has(kind)) continue;
+    seen.add(kind);
+    valid.push(kind);
+  }
+  return valid.sort((a, b) => PROPERTY_CARD_CABINET_KINDS[a].rank - PROPERTY_CARD_CABINET_KINDS[b].rank);
+}
+
+function propertyCardCabinetDefaultOpen(kind, options = {}) {
+  const spec = PROPERTY_CARD_CABINET_KINDS[kind];
+  if (!spec) return false;
+  if (spec.defaultOpen === "healthy-closed") {
+    return typeof options.problems === "string" && options.problems.length > 0;
+  }
+  return spec.defaultOpen === true;
+}
+
+function propertyCardCabinetNumbering(extras) {
+  const ordered = propertyCardCabinetOrder(extras)
+    .filter((kind) => PROPERTY_CARD_CABINET_KINDS[kind].role !== "properties");
+  const numbered = ordered.slice(-9);
+  return numbered.map((kind, index) => ({ kind, number: numbered.length - index }));
+}
+// ---- src/240wb-plugin-cabinet-state.js ----
+// Session-only content-cabinet state, keyed by normalized path and kind.
+// Existing fold registrations and the Properties foot remain their state
+// owners; this map is only for content cabinets.
+const propertyCardCabinetOpenStates = new Map();
+const propertyCardCabinetStateListeners = new Set();
+const propertyCardCabinetMounts = new Set();
+let propertyCardCabinetStateOwner = null;
+
+function propertyCardCabinetPath(value) {
+  try {
+    if (typeof propertyCardFootPath === "function") return propertyCardFootPath(value);
+  } catch (_) {}
+  return typeof value === "string" ? value.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/$/, "") : "";
+}
+
+function propertyCardCabinetStateKey(path, kind) {
+  const normalized = propertyCardCabinetPath(path);
+  return normalized && Object.prototype.hasOwnProperty.call(PROPERTY_CARD_CABINET_KINDS, kind)
+    ? `${normalized}\u0000${kind}`
+    : "";
+}
+
+function propertyCardCabinetProblemSignature(problems) {
+  return typeof problems === "string" ? problems : "";
+}
+
+function propertyCardCabinetIsOpen(path, kind, options = {}) {
+  const spec = PROPERTY_CARD_CABINET_KINDS[kind];
+  const key = propertyCardCabinetStateKey(path, kind);
+  if (!spec || spec.role !== "content" || !key) return propertyCardCabinetDefaultOpen(kind, options);
+  let choice = null;
+  try {
+    choice = typeof propertyCardFoldChoiceFromStored === "function"
+      ? propertyCardFoldChoiceFromStored(propertyCardCabinetOpenStates.get(key))
+      : null;
+  } catch (_) {}
+  const problems = propertyCardCabinetProblemSignature(options.problems);
+  try {
+    const restamped = typeof propertyCardFoldRestamp === "function"
+      ? propertyCardFoldRestamp(choice, problems)
+      : choice;
+    if (restamped && restamped !== choice) {
+      propertyCardCabinetOpenStates.set(key, restamped);
+      choice = restamped;
+    }
+  } catch (_) {}
+  try {
+    if (typeof propertyCardFoldResolve === "function") {
+      return propertyCardFoldResolve({
+        choice,
+        problems,
+        foldDefault: propertyCardCabinetDefaultOpen(kind, options),
+      }) === true;
+    }
+  } catch (_) {}
+  return choice?.open === true || (!choice && propertyCardCabinetDefaultOpen(kind, options));
+}
+
+function propertyCardCabinetSetOpen(path, kind, open, options = {}) {
+  const spec = PROPERTY_CARD_CABINET_KINDS[kind];
+  const key = propertyCardCabinetStateKey(path, kind);
+  if (!spec || spec.role !== "content" || !key) return false;
+  const normalized = propertyCardCabinetPath(path);
+  const next = open === true;
+  const problems = propertyCardCabinetProblemSignature(options.problems);
+  const previous = propertyCardCabinetOpenStates.get(key);
+  const choice = typeof propertyCardFoldChoice === "function"
+    ? propertyCardFoldChoice(next, problems)
+    : { open: next, problems };
+  if (previous?.open === choice.open && previous?.problems === choice.problems) return next;
+  propertyCardCabinetOpenStates.set(key, choice);
+  for (const listener of Array.from(propertyCardCabinetStateListeners)) {
+    try { listener({ path: normalized, kind, open: next, previous: previous?.open === true }); } catch (_) {}
+  }
+  return next;
+}
+
+function propertyCardCabinetOnStateChange(listener) {
+  if (typeof listener !== "function") return () => false;
+  propertyCardCabinetStateListeners.add(listener);
+  return () => propertyCardCabinetStateListeners.delete(listener);
+}
+
+function propertyCardCabinetRenamePath(oldPath, newPath) {
+  const from = propertyCardCabinetPath(oldPath);
+  const to = propertyCardCabinetPath(newPath);
+  if (!from || !to || from === to) return false;
+  const prefix = `${from}\u0000`;
+  for (const [key, value] of Array.from(propertyCardCabinetOpenStates.entries())) {
+    if (!key.startsWith(prefix)) continue;
+    propertyCardCabinetOpenStates.set(`${to}${key.slice(from.length)}`, value);
+    propertyCardCabinetOpenStates.delete(key);
+  }
+  for (const mount of propertyCardCabinetMounts) {
+    if (mount.path === from) mount.path = to;
+  }
+  return true;
+}
+
+function propertyCardCabinetReleasePath(path) {
+  const normalized = propertyCardCabinetPath(path);
+  if (!normalized) return false;
+  const prefix = `${normalized}\u0000`;
+  for (const key of Array.from(propertyCardCabinetOpenStates.keys())) {
+    if (key.startsWith(prefix)) propertyCardCabinetOpenStates.delete(key);
+  }
+  for (const mount of Array.from(propertyCardCabinetMounts)) {
+    if (mount.path === normalized) propertyCardCabinetMountUnregister(mount);
+  }
+  return true;
+}
+
+function propertyCardCabinetRegisterMount(plugin, view, path, stack, repaint) {
+  const normalized = propertyCardCabinetPath(path);
+  if (!plugin || !view || !normalized || !stack) return () => false;
+  const entry = { plugin, view, path: normalized, stack, repaint: typeof repaint === "function" ? repaint : null };
+  propertyCardCabinetMounts.add(entry);
+  let live = true;
+  return () => {
+    if (!live) return false;
+    live = false;
+    return propertyCardCabinetMounts.delete(entry);
+  };
+}
+
+function propertyCardCabinetMountUnregister(entry) {
+  return propertyCardCabinetMounts.delete(entry);
+}
+
+function propertyCardCabinetRequestRepaint(view, path, kind) {
+  const normalized = propertyCardCabinetPath(path);
+  if (!view || !normalized) return false;
+  let requested = false;
+  for (const mount of propertyCardCabinetMounts) {
+    if (mount.view !== view || mount.path !== normalized || mount.stack?.isConnected === false) continue;
+    try {
+      if (mount.repaint) {
+        if (mount.repaint({ path: normalized, kind }) === false) continue;
+      }
+      else if (typeof mount.stack.dispatchEvent === "function") {
+        const win = mount.stack.ownerDocument?.defaultView;
+        const EventCtor = win?.CustomEvent || globalThis.CustomEvent;
+        let event = null;
+        if (typeof EventCtor === "function") event = new EventCtor("bob-cabinet-repaint", { detail: { path: normalized, kind } });
+        else if (typeof Event === "function") {
+          event = new Event("bob-cabinet-repaint");
+          Object.defineProperty(event, "detail", { value: { path: normalized, kind } });
+        }
+        if (event) mount.stack.dispatchEvent(event);
+        else continue;
+      } else {
+        continue;
+      }
+      requested = true;
+    } catch (_) {}
+  }
+  return requested;
+}
+
+function propertyCardCabinetMountsReleasePlugin(plugin) {
+  let count = 0;
+  for (const mount of Array.from(propertyCardCabinetMounts)) {
+    if (mount.plugin === plugin && propertyCardCabinetMountUnregister(mount)) count += 1;
+  }
+  return count;
+}
+
+function propertyCardCabinetStateBind(plugin) {
+  if (!plugin || plugin.propertyCardCabinetStateVaultBound === true) return false;
+  const vault = plugin.app?.vault;
+  if (!vault || typeof vault.on !== "function" || typeof plugin.registerEvent !== "function") return false;
+  try {
+    plugin.propertyCardCabinetStateVaultBound = true;
+    propertyCardCabinetStateOwner = plugin;
+    plugin.registerEvent(vault.on("rename", (file, oldPath) => propertyCardCabinetRenamePath(oldPath, file?.path)));
+    plugin.registerEvent(vault.on("delete", (file) => propertyCardCabinetReleasePath(file?.path)));
+    return true;
+  } catch (_) {
+    plugin.propertyCardCabinetStateVaultBound = false;
+    return false;
+  }
+}
+
+function propertyCardCabinetStateReleasePlugin(plugin) {
+  if (propertyCardCabinetStateOwner && propertyCardCabinetStateOwner !== plugin) return false;
+  propertyCardCabinetOpenStates.clear();
+  propertyCardCabinetStateListeners.clear();
+  propertyCardCabinetMounts.clear();
+  propertyCardCabinetStateOwner = null;
+  try { plugin.propertyCardCabinetStateVaultBound = false; } catch (_) {}
+  return true;
+}
+
+function propertyCardCabinetStateResetForTests() {
+  propertyCardCabinetOpenStates.clear();
+  propertyCardCabinetStateListeners.clear();
+  propertyCardCabinetMounts.clear();
+  propertyCardCabinetStateOwner = null;
+}
+// ---- src/240wc-plugin-cabinet-providers.js ----
+// Content providers belong to the plugin generation that registered them.
+// A late teardown from an older registration cannot erase its replacement.
+// `applies` stays synchronous and may use only confirmed source and cached
+// reports; `buildBody` is the separately lazy, potentially async operation.
+const propertyCardCabinetProviders = new Map();
+let propertyCardCabinetProviderGeneration = 0;
+
+function propertyCardRegisterCabinetProvider(plugin, kind, provider) {
+  const spec = PROPERTY_CARD_CABINET_KINDS[kind];
+  if (!plugin || !spec || spec.role !== "content" || !provider || typeof provider !== "object"
+    || typeof provider.applies !== "function" || typeof provider.buildBody !== "function"
+    || typeof provider.paintKey !== "function") return () => false;
+  propertyCardCabinetProviderGeneration += 1;
+  const entry = { plugin, kind, generation: propertyCardCabinetProviderGeneration, provider };
+  propertyCardCabinetProviders.set(kind, entry);
+  let live = true;
+  return () => {
+    if (!live) return false;
+    live = false;
+    if (propertyCardCabinetProviders.get(kind) !== entry
+      || entry.generation !== propertyCardCabinetProviderGenerationFor(kind)) return false;
+    propertyCardCabinetProviders.delete(kind);
+    return true;
+  };
+}
+
+function propertyCardCabinetProviderGenerationFor(kind) {
+  return propertyCardCabinetProviders.get(kind)?.generation || 0;
+}
+
+function propertyCardCabinetProviderFor(kind) {
+  return propertyCardCabinetProviders.get(kind)?.provider || null;
+}
+
+function propertyCardCabinetProviderApplies(kind, context = {}) {
+  const provider = propertyCardCabinetProviderFor(kind);
+  if (!provider) return null;
+  try {
+    const result = provider.applies(context);
+    if (result && typeof result.then === "function") {
+      Promise.resolve(result).catch(() => {});
+      return null;
+    }
+    return result && typeof result === "object" && !Array.isArray(result) ? result : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function propertyCardCabinetProvidersReleasePlugin(plugin) {
+  let count = 0;
+  for (const [kind, entry] of Array.from(propertyCardCabinetProviders.entries())) {
+    if (entry.plugin !== plugin) continue;
+    if (propertyCardCabinetProviders.get(kind) === entry) {
+      propertyCardCabinetProviders.delete(kind);
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function propertyCardCabinetProvidersResetForTests() {
+  propertyCardCabinetProviders.clear();
+  propertyCardCabinetProviderGeneration = 0;
+}
+// ---- src/240wd-plugin-cabinet-view.js ----
+// Collect the one visible cabinet stack belonging to a Markdown view. Stale
+// panes, hidden embeds, disabled controls, and malformed stack order fail
+// closed so keyboard dispatch cannot act on another card.
+const PROPERTY_CARD_CABINET_STACK_CLASS = "bob-property-card-cabinets";
+const PROPERTY_CARD_CABINET_KIND_ATTR = "data-cabinet-kind";
+
+function propertyCardCabinetViewScopes(view) {
+  return typeof propertyCardFoldScopes === "function"
+    ? propertyCardFoldScopes(view)
+    : [view?.dom, view?.containerEl, view?.contentEl].filter(Boolean);
+}
+
+function propertyCardCabinetViewPath(view) {
+  try {
+    const raw = typeof propertyCardFootViewPath === "function"
+      ? propertyCardFootViewPath(view)
+      : view?.file?.path;
+    return propertyCardCabinetPath(raw);
+  } catch (_) {
+    return "";
+  }
+}
+
+function propertyCardCabinetStackCandidates(view) {
+  const selector = `.${PROPERTY_CARD_CABINET_STACK_CLASS}`;
+  const found = [];
+  const seen = new Set();
+  for (const scope of propertyCardCabinetViewScopes(view)) {
+    try {
+      if (scope.matches?.(selector) && !seen.has(scope)) {
+        seen.add(scope);
+        found.push(scope);
+      }
+      for (const node of Array.from(scope.querySelectorAll?.(selector) || [])) {
+        if (!seen.has(node)) {
+          seen.add(node);
+          found.push(node);
+        }
+      }
+    } catch (_) {}
+  }
+  return found;
+}
+
+function propertyCardCabinetElementFor(panel) {
+  if (!panel) return null;
+  try {
+    if (panel.matches?.("[data-card-fold]")) return panel;
+    return panel.querySelector?.("[data-card-fold-role='cabinet'][data-card-fold]") || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function propertyCardCabinetKindFromPanel(panel, element) {
+  let kind = "";
+  try {
+    kind = panel?.getAttribute?.(PROPERTY_CARD_CABINET_KIND_ATTR)
+      || element?.getAttribute?.(PROPERTY_CARD_CABINET_KIND_ATTR)
+      || "";
+  } catch (_) {}
+  if (Object.prototype.hasOwnProperty.call(PROPERTY_CARD_CABINET_KINDS, kind)) return kind;
+  try {
+    const foldKind = element?.getAttribute?.("data-card-fold") || "";
+    if (foldKind === "properties") return "properties";
+    return propertyCardCabinetKindForFold(foldKind) || "";
+  } catch (_) {
+    return "";
+  }
+}
+
+function propertyCardCabinetNodeVisible(node) {
+  try {
+    return typeof propertyCardFoldVisible === "function"
+      ? propertyCardFoldVisible(node)
+      : Boolean(node && node.isConnected !== false && node.getBoundingClientRect?.().height > 0);
+  } catch (_) {
+    return false;
+  }
+}
+
+function propertyCardCabinetStackForView(view, path = propertyCardCabinetViewPath(view)) {
+  if (!path) return null;
+  for (const stack of propertyCardCabinetStackCandidates(view)) {
+    if (!propertyCardCabinetNodeVisible(stack)) continue;
+    const stamped = propertyCardCabinetPath(stack.getAttribute?.("data-cabinet-source") || "");
+    if (stamped && stamped !== path) continue;
+    const panels = Array.from(stack.querySelectorAll?.(`[${PROPERTY_CARD_CABINET_KIND_ATTR}]`) || []);
+    if (panels.some((panel) => {
+      const element = propertyCardCabinetElementFor(panel);
+      return element && propertyCardCabinetPath(element.getAttribute?.("data-card-fold-source") || stamped) === path;
+    })) return stack;
+    const controls = Array.from(stack.querySelectorAll?.("[data-card-fold-role='cabinet'][data-card-fold]") || []);
+    if (controls.some((element) => propertyCardCabinetPath(element.getAttribute?.("data-card-fold-source") || stamped) === path)) return stack;
+  }
+  return null;
+}
+
+function propertyCardCabinetCollectRows(stack, path) {
+  const rows = [];
+  const panels = Array.from(stack?.querySelectorAll?.(`[${PROPERTY_CARD_CABINET_KIND_ATTR}]`) || []);
+  const candidates = panels.length
+    ? panels
+    : Array.from(stack?.querySelectorAll?.("[data-card-fold-role='cabinet'][data-card-fold]") || []);
+  const seen = new Set();
+  for (const panel of candidates) {
+    const element = panels.length ? propertyCardCabinetElementFor(panel) : panel;
+    if (!element || seen.has(element)) continue;
+    seen.add(element);
+    if (element.getAttribute?.("data-card-fold-role") !== "cabinet") continue;
+    const kind = propertyCardCabinetKindFromPanel(panel, element);
+    if (!kind || !Object.prototype.hasOwnProperty.call(PROPERTY_CARD_CABINET_KINDS, kind)) continue;
+    const source = propertyCardCabinetPath(element.getAttribute?.("data-card-fold-source")
+      || panel.getAttribute?.("data-card-fold-source")
+      || stack.getAttribute?.("data-cabinet-source") || "");
+    if (source !== path) continue;
+    const expanded = element.getAttribute?.("aria-expanded");
+    if (expanded !== "true" && expanded !== "false") continue;
+    if (element.disabled === true || element.getAttribute?.("aria-disabled") === "true") continue;
+    if (!propertyCardCabinetNodeVisible(panel) || !propertyCardCabinetNodeVisible(element)) continue;
+    rows.push({
+      kind,
+      open: expanded === "true",
+      element,
+      panel,
+      problems: panel.getAttribute?.("data-cabinet-problems") || "",
+    });
+  }
+  return rows;
+}
+
+function propertyCardCabinetsInView(view) {
+  const path = propertyCardCabinetViewPath(view);
+  const result = { path, extras: [], properties: null, details: null };
+  if (!path || propertyCardCabinetsGateLive?.() !== true) return result;
+  let details = null;
+  try { details = typeof propertyCardFoldTarget === "function" ? propertyCardFoldTarget(view) : null; } catch (_) {}
+  result.details = details;
+  const stack = propertyCardCabinetStackForView(view, path);
+  if (!stack) return result;
+  const rows = propertyCardCabinetCollectRows(stack, path);
+  const actualKinds = rows.map((row) => row.kind);
+  const canonicalKinds = propertyCardCabinetOrder(actualKinds);
+  const orderValid = canonicalKinds.length === actualKinds.length
+    && canonicalKinds.every((kind, index) => kind === actualKinds[index]);
+  if (!orderValid || new Set(actualKinds).size !== actualKinds.length) return result;
+  const properties = rows.find((row) => row.kind === "properties");
+  if (properties) result.properties = { open: properties.open, element: properties.element };
+  const extras = rows.filter((row) => row.kind !== "properties");
+  const numbering = new Map(propertyCardCabinetNumbering(extras.map((row) => row.kind)).map((row) => [row.kind, row.number]));
+  result.extras = extras
+    .filter((row) => numbering.has(row.kind))
+    .map((row) => ({ kind: row.kind, number: numbering.get(row.kind), open: row.open, element: row.element }));
+  return result;
+}
+// ---- src/240we-plugin-cabinet-toggle.js ----
+// One semantic router for Properties, delegated folds, and content cabinets.
+// It acts only on a cabinet mounted in the supplied view and never throws.
+function propertyCardCabinetToggle(view, kind) {
+  try {
+    if (propertyCardCabinetsGateLive?.() !== true || typeof kind !== "string") return false;
+    const collected = propertyCardCabinetsInView(view);
+    if (!collected?.path) return false;
+    if (kind === "properties") {
+      if (!collected.properties || typeof propertyCardToggleProperties !== "function") return false;
+      return propertyCardToggleProperties(view) === true;
+    }
+    const extra = collected.extras.find((row) => row.kind === kind);
+    const spec = PROPERTY_CARD_CABINET_KINDS[kind];
+    if (!extra || !spec) return false;
+    if (spec.role === "config") {
+      const foldKind = Object.keys(PROPERTY_CARD_CABINET_FOLD_KINDS)
+        .find((candidate) => PROPERTY_CARD_CABINET_FOLD_KINDS[candidate] === kind);
+      const registration = foldKind ? propertyCardFoldKinds.get(foldKind) : null;
+      if (typeof registration?.toggle !== "function") return false;
+      try {
+        const result = registration.toggle(collected.path, view);
+        return result !== false;
+      } catch (_) {
+        return false;
+      }
+    }
+    if (spec.role !== "content" || !propertyCardCabinetProviderFor(kind)) return false;
+    const rawProblems = extra.element?.getAttribute?.("data-cabinet-problems")
+      || extra.element?.parentElement?.getAttribute?.("data-cabinet-problems") || "";
+    const problems = typeof rawProblems === "string" ? rawProblems : "";
+    const previous = propertyCardCabinetIsOpen(collected.path, kind, { problems });
+    const next = !previous;
+    propertyCardCabinetSetOpen(collected.path, kind, next, { problems });
+    if (propertyCardCabinetRequestRepaint(view, collected.path, kind)) return true;
+    propertyCardCabinetSetOpen(collected.path, kind, previous, { problems });
+    return false;
   } catch (_) {
     return false;
   }
@@ -209409,6 +210040,50 @@ try {
       propertyCardCabinetAbsorbUntagReading,
       propertyCardCabinetAbsorbRescanReading,
       propertyCardCabinetRenderCatalog,
+    });
+  }
+} catch (_) {}
+// ---- src/374k-exports-cabinets.js ----
+// Test-facing exports for the gated property-card cabinets kit.
+try {
+  if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
+    module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
+      PROPERTY_CARD_CABINETS_PREVIEW_KEY,
+      propertyCardCabinetsFromData,
+      propertyCardCabinetsRemember,
+      propertyCardCabinetsLoad,
+      propertyCardCabinetsGateLive,
+      propertyCardCabinetsUnload,
+      propertyCardCabinetsSetGateForTests,
+      PROPERTY_CARD_CABINET_KINDS,
+      PROPERTY_CARD_CABINET_FOLD_KINDS,
+      propertyCardCabinetKindForFold,
+      propertyCardCabinetOrder,
+      propertyCardCabinetDefaultOpen,
+      propertyCardCabinetNumbering,
+      propertyCardCabinetOpenStates,
+      propertyCardCabinetIsOpen,
+      propertyCardCabinetSetOpen,
+      propertyCardCabinetOnStateChange,
+      propertyCardCabinetRenamePath,
+      propertyCardCabinetReleasePath,
+      propertyCardCabinetRegisterMount,
+      propertyCardCabinetRequestRepaint,
+      propertyCardCabinetMountsReleasePlugin,
+      propertyCardCabinetStateBind,
+      propertyCardCabinetStateReleasePlugin,
+      propertyCardCabinetStateResetForTests,
+      propertyCardRegisterCabinetProvider,
+      propertyCardCabinetProviderFor,
+      propertyCardCabinetProviderApplies,
+      propertyCardCabinetProvidersReleasePlugin,
+      propertyCardCabinetProvidersResetForTests,
+      PROPERTY_CARD_CABINET_STACK_CLASS,
+      PROPERTY_CARD_CABINET_KIND_ATTR,
+      propertyCardCabinetStackForView,
+      propertyCardCabinetCollectRows,
+      propertyCardCabinetsInView,
+      propertyCardCabinetToggle,
     });
   }
 } catch (_) {}

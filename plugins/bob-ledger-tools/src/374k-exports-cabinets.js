@@ -1,0 +1,43 @@
+// Test-facing exports for the gated property-card cabinets kit.
+try {
+  if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
+    module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
+      PROPERTY_CARD_CABINETS_PREVIEW_KEY,
+      propertyCardCabinetsFromData,
+      propertyCardCabinetsRemember,
+      propertyCardCabinetsLoad,
+      propertyCardCabinetsGateLive,
+      propertyCardCabinetsUnload,
+      propertyCardCabinetsSetGateForTests,
+      PROPERTY_CARD_CABINET_KINDS,
+      PROPERTY_CARD_CABINET_FOLD_KINDS,
+      propertyCardCabinetKindForFold,
+      propertyCardCabinetOrder,
+      propertyCardCabinetDefaultOpen,
+      propertyCardCabinetNumbering,
+      propertyCardCabinetOpenStates,
+      propertyCardCabinetIsOpen,
+      propertyCardCabinetSetOpen,
+      propertyCardCabinetOnStateChange,
+      propertyCardCabinetRenamePath,
+      propertyCardCabinetReleasePath,
+      propertyCardCabinetRegisterMount,
+      propertyCardCabinetRequestRepaint,
+      propertyCardCabinetMountsReleasePlugin,
+      propertyCardCabinetStateBind,
+      propertyCardCabinetStateReleasePlugin,
+      propertyCardCabinetStateResetForTests,
+      propertyCardRegisterCabinetProvider,
+      propertyCardCabinetProviderFor,
+      propertyCardCabinetProviderApplies,
+      propertyCardCabinetProvidersReleasePlugin,
+      propertyCardCabinetProvidersResetForTests,
+      PROPERTY_CARD_CABINET_STACK_CLASS,
+      PROPERTY_CARD_CABINET_KIND_ATTR,
+      propertyCardCabinetStackForView,
+      propertyCardCabinetCollectRows,
+      propertyCardCabinetsInView,
+      propertyCardCabinetToggle,
+    });
+  }
+} catch (_) {}

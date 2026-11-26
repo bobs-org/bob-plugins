@@ -349,6 +349,7 @@ function propertyCardFootAdapterAppend(card, path, doc, spec, handlers, pendingS
 }
 
 function propertyCardFootAdapterBind(plugin, options = {}) {
+  try { propertyCardCabinetStateBind?.(plugin); } catch (_) {}
   const pendingKey = options.pendingKey;
   const untoggleKey = options.untoggleKey;
   const unresolverKey = options.unresolverKey;

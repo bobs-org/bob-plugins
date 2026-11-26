@@ -40,6 +40,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.pendingCountedDependency = null;
     this.pendingVaultSingle = null;
     this.pendingVaultCounted = null;
+    this.pendingTieChange = null;
     this.blockIdMode = "single";
     this.blockIdContext = null;
     this.pendingScheduleReason = null;

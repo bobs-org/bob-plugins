@@ -312,6 +312,54 @@ function planCountedLocalTaskDependency(
     (entry) => entry.snapshot === firstSnapshot,
   );
   const mappedCursorLine = firstTracked ? firstTracked.line : firstSnapshot.line;
+  // Counted absorption (§22): a counted add absorbs the pair's plain links.
+  // Same-note drops fold into the single-transaction content below; a
+  // malformed LINKS line is reported for the honest failure suffix.
+  let tieDropped = 0;
+  let tieMirrorDropped = 0;
+  let tieSkipped = [];
+  if (remove !== true) {
+    try {
+      const normalizedPath = normalizeVaultRelativePath(filePath);
+      const finalLines = String(nextContent).split(/\r?\n/);
+      const countedPairs = [];
+      for (const tracked of trackedSources) {
+        if (!Number.isInteger(tracked.line)) continue;
+        const sourceLineText = String(finalLines[tracked.line] || "");
+        const sourceBlockId = normalizeBulletPropertyValue(getTrailingBlockId(sourceLineText) || "");
+        countedPairs.push({
+          owner: {
+            path: normalizedPath,
+            blockId: sourceBlockId || "",
+            line: tracked.line,
+          },
+          other: {
+            path: normalizedPath,
+            blockId: countedTargetRef.blockId,
+            line: Number.isInteger(dependencyTask.line) ? dependencyTask.line : null,
+          },
+        });
+      }
+      if (countedPairs.length > 0) {
+        const absorbed = absorbTiePairsFromContents({
+          contents: new Map([[normalizedPath, nextContent]]),
+          pairs: countedPairs,
+          paths: [normalizedPath],
+          resolveLinkpath: options.resolveLinkpath,
+          isWritable: () => true,
+        });
+        const absorbedContent = absorbed.contents.get(normalizedPath);
+        if (typeof absorbedContent === "string" && absorbedContent !== nextContent) {
+          nextContent = absorbedContent;
+        }
+        tieDropped += absorbed.dropped || 0;
+        tieMirrorDropped += absorbed.mirrorDropped || 0;
+        tieSkipped = (absorbed.skipped || []).slice();
+      }
+    } catch (_countedTieError) {
+      tieSkipped = [{ path: normalizeVaultRelativePath(filePath), reason: "plan-failed" }];
+    }
+  }
   return Object.freeze({
     valid: true,
     stale: false,
@@ -330,6 +378,9 @@ function planCountedLocalTaskDependency(
     cursorLine: mappedCursorLine,
     blocksFollowUps: Object.freeze(blocksFollowUps),
     pomodoroTargets: collectDependencyPlanPomodoroTargets(parentPlans),
+    tieDropped,
+    tieMirrorDropped,
+    tieSkipped: Object.freeze(tieSkipped),
   });
 }
 

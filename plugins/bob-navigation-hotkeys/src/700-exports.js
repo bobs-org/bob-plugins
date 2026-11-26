@@ -700,7 +700,7 @@ module.exports.helpers = {
   planLinksEdit,
   planLinkedFromLine,
   linkedFromDesiredAfterDelta,
-  dropPlainLinkEntries, classifyPairTies, planTieChange, isCtrlKey, isCtrlShiftKey, isCtrlLeftBracketKeydown, tieChordTarget, tieChordStageKind, tieChordRefusal, tieChordOwnerOther, tieChordDisplayName, tieChordHintsForItem, tieShouldHandleChord, tieEnterForRow, tieEnterActionForRow, tieEnterToForStage, tieArmedKey, tieGetArmed, tieDisarm, tieIsArmedFor, tieReleaseArmCopy, tieArmRelease, tieRefreshArmedUI, tieLabelPlainGuardReason, tieLabelGuardForPicker, tieAbsorptionLinkDeltas, tieNavNoteIsWritable, absorbTieSideFromContent, absorbTiePairsFromContents, applyTieLinksToContent, applyTieLinksFollowUps, buildTieChangeNotice, withTieAbsorptionNotice, withTieAbsorptionFailureSuffix,
+  dropPlainLinkEntries, classifyPairTies, planTieChange, isCtrlKey, isCtrlShiftKey, isCtrlLeftBracketKeydown, tieChordTarget, tieChordStageKind, tieChordRefusal, tieChordKeyName, tieChordOwnerOther, tieItemCandidate, tieOwnerCandidate, tieMissingIdRequest, tieChordDisplayName, tieChordHintsForItem, tieShouldHandleChord, tieEnterForRow, tieEnterActionForRow, tieEnterToForStage, tieArmedKey, tieGetArmed, tieDisarm, tieIsArmedFor, tieReleaseArmCopy, tieArmRelease, tieRefreshArmedUI, tieLabelPlainGuardReason, tieLabelGuardForPicker, tieAbsorptionLinkDeltas, tieNavNoteIsWritable, absorbTieSideFromContent, absorbTiePairsFromContents, applyTieLinksToContent, applyTieLinksFollowUps, buildTieChangeNotice, withTieAbsorptionNotice, withTieAbsorptionFailureSuffix, withCountedTieNotice,
   buildRelationEditNotice,
   withLinkedFromFollowUpNotice,
   relationPathIsWritable,

@@ -117,6 +117,125 @@ function tieChordOwnerOther(picker, item) {
   return Object.freeze({ owner, other });
 }
 
+// ID-less candidates for the ＋ id prompt flow: same resolution as the
+// strict refs above, but keeping path/line when the block ID is missing so
+// the chord can mint one and then commit. Returns null when even the path
+// cannot be located.
+function tieItemCandidate(item, fallbackPath) {
+  if (!item || typeof item !== "object") return null;
+  const path = normalizeVaultRelativePath(
+    item.path || fallbackPath || "",
+  );
+  if (!path) return null;
+  const blockId = normalizeBulletPropertyValue(
+    item.blockId || item.existingBlockId || "",
+  );
+  const candidate = {
+    path,
+    blockId: blockId || "",
+    line: Number.isInteger(item.line) ? item.line : null,
+    rawLine: typeof item.rawLine === "string" ? item.rawLine : null,
+    displayText: item.displayText || item.searchText || "",
+    existingIdField: item.existingIdField || item.idField || null,
+  };
+  if (!candidate.blockId) delete candidate.blockId;
+  return Object.freeze(candidate);
+}
+
+function tieOwnerCandidate(picker) {
+  try {
+    const stage = picker.vaultStage || null;
+    const dependent = stage && stage.dependent ? stage.dependent : null;
+    if (dependent && dependent.path) {
+      const path = normalizeVaultRelativePath(dependent.path);
+      let blockId = tieOwnerBlockId(dependent);
+      let line = Number.isInteger(dependent.line) ? dependent.line : null;
+      let rawLine = typeof dependent.rawLine === "string" ? dependent.rawLine : null;
+      if (!blockId && picker.filePath && stage.files instanceof Map) {
+        const content = stage.files.get(path) || "";
+        const lines = String(content).split(/\r?\n/);
+        if (Number.isInteger(line) && typeof lines[line] === "string") {
+          blockId = normalizeBulletPropertyValue(getTrailingBlockId(lines[line]) || "");
+          if (rawLine === null) rawLine = String(lines[line] || "");
+        } else if (line === null) {
+          const found = tieFindTaskLine(stage.files, path, "");
+          void found;
+        }
+      }
+      if (!blockId && picker.filePath) {
+        const editor = typeof picker.getEditorContent === "function"
+          ? picker.getEditorContent()
+          : null;
+        if (typeof editor === "string" && picker.cursor && Number.isInteger(picker.cursor.line)) {
+          const editorLine = String(editor).split(/\r?\n/)[picker.cursor.line];
+          if (typeof editorLine === "string") {
+            const editorId = normalizeBulletPropertyValue(getTrailingBlockId(editorLine) || "");
+            if (editorId) blockId = editorId;
+            if (line === null) line = picker.cursor.line;
+            if (rawLine === null) rawLine = String(editorLine || "");
+          }
+        }
+      }
+      if (path) {
+        const candidate = {
+          path,
+          line,
+          rawLine,
+          displayText: dependent.displayText || "",
+        };
+        if (blockId) candidate.blockId = blockId;
+        return Object.freeze(candidate);
+      }
+    }
+    if (picker.filePath && picker.cursor && Number.isInteger(picker.cursor.line)) {
+      const editor = typeof picker.getEditorContent === "function"
+        ? picker.getEditorContent()
+        : null;
+      if (typeof editor === "string") {
+        const lineText = String(editor).split(/\r?\n/)[picker.cursor.line];
+        if (typeof lineText === "string") {
+          const blockId = normalizeBulletPropertyValue(getTrailingBlockId(lineText) || "");
+          const candidate = {
+            path: normalizeVaultRelativePath(picker.filePath),
+            line: picker.cursor.line,
+            rawLine: String(lineText || ""),
+            displayText: "",
+          };
+          if (blockId) candidate.blockId = blockId;
+          return Object.freeze(candidate);
+        }
+      }
+    }
+  } catch (_error) {
+    // Best-effort candidate; the caller refuses when null.
+  }
+  return null;
+}
+
+function tieMissingIdRequest(picker, item) {
+  const fallbackPath = normalizeVaultRelativePath(picker.filePath || "");
+  const ownerCand = tieOwnerCandidate(picker);
+  const otherCand = tieItemCandidate(item, fallbackPath);
+  if (!ownerCand && !otherCand) return null;
+  if (ownerCand && ownerCand.path && !ownerCand.blockId) {
+    return Object.freeze({
+      owner: ownerCand,
+      other: otherCand,
+      missingSide: "owner",
+      missing: ownerCand,
+    });
+  }
+  if (otherCand && otherCand.path && !otherCand.blockId) {
+    return Object.freeze({
+      owner: ownerCand,
+      other: otherCand,
+      missingSide: "other",
+      missing: otherCand,
+    });
+  }
+  return null;
+}
+
 function tieChordDisplayName(item) {
   try {
     const raw = item.displayText || item.searchText || item.path || "that task";
@@ -126,10 +245,18 @@ function tieChordDisplayName(item) {
   }
 }
 
+function tieChordKeyName(to) {
+  if (to === "other-waits") return "⌃⇧B";
+  if (to === "plain-out") return "⌃L";
+  if (to === "plain-in") return "⌃⇧L";
+  return "⌃B";
+}
+
 function tieChordRefusal(picker, item, to) {
+  const chord = tieChordKeyName(to);
   try {
     if (picker.isCountedSession && picker.isCountedSession()) {
-      return "⌃B acts on one task · needs a single task";
+      return `${chord} acts on one task · needs a single task`;
     }
   } catch (_error) {
     // A helper failure never blocks the chord; applyTieChange guards.
@@ -143,7 +270,7 @@ function tieChordRefusal(picker, item, to) {
         const name = tieChordDisplayName(item);
         return `↵ can't replace a dependency in a batch · unmark "${name}" or use ⌃L on it`;
       }
-      return "⌃B acts on one task · clear marks first";
+      return `${chord} acts on one task · clear marks first`;
     }
   } catch (_error) {
     // Best-effort batch guard.
@@ -214,6 +341,36 @@ async function tieCommitChord(picker, to) {
   }
   const refs = tieChordOwnerOther(picker, item);
   if (!refs) {
+    // ID-less rows or owners go through the ＋ id prompt flow; Esc writes
+    // nothing. Only a truly unlocatable pair refuses here.
+    try {
+      const missing = typeof tieMissingIdRequest === "function"
+        ? tieMissingIdRequest(picker, item)
+        : null;
+      if (missing && missing.missing && missing.missing.path) {
+        if (typeof picker.showBlockIdStage === "function") {
+          picker.pendingTieChange = Object.freeze({
+            owner: missing.owner,
+            other: missing.other,
+            missingSide: missing.missingSide,
+            missing: missing.missing,
+            to,
+            reservedIds: new Set(),
+          });
+          const promptTask = {
+            path: missing.missing.path,
+            line: missing.missing.line,
+            rawLine: missing.missing.rawLine,
+            displayText: missing.missing.displayText || tieChordDisplayName(item),
+            existingIdField: missing.missing.existingIdField || null,
+          };
+          picker.showBlockIdStage(promptTask, { mode: "tie-change" });
+          return true;
+        }
+      }
+    } catch (_missingPromptError) {
+      // A helper failure falls through to the locate refusal below.
+    }
     new Notice("That task could not be located");
     return true;
   }
@@ -223,12 +380,12 @@ async function tieCommitChord(picker, to) {
     return true;
   }
   tieDisarm(picker);
+  // Missing IDs are handled before this call through the ＋ id prompt flow
+  // (pendingTieChange); the writer only sees resolved refs here.
   let outcome = null;
   try {
     outcome = await picker.plugin.applyTieChange(refs.owner, refs.other, to, {
-      promptBlockId: picker.showBlockIdStage
-        ? (ref) => picker.showBlockIdStage(ref, { mode: "tie-change" })
-        : null,
+      promptBlockId: null,
     });
   } catch (_error) {
     new Notice("Could not update the tie");

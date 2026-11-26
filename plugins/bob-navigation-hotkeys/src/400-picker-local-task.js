@@ -93,6 +93,7 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
     this.pendingVaultCounted = null;
     this.pendingBlocks = null;
     this.pendingRelation = null;
+    this.pendingTieChange = null;
     this.blockIdMode = "single";
     this.blockIdContext = null;
     this.pendingScheduleReason = null;
@@ -596,6 +597,9 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
     if (this.blockIdMode === "relation-target" && this.pendingRelation) {
       return this.pendingRelation.reservedIds || new Set();
     }
+    if (this.blockIdMode === "tie-change" && this.pendingTieChange) {
+      return this.pendingTieChange.reservedIds || new Set();
+    }
     return new Set();
   }
 
@@ -612,6 +616,7 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
       "vault-counted",
       "blocks-source",
       "relation-target",
+      "tie-change",
     ].includes(options.mode)
       ? options.mode
       : "single";

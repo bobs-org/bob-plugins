@@ -612,14 +612,9 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
     const countedSubtreeSuffix = countedSubtree
       ? subtreePassNoticeSuffix(countedSubtree)
       : "";
-    await this.finishBlocksFollowUps(
-      plan.blocksFollowUps,
-      `${verb} ${plan.dependencyValue} ${
-        plan.operation === "remove" ? "from" : "to"
-      } ${formatCountLabel(plan.targetCount, "task")}${identity}${
-        this.getCountedTaskNoticeSuffix(session, plan.unchangedTaskCount)
-      }${countedSubtreeSuffix ? ` ${countedSubtreeSuffix}` : ""}${dependencyPomodoroNoticeSuffix(countedPomodoroDone.removed, countedPomodoroDone.failed)}`,
-    );
+    const countedBase = `${verb} ${plan.dependencyValue} ${plan.operation === "remove" ? "from" : "to"} ${formatCountLabel(plan.targetCount, "task")}${identity}${this.getCountedTaskNoticeSuffix(session, plan.unchangedTaskCount)}${countedSubtreeSuffix ? ` ${countedSubtreeSuffix}` : ""}${dependencyPomodoroNoticeSuffix(countedPomodoroDone.removed, countedPomodoroDone.failed)}`;
+    const countedNotice = typeof withCountedTieNotice === "function" ? withCountedTieNotice(countedBase, plan) : countedBase;
+    await this.finishBlocksFollowUps(plan.blocksFollowUps, countedNotice);
     return true;
   }
 

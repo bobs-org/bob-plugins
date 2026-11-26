@@ -12225,6 +12225,26 @@ function withTieAbsorptionFailureSuffix(notice, failed) {
   }
   return `${notice} · 🪢 link not removed (reconcile will fold it)`;
 }
+
+// Counted writers (§22): fold tie drops and skips from a counted plan into
+// its notice in one call, keeping call sites to one line.
+function withCountedTieNotice(baseNotice, plan) {
+  let notice = baseNotice;
+  const dropped = plan && Number.isInteger(plan.tieDropped) ? plan.tieDropped : 0;
+  const mirrored = plan && Number.isInteger(plan.tieMirrorDropped) ? plan.tieMirrorDropped : 0;
+  const skipped = plan && Array.isArray(plan.tieSkipped) ? plan.tieSkipped : [];
+  if (typeof withTieAbsorptionNotice === "function") {
+    notice = withTieAbsorptionNotice(notice, { dropped, mirrorDropped: mirrored });
+  } else if (dropped + mirrored > 0) {
+    notice = `${notice} · replaced the 🪢 link`;
+  }
+  if (typeof withTieAbsorptionFailureSuffix === "function") {
+    notice = withTieAbsorptionFailureSuffix(notice, skipped);
+  } else if (skipped.length > 0) {
+    notice = `${notice} · 🪢 link not removed (reconcile will fold it)`;
+  }
+  return notice;
+}
 // ---- src/082-blocks-mint.js ----
 // BLOCKS dependent-id minting, ported from task-status-cycler's
 // `mintBlockId` and pinned by docs/task-dependencies.md §11.7 (SB1–SB9).
@@ -50770,8 +50790,8 @@ function planProjectSubtreePass(args = {}) {
   });
 }
 // ---- src/218-plugin-project-subtree.js ----
-// Task Card subtree pass for the sub-project cascade
-// (`docs/task-dependencies.md` §13.19 PDS, PDG8–PDG12, PDG14).
+// Task Card subtree pass for the sub-project cascade (§13.19 PDS, PDG8–PDG12, PDG14).
+// Tie audit (§22): no dependency pairs created here, so no absorption.
 // After a Depends on or Schedule gesture blocks or unblocks N's `^prj`,
 // the pass blocks or recovers N's descendant sub-projects top-down in the
 // same gesture (reconcile re-derives them within one interval when any
@@ -63437,6 +63457,54 @@ function planCountedLocalTaskDependency(
     (entry) => entry.snapshot === firstSnapshot,
   );
   const mappedCursorLine = firstTracked ? firstTracked.line : firstSnapshot.line;
+  // Counted absorption (§22): a counted add absorbs the pair's plain links.
+  // Same-note drops fold into the single-transaction content below; a
+  // malformed LINKS line is reported for the honest failure suffix.
+  let tieDropped = 0;
+  let tieMirrorDropped = 0;
+  let tieSkipped = [];
+  if (remove !== true) {
+    try {
+      const normalizedPath = normalizeVaultRelativePath(filePath);
+      const finalLines = String(nextContent).split(/\r?\n/);
+      const countedPairs = [];
+      for (const tracked of trackedSources) {
+        if (!Number.isInteger(tracked.line)) continue;
+        const sourceLineText = String(finalLines[tracked.line] || "");
+        const sourceBlockId = normalizeBulletPropertyValue(getTrailingBlockId(sourceLineText) || "");
+        countedPairs.push({
+          owner: {
+            path: normalizedPath,
+            blockId: sourceBlockId || "",
+            line: tracked.line,
+          },
+          other: {
+            path: normalizedPath,
+            blockId: countedTargetRef.blockId,
+            line: Number.isInteger(dependencyTask.line) ? dependencyTask.line : null,
+          },
+        });
+      }
+      if (countedPairs.length > 0) {
+        const absorbed = absorbTiePairsFromContents({
+          contents: new Map([[normalizedPath, nextContent]]),
+          pairs: countedPairs,
+          paths: [normalizedPath],
+          resolveLinkpath: options.resolveLinkpath,
+          isWritable: () => true,
+        });
+        const absorbedContent = absorbed.contents.get(normalizedPath);
+        if (typeof absorbedContent === "string" && absorbedContent !== nextContent) {
+          nextContent = absorbedContent;
+        }
+        tieDropped += absorbed.dropped || 0;
+        tieMirrorDropped += absorbed.mirrorDropped || 0;
+        tieSkipped = (absorbed.skipped || []).slice();
+      }
+    } catch (_countedTieError) {
+      tieSkipped = [{ path: normalizeVaultRelativePath(filePath), reason: "plan-failed" }];
+    }
+  }
   return Object.freeze({
     valid: true,
     stale: false,
@@ -63455,6 +63523,9 @@ function planCountedLocalTaskDependency(
     cursorLine: mappedCursorLine,
     blocksFollowUps: Object.freeze(blocksFollowUps),
     pomodoroTargets: collectDependencyPlanPomodoroTargets(parentPlans),
+    tieDropped,
+    tieMirrorDropped,
+    tieSkipped: Object.freeze(tieSkipped),
   });
 }
 
@@ -76305,6 +76376,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.pendingCountedDependency = null;
     this.pendingVaultSingle = null;
     this.pendingVaultCounted = null;
+    this.pendingTieChange = null;
     this.blockIdMode = "single";
     this.blockIdContext = null;
     this.pendingScheduleReason = null;
@@ -81461,6 +81533,7 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
     this.pendingVaultCounted = null;
     this.pendingBlocks = null;
     this.pendingRelation = null;
+    this.pendingTieChange = null;
     this.blockIdMode = "single";
     this.blockIdContext = null;
     this.pendingScheduleReason = null;
@@ -81964,6 +82037,9 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
     if (this.blockIdMode === "relation-target" && this.pendingRelation) {
       return this.pendingRelation.reservedIds || new Set();
     }
+    if (this.blockIdMode === "tie-change" && this.pendingTieChange) {
+      return this.pendingTieChange.reservedIds || new Set();
+    }
     return new Set();
   }
 
@@ -81980,6 +82056,7 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
       "vault-counted",
       "blocks-source",
       "relation-target",
+      "tie-change",
     ].includes(options.mode)
       ? options.mode
       : "single";
@@ -82713,20 +82790,33 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
     if (this.relationStage) {
       return this.chooseRelationTask(item);
     }
+    // Marked and counted Depends-on ↵ absorbs through the native batch
+    // writers (which already absorb); only single-select ↵ converts via the
+    // tie writer. Chords still refuse via tieCommitChord (R8).
     try {
       if (typeof tieEnterActionForRow === "function") {
         const tieAction = tieEnterActionForRow(this, item);
         if (tieAction && tieAction.action === "convert-dependency") {
-          const refusal = typeof tieChordRefusal === "function"
-            ? tieChordRefusal(this, item, tieAction.to)
-            : null;
-          if (refusal) {
-            new Notice(refusal);
-            return false;
+          let batchAbsorbs = false;
+          try {
+            batchAbsorbs =
+              (typeof this.isCountedSession === "function" && this.isCountedSession() === true) ||
+              (typeof this.getMarkedCount === "function" && this.getMarkedCount() > 0);
+          } catch (_batchCheckError) {
+            batchAbsorbs = false;
           }
-          if (typeof tieCommitChord === "function") {
-            await tieCommitChord(this, tieAction.to);
-            return true;
+          if (!batchAbsorbs) {
+            const refusal = typeof tieChordRefusal === "function"
+              ? tieChordRefusal(this, item, tieAction.to)
+              : null;
+            if (refusal) {
+              new Notice(refusal);
+              return false;
+            }
+            if (typeof tieCommitChord === "function") {
+              await tieCommitChord(this, tieAction.to);
+              return true;
+            }
           }
         }
       }
@@ -83517,6 +83607,74 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
         return false;
       }
     }
+    // Counted vault absorption (§22): a counted add absorbs the pair's plain
+    // links. Same-note sides fold into the working copy below; cross-note
+    // target sides become follow-ups after the commit. Lane transfer,
+    // project lanes, and Pomodoro consumption stay as they are.
+    let vaultCountedTieDropped = 0;
+    let vaultCountedTieMirrorDropped = 0;
+    let vaultCountedTieSkipped = [];
+    let vaultCountedTieFollowUps = [];
+    if (!snapshot.remove) {
+      try {
+        const vaultTiePairs = [];
+        const workingLinesForTie = String(working).split(/\r?\n/);
+        for (const tracked of trackedVaultSources) {
+          if (!Number.isInteger(tracked.line)) continue;
+          const sourceLineText = String(workingLinesForTie[tracked.line] || "");
+          const sourceBlockId = normalizeBulletPropertyValue(getTrailingBlockId(sourceLineText) || "");
+          vaultTiePairs.push({
+            owner: {
+              path: ownerPath,
+              blockId: sourceBlockId || "",
+              line: tracked.line,
+            },
+            other: { path: targetPath, blockId: snapshot.blockId },
+          });
+        }
+        if (vaultTiePairs.length > 0) {
+          const tieIsWritable = this.plugin
+            ? tieNavNoteIsWritable(this.plugin, new Date())
+            : () => true;
+          const absorbed = absorbTiePairsFromContents({
+            contents: new Map([[ownerPath, working]]),
+            pairs: vaultTiePairs,
+            paths: [ownerPath],
+            resolveLinkpath,
+            isWritable: tieIsWritable,
+          });
+          const absorbedWorking = absorbed.contents.get(ownerPath);
+          if (typeof absorbedWorking === "string" && absorbedWorking !== working) {
+            working = absorbedWorking;
+          }
+          vaultCountedTieDropped += absorbed.dropped || 0;
+          vaultCountedTieMirrorDropped += absorbed.mirrorDropped || 0;
+          for (const reason of absorbed.skipped || []) {
+            vaultCountedTieSkipped.push(reason);
+          }
+          if (targetPath !== ownerPath) {
+            let writable = false;
+            try {
+              writable = tieIsWritable(targetPath) === true;
+            } catch (_writableError) {
+              writable = false;
+            }
+            const preimage = files.get(targetPath);
+            if (writable && typeof preimage === "string") {
+              vaultCountedTieFollowUps.push(Object.freeze({
+                path: targetPath,
+                preimage: String(preimage),
+                pairs: Object.freeze(vaultTiePairs.slice()),
+              }));
+            } else {
+              vaultCountedTieSkipped.push(Object.freeze({ path: targetPath, reason: "note-not-writable" }));
+            }
+          }
+        }
+      } catch (_vaultTieError) {
+        vaultCountedTieSkipped.push(Object.freeze({ path: ownerPath, reason: "plan-failed" }));
+      }
+    }
     if (working === originalContent) {
       new Notice("No dependencies changed");
       return true;
@@ -83579,13 +83737,48 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
     const vaultCountedSuffix = vaultCountedSubtree
       ? subtreePassNoticeSuffix(vaultCountedSubtree)
       : "";
+    // Cross-note tie follow-ups run after the dependency commit, best-effort;
+    // a leftover plain link is folded by reconcile with the honest suffix.
+    let vaultTieFollowDropped = 0;
+    let vaultTieFollowMirror = 0;
+    const vaultTieFollowFailed = [];
+    if (vaultCountedTieFollowUps.length > 0) {
+      try {
+        const tieOutcome = await applyTieLinksFollowUps({
+          app: this.plugin ? this.plugin.app : null,
+          followUps: vaultCountedTieFollowUps,
+          resolveLinkpath,
+          isWritable: this.plugin ? tieNavNoteIsWritable(this.plugin, new Date()) : undefined,
+        });
+        vaultTieFollowDropped += tieOutcome.dropped || 0;
+        vaultTieFollowMirror += tieOutcome.mirrorDropped || 0;
+        for (const failed of tieOutcome.failed || []) {
+          vaultTieFollowFailed.push(Object.freeze({ path: failed, reason: "follow-up-failed" }));
+        }
+      } catch (_tieFollowError) {
+        for (const entry of vaultCountedTieFollowUps) {
+          vaultTieFollowFailed.push(Object.freeze({ path: entry.path, reason: "follow-up-failed" }));
+        }
+      }
+    }
+    let vaultCountedNotice = `${
+      snapshot.remove
+        ? `⛓ Removed from ${applied} task${applied === 1 ? "" : "s"}`
+        : `⛓ Linked ${applied} task${applied === 1 ? "" : "s"}`
+    }${vaultCountedSuffix ? ` ${vaultCountedSuffix}` : ""}${dependencyPomodoroNoticeSuffix(vaultPomodoroDone.removed, vaultPomodoroDone.failed)}`;
+    if (typeof withTieAbsorptionNotice === "function" && typeof withTieAbsorptionFailureSuffix === "function") {
+      vaultCountedNotice = withTieAbsorptionNotice(vaultCountedNotice, {
+        dropped: vaultCountedTieDropped + vaultTieFollowDropped,
+        mirrorDropped: vaultCountedTieMirrorDropped + vaultTieFollowMirror,
+      });
+      vaultCountedNotice = withTieAbsorptionFailureSuffix(vaultCountedNotice, [
+        ...vaultCountedTieSkipped,
+        ...vaultTieFollowFailed,
+      ]);
+    }
     await this.plugin.finishBlocksFollowUps(
       blocksFollowUps,
-      `${
-        snapshot.remove
-          ? `⛓ Removed from ${applied} task${applied === 1 ? "" : "s"}`
-          : `⛓ Linked ${applied} task${applied === 1 ? "" : "s"}`
-      }${vaultCountedSuffix ? ` ${vaultCountedSuffix}` : ""}${dependencyPomodoroNoticeSuffix(vaultPomodoroDone.removed, vaultPomodoroDone.failed)}`,
+      vaultCountedNotice,
     );
     return true;
   }
@@ -84039,20 +84232,32 @@ class BulletPropertyPickerBlocksStageMixin extends FilteredPickerModal {
   }
 
   async chooseBlocksTask(item) {
+    // Marked and counted Blocks ↵ absorbs through the native batch writers;
+    // only single-select ↵ converts via the tie writer. Chords refuse (R8).
     try {
       if (typeof tieEnterForRow === "function") {
         const tieAction = tieEnterForRow(this, item);
         if (tieAction && tieAction.action === "convert-dependency") {
-          const refusal = typeof tieChordRefusal === "function"
-            ? tieChordRefusal(this, item, tieAction.to)
-            : null;
-          if (refusal) {
-            new Notice(refusal);
-            return false;
+          let batchAbsorbs = false;
+          try {
+            batchAbsorbs =
+              (typeof this.isCountedSession === "function" && this.isCountedSession() === true) ||
+              (typeof this.getMarkedCount === "function" && this.getMarkedCount() > 0);
+          } catch (_batchCheckError) {
+            batchAbsorbs = false;
           }
-          if (typeof tieCommitChord === "function") {
-            await tieCommitChord(this, tieAction.to);
-            return true;
+          if (!batchAbsorbs) {
+            const refusal = typeof tieChordRefusal === "function"
+              ? tieChordRefusal(this, item, tieAction.to)
+              : null;
+            if (refusal) {
+              new Notice(refusal);
+              return false;
+            }
+            if (typeof tieCommitChord === "function") {
+              await tieCommitChord(this, tieAction.to);
+              return true;
+            }
           }
         }
       }
@@ -88903,6 +89108,10 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
       return this.confirmRelationTargetBlockId(item);
     }
 
+    if (this.blockIdMode === "tie-change" && this.pendingTieChange) {
+      return this.confirmTieChangeBlockId(item);
+    }
+
     return this.confirmSingleBlockId(item);
   }
 
@@ -89062,6 +89271,103 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
       );
     }
     return await countedConfirmWrite();
+  }
+
+  // Tie-change `＋ id` for a chord on an ID-less row or owner: the confirmed
+  // id is written to the missing note first (Esc writes nothing), then the
+  // chord commits through `applyTieChange`.
+  async confirmTieChangeBlockId(item) {
+    const pending = this.pendingTieChange;
+    if (!pending || !item.valid) {
+      return false;
+    }
+    const missing = pending.missing || null;
+    const missingPath = missing ? normalizeVaultRelativePath(missing.path || "") : "";
+    if (!missing || !missingPath) {
+      this.clearPendingBatch();
+      new Notice("That task could not be located");
+      return false;
+    }
+    const files = typeof this.readVaultStageFiles === "function"
+      ? await this.readVaultStageFiles([missingPath])
+      : null;
+    const stagedContent = files ? files.get(missingPath) : null;
+    const fallbackContent = typeof this.getBlockIdStageContent === "function"
+      ? this.getBlockIdStageContent()
+      : null;
+    const targetContent = stagedContent !== undefined && stagedContent !== null
+      ? String(stagedContent)
+      : fallbackContent !== null && fallbackContent !== undefined
+        ? String(fallbackContent)
+        : null;
+    if (targetContent === null) {
+      new Notice("That task could not be located");
+      return false;
+    }
+    const validation = validateBlockIdCandidate(item.id, targetContent, {
+      reservedIds: pending.reservedIds || new Set(),
+    });
+    if (!validation.valid || !tryDependencyId(missingPath, validation.id)) {
+      new Notice(validation.message || "That block ID cannot be used in the target note");
+      return false;
+    }
+    const targetLines = String(targetContent).split(/\r?\n/);
+    const missingLine = Number.isInteger(missing.line) ? missing.line : null;
+    if (missingLine === null || targetLines[missingLine] !== missing.rawLine) {
+      return this.refuseDependencyStale();
+    }
+    if (!isObsidianTaskAtLine(targetContent, missingLine, null, targetLines)) {
+      new Notice("That task could not be located");
+      return false;
+    }
+    const updatedLine = applyPromptedBlockIdPreservingLegacyId(
+      targetLines[missingLine],
+      validation.id,
+      missingPath,
+    );
+    if (updatedLine === null) {
+      new Notice("Dependency not added: this note path cannot be encoded as a dependency ID");
+      return false;
+    }
+    const prepared = await this.plugin.prepareDependencyTargetNote(missingPath, {
+      line: missingLine,
+      from: targetLines[missingLine],
+      text: updatedLine,
+    });
+    if (!prepared.ok) {
+      new Notice(`⛓ Could not prepare ${missingPath} (${prepared.reason})`);
+      return false;
+    }
+    const resolvedOwner = pending.missingSide === "owner"
+      ? { ...pending.owner, blockId: validation.id }
+      : pending.owner;
+    const resolvedOther = pending.missingSide === "other"
+      ? { ...pending.other, blockId: validation.id }
+      : pending.other;
+    const to = pending.to;
+    this.clearPendingBatch();
+    let outcome = null;
+    try {
+      outcome = await this.plugin.applyTieChange(resolvedOwner, resolvedOther, to, {
+        promptBlockId: null,
+      });
+    } catch (_error) {
+      new Notice("Could not update the tie");
+      return false;
+    }
+    if (!outcome || outcome.ok !== true) {
+      new Notice((outcome && outcome.notice) || "Could not update the tie");
+      return false;
+    }
+    if (outcome.notice) new Notice(outcome.notice);
+    try {
+      if (typeof this.reopenDependencyStageFresh === "function") {
+        this.reopenDependencyStageFresh();
+      }
+    } catch (_error) {
+      // The notice already committed; reopen is best-effort.
+    }
+    return true;
   }
 
   // Record one confirmed block ID and either advance to the next prompt (modal
@@ -91306,6 +91612,125 @@ function tieChordOwnerOther(picker, item) {
   return Object.freeze({ owner, other });
 }
 
+// ID-less candidates for the ＋ id prompt flow: same resolution as the
+// strict refs above, but keeping path/line when the block ID is missing so
+// the chord can mint one and then commit. Returns null when even the path
+// cannot be located.
+function tieItemCandidate(item, fallbackPath) {
+  if (!item || typeof item !== "object") return null;
+  const path = normalizeVaultRelativePath(
+    item.path || fallbackPath || "",
+  );
+  if (!path) return null;
+  const blockId = normalizeBulletPropertyValue(
+    item.blockId || item.existingBlockId || "",
+  );
+  const candidate = {
+    path,
+    blockId: blockId || "",
+    line: Number.isInteger(item.line) ? item.line : null,
+    rawLine: typeof item.rawLine === "string" ? item.rawLine : null,
+    displayText: item.displayText || item.searchText || "",
+    existingIdField: item.existingIdField || item.idField || null,
+  };
+  if (!candidate.blockId) delete candidate.blockId;
+  return Object.freeze(candidate);
+}
+
+function tieOwnerCandidate(picker) {
+  try {
+    const stage = picker.vaultStage || null;
+    const dependent = stage && stage.dependent ? stage.dependent : null;
+    if (dependent && dependent.path) {
+      const path = normalizeVaultRelativePath(dependent.path);
+      let blockId = tieOwnerBlockId(dependent);
+      let line = Number.isInteger(dependent.line) ? dependent.line : null;
+      let rawLine = typeof dependent.rawLine === "string" ? dependent.rawLine : null;
+      if (!blockId && picker.filePath && stage.files instanceof Map) {
+        const content = stage.files.get(path) || "";
+        const lines = String(content).split(/\r?\n/);
+        if (Number.isInteger(line) && typeof lines[line] === "string") {
+          blockId = normalizeBulletPropertyValue(getTrailingBlockId(lines[line]) || "");
+          if (rawLine === null) rawLine = String(lines[line] || "");
+        } else if (line === null) {
+          const found = tieFindTaskLine(stage.files, path, "");
+          void found;
+        }
+      }
+      if (!blockId && picker.filePath) {
+        const editor = typeof picker.getEditorContent === "function"
+          ? picker.getEditorContent()
+          : null;
+        if (typeof editor === "string" && picker.cursor && Number.isInteger(picker.cursor.line)) {
+          const editorLine = String(editor).split(/\r?\n/)[picker.cursor.line];
+          if (typeof editorLine === "string") {
+            const editorId = normalizeBulletPropertyValue(getTrailingBlockId(editorLine) || "");
+            if (editorId) blockId = editorId;
+            if (line === null) line = picker.cursor.line;
+            if (rawLine === null) rawLine = String(editorLine || "");
+          }
+        }
+      }
+      if (path) {
+        const candidate = {
+          path,
+          line,
+          rawLine,
+          displayText: dependent.displayText || "",
+        };
+        if (blockId) candidate.blockId = blockId;
+        return Object.freeze(candidate);
+      }
+    }
+    if (picker.filePath && picker.cursor && Number.isInteger(picker.cursor.line)) {
+      const editor = typeof picker.getEditorContent === "function"
+        ? picker.getEditorContent()
+        : null;
+      if (typeof editor === "string") {
+        const lineText = String(editor).split(/\r?\n/)[picker.cursor.line];
+        if (typeof lineText === "string") {
+          const blockId = normalizeBulletPropertyValue(getTrailingBlockId(lineText) || "");
+          const candidate = {
+            path: normalizeVaultRelativePath(picker.filePath),
+            line: picker.cursor.line,
+            rawLine: String(lineText || ""),
+            displayText: "",
+          };
+          if (blockId) candidate.blockId = blockId;
+          return Object.freeze(candidate);
+        }
+      }
+    }
+  } catch (_error) {
+    // Best-effort candidate; the caller refuses when null.
+  }
+  return null;
+}
+
+function tieMissingIdRequest(picker, item) {
+  const fallbackPath = normalizeVaultRelativePath(picker.filePath || "");
+  const ownerCand = tieOwnerCandidate(picker);
+  const otherCand = tieItemCandidate(item, fallbackPath);
+  if (!ownerCand && !otherCand) return null;
+  if (ownerCand && ownerCand.path && !ownerCand.blockId) {
+    return Object.freeze({
+      owner: ownerCand,
+      other: otherCand,
+      missingSide: "owner",
+      missing: ownerCand,
+    });
+  }
+  if (otherCand && otherCand.path && !otherCand.blockId) {
+    return Object.freeze({
+      owner: ownerCand,
+      other: otherCand,
+      missingSide: "other",
+      missing: otherCand,
+    });
+  }
+  return null;
+}
+
 function tieChordDisplayName(item) {
   try {
     const raw = item.displayText || item.searchText || item.path || "that task";
@@ -91315,10 +91740,18 @@ function tieChordDisplayName(item) {
   }
 }
 
+function tieChordKeyName(to) {
+  if (to === "other-waits") return "⌃⇧B";
+  if (to === "plain-out") return "⌃L";
+  if (to === "plain-in") return "⌃⇧L";
+  return "⌃B";
+}
+
 function tieChordRefusal(picker, item, to) {
+  const chord = tieChordKeyName(to);
   try {
     if (picker.isCountedSession && picker.isCountedSession()) {
-      return "⌃B acts on one task · needs a single task";
+      return `${chord} acts on one task · needs a single task`;
     }
   } catch (_error) {
     // A helper failure never blocks the chord; applyTieChange guards.
@@ -91332,7 +91765,7 @@ function tieChordRefusal(picker, item, to) {
         const name = tieChordDisplayName(item);
         return `↵ can't replace a dependency in a batch · unmark "${name}" or use ⌃L on it`;
       }
-      return "⌃B acts on one task · clear marks first";
+      return `${chord} acts on one task · clear marks first`;
     }
   } catch (_error) {
     // Best-effort batch guard.
@@ -91403,6 +91836,36 @@ async function tieCommitChord(picker, to) {
   }
   const refs = tieChordOwnerOther(picker, item);
   if (!refs) {
+    // ID-less rows or owners go through the ＋ id prompt flow; Esc writes
+    // nothing. Only a truly unlocatable pair refuses here.
+    try {
+      const missing = typeof tieMissingIdRequest === "function"
+        ? tieMissingIdRequest(picker, item)
+        : null;
+      if (missing && missing.missing && missing.missing.path) {
+        if (typeof picker.showBlockIdStage === "function") {
+          picker.pendingTieChange = Object.freeze({
+            owner: missing.owner,
+            other: missing.other,
+            missingSide: missing.missingSide,
+            missing: missing.missing,
+            to,
+            reservedIds: new Set(),
+          });
+          const promptTask = {
+            path: missing.missing.path,
+            line: missing.missing.line,
+            rawLine: missing.missing.rawLine,
+            displayText: missing.missing.displayText || tieChordDisplayName(item),
+            existingIdField: missing.missing.existingIdField || null,
+          };
+          picker.showBlockIdStage(promptTask, { mode: "tie-change" });
+          return true;
+        }
+      }
+    } catch (_missingPromptError) {
+      // A helper failure falls through to the locate refusal below.
+    }
     new Notice("That task could not be located");
     return true;
   }
@@ -91412,12 +91875,12 @@ async function tieCommitChord(picker, to) {
     return true;
   }
   tieDisarm(picker);
+  // Missing IDs are handled before this call through the ＋ id prompt flow
+  // (pendingTieChange); the writer only sees resolved refs here.
   let outcome = null;
   try {
     outcome = await picker.plugin.applyTieChange(refs.owner, refs.other, to, {
-      promptBlockId: picker.showBlockIdStage
-        ? (ref) => picker.showBlockIdStage(ref, { mode: "tie-change" })
-        : null,
+      promptBlockId: null,
     });
   } catch (_error) {
     new Notice("Could not update the tie");
@@ -112253,14 +112716,9 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
     const countedSubtreeSuffix = countedSubtree
       ? subtreePassNoticeSuffix(countedSubtree)
       : "";
-    await this.finishBlocksFollowUps(
-      plan.blocksFollowUps,
-      `${verb} ${plan.dependencyValue} ${
-        plan.operation === "remove" ? "from" : "to"
-      } ${formatCountLabel(plan.targetCount, "task")}${identity}${
-        this.getCountedTaskNoticeSuffix(session, plan.unchangedTaskCount)
-      }${countedSubtreeSuffix ? ` ${countedSubtreeSuffix}` : ""}${dependencyPomodoroNoticeSuffix(countedPomodoroDone.removed, countedPomodoroDone.failed)}`,
-    );
+    const countedBase = `${verb} ${plan.dependencyValue} ${plan.operation === "remove" ? "from" : "to"} ${formatCountLabel(plan.targetCount, "task")}${identity}${this.getCountedTaskNoticeSuffix(session, plan.unchangedTaskCount)}${countedSubtreeSuffix ? ` ${countedSubtreeSuffix}` : ""}${dependencyPomodoroNoticeSuffix(countedPomodoroDone.removed, countedPomodoroDone.failed)}`;
+    const countedNotice = typeof withCountedTieNotice === "function" ? withCountedTieNotice(countedBase, plan) : countedBase;
+    await this.finishBlocksFollowUps(plan.blocksFollowUps, countedNotice);
     return true;
   }
 
@@ -113088,7 +113546,7 @@ class BobNavigationHotkeysPropertyDependencyMixin {
         content,
         { files, add, remove, mirrorTouch, today: args.today || new Date() },
       );
-      const plan = planDependencyEdit({
+      let plan = planDependencyEdit({
         content,
         parentLine,
         parentPath,
@@ -113120,6 +113578,91 @@ class BobNavigationHotkeysPropertyDependencyMixin {
       });
       if (!plan.ok) {
         return Object.freeze({ ok: false, reason: plan.reason });
+      }
+      // Same-note reversal (§22 one-undo): an optional second dependent edit
+      // in the same note folds into this transaction, so one Ctrl+Z restores
+      // the prior tie. Both edits share the guards already checked by
+      // `planTieChange`; lane transfer, stamps, and consumption run once.
+      let secondPlan = null;
+      let secondParentLineNext = null;
+      const secondDependent = args.secondDependent && typeof args.secondDependent === "object"
+        ? args.secondDependent
+        : null;
+      if (
+        secondDependent &&
+        Number.isInteger(secondDependent.parentLine) &&
+        normalizeVaultRelativePath(secondDependent.parentPath || parentPath) === parentPath &&
+        (Array.isArray(secondDependent.add) || Array.isArray(secondDependent.remove))
+      ) {
+        const secondAdd = Array.isArray(secondDependent.add) ? secondDependent.add : [];
+        const secondRemove = Array.isArray(secondDependent.remove) ? secondDependent.remove : [];
+        if (secondAdd.length > 0 || secondRemove.length > 0) {
+          const mappedSecondLine = mapLineThroughLineEdits(
+            secondDependent.parentLine,
+            plan.lineEdits,
+          );
+          if (mappedSecondLine === null) {
+            return Object.freeze({ ok: false, reason: "changed — reopen" });
+          }
+          const secondFiles = new Map(files);
+          secondFiles.set(parentPath, plan.nextContent);
+          const plannedSecond = planDependencyEdit({
+            content: plan.nextContent,
+            parentLine: mappedSecondLine,
+            parentPath,
+            add: secondAdd,
+            remove: secondRemove,
+            files: secondFiles,
+            vaultFiles: this.readDependencyVaultFileList(),
+            resolveLinkpath,
+            blocksLinesEnabled:
+              args.blocksLinesEnabled !== undefined
+                ? args.blocksLinesEnabled === true
+                : loadBlocksLinesEnabled(),
+            mirrorTouch,
+            ...(subtreePrep && subtreePrep.lanes.length > 0
+              ? { projectLaneStatuses: subtreePrep.lanes }
+              : {}),
+            recovery: {
+              registry,
+              today: args.today || new Date(),
+              vaultContents,
+              markUnblockedLine: navFreshnessMarkUnblockedLine(
+                typeof this.getFreshnessApi === "function"
+                  ? this.getFreshnessApi()
+                  : null,
+              ),
+              ...scopeFlags,
+            },
+          });
+          if (!plannedSecond.ok) {
+            return Object.freeze({ ok: false, reason: plannedSecond.reason });
+          }
+          secondPlan = plannedSecond;
+          secondParentLineNext = Number.isInteger(plannedSecond.parentLineNext)
+            ? plannedSecond.parentLineNext
+            : mappedSecondLine;
+          // Merge the second edit into the commit plan below.
+          plan = Object.freeze({
+            ...plan,
+            nextContent: secondPlan.nextContent,
+            lineEdits: secondPlan.lineEdits,
+            parentLineNext: plan.parentLineNext,
+            blocksFollowUps: Object.freeze([
+              ...(plan.blocksFollowUps || []),
+              ...(secondPlan.blocksFollowUps || []),
+            ]),
+            preparations: Object.freeze([
+              ...(plan.preparations || []),
+              ...(secondPlan.preparations || []),
+            ]),
+            blocksFailedPaths: Object.freeze([
+              ...(plan.blocksFailedPaths || []),
+              ...(secondPlan.blocksFailedPaths || []),
+            ]),
+            changed: true,
+          });
+        }
       }
       if (!plan.changed) {
         // The dependent's bytes can already match (a hand-typed canonical
@@ -113297,12 +113840,24 @@ class BobNavigationHotkeysPropertyDependencyMixin {
         // Freshness stamps the dependent's post-plan line: a same-note
         // prerequisite above it can gain a BLOCKS line and shift it.
         // Stamping before the Pomodoro fold keeps the line index valid.
+        // A same-note reversal stamps both dependents in the one transaction.
         if (Number.isInteger(plan.parentLineNext)) {
           commitPlan = {
             ...commitPlan,
             nextContent: this.stampDependencyParentLine(
               commitPlan.nextContent,
               plan.parentLineNext,
+              args.stamper,
+              args.dateText,
+            ),
+          };
+        }
+        if (Number.isInteger(secondParentLineNext) && secondParentLineNext !== plan.parentLineNext) {
+          commitPlan = {
+            ...commitPlan,
+            nextContent: this.stampDependencyParentLine(
+              commitPlan.nextContent,
+              secondParentLineNext,
               args.stamper,
               args.dateText,
             ),
@@ -118153,7 +118708,92 @@ class BobNavigationHotkeysTieChangeMixin {
         Number((left.remove || []).length > 0),
       );
     }
+    // Same-note reversal (§22 one-undo): both dependents share one editor
+    // transaction. Cross-note keeps remove-then-add with the incomplete
+    // suffix on partial failure.
+    const sameNoteReversal = Boolean(
+      planned.reversing &&
+      operations.length === 2 &&
+      ownerRef.path === otherRef.path &&
+      operations.every((edit) => edit.dependent && edit.dependent.path === ownerRef.path),
+    );
     let linkAdditionIntegrated = false;
+    if (sameNoteReversal) {
+      const first = operations[0];
+      const second = operations[1];
+      const firstLocated = tieFindTaskLine(notes, first.dependent.path, first.dependent.blockId);
+      const secondLocated = tieFindTaskLine(notes, second.dependent.path, second.dependent.blockId);
+      if (!notes.get(first.dependent.path) || firstLocated.reason || secondLocated.reason) {
+        return Object.freeze({ ok: false, reason: "changed — reopen", notice: "changed — reopen", stale: true });
+      }
+      const firstWantsAdd = (first.add || []).length > 0;
+      const secondWantsAdd = (second.add || []).length > 0;
+      const combinedTieLinks = {
+        pairs: (firstWantsAdd || secondWantsAdd) ? [pair] : [],
+      };
+      const firstDependentIsOwner =
+        first.dependent.path === ownerRef.path && first.dependent.blockId === ownerRef.blockId;
+      const combinedEditor =
+        (activeEditor &&
+        normalizeVaultRelativePath(options.editorPath || ownerRef.path) === first.dependent.path
+          ? activeEditor
+          : null) ||
+        (typeof this.findRelationEditOpenEditor === "function"
+          ? this.findRelationEditOpenEditor(first.dependent.path)
+          : null) ||
+        (typeof this.findBlocksEditOpenEditor === "function"
+          ? this.findBlocksEditOpenEditor(first.dependent.path)
+          : null);
+      let combinedOutcome = null;
+      if (firstDependentIsOwner) {
+        combinedOutcome = await this.applyDependencyEdit({
+          editor: combinedEditor,
+          parentPath: first.dependent.path,
+          parentLine: firstLocated.line,
+          add: first.add || [],
+          remove: first.remove || [],
+          files: notes,
+          expected: expectedLive,
+          tieLinks: combinedTieLinks,
+          today: options.today,
+          secondDependent: {
+            parentPath: second.dependent.path,
+            parentLine: secondLocated.line,
+            add: second.add || [],
+            remove: second.remove || [],
+          },
+        });
+      } else {
+        // Primary is the other dependent; the owner edit rides as second.
+        combinedOutcome = await this.applyDependencyEdit({
+          editor: combinedEditor,
+          parentPath: first.dependent.path,
+          parentLine: firstLocated.line,
+          add: first.add || [],
+          remove: first.remove || [],
+          files: notes,
+          expected: expectedLive,
+          tieLinks: combinedTieLinks,
+          today: options.today,
+          secondDependent: {
+            parentPath: second.dependent.path,
+            parentLine: secondLocated.line,
+            add: second.add || [],
+            remove: second.remove || [],
+          },
+        });
+      }
+      dependencyOutcomes.push(combinedOutcome);
+      if (!combinedOutcome || combinedOutcome.ok !== true) {
+        return Object.freeze({
+          ...(combinedOutcome || {}),
+          ok: false,
+          reason: (combinedOutcome && combinedOutcome.reason) || "dependency-write-failed",
+          notice: (combinedOutcome && combinedOutcome.notice) || planned.notice,
+          partial: false,
+        });
+      }
+    } else
     for (const edit of operations) {
       const dependent = edit.dependent;
       const dependentIsOwner =
@@ -130442,6 +131082,8 @@ class BobNavigationHotkeysProjectConversionMixin {
 
     let parentContentToWrite = finalInsertion.content;
     let conversionBlocksFollowUps = [];
+    // Tie audit (§22): conversion preserves Depends-On onto a fresh parent note
+    // with no LINKS lines, so no new pair can carry a plain link to absorb.
     if (dependencyRefs.length > 0) {
       const files = new Map([[normalizeVaultRelativePath(parentFile.path), finalInsertion.content]]);
       for (const target of dependencyRefs) {
@@ -130991,6 +131633,8 @@ class BobNavigationHotkeysProjectPromotionMixin {
       return true;
     }
     let projectContent = seedResult.content;
+    // Tie audit (§22): promotion preserves Depends-On onto a freshly seeded
+    // project note with no LINKS lines, so no new pair can carry a plain link.
     if (dependencyRefs.length > 0) {
       const files = new Map([[createdFile.path, projectContent]]);
       for (const target of dependencyRefs) {
@@ -146468,7 +147112,7 @@ module.exports.helpers = {
   planLinksEdit,
   planLinkedFromLine,
   linkedFromDesiredAfterDelta,
-  dropPlainLinkEntries, classifyPairTies, planTieChange, isCtrlKey, isCtrlShiftKey, isCtrlLeftBracketKeydown, tieChordTarget, tieChordStageKind, tieChordRefusal, tieChordOwnerOther, tieChordDisplayName, tieChordHintsForItem, tieShouldHandleChord, tieEnterForRow, tieEnterActionForRow, tieEnterToForStage, tieArmedKey, tieGetArmed, tieDisarm, tieIsArmedFor, tieReleaseArmCopy, tieArmRelease, tieRefreshArmedUI, tieLabelPlainGuardReason, tieLabelGuardForPicker, tieAbsorptionLinkDeltas, tieNavNoteIsWritable, absorbTieSideFromContent, absorbTiePairsFromContents, applyTieLinksToContent, applyTieLinksFollowUps, buildTieChangeNotice, withTieAbsorptionNotice, withTieAbsorptionFailureSuffix,
+  dropPlainLinkEntries, classifyPairTies, planTieChange, isCtrlKey, isCtrlShiftKey, isCtrlLeftBracketKeydown, tieChordTarget, tieChordStageKind, tieChordRefusal, tieChordKeyName, tieChordOwnerOther, tieItemCandidate, tieOwnerCandidate, tieMissingIdRequest, tieChordDisplayName, tieChordHintsForItem, tieShouldHandleChord, tieEnterForRow, tieEnterActionForRow, tieEnterToForStage, tieArmedKey, tieGetArmed, tieDisarm, tieIsArmedFor, tieReleaseArmCopy, tieArmRelease, tieRefreshArmedUI, tieLabelPlainGuardReason, tieLabelGuardForPicker, tieAbsorptionLinkDeltas, tieNavNoteIsWritable, absorbTieSideFromContent, absorbTiePairsFromContents, applyTieLinksToContent, applyTieLinksFollowUps, buildTieChangeNotice, withTieAbsorptionNotice, withTieAbsorptionFailureSuffix, withCountedTieNotice,
   buildRelationEditNotice,
   withLinkedFromFollowUpNotice,
   relationPathIsWritable,

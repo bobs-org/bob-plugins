@@ -176,6 +176,8 @@ class BobNavigationHotkeysProjectPromotionMixin {
       return true;
     }
     let projectContent = seedResult.content;
+    // Tie audit (§22): promotion preserves Depends-On onto a freshly seeded
+    // project note with no LINKS lines, so no new pair can carry a plain link.
     if (dependencyRefs.length > 0) {
       const files = new Map([[createdFile.path, projectContent]]);
       for (const target of dependencyRefs) {

@@ -618,20 +618,33 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
     if (this.relationStage) {
       return this.chooseRelationTask(item);
     }
+    // Marked and counted Depends-on ↵ absorbs through the native batch
+    // writers (which already absorb); only single-select ↵ converts via the
+    // tie writer. Chords still refuse via tieCommitChord (R8).
     try {
       if (typeof tieEnterActionForRow === "function") {
         const tieAction = tieEnterActionForRow(this, item);
         if (tieAction && tieAction.action === "convert-dependency") {
-          const refusal = typeof tieChordRefusal === "function"
-            ? tieChordRefusal(this, item, tieAction.to)
-            : null;
-          if (refusal) {
-            new Notice(refusal);
-            return false;
+          let batchAbsorbs = false;
+          try {
+            batchAbsorbs =
+              (typeof this.isCountedSession === "function" && this.isCountedSession() === true) ||
+              (typeof this.getMarkedCount === "function" && this.getMarkedCount() > 0);
+          } catch (_batchCheckError) {
+            batchAbsorbs = false;
           }
-          if (typeof tieCommitChord === "function") {
-            await tieCommitChord(this, tieAction.to);
-            return true;
+          if (!batchAbsorbs) {
+            const refusal = typeof tieChordRefusal === "function"
+              ? tieChordRefusal(this, item, tieAction.to)
+              : null;
+            if (refusal) {
+              new Notice(refusal);
+              return false;
+            }
+            if (typeof tieCommitChord === "function") {
+              await tieCommitChord(this, tieAction.to);
+              return true;
+            }
           }
         }
       }

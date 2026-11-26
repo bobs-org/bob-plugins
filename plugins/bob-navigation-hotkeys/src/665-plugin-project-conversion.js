@@ -238,6 +238,8 @@ class BobNavigationHotkeysProjectConversionMixin {
 
     let parentContentToWrite = finalInsertion.content;
     let conversionBlocksFollowUps = [];
+    // Tie audit (§22): conversion preserves Depends-On onto a fresh parent note
+    // with no LINKS lines, so no new pair can carry a plain link to absorb.
     if (dependencyRefs.length > 0) {
       const files = new Map([[normalizeVaultRelativePath(parentFile.path), finalInsertion.content]]);
       for (const target of dependencyRefs) {

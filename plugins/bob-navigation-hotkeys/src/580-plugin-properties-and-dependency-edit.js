@@ -457,7 +457,7 @@ class BobNavigationHotkeysPropertyDependencyMixin {
         content,
         { files, add, remove, mirrorTouch, today: args.today || new Date() },
       );
-      const plan = planDependencyEdit({
+      let plan = planDependencyEdit({
         content,
         parentLine,
         parentPath,
@@ -489,6 +489,91 @@ class BobNavigationHotkeysPropertyDependencyMixin {
       });
       if (!plan.ok) {
         return Object.freeze({ ok: false, reason: plan.reason });
+      }
+      // Same-note reversal (§22 one-undo): an optional second dependent edit
+      // in the same note folds into this transaction, so one Ctrl+Z restores
+      // the prior tie. Both edits share the guards already checked by
+      // `planTieChange`; lane transfer, stamps, and consumption run once.
+      let secondPlan = null;
+      let secondParentLineNext = null;
+      const secondDependent = args.secondDependent && typeof args.secondDependent === "object"
+        ? args.secondDependent
+        : null;
+      if (
+        secondDependent &&
+        Number.isInteger(secondDependent.parentLine) &&
+        normalizeVaultRelativePath(secondDependent.parentPath || parentPath) === parentPath &&
+        (Array.isArray(secondDependent.add) || Array.isArray(secondDependent.remove))
+      ) {
+        const secondAdd = Array.isArray(secondDependent.add) ? secondDependent.add : [];
+        const secondRemove = Array.isArray(secondDependent.remove) ? secondDependent.remove : [];
+        if (secondAdd.length > 0 || secondRemove.length > 0) {
+          const mappedSecondLine = mapLineThroughLineEdits(
+            secondDependent.parentLine,
+            plan.lineEdits,
+          );
+          if (mappedSecondLine === null) {
+            return Object.freeze({ ok: false, reason: "changed — reopen" });
+          }
+          const secondFiles = new Map(files);
+          secondFiles.set(parentPath, plan.nextContent);
+          const plannedSecond = planDependencyEdit({
+            content: plan.nextContent,
+            parentLine: mappedSecondLine,
+            parentPath,
+            add: secondAdd,
+            remove: secondRemove,
+            files: secondFiles,
+            vaultFiles: this.readDependencyVaultFileList(),
+            resolveLinkpath,
+            blocksLinesEnabled:
+              args.blocksLinesEnabled !== undefined
+                ? args.blocksLinesEnabled === true
+                : loadBlocksLinesEnabled(),
+            mirrorTouch,
+            ...(subtreePrep && subtreePrep.lanes.length > 0
+              ? { projectLaneStatuses: subtreePrep.lanes }
+              : {}),
+            recovery: {
+              registry,
+              today: args.today || new Date(),
+              vaultContents,
+              markUnblockedLine: navFreshnessMarkUnblockedLine(
+                typeof this.getFreshnessApi === "function"
+                  ? this.getFreshnessApi()
+                  : null,
+              ),
+              ...scopeFlags,
+            },
+          });
+          if (!plannedSecond.ok) {
+            return Object.freeze({ ok: false, reason: plannedSecond.reason });
+          }
+          secondPlan = plannedSecond;
+          secondParentLineNext = Number.isInteger(plannedSecond.parentLineNext)
+            ? plannedSecond.parentLineNext
+            : mappedSecondLine;
+          // Merge the second edit into the commit plan below.
+          plan = Object.freeze({
+            ...plan,
+            nextContent: secondPlan.nextContent,
+            lineEdits: secondPlan.lineEdits,
+            parentLineNext: plan.parentLineNext,
+            blocksFollowUps: Object.freeze([
+              ...(plan.blocksFollowUps || []),
+              ...(secondPlan.blocksFollowUps || []),
+            ]),
+            preparations: Object.freeze([
+              ...(plan.preparations || []),
+              ...(secondPlan.preparations || []),
+            ]),
+            blocksFailedPaths: Object.freeze([
+              ...(plan.blocksFailedPaths || []),
+              ...(secondPlan.blocksFailedPaths || []),
+            ]),
+            changed: true,
+          });
+        }
       }
       if (!plan.changed) {
         // The dependent's bytes can already match (a hand-typed canonical
@@ -666,12 +751,24 @@ class BobNavigationHotkeysPropertyDependencyMixin {
         // Freshness stamps the dependent's post-plan line: a same-note
         // prerequisite above it can gain a BLOCKS line and shift it.
         // Stamping before the Pomodoro fold keeps the line index valid.
+        // A same-note reversal stamps both dependents in the one transaction.
         if (Number.isInteger(plan.parentLineNext)) {
           commitPlan = {
             ...commitPlan,
             nextContent: this.stampDependencyParentLine(
               commitPlan.nextContent,
               plan.parentLineNext,
+              args.stamper,
+              args.dateText,
+            ),
+          };
+        }
+        if (Number.isInteger(secondParentLineNext) && secondParentLineNext !== plan.parentLineNext) {
+          commitPlan = {
+            ...commitPlan,
+            nextContent: this.stampDependencyParentLine(
+              commitPlan.nextContent,
+              secondParentLineNext,
               args.stamper,
               args.dateText,
             ),

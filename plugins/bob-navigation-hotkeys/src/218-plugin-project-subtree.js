@@ -1,5 +1,5 @@
-// Task Card subtree pass for the sub-project cascade
-// (`docs/task-dependencies.md` §13.19 PDS, PDG8–PDG12, PDG14).
+// Task Card subtree pass for the sub-project cascade (§13.19 PDS, PDG8–PDG12, PDG14).
+// Tie audit (§22): no dependency pairs created here, so no absorption.
 // After a Depends on or Schedule gesture blocks or unblocks N's `^prj`,
 // the pass blocks or recovers N's descendant sub-projects top-down in the
 // same gesture (reconcile re-derives them within one interval when any

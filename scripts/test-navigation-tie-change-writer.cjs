@@ -145,6 +145,83 @@ test("same-note conversion is one actual editor undo group", async () => {
   assert.doesNotMatch(editor.content, /\*\*LINKS:\*\*/);
 });
 
+test("same-note reversal commits in one undo group and is byte-correct", async () => {
+  const initial = [
+    task("Owner", "owner"),
+    "- [?] #task Other [dependsOn:: Tasks__owner] ^other",
+    `\t- ⛓️ **DEPENDS ON:** [[#^owner]]`,
+  ].join("\n");
+  const editor = new TransactionEditor(initial, { line: 0, ch: 0 });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: {
+      getLeavesOfType: () => [
+        { view: { file: { path: "Tasks.md" }, editor } },
+      ],
+    },
+    plugins: { plugins: {} },
+  };
+  plugin.getActiveMarkdownView = () => ({
+    editor,
+    file: { path: "Tasks.md" },
+  });
+  plugin.readDependencyNoteContent = async (path, openEditor) =>
+    path === "Tasks.md"
+      ? String(openEditor && openEditor.getValue ? openEditor.getValue() : editor.getValue())
+      : null;
+  plugin.readDependencyVaultFileList = () => ["Tasks.md"];
+  plugin.dependencyLinkpathResolver = () => (note, from) =>
+    !note ? from : `${note}.md`;
+  plugin.readDependencyRecoveryVaultContents = async () =>
+    new Map([["Tasks.md", editor.getValue()]]);
+  plugin.prepareSubtreeForDependencyPlan = async () => null;
+  plugin.readDeferredPomodoroSnapshot = async () => ({
+    ok: true,
+    contents: new Map(),
+  });
+  plugin.getFreshnessApi = () => null;
+
+  const result = await plugin.applyTieChange(owner, other, "owner-waits", {
+    editor,
+    editorPath: "Tasks.md",
+  });
+
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(editor.undoGroups, 1);
+  assert.match(result.notice, /Reversed/);
+  assert.match(editor.content, /Owner.*\[dependsOn:: Tasks__other\]/);
+  assert.doesNotMatch(editor.content, /Other.*\[dependsOn:: Tasks__owner\]/);
+  assert.match(editor.content, /DEPENDS ON:\*\* \[\[#\^other\]\]/);
+  assert.doesNotMatch(editor.content, /DEPENDS ON:\*\* \[\[#\^owner\]\]/);
+});
+
+test("cross-note reversal reports incomplete when the add fails", async () => {
+  const { plugin, live } = makePlugin({
+    "Tasks.md": [task("Owner", "owner")].join("\n"),
+    "Other.md": [task("Other", "other"), deps("[[Tasks#^owner]]")].join("\n"),
+  });
+  const events = [];
+  plugin.applyBlocksEdit = async (args) => {
+    events.push("blocks-remove");
+    return { ok: true, notice: "🧱 Removed", committed: ["Other.md"] };
+  };
+  plugin.applyDependencyEdit = async (args) => {
+    events.push("dependency-add");
+    return { ok: false, reason: "target-not-found", notice: "⛓ Could not update" };
+  };
+  installRelationWriter(plugin, events);
+
+  const result = await plugin.applyTieChange(
+    { path: "Tasks.md", blockId: "owner" },
+    { path: "Other.md", blockId: "other" },
+    "owner-waits",
+  );
+
+  assert.equal(result.ok, false);
+  assert.match(result.notice, /dependency reversal incomplete/);
+  assert.equal(result.partial, true);
+});
+
 test("cross-note release writes the dependency before adding the plain link", async () => {
   const source = [
     task("Owner", "owner"),

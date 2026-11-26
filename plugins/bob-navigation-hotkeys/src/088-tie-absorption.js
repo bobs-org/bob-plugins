@@ -668,3 +668,23 @@ function withTieAbsorptionFailureSuffix(notice, failed) {
   }
   return `${notice} · 🪢 link not removed (reconcile will fold it)`;
 }
+
+// Counted writers (§22): fold tie drops and skips from a counted plan into
+// its notice in one call, keeping call sites to one line.
+function withCountedTieNotice(baseNotice, plan) {
+  let notice = baseNotice;
+  const dropped = plan && Number.isInteger(plan.tieDropped) ? plan.tieDropped : 0;
+  const mirrored = plan && Number.isInteger(plan.tieMirrorDropped) ? plan.tieMirrorDropped : 0;
+  const skipped = plan && Array.isArray(plan.tieSkipped) ? plan.tieSkipped : [];
+  if (typeof withTieAbsorptionNotice === "function") {
+    notice = withTieAbsorptionNotice(notice, { dropped, mirrorDropped: mirrored });
+  } else if (dropped + mirrored > 0) {
+    notice = `${notice} · replaced the 🪢 link`;
+  }
+  if (typeof withTieAbsorptionFailureSuffix === "function") {
+    notice = withTieAbsorptionFailureSuffix(notice, skipped);
+  } else if (skipped.length > 0) {
+    notice = `${notice} · 🪢 link not removed (reconcile will fold it)`;
+  }
+  return notice;
+}

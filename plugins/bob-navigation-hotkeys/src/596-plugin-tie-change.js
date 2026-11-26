@@ -352,7 +352,92 @@ class BobNavigationHotkeysTieChangeMixin {
         Number((left.remove || []).length > 0),
       );
     }
+    // Same-note reversal (§22 one-undo): both dependents share one editor
+    // transaction. Cross-note keeps remove-then-add with the incomplete
+    // suffix on partial failure.
+    const sameNoteReversal = Boolean(
+      planned.reversing &&
+      operations.length === 2 &&
+      ownerRef.path === otherRef.path &&
+      operations.every((edit) => edit.dependent && edit.dependent.path === ownerRef.path),
+    );
     let linkAdditionIntegrated = false;
+    if (sameNoteReversal) {
+      const first = operations[0];
+      const second = operations[1];
+      const firstLocated = tieFindTaskLine(notes, first.dependent.path, first.dependent.blockId);
+      const secondLocated = tieFindTaskLine(notes, second.dependent.path, second.dependent.blockId);
+      if (!notes.get(first.dependent.path) || firstLocated.reason || secondLocated.reason) {
+        return Object.freeze({ ok: false, reason: "changed — reopen", notice: "changed — reopen", stale: true });
+      }
+      const firstWantsAdd = (first.add || []).length > 0;
+      const secondWantsAdd = (second.add || []).length > 0;
+      const combinedTieLinks = {
+        pairs: (firstWantsAdd || secondWantsAdd) ? [pair] : [],
+      };
+      const firstDependentIsOwner =
+        first.dependent.path === ownerRef.path && first.dependent.blockId === ownerRef.blockId;
+      const combinedEditor =
+        (activeEditor &&
+        normalizeVaultRelativePath(options.editorPath || ownerRef.path) === first.dependent.path
+          ? activeEditor
+          : null) ||
+        (typeof this.findRelationEditOpenEditor === "function"
+          ? this.findRelationEditOpenEditor(first.dependent.path)
+          : null) ||
+        (typeof this.findBlocksEditOpenEditor === "function"
+          ? this.findBlocksEditOpenEditor(first.dependent.path)
+          : null);
+      let combinedOutcome = null;
+      if (firstDependentIsOwner) {
+        combinedOutcome = await this.applyDependencyEdit({
+          editor: combinedEditor,
+          parentPath: first.dependent.path,
+          parentLine: firstLocated.line,
+          add: first.add || [],
+          remove: first.remove || [],
+          files: notes,
+          expected: expectedLive,
+          tieLinks: combinedTieLinks,
+          today: options.today,
+          secondDependent: {
+            parentPath: second.dependent.path,
+            parentLine: secondLocated.line,
+            add: second.add || [],
+            remove: second.remove || [],
+          },
+        });
+      } else {
+        // Primary is the other dependent; the owner edit rides as second.
+        combinedOutcome = await this.applyDependencyEdit({
+          editor: combinedEditor,
+          parentPath: first.dependent.path,
+          parentLine: firstLocated.line,
+          add: first.add || [],
+          remove: first.remove || [],
+          files: notes,
+          expected: expectedLive,
+          tieLinks: combinedTieLinks,
+          today: options.today,
+          secondDependent: {
+            parentPath: second.dependent.path,
+            parentLine: secondLocated.line,
+            add: second.add || [],
+            remove: second.remove || [],
+          },
+        });
+      }
+      dependencyOutcomes.push(combinedOutcome);
+      if (!combinedOutcome || combinedOutcome.ok !== true) {
+        return Object.freeze({
+          ...(combinedOutcome || {}),
+          ok: false,
+          reason: (combinedOutcome && combinedOutcome.reason) || "dependency-write-failed",
+          notice: (combinedOutcome && combinedOutcome.notice) || planned.notice,
+          partial: false,
+        });
+      }
+    } else
     for (const edit of operations) {
       const dependent = edit.dependent;
       const dependentIsOwner =

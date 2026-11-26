@@ -193,6 +193,56 @@ test("batch and counted refusals name the row and keep the link", () => {
   );
 });
 
+test("chord refusals name the pressed chord", () => {
+  const picker = (overrides = {}) => ({
+    isCountedSession: () => false,
+    getMarkedCount: () => 0,
+    ...overrides,
+  });
+  assert.match(helpers.tieChordRefusal({ ...picker(), isCountedSession: () => true }, {}, "owner-waits"), /⌃B/);
+  assert.match(helpers.tieChordRefusal({ ...picker(), isCountedSession: () => true }, {}, "other-waits"), /⌃⇧B/);
+  assert.match(helpers.tieChordRefusal({ ...picker(), isCountedSession: () => true }, {}, "plain-out"), /⌃L/);
+  assert.match(helpers.tieChordRefusal({ ...picker(), isCountedSession: () => true }, {}, "plain-in"), /⌃⇧L/);
+  assert.match(helpers.tieChordRefusal({ ...picker(), getMarkedCount: () => 1 }, {}, "other-waits"), /⌃⇧B/);
+  assert.match(helpers.tieChordRefusal({ ...picker(), getMarkedCount: () => 1 }, {}, "plain-out"), /⌃L/);
+  assert.equal(helpers.tieChordKeyName("owner-waits"), "⌃B");
+  assert.equal(helpers.tieChordKeyName("other-waits"), "⌃⇧B");
+  assert.equal(helpers.tieChordKeyName("plain-out"), "⌃L");
+  assert.equal(helpers.tieChordKeyName("plain-in"), "⌃⇧L");
+});
+
+test("marked Depends-on and Blocks batches absorb instead of refusing", () => {
+  const srcDir = path.join(__dirname, "..", "plugins", "bob-navigation-hotkeys", "src");
+  const depends = fs.readFileSync(path.join(srcDir, "410-picker-filter-and-render.js"), "utf8");
+  assert.match(depends, /batchAbsorbs/);
+  assert.match(depends, /Marked and counted Depends-on/);
+  const blocks = fs.readFileSync(path.join(srcDir, "425-picker-blocks-stage.js"), "utf8");
+  assert.match(blocks, /batchAbsorbs/);
+  assert.match(blocks, /Marked and counted Blocks/);
+  const relation = fs.readFileSync(path.join(srcDir, "426-picker-relation-stage.js"), "utf8");
+  assert.match(relation, /can't replace a dependency in a batch/);
+});
+
+test("ID-less rows and owners prompt through the block-ID flow", () => {
+  const idLessRow = { path: "n.md", line: 1, rawLine: "- [ ] Other #task", displayText: "Other" };
+  const picker = { filePath: "n.md", vaultStage: null, cursor: { line: 0 }, getEditorContent: () => "- [ ] Owner #task ^aaa" };
+  const missing = helpers.tieMissingIdRequest(picker, idLessRow);
+  assert.ok(missing && missing.missingSide === "other");
+  assert.equal(missing.missing.path, "n.md");
+  const srcDir = path.join(__dirname, "..", "plugins", "bob-navigation-hotkeys", "src");
+  const localTask = fs.readFileSync(path.join(srcDir, "400-picker-local-task.js"), "utf8");
+  assert.match(localTask, /"tie-change"/);
+  const vaultBatch = fs.readFileSync(path.join(srcDir, "430-picker-vault-batch.js"), "utf8");
+  assert.match(vaultBatch, /confirmTieChangeBlockId/);
+  assert.match(vaultBatch, /pendingTieChange/);
+});
+
+test("Esc in the block-ID prompt writes nothing", () => {
+  const srcDir = path.join(__dirname, "..", "plugins", "bob-navigation-hotkeys", "src");
+  const vaultBatch = fs.readFileSync(path.join(srcDir, "430-picker-vault-batch.js"), "utf8");
+  assert.match(vaultBatch, /Esc writes nothing|Esc allocates no id|writes nothing/);
+});
+
 test("armed release: first ↵ arms, moving/disarming clears, second ↵ commits", () => {
   const owner = { path: "n.md", blockId: "aaa" };
   const other = { path: "n.md", blockId: "bbb" };

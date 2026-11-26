@@ -64692,6 +64692,1135 @@ function refCardLaneWord(lane) {
     return "";
   }
 }
+// ---- src/240wf-plugin-cabinet-regions.js ----
+// Cabinet absorption recognizer (bob-cli-qq absorption): a pure,
+// region.rs-mirroring scan of note source for bob-owned catalog callouts.
+//
+// For each known catalog kind it returns the owned region (the `> [!{callout}]`
+// head line plus contiguous `>` lines), the hideable H2 heading when the
+// section holds nothing else, a fingerprint of the owned bytes, and damage
+// when the region is malformed, duplicated, or ambiguous. Anything damaged
+// is never hidden: cabinets fail open to the stored section. Never throws.
+const PROPERTY_CARD_CABINET_REGION_SPECS = Object.freeze([
+  { kind: "areas", callout: "areas", heading: "Areas", strictBare: true, legacy: null },
+  { kind: "projects", callout: "projects", heading: "Projects", strictBare: true, legacy: null },
+  { kind: "notebooks", callout: "notebooks", heading: "Notebooks", strictBare: false, legacy: { begin: "<!-- bob:notebooks:begin v1 -->", end: "<!-- bob:notebooks:end -->", opener: "<!-- bob:notebooks:", noun: "notebook catalog" } },
+  { kind: "albums", callout: "albums", heading: "Albums", strictBare: true, legacy: null },
+  // Records heads carry a tally title (`> [!records] 24 restaurants ...`),
+  // so recognition accepts any title after the callout name.
+  { kind: "records", callout: "records", heading: "Records", strictBare: false, legacy: null },
+]);
+
+function propertyCardCabinetRegionSpec(kind) {
+  return PROPERTY_CARD_CABINET_REGION_SPECS.find((spec) => spec.kind === kind) || null;
+}
+
+function propertyCardCabinetSplitLines(text) {
+  const source = String(text == null ? "" : text);
+  if (source === "") return { lines: [], eol: "\n" };
+  const eol = /\r\n/.test(source) ? "\r\n" : "\n";
+  return { lines: source.split(/\r\n|\r|\n/), eol };
+}
+
+// First body line index after a leading `---` frontmatter block, or 0 when
+// the note has none (a lone opening fence is not frontmatter). A UTF-8 BOM
+// before the opening fence is allowed, mirroring region.rs.
+function propertyCardCabinetFrontmatterEnd(lines) {
+  if (lines.length === 0) return 0;
+  const first = String(lines[0]).replace(/^\uFEFF/, "");
+  if (first !== "---") return 0;
+  for (let index = 1; index < lines.length; index += 1) {
+    if (lines[index] === "---") return index + 1;
+  }
+  return 0;
+}
+
+function propertyCardCabinetFenceMarker(line) {
+  const content = String(line);
+  let indent = 0;
+  while (indent < content.length && content[indent] === " ") indent += 1;
+  if (indent > 3) return null;
+  const rest = content.slice(indent);
+  const character = rest[0];
+  if (character !== "`" && character !== "~") return null;
+  let length = 0;
+  while (rest[length] === character) length += 1;
+  if (length < 3) return null;
+  return { character, length };
+}
+
+function propertyCardCabinetClosesFence(line, open) {
+  if (!open) return false;
+  const marker = propertyCardCabinetFenceMarker(line);
+  if (!marker) return false;
+  if (marker.character !== open.character || marker.length < open.length) return false;
+  return String(line).trimStart().slice(marker.length).trim() === "";
+}
+
+// ATX heading level and trimmed title (closing hashes removed), or null.
+// Mirrors region.rs: at most 3 leading spaces, `#` run, then space/EOL.
+function propertyCardCabinetAtxHeading(content) {
+  const line = String(content);
+  let indent = 0;
+  while (indent < line.length && line[indent] === " ") indent += 1;
+  if (indent > 3) return null;
+  let level = 0;
+  while (line[indent + level] === "#") level += 1;
+  if (level < 1 || level > 6) return null;
+  const rest = line.slice(indent + level);
+  if (rest !== "" && rest[0] !== " " && rest[0] !== "\t") return null;
+  let title = rest.trim();
+  title = title.replace(/ +#+$/, "").replace(/#+$/, "").trim();
+  return { level, title };
+}
+
+// True when `content` is a `> [!{callout}]` head: at most 3 spaces of
+// indentation, then `>`, then `[!{callout}]` case-insensitively, with an
+// optional `-`/`+` fold sign and title. A `|alias` form is not a head.
+function propertyCardCabinetIsCalloutHead(content, callout) {
+  const line = String(content);
+  let indent = 0;
+  while (indent < line.length && line[indent] === " ") indent += 1;
+  if (indent > 3) return false;
+  const rest = line.slice(indent);
+  if (!rest.startsWith(">")) return false;
+  const afterGt = rest.slice(1).replace(/^[ \t]+/, "");
+  if (!afterGt.startsWith("[")) return false;
+  const close = afterGt.indexOf("]");
+  if (close < 0) return false;
+  const inner = afterGt.slice(1, close).trim();
+  if (!inner.startsWith("!")) return false;
+  if (inner.slice(1).toLowerCase() !== String(callout).toLowerCase()) return false;
+  let tail = afterGt.slice(close + 1).replace(/^[ \t]+/, "");
+  if (tail.startsWith("-") || tail.startsWith("+")) tail = tail.slice(1);
+  return !tail.replace(/^[ \t]+/, "").startsWith("|");
+}
+
+// True when `content` is a blockquote line: at most 3 spaces, then `>`.
+function propertyCardCabinetIsQuoteLine(content) {
+  const line = String(content);
+  let indent = 0;
+  while (indent < line.length && line[indent] === " ") indent += 1;
+  if (indent > 3) return false;
+  return line.slice(indent).startsWith(">");
+}
+
+function propertyCardCabinetNameChars(value) {
+  return /^[A-Za-z0-9_-]+$/.test(value);
+}
+
+// A real, malformed opener for a strict callout: `[!{callout}...` that is
+// not a valid head. Limited to the exact callout name, so `[!albums-card]`
+// stays authored content. Mirrors region.rs.
+function propertyCardCabinetMalformedHead(lines, real, callout, at) {
+  if (!real(at)) return -1;
+  if (propertyCardCabinetIsCalloutHead(lines[at], callout)) return -1;
+  const line = String(lines[at]);
+  let indent = 0;
+  while (indent < line.length && line[indent] === " ") indent += 1;
+  if (indent > 3) return -1;
+  const rest = line.slice(indent);
+  if (!rest.startsWith(">")) return -1;
+  const afterGt = rest.slice(1).replace(/^[ \t]+/, "");
+  if (!afterGt.startsWith("[!")) return -1;
+  const name = afterGt.slice(2).split(/[^A-Za-z0-9_-]/)[0] || "";
+  if (!propertyCardCabinetNameChars(name)) return -1;
+  return name.toLowerCase() === String(callout).toLowerCase() ? at : -1;
+}
+
+// FNV-1a over the owned bytes: cheap, stable, and enough to notice a vault
+// change between claim and paint.
+function propertyCardCabinetFingerprint(bytes) {
+  let hash = 0x811c9dc5;
+  const source = String(bytes);
+  for (let index = 0; index < source.length; index += 1) {
+    hash ^= source.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return `fnv1a:${hash.toString(16).padStart(8, "0")}`;
+}
+
+function propertyCardCabinetDamage(line, message) {
+  return { line, message: String(message) };
+}
+
+// Scan one note for one spec. Returns { kind, regions, damage }: regions are
+// 1-based { startLine, endLine, lines, legacy } in document order, and at most
+// one region may hide. Duplicates are damage, never a guess.
+function propertyCardCatalogScanSpec(text, spec) {
+  const kind = spec.kind;
+  const split = propertyCardCabinetSplitLines(text);
+  const lines = split.lines;
+  const bodyFirst = propertyCardCabinetFrontmatterEnd(lines);
+  const fenced = new Array(lines.length).fill(false);
+  let open = null;
+  for (let index = bodyFirst; index < lines.length; index += 1) {
+    if (open) {
+      fenced[index] = true;
+      if (propertyCardCabinetClosesFence(lines[index], open)) open = null;
+    } else {
+      const marker = propertyCardCabinetFenceMarker(lines[index]);
+      if (marker) {
+        fenced[index] = true;
+        open = marker;
+      }
+    }
+  }
+  const real = (index) => index >= bodyFirst && index < lines.length && !fenced[index];
+
+  if (spec.strictBare) {
+    for (let index = bodyFirst; index < lines.length; index += 1) {
+      const at = propertyCardCabinetMalformedHead(lines, real, spec.callout, index);
+      if (at >= 0) {
+        return { kind, regions: [], damage: propertyCardCabinetDamage(at + 1, `malformed [!${spec.callout}] callout head; repair the catalog by hand`) };
+      }
+    }
+  }
+
+  let legacy = null;
+  if (spec.legacy) {
+    const begins = [];
+    const ends = [];
+    for (let index = 0; index < lines.length; index += 1) {
+      if (!real(index)) continue;
+      const trimmed = String(lines[index]).trim();
+      if (trimmed === spec.legacy.begin) begins.push(index);
+      else if (trimmed === spec.legacy.end) ends.push(index);
+      else if (String(lines[index]).includes(spec.legacy.opener)) {
+        return { kind, regions: [], damage: propertyCardCabinetDamage(index + 1, `unsupported or malformed ${spec.legacy.noun} marker; repair the old markers by hand`) };
+      }
+    }
+    if (begins.length === 0 && ends.length === 0) legacy = null;
+    else if (begins.length === 1 && ends.length === 1 && begins[0] < ends[0]) legacy = { begin: begins[0], end: ends[0] };
+    else {
+      const first = Math.min(...begins, ...ends);
+      const message = begins.length === 0
+        ? `${spec.legacy.noun} end marker has no begin marker; repair the old markers by hand`
+        : ends.length === 0
+          ? `${spec.legacy.noun} begin marker has no end marker; repair the old markers by hand`
+          : begins[0] > ends[0]
+            ? `${spec.legacy.noun} markers are reversed; repair the old markers by hand`
+            : `${spec.legacy.noun} markers are duplicated; repair the old markers by hand`;
+      return { kind, regions: [], damage: propertyCardCabinetDamage(first + 1, message) };
+    }
+  }
+
+  const bare = [];
+  let index = bodyFirst;
+  while (index < lines.length) {
+    if (!real(index) || !propertyCardCabinetIsCalloutHead(lines[index], spec.callout)) {
+      index += 1;
+      continue;
+    }
+    let end = index;
+    let next = index + 1;
+    while (next < lines.length && real(next) && propertyCardCabinetIsQuoteLine(lines[next])) {
+      end = next;
+      next += 1;
+    }
+    bare.push([index, end]);
+    index = end + 1;
+  }
+
+  const regions = [];
+  if (legacy) regions.push({ start: legacy.begin, end: legacy.end, legacy: true });
+  for (const [start, end] of bare) {
+    if (legacy && start >= legacy.begin && end <= legacy.end) continue;
+    regions.push({ start, end, legacy: false });
+  }
+  regions.sort((a, b) => a.start - b.start);
+
+  if (regions.length > 1) {
+    return { kind, regions: [], damage: propertyCardCabinetDamage(regions[0].start + 1, `duplicate [!${spec.callout}] catalog; repair the catalog by hand`) };
+  }
+  return {
+    kind,
+    regions: regions.map((region) => ({
+      startLine: region.start + 1,
+      endLine: region.end + 1,
+      lines: lines.slice(region.start, region.end + 1),
+      legacy: region.legacy,
+    })),
+    damage: null,
+  };
+}
+
+// Recognize every catalog kind in `text`. Mirrors region.rs and
+// records_spec: case-insensitive heads, optional fold signs, frontmatter and
+// fences ignored, and the records head title. Never throws.
+function propertyCardCatalogRegions(text) {
+  try {
+    const out = {};
+    for (const spec of PROPERTY_CARD_CABINET_REGION_SPECS) {
+      out[spec.kind] = propertyCardCatalogScanSpec(text, spec);
+    }
+    return out;
+  } catch (_) {
+    return {};
+  }
+}
+
+// The hideable plan for one kind: the callout span plus the H2 heading line
+// when the section (up to the next heading of level 2 or less, or EOF)
+// holds nothing but the callout and whitespace. A heading whose text differs
+// is never adopted. Returns { kind, startLine, endLine, headingLine|null,
+// fingerprint, damage|null } with 1-based lines, or null when absent.
+function propertyCardCatalogRegionForHide(text, kind) {
+  try {
+    const spec = propertyCardCabinetRegionSpec(kind);
+    if (!spec) return null;
+    const split = propertyCardCabinetSplitLines(text);
+    const lines = split.lines;
+    const scan = propertyCardCatalogScanSpec(text, spec);
+    if (scan.damage) return { kind, startLine: null, endLine: null, headingLine: null, fingerprint: null, damage: scan.damage };
+    if (scan.regions.length === 0) return null;
+    const region = scan.regions[0];
+    const bodyFirst = propertyCardCabinetFrontmatterEnd(lines);
+
+    let headingLine = null;
+    for (let at = 0; at < lines.length; at += 1) {
+      if (at < bodyFirst) continue;
+      const heading = propertyCardCabinetAtxHeading(lines[at]);
+      if (!heading || heading.level !== 2 || heading.title !== spec.heading) continue;
+      const sectionEnd = (() => {
+        for (let next = at + 1; next < lines.length; next += 1) {
+          if (next < bodyFirst) continue;
+          const following = propertyCardCabinetAtxHeading(lines[next]);
+          if (following && following.level <= 2) return next;
+        }
+        return lines.length;
+      })();
+      if (region.startLine - 1 < at + 1 || region.startLine - 1 >= sectionEnd) continue;
+      let authored = false;
+      for (let row = at + 1; row < sectionEnd; row += 1) {
+        if (row >= region.startLine - 1 && row <= region.endLine - 1) continue;
+        if (String(lines[row]).trim() !== "") {
+          authored = true;
+          break;
+        }
+      }
+      if (!authored) headingLine = at + 1;
+      break;
+    }
+
+    const fingerprint = propertyCardCabinetFingerprint(`${spec.callout}\n${region.lines.join("\n")}`);
+    return { kind, startLine: region.startLine, endLine: region.endLine, headingLine, fingerprint, damage: null };
+  } catch (_) {
+    return null;
+  }
+}
+// ---- src/240wg-plugin-cabinet-absorb-editor.js ----
+// Cabinet Live Preview absorption (bob-cli-qq absorption): one StateField
+// that hides a claimed catalog region at render time. Modeled on the title
+// ownership kit (240i): a pure reducer with injectable deps, a refresh
+// effect, strict-inside reveal, and atomic ranges (ladder rung b) so Vim
+// motion never strands an invisible cursor. Fail-open everywhere: Source
+// mode, embeds, hover, canvas, and print carry no claim, so the stored
+// section renders natively. Never throws.
+const PROPERTY_CARD_CABINET_ABSORB_ATTRS = Object.freeze({ class: "bob-cabinet-absorbed" });
+
+// Lazy CodeMirror pieces, created on first use like the title kit.
+let propertyCardCabinetAbsorbEffectType = null;
+let propertyCardCabinetAbsorbFieldType = null;
+let propertyCardCabinetAbsorbGeneration = 0;
+const propertyCardCabinetAbsorbOwners = new WeakMap();
+
+function propertyCardCabinetAbsorbEnsureEffect() {
+  if (!propertyCardCabinetAbsorbEffectType) {
+    try {
+      if (typeof StateEffect !== "undefined" && StateEffect && typeof StateEffect.define === "function") {
+        propertyCardCabinetAbsorbEffectType = StateEffect.define();
+      }
+    } catch (_) {
+      propertyCardCabinetAbsorbEffectType = null;
+    }
+  }
+  return propertyCardCabinetAbsorbEffectType;
+}
+
+function propertyCardCabinetAbsorbFieldCreate() {
+  return { claim: null, ranges: [], revealed: false };
+}
+
+function propertyCardCabinetAbsorbStateField(state, field) {
+  if (!field || !state || typeof state.field !== "function") return undefined;
+  try {
+    return state.field(field, false);
+  } catch (_) {
+    return undefined;
+  }
+}
+
+function propertyCardCabinetAbsorbLineStarts(text) {
+  const starts = [0];
+  const source = String(text);
+  for (let index = 0; index < source.length; index += 1) {
+    if (source[index] === "\n") starts.push(index + 1);
+  }
+  return starts;
+}
+
+// Hidden doc ranges for one hide plan: the heading when hideable, the
+// callout, and one following blank line so no empty gap remains.
+function propertyCardCabinetAbsorbRangesForPlan(text, plan) {
+  if (!plan || plan.startLine == null || plan.endLine == null) return [];
+  const source = String(text == null ? "" : text);
+  const starts = propertyCardCabinetAbsorbLineStarts(source);
+  const lineStart = (line) => starts[Math.min(Math.max(line - 1, 0), starts.length - 1)] ?? source.length;
+  const lineEnd = (line) => {
+    const at = Math.min(Math.max(line - 1, 0), starts.length - 1);
+    const next = starts[at + 1];
+    let end = next == null ? source.length : next;
+    if (end > starts[at] && source[end - 1] === "\n") end -= 1;
+    if (end > starts[at] && source[end - 1] === "\r") end -= 1;
+    return end;
+  };
+  const from = lineStart(plan.headingLine != null ? plan.headingLine : plan.startLine);
+  let toLine = plan.endLine;
+  const after = String(source.split(/\r\n|\r|\n/)[plan.endLine] ?? "");
+  if (after.trim() === "") toLine = plan.endLine + 1;
+  return [{ from, to: lineEnd(toLine) }];
+}
+
+// Strictly inside: both selection ends are strictly within the range.
+// Boundary contact never reveals, so a cursor parked at the edge of a
+// hidden range keeps the cabinet standing in for it.
+function propertyCardCabinetSelectionStrictlyInside(selection, range) {
+  try {
+    if (!selection || !range) return false;
+    const points = [];
+    if (typeof selection.anchor === "number" && typeof selection.head === "number") {
+      points.push(selection.anchor, selection.head);
+    }
+    for (const sub of selection.ranges || []) {
+      if (typeof sub?.from === "number" && typeof sub?.to === "number") points.push(sub.from, sub.to);
+      if (typeof sub?.anchor === "number" && typeof sub?.head === "number") points.push(sub.anchor, sub.head);
+    }
+    if (points.length === 0) return false;
+    return points.every((point) => point > range.from && point < range.to);
+  } catch (_) {
+    return false;
+  }
+}
+
+// Pure reducer behind the StateField. tr needs effects, docChanged, state
+// ({ doc, selection, field }), and startState. deps may inject { effect,
+// livePreviewField, infoField, text } for tests.
+function propertyCardCabinetAbsorbFieldReduce(value, tr, deps = {}) {
+  const current = value && typeof value === "object" ? value : propertyCardCabinetAbsorbFieldCreate();
+  try {
+    const effectType = deps.effect || propertyCardCabinetAbsorbEffectType;
+    const liveField = Object.prototype.hasOwnProperty.call(deps, "livePreviewField")
+      ? deps.livePreviewField
+      : (typeof editorLivePreviewField !== "undefined" ? editorLivePreviewField : undefined);
+    const infoField = Object.prototype.hasOwnProperty.call(deps, "infoField")
+      ? deps.infoField
+      : (typeof editorInfoField !== "undefined" ? editorInfoField : undefined);
+    let claim = current.claim || null;
+    for (const effect of tr?.effects || []) {
+      if (!effectType || typeof effect?.is !== "function" || !effect.is(effectType)) continue;
+      const payload = effect.value || {};
+      if (payload.absorb && typeof payload.absorb.path === "string" && typeof payload.absorb.kind === "string") {
+        claim = {
+          path: payload.absorb.path,
+          kind: payload.absorb.kind,
+          fingerprint: payload.absorb.fingerprint == null ? null : String(payload.absorb.fingerprint),
+          generation: payload.absorb.generation == null ? null : payload.absorb.generation,
+          rung: payload.absorb.rung === "replace" ? "replace" : "atomic",
+        };
+      } else if (payload.release !== undefined && claim && claim.generation === payload.release) {
+        claim = null;
+      }
+    }
+    const state = tr?.state;
+    if (claim) {
+      if (propertyCardCabinetAbsorbStateField(state, liveField) === false) claim = null;
+    }
+    if (claim) {
+      const info = propertyCardCabinetAbsorbStateField(state, infoField);
+      if (info && (info.file?.path ?? null) !== claim.path) claim = null;
+    }
+    let ranges = current.ranges || [];
+    if (!claim) {
+      ranges = [];
+    } else if (claim !== current.claim || tr?.docChanged) {
+      const doc = state?.doc;
+      const text = deps.text !== undefined
+        ? deps.text
+        : (doc && typeof doc.toString === "function"
+          ? doc.toString()
+          : (typeof doc?.sliceString === "function" && typeof doc?.length === "number"
+            ? doc.sliceString(0, doc.length)
+            : (typeof state?.doc === "string" ? state.doc : "")));
+      const plan = propertyCardCatalogRegionForHide(text, claim.kind);
+      if (!plan || plan.damage || (claim.fingerprint != null && plan.fingerprint !== claim.fingerprint)) {
+        claim = null;
+        ranges = [];
+      } else {
+        ranges = propertyCardCabinetAbsorbRangesForPlan(text, plan);
+      }
+    }
+    const selection = state?.selection;
+    const revealed = ranges.length > 0 && ranges.some((range) => propertyCardCabinetSelectionStrictlyInside(selection, range));
+    if (claim === current.claim && ranges === current.ranges && revealed === current.revealed) return current;
+    return { claim, ranges, revealed };
+  } catch (_) {
+    return propertyCardCabinetAbsorbFieldCreate();
+  }
+}
+
+function propertyCardCabinetAbsorbFieldDecorations(value) {
+  let none = null;
+  try {
+    none = (typeof Decoration !== "undefined" && Decoration && Decoration.none !== undefined) ? Decoration.none : null;
+  } catch (_) {
+    none = null;
+  }
+  try {
+    if (!value?.claim || !value.ranges || value.ranges.length === 0 || value.revealed) return none;
+    if (typeof Decoration === "undefined" || !Decoration || typeof Decoration.replace !== "function") return none;
+    const built = value.ranges.map((range) => {
+      const replace = Decoration.replace({ block: true });
+      if (replace && typeof replace.range === "function") return replace.range(range.from, range.to);
+      return { from: range.from, to: range.to, value: replace };
+    });
+    if (typeof Decoration.set === "function") return Decoration.set(built);
+    if (typeof RangeSetBuilder !== "undefined" && RangeSetBuilder) {
+      const builder = new RangeSetBuilder();
+      for (const span of built) {
+        if (span && typeof span.from === "number") builder.add(span.from, span.to, span.value !== undefined ? span.value : span);
+        else if (span && typeof builder.add === "function") builder.add(span.from, span.to, span);
+      }
+      return builder.finish();
+    }
+    return built;
+  } catch (_) {
+    return none;
+  }
+}
+
+// Atomic ranges for the same hidden spans (ladder rung b): the cursor maps
+// around them, so Vim motion never lands inside a replaced range. Rung
+// "replace" (ladder rung a) skips them, so the spike can measure the bare
+// replace behavior against the atomic one.
+function propertyCardCabinetAbsorbAtomicRanges(value) {
+  try {
+    if (!value?.claim || !value.ranges || value.ranges.length === 0 || value.revealed) return [];
+    if ((value.claim.rung || "atomic") === "replace") return [];
+    return value.ranges.map((range) => ({ from: range.from, to: range.to }));
+  } catch (_) {
+    return [];
+  }
+}
+
+// True when a document position falls strictly inside a hidden span: the
+// navigation hook calls the claim's reveal() instead of moving the cursor.
+function propertyCardCabinetAbsorbShouldReveal(value, pos) {
+  try {
+    if (typeof pos !== "number" || !value?.ranges) return false;
+    return value.ranges.some((range) => pos > range.from && pos < range.to);
+  } catch (_) {
+    return false;
+  }
+}
+
+// The StateField plus atomic ranges for every Live Preview editor. Returns
+// null (the caller registers nothing) when any CodeMirror piece is missing.
+function propertyCardCabinetAbsorbEditorExtension() {
+  try {
+    if (propertyCardCabinetAbsorbFieldType) return propertyCardCabinetAbsorbFieldType;
+    if (typeof StateField === "undefined" || !StateField || typeof StateField.define !== "function") return null;
+    if (typeof Decoration === "undefined" || !Decoration || typeof Decoration.replace !== "function") return null;
+    if (typeof EditorView === "undefined" || !EditorView) return null;
+    if (typeof EditorView.decorations?.from !== "function") return null;
+    if (!propertyCardCabinetAbsorbEnsureEffect()) return null;
+    const field = StateField.define({
+      create: () => propertyCardCabinetAbsorbFieldCreate(),
+      update: (value, tr) => propertyCardCabinetAbsorbFieldReduce(value, tr),
+      provide: (defined) => {
+        const extensions = [EditorView.decorations.from(defined, (value) => propertyCardCabinetAbsorbFieldDecorations(value))];
+        if (EditorView.atomicRanges && typeof EditorView.atomicRanges.of === "function") {
+          extensions.push(EditorView.atomicRanges.of((view) => {
+            try {
+              return propertyCardCabinetAbsorbAtomicRanges(view.state.field(defined, false));
+            } catch (_) {
+              return [];
+            }
+          }));
+        }
+        return extensions;
+      },
+    });
+    propertyCardCabinetAbsorbFieldType = field;
+    return field;
+  } catch (_) {
+    propertyCardCabinetAbsorbFieldType = null;
+    return null;
+  }
+}
+
+function propertyCardCabinetAbsorbDefer(callback) {
+  if (typeof queueMicrotask === "function") queueMicrotask(callback);
+  else Promise.resolve().then(callback);
+}
+
+function propertyCardCabinetAbsorbEditorDispatch(view, payload) {
+  const effect = propertyCardCabinetAbsorbEnsureEffect();
+  if (!effect) return;
+  try {
+    view.dispatch({ effects: effect.of(payload) });
+  } catch (_) {}
+}
+
+// Claim a region in one Live Preview editor. The claim only hides while a
+// mounted cabinet vouches for it: pass the cabinet's release alongside so a
+// failed body build unhides in the same frame. `options.rung` selects the
+// hide ladder rung ("atomic" by default, "replace" for the bare rung a).
+// Returns an idempotent release function (with .generation), or null when
+// the editor cannot carry it.
+function propertyCardCabinetAbsorbInEditor(view, options = {}) {
+  try {
+    if (!view || typeof view.dispatch !== "function") return null;
+    const path = String(options?.path || "");
+    const kind = String(options?.kind || "");
+    if (!path || !kind || !propertyCardCabinetRegionSpec(kind)) return null;
+    if (!propertyCardCabinetAbsorbEnsureEffect()) return null;
+    try {
+      if (typeof editorLivePreviewField !== "undefined" && propertyCardCabinetAbsorbStateField(view.state, editorLivePreviewField) === false) return null;
+    } catch (_) {
+      return null;
+    }
+    if (typeof propertyCardCabinetAbsorbEditorExtension !== "function") return null;
+    if (!propertyCardCabinetAbsorbEditorExtension()) return null;
+    const defer = typeof options.defer === "function" ? options.defer : propertyCardCabinetAbsorbDefer;
+    const current = propertyCardCabinetAbsorbOwners.get(view);
+    if (current && !current.released && current.path === path && current.kind === kind) return current.handle;
+    propertyCardCabinetAbsorbGeneration += 1;
+    const entry = {
+      view, path, kind, defer,
+      fingerprint: options?.fingerprint == null ? null : String(options.fingerprint),
+      rung: options?.rung === "replace" ? "replace" : "atomic",
+      generation: propertyCardCabinetAbsorbGeneration, pending: false, released: false, handle: null,
+    };
+    if (current && !current.released) {
+      current.released = true;
+      current.defer(() => propertyCardCabinetAbsorbEditorDispatch(current.view, { release: current.generation }));
+    }
+    const handle = () => {
+      if (entry.released) return;
+      entry.released = true;
+      if (propertyCardCabinetAbsorbOwners.get(view) !== entry) return;
+      propertyCardCabinetAbsorbOwners.delete(view);
+      entry.defer(() => propertyCardCabinetAbsorbEditorDispatch(entry.view, { release: entry.generation }));
+    };
+    handle.generation = entry.generation;
+    entry.handle = handle;
+    propertyCardCabinetAbsorbOwners.set(view, entry);
+    entry.pending = true;
+    entry.defer(() => {
+      entry.pending = false;
+      if (entry.released || propertyCardCabinetAbsorbOwners.get(view) !== entry) return;
+      propertyCardCabinetAbsorbEditorDispatch(view, {
+        absorb: { path: entry.path, kind: entry.kind, fingerprint: entry.fingerprint, generation: entry.generation, rung: entry.rung },
+      });
+    });
+    return handle;
+  } catch (_) {
+    return null;
+  }
+}
+// ---- src/240wh-plugin-cabinet-absorb-reading.js ----
+// Cabinet Reading absorption (bob-cli-qq absorption): source-aware section
+// tagging that hides a claimed catalog region in Reading view, modeled on
+// the title ownership kit (240i). The recognized callout element and, when
+// hideable, its H2 get the absorbed class (kit CSS hides them); section
+// wrappers, cards, and embeds are never tagged. Re-scan on claim change;
+// print and export are left untouched. Never throws.
+const PROPERTY_CARD_CABINET_ABSORBED_CLASS = "bob-cabinet-absorbed";
+const PROPERTY_CARD_CABINET_READING_SKIP = Object.freeze([
+  "mod-header", "mod-frontmatter", "markdown-preview-pusher", "mod-footer",
+]);
+
+function propertyCardCabinetReadingElements(node) {
+  try {
+    return Array.from(node?.children || []).filter((child) => child && child.nodeType === 1);
+  } catch (_) {
+    return [];
+  }
+}
+
+function propertyCardCabinetReadingDenied(node) {
+  try {
+    if (!node || typeof node.closest !== "function") return true;
+    return Boolean(node.closest(".canvas-node, .canvas-node-content, .print, .markdown-embed"));
+  } catch (_) {
+    return true;
+  }
+}
+
+function propertyCardCabinetReadingCalloutName(node) {
+  try {
+    if (!node || node.nodeType !== 1) return null;
+    const direct = node.getAttribute?.("data-callout");
+    if (typeof direct === "string" && direct !== "") return direct.toLowerCase();
+    const tagged = node.querySelector?.("[data-callout]");
+    if (tagged && tagged !== node && typeof tagged.getAttribute === "function") {
+      const name = tagged.getAttribute("data-callout");
+      if (typeof name === "string" && name !== "") return name.toLowerCase();
+    }
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
+
+// Collect the Reading targets for one hide plan: the callout element and,
+// when hideable, its H2. Sections are scanned source-aware like 240i: skip
+// chrome sections, stop at cards and embeds, and never tag wrappers.
+function propertyCardCabinetAbsorbReadingTargets(scope, plan) {
+  const found = { callout: null, heading: null };
+  try {
+    if (!scope || !plan || plan.startLine == null) return found;
+    const spec = propertyCardCabinetRegionSpec(plan.kind);
+    if (!spec) return found;
+    const sizer = propertyCardCabinetReadingElements(scope)
+      .find((node) => node.classList?.contains("markdown-preview-sizer"));
+    if (!sizer) return found;
+    for (const section of propertyCardCabinetReadingElements(sizer)) {
+      if (PROPERTY_CARD_CABINET_READING_SKIP.some((name) => section.classList?.contains(name))) continue;
+      if (propertyCardCabinetReadingDenied(section)) continue;
+      try {
+        if (section.classList?.contains("bob-property-card") || section.querySelector?.(".bob-property-card")) continue;
+      } catch (_) {
+        continue;
+      }
+      for (const node of propertyCardCabinetReadingElements(section)) {
+        if (propertyCardCabinetReadingDenied(node)) continue;
+        try {
+          if (node.classList?.contains("bob-property-card") || node.querySelector?.(".bob-property-card")) continue;
+        } catch (_) {
+          continue;
+        }
+        const tag = String(node.tagName || "").toUpperCase();
+        if (plan.headingLine != null && tag === "H2" && !found.heading) {
+          const text = String(node.textContent ?? "").trim();
+          if (text === spec.heading || text.replace(/#+\s*$/, "").trim() === spec.heading) found.heading = node;
+        }
+        if (!found.callout) {
+          const name = propertyCardCabinetReadingCalloutName(node);
+          if (name === spec.callout) found.callout = node;
+          else if (tag === "DIV" && node.classList?.contains("callout")) {
+            const title = node.querySelector?.(".callout-title");
+            const label = String(title?.textContent ?? "").trim().toLowerCase();
+            if (label === spec.callout || label.startsWith(`${spec.callout} `)) found.callout = node;
+          }
+        }
+        if (found.callout && (plan.headingLine == null || found.heading)) break;
+      }
+      if (found.callout && (plan.headingLine == null || found.heading)) break;
+    }
+    return found;
+  } catch (_) {
+    return found;
+  }
+}
+
+function propertyCardCabinetAbsorbTagNode(node, on) {
+  try {
+    if (!node || !node.classList) return;
+    if (on) node.classList.add(PROPERTY_CARD_CABINET_ABSORBED_CLASS);
+    else node.classList.remove(PROPERTY_CARD_CABINET_ABSORBED_CLASS);
+  } catch (_) {}
+}
+
+// Paint (or clear) the Reading absorption for one claim. Returns the tagged
+// nodes so the caller can untag on claim change without a full re-scan.
+function propertyCardCabinetAbsorbPaintReading(scope, plan, on = true) {
+  try {
+    const targets = propertyCardCabinetAbsorbReadingTargets(scope, plan);
+    const tagged = [];
+    if (targets.callout) {
+      propertyCardCabinetAbsorbTagNode(targets.callout, on);
+      if (on) tagged.push(targets.callout);
+    }
+    if (targets.heading) {
+      propertyCardCabinetAbsorbTagNode(targets.heading, on);
+      if (on) tagged.push(targets.heading);
+    }
+    return tagged;
+  } catch (_) {
+    return [];
+  }
+}
+
+function propertyCardCabinetAbsorbUntagReading(nodes) {
+  try {
+    for (const node of nodes || []) propertyCardCabinetAbsorbTagNode(node, false);
+  } catch (_) {}
+}
+
+// Re-scan every claim in `claims` ({ plan } entries) against `scope`,
+// clearing stale tags first. Returns the newly tagged nodes.
+function propertyCardCabinetAbsorbRescanReading(scope, claims, previous) {
+  try {
+    propertyCardCabinetAbsorbUntagReading(previous);
+    const tagged = [];
+    for (const claim of claims || []) {
+      if (!claim || !claim.plan) continue;
+      for (const node of propertyCardCabinetAbsorbPaintReading(scope, claim.plan, true)) tagged.push(node);
+    }
+    return tagged;
+  } catch (_) {
+    return [];
+  }
+}
+// ---- src/240wi-plugin-cabinet-claims.js ----
+// Cabinet ownership claims (bob-cli-qq absorption): fingerprinted claims
+// that one mounted cabinet stands in for one stored catalog region in one
+// view. Invariant: a valid stored catalog is never hidden without a working
+// cabinet for it in that view. Claims are bound to a mount generation and
+// released on unmount, file change, mode change, and unload; a fingerprint
+// mismatch reads as unclaimed. Never throws.
+const PROPERTY_CARD_CABINET_CLAIMS = new WeakMap();
+const PROPERTY_CARD_CABINET_CLAIM_VIEWS = new Set();
+const PROPERTY_CARD_CABINET_STAND_DOWN_CLASS = "bob-property-card-cabinets";
+
+function propertyCardCatalogClaimStore(view, create) {
+  if (!view || (typeof view !== "object" && typeof view !== "function")) return null;
+  let store = PROPERTY_CARD_CABINET_CLAIMS.get(view);
+  if (!store && create) {
+    store = new Map();
+    PROPERTY_CARD_CABINET_CLAIMS.set(view, store);
+    PROPERTY_CARD_CABINET_CLAIM_VIEWS.add(view);
+  }
+  return store || null;
+}
+
+// Claim one region for one mounted cabinet. `reveal` opens the cabinet and
+// scrolls its header into view. Returns a release function; releasing twice
+// is a no-op. Never throws.
+function propertyCardCatalogClaim(options) {
+  const noop = () => {};
+  try {
+    const { view, path, kind, fingerprint, generation, reveal } = options || {};
+    if (!view || typeof path !== "string" || typeof kind !== "string") return noop;
+    const store = propertyCardCatalogClaimStore(view, true);
+    if (!store) return noop;
+    const key = `${path}\u0000${kind}`;
+    const claim = {
+      path,
+      kind,
+      fingerprint: fingerprint == null ? null : String(fingerprint),
+      generation: generation == null ? null : generation,
+      reveal: typeof reveal === "function" ? reveal : null,
+      released: false,
+    };
+    store.set(key, claim);
+    let done = false;
+    return () => {
+      if (done) return;
+      done = true;
+      try {
+        claim.released = true;
+        if (store.get(key) === claim) store.delete(key);
+      } catch (_) {}
+    };
+  } catch (_) {
+    return noop;
+  }
+}
+
+function propertyCardCatalogClaimEntry(view, path, kind) {
+  try {
+    const store = propertyCardCatalogClaimStore(view, false);
+    if (!store) return null;
+    return store.get(`${path}\u0000${kind}`) || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+// True when a live claim covers `path`/`kind` in `view`: mounted, not
+// released, generation matches, and fingerprint matches.
+function propertyCardCatalogClaimed(view, path, kind, fingerprint, generation) {
+  try {
+    const claim = propertyCardCatalogClaimEntry(view, path, kind);
+    if (!claim || claim.released) return false;
+    if (generation !== undefined && claim.generation !== generation) return false;
+    if (fingerprint != null && claim.fingerprint !== String(fingerprint)) return false;
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+// True when `view` (or an element inside it) has a live claim covering
+// `path`/`kind`. Painters use this to stand down inline painting.
+function propertyCardCatalogAbsorbed(viewOrEl, path, kind) {
+  try {
+    if (!viewOrEl) return false;
+    if (PROPERTY_CARD_CABINET_CLAIMS.has(viewOrEl)) {
+      return propertyCardCatalogClaimEntry(viewOrEl, path, kind) != null
+        && !propertyCardCatalogClaimEntry(viewOrEl, path, kind).released;
+    }
+    if (typeof viewOrEl.closest === "function") {
+      const view = viewOrEl.closest("[data-bob-cabinet-view]");
+      if (view && propertyCardCatalogClaimEntry(view, path, kind)) {
+        const claim = propertyCardCatalogClaimEntry(view, path, kind);
+        return !claim.released;
+      }
+    }
+    return false;
+  } catch (_) {
+    return false;
+  }
+}
+
+// The painter stand-down check: skip inline painting when the node already
+// lives inside a cabinet body or an absorbed claim covers it.
+function propertyCardCabinetStandDown(el, view, path, kind) {
+  try {
+    if (el && typeof el.closest === "function") {
+      try {
+        if (el.closest(`.${PROPERTY_CARD_CABINET_STAND_DOWN_CLASS}`)) return true;
+      } catch (_) {}
+    }
+    if (view && path && kind) return propertyCardCatalogAbsorbed(view, path, kind);
+    return false;
+  } catch (_) {
+    return false;
+  }
+}
+
+// Run the claim's reveal (open the cabinet, scroll its head into view) for
+// heading navigation into a hidden range. Returns true when revealed.
+function propertyCardCatalogRevealClaim(view, path, kind) {
+  try {
+    const claim = propertyCardCatalogClaimEntry(view, path, kind);
+    if (!claim || claim.released || typeof claim.reveal !== "function") return false;
+    claim.reveal();
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+// Release every claim held for one view (unmount, file change, mode change).
+function propertyCardCatalogReleaseScope(view) {
+  try {
+    const store = propertyCardCatalogClaimStore(view, false);
+    if (!store) return 0;
+    let count = 0;
+    for (const claim of store.values()) {
+      try {
+        claim.released = true;
+        count += 1;
+      } catch (_) {}
+    }
+    store.clear();
+    return count;
+  } catch (_) {
+    return 0;
+  }
+}
+
+// Release every claim everywhere (plugin unload). Returns the count.
+function propertyCardCatalogReleaseAll() {
+  try {
+    let count = 0;
+    for (const view of [...PROPERTY_CARD_CABINET_CLAIM_VIEWS]) {
+      try {
+        count += propertyCardCatalogReleaseScope(view);
+      } catch (_) {}
+    }
+    return count;
+  } catch (_) {
+    return 0;
+  }
+}
+// ---- src/240wj-plugin-cabinet-catalog-body.js ----
+// Cabinet catalog body renderer (bob-cli-qq absorption): a generic
+// renderer that paints one stored callout region through MarkdownRenderer
+// under the mount's Component, binds links and hover like the inline path,
+// and caches the painted body by paintKey so card repaints re-attach the
+// same nodes (keeping interior fold state, avoiding flicker). On a throw it
+// releases the claim and shows the "Couldn't render" line, so the stored
+// section returns in the same frame. Never throws.
+const PROPERTY_CARD_CABINET_BODY_CACHE = new Map();
+const PROPERTY_CARD_CABINET_BODY_CACHE_LIMIT = 40;
+
+function propertyCardCabinetBodyCacheKey(path, paintKey) {
+  return `${String(path)}\u0000${String(paintKey)}`;
+}
+
+function propertyCardCabinetBodyCacheGet(path, paintKey) {
+  try {
+    if (paintKey == null) return null;
+    const node = PROPERTY_CARD_CABINET_BODY_CACHE.get(propertyCardCabinetBodyCacheKey(path, paintKey));
+    return node || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function propertyCardCabinetBodyCacheSet(path, paintKey, node) {
+  try {
+    if (paintKey == null || !node) return;
+    PROPERTY_CARD_CABINET_BODY_CACHE.set(propertyCardCabinetBodyCacheKey(path, paintKey), node);
+    while (PROPERTY_CARD_CABINET_BODY_CACHE.size > PROPERTY_CARD_CABINET_BODY_CACHE_LIMIT) {
+      const oldest = PROPERTY_CARD_CABINET_BODY_CACHE.keys().next();
+      if (oldest.done) break;
+      PROPERTY_CARD_CABINET_BODY_CACHE.delete(oldest.value);
+    }
+  } catch (_) {}
+}
+
+function propertyCardCabinetBodyCacheDrop(path, paintKey) {
+  try {
+    if (paintKey == null) return;
+    PROPERTY_CARD_CABINET_BODY_CACHE.delete(propertyCardCabinetBodyCacheKey(path, paintKey));
+  } catch (_) {}
+}
+
+function propertyCardCabinetRenderFailureLine(doc, message) {
+  try {
+    const line = doc.createElement("div");
+    line.setAttribute("class", "bob-cabinet-body-failure");
+    line.appendChild(doc.createTextNode(String(message || "Couldn't render — showing the note's section")));
+    return line;
+  } catch (_) {
+    return null;
+  }
+}
+
+function propertyCardCabinetBindBodyLinks(container, path, plugin) {
+  try {
+    const links = container.querySelectorAll ? Array.from(container.querySelectorAll("a.internal-link")) : [];
+    for (const link of links) {
+      if (!link || link.__bobCabinetBound) continue;
+      link.__bobCabinetBound = true;
+      link.addEventListener("click", (event) => {
+        try {
+          if (event.defaultPrevented) return;
+          const href = link.getAttribute("data-href") || link.getAttribute("href") || "";
+          const target = String(href).split("#")[0];
+          if (!target) return;
+          event.preventDefault();
+          const app = plugin?.app;
+          const open = app?.workspace?.openLinkText;
+          if (typeof open === "function") {
+            open.call(app.workspace, target, String(path || ""), event.ctrlKey || event.metaKey);
+          }
+        } catch (_) {}
+      });
+      link.addEventListener("mouseover", (event) => {
+        try {
+          const href = link.getAttribute("data-href") || link.getAttribute("href") || "";
+          if (!href) return;
+          if (typeof propertyCardFootAdapterHoverLink === "function") {
+            propertyCardFootAdapterHoverLink(plugin, event, link, href, path, undefined);
+          } else {
+            plugin?.app?.workspace?.trigger?.("hover-link", {
+              event,
+              source: "preview",
+              hoverParent: link,
+              targetEl: link,
+              linktext: href,
+              sourcePath: path,
+            });
+          }
+        } catch (_) {}
+      });
+    }
+  } catch (_) {}
+}
+
+// Render one stored callout region into `container` and run the kind's
+// painter over the rendered callout. Options: { plugin, doc, container,
+// path, regionSource, component, paint, paintKey, cache=true,
+// releaseClaim }. `paint(calloutEl)` is the kind's existing painter
+// (areas/projects/notebooks/albums/records); it gets the same options the
+// inline Live Preview path passes. Resolves to { reused, failed }.
+async function propertyCardCabinetRenderCatalog(options = {}) {
+  const { plugin, doc, container, path, paint, paintKey } = options;
+  const useCache = options.cache !== false;
+  try {
+    if (!doc || !container) return { reused: false, failed: true };
+    const regionSource = String(options.regionSource ?? "");
+    if (regionSource.trim() === "") return { reused: false, failed: true };
+    while (container.firstChild) container.removeChild(container.firstChild);
+
+    if (useCache) {
+      const cached = propertyCardCabinetBodyCacheGet(path, paintKey);
+      if (cached) {
+        try {
+          if (!cached.isConnected) {
+            // Re-attach the same nodes: interior fold state survives and
+            // nothing repaints. A refreshed report changes paintKey, so a
+            // cached body is never stale.
+            container.appendChild(cached);
+            propertyCardCabinetBindBodyLinks(container, path, plugin);
+            return { reused: true, failed: false };
+          }
+        } catch (_) {}
+        propertyCardCabinetBodyCacheDrop(path, paintKey);
+      }
+    }
+
+    const Renderer = (() => {
+      try {
+        if (typeof MarkdownRenderer !== "undefined" && MarkdownRenderer) return MarkdownRenderer;
+      } catch (_) {}
+      try {
+        return plugin?.app?.MarkdownRenderer || null;
+      } catch (_) {
+        return null;
+      }
+    })();
+    // The mount's Component arrives via options; without one the rendered
+    // output still binds links and hover through the adapter below.
+    const Component = options.component || null;
+
+    const holder = doc.createElement("div");
+    holder.setAttribute("class", "bob-cabinet-body-source");
+    container.appendChild(holder);
+    if (Renderer && typeof Renderer.render === "function") {
+      await Renderer.render(plugin?.app, regionSource, holder, String(path || ""), Component || undefined);
+    } else {
+      holder.appendChild(doc.createTextNode(regionSource));
+    }
+
+    const calloutEl = holder.querySelector ? (holder.querySelector("[data-callout]") || holder) : holder;
+    if (typeof paint === "function") {
+      try {
+        await paint(calloutEl);
+      } catch (_) {
+        try {
+          if (typeof options.releaseClaim === "function") options.releaseClaim();
+        } catch (_) {}
+        while (container.firstChild) container.removeChild(container.firstChild);
+        const line = propertyCardCabinetRenderFailureLine(doc, "Couldn't render — showing the note's section");
+        if (line) container.appendChild(line);
+        return { reused: false, failed: true };
+      }
+    }
+    propertyCardCabinetBindBodyLinks(container, path, plugin);
+    if (useCache) propertyCardCabinetBodyCacheSet(path, paintKey, holder);
+    return { reused: false, failed: false };
+  } catch (error) {
+    try {
+      if (typeof options.releaseClaim === "function") options.releaseClaim();
+    } catch (_) {}
+    try {
+      if (container) {
+        while (container.firstChild) container.removeChild(container.firstChild);
+        const line = propertyCardCabinetRenderFailureLine(doc, "Couldn't render — showing the note's section");
+        if (line) container.appendChild(line);
+      }
+    } catch (_) {}
+    return { reused: false, failed: true };
+  }
+}
 // ---- src/241-plugin-reading-board-data.js ----
 // --- Reading Board data path (bob-cli-99.2) -------------------------------
 // Bob owns the reading queue and all blocking rules. This fragment only
@@ -207877,6 +209006,49 @@ try {
       refLibraryReportDecode,
       refLibraryReportNormalizeRow,
       BobLedgerToolsRefLibraryReportMixin,
+    });
+  }
+} catch (_) {}
+// ---- src/374k-exports-cabinet-absorption.js ----
+// Test-facing exports for the cabinet absorption kit (bob-cli-qq absorption).
+try {
+  if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
+    module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
+      PROPERTY_CARD_CABINET_REGION_SPECS,
+      propertyCardCabinetRegionSpec,
+      propertyCardCabinetSplitLines,
+      propertyCardCabinetFrontmatterEnd,
+      propertyCardCabinetFenceMarker,
+      propertyCardCabinetClosesFence,
+      propertyCardCabinetAtxHeading,
+      propertyCardCabinetIsCalloutHead,
+      propertyCardCabinetIsQuoteLine,
+      propertyCardCabinetFingerprint,
+      propertyCardCatalogScanSpec,
+      propertyCardCatalogRegions,
+      propertyCardCatalogRegionForHide,
+      propertyCardCatalogClaim,
+      propertyCardCatalogClaimed,
+      propertyCardCatalogAbsorbed,
+      propertyCardCabinetStandDown,
+      propertyCardCatalogRevealClaim,
+      propertyCardCatalogReleaseScope,
+      propertyCardCatalogReleaseAll,
+      propertyCardCabinetAbsorbLineStarts,
+      propertyCardCabinetAbsorbRangesForPlan,
+      propertyCardCabinetSelectionStrictlyInside,
+      propertyCardCabinetAbsorbFieldReduce,
+      propertyCardCabinetAbsorbFieldDecorations,
+      propertyCardCabinetAbsorbAtomicRanges,
+      propertyCardCabinetAbsorbShouldReveal,
+      propertyCardCabinetAbsorbEditorExtension,
+      propertyCardCabinetAbsorbInEditor,
+      PROPERTY_CARD_CABINET_ABSORBED_CLASS,
+      propertyCardCabinetAbsorbReadingTargets,
+      propertyCardCabinetAbsorbPaintReading,
+      propertyCardCabinetAbsorbUntagReading,
+      propertyCardCabinetAbsorbRescanReading,
+      propertyCardCabinetRenderCatalog,
     });
   }
 } catch (_) {}

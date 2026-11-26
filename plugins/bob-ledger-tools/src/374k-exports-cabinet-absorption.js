@@ -1,0 +1,42 @@
+// Test-facing exports for the cabinet absorption kit (bob-cli-qq absorption).
+try {
+  if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
+    module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
+      PROPERTY_CARD_CABINET_REGION_SPECS,
+      propertyCardCabinetRegionSpec,
+      propertyCardCabinetSplitLines,
+      propertyCardCabinetFrontmatterEnd,
+      propertyCardCabinetFenceMarker,
+      propertyCardCabinetClosesFence,
+      propertyCardCabinetAtxHeading,
+      propertyCardCabinetIsCalloutHead,
+      propertyCardCabinetIsQuoteLine,
+      propertyCardCabinetFingerprint,
+      propertyCardCatalogScanSpec,
+      propertyCardCatalogRegions,
+      propertyCardCatalogRegionForHide,
+      propertyCardCatalogClaim,
+      propertyCardCatalogClaimed,
+      propertyCardCatalogAbsorbed,
+      propertyCardCabinetStandDown,
+      propertyCardCatalogRevealClaim,
+      propertyCardCatalogReleaseScope,
+      propertyCardCatalogReleaseAll,
+      propertyCardCabinetAbsorbLineStarts,
+      propertyCardCabinetAbsorbRangesForPlan,
+      propertyCardCabinetSelectionStrictlyInside,
+      propertyCardCabinetAbsorbFieldReduce,
+      propertyCardCabinetAbsorbFieldDecorations,
+      propertyCardCabinetAbsorbAtomicRanges,
+      propertyCardCabinetAbsorbShouldReveal,
+      propertyCardCabinetAbsorbEditorExtension,
+      propertyCardCabinetAbsorbInEditor,
+      PROPERTY_CARD_CABINET_ABSORBED_CLASS,
+      propertyCardCabinetAbsorbReadingTargets,
+      propertyCardCabinetAbsorbPaintReading,
+      propertyCardCabinetAbsorbUntagReading,
+      propertyCardCabinetAbsorbRescanReading,
+      propertyCardCabinetRenderCatalog,
+    });
+  }
+} catch (_) {}

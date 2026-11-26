@@ -46,6 +46,7 @@
   "151-pomodoro-type-split.js",
   "160-pomodoro-reorder.js",
   "161-pomodoro-cleanup-agreement.js",
+  "162-snoozed-cleanup-compose.js",
   "165-pomodoro-theme-picker.js",
   "170-open-task-jump.js",
   "180-editor-transactions.js",
@@ -322,5 +323,6 @@
   "733-mail-close-exports.js",
   "734-nav-task-settle-exports.js",
   "735-parent-picker-choose.js",
-  "736-snooze-model-exports.js"
+  "736-snooze-model-exports.js",
+  "737-snoozed-cleanup-exports.js"
 ]

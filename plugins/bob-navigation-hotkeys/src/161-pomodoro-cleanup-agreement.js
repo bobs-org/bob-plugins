@@ -9,6 +9,10 @@ function emptyDeferredPomodoroLinkCleanup(content, unresolvedCount = 0) {
     removedEntryCount: 0,
     touchedEntryLines: Object.freeze([]),
     unresolvedCount,
+    snoozedChanged: false,
+    removedSnoozedIdentities: Object.freeze([]),
+    removedSnoozedLineRanges: Object.freeze([]),
+    snoozedSectionRemoved: false,
   });
 }
 

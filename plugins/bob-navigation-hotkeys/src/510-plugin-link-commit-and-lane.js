@@ -394,6 +394,9 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
         skipReleasePrompt: options.skipReleasePrompt,
       });
     }
+    // Alt+N on an active Snoozed row resolves through the link transaction.
+    const snoozedLane = await toggleTaskLaneOnSnoozedRow(this, cm, cursor, content, options, settleLaneReview);
+    if (snoozedLane.handled === true) return snoozedLane.ok;
     settleLaneReview(null);
     new Notice("Cursor is not on a task or Task Link");
     return false;
@@ -867,12 +870,9 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
               dailyCleanupPlan,
             );
             if (dailyCleanupPlan.changed) {
-              const removedBefore = dailyCleanupPlan.removedLineRanges.reduce(
-                (total, range) =>
-                  range.endLineExclusive <= finalCursorLine
-                    ? total + (range.endLineExclusive - range.startLine)
-                    : total,
-                0,
+              const removedBefore = deferredCleanupRemovedLinesBefore(
+                dailyCleanupPlan,
+                finalCursorLine,
               );
               finalContent = dailyCleanupPlan.content;
               finalCursorLine = finalCursorLine - removedBefore;

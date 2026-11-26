@@ -71,7 +71,7 @@ function pomodoroCleanupCursor(editor, plan, beforeCleanup = null) {
     }
   }
   let line = cursor.line;
-  for (const range of plan.removedLineRanges) {
+  for (const range of deferredCleanupAllRemovedRanges(plan)) {
     if (cursor.line < range.startLine) break;
     line -= Math.min(cursor.line, range.endLineExclusive) - range.startLine;
   }

@@ -841,11 +841,9 @@ class BobNavigationHotkeysCancelPropertyMixin {
           }
           dailyCleanupPlan = await agreeNavigationPomodoroCleanup(this.app, pomodoroSnapshot.dailyPath, dailyCleanupPlan);
           if (pomodoroSnapshot.sameFile && dailyCleanupPlan.changed) {
-            const linesRemovedBeforeCursor = dailyCleanupPlan.removedLineRanges.reduce(
-              (total, range) => range.endLineExclusive <= plan.cursorLine
-                ? total + (range.endLineExclusive - range.startLine)
-                : total,
-              0,
+            const linesRemovedBeforeCursor = deferredCleanupRemovedLinesBefore(
+              dailyCleanupPlan,
+              plan.cursorLine,
             );
             finalContent = dailyCleanupPlan.content;
             finalCursorLine = plan.cursorLine - linesRemovedBeforeCursor;

@@ -638,12 +638,9 @@ class BobNavigationHotkeysDecayCancelMixin {
               dailyCleanupPlan,
             );
             if (dailyCleanupPlan.changed) {
-              const removedBefore = dailyCleanupPlan.removedLineRanges.reduce(
-                (total, range) =>
-                  range.endLineExclusive <= finalCursorLine
-                    ? total + (range.endLineExclusive - range.startLine)
-                    : total,
-                0,
+              const removedBefore = deferredCleanupRemovedLinesBefore(
+                dailyCleanupPlan,
+                finalCursorLine,
               );
               finalContent = dailyCleanupPlan.content;
               finalCursorLine = finalCursorLine - removedBefore;
@@ -911,14 +908,10 @@ class BobNavigationHotkeysDecayCancelMixin {
             dailyCleanupPlan,
           );
           if (dailyCleanupPlan.changed) {
-            const linesRemovedBeforeCursor =
-              dailyCleanupPlan.removedLineRanges.reduce(
-                (total, range) =>
-                  range.endLineExclusive <= finalCursorLine
-                    ? total + (range.endLineExclusive - range.startLine)
-                    : total,
-                0,
-              );
+            const linesRemovedBeforeCursor = deferredCleanupRemovedLinesBefore(
+              dailyCleanupPlan,
+              finalCursorLine,
+            );
             finalContent = dailyCleanupPlan.content;
             finalCursorLine = finalCursorLine - linesRemovedBeforeCursor;
           }

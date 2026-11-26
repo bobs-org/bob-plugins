@@ -548,11 +548,19 @@ function planDeferredPomodoroLinkCleanup(dailyContent, targets, options = {}) {
   const contexts = getMarkdownLineContexts(snapshot);
   const section = findPomodorosSectionRange(snapshot);
   if (!section) {
-    return emptyDeferredPomodoroLinkCleanup(snapshot);
+    return composeEmptyDeferredCleanupWithSnoozed(
+      snapshot,
+      targetList,
+      options,
+    );
   }
   const openRanges = collectOpenPomodoroRanges(lines, contexts, section);
   if (openRanges.length === 0) {
-    return emptyDeferredPomodoroLinkCleanup(snapshot);
+    return composeEmptyDeferredCleanupWithSnoozed(
+      snapshot,
+      targetList,
+      options,
+    );
   }
 
   const dailyPath = normalizeVaultRelativePath(options.dailyPath);
@@ -615,7 +623,12 @@ function planDeferredPomodoroLinkCleanup(dailyContent, targets, options = {}) {
   }
 
   if (matches.length === 0) {
-    return emptyDeferredPomodoroLinkCleanup(snapshot, unresolvedCount);
+    return composeEmptyDeferredCleanupWithSnoozed(
+      snapshot,
+      targetList,
+      options,
+      unresolvedCount,
+    );
   }
 
   const matchesByLine = new Map();
@@ -828,47 +841,20 @@ function planDeferredPomodoroLinkCleanup(dailyContent, targets, options = {}) {
     });
   }
 
-  const edits = [...subtreeEdits, ...lineEdits].sort(
-    (left, right) => right.start - left.start,
-  );
-  let nextContent = snapshot;
-  for (const edit of edits) {
-    nextContent =
-      nextContent.slice(0, edit.start) +
-      edit.replacement +
-      nextContent.slice(edit.end);
-  }
-
-  const touchedEntryLines = deferredPomodoroCleanupTouchedEntryLines(
+  // Compose the active Snoozed-row pass on the same snapshot base (see
+  // `162-snoozed-cleanup-compose.js`): both edit lists share the daily
+  // offsets, so they merge before a single apply and entry mapping runs
+  // against the merged postimage.
+  return finishDeferredCleanupWithSnoozed(snapshot, targetList, {
+    dailyPath,
+    noteIndex,
+    subtreeEdits,
+    lineEdits,
     touchedEntryOffsets,
-    edits,
-    nextContent,
-  );
-
-  return Object.freeze({
-    content: nextContent,
-    changed: nextContent !== snapshot,
-    // Counts removed dedicated bullets, not text-splice operations — adjacent
-    // bullets can merge into one contiguous edit above.
+    matches,
+    removedTargetKeys,
     removedBulletCount,
-    removedLinkCount: matches.length,
-    removedTargets: Object.freeze(
-      targetList.filter((target) =>
-        removedTargetKeys.has(
-          `${normalizeVaultRelativePath(target.path)}\x00${target.blockId}`,
-        ),
-      ),
-    ),
-    removedLineRanges: Object.freeze(
-      subtreeEdits.map((edit) =>
-        Object.freeze({
-          startLine: edit.startLine,
-          endLineExclusive: edit.endLineExclusive,
-        }),
-      ),
-    ),
     removedEntryCount,
-    touchedEntryLines: Object.freeze(touchedEntryLines),
     unresolvedCount,
   });
 }

@@ -130,6 +130,30 @@ class BobNavigationHotkeysLaneReviewMixin {
         }
       }
     }
+    // Alt+N from a Snoozed row consumes the row even when the lane plan
+    // commits: the user acted on the wake itself, so the row and its subtree
+    // go through the composed daily cleanup in either mode.
+    const snoozedRowBlockId =
+      options && typeof options.snoozedRowBlockId === "string"
+        ? options.snoozedRowBlockId
+        : null;
+    if (snoozedRowBlockId) {
+      for (const { group } of planned) {
+        if (!group || !group.path) {
+          continue;
+        }
+        const known = pruneTargets.some(
+          (target) =>
+            target.path === group.path &&
+            target.blockId === snoozedRowBlockId,
+        );
+        if (!known) {
+          pruneTargets.push(
+            Object.freeze({ path: group.path, blockId: snoozedRowBlockId }),
+          );
+        }
+      }
+    }
     let pomodoroSnapshot = null;
     let dailyCleanupPlan = null;
     let foldedDailyPath = null;

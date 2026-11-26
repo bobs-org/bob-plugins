@@ -93,6 +93,90 @@ class BobNavigationHotkeysDecayCardWriterMixin {
           new Notice(freshStampRefusalNotice(logged.refusal));
           return false;
         }
+        // Next → Ready composes the deferred daily cleanup (live Pomodoro
+        // links and active Snoozed rows) into the step: same-file folds into
+        // the card write, separate-file prunes after it lands. WIP → Next
+        // never touches the snooze.
+        if (cardCtx.rung === "Next" && plan.mode === "release") {
+          const pruneTargets = (plan.released || [])
+            .filter((entry) => entry && entry.blockId)
+            .map((entry) =>
+              Object.freeze({ path: cardCtx.filePath, blockId: entry.blockId }),
+            )
+            .filter((entry) => entry.path);
+          if (pruneTargets.length > 0 && cardCtx.filePath) {
+            const noticeText = `${cardCtx.rung} → ${step.toLabel} · Ctrl+Z undoes`;
+            const snapshot = await this.readDeferredPomodoroSnapshot(this.app, {
+              sourcePath: cardCtx.filePath,
+              sourceContent: live.content,
+              today: new Date(),
+            });
+            if (snapshot && snapshot.sameFile) {
+              let dailyCleanupPlan = planDeferredPomodoroLinkCleanup(
+                logged.content,
+                pruneTargets,
+                {
+                  dailyPath: snapshot.dailyPath,
+                  noteIndex: snapshot.noteIndex,
+                },
+              );
+              dailyCleanupPlan = await agreeDeferredPomodoroLinkCleanup(
+                getNavigationPomodoroThemesApi(this.app),
+                snapshot.dailyPath,
+                dailyCleanupPlan,
+              );
+              if (dailyCleanupPlan.changed) {
+                const writeLine =
+                  cardCtx.line -
+                  deferredCleanupRemovedLinesBefore(
+                    dailyCleanupPlan,
+                    cardCtx.line,
+                  );
+                return this.applyFreshnessDecayCardLinePlan(
+                  { ...cardCtx, line: writeLine },
+                  live,
+                  dailyCleanupPlan.content,
+                  noticeText,
+                  "step",
+                );
+              }
+            } else if (snapshot) {
+              const applied = await this.applyFreshnessDecayCardLinePlan(
+                cardCtx,
+                live,
+                logged.content,
+                noticeText,
+                "step",
+              );
+              if (!applied) {
+                return false;
+              }
+              let dailyCleanupPlan = planDeferredPomodoroLinkCleanup(
+                snapshot.content,
+                pruneTargets,
+                {
+                  dailyPath: snapshot.dailyPath,
+                  noteIndex: snapshot.noteIndex,
+                },
+              );
+              dailyCleanupPlan = await agreeDeferredPomodoroLinkCleanup(
+                getNavigationPomodoroThemesApi(this.app),
+                snapshot.dailyPath,
+                dailyCleanupPlan,
+              );
+              if (dailyCleanupPlan.changed) {
+                const written = await this.writeDeferredPomodoroCleanup(
+                  snapshot,
+                  dailyCleanupPlan,
+                );
+                if (!written) {
+                  new Notice("Step applied; Pomodoro links not removed");
+                }
+              }
+              return true;
+            }
+          }
+        }
         return this.applyFreshnessDecayCardLinePlan(
           cardCtx,
           live,

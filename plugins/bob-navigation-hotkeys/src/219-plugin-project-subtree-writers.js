@@ -255,12 +255,9 @@ class BobNavigationHotkeysProjectSubtreeWritersMixin {
       : "";
     let preplannedScheduleLog = null;
     if (foldedDailyContent !== null) {
-      const linesRemovedBeforeCursor = dailyCleanupPlan.removedLineRanges.reduce(
-        (total, range) =>
-          range.endLineExclusive <= cursor.line
-            ? total + (range.endLineExclusive - range.startLine)
-            : total,
-        0,
+      const linesRemovedBeforeCursor = deferredCleanupRemovedLinesBefore(
+        dailyCleanupPlan,
+        cursor.line,
       );
       effectiveCursorLine = cursor.line - linesRemovedBeforeCursor;
       if (wantsScheduleLog) {

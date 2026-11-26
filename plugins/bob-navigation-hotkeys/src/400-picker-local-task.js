@@ -169,12 +169,25 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
     }
     if (this.vaultStage) {
       const marked = this.getMarkedCount();
-      return [
+      const base = [
         { keys: ["↑", "↓"], label: "navigate" },
         { keys: ["⇥"], label: "mark" },
         { keys: ["↵"], label: marked > 0 ? `apply ${marked}` : "toggle" },
         { keys: ["esc"], label: "dismiss" },
       ];
+      try {
+        if (marked === 0 && typeof tieChordHintsForItem === "function") {
+          const item = (this.visibleItems || [])[this.selectedIndex] || null;
+          const chords = tieChordHintsForItem(this, item);
+          if (chords.length > 0) {
+            return [
+              ...base.filter((hint) => !hint.keys.includes("↑")),
+              ...chords,
+            ];
+          }
+        }
+      } catch (_tieFooterError) {}
+      return base;
     }
     const hints = getBulletPropertyLocalTaskHints(this.getMarkedCount() > 0);
     return hints;
@@ -250,6 +263,12 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
   // folding, and the freshness stamp in one transaction.
   showLocalTaskValueStage(propertyItem) {
     this.stage = "value";
+    this.blocksStage = false;
+    this.relationStage = false;
+    this.relationStageDirection = null;
+    try {
+      if (typeof tieDisarm === "function") tieDisarm(this);
+    } catch (_tieStageDisarmError) {}
     this.selectedPropertyItem = propertyItem;
     this.pendingTask = null;
     this.clearPendingBatch();

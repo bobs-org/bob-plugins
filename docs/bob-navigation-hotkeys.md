@@ -132,7 +132,7 @@ Depends on, `Ctrl+Shift+Alt+B` opens Blocks, and `Ctrl+Shift+L` /
 `Ctrl+Shift+Alt+L` open Links / Linked from. On a Task Link, a stage targets
 the linked task; on dependency, relation, or requirement lines it targets the
 owner. On album or record notes without a task target, the matching Schema or
-Record Card opens. See [Task Card](task-card.md).
+Record Card opens. See [Task Card](task-card.md). In the four stages, `⌃B` / `⌃⇧B` / `⌃L` / `⌃⇧L` set the pair's tie.
 
 ## Mail Close Card
 

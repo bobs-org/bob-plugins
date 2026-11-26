@@ -1410,6 +1410,10 @@
   color: var(--text-warning, var(--text-muted));
 }
 
+.bob-cnp-consequence-strip-text.bob-cnp-tie-armed-effects {
+  color: var(--text-warning, var(--text-muted));
+}
+
 /* --- Footer ------------------------------------------------------------- */
 
 .bob-cnp-footer {

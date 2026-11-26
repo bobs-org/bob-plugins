@@ -618,6 +618,26 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
     if (this.relationStage) {
       return this.chooseRelationTask(item);
     }
+    try {
+      if (typeof tieEnterActionForRow === "function") {
+        const tieAction = tieEnterActionForRow(this, item);
+        if (tieAction && tieAction.action === "convert-dependency") {
+          const refusal = typeof tieChordRefusal === "function"
+            ? tieChordRefusal(this, item, tieAction.to)
+            : null;
+          if (refusal) {
+            new Notice(refusal);
+            return false;
+          }
+          if (typeof tieCommitChord === "function") {
+            await tieCommitChord(this, tieAction.to);
+            return true;
+          }
+        }
+      }
+    } catch (_tieEnterError) {
+      // A tie helper failure falls through to the native Depends-on path.
+    }
     if (!this.selectedPropertyItem) {
       return false;
     }

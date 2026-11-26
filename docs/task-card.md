@@ -54,6 +54,7 @@ for the pill, band, subtitle, and consequence copy.
 | `⇧B` | Open Blocks (reverse Depends on). |
 | `l` | Open Links to (task relations); in its filter, `~` flips direction. |
 | `⇧L` | Open Linked from (task relations); in its filter, `~` flips direction. |
+| `⌃B` / `⌃⇧B` / `⌃L` / `⌃⇧L` | In any of the four relationship stages, set the highlighted pair's tie: wait on it, make it wait, plain link out, or plain link in. Chords are desired-state commands through `applyTieChange`; a second press never flips the state back. Ctrl only, never Meta; repeat and IME events are ignored. |
 | `f` | Open Review every (Refresh). |
 | `t` | Open Type; `Enter` on the Type row opens the same stage. The stage offers Use default first with its inherited reason (`Use default · BUILD from dev`, `Use default · CHORE default type`), then Today, Recent, and a validated typed new name. Any type is choosable, including PLAN and other exempt types. Type rows use Bob's reported hue in a tinted pill with a swatch; uncolored types (exempt or unconfigured), such as PLAN, are grey. The inherited type's row is marked Default. A consequence line under the selected row states the live-link outcome before Enter (`link moves FIX → BUILD`, `running FIX becomes BUILD`, `FIX placeholder becomes BUILD`, `new BUILD Pomodoro below FIX`, `no live link · ledger unchanged`, or `already under BUILD`). |
 | `x` | Open the cancel-reason stage; the key alone never cancels. |
@@ -193,7 +194,7 @@ when the selection mixes both. Recurring sources and an old Task Status Cycler
 two or more sources first shows `⊘ Cancels {N} tasks — ↵ again to confirm`,
 `✓ Completes {N} tasks — ↵ again to confirm`, or
 `Closes {N} tasks · ✓ {a} · ⊘ {b} — ↵ again to confirm`; a second Return
-commits, while Escape or changing the query or selection disarms it.
+commits, while Escape or changing the query or selection disarms it. On a ⇄ row, ↵ releases the dependency in two presses: the first press arms an amber `⚠ Removes the dependency · "X" becomes Ready — ↵ again · esc keeps it` banner with an `↵ again to confirm` footer, and the second press commits; moving the selection, editing the query, pressing Esc, or entering a stage disarms it. While a dependency ties the pair, the relation-label stage disables the "Plain link (no relation)" row and any relabel-to-empty with `A dependency ties them · ⌃L makes it a plain link`.
 
 Inverse labels explain that they never cancel or complete and point to `⇧L` or
 `l` with the closing label. A hand edit of a closing label into LINKS does not

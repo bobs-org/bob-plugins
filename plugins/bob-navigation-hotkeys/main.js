@@ -36284,6 +36284,9 @@ class FilteredPickerModal extends Modal {
       },
     });
     this.inputEl.addEventListener("input", () => {
+      try {
+        if (typeof tieDisarm === "function") tieDisarm(this);
+      } catch (_tieInputDisarmError) {}
       this.selectedIndex = 0;
       this.renderResults();
     });
@@ -36391,6 +36394,9 @@ class FilteredPickerModal extends Modal {
       return;
     }
 
+    try {
+      if (typeof tieDisarm === "function") tieDisarm(this);
+    } catch (_tieDisarmError) {}
     this.selectedIndex =
       (this.selectedIndex + delta + this.visibleItems.length) %
       this.visibleItems.length;
@@ -81531,12 +81537,25 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
     }
     if (this.vaultStage) {
       const marked = this.getMarkedCount();
-      return [
+      const base = [
         { keys: ["↑", "↓"], label: "navigate" },
         { keys: ["⇥"], label: "mark" },
         { keys: ["↵"], label: marked > 0 ? `apply ${marked}` : "toggle" },
         { keys: ["esc"], label: "dismiss" },
       ];
+      try {
+        if (marked === 0 && typeof tieChordHintsForItem === "function") {
+          const item = (this.visibleItems || [])[this.selectedIndex] || null;
+          const chords = tieChordHintsForItem(this, item);
+          if (chords.length > 0) {
+            return [
+              ...base.filter((hint) => !hint.keys.includes("↑")),
+              ...chords,
+            ];
+          }
+        }
+      } catch (_tieFooterError) {}
+      return base;
     }
     const hints = getBulletPropertyLocalTaskHints(this.getMarkedCount() > 0);
     return hints;
@@ -81612,6 +81631,12 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
   // folding, and the freshness stamp in one transaction.
   showLocalTaskValueStage(propertyItem) {
     this.stage = "value";
+    this.blocksStage = false;
+    this.relationStage = false;
+    this.relationStageDirection = null;
+    try {
+      if (typeof tieDisarm === "function") tieDisarm(this);
+    } catch (_tieStageDisarmError) {}
     this.selectedPropertyItem = propertyItem;
     this.pendingTask = null;
     this.clearPendingBatch();
@@ -82688,6 +82713,26 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
     if (this.relationStage) {
       return this.chooseRelationTask(item);
     }
+    try {
+      if (typeof tieEnterActionForRow === "function") {
+        const tieAction = tieEnterActionForRow(this, item);
+        if (tieAction && tieAction.action === "convert-dependency") {
+          const refusal = typeof tieChordRefusal === "function"
+            ? tieChordRefusal(this, item, tieAction.to)
+            : null;
+          if (refusal) {
+            new Notice(refusal);
+            return false;
+          }
+          if (typeof tieCommitChord === "function") {
+            await tieCommitChord(this, tieAction.to);
+            return true;
+          }
+        }
+      }
+    } catch (_tieEnterError) {
+      // A tie helper failure falls through to the native Depends-on path.
+    }
     if (!this.selectedPropertyItem) {
       return false;
     }
@@ -83713,6 +83758,11 @@ class BulletPropertyPickerBlocksStageMixin extends FilteredPickerModal {
   showBlocksStage() {
     this.stage = "value";
     this.blocksStage = true;
+    this.relationStage = false;
+    this.relationStageDirection = null;
+    try {
+      if (typeof tieDisarm === "function") tieDisarm(this);
+    } catch (_tieBlocksDisarmError) {}
     this.selectedPropertyItem = this.blocksStageDummyProperty();
     this.pendingTask = null;
     this.pendingBlocks = null;
@@ -83802,6 +83852,17 @@ class BulletPropertyPickerBlocksStageMixin extends FilteredPickerModal {
     if (this.isCountedSession()) {
       return hints.filter((hint) => !hint.keys.includes("\u21e5"));
     }
+    try {
+      if (marked === 0 && typeof tieChordHintsForItem === "function") {
+        const chords = tieChordHintsForItem(this, item);
+        if (chords.length > 0) {
+          return [
+            ...hints.filter((hint) => !hint.keys.includes("\u2191")),
+            ...chords,
+          ];
+        }
+      }
+    } catch (_tieBlocksFooterError) {}
     return hints;
   }
 
@@ -83978,6 +84039,26 @@ class BulletPropertyPickerBlocksStageMixin extends FilteredPickerModal {
   }
 
   async chooseBlocksTask(item) {
+    try {
+      if (typeof tieEnterForRow === "function") {
+        const tieAction = tieEnterForRow(this, item);
+        if (tieAction && tieAction.action === "convert-dependency") {
+          const refusal = typeof tieChordRefusal === "function"
+            ? tieChordRefusal(this, item, tieAction.to)
+            : null;
+          if (refusal) {
+            new Notice(refusal);
+            return false;
+          }
+          if (typeof tieCommitChord === "function") {
+            await tieCommitChord(this, tieAction.to);
+            return true;
+          }
+        }
+      }
+    } catch (_tieBlocksEnterError) {
+      // A tie helper failure falls through to the native Blocks path.
+    }
     if (this.getMarkedCount() > 0) {
       return this.commitMarkedBlocks();
     }
@@ -84210,6 +84291,9 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
     this.blocksStage = false;
     this.relationStage = true;
     this.relationStageDirection = direction === "from" ? "from" : "to";
+    try {
+      if (typeof tieDisarm === "function") tieDisarm(this);
+    } catch (_tieRelationDisarmError) {}
     this.relationLabel = null;
     this.relationCancelExpected = null;
     this.relationCloseExpected = null;
@@ -84312,110 +84396,6 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
     return true;
   }
 
-  relationStageListOptions() {
-    const title =
-      (this.vaultStage && this.vaultStage.title) || "🪢 Links";
-    return {
-      items: this.vaultStage
-        ? planRelationStageItemsFromVault(
-            this.vaultStage,
-            this.getQuery ? this.getQuery() : "",
-          )
-        : [],
-      title,
-      headerIcon: "link-2",
-      inputLabel: "Filter tasks",
-      placeholder: "Filter tasks",
-      resultsLabel: this.isLinkedFromStage()
-        ? "Tasks that could link here"
-        : "Tasks this could link to",
-      emptyText: this.isLinkedFromStage()
-        ? "No matching editable tasks in the vault"
-        : "No matching tasks in the vault",
-      footerHints: this.getRelationStageFooterHints(),
-      getSubtitle: (visibleItems, allItems) =>
-        this.getRelationStageSubtitle(visibleItems, allItems),
-      filterItem: (item, query) => fuzzyMatchesText(item.searchText, query),
-      renderItem: (item, rowEl, query) =>
-        this.renderTaskValueItem(item, rowEl, query),
-      openItem: (item) => this.chooseRelationTask(item),
-    };
-  }
-
-  getRelationStageFooterHints() {
-    if (!this.isRelationStage()) {
-      return this.getLocalTaskFooterHints();
-    }
-    const marked = this.getMarkedCount();
-    const item = (this.visibleItems || [])[this.selectedIndex];
-    // §19: footer hints follow the selected row's kind — a mention row
-    // opens instead of linking.
-    if (item && item.mention === true && marked === 0) {
-      const hints = [
-        { keys: ["↑", "↓"], label: "navigate" },
-        { keys: ["↵"], label: "open mention" },
-        { keys: ["⌃↵"], label: "add relation" },
-      ];
-      if (!this.taskSession || this.taskSession.type === "single") {
-        hints.push({ keys: ["~"], label: "flip direction" });
-      }
-      hints.push({ keys: ["esc"], label: "dismiss" });
-      return hints;
-    }
-    let verb = this.isLinkedFromStage() ? "link here" : "link";
-    if (marked > 0) {
-      verb = `apply ${marked}`;
-    } else if (item && item.stageSection === "current") {
-      verb = this.isLinkedFromStage() ? "remove source" : "unlink";
-    }
-    const hints = [
-      { keys: ["↑", "↓"], label: "navigate" },
-      { keys: ["⇥"], label: "mark" },
-      { keys: ["↵"], label: verb },
-      { keys: ["⌃↵"], label: "with a relation" },
-    ];
-    if (!this.taskSession || this.taskSession.type === "single") {
-      hints.push({ keys: ["~"], label: "flip direction" });
-    }
-    hints.push({ keys: ["esc"], label: "dismiss" });
-    return hints;
-  }
-
-  getRelationStageSubtitle(_visibleItems, _allItems) {
-    const stage = this.vaultStage;
-    if (this.getMarkedCount() > 0) {
-      return relationStageSubtitle(stage, this.getMarkedTaskDiff(), {});
-    }
-    return relationStageSubtitle(stage, null, {});
-  }
-
-  ensureRelationConsequenceStrip() {
-    if (!this.contentEl || !this.footerEl) {
-      return null;
-    }
-    if (
-      this.consequenceStripEl &&
-      this.consequenceStripEl.parentElement === this.contentEl
-    ) {
-      return this.consequenceStripEl;
-    }
-    const el = this.contentEl.createDiv({
-      cls: "bob-cnp-consequence-strip",
-      attr: { "aria-live": "polite" },
-    });
-    try {
-      if (
-        this.footerEl.parentElement === this.contentEl &&
-        typeof this.contentEl.insertBefore === "function"
-      ) {
-        this.contentEl.insertBefore(el, this.footerEl);
-      }
-    } catch (_error) {
-      // Best-effort placement between the list and the footer.
-    }
-    this.consequenceStripEl = el;
-    return el;
-  }
 
   // 🍅 badge (display only): today's Pomodoro links over the current pool.
   // Relations never consume them; the badge only informs (LG13).
@@ -84525,6 +84505,40 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
   }
 
   chooseRelationTask(item, options = {}) {
+    try {
+      if (!options.withLabel && typeof tieEnterForRow === "function") {
+        const tieAction = tieEnterForRow(this, item);
+        if (tieAction && tieAction.action === "arm-release") {
+          const refusal = typeof tieChordRefusal === "function"
+            ? tieChordRefusal(this, item, tieAction.to)
+            : null;
+          if (refusal) {
+            new Notice(refusal);
+            return false;
+          }
+          const refs = typeof tieChordOwnerOther === "function"
+            ? tieChordOwnerOther(this, item)
+            : null;
+          if (!refs) {
+            new Notice("That task could not be located");
+            return false;
+          }
+          if (typeof tieIsArmedFor === "function" && tieIsArmedFor(this, refs.owner, refs.other, tieAction.to)) {
+            if (typeof tieDisarm === "function") tieDisarm(this);
+            if (typeof tieCommitChord === "function") {
+              void tieCommitChord(this, tieAction.to);
+              return true;
+            }
+          }
+          if (typeof tieArmRelease === "function") {
+            tieArmRelease(this, item, tieAction.to);
+            return true;
+          }
+        }
+      }
+    } catch (_tieRelationEnterError) {
+      // A tie helper failure falls through to the native Links path.
+    }
     if (this.getMarkedCount() > 0 && !options.withLabel) {
       return this.commitMarkedRelations();
     }
@@ -84569,6 +84583,23 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
   commitMarkedRelations() {
     if (this.getMarkedCount() === 0) {
       return false;
+    }
+    try {
+      const marked = typeof this.getMarkedTaskItems === "function"
+        ? this.getMarkedTaskItems()
+        : [];
+      const converting = (Array.isArray(marked) ? marked : []).find(
+        (entry) => entry && entry.tieConvert === true,
+      );
+      if (converting) {
+        const name = typeof tieChordDisplayName === "function"
+          ? tieChordDisplayName(converting)
+          : cleanTaskDisplayText(converting.displayText || "") || "that task";
+        new Notice(`↵ can't replace a dependency in a batch · unmark "${name}" or use ⌃L on it`);
+        return false;
+      }
+    } catch (_tieBatchError) {
+      // A tie helper failure falls through to the native batch path.
     }
     const planned = planRelationStageCommit(this.getMarkedTaskItems());
     if (planned.add.length === 0 && planned.remove.length === 0) {
@@ -85169,6 +85200,223 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
 
 }
 
+// ---- src/426b-relation-stage-view.js ----
+// Relation-stage list, footer, subtitle, and strip view helpers.
+// Split out of 426-picker-relation-stage.js to keep that fragment at or
+// under the 1000-line cap. Installed as BulletPropertyPickerRelationStageViewMixin.
+class BulletPropertyPickerRelationStageViewMixin {
+  relationStageListOptions() {
+    const title =
+      (this.vaultStage && this.vaultStage.title) || "🪢 Links";
+    return {
+      items: this.vaultStage
+        ? planRelationStageItemsFromVault(
+            this.vaultStage,
+            this.getQuery ? this.getQuery() : "",
+          )
+        : [],
+      title,
+      headerIcon: "link-2",
+      inputLabel: "Filter tasks",
+      placeholder: "Filter tasks",
+      resultsLabel: this.isLinkedFromStage()
+        ? "Tasks that could link here"
+        : "Tasks this could link to",
+      emptyText: this.isLinkedFromStage()
+        ? "No matching editable tasks in the vault"
+        : "No matching tasks in the vault",
+      footerHints: this.getRelationStageFooterHints(),
+      getSubtitle: (visibleItems, allItems) =>
+        this.getRelationStageSubtitle(visibleItems, allItems),
+      filterItem: (item, query) => fuzzyMatchesText(item.searchText, query),
+      renderItem: (item, rowEl, query) =>
+        this.renderTaskValueItem(item, rowEl, query),
+      openItem: (item) => this.chooseRelationTask(item),
+    };
+  }
+
+  getRelationStageFooterHints() {
+    if (!this.isRelationStage()) {
+      return this.getLocalTaskFooterHints();
+    }
+    const marked = this.getMarkedCount();
+    const item = (this.visibleItems || [])[this.selectedIndex];
+    // §19: footer hints follow the selected row's kind — a mention row
+    // opens instead of linking.
+    if (item && item.mention === true && marked === 0) {
+      const hints = [
+        { keys: ["↑", "↓"], label: "navigate" },
+        { keys: ["↵"], label: "open mention" },
+        { keys: ["⌃↵"], label: "add relation" },
+      ];
+      if (!this.taskSession || this.taskSession.type === "single") {
+        hints.push({ keys: ["~"], label: "flip direction" });
+      }
+      hints.push({ keys: ["esc"], label: "dismiss" });
+      return hints;
+    }
+    let verb = this.isLinkedFromStage() ? "link here" : "link";
+    if (marked > 0) {
+      verb = `apply ${marked}`;
+    } else if (item && item.stageSection === "current") {
+      verb = this.isLinkedFromStage() ? "remove source" : "unlink";
+    }
+    const hints = [
+      { keys: ["↑", "↓"], label: "navigate" },
+      { keys: ["⇥"], label: "mark" },
+      { keys: ["↵"], label: verb },
+      { keys: ["⌃↵"], label: "with a relation" },
+    ];
+    if (!this.taskSession || this.taskSession.type === "single") {
+      hints.push({ keys: ["~"], label: "flip direction" });
+    }
+    hints.push({ keys: ["esc"], label: "dismiss" });
+    try {
+      if (typeof tieGetArmed === "function" && tieGetArmed(this)) {
+        return [...hints, { keys: ["↵"], label: "again to confirm" }];
+      }
+      if (marked === 0 && typeof tieChordHintsForItem === "function") {
+        const chords = tieChordHintsForItem(this, item);
+        if (chords.length > 0) {
+          return [
+            ...hints.filter((hint) => !hint.keys.includes("↑")),
+            ...chords,
+          ];
+        }
+      }
+    } catch (_tieRelationFooterError) {}
+    return hints;
+  }
+
+  getRelationStageSubtitle(_visibleItems, _allItems) {
+    const stage = this.vaultStage;
+    if (this.getMarkedCount() > 0) {
+      return relationStageSubtitle(stage, this.getMarkedTaskDiff(), {});
+    }
+    return relationStageSubtitle(stage, null, {});
+  }
+
+  ensureRelationConsequenceStrip() {
+    if (!this.contentEl || !this.footerEl) {
+      return null;
+    }
+    if (
+      this.consequenceStripEl &&
+      this.consequenceStripEl.parentElement === this.contentEl
+    ) {
+      return this.consequenceStripEl;
+    }
+    const el = this.contentEl.createDiv({
+      cls: "bob-cnp-consequence-strip",
+      attr: { "aria-live": "polite" },
+    });
+    try {
+      if (
+        this.footerEl.parentElement === this.contentEl &&
+        typeof this.contentEl.insertBefore === "function"
+      ) {
+        this.contentEl.insertBefore(el, this.footerEl);
+      }
+    } catch (_error) {
+      // Best-effort placement between the list and the footer.
+    }
+    this.consequenceStripEl = el;
+    return el;
+  }
+  refreshRelationConsequenceStrip() {
+    if (!this.isRelationStage() && this.stage !== "relation-label") {
+      if (this.consequenceStripEl) this.consequenceStripEl.setText("");
+      return;
+    }
+    const el = this.ensureRelationConsequenceStrip();
+    if (!el) return;
+    const item = (this.visibleItems || [])[this.selectedIndex] || null;
+    if (this.stage === "relation-label") {
+      if (item && item.configuredMerge === true) {
+        const mergePreview = this.relationMergePreview || null;
+        const mergeArmed = Boolean(mergePreview) &&
+          this.relationMergeConfirmNonce === mergePreview.nonce;
+        const mergeText = this.relationMergePreviewing === true
+          ? "⤵ previewing…"
+          : mergePreview
+            ? formatTaskMergeConsequenceStrip(mergePreview)
+            : "⤵ merges source · ↵ link & merge";
+        el.empty();
+        el.createSpan({
+          cls: "bob-cnp-consequence-strip-text bob-cnp-relation-merge-effects",
+          text: mergeArmed
+            ? `${mergeText} — ${relationMergeConfirmBanner(mergePreview.count)}`
+            : mergeText,
+        });
+        return;
+      }
+      const preview = item && (item.closePreview || item.cancelPreview)
+        ? (item.closePreview || item.cancelPreview)
+        : item && item.label
+          ? this.relationCancelPreviewForLabel(item.label)
+          : null;
+      const counts = this.relationLabelCloseCounts(preview);
+      const nonce = this.relationLabelCloseNonce(preview);
+      const confirmBanner = nonce && this.relationCancelConfirmNonce === nonce
+        ? relationCloseConfirmBanner(counts.cancelCount, counts.completeCount)
+        : "";
+      const text = relationLabelCancelConsequenceStrip(item, {
+        preview,
+        confirmBanner,
+      });
+      const completeCue = counts.completeCount > 0 && counts.cancelCount === 0;
+      const cancelCue = counts.cancelCount > 0 && counts.completeCount === 0;
+      const successorCaveat = Boolean(
+        preview && preview.configuredSuccessor &&
+        (preview.successorVerdict === "already_parked" ||
+          preview.successorVerdict === "already_closed"),
+      );
+      el.empty();
+      el.createSpan({
+        cls: completeCue
+          ? "bob-cnp-consequence-strip-text bob-cnp-relation-complete-effects"
+          : cancelCue
+            ? "bob-cnp-consequence-strip-text bob-cnp-relation-cancel-effects"
+            : successorCaveat
+              ? "bob-cnp-consequence-strip-text bob-cnp-relation-successor-caveat"
+              : "bob-cnp-consequence-strip-text",
+        text,
+      });
+      if (!confirmBanner && preview && preview.targetCancelledCaveat) {
+        el.createSpan({
+          cls: "bob-cnp-relation-complete-caveat",
+          text: ` · ${preview.targetCancelledCaveat}`,
+        });
+      }
+      return;
+    }
+    try {
+      if (typeof tieGetArmed === "function" && typeof tieReleaseArmCopy === "function") {
+        const armed = tieGetArmed(this);
+        if (armed && item) {
+          const refs = typeof tieChordOwnerOther === "function"
+            ? tieChordOwnerOther(this, item)
+            : null;
+          if (refs && armed.key === tieArmedKey(refs.owner, refs.other, armed.to)) {
+            el.empty();
+            el.createSpan({
+              cls: "bob-cnp-consequence-strip-text bob-cnp-tie-armed-effects",
+              text: tieReleaseArmCopy(item),
+            });
+            return;
+          }
+        }
+      }
+    } catch (_tieArmedStripError) {}
+    const text = relationStageConsequenceStrip(item, {
+      marked: this.getMarkedTaskItems(),
+      direction: this.relationStageDirection,
+      cancelStayHint: this.relationCancelStayHintForItem(item),
+    });
+    el.empty();
+    el.createSpan({ cls: "bob-cnp-consequence-strip-text", text });
+  }
+}
 // ---- src/427-relation-stage-plugin.js ----
 // Links stage vault pool (`docs/task-relations.md` Rules 7-8).
 class BobNavigationHotkeysRelationStageMixin {
@@ -86588,81 +86836,6 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
     return true;
   }
 
-  refreshRelationConsequenceStrip() {
-    if (!this.isRelationStage() && this.stage !== "relation-label") {
-      if (this.consequenceStripEl) this.consequenceStripEl.setText("");
-      return;
-    }
-    const el = this.ensureRelationConsequenceStrip();
-    if (!el) return;
-    const item = (this.visibleItems || [])[this.selectedIndex] || null;
-    if (this.stage === "relation-label") {
-      if (item && item.configuredMerge === true) {
-        const mergePreview = this.relationMergePreview || null;
-        const mergeArmed = Boolean(mergePreview) &&
-          this.relationMergeConfirmNonce === mergePreview.nonce;
-        const mergeText = this.relationMergePreviewing === true
-          ? "⤵ previewing…"
-          : mergePreview
-            ? formatTaskMergeConsequenceStrip(mergePreview)
-            : "⤵ merges source · ↵ link & merge";
-        el.empty();
-        el.createSpan({
-          cls: "bob-cnp-consequence-strip-text bob-cnp-relation-merge-effects",
-          text: mergeArmed
-            ? `${mergeText} — ${relationMergeConfirmBanner(mergePreview.count)}`
-            : mergeText,
-        });
-        return;
-      }
-      const preview = item && (item.closePreview || item.cancelPreview)
-        ? (item.closePreview || item.cancelPreview)
-        : item && item.label
-          ? this.relationCancelPreviewForLabel(item.label)
-          : null;
-      const counts = this.relationLabelCloseCounts(preview);
-      const nonce = this.relationLabelCloseNonce(preview);
-      const confirmBanner = nonce && this.relationCancelConfirmNonce === nonce
-        ? relationCloseConfirmBanner(counts.cancelCount, counts.completeCount)
-        : "";
-      const text = relationLabelCancelConsequenceStrip(item, {
-        preview,
-        confirmBanner,
-      });
-      const completeCue = counts.completeCount > 0 && counts.cancelCount === 0;
-      const cancelCue = counts.cancelCount > 0 && counts.completeCount === 0;
-      const successorCaveat = Boolean(
-        preview && preview.configuredSuccessor &&
-        (preview.successorVerdict === "already_parked" ||
-          preview.successorVerdict === "already_closed"),
-      );
-      el.empty();
-      el.createSpan({
-        cls: completeCue
-          ? "bob-cnp-consequence-strip-text bob-cnp-relation-complete-effects"
-          : cancelCue
-            ? "bob-cnp-consequence-strip-text bob-cnp-relation-cancel-effects"
-            : successorCaveat
-              ? "bob-cnp-consequence-strip-text bob-cnp-relation-successor-caveat"
-              : "bob-cnp-consequence-strip-text",
-        text,
-      });
-      if (!confirmBanner && preview && preview.targetCancelledCaveat) {
-        el.createSpan({
-          cls: "bob-cnp-relation-complete-caveat",
-          text: ` · ${preview.targetCancelledCaveat}`,
-        });
-      }
-      return;
-    }
-    const text = relationStageConsequenceStrip(item, {
-      marked: this.getMarkedTaskItems(),
-      direction: this.relationStageDirection,
-      cancelStayHint: this.relationCancelStayHintForItem(item),
-    });
-    el.empty();
-    el.createSpan({ cls: "bob-cnp-consequence-strip-text", text });
-  }
 
   getRelationLabelPreviewItems() {
     const raw = this.getRawQuery ? String(this.getRawQuery() || "") : "";
@@ -86749,6 +86922,14 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
       });
     };
     if (!raw.trim()) {
+      let plainGuard = null;
+      try {
+        plainGuard = typeof tieLabelGuardForPicker === "function"
+          ? tieLabelGuardForPicker(this)
+          : null;
+      } catch (_tieLabelGuardError) {
+        plainGuard = null;
+      }
       out.push(Object.freeze({
         kind: "relation-label",
         label: null,
@@ -86757,6 +86938,8 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
         displayText: "Plain link (no relation)",
         searchText: "",
         oneOff: false,
+        disabled: Boolean(plainGuard),
+        disabledReason: plainGuard || "",
       }));
     } else if (typed) {
       const key = relationCancelLabelKey(typed);
@@ -90262,6 +90445,26 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
     if (this.stage === "relation-label" && this.handleRelationLabelKeydown(event)) {
       return;
     }
+    if (this.stage === "value" && this.blockIdMode === "single") {
+      try {
+        const chord = tieShouldHandleChord(this, event);
+        if (chord) {
+          event.preventDefault();
+          event.stopPropagation();
+          if (!this.opening) {
+            void handleTieChord(this, chord.to);
+          }
+          return;
+        }
+      } catch (_tieChordError) {
+        // A chord helper failure never blocks the generic handlers.
+      }
+      try {
+        if (event && event.key === "Escape") {
+          tieDisarm(this);
+        }
+      } catch (_tieDisarmError) {}
+    }
     if (this.stage === "schedule-work-log" && isQuickRollKeydown(event)) {
       event.preventDefault();
       event.stopPropagation();
@@ -90982,6 +91185,409 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
     }
     return await selectedWrite();
   }
+}
+// ---- src/451-picker-tie-chords.js ----
+// Tie chords and armed ↵ releases for the four Task Card relationship
+// stages (`docs/task-dependencies.md` §§6.4, 15; `docs/task-relations.md`
+// LG rows). Dispatched from 450 before the generic handlers. Chords are
+// desired-state commands through `applyTieChange` (596); ↵ on a ⇄ row
+// converts (Depends/Blocks commit on one press, Links/Linked-from arm
+// first). Batches and counted sessions refuse conversions (R8).
+function tieChordTarget(event) {
+  if (!event || event.metaKey === true || event.altKey === true) return null;
+  if (event.isComposing === true || event.keyCode === 229) return null;
+  if (event.repeat === true) return null;
+  if (isCtrlShiftKey(event, "b")) return "other-waits";
+  if (isCtrlShiftKey(event, "l")) return "plain-in";
+  if (isCtrlKey(event, "b")) return "owner-waits";
+  if (isCtrlKey(event, "l")) return "plain-out";
+  return null;
+}
+
+function tieChordStageKind(picker) {
+  if (!picker || typeof picker.isLocalTaskStage !== "function") return null;
+  try {
+    if (!picker.isLocalTaskStage()) return null;
+  } catch (_error) {
+    return null;
+  }
+  if (picker.relationStage === true) {
+    return picker.relationStageDirection === "from" ? "linked-from" : "links";
+  }
+  if (picker.blocksStage === true) return "blocks";
+  if (picker.stage === "value") return "depends";
+  return null;
+}
+
+function tieHighlightedItem(picker) {
+  try {
+    const items = picker.visibleItems || [];
+    const index = picker.selectedIndex || 0;
+    return items[index] || null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function tieItemRef(item) {
+  if (!item || typeof item !== "object") return null;
+  const path = normalizeVaultRelativePath(item.path || "");
+  const blockId = normalizeBulletPropertyValue(
+    item.blockId || item.existingBlockId || "",
+  );
+  if (!path || !blockId) return null;
+  return Object.freeze({ path, blockId });
+}
+
+function tieOwnerBlockId(dependent) {
+  if (!dependent || typeof dependent !== "object") return "";
+  if (dependent.blockId) {
+    return normalizeBulletPropertyValue(dependent.blockId);
+  }
+  const key = String(dependent.key || "");
+  const sep = key.indexOf("\x00");
+  if (sep !== -1 && sep < key.length - 1) {
+    return normalizeBulletPropertyValue(key.slice(sep + 1));
+  }
+  return "";
+}
+
+function tieChordOwner(picker) {
+  try {
+    const stage = picker.vaultStage || null;
+    const dependent = stage && stage.dependent ? stage.dependent : null;
+    if (dependent && dependent.path) {
+      const path = normalizeVaultRelativePath(dependent.path);
+      let blockId = tieOwnerBlockId(dependent);
+      if (!blockId && picker.filePath && stage.files instanceof Map) {
+        const content = stage.files.get(path) || "";
+        const lines = String(content).split(/\r?\n/);
+        const line = lines[dependent.line];
+        if (typeof line === "string") {
+          blockId = normalizeBulletPropertyValue(getTrailingBlockId(line) || "");
+        }
+      }
+      if (!blockId && picker.filePath) {
+        const editor = typeof picker.getEditorContent === "function"
+          ? picker.getEditorContent()
+          : null;
+        if (typeof editor === "string" && picker.cursor) {
+          const line = String(editor).split(/\r?\n/)[picker.cursor.line];
+          if (typeof line === "string") {
+            blockId = normalizeBulletPropertyValue(getTrailingBlockId(line) || "");
+          }
+        }
+      }
+      if (path && blockId) return Object.freeze({ path, blockId });
+    }
+    if (picker.filePath && picker.cursor && Number.isInteger(picker.cursor.line)) {
+      const editor = typeof picker.getEditorContent === "function"
+        ? picker.getEditorContent()
+        : null;
+      if (typeof editor === "string") {
+        const line = String(editor).split(/\r?\n/)[picker.cursor.line];
+        if (typeof line === "string") {
+          const blockId = normalizeBulletPropertyValue(getTrailingBlockId(line) || "");
+          const path = normalizeVaultRelativePath(picker.filePath);
+          if (path && blockId) return Object.freeze({ path, blockId });
+        }
+      }
+    }
+  } catch (_error) {
+    // Best-effort owner resolution; the caller refuses when null.
+  }
+  return null;
+}
+
+function tieChordOwnerOther(picker, item) {
+  const owner = tieChordOwner(picker);
+  const other = tieItemRef(item);
+  if (!owner || !other) return null;
+  return Object.freeze({ owner, other });
+}
+
+function tieChordDisplayName(item) {
+  try {
+    const raw = item.displayText || item.searchText || item.path || "that task";
+    return cleanTaskDisplayText(String(raw)) || "that task";
+  } catch (_error) {
+    return "that task";
+  }
+}
+
+function tieChordRefusal(picker, item, to) {
+  try {
+    if (picker.isCountedSession && picker.isCountedSession()) {
+      return "⌃B acts on one task · needs a single task";
+    }
+  } catch (_error) {
+    // A helper failure never blocks the chord; applyTieChange guards.
+  }
+  try {
+    const marked = typeof picker.getMarkedCount === "function"
+      ? picker.getMarkedCount()
+      : 0;
+    if (marked > 0) {
+      if (item && item.tieConvert === true) {
+        const name = tieChordDisplayName(item);
+        return `↵ can't replace a dependency in a batch · unmark "${name}" or use ⌃L on it`;
+      }
+      return "⌃B acts on one task · clear marks first";
+    }
+  } catch (_error) {
+    // Best-effort batch guard.
+  }
+  return null;
+}
+
+function tieShouldHandleChord(picker, event) {
+  if (!picker || !event) return null;
+  if (picker.stage === "relation-label") return null;
+  if (picker.blockIdMode && picker.blockIdMode !== "single") return null;
+  if (picker.stage !== "value") return null;
+  const kind = tieChordStageKind(picker);
+  if (!kind) return null;
+  const to = tieChordTarget(event);
+  if (!to) return null;
+  return Object.freeze({ kind, to });
+}
+
+function tieArmedKey(owner, other, to) {
+  const o = owner ? `${owner.path}\x00${owner.blockId}` : "";
+  const x = other ? `${other.path}\x00${other.blockId}` : "";
+  return `${o}→${x}:${to}`;
+}
+
+function tieGetArmed(picker) {
+  return picker && picker.tieArmedRelease ? picker.tieArmedRelease : null;
+}
+
+function tieDisarm(picker) {
+  if (picker) picker.tieArmedRelease = null;
+}
+
+function tieIsArmedFor(picker, owner, other, to) {
+  const armed = tieGetArmed(picker);
+  if (!armed) return false;
+  return armed.key === tieArmedKey(owner, other, to);
+}
+
+function tieEnterToForStage(kind) {
+  if (kind === "depends") return "owner-waits";
+  if (kind === "blocks") return "other-waits";
+  if (kind === "links") return "plain-out";
+  if (kind === "linked-from") return "plain-in";
+  return null;
+}
+
+function tieEnterForRow(picker, item) {
+  if (!picker || !item || item.kind === "stage-more") return null;
+  if (item.disabled) return null;
+  if (item.tieConvert !== true) return null;
+  const kind = tieChordStageKind(picker);
+  if (!kind) return null;
+  const to = tieEnterToForStage(kind);
+  if (!to) return null;
+  if (kind === "depends" || kind === "blocks") {
+    return Object.freeze({ action: "convert-dependency", to });
+  }
+  return Object.freeze({ action: "arm-release", to });
+}
+
+async function tieCommitChord(picker, to) {
+  const item = tieHighlightedItem(picker);
+  if (!item || item.kind === "stage-more") return false;
+  if (item.disabled) {
+    new Notice(item.disabledReason || "That task cannot change its tie");
+    return true;
+  }
+  const refs = tieChordOwnerOther(picker, item);
+  if (!refs) {
+    new Notice("That task could not be located");
+    return true;
+  }
+  const refusal = tieChordRefusal(picker, item, to);
+  if (refusal) {
+    new Notice(refusal);
+    return true;
+  }
+  tieDisarm(picker);
+  let outcome = null;
+  try {
+    outcome = await picker.plugin.applyTieChange(refs.owner, refs.other, to, {
+      promptBlockId: picker.showBlockIdStage
+        ? (ref) => picker.showBlockIdStage(ref, { mode: "tie-change" })
+        : null,
+    });
+  } catch (_error) {
+    new Notice("Could not update the tie");
+    return true;
+  }
+  if (!outcome) {
+    new Notice("Could not update the tie");
+    return true;
+  }
+  if (outcome.ok === true) {
+    if (outcome.notice) new Notice(outcome.notice);
+    try {
+      if (typeof picker.reopenDependencyStageFresh === "function") {
+        picker.reopenDependencyStageFresh();
+      }
+    } catch (_error) {
+      // The notice already committed; reopen is best-effort.
+    }
+    return true;
+  }
+  if (outcome.reason === "stale") {
+    try {
+      if (typeof picker.refuseDependencyStale === "function") {
+        picker.refuseDependencyStale(outcome.notice || "changed — reopen");
+      } else {
+        new Notice(outcome.notice || "changed — reopen");
+      }
+    } catch (_error) {
+      new Notice(outcome.notice || "changed — reopen");
+    }
+    return true;
+  }
+  new Notice(outcome.notice || "Could not update the tie");
+  return true;
+}
+
+async function handleTieChord(picker, to) {
+  return tieCommitChord(picker, to);
+}
+
+function tieReleaseArmCopy(item) {
+  const name = tieChordDisplayName(item);
+  return `⚠ Removes the dependency · "${name}" becomes Ready — ↵ again · esc keeps it`;
+}
+
+function tieDisarmOnNavigate(picker, nextIndex) {
+  const armed = tieGetArmed(picker);
+  if (!armed) return;
+  const item = tieHighlightedItem(picker);
+  const key = item ? tieArmedKeyForItem(picker, item) : null;
+  if (key !== armed.key) tieDisarm(picker);
+}
+
+function tieArmedKeyForItem(picker, item) {
+  const refs = tieChordOwnerOther(picker, item);
+  if (!refs) return null;
+  const kind = tieChordStageKind(picker);
+  const to = tieEnterToForStage(kind);
+  if (!to) return null;
+  return tieArmedKey(refs.owner, refs.other, to);
+}
+
+function tieLabelPlainGuardReason(target) {
+  const tie = target && target.tieInfo ? target.tieInfo : null;
+  if (!tie) return null;
+  const hasDependency = Boolean(tie.waitsOn || tie.waitedOnBy);
+  if (!hasDependency) return null;
+  return "A dependency ties them · ⌃L makes it a plain link";
+}
+
+function tieChordNoopForItem(item, to) {
+  const tie = item && item.tieInfo ? item.tieInfo : null;
+  if (!tie) return false;
+  if (to === "owner-waits") return tie.waitsOn === true && tie.waitedOnBy !== true;
+  if (to === "other-waits") return tie.waitedOnBy === true && tie.waitsOn !== true;
+  if (to === "plain-out") return tie.plainOut === true;
+  if (to === "plain-in") return tie.plainIn === true;
+  return false;
+}
+
+function tieChordHintsForItem(picker, item) {
+  const kind = tieChordStageKind(picker);
+  if (!kind || !item || item.kind === "stage-more" || item.disabled) return [];
+  const enterTo = tieEnterToForStage(kind);
+  const chords = [
+    { to: "owner-waits", keys: ["⌃B"], label: "wait on it" },
+    { to: "other-waits", keys: ["⌃⇧B"], label: "make it wait" },
+    { to: "plain-out", keys: ["⌃L"], label: "plain link" },
+    { to: "plain-in", keys: ["⌃⇧L"], label: "link here" },
+  ];
+  const out = [];
+  for (const chord of chords) {
+    if (chord.to === enterTo) continue;
+    if (tieChordNoopForItem(item, chord.to)) continue;
+    out.push({ keys: chord.keys, label: chord.label });
+  }
+  return out;
+}
+
+function tieEnterActionForRow(picker, item) {
+  return tieEnterForRow(picker, item);
+}
+
+function tieRefreshArmedUI(picker) {
+  try {
+    const armed = tieGetArmed(picker);
+    if (picker && typeof picker.refreshRelationConsequenceStrip === "function") {
+      picker.refreshRelationConsequenceStrip();
+    }
+    if (picker && typeof picker.refreshLocalTaskFooter === "function") {
+      picker.refreshLocalTaskFooter();
+    } else if (picker && typeof picker.renderFooter === "function") {
+      try {
+        const item = tieHighlightedItem(picker);
+        const hints = typeof picker.getRelationStageFooterHints === "function"
+          ? picker.getRelationStageFooterHints()
+          : picker.footerHints;
+        picker.footerHints = hints;
+        picker.renderFooter();
+      } catch (_footerError) {}
+    }
+    void armed;
+  } catch (_error) {}
+}
+
+function tieArmRelease(picker, item, to) {
+  const refs = tieChordOwnerOther(picker, item);
+  if (!refs) {
+    new Notice("That task could not be located");
+    return true;
+  }
+  picker.tieArmedRelease = Object.freeze({
+    key: tieArmedKey(refs.owner, refs.other, to),
+    owner: refs.owner,
+    other: refs.other,
+    to,
+    display: tieChordDisplayName(item),
+  });
+  try {
+    const el = typeof picker.ensureRelationConsequenceStrip === "function"
+      ? picker.ensureRelationConsequenceStrip()
+      : picker.consequenceStripEl;
+    if (el) {
+      el.empty();
+      el.createSpan({
+        cls: "bob-cnp-consequence-strip-text bob-cnp-tie-armed-effects",
+        text: tieReleaseArmCopy(item),
+      });
+    }
+  } catch (_stripError) {}
+  try {
+    if (typeof picker.getRelationStageFooterHints === "function") {
+      picker.footerHints = picker.getRelationStageFooterHints();
+      if (typeof picker.renderFooter === "function") picker.renderFooter();
+    }
+  } catch (_footerError) {}
+  return true;
+}
+
+function tieLabelGuardForPicker(picker) {
+  try {
+    const targets = picker && Array.isArray(picker.relationLabelTargets)
+      ? picker.relationLabelTargets
+      : [];
+    const target = targets[0] || null;
+    if (typeof tieLabelPlainGuardReason === "function") {
+      return tieLabelPlainGuardReason(target);
+    }
+  } catch (_error) {}
+  return null;
 }
 // ---- src/455-picker-inbox-route-gate.js ----
 // Task Card inbox-route gate (task-card-gate): one helper,
@@ -91817,6 +92423,7 @@ installBulletPropertyPickerMixins(BulletPropertyPickerModal, [
   BulletPropertyPickerCountedDependencyMixin,
   BulletPropertyPickerBlocksStageMixin,
   BulletPropertyPickerRelationStageMixin,
+  BulletPropertyPickerRelationStageViewMixin,
   BulletPropertyPickerRelationLabelVocabularyMixin,
   BulletPropertyPickerRelationClosePreviewMixin,
   BulletPropertyPickerRelationSuccessorPreviewMixin,
@@ -91827,11 +92434,11 @@ installBulletPropertyPickerMixins(BulletPropertyPickerModal, [
   BulletPropertyPickerKeydownMixin,
   BulletPropertyPickerInboxRouteGateMixin,
 ]);
-// ---- src/470-keydown-and-freshness.js ----
-
-// Ctrl+[ closes the Task Card and every stage its modal opens. Matches the
-// requested chord only: Ctrl alone (no Alt, Meta, or Shift). This is the
-// modal's own close path; it does not synthesize Escape or go through Vim.
+// ---- src/469-ctrl-modifiers.js ----
+// Strict Ctrl modifier helpers for picker key handling. Split out of
+// 470-keydown-and-freshness.js to keep that fragment at or under the
+// 1000-line cap. All chords match Ctrl only, never Meta, so macOS ⌘B stays
+// Bold. Callers (Ctrl+N/P/X/D/R, Ctrl+[, tie chords) share these guards.
 function isCtrlLeftBracketKeydown(event) {
   return (
     Boolean(event) &&
@@ -91843,9 +92450,6 @@ function isCtrlLeftBracketKeydown(event) {
   );
 }
 
-// The keys that close the Task Card without writing: Escape, bare q / Q
-// (Shift allowed for Q; never Ctrl, Meta, or Alt), and Ctrl+[. Composition
-// and text-field focus are the caller's guards.
 function isTaskCardCloseKeydown(event) {
   if (!event) {
     return false;
@@ -91864,13 +92468,31 @@ function isTaskCardCloseKeydown(event) {
 
 function isCtrlKey(event, key) {
   return (
+    Boolean(event) &&
     event.ctrlKey === true &&
     event.altKey !== true &&
     event.metaKey !== true &&
+    event.shiftKey !== true &&
     typeof event.key === "string" &&
-    event.key.toLowerCase() === key
+    event.key.toLowerCase() === String(key).toLowerCase()
   );
 }
+
+function isCtrlShiftKey(event, key) {
+  return (
+    Boolean(event) &&
+    event.ctrlKey === true &&
+    event.shiftKey === true &&
+    event.altKey !== true &&
+    event.metaKey !== true &&
+    typeof event.key === "string" &&
+    event.key.toLowerCase() === String(key).toLowerCase()
+  );
+}
+// ---- src/470-keydown-and-freshness.js ----
+// Strict Ctrl helpers live in 469-ctrl-modifiers.js (isCtrlKey requires
+// shiftKey !== true; isCtrlShiftKey mirrors isCtrlLeftBracketKeydown).
+// Ctrl+Shift+N/P/R/X/D therefore stop matching the bare-Ctrl paths below.
 
 // ---------------------------------------------------------------------------
 // freshness review (nav-review): vault-wide due-task jumps (Ctrl+Alt+J/K,
@@ -145846,7 +146468,7 @@ module.exports.helpers = {
   planLinksEdit,
   planLinkedFromLine,
   linkedFromDesiredAfterDelta,
-  dropPlainLinkEntries, classifyPairTies, planTieChange, tieAbsorptionLinkDeltas, tieNavNoteIsWritable, absorbTieSideFromContent, absorbTiePairsFromContents, applyTieLinksToContent, applyTieLinksFollowUps, buildTieChangeNotice, withTieAbsorptionNotice, withTieAbsorptionFailureSuffix,
+  dropPlainLinkEntries, classifyPairTies, planTieChange, isCtrlKey, isCtrlShiftKey, isCtrlLeftBracketKeydown, tieChordTarget, tieChordStageKind, tieChordRefusal, tieChordOwnerOther, tieChordDisplayName, tieChordHintsForItem, tieShouldHandleChord, tieEnterForRow, tieEnterActionForRow, tieEnterToForStage, tieArmedKey, tieGetArmed, tieDisarm, tieIsArmedFor, tieReleaseArmCopy, tieArmRelease, tieRefreshArmedUI, tieLabelPlainGuardReason, tieLabelGuardForPicker, tieAbsorptionLinkDeltas, tieNavNoteIsWritable, absorbTieSideFromContent, absorbTiePairsFromContents, applyTieLinksToContent, applyTieLinksFollowUps, buildTieChangeNotice, withTieAbsorptionNotice, withTieAbsorptionFailureSuffix,
   buildRelationEditNotice,
   withLinkedFromFollowUpNotice,
   relationPathIsWritable,

@@ -144,7 +144,7 @@ trailing pill cluster: `⛓ prerequisite` (this task waits on it), `🧱 depende
 (plain link in). A stage hides its native tie; the dependency stages also show
 labelled relation pills. Incoming relation pills use `api.relationIndex` and
 are omitted when that index is unavailable. When Enter converts a tie, the
-row badge reads `⇄ add`, `⇄ block`, `⇄ link`, or `⇄ link here`.
+row badge reads `⇄ add`, `⇄ block`, `⇄ link`, or `⇄ link here`. Inside any of the four stages, `⌃B` sets the pair to owner-waits, `⌃⇧B` to other-waits, `⌃L` releases to a plain link out, and `⌃⇧L` releases to a plain link in; chords are desired-state commands that write through `applyTieChange` and show a quiet notice when the pair already holds the tie. The Depends-on and Blocks `⇄` rows commit on one press. The Links and Linked-from `⇄` rows arm first with an amber `⚠ Removes the dependency · "X" becomes Ready — ↵ again · esc keeps it` banner and an `↵ again to confirm` footer; moving the selection, editing the query, pressing Esc, or entering a stage disarms them. With Tab marks or in a counted session, chords refuse with `⌃B acts on one task · clear marks first` (`needs a single task` when counted); a marked batch containing a `⇄` row refuses with `↵ can't replace a dependency in a batch · unmark "X" or use ⌃L on it`. Chords match Ctrl only (never Meta), ignore repeat and IME events, and never fire in the relation-label field or the block-ID prompt.
 
 On an empty filter, Links and Linked from move dependency-tied rows into a
 `TIED BY A DEPENDENCY` band; Depends on and Blocks move plain-linked rows into

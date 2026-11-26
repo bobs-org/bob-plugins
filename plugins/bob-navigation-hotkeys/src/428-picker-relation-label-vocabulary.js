@@ -625,81 +625,6 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
     return true;
   }
 
-  refreshRelationConsequenceStrip() {
-    if (!this.isRelationStage() && this.stage !== "relation-label") {
-      if (this.consequenceStripEl) this.consequenceStripEl.setText("");
-      return;
-    }
-    const el = this.ensureRelationConsequenceStrip();
-    if (!el) return;
-    const item = (this.visibleItems || [])[this.selectedIndex] || null;
-    if (this.stage === "relation-label") {
-      if (item && item.configuredMerge === true) {
-        const mergePreview = this.relationMergePreview || null;
-        const mergeArmed = Boolean(mergePreview) &&
-          this.relationMergeConfirmNonce === mergePreview.nonce;
-        const mergeText = this.relationMergePreviewing === true
-          ? "⤵ previewing…"
-          : mergePreview
-            ? formatTaskMergeConsequenceStrip(mergePreview)
-            : "⤵ merges source · ↵ link & merge";
-        el.empty();
-        el.createSpan({
-          cls: "bob-cnp-consequence-strip-text bob-cnp-relation-merge-effects",
-          text: mergeArmed
-            ? `${mergeText} — ${relationMergeConfirmBanner(mergePreview.count)}`
-            : mergeText,
-        });
-        return;
-      }
-      const preview = item && (item.closePreview || item.cancelPreview)
-        ? (item.closePreview || item.cancelPreview)
-        : item && item.label
-          ? this.relationCancelPreviewForLabel(item.label)
-          : null;
-      const counts = this.relationLabelCloseCounts(preview);
-      const nonce = this.relationLabelCloseNonce(preview);
-      const confirmBanner = nonce && this.relationCancelConfirmNonce === nonce
-        ? relationCloseConfirmBanner(counts.cancelCount, counts.completeCount)
-        : "";
-      const text = relationLabelCancelConsequenceStrip(item, {
-        preview,
-        confirmBanner,
-      });
-      const completeCue = counts.completeCount > 0 && counts.cancelCount === 0;
-      const cancelCue = counts.cancelCount > 0 && counts.completeCount === 0;
-      const successorCaveat = Boolean(
-        preview && preview.configuredSuccessor &&
-        (preview.successorVerdict === "already_parked" ||
-          preview.successorVerdict === "already_closed"),
-      );
-      el.empty();
-      el.createSpan({
-        cls: completeCue
-          ? "bob-cnp-consequence-strip-text bob-cnp-relation-complete-effects"
-          : cancelCue
-            ? "bob-cnp-consequence-strip-text bob-cnp-relation-cancel-effects"
-            : successorCaveat
-              ? "bob-cnp-consequence-strip-text bob-cnp-relation-successor-caveat"
-              : "bob-cnp-consequence-strip-text",
-        text,
-      });
-      if (!confirmBanner && preview && preview.targetCancelledCaveat) {
-        el.createSpan({
-          cls: "bob-cnp-relation-complete-caveat",
-          text: ` · ${preview.targetCancelledCaveat}`,
-        });
-      }
-      return;
-    }
-    const text = relationStageConsequenceStrip(item, {
-      marked: this.getMarkedTaskItems(),
-      direction: this.relationStageDirection,
-      cancelStayHint: this.relationCancelStayHintForItem(item),
-    });
-    el.empty();
-    el.createSpan({ cls: "bob-cnp-consequence-strip-text", text });
-  }
 
   getRelationLabelPreviewItems() {
     const raw = this.getRawQuery ? String(this.getRawQuery() || "") : "";
@@ -786,6 +711,14 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
       });
     };
     if (!raw.trim()) {
+      let plainGuard = null;
+      try {
+        plainGuard = typeof tieLabelGuardForPicker === "function"
+          ? tieLabelGuardForPicker(this)
+          : null;
+      } catch (_tieLabelGuardError) {
+        plainGuard = null;
+      }
       out.push(Object.freeze({
         kind: "relation-label",
         label: null,
@@ -794,6 +727,8 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
         displayText: "Plain link (no relation)",
         searchText: "",
         oneOff: false,
+        disabled: Boolean(plainGuard),
+        disabledReason: plainGuard || "",
       }));
     } else if (typed) {
       const key = relationCancelLabelKey(typed);

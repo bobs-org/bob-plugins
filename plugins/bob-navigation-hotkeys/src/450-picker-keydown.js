@@ -12,6 +12,26 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
     if (this.stage === "relation-label" && this.handleRelationLabelKeydown(event)) {
       return;
     }
+    if (this.stage === "value" && this.blockIdMode === "single") {
+      try {
+        const chord = tieShouldHandleChord(this, event);
+        if (chord) {
+          event.preventDefault();
+          event.stopPropagation();
+          if (!this.opening) {
+            void handleTieChord(this, chord.to);
+          }
+          return;
+        }
+      } catch (_tieChordError) {
+        // A chord helper failure never blocks the generic handlers.
+      }
+      try {
+        if (event && event.key === "Escape") {
+          tieDisarm(this);
+        }
+      } catch (_tieDisarmError) {}
+    }
     if (this.stage === "schedule-work-log" && isQuickRollKeydown(event)) {
       event.preventDefault();
       event.stopPropagation();

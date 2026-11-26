@@ -41,6 +41,11 @@ class BulletPropertyPickerBlocksStageMixin extends FilteredPickerModal {
   showBlocksStage() {
     this.stage = "value";
     this.blocksStage = true;
+    this.relationStage = false;
+    this.relationStageDirection = null;
+    try {
+      if (typeof tieDisarm === "function") tieDisarm(this);
+    } catch (_tieBlocksDisarmError) {}
     this.selectedPropertyItem = this.blocksStageDummyProperty();
     this.pendingTask = null;
     this.pendingBlocks = null;
@@ -130,6 +135,17 @@ class BulletPropertyPickerBlocksStageMixin extends FilteredPickerModal {
     if (this.isCountedSession()) {
       return hints.filter((hint) => !hint.keys.includes("\u21e5"));
     }
+    try {
+      if (marked === 0 && typeof tieChordHintsForItem === "function") {
+        const chords = tieChordHintsForItem(this, item);
+        if (chords.length > 0) {
+          return [
+            ...hints.filter((hint) => !hint.keys.includes("\u2191")),
+            ...chords,
+          ];
+        }
+      }
+    } catch (_tieBlocksFooterError) {}
     return hints;
   }
 
@@ -306,6 +322,26 @@ class BulletPropertyPickerBlocksStageMixin extends FilteredPickerModal {
   }
 
   async chooseBlocksTask(item) {
+    try {
+      if (typeof tieEnterForRow === "function") {
+        const tieAction = tieEnterForRow(this, item);
+        if (tieAction && tieAction.action === "convert-dependency") {
+          const refusal = typeof tieChordRefusal === "function"
+            ? tieChordRefusal(this, item, tieAction.to)
+            : null;
+          if (refusal) {
+            new Notice(refusal);
+            return false;
+          }
+          if (typeof tieCommitChord === "function") {
+            await tieCommitChord(this, tieAction.to);
+            return true;
+          }
+        }
+      }
+    } catch (_tieBlocksEnterError) {
+      // A tie helper failure falls through to the native Blocks path.
+    }
     if (this.getMarkedCount() > 0) {
       return this.commitMarkedBlocks();
     }

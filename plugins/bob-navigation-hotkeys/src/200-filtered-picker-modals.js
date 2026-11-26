@@ -109,6 +109,9 @@ class FilteredPickerModal extends Modal {
       },
     });
     this.inputEl.addEventListener("input", () => {
+      try {
+        if (typeof tieDisarm === "function") tieDisarm(this);
+      } catch (_tieInputDisarmError) {}
       this.selectedIndex = 0;
       this.renderResults();
     });
@@ -216,6 +219,9 @@ class FilteredPickerModal extends Modal {
       return;
     }
 
+    try {
+      if (typeof tieDisarm === "function") tieDisarm(this);
+    } catch (_tieDisarmError) {}
     this.selectedIndex =
       (this.selectedIndex + delta + this.visibleItems.length) %
       this.visibleItems.length;

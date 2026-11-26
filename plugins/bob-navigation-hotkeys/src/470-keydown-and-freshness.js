@@ -1,46 +1,6 @@
-
-// Ctrl+[ closes the Task Card and every stage its modal opens. Matches the
-// requested chord only: Ctrl alone (no Alt, Meta, or Shift). This is the
-// modal's own close path; it does not synthesize Escape or go through Vim.
-function isCtrlLeftBracketKeydown(event) {
-  return (
-    Boolean(event) &&
-    event.ctrlKey === true &&
-    event.altKey !== true &&
-    event.metaKey !== true &&
-    event.shiftKey !== true &&
-    (event.code === "BracketLeft" || event.key === "[")
-  );
-}
-
-// The keys that close the Task Card without writing: Escape, bare q / Q
-// (Shift allowed for Q; never Ctrl, Meta, or Alt), and Ctrl+[. Composition
-// and text-field focus are the caller's guards.
-function isTaskCardCloseKeydown(event) {
-  if (!event) {
-    return false;
-  }
-  const key = String(event.key || "");
-  const ctrl = event.ctrlKey === true;
-  const meta = event.metaKey === true;
-  const alt = event.altKey === true;
-  const shift = event.shiftKey === true;
-  return (
-    (key === "Escape" && !ctrl && !meta && !alt && !shift) ||
-    (key.toLowerCase() === "q" && !ctrl && !meta && !alt) ||
-    isCtrlLeftBracketKeydown(event)
-  );
-}
-
-function isCtrlKey(event, key) {
-  return (
-    event.ctrlKey === true &&
-    event.altKey !== true &&
-    event.metaKey !== true &&
-    typeof event.key === "string" &&
-    event.key.toLowerCase() === key
-  );
-}
+// Strict Ctrl helpers live in 469-ctrl-modifiers.js (isCtrlKey requires
+// shiftKey !== true; isCtrlShiftKey mirrors isCtrlLeftBracketKeydown).
+// Ctrl+Shift+N/P/R/X/D therefore stop matching the bare-Ctrl paths below.
 
 // ---------------------------------------------------------------------------
 // freshness review (nav-review): vault-wide due-task jumps (Ctrl+Alt+J/K,

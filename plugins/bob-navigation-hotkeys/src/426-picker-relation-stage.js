@@ -39,6 +39,9 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
     this.blocksStage = false;
     this.relationStage = true;
     this.relationStageDirection = direction === "from" ? "from" : "to";
+    try {
+      if (typeof tieDisarm === "function") tieDisarm(this);
+    } catch (_tieRelationDisarmError) {}
     this.relationLabel = null;
     this.relationCancelExpected = null;
     this.relationCloseExpected = null;
@@ -141,110 +144,6 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
     return true;
   }
 
-  relationStageListOptions() {
-    const title =
-      (this.vaultStage && this.vaultStage.title) || "🪢 Links";
-    return {
-      items: this.vaultStage
-        ? planRelationStageItemsFromVault(
-            this.vaultStage,
-            this.getQuery ? this.getQuery() : "",
-          )
-        : [],
-      title,
-      headerIcon: "link-2",
-      inputLabel: "Filter tasks",
-      placeholder: "Filter tasks",
-      resultsLabel: this.isLinkedFromStage()
-        ? "Tasks that could link here"
-        : "Tasks this could link to",
-      emptyText: this.isLinkedFromStage()
-        ? "No matching editable tasks in the vault"
-        : "No matching tasks in the vault",
-      footerHints: this.getRelationStageFooterHints(),
-      getSubtitle: (visibleItems, allItems) =>
-        this.getRelationStageSubtitle(visibleItems, allItems),
-      filterItem: (item, query) => fuzzyMatchesText(item.searchText, query),
-      renderItem: (item, rowEl, query) =>
-        this.renderTaskValueItem(item, rowEl, query),
-      openItem: (item) => this.chooseRelationTask(item),
-    };
-  }
-
-  getRelationStageFooterHints() {
-    if (!this.isRelationStage()) {
-      return this.getLocalTaskFooterHints();
-    }
-    const marked = this.getMarkedCount();
-    const item = (this.visibleItems || [])[this.selectedIndex];
-    // §19: footer hints follow the selected row's kind — a mention row
-    // opens instead of linking.
-    if (item && item.mention === true && marked === 0) {
-      const hints = [
-        { keys: ["↑", "↓"], label: "navigate" },
-        { keys: ["↵"], label: "open mention" },
-        { keys: ["⌃↵"], label: "add relation" },
-      ];
-      if (!this.taskSession || this.taskSession.type === "single") {
-        hints.push({ keys: ["~"], label: "flip direction" });
-      }
-      hints.push({ keys: ["esc"], label: "dismiss" });
-      return hints;
-    }
-    let verb = this.isLinkedFromStage() ? "link here" : "link";
-    if (marked > 0) {
-      verb = `apply ${marked}`;
-    } else if (item && item.stageSection === "current") {
-      verb = this.isLinkedFromStage() ? "remove source" : "unlink";
-    }
-    const hints = [
-      { keys: ["↑", "↓"], label: "navigate" },
-      { keys: ["⇥"], label: "mark" },
-      { keys: ["↵"], label: verb },
-      { keys: ["⌃↵"], label: "with a relation" },
-    ];
-    if (!this.taskSession || this.taskSession.type === "single") {
-      hints.push({ keys: ["~"], label: "flip direction" });
-    }
-    hints.push({ keys: ["esc"], label: "dismiss" });
-    return hints;
-  }
-
-  getRelationStageSubtitle(_visibleItems, _allItems) {
-    const stage = this.vaultStage;
-    if (this.getMarkedCount() > 0) {
-      return relationStageSubtitle(stage, this.getMarkedTaskDiff(), {});
-    }
-    return relationStageSubtitle(stage, null, {});
-  }
-
-  ensureRelationConsequenceStrip() {
-    if (!this.contentEl || !this.footerEl) {
-      return null;
-    }
-    if (
-      this.consequenceStripEl &&
-      this.consequenceStripEl.parentElement === this.contentEl
-    ) {
-      return this.consequenceStripEl;
-    }
-    const el = this.contentEl.createDiv({
-      cls: "bob-cnp-consequence-strip",
-      attr: { "aria-live": "polite" },
-    });
-    try {
-      if (
-        this.footerEl.parentElement === this.contentEl &&
-        typeof this.contentEl.insertBefore === "function"
-      ) {
-        this.contentEl.insertBefore(el, this.footerEl);
-      }
-    } catch (_error) {
-      // Best-effort placement between the list and the footer.
-    }
-    this.consequenceStripEl = el;
-    return el;
-  }
 
   // 🍅 badge (display only): today's Pomodoro links over the current pool.
   // Relations never consume them; the badge only informs (LG13).
@@ -354,6 +253,40 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
   }
 
   chooseRelationTask(item, options = {}) {
+    try {
+      if (!options.withLabel && typeof tieEnterForRow === "function") {
+        const tieAction = tieEnterForRow(this, item);
+        if (tieAction && tieAction.action === "arm-release") {
+          const refusal = typeof tieChordRefusal === "function"
+            ? tieChordRefusal(this, item, tieAction.to)
+            : null;
+          if (refusal) {
+            new Notice(refusal);
+            return false;
+          }
+          const refs = typeof tieChordOwnerOther === "function"
+            ? tieChordOwnerOther(this, item)
+            : null;
+          if (!refs) {
+            new Notice("That task could not be located");
+            return false;
+          }
+          if (typeof tieIsArmedFor === "function" && tieIsArmedFor(this, refs.owner, refs.other, tieAction.to)) {
+            if (typeof tieDisarm === "function") tieDisarm(this);
+            if (typeof tieCommitChord === "function") {
+              void tieCommitChord(this, tieAction.to);
+              return true;
+            }
+          }
+          if (typeof tieArmRelease === "function") {
+            tieArmRelease(this, item, tieAction.to);
+            return true;
+          }
+        }
+      }
+    } catch (_tieRelationEnterError) {
+      // A tie helper failure falls through to the native Links path.
+    }
     if (this.getMarkedCount() > 0 && !options.withLabel) {
       return this.commitMarkedRelations();
     }
@@ -398,6 +331,23 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
   commitMarkedRelations() {
     if (this.getMarkedCount() === 0) {
       return false;
+    }
+    try {
+      const marked = typeof this.getMarkedTaskItems === "function"
+        ? this.getMarkedTaskItems()
+        : [];
+      const converting = (Array.isArray(marked) ? marked : []).find(
+        (entry) => entry && entry.tieConvert === true,
+      );
+      if (converting) {
+        const name = typeof tieChordDisplayName === "function"
+          ? tieChordDisplayName(converting)
+          : cleanTaskDisplayText(converting.displayText || "") || "that task";
+        new Notice(`↵ can't replace a dependency in a batch · unmark "${name}" or use ⌃L on it`);
+        return false;
+      }
+    } catch (_tieBatchError) {
+      // A tie helper failure falls through to the native batch path.
     }
     const planned = planRelationStageCommit(this.getMarkedTaskItems());
     if (planned.add.length === 0 && planned.remove.length === 0) {

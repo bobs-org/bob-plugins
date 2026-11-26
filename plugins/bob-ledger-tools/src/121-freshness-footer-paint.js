@@ -683,6 +683,15 @@ function freshnessFooterPaint(el, view) {
   if (!el) {
     return null;
   }
+  const overlayOwner = el._bobWalkerFooterOverlayOwner;
+  if (
+    overlayOwner &&
+    Array.isArray(overlayOwner.walkerFooterOverlayStack) &&
+    overlayOwner.walkerFooterOverlayStack.length
+  ) {
+    el._bobWalkerFooterDeferredView = view;
+    return overlayOwner.freshnessFooterParts || el._bobFreshnessParts || null;
+  }
   const parts = freshnessFooterEnsureDom(el);
   if (!parts) {
     return null;

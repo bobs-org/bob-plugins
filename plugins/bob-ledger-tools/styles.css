@@ -354,6 +354,28 @@ a.bob-plan-ready:hover {
   pointer-events: none !important;
 }
 
+.bob-walker-footer-overlay-active > :not(.bob-walker-footer-overlay) {
+  display: none !important;
+}
+
+.bob-walker-footer-overlay {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.bob-walker-footer-fallback {
+  position: relative;
+  z-index: 2;
+  padding: 0.35em 0.75em;
+  border-bottom: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  font-family: var(--font-interface);
+  font-size: var(--font-ui-small);
+}
+
 .bob-freshness-main {
   appearance: none;
   background: transparent;

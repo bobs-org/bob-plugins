@@ -29,6 +29,11 @@ class BobLedgerToolsFreshnessStatusMixin {
       }
       this.freshnessStatusEl = el;
       try {
+        el._bobWalkerFooterOverlayOwner = this;
+        el.setAttribute?.("aria-live", "polite");
+        el.setAttribute?.("aria-atomic", "true");
+      } catch (_error) {}
+      try {
         if (typeof el.addClass === "function") {
           el.addClass("bob-freshness");
           el.addClass("bob-freshness-hidden");
@@ -149,6 +154,7 @@ class BobLedgerToolsFreshnessStatusMixin {
       this.linkWalkerFooterAlbumUnsubscribe = linksWalkerFooterSubscribeAlbum(this);
       if (typeof this.register === "function") {
         this.register(() => {
+          walkerFooterOverlayClear(this);
           this.linkWalkerFooterAlbumUnsubscribe?.();
           this.linkWalkerFooterAlbumUnsubscribe = null;
         });
@@ -158,6 +164,14 @@ class BobLedgerToolsFreshnessStatusMixin {
       this.freshnessStatusEl = null;
       this.freshnessFooterParts = null;
     }
+  }
+
+  walkerFooterOverlayPush(text, options = {}) {
+    return walkerFooterOverlayPush(this, text, options);
+  }
+
+  walkerFooterOverlayPop(token) {
+    return walkerFooterOverlayPop(this, token);
   }
 
   // Walker-footer host (plan 202611/walker_footers.md, phase host): the

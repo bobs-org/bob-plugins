@@ -7,6 +7,158 @@
 const WALKER_FOOTER_DOORBELL_EVENT = "bob-navigation-hotkeys:walk-mode";
 const WALKER_FOOTER_REPEAT_HINT = "]] next";
 
+function walkerFooterOverlayEnsureNode(host, className, doc) {
+  try {
+    if (!host || !doc || typeof doc.createElement !== "function") return null;
+    let node = host.querySelector?.("." + className);
+    if (!node) {
+      node = doc.createElement("div");
+      node.className = className;
+      host.appendChild?.(node);
+    }
+    node.setAttribute?.("role", "status");
+    node.setAttribute?.("aria-live", "polite");
+    node.setAttribute?.("aria-atomic", "true");
+    return node;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function walkerFooterOverlayStatusBarVisible(el) {
+  try {
+    if (!el || el.isConnected === false) return false;
+    const win = el.ownerDocument && el.ownerDocument.defaultView;
+    const getStyle = win && win.getComputedStyle;
+    if (typeof getStyle === "function") {
+      for (let node = el.parentElement; node; node = node.parentElement) {
+        const style = getStyle.call(win, node);
+        if (style && (style.display === "none" || style.visibility === "hidden")) {
+          return false;
+        }
+        if (node.classList?.contains("status-bar")) break;
+      }
+    }
+    const bar = el.closest?.(".status-bar");
+    if (bar && typeof bar.getClientRects === "function" && bar.getClientRects().length === 0) {
+      return false;
+    }
+    return true;
+  } catch (_error) {
+    return Boolean(el);
+  }
+}
+
+function walkerFooterOverlayRender(plugin) {
+  const stack = plugin && Array.isArray(plugin.walkerFooterOverlayStack)
+    ? plugin.walkerFooterOverlayStack
+    : [];
+  const top = stack.length ? stack[stack.length - 1] : null;
+  const el = plugin && plugin.freshnessStatusEl;
+  const previousFallback = plugin && plugin.walkerFooterOverlayFallback;
+  try { previousFallback?.remove?.(); } catch (_error) {}
+  if (plugin) plugin.walkerFooterOverlayFallback = null;
+
+  if (!top) {
+    try {
+      el?.classList?.remove("bob-walker-footer-overlay-active");
+      const overlay = el?.querySelector?.(".bob-walker-footer-overlay");
+      overlay?.remove?.();
+    } catch (_error) {}
+    return;
+  }
+
+  const visible = walkerFooterOverlayStatusBarVisible(el);
+  if (visible) {
+    try {
+      el.classList?.remove("bob-freshness-hidden");
+      el.classList?.add("bob-walker-footer-overlay-active");
+      el.setAttribute?.("aria-hidden", "false");
+      const overlay = walkerFooterOverlayEnsureNode(
+        el,
+        "bob-walker-footer-overlay",
+        el.ownerDocument,
+      );
+      if (overlay) overlay.textContent = top.text;
+    } catch (_error) {}
+    return;
+  }
+
+  const host = top.view && (top.view.contentEl || top.view.containerEl);
+  const doc = host && host.ownerDocument;
+  const fallback = walkerFooterOverlayEnsureNode(
+    host,
+    "bob-walker-footer-fallback",
+    doc,
+  );
+  if (fallback) {
+    fallback.textContent = top.text;
+    plugin.walkerFooterOverlayFallback = fallback;
+  }
+}
+
+function walkerFooterOverlayPush(plugin, text, options = {}) {
+  if (!plugin || typeof text !== "string") return null;
+  if (!Array.isArray(plugin.walkerFooterOverlayStack)) {
+    plugin.walkerFooterOverlayStack = [];
+  }
+  const token = {};
+  plugin.walkerFooterOverlayStack.push({
+    token,
+    text,
+    view: options && options.view ? options.view : null,
+  });
+  const el = plugin.freshnessStatusEl;
+  if (el) {
+    try {
+      el.setAttribute?.("aria-live", "polite");
+      el.setAttribute?.("aria-atomic", "true");
+      el._bobWalkerFooterOverlayOwner = plugin;
+    } catch (_error) {}
+  }
+  walkerFooterOverlayRender(plugin);
+  return token;
+}
+
+function walkerFooterOverlayPop(plugin, token) {
+  const stack = plugin && plugin.walkerFooterOverlayStack;
+  if (!Array.isArray(stack) || !stack.length) return false;
+  const top = stack[stack.length - 1];
+  if (token && top.token !== token) return false;
+  stack.pop();
+  walkerFooterOverlayRender(plugin);
+  if (stack.length) return true;
+
+  const el = plugin.freshnessStatusEl;
+  if (el) {
+    try { el.classList?.remove("bob-walker-footer-overlay-active"); } catch (_error) {}
+    const deferred = el._bobWalkerFooterDeferredView;
+    el._bobWalkerFooterDeferredView = null;
+    if (deferred) {
+      try {
+        plugin.freshnessFooterLastView = deferred;
+        plugin.freshnessFooterParts = freshnessFooterPaint(el, deferred);
+      } catch (_error) {}
+    }
+  }
+  try {
+    plugin.freshnessFooterPaintKey = null;
+    plugin.updateFreshnessStatusBar?.();
+  } catch (_error) {}
+  return true;
+}
+
+function walkerFooterOverlayClear(plugin) {
+  if (!plugin) return;
+  plugin.walkerFooterOverlayStack = [];
+  walkerFooterOverlayRender(plugin);
+  const el = plugin.freshnessStatusEl;
+  if (el) {
+    el._bobWalkerFooterDeferredView = null;
+    try { el.classList?.remove("bob-walker-footer-overlay-active"); } catch (_error) {}
+  }
+}
+
 // The s mark is on exactly when ]s has a row to land on. Keep pushing while s
 // is selected so nav v6 can paint its attention as readable ink. This is a
 // display projection over the existing memo and never changes task or walk

@@ -865,7 +865,7 @@ function compareRelationStageCanonical(first, second, ownerPath) {
   });
 }
 
-function planRelationStageItemsFromVault(stage, query) {
+function planRelationStageItemsFromVault(stage, query, plugin = null) {
   if (!stage) {
     return Object.freeze([]);
   }
@@ -878,7 +878,7 @@ function planRelationStageItemsFromVault(stage, query) {
       linkedKeys: stage.linkedKeys,
       previousDailyPath: stage.previousDailyPath,
     });
-    return planTieVisibilityItems(items, stage, "linked-from", query || "");
+    return planTieVisibilityItems(items, stage, "linked-from", query || "", plugin);
   }
   const items = planRelationStageView({
     sources: stage.sources,
@@ -890,7 +890,7 @@ function planRelationStageItemsFromVault(stage, query) {
     todayMap: stage.todayMap,
     previousDailyPath: stage.previousDailyPath,
   });
-  return planTieVisibilityItems(items, stage, "links", query || "");
+  return planTieVisibilityItems(items, stage, "links", query || "", plugin);
 }
 
 // Pure commit plan for one Links stage gesture (LG15): marked and chosen

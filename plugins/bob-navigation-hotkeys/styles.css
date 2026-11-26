@@ -1414,6 +1414,13 @@
   color: var(--text-warning, var(--text-muted));
 }
 
+.bob-cnp-tie-release-alternative {
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* --- Footer ------------------------------------------------------------- */
 
 .bob-cnp-footer {

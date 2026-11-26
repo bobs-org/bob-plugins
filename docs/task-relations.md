@@ -155,6 +155,20 @@ consequence strip for the selected row, including Ready/Blocked status,
 lane and Pomodoro effects, and `⌃L keeps a plain link` for CURRENT. A
 converted result adds `Replaces the 🪢 link`.
 
+Dependency pill tooltips name the plain-link key that applies in that stage
+(`⌃L` or `⌃⇧L`); plain-link pills name the `↵` conversion. Depends-on
+consequences read the owner's state and Today link, including the count of
+open prerequisites after the add. A `^prj` owner uses the project consequence
+copy. Cycle rows name a reversing chord only when the reversal passes the
+planner; footer chord hints omit guarded and stale changes and update with
+selection movement.
+
+Links and Linked from release copy includes a muted `⌃B` / `⌃⇧B reverses`
+segment only when that opposite dependency change is valid. Releasing the last
+open `^prj` prerequisite reports the number of residents unblocked. Adding a
+dependency preserves a labelled relation and appends its label to the notice,
+for example `⛓ Now waits on “X” · kept the "follow-up of" relation`.
+
 When a hand-edited LINKS or Depends-On line creates an overlap, the existing
 mirror shows one notice after the cursor leaves the line:
 `"X" is already a dependency · reconcile will drop this plain link`. The

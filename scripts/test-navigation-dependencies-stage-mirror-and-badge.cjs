@@ -11,6 +11,7 @@ const {
   stubStageModal,
   stubReopen,
 } = require("./navigation-dependencies-stage-harness.cjs");
+const { helpers } = NavigationHotkeysPlugin;
 
 // ---------------------------------------------------------------------------
 // nav-mirror-stage-fixes: the hand-edit mirror resolves its owner in burst
@@ -310,5 +311,48 @@ test("stage vault batch with a stale row refuses and reopens", async () => {
   assert.equal(editor.content, owner);
   assert.equal(editor.undoGroups, 0);
   assert.equal(store.get("Other.md"), "- [ ] #task Target edited ^target");
+});
+
+test("Depends-on consequence follows the owner and its live Pomodoro link", () => {
+  const ownerLine = "- [/] #task Owner ^owner";
+  const candidateLine = "- [*] #task Candidate ^candidate";
+  const prereqLine = "- [ ] #task Existing prerequisite ^prereq";
+  const content = [
+    ownerLine,
+    "  - ⛓️ **DEPENDS ON:** [[#^prereq]]",
+    candidateLine,
+    prereqLine,
+  ].join("\n");
+  const ownerKey = "Tasks.md\0owner";
+  const prereqKey = "Tasks.md\0prereq";
+  const owner = {
+    path: "Tasks.md",
+    line: 0,
+    blockId: "owner",
+    rawLine: ownerLine,
+    displayText: "Owner",
+    status: "/",
+  };
+  const stage = {
+    sources: [owner],
+    dependent: owner,
+    files: new Map([["Tasks.md", content]]),
+    edges: new Map([[ownerKey, [prereqKey]]]),
+    index: { byKey: new Map([[ownerKey, { open: true }], [prereqKey, { open: true }]]) },
+    todayLinks: [{ key: ownerKey, label: "JOB", range: "10:10–10:35" }],
+  };
+  const candidate = {
+    kind: "local-task",
+    path: "Tasks.md",
+    line: 2,
+    blockId: "candidate",
+    rawLine: candidateLine,
+    displayText: "Candidate",
+    status: "*",
+  };
+  assert.equal(
+    helpers.dependencyStageConsequenceStrip(candidate, { stage }),
+    "Waits on it · this task becomes Blocked · it takes In Progress · ⚠ removes this task's link from JOB 10:10–10:35",
+  );
 });
 

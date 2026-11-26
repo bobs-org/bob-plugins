@@ -114,7 +114,7 @@ class BulletPropertyPickerBlocksStageMixin extends FilteredPickerModal {
     ) {
       void this.plugin.refreshVaultDependencyStage(this, stage);
     }
-    void this.refreshBlocksStageTodayLinks();
+    void this.refreshTaskStageTodayLinks();
   }
 
   getBlocksStageFooterHints() {
@@ -211,6 +211,8 @@ class BulletPropertyPickerBlocksStageMixin extends FilteredPickerModal {
     const item = (this.visibleItems || [])[this.selectedIndex] || null;
     const text = blocksStageConsequenceStrip(item, {
       sources: this.vaultStage && this.vaultStage.sources,
+      stage: this.vaultStage,
+      plugin: this.plugin,
       marked,
     });
     el.empty();
@@ -223,9 +225,9 @@ class BulletPropertyPickerBlocksStageMixin extends FilteredPickerModal {
     });
   }
 
-  async refreshBlocksStageTodayLinks() {
+  async refreshTaskStageTodayLinks() {
     const stage = this.vaultStage;
-    if (!stage || !this.blocksStage) {
+    if (!stage || (!this.blocksStage && this.relationStage)) {
       return;
     }
     const files = stage.files instanceof Map ? stage.files : new Map();
@@ -265,7 +267,7 @@ class BulletPropertyPickerBlocksStageMixin extends FilteredPickerModal {
     // A vault pool refresh can swap the stage while the daily note loads;
     // the read still applies, to whichever stage is current now.
     const current = this.vaultStage;
-    if (!current || !this.blocksStage || dailyContent === null) {
+    if (!current || this.relationStage || dailyContent === null) {
       return;
     }
     if (current.files instanceof Map) {
@@ -276,6 +278,11 @@ class BulletPropertyPickerBlocksStageMixin extends FilteredPickerModal {
       dailyPath,
       current.index,
     );
+    if (!this.blocksStage) {
+      this.vaultStage = { ...current, todayLinks: Object.freeze(todayLinks) };
+      this.refreshDependencyConsequenceStrip();
+      return;
+    }
     const marked = this.markedLines instanceof Set ? new Set(this.markedLines) : new Set();
     this.vaultStage = this.decorateOpenBlocksStage(current, {
       sources: current.sources,

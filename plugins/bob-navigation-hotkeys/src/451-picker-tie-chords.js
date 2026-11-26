@@ -321,9 +321,16 @@ function tieEnterToForStage(kind) {
 function tieEnterForRow(picker, item) {
   if (!picker || !item || item.kind === "stage-more") return null;
   if (item.disabled) return null;
-  if (item.tieConvert !== true) return null;
   const kind = tieChordStageKind(picker);
   if (!kind) return null;
+  const tie = item.tieInfo || null;
+  const hasKeptRelation = Boolean(
+    (kind === "depends" || kind === "blocks") &&
+    tie &&
+    ((Array.isArray(tie.labelledOut) && tie.labelledOut.length > 0) ||
+      (Array.isArray(tie.labelledIn) && tie.labelledIn.length > 0)),
+  );
+  if (item.tieConvert !== true && !hasKeptRelation) return null;
   const to = tieEnterToForStage(kind);
   if (!to) return null;
   if (kind === "depends" || kind === "blocks") {
@@ -466,9 +473,69 @@ function tieChordNoopForItem(item, to) {
   return false;
 }
 
+function tieChordHintIsStale(picker, item, stage, refs) {
+  if (
+    !stage || !(stage.files instanceof Map) ||
+    item.stale === true || item.staleRow === true || item.isStale === true ||
+    item.changedSinceOpen === true || item.disabledReason === "changed — reopen"
+  ) {
+    return true;
+  }
+  const liveContent = (path) => {
+    if (
+      picker.filePath === path &&
+      typeof picker.getEditorContent === "function"
+    ) {
+      try {
+        const content = picker.getEditorContent();
+        if (typeof content === "string") return content;
+      } catch (_error) {}
+    }
+    const plugin = picker.plugin;
+    for (const method of ["findRelationEditOpenEditor", "findBlocksEditOpenEditor"]) {
+      try {
+        const editor = plugin && typeof plugin[method] === "function"
+          ? plugin[method](path)
+          : null;
+        if (editor && typeof editor.getValue === "function") {
+          return String(editor.getValue() || "");
+        }
+      } catch (_error) {}
+    }
+    return null;
+  };
+  const paths = refs
+    ? new Set([refs.owner.path, refs.other.path])
+    : new Set([item.path]);
+  for (const path of paths) {
+    if (!path || !stage.files.has(path)) return true;
+    const live = liveContent(path);
+    if (live !== null && live !== stage.files.get(path)) return true;
+  }
+  if (refs && typeof item.rawLine === "string") {
+    const content = stage.files.get(refs.other.path);
+    const found = tieFindTaskLine(
+      new Map([[refs.other.path, String(content || "")]]),
+      refs.other.path,
+      refs.other.blockId,
+    );
+    if (found.reason || String(found.lines[found.line] || "") !== item.rawLine) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function tieChordHintsForItem(picker, item) {
   const kind = tieChordStageKind(picker);
-  if (!kind || !item || item.kind === "stage-more" || item.disabled) return [];
+  if (!kind || !item || item.kind === "stage-more") return [];
+  const stage = picker.vaultStage;
+  const refs = tieChordOwnerOther(picker, item);
+  const missing = !refs && typeof tieMissingIdRequest === "function"
+    ? tieMissingIdRequest(picker, item)
+    : null;
+  if (!refs && (!missing || !missing.missing || !missing.missing.path)) return [];
+  if (tieChordHintIsStale(picker, item, stage, refs)) return [];
   const enterTo = tieEnterToForStage(kind);
   const chords = [
     { to: "owner-waits", keys: ["⌃B"], label: "wait on it" },
@@ -480,6 +547,16 @@ function tieChordHintsForItem(picker, item) {
   for (const chord of chords) {
     if (chord.to === enterTo) continue;
     if (tieChordNoopForItem(item, chord.to)) continue;
+    if (refs) {
+      const planned = tieVisibilityTieChangePlan(
+        stage,
+        picker.plugin,
+        refs.owner,
+        refs.other,
+        chord.to,
+      );
+      if (!planned || planned.kind !== "change") continue;
+    }
     out.push({ keys: chord.keys, label: chord.label });
   }
   return out;

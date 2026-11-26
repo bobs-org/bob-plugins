@@ -213,6 +213,8 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
       this.vaultStage &&
       typeof this.refreshDependencyConsequenceStrip === "function"
     ) {
+      this.footerHints = this.getLocalTaskFooterHints();
+      this.renderFooter();
       this.refreshDependencyConsequenceStrip();
     }
     if (this.relationStage && this.isLocalTaskStage()) {

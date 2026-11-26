@@ -487,6 +487,22 @@ function planTieChange(args = {}) {
     plainOut: ownerPlain.ok && ownerPlain.out.some((entry) => tieIdentityOf(entry) === otherIdentity),
     plainIn: otherPlain.ok && otherPlain.out.some((entry) => tieIdentityOf(entry) === ownerIdentity),
   });
+  const keptRelationLabel = [
+    ...tieLabelledRelationsForPair(
+      ownerFound.lines,
+      ownerFound.line,
+      owner.path,
+      other,
+      resolveLinkpath,
+    ),
+    ...tieLabelledRelationsForPair(
+      otherFound.lines,
+      otherFound.line,
+      other.path,
+      owner,
+      resolveLinkpath,
+    ),
+  ][0] || null;
   const idsNeeded = Object.freeze([owner, other]);
   const sameNote = owner.path === other.path;
   const ownerName = quoteRelationNoticeName(
@@ -701,6 +717,7 @@ function planTieChange(args = {}) {
       links: links.deltas,
       mirrors: links.mirrors,
       idsNeeded,
+      keptRelationLabel,
       notice: reversing
         ? `⇄ Reversed · ${noticeBase}`
         : absorbedDrops > 0
@@ -868,4 +885,47 @@ function tieHasLabelledEntry(lines, taskLine, ownerPath, counterpart, resolveLin
     return false;
   }
   return false;
+}
+
+function tieLabelledRelationsForPair(
+  lines,
+  taskLine,
+  sourcePath,
+  counterpart,
+  resolveLinkpath,
+) {
+  try {
+    if (!Array.isArray(lines) || !Number.isInteger(taskLine)) return [];
+    const labels = [];
+    for (const index of findLinksChildren(lines, taskLine)) {
+      const parsed = parseLinksLine(String(lines[index] || ""), {
+        isDirectChildOfTask: true,
+      });
+      if (!parsed || parsed.verdict !== "accept") continue;
+      for (const entry of parsed.entries || []) {
+        if (
+          !entry.label ||
+          entry.mention === true ||
+          (typeof TASK_MENTION_LABEL === "string" &&
+            entry.label === TASK_MENTION_LABEL)
+        ) {
+          continue;
+        }
+        const targetPath = dependencyPathForLinkNote(
+          entry.note,
+          sourcePath,
+          resolveLinkpath,
+        );
+        if (
+          normalizeVaultRelativePath(targetPath) === counterpart.path &&
+          normalizeBulletPropertyValue(entry.blockId) === counterpart.blockId
+        ) {
+          labels.push(String(entry.label));
+        }
+      }
+    }
+    return labels;
+  } catch (_error) {
+    return [];
+  }
 }

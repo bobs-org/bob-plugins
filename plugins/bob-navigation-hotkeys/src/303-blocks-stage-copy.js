@@ -83,6 +83,23 @@ function blocksStageConsequenceStrip(item, context = {}) {
   if (item.disabled) {
     if (
       item.disabledReason === "would create a cycle" &&
+      item.tieInfo && item.tieInfo.waitsOn &&
+      typeof tieVisibilityTieChangePlan === "function"
+    ) {
+      const owner = sources[0] || null;
+      const planned = tieVisibilityTieChangePlan(
+        context.stage,
+        context.plugin,
+        owner,
+        item,
+        "other-waits",
+      );
+      if (planned && planned.kind === "change" && planned.reversing === true) {
+        return "⟲ This task waits on it · ⌃⇧B reverses";
+      }
+    }
+    if (
+      item.disabledReason === "would create a cycle" &&
       Array.isArray(item.cycleLabels) &&
       item.cycleLabels.length > 0
     ) {

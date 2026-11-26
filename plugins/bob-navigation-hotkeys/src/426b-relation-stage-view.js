@@ -10,6 +10,7 @@ class BulletPropertyPickerRelationStageViewMixin {
         ? planRelationStageItemsFromVault(
             this.vaultStage,
             this.getQuery ? this.getQuery() : "",
+            this.plugin,
           )
         : [],
       title,
@@ -211,6 +212,18 @@ class BulletPropertyPickerRelationStageViewMixin {
       cancelStayHint: this.relationCancelStayHintForItem(item),
     });
     el.empty();
-    el.createSpan({ cls: "bob-cnp-consequence-strip-text", text });
+    const releaseAlternative = /^(.*?)( · ⌃(?:⇧)?B reverses · .+)$/.exec(text);
+    if (releaseAlternative) {
+      el.createSpan({
+        cls: "bob-cnp-consequence-strip-text",
+        text: releaseAlternative[1],
+      });
+      el.createSpan({
+        cls: "bob-cnp-tie-release-alternative",
+        text: releaseAlternative[2],
+      });
+    } else {
+      el.createSpan({ cls: "bob-cnp-consequence-strip-text", text });
+    }
   }
 }

@@ -278,15 +278,39 @@ test("label stage: plain row disabled while a dependency ties the pair", () => {
   assert.equal(helpers.tieLabelGuardForPicker({ relationLabelTargets: [{ tieInfo: null }] }), null);
 });
 
-test("footer hints: contextual chords only, never the ↵ tie, never no-ops", () => {
-  const dependsPicker = { stage: "value", isLocalTaskStage: () => true, blocksStage: false, relationStage: false, visibleItems: [], selectedIndex: 0 };
-  const untied = { kind: "local-task", tieInfo: null, disabled: false };
-  const hints = helpers.tieChordHintsForItem(dependsPicker, untied);
-  assert.ok(hints.length >= 3);
-  assert.ok(!hints.some((hint) => hint.to === "owner-waits"));
-  const alreadyWaiting = { kind: "local-task", tieInfo: { waitsOn: true }, disabled: false };
-  assert.ok(!helpers.tieChordHintsForItem(dependsPicker, alreadyWaiting).some((hint) => hint.to === "owner-waits"));
-  assert.deepEqual(helpers.tieChordHintsForItem(dependsPicker, { ...untied, disabled: true }), []);
+test("footer hints: stage-backed plans show only valid contextual chords", () => {
+  const ownerLine = taskLine(" ", "Owner", "aaa");
+  const otherLine = taskLine(" ", "Other", "bbb");
+  const content = [ownerLine, otherLine].join("\n");
+  const owner = { path: "n.md", line: 0, blockId: "aaa", rawLine: ownerLine, displayText: "Owner", status: " " };
+  const other = { path: "n.md", line: 1, blockId: "bbb", rawLine: otherLine, displayText: "Other", status: " " };
+  const stage = { dependent: owner, files: new Map([["n.md", content]]) };
+  const plugin = {
+    dependencyLinkpathResolver: () => (note, from) => (!note ? from : `${note}.md`),
+    readDependencyVaultFileList: () => ["n.md"],
+  };
+  const dependsPicker = {
+    stage: "value",
+    filePath: "n.md",
+    plugin,
+    vaultStage: stage,
+    cursor: { line: 0 },
+    getEditorContent: () => content,
+    isLocalTaskStage: () => true,
+    blocksStage: false,
+    relationStage: false,
+    visibleItems: [],
+    selectedIndex: 0,
+  };
+  const row = { ...other, kind: "local-task", tieInfo: null, disabled: false };
+  const hints = helpers.tieChordHintsForItem(dependsPicker, row);
+  assert.deepEqual(hints.map((hint) => hint.keys[0]), ["⌃⇧B", "⌃L", "⌃⇧L"]);
+
+  const relationPicker = { ...dependsPicker, relationStage: true, relationStageDirection: "to" };
+  const alreadyWaiting = { ...row, tieInfo: { waitsOn: true } };
+  assert.ok(!helpers.tieChordHintsForItem(relationPicker, alreadyWaiting)
+    .some((hint) => hint.keys.includes("⌃B")));
+  assert.deepEqual(helpers.tieChordHintsForItem(dependsPicker, { ...row, stale: true }), []);
 });
 
 test("stage-flag leak: entering a stage resets the other stage flags and disarms", () => {

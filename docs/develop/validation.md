@@ -651,11 +651,14 @@ The dependency-stage tests share
 node --test scripts/test-navigation-dependencies-stage-ranker-and-pool.cjs scripts/test-navigation-dependencies-stage-entry-and-view.cjs scripts/test-navigation-dependencies-stage-writes.cjs scripts/test-navigation-dependencies-stage-mirror-and-badge.cjs scripts/test-navigation-dependencies-stage-stale-guards.cjs scripts/test-navigation-dependencies-stage-performance.cjs
 ```
 
-The tie suites cover the §22 twins and absorption:
+The tie suites cover the §22 twins and absorption, plus stage copy, guarded
+chord hints, live footer refresh, release alternatives, and kept-relation
+notices:
 `scripts/test-navigation-plain-link-ties.cjs` (mirrored PT vectors plus the
 PT22+ planner vectors), with DW20–DW22 in
 `scripts/test-navigation-dependencies-writer.cjs` and RBP12–RBP13 in
-`scripts/test-navigation-blocks-edit.cjs`.
+`scripts/test-navigation-blocks-edit.cjs`; `scripts/test-navigation-tie-chords.cjs`
+and `scripts/test-navigation-tie-stage-copy.cjs` cover navigation ties.
 
 The source-build suite is `scripts/test-plugin-build.cjs`. It
 covers fragment manifests, deterministic output, read-only freshness checks,

@@ -11177,6 +11177,22 @@ function planTieChange(args = {}) {
     plainOut: ownerPlain.ok && ownerPlain.out.some((entry) => tieIdentityOf(entry) === otherIdentity),
     plainIn: otherPlain.ok && otherPlain.out.some((entry) => tieIdentityOf(entry) === ownerIdentity),
   });
+  const keptRelationLabel = [
+    ...tieLabelledRelationsForPair(
+      ownerFound.lines,
+      ownerFound.line,
+      owner.path,
+      other,
+      resolveLinkpath,
+    ),
+    ...tieLabelledRelationsForPair(
+      otherFound.lines,
+      otherFound.line,
+      other.path,
+      owner,
+      resolveLinkpath,
+    ),
+  ][0] || null;
   const idsNeeded = Object.freeze([owner, other]);
   const sameNote = owner.path === other.path;
   const ownerName = quoteRelationNoticeName(
@@ -11391,6 +11407,7 @@ function planTieChange(args = {}) {
       links: links.deltas,
       mirrors: links.mirrors,
       idsNeeded,
+      keptRelationLabel,
       notice: reversing
         ? `⇄ Reversed · ${noticeBase}`
         : absorbedDrops > 0
@@ -11558,6 +11575,49 @@ function tieHasLabelledEntry(lines, taskLine, ownerPath, counterpart, resolveLin
     return false;
   }
   return false;
+}
+
+function tieLabelledRelationsForPair(
+  lines,
+  taskLine,
+  sourcePath,
+  counterpart,
+  resolveLinkpath,
+) {
+  try {
+    if (!Array.isArray(lines) || !Number.isInteger(taskLine)) return [];
+    const labels = [];
+    for (const index of findLinksChildren(lines, taskLine)) {
+      const parsed = parseLinksLine(String(lines[index] || ""), {
+        isDirectChildOfTask: true,
+      });
+      if (!parsed || parsed.verdict !== "accept") continue;
+      for (const entry of parsed.entries || []) {
+        if (
+          !entry.label ||
+          entry.mention === true ||
+          (typeof TASK_MENTION_LABEL === "string" &&
+            entry.label === TASK_MENTION_LABEL)
+        ) {
+          continue;
+        }
+        const targetPath = dependencyPathForLinkNote(
+          entry.note,
+          sourcePath,
+          resolveLinkpath,
+        );
+        if (
+          normalizeVaultRelativePath(targetPath) === counterpart.path &&
+          normalizeBulletPropertyValue(entry.blockId) === counterpart.blockId
+        ) {
+          labels.push(String(entry.label));
+        }
+      }
+    }
+    return labels;
+  } catch (_error) {
+    return [];
+  }
 }
 // ---- src/088-tie-absorption.js ----
 // Tie absorption for the dependency writers (`docs/task-relations.md` §22).
@@ -68730,6 +68790,23 @@ function blocksStageConsequenceStrip(item, context = {}) {
   if (item.disabled) {
     if (
       item.disabledReason === "would create a cycle" &&
+      item.tieInfo && item.tieInfo.waitsOn &&
+      typeof tieVisibilityTieChangePlan === "function"
+    ) {
+      const owner = sources[0] || null;
+      const planned = tieVisibilityTieChangePlan(
+        context.stage,
+        context.plugin,
+        owner,
+        item,
+        "other-waits",
+      );
+      if (planned && planned.kind === "change" && planned.reversing === true) {
+        return "⟲ This task waits on it · ⌃⇧B reverses";
+      }
+    }
+    if (
+      item.disabledReason === "would create a cycle" &&
       Array.isArray(item.cycleLabels) &&
       item.cycleLabels.length > 0
     ) {
@@ -70132,7 +70209,7 @@ function compareRelationStageCanonical(first, second, ownerPath) {
   });
 }
 
-function planRelationStageItemsFromVault(stage, query) {
+function planRelationStageItemsFromVault(stage, query, plugin = null) {
   if (!stage) {
     return Object.freeze([]);
   }
@@ -70145,7 +70222,7 @@ function planRelationStageItemsFromVault(stage, query) {
       linkedKeys: stage.linkedKeys,
       previousDailyPath: stage.previousDailyPath,
     });
-    return planTieVisibilityItems(items, stage, "linked-from", query || "");
+    return planTieVisibilityItems(items, stage, "linked-from", query || "", plugin);
   }
   const items = planRelationStageView({
     sources: stage.sources,
@@ -70157,7 +70234,7 @@ function planRelationStageItemsFromVault(stage, query) {
     todayMap: stage.todayMap,
     previousDailyPath: stage.previousDailyPath,
   });
-  return planTieVisibilityItems(items, stage, "links", query || "");
+  return planTieVisibilityItems(items, stage, "links", query || "", plugin);
 }
 
 // Pure commit plan for one Links stage gesture (LG15): marked and chosen
@@ -71522,8 +71599,10 @@ function tieVisibilityPills(tie, stageKind) {
       "dependency-prerequisite",
       "⛓ prerequisite",
       stageKind === "links" || stageKind === "linked-from"
-        ? "This task waits on it · Enter converts the dependency to a plain link"
-        : "This task waits on it",
+        ? "This task waits on it · ↵ converts the dependency to a plain link"
+        : stageKind === "blocks"
+          ? "This task waits on it · ⌃L makes it a plain link"
+          : "This task waits on it · ⌃B keeps the dependency",
     );
   }
   if (tie.waitedOnBy && stageKind !== "blocks") {
@@ -71531,8 +71610,10 @@ function tieVisibilityPills(tie, stageKind) {
       "dependency-dependent",
       "🧱 dependent",
       stageKind === "links" || stageKind === "linked-from"
-        ? "It waits on this task · Enter converts the dependency to a plain link"
-        : "It waits on this task",
+        ? "It waits on this task · ↵ converts the dependency to a plain link"
+        : stageKind === "depends"
+          ? "It waits on this task · ⌃⇧L makes it a plain link"
+          : "It waits on this task · ⌃⇧B keeps the dependency",
     );
   }
   if (tie.plainOut && stageKind !== "links") {
@@ -71540,7 +71621,7 @@ function tieVisibilityPills(tie, stageKind) {
       "relation-plain",
       "🪢 linked",
       stageKind === "depends" || stageKind === "blocks"
-        ? "This task has a plain link to it · Enter replaces the link with a dependency"
+        ? "This task has a plain link to it · ↵ replaces the link with a dependency"
         : "This task has a plain link to it",
     );
   }
@@ -71549,7 +71630,7 @@ function tieVisibilityPills(tie, stageKind) {
       "relation-plain",
       "🪢 links here",
       stageKind === "depends" || stageKind === "blocks"
-        ? "It has a plain link to this task · Enter replaces the link with a dependency"
+        ? "It has a plain link to this task · ↵ replaces the link with a dependency"
         : "It has a plain link to this task",
     );
   }
@@ -71581,7 +71662,124 @@ function tieVisibilityOpenWaitCount(stage, fromKey, exceptKey = null) {
   return count;
 }
 
-function tieVisibilityReleaseCopy(item, stage) {
+function tieVisibilityTieChangePlan(stage, plugin, owner, other, to) {
+  const files = stage && stage.files;
+  if (!(files instanceof Map) || !owner || !other) return null;
+  let resolveLinkpath = null;
+  let vaultFiles = [...files.keys()];
+  try {
+    if (plugin && typeof plugin.dependencyLinkpathResolver === "function") {
+      resolveLinkpath = plugin.dependencyLinkpathResolver();
+    }
+    if (plugin && typeof plugin.readDependencyVaultFileList === "function") {
+      const listed = plugin.readDependencyVaultFileList();
+      if (Array.isArray(listed) && listed.length > 0) vaultFiles = listed;
+    }
+  } catch (_error) {
+    return null;
+  }
+  if (typeof resolveLinkpath !== "function") return null;
+  try {
+    return planTieChange({
+      owner,
+      other,
+      to,
+      notes: files,
+      resolve: { linkpath: resolveLinkpath, vaultFiles },
+    });
+  } catch (_error) {
+    return null;
+  }
+}
+
+function tieVisibilityProjectInfo(stage, owner) {
+  const path = normalizeVaultRelativePath(owner && owner.path);
+  const files = stage && stage.files instanceof Map ? stage.files : null;
+  const content = path && files ? files.get(path) : null;
+  if (typeof content !== "string" || !Number.isInteger(owner && owner.line)) {
+    return null;
+  }
+  try {
+    return isProjectPrjDependencyParent(content, path, owner.line);
+  } catch (_error) {
+    return null;
+  }
+}
+
+function tieVisibilityTodayLink(stage, owner) {
+  const ownerKey = tieVisibilityOwnerKey(owner, stage);
+  const todayLinks = Array.isArray(stage && stage.todayLinks)
+    ? stage.todayLinks
+    : [];
+  return todayLinks.find((link) => link && link.key === ownerKey) || null;
+}
+
+function tieVisibilityProjectPomodoroCount(stage, projectInfo, owner) {
+  const keys = new Set([tieVisibilityOwnerKey(owner, stage)]);
+  const path = normalizeVaultRelativePath(owner && owner.path);
+  for (const resident of projectInfo && Array.isArray(projectInfo.residents)
+    ? projectInfo.residents
+    : []) {
+    const key = resident && resident.blockId
+      ? tieVisibilityRowKey(path, resident.blockId)
+      : null;
+    if (key) keys.add(key);
+  }
+  const todayLinks = Array.isArray(stage && stage.todayLinks)
+    ? stage.todayLinks
+    : [];
+  return todayLinks.filter((link) => link && keys.has(link.key)).length;
+}
+
+function tieVisibilityProjectReleaseCopy(stage, owner, rowKey) {
+  const info = tieVisibilityProjectInfo(stage, owner);
+  if (!info || !Array.isArray(info.residents) || info.residents.length === 0) {
+    return "";
+  }
+  const ownerKey = tieVisibilityOwnerKey(owner, stage);
+  const remaining = tieVisibilityOpenWaitCount(stage, ownerKey, rowKey);
+  const scheduled = findBulletPropertyField(owner && owner.rawLine || "", "scheduled");
+  const futureSchedule = Boolean(
+    scheduled && isFutureInlineScheduledValue(scheduled.value),
+  );
+  if ((owner && owner.status) !== "?" || remaining > 0 || futureSchedule) {
+    return "";
+  }
+  const name = String(owner.displayText || cleanTaskDisplayText(owner.rawLine || "") || "")
+    .trim();
+  return name
+    ? `unblocks ${info.residents.length} residents of ‹${name}›`
+    : "";
+}
+
+function tieVisibilityReleaseAlternative(item, stage, owner, plugin, tie) {
+  let to = null;
+  let chord = "";
+  let outcome = "";
+  if (tie && tie.waitsOn) {
+    to = "other-waits";
+    chord = "⌃⇧B";
+    outcome = "it becomes Blocked";
+  } else if (tie && tie.waitedOnBy) {
+    to = "owner-waits";
+    chord = "⌃B";
+    outcome = "this task becomes Blocked";
+  }
+  if (!to) return "";
+  const planned = tieVisibilityTieChangePlan(
+    stage,
+    plugin,
+    tieVisibilityOwnerSources(stage)[0],
+    item,
+    to,
+  );
+  if (!planned || planned.kind !== "change" || planned.reversing !== true) {
+    return "";
+  }
+  return ` · ${chord} reverses · ${outcome}`;
+}
+
+function tieVisibilityReleaseCopy(item, stage, plugin = null) {
   const tie = item && item.tieInfo;
   if (!tie || !tieVisibilityHasDependency(tie)) return "";
   const rowKey = tieVisibilityRowKey(item.path, item.blockId);
@@ -71615,7 +71813,16 @@ function tieVisibilityReleaseCopy(item, stage) {
         : "it becomes Ready again");
     }
   }
-  return `⇄ Makes it a plain link${effects.length ? ` · ${effects.join(" · ")}` : ""}`;
+  const project = tieVisibilityProjectReleaseCopy(stage, owner, rowKey);
+  if (project) effects.push(project);
+  const alternative = tieVisibilityReleaseAlternative(
+    item,
+    stage,
+    owner,
+    plugin,
+    tie,
+  );
+  return `⇄ Makes it a plain link${effects.length ? ` · ${effects.join(" · ")}` : ""}${alternative}`;
 }
 
 function tieVisibilityKind(stage, fallback = "depends") {
@@ -71639,7 +71846,7 @@ function tieVisibilityHeader(kind) {
     : "tie-plain-links";
 }
 
-function planTieVisibilityItems(items, stage, kind, query = "") {
+function planTieVisibilityItems(items, stage, kind, query = "", plugin = null) {
   const source = Array.isArray(items) ? items : [];
   const ties = ensureTieVisibilityIndex(stage);
   const stageKind = tieVisibilityKind(stage, kind);
@@ -71651,18 +71858,18 @@ function planTieVisibilityItems(items, stage, kind, query = "") {
     const otherKindTie = stageKind === "links" || stageKind === "linked-from"
       ? tieVisibilityHasDependency(tie)
       : tieVisibilityHasPlainLink(tie);
+    const tieReleaseCopy = eligible && item.stageSection !== "current" &&
+      (stageKind === "links" || stageKind === "linked-from") &&
+      tieVisibilityHasDependency(tie)
+      ? tieVisibilityReleaseCopy({ ...item, tieInfo: tie }, stage, plugin)
+      : "";
     return {
       ...item,
       tieInfo: eligible ? tie : null,
       tiePills: eligible ? tieVisibilityPills(tie, stageKind) : [],
       tieConvert:
         eligible && item.stageSection !== "current" && otherKindTie && !item.disabled,
-      tieReleaseCopy:
-        eligible && item.stageSection !== "current" &&
-          (stageKind === "links" || stageKind === "linked-from") &&
-          tieVisibilityHasDependency(tie)
-          ? tieVisibilityReleaseCopy({ ...item, tieInfo: tie }, stage)
-          : "",
+      tieReleaseCopy,
     };
   });
   if (String(query || "").trim()) return decorated;
@@ -71717,7 +71924,7 @@ function tieVisibilityCountPhrase(count, subject) {
   return `${value} ${value === 1 ? "plain link" : "plain links"}`;
 }
 
-function planDependencyStageItemsFromVault(stage, query = "") {
+function planDependencyStageItemsFromVault(stage, query = "", plugin = null) {
   if (!stage) return Object.freeze([]);
   const items = planDependencyStageView({
     current: stage.current,
@@ -71728,14 +71935,29 @@ function planDependencyStageItemsFromVault(stage, query = "") {
     linkedKeys: stage.linkedKeys,
     sourceValueSets: stage.sourceValueSets,
   });
-  return planTieVisibilityItems(items, stage, "depends", query);
+  return planTieVisibilityItems(items, stage, "depends", query, plugin);
 }
 
 function dependencyStageConsequenceStrip(item, context = {}) {
   if (!item || item.kind === "stage-more") return "";
-  if (item.disabled) return item.disabledReason || "";
   const stage = context.stage || {};
   const tie = item.tieInfo || null;
+  if (item.disabled) {
+    if (item.disabledReason === "would create a cycle" && tie && tie.waitedOnBy) {
+      const owner = tieVisibilityOwnerSources(stage)[0];
+      const planned = tieVisibilityTieChangePlan(
+        stage,
+        context.plugin,
+        owner,
+        item,
+        "owner-waits",
+      );
+      if (planned && planned.kind === "change" && planned.reversing === true) {
+        return "⟲ It waits on this task · ⌃B reverses";
+      }
+    }
+    return item.disabledReason || "";
+  }
   if (item.stageSection === "current") {
     let text;
     if (item.open !== true) {
@@ -71753,28 +71975,40 @@ function dependencyStageConsequenceStrip(item, context = {}) {
     }
     return `${text} · ⌃L keeps a plain link`;
   }
-  if (stage.dependent && stage.dependent.isProjectPrj) {
-    return blocksStageConsequenceStrip(item, {
-      sources: [stage.dependent],
+  const owner = tieVisibilityOwnerSources(stage)[0] || stage.dependent || {};
+  const projectInfo = tieVisibilityProjectInfo(stage, owner);
+  if (projectInfo) {
+    const projectItem = {
+      ...item,
+      isProjectPrj: true,
+      projectWaitCount: projectInfo.residents.length + 1,
+      projectPomodoroCount: tieVisibilityProjectPomodoroCount(stage, projectInfo, owner),
+    };
+    return blocksStageConsequenceStrip(projectItem, {
+      sources: [owner],
       marked: [],
     });
   }
   if (item.closed === true || item.open === false) {
     return "Waits on it · already done · status unchanged";
   }
-  if (item.blocked === true || item.status === "?") {
-    const open = Math.max(1, Math.floor(numericOrDefault(item.waitsOn, item.openCount || 1)));
-    return `Also waits on it (${open} open)`;
+  const ownerKey = tieVisibilityOwnerKey(owner, stage);
+  const currentOpen = tieVisibilityOpenWaitCount(stage, ownerKey);
+  const openAfter = currentOpen + 1;
+  const ownerStatus = owner.status || (stage.dependent && stage.dependent.status);
+  if (ownerStatus === "?" || currentOpen > 0) {
+    return `Also waits on it (${openAfter} open)`;
   }
   const parts = ["Waits on it · this task becomes Blocked"];
-  const lane = item.status === "/"
+  const lane = ownerStatus === "/"
     ? "it takes In Progress"
-    : item.status === "*"
+    : ownerStatus === "*"
       ? "it takes Next"
       : "";
   if (lane) parts.push(lane);
-  if (item.todayLink) {
-    const link = item.todayLink;
+  const todayLink = tieVisibilityTodayLink(stage, owner);
+  if (todayLink) {
+    const link = todayLink;
     const range = link.range ? ` ${link.range}` : "";
     parts.push(`⚠ removes this task's link from ${link.label}${range}`);
   }
@@ -81794,6 +82028,9 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
     if (this.vaultStage) {
       this.ensureDependencyConsequenceStrip();
       this.refreshDependencyConsequenceStrip();
+      if (typeof this.refreshTaskStageTodayLinks === "function") {
+        void this.refreshTaskStageTodayLinks();
+      }
     }
     if (
       stage &&
@@ -81847,6 +82084,7 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
     const item = (this.visibleItems || [])[this.selectedIndex] || null;
     let text = dependencyStageConsequenceStrip(item, {
       stage: this.vaultStage,
+      plugin: this.plugin,
       marked,
     });
     if (marked.length > 0) {
@@ -81876,9 +82114,9 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
       return planBlocksStageItemsFromVault(stage, resolved);
     }
     if (this.relationStage) {
-      return planRelationStageItemsFromVault(stage, resolved);
+      return planRelationStageItemsFromVault(stage, resolved, this.plugin);
     }
-    return planDependencyStageItemsFromVault(stage, resolved);
+    return planDependencyStageItemsFromVault(stage, resolved, this.plugin);
   }
 
   // Swap in the vault-scan pool, keeping marks across the refresh: mark keys
@@ -81903,7 +82141,12 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
       this.vaultStage = this.decorateOpenBlocksStage(stage, { todayLinks });
       this.blocksStageSeed = stage.refreshOf || this.blocksStageSeed;
     } else {
-      this.vaultStage = stage;
+      const todayLinks = this.vaultStage && Array.isArray(this.vaultStage.todayLinks)
+        ? this.vaultStage.todayLinks
+        : [];
+      this.vaultStage = !this.relationStage && todayLinks.length > 0
+        ? { ...stage, todayLinks }
+        : stage;
     }
     ensureTieVisibilityIndex(this.vaultStage, this.plugin);
     const items = this.planVaultStageItemsForQuery(this.vaultStage, this.getQuery());
@@ -81916,6 +82159,10 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
     this.items = items;
     if (this.resultsEl) {
       this.renderResults();
+    }
+    if (!this.blocksStage && !this.relationStage &&
+        typeof this.refreshTaskStageTodayLinks === "function") {
+      void this.refreshTaskStageTodayLinks();
     }
   }
 
@@ -82390,6 +82637,8 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
       this.vaultStage &&
       typeof this.refreshDependencyConsequenceStrip === "function"
     ) {
+      this.footerHints = this.getLocalTaskFooterHints();
+      this.renderFooter();
       this.refreshDependencyConsequenceStrip();
     }
     if (this.relationStage && this.isLocalTaskStage()) {
@@ -84029,7 +84278,7 @@ class BulletPropertyPickerBlocksStageMixin extends FilteredPickerModal {
     ) {
       void this.plugin.refreshVaultDependencyStage(this, stage);
     }
-    void this.refreshBlocksStageTodayLinks();
+    void this.refreshTaskStageTodayLinks();
   }
 
   getBlocksStageFooterHints() {
@@ -84126,6 +84375,8 @@ class BulletPropertyPickerBlocksStageMixin extends FilteredPickerModal {
     const item = (this.visibleItems || [])[this.selectedIndex] || null;
     const text = blocksStageConsequenceStrip(item, {
       sources: this.vaultStage && this.vaultStage.sources,
+      stage: this.vaultStage,
+      plugin: this.plugin,
       marked,
     });
     el.empty();
@@ -84138,9 +84389,9 @@ class BulletPropertyPickerBlocksStageMixin extends FilteredPickerModal {
     });
   }
 
-  async refreshBlocksStageTodayLinks() {
+  async refreshTaskStageTodayLinks() {
     const stage = this.vaultStage;
-    if (!stage || !this.blocksStage) {
+    if (!stage || (!this.blocksStage && this.relationStage)) {
       return;
     }
     const files = stage.files instanceof Map ? stage.files : new Map();
@@ -84180,7 +84431,7 @@ class BulletPropertyPickerBlocksStageMixin extends FilteredPickerModal {
     // A vault pool refresh can swap the stage while the daily note loads;
     // the read still applies, to whichever stage is current now.
     const current = this.vaultStage;
-    if (!current || !this.blocksStage || dailyContent === null) {
+    if (!current || this.relationStage || dailyContent === null) {
       return;
     }
     if (current.files instanceof Map) {
@@ -84191,6 +84442,11 @@ class BulletPropertyPickerBlocksStageMixin extends FilteredPickerModal {
       dailyPath,
       current.index,
     );
+    if (!this.blocksStage) {
+      this.vaultStage = { ...current, todayLinks: Object.freeze(todayLinks) };
+      this.refreshDependencyConsequenceStrip();
+      return;
+    }
     const marked = this.markedLines instanceof Set ? new Set(this.markedLines) : new Set();
     this.vaultStage = this.decorateOpenBlocksStage(current, {
       sources: current.sources,
@@ -85423,6 +85679,7 @@ class BulletPropertyPickerRelationStageViewMixin {
         ? planRelationStageItemsFromVault(
             this.vaultStage,
             this.getQuery ? this.getQuery() : "",
+            this.plugin,
           )
         : [],
       title,
@@ -85624,7 +85881,19 @@ class BulletPropertyPickerRelationStageViewMixin {
       cancelStayHint: this.relationCancelStayHintForItem(item),
     });
     el.empty();
-    el.createSpan({ cls: "bob-cnp-consequence-strip-text", text });
+    const releaseAlternative = /^(.*?)( · ⌃(?:⇧)?B reverses · .+)$/.exec(text);
+    if (releaseAlternative) {
+      el.createSpan({
+        cls: "bob-cnp-consequence-strip-text",
+        text: releaseAlternative[1],
+      });
+      el.createSpan({
+        cls: "bob-cnp-tie-release-alternative",
+        text: releaseAlternative[2],
+      });
+    } else {
+      el.createSpan({ cls: "bob-cnp-consequence-strip-text", text });
+    }
   }
 }
 // ---- src/427-relation-stage-plugin.js ----
@@ -91821,9 +92090,16 @@ function tieEnterToForStage(kind) {
 function tieEnterForRow(picker, item) {
   if (!picker || !item || item.kind === "stage-more") return null;
   if (item.disabled) return null;
-  if (item.tieConvert !== true) return null;
   const kind = tieChordStageKind(picker);
   if (!kind) return null;
+  const tie = item.tieInfo || null;
+  const hasKeptRelation = Boolean(
+    (kind === "depends" || kind === "blocks") &&
+    tie &&
+    ((Array.isArray(tie.labelledOut) && tie.labelledOut.length > 0) ||
+      (Array.isArray(tie.labelledIn) && tie.labelledIn.length > 0)),
+  );
+  if (item.tieConvert !== true && !hasKeptRelation) return null;
   const to = tieEnterToForStage(kind);
   if (!to) return null;
   if (kind === "depends" || kind === "blocks") {
@@ -91966,9 +92242,69 @@ function tieChordNoopForItem(item, to) {
   return false;
 }
 
+function tieChordHintIsStale(picker, item, stage, refs) {
+  if (
+    !stage || !(stage.files instanceof Map) ||
+    item.stale === true || item.staleRow === true || item.isStale === true ||
+    item.changedSinceOpen === true || item.disabledReason === "changed — reopen"
+  ) {
+    return true;
+  }
+  const liveContent = (path) => {
+    if (
+      picker.filePath === path &&
+      typeof picker.getEditorContent === "function"
+    ) {
+      try {
+        const content = picker.getEditorContent();
+        if (typeof content === "string") return content;
+      } catch (_error) {}
+    }
+    const plugin = picker.plugin;
+    for (const method of ["findRelationEditOpenEditor", "findBlocksEditOpenEditor"]) {
+      try {
+        const editor = plugin && typeof plugin[method] === "function"
+          ? plugin[method](path)
+          : null;
+        if (editor && typeof editor.getValue === "function") {
+          return String(editor.getValue() || "");
+        }
+      } catch (_error) {}
+    }
+    return null;
+  };
+  const paths = refs
+    ? new Set([refs.owner.path, refs.other.path])
+    : new Set([item.path]);
+  for (const path of paths) {
+    if (!path || !stage.files.has(path)) return true;
+    const live = liveContent(path);
+    if (live !== null && live !== stage.files.get(path)) return true;
+  }
+  if (refs && typeof item.rawLine === "string") {
+    const content = stage.files.get(refs.other.path);
+    const found = tieFindTaskLine(
+      new Map([[refs.other.path, String(content || "")]]),
+      refs.other.path,
+      refs.other.blockId,
+    );
+    if (found.reason || String(found.lines[found.line] || "") !== item.rawLine) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function tieChordHintsForItem(picker, item) {
   const kind = tieChordStageKind(picker);
-  if (!kind || !item || item.kind === "stage-more" || item.disabled) return [];
+  if (!kind || !item || item.kind === "stage-more") return [];
+  const stage = picker.vaultStage;
+  const refs = tieChordOwnerOther(picker, item);
+  const missing = !refs && typeof tieMissingIdRequest === "function"
+    ? tieMissingIdRequest(picker, item)
+    : null;
+  if (!refs && (!missing || !missing.missing || !missing.missing.path)) return [];
+  if (tieChordHintIsStale(picker, item, stage, refs)) return [];
   const enterTo = tieEnterToForStage(kind);
   const chords = [
     { to: "owner-waits", keys: ["⌃B"], label: "wait on it" },
@@ -91980,6 +92316,16 @@ function tieChordHintsForItem(picker, item) {
   for (const chord of chords) {
     if (chord.to === enterTo) continue;
     if (tieChordNoopForItem(item, chord.to)) continue;
+    if (refs) {
+      const planned = tieVisibilityTieChangePlan(
+        stage,
+        picker.plugin,
+        refs.owner,
+        refs.other,
+        chord.to,
+      );
+      if (!planned || planned.kind !== "change") continue;
+    }
     out.push({ keys: chord.keys, label: chord.label });
   }
   return out;
@@ -118522,6 +118868,15 @@ function tieChangeDependencyConsequence(notice) {
     .join(" · ");
 }
 
+function tieChangeKeptRelationNotice(notice, plan) {
+  const label = plan && typeof plan.keptRelationLabel === "string"
+    ? plan.keptRelationLabel
+    : "";
+  if (!notice || !label) return notice;
+  const phrase = `kept the "${label}" relation`;
+  return String(notice).includes(phrase) ? notice : `${notice} · ${phrase}`;
+}
+
 function buildTieChangeNotice(
   plan,
   dependencyOutcome,
@@ -118541,7 +118896,7 @@ function buildTieChangeNotice(
       if (linkMirrorFailed && notice && !notice.includes("LINKED FROM not updated")) {
         notice = `${notice} · 🪢 LINKED FROM not updated`;
       }
-      return notice;
+      return tieChangeKeptRelationNotice(notice, plan);
     }
     const consequence = tieChangeDependencyConsequence(
       dependencyOutcome && dependencyOutcome.notice,

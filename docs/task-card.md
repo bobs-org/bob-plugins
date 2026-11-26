@@ -37,8 +37,12 @@ Each of the four stages shows the other relationship on eligible rows with
 trailing tie pills. On an empty filter, cross-tied rows move into a named band
 between CURRENT and RESULTS. A `⇄` row badge marks an Enter action that will
 convert the existing tie; Depends on also shows the selected row's status and
-Pomodoro consequences below the list. See [Task relations](task-relations.md)
-for the pill, band, subtitle, and consequence copy.
+Pomodoro consequences below the list. Depends-on copy follows the owner's
+status, open prerequisites, lane, and live Today link. Guarded cycle rows show
+a reversing chord only when the reverse plan is valid; footer chord hints omit
+guarded and stale changes and refresh as the selection moves. See
+[Task relations](task-relations.md) for the pill, band, subtitle, and
+consequence copy.
 
 ## Card gestures
 

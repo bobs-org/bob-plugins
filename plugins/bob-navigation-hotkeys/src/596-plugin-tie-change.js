@@ -161,6 +161,15 @@ function tieChangeDependencyConsequence(notice) {
     .join(" · ");
 }
 
+function tieChangeKeptRelationNotice(notice, plan) {
+  const label = plan && typeof plan.keptRelationLabel === "string"
+    ? plan.keptRelationLabel
+    : "";
+  if (!notice || !label) return notice;
+  const phrase = `kept the "${label}" relation`;
+  return String(notice).includes(phrase) ? notice : `${notice} · ${phrase}`;
+}
+
 function buildTieChangeNotice(
   plan,
   dependencyOutcome,
@@ -180,7 +189,7 @@ function buildTieChangeNotice(
       if (linkMirrorFailed && notice && !notice.includes("LINKED FROM not updated")) {
         notice = `${notice} · 🪢 LINKED FROM not updated`;
       }
-      return notice;
+      return tieChangeKeptRelationNotice(notice, plan);
     }
     const consequence = tieChangeDependencyConsequence(
       dependencyOutcome && dependencyOutcome.notice,

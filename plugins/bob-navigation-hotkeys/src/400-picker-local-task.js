@@ -349,6 +349,9 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
     if (this.vaultStage) {
       this.ensureDependencyConsequenceStrip();
       this.refreshDependencyConsequenceStrip();
+      if (typeof this.refreshTaskStageTodayLinks === "function") {
+        void this.refreshTaskStageTodayLinks();
+      }
     }
     if (
       stage &&
@@ -402,6 +405,7 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
     const item = (this.visibleItems || [])[this.selectedIndex] || null;
     let text = dependencyStageConsequenceStrip(item, {
       stage: this.vaultStage,
+      plugin: this.plugin,
       marked,
     });
     if (marked.length > 0) {
@@ -431,9 +435,9 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
       return planBlocksStageItemsFromVault(stage, resolved);
     }
     if (this.relationStage) {
-      return planRelationStageItemsFromVault(stage, resolved);
+      return planRelationStageItemsFromVault(stage, resolved, this.plugin);
     }
-    return planDependencyStageItemsFromVault(stage, resolved);
+    return planDependencyStageItemsFromVault(stage, resolved, this.plugin);
   }
 
   // Swap in the vault-scan pool, keeping marks across the refresh: mark keys
@@ -458,7 +462,12 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
       this.vaultStage = this.decorateOpenBlocksStage(stage, { todayLinks });
       this.blocksStageSeed = stage.refreshOf || this.blocksStageSeed;
     } else {
-      this.vaultStage = stage;
+      const todayLinks = this.vaultStage && Array.isArray(this.vaultStage.todayLinks)
+        ? this.vaultStage.todayLinks
+        : [];
+      this.vaultStage = !this.relationStage && todayLinks.length > 0
+        ? { ...stage, todayLinks }
+        : stage;
     }
     ensureTieVisibilityIndex(this.vaultStage, this.plugin);
     const items = this.planVaultStageItemsForQuery(this.vaultStage, this.getQuery());
@@ -471,6 +480,10 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
     this.items = items;
     if (this.resultsEl) {
       this.renderResults();
+    }
+    if (!this.blocksStage && !this.relationStage &&
+        typeof this.refreshTaskStageTodayLinks === "function") {
+      void this.refreshTaskStageTodayLinks();
     }
   }
 

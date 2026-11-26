@@ -15,11 +15,20 @@ class BulletPropertyPickerVaultCommitMixin extends FilteredPickerModal {
       } catch (_closeError) {
         // Best-effort close only.
       }
+      const relationStage = this.relationStage === true;
+      const reopenOptions = relationStage
+        ? this.relationStageDirection === "from"
+          ? { reopenLinkedFromStage: true }
+          : { reopenLinksStage: true }
+        : {
+            initialProperty: this.blocksStage ? null : "dependsOn",
+            reopenBlocksStage: this.blocksStage === true,
+            directStage: true,
+          };
       void plugin.openBulletPropertyPicker(editor, {
-        initialProperty: this.blocksStage ? null : "dependsOn",
-        reopenBlocksStage: this.blocksStage === true,
-        directStage: true,
+        ...reopenOptions,
         inboxRoute: this.inboxRoute || null,
+        taskSession: this.taskSession || null,
       });
     } catch (_reopenError) {
       // Best-effort reopen only.

@@ -480,6 +480,41 @@ class BobNavigationHotkeysBlocksEditMixin {
           }
         }
       }
+      const tieLinksResult = {
+        changed: false,
+        added: 0,
+        dropped: 0,
+        mirrorDropped: 0,
+        mirrorFailed: [],
+        failed: [],
+      };
+      if (args.tieLinks) {
+        const appliedByPath = new Map();
+        for (const write of [...sourceWrites, ...dependentWrites]) {
+          const path = normalizeVaultRelativePath(write.path || "");
+          if (!path) continue;
+          if (appliedByPath.has(path)) {
+            write.nextContent = appliedByPath.get(path);
+            continue;
+          }
+          const applied = applyTieLinksToContent(
+            write.nextContent,
+            path,
+            args.tieLinks,
+            { resolveLinkpath, vaultFiles },
+          );
+          write.nextContent = applied.nextContent;
+          appliedByPath.set(path, applied.nextContent);
+          tieLinksResult.changed = tieLinksResult.changed || applied.changed;
+          tieLinksResult.added += applied.added || 0;
+          tieLinksResult.dropped += applied.dropped || 0;
+          tieLinksResult.mirrorDropped += applied.mirrorDropped || 0;
+          tieLinksResult.mirrorFailed.push(...(applied.mirrorFailed || []));
+          tieLinksResult.failed.push(...(applied.failed || []));
+        }
+      }
+      tieLinksResult.failed = [...new Set(tieLinksResult.failed)];
+      tieLinksResult.mirrorFailed = [...new Set(tieLinksResult.mirrorFailed)];
       const extraTargetsByPath = new Map();
       for (const entry of subtreePreps) {
         const write =
@@ -648,17 +683,26 @@ class BobNavigationHotkeysBlocksEditMixin {
         }
       }
       const tieNotice = (notice) =>
-        withTieAbsorptionFailureSuffix(
+        withLinkedFromFollowUpNotice(
+          withTieAbsorptionFailureSuffix(
           withTieAbsorptionNotice(notice, {
-            dropped: (tieAbsorbed ? tieAbsorbed.dropped : 0) + tieFollowDropped,
+            dropped:
+              (tieAbsorbed ? tieAbsorbed.dropped : 0) +
+              tieFollowDropped +
+              tieLinksResult.dropped,
             mirrorDropped:
-              (tieAbsorbed ? tieAbsorbed.mirrorDropped : 0) + tieFollowMirrorDropped,
+              (tieAbsorbed ? tieAbsorbed.mirrorDropped : 0) +
+              tieFollowMirrorDropped +
+              tieLinksResult.mirrorDropped,
           }),
           [
             ...((tieAbsorbed && tieAbsorbed.skipped) || []),
             ...tieSkippedPaths,
             ...tieFollowFailed,
+            ...tieLinksResult.failed,
           ],
+          ),
+          tieLinksResult.mirrorFailed,
         );
       let blocksFailed = [];
       if (blocksLinesEnabled) {
@@ -797,6 +841,10 @@ class BobNavigationHotkeysBlocksEditMixin {
         }),
         blocksFailed: Object.freeze(blocksFailed),
         subtree,
+        tieLinks: Object.freeze({
+          ...tieLinksResult,
+          failed: Object.freeze(tieLinksResult.failed),
+        }),
       });
     } catch (_error) {
       return refuse("apply-failed");

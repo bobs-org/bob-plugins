@@ -217,6 +217,7 @@
   "594a-relation-hand-edit.js",
   "594b-relation-unlink.js",
   "595-relation-follow-ups.js",
+  "596-plugin-tie-change.js",
   "596-relation-cancel-compose.js",
   "597-relation-complete-compose.js",
   "600-plugin-dependency-mirror.js",

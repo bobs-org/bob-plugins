@@ -700,7 +700,7 @@ module.exports.helpers = {
   planLinksEdit,
   planLinkedFromLine,
   linkedFromDesiredAfterDelta,
-  dropPlainLinkEntries, classifyPairTies, planTieChange, tieAbsorptionLinkDeltas, tieNavNoteIsWritable, absorbTieSideFromContent, absorbTiePairsFromContents, applyTieLinksFollowUps, withTieAbsorptionNotice, withTieAbsorptionFailureSuffix,
+  dropPlainLinkEntries, classifyPairTies, planTieChange, tieAbsorptionLinkDeltas, tieNavNoteIsWritable, absorbTieSideFromContent, absorbTiePairsFromContents, applyTieLinksToContent, applyTieLinksFollowUps, buildTieChangeNotice, withTieAbsorptionNotice, withTieAbsorptionFailureSuffix,
   buildRelationEditNotice,
   withLinkedFromFollowUpNotice,
   relationPathIsWritable,

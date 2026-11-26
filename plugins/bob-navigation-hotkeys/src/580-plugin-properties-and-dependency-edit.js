@@ -571,6 +571,14 @@ class BobNavigationHotkeysPropertyDependencyMixin {
         let tieAbsorbed = null;
         let tieFollowUps = [];
         let tieSkippedPaths = [];
+        let tieLinksResult = Object.freeze({
+          changed: false,
+          added: 0,
+          dropped: 0,
+          mirrorDropped: 0,
+          mirrorFailed: Object.freeze([]),
+          failed: Object.freeze([]),
+        });
         const tieIsWritable = tieNavNoteIsWritable(
           this,
           args.today || new Date(),
@@ -643,6 +651,15 @@ class BobNavigationHotkeysPropertyDependencyMixin {
               Object.freeze({ path: otherPath, preimage, pairs: Object.freeze(otherPairs.slice()) }),
             );
           }
+        }
+        tieLinksResult = applyTieLinksToContent(
+          commitPlan.nextContent,
+          parentPath,
+          args.tieLinks,
+          { resolveLinkpath, vaultFiles: this.readDependencyVaultFileList() || [] },
+        );
+        if (tieLinksResult.changed) {
+          commitPlan = { ...commitPlan, nextContent: tieLinksResult.nextContent };
         }
       let pomodoroPrep = null;
       if (!mirrorTouch) {
@@ -777,19 +794,26 @@ class BobNavigationHotkeysPropertyDependencyMixin {
       // A failed follow-up leaves a reconcile-folded plain link and an
       // honest suffix, never a rolled-back dependency.
       const tieNotice = (notice) =>
-        withTieAbsorptionFailureSuffix(
+        withLinkedFromFollowUpNotice(
+          withTieAbsorptionFailureSuffix(
           withTieAbsorptionNotice(notice, {
             dropped:
-              (tieAbsorbed ? tieAbsorbed.dropped : 0) + tieExtra.dropped,
+              (tieAbsorbed ? tieAbsorbed.dropped : 0) +
+              tieExtra.dropped +
+              tieLinksResult.dropped,
             mirrorDropped:
               (tieAbsorbed ? tieAbsorbed.mirrorDropped : 0) +
-              tieExtra.mirrorDropped,
+              tieExtra.mirrorDropped +
+              tieLinksResult.mirrorDropped,
           }),
           [
             ...((tieAbsorbed && tieAbsorbed.skipped) || []),
             ...tieSkippedPaths,
             ...tieExtra.failed,
+            ...tieLinksResult.failed,
           ],
+          ),
+          tieLinksResult.mirrorFailed,
         );
       const blocksFailedPaths = [
         ...(plan.blocksFailedPaths || []),
@@ -821,6 +845,7 @@ class BobNavigationHotkeysPropertyDependencyMixin {
             ),
           ),
           subtree: outcome.subtree || null,
+          tieLinks: tieLinksResult,
         });
       }
       if (outcome.subtree && subtreePassNoticeSuffix(outcome.subtree)) {
@@ -837,6 +862,7 @@ class BobNavigationHotkeysPropertyDependencyMixin {
             ),
           ),
           subtree: outcome.subtree,
+          tieLinks: tieLinksResult,
         });
       }
       return Object.freeze({
@@ -844,6 +870,7 @@ class BobNavigationHotkeysPropertyDependencyMixin {
         notice: tieNotice(
           withBlocksFollowUpNotice(outcome.notice, blocksFailedPaths),
         ),
+        tieLinks: tieLinksResult,
       });
     } catch (_error) {
       return Object.freeze({ ok: false, reason: "apply-failed" });

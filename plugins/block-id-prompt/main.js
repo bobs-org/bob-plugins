@@ -15505,6 +15505,25 @@ const snoozeModel = Object.freeze({
 // ---- src/095-snoozed-cleanup-compose.js ----
 // Compose explicit Snoozed-row removal with the existing open-Pomodoro
 // cleanup. The row planner runs even when the note has no Pomodoros section.
+function composeSnoozedRemovalEdits(pomodoroEdits, snoozedEdits) {
+  const pomodoro = (pomodoroEdits || []).map((edit) => ({ ...edit }));
+  const snoozed = (snoozedEdits || []).map((edit) => ({ ...edit }));
+  const absorbed = new Set();
+  for (const insertion of pomodoro) {
+    if (insertion.start !== insertion.end) continue;
+    const removal = snoozed.find((edit) =>
+      edit.start === insertion.start && edit.end > edit.start,
+    );
+    if (!removal) continue;
+    removal.replacement = `${insertion.replacement || ""}${removal.replacement || ""}`;
+    absorbed.add(insertion);
+  }
+  return mergeCoveringEdits([
+    ...pomodoro.filter((edit) => !absorbed.has(edit)),
+    ...snoozed,
+  ]);
+}
+
 function planAllOpenPomodoroLinkCleanup(content, options = {}) {
   const snapshot = String(content || "");
   const lines = snapshot.split("\n");
@@ -17078,10 +17097,10 @@ class BlockIdPromptPomodoroLinksMixin {
       new Notice(`Task link stopped: task is already linked in today's ledger`);
       return false;
     }
-    const composedDailyEdits = mergeCoveringEdits([
-      ...(pomodoroPlan.edits || []),
-      ...(snoozedPlan.edits || []),
-    ]).sort((left, right) => left.start - right.start || left.end - right.end);
+    const composedDailyEdits = composeSnoozedRemovalEdits(
+      pomodoroPlan.edits || [],
+      snoozedPlan.edits || [],
+    ).sort((left, right) => left.start - right.start || left.end - right.end);
     if (!validateNonOverlappingEdits(composedDailyEdits)) {
       new Notice(`Task link stopped: overlapping daily-note edits in ${dailyFile.path}`);
       return false;

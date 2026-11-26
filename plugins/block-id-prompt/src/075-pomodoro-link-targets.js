@@ -697,7 +697,7 @@ function planExistingPomodoroLinkInsertion(
   linkOptions,
   matchedExisting,
 ) {
-  const { blockId, targetPath, sourcePath, resolveTarget, linkText } = linkOptions;
+  const { blockId, targetPath, sourcePath, resolveTarget, linkText, attachedChildren } = linkOptions;
   const entryEndLine = pomodoroEntryEndLine(lines, entryLine, section.endLine);
   const alreadyLinked = rangeContainsMatchingLink(
     snapshot,
@@ -723,6 +723,7 @@ function planExistingPomodoroLinkInsertion(
   if (!alreadyLinked) {
     const indentation = findPomodoroChildIndentation(lines, entryLine, entryEndLine, section);
     const entryLineText = `${indentation}- ${linkText}`;
+    const insertedLines = pomodoroInsertionLines(indentation, [entryLineText], attachedChildren);
     // The new child belongs immediately after the last nonblank descendant
     // so trailing separators stay after it.
     let insertAfterLine = entryEndLine;
@@ -738,7 +739,7 @@ function planExistingPomodoroLinkInsertion(
         snapshot,
         lines,
         insertLine,
-        [entryLineText],
+        insertedLines,
         lineEndingForInsertion(snapshot, lines, insertAfterLine),
       ),
     );
@@ -794,7 +795,7 @@ function planNewPomodoroLinkInsertion(
   name,
   linkOptions,
 ) {
-  const { blockId, targetPath, sourcePath, resolveTarget, linkText } = linkOptions;
+  const { blockId, targetPath, sourcePath, resolveTarget, linkText, attachedChildren } = linkOptions;
   const canonicalName = canonicalPomodoroEntryName(name);
   const collected = collectPomodoroLinkEntries(snapshot);
   const race = collected.entries.find(
@@ -839,6 +840,7 @@ function planNewPomodoroLinkInsertion(
 
   const entryLineText = `- [ ] () — ${name}`;
   const childLineText = `${indentation}- ${linkText}`;
+  const insertedLines = pomodoroInsertionLines(indentation, [entryLineText, childLineText], attachedChildren);
   const referenceLine =
     anchor.entry && anchor.kind !== "first-open" && anchor.kind !== "section-top"
       ? (() => {
@@ -865,7 +867,7 @@ function planNewPomodoroLinkInsertion(
 
   const edits = composeInsertionWithLinkCleanup(
     [
-      insertionEditAtLine(snapshot, lines, insertLine, [entryLineText, childLineText], lineEnding),
+      insertionEditAtLine(snapshot, lines, insertLine, insertedLines, lineEnding),
     ],
     cleanup,
   );
@@ -940,7 +942,7 @@ function planExplicitPomodoroLinkInsertion(content, options = {}) {
     return { error: "no-section" };
   }
 
-  const linkOptions = { blockId, targetPath, sourcePath, resolveTarget, linkText };
+  const linkOptions = { blockId, targetPath, sourcePath, resolveTarget, linkText, attachedChildren: options.attachedChildren };
 
   if (target.kind === "new") {
     const canonical = target.preserveSpelling === true

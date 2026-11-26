@@ -246,6 +246,12 @@ function rangeContainsMatchingLink(
   return false;
 }
 
+function pomodoroInsertionLines(indentation, baseLines, attachedChildren) {
+  const children = typeof attachedChildren === "string" ? attachedChildren.split(/\r\n|\n|\r/) : [];
+  if (children[children.length - 1] === "") children.pop();
+  return [...baseLines, ...children.map((line) => line ? `${indentation}${line}` : line)];
+}
+
 // Pure planner for inserting a task block link under today's current/next
 // Pomodoro entry (the Ctrl+Shift+Enter command). Given the daily note's
 // preimage, selects the destination entry, skips insertion when a matching

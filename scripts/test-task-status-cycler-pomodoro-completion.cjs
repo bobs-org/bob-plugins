@@ -474,8 +474,7 @@ test("Pomodoro hash Vim mapping distinguishes bare and explicit repeats", async 
 });
 
 test("Done prunes the active Snoozed subtree and joins it to the task settle history", async () => {
-  const now = new Date();
-  const dailyPath = `${String(now.getFullYear()).padStart(4, "0")}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}.md`;
+  const dailyPath = helpers.todayDailyPath({ plugins: { plugins: {} } });
   const daily = [
     "## Snoozed",
     "- **1530** [[Tasks#^ship]]",

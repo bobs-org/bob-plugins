@@ -30062,6 +30062,9 @@ class TaskStatusCyclerSnoozedCompletionMixin {
       if (String(editor.getValue() || "") !== before) {
         return { removedCount: 0, failures: ["daily note changed before Snoozed cleanup"] };
       }
+      if (typeof editor.replaceRange !== "function") {
+        return { removedCount: 0, failures: ["daily note editor cannot apply Snoozed cleanup"] };
+      }
       const cursor = typeof editor.getCursor === "function" ? editor.getCursor() : null;
       for (const edit of plan.edits.slice().sort((left, right) => right.start - left.start)) {
         editor.replaceRange(

@@ -804,7 +804,7 @@ class BobLedgerToolsBankSetupMixin {
     this.bankSetupOwnKeys(view?.dom, livePath);
     try { this.bankSetupTrackFoot?.(view?.dom, livePath, header); } catch (_) {}
     if (adoption.mode === "slot") {
-      this.bankSetupOwnMountedFrontmatter(view.dom, view, livePath, header, text,
+      this.bankSetupOwnMountedFrontmatterDeferred(view.dom, view, livePath, header, text,
         () => this.bankSetupLivePath(view) || "");
       return Decoration.none;
     }

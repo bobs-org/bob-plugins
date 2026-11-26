@@ -95375,7 +95375,7 @@ class BobLedgerToolsBankSetupMixin {
     this.bankSetupOwnKeys(view?.dom, livePath);
     try { this.bankSetupTrackFoot?.(view?.dom, livePath, header); } catch (_) {}
     if (adoption.mode === "slot") {
-      this.bankSetupOwnMountedFrontmatter(view.dom, view, livePath, header, text,
+      this.bankSetupOwnMountedFrontmatterDeferred(view.dom, view, livePath, header, text,
         () => this.bankSetupLivePath(view) || "");
       return Decoration.none;
     }
@@ -95605,6 +95605,25 @@ Object.assign(BobLedgerToolsBankSetupMixin.prototype, {
       scope, view: view?.dom === scope ? view : null, path: key, kind: "bank", mount,
       sourceText, getSource: sourceFor, currentPath, isCurrent: current,
       active: () => this.bankSetupActive === true,
+    });
+  },
+
+  bankSetupOwnMountedFrontmatterDeferred(scope, view, path, mount, sourceText, currentPath) {
+    if (typeof propertyCardFrontmatterOwnMountedDeferred !== "function") return null;
+    const key = bankSetupHubPath(path);
+    const sourceFor = () => view?.state?.doc?.toString?.() || this.bankSetupSourceCache?.get?.(key);
+    const current = () => {
+      const text = sourceFor();
+      const card = text && this.bankSetupCardFor(key, text);
+      return Boolean(card && card.model);
+    };
+    // Title-slot adoption mounts after the CodeMirror update. Acquire only
+    // after that mount is attached, including when eligibility has returned.
+    return propertyCardFrontmatterOwnMountedDeferred(this, {
+      scope, view: view?.dom === scope ? view : null, path: key, kind: "bank", mount,
+      sourceText, getSource: sourceFor, currentPath, isCurrent: current,
+      active: () => this.bankSetupActive === true,
+      afterAttach: true,
     });
   },
 

@@ -3,10 +3,13 @@ title: "Area and Project Cards"
 description: "Local title cards for typed Area and Project notes in Live Preview and Reading view."
 ---
 
-Typed Area and Project notes show a compact card in desktop Live Preview and Reading
+Typed Area and Project notes can show a compact card in desktop Live Preview and Reading
 view. It gives the note a clear title, its place in the home hierarchy, and the
-properties that the note explicitly declares. The card reads local note data and keeps
-Obsidian's native Properties block visible.
+properties that the note explicitly declares. The typed Settings contract uses
+`props_contract_v1` on top of `props_v1`. Whole-block ownership also requires matching
+source and cache plus working editor routing. Missing or uncertain capability,
+malformed or stale source, a failed mount, Source, embeds, hover previews, canvas,
+print, and mobile leave native Properties available.
 
 The card does not change the note. The original heading and properties stay in the
 Markdown source, and the Project's `^prj` task stays directly below the card as its
@@ -67,10 +70,10 @@ missing snapshot is never shown as zero. Areas can show an inbox pill when the i
 route API says the note is the inbox, and Projects can show a root pill, but cards do
 not infer inbox status from the filename or display inherited policy values.
 
-The shared Properties foot remains below the card. `-` toggles that drawer and `+`
-opens the Property Editor; `==` on an area or project note opens the editor on
-the first settings row, and a policy chip opens it on its own setting. `_` folds
-details (`Toggle card details (_)`). Collapse is per-note for the session.
+One shared Properties foot remains below the card. `-` toggles that drawer, `_` folds
+the card's own details, `==` opens the Area or Project settings editor, and `+` opens
+the generic Property Editor. A policy chip opens its own setting. Collapse is per-note
+for the session.
 Collapsing an Area hides its summary and property chips/readout; a Project keeps
 its lifecycle line visible.
 
@@ -98,8 +101,10 @@ report-backed parts below; the card keeps painting everything local.
 ## Data and display rules
 
 The cards use Bob's existing Area and Project type classifiers. Untyped notes do not
-become homes based on their filenames. The untyped type notes and `bank.md` (the Bank
-Setup hub, not an Area home), `_templates/`, `done/`, and `_conflicts/` are excluded.
+become homes based on their filenames. `bank.md` is excluded by its canonical path
+because it is the taskless Bank hub, never an Area note; an accidental `area` type does
+not make it eligible. The untyped type notes, `_templates/`, `done/`, and `_conflicts/`
+are also excluded.
 
 Painting uses the metadata cache, confirmed local Markdown bytes, the local home-hue
 resolver, the ledger type-hue API, the synchronous Ready snapshot, and synchronous

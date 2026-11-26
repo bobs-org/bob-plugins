@@ -209,9 +209,13 @@ returns the glyph tile plus the species word for surfaces that name a species
 without owning the title: the card editors' modal headers. (The bank card
 owned its title in bank-title and no longer uses the badge.) It is never a
 heading, and outside a card it falls back to neutral ink.
-The local Area and Project hosts leave native Properties visible and keep the
-Project's `^prj` line as its editable control; see
-[Area and Project Cards](https://bobs-org.github.io/reference/plugins/area-and-project-cards/).
+The Area and Project hosts own one title and one shared Properties foot when
+`props_v1`, `props_contract_v1`, source/cache evidence, and editor routing are confirmed.
+They keep the Project's `^prj` line as its editable control. `bank.md` is
+excluded from those hosts by path because it is the taskless Bank hub, never
+an Area; its one Bank Card uses the `props_v1` gate. The card keys stay `-`
+(Properties drawer), `_` (own fold), `==` (species editor), and `+` (generic
+Property Editor). See [Area and Project Cards](https://bobs-org.github.io/reference/plugins/area-and-project-cards/).
 
 `propertyCardOwnTitle(scope, { path, recognizer, view })` hides the view's
 inline title and the recognized source title range. In Live Preview, one
@@ -230,7 +234,9 @@ bits. The unit entry points are
 Album, record, day/week/quarter/year, and bank adapters use
 `propertyCardFrontmatterOwnMounted` to acquire whole-container ownership
 only after their card and foot mount. Identity-only temporal cards qualify;
-bank ownership applies to `bank.md`. The coordinator checks the current path and mount generation,
+bank ownership applies to `bank.md` by path and requires `props_v1`. Area and
+Project ownership uses `props_contract_v1` for the typed home-card contract.
+The coordinator checks the current path and mount generation,
 desktop Live Preview or Reading scope, a closed valid frontmatter mapping
 whose parsed values agree with the cache, confirmed `props_v1` for the
 current bob path, and working property-editor/native-command routing.

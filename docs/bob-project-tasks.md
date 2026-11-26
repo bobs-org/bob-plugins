@@ -65,11 +65,13 @@ area/project frontmatter are:
 | Navigation rename, link replacement, and project promotion/reversal; block-ID rename | Guarded text/link replacements can update a linked frontmatter value, but do not serialize YAML or maintain count keys. Task, dependency, relation, and successor writers edit body spans. |
 | Articles `030-plugin.js` | Applies Bob's planned text edits and preimage-checked inbound link replacements; formatting is article-gated. |
 | Ledger Property Editor | Sends guarded operations to `bob props`; its YAML fragment parser is read-only. Other card writers call their Bob commands. |
-| Ledger `241d-plugin-notebook-catalog.js` | `metadataEditor` is used only to focus native Properties; it never assigns a property. Area-card takeover owns rerouting that fallback. |
+| Ledger `241d-plugin-notebook-catalog.js` | `metadataEditor` is used only to focus native Properties; it never assigns a property. The Area/Project home-card ownership gate reroutes this fallback only while `props_v1`, `props_contract_v1`, source/cache evidence, and editor routing are confirmed. |
 | Ledger stats journal | Writes `.bob` journal data, not note frontmatter. |
 
-No automatic count writer remains. The native Properties UI remains available
-until the area/project cards' validated settings editor takes ownership.
+No automatic count writer remains. The native Properties UI remains available until
+the Area/Project home-card ownership gate confirms matching source, cache, both Bob
+capabilities, and editor routing. That gate is separate from whether a typed Settings
+editor can open a particular setting.
 
 ## Snapshots to Highlights
 

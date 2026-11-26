@@ -46,9 +46,12 @@ logical setting in browse mode. On a degraded report the request selects the
 corresponding real property when present, otherwise a safe first row.
 
 On area and project notes, `==` and the card Settings control open the editor
-on the first settings row; a policy chip opens it on its own setting. `+`
-opens the generic Property Editor on any Markdown note. Bank has no typed
-settings group: its `bank` property row hands off to Bank Setup with `==`.
+on the first settings row; a policy chip opens it on its own setting. Those
+typed rows require a current `props_contract_v1` report. `+` opens the generic
+Property Editor on any Markdown note. `bank.md` is the path-canonical, untyped
+hub and uses one Bank Card on `props_v1`; it has no typed settings group, even
+when an older Bob reports the former hybrid contract. Its `bank` property row
+hands off to Bank Setup with `==`.
 
 ## Ownership and rows
 
@@ -358,9 +361,10 @@ keep native focus elsewhere.
 The **File Properties sidebar** remains available for native editing even
 when the document card owns Properties. Metadata Menu's native Properties
 context menu is unavailable on the hidden in-document block; use the native
-sidebar or Source when you need native access. The bank card can own the
-in-document block on `bank.md` under the same source/cache and capability
-checks as the other property cards. Ordinary notes, Source, embeds, hover
+sidebar or Source when you need native access. The Bank Card can own the
+in-document block on `bank.md` when the source/cache and `props_v1` gate is
+confirmed. Area and Project cards use `props_contract_v1` for their typed
+settings. Ordinary notes, Source, embeds, hover
 popovers, canvas, print, and mobile never acquire whole-block ownership.
 
 Unknown or absent capability, malformed or unclosed YAML, duplicate keys,
@@ -373,8 +377,10 @@ as the card's title-slot anchor. Painting and drawer toggles never launch
 bob or write the note; capability discovery happens separately on lifecycle
 events. See the [ownership architecture](https://bobs-org.github.io/develop/plugins/architecture/#frontmatter-ownership).
 
-The current Vim family is `==`, `-`, and `+`. The former `=-` and `=+`
-chords fall through to Vim; Reading uses the disclosure and commands.
+The card key family is `-` for the Properties drawer, `_` for the card's own
+fold, `==` for its species editor, and `+` for the generic Property Editor.
+The former `=-` and `=+` chords fall through to Vim; Reading uses the disclosure
+and commands.
 
 ## Native Properties parity
 

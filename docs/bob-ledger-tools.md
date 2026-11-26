@@ -5,9 +5,9 @@ description: "Inspect task lanes, Pomodoros, freshness, planning marks, and cale
 
 Renders task, Pomodoro, freshness, and planning information from Bob notes.
 
-Album cards and sync: [Album cards](albums.md); record cards and editor:
-[Record Card](record-card.md); [Day and Period Cards](intention-card.md);
-note properties: [Property Editor](property-editor.md).
+Cards: [Album cards](albums.md), [Record Card](record-card.md),
+[Day and Period Cards](intention-card.md), [Area and Project Cards](area-and-project-cards.md),
+[Bank](https://bobs-org.github.io/bank/); [Property Editor](property-editor.md).
 
 <!-- BEGIN GENERATED: facts -->
 ## Plugin facts

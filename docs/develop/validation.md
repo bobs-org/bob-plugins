@@ -395,9 +395,10 @@ late H1, deep ancestry, long summary, shadowed/invalid clock, cap-off, created
 stamps, nested inbox, nested `^prj`, untyped control), collapse and `-` drawer in both
 modes, Settings/chip handoff to the browse editor, missing-editor inert rendering,
 modifier crumbs, Source/eligibility/rename/delete, injected mount failure with native
-title restore, denied embed/print/mobile contexts, native Properties remaining
-visible, Task Card open/close on `^prj` with `Esc`/`q`/`Ctrl+[`, and Ctrl+Enter on a
-separate completion fixture. Screenshots cover light/dark × wide/narrow (narrow card
+title restore, denied embed/print/mobile contexts, native Properties hidden only while
+the ownership gate is valid and restored on failure, Task Card open/close on `^prj`
+with `Esc`/`q`/`Ctrl+[`, and Ctrl+Enter on a separate completion fixture. Screenshots
+cover light/dark × wide/narrow (narrow card
 containers at or below the 420 px breakpoint), collapsed, open-drawer, and reduced
 motion, with recorded container geometry and visual verdicts. Review every PNG and
 the report's checks, note-byte hashes, and bob invocation log. Copy the report and
@@ -412,6 +413,30 @@ within 2 px of `coordsAtPos(head, 1)`. The report records the checks
 `underscore-project-cursor-tracks-text` and `underscore-project-expand-cursor-tracks-text`.
 It also checks Project `_` collapse/expand. Each step keeps the same editor head,
 changes card height, and leaves the drawn block cursor within 2 px of the text.
+
+## Bank and home-card takeover evidence
+
+The production-adapter runner, `scripts/obsidian-frontmatter-takeover-e2e.cjs`, covers
+Area, inbox, active/terminal Project, and canonical Bank in Live Preview and Reading;
+title/foot uniqueness; `-`, `_`, `==`, and `+`; `^prj` cursor integrity; and native
+Properties recovery across capability, source/cache, context, mount, path, and unload
+failures. Bank stays outside Area ownership even with an accidental `area` type. `+`
+stays generic under the old hybrid contract. Bank requires `props_v1`; home Settings
+require `props_contract_v1`.
+
+The 2026-11-26 report has 62/63 checks (30/31 Live Preview, 9/9 Reading, 23/23 shared);
+**GO (reading only; live preview keeps per-row hiding)** because one record-foot live
+autosave check failed. Bank checks passed. Forty-six screenshots include Bank Live
+Preview/Reading × light/dark × wide/narrow, plus record/album Live Preview wide. The
+Area/Project runner recorded 53/60; seven failures also reproduce on pristine master.
+It stopped before screenshots, so that run has no Area/Project visual verdict.
+
+Evidence attached to `bob-cli-qi.4`: takeover report `file:explicit:290bf602385934c8b83ee465`,
+runner log `file:explicit:9bc0eacb4d944023db5b3888`, and 46-shot archive
+`file:explicit:cdd6ba05e0b402a23c048298`. The home-cards report, log, and empty-shot
+archive are `file:explicit:dce3a74989f86e48da93715d`,
+`file:explicit:2a125acea859ceb79722a65c`, and
+`file:explicit:c4c6acced7cb004fabf26e32`.
 
 ## Card foot walkthrough
 

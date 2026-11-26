@@ -2,7 +2,8 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 const {
-  makePlugin, laneEntry, land, flushAll, notices, helpers, DATE,
+  makePlugin, laneEntry, land, flushAll, notices, helpers, DATE, CARD_BASE_DATE, priorityConfig,
+  choosePriorityLevel, confirmCancelReasonStage,
 } = require("./navigation-review-gestures-harness.cjs");
 const { LedgerToolsPlugin } = require("./ledger-tools-harness.cjs");
 const { TaskStatusCyclerPlugin, installTasksCloseCommand } = require("./task-status-cycler-harness.cjs");
@@ -335,4 +336,246 @@ test("Alt+F uses the real settle provider and stays without answering the walk",
   assert.equal(f.editor.getCursor().line, cursor.line);
   assert.equal(f.editor.transactions.length, 1);
   assert.match(f.editor.getValue(), /Same name \[fresh:: 2026-10-08\] \^new/);
+});
+
+function openWalkCard(f) {
+  assert.equal(
+    f.plugin.openBulletPropertyPicker(f.view().editor, {
+      config: priorityConfig(),
+      baseDate: CARD_BASE_DATE,
+      random: () => 0,
+    }),
+    true,
+  );
+  const picker = f.plugin.activeBulletPropertyPicker;
+  assert.ok(picker, "the Task Card opened");
+  assert.equal(picker.stage, "task-card");
+  return picker;
+}
+
+async function confirmWalkWorkLogIfNeeded(picker, summary = "") {
+  if (picker.stage !== "schedule-work-log") return false;
+  picker.inputEl = { value: summary };
+  picker.visibleItems = picker.getFilteredItems();
+  await picker.openItemAtIndex(0);
+  return true;
+}
+
+async function runWalkCardRow(picker, rowId) {
+  const row = picker.taskCardModel.rows.find((item) => item.id === rowId);
+  assert.ok(row, `missing ${rowId} card row`);
+  return await picker.dispatchTaskCardIntent({ type: "open-action", rowId, action: row.action });
+}
+
+function groupedWalkFixture({ targetLines, targetMatch, targetBlockId, laterDefs }) {
+  const ledger = new LedgerToolsPlugin();
+  ledger.app = { plugins: { plugins: {} }, vault: {}, workspace: {} };
+  const settle = ledger.taskSettleApi();
+  const laterLines = [];
+  for (const later of laterDefs) {
+    laterLines.push(later.headline);
+    laterLines.push(...(later.children || []));
+  }
+  const raw = ["---", "type: [[area]]", "---", "## Tasks", "", ...targetLines, ...laterLines, ""].join("\n");
+  const settled0 = settle.settleNote({ path: AREA, contents: raw, today: DATE }).contents;
+  const lines = settled0.split("\n");
+  const findBy = (match) => {
+    const idx = lines.findIndex((line) => line.includes(match));
+    assert.notEqual(idx, -1, `missing ${match} in:\n${settled0}`);
+    return idx;
+  };
+  const targetIdx = findBy(targetMatch);
+  const laterIdx = findBy(laterDefs[0].match);
+  const rows = [
+    { key: `${AREA}:${targetIdx + 1}`, path: AREA, line: targetIdx + 1, originalMarkdown: lines[targetIdx], text: targetMatch, state: null, bucket: null, tier: "next", tierLabel: "NEXT", lane: "ready", fresh: "2026-10-06", dueOn: DATE, daysOverdue: 0, interval: 7, rank: 1, tierRank: 1, tierTotal: 2, blockId: targetBlockId },
+    { key: `${AREA}:${laterIdx + 1}`, path: AREA, line: laterIdx + 1, originalMarkdown: lines[laterIdx], text: laterDefs[0].match, state: null, bucket: null, tier: "next", tierLabel: "NEXT", lane: "ready", fresh: "2026-10-06", dueOn: DATE, daysOverdue: 0, interval: 7, rank: 2, tierRank: 2, tierTotal: 2, blockId: laterDefs[0].blockId },
+  ];
+  const f = makePlugin({ rows, activePath: AREA, notes: { [AREA]: settled0 }, areaPaths: [AREA] });
+  const { plugin } = f;
+  ledger.app = plugin.app;
+  plugin.navTaskSettleToday = () => DATE;
+  plugin.app.plugins.plugins["bob-ledger-tools"].api.taskSettle = settle;
+  plugin.app.plugins.plugins["bob-ledger-tools"].api.freshness.version = 7;
+  const leaves = [...f.editors].map(([path, editor]) => ({ view: { file: { path, extension: "md" }, editor, getViewType: () => "markdown" } }));
+  plugin.app.workspace.getLeavesOfType = (type) => (type === "markdown" ? leaves : []);
+  plugin.app.workspace.iterateAllLeaves = (visit) => leaves.forEach(visit);
+  plugin.app.vault.read = async (file) => f.editors.get(file.path)?.getValue() ?? f.contents.get(file.path);
+  plugin.app.vault.cachedRead = plugin.app.vault.read;
+  plugin.readLinkPickerNoteContent = async (path) => plugin.app.vault.read({ path });
+  plugin.app.metadataCache.getFileCache = (file) => ({ frontmatter: file.path === AREA ? { type: "[[area]]" } : {} });
+  return { ...f, ledger, settle, settled0, targetMatch, targetBlockId };
+}
+
+function laterPair(oneId, twoId) {
+  const lineFor = (id) => (oneId === "" ? `- [*] #task ${id} [fresh:: 2026-10-01]` : `- [*] #task ${id} [fresh:: 2026-10-01] ^${id}`);
+  return [
+    { headline: lineFor(oneId === "" ? "Later one" : oneId), children: ["  - child note one", "  - child note two"], match: oneId === "" ? "Later one" : `^${oneId}`, blockId: oneId === "" ? "" : oneId },
+    { headline: lineFor(twoId === "" ? "Later two" : twoId), children: ["  - child note one", "  - child note two"], match: twoId === "" ? "Later two" : `^${twoId}`, blockId: twoId === "" ? "" : twoId },
+  ];
+}
+
+function assertGroupedSettleAdvance({ f, editor, beforeTx, epoch, laterMatch, groupTitle }) {
+  const value = editor.getValue();
+  assert.equal(f.settle.settleNote({ path: AREA, contents: value, today: DATE }).contents, value, "the note is a settle fixpoint");
+  assert.equal(editor.transactions.length, beforeTx + 1, "gesture and regroup share one transaction");
+  assert.equal(f.plugin.reviewLandingEpoch, epoch + 1, "the walk advanced exactly once");
+  const cursorLine = editor.getLine(editor.getCursor().line) || "";
+  assert.ok(cursorLine.includes(laterMatch), `cursor is on the next due row by identity, saw: ${cursorLine}`);
+  assert.equal(notices.length, 2, `rich card plus one landing toast, saw: ${JSON.stringify(notices)}`);
+  assert.match(notices[1], /Review \d+\/\d+/);
+  const groupIdx = value.split("\n").findIndex((line) => line.trim() === groupTitle);
+  assert.notEqual(groupIdx, -1, `missing ${groupTitle} in:\n${value}`);
+  return value;
+}
+
+test("Alt+P on a grouped ID'd walk row regroups to Blocked and advances once", async () => {
+  const targetLine = "- [ ] #task Target [priority:: high] [scheduled:: 2026-10-01] [fresh:: 2026-10-01] ^target";
+  const f = groupedWalkFixture({ targetLines: [targetLine], targetMatch: "^target", targetBlockId: "target", laterDefs: laterPair("later1", "later2") });
+  await land(f);
+  const editor = f.view().editor;
+  assert.ok(editor.getLine(editor.getCursor().line).includes("^target"));
+  const epoch = f.plugin.reviewLandingEpoch;
+  const beforeTx = editor.transactions.length;
+  notices.length = 0;
+  f.plugin.rollByRecommendation(editor, { config: priorityConfig(), baseDate: CARD_BASE_DATE, random: () => 0 });
+  await flushAll(f.plugin);
+  await flushAll(f.plugin);
+  const value = assertGroupedSettleAdvance({ f, editor, beforeTx, epoch, laterMatch: "^later1", groupTitle: "### Blocked" });
+  assert.match(value, /- \[\?\] #task Target .*\[scheduled:: 2026-10-09\].*\^target/);
+  assert.match(value, /### Blocked/);
+});
+
+test("Alt+P on a grouped ID-less walk row regroups to Blocked and advances once", async () => {
+  const targetLine = "- [ ] #task Target [priority:: high] [scheduled:: 2026-10-01] [fresh:: 2026-10-01]";
+  const f = groupedWalkFixture({ targetLines: [targetLine], targetMatch: "Target", targetBlockId: "", laterDefs: [
+    { headline: "- [*] #task Later one [fresh:: 2026-10-01]", children: ["  - child note one", "  - child note two"], match: "Later one", blockId: "" },
+    { headline: "- [*] #task Later two [fresh:: 2026-10-01]", children: ["  - child note one", "  - child note two"], match: "Later two", blockId: "" },
+  ] });
+  await land(f);
+  const editor = f.view().editor;
+  assert.ok(editor.getLine(editor.getCursor().line).includes("Target"));
+  const epoch = f.plugin.reviewLandingEpoch;
+  const beforeTx = editor.transactions.length;
+  notices.length = 0;
+  f.plugin.rollByRecommendation(editor, { config: priorityConfig(), baseDate: CARD_BASE_DATE, random: () => 0 });
+  await flushAll(f.plugin);
+  await flushAll(f.plugin);
+  const value = assertGroupedSettleAdvance({ f, editor, beforeTx, epoch, laterMatch: "Later one", groupTitle: "### Blocked" });
+  assert.match(value, /- \[\?\] #task Target .*\[scheduled:: 2026-10-09\]/);
+});
+
+test("Alt+P decay P1 to P2 on a grouped walk row regroups and advances once", async () => {
+  const targetLines = [
+    "- [ ] #task Target [priority:: high] [scheduled:: 2026-10-01] [fresh:: 2026-10-01] ^target",
+    "\t- \u{1F5D3}\uFE0F **SCHEDULE LOG**",
+    "\t\t- *2026-10-01* \u2014 \u{1F3B2} P1 roll \u00B7 in **2** (2\u20137) days",
+  ];
+  const f = groupedWalkFixture({ targetLines, targetMatch: "^target", targetBlockId: "target", laterDefs: laterPair("later1", "later2") });
+  await land(f);
+  const editor = f.view().editor;
+  const epoch = f.plugin.reviewLandingEpoch;
+  const beforeTx = editor.transactions.length;
+  notices.length = 0;
+  f.plugin.rollByRecommendation(editor, { config: priorityConfig(), baseDate: CARD_BASE_DATE, random: () => 0 });
+  await flushAll(f.plugin);
+  await flushAll(f.plugin);
+  const value = assertGroupedSettleAdvance({ f, editor, beforeTx, epoch, laterMatch: "^later1", groupTitle: "### Blocked" });
+  assert.match(value, /P1 \u2192 P2 decay/);
+  assert.match(value, /\[priority:: medium\].*\^target/);
+  assert.match(value, /- \[\?\] #task Target .*\[scheduled:: 2026-10-15\].*\^target/);
+});
+
+test("a Task Card P-level pick on a grouped walk row regroups and advances once", async () => {
+  const targetLine = "- [ ] #task Target [priority:: high] [scheduled:: 2026-10-01] [fresh:: 2026-10-01] ^target";
+  const f = groupedWalkFixture({ targetLines: [targetLine], targetMatch: "^target", targetBlockId: "target", laterDefs: laterPair("later1", "later2") });
+  await land(f);
+  const editor = f.view().editor;
+  const epoch = f.plugin.reviewLandingEpoch;
+  const beforeTx = editor.transactions.length;
+  notices.length = 0;
+  const picker = openWalkCard(f);
+  await choosePriorityLevel(f.plugin, "P2");
+  await confirmWalkWorkLogIfNeeded(picker, "");
+  await flushAll(f.plugin);
+  const value = assertGroupedSettleAdvance({ f, editor, beforeTx, epoch, laterMatch: "^later1", groupTitle: "### Blocked" });
+  assert.match(value, /\[priority:: medium\].*\^target/);
+  assert.match(value, /- \[\?\] #task Target .*\[scheduled:: /);
+});
+
+test("Ctrl+Enter on a grouped walk row regroups and advances once", async () => {
+  const targetLine = "- [ ] #task Target [priority:: high] [scheduled:: 2026-10-01] [fresh:: 2026-10-01] ^target";
+  const f = groupedWalkFixture({ targetLines: [targetLine], targetMatch: "^target", targetBlockId: "target", laterDefs: laterPair("later1", "later2") });
+  await land(f);
+  const editor = f.view().editor;
+  const epoch = f.plugin.reviewLandingEpoch;
+  const beforeTx = editor.transactions.length;
+  notices.length = 0;
+  const picker = openWalkCard(f);
+  assert.equal(await picker.dispatchTaskCardIntent({ type: "apply-recommendation" }), true);
+  await confirmWalkWorkLogIfNeeded(picker, "");
+  await flushAll(f.plugin);
+  await flushAll(f.plugin);
+  const value = assertGroupedSettleAdvance({ f, editor, beforeTx, epoch, laterMatch: "^later1", groupTitle: "### Blocked" });
+  assert.match(value, /- \[\?\] #task Target .*\[scheduled:: 2026-10-09\].*\^target/);
+});
+
+test("a Task Card cancel on a grouped walk row closes to Done and advances once", async () => {
+  const targetLine = "- [ ] #task Target [priority:: high] [scheduled:: 2026-10-01] [fresh:: 2026-10-01] ^target";
+  const f = groupedWalkFixture({ targetLines: [targetLine], targetMatch: "^target", targetBlockId: "target", laterDefs: laterPair("later1", "later2") });
+  await land(f);
+  const editor = f.view().editor;
+  const epoch = f.plugin.reviewLandingEpoch;
+  const beforeTx = editor.transactions.length;
+  notices.length = 0;
+  const picker = openWalkCard(f);
+  await runWalkCardRow(picker, "cancel");
+  await confirmCancelReasonStage(picker, "too late");
+  await flushAll(f.plugin);
+  await flushAll(f.plugin);
+  const value = assertGroupedSettleAdvance({ f, editor, beforeTx, epoch, laterMatch: "^later1", groupTitle: "### Done & Canceled" });
+  assert.match(value, /- \[-\] #task Target.*\^target/);
+});
+
+test("a duplicate-title ID-less grouped commit stays without advancing", async () => {
+  const f = groupedWalkFixture({
+    targetLines: ["- [ ] #task Same title"],
+    targetMatch: "Same title",
+    targetBlockId: "",
+    laterDefs: [
+      { headline: "- [ ] #task Same title", children: [], match: "Same title", blockId: "" },
+      { headline: "- [*] #task Later with child [fresh:: 2026-10-01]", children: ["  - child one", "  - child two"], match: "Later with child", blockId: "" },
+    ],
+  });
+  await land(f);
+  const editor = f.view().editor;
+  const epoch = f.plugin.reviewLandingEpoch;
+  notices.length = 0;
+  const picker = openWalkCard(f);
+  await choosePriorityLevel(f.plugin, "P2");
+  await confirmWalkWorkLogIfNeeded(picker, "");
+  await flushAll(f.plugin);
+  await flushAll(f.plugin);
+  assert.equal(f.plugin.reviewLandingEpoch, epoch, "an ambiguous identity stays");
+});
+
+test("a large grouped block still advances exactly once", async () => {
+  const children = Array.from({ length: 12 }, (_, i) => `  - child note ${i + 1}`);
+  const f = groupedWalkFixture({
+    targetLines: ["- [ ] #task Target [priority:: high] [scheduled:: 2026-10-01] [fresh:: 2026-10-01] ^target", ...children],
+    targetMatch: "^target",
+    targetBlockId: "target",
+    laterDefs: [
+      { headline: "- [*] #task Later one [fresh:: 2026-10-01] ^later1", children: [], match: "^later1", blockId: "later1" },
+      { headline: "- [*] #task Later two [fresh:: 2026-10-01] ^later2", children: [], match: "^later2", blockId: "later2" },
+    ],
+  });
+  await land(f);
+  const editor = f.view().editor;
+  const epoch = f.plugin.reviewLandingEpoch;
+  const beforeTx = editor.transactions.length;
+  notices.length = 0;
+  f.plugin.rollByRecommendation(editor, { config: priorityConfig(), baseDate: CARD_BASE_DATE, random: () => 0 });
+  await flushAll(f.plugin);
+  await flushAll(f.plugin);
+  assertGroupedSettleAdvance({ f, editor, beforeTx, epoch, laterMatch: "^later1", groupTitle: "### Blocked" });
 });

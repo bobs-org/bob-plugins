@@ -87,13 +87,20 @@ function taskLine(description, status, dates, id) {
 function seedNote(dates) {
   const d = dates || fixtureDates();
   return [
+    "---",
+    "type: [[area]]",
+    "---",
     "# Quick roll e2e",
+    "",
+    "## Tasks",
     "",
     taskLine(TASKS.ready, " ", d, "quick-ready"),
     taskLine(TASKS.pending, "/", d, "quick-pending"),
-    ...TASKS.walk.map((description, index) =>
-      taskLine(description, " ", d, `quick-walk-${index + 1}`),
-    ),
+    ...TASKS.walk.flatMap((description, index) => {
+      const line = taskLine(description, " ", d, `quick-walk-${index + 1}`);
+      if (index === 0) return [line];
+      return [line, `  - walk child ${index}-a`, `  - walk child ${index}-b`];
+    }),
     "",
   ].join("\n");
 }

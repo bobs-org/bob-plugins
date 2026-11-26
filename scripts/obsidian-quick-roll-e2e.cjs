@@ -669,6 +669,11 @@ async function runE2e(parsed) {
     const untouchedBefore = quickRoll.extractTaskLine(advanced.editorValue, targetDescription);
     const noticeStart = advanced.notices.length;
     record("answer-lands-next-review-row", true, targetDescription);
+    const blockedLines = String(advanced.editorValue || "").split(/\r?\n/);
+    const blockedIdx = blockedLines.findIndex((line) => line.trim() === "### Blocked");
+    const sourceLine = quickRoll.extractTaskLine(advanced.editorValue, sourceDescription);
+    const sourceIdx = blockedLines.findIndex((line) => line === sourceLine);
+    record("walk-task-regroups-to-blocked", blockedIdx >= 0 && sourceIdx > blockedIdx && /\[scheduled::/.test(sourceLine), sourceLine);
 
     await pressAltP(client, false);
     const busyProbe = await waitFor(client, (value) =>

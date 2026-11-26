@@ -172,3 +172,129 @@ findReviewResumeIndex = function findReviewResumeIndexWithSettleIdentity(list, r
     return -1;
   }
 };
+
+// Identity-first reader for the Task Card review settle. An ID'd row resolves
+// by its trailing block ID (exactly one final-text match wins, closed rows
+// included; zero or duplicate stays null and never falls back to alignment).
+// An ID-less row pairs through `alignEditorLines` first (BLOCKS shifts and
+// the positional choice between duplicate rows), then through a unique
+// `editorLineAlignmentKey` task-line match. Never throws and never
+// substitutes the cursor line. Uses the final editor content.
+function readReviewOriginAfterLine(modal) {
+  try {
+    if (!modal || !Number.isInteger(modal.reviewLineIndex)) return null;
+    const snapshot =
+      typeof modal.reviewOriginContent === "string"
+        ? modal.reviewOriginContent
+        : null;
+    let current = null;
+    try {
+      if (
+        modal.editor &&
+        typeof modal.editor.getValue === "function"
+      ) {
+        current = String(modal.editor.getValue() || "");
+      } else if (typeof modal.getEditorContent === "function") {
+        current = String(modal.getEditorContent() || "");
+      }
+    } catch (_readError) {
+      current = null;
+    }
+    if (snapshot === null || current === null) {
+      try {
+        const live =
+          modal.editor && Number.isInteger(modal.reviewLineIndex)
+            ? getEditorLine(modal.editor, modal.reviewLineIndex)
+            : null;
+        return typeof live === "string" ? live : null;
+      } catch (_fallbackError) {
+        return null;
+      }
+    }
+    const oldLines = String(snapshot).split(/\r?\n/);
+    const newLines = String(current).split(/\r?\n/);
+    if (
+      modal.reviewLineIndex < 0 ||
+      modal.reviewLineIndex >= oldLines.length
+    ) {
+      return null;
+    }
+    const reviewed = String(oldLines[modal.reviewLineIndex] ?? "");
+    let reviewedId = "";
+    try {
+      reviewedId = navTaskSettleLineBlockId(reviewed);
+    } catch (_idError) {
+      reviewedId = "";
+    }
+    if (reviewedId) {
+      const hits = [];
+      for (let index = 0; index < newLines.length; index += 1) {
+        let candidateId = "";
+        try {
+          candidateId = navTaskSettleLineBlockId(newLines[index]);
+        } catch (_candidateError) {
+          candidateId = "";
+        }
+        if (candidateId === reviewedId) hits.push(index);
+      }
+      if (hits.length === 1) {
+        return String(newLines[hits[0]] || "");
+      }
+      return null;
+    }
+    let pairs = null;
+    try {
+      pairs = alignEditorLines(oldLines, newLines);
+    } catch (_alignError) {
+      return null;
+    }
+    for (const [oldIndex, newIndex] of Array.isArray(pairs) ? pairs : []) {
+      if (oldIndex === modal.reviewLineIndex) {
+        if (!Number.isInteger(newIndex) || newIndex < 0 || newIndex >= newLines.length) {
+          return null;
+        }
+        return String(newLines[newIndex] || "");
+      }
+    }
+    let key = "";
+    try {
+      key = editorLineAlignmentKey(reviewed);
+    } catch (_keyError) {
+      return null;
+    }
+    if (typeof key !== "string" || !key.trim()) return null;
+    const oldHits = [];
+    for (let index = 0; index < oldLines.length; index += 1) {
+      let candidateKey = "";
+      try {
+        candidateKey = editorLineAlignmentKey(oldLines[index]);
+      } catch (_oldKeyError) {
+        continue;
+      }
+      if (candidateKey === key) oldHits.push(index);
+    }
+    if (oldHits.length !== 1) return null;
+    const newHits = [];
+    for (let index = 0; index < newLines.length; index += 1) {
+      let candidateKey = "";
+      try {
+        candidateKey = editorLineAlignmentKey(newLines[index]);
+      } catch (_newKeyError) {
+        continue;
+      }
+      if (candidateKey === key) newHits.push(index);
+    }
+    if (newHits.length !== 1) return null;
+    const candidate = String(newLines[newHits[0]] || "");
+    try {
+      if (typeof isObsidianTaskLine === "function" && !isObsidianTaskLine(candidate)) {
+        return null;
+      }
+    } catch (_taskError) {
+      return null;
+    }
+    return candidate;
+  } catch (_error) {
+    return null;
+  }
+}

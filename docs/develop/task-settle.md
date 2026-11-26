@@ -89,7 +89,7 @@ still resolves after the row moves. With no block ID, exact `text` at the
 hinted line wins, else an unambiguous exact-text match in the same path.
 Missing or ambiguous identities drop pending work. Settling never creates a
 block ID. Rapid taps rearm with the newest identity snapshot, including
-refreshed text.
+refreshed text. The Task Card's review settle resolves the answered row by the same identity rules, with an alignment-key fallback for ID-less rows.
 
 ## Staged apply and preimage
 

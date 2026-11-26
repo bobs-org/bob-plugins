@@ -916,6 +916,151 @@ test("review settle never substitutes the cursor line and shares the inbox fallb
   assert.equal(helpers.readReviewOriginAfterLine(picker), null);
 });
 
+function fakeOriginModal(snapshotLines, currentLines, reviewLineIndex) {
+  const current = currentLines.join("\n");
+  return {
+    reviewLineIndex,
+    reviewOriginContent: snapshotLines.join("\n"),
+    editor: {
+      getValue: () => current,
+      getLine: (line) => currentLines[line] ?? null,
+    },
+    getEditorContent: () => current,
+  };
+}
+
+test("review origin reader resolves an ID'd row after it regroups past larger blocks", () => {
+  const snapshot = [
+    "# Note",
+    "- [ ] #task Keep ^keep",
+    "- [ ] #task Fix flicker ^abc",
+    "- [ ] #task Later one",
+    "- [ ] #task Later two",
+    "- [ ] #task Later three",
+    "  - child note one",
+    "  - child note two",
+  ];
+  const current = [
+    "# Note",
+    "- [ ] #task Keep ^keep",
+    "- [ ] #task Later one",
+    "- [ ] #task Later two",
+    "- [ ] #task Later three",
+    "  - child note one",
+    "  - child note two",
+    "- [?] #task Fix flicker [scheduled:: 2026-11-20] ^abc",
+  ];
+  const after = helpers.readReviewOriginAfterLine(fakeOriginModal(snapshot, current, 2));
+  assert.ok(after && after.includes("^abc"), `moved ID'd row resolves, saw: ${after}`);
+  assert.match(after, /\[scheduled:: 2026-11-20\]/);
+});
+
+test("review origin reader stays null for duplicate or missing block IDs", () => {
+  const snapshot = ["# Note", "- [ ] #task Fix flicker ^dup", "- [ ] #task Other"];
+  const duplicated = [
+    "# Note",
+    "- [ ] #task Fix flicker ^dup",
+    "- [ ] #task Copy ^dup",
+    "- [ ] #task Other",
+  ];
+  assert.equal(
+    helpers.readReviewOriginAfterLine(fakeOriginModal(snapshot, duplicated, 1)),
+    null,
+    "duplicate block ID stays null even when the old index still looks similar",
+  );
+  const missing = ["# Note", "- [ ] #task Fix flicker", "- [ ] #task Other"];
+  assert.equal(
+    helpers.readReviewOriginAfterLine(fakeOriginModal(snapshot, missing, 1)),
+    null,
+    "missing block ID stays null even when the old index still looks similar",
+  );
+});
+
+test("review origin reader falls back to a unique alignment key for ID-less rows", () => {
+  const snapshot = [
+    "# Note",
+    "- [ ] #task Small row",
+    "- [ ] #task Later one",
+    "- [ ] #task Later two with child",
+    "  - child one",
+    "  - child two",
+    "- [ ] #task Later three with child",
+    "  - child three",
+    "  - child four",
+  ];
+  const current = [
+    "# Note",
+    "- [ ] #task Later one",
+    "- [ ] #task Later two with child",
+    "  - child one",
+    "  - child two",
+    "- [ ] #task Later three with child",
+    "  - child three",
+    "  - child four",
+    "- [?] #task Small row [scheduled:: 2026-11-20]",
+  ];
+  const after = helpers.readReviewOriginAfterLine(fakeOriginModal(snapshot, current, 1));
+  assert.ok(after && after.includes("Small row"), `unique key match resolves, saw: ${after}`);
+  assert.match(after, /\[scheduled:: 2026-11-20\]/);
+});
+
+test("review origin reader stays null for a duplicated ID-less key", () => {
+  const snapshot = [
+    "# Note",
+    "- [ ] #task Small row",
+    "- [ ] #task Later one",
+    "- [ ] #task Later two with child",
+    "  - child one",
+    "  - child two",
+  ];
+  const duplicatedFinal = [
+    "# Note",
+    "- [ ] #task Later one",
+    "- [ ] #task Later two with child",
+    "  - child one",
+    "  - child two",
+    "- [?] #task Small row [scheduled:: 2026-11-20]",
+    "- [ ] #task Small row",
+  ];
+  assert.equal(
+    helpers.readReviewOriginAfterLine(fakeOriginModal(snapshot, duplicatedFinal, 1)),
+    null,
+    "duplicated final key stays null when the moved row is unpaired",
+  );
+  const duplicatedSnapshot = [
+    "# Note",
+    "- [ ] #task Small row",
+    "- [ ] #task Small row",
+    "- [ ] #task Later one",
+    "- [ ] #task Later two with child",
+    "  - child one",
+    "  - child two",
+  ];
+  const moved = [
+    "# Note",
+    "- [ ] #task Later one",
+    "- [ ] #task Later two with child",
+    "  - child one",
+    "  - child two",
+    "- [?] #task Small row [scheduled:: 2026-11-20]",
+  ];
+  assert.equal(
+    helpers.readReviewOriginAfterLine(fakeOriginModal(duplicatedSnapshot, moved, 1)),
+    null,
+    "duplicated snapshot key stays null when the moved row is unpaired",
+  );
+});
+
+test("review origin reader stays null for a reworded ID-less row", () => {
+  const snapshot = ["# Note", "- [ ] #task Original wording", "- [ ] #task Other"];
+  const current = ["# Note", "- [ ] #task Other", "- [ ] #task Reworded text"];
+  assert.equal(
+    helpers.readReviewOriginAfterLine(fakeOriginModal(snapshot, current, 1)),
+    null,
+    "a reword changes the key and stays",
+  );
+});
+
 test("reviewWalk v2 follow parks, holds the lock until landing, and shows one toast", async () => {
   const fixture = makePlugin({
     rows: nextQueue(["One", "Two", "Three"]),

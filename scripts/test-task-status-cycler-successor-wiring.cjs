@@ -908,6 +908,82 @@ test("recovered-only close reports unblocked without linking (SO4 Esc)", async (
   assert.equal(notices.length, 0, JSON.stringify(notices));
 });
 
+test("public Done recovery preserves a snoozed dependent without an unblocked mark", async () => {
+  notices.length = 0;
+  const dependent = "- [?] #task Re-launch all failed agents on apollo! [fresh:: 2026-01-01] [dependsOn:: sase__fix-apollo] ^relaunch-failed";
+  const day = [`# ${TODAY}`, "", "## Pomodoros", "- [ ] () — FIX"].join("\n");
+  const harness = createInMemoryObsidianApp({
+    "sase.md": [FIX_LINE, dependent].join("\n"),
+    [DAILY_PATH]: day,
+  });
+  const editor = createTextEditor(day, { line: 3, ch: 5 });
+  const plugin = makePlugin(harness, editor, DAILY_PATH);
+  installNavStub(plugin, []);
+  const snoozedCalls = [];
+  plugin.app.plugins.plugins["bob-ledger-tools"].api.isSnoozedToday = (task) => {
+    snoozedCalls.push(task);
+    return true;
+  };
+  plugin.app.plugins.plugins["bob-navigation-hotkeys"].api.successors.pick = async () => null;
+
+  const result = await plugin.finalizeClosedTasks(
+    [{ path: "sase.md", blockId: "fix-apollo", taskId: "sase__fix-apollo", text: "Fix apollo machine!" }],
+    { editor, activePath: DAILY_PATH },
+  );
+
+  assert.ok(result.successors);
+  assert.equal(harness.getSource("sase.md").split("\n")[1],
+    "- [ ] #task Re-launch all failed agents on apollo! [fresh:: 2026-01-01] [dependsOn:: sase__fix-apollo] ^relaunch-failed");
+  assert.ok(snoozedCalls.some((task) => task.path === "sase.md" && task.blockId === "relaunch-failed"),
+    JSON.stringify(snoozedCalls));
+});
+
+test("public Done recovery marks an ordinary dependent unblocked", async () => {
+  notices.length = 0;
+  const dependent = "- [?] #task Re-launch all failed agents on apollo! [fresh:: 2026-01-01] [dependsOn:: sase__fix-apollo] ^relaunch-failed";
+  const day = [`# ${TODAY}`, "", "## Pomodoros", "- [ ] () — FIX"].join("\n");
+  const harness = createInMemoryObsidianApp({
+    "sase.md": [FIX_LINE, dependent].join("\n"),
+    [DAILY_PATH]: day,
+  });
+  const editor = createTextEditor(day, { line: 3, ch: 5 });
+  const plugin = makePlugin(harness, editor, DAILY_PATH);
+  installNavStub(plugin, []);
+  plugin.app.plugins.plugins["bob-ledger-tools"].api.isSnoozedToday = () => false;
+  plugin.app.plugins.plugins["bob-navigation-hotkeys"].api.successors.pick = async () => null;
+
+  const result = await plugin.finalizeClosedTasks(
+    [{ path: "sase.md", blockId: "fix-apollo", taskId: "sase__fix-apollo", text: "Fix apollo machine!" }],
+    { editor, activePath: DAILY_PATH },
+  );
+
+  assert.ok(result.successors);
+  assert.equal(harness.getSource("sase.md").split("\n")[1],
+    `- [ ] #task Re-launch all failed agents on apollo! [fresh:: 2026-01-01] [unblocked:: ${TODAY}] [dependsOn:: sase__fix-apollo] ^relaunch-failed`);
+});
+
+test("public Done recovery preserves a snoozed same-note dependent", async () => {
+  notices.length = 0;
+  const dependent = "- [?] #task Re-launch all failed agents on apollo! [fresh:: 2026-01-01] [dependsOn:: sase__fix-apollo] ^relaunch-failed";
+  const source = [FIX_LINE, dependent].join("\n");
+  const day = [`# ${TODAY}`, "", "## Pomodoros", "- [ ] () — FIX"].join("\n");
+  const harness = createInMemoryObsidianApp({ "Tasks.md": source, [DAILY_PATH]: day });
+  const editor = createTextEditor(source, { line: 0, ch: 0 });
+  const plugin = makePlugin(harness, editor, "Tasks.md");
+  installNavStub(plugin, []);
+  plugin.app.plugins.plugins["bob-ledger-tools"].api.isSnoozedToday = () => true;
+  plugin.app.plugins.plugins["bob-navigation-hotkeys"].api.successors.pick = async () => null;
+
+  const result = await plugin.finalizeClosedTasks(
+    [{ path: "Tasks.md", blockId: "fix-apollo", taskId: "sase__fix-apollo", text: "Fix apollo machine!" }],
+    { editor, activePath: "Tasks.md", dailyPath: DAILY_PATH },
+  );
+
+  assert.ok(result.successors);
+  assert.equal(editor.getValue().split("\n")[1],
+    "- [ ] #task Re-launch all failed agents on apollo! [fresh:: 2026-01-01] [dependsOn:: sase__fix-apollo] ^relaunch-failed");
+});
+
 test("SV14: stale close is refused per row while a fresh close and recovery apply", async () => {
   notices.length = 0;
   const rootOne = "- [x] #task Root one [id:: root__one] ^root-one";

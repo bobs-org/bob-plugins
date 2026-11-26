@@ -23161,6 +23161,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
             dailyPath: dailyPath || "",
             today,
             markUnblockedLine: this.getFreshnessMarkUnblockedLine(),
+            isSnoozedToday: (task) => projectRecoveryTaskIsSnoozedToday(this, task),
             stampLine: stampLineForPass,
             selection,
             destinations,

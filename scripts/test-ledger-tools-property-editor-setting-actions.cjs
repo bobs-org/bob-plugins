@@ -202,9 +202,11 @@ test("ghost Enter seeds an override draft from effective data and writes nothing
     apply: async () => { writes += 1; return { ok: true }; },
   });
   const entry = H.propertyEditorSettingsFindEntry(modal, "setting::color");
+  entry.row.effectiveValue = "blue";
   await modal.propertyEditorActivate(entry);
   assert.equal(modal.stage.settingId, "color");
-  assert.equal(modal.stage.value, "teal");
+  assert.equal(modal.stage.value, H.PROPERTY_EDITOR_POLICY_INHERIT);
+  assert.equal(H.propertyEditorPolicyPreviewHue(modal.stage), "blue");
   assert.equal(writes, 0);
   modal.propertyEditorCancelStage();
   assert.equal(modal.stage, null);
@@ -263,8 +265,9 @@ test("capture names keep order on setting.set and clock never submits a scalar",
   const clockModal = modalFor(report("area"));
   const clock = H.propertyEditorSettingsFindEntry(clockModal, "setting::clock");
   clockModal.propertyEditorResolveSettingStage(clock);
-  assert.equal(clockModal.stage.value, "writing");
-  clockModal.stage.value = "off";
+  assert.equal(clockModal.stage.settingStage, "clock-policy");
+  assert.deepEqual(clockModal.stage.clockTypes, ["writing"]);
+  clockModal.stage.clockMode = "off";
   assert.deepEqual(clockModal.propertyEditorBuildCurrentStage().ops[0], {
     op: "setting.set", setting: "clock", value: { mode: "off" },
   });
@@ -427,11 +430,97 @@ test("stale setting previews keep the draft and ordinary YAML/list builders stay
 
 test("later phases can replace only their setting handler", () => {
   const previous = H.propertyEditorSettingStageHandler("color");
-  assert.equal(previous.kind, "generic-text");
+  assert.equal(previous.kind, "hue");
   assert.equal(H.propertyEditorRegisterSettingStageHandler("color", { kind: "swatch", wireKind: "text" }), true);
   assert.equal(H.propertyEditorSettingStageHandler("color").kind, "swatch");
   H.propertyEditorRegisterSettingStageHandler("color", previous);
   assert.equal(H.propertyEditorSettingStageHandler("parent").prose, true);
+});
+
+test("Hue stage lists inherited palette choices and builds set or clear ops", () => {
+  const show = report("area");
+  const color = show.contract.settings.find((item) => item.id === "color");
+  color.choices = [
+    { id: "blue", label: "Blue", hue: "blue", used_by: ["Love"] },
+    { id: "grey", label: "Grey", hue: "grey", used_by: [] },
+  ];
+  color.effective.value = "blue";
+  const modal = modalFor(show);
+  const entry = H.propertyEditorSettingsFindEntry(modal, "setting::color");
+  modal.propertyEditorResolveSettingStage(entry);
+  assert.equal(modal.stage.settingStage, "hue");
+  assert.equal(modal.stage.value, H.PROPERTY_EDITOR_POLICY_INHERIT);
+  assert.equal(H.propertyEditorPolicyPreviewHue(modal.stage), "blue");
+  assert.deepEqual(modal.stage.policyChoices.map((choice) => choice.id), ["blue", "grey"]);
+  assert.deepEqual(H.propertyEditorPolicyStageBuild(entry, { ...modal.stage, value: "blue" }).ops,
+    [{ op: "setting.set", setting: "color", value: "blue" }]);
+
+  entry.row.settingDeclared = true;
+  entry.row.settingValue = "blue";
+  assert.deepEqual(H.propertyEditorPolicyStageBuild(entry, {
+    ...modal.stage, value: H.PROPERTY_EDITOR_POLICY_INHERIT,
+  }).ops, [{ op: "setting.clear", setting: "color" }]);
+  assert.equal(H.propertyEditorPolicyHue("gray"), "grey");
+  assert.equal(H.propertyEditorPolicyHueAccelerator("e"), "grey");
+});
+
+test("Default type picker includes Inherit, off, configured and unconfigured values", () => {
+  const show = report("project");
+  const type = show.contract.settings.find((item) => item.id === "task_type");
+  type.choices = [{ id: "writing", label: "Writing", hue: "green", used_by: ["Love"] }];
+  type.value = "Writing";
+  show.properties.find((item) => item.key === "theme").value = "Writing";
+  const modal = modalFor(show);
+  const entry = H.propertyEditorSettingsFindEntry(modal, "setting::task_type");
+  modal.propertyEditorResolveSettingStage(entry);
+  assert.equal(modal.stage.settingStage, "type-picker");
+  assert.equal(modal.stage.policyLegacyTheme, true);
+  const choices = H.propertyEditorPolicyTypeChoices(modal.stage);
+  assert.deepEqual(choices.map((choice) => choice.value), [
+    H.PROPERTY_EDITOR_POLICY_INHERIT, "off", "writing",
+  ]);
+  assert.equal(choices.find((choice) => choice.value === "writing").hue, "green");
+  modal.stage.value = "Custom type";
+  assert.ok(H.propertyEditorPolicyTypeChoices(modal.stage).some((choice) => choice.label === "Unconfigured · Custom type"));
+  modal.stage.value = "writing";
+  assert.deepEqual(modal.propertyEditorBuildCurrentStage().ops,
+    [{ op: "setting.set", setting: "task_type", value: "writing" }]);
+  modal.stage.value = H.PROPERTY_EDITOR_POLICY_INHERIT;
+  entry.row.settingDeclared = true;
+  assert.deepEqual(modal.propertyEditorBuildCurrentStage().ops,
+    [{ op: "setting.clear", setting: "task_type" }]);
+
+  const inheritedShow = report("area");
+  const inherited = inheritedShow.contract.settings.find((item) => item.id === "task_type");
+  inherited.declared = false;
+  inherited.value = null;
+  inherited.effective.value = "writing";
+  inheritedShow.properties = inheritedShow.properties.filter((item) => item.key !== "theme");
+  const inheritedModal = modalFor(inheritedShow);
+  inheritedModal.propertyEditorResolveSettingStage(
+    H.propertyEditorSettingsFindEntry(inheritedModal, "setting::task_type"),
+  );
+  assert.equal(inheritedModal.stage.value, H.PROPERTY_EDITOR_POLICY_INHERIT,
+    "an inherited effective type is represented by the local Inherit choice");
+});
+
+test("Clock policy stage preserves shadowed off-clock types in one normalized setting op", () => {
+  const show = report("area");
+  const modal = modalFor(show);
+  const entry = H.propertyEditorSettingsFindEntry(modal, "setting::clock");
+  modal.propertyEditorResolveSettingStage(entry);
+  assert.equal(modal.stage.settingStage, "clock-policy");
+  assert.equal(modal.stage.policyShadowedClock, true);
+  assert.equal(modal.stage.clockMode, "types");
+  assert.deepEqual(modal.stage.clockTypes, ["writing"]);
+  assert.deepEqual(modal.propertyEditorBuildCurrentStage().ops, [{
+    op: "setting.set", setting: "clock", value: { mode: "types", types: ["writing"] },
+  }]);
+  assert.match(H.propertyEditorPolicyClockSentence("inherit"), /Inherit/);
+  assert.match(H.propertyEditorPolicyClockSentence("on"), /every type/);
+  assert.match(H.propertyEditorPolicyClockSentence("off"), /off the clock/);
+  assert.match(H.propertyEditorPolicyClockSentence("types", ["writing"]), /writing/);
+  assert.equal(H.propertyEditorPolicyClockSetMode(modal, "types").ok, true);
 });
 
 test("ready cap effect line uses local noteReady counts and stays quiet when unavailable", () => {

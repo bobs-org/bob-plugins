@@ -101,16 +101,30 @@ past 140 without blocking). Ready cap is a count stepper from 1 to 999
 or `off` (`o` toggles in the control). Review takes 1–365 days and applies to
 tasks living in the note. Capture names reuse the ordered List stage with
 Bob's duplicate and collision warnings. Stats root toggles between `true` and
-absence, and stays disabled on top-level projects. Lives under opens a
-dedicated home picker: type to rank homes (kind and hue pips, with the
-refusal text for ineligible homes), pick with the mouse or ↑/↓, and Enter
-applies only on a current dry-run preview showing bob's consequence lines.
-After apply the stage runs exactly the catalog syncs bob named and reports
-`✓ Moved · N catalogs refreshed · u undo`; a sync failure keeps the write
-and names the failed catalog. Undo restores the parent and re-runs the same
-syncs. Hue, default type, and clock reuse generic stages for now, with Bob
-validating; a logical clock value is always submitted as the strict mode
-object, and generic edits to an actual clock key use that key's `prop.*` op.
+absence, and stays disabled on top-level projects.
+
+Lives under opens a dedicated home picker: type to rank homes (kind and hue
+pips, with the refusal text for ineligible homes), pick with the mouse or
+↑/↓, and Enter applies only on a current dry-run preview showing bob's
+consequence lines. After apply the stage runs exactly the catalog syncs bob
+named and reports `✓ Moved · N catalogs refreshed · u undo`; a sync failure
+keeps the write and names the failed catalog. Undo restores the parent and
+re-runs the same syncs.
+
+Hue opens a swatch stage with Inherit, the eight palette hues, and grey. Each
+swatch shows the top-level areas that use it; letter keys select a hue, and the
+header tint previews the selection. Esc returns without writing. Default type
+opens a filterable list of configured types in their hue ink, plus Inherit and
+`off` (Stop parent defaults). Bob's warning stays visible for an unconfigured
+name, and saving a legacy `theme:` value migrates it to `task_type:`.
+
+Clock opens the four-mode policy stage: Inherit, On, Off, or Off for types.
+The last mode shows a checklist of configured types; Space toggles a type, and
+the live sentence describes the resulting policy. Every mode is submitted to
+Bob as the strict `setting.set clock` object. If both clock keys are shadowed,
+the stage previews one cleanup that preserves the effective policy and removes
+the ignored key. Generic edits to an actual clock key continue to use that
+key's `prop.*` op.
 
 Settings and project-task rows cannot be renamed, reordered, or kind-changed.
 Copying a declared setting copies its actual source bytes, including keys

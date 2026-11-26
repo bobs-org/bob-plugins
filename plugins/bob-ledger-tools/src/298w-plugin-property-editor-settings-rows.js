@@ -154,6 +154,7 @@ function propertyEditorSettingsEntry(setting, report) {
     duplicate: false, opaque: false, settingId: setting.id, settingKeys: setting.keys.slice(),
     settingDeclared: setting.declared, settingValue: propertyCloneJson(setting.value),
     effectiveValue: propertyCloneJson(setting.effective.value), effectiveLabel: effective,
+    settingChoices: Array.isArray(setting.choices) ? propertyCloneJson(setting.choices) : [],
     help: setting.help, settingDisabled: setting.disabled,
     disabledReason: setting.disabled ? `${setting.label} is disabled for this note.` : "",
     issues: setting.issues || [],

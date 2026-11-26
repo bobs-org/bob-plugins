@@ -12,12 +12,15 @@ const { clipboardRead, clipboardWrite } = require("./obsidian-property-editor-e2
 
 const AREA = "settings-acceptance-area.md";
 const PROJECT = "settings-acceptance-project.md";
+const LOVE = "love.md";
+const BODY = "body.md";
 const TOP_PROJECT = "projects/top-level-settings.md";
 const BANK = "bank.md";
+const STAGE_SHOTS = [[1400, "light"], [1400, "dark"], [390, "light"], [390, "dark"]];
 
 function verifyFixtures(ctx, report, runBob) {
   const contracts = {};
-  for (const file of [AREA, PROJECT, TOP_PROJECT, BANK]) {
+  for (const file of [AREA, PROJECT, LOVE, BODY, TOP_PROJECT, BANK]) {
     const result = runBob(ctx, ["props", "show", file, "-f", "json"]);
     report.bobRuns.push(result);
     assert.equal(result.exitCode, 0, `${file} must be readable by the supplied bob`);
@@ -29,6 +32,9 @@ function verifyFixtures(ctx, report, runBob) {
     "the editable Stats root fixture must be a subproject");
   assert.equal(contracts[TOP_PROJECT].settings.find((row) => row.id === "root").disabled, true);
   assert.equal(contracts[AREA].settings.find((row) => row.id === "ready_cap").declared, false);
+  assert.equal(contracts[LOVE].settings.find((row) => row.id === "color").value, "blue");
+  assert.equal(contracts[BODY].settings.find((row) => row.id === "color").effective.value, "blue",
+    "the body fixture inherits love's hue before its local override");
 
   // Capture names collide only between routable capture targets. Prove with
   // the same bob that the fixtures produce the cross-note warning (and that
@@ -574,6 +580,180 @@ async function aliasWarningAcceptance(ctx) {
   await ctx.closePropertyEditor(ctx.client);
 }
 
+async function policyStagesAcceptance(ctx) {
+  const bodyPath = path.join(ctx.vaultDir, BODY);
+  const bodyBefore = fs.readFileSync(bodyPath, "utf8");
+  let probe = await ctx.openPropertyEditor(ctx.client, BODY, { setting: "color" });
+  await ctx.sendKey(ctx.client, "Enter");
+  await ctx.shared.waitFor(ctx.client,
+    `Boolean(document.querySelector('.bob-property-editor [data-property-stage][data-setting-id="color"]'))`,
+    Boolean, "Hue swatch stage", 10_000);
+  const swatches = await ctx.client.evaluate(`(() => ({
+    hue: document.querySelector(".bob-property-editor-header")?.getAttribute("data-policy-preview-hue") || "",
+    blue: Boolean(document.querySelector('[data-property-policy-choice="blue"]')),
+    loveLabel: document.querySelector('[data-property-policy-choice="blue"]')?.getAttribute("title") || "",
+    inherit: Boolean(document.querySelector('[data-property-policy-choice="__bob_policy_inherit__"]')),
+    inheritSelected: document.querySelector('[data-property-policy-choice="__bob_policy_inherit__"]')?.getAttribute("aria-pressed") || "",
+  }))()`);
+  ctx.addCheck(ctx.report, "settings invalid and warning values hue stage starts at inherited tint and shows used-by labels",
+    swatches.hue === "blue" && swatches.blue && /love/i.test(swatches.loveLabel)
+      && swatches.inherit && swatches.inheritSelected === "true",
+    swatches);
+  if (!await ctx.selectorClick(ctx.client, '[data-property-policy-choice="aqua"]')) throw new Error("Missing aqua hue swatch");
+  probe = await ctx.waitForEditor(ctx.client,
+    (value) => lib.stagePreviewSettled(value) && value.stageSession.currentOps.includes('"setting":"color"')
+      && value.stageSession.currentOps.includes('"value":"aqua"'),
+    "Hue change previewed by Bob");
+  const tint = await ctx.client.evaluate(`document.querySelector(".bob-property-editor-header")?.getAttribute("data-policy-preview-hue") || ""`);
+  ctx.addCheck(ctx.report, "settings invalid and warning values hue swatch previews the header tint",
+    tint === "aqua", { tint, session: probe.stageSession });
+  await ctx.sendKey(ctx.client, "Escape");
+  await ctx.waitForEditor(ctx.client, (value) => !value.stage, "cancel Hue preview");
+  ctx.assertDiskBytes(ctx.report, "settings invalid and warning values Hue Esc writes nothing", bodyPath, bodyBefore);
+
+  await ctx.openPropertyEditor(ctx.client, BODY, { setting: "color" });
+  await ctx.sendKey(ctx.client, "Enter");
+  await ctx.shared.waitFor(ctx.client,
+    `Boolean(document.querySelector('.bob-property-editor [data-property-stage][data-setting-id="color"]'))`,
+    Boolean, "Hue apply stage", 10_000);
+  if (!await ctx.selectorClick(ctx.client, '[data-property-policy-choice="aqua"]')) throw new Error("Missing aqua hue swatch for apply");
+  await ctx.waitForEditor(ctx.client,
+    (value) => lib.stagePreviewSettled(value) && value.stageSession.currentOps.includes('"value":"aqua"'),
+    "Hue apply preview settled");
+  await ctx.sendKey(ctx.client, "Enter");
+  probe = await ctx.waitForEditor(ctx.client,
+    (value) => !value.stage && /Saved/.test(value.status)
+      && /^color:\s*aqua\s*$/m.test(fs.readFileSync(bodyPath, "utf8")),
+    "sub-area hue override applied");
+  const afterHue = fs.readFileSync(bodyPath, "utf8");
+  ctx.addCheck(ctx.report, "settings invalid and warning values sub-area hue override writes through setting.set",
+    afterHue !== bodyBefore && /^color:\s*aqua\s*$/m.test(afterHue), { beforeBytes: bodyBefore.length, afterBytes: afterHue.length });
+  await ctx.sendKey(ctx.client, "u");
+  await ctx.waitForEditor(ctx.client,
+    (value) => !value.stage && fs.readFileSync(bodyPath, "utf8") === bodyBefore,
+    "undo sub-area hue override");
+  ctx.assertDiskBytes(ctx.report, "settings invalid and warning values sub-area hue undo restores exact bytes", bodyPath, bodyBefore);
+  await ctx.closePropertyEditor(ctx.client);
+
+  const projectPath = path.join(ctx.vaultDir, PROJECT);
+  const projectBefore = fs.readFileSync(projectPath, "utf8");
+  probe = await ctx.openPropertyEditor(ctx.client, PROJECT, { setting: "task_type" });
+  await ctx.sendKey(ctx.client, "Enter");
+  await ctx.shared.waitFor(ctx.client,
+    `Boolean(document.querySelector('.bob-property-editor [data-property-stage][data-setting-id="task_type"]'))`,
+    Boolean, "Default type picker stage", 10_000);
+  const migrationCopy = await ctx.client.evaluate(`document.querySelector(".bob-property-editor-stage")?.textContent || ""`);
+  ctx.addCheck(ctx.report, "settings invalid and warning values Default type stage names legacy theme migration",
+    /migrates legacy theme to task_type/i.test(migrationCopy), { migrationCopy });
+  await ctx.setInput(ctx.client, "[data-property-policy-filter]", "Writing");
+  if (!await ctx.selectorClick(ctx.client, '[data-property-policy-choice="Writing"]')) {
+    const choice = await ctx.client.evaluate(`Array.from(document.querySelectorAll("[data-property-policy-choice]"))
+      .find((node) => /writing/i.test(node.textContent || ""))?.getAttribute("data-property-policy-choice") || ""`);
+    if (!choice || !await ctx.selectorClick(ctx.client, `[data-property-policy-choice="${choice}"]`)) {
+      throw new Error("Default type picker did not expose the existing legacy theme value");
+    }
+  }
+  probe = await ctx.waitForEditor(ctx.client,
+    (value) => lib.stagePreviewSettled(value) && value.stageSession.currentOps.includes('"setting":"task_type"'),
+    "legacy type migration preview settled");
+  ctx.addCheck(ctx.report, "settings invalid and warning values unconfigured default type keeps Bob warning",
+    probe.stageSession.warnings.length > 0 || /unconfigured/i.test(probe.stagePreview + " " + migrationCopy),
+    { warnings: probe.stageSession.warnings, preview: probe.stagePreview, migrationCopy });
+  await ctx.sendKey(ctx.client, "Enter");
+  probe = await ctx.waitForEditor(ctx.client,
+    (value) => !value.stage && /Saved/.test(value.status)
+      && /^task_type:/m.test(fs.readFileSync(projectPath, "utf8"))
+      && !/^theme:/m.test(fs.readFileSync(projectPath, "utf8")),
+    "legacy theme migrated to task_type");
+  ctx.addCheck(ctx.report, "settings invalid and warning values legacy theme migration writes canonical key",
+    /^task_type:/m.test(fs.readFileSync(projectPath, "utf8")) && !/^theme:/m.test(fs.readFileSync(projectPath, "utf8")),
+    { bytes: fs.readFileSync(projectPath, "utf8") });
+  await ctx.sendKey(ctx.client, "u");
+  await ctx.waitForEditor(ctx.client,
+    (value) => !value.stage && fs.readFileSync(projectPath, "utf8") === projectBefore,
+    "undo legacy theme migration");
+  ctx.assertDiskBytes(ctx.report, "settings invalid and warning values legacy theme undo restores exact bytes", projectPath, projectBefore);
+  await ctx.closePropertyEditor(ctx.client);
+
+  const clockBefore = fs.readFileSync(bodyPath, "utf8");
+  probe = await ctx.openPropertyEditor(ctx.client, BODY, { setting: "clock" });
+  await ctx.sendKey(ctx.client, "Enter");
+  await ctx.shared.waitFor(ctx.client,
+    `Boolean(document.querySelector('.bob-property-editor [data-property-stage][data-setting-id="clock"]'))`,
+    Boolean, "Clock policy stage", 10_000);
+  const clockCopy = await ctx.client.evaluate(`document.querySelector(".bob-property-editor-stage")?.textContent || ""`);
+  ctx.addCheck(ctx.report, "settings invalid and warning values shadowed Clock stage warns and previews cleanup",
+    /shadowed|ignored/i.test(clockCopy), { clockCopy });
+  probe = await ctx.waitForEditor(ctx.client,
+    (value) => lib.stagePreviewSettled(value) && value.stageSession.currentOps.includes('"setting":"clock"')
+      && value.stageSession.currentOps.includes('"mode":"types"'),
+    "shadowed clock cleanup preview settled");
+  await ctx.sendKey(ctx.client, "Enter");
+  probe = await ctx.waitForEditor(ctx.client,
+    (value) => !value.stage && /Saved/.test(value.status)
+      && !/^offclock:/m.test(fs.readFileSync(bodyPath, "utf8"))
+      && /^offclock_types:/m.test(fs.readFileSync(bodyPath, "utf8")),
+    "shadowed clock key removed");
+  const clockAfter = fs.readFileSync(bodyPath, "utf8");
+  ctx.addCheck(ctx.report, "settings invalid and warning values clock cleanup is one setting operation",
+    clockAfter !== clockBefore && !/^offclock:/m.test(clockAfter) && /^offclock_types:/m.test(clockAfter),
+    { before: clockBefore, after: clockAfter });
+  await ctx.sendKey(ctx.client, "u");
+  await ctx.waitForEditor(ctx.client,
+    (value) => !value.stage && fs.readFileSync(bodyPath, "utf8") === clockBefore,
+    "undo shadowed clock cleanup");
+  ctx.assertDiskBytes(ctx.report, "settings invalid and warning values shadowed clock undo restores exact bytes", bodyPath, clockBefore);
+  await ctx.closePropertyEditor(ctx.client);
+}
+
+async function policyStageScreenshots(ctx) {
+  const cases = [
+    { file: BODY, setting: "color", choice: '[data-property-policy-choice="aqua"]', name: "hue" },
+    { file: PROJECT, setting: "task_type", choice: '[data-property-policy-choice="Writing"]', name: "type" },
+    { file: BODY, setting: "clock", choice: '[data-property-policy-clock-mode="off"]', name: "clock" },
+  ];
+  for (const item of cases) {
+    const notePath = path.join(ctx.vaultDir, item.file);
+    const before = fs.readFileSync(notePath, "utf8");
+    await ctx.openPropertyEditor(ctx.client, item.file, { setting: item.setting });
+    await ctx.sendKey(ctx.client, "Enter");
+    await ctx.shared.waitFor(ctx.client,
+      `Boolean(document.querySelector('.bob-property-editor [data-property-stage][data-setting-id="${item.setting}"]'))`,
+      Boolean, `${item.name} policy screenshot stage`, 10_000);
+    if (item.setting !== "clock") {
+      let selected = await ctx.selectorClick(ctx.client, item.choice);
+      if (!selected && item.setting === "task_type") {
+        const choice = await ctx.client.evaluate(`Array.from(document.querySelectorAll("[data-property-policy-choice]"))
+          .find((node) => /writing/i.test(node.textContent || ""))?.getAttribute("data-property-policy-choice") || ""`);
+        if (choice) selected = await ctx.selectorClick(ctx.client,
+          `[data-property-policy-choice=${JSON.stringify(choice)}]`);
+      }
+      if (!selected) throw new Error(`Could not select a ${item.name} policy screenshot candidate`);
+    }
+    const settled = await ctx.waitForEditor(ctx.client,
+      (value) => lib.stagePreviewSettled(value)
+        && (item.setting !== "clock" || value.stageSession.currentOps.includes('"mode":"types"')),
+      `${item.name} policy screenshot preview settled`, 20_000);
+    for (const [width, theme] of STAGE_SHOTS) {
+      await ctx.shared.setTheme(ctx.client, theme);
+      await ctx.shared.setViewport(ctx.client, width, 900);
+      const shot = await ctx.shared.capture(ctx.client, ctx.outDir,
+        `settings-policy-${item.name}-${width}-${theme}`, width, theme, `Live Preview · ${item.name} policy stage`);
+      shot.session = settled.stageSession;
+      ctx.report.screenshots.push(shot);
+      ctx.addCheck(ctx.report, "settings screenshots light dark narrow wide policy stages",
+        fs.existsSync(shot.path) && shot.bytes > 0,
+        { setting: item.setting, width, theme, name: shot.name, sha256: shot.sha256 });
+    }
+    await ctx.sendKey(ctx.client, "Escape");
+    await ctx.waitForEditor(ctx.client, (value) => !value.stage, `${item.name} policy screenshot stage canceled`);
+    ctx.assertDiskBytes(ctx.report, `settings ${item.name} policy screenshot cancel leaves exact bytes`, notePath, before);
+    await ctx.shared.setViewport(ctx.client, 1400, 900);
+    await ctx.closePropertyEditor(ctx.client);
+  }
+  await ctx.shared.setTheme(ctx.client, "light");
+}
+
 async function capabilityAcceptance(ctx) {
   const noContract = ctx.noContractFlag;
   fs.writeFileSync(noContract, "simulate props_v1 without props_contract_v1\n");
@@ -723,6 +903,8 @@ async function runSettingsAcceptance(ctx) {
   await settingHistoryAcceptance(ctx);
   await simpleSettingsAcceptance(ctx);
   await aliasWarningAcceptance(ctx);
+  await policyStagesAcceptance(ctx);
+  await policyStageScreenshots(ctx);
   await projectTaskAcceptance(ctx);
   await genericParityAcceptance(ctx);
   await capabilityAcceptance(ctx);

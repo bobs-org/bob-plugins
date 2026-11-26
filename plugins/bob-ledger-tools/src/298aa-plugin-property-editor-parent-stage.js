@@ -182,7 +182,7 @@ function propertyEditorPaintParentStage(doc, host, options, modal) {
   panel.appendChild(label);
   let input = options.keptInput || null;
   if (!input) {
-    // bob-text: literal Lives under parent note name
+    // bob-text: literal parent home picker query
     input = propertyEditorCreateEl(doc, "input", "bob-property-editor-stage-input is-parent");
     input.setAttribute("type", "text");
     input.value = String(options.value == null ? "" : options.value);

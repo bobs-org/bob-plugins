@@ -185,6 +185,29 @@ function fixtureNotes(today = "2026-11-23") {
       "Body bytes stay outside settings edits.",
       "",
     ].join("\n"),
+    "love.md": [
+      "---",
+      'type: "[[area]]"',
+      'parent: "[[projects]]"',
+      "color: blue",
+      'summary: "Love area policy fixture"',
+      "---",
+      "",
+      "# Love",
+      "",
+    ].join("\n"),
+    "body.md": [
+      "---",
+      'type: "[[area]]"',
+      'parent: "[[love]]"',
+      "offclock: false",
+      "offclock_types: [writing]",
+      'summary: "Body area policy fixture"',
+      "---",
+      "",
+      "# Body",
+      "",
+    ].join("\n"),
     "settings-acceptance-project.md": [
       "---",
       'type: "[[project]]"',
@@ -746,7 +769,7 @@ function selfTest() {
 
   const notes = fixtureNotes();
   assert.match(notes["projects-album.md"], /  noun: acceptance_fixture\n/);
-  for (const pathValue of ["projects/project-note.md", "settings-acceptance-area.md", "settings-acceptance-project.md", "projects/top-level-settings.md", "bank.md", "2026/20261123.md", "projects-album/acceptance.md", "invalid.md", "unclosed.md", "duplicate.md", "plain.md", "literal-name.md", "value-kinds.md", "old-bob.md", "surfaces.md", "ordinary.md", "parity.md"]) {
+  for (const pathValue of ["projects/project-note.md", "settings-acceptance-area.md", "settings-acceptance-project.md", "love.md", "body.md", "projects/top-level-settings.md", "bank.md", "2026/20261123.md", "projects-album/acceptance.md", "invalid.md", "unclosed.md", "duplicate.md", "plain.md", "literal-name.md", "value-kinds.md", "old-bob.md", "surfaces.md", "ordinary.md", "parity.md"]) {
     assert.ok(notes[pathValue], `fixture missing ${pathValue}`);
   }
   assert.match(notes["surfaces.md"], /keep_me: "original"/);

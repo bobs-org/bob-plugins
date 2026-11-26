@@ -153,13 +153,28 @@ function createHarness(notes, options = {}) {
   return { plugin, contents, cachedReads, processWrites, openEditors, files };
 }
 
+function bindActiveMarkdownEditor(plugin, editor, filePath) {
+  const view = {
+    editor,
+    file: { path: filePath, extension: "md" },
+    getViewType: () => "markdown",
+  };
+  plugin.getActiveMarkdownView = () => view;
+  const workspace = plugin.app.workspace;
+  const getLeavesOfType = workspace.getLeavesOfType.bind(workspace);
+  workspace.activeLeaf = { view };
+  workspace.getActiveViewOfType = () => view;
+  workspace.getLeavesOfType = (type) => {
+    if (type !== "markdown") return [];
+    const otherOpenNotes = getLeavesOfType(type).filter(
+      (leaf) => leaf && leaf.view && leaf.view.file && leaf.view.file.path !== filePath,
+    );
+    return [...otherOpenNotes, { view }];
+  };
+}
+
 function stubModal(plugin, editor, filePath, cursorLine) {
-  const activeView = { editor, file: { path: filePath, extension: "md" } };
-  const otherLeaves = plugin.app.workspace.getLeavesOfType("markdown")
-    .filter((leaf) => leaf.view?.file?.path !== filePath);
-  plugin.getActiveMarkdownView = () => activeView;
-  plugin.app.workspace.getLeavesOfType = (type) =>
-    type === "markdown" ? [{ view: activeView }, ...otherLeaves] : [];
+  bindActiveMarkdownEditor(plugin, editor, filePath);
   const content = String(editor.getValue() || "");
   const lines = content.split(/\r?\n/);
   const cursor = { line: cursorLine, ch: 0 };
@@ -331,7 +346,7 @@ test("PDL8-PDL10: Depends-On consumption keeps notes, matches aliases, and remov
     [datePath]: daily,
   });
   const editor = new TransactionEditor(parentNote, { line: 0, ch: 0 });
-  harness.plugin.getActiveMarkdownView = () => ({ editor, file: { path: parentPath } });
+  bindActiveMarkdownEditor(harness.plugin, editor, parentPath);
   const outcome = await harness.plugin.applyDependencyEdit({
     editor,
     parentPath,
@@ -369,7 +384,7 @@ test("applyDependencyEdit removes one live link and reports it", async () => {
     { openEditors: [[datePath, dailyEditor]] },
   );
   const editor = new TransactionEditor(parentNote, { line: 0, ch: 0 });
-  harness.plugin.getActiveMarkdownView = () => ({ editor, file: { path: "Tasks.md" } });
+  bindActiveMarkdownEditor(harness.plugin, editor, "Tasks.md");
   const outcome = await harness.plugin.applyDependencyEdit({
     editor,
     parentPath: "Tasks.md",
@@ -402,7 +417,7 @@ test("applyDependencyEdit keeps the dependent write when the daily preimage chan
     },
   );
   const editor = new TransactionEditor(parentNote, { line: 0, ch: 0 });
-  harness.plugin.getActiveMarkdownView = () => ({ editor, file: { path: "Tasks.md" } });
+  bindActiveMarkdownEditor(harness.plugin, editor, "Tasks.md");
   const outcome = await harness.plugin.applyDependencyEdit({
     editor,
     parentPath: "Tasks.md",
@@ -715,7 +730,7 @@ test("a dependent without a block id does zero cachedReads even when today's dai
     [datePath]: pomodoroDaily(["- [ ] Current (0900-0930)", "  - leftover"]),
   });
   const editor = new TransactionEditor(content, { line: 0, ch: 0 });
-  harness.plugin.getActiveMarkdownView = () => ({ editor, file: { path: "Tasks.md" } });
+  bindActiveMarkdownEditor(harness.plugin, editor, "Tasks.md");
   const outcome = await harness.plugin.applyDependencyEdit({
     editor,
     parentPath: "Tasks.md",

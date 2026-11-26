@@ -97,6 +97,16 @@ function getTaskBlockLinkTargetFromLine(
     : null;
 }
 
+function findSnoozedTaskBlockLinkRow(content, candidate) {
+  if (!candidate || !Number.isInteger(candidate.activeLine)) return null;
+  const section = snoozeModel.parseSection(String(content || ""));
+  if (!section) return null;
+  return section.rows.find((row) =>
+    row.kind === "active" && row.lineIndex === candidate.activeLine &&
+    row.blockId === candidate.blockId && row.target === candidate.pathPart,
+  ) || null;
+}
+
 function collectTaskBlockLinkTargetsInLineRange(
   lines,
   sourcePath,

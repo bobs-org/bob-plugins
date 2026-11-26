@@ -130,7 +130,7 @@ class TaskStatusCyclerCompletionLinksMixin {
             identity &&
             `${identity.path}#^${identity.blockId}` === rootKey,
         );
-        if (rootClosed) {
+        if (rootClosed && !candidate.snoozedRow) {
           try {
             await this.strikeActiveSelectedTaskBlockLink(editor, activePath, candidate);
           } catch (error) {
@@ -168,7 +168,7 @@ class TaskStatusCyclerCompletionLinksMixin {
         ...context,
         reqCloseOwners,
       }, options);
-      if (!onDependencyLine) {
+      if (!onDependencyLine && !candidate.snoozedRow) {
         try {
           await this.strikeActiveSelectedTaskBlockLink(editor, activePath, candidate);
         } catch (error) {

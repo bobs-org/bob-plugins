@@ -22,6 +22,7 @@ installBlockIdPromptMixins(BlockIdPromptPlugin, [
   BlockIdPromptPomodoroLinksMixin,
   BlockIdPromptPomodoroDependencyMixin,
   BlockIdPromptPomodoroLinkPickerMixin,
+  BlockIdPromptSnoozedLinkNowMixin,
   BlockIdPromptPomodoroLinkPickerApiMixin,
   BlockIdPromptTaskWikilinksMixin,
   BlockIdPromptTaskWikilinkPomodoroMixin,

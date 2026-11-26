@@ -154,6 +154,8 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
         targetBlockId: target.id,
         resolveTarget: (reference, referrerPath) =>
           this.resolveReferenceDestination(reference, referrerPath),
+        resolveSnoozedTarget: (row, referrerPath) =>
+          this.resolveUniqueSnoozedTarget(row.target, referrerPath),
       });
     }
 

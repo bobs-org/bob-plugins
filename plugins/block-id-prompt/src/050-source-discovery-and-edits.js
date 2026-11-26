@@ -432,6 +432,22 @@ function collectFutureOpenPomodoroRanges(lines, context) {
 function revalidatePomodoroToggleSourceAfterRoute(source, options = {}) {
   try {
     if (!source || !source.editor || typeof source.editor.getLine !== "function") return false;
+    if (source.snoozedRow && source.taskSnapshot) {
+      const daily = String(source.editor.getValue() || "");
+      const section = snoozeModel.parseSection(daily);
+      const currentRows = section ? section.rows.filter((row) =>
+        row.kind === "active" && row.blockId === source.snoozedRow.blockId &&
+        row.target === source.snoozedRow.target && row.subtree === source.snoozedRow.subtree,
+      ) : [];
+      if (currentRows.length !== 1) return false;
+      const taskContent = source.taskSnapshot.path === source.sourcePath
+        ? daily
+        : String(source.taskSnapshot.content || "");
+      const line = taskContent.split("\n")[source.taskSnapshot.line] || "";
+      if (line !== source.task.rawLine) return false;
+      if (options.isNewId && options.newId) return blockTokenMatches(taskContent, options.newId).length === 0;
+      return blockTokenMatches(taskContent, source.task.existingId).length === 1;
+    }
     if ((source.editor.getLine(source.line) || "") !== source.task.rawLine) return false;
     const content = String(source.editor.getValue() || "");
     if (options.isNewId && options.newId) return blockTokenMatches(content, options.newId).length === 0;

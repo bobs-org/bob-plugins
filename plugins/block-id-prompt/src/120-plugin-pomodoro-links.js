@@ -58,6 +58,13 @@ class BlockIdPromptPomodoroLinksMixin {
       const resolved = this.resolvePomodoroLinkTaskFromEditor(editor);
       if (resolved.error) {
         if (resolved.error === NO_OPEN_TASK_NOTICE) {
+          if (typeof this.selectedActiveSnoozedRow === "function") {
+            const snoozed = this.selectedActiveSnoozedRow(editor);
+            if (snoozed) {
+              await this.startSnoozedRowLinkNow(editor, file, snoozed);
+              return;
+            }
+          }
           await this.startTaskLinkOpen(editor, file);
           return;
         }
@@ -86,7 +93,7 @@ class BlockIdPromptPomodoroLinksMixin {
           return;
         }
 
-        if (linked) {
+        if (linked === true) {
           if (task.status === "/") {
             // Work summary handoff: retain the walk origin until the
             // prompted unlink resolves, like the block-ID path below.
@@ -163,37 +170,6 @@ class BlockIdPromptPomodoroLinksMixin {
         }
       }
     }
-  }
-
-  // Whether the task's block ID currently has a live link under any open
-  // Pomodoro of today's daily note: the same set
-  // planAllOpenPomodoroLinkCleanup would remove. Returns true/false, or
-  // "blocked" (with a Notice) when today's note cannot be read and null when
-  // there is no daily note (the link path reports that itself).
-  async pomodoroTaskLinkPresence(source, blockId) {
-    const taskFile = this.resolveTaskFile(source.sourcePath);
-    const dailyFile = this.resolveTodayDailyFile();
-    if (!dailyFile) {
-      return false;
-    }
-
-    const dailyContent =
-      taskFile && dailyFile.path === taskFile.path
-        ? source.editor.getValue()
-        : await this.readFileSnapshot(dailyFile, source);
-    if (dailyContent === null) {
-      new Notice(`Task toggle blocked: ${dailyFile.path} could not be read`);
-      return "blocked";
-    }
-
-    const cleanup = planAllOpenPomodoroLinkCleanup(dailyContent, {
-      sourcePath: dailyFile.path,
-      targetPath: taskFile ? taskFile.path : source.sourcePath,
-      targetBlockId: blockId,
-      resolveTarget: (reference, referrerPath) =>
-        this.resolveReferenceDestination(reference, referrerPath),
-    });
-    return cleanup.removedCount > 0;
   }
 
   // The cursor/task-eligibility half of openPomodoroTaskLink, split out so it
@@ -553,7 +529,18 @@ class BlockIdPromptPomodoroLinksMixin {
   // (guarded) and the daily note second (guarded), reporting the exact
   // partial result if the second write fails after the first succeeds.
   async applyPomodoroTaskLink(source, id, isNewId) {
-    const currentLine = source.editor.getLine(source.line) || "";
+    const taskSnapshot = source && source.taskSnapshot && typeof source.taskSnapshot === "object"
+      ? source.taskSnapshot
+      : null;
+    const taskLine = taskSnapshot && Number.isInteger(taskSnapshot.line)
+      ? taskSnapshot.line
+      : source.line;
+    const taskContent = taskSnapshot && typeof taskSnapshot.content === "string"
+      ? (taskSnapshot.path === source.sourcePath
+          ? source.editor.getValue()
+          : taskSnapshot.content)
+      : source.editor.getValue();
+    const currentLine = taskContent.split("\n")[taskLine] || "";
     if (currentLine !== source.task.rawLine) {
       new Notice(`Task link blocked: selected task changed in ${source.sourcePath}`);
       return false;
@@ -593,10 +580,15 @@ class BlockIdPromptPomodoroLinksMixin {
     }
 
     let taskFile = this.app && this.app.vault
-      ? this.resolveTaskFile(source.sourcePath)
+      ? this.resolveTaskFile(taskSnapshot && taskSnapshot.path ? taskSnapshot.path : source.sourcePath)
       : null;
     if (taskFile) {
-      if (await this.consumeBlockedTaskPomodoroLink(source, taskFile)) {
+      if (await this.consumeBlockedTaskPomodoroLink(source, taskFile, {
+        targetPath: taskFile.path,
+        targetLine: taskLine,
+        targetLineText: currentLine,
+        targetContent: taskContent,
+      })) {
         return false;
       }
     }
@@ -607,13 +599,11 @@ class BlockIdPromptPomodoroLinksMixin {
       return false;
     }
 
-    taskFile = taskFile || this.resolveTaskFile(source.sourcePath);
+    taskFile = taskFile || this.resolveTaskFile(taskSnapshot && taskSnapshot.path ? taskSnapshot.path : source.sourcePath);
     if (!taskFile) {
       new Notice("Task link blocked: active note could not be resolved");
       return false;
     }
-
-    const taskContent = source.editor.getValue();
 
     const sameNote = dailyFile.path === taskFile.path;
     const dailyContent = sameNote
@@ -639,6 +629,29 @@ class BlockIdPromptPomodoroLinksMixin {
       source.pomodoroTarget || null,
       taskContent,
     );
+    const taskIdentity = snoozeModel.identityKey(taskFile.path, id);
+    const snoozedPlan = snoozeModel.planRemoveRows(dailyContent, [taskIdentity], {
+      resolveIdentity: (row) => {
+        if (!row || row.blockId !== id) return null;
+        const rowFile = this.resolveUniqueSnoozedTarget(row.target, dailyFile.path);
+        return rowFile && rowFile.path === taskFile.path
+          ? snoozeModel.identityKey(rowFile.path, row.blockId)
+          : null;
+      },
+    });
+    if (
+      source.snoozedRow &&
+      !(snoozedPlan.detachedSubtrees || []).some((item) =>
+        item.row && item.row.subtree === source.snoozedRow.subtree,
+      )
+    ) {
+      new Notice(`Task link stopped: Snoozed row changed in ${dailyFile.path}`);
+      return false;
+    }
+    const attachedChildren = (snoozedPlan.detachedSubtrees || [])
+      .map((item) => item.children || "")
+      .filter(Boolean)
+      .join("");
     let pomodoroPlan = planPomodoroLinkWithTypeMerge(dailyContent, {
       blockId: id,
       targetPath: taskFile.path,
@@ -647,6 +660,7 @@ class BlockIdPromptPomodoroLinksMixin {
         this.resolveReferenceDestination(reference, referrerPath),
       linkText,
       target: source.pomodoroTarget || null,
+      attachedChildren,
     }, themeWrite);
     if (pomodoroPlan.error) {
       new Notice(
@@ -664,7 +678,28 @@ class BlockIdPromptPomodoroLinksMixin {
       dailyContent,
       pomodoroPlan,
     );
-    const plan = planTargetTaskUpdate(taskContent, source.line, {
+    if (snoozedPlan.edits.length > 0 && pomodoroPlan.alreadyLinked) {
+      new Notice(`Task link stopped: task is already linked in today's ledger`);
+      return false;
+    }
+    const composedDailyEdits = composeSnoozedRemovalEdits(
+      pomodoroPlan.edits || [],
+      snoozedPlan.edits || [],
+    ).sort((left, right) => left.start - right.start || left.end - right.end);
+    if (!validateNonOverlappingEdits(composedDailyEdits)) {
+      new Notice(`Task link stopped: overlapping daily-note edits in ${dailyFile.path}`);
+      return false;
+    }
+    pomodoroPlan = {
+      ...pomodoroPlan,
+      edits: composedDailyEdits,
+      content: composedDailyEdits.length > 0
+        ? applyTextEdits(dailyContent, composedDailyEdits)
+        : dailyContent,
+      hasChanges: composedDailyEdits.length > 0,
+      snoozedRemovedCount: (snoozedPlan.detachedSubtrees || []).length,
+    };
+    const plan = planTargetTaskUpdate(taskContent, taskLine, {
       activationEligible: true,
       forceNext: true,
       newBlockId: isNewId ? id : null,
@@ -841,6 +876,8 @@ class BlockIdPromptPomodoroLinksMixin {
           targetBlockId: source.task.existingId,
           resolveTarget: (reference, referrerPath) =>
             this.resolveReferenceDestination(reference, referrerPath),
+        resolveSnoozedTarget: (row, referrerPath) =>
+          this.resolveUniqueSnoozedTarget(row.target, referrerPath),
         });
 
         if (sameNote) {

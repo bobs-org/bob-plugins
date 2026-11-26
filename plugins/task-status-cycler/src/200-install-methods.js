@@ -38,6 +38,7 @@ installTaskStatusCyclerMixins(TaskStatusCyclerPlugin, [
   TaskStatusCyclerCompletionMixin,
   TaskStatusCyclerCompletionLinksMixin,
   TaskStatusCyclerCompletionRestoreMixin,
+  TaskStatusCyclerSnoozedCompletionMixin,
   TaskStatusCyclerEventTaskClockMixin,
   TaskStatusCyclerPomodoroClockMixin,
   TaskStatusCyclerPomodoroMixin,

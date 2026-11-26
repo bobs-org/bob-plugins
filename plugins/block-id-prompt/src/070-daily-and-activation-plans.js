@@ -307,6 +307,15 @@ function planPomodoroLinkInsertion(content, options = {}) {
   if (!alreadyLinked) {
     const indentation = findPomodoroChildIndentation(lines, entryLine, entryEndLine, section);
     const entryLineText = `${indentation}- ${linkText}`;
+    const attachedChildren = typeof options.attachedChildren === "string"
+      ? options.attachedChildren.split(/\r\n|\n|\r/)
+      : [];
+    if (attachedChildren.length > 0 && attachedChildren[attachedChildren.length - 1] === "") {
+      attachedChildren.pop();
+    }
+    const insertedLines = [entryLineText, ...attachedChildren.map((line) =>
+      line ? `${indentation}${line}` : line,
+    )];
     // The ownership range extends through trailing separator blanks (and the
     // final empty split element from a terminal newline), but the new child
     // belongs immediately after the last nonblank descendant so separators
@@ -324,7 +333,7 @@ function planPomodoroLinkInsertion(content, options = {}) {
         snapshot,
         lines,
         insertLine,
-        [entryLineText],
+        insertedLines,
         lineEndingForInsertion(snapshot, lines, insertAfterLine),
       ),
     );

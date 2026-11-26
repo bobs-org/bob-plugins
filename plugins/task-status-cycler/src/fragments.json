@@ -62,6 +62,7 @@
   "160-plugin-completion.js",
   "161-plugin-completion-links.js",
   "162-plugin-completion-restore.js",
+  "163-plugin-snoozed-completion.js",
   "170-plugin-pomodoro.js",
   "175-plugin-pomodoro-names.js",
   "180-plugin-editor-edits.js",

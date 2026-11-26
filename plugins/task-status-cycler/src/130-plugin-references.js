@@ -161,6 +161,12 @@ class TaskStatusCyclerReferencesMixin {
           }
         }
       }
+      let snoozed = { removedCount: 0 };
+      try {
+        snoozed = await this.pruneClosedSnoozedRowsNow(closed, context || {});
+      } catch (_error) {
+        snoozed = { removedCount: 0 };
+      }
       const retirement = await this.retireClosedTaskReferencesNow(
         normalizeTaskReferenceIdentities(closed),
         context || {},
@@ -180,6 +186,7 @@ class TaskStatusCyclerReferencesMixin {
       return {
         reopened,
         retired: retirement.retired,
+        snoozedPruned: snoozed.removedCount || 0,
         recoveryFailures,
         retirementFailures: retirement.failures,
         successors,

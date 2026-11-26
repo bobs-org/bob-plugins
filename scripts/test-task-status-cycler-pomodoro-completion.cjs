@@ -473,6 +473,65 @@ test("Pomodoro hash Vim mapping distinguishes bare and explicit repeats", async 
   }
 });
 
+test("Done prunes the active Snoozed subtree and joins it to the task settle history", async () => {
+  const now = new Date();
+  const dailyPath = `${String(now.getFullYear()).padStart(4, "0")}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}.md`;
+  const daily = [
+    "## Snoozed",
+    "- **1530** [[Tasks#^ship]]",
+    "  - keep this note",
+    "- ~~**1400** [[Tasks#^ship]]~~ · woke 14:02",
+    "",
+    "## Pomodoros",
+    "- [x] Done (14:00-14:25)",
+    "  - [[Tasks#^ship]]",
+  ].join("\n");
+  const harness = createInMemoryObsidianApp({
+    [dailyPath]: daily,
+    "Tasks.md": "- [ ] #task Ship it ^ship",
+  });
+  const editor = createTextEditor(daily, { line: 2, ch: 3 });
+  const plugin = new TaskStatusCyclerPlugin();
+  const { file, view } = attachActiveMarkdownView(plugin, harness, editor, dailyPath);
+  let settleCall = null;
+  const ledgerApi = harness.app.plugins.plugins["bob-ledger-tools"].api;
+  ledgerApi.taskSettle = {
+    version: 1,
+    applyToEditor(targetEditor, path, options) {
+      settleCall = { targetEditor, path, options };
+      const lastLine = targetEditor.lastLine();
+      targetEditor.replaceRange(
+        options.contents,
+        { line: 0, ch: 0 },
+        { line: lastLine, ch: targetEditor.getLine(lastLine).length },
+      );
+      return { applied: true, changed: true };
+    },
+  };
+  plugin.planAndApplySuccessorsNow = async () => ({
+    unblocked: [],
+    keep_moving: [],
+    relation_successors: [],
+  });
+  plugin.retireClosedTaskReferencesNow = async () => ({ retired: 0, failures: [] });
+  plugin.presentSuccessorModel = () => null;
+  plugin.landSuccessorJump = async () => null;
+
+  const result = await plugin.finalizeClosedTasks(
+    [{ path: "Tasks.md", blockId: "ship" }],
+    { activePath: file.path, editor: view.editor },
+  );
+
+  assert.equal(result.snoozedPruned, 1);
+  assert.equal(settleCall.path, dailyPath);
+  assert.equal(settleCall.options.joinHistory, true);
+  assert.equal(settleCall.options.expected, daily);
+  assert.doesNotMatch(editor.getValue(), /\*\*1530\*\* \[\[Tasks#\^ship\]\]/);
+  assert.doesNotMatch(editor.getValue(), /keep this note/);
+  assert.match(editor.getValue(), /~~\*\*1400\*\* \[\[Tasks#\^ship\]\]~~ · woke 14:02/);
+  assert.match(editor.getValue(), /- \[x\] Done \(14:00-14:25\)\n  - \[\[Tasks#\^ship\]\]/);
+});
+
 test("Pomodoro completion marks originals and carries clean live copies", () => {
   const lines = [
     "## Pomodoros",

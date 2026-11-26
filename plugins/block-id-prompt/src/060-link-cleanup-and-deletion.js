@@ -602,41 +602,6 @@ function planFuturePomodoroLinkCleanup(content, options = {}) {
   return planPomodoroLinkCleanupForRanges(snapshot, futureRanges, options);
 }
 
-function planAllOpenPomodoroLinkCleanup(content, options = {}) {
-  const snapshot = String(content || "");
-  const lines = snapshot.split("\n");
-  const section = findPomodorosSectionRange(lines);
-  if (!section) {
-    return {
-      section: null,
-      ranges: [],
-      edits: [],
-      removedCount: 0,
-      removedEntryCount: 0,
-      entryEdits: [],
-      references: [],
-      content: snapshot,
-      hasChanges: false,
-    };
-  }
-
-  const ranges = collectAllOpenPomodoroRanges(lines, section);
-  const cleanup = planPomodoroLinkCleanupForRanges(snapshot, ranges, options);
-  return {
-    section,
-    ranges,
-    edits: cleanup.edits,
-    removedCount: cleanup.removedCount,
-    removedEntryCount: cleanup.removedEntryCount,
-    entryEdits: cleanup.entryEdits,
-    touchedEntryOffsets: cleanup.touchedEntryOffsets || [],
-    references: cleanup.references || [],
-    firstRemoved: cleanup.firstRemoved || null,
-    content: cleanup.edits.length > 0 ? applyTextEdits(snapshot, cleanup.edits) : snapshot,
-    hasChanges: cleanup.edits.length > 0,
-  };
-}
-
 // ---------------------------------------------------------------------------
 // Ctrl+Shift+Enter on a selected Task Link: link selection and deletion
 // planning (the lane never changes). Mirrors task-status-cycler's definition

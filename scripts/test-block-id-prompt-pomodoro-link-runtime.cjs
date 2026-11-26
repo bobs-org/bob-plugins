@@ -862,6 +862,109 @@ function routeCommitCalls(routeCalls) {
   return routeCalls.filter((entry) => entry[0] === "commit");
 }
 
+function createSnoozedLinkNowHarness(options = {}) {
+  resetNotices();
+  const dailyContent = options.dailyContent || [
+    "## Pomodoros",
+    "- [ ] Current (10:00-10:25)",
+    "",
+    "## Snoozed",
+    "- **1530** [[Tasks#^ship]]",
+    "  - keep this note",
+  ].join("\n");
+  let taskContent = options.taskContent || "- [ ] #task Ship it ^ship";
+  const dailyFile = createTFile("Daily.md");
+  const taskFile = createTFile("Tasks.md");
+  const editor = createEditor(dailyContent);
+  const rowLine = dailyContent.split("\n").findIndex((line) => line.includes("[[Tasks#^ship]]"));
+  editor.setCursor({ line: rowLine, ch: 5 });
+  const view = createMarkdownView(dailyFile);
+  const writes = [];
+  const pickerRequests = [];
+  const plugin = new Plugin();
+  plugin.app = {
+    workspace: {
+      getActiveViewOfType: () => view,
+      getActiveFile: () => dailyFile,
+    },
+    vault: {
+      getAbstractFileByPath: (path) => ({ "Daily.md": dailyFile, "Tasks.md": taskFile }[path] || null),
+      getMarkdownFiles: () => [dailyFile, taskFile],
+      read: async (file) => file.path === "Tasks.md" ? taskContent : dailyContent,
+      modify: async (file, content) => writes.push({ path: file.path, content }),
+    },
+    metadataCache: {
+      fileToLinktext: (file) => file.path.replace(/\.md$/i, ""),
+    },
+  };
+  plugin.resolveTodayDailyFile = () => dailyFile;
+  plugin.resolveTaskFile = (path) => path === "Tasks.md" ? taskFile : null;
+  plugin.resolveReferenceDestination = (reference) =>
+    reference && reference.targetText === "Tasks" ? taskFile : null;
+  plugin.promptPomodoroLinkTarget = async (request) => {
+    pickerRequests.push(request);
+    return helpers.defaultPomodoroLinkChoice(request.model);
+  };
+  plugin.suppressEditorScans = () => {};
+  plugin.now = () => localDate(2026, 8, 15);
+  const routeCalls = [];
+  installMockInboxRoute(plugin, routeCalls, {
+    inboxPaths: ["Daily.md"],
+    prompt: async (request) => {
+      if (typeof options.beforeRouteResult === "function") {
+        options.beforeRouteResult({ editor, setTaskContent: (value) => { taskContent = value; }, request });
+      }
+      return options.routeOutcome || { kind: "stay" };
+    },
+  });
+  return { plugin, editor, view, dailyFile, taskFile, writes, pickerRequests, routeCalls };
+}
+
+test("Ctrl+Shift+Enter on an active Snoozed row links it now and moves its note under the current Pomodoro", async () => {
+  const h = createSnoozedLinkNowHarness();
+
+  await h.plugin.openPomodoroTaskLink(h.editor, h.view);
+
+  assert.equal(h.pickerRequests.length, 1);
+  assert.equal(h.writes.length, 1);
+  assert.deepEqual(h.writes[0], {
+    path: "Tasks.md",
+    content: "- [*] #task Ship it ^ship",
+  });
+  assert.match(h.editor.getValue(), /- \[ \] Current \(10:00-10:25\)\n\t- \[\[Tasks#\^ship\]\]\n\t  - keep this note/);
+  assert.doesNotMatch(h.editor.getValue(), /\*\*1530\*\* \[\[Tasks#\^ship\]\]/);
+  assert.equal(routePromptCalls(h.routeCalls).length, 1);
+  assert.equal(lastNotice(), "Linked · Next");
+});
+
+test("Snoozed link-now refuses stale rows and stale target snapshots after the route prompt", async () => {
+  const staleRow = createSnoozedLinkNowHarness({
+    beforeRouteResult: ({ editor }) => {
+      const line = editor.getLine(4);
+      editor.replaceRange(
+        "- **1530** [[Tasks#^ship|changed]]",
+        { line: 4, ch: 0 },
+        { line: 4, ch: line.length },
+      );
+    },
+  });
+  await staleRow.plugin.openPomodoroTaskLink(staleRow.editor, staleRow.view);
+  assert.deepEqual(staleRow.writes, []);
+  assert.equal(staleRow.pickerRequests.length, 0);
+  assert.match(lastNotice(), /Snoozed row or target changed/);
+
+  const staleTarget = createSnoozedLinkNowHarness({
+    beforeRouteResult: ({ setTaskContent }) => {
+      setTaskContent("- [ ] #task Ship it NOW ^ship");
+    },
+  });
+  await staleTarget.plugin.openPomodoroTaskLink(staleTarget.editor, staleTarget.view);
+  assert.equal(staleTarget.pickerRequests.length, 1);
+  assert.deepEqual(staleTarget.writes, []);
+  assert.match(lastNotice(), /Tasks\.md changed before update/);
+  assert.match(staleTarget.editor.getValue(), /\*\*1530\*\* \[\[Tasks#\^ship\]\]/);
+});
+
 test("inbox-route: getInboxRouteApi detects the v1 namespace and rejects partial shapes", () => {
   const missing = new Plugin();
   assert.equal(missing.getInboxRouteApi(), null);

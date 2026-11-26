@@ -41,12 +41,14 @@ class TaskStatusCyclerTargetsMixin {
       return null;
     }
 
-    return getTaskBlockLinkTargetFromLine(
+    const candidate = getTaskBlockLinkTargetFromLine(
       editor.getLine(cursor.line),
       sourcePath,
       cursor.line,
       cursor.ch,
     );
+    const snoozedRow = findSnoozedTaskBlockLinkRow(editor.getValue(), candidate);
+    return candidate && snoozedRow ? { ...candidate, snoozedRow } : candidate;
   }
 
   // Whether the cursor sits on a managed dependency, BLOCKS, or relation

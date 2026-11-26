@@ -934,7 +934,7 @@ test("Ctrl+Shift+Enter on an active Snoozed row links it now and moves its note 
   assert.match(h.editor.getValue(), /- \[ \] Current \(10:00-10:25\)\n\t- \[\[Tasks#\^ship\]\]\n\t  - keep this note/);
   assert.doesNotMatch(h.editor.getValue(), /\*\*1530\*\* \[\[Tasks#\^ship\]\]/);
   assert.equal(routePromptCalls(h.routeCalls).length, 1);
-  assert.equal(lastNotice(), "Linked · Next");
+  assert.equal(lastNotice(), "Linked under Current · Next");
 });
 
 test("Snoozed link-now refuses stale rows and stale target snapshots after the route prompt", async () => {

@@ -90782,12 +90782,41 @@ function propertyCardFootAdapterHandlers(plugin, path, options = {}) {
   };
 }
 
+function propertyCardFootAdapterPruneDisconnected(path) {
+  const key = propertyCardFootAdapterPath(path);
+  if (!key) return 0;
+  let released = 0;
+  try {
+    const mounts = typeof propertyCardFootMounts !== "undefined" ? propertyCardFootMounts : null;
+    if (!mounts || typeof mounts.values !== "function") return 0;
+    for (const entry of Array.from(mounts.values())) {
+      if (!entry || entry.path !== key) continue;
+      let connected = true;
+      try {
+        connected = entry.node ? entry.node.isConnected !== false : false;
+      } catch (_) {
+        connected = true;
+      }
+      if (connected) continue;
+      try {
+        if (typeof propertyCardFootUnregisterMount === "function" && propertyCardFootUnregisterMount(entry.id)) released += 1;
+      } catch (_) {}
+    }
+  } catch (_) {}
+  return released;
+}
+
 function propertyCardFootAdapterTrack(container, path, card, tracked) {
   const key = propertyCardFootAdapterPath(path);
+  // Pane-local lifecycle: each adapter releases only disconnected stale
+  // mounts for the path, never a connected live mount owned by another
+  // adapter in the same pane. Unmounting one pane never touches another
+  // pane because disconnected nodes have no scope; connected mounts in
+  // other scopes are left intact. A newly connected Area foot must
+  // register before Bank yields, so a yielding Bank card without a foot
+  // preserves the Area registration instead of releasing the scope.
   try {
-    if (typeof propertyCardFootReleaseScope === "function") {
-      propertyCardFootReleaseScope(container || null, key);
-    }
+    propertyCardFootAdapterPruneDisconnected(key);
   } catch (_) {}
   if (!card || !key) return null;
   if (tracked instanceof Set) tracked.add(key);
@@ -95597,6 +95626,12 @@ Object.assign(BobLedgerToolsBankSetupMixin.prototype, {
       return this.bankSetupSourceCache?.get?.(key);
     };
     const current = () => {
+      // A live Area mount owns whole frontmatter; a surviving Bank body
+      // must not conceal Area loss by claiming it. Stale Bank callbacks
+      // never release the replacement Area owner.
+      try {
+        if (propertyCardHomeBankAreaCurrent?.(scope, key)) return false;
+      } catch (_) {}
       const text = sourceFor();
       const card = text && this.bankSetupCardFor(key, text);
       return Boolean(card && card.model);
@@ -95628,6 +95663,12 @@ Object.assign(BobLedgerToolsBankSetupMixin.prototype, {
     }
     const sourceFor = () => view?.state?.doc?.toString?.() || this.bankSetupSourceCache?.get?.(key);
     const current = () => {
+      // Re-check Area arbitration at fire time: an Area mount that
+      // attached after scheduling must keep whole ownership. A stale Bank
+      // callback cannot release the replacement owner's state.
+      try {
+        if (propertyCardHomeBankAreaCurrent?.(scope, key)) return false;
+      } catch (_) {}
       const text = sourceFor();
       const card = text && this.bankSetupCardFor(key, text);
       return Boolean(card && card.model);
@@ -95798,8 +95839,17 @@ class BobLedgerToolsBankSetupFootMixin {
     // Area card owns bank.md's foot, a Bank Setup repaint without its own
     // foot must leave that Area registration intact; releasing the whole
     // scope here would make the next arbitration pass restore both feet.
+    // Prune only disconnected stale mounts so a replaced Bank foot does
+    // not linger while the connected Area foot survives in this pane.
     try {
-      if (bankSetupAreaArbitration?.(container, path)?.suppressBankFoot === true) return null;
+      if (bankSetupAreaArbitration?.(container, path)?.suppressBankFoot === true) {
+        try {
+          if (typeof propertyCardFootAdapterPruneDisconnected === "function") {
+            propertyCardFootAdapterPruneDisconnected(path);
+          }
+        } catch (_) {}
+        return null;
+      }
     } catch (_) {}
     return propertyCardFootAdapterTrack(container, path, header, this.bankSetupFootTracked);
   }
@@ -196702,6 +196752,7 @@ try {
       propertyCardFootAdapterHoverLink,
       propertyCardFootAdapterHandlers,
       propertyCardFootAdapterTrack,
+      propertyCardFootAdapterPruneDisconnected,
       propertyCardFootAdapterAppend,
       propertyCardFootAdapterBind,
       propertyCardFootAdapterUnbind,

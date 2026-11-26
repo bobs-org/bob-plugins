@@ -437,6 +437,161 @@ test("a yielding Bank Setup repaint preserves the ready Area foot registration",
   assert.equal(H.bankSetupAreaArbitration(scope, "bank.md").suppressBankFoot, true);
 });
 
+test("each adapter releases only disconnected mounts and preserves the live peer", () => {
+  const doc = makeDoc();
+  const scope = doc.createElement("div");
+  const plugin = {
+    homeCardActive: true,
+    homeCardFootTracked: new Set(),
+    bankSetupFootTracked: new Set(),
+    scheduleBankSetupRefresh() {},
+  };
+  const areaMount = doc.createElement("section");
+  areaMount.setAttribute("class", `${H.HOME_CARD_CLASS} bob-property-card`);
+  areaMount.setAttribute("data-home-source", "bank.md");
+  const areaFoot = doc.createElement("div");
+  areaFoot.setAttribute("class", "bob-property-card-foot");
+  const disclosure = doc.createElement("button");
+  disclosure.setAttribute("class", "bob-property-card-foot-disclosure");
+  areaFoot.appendChild(disclosure);
+  areaMount.appendChild(areaFoot);
+  scope.appendChild(areaMount);
+
+  H.propertyCardHomeBankAreaRegister(plugin, scope, "bank.md", "area", areaMount);
+  H.BobLedgerToolsHomeCardFootMixin.prototype.homeCardTrackFoot.call(plugin, scope, "bank.md", areaMount);
+  const area = H.propertyCardHomeBankAreaCurrent(scope, "bank.md");
+  assert.equal(H.propertyCardHomeBankAreaFootReady(area), true);
+
+  const bankCard = doc.createElement("section");
+  const bankFoot = doc.createElement("div");
+  bankFoot.setAttribute("class", "bob-property-card-foot");
+  bankCard.appendChild(bankFoot);
+  scope.appendChild(bankCard);
+  H.BobLedgerToolsBankSetupFootMixin.prototype.bankSetupTrackFoot.call(plugin, scope, "bank.md", bankCard);
+  assert.equal(H.propertyCardHomeBankAreaFootReady(area), true,
+    "a Bank track must not release the connected Area foot");
+  assert.equal(H.bankSetupAreaArbitration(scope, "bank.md").suppressBankFoot, true);
+
+  H.BobLedgerToolsBankSetupFootMixin.prototype.bankSetupTrackFoot.call(plugin, scope, "bank.md", null);
+  assert.equal(H.propertyCardHomeBankAreaFootReady(area), true,
+    "a Bank teardown with null must preserve the surviving Area foot");
+});
+
+test("unmounting one pane never deletes another pane's registrations", () => {
+  const doc = makeDoc();
+  const firstScope = doc.createElement("div");
+  const secondScope = doc.createElement("div");
+  const plugin = {
+    homeCardActive: true,
+    homeCardFootTracked: new Set(),
+    bankSetupFootTracked: new Set(),
+    scheduleBankSetupRefresh() {},
+  };
+  const makeArea = (scope) => {
+    const mount = doc.createElement("section");
+    mount.setAttribute("class", `${H.HOME_CARD_CLASS} bob-property-card`);
+    mount.setAttribute("data-home-source", "bank.md");
+    const foot = doc.createElement("div");
+    foot.setAttribute("class", "bob-property-card-foot");
+    const disclosure = doc.createElement("button");
+    disclosure.setAttribute("class", "bob-property-card-foot-disclosure");
+    foot.appendChild(disclosure);
+    mount.appendChild(foot);
+    scope.appendChild(mount);
+    return mount;
+  };
+  const firstMount = makeArea(firstScope);
+  const secondMount = makeArea(secondScope);
+  H.propertyCardHomeBankAreaRegister(plugin, firstScope, "bank.md", "area", firstMount);
+  H.propertyCardHomeBankAreaRegister(plugin, secondScope, "bank.md", "area", secondMount);
+  H.BobLedgerToolsHomeCardFootMixin.prototype.homeCardTrackFoot.call(plugin, firstScope, "bank.md", firstMount);
+  H.BobLedgerToolsHomeCardFootMixin.prototype.homeCardTrackFoot.call(plugin, secondScope, "bank.md", secondMount);
+  const first = H.propertyCardHomeBankAreaCurrent(firstScope, "bank.md");
+  const second = H.propertyCardHomeBankAreaCurrent(secondScope, "bank.md");
+  assert.equal(H.propertyCardHomeBankAreaFootReady(first), true);
+  assert.equal(H.propertyCardHomeBankAreaFootReady(second), true);
+
+  H.BobLedgerToolsBankSetupFootMixin.prototype.bankSetupTrackFoot.call(plugin, firstScope, "bank.md", null);
+  assert.equal(H.propertyCardHomeBankAreaFootReady(second), true,
+    "tearing down the first pane must leave the second pane's Area foot ready");
+  assert.equal(H.propertyCardHomeBankAreaCurrent(secondScope, "bank.md"), second);
+  assert.equal(H.bankSetupAreaArbitration(secondScope, "bank.md").suppressBankFoot, true);
+});
+
+test("both mount orders converge to a single Area foot before Bank yields", () => {
+  for (const order of ["bank-first", "area-first"]) {
+    const doc = makeDoc();
+    const scope = doc.createElement("div");
+    const plugin = {
+      homeCardActive: true,
+      homeCardFootTracked: new Set(),
+      bankSetupFootTracked: new Set(),
+      scheduleBankSetupRefresh() {},
+    };
+    const areaMount = doc.createElement("section");
+    areaMount.setAttribute("class", `${H.HOME_CARD_CLASS} bob-property-card`);
+    areaMount.setAttribute("data-home-source", "bank.md");
+    const areaFoot = doc.createElement("div");
+    areaFoot.setAttribute("class", "bob-property-card-foot");
+    const disclosure = doc.createElement("button");
+    disclosure.setAttribute("class", "bob-property-card-foot-disclosure");
+    areaFoot.appendChild(disclosure);
+    areaMount.appendChild(areaFoot);
+    scope.appendChild(areaMount);
+    const bankCard = doc.createElement("section");
+    scope.appendChild(bankCard);
+
+    if (order === "bank-first") {
+      H.BobLedgerToolsBankSetupFootMixin.prototype.bankSetupTrackFoot.call(plugin, scope, "bank.md", bankCard);
+      H.propertyCardHomeBankAreaRegister(plugin, scope, "bank.md", "area", areaMount);
+      H.BobLedgerToolsHomeCardFootMixin.prototype.homeCardTrackFoot.call(plugin, scope, "bank.md", areaMount);
+    } else {
+      H.propertyCardHomeBankAreaRegister(plugin, scope, "bank.md", "area", areaMount);
+      H.BobLedgerToolsHomeCardFootMixin.prototype.homeCardTrackFoot.call(plugin, scope, "bank.md", areaMount);
+      H.BobLedgerToolsBankSetupFootMixin.prototype.bankSetupTrackFoot.call(plugin, scope, "bank.md", bankCard);
+    }
+    const area = H.propertyCardHomeBankAreaCurrent(scope, "bank.md");
+    assert.equal(H.propertyCardHomeBankAreaFootReady(area), true, order);
+    assert.equal(H.bankSetupAreaArbitration(scope, "bank.md").suppressBankFoot, true, order);
+  }
+});
+
+test("Area loss restores Bank eligibility at the next paint", () => {
+  const doc = makeDoc();
+  const scope = doc.createElement("div");
+  const plugin = {
+    homeCardActive: true,
+    homeCardFootTracked: new Set(),
+    bankSetupFootTracked: new Set(),
+    scheduleBankSetupRefresh() {},
+  };
+  const areaMount = doc.createElement("section");
+  areaMount.setAttribute("class", `${H.HOME_CARD_CLASS} bob-property-card`);
+  areaMount.setAttribute("data-home-source", "bank.md");
+  const areaFoot = doc.createElement("div");
+  areaFoot.setAttribute("class", "bob-property-card-foot");
+  const disclosure = doc.createElement("button");
+  disclosure.setAttribute("class", "bob-property-card-foot-disclosure");
+  areaFoot.appendChild(disclosure);
+  areaMount.appendChild(areaFoot);
+  scope.appendChild(areaMount);
+
+  H.propertyCardHomeBankAreaRegister(plugin, scope, "bank.md", "area", areaMount);
+  H.BobLedgerToolsHomeCardFootMixin.prototype.homeCardTrackFoot.call(plugin, scope, "bank.md", areaMount);
+  assert.equal(H.bankSetupAreaArbitration(scope, "bank.md").suppressBankFoot, true);
+
+  assert.equal(H.propertyCardHomeBankAreaRelease(scope, "bank.md", areaMount, plugin), true);
+  areaMount.remove();
+  try {
+    if (typeof H.propertyCardFootAdapterPruneDisconnected === "function") {
+      H.propertyCardFootAdapterPruneDisconnected("bank.md");
+    }
+  } catch (_) {}
+  assert.equal(H.propertyCardHomeBankAreaCurrent(scope, "bank.md"), null);
+  assert.equal(H.bankSetupAreaArbitration(scope, "bank.md").suppressBankFoot, false,
+    "Bank must stop yielding once the Area mount is gone");
+});
+
 test("the Area foot preserves the bank setup handoff and truthful body mark", () => {
   const mixin = H.BobLedgerToolsHomeCardFootMixin.prototype;
   const plugin = Object.create(mixin);

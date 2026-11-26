@@ -138,8 +138,17 @@ class BobLedgerToolsBankSetupFootMixin {
     // Area card owns bank.md's foot, a Bank Setup repaint without its own
     // foot must leave that Area registration intact; releasing the whole
     // scope here would make the next arbitration pass restore both feet.
+    // Prune only disconnected stale mounts so a replaced Bank foot does
+    // not linger while the connected Area foot survives in this pane.
     try {
-      if (bankSetupAreaArbitration?.(container, path)?.suppressBankFoot === true) return null;
+      if (bankSetupAreaArbitration?.(container, path)?.suppressBankFoot === true) {
+        try {
+          if (typeof propertyCardFootAdapterPruneDisconnected === "function") {
+            propertyCardFootAdapterPruneDisconnected(path);
+          }
+        } catch (_) {}
+        return null;
+      }
     } catch (_) {}
     return propertyCardFootAdapterTrack(container, path, header, this.bankSetupFootTracked);
   }

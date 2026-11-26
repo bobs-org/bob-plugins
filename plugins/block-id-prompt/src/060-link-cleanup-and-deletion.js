@@ -812,6 +812,15 @@ function mergeCoveringEdits(edits) {
           return false;
         }
 
+        // An insertion at a replacement boundary is adjacent to that edit,
+        // not covered by it. Preserve it so the boundary text survives.
+        if (
+          edit.start === edit.end && other.start !== other.end &&
+          (edit.start === other.start || edit.start === other.end)
+        ) {
+          return false;
+        }
+
         return other.start < edit.start || other.end > edit.end || otherIndex < index;
       }),
   );

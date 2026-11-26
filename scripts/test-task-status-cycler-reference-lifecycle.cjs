@@ -500,6 +500,7 @@ test("post-close finalizer runs one gated plan before reference retirement", asy
   assert.deepEqual(result, {
     reopened: 1,
     retired: 2,
+    snoozedPruned: 0,
     recoveryFailures: [],
     retirementFailures: [],
     successors: model,

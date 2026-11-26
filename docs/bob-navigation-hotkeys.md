@@ -5,7 +5,7 @@ description: "Navigate and edit Bob notes with keyboard commands."
 
 Navigate and edit Bob notes with keyboard commands.
 
-`Cmd+Y` opens the [Copy card](copy-card.md): one key per path, block ID, or template row.
+`Cmd+Y` opens the [Copy card](copy-card.md): one key per path, link, block ID, or template row.
 
 <!-- BEGIN GENERATED: facts -->
 ## Plugin facts
@@ -31,7 +31,7 @@ Navigate and edit Bob notes with keyboard commands.
 | Close tabs to the left | `close-tabs-left` | — |
 | Close tabs to the right | `close-tabs-right` | — |
 | Commit to Next / release to Ready | `toggle-task-lane` | Alt+N |
-| Copy card: path, block ID, or template | `copy-active-file-path` | Mod+Y |
+| Copy card: path, link, block ID, or template | `copy-active-file-path` | Mod+Y |
 | Create notebook here | `create-notebook-here` | — |
 | Create project note | `create-project-note` | — |
 | Create project note from task | `create-project-note-from-task` | — |
@@ -726,7 +726,7 @@ This plugin adds no settings tab. It honors the shared bob config file
 
 ## Related
 
-- [Copy card](copy-card.md) — Cmd+Y path, block ID, and template copy.
+- [Copy card](copy-card.md) — Cmd+Y path, link, block ID, and template copy.
 - [Task Card](task-card.md) — property editing controls and scheduling input.
 - [BLOCKS dependency mirrors](blocks-mirrors.md) — reverse dependency rows.
 - [Go to task URI](goto-task-uri.md) — open a note at a searched line.

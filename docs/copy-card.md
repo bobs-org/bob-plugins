@@ -5,8 +5,9 @@ description: "Reference for the Cmd+Y Copy card: keys, task rows, template gramm
 
 `Cmd+Y` (command `bob-navigation-hotkeys:copy-active-file-path`) opens the
 Copy card: a compact, filter-less card where every row copies with one key.
-`P` stays the `↵` default. The cursor's task, or the task a Task Link bullet
-at the cursor points to, contributes an `I` Block ID row, and `copy.templates`
+`P` stays the `↵` default. The file group offers an `L` Note link row, and
+the cursor's task — or the task a Task Link bullet at the cursor points to —
+contributes an `I` Block ID row plus a `K` Task link row, and `copy.templates`
 in `~/.config/bob/config.yml` adds rows such as
 `the ^{block_id} task in the {path} file`. An optional `C` chip row copies
 the copy chip at the cursor, or the only chip in the cursor's task, when Bob
@@ -18,10 +19,11 @@ clipboard never disagree, and copying never writes the vault.
 | Key | Row | Copies (cursor on `^bank-records` in `bob.md`) |
 | --- | --- | --- |
 | `P` · `↵` | Path | `~/bob/bob.md` (`~` only at a real home-directory boundary; a vault outside home gets the absolute path) |
-| `A` | Absolute path | `/home/alex/bob/bob.md` |
 | `F` | File name | `bob.md` |
 | `N` | Note name | `bob` |
+| `L` | Note link | `[[bob]]` |
 | `I` | Block ID (task group) | `bank-records` |
+| `K` | Task link (task group) | `[[bob#^bank-records]]` |
 | `C` | Chip (CHIP group; needs Bob Chips) | the payload of the copy chip at the cursor, or the only chip in the cursor's task |
 | `key:` or `1`–`9` | Each `copy.templates` entry | `the ^bank-records task in the ~/bob/bob.md file` |
 
@@ -30,12 +32,13 @@ template using the linked task's note path.
 
 A template like `^{block_id}` copies the caret form for anyone who wants it.
 
-`P A F N I C` are reserved even when their row is hidden, and `q` is reserved
+`P F N L I K C` are reserved even when their row is hidden, and `q` is reserved
 for closing, so a key never changes meaning. `Esc`, `q`, and `Ctrl+[` close
 the card without copying; `Shift+Q` closes like `q`. Other `Shift+letter`
 keys are ignored.
-Row order is fixed: file rows, file-only templates, the `TASK` or `LINKED TASK` group,
-then the `CHIP` group. Templates keep the order
+Row order is fixed: file builtins (Path, File name, Note name, Note link),
+file-only templates, the diagnostic row, the `TASK` or `LINKED TASK` group
+(Block ID, Task link, task templates), then the `CHIP` group. Templates keep the order
 they have in `copy.templates`. The highlight starts on Path, or on the
 first copyable row when Path is unavailable. `↵` copies the highlighted
 row. `↑` / `↓` and `Ctrl+P` / `Ctrl+N` move the highlight among copyable
@@ -85,7 +88,9 @@ then any open buffer, then the cached vault content, and opens after that read
 finishes. Any checkbox status is accepted, including closed tasks. A linked
 task uses the `LINKED TASK` divider and the linked note's path for `{path}`,
 `{absolute_path}`, `{file_name}`, and `{note_name}` in TASK-group templates.
-File rows and file-only templates continue to describe the active file. A
+File rows and file-only templates continue to describe the active file. The
+Task link row uses the linked note, so a same-note `[[#^id]]` bullet still
+copies the full `[[bob#^id]]` form. A
 missing note, unreadable note, missing or duplicate ID, or non-`#task` target
 shows a dimmed unresolved group; `I` and block-ID templates announce the
 specific reason.
@@ -93,6 +98,15 @@ specific reason.
 The result has four states: `none` (no group), `no-id` (dimmed group with
 `none yet · Ctrl+6 on the task line names one`), `ready` (live group), and
 `unresolved` (dimmed linked group with its resolution reason).
+`no-id` and `unresolved` hide the Task link row while `I` stays dimmed.
+
+Link form is the canonical note rule: the basename (`[[bob]]`), or the vault
+path without `.md` when another note shares the basename or the note lives
+under `done/` (`[[notes/bob]]`, `[[done/bob]]`). The Note link needs only the
+vault-relative path, so it stays ready where absolute paths are unavailable.
+
+Tip: to keep an Absolute path row, add a template
+`{label: Absolute path, key: a, template: "{absolute_path}"}`.
 
 An optional `C` chip row copies the copy chip at the cursor, or the only chip
 in the cursor's task, when Bob Chips is enabled. It appears only when
@@ -155,7 +169,7 @@ the card, never on the clipboard: unknown variables (with a
 empty or non-string templates (`quote the template`), blank labels
 (`add a label`), non-mapping entries (`expected label and template`),
 missing values (`needs a block ID`, `needs an absolute vault path`), and
-collisions (`key p is Path's`, `key c is Chip's`, `key q closes the card`)
+collisions (`key p is Path's`, `key l is Note link's`, `key k is Task link's`, `key c is Chip's`, `key q closes the card`)
 which stay copyable by `↑↓ ↵` or click.
 An explicit `key:` must be one letter or digit after lowercasing, with no
 trimming: blank, whitespace, padded, and null keys are invalid. Only an

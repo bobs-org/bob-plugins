@@ -34,6 +34,7 @@
   "101a-copy-card-keys.js",
   "101b-copy-card-chips.js",
   "101c-copy-card-task-link.js",
+  "101d-copy-card-links.js",
   "102-copy-card-config.js",
   "103-copy-card-modal.js",
   "110-project-seed.js",

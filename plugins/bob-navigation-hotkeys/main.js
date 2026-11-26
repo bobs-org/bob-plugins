@@ -16450,13 +16450,6 @@ const COPY_CARD_BUILTIN_ROWS = Object.freeze([
     needs: Object.freeze(["path"]),
   }),
   Object.freeze({
-    id: "absolute",
-    key: "a",
-    label: "Absolute path",
-    variable: "absolute_path",
-    needs: Object.freeze(["absolute_path"]),
-  }),
-  Object.freeze({
     id: "file",
     key: "f",
     label: "File name",
@@ -16471,11 +16464,23 @@ const COPY_CARD_BUILTIN_ROWS = Object.freeze([
     needs: Object.freeze(["note_name"]),
   }),
   Object.freeze({
+    id: "note-link",
+    key: "l",
+    label: "Note link",
+    needs: Object.freeze([]),
+  }),
+  Object.freeze({
     id: "block-id",
     key: "i",
     label: "Block ID",
     variable: "block_id",
     needs: Object.freeze(["block_id"]),
+  }),
+  Object.freeze({
+    id: "task-link",
+    key: "k",
+    label: "Task link",
+    needs: Object.freeze([]),
   }),
   Object.freeze({
     id: "chip",
@@ -17126,12 +17131,12 @@ function buildCopyCardBuiltinRow(spec, values, taskState, taskReason) {
     });
   }
 
-  const isPath = spec.id === "path" || spec.id === "absolute";
+  const isPath = spec.id === "path";
   const needed = spec.needs[0];
   const value = copyCardAvailableValue(values[needed]);
   if (!value) {
     const reason =
-      needed === "path" || needed === "absolute_path"
+      needed === "path"
         ? "needs an absolute vault path"
         : `needs {${needed}}`;
     return buildCopyCardRow({
@@ -17304,24 +17309,22 @@ function buildCopyCardModel(input) {
     typeof options.diagnostic === "string" && options.diagnostic.trim()
       ? options.diagnostic.trim()
       : null;
-  const fileBuiltins = [];
-  const taskBuiltins = [];
-  let chipRow = null;
-  for (const spec of COPY_CARD_BUILTIN_ROWS) {
-    if (spec.id === "chip") {
-      chipRow = buildCopyCardChipRow(spec, options.copyChip);
-      continue;
-    }
-    const row = buildCopyCardBuiltinRow(spec, values, taskState, taskReason);
-    if (!row) {
-      continue;
-    }
-    if (spec.id === "block-id") {
-      taskBuiltins.push(row);
-    } else {
-      fileBuiltins.push(row);
-    }
-  }
+  const markdownPaths = Array.isArray(options.markdownPaths)
+    ? options.markdownPaths
+    : null;
+  const builtins = buildCopyCardBuiltinRowLists({
+    values,
+    relative,
+    taskPath,
+    task,
+    taskState,
+    taskReason,
+    markdownPaths,
+    copyChip: options.copyChip,
+  });
+  const fileBuiltins = builtins.fileBuiltins;
+  const taskBuiltins = builtins.taskBuiltins;
+  const chipRow = builtins.chipRow;
   const fileTemplates = [];
   const taskTemplates = [];
   for (const template of templates) {
@@ -17824,6 +17827,154 @@ function buildCopyCardLinkedTask({ link, path, content, error } = {}) {
     blockId,
     title: cleanTaskDisplayText(found.rawLine),
   });
+}
+// ---- src/101d-copy-card-links.js ----
+// Copy card link rows: Note link and Task link built from the shared
+// canonical link-note rule (080-dependency-identity.js). Function
+// declarations only: fragments share one script scope and a top-level const
+// that reads another fragment at load time would break order independence.
+
+function copyCardLinkNote(targetPath, blockIdOrPaths, maybePaths) {
+  let blockId = "bob-copy-card-note-probe";
+  let markdownPaths = null;
+  if (Array.isArray(blockIdOrPaths) || blockIdOrPaths === null || blockIdOrPaths === undefined) {
+    markdownPaths = blockIdOrPaths || null;
+  } else if (typeof blockIdOrPaths === "string") {
+    if (Array.isArray(maybePaths) || maybePaths === null || maybePaths === undefined) {
+      blockId = blockIdOrPaths || "bob-copy-card-note-probe";
+      markdownPaths = maybePaths || null;
+    } else {
+      blockId = blockIdOrPaths || "bob-copy-card-note-probe";
+      markdownPaths = null;
+    }
+  } else {
+    markdownPaths = maybePaths || null;
+  }
+  const normalized = normalizeVaultRelativePath(targetPath);
+  return canonicalDependencyLink(
+    { path: normalized, blockId },
+    "",
+    markdownPaths || [],
+  );
+}
+
+function buildCopyCardNoteLinkRow(spec, relativePath, markdownPaths) {
+  const normalized = normalizeVaultRelativePath(relativePath);
+  if (!normalized) {
+    const reason = "needs a note";
+    return buildCopyCardRow({
+      id: spec.id,
+      group: "file",
+      key: spec.key,
+      label: spec.label,
+      value: null,
+      preview: reason,
+      state: "unavailable",
+      reason,
+      isPath: false,
+    });
+  }
+  const link = copyCardLinkNote(normalized, markdownPaths || []);
+  const note = link && typeof link.note === "string" ? link.note : "";
+  if (!note) {
+    const reason = "needs a note";
+    return buildCopyCardRow({
+      id: spec.id,
+      group: "file",
+      key: spec.key,
+      label: spec.label,
+      value: null,
+      preview: reason,
+      state: "unavailable",
+      reason,
+      isPath: false,
+    });
+  }
+  const value = `[[${note}]]`;
+  return buildCopyCardRow({
+    id: spec.id,
+    group: "file",
+    key: spec.key,
+    label: spec.label,
+    value,
+    preview: copyCardPreviewText(value),
+    state: "ready",
+    reason: null,
+    isPath: false,
+  });
+}
+
+function buildCopyCardTaskLinkRow(spec, taskPath, blockId, markdownPaths) {
+  const normalized = normalizeVaultRelativePath(taskPath);
+  const id = copyCardAvailableValue(blockId);
+  if (!normalized || !id) {
+    return null;
+  }
+  const link = copyCardLinkNote(normalized, id, markdownPaths || []);
+  const text = link && typeof link.text === "string" ? link.text : "";
+  if (!text) {
+    return null;
+  }
+  return buildCopyCardRow({
+    id: spec.id,
+    group: "task",
+    key: spec.key,
+    label: spec.label,
+    value: text,
+    preview: copyCardPreviewText(text),
+    state: "ready",
+    reason: null,
+    isPath: false,
+  });
+}
+
+function buildCopyCardBuiltinRowLists(args) {
+  const input = args && typeof args === "object" ? args : {};
+  const values = input.values && typeof input.values === "object" ? input.values : {};
+  const relative = String(input.relative || "");
+  const taskPath = String(input.taskPath || "");
+  const task = input.task && typeof input.task === "object" ? input.task : {};
+  const taskState = String(input.taskState || "none");
+  const taskReason = input.taskReason || null;
+  const markdownPaths = Array.isArray(input.markdownPaths) ? input.markdownPaths : null;
+  const fileBuiltins = [];
+  const taskBuiltins = [];
+  let chipRow = null;
+  for (const spec of COPY_CARD_BUILTIN_ROWS) {
+    if (spec.id === "chip") {
+      chipRow = buildCopyCardChipRow(spec, input.copyChip);
+      continue;
+    }
+    if (spec.id === "note-link") {
+      const row = buildCopyCardNoteLinkRow(spec, relative, markdownPaths);
+      if (!row) {
+        continue;
+      }
+      fileBuiltins.push(row);
+      continue;
+    }
+    if (spec.id === "task-link") {
+      if (taskState !== "ready") {
+        continue;
+      }
+      const row = buildCopyCardTaskLinkRow(spec, taskPath, task.blockId, markdownPaths);
+      if (!row) {
+        continue;
+      }
+      taskBuiltins.push(row);
+      continue;
+    }
+    const row = buildCopyCardBuiltinRow(spec, values, taskState, taskReason);
+    if (!row) {
+      continue;
+    }
+    if (spec.id === "block-id") {
+      taskBuiltins.push(row);
+    } else {
+      fileBuiltins.push(row);
+    }
+  }
+  return { fileBuiltins, taskBuiltins, chipRow };
 }
 // ---- src/102-copy-card-config.js ----
 // Copy card `copy.templates` loader. Reads ~/.config/bob/config.yml through
@@ -99036,7 +99187,7 @@ class BobNavigationHotkeysPlugin extends Plugin {
 
     this.addCommand({
       id: "copy-active-file-path",
-      name: "Copy card: path, block ID, or template",
+      name: "Copy card: path, link, block ID, or template",
       hotkeys: [{ modifiers: ["Mod"], key: "Y" }],
       callback: () => this.openCopyCard(),
     });
@@ -127917,6 +128068,26 @@ class BobNavigationHotkeysCopyCardMixin {
     const templates = loaded && Array.isArray(loaded.templates) ? loaded.templates : [];
     const diagnostic =
       loaded && typeof loaded.diagnostic === "string" ? loaded.diagnostic : null;
+    let markdownPaths = [];
+    try {
+      if (typeof this.readDependencyVaultFileList === "function") {
+        markdownPaths = this.readDependencyVaultFileList() || [];
+      } else {
+        const vault = this.app && this.app.vault;
+        if (vault && typeof vault.getMarkdownFiles === "function") {
+          const files = vault.getMarkdownFiles() || [];
+          markdownPaths = [];
+          for (const file of files) {
+            const normalized = normalizeVaultRelativePath(file && file.path);
+            if (normalized) {
+              markdownPaths.push(normalized);
+            }
+          }
+        }
+      }
+    } catch (_error) {
+      markdownPaths = [];
+    }
     const model = buildCopyCardModel({
       filePath: relativePath,
       basePath,
@@ -127925,6 +128096,7 @@ class BobNavigationHotkeysCopyCardMixin {
       templates,
       diagnostic,
       copyChip,
+      markdownPaths,
     });
     const editorView = editor && (editor.cm || editor.cm6)
       ? (editor.cm || editor.cm6)
@@ -150377,6 +150549,10 @@ Object.assign(module.exports.helpers, {
   buildCopyCardLinkedTask,
   parseCopyTemplate,
   renderCopyTemplate,
+  copyCardLinkNote,
+  buildCopyCardNoteLinkRow,
+  buildCopyCardTaskLinkRow,
+  buildCopyCardBuiltinRowLists,
   buildCopyCardModel,
   resolveCopyCardKey,
   formatCopiedNotice,

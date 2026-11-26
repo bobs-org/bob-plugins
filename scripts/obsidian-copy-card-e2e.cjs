@@ -485,7 +485,8 @@ function runSelfTest() {
   const values = fixture.expectedValues("/tmp/home/bob", "/tmp/home");
   assert.equal(values.path, "~/bob/Copy card e2e.md");
   assert.equal(values.taskRef, "the ^bank-records task in the ~/bob/Copy card e2e.md file");
-  assert.equal(values.absolute, "/tmp/home/bob/Copy card e2e.md");
+  assert.equal(values.taskLink, "[[Copy card e2e#^bank-records]]");
+  assert.equal(values.noteLink, "[[Copy card e2e]]");
   const probe = {
     open: true,
     title: "Copy",
@@ -599,8 +600,8 @@ async function runE2e(args) {
     // Clean config yields the prose and identified-task states without diagnostics.
     let card = await openCardAt(client, "Plain prose for the file-only", true);
     let check = fixture.assertProbe(card, {
-      rows: ["path", "absolute", "file", "note", "template-1"],
-      noRows: ["block-id"],
+      rows: ["path", "file", "note", "note-link", "template-1"],
+      noRows: ["block-id", "task-link"],
       taskDivider: false,
       taskState: "none",
     });
@@ -610,7 +611,7 @@ async function runE2e(args) {
 
     card = await openCardAt(client, fixture.TASKS.id.title, true);
     check = fixture.assertProbe(card, {
-      rows: ["path", "absolute", "file", "note", "block-id", "template-1"],
+      rows: ["path", "file", "note", "note-link", "block-id", "task-link", "template-1"],
       taskDivider: true,
       taskState: "ready",
       taskTitle: fixture.TASKS.id.title,
@@ -636,6 +637,8 @@ async function runE2e(args) {
     record("reserved-key-p-keeps-path", check.rows.get("path")?.key === "p");
     record("template-key-t", check.rows.get("template-1")?.key === "t");
     record("positional-key-2", check.rows.get("template-2")?.key === "2");
+    record("note-link-key-l", check.rows.get("note-link")?.key === "l");
+    record("task-link-key-k", check.rows.get("task-link")?.key === "k");
     await capturePair(client, outDir, "broken-collision", report);
     await closeCard(client);
 
@@ -687,10 +690,11 @@ async function runE2e(args) {
     }
 
     await copyByKey("copy-path-P", fixture.TASKS.id.title, "p", expected.path);
-    await copyByKey("copy-absolute-A", fixture.TASKS.id.title, "a", expected.absolute);
     await copyByKey("copy-file-F", fixture.TASKS.id.title, "f", expected.fileName);
     await copyByKey("copy-note-N", fixture.TASKS.id.title, "n", expected.noteName);
+    await copyByKey("copy-note-link-L", fixture.TASKS.id.title, "l", expected.noteLink);
     await copyByKey("copy-block-id-I", fixture.TASKS.id.title, "i", expected.blockId);
+    await copyByKey("copy-task-link-K", fixture.TASKS.id.title, "k", expected.taskLink);
     await copyByKey("copy-task-ref-T", fixture.TASKS.id.title, "t", expected.taskRef);
     await copyByKey("copy-positional-template-2", fixture.TASKS.id.title, "2", expected.noteLink);
     await copyByKey("collision-row-does-not-steal-P", fixture.TASKS.id.title, "p", expected.path);
@@ -709,7 +713,7 @@ async function runE2e(args) {
     await dispatchKey(client, { key: "Enter" });
     await waitFor(client, cardProbeExpression(), (state) => !state || !state.open, "ArrowDown Enter copy");
     const downClip = await readClipboard(client);
-    record("copy-arrow-down-enter", Boolean(downClip && downClip.ok && downClip.value === expected.absolute && downClip.value !== downSeed.sentinel), downClip && downClip.value || "");
+    record("copy-arrow-down-enter", Boolean(downClip && downClip.ok && downClip.value === expected.fileName && downClip.value !== downSeed.sentinel), downClip && downClip.value || "");
 
     const ctrlNSeed = await seedClipboard("ctrl-n-enter");
     await openCardAt(client, fixture.TASKS.id.title, true);
@@ -717,7 +721,7 @@ async function runE2e(args) {
     await dispatchKey(client, { key: "Enter" });
     await waitFor(client, cardProbeExpression(), (state) => !state || !state.open, "Ctrl+N Enter copy");
     const ctrlNClip = await readClipboard(client);
-    record("copy-ctrl-n-enter", Boolean(ctrlNClip && ctrlNClip.ok && ctrlNClip.value === expected.absolute && ctrlNClip.value !== ctrlNSeed.sentinel), ctrlNClip && ctrlNClip.value || "");
+    record("copy-ctrl-n-enter", Boolean(ctrlNClip && ctrlNClip.ok && ctrlNClip.value === expected.fileName && ctrlNClip.value !== ctrlNSeed.sentinel), ctrlNClip && ctrlNClip.value || "");
 
     const escapeSeed = await seedClipboard("escape");
     await openCardAt(client, fixture.TASKS.id.title, true);

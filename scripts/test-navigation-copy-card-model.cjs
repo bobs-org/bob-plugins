@@ -16,6 +16,9 @@ const {
   createDependencyNavApi,
   parseCopyTemplate,
   renderCopyTemplate,
+  copyCardLinkNote,
+  buildCopyCardNoteLinkRow,
+  buildCopyCardTaskLinkRow,
   buildCopyCardModel,
   resolveCopyCardKey,
   formatCopiedNotice,
@@ -148,11 +151,19 @@ function loadTemplates(parsed, extras = {}) {
 test("builtin row table and reserved keys", () => {
   assert.deepEqual(
     COPY_CARD_BUILTIN_ROWS.map((entry) => entry.id),
-    ["path", "absolute", "file", "note", "block-id", "chip"],
+    ["path", "file", "note", "note-link", "block-id", "task-link", "chip"],
   );
-  assert.deepEqual(COPY_CARD_RESERVED_KEYS, ["p", "a", "f", "n", "i", "c"]);
+  assert.deepEqual(COPY_CARD_RESERVED_KEYS, ["p", "f", "n", "l", "i", "k", "c"]);
   assert.equal(COPY_CARD_BUILTIN_ROWS[0].label, "Path");
   assert.equal(COPY_CARD_BUILTIN_ROWS[4].variable, "block_id");
+  assert.equal(
+    COPY_CARD_BUILTIN_ROWS.find((entry) => entry.id === "note-link").key,
+    "l",
+  );
+  assert.equal(
+    COPY_CARD_BUILTIN_ROWS.find((entry) => entry.id === "task-link").key,
+    "k",
+  );
   assert.ok(Object.isFrozen(COPY_CARD_BUILTIN_ROWS));
   assert.ok(Object.isFrozen(COPY_CARD_BUILTIN_ROWS[0]));
 });
@@ -556,10 +567,11 @@ test("model: Bryan's Task ref template renders the exact clipboard string", () =
   assert.equal(model.title, "Copy");
   assert.equal(model.subtitle, "bob.md");
   assert.equal(row(model, "path").value, "~/bob/bob.md");
-  assert.equal(row(model, "absolute").value, "/Users/bbugyi/bob/bob.md");
   assert.equal(row(model, "file").value, "bob.md");
   assert.equal(row(model, "note").value, "bob");
+  assert.equal(row(model, "note-link").value, "[[bob]]");
   assert.equal(row(model, "block-id").value, "bank-records");
+  assert.equal(row(model, "task-link").value, "[[bob#^bank-records]]");
   const taskRef = row(model, "template-1");
   assert.equal(taskRef.label, "Task ref");
   assert.equal(taskRef.key, "t");
@@ -608,10 +620,11 @@ test("model: linked TASK templates use the linked note while file rows use the a
     owned.rows.map(({ id, value, preview, state, reason }) => ({ id, value, preview, state, reason })),
     [
       { id: "path", value: "~/bob/bob.md", preview: "~/bob/bob.md", state: "ready", reason: null },
-      { id: "absolute", value: "/Users/bbugyi/bob/bob.md", preview: "/Users/bbugyi/bob/bob.md", state: "ready", reason: null },
       { id: "file", value: "bob.md", preview: "bob.md", state: "ready", reason: null },
       { id: "note", value: "bob", preview: "bob", state: "ready", reason: null },
+      { id: "note-link", value: "[[bob]]", preview: "[[bob]]", state: "ready", reason: null },
       { id: "block-id", value: "bank-records", preview: "bank-records", state: "ready", reason: null },
+      { id: "task-link", value: "[[bob#^bank-records]]", preview: "[[bob#^bank-records]]", state: "ready", reason: null },
       { id: "template-1", value: "the ^bank-records task in the ~/bob/bob.md", preview: "the ^bank-records task in the ~/bob/bob.md", state: "ready", reason: null },
     ],
   );
@@ -664,6 +677,8 @@ test("model: vault outside home uses the absolute path for {path}", () => {
     ],
   });
   assert.equal(row(model, "path").value, "/opt/vault/bob.md");
+  assert.equal(row(model, "note-link").value, "[[bob]]");
+  assert.equal(row(model, "task-link").value, "[[bob#^bank-records]]");
   assert.equal(
     row(model, "template-1").value,
     "the ^bank-records task in the /opt/vault/bob.md",
@@ -683,9 +698,12 @@ test("model: no base path dims path rows and defaults to File name", () => {
   assert.equal(row(model, "path").state, "unavailable");
   assert.equal(row(model, "path").reason, "needs an absolute vault path");
   assert.equal(row(model, "path").value, null);
-  assert.equal(row(model, "absolute").state, "unavailable");
   assert.equal(row(model, "file").state, "ready");
   assert.equal(row(model, "file").value, "bob.md");
+  assert.equal(row(model, "note-link").value, "[[bob]]");
+  assert.equal(row(model, "note-link").state, "ready");
+  assert.equal(row(model, "task-link").value, "[[bob#^bank-records]]");
+  assert.equal(row(model, "task-link").state, "ready");
   assert.equal(model.defaultRowId, "file");
   assert.equal(row(model, "template-1").state, "unavailable");
   assert.equal(row(model, "template-1").reason, "needs an absolute vault path");
@@ -694,6 +712,7 @@ test("model: no base path dims path rows and defaults to File name", () => {
 test("model: TASK group hidden for none, dimmed for no-id, I copies the bare ID", () => {
   const noneModel = bryanModel({ task: { state: "none" } });
   assert.equal(row(noneModel, "block-id"), null);
+  assert.equal(row(noneModel, "task-link"), null);
   assert.equal(row(noneModel, "template-1"), null);
   assert.equal(noneModel.task.state, "none");
   assert.ok(noneModel.rows.every((entry) => entry.group === "file"));
@@ -716,6 +735,7 @@ test("model: TASK group hidden for none, dimmed for no-id, I copies the bare ID"
   const taskRef = row(noId, "template-1");
   assert.equal(taskRef.state, "unavailable");
   assert.equal(taskRef.reason, "needs a block ID");
+  assert.equal(row(noId, "task-link"), null);
   assert.equal(noId.task.title, "Add event note to the recruiter Google event");
 
   const ready = bryanModel();
@@ -723,6 +743,8 @@ test("model: TASK group hidden for none, dimmed for no-id, I copies the bare ID"
   assert.equal(readyId.value, "bank-records");
   assert.equal(readyId.preview, readyId.value);
   assert.equal(readyId.state, "ready");
+  assert.equal(row(ready, "task-link").value, "[[bob#^bank-records]]");
+  assert.equal(row(ready, "note-link").value, "[[bob]]");
 });
 
 test("model: path previewParts split at the final slash", () => {
@@ -732,11 +754,11 @@ test("model: path previewParts split at the final slash", () => {
     tail: "bob.md",
   });
   assert.equal(row(model, "path").isPath, true);
-  assert.deepEqual(row(model, "absolute").previewParts, {
-    head: "/Users/bbugyi/bob/",
-    tail: "bob.md",
-  });
   assert.equal(row(model, "file").isPath, false);
+  assert.equal(row(model, "note-link").isPath, false);
+  assert.equal(row(model, "task-link").isPath, false);
+  assert.equal(row(model, "note-link").preview, "[[bob]]");
+  assert.equal(row(model, "task-link").preview, "[[bob#^bank-records]]");
 });
 
 test("model: file-only templates stay visible without a task", () => {
@@ -768,7 +790,7 @@ test("model: row order is file builtins, file templates, then TASK group", () =>
   });
   assert.deepEqual(
     model.rows.map((entry) => entry.id),
-    ["path", "absolute", "file", "note", "template-2", "block-id", "template-1"],
+    ["path", "file", "note", "note-link", "template-2", "block-id", "task-link", "template-1"],
   );
   assert.equal(model.subtitle, "notes/bob.md");
 });
@@ -792,7 +814,7 @@ test("model: ready chip row comes last, after TASK group", () => {
   });
   assert.deepEqual(
     model.rows.map((entry) => entry.id),
-    ["path", "absolute", "file", "note", "template-2", "block-id", "template-1", "chip"],
+    ["path", "file", "note", "note-link", "template-2", "block-id", "task-link", "template-1", "chip"],
   );
   const chip = row(model, "chip");
   assert.equal(chip.group, "chip");
@@ -1619,4 +1641,220 @@ test("renderCopyTemplate returns null when a value is missing", () => {
     }),
     "the ^bank-records task in the ~/bob/bob.md",
   );
+});
+
+test("model: Note link canonical forms", () => {
+  const root = buildCopyCardModel({
+    filePath: "bob.md",
+    basePath: BRYAN_VAULT,
+    homePath: BRYAN_HOME,
+    task: { state: "none" },
+    templates: [],
+  });
+  assert.equal(row(root, "note-link").value, "[[bob]]");
+
+  const nested = buildCopyCardModel({
+    filePath: "notes/bob.md",
+    basePath: BRYAN_VAULT,
+    homePath: BRYAN_HOME,
+    task: { state: "none" },
+    templates: [],
+  });
+  assert.equal(row(nested, "note-link").value, "[[bob]]");
+
+  const rival = buildCopyCardModel({
+    filePath: "notes/bob.md",
+    basePath: BRYAN_VAULT,
+    homePath: BRYAN_HOME,
+    task: { state: "none" },
+    templates: [],
+    markdownPaths: ["bob.md", "notes/bob.md"],
+  });
+  assert.equal(row(rival, "note-link").value, "[[notes/bob]]");
+
+  const done = buildCopyCardModel({
+    filePath: "done/bob.md",
+    basePath: BRYAN_VAULT,
+    homePath: BRYAN_HOME,
+    task: { state: "none" },
+    templates: [],
+    markdownPaths: ["done/bob.md"],
+  });
+  assert.equal(row(done, "note-link").value, "[[done/bob]]");
+
+  const missing = buildCopyCardModel({
+    filePath: "bob.md",
+    basePath: BRYAN_VAULT,
+    homePath: BRYAN_HOME,
+    task: { state: "none" },
+    templates: [],
+  });
+  assert.equal(row(missing, "note-link").value, "[[bob]]");
+
+  const noBase = buildCopyCardModel({
+    filePath: "bob.md",
+    basePath: "",
+    homePath: BRYAN_HOME,
+    task: { state: "none" },
+    templates: [],
+  });
+  assert.equal(row(noBase, "note-link").state, "ready");
+  assert.equal(row(noBase, "note-link").value, "[[bob]]");
+  assert.equal(row(noBase, "note-link").isPath, false);
+});
+
+test("model: Task link canonical forms and visibility", () => {
+  const owned = buildCopyCardModel({
+    filePath: "bob.md",
+    basePath: BRYAN_VAULT,
+    homePath: BRYAN_HOME,
+    task: readyTask(),
+    templates: [],
+  });
+  assert.equal(row(owned, "task-link").value, "[[bob#^bank-records]]");
+
+  const other = buildCopyCardModel({
+    filePath: "daily.md",
+    basePath: BRYAN_VAULT,
+    homePath: BRYAN_HOME,
+    task: {
+      state: "ready",
+      linked: true,
+      path: "other.md",
+      line: 0,
+      blockId: "bank-records",
+      title: "Other task",
+    },
+    templates: [],
+  });
+  assert.equal(row(other, "task-link").value, "[[other#^bank-records]]");
+
+  const sameNote = buildCopyCardModel({
+    filePath: "bob.md",
+    basePath: BRYAN_VAULT,
+    homePath: BRYAN_HOME,
+    task: {
+      state: "ready",
+      linked: true,
+      path: "bob.md",
+      line: 0,
+      blockId: "bank-records",
+      title: "Same-note task",
+    },
+    templates: [],
+  });
+  assert.equal(row(sameNote, "task-link").value, "[[bob#^bank-records]]");
+
+  const noId = bryanModel({
+    task: { state: "no-id", line: 0, blockId: null, title: "No id" },
+  });
+  assert.equal(row(noId, "task-link"), null);
+  assert.equal(row(noId, "block-id").state, "unavailable");
+
+  for (const state of ["unresolved", "none"]) {
+    const model = bryanModel({
+      task:
+        state === "none"
+          ? { state: "none" }
+          : { state, linked: true, path: "other.md", reason: "missing" },
+    });
+    assert.equal(row(model, "task-link"), null, state);
+  }
+
+  const ordered = buildCopyCardModel({
+    filePath: "bob.md",
+    basePath: BRYAN_VAULT,
+    homePath: BRYAN_HOME,
+    task: readyTask(),
+    templates: [
+      { label: "Task ref", key: "t", template: TASK_REF_TEMPLATE },
+      { label: "Wiki link", template: "[[{note_name}]]" },
+    ],
+  });
+  assert.deepEqual(
+    ordered.rows.map((entry) => entry.id),
+    ["path", "file", "note", "note-link", "template-2", "block-id", "task-link", "template-1"],
+  );
+});
+
+test("keys: note-link and task-link copy, task-link is consumed while hidden", () => {
+  const model = bryanModel();
+  const ui = { highlightId: "path", busy: false };
+  assert.deepEqual(resolveCopyCardKey(model, keyEvent("l"), ui), {
+    type: "copy",
+    rowId: "note-link",
+  });
+  assert.deepEqual(resolveCopyCardKey(model, keyEvent("k"), ui), {
+    type: "copy",
+    rowId: "task-link",
+  });
+  assert.deepEqual(resolveCopyCardKey(model, keyEvent("L"), ui), {
+    type: "copy",
+    rowId: "note-link",
+  });
+  assert.deepEqual(resolveCopyCardKey(model, keyEvent("K"), ui), {
+    type: "copy",
+    rowId: "task-link",
+  });
+
+  const noneModel = bryanModel({ task: { state: "none" } });
+  assert.equal(row(noneModel, "task-link"), null);
+  assert.deepEqual(
+    resolveCopyCardKey(noneModel, keyEvent("k"), { highlightId: "path", busy: false }),
+    { type: "consume" },
+  );
+  const noId = bryanModel({
+    task: { state: "no-id", line: 0, blockId: null, title: "No id" },
+  });
+  assert.equal(row(noId, "task-link"), null);
+  assert.deepEqual(
+    resolveCopyCardKey(noId, keyEvent("k"), { highlightId: "path", busy: false }),
+    { type: "consume" },
+  );
+});
+
+test("keys: a with no template returns null, template with key a binds", () => {
+  const model = bryanModel({ task: { state: "none" }, templates: [] });
+  assert.equal(
+    resolveCopyCardKey(model, keyEvent("a"), { highlightId: "path", busy: false }),
+    null,
+  );
+  const bound = buildCopyCardModel({
+    filePath: "bob.md",
+    basePath: BRYAN_VAULT,
+    homePath: BRYAN_HOME,
+    task: { state: "none" },
+    templates: [{ label: "Abs", key: "a", template: "{note_name}" }],
+  });
+  assert.equal(row(bound, "template-1").key, "a");
+  assert.deepEqual(
+    resolveCopyCardKey(bound, keyEvent("a"), { highlightId: "path", busy: false }),
+    { type: "copy", rowId: "template-1" },
+  );
+});
+
+test("keys: templates keyed to the new keys report the new collision reasons", () => {
+  const loaded = loadTemplates({
+    copy: {
+      templates: [
+        { label: "Note dup", key: "l", template: "{note_name}" },
+        { label: "Task dup", key: "k", template: "{note_name}" },
+      ],
+    },
+  });
+  assert.equal(loaded.templates[0].reason, "key l is Note link's");
+  assert.equal(loaded.templates[1].reason, "key k is Task link's");
+  assert.equal(loaded.templates[0].state, "collision");
+  assert.equal(loaded.templates[1].state, "collision");
+});
+
+test("helpers: copyCardLinkNote wraps the canonical rule without same-note short form", () => {
+  const note = copyCardLinkNote("bob.md", []);
+  assert.equal(note.note, "bob");
+  const rival = copyCardLinkNote("notes/bob.md", ["bob.md", "notes/bob.md"]);
+  assert.equal(rival.note, "notes/bob");
+  const task = copyCardLinkNote("bob.md", "bank-records", []);
+  assert.equal(task.text, "[[bob#^bank-records]]");
+  const sameNote = copyCardLinkNote("bob.md", "bank-records", ["bob.md"]);
+  assert.equal(sameNote.text, "[[bob#^bank-records]]");
 });

@@ -213,9 +213,9 @@ test("render: rows, keycaps, ARIA, divider, and footer chip", () => {
   assert.ok(modal.rowsEl.attributes["aria-activedescendant"]);
 
   const rows = byClass(modal.contentEl, "bob-copy-card-row");
-  assert.equal(rows.length, 6);
+  assert.equal(rows.length, 7);
   const keys = byClass(modal.contentEl, "bob-copy-card-key").map((el) => el.textContent);
-  assert.deepEqual(keys, ["P", "A", "F", "N", "I", "T"]);
+  assert.deepEqual(keys, ["P", "F", "N", "L", "I", "K", "T"]);
   for (const row of rows) {
     assert.equal(row.attributes.role, "option");
     assert.ok(row.attributes["aria-selected"] === "true" || row.attributes["aria-selected"] === "false");
@@ -247,9 +247,9 @@ test("render: ready chip row with CHIP divider after TASK rows", () => {
   });
   const modal = openCard(model);
   const rows = byClass(modal.contentEl, "bob-copy-card-row");
-  assert.equal(rows.length, 7);
+  assert.equal(rows.length, 8);
   const keys = byClass(modal.contentEl, "bob-copy-card-key").map((el) => el.textContent);
-  assert.deepEqual(keys, ["P", "A", "F", "N", "I", "T", "C"]);
+  assert.deepEqual(keys, ["P", "F", "N", "L", "I", "K", "T", "C"]);
   const dividers = byClass(modal.contentEl, "bob-copy-card-divider");
   assert.equal(dividers.length, 2);
   assert.match(flattenText(dividers[0]), /TASK/);
@@ -365,8 +365,8 @@ test("footer chip follows the highlight", () => {
   const modal = openCard(bryanModel());
   assert.match(flattenText(modal.footerEl), /copy path/);
   modal.handleCopyCardKey(keyEvent("ArrowDown"));
-  assert.match(flattenText(modal.footerEl), /copy absolute path/);
-  for (let step = 0; step < 4; step += 1) {
+  assert.match(flattenText(modal.footerEl), /copy file name/);
+  for (let step = 0; step < 5; step += 1) {
     modal.handleCopyCardKey(keyEvent("ArrowDown"));
   }
   assert.equal(modal.highlightId, "template-1");
@@ -428,7 +428,7 @@ test("double press during an in-flight write writes once", async () => {
     return { ok: true };
   });
   modal.handleCopyCardKey(keyEvent("p"));
-  modal.handleCopyCardKey(keyEvent("a"));
+  modal.handleCopyCardKey(keyEvent("f"));
   assert.equal(writes, 1);
   release();
   await nextTurn();
@@ -1215,15 +1215,30 @@ test("selection and refusal scroll the row nearest into view", () => {
 test("hover does not move the keyboard highlight", () => {
   const modal = openCard(bryanModel());
   assert.equal(modal.highlightId, "path");
-  const absolute = byClass(modal.contentEl, "bob-copy-card-row").find((entry) =>
-    flattenText(entry).includes("Absolute"),
+  const fileName = byClass(modal.contentEl, "bob-copy-card-row").find((entry) =>
+    flattenText(entry).includes("File name"),
   );
   for (const type of ["mouseover", "mouseenter", "pointerover"]) {
-    if (typeof absolute.listeners?.[type] === "function") {
-      absolute.listeners[type]({ type });
+    if (typeof fileName.listeners?.[type] === "function") {
+      fileName.listeners[type]({ type });
     }
   }
   assert.equal(modal.highlightId, "path");
+  modal.close();
+});
+
+test("render: Note link and Task link rows show their link previews", () => {
+  const modal = openCard(bryanModel());
+  const text = flattenText(modal.contentEl);
+  assert.match(text, /Note link/);
+  assert.match(text, /\[\[bob\]\]/);
+  assert.match(text, /Task link/);
+  assert.match(text, /\[\[bob#\^bank-records\]\]/);
+  assert.ok(!text.includes("Absolute path"));
+  assert.ok(!text.includes("Absolute"));
+  const keys = byClass(modal.contentEl, "bob-copy-card-key").map((el) => el.textContent);
+  assert.ok(keys.includes("L"));
+  assert.ok(keys.includes("K"));
   modal.close();
 });
 

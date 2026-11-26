@@ -238,6 +238,26 @@ class BobNavigationHotkeysCopyCardMixin {
     const templates = loaded && Array.isArray(loaded.templates) ? loaded.templates : [];
     const diagnostic =
       loaded && typeof loaded.diagnostic === "string" ? loaded.diagnostic : null;
+    let markdownPaths = [];
+    try {
+      if (typeof this.readDependencyVaultFileList === "function") {
+        markdownPaths = this.readDependencyVaultFileList() || [];
+      } else {
+        const vault = this.app && this.app.vault;
+        if (vault && typeof vault.getMarkdownFiles === "function") {
+          const files = vault.getMarkdownFiles() || [];
+          markdownPaths = [];
+          for (const file of files) {
+            const normalized = normalizeVaultRelativePath(file && file.path);
+            if (normalized) {
+              markdownPaths.push(normalized);
+            }
+          }
+        }
+      }
+    } catch (_error) {
+      markdownPaths = [];
+    }
     const model = buildCopyCardModel({
       filePath: relativePath,
       basePath,
@@ -246,6 +266,7 @@ class BobNavigationHotkeysCopyCardMixin {
       templates,
       diagnostic,
       copyChip,
+      markdownPaths,
     });
     const editorView = editor && (editor.cm || editor.cm6)
       ? (editor.cm || editor.cm6)

@@ -33,13 +33,6 @@ const COPY_CARD_BUILTIN_ROWS = Object.freeze([
     needs: Object.freeze(["path"]),
   }),
   Object.freeze({
-    id: "absolute",
-    key: "a",
-    label: "Absolute path",
-    variable: "absolute_path",
-    needs: Object.freeze(["absolute_path"]),
-  }),
-  Object.freeze({
     id: "file",
     key: "f",
     label: "File name",
@@ -54,11 +47,23 @@ const COPY_CARD_BUILTIN_ROWS = Object.freeze([
     needs: Object.freeze(["note_name"]),
   }),
   Object.freeze({
+    id: "note-link",
+    key: "l",
+    label: "Note link",
+    needs: Object.freeze([]),
+  }),
+  Object.freeze({
     id: "block-id",
     key: "i",
     label: "Block ID",
     variable: "block_id",
     needs: Object.freeze(["block_id"]),
+  }),
+  Object.freeze({
+    id: "task-link",
+    key: "k",
+    label: "Task link",
+    needs: Object.freeze([]),
   }),
   Object.freeze({
     id: "chip",
@@ -709,12 +714,12 @@ function buildCopyCardBuiltinRow(spec, values, taskState, taskReason) {
     });
   }
 
-  const isPath = spec.id === "path" || spec.id === "absolute";
+  const isPath = spec.id === "path";
   const needed = spec.needs[0];
   const value = copyCardAvailableValue(values[needed]);
   if (!value) {
     const reason =
-      needed === "path" || needed === "absolute_path"
+      needed === "path"
         ? "needs an absolute vault path"
         : `needs {${needed}}`;
     return buildCopyCardRow({
@@ -887,24 +892,22 @@ function buildCopyCardModel(input) {
     typeof options.diagnostic === "string" && options.diagnostic.trim()
       ? options.diagnostic.trim()
       : null;
-  const fileBuiltins = [];
-  const taskBuiltins = [];
-  let chipRow = null;
-  for (const spec of COPY_CARD_BUILTIN_ROWS) {
-    if (spec.id === "chip") {
-      chipRow = buildCopyCardChipRow(spec, options.copyChip);
-      continue;
-    }
-    const row = buildCopyCardBuiltinRow(spec, values, taskState, taskReason);
-    if (!row) {
-      continue;
-    }
-    if (spec.id === "block-id") {
-      taskBuiltins.push(row);
-    } else {
-      fileBuiltins.push(row);
-    }
-  }
+  const markdownPaths = Array.isArray(options.markdownPaths)
+    ? options.markdownPaths
+    : null;
+  const builtins = buildCopyCardBuiltinRowLists({
+    values,
+    relative,
+    taskPath,
+    task,
+    taskState,
+    taskReason,
+    markdownPaths,
+    copyChip: options.copyChip,
+  });
+  const fileBuiltins = builtins.fileBuiltins;
+  const taskBuiltins = builtins.taskBuiltins;
+  const chipRow = builtins.chipRow;
   const fileTemplates = [];
   const taskTemplates = [];
   for (const template of templates) {

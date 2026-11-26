@@ -99,7 +99,7 @@ function baseConfigYaml() {
   return [
     "copy:",
     "  templates:",
-    "    - label: Note link",
+    "    - label: Bare note link",
     '      template: "[[{note_name}]]"',
     "",
   ].join("\n");
@@ -112,7 +112,7 @@ function fullConfigYaml() {
     "    - label: Task ref",
     "      key: t",
     '      template: "the ^{block_id} task in the {path} file"',
-    "    - label: Note link",
+    "    - label: Bare note link",
     '      template: "[[{note_name}]]"',
     "    - label: Broken task ref",
     "      key: b",
@@ -133,14 +133,15 @@ function expectedValues(vaultDir, homeDir) {
   const compact = homeRelative && !homeRelative.startsWith("..") && !path.isAbsolute(homeRelative)
     ? "~/" + homeRelative
     : absolute;
+  const noteName = path.basename(NOTE, path.extname(NOTE));
   return Object.freeze({
     path: compact,
-    absolute,
     fileName: NOTE,
-    noteName: path.basename(NOTE, path.extname(NOTE)),
+    noteName,
     blockId: TASKS.id.blockId,
     taskRef: "the ^" + TASKS.id.blockId + " task in the " + compact + " file",
-    noteLink: "[[" + path.basename(NOTE, path.extname(NOTE)) + "]]",
+    noteLink: "[[" + noteName + "]]",
+    taskLink: "[[" + noteName + "#^" + TASKS.id.blockId + "]]",
     closedBlockId: TASKS.closed.blockId,
     linkedPath: path.join(vaultDir, "Linked target.md"),
     linkedTaskRef: "the ^" + TASKS.linked.blockId + " task in the " +

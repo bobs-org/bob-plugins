@@ -515,7 +515,7 @@ class BobNavigationHotkeysPlugin extends Plugin {
 
     this.addCommand({
       id: "copy-active-file-path",
-      name: "Copy card: path, block ID, or template",
+      name: "Copy card: path, link, block ID, or template",
       hotkeys: [{ modifiers: ["Mod"], key: "Y" }],
       callback: () => this.openCopyCard(),
     });

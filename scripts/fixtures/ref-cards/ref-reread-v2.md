@@ -1,9 +1,9 @@
 ---
 type: "[[ref]]"
-title: "Outlive"
-ref_type: books
+title: "Attention Is All You Need"
+ref_type: papers
 created: 2026-05-01
-earlier: ["ref/outlive.md"]
+earlier: ["ref/papers/attention-is-all-you-need__v1"]
 ---
 
-# Outlive
+# Attention Is All You Need

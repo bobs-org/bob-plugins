@@ -11,8 +11,10 @@ from the live vault.
 - `ref-blocked-chat.md` — blocked chat report (local dependency).
 - `ref-blocked-paper.md` — scheduled-blocked paper.
 - `ref-arxiv-paper.md` — arXiv paper with identity.
-- `ref-reread-v1.md` + `ref-reread-v2.md` — reread pair (`x`, `x__v2`).
-- `ref-earlier-replaced.md` — `earlier` replaced capture.
+- `ref-reread-v1.md` + `ref-reread-v2.md` — the paper reread pair, installed at
+  `ref/papers/attention-is-all-you-need__v1.md` and `__v2.md`.
+- `ref-earlier-replaced.md` — replaced capture installed under
+  `ref_history/attention-flyby.md` and linked from the current paper.
 - `ref-v1-tracker.md` — v1 tracker.
 - `ref-legacy-book.md` — legacy zorg book (provenance keys, `legacy_status`).
 - `ref-legacy-ai.md` — legacy url-only `ai` ref.
@@ -21,7 +23,13 @@ from the live vault.
 - `ref-missing-pdf.md` — declared-but-missing PDF.
 - `ref-meeting.md` — meeting ref.
 - Non-claims: `sase_ref.md` (root hub), `ref-mixed-type.md`
-  (`[ref, project]`), `ref-sample.assets/note.md`, `ref_history/old-capture.md`.
+  (`[ref, project]`), `ref-sample.assets/note.md`,
+  `ref_history/old-capture.md`, and `ref_history/attention-flyby.md`.
+
+The acceptance runner also builds a disposable task-note set and valid one-page
+PDF fixtures for the blog and paper. The missing-PDF fixture intentionally has
+no matching binary; the tiny MP3 header is only used to verify the companion
+audio access control is present.
 
 ## Reports
 

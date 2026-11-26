@@ -226,7 +226,7 @@ test("titles adopt only a matching opening H1 and citation values keep written p
   assert.equal(blog.title.text, "Agentic coding is straining CI");
   assert.equal(blog.title.source, "title");
   assert.equal(blog.title.range.title, blog.title.text);
-  assert.equal(blog.title.range.headingLine, 13);
+  assert.equal(blog.title.range.headingLine, 15);
   assert.deepEqual(blog.byline.map(({ kind, text }) => [kind, text]), [
     ["author", "Sachin Malhotra"],
     ["source", "claude.com"],

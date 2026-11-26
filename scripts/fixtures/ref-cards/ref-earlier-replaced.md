@@ -1,8 +1,8 @@
 ---
 type: "[[ref]]"
-title: "Replaced capture"
+title: "Attention flyby capture"
 ref_type: notes
 created: 2026-04-01
 ---
 
-# Replaced capture
+# Attention flyby capture

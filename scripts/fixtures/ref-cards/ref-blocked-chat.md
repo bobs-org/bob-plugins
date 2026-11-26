@@ -1,6 +1,7 @@
 ---
 type: "[[ref]]"
 title: "SASE memory router blocked on ledger scan"
+status: wip
 agent: "research.5.final"
 ref_type: chat
 created: 2026-11-08

@@ -171,3 +171,13 @@ test("composeNavLineMaps drops missing mappings", () => {
   const composed = helpers.composeNavLineMaps({ 0: 2, 1: 3, 2: 9 }, { 2: 4, 3: 5 });
   assert.deepEqual(composed, { 0: 4, 1: 5 });
 });
+
+test("closed identities in a lagging review queue are refused", () => {
+  for (const status of ["x", "-"]) {
+    const content = AFTER.replace("- [/] #task Finish the design", `- [${status}] #task Finish the design`);
+    assert.deepEqual(helpers.resolveReviewQueueLine(content, {
+      path: "Areas/home.md", blockId: "design", line: 4,
+      originalMarkdown: "- [/] #task Finish the design ^design",
+    }), { ok: false, reason: "stale" });
+  }
+});

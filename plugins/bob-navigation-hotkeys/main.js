@@ -103396,6 +103396,9 @@ class BobNavigationHotkeysReviewAdvanceMixin {
   // the epoch, so a stale `continue` can never move the cursor. It also
   // records the current review task, which outlives the landing.
   setReviewLanding(entry, path) {
+    // The queue can lag the settled editor: retain queue membership, but
+    // remember the row we actually landed on so ]s can leave it again.
+    entry = liveReviewLandingEntry(this, entry, path);
     try {
       this.reviewLandingEpoch =
         Math.floor(numericOrDefault(this.reviewLandingEpoch, 0)) + 1;
@@ -105704,7 +105707,7 @@ resolveReviewQueueLine = function resolveReviewQueueLineWithBlockId(content, ent
     for (let index = 0; index < lines.length; index += 1) {
       if (navTaskSettleLineBlockId(lines[index]) === blockId) matches.push(index);
     }
-    if (matches.length === 1) {
+    if (matches.length === 1 && !reviewAdvanceLineIsClosed(lines[matches[0]])) {
       return Object.freeze({ ok: true, line: matches[0], source: "blockId" });
     }
     return Object.freeze({ ok: false, reason: "stale" });
@@ -105719,6 +105722,18 @@ reviewResumeRef = function reviewResumeRefWithSettleIdentity(entry) {
   const blockId = navReviewEntryBlockId(entry);
   if (!blockId) return ref;
   return Object.freeze({ ...ref, blockId });
+};
+
+// Explicit walk navigation can use identity even while Tasks still reports
+// the pre-settle text/line. Alt+N's off-landing eligibility remains the
+// separate exact-text check in captureReviewDueRowGesture.
+const findReviewCursorIndexBeforeSettle = findReviewCursorIndex;
+findReviewCursorIndex = function findReviewCursorIndexWithSettleIdentity(list, cursor, handledKeys) {
+  const blockId = cursor && navTaskSettleLineBlockId(cursor.text);
+  if (!blockId) return findReviewCursorIndexBeforeSettle(list, cursor, handledKeys);
+  const index = findReviewResumeIndex(list, { ...cursor, blockId });
+  const handled = handledKeys instanceof Set ? handledKeys : new Set(handledKeys || []);
+  return index >= 0 && !handled.has(reviewQueueEntryKey(list[index])) ? index : -1;
 };
 
 const findReviewResumeIndexBeforeSettle = findReviewResumeIndex;
@@ -105776,9 +105791,23 @@ findReviewResumeIndex = function findReviewResumeIndexWithSettleIdentity(list, r
 // group jumps never return. Nothing here throws.
 const REVIEW_RETURN_NOTICE_HEAD = "Back to current review task";
 
-// Frozen `{ path, line, text, key, tier, day }` for the row the walk last
-// landed on. `line` is the queue row's 1-based `line`, `text` is its
-// `originalMarkdown`, and `tier` is `reviewEntryMachineTier(entry)`.
+// Preserve queue membership while remembering the live settled landing.
+function liveReviewLandingEntry(plugin, entry, path) {
+  try {
+    const view = plugin.getActiveMarkdownView();
+    const editor = view && view.editor;
+    if (!editor || view.file?.path !== path || typeof editor.getValue !== "function") return entry;
+    const content = String(editor.getValue());
+    const resolved = resolveReviewQueueLine(content, entry);
+    if (!resolved.ok) return entry;
+    return { ...entry, key: reviewQueueEntryKey(entry), line: resolved.line + 1,
+      originalMarkdown: splitMarkdownContent(content).lines[resolved.line] };
+  } catch (_error) {
+    return entry;
+  }
+}
+
+// Frozen current-row identity; line is one-based, text is the landed row.
 // Returns null when the path or text is empty. Never throws.
 function reviewWalkCurrentRef(entry, path, day) {
   try {
@@ -105812,6 +105841,7 @@ function reviewWalkCurrentRef(entry, path, day) {
       line,
       text,
       key,
+      blockId: ref.blockId || null,
       tier,
       day: typeof day === "string" ? day : "",
     });

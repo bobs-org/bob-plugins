@@ -113,7 +113,7 @@ resolveReviewQueueLine = function resolveReviewQueueLineWithBlockId(content, ent
     for (let index = 0; index < lines.length; index += 1) {
       if (navTaskSettleLineBlockId(lines[index]) === blockId) matches.push(index);
     }
-    if (matches.length === 1) {
+    if (matches.length === 1 && !reviewAdvanceLineIsClosed(lines[matches[0]])) {
       return Object.freeze({ ok: true, line: matches[0], source: "blockId" });
     }
     return Object.freeze({ ok: false, reason: "stale" });
@@ -128,6 +128,18 @@ reviewResumeRef = function reviewResumeRefWithSettleIdentity(entry) {
   const blockId = navReviewEntryBlockId(entry);
   if (!blockId) return ref;
   return Object.freeze({ ...ref, blockId });
+};
+
+// Explicit walk navigation can use identity even while Tasks still reports
+// the pre-settle text/line. Alt+N's off-landing eligibility remains the
+// separate exact-text check in captureReviewDueRowGesture.
+const findReviewCursorIndexBeforeSettle = findReviewCursorIndex;
+findReviewCursorIndex = function findReviewCursorIndexWithSettleIdentity(list, cursor, handledKeys) {
+  const blockId = cursor && navTaskSettleLineBlockId(cursor.text);
+  if (!blockId) return findReviewCursorIndexBeforeSettle(list, cursor, handledKeys);
+  const index = findReviewResumeIndex(list, { ...cursor, blockId });
+  const handled = handledKeys instanceof Set ? handledKeys : new Set(handledKeys || []);
+  return index >= 0 && !handled.has(reviewQueueEntryKey(list[index])) ? index : -1;
 };
 
 const findReviewResumeIndexBeforeSettle = findReviewResumeIndex;

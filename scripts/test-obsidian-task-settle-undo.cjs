@@ -14,6 +14,9 @@ const NOTE_PATH = "Areas/home.md";
 const PROMOTION_PATH = "Areas/promotion.md";
 const SCAFFOLD_PATH = "Areas/scaffold.md";
 const CLOSE_PATH = "Areas/close.md";
+const NAV_PATH = "Areas/nav-lane.md";
+const MIRROR_PATH = "Areas/nav-mirror.md";
+const NAV_CONTENT = "---\ntype: [[area]]\n---\n## Tasks\n\n- [ ] #task Act on this ^act\n  - [ ] Untouched requirement\n  - **NOTES**\n    - Keep this context\n- [ ] #task Prerequisite ^prereq\n- [*] #task Existing lane ^lane\n";
 const today = (() => {
   const date = new Date();
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
@@ -145,12 +148,14 @@ async function main() {
     [PROMOTION_PATH, PROMOTION_CONTENT],
     [SCAFFOLD_PATH, SCAFFOLD_CONTENT],
     [CLOSE_PATH, CLOSE_CONTENT],
+    [NAV_PATH, NAV_CONTENT],
+    [MIRROR_PATH, NAV_CONTENT],
   ]) {
     fs.mkdirSync(path.dirname(path.join(vault, notePath)), { recursive: true });
     fs.writeFileSync(path.join(vault, notePath), contents);
   }
 
-  const enabled = ["bob-ledger-tools", "task-status-cycler"];
+  const enabled = ["bob-ledger-tools", "task-status-cycler", "bob-navigation-hotkeys"];
   for (const id of enabled) {
     const pluginSource = path.join(repoRoot, "plugins", id);
     const pluginTarget = path.join(vault, ".obsidian", "plugins", id);
@@ -223,6 +228,7 @@ async function main() {
         `(() => Boolean(
           window.app?.plugins?.plugins?.["bob-ledger-tools"]?.api?.taskSettle?.applyToEditor &&
           window.app?.plugins?.plugins?.["task-status-cycler"]?.api?.completeTaskAtCursor &&
+          window.app?.plugins?.plugins?.["bob-navigation-hotkeys"]?.api?.reviewWalk &&
           window.app?.commands?.commands?.["obsidian-tasks-plugin:set-status-symbol-to-x"]
         ))()`,
         5000,
@@ -569,8 +575,52 @@ async function main() {
       throw new Error(`Tasks-backed recurring close undo assertion failed: ${JSON.stringify(close)}`);
     }
 
+    const navigation = await client.evaluate(
+      `(() => (async () => {
+        const app = window.app;
+        const nav = app.plugins.plugins["bob-navigation-hotkeys"];
+        const settle = app.plugins.plugins["bob-ledger-tools"].api.taskSettle;
+        const frames = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const results = [];
+        for (const [path, kind] of ${JSON.stringify([[NAV_PATH, "lane"], [MIRROR_PATH, "annotated-dependency"]])}) {
+          const file = app.vault.getAbstractFileByPath(path);
+          const leaf = app.workspace.getLeaf(false);
+          await leaf.openFile(file, { state: { mode: "source" } });
+          await frames();
+          const editor = leaf.view.editor;
+          const before = editor.getValue();
+          const line = before.split("\\n").findIndex((text) => text.endsWith(" ^act"));
+          editor.setCursor({ line, ch: 4 });
+          const outcome = kind === "lane"
+            ? await nav.toggleTaskLane(editor, { skipReleasePrompt: true })
+            : await nav.applyDependencyEdit({ editor, parentPath: path, parentLine: line,
+                add: [{ path, blockId: "prereq" }], remove: [], today: new Date() });
+          await frames();
+          const after = editor.getValue();
+          const fixed = settle.settleNote({ path, contents: after }).contents === after;
+          const wrote = kind === "lane" ? outcome === true : outcome?.ok === true;
+          editor.undo();
+          await frames();
+          const undo = editor.getValue();
+          editor.redo();
+          await frames();
+          results.push({ kind, wrote, fixed, grouped: after.includes("### "),
+            childPreserved: after.includes("  - [ ] Untouched requirement\\n  - **NOTES**\\n    - Keep this context"),
+            undoRestoredOriginal: undo === before,
+            redoRestoredSettled: editor.getValue() === after });
+        }
+        return results;
+      })())()`,
+      20_000,
+    );
+    if (!Array.isArray(navigation) || navigation.length !== 2 || navigation.some((entry) =>
+      !entry.wrote || !entry.fixed || !entry.grouped || !entry.childPreserved ||
+      !entry.undoRestoredOriginal || !entry.redoRestoredSettled)) {
+      throw new Error(`navigation staged undo assertion failed: ${JSON.stringify(navigation)}`);
+    }
+
     passed = true;
-    console.log(JSON.stringify({ pass: true, result, refusal, promotion, scaffold, close }));
+    console.log(JSON.stringify({ pass: true, result, refusal, promotion, scaffold, close, navigation }));
   } finally {
     if (client) client.close();
     if (child.exitCode == null && child.signalCode == null) child.kill("SIGTERM");

@@ -171,6 +171,9 @@ class BobNavigationHotkeysReviewAdvanceMixin {
   // the epoch, so a stale `continue` can never move the cursor. It also
   // records the current review task, which outlives the landing.
   setReviewLanding(entry, path) {
+    // The queue can lag the settled editor: retain queue membership, but
+    // remember the row we actually landed on so ]s can leave it again.
+    entry = liveReviewLandingEntry(this, entry, path);
     try {
       this.reviewLandingEpoch =
         Math.floor(numericOrDefault(this.reviewLandingEpoch, 0)) + 1;

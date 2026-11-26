@@ -154,6 +154,12 @@ function createHarness(notes, options = {}) {
 }
 
 function stubModal(plugin, editor, filePath, cursorLine) {
+  const activeView = { editor, file: { path: filePath, extension: "md" } };
+  const otherLeaves = plugin.app.workspace.getLeavesOfType("markdown")
+    .filter((leaf) => leaf.view?.file?.path !== filePath);
+  plugin.getActiveMarkdownView = () => activeView;
+  plugin.app.workspace.getLeavesOfType = (type) =>
+    type === "markdown" ? [{ view: activeView }, ...otherLeaves] : [];
   const content = String(editor.getValue() || "");
   const lines = content.split(/\r?\n/);
   const cursor = { line: cursorLine, ch: 0 };
@@ -325,6 +331,7 @@ test("PDL8-PDL10: Depends-On consumption keeps notes, matches aliases, and remov
     [datePath]: daily,
   });
   const editor = new TransactionEditor(parentNote, { line: 0, ch: 0 });
+  harness.plugin.getActiveMarkdownView = () => ({ editor, file: { path: parentPath } });
   const outcome = await harness.plugin.applyDependencyEdit({
     editor,
     parentPath,
@@ -362,6 +369,7 @@ test("applyDependencyEdit removes one live link and reports it", async () => {
     { openEditors: [[datePath, dailyEditor]] },
   );
   const editor = new TransactionEditor(parentNote, { line: 0, ch: 0 });
+  harness.plugin.getActiveMarkdownView = () => ({ editor, file: { path: "Tasks.md" } });
   const outcome = await harness.plugin.applyDependencyEdit({
     editor,
     parentPath: "Tasks.md",
@@ -394,6 +402,7 @@ test("applyDependencyEdit keeps the dependent write when the daily preimage chan
     },
   );
   const editor = new TransactionEditor(parentNote, { line: 0, ch: 0 });
+  harness.plugin.getActiveMarkdownView = () => ({ editor, file: { path: "Tasks.md" } });
   const outcome = await harness.plugin.applyDependencyEdit({
     editor,
     parentPath: "Tasks.md",
@@ -706,6 +715,7 @@ test("a dependent without a block id does zero cachedReads even when today's dai
     [datePath]: pomodoroDaily(["- [ ] Current (0900-0930)", "  - leftover"]),
   });
   const editor = new TransactionEditor(content, { line: 0, ch: 0 });
+  harness.plugin.getActiveMarkdownView = () => ({ editor, file: { path: "Tasks.md" } });
   const outcome = await harness.plugin.applyDependencyEdit({
     editor,
     parentPath: "Tasks.md",

@@ -1527,7 +1527,7 @@ test("tie pills, conversion badges, and the dependency band follow both directio
     ],
   );
   assert.deepEqual(planned[0].tiePills.map((pill) => pill.text), ["⛓ prerequisite"]);
-  assert.match(planned[0].tiePills[0].title, /Enter converts the dependency/);
+  assert.match(planned[0].tiePills[0].title, /↵ converts the dependency/);
   const blockRows = helpers.planTieVisibilityItems(
     [rows[1]],
     { ...stage, relationStage: false },
@@ -1547,7 +1547,7 @@ test("tie pills, conversion badges, and the dependency band follow both directio
   assert.equal(dependsRows[0].tieConvert, true);
   const consequenceStage = {
     ...stage,
-    dependent: { path: "Owner.md", blockId: "owner", isProjectPrj: false },
+    dependent: { path: "Owner.md", blockId: "owner", status: " ", isProjectPrj: false },
     tieEdges: edges,
   };
   assert.equal(
@@ -1555,7 +1555,7 @@ test("tie pills, conversion badges, and the dependency band follow both directio
       { ...dependsRows[0], status: "*" },
       { stage: consequenceStage },
     ),
-    "Replaces the 🪢 link · Waits on it · this task becomes Blocked · it takes Next",
+    "Replaces the 🪢 link · Waits on it · this task becomes Blocked",
   );
   assert.equal(
     helpers.dependencyStageConsequenceStrip(

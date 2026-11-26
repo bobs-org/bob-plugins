@@ -22,9 +22,23 @@
 // group jumps never return. Nothing here throws.
 const REVIEW_RETURN_NOTICE_HEAD = "Back to current review task";
 
-// Frozen `{ path, line, text, key, tier, day }` for the row the walk last
-// landed on. `line` is the queue row's 1-based `line`, `text` is its
-// `originalMarkdown`, and `tier` is `reviewEntryMachineTier(entry)`.
+// Preserve queue membership while remembering the live settled landing.
+function liveReviewLandingEntry(plugin, entry, path) {
+  try {
+    const view = plugin.getActiveMarkdownView();
+    const editor = view && view.editor;
+    if (!editor || view.file?.path !== path || typeof editor.getValue !== "function") return entry;
+    const content = String(editor.getValue());
+    const resolved = resolveReviewQueueLine(content, entry);
+    if (!resolved.ok) return entry;
+    return { ...entry, key: reviewQueueEntryKey(entry), line: resolved.line + 1,
+      originalMarkdown: splitMarkdownContent(content).lines[resolved.line] };
+  } catch (_error) {
+    return entry;
+  }
+}
+
+// Frozen current-row identity; line is one-based, text is the landed row.
 // Returns null when the path or text is empty. Never throws.
 function reviewWalkCurrentRef(entry, path, day) {
   try {
@@ -58,6 +72,7 @@ function reviewWalkCurrentRef(entry, path, day) {
       line,
       text,
       key,
+      blockId: ref.blockId || null,
       tier,
       day: typeof day === "string" ? day : "",
     });

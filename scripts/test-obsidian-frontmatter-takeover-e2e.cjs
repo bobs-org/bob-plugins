@@ -64,6 +64,7 @@ test("required takeover checks cover both surfaces, denials, and command routing
     "bank-area-live-arbitration", "bank-area-reading-arbitration",
     "bank-contractless-native", "bank-pane-path-lifecycle", "bank-area-settings-gestures",
     "own-quarter-live", "own-year-live", "own-identity-day-live",
+    "foreign-refresh-keeps-ownership",
     "source-toggle-releases", "deny-embed", "deny-hover", "deny-canvas", "deny-print", "deny-mobile",
     "deny-malformed", "deny-unclosed", "stale-cache-releases", "bank-cache-skew-releases",
     "live-autosave-keeps-ownership", "live-slow-reparse-keeps-card",
@@ -78,6 +79,7 @@ test("required takeover checks cover both surfaces, denials, and command routing
   ]) {
     assert.ok(names.includes(name), name);
   }
+  assert.equal(lib.REQUIRED_CHECKS.find((row) => row.name === "foreign-refresh-keeps-ownership")?.surface, "both");
   assert.ok(lib.REQUIRED_CHECKS.some((row) => row.surface === "live"));
   assert.ok(lib.REQUIRED_CHECKS.some((row) => row.surface === "reading"));
   assert.ok(lib.REQUIRED_CHECKS.some((row) => row.surface === "both"));
@@ -93,6 +95,7 @@ test("Bank profile isolates its acceptance checks and retains the final invarian
     "disable-unload-restores", "pending-capability-native", "bytes-unchanged",
     "no-paint-spawn", "screenshots-captured", "no-console-exceptions",
   ]) assert.ok(names.includes(name), name);
+  assert.ok(!names.includes("foreign-refresh-keeps-ownership"), "the survival check belongs to the full profile only");
   assert.ok(!names.includes("own-day-live"));
   assert.ok(!names.includes("own-album-live"));
   assert.equal(lib.computeVerdict(lib.passingReport("bank")).verdict, "GO");
@@ -183,6 +186,15 @@ test("runner creates the profile directory before writing bob-control.json", () 
   assert.ok(write >= 0, "writeControl(controlPath) is missing");
   assert.ok(mkdir < write, "profileDir must exist before the first writeControl");
   assert.match(source, /fs\.mkdirSync\(path\.dirname\(file\), \{ recursive: true \}\)/);
+});
+
+test("foreign-refresh acceptance writes an unrelated note and checks quiet ownership survival", () => {
+  const source = fs.readFileSync(path.join(__dirname, "obsidian-frontmatter-takeover-e2e.cjs"), "utf8");
+  assert.match(source, /attempt\("foreign-refresh-keeps-ownership"/);
+  assert.match(source, /app\.vault\.modify\(file, next\)/);
+  assert.match(source, /await sleep\(1600\)/);
+  assert.match(source, /lib\.ownedFailures\(probe, target\.mode\)/);
+  assert.doesNotMatch(source, /propertyCardOwnFrontmatter\(/);
 });
 
 test("stale-cache probe injects a stale view without mutating Obsidian's cached frontmatter", () => {

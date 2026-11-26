@@ -75,6 +75,7 @@ const REQUIRED_CHECKS = Object.freeze([
   { name: "own-year-live", surface: "live" },
   { name: "own-identity-day-live", surface: "live" },
   { name: "own-identity-day-reading", surface: "reading" },
+  { name: "foreign-refresh-keeps-ownership", surface: "both" },
   { name: "source-toggle-releases", surface: "live" },
   { name: "deny-embed", surface: "both" },
   { name: "deny-hover", surface: "both" },

@@ -267,6 +267,10 @@ without polling or relaxing eligibility. Teardown releases all handles,
 attributes, listeners, observers, and late callbacks through
 `propertyCardFrontmatterReleaseAll()`.
 
+Adapters release only their own mounted kinds with `kind` or `kinds` filters.
+Only coordinator path-wide rename/delete handling and newer-owner replacement
+release across card species.
+
 Loss of whole ownership restores the preexisting per-row hiding; loss of
 the card or entry into a denied context restores native rendering entirely.
 Painting reads local metadata and confirmed source, never starts bob, and

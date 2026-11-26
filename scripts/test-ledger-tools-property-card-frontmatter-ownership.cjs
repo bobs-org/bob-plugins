@@ -841,6 +841,110 @@ test("area and project mounts acquire through the shared coordinator with contra
   }
 });
 
+test("home release leaves other card kinds owned and still releases Area/Project mounts", () => {
+  for (const kind of ["day", "album", "record", "bank"]) {
+    const path = `${kind}.md`;
+    const sourceText = `---\ntype: ${kind}\n---\n# ${kind}\n`;
+    const world = coordinatorWorld({ type: kind });
+    if (kind === "bank") world.plugin.propertyCapabilityContractConfirmed = () => true;
+    const fx = readingFixture();
+    const cls = kind === "album" ? "bob-album-header" : kind === "record" ? "bob-record-sheet"
+      : kind === "bank" ? "bob-bank-setup" : "bob-intention-card";
+    const attr = kind === "album" ? "data-album-source" : kind === "record" ? "data-record-source"
+      : kind === "bank" ? "data-bank-setup-source" : "data-intention-source";
+    const mount = el(fx.doc, "section", `${cls} bob-property-card`);
+    mount.setAttribute(attr, path);
+    mount.appendChild(el(fx.doc, "footer", "bob-property-card-foot"));
+    fx.scope.appendChild(mount);
+    const view = { file: { path }, getMode: () => "preview" };
+    H.propertyCardFrontmatterCoordinatorBind(world.plugin, kind);
+    const release = H.propertyCardFrontmatterOwnMounted(world.plugin, {
+      scope: fx.scope, view, path, kind, mount, sourceText,
+      currentPath: () => view.file.path, active: () => true, parseYaml: world.parse,
+    });
+    assert.equal(typeof release, "function", `${kind} first owns its scope`);
+    assert.ok(fx.scope.classList.contains(OWNS));
+    assert.ok(owned(fx.container));
+
+    const homeRelease = H.BobLedgerToolsHomeCardOwnershipMixin.prototype.homeCardReleaseFrontmatter
+      .call(world.plugin, fx.scope, path);
+    assert.equal(homeRelease, false, `home release ignores the ${kind} owner`);
+    assert.ok(fx.scope.classList.contains(OWNS), `${kind} ownership class survives`);
+    assert.ok(owned(fx.container), `${kind} native Properties stays inert`);
+    release();
+  }
+
+  for (const kind of ["area", "project"]) {
+    const world = homeWorld(kind === "area" ? { type: "area", summary: "Lovely" } : { type: "project" });
+    const fx = readingFixture();
+    const view = { file: { path: "note.md" }, getMode: () => "preview" };
+    const sourceText = kind === "area" ? areaSource() : "---\ntype: project\n---\n# Project\n";
+    const mount = homeMount(fx);
+    H.propertyCardFrontmatterCoordinatorBind(world.plugin, kind);
+    const release = H.propertyCardFrontmatterOwnMounted(world.plugin,
+      homeOwnArgs(world, fx, view, mount, sourceText, kind));
+    assert.equal(typeof release, "function", `${kind} first owns its scope`);
+    assert.equal(
+      H.BobLedgerToolsHomeCardOwnershipMixin.prototype.homeCardReleaseFrontmatter.call(world.plugin, fx.scope, "note.md"),
+      true,
+      `${kind} ownership is released by the home adapter`,
+    );
+    assert.ok(!fx.scope.classList.contains(OWNS));
+    assert.ok(native(fx.container));
+  }
+});
+
+test("every adapter mounted release call is filtered by kind or kinds", () => {
+  const srcDir = path.join(__dirname, "../plugins/bob-ledger-tools/src");
+  const fragments = fs.readdirSync(srcDir).filter((name) => name.endsWith(".js")
+    && !name.startsWith("240q-") && !name.startsWith("374"));
+  for (const name of fragments) {
+    const source = fs.readFileSync(path.join(srcDir, name), "utf8");
+    const calls = /propertyCardFrontmatterReleaseMounted(?:\?\.)?\s*\(/g;
+    for (const match of source.matchAll(calls)) {
+      const open = source.indexOf("(", match.index);
+      let depth = 1;
+      let quote = "";
+      let escaped = false;
+      let end = -1;
+      for (let i = open + 1; i < source.length; i += 1) {
+        const char = source[i];
+        if (quote) {
+          if (escaped) escaped = false;
+          else if (char === "\\") escaped = true;
+          else if (char === quote) quote = "";
+          continue;
+        }
+        if (char === "\"" || char === "'" || char === "`") { quote = char; continue; }
+        if (char === "(") depth += 1;
+        else if (char === ")" && --depth === 0) { end = i; break; }
+      }
+      assert.notEqual(end, -1, `${name}: release call closes`);
+      const args = source.slice(open + 1, end);
+      let braces = 0;
+      let brackets = 0;
+      let parens = 0;
+      let comma = -1;
+      for (let i = 0; i < args.length; i += 1) {
+        const char = args[i];
+        if (char === "{") braces += 1;
+        else if (char === "}") braces -= 1;
+        else if (char === "[") brackets += 1;
+        else if (char === "]") brackets -= 1;
+        else if (char === "(") parens += 1;
+        else if (char === ")") parens -= 1;
+        else if (char === "," && braces === 0 && brackets === 0 && parens === 0) { comma = i; break; }
+      }
+      assert.notEqual(comma, -1, `${name}: release call has filters`);
+      const filters = args.slice(comma + 1);
+      assert.match(filters, /^\s*\{/,
+        `${name}: release call must pass a filter object (coordinator and exports are excluded)`);
+      assert.match(filters, /\b(?:kind|kinds)\s*:/,
+        `${name}: release call must filter mounted ownership by kind or kinds`);
+    }
+  }
+});
+
 test("area, project, and bank hub require the typed settings contract; albums keep generic ownership", () => {
   for (const kind of ["area", "project"]) {
     const world = homeWorld();

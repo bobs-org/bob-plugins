@@ -588,6 +588,9 @@ an offline pass is not real-app acceptance.
 
 The required matrix covers automatic ownership in Live Preview and Reading
 for day, week, record, and album, plus quarter/year and identity-only days.
+The full profile also runs `foreign-refresh-keeps-ownership`: after one write
+to an unrelated scratch note, day Live Preview and Reading, album Live Preview,
+and record Live Preview must stay owned through 1.5 seconds without pane input.
 It checks Source, navigation, malformed/unclosed YAML, cache skew, denied
 contexts (embeds, hover, canvas, print, mobile), failed mounts, container
 replacement, and disable/unload. Capability cases cover pending, absent,

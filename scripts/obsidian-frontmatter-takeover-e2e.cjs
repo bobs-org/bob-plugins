@@ -33,6 +33,7 @@ let activeRun = null;
 const VIM_PROBE_PATH = "2026/20261119.md";
 const STALE_CACHE_PROBE_PATH = "2026/20261118.md";
 const NATIVE_FALLBACK_PROBE_PATH = "2026/20261117.md";
+const FOREIGN_REFRESH_PATH = "unrelated-refresh.md";
 const AUTOSAVE_DAY_PATH = "2026/20261116.md";
 const AUTOSAVE_RECORD_PATH = "eat/autosave-probe.md";
 const SLOW_DAY_PATH = "2026/20261115.md";
@@ -675,6 +676,7 @@ async function run(args) {
     fs.mkdirSync(vaultDir, { recursive: true });
     fs.mkdirSync(profileDir, { recursive: true });
     for (const [name, content] of Object.entries(notes)) shared.writeNote(vaultDir, name, content);
+    shared.writeNote(vaultDir, FOREIGN_REFRESH_PATH, "---\ntype: scratch\nvalue: before\n---\nUnrelated refresh fixture.\n");
     shared.writeNote(vaultDir, "board.canvas", lib.canvasFixture());
     installVault(vaultDir);
     writeControl(controlPath, "pass");
@@ -747,7 +749,7 @@ async function run(args) {
     await ctx.page.ev(`(() => {
       const audit = { rows: [], restores: [], stage: "startup" };
       const normalizePath = (value) => String(value?.path ?? value ?? "").replace(/\\\\/g, "/");
-      const trackedPaths = new Set(${JSON.stringify([...names, VIM_PROBE_PATH, STALE_CACHE_PROBE_PATH, NATIVE_FALLBACK_PROBE_PATH])});
+      const trackedPaths = new Set(${JSON.stringify([...names, VIM_PROBE_PATH, STALE_CACHE_PROBE_PATH, NATIVE_FALLBACK_PROBE_PATH, FOREIGN_REFRESH_PATH])});
       const wrap = (owner, name, pathAt) => {
         if (!owner || typeof owner[name] !== "function") return;
         const original = owner[name];
@@ -796,6 +798,77 @@ async function run(args) {
     await ownCase("own-record-reading", P.record, "reading");
     await ownCase("own-album-live", P.album, "live");
     await ownCase("own-album-reading", P.album, "reading");
+    await attempt("foreign-refresh-keeps-ownership", async () => {
+      let extraLeaves = [];
+      try {
+        extraLeaves = await ctx.page.ev(`(() => [
+          app.workspace.getLeaf("tab").id,
+          app.workspace.getLeaf("tab").id,
+          app.workspace.getLeaf("tab").id,
+        ])()`);
+        if (!Array.isArray(extraLeaves) || extraLeaves.length !== 3 || new Set(extraLeaves).size !== 3) {
+          throw new Error("could not create three independent Markdown leaves");
+        }
+        const targets = [
+          { label: "day Live Preview", leaf: ctx.main, path: P.day, mode: "live" },
+          { label: "day Reading", leaf: extraLeaves[0], path: P.day, mode: "reading" },
+          { label: "album Live Preview", leaf: extraLeaves[1], path: P.album, mode: "live" },
+          { label: "record Live Preview", leaf: extraLeaves[2], path: P.record, mode: "live" },
+        ];
+        const before = [];
+        for (const target of targets) {
+          await ctx.page.open(target.leaf, target.path, target.mode);
+          await ctx.page.settle(250);
+          before.push({ label: target.label, probe: await ctx.page.waitOwned(target.leaf, target.mode, target.label) });
+        }
+        const preWrite = [];
+        for (const target of targets) {
+          const probe = await ctx.page.probe(target.leaf);
+          const failures = lib.ownedFailures(probe, target.mode);
+          if (probe?.path !== target.path) failures.push("wrong note remained open");
+          if (failures.length) preWrite.push({ label: target.label, failures, probe });
+        }
+        if (preWrite.length) return { ok: false, reason: "ownership did not remain on every target before the foreign write", before, preWrite };
+
+        const write = await ctx.page.ev(`(async () => {
+          const file = app.vault.getAbstractFileByPath(${JSON.stringify(FOREIGN_REFRESH_PATH)});
+          if (!file) throw new Error("unrelated scratch note is missing");
+          const source = await app.vault.read(file);
+          const next = source.replace("value: before", "value: after");
+          if (next === source) throw new Error("unrelated scratch note had no expected value to change");
+          await app.vault.modify(file, next);
+          return { path: file.path, changed: next !== source };
+        })()`);
+        await sleep(1600);
+        const writeAuditCount = await ctx.page.ev(`(() => {
+          const rows = window.__bobFrontmatterTakeoverWriteAudit?.rows || [];
+          return rows.filter((row) => row.api === "modify" && row.path === ${JSON.stringify(FOREIGN_REFRESH_PATH)}
+            && row.stage === "foreign-refresh-keeps-ownership").length;
+        })()`);
+        const after = [];
+        const failures = [];
+        if (write?.changed !== true || write?.path !== FOREIGN_REFRESH_PATH) failures.push("the unrelated scratch note was not modified through the vault API");
+        if (writeAuditCount !== 1) failures.push("the ownership write audit did not record exactly one unrelated vault modify");
+        for (const target of targets) {
+          const probe = await ctx.page.probe(target.leaf);
+          const probeFailures = lib.ownedFailures(probe, target.mode);
+          if (probe?.path !== target.path) probeFailures.push("wrong note remained open");
+          if (probeFailures.length) failures.push(target.label + ": " + probeFailures.join("; "));
+          after.push({ label: target.label, probe, failures: probeFailures });
+        }
+        return { ok: failures.length === 0, failures, before, write, writeAuditCount, after, quietMs: 1600 };
+      } finally {
+        if (extraLeaves.length) {
+          try {
+            await ctx.page.ev(`(() => {
+              for (const id of ${JSON.stringify(extraLeaves)}) app.workspace.getLeafById(id)?.detach?.();
+              return true;
+            })()`);
+          } catch (_) {}
+        }
+        try { await ctx.page.open(ctx.main, P.day, "live"); } catch (_) {}
+      }
+    });
     await attempt("bank-cache-parity", async () => {
       await ctx.page.open(ctx.main, P.bank, "live");
       await ctx.page.settle(350);

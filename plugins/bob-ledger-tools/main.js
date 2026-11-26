@@ -106803,9 +106803,11 @@ class BobLedgerToolsHomeCardOwnershipMixin {
     });
   }
 
+  // Release only Area/Project whole-frontmatter ownership; never another
+  // card species' mount on the same pane.
   homeCardReleaseFrontmatter(scope, path = "") {
     try {
-      return propertyCardFrontmatterReleaseMounted?.(scope, { plugin: this, path }) || false;
+      return propertyCardFrontmatterReleaseMounted?.(scope, { plugin: this, kinds: ["area", "project"], path }) || false;
     } catch (_) { return false; }
   }
 

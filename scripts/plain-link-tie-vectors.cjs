@@ -226,6 +226,36 @@ module.exports = Object.freeze({
       "removed": [
         "[[#^a]]"
       ]
+    },
+    {
+      "id": "PT12b",
+      "line_in": "- 🪢 **LINKS:** see [[#^b]] • [[#^a]]\r",
+      "tied": [
+        {
+          "target": "",
+          "block_id": "a"
+        }
+      ],
+      "line_out": "- 🪢 **LINKS:** see [[#^b]]\r",
+      "outcome": "rewritten",
+      "removed": [
+        "[[#^a]]"
+      ]
+    },
+    {
+      "id": "PT12c",
+      "line_in": "- 🪢 **LINKS:** [[#^a]]\r",
+      "tied": [
+        {
+          "target": "",
+          "block_id": "a"
+        }
+      ],
+      "line_out": null,
+      "outcome": "delete_line",
+      "removed": [
+        "[[#^a]]"
+      ]
     }
   ],
   "pair": [

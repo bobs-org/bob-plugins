@@ -161,10 +161,15 @@ function tieLabelStartInGap(gapText, isFirst, label) {
 // Separator rule (PT2–PT4, PT9): a dropped non-first entry takes its
 // preceding separator; a dropped first entry takes its following separator
 // but keeps the next kept entry's gap label (`see ` in PT2). All other
-// bytes — indent, header, CRLF, trailing spaces — are preserved (PT12).
+// bytes — indent, header, CRLF, trailing spaces — are preserved
+// (PT12–PT12c). A CRLF artifact rides on the raw line; Rust parses the
+// trailing `\r` as separator residue, so the twin strips one trailing
+// `\r` up front and restores it on a rewrite.
 function dropPlainLinkEntries(lineText, isTied) {
   const text = String(lineText || "");
-  const tokenized = tieTokenizeLinksLine(text);
+  const carriage = text.endsWith("\r") ? "\r" : "";
+  const source = carriage ? text.slice(0, -1) : text;
+  const tokenized = tieTokenizeLinksLine(source);
   if (!tokenized.ok) {
     return Object.freeze({
       outcome: tokenized.reason === "empty" ? "unchanged" : "malformed",
@@ -222,14 +227,14 @@ function dropPlainLinkEntries(lineText, isTied) {
   let out = "";
   let cursor = 0;
   for (const [start, finish] of cuts) {
-    out += text.slice(cursor, start);
+    out += source.slice(cursor, start);
     cursor = finish;
   }
-  out += text.slice(cursor);
+  out += source.slice(cursor);
   return Object.freeze({
     outcome: "rewritten",
     removed: Object.freeze(removed),
-    line: out,
+    line: out + carriage,
   });
 }
 

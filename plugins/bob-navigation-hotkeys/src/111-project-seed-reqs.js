@@ -642,21 +642,10 @@ function buildProjectSeedFromChildBulletsReqs(childLines, createdDateString) {
       const baseIndent = projectSeedReqShallowestNestedIndent(lines, start, end, directChildIndentLength);
       const sectionTitle = parseProjectSectionBulletTitle(parsedChild.body);
       if (sectionTitle && baseIndent === null) {
-        // Explicitly authored empty drawer: bold markers make intent
-        // unambiguous, so preserve as an empty section. Legacy ALL-CAPS
-        // without nested content stays a loose note (existing behavior).
-        let marker = null;
-        try {
-          const parsed = drawer_body_title(String(parsedChild.body || ""));
-          marker = parsed ? parsed.marker : null;
-        } catch (_error) {
-          marker = null;
-        }
-        if (marker === "bold") {
-          if (projectSeedReqIsNotesDrawerTitle(parsedChild.body)) pushEmptySection("Notes");
-          else pushEmptySection(sectionTitle);
-          continue;
-        }
+        // Whole-bold section bullets are explicit, including empty sections.
+        if (projectSeedReqIsNotesDrawerTitle(parsedChild.body)) pushEmptySection("Notes");
+        else pushEmptySection(sectionTitle);
+        continue;
       }
       if (sectionTitle && baseIndent !== null) {
         if (projectSeedReqIsNotesDrawerTitle(parsedChild.body)) {

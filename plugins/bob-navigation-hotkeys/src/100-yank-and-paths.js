@@ -687,8 +687,7 @@ function getProjectReversalBlockId(noteBasename, parentBasename) {
 }
 
 function formatProjectReversalSectionTitle(headerText) {
-  // bob-task-drawer-bold-writes-v1: reversal keeps the authored heading bytes
-  // verbatim (bold titles lossless; legacy Title Case only for legacy input).
+  // Reversal keeps the authored heading bytes verbatim.
   const title = String(headerText || "").trim();
   if (!title) return null;
   const resolved = drawer_for_heading(title);
@@ -851,29 +850,15 @@ function isProjectFrontmatterParentLink(value) {
   return /\[[^\]]*\]\([^)\s]+\)/.test(text);
 }
 
-// Lowercase the whole body, uppercase the first character of every maximal
-// run of letters/digits, and collapse internal whitespace runs to a single
-// space. Acronyms are not special-cased: "API DESIGN" becomes "Api Design".
-function formatProjectSectionTitle(body) {
-  const collapsed = String(body || "")
-    .trim()
-    .replace(/\s+/g, " ");
-  return collapsed
-    .toLowerCase()
-    .replace(/[a-z0-9]+/g, (run) => run.charAt(0).toUpperCase() + run.slice(1));
-}
-
-// The title-cased section title for a direct-child bullet body, or null when
-// the trimmed body is not a drawer title (isTaskSplitDrawerTitle, shared with
-// the task-split planner, so an all-digit or empty body is rejected too).
+// The authored title of a whole-bold direct-child bullet, or null when the
+// body is not an eligible project section.
 function parseProjectSectionBulletTitle(body) {
   const trimmed = String(body || "").trim();
   const parsed = drawer_body_title(trimmed);
   if (!parsed) return null;
   const key = drawer_key(parsed.title);
-  const legacyLog = parsed.marker === "legacy_caps" && DRAWER_LEGACY_LOG_KEYS.has(key);
-  if ((drawer_is_reserved_key(key) && !legacyLog) || drawer_is_structural_h2_key(key)) return null;
-  return heading_for_drawer(parsed.title, parsed.marker);
+  if (drawer_is_reserved_key(key) || drawer_is_structural_h2_key(key)) return null;
+  return heading_for_drawer(parsed.title);
 }
 
 // Casefolded, whitespace-collapsed comparison key for matching a section
@@ -890,8 +875,8 @@ function normalizeProjectSectionTitle(title) {
 // managed task-log child lines for the `^prj` task. Direct child list items
 // (those at the shallowest child indentation) become top-level tasks unless they
 // qualify as a managed schedule- or work-log marker or as a drawer: no
-// checkbox, an ALL-CAPS title (see isTaskSplitDrawerTitle), and at least one
-// nonblank list item nested deeper than it. A qualifying drawer's
+// checkbox, a whole-bold title, and at least one nonblank list item nested
+// deeper than it. A qualifying drawer's
 // descendants are copied in verbatim as that section's notes instead; a
 // non-qualifying bullet keeps today's task-conversion behavior. Two drawers
 // whose titles normalize equally merge into one section, in source order.

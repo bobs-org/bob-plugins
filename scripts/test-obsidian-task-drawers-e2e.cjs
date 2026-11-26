@@ -60,7 +60,7 @@ test("toggle, conversion, and look cover wrap, refusal, titles, and themes", () 
   const toggle = TOGGLE_CASES.map((entry) => entry.name).join("\n");
   assert.ok(toggle.includes("wraps a plain title"));
   assert.ok(toggle.includes("unwraps a bold header"));
-  assert.ok(toggle.includes("legacy drawer"));
+  assert.ok(toggle.includes("uppercase plain content"));
   assert.ok(toggle.includes("reserved title"));
   assert.ok(conversion.AREA.includes("**API Design**"));
   assert.ok(conversion.AREA.includes("**API  Design**"));

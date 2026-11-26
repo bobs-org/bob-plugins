@@ -329,7 +329,7 @@ function planDrawerToggle(contents, lineIndex, cursorCh) {
       return { ok: false, message: DRAWER_TOGGLE_DIRECT_COPY };
     }
     const header = recognize_drawer_header(text, owned.task, lineIndex);
-    if (header && header.marker !== "legacy_caps") {
+    if (header) {
       const prefix = line.slice(0, item.bodyFrom);
       const landed = prefix + header.title;
       const next = lines.slice();
@@ -337,17 +337,6 @@ function planDrawerToggle(contents, lineIndex, cursorCh) {
       const titleStart = item.bodyFrom + 2;
       const ch = drawerToggleLandingCh(titleStart, header.title, cursorCh, landed, header.title);
       return { ok: true, updated: next.join("\n"), lineIndex, cursorCh: ch, wrapped: false, title: header.title };
-    }
-    // A legacy drawer is deliberately marked bold by this explicit gesture,
-    // keeping its title bytes without recasing.
-    if (header && header.marker === "legacy_caps") {
-      const prefix = line.slice(0, item.bodyFrom);
-      const landed = `${prefix}**${header.title}**`;
-      const next = lines.slice();
-      next[lineIndex] = landed;
-      const titleStart = item.bodyFrom;
-      const ch = drawerToggleLandingCh(titleStart, header.title, cursorCh, landed, header.title);
-      return { ok: true, updated: next.join("\n"), lineIndex, cursorCh: ch, wrapped: true, title: header.title };
     }
     // Not a drawer header: refuse managed lines before wrapping.
     if (

@@ -20,10 +20,9 @@
 //   clamped, owner_minted_id, owner_path, owner_line }.
 // Failure: { ok: false, code, message } with the §5.1 codes verbatim.
 
-// Compatibility predicate for callers that still ask about the legacy
-// ALL-CAPS body form. Contextual readers use `recognize_drawer_header`.
+// A task-split drawer title must use the whole-bold body form.
 function isTaskSplitDrawerTitle(title) {
-  return is_legacy_drawer_title(title);
+  return drawer_body_title(title) !== null;
 }
 
 // --- Block-ID mint pipeline (mirrors `capture_block_ids`) ---

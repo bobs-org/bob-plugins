@@ -126,7 +126,7 @@ test("unicode and CRLF coordinates preserve endings and stay bounded", () => {
   assert.equal(missing.contents.endsWith("\n"), false, "a missing final newline stays missing");
 });
 
-test("settle keeps bold and legacy drawer subtrees byte-for-byte with a moved task", () => {
+test("settle keeps bold drawers and uppercase plain subtrees byte-for-byte", () => {
   const input = [
     "---",
     "type: [[area]]",
@@ -137,7 +137,7 @@ test("settle keeps bold and legacy drawer subtrees byte-for-byte with a moved ta
     "  - **API Design**",
     "    - bold detail",
     "  - FUTURE WORK",
-    "    - legacy detail",
+    "    - uppercase plain detail",
     "- [ ] #task Stay ^stay",
     "",
   ].join("\n");

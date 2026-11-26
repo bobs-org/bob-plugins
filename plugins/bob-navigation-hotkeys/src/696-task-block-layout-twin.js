@@ -78,8 +78,7 @@ function taskBlockClassifyChild(line, nestedTaskOpen, globalFilter) {
     const parsed = drawer_body_title(taskReqTrim(body));
     if (parsed) {
       const key = drawer_key(parsed.title);
-      const legacyLog = parsed.marker === "legacy_caps" && DRAWER_LEGACY_LOG_KEYS.has(key);
-      if ((!drawer_is_reserved_key(key) || legacyLog) && !drawer_is_structural_h2_key(key)) {
+      if (!drawer_is_reserved_key(key) && !drawer_is_structural_h2_key(key)) {
         return { type: "drawer", title: parsed.title };
       }
     }
@@ -307,7 +306,7 @@ function taskBlockRawFenced(doc) {
   return taskReqDocMemo(doc, "raw-fenced", () => taskReqFencedLines(doc.texts, 0, doc.texts.length));
 }
 
-// `capture_drawers::drawers`: the dual-read drawer headers directly under the
+// `capture_drawers::drawers`: whole-bold drawer headers directly under the
 // task, as `{title, key, line (1-based), lineIndex, indentation, blockEnd,
 // entryCount}`.
 function taskBlockDrawersIn(doc, task) {

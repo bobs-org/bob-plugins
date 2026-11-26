@@ -162,7 +162,7 @@ const TOGGLE_CASES = [
     expect: { doc: `${TASK}\n  - API Design\n    - nested stays` },
   },
   {
-    name: "Toggle Drawer marks a legacy drawer bold without recasing",
+    name: "Toggle Drawer wraps uppercase plain content as a drawer",
     doc: `${TASK}\n  - NOTES\n    - filed`,
     caret: [1, 4],
     viaCommand: "task-status-cycler:toggle-task-drawer",

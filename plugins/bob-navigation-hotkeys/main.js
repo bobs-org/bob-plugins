@@ -15110,8 +15110,7 @@ function getProjectReversalBlockId(noteBasename, parentBasename) {
 }
 
 function formatProjectReversalSectionTitle(headerText) {
-  // bob-task-drawer-bold-writes-v1: reversal keeps the authored heading bytes
-  // verbatim (bold titles lossless; legacy Title Case only for legacy input).
+  // Reversal keeps the authored heading bytes verbatim.
   const title = String(headerText || "").trim();
   if (!title) return null;
   const resolved = drawer_for_heading(title);
@@ -15274,29 +15273,15 @@ function isProjectFrontmatterParentLink(value) {
   return /\[[^\]]*\]\([^)\s]+\)/.test(text);
 }
 
-// Lowercase the whole body, uppercase the first character of every maximal
-// run of letters/digits, and collapse internal whitespace runs to a single
-// space. Acronyms are not special-cased: "API DESIGN" becomes "Api Design".
-function formatProjectSectionTitle(body) {
-  const collapsed = String(body || "")
-    .trim()
-    .replace(/\s+/g, " ");
-  return collapsed
-    .toLowerCase()
-    .replace(/[a-z0-9]+/g, (run) => run.charAt(0).toUpperCase() + run.slice(1));
-}
-
-// The title-cased section title for a direct-child bullet body, or null when
-// the trimmed body is not a drawer title (isTaskSplitDrawerTitle, shared with
-// the task-split planner, so an all-digit or empty body is rejected too).
+// The authored title of a whole-bold direct-child bullet, or null when the
+// body is not an eligible project section.
 function parseProjectSectionBulletTitle(body) {
   const trimmed = String(body || "").trim();
   const parsed = drawer_body_title(trimmed);
   if (!parsed) return null;
   const key = drawer_key(parsed.title);
-  const legacyLog = parsed.marker === "legacy_caps" && DRAWER_LEGACY_LOG_KEYS.has(key);
-  if ((drawer_is_reserved_key(key) && !legacyLog) || drawer_is_structural_h2_key(key)) return null;
-  return heading_for_drawer(parsed.title, parsed.marker);
+  if (drawer_is_reserved_key(key) || drawer_is_structural_h2_key(key)) return null;
+  return heading_for_drawer(parsed.title);
 }
 
 // Casefolded, whitespace-collapsed comparison key for matching a section
@@ -15313,8 +15298,8 @@ function normalizeProjectSectionTitle(title) {
 // managed task-log child lines for the `^prj` task. Direct child list items
 // (those at the shallowest child indentation) become top-level tasks unless they
 // qualify as a managed schedule- or work-log marker or as a drawer: no
-// checkbox, an ALL-CAPS title (see isTaskSplitDrawerTitle), and at least one
-// nonblank list item nested deeper than it. A qualifying drawer's
+// checkbox, a whole-bold title, and at least one nonblank list item nested
+// deeper than it. A qualifying drawer's
 // descendants are copied in verbatim as that section's notes instead; a
 // non-qualifying bullet keeps today's task-conversion behavior. Two drawers
 // whose titles normalize equally merge into one section, in source order.
@@ -18998,21 +18983,10 @@ function buildProjectSeedFromChildBulletsReqs(childLines, createdDateString) {
       const baseIndent = projectSeedReqShallowestNestedIndent(lines, start, end, directChildIndentLength);
       const sectionTitle = parseProjectSectionBulletTitle(parsedChild.body);
       if (sectionTitle && baseIndent === null) {
-        // Explicitly authored empty drawer: bold markers make intent
-        // unambiguous, so preserve as an empty section. Legacy ALL-CAPS
-        // without nested content stays a loose note (existing behavior).
-        let marker = null;
-        try {
-          const parsed = drawer_body_title(String(parsedChild.body || ""));
-          marker = parsed ? parsed.marker : null;
-        } catch (_error) {
-          marker = null;
-        }
-        if (marker === "bold") {
-          if (projectSeedReqIsNotesDrawerTitle(parsedChild.body)) pushEmptySection("Notes");
-          else pushEmptySection(sectionTitle);
-          continue;
-        }
+        // Whole-bold section bullets are explicit, including empty sections.
+        if (projectSeedReqIsNotesDrawerTitle(parsedChild.body)) pushEmptySection("Notes");
+        else pushEmptySection(sectionTitle);
+        continue;
       }
       if (sectionTitle && baseIndent !== null) {
         if (projectSeedReqIsNotesDrawerTitle(parsedChild.body)) {
@@ -57291,10 +57265,9 @@ function createInboxRouteApi(plugin) {
 //   clamped, owner_minted_id, owner_path, owner_line }.
 // Failure: { ok: false, code, message } with the §5.1 codes verbatim.
 
-// Compatibility predicate for callers that still ask about the legacy
-// ALL-CAPS body form. Contextual readers use `recognize_drawer_header`.
+// A task-split drawer title must use the whole-bold body form.
 function isTaskSplitDrawerTitle(title) {
-  return is_legacy_drawer_title(title);
+  return drawer_body_title(title) !== null;
 }
 
 // --- Block-ID mint pipeline (mirrors `capture_block_ids`) ---
@@ -140721,7 +140694,7 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
 // ---- src/693a-task-drawers-twin.js ----
 // Shared task-drawer reader twin. The bob-cli fixtures are authoritative;
 // copy this fragment byte for byte to every plugin that reads task blocks.
-// Marker searched by the reader-rollout phase: bob-task-drawer-dual-read-v1
+// Marker for the bold-only reader contract: bob-task-drawer-bold-only-v1
 
 const DRAWER_RESERVED_KEYS = new Set([
   "SCHEDULE LOG", "WORK LOG", "ROTTEN LOG", "CANCEL LOG",
@@ -140729,25 +140702,10 @@ const DRAWER_RESERVED_KEYS = new Set([
   "TASKS", "NEXT & IN PROGRESS", "BLOCKED", "DONE & CANCELED",
   "POMODOROS", "EVENTS", "HIGHLIGHTS", "AREAS", "NOTEBOOKS", "ALBUMS", "PROJECTS",
 ]);
-const DRAWER_LEGACY_LOG_KEYS = new Set(["SCHEDULE LOG", "WORK LOG", "ROTTEN LOG"]);
 const DRAWER_STRUCTURAL_H2_KEYS = new Set([
   "TASKS", "NEXT & IN PROGRESS", "BLOCKED", "DONE & CANCELED", "POMODOROS",
   "EVENTS", "HIGHLIGHTS", "AREAS", "NOTEBOOKS", "ALBUMS", "PROJECTS",
 ]);
-
-function is_legacy_drawer_title(title) {
-  const chars = Array.from(String(title == null ? "" : title));
-  if (!chars.length || !((chars[0] >= "A" && chars[0] <= "Z") || (chars[0] >= "0" && chars[0] <= "9"))) return false;
-  let hasLetter = chars[0] >= "A" && chars[0] <= "Z";
-  for (let index = 1; index < chars.length; index += 1) {
-    const character = chars[index];
-    const isLast = index === chars.length - 1;
-    const asciiLead = (character >= "A" && character <= "Z") || (character >= "0" && character <= "9");
-    if (!asciiLead && !" \t&'(),./-?!;".includes(character) && !(character === ":" && isLast)) return false;
-    if (character >= "A" && character <= "Z") hasLetter = true;
-  }
-  return hasLetter;
-}
 
 function drawer_key(title) {
   return String(title == null ? "" : title).trim().replace(/\s+/gu, " ").toUpperCase();
@@ -140757,7 +140715,6 @@ function drawer_body_title(body) {
   const value = String(body == null ? "" : body);
   if (/^\[[^\]\r\n]\][ \t]+/u.test(value)) return null;
   const trimmed = value.trim();
-  if (is_legacy_drawer_title(trimmed)) return { title: trimmed, marker: "legacy_caps" };
   if (!trimmed.startsWith("**") || !trimmed.endsWith("**")) return null;
   const title = trimmed.slice(2, -2);
   if (!title || /[\r\n*]/u.test(title) || title.trim() !== title || title.endsWith(":")) return null;
@@ -140788,13 +140745,8 @@ function can_create_drawer(title, hasContent) {
   return { ok: true };
 }
 
-function drawer_title_case_legacy(title) {
-  return String(title || "").trim().replace(/\s+/g, " ").toLowerCase()
-    .replace(/[a-z0-9]+/g, (run) => run.charAt(0).toUpperCase() + run.slice(1));
-}
-
-function heading_for_drawer(title, marker) {
-  return marker === "legacy_caps" ? drawer_title_case_legacy(title) : String(title || "");
+function heading_for_drawer(title) {
+  return String(title || "");
 }
 
 function drawer_for_heading(title) {
@@ -140958,8 +140910,7 @@ function recognize_drawer_header(contents, task, line_index) {
   const parsed = drawer_body_title(item.body);
   if (!parsed) return null;
   const key = drawer_key(parsed.title);
-  const legacyLog = parsed.marker === "legacy_caps" && DRAWER_LEGACY_LOG_KEYS.has(key);
-  if ((drawer_is_reserved_key(key) && !legacyLog) || drawer_is_structural_h2_key(key)) return null;
+  if (drawer_is_reserved_key(key) || drawer_is_structural_h2_key(key)) return null;
   const titleWithinBody = item.body.indexOf(parsed.title) + item.bodyFrom;
   const linePrefix = text.slice(0, candidate.start);
   const titlePrefix = text.slice(0, candidate.start + titleWithinBody);
@@ -141976,8 +141927,7 @@ function taskBlockClassifyChild(line, nestedTaskOpen, globalFilter) {
     const parsed = drawer_body_title(taskReqTrim(body));
     if (parsed) {
       const key = drawer_key(parsed.title);
-      const legacyLog = parsed.marker === "legacy_caps" && DRAWER_LEGACY_LOG_KEYS.has(key);
-      if ((!drawer_is_reserved_key(key) || legacyLog) && !drawer_is_structural_h2_key(key)) {
+      if (!drawer_is_reserved_key(key) && !drawer_is_structural_h2_key(key)) {
         return { type: "drawer", title: parsed.title };
       }
     }
@@ -142205,7 +142155,7 @@ function taskBlockRawFenced(doc) {
   return taskReqDocMemo(doc, "raw-fenced", () => taskReqFencedLines(doc.texts, 0, doc.texts.length));
 }
 
-// `capture_drawers::drawers`: the dual-read drawer headers directly under the
+// `capture_drawers::drawers`: whole-bold drawer headers directly under the
 // task, as `{title, key, line (1-based), lineIndex, indentation, blockEnd,
 // entryCount}`.
 function taskBlockDrawersIn(doc, task) {
@@ -144003,7 +143953,6 @@ module.exports.helpers = {
   countPlannedRewriteLinksByPath,
   applyPlannedBlockIdLinkRewrites,
   getProjectNoteToTaskNoticeText,
-  formatProjectSectionTitle,
   parseProjectSectionBulletTitle,
   normalizeProjectSectionTitle,
   buildProjectSeedFromChildBullets,
@@ -145820,7 +145769,6 @@ try {
   if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
     module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
       drawer_body_title,
-      is_legacy_drawer_title,
       drawer_key,
       recognize_drawer_header,
       heading_for_drawer,

@@ -356,7 +356,7 @@ containing only it are never copied. If backlink rewriting fails, the restored
 task remains and the project note is kept with a notice.
 
 When promoting a task, a bold drawer becomes a `##` keeping its title, empty
-included; a legacy ALL-CAPS child still title-cases only with nested items.
+included. Plain uppercase children remain ordinary tasks or notes.
 Reversal writes `- **Title**`. The converter reuses a matching heading
 case-insensitively or appends a new one; it copies descendants as notes rather
 than `#task` lines. Other eligible child bullets become tasks. Managed logs

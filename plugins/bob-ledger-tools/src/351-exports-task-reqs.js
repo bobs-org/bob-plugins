@@ -3,7 +3,6 @@ try {
   if (module.exports && module.exports.helpers) {
     Object.assign(module.exports.helpers, {
       drawer_body_title,
-      is_legacy_drawer_title,
       drawer_key,
       recognize_drawer_header,
       heading_for_drawer,

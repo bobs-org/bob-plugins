@@ -123,7 +123,6 @@ module.exports.helpers = {
   countPlannedRewriteLinksByPath,
   applyPlannedBlockIdLinkRewrites,
   getProjectNoteToTaskNoticeText,
-  formatProjectSectionTitle,
   parseProjectSectionBulletTitle,
   normalizeProjectSectionTitle,
   buildProjectSeedFromChildBullets,

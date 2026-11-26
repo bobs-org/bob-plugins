@@ -438,9 +438,9 @@ checkbox, or deeper than a task's direct children. Vim insert mode uses the
 same adapter; Vim normal-mode `*` is unchanged.
 
 **Toggle Drawer** (no default hotkey) wraps or unwraps an eligible direct
-child bullet, preserving title bytes and descendants. A legacy ALL-CAPS drawer
-becomes `- **NOTES**` without recasing; unwrapping a bold header yields its
-plain title. Checkbox lines, managed lines, reserved names, invalid or
+child bullet, preserving title bytes and descendants. Unwrapping a bold header
+yields its plain title; wrapping plain uppercase text makes the structure
+explicit. Checkbox lines, managed lines, reserved names, invalid or
 trailing-colon titles, and deeper positions show an actionable notice and
 write nothing. See the [task drawer contract](https://bobs-org.github.io/task-drawers/).
 
@@ -517,6 +517,6 @@ every list.
   lane toggle this plugin hands off to.
 - [Bob Ledger Tools](bob-ledger-tools.md) — the freshness stamper,
   successor-reporting surfaces, and drawer trays.
-- [Task drawers](https://bobs-org.github.io/task-drawers/) — dual-read
-  headers, Notes home, and the limited title round-trip.
+- [Task drawers](https://bobs-org.github.io/task-drawers/) — bold headers,
+  Notes home, and the title round-trip.
 - [Cross-plugin APIs](https://bobs-org.github.io/develop/plugins/plugin-apis/) — the completion and blocked-dependent interface.

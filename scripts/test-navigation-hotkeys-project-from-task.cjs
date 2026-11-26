@@ -4,28 +4,28 @@ const {
   helpers,
 } = require("./navigation-hotkeys-harness.cjs");
 
-test("buildProjectSeedFromChildBullets: an ALL-CAPS bullet becomes a section only when it has nested list items", () => {
+test("buildProjectSeedFromChildBullets: uppercase plain bullets remain ordinary notes", () => {
   const withChildren = helpers.buildProjectSeedFromChildBullets(
     ["  - FUTURE WORK", "    - Must work offline"],
     "2026-08-12",
   );
-  assert.deepEqual(withChildren.taskLines, []);
   assert.deepEqual(withChildren.sections, [
-    { title: "Future Work", noteLines: ["- Must work offline"] },
+    { title: "Notes", noteLines: ["- FUTURE WORK", "  - Must work offline"] },
   ]);
+  assert.deepEqual(withChildren.taskLines, []);
   assert.equal(withChildren.lossless, true);
 
   const withoutChildren = helpers.buildProjectSeedFromChildBullets(
     ["  - FUTURE WORK"],
     "2026-08-12",
   );
-  assert.deepEqual(withoutChildren.taskLines, []);
   assert.deepEqual(withoutChildren.sections, [
     { title: "Notes", noteLines: ["- FUTURE WORK"] },
   ]);
+  assert.deepEqual(withoutChildren.taskLines, []);
 });
 
-test("buildProjectSeedFromChildBullets: a checked ALL-CAPS bullet stays a task even with nested list items", () => {
+test("buildProjectSeedFromChildBullets: a checked uppercase bullet stays a task", () => {
   const result = helpers.buildProjectSeedFromChildBullets(
     ["  - [ ] REQUIREMENTS", "    - Must work offline"],
     "2026-08-12",
@@ -91,14 +91,14 @@ test("buildProjectSeedFromChildBullets keeps schedule-log boundary cases on the 
     "  - Child note",
   ]);
 
-  const plainSection = helpers.buildProjectSeedFromChildBullets(
+  const plainContent = helpers.buildProjectSeedFromChildBullets(
     ["  - SCHEDULE LOG", "    - Preserve as a section note"],
     "2026-08-12",
   );
-  assert.deepEqual(plainSection.managedLogLines, []);
-  assert.deepEqual(plainSection.taskLines, []);
-  assert.deepEqual(plainSection.sections, [
-    { title: "Schedule Log", noteLines: ["- Preserve as a section note"] },
+  assert.deepEqual(plainContent.managedLogLines, []);
+  assert.deepEqual(plainContent.taskLines, []);
+  assert.deepEqual(plainContent.sections, [
+    { title: "Notes", noteLines: ["- SCHEDULE LOG", "  - Preserve as a section note"] },
   ]);
 });
 
@@ -153,7 +153,7 @@ test("buildProjectSeedFromChildBullets routes mixed child blocks to tasks, secti
       "  - [ ] Draft the API",
       "  - 🗓️ **SCHEDULE LOG**",
       "    - *2026-08-05* — waiting on the vendor quote",
-      "  - FUTURE WORK",
+      "  - **FUTURE WORK**",
       "    - Must work offline",
       "  - [ ] Write the migration",
     ],
@@ -166,7 +166,7 @@ test("buildProjectSeedFromChildBullets routes mixed child blocks to tasks, secti
     "- [ ] #task Write the migration [created::2026-08-12]",
   ]);
   assert.deepEqual(result.sections, [
-    { title: "Future Work", noteLines: ["- Must work offline"] },
+    { title: "FUTURE WORK", noteLines: ["- Must work offline"] },
   ]);
   assert.deepEqual(result.managedLogLines, [
     "\t- 🗓️ **SCHEDULE LOG**",
@@ -228,14 +228,14 @@ test("buildProjectSeedFromChildBullets keeps work-log boundary cases on the exis
     "  - Child note",
   ]);
 
-  const plainSection = helpers.buildProjectSeedFromChildBullets(
+  const plainContent = helpers.buildProjectSeedFromChildBullets(
     ["  - WORK LOG", "    - Preserve as a section note"],
     "2026-08-12",
   );
-  assert.deepEqual(plainSection.managedLogLines, []);
-  assert.deepEqual(plainSection.taskLines, []);
-  assert.deepEqual(plainSection.sections, [
-    { title: "Work Log", noteLines: ["- Preserve as a section note"] },
+  assert.deepEqual(plainContent.managedLogLines, []);
+  assert.deepEqual(plainContent.taskLines, []);
+  assert.deepEqual(plainContent.sections, [
+    { title: "Notes", noteLines: ["- WORK LOG", "  - Preserve as a section note"] },
   ]);
 });
 
@@ -302,7 +302,7 @@ test("buildProjectSeedFromChildBullets routes mixed child blocks to tasks, secti
       "  - [ ] Draft the API",
       "  - 🗓️ **SCHEDULE LOG**",
       "    - *2026-08-05* — waiting on the vendor quote",
-      "  - FUTURE WORK",
+      "  - **FUTURE WORK**",
       "    - Must work offline",
       "  - 🛠️ **WORK LOG**",
       "    - *2026-08-15* — Added coverage for the parser",
@@ -317,7 +317,7 @@ test("buildProjectSeedFromChildBullets routes mixed child blocks to tasks, secti
     "- [ ] #task Write the migration [created::2026-08-12]",
   ]);
   assert.deepEqual(result.sections, [
-    { title: "Future Work", noteLines: ["- Must work offline"] },
+    { title: "FUTURE WORK", noteLines: ["- Must work offline"] },
   ]);
   assert.deepEqual(result.managedLogLines, [
     "\t- 🗓️ **SCHEDULE LOG**",
@@ -476,31 +476,27 @@ test("normalizeProjectManagedLogLine falls back to one extra tab for mixed inden
   );
 });
 
-test("parseProjectSectionBulletTitle rejects wikilinks, tags, block IDs, mixed case, snake_case, and inline code", () => {
+test("parseProjectSectionBulletTitle accepts only whole-bold eligible titles", () => {
   assert.equal(helpers.parseProjectSectionBulletTitle("[[SOME_NOTE]]"), null);
   assert.equal(helpers.parseProjectSectionBulletTitle("#TODO"), null);
   assert.equal(
-    helpers.parseProjectSectionBulletTitle("REQUIREMENTS ^abc"),
+    helpers.parseProjectSectionBulletTitle("**REQUIREMENTS** ^abc"),
     null,
   );
   assert.equal(helpers.parseProjectSectionBulletTitle("Mixed Case"), null);
-  assert.equal(helpers.parseProjectSectionBulletTitle("SNAKE_CASE"), null);
+  assert.equal(
+    helpers.parseProjectSectionBulletTitle("**Mixed Case**"),
+    "Mixed Case",
+  );
+  assert.equal(
+    helpers.parseProjectSectionBulletTitle("**SNAKE_CASE**"),
+    "SNAKE_CASE",
+  );
   assert.equal(helpers.parseProjectSectionBulletTitle("`CODE`"), null);
   assert.equal(
-    helpers.parseProjectSectionBulletTitle("REQUIREMENTS"),
-    "Requirements",
+    helpers.parseProjectSectionBulletTitle("**REQUIREMENTS**"),
+    "REQUIREMENTS",
   );
-});
-
-test("formatProjectSectionTitle title-cases without preserving acronyms and collapses whitespace", () => {
-  assert.equal(helpers.formatProjectSectionTitle("FUTURE WORK"), "Future Work");
-  assert.equal(helpers.formatProjectSectionTitle("NON-GOALS"), "Non-Goals");
-  assert.equal(
-    helpers.formatProjectSectionTitle("OPEN   QUESTIONS"),
-    "Open Questions",
-  );
-  assert.equal(helpers.formatProjectSectionTitle("API DESIGN"), "Api Design");
-  assert.equal(helpers.formatProjectSectionTitle("Q&A"), "Q&A");
 });
 
 test("insertProjectSectionNotes fills an empty existing section with a blank line then the notes", () => {
@@ -625,17 +621,17 @@ test("insertProjectSectionNotes creates a new section using the document's CRLF 
 test("buildProjectSeedFromChildBullets merges drawers with equally-normalized titles in source order", () => {
   const result = helpers.buildProjectSeedFromChildBullets(
     [
-      "  - OPEN QUESTIONS",
+      "  - **OPEN QUESTIONS**",
       "    - Who owns rollout?",
       "  - [ ] Draft the API",
-      "  - OPEN  QUESTIONS",
+      "  - **OPEN  QUESTIONS**",
       "    - What about backfill?",
     ],
     "2026-08-12",
   );
   assert.deepEqual(result.sections, [
     {
-      title: "Open Questions",
+      title: "OPEN QUESTIONS",
       noteLines: ["- Who owns rollout?", "- What about backfill?"],
     },
   ]);
@@ -644,17 +640,17 @@ test("buildProjectSeedFromChildBullets merges drawers with equally-normalized ti
   ]);
 });
 
-test("a Bob-written drawer promotes to a title-case section and reverses to the same drawer key", () => {
+test("a Bob-written bold drawer promotes and reverses with its authored title", () => {
   // bob capture writes a new drawer as a two-space child bullet, with its
   // contents nested four spaces beneath it.
-  const drawerLines = ["  - API DESIGN", "    - Must stay backward compatible"];
+  const drawerLines = ["  - **API DESIGN**", "    - Must stay backward compatible"];
   const seeded = helpers.buildProjectSeedFromChildBullets(
     drawerLines,
     "2026-08-12",
   );
   assert.deepEqual(seeded.sections, [
     {
-      title: "Api Design",
+      title: "API DESIGN",
       noteLines: ["- Must stay backward compatible"],
     },
   ]);
@@ -678,7 +674,7 @@ test("a Bob-written drawer promotes to a title-case section and reverses to the 
     { description: "Ship the API", priority: null },
     { sections: seeded.sections },
   );
-  assert.match(promoted.content, /## Api Design\n\n- Must stay backward compatible/);
+  assert.match(promoted.content, /## API DESIGN\n\n- Must stay backward compatible/);
 
   const reversed = helpers.buildTaskBlockFromProjectNote(promoted.content, {
     noteBasename: "Engineering_api",
@@ -686,13 +682,13 @@ test("a Bob-written drawer promotes to a title-case section and reverses to the 
     now: new Date("2026-08-12T12:00:00Z"),
   });
   assert.equal(reversed.valid, true, reversed.error || "project reversal failed");
-  assert.ok(reversed.lines.includes("\t- **Api Design**"));
+  assert.ok(reversed.lines.includes("\t- **API DESIGN**"));
   assert.ok(reversed.lines.includes("\t\t- Must stay backward compatible"));
 });
 
-test("a punctuated WHAT IS SASE? drawer promotes to title case and reverses to the same drawer key", () => {
+test("a punctuated bold drawer promotes and reverses with its authored title", () => {
   const drawerLines = [
-    "  - WHAT IS SASE?",
+    "  - **WHAT IS SASE?**",
     "    - Why does capture need it?",
   ];
   const seeded = helpers.buildProjectSeedFromChildBullets(
@@ -701,7 +697,7 @@ test("a punctuated WHAT IS SASE? drawer promotes to title case and reverses to t
   );
   assert.deepEqual(seeded.sections, [
     {
-      title: "What Is Sase?",
+      title: "WHAT IS SASE?",
       noteLines: ["- Why does capture need it?"],
     },
   ]);
@@ -727,7 +723,7 @@ test("a punctuated WHAT IS SASE? drawer promotes to title case and reverses to t
   );
   assert.match(
     promoted.content,
-    /## What Is Sase\?\n\n- Why does capture need it\?/,
+    /## WHAT IS SASE\?\n\n- Why does capture need it\?/,
   );
 
   const reversed = helpers.buildTaskBlockFromProjectNote(promoted.content, {
@@ -736,7 +732,7 @@ test("a punctuated WHAT IS SASE? drawer promotes to title case and reverses to t
     now: new Date("2026-08-12T12:00:00Z"),
   });
   assert.equal(reversed.valid, true, reversed.error || "project reversal failed");
-  assert.ok(reversed.lines.includes("\t- **What Is Sase?**"));
+  assert.ok(reversed.lines.includes("\t- **WHAT IS SASE?**"));
   assert.ok(reversed.lines.includes("\t\t- Why does capture need it?"));
 
   // Excluded forms never become sections.
@@ -748,11 +744,11 @@ test("a punctuated WHAT IS SASE? drawer promotes to title case and reverses to t
 test("buildProjectSeedFromChildBullets splits a mixed child block into tasks and sections, preserving relative note depth verbatim", () => {
   const childLines = [
     "  - [ ] Draft the API",
-    "  - FUTURE WORK",
+    "  - **FUTURE WORK**",
     "    - Must work offline",
     "    - p95 under 200ms",
     "      - measured at the edge",
-    "  - OPEN QUESTIONS",
+    "  - **OPEN QUESTIONS**",
     "    - Who owns rollout?",
     "  - [ ] Write the migration",
   ];
@@ -769,7 +765,7 @@ test("buildProjectSeedFromChildBullets splits a mixed child block into tasks and
   ]);
   assert.deepEqual(result.sections, [
     {
-      title: "Future Work",
+      title: "FUTURE WORK",
       noteLines: [
         "- Must work offline",
         "- p95 under 200ms",
@@ -777,7 +773,7 @@ test("buildProjectSeedFromChildBullets splits a mixed child block into tasks and
       ],
     },
     {
-      title: "Open Questions",
+      title: "OPEN QUESTIONS",
       noteLines: ["- Who owns rollout?"],
     },
   ]);
@@ -1239,7 +1235,7 @@ test("promotion: loose notes and NOTES merge into one ## Notes section", () => {
       "  - [ ] Handles supported inputs",
       "    - Morgan reported the original issue.",
       "  - Loose note on the source",
-      "  - NOTES",
+      "  - **NOTES**",
       "    - Filed note from the drawer",
     ],
     "2026-08-12",

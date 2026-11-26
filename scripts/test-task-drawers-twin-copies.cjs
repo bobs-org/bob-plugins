@@ -1,4 +1,4 @@
-// Shared dual-read task-drawer twin and rollout fixture checks.
+// Shared bold-only task-drawer twin and contract fixture checks.
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -64,11 +64,12 @@ test("four source fragments, manifests, bundles, fixtures, and exports stay in s
     assert.ok(fs.readFileSync(fragmentPath(entry.id, entry.fragment)).equals(canonical), `${entry.id} source matches the cycler byte for byte`);
     const source = fs.readFileSync(fragmentPath(entry.id, entry.fragment), "utf8");
     const bundle = fs.readFileSync(path.join(PLUGINS, entry.id, "main.js"), "utf8");
-    assert.match(source, /bob-task-drawer-dual-read-v1/);
+    assert.match(source, /bob-task-drawer-bold-only-v1/);
     assert.ok(bundle.includes(`// ---- src/${entry.fragment} ----\n${source}`), `${entry.id} bundle contains its built twin`);
-    for (const helper of ["drawer_body_title", "is_legacy_drawer_title", "drawer_key", "recognize_drawer_header", "heading_for_drawer", "drawer_for_heading", "can_create_drawer"]) {
+    for (const helper of ["drawer_body_title", "drawer_key", "recognize_drawer_header", "heading_for_drawer", "drawer_for_heading", "can_create_drawer"]) {
       assert.equal(typeof entry.helpers[helper], "function", `${entry.id} exports ${helper}`);
     }
+    assert.equal("is_legacy_drawer_title" in entry.helpers, false, `${entry.id} does not export an ALL-CAPS drawer predicate`);
     const copiedFixtureDir = drawerFixtureDir(entry.id);
     for (const name of DRAWER_FILES) {
       assert.ok(
@@ -156,8 +157,8 @@ test("bold Notes is reused verbatim and new Notes writers are bold", () => {
   assert.match(created.updated, /^  - \*\*Notes\*\*$/m);
   assert.doesNotMatch(created.updated, /^  - NOTES$/m);
 
-  // Existing legacy headers are reused verbatim, never respelled on write.
-  const legacyContents = [
+  // Plain uppercase content remains ordinary content beside a new bold drawer.
+  const plainContents = [
     "- [ ] #task Parent ^parent",
     "  - [ ] requirement",
     "  - NOTES",
@@ -165,12 +166,11 @@ test("bold Notes is reused verbatim and new Notes writers are bold", () => {
     "  - loose note",
     "",
   ].join("\n");
-  const legacyTask = cycler.taskBlockFindTask(legacyContents, 0);
-  const legacyFiled = cycler.taskBlockFileIntoNotes(legacyContents, 0, [{ lines: ["  - filed note\n"], indent: "  " }]);
-  assert.ok(legacyFiled);
-  assert.match(legacyFiled.updated, /^  - NOTES$/m);
-  assert.doesNotMatch(legacyFiled.updated, /\*\*Notes\*\*/);
-  assert.equal((legacyFiled.updated.match(/^  - NOTES$/mg) || []).length, 1);
+  const plainFiled = cycler.taskBlockFileIntoNotes(plainContents, 0, [{ lines: ["  - filed note\n"], indent: "  " }]);
+  assert.ok(plainFiled);
+  assert.match(plainFiled.updated, /^  - NOTES$/m);
+  assert.match(plainFiled.updated, /^  - \*\*Notes\*\*$/m);
+  assert.match(plainFiled.updated, /- filed note/);
 
   // Mixed-case bold headers are reused verbatim; first-note birth creates
   // exactly one bold home and never duplicates it.
@@ -207,7 +207,8 @@ test("promotion reads bold true-case titles verbatim and task-split labels decod
   for (const title of ["API Design", "C++ Notes", "Q1: Goals", "Café"]) {
     assert.equal(nav.parseProjectSectionBulletTitle(`**${title}**`), title);
   }
-  assert.equal(nav.parseProjectSectionBulletTitle("API DESIGN"), "Api Design");
+  assert.equal(nav.parseProjectSectionBulletTitle("API DESIGN"), null);
+  assert.equal(nav.parseProjectSectionBulletTitle("**API DESIGN**"), "API DESIGN");
 
   const files = {
     "db.md": "- [ ] #task Parent ^parent\n  - **API Design**\n    - Draft endpoint\n    - **Nested bold note**\n      - detail\n",

@@ -21305,7 +21305,7 @@ installBlockIdPromptMixins(BlockIdPromptPlugin, [
 // ---- src/164a-task-drawers-twin.js ----
 // Shared task-drawer reader twin. The bob-cli fixtures are authoritative;
 // copy this fragment byte for byte to every plugin that reads task blocks.
-// Marker searched by the reader-rollout phase: bob-task-drawer-dual-read-v1
+// Marker for the bold-only reader contract: bob-task-drawer-bold-only-v1
 
 const DRAWER_RESERVED_KEYS = new Set([
   "SCHEDULE LOG", "WORK LOG", "ROTTEN LOG", "CANCEL LOG",
@@ -21313,25 +21313,10 @@ const DRAWER_RESERVED_KEYS = new Set([
   "TASKS", "NEXT & IN PROGRESS", "BLOCKED", "DONE & CANCELED",
   "POMODOROS", "EVENTS", "HIGHLIGHTS", "AREAS", "NOTEBOOKS", "ALBUMS", "PROJECTS",
 ]);
-const DRAWER_LEGACY_LOG_KEYS = new Set(["SCHEDULE LOG", "WORK LOG", "ROTTEN LOG"]);
 const DRAWER_STRUCTURAL_H2_KEYS = new Set([
   "TASKS", "NEXT & IN PROGRESS", "BLOCKED", "DONE & CANCELED", "POMODOROS",
   "EVENTS", "HIGHLIGHTS", "AREAS", "NOTEBOOKS", "ALBUMS", "PROJECTS",
 ]);
-
-function is_legacy_drawer_title(title) {
-  const chars = Array.from(String(title == null ? "" : title));
-  if (!chars.length || !((chars[0] >= "A" && chars[0] <= "Z") || (chars[0] >= "0" && chars[0] <= "9"))) return false;
-  let hasLetter = chars[0] >= "A" && chars[0] <= "Z";
-  for (let index = 1; index < chars.length; index += 1) {
-    const character = chars[index];
-    const isLast = index === chars.length - 1;
-    const asciiLead = (character >= "A" && character <= "Z") || (character >= "0" && character <= "9");
-    if (!asciiLead && !" \t&'(),./-?!;".includes(character) && !(character === ":" && isLast)) return false;
-    if (character >= "A" && character <= "Z") hasLetter = true;
-  }
-  return hasLetter;
-}
 
 function drawer_key(title) {
   return String(title == null ? "" : title).trim().replace(/\s+/gu, " ").toUpperCase();
@@ -21341,7 +21326,6 @@ function drawer_body_title(body) {
   const value = String(body == null ? "" : body);
   if (/^\[[^\]\r\n]\][ \t]+/u.test(value)) return null;
   const trimmed = value.trim();
-  if (is_legacy_drawer_title(trimmed)) return { title: trimmed, marker: "legacy_caps" };
   if (!trimmed.startsWith("**") || !trimmed.endsWith("**")) return null;
   const title = trimmed.slice(2, -2);
   if (!title || /[\r\n*]/u.test(title) || title.trim() !== title || title.endsWith(":")) return null;
@@ -21372,13 +21356,8 @@ function can_create_drawer(title, hasContent) {
   return { ok: true };
 }
 
-function drawer_title_case_legacy(title) {
-  return String(title || "").trim().replace(/\s+/g, " ").toLowerCase()
-    .replace(/[a-z0-9]+/g, (run) => run.charAt(0).toUpperCase() + run.slice(1));
-}
-
-function heading_for_drawer(title, marker) {
-  return marker === "legacy_caps" ? drawer_title_case_legacy(title) : String(title || "");
+function heading_for_drawer(title) {
+  return String(title || "");
 }
 
 function drawer_for_heading(title) {
@@ -21542,8 +21521,7 @@ function recognize_drawer_header(contents, task, line_index) {
   const parsed = drawer_body_title(item.body);
   if (!parsed) return null;
   const key = drawer_key(parsed.title);
-  const legacyLog = parsed.marker === "legacy_caps" && DRAWER_LEGACY_LOG_KEYS.has(key);
-  if ((drawer_is_reserved_key(key) && !legacyLog) || drawer_is_structural_h2_key(key)) return null;
+  if (drawer_is_reserved_key(key) || drawer_is_structural_h2_key(key)) return null;
   const titleWithinBody = item.body.indexOf(parsed.title) + item.bodyFrom;
   const linePrefix = text.slice(0, candidate.start);
   const titlePrefix = text.slice(0, candidate.start + titleWithinBody);
@@ -22793,7 +22771,6 @@ module.exports.helpers = {
 // drift test.
 Object.assign(module.exports.helpers, {
   drawer_body_title,
-  is_legacy_drawer_title,
   drawer_key,
   recognize_drawer_header,
   heading_for_drawer,

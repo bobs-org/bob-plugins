@@ -30,6 +30,7 @@ class BobLedgerToolsTaskLinkMarksMixin {
     this.setupProgressMarks();
     this.setupLedgerTypeMarks();
     this.setupTodayMarks();
+    this.setupSnoozeMarks();
     this.setupTaskLinkMarks();
     this.setupOffClockLinkChips();
     this.setupBlockMarks();

@@ -85,6 +85,11 @@ class BobLedgerToolsSnoozeMarksMixin {
       } catch (error) {
         // Reading-view wiring is best-effort.
       }
+      try {
+        if (typeof this.setupSnoozeWokenPills === "function") this.setupSnoozeWokenPills();
+      } catch (error) {
+        // Woken-link paint is best-effort.
+      }
       this.scheduleSnoozeMarksRefresh();
     } catch (error) {
       // Setup never breaks plugin startup.
@@ -677,6 +682,12 @@ class BobLedgerToolsSnoozeMarksMixin {
       }
     } catch (error) {
       // Reading sweep is best-effort.
+    }
+    try {
+      if (typeof this.refreshSnoozeWokenPillEditors === "function") this.refreshSnoozeWokenPillEditors();
+      if (typeof this.refreshSnoozeWokenPillReadingViews === "function") this.refreshSnoozeWokenPillReadingViews();
+    } catch (error) {
+      // Woken-link refresh shares the snooze display lifecycle.
     }
   }
 

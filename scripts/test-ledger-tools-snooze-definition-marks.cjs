@@ -810,7 +810,7 @@ test("toggle: flipping the snooze gate hides clocks and mirrors popouts", () => 
   assert.ok(plugin.snoozeMarksEnabled);
   assert.ok(commands.some((command) => command.id === "toggle-snooze-marks"));
   assert.ok(commands.some((command) => command.id === "go-to-snoozed-row"));
-  assert.equal(extensions.length, 1);
+  assert.equal(extensions.length, 2);
   assert.deepEqual(applied[0], ["bob-snooze-marks-off", false]);
   assert.equal(synced[0][0], "bob-snooze-marks-off");
   assert.equal(synced[0][1], false);

@@ -215,8 +215,25 @@ class BobLedgerToolsSnoozeMarksJumpMixin {
           path: dailyPath,
         });
       } else {
-        const opened = await openTodayDailyNoteWithState(this.app);
-        markdownView = opened && opened.view ? opened.view : null;
+        const file = this.app && this.app.vault && typeof this.app.vault.getAbstractFileByPath === "function"
+          ? this.app.vault.getAbstractFileByPath(dailyPath)
+          : null;
+        const workspace = this.app && this.app.workspace;
+        if (file && workspace && typeof workspace.getLeaf === "function") {
+          const leaf = workspace.getLeaf("tab");
+          if (leaf && typeof leaf.openFile === "function") {
+            await leaf.openFile(file);
+            markdownView = leaf.view || null;
+          }
+        } else {
+          let isToday = false;
+          try { isToday = snoozedNoteDateFromDailyPath(dailyPath) === formatLocalDate(new Date()); }
+          catch (error) { isToday = false; }
+          if (isToday) {
+            const opened = await openTodayDailyNoteWithState(this.app);
+            markdownView = opened && opened.view ? opened.view : null;
+          }
+        }
       }
       if (!markdownView || !markdownView.editor) {
         new Notice("Could not open daily note");
@@ -242,15 +259,20 @@ class BobLedgerToolsSnoozeMarksJumpMixin {
         );
         return false;
       }
+      let targetLine = lineNumber;
+      if (notices && typeof notices.findLine === "function") {
+        try { targetLine = notices.findLine(content, lineNumber); }
+        catch (error) { targetLine = null; }
+      }
       const lines = content.split(/\r?\n/);
-      if (lineNumber >= lines.length) {
+      if (!Number.isInteger(targetLine) || targetLine < 0 || targetLine >= lines.length) {
         new Notice(
           (notices && notices.vanished) ||
             "This task's Snoozed row is no longer in today's note",
         );
         return false;
       }
-      const cursor = { line: lineNumber, ch: column };
+      const cursor = { line: targetLine, ch: column };
       try {
         if (typeof markdownView.editor.setCursor === "function") {
           markdownView.editor.setCursor(cursor);
@@ -258,7 +280,7 @@ class BobLedgerToolsSnoozeMarksJumpMixin {
           const cm = getEditorViewFromEditor(markdownView.editor);
           const line =
             cm && cm.state && cm.state.doc
-              ? cm.state.doc.line(lineNumber + 1)
+              ? cm.state.doc.line(targetLine + 1)
               : null;
           if (line && cm && typeof cm.dispatch === "function") {
             cm.dispatch({
@@ -273,7 +295,7 @@ class BobLedgerToolsSnoozeMarksJumpMixin {
       try {
         centered = centerEditorViewOnPosition(
           getEditorViewFromEditor(markdownView.editor),
-          lineNumber,
+          targetLine,
           column,
         );
       } catch (error) {
@@ -281,7 +303,7 @@ class BobLedgerToolsSnoozeMarksJumpMixin {
       }
       if (!centered) {
         try {
-          scrollEditorIntoView(markdownView.editor, lineNumber, column);
+          scrollEditorIntoView(markdownView.editor, targetLine, column);
         } catch (error) {
           // Scrolling is best-effort.
         }

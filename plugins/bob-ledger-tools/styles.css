@@ -3413,6 +3413,74 @@ body.bob-snooze-marks-off .bob-snooze-mark {
   display: none;
 }
 
+/* Woken ledger links: display-only history pills reuse the definition
+   alarm glyph, keep generated text out of copied Markdown, and fit in the
+   existing line box. Fresh wakes use amber-gold; settled history keeps a
+   quiet outline so state is still visible without color. */
+.bob-snooze-woke {
+  display: inline-flex;
+  align-items: center;
+  margin-inline-end: 0.35em;
+  border-radius: 999px;
+  padding-inline: 0.18em;
+  font-size: 0.85em;
+  line-height: 1;
+  vertical-align: -0.14em;
+  white-space: nowrap;
+  user-select: none;
+  cursor: default;
+  font-variant-numeric: tabular-nums;
+  print-color-adjust: exact;
+}
+
+.bob-snooze-woke::before {
+  content: var(--bob-snooze-mark-glyph, "⏰");
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+  font-variant-emoji: emoji;
+  line-height: 1;
+}
+
+.bob-snooze-woke::after {
+  content: " woke " attr(data-bob-snooze-woke-time);
+  line-height: 1;
+  margin-inline-start: 0.18em;
+}
+
+.bob-snooze-woke--fresh {
+  color: color-mix(in srgb, var(--text-warning, #e7a43d) 88%, #f3c96b);
+  background-color: color-mix(in srgb, var(--text-warning, #e7a43d) 12%, transparent);
+}
+
+.bob-snooze-woke--settled,
+.bob-snooze-woke--quiet {
+  color: var(--text-muted, #8b8fa3);
+  outline: 1px solid color-mix(in srgb, var(--text-muted, #8b8fa3) 42%, transparent);
+  outline-offset: -1px;
+}
+
+body.bob-snooze-marks-off .bob-snooze-woke {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bob-snooze-woke {
+    animation: none;
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .bob-snooze-woke,
+  .bob-snooze-woke--fresh,
+  .bob-snooze-woke--settled,
+  .bob-snooze-woke--quiet {
+    color: CanvasText;
+    background: Canvas;
+    outline: 1px solid CanvasText;
+    outline-offset: -1px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .bob-progress-mark {
     animation: none;

@@ -143,7 +143,7 @@ test("screenshot inventory covers the required light/dark × narrow/wide matrix"
   assert.ok(needed.includes("day-live-light-wide"));
   assert.ok(needed.includes("bank-reading-dark-narrow"));
   assert.ok(needed.includes("ordinary-add-light-wide"));
-  assert.equal(needed.length, 44);
+  assert.equal(needed.length, 9 * 2 * 2 * 2 + 2 * 2);
   assert.equal(lib.screenshotNeeds("bank").length, 8);
   assert.ok(lib.screenshotNeeds("bank").every((name) => name.startsWith("bank-")));
 });

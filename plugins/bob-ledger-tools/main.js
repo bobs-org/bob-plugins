@@ -148665,6 +148665,7 @@ class BobLedgerToolsProgressMarksReadingMixin {
                 "bob-keep-moving-mark",
                 "bob-off-clock-link-chip",
                 "bob-event-link-time",
+                "bob-snooze-woke",
                 "bob-today-mark",
                 "list-bullet",
                 "list-collapse-indicator",
@@ -167943,6 +167944,11 @@ class BobLedgerToolsSnoozeMarksMixin {
       } catch (error) {
         // Reading-view wiring is best-effort.
       }
+      try {
+        if (typeof this.setupSnoozeWokenPills === "function") this.setupSnoozeWokenPills();
+      } catch (error) {
+        // Woken-link paint is best-effort.
+      }
       this.scheduleSnoozeMarksRefresh();
     } catch (error) {
       // Setup never breaks plugin startup.
@@ -168535,6 +168541,12 @@ class BobLedgerToolsSnoozeMarksMixin {
       }
     } catch (error) {
       // Reading sweep is best-effort.
+    }
+    try {
+      if (typeof this.refreshSnoozeWokenPillEditors === "function") this.refreshSnoozeWokenPillEditors();
+      if (typeof this.refreshSnoozeWokenPillReadingViews === "function") this.refreshSnoozeWokenPillReadingViews();
+    } catch (error) {
+      // Woken-link refresh shares the snooze display lifecycle.
     }
   }
 
@@ -169416,8 +169428,25 @@ class BobLedgerToolsSnoozeMarksJumpMixin {
           path: dailyPath,
         });
       } else {
-        const opened = await openTodayDailyNoteWithState(this.app);
-        markdownView = opened && opened.view ? opened.view : null;
+        const file = this.app && this.app.vault && typeof this.app.vault.getAbstractFileByPath === "function"
+          ? this.app.vault.getAbstractFileByPath(dailyPath)
+          : null;
+        const workspace = this.app && this.app.workspace;
+        if (file && workspace && typeof workspace.getLeaf === "function") {
+          const leaf = workspace.getLeaf("tab");
+          if (leaf && typeof leaf.openFile === "function") {
+            await leaf.openFile(file);
+            markdownView = leaf.view || null;
+          }
+        } else {
+          let isToday = false;
+          try { isToday = snoozedNoteDateFromDailyPath(dailyPath) === formatLocalDate(new Date()); }
+          catch (error) { isToday = false; }
+          if (isToday) {
+            const opened = await openTodayDailyNoteWithState(this.app);
+            markdownView = opened && opened.view ? opened.view : null;
+          }
+        }
       }
       if (!markdownView || !markdownView.editor) {
         new Notice("Could not open daily note");
@@ -169443,15 +169472,20 @@ class BobLedgerToolsSnoozeMarksJumpMixin {
         );
         return false;
       }
+      let targetLine = lineNumber;
+      if (notices && typeof notices.findLine === "function") {
+        try { targetLine = notices.findLine(content, lineNumber); }
+        catch (error) { targetLine = null; }
+      }
       const lines = content.split(/\r?\n/);
-      if (lineNumber >= lines.length) {
+      if (!Number.isInteger(targetLine) || targetLine < 0 || targetLine >= lines.length) {
         new Notice(
           (notices && notices.vanished) ||
             "This task's Snoozed row is no longer in today's note",
         );
         return false;
       }
-      const cursor = { line: lineNumber, ch: column };
+      const cursor = { line: targetLine, ch: column };
       try {
         if (typeof markdownView.editor.setCursor === "function") {
           markdownView.editor.setCursor(cursor);
@@ -169459,7 +169493,7 @@ class BobLedgerToolsSnoozeMarksJumpMixin {
           const cm = getEditorViewFromEditor(markdownView.editor);
           const line =
             cm && cm.state && cm.state.doc
-              ? cm.state.doc.line(lineNumber + 1)
+              ? cm.state.doc.line(targetLine + 1)
               : null;
           if (line && cm && typeof cm.dispatch === "function") {
             cm.dispatch({
@@ -169474,7 +169508,7 @@ class BobLedgerToolsSnoozeMarksJumpMixin {
       try {
         centered = centerEditorViewOnPosition(
           getEditorViewFromEditor(markdownView.editor),
-          lineNumber,
+          targetLine,
           column,
         );
       } catch (error) {
@@ -169482,7 +169516,7 @@ class BobLedgerToolsSnoozeMarksJumpMixin {
       }
       if (!centered) {
         try {
-          scrollEditorIntoView(markdownView.editor, lineNumber, column);
+          scrollEditorIntoView(markdownView.editor, targetLine, column);
         } catch (error) {
           // Scrolling is best-effort.
         }
@@ -172691,6 +172725,7 @@ class BobLedgerToolsTaskLinkMarksMixin {
     this.setupProgressMarks();
     this.setupLedgerTypeMarks();
     this.setupTodayMarks();
+    this.setupSnoozeMarks();
     this.setupTaskLinkMarks();
     this.setupOffClockLinkChips();
     this.setupBlockMarks();
@@ -179999,6 +180034,888 @@ class BobLedgerToolsEventLinkTimesReadingMixin {
     } catch (error) {
       return false;
     }
+  }
+}
+// ---- src/291g-snooze-woken-pills.js ----
+// Snoozed wake-history pills: pure presentation model and Live Preview host.
+// The shared Snoozed parser supplies exact history rows; the ledger parser
+// supplies exact Task Link lines. Nothing here writes note text.
+
+const SNOOZE_WOKEN_SIDE = -3;
+const SNOOZE_WOKEN_CLICK_HINT = "Ctrl-click to open the struck row";
+
+function snoozeWokenTimeMinutes(value, allowColon = true) {
+  try {
+    const text = String(value == null ? "" : value).trim();
+    const match = allowColon
+      ? /^(\d{2}):?(\d{2})$/.exec(text)
+      : /^(\d{2})(\d{2})$/.exec(text);
+    if (!match) return null;
+    const hour = Number(match[1]);
+    const minute = Number(match[2]);
+    if (hour > 23 || minute > 59) return null;
+    return hour * 60 + minute;
+  } catch (error) {
+    return null;
+  }
+}
+
+function snoozeWokenTimeLabel(value) {
+  try {
+    const minutes = snoozeWokenTimeMinutes(value);
+    if (minutes === null) return null;
+    return String(Math.floor(minutes / 60)).padStart(2, "0") + ":" +
+      String(minutes % 60).padStart(2, "0");
+  } catch (error) {
+    return null;
+  }
+}
+
+function snoozeWokenOutcome(wokeMinutes, targetMinutes) {
+  try {
+    let delta = wokeMinutes - targetMinutes;
+    if (delta > 720) delta -= 1440;
+    if (delta < -720) delta += 1440;
+    if (delta === 0) return "on time";
+    return Math.abs(delta) + "m " + (delta < 0 ? "early" : "late");
+  } catch (error) {
+    return "on time";
+  }
+}
+
+function snoozeWokenNone() {
+  return Object.freeze({ pill: "none", text: null, tooltip: null, navigates_to: null });
+}
+
+// Pure contract adapter for the canonical SM-W vectors. Runtime builders
+// resolve each target and pass only history rows with the same canonical
+// path/block identity. Optional `link.route` makes that identity explicit
+// for callers that have already resolved it.
+function snoozeWokenPillModel(input = {}) {
+  try {
+    const source = input && typeof input === "object" ? input : {};
+    const link = source.link && typeof source.link === "object" ? source.link : {};
+    const entry = source.entry && typeof source.entry === "object" ? source.entry : {};
+    const toggles = source.toggles && typeof source.toggles === "object" ? source.toggles : {};
+    if (toggles.snooze_marks === false || toggles.snoozeMarks === false) return snoozeWokenNone();
+    if (entry.open !== true || source.active_row_for_identity === true) return snoozeWokenNone();
+    if (
+      link.struck === true || link.is_event === true || link.is_prose === true ||
+      link.is_embed === true || link.in_fence === true ||
+      source.resolution !== "found" ||
+      (link.aliased !== undefined && link.aliased !== true && link.aliased !== false) ||
+      (source.target_status !== "*" && source.target_status !== "/")
+    ) return snoozeWokenNone();
+    const block = String(link.block || "");
+    const note = String(source.note || "");
+    const noteDate = String(source.note_date || "");
+    const today = String(source.today || "");
+    const nowMinutes = snoozeWokenTimeMinutes(source.now);
+    if (!block || !note || !/^\d{4}-\d{2}-\d{2}$/.test(noteDate) ||
+        !/^\d{4}-\d{2}-\d{2}$/.test(today) || nowMinutes === null || noteDate > today) {
+      return snoozeWokenNone();
+    }
+    const wantedRoute = typeof link.route === "string" ? link.route : null;
+    const candidates = [];
+    for (const row of Array.isArray(source.history) ? source.history : []) {
+      try {
+        if (!row || String(row.block || "") !== block) continue;
+        if (wantedRoute !== null && String(row.route || "") !== wantedRoute) continue;
+        const wokeMinutes = snoozeWokenTimeMinutes(row.woke_at);
+        const targetMinutes = snoozeWokenTimeMinutes(row.target, false);
+        if (wokeMinutes === null || targetMinutes === null || !Number.isInteger(row.line) || row.line < 1) continue;
+        candidates.push({ row, wokeMinutes, targetMinutes });
+      } catch (error) {
+        continue;
+      }
+    }
+    if (!candidates.length) return snoozeWokenNone();
+    candidates.sort((left, right) =>
+      left.wokeMinutes - right.wokeMinutes || Number(left.row.line) - Number(right.row.line),
+    );
+    const latest = candidates[candidates.length - 1];
+    const woke = snoozeWokenTimeLabel(latest.row.woke_at);
+    const target = snoozeWokenTimeLabel(latest.row.target);
+    if (!woke || !target) return snoozeWokenNone();
+    const age = nowMinutes - latest.wokeMinutes;
+    if (noteDate === today && age < 0) return snoozeWokenNone();
+    const pill = noteDate < today ? "quiet" : age < 60 ? "fresh" : "settled";
+    const text = "⏰ woke " + woke;
+    const tooltip = ("Woke " + woke + " (snoozed until " + target + ", " +
+      snoozeWokenOutcome(latest.wokeMinutes, latest.targetMinutes) + ")\n" +
+      SNOOZE_WOKEN_CLICK_HINT).replace(/::/g, ":");
+    return Object.freeze({
+      pill,
+      text,
+      tooltip,
+      navigates_to: Object.freeze({ note, line: latest.row.line }),
+    });
+  } catch (error) {
+    return snoozeWokenNone();
+  }
+}
+
+// Empty host: generated words stay out of copy/yank output and source
+// positions. `model` is the current, path-resolved display result.
+function buildSnoozeWokenElement(doc, model) {
+  try {
+    if (!doc || typeof doc.createElement !== "function" || !model || model.pill === "none") return null;
+    const target = model.navigates_to && typeof model.navigates_to === "object" ? model.navigates_to : {};
+    const host = doc.createElement("span");
+    host.setAttribute("class", "bob-snooze-woke bob-snooze-woke--" + String(model.pill));
+    host.setAttribute("role", "img");
+    host.setAttribute("aria-label", String(model.tooltip || "Woken task history").replace(/::/g, ":"));
+    host.setAttribute("data-tooltip-position", "top");
+    host.setAttribute("data-bob-snooze-woke-time", String(model.text || "").replace(/^⏰ woke /, ""));
+    host.setAttribute("data-bob-snooze-woke-note", String(target.note || ""));
+    host.setAttribute("data-bob-snooze-woke-line", String(target.line || ""));
+    return host;
+  } catch (error) {
+    return null;
+  }
+}
+
+let SnoozeWokenWidget = null;
+if (WidgetType && typeof WidgetType === "function") {
+  SnoozeWokenWidget = class extends WidgetType {
+    constructor(model, sourcePath, targetPath, blockId, onJump) {
+      super();
+      this.model = model || snoozeWokenNone();
+      this.sourcePath = String(sourcePath || "");
+      this.targetPath = String(targetPath || "");
+      this.blockId = String(blockId || "");
+      this.onJump = typeof onJump === "function" ? onJump : null;
+      this.key = [this.model.pill, this.model.text, this.model.tooltip,
+        this.model.navigates_to && this.model.navigates_to.line,
+        this.sourcePath, this.targetPath, this.blockId].join("|");
+    }
+
+    eq(other) {
+      return Boolean(other && other instanceof SnoozeWokenWidget && other.key === this.key);
+    }
+
+    toDOM(view) {
+      let host = null;
+      try {
+        host = buildSnoozeWokenElement(typeof document !== "undefined" ? document : null, this.model);
+      } catch (error) {
+        host = null;
+      }
+      if (!host) {
+        try { return typeof document !== "undefined" ? document.createElement("span") : null; }
+        catch (error) { return null; }
+      }
+      const self = this;
+      try {
+        host.addEventListener("mousedown", (event) => {
+          try {
+            if (event && event.button !== undefined && event.button !== 0) return;
+            const isMac = Boolean(Platform && Platform.isMacOS);
+            const modified = typeof todayMarkModifierPressed === "function"
+              ? todayMarkModifierPressed(event, isMac)
+              : (isMac ? Boolean(event && event.metaKey) : Boolean(event && event.ctrlKey));
+            if (modified) {
+              if (event && typeof event.preventDefault === "function") event.preventDefault();
+              if (event && typeof event.stopPropagation === "function") event.stopPropagation();
+              if (self.onJump) self.onJump(self.model.navigates_to, self.targetPath, self.blockId);
+              return;
+            }
+            if (event && typeof event.preventDefault === "function") event.preventDefault();
+            const anchor = view && typeof view.posAtDOM === "function" ? view.posAtDOM(host) : null;
+            if (Number.isInteger(anchor) && view && typeof view.dispatch === "function") {
+              view.dispatch({ selection: { anchor } });
+            }
+            if (view && typeof view.focus === "function") view.focus();
+          } catch (error) {
+            // A failed gesture never affects the document.
+          }
+        });
+      } catch (error) {
+        // A listener-free host still paints.
+      }
+      return host;
+    }
+  };
+}
+// ---- src/291h-plugin-snooze-woken-pills.js ----
+// Snoozed wake-history pills in Live Preview. The source doc is scanned
+// once per build; link paths and task identities are memoized within that
+// build. The existing snooze refresh effect drives minute/cache updates.
+function snoozeWokenEntryIsOpen(lines, index) {
+  try {
+    const memo = taskLinkMarkMemoizedSection(lines);
+    const section = memo && memo.section;
+    if (!section || index <= section.start || index > section.end) return false;
+    for (let at = index - 1; at >= section.start; at -= 1) {
+      const line = String(lines[at] || "");
+      if (line.trim() === "") return false;
+      if (/^[ \t]/.test(line)) {
+        if (!todayIsSubBulletLine(line)) return false;
+        continue;
+      }
+      const entry = planParseEntry(line);
+      return Boolean(entry && entry.state === "open");
+    }
+    return false;
+  } catch (error) {
+    return false;
+  }
+}
+
+// Exact, unstruck, one-link rows under open entries. The established
+// ledger parser owns fences, comments, nesting, and prose exclusions.
+function snoozeWokenLedgerLinks(lines, path) {
+  try {
+    const sourcePath = String(path || "");
+    if (!Array.isArray(lines) || !sourcePath || !PLAN_DAILY_PATH_RE.test(sourcePath)) return [];
+    const ctx = taskLinkMarkDocContext(lines, sourcePath);
+    const links = [];
+    for (let index = 0; index < lines.length; index += 1) {
+      try {
+        if (ctx.inert(index) || !taskLinkMarkIsLedgerTaskLinkLine(lines, index, sourcePath)) continue;
+        if (!snoozeWokenEntryIsOpen(lines, index)) continue;
+        const spans = taskLinkMarkSpans(String(lines[index] || ""), ctx.excluded(index));
+        if (!Array.isArray(spans) || spans.length !== 1) continue;
+        const span = spans[0];
+        if (!span || span.kind !== "wiki" || !span.blockId) continue;
+        if (String(lines[index] || "").slice(span.at, span.at + 2) === "~~") continue;
+        links.push(Object.freeze({
+          line: index,
+          ch: span.at,
+          linkpath: String(span.linkpath || ""),
+          blockId: String(span.blockId),
+          aliased: span.alias !== null,
+        }));
+      } catch (error) {
+        continue;
+      }
+    }
+    return Object.freeze(links);
+  } catch (error) {
+    return Object.freeze([]);
+  }
+}
+
+class BobLedgerToolsSnoozeWokenPillsMixin {
+  setupSnoozeWokenPills() {
+    try {
+      if (!(this.snoozeWokenViews instanceof Set)) this.snoozeWokenViews = new Set();
+      const extension = this.createSnoozeWokenPillExtension();
+      if (extension && typeof this.registerEditorExtension === "function") this.registerEditorExtension(extension);
+      if (typeof this.setupSnoozeWokenPillsReading === "function") this.setupSnoozeWokenPillsReading();
+      if (typeof this.register === "function") this.register(() => { this.snoozeWokenViews = null; });
+    } catch (error) {
+      // A failed decorative surface never blocks startup.
+    }
+  }
+
+  createSnoozeWokenPillExtension() {
+    try {
+      if (!ViewPlugin || !Decoration || !RangeSetBuilder || !SnoozeWokenWidget ||
+          !editorInfoField || !editorLivePreviewField || !Prec || typeof Prec.highest !== "function") return null;
+      const plugin = this;
+      const WokenPluginClass = class {
+        constructor(view) {
+          this.view = view;
+          try { plugin.snoozeWokenViews.add(view); } catch (error) {}
+          try { this.decorations = plugin.buildSnoozeWokenPillDecorations(view); }
+          catch (error) { this.decorations = Decoration.none; }
+        }
+
+        update(update) {
+          try {
+            if (plugin.snoozeWokenPillRebuildReason(update)) {
+              this.decorations = plugin.buildSnoozeWokenPillDecorations(update.view);
+            }
+          } catch (error) {
+            // Keep the last valid decoration set.
+          }
+        }
+
+        destroy() {
+          try { plugin.snoozeWokenViews.delete(this.view); } catch (error) {}
+        }
+      };
+      return Prec.highest(ViewPlugin.fromClass(WokenPluginClass, { decorations: (value) => value.decorations }));
+    } catch (error) {
+      return null;
+    }
+  }
+
+  snoozeWokenPillRebuildReason(update) {
+    try {
+      if (!update || typeof update !== "object") return null;
+      const refresh = ensureSnoozeMarksRefresh();
+      for (const transaction of update.transactions || []) {
+        const effects = transaction && transaction.effects !== undefined ? transaction.effects : null;
+        for (const effect of Array.isArray(effects) ? effects : effects ? [effects] : []) {
+          if (effect && (effect === refresh || (refresh && typeof effect.is === "function" && effect.is(refresh)))) return "refresh";
+        }
+      }
+      if (update.docChanged) return "doc";
+      if (editorLivePreviewField && update.startState && update.state) {
+        try { if (update.startState.field(editorLivePreviewField) !== update.state.field(editorLivePreviewField)) return "mode"; }
+        catch (error) {}
+      }
+      if (editorInfoField && update.startState && update.state) {
+        try {
+          const before = update.startState.field(editorInfoField);
+          const after = update.state.field(editorInfoField);
+          if ((before && before.file && before.file.path) !== (after && after.file && after.file.path)) return "mode";
+        } catch (error) {}
+      }
+      return update.viewportChanged ? "viewport" : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  snoozeWokenResolvedPath(linkpath, sourcePath, cache) {
+    try {
+      const raw = String(linkpath || "").trim();
+      if (cache && cache.has(raw)) return cache.get(raw);
+      let resolved = null;
+      if (raw === "") resolved = String(sourcePath || "");
+      else if (typeof this.taskLinkMarkResolvePath === "function") resolved = this.taskLinkMarkResolvePath(raw, sourcePath);
+      if (resolved && !/\.md$/i.test(resolved)) resolved += ".md";
+      if (cache) cache.set(raw, resolved || null);
+      return resolved || null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  snoozeWokenTaskFacts(targetPath, blockId, sourcePath, lines, liveDoc, eventRows, memo) {
+    try {
+      const key = String(targetPath || "") + "\u0000" + String(blockId || "");
+      if (memo.has(key)) return memo.get(key);
+      const index = typeof this.dependencyTasksIndex === "function" ? this.dependencyTasksIndex() : null;
+      const duplicates = typeof this.dependencyTasksDuplicateKeys === "function" ? this.dependencyTasksDuplicateKeys() : null;
+      if (duplicates instanceof Set && duplicates.has(key)) { memo.set(key, null); return null; }
+      let state = null;
+      let fact = index instanceof Map ? index.get(key) || null : null;
+      if (targetPath === sourcePath && liveDoc) {
+        const live = taskLinkMarkLiveLookup(liveDoc, blockId, (symbol) => this.taskLinkMarkStatusTypeFor(symbol));
+        state = live ? live.state : null;
+        const hits = liveDoc.blocks instanceof Map ? liveDoc.blocks.get(String(blockId)) : null;
+        if (!fact && Array.isArray(hits) && hits.length === 1) {
+          fact = { path: targetPath, lineNumber: hits[0], originalMarkdown: liveDoc.lines[hits[0]] };
+        }
+      } else {
+        let hit = typeof this.taskLinkMarkFromMemo === "function" ? this.taskLinkMarkFromMemo(key) : undefined;
+        if (hit === undefined && typeof this.taskLinkMarkFromCache === "function") hit = this.taskLinkMarkFromCache(targetPath, blockId);
+        state = hit && typeof hit.state === "string" ? hit.state : null;
+      }
+      if (!fact || !["next", "in-progress"].includes(state)) { memo.set(key, null); return null; }
+      let isEvent = false;
+      if (targetPath === sourcePath) {
+        isEvent = Boolean(eventRunById(eventRows, blockId));
+      } else if (snoozedCanonicalDailyPath(targetPath)) {
+        const lineNumber = snoozedTaskLineNumber(fact);
+        const metadata = this.app && this.app.metadataCache;
+        const vault = this.app && this.app.vault;
+        let headingsKnown = false;
+        try {
+          const file = vault && typeof vault.getAbstractFileByPath === "function" ? vault.getAbstractFileByPath(targetPath) : { path: targetPath };
+          const cache = metadata && typeof metadata.getFileCache === "function" ? metadata.getFileCache(file) : null;
+          headingsKnown = Boolean(cache && Array.isArray(cache.headings));
+        } catch (error) { headingsKnown = false; }
+        if (lineNumber === null || !headingsKnown) { memo.set(key, null); return null; }
+        isEvent = snoozedIsEventTask(fact, { dailyPath: sourcePath, content: lines.join("\n"), metadataCache: metadata, vault });
+      }
+      const result = isEvent ? null : { fact, state };
+      memo.set(key, result);
+      return result;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  buildSnoozeWokenPillDecorations(view) {
+    try {
+      if (!this.snoozeMarksEnabled || !Decoration || !RangeSetBuilder || !SnoozeWokenWidget || !editorInfoField || !editorLivePreviewField) return Decoration.none;
+      if (!view || !view.state || !view.state.field(editorLivePreviewField)) return Decoration.none;
+      const info = view.state.field(editorInfoField);
+      const sourcePath = info && info.file && typeof info.file.path === "string" ? info.file.path : "";
+      if (!sourcePath || !PLAN_DAILY_PATH_RE.test(sourcePath)) return Decoration.none;
+      const doc = view.state.doc;
+      if (!doc || typeof doc.toString !== "function") return Decoration.none;
+      const lines = doc.toString().replace(/\r\n/g, "\n").split("\n");
+      const text = lines.join("\n");
+      const parsed = snoozeParseSection(text);
+      if (!parsed || !Array.isArray(parsed.rows)) return Decoration.none;
+      const liveDoc = taskLinkMarkLiveDocModel(text, sourcePath);
+      const eventRows = eventRunEventRows(lines);
+      const resolutionCache = new Map();
+      const taskCache = new Map();
+      const historyByIdentity = new Map();
+      const activeIdentities = new Set();
+      for (const row of parsed.rows) {
+        try {
+          if (!row || !row.blockId || row.embedded) continue;
+          const targetPath = this.snoozeWokenResolvedPath(row.target, sourcePath, resolutionCache);
+          if (!targetPath) continue;
+          const identity = targetPath + "\u0000" + row.blockId;
+          if (row.kind === "active") activeIdentities.add(identity);
+          if (row.kind !== "history" || !row.wokeHhmm || !Number.isInteger(row.wokeMinutes)) continue;
+          const rows = historyByIdentity.get(identity) || [];
+          rows.push({ route: targetPath, block: row.blockId, line: row.line, woke_at: row.wokeHhmm, target: row.hhmm });
+          historyByIdentity.set(identity, rows);
+        } catch (error) { continue; }
+      }
+      const links = snoozeWokenLedgerLinks(lines, sourcePath);
+      if (!links.length) return Decoration.none;
+      const now = new Date();
+      const nowLabel = String(now.getHours()).padStart(2, "0") + ":" + String(now.getMinutes()).padStart(2, "0");
+      let today = "";
+      try { today = formatLocalDate(now); } catch (error) { today = ""; }
+      let noteDate = "";
+      try { noteDate = typeof snoozedNoteDateFromDailyPath === "function" ? snoozedNoteDateFromDailyPath(sourcePath) || "" : ""; } catch (error) {}
+      const ranges = Array.isArray(view.visibleRanges) ? view.visibleRanges : [];
+      const builder = new RangeSetBuilder();
+      for (const link of links) {
+        try {
+          const targetPath = this.snoozeWokenResolvedPath(link.linkpath, sourcePath, resolutionCache);
+          if (!targetPath) continue;
+          const identity = targetPath + "\u0000" + link.blockId;
+          const facts = this.snoozeWokenTaskFacts(targetPath, link.blockId, sourcePath, lines, liveDoc, eventRows, taskCache);
+          if (!facts) continue;
+          const history = historyByIdentity.get(identity) || [];
+          if (!history.length) continue;
+          const model = snoozeWokenPillModel({
+            today,
+            now: nowLabel,
+            zone: snoozedLocalZoneName(),
+            note: sourcePath,
+            note_date: noteDate,
+            entry: { open: true, name: "" },
+            link: { line: lines[link.line], struck: false, is_event: false, is_prose: false,
+              is_embed: false, in_fence: false, aliased: link.aliased, block: link.blockId, route: targetPath },
+            history,
+            active_row_for_identity: activeIdentities.has(identity),
+            resolution: "found",
+            target_status: facts.state === "next" ? "*" : facts.state === "in-progress" ? "/" : " ",
+            toggles: { snooze_marks: true },
+          });
+          if (model.pill === "none") continue;
+          const line = doc.line(link.line + 1);
+          if (!line || typeof line.from !== "number") continue;
+          const position = line.from + link.ch;
+          if (!ranges.some((range) => range && position >= range.from && position <= range.to)) continue;
+          builder.add(position, position, Decoration.widget({
+            widget: new SnoozeWokenWidget(model, sourcePath, targetPath, link.blockId,
+              (navigation, path, block) => { void this.jumpToSnoozeWokenHistory(navigation, path, block); }),
+            side: SNOOZE_WOKEN_SIDE,
+          }));
+        } catch (error) { continue; }
+      }
+      return builder.finish();
+    } catch (error) {
+      try { return Decoration.none; } catch (inner) { return null; }
+    }
+  }
+
+  snoozeWokenPillEditorViews() {
+    const views = new Set();
+    try { if (this.snoozeWokenViews instanceof Set) this.snoozeWokenViews.forEach((view) => views.add(view)); } catch (error) {}
+    try {
+      const leaves = this.app && this.app.workspace && typeof this.app.workspace.getLeavesOfType === "function"
+        ? this.app.workspace.getLeavesOfType("markdown") || [] : [];
+      for (const leaf of leaves) {
+        const cm = leaf && leaf.view && leaf.view.editor && leaf.view.editor.cm;
+        if (cm) views.add(cm);
+      }
+    } catch (error) {}
+    return views;
+  }
+
+  refreshSnoozeWokenPillEditors() {
+    try {
+      const refresh = ensureSnoozeMarksRefresh();
+      if (!refresh) return;
+      for (const view of this.snoozeWokenPillEditorViews()) {
+        try { if (view && typeof view.dispatch === "function") view.dispatch({ effects: refresh.of(null) }); }
+        catch (error) {}
+      }
+    } catch (error) {}
+  }
+}
+// ---- src/291i-plugin-snooze-woken-pills-reading.js ----
+// Snoozed wake-history pills in Reading view. Source text comes from the
+// render section, a live editor, or the established source-text cache; a
+// missing or uncertain mapping stays neutral.
+class BobLedgerToolsSnoozeWokenPillsReadingMixin {
+  setupSnoozeWokenPillsReading() {
+    try {
+      if (!(this.snoozeWokenReadingViews instanceof Map)) this.snoozeWokenReadingViews = new Map();
+      if (typeof this.registerMarkdownPostProcessor === "function") {
+        this.registerMarkdownPostProcessor((el, ctx) => this.renderSnoozeWokenPillsIn(el, ctx), 57);
+      }
+    } catch (error) {}
+  }
+
+  snoozeWokenReadingTag(node) {
+    try { return String(node && (node.tagName || node.nodeName) || "").toUpperCase(); }
+    catch (error) { return ""; }
+  }
+
+  snoozeWokenReadingHasClass(node, name) {
+    try {
+      if (node && node.classList && typeof node.classList.contains === "function") return node.classList.contains(name);
+      const raw = node && typeof node.getAttribute === "function" ? node.getAttribute("class") || "" : node && node.className || "";
+      return String(raw).split(/\s+/).includes(name);
+    } catch (error) { return false; }
+  }
+
+  renderSnoozeWokenPillsIn(el, ctx) {
+    try {
+      if (!el || !ctx) return;
+      if (!(this.snoozeWokenReadingViews instanceof Map)) this.snoozeWokenReadingViews = new Map();
+      const record = { el, ctx, sourcePath: typeof ctx.sourcePath === "string" ? ctx.sourcePath : "" };
+      this.snoozeWokenReadingViews.set(el, record);
+      this.sweepSnoozeWokenPillsReadingView(record);
+      try { this.scheduleSnoozeMarksRefresh(); } catch (error) {}
+      if (typeof ctx.addChild === "function") {
+        const views = this.snoozeWokenReadingViews;
+        let child = null;
+        try {
+          child = typeof MarkdownRenderChild === "function" ? new MarkdownRenderChild(el) : null;
+          if (child) child.onunload = () => { if (views) views.delete(el); };
+        } catch (error) { child = null; }
+        if (!child) child = { unload: () => { if (views) views.delete(el); } };
+        try { ctx.addChild(child); } catch (error) {}
+      }
+    } catch (error) {}
+  }
+
+  snoozeWokenPillPreviewRecords() {
+    const records = [];
+    try {
+      const workspace = this.app && this.app.workspace;
+      const leaves = workspace && typeof workspace.getLeavesOfType === "function" ? workspace.getLeavesOfType("markdown") || [] : [];
+      for (const leaf of leaves) {
+        try {
+          const view = leaf && leaf.view;
+          const sourcePath = view && view.file && typeof view.file.path === "string" ? view.file.path : "";
+          const container = view && ((view.previewMode && view.previewMode.containerEl) || view.contentEl || view.containerEl);
+          if (!sourcePath || !container || typeof container.querySelector !== "function") continue;
+          records.push({
+            el: container.querySelector(".markdown-preview-view, .markdown-reading-view") || container,
+            ctx: { sourcePath },
+            sourcePath,
+          });
+        } catch (error) { continue; }
+      }
+    } catch (error) {}
+    return records;
+  }
+
+  refreshSnoozeWokenPillReadingViews() {
+    let refreshed = false;
+    try {
+      if (this.snoozeWokenReadingViews instanceof Map) {
+        for (const [el, record] of Array.from(this.snoozeWokenReadingViews.entries())) {
+          try {
+            if (!el) { this.snoozeWokenReadingViews.delete(el); continue; }
+            this.sweepSnoozeWokenPillsReadingView(record);
+            refreshed = true;
+          } catch (error) {}
+        }
+      }
+      for (const record of this.snoozeWokenPillPreviewRecords()) {
+        try { this.sweepSnoozeWokenPillsReadingView(record); refreshed = true; }
+        catch (error) {}
+      }
+    } catch (error) {}
+    return refreshed;
+  }
+
+  snoozeWokenReadingLines(record) {
+    try {
+      const sourcePath = String(record && record.sourcePath || "");
+      if (!sourcePath) return null;
+      const ctx = record && record.ctx;
+      try {
+        if (ctx && typeof ctx.getSectionInfo === "function" && record.el) {
+          const info = ctx.getSectionInfo(record.el);
+          if (info && typeof info.text === "string" && info.text !== "") {
+            const lines = info.text.replace(/\r\n/g, "\n").split("\n");
+            if (snoozeParseSection(info.text) && planSectionRange(lines)) return lines;
+          }
+        }
+      } catch (error) {}
+      try {
+        if (ctx && typeof this.calendarEventSourceLines === "function") {
+          const lines = this.calendarEventSourceLines(ctx);
+          if (Array.isArray(lines) && lines.length && snoozeParseSection(lines.join("\n"))) return lines;
+        }
+      } catch (error) {}
+      try {
+        if (typeof this.taskThemeSourceTextFor === "function") {
+          const text = this.taskThemeSourceTextFor(sourcePath);
+          if (typeof text === "string" && text !== "") {
+            const lines = text.replace(/\r\n/g, "\n").split("\n");
+            if (snoozeParseSection(text)) return lines;
+          }
+        }
+      } catch (error) {}
+      try { if (typeof this.taskThemeRequestSourceText === "function") this.taskThemeRequestSourceText(sourcePath); }
+      catch (error) {}
+      return null;
+    } catch (error) { return null; }
+  }
+
+  snoozeWokenPillOwnedHosts(li, root) {
+    try {
+      const found = li && typeof li.querySelectorAll === "function" ? li.querySelectorAll(".bob-snooze-woke") : [];
+      const hosts = [];
+      for (const host of found || []) {
+        let owner = host && host.parentNode;
+        let guard = 0;
+        while (owner && owner !== root && guard++ < 100 && this.snoozeWokenReadingTag(owner) !== "LI") owner = owner.parentNode;
+        if (owner === li) hosts.push(host);
+      }
+      return hosts;
+    } catch (error) { return []; }
+  }
+
+  snoozeWokenPillRemoveHost(host) {
+    try { if (host && host.parentNode && typeof host.parentNode.removeChild === "function") host.parentNode.removeChild(host); }
+    catch (error) {}
+  }
+
+  snoozeWokenPillSetAttribute(host, name, value) {
+    try {
+      if (value === null || value === undefined) {
+        if (host && typeof host.removeAttribute === "function") host.removeAttribute(name);
+      } else if (host && typeof host.setAttribute === "function") host.setAttribute(name, String(value));
+    } catch (error) {}
+  }
+
+  snoozeWokenPillRefreshHost(host, doc, model, targetPath, blockId, sourcePath) {
+    try {
+      const fresh = buildSnoozeWokenElement(doc, model);
+      if (!host || !fresh) return false;
+      for (const name of ["class", "role", "aria-label", "data-tooltip-position", "data-bob-snooze-woke-time", "data-bob-snooze-woke-note", "data-bob-snooze-woke-line"]) {
+        this.snoozeWokenPillSetAttribute(host, name, fresh.getAttribute(name));
+      }
+      this.snoozeWokenPillSetAttribute(host, "data-bob-snooze-woke-target", targetPath);
+      this.snoozeWokenPillSetAttribute(host, "data-bob-snooze-woke-block", blockId);
+      this.snoozeWokenPillSetAttribute(host, "data-bob-snooze-woke-source", sourcePath);
+      return true;
+    } catch (error) { return false; }
+  }
+
+  snoozeWokenPillBindReadingGesture(host) {
+    try {
+      if (!host || typeof host.addEventListener !== "function") return;
+      host.addEventListener("mousedown", (event) => {
+        try {
+          if (!event || (event.button !== undefined && event.button !== 0)) return;
+          const isMac = Boolean(Platform && Platform.isMacOS);
+          const modified = typeof todayMarkModifierPressed === "function"
+            ? todayMarkModifierPressed(event, isMac)
+            : (isMac ? Boolean(event.metaKey) : Boolean(event.ctrlKey));
+          if (!modified) return;
+          if (typeof event.preventDefault === "function") event.preventDefault();
+          if (typeof event.stopPropagation === "function") event.stopPropagation();
+          const note = host.getAttribute("data-bob-snooze-woke-note");
+          const line = Number(host.getAttribute("data-bob-snooze-woke-line"));
+          const target = host.getAttribute("data-bob-snooze-woke-target");
+          const block = host.getAttribute("data-bob-snooze-woke-block");
+          if (typeof this.jumpToSnoozeWokenHistory === "function") {
+            void this.jumpToSnoozeWokenHistory({ note, line }, target, block);
+          }
+        } catch (error) {}
+      });
+    } catch (error) {}
+  }
+
+  snoozeWokenPillReadingContainer(anchor) {
+    try {
+      const parent = anchor && anchor.parentNode;
+      const tag = this.snoozeWokenReadingTag(parent);
+      if (["S", "DEL", "STRIKE"].includes(tag) && parent.childNodes && parent.childNodes.length === 1 && parent.childNodes[0] === anchor) return parent;
+      return anchor || null;
+    } catch (error) { return anchor || null; }
+  }
+
+  snoozeWokenPillReadingPlace(container, host) {
+    try {
+      const parent = container && container.parentNode;
+      if (!parent || typeof parent.insertBefore !== "function") return;
+      if (host.parentNode !== parent || host.nextSibling !== container) parent.insertBefore(host, container);
+      let node = host.previousSibling;
+      let guard = 0;
+      while (node && guard++ < 100 && (this.snoozeWokenReadingHasClass(node, "bob-ledger-type-mark") || this.snoozeWokenReadingHasClass(node, "bob-progress-mark"))) {
+        const before = node;
+        node = node.previousSibling;
+        parent.insertBefore(host, before);
+      }
+    } catch (error) {}
+  }
+
+  sweepSnoozeWokenPillsReadingView(record) {
+    try {
+      const root = record && record.el;
+      const sourcePath = String(record && record.sourcePath || "");
+      if (!root || !sourcePath) return false;
+      const allHosts = typeof root.querySelectorAll === "function" ? Array.from(root.querySelectorAll(".bob-snooze-woke")) : [];
+      if (!this.snoozeMarksEnabled || !PLAN_DAILY_PATH_RE.test(sourcePath)) {
+        for (const host of allHosts) this.snoozeWokenPillRemoveHost(host);
+        return true;
+      }
+      const lines = this.snoozeWokenReadingLines(record);
+      if (!lines) { for (const host of allHosts) this.snoozeWokenPillRemoveHost(host); return true; }
+      const parsed = snoozeParseSection(lines.join("\n"));
+      if (!parsed || !Array.isArray(parsed.rows)) { for (const host of allHosts) this.snoozeWokenPillRemoveHost(host); return true; }
+      const resolutionCache = new Map();
+      const taskCache = new Map();
+      const historyByIdentity = new Map();
+      const activeIdentities = new Set();
+      for (const row of parsed.rows) {
+        try {
+          if (!row || !row.blockId || row.embedded) continue;
+          const targetPath = this.snoozeWokenResolvedPath(row.target, sourcePath, resolutionCache);
+          if (!targetPath) continue;
+          const identity = targetPath + "\u0000" + row.blockId;
+          if (row.kind === "active") activeIdentities.add(identity);
+          if (row.kind !== "history" || !row.wokeHhmm || !Number.isInteger(row.wokeMinutes)) continue;
+          const rows = historyByIdentity.get(identity) || [];
+          rows.push({ route: targetPath, block: row.blockId, line: row.line, woke_at: row.wokeHhmm, target: row.hhmm });
+          historyByIdentity.set(identity, rows);
+        } catch (error) {}
+      }
+      const sourceText = lines.join("\n");
+      const liveDoc = taskLinkMarkLiveDocModel(sourceText, sourcePath);
+      const eventRows = eventRunEventRows(lines);
+      const doc = root.ownerDocument || (typeof document !== "undefined" ? document : null);
+      if (!doc) { for (const host of allHosts) this.snoozeWokenPillRemoveHost(host); return true; }
+      const now = new Date();
+      const nowLabel = String(now.getHours()).padStart(2, "0") + ":" + String(now.getMinutes()).padStart(2, "0");
+      let today = "";
+      let noteDate = "";
+      try { today = formatLocalDate(now); } catch (error) {}
+      try { noteDate = snoozedNoteDateFromDailyPath(sourcePath) || ""; } catch (error) {}
+      const items = typeof root.querySelectorAll === "function" ? Array.from(root.querySelectorAll("li")) : [];
+      for (const li of items) {
+        try {
+          const existing = this.snoozeWokenPillOwnedHosts(li, root);
+          const context = typeof this.progressMarkReadingContext === "function"
+            ? this.progressMarkReadingContext(li, root, { allowLedgerMarks: true }) : null;
+          if (!context || !context.anchor || !context.blockId) {
+            for (const host of existing) this.snoozeWokenPillRemoveHost(host);
+            continue;
+          }
+          const targetPath = this.snoozeWokenResolvedPath(context.target, sourcePath, resolutionCache);
+          const identity = targetPath ? targetPath + "\u0000" + context.blockId : "";
+          const facts = targetPath ? this.snoozeWokenTaskFacts(targetPath, context.blockId, sourcePath, lines, liveDoc, eventRows, taskCache) : null;
+          const history = identity ? historyByIdentity.get(identity) || [] : [];
+          if (!facts || !history.length) { for (const host of existing) this.snoozeWokenPillRemoveHost(host); continue; }
+          const model = snoozeWokenPillModel({
+            today, now: nowLabel, zone: snoozedLocalZoneName(), note: sourcePath, note_date: noteDate,
+            entry: { open: true, name: "" },
+            link: { line: "", struck: false, is_event: false, is_prose: false, is_embed: false,
+              in_fence: false, aliased: Boolean(context.alias), block: context.blockId, route: targetPath },
+            history, active_row_for_identity: activeIdentities.has(identity), resolution: "found",
+            target_status: facts.state === "next" ? "*" : facts.state === "in-progress" ? "/" : " ",
+            toggles: { snooze_marks: true },
+          });
+          if (model.pill === "none") { for (const host of existing) this.snoozeWokenPillRemoveHost(host); continue; }
+          let host = existing[0] || null;
+          if (host) this.snoozeWokenPillRefreshHost(host, doc, model, targetPath, context.blockId, sourcePath);
+          else {
+            host = buildSnoozeWokenElement(doc, model);
+            if (host) {
+              this.snoozeWokenPillSetAttribute(host, "data-bob-snooze-woke-target", targetPath);
+              this.snoozeWokenPillSetAttribute(host, "data-bob-snooze-woke-block", context.blockId);
+              this.snoozeWokenPillSetAttribute(host, "data-bob-snooze-woke-source", sourcePath);
+              this.snoozeWokenPillBindReadingGesture(host);
+            }
+          }
+          if (!host) continue;
+          const container = this.snoozeWokenPillReadingContainer(context.anchor);
+          if (!container || !container.parentNode) { for (const old of existing) this.snoozeWokenPillRemoveHost(old); continue; }
+          this.snoozeWokenPillReadingPlace(container, host);
+          for (const duplicate of existing.slice(1)) this.snoozeWokenPillRemoveHost(duplicate);
+        } catch (error) { continue; }
+      }
+      for (const host of allHosts) {
+        try {
+          let node = host.parentNode;
+          let inList = false;
+          let guard = 0;
+          while (node && node !== root && guard++ < 100) {
+            if (this.snoozeWokenReadingTag(node) === "LI") { inList = true; break; }
+            node = node.parentNode;
+          }
+          if (!inList) this.snoozeWokenPillRemoveHost(host);
+        } catch (error) {}
+      }
+      return true;
+    } catch (error) { return false; }
+  }
+
+  snoozeWokenFindHistoryLine(content, notePath, targetPath, blockId) {
+    try {
+      const parsed = snoozeParseSection(String(content || ""));
+      if (!parsed || !Array.isArray(parsed.rows)) return null;
+      const cache = new Map();
+      const histories = [];
+      let active = false;
+      for (const row of parsed.rows) {
+        try {
+          if (!row || !row.blockId || row.embedded) continue;
+          const route = this.snoozeWokenResolvedPath(row.target, notePath, cache);
+          if (route !== targetPath || row.blockId !== blockId) continue;
+          if (row.kind === "active") active = true;
+          if (row.kind === "history" && Number.isInteger(row.wokeMinutes) && Number.isInteger(row.line)) histories.push(row);
+        } catch (error) {}
+      }
+      if (active || !histories.length) return null;
+      histories.sort((a, b) => a.wokeMinutes - b.wokeMinutes || a.line - b.line);
+      return histories[histories.length - 1].line - 1;
+    } catch (error) { return null; }
+  }
+
+  async snoozeWokenOpenDailyPath(notePath) {
+    try {
+      let leaf = findOpenMarkdownLeafByPath(this.app, notePath);
+      if (leaf) return await activateMarkdownLeaf(this.app, leaf, { path: notePath });
+      const file = this.app && this.app.vault && typeof this.app.vault.getAbstractFileByPath === "function"
+        ? this.app.vault.getAbstractFileByPath(notePath) : null;
+      const workspace = this.app && this.app.workspace;
+      if (!file || !workspace || typeof workspace.getLeaf !== "function") return null;
+      leaf = workspace.getLeaf("tab");
+      if (!leaf || typeof leaf.openFile !== "function") return null;
+      await leaf.openFile(file);
+      return leaf.view || null;
+    } catch (error) { return null; }
+  }
+
+  async jumpToSnoozeWokenHistory(navigation, targetPath, blockId) {
+    try {
+      const notePath = String(navigation && navigation.note || "");
+      const hintLine = Number(navigation && navigation.line);
+      if (!notePath || !Number.isInteger(hintLine) || hintLine < 1 || !targetPath || !blockId) return false;
+      const view = await this.snoozeWokenOpenDailyPath(notePath);
+      if (!view || !view.editor) { new Notice("Could not open the daily note"); return false; }
+      const read = () => {
+        try { if (typeof view.editor.getValue === "function") return view.editor.getValue(); }
+        catch (error) {}
+        try { const cm = getEditorViewFromEditor(view.editor); if (cm && cm.state && cm.state.doc) return cm.state.doc.toString(); }
+        catch (error) {}
+        return null;
+      };
+      const content = read();
+      if (typeof content !== "string") { new Notice("This task's wake history is no longer in this note"); return false; }
+      const line = this.snoozeWokenFindHistoryLine(content, notePath, String(targetPath), String(blockId));
+      if (!Number.isInteger(line)) { new Notice("This task's wake history is no longer in this note"); return false; }
+      return await this.jumpToDailyNoteLine(notePath, line, 0, {
+        vanished: "This task's wake history is no longer in this note",
+        findLine: (current) => this.snoozeWokenFindHistoryLine(current, notePath, String(targetPath), String(blockId)),
+      });
+    } catch (error) { return false; }
   }
 }
 // ---- src/292-keep-inbox-model.js ----
@@ -205290,6 +206207,8 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsSnoozeMarksMixin,
   BobLedgerToolsSnoozeMarksReadingMixin,
   BobLedgerToolsSnoozeMarksJumpMixin,
+  BobLedgerToolsSnoozeWokenPillsMixin,
+  BobLedgerToolsSnoozeWokenPillsReadingMixin,
   BobLedgerToolsTaskLinkMarksMixin,
   BobLedgerToolsTaskLinkMarksResolveMixin,
   BobLedgerToolsTaskLinkMarksReadingMixin,
@@ -210644,4 +211563,17 @@ Object.assign(module.exports.helpers, {
   buildSnoozeMarkElement,
   SnoozeMarkWidget,
   ensureSnoozeMarksRefresh,
+});
+// ---- src/384-snooze-woken-pills-exports.js ----
+Object.assign(module.exports.helpers, {
+  SNOOZE_WOKEN_SIDE,
+  SNOOZE_WOKEN_CLICK_HINT,
+  snoozeWokenTimeMinutes,
+  snoozeWokenTimeLabel,
+  snoozeWokenOutcome,
+  snoozeWokenPillModel,
+  buildSnoozeWokenElement,
+  SnoozeWokenWidget,
+  snoozeWokenEntryIsOpen,
+  snoozeWokenLedgerLinks,
 });

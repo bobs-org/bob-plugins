@@ -90,6 +90,7 @@ class BobLedgerToolsProgressMarksReadingMixin {
                 "bob-keep-moving-mark",
                 "bob-off-clock-link-chip",
                 "bob-event-link-time",
+                "bob-snooze-woke",
                 "bob-today-mark",
                 "list-bullet",
                 "list-collapse-indicator",

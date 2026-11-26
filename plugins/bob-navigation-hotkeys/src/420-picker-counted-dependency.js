@@ -380,7 +380,14 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
     if (String(this.editor.getValue() || "") !== originalContent) {
       return this.refuseDependencyStale();
     }
-    if (!applyEditorContentTransaction(this.editor, originalContent, working, null, BLOCKS_MACHINE_WRITE_ANNOTATION)) {
+    if (!navApplySettledEditorPostimage(
+      this.plugin,
+      this.editor,
+      ownerPath,
+      originalContent,
+      working,
+      { annotation: BLOCKS_MACHINE_WRITE_ANNOTATION, today },
+    ).ok) {
       new Notice("Could not update counted dependencies; no tasks were updated");
       return false;
     }
@@ -684,9 +691,14 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
       getNavigationPomodoroThemesApi(this.plugin && this.plugin.app),
     );
     working = vaultPomodoroPrep.commitContent;
-    if (
-      !applyEditorContentTransaction(this.editor, originalContent, working, null, BLOCKS_MACHINE_WRITE_ANNOTATION)
-    ) {
+    if (!navApplySettledEditorPostimage(
+      this.plugin,
+      this.editor,
+      ownerPath,
+      originalContent,
+      working,
+      { annotation: BLOCKS_MACHINE_WRITE_ANNOTATION, today: new Date() },
+    ).ok) {
       new Notice("Could not update counted dependencies; no tasks were updated");
       return false;
     }

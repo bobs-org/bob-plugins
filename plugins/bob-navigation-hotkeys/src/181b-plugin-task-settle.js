@@ -139,7 +139,8 @@ class BobNavigationHotkeysTaskSettleMixin {
       } catch (_error) {
         return Object.freeze([]);
       }
-      return consumeNavSettleFlushResults(this, results);
+      // The pending scheduler's onSettled observer records this jump already.
+      return consumeNavSettleFlushResults(this, results, { recordJump: false });
     } finally {
       this._navTaskSettleFlushing = false;
     }

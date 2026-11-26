@@ -23,7 +23,7 @@ class BobNavigationHotkeysBlocksEditMixin {
     return null;
   }
 
-  async writeBlocksEditNote(filePath, preimage, nextContent) {
+  async writeBlocksEditNote(filePath, preimage, nextContent, options = {}) {
     const path = normalizeVaultRelativePath(filePath || "");
     const before = String(preimage || "");
     const after = String(nextContent || "");
@@ -38,14 +38,26 @@ class BobNavigationHotkeysBlocksEditMixin {
       if (String(editor.getValue() || "") !== before) {
         return Object.freeze({ ok: false, reason: "changed" });
       }
-      const committed = applyEditorContentTransaction(
-        editor,
-        before,
-        after,
-        null,
-        BLOCKS_MACHINE_WRITE_ANNOTATION,
-      );
-      return committed
+      const committed = options.settle === true
+        ? navApplySettledEditorPostimage(
+            this,
+            editor,
+            path,
+            before,
+            after,
+            {
+              annotation: BLOCKS_MACHINE_WRITE_ANNOTATION,
+              today: options.today,
+            },
+          )
+        : { ok: applyEditorContentTransaction(
+            editor,
+            before,
+            after,
+            null,
+            BLOCKS_MACHINE_WRITE_ANNOTATION,
+          ) };
+      return committed.ok
         ? Object.freeze({ ok: true, reason: null, via: "editor" })
         : Object.freeze({ ok: false, reason: "commit-failed" });
     }
@@ -56,6 +68,20 @@ class BobNavigationHotkeysBlocksEditMixin {
         : null;
     if (!file || !vault || typeof vault.process !== "function") {
       return Object.freeze({ ok: false, reason: "target-unavailable" });
+    }
+    if (options.settle === true) {
+      const committed = await navApplySettledVaultPostimage(
+        this,
+        vault,
+        file,
+        path,
+        before,
+        after,
+        { today: options.today },
+      );
+      return committed.ok
+        ? Object.freeze({ ok: true, reason: null, via: "vault", contents: committed.contents })
+        : Object.freeze({ ok: false, reason: "changed" });
     }
     let applied = false;
     try {
@@ -445,6 +471,7 @@ class BobNavigationHotkeysBlocksEditMixin {
           write.path,
           write.original,
           write.nextContent,
+          { settle: write.foldedDependents, today },
         );
         if (!result.ok) {
           return refuse(stale, stale);
@@ -467,6 +494,7 @@ class BobNavigationHotkeysBlocksEditMixin {
           write.path,
           write.original,
           write.nextContent,
+          { settle: true, today },
         );
         const refs = (write.tPlans || []).map((entry) => refOf(write, entry));
         if (result.ok) {

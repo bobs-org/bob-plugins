@@ -690,7 +690,6 @@ class BobNavigationHotkeysProjectSubtreeMixin {
       return null;
     }
   }
-
   // Write one planned pass: one preimage-checked write per descendant note
   // (open editor transaction, else `vault.process`). A stale or failing
   // note is skipped and counted (PDG14); N is never rolled back. Never
@@ -732,25 +731,34 @@ class BobNavigationHotkeysProjectSubtreeMixin {
               : null;
           if (editor && typeof editor.getValue === "function") {
             if (String(editor.getValue() || "") === before) {
-              if (
-                applyEditorContentTransaction(editor, before, after) &&
-                String(editor.getValue() || "") === after
-              ) {
+              const result = navApplySettledEditorPostimage(
+                this,
+                editor,
+                path,
+                before,
+                after,
+                {
+                  annotation: BLOCKS_MACHINE_WRITE_ANNOTATION,
+                  today: pass && pass.today,
+                },
+              );
+              if (result.ok) {
                 done = true;
               }
             }
           } else if (vault && typeof vault.process === "function") {
             const file = fileByPath.get(path);
             if (file) {
-              let transformed = false;
-              await vault.process(file, (content) => {
-                if (String(content || "") !== before) {
-                  throw new Error(`Sub-project preimage changed: ${path}`);
-                }
-                transformed = true;
-                return after;
-              });
-              done = transformed;
+              const result = await navApplySettledVaultPostimage(
+                this,
+                vault,
+                file,
+                path,
+                before,
+                after,
+                { today: pass && pass.today },
+              );
+              done = result.ok;
             }
           }
         } catch (_error) {
@@ -767,7 +775,6 @@ class BobNavigationHotkeysProjectSubtreeMixin {
     }
     return Object.freeze({ written: written.length, skipped: skipped.length });
   }
-
   // Plan and write the pass for one `^prj` edit. Returns null when no pass
   // applies, else `{blocked, recovered, written, skipped, pomodoroTargets,
   // laneStatuses}`. A write failure is reported in counts, never thrown.

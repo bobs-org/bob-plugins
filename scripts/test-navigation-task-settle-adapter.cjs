@@ -104,6 +104,20 @@ const AREA_INPUT = [
   "- [-] #task Superseded experiment ^experiment",
   "",
 ].join("\n");
+const STATUS_WRITE_BEFORE = [
+  "---",
+  "type: [[area]]",
+  "---",
+  "## Tasks",
+  "",
+  "- [ ] #task Wait for the prerequisite ^waiting",
+  "- [ ] #task Ship the report ^report",
+  "",
+].join("\n");
+const STATUS_WRITE_AFTER = STATUS_WRITE_BEFORE.replace(
+  "- [ ] #task Wait for the prerequisite ^waiting",
+  "- [?] #task Wait for the prerequisite [dependsOn:: blocker] ^waiting",
+);
 
 class SettleEditor extends Cm6MappingEditor {
   constructor(content, cursor = { line: 0, ch: 0 }) {
@@ -399,6 +413,8 @@ test("own-task cursor stays and records one jump; other cursors follow the map",
   assert.equal(stay.jumpTarget.blockId, "design");
   assert.ok(stay.jumpTarget.line > 8);
   assert.equal(stayNav.jumps.length, 1);
+  assert.equal(stayNav.jumps[0].from.line, stay.jumpTarget.line);
+  assert.equal(stayNav.jumps[0].to.line, stay.cursor.line);
 
   const otherEditor = new SettleEditor(AREA_INPUT, { line: 7, ch: 2 });
   const otherApp = makeApp({ editor: otherEditor, path: AREA });
@@ -419,6 +435,70 @@ test("own-task cursor stays and records one jump; other cursors follow the map",
   assert.equal(typeof mapped, "number");
   assert.equal(other.cursor.line, mapped);
   assert.equal(other.jumpTarget, null);
+});
+
+test("pending flush consumes results without duplicating the scheduler jump", () => {
+  const editor = new SettleEditor("settled note\n", { line: 4, ch: 2 });
+  const app = makeApp({ editor, path: AREA });
+  const plugin = makeNav(app);
+  const cursor = { path: AREA, line: 4, ch: 2 };
+  const target = { path: AREA, line: 9, ch: 0, blockId: "waiting" };
+  app.plugins.plugins["bob-ledger-tools"] = {
+    api: {
+      taskSettle: {
+        version: 1,
+        flushPending() {
+          // Mirrors task-status-cycler's onSettled observer.
+          plugin.recordJump(target, cursor);
+          return [{ path: AREA, result: { cursor, jumpTarget: target } }];
+        },
+      },
+    },
+  };
+  plugin.flushPendingNavSettles();
+  assert.deepEqual(plugin.jumps, [{ from: target, to: cursor }]);
+});
+
+test("dependency editor writes settle their complete postimage in one annotated transaction", async () => {
+  const editor = new SettleEditor(STATUS_WRITE_BEFORE, { line: 5, ch: 2 });
+  const app = makeApp({ editor, path: AREA });
+  attachLedger(app);
+  const plugin = makeNav(app);
+  const result = await plugin.writeBlocksEditNote(
+    AREA,
+    STATUS_WRITE_BEFORE,
+    STATUS_WRITE_AFTER,
+    { settle: true, today: TODAY },
+  );
+  assert.equal(result.ok, true);
+  assert.match(editor.getValue(), /### Blocked/);
+  assert.match(editor.getValue(), /### Ready/);
+  assert.equal(editor.transactions.length, 1);
+  assert.equal(editor.transactions[0].annotation, helpers.BLOCKS_MACHINE_WRITE_ANNOTATION);
+});
+
+test("closed relation writes settle before their preimage-checked vault write", async () => {
+  const path = "Areas/closed.md";
+  const stored = new Map([[path, STATUS_WRITE_BEFORE]]);
+  const app = makeApp({ editor: null, path });
+  app.workspace.getLeavesOfType = () => [];
+  app.vault.getAbstractFileByPath = (candidate) =>
+    stored.has(candidate) ? { path: candidate } : null;
+  app.vault.process = async (file, transform) => {
+    stored.set(file.path, transform(stored.get(file.path)));
+  };
+  attachLedger(app);
+  const plugin = makeNav(app);
+  const result = await plugin.writeRelationEditNote(
+    path,
+    STATUS_WRITE_BEFORE,
+    STATUS_WRITE_AFTER,
+    { settle: true, today: TODAY },
+  );
+  assert.equal(result.ok, true);
+  assert.match(stored.get(path), /### Blocked/);
+  assert.match(stored.get(path), /### Ready/);
+  assert.match(stored.get(path), /LINKS|dependsOn/);
 });
 
 test("annotated writes keep the machine annotation; restore never settles", () => {

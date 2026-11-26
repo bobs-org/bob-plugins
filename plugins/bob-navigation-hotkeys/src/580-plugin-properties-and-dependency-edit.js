@@ -621,15 +621,19 @@ class BobNavigationHotkeysPropertyDependencyMixin {
             }
           }
           // Stamped above (the hand-edit mirror never stamps freshness).
-          const committed = applyEditorContentTransaction(
+          const committed = navApplySettledEditorPostimage(
+            this,
             editor,
+            parentPath,
             content,
             nextContent,
-            null,
-            BLOCKS_MACHINE_WRITE_ANNOTATION,
+            {
+              annotation: BLOCKS_MACHINE_WRITE_ANNOTATION,
+              today: args.today || new Date(),
+            },
           );
-          return committed
-            ? { ok: true }
+          return committed.ok
+            ? { ok: true, contents: committed.contents }
             : { ok: false, reason: "commit-failed" };
         },
       });

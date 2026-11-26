@@ -25,7 +25,7 @@ class BobNavigationHotkeysRelationEditMixin {
     return null;
   }
 
-  async writeRelationEditNote(filePath, preimage, nextContent) {
+  async writeRelationEditNote(filePath, preimage, nextContent, options = {}) {
     const path = normalizeVaultRelativePath(filePath || "");
     const before = String(preimage || "");
     const after = String(nextContent || "");
@@ -40,14 +40,26 @@ class BobNavigationHotkeysRelationEditMixin {
       if (String(editor.getValue() || "") !== before) {
         return Object.freeze({ ok: false, reason: "changed" });
       }
-      const committed = applyEditorContentTransaction(
-        editor,
-        before,
-        after,
-        null,
-        RELATIONS_MACHINE_WRITE_ANNOTATION,
-      );
-      return committed
+      const committed = options.settle === true
+        ? navApplySettledEditorPostimage(
+            this,
+            editor,
+            path,
+            before,
+            after,
+            {
+              annotation: RELATIONS_MACHINE_WRITE_ANNOTATION,
+              today: options.today,
+            },
+          )
+        : { ok: applyEditorContentTransaction(
+            editor,
+            before,
+            after,
+            null,
+            RELATIONS_MACHINE_WRITE_ANNOTATION,
+          ) };
+      return committed.ok
         ? Object.freeze({ ok: true, reason: null, via: "editor" })
         : Object.freeze({ ok: false, reason: "commit-failed" });
     }
@@ -58,6 +70,20 @@ class BobNavigationHotkeysRelationEditMixin {
         : null;
     if (!file || !vault || typeof vault.process !== "function") {
       return Object.freeze({ ok: false, reason: "target-unavailable" });
+    }
+    if (options.settle === true) {
+      const committed = await navApplySettledVaultPostimage(
+        this,
+        vault,
+        file,
+        path,
+        before,
+        after,
+        { today: options.today },
+      );
+      return committed.ok
+        ? Object.freeze({ ok: true, reason: null, via: "vault", contents: committed.contents })
+        : Object.freeze({ ok: false, reason: "changed" });
     }
     let applied = false;
     try {
@@ -758,11 +784,17 @@ class BobNavigationHotkeysRelationEditMixin {
       }
 
       const failed = [];
+      const settlePaths = new Set(
+        [...cancelledIdentities, ...completedIdentities]
+          .map((identity) => normalizeVaultRelativePath(identity && identity.path))
+          .filter(Boolean),
+      );
       for (const write of sourceWrites.values()) {
         const result = await this.writeRelationEditNote(
           write.path,
           write.original,
           write.nextContent,
+          { settle: settlePaths.has(write.path), today },
         );
         if (!result.ok) {
           failed.push(write.path);

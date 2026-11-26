@@ -164,7 +164,15 @@ class BobNavigationHotkeysDependencyMirrorMixin {
     );
     const nextContent = folded.content;
     if (nextContent !== originalContent) {
-      if (!applyEditorContentTransaction(cm, originalContent, nextContent, null, BLOCKS_MACHINE_WRITE_ANNOTATION)) {
+      const committed = navApplySettledEditorPostimage(
+        this,
+        cm,
+        filePath,
+        originalContent,
+        nextContent,
+        { annotation: BLOCKS_MACHINE_WRITE_ANNOTATION, today },
+      );
+      if (!committed.ok) {
         new Notice("Could not update bullet property");
         return false;
       }
@@ -428,15 +436,25 @@ class BobNavigationHotkeysDependencyMirrorMixin {
     }
     const finalLines = working.split(/\r?\n/);
     const anchor = Math.max(0, Math.min(cursor.line, finalLines.length - 1));
-    if (
-      !applyEditorContentTransaction(cm, originalContent, working, {
-        line: anchor,
-        ch: Math.min(
-          Math.max(cursor.ch, 0),
-          String(finalLines[anchor] || "").length,
-        ),
-      }, BLOCKS_MACHINE_WRITE_ANNOTATION)
-    ) {
+    const committed = navApplySettledEditorPostimage(
+      this,
+      cm,
+      parentPath,
+      originalContent,
+      working,
+      {
+        cursor: {
+          line: anchor,
+          ch: Math.min(
+            Math.max(cursor.ch, 0),
+            String(finalLines[anchor] || "").length,
+          ),
+        },
+        annotation: BLOCKS_MACHINE_WRITE_ANNOTATION,
+        today,
+      },
+    );
+    if (!committed.ok) {
       new Notice("Could not delete task dependencies; no tasks were updated");
       return null;
     }
@@ -557,102 +575,7 @@ class BobNavigationHotkeysDependencyMirrorMixin {
   // R9 half of the hand-edit mirror: drop the linkless line(s) and the field,
   // then recover immediately (ADJ-8) when no open prerequisite remains.
   async applyDependencyHandEditClear(editor, parentPath, plan, options = {}) {
-    const content = String(editor.getValue() || "");
-    const { lines, lineEnding } = splitMarkdownContent(content);
-    const owning = plan.owning;
-    if (!Number.isInteger(owning) || owning < 0 || owning >= lines.length) {
-      return Object.freeze({ mirrored: false });
-    }
-    if (isBlockquotedMarkdownLine(lines[owning])) {
-      return Object.freeze({ mirrored: false });
-    }
-    const next = lines.slice();
-    if (plan.kind === "clear-empty" && Array.isArray(plan.emptyLines)) {
-      const dels = plan.emptyLines
-        .filter((line) => line !== owning)
-        .sort((a, b) => b - a);
-      for (const line of dels) {
-        if (line >= 0 && line < next.length) {
-          next.splice(line, 1);
-        }
-      }
-    }
-    let parentText = deleteBulletProperty(String(next[owning] || ""), "dependsOn").line;
-    const registry =
-      options.registry || (await readTasksStatusRegistry(this.app));
-    const preview = next.slice();
-    preview[owning] = parentText;
-    const previewContent = preview.join(lineEnding);
-    const recoveryToday = options.today || new Date();
-    // The snapshot costs a whole-vault read, so build it only for a `[?]`
-    // dependent: recovery can never fire otherwise (same gate as
-    // `needsDependencyRecoverySnapshot`; adds never reach this clear path).
-    const clearNeedsSnapshot =
-      getObsidianTaskCheckboxStatus(String(lines[owning] || "")) === "?";
-    let recoverySnapshot = options.vaultContents !== undefined ? options.vaultContents : null;
-    if (options.vaultContents === undefined && clearNeedsSnapshot && typeof this.readDependencyRecoveryVaultContents === "function") {
-      try {
-        recoverySnapshot = await this.readDependencyRecoveryVaultContents(parentPath, previewContent);
-      } catch (_snapshotError) {
-        recoverySnapshot = null;
-      }
-    }
-    const recoveryNotes = [];
-    if (recoverySnapshot instanceof Map) {
-      for (const [filePath, fileContent] of recoverySnapshot) {
-        const normalized = normalizeVaultRelativePath(filePath);
-        if (!normalized) {
-          continue;
-        }
-        recoveryNotes.push({
-          path: normalized,
-          content: normalized === normalizeVaultRelativePath(parentPath) ? previewContent : String(fileContent || ""),
-        });
-      }
-    } else if (recoverySnapshot && typeof recoverySnapshot === "object") {
-      for (const filePath of Object.keys(recoverySnapshot)) {
-        const normalized = normalizeVaultRelativePath(filePath);
-        if (!normalized) {
-          continue;
-        }
-        recoveryNotes.push({
-          path: normalized,
-          content: normalized === normalizeVaultRelativePath(parentPath) ? previewContent : String(recoverySnapshot[filePath] || ""),
-        });
-      }
-    }
-    if (!recoveryNotes.some((note) => normalizeVaultRelativePath(note.path) === normalizeVaultRelativePath(parentPath))) {
-      recoveryNotes.push({ path: parentPath, content: previewContent });
-    }
-    const recoveryIndex = buildScheduledRecoveryIndex(
-      recoveryNotes,
-      registry,
-      recoveryToday,
-    );
-    const metadata = getScheduledRecoveryMetadata(
-      recoveryIndex,
-      parentPath,
-      owning,
-    );
-    const reconciled = reconcileBlockedScheduledTaskLine(parentText, metadata);
-    parentText = reconciled.line;
-    // The hand-edit mirror never stamps freshness.
-    next[owning] = parentText;
-    const nextContent = next.join(lineEnding);
-    if (nextContent === content) {
-      return Object.freeze({ mirrored: false });
-    }
-    const cursor = getEditorCursor(editor);
-    if (
-      !applyEditorContentTransaction(editor, content, nextContent, {
-        line: cursor ? cursor.line : owning,
-        ch: cursor ? cursor.ch : 0,
-      })
-    ) {
-      new Notice("Could not mirror dependency edit");
-      return Object.freeze({ mirrored: false });
-    }
-    return Object.freeze({ mirrored: true });
+    return navApplyDependencyHandEditClear(this, editor, parentPath, plan, options);
   }
 
   // CM6 update-listener entry for the hand-edit mirror: reads the real

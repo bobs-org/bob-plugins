@@ -746,7 +746,14 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
       }
     }
     if (batchPlan.changed) {
-      if (!applyEditorContentTransaction(this.editor, originalContent, batchCommitContent, null, BLOCKS_MACHINE_WRITE_ANNOTATION)) {
+      if (!navApplySettledEditorPostimage(
+        this.plugin,
+        this.editor,
+        filePath,
+        originalContent,
+        batchCommitContent,
+        { annotation: BLOCKS_MACHINE_WRITE_ANNOTATION, today: new Date() },
+      ).ok) {
         new Notice("Could not update bullet property");
         return false;
       }

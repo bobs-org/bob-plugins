@@ -502,7 +502,7 @@ function navSettleJumpLocations(path, outcome) {
       ? target.path
       : String(path || "");
   if (!destPath) return null;
-  const origin = outcome.cursor && Number.isInteger(outcome.cursor.line)
+  const cursor = outcome.cursor && Number.isInteger(outcome.cursor.line)
     ? {
         path: destPath,
         line: outcome.cursor.line,
@@ -514,19 +514,23 @@ function navSettleJumpLocations(path, outcome) {
     line: Number.isInteger(target.line) ? target.line : 0,
     ch: Number.isInteger(target.ch) ? target.ch : 0,
   };
-  if (!origin) return { origin: null, destination };
-  return { origin, destination };
+  if (!cursor) return { origin: null, destination };
+  // recordJump follows Vim's from -> to direction. Ctrl+O should return
+  // from the task's new settled line to the physical stay cursor.
+  return { origin: destination, destination: cursor };
 }
 
-function consumeNavSettleFlushResults(plugin, results) {
+function consumeNavSettleFlushResults(plugin, results, options = {}) {
   const list = Array.isArray(results) ? results : [];
   const consumed = [];
+  const recordJump = options.recordJump !== false;
   for (const entry of list) {
     if (!entry || typeof entry !== "object") continue;
     const result = entry.result && typeof entry.result === "object" ? entry.result : entry;
     const path = typeof entry.path === "string" ? entry.path : "";
     const jump = navSettleJumpLocations(path, result);
     if (
+      recordJump &&
       jump &&
       jump.origin &&
       jump.destination &&

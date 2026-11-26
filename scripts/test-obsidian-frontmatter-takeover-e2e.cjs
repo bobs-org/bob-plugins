@@ -36,7 +36,9 @@ test("computeVerdict: GO, partial GO, NO-GO, and a missing check", () => {
 
 test("parseArgs accepts the documented flags and rejects bad input", () => {
   const args = lib.parseArgs(["--executable", "/x/obsidian", "--out", "/tmp/a", "--report", "/tmp/r.json", "-s", "-h"]);
-  assert.deepEqual(args, { executable: "/x/obsidian", out: "/tmp/a", report: "/tmp/r.json", selfTest: true, help: true });
+  assert.deepEqual(args, { executable: "/x/obsidian", out: "/tmp/a", report: "/tmp/r.json", profile: "full", selfTest: true, help: true });
+  assert.equal(lib.parseArgs(["--profile", "bank"]).profile, "bank");
+  assert.throws(() => lib.parseArgs(["--profile", "album"]), /must be full or bank/);
   assert.throws(() => lib.parseArgs(["-e"]), /--executable requires a PATH value/);
   assert.throws(() => lib.parseArgs(["--verbose"]), /Unknown argument: --verbose/);
   const help = spawnSync(process.execPath, [path.join(__dirname, "obsidian-frontmatter-takeover-e2e.cjs"), "--bogus"], { encoding: "utf8", timeout: 20_000 });
@@ -81,6 +83,49 @@ test("required takeover checks cover both surfaces, denials, and command routing
   assert.ok(lib.REQUIRED_CHECKS.some((row) => row.surface === "both"));
 });
 
+test("Bank profile isolates its acceptance checks and retains the final invariants", () => {
+  const names = lib.BANK_PROFILE_REQUIRED_CHECKS.map((row) => row.name);
+  for (const name of [
+    "plugin-loaded", "bank-cache-parity", "own-bank-live", "own-bank-reading",
+    "bank-area-live-arbitration", "bank-area-reading-arbitration", "bank-pane-path-lifecycle",
+    "bank-area-settings-gestures", "bank-cache-skew-releases", "bank-contractless-native",
+    "source-toggle-releases", "bank-add-file-property", "bank-sidebar-native",
+    "disable-unload-restores", "pending-capability-native", "bytes-unchanged",
+    "no-paint-spawn", "screenshots-captured", "no-console-exceptions",
+  ]) assert.ok(names.includes(name), name);
+  assert.ok(!names.includes("own-day-live"));
+  assert.ok(!names.includes("own-album-live"));
+  assert.equal(lib.computeVerdict(lib.passingReport("bank")).verdict, "GO");
+  const missingBank = lib.passingReport("bank");
+  missingBank.checks = missingBank.checks.filter((row) => row.name !== "bank-area-live-arbitration");
+  assert.deepEqual(lib.computeVerdict(missingBank).missing, ["bank-area-live-arbitration"]);
+});
+
+test("Bank modal and Settings assertions use owner lifecycle, opener result, and actual selected row", () => {
+  const modal = {
+    present: true, closed: false, connected: true, ownerDocumentPresent: true,
+    ownerDocumentIsCurrent: true, classes: ["modal", "bob-bank-setup-card-modal"],
+  };
+  const opener = { called: true, pending: false, outcome: { ok: true, modalPresent: true } };
+  assert.deepEqual(lib.modalLifecycleFailures(modal, "bob-bank-setup-card-modal", opener), []);
+  assert.ok(lib.modalLifecycleFailures({ ...modal, connected: false }, "bob-bank-setup-card-modal", opener).length);
+  assert.ok(lib.modalLifecycleFailures(modal, "bob-bank-setup-card-modal", { called: true,
+    pending: false, outcome: { ok: false, reason: "refused", modalPresent: false } }).length);
+  assert.match(lib.modalProbeSource("bank"), /ownerDocumentIsCurrent/);
+  assert.match(lib.modalProbeSource("bank"), /containerConnected/);
+  assert.match(lib.modalProbeSource("bank"), /rootClass/);
+  const settings = {
+    noteKind: "bank", viewMode: "live", editorMode: "browse", hasSettingsGroup: true,
+    heading: true, selectedId: "setting::summary", selectedRowGroup: "settings", selectedRowConnected: true,
+  };
+  assert.deepEqual(lib.bankSettingsFailures(settings), []);
+  for (const delta of [
+    { noteKind: "area" }, { viewMode: "reading" }, { editorMode: "add" },
+    { hasSettingsGroup: false }, { heading: false }, { selectedId: "setting::task_type" },
+    { selectedRowGroup: "properties" }, { selectedRowConnected: false },
+  ]) assert.ok(lib.bankSettingsFailures({ ...settings, ...delta }).length, JSON.stringify(delta));
+});
+
 test("ownership and native restoration probes reject the opposite state", () => {
   const owned = {
     mode: "live", scopeClass: true, actualOwned: true, containerPresent: true, containerVisible: false,
@@ -100,6 +145,8 @@ test("screenshot inventory covers the required light/dark × narrow/wide matrix"
   assert.ok(needed.includes("bank-reading-dark-narrow"));
   assert.ok(needed.includes("ordinary-add-light-wide"));
   assert.equal(needed.length, 44);
+  assert.equal(lib.screenshotNeeds("bank").length, 8);
+  assert.ok(lib.screenshotNeeds("bank").every((name) => name.startsWith("bank-")));
 });
 
 test("screenshot acceptance rejects leaked clones, native fallback, and wrong views", () => {

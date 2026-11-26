@@ -292,6 +292,68 @@ function makePage(ctx) {
       }
       throw new Error("contract capability " + contract + " timed out: " + JSON.stringify(last));
     },
+    modal: (kind) => ev(lib.modalProbeSource(kind)),
+    startOpenerWatch: (kind) => ev(lib.openerWatchSource(kind, "start")),
+    openerWatch: (kind) => ev(lib.openerWatchSource(kind, "read")),
+    stopOpenerWatch: (kind) => ev(lib.openerWatchSource(kind, "stop")),
+    waitOpener: async (kind, label, timeoutMs = 5_000) => {
+      const deadline = Date.now() + timeoutMs;
+      let last = null;
+      while (Date.now() < deadline) {
+        last = await page.openerWatch(kind);
+        if (last?.called && !last.pending) return last;
+        await sleep(75);
+      }
+      throw new Error((label || kind + " opener") + " did not settle: " + JSON.stringify(last));
+    },
+    waitModal: async (kind, expectedClass, label, timeoutMs = 10_000) => {
+      const deadline = Date.now() + timeoutMs;
+      let last = null;
+      while (Date.now() < deadline) {
+        last = await page.modal(kind);
+        if (lib.modalLifecycleFailures(last, expectedClass).length === 0) return last;
+        await sleep(100);
+      }
+      throw new Error((label || kind + " modal") + " timed out: " + JSON.stringify(last));
+    },
+    bankSnapshot: async (leafId) => {
+      const probe = await page.probe(leafId);
+      const state = await ev(`(async () => {
+        const plugin = app.plugins.plugins[${json(PLUGIN_ID)}];
+        const leaf = app.workspace.getLeafById(${json(leafId)});
+        const view = leaf?.view || null;
+        const viewMode = !view ? "" : view.getMode?.() === "preview" ? "reading"
+          : view.getState?.()?.source ? "source" : "live";
+        const bankFile = app.vault.getAbstractFileByPath(${json(P.bank)});
+        const bankSource = bankFile ? await app.vault.read(bankFile) : null;
+        const frontmatter = bankFile ? app.metadataCache.getFileCache(bankFile)?.frontmatter || null : null;
+        const scope = viewMode === "reading" ? view?.previewMode?.containerEl : view?.editor?.cm?.dom;
+        const drawer = scope?.querySelector?.('.bob-home-card[data-home-source="bank.md"] .bob-property-card-foot-drawer');
+        return {
+          leafPath: view?.file?.path || "", viewMode,
+          bankSource,
+          bankCache: frontmatter ? JSON.parse(JSON.stringify(frontmatter)) : null,
+          homeCardActive: plugin?.homeCardActive,
+          bankSetupActive: plugin?.bankSetupActive,
+          bankSetupCardActive: plugin?.bankSetupCardActive,
+          propertyEditorEntrypointsActive: plugin?.propertyEditorEntrypointsActive,
+          bankSetupExpanded: plugin?.bankSetupModelFor?.("bank.md")?.expanded === true,
+          homeDrawerOpen: drawer?.getAttribute?.("data-open") === "true",
+          capability: (() => {
+            try { return plugin?.propertyCapabilityState?.(plugin.propertyCapabilityCurrentBobKey?.()) || null; }
+            catch (_) { return null; }
+          })(),
+          markdownLeaves: app.workspace.getLeavesOfType("markdown").map((item) => item.id),
+        };
+      })()`);
+      return {
+        probe, state,
+        bankModal: await page.modal("bank"),
+        propertyModal: await page.modal("property"),
+        bankOpener: await page.openerWatch("bank"),
+        propertyOpener: await page.openerWatch("property"),
+      };
+    },
     keys: async (key, modifiers = 0) => {
       const code = /^[a-z]$/i.test(key) ? "Key" + key.toUpperCase()
         : (key === "Enter" || key === "Escape" ? key : key);
@@ -313,7 +375,10 @@ function makePage(ctx) {
     },
     closeEditor: async () => {
       await lib.dismissEditor({
-        isOpen: () => ev("Boolean(document.querySelector('.bob-property-editor'))"),
+        isOpen: async () => {
+          const modal = await page.modal("property");
+          return modal.present && !modal.closed;
+        },
         escape: () => page.keys("Escape"),
       });
     },
@@ -336,45 +401,53 @@ async function run(args) {
   const report = {
     startedAt: new Date().toISOString(), checks: [], screenshots: [], consoleExceptions: [], consoleErrors: [],
     prerequisites: [], measurements: {}, bobInvocations: { count: 0 }, pluginSource: pluginProvenance(),
-    addFilePropertyCommand: null,
+    addFilePropertyCommand: null, profile: args.profile || "full", skippedChecks: [],
   };
   const outDir = path.resolve(args.out || path.join(os.tmpdir(), "bob-frontmatter-takeover-e2e-shots-" + crypto.randomBytes(4).toString("hex")));
   const reportPath = path.resolve(args.report || path.join(outDir, "frontmatter-takeover-report.json"));
   Object.assign(report, { reportPath, screenshotDirectory: outDir });
-  activeRun = { report, reportPath, outDir, currentCheck: null, client: null, child: null };
+  activeRun = { report, reportPath, outDir, currentCheck: null, client: null, child: null, profile: report.profile };
   let scratch = "";
   let child = null;
   let client = null;
+  let vaultReal = "";
+  let fixtureNames = [];
+  let bobLogPath = "";
   let fixtureWatch = null;
+  let bankFixtureWatch = null;
   let fixtureWatchTimer = null;
+  let ctxRef = null;
+  let testControlPath = "";
   const observeFixtureWatch = (stage) => {
-    if (!fixtureWatch) return;
-    if (stage) fixtureWatch.stage = stage;
-    let content = "";
-    let hash = null;
-    try {
-      content = fs.readFileSync(fixtureWatch.file, "utf8");
-      hash = sha256Text(content);
-    } catch (_) {}
-    if (hash !== fixtureWatch.current) {
-      let firstDifference = null;
-      if (hash && content !== fixtureWatch.expectedText) {
-        let offset = 0;
-        while (offset < content.length && offset < fixtureWatch.expectedText.length
-          && content[offset] === fixtureWatch.expectedText[offset]) offset += 1;
-        firstDifference = {
-          offset,
-          expected: fixtureWatch.expectedText.slice(Math.max(0, offset - 80), offset + 160),
-          actual: content.slice(Math.max(0, offset - 80), offset + 160),
-        };
+    for (const [watcher, key] of [[fixtureWatch, "fixtureWatch"], [bankFixtureWatch, "bankFixtureWatch"]]) {
+      if (!watcher) continue;
+      if (stage) watcher.stage = stage;
+      let content = "";
+      let hash = null;
+      try {
+        content = fs.readFileSync(watcher.file, "utf8");
+        hash = sha256Text(content);
+      } catch (_) {}
+      if (hash !== watcher.current) {
+        let firstDifference = null;
+        if (hash && content !== watcher.expectedText) {
+          let offset = 0;
+          while (offset < content.length && offset < watcher.expectedText.length
+            && content[offset] === watcher.expectedText[offset]) offset += 1;
+          firstDifference = {
+            offset,
+            expected: watcher.expectedText.slice(Math.max(0, offset - 80), offset + 160),
+            actual: content.slice(Math.max(0, offset - 80), offset + 160),
+          };
+        }
+        watcher.transitions.push({
+          at: new Date().toISOString(), stage: watcher.stage,
+          from: watcher.current, to: hash, firstDifference,
+        });
+        watcher.current = hash;
       }
-      fixtureWatch.transitions.push({
-        at: new Date().toISOString(), stage: fixtureWatch.stage,
-        from: fixtureWatch.current, to: hash, firstDifference,
-      });
-      fixtureWatch.current = hash;
+      if (report[key]) report[key].final = hash;
     }
-    report.fixtureWatch.final = hash;
   };
   const check = (name, ok, detail = {}, mandatory = true) => {
     report.checks.push({
@@ -383,21 +456,183 @@ async function run(args) {
     });
     return ok;
   };
+  const finalCheck = async (name, fn) => {
+    try {
+      const result = await fn();
+      const ok = Boolean(result && result.ok !== false
+        && (result.ok === true || result.ok === undefined || result.failures === undefined || result.failures.length === 0));
+      check(name, ok, result || {});
+    } catch (error) {
+      check(name, false, { error: String(error && error.stack || error).slice(0, 3000) });
+    }
+  };
+  const restoreBankProbe = async (before) => {
+    const failures = [];
+    if (!ctxRef || !client || !before?.state) return failures;
+    const safe = async (label, action) => {
+      try { await action(); } catch (error) { failures.push(label + ": " + String(error?.message || error)); }
+    };
+    await safe("restore opener watches", async () => {
+      await ctxRef.page.stopOpenerWatch("bank");
+      await ctxRef.page.stopOpenerWatch("property");
+    });
+    await safe("restore plugin/modal state", async () => {
+      const pluginMissing = await ctxRef.page.ev(`!app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}]`);
+      await ctxRef.page.ev(`(async () => {
+        if (${JSON.stringify(pluginMissing)}) {
+          await app.plugins.enablePlugin(${JSON.stringify(PLUGIN_ID)});
+        }
+        const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
+        try { plugin?.bankSetupCardModal?.close?.(); } catch (_) {}
+        try { plugin?.propertyEditorModal?.close?.(); } catch (_) {}
+        if (!plugin) return false;
+        const flags = ${JSON.stringify({
+          homeCardActive: before.state.homeCardActive,
+          bankSetupActive: before.state.bankSetupActive,
+          bankSetupCardActive: before.state.bankSetupCardActive,
+          propertyEditorEntrypointsActive: before.state.propertyEditorEntrypointsActive,
+        })};
+        for (const [key, value] of Object.entries(flags)) if (value !== undefined) plugin[key] = value;
+        try { plugin.scheduleHomeCardRefresh?.(); } catch (_) {}
+        try { plugin.scheduleBankSetupRefresh?.(); } catch (_) {}
+        return true;
+      })()`);
+      await waitFor(client, "Boolean(app.plugins.plugins[" + JSON.stringify(PLUGIN_ID) + "])" , Boolean, "Bank probe plugin restore", 30_000);
+      if (pluginMissing) await ctxRef.page.install();
+    });
+    await safe("restore Bank fixture source", async () => {
+      if (typeof before.state.bankSource !== "string") return;
+      const current = await ctxRef.page.ev(`(async () => {
+        const file = app.vault.getAbstractFileByPath(${JSON.stringify(P.bank)});
+        return file ? await app.vault.read(file) : null;
+      })()`);
+      if (current !== before.state.bankSource) {
+        await ctxRef.page.ev(`(async () => {
+          const file = app.vault.getAbstractFileByPath(${JSON.stringify(P.bank)});
+          if (!file) throw new Error("bank.md disappeared during probe");
+          await app.vault.modify(file, ${JSON.stringify(before.state.bankSource)});
+          return true;
+        })()`);
+        await waitFor(client,
+          "window.__bobFrontmatterTakeover.readNote(" + JSON.stringify(P.bank) + ") === " + JSON.stringify(before.state.bankSource),
+          Boolean, "Bank fixture source restore", 15_000);
+      }
+    });
+    await safe("restore capability shim", async () => {
+      let control = { mode: "pass" };
+      try { control = JSON.parse(fs.readFileSync(testControlPath, "utf8")); } catch (_) {}
+      const configPath = path.join(ctxRef.profileDir, ".config", "bob", "config.yml");
+      const config = fs.existsSync(configPath) ? fs.readFileSync(configPath, "utf8") : "";
+      if (control.mode !== "pass" || config.includes("shim-alt")) {
+        writeControl(testControlPath, "pass");
+        ctxRef.page.writeConfig(null);
+        await ctxRef.page.ev(`(() => {
+          const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
+          if (!plugin) return false;
+          if (plugin.propertyCapabilityByBobPath instanceof Map) plugin.propertyCapabilityByBobPath.clear();
+          plugin.propertyCapabilityGeneration = (plugin.propertyCapabilityGeneration || 0) + 1;
+          return plugin.schedulePropertyCapabilityProbes("bank-probe-cleanup");
+        })()`);
+        await ctxRef.page.waitCapability("confirmed", 25_000);
+      }
+    });
+    await safe("restore Bank setup fold and Area drawer", async () => {
+      const now = await ctxRef.page.bankSnapshot(ctxRef.main);
+      if (now.state.bankSetupExpanded !== before.state.bankSetupExpanded
+        || now.state.homeDrawerOpen !== before.state.homeDrawerOpen) {
+        await ctxRef.page.ev(`(() => {
+          const leaf = app.workspace.getLeafById(${JSON.stringify(ctxRef.main)});
+          const view = leaf?.view;
+          const scope = view?.getMode?.() === "preview" ? view.previewMode?.containerEl : view?.editor?.cm?.dom;
+          const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
+          const expanded = plugin?.bankSetupModelFor?.("bank.md")?.expanded === true;
+          if (expanded !== ${JSON.stringify(before.state.bankSetupExpanded)}) {
+            scope?.querySelector?.('.bob-bank-setup[data-bank-setup-source="bank.md"] .bob-bank-setup-toggle')?.click?.();
+          }
+          const disclosure = scope?.querySelector?.('.bob-home-card[data-home-source="bank.md"] .bob-property-card-foot-disclosure');
+          const drawer = scope?.querySelector?.('.bob-home-card[data-home-source="bank.md"] .bob-property-card-foot-drawer');
+          const drawerOpen = drawer?.getAttribute?.("data-open") === "true";
+          if (disclosure && drawerOpen !== ${JSON.stringify(before.state.homeDrawerOpen)}) disclosure.click();
+          return true;
+        })()`);
+      }
+    });
+    await safe("restore pane set", async () => {
+      const originalLeaves = new Set(before.state.markdownLeaves || []);
+      await ctxRef.page.ev(`(() => {
+        const keep = new Set(${JSON.stringify(before.state.markdownLeaves || [])});
+        for (const leaf of app.workspace.getLeavesOfType("markdown")) {
+          if (!keep.has(leaf.id)) leaf.detach?.();
+        }
+        return true;
+      })()`);
+      void originalLeaves;
+    });
+    await safe("restore active note and mode", async () => {
+      if (!before.state.leafPath) return;
+      const mode = ["live", "reading", "source"].includes(before.state.viewMode) ? before.state.viewMode : "live";
+      await ctxRef.page.open(ctxRef.main, before.state.leafPath, mode);
+      await ctxRef.page.settle(250);
+    });
+    await safe("restore Bank activity flags", async () => {
+      await ctxRef.page.ev(`(() => {
+        const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
+        if (!plugin) return false;
+        for (const [key, value] of Object.entries(${JSON.stringify({
+          homeCardActive: before.state.homeCardActive,
+          bankSetupActive: before.state.bankSetupActive,
+          bankSetupCardActive: before.state.bankSetupCardActive,
+          propertyEditorEntrypointsActive: before.state.propertyEditorEntrypointsActive,
+        })})) if (value !== undefined) plugin[key] = value;
+        try { plugin.scheduleHomeCardRefresh?.(); } catch (_) {}
+        try { plugin.scheduleBankSetupRefresh?.(); } catch (_) {}
+        return true;
+      })()`);
+    });
+    return failures;
+  };
   const attempt = async (name, fn) => {
+    if (args.profile === "bank" && !lib.BANK_PROFILE_PRODUCT_CHECKS.includes(name)) {
+      report.skippedChecks.push(name);
+      process.stderr.write("[frontmatter-takeover] check skipped by Bank profile " + name + "\n");
+      return;
+    }
     observeFixtureWatch("before:" + name);
     const startedAt = new Date().toISOString();
     activeRun.currentCheck = { name, startedAt };
     process.stderr.write("[frontmatter-takeover] check start " + name + " " + startedAt + "\n");
+    const bankProbe = lib.BANK_PROFILE_PRODUCT_CHECKS.includes(name);
+    let before = null;
+    let after = null;
+    let result = null;
+    let error = null;
+    let cleanupFailures = [];
     try {
+      if (bankProbe && ctxRef?.page) {
+        try { before = await ctxRef.page.bankSnapshot(ctxRef.main); }
+        catch (snapshotError) { before = { snapshotError: String(snapshotError?.message || snapshotError) }; }
+      }
       if (client) await client.evaluate(`(() => {
         const audit = window.__bobFrontmatterTakeoverWriteAudit;
         if (audit) audit.stage = ${JSON.stringify(name)};
       })()`);
-      const result = await fn();
-      check(name, Boolean(result && result.ok !== false && (result.ok === true || result.ok === undefined || result.failures === undefined || result.failures.length === 0)), result || {});
-    } catch (error) {
-      check(name, false, { error: String(error && error.stack || error).slice(0, 3000) });
+      result = await fn();
+    } catch (caught) {
+      error = caught;
     } finally {
+      if (bankProbe && ctxRef?.page) {
+        try { after = await ctxRef.page.bankSnapshot(ctxRef.main); }
+        catch (snapshotError) { after = { snapshotError: String(snapshotError?.message || snapshotError) }; }
+        cleanupFailures = await restoreBankProbe(before);
+      }
+      const resultOk = Boolean(result && result.ok !== false
+        && (result.ok === true || result.ok === undefined || result.failures === undefined || result.failures.length === 0));
+      const ok = !error && resultOk && cleanupFailures.length === 0;
+      const detail = bankProbe
+        ? { result: result || null, error: error ? String(error && error.stack || error).slice(0, 3000) : null,
+          bankState: { before, after }, cleanupFailures }
+        : error ? { error: String(error && error.stack || error).slice(0, 3000) } : result || {};
+      check(name, ok, detail);
       const row = report.checks[report.checks.length - 1];
       if (row?.name === name) Object.assign(row, { startedAt, finishedAt: new Date().toISOString() });
       process.stderr.write("[frontmatter-takeover] check done " + name + " status=" + (row?.status || "unknown") + " " + new Date().toISOString() + "\n");
@@ -434,7 +669,9 @@ async function run(args) {
     const shimDir = path.join(profileDir, "shim");
     const altShimDir = path.join(profileDir, "shim-alt");
     const bobLog = path.join(profileDir, "bob-invocations.jsonl");
+    bobLogPath = bobLog;
     const controlPath = path.join(profileDir, "bob-control.json");
+    testControlPath = controlPath;
     fs.mkdirSync(vaultDir, { recursive: true });
     fs.mkdirSync(profileDir, { recursive: true });
     for (const [name, content] of Object.entries(notes)) shared.writeNote(vaultDir, name, content);
@@ -444,9 +681,10 @@ async function run(args) {
     const shim = writeBobShim(shimDir, bobLog, controlPath, bob.path);
     writeBobShim(altShimDir, bobLog, controlPath, bob.path);
     shared.initScratchGit(vaultDir);
-    const vaultReal = fs.realpathSync(vaultDir);
+    vaultReal = fs.realpathSync(vaultDir);
     shared.seedProfile(profileDir, vaultReal);
     const names = Object.keys(notes).sort();
+    fixtureNames = names;
     report.fixtures = { names, expected: Object.fromEntries(names.map((name) => [name, sha256Text(notes[name])])), seeded: hashFixtures(vaultReal, names) };
     report.scratch = { root: scratch, vault: vaultReal, profile: profileDir };
     fixtureWatch = {
@@ -457,6 +695,14 @@ async function run(args) {
       path: P.day, expected: fixtureWatch.current, transitions: [], final: fixtureWatch.current,
     };
     fixtureWatch.transitions = report.fixtureWatch.transitions;
+    bankFixtureWatch = {
+      file: path.join(vaultReal, P.bank), expectedText: notes[P.bank],
+      current: report.fixtures.expected[P.bank], stage: "startup", transitions: [],
+    };
+    report.bankFixtureWatch = {
+      path: P.bank, expected: bankFixtureWatch.current, transitions: [], final: bankFixtureWatch.current,
+    };
+    bankFixtureWatch.transitions = report.bankFixtureWatch.transitions;
     fixtureWatchTimer = setInterval(() => observeFixtureWatch(), 100);
 
     const port = await shared.freePort();
@@ -495,6 +741,7 @@ async function run(args) {
     await shared.setTheme(client, "light");
 
     const ctx = { client, report, notes, outDir, profileDir, check, attempt };
+    ctxRef = ctx;
     ctx.page = makePage(ctx);
     await ctx.page.install();
     await ctx.page.ev(`(() => {
@@ -586,43 +833,66 @@ async function run(args) {
         failures.push("the bank card is no longer first in the double-equals registry");
       }
       const drawer = await ctx.page.ev(`(() => {
-        const disclosure = document.querySelector('.bob-home-card[data-home-source="bank.md"] .bob-property-card-foot-disclosure');
+        const leaf = app.workspace.getLeafById(${JSON.stringify(ctx.main)});
+        const view = leaf?.view;
+        const scope = view?.getMode?.() === "preview" ? view.previewMode?.containerEl : view?.editor?.cm?.dom;
+        const disclosure = scope?.querySelector?.('.bob-home-card[data-home-source="bank.md"] .bob-property-card-foot-disclosure');
         if (!disclosure) return false;
         disclosure.click();
         return true;
       })()`);
       if (!drawer) failures.push("Area Properties drawer disclosure is missing");
-      const nestedAvailable = await waitFor(client,
-        `Boolean(document.querySelector('.bob-home-card[data-home-source="bank.md"] [data-property-key="bank"] .bob-property-card-foot-nested'))`,
-        Boolean, "Area drawer bank setup opener", 10_000);
+      const nestedAvailable = await waitFor(client, `(() => {
+        const leaf = app.workspace.getLeafById(${JSON.stringify(ctx.main)});
+        const view = leaf?.view;
+        const scope = view?.getMode?.() === "preview" ? view.previewMode?.containerEl : view?.editor?.cm?.dom;
+        return Boolean(scope?.querySelector?.('.bob-home-card[data-home-source="bank.md"] [data-property-key="bank"] .bob-property-card-foot-nested'));
+      })()`, Boolean, "Area drawer bank setup opener", 10_000);
       if (!nestedAvailable) failures.push("Area Properties drawer lost the nested bank setup opener");
+      const openerWatch = await ctx.page.startOpenerWatch("bank");
+      if (!openerWatch?.installed) failures.push("could not observe the production Bank Setup opener");
       const nested = await ctx.page.ev(`(() => {
-        const button = document.querySelector('.bob-home-card[data-home-source="bank.md"] [data-property-key="bank"] .bob-property-card-foot-nested');
+        const leaf = app.workspace.getLeafById(${JSON.stringify(ctx.main)});
+        const view = leaf?.view;
+        const scope = view?.getMode?.() === "preview" ? view.previewMode?.containerEl : view?.editor?.cm?.dom;
+        const button = scope?.querySelector?.('.bob-home-card[data-home-source="bank.md"] [data-property-key="bank"] .bob-property-card-foot-nested');
         if (!button) return false;
         button.click();
         return true;
       })()`);
       if (!nested) failures.push("Area Properties drawer bank opener did not click");
-      const nestedEditor = await waitFor(client,
-        `Boolean(document.querySelector(".bob-bank-setup-card-modal"))`, Boolean,
-        "Area bank nested editor", 10_000);
-      if (!nestedEditor) failures.push("Area Properties drawer did not hand off to Bank Setup");
+      const nestedEditor = await ctx.page.waitModal("bank", "bob-bank-setup-card-modal", "Area bank nested editor", 10_000);
+      const nestedOpener = await ctx.page.waitOpener("bank", "Area drawer Bank Setup opener");
+      failures.push(...lib.modalLifecycleFailures(nestedEditor, "bob-bank-setup-card-modal", nestedOpener));
+      const nestedOpenOutcome = { modal: nestedEditor, opener: nestedOpener };
+      await ctx.page.stopOpenerWatch("bank");
       await ctx.page.ev(`app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}]?.bankSetupCardModal?.close?.()`);
       await ctx.page.settle(100);
       const setupState = () => ctx.page.ev(`(() => {
+        const leaf = app.workspace.getLeafById(${JSON.stringify(ctx.main)});
+        const view = leaf?.view;
+        const scope = view?.getMode?.() === "preview" ? view.previewMode?.containerEl : view?.editor?.cm?.dom;
         const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
-        const card = document.querySelector('.bob-bank-setup[data-bank-setup-source="bank.md"]');
+        const card = scope?.querySelector?.('.bob-bank-setup[data-bank-setup-source="bank.md"]');
         const body = card?.querySelector('.bob-bank-setup-body');
-        const mark = document.querySelector('.bob-home-card[data-home-source="bank.md"] [data-property-key="bank"] .bob-property-card-foot-mark');
+        const mark = scope?.querySelector?.('.bob-home-card[data-home-source="bank.md"] [data-property-key="bank"] .bob-property-card-foot-mark');
         return { expanded: plugin?.bankSetupModelFor?.("bank.md")?.expanded === true,
           bodyVisible: Boolean(body && !body.hasAttribute("hidden")), mark: mark?.textContent || null };
       })()`);
       let current = await setupState();
       if (current.expanded) {
-        await ctx.page.ev(`document.querySelector('.bob-bank-setup[data-bank-setup-source="bank.md"] .bob-bank-setup-toggle')?.click()`);
+        await ctx.page.ev(`(() => {
+          const leaf = app.workspace.getLeafById(${JSON.stringify(ctx.main)});
+          const view = leaf?.view;
+          const scope = view?.getMode?.() === "preview" ? view.previewMode?.containerEl : view?.editor?.cm?.dom;
+          scope?.querySelector?.('.bob-bank-setup[data-bank-setup-source="bank.md"] .bob-bank-setup-toggle')?.click();
+        })()`);
         current = await waitFor(client, `(() => {
+          const leaf = app.workspace.getLeafById(${JSON.stringify(ctx.main)});
+          const view = leaf?.view;
+          const scope = view?.getMode?.() === "preview" ? view.previewMode?.containerEl : view?.editor?.cm?.dom;
           const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
-          const mark = document.querySelector('.bob-home-card[data-home-source="bank.md"] [data-property-key="bank"] .bob-property-card-foot-mark');
+          const mark = scope?.querySelector?.('.bob-home-card[data-home-source="bank.md"] [data-property-key="bank"] .bob-property-card-foot-mark');
           return { expanded: plugin?.bankSetupModelFor?.("bank.md")?.expanded === true, mark: mark?.textContent || null };
         })()`, (value) => value?.expanded === false && value.mark === null,
         "collapsed bank body where-mark", 10_000);
@@ -630,45 +900,58 @@ async function run(args) {
         failures.push("Area where-mark claims a folded bank setup body");
       }
       const toggle = await ctx.page.ev(`(() => {
-        const button = document.querySelector('.bob-bank-setup[data-bank-setup-source="bank.md"] .bob-bank-setup-toggle');
+        const leaf = app.workspace.getLeafById(${JSON.stringify(ctx.main)});
+        const view = leaf?.view;
+        const scope = view?.getMode?.() === "preview" ? view.previewMode?.containerEl : view?.editor?.cm?.dom;
+        const button = scope?.querySelector?.('.bob-bank-setup[data-bank-setup-source="bank.md"] .bob-bank-setup-toggle');
         if (!button) return false;
         button.click();
         return true;
       })()`);
       if (!toggle) failures.push("bank setup body fold control is missing");
       const expanded = await waitFor(client, `(() => {
+        const leaf = app.workspace.getLeafById(${JSON.stringify(ctx.main)});
+        const view = leaf?.view;
+        const scope = view?.getMode?.() === "preview" ? view.previewMode?.containerEl : view?.editor?.cm?.dom;
         const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
-        const card = document.querySelector('.bob-bank-setup[data-bank-setup-source="bank.md"]');
+        const card = scope?.querySelector?.('.bob-bank-setup[data-bank-setup-source="bank.md"]');
         const body = card?.querySelector('.bob-bank-setup-body');
-        const mark = document.querySelector('.bob-home-card[data-home-source="bank.md"] [data-property-key="bank"] .bob-property-card-foot-mark');
+        const mark = scope?.querySelector?.('.bob-home-card[data-home-source="bank.md"] [data-property-key="bank"] .bob-property-card-foot-mark');
         return { expanded: plugin?.bankSetupModelFor?.("bank.md")?.expanded === true,
           bodyVisible: Boolean(body && !body.hasAttribute("hidden")), mark: mark?.textContent || null };
       })()`, (value) => value?.expanded === true && value.bodyVisible === true && value.mark === "setup",
       "expanded bank body and Area where-mark", 10_000);
       if (!expanded || expanded.mark !== "setup") failures.push("Area where-mark did not follow the visible bank setup body");
+      const editWatch = await ctx.page.startOpenerWatch("bank");
+      if (!editWatch?.installed) failures.push("could not observe the production Bank Edit opener");
       const edit = await ctx.page.ev(`(() => {
-        const button = document.querySelector('.bob-bank-setup[data-bank-setup-source="bank.md"] button.bob-bank-setup-edit');
+        const leaf = app.workspace.getLeafById(${JSON.stringify(ctx.main)});
+        const view = leaf?.view;
+        const scope = view?.getMode?.() === "preview" ? view.previewMode?.containerEl : view?.editor?.cm?.dom;
+        const button = scope?.querySelector?.('.bob-bank-setup[data-bank-setup-source="bank.md"] button.bob-bank-setup-edit');
         if (!button) return false;
         button.click();
         return true;
       })()`);
       if (!edit) failures.push("bank Edit control did not click");
-      const editEditor = await waitFor(client,
-        `Boolean(document.querySelector(".bob-bank-setup-card-modal"))`, Boolean,
-        "bank Edit setup editor", 10_000);
-      if (!editEditor) failures.push("bank Edit control did not open Bank Setup");
+      const editEditor = await ctx.page.waitModal("bank", "bob-bank-setup-card-modal", "bank Edit setup editor", 10_000);
+      const editOpener = await ctx.page.waitOpener("bank", "Bank Edit opener");
+      failures.push(...lib.modalLifecycleFailures(editEditor, "bob-bank-setup-card-modal", editOpener));
+      await ctx.page.stopOpenerWatch("bank");
       await ctx.page.ev(`app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}]?.bankSetupCardModal?.close?.()`);
       if (mode === "live") {
         await ctx.page.ev(`app.workspace.getLeafById(${JSON.stringify(ctx.main)})?.view?.editor?.focus?.()`);
         await ctx.page.keys("=");
         await ctx.page.keys("=");
-        const doubleEquals = await waitFor(client,
-          `Boolean(document.querySelector(".bob-bank-setup-card-modal"))`, Boolean,
-          "bank-first double-equals editor", 10_000);
-        if (!doubleEquals) failures.push("== did not open Bank Setup before Area Settings");
+        const equalsWatch = await ctx.page.startOpenerWatch("bank");
+        if (!equalsWatch?.installed) failures.push("could not observe the production == Bank Setup opener");
+        const doubleEquals = await ctx.page.waitModal("bank", "bob-bank-setup-card-modal", "bank-first double-equals editor", 10_000);
+        const equalsOpener = await ctx.page.waitOpener("bank", "== Bank Setup opener");
+        failures.push(...lib.modalLifecycleFailures(doubleEquals, "bob-bank-setup-card-modal", equalsOpener));
+        await ctx.page.stopOpenerWatch("bank");
         await ctx.page.ev(`app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}]?.bankSetupCardModal?.close?.()`);
       }
-      return { ok: failures.length === 0, probe, expanded, failures };
+      return { ok: failures.length === 0, probe, expanded, nestedOpenOutcome, editEditor, failures };
     });
     await bankAreaArbitrationCase("bank-area-live-arbitration", "live");
     await bankAreaArbitrationCase("bank-area-reading-arbitration", "reading");
@@ -742,41 +1025,41 @@ async function run(args) {
       await ctx.page.open(ctx.main, P.bank, "live");
       await ctx.page.waitOwned(ctx.main, "live", "Area Settings gesture setup");
       const failures = [];
+      const plusWatch = await ctx.page.startOpenerWatch("property");
+      if (!plusWatch?.installed) failures.push("could not observe the production property editor opener");
       await ctx.page.keys("+");
-      const plus = await waitFor(client, `(() => {
-        const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
-        const modal = plugin?.propertyEditorModal;
-        return modal && !modal.closed ? {
-          noteKind: modal.report?.note_kind || "",
-          focusSettings: modal.focusSettings === true,
-          selectedId: modal.selectedId || "",
-          requestedSetting: modal.requestedSetting || "",
-          heading: String(modal.contentEl?.textContent || "").includes("AREA SETTINGS"),
-        } : null;
-      })()`, (value) => value?.noteKind === "area" && Boolean(value.selectedId),
-      "bare + Area Settings", 15_000);
-      if (!plus || plus.focusSettings !== true || plus.selectedId !== "setting::summary" || !plus.heading) {
-        failures.push("bare + did not open AREA SETTINGS on its first setting");
-      }
+      const plus = await ctx.page.waitModal("property", "bob-property-editor-modal", "bare + Area Settings", 15_000);
+      const plusOpener = await ctx.page.waitOpener("property", "bare + property editor opener");
+      failures.push(...lib.modalLifecycleFailures(plus, "bob-property-editor-modal", plusOpener));
+      failures.push(...lib.bankSettingsFailures(plus));
+      const plusEvidence = { modal: plus, opener: plusOpener };
+      await ctx.page.stopOpenerWatch("property");
       await ctx.page.closeEditor();
+      const chipWatch = await ctx.page.startOpenerWatch("property");
+      if (!chipWatch?.installed) failures.push("could not observe the production settings-chip opener");
       const clicked = await ctx.page.ev(`(() => {
-        const chip = document.querySelector('.bob-home-card[data-home-source="bank.md"] .bob-home-card-chip[data-home-chip="task_type"]');
+        const leaf = app.workspace.getLeafById(${JSON.stringify(ctx.main)});
+        const view = leaf?.view;
+        const scope = view?.getMode?.() === "preview" ? view.previewMode?.containerEl : view?.editor?.cm?.dom;
+        const chip = scope?.querySelector?.('.bob-home-card[data-home-source="bank.md"] .bob-home-card-chip[data-home-chip="task_type"]');
         if (!chip) return false;
         chip.click();
         return true;
       })()`);
       if (!clicked) failures.push("Area task_type policy chip is missing");
-      const chip = await waitFor(client, `(() => {
-        const modal = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}]?.propertyEditorModal;
-        return modal && !modal.closed ? { noteKind: modal.report?.note_kind || "",
-          requestedSetting: modal.requestedSetting || "", selectedId: modal.selectedId || "" } : null;
-      })()`, (value) => value?.noteKind === "area" && Boolean(value.selectedId),
-      "Area task_type chip setting", 15_000);
-      if (!chip || chip.requestedSetting !== "task_type" || chip.selectedId !== "setting::task_type") {
+      const chip = await ctx.page.waitModal("property", "bob-property-editor-modal", "Area task_type chip setting", 15_000);
+      const chipOpener = await ctx.page.waitOpener("property", "Area settings-chip opener");
+      failures.push(...lib.modalLifecycleFailures(chip, "bob-property-editor-modal", chipOpener));
+      if (chip.noteKind !== "bank" || chip.viewMode !== "live" || chip.editorMode !== "browse"
+        || chip.requestedSetting !== "task_type" || chip.selectedId !== "setting::task_type"
+        || chip.selectedRowGroup !== "settings" || chip.selectedRowConnected !== true
+        || chip.hasSettingsGroup !== true || chip.heading !== true) {
         failures.push("Area policy chip did not focus its own task_type setting");
       }
+      const chipEvidence = { modal: chip, opener: chipOpener };
+      await ctx.page.stopOpenerWatch("property");
       await ctx.page.closeEditor();
-      return { ok: failures.length === 0, plus, chip, failures };
+      return { ok: failures.length === 0, plus: plusEvidence, chip: chipEvidence, failures };
     });
     await ownCase("own-quarter-live", P.quarter, "live");
     await ownCase("own-year-live", P.year, "live");
@@ -793,6 +1076,10 @@ async function run(args) {
       return { ok: failures.length === 0, probe, failures };
     });
     await attempt("variables-live", async () => {
+      if (report.profile === "bank") {
+        await ctx.page.open(ctx.main, P.bank, "live");
+        await ctx.page.settle(300);
+      }
       const probe = await ctx.page.probe(ctx.main);
       const failures = lib.variablesOk(probe, "live");
       return { ok: failures.length === 0, probe, failures };
@@ -958,6 +1245,10 @@ async function run(args) {
       return { ok: failures.length === 0, probe, failures };
     });
     await attempt("variables-reading", async () => {
+      if (report.profile === "bank") {
+        await ctx.page.open(ctx.main, P.bank, "reading");
+        await ctx.page.settle(300);
+      }
       const probe = await ctx.page.probe(ctx.main);
       const failures = lib.variablesOk(probe, "reading");
       return { ok: failures.length === 0, probe, failures };
@@ -1917,36 +2208,41 @@ async function run(args) {
         for (const [widthName, width] of [["narrow", 720], ["wide", 1400]]) {
           await shared.setViewport(client, width, 1000);
           for (const mode of ["live", "reading"]) {
-            await ctx.page.open(ctx.main, notePath, mode);
-            await ctx.page.waitOwned(ctx.main, mode, label + " screenshot");
-            // Start at the card, not the scroll offset left by the drawer/focus tests.
-            await ctx.page.ev(`(() => {
-              const view = app.workspace.getLeafById(${JSON.stringify(ctx.main)}).view;
-              const scope = view.getMode() === "preview" ? view.previewMode.containerEl : view.editor.cm.dom;
-              const disclosure = scope.querySelector(".bob-property-card-foot-disclosure");
-              if (disclosure?.getAttribute("aria-expanded") === "true") disclosure.click();
-              if (view.getMode() !== "preview") view.editor.scrollTo(0, 0);
-              for (const node of [scope, ...scope.querySelectorAll(".cm-scroller, .markdown-preview-view")]) node.scrollTop = 0;
-              return true;
-            })()`);
-            await ctx.page.settle(250);
-            const before = await ctx.page.probe(ctx.main);
             const name = label + "-" + mode + "-" + theme + "-" + widthName;
-            const row = await ctx.page.shot(name, [label, mode, theme, widthName], width);
-            const after = await ctx.page.probe(ctx.main);
-            row.captureProbes = { before, after };
-            row.captureFailures = [...lib.screenshotFailures(before, notePath, mode),
-              ...lib.screenshotFailures(after, notePath, mode)];
+            try {
+              await ctx.page.open(ctx.main, notePath, mode);
+              await ctx.page.settle(500);
+              // Capture the real state even when ownership is failing; the PNG
+              // and probes remain useful evidence for the repair phases.
+              await ctx.page.ev(`(() => {
+                const view = app.workspace.getLeafById(${JSON.stringify(ctx.main)}).view;
+                const scope = view.getMode() === "preview" ? view.previewMode.containerEl : view.editor.cm.dom;
+                const disclosure = scope.querySelector(".bob-property-card-foot-disclosure");
+                if (disclosure?.getAttribute("aria-expanded") === "true") disclosure.click();
+                if (view.getMode() !== "preview") view.editor.scrollTo(0, 0);
+                for (const node of [scope, ...scope.querySelectorAll(".cm-scroller, .markdown-preview-view")]) node.scrollTop = 0;
+                return true;
+              })()`);
+              await ctx.page.settle(250);
+              const before = await ctx.page.probe(ctx.main);
+              const row = await ctx.page.shot(name, [label, mode, theme, widthName], width);
+              const after = await ctx.page.probe(ctx.main);
+              row.captureProbes = { before, after };
+              row.captureFailures = [...lib.screenshotFailures(before, notePath, mode),
+                ...lib.screenshotFailures(after, notePath, mode)];
+            } catch (error) {
+              report.screenshots.push({ name, tags: [label, mode, theme, widthName], captureFailures: [String(error?.message || error)] });
+              process.stderr.write("[frontmatter-takeover] screenshot failed " + name + ": " + String(error?.message || error) + "\n");
+            }
           }
         }
       }
     };
-    await shotCard("day", P.day);
-    await shotCard("week", P.week);
-    await shotCard("record", P.record);
-    await shotCard("album", P.album);
-    await shotCard("bank", P.bank);
-    for (const theme of ["light", "dark"]) {
+    const screenshotCards = report.profile === "bank"
+      ? [["bank", P.bank]]
+      : [["day", P.day], ["week", P.week], ["record", P.record], ["album", P.album], ["bank", P.bank]];
+    for (const [label, notePath] of screenshotCards) await shotCard(label, notePath);
+    if (report.profile !== "bank") for (const theme of ["light", "dark"]) {
       observeFixtureWatch("ordinary-add-screenshots:" + theme);
       await shared.setTheme(client, theme);
       for (const [widthName, width] of [["narrow", 720], ["wide", 1400]]) {
@@ -1963,54 +2259,17 @@ async function run(args) {
         await ctx.page.closeEditor();
       }
     }
-    await shared.setViewport(client, 1400, 1000);
-    await shared.setTheme(client, "light");
-    observeFixtureWatch("fallback-source-day");
-    await ctx.page.open(ctx.main, P.day, "source");
-    await ctx.page.settle(200);
-    await ctx.page.shot("fallback-source-day", ["source", "fallback", "light", "wide"]);
-    await ctx.page.open(ctx.main, P.malformedDay, "live");
-    await ctx.page.settle(200);
-    await ctx.page.shot("fallback-malformed-day", ["malformed", "fallback", "light", "wide"]);
-
-    await sleep(400);
-    report.fixtures.final = hashFixtures(vaultReal, names);
-    report.vaultWriteAudit = await ctx.page.ev("window.__bobFrontmatterTakeoverWriteAudit?.rows || []");
-    const changed = names.filter((name) => report.fixtures.final[name] !== report.fixtures.expected[name]);
-    check("bytes-unchanged", changed.length === 0, { changed, seeded: report.fixtures.seeded, final: report.fixtures.final });
-    const beforeNativeCheck = readInvocations(bobLog).length;
-    await ctx.page.open(ctx.main, P.ordinary, "live");
-    await ctx.page.waitNative(ctx.main, "ordinary before paint-spawn comparison");
-    await ctx.page.settle(1200);
-    const baselineInvocations = paintSpawned(readInvocations(bobLog).slice(beforeNativeCheck));
-    const beforeOwnedCheck = readInvocations(bobLog).length;
-    await ctx.page.open(ctx.main, P.day, "live");
-    await ctx.page.waitOwned(ctx.main, "live", "paint-spawn ownership");
-    await ctx.page.settle(1200);
-    const ownedInvocations = paintSpawned(readInvocations(bobLog).slice(beforeOwnedCheck));
-    const baselineArgs = new Set(baselineInvocations.map((row) => JSON.stringify(row.args)));
-    const extra = ownedInvocations.filter((row) => !baselineArgs.has(JSON.stringify(row.args)));
-    const invocations = readInvocations(bobLog);
-    report.bobInvocations = {
-      count: invocations.length,
-      baselinePaintSpawnCandidates: baselineInvocations.map((row) => row.args),
-      ownedPaintSpawnCandidates: ownedInvocations.map((row) => row.args),
-      extra: extra.map((row) => row.args),
-    };
-    check("no-paint-spawn", extra.length === 0, {
-      extra: extra.map((row) => row.args),
-      baselineCandidates: baselineInvocations.length,
-      ownedCandidates: ownedInvocations.length,
-      count: invocations.length,
-    });
-    const needed = lib.screenshotNeeds();
-    const have = new Set(report.screenshots.map((row) => row.name));
-    const missingShots = needed.filter((name) => !have.has(name));
-    const invalidShots = report.screenshots.filter((row) => row.captureFailures?.length)
-      .map((row) => ({ name: row.name, failures: row.captureFailures }));
-    check("screenshots-captured", missingShots.length === 0 && invalidShots.length === 0 && report.screenshots.length >= needed.length,
-      { missingShots, invalidShots, count: report.screenshots.length });
-    check("no-console-exceptions", report.consoleExceptions.length === 0, report.consoleExceptions);
+    if (report.profile !== "bank") {
+      await shared.setViewport(client, 1400, 1000);
+      await shared.setTheme(client, "light");
+      observeFixtureWatch("fallback-source-day");
+      await ctx.page.open(ctx.main, P.day, "source");
+      await ctx.page.settle(200);
+      await ctx.page.shot("fallback-source-day", ["source", "fallback", "light", "wide"]);
+      await ctx.page.open(ctx.main, P.malformedDay, "live");
+      await ctx.page.settle(200);
+      await ctx.page.shot("fallback-malformed-day", ["malformed", "fallback", "light", "wide"]);
+    }
   } catch (error) {
     report.error = error && error.stack ? error.stack : String(error);
     report.prerequisites.push({ name: "runner", status: "fail", detail: String(error && error.message || error) });
@@ -2019,7 +2278,55 @@ async function run(args) {
       catch (_) {}
     }
   } finally {
-    for (const { name } of lib.REQUIRED_CHECKS) {
+    await sleep(400);
+    await finalCheck("bytes-unchanged", async () => {
+      if (!vaultReal || !Array.isArray(fixtureNames) || !report.fixtures || !ctxRef?.page) {
+        return { ok: false, reason: "fixture vault or runner page was not initialized" };
+      }
+      report.fixtures.final = hashFixtures(vaultReal, fixtureNames);
+      report.vaultWriteAudit = await ctxRef.page.ev("window.__bobFrontmatterTakeoverWriteAudit?.rows || []");
+      const changed = fixtureNames.filter((name) => report.fixtures.final[name] !== report.fixtures.expected[name]);
+      return { ok: changed.length === 0, changed, seeded: report.fixtures.seeded, final: report.fixtures.final,
+        fixtureWatch: report.bankFixtureWatch };
+    });
+    await finalCheck("no-paint-spawn", async () => {
+      if (!bobLogPath || !ctxRef?.page) return { ok: false, reason: "runner process or page was not initialized" };
+      const beforeNativeCheck = readInvocations(bobLogPath).length;
+      await ctxRef.page.open(ctxRef.main, P.ordinary, "live");
+      await ctxRef.page.settle(1200);
+      const baselineInvocations = paintSpawned(readInvocations(bobLogPath).slice(beforeNativeCheck));
+      const beforeOwnedCheck = readInvocations(bobLogPath).length;
+      const ownedPath = report.profile === "bank" ? P.bank : P.day;
+      await ctxRef.page.open(ctxRef.main, ownedPath, "live");
+      await ctxRef.page.settle(1200);
+      const ownedProbe = await ctxRef.page.probe(ctxRef.main);
+      const ownedInvocations = paintSpawned(readInvocations(bobLogPath).slice(beforeOwnedCheck));
+      const baselineArgs = new Set(baselineInvocations.map((row) => JSON.stringify(row.args)));
+      const extra = ownedInvocations.filter((row) => !baselineArgs.has(JSON.stringify(row.args)));
+      const invocations = readInvocations(bobLogPath);
+      report.bobInvocations = {
+        count: invocations.length,
+        baselinePaintSpawnCandidates: baselineInvocations.map((row) => row.args),
+        ownedPaintSpawnCandidates: ownedInvocations.map((row) => row.args),
+        extra: extra.map((row) => row.args), ownedProbe,
+      };
+      return { ok: extra.length === 0, extra: extra.map((row) => row.args),
+        baselineCandidates: baselineInvocations.length, ownedCandidates: ownedInvocations.length,
+        count: invocations.length, ownedProbe };
+    });
+    await finalCheck("screenshots-captured", async () => {
+      const needed = lib.screenshotNeeds(report.profile);
+      const have = new Set(report.screenshots.map((row) => row.name));
+      const missingShots = needed.filter((name) => !have.has(name));
+      const invalidShots = report.screenshots.filter((row) => row.captureFailures?.length)
+        .map((row) => ({ name: row.name, failures: row.captureFailures }));
+      return { ok: missingShots.length === 0 && invalidShots.length === 0 && report.screenshots.length >= needed.length,
+        missingShots, invalidShots, count: report.screenshots.length };
+    });
+    await finalCheck("no-console-exceptions", async () => ({
+      ok: report.consoleExceptions.length === 0, failures: report.consoleExceptions,
+    }));
+    for (const { name } of lib.requiredChecksForProfile(report.profile)) {
       if (!report.checks.some((row) => row.name === name)) check(name, false, "Required check was not executed");
     }
     report.verdict = lib.computeVerdict(report);
@@ -2031,6 +2338,7 @@ async function run(args) {
       addFilePropertyCommand: report.addFilePropertyCommand,
       failed: Object.values(report.verdict.surfaces).flatMap((value) => value.failed),
       screenshots: report.screenshots.length, consoleExceptions: report.consoleExceptions.length,
+      skippedChecks: report.skippedChecks.length,
     };
     if (client) client.close();
     if (child && child.exitCode == null) {

@@ -22,12 +22,13 @@ const HELP_TEXT = [
   "  -e, --executable PATH   Obsidian Electron binary",
   "  -o, --out DIRECTORY    Save PNG screenshots here",
   "  -r, --report PATH      Write the structured JSON report here",
+  "      --profile PROFILE  Run full (default) or bank-only acceptance",
   "  -s, --self-test        Validate fixtures, probes, and the verdict without launching apps",
   "  -h, --help             Print this help",
 ].join("\n");
 
 function parseArgs(argv) {
-  const args = { executable: null, out: null, report: null, selfTest: false, help: false };
+  const args = { executable: null, out: null, report: null, profile: "full", selfTest: false, help: false };
   const input = Array.isArray(argv) ? argv.slice() : [];
   const value = (flag, name, index) => {
     const next = input[index];
@@ -39,6 +40,12 @@ function parseArgs(argv) {
     if (flag === "-e" || flag === "--executable") args.executable = value("--executable", "PATH", ++i);
     else if (flag === "-o" || flag === "--out") args.out = value("--out", "DIRECTORY", ++i);
     else if (flag === "-r" || flag === "--report") args.report = value("--report", "PATH", ++i);
+    else if (flag === "--profile") {
+      args.profile = value("--profile", "PROFILE", ++i);
+      if (args.profile !== "full" && args.profile !== "bank") {
+        throw new Error("--profile must be full or bank");
+      }
+    }
     else if (flag === "-s" || flag === "--self-test") args.selfTest = true;
     else if (flag === "-h" || flag === "--help") args.help = true;
     else throw new Error("Unknown argument: " + flag);
@@ -112,6 +119,36 @@ const REQUIRED_CHECKS = Object.freeze([
   { name: "screenshots-captured", surface: "both" },
   { name: "no-console-exceptions", surface: "both" },
 ]);
+
+// Keep a Bank-only acceptance slice inside the same runner and fixture setup.
+// Product checks are selected explicitly so unrelated day/album failures cannot
+// prevent the Bank invariants and captures from running.
+const BANK_PROFILE_PRODUCT_CHECKS = Object.freeze([
+  "bank-cache-parity", "own-bank-live", "own-bank-reading",
+  "bank-area-live-arbitration", "bank-area-reading-arbitration",
+  "bank-pane-path-lifecycle", "bank-area-settings-gestures",
+  "variables-live", "tab-live", "bank-vim-k-gg-live", "bank-focusin-guard",
+  "variables-reading", "tab-reading", "source-toggle-releases",
+  "bank-cache-skew-releases", "disable-unload-restores",
+  "pending-capability-native", "absent-old-bob-native", "failed-probe-native",
+  "bank-contractless-native", "path-switch-native", "late-after-unload-native",
+  "bank-add-file-property", "bank-sidebar-native",
+]);
+const BANK_PROFILE_REQUIRED_NAMES = new Set([
+  "plugin-loaded", ...BANK_PROFILE_PRODUCT_CHECKS,
+  "bytes-unchanged", "no-paint-spawn", "screenshots-captured", "no-console-exceptions",
+]);
+const BANK_PROFILE_REQUIRED_CHECKS = Object.freeze(
+  REQUIRED_CHECKS.filter((row) => BANK_PROFILE_REQUIRED_NAMES.has(row.name)),
+);
+
+function requiredChecksForProfile(profile = "full") {
+  return profile === "bank" ? BANK_PROFILE_REQUIRED_CHECKS : REQUIRED_CHECKS;
+}
+
+function isBankProfileCheck(name) {
+  return BANK_PROFILE_REQUIRED_NAMES.has(name);
+}
 
 function surfaceOf(name) {
   return REQUIRED_CHECKS.find((row) => row.name === name)?.surface || "both";
@@ -211,14 +248,16 @@ function canvasFixture() {
   }, null, 2);
 }
 
-function passingReport() {
+function passingReport(profile = "full") {
   return {
-    checks: REQUIRED_CHECKS.map((row) => ({ name: row.name, surface: row.surface, status: "pass", mandatory: true })),
+    profile,
+    checks: requiredChecksForProfile(profile).map((row) => ({ name: row.name, surface: row.surface, status: "pass", mandatory: true })),
   };
 }
 
 function computeVerdict(report) {
   const checks = Array.isArray(report?.checks) ? report.checks : [];
+  const required = requiredChecksForProfile(report?.profile || "full");
   const byName = new Map();
   for (const row of checks) {
     const current = byName.get(row.name) || {
@@ -228,9 +267,9 @@ function computeVerdict(report) {
     if (row.mandatory === false) current.mandatory = current.mandatory && false;
     byName.set(row.name, current);
   }
-  const missing = REQUIRED_CHECKS.filter((row) => !byName.has(row.name)).map((row) => row.name);
+  const missing = required.filter((row) => !byName.has(row.name)).map((row) => row.name);
   const surfaces = { live: { pass: 0, total: 0, failed: [] }, reading: { pass: 0, total: 0, failed: [] }, both: { pass: 0, total: 0, failed: [] } };
-  for (const spec of REQUIRED_CHECKS) {
+  for (const spec of required) {
     const row = byName.get(spec.name);
     const bucket = surfaces[spec.surface];
     bucket.total += 1;
@@ -306,6 +345,130 @@ function sidebarFailures(probe) {
   if (probe?.owned) failures.push("sidebar acquired whole-container ownership");
   if (probe?.inert) failures.push("sidebar native properties are inert or aria-hidden");
   return failures;
+}
+
+function modalLifecycleFailures(modal, expectedClass, opener) {
+  const failures = [];
+  if (!modal?.present) failures.push("modal object is absent");
+  if (modal?.closed) failures.push("modal is closed");
+  if (!modal?.connected) failures.push("modal root is disconnected");
+  if (!modal?.ownerDocumentPresent) failures.push("modal has no owning document");
+  if (modal?.ownerDocumentIsCurrent !== true) failures.push("modal belongs to a different Obsidian document");
+  if (expectedClass && !(modal?.classes || []).includes(expectedClass)) {
+    failures.push("modal class is missing: " + expectedClass);
+  }
+  if (opener) {
+    if (opener.called !== true) failures.push("production opener was not called by the gesture");
+    if (opener.pending === true) failures.push("production opener has not settled");
+    if (opener.error) failures.push("production opener rejected: " + opener.error);
+    if (opener.outcome?.ok !== true) failures.push("production opener refused: " + JSON.stringify(opener.outcome || null));
+    if (opener.outcome?.modalPresent !== true) failures.push("production opener did not return the live modal");
+  }
+  return failures;
+}
+
+function bankSettingsFailures(modal) {
+  const failures = [];
+  if (modal?.noteKind !== "bank") failures.push("property report note_kind is " + JSON.stringify(modal?.noteKind));
+  if (modal?.viewMode !== "live") failures.push("bare + ran in " + JSON.stringify(modal?.viewMode) + " mode");
+  if (modal?.editorMode !== "browse") failures.push("property editor opened in " + JSON.stringify(modal?.editorMode) + " mode");
+  if (modal?.hasSettingsGroup !== true) failures.push("property report has no Settings group");
+  if (modal?.heading !== true) failures.push("property editor does not render AREA SETTINGS");
+  if (modal?.selectedId !== "setting::summary") failures.push("first Settings row is " + JSON.stringify(modal?.selectedId));
+  if (modal?.selectedRowGroup !== "settings" || modal?.selectedRowConnected !== true) {
+    failures.push("selected row is not a connected row in the Settings group");
+  }
+  return failures;
+}
+
+function modalProbeSource(kind) {
+  const property = kind === "bank" ? "bankSetupCardModal" : "propertyEditorModal";
+  return `(() => {
+    const plugin = app.plugins.plugins["bob-ledger-tools"];
+    const modal = plugin?.${property} || null;
+    const nodes = [modal?.containerEl, modal?.modalEl, modal?.contentEl].filter(Boolean);
+    const root = modal?.containerEl || modal?.modalEl || modal?.contentEl || null;
+    const ownerDocument = nodes.map((node) => node.ownerDocument).find(Boolean) || null;
+    const selectedId = String(modal?.selectedId || "");
+    const selectedRow = Array.from(root?.querySelectorAll?.("[data-property-row]") || [])
+      .find((node) => node.getAttribute("data-property-row") === selectedId) || null;
+    const selectedGroup = selectedRow?.closest?.("[data-property-group]") || null;
+    const title = root?.querySelector?.("[data-property-group='settings'] .bob-property-editor-group-title") || null;
+    const activeView = app.workspace?.activeLeaf?.view || null;
+    const viewMode = !activeView ? ""
+      : activeView.getMode?.() === "preview" ? "reading"
+        : activeView.getState?.()?.source ? "source" : "live";
+    return {
+      kind: ${JSON.stringify(kind)}, present: Boolean(modal), closed: modal?.closed === true,
+      connected: nodes.some((node) => node.isConnected === true),
+      ownerDocumentPresent: Boolean(ownerDocument), ownerDocumentIsCurrent: ownerDocument === document,
+      ownerDocumentURL: ownerDocument?.location?.href || "",
+      classes: [...new Set(nodes.flatMap((node) => Array.from(node.classList || [])))],
+      noteKind: modal?.report?.note_kind || modal?.noteKind || "",
+      editorMode: modal?.mode || "", viewMode, selectedId,
+      requestedSetting: modal?.requestedSetting || "",
+      selectedRowGroup: selectedGroup?.getAttribute?.("data-property-group") || "",
+      selectedRowConnected: Boolean(selectedRow?.isConnected),
+      hasSettingsGroup: Boolean(root?.querySelector?.('[data-property-group="settings"]')),
+      heading: Boolean(title && String(title.textContent || "").includes("AREA SETTINGS")),
+      text: String(root?.textContent || "").slice(0, 240),
+      rootClass: String(root?.className || ""),
+      modalClass: String(modal?.modalEl?.className || ""),
+      containerConnected: Boolean(modal?.containerEl?.isConnected),
+      modalConnected: Boolean(modal?.modalEl?.isConnected),
+      contentConnected: Boolean(modal?.contentEl?.isConnected),
+    };
+  })()`;
+}
+
+function openerWatchSource(kind, action = "read") {
+  const method = kind === "bank" ? "openBankSetupCard" : "openPropertyEditor";
+  const modalProperty = kind === "bank" ? "bankSetupCardModal" : "propertyEditorModal";
+  const key = kind === "bank" ? "bank" : "property";
+  if (action === "start") return `(() => {
+    const plugin = app.plugins.plugins["bob-ledger-tools"];
+    const watches = window.__bobTakeoverOpenerWatches || (window.__bobTakeoverOpenerWatches = {});
+    const previous = watches[${JSON.stringify(key)}];
+    if (previous && plugin?.${method} === previous.wrapped) plugin.${method} = previous.original;
+    const state = { called: false, pending: false, outcome: null, error: null };
+    const original = plugin?.${method};
+    if (typeof original !== "function") return { installed: false, reason: "production opener is missing" };
+    const summarize = (result) => {
+      const modal = result?.modal || plugin?.${modalProperty} || null;
+      const connected = [modal?.containerEl, modal?.modalEl, modal?.contentEl]
+        .some((node) => node?.isConnected === true);
+      return { ok: result?.ok === true, reason: result?.reason || "",
+        modalPresent: Boolean(modal && modal.closed !== true), modalConnected: connected };
+    };
+    const wrapped = function(...args) {
+      state.called = true;
+      try {
+        const result = original.apply(this, args);
+        if (result && typeof result.then === "function") {
+          state.pending = true;
+          result.then((value) => { state.outcome = summarize(value); state.pending = false; }, (error) => {
+            state.error = String(error?.message || error); state.pending = false;
+          });
+        } else state.outcome = summarize(result);
+        return result;
+      } catch (error) {
+        state.error = String(error?.message || error);
+        throw error;
+      }
+    };
+    plugin.${method} = wrapped;
+    watches[${JSON.stringify(key)}] = { plugin, original, wrapped, state };
+    return { installed: true };
+  })()`;
+  if (action === "stop") return `(() => {
+    const watches = window.__bobTakeoverOpenerWatches || {};
+    const watch = watches[${JSON.stringify(key)}];
+    if (!watch) return null;
+    if (watch.plugin?.${method} === watch.wrapped) watch.plugin.${method} = watch.original;
+    delete watches[${JSON.stringify(key)}];
+    return watch.state;
+  })()`;
+  return `(() => window.__bobTakeoverOpenerWatches?.[${JSON.stringify(key)}]?.state || null)()`;
 }
 
 // One Escape may only dismiss a menu, Add stage, or filter. Follow the
@@ -790,8 +953,8 @@ const PROBE_SOURCE = "(() => {" + PAGE_COMMON + String.raw`
   return true;
 })()`;
 
-function screenshotNeeds() {
-  const cards = ["day", "week", "record", "album", "bank"];
+function screenshotNeeds(profile = "full") {
+  const cards = profile === "bank" ? ["bank"] : ["day", "week", "record", "album", "bank"];
   const modes = ["live", "reading"];
   const themes = ["light", "dark"];
   const widths = ["narrow", "wide"];
@@ -803,8 +966,10 @@ function screenshotNeeds() {
       }
     }
   }
-  for (const theme of themes) {
-    for (const width of widths) needed.push("ordinary-add-" + theme + "-" + width);
+  if (profile !== "bank") {
+    for (const theme of themes) {
+      for (const width of widths) needed.push("ordinary-add-" + theme + "-" + width);
+    }
   }
   return needed;
 }
@@ -839,11 +1004,20 @@ function selfTest() {
   missing.checks = missing.checks.filter((row) => row.name !== "own-day-live");
   assert.deepEqual(computeVerdict(missing).missing, ["own-day-live"]);
   assert.equal(new Set(REQUIRED_CHECKS.map((row) => row.name)).size, REQUIRED_CHECKS.length);
-  const parsed = parseArgs(["-e", "/opt/obsidian", "-o", "/tmp/shots", "-r", "/tmp/report.json", "--self-test"]);
-  assert.ok(parsed.selfTest && parsed.executable === "/opt/obsidian");
+  const parsed = parseArgs(["-e", "/opt/obsidian", "-o", "/tmp/shots", "-r", "/tmp/report.json", "--profile", "bank", "--self-test"]);
+  assert.ok(parsed.selfTest && parsed.executable === "/opt/obsidian" && parsed.profile === "bank");
+  assert.throws(() => parseArgs(["--profile", "album"]), /must be full or bank/);
+  assert.ok(requiredChecksForProfile("bank").some((row) => row.name === "bank-area-settings-gestures"));
+  assert.ok(!requiredChecksForProfile("bank").some((row) => row.name === "own-day-live"));
+  assert.equal(computeVerdict(passingReport("bank")).verdict, "GO");
+  const missingBank = passingReport("bank");
+  missingBank.checks = missingBank.checks.filter((row) => row.name !== "bank-cache-parity");
+  assert.deepEqual(computeVerdict(missingBank).missing, ["bank-cache-parity"]);
   assert.throws(() => parseArgs(["--out"]), /requires/);
   assert.throws(() => parseArgs(["--bogus"]), /Unknown/);
   assert.doesNotThrow(() => new Function("return " + PROBE_SOURCE));
+  assert.doesNotThrow(() => new Function("return " + modalProbeSource("bank")));
+  assert.doesNotThrow(() => new Function("return " + openerWatchSource("bank", "start")));
   assert.match(PROBE_SOURCE, /^\(\(\) => \{/);
   assert.match(PROBE_SOURCE, /propertyCardFrontmatterActualOwnership/);
   assert.doesNotMatch(PROBE_SOURCE, /propertyCardOwnFrontmatter\(/);
@@ -865,13 +1039,31 @@ function selfTest() {
   assert.ok(needed.includes("day-live-light-wide"));
   assert.ok(needed.includes("ordinary-add-dark-narrow"));
   assert.equal(needed.length, 5 * 2 * 2 * 2 + 2 * 2);
+  assert.equal(screenshotNeeds("bank").length, 2 * 2 * 2);
+  assert.ok(screenshotNeeds("bank").every((name) => name.startsWith("bank-")));
+  assert.deepEqual(modalLifecycleFailures({ present: true, closed: false, connected: true,
+    ownerDocumentPresent: true, ownerDocumentIsCurrent: true, classes: ["bob-bank-setup-card-modal"] },
+  "bob-bank-setup-card-modal", { called: true, pending: false, outcome: { ok: true, modalPresent: true } }), []);
+  assert.ok(modalLifecycleFailures({ present: true, closed: false, connected: false,
+    ownerDocumentPresent: true, ownerDocumentIsCurrent: true, classes: [] },
+  "bob-bank-setup-card-modal", { called: false }).length > 0);
+  const settingsModal = { noteKind: "bank", viewMode: "live", editorMode: "browse", hasSettingsGroup: true,
+    heading: true, selectedId: "setting::summary", selectedRowGroup: "settings", selectedRowConnected: true };
+  assert.deepEqual(bankSettingsFailures(settingsModal), []);
+  assert.ok(bankSettingsFailures({ ...settingsModal, noteKind: "area" }).length > 0);
+  assert.ok(bankSettingsFailures({ ...settingsModal, selectedId: "setting::task_type" }).length > 0);
+  assert.ok(bankSettingsFailures({ ...settingsModal, hasSettingsGroup: false }).length > 0);
+  assert.ok(bankSettingsFailures({ ...settingsModal, viewMode: "reading" }).length > 0);
   assert.equal(typeof spike.PROBE_SOURCE, "string");
   assert.equal(foot.FIXTURE_TODAY, "2026-11-20");
   return true;
 }
 
 module.exports = {
-  HELP_TEXT, REQUIRED_CHECKS, PATHS, PROBE_SOURCE, PAGE_COMMON, dismissEditor,
-  parseArgs, surfaceOf, fixtureNotes, canvasFixture, passingReport, computeVerdict,
+  HELP_TEXT, REQUIRED_CHECKS, BANK_PROFILE_PRODUCT_CHECKS, BANK_PROFILE_REQUIRED_CHECKS,
+  PATHS, PROBE_SOURCE, PAGE_COMMON, dismissEditor,
+  parseArgs, surfaceOf, requiredChecksForProfile, isBankProfileCheck, fixtureNotes, canvasFixture, passingReport, computeVerdict,
   ownedFailures, nativeFailures, addEditorFailures, screenshotFailures, sidebarFailures, variablesOk, screenshotNeeds, selfTest,
+  modalLifecycleFailures, bankSettingsFailures,
+  modalProbeSource, openerWatchSource,
 };

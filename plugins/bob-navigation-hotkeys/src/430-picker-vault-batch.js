@@ -666,6 +666,40 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
       new Notice(dependencyPlanFailureNotice(plan.reason, "update"));
       return false;
     }
+    // Tie absorption (§22): a new dependency absorbs the pair's plain
+    // links. Same-note batches fold every side into the single-transaction
+    // commit below (cross-note rows commit through the vault path, which
+    // absorbs in `applyDependencyEdit`).
+    let batchTieAbsorbed = null;
+    if (plan.changed && addRefs.length > 0) {
+      const batchTieParentLines = String(plan.nextContent || "").split(/\r?\n/);
+      const batchTieParentBlockId = Number.isInteger(plan.parentLineNext)
+        ? getTrailingBlockId(String(batchTieParentLines[plan.parentLineNext] || ""))
+        : "";
+      const batchTiePairs = addRefs.map((ref) => ({
+        owner: {
+          path: filePath,
+          blockId: batchTieParentBlockId || "",
+          line: plan.parentLineNext,
+        },
+        other: { path: ref.path, blockId: ref.blockId },
+      }));
+      try {
+        batchTieAbsorbed = absorbTiePairsFromContents({
+          contents: new Map([[filePath, plan.nextContent]]),
+          pairs: batchTiePairs,
+          paths: [filePath],
+          resolveLinkpath: this.plugin
+            ? this.plugin.dependencyLinkpathResolver()
+            : null,
+          isWritable: this.plugin
+            ? tieNavNoteIsWritable(this.plugin, new Date())
+            : undefined,
+        });
+      } catch (_error) {
+        batchTieAbsorbed = null;
+      }
+    }
     const batchSubtreePlanned = batchSubtreePrep &&
       this.plugin &&
       typeof this.plugin.planSubtreePassForPrjEdit === "function"
@@ -687,16 +721,24 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
     const batchSubtreeTargets = batchSubtreePlanned
       ? batchSubtreePlanned.pass.pomodoroTargets || []
       : [];
+    // Absorbed LINKS drops join the plan before stamping: drops land on
+    // child lines below the parent, so the parent line index is unchanged.
     let batchPlan = plan;
-    if (batchSubtreeTargets.length > 0 && plan.summary && plan.summary.project) {
+    if (batchTieAbsorbed && batchTieAbsorbed.changed.length > 0) {
       batchPlan = {
         ...plan,
+        nextContent: batchTieAbsorbed.contents.get(filePath),
+      };
+    }
+    if (batchSubtreeTargets.length > 0 && plan.summary && plan.summary.project) {
+      batchPlan = {
+        ...batchPlan,
         summary: {
-          ...plan.summary,
+          ...batchPlan.summary,
           project: {
-            ...plan.summary.project,
+            ...batchPlan.summary.project,
             pomodoroTargets: Object.freeze([
-              ...(plan.summary.project.pomodoroTargets || []),
+              ...(batchPlan.summary.project.pomodoroTargets || []),
               ...batchSubtreeTargets,
             ]),
           },
@@ -800,9 +842,15 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
       batchPomodoroRemoved,
       batchPomodoroPruneFailed,
     );
-    const batchNotice = withSubtreePassNotice(
-      batchProjectNotice || batchPlan.notice,
-      batchSubtree,
+    const batchNotice = withTieAbsorptionFailureSuffix(
+      withTieAbsorptionNotice(
+        withSubtreePassNotice(
+          batchProjectNotice || batchPlan.notice,
+          batchSubtree,
+        ),
+        batchTieAbsorbed,
+      ),
+      (batchTieAbsorbed && batchTieAbsorbed.skipped) || [],
     );
     await this.plugin.finishBlocksFollowUps(
       batchPlan.blocksFollowUps,

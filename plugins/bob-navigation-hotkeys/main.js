@@ -10687,6 +10687,1544 @@ function buildRelationEditNotice(details = {}) {
   notice = withLinkedFromFollowUpNotice(notice, details.mirrorFailed);
   return notice;
 }
+// ---- src/087-plain-link-ties.js ----
+// Plain-link/dependency tie twins (`docs/task-relations.md` §22). JS twins of
+// bob-cli `src/native/task_relations/ties.rs`, pinned by the mirrored PT
+// vectors in `scripts/plain-link-tie-vectors.cjs`: `dropPlainLinkEntries`
+// (byte-exact plain-entry drop), `classifyPairTies` (pair classification),
+// `planTieChange` (desired-state chord/↵ planner composing
+// `planDependencyEdit`, `planLinksEdit`, and the drop helper), and the
+// absorption planner/applier the dependency writers share
+// (`applyDependencyEdit`, `applyBlocksEdit`, same-note marked batches).
+//
+// Identity on the planner is the resolved vault identity
+// (`path\x00blockId`, via `blocksIdentity`); the writers resolve link-note
+// text first (PT10). Labelled relations (including `[[#^a|alias]]` per LK5)
+// never drop, whatever the predicate says. One predicate, one drop.
+const TIE_PLAIN_TOKEN_RE = /(?:~~)?!?\[\[([^\]\n]*)\]\](?:~~)?/g;
+const TIE_TARGET_RE = /^(?<note>[^#|\n]*?)#\^(?<blockId>[A-Za-z0-9-]+)$/u;
+const TIE_TODO_STATUSES = new Set([" ", "/", "*", "?", "x"]);
+
+// Rust `skip_one_separator` twin: trim leading whitespace, strip one
+// `•`/`·`/`,`, trim again. Returns the remaining raw gap plus how many gap
+// characters were consumed, so a label span starts at the right offset.
+function tieSkipOneSeparator(gapText) {
+  const gap = String(gapText || "");
+  const leading = /^\s*/u.exec(gap)[0].length;
+  let rest = gap.slice(leading);
+  if (
+    rest.startsWith("•") ||
+    rest.startsWith("·") ||
+    rest.startsWith(",")
+  ) {
+    rest = rest.slice(1);
+  }
+  const trailing = /^\s*/u.exec(rest)[0].length;
+  rest = rest.slice(trailing);
+  return Object.freeze({ raw: rest, consumed: gap.length - rest.length });
+}
+
+// Per-occurrence gap label, mirroring `parseLinksEntryLabel` (085) and the
+// Rust label spans: the first entry's gap carries its label verbatim, later
+// entries skip one separator first. An alias label counts as a label (LK5).
+function tieGapLabel(gapText, isFirst, alias) {
+  const gap = String(gapText || "");
+  if (isFirst) {
+    const trimmed = gap.trim();
+    if (!trimmed) {
+      if (!alias) {
+        return null;
+      }
+      const fallback = normalizeRelationReaderLabel(alias);
+      if (!fallback || relationLabelIsReservedStart(fallback)) {
+        return null;
+      }
+      return fallback;
+    }
+    const label = normalizeRelationReaderLabel(trimmed);
+    if (!label || relationLabelIsReservedStart(label)) {
+      return null;
+    }
+    return label;
+  }
+  const { raw } = tieSkipOneSeparator(gap);
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    if (!alias) {
+      return null;
+    }
+    const fallback = normalizeRelationReaderLabel(alias);
+    if (!fallback || relationLabelIsReservedStart(fallback)) {
+      return fallback === TASK_MENTION_LABEL ? fallback : null;
+    }
+    return fallback;
+  }
+  const label = normalizeRelationReaderLabel(trimmed);
+  if (!label || relationLabelIsReservedStart(label)) {
+    return null;
+  }
+  return label;
+}
+
+// Tokenize one LINKS line into per-occurrence spans. Gates on the plugin's
+// local recogniser (`parseLinksLine`, 085): anything it refuses is
+// malformed here too, so the twin never drops off a line Rust would skip.
+function tieTokenizeLinksLine(lineText) {
+  const text = String(lineText || "");
+  let parsed = null;
+  try {
+    parsed = parseLinksLine(text, { isDirectChildOfTask: true });
+  } catch (_error) {
+    return Object.freeze({ ok: false, reason: "malformed" });
+  }
+  if (!parsed || parsed.verdict !== "accept") {
+    return Object.freeze({
+      ok: false,
+      reason: parsed && parsed.verdict === "empty" ? "empty" : "malformed",
+    });
+  }
+  const header = /^\s*(?:[-*+]|\d+[.)])[\s\S]*?\*\*(?:LINKS|LINKS TO):\*\*/u.exec(text);
+  if (!header) {
+    return Object.freeze({ ok: false, reason: "malformed" });
+  }
+  const bodyOffset = header[0].length;
+  const body = text.slice(bodyOffset);
+  const tokens = [];
+  TIE_PLAIN_TOKEN_RE.lastIndex = 0;
+  let token = null;
+  while ((token = TIE_PLAIN_TOKEN_RE.exec(body)) !== null) {
+    const pipe = token[1].indexOf("|");
+    const targetText = pipe === -1 ? token[1] : token[1].slice(0, pipe);
+    const alias = pipe === -1 ? "" : token[1].slice(pipe + 1);
+    const match = TIE_TARGET_RE.exec(targetText);
+    if (!match) {
+      TIE_PLAIN_TOKEN_RE.lastIndex = 0;
+      return Object.freeze({ ok: false, reason: "malformed" });
+    }
+    tokens.push({
+      fullStart: bodyOffset + token.index,
+      fullEnd: bodyOffset + token.index + token[0].length,
+      target: match.groups.note || "",
+      blockId: match.groups.blockId,
+      alias,
+    });
+    if (token[0].length === 0) {
+      break;
+    }
+  }
+  TIE_PLAIN_TOKEN_RE.lastIndex = 0;
+  if (tokens.length === 0) {
+    return Object.freeze({ ok: false, reason: "empty" });
+  }
+  let previousEnd = bodyOffset;
+  for (let index = 0; index < tokens.length; index += 1) {
+    const current = tokens[index];
+    const gap = text.slice(previousEnd, current.fullStart);
+    current.gap = gap;
+    current.label = tieGapLabel(gap, index === 0, current.alias);
+    if (current.alias) {
+      const aliasLabel = normalizeRelationReaderLabel(current.alias);
+      if (aliasLabel && !relationLabelIsReservedStart(aliasLabel)) {
+        current.label = aliasLabel;
+      }
+    }
+    previousEnd = current.fullEnd;
+  }
+  return Object.freeze({ ok: true, tokens: Object.freeze(tokens) });
+}
+
+function tieLabelStartInGap(gapText, isFirst, label) {
+  if (label === null || label === undefined) {
+    return null;
+  }
+  const gap = String(gapText || "");
+  if (isFirst) {
+    return gap.length - gap.trimStart().length;
+  }
+  const { consumed, raw } = tieSkipOneSeparator(gap);
+  return consumed + (raw.length - raw.trimStart().length);
+}
+
+// Byte-exact twin of the Rust `drop_plain_link_entries`: drop every plain
+// (unlabelled) LINKS entry whose target the caller reports as
+// dependency-tied. `isTied` answers one entry (`{target, blockId}`).
+// Separator rule (PT2–PT4, PT9): a dropped non-first entry takes its
+// preceding separator; a dropped first entry takes its following separator
+// but keeps the next kept entry's gap label (`see ` in PT2). All other
+// bytes — indent, header, CRLF, trailing spaces — are preserved (PT12).
+function dropPlainLinkEntries(lineText, isTied) {
+  const text = String(lineText || "");
+  const tokenized = tieTokenizeLinksLine(text);
+  if (!tokenized.ok) {
+    return Object.freeze({
+      outcome: tokenized.reason === "empty" ? "unchanged" : "malformed",
+      removed: Object.freeze([]),
+    });
+  }
+  const tokens = tokenized.tokens;
+  const tied = tokens.map(
+    (entry) =>
+      (entry.label === null || entry.label === undefined) &&
+      (typeof isTied === "function"
+        ? isTied(
+            Object.freeze({ target: entry.target, blockId: entry.blockId }),
+          ) === true
+        : false),
+  );
+  if (!tied.some(Boolean)) {
+    return Object.freeze({ outcome: "unchanged", removed: Object.freeze([]) });
+  }
+  const removed = tokens
+    .filter((entry, index) => tied[index])
+    .map((entry) =>
+      relationLinkText({ note: entry.target, blockId: entry.blockId }),
+    );
+  if (tied.every(Boolean)) {
+    return Object.freeze({ outcome: "delete-line", removed: Object.freeze(removed) });
+  }
+  const cuts = [];
+  let index = 0;
+  while (index < tokens.length) {
+    if (!tied[index]) {
+      index += 1;
+      continue;
+    }
+    let end = index;
+    while (end + 1 < tokens.length && tied[end + 1]) {
+      end += 1;
+    }
+    if (index === 0) {
+      const next = end + 1;
+      const gapStart = tokens[end].fullEnd;
+      const gapEnd = tokens[next].fullStart;
+      const start = tieLabelStartInGap(
+        tokens[next].gap,
+        false,
+        tokens[next].label,
+      );
+      cuts.push([tokens[index].fullStart, start === null ? gapEnd : gapStart + start]);
+    } else {
+      cuts.push([tokens[index - 1].fullEnd, tokens[end].fullEnd]);
+    }
+    index = end + 1;
+  }
+  cuts.sort((left, right) => left[0] - right[0]);
+  let out = "";
+  let cursor = 0;
+  for (const [start, finish] of cuts) {
+    out += text.slice(cursor, start);
+    cursor = finish;
+  }
+  out += text.slice(cursor);
+  return Object.freeze({
+    outcome: "rewritten",
+    removed: Object.freeze(removed),
+    line: out,
+  });
+}
+
+// Twin of the Rust `PairTies::classify`: one pair's exclusive tie from
+// already-resolved edge sets. Labelled relations never enter the verdict;
+// callers pass only plain-link presence per side.
+function classifyPairTies(facts = {}) {
+  const ownerWaits = facts.ownerWaitsOnOther === true;
+  const otherWaits = facts.otherWaitsOnOwner === true;
+  const plainOut = facts.plainOut === true;
+  const plainIn = facts.plainIn === true;
+  const dependency = ownerWaits || otherWaits;
+  let tie = "untied";
+  if (ownerWaits && otherWaits) {
+    tie = "depends_both";
+  } else if (ownerWaits) {
+    tie = "depends_out";
+  } else if (otherWaits) {
+    tie = "depends_in";
+  } else if (plainOut && plainIn) {
+    tie = "plain_both";
+  } else if (plainOut) {
+    tie = "plain_out";
+  } else if (plainIn) {
+    tie = "plain_in";
+  }
+  return Object.freeze({
+    tie,
+    dropOwnerPlain: dependency && plainOut,
+    dropOtherPlain: dependency && plainIn,
+  });
+}
+
+function tieNormalizeRef(ref) {
+  const path = normalizeVaultRelativePath((ref && ref.path) || "");
+  const blockId = normalizeBulletPropertyValue((ref && ref.blockId) || "");
+  if (!path || !blockId) {
+    return null;
+  }
+  return Object.freeze({ path, blockId });
+}
+
+function tieNotesMap(notes) {
+  if (notes instanceof Map) {
+    const map = new Map();
+    for (const [path, content] of notes) {
+      const normalized = normalizeVaultRelativePath(path);
+      if (normalized) {
+        map.set(normalized, String(content || ""));
+      }
+    }
+    return map;
+  }
+  const map = new Map();
+  if (notes && typeof notes === "object") {
+    for (const path of Object.keys(notes)) {
+      const normalized = normalizeVaultRelativePath(path);
+      if (normalized) {
+        map.set(normalized, String(notes[path] || ""));
+      }
+    }
+  }
+  return map;
+}
+
+function tieFindTaskLine(contents, path, blockId) {
+  const text = contents.get(path);
+  if (typeof text !== "string") {
+    return Object.freeze({ line: null, lines: null, reason: "note-unavailable" });
+  }
+  const lines = text.split(/\r?\n/);
+  let found = null;
+  let duplicates = 0;
+  for (let index = 0; index < lines.length; index += 1) {
+    if (getTrailingBlockId(String(lines[index] || "")) === blockId) {
+      duplicates += 1;
+      if (found === null) {
+        found = index;
+      }
+    }
+  }
+  if (found === null) {
+    return Object.freeze({ line: null, lines, reason: "not-found" });
+  }
+  if (duplicates > 1) {
+    return Object.freeze({ line: null, lines, reason: "duplicate-id" });
+  }
+  return Object.freeze({ line: found, lines, reason: null });
+}
+
+function tieTaskStatus(lines, line) {
+  if (!Array.isArray(lines) || !Number.isInteger(line) || line < 0 || line >= lines.length) {
+    return null;
+  }
+  return getObsidianTaskCheckboxStatus(String(lines[line] || ""));
+}
+
+function tieDependsOnTargets(content, taskLine, ownerPath, resolveLinkpath) {
+  const collection = collectDependencyNavigationBullets(content, taskLine);
+  if (collection.reason) {
+    return Object.freeze({ ok: false, reason: collection.reason, targets: null });
+  }
+  const targets = [];
+  for (const target of collection.targets || []) {
+    const targetPath = dependencyPathForLinkNote(
+      target.note,
+      ownerPath,
+      resolveLinkpath,
+    );
+    if (!targetPath) {
+      continue;
+    }
+    targets.push(
+      Object.freeze({
+        path: normalizeVaultRelativePath(targetPath),
+        blockId: normalizeBulletPropertyValue(target.blockId),
+      }),
+    );
+  }
+  return Object.freeze({ ok: true, reason: null, targets: Object.freeze(targets) });
+}
+
+// Plain-link presence per side for one task, resolved to vault identities.
+// Labelled entries never count (PT20); unresolvable entries are ignored
+// (uncertain, left for reconcile); malformed LINKS lines are reported.
+function tiePlainPresence(lines, taskLine, ownerPath, resolveLinkpath) {
+  const children = findLinksChildren(lines, taskLine);
+  const parsed = children.map((index) =>
+    parseLinksLine(String(lines[index] || ""), { isDirectChildOfTask: true }),
+  );
+  if (parsed.some((entry) => entry && entry.verdict === "malformed")) {
+    return Object.freeze({ ok: false, reason: "malformed-links-line", out: null });
+  }
+  const out = [];
+  for (const entry of parsed) {
+    if (!entry || entry.verdict !== "accept") {
+      continue;
+    }
+    for (const link of entry.entries || []) {
+      if (link.label) {
+        continue;
+      }
+      const targetPath = dependencyPathForLinkNote(
+        link.note,
+        ownerPath,
+        resolveLinkpath,
+      );
+      if (!targetPath) {
+        continue;
+      }
+      out.push(
+        Object.freeze({
+          path: normalizeVaultRelativePath(targetPath),
+          blockId: normalizeBulletPropertyValue(link.blockId),
+        }),
+      );
+    }
+  }
+  return Object.freeze({ ok: true, reason: null, out: Object.freeze(out) });
+}
+
+function tieIdentityOf(ref) {
+  return blocksIdentity(ref.path, ref.blockId);
+}
+
+function tieHasIdentity(list, ref) {
+  const wanted = tieIdentityOf(ref);
+  return (Array.isArray(list) ? list : []).some(
+    (entry) => tieIdentityOf(entry) === wanted,
+  );
+}
+
+// Desired-state tie planner (`docs/task-relations.md` key grammar). `to` is
+// `owner-waits` (⌃B), `other-waits` (⌃⇧B), `plain-out` (⌃L), or `plain-in`
+// (⌃⇧L). Chords are desired-state commands, never toggles: pressing one
+// when the pair already holds that tie is a `noop`. Returns one of:
+// - `{kind: "noop", notice}` — the pair already holds the tie;
+// - `{kind: "refuse", reason, notice}` — guarded (cycles, eligibility);
+// - `{kind: "change", ...}` — the dependency delta (one entry per
+//   dependent: `{dependent, add, remove}`, each with its `planDependencyEdit`
+//   preview), the LINKS deltas per note (drops plus an optional add, with
+//   the `planLinksEdit` preview), the LINKED FROM courtesy drops, the ids
+//   needed, and whether every edit is same-note.
+function planTieChange(args = {}) {
+  const owner = tieNormalizeRef(args.owner);
+  const other = tieNormalizeRef(args.other);
+  const to = String(args.to || "");
+  const notes = tieNotesMap(args.notes);
+  const resolve = args.resolve && typeof args.resolve === "object" ? args.resolve : {};
+  const resolveLinkpath =
+    typeof resolve.linkpath === "function" ? resolve.linkpath : null;
+  const vaultFiles = Array.isArray(resolve.vaultFiles) && resolve.vaultFiles.length > 0
+    ? resolve.vaultFiles
+    : [...notes.keys()];
+  const isArchived =
+    typeof resolve.isArchived === "function"
+      ? resolve.isArchived
+      : (path) => isDoneArchivePath(path);
+  const today = args.today instanceof Date ? args.today : resolve.today instanceof Date ? resolve.today : new Date();
+  const refuse = (reason, notice) =>
+    Object.freeze({ kind: "refuse", to, reason, notice: notice || null });
+  if (!owner || !other) {
+    return refuse("invalid-ref", "That task could not be located");
+  }
+  if (
+    to !== "owner-waits" &&
+    to !== "other-waits" &&
+    to !== "plain-out" &&
+    to !== "plain-in"
+  ) {
+    return refuse("invalid-target", "That tie change is not supported");
+  }
+  const ownerFound = tieFindTaskLine(notes, owner.path, owner.blockId);
+  const otherFound = tieFindTaskLine(notes, other.path, other.blockId);
+  if (ownerFound.reason) {
+    return refuse(ownerFound.reason, `The owner task could not be located (^${owner.blockId})`);
+  }
+  if (otherFound.reason) {
+    return refuse(otherFound.reason, `The other task could not be located (^${other.blockId})`);
+  }
+  const ownerKey = dependencyStageRowKey(owner.path, owner.blockId);
+  const otherKey = dependencyStageRowKey(other.path, other.blockId);
+  if (ownerKey && otherKey && ownerKey === otherKey) {
+    return refuse("this-task", "A task cannot tie to itself");
+  }
+  const ownerContent = notes.get(owner.path);
+  const otherContent = notes.get(other.path);
+  if (taskDependsOnLineIsMalformed(ownerContent, ownerFound.line)) {
+    return refuse("malformed-depends-on", "Its Depends-On line is malformed");
+  }
+  if (taskDependsOnLineIsMalformed(otherContent, otherFound.line)) {
+    return refuse("malformed-depends-on", "Its Depends-On line is malformed");
+  }
+  const ownerDeps = tieDependsOnTargets(ownerContent, ownerFound.line, owner.path, resolveLinkpath);
+  const otherDeps = tieDependsOnTargets(otherContent, otherFound.line, other.path, resolveLinkpath);
+  if (!ownerDeps.ok || !otherDeps.ok) {
+    return refuse("malformed-depends-on", "A Depends-On line is malformed");
+  }
+  const ownerWaits = tieHasIdentity(ownerDeps.targets, other);
+  const otherWaits = tieHasIdentity(otherDeps.targets, owner);
+  const ownerPlain = tiePlainPresence(ownerFound.lines, ownerFound.line, owner.path, resolveLinkpath);
+  const otherPlain = tiePlainPresence(otherFound.lines, otherFound.line, other.path, resolveLinkpath);
+  const ownerStatus = tieTaskStatus(ownerFound.lines, ownerFound.line);
+  const otherStatus = tieTaskStatus(otherFound.lines, otherFound.line);
+  const ownerIdentity = blocksIdentity(owner.path, owner.blockId);
+  const otherIdentity = blocksIdentity(other.path, other.blockId);
+  const pair = classifyPairTies({
+    ownerWaitsOnOther: ownerWaits,
+    otherWaitsOnOwner: otherWaits,
+    plainOut: ownerPlain.ok && ownerPlain.out.some((entry) => tieIdentityOf(entry) === otherIdentity),
+    plainIn: otherPlain.ok && otherPlain.out.some((entry) => tieIdentityOf(entry) === ownerIdentity),
+  });
+  const idsNeeded = Object.freeze([owner, other]);
+  const sameNote = owner.path === other.path;
+  const ownerName = quoteRelationNoticeName(
+    cleanTaskDisplayText(String(ownerFound.lines[ownerFound.line] || "")) || "that task",
+  );
+  const otherName = quoteRelationNoticeName(
+    cleanTaskDisplayText(String(otherFound.lines[otherFound.line] || "")) || "that task",
+  );
+
+  const wantsDependency = to === "owner-waits" || to === "other-waits";
+  if (wantsDependency) {
+    const dependent = to === "owner-waits" ? owner : other;
+    const prerequisite = to === "owner-waits" ? other : owner;
+    const alreadyHolds =
+      (to === "owner-waits" && pair.tie === "depends_out") ||
+      (to === "other-waits" && pair.tie === "depends_in");
+    if (alreadyHolds && pair.tie !== "depends_both") {
+      return Object.freeze({
+        kind: "noop",
+        to,
+        tie: pair.tie,
+        notice: to === "owner-waits" ? "Already waits on it" : "Already waited on",
+      });
+    }
+    const prerequisiteStatus = to === "owner-waits" ? otherStatus : ownerStatus;
+    const prerequisiteLines = to === "owner-waits" ? otherFound.lines : ownerFound.lines;
+    const prerequisiteLine = to === "owner-waits" ? otherFound.line : ownerFound.line;
+    const prerequisiteRef = prerequisite;
+    if (prerequisiteStatus !== null && !TIE_TODO_STATUSES.has(prerequisiteStatus)) {
+      return refuse(
+        "target-closed",
+        `${prerequisiteRef === other ? otherName : ownerName} is closed · it cannot become a prerequisite`,
+      );
+    }
+    try {
+      if (isArchived(prerequisiteRef.path)) {
+        return refuse(
+          "target-archived",
+          `${prerequisiteRef === other ? otherName : ownerName} is archived · it cannot become a prerequisite`,
+        );
+      }
+    } catch (_error) {
+      return refuse("target-archived", "The target note is not writable");
+    }
+    try {
+      const scopeFlags = navNoteScopeFlags(prerequisiteRef.path);
+      if (
+        scopeFlags &&
+        scopeFlags.isDailyNote === true &&
+        relationStageEventTaskSpan(String(prerequisiteLines[prerequisiteLine] || "")) !== null
+      ) {
+        return refuse(
+          "event-task",
+          `${prerequisiteRef === other ? otherName : ownerName} is an Event Task · it cannot become a prerequisite`,
+        );
+      }
+    } catch (_error) {
+      // Event-task detection is best-effort; a helper failure never blocks.
+    }
+    const dependentFound = to === "owner-waits" ? ownerFound : otherFound;
+    const dependentStatus = to === "owner-waits" ? ownerStatus : otherStatus;
+    if (dependentStatus !== null && !OPEN_OBSIDIAN_TASK_STATUSES.has(dependentStatus)) {
+      return refuse(
+        "owner-closed",
+        `${dependent === owner ? ownerName : otherName} is closed · its dependencies cannot change`,
+      );
+    }
+    try {
+      if (
+        dependentFound &&
+        isProjectPrjDependencyParent(
+          notes.get(dependent.path),
+          dependent.path,
+          dependentFound.line,
+        ) &&
+        sameNote
+      ) {
+        return refuse("inside-project", "A project cannot wait on its own note");
+      }
+    } catch (_error) {
+      // ^prj detection is best-effort.
+    }
+    // Trial-graph cycle check, excluding the reversed edge (key grammar).
+    try {
+      const trialNotes = [...notes].map(([path, content]) => ({ path, content }));
+      const index = indexDependencyStageNotes(trialNotes);
+      const edges = collectDependencyStageEdges(trialNotes, index);
+      const trial = new Map();
+      for (const [from, targets] of edges) {
+        trial.set(from, targets.slice());
+      }
+      const dependentKey = to === "owner-waits" ? ownerKey : otherKey;
+      const prerequisiteKey = to === "owner-waits" ? otherKey : ownerKey;
+      if (dependentKey && prerequisiteKey) {
+        const reversing =
+          (to === "owner-waits" && pair.tie === "depends_in") ||
+          (to === "other-waits" && pair.tie === "depends_out") ||
+          pair.tie === "depends_both";
+        if (reversing) {
+          const current = trial.get(prerequisiteKey) || [];
+          trial.set(
+            prerequisiteKey,
+            current.filter((key) => key !== dependentKey),
+          );
+        }
+        const current = trial.get(dependentKey) || [];
+        if (!current.includes(prerequisiteKey)) {
+          trial.set(dependentKey, [...current, prerequisiteKey]);
+        }
+        const cycle = findDependencyStageCycle(trial, dependentKey, prerequisiteKey);
+        if (cycle) {
+          return refuse(
+            "would-create-cycle",
+            `⛓ Could not update dependencies (would create a cycle: ${cycle.length - 1} back-link${cycle.length - 1 === 1 ? "" : "s"})`,
+          );
+        }
+      }
+    } catch (_error) {
+      // Cycle detection is best-effort off the loaded notes.
+    }
+    const reversing =
+      (to === "owner-waits" && (pair.tie === "depends_in" || pair.tie === "depends_both")) ||
+      (to === "other-waits" && (pair.tie === "depends_out" || pair.tie === "depends_both"));
+    const dependency = [];
+    const planFor = (dependentRef, add, remove) => {
+      const content = notes.get(dependentRef.path);
+      const located = tieFindTaskLine(notes, dependentRef.path, dependentRef.blockId);
+      if (located.reason) {
+        return null;
+      }
+      try {
+        const planned = planDependencyEdit({
+          content,
+          parentLine: located.line,
+          parentPath: dependentRef.path,
+          add,
+          remove,
+          files: notes,
+          vaultFiles,
+          resolveLinkpath,
+          blocksLinesEnabled: false,
+        });
+        return planned && planned.ok ? planned : null;
+      } catch (_error) {
+        return null;
+      }
+    };
+    const edits = [];
+    if (to === "owner-waits") {
+      edits.push({
+        dependent: owner,
+        add: [other],
+        remove: reversing ? [] : [],
+      });
+      if (reversing) {
+        edits.push({ dependent: other, add: [], remove: [owner] });
+      }
+    } else {
+      edits.push({
+        dependent: other,
+        add: [owner],
+        remove: [],
+      });
+      if (reversing) {
+        edits.push({ dependent: owner, add: [], remove: [other] });
+      }
+    }
+    const dependencyPlans = [];
+    for (const edit of edits) {
+      const preview = planFor(edit.dependent, edit.add, edit.remove);
+      if (!preview) {
+        return refuse("plan-failed", "The dependency edit could not be planned");
+      }
+      dependencyPlans.push(
+        Object.freeze({
+          dependent: edit.dependent,
+          add: Object.freeze(edit.add.slice()),
+          remove: Object.freeze(edit.remove.slice()),
+          previewChanged: preview.changed === true,
+          nextContent: preview.nextContent,
+        }),
+      );
+    }
+    const links = tieAbsorptionLinkDeltas({
+      pairs: [{ owner, other }],
+      notes,
+      resolveLinkpath,
+    });
+    const absorbedDrops = links.deltas.reduce(
+      (count, delta) => count + delta.drops.length,
+      0,
+    );
+    const noticeBase =
+      to === "owner-waits"
+        ? `⛓ Now waits on ${otherName}`
+        : `🧱 ${otherName} now waits on this`;
+    return Object.freeze({
+      kind: "change",
+      to,
+      tieBefore: pair.tie,
+      tieAfter: to === "owner-waits" ? "depends_out" : "depends_in",
+      sameNote,
+      reversing,
+      dependency: Object.freeze(
+        edits.map((edit) => Object.freeze({
+          dependent: edit.dependent,
+          add: Object.freeze(edit.add.slice()),
+          remove: Object.freeze(edit.remove.slice()),
+        })),
+      ),
+      dependencyPlans: Object.freeze(dependencyPlans),
+      links: links.deltas,
+      mirrors: links.mirrors,
+      idsNeeded,
+      notice: reversing
+        ? `⇄ Reversed · ${noticeBase}`
+        : absorbedDrops > 0
+          ? `${noticeBase} · replaced the 🪢 link`
+          : noticeBase,
+    });
+  }
+
+  // Plain-link chords (⌃L / ⌃⇧L): release any dependency between the pair,
+  // else ensure the plain edge. A labelled owner→other entry already
+  // satisfies the chord; an existing reverse plain or labelled entry is a
+  // no-op.
+  const outIsOwnerSide = to === "plain-out";
+  const dependencyTies = pair.tie === "depends_out" || pair.tie === "depends_in" || pair.tie === "depends_both";
+  const ownerLinks = outIsOwnerSide ? ownerPlain : otherPlain;
+  const reverseLinks = outIsOwnerSide ? otherPlain : ownerPlain;
+  const ownerTaskLines = outIsOwnerSide ? ownerFound.lines : otherFound.lines;
+  const ownerTaskLine = outIsOwnerSide ? ownerFound.line : otherFound.line;
+  const ownerTaskPath = outIsOwnerSide ? owner.path : other.path;
+  const ownerTaskRef = outIsOwnerSide ? owner : other;
+  const counterpartRef = outIsOwnerSide ? other : owner;
+  const counterpartIdentity = outIsOwnerSide ? otherIdentity : ownerIdentity;
+  const reverseIdentity = outIsOwnerSide ? ownerIdentity : otherIdentity;
+  const ownerSideHasPlain =
+    ownerLinks.ok &&
+    ownerLinks.out.some((entry) => tieIdentityOf(entry) === counterpartIdentity);
+  const reverseHasPlain =
+    reverseLinks.ok &&
+    reverseLinks.out.some((entry) => tieIdentityOf(entry) === reverseIdentity);
+  const ownerSideHasLabelled = tieHasLabelledEntry(
+    ownerTaskLines,
+    ownerTaskLine,
+    ownerTaskPath,
+    counterpartRef,
+    resolveLinkpath,
+  );
+  const reverseHasLabelled = tieHasLabelledEntry(
+    outIsOwnerSide ? otherFound.lines : ownerFound.lines,
+    outIsOwnerSide ? otherFound.line : ownerFound.line,
+    outIsOwnerSide ? other.path : owner.path,
+    outIsOwnerSide ? owner : other,
+    resolveLinkpath,
+  );
+  if (!dependencyTies && (ownerSideHasPlain || ownerSideHasLabelled)) {
+    return Object.freeze({
+      kind: "noop",
+      to,
+      tie: pair.tie,
+      notice: outIsOwnerSide ? "Already links to it" : "Already links here",
+    });
+  }
+  if (!dependencyTies && (reverseHasPlain || reverseHasLabelled)) {
+    return Object.freeze({
+      kind: "noop",
+      to,
+      tie: pair.tie,
+      notice: outIsOwnerSide ? "Already linked from it" : "Already linked to it",
+    });
+  }
+  if (ownerLinks.reason === "malformed-links-line") {
+    return refuse("malformed-links-line", "Its LINKS line is malformed");
+  }
+  const releaseEdits = [];
+  if (pair.tie === "depends_out") {
+    releaseEdits.push({ dependent: owner, add: [], remove: [other] });
+  } else if (pair.tie === "depends_in") {
+    releaseEdits.push({ dependent: other, add: [], remove: [owner] });
+  } else if (pair.tie === "depends_both") {
+    releaseEdits.push({ dependent: owner, add: [], remove: [other] });
+    releaseEdits.push({ dependent: other, add: [], remove: [owner] });
+  }
+  const needsPlainAdd = !ownerSideHasPlain && !ownerSideHasLabelled;
+  let linksAddPreview = null;
+  if (needsPlainAdd) {
+    const targetNote =
+      ownerTaskPath === counterpartRef.path
+        ? ""
+        : String(counterpartRef.path.split("/").pop() || "").replace(/\.md$/i, "");
+    try {
+      const attempted = planLinksEdit(notes.get(ownerTaskPath), ownerTaskLine, {
+        add: [
+          {
+            link: relationLinkText({ note: targetNote, blockId: counterpartRef.blockId }),
+            label: null,
+          },
+        ],
+      });
+      linksAddPreview = attempted && attempted.ok ? attempted : null;
+    } catch (_error) {
+      linksAddPreview = null;
+    }
+    if (!linksAddPreview) {
+      return refuse("plan-failed", "The plain link could not be planned");
+    }
+  }
+  // A release keeps every plain entry (the surviving plain link is the
+  // release target) and every mirror, so there is nothing to absorb.
+  const links = tieAbsorptionLinkDeltas({ pairs: [], notes, resolveLinkpath });
+  const released = dependencyTies
+    ? (outIsOwnerSide
+      ? `🪢 Now links to ${otherName} · no longer waits on it`
+      : `🪢 Now links here from ${ownerName} · no longer waits on it`)
+    : (outIsOwnerSide ? `🪢 Now links to ${otherName}` : `🪢 Now links here from ${ownerName}`);
+  return Object.freeze({
+    kind: "change",
+    to,
+    tieBefore: pair.tie,
+    tieAfter: outIsOwnerSide ? "plain_out" : "plain_in",
+    sameNote,
+    reversing: false,
+    dependency: Object.freeze(
+      releaseEdits.map((edit) => Object.freeze({
+        dependent: edit.dependent,
+        add: Object.freeze([]),
+        remove: Object.freeze(edit.remove.slice()),
+      })),
+    ),
+    dependencyPlans: Object.freeze([]),
+    links: links.deltas,
+    mirrors: links.mirrors,
+    plainAdd: needsPlainAdd
+      ? Object.freeze({
+        path: ownerTaskPath,
+        link: relationLinkText({
+          note: ownerTaskPath === counterpartRef.path
+            ? ""
+            : String(counterpartRef.path.split("/").pop() || "").replace(/\.md$/i, ""),
+          blockId: counterpartRef.blockId,
+        }),
+        previewChanged: linksAddPreview ? linksAddPreview.changed === true : false,
+      })
+      : null,
+    idsNeeded,
+    notice: released,
+  });
+}
+
+// Whether the task's LINKS lines hold a labelled entry for the counterpart
+// (a labelled entry satisfies a plain-link chord and is never absorbed).
+function tieHasLabelledEntry(lines, taskLine, ownerPath, counterpart, resolveLinkpath) {
+  try {
+    if (!Array.isArray(lines) || !Number.isInteger(taskLine)) {
+      return false;
+    }
+    const children = findLinksChildren(lines, taskLine);
+    for (const index of children) {
+      const parsed = parseLinksLine(String(lines[index] || ""), { isDirectChildOfTask: true });
+      if (!parsed || parsed.verdict !== "accept") {
+        continue;
+      }
+      for (const entry of parsed.entries || []) {
+        if (!entry.label) {
+          continue;
+        }
+        const targetPath = dependencyPathForLinkNote(entry.note, ownerPath, resolveLinkpath);
+        if (
+          normalizeVaultRelativePath(targetPath) === counterpart.path &&
+          normalizeBulletPropertyValue(entry.blockId) === counterpart.blockId
+        ) {
+          return true;
+        }
+      }
+    }
+  } catch (_error) {
+    return false;
+  }
+  return false;
+}
+// ---- src/088-tie-absorption.js ----
+// Tie absorption for the dependency writers (`docs/task-relations.md` §22).
+// `tieAbsorptionLinkDeltas` plans the LINKS drops plus LINKED FROM courtesy
+// drops for dependency adds; `absorbTieSideFromContent` /
+// `absorbTiePairsFromContents` fold them (same-note transaction), and
+// `applyTieLinksFollowUps` writes cross-note follow-ups after the commit
+// through the existing follow-up machinery shape. Notice helpers name what
+// was replaced and what reconcile must fold.
+
+// LINKS drops plus LINKED FROM courtesy drops for dependency adds. Pure:
+// returns per-note deltas the writers fold (same-note) or follow up
+// (cross-note). Malformed lines are reported per note, never thrown.
+function tieAbsorptionLinkDeltas(args = {}) {
+  const pairs = Array.isArray(args.pairs) ? args.pairs : [];
+  const notes = tieNotesMap(args.notes);
+  const resolveLinkpath =
+    typeof args.resolveLinkpath === "function" ? args.resolveLinkpath : null;
+  const deltas = [];
+  const mirrors = [];
+  const byNote = new Map();
+  const deltaFor = (path, blockId, line) => {
+    const key = `${path}\x00${blockId}`;
+    if (!byNote.has(key)) {
+      const delta = { path, blockId, line, drops: [], adds: [] };
+      byNote.set(key, delta);
+      deltas.push(delta);
+    }
+    return byNote.get(key);
+  };
+  for (const pair of pairs) {
+    const owner = tieNormalizeRef(pair && pair.owner);
+    const other = tieNormalizeRef(pair && pair.other);
+    if (!owner || !other) {
+      continue;
+    }
+    const ownerFound = tieFindTaskLine(notes, owner.path, owner.blockId);
+    const otherFound = tieFindTaskLine(notes, other.path, other.blockId);
+    if (!ownerFound.reason) {
+      const ownerDrops = tiePlainDropsForCounterpart(
+        ownerFound.lines,
+        ownerFound.line,
+        owner.path,
+        other,
+        resolveLinkpath,
+      );
+      if (ownerDrops.drops.length > 0 || ownerDrops.malformed) {
+        const delta = deltaFor(owner.path, owner.blockId, ownerFound.line);
+        for (const drop of ownerDrops.drops) {
+          delta.drops.push(drop);
+        }
+        if (ownerDrops.malformed && !delta.malformed) {
+          delta.malformed = ownerDrops.malformed;
+        }
+      }
+      const ownerMirrors = tieMirrorDropsForCounterpart(
+        ownerFound.lines,
+        ownerFound.line,
+        owner.path,
+        other,
+        resolveLinkpath,
+      );
+      if (ownerMirrors.drops.length > 0 || ownerMirrors.malformed) {
+        mirrors.push(Object.freeze({
+          path: owner.path,
+          blockId: owner.blockId,
+          line: ownerFound.line,
+          remove: Object.freeze(ownerMirrors.drops.slice()),
+          malformed: ownerMirrors.malformed || null,
+        }));
+      }
+    }
+    if (!otherFound.reason) {
+      const otherDrops = tiePlainDropsForCounterpart(
+        otherFound.lines,
+        otherFound.line,
+        other.path,
+        owner,
+        resolveLinkpath,
+      );
+      if (otherDrops.drops.length > 0 || otherDrops.malformed) {
+        const delta = deltaFor(other.path, other.blockId, otherFound.line);
+        for (const drop of otherDrops.drops) {
+          delta.drops.push(drop);
+        }
+        if (otherDrops.malformed && !delta.malformed) {
+          delta.malformed = otherDrops.malformed;
+        }
+      }
+      const otherMirrors = tieMirrorDropsForCounterpart(
+        otherFound.lines,
+        otherFound.line,
+        other.path,
+        owner,
+        resolveLinkpath,
+      );
+      if (otherMirrors.drops.length > 0 || otherMirrors.malformed) {
+        mirrors.push(Object.freeze({
+          path: other.path,
+          blockId: other.blockId,
+          line: otherFound.line,
+          remove: Object.freeze(otherMirrors.drops.slice()),
+          malformed: otherMirrors.malformed || null,
+        }));
+      }
+    }
+  }
+  return Object.freeze({
+    deltas: Object.freeze(
+      deltas.map((delta) => Object.freeze({
+        path: delta.path,
+        blockId: delta.blockId,
+        line: delta.line,
+        drops: Object.freeze(delta.drops.slice()),
+        adds: Object.freeze([]),
+        malformed: delta.malformed || null,
+      })),
+    ),
+    mirrors: Object.freeze(mirrors),
+  });
+}
+
+// Plain entries on the task's LINKS lines resolving to the counterpart.
+function tiePlainDropsForCounterpart(lines, taskLine, ownerPath, counterpart, resolveLinkpath) {
+  const drops = [];
+  try {
+    const children = findLinksChildren(lines, taskLine);
+    const parsed = children.map((index) =>
+      parseLinksLine(String(lines[index] || ""), { isDirectChildOfTask: true }),
+    );
+    if (parsed.some((entry) => entry && entry.verdict === "malformed")) {
+      return { drops, malformed: "malformed-links-line" };
+    }
+    for (const entry of parsed) {
+      if (!entry || entry.verdict !== "accept") {
+        continue;
+      }
+      for (const link of entry.entries || []) {
+        if (link.label) {
+          continue;
+        }
+        const targetPath = dependencyPathForLinkNote(link.note, ownerPath, resolveLinkpath);
+        if (!targetPath) {
+          continue;
+        }
+        if (
+          normalizeVaultRelativePath(targetPath) === counterpart.path &&
+          normalizeBulletPropertyValue(link.blockId) === counterpart.blockId
+        ) {
+          drops.push(Object.freeze({ note: link.note, blockId: link.blockId }));
+        }
+      }
+    }
+  } catch (_error) {
+    return { drops, malformed: "plan-failed" };
+  }
+  return { drops, malformed: null };
+}
+
+// Shared writability for tie absorption across the dependency writers:
+// done/ archives and the previous daily note never take machine writes
+// (contract §22 protected history), matching the follow-up machinery.
+function tieNavNoteIsWritable(plugin, today) {
+  let previousDaily = null;
+  try {
+    const vaultFiles =
+      plugin && typeof plugin.readDependencyVaultFileList === "function"
+        ? plugin.readDependencyVaultFileList()
+        : [];
+    const paths = (Array.isArray(vaultFiles) ? vaultFiles : []).map((entry) =>
+      entry && typeof entry === "object" ? entry.path : entry,
+    );
+    const daily = scheduledRecoveryDailyPaths(
+      paths.map((path) => ({ path })),
+      today instanceof Date ? today : new Date(),
+    );
+    previousDaily = daily && daily.previous;
+  } catch (_error) {
+    previousDaily = null;
+  }
+  return (path) => relationPathIsWritable(path, previousDaily);
+}
+
+// Writer-side absorption: apply one task side to note content. Drops the
+// task's plain LINKS entries for the counterpart (byte-exact) plus the
+// unlabelled LINKED FROM mirror entries, deleting lines left with no
+// entries. Never throws: malformed lines skip that part and are reported.
+function absorbTieSideFromContent(content, taskLine, counterpart, ctx = {}) {
+  const ownerPath = normalizeVaultRelativePath((ctx && ctx.ownerPath) || "");
+  const resolveLinkpath =
+    ctx && typeof ctx.resolveLinkpath === "function" ? ctx.resolveLinkpath : null;
+  const text = String(content || "");
+  const lineEnding = text.includes("\r\n") ? "\r\n" : "\n";
+  let lines = text.split(/\r?\n/);
+  let dropped = 0;
+  let mirrorDropped = 0;
+  const skipped = [];
+  const counterpartIdentity = blocksIdentity(counterpart.path, counterpart.blockId);
+  const isCounterpart = (note, blockId) => {
+    let targetPath = null;
+    try {
+      targetPath = dependencyPathForLinkNote(note, ownerPath, resolveLinkpath);
+    } catch (_error) {
+      return false;
+    }
+    if (!targetPath) {
+      return false;
+    }
+    return (
+      normalizeVaultRelativePath(targetPath) === counterpart.path &&
+      normalizeBulletPropertyValue(blockId) === counterpart.blockId
+    );
+  };
+  if (
+    !Number.isInteger(taskLine) ||
+    taskLine < 0 ||
+    taskLine >= lines.length ||
+    !isObsidianTaskAtLine(lines.join(lineEnding), taskLine)
+  ) {
+    return { nextContent: text, dropped, mirrorDropped, skipped: ["not-a-task"] };
+  }
+  const linkChildren = findLinksChildren(lines, taskLine);
+  const linkParsed = linkChildren.map((index) =>
+    parseLinksLine(String(lines[index] || ""), { isDirectChildOfTask: true }),
+  );
+  if (linkParsed.some((entry) => entry && entry.verdict === "malformed")) {
+    skipped.push("malformed-links-line");
+  } else {
+    const replacements = [];
+    const deletions = [];
+    for (let cursor = 0; cursor < linkChildren.length; cursor += 1) {
+      const lineIndex = linkChildren[cursor];
+      const outcome = dropPlainLinkEntries(
+        String(lines[lineIndex] || ""),
+        (entry) => isCounterpart(entry.target, entry.blockId),
+      );
+      if (outcome.outcome === "malformed") {
+        skipped.push("malformed-links-line");
+        break;
+      }
+      if (outcome.outcome === "rewritten") {
+        replacements.push({ lineIndex, text: outcome.line });
+        dropped += outcome.removed.length;
+      } else if (outcome.outcome === "delete-line") {
+        deletions.push(lineIndex);
+        dropped += outcome.removed.length;
+      }
+    }
+    if (skipped.length === 0) {
+      for (const deletion of deletions) {
+        lines[deletion] = null;
+      }
+      lines = lines.filter((line) => line !== null);
+      for (const replacement of replacements) {
+        const shift = deletions.filter((at) => at < replacement.lineIndex).length;
+        lines[replacement.lineIndex - shift] = replacement.text;
+      }
+    }
+  }
+  if (skipped.length === 0) {
+    const working = lines.join(lineEnding);
+    const workingLines = working.split(/\r?\n/);
+    const mirrorChildren = findLinkedFromChildren(workingLines, taskLine);
+    const mirrorParsed = mirrorChildren.map((index) =>
+      parseLinkedFromLine(String(workingLines[index] || ""), { isDirectChildOfTask: true }),
+    );
+    if (mirrorParsed.some((entry) => entry && entry.verdict === "malformed")) {
+      skipped.push("malformed-linked-from-line");
+    } else {
+      const desired = [];
+      let excluded = 0;
+      for (const entry of mirrorParsed) {
+        if (!entry || entry.verdict !== "accept") {
+          continue;
+        }
+        for (const link of entry.entries || []) {
+          if (
+            !link.label &&
+            isCounterpart(link.note, link.blockId) &&
+            blocksIdentity(
+              dependencyPathForLinkNote(link.note, ownerPath, resolveLinkpath) || "",
+              link.blockId,
+            ) === counterpartIdentity
+          ) {
+            excluded += 1;
+            continue;
+          }
+          desired.push({
+            link: relationLinkText({ note: link.note, blockId: link.blockId }),
+            label: link.label || null,
+          });
+        }
+      }
+      if (excluded > 0) {
+        const planned = planLinkedFromLine(working, taskLine, desired);
+        if (!planned.ok) {
+          skipped.push("mirror-plan-failed");
+        } else {
+          lines = String(planned.nextContent).split(/\r?\n/);
+          mirrorDropped = excluded;
+        }
+      }
+    }
+  }
+  return {
+    nextContent: lines.join(lineEnding),
+    dropped,
+    mirrorDropped,
+    skipped,
+  };
+}
+
+// Unlabelled LINKED FROM mirror entries for the counterpart (generated
+// mirrors of the plain links being absorbed; labelled mirrors stay).
+function tieMirrorDropsForCounterpart(lines, taskLine, ownerPath, counterpart, resolveLinkpath) {
+  const drops = [];
+  try {
+    const children = findLinkedFromChildren(lines, taskLine);
+    const parsed = children.map((index) =>
+      parseLinkedFromLine(String(lines[index] || ""), { isDirectChildOfTask: true }),
+    );
+    if (parsed.some((entry) => entry && entry.verdict === "malformed")) {
+      return { drops, malformed: "malformed-linked-from-line" };
+    }
+    for (const entry of parsed) {
+      if (!entry || entry.verdict !== "accept") {
+        continue;
+      }
+      for (const link of entry.entries || []) {
+        if (link.label) {
+          continue;
+        }
+        const targetPath = dependencyPathForLinkNote(link.note, ownerPath, resolveLinkpath);
+        if (!targetPath) {
+          continue;
+        }
+        if (
+          normalizeVaultRelativePath(targetPath) === counterpart.path &&
+          normalizeBulletPropertyValue(link.blockId) === counterpart.blockId
+        ) {
+          drops.push(blocksIdentity(targetPath, link.blockId));
+        }
+      }
+    }
+  } catch (_error) {
+    return { drops, malformed: "plan-failed" };
+  }
+  return { drops, malformed: null };
+}
+
+// Apply dependency-add absorption pairs to a contents map. Each pair's two
+// sides (owner task drops plain-for-other, other task drops plain-for-owner,
+// plus LINKED FROM courtesy) fold into that note's next content. Sides on
+// unwritable notes, closed tasks, or missing/duplicate/malformed lines skip
+// with a reason; reconcile folds leftovers. Returns the changed notes plus
+// counts. Never throws.
+function absorbTiePairsFromContents(args = {}) {
+  const contents = tieNotesMap(args.contents);
+  const pairs = Array.isArray(args.pairs) ? args.pairs : [];
+  const resolveLinkpath =
+    typeof args.resolveLinkpath === "function" ? args.resolveLinkpath : null;
+  const isWritable =
+    typeof args.isWritable === "function"
+      ? args.isWritable
+      : (path) => !isDoneArchivePath(path);
+  const next = new Map(contents);
+  let dropped = 0;
+  let mirrorDropped = 0;
+  const skipped = [];
+  // Follow-ups carry whole pairs but write one note: `paths` scopes the
+  // sides to the notes being written, skipping other sides silently.
+  const scoped =
+    args.paths instanceof Set
+      ? args.paths
+      : Array.isArray(args.paths)
+        ? new Set(args.paths.map((path) => normalizeVaultRelativePath(path)))
+        : null;
+  const sides = [];
+  const sideRef = (ref) => {
+    if (!ref || typeof ref !== "object") {
+      return null;
+    }
+    const path = normalizeVaultRelativePath(ref.path);
+    const blockId = normalizeBulletPropertyValue(ref.blockId);
+    const line = Number.isInteger(ref.line) ? ref.line : null;
+    if (!path || (!blockId && line === null)) {
+      return null;
+    }
+    return Object.freeze({ path, blockId: blockId || "", line });
+  };
+  for (const pair of pairs) {
+    const owner = sideRef(pair && pair.owner);
+    const other = sideRef(pair && pair.other);
+    if (!owner || !other || !other.blockId) {
+      continue;
+    }
+    if (!scoped || scoped.has(owner.path)) {
+      sides.push({
+        path: owner.path,
+        blockId: owner.blockId,
+        line: owner.line,
+        counterpart: other,
+      });
+    }
+    if (!scoped || scoped.has(other.path)) {
+      sides.push({
+        path: other.path,
+        blockId: other.blockId,
+        line: other.line,
+        counterpart: owner,
+      });
+    }
+  }
+  for (const side of sides) {
+    const current = next.get(side.path);
+    if (typeof current !== "string") {
+      skipped.push(
+        Object.freeze({ path: side.path, reason: "note-unavailable" }),
+      );
+      continue;
+    }
+    let writable = false;
+    try {
+      writable = isWritable(side.path) === true;
+    } catch (_error) {
+      writable = false;
+    }
+    if (!writable) {
+      skipped.push(Object.freeze({ path: side.path, reason: "note-not-writable" }));
+      continue;
+    }
+    let taskLine = side.line;
+    if (!Number.isInteger(taskLine)) {
+      const found = tieFindTaskLine(next, side.path, side.blockId);
+      if (found.reason) {
+        skipped.push(Object.freeze({ path: side.path, reason: found.reason }));
+        continue;
+      }
+      taskLine = found.line;
+    }
+    const status = tieTaskStatus(String(current).split(/\r?\n/), taskLine);
+    if (status !== null && !OPEN_OBSIDIAN_TASK_STATUSES.has(status)) {
+      skipped.push(Object.freeze({ path: side.path, reason: "task-closed" }));
+      continue;
+    }
+    let applied = null;
+    try {
+      applied = absorbTieSideFromContent(current, taskLine, side.counterpart, {
+        ownerPath: side.path,
+        resolveLinkpath,
+      });
+    } catch (_error) {
+      skipped.push(Object.freeze({ path: side.path, reason: "plan-failed" }));
+      continue;
+    }
+    if (applied.nextContent !== current) {
+      next.set(side.path, applied.nextContent);
+    }
+    dropped += applied.dropped;
+    mirrorDropped += applied.mirrorDropped;
+    for (const reason of applied.skipped) {
+      skipped.push(Object.freeze({ path: side.path, reason }));
+    }
+  }
+  const changed = [...next]
+    .filter(([path, content]) => content !== contents.get(path))
+    .map(([path]) => path);
+  return Object.freeze({
+    contents: next,
+    changed: Object.freeze(changed),
+    dropped,
+    mirrorDropped,
+    skipped: Object.freeze(skipped),
+  });
+}
+
+// Cross-note absorption follow-ups, applied after the dependency commit
+// through the existing follow-up machinery shape (preimage-checked,
+// editor-or-vault writes, best-effort with a failed list). Each entry is
+// `{path, preimage, pairs: [{owner, other}]}`; `io` supplies the app plus
+// the linkpath resolver. A leftover plain link is folded by reconcile.
+async function applyTieLinksFollowUps(args = {}) {
+  const app = args.app || null;
+  const followUps = Array.isArray(args.followUps) ? args.followUps : [];
+  const resolveLinkpath =
+    typeof args.resolveLinkpath === "function" ? args.resolveLinkpath : null;
+  const isWritable =
+    typeof args.isWritable === "function"
+      ? args.isWritable
+      : (path) => !isDoneArchivePath(path);
+  const failed = new Set();
+  let dropped = 0;
+  let mirrorDropped = 0;
+  if (followUps.length === 0) {
+    return Object.freeze({
+      ok: true,
+      failed: Object.freeze([]),
+      dropped: 0,
+      mirrorDropped: 0,
+    });
+  }
+  const vault = app && app.vault;
+  const workspace = app && app.workspace;
+  const findEditor = (path) => {
+    try {
+      if (!workspace || typeof workspace.getLeavesOfType !== "function") {
+        return null;
+      }
+      for (const leaf of workspace.getLeavesOfType("markdown") || []) {
+        const view = leaf && leaf.view;
+        if (
+          view &&
+          view.file &&
+          normalizeVaultRelativePath(view.file.path) === path &&
+          view.editor &&
+          typeof view.editor.getValue === "function"
+        ) {
+          return view.editor;
+        }
+      }
+    } catch (_error) {
+      return null;
+    }
+    return null;
+  };
+  for (const entry of followUps) {
+    const path = normalizeVaultRelativePath((entry && entry.path) || "");
+    const preimage = entry && typeof entry.preimage === "string" ? entry.preimage : null;
+    const pairs = entry && Array.isArray(entry.pairs) ? entry.pairs : [];
+    if (!path || preimage === null || pairs.length === 0) {
+      if (path) {
+        failed.add(path);
+      }
+      continue;
+    }
+    let writable = false;
+    try {
+      writable = isWritable(path) === true;
+    } catch (_error) {
+      writable = false;
+    }
+    if (!writable) {
+      failed.add(path);
+      continue;
+    }
+    const editor = findEditor(path);
+    let current = null;
+    if (editor) {
+      current = String(editor.getValue() || "");
+    } else {
+      try {
+        const file = vault && typeof vault.getAbstractFileByPath === "function"
+          ? vault.getAbstractFileByPath(path)
+          : null;
+        if (file && vault && typeof vault.cachedRead === "function") {
+          current = String(await vault.cachedRead(file));
+        } else if (file && vault && typeof vault.read === "function") {
+          current = String(await vault.read(file));
+        }
+      } catch (_error) {
+        current = null;
+      }
+    }
+    if (current === null || current !== preimage) {
+      failed.add(path);
+      continue;
+    }
+    let applied = null;
+    try {
+      applied = absorbTiePairsFromContents({
+        contents: new Map([[path, current]]),
+        pairs,
+        paths: [path],
+        resolveLinkpath,
+        isWritable,
+      });
+    } catch (_error) {
+      failed.add(path);
+      continue;
+    }
+    if (applied.skipped.length > 0) {
+      failed.add(path);
+      continue;
+    }
+    const nextContent = applied.contents.get(path) || current;
+    if (nextContent === current) {
+      dropped += applied.dropped;
+      mirrorDropped += applied.mirrorDropped;
+      continue;
+    }
+    dropped += applied.dropped;
+    mirrorDropped += applied.mirrorDropped;
+    if (editor) {
+      let committed = false;
+      try {
+        committed =
+          String(editor.getValue() || "") === preimage &&
+          applyEditorContentTransaction(
+            editor,
+            preimage,
+            nextContent,
+            null,
+            RELATIONS_MACHINE_WRITE_ANNOTATION,
+          );
+      } catch (_error) {
+        committed = false;
+      }
+      if (!committed) {
+        failed.add(path);
+      }
+      continue;
+    }
+    try {
+      const file = vault && typeof vault.getAbstractFileByPath === "function"
+        ? vault.getAbstractFileByPath(path)
+        : null;
+      if (!file || !vault || typeof vault.process !== "function") {
+        failed.add(path);
+        continue;
+      }
+      let wrote = false;
+      await vault.process(file, (data) => {
+        if (String(data || "") !== preimage) {
+          return data;
+        }
+        wrote = true;
+        return nextContent;
+      });
+      if (!wrote) {
+        failed.add(path);
+      }
+    } catch (_error) {
+      failed.add(path);
+    }
+  }
+  return Object.freeze({
+    ok: failed.size === 0,
+    failed: Object.freeze([...failed]),
+    dropped,
+    mirrorDropped,
+  });
+}
+
+// Notice segments for absorbed ties (`docs/task-dependencies.md` §6.7/§15.7):
+// `· replaced the 🪢 link` when a drop landed, and the honest failure
+// suffix when a needed drop did not.
+function withTieAbsorptionNotice(notice, absorbed) {
+  if (!notice) {
+    return notice;
+  }
+  const count =
+    (absorbed && Number.isInteger(absorbed.dropped) ? absorbed.dropped : 0) +
+    (absorbed && Number.isInteger(absorbed.mirrorDropped) ? absorbed.mirrorDropped : 0);
+  if (count <= 0) {
+    return notice;
+  }
+  return `${notice} · replaced the 🪢 link`;
+}
+
+function withTieAbsorptionFailureSuffix(notice, failed) {
+  const count = Array.isArray(failed)
+    ? failed.length
+    : failed && Number.isInteger(failed.length)
+      ? failed.length
+      : failed
+        ? 1
+        : 0;
+  if (count <= 0 || !notice) {
+    return notice;
+  }
+  return `${notice} · 🪢 link not removed (reconcile will fold it)`;
+}
 // ---- src/082-blocks-mint.js ----
 // BLOCKS dependent-id minting, ported from task-status-cycler's
 // `mintBlockId` and pinned by docs/task-dependencies.md §11.7 (SB1–SB9).
@@ -87114,6 +88652,40 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
       new Notice(dependencyPlanFailureNotice(plan.reason, "update"));
       return false;
     }
+    // Tie absorption (§22): a new dependency absorbs the pair's plain
+    // links. Same-note batches fold every side into the single-transaction
+    // commit below (cross-note rows commit through the vault path, which
+    // absorbs in `applyDependencyEdit`).
+    let batchTieAbsorbed = null;
+    if (plan.changed && addRefs.length > 0) {
+      const batchTieParentLines = String(plan.nextContent || "").split(/\r?\n/);
+      const batchTieParentBlockId = Number.isInteger(plan.parentLineNext)
+        ? getTrailingBlockId(String(batchTieParentLines[plan.parentLineNext] || ""))
+        : "";
+      const batchTiePairs = addRefs.map((ref) => ({
+        owner: {
+          path: filePath,
+          blockId: batchTieParentBlockId || "",
+          line: plan.parentLineNext,
+        },
+        other: { path: ref.path, blockId: ref.blockId },
+      }));
+      try {
+        batchTieAbsorbed = absorbTiePairsFromContents({
+          contents: new Map([[filePath, plan.nextContent]]),
+          pairs: batchTiePairs,
+          paths: [filePath],
+          resolveLinkpath: this.plugin
+            ? this.plugin.dependencyLinkpathResolver()
+            : null,
+          isWritable: this.plugin
+            ? tieNavNoteIsWritable(this.plugin, new Date())
+            : undefined,
+        });
+      } catch (_error) {
+        batchTieAbsorbed = null;
+      }
+    }
     const batchSubtreePlanned = batchSubtreePrep &&
       this.plugin &&
       typeof this.plugin.planSubtreePassForPrjEdit === "function"
@@ -87135,16 +88707,24 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
     const batchSubtreeTargets = batchSubtreePlanned
       ? batchSubtreePlanned.pass.pomodoroTargets || []
       : [];
+    // Absorbed LINKS drops join the plan before stamping: drops land on
+    // child lines below the parent, so the parent line index is unchanged.
     let batchPlan = plan;
-    if (batchSubtreeTargets.length > 0 && plan.summary && plan.summary.project) {
+    if (batchTieAbsorbed && batchTieAbsorbed.changed.length > 0) {
       batchPlan = {
         ...plan,
+        nextContent: batchTieAbsorbed.contents.get(filePath),
+      };
+    }
+    if (batchSubtreeTargets.length > 0 && plan.summary && plan.summary.project) {
+      batchPlan = {
+        ...batchPlan,
         summary: {
-          ...plan.summary,
+          ...batchPlan.summary,
           project: {
-            ...plan.summary.project,
+            ...batchPlan.summary.project,
             pomodoroTargets: Object.freeze([
-              ...(plan.summary.project.pomodoroTargets || []),
+              ...(batchPlan.summary.project.pomodoroTargets || []),
               ...batchSubtreeTargets,
             ]),
           },
@@ -87248,9 +88828,15 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
       batchPomodoroRemoved,
       batchPomodoroPruneFailed,
     );
-    const batchNotice = withSubtreePassNotice(
-      batchProjectNotice || batchPlan.notice,
-      batchSubtree,
+    const batchNotice = withTieAbsorptionFailureSuffix(
+      withTieAbsorptionNotice(
+        withSubtreePassNotice(
+          batchProjectNotice || batchPlan.notice,
+          batchSubtree,
+        ),
+        batchTieAbsorbed,
+      ),
+      (batchTieAbsorbed && batchTieAbsorbed.skipped) || [],
     );
     await this.plugin.finishBlocksFollowUps(
       batchPlan.blocksFollowUps,
@@ -110348,6 +111934,87 @@ class BobNavigationHotkeysPropertyDependencyMixin {
           },
         };
       }
+      // Tie absorption (§22): a new dependency absorbs the pair's plain
+        // links. Same-note sides fold into the dependent's one transaction;
+        // cross-note sides become follow-ups after the commit. Hand-edit
+        // mirrors never absorb (they report one notice instead; reconcile
+        // folds).
+        let tieAbsorbed = null;
+        let tieFollowUps = [];
+        let tieSkippedPaths = [];
+        const tieIsWritable = tieNavNoteIsWritable(
+          this,
+          args.today || new Date(),
+        );
+        if (!mirrorTouch && plan.changed && add.length > 0) {
+          const tieParentLines = String(commitPlan.nextContent || "").split(/\r?\n/);
+          const tieParentBlockId = Number.isInteger(plan.parentLineNext)
+            ? getTrailingBlockId(String(tieParentLines[plan.parentLineNext] || ""))
+            : "";
+          const tiePairs = add
+            .map(normalizeDependencyTargetRef)
+            .filter((ref) => ref.path && ref.blockId)
+            .map((ref) => ({
+              owner: {
+                path: parentPath,
+                blockId: tieParentBlockId || "",
+                line: plan.parentLineNext,
+              },
+              other: { path: ref.path, blockId: ref.blockId },
+            }));
+          try {
+            tieAbsorbed = absorbTiePairsFromContents({
+              contents: new Map([[parentPath, commitPlan.nextContent]]),
+              pairs: tiePairs,
+              paths: [parentPath],
+              resolveLinkpath,
+              isWritable: tieIsWritable,
+            });
+          } catch (_error) {
+            tieAbsorbed = null;
+          }
+          if (tieAbsorbed && tieAbsorbed.changed.length > 0) {
+            commitPlan = {
+              ...commitPlan,
+              nextContent: tieAbsorbed.contents.get(parentPath),
+            };
+          }
+          const byPath = new Map();
+          for (const pair of tiePairs) {
+            const otherPath = normalizeVaultRelativePath(pair.other.path);
+            if (!otherPath || otherPath === parentPath) {
+              continue;
+            }
+            if (!byPath.has(otherPath)) {
+              byPath.set(otherPath, []);
+            }
+            byPath.get(otherPath).push(pair);
+          }
+          for (const [otherPath, otherPairs] of byPath) {
+            let writable = false;
+            try {
+              writable = tieIsWritable(otherPath) === true;
+            } catch (_error) {
+              writable = false;
+            }
+            if (!writable) {
+              tieSkippedPaths.push(otherPath);
+              continue;
+            }
+            const preimage = blocksNotePreimage(
+              otherPath,
+              files,
+              plan.preparations,
+            );
+            if (typeof preimage !== "string") {
+              tieSkippedPaths.push(otherPath);
+              continue;
+            }
+            tieFollowUps.push(
+              Object.freeze({ path: otherPath, preimage, pairs: Object.freeze(otherPairs.slice()) }),
+            );
+          }
+        }
       let pomodoroPrep = null;
       if (!mirrorTouch) {
         // Freshness stamps the dependent's post-plan line: a same-note
@@ -110377,6 +112044,11 @@ class BobNavigationHotkeysPropertyDependencyMixin {
           commitPlan = { ...commitPlan, nextContent: pomodoroPrep.commitContent };
         }
       }
+      // Tie drops that share a note with a BLOCKS mirror ride that note's
+      // single follow-up write; notes with no mirror go through the
+      // standalone tie applier. Both run inside the transaction, after the
+      // dependent commit, so a failed commit writes nothing anywhere.
+      const tieExtra = { dropped: 0, mirrorDropped: 0, failed: [] };
       const outcome = await applyDependencyEditTransaction(commitPlan, {
         // The hand-edit mirror never writes cross-note targets' `[id::]`;
         // the hooks reconcile them (contract §4).
@@ -110384,7 +112056,52 @@ class BobNavigationHotkeysPropertyDependencyMixin {
           ? async () => ({ ok: true })
           : (filePath, preparation) =>
               this.prepareDependencyTargetNote(filePath, preparation),
-        applyBlocksFollowUps: (followUps) => this.applyBlocksFollowUps(followUps),
+        applyBlocksFollowUps: async (followUps) => {
+          const byPath = new Map();
+          for (const followUp of tieFollowUps) {
+            if (!byPath.has(followUp.path)) {
+              byPath.set(followUp.path, []);
+            }
+            byPath.get(followUp.path).push(...(followUp.pairs || []));
+          }
+          const merged = (Array.isArray(followUps) ? followUps : []).map((entry) => {
+            const pairs = byPath.get(normalizeVaultRelativePath(entry && entry.path));
+            byPath.delete(normalizeVaultRelativePath(entry && entry.path));
+            if (!pairs || pairs.length === 0) {
+              return entry;
+            }
+            return { ...entry, tiePairs: pairs };
+          });
+          const tieOnly = [...byPath].map(([path, pairs]) =>
+            Object.freeze({
+              path,
+              preimage: (tieFollowUps.find((entry) => entry.path === path) || {}).preimage,
+              pairs: Object.freeze(pairs.slice()),
+            }),
+          );
+          if (tieOnly.length > 0) {
+            try {
+              const tieOutcome = await applyTieLinksFollowUps({
+                app: this.app,
+                followUps: tieOnly,
+                resolveLinkpath,
+                isWritable: tieIsWritable,
+              });
+              tieExtra.dropped += tieOutcome.dropped || 0;
+              tieExtra.mirrorDropped += tieOutcome.mirrorDropped || 0;
+              tieExtra.failed.push(...(tieOutcome.failed || []));
+            } catch (_error) {
+              for (const entry of tieOnly) {
+                tieExtra.failed.push(entry.path);
+              }
+            }
+          }
+          const blocksOutcome = await this.applyBlocksFollowUps(merged);
+          tieExtra.dropped += blocksOutcome.tieDropped || 0;
+          tieExtra.mirrorDropped += blocksOutcome.tieMirrorDropped || 0;
+          tieExtra.failed.push(...(blocksOutcome.tieFailed || []));
+          return blocksOutcome;
+        },
         planSubtreePass: subtreePlanned ? async () => subtreePlanned : null,
         writeSubtreePass: async (planned) => {
           const wrote = await this.writeSubtreePass(planned.pass);
@@ -110428,6 +112145,23 @@ class BobNavigationHotkeysPropertyDependencyMixin {
       if (!outcome.ok) {
         return outcome;
       }
+      // A failed follow-up leaves a reconcile-folded plain link and an
+      // honest suffix, never a rolled-back dependency.
+      const tieNotice = (notice) =>
+        withTieAbsorptionFailureSuffix(
+          withTieAbsorptionNotice(notice, {
+            dropped:
+              (tieAbsorbed ? tieAbsorbed.dropped : 0) + tieExtra.dropped,
+            mirrorDropped:
+              (tieAbsorbed ? tieAbsorbed.mirrorDropped : 0) +
+              tieExtra.mirrorDropped,
+          }),
+          [
+            ...((tieAbsorbed && tieAbsorbed.skipped) || []),
+            ...tieSkippedPaths,
+            ...tieExtra.failed,
+          ],
+        );
       const blocksFailedPaths = [
         ...(plan.blocksFailedPaths || []),
         ...((outcome.blocks && outcome.blocks.failed) || []),
@@ -110451,9 +112185,11 @@ class BobNavigationHotkeysPropertyDependencyMixin {
         return Object.freeze({
           ok: true,
           reason: null,
-          notice: withBlocksFollowUpNotice(
-            withSubtreePassNotice(pomodoroNotice, outcome.subtree),
-            blocksFailedPaths,
+          notice: tieNotice(
+            withBlocksFollowUpNotice(
+              withSubtreePassNotice(pomodoroNotice, outcome.subtree),
+              blocksFailedPaths,
+            ),
           ),
           subtree: outcome.subtree || null,
         });
@@ -110462,19 +112198,23 @@ class BobNavigationHotkeysPropertyDependencyMixin {
         return Object.freeze({
           ok: true,
           reason: null,
-          notice: withBlocksFollowUpNotice(
-            withSubtreePassNotice(
-              outcome.notice || "⛓ Dependencies updated",
-              outcome.subtree,
+          notice: tieNotice(
+            withBlocksFollowUpNotice(
+              withSubtreePassNotice(
+                outcome.notice || "⛓ Dependencies updated",
+                outcome.subtree,
+              ),
+              blocksFailedPaths,
             ),
-            blocksFailedPaths,
           ),
           subtree: outcome.subtree,
         });
       }
       return Object.freeze({
         ...outcome,
-        notice: withBlocksFollowUpNotice(outcome.notice, blocksFailedPaths),
+        notice: tieNotice(
+          withBlocksFollowUpNotice(outcome.notice, blocksFailedPaths),
+        ),
       });
     } catch (_error) {
       return Object.freeze({ ok: false, reason: "apply-failed" });
@@ -111437,9 +113177,14 @@ class BobNavigationHotkeysDependencyStageMixin {
 // preimage and committed after the Depends-On transaction; an open editor
 // receives its own undo entry, while vault.process protects a closed note.
 class BobNavigationHotkeysBlocksFollowUpsMixin {
+  // Entries may carry `tiePairs` (tie-absorption pairs from §22): the
+  // plain-LINKS drops (plus LINKED FROM courtesy) fold into this same
+  // post-commit write, so a BLOCKS mirror and a tie drop never race on the
+  // note preimage. Tie skips are reported separately as `tieFailed` with
+  // `tieDropped`/`tieMirrorDropped` counts; reconcile folds leftovers.
   async applyBlocksFollowUps(followUps) {
     const entries = Array.isArray(followUps) ? followUps : [];
-    if (entries.length === 0) return Object.freeze({ ok: true, failed: Object.freeze([]) });
+    if (entries.length === 0) return Object.freeze({ ok: true, failed: Object.freeze([]), tieFailed: Object.freeze([]), tieDropped: 0, tieMirrorDropped: 0 });
     const vault = this.app && this.app.vault;
     const workspace = this.app && this.app.workspace;
     const resolver = this.dependencyLinkpathResolver();
@@ -111451,9 +113196,10 @@ class BobNavigationHotkeysBlocksFollowUpsMixin {
     for (const entry of entries) {
       const path = normalizeVaultRelativePath(entry && entry.path);
       if (!path || isDoneArchivePath(path) || path === (dailyPaths && dailyPaths.previous)) continue;
-      if (!grouped.has(path)) grouped.set(path, { path, preimage: entry.preimage, owners: new Map() });
+      if (!grouped.has(path)) grouped.set(path, { path, preimage: entry.preimage, owners: new Map(), tiePairs: [] });
       const note = grouped.get(path);
       if (note.preimage !== entry.preimage) note.preimage = null;
+      if (entry && Array.isArray(entry.tiePairs)) note.tiePairs.push(...entry.tiePairs);
       const id = normalizeBulletPropertyValue(entry.ownerBlockId);
       if (!id) continue;
       if (!note.owners.has(id)) note.owners.set(id, { add: [], remove: [] });
@@ -111463,6 +113209,9 @@ class BobNavigationHotkeysBlocksFollowUpsMixin {
     }
 
     const failed = new Set();
+    const tieFailed = new Set();
+    let tieDropped = 0;
+    let tieMirrorDropped = 0;
     for (const note of grouped.values()) {
       if (typeof note.preimage !== "string") {
         failed.add(note.path);
@@ -111499,6 +113248,34 @@ class BobNavigationHotkeysBlocksFollowUpsMixin {
 
       let nextContent = note.preimage;
       let noteFailed = false;
+      if (note.tiePairs.length > 0) {
+        let absorbed = null;
+        try {
+          absorbed = absorbTiePairsFromContents({
+            contents: new Map([[note.path, nextContent]]),
+            pairs: note.tiePairs,
+            paths: [note.path],
+            resolveLinkpath: resolver,
+            isWritable: (candidate) => {
+              const normalized = normalizeVaultRelativePath(candidate);
+              return Boolean(
+                normalized &&
+                  !isDoneArchivePath(normalized) &&
+                  normalized !== (dailyPaths && dailyPaths.previous),
+              );
+            },
+          });
+        } catch (_error) {
+          absorbed = null;
+        }
+        if (!absorbed || absorbed.skipped.length > 0) {
+          tieFailed.add(note.path);
+        } else {
+          nextContent = absorbed.contents.get(note.path) || nextContent;
+          tieDropped += absorbed.dropped;
+          tieMirrorDropped += absorbed.mirrorDropped;
+        }
+      }
       for (const [ownerBlockId, delta] of note.owners) {
         const lines = nextContent.split(/\r?\n/);
         const ownerLine = findTaskLineByTrailingBlockId(lines, ownerBlockId);
@@ -111568,7 +113345,13 @@ class BobNavigationHotkeysBlocksFollowUpsMixin {
       }
       if (noteFailed) failed.add(note.path);
     }
-    return Object.freeze({ ok: failed.size === 0, failed: Object.freeze([...failed]) });
+    return Object.freeze({
+      ok: failed.size === 0,
+      failed: Object.freeze([...failed]),
+      tieFailed: Object.freeze([...tieFailed]),
+      tieDropped,
+      tieMirrorDropped,
+    });
   }
 
   // Remaining direct-planner paths commit their own transaction, then call
@@ -111980,6 +113763,96 @@ class BobNavigationHotkeysBlocksEditMixin {
       }
       const sourceWrites = plan.sourceWrites.map((entry) => ({ ...entry }));
       const dependentWrites = plan.dependentWrites.map((entry) => ({ ...entry }));
+      // Tie absorption (§22): a new dependency absorbs the pair's plain
+      // links. T-note sides fold into the writes below (one transaction per
+      // note); source-note sides on pure source notes become follow-ups
+      // after the commits, so a failed T write leaves its pair untouched.
+      const tieIsWritable = tieNavNoteIsWritable(this, today);
+      let tieAbsorbed = null;
+      let tieFollowUps = [];
+      let tieSkippedPaths = [];
+      if (plan.changed && liveAdd.length > 0) {
+        const tPaths = new Set((plan.notePlans || []).map((note) => note.path));
+        const tiePairs = [];
+        for (const note of plan.notePlans || []) {
+          for (const t of note.tPlans || []) {
+            if (!t || !t.row || t.row.kind !== "add") {
+              continue;
+            }
+            for (const source of liveSources) {
+              if (!source.blockId) {
+                continue;
+              }
+              tiePairs.push(
+                Object.freeze({
+                  owner: Object.freeze({
+                    path: note.path,
+                    blockId: t.blockId || "",
+                    line: Number.isInteger(t.finalLine) ? t.finalLine : null,
+                  }),
+                  other: Object.freeze({ path: source.path, blockId: source.blockId }),
+                }),
+              );
+            }
+          }
+        }
+        if (tiePairs.length > 0) {
+          const writeContents = new Map();
+          for (const write of [...sourceWrites, ...dependentWrites]) {
+            if (!writeContents.has(write.path)) {
+              writeContents.set(write.path, write.nextContent);
+            }
+          }
+          try {
+            tieAbsorbed = absorbTiePairsFromContents({
+              contents: writeContents,
+              pairs: tiePairs,
+              paths: [...tPaths],
+              resolveLinkpath,
+              isWritable: tieIsWritable,
+            });
+          } catch (_error) {
+            tieAbsorbed = null;
+          }
+          if (tieAbsorbed) {
+            for (const write of [...sourceWrites, ...dependentWrites]) {
+              const next = tieAbsorbed.contents.get(write.path);
+              if (typeof next === "string" && next !== write.nextContent) {
+                write.nextContent = next;
+              }
+            }
+            const sourceNextByPath = new Map(
+              sourceWrites.map((write) => [write.path, write.nextContent]),
+            );
+            const followByPath = new Map();
+            for (const pair of tiePairs) {
+              if (tPaths.has(pair.other.path)) {
+                continue;
+              }
+              if (!followByPath.has(pair.other.path)) {
+                followByPath.set(pair.other.path, []);
+              }
+              followByPath.get(pair.other.path).push(pair);
+            }
+            for (const [otherPath, otherPairs] of followByPath) {
+              let writable = false;
+              try {
+                writable = tieIsWritable(otherPath) === true;
+              } catch (_error) {
+                writable = false;
+              }
+              const preimage = sourceNextByPath.get(otherPath);
+              if (!writable || typeof preimage !== "string") {
+                tieSkippedPaths.push(otherPath);
+                continue;
+              }
+              tieFollowUps.push(
+                Object.freeze({ path: otherPath, preimage, pairs: Object.freeze(otherPairs.slice()) }),
+              );
+            }
+          }
+        }
+      }
       const extraTargetsByPath = new Map();
       for (const entry of subtreePreps) {
         const write =
@@ -112106,6 +113979,60 @@ class BobNavigationHotkeysBlocksEditMixin {
           committed.push(refOf(write, entry));
         }
       }
+      // Tie follow-ups run after the T commits and before the BLOCKS
+      // mirrors (which re-read live content): only pairs whose T landed
+      // absorb, and a leftover plain link is folded by reconcile.
+      let tieFollowFailed = [];
+      let tieFollowDropped = 0;
+      let tieFollowMirrorDropped = 0;
+      if (tieFollowUps.length > 0) {
+        const failedT = new Set(
+          failed
+            .filter((ref) => ref.kind === "add")
+            .map((ref) => `${normalizeVaultRelativePath(ref.path)}\x00${normalizeBulletPropertyValue(ref.blockId)}`),
+        );
+        const landedFollowUps = [];
+        for (const followUp of tieFollowUps) {
+          const landedPairs = (followUp.pairs || []).filter(
+            (pair) =>
+              !failedT.has(
+                `${normalizeVaultRelativePath(pair.owner.path)}\x00${normalizeBulletPropertyValue(pair.owner.blockId)}`,
+              ),
+          );
+          if (landedPairs.length === 0) {
+            continue;
+          }
+          landedFollowUps.push({ ...followUp, pairs: landedPairs });
+        }
+        if (landedFollowUps.length > 0) {
+          try {
+            const tieOutcome = await applyTieLinksFollowUps({
+              app: this.app,
+              followUps: landedFollowUps,
+              resolveLinkpath,
+              isWritable: tieIsWritable,
+            });
+            tieFollowFailed = [...(tieOutcome.failed || [])];
+            tieFollowDropped = tieOutcome.dropped || 0;
+            tieFollowMirrorDropped = tieOutcome.mirrorDropped || 0;
+          } catch (_error) {
+            tieFollowFailed = landedFollowUps.map((entry) => entry.path);
+          }
+        }
+      }
+      const tieNotice = (notice) =>
+        withTieAbsorptionFailureSuffix(
+          withTieAbsorptionNotice(notice, {
+            dropped: (tieAbsorbed ? tieAbsorbed.dropped : 0) + tieFollowDropped,
+            mirrorDropped:
+              (tieAbsorbed ? tieAbsorbed.mirrorDropped : 0) + tieFollowMirrorDropped,
+          }),
+          [
+            ...((tieAbsorbed && tieAbsorbed.skipped) || []),
+            ...tieSkippedPaths,
+            ...tieFollowFailed,
+          ],
+        );
       let blocksFailed = [];
       if (blocksLinesEnabled) {
         for (const source of plan.sources || []) {
@@ -112216,16 +114143,18 @@ class BobNavigationHotkeysBlocksEditMixin {
         (infos || []).filter(
           (info) => !failedKeys.has(`${info.path}\x00${info.line}`),
         );
-      const notice = buildBlocksEditNotice({
-        sourceCount: (plan.sources || []).length,
-        added: landedOnly(plan.added),
-        removed: landedOnly(plan.removed),
-        takesLane: plan.takesLane,
-        failedCount: failed.length,
-        pomodoroRemoved,
-        pomodoroFailed: pomodoroDone.failed,
-        blocksFailed: blocksFailed.length > 0,
-      });
+      const notice = tieNotice(
+        buildBlocksEditNotice({
+          sourceCount: (plan.sources || []).length,
+          added: landedOnly(plan.added),
+          removed: landedOnly(plan.removed),
+          takesLane: plan.takesLane,
+          failedCount: failed.length,
+          pomodoroRemoved,
+          pomodoroFailed: pomodoroDone.failed,
+          blocksFailed: blocksFailed.length > 0,
+        }),
+      );
       const withSubtree = subtree && subtreePassNoticeSuffix(subtree)
         ? `${notice} ${subtreePassNoticeSuffix(subtree)}`
         : notice;
@@ -142652,6 +144581,7 @@ module.exports.helpers = {
   planLinksEdit,
   planLinkedFromLine,
   linkedFromDesiredAfterDelta,
+  dropPlainLinkEntries, classifyPairTies, planTieChange, tieAbsorptionLinkDeltas, tieNavNoteIsWritable, absorbTieSideFromContent, absorbTiePairsFromContents, applyTieLinksFollowUps, withTieAbsorptionNotice, withTieAbsorptionFailureSuffix,
   buildRelationEditNotice,
   withLinkedFromFollowUpNotice,
   relationPathIsWritable,

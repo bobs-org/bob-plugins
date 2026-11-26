@@ -563,6 +563,87 @@ class BobNavigationHotkeysPropertyDependencyMixin {
           },
         };
       }
+      // Tie absorption (§22): a new dependency absorbs the pair's plain
+        // links. Same-note sides fold into the dependent's one transaction;
+        // cross-note sides become follow-ups after the commit. Hand-edit
+        // mirrors never absorb (they report one notice instead; reconcile
+        // folds).
+        let tieAbsorbed = null;
+        let tieFollowUps = [];
+        let tieSkippedPaths = [];
+        const tieIsWritable = tieNavNoteIsWritable(
+          this,
+          args.today || new Date(),
+        );
+        if (!mirrorTouch && plan.changed && add.length > 0) {
+          const tieParentLines = String(commitPlan.nextContent || "").split(/\r?\n/);
+          const tieParentBlockId = Number.isInteger(plan.parentLineNext)
+            ? getTrailingBlockId(String(tieParentLines[plan.parentLineNext] || ""))
+            : "";
+          const tiePairs = add
+            .map(normalizeDependencyTargetRef)
+            .filter((ref) => ref.path && ref.blockId)
+            .map((ref) => ({
+              owner: {
+                path: parentPath,
+                blockId: tieParentBlockId || "",
+                line: plan.parentLineNext,
+              },
+              other: { path: ref.path, blockId: ref.blockId },
+            }));
+          try {
+            tieAbsorbed = absorbTiePairsFromContents({
+              contents: new Map([[parentPath, commitPlan.nextContent]]),
+              pairs: tiePairs,
+              paths: [parentPath],
+              resolveLinkpath,
+              isWritable: tieIsWritable,
+            });
+          } catch (_error) {
+            tieAbsorbed = null;
+          }
+          if (tieAbsorbed && tieAbsorbed.changed.length > 0) {
+            commitPlan = {
+              ...commitPlan,
+              nextContent: tieAbsorbed.contents.get(parentPath),
+            };
+          }
+          const byPath = new Map();
+          for (const pair of tiePairs) {
+            const otherPath = normalizeVaultRelativePath(pair.other.path);
+            if (!otherPath || otherPath === parentPath) {
+              continue;
+            }
+            if (!byPath.has(otherPath)) {
+              byPath.set(otherPath, []);
+            }
+            byPath.get(otherPath).push(pair);
+          }
+          for (const [otherPath, otherPairs] of byPath) {
+            let writable = false;
+            try {
+              writable = tieIsWritable(otherPath) === true;
+            } catch (_error) {
+              writable = false;
+            }
+            if (!writable) {
+              tieSkippedPaths.push(otherPath);
+              continue;
+            }
+            const preimage = blocksNotePreimage(
+              otherPath,
+              files,
+              plan.preparations,
+            );
+            if (typeof preimage !== "string") {
+              tieSkippedPaths.push(otherPath);
+              continue;
+            }
+            tieFollowUps.push(
+              Object.freeze({ path: otherPath, preimage, pairs: Object.freeze(otherPairs.slice()) }),
+            );
+          }
+        }
       let pomodoroPrep = null;
       if (!mirrorTouch) {
         // Freshness stamps the dependent's post-plan line: a same-note
@@ -592,6 +673,11 @@ class BobNavigationHotkeysPropertyDependencyMixin {
           commitPlan = { ...commitPlan, nextContent: pomodoroPrep.commitContent };
         }
       }
+      // Tie drops that share a note with a BLOCKS mirror ride that note's
+      // single follow-up write; notes with no mirror go through the
+      // standalone tie applier. Both run inside the transaction, after the
+      // dependent commit, so a failed commit writes nothing anywhere.
+      const tieExtra = { dropped: 0, mirrorDropped: 0, failed: [] };
       const outcome = await applyDependencyEditTransaction(commitPlan, {
         // The hand-edit mirror never writes cross-note targets' `[id::]`;
         // the hooks reconcile them (contract §4).
@@ -599,7 +685,52 @@ class BobNavigationHotkeysPropertyDependencyMixin {
           ? async () => ({ ok: true })
           : (filePath, preparation) =>
               this.prepareDependencyTargetNote(filePath, preparation),
-        applyBlocksFollowUps: (followUps) => this.applyBlocksFollowUps(followUps),
+        applyBlocksFollowUps: async (followUps) => {
+          const byPath = new Map();
+          for (const followUp of tieFollowUps) {
+            if (!byPath.has(followUp.path)) {
+              byPath.set(followUp.path, []);
+            }
+            byPath.get(followUp.path).push(...(followUp.pairs || []));
+          }
+          const merged = (Array.isArray(followUps) ? followUps : []).map((entry) => {
+            const pairs = byPath.get(normalizeVaultRelativePath(entry && entry.path));
+            byPath.delete(normalizeVaultRelativePath(entry && entry.path));
+            if (!pairs || pairs.length === 0) {
+              return entry;
+            }
+            return { ...entry, tiePairs: pairs };
+          });
+          const tieOnly = [...byPath].map(([path, pairs]) =>
+            Object.freeze({
+              path,
+              preimage: (tieFollowUps.find((entry) => entry.path === path) || {}).preimage,
+              pairs: Object.freeze(pairs.slice()),
+            }),
+          );
+          if (tieOnly.length > 0) {
+            try {
+              const tieOutcome = await applyTieLinksFollowUps({
+                app: this.app,
+                followUps: tieOnly,
+                resolveLinkpath,
+                isWritable: tieIsWritable,
+              });
+              tieExtra.dropped += tieOutcome.dropped || 0;
+              tieExtra.mirrorDropped += tieOutcome.mirrorDropped || 0;
+              tieExtra.failed.push(...(tieOutcome.failed || []));
+            } catch (_error) {
+              for (const entry of tieOnly) {
+                tieExtra.failed.push(entry.path);
+              }
+            }
+          }
+          const blocksOutcome = await this.applyBlocksFollowUps(merged);
+          tieExtra.dropped += blocksOutcome.tieDropped || 0;
+          tieExtra.mirrorDropped += blocksOutcome.tieMirrorDropped || 0;
+          tieExtra.failed.push(...(blocksOutcome.tieFailed || []));
+          return blocksOutcome;
+        },
         planSubtreePass: subtreePlanned ? async () => subtreePlanned : null,
         writeSubtreePass: async (planned) => {
           const wrote = await this.writeSubtreePass(planned.pass);
@@ -643,6 +774,23 @@ class BobNavigationHotkeysPropertyDependencyMixin {
       if (!outcome.ok) {
         return outcome;
       }
+      // A failed follow-up leaves a reconcile-folded plain link and an
+      // honest suffix, never a rolled-back dependency.
+      const tieNotice = (notice) =>
+        withTieAbsorptionFailureSuffix(
+          withTieAbsorptionNotice(notice, {
+            dropped:
+              (tieAbsorbed ? tieAbsorbed.dropped : 0) + tieExtra.dropped,
+            mirrorDropped:
+              (tieAbsorbed ? tieAbsorbed.mirrorDropped : 0) +
+              tieExtra.mirrorDropped,
+          }),
+          [
+            ...((tieAbsorbed && tieAbsorbed.skipped) || []),
+            ...tieSkippedPaths,
+            ...tieExtra.failed,
+          ],
+        );
       const blocksFailedPaths = [
         ...(plan.blocksFailedPaths || []),
         ...((outcome.blocks && outcome.blocks.failed) || []),
@@ -666,9 +814,11 @@ class BobNavigationHotkeysPropertyDependencyMixin {
         return Object.freeze({
           ok: true,
           reason: null,
-          notice: withBlocksFollowUpNotice(
-            withSubtreePassNotice(pomodoroNotice, outcome.subtree),
-            blocksFailedPaths,
+          notice: tieNotice(
+            withBlocksFollowUpNotice(
+              withSubtreePassNotice(pomodoroNotice, outcome.subtree),
+              blocksFailedPaths,
+            ),
           ),
           subtree: outcome.subtree || null,
         });
@@ -677,19 +827,23 @@ class BobNavigationHotkeysPropertyDependencyMixin {
         return Object.freeze({
           ok: true,
           reason: null,
-          notice: withBlocksFollowUpNotice(
-            withSubtreePassNotice(
-              outcome.notice || "⛓ Dependencies updated",
-              outcome.subtree,
+          notice: tieNotice(
+            withBlocksFollowUpNotice(
+              withSubtreePassNotice(
+                outcome.notice || "⛓ Dependencies updated",
+                outcome.subtree,
+              ),
+              blocksFailedPaths,
             ),
-            blocksFailedPaths,
           ),
           subtree: outcome.subtree,
         });
       }
       return Object.freeze({
         ...outcome,
-        notice: withBlocksFollowUpNotice(outcome.notice, blocksFailedPaths),
+        notice: tieNotice(
+          withBlocksFollowUpNotice(outcome.notice, blocksFailedPaths),
+        ),
       });
     } catch (_error) {
       return Object.freeze({ ok: false, reason: "apply-failed" });

@@ -2,9 +2,14 @@
 // preimage and committed after the Depends-On transaction; an open editor
 // receives its own undo entry, while vault.process protects a closed note.
 class BobNavigationHotkeysBlocksFollowUpsMixin {
+  // Entries may carry `tiePairs` (tie-absorption pairs from §22): the
+  // plain-LINKS drops (plus LINKED FROM courtesy) fold into this same
+  // post-commit write, so a BLOCKS mirror and a tie drop never race on the
+  // note preimage. Tie skips are reported separately as `tieFailed` with
+  // `tieDropped`/`tieMirrorDropped` counts; reconcile folds leftovers.
   async applyBlocksFollowUps(followUps) {
     const entries = Array.isArray(followUps) ? followUps : [];
-    if (entries.length === 0) return Object.freeze({ ok: true, failed: Object.freeze([]) });
+    if (entries.length === 0) return Object.freeze({ ok: true, failed: Object.freeze([]), tieFailed: Object.freeze([]), tieDropped: 0, tieMirrorDropped: 0 });
     const vault = this.app && this.app.vault;
     const workspace = this.app && this.app.workspace;
     const resolver = this.dependencyLinkpathResolver();
@@ -16,9 +21,10 @@ class BobNavigationHotkeysBlocksFollowUpsMixin {
     for (const entry of entries) {
       const path = normalizeVaultRelativePath(entry && entry.path);
       if (!path || isDoneArchivePath(path) || path === (dailyPaths && dailyPaths.previous)) continue;
-      if (!grouped.has(path)) grouped.set(path, { path, preimage: entry.preimage, owners: new Map() });
+      if (!grouped.has(path)) grouped.set(path, { path, preimage: entry.preimage, owners: new Map(), tiePairs: [] });
       const note = grouped.get(path);
       if (note.preimage !== entry.preimage) note.preimage = null;
+      if (entry && Array.isArray(entry.tiePairs)) note.tiePairs.push(...entry.tiePairs);
       const id = normalizeBulletPropertyValue(entry.ownerBlockId);
       if (!id) continue;
       if (!note.owners.has(id)) note.owners.set(id, { add: [], remove: [] });
@@ -28,6 +34,9 @@ class BobNavigationHotkeysBlocksFollowUpsMixin {
     }
 
     const failed = new Set();
+    const tieFailed = new Set();
+    let tieDropped = 0;
+    let tieMirrorDropped = 0;
     for (const note of grouped.values()) {
       if (typeof note.preimage !== "string") {
         failed.add(note.path);
@@ -64,6 +73,34 @@ class BobNavigationHotkeysBlocksFollowUpsMixin {
 
       let nextContent = note.preimage;
       let noteFailed = false;
+      if (note.tiePairs.length > 0) {
+        let absorbed = null;
+        try {
+          absorbed = absorbTiePairsFromContents({
+            contents: new Map([[note.path, nextContent]]),
+            pairs: note.tiePairs,
+            paths: [note.path],
+            resolveLinkpath: resolver,
+            isWritable: (candidate) => {
+              const normalized = normalizeVaultRelativePath(candidate);
+              return Boolean(
+                normalized &&
+                  !isDoneArchivePath(normalized) &&
+                  normalized !== (dailyPaths && dailyPaths.previous),
+              );
+            },
+          });
+        } catch (_error) {
+          absorbed = null;
+        }
+        if (!absorbed || absorbed.skipped.length > 0) {
+          tieFailed.add(note.path);
+        } else {
+          nextContent = absorbed.contents.get(note.path) || nextContent;
+          tieDropped += absorbed.dropped;
+          tieMirrorDropped += absorbed.mirrorDropped;
+        }
+      }
       for (const [ownerBlockId, delta] of note.owners) {
         const lines = nextContent.split(/\r?\n/);
         const ownerLine = findTaskLineByTrailingBlockId(lines, ownerBlockId);
@@ -133,7 +170,13 @@ class BobNavigationHotkeysBlocksFollowUpsMixin {
       }
       if (noteFailed) failed.add(note.path);
     }
-    return Object.freeze({ ok: failed.size === 0, failed: Object.freeze([...failed]) });
+    return Object.freeze({
+      ok: failed.size === 0,
+      failed: Object.freeze([...failed]),
+      tieFailed: Object.freeze([...tieFailed]),
+      tieDropped,
+      tieMirrorDropped,
+    });
   }
 
   // Remaining direct-planner paths commit their own transaction, then call

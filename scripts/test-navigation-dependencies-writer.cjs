@@ -1304,3 +1304,96 @@ test("counted remove commits every source in one transaction", async () => {
   assert.doesNotMatch(healthyEditor.content, /DEPENDS ON/);
   assert.doesNotMatch(healthyEditor.content, /dependsOn/);
 });
+
+// DW20: a same-note add over a plain link absorbs in one transaction: the
+// dependency and the LINKS drop commit together (one Ctrl+Z) and the notice
+// names what was replaced.
+test("DW20 same-note add absorbs the plain link in one transaction", async () => {
+  const parentNote = [
+    "- [ ] #task Parent ^parent",
+    "  - 🪢 **LINKS:** [[#^target]]",
+    "- [ ] #task Target ^target",
+  ].join("\n");
+  const { plugin } = stubPlugin({ "Tasks.md": parentNote });
+  const editor = new TransactionEditor(parentNote, { line: 0, ch: 0 });
+  const outcome = await plugin.applyDependencyEdit({
+    editor,
+    parentPath: "Tasks.md",
+    parentLine: 0,
+    add: [{ path: "Tasks.md", blockId: "target" }],
+    remove: [],
+  });
+  assert.equal(outcome.ok, true, JSON.stringify(outcome));
+  assert.equal(editor.undoGroups, 1);
+  assert.match(editor.content, /⛓️ \*\*DEPENDS ON:\*\* \[\[#\^target\]\]/);
+  assert.doesNotMatch(editor.content, /🪢 \*\*LINKS:\*\*/);
+  assert.ok(
+    String(outcome.notice || "").includes("replaced the 🪢 link"),
+    outcome.notice,
+  );
+});
+
+// DW21: a cross-note add drops the other task's plain link as a follow-up
+// after the dependency commit, and the notice names what was replaced.
+test("DW21 cross-note add drops the other plain link as a follow-up", async () => {
+  const parentNote = "- [ ] #task Parent ^parent";
+  const targetNote = [
+    "- [ ] #task Target ^target",
+    "  - 🪢 **LINKS:** [[Tasks#^parent]]",
+  ].join("\n");
+  const { plugin, store } = stubPlugin({
+    "Tasks.md": parentNote,
+    "Other.md": targetNote,
+  });
+  const editor = new TransactionEditor(parentNote, { line: 0, ch: 0 });
+  const outcome = await plugin.applyDependencyEdit({
+    editor,
+    parentPath: "Tasks.md",
+    parentLine: 0,
+    add: [{ path: "Other.md", blockId: "target" }],
+    remove: [],
+  });
+  assert.equal(outcome.ok, true, JSON.stringify(outcome));
+  assert.doesNotMatch(store.get("Other.md"), /🪢 \*\*LINKS:\*\*/);
+  assert.match(store.get("Other.md"), /🧱 \*\*BLOCKS:\*\* \[\[Tasks#\^parent\]\]/);
+  assert.ok(
+    String(outcome.notice || "").includes("replaced the 🪢 link"),
+    outcome.notice,
+  );
+});
+
+// DW22: a malformed LINKS line on the other note is left for reconcile with
+// the honest suffix, and the dependency still lands.
+test("DW22 malformed other-note LINKS is left for reconcile with a suffix", async () => {
+  const parentNote = "- [ ] #task Parent ^parent";
+  const targetNote = [
+    "- [ ] #task Target ^target",
+    "  - 🪢 **LINKS:** [[Tasks#^parent]] until Friday",
+  ].join("\n");
+  const { plugin, store } = stubPlugin({
+    "Tasks.md": parentNote,
+    "Other.md": targetNote,
+  });
+  const editor = new TransactionEditor(parentNote, { line: 0, ch: 0 });
+  const outcome = await plugin.applyDependencyEdit({
+    editor,
+    parentPath: "Tasks.md",
+    parentLine: 0,
+    add: [{ path: "Other.md", blockId: "target" }],
+    remove: [],
+  });
+  assert.equal(outcome.ok, true, JSON.stringify(outcome));
+  assert.match(editor.content, /⛓️ \*\*DEPENDS ON:\*\*/);
+  assert.ok(
+    String(store.get("Other.md") || "").includes(
+      "[[Tasks#^parent]] until Friday",
+    ),
+    store.get("Other.md"),
+  );
+  assert.ok(
+    String(outcome.notice || "").includes(
+      "🪢 link not removed (reconcile will fold it)",
+    ),
+    outcome.notice,
+  );
+});

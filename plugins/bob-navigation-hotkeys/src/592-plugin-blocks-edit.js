@@ -390,6 +390,96 @@ class BobNavigationHotkeysBlocksEditMixin {
       }
       const sourceWrites = plan.sourceWrites.map((entry) => ({ ...entry }));
       const dependentWrites = plan.dependentWrites.map((entry) => ({ ...entry }));
+      // Tie absorption (§22): a new dependency absorbs the pair's plain
+      // links. T-note sides fold into the writes below (one transaction per
+      // note); source-note sides on pure source notes become follow-ups
+      // after the commits, so a failed T write leaves its pair untouched.
+      const tieIsWritable = tieNavNoteIsWritable(this, today);
+      let tieAbsorbed = null;
+      let tieFollowUps = [];
+      let tieSkippedPaths = [];
+      if (plan.changed && liveAdd.length > 0) {
+        const tPaths = new Set((plan.notePlans || []).map((note) => note.path));
+        const tiePairs = [];
+        for (const note of plan.notePlans || []) {
+          for (const t of note.tPlans || []) {
+            if (!t || !t.row || t.row.kind !== "add") {
+              continue;
+            }
+            for (const source of liveSources) {
+              if (!source.blockId) {
+                continue;
+              }
+              tiePairs.push(
+                Object.freeze({
+                  owner: Object.freeze({
+                    path: note.path,
+                    blockId: t.blockId || "",
+                    line: Number.isInteger(t.finalLine) ? t.finalLine : null,
+                  }),
+                  other: Object.freeze({ path: source.path, blockId: source.blockId }),
+                }),
+              );
+            }
+          }
+        }
+        if (tiePairs.length > 0) {
+          const writeContents = new Map();
+          for (const write of [...sourceWrites, ...dependentWrites]) {
+            if (!writeContents.has(write.path)) {
+              writeContents.set(write.path, write.nextContent);
+            }
+          }
+          try {
+            tieAbsorbed = absorbTiePairsFromContents({
+              contents: writeContents,
+              pairs: tiePairs,
+              paths: [...tPaths],
+              resolveLinkpath,
+              isWritable: tieIsWritable,
+            });
+          } catch (_error) {
+            tieAbsorbed = null;
+          }
+          if (tieAbsorbed) {
+            for (const write of [...sourceWrites, ...dependentWrites]) {
+              const next = tieAbsorbed.contents.get(write.path);
+              if (typeof next === "string" && next !== write.nextContent) {
+                write.nextContent = next;
+              }
+            }
+            const sourceNextByPath = new Map(
+              sourceWrites.map((write) => [write.path, write.nextContent]),
+            );
+            const followByPath = new Map();
+            for (const pair of tiePairs) {
+              if (tPaths.has(pair.other.path)) {
+                continue;
+              }
+              if (!followByPath.has(pair.other.path)) {
+                followByPath.set(pair.other.path, []);
+              }
+              followByPath.get(pair.other.path).push(pair);
+            }
+            for (const [otherPath, otherPairs] of followByPath) {
+              let writable = false;
+              try {
+                writable = tieIsWritable(otherPath) === true;
+              } catch (_error) {
+                writable = false;
+              }
+              const preimage = sourceNextByPath.get(otherPath);
+              if (!writable || typeof preimage !== "string") {
+                tieSkippedPaths.push(otherPath);
+                continue;
+              }
+              tieFollowUps.push(
+                Object.freeze({ path: otherPath, preimage, pairs: Object.freeze(otherPairs.slice()) }),
+              );
+            }
+          }
+        }
+      }
       const extraTargetsByPath = new Map();
       for (const entry of subtreePreps) {
         const write =
@@ -516,6 +606,60 @@ class BobNavigationHotkeysBlocksEditMixin {
           committed.push(refOf(write, entry));
         }
       }
+      // Tie follow-ups run after the T commits and before the BLOCKS
+      // mirrors (which re-read live content): only pairs whose T landed
+      // absorb, and a leftover plain link is folded by reconcile.
+      let tieFollowFailed = [];
+      let tieFollowDropped = 0;
+      let tieFollowMirrorDropped = 0;
+      if (tieFollowUps.length > 0) {
+        const failedT = new Set(
+          failed
+            .filter((ref) => ref.kind === "add")
+            .map((ref) => `${normalizeVaultRelativePath(ref.path)}\x00${normalizeBulletPropertyValue(ref.blockId)}`),
+        );
+        const landedFollowUps = [];
+        for (const followUp of tieFollowUps) {
+          const landedPairs = (followUp.pairs || []).filter(
+            (pair) =>
+              !failedT.has(
+                `${normalizeVaultRelativePath(pair.owner.path)}\x00${normalizeBulletPropertyValue(pair.owner.blockId)}`,
+              ),
+          );
+          if (landedPairs.length === 0) {
+            continue;
+          }
+          landedFollowUps.push({ ...followUp, pairs: landedPairs });
+        }
+        if (landedFollowUps.length > 0) {
+          try {
+            const tieOutcome = await applyTieLinksFollowUps({
+              app: this.app,
+              followUps: landedFollowUps,
+              resolveLinkpath,
+              isWritable: tieIsWritable,
+            });
+            tieFollowFailed = [...(tieOutcome.failed || [])];
+            tieFollowDropped = tieOutcome.dropped || 0;
+            tieFollowMirrorDropped = tieOutcome.mirrorDropped || 0;
+          } catch (_error) {
+            tieFollowFailed = landedFollowUps.map((entry) => entry.path);
+          }
+        }
+      }
+      const tieNotice = (notice) =>
+        withTieAbsorptionFailureSuffix(
+          withTieAbsorptionNotice(notice, {
+            dropped: (tieAbsorbed ? tieAbsorbed.dropped : 0) + tieFollowDropped,
+            mirrorDropped:
+              (tieAbsorbed ? tieAbsorbed.mirrorDropped : 0) + tieFollowMirrorDropped,
+          }),
+          [
+            ...((tieAbsorbed && tieAbsorbed.skipped) || []),
+            ...tieSkippedPaths,
+            ...tieFollowFailed,
+          ],
+        );
       let blocksFailed = [];
       if (blocksLinesEnabled) {
         for (const source of plan.sources || []) {
@@ -626,16 +770,18 @@ class BobNavigationHotkeysBlocksEditMixin {
         (infos || []).filter(
           (info) => !failedKeys.has(`${info.path}\x00${info.line}`),
         );
-      const notice = buildBlocksEditNotice({
-        sourceCount: (plan.sources || []).length,
-        added: landedOnly(plan.added),
-        removed: landedOnly(plan.removed),
-        takesLane: plan.takesLane,
-        failedCount: failed.length,
-        pomodoroRemoved,
-        pomodoroFailed: pomodoroDone.failed,
-        blocksFailed: blocksFailed.length > 0,
-      });
+      const notice = tieNotice(
+        buildBlocksEditNotice({
+          sourceCount: (plan.sources || []).length,
+          added: landedOnly(plan.added),
+          removed: landedOnly(plan.removed),
+          takesLane: plan.takesLane,
+          failedCount: failed.length,
+          pomodoroRemoved,
+          pomodoroFailed: pomodoroDone.failed,
+          blocksFailed: blocksFailed.length > 0,
+        }),
+      );
       const withSubtree = subtree && subtreePassNoticeSuffix(subtree)
         ? `${notice} ${subtreePassNoticeSuffix(subtree)}`
         : notice;

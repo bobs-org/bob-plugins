@@ -651,6 +651,12 @@ The dependency-stage tests share
 node --test scripts/test-navigation-dependencies-stage-ranker-and-pool.cjs scripts/test-navigation-dependencies-stage-entry-and-view.cjs scripts/test-navigation-dependencies-stage-writes.cjs scripts/test-navigation-dependencies-stage-mirror-and-badge.cjs scripts/test-navigation-dependencies-stage-stale-guards.cjs scripts/test-navigation-dependencies-stage-performance.cjs
 ```
 
+The tie suites cover the §22 twins and absorption:
+`scripts/test-navigation-plain-link-ties.cjs` (mirrored PT vectors plus the
+PT22+ planner vectors), with DW20–DW22 in
+`scripts/test-navigation-dependencies-writer.cjs` and RBP12–RBP13 in
+`scripts/test-navigation-blocks-edit.cjs`.
+
 The source-build suite is `scripts/test-plugin-build.cjs`. It
 covers fragment manifests, deterministic output, read-only freshness checks,
 and parity comparison. The full test command also checks that Ledger Tools

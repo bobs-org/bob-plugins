@@ -701,6 +701,7 @@ module.exports.helpers = {
   planLinksEdit,
   planLinkedFromLine,
   linkedFromDesiredAfterDelta,
+  dropPlainLinkEntries, classifyPairTies, planTieChange, tieAbsorptionLinkDeltas, tieNavNoteIsWritable, absorbTieSideFromContent, absorbTiePairsFromContents, applyTieLinksFollowUps, withTieAbsorptionNotice, withTieAbsorptionFailureSuffix,
   buildRelationEditNotice,
   withLinkedFromFollowUpNotice,
   relationPathIsWritable,

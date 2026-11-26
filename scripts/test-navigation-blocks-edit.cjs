@@ -1399,3 +1399,76 @@ test("applyBlocksEdit giving a source its first BLOCKS line keeps the source's c
   assert.equal(editor.scrollAnchorLine, 16);
   assert.equal(editor.undoGroups, 1);
 });
+
+// RB20: same-note reverse add absorbs the pair's plain links in the note
+// writes, matching the forward writer byte for byte.
+test("RBP12 same-note reverse add absorbs plain links both ways", async () => {
+  const notes = {
+    "Tasks.md": [
+      "- [ ] #task Dependent ^t",
+      "  - 🪢 **LINKS:** [[#^n]]",
+      "- [ ] #task Prerequisite ^n",
+      "  - 🪢 **LINKS:** [[#^t]]",
+    ].join("\n"),
+  };
+  const forward = createHarness(cloneNotes(notes));
+  const reverse = createHarness(cloneNotes(notes));
+  openNote(forward, "Tasks.md", 0);
+  openNote(reverse, "Tasks.md", 1);
+  const forwardOut = await applyForward(forward, "Tasks.md", "t", [
+    { path: "Tasks.md", blockId: "n" },
+  ]);
+  const reverseOut = await applyReverse(
+    reverse,
+    [refFor(reverse, "Tasks.md", "n")],
+    [refFor(reverse, "Tasks.md", "t")],
+  );
+  assert.equal(forwardOut.ok, true, forwardOut.reason);
+  assert.equal(reverseOut.ok, true, reverseOut.reason);
+  assertParity(forward, reverse, "RBP12");
+  const after = liveNotes(reverse)["Tasks.md"];
+  assert.doesNotMatch(after, /🪢 \*\*LINKS:\*\*/);
+  assert.ok(
+    String(reverseOut.notice || "").includes("replaced the 🪢 link"),
+    reverseOut.notice,
+  );
+});
+
+// RB21: cross-note reverse add drops the source note's plain link as a
+// follow-up after the T commits, matching the forward writer byte for byte.
+test("RBP13 cross-note reverse add absorbs through a follow-up", async () => {
+  const notes = {
+    "N.md": [
+      "- [ ] #task Prerequisite ^n",
+      "  - 🪢 **LINKS:** [[t#^t]]",
+    ].join("\n"),
+    "T.md": [
+      "- [ ] #task Dependent ^t",
+      "  - 🪢 **LINKS:** [[n#^n]]",
+    ].join("\n"),
+  };
+  const forward = createHarness(cloneNotes(notes));
+  const reverse = createHarness(cloneNotes(notes));
+  openNote(forward, "T.md", 0);
+  openNote(reverse, "T.md", 0);
+  openNote(reverse, "N.md", 0);
+  const forwardOut = await applyForward(forward, "T.md", "t", [
+    { path: "N.md", blockId: "n" },
+  ]);
+  const reverseOut = await applyReverse(
+    reverse,
+    [refFor(reverse, "N.md", "n")],
+    [refFor(reverse, "T.md", "t")],
+  );
+  assert.equal(forwardOut.ok, true, forwardOut.reason);
+  assert.equal(reverseOut.ok, true, reverseOut.reason);
+  assertParity(forward, reverse, "RBP13");
+  const afterN = liveNotes(reverse)["N.md"];
+  const afterT = liveNotes(reverse)["T.md"];
+  assert.doesNotMatch(afterN, /🪢 \*\*LINKS:\*\*/);
+  assert.doesNotMatch(afterT, /🪢 \*\*LINKS:\*\*/);
+  assert.ok(
+    String(reverseOut.notice || "").includes("replaced the 🪢 link"),
+    reverseOut.notice,
+  );
+});

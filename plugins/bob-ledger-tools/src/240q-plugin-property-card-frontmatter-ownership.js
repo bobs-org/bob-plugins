@@ -512,9 +512,10 @@ function propertyCardFrontmatterCapabilityReady(plugin) {
 }
 
 // Species-specific contract requirement (bob-cli-pl.9.1.1 / .9.1.2):
-// area/project cards and the bank hub need confirmed `props_contract_v1`
-// evidence for the current bob path. Bank, album, record, temporal,
-// notebook, prose, and ref cards use the generic `props_v1` capability alone.
+// area/project cards need confirmed `props_contract_v1` evidence for the
+// current bob path. Bank, album, record, temporal, notebook, prose, and ref
+// cards use the generic `props_v1` capability alone; the bank hub is never
+// an area and has no settings contract (bob-cli-qi).
 function propertyCardFrontmatterContractReady(plugin, kind, path) {
   try {
     if (kind !== "area" && kind !== "project") return true;

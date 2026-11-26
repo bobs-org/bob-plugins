@@ -811,6 +811,7 @@ class BobLedgerToolsBankSetupMixin {
     this.bankSetupReleaseFrontmatter(view?.dom, livePath);
 
     // Fallback: today's inline widget at the end of the first `# ` line.
+    // bank.md is single-owner: no Area adapter can own its title slot.
     const anchor = this.notebookHeaderLiveAnchor?.(text) ?? -1;
     const frontmatterEnd = this.notebookHeaderFrontmatterEnd?.(text) ?? -1;
     const plugin = this;

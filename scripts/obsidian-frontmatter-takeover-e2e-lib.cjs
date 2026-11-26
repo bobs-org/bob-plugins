@@ -212,6 +212,7 @@ function fixtureNotes() {
   const project = (task, terminal = false) => [
     "---",
     'type: "[[project]]"',
+    ...(terminal ? ["status: done"] : []),
     'parent: "[[work]]"',
     'summary: "Synthetic Project ownership fixture."',
     "created: 2026-11-11T11:31:42-05:00",
@@ -223,7 +224,23 @@ function fixtureNotes() {
     terminal ? "Terminal project body." : "Active project body.",
     "",
   ].join("\n");
-  notes[PATHS.area] = area("area", "Visible Area body text.");
+  notes[PATHS.area] = area("area", [
+    "Visible Area body text.",
+    "",
+    "## Areas",
+    "",
+    "> [!areas]",
+    ">",
+    "> - **[[tools]]** — Synthetic sub-area fixture.",
+    "",
+    "## Projects",
+    "",
+    "> [!projects]",
+    ">",
+    "> - **[[launch]]** — Launch the rollout",
+    "> - **Closed**",
+    ">   - ✅ **[[retired]]** — Finish the rollout",
+  ].join("\n"));
   notes[PATHS.subarea] = area("work", "Visible sub-area body text.", "Tools", "Synthetic sub-area fixture.");
   notes[PATHS.inbox] = area("area", "Visible inbox body text.", "Inbox Acceptance", "Synthetic inbox fixture.");
   notes[PATHS.project] = project("- [ ] #task #prj Launch the rollout ^prj");

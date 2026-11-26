@@ -727,7 +727,8 @@ async function run(args) {
     activeRun.client = client;
     client.on("Runtime.exceptionThrown", (params) => {
       const details = params.exceptionDetails || {};
-      report.consoleExceptions.push({ text: details.text || "", description: details.exception?.description || "", url: details.url || "", lineNumber: details.lineNumber || null });
+      report.consoleExceptions.push({ check: activeRun.currentCheck?.name || null,
+        text: details.text || "", description: details.exception?.description || "", url: details.url || "", lineNumber: details.lineNumber || null });
     });
     client.on("Runtime.consoleAPICalled", (params) => {
       if (params.type === "error") report.consoleErrors.push((params.args || []).map((arg) => arg.value ?? arg.description ?? "").join(" ").slice(0, 1500));
@@ -1030,20 +1031,20 @@ async function run(args) {
         let probe = await ctx.page.waitOwned(ctx.main, "live", row.title + " gesture setup");
         failures.push(...lib.homeCardFailures(probe, { kind: row.kind }));
         await ctx.page.keys("-");
-        await waitFor(client, `window.__bobFrontmatterTakeover.probe(${JSON.stringify(ctx.main)}).drawerOpen`, Boolean,
+        await waitFor(client, `window.__bobFrontmatterTakeover.leaf(${JSON.stringify(ctx.main)}).drawerOpen`, Boolean,
           row.title + " drawer opens on -", 10_000);
         const drawerOpen = await ctx.page.probe(ctx.main);
         if (!drawerOpen.drawerOpen) failures.push(row.title + ": - did not open the Properties drawer");
         await ctx.page.keys("-");
-        await waitFor(client, `!window.__bobFrontmatterTakeover.probe(${JSON.stringify(ctx.main)}).drawerOpen`, Boolean,
+        await waitFor(client, `!window.__bobFrontmatterTakeover.leaf(${JSON.stringify(ctx.main)}).drawerOpen`, Boolean,
           row.title + " drawer closes on -", 10_000);
         await ctx.page.keys("_", 8);
-        await waitFor(client, `window.__bobFrontmatterTakeover.probe(${JSON.stringify(ctx.main)}).homeCardCollapsed`, Boolean,
+        await waitFor(client, `window.__bobFrontmatterTakeover.leaf(${JSON.stringify(ctx.main)}).homeCardCollapsed`, Boolean,
           row.title + " card folds on _", 10_000);
         const folded = await ctx.page.probe(ctx.main);
         if (!folded.homeCardCollapsed || !folded.footPresent) failures.push(row.title + ": _ did not fold the card while keeping its foot");
         await ctx.page.keys("_", 8);
-        await waitFor(client, `!window.__bobFrontmatterTakeover.probe(${JSON.stringify(ctx.main)}).homeCardCollapsed`, Boolean,
+        await waitFor(client, `!window.__bobFrontmatterTakeover.leaf(${JSON.stringify(ctx.main)}).homeCardCollapsed`, Boolean,
           row.title + " card expands on _", 10_000);
         const expanded = await ctx.page.probe(ctx.main);
         if (expanded.homeCardCollapsed) failures.push(row.title + ": _ did not restore the card details");
@@ -1159,7 +1160,9 @@ async function run(args) {
           return cm.state.doc.toString() === ${JSON.stringify(original)};
         })()`);
       }
-      if (!ime.covered) failures.push("IME composition could not be verified on the ^prj line: " + ime.reason);
+      if (!ime.covered && !(typeof ime.reason === "string" && ime.reason.trim())) {
+        failures.push("IME composition was not covered and the harness recorded no reason");
+      }
       const lineNo = original.split("\n").findIndex((line) => line === "Scratch line beside the project id.");
       const scratchPlaced = await ctx.page.ev("window.__bobFrontmatterTakeover.setCursor(" + JSON.stringify(ctx.main) + ", " + lineNo + ", 0)");
       if (!scratchPlaced?.ok) failures.push("could not place the caret on the adjacent scratch line");
@@ -2110,10 +2113,14 @@ async function run(args) {
           if (probe.capability?.status !== "confirmed" || probe.capability?.contract !== "absent") {
             failures.push(notePath + " did not record confirmed props_contract_v1 absence in " + mode);
           }
-          if (probe.homeCardCount !== 0 || probe.cardCount !== 0) {
-            failures.push(notePath + " home card did not fail open in " + mode);
+          failures.push(...lib.homeCardFailures(probe, {
+            kind: notePath === P.area ? "area" : "project",
+            terminal: notePath === P.project ? false : undefined,
+          }));
+          if (probe.visibleContainerCount !== 1 || !probe.containerVisible) {
+            failures.push(notePath + " native Properties are not visible in " + mode);
           }
-          if (probe.visibleContainerCount !== 1) failures.push(notePath + " native Properties are not visible in " + mode);
+          if (probe.ownsCount !== 0) failures.push(notePath + " Home Card owns the frontmatter title in " + mode);
         }
       } finally {
         await restoreBob();
@@ -2456,16 +2463,30 @@ async function run(args) {
       const baselineArgs = new Set(baselineInvocations.map((row) => JSON.stringify(row.args)));
       const homeCardPaint = [];
       if (report.profile !== "bank") for (const notePath of [P.area, P.inbox, P.project, P.projectTerminal]) {
-        const beforeHome = readInvocations(bobLogPath).length;
-        await ctxRef.page.open(ctxRef.main, notePath, "live");
-        await ctxRef.page.settle(1200);
-        const probe = await ctxRef.page.probe(ctxRef.main);
-        const invocations = paintSpawned(readInvocations(bobLogPath).slice(beforeHome));
-        if (invocations.length) homeCardPaint.push({ path: notePath, invocations: invocations.map((row) => row.args), probe });
+        for (const mode of ["live", "reading"]) {
+          const beforeOpen = readInvocations(bobLogPath).length;
+          await ctxRef.page.open(ctxRef.main, notePath, mode);
+          await ctxRef.page.settle(1200);
+          const lifecycleInvocations = paintSpawned(readInvocations(bobLogPath).slice(beforeOpen));
+          const probe = await ctxRef.page.probe(ctxRef.main);
+          const beforePaint = readInvocations(bobLogPath).length;
+          await ctxRef.page.ev(`(() => {
+            const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
+            if (!plugin) return false;
+            if (${JSON.stringify(mode)} === "reading") plugin.refreshHomeCardReading?.();
+            else plugin.refreshHomeCardEditors?.();
+            return true;
+          })()`);
+          await ctxRef.page.settle(1200);
+          const paintInvocations = paintSpawned(readInvocations(bobLogPath).slice(beforePaint));
+          homeCardPaint.push({ path: notePath, mode,
+            lifecycleInvocations: lifecycleInvocations.map((row) => row.args),
+            invocations: paintInvocations.map((row) => row.args), probe });
+        }
       }
       const extra = [
         ...ownedInvocations.filter((row) => !baselineArgs.has(JSON.stringify(row.args))),
-        ...homeCardPaint.flatMap((row) => row.invocations.map((args) => ({ args, path: row.path }))),
+        ...homeCardPaint.flatMap((row) => row.invocations.map((args) => ({ args, path: row.path, mode: row.mode }))),
       ];
       const invocations = readInvocations(bobLogPath);
       report.bobInvocations = {

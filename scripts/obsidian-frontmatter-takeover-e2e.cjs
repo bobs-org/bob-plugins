@@ -582,10 +582,20 @@ async function run(args) {
       if (!bank.bankSetupBodyPresent) failures.push("bank setup body is missing");
       if (!bank.bankEditPresent) failures.push("bank Edit control is missing");
       if (!bank.bankFootSuppressedAfterAreaFoot) failures.push("bank foot did not yield to the connected Area foot");
-      if (!bank.bankNestedPresent) failures.push("Area Properties drawer lost the nested bank setup opener");
       if (bank.resolvedKind !== "bank" || bank.registryKinds[0] !== "bank") {
         failures.push("the bank card is no longer first in the double-equals registry");
       }
+      const drawer = await ctx.page.ev(`(() => {
+        const disclosure = document.querySelector('.bob-home-card[data-home-source="bank.md"] .bob-property-card-foot-disclosure');
+        if (!disclosure) return false;
+        disclosure.click();
+        return true;
+      })()`);
+      if (!drawer) failures.push("Area Properties drawer disclosure is missing");
+      const nestedAvailable = await waitFor(client,
+        `Boolean(document.querySelector('.bob-home-card[data-home-source="bank.md"] [data-property-key="bank"] .bob-property-card-foot-nested'))`,
+        Boolean, "Area drawer bank setup opener", 10_000);
+      if (!nestedAvailable) failures.push("Area Properties drawer lost the nested bank setup opener");
       const nested = await ctx.page.ev(`(() => {
         const button = document.querySelector('.bob-home-card[data-home-source="bank.md"] [data-property-key="bank"] .bob-property-card-foot-nested');
         if (!button) return false;
@@ -1663,11 +1673,17 @@ async function run(args) {
             failures.push("the contractless probe did not retain props_v1 while recording contract absence");
           }
           if (probe.containerVisible !== true) failures.push("native Properties are not visible in " + mode);
-          if (bank.areaCardPresent) failures.push("Area card mounted without props_contract_v1 in " + mode);
+          if (bank.areaCardPresent && !bank.areaCardFootPresent) {
+            failures.push("Area card has no connected Properties foot in " + mode);
+          }
           if (!bank.bankCardPresent || !bank.bankSetupBodyPresent || !bank.bankEditPresent) {
             failures.push("bank setup body/Edit did not remain available in " + mode);
           }
-          if (!bank.bankFootPresent) failures.push("bank fallback foot did not return in " + mode);
+          const connectedFeet = Number(bank.areaCardFootPresent === true) + Number(bank.bankFootPresent === true);
+          if (connectedFeet !== 1) failures.push("contractless bank scope does not have exactly one connected Properties foot in " + mode);
+          if (bank.areaCardFootPresent && !bank.bankFootSuppressedAfterAreaFoot) {
+            failures.push("bank foot did not yield to the connected Area foot in " + mode);
+          }
         }
       } finally {
         await restoreBob();

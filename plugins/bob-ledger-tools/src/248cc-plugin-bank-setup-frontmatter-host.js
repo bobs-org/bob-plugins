@@ -18,16 +18,22 @@ function bankSetupClockLabel(timestamp) {
   }
 }
 
+function bankSetupAreaFrontmatterEligible(plugin, path) {
+  try {
+    const key = bankSetupHubPath(path);
+    const frontmatter = typeof plugin?.homeCardFrontmatter === "function"
+      ? plugin.homeCardFrontmatter(key) : null;
+    return key === "bank.md" && homeCardEligible?.(key, frontmatter)?.kind === "area";
+  } catch (_) {
+    return false;
+  }
+}
+
 Object.assign(BobLedgerToolsBankSetupMixin.prototype, {
   bankSetupOwnMountedFrontmatter(scope, view, path, mount, sourceText, currentPath) {
     if (typeof propertyCardFrontmatterOwnMounted !== "function") return null;
     const key = bankSetupHubPath(path);
-    let areaEligible = false;
-    try {
-      const frontmatter = typeof this.homeCardFrontmatter === "function" ? this.homeCardFrontmatter(key) : null;
-      areaEligible = typeof homeCardEligible === "function"
-        && homeCardEligible(key, frontmatter)?.kind === "area";
-    } catch (_) {}
+    const areaEligible = bankSetupAreaFrontmatterEligible(this, key);
     if (areaEligible || propertyCardHomeBankAreaCurrent?.(scope, key)) {
       this.bankSetupReleaseFrontmatter(scope, key);
       return null;
@@ -58,6 +64,14 @@ Object.assign(BobLedgerToolsBankSetupMixin.prototype, {
   bankSetupOwnMountedFrontmatterDeferred(scope, view, path, mount, sourceText, currentPath) {
     if (typeof propertyCardFrontmatterOwnMountedDeferred !== "function") return null;
     const key = bankSetupHubPath(path);
+    // The deferred attachment must honor the same Area arbitration as the
+    // synchronous mount. Otherwise an Area mount that disappears before the
+    // next frame lets the surviving Bank card reacquire whole ownership.
+    if (bankSetupAreaFrontmatterEligible(this, key)
+      || propertyCardHomeBankAreaCurrent?.(scope, key)) {
+      this.bankSetupReleaseFrontmatter(scope, key);
+      return null;
+    }
     const sourceFor = () => view?.state?.doc?.toString?.() || this.bankSetupSourceCache?.get?.(key);
     const current = () => {
       const text = sourceFor();

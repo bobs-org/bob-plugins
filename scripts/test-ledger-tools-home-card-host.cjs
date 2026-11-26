@@ -365,6 +365,16 @@ test("chip handoff uses one adapter callback and renders inert text without the 
   const withoutEditor = Object.create(mixin);
   withoutEditor.openPropertyEditor = undefined;
   assert.deepEqual(withoutEditor.homeCardOpenSetting("love.md", "task_type"), { ok: false, reason: "editor-unavailable" });
+
+  const areaEditor = Object.create(mixin);
+  areaEditor.homeCardFrontmatter = () => areaFrontmatter({ task_type: "CHORE" });
+  areaEditor.openPropertyEditor = (request) => request;
+  assert.deepEqual(areaEditor.homeCardOpenSetting("love.md", "task_type"), {
+    filePath: "love.md", noteKind: "area", setting: "task_type", mode: "browse",
+  });
+  assert.deepEqual(areaEditor.homeCardOpenSetting("love.md"), {
+    filePath: "love.md", noteKind: "area", focusSettings: true, mode: "browse",
+  });
 });
 
 test("the Area foot preserves the bank setup handoff and truthful body mark", () => {

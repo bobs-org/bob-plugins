@@ -95369,7 +95369,10 @@ class BobLedgerToolsBankSetupMixin {
     this.bankSetupReleaseFrontmatter(view?.dom, livePath);
 
     // Fallback: today's inline widget at the end of the first `# ` line.
-    const anchor = this.notebookHeaderLiveAnchor?.(text) ?? -1;
+    // When the Area adapter owns bank.md's title slot, the literal H1 line is
+    // hidden with that title. Place Bank Setup after frontmatter so its body
+    // remains visible below the Area card instead of inside the hidden title.
+    const anchor = arbitration.owner ? -1 : (this.notebookHeaderLiveAnchor?.(text) ?? -1);
     const frontmatterEnd = this.notebookHeaderFrontmatterEnd?.(text) ?? -1;
     const widget = new class extends WidgetType {
       constructor() {
@@ -95381,17 +95384,10 @@ class BobLedgerToolsBankSetupMixin {
       toDOM() {
         header.setAttribute?.("data-cm-widget", "true");
         header.setAttribute?.("data-bank-setup-source", livePath);
-        propertyCardFrontmatterOwnMountedDeferred?.(plugin, {
-          scope: view.dom, view, path: livePath, kind: "bank", mount: header, sourceText: text,
-          getSource: () => view?.state?.doc?.toString?.() || "",
-          currentPath: () => plugin.bankSetupLivePath(view) || "",
-          active: () => plugin.bankSetupActive === true,
-          isCurrent: () => {
-            const source = view?.state?.doc?.toString?.() || "";
-            const card = source && plugin.bankSetupCardFor(livePath, source);
-            return Boolean(card && card.model);
-          },
-        });
+        plugin.bankSetupOwnMountedFrontmatterDeferred?.(
+          view.dom, view, livePath, header, text,
+          () => plugin.bankSetupLivePath(view) || "",
+        );
         return header;
       }
     }();
@@ -95575,16 +95571,22 @@ function bankSetupClockLabel(timestamp) {
   }
 }
 
+function bankSetupAreaFrontmatterEligible(plugin, path) {
+  try {
+    const key = bankSetupHubPath(path);
+    const frontmatter = typeof plugin?.homeCardFrontmatter === "function"
+      ? plugin.homeCardFrontmatter(key) : null;
+    return key === "bank.md" && homeCardEligible?.(key, frontmatter)?.kind === "area";
+  } catch (_) {
+    return false;
+  }
+}
+
 Object.assign(BobLedgerToolsBankSetupMixin.prototype, {
   bankSetupOwnMountedFrontmatter(scope, view, path, mount, sourceText, currentPath) {
     if (typeof propertyCardFrontmatterOwnMounted !== "function") return null;
     const key = bankSetupHubPath(path);
-    let areaEligible = false;
-    try {
-      const frontmatter = typeof this.homeCardFrontmatter === "function" ? this.homeCardFrontmatter(key) : null;
-      areaEligible = typeof homeCardEligible === "function"
-        && homeCardEligible(key, frontmatter)?.kind === "area";
-    } catch (_) {}
+    const areaEligible = bankSetupAreaFrontmatterEligible(this, key);
     if (areaEligible || propertyCardHomeBankAreaCurrent?.(scope, key)) {
       this.bankSetupReleaseFrontmatter(scope, key);
       return null;
@@ -95615,6 +95617,14 @@ Object.assign(BobLedgerToolsBankSetupMixin.prototype, {
   bankSetupOwnMountedFrontmatterDeferred(scope, view, path, mount, sourceText, currentPath) {
     if (typeof propertyCardFrontmatterOwnMountedDeferred !== "function") return null;
     const key = bankSetupHubPath(path);
+    // The deferred attachment must honor the same Area arbitration as the
+    // synchronous mount. Otherwise an Area mount that disappears before the
+    // next frame lets the surviving Bank card reacquire whole ownership.
+    if (bankSetupAreaFrontmatterEligible(this, key)
+      || propertyCardHomeBankAreaCurrent?.(scope, key)) {
+      this.bankSetupReleaseFrontmatter(scope, key);
+      return null;
+    }
     const sourceFor = () => view?.state?.doc?.toString?.() || this.bankSetupSourceCache?.get?.(key);
     const current = () => {
       const text = sourceFor();
@@ -106068,10 +106078,10 @@ class BobLedgerToolsHomeCardMixin {
     if (!target) return { ok: false, reason: "missing-path" };
     try {
       if (typeof this.openPropertyEditor !== "function") return { ok: false, reason: "editor-unavailable" };
-      const setting = typeof propertyEditorSettingIdForKey === "function" ? propertyEditorSettingIdForKey(key || "") || "" : "";
-      if (!key) return this.openPropertyEditor({ filePath: target, focusSettings: true, mode: "browse" });
-      if (setting) return this.openPropertyEditor({ filePath: target, setting, mode: "browse" });
-      return this.openPropertyEditor({ filePath: target, key, mode: "browse" });
+      const kind = homeCardEligible(target, this.homeCardFrontmatter(target))?.kind, setting = typeof propertyEditorSettingIdForKey === "function" ? propertyEditorSettingIdForKey(key || "") || "" : "", noteKind = kind === "area" || kind === "project" ? { noteKind: kind } : {};
+      if (!key) return this.openPropertyEditor({ filePath: target, ...noteKind, focusSettings: true, mode: "browse" });
+      if (setting) return this.openPropertyEditor({ filePath: target, ...noteKind, setting, mode: "browse" });
+      return this.openPropertyEditor({ filePath: target, ...noteKind, key, mode: "browse" });
     } catch (_) {}
     return { ok: false, reason: "editor-unavailable" };
   }

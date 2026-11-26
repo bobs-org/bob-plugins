@@ -368,10 +368,10 @@ class BobLedgerToolsHomeCardMixin {
     if (!target) return { ok: false, reason: "missing-path" };
     try {
       if (typeof this.openPropertyEditor !== "function") return { ok: false, reason: "editor-unavailable" };
-      const setting = typeof propertyEditorSettingIdForKey === "function" ? propertyEditorSettingIdForKey(key || "") || "" : "";
-      if (!key) return this.openPropertyEditor({ filePath: target, focusSettings: true, mode: "browse" });
-      if (setting) return this.openPropertyEditor({ filePath: target, setting, mode: "browse" });
-      return this.openPropertyEditor({ filePath: target, key, mode: "browse" });
+      const kind = homeCardEligible(target, this.homeCardFrontmatter(target))?.kind, setting = typeof propertyEditorSettingIdForKey === "function" ? propertyEditorSettingIdForKey(key || "") || "" : "", noteKind = kind === "area" || kind === "project" ? { noteKind: kind } : {};
+      if (!key) return this.openPropertyEditor({ filePath: target, ...noteKind, focusSettings: true, mode: "browse" });
+      if (setting) return this.openPropertyEditor({ filePath: target, ...noteKind, setting, mode: "browse" });
+      return this.openPropertyEditor({ filePath: target, ...noteKind, key, mode: "browse" });
     } catch (_) {}
     return { ok: false, reason: "editor-unavailable" };
   }

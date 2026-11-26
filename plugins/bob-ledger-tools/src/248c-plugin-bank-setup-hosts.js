@@ -820,7 +820,10 @@ class BobLedgerToolsBankSetupMixin {
     this.bankSetupReleaseFrontmatter(view?.dom, livePath);
 
     // Fallback: today's inline widget at the end of the first `# ` line.
-    const anchor = this.notebookHeaderLiveAnchor?.(text) ?? -1;
+    // When the Area adapter owns bank.md's title slot, the literal H1 line is
+    // hidden with that title. Place Bank Setup after frontmatter so its body
+    // remains visible below the Area card instead of inside the hidden title.
+    const anchor = arbitration.owner ? -1 : (this.notebookHeaderLiveAnchor?.(text) ?? -1);
     const frontmatterEnd = this.notebookHeaderFrontmatterEnd?.(text) ?? -1;
     const widget = new class extends WidgetType {
       constructor() {
@@ -832,17 +835,10 @@ class BobLedgerToolsBankSetupMixin {
       toDOM() {
         header.setAttribute?.("data-cm-widget", "true");
         header.setAttribute?.("data-bank-setup-source", livePath);
-        propertyCardFrontmatterOwnMountedDeferred?.(plugin, {
-          scope: view.dom, view, path: livePath, kind: "bank", mount: header, sourceText: text,
-          getSource: () => view?.state?.doc?.toString?.() || "",
-          currentPath: () => plugin.bankSetupLivePath(view) || "",
-          active: () => plugin.bankSetupActive === true,
-          isCurrent: () => {
-            const source = view?.state?.doc?.toString?.() || "";
-            const card = source && plugin.bankSetupCardFor(livePath, source);
-            return Boolean(card && card.model);
-          },
-        });
+        plugin.bankSetupOwnMountedFrontmatterDeferred?.(
+          view.dom, view, livePath, header, text,
+          () => plugin.bankSetupLivePath(view) || "",
+        );
         return header;
       }
     }();

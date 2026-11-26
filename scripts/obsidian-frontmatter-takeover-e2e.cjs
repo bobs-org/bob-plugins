@@ -801,11 +801,15 @@ async function run(args) {
     await attempt("foreign-refresh-keeps-ownership", async () => {
       let extraLeaves = [];
       try {
-        extraLeaves = await ctx.page.ev(`(() => [
-          app.workspace.getLeaf("tab").id,
-          app.workspace.getLeaf("tab").id,
-          app.workspace.getLeaf("tab").id,
-        ])()`);
+        extraLeaves = await ctx.page.ev(`(() => {
+          const ids = [];
+          for (let index = 0; index < 3; index += 1) {
+            const leaf = app.workspace.getLeaf(true);
+            if (!leaf || typeof leaf.id !== "string") break;
+            ids.push(leaf.id);
+          }
+          return ids;
+        })()`);
         if (!Array.isArray(extraLeaves) || extraLeaves.length !== 3 || new Set(extraLeaves).size !== 3) {
           throw new Error("could not create three independent Markdown leaves");
         }

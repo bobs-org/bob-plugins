@@ -804,7 +804,7 @@ async function run(args) {
         extraLeaves = await ctx.page.ev(`(() => {
           const ids = [];
           for (let index = 0; index < 3; index += 1) {
-            const leaf = app.workspace.getLeaf(true);
+            const leaf = app.workspace.getLeaf("split");
             if (!leaf || typeof leaf.id !== "string") break;
             ids.push(leaf.id);
           }

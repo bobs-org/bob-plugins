@@ -191,7 +191,7 @@ test("runner creates the profile directory before writing bob-control.json", () 
 test("foreign-refresh acceptance writes an unrelated note and checks quiet ownership survival", () => {
   const source = fs.readFileSync(path.join(__dirname, "obsidian-frontmatter-takeover-e2e.cjs"), "utf8");
   assert.match(source, /attempt\("foreign-refresh-keeps-ownership"/);
-  assert.match(source, /const leaf = app\.workspace\.getLeaf\(true\);/);
+  assert.match(source, /const leaf = app\.workspace\.getLeaf\("split"\);/);
   assert.match(source, /if \(!leaf \|\| typeof leaf\.id !== "string"\) break;/);
   assert.doesNotMatch(source, /app\.workspace\.getLeaf\("tab"\)\.id,\s*app\.workspace\.getLeaf\("tab"\)\.id/);
   assert.match(source, /app\.vault\.modify\(file, next\)/);

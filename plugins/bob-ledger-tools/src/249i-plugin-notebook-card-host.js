@@ -221,16 +221,6 @@ class BobLedgerToolsNotebookCardMixin {
     try { this.notebookCardReadoutsBind?.(); } catch (_) {}
     this.notebookCardRegisterSummaryKey();
     try {
-      if (!this.notebookCardPreviewLoadStarted) {
-        this.notebookCardPreviewLoadStarted = true;
-        void propertyCardPreviewLoad(this).then(() => {
-          if (this.notebookCardActive !== true) return;
-          this.scheduleNotebookCardRefresh();
-          this.scheduleNotebookHeaderRefresh?.();
-        });
-      }
-    } catch (_) {}
-    try {
       const cache = this.app?.metadataCache;
       if (cache && typeof cache.on === "function" && typeof this.registerEvent === "function" && !this.notebookCardMetaBound) {
         this.notebookCardMetaBound = true;

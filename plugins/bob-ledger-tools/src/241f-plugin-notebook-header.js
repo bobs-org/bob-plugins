@@ -133,7 +133,7 @@ class BobLedgerToolsNotebookHeaderMixin {
             const setting = new Setting(containerEl)
               .setName("Notebook chips")
               .setDesc(
-                "Show live counts, age, add-summary and sync chips on notebook catalogs and child-notebook chips in headers. Ancestry links and catalog cards stay on. Sync still runs automatically.",
+                "Show live counts, age, Add summary and sync chips on notebook catalogs, plus child-notebook chips in a linked header only when its Notebook Card cannot mount. Ancestry links and catalog cards stay on; sync still runs automatically.",
               );
             if (setting && typeof setting.addToggle === "function") {
               setting.addToggle((toggle) => toggle

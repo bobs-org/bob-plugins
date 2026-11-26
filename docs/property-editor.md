@@ -45,6 +45,10 @@ caller key such as `theme`, `offclock`, or `offclock_types` maps onto its
 logical setting in browse mode. On a degraded report the request selects the
 corresponding real property when present, otherwise a safe first row.
 
+On a Notebook Card, `==` focuses `summary`; on a Prose Card, it focuses `title`.
+If the key is missing, focus-or-add opens Add mode with that key prefilled, so
+the editor can create the field without losing the intended focus.
+
 On area and project notes, `==` and the card Settings control open the editor
 on the first settings row; a policy chip opens it on its own setting. Those
 typed rows require a current `props_contract_v1` report. `+` opens the generic
@@ -63,7 +67,7 @@ fingerprint decide what each row can do.
 | Area/Project settings | Typed settings in Bob's contract order (summary, lives under, hue, default type, clock, caps, review, capture names; projects add stats root) | Open that setting's control |
 | On the `^prj` line | Project goal, starts, and depends-on navigation rows | Open the current project task's Task Card |
 | Loose | Values with no other Bob owner, including `created` | Edit the value here |
-| On the `<Kind>` card | Fields owned by a record, album, bank, or day/period card | Hand off to that card's `==` editor |
+| On the `<Kind>` card | Fields owned by a record, album, bank, day/period, notebook (`summary`), or prose (`title`) card | Hand off to that card's `==` editor |
 | Identity | Note identity such as `type`, or a project `status` | Locked, except project `status`, which navigates to `^prj`; `y` opens YAML |
 | Bob-managed | Derived and generated values | Locked with Bob's writer/reason; `y` opens YAML |
 

@@ -95624,10 +95624,10 @@ function propertyCardBuildFoldRow(doc, spec = {}) {
 }
 // ---- src/240t-plugin-property-card-note-species.js ----
 // Property-card kit (bob-cli-qm kit + bob-cli-qp ref-kit): notebook, prose,
-// and ref species predicates, the precedence function, and the preview gate.
+// and ref species predicates plus the precedence function.
 // Pure: no DOM, no spawns, never throws. Later fragments reuse the
 // normalizer instead of retyping wikilink forms, and the species phases
-// reuse the precedence function and the gate for their hosts.
+// reuse the precedence function for their hosts.
 
 // Type-name normalization. Mirrors albumTypeNames (241l): a scalar, list,
 // quoted scalar, [[wikilink]] (alias and anchor stripped), comma flow list,
@@ -95835,73 +95835,9 @@ function propertyCardNoteSpecies(input = {}) {
   }
 }
 
-// Preview gate (bob-cli-qm). Both new species stay off in the live vault
-// until ledger-tools plugin data lists them in `cardPreviewKinds`:
-// ["notebook", "prose"]. Existing species are always live; unknown kinds
-// never are. The acceptance harness writes the key into its disposable
-// vault; go-live deletes the gate, the key, and their tests.
-const PROPERTY_CARD_PREVIEW_KINDS = Object.freeze(["notebook", "prose"]);
-
-function propertyCardPreviewKindsFromData(data) {
-  try {
-    const raw = data && typeof data === "object" && !Array.isArray(data) ? data.cardPreviewKinds : null;
-    if (!Array.isArray(raw)) return [];
-    return raw.filter((kind) => kind === "notebook" || kind === "prose");
-  } catch (_) {
-    return [];
-  }
-}
-
-function propertyCardPreviewRemember(plugin, data) {
-  const kinds = propertyCardPreviewKindsFromData(data);
-  try {
-    if (plugin && typeof plugin === "object") plugin.propertyCardPreviewKinds = kinds;
-  } catch (_) {}
-  return kinds;
-}
-
-async function propertyCardPreviewLoad(plugin) {
-  if (!plugin || typeof plugin !== "object") return [];
-  if (plugin.propertyCardPreviewLoaded === true) {
-    return Array.isArray(plugin.propertyCardPreviewKinds) ? plugin.propertyCardPreviewKinds : [];
-  }
-  if (plugin.propertyCardPreviewLoadPromise) return plugin.propertyCardPreviewLoadPromise;
-  const load = (async () => {
-    let stored = null;
-    try {
-      if (plugin.ledgerToolsPluginDataLoaded === true
-        && plugin.ledgerToolsPluginData && typeof plugin.ledgerToolsPluginData === "object") {
-        stored = plugin.ledgerToolsPluginData;
-      } else if (typeof plugin.loadLedgerToolsPluginData === "function") {
-        stored = await plugin.loadLedgerToolsPluginData();
-      } else if (typeof plugin.loadData === "function") {
-        stored = await plugin.loadData();
-      }
-    } catch (_) {
-      stored = null;
-    }
-    const kinds = propertyCardPreviewRemember(plugin, stored);
-    plugin.propertyCardPreviewLoaded = true;
-    return kinds;
-  })();
-  plugin.propertyCardPreviewLoadPromise = load;
-  try {
-    return await load;
-  } finally {
-    if (plugin.propertyCardPreviewLoadPromise === load) plugin.propertyCardPreviewLoadPromise = null;
-  }
-}
-
 function propertyCardKindLive(plugin, kind) {
   try {
-    if (kind !== "notebook" && kind !== "prose") {
-      return typeof kind === "string" && PROPERTY_CARD_KINDS.includes(kind);
-    }
-    const kinds = plugin && Array.isArray(plugin.propertyCardPreviewKinds)
-      ? plugin.propertyCardPreviewKinds
-      : null;
-    if (!kinds) return false;
-    return kinds.includes(kind);
+    return typeof kind === "string" && PROPERTY_CARD_KINDS.includes(kind);
   } catch (_) {
     return false;
   }
@@ -113674,16 +113610,6 @@ class BobLedgerToolsNotebookCardMixin {
     try { this.notebookCardReadoutsBind?.(); } catch (_) {}
     this.notebookCardRegisterSummaryKey();
     try {
-      if (!this.notebookCardPreviewLoadStarted) {
-        this.notebookCardPreviewLoadStarted = true;
-        void propertyCardPreviewLoad(this).then(() => {
-          if (this.notebookCardActive !== true) return;
-          this.scheduleNotebookCardRefresh();
-          this.scheduleNotebookHeaderRefresh?.();
-        });
-      }
-    } catch (_) {}
-    try {
       const cache = this.app?.metadataCache;
       if (cache && typeof cache.on === "function" && typeof this.registerEvent === "function" && !this.notebookCardMetaBound) {
         this.notebookCardMetaBound = true;
@@ -115143,14 +115069,6 @@ class BobLedgerToolsProseNoteCardMixin {
     try { this.proseNoteCardFootBind(); } catch (_) {}
     this.proseNoteCardBindProviderEvents();
     this.proseNoteCardEnsureApiSubscription();
-    const epoch = this.proseNoteCardEpoch;
-    try {
-      Promise.resolve(propertyCardPreviewLoad(this)).then(() => {
-        if (this.proseNoteCardActive === true && this.proseNoteCardEpoch === epoch) {
-          this.scheduleProseNoteCardRefresh();
-        }
-      });
-    } catch (_) {}
   }
 
   proseNoteCardOnDisposeStart() {
@@ -137870,7 +137788,7 @@ class BobLedgerToolsNotebookHeaderMixin {
             const setting = new Setting(containerEl)
               .setName("Notebook chips")
               .setDesc(
-                "Show live counts, age, add-summary and sync chips on notebook catalogs and child-notebook chips in headers. Ancestry links and catalog cards stay on. Sync still runs automatically.",
+                "Show live counts, age, Add summary and sync chips on notebook catalogs, plus child-notebook chips in a linked header only when its Notebook Card cannot mount. Ancestry links and catalog cards stay on; sync still runs automatically.",
               );
             if (setting && typeof setting.addToggle === "function") {
               setting.addToggle((toggle) => toggle
@@ -213221,8 +213139,8 @@ try {
       propertyCardFrontmatterReleaseScope,
       propertyCardFrontmatterReleaseAll,
       propertyCardHostRegisterFrontmatterOwnership,
-      // Note species (bob-cli-qm kit + bob-cli-qp ref-kit): predicates,
-      // precedence, preview gate.
+      // Note species (bob-cli-qm kit + bob-cli-qp ref-kit): predicates and
+      // precedence.
       noteCardTypeNames,
       noteCardIsNotebookKind,
       noteCardIsProseKind,
@@ -213230,10 +213148,6 @@ try {
       noteCardIsRefLibraryPath,
       noteCardPathExcluded,
       propertyCardNoteSpecies,
-      PROPERTY_CARD_PREVIEW_KINDS,
-      propertyCardPreviewKindsFromData,
-      propertyCardPreviewRemember,
-      propertyCardPreviewLoad,
       propertyCardKindLive,
       // Focus-or-add (bob-cli-qm kit T2).
       propertyEditorFocusOrAddConsume,

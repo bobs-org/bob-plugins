@@ -6,7 +6,7 @@
 // Sibling of scripts/obsidian-frontmatter-takeover-e2e.cjs: it imports that
 // runner's lib for the shared takeover vocabulary and verdict rules and never
 // forks it. The vault is built byte-identical from
-// scripts/fixtures/note-cards/ with cardPreviewKinds set.
+// scripts/fixtures/note-cards/ with the Notebook and Prose Cards live.
 //
 //   xvfb-run -a node scripts/obsidian-note-cards-e2e.cjs [-e BIN] [-o DIR] [-r REPORT]
 //   node scripts/obsidian-note-cards-e2e.cjs --self-test
@@ -294,10 +294,6 @@ function installVault(vaultDir) {
     readableLineLength: true, vimMode: true, showLineNumber: false, alwaysUpdateLinks: false,
   }, null, 2));
   fs.writeFileSync(path.join(dot, "appearance.json"), JSON.stringify({ cssTheme: "", theme: "moonstone" }, null, 2));
-  fs.writeFileSync(
-    path.join(dot, "plugins", PLUGIN_ID, "data.json"),
-    JSON.stringify({ cardPreviewKinds: ["notebook", "prose"] }, null, 2),
-  );
 }
 
 function sha256Text(text) {
@@ -527,41 +523,6 @@ async function driveMatrix(client, report, record, outDir, vaultReal, profileDir
     const album = await openProbe("album.md", "live");
     record("album-unchanged", (album.snapshot?.notebook === 0 && album.snapshot?.prose === 0),
       JSON.stringify(album.snapshot));
-  }
-
-  // Gate closed: without cardPreviewKinds the notebook renders as today (header + native).
-  {
-    const dataFile = path.join(vaultReal, ".obsidian", "plugins", PLUGIN_ID, "data.json");
-    const saved = fs.readFileSync(dataFile, "utf8");
-    let ok = false, detail = "";
-    try {
-      fs.writeFileSync(dataFile, JSON.stringify({}, null, 2));
-      await client.evaluate(`(async () => {
-        await app.plugins.disablePlugin(${JSON.stringify(PLUGIN_ID)});
-        await app.plugins.enablePlugin(${JSON.stringify(PLUGIN_ID)});
-        return true;
-      })()`, 30000);
-      await waitFor(client, "Boolean(app.plugins.plugins['bob-ledger-tools']) && app.workspace.layoutReady", Boolean, "reload-no-gate", 30000);
-      await sleep(600);
-      const s = (await openProbe("notebook-about-abby.md", "live")).snapshot || {};
-      // Gate closed: no card, native Properties, and the fallback header.
-      ok = s.notebook === 0 && s.prose === 0 && s.native >= 1 && s.headers >= 1;
-      detail = JSON.stringify(s);
-    } catch (error) { detail = "gate-closed probe error: " + String(error?.message || error); }
-    try {
-      fs.writeFileSync(dataFile, saved);
-      await client.evaluate(`(async () => {
-        await app.plugins.disablePlugin(${JSON.stringify(PLUGIN_ID)});
-        await app.plugins.enablePlugin(${JSON.stringify(PLUGIN_ID)});
-        return true;
-      })()`, 30000);
-      await waitFor(client, "Boolean(app.plugins.plugins['bob-ledger-tools']) && app.workspace.layoutReady", Boolean, "reload-gate", 30000);
-      await sleep(600);
-      const s = (await openProbe("notebook-about-abby.md", "live")).snapshot || {};
-      ok = ok && s.notebook === 1 && s.native === 0;
-      detail += " | restored=" + JSON.stringify({ notebook: s.notebook, native: s.native });
-    } catch (error) { ok = false; detail += " | restore error: " + String(error?.message || error); }
-    record("gate-closed-notebook-native", ok, detail);
   }
 
   // Native restoration: source, embed, malformed, unload, plugin-disabled.

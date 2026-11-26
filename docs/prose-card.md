@@ -3,11 +3,6 @@ title: "Prose Card"
 description: "Reference for the quiet prose title card: identity, measures, outline, and keys."
 ---
 
-> [!warning] Preview — not yet enabled
-> The Prose Card is under acceptance review and stays off in the live vault
-> until the preview gate opens. Native Properties render as today until
-> then.
-
 Bob Ledger Tools paints a **prose card** — a quiet title page — at the top
 of a prose note (`type: [[prose]]`, including the legacy `[[article]]`
 spelling) in desktop Reading view and Live Preview. When eligible, it

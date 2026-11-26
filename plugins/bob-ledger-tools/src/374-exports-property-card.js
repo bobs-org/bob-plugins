@@ -109,8 +109,8 @@ try {
       propertyCardFrontmatterReleaseScope,
       propertyCardFrontmatterReleaseAll,
       propertyCardHostRegisterFrontmatterOwnership,
-      // Note species (bob-cli-qm kit + bob-cli-qp ref-kit): predicates,
-      // precedence, preview gate.
+      // Note species (bob-cli-qm kit + bob-cli-qp ref-kit): predicates and
+      // precedence.
       noteCardTypeNames,
       noteCardIsNotebookKind,
       noteCardIsProseKind,
@@ -118,10 +118,6 @@ try {
       noteCardIsRefLibraryPath,
       noteCardPathExcluded,
       propertyCardNoteSpecies,
-      PROPERTY_CARD_PREVIEW_KINDS,
-      propertyCardPreviewKindsFromData,
-      propertyCardPreviewRemember,
-      propertyCardPreviewLoad,
       propertyCardKindLive,
       // Focus-or-add (bob-cli-qm kit T2).
       propertyEditorFocusOrAddConsume,

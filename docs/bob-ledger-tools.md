@@ -600,12 +600,12 @@ See [`taskSettle` v1](https://bobs-org.github.io/develop/plugins/task-settle/) f
 
 ## Notebooks
 
-Catalogs use the host's ancestry hue, including mute. **add summary** opens
-the notebook and focuses Properties `summary`. **↻ sync** rewrites missing,
-stale, or damaged catalogs. Chrome (sync, Retry, status, anchor) paints only
-in report-listed hosts (or pre-report notes with a callout); non-hosts get
-none, never at position 0. **Retry** needs a failed refresh or no report; lag
-alone stays silent. Live data needs desktop Obsidian.
+On eligible notebook notes, Notebook Cards replace linked headers; otherwise
+the header remains a fallback. Catalogs inherit the host hue. **add summary**
+opens the notebook on `summary`; **↻ sync** repairs missing, stale, or damaged
+catalogs. Catalog chrome appears only on report-listed hosts or pre-report
+notes with a callout. **Retry** follows a failed refresh or missing report; lag
+alone stays silent. Live data requires desktop Obsidian.
 
 ## Projects catalog card
 
@@ -645,8 +645,9 @@ guide](../../mail-link-marks.md).
 
 ## Settings
 
-The **Notebook chips** setting (default on) hides live chips, keeping styling,
-links, and sync. The plugin reads the bob config file.
+**Notebook chips** (default on) controls catalog counts, age, summary/sync, and
+child chips in fallback headers. Ancestry links, catalogs, and automatic sync
+stay on; bob config stores the setting.
 
 ## Related
 

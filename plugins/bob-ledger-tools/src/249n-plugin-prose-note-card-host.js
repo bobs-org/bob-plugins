@@ -117,14 +117,6 @@ class BobLedgerToolsProseNoteCardMixin {
     try { this.proseNoteCardFootBind(); } catch (_) {}
     this.proseNoteCardBindProviderEvents();
     this.proseNoteCardEnsureApiSubscription();
-    const epoch = this.proseNoteCardEpoch;
-    try {
-      Promise.resolve(propertyCardPreviewLoad(this)).then(() => {
-        if (this.proseNoteCardActive === true && this.proseNoteCardEpoch === epoch) {
-          this.scheduleProseNoteCardRefresh();
-        }
-      });
-    } catch (_) {}
   }
 
   proseNoteCardOnDisposeStart() {

@@ -195,9 +195,10 @@ card hosts.
 
 ### Title block kit
 
-`propertyCardSpecies(kind)` names nine species: album, record, day, week,
-quarter, year, bank, area, and project. Each has a word, tile form, fallback icon, and leaf
-band. Area uses the `field` tile and Project the `pennant` tile. `propertyCardApplyIdentity` stamps `data-card-kind` and an accessible
+`propertyCardSpecies(kind)` names twelve species: album, record, day, week,
+quarter, year, bank, area, project, notebook, prose, and ref. Each has a word,
+tile form, fallback icon, and leaf band. Area uses the `field` tile and Project
+the `pennant` tile. `propertyCardApplyIdentity` stamps `data-card-kind` and an accessible
 name that starts with the species word. `propertyCardBuildGlyphTile`,
 `propertyCardBuildTitleBlock`, and `propertyCardBuildRail` return plain DOM
 or `null`. Links call the injected `onLink` or `onNavigate`, so adapters
@@ -209,6 +210,11 @@ returns the glyph tile plus the species word for surfaces that name a species
 without owning the title: the card editors' modal headers. (The bank card
 owned its title in bank-title and no longer uses the badge.) It is never a
 heading, and outside a card it falls back to neutral ink.
+`propertyCardNoteSpecies` resolves note ownership in Bob's order: bank path,
+album, record, Area or Project, day/week/quarter/year, notebook, prose, ref,
+then none. Notebook and Prose use `props_v1` alone and do not require
+`props_contract_v1`. The Prose Card owns only its inline title; body headings
+remain visible. Ref Cards keep their ref-owned preview gate.
 The Area and Project hosts own one title and one shared Properties foot when
 `props_v1`, `props_contract_v1`, source/cache evidence, and editor routing are confirmed.
 They keep the Project's `^prj` line as its editable control. `bank.md` is

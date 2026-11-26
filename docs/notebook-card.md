@@ -3,11 +3,6 @@ title: "Notebook Card"
 description: "Reference for the notebook title card: identity, sections, children, and keys."
 ---
 
-> [!warning] Preview — not yet enabled
-> The Notebook Card is under acceptance review and stays off in the live
-> vault until the preview gate opens. Native Properties and the linked
-> notebook header render as today until then.
-
 Bob Ledger Tools paints a **notebook card** in the title slot of a notebook
 (`type: [[notebook]]`) in desktop Reading view and Live Preview. When
 eligible, it replaces the in-document native Properties block and the linked

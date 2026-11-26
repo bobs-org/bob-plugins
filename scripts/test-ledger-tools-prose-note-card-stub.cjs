@@ -313,37 +313,26 @@ test("outline jumps trust a matching Bob heading and otherwise pair metadata hea
   assert.equal(H.proseNoteCardSectionLine({ line: 6, title: "Missing" }, 9, source, []), null);
 });
 
-test("the prose == registration is preview-gated, focuses title, and reads plugin data once", async () => {
-  let loads = 0;
+test("the prose == registration is live immediately and focuses title", async () => {
   let registrations = [];
   let unregistered = [];
   let opens = [];
-  let refreshes = 0;
   const plugin = Object.create(H.BobLedgerToolsProseNoteCardMixin.prototype);
   Object.assign(plugin, {
     app: { commands: {} },
-    loadLedgerToolsPluginData: async () => { loads += 1; return { cardPreviewKinds: ["prose"] }; },
     registerPropertyCard: (entry) => { registrations.push(entry); return true; },
     unregisterPropertyCard: (kind) => { unregistered.push(kind); return true; },
     openPropertyEditor: (request) => { opens.push(request); },
     proseNoteCardFootBind() {},
     proseNoteCardFootUnbind() {},
-    scheduleProseNoteCardRefresh() { refreshes += 1; },
   });
   plugin.proseNoteCardOnSetup();
-  await H.propertyCardPreviewLoad(plugin);
-  await Promise.resolve();
-  await Promise.resolve();
-  assert.equal(loads, 1);
-  assert.equal(refreshes, 1);
   const entry = registrations[0];
   assert.equal(entry.kind, "prose");
   assert.equal(entry.match({ path: "notes.md", frontmatter: { type: "[[prose]]" } }), true);
   assert.equal(entry.match({ path: "notes.md", frontmatter: { type: ["[[prose]]", "[[area]]"] } }), false);
   entry.open({ path: "notes.md" });
   assert.deepEqual(opens, [{ filePath: "notes.md", key: "title" }]);
-  await H.propertyCardPreviewLoad(plugin);
-  assert.equal(loads, 1);
   plugin.proseNoteCardOnDisposeStart();
   assert.deepEqual(unregistered, ["prose"]);
 });

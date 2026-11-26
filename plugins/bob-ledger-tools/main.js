@@ -96572,10 +96572,7 @@ class BobLedgerToolsBankSetupMixin {
     this.bankSetupReleaseFrontmatter(view?.dom, livePath);
 
     // Fallback: today's inline widget at the end of the first `# ` line.
-    // When the Area adapter owns bank.md's title slot, the literal H1 line is
-    // hidden with that title. Place Bank Setup after frontmatter so its body
-    // remains visible below the Area card instead of inside the hidden title.
-    const anchor = arbitration.owner ? -1 : (this.notebookHeaderLiveAnchor?.(text) ?? -1);
+    const anchor = this.notebookHeaderLiveAnchor?.(text) ?? -1;
     const frontmatterEnd = this.notebookHeaderFrontmatterEnd?.(text) ?? -1;
     const plugin = this;
     const widget = new class extends WidgetType {

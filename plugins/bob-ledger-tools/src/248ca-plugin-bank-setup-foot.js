@@ -149,6 +149,7 @@ class BobLedgerToolsBankSetupFootMixin {
     const base = typeof bankSetupSignature === "function"
       ? bankSetupSignature(model, options)
       : (model && model.signature);
-    return [base, extra?.footDigest || "", extra?.footOpen === true].join("::");
+    const arbitration = `${Number(options?.bankAreaGeneration) || 0}:${options?.suppressBankFoot === true}`;
+    return [base, extra?.footDigest || "", extra?.footOpen === true, arbitration].join("::");
   }
 }

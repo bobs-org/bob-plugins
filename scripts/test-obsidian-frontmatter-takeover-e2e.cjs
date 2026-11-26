@@ -59,6 +59,8 @@ test("required takeover checks cover both surfaces, denials, and command routing
   for (const name of [
     "own-day-live", "own-day-reading", "own-week-live", "own-record-live", "own-album-reading",
     "bank-cache-parity", "own-bank-live", "own-bank-reading", "bank-add-file-property", "bank-sidebar-native",
+    "bank-area-live-arbitration", "bank-area-reading-arbitration",
+    "bank-contractless-native", "bank-pane-path-lifecycle", "bank-area-settings-gestures",
     "own-quarter-live", "own-year-live", "own-identity-day-live",
     "source-toggle-releases", "deny-embed", "deny-hover", "deny-canvas", "deny-print", "deny-mobile",
     "deny-malformed", "deny-unclosed", "stale-cache-releases", "bank-cache-skew-releases",

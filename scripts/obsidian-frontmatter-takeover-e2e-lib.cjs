@@ -59,6 +59,11 @@ const REQUIRED_CHECKS = Object.freeze([
   { name: "bank-cache-parity", surface: "both" },
   { name: "own-bank-live", surface: "live" },
   { name: "own-bank-reading", surface: "reading" },
+  { name: "bank-area-live-arbitration", surface: "live" },
+  { name: "bank-area-reading-arbitration", surface: "reading" },
+  { name: "bank-contractless-native", surface: "both" },
+  { name: "bank-pane-path-lifecycle", surface: "live" },
+  { name: "bank-area-settings-gestures", surface: "live" },
   { name: "own-quarter-live", surface: "live" },
   { name: "own-year-live", surface: "live" },
   { name: "own-identity-day-live", surface: "live" },
@@ -136,6 +141,7 @@ function fixtureNotes() {
     'parent: "[[cash]]"',
     'type: "[[area]]"',
     'summary: "Synthetic bank ownership fixture."',
+    'task_type: "CASH"',
     "created: 2026-11-11T11:31:42-05:00",
     "bank:",
     "  accounts:",
@@ -392,14 +398,22 @@ const PROBE_SOURCE = "(() => {" + PAGE_COMMON + String.raw`
         return {
           key, ready: typeof plugin.propertyCapabilityRoutingReady === "function" ? plugin.propertyCapabilityRoutingReady() : false,
           confirmed: typeof plugin.propertyCapabilityConfirmed === "function" ? plugin.propertyCapabilityConfirmed(key) : false,
-          status: state && state.status || null, attempts: state && state.attempts || 0,
+          status: state && state.status || null, contract: state && state.contract || null,
+          attempts: state && state.attempts || 0, contractAttempts: state && state.contractAttempts || 0,
         };
       } catch (_) { return null; }
     })();
+    const homeCard = file?.path === "bank.md" && scope?.querySelector
+      ? scope.querySelector('.bob-home-card[data-home-source="bank.md"]') : null;
+    const bankCard = file?.path === "bank.md" && scope?.querySelector
+      ? scope.querySelector('.bob-bank-setup[data-bank-setup-source="bank.md"]') : null;
     const card = scope && scope.querySelector
-      ? (scope.querySelector(".bob-album-header, .bob-record-sheet, .bob-intention-card, .bob-bank-setup") || null)
+      ? (homeCard || scope.querySelector(".bob-album-header, .bob-record-sheet, .bob-intention-card, .bob-bank-setup") || null)
       : null;
     const foot = card && card.querySelector ? card.querySelector(".bob-property-card-foot") : null;
+    const adopted = (() => {
+      try { return helpers?.propertyCardAdoptedEntry?.(scope) || null; } catch (_) { return null; }
+    })();
     const bankGate = file?.path === "bank.md" && helpers && plugin ? (() => {
       const source = mode === "live"
         ? String(liveViewOf(view)?.state?.doc?.toString?.() || "")
@@ -412,15 +426,34 @@ const PROBE_SOURCE = "(() => {" + PAGE_COMMON + String.raw`
       try { cacheEvidence = helpers.propertyCardFrontmatterCacheEvidence(source, cached); } catch (_) {}
       let modelCurrent = false;
       try { modelCurrent = Boolean(plugin.bankSetupCardFor("bank.md", source)?.model); } catch (_) {}
+      const areaFoot = homeCard?.querySelector?.(".bob-property-card-foot") || null;
+      const bankFoot = bankCard?.querySelector?.(".bob-property-card-foot") || null;
       return {
         active: plugin.bankSetupActive === true,
         desktop: helpers.propertyCardDesktopPlatform?.isDesktopApp,
         scopeDenied: helpers.propertyCardFrontmatterScopeDenied?.(scope) === true,
         livePath,
-        mountPath: card?.getAttribute?.("data-bank-setup-source") || null,
-        mountConnected: Boolean(card?.isConnected),
-        scopeContainsMount: Boolean(scope?.contains?.(card)),
-        footPresent: Boolean(foot),
+        titleOwnerKind: adopted?.kind || null,
+        titleOwnerGeneration: adopted?.generation || null,
+        areaOwnerGeneration: helpers.propertyCardHomeBankAreaCurrent?.(scope, file.path)?.generation || null,
+        areaCardPresent: Boolean(homeCard?.isConnected),
+        areaCardFootPresent: Boolean(areaFoot?.isConnected),
+        bankCardPresent: Boolean(bankCard?.isConnected),
+        bankCardInBody: Boolean(bankCard?.isConnected && !bankCard.classList?.contains("bob-property-card-title-slot")),
+        bankCardParentClass: bankCard?.parentElement?.className || null,
+        bankSetupBodyPresent: Boolean(bankCard?.querySelector?.(".bob-bank-setup-body")),
+        bankEditPresent: Boolean(bankCard?.querySelector?.("button.bob-bank-setup-edit")),
+        bankNestedPresent: Boolean(homeCard?.querySelector?.('[data-property-key="bank"] .bob-property-card-foot-nested')),
+        bankWhereMark: homeCard?.querySelector?.('[data-property-key="bank"] .bob-property-card-foot-mark')?.textContent || null,
+        registryKinds: typeof plugin.propertyCardKinds === "function" ? plugin.propertyCardKinds() : [],
+        resolvedKind: typeof plugin.resolvePropertyCard === "function"
+          ? plugin.resolvePropertyCard({ path: file.path, frontmatter: cached })?.kind || null : null,
+        bankFootPresent: Boolean(bankFoot?.isConnected),
+        bankFootSuppressedAfterAreaFoot: Boolean(areaFoot?.isConnected && !bankFoot?.isConnected),
+        mountPath: bankCard?.getAttribute?.("data-bank-setup-source") || null,
+        mountConnected: Boolean(bankCard?.isConnected),
+        scopeContainsMount: Boolean(scope?.contains?.(bankCard)),
+        footPresent: Boolean(areaFoot?.isConnected || foot?.isConnected),
         cacheEvidence,
         cachedKeys: cached && typeof cached === "object" ? Object.keys(cached).sort() : [],
         sourceLength: source.length,

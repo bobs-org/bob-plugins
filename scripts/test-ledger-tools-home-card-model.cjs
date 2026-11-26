@@ -57,14 +57,15 @@ function model(path, frontmatter, extra = {}) {
   });
 }
 
-test("eligibility is typed homes only and excludes type notes, archives, and templates", () => {
+test("eligibility is typed homes only and excludes area/project type notes, archives, and templates", () => {
   assert.equal(H.homeCardEligible("love.md", { type: "[[area]]" }).kind, "area");
   assert.equal(H.homeCardEligible("sase_blog.md", { type: "[[project]]" }).kind, "project");
   assert.equal(H.homeCardEligible("love.md", { type: "[[album]]" }), null);
   assert.equal(H.homeCardEligible("love.md", {}), null);
-  for (const path of ["area.md", "project.md", "bank.md", "done/old.md", "_templates/area.md", "x/_conflicts/note.md"]) {
+  for (const path of ["area.md", "project.md", "done/old.md", "_templates/area.md", "x/_conflicts/note.md"]) {
     assert.equal(H.homeCardEligible(path, { type: "[[area]]" }), null, path);
   }
+  assert.equal(H.homeCardEligible("bank.md", { type: "[[area]]" }).kind, "area");
   assert.ok(H.homeCardEligible("areas/love.md", { type: "[[area]]" }));
   assert.equal(H.homeCardModel({ path: "love.md", frontmatter: { type: "record" } }), null);
 });

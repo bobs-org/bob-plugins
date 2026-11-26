@@ -168,13 +168,63 @@ test("denied contexts never show the card", () => {
 });
 
 test("the same eligibility decision drives the mount", () => {
-  for (const path of ["area.md", "project.md", "bank.md", "done/old.md", "_templates/a.md"]) {
+  for (const path of ["area.md", "project.md", "done/old.md", "_templates/a.md"]) {
     assert.equal(H.homeCardEligible(path, { type: "[[area]]" }), null, path);
   }
+  assert.equal(H.homeCardEligible("bank.md", { type: "[[area]]" }).kind, "area");
   assert.ok(H.homeCardEligible("love.md", areaFrontmatter()));
   assert.ok(H.homeCardEligible("sase_blog.md", projectFrontmatter()));
   assert.equal(H.homeCardEligible("love.md", {}), null);
   assert.equal(H.homeCardEligible("love.md", { type: "[[album]]" }), null);
+});
+
+test("bank arbitration follows one connected Area mount and its registered foot per pane", () => {
+  const doc = makeDoc();
+  const scope = doc.createElement("div");
+  const otherScope = doc.createElement("div");
+  const plugin = { homeCardActive: true, refreshes: 0, scheduleBankSetupRefresh() { this.refreshes += 1; } };
+  const mount = doc.createElement("section");
+  mount.setAttribute("class", `${H.HOME_CARD_CLASS} bob-property-card`);
+  mount.setAttribute("data-home-source", "bank.md");
+  const foot = doc.createElement("div");
+  foot.setAttribute("class", "bob-property-card-foot");
+  const disclosure = doc.createElement("button");
+  disclosure.setAttribute("class", "bob-property-card-foot-disclosure");
+  foot.appendChild(disclosure);
+  mount.appendChild(foot);
+  scope.appendChild(mount);
+
+  const first = H.propertyCardHomeBankAreaRegister(plugin, scope, "bank.md", "area", mount);
+  assert.ok(first > 0);
+  const pending = H.propertyCardHomeBankAreaCurrent(scope, "bank.md");
+  assert.equal(pending.generation, first);
+  assert.equal(H.propertyCardHomeBankAreaCurrent(otherScope, "bank.md"), null);
+  assert.equal(H.propertyCardHomeBankAreaFootReady(pending), false, "an unregistered foot is not a replacement");
+  assert.deepEqual(H.bankSetupAreaArbitration(scope, "bank.md"), {
+    owner: pending, generation: first, suppressBankFoot: false,
+  });
+
+  H.propertyCardFootRegisterMount(foot, "bank.md");
+  assert.equal(H.propertyCardHomeBankAreaFootReady(pending), true);
+  assert.equal(H.bankSetupAreaArbitration(scope, "bank.md").suppressBankFoot, true);
+
+  const replacement = doc.createElement("section");
+  replacement.setAttribute("class", `${H.HOME_CARD_CLASS} bob-property-card`);
+  replacement.setAttribute("data-home-source", "bank.md");
+  const replacementFoot = doc.createElement("div");
+  replacementFoot.setAttribute("class", "bob-property-card-foot");
+  const replacementDisclosure = doc.createElement("button");
+  replacementDisclosure.setAttribute("class", "bob-property-card-foot-disclosure");
+  replacementFoot.appendChild(replacementDisclosure);
+  replacement.appendChild(replacementFoot);
+  scope.appendChild(replacement);
+  const second = H.propertyCardHomeBankAreaRegister(plugin, scope, "bank.md", "area", replacement);
+  assert.ok(second > first, "a replacement mount receives a new generation");
+  assert.equal(H.propertyCardHomeBankAreaRelease(scope, "bank.md", mount, plugin), false,
+    "a stale release cannot clear the replacement");
+  assert.equal(H.propertyCardHomeBankAreaCurrent(scope, "bank.md").mount, replacement);
+  assert.equal(H.propertyCardHomeBankAreaRelease(scope, "bank.md", replacement, plugin), true);
+  assert.equal(H.propertyCardHomeBankAreaCurrent(scope, "bank.md"), null);
 });
 
 test("modifier-aware links open tabs and splits", () => {
@@ -315,6 +365,33 @@ test("chip handoff uses one adapter callback and renders inert text without the 
   const withoutEditor = Object.create(mixin);
   withoutEditor.openPropertyEditor = undefined;
   assert.deepEqual(withoutEditor.homeCardOpenSetting("love.md", "task_type"), { ok: false, reason: "editor-unavailable" });
+});
+
+test("the Area foot preserves the bank setup handoff and truthful body mark", () => {
+  const mixin = H.BobLedgerToolsHomeCardFootMixin.prototype;
+  const plugin = Object.create(mixin);
+  plugin.homeCardFrontmatter = () => ({ bank: { accounts: { checking: {} } } });
+  plugin.homeCardFootContract = () => null;
+  plugin.homeCardSourceCache = new Map();
+  plugin.bankSetupDesktop = () => true;
+  plugin.bankSetupModelFor = () => ({ expanded: false });
+  const model = { kind: "area", where: { type: "tile" }, managed: {} };
+  let spec = plugin.homeCardFootSpec("bank.md", model);
+  let bank = spec.inventory.rows.find((row) => row.key === "bank");
+  assert.ok(bank, JSON.stringify(spec.inventory));
+  assert.equal(bank.nested, "setup");
+  assert.equal(bank.mark, null, "a folded body is not claimed as painted on the card");
+
+  plugin.bankSetupModelFor = () => ({ expanded: true });
+  spec = plugin.homeCardFootSpec("bank.md", model);
+  bank = spec.inventory.rows.find((row) => row.key === "bank");
+  assert.equal(bank.nested, "setup");
+  assert.equal(bank.mark, "setup", "the Area foot marks the bank mapping only while its body is open");
+
+  let opened = null;
+  plugin.openBankSetupCard = (options) => { opened = options; };
+  plugin.homeCardFootHandlers("bank.md").openNested("bank");
+  assert.deepEqual(opened, { sourcePath: "bank.md" });
 });
 
 test("title adoption never consumes ^prj and the source task offsets survive the build", () => {

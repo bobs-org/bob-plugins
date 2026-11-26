@@ -22,6 +22,16 @@ Object.assign(BobLedgerToolsBankSetupMixin.prototype, {
   bankSetupOwnMountedFrontmatter(scope, view, path, mount, sourceText, currentPath) {
     if (typeof propertyCardFrontmatterOwnMounted !== "function") return null;
     const key = bankSetupHubPath(path);
+    let areaEligible = false;
+    try {
+      const frontmatter = typeof this.homeCardFrontmatter === "function" ? this.homeCardFrontmatter(key) : null;
+      areaEligible = typeof homeCardEligible === "function"
+        && homeCardEligible(key, frontmatter)?.kind === "area";
+    } catch (_) {}
+    if (areaEligible || propertyCardHomeBankAreaCurrent?.(scope, key)) {
+      this.bankSetupReleaseFrontmatter(scope, key);
+      return null;
+    }
     const sourceFor = () => {
       if (view?.state?.doc && typeof view.state.doc.toString === "function") return view.state.doc.toString();
       return this.bankSetupSourceCache?.get?.(key);

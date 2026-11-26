@@ -511,14 +511,14 @@ function propertyCardFrontmatterCapabilityReady(plugin) {
   }
 }
 
-// Species-specific contract requirement (bob-cli-pl.9.1.1): area/project
-// whole-frontmatter ownership additionally needs confirmed
-// `props_contract_v1` evidence for the current bob path. Existing species
-// keep working on the generic `props_v1` capability alone, and bank stays
-// on its pre-takeover gate until the bank-arbitration phase.
-function propertyCardFrontmatterContractReady(plugin, kind) {
+// Species-specific contract requirement (bob-cli-pl.9.1.1 / .9.1.2):
+// area/project cards and the bank hub need confirmed `props_contract_v1`
+// evidence for the current bob path. Other existing species keep working on
+// the generic `props_v1` capability alone.
+function propertyCardFrontmatterContractReady(plugin, kind, path) {
   try {
-    if (kind !== "area" && kind !== "project") return true;
+    const bankHub = kind === "bank" && String(path || "").replace(/\\/g, "/") === "bank.md";
+    if (kind !== "area" && kind !== "project" && !bankHub) return true;
     if (typeof plugin?.propertyCapabilityContractConfirmed !== "function") return false;
     return plugin.propertyCapabilityContractConfirmed() === true;
   } catch (_) {
@@ -553,7 +553,7 @@ function propertyCardFrontmatterRecordEligible(plugin, options = {}) {
     if (!propertyCardFrontmatterCapabilityReady(plugin)) return false;
     // Area/project mounts additionally need the typed settings contract;
     // without it the mount keeps native Properties (fail open).
-    if (!propertyCardFrontmatterContractReady(plugin, kind)) return false;
+    if (!propertyCardFrontmatterContractReady(plugin, kind, path)) return false;
 
     const view = options.view || (mode === "reading"
       ? propertyCardFrontmatterMarkdownViewFor(plugin?.app, scope) : null);

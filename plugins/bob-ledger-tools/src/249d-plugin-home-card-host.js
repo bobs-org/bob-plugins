@@ -705,7 +705,10 @@ class BobLedgerToolsHomeCardMixin {
       currentPath: reading?.currentPath || null,
       recognizer: propertyCardHomeTitleRecognizer(model.title?.text),
       onLost: () => this.scheduleHomeCardRefresh(),
-      onMount: (mount) => { void ownFrontmatter(mount); },
+      onMount: (mount) => {
+        plugin.homeCardRegisterBankAreaMount?.(scope, sourcePath, model.kind, mount);
+        void ownFrontmatter(mount);
+      },
     });
     if (adoption.mode !== "slot") {
       try {
@@ -727,6 +730,7 @@ class BobLedgerToolsHomeCardMixin {
     this.homeCardPaintGoal(root, model);
     this.homeCardRestoreFocus(header, focusKey);
     try { this.homeCardTrackFoot?.(scope || root, sourcePath, header); } catch (_) {}
+    try { this.homeCardRegisterBankAreaMount?.(scope, sourcePath, model.kind, header); } catch (_) {}
     try { this.homeCardEnsureSource?.(sourcePath); } catch (_) {}
     return header;
   }
@@ -810,6 +814,7 @@ class BobLedgerToolsHomeCardMixin {
       const path = this.homeCardLivePath(view);
       if (!path || !view?.state?.doc) {
         this.homeCardReleaseAdoption(view?.dom);
+        try { this.homeCardReleaseBankAreaMounts?.(view?.dom); } catch (_) {}
         try { this.homeCardReleaseFrontmatter?.(view?.dom, this.homeCardLivePath(view)); } catch (_) {}
         try { this.homeCardReleaseKeys?.(view?.dom, this.homeCardLivePath(view)); } catch (_) {}
         this.homeCardSetEditorScope(view, false);
@@ -822,6 +827,7 @@ class BobLedgerToolsHomeCardMixin {
       this.homeCardSetEditorScope(view, Boolean(model));
       if (!model) {
         this.homeCardReleaseAdoption(view?.dom);
+        try { this.homeCardReleaseBankAreaMounts?.(view?.dom, path); } catch (_) {}
         try { this.homeCardReleaseFrontmatter?.(view?.dom, path); } catch (_) {}
         try { this.homeCardReleaseKeys?.(view?.dom, path); } catch (_) {}
         try { this.homeCardTrackFoot?.(view?.dom, path, null); } catch (_) {}
@@ -864,6 +870,15 @@ class BobLedgerToolsHomeCardMixin {
         recognizer: propertyCardHomeTitleRecognizer(model.title?.text),
         currentPath: () => propertyCardLiveCurrentPath(view),
         onLost: () => this.scheduleHomeCardRefresh(),
+        onMount: (mount) => {
+          this.homeCardRegisterBankAreaMount?.(view.dom, path, model.kind, mount);
+          try {
+            this.homeCardOwnMountedFrontmatter?.(
+              view.dom, view, path, mount, model.kind, view?.state?.doc?.toString?.() || text,
+              () => this.homeCardLivePath(view) || "",
+            );
+          } catch (_) {}
+        },
       });
       try { this.homeCardTrackFoot?.(view?.dom, path, header); } catch (_) {}
       if (adoption.mode === "slot") {
@@ -905,6 +920,9 @@ class BobLedgerToolsHomeCardMixin {
         toDOM() {
           header.setAttribute?.("data-cm-widget", "true");
           header.setAttribute?.("data-home-source", path);
+          homeCardDefer(() => {
+            try { plugin.homeCardRegisterBankAreaMount?.(view.dom, path, model.kind, header); } catch (_) {}
+          });
           try {
             propertyCardFrontmatterOwnMountedDeferred?.(plugin, {
               scope: view.dom, view, path, kind: model.kind, mount: header, sourceText: text,
@@ -918,6 +936,9 @@ class BobLedgerToolsHomeCardMixin {
             });
           } catch (_) {}
           return header;
+        }
+        destroy() {
+          try { plugin.homeCardReleaseBankAreaMount?.(view.dom, path, header); } catch (_) {}
         }
       }();
       let at = 0;

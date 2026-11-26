@@ -302,6 +302,13 @@ class BobLedgerToolsBankSetupTitleMixin {
   // onLost reschedules so a lost slot recovers through the next refresh.
   bankSetupAdoptTitle(scope, header, sourcePath, identity, extra = {}) {
     try {
+      if (propertyCardHomeBankAreaCurrent?.(scope, bankSetupHubPath(sourcePath))) {
+        // A current Area mount owns the pane's title arbitration. The bank
+        // card remains in the body and keeps its setup/editor controls.
+        this.bankSetupReleaseAdoption(scope, sourcePath, { preserveFallback: true });
+        this.bankSetupReleaseFrontmatter?.(scope, sourcePath);
+        return { mode: "fallback", release: () => {} };
+      }
       return propertyCardAdoptTitle(scope, header, {
         path: bankSetupHubPath(sourcePath),
         kind: "bank",

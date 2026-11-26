@@ -4,7 +4,7 @@
 
 const HOME_CARD_MAX_CRUMBS = 4;
 const HOME_CARD_MAX_HOPS = 8;
-const HOME_CARD_TYPE_NOTES = Object.freeze(["area.md", "project.md", "bank.md"]);
+const HOME_CARD_TYPE_NOTES = Object.freeze(["area.md", "project.md"]);
 const HOME_CARD_MONTHS = Object.freeze([
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",

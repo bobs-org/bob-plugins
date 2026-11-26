@@ -20,7 +20,7 @@ const repoRoot = path.resolve(__dirname, "..");
 const ELECTRON_FALLBACK = "/snap/obsidian/current/app/obsidian";
 const PLUGIN_ID = "bob-ledger-tools";
 const FIXTURE_TODAY = "2026-11-20";
-const OVERALL_TIMEOUT_MS = 600_000;
+const OVERALL_TIMEOUT_MS = 1_500_000;
 const COMMAND_ID = "markdown:add-metadata-property";
 const MODE_STATE = {
   live: { mode: "source", source: false },
@@ -29,6 +29,7 @@ const MODE_STATE = {
 };
 const { sleep, waitFor } = shared;
 const P = lib.PATHS;
+let activeRun = null;
 const VIM_PROBE_PATH = "2026/20261119.md";
 const STALE_CACHE_PROBE_PATH = "2026/20261118.md";
 const NATIVE_FALLBACK_PROBE_PATH = "2026/20261117.md";
@@ -148,9 +149,18 @@ if (isShow && control.mode === "fail") {
   process.stderr.write(stderr);
   process.exit(1);
 }
-const result = spawnSync(real, args, {
+let result = spawnSync(real, args, {
   encoding: "utf8", env: process.env, input, timeout: 90000, maxBuffer: 32 * 1024 * 1024,
 });
+if (args[0] === "__catalog" && control.mode === "contractless" && result.status === 0) {
+  try {
+    const catalog = JSON.parse(result.stdout || "{}");
+    catalog.features = Array.isArray(catalog.features)
+      ? catalog.features.filter((feature) => feature !== "props_contract_v1")
+      : [];
+    result.stdout = JSON.stringify(catalog);
+  } catch (_) {}
+}
 append({ event: "finish", pid: process.pid, args, exitCode: result.status });
 if (result.stdout) process.stdout.write(result.stdout);
 if (result.stderr) process.stderr.write(result.stderr);
@@ -268,6 +278,20 @@ function makePage(ctx) {
       }
       throw new Error("capability " + status + " timed out: " + JSON.stringify(last));
     },
+    waitContract: async (contract, timeoutMs = 20_000) => {
+      const deadline = Date.now() + timeoutMs;
+      let last = null;
+      while (Date.now() < deadline) {
+        last = await ev(`(() => {
+          const plugin = app.plugins.plugins[${json(PLUGIN_ID)}];
+          if (!plugin) return null;
+          return plugin.propertyCapabilityState(plugin.propertyCapabilityCurrentBobKey());
+        })()`);
+        if (last && last.contract === contract) return last;
+        await sleep(150);
+      }
+      throw new Error("contract capability " + contract + " timed out: " + JSON.stringify(last));
+    },
     keys: async (key, modifiers = 0) => {
       const code = /^[a-z]$/i.test(key) ? "Key" + key.toUpperCase()
         : (key === "Enter" || key === "Escape" ? key : key);
@@ -284,6 +308,7 @@ function makePage(ctx) {
       const row = await shared.capture(ctx.client, ctx.outDir, name, width || 1400, theme, tags.join(" "));
       row.tags = tags;
       ctx.report.screenshots.push(row);
+      process.stderr.write("[frontmatter-takeover] screenshot " + name + " sha256=" + row.sha256 + "\n");
       return row;
     },
     closeEditor: async () => {
@@ -316,6 +341,7 @@ async function run(args) {
   const outDir = path.resolve(args.out || path.join(os.tmpdir(), "bob-frontmatter-takeover-e2e-shots-" + crypto.randomBytes(4).toString("hex")));
   const reportPath = path.resolve(args.report || path.join(outDir, "frontmatter-takeover-report.json"));
   Object.assign(report, { reportPath, screenshotDirectory: outDir });
+  activeRun = { report, reportPath, outDir, currentCheck: null, client: null, child: null };
   let scratch = "";
   let child = null;
   let client = null;
@@ -359,12 +385,14 @@ async function run(args) {
   };
   const attempt = async (name, fn) => {
     observeFixtureWatch("before:" + name);
-    if (client) await client.evaluate(`(() => {
-      const audit = window.__bobFrontmatterTakeoverWriteAudit;
-      if (audit) audit.stage = ${JSON.stringify(name)};
-    })()`);
     const startedAt = new Date().toISOString();
+    activeRun.currentCheck = { name, startedAt };
+    process.stderr.write("[frontmatter-takeover] check start " + name + " " + startedAt + "\n");
     try {
+      if (client) await client.evaluate(`(() => {
+        const audit = window.__bobFrontmatterTakeoverWriteAudit;
+        if (audit) audit.stage = ${JSON.stringify(name)};
+      })()`);
       const result = await fn();
       check(name, Boolean(result && result.ok !== false && (result.ok === true || result.ok === undefined || result.failures === undefined || result.failures.length === 0)), result || {});
     } catch (error) {
@@ -372,6 +400,8 @@ async function run(args) {
     } finally {
       const row = report.checks[report.checks.length - 1];
       if (row?.name === name) Object.assign(row, { startedAt, finishedAt: new Date().toISOString() });
+      process.stderr.write("[frontmatter-takeover] check done " + name + " status=" + (row?.status || "unknown") + " " + new Date().toISOString() + "\n");
+      activeRun.currentCheck = null;
       observeFixtureWatch("after:" + name);
     }
   };
@@ -441,10 +471,12 @@ async function run(args) {
         PATH: shimDir + path.delimiter + (process.env.PATH || ""), TMPDIR: "/tmp", NO_COLOR: "1",
       },
     });
+    activeRun.child = child;
     child.stderr.on("data", () => {});
     report.obsidianProcess = { pid: child.pid, executable, debugPort: port };
     const target = await shared.selectTarget(port, vaultReal, () => child && child.exitCode == null);
     client = target.client;
+    activeRun.client = client;
     client.on("Runtime.exceptionThrown", (params) => {
       const details = params.exceptionDetails || {};
       report.consoleExceptions.push({ text: details.text || "", description: details.exception?.description || "", url: details.url || "", lineNumber: details.lineNumber || null });
@@ -537,6 +569,205 @@ async function run(args) {
     });
     await ownCase("own-bank-live", P.bank, "live");
     await ownCase("own-bank-reading", P.bank, "reading");
+    const bankAreaArbitrationCase = (name, mode) => attempt(name, async () => {
+      await ctx.page.open(ctx.main, P.bank, mode);
+      await ctx.page.settle(600);
+      await ctx.page.waitOwned(ctx.main, mode, name);
+      const probe = await ctx.page.probe(ctx.main);
+      const bank = probe.bankGate || {};
+      const failures = [];
+      if (bank.titleOwnerKind !== "home") failures.push("Area is not the pane's title-slot owner: " + bank.titleOwnerKind);
+      if (!bank.areaCardPresent || !bank.areaCardFootPresent) failures.push("connected Area card/foot is missing");
+      if (!bank.bankCardPresent || !bank.bankCardInBody) failures.push("bank setup card did not remain in the body");
+      if (!bank.bankSetupBodyPresent) failures.push("bank setup body is missing");
+      if (!bank.bankEditPresent) failures.push("bank Edit control is missing");
+      if (!bank.bankFootSuppressedAfterAreaFoot) failures.push("bank foot did not yield to the connected Area foot");
+      if (!bank.bankNestedPresent) failures.push("Area Properties drawer lost the nested bank setup opener");
+      if (bank.resolvedKind !== "bank" || bank.registryKinds[0] !== "bank") {
+        failures.push("the bank card is no longer first in the double-equals registry");
+      }
+      const nested = await ctx.page.ev(`(() => {
+        const button = document.querySelector('.bob-home-card[data-home-source="bank.md"] [data-property-key="bank"] .bob-property-card-foot-nested');
+        if (!button) return false;
+        button.click();
+        return true;
+      })()`);
+      if (!nested) failures.push("Area Properties drawer bank opener did not click");
+      const nestedEditor = await waitFor(client,
+        `Boolean(document.querySelector(".bob-bank-setup-card-modal"))`, Boolean,
+        "Area bank nested editor", 10_000);
+      if (!nestedEditor) failures.push("Area Properties drawer did not hand off to Bank Setup");
+      await ctx.page.ev(`app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}]?.bankSetupCardModal?.close?.()`);
+      await ctx.page.settle(100);
+      const setupState = () => ctx.page.ev(`(() => {
+        const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
+        const card = document.querySelector('.bob-bank-setup[data-bank-setup-source="bank.md"]');
+        const body = card?.querySelector('.bob-bank-setup-body');
+        const mark = document.querySelector('.bob-home-card[data-home-source="bank.md"] [data-property-key="bank"] .bob-property-card-foot-mark');
+        return { expanded: plugin?.bankSetupModelFor?.("bank.md")?.expanded === true,
+          bodyVisible: Boolean(body && !body.hasAttribute("hidden")), mark: mark?.textContent || null };
+      })()`);
+      let current = await setupState();
+      if (current.expanded) {
+        await ctx.page.ev(`document.querySelector('.bob-bank-setup[data-bank-setup-source="bank.md"] .bob-bank-setup-toggle')?.click()`);
+        current = await waitFor(client, `(() => {
+          const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
+          const mark = document.querySelector('.bob-home-card[data-home-source="bank.md"] [data-property-key="bank"] .bob-property-card-foot-mark');
+          return { expanded: plugin?.bankSetupModelFor?.("bank.md")?.expanded === true, mark: mark?.textContent || null };
+        })()`, (value) => value?.expanded === false && value.mark === null,
+        "collapsed bank body where-mark", 10_000);
+      } else if (current.mark !== null) {
+        failures.push("Area where-mark claims a folded bank setup body");
+      }
+      const toggle = await ctx.page.ev(`(() => {
+        const button = document.querySelector('.bob-bank-setup[data-bank-setup-source="bank.md"] .bob-bank-setup-toggle');
+        if (!button) return false;
+        button.click();
+        return true;
+      })()`);
+      if (!toggle) failures.push("bank setup body fold control is missing");
+      const expanded = await waitFor(client, `(() => {
+        const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
+        const card = document.querySelector('.bob-bank-setup[data-bank-setup-source="bank.md"]');
+        const body = card?.querySelector('.bob-bank-setup-body');
+        const mark = document.querySelector('.bob-home-card[data-home-source="bank.md"] [data-property-key="bank"] .bob-property-card-foot-mark');
+        return { expanded: plugin?.bankSetupModelFor?.("bank.md")?.expanded === true,
+          bodyVisible: Boolean(body && !body.hasAttribute("hidden")), mark: mark?.textContent || null };
+      })()`, (value) => value?.expanded === true && value.bodyVisible === true && value.mark === "setup",
+      "expanded bank body and Area where-mark", 10_000);
+      if (!expanded || expanded.mark !== "setup") failures.push("Area where-mark did not follow the visible bank setup body");
+      const edit = await ctx.page.ev(`(() => {
+        const button = document.querySelector('.bob-bank-setup[data-bank-setup-source="bank.md"] button.bob-bank-setup-edit');
+        if (!button) return false;
+        button.click();
+        return true;
+      })()`);
+      if (!edit) failures.push("bank Edit control did not click");
+      const editEditor = await waitFor(client,
+        `Boolean(document.querySelector(".bob-bank-setup-card-modal"))`, Boolean,
+        "bank Edit setup editor", 10_000);
+      if (!editEditor) failures.push("bank Edit control did not open Bank Setup");
+      await ctx.page.ev(`app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}]?.bankSetupCardModal?.close?.()`);
+      if (mode === "live") {
+        await ctx.page.ev(`app.workspace.getLeafById(${JSON.stringify(ctx.main)})?.view?.editor?.focus?.()`);
+        await ctx.page.keys("=");
+        await ctx.page.keys("=");
+        const doubleEquals = await waitFor(client,
+          `Boolean(document.querySelector(".bob-bank-setup-card-modal"))`, Boolean,
+          "bank-first double-equals editor", 10_000);
+        if (!doubleEquals) failures.push("== did not open Bank Setup before Area Settings");
+        await ctx.page.ev(`app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}]?.bankSetupCardModal?.close?.()`);
+      }
+      return { ok: failures.length === 0, probe, expanded, failures };
+    });
+    await bankAreaArbitrationCase("bank-area-live-arbitration", "live");
+    await bankAreaArbitrationCase("bank-area-reading-arbitration", "reading");
+    await attempt("bank-pane-path-lifecycle", async () => {
+      const failures = [];
+      await ctx.page.open(ctx.main, P.bank, "live");
+      const first = await ctx.page.waitOwned(ctx.main, "live", "first bank pane");
+      const secondLeaf = await ctx.page.ev('app.workspace.getLeaf("split", "vertical").id');
+      try {
+        await ctx.page.open(secondLeaf, P.bank, "live");
+        const second = await ctx.page.waitOwned(secondLeaf, "live", "second bank pane");
+        if (!first.bankGate?.areaOwnerGeneration || !second.bankGate?.areaOwnerGeneration
+          || first.bankGate.areaOwnerGeneration === second.bankGate.areaOwnerGeneration) {
+          failures.push("two bank panes did not get independent Area mount generations");
+        }
+        await ctx.page.open(secondLeaf, P.ordinary, "live");
+        const secondNative = await ctx.page.waitNative(secondLeaf, "second pane path change");
+        const firstStillOwned = await ctx.page.waitOwned(ctx.main, "live", "first pane survives other path change");
+        if (!firstStillOwned.bankGate?.bankFootSuppressedAfterAreaFoot) {
+          failures.push("changing the second pane path disturbed the first pane's bank foot arbitration");
+        }
+        await ctx.page.open(secondLeaf, P.bank, "live");
+        const secondRestored = await ctx.page.waitOwned(secondLeaf, "live", "second pane bank restore");
+        await ctx.page.ev(`(() => {
+          const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
+          plugin.scheduleHomeCardRefresh?.();
+          plugin.scheduleHomeCardRefresh?.();
+          plugin.scheduleBankSetupRefresh?.();
+          plugin.scheduleBankSetupRefresh?.();
+          return true;
+        })()`);
+        await ctx.page.settle(500);
+        const repeated = await ctx.page.waitOwned(secondLeaf, "live", "repeated bank refreshes");
+        const areaFootCount = await ctx.page.ev(`(() => {
+          const leaf = app.workspace.getLeafById(${JSON.stringify(secondLeaf)});
+          const scope = leaf?.view?.editor?.cm?.dom;
+          return scope?.querySelectorAll?.('.bob-home-card[data-home-source="bank.md"] .bob-property-card-foot').length || 0;
+        })()`);
+        if (areaFootCount !== 1) failures.push("repeated refresh callbacks duplicated or lost the Area foot");
+        await ctx.page.ev(`app.workspace.getLeafById(${JSON.stringify(secondLeaf)})?.detach?.()`);
+        await ctx.page.settle(300);
+        const firstAfterClose = await ctx.page.waitOwned(ctx.main, "live", "first bank pane after sibling close");
+        if (!firstAfterClose.bankGate?.bankFootSuppressedAfterAreaFoot) failures.push("closing one bank pane changed the surviving pane's foot owner");
+        await ctx.page.ev(`(() => {
+          const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
+          plugin.homeCardActive = false;
+          plugin.scheduleHomeCardRefresh?.();
+          plugin.scheduleBankSetupRefresh?.();
+          return true;
+        })()`);
+        const native = await ctx.page.waitNative(ctx.main, "Area mount loss on bank.md");
+        if (native.bankGate?.areaCardPresent || !native.bankGate?.bankFootPresent
+          || native.bankGate?.bankCardPresent !== true || native.containerVisible !== true) {
+          failures.push("Area loss did not restore native Properties and the surviving bank foot/body");
+        }
+        await ctx.page.ev(`(() => {
+          const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
+          plugin.homeCardActive = true;
+          plugin.scheduleHomeCardRefresh?.();
+          plugin.scheduleBankSetupRefresh?.();
+          return true;
+        })()`);
+        const restored = await ctx.page.waitOwned(ctx.main, "live", "Area mount restoration");
+        return { ok: failures.length === 0, first, second, secondNative, firstStillOwned,
+          secondRestored, repeated, areaFootCount, firstAfterClose, native, restored, failures };
+      } finally {
+        await ctx.page.ev(`app.workspace.getLeafById(${JSON.stringify(secondLeaf)})?.detach?.()`);
+      }
+    });
+    await attempt("bank-area-settings-gestures", async () => {
+      await ctx.page.open(ctx.main, P.bank, "live");
+      await ctx.page.waitOwned(ctx.main, "live", "Area Settings gesture setup");
+      const failures = [];
+      await ctx.page.keys("+");
+      const plus = await waitFor(client, `(() => {
+        const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
+        const modal = plugin?.propertyEditorModal;
+        return modal && !modal.closed ? {
+          noteKind: modal.report?.note_kind || "",
+          focusSettings: modal.focusSettings === true,
+          selectedId: modal.selectedId || "",
+          requestedSetting: modal.requestedSetting || "",
+          heading: String(modal.contentEl?.textContent || "").includes("AREA SETTINGS"),
+        } : null;
+      })()`, (value) => value?.noteKind === "area" && Boolean(value.selectedId),
+      "bare + Area Settings", 15_000);
+      if (!plus || plus.focusSettings !== true || plus.selectedId !== "setting::summary" || !plus.heading) {
+        failures.push("bare + did not open AREA SETTINGS on its first setting");
+      }
+      await ctx.page.closeEditor();
+      const clicked = await ctx.page.ev(`(() => {
+        const chip = document.querySelector('.bob-home-card[data-home-source="bank.md"] .bob-home-card-chip[data-home-chip="task_type"]');
+        if (!chip) return false;
+        chip.click();
+        return true;
+      })()`);
+      if (!clicked) failures.push("Area task_type policy chip is missing");
+      const chip = await waitFor(client, `(() => {
+        const modal = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}]?.propertyEditorModal;
+        return modal && !modal.closed ? { noteKind: modal.report?.note_kind || "",
+          requestedSetting: modal.requestedSetting || "", selectedId: modal.selectedId || "" } : null;
+      })()`, (value) => value?.noteKind === "area" && Boolean(value.selectedId),
+      "Area task_type chip setting", 15_000);
+      if (!chip || chip.requestedSetting !== "task_type" || chip.selectedId !== "setting::task_type") {
+        failures.push("Area policy chip did not focus its own task_type setting");
+      }
+      await ctx.page.closeEditor();
+      return { ok: failures.length === 0, plus, chip, failures };
+    });
     await ownCase("own-quarter-live", P.quarter, "live");
     await ownCase("own-year-live", P.year, "live");
     await ownCase("own-identity-day-live", P.identity, "live");
@@ -1364,7 +1595,7 @@ async function run(args) {
         const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
         if (plugin.propertyCapabilityByBobPath instanceof Map) plugin.propertyCapabilityByBobPath.clear();
         plugin.propertyCapabilityGeneration = (plugin.propertyCapabilityGeneration || 0) + 1;
-        return plugin.schedulePropertyCapabilityProbe(${JSON.stringify(mode)});
+        return plugin.schedulePropertyCapabilityProbes(${JSON.stringify(mode)});
       })()`);
       if (status) await ctx.page.waitCapability(status, 25_000);
     };
@@ -1375,7 +1606,7 @@ async function run(args) {
         const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
         if (plugin.propertyCapabilityByBobPath instanceof Map) plugin.propertyCapabilityByBobPath.clear();
         plugin.propertyCapabilityGeneration = (plugin.propertyCapabilityGeneration || 0) + 1;
-        return plugin.schedulePropertyCapabilityProbe("restore");
+        return plugin.schedulePropertyCapabilityProbes("restore");
       })()`);
       await ctx.page.waitCapability("confirmed", 25_000);
     };
@@ -1414,6 +1645,35 @@ async function run(args) {
       const probe = await ctx.page.waitNative(ctx.main, "failed probe");
       await restoreBob();
       return { ok: true, probe };
+    });
+    await attempt("bank-contractless-native", async () => {
+      const probes = [];
+      const failures = [];
+      let state = null;
+      try {
+        await switchBob("contractless", "confirmed");
+        state = await ctx.page.waitContract("absent", 25_000);
+        for (const mode of ["live", "reading"]) {
+          await ctx.page.open(ctx.main, P.bank, mode);
+          const probe = await ctx.page.waitNative(ctx.main, "bank without props_contract_v1 " + mode);
+          probes.push(probe);
+          const bank = probe.bankGate || {};
+          failures.push(...lib.nativeFailures(probe, "bank contractless " + mode));
+          if (probe.capability?.status !== "confirmed" || probe.capability?.contract !== "absent") {
+            failures.push("the contractless probe did not retain props_v1 while recording contract absence");
+          }
+          if (probe.containerVisible !== true) failures.push("native Properties are not visible in " + mode);
+          if (bank.areaCardPresent) failures.push("Area card mounted without props_contract_v1 in " + mode);
+          if (!bank.bankCardPresent || !bank.bankSetupBodyPresent || !bank.bankEditPresent) {
+            failures.push("bank setup body/Edit did not remain available in " + mode);
+          }
+          if (!bank.bankFootPresent) failures.push("bank fallback foot did not return in " + mode);
+        }
+      } finally {
+        await restoreBob();
+      }
+      const restored = await ctx.page.waitOwned(ctx.main, "reading", "contract restored after fallback");
+      return { ok: failures.length === 0, state, probes, restored, failures };
     });
     await attempt("path-switch-native", async () => {
       await switchBob("fail", "unconfirmed");
@@ -1774,6 +2034,7 @@ async function run(args) {
     if (scratch) {
       try { fs.rmSync(scratch, { recursive: true, force: true }); } catch (_) {}
     }
+    activeRun = null;
   }
   process.stdout.write(JSON.stringify(report.summary, null, 2) + "\n");
   process.stdout.write("report: " + reportPath + "\n");
@@ -1805,7 +2066,31 @@ async function main(argv) {
     return;
   }
   const timer = setTimeout(() => {
-    process.stderr.write("frontmatter takeover e2e exceeded " + OVERALL_TIMEOUT_MS + " ms\n");
+    const timedOutAt = new Date().toISOString();
+    process.stderr.write("frontmatter takeover e2e exceeded " + OVERALL_TIMEOUT_MS + " ms at " + timedOutAt + "\n");
+    if (activeRun) {
+      const { report, reportPath, outDir, currentCheck, client, child } = activeRun;
+      report.error = "Overall runner timeout at " + timedOutAt;
+      report.timeout = { at: timedOutAt, currentCheck };
+      report.prerequisites.push({ name: "runner-timeout", status: "fail", detail: report.timeout });
+      try {
+        report.timeout.screenshots = fs.readdirSync(outDir)
+          .filter((name) => name.toLowerCase().endsWith(".png"))
+          .sort()
+          .map((name) => {
+            const bytes = fs.readFileSync(path.join(outDir, name));
+            return { name, sizeBytes: bytes.length, sha256: crypto.createHash("sha256").update(bytes).digest("hex") };
+          });
+        report.verdict = lib.computeVerdict(report);
+        report.pass = false;
+        fs.mkdirSync(path.dirname(reportPath), { recursive: true });
+        fs.writeFileSync(reportPath, JSON.stringify(report, null, 2));
+      } catch (error) {
+        process.stderr.write("Could not write timeout report: " + String(error && error.message || error) + "\n");
+      }
+      try { if (client) client.close(); } catch (_) {}
+      try { if (child && child.exitCode == null) child.kill("SIGTERM"); } catch (_) {}
+    }
     process.exit(1);
   }, OVERALL_TIMEOUT_MS);
   try { await run(args); }

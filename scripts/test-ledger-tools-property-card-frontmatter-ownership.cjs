@@ -261,6 +261,7 @@ test("the ownership coordinator registers its Live Preview StateField", () => {
   plugin.propertyCapabilityRoutingReady = () => true;
   plugin.propertyCapabilityCurrentBobKey = () => "bob:/usr/bin/bob";
   plugin.propertyCapabilityConfirmed = () => true;
+  plugin.propertyCapabilityContractConfirmed = () => true;
   plugin.scheduleBankSetupRefresh = () => { bankRefreshes += 1; };
 
   H.propertyCardFrontmatterCoordinatorBind(plugin, "day");
@@ -657,6 +658,7 @@ test("supported card kinds own independent panes; replacement, stale release, an
   plugin.propertyCapabilityRoutingReady = () => true;
   plugin.propertyCapabilityCurrentBobKey = () => "bob:/usr/bin/bob";
   plugin.propertyCapabilityConfirmed = () => true;
+  plugin.propertyCapabilityContractConfirmed = () => true;
   const parse = (yaml) => Object.fromEntries(String(yaml).split(/\r?\n/).filter(Boolean).map((line) => {
     const index = line.indexOf(":");
     return [line.slice(0, index).trim(), line.slice(index + 1).trim()];
@@ -839,7 +841,7 @@ test("area and project mounts acquire through the shared coordinator with contra
   }
 });
 
-test("area and project mounts fail open without contract evidence; album and bank keep generic ownership", () => {
+test("area, project, and bank hub require the typed settings contract; albums keep generic ownership", () => {
   for (const kind of ["area", "project"]) {
     const world = homeWorld();
     world.contract = "absent";
@@ -863,17 +865,25 @@ test("area and project mounts fail open without contract evidence; album and ban
     currentPath: () => albumView.file.path, active: () => true, parseYaml: album.parse,
   }), "function", "album keeps working on props_v1 alone");
   const bankWorld = coordinatorWorld({ type: "bank" });
+  bankWorld.contract = "absent";
+  bankWorld.plugin.propertyCapabilityContractConfirmed = () => bankWorld.contract === "confirmed";
   const bankFx = readingFixture();
   const bankMount = el(bankFx.doc, "section", "bob-bank-setup bob-property-card");
-  bankMount.setAttribute("data-bank-setup-source", "note.md");
+  bankMount.setAttribute("data-bank-setup-source", "bank.md");
   bankMount.appendChild(el(bankFx.doc, "footer", "bob-property-card-foot"));
   bankFx.scope.appendChild(bankMount);
-  const bankView = { file: { path: "note.md" }, getMode: () => "preview" };
-  assert.equal(typeof H.propertyCardFrontmatterOwnMounted(bankWorld.plugin, {
-    scope: bankFx.scope, view: bankView, path: "note.md", kind: "bank", mount: bankMount,
+  const bankView = { file: { path: "bank.md" }, getMode: () => "preview" };
+  const bankArgs = {
+    scope: bankFx.scope, view: bankView, path: "bank.md", kind: "bank", mount: bankMount,
     sourceText: "---\ntype: bank\n---\n# Bank\n",
     currentPath: () => bankView.file.path, active: () => true, parseYaml: bankWorld.parse,
-  }), "function", "bank keeps its pre-takeover gate until the bank-arbitration phase");
+  };
+  assert.equal(H.propertyCardFrontmatterOwnMounted(bankWorld.plugin, bankArgs), null,
+    "bank.md stays native without props_contract_v1");
+  assert.ok(native(bankFx.container));
+  bankWorld.contract = "confirmed";
+  assert.equal(typeof H.propertyCardFrontmatterOwnMounted(bankWorld.plugin, bankArgs), "function",
+    "bank.md may own only after the typed settings contract is confirmed");
 });
 
 test("area mounts need the home source path and a connected foot", () => {

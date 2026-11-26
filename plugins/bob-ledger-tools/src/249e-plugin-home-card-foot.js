@@ -140,7 +140,16 @@ class BobLedgerToolsHomeCardFootMixin {
   homeCardFootSpec(path, model) {
     const filePath = homeCardPath(path);
     const frontmatter = this.homeCardFrontmatter(filePath);
-    const where = model && model.where && typeof model.where === "object" ? model.where : {};
+    const where = model && model.where && typeof model.where === "object" ? { ...model.where } : {};
+    const nested = {};
+    if (filePath === "bank.md") {
+      let bankModel = null;
+      try { bankModel = this.bankSetupModelFor?.(filePath) || null; } catch (_) {}
+      if (bankModel?.expanded === true) where.bank = "setup";
+      try {
+        if (this.bankSetupDesktop?.() !== false) nested.bank = "setup";
+      } catch (_) { nested.bank = "setup"; }
+    }
     let managed = null;
     try {
       managed = model && model.managed && typeof model.managed === "object" ? model.managed : homeCardManagedMap();
@@ -158,7 +167,7 @@ class BobLedgerToolsHomeCardFootMixin {
       sourceText: this.homeCardSourceCache?.get?.(filePath),
       frontmatter,
       where,
-      nested: {},
+      nested,
       legacy: {},
       managed,
       contractIssues: contract ? contract.issues : [],
@@ -180,14 +189,18 @@ class BobLedgerToolsHomeCardFootMixin {
   }
 
   homeCardFootHandlers(path) {
-    return propertyCardFootAdapterHandlers(this, path, {
+    const filePath = homeCardPath(path);
+    return propertyCardFootAdapterHandlers(this, filePath, {
       pendingScroll: this.homeCardFootPendingScroll,
       refresh: () => this.scheduleHomeCardRefresh(),
       hoverSource: "bob-home-card",
-      jumpYaml: (key, line) => { void this.homeCardJumpYaml(path, key, line); },
-      jumpRecovery: () => { void this.homeCardJumpYaml(path, "", 1); },
-      openPath: (target, event) => { void this.homeCardOpenPath(target, path, event); },
-      openSetting: (setting) => { void this.homeCardOpenSetting(path, setting || undefined); },
+      jumpYaml: (key, line) => { void this.homeCardJumpYaml(filePath, key, line); },
+      jumpRecovery: () => { void this.homeCardJumpYaml(filePath, "", 1); },
+      openPath: (target, event) => { void this.homeCardOpenPath(target, filePath, event); },
+      openSetting: (setting) => { void this.homeCardOpenSetting(filePath, setting || undefined); },
+      openNested: filePath === "bank.md" && this.bankSetupDesktop?.() !== false
+        ? (key) => { if (key === "bank") void this.openBankSetupCard?.({ sourcePath: filePath }); }
+        : null,
     });
   }
 

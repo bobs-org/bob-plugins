@@ -29,6 +29,33 @@ function notebookCardHumanizeStem(stem) {
   return String(stem == null ? "" : stem).replace(/[^A-Za-z0-9]+/g, " ").trim();
 }
 
+function notebookCardOpeningHeadingTextRange(sourceText, headingRange) {
+  if (typeof sourceText !== "string" || !headingRange || !Number.isInteger(headingRange.headingLine)) return null;
+  const lines = [];
+  const separator = /\r\n|\r|\n/g;
+  let cursor = 0;
+  let match;
+  while ((match = separator.exec(sourceText))) {
+    lines.push({ text: sourceText.slice(cursor, match.index), from: cursor });
+    cursor = match.index + match[0].length;
+  }
+  lines.push({ text: sourceText.slice(cursor), from: cursor });
+  const line = lines[headingRange.headingLine];
+  if (!line) return null;
+  const bomLength = line.text.charCodeAt(0) === 0xfeff ? 1 : 0;
+  const content = line.text.slice(bomLength);
+  const prefix = /^ {0,3}#{1,6}[ \t]+/.exec(content);
+  if (!prefix) return null;
+  const rawTitle = content.slice(prefix[0].length);
+  const closing = /[ \t]+#+[ \t]*$/.exec(rawTitle);
+  let titleLength = closing ? closing.index : rawTitle.length;
+  while (titleLength > 0 && /[ \t]/.test(rawTitle[titleLength - 1])) titleLength -= 1;
+  return {
+    from: line.from + bomLength + prefix[0].length,
+    to: line.from + bomLength + prefix[0].length + titleLength,
+  };
+}
+
 function notebookCardOpeningHeading(sourceText) {
   if (typeof sourceText !== "string" || typeof propertyCardTitleSourceRange !== "function") return null;
   try {
@@ -38,7 +65,9 @@ function notebookCardOpeningHeading(sourceText) {
       heading: (cleaned) => Boolean(String(cleaned || "").trim()),
       follower: () => false,
     });
-    return range && range.title ? { text: range.title, range } : null;
+    return range && range.title
+      ? { text: range.title, range: notebookCardOpeningHeadingTextRange(sourceText, range) || range }
+      : null;
   } catch (_) {
     return null;
   }

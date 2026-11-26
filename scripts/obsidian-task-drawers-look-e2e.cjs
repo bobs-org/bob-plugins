@@ -54,6 +54,75 @@ function pageRows() {
     const cs = getComputedStyle(el);
     return { fontWeight: cs.fontWeight, color: cs.color };
   };
+  const parseMaskGeometry = (maskImage, boxW, boxH, emBase) => {
+    if (!maskImage || maskImage === "none" || !boxW || !boxH || !emBase) return null;
+    const urlMatch = String(maskImage).match(/url\(["']?(.*?)["']?\)/);
+    if (!urlMatch) return null;
+    let svgText = urlMatch[1].trim();
+    if ((svgText.startsWith('"') && svgText.endsWith('"')) || (svgText.startsWith("'") && svgText.endsWith("'"))) {
+      svgText = svgText.slice(1, -1);
+    }
+    try {
+      if (svgText.includes("%3C")) svgText = decodeURIComponent(svgText);
+    } catch (_) {
+      return null;
+    }
+    const svgStart = svgText.indexOf("<svg");
+    if (svgStart < 0) return null;
+    svgText = svgText.slice(svgStart);
+    let doc = null;
+    try {
+      doc = new DOMParser().parseFromString(svgText, "image/svg+xml");
+    } catch (_) {
+      return null;
+    }
+    if (doc && doc.querySelector("parsererror")) return null;
+    const svg = doc && doc.querySelector("svg");
+    if (!svg) return null;
+    const vb = (svg.getAttribute("viewBox") || "").trim().split(/[\s,]+/).map(Number);
+    if (vb.length !== 4 || vb.slice(2).some((n) => !(n > 0))) return null;
+    const vbW = vb[2];
+    const vbH = vb[3];
+    const strokeWidth = parseFloat(svg.getAttribute("stroke-width"));
+    if (!(strokeWidth > 0)) return null;
+    const scale = Math.min(boxW / vbW, boxH / vbH);
+    const renderedStrokeEm = (strokeWidth * scale) / emBase;
+    let drawnSpanEm = null;
+    const pathEl = doc.querySelector("path");
+    if (pathEl) {
+      const pathD = pathEl.getAttribute("d");
+      if (pathD) {
+        try {
+          const NS = "http://www.w3.org/2000/svg";
+          const holder = document.createElementNS(NS, "svg");
+          holder.setAttribute("viewBox", `0 0 ${vbW} ${vbH}`);
+          holder.setAttribute("width", String(vbW));
+          holder.setAttribute("height", String(vbH));
+          holder.style.cssText = "position:absolute;left:-9999px;top:0;visibility:hidden;";
+          const holderPath = document.createElementNS(NS, "path");
+          holderPath.setAttribute("d", pathD);
+          holder.appendChild(holderPath);
+          document.body.appendChild(holder);
+          const bbox = holderPath.getBBox();
+          document.body.removeChild(holder);
+          if (bbox && isFinite(bbox.width)) {
+            drawnSpanEm = ((bbox.width + strokeWidth) * scale) / emBase;
+          }
+        } catch (_) {
+          drawnSpanEm = null;
+        }
+      }
+    }
+    return {
+      viewBox: `${vb[0]} ${vb[1]} ${vbW} ${vbH}`,
+      vbW,
+      vbH,
+      strokeWidth,
+      scale,
+      renderedStrokeEm,
+      drawnSpanEm,
+    };
+  };
   const rows = (isLive ? live : reading).map((row) => {
     const marker = row.querySelector(".cm-formatting-list");
     const glyph = marker
@@ -82,6 +151,10 @@ function pageRows() {
       : findTextElement(row, "*", "Review the endpoint");
     const childVisible = child ? child.getBoundingClientRect().height > 0 : false;
     const fontSize = parseFloat(getComputedStyle(row).fontSize) || 16;
+    const boxW = parseFloat(glyph.width);
+    const boxH = parseFloat(glyph.height);
+    const maskImage = glyph.webkitMaskImage || glyph.maskImage || glyph.mask;
+    const trayGeometry = parseMaskGeometry(maskImage, boxW, boxH, fontSize);
     return {
       key: row.dataset.bobDrawerKey,
       count: row.dataset.bobDrawerCount,
@@ -91,10 +164,15 @@ function pageRows() {
       title,
       label: row.getAttribute("aria-label"),
       live: Boolean(marker),
-      width: parseFloat(glyph.width),
-      height: parseFloat(glyph.height),
+      width: boxW,
+      height: boxH,
+      fontSize,
       expectedSlot: fontSize * 0.95,
-      mask: glyph.webkitMaskImage || glyph.maskImage || glyph.mask,
+      mask: maskImage,
+      trayViewBox: trayGeometry ? trayGeometry.viewBox : null,
+      trayStrokeWidth: trayGeometry ? trayGeometry.strokeWidth : null,
+      trayRenderedStrokeEm: trayGeometry ? trayGeometry.renderedStrokeEm : null,
+      trayDrawnSpanEm: trayGeometry ? trayGeometry.drawnSpanEm : null,
       ink: glyph.backgroundColor,
       display: glyph.display,
       markerColor: marker ? getComputedStyle(marker).color : "",
@@ -166,11 +244,50 @@ function pageRows() {
       after: getComputedStyle(row, "::after").content,
     };
   });
-  const reqs = [...root.querySelectorAll('[data-bob-req="true"]')]
-    .filter((el) => el.getBoundingClientRect().height).length;
+  const reqEls = [...root.querySelectorAll('[data-bob-req="true"]')]
+    .filter((el) => el.getBoundingClientRect().height);
+  const reqEl = reqEls[0] || null;
+  let diamond = null;
+  if (reqEl) {
+    const diamondTarget = reqEl.querySelector("input.task-list-item-checkbox")
+      || reqEl.querySelector(".bob-req-mark")
+      || (reqEl.matches && reqEl.matches("input.task-list-item-checkbox, .bob-req-mark") ? reqEl : reqEl);
+    const diamondStyle = getComputedStyle(diamondTarget, "::before");
+    const diamondBoxW = parseFloat(diamondStyle.width);
+    const diamondBoxH = parseFloat(diamondStyle.height);
+    const diamondFontSize = parseFloat(getComputedStyle(diamondTarget).fontSize)
+      || parseFloat(diamondStyle.fontSize)
+      || parseFloat(getComputedStyle(reqEl).fontSize)
+      || 16;
+    const diamondMask = diamondStyle.webkitMaskImage || diamondStyle.maskImage || diamondStyle.mask;
+    const diamondGeometry = parseMaskGeometry(diamondMask, diamondBoxW, diamondBoxH, diamondFontSize);
+    if (diamondGeometry) {
+      diamond = {
+        boxW: diamondBoxW,
+        boxH: diamondBoxH,
+        fontSize: diamondFontSize,
+        mask: diamondMask,
+        viewBox: diamondGeometry.viewBox,
+        strokeWidth: diamondGeometry.strokeWidth,
+        renderedStrokeEm: diamondGeometry.renderedStrokeEm,
+      };
+    } else {
+      diamond = {
+        boxW: diamondBoxW,
+        boxH: diamondBoxH,
+        fontSize: diamondFontSize,
+        mask: diamondMask,
+        viewBox: null,
+        strokeWidth: null,
+        renderedStrokeEm: null,
+      };
+    }
+  }
+  const reqs = reqEls.length;
   return {
     rows,
     reqs,
+    diamond,
     live: isLive,
     activeMode,
     nestedNote: textStyle("Review the endpoint"),
@@ -274,6 +391,7 @@ async function run(client, entry, { setDoc, setMode, waitFor, args }) {
     activeMode: state.activeMode,
     live: state.live,
     reqs: state.reqs,
+    diamond: state.diamond,
     rows: state.rows.map((row) => ({
       key: row.key,
       count: row.count,
@@ -282,8 +400,13 @@ async function run(client, entry, { setDoc, setMode, waitFor, args }) {
       title: row.title,
       width: row.width,
       height: row.height,
+      fontSize: row.fontSize,
       expectedSlot: row.expectedSlot,
       mask: row.mask,
+      trayViewBox: row.trayViewBox,
+      trayStrokeWidth: row.trayStrokeWidth,
+      trayRenderedStrokeEm: row.trayRenderedStrokeEm,
+      trayDrawnSpanEm: row.trayDrawnSpanEm,
       markerText: row.markerText,
       markerHtml: row.markerHtml,
       markerColor: row.markerColor,
@@ -344,6 +467,21 @@ async function run(client, entry, { setDoc, setMode, waitFor, args }) {
     assert.ok(row.height >= row.expectedSlot * 0.68 && row.height <= row.expectedSlot * 0.95, row.key + " tray height " + row.height);
   }
   assert.notEqual(open.mask, "none");
+  assert.ok(state.diamond, "requirement diamond style is present for stroke parity");
+  assert.ok(state.diamond.renderedStrokeEm > 0, "diamond rendered stroke parses: " + JSON.stringify(state.diamond));
+  for (const row of state.rows) {
+    assert.ok(row.trayViewBox, row.key + " tray viewBox parses from mask image");
+    assert.ok(row.trayRenderedStrokeEm > 0, row.key + " tray rendered stroke parses");
+    const strokeDelta = Math.abs(row.trayRenderedStrokeEm - state.diamond.renderedStrokeEm)
+      / state.diamond.renderedStrokeEm;
+    assert.ok(strokeDelta <= 0.05, row.key + " tray stroke " + row.trayRenderedStrokeEm
+      + "em is within 5% of diamond " + state.diamond.renderedStrokeEm + "em");
+    assert.ok(row.trayDrawnSpanEm !== null && row.trayDrawnSpanEm !== undefined, row.key + " drawn span parses");
+    const slotEm = row.expectedSlot / row.fontSize;
+    assert.ok(row.trayDrawnSpanEm >= 0.85, row.key + " drawn span " + row.trayDrawnSpanEm + "em reaches 0.85em");
+    assert.ok(row.trayDrawnSpanEm <= slotEm + 1e-9, row.key + " drawn span " + row.trayDrawnSpanEm
+      + "em fits the 0.95em slot (" + slotEm + "em)");
+  }
   assert.ok(
     state.nestedNote && state.ordinaryNote,
     "nested and ordinary notes are present: " + JSON.stringify({

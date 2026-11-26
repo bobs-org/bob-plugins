@@ -83,6 +83,10 @@ test("toggle, conversion, and look cover wrap, refusal, titles, and themes", () 
     "settings off removes every owned drawer attribute",
     "settings off does not change Markdown",
     "tray width",
+    "within 5% of diamond",
+    "drawn span",
+    "trayRenderedStrokeEm",
+    "trayDrawnSpanEm",
   ]) {
     assert.ok(lookSource.includes(assertion), assertion);
   }

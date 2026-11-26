@@ -785,7 +785,7 @@ test("a later foreign wrapper survives our teardown", () => {
 
 // --- Focus-helper routing ---
 
-test("owned views route summary focus to the editor with setting summary", async () => {
+test("owned views route summary focus to the editor with a loose summary key", async () => {
   const app = makeApp({ files: ["note.md"], activePath: "note.md" });
   const plugin = makePlugin(app);
   try {
@@ -795,7 +795,7 @@ test("owned views route summary focus to the editor with setting summary", async
     const result = plugin.notebookFocusSummaryProperty(app.__activeView);
     assert.equal(result, true);
     await flushMicrotasks();
-    assert.deepEqual(openerCalls, [{ filePath: "note.md", setting: "summary" }]);
+    assert.deepEqual(openerCalls, [{ filePath: "note.md", key: "summary" }]);
   } finally {
     plugin.teardownPropertyCapabilityRouting();
     plugin.teardownPropertyUpdate();

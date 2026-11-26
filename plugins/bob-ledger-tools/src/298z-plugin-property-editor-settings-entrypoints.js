@@ -118,6 +118,27 @@ function propertyEditorSettingsConsumeFocus(modal) {
         return true;
       }
     }
+    // Focus-or-add for notes without a settings contract (bob-cli-qm kit
+    // T2): on a writable report a missing loose key opens Add with the key
+    // prefilled and the value focused, instead of stranding focus on the
+    // safe first row. Area/project notes keep the safe row until their
+    // typed contract arrives.
+    const contractKind = typeof modal.noteKind === "string" ? modal.noteKind : "";
+    if (contractKind !== "area" && contractKind !== "project") {
+      const first = keys[0] || "";
+      if (first && typeof modal.propertyEditorCanAdd === "function"
+        && modal.propertyEditorCanAdd() === true
+        && typeof modal.propertyEditorStartAdd === "function"
+        && modal.propertyEditorStartAdd("end") === true) {
+        try {
+          if (typeof modal.propertyEditorSetAddName === "function") modal.propertyEditorSetAddName(first);
+        } catch (_) {}
+        try {
+          if (typeof modal.propertyEditorCommitAddName === "function") modal.propertyEditorCommitAddName();
+        } catch (_) {}
+        return true;
+      }
+    }
   } catch (_) {}
   return false;
 }

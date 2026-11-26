@@ -74,7 +74,10 @@ function propertyCardKitLink(doc, className, target, unresolved) {
 
 // span.bob-property-card-tile[data-tile-form][aria-hidden]. Stack, sheet, and
 // plain tiles show the emoji, else the species (or given) icon. A leaf tile
-// shows a band (weekday or WEEK/QTR/YEAR) over a large value.
+// shows a band (weekday or WEEK/QTR/YEAR) over a large value. A folio tile
+// (prose) shows a value — the title initial — else the species icon, so the
+// prose initial reads as a species in grayscale. A spine tile (notebook)
+// needs no extra node: CSS paints its bound edge.
 function propertyCardBuildGlyphTile(doc, spec = {}) {
   try {
     if (!propertyCardKitDocOk(doc)) return null;
@@ -92,6 +95,16 @@ function propertyCardBuildGlyphTile(doc, spec = {}) {
       value.setAttribute("data-value-length", String(Array.from(valueText).length));
       tile.appendChild(value);
       return tile;
+    }
+    if (species.tile === "folio") {
+      const valueText = propertyCardKitText(spec.value).trim();
+      if (valueText) {
+        const value = propertyCardKitSpan(doc, "bob-property-card-tile-value", valueText);
+        value.setAttribute("data-value-length", String(Array.from(valueText).length));
+        value.setAttribute("data-glyph", "initial");
+        tile.appendChild(value);
+        return tile;
+      }
     }
     const glyph = propertyCardKitEl(doc, "span", "bob-property-card-tile-glyph");
     const emoji = propertyCardKitText(spec.emoji).trim();

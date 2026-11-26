@@ -1,0 +1,64 @@
+{
+  "ok": true,
+  "schema_version": 1,
+  "notebooks": [
+    {
+      "stem": "dev_tools",
+      "path": "dev_tools.md",
+      "title": "Developer tools",
+      "summary": "Imported reference notes for developer tooling.",
+      "parent": null,
+      "parent_kind": null,
+      "owner": "dev",
+      "root": "dev",
+      "breadcrumb": ["dev", "Developer tools"],
+      "children": ["git"],
+      "notes": 6,
+      "sections": [
+        { "title": "Shell", "notes": 1 },
+        { "title": "Git", "notes": 2 }
+      ],
+      "last_note": null,
+      "issues": []
+    },
+    {
+      "stem": "git",
+      "path": "git.md",
+      "title": "Git",
+      "summary": "Git commands, configuration, and workflow tips.",
+      "parent": "dev_tools",
+      "parent_kind": "notebook",
+      "owner": "dev",
+      "root": "dev",
+      "breadcrumb": ["dev", "Developer tools", "Git"],
+      "children": [],
+      "notes": 6,
+      "sections": [
+        { "title": "Config", "notes": 2 },
+        { "title": "Workflow", "notes": 1 }
+      ],
+      "last_note": "2026-11-09",
+      "issues": []
+    },
+    {
+      "stem": "household",
+      "path": "household.md",
+      "title": "Household",
+      "summary": "Household routines and shopping notes.",
+      "parent": "personal",
+      "parent_kind": null,
+      "owner": "personal",
+      "root": "personal",
+      "breadcrumb": ["personal", "Household"],
+      "children": [],
+      "notes": 2,
+      "sections": [{ "title": "Shopping", "notes": 1 }],
+      "last_note": null,
+      "issues": [
+        { "severity": "error", "code": "notebook_shape", "message": "notebooks hold no tasks", "line": 9 }
+      ]
+    }
+  ],
+  "catalogs": [],
+  "counts": { "notebooks": 3, "roots": 2, "errors": 1, "warnings": 0 }
+}

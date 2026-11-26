@@ -1,6 +1,59 @@
 // Property editor add-flow modal: o/O/Mod+; name completion, then a typed
 // value stage. Cancellation writes nothing; insertion anchors stay on the
 // source key the add started with.
+
+// Focus-or-add (bob-cli-qm kit): a loose-key request — openPropertyEditor({
+// filePath, key }) in browse mode — selects the key's row when present,
+// else opens Add mode with the key prefilled and the value focused. The
+// setting path is unchanged: setting requests return before touching Add.
+// Consumed once per modal on a usable report; a degraded (unwritable) report
+// keeps the safe first row. Never throws.
+function propertyEditorFocusOrAddConsume(modal) {
+  try {
+    if (!modal || modal.closed === true || modal.propertyEditorFocusOrAddDone === true) return false;
+    if (modal.mode !== "browse") return false;
+    const key = typeof modal.requestedKey === "string" ? modal.requestedKey.trim() : "";
+    if (!key) return false;
+    if (modal.requestedSetting || modal.focusSettings === true) return false;
+    if (!modal.report || typeof modal.report !== "object") return false;
+    if (modal.stage || modal.addName) return false;
+    // A resolved selection for the key (including a stored duplicate
+    // ordinal the base reconcile just honored) satisfies the request: never
+    // yank it back to the first row.
+    try {
+      const selected = typeof modal.editorSelected === "function" ? modal.editorSelected() : null;
+      if (selected && selected.row && selected.row.key === key) {
+        modal.propertyEditorFocusOrAddDone = true;
+        return true;
+      }
+    } catch (_) {}
+    const rows = typeof modal.editorOrderedRows === "function" ? modal.editorOrderedRows() : [];
+    const match = rows.find((entry) => entry && entry.row && entry.row.key === key);
+    modal.propertyEditorFocusOrAddDone = true;
+    if (match) {
+      modal.selectedId = match.id;
+      try { modal.paintPropertyEditor(); } catch (_) {}
+      return true;
+    }
+    // No row: Add, prefilled, straight to the value stage. When the note is
+    // unwritable or the name is rejected, the prefilled Add row stays open.
+    try {
+      if (typeof modal.propertyEditorCanAdd !== "function" || modal.propertyEditorCanAdd() !== true) return false;
+    } catch (_) {
+      return false;
+    }
+    if (typeof modal.propertyEditorStartAdd !== "function" || modal.propertyEditorStartAdd("end") !== true) return false;
+    try {
+      if (typeof modal.propertyEditorSetAddName === "function") modal.propertyEditorSetAddName(key);
+    } catch (_) {}
+    try {
+      if (typeof modal.propertyEditorCommitAddName === "function") modal.propertyEditorCommitAddName();
+    } catch (_) {}
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
 function propertyEditorPaintNameStage(doc, host, options, modal) {
   if (!doc || !host || !options) return null;
   const panel = propertyEditorCreateEl(doc, "section", "bob-property-editor-stage is-name");
@@ -288,6 +341,13 @@ Object.assign(PropertyEditorModal.prototype, {
     if (!this.report) return;
     this.addModeStarted = true;
     this.propertyEditorStartAdd("end");
+    // An explicitly requested key prefills the Add name so == on a missing
+    // key lands with the name typed. Browse mode commits further to the
+    // value stage through propertyEditorFocusOrAddConsume instead.
+    try {
+      const requested = typeof this.requestedKey === "string" ? this.requestedKey.trim() : "";
+      if (requested && this.addName && !this.addName.name) this.propertyEditorSetAddName(requested);
+    } catch (_) {}
   }
 ,
   propertyEditorMaybeStartModeEdit() {
@@ -494,6 +554,9 @@ Object.assign(PropertyEditorModal.prototype, {
     }
     this.propertyEditorMaybeStartModeAdd();
     this.propertyEditorMaybeStartModeEdit();
+    try {
+      if (typeof propertyEditorFocusOrAddConsume === "function") propertyEditorFocusOrAddConsume(this);
+    } catch (_) {}
   }
 ,
   onOpen() {

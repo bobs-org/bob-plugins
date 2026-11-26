@@ -87267,6 +87267,7 @@ function propertyCardTitleSlotStats(scope) {
 const PROPERTY_CARD_KIND_ATTR = "data-card-kind";
 const PROPERTY_CARD_KINDS = Object.freeze([
   "album", "record", "day", "week", "quarter", "year", "bank", "area", "project",
+  "notebook", "prose",
 ]);
 
 const PROPERTY_CARD_SPECIES = Object.freeze({
@@ -87279,6 +87280,8 @@ const PROPERTY_CARD_SPECIES = Object.freeze({
   bank: Object.freeze({ kind: "bank", word: "Bank", tile: "plain", icon: "landmark", band: "", temporal: false, foldDefault: false }),
   area: Object.freeze({ kind: "area", word: "Area", tile: "field", icon: "layers", band: "", temporal: false, foldDefault: true }),
   project: Object.freeze({ kind: "project", word: "Project", tile: "pennant", icon: "target", band: "", temporal: false, foldDefault: true }),
+  notebook: Object.freeze({ kind: "notebook", word: "Notebook", tile: "spine", icon: "notebook-tabs", band: "", temporal: false, foldDefault: true }),
+  prose: Object.freeze({ kind: "prose", word: "Prose", tile: "folio", icon: "pilcrow", band: "", temporal: false, foldDefault: false }),
 });
 
 // Frozen descriptor { kind, word, tile, icon, band, temporal, foldDefault? }
@@ -87398,7 +87401,10 @@ function propertyCardKitLink(doc, className, target, unresolved) {
 
 // span.bob-property-card-tile[data-tile-form][aria-hidden]. Stack, sheet, and
 // plain tiles show the emoji, else the species (or given) icon. A leaf tile
-// shows a band (weekday or WEEK/QTR/YEAR) over a large value.
+// shows a band (weekday or WEEK/QTR/YEAR) over a large value. A folio tile
+// (prose) shows a value — the title initial — else the species icon, so the
+// prose initial reads as a species in grayscale. A spine tile (notebook)
+// needs no extra node: CSS paints its bound edge.
 function propertyCardBuildGlyphTile(doc, spec = {}) {
   try {
     if (!propertyCardKitDocOk(doc)) return null;
@@ -87416,6 +87422,16 @@ function propertyCardBuildGlyphTile(doc, spec = {}) {
       value.setAttribute("data-value-length", String(Array.from(valueText).length));
       tile.appendChild(value);
       return tile;
+    }
+    if (species.tile === "folio") {
+      const valueText = propertyCardKitText(spec.value).trim();
+      if (valueText) {
+        const value = propertyCardKitSpan(doc, "bob-property-card-tile-value", valueText);
+        value.setAttribute("data-value-length", String(Array.from(valueText).length));
+        value.setAttribute("data-glyph", "initial");
+        tile.appendChild(value);
+        return tile;
+      }
     }
     const glyph = propertyCardKitEl(doc, "span", "bob-property-card-tile-glyph");
     const emoji = propertyCardKitText(spec.emoji).trim();
@@ -89396,9 +89412,10 @@ function propertyCardFormatCreatedStamp(input = {}) {
     ? Object.prototype.hasOwnProperty.call(options, "value") && options.value !== undefined
     : options.present === true;
   if (!present) {
-    // Areas omit the missing stamp; temporal cards already do. Projects and
-    // other non-temporal cards keep "no created date".
-    const silent = temporal || kind === "area";
+    // Areas omit the missing stamp; temporal cards already do. Notebook and
+    // prose cards do too (most notebooks carry no created stamp). Projects
+    // and other non-temporal cards keep "no created date".
+    const silent = temporal || kind === "area" || kind === "notebook" || kind === "prose";
     return { text: silent ? "" : "no created date", tooltip: "", state: "missing", dateOnly: false };
   }
 
@@ -91224,8 +91241,8 @@ function propertyCardFrontmatterCapabilityReady(plugin) {
 
 // Species-specific contract requirement (bob-cli-pl.9.1.1 / .9.1.2):
 // area/project cards and the bank hub need confirmed `props_contract_v1`
-// evidence for the current bob path. Bank, album, record, and temporal cards
-// use the generic `props_v1` capability alone.
+// evidence for the current bob path. Bank, album, record, temporal,
+// notebook, and prose cards use the generic `props_v1` capability alone.
 function propertyCardFrontmatterContractReady(plugin, kind, path) {
   try {
     if (kind !== "area" && kind !== "project") return true;
@@ -91240,7 +91257,9 @@ function propertyCardFrontmatterMountPath(mount, kind) {
   const attr = kind === "album" ? "data-album-source"
     : kind === "record" ? "data-record-source"
       : kind === "bank" ? "data-bank-setup-source"
-        : kind === "area" || kind === "project" ? "data-home-source" : "data-intention-source";
+        : kind === "area" || kind === "project" ? "data-home-source"
+          : kind === "notebook" ? "data-notebook-source"
+            : kind === "prose" ? "data-prose-source" : "data-intention-source";
   try { return String(mount?.getAttribute?.(attr) || "").replace(/\\/g, "/"); } catch (_) { return ""; }
 }
 
@@ -91251,7 +91270,7 @@ function propertyCardFrontmatterRecordEligible(plugin, options = {}) {
     const path = String(options.path || "").replace(/\\/g, "/");
     const kind = options.kind;
     const mount = options.mount;
-    if (!scope || !path || !["album", "record", "day", "week", "quarter", "year", "bank", "area", "project"].includes(kind)) return false;
+    if (!scope || !path || !["album", "record", "day", "week", "quarter", "year", "bank", "area", "project", "notebook", "prose"].includes(kind)) return false;
     if (options.active && options.active() !== true) return false;
     if (typeof propertyCardDesktop === "function" && propertyCardDesktop() !== true) return false;
     if (propertyCardFrontmatterScopeDenied(scope)) return false;
@@ -92395,6 +92414,230 @@ function propertyCardBuildFoldRow(doc, spec = {}) {
     spec.onToggle?.(!open);
   });
   return { element: button, bodyId };
+}
+// ---- src/240t-plugin-property-card-note-species.js ----
+// Property-card kit (bob-cli-qm kit): notebook and prose species predicates,
+// the precedence function, and the preview gate. Pure: no DOM, no spawns,
+// never throws. Later fragments reuse the normalizer instead of retyping
+// wikilink forms, and the two species phases reuse the precedence function
+// and the gate for their hosts.
+
+// Type-name normalization. Mirrors albumTypeNames (241l): a scalar, list,
+// quoted scalar, [[wikilink]] (alias and anchor stripped), comma flow list,
+// or "- " item all reduce to lowercase bare names.
+function noteCardTypeNames(value) {
+  try {
+    if (Array.isArray(value)) return value.flatMap((part) => noteCardTypeNames(part));
+    if (typeof value !== "string") return [];
+    let text = value.trim();
+    if (!text) return [];
+    if ((text.startsWith("\"") && text.endsWith("\"")) || (text.startsWith("'") && text.endsWith("'"))) {
+      text = text.slice(1, -1).trim();
+    }
+    if (text.startsWith("[[") && text.endsWith("]]") && /^\[\[[^\[\]]+\]\]$/.test(text)) {
+      text = text.slice(2, -2).split("|")[0].split("#")[0].trim();
+    } else if (text.startsWith("[") && text.endsWith("]")) {
+      return text.slice(1, -1).split(",").flatMap((part) => noteCardTypeNames(part));
+    }
+    if (text.startsWith("- ")) return noteCardTypeNames(text.slice(2));
+    if (text.startsWith("[[") && text.endsWith("]]")) {
+      text = text.slice(2, -2).split("|")[0].split("#")[0].trim();
+    }
+    text = text.replace(/\.md$/i, "").trim().toLowerCase();
+    return text ? [text] : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function noteCardFrontmatterType(frontmatter) {
+  try {
+    if (!frontmatter || typeof frontmatter !== "object" || Array.isArray(frontmatter)) return undefined;
+    return frontmatter.type;
+  } catch (_) {
+    return undefined;
+  }
+}
+
+// The new notebook species claims a note only when its type is exactly
+// [[notebook]]. Any mixed type mounts neither new card.
+function noteCardIsNotebookKind(frontmatter) {
+  try {
+    const names = noteCardTypeNames(noteCardFrontmatterType(frontmatter));
+    return names.length === 1 && names[0] === "notebook";
+  } catch (_) {
+    return false;
+  }
+}
+
+// One shared dual-spelling prose predicate (mirrors qj's rule): scalar or
+// list holding only [[prose]] / [[article]]. Writers never retype a note,
+// and the kicker word is always PROSE, including the legacy spelling.
+function noteCardIsProseKind(frontmatter) {
+  try {
+    const names = noteCardTypeNames(noteCardFrontmatterType(frontmatter));
+    if (!names.length) return false;
+    return names.every((name) => name === "prose" || name === "article");
+  } catch (_) {
+    return false;
+  }
+}
+
+function noteCardPathText(path) {
+  try {
+    if (path && typeof path === "object" && typeof path.path === "string") return path.path;
+    return typeof path === "string" ? path : "";
+  } catch (_) {
+    return "";
+  }
+}
+
+// Exclusions match the home card (_templates/, done/, _conflicts/, the
+// untyped type notes). Embeds are a mount-context concern the hosts keep,
+// not a frontmatter one this pure function can see.
+function noteCardPathExcluded(path) {
+  try {
+    if (typeof homeCardPathExcluded === "function") return homeCardPathExcluded(noteCardPathText(path));
+  } catch (_) {}
+  try {
+    const text = String(noteCardPathText(path) || "").replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/$/, "");
+    if (!text || text === "area.md" || text === "project.md" || text === "bank.md") return true;
+    const segments = text.split("/");
+    if (segments[0] === "done") return true;
+    for (let index = 0; index < segments.length - 1; index += 1) {
+      if (segments[index] === "_templates" || segments[index] === "_conflicts") return true;
+    }
+  } catch (_) {
+    return true;
+  }
+  return false;
+}
+
+function noteCardBankKind(path) {
+  try {
+    if (typeof bankSetupIsHubPath === "function") return bankSetupIsHubPath(path) === true;
+  } catch (_) {}
+  return false;
+}
+
+function noteCardAlbumKind(frontmatter) {
+  try {
+    if (typeof albumSchemaEntryKindOf === "function") return albumSchemaEntryKindOf(frontmatter) === "album";
+  } catch (_) {}
+  return false;
+}
+
+function noteCardRecordKind(frontmatter) {
+  try {
+    // Canonical records only, like the == registry: the loose album helper
+    // classifies other single types as "record", which must not claim here.
+    if (typeof recordSheetIsCanonicalRecordType === "function") {
+      return recordSheetIsCanonicalRecordType(frontmatter) === true;
+    }
+  } catch (_) {}
+  return false;
+}
+
+function noteCardHomeKind(path, frontmatter) {
+  try {
+    if (typeof homeCardEligible === "function") {
+      const eligible = homeCardEligible(path, frontmatter);
+      if (eligible && (eligible.kind === "area" || eligible.kind === "project")) return eligible.kind;
+    }
+  } catch (_) {}
+  return null;
+}
+
+function noteCardTemporalKind(path, today) {
+  try {
+    if (typeof intentionCardSubjectForPath === "function") {
+      const subject = intentionCardSubjectForPath(path, today);
+      if (subject && ["day", "week", "quarter", "year"].includes(subject.kind)) return subject.kind;
+    }
+  } catch (_) {}
+  return null;
+}
+
+// One kit function resolves a note's top species in bob's props order:
+// bank path; album; record; area/project; temporal; notebook; prose; none.
+// The bank hub path wins before exclusions (it is itself a type note); every
+// other claim needs a non-excluded path. Existing species keep their own
+// predicates — this function only composes them, and never throws.
+function propertyCardNoteSpecies(input = {}) {
+  try {
+    const path = noteCardPathText(input && input.path);
+    const frontmatter = input && typeof input.frontmatter === "object" && input.frontmatter !== null
+      ? input.frontmatter
+      : {};
+    const today = input && input.today !== undefined ? input.today : undefined;
+    if (!path) return null;
+    if (noteCardBankKind(path)) return "bank";
+    if (noteCardPathExcluded(path)) return null;
+    if (noteCardAlbumKind(frontmatter)) return "album";
+    if (noteCardRecordKind(frontmatter)) return "record";
+    const home = noteCardHomeKind(path, frontmatter);
+    if (home) return home;
+    const temporal = noteCardTemporalKind(path, today);
+    if (temporal) return temporal;
+    if (noteCardIsNotebookKind(frontmatter)) return "notebook";
+    if (noteCardIsProseKind(frontmatter)) return "prose";
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
+
+// Preview gate (bob-cli-qm). Both new species stay off in the live vault
+// until ledger-tools plugin data lists them in `cardPreviewKinds`:
+// ["notebook", "prose"]. Existing species are always live; unknown kinds
+// never are. The acceptance harness writes the key into its disposable
+// vault; go-live deletes the gate, the key, and their tests.
+const PROPERTY_CARD_PREVIEW_KINDS = Object.freeze(["notebook", "prose"]);
+
+function propertyCardPreviewKindsFromData(data) {
+  try {
+    const raw = data && typeof data === "object" && !Array.isArray(data) ? data.cardPreviewKinds : null;
+    if (!Array.isArray(raw)) return [];
+    return raw.filter((kind) => kind === "notebook" || kind === "prose");
+  } catch (_) {
+    return [];
+  }
+}
+
+function propertyCardPreviewRemember(plugin, data) {
+  const kinds = propertyCardPreviewKindsFromData(data);
+  try {
+    if (plugin && typeof plugin === "object") plugin.propertyCardPreviewKinds = kinds;
+  } catch (_) {}
+  return kinds;
+}
+
+async function propertyCardPreviewLoad(plugin) {
+  try {
+    const stored = typeof plugin?.loadLedgerToolsPluginData === "function"
+      ? await plugin.loadLedgerToolsPluginData()
+      : typeof plugin?.loadData === "function"
+        ? await plugin.loadData()
+        : null;
+    return propertyCardPreviewRemember(plugin, stored);
+  } catch (_) {
+    return propertyCardPreviewRemember(plugin, null);
+  }
+}
+
+function propertyCardKindLive(plugin, kind) {
+  try {
+    if (kind !== "notebook" && kind !== "prose") {
+      return typeof kind === "string" && PROPERTY_CARD_KINDS.includes(kind);
+    }
+    const kinds = plugin && Array.isArray(plugin.propertyCardPreviewKinds)
+      ? plugin.propertyCardPreviewKinds
+      : null;
+    if (!kinds) return false;
+    return kinds.includes(kind);
+  } catch (_) {
+    return false;
+  }
 }
 // ---- src/245-plugin-bank-category-card-model.js ----
 // Pure Category card view model, key table, session, and end-of-run summary
@@ -108790,6 +109033,100 @@ class BobLedgerToolsHomeCardLiveMixin {
     this.homeCardLiveAreasOff = null;
   }
 }
+// ---- src/249g-plugin-notebook-card-model.js ----
+// Notebook Card model (bob-cli-qm notebook-card): REGION.
+// The species phase derives the view model here from local frontmatter, the
+// metadata cache, and the header's ancestry model: crumbs and hue, the title
+// and its H1 adoption range, the summary or ghost, created, the @stem route,
+// and the managed key set. Kit seeds: the species kind and the stem helper.
+const NOTEBOOK_CARD_KIND = "notebook";
+
+function notebookCardStem(path) {
+  try {
+    const text = String(path === null || path === undefined ? "" : path).replace(/\\/g, "/");
+    const base = text.split("/").pop() || "";
+    return base.replace(/\.md$/i, "");
+  } catch (_) {
+    return "";
+  }
+}
+// ---- src/249h-plugin-notebook-card-dom.js ----
+// Notebook Card DOM (bob-cli-qm notebook-card): REGION.
+// The species phase builds the kit title block here: the spine tile, kicker,
+// title, summary or ghost, a reserved readout slot, chip rows, and children
+// rows for notebook-readouts. Kit seeds: the surface class.
+const NOTEBOOK_CARD_SURFACE_CLASS = "bob-notebook-card";
+// ---- src/249i-plugin-notebook-card-host.js ----
+// Notebook Card host (bob-cli-qm notebook-card): REGION.
+// The species phase mounts here on createPropertyCardHost for Reading and
+// Live Preview, behind the preview gate and the precedence function, with
+// coordinator kind "notebook" and the mount-source attribute below. It owns
+// the title with matching-H1 adoption, wires the foot adapter, registers
+// the _ fold (default expanded) and == (focus-or-add on summary). Kit seeds:
+// the coordinator kind and mount attribute, mirroring 240q.
+const NOTEBOOK_CARD_HOST_KIND = "notebook";
+const NOTEBOOK_CARD_MOUNT_ATTR = "data-notebook-source";
+// ---- src/249j-plugin-notebook-card-foot.js ----
+// Notebook Card foot (bob-cli-qm notebook-card): REGION.
+// The species phase wires the kit foot here: created (silent when missing),
+// the quiet @stem route token, the lint slot, and the drawer with the
+// managed group. Kit seeds: the species kind for foot routing.
+const NOTEBOOK_CARD_FOOT_KIND = "notebook";
+// ---- src/249k-plugin-notebook-card-readouts.js ----
+// Notebook Card readouts (bob-cli-qm notebook-readouts): REGION.
+// The readouts phase subscribes here to the shared apiNotebookSubscribe
+// report (zero new spawns) and patches the reserved readout slot, section
+// chips, children, and findings in place. Kit seeds: the readout row marker.
+const NOTEBOOK_CARD_READOUT_SLOT = "notebook-readouts";
+// ---- src/249l-plugin-prose-note-card-model.js ----
+// Prose Card model (bob-cli-qm prose-card): REGION.
+// The species phase derives the view model here from local data: the
+// dual-spelling detection (from kit), the title precedence and stem-fallback
+// flag, the tile initial or pilcrow, the dek, the numbering state, created,
+// and the crumbs and hue from the home-card resolver. Kit seeds: the
+// species kind and the verbatim stem fallback helper.
+const PROSE_NOTE_CARD_KIND = "prose";
+
+function proseNoteCardStem(path) {
+  try {
+    const text = String(path === null || path === undefined ? "" : path).replace(/\\/g, "/");
+    const base = text.split("/").pop() || "";
+    // Verbatim: no humanizing, no case folding. The tooltip invites ==.
+    return base.replace(/\.md$/i, "");
+  } catch (_) {
+    return "";
+  }
+}
+// ---- src/249m-plugin-prose-note-card-dom.js ----
+// Prose Card DOM (bob-cli-qm prose-card): REGION.
+// The species phase builds the quiet title page here: the folio tile with
+// the initial, the kicker, numbering chip, title, dek, a reserved measure
+// row, and an empty outline region for prose-seam. Kit seeds: the surface
+// class.
+const PROSE_NOTE_CARD_SURFACE_CLASS = "bob-prose-note-card";
+// ---- src/249n-plugin-prose-note-card-host.js ----
+// Prose Card host (bob-cli-qm prose-card): REGION.
+// The species phase mounts here on createPropertyCardHost behind the gate
+// and precedence, with coordinator kind "prose" and the mount-source
+// attribute below. It owns the inline title only through
+// propertyCardNeverTitleRecognizer, wires the foot, the _ fold (default
+// folded), and == (focus-or-add on title). Kit seeds: the coordinator kind
+// and mount attribute, mirroring 240q.
+const PROSE_NOTE_CARD_HOST_KIND = "prose";
+const PROSE_NOTE_CARD_MOUNT_ATTR = "data-prose-source";
+// ---- src/249o-plugin-prose-note-card-foot.js ----
+// Prose Card foot (bob-cli-qm prose-card): REGION.
+// The species phase wires the kit foot here: created (silent when missing),
+// the lint chip with the findings count, and the Properties drawer. Kit
+// seeds: the species kind for foot routing.
+const PROSE_NOTE_CARD_FOOT_KIND = "prose";
+// ---- src/249p-plugin-prose-note-card-outline.js ----
+// Prose Card outline (bob-cli-qm prose-seam): REGION.
+// After bob-cli-qj.3, the seam phase paints here from Bob Prose's read-only
+// api.prose snapshot: the measure row, the unwritten count, the refusal
+// line, and the expanded outline and findings list with safe jumps. Kit
+// seeds: the outline region marker.
+const PROSE_NOTE_CARD_OUTLINE_SLOT = "prose-outline";
 // ---- src/241b-plugin-notebook-catalog-model.js ----
 // Pure notebook catalog presentation: chips, source regions, hue, and
 // link matching. Bob remains the authority for rows and their order;
@@ -110695,8 +111032,9 @@ class BobLedgerToolsNotebookCatalogMixin {
     return this.apiNotebookSync({ automatic: false });
   }
 
-  // Owned scopes route to the shared property editor (setting "summary",
-  // including its ghost row when the area has none yet); ordinary notebook
+  // Owned scopes route to the shared property editor through focus-or-add
+  // on the loose "summary" key (selects the row when present, Add with the
+  // key prefilled and the value focused when missing); ordinary notebook
   // views and the File Properties sidebar keep native behavior. A failed
   // opener releases the scope before the native fallback so the focused
   // input is visible again. Never awaits: the opener is asynchronous and
@@ -110723,7 +111061,7 @@ class BobLedgerToolsNotebookCatalogMixin {
           } catch (_) {}
         };
         void Promise.resolve()
-          .then(() => plugin.openPropertyEditor({ filePath: owned.path, setting: "summary" }))
+          .then(() => plugin.openPropertyEditor({ filePath: owned.path, key: "summary" }))
           .then((outcome) => {
             if (outcome && outcome.ok === true) return;
             onOpenerFailed();
@@ -182444,6 +182782,59 @@ function propertyEditorAddStageBuild(stage, draft, options = {}) {
 // Property editor add-flow modal: o/O/Mod+; name completion, then a typed
 // value stage. Cancellation writes nothing; insertion anchors stay on the
 // source key the add started with.
+
+// Focus-or-add (bob-cli-qm kit): a loose-key request — openPropertyEditor({
+// filePath, key }) in browse mode — selects the key's row when present,
+// else opens Add mode with the key prefilled and the value focused. The
+// setting path is unchanged: setting requests return before touching Add.
+// Consumed once per modal on a usable report; a degraded (unwritable) report
+// keeps the safe first row. Never throws.
+function propertyEditorFocusOrAddConsume(modal) {
+  try {
+    if (!modal || modal.closed === true || modal.propertyEditorFocusOrAddDone === true) return false;
+    if (modal.mode !== "browse") return false;
+    const key = typeof modal.requestedKey === "string" ? modal.requestedKey.trim() : "";
+    if (!key) return false;
+    if (modal.requestedSetting || modal.focusSettings === true) return false;
+    if (!modal.report || typeof modal.report !== "object") return false;
+    if (modal.stage || modal.addName) return false;
+    // A resolved selection for the key (including a stored duplicate
+    // ordinal the base reconcile just honored) satisfies the request: never
+    // yank it back to the first row.
+    try {
+      const selected = typeof modal.editorSelected === "function" ? modal.editorSelected() : null;
+      if (selected && selected.row && selected.row.key === key) {
+        modal.propertyEditorFocusOrAddDone = true;
+        return true;
+      }
+    } catch (_) {}
+    const rows = typeof modal.editorOrderedRows === "function" ? modal.editorOrderedRows() : [];
+    const match = rows.find((entry) => entry && entry.row && entry.row.key === key);
+    modal.propertyEditorFocusOrAddDone = true;
+    if (match) {
+      modal.selectedId = match.id;
+      try { modal.paintPropertyEditor(); } catch (_) {}
+      return true;
+    }
+    // No row: Add, prefilled, straight to the value stage. When the note is
+    // unwritable or the name is rejected, the prefilled Add row stays open.
+    try {
+      if (typeof modal.propertyEditorCanAdd !== "function" || modal.propertyEditorCanAdd() !== true) return false;
+    } catch (_) {
+      return false;
+    }
+    if (typeof modal.propertyEditorStartAdd !== "function" || modal.propertyEditorStartAdd("end") !== true) return false;
+    try {
+      if (typeof modal.propertyEditorSetAddName === "function") modal.propertyEditorSetAddName(key);
+    } catch (_) {}
+    try {
+      if (typeof modal.propertyEditorCommitAddName === "function") modal.propertyEditorCommitAddName();
+    } catch (_) {}
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
 function propertyEditorPaintNameStage(doc, host, options, modal) {
   if (!doc || !host || !options) return null;
   const panel = propertyEditorCreateEl(doc, "section", "bob-property-editor-stage is-name");
@@ -182731,6 +183122,13 @@ Object.assign(PropertyEditorModal.prototype, {
     if (!this.report) return;
     this.addModeStarted = true;
     this.propertyEditorStartAdd("end");
+    // An explicitly requested key prefills the Add name so == on a missing
+    // key lands with the name typed. Browse mode commits further to the
+    // value stage through propertyEditorFocusOrAddConsume instead.
+    try {
+      const requested = typeof this.requestedKey === "string" ? this.requestedKey.trim() : "";
+      if (requested && this.addName && !this.addName.name) this.propertyEditorSetAddName(requested);
+    } catch (_) {}
   }
 ,
   propertyEditorMaybeStartModeEdit() {
@@ -182937,6 +183335,9 @@ Object.assign(PropertyEditorModal.prototype, {
     }
     this.propertyEditorMaybeStartModeAdd();
     this.propertyEditorMaybeStartModeEdit();
+    try {
+      if (typeof propertyEditorFocusOrAddConsume === "function") propertyEditorFocusOrAddConsume(this);
+    } catch (_) {}
   }
 ,
   onOpen() {
@@ -191401,6 +191802,27 @@ function propertyEditorSettingsConsumeFocus(modal) {
         return true;
       }
     }
+    // Focus-or-add for notes without a settings contract (bob-cli-qm kit
+    // T2): on a writable report a missing loose key opens Add with the key
+    // prefilled and the value focused, instead of stranding focus on the
+    // safe first row. Area/project notes keep the safe row until their
+    // typed contract arrives.
+    const contractKind = typeof modal.noteKind === "string" ? modal.noteKind : "";
+    if (contractKind !== "area" && contractKind !== "project") {
+      const first = keys[0] || "";
+      if (first && typeof modal.propertyEditorCanAdd === "function"
+        && modal.propertyEditorCanAdd() === true
+        && typeof modal.propertyEditorStartAdd === "function"
+        && modal.propertyEditorStartAdd("end") === true) {
+        try {
+          if (typeof modal.propertyEditorSetAddName === "function") modal.propertyEditorSetAddName(first);
+        } catch (_) {}
+        try {
+          if (typeof modal.propertyEditorCommitAddName === "function") modal.propertyEditorCommitAddName();
+        } catch (_) {}
+        return true;
+      }
+    }
   } catch (_) {}
   return false;
 }
@@ -198004,6 +198426,7 @@ try {
     module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
       bankDecodeConfig,
       bankConfigUnsupported,
+      bankSetupIsHubPath,
       bankSetupStateKind,
       bankSetupStatusTone,
       bankSetupCollapsedLine,
@@ -198605,6 +199028,19 @@ try {
       propertyCardFrontmatterReleaseScope,
       propertyCardFrontmatterReleaseAll,
       propertyCardHostRegisterFrontmatterOwnership,
+      // Note species (bob-cli-qm kit): predicates, precedence, preview gate.
+      noteCardTypeNames,
+      noteCardIsNotebookKind,
+      noteCardIsProseKind,
+      noteCardPathExcluded,
+      propertyCardNoteSpecies,
+      PROPERTY_CARD_PREVIEW_KINDS,
+      propertyCardPreviewKindsFromData,
+      propertyCardPreviewRemember,
+      propertyCardPreviewLoad,
+      propertyCardKindLive,
+      // Focus-or-add (bob-cli-qm kit T2).
+      propertyEditorFocusOrAddConsume,
     });
   }
 } catch (_) {}
@@ -198800,6 +199236,28 @@ try {
       BobLedgerToolsHomeCardMixin,
       BobLedgerToolsHomeCardOwnershipMixin,
       BobLedgerToolsHomeCardFootMixin,
+    });
+  }
+} catch (_) {}
+// ---- src/374h-exports-note-cards.js ----
+// Test-facing exports for the Notebook and Prose Card kit scaffolding.
+try {
+  if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
+    module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
+      NOTEBOOK_CARD_KIND,
+      notebookCardStem,
+      NOTEBOOK_CARD_SURFACE_CLASS,
+      NOTEBOOK_CARD_HOST_KIND,
+      NOTEBOOK_CARD_MOUNT_ATTR,
+      NOTEBOOK_CARD_FOOT_KIND,
+      NOTEBOOK_CARD_READOUT_SLOT,
+      PROSE_NOTE_CARD_KIND,
+      proseNoteCardStem,
+      PROSE_NOTE_CARD_SURFACE_CLASS,
+      PROSE_NOTE_CARD_HOST_KIND,
+      PROSE_NOTE_CARD_MOUNT_ATTR,
+      PROSE_NOTE_CARD_FOOT_KIND,
+      PROSE_NOTE_CARD_OUTLINE_SLOT,
     });
   }
 } catch (_) {}

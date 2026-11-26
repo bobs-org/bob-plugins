@@ -12941,6 +12941,51 @@ button.bob-property-card-foot-lint-chip {
 .bob-property-card[data-card-kind="project"].is-terminal .bob-property-card-tile[data-tile-form="pennant"] {
   background: transparent;
 }
+
+/* Note cards (bob-cli-qm kit): spine and folio tile forms. The spine reads
+   as a bound edge in grayscale; the folio reads as a page whose initial —
+   not an icon — names the prose note. Both hold in light, dark,
+   forced-colors, and grayscale against the existing tiles. */
+.bob-property-card-tile[data-tile-form="spine"] { overflow: hidden; }
+.bob-property-card-tile[data-tile-form="spine"]::before {
+  content: "";
+  position: absolute;
+  inset-block: 3px;
+  inset-inline-start: 3px;
+  inline-size: 0.34em;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--bob-property-card-accent) 70%, var(--background-primary));
+  pointer-events: none;
+}
+.bob-property-card-tile[data-tile-form="folio"] {
+  clip-path: polygon(0 0, calc(100% - var(--bob-property-card-tile-fold)) 0, 100% var(--bob-property-card-tile-fold), 100% 100%, 0 100%);
+}
+.bob-property-card-tile[data-tile-form="folio"]::after {
+  content: "";
+  position: absolute;
+  inset-block-start: -1px;
+  inset-inline-end: -1px;
+  box-sizing: border-box;
+  inline-size: calc(var(--bob-property-card-tile-fold) + 1px);
+  block-size: calc(var(--bob-property-card-tile-fold) + 1px);
+  border-inline-start: 1px solid var(--bob-property-card-tile-edge);
+  border-block-end: 1px solid var(--bob-property-card-tile-edge);
+  border-end-start-radius: 2px;
+  background: transparent;
+  pointer-events: none;
+}
+.bob-property-card-tile[data-tile-form="folio"] .bob-property-card-tile-value {
+  font-variant-numeric: normal;
+  font-weight: 750;
+}
+
+/* Notebook Card (bob-cli-qm notebook-card): start.
+   The species phase fills this region. */
+/* Notebook Card (bob-cli-qm notebook-card): end. */
+
+/* Prose Card (bob-cli-qm prose-card): start.
+   The species phase fills this region. */
+/* Prose Card (bob-cli-qm prose-card): end. */
 .bob-property-card-kicker-pip {
   display: inline-block;
   width: 6px;
@@ -13075,6 +13120,15 @@ button.bob-property-card-foot-lint-chip {
   .bob-property-card-tile[data-tile-form="sheet"]::after {
     border-color: transparent;
     border-inline-end-color: CanvasText;
+    border-block-end-color: CanvasText;
+  }
+  .bob-property-card-tile[data-tile-form="spine"]::before {
+    forced-color-adjust: none;
+    background: CanvasText;
+  }
+  .bob-property-card-tile[data-tile-form="folio"]::after {
+    border-color: transparent;
+    border-inline-start-color: CanvasText;
     border-block-end-color: CanvasText;
   }
   .bob-property-card-tile[data-tile-form="sheet"]::after {

@@ -11,6 +11,7 @@ try {
     module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
       bankDecodeConfig,
       bankConfigUnsupported,
+      bankSetupIsHubPath,
       bankSetupStateKind,
       bankSetupStatusTone,
       bankSetupCollapsedLine,

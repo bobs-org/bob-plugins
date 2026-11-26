@@ -114,9 +114,9 @@ function makeDoc() {
 
 const classes = (node) => node.className.split(/\s+/).filter(Boolean);
 
-test("registry covers nine frozen species with presentation and fold defaults", () => {
+test("registry covers eleven frozen species with presentation and fold defaults", () => {
   assert.equal(H.PROPERTY_CARD_KIND_ATTR, "data-card-kind");
-  assert.deepEqual([...H.PROPERTY_CARD_KINDS], ["album", "record", "day", "week", "quarter", "year", "bank", "area", "project"]);
+  assert.deepEqual([...H.PROPERTY_CARD_KINDS], ["album", "record", "day", "week", "quarter", "year", "bank", "area", "project", "notebook", "prose"]);
   const expected = {
     album: { kind: "album", word: "Album", tile: "stack", icon: "library", band: "", temporal: false, foldDefault: true },
     record: { kind: "record", word: "Record", tile: "sheet", icon: "file-text", band: "", temporal: false, foldDefault: true },
@@ -127,6 +127,8 @@ test("registry covers nine frozen species with presentation and fold defaults", 
     bank: { kind: "bank", word: "Bank", tile: "plain", icon: "landmark", band: "", temporal: false, foldDefault: false },
     area: { kind: "area", word: "Area", tile: "field", icon: "layers", band: "", temporal: false, foldDefault: true },
     project: { kind: "project", word: "Project", tile: "pennant", icon: "target", band: "", temporal: false, foldDefault: true },
+    notebook: { kind: "notebook", word: "Notebook", tile: "spine", icon: "notebook-tabs", band: "", temporal: false, foldDefault: true },
+    prose: { kind: "prose", word: "Prose", tile: "folio", icon: "pilcrow", band: "", temporal: false, foldDefault: false },
   };
   for (const kind of H.PROPERTY_CARD_KINDS) {
     const species = H.propertyCardSpecies(kind);
@@ -134,7 +136,7 @@ test("registry covers nine frozen species with presentation and fold defaults", 
     assert.deepEqual({ ...species }, expected[kind]);
     assert.throws(() => { "use strict"; species.word = "x"; });
   }
-  for (const value of ["notebook", "", "ALBUM", "toString", null, undefined, 3]) {
+  for (const value of ["", "ALBUM", "toString", null, undefined, 3]) {
     assert.equal(H.propertyCardSpecies(value), null, String(value));
   }
 });
@@ -147,7 +149,9 @@ test("accessible names lead with the species word", () => {
   assert.equal(H.propertyCardAccessibleName("record", null), "Record");
   assert.equal(H.propertyCardAccessibleName("area", "love"), "Area: love");
   assert.equal(H.propertyCardAccessibleName("project", "sase_blog"), "Project: sase_blog");
-  assert.equal(H.propertyCardAccessibleName("notebook", "Ideas"), "Ideas");
+  assert.equal(H.propertyCardAccessibleName("notebook", "Ideas"), "Notebook: Ideas");
+  assert.equal(H.propertyCardAccessibleName("prose", "Why I built SASE"), "Prose: Why I built SASE");
+  assert.equal(H.propertyCardAccessibleName("prose", ""), "Prose");
 });
 
 test("applyIdentity stamps kind, label, and a group role without replacing one", () => {
@@ -164,15 +168,19 @@ test("applyIdentity stamps kind, label, and a group role without replacing one",
   assert.equal(region.getAttribute("role"), "region");
   assert.equal(region.getAttribute("aria-label"), "Day: Fri, Nov 20, 2026");
 
+  const noteCard = doc.createElement("div");
+  assert.equal(H.propertyCardApplyIdentity(noteCard, { kind: "notebook", title: "Ideas" }), true);
+  assert.equal(noteCard.getAttribute("aria-label"), "Notebook: Ideas");
+
   const untouched = doc.createElement("div");
-  assert.equal(H.propertyCardApplyIdentity(untouched, { kind: "notebook", title: "x" }), false);
+  assert.equal(H.propertyCardApplyIdentity(untouched, { kind: "mystery", title: "x" }), false);
   assert.equal(untouched.attrs.size, 0);
   assert.equal(H.propertyCardApplyIdentity(null, { kind: "album" }), false);
 });
 
 test("glyph tiles: every form, emoji versus icon fallback, and leaf band/value", () => {
   const doc = makeDoc();
-  const forms = { album: "stack", record: "sheet", bank: "plain", day: "leaf", week: "leaf", quarter: "leaf", year: "leaf", area: "field", project: "pennant" };
+  const forms = { album: "stack", record: "sheet", bank: "plain", day: "leaf", week: "leaf", quarter: "leaf", year: "leaf", area: "field", project: "pennant", notebook: "spine", prose: "folio" };
   for (const [kind, form] of Object.entries(forms)) {
     const tile = H.propertyCardBuildGlyphTile(doc, { kind });
     assert.equal(tile.tagName, "SPAN");
@@ -204,7 +212,17 @@ test("glyph tiles: every form, emoji versus icon fallback, and leaf band/value",
   assert.equal(year.querySelector(".bob-property-card-tile-band").textContent, "YEAR");
   assert.equal(year.querySelector(".bob-property-card-tile-value").getAttribute("data-value-length"), "4");
 
-  assert.equal(H.propertyCardBuildGlyphTile(doc, { kind: "notebook" }), null);
+  // A folio tile shows the title initial, else the species icon.
+  const folio = H.propertyCardBuildGlyphTile(doc, { kind: "prose", value: "W" });
+  assert.equal(folio.getAttribute("data-tile-form"), "folio");
+  const initial = folio.querySelector(".bob-property-card-tile-value");
+  assert.equal(initial.textContent, "W");
+  assert.equal(initial.getAttribute("data-value-length"), "1");
+  assert.equal(initial.getAttribute("data-glyph"), "initial");
+  assert.equal(folio.querySelector(".bob-property-card-tile-glyph"), null);
+  const pilcrow = H.propertyCardBuildGlyphTile(doc, { kind: "prose" });
+  assert.equal(pilcrow.querySelector(".bob-property-card-tile-glyph").getAttribute("data-icon"), "pilcrow");
+  assert.equal(H.propertyCardBuildGlyphTile(doc, { kind: "mystery" }), null);
   assert.equal(H.propertyCardBuildGlyphTile(null, { kind: "album" }), null);
 });
 
@@ -312,7 +330,10 @@ test("title block keeps markup-looking text literal and fails closed", () => {
   assert.equal(block.heading.textContent, "<img src=x onerror=alert(1)> & [[link]]");
   assert.equal(block.kicker.querySelector(".bob-property-card-kicker-link").textContent, "<b>Album</b>");
   assert.equal(block.subtitle.children.length, 0);
-  assert.equal(H.propertyCardBuildTitleBlock(doc, { kind: "notebook", title: "x" }), null);
+  const noteBlock = H.propertyCardBuildTitleBlock(doc, { kind: "notebook", title: "Ideas", tile: {} });
+  assert.equal(noteBlock.element.getAttribute("data-card-kind"), "notebook");
+  assert.equal(noteBlock.tile.getAttribute("data-tile-form"), "spine");
+  assert.equal(H.propertyCardBuildTitleBlock(doc, { kind: "mystery", title: "x" }), null);
   assert.equal(H.propertyCardBuildTitleBlock(doc, { kind: "album", title: "   " }), null);
   assert.equal(H.propertyCardBuildTitleBlock(doc, { kind: "album" }), null);
   assert.equal(H.propertyCardBuildTitleBlock(null, { kind: "album", title: "x" }), null);
@@ -424,7 +445,7 @@ test("identity badge: tile plus species word, never a heading, fails closed", ()
   const doc = makeDoc();
   assert.equal(H.PROPERTY_CARD_IDENTITY_CLASS, "bob-property-card-identity");
   assert.equal(H.PROPERTY_CARD_IDENTITY_WORD_CLASS, "bob-property-card-identity-word");
-  const forms = { album: "stack", record: "sheet", day: "leaf", week: "leaf", quarter: "leaf", year: "leaf", bank: "plain", area: "field", project: "pennant" };
+  const forms = { album: "stack", record: "sheet", day: "leaf", week: "leaf", quarter: "leaf", year: "leaf", bank: "plain", area: "field", project: "pennant", notebook: "spine", prose: "folio" };
   for (const kind of H.PROPERTY_CARD_KINDS) {
     const badge = H.propertyCardBuildIdentityBadge(doc, { kind, emoji: "🍽️", band: "FRI", value: "20" });
     assert.ok(badge, kind);
@@ -460,7 +481,11 @@ test("identity badge: tile plus species word, never a heading, fails closed", ()
   // Emoji text stays literal.
   assert.equal(H.propertyCardBuildIdentityBadge(doc, { kind: "record", emoji: "<b>x</b>" }).children[0].textContent, "<b>x</b>");
   // Fails closed: unknown kinds, bad specs, and documents without text nodes.
-  for (const spec of [{ kind: "notebook" }, {}, null, "album", 3]) assert.equal(H.propertyCardBuildIdentityBadge(doc, spec), null, String(spec));
+  // A prose badge carries the folio initial.
+  const prose = H.propertyCardBuildIdentityBadge(doc, { kind: "prose", value: "W" });
+  assert.equal(prose.querySelector(".bob-property-card-tile").getAttribute("data-tile-form"), "folio");
+  assert.equal(prose.querySelector(".bob-property-card-tile-value").textContent, "W");
+  for (const spec of [{ kind: "mystery" }, {}, null, "album", 3]) assert.equal(H.propertyCardBuildIdentityBadge(doc, spec), null, String(spec));
   assert.equal(H.propertyCardBuildIdentityBadge(null, { kind: "bank" }), null);
   assert.equal(H.propertyCardBuildIdentityBadge({ createElement: () => { throw new Error("boom"); }, createTextNode: () => null }, { kind: "bank" }), null);
   assert.equal(H.propertyCardBuildIdentityBadge({ createElement: (tag) => new FakeNode(tag, null) }, { kind: "bank" }), null);

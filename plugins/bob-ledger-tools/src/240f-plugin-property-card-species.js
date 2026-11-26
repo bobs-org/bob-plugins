@@ -6,6 +6,7 @@
 const PROPERTY_CARD_KIND_ATTR = "data-card-kind";
 const PROPERTY_CARD_KINDS = Object.freeze([
   "album", "record", "day", "week", "quarter", "year", "bank", "area", "project",
+  "notebook", "prose",
 ]);
 
 const PROPERTY_CARD_SPECIES = Object.freeze({
@@ -18,6 +19,8 @@ const PROPERTY_CARD_SPECIES = Object.freeze({
   bank: Object.freeze({ kind: "bank", word: "Bank", tile: "plain", icon: "landmark", band: "", temporal: false, foldDefault: false }),
   area: Object.freeze({ kind: "area", word: "Area", tile: "field", icon: "layers", band: "", temporal: false, foldDefault: true }),
   project: Object.freeze({ kind: "project", word: "Project", tile: "pennant", icon: "target", band: "", temporal: false, foldDefault: true }),
+  notebook: Object.freeze({ kind: "notebook", word: "Notebook", tile: "spine", icon: "notebook-tabs", band: "", temporal: false, foldDefault: true }),
+  prose: Object.freeze({ kind: "prose", word: "Prose", tile: "folio", icon: "pilcrow", band: "", temporal: false, foldDefault: false }),
 });
 
 // Frozen descriptor { kind, word, tile, icon, band, temporal, foldDefault? }

@@ -513,8 +513,8 @@ function propertyCardFrontmatterCapabilityReady(plugin) {
 
 // Species-specific contract requirement (bob-cli-pl.9.1.1 / .9.1.2):
 // area/project cards and the bank hub need confirmed `props_contract_v1`
-// evidence for the current bob path. Bank, album, record, and temporal cards
-// use the generic `props_v1` capability alone.
+// evidence for the current bob path. Bank, album, record, temporal,
+// notebook, and prose cards use the generic `props_v1` capability alone.
 function propertyCardFrontmatterContractReady(plugin, kind, path) {
   try {
     if (kind !== "area" && kind !== "project") return true;
@@ -529,7 +529,9 @@ function propertyCardFrontmatterMountPath(mount, kind) {
   const attr = kind === "album" ? "data-album-source"
     : kind === "record" ? "data-record-source"
       : kind === "bank" ? "data-bank-setup-source"
-        : kind === "area" || kind === "project" ? "data-home-source" : "data-intention-source";
+        : kind === "area" || kind === "project" ? "data-home-source"
+          : kind === "notebook" ? "data-notebook-source"
+            : kind === "prose" ? "data-prose-source" : "data-intention-source";
   try { return String(mount?.getAttribute?.(attr) || "").replace(/\\/g, "/"); } catch (_) { return ""; }
 }
 
@@ -540,7 +542,7 @@ function propertyCardFrontmatterRecordEligible(plugin, options = {}) {
     const path = String(options.path || "").replace(/\\/g, "/");
     const kind = options.kind;
     const mount = options.mount;
-    if (!scope || !path || !["album", "record", "day", "week", "quarter", "year", "bank", "area", "project"].includes(kind)) return false;
+    if (!scope || !path || !["album", "record", "day", "week", "quarter", "year", "bank", "area", "project", "notebook", "prose"].includes(kind)) return false;
     if (options.active && options.active() !== true) return false;
     if (typeof propertyCardDesktop === "function" && propertyCardDesktop() !== true) return false;
     if (propertyCardFrontmatterScopeDenied(scope)) return false;

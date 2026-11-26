@@ -109,6 +109,19 @@ try {
       propertyCardFrontmatterReleaseScope,
       propertyCardFrontmatterReleaseAll,
       propertyCardHostRegisterFrontmatterOwnership,
+      // Note species (bob-cli-qm kit): predicates, precedence, preview gate.
+      noteCardTypeNames,
+      noteCardIsNotebookKind,
+      noteCardIsProseKind,
+      noteCardPathExcluded,
+      propertyCardNoteSpecies,
+      PROPERTY_CARD_PREVIEW_KINDS,
+      propertyCardPreviewKindsFromData,
+      propertyCardPreviewRemember,
+      propertyCardPreviewLoad,
+      propertyCardKindLive,
+      // Focus-or-add (bob-cli-qm kit T2).
+      propertyEditorFocusOrAddConsume,
     });
   }
 } catch (_) {}

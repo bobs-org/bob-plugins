@@ -149,7 +149,7 @@ test("settle keeps bold drawers and uppercase plain subtrees byte-for-byte", () 
     "  - **API Design**",
     "    - bold detail",
     "  - FUTURE WORK",
-    "    - legacy detail",
+    "    - uppercase plain detail",
   ].join("\n")), result.contents);
   assert.ok(result.contents.includes("- [ ] #task Stay ^stay"));
 });

@@ -797,7 +797,7 @@ module.exports.helpers = {
   planRelationStageView,
   planLinkedFromStageView,
   compareRelationStageCanonical,
-  planRelationStageItemsFromVault,
+  planRelationStageItemsFromVault, planTieVisibilityItems, buildTieVisibilityIndex, tieHandEditOverlapNotice, planDependencyStageItemsFromVault, dependencyStageConsequenceStrip,
   planRelationStageCommit,
   relationStageSubtitle,
   relationStageConsequenceStrip,

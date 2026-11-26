@@ -307,6 +307,21 @@ class BobNavigationHotkeysRelationHandEditMixin {
       const result = await this.applyRelationFollowUps(followUps);
       for (const failedPath of result.failed || []) failed.add(failedPath);
     }
+    const addedPlainTargets = changes
+      .filter((change) =>
+        (change.kind === "add" || change.kind === "relabel") &&
+        !String(change.label || "").trim(),
+      )
+      .map((change) => ({ path: change.path, blockId: change.blockId }));
+    const tieNotice = await tieHandEditOverlapNotice(
+      this,
+      path,
+      currentContent,
+      owner,
+      addedPlainTargets,
+      resolveLinkpath,
+    );
+    if (tieNotice) new Notice(tieNotice);
     showRelationCancelHandEditNotice(changes, currentLines[owner], failed);
     return Object.freeze({ mirrored: true, failed: Object.freeze([...failed]) });
   }

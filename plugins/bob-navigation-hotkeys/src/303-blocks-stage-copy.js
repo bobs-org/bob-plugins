@@ -25,6 +25,12 @@ function blocksStagePomodoroPhrase(todayLink) {
   return phrase;
 }
 
+function blocksStageTiePrefix(item, text) {
+  return item && item.tieConvert && tieVisibilityHasPlainLink(item.tieInfo)
+    ? `Replaces the 🪢 link · ${text}`
+    : text;
+}
+
 function blocksStageConsequenceStrip(item, context = {}) {
   const sources = Array.isArray(context.sources) ? context.sources : [];
   const marked = Array.isArray(context.marked) ? context.marked : [];
@@ -69,7 +75,7 @@ function blocksStageConsequenceStrip(item, context = {}) {
         `\u26a0 removes ${pomodoro} Pomodoro link${pomodoro === 1 ? "" : "s"}`,
       );
     }
-    return parts.join(" \u00b7 ");
+    return blocksStageTiePrefix(item, parts.join(" \u00b7 "));
   }
   if (!item || item.kind === "stage-more") {
     return "";
@@ -105,7 +111,7 @@ function blocksStageConsequenceStrip(item, context = {}) {
     if (links > 0) {
       parts.push(`\u26a0 removes ${links} Pomodoro link${links === 1 ? "" : "s"}`);
     }
-    return parts.join(" \u00b7 ");
+    return blocksStageTiePrefix(item, parts.join(" \u00b7 "));
   }
   if (item.stageSection === "blocked") {
     // Counted after the add, so this task is one of the open reasons.
@@ -114,7 +120,7 @@ function blocksStageConsequenceStrip(item, context = {}) {
         0,
         Math.floor(numericOrDefault(item.waitsOn, item.openCount || 0)),
       ) + 1;
-    return `Also waits on this (${open} open)`;
+    return blocksStageTiePrefix(item, `Also waits on this (${open} open)`);
   }
   const parts = ["Becomes Blocked until this is done"];
   const strongest = sources.some((source) => source.isProjectPrj)
@@ -127,7 +133,7 @@ function blocksStageConsequenceStrip(item, context = {}) {
   if (pomodoro) {
     parts.push(pomodoro);
   }
-  return parts.join(" \u00b7 ");
+  return blocksStageTiePrefix(item, parts.join(" \u00b7 "));
 }
 
 function blocksStageSubtitle(stage, markedDiff, options = {}) {
@@ -143,6 +149,7 @@ function blocksStageSubtitle(stage, markedDiff, options = {}) {
     Math.floor(numericOrDefault(stage && stage.poolSize, 0)),
   );
   const needsId = options.needsId === true;
+  const plainLinks = tieVisibilityCountPhrase(options.plainLinkCount, "plain-link");
   const marked = markedDiff && typeof markedDiff === "object" ? markedDiff : null;
   if (marked && (marked.add > 0 || marked.remove > 0 || marked.needId > 0)) {
     const parts = [];
@@ -158,10 +165,13 @@ function blocksStageSubtitle(stage, markedDiff, options = {}) {
     }
     return parts.join(" \u00b7 ");
   }
-  const head =
+  let head =
     currentCount === 0
       ? `Blocks nothing yet \u00b7 searching ${pool} open tasks`
       : `Blocks ${currentCount} \u00b7 frees ${frees} \u00b7 searching ${pool} open tasks`;
+  if (plainLinks) {
+    head = head.replace(`searching ${pool} open tasks`, `${plainLinks} \u00b7 searching ${pool} open tasks`);
+  }
   // \u21e5 marks are off in counted sessions, so the hint is dropped there.
   return options.counted === true ? head : `${head} \u00b7 \u21e5 to mark several`;
 }

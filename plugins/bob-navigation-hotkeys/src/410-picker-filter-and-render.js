@@ -206,6 +206,15 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
       this.renderFooter();
       this.refreshBlocksConsequenceStrip();
     }
+    if (
+      !this.blocksStage &&
+      !this.relationStage &&
+      this.isLocalTaskStage() &&
+      this.vaultStage &&
+      typeof this.refreshDependencyConsequenceStrip === "function"
+    ) {
+      this.refreshDependencyConsequenceStrip();
+    }
     if (this.relationStage && this.isLocalTaskStage()) {
       this.footerHints = this.getRelationStageFooterHints();
       this.renderFooter();
@@ -279,7 +288,14 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
     // `headerSection` names it, while `stageSection` stays the row's status
     // class for tints and badges.
     if (item && item.stageSection && item.firstInSection) {
-      const sectionNames = { current: "CURRENT", results: "RESULTS", blocked: "BLOCKED", closed: "CLOSED" };
+      const sectionNames = {
+        current: "CURRENT",
+        results: "RESULTS",
+        blocked: "BLOCKED",
+        closed: "CLOSED",
+        "tie-dependency": "TIED BY A DEPENDENCY",
+        "tie-plain-links": "PLAIN LINKS",
+      };
       const header = item.headerSection || item.stageSection;
       rowEl.createDiv({
         cls: "bob-cnp-section-header",
@@ -313,6 +329,7 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
       item.linkState === "mixed" ? "is-mixed" : "",
       item.needsBlockIdPrompt ? "is-create" : "is-existing",
       item.disabled ? "is-disabled" : "",
+      item.inTieBand ? "is-tie-band" : "",
       item.stageSection ? `is-stage-${item.stageSection}` : "",
       marked ? "is-marked" : "",
       markedRemove ? "is-marked-remove" : "",
@@ -398,6 +415,7 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
 
     const badgeClasses = [
       "bob-cnp-task-badge",
+      item.tieConvert ? "is-tie-convert" : "",
       markedRemove
         ? "is-marked-remove"
         : markedNeedsId
@@ -411,7 +429,25 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
                 : "is-existing",
     ];
     const badgeEl = rowEl.createDiv({ cls: `bob-cnp-dep-badge ${badgeClasses.join(" ")}` });
-    if (markedRemove) {
+    if (!marked && item.tieConvert) {
+      const verb = this.blocksStage
+        ? "block"
+        : this.relationStage
+          ? this.isLinkedFromStage()
+            ? "link here"
+            : "link"
+          : "add";
+      badgeEl.createSpan({
+        cls: "bob-cnp-task-badge-action bob-cnp-tie-convert-action",
+        text: `⇄ ${verb}`,
+      });
+      badgeEl.setAttribute(
+        "title",
+        this.relationStage
+          ? "Enter releases the dependency and makes this a plain link"
+          : "Enter adds the dependency and replaces the plain link",
+      );
+    } else if (markedRemove) {
       badgeEl.createSpan({
         cls: "bob-cnp-task-badge-action",
         text: "− remove",
@@ -463,14 +499,14 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
     } else {
       badgeEl.createSpan({ cls: "bob-cnp-task-badge-action", text: "＋" });
     }
-    // Links stage badges (`docs/task-relations.md` Rule 8): the label pill,
-    // `⛓ prerequisite` (information only), and 🍅 for rows linked under
-    // today's open Pomodoros (display only — relations never consume them).
+    // Relationship facts live in a trailing cluster, independent of the
+    // stage action badge so long tie labels no longer clip at 190px.
+    const tieCluster = rowEl.createDiv({ cls: "bob-cnp-row-ties" });
     if (item && item.relationKind === true) {
       if (item.mention === true) {
         // §19: the mention pill carries the row tooltip; the excerpt
         // subtitle below names the note's own words.
-        const pillEl = badgeEl.createSpan({
+        const pillEl = tieCluster.createSpan({
           cls: "bob-cnp-task-badge-extra bob-cnp-relation-label is-mention",
           text: String(item.mentionPill || "💬 mentioned in"),
         });
@@ -484,42 +520,36 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
           );
         }
       } else if (item.label) {
-        badgeEl.createSpan({
+        tieCluster.createSpan({
           cls: "bob-cnp-task-badge-extra bob-cnp-relation-label",
           text: String(item.label),
         });
       }
-      if (item.prerequisite) {
-        const prerequisiteEl = badgeEl.createSpan({
-          cls: "bob-cnp-task-badge-extra bob-cnp-relation-prerequisite",
-          text: "⛓ prerequisite",
-        });
-        prerequisiteEl.setAttribute(
-          "title",
-          "Also a prerequisite · linking stays inert",
-        );
-      }
-      if (item.todayLink) {
-        const link = item.todayLink;
-        const range = link.range ? ` ${link.range}` : "";
-        const tomato = badgeEl.createSpan({
-          cls: "bob-cnp-task-badge-extra bob-cnp-relation-today",
-          text: link.running ? "🍅 running" : "🍅",
-        });
-        tomato.setAttribute(
-          "title",
-          `Linked under ${link.label}${range} · linking stays inert`,
-        );
-      }
-      if (item.archived === true) {
-        badgeEl.createSpan({
-          cls: "bob-cnp-task-badge-extra bob-cnp-relation-archived",
-          text: "Archived",
-        });
-      }
+    }
+    for (const pill of item.tiePills || []) {
+      const pillEl = tieCluster.createSpan({
+        cls: `bob-cnp-task-badge-extra bob-cnp-tie-pill is-${pill.kind}`,
+        text: pill.text,
+      });
+      if (pill.title) pillEl.setAttribute("title", pill.title);
+    }
+    if (item && item.relationKind === true && item.todayLink) {
+      const link = item.todayLink;
+      const range = link.range ? ` ${link.range}` : "";
+      const tomato = tieCluster.createSpan({
+        cls: "bob-cnp-task-badge-extra bob-cnp-relation-today",
+        text: link.running ? "🍅 running" : "🍅",
+      });
+      tomato.setAttribute("title", `Linked under ${link.label}${range}`);
+    }
+    if (item && item.relationKind === true && item.archived === true) {
+      tieCluster.createSpan({
+        cls: "bob-cnp-task-badge-extra bob-cnp-relation-archived",
+        text: "Archived",
+      });
     }
     if (this.blocksStage && item.lastReason) {
-      const keyEl = badgeEl.createSpan({
+      const keyEl = tieCluster.createSpan({
         cls: "bob-cnp-task-badge-extra bob-cnp-blocks-last",
         text: "\ud83d\udd11",
       });
@@ -531,7 +561,7 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
     if (this.blocksStage && item.todayLink) {
       const link = item.todayLink;
       const range = link.range ? ` ${link.range}` : "";
-      const tomato = badgeEl.createSpan({
+      const tomato = tieCluster.createSpan({
         cls: "bob-cnp-task-badge-extra bob-cnp-blocks-today",
         text: link.running ? "\ud83c\udf45 running" : "\ud83c\udf45",
       });

@@ -870,7 +870,7 @@ function planRelationStageItemsFromVault(stage, query) {
     return Object.freeze([]);
   }
   if (stage.direction === "from") {
-    return planLinkedFromStageView({
+    const items = planLinkedFromStageView({
       sources: stage.sources,
       current: stage.current,
       candidates: stage.candidates,
@@ -878,8 +878,9 @@ function planRelationStageItemsFromVault(stage, query) {
       linkedKeys: stage.linkedKeys,
       previousDailyPath: stage.previousDailyPath,
     });
+    return planTieVisibilityItems(items, stage, "linked-from", query || "");
   }
-  return planRelationStageView({
+  const items = planRelationStageView({
     sources: stage.sources,
     current: stage.current,
     candidates: stage.candidates,
@@ -889,6 +890,7 @@ function planRelationStageItemsFromVault(stage, query) {
     todayMap: stage.todayMap,
     previousDailyPath: stage.previousDailyPath,
   });
+  return planTieVisibilityItems(items, stage, "links", query || "");
 }
 
 // Pure commit plan for one Links stage gesture (LG15): marked and chosen

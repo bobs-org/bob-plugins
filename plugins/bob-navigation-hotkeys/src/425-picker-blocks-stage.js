@@ -33,6 +33,7 @@ class BulletPropertyPickerBlocksStageMixin extends FilteredPickerModal {
     });
     if (decorated) {
       decorated.refreshOf = stage && stage.refreshOf ? stage.refreshOf : stage;
+      ensureTieVisibilityIndex(decorated, this.plugin);
     }
     return decorated;
   }
@@ -141,9 +142,14 @@ class BulletPropertyPickerBlocksStageMixin extends FilteredPickerModal {
       return blocksStageSubtitle(stage, this.getMarkedTaskDiff(), {
         needsId,
         counted,
+        plainLinkCount: stage && stage.plainLinkTieCount,
       });
     }
-    return blocksStageSubtitle(stage, null, { needsId, counted });
+    return blocksStageSubtitle(stage, null, {
+      needsId,
+      counted,
+      plainLinkCount: stage && stage.plainLinkTieCount,
+    });
   }
 
   ensureBlocksConsequenceStrip() {

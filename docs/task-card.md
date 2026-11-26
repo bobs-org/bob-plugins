@@ -33,6 +33,13 @@ first. `Ctrl+Shift+Alt+L` (command
 matching stage directly. On a Depends-On or BLOCKS line, the L chords open
 the owning task's Links or Linked-from stage.
 
+Each of the four stages shows the other relationship on eligible rows with
+trailing tie pills. On an empty filter, cross-tied rows move into a named band
+between CURRENT and RESULTS. A `⇄` row badge marks an Enter action that will
+convert the existing tie; Depends on also shows the selected row's status and
+Pomodoro consequences below the list. See [Task relations](task-relations.md)
+for the pill, band, subtitle, and consequence copy.
+
 ## Card gestures
 
 | Gesture | Outcome |

@@ -69,6 +69,7 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
     }
     this.relationStageSeed = stage;
     this.vaultStage = stage;
+    ensureTieVisibilityIndex(stage, this.plugin);
     const items = this.vaultStage
       ? planRelationStageItemsFromVault(this.vaultStage, initialQuery)
       : [];

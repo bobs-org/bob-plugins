@@ -893,7 +893,7 @@ function planBlocksStageItemsFromVault(stage, query) {
   if (!stage) {
     return Object.freeze([]);
   }
-  return planBlocksStageView({
+  const items = planBlocksStageView({
     sources: stage.sources,
     current: stage.current,
     candidates: stage.candidates,
@@ -902,4 +902,5 @@ function planBlocksStageItemsFromVault(stage, query) {
     files: stage.files,
     todayLinks: stage.todayLinks,
   });
+  return planTieVisibilityItems(items, stage, "blocks", query || "");
 }

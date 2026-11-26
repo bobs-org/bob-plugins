@@ -128,6 +128,7 @@
   "304-relation-stage-view.js",
   "304a-relation-event-targets.js",
   "305-relation-stage-copy.js",
+  "306-tie-stage-visibility.js",
   "310-task-card-previews.js",
   "311-task-card-blocks.js",
   "312-task-card-relations.js",

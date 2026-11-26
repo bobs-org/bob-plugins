@@ -28,7 +28,11 @@ function relationStageSubtitle(stage, markedDiff, options = {}) {
     : currentCount === 0
       ? `Links to nothing yet · searching ${pool} tasks`
       : `Links to ${currentCount} · searching ${pool} tasks`;
-  return `${head} · ⇥ to mark several · does not block`;
+  const tied = tieVisibilityCountPhrase(
+    stage && stage.tiedByDependencyCount,
+    "dependency",
+  );
+  return `${head}${tied ? ` · ${tied}` : ""} · ⇥ to mark several`;
 }
 
 function relationStageConsequenceStrip(item, context = {}) {
@@ -61,6 +65,9 @@ function relationStageConsequenceStrip(item, context = {}) {
   }
   if (item.disabled) {
     return item.disabledReason || "";
+  }
+  if (item.tieConvert && item.tieReleaseCopy) {
+    return item.tieReleaseCopy;
   }
   if (item.archived === true) {
     return "Archived · its LINKED FROM shows live only";

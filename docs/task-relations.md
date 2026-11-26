@@ -113,7 +113,8 @@ stage and reports that it opened the first of N linked tasks. The Task Card's
 Links to and Linked from rows on a Task Link use the same focus-and-open path.
 
 The Links stage title reads `🪢 Links · <task>` with the subtitle
-`Links to K · searching P tasks · ⇥ to mark several · does not block`.
+`Links to K · searching P tasks · ⇥ to mark several`; it no longer says
+`does not block`, because a Blocks-stage gesture can create that dependency.
 CURRENT holds the outgoing links with label pills in authored order. RESULTS
 ranks every match (open, Blocked `[?]`, closed, and `done/` archives) by match
 score, so a better match always ranks higher whatever its status; exact-score
@@ -136,6 +137,28 @@ the live index with a live `S — ‹label› → T` sentence; an empty field
 commits a plain link. Same-note writes share one undo entry; cross-note
 mirrors follow best-effort with a `· 🪢 LINKED FROM not updated` suffix when
 they cannot.
+
+All four Task Card stages show the other tie on each eligible row in a
+trailing pill cluster: `⛓ prerequisite` (this task waits on it), `🧱 dependent`
+(it waits on this task), `🪢 linked` (plain link out), and `🪢 links here`
+(plain link in). A stage hides its native tie; the dependency stages also show
+labelled relation pills. Incoming relation pills use `api.relationIndex` and
+are omitted when that index is unavailable. When Enter converts a tie, the
+row badge reads `⇄ add`, `⇄ block`, `⇄ link`, or `⇄ link here`.
+
+On an empty filter, Links and Linked from move dependency-tied rows into a
+`TIED BY A DEPENDENCY` band; Depends on and Blocks move plain-linked rows into
+`PLAIN LINKS`. The rows appear once, outside RESULTS, and remain actionable.
+The relation-stage subtitle counts unique tasks tied by a dependency. The
+Depends on and Blocks subtitles count plain links. Depends on shows a
+consequence strip for the selected row, including Ready/Blocked status,
+lane and Pomodoro effects, and `⌃L keeps a plain link` for CURRENT. A
+converted result adds `Replaces the 🪢 link`.
+
+When a hand-edited LINKS or Depends-On line creates an overlap, the existing
+mirror shows one notice after the cursor leaves the line:
+`"X" is already a dependency · reconcile will drop this plain link`. The
+hand edit is left for reconcile to fold.
 
 Linked from lists incoming sources in CURRENT from `api.relationIndex`, or
 from a generation-guarded vault scan while that index is unavailable.

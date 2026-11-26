@@ -527,6 +527,45 @@ class BobNavigationHotkeysDependencyMirrorMixin {
     if (!plan) {
       return Object.freeze({ mirrored: false });
     }
+    if (plan.kind === "touch") {
+      const path = normalizeVaultRelativePath(parentPath || "");
+      const oldLines = before.split(/\r?\n/);
+      const currentLines = content.split(/\r?\n/);
+      const baselineAt = Math.max(0, Math.min(
+        Math.floor(numericOrDefault(baselineLine, editedLine)),
+        Math.max(oldLines.length - 1, 0),
+      ));
+      const oldOwner = findOwningTaskLine(oldLines, baselineAt);
+      let currentOwner = plan.owning;
+      if (oldOwner !== null && oldOwner !== undefined) {
+        const ownerId = normalizeBulletPropertyValue(getTrailingBlockId(oldLines[oldOwner]) || "");
+        if (ownerId) {
+          const relocated = findTaskLineByTrailingBlockId(currentLines, ownerId);
+          if (relocated !== null) currentOwner = relocated;
+        }
+      }
+      const resolveLinkpath = this.dependencyLinkpathResolver();
+      const oldDeps = oldOwner === null || oldOwner === undefined
+        ? { ok: false, targets: [] }
+        : tieDependsOnTargets(before, oldOwner, path, resolveLinkpath);
+      const currentDeps = tieDependsOnTargets(content, currentOwner, path, resolveLinkpath);
+      const oldKeys = new Set(
+        (oldDeps && oldDeps.ok && oldDeps.targets || [])
+          .map((entry) => blocksIdentity(entry.path, entry.blockId))
+          .filter(Boolean),
+      );
+      const addedTargets = (currentDeps && currentDeps.ok && currentDeps.targets || [])
+        .filter((entry) => !oldKeys.has(blocksIdentity(entry.path, entry.blockId)));
+      const tieNotice = await tieHandEditOverlapNotice(
+        this,
+        path,
+        content,
+        currentOwner,
+        addedTargets,
+        resolveLinkpath,
+      );
+      if (tieNotice) new Notice(tieNotice);
+    }
     // BW12 + Rule 8: a burst confined to a BLOCKS mirror line never changes
     // edges. Show the generated-line notice once (this runs once per burst)
     // and write nothing; reconcile restores the line.

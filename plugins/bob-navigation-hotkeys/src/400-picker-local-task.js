@@ -287,16 +287,11 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
       stage = null;
     }
     this.vaultStage = stage;
+    if (stage) {
+      ensureTieVisibilityIndex(stage, this.plugin);
+    }
     const items = stage
-      ? planDependencyStageView({
-          current: stage.current,
-          candidates: stage.candidates,
-          query: "",
-          dependent: stage.dependent,
-          edges: stage.edges,
-          linkedKeys: stage.linkedKeys,
-          sourceValueSets: stage.sourceValueSets,
-        })
+      ? planDependencyStageItemsFromVault(stage, "")
       : createBulletPropertyLocalTaskItems(this.getEditorContent(), {
           excludeLine: this.isCountedSession() ? null : this.cursor.line,
           excludeLines: this.isCountedSession()
@@ -331,6 +326,10 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
       this.renderAll({ clearQuery: true });
     }
     this.applyTaskCardChrome({ wide: Boolean(this.vaultStage) });
+    if (this.vaultStage) {
+      this.ensureDependencyConsequenceStrip();
+      this.refreshDependencyConsequenceStrip();
+    }
     if (
       stage &&
       !stage.cacheReady &&
@@ -341,26 +340,80 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
     }
   }
 
+  ensureDependencyConsequenceStrip() {
+    if (!this.contentEl || !this.footerEl) return null;
+    if (
+      this.consequenceStripEl &&
+      this.consequenceStripEl.parentElement === this.contentEl
+    ) {
+      return this.consequenceStripEl;
+    }
+    const el = this.contentEl.createDiv({
+      cls: "bob-cnp-consequence-strip",
+      attr: { "aria-live": "polite" },
+    });
+    try {
+      if (
+        this.footerEl.parentElement === this.contentEl &&
+        typeof this.contentEl.insertBefore === "function"
+      ) {
+        this.contentEl.insertBefore(el, this.footerEl);
+      }
+    } catch (_error) {
+      // Best-effort placement between the list and the footer.
+    }
+    this.consequenceStripEl = el;
+    return el;
+  }
+
+  refreshDependencyConsequenceStrip() {
+    if (
+      !this.vaultStage ||
+      !this.isLocalTaskStage() ||
+      this.blocksStage ||
+      this.relationStage
+    ) {
+      if (this.consequenceStripEl) this.consequenceStripEl.setText("");
+      return;
+    }
+    const el = this.ensureDependencyConsequenceStrip();
+    if (!el) return;
+    const marked = this.getMarkedTaskItems();
+    const item = (this.visibleItems || [])[this.selectedIndex] || null;
+    let text = dependencyStageConsequenceStrip(item, {
+      stage: this.vaultStage,
+      marked,
+    });
+    if (marked.length > 0) {
+      const diff = this.getMarkedTaskDiff();
+      const parts = [];
+      if (diff.add > 0) parts.push(`↵ adds ${diff.add}`);
+      if (diff.remove > 0) parts.push(`removes ${diff.remove}`);
+      parts.push("updates dependency status");
+      text = parts.join(" · ");
+    }
+    el.empty();
+    el.createSpan({
+      cls: /⚠/.test(text)
+        ? "bob-cnp-consequence-strip-text is-destructive"
+        : "bob-cnp-consequence-strip-text",
+      text,
+    });
+  }
+
   // One stage-planner dispatch shared by render and refresh: Blocks goes to
   // the Blocks planner, relation stages (Links both directions) go to the
   // relation planner, and everything else goes to the Depends-on planner.
   planVaultStageItemsForQuery(stage, query) {
     const resolved = typeof query === "string" ? query : this.getQuery();
+    ensureTieVisibilityIndex(stage, this.plugin);
     if (this.blocksStage) {
       return planBlocksStageItemsFromVault(stage, resolved);
     }
     if (this.relationStage) {
       return planRelationStageItemsFromVault(stage, resolved);
     }
-    return planDependencyStageView({
-      current: stage.current,
-      candidates: stage.candidates,
-      query: resolved,
-      dependent: stage.dependent,
-      edges: stage.edges,
-      linkedKeys: stage.linkedKeys,
-      sourceValueSets: stage.sourceValueSets,
-    });
+    return planDependencyStageItemsFromVault(stage, resolved);
   }
 
   // Swap in the vault-scan pool, keeping marks across the refresh: mark keys
@@ -387,6 +440,7 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
     } else {
       this.vaultStage = stage;
     }
+    ensureTieVisibilityIndex(this.vaultStage, this.plugin);
     const items = this.planVaultStageItemsForQuery(this.vaultStage, this.getQuery());
     this.resetLocalTaskMarks(items);
     for (const key of marked) {
@@ -415,7 +469,11 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
       visibleItems.length === allItems.length
         ? ""
         : `Showing ${visibleItems.length} of ${allItems.length} · `;
-    const head = `${countText}${stage.current.length} prerequisite${stage.current.length === 1 ? "" : "s"} · ${stage.openCount} open · searching ${stage.poolSize} open tasks`;
+    const plainLinkCount = tieVisibilityCountPhrase(
+      stage.plainLinkTieCount,
+      "plain-link",
+    );
+    const head = `${countText}${stage.current.length} prerequisite${stage.current.length === 1 ? "" : "s"} · ${stage.openCount} open${plainLinkCount ? ` · ${plainLinkCount}` : ""} · searching ${stage.poolSize} open tasks`;
     if (this.getMarkedCount() === 0) {
       return `${head} · ⇥ to mark several`;
     }

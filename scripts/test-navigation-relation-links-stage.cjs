@@ -1343,11 +1343,11 @@ test("subtitle, consequence strip, live sentence, and label refusal copy", () =>
   const stage = { current: [{}, {}], poolSize: 9 };
   assert.equal(
     helpers.relationStageSubtitle(stage, null, {}),
-    "Links to 2 · searching 9 tasks · ⇥ to mark several · does not block",
+    "Links to 2 · searching 9 tasks · ⇥ to mark several",
   );
   assert.equal(
     helpers.relationStageSubtitle({ current: [], poolSize: 9 }, null, {}),
-    "Links to nothing yet · searching 9 tasks · ⇥ to mark several · does not block",
+    "Links to nothing yet · searching 9 tasks · ⇥ to mark several",
   );
   assert.equal(
     helpers.relationStageSubtitle(stage, { add: 2, remove: 1, needId: 0 }, {}),
@@ -1489,6 +1489,165 @@ test("subtitle, consequence strip, live sentence, and label refusal copy", () =>
     ),
     "⊘ Cancels “Ship it” · removes its links from today's open Pomodoros · unblocks dependents · its 2 open tasks stay open",
   );
+});
+
+test("tie pills, conversion badges, and the dependency band follow both directions", () => {
+  const notes = {
+    "Owner.md": [
+      "- [ ] #task Owner ^owner",
+      "  - ⛓️ **DEPENDS ON:** [[Other#^prerequisite]]",
+      "  - 🪢 **LINKS:** [[Other#^plain]]",
+    ].join("\n"),
+    "Other.md": [
+      "- [ ] #task Prerequisite ^prerequisite",
+      "- [ ] #task Plain link target ^plain",
+    ].join("\n"),
+  };
+  const snapshots = snapshotMap(notes);
+  const index = helpers.indexDependencyStageNotesFromSnapshots(snapshots);
+  const edges = helpers.collectDependencyStageEdgesFromSnapshots(snapshots, index);
+  const stage = {
+    relationStage: true,
+    sources: [{ path: "Owner.md", line: 0, blockId: "owner" }],
+    files: new Map(Object.entries(notes)),
+    index,
+    edges,
+    tiedByDependencyCount: 1,
+  };
+  const rows = [
+    { kind: "local-task", path: "Other.md", line: 0, blockId: "prerequisite", stageSection: "results" },
+    { kind: "local-task", path: "Other.md", line: 1, blockId: "plain", stageSection: "results" },
+  ];
+  const planned = helpers.planTieVisibilityItems(rows, stage, "links", "");
+  assert.deepEqual(
+    planned.map((row) => [row.blockId, row.headerSection || null, row.tieConvert]),
+    [
+      ["prerequisite", "tie-dependency", true],
+      ["plain", "results", false],
+    ],
+  );
+  assert.deepEqual(planned[0].tiePills.map((pill) => pill.text), ["⛓ prerequisite"]);
+  assert.match(planned[0].tiePills[0].title, /Enter converts the dependency/);
+  const blockRows = helpers.planTieVisibilityItems(
+    [rows[1]],
+    { ...stage, relationStage: false },
+    "blocks",
+    "",
+  );
+  assert.equal(blockRows[0].headerSection, "tie-plain-links");
+  assert.equal(blockRows[0].tieConvert, true);
+  assert.deepEqual(blockRows[0].tiePills.map((pill) => pill.text), ["🪢 linked"]);
+  const dependsRows = helpers.planTieVisibilityItems(
+    [rows[1]],
+    { ...stage, relationStage: false },
+    "depends",
+    "",
+  );
+  assert.equal(dependsRows[0].headerSection, "tie-plain-links");
+  assert.equal(dependsRows[0].tieConvert, true);
+  const consequenceStage = {
+    ...stage,
+    dependent: { path: "Owner.md", blockId: "owner", isProjectPrj: false },
+    tieEdges: edges,
+  };
+  assert.equal(
+    helpers.dependencyStageConsequenceStrip(
+      { ...dependsRows[0], status: "*" },
+      { stage: consequenceStage },
+    ),
+    "Replaces the 🪢 link · Waits on it · this task becomes Blocked · it takes Next",
+  );
+  assert.equal(
+    helpers.dependencyStageConsequenceStrip(
+      { ...planned[0], stageSection: "current", open: true },
+      { stage: consequenceStage },
+    ),
+    "Stops waiting on it · Ready again · ⌃L keeps a plain link",
+  );
+  assert.equal(
+    helpers.relationStageSubtitle({ current: [{}, {}], poolSize: 9, tiedByDependencyCount: 1 }, null, {}),
+    "Links to 2 · searching 9 tasks · 1 tied by a dependency · ⇥ to mark several",
+  );
+  const noIdNotes = {
+    "Owner.md": "- [ ] #task Owner [id:: owner]\n  - ⛓️ **DEPENDS ON:** [[Other#^prerequisite]]",
+    "Other.md": "- [ ] #task Prerequisite ^prerequisite",
+  };
+  const noIdSnapshots = snapshotMap(noIdNotes);
+  const noIdIndex = helpers.indexDependencyStageNotesFromSnapshots(noIdSnapshots);
+  const noIdStage = {
+    relationStage: true,
+    sources: [{ path: "Owner.md", line: 0, blockId: null, key: "id:owner" }],
+    files: new Map(Object.entries(noIdNotes)),
+    index: noIdIndex,
+    edges: new Map(),
+  };
+  const noIdRows = helpers.planTieVisibilityItems(
+    [{ kind: "local-task", path: "Other.md", line: 0, blockId: "prerequisite", stageSection: "results" }],
+    noIdStage,
+    "links",
+    "",
+  );
+  assert.deepEqual(noIdRows[0].tiePills.map((pill) => pill.text), ["⛓ prerequisite"]);
+  const incomingStage = {
+    relationStage: true,
+    sources: [{ path: "Owner.md", line: 0, blockId: "owner" }],
+    files: new Map(Object.entries(notes)),
+    index,
+    edges,
+  };
+  const incomingApi = {
+    incoming: () => [
+      { kind: "relation", source: { path: "Other.md", blockId: "plain" }, label: null },
+      { kind: "relation", source: { path: "Other.md", blockId: "label" }, label: "follow-up" },
+      { kind: "mention", source: { path: "Other.md", blockId: "mention" }, label: null },
+    ],
+  };
+  helpers.buildTieVisibilityIndex(incomingStage, incomingApi);
+  const incomingRows = helpers.planTieVisibilityItems(
+    [
+      { kind: "local-task", path: "Other.md", line: 0, blockId: "plain", stageSection: "results" },
+      { kind: "local-task", path: "Other.md", line: 1, blockId: "label", stageSection: "results" },
+      { kind: "local-task", path: "Other.md", line: 2, blockId: "mention", stageSection: "results" },
+    ],
+    incomingStage,
+    "links",
+    "query",
+  );
+  assert.deepEqual(incomingRows[0].tiePills.map((pill) => pill.text), ["🪢 links here"]);
+  assert.deepEqual(incomingRows[1].tiePills.map((pill) => pill.text), ["← follow-up"]);
+  assert.deepEqual(incomingRows[2].tiePills, []);
+});
+
+test("hand-edited plain-link overlap notice waits until a candidate overlap is known", async () => {
+  const ownerContent = [
+    "- [ ] #task Owner ^owner",
+    "  - ⛓️ **DEPENDS ON:** [[Other#^target]]",
+    "  - 🪢 **LINKS:** [[Other#^target]]",
+  ].join("\n");
+  const plugin = {
+    async readDependencyNoteContent() {
+      return "- [ ] #task Target ^target";
+    },
+  };
+  const resolveLinkpath = (linkpath) => linkpath === "Other" ? "Other.md" : null;
+  const message = await helpers.tieHandEditOverlapNotice(
+    plugin,
+    "Owner.md",
+    ownerContent,
+    0,
+    [{ path: "Other.md", blockId: "target" }],
+    resolveLinkpath,
+  );
+  assert.equal(message, '"Target" is already a dependency · reconcile will drop this plain link');
+  const noCandidate = await helpers.tieHandEditOverlapNotice(
+    plugin,
+    "Owner.md",
+    ownerContent,
+    0,
+    [],
+    resolveLinkpath,
+  );
+  assert.equal(noCandidate, "");
 });
 
 test("cancel labels overlay at zero uses and render the live source cue", () => {

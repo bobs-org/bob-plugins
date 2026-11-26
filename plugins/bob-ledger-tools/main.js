@@ -90204,6 +90204,35 @@ function propertyCardFrontmatterCoordinatorReconcile(plugin) {
       if (propertyCardFrontmatterReleaseMounted(scope, { plugin, kind: entry.kind, path: entry.path })) released += 1;
     }
   }
+  // Reconcile releases ownership when a mounted surface becomes ineligible,
+  // but there is no owner entry left to observe when the same surface becomes
+  // eligible again. Repaint an open bank note on workspace/config transitions
+  // so its adapter can reacquire the mounted Properties container.
+  const binding = propertyCardFrontmatterCoordinatorBindings.get(plugin);
+  if (binding?.kinds?.has?.("bank")) {
+    let bankOpen = false;
+    try {
+      bankOpen = (plugin?.app?.workspace?.getLeavesOfType?.("markdown") || []).some((leaf) => {
+        const markdown = leaf?.view;
+        const editor = markdown?.editor?.cm;
+        const paths = [
+          plugin?.bankSetupLivePath?.(editor),
+          plugin?.bankSetupSourcePath?.(editor),
+          markdown?.file?.path,
+        ];
+        return paths.some((path) => {
+          try {
+            return typeof bankSetupIsHubPath === "function"
+              ? bankSetupIsHubPath(path)
+              : String(path || "").replace(/\\/g, "/") === "bank.md";
+          } catch (_) { return false; }
+        });
+      });
+    } catch (_) {}
+    if (bankOpen) {
+      try { plugin?.scheduleBankSetupRefresh?.(); } catch (_) {}
+    }
+  }
   return released;
 }
 

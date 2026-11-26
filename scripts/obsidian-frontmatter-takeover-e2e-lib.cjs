@@ -533,7 +533,12 @@ const PROBE_SOURCE = "(() => {" + PAGE_COMMON + String.raw`
       const target = Math.min(docLine.from + (ch || 0), docLine.to);
       if (view && typeof view.setCursor === "function") {
         view.setCursor({ line, ch: ch || 0 });
-      } else {
+      }
+      // Obsidian's editor wrapper can leave the CodeMirror selection at its
+      // previous position during a rapid test-mode switch. Fall back to the
+      // live view selection when the wrapper did not place the requested
+      // cursor; the subsequent key probes still exercise Obsidian's handler.
+      if (cm.state.selection.main.head !== target) {
         cm.dispatch({ selection: { anchor: target }, scrollIntoView: true });
       }
       const head = cm.state.selection.main.head;

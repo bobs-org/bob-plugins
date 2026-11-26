@@ -95,6 +95,8 @@ class BobLedgerToolsNotebookHeaderLiveMixin {
       if (!filePath) {
         return Decoration.none;
       }
+      if (typeof notebookCardMountedInSurface === "function"
+        && notebookCardMountedInSurface(view?.dom, filePath)) return Decoration.none;
       let docText = "";
       try {
         docText = view.state.doc && typeof view.state.doc.toString === "function"
@@ -220,6 +222,9 @@ class BobLedgerToolsNotebookHeaderLiveMixin {
         return false;
       }
       const root = view.dom;
+      const filePath = this.notebookHeaderLivePath(view);
+      if (filePath && typeof notebookCardMountedInSurface === "function"
+        && notebookCardMountedInSurface(root, filePath)) return false;
       let state = null;
       try {
         state = typeof this.notebookCatalogState === "function"

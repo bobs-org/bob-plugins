@@ -4,7 +4,12 @@ try {
     module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
       NOTEBOOK_CARD_KIND,
       notebookCardStem,
+      notebookCardModel,
       NOTEBOOK_CARD_SURFACE_CLASS,
+      notebookCardBuildEl,
+      BobLedgerToolsNotebookCardMixin,
+      BobLedgerToolsNotebookCardFootMixin,
+      notebookCardMountedInSurface,
       NOTEBOOK_CARD_HOST_KIND,
       NOTEBOOK_CARD_MOUNT_ATTR,
       NOTEBOOK_CARD_FOOT_KIND,

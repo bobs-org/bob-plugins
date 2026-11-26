@@ -450,6 +450,8 @@ class BobLedgerToolsNotebookHeaderMixin {
       focusedHref = "";
     }
     this.notebookHeaderRemoveOwned(root, sourcePath);
+    if (typeof notebookCardMountedInSurface === "function"
+      && notebookCardMountedInSurface(root, sourcePath)) return null;
     const model = this.notebookHeaderModelFor(sourcePath, state);
     if (!model) {
       return null;

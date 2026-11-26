@@ -12979,8 +12979,65 @@ button.bob-property-card-foot-lint-chip {
   font-weight: 750;
 }
 
-/* Notebook Card (bob-cli-qm notebook-card): start.
-   The species phase fills this region. */
+/* Notebook Card (bob-cli-qm notebook-card): start. Title identity and local fields. */
+.bob-property-card[data-card-kind="notebook"] { --bob-property-card-tint: 3%; }
+.bob-notebook-card {
+  display: block;
+  box-sizing: border-box;
+  inline-size: 100%;
+  margin-block: 0.65em;
+  padding: 0.75em 0.9em;
+  border: 1px solid color-mix(in srgb, var(--bob-property-card-accent, var(--background-modifier-border)) 16%, var(--background-modifier-border));
+  border-inline-start: 2px solid var(--bob-property-card-accent, var(--background-modifier-border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bob-property-card-accent, var(--background-primary)) var(--bob-property-card-tint, 0%), var(--background-primary));
+}
+.bob-notebook-card .bob-property-card-title-block { margin: 0; }
+.bob-notebook-card-summary {
+  margin-block-start: 0.35em;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+.bob-notebook-card-add-summary {
+  margin-block-start: 0.35em;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px dashed color-mix(in srgb, var(--text-muted) 45%, transparent);
+  background: transparent;
+  color: var(--text-faint);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.bob-notebook-card-add-summary:hover,
+.bob-notebook-card-add-summary:focus-visible { color: var(--text-normal); }
+.bob-notebook-card-route {
+  display: inline-flex;
+  align-items: center;
+  margin-inline-end: 0.6em;
+  padding: 0.12em 0.45em;
+  border: 1px solid color-mix(in srgb, var(--text-muted) 28%, var(--background-modifier-border));
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.82em;
+  cursor: copy;
+}
+.bob-notebook-card-route:hover,
+.bob-notebook-card-route:focus-visible { color: var(--text-normal); }
+.bob-notebook-card-details { margin-block-start: 0.3em; }
+.bob-notebook-card-body { min-width: 0; }
+.bob-notebook-card-readouts[data-state="reserved"] { display: none; }
+.bob-notebook-card-fold:focus-visible,
+.bob-notebook-card-route:focus-visible,
+.bob-notebook-card-add-summary:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .bob-notebook-card .bob-home-card-collapsible { transition: none; }
+}
 /* Notebook Card (bob-cli-qm notebook-card): end. */
 
 /* Prose Card (bob-cli-qm prose-card): start.

@@ -33,11 +33,7 @@ try {
       REF_NOTE_CARD_EDITOR_KIND,
       refNoteCardEditorRoute,
       REF_LIBRARY_REPORT_ARGV,
-      REF_LIBRARY_REPORT_SCHEMA_VERSION,
-      refLibraryReportArgs,
       refLibraryReportRow,
-      refLibraryReportDecode,
-      apiRefLibrarySubscribe,
     });
   }
 } catch (_) {}

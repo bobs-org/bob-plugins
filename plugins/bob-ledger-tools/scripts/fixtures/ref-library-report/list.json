@@ -1,0 +1,119 @@
+{
+  "ok": true,
+  "schema_version": 1,
+  "command": "ref list",
+  "generated_at": "2026-11-26T14:00:00",
+  "coverage": {
+    "ref_dir": "ref",
+    "notes": 4
+  },
+  "refs": [
+    {
+      "path": "ref/blogs/finished-blog.md",
+      "link": "[[ref/blogs/finished-blog|Agentic coding strains CI]]",
+      "title": "Agentic coding strains CI",
+      "origin": "external",
+      "ref_type": "blogs",
+      "era": "modern",
+      "status": "read",
+      "status_sync": "ok",
+      "reading_state": "finished",
+      "blocked": false,
+      "blocked_by": [],
+      "parent": "[[engineering]]",
+      "task": {
+        "path": "daily/2026-11-26.md",
+        "block_id": "ref-agentic-coding",
+        "link": "[[ref/blogs/finished-blog|Agentic coding strains CI]]",
+        "mark": "x",
+        "archived": false,
+        "priority": "medium",
+        "scheduled": null
+      },
+      "earlier": [],
+      "reading": null,
+      "identity": { "keys": ["doi"], "arxiv": null, "doi": "10.5555/example" },
+      "author": "Ada Writer",
+      "published": "2026-09-14",
+      "captured": "2026-10-22",
+      "added": "2026-10-22",
+      "added_at": "2026-10-22T09:30:00",
+      "finished": "2026-10-23",
+      "source_pdf": "ref/blogs/finished-blog.pdf",
+      "audio": "ref/blogs/finished-blog.mp3",
+      "annotation_count": 5,
+      "comment_count": 1,
+      "snapshot": { "synced_at": "2026-10-23T12:00:00", "highlights_count": 5 },
+      "diagnostics": []
+    },
+    {
+      "path": "ref/papers/blocked-paper.md",
+      "title": "Blocked paper",
+      "origin": "external",
+      "ref_type": "papers",
+      "era": "modern",
+      "status": "ready",
+      "status_sync": "ok",
+      "reading_state": "queued",
+      "blocked": true,
+      "blocked_by": [
+        {
+          "kind": "local_dependency",
+          "prerequisites": [
+            {
+              "id": "task-1",
+              "title": "Read the prerequisite",
+              "path": "daily/2026-11-26.md",
+              "block_id": "task-one",
+              "link": "[[task-one|Read the prerequisite]]",
+              "mark": " ",
+              "ref_path": null
+            }
+          ]
+        }
+      ],
+      "task": {
+        "path": "daily/2026-11-27.md",
+        "block_id": null,
+        "link": "[[ref/papers/blocked-paper|Blocked paper]]",
+        "mark": " ",
+        "archived": false,
+        "priority": null,
+        "scheduled": "2026-11-27"
+      },
+      "earlier": [
+        { "target": "ref/papers/blocked-paper__v1", "label": "v1", "kind": "reading" },
+        { "target": "ref_history/blocked-paper", "label": "replaced capture", "kind": "replaced" }
+      ],
+      "reading": 2,
+      "identity": { "keys": ["arxiv"], "arxiv": "2401.12345", "doi": null },
+      "annotation_count": 0,
+      "comment_count": 0,
+      "diagnostics": [
+        { "code": "parent_mismatch", "detail": "The task is filed under a different parent." }
+      ]
+    },
+    {
+      "path": "ref/ai/legacy-book.md",
+      "title": "A legacy book",
+      "origin": "zorg",
+      "ref_type": "books",
+      "era": "legacy",
+      "legacy_status": "read",
+      "reading_state": "finished",
+      "blocked": false,
+      "blocked_by": [],
+      "author": "Example Author",
+      "source_pdf": null,
+      "annotation_count": 2,
+      "comment_count": 0,
+      "snapshot": { "synced_at": null, "highlights_count": 2 },
+      "diagnostics": []
+    },
+    {
+      "path": "ref/chat/partial-report.md",
+      "title": "Partial old report",
+      "era": "legacy"
+    }
+  ]
+}

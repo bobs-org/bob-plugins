@@ -339,6 +339,7 @@
   "285-plugin-task-link-marks-reading.js",
   "290-plugin-today-and-location.js",
   "290a-snoozed-today-cache.js",
+  "290b-snooze-waker.js",
   "291-plugin-gcal-events.js",
   "291a-plugin-gcal-readiness.js",
   "291g-plugin-gmail-sync.js",
@@ -455,5 +456,6 @@
   "378-exports-nav-groups.js",
   "379-exports-property-editor.js",
   "380-snooze-model-exports.js",
-  "381-snoozed-cache-exports.js"
+  "381-snoozed-cache-exports.js",
+  "382-snooze-waker-exports.js"
 ]

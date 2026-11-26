@@ -531,6 +531,11 @@ class BobLedgerToolsSnoozedTodayMixin {
         // The cache is still correct; only the live refresh is skipped.
       }
     }
+    // Rebuild first so the minute trigger only consults current row/task facts.
+    // The CLI remains the sole writer for the daily note.
+    if (typeof this.snoozeWakeTick === "function") {
+      void this.snoozeWakeTick(clock);
+    }
     return changed;
   }
 

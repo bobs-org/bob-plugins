@@ -18,6 +18,7 @@ function installBobLedgerToolsMixins(pluginClass, mixins) {
 }
 
 installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
+  BobLedgerToolsSnoozeWakerMixin,
   BobLedgerToolsPlanAndReadyMixin,
   BobLedgerToolsPlanBudgetOffClockMixin,
   BobLedgerToolsNoteReadyMixin,

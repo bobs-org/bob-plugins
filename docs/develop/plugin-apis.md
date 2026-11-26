@@ -54,6 +54,15 @@ either identity field is missing or the Today ledger cache is not ready.
 `todayRank(task)` returns that task's zero-based index in the cached Today
 ledger, or `Number.MAX_SAFE_INTEGER` when the task has no rank.
 
+`isSnoozedToday(task)` and `isPlannedToday(task)` are additive readers:
+Today remains ledger-derived, while planned-today also includes live Asleep,
+Due, and Blocked snoozed tasks. `snoozed.rows()` returns snapshots from the
+current daily-note cache, `plannedKeys()` returns canonical identity keys,
+`nextWakeAt()` returns the earliest live Asleep/Due RFC 3339 instant or
+`null`, and `ready(now?)` reports cache readiness. These methods never write
+notes. On desktop, Ledger Tools asks `bob snooze wake -q -f json` once per
+eligible minute; Bob alone performs the wake mutation.
+
 | Namespace | Version | Purpose |
 | --- | ---: | --- |
 | `taskSettle` | 1 | Pure settle, guarded editor apply, idle pending scheduler, and optional `onSettled` observer. |
@@ -61,6 +70,7 @@ ledger, or `Number.MAX_SAFE_INTEGER` when the task has no rank.
 | `logs` | 1 | Read the cached `bob logs list --format json` phrase catalog; `snapshot()` includes the session overlay, `noteUsed(kind, text)` records a successful local write, and `onChange` subscribes to refreshes. |
 | `themes` | 1 | Share the Pomodoro theme catalog; `hueFor`, `componentsOf`, `historyRows`, and `similarTo` are synchronous, `fetch` and `snapshot` serve the cached `bob themes list` report, `hide`/`unhide`/`color`/`rename` spawn bob with `--via`, and `onChange` subscribes to updates. |
 | `workBadges` | 2 | Return count-to-limit badge tones through `tone` and `todayTone`. |
+| `snoozed` | 1 | Read cached Snoozed rows, planned identities, and next wake time; the desktop waker invokes Bob's CLI writer internally. |
 | `freshness` | 12 | Read or update freshness, refresh intervals, keep counts, review queue, and unblocked metadata. |
 | `noteReady` | 1 | Read per-note Ready-lane counts and render the crowded-note chip. |
 | `dashboardCollections` | 1 | Snapshot or render PROJECTS and REFERENCES badges. |

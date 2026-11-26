@@ -683,3 +683,155 @@ test("api shape exposes additive snoozed namespace", () => {
     }
   });
 });
+
+function wakeReport(now, { woken = [], notified = "none", status = woken.length ? "woke" : "nothing_due" } = {}) {
+  return {
+    schema_version: 1,
+    date: helpers.snoozedTodayTextFromClock(now),
+    now: now.toISOString(),
+    status,
+    woken,
+    dropped: [],
+    ignored: [],
+    pending: [],
+    next_wake_at: null,
+    plan: { count: 1, cap: 10, over: false },
+    notified,
+    wake_id: null,
+    daily_file: "2026/20261117.md",
+  };
+}
+
+function wakerAt(now, report) {
+  const plugin = Object.create(LedgerToolsPlugin.prototype);
+  Object.assign(plugin, {
+    snoozedCache: {
+      date: helpers.snoozedTodayTextFromClock(now),
+      nowMinutes: helpers.snoozedNowMinutesFromClock(now),
+      nextWakeAt: new Date(now.getTime() - 60_000).toISOString(),
+    },
+    snoozeWakeLastAttemptMinute: "",
+    snoozeWakeInFlight: false,
+    snoozeWakeDisabled: false,
+    snoozeWakeUnloaded: false,
+    snoozeWakeGeneration: 0,
+    snoozeWakeNow: () => new Date(now.getTime()),
+    snoozeWakeIsDesktop: () => true,
+    isSnoozedCacheReady: () => true,
+    snoozeWakeSpawn: async () => ({ ok: true, report }),
+  });
+  return plugin;
+}
+
+test("snooze wake report decoder validates the whole public envelope", () => {
+  const now = new Date(2026, 10, 17, 15, 31);
+  const row = {
+    route: "jobs.md",
+    block_id: "job",
+    title: "Email Dan",
+    target: "1530",
+    woke_at: "15:31",
+    destination: { line: 3, name: "WRITE", created: false },
+    over_cap: false,
+  };
+  assert.deepEqual(helpers.snoozeWakeDecodeReport(JSON.stringify(wakeReport(now, { woken: [row] })), ""), {
+    ok: true,
+    report: wakeReport(now, { woken: [row] }),
+  });
+  for (const corrupt of [
+    { schema_version: 2 },
+    { status: "woke", woken: [null] },
+    { notified: "other" },
+    { plan: { count: "1", cap: 10, over: false } },
+  ]) {
+    const bad = { ...wakeReport(now), ...corrupt };
+    assert.equal(helpers.snoozeWakeDecodeReport(JSON.stringify(bad), "").ok, false);
+  }
+  assert.equal(helpers.snoozeWakeDecodeReport("not json", "").code, "bad-json");
+});
+
+test("minute waker is desktop-only, single-flight, and notices only its own unnotified wake", async () => {
+  const now = new Date(2026, 10, 17, 15, 31);
+  const row = { route: "jobs.md", block_id: "job", title: "Email Dan", target: "1530", woke_at: "15:31", destination: { line: 3, name: "WRITE", created: false }, over_cap: false };
+  const plugin = wakerAt(now, wakeReport(now, { woken: [row] }));
+  let spawns = 0;
+  let refreshes = 0;
+  const notices = [];
+  plugin.snoozeWakeSpawn = async () => { spawns += 1; return { ok: true, report: wakeReport(now, { woken: [row] }) }; };
+  plugin.refreshSnoozedCacheFromDaily = async () => { refreshes += 1; return true; };
+  plugin.snoozeWakeNotice = (report) => notices.push(helpers.snoozeWakeNoticeText(report));
+  assert.equal(await plugin.snoozeWakeTick(now), true);
+  assert.equal(await plugin.snoozeWakeTick(now), false);
+  assert.equal(spawns, 1, "one attempt per local minute");
+  assert.equal(refreshes, 1, "refreshes authoritative cache after write");
+  assert.deepEqual(notices, ["⏰ Ready now: Email Dan · woke 15:31 · WRITE"]);
+
+  const notified = wakerAt(now, wakeReport(now, { woken: [row], notified: "desktop" }));
+  let notifiedNotice = false;
+  notified.snoozeWakeSpawn = async () => ({ ok: true, report: wakeReport(now, { woken: [row], notified: "desktop" }) });
+  notified.refreshSnoozedCacheFromDaily = async () => true;
+  notified.snoozeWakeNotice = () => { notifiedNotice = true; };
+  await notified.snoozeWakeTick(now);
+  assert.equal(notifiedNotice, false, "Mac Capture or desktop notification suppresses fallback");
+
+  const mobile = wakerAt(now, wakeReport(now));
+  mobile.snoozeWakeIsDesktop = () => false;
+  let mobileSpawn = false;
+  mobile.snoozeWakeSpawn = async () => { mobileSpawn = true; return { ok: true, report: wakeReport(now) }; };
+  assert.equal(await mobile.snoozeWakeTick(now), false);
+  assert.equal(mobileSpawn, false);
+});
+
+test("minute waker retries transient failures, disables only explicit unsupported syntax, and ignores stale unload results", async () => {
+  const now = new Date(2026, 10, 17, 15, 31);
+  const plugin = wakerAt(now, wakeReport(now));
+  let attempts = 0;
+  plugin.snoozeWakeSpawn = async () => {
+    attempts += 1;
+    return attempts === 1 ? { ok: false, exitCode: 1, message: "temporary I/O" } : { ok: true, report: wakeReport(now) };
+  };
+  assert.equal(await plugin.snoozeWakeTick(now), false);
+  assert.equal(plugin.snoozeWakeDisabled, false);
+  const nextMinute = new Date(now.getTime() + 60_000);
+  plugin.snoozedCache.nowMinutes = helpers.snoozedNowMinutesFromClock(nextMinute);
+  plugin.snoozedCache.nextWakeAt = new Date(nextMinute.getTime() - 60_000).toISOString();
+  plugin.snoozeWakeNow = () => nextMinute;
+  assert.equal(await plugin.snoozeWakeTick(nextMinute), true);
+  assert.equal(attempts, 2);
+  assert.equal(helpers.snoozeWakeUnsupportedFailure({ exitCode: 2, message: "unknown subcommand 'snooze'" }), true);
+  assert.equal(helpers.snoozeWakeUnsupportedFailure({ exitCode: 2, message: "invalid value" }), false);
+
+  const stale = wakerAt(now, wakeReport(now));
+  let finish;
+  stale.snoozeWakeSpawn = () => new Promise((resolve) => { finish = resolve; });
+  const pending = stale.snoozeWakeTick(now);
+  stale.disposeSnoozeWaker();
+  assert.equal(await stale.snoozeWakeTick(now), false, "unload prevents new spawns");
+  finish({ ok: true, report: wakeReport(now) });
+  assert.equal(await pending, false);
+});
+
+test("minute waker waits for a live due row and cannot overlap a slow spawn", async () => {
+  const now = new Date(2026, 10, 17, 15, 31);
+  const asleep = wakerAt(now, wakeReport(now));
+  asleep.snoozedCache.nextWakeAt = new Date(now.getTime() + 60_000).toISOString();
+  let calls = 0;
+  asleep.snoozeWakeSpawn = async () => { calls += 1; return { ok: true, report: wakeReport(now) }; };
+  assert.equal(await asleep.snoozeWakeTick(now), false);
+  assert.equal(calls, 0, "future rows do not spawn");
+
+  const blocked = wakerAt(now, wakeReport(now));
+  blocked.snoozedCache.nextWakeAt = null;
+  blocked.snoozeWakeSpawn = async () => { calls += 1; return { ok: true, report: wakeReport(now) }; };
+  assert.equal(await blocked.snoozeWakeTick(now), false);
+  assert.equal(calls, 0, "parked rows do not spawn");
+
+  const slow = wakerAt(now, wakeReport(now));
+  let release;
+  slow.snoozeWakeSpawn = () => { calls += 1; return new Promise((resolve) => { release = resolve; }); };
+  const first = slow.snoozeWakeTick(now);
+  assert.equal(await slow.snoozeWakeTick(now), false);
+  assert.equal(calls, 1, "an in-flight spawn is not overlapped");
+  release({ ok: true, report: wakeReport(now) });
+  await first;
+});

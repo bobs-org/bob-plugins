@@ -228,6 +228,11 @@ class BobLedgerToolsPlugin extends Plugin {
     this.snoozedEnteredAt = new Map();
     this.snoozedRevalidateAt = 0;
     this.snoozedRefreshTimer = null;
+    this.snoozeWakeLastAttemptMinute = "";
+    this.snoozeWakeInFlight = false;
+    this.snoozeWakeDisabled = false;
+    this.snoozeWakeUnloaded = false;
+    this.snoozeWakeGeneration = 0;
     this.laneWalkMemo = null;
     this.todayEnteredAt = new Map();
     this.todayRevalidateAt = 0;

@@ -220,8 +220,14 @@ test("the observer re-inserts a removed node and re-anchors before new Propertie
   const doc = makeDoc();
   const parts = liveScope(doc);
   const node = card(doc);
-  const view = { measures: 0, requestMeasure() { this.measures += 1; } };
+  const view = {
+    measures: 0,
+    redraws: 0,
+    cm: { state: { vimPlugin: { blockCursor: { scheduleRedraw() { view.redraws += 1; } } } } },
+    requestMeasure() { this.measures += 1; },
+  };
   helpers.propertyCardMountInTitleSlot(parts.scope, node, { path: "alpha.md", view });
+  assert.equal(view.redraws, 1, "a Live Preview insertion redraws the Vim cursor");
   const observer = doc.mutation[0];
   assert.deepEqual(observer.targets.map((row) => row.target), [parts.sizer, parts.source]);
   assert.deepEqual(observer.targets[0].options, { childList: true });
@@ -242,6 +248,7 @@ test("the observer re-inserts a removed node and re-anchors before new Propertie
   assert.equal(node.nextElementSibling, fresh);
   assert.equal(helpers.propertyCardTitleSlotStats(parts.scope).reinserts, 2);
   assert.ok(view.measures >= 3, "every Live Preview insertion re-measures");
+  assert.ok(view.redraws >= 3, "every Live Preview re-insertion redraws the Vim cursor");
 
   doc.writes.length = 0;
   observer.fire();
@@ -693,11 +700,67 @@ test("the editor update listener arms the rescue only for an editor with a mount
 test("Live Preview measure requests are budgeted so a size loop cannot freeze the renderer", () => {
   const doc = makeDoc();
   const parts = liveScope(doc);
+  const node = card(doc);
+  let height = 100;
+  node.getBoundingClientRect = () => rect(100, height);
   const requests = [];
-  const view = { requestMeasure(request) { requests.push(request); } };
-  helpers.propertyCardMountInTitleSlot(parts.scope, card(doc), { path: "alpha.md", view });
+  let redraws = 0;
+  const view = {
+    cm: { state: { vimPlugin: { blockCursor: { scheduleRedraw() { redraws += 1; } } } } },
+    requestMeasure(request) { requests.push(request); },
+  };
+  helpers.propertyCardMountInTitleSlot(parts.scope, node, { path: "alpha.md", view });
   const afterMount = requests.length;
-  for (let i = 0; i < 20; i += 1) doc.resize[0].fire();
-  assert.ok(requests.length - afterMount < 20, "a tight ResizeObserver loop does not measure on every fire");
+  doc.resize[0].fire();
+  assert.equal(redraws, 1, "a same-height notification needs no redraw");
+  for (let i = 0; i < 20; i += 1) {
+    height += 1;
+    doc.resize[0].fire();
+  }
+  assert.equal(redraws, 21, "every real size change queues a cursor redraw");
+  assert.ok(requests.length - afterMount < 20, "measure requests stay budgeted during a tight resize burst");
   assert.ok(requests.length <= 8, "mount plus the loop stay inside the measure budget");
+});
+
+test("cursor redraw is Live Preview only and missing or throwing Vim hooks are fail-safe", () => {
+  const readingDoc = makeDoc();
+  const reading = readingScope(readingDoc);
+  let readingRedraws = 0;
+  const readingNode = card(readingDoc);
+  readingNode.getBoundingClientRect = () => rect(100, 120);
+  const readingView = {
+    cm: { state: { vimPlugin: { blockCursor: { scheduleRedraw() { readingRedraws += 1; } } } } },
+    updateHeader() {},
+  };
+  assert.doesNotThrow(() => helpers.propertyCardMountInTitleSlot(reading.scope, readingNode, { path: "reading.md", view: readingView }));
+  readingDoc.resize[0].fire();
+  assert.equal(readingRedraws, 0, "Reading mounts never redraw the Vim cursor");
+
+  const views = [
+    { requestMeasure() {} },
+    { cm: {}, requestMeasure() {} },
+    { cm: { state: {} }, requestMeasure() {} },
+    { cm: { state: { vimPlugin: {} } }, requestMeasure() {} },
+    {
+      cm: {
+        state: {
+          vimPlugin: {
+            blockCursor: { scheduleRedraw() { throw new Error("redraw failed"); } },
+          },
+        },
+      },
+      requestMeasure() {},
+    },
+  ];
+  for (const [index, view] of views.entries()) {
+    const doc = makeDoc();
+    const parts = liveScope(doc);
+    const node = card(doc);
+    let height = 100;
+    node.getBoundingClientRect = () => rect(100, height);
+    assert.doesNotThrow(() => helpers.propertyCardMountInTitleSlot(parts.scope, node, { path: `live-${index}.md`, view }));
+    height = 110;
+    assert.doesNotThrow(() => doc.resize[0].fire());
+    assert.equal(node.parentNode, parts.sizer, "missing or throwing Vim hooks keep the mount in place");
+  }
 });

@@ -323,6 +323,12 @@ count. Pass the CodeMirror `EditorView` as `view` in Live Preview and
 `previewMode.renderer` in Reading, so that each insertion and resize
 re-measures the host.
 
+In Live Preview, each title-slot insertion and measured height change also
+queues codemirror-vim's block-cursor redraw. The card sits outside
+`.cm-content`, so it can move editor text without changing CodeMirror
+geometry; without the redraw, the painted cursor can remain at its previous
+screen position. Reading mode does not request this editor redraw.
+
 The mount returns `null` on mobile, in Source mode, in embeds, hover popovers,
 canvas nodes, and print, and when the slot is missing or insertion throws.
 `null` means the adapter falls back to the body. Otherwise the mount returns a

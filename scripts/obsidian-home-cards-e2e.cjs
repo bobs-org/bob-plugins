@@ -37,6 +37,30 @@ const HOTKEYS = {
   "switcher:open": [{ modifiers: ["Ctrl", "Shift"], key: "O" }],
   "command-palette:open": [{ modifiers: ["Ctrl"], key: "P" }],
 };
+const CURSOR_PROBE_SOURCE = `(() => {
+  const view = app.workspace.activeLeaf && app.workspace.activeLeaf.view;
+  const editor = view && view.editor && view.editor.cm;
+  const head = editor && editor.state && editor.state.selection && editor.state.selection.main.head;
+  let expected = null;
+  try { expected = Number.isInteger(head) ? editor.coordsAtPos(head, 1) : null; } catch (_) {}
+  const root = view && view.containerEl;
+  const cursor = root && root.querySelector
+    ? root.querySelector(".cm-vimCursorLayer .cm-fat-cursor.cm-cursor-primary") : null;
+  const cursorRect = cursor && cursor.getBoundingClientRect ? cursor.getBoundingClientRect() : null;
+  const card = root && root.querySelector
+    ? root.querySelector(".markdown-source-view .bob-home-card") : null;
+  const cardRect = card && card.getBoundingClientRect ? card.getBoundingClientRect() : null;
+  let lineText = null;
+  try { lineText = Number.isInteger(head) ? editor.state.doc.lineAt(head).text : null; } catch (_) {}
+  return {
+    path: view && view.file && view.file.path || null,
+    head: Number.isInteger(head) ? head : null,
+    lineText,
+    expectedTop: expected && Number.isFinite(expected.top) ? expected.top : null,
+    drawnTop: cursorRect && Number.isFinite(cursorRect.top) ? cursorRect.top : null,
+    cardHeight: cardRect && Number.isFinite(cardRect.height) ? cardRect.height : null,
+  };
+})()`;
 const PROBE_SOURCE = `(() => {
   const workspace = app.workspace;
   const leaf = workspace.activeLeaf;
@@ -203,6 +227,66 @@ function waitForCard(client, notePath, mode) {
   return shared.waitFor(client, PROBE_SOURCE,
     (probe) => probe?.path === notePath && probe?.mode === mode && probe.cardPresent,
     `${mode} home card for ${notePath}`, 25_000);
+}
+
+async function settleTwoFrames(client) {
+  await client.evaluate("new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
+}
+
+function cursorAlignment(probe) {
+  const expectedTop = probe?.expectedTop;
+  const drawnTop = probe?.drawnTop;
+  const alignmentError = Number.isFinite(expectedTop) && Number.isFinite(drawnTop) ? drawnTop - expectedTop : null;
+  const failures = alignmentError === null || Math.abs(alignmentError) > 2
+    ? ["drawn Vim cursor is not within 2 px of the text"] : [];
+  return { failures, expectedTop, drawnTop, alignmentError, lineText: probe?.lineText ?? null };
+}
+
+function cursorTracking(before, after) {
+  const failures = [];
+  if (!Number.isInteger(before?.head) || before.head !== after?.head) failures.push("editor head offset changed");
+  const beforeHeight = before?.cardHeight;
+  const afterHeight = after?.cardHeight;
+  if (!Number.isFinite(beforeHeight) || !Number.isFinite(afterHeight) || Math.abs(afterHeight - beforeHeight) < 1) {
+    failures.push("card height did not change");
+  }
+  const alignment = cursorAlignment(after);
+  const expectedTop = alignment.expectedTop;
+  const drawnTop = alignment.drawnTop;
+  const alignmentError = alignment.alignmentError;
+  failures.push(...alignment.failures);
+  return {
+    failures,
+    headBefore: before?.head ?? null,
+    headAfter: after?.head ?? null,
+    lineText: after?.lineText ?? null,
+    cardHeightBefore: beforeHeight ?? null,
+    cardHeightAfter: afterHeight ?? null,
+    expectedTop,
+    drawnTop,
+    alignmentError,
+  };
+}
+
+async function placeVimCursorOnLastBodyLine(client, notePath) {
+  await openCardNote(client, notePath, "live");
+  await waitForCard(client, notePath, "live");
+  await ensureMainWindow(client);
+  const focused = await client.evaluate(`(() => {
+    const editor = document.querySelector(".markdown-source-view .cm-content");
+    if (editor && editor.focus) editor.focus();
+    return Boolean(editor);
+  })()`);
+  await taskReqs.key(client, "Escape");
+  await taskReqs.key(client, { key: "G", modifiers: taskReqs.SHIFT });
+  await settleTwoFrames(client);
+  return { focused, probe: await client.evaluate(CURSOR_PROBE_SOURCE) };
+}
+
+async function waitForCursorAfterCardChange(client, predicate, label) {
+  const state = await shared.waitFor(client, PROBE_SOURCE, predicate, label, 12_000);
+  await settleTwoFrames(client);
+  return { state, cursor: await client.evaluate(CURSOR_PROBE_SOURCE) };
 }
 
 async function openCardNote(client, notePath, mode = "live") {
@@ -452,43 +536,68 @@ async function run(args) {
     await clickSelector(client, ".bob-home-card-collapse");
     await shared.waitFor(client, PROBE_SOURCE, (probe) => probe?.collapsed !== true, "expand area", 10_000);
 
-    await openCardNote(client, lib.PATHS.long, "live");
-    await waitForCard(client, lib.PATHS.long, "live");
-    await ensureMainWindow(client);
-    await client.evaluate(`(() => {
-      const editor = document.querySelector(".markdown-source-view .cm-content");
-      if (editor && editor.focus) editor.focus();
-      return Boolean(editor);
-    })()`);
-    await taskReqs.key(client, "Escape");
+    const areaCursorStart = await placeVimCursorOnLastBodyLine(client, lib.PATHS.long);
+    const areaBaseline = cursorAlignment(areaCursorStart.probe);
+    check("area-cursor-starts-on-body-line", areaCursorStart.focused
+      && areaCursorStart.probe?.path === lib.PATHS.long
+      && areaCursorStart.probe?.lineText === "Cursor probe target area body line."
+      && areaBaseline.failures.length === 0, { ...areaCursorStart, alignment: areaBaseline });
+    let areaCursor = areaCursorStart.probe;
     await taskReqs.key(client, "-");
-    const drawer = await shared.waitFor(client, PROBE_SOURCE, (probe) => probe?.drawerOpen === true, "drawer opens on -", 12_000);
+    const minusOpenResult = await waitForCursorAfterCardChange(client,
+      (probe) => probe?.path === lib.PATHS.long && probe?.drawerOpen === true, "drawer opens on -");
+    const drawer = minusOpenResult.state;
     check("minus-opens-drawer", drawer.drawerOpen === true && drawer.footPresent, drawer);
+    const minusOpenCursor = cursorTracking(areaCursor, minusOpenResult.cursor);
+    check("minus-open-cursor-tracks-text", minusOpenCursor.failures.length === 0, minusOpenCursor);
+    areaCursor = minusOpenResult.cursor;
     const drawerId = drawer.drawerId;
     await taskReqs.key(client, "-");
-    const drawerClosed = await shared.waitFor(client, PROBE_SOURCE, (probe) => probe?.drawerOpen !== true, "drawer closes on -", 12_000);
+    const minusCloseResult = await waitForCursorAfterCardChange(client,
+      (probe) => probe?.path === lib.PATHS.long && probe?.drawerOpen !== true, "drawer closes on -");
+    const drawerClosed = minusCloseResult.state;
     check("minus-closes-drawer", drawerClosed.drawerOpen !== true, drawerClosed);
+    const minusCloseCursor = cursorTracking(areaCursor, minusCloseResult.cursor);
+    check("minus-close-cursor-tracks-text", minusCloseCursor.failures.length === 0, minusCloseCursor);
+    areaCursor = minusCloseResult.cursor;
     await taskReqs.key(client, "Escape");
     await taskReqs.key(client, { key: "_", modifiers: taskReqs.SHIFT });
-    const folded = await shared.waitFor(client, PROBE_SOURCE, (probe) => probe?.collapsed === true, "area folds on _", 12_000);
+    const areaFoldResult = await waitForCursorAfterCardChange(client,
+      (probe) => probe?.path === lib.PATHS.long && probe?.collapsed === true, "area folds on _");
+    const folded = areaFoldResult.state;
     check("underscore-collapses-area", folded.collapsed === true && folded.footPresent, folded);
+    const areaFoldCursor = cursorTracking(areaCursor, areaFoldResult.cursor);
+    check("underscore-collapse-cursor-tracks-text", areaFoldCursor.failures.length === 0, areaFoldCursor);
+    areaCursor = areaFoldResult.cursor;
     await taskReqs.key(client, { key: "_", modifiers: taskReqs.SHIFT });
-    const unfolded = await shared.waitFor(client, PROBE_SOURCE, (probe) => probe?.collapsed !== true, "area expands on _", 12_000);
+    const areaExpandResult = await waitForCursorAfterCardChange(client,
+      (probe) => probe?.path === lib.PATHS.long && probe?.collapsed !== true, "area expands on _");
+    const unfolded = areaExpandResult.state;
     check("underscore-expands-area", unfolded.collapsed !== true, unfolded);
-    await openCardNote(client, lib.PATHS.wip, "live");
-    await waitForCard(client, lib.PATHS.wip, "live");
-    await ensureMainWindow(client);
-    await client.evaluate(`(() => {
-      const editor = document.querySelector(".markdown-source-view .cm-content");
-      if (editor && editor.focus) editor.focus();
-      return Boolean(editor);
-    })()`);
-    await taskReqs.key(client, "Escape");
+    const areaExpandCursor = cursorTracking(areaCursor, areaExpandResult.cursor);
+    check("underscore-expand-cursor-tracks-text", areaExpandCursor.failures.length === 0, areaExpandCursor);
+
+    const projectCursorStart = await placeVimCursorOnLastBodyLine(client, lib.PATHS.wip);
+    const projectBaseline = cursorAlignment(projectCursorStart.probe);
+    check("project-cursor-starts-on-body-line", projectCursorStart.focused
+      && projectCursorStart.probe?.path === lib.PATHS.wip
+      && String(projectCursorStart.probe?.lineText || "").includes("Ship the root rollout")
+      && projectBaseline.failures.length === 0, { ...projectCursorStart, alignment: projectBaseline });
+    let projectCursor = projectCursorStart.probe;
     await taskReqs.key(client, { key: "_", modifiers: taskReqs.SHIFT });
-    const foldedProject = await shared.waitFor(client, PROBE_SOURCE, (probe) => probe?.path === lib.PATHS.wip && probe?.collapsed === true, "project folds on _", 12_000);
+    const projectFoldResult = await waitForCursorAfterCardChange(client,
+      (probe) => probe?.path === lib.PATHS.wip && probe?.collapsed === true, "project folds on _");
+    const foldedProject = projectFoldResult.state;
     check("underscore-collapses-project", foldedProject.collapsed === true && foldedProject.lifecycleVisible === true, foldedProject);
+    const projectFoldCursor = cursorTracking(projectCursor, projectFoldResult.cursor);
+    projectCursor = projectFoldResult.cursor;
     await taskReqs.key(client, { key: "_", modifiers: taskReqs.SHIFT });
-    await shared.waitFor(client, PROBE_SOURCE, (probe) => probe?.path === lib.PATHS.wip && probe?.collapsed !== true, "project expands on _", 12_000);
+    const projectExpandResult = await waitForCursorAfterCardChange(client,
+      (probe) => probe?.path === lib.PATHS.wip && probe?.collapsed !== true, "project expands on _");
+    const projectExpandCursor = cursorTracking(projectCursor, projectExpandResult.cursor);
+    check("underscore-project-cursor-tracks-text",
+      projectFoldCursor.failures.length === 0 && projectExpandCursor.failures.length === 0,
+      { collapse: projectFoldCursor, expand: projectExpandCursor });
     await openCardNote(client, lib.PATHS.long, "reading");
     await waitForCard(client, lib.PATHS.long, "reading");
     await clickSelector(client, ".bob-property-card-foot [aria-expanded], .bob-property-card-foot button");
@@ -964,6 +1073,7 @@ async function main(argv) {
     try {
       lib.selfTest();
       new Function("return " + PROBE_SOURCE);
+      new Function("return " + CURSOR_PROBE_SOURCE);
       process.stdout.write("offline self-test complete (synthetic fixtures and probes; no Obsidian launched)\n");
     } catch (error) {
       process.stderr.write(String(error.stack || error) + "\n");
@@ -975,4 +1085,4 @@ async function main(argv) {
 }
 
 if (require.main === module) void main(process.argv.slice(2));
-module.exports = { PROBE_SOURCE, installVault, parseArgs: lib.parseArgs, run, tasksPluginSource, pinFixtureClock, ensureMainWindow };
+module.exports = { PROBE_SOURCE, CURSOR_PROBE_SOURCE, installVault, parseArgs: lib.parseArgs, run, tasksPluginSource, pinFixtureClock, ensureMainWindow };

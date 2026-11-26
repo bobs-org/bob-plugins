@@ -403,6 +403,14 @@ motion, with recorded container geometry and visual verdicts. Review every PNG a
 the report's checks, note-byte hashes, and bob invocation log. Copy the report and
 screenshots back from athena and retain them through `/sase_artifact`.
 
+The cursor walkthrough puts Vim on body text below an Area card and a Project card.
+After each Live Preview `-` drawer open/close and `_` collapse/expand, it checks that
+the editor head is unchanged, the card height changed, and the painted block cursor is
+within 2 px of `coordsAtPos(head, 1)`. The report records the checks
+`minus-open-cursor-tracks-text`, `minus-close-cursor-tracks-text`,
+`underscore-collapse-cursor-tracks-text`, `underscore-expand-cursor-tracks-text`, and
+`underscore-project-cursor-tracks-text`.
+
 ## Card foot walkthrough
 
 `scripts/obsidian-card-foot-e2e.cjs` proves the shared property-card foot and

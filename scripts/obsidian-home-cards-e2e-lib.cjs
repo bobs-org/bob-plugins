@@ -110,7 +110,7 @@ function fixtureNotes() {
     [PATHS.long]: yaml({
       type: "[[area]]", parent: "[[area]]", aliases: ["Long Summary"],
       summary: longSummary, color: "yellow",
-    }, "# Long Summary\n"),
+    }, "# Long Summary\n\nA plain body line below the card.\nAnother body line keeps the fixture readable.\nCursor probe target area body line.\n"),
     [PATHS.shadowed]: project({
       offclock: false, offclock_types: ["MEET"],
     }, "- [ ] #task #prj Shadowed clock policy ^prj\n"),
@@ -311,6 +311,8 @@ function selfTest() {
   assert.match(notes[PATHS.lateTitle], /\^prj[\s\S]*# Late heading after the task/);
   assert.match(notes[PATHS.deep], /parent: "\[\[mid_plan\]\]"/);
   assert.match(notes[PATHS.long], /second line/);
+  assert.match(notes[PATHS.long], /A plain body line below the card/);
+  assert.match(notes[PATHS.long], /Cursor probe target area body line/);
   assert.match(notes[PATHS.shadowed], /offclock_types:/);
   assert.match(notes[PATHS.invalidClock], /offclock_types:\n/);
   assert.match(notes[PATHS.mixedClock], /offclock_types: \[MEET, 7\]/);

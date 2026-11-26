@@ -37,6 +37,8 @@ test("fixtures cover home species, ancestry, inbox, every local project state, a
   assert.match(fixtures[lib.PATHS.scheduled], /\[scheduled:: 2026-12-02\]/);
   assert.match(fixtures[lib.PATHS.legacy], /theme: "BUILD"/);
   assert.match(fixtures[lib.PATHS.complete], /Close this completion fixture/);
+  assert.match(fixtures[lib.PATHS.long], /Another body line keeps the fixture readable/);
+  assert.match(fixtures[lib.PATHS.long], /Cursor probe target area body line/);
   assert.doesNotMatch(fixtures[lib.PATHS.untyped], /^type:/m);
   assert.match(fixtures[lib.PATHS.untyped], /aliases:/);
 });
@@ -74,6 +76,7 @@ test("CLI arguments and the page probe are valid", () => {
   assert.throws(() => lib.parseArgs(["--executable"]), /requires a PATH value/);
   assert.throws(() => lib.parseArgs(["--unknown"]), /Unknown argument/);
   assert.doesNotThrow(() => new Function("return " + runner.PROBE_SOURCE));
+  assert.doesNotThrow(() => new Function("return " + runner.CURSOR_PROBE_SOURCE));
   assert.match(runner.PROBE_SOURCE, /bob-home-card/);
   assert.match(runner.PROBE_SOURCE, /cardWidth/);
   assert.match(runner.PROBE_SOURCE, /nativePropertiesVisible/);
@@ -89,6 +92,15 @@ test("CLI arguments and the page probe are valid", () => {
   assert.match(runnerSource, /homeCardSetCollapsed\(notePath, false\)/);
   assert.match(runnerSource, /underscore-collapses-area/);
   assert.match(runnerSource, /underscore-collapses-project/);
+  for (const name of [
+    "minus-open-cursor-tracks-text", "minus-close-cursor-tracks-text",
+    "underscore-collapse-cursor-tracks-text", "underscore-expand-cursor-tracks-text",
+    "underscore-project-cursor-tracks-text",
+  ]) assert.ok(runnerSource.includes(name), `${name} cursor check is present`);
+  assert.match(runner.CURSOR_PROBE_SOURCE, /coordsAtPos\(head, 1\)/);
+  assert.match(runner.CURSOR_PROBE_SOURCE, /\.cm-vimCursorLayer \.cm-fat-cursor\.cm-cursor-primary/);
+  assert.match(runner.CURSOR_PROBE_SOURCE, /cardHeight/);
+  assert.match(runnerSource, /requestAnimationFrame\(\(\) => requestAnimationFrame/);
   const geo = lib.inspectGeometry({
     cardWidth: 360, cardHeight: 140, collapsed: true, drawerOpen: false,
     lifecycleVisible: true, nativePropertiesVisible: true,

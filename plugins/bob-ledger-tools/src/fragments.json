@@ -69,6 +69,7 @@
   "142b-plan-today-roots.js",
   "143-today-marks.js",
   "143a-snooze-definition-model.js",
+  "143b-snooze-row-paint-model.js",
   "144-relation-line-grammar.js",
   "145-relation-index-model.js",
   "145a-relation-inverse-phrase.js",
@@ -364,6 +365,8 @@
   "277a-plugin-snooze-marks.js",
   "277b-plugin-snooze-marks-reading.js",
   "277c-plugin-snooze-marks-jump.js",
+  "278a-plugin-snooze-row-paint.js",
+  "278b-plugin-snooze-row-paint-reading.js",
   "278-plugin-relation-model.js",
   "280-plugin-dependency-render.js",
   "281-plugin-blocks-render.js",
@@ -503,5 +506,6 @@
   "381-snoozed-cache-exports.js",
   "382-snooze-waker-exports.js",
   "383-snooze-definition-exports.js",
-  "384-snooze-woken-pills-exports.js"
+  "384-snooze-woken-pills-exports.js",
+  "385-snooze-row-paint-exports.js"
 ]

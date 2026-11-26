@@ -35557,6 +35557,589 @@ function ensureSnoozeMarksRefresh() {
   }
   return snoozeMarksRefresh;
 }
+// ---- src/143b-snooze-row-paint-model.js ----
+// --- Snooze row paint: pure display model --------------------------------
+// Owned by the display contract `docs/snooze-marks.md` in bob-cli
+// (child epic `plan:202611/snooze_display_marks.md`, phase
+// `snoozed-row-paint`). Pure helpers only: the SM-R vector model for
+// daily Snoozed row paint (asleep / due / blocked / history /
+// ignored / none / historical) plus the heading-summary model. This
+// file never touches Obsidian state and never throws: bad input
+// yields neutral paint (`none`) or no summary (`null`).
+
+// `HHMM` target into minutes since midnight, or null. Never throws.
+function snoozeRowPaintTargetMinutes(target) {
+  try {
+    if (typeof target !== "string" || !/^\d{4}$/.test(target)) {
+      return null;
+    }
+    const hours = Number(target.slice(0, 2));
+    const minutes = Number(target.slice(2, 4));
+    if (hours > 23 || minutes > 59) {
+      return null;
+    }
+    return hours * 60 + minutes;
+  } catch (error) {
+    return null;
+  }
+}
+
+// `HHMM` into `HH:MM`, or null. Never throws.
+function snoozeRowPaintColonTime(target) {
+  try {
+    if (typeof target !== "string" || !/^\d{4}$/.test(target)) {
+      return null;
+    }
+    const hours = Number(target.slice(0, 2));
+    const minutes = Number(target.slice(2, 4));
+    if (hours > 23 || minutes > 59) {
+      return null;
+    }
+    return target.slice(0, 2) + ":" + target.slice(2, 4);
+  } catch (error) {
+    return null;
+  }
+}
+
+// `HH:MM` clock text into minutes since midnight, or null. Never
+// throws.
+function snoozeRowPaintNowMinutes(now) {
+  try {
+    if (typeof now !== "string") {
+      return null;
+    }
+    const match = /^(\d{1,2}):(\d{2})$/.exec(now.trim());
+    if (!match) {
+      return null;
+    }
+    const hours = Number(match[1]);
+    const minutes = Number(match[2]);
+    if (hours > 23 || minutes > 59) {
+      return null;
+    }
+    return hours * 60 + minutes;
+  } catch (error) {
+    return null;
+  }
+}
+
+// A non-negative minute gap into countdown words (`2h 30m`, `45m`,
+// `1h`, `0m`). Never throws.
+function snoozeRowPaintCountdownText(gapMinutes) {
+  try {
+    const gap =
+      typeof gapMinutes === "number" && Number.isFinite(gapMinutes)
+        ? Math.max(0, Math.floor(gapMinutes))
+        : 0;
+    const hours = Math.floor(gap / 60);
+    const minutes = gap % 60;
+    if (hours <= 0) {
+      return "in " + minutes + "m";
+    }
+    if (minutes <= 0) {
+      return "in " + hours + "h";
+    }
+    return "in " + hours + "h " + minutes + "m";
+  } catch (error) {
+    return "in 0m";
+  }
+}
+
+// The muted reason chip for an ignored row, derived from task facts.
+// Precedence mirrors the shared classifier: non-task, event, missing,
+// ambiguous, done, cancelled, then Ready, then duplicate. Never
+// throws; unknown ignored input falls back to the duplicate words.
+function snoozeRowPaintIgnoredReason(task, target) {
+  try {
+    const facts =
+      task && typeof task === "object" ? task : {};
+    if (facts.is_task !== true) {
+      return "Not a task \u2014 won't wake";
+    }
+    if (facts.is_event === true) {
+      return "Event \u2014 won't wake";
+    }
+    if (facts.resolution === "missing") {
+      return "Missing \u2014 won't wake";
+    }
+    if (facts.resolution === "ambiguous") {
+      return "Ambiguous \u2014 won't wake";
+    }
+    const status =
+      typeof facts.status === "string" ? facts.status : null;
+    if (status === "x" || status === "X") {
+      return "Done \u2014 won't wake";
+    }
+    if (status === "-") {
+      return "Cancelled \u2014 won't wake";
+    }
+    if (status === " ") {
+      return "Ready \u2014 won't wake";
+    }
+    if (snoozeRowPaintTargetMinutes(target) === null) {
+      return "Unrecognized row";
+    }
+    return "Duplicate \u2014 earliest wins";
+  } catch (error) {
+    return "Duplicate \u2014 earliest wins";
+  }
+}
+
+// Extract `woke HH:MM` from a struck history row's source text.
+// Returns the `HH:MM` label or null. Never throws.
+function snoozeRowPaintWokeLabel(lineText) {
+  try {
+    const text = typeof lineText === "string" ? lineText : "";
+    const match = /woke\s+(\d{2}):(\d{2})/.exec(text);
+    if (!match) {
+      return null;
+    }
+    const hours = Number(match[1]);
+    const minutes = Number(match[2]);
+    if (hours > 23 || minutes > 59) {
+      return null;
+    }
+    return match[1] + ":" + match[2];
+  } catch (error) {
+    return null;
+  }
+}
+
+// Daily-note path (`2026/20261105.md`) into `YYYY-MM-DD`, or null.
+// Never throws.
+function snoozeRowPaintNoteDate(note) {
+  try {
+    const text = typeof note === "string" ? note : "";
+    const match = /(^|\/)(\d{4})(\d{4})(\d{2})(\d{2})\.md$/.exec(text);
+    if (!match) {
+      return null;
+    }
+    return match[2] + "-" + match[3] + "-" + match[4];
+  } catch (error) {
+    return null;
+  }
+}
+
+function snoozeRowPaintNone() {
+  return Object.freeze({
+    live_countdown: false,
+    paint: "none",
+    status_text: null,
+    time_pill: null,
+  });
+}
+
+// The SM-R paint model for one vector-shaped input: `{ paint:
+// 'asleep' | 'due' | 'blocked' | 'history' | 'ignored' | 'none' |
+// 'historical', status_text, time_pill, live_countdown }`. Mirrors
+// the canonical `marks.json` `rows` group verbatim: the snooze
+// toggle gates everything, fenced and indented row-like text never
+// paints, history stays dim, ignored rows carry the state's muted
+// reason, earlier notes keep neutral historical paint, and live
+// rows split into asleep (indigo countdown), due (amber waking),
+// and blocked (muted prerequisites). Never throws.
+function snoozeRowPaintModelForVector(input) {
+  try {
+    const value =
+      input && typeof input === "object" ? input : {};
+    const toggles =
+      value.toggles && typeof value.toggles === "object"
+        ? value.toggles
+        : {};
+    if (toggles.snooze_marks !== true) {
+      return snoozeRowPaintNone();
+    }
+    const row =
+      value.row && typeof value.row === "object" ? value.row : {};
+    const task =
+      value.task && typeof value.task === "object"
+        ? value.task
+        : {};
+    const kind = typeof row.kind === "string" ? row.kind : "";
+    if (kind === "fenced" || kind === "indented") {
+      return snoozeRowPaintNone();
+    }
+    if (kind === "history") {
+      const woke = snoozeRowPaintWokeLabel(row.line_text);
+      if (!woke) {
+        return Object.freeze({
+          live_countdown: false,
+          paint: "history",
+          status_text: null,
+          time_pill: null,
+        });
+      }
+      return Object.freeze({
+        live_countdown: false,
+        paint: "history",
+        status_text: "woke " + woke,
+        time_pill: null,
+      });
+    }
+    if (kind === "ignored") {
+      return Object.freeze({
+        live_countdown: false,
+        paint: "ignored",
+        status_text: snoozeRowPaintIgnoredReason(task, row.target),
+        time_pill: null,
+      });
+    }
+    if (kind !== "active") {
+      return snoozeRowPaintNone();
+    }
+    const target = typeof row.target === "string" ? row.target : "";
+    const colonTime = snoozeRowPaintColonTime(target);
+    if (!colonTime) {
+      return Object.freeze({
+        live_countdown: false,
+        paint: "ignored",
+        status_text: "Unrecognized row",
+        time_pill: null,
+      });
+    }
+    // Guard active rows with non-actionable task facts: they paint
+    // the ignored reason instead of inventing a live membership.
+    if (task.is_task !== true) {
+      return Object.freeze({
+        live_countdown: false,
+        paint: "ignored",
+        status_text: "Not a task \u2014 won't wake",
+        time_pill: null,
+      });
+    }
+    if (task.is_event === true) {
+      return Object.freeze({
+        live_countdown: false,
+        paint: "ignored",
+        status_text: "Event \u2014 won't wake",
+        time_pill: null,
+      });
+    }
+    if (task.resolution !== "found") {
+      return Object.freeze({
+        live_countdown: false,
+        paint: "ignored",
+        status_text: snoozeRowPaintIgnoredReason(task, target),
+        time_pill: null,
+      });
+    }
+    const status =
+      typeof task.status === "string" ? task.status : null;
+    if (status === "x" || status === "X") {
+      return Object.freeze({
+        live_countdown: false,
+        paint: "ignored",
+        status_text: "Done \u2014 won't wake",
+        time_pill: null,
+      });
+    }
+    if (status === "-") {
+      return Object.freeze({
+        live_countdown: false,
+        paint: "ignored",
+        status_text: "Cancelled \u2014 won't wake",
+        time_pill: null,
+      });
+    }
+    if (status === " ") {
+      return Object.freeze({
+        live_countdown: false,
+        paint: "ignored",
+        status_text: "Ready \u2014 won't wake",
+        time_pill: null,
+      });
+    }
+    // An earlier daily note keeps neutral historical paint: the time
+    // pill stays, but there is no live countdown and no today-state
+    // heading summary.
+    try {
+      const noteDate =
+        typeof value.note_date === "string" && value.note_date
+          ? value.note_date
+          : snoozeRowPaintNoteDate(value.note);
+      const today = typeof value.today === "string" ? value.today : "";
+      if (
+        noteDate &&
+        today &&
+        /^\d{4}-\d{2}-\d{2}$/.test(noteDate) &&
+        /^\d{4}-\d{2}-\d{2}$/.test(today) &&
+        noteDate !== today
+      ) {
+        return Object.freeze({
+          live_countdown: false,
+          paint: "historical",
+          status_text: null,
+          time_pill: colonTime,
+        });
+      }
+    } catch (error) {
+      // A date failure falls through to live paint.
+    }
+    if (status === "?") {
+      return Object.freeze({
+        live_countdown: false,
+        paint: "blocked",
+        status_text: "waits on prerequisites",
+        time_pill: colonTime,
+      });
+    }
+    if (status !== "*" && status !== "/") {
+      return Object.freeze({
+        live_countdown: false,
+        paint: "ignored",
+        status_text: snoozeRowPaintIgnoredReason(task, target),
+        time_pill: null,
+      });
+    }
+    const targetMinutes = snoozeRowPaintTargetMinutes(target);
+    const nowMinutes = snoozeRowPaintNowMinutes(value.now);
+    if (targetMinutes === null || nowMinutes === null) {
+      return Object.freeze({
+        live_countdown: false,
+        paint: "ignored",
+        status_text: "Unrecognized row",
+        time_pill: null,
+      });
+    }
+    if (targetMinutes <= nowMinutes) {
+      return Object.freeze({
+        live_countdown: false,
+        paint: "due",
+        status_text: "due \u00b7 waking",
+        time_pill: colonTime,
+      });
+    }
+    return Object.freeze({
+      live_countdown: true,
+      paint: "asleep",
+      status_text: snoozeRowPaintCountdownText(
+        targetMinutes - nowMinutes,
+      ),
+      time_pill: colonTime,
+    });
+  } catch (error) {
+    return snoozeRowPaintNone();
+  }
+}
+
+// The SM-R summary model for one vector-shaped heading input:
+// `{ summary: string | null }`. Counts unique planned identities
+// (on-clock Asleep, Due, Blocked only), omits zero subcounts, omits
+// `next` when no live row remains, and stays null for history-only
+// or toggle-off sections. Never throws.
+function snoozeRowSummaryModelForVector(input) {
+  try {
+    const value =
+      input && typeof input === "object" ? input : {};
+    const toggles =
+      value.toggles && typeof value.toggles === "object"
+        ? value.toggles
+        : {};
+    if (toggles.snooze_marks !== true) {
+      return Object.freeze({ summary: null });
+    }
+    // An earlier daily note never carries a today-state heading
+    // summary, even with live-looking rows.
+    try {
+      const noteDate = snoozeRowPaintNoteDate(value.note);
+      const today = typeof value.today === "string" ? value.today : "";
+      if (
+        noteDate &&
+        today &&
+        /^\d{4}-\d{2}-\d{2}$/.test(noteDate) &&
+        /^\d{4}-\d{2}-\d{2}$/.test(today) &&
+        noteDate !== today
+      ) {
+        return Object.freeze({ summary: null });
+      }
+    } catch (error) {
+      // A date failure falls through to the live summary.
+    }
+    const rows = Array.isArray(value.rows) ? value.rows : [];
+    const seen = new Set();
+    let asleep = 0;
+    let due = 0;
+    let blocked = 0;
+    let nextMinutes = null;
+    for (const entry of rows) {
+      try {
+        if (!entry || typeof entry !== "object") {
+          continue;
+        }
+        if (entry.on_clock !== true) {
+          continue;
+        }
+        const state =
+          typeof entry.state === "string" ? entry.state : "";
+        if (
+          state !== "asleep" &&
+          state !== "due" &&
+          state !== "blocked"
+        ) {
+          continue;
+        }
+        const id =
+          typeof entry.id === "string"
+            ? entry.id
+            : typeof entry.target === "string"
+              ? entry.target + "@" + String(rows.indexOf(entry))
+              : null;
+        if (id && seen.has(id)) {
+          continue;
+        }
+        if (id) {
+          seen.add(id);
+        }
+        if (state === "asleep") {
+          asleep += 1;
+        } else if (state === "due") {
+          due += 1;
+        } else {
+          blocked += 1;
+        }
+        if (state === "blocked") {
+          continue;
+        }
+        const minutes = snoozeRowPaintTargetMinutes(entry.target);
+        if (minutes === null) {
+          continue;
+        }
+        if (nextMinutes === null || minutes < nextMinutes) {
+          nextMinutes = minutes;
+        }
+      } catch (error) {
+        continue;
+      }
+    }
+    if (asleep <= 0 && due <= 0 && blocked <= 0) {
+      return Object.freeze({ summary: null });
+    }
+    const parts = [];
+    if (asleep > 0) {
+      parts.push(asleep + " asleep");
+    }
+    if (due > 0) {
+      parts.push(due + " due");
+    }
+    if (blocked > 0) {
+      parts.push(blocked + " blocked");
+    }
+    if (nextMinutes !== null) {
+      const label =
+        String(Math.floor(nextMinutes / 60)).padStart(2, "0") +
+        ":" +
+        String(nextMinutes % 60).padStart(2, "0");
+      parts.push("next " + label);
+    }
+    return Object.freeze({ summary: parts.join(" \u00b7 ") });
+  } catch (error) {
+    return Object.freeze({ summary: null });
+  }
+}
+
+// Listener-free row chip: an empty `span.bob-snooze-row-chip` with
+// `role=img`, an accessible label, and `data-bob-snooze-row-time` /
+// `data-bob-snooze-row-status` for CSS `::after` words, so copying
+// a row never picks up the paint. `doc` provides `createElement`
+// so tests can pass a fake document. Never throws: bad input
+// yields null.
+function buildSnoozeRowChipElement(doc, options) {
+  try {
+    if (!doc || typeof doc.createElement !== "function") {
+      return null;
+    }
+    const opts =
+      options && typeof options === "object" ? options : {};
+    const paint = typeof opts.paint === "string" ? opts.paint : "";
+    if (
+      paint !== "asleep" &&
+      paint !== "due" &&
+      paint !== "blocked" &&
+      paint !== "history" &&
+      paint !== "ignored" &&
+      paint !== "historical"
+    ) {
+      return null;
+    }
+    const time =
+      typeof opts.timePill === "string" ? opts.timePill : "";
+    const status =
+      typeof opts.statusText === "string" ? opts.statusText : "";
+    if (!/^\d{2}:\d{2}$/.test(time) && paint !== "history" && paint !== "ignored") {
+      if (paint === "asleep" || paint === "due" || paint === "blocked" || paint === "historical") {
+        return null;
+      }
+    }
+    const label =
+      status.trim() !== ""
+        ? status
+        : time.trim() !== ""
+          ? time
+          : "Snoozed row";
+    const span = doc.createElement("span");
+    span.setAttribute(
+      "class",
+      "bob-snooze-row-chip bob-snooze-row-chip--" + paint,
+    );
+    span.setAttribute("role", "img");
+    span.setAttribute(
+      "aria-label",
+      String(label).replace(/:{2,}/g, ":"),
+    );
+    span.setAttribute("data-tooltip-position", "top");
+    span.setAttribute("data-bob-snooze-row-paint", paint);
+    if (/^\d{2}:\d{2}$/.test(time)) {
+      span.setAttribute("data-bob-snooze-row-time", time);
+    }
+    if (status.trim() !== "") {
+      span.setAttribute(
+        "data-bob-snooze-row-status",
+        String(status).replace(/:{2,}/g, ":"),
+      );
+    }
+    try {
+      span.textContent = "";
+    } catch (error) {
+      // An empty host still renders.
+    }
+    return span;
+  } catch (error) {
+    return null;
+  }
+}
+
+// Listener-free heading summary chip: an empty
+// `span.bob-snooze-heading-chip` whose words ride in on
+// `data-bob-snooze-heading-summary` through CSS `::after`, so the
+// Markdown and copy/yank output never change. Never throws.
+function buildSnoozeHeadingChipElement(doc, summary) {
+  try {
+    if (!doc || typeof doc.createElement !== "function") {
+      return null;
+    }
+    if (typeof summary !== "string" || summary.trim() === "") {
+      return null;
+    }
+    const clean = String(summary).replace(/:{2,}/g, ":");
+    const span = doc.createElement("span");
+    span.setAttribute(
+      "class",
+      "bob-snooze-heading-chip",
+    );
+    span.setAttribute("role", "img");
+    span.setAttribute("aria-label", clean);
+    span.setAttribute("data-tooltip-position", "top");
+    span.setAttribute("data-bob-snooze-heading-summary", clean);
+    try {
+      span.textContent = "";
+    } catch (error) {
+      // An empty host still renders.
+    }
+    return span;
+  } catch (error) {
+    return null;
+  }
+}
 // ---- src/144-relation-line-grammar.js ----
 // Task relation rows are inert metadata, never Pomodoro Task Links or plan
 // budget items. Recognize empty and malformed shapes too, so their wikilinks
@@ -167950,6 +168533,11 @@ class BobLedgerToolsSnoozeMarksMixin {
       } catch (error) {
         // Woken-link paint is best-effort.
       }
+      try {
+        if (typeof this.setupSnoozeRowPaint === "function") this.setupSnoozeRowPaint();
+      } catch (error) {
+        // Row paint is best-effort.
+      }
       this.scheduleSnoozeMarksRefresh();
     } catch (error) {
       // Setup never breaks plugin startup.
@@ -168548,6 +169136,12 @@ class BobLedgerToolsSnoozeMarksMixin {
       if (typeof this.refreshSnoozeWokenPillReadingViews === "function") this.refreshSnoozeWokenPillReadingViews();
     } catch (error) {
       // Woken-link refresh shares the snooze display lifecycle.
+    }
+    try {
+      if (typeof this.refreshSnoozeRowPaintEditors === "function") this.refreshSnoozeRowPaintEditors();
+      if (typeof this.refreshSnoozeRowPaintReadingViews === "function") this.refreshSnoozeRowPaintReadingViews();
+    } catch (error) {
+      // Row paint shares the snooze display lifecycle.
     }
   }
 
@@ -169637,6 +170231,1661 @@ class BobLedgerToolsSnoozeMarksJumpMixin {
       return false;
     } finally {
       this.snoozeJumpInFlight = false;
+    }
+  }
+}
+// ---- src/278a-plugin-snooze-row-paint.js ----
+// Snoozed row paint in Live Preview (snoozed-row-paint phase).
+// The daily `## Snoozed` section is scanned once per build; each
+// distinct link path resolves once and task facts are memoized within
+// the build. Only the structural H2's own rows paint: notes beneath
+// rows stay, Markdown is never rewritten, and a fenced, indented, or
+// duplicate-header uncertainty never invents paint. The existing
+// snooze refresh effect drives minute/cache/toggle updates. Contract:
+// bob-cli `docs/snooze-marks.md`.
+
+// Classifier state into row-paint presentation. `wokeHhmm` feeds
+// history rows; `hhmm` feeds live and historical pills. Never throws.
+function snoozeRowPaintPresentation(state, hhmm, wokeHhmm) {
+  try {
+    const time =
+      typeof hhmm === "string" && /^\d{2}:\d{2}$/.test(hhmm)
+        ? hhmm
+        : null;
+    const woke =
+      typeof wokeHhmm === "string" && /^\d{2}:\d{2}$/.test(wokeHhmm)
+        ? wokeHhmm
+        : null;
+    if (state === "asleep") {
+      return { paint: "asleep", timePill: time, statusText: null, live: true };
+    }
+    if (state === "due") {
+      return {
+        paint: "due",
+        timePill: time,
+        statusText: "due \u00b7 waking",
+        live: false,
+      };
+    }
+    if (state === "blocked") {
+      return {
+        paint: "blocked",
+        timePill: time,
+        statusText: "waits on prerequisites",
+        live: false,
+      };
+    }
+    if (state === "woken") {
+      return {
+        paint: "history",
+        timePill: null,
+        statusText: woke ? "woke " + woke : null,
+        live: false,
+      };
+    }
+    if (state === "previous_day") {
+      return {
+        paint: "historical",
+        timePill: time,
+        statusText: null,
+        live: false,
+      };
+    }
+    if (state === "ready") {
+      return {
+        paint: "ignored",
+        timePill: null,
+        statusText: "Ready \u2014 won't wake",
+        live: false,
+      };
+    }
+    if (state === "missing") {
+      return {
+        paint: "ignored",
+        timePill: null,
+        statusText: "Missing \u2014 won't wake",
+        live: false,
+      };
+    }
+    if (state === "ambiguous") {
+      return {
+        paint: "ignored",
+        timePill: null,
+        statusText: "Ambiguous \u2014 won't wake",
+        live: false,
+      };
+    }
+    if (state === "done") {
+      return {
+        paint: "ignored",
+        timePill: null,
+        statusText: "Done \u2014 won't wake",
+        live: false,
+      };
+    }
+    if (state === "cancelled") {
+      return {
+        paint: "ignored",
+        timePill: null,
+        statusText: "Cancelled \u2014 won't wake",
+        live: false,
+      };
+    }
+    if (state === "already_linked") {
+      return {
+        paint: "ignored",
+        timePill: null,
+        statusText: "Already linked \u2014 won't wake",
+        live: false,
+      };
+    }
+    if (state === "event_task") {
+      return {
+        paint: "ignored",
+        timePill: null,
+        statusText: "Event \u2014 won't wake",
+        live: false,
+      };
+    }
+    if (state === "not_task") {
+      return {
+        paint: "ignored",
+        timePill: null,
+        statusText: "Not a task \u2014 won't wake",
+        live: false,
+      };
+    }
+    if (state === "duplicate") {
+      return {
+        paint: "ignored",
+        timePill: null,
+        statusText: "Duplicate \u2014 earliest wins",
+        live: false,
+      };
+    }
+    if (state === "malformed") {
+      return {
+        paint: "ignored",
+        timePill: null,
+        statusText: "Unrecognized row",
+        live: false,
+      };
+    }
+    return { paint: "none", timePill: null, statusText: null, live: false };
+  } catch (error) {
+    return { paint: "none", timePill: null, statusText: null, live: false };
+  }
+}
+
+class BobLedgerToolsSnoozeRowPaintMixin {
+  setupSnoozeRowPaint() {
+    try {
+      if (typeof this.snoozeRowPaintViews === "undefined") {
+        this.snoozeRowPaintViews = null;
+      }
+      const extension = this.createSnoozeRowPaintExtension();
+      if (
+        extension &&
+        typeof this.registerEditorExtension === "function"
+      ) {
+        this.registerEditorExtension(extension);
+      }
+      if (typeof this.setupSnoozeRowPaintReading === "function") {
+        this.setupSnoozeRowPaintReading();
+      }
+      if (typeof this.register === "function") {
+        this.register(() => {
+          this.snoozeRowPaintViews = null;
+        });
+      }
+    } catch (error) {
+      // A failed decorative surface never blocks startup.
+    }
+  }
+
+  snoozeRowPaintAvailable() {
+    try {
+      return Boolean(
+        ViewPlugin &&
+          Decoration &&
+          WidgetType &&
+          RangeSetBuilder &&
+          editorInfoField &&
+          editorLivePreviewField &&
+          ensureSnoozeMarksRefresh(),
+      );
+    } catch (error) {
+      return false;
+    }
+  }
+
+  createSnoozeRowPaintExtension() {
+    try {
+      if (
+        !this.snoozeRowPaintAvailable() ||
+        !ViewPlugin ||
+        typeof ViewPlugin.fromClass !== "function" ||
+        !Prec ||
+        typeof Prec.highest !== "function"
+      ) {
+        return null;
+      }
+      const plugin = this;
+      const RowPaintPluginClass = class {
+        constructor(view) {
+          try {
+            if (plugin.snoozeRowPaintViews instanceof Set) {
+              plugin.snoozeRowPaintViews.add(view);
+            }
+          } catch (error) {
+            // View tracking is best-effort.
+          }
+          try {
+            this.decorations =
+              plugin.buildSnoozeRowPaintDecorations(view);
+          } catch (error) {
+            this.decorations = Decoration.none;
+          }
+        }
+
+        update(update) {
+          try {
+            if (plugin.snoozeRowPaintShouldRebuild(update)) {
+              this.decorations =
+                plugin.buildSnoozeRowPaintDecorations(update.view);
+            }
+          } catch (error) {
+            // Keep the last valid decoration set.
+          }
+        }
+
+        destroy() {
+          try {
+            if (
+              plugin.snoozeRowPaintViews instanceof Set &&
+              this.view
+            ) {
+              plugin.snoozeRowPaintViews.delete(this.view);
+            }
+          } catch (error) {
+            // Teardown is best-effort.
+          }
+          try {
+            if (plugin.snoozeRowPaintViews instanceof Set) {
+              for (const view of Array.from(
+                plugin.snoozeRowPaintViews,
+              )) {
+                try {
+                  if (!view || view === update?.view) {
+                    continue;
+                  }
+                } catch (error) {
+                  continue;
+                }
+              }
+            }
+          } catch (error) {
+            // Best-effort.
+          }
+        }
+      };
+      return Prec.highest(
+        ViewPlugin.fromClass(RowPaintPluginClass, {
+          decorations: (value) => value.decorations,
+        }),
+      );
+    } catch (error) {
+      return null;
+    }
+  }
+
+  snoozeRowPaintShouldRebuild(update) {
+    try {
+      if (!update || typeof update !== "object") {
+        return false;
+      }
+      if (update.docChanged || update.viewportChanged) {
+        return true;
+      }
+      const refresh = ensureSnoozeMarksRefresh();
+      const transactions = update.transactions || [];
+      for (const transaction of transactions) {
+        const effects =
+          transaction && transaction.effects !== undefined
+            ? transaction.effects
+            : null;
+        const list = Array.isArray(effects)
+          ? effects
+          : effects
+            ? [effects]
+            : [];
+        for (const effect of list) {
+          if (
+            effect === refresh ||
+            (refresh &&
+              effect &&
+              typeof effect.is === "function" &&
+              effect.is(refresh))
+          ) {
+            return true;
+          }
+        }
+      }
+      if (editorLivePreviewField && update.startState && update.state) {
+        try {
+          if (
+            update.startState.field(editorLivePreviewField) !==
+            update.state.field(editorLivePreviewField)
+          ) {
+            return true;
+          }
+        } catch (error) {
+          // Field comparison is best-effort.
+        }
+      }
+      if (editorInfoField && update.startState && update.state) {
+        try {
+          const before = update.startState.field(editorInfoField);
+          const after = update.state.field(editorInfoField);
+          const beforePath =
+            before && before.file ? before.file.path : null;
+          const afterPath =
+            after && after.file ? after.file.path : null;
+          if (beforePath !== afterPath) {
+            return true;
+          }
+        } catch (error) {
+          // Field comparison is best-effort.
+        }
+      }
+      return false;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  // Classify the current daily-note document for row paint. Returns
+  // `{ parsed, classified, noteDate, today, historical }` or null
+  // when paint must stay neutral (no section, duplicate headers,
+  // toggle off, non-daily path). Never throws.
+  snoozeRowPaintClassify(sourcePath, text, clock) {
+    try {
+      if (
+        typeof sourcePath !== "string" ||
+        !sourcePath ||
+        !PLAN_DAILY_PATH_RE.test(sourcePath)
+      ) {
+        return null;
+      }
+      if (!this.snoozeMarksEnabled) {
+        return null;
+      }
+      const content = typeof text === "string" ? text : "";
+      if (!content) {
+        return null;
+      }
+      const parsed = snoozeParseSection(content);
+      if (!parsed || !Array.isArray(parsed.rows)) {
+        return null;
+      }
+      if (
+        Array.isArray(parsed.duplicateHeaders) &&
+        parsed.duplicateHeaders.length > 0
+      ) {
+        return null;
+      }
+      const moment = clock instanceof Date ? clock : new Date();
+      let today = "";
+      try {
+        today = formatLocalDate(moment);
+      } catch (error) {
+        today = "";
+      }
+      let noteDate = "";
+      try {
+        noteDate = snoozedNoteDateFromDailyPath(sourcePath) || "";
+      } catch (error) {
+        noteDate = "";
+      }
+      const historical =
+        Boolean(noteDate) &&
+        Boolean(today) &&
+        /^\d{4}-\d{2}-\d{2}$/.test(noteDate) &&
+        /^\d{4}-\d{2}-\d{2}$/.test(today) &&
+        noteDate !== today;
+      if (historical) {
+        return { parsed, classified: null, noteDate, today, historical };
+      }
+      let tasks = [];
+      try {
+        const found =
+          typeof planBlockTasks === "function"
+            ? planBlockTasks(this.app)
+            : [];
+        tasks = Array.isArray(found) ? found : [];
+      } catch (error) {
+        tasks = [];
+      }
+      let todayKeySet = new Set();
+      try {
+        const rank =
+          this.todayCache && this.todayCache.rank instanceof Map
+            ? this.todayCache.rank
+            : null;
+        todayKeySet = new Set(
+          rank ? Array.from(rank.keys()) : [],
+        );
+      } catch (error) {
+        todayKeySet = new Set();
+      }
+      let built = null;
+      try {
+        built = snoozedBuildClassifyInput({
+          content,
+          dailyPath: sourcePath,
+          tasks,
+          resolve: (target, daily) =>
+            this.resolveTodayLink(target, daily),
+          todayKeySet,
+          clock: moment,
+          zone: snoozedLocalZoneName(),
+          metadataCache: this.app && this.app.metadataCache,
+          vault: this.app && this.app.vault,
+        });
+      } catch (error) {
+        built = null;
+      }
+      if (!built || !built.classifierInput) {
+        return null;
+      }
+      let classified = null;
+      try {
+        classified = snoozeModel.classifyRows(built.classifierInput);
+      } catch (error) {
+        classified = null;
+      }
+      if (!classified || !Array.isArray(classified.rows)) {
+        return null;
+      }
+      return {
+        parsed,
+        classified,
+        meta: built.meta,
+        noteDate,
+        today,
+        historical,
+      };
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // Heading summary for today's note from classified winner rows:
+  // `2 asleep · next 19:00`, distinct due/blocked counts, no `next`
+  // for blocked-only, null for history/ignored-only. Never throws.
+  snoozeRowPaintHeadingSummary(classified) {
+    try {
+      if (!classified || !Array.isArray(classified.rows)) {
+        return null;
+      }
+      let asleep = 0;
+      let due = 0;
+      let blocked = 0;
+      let nextMinutes = null;
+      for (const row of classified.rows) {
+        try {
+          if (!row || typeof row !== "object") {
+            continue;
+          }
+          const state =
+            typeof row.state === "string" ? row.state : "";
+          if (
+            state !== "asleep" &&
+            state !== "due" &&
+            state !== "blocked"
+          ) {
+            continue;
+          }
+          if (state === "asleep") {
+            asleep += 1;
+          } else if (state === "due") {
+            due += 1;
+          } else {
+            blocked += 1;
+          }
+          if (state === "blocked") {
+            continue;
+          }
+          const minutes = Number.isInteger(row.minutes)
+            ? row.minutes
+            : null;
+          if (minutes === null) {
+            continue;
+          }
+          if (nextMinutes === null || minutes < nextMinutes) {
+            nextMinutes = minutes;
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      if (asleep <= 0 && due <= 0 && blocked <= 0) {
+        return null;
+      }
+      const parts = [];
+      if (asleep > 0) {
+        parts.push(asleep + " asleep");
+      }
+      if (due > 0) {
+        parts.push(due + " due");
+      }
+      if (blocked > 0) {
+        parts.push(blocked + " blocked");
+      }
+      if (nextMinutes !== null) {
+        const label =
+          String(Math.floor(nextMinutes / 60)).padStart(2, "0") +
+          ":" +
+          String(nextMinutes % 60).padStart(2, "0");
+        parts.push("next " + label);
+      }
+      return parts.join(" \u00b7 ");
+    } catch (error) {
+      return null;
+    }
+  }
+
+  buildSnoozeRowPaintDecorations(view) {
+    try {
+      if (
+        !this.snoozeMarksEnabled ||
+        !Decoration ||
+        !RangeSetBuilder ||
+        !view ||
+        !view.state
+      ) {
+        return Decoration.none;
+      }
+      let livePreview = false;
+      try {
+        livePreview = Boolean(
+          view.state.field(editorLivePreviewField),
+        );
+      } catch (error) {
+        livePreview = false;
+      }
+      if (!livePreview) {
+        return Decoration.none;
+      }
+      let sourcePath = "";
+      try {
+        const info = view.state.field(editorInfoField);
+        sourcePath =
+          info && info.file && typeof info.file.path === "string"
+            ? info.file.path
+            : "";
+      } catch (error) {
+        sourcePath = "";
+      }
+      if (!sourcePath || !PLAN_DAILY_PATH_RE.test(sourcePath)) {
+        return Decoration.none;
+      }
+      const doc = view.state.doc;
+      if (!doc || typeof doc.toString !== "function") {
+        return Decoration.none;
+      }
+      const text = doc.toString().replace(/\r\n/g, "\n");
+      let clock = null;
+      try {
+        clock =
+          typeof this.snoozeMarksNow === "function"
+            ? this.snoozeMarksNow()
+            : new Date();
+      } catch (error) {
+        clock = new Date();
+      }
+      if (!(clock instanceof Date)) {
+        clock = new Date();
+      }
+      const model = this.snoozeRowPaintClassify(
+        sourcePath,
+        text,
+        clock,
+      );
+      if (!model || !model.parsed) {
+        return Decoration.none;
+      }
+      const builder = new RangeSetBuilder();
+      const ranges = Array.isArray(view.visibleRanges)
+        ? view.visibleRanges
+        : [];
+      const inRange = (pos) => {
+        if (!ranges.length) {
+          return true;
+        }
+        for (const range of ranges) {
+          try {
+            if (
+              pos >= range.from &&
+              pos <= range.to
+            ) {
+              return true;
+            }
+          } catch (error) {
+            continue;
+          }
+        }
+        return false;
+      };
+      // Historical notes: quiet time pills, no countdown, no
+      // heading summary. Map parser rows directly.
+      if (model.historical) {
+        for (const row of model.parsed.rows) {
+          try {
+            if (!row || row.embedded) {
+              continue;
+            }
+            if (row.kind !== "active" && row.kind !== "history") {
+              continue;
+            }
+            const lineNumber = Number.isInteger(row.line)
+              ? row.line
+              : null;
+            if (!lineNumber || lineNumber < 1) {
+              continue;
+            }
+            let line = null;
+            try {
+              line = doc.line(lineNumber);
+            } catch (error) {
+              line = null;
+            }
+            if (!line) {
+              continue;
+            }
+            if (!inRange(line.from)) {
+              continue;
+            }
+            const presentation =
+              row.kind === "history"
+                ? snoozeRowPaintPresentation(
+                    "woken",
+                    null,
+                    row.wokeHhmm,
+                  )
+                : snoozeRowPaintPresentation(
+                    "previous_day",
+                    row.hhmm,
+                    null,
+                  );
+            if (
+              !presentation ||
+              presentation.paint === "none"
+            ) {
+              continue;
+            }
+            try {
+              builder.add(
+                line.from,
+                line.from,
+                Decoration.line({
+                  class:
+                    "bob-snooze-row bob-snooze-row--" +
+                    presentation.paint,
+                }),
+              );
+            } catch (error) {
+              // Line paint is best-effort.
+            }
+            if (
+              presentation.timePill ||
+              presentation.statusText
+            ) {
+              try {
+                const chip = buildSnoozeRowChipElement(
+                  typeof document !== "undefined"
+                    ? document
+                    : null,
+                  {
+                    paint: presentation.paint,
+                    timePill: presentation.timePill,
+                    statusText: presentation.statusText,
+                  },
+                );
+                if (chip && typeof WidgetType === "function") {
+                  const widget = new (class extends WidgetType {
+                    eq(other) {
+                      return Boolean(
+                        other &&
+                          other.key === this.key,
+                      );
+                    }
+                    toDOM() {
+                      return chip;
+                    }
+                  })();
+                  widget.key = [
+                    presentation.paint,
+                    presentation.timePill,
+                    presentation.statusText,
+                    lineNumber,
+                  ].join("|");
+                  builder.add(
+                    line.to,
+                    line.to,
+                    Decoration.widget({
+                      widget,
+                      side: 1,
+                    }),
+                  );
+                }
+              } catch (error) {
+                // Chip paint is best-effort.
+              }
+            }
+          } catch (error) {
+            continue;
+          }
+        }
+        return builder.finish();
+      }
+      // Live today note: paint from classifier winner states.
+      const byLine = new Map();
+      for (const row of model.classified.rows) {
+        try {
+          if (!row || !Number.isInteger(row.line)) {
+            continue;
+          }
+          byLine.set(row.line, row);
+        } catch (error) {
+          continue;
+        }
+      }
+      const nowMinutes =
+        clock.getHours() * 60 + clock.getMinutes();
+      for (const [lineNumber, row] of byLine.entries()) {
+        try {
+          let line = null;
+          try {
+            line = doc.line(lineNumber);
+          } catch (error) {
+            line = null;
+          }
+          if (!line) {
+            continue;
+          }
+          if (!inRange(line.from)) {
+            continue;
+          }
+          const presentation = snoozeRowPaintPresentation(
+            row.state,
+            row.hhmm,
+            row.wokeAt,
+          );
+          if (!presentation || presentation.paint === "none") {
+            continue;
+          }
+          // Countdown words for asleep rows tick on the minute.
+          if (presentation.paint === "asleep") {
+            const gap =
+              Number.isInteger(row.minutes) && Number.isInteger(nowMinutes)
+                ? Math.max(0, row.minutes - nowMinutes)
+                : 0;
+            presentation.statusText =
+              snoozeRowPaintCountdownText(gap);
+            presentation.live = true;
+          }
+          try {
+            builder.add(
+              line.from,
+              line.from,
+              Decoration.line({
+                class:
+                  "bob-snooze-row bob-snooze-row--" +
+                  presentation.paint,
+              }),
+            );
+          } catch (error) {
+            // Line paint is best-effort.
+          }
+          if (presentation.timePill || presentation.statusText) {
+            try {
+              const chip = buildSnoozeRowChipElement(
+                typeof document !== "undefined" ? document : null,
+                {
+                  paint: presentation.paint,
+                  timePill: presentation.timePill,
+                  statusText: presentation.statusText,
+                },
+              );
+              if (chip && typeof WidgetType === "function") {
+                const key = [
+                  presentation.paint,
+                  presentation.timePill,
+                  presentation.statusText,
+                  lineNumber,
+                ].join("|");
+                const widget = new (class extends WidgetType {
+                  constructor() {
+                    super();
+                    this.key = key;
+                  }
+                  eq(other) {
+                    return Boolean(
+                      other && other.key === this.key,
+                    );
+                  }
+                  toDOM() {
+                    return chip;
+                  }
+                })();
+                builder.add(
+                  line.to,
+                  line.to,
+                  Decoration.widget({ widget, side: 1 }),
+                );
+              }
+            } catch (error) {
+              // Chip paint is best-effort.
+            }
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      // Heading summary chip after the `## Snoozed` header line.
+      try {
+        const summary = this.snoozeRowPaintHeadingSummary(
+          model.classified,
+        );
+        if (summary) {
+          const headerNumber = Number.isInteger(
+            model.parsed.headerNumber,
+          )
+            ? model.parsed.headerNumber
+            : null;
+          if (headerNumber && headerNumber >= 1) {
+            let headerLine = null;
+            try {
+              headerLine = doc.line(headerNumber);
+            } catch (error) {
+              headerLine = null;
+            }
+            if (headerLine && inRange(headerLine.from)) {
+              const chip = buildSnoozeHeadingChipElement(
+                typeof document !== "undefined" ? document : null,
+                summary,
+              );
+              if (chip && typeof WidgetType === "function") {
+                const key = "heading|" + summary;
+                const widget = new (class extends WidgetType {
+                  constructor() {
+                    super();
+                    this.key = key;
+                  }
+                  eq(other) {
+                    return Boolean(other && other.key === this.key);
+                  }
+                  toDOM() {
+                    return chip;
+                  }
+                })();
+                builder.add(
+                  headerLine.to,
+                  headerLine.to,
+                  Decoration.widget({ widget, side: 1 }),
+                );
+              }
+            }
+          }
+        }
+      } catch (error) {
+        // Heading summary is best-effort.
+      }
+      return builder.finish();
+    } catch (error) {
+      try {
+        return Decoration.none;
+      } catch (inner) {
+        return null;
+      }
+    }
+  }
+
+  refreshSnoozeRowPaintEditors() {
+    try {
+      const refresh = ensureSnoozeMarksRefresh();
+      const workspace = this.app && this.app.workspace;
+      if (
+        !refresh ||
+        !workspace ||
+        typeof workspace.getLeavesOfType !== "function"
+      ) {
+        return;
+      }
+      let leaves = [];
+      try {
+        leaves = workspace.getLeavesOfType("markdown") || [];
+      } catch (error) {
+        leaves = [];
+      }
+      for (const leaf of leaves) {
+        try {
+          const leafPath =
+            leaf && leaf.view && leaf.view.file &&
+            typeof leaf.view.file.path === "string"
+              ? leaf.view.file.path
+              : "";
+          if (!leafPath || !PLAN_DAILY_PATH_RE.test(leafPath)) {
+            continue;
+          }
+          const cm =
+            leaf && leaf.view && leaf.view.editor
+              ? leaf.view.editor.cm
+              : null;
+          if (cm && typeof cm.dispatch === "function") {
+            cm.dispatch({ effects: refresh.of(null) });
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+    } catch (error) {
+      // Editor refresh is best-effort.
+    }
+  }
+}
+// ---- src/278b-plugin-snooze-row-paint-reading.js ----
+// Snoozed row paint in Reading view (snoozed-row-paint phase).
+// Exact source mapping or neutral; never title-matches, never
+// writes. Split from `278a-plugin-snooze-row-paint.js` to keep each
+// fragment at or below 1000 lines. Contract: bob-cli
+// `docs/snooze-marks.md`.
+
+class BobLedgerToolsSnoozeRowPaintReadingMixin {
+  setupSnoozeRowPaintReading() {
+    try {
+      if (!(this.snoozeRowPaintReadingViews instanceof Map)) {
+        try {
+          this.snoozeRowPaintReadingViews = new Map();
+        } catch (error) {
+          this.snoozeRowPaintReadingViews = null;
+        }
+      }
+      if (typeof this.registerMarkdownPostProcessor === "function") {
+        this.registerMarkdownPostProcessor(
+          (el, ctx) => this.renderSnoozeRowPaintIn(el, ctx),
+          58,
+        );
+      }
+    } catch (error) {
+      // Reading-view wiring never blocks plugin startup.
+    }
+  }
+
+  snoozeRowPaintReadingTag(node) {
+    try {
+      return String(
+        (node && (node.tagName || node.nodeName)) || "",
+      ).toUpperCase();
+    } catch (error) {
+      return "";
+    }
+  }
+
+  snoozeRowPaintReadingHasClass(node, name) {
+    try {
+      if (!node || !name) {
+        return false;
+      }
+      if (
+        node.classList &&
+        typeof node.classList.contains === "function"
+      ) {
+        return node.classList.contains(name);
+      }
+      const raw =
+        typeof node.getAttribute === "function"
+          ? node.getAttribute("class") || ""
+          : typeof node.className === "string"
+            ? node.className
+            : "";
+      return String(raw).split(/\s+/).indexOf(name) !== -1;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  renderSnoozeRowPaintIn(el, ctx) {
+    try {
+      if (!el || !ctx) {
+        return;
+      }
+      if (!(this.snoozeRowPaintReadingViews instanceof Map)) {
+        try {
+          this.snoozeRowPaintReadingViews = new Map();
+        } catch (error) {
+          return;
+        }
+      }
+      const sourcePath =
+        ctx && typeof ctx.sourcePath === "string"
+          ? ctx.sourcePath
+          : "";
+      const record = { el, ctx, sourcePath };
+      this.snoozeRowPaintReadingViews.set(el, record);
+      this.sweepSnoozeRowPaintReadingView(record);
+      try {
+        if (typeof this.scheduleSnoozeMarksRefresh === "function") {
+          this.scheduleSnoozeMarksRefresh();
+        }
+      } catch (error) {
+        // A follow-up sweep covers late source fills.
+      }
+      if (typeof ctx.addChild === "function") {
+        let child = null;
+        try {
+          if (typeof MarkdownRenderChild === "function") {
+            child = new MarkdownRenderChild(el);
+            const views = this.snoozeRowPaintReadingViews;
+            child.onunload = () => {
+              if (views) {
+                views.delete(el);
+              }
+            };
+          }
+        } catch (error) {
+          child = null;
+        }
+        if (!child) {
+          const views = this.snoozeRowPaintReadingViews;
+          child = {
+            unload: () => {
+              if (views) {
+                views.delete(el);
+              }
+            },
+          };
+        }
+        try {
+          ctx.addChild(child);
+        } catch (error) {
+          // Older hosts may reject processor children.
+        }
+      }
+    } catch (error) {
+      // Reading-view marks never throw.
+    }
+  }
+
+  snoozeRowPaintPreviewRecords() {
+    const records = [];
+    try {
+      const workspace = this.app && this.app.workspace;
+      if (
+        !workspace ||
+        typeof workspace.getLeavesOfType !== "function"
+      ) {
+        return records;
+      }
+      const leaves = workspace.getLeavesOfType("markdown") || [];
+      for (const leaf of leaves) {
+        try {
+          const view = leaf && leaf.view ? leaf.view : null;
+          const sourcePath =
+            view && view.file && typeof view.file.path === "string"
+              ? view.file.path
+              : "";
+          if (!sourcePath) {
+            continue;
+          }
+          const container =
+            (view.previewMode && view.previewMode.containerEl) ||
+            view.contentEl ||
+            view.containerEl ||
+            null;
+          if (
+            !container ||
+            typeof container.querySelector !== "function"
+          ) {
+            continue;
+          }
+          const root =
+            container.querySelector(
+              ".markdown-preview-view, .markdown-reading-view",
+            ) || container;
+          if (root) {
+            records.push({
+              el: root,
+              ctx: { sourcePath },
+              sourcePath,
+            });
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+    } catch (error) {
+      return records;
+    }
+    return records;
+  }
+
+  refreshSnoozeRowPaintReadingViews() {
+    let refreshed = false;
+    try {
+      if (this.snoozeRowPaintReadingViews instanceof Map) {
+        for (const [el, record] of Array.from(
+          this.snoozeRowPaintReadingViews.entries(),
+        )) {
+          try {
+            if (!el) {
+              this.snoozeRowPaintReadingViews.delete(el);
+              continue;
+            }
+            this.sweepSnoozeRowPaintReadingView(record);
+            refreshed = true;
+          } catch (error) {
+            continue;
+          }
+        }
+      }
+      for (const record of this.snoozeRowPaintPreviewRecords()) {
+        try {
+          this.sweepSnoozeRowPaintReadingView(record);
+          refreshed = true;
+        } catch (error) {
+          continue;
+        }
+      }
+    } catch (error) {
+      // Best-effort.
+    }
+    return refreshed;
+  }
+
+  snoozeRowPaintReadingLines(record) {
+    try {
+      const sourcePath = String(
+        (record && record.sourcePath) || "",
+      );
+      if (!sourcePath) {
+        return null;
+      }
+      const ctx = record && record.ctx;
+      try {
+        if (
+          ctx &&
+          typeof ctx.getSectionInfo === "function" &&
+          record.el
+        ) {
+          const info = ctx.getSectionInfo(record.el);
+          if (
+            info &&
+            typeof info.text === "string" &&
+            info.text !== ""
+          ) {
+            const lines = info.text
+              .replace(/\r\n/g, "\n")
+              .split("\n");
+            if (snoozeParseSection(info.text)) {
+              return lines;
+            }
+          }
+        }
+      } catch (error) {
+        // Fall through to the source-text cache.
+      }
+      try {
+        if (typeof this.taskThemeSourceTextFor === "function") {
+          const text = this.taskThemeSourceTextFor(sourcePath);
+          if (typeof text === "string" && text !== "") {
+            if (snoozeParseSection(text)) {
+              return text.replace(/\r\n/g, "\n").split("\n");
+            }
+          }
+        }
+      } catch (error) {
+        // Fall through to the fill request.
+      }
+      try {
+        if (
+          typeof this.taskThemeRequestSourceText === "function"
+        ) {
+          this.taskThemeRequestSourceText(sourcePath);
+        }
+      } catch (error) {
+        // Best-effort.
+      }
+      return null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  snoozeRowPaintOwnedChips(li) {
+    try {
+      if (!li || typeof li.querySelectorAll !== "function") {
+        return [];
+      }
+      const found = li.querySelectorAll(
+        ".bob-snooze-row-chip, .bob-snooze-heading-chip",
+      );
+      const out = [];
+      for (const node of found || []) {
+        try {
+          let owner = node;
+          let guard = 0;
+          while (owner && guard++ < 50) {
+            const tag = String(
+              (owner && (owner.tagName || owner.nodeName)) || "",
+            ).toUpperCase();
+            if (tag === "LI" || tag === "H2") {
+              break;
+            }
+            owner = owner.parentNode || null;
+          }
+          if (owner === li) {
+            out.push(node);
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      return out;
+    } catch (error) {
+      return [];
+    }
+  }
+
+  snoozeRowPaintRemoveNode(node) {
+    try {
+      if (
+        node &&
+        node.parentNode &&
+        typeof node.parentNode.removeChild === "function"
+      ) {
+        node.parentNode.removeChild(node);
+      }
+    } catch (error) {
+      // Best-effort.
+    }
+  }
+
+  snoozeRowPaintApplyRowClass(li, paint) {
+    try {
+      if (!li) {
+        return;
+      }
+      const names = [
+        "bob-snooze-row",
+        "bob-snooze-row--asleep",
+        "bob-snooze-row--due",
+        "bob-snooze-row--blocked",
+        "bob-snooze-row--history",
+        "bob-snooze-row--ignored",
+        "bob-snooze-row--historical",
+      ];
+      if (li.classList && typeof li.classList.remove === "function") {
+        for (const name of names) {
+          try {
+            li.classList.remove(name);
+          } catch (error) {
+            // Best-effort.
+          }
+        }
+        if (paint && paint !== "none") {
+          try {
+            li.classList.add("bob-snooze-row");
+            li.classList.add("bob-snooze-row--" + paint);
+          } catch (error) {
+            // Best-effort.
+          }
+        }
+        return;
+      }
+      const current =
+        typeof li.getAttribute === "function"
+          ? li.getAttribute("class") || ""
+          : typeof li.className === "string"
+            ? li.className
+            : "";
+      const kept = String(current)
+        .split(/\s+/)
+        .filter((part) => part && names.indexOf(part) === -1);
+      if (paint && paint !== "none") {
+        kept.push("bob-snooze-row");
+        kept.push("bob-snooze-row--" + paint);
+      }
+      const next = kept.join(" ").trim();
+      if (typeof li.setAttribute === "function") {
+        li.setAttribute("class", next);
+      } else {
+        li.className = next;
+      }
+    } catch (error) {
+      // Class paint is best-effort.
+    }
+  }
+
+  sweepSnoozeRowPaintReadingView(record) {
+    try {
+      const root = record && record.el;
+      const sourcePath = String(
+        (record && record.sourcePath) || "",
+      );
+      if (!root || !sourcePath) {
+        return false;
+      }
+      const staleChips =
+        typeof root.querySelectorAll === "function"
+          ? Array.from(
+              root.querySelectorAll(
+                ".bob-snooze-row-chip, .bob-snooze-heading-chip",
+              ),
+            )
+          : [];
+      const staleRows =
+        typeof root.querySelectorAll === "function"
+          ? Array.from(root.querySelectorAll("li.bob-snooze-row"))
+          : [];
+      if (
+        !this.snoozeMarksEnabled ||
+        !PLAN_DAILY_PATH_RE.test(sourcePath)
+      ) {
+        for (const node of staleChips) {
+          this.snoozeRowPaintRemoveNode(node);
+        }
+        for (const li of staleRows) {
+          this.snoozeRowPaintApplyRowClass(li, "none");
+        }
+        return true;
+      }
+      const lines = this.snoozeRowPaintReadingLines(record);
+      if (!lines) {
+        for (const node of staleChips) {
+          this.snoozeRowPaintRemoveNode(node);
+        }
+        for (const li of staleRows) {
+          this.snoozeRowPaintApplyRowClass(li, "none");
+        }
+        return true;
+      }
+      const text = lines.join("\n");
+      const parsed = snoozeParseSection(text);
+      if (!parsed || !Array.isArray(parsed.rows)) {
+        for (const node of staleChips) {
+          this.snoozeRowPaintRemoveNode(node);
+        }
+        for (const li of staleRows) {
+          this.snoozeRowPaintApplyRowClass(li, "none");
+        }
+        return true;
+      }
+      if (
+        Array.isArray(parsed.duplicateHeaders) &&
+        parsed.duplicateHeaders.length > 0
+      ) {
+        for (const node of staleChips) {
+          this.snoozeRowPaintRemoveNode(node);
+        }
+        for (const li of staleRows) {
+          this.snoozeRowPaintApplyRowClass(li, "none");
+        }
+        return true;
+      }
+      let clock = null;
+      try {
+        clock =
+          typeof this.snoozeMarksNow === "function"
+            ? this.snoozeMarksNow()
+            : new Date();
+      } catch (error) {
+        clock = new Date();
+      }
+      if (!(clock instanceof Date)) {
+        clock = new Date();
+      }
+      const model =
+        typeof this.snoozeRowPaintClassify === "function"
+          ? this.snoozeRowPaintClassify(sourcePath, text, clock)
+          : null;
+      const doc =
+        root.ownerDocument ||
+        (typeof document !== "undefined" ? document : null);
+      // Find the structural `## Snoozed` heading: the first H2 whose
+      // text starts with `Snoozed`. Any second match means the same
+      // duplicate-header uncertainty as the parser, so stay neutral.
+      let headings = [];
+      try {
+        headings =
+          typeof root.querySelectorAll === "function"
+            ? Array.from(root.querySelectorAll("h2"))
+            : [];
+      } catch (error) {
+        headings = [];
+      }
+      const snoozedHeadings = [];
+      for (const heading of headings) {
+        try {
+          const label = String(
+            (heading && heading.textContent) || "",
+          ).trim();
+          if (
+            label === "Snoozed" ||
+            label.startsWith("Snoozed \u00b7") ||
+            label.startsWith("Snoozed ")
+          ) {
+            const raw = String(
+              (heading && heading.textContent) || "",
+            );
+            void raw;
+            snoozedHeadings.push(heading);
+          } else {
+            // Fall back to the data-heading attribute Obsidian sets.
+            const data =
+              heading && typeof heading.getAttribute === "function"
+                ? heading.getAttribute("data-heading") || ""
+                : "";
+            if (
+              String(data).trim() === "Snoozed" ||
+              String(data).trim().startsWith("Snoozed")
+            ) {
+              snoozedHeadings.push(heading);
+            }
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      if (snoozedHeadings.length !== 1) {
+        for (const node of staleChips) {
+          this.snoozeRowPaintRemoveNode(node);
+        }
+        for (const li of staleRows) {
+          this.snoozeRowPaintApplyRowClass(li, "none");
+        }
+        return true;
+      }
+      const heading = snoozedHeadings[0];
+      // Collect top-level list items under the heading until the next
+      // H2: those positions mirror `parsed.rows` order, so the nth
+      // item maps to the nth parsed row without title heuristics.
+      const items = [];
+      try {
+        let sibling = heading.nextElementSibling;
+        let guard = 0;
+        while (sibling && guard++ < 200) {
+          const tag = this.snoozeRowPaintReadingTag(sibling);
+          if (tag === "H2" || tag === "H1") {
+            break;
+          }
+          if (tag === "UL" || tag === "OL") {
+            const children = sibling.children || sibling.childNodes || [];
+            for (const child of Array.from(children)) {
+              try {
+                if (
+                  this.snoozeRowPaintReadingTag(child) === "LI"
+                ) {
+                  items.push(child);
+                }
+              } catch (error) {
+                continue;
+              }
+            }
+          }
+          sibling = sibling.nextElementSibling;
+        }
+      } catch (error) {
+        // Item scan is best-effort.
+      }
+      // Heading summary first: remove the stale chip, then append
+      // the current one exactly once (idempotent rerenders).
+      try {
+        for (const owned of this.snoozeRowPaintOwnedChips(heading)) {
+          this.snoozeRowPaintRemoveNode(owned);
+        }
+        Array.from(
+          heading.querySelectorAll
+            ? heading.querySelectorAll(".bob-snooze-heading-chip")
+            : [],
+        ).forEach((node) => this.snoozeRowPaintRemoveNode(node));
+      } catch (error) {
+        // Best-effort.
+      }
+      if (model && !model.historical && model.classified && doc) {
+        try {
+          const summary =
+            typeof this.snoozeRowPaintHeadingSummary === "function"
+              ? this.snoozeRowPaintHeadingSummary(model.classified)
+              : null;
+          if (summary) {
+            const chip = buildSnoozeHeadingChipElement(doc, summary);
+            if (chip && typeof heading.appendChild === "function") {
+              heading.appendChild(chip);
+            }
+          }
+        } catch (error) {
+          // Heading summary is best-effort.
+        }
+      }
+      // Row paint by position: the nth rendered item carries the nth
+      // parsed row's paint. A length mismatch or an uncertain mapping
+      // stays neutral instead of guessing.
+      const rows = parsed.rows.filter(
+        (row) => row && !row.embedded,
+      );
+      if (model && model.historical) {
+        for (let index = 0; index < items.length; index += 1) {
+          try {
+            const li = items[index];
+            const row = rows[index] || null;
+            for (const owned of this.snoozeRowPaintOwnedChips(li)) {
+              this.snoozeRowPaintRemoveNode(owned);
+            }
+            if (!row || (row.kind !== "active" && row.kind !== "history")) {
+              this.snoozeRowPaintApplyRowClass(li, "none");
+              continue;
+            }
+            const presentation =
+              row.kind === "history"
+                ? snoozeRowPaintPresentation(
+                    "woken",
+                    null,
+                    row.wokeHhmm,
+                  )
+                : snoozeRowPaintPresentation(
+                    "previous_day",
+                    row.hhmm,
+                    null,
+                  );
+            this.snoozeRowPaintApplyRowClass(li, presentation.paint);
+            if (
+              doc &&
+              (presentation.timePill || presentation.statusText) &&
+              presentation.paint !== "none"
+            ) {
+              const chip = buildSnoozeRowChipElement(doc, {
+                paint: presentation.paint,
+                timePill: presentation.timePill,
+                statusText: presentation.statusText,
+              });
+              if (chip && typeof li.appendChild === "function") {
+                li.appendChild(chip);
+              }
+            }
+          } catch (error) {
+            continue;
+          }
+        }
+        return true;
+      }
+      if (!model || !model.classified) {
+        for (const li of items) {
+          try {
+            for (const owned of this.snoozeRowPaintOwnedChips(li)) {
+              this.snoozeRowPaintRemoveNode(owned);
+            }
+            this.snoozeRowPaintApplyRowClass(li, "none");
+          } catch (error) {
+            continue;
+          }
+        }
+        return true;
+      }
+      const byPosition = model.classified.rows || [];
+      // `classified.rows` parallels `parsed.rows` for active rows
+      // plus trailing history snapshots; align by source line.
+      const stateByLine = new Map();
+      for (const entry of byPosition) {
+        try {
+          if (entry && Number.isInteger(entry.line)) {
+            stateByLine.set(entry.line, entry);
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      const nowMinutes = clock.getHours() * 60 + clock.getMinutes();
+      for (let index = 0; index < items.length; index += 1) {
+        try {
+          const li = items[index];
+          const row = rows[index] || null;
+          for (const owned of this.snoozeRowPaintOwnedChips(li)) {
+            this.snoozeRowPaintRemoveNode(owned);
+          }
+          if (!row || !Number.isInteger(row.line)) {
+            this.snoozeRowPaintApplyRowClass(li, "none");
+            continue;
+          }
+          const entry = stateByLine.get(row.line) || null;
+          const state =
+            entry && typeof entry.state === "string"
+              ? entry.state
+              : null;
+          if (!state) {
+            this.snoozeRowPaintApplyRowClass(li, "none");
+            continue;
+          }
+          const presentation = snoozeRowPaintPresentation(
+            state,
+            entry.hhmm,
+            entry.wokeAt,
+          );
+          if (!presentation || presentation.paint === "none") {
+            this.snoozeRowPaintApplyRowClass(li, "none");
+            continue;
+          }
+          if (presentation.paint === "asleep") {
+            const gap =
+              Number.isInteger(entry.minutes) &&
+              Number.isInteger(nowMinutes)
+                ? Math.max(0, entry.minutes - nowMinutes)
+                : 0;
+            presentation.statusText =
+              snoozeRowPaintCountdownText(gap);
+          }
+          this.snoozeRowPaintApplyRowClass(li, presentation.paint);
+          if (
+            doc &&
+            (presentation.timePill || presentation.statusText)
+          ) {
+            const chip = buildSnoozeRowChipElement(doc, {
+              paint: presentation.paint,
+              timePill: presentation.timePill,
+              statusText: presentation.statusText,
+            });
+            if (chip && typeof li.appendChild === "function") {
+              li.appendChild(chip);
+            }
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      // Remove chips left on rows that no longer render.
+      for (const node of staleChips) {
+        try {
+          let owner = node.parentNode;
+          let guard = 0;
+          let inView = false;
+          while (owner && guard++ < 50) {
+            if (owner === root) {
+              inView = true;
+              break;
+            }
+            owner = owner.parentNode;
+          }
+          if (!inView) {
+            this.snoozeRowPaintRemoveNode(node);
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      return true;
+    } catch (error) {
+      return false;
     }
   }
 }
@@ -206210,6 +208459,8 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsSnoozeMarksJumpMixin,
   BobLedgerToolsSnoozeWokenPillsMixin,
   BobLedgerToolsSnoozeWokenPillsReadingMixin,
+  BobLedgerToolsSnoozeRowPaintMixin,
+  BobLedgerToolsSnoozeRowPaintReadingMixin,
   BobLedgerToolsTaskLinkMarksMixin,
   BobLedgerToolsTaskLinkMarksResolveMixin,
   BobLedgerToolsTaskLinkMarksReadingMixin,
@@ -211577,4 +213828,19 @@ Object.assign(module.exports.helpers, {
   SnoozeWokenWidget,
   snoozeWokenEntryIsOpen,
   snoozeWokenLedgerLinks,
+});
+// ---- src/385-snooze-row-paint-exports.js ----
+Object.assign(module.exports.helpers, {
+  snoozeRowPaintTargetMinutes,
+  snoozeRowPaintColonTime,
+  snoozeRowPaintNowMinutes,
+  snoozeRowPaintCountdownText,
+  snoozeRowPaintIgnoredReason,
+  snoozeRowPaintWokeLabel,
+  snoozeRowPaintNoteDate,
+  snoozeRowPaintModelForVector,
+  snoozeRowSummaryModelForVector,
+  buildSnoozeRowChipElement,
+  buildSnoozeHeadingChipElement,
+  snoozeRowPaintPresentation,
 });

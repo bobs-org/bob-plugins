@@ -167,6 +167,8 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsSnoozeMarksJumpMixin,
   BobLedgerToolsSnoozeWokenPillsMixin,
   BobLedgerToolsSnoozeWokenPillsReadingMixin,
+  BobLedgerToolsSnoozeRowPaintMixin,
+  BobLedgerToolsSnoozeRowPaintReadingMixin,
   BobLedgerToolsTaskLinkMarksMixin,
   BobLedgerToolsTaskLinkMarksResolveMixin,
   BobLedgerToolsTaskLinkMarksReadingMixin,

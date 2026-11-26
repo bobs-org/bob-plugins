@@ -3481,6 +3481,147 @@ body.bob-snooze-marks-off .bob-snooze-woke {
   }
 }
 
+/* Snoozed row paint (snoozed-row-paint phase): daily `## Snoozed` rows
+   and the heading summary. Display-only; Markdown is never rewritten
+   and copy/yank output never includes the paint. Contract: bob-cli
+   `docs/snooze-marks.md`. Row lines carry `bob-snooze-row` plus one
+   state class; chips are empty hosts whose words ride in on
+   `::after` from data attributes, so generated text stays out of the
+   clipboard. Shape plus words carry every state; color is never the
+   only cue. */
+
+.bob-snooze-row--asleep {
+  background-color: color-mix(in srgb, var(--text-accent, #7c8aff) 7%, transparent);
+  border-radius: 6px;
+}
+
+.bob-snooze-row--due {
+  background-color: color-mix(in srgb, var(--text-warning, #e8a13c) 10%, transparent);
+  border-radius: 6px;
+}
+
+.bob-snooze-row--blocked {
+  opacity: 0.82;
+}
+
+.bob-snooze-row--history {
+  opacity: 0.62;
+}
+
+.bob-snooze-row--ignored {
+  opacity: 0.72;
+}
+
+.bob-snooze-row--historical {
+  opacity: 0.85;
+}
+
+.bob-snooze-row-chip {
+  display: inline-flex;
+  align-items: center;
+  margin-inline: 0.35em 0.1em;
+  border-radius: 999px;
+  padding-inline: 0.45em;
+  font-size: 0.82em;
+  line-height: 1.6;
+  white-space: nowrap;
+  vertical-align: baseline;
+  user-select: none;
+  cursor: default;
+  font-variant-numeric: tabular-nums;
+  print-color-adjust: exact;
+}
+
+.bob-snooze-row-chip::after {
+  content: attr(data-bob-snooze-row-time) " " attr(data-bob-snooze-row-status);
+  line-height: 1.6;
+}
+
+.bob-snooze-row-chip--asleep {
+  color: color-mix(in srgb, var(--text-accent, #7c8aff) 88%, var(--text-normal, #2b2b2b));
+  background-color: color-mix(in srgb, var(--text-accent, #7c8aff) 12%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--text-accent, #7c8aff) 38%, transparent);
+  outline-offset: -1px;
+}
+
+.bob-snooze-row-chip--due {
+  color: color-mix(in srgb, var(--text-warning, #e7a43d) 92%, #6b4a12);
+  background-color: color-mix(in srgb, var(--text-warning, #e7a43d) 14%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--text-warning, #e7a43d) 55%, transparent);
+  outline-offset: -1px;
+}
+
+.bob-snooze-row-chip--blocked,
+.bob-snooze-row-chip--ignored,
+.bob-snooze-row-chip--history,
+.bob-snooze-row-chip--historical {
+  color: var(--text-muted, #8b8fa3);
+  outline: 1px solid color-mix(in srgb, var(--text-muted, #8b8fa3) 42%, transparent);
+  outline-offset: -1px;
+}
+
+.bob-snooze-row-chip--history {
+  opacity: 0.85;
+}
+
+.bob-snooze-heading-chip {
+  display: inline-flex;
+  align-items: center;
+  margin-inline-start: 0.5em;
+  border-radius: 999px;
+  padding-inline: 0.5em;
+  font-size: 0.78em;
+  font-weight: 400;
+  line-height: 1.6;
+  white-space: nowrap;
+  vertical-align: baseline;
+  user-select: none;
+  cursor: default;
+  color: var(--text-muted, #8b8fa3);
+  background-color: color-mix(in srgb, var(--text-accent, #7c8aff) 8%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--text-accent, #7c8aff) 30%, transparent);
+  outline-offset: -1px;
+  font-variant-numeric: tabular-nums;
+}
+
+.bob-snooze-heading-chip::after {
+  content: attr(data-bob-snooze-heading-summary);
+  line-height: 1.6;
+}
+
+body.bob-snooze-marks-off .bob-snooze-row-chip,
+body.bob-snooze-marks-off .bob-snooze-heading-chip {
+  display: none;
+}
+
+body.bob-snooze-marks-off .bob-snooze-row {
+  background: none;
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bob-snooze-row-chip,
+  .bob-snooze-heading-chip {
+    animation: none;
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .bob-snooze-row-chip,
+  .bob-snooze-heading-chip {
+    color: CanvasText;
+    background: Canvas;
+    outline: 1px solid CanvasText;
+    outline-offset: -1px;
+  }
+  .bob-snooze-row--asleep,
+  .bob-snooze-row--due {
+    background: none;
+    outline: 1px solid CanvasText;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .bob-progress-mark {
     animation: none;

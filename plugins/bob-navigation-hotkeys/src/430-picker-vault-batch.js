@@ -271,100 +271,10 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
   }
 
   // Tie-change `＋ id` for a chord on an ID-less row or owner: the confirmed
-  // id is written to the missing note first (Esc writes nothing), then the
-  // chord commits through `applyTieChange`.
+  // IDs are gathered before any write. Same-note preparations join the tie
+  // transaction; cross-note preparations happen after the final confirmation.
   async confirmTieChangeBlockId(item) {
-    const pending = this.pendingTieChange;
-    if (!pending || !item.valid) {
-      return false;
-    }
-    const missing = pending.missing || null;
-    const missingPath = missing ? normalizeVaultRelativePath(missing.path || "") : "";
-    if (!missing || !missingPath) {
-      this.clearPendingBatch();
-      new Notice("That task could not be located");
-      return false;
-    }
-    const files = typeof this.readVaultStageFiles === "function"
-      ? await this.readVaultStageFiles([missingPath])
-      : null;
-    const stagedContent = files ? files.get(missingPath) : null;
-    const fallbackContent = typeof this.getBlockIdStageContent === "function"
-      ? this.getBlockIdStageContent()
-      : null;
-    const targetContent = stagedContent !== undefined && stagedContent !== null
-      ? String(stagedContent)
-      : fallbackContent !== null && fallbackContent !== undefined
-        ? String(fallbackContent)
-        : null;
-    if (targetContent === null) {
-      new Notice("That task could not be located");
-      return false;
-    }
-    const validation = validateBlockIdCandidate(item.id, targetContent, {
-      reservedIds: pending.reservedIds || new Set(),
-    });
-    if (!validation.valid || !tryDependencyId(missingPath, validation.id)) {
-      new Notice(validation.message || "That block ID cannot be used in the target note");
-      return false;
-    }
-    const targetLines = String(targetContent).split(/\r?\n/);
-    const missingLine = Number.isInteger(missing.line) ? missing.line : null;
-    if (missingLine === null || targetLines[missingLine] !== missing.rawLine) {
-      return this.refuseDependencyStale();
-    }
-    if (!isObsidianTaskAtLine(targetContent, missingLine, null, targetLines)) {
-      new Notice("That task could not be located");
-      return false;
-    }
-    const updatedLine = applyPromptedBlockIdPreservingLegacyId(
-      targetLines[missingLine],
-      validation.id,
-      missingPath,
-    );
-    if (updatedLine === null) {
-      new Notice("Dependency not added: this note path cannot be encoded as a dependency ID");
-      return false;
-    }
-    const prepared = await this.plugin.prepareDependencyTargetNote(missingPath, {
-      line: missingLine,
-      from: targetLines[missingLine],
-      text: updatedLine,
-    });
-    if (!prepared.ok) {
-      new Notice(`⛓ Could not prepare ${missingPath} (${prepared.reason})`);
-      return false;
-    }
-    const resolvedOwner = pending.missingSide === "owner"
-      ? { ...pending.owner, blockId: validation.id }
-      : pending.owner;
-    const resolvedOther = pending.missingSide === "other"
-      ? { ...pending.other, blockId: validation.id }
-      : pending.other;
-    const to = pending.to;
-    this.clearPendingBatch();
-    let outcome = null;
-    try {
-      outcome = await this.plugin.applyTieChange(resolvedOwner, resolvedOther, to, {
-        promptBlockId: null,
-      });
-    } catch (_error) {
-      new Notice("Could not update the tie");
-      return false;
-    }
-    if (!outcome || outcome.ok !== true) {
-      new Notice((outcome && outcome.notice) || "Could not update the tie");
-      return false;
-    }
-    if (outcome.notice) new Notice(outcome.notice);
-    try {
-      if (typeof this.reopenDependencyStageFresh === "function") {
-        this.reopenDependencyStageFresh();
-      }
-    } catch (_error) {
-      // The notice already committed; reopen is best-effort.
-    }
-    return true;
+    return await confirmTieChangeBlockId(this, item);
   }
 
   // Record one confirmed block ID and either advance to the next prompt (modal

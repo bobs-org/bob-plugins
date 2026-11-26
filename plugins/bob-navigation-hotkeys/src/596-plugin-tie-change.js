@@ -323,6 +323,18 @@ class BobNavigationHotkeysTieChangeMixin {
         });
       }
     }
+    const originalNotes = new Map(notes);
+    const promptPreparations = Array.isArray(options.promptPreparations)
+      ? options.promptPreparations
+      : [];
+    if (promptPreparations.length > 0) {
+      const preparedNotes = applyTiePromptPreparationsToNotes(notes, promptPreparations);
+      if (!preparedNotes) {
+        return Object.freeze({ ok: false, reason: "changed — reopen", notice: "changed — reopen", stale: true });
+      }
+      notes.clear();
+      for (const [path, content] of preparedNotes) notes.set(path, content);
+    }
 
     const resolveLinkpath = this.dependencyLinkpathResolver();
     const vaultFiles = this.readDependencyVaultFileList() || [...notes.keys()];
@@ -349,7 +361,36 @@ class BobNavigationHotkeysTieChangeMixin {
       });
     }
 
-    const expectedLive = new Map(notes);
+    const sameNotePreparations = promptPreparations.filter(
+      (entry) => normalizeVaultRelativePath(entry.path || "") === ownerRef.path,
+    );
+    const crossNotePreparations = promptPreparations.filter(
+      (entry) => normalizeVaultRelativePath(entry.path || "") !== ownerRef.path,
+    );
+    for (const preparation of crossNotePreparations) {
+      let prepared = null;
+      try {
+        prepared = await this.prepareDependencyTargetNote(
+          preparation.path,
+          preparation,
+        );
+      } catch (_prepareError) {
+        prepared = null;
+      }
+      if (!prepared || prepared.ok !== true) {
+        return Object.freeze({
+          ok: false,
+          reason: (prepared && prepared.reason) || "target-preparation-failed",
+          notice: `⛓ Could not prepare ${preparation.path}`,
+        });
+      }
+    }
+
+    const expectedLive = new Map(originalNotes);
+    for (const preparation of crossNotePreparations) {
+      const path = normalizeVaultRelativePath(preparation.path || "");
+      if (notes.has(path)) expectedLive.set(path, notes.get(path));
+    }
     const pair = Object.freeze({ owner: ownerRef, other: otherRef });
     const plainSource = planned.to === "plain-out" ? ownerRef : otherRef;
     const plainTarget = planned.to === "plain-out" ? otherRef : ownerRef;
@@ -408,10 +449,12 @@ class BobNavigationHotkeysTieChangeMixin {
           files: notes,
           expected: expectedLive,
           tieLinks: combinedTieLinks,
+          taskIdPreparations: sameNotePreparations,
           today: options.today,
           secondDependent: {
             parentPath: second.dependent.path,
             parentLine: secondLocated.line,
+            blockId: second.dependent.blockId,
             add: second.add || [],
             remove: second.remove || [],
           },
@@ -427,10 +470,12 @@ class BobNavigationHotkeysTieChangeMixin {
           files: notes,
           expected: expectedLive,
           tieLinks: combinedTieLinks,
+          taskIdPreparations: sameNotePreparations,
           today: options.today,
           secondDependent: {
             parentPath: second.dependent.path,
             parentLine: secondLocated.line,
+            blockId: second.dependent.blockId,
             add: second.add || [],
             remove: second.remove || [],
           },
@@ -495,6 +540,7 @@ class BobNavigationHotkeysTieChangeMixin {
           files: notes,
           expected: expectedLive,
           tieLinks,
+          taskIdPreparations: sameNotePreparations,
           today: options.today,
         });
       } else {
@@ -505,6 +551,7 @@ class BobNavigationHotkeysTieChangeMixin {
           remove: (edit.remove || []).length > 0 ? targetChanges : [],
           expected: expectedLive,
           tieLinks,
+          taskIdPreparations: sameNotePreparations,
           today: options.today,
         });
       }
@@ -564,6 +611,9 @@ class BobNavigationHotkeysTieChangeMixin {
         add: [{ ...target, label: null }],
         direction: planned.to === "plain-out" ? "to" : "from",
         expected: expectedLive,
+        taskIdPreparations: sameNotePreparations.filter(
+          (preparation) => normalizeVaultRelativePath(preparation.path || "") === plainSource.path,
+        ),
         today: options.today,
       });
       linkSucceeded = Boolean(

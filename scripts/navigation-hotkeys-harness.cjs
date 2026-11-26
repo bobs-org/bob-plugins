@@ -125,6 +125,7 @@ class TransactionEditor extends TestEditor {
     this.transactionScrollTops = [];
     this.setCursorCalls = [];
     this.undoGroups = 0;
+    this.undoHistory = [];
   }
   getCursor() {
     return { ...this.cursor };
@@ -145,6 +146,7 @@ class TransactionEditor extends TestEditor {
     this.transactions.push(JSON.parse(JSON.stringify(transaction)));
     if (transaction.changes && transaction.changes.length > 0) {
       this.undoGroups += 1;
+      this.undoHistory.push(this.content);
     }
     const changes = [...(transaction.changes || [])].sort(
       (left, right) =>
@@ -158,6 +160,12 @@ class TransactionEditor extends TestEditor {
         ...(transaction.selection.to || transaction.selection.from),
       };
     }
+  }
+  undo() {
+    if (this.undoHistory.length === 0) return false;
+    this.content = this.undoHistory.pop();
+    this.undoGroups -= 1;
+    return true;
   }
 }
 

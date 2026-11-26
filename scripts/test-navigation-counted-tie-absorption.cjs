@@ -35,6 +35,7 @@ Module._load = function loadWithObsidianStubs(request, parent, isMain) {
 const NavigationHotkeysPlugin = require("../plugins/bob-navigation-hotkeys/main.js");
 const { helpers } = NavigationHotkeysPlugin;
 Module._load = originalLoad;
+const { TransactionEditor, compatibleTasksSettings } = require("./navigation-hotkeys-harness.cjs");
 
 const LINKS = "🪢 **LINKS:**";
 const taskLine = (status, text, blockId) => `- [${status}] ${text} #task ^${blockId}`;
@@ -45,6 +46,62 @@ function countedSession(content, sourceLines, targetLine) {
   const dependencyTask = helpers.getOpenLocalTasks(content).find((task) => task.line === targetLine);
   return { session, dependencyTask };
 }
+
+test("counted same-note entrypoint commits dependency and tie mirrors in one transaction", async () => {
+  const content = [
+    "- [ ] #task One ^one",
+    "  - 🪢 **LINKS:** [[#^target]]",
+    "  - 🪢 **LINKED FROM:** [[#^target]]",
+    "- [ ] #task Two ^two",
+    "  - 🪢 **LINKS:** [[#^target]]",
+    "  - 🪢 **LINKED FROM:** [[#^target]]",
+    "- [ ] #task Target [id:: Tasks__target] ^target",
+    "  - 🪢 **LINKS:** [[#^one]] • [[#^two]]",
+    "  - 🪢 **LINKED FROM:** [[#^one]] • [[#^two]]",
+  ].join("\n");
+  const editor = new TransactionEditor(content, { line: 0, ch: 0 });
+  const file = { path: "Tasks.md", extension: "md" };
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: {
+      getActiveFile: () => file,
+      getActiveViewOfType: () => ({ editor, file }),
+      getLeavesOfType: () => [{ view: { file, editor } }],
+    },
+    vault: {
+      adapter: { read: async () => JSON.stringify(compatibleTasksSettings()) },
+      getMarkdownFiles: () => [file],
+    },
+    metadataCache: {
+      getFirstLinkpathDest: (linkpath) =>
+        String(linkpath).replace(/\.md$/i, "").toLowerCase() === "tasks"
+          ? file
+          : null,
+    },
+    plugins: { plugins: {} },
+  };
+  plugin.getActiveMarkdownView = () => ({ editor, file });
+  const session = helpers.discoverCountedObsidianTaskTargets(content, 0, 1);
+  const dependencyTask = helpers.getOpenLocalTasks(content).find(
+    (task) => task.existingBlockId === "target",
+  );
+
+  const applied = await plugin.applyCountedLocalTaskDependency(
+    editor,
+    { line: 0, ch: 0 },
+    file.path,
+    session,
+    dependencyTask,
+  );
+
+  assert.equal(applied, true);
+  assert.equal(editor.undoGroups, 1);
+  assert.match(editor.content, /- \[\?\] #task One/);
+  assert.match(editor.content, /- \[\?\] #task Two/);
+  assert.doesNotMatch(editor.content, /\*\*LINKS:\*\*|\*\*LINKED FROM:\*\*/);
+  assert.equal(editor.undo(), true);
+  assert.equal(editor.content, content);
+});
 
 test("counted session absorbs same-note plain links in one transaction", () => {
   const content = [

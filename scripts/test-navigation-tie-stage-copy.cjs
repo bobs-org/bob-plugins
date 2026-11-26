@@ -138,22 +138,22 @@ test("Depends-on consequence reads the owner status, prerequisites, and today's 
     ...other,
     kind: "local-task",
     status: "/", // A candidate's lane must not supply the owner's outcome.
-    tieInfo: { labelledOut: ["follow-up of"] },
+    tieInfo: { plainOut: true, labelledOut: ["follow-up of"] },
   };
   assert.equal(
     helpers.dependencyStageConsequenceStrip(candidate, { stage, plugin }),
-    'Waits on it · this task becomes Blocked · it takes Next · ⚠ removes this task\'s link from JOB 10:10–10:35 · keeps "follow-up of"',
+    'Replaces the 🪢 link · Waits on it · this task becomes Blocked · it takes Next · ⚠ removes this task\'s link from JOB 10:10–10:35 · keeps "follow-up of"',
   );
 
   const blockedOwner = { ...owner, status: "?" };
   const blockedStage = { ...stage, sources: [blockedOwner], dependent: blockedOwner };
   assert.equal(
     helpers.dependencyStageConsequenceStrip(candidate, { stage: blockedStage, plugin }),
-    "Also waits on it (2 open)",
+    'Replaces the 🪢 link · Also waits on it (2 open) · keeps "follow-up of"',
   );
   assert.equal(
     helpers.dependencyStageConsequenceStrip({ ...candidate, closed: true }, { stage, plugin }),
-    "Waits on it · already done · status unchanged",
+    'Replaces the 🪢 link · Waits on it · already done · status unchanged · keeps "follow-up of"',
   );
 });
 

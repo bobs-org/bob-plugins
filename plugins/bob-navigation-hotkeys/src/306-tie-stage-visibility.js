@@ -624,6 +624,11 @@ function dependencyStageConsequenceStrip(item, context = {}) {
   if (!item || item.kind === "stage-more") return "";
   const stage = context.stage || {};
   const tie = item.tieInfo || null;
+  const decorateEarlyResult = (text) => {
+    const prefix = tieVisibilityHasPlainLink(tie) ? "Replaces the 🪢 link · " : "";
+    const label = [...(tie && tie.labelledOut || []), ...(tie && tie.labelledIn || [])][0];
+    return `${prefix}${text}${label ? ` · keeps "${label}"` : ""}`;
+  };
   if (item.disabled) {
     if (item.disabledReason === "would create a cycle" && tie && tie.waitedOnBy) {
       const owner = tieVisibilityOwnerSources(stage)[0];
@@ -635,7 +640,7 @@ function dependencyStageConsequenceStrip(item, context = {}) {
         "owner-waits",
       );
       if (planned && planned.kind === "change" && planned.reversing === true) {
-        return "⟲ It waits on this task · ⌃B reverses";
+        return decorateEarlyResult("⟲ It waits on this task · ⌃B reverses");
       }
     }
     return item.disabledReason || "";
@@ -672,14 +677,14 @@ function dependencyStageConsequenceStrip(item, context = {}) {
     });
   }
   if (item.closed === true || item.open === false) {
-    return "Waits on it · already done · status unchanged";
+    return decorateEarlyResult("Waits on it · already done · status unchanged");
   }
   const ownerKey = tieVisibilityOwnerKey(owner, stage);
   const currentOpen = tieVisibilityOpenWaitCount(stage, ownerKey);
   const openAfter = currentOpen + 1;
   const ownerStatus = owner.status || (stage.dependent && stage.dependent.status);
   if (ownerStatus === "?") {
-    return `Also waits on it (${openAfter} open)`;
+    return decorateEarlyResult(`Also waits on it (${openAfter} open)`);
   }
   const parts = ["Waits on it · this task becomes Blocked"];
   const lane = ownerStatus === "/"

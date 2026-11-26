@@ -331,12 +331,14 @@ function planCountedLocalTaskDependency(
           owner: {
             path: normalizedPath,
             blockId: sourceBlockId || "",
-            line: tracked.line,
+            line: sourceBlockId ? null : tracked.line,
           },
           other: {
             path: normalizedPath,
             blockId: countedTargetRef.blockId,
-            line: Number.isInteger(dependencyTask.line) ? dependencyTask.line : null,
+            // The target can move as preceding sources gain their navigation
+            // children. Re-resolve its stable ID in the final postimage.
+            line: null,
           },
         });
       }

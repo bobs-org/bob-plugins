@@ -529,7 +529,14 @@ test("setLocalTaskDependencyLink cross-file continuation removes the live link",
 test("same-note marked batch consumes every newly Blocked source", async () => {
   resetNotices();
   const datePath = liveDailyPath();
-  const content = ordinaryNote();
+  const content = [
+    "- [ ] #task Parent ^parent",
+    "  - 🪢 **LINKS:** [[#^target]]",
+    "  - 🪢 **LINKED FROM:** [[#^target]]",
+    "- [ ] #task Target ^target",
+    "  - 🪢 **LINKS:** [[#^parent]]",
+    "  - 🪢 **LINKED FROM:** [[#^parent]]",
+  ].join("\n");
   const daily = pomodoroDaily([
     "- [ ] Current (0900-0930)",
     "  - [[Tasks#^parent]]",
@@ -545,7 +552,7 @@ test("same-note marked batch consumes every newly Blocked source", async () => {
       {
         markKey: "Tasks.md#1",
         path: "Tasks.md",
-        line: 1,
+        line: 3,
         rawLine: "- [ ] #task Target ^target",
         displayText: "Target",
         existingIdField: null,
@@ -560,6 +567,7 @@ test("same-note marked batch consumes every newly Blocked source", async () => {
   });
   assert.equal(applied, true);
   assert.match(editor.content, /- \[\?\] #task Parent/);
+  assert.doesNotMatch(editor.content, /\*\*LINKS:\*\*|\*\*LINKED FROM:\*\*/);
   await waitUntil(
     () => !String(harness.contents.get(datePath) || "").includes("[[Tasks#^parent]]"),
     "marked batch did not consume the live link",
@@ -572,8 +580,14 @@ test("counted same-note writer consumes every newly Blocked source", async () =>
   const datePath = liveDailyPath();
   const content = [
     "- [ ] #task One ^one",
+    "  - 🪢 **LINKS:** [[#^target]]",
+    "  - 🪢 **LINKED FROM:** [[#^target]]",
     "- [ ] #task Two ^two",
+    "  - 🪢 **LINKS:** [[#^target]]",
+    "  - 🪢 **LINKED FROM:** [[#^target]]",
     "- [ ] #task Target ^target",
+    "  - 🪢 **LINKS:** [[#^one]] • [[#^two]]",
+    "  - 🪢 **LINKED FROM:** [[#^one]] • [[#^two]]",
   ].join("\n");
   const daily = pomodoroDaily([
     "- [ ] Current (0900-0930)",
@@ -612,6 +626,8 @@ test("counted same-note writer consumes every newly Blocked source", async () =>
   );
   assert.match(editor.content, /- \[\?\] #task One/);
   assert.match(editor.content, /- \[\?\] #task Two/);
+  assert.doesNotMatch(editor.content, /\*\*LINKS:\*\*|\*\*LINKED FROM:\*\*/);
+  assert.equal(editor.undoGroups, 1);
   await waitUntil(
     () => {
       const nextDaily = String(harness.contents.get(datePath) || "");
@@ -625,13 +641,21 @@ test("counted same-note writer consumes every newly Blocked source", async () =>
   assert.match(notices.join("\n"), /removed 2 Pomodoro links/);
 });
 
-test("counted vault writer consumes every newly Blocked source", async () => {
+test("counted vault writer absorbs cross-note ties and consumes every newly Blocked source", async () => {
   resetNotices();
   const datePath = liveDailyPath();
   const content = [
     "- [ ] #task First ^first",
+    "  - 🪢 **LINKS:** [[Other#^target]]",
+    "  - 🪢 **LINKED FROM:** [[Other#^target]]",
     "- [ ] #task Second ^second",
+    "  - 🪢 **LINKS:** [[Other#^target]]",
+    "  - 🪢 **LINKED FROM:** [[Other#^target]]",
+  ].join("\n");
+  const target = [
     "- [ ] #task Target ^target",
+    "  - 🪢 **LINKS:** [[Tasks#^first]] • [[Tasks#^second]]",
+    "  - 🪢 **LINKED FROM:** [[Tasks#^first]] • [[Tasks#^second]]",
   ].join("\n");
   const daily = pomodoroDaily([
     "- [ ] Current (0900-0930)",
@@ -640,24 +664,43 @@ test("counted vault writer consumes every newly Blocked source", async () => {
     "  - [[Tasks#^second]]",
   ]);
   const editor = new TransactionEditor(content, { line: 0, ch: 0 });
-  const harness = createHarness({ "Tasks.md": content, [datePath]: daily });
+  const harness = createHarness({
+    "Tasks.md": content,
+    "Other.md": target,
+    [datePath]: daily,
+  });
+  const countedFollowUps = [];
+  const applyFollowUps = harness.plugin.applyBlocksFollowUps.bind(harness.plugin);
+  harness.plugin.applyBlocksFollowUps = async (entries) => {
+    countedFollowUps.push(entries);
+    return await applyFollowUps(entries);
+  };
   const modal = stubModal(harness.plugin, editor, "Tasks.md", 0);
   modal.taskSession = {
     valid: true,
     targets: [
       { line: 0, rawLine: "- [ ] #task First ^first" },
-      { line: 1, rawLine: "- [ ] #task Second ^second" },
+      { line: 3, rawLine: "- [ ] #task Second ^second" },
     ],
   };
   const applied = await modal.applyVaultCountedDependencyRef({
-    path: "Tasks.md",
-    line: 2,
+    path: "Other.md",
+    line: 0,
     rawLine: "- [ ] #task Target ^target",
     displayText: "Target",
     existingIdField: null,
     blockId: "target",
   });
   assert.equal(applied, true);
+  assert.match(editor.content, /DEPENDS ON:\*\* \[\[Other#\^target\]\]/);
+  assert.doesNotMatch(editor.content, /\*\*LINKS:\*\*|\*\*LINKED FROM:\*\*/);
+  assert.doesNotMatch(
+    harness.contents.get("Other.md"),
+    /\*\*LINKS:\*\*|\*\*LINKED FROM:\*\*/,
+    JSON.stringify({ countedFollowUps, processWrites: harness.processWrites }),
+  );
+  assert.equal(countedFollowUps.length, 1);
+  assert.equal(countedFollowUps[0].find((entry) => entry.path === "Other.md").tiePairs.length, 2);
   await waitUntil(
     () => {
       const nextDaily = String(harness.contents.get(datePath) || "");
@@ -671,6 +714,38 @@ test("counted vault writer consumes every newly Blocked source", async () => {
   assert.match(notices.join("\n"), /removed 2 Pomodoro links/);
 });
 
+test("counted vault writer keeps malformed cross-note LINKS and reports reconcile follow-up", async () => {
+  resetNotices();
+  const content = [
+    "- [ ] #task First ^first",
+    "  - 🪢 **LINKS:** [[Other#^target]]",
+  ].join("\n");
+  const target = [
+    "- [ ] #task Target ^target",
+    "  - 🪢 **LINKS:** [[Tasks#^first]] until Friday",
+  ].join("\n");
+  const editor = new TransactionEditor(content, { line: 0, ch: 0 });
+  const harness = createHarness({ "Tasks.md": content, "Other.md": target });
+  const modal = stubModal(harness.plugin, editor, "Tasks.md", 0);
+  modal.taskSession = {
+    valid: true,
+    targets: [{ line: 0, rawLine: "- [ ] #task First ^first" }],
+  };
+  const applied = await modal.applyVaultCountedDependencyRef({
+    path: "Other.md",
+    line: 0,
+    rawLine: "- [ ] #task Target ^target",
+    displayText: "Target",
+    existingIdField: null,
+    blockId: "target",
+  });
+  assert.equal(applied, true);
+  assert.match(editor.content, /- \[\?\] #task First/);
+  assert.doesNotMatch(editor.content, /\*\*LINKS:\*\*/);
+  assert.match(harness.contents.get("Other.md"), /until Friday/);
+  assert.match(notices.join("\n"), /reconcile will fold it/);
+});
+
 test("counted ^prj source consumes its project targets", async () => {
   resetNotices();
   const datePath = liveDailyPath();
@@ -681,9 +756,13 @@ test("counted ^prj source consumes its project targets", async () => {
     "---",
     "",
     "- [ ] #task #prj Ship the project ^prj",
-    "- [ ] #task Draft the pitch ^pitch",
+    "  - 🪢 **LINKS:** [[Target#^setup]]",
+    "- [/] #task Draft the pitch ^pitch",
   ].join("\n");
-  const targetNote = "- [ ] #task Setup ^setup";
+  const targetNote = [
+    "- [ ] #task Setup ^setup",
+    "  - 🪢 **LINKS:** [[Project#^prj]]",
+  ].join("\n");
   const daily = pomodoroDaily([
     "- [ ] Current (0900-0930)",
     "  - [[Project#^prj]]",
@@ -704,12 +783,16 @@ test("counted ^prj source consumes its project targets", async () => {
   const applied = await modal.applyVaultCountedDependencyRef({
     path: "Target.md",
     line: 0,
-    rawLine: targetNote,
+    rawLine: "- [ ] #task Setup ^setup",
     displayText: "Setup",
     existingIdField: null,
     blockId: "setup",
   });
   assert.equal(applied, true);
+  assert.match(editor.content, /#prj_is_blocked/);
+  assert.doesNotMatch(editor.content, /\*\*LINKS:\*\*/);
+  assert.match(harness.contents.get("Target.md"), /^- \[\/] #task Setup/m);
+  assert.doesNotMatch(harness.contents.get("Target.md"), /\*\*LINKS:\*\*/);
   await waitUntil(
     () => {
       const nextDaily = String(harness.contents.get(datePath) || "");

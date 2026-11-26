@@ -671,6 +671,11 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
         return false;
       }
     }
+    const preparedFiles = applyTiePromptPreparationsToNotes(files, preparations);
+    if (preparedFiles) {
+      files.clear();
+      for (const [path, content] of preparedFiles) files.set(path, content);
+    }
     // Counted vault absorption (§22): a counted add absorbs the pair's plain
     // links. Same-note sides fold into the working copy below; cross-note
     // target sides become follow-ups after the commit. Lane transfer,
@@ -691,7 +696,7 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
             owner: {
               path: ownerPath,
               blockId: sourceBlockId || "",
-              line: tracked.line,
+              line: sourceBlockId ? null : tracked.line,
             },
             other: { path: targetPath, blockId: snapshot.blockId },
           });
@@ -801,29 +806,32 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
     const vaultCountedSuffix = vaultCountedSubtree
       ? subtreePassNoticeSuffix(vaultCountedSubtree)
       : "";
-    // Cross-note tie follow-ups run after the dependency commit, best-effort;
-    // a leftover plain link is folded by reconcile with the honest suffix.
-    let vaultTieFollowDropped = 0;
-    let vaultTieFollowMirror = 0;
-    const vaultTieFollowFailed = [];
-    if (vaultCountedTieFollowUps.length > 0) {
-      try {
-        const tieOutcome = await applyTieLinksFollowUps({
-          app: this.plugin ? this.plugin.app : null,
-          followUps: vaultCountedTieFollowUps,
-          resolveLinkpath,
-          isWritable: this.plugin ? tieNavNoteIsWritable(this.plugin, new Date()) : undefined,
-        });
-        vaultTieFollowDropped += tieOutcome.dropped || 0;
-        vaultTieFollowMirror += tieOutcome.mirrorDropped || 0;
-        for (const failed of tieOutcome.failed || []) {
-          vaultTieFollowFailed.push(Object.freeze({ path: failed, reason: "follow-up-failed" }));
-        }
-      } catch (_tieFollowError) {
-        for (const entry of vaultCountedTieFollowUps) {
-          vaultTieFollowFailed.push(Object.freeze({ path: entry.path, reason: "follow-up-failed" }));
-        }
+    // Merge cross-note tie absorption into any BLOCKS mirror write for that
+    // target note. Two separate follow-ups would each start from the same
+    // preimage, so the later write could restore the plain LINKS line.
+    const countedFollowUps = mergeCountedTieFollowUps(
+      blocksFollowUps,
+      vaultCountedTieFollowUps,
+    );
+    let followUpResult = Object.freeze({
+      failed: Object.freeze([]),
+      tieFailed: Object.freeze([]),
+      tieDropped: 0,
+      tieMirrorDropped: 0,
+    });
+    try {
+      if (this.plugin && typeof this.plugin.applyBlocksFollowUps === "function") {
+        followUpResult = await this.plugin.applyBlocksFollowUps(countedFollowUps);
+      } else if (this.plugin && typeof this.plugin.finishBlocksFollowUps === "function") {
+        await this.plugin.finishBlocksFollowUps(countedFollowUps);
       }
+    } catch (_followUpError) {
+      followUpResult = Object.freeze({
+        failed: Object.freeze(countedFollowUps.map((entry) => entry.path)),
+        tieFailed: Object.freeze(vaultCountedTieFollowUps.map((entry) => entry.path)),
+        tieDropped: 0,
+        tieMirrorDropped: 0,
+      });
     }
     let vaultCountedNotice = `${
       snapshot.remove
@@ -832,18 +840,30 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
     }${vaultCountedSuffix ? ` ${vaultCountedSuffix}` : ""}${dependencyPomodoroNoticeSuffix(vaultPomodoroDone.removed, vaultPomodoroDone.failed)}`;
     if (typeof withTieAbsorptionNotice === "function" && typeof withTieAbsorptionFailureSuffix === "function") {
       vaultCountedNotice = withTieAbsorptionNotice(vaultCountedNotice, {
-        dropped: vaultCountedTieDropped + vaultTieFollowDropped,
-        mirrorDropped: vaultCountedTieMirrorDropped + vaultTieFollowMirror,
+        dropped: vaultCountedTieDropped + (followUpResult.tieDropped || 0),
+        mirrorDropped: vaultCountedTieMirrorDropped + (followUpResult.tieMirrorDropped || 0),
       });
+      const tieFailedPaths = new Set(
+        (followUpResult.tieFailed || []).map((entry) =>
+          normalizeVaultRelativePath(typeof entry === "string" ? entry : entry && entry.path || ""),
+        ),
+      );
+      for (const failedPath of followUpResult.failed || []) {
+        const normalized = normalizeVaultRelativePath(failedPath || "");
+        if (vaultCountedTieFollowUps.some((entry) => entry.path === normalized)) {
+          tieFailedPaths.add(normalized);
+        }
+      }
       vaultCountedNotice = withTieAbsorptionFailureSuffix(vaultCountedNotice, [
         ...vaultCountedTieSkipped,
-        ...vaultTieFollowFailed,
+        ...[...tieFailedPaths].map((path) => ({ path, reason: "follow-up-failed" })),
       ]);
     }
-    await this.plugin.finishBlocksFollowUps(
-      blocksFollowUps,
+    vaultCountedNotice = withBlocksFollowUpNotice(
       vaultCountedNotice,
+      followUpResult.failed || [],
     );
+    new Notice(vaultCountedNotice);
     return true;
   }
 

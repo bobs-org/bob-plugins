@@ -6,6 +6,7 @@ const test = require("node:test");
 const {
   NavigationHotkeysPlugin,
   TransactionEditor,
+  compatibleTasksSettings,
   helpers,
 } = require("./navigation-hotkeys-harness.cjs");
 
@@ -148,8 +149,20 @@ test("same-note conversion is one actual editor undo group", async () => {
 test("same-note reversal commits in one undo group and is byte-correct", async () => {
   const initial = [
     task("Owner", "owner"),
+    links("[[#^other]]"),
+    "\t- Keep the owner's authored note",
     "- [?] #task Other [dependsOn:: Tasks__owner] ^other",
     `\t- ⛓️ **DEPENDS ON:** [[#^owner]]`,
+    links("[[#^owner]]"),
+    "\t- Keep the other's authored note",
+    "\t- [t:: 45m]",
+    "## Pomodoros",
+    "- [ ] Current (0900-0930)",
+    "  - [[#^owner]]",
+    "- [ ] Next (0930-1000)",
+    "  - [[#^other]]",
+    "- [x] Finished (0800-0830) [t:: 25m]",
+    "  - [[#^owner]]",
   ].join("\n");
   const editor = new TransactionEditor(initial, { line: 0, ch: 0 });
   const plugin = new NavigationHotkeysPlugin();
@@ -158,6 +171,9 @@ test("same-note reversal commits in one undo group and is byte-correct", async (
       getLeavesOfType: () => [
         { view: { file: { path: "Tasks.md" }, editor } },
       ],
+    },
+    vault: {
+      adapter: { read: async () => JSON.stringify(compatibleTasksSettings()) },
     },
     plugins: { plugins: {} },
   };
@@ -177,9 +193,20 @@ test("same-note reversal commits in one undo group and is byte-correct", async (
   plugin.prepareSubtreeForDependencyPlan = async () => null;
   plugin.readDeferredPomodoroSnapshot = async () => ({
     ok: true,
-    contents: new Map(),
+    sameFile: true,
+    dailyPath: "Tasks.md",
+    content: editor.getValue(),
+    noteIndex: helpers.createScheduledRecoveryNoteIndex([{ path: "Tasks.md" }]),
   });
   plugin.getFreshnessApi = () => null;
+  const stampedIds = [];
+  plugin.stampDependencyParentLine = (content, line) => {
+    const lines = String(content).split(/\r?\n/);
+    const match = /\^([^\s]+)$/.exec(lines[line] || "");
+    stampedIds.push(match ? match[1] : null);
+    lines[line] = String(lines[line] || "").replace(/\s+\^([^\s]+)$/, " [fresh:: 2026-10-14] ^$1");
+    return lines.join("\n");
+  };
 
   const result = await plugin.applyTieChange(owner, other, "owner-waits", {
     editor,
@@ -193,6 +220,159 @@ test("same-note reversal commits in one undo group and is byte-correct", async (
   assert.doesNotMatch(editor.content, /Other.*\[dependsOn:: Tasks__owner\]/);
   assert.match(editor.content, /DEPENDS ON:\*\* \[\[#\^other\]\]/);
   assert.doesNotMatch(editor.content, /DEPENDS ON:\*\* \[\[#\^owner\]\]/);
+  assert.deepEqual(new Set(stampedIds), new Set(["owner", "other"]));
+  assert.equal(stampedIds.length, 2);
+  assert.match(editor.content, /\[fresh:: 2026-10-14\]/);
+  assert.match(editor.content, /Keep the owner's authored note/);
+  assert.match(editor.content, /Keep the other's authored note/);
+  assert.match(editor.content, /\[t:: 45m\]/);
+  assert.doesNotMatch(editor.content, /\*\*LINKS:\*\*/);
+  assert.doesNotMatch(editor.content, /Current \(0900-0930\)[\s\S]*?\[\[#\^owner\]\]/);
+  assert.match(editor.content, /Finished \(0800-0830\) \[t:: 25m\][\s\S]*?\[\[#\^owner\]\]/);
+  assert.match(editor.content, /Next \(0930-1000\)[\s\S]*?\[\[#\^other\]\]/);
+  assert.equal(editor.undo(), true);
+  assert.equal(editor.content, initial);
+});
+
+test("same-note reversal works with the task order reversed", async () => {
+  const initial = [
+    task("Other", "other"),
+    links("[[#^owner]]"),
+    "\t- Keep the prerequisite note",
+    "- [?] #task Owner [dependsOn:: Tasks__other] ^owner",
+    deps("[[#^other]]"),
+    links("[[#^other]]"),
+    "\t- Keep the dependent note",
+  ].join("\n");
+  const editor = new TransactionEditor(initial, { line: 0, ch: 0 });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: {
+      getLeavesOfType: () => [
+        { view: { file: { path: "Tasks.md" }, editor } },
+      ],
+    },
+    vault: {
+      adapter: { read: async () => JSON.stringify(compatibleTasksSettings()) },
+    },
+    plugins: { plugins: {} },
+  };
+  plugin.getActiveMarkdownView = () => ({ editor, file: { path: "Tasks.md" } });
+  plugin.readDependencyNoteContent = async (path, openEditor) =>
+    path === "Tasks.md"
+      ? String(openEditor && openEditor.getValue ? openEditor.getValue() : editor.getValue())
+      : null;
+  plugin.readDependencyVaultFileList = () => ["Tasks.md"];
+  plugin.dependencyLinkpathResolver = () => (note, from) =>
+    !note ? from : `${note}.md`;
+  plugin.readDependencyRecoveryVaultContents = async () =>
+    new Map([["Tasks.md", editor.getValue()]]);
+  plugin.prepareSubtreeForDependencyPlan = async () => null;
+  plugin.readDeferredPomodoroSnapshot = async () => ({ ok: true, contents: new Map() });
+  plugin.getFreshnessApi = () => null;
+  const stampedIds = [];
+  plugin.stampDependencyParentLine = (content, line) => {
+    const lines = String(content).split(/\r?\n/);
+    const match = /\^([^\s]+)$/.exec(lines[line] || "");
+    stampedIds.push(match ? match[1] : null);
+    lines[line] = String(lines[line] || "").replace(/\s+\^([^\s]+)$/, " [fresh:: 2026-10-14] ^$1");
+    return lines.join("\n");
+  };
+
+  const result = await plugin.applyTieChange(owner, other, "other-waits", {
+    editor,
+    editorPath: "Tasks.md",
+  });
+
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(editor.undoGroups, 1);
+  assert.deepEqual(new Set(stampedIds), new Set(["owner", "other"]));
+  assert.match(editor.content, /Other.*\[dependsOn:: Tasks__owner\]/);
+  assert.doesNotMatch(editor.content, /Owner.*\[dependsOn:: Tasks__other\]/);
+  assert.match(editor.content, /Keep the prerequisite note/);
+  assert.match(editor.content, /Keep the dependent note/);
+  assert.doesNotMatch(editor.content, /\*\*LINKS:\*\*/);
+  assert.equal(editor.undo(), true);
+  assert.equal(editor.content, initial);
+});
+
+test("cross-note reversal through a project root blocks residents and consumes project links", async () => {
+  const project = [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    "---",
+    "",
+    "- [ ] #task #prj Project root [id:: Project__prj] ^prj",
+    "- [ ] #task Project resident [id:: Project__resident] ^resident",
+    "## Pomodoros",
+    "- [ ] Current (0900-0930)",
+    "  - [[#^prj]]",
+    "- [ ] Next (0930-1000)",
+    "  - [[#^resident]]",
+  ].join("\n");
+  const tasks = [
+    "- [?] #task Other [id:: Tasks__other] [dependsOn:: Project__prj] ^other",
+    "\t- ⛓️ **DEPENDS ON:** [[Project#^prj]]",
+  ].join("\n");
+  const projectEditor = new TransactionEditor(project, { line: 5, ch: 0 });
+  const tasksEditor = new TransactionEditor(tasks, { line: 0, ch: 0 });
+  const editors = new Map([
+    ["Project.md", projectEditor],
+    ["Tasks.md", tasksEditor],
+  ]);
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: {
+      getLeavesOfType: () => [...editors].map(([path, editor]) => ({
+        view: { file: { path }, editor },
+      })),
+    },
+    vault: {
+      adapter: { read: async () => JSON.stringify(compatibleTasksSettings()) },
+      getMarkdownFiles: () => [...editors.keys()].map((path) => ({ path })),
+    },
+    plugins: { plugins: {} },
+  };
+  plugin.getActiveMarkdownView = () => ({
+    editor: projectEditor,
+    file: { path: "Project.md" },
+  });
+  plugin.readDependencyNoteContent = async (path, openEditor) => {
+    const editor = openEditor || editors.get(path);
+    return editor ? editor.getValue() : null;
+  };
+  plugin.readDependencyVaultFileList = () => [...editors.keys()];
+  plugin.dependencyLinkpathResolver = () => (note, from) =>
+    !note ? from : `${String(note).replace(/\.md$/i, "")}.md`;
+  plugin.readDependencyRecoveryVaultContents = async () =>
+    new Map([...editors].map(([path, editor]) => [path, editor.getValue()]));
+  plugin.prepareSubtreeForDependencyPlan = async () => null;
+  plugin.readDeferredPomodoroSnapshot = async (_app, options) => ({
+    ok: true,
+    sameFile: options.sourcePath === "Project.md",
+    dailyPath: "Project.md",
+    content: options.sourceContent,
+    noteIndex: helpers.createScheduledRecoveryNoteIndex(
+      [...editors.keys()].map((path) => ({ path })),
+    ),
+  });
+  plugin.getFreshnessApi = () => null;
+
+  const result = await plugin.applyTieChange(
+    { path: "Project.md", blockId: "prj" },
+    { path: "Tasks.md", blockId: "other" },
+    "owner-waits",
+    { editor: projectEditor, editorPath: "Project.md" },
+  );
+
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.match(projectEditor.content, /\[\?\] #task #prj Project root/);
+  assert.match(projectEditor.content, /#prj_is_blocked/);
+  assert.match(projectEditor.content, /\[\[Tasks#\^other\]\]/);
+  assert.doesNotMatch(tasksEditor.content, /dependsOn|DEPENDS ON/);
+  assert.doesNotMatch(projectEditor.content, /Current \(0900-0930\)[\s\S]*?\[\[#\^prj\]\]/);
+  assert.doesNotMatch(projectEditor.content, /Next \(0930-1000\)[\s\S]*?\[\[#\^resident\]\]/);
 });
 
 test("cross-note reversal reports incomplete when the add fails", async () => {

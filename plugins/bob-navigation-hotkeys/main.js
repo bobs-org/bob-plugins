@@ -63541,12 +63541,14 @@ function planCountedLocalTaskDependency(
           owner: {
             path: normalizedPath,
             blockId: sourceBlockId || "",
-            line: tracked.line,
+            line: sourceBlockId ? null : tracked.line,
           },
           other: {
             path: normalizedPath,
             blockId: countedTargetRef.blockId,
-            line: Number.isInteger(dependencyTask.line) ? dependencyTask.line : null,
+            // The target can move as preceding sources gain their navigation
+            // children. Re-resolve its stable ID in the final postimage.
+            line: null,
           },
         });
       }
@@ -71946,6 +71948,11 @@ function dependencyStageConsequenceStrip(item, context = {}) {
   if (!item || item.kind === "stage-more") return "";
   const stage = context.stage || {};
   const tie = item.tieInfo || null;
+  const decorateEarlyResult = (text) => {
+    const prefix = tieVisibilityHasPlainLink(tie) ? "Replaces the 🪢 link · " : "";
+    const label = [...(tie && tie.labelledOut || []), ...(tie && tie.labelledIn || [])][0];
+    return `${prefix}${text}${label ? ` · keeps "${label}"` : ""}`;
+  };
   if (item.disabled) {
     if (item.disabledReason === "would create a cycle" && tie && tie.waitedOnBy) {
       const owner = tieVisibilityOwnerSources(stage)[0];
@@ -71957,7 +71964,7 @@ function dependencyStageConsequenceStrip(item, context = {}) {
         "owner-waits",
       );
       if (planned && planned.kind === "change" && planned.reversing === true) {
-        return "⟲ It waits on this task · ⌃B reverses";
+        return decorateEarlyResult("⟲ It waits on this task · ⌃B reverses");
       }
     }
     return item.disabledReason || "";
@@ -71994,14 +72001,14 @@ function dependencyStageConsequenceStrip(item, context = {}) {
     });
   }
   if (item.closed === true || item.open === false) {
-    return "Waits on it · already done · status unchanged";
+    return decorateEarlyResult("Waits on it · already done · status unchanged");
   }
   const ownerKey = tieVisibilityOwnerKey(owner, stage);
   const currentOpen = tieVisibilityOpenWaitCount(stage, ownerKey);
   const openAfter = currentOpen + 1;
   const ownerStatus = owner.status || (stage.dependent && stage.dependent.status);
   if (ownerStatus === "?") {
-    return `Also waits on it (${openAfter} open)`;
+    return decorateEarlyResult(`Also waits on it (${openAfter} open)`);
   }
   const parts = ["Waits on it · this task becomes Blocked"];
   const lane = ownerStatus === "/"
@@ -83865,6 +83872,11 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
         return false;
       }
     }
+    const preparedFiles = applyTiePromptPreparationsToNotes(files, preparations);
+    if (preparedFiles) {
+      files.clear();
+      for (const [path, content] of preparedFiles) files.set(path, content);
+    }
     // Counted vault absorption (§22): a counted add absorbs the pair's plain
     // links. Same-note sides fold into the working copy below; cross-note
     // target sides become follow-ups after the commit. Lane transfer,
@@ -83885,7 +83897,7 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
             owner: {
               path: ownerPath,
               blockId: sourceBlockId || "",
-              line: tracked.line,
+              line: sourceBlockId ? null : tracked.line,
             },
             other: { path: targetPath, blockId: snapshot.blockId },
           });
@@ -83995,29 +84007,32 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
     const vaultCountedSuffix = vaultCountedSubtree
       ? subtreePassNoticeSuffix(vaultCountedSubtree)
       : "";
-    // Cross-note tie follow-ups run after the dependency commit, best-effort;
-    // a leftover plain link is folded by reconcile with the honest suffix.
-    let vaultTieFollowDropped = 0;
-    let vaultTieFollowMirror = 0;
-    const vaultTieFollowFailed = [];
-    if (vaultCountedTieFollowUps.length > 0) {
-      try {
-        const tieOutcome = await applyTieLinksFollowUps({
-          app: this.plugin ? this.plugin.app : null,
-          followUps: vaultCountedTieFollowUps,
-          resolveLinkpath,
-          isWritable: this.plugin ? tieNavNoteIsWritable(this.plugin, new Date()) : undefined,
-        });
-        vaultTieFollowDropped += tieOutcome.dropped || 0;
-        vaultTieFollowMirror += tieOutcome.mirrorDropped || 0;
-        for (const failed of tieOutcome.failed || []) {
-          vaultTieFollowFailed.push(Object.freeze({ path: failed, reason: "follow-up-failed" }));
-        }
-      } catch (_tieFollowError) {
-        for (const entry of vaultCountedTieFollowUps) {
-          vaultTieFollowFailed.push(Object.freeze({ path: entry.path, reason: "follow-up-failed" }));
-        }
+    // Merge cross-note tie absorption into any BLOCKS mirror write for that
+    // target note. Two separate follow-ups would each start from the same
+    // preimage, so the later write could restore the plain LINKS line.
+    const countedFollowUps = mergeCountedTieFollowUps(
+      blocksFollowUps,
+      vaultCountedTieFollowUps,
+    );
+    let followUpResult = Object.freeze({
+      failed: Object.freeze([]),
+      tieFailed: Object.freeze([]),
+      tieDropped: 0,
+      tieMirrorDropped: 0,
+    });
+    try {
+      if (this.plugin && typeof this.plugin.applyBlocksFollowUps === "function") {
+        followUpResult = await this.plugin.applyBlocksFollowUps(countedFollowUps);
+      } else if (this.plugin && typeof this.plugin.finishBlocksFollowUps === "function") {
+        await this.plugin.finishBlocksFollowUps(countedFollowUps);
       }
+    } catch (_followUpError) {
+      followUpResult = Object.freeze({
+        failed: Object.freeze(countedFollowUps.map((entry) => entry.path)),
+        tieFailed: Object.freeze(vaultCountedTieFollowUps.map((entry) => entry.path)),
+        tieDropped: 0,
+        tieMirrorDropped: 0,
+      });
     }
     let vaultCountedNotice = `${
       snapshot.remove
@@ -84026,18 +84041,30 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
     }${vaultCountedSuffix ? ` ${vaultCountedSuffix}` : ""}${dependencyPomodoroNoticeSuffix(vaultPomodoroDone.removed, vaultPomodoroDone.failed)}`;
     if (typeof withTieAbsorptionNotice === "function" && typeof withTieAbsorptionFailureSuffix === "function") {
       vaultCountedNotice = withTieAbsorptionNotice(vaultCountedNotice, {
-        dropped: vaultCountedTieDropped + vaultTieFollowDropped,
-        mirrorDropped: vaultCountedTieMirrorDropped + vaultTieFollowMirror,
+        dropped: vaultCountedTieDropped + (followUpResult.tieDropped || 0),
+        mirrorDropped: vaultCountedTieMirrorDropped + (followUpResult.tieMirrorDropped || 0),
       });
+      const tieFailedPaths = new Set(
+        (followUpResult.tieFailed || []).map((entry) =>
+          normalizeVaultRelativePath(typeof entry === "string" ? entry : entry && entry.path || ""),
+        ),
+      );
+      for (const failedPath of followUpResult.failed || []) {
+        const normalized = normalizeVaultRelativePath(failedPath || "");
+        if (vaultCountedTieFollowUps.some((entry) => entry.path === normalized)) {
+          tieFailedPaths.add(normalized);
+        }
+      }
       vaultCountedNotice = withTieAbsorptionFailureSuffix(vaultCountedNotice, [
         ...vaultCountedTieSkipped,
-        ...vaultTieFollowFailed,
+        ...[...tieFailedPaths].map((path) => ({ path, reason: "follow-up-failed" })),
       ]);
     }
-    await this.plugin.finishBlocksFollowUps(
-      blocksFollowUps,
+    vaultCountedNotice = withBlocksFollowUpNotice(
       vaultCountedNotice,
+      followUpResult.failed || [],
     );
+    new Notice(vaultCountedNotice);
     return true;
   }
 
@@ -89552,100 +89579,10 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
   }
 
   // Tie-change `＋ id` for a chord on an ID-less row or owner: the confirmed
-  // id is written to the missing note first (Esc writes nothing), then the
-  // chord commits through `applyTieChange`.
+  // IDs are gathered before any write. Same-note preparations join the tie
+  // transaction; cross-note preparations happen after the final confirmation.
   async confirmTieChangeBlockId(item) {
-    const pending = this.pendingTieChange;
-    if (!pending || !item.valid) {
-      return false;
-    }
-    const missing = pending.missing || null;
-    const missingPath = missing ? normalizeVaultRelativePath(missing.path || "") : "";
-    if (!missing || !missingPath) {
-      this.clearPendingBatch();
-      new Notice("That task could not be located");
-      return false;
-    }
-    const files = typeof this.readVaultStageFiles === "function"
-      ? await this.readVaultStageFiles([missingPath])
-      : null;
-    const stagedContent = files ? files.get(missingPath) : null;
-    const fallbackContent = typeof this.getBlockIdStageContent === "function"
-      ? this.getBlockIdStageContent()
-      : null;
-    const targetContent = stagedContent !== undefined && stagedContent !== null
-      ? String(stagedContent)
-      : fallbackContent !== null && fallbackContent !== undefined
-        ? String(fallbackContent)
-        : null;
-    if (targetContent === null) {
-      new Notice("That task could not be located");
-      return false;
-    }
-    const validation = validateBlockIdCandidate(item.id, targetContent, {
-      reservedIds: pending.reservedIds || new Set(),
-    });
-    if (!validation.valid || !tryDependencyId(missingPath, validation.id)) {
-      new Notice(validation.message || "That block ID cannot be used in the target note");
-      return false;
-    }
-    const targetLines = String(targetContent).split(/\r?\n/);
-    const missingLine = Number.isInteger(missing.line) ? missing.line : null;
-    if (missingLine === null || targetLines[missingLine] !== missing.rawLine) {
-      return this.refuseDependencyStale();
-    }
-    if (!isObsidianTaskAtLine(targetContent, missingLine, null, targetLines)) {
-      new Notice("That task could not be located");
-      return false;
-    }
-    const updatedLine = applyPromptedBlockIdPreservingLegacyId(
-      targetLines[missingLine],
-      validation.id,
-      missingPath,
-    );
-    if (updatedLine === null) {
-      new Notice("Dependency not added: this note path cannot be encoded as a dependency ID");
-      return false;
-    }
-    const prepared = await this.plugin.prepareDependencyTargetNote(missingPath, {
-      line: missingLine,
-      from: targetLines[missingLine],
-      text: updatedLine,
-    });
-    if (!prepared.ok) {
-      new Notice(`⛓ Could not prepare ${missingPath} (${prepared.reason})`);
-      return false;
-    }
-    const resolvedOwner = pending.missingSide === "owner"
-      ? { ...pending.owner, blockId: validation.id }
-      : pending.owner;
-    const resolvedOther = pending.missingSide === "other"
-      ? { ...pending.other, blockId: validation.id }
-      : pending.other;
-    const to = pending.to;
-    this.clearPendingBatch();
-    let outcome = null;
-    try {
-      outcome = await this.plugin.applyTieChange(resolvedOwner, resolvedOther, to, {
-        promptBlockId: null,
-      });
-    } catch (_error) {
-      new Notice("Could not update the tie");
-      return false;
-    }
-    if (!outcome || outcome.ok !== true) {
-      new Notice((outcome && outcome.notice) || "Could not update the tie");
-      return false;
-    }
-    if (outcome.notice) new Notice(outcome.notice);
-    try {
-      if (typeof this.reopenDependencyStageFresh === "function") {
-        this.reopenDependencyStageFresh();
-      }
-    } catch (_error) {
-      // The notice already committed; reopen is best-effort.
-    }
-    return true;
+    return await confirmTieChangeBlockId(this, item);
   }
 
   // Record one confirmed block ID and either advance to the next prompt (modal
@@ -91017,6 +90954,15 @@ class BulletPropertyPickerVaultCommitMixin extends FilteredPickerModal {
 // ---- src/450-picker-keydown.js ----
 class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
   handleKeydown(event) {
+    if (
+      this.stage === "blockid" &&
+      this.blockIdMode === "tie-change" &&
+      event &&
+      event.key === "Escape" &&
+      typeof this.clearPendingBatch === "function"
+    ) {
+      this.clearPendingBatch();
+    }
     if (this.stage === "task-card") {
       this.handleTaskCardKeydown(event);
       return;
@@ -91990,23 +91936,21 @@ function tieMissingIdRequest(picker, item) {
   const ownerCand = tieOwnerCandidate(picker);
   const otherCand = tieItemCandidate(item, fallbackPath);
   if (!ownerCand && !otherCand) return null;
+  const requests = [];
   if (ownerCand && ownerCand.path && !ownerCand.blockId) {
-    return Object.freeze({
-      owner: ownerCand,
-      other: otherCand,
-      missingSide: "owner",
-      missing: ownerCand,
-    });
+    requests.push(Object.freeze({ side: "owner", missing: ownerCand }));
   }
   if (otherCand && otherCand.path && !otherCand.blockId) {
-    return Object.freeze({
-      owner: ownerCand,
-      other: otherCand,
-      missingSide: "other",
-      missing: otherCand,
-    });
+    requests.push(Object.freeze({ side: "other", missing: otherCand }));
   }
-  return null;
+  if (requests.length === 0) return null;
+  return Object.freeze({
+    owner: ownerCand,
+    other: otherCand,
+    missingSide: requests[0].side,
+    missing: requests[0].missing,
+    requests: Object.freeze(requests),
+  });
 }
 
 function tieChordDisplayName(item) {
@@ -92049,6 +91993,22 @@ function tieChordRefusal(picker, item, to) {
     // Best-effort batch guard.
   }
   return null;
+}
+
+function tieChordExpectedSnapshots(picker, item, refs) {
+  const files = picker && picker.vaultStage && picker.vaultStage.files;
+  const expected = new Map();
+  if (!(files instanceof Map)) return expected;
+  const paths = refs
+    ? [refs.owner.path, refs.other.path]
+    : [tieOwnerCandidate(picker)?.path, item && item.path];
+  for (const path of paths) {
+    const normalized = normalizeVaultRelativePath(path || "");
+    if (normalized && files.has(normalized)) {
+      expected.set(normalized, files.get(normalized));
+    }
+  }
+  return expected;
 }
 
 function tieShouldHandleChord(picker, event) {
@@ -92115,11 +92075,36 @@ function tieEnterForRow(picker, item) {
 async function tieCommitChord(picker, to) {
   const item = tieHighlightedItem(picker);
   if (!item || item.kind === "stage-more") return false;
-  if (item.disabled) {
-    new Notice(item.disabledReason || "That task cannot change its tie");
+  const refusal = tieChordRefusal(picker, item, to);
+  if (refusal) {
+    new Notice(refusal);
     return true;
   }
   const refs = tieChordOwnerOther(picker, item);
+  const stage = picker.vaultStage;
+  if (tieChordHintIsStale(picker, item, stage, refs)) {
+    if (typeof picker.refuseDependencyStale === "function") {
+      picker.refuseDependencyStale("changed — reopen");
+    } else {
+      new Notice("changed — reopen");
+    }
+    return true;
+  }
+  if (item.disabled) {
+    const guarded = !refs
+      ? null
+      : tieVisibilityTieChangePlan(
+          stage,
+          picker.plugin,
+          refs.owner,
+          refs.other,
+          to,
+        );
+    if (!guarded || guarded.kind !== "change" || guarded.reversing !== true) {
+      new Notice(item.disabledReason || (guarded && guarded.notice) || "That task cannot change its tie");
+      return true;
+    }
+  }
   if (!refs) {
     // ID-less rows or owners go through the ＋ id prompt flow; Esc writes
     // nothing. Only a truly unlocatable pair refuses here.
@@ -92129,12 +92114,34 @@ async function tieCommitChord(picker, to) {
         : null;
       if (missing && missing.missing && missing.missing.path) {
         if (typeof picker.showBlockIdStage === "function") {
+          const stage = picker.vaultStage;
+          const expected = new Map();
+          for (const candidate of [missing.owner, missing.other]) {
+            const path = normalizeVaultRelativePath(candidate && candidate.path || "");
+            if (path && stage && stage.files instanceof Map && stage.files.has(path)) {
+              expected.set(path, stage.files.get(path));
+            }
+          }
+          if (picker.filePath && typeof picker.getEditorContent === "function") {
+            const ownerPath = normalizeVaultRelativePath(picker.filePath);
+            const ownerContent = picker.getEditorContent();
+            if (ownerPath && typeof ownerContent === "string" && !expected.has(ownerPath)) {
+              expected.set(ownerPath, ownerContent);
+            }
+          }
           picker.pendingTieChange = Object.freeze({
             owner: missing.owner,
             other: missing.other,
             missingSide: missing.missingSide,
             missing: missing.missing,
             to,
+            requests: missing.requests || Object.freeze([
+              Object.freeze({ side: missing.missingSide, missing: missing.missing }),
+            ]),
+            promptIndex: 0,
+            confirmedIds: Object.freeze({}),
+            preparations: Object.freeze([]),
+            expected,
             reservedIds: new Set(),
           });
           const promptTask = {
@@ -92154,11 +92161,6 @@ async function tieCommitChord(picker, to) {
     new Notice("That task could not be located");
     return true;
   }
-  const refusal = tieChordRefusal(picker, item, to);
-  if (refusal) {
-    new Notice(refusal);
-    return true;
-  }
   tieDisarm(picker);
   // Missing IDs are handled before this call through the ＋ id prompt flow
   // (pendingTieChange); the writer only sees resolved refs here.
@@ -92166,6 +92168,7 @@ async function tieCommitChord(picker, to) {
   try {
     outcome = await picker.plugin.applyTieChange(refs.owner, refs.other, to, {
       promptBlockId: null,
+      expected: tieChordExpectedSnapshots(picker, item, refs),
     });
   } catch (_error) {
     new Notice("Could not update the tie");
@@ -92309,6 +92312,7 @@ function tieChordHintsForItem(picker, item) {
     : null;
   if (!refs && (!missing || !missing.missing || !missing.missing.path)) return [];
   if (tieChordHintIsStale(picker, item, stage, refs)) return [];
+  if (!refs && item.disabled) return [];
   const enterTo = tieEnterToForStage(kind);
   const chords = [
     { to: "owner-waits", keys: ["⌃B"], label: "wait on it" },
@@ -92318,10 +92322,11 @@ function tieChordHintsForItem(picker, item) {
   ];
   const out = [];
   for (const chord of chords) {
-    if (chord.to === enterTo) continue;
+    if (tieChordRefusal(picker, item, chord.to)) continue;
     if (tieChordNoopForItem(item, chord.to)) continue;
+    let planned = null;
     if (refs) {
-      const planned = tieVisibilityTieChangePlan(
+      planned = tieVisibilityTieChangePlan(
         stage,
         picker.plugin,
         refs.owner,
@@ -92330,6 +92335,11 @@ function tieChordHintsForItem(picker, item) {
       );
       if (!planned || planned.kind !== "change") continue;
     }
+    if (
+      chord.to === enterTo &&
+      !(item.disabled && planned && planned.reversing === true)
+    ) continue;
+    if (item.disabled && (!planned || planned.reversing !== true)) continue;
     out.push({ keys: chord.keys, label: chord.label });
   }
   return out;
@@ -113844,15 +113854,16 @@ class BobNavigationHotkeysPropertyDependencyMixin {
       if (!parentPath || !Number.isFinite(parentLine)) {
         return Object.freeze({ ok: false, reason: "invalid-ref" });
       }
-      const content =
+      const originalContent =
         args.content !== undefined
           ? String(args.content)
           : editor && typeof editor.getValue === "function"
             ? String(editor.getValue() || "")
             : null;
-      if (content === null) {
+      if (originalContent === null) {
         return Object.freeze({ ok: false, reason: "no-content" });
       }
+      let content = originalContent;
       const add = Array.isArray(args.add) ? args.add : [];
       const remove = Array.isArray(args.remove) ? args.remove : [];
       const blocksExisting = Array.isArray(args.blocksExisting) ? args.blocksExisting : null;
@@ -113872,6 +113883,18 @@ class BobNavigationHotkeysPropertyDependencyMixin {
       if (!files.has(parentPath)) {
         files.set(parentPath, content);
       }
+      const taskIdPreparations = Array.isArray(args.taskIdPreparations)
+        ? args.taskIdPreparations
+        : [];
+      const preparedParent = applyTiePromptPreparations(content, parentPath, taskIdPreparations);
+      if (preparedParent === null) {
+        return Object.freeze({ ok: false, reason: "changed — reopen", notice: "changed — reopen", stale: true });
+      }
+      content = preparedParent;
+      files.set(parentPath, content);
+      const parentBlockIdBefore = normalizeBulletPropertyValue(
+        args.parentBlockId || getTrailingBlockId(String(content).split(/\r?\n/)[parentLine] || ""),
+      );
       // Every note the edit touches is loaded: the add/remove targets plus
       // every note already linked on the line (open buffers first, else the
       // vault). A link whose note cannot be loaded stays verbatim in the
@@ -113970,6 +113993,7 @@ class BobNavigationHotkeysPropertyDependencyMixin {
       // `planTieChange`; lane transfer, stamps, and consumption run once.
       let secondPlan = null;
       let secondParentLineNext = null;
+      let secondBlockIdBefore = "";
       const secondDependent = args.secondDependent && typeof args.secondDependent === "object"
         ? args.secondDependent
         : null;
@@ -113982,6 +114006,10 @@ class BobNavigationHotkeysPropertyDependencyMixin {
         const secondAdd = Array.isArray(secondDependent.add) ? secondDependent.add : [];
         const secondRemove = Array.isArray(secondDependent.remove) ? secondDependent.remove : [];
         if (secondAdd.length > 0 || secondRemove.length > 0) {
+          secondBlockIdBefore = normalizeBulletPropertyValue(
+            secondDependent.blockId ||
+              getTrailingBlockId(String(content).split(/\r?\n/)[secondDependent.parentLine] || ""),
+          );
           const mappedSecondLine = mapLineThroughLineEdits(
             secondDependent.parentLine,
             plan.lineEdits,
@@ -114027,26 +114055,7 @@ class BobNavigationHotkeysPropertyDependencyMixin {
           secondParentLineNext = Number.isInteger(plannedSecond.parentLineNext)
             ? plannedSecond.parentLineNext
             : mappedSecondLine;
-          // Merge the second edit into the commit plan below.
-          plan = Object.freeze({
-            ...plan,
-            nextContent: secondPlan.nextContent,
-            lineEdits: secondPlan.lineEdits,
-            parentLineNext: plan.parentLineNext,
-            blocksFollowUps: Object.freeze([
-              ...(plan.blocksFollowUps || []),
-              ...(secondPlan.blocksFollowUps || []),
-            ]),
-            preparations: Object.freeze([
-              ...(plan.preparations || []),
-              ...(secondPlan.preparations || []),
-            ]),
-            blocksFailedPaths: Object.freeze([
-              ...(plan.blocksFailedPaths || []),
-              ...(secondPlan.blocksFailedPaths || []),
-            ]),
-            changed: true,
-          });
+          plan = composeTieDependencyPlans(plan, secondPlan);
         }
       }
       if (!plan.changed) {
@@ -114143,10 +114152,7 @@ class BobNavigationHotkeysPropertyDependencyMixin {
           args.today || new Date(),
         );
         if (!mirrorTouch && plan.changed && add.length > 0) {
-          const tieParentLines = String(commitPlan.nextContent || "").split(/\r?\n/);
-          const tieParentBlockId = Number.isInteger(plan.parentLineNext)
-            ? getTrailingBlockId(String(tieParentLines[plan.parentLineNext] || ""))
-            : "";
+          const tieParentBlockId = parentBlockIdBefore;
           const tiePairs = add
             .map(normalizeDependencyTargetRef)
             .filter((ref) => ref.path && ref.blockId)
@@ -114226,23 +114232,33 @@ class BobNavigationHotkeysPropertyDependencyMixin {
         // prerequisite above it can gain a BLOCKS line and shift it.
         // Stamping before the Pomodoro fold keeps the line index valid.
         // A same-note reversal stamps both dependents in the one transaction.
-        if (Number.isInteger(plan.parentLineNext)) {
+        const firstStampLine = lineForTrailingTaskId(
+          commitPlan.nextContent,
+          parentBlockIdBefore,
+          plan.parentLineNext,
+        );
+        if (Number.isInteger(firstStampLine)) {
           commitPlan = {
             ...commitPlan,
             nextContent: this.stampDependencyParentLine(
               commitPlan.nextContent,
-              plan.parentLineNext,
+              firstStampLine,
               args.stamper,
               args.dateText,
             ),
           };
         }
-        if (Number.isInteger(secondParentLineNext) && secondParentLineNext !== plan.parentLineNext) {
+        const secondStampLine = lineForTrailingTaskId(
+          commitPlan.nextContent,
+          secondBlockIdBefore,
+          secondParentLineNext,
+        );
+        if (Number.isInteger(secondStampLine) && secondStampLine !== firstStampLine) {
           commitPlan = {
             ...commitPlan,
             nextContent: this.stampDependencyParentLine(
               commitPlan.nextContent,
-              secondParentLineNext,
+              secondStampLine,
               args.stamper,
               args.dateText,
             ),
@@ -114335,7 +114351,7 @@ class BobNavigationHotkeysPropertyDependencyMixin {
           }
           if (typeof editor.getValue === "function") {
             const live = String(editor.getValue() || "");
-            if (live !== content) {
+            if (live !== originalContent) {
               return { ok: false, reason: "stale-editor" };
             }
           }
@@ -114344,7 +114360,7 @@ class BobNavigationHotkeysPropertyDependencyMixin {
             this,
             editor,
             parentPath,
-            content,
+            originalContent,
             nextContent,
             {
               annotation: BLOCKS_MACHINE_WRITE_ANNOTATION,
@@ -115835,6 +115851,7 @@ class BobNavigationHotkeysBlocksEditMixin {
           files.set(dailyPath, loaded);
         }
       }
+      const originalFiles = new Map(files);
       const expected =
         args.expected instanceof Map
           ? args.expected
@@ -115846,6 +115863,15 @@ class BobNavigationHotkeysBlocksEditMixin {
         if (live !== undefined && live !== String(expectedContent || "")) {
           return refuse(stale, stale);
         }
+      }
+      const taskIdPreparations = Array.isArray(args.taskIdPreparations)
+        ? args.taskIdPreparations
+        : [];
+      for (const path of new Set(taskIdPreparations.map((entry) => normalizeVaultRelativePath(entry.path || "")))) {
+        if (!path || !files.has(path)) continue;
+        const prepared = applyTiePromptPreparations(files.get(path), path, taskIdPreparations);
+        if (prepared === null) return refuse(stale, stale);
+        files.set(path, prepared);
       }
       const locate = (refs) => {
         const located = [];
@@ -115988,8 +116014,14 @@ class BobNavigationHotkeysBlocksEditMixin {
           blocksFailed: Object.freeze([]),
         });
       }
-      const sourceWrites = plan.sourceWrites.map((entry) => ({ ...entry }));
-      const dependentWrites = plan.dependentWrites.map((entry) => ({ ...entry }));
+      const sourceWrites = plan.sourceWrites.map((entry) => ({
+        ...entry,
+        original: originalFiles.has(entry.path) ? originalFiles.get(entry.path) : entry.original,
+      }));
+      const dependentWrites = plan.dependentWrites.map((entry) => ({
+        ...entry,
+        original: originalFiles.has(entry.path) ? originalFiles.get(entry.path) : entry.original,
+      }));
       // Tie absorption (§22): a new dependency absorbs the pair's plain
       // links. T-note sides fold into the writes below (one transaction per
       // note); source-note sides on pure source notes become follow-ups
@@ -116876,6 +116908,16 @@ class BobNavigationHotkeysRelationEditMixin {
           return refuse(stale, stale);
         }
       }
+      const originalFiles = new Map(files);
+      const taskIdPreparations = Array.isArray(args.taskIdPreparations)
+        ? args.taskIdPreparations
+        : [];
+      for (const path of new Set(taskIdPreparations.map((entry) => normalizeVaultRelativePath(entry.path || "")))) {
+        if (!path || !files.has(path)) continue;
+        const prepared = applyTiePromptPreparations(files.get(path), path, taskIdPreparations);
+        if (prepared === null) return refuse(stale, stale);
+        files.set(path, prepared);
+      }
 
       const locateList = (refs) => {
         const located = [];
@@ -116959,7 +117001,7 @@ class BobNavigationHotkeysRelationEditMixin {
         let content = contentOf(source.path);
         const original = sourceWrites.has(source.path)
           ? sourceWrites.get(source.path).original
-          : String(files.get(source.path) || "");
+          : String(originalFiles.get(source.path) || "");
         const consumed = consumedLinesByPath.get(source.path) || new Set();
         const liveSource = relocateRelationCancelSource(content, source, consumed);
         let sourceLine = liveSource.line;
@@ -119064,6 +119106,18 @@ class BobNavigationHotkeysTieChangeMixin {
         });
       }
     }
+    const originalNotes = new Map(notes);
+    const promptPreparations = Array.isArray(options.promptPreparations)
+      ? options.promptPreparations
+      : [];
+    if (promptPreparations.length > 0) {
+      const preparedNotes = applyTiePromptPreparationsToNotes(notes, promptPreparations);
+      if (!preparedNotes) {
+        return Object.freeze({ ok: false, reason: "changed — reopen", notice: "changed — reopen", stale: true });
+      }
+      notes.clear();
+      for (const [path, content] of preparedNotes) notes.set(path, content);
+    }
 
     const resolveLinkpath = this.dependencyLinkpathResolver();
     const vaultFiles = this.readDependencyVaultFileList() || [...notes.keys()];
@@ -119090,7 +119144,36 @@ class BobNavigationHotkeysTieChangeMixin {
       });
     }
 
-    const expectedLive = new Map(notes);
+    const sameNotePreparations = promptPreparations.filter(
+      (entry) => normalizeVaultRelativePath(entry.path || "") === ownerRef.path,
+    );
+    const crossNotePreparations = promptPreparations.filter(
+      (entry) => normalizeVaultRelativePath(entry.path || "") !== ownerRef.path,
+    );
+    for (const preparation of crossNotePreparations) {
+      let prepared = null;
+      try {
+        prepared = await this.prepareDependencyTargetNote(
+          preparation.path,
+          preparation,
+        );
+      } catch (_prepareError) {
+        prepared = null;
+      }
+      if (!prepared || prepared.ok !== true) {
+        return Object.freeze({
+          ok: false,
+          reason: (prepared && prepared.reason) || "target-preparation-failed",
+          notice: `⛓ Could not prepare ${preparation.path}`,
+        });
+      }
+    }
+
+    const expectedLive = new Map(originalNotes);
+    for (const preparation of crossNotePreparations) {
+      const path = normalizeVaultRelativePath(preparation.path || "");
+      if (notes.has(path)) expectedLive.set(path, notes.get(path));
+    }
     const pair = Object.freeze({ owner: ownerRef, other: otherRef });
     const plainSource = planned.to === "plain-out" ? ownerRef : otherRef;
     const plainTarget = planned.to === "plain-out" ? otherRef : ownerRef;
@@ -119149,10 +119232,12 @@ class BobNavigationHotkeysTieChangeMixin {
           files: notes,
           expected: expectedLive,
           tieLinks: combinedTieLinks,
+          taskIdPreparations: sameNotePreparations,
           today: options.today,
           secondDependent: {
             parentPath: second.dependent.path,
             parentLine: secondLocated.line,
+            blockId: second.dependent.blockId,
             add: second.add || [],
             remove: second.remove || [],
           },
@@ -119168,10 +119253,12 @@ class BobNavigationHotkeysTieChangeMixin {
           files: notes,
           expected: expectedLive,
           tieLinks: combinedTieLinks,
+          taskIdPreparations: sameNotePreparations,
           today: options.today,
           secondDependent: {
             parentPath: second.dependent.path,
             parentLine: secondLocated.line,
+            blockId: second.dependent.blockId,
             add: second.add || [],
             remove: second.remove || [],
           },
@@ -119236,6 +119323,7 @@ class BobNavigationHotkeysTieChangeMixin {
           files: notes,
           expected: expectedLive,
           tieLinks,
+          taskIdPreparations: sameNotePreparations,
           today: options.today,
         });
       } else {
@@ -119246,6 +119334,7 @@ class BobNavigationHotkeysTieChangeMixin {
           remove: (edit.remove || []).length > 0 ? targetChanges : [],
           expected: expectedLive,
           tieLinks,
+          taskIdPreparations: sameNotePreparations,
           today: options.today,
         });
       }
@@ -119305,6 +119394,9 @@ class BobNavigationHotkeysTieChangeMixin {
         add: [{ ...target, label: null }],
         direction: planned.to === "plain-out" ? "to" : "from",
         expected: expectedLive,
+        taskIdPreparations: sameNotePreparations.filter(
+          (preparation) => normalizeVaultRelativePath(preparation.path || "") === plainSource.path,
+        ),
         today: options.today,
       });
       linkSucceeded = Boolean(
@@ -119352,6 +119444,231 @@ class BobNavigationHotkeysTieChangeMixin {
       linkSucceeded,
     });
   }
+}
+// ---- src/596a-tie-dispatch-composition.js ----
+// Compose the two dependency plans in a same-note reversal without losing
+// either dependent's downstream effects. `second.lineEdits` is relative to
+// the first plan's postimage, so the arrays compose in execution order.
+function composeTieDependencyPlans(first, second) {
+  const unionRefs = (...lists) => {
+    const seen = new Set();
+    const out = [];
+    for (const entry of lists.flat()) {
+      const path = normalizeVaultRelativePath(entry && entry.path || "");
+      const blockId = normalizeBulletPropertyValue(entry && entry.blockId || "");
+      const key = `${path}\x00${blockId}`;
+      if (!path || !blockId || seen.has(key)) continue;
+      seen.add(key);
+      out.push(Object.freeze({ ...entry, path, blockId }));
+    }
+    return Object.freeze(out);
+  };
+  const one = first.summary || {};
+  const two = second.summary || {};
+  const projectOne = one.project || null;
+  const projectTwo = two.project || null;
+  const project = projectOne || projectTwo
+    ? Object.freeze({
+        blocked: (projectOne && projectOne.blocked || 0) + (projectTwo && projectTwo.blocked || 0),
+        recovered: (projectOne && projectOne.recovered || 0) + (projectTwo && projectTwo.recovered || 0),
+        ready: (projectOne && projectOne.ready || 0) + (projectTwo && projectTwo.ready || 0),
+        pomodoroTargets: unionRefs(
+          projectOne && projectOne.pomodoroTargets || [],
+          projectTwo && projectTwo.pomodoroTargets || [],
+        ),
+      })
+    : null;
+  const summary = Object.freeze({
+    ...one,
+    added: (one.added || 0) + (two.added || 0),
+    removed: (one.removed || 0) + (two.removed || 0),
+    openRemaining: two.openRemaining,
+    blockedAfter: two.blockedAfter,
+    recoveredOutcome: two.recoveredOutcome || one.recoveredOutcome,
+    pomodoroTargets: unionRefs(one.pomodoroTargets || [], two.pomodoroTargets || []),
+    project,
+  });
+  return Object.freeze({
+    ...first,
+    nextContent: second.nextContent,
+    lineEdits: Object.freeze([...(first.lineEdits || []), ...(second.lineEdits || [])]),
+    parentLineNext: mapLineThroughLineEdits(first.parentLineNext, second.lineEdits),
+    summary,
+    targetEdits: Object.freeze([...(first.targetEdits || []), ...(second.targetEdits || [])]),
+    preparations: Object.freeze([...(first.preparations || []), ...(second.preparations || [])]),
+    blocksFollowUps: Object.freeze([...(first.blocksFollowUps || []), ...(second.blocksFollowUps || [])]),
+    blocksFailedPaths: Object.freeze([...(first.blocksFailedPaths || []), ...(second.blocksFailedPaths || [])]),
+    promotions: Object.freeze([...(first.promotions || []), ...(second.promotions || [])]),
+    added: Object.freeze([...(first.added || []), ...(second.added || [])]),
+    removed: Object.freeze([...(first.removed || []), ...(second.removed || [])]),
+    changed: first.changed === true || second.changed === true,
+  });
+}
+
+function lineForTrailingTaskId(content, blockId, fallback = null) {
+  const wanted = normalizeBulletPropertyValue(blockId || "");
+  if (wanted) {
+    const found = findTaskLineByTrailingBlockId(String(content || "").split(/\r?\n/), wanted);
+    if (found !== null) return found;
+  }
+  return Number.isInteger(fallback) ? fallback : null;
+}
+
+// Fold counted tie absorption into the existing cross-note BLOCKS write for
+// a target note. Keeping one postimage avoids one follow-up restoring the
+// other's edits from a shared preimage.
+function mergeCountedTieFollowUps(blocksFollowUps, tieFollowUps) {
+  const out = (Array.isArray(blocksFollowUps) ? blocksFollowUps : []).map((entry) => ({
+    ...entry,
+    tiePairs: Array.isArray(entry.tiePairs) ? entry.tiePairs.slice() : [],
+  }));
+  for (const tieEntry of Array.isArray(tieFollowUps) ? tieFollowUps : []) {
+    const path = normalizeVaultRelativePath(tieEntry && tieEntry.path || "");
+    if (!path) continue;
+    const pairs = Array.isArray(tieEntry.pairs) ? tieEntry.pairs : [];
+    const matching = out.findIndex(
+      (entry) => normalizeVaultRelativePath(entry.path || "") === path,
+    );
+    if (matching < 0) {
+      out.push({ path, preimage: tieEntry.preimage, tiePairs: pairs.slice() });
+      continue;
+    }
+    const current = out[matching];
+    out[matching] = {
+      ...current,
+      preimage: current.preimage === tieEntry.preimage ? current.preimage : null,
+      tiePairs: [...(current.tiePairs || []), ...pairs],
+    };
+  }
+  return out;
+}
+
+function applyTiePromptPreparations(content, path, preparations) {
+  const wanted = normalizeVaultRelativePath(path || "");
+  const relevant = (Array.isArray(preparations) ? preparations : []).filter(
+    (entry) => normalizeVaultRelativePath(entry && entry.path || "") === wanted,
+  );
+  if (relevant.length === 0) return String(content || "");
+  const text = String(content || "");
+  const lines = text.split(/\r?\n/);
+  for (const entry of relevant) {
+    const line = Number.isInteger(entry.line) ? entry.line : -1;
+    if (line < 0 || line >= lines.length) return null;
+    if (lines[line] === entry.text) continue;
+    if (lines[line] !== entry.from || typeof entry.text !== "string") return null;
+    lines[line] = entry.text;
+  }
+  return lines.join(text.includes("\r\n") ? "\r\n" : "\n");
+}
+
+function applyTiePromptPreparationsToNotes(notes, preparations) {
+  const out = new Map(notes);
+  const grouped = new Map();
+  for (const entry of Array.isArray(preparations) ? preparations : []) {
+    const path = normalizeVaultRelativePath(entry && entry.path || "");
+    if (!path || !out.has(path)) return null;
+    if (!grouped.has(path)) grouped.set(path, []);
+    grouped.get(path).push(entry);
+  }
+  for (const [path, entries] of grouped) {
+    const next = applyTiePromptPreparations(out.get(path), path, entries);
+    if (next === null) return null;
+    out.set(path, next);
+  }
+  return out;
+}
+
+async function confirmTieChangeBlockId(picker, item) {
+  const pending = picker.pendingTieChange;
+  if (!pending || !item || item.valid !== true) return false;
+  const requests = Array.isArray(pending.requests) && pending.requests.length > 0
+    ? pending.requests
+    : [{ side: pending.missingSide, missing: pending.missing }];
+  const request = requests[pending.promptIndex || 0];
+  const missing = request && request.missing;
+  const path = normalizeVaultRelativePath(missing && missing.path || "");
+  if (!missing || !path) {
+    picker.clearPendingBatch();
+    new Notice("That task could not be located");
+    return false;
+  }
+  const files = await picker.readVaultStageFiles([path]);
+  const content = files && files.get(path);
+  if (typeof content !== "string") return false;
+  const validation = validateBlockIdCandidate(item.id, content, {
+    reservedIds: pending.reservedIds || new Set(),
+  });
+  if (!validation.valid || !tryDependencyId(path, validation.id)) {
+    new Notice(validation.message || "That block ID cannot be used in the target note");
+    return false;
+  }
+  const lines = content.split(/\r?\n/);
+  const line = Number.isInteger(missing.line) ? missing.line : -1;
+  if (line < 0 || lines[line] !== missing.rawLine || !isObsidianTaskAtLine(content, line, null, lines)) {
+    picker.clearPendingBatch();
+    return picker.refuseDependencyStale();
+  }
+  const text = applyPromptedBlockIdPreservingLegacyId(lines[line], validation.id, path);
+  if (text === null) return false;
+  const preparation = Object.freeze({
+    side: request.side,
+    path,
+    line,
+    from: lines[line],
+    text,
+    blockId: validation.id,
+  });
+  const confirmedIds = Object.freeze({
+    ...(pending.confirmedIds || {}),
+    [request.side]: validation.id,
+  });
+  const preparations = Object.freeze([...(pending.preparations || []), preparation]);
+  pending.reservedIds.add(validation.id);
+  const nextIndex = (pending.promptIndex || 0) + 1;
+  if (nextIndex < requests.length) {
+    const next = requests[nextIndex];
+    picker.pendingTieChange = Object.freeze({
+      ...pending,
+      promptIndex: nextIndex,
+      confirmedIds,
+      preparations,
+      missingSide: next.side,
+      missing: next.missing,
+    });
+    picker.showBlockIdStage(next.missing, { mode: "tie-change" });
+    return false;
+  }
+  const owner = pending.owner && pending.owner.blockId
+    ? pending.owner
+    : { ...pending.owner, blockId: confirmedIds.owner };
+  const other = pending.other && pending.other.blockId
+    ? pending.other
+    : { ...pending.other, blockId: confirmedIds.other };
+  picker.clearPendingBatch();
+  let outcome = null;
+  try {
+    outcome = await picker.plugin.applyTieChange(owner, other, pending.to, {
+      promptBlockId: null,
+      promptPreparations: preparations,
+      expected: pending.expected,
+      editor: picker.editor,
+      editorPath: picker.filePath,
+    });
+  } catch (_error) {
+    new Notice("Could not update the tie");
+    return false;
+  }
+  if (!outcome || outcome.ok !== true) {
+    new Notice((outcome && outcome.notice) || "Could not update the tie");
+    return false;
+  }
+  if (outcome.notice) new Notice(outcome.notice);
+  try {
+    if (typeof picker.reopenDependencyStageFresh === "function") {
+      picker.reopenDependencyStageFresh();
+    }
+  } catch (_error) {}
+  return true;
 }
 // ---- src/596-relation-cancel-compose.js ----
 // Relation-writer composition for §17 cancel labels. Preview/commit

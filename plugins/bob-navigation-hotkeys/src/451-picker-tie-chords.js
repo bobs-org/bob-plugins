@@ -217,23 +217,21 @@ function tieMissingIdRequest(picker, item) {
   const ownerCand = tieOwnerCandidate(picker);
   const otherCand = tieItemCandidate(item, fallbackPath);
   if (!ownerCand && !otherCand) return null;
+  const requests = [];
   if (ownerCand && ownerCand.path && !ownerCand.blockId) {
-    return Object.freeze({
-      owner: ownerCand,
-      other: otherCand,
-      missingSide: "owner",
-      missing: ownerCand,
-    });
+    requests.push(Object.freeze({ side: "owner", missing: ownerCand }));
   }
   if (otherCand && otherCand.path && !otherCand.blockId) {
-    return Object.freeze({
-      owner: ownerCand,
-      other: otherCand,
-      missingSide: "other",
-      missing: otherCand,
-    });
+    requests.push(Object.freeze({ side: "other", missing: otherCand }));
   }
-  return null;
+  if (requests.length === 0) return null;
+  return Object.freeze({
+    owner: ownerCand,
+    other: otherCand,
+    missingSide: requests[0].side,
+    missing: requests[0].missing,
+    requests: Object.freeze(requests),
+  });
 }
 
 function tieChordDisplayName(item) {
@@ -276,6 +274,22 @@ function tieChordRefusal(picker, item, to) {
     // Best-effort batch guard.
   }
   return null;
+}
+
+function tieChordExpectedSnapshots(picker, item, refs) {
+  const files = picker && picker.vaultStage && picker.vaultStage.files;
+  const expected = new Map();
+  if (!(files instanceof Map)) return expected;
+  const paths = refs
+    ? [refs.owner.path, refs.other.path]
+    : [tieOwnerCandidate(picker)?.path, item && item.path];
+  for (const path of paths) {
+    const normalized = normalizeVaultRelativePath(path || "");
+    if (normalized && files.has(normalized)) {
+      expected.set(normalized, files.get(normalized));
+    }
+  }
+  return expected;
 }
 
 function tieShouldHandleChord(picker, event) {
@@ -342,11 +356,36 @@ function tieEnterForRow(picker, item) {
 async function tieCommitChord(picker, to) {
   const item = tieHighlightedItem(picker);
   if (!item || item.kind === "stage-more") return false;
-  if (item.disabled) {
-    new Notice(item.disabledReason || "That task cannot change its tie");
+  const refusal = tieChordRefusal(picker, item, to);
+  if (refusal) {
+    new Notice(refusal);
     return true;
   }
   const refs = tieChordOwnerOther(picker, item);
+  const stage = picker.vaultStage;
+  if (tieChordHintIsStale(picker, item, stage, refs)) {
+    if (typeof picker.refuseDependencyStale === "function") {
+      picker.refuseDependencyStale("changed — reopen");
+    } else {
+      new Notice("changed — reopen");
+    }
+    return true;
+  }
+  if (item.disabled) {
+    const guarded = !refs
+      ? null
+      : tieVisibilityTieChangePlan(
+          stage,
+          picker.plugin,
+          refs.owner,
+          refs.other,
+          to,
+        );
+    if (!guarded || guarded.kind !== "change" || guarded.reversing !== true) {
+      new Notice(item.disabledReason || (guarded && guarded.notice) || "That task cannot change its tie");
+      return true;
+    }
+  }
   if (!refs) {
     // ID-less rows or owners go through the ＋ id prompt flow; Esc writes
     // nothing. Only a truly unlocatable pair refuses here.
@@ -356,12 +395,34 @@ async function tieCommitChord(picker, to) {
         : null;
       if (missing && missing.missing && missing.missing.path) {
         if (typeof picker.showBlockIdStage === "function") {
+          const stage = picker.vaultStage;
+          const expected = new Map();
+          for (const candidate of [missing.owner, missing.other]) {
+            const path = normalizeVaultRelativePath(candidate && candidate.path || "");
+            if (path && stage && stage.files instanceof Map && stage.files.has(path)) {
+              expected.set(path, stage.files.get(path));
+            }
+          }
+          if (picker.filePath && typeof picker.getEditorContent === "function") {
+            const ownerPath = normalizeVaultRelativePath(picker.filePath);
+            const ownerContent = picker.getEditorContent();
+            if (ownerPath && typeof ownerContent === "string" && !expected.has(ownerPath)) {
+              expected.set(ownerPath, ownerContent);
+            }
+          }
           picker.pendingTieChange = Object.freeze({
             owner: missing.owner,
             other: missing.other,
             missingSide: missing.missingSide,
             missing: missing.missing,
             to,
+            requests: missing.requests || Object.freeze([
+              Object.freeze({ side: missing.missingSide, missing: missing.missing }),
+            ]),
+            promptIndex: 0,
+            confirmedIds: Object.freeze({}),
+            preparations: Object.freeze([]),
+            expected,
             reservedIds: new Set(),
           });
           const promptTask = {
@@ -381,11 +442,6 @@ async function tieCommitChord(picker, to) {
     new Notice("That task could not be located");
     return true;
   }
-  const refusal = tieChordRefusal(picker, item, to);
-  if (refusal) {
-    new Notice(refusal);
-    return true;
-  }
   tieDisarm(picker);
   // Missing IDs are handled before this call through the ＋ id prompt flow
   // (pendingTieChange); the writer only sees resolved refs here.
@@ -393,6 +449,7 @@ async function tieCommitChord(picker, to) {
   try {
     outcome = await picker.plugin.applyTieChange(refs.owner, refs.other, to, {
       promptBlockId: null,
+      expected: tieChordExpectedSnapshots(picker, item, refs),
     });
   } catch (_error) {
     new Notice("Could not update the tie");
@@ -536,6 +593,7 @@ function tieChordHintsForItem(picker, item) {
     : null;
   if (!refs && (!missing || !missing.missing || !missing.missing.path)) return [];
   if (tieChordHintIsStale(picker, item, stage, refs)) return [];
+  if (!refs && item.disabled) return [];
   const enterTo = tieEnterToForStage(kind);
   const chords = [
     { to: "owner-waits", keys: ["⌃B"], label: "wait on it" },
@@ -545,10 +603,11 @@ function tieChordHintsForItem(picker, item) {
   ];
   const out = [];
   for (const chord of chords) {
-    if (chord.to === enterTo) continue;
+    if (tieChordRefusal(picker, item, chord.to)) continue;
     if (tieChordNoopForItem(item, chord.to)) continue;
+    let planned = null;
     if (refs) {
-      const planned = tieVisibilityTieChangePlan(
+      planned = tieVisibilityTieChangePlan(
         stage,
         picker.plugin,
         refs.owner,
@@ -557,6 +616,11 @@ function tieChordHintsForItem(picker, item) {
       );
       if (!planned || planned.kind !== "change") continue;
     }
+    if (
+      chord.to === enterTo &&
+      !(item.disabled && planned && planned.reversing === true)
+    ) continue;
+    if (item.disabled && (!planned || planned.reversing !== true)) continue;
     out.push({ keys: chord.keys, label: chord.label });
   }
   return out;

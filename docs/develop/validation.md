@@ -670,8 +670,13 @@ notices:
 `scripts/test-navigation-plain-link-ties.cjs` (mirrored PT vectors plus the
 PT22+ planner vectors), with DW20–DW22 in
 `scripts/test-navigation-dependencies-writer.cjs` and RBP12–RBP13 in
-`scripts/test-navigation-blocks-edit.cjs`; `scripts/test-navigation-tie-chords.cjs`
-and `scripts/test-navigation-tie-stage-copy.cjs` cover navigation ties.
+`scripts/test-navigation-blocks-edit.cjs`; `scripts/test-navigation-tie-chords.cjs`,
+`scripts/test-navigation-tie-change-writer.cjs`,
+`scripts/test-navigation-counted-tie-absorption.cjs`, and
+`scripts/test-navigation-dependency-link-consumption.cjs` and
+`scripts/test-navigation-tie-stage-copy.cjs` cover navigation tie dispatch,
+combined writes, counted absorption through the counted entrypoints, Pomodoro
+consumption, and stage copy.
 
 The source-build suite is `scripts/test-plugin-build.cjs`. It
 covers fragment manifests, deterministic output, read-only freshness checks,

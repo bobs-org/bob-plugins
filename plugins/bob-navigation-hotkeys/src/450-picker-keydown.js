@@ -1,5 +1,14 @@
 class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
   handleKeydown(event) {
+    if (
+      this.stage === "blockid" &&
+      this.blockIdMode === "tie-change" &&
+      event &&
+      event.key === "Escape" &&
+      typeof this.clearPendingBatch === "function"
+    ) {
+      this.clearPendingBatch();
+    }
     if (this.stage === "task-card") {
       this.handleTaskCardKeydown(event);
       return;

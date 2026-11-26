@@ -225,6 +225,16 @@ class BobNavigationHotkeysRelationEditMixin {
           return refuse(stale, stale);
         }
       }
+      const originalFiles = new Map(files);
+      const taskIdPreparations = Array.isArray(args.taskIdPreparations)
+        ? args.taskIdPreparations
+        : [];
+      for (const path of new Set(taskIdPreparations.map((entry) => normalizeVaultRelativePath(entry.path || "")))) {
+        if (!path || !files.has(path)) continue;
+        const prepared = applyTiePromptPreparations(files.get(path), path, taskIdPreparations);
+        if (prepared === null) return refuse(stale, stale);
+        files.set(path, prepared);
+      }
 
       const locateList = (refs) => {
         const located = [];
@@ -308,7 +318,7 @@ class BobNavigationHotkeysRelationEditMixin {
         let content = contentOf(source.path);
         const original = sourceWrites.has(source.path)
           ? sourceWrites.get(source.path).original
-          : String(files.get(source.path) || "");
+          : String(originalFiles.get(source.path) || "");
         const consumed = consumedLinesByPath.get(source.path) || new Set();
         const liveSource = relocateRelationCancelSource(content, source, consumed);
         let sourceLine = liveSource.line;

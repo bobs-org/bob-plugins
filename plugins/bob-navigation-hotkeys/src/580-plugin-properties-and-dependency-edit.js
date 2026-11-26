@@ -370,15 +370,16 @@ class BobNavigationHotkeysPropertyDependencyMixin {
       if (!parentPath || !Number.isFinite(parentLine)) {
         return Object.freeze({ ok: false, reason: "invalid-ref" });
       }
-      const content =
+      const originalContent =
         args.content !== undefined
           ? String(args.content)
           : editor && typeof editor.getValue === "function"
             ? String(editor.getValue() || "")
             : null;
-      if (content === null) {
+      if (originalContent === null) {
         return Object.freeze({ ok: false, reason: "no-content" });
       }
+      let content = originalContent;
       const add = Array.isArray(args.add) ? args.add : [];
       const remove = Array.isArray(args.remove) ? args.remove : [];
       const blocksExisting = Array.isArray(args.blocksExisting) ? args.blocksExisting : null;
@@ -398,6 +399,18 @@ class BobNavigationHotkeysPropertyDependencyMixin {
       if (!files.has(parentPath)) {
         files.set(parentPath, content);
       }
+      const taskIdPreparations = Array.isArray(args.taskIdPreparations)
+        ? args.taskIdPreparations
+        : [];
+      const preparedParent = applyTiePromptPreparations(content, parentPath, taskIdPreparations);
+      if (preparedParent === null) {
+        return Object.freeze({ ok: false, reason: "changed — reopen", notice: "changed — reopen", stale: true });
+      }
+      content = preparedParent;
+      files.set(parentPath, content);
+      const parentBlockIdBefore = normalizeBulletPropertyValue(
+        args.parentBlockId || getTrailingBlockId(String(content).split(/\r?\n/)[parentLine] || ""),
+      );
       // Every note the edit touches is loaded: the add/remove targets plus
       // every note already linked on the line (open buffers first, else the
       // vault). A link whose note cannot be loaded stays verbatim in the
@@ -496,6 +509,7 @@ class BobNavigationHotkeysPropertyDependencyMixin {
       // `planTieChange`; lane transfer, stamps, and consumption run once.
       let secondPlan = null;
       let secondParentLineNext = null;
+      let secondBlockIdBefore = "";
       const secondDependent = args.secondDependent && typeof args.secondDependent === "object"
         ? args.secondDependent
         : null;
@@ -508,6 +522,10 @@ class BobNavigationHotkeysPropertyDependencyMixin {
         const secondAdd = Array.isArray(secondDependent.add) ? secondDependent.add : [];
         const secondRemove = Array.isArray(secondDependent.remove) ? secondDependent.remove : [];
         if (secondAdd.length > 0 || secondRemove.length > 0) {
+          secondBlockIdBefore = normalizeBulletPropertyValue(
+            secondDependent.blockId ||
+              getTrailingBlockId(String(content).split(/\r?\n/)[secondDependent.parentLine] || ""),
+          );
           const mappedSecondLine = mapLineThroughLineEdits(
             secondDependent.parentLine,
             plan.lineEdits,
@@ -553,26 +571,7 @@ class BobNavigationHotkeysPropertyDependencyMixin {
           secondParentLineNext = Number.isInteger(plannedSecond.parentLineNext)
             ? plannedSecond.parentLineNext
             : mappedSecondLine;
-          // Merge the second edit into the commit plan below.
-          plan = Object.freeze({
-            ...plan,
-            nextContent: secondPlan.nextContent,
-            lineEdits: secondPlan.lineEdits,
-            parentLineNext: plan.parentLineNext,
-            blocksFollowUps: Object.freeze([
-              ...(plan.blocksFollowUps || []),
-              ...(secondPlan.blocksFollowUps || []),
-            ]),
-            preparations: Object.freeze([
-              ...(plan.preparations || []),
-              ...(secondPlan.preparations || []),
-            ]),
-            blocksFailedPaths: Object.freeze([
-              ...(plan.blocksFailedPaths || []),
-              ...(secondPlan.blocksFailedPaths || []),
-            ]),
-            changed: true,
-          });
+          plan = composeTieDependencyPlans(plan, secondPlan);
         }
       }
       if (!plan.changed) {
@@ -669,10 +668,7 @@ class BobNavigationHotkeysPropertyDependencyMixin {
           args.today || new Date(),
         );
         if (!mirrorTouch && plan.changed && add.length > 0) {
-          const tieParentLines = String(commitPlan.nextContent || "").split(/\r?\n/);
-          const tieParentBlockId = Number.isInteger(plan.parentLineNext)
-            ? getTrailingBlockId(String(tieParentLines[plan.parentLineNext] || ""))
-            : "";
+          const tieParentBlockId = parentBlockIdBefore;
           const tiePairs = add
             .map(normalizeDependencyTargetRef)
             .filter((ref) => ref.path && ref.blockId)
@@ -752,23 +748,33 @@ class BobNavigationHotkeysPropertyDependencyMixin {
         // prerequisite above it can gain a BLOCKS line and shift it.
         // Stamping before the Pomodoro fold keeps the line index valid.
         // A same-note reversal stamps both dependents in the one transaction.
-        if (Number.isInteger(plan.parentLineNext)) {
+        const firstStampLine = lineForTrailingTaskId(
+          commitPlan.nextContent,
+          parentBlockIdBefore,
+          plan.parentLineNext,
+        );
+        if (Number.isInteger(firstStampLine)) {
           commitPlan = {
             ...commitPlan,
             nextContent: this.stampDependencyParentLine(
               commitPlan.nextContent,
-              plan.parentLineNext,
+              firstStampLine,
               args.stamper,
               args.dateText,
             ),
           };
         }
-        if (Number.isInteger(secondParentLineNext) && secondParentLineNext !== plan.parentLineNext) {
+        const secondStampLine = lineForTrailingTaskId(
+          commitPlan.nextContent,
+          secondBlockIdBefore,
+          secondParentLineNext,
+        );
+        if (Number.isInteger(secondStampLine) && secondStampLine !== firstStampLine) {
           commitPlan = {
             ...commitPlan,
             nextContent: this.stampDependencyParentLine(
               commitPlan.nextContent,
-              secondParentLineNext,
+              secondStampLine,
               args.stamper,
               args.dateText,
             ),
@@ -861,7 +867,7 @@ class BobNavigationHotkeysPropertyDependencyMixin {
           }
           if (typeof editor.getValue === "function") {
             const live = String(editor.getValue() || "");
-            if (live !== content) {
+            if (live !== originalContent) {
               return { ok: false, reason: "stale-editor" };
             }
           }
@@ -870,7 +876,7 @@ class BobNavigationHotkeysPropertyDependencyMixin {
             this,
             editor,
             parentPath,
-            content,
+            originalContent,
             nextContent,
             {
               annotation: BLOCKS_MACHINE_WRITE_ANNOTATION,

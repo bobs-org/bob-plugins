@@ -235,6 +235,7 @@ class BobNavigationHotkeysBlocksEditMixin {
           files.set(dailyPath, loaded);
         }
       }
+      const originalFiles = new Map(files);
       const expected =
         args.expected instanceof Map
           ? args.expected
@@ -246,6 +247,15 @@ class BobNavigationHotkeysBlocksEditMixin {
         if (live !== undefined && live !== String(expectedContent || "")) {
           return refuse(stale, stale);
         }
+      }
+      const taskIdPreparations = Array.isArray(args.taskIdPreparations)
+        ? args.taskIdPreparations
+        : [];
+      for (const path of new Set(taskIdPreparations.map((entry) => normalizeVaultRelativePath(entry.path || "")))) {
+        if (!path || !files.has(path)) continue;
+        const prepared = applyTiePromptPreparations(files.get(path), path, taskIdPreparations);
+        if (prepared === null) return refuse(stale, stale);
+        files.set(path, prepared);
       }
       const locate = (refs) => {
         const located = [];
@@ -388,8 +398,14 @@ class BobNavigationHotkeysBlocksEditMixin {
           blocksFailed: Object.freeze([]),
         });
       }
-      const sourceWrites = plan.sourceWrites.map((entry) => ({ ...entry }));
-      const dependentWrites = plan.dependentWrites.map((entry) => ({ ...entry }));
+      const sourceWrites = plan.sourceWrites.map((entry) => ({
+        ...entry,
+        original: originalFiles.has(entry.path) ? originalFiles.get(entry.path) : entry.original,
+      }));
+      const dependentWrites = plan.dependentWrites.map((entry) => ({
+        ...entry,
+        original: originalFiles.has(entry.path) ? originalFiles.get(entry.path) : entry.original,
+      }));
       // Tie absorption (§22): a new dependency absorbs the pair's plain
       // links. T-note sides fold into the writes below (one transaction per
       // note); source-note sides on pure source notes become follow-ups

@@ -71747,9 +71747,13 @@ function tieVisibilityProjectReleaseCopy(stage, owner, rowKey) {
   }
   const name = String(owner.displayText || cleanTaskDisplayText(owner.rawLine || "") || "")
     .trim();
-  return name
-    ? `unblocks ${info.residents.length} residents of ‹${name}›`
-    : "";
+  if (!name) return "";
+  const parts = [`unblocks ${info.residents.length} residents of ‹${name}›`];
+  const pomodoros = tieVisibilityProjectPomodoroCount(stage, info, owner);
+  if (pomodoros > 0) {
+    parts.push(`⚠ removes ${pomodoros} Pomodoro link${pomodoros === 1 ? "" : "s"}`);
+  }
+  return parts.join(" · ");
 }
 
 function tieVisibilityReleaseAlternative(item, stage, owner, plugin, tie) {
@@ -71996,7 +72000,7 @@ function dependencyStageConsequenceStrip(item, context = {}) {
   const currentOpen = tieVisibilityOpenWaitCount(stage, ownerKey);
   const openAfter = currentOpen + 1;
   const ownerStatus = owner.status || (stage.dependent && stage.dependent.status);
-  if (ownerStatus === "?" || currentOpen > 0) {
+  if (ownerStatus === "?") {
     return `Also waits on it (${openAfter} open)`;
   }
   const parts = ["Waits on it · this task becomes Blocked"];

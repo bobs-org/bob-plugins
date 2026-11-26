@@ -425,9 +425,13 @@ function tieVisibilityProjectReleaseCopy(stage, owner, rowKey) {
   }
   const name = String(owner.displayText || cleanTaskDisplayText(owner.rawLine || "") || "")
     .trim();
-  return name
-    ? `unblocks ${info.residents.length} residents of ‹${name}›`
-    : "";
+  if (!name) return "";
+  const parts = [`unblocks ${info.residents.length} residents of ‹${name}›`];
+  const pomodoros = tieVisibilityProjectPomodoroCount(stage, info, owner);
+  if (pomodoros > 0) {
+    parts.push(`⚠ removes ${pomodoros} Pomodoro link${pomodoros === 1 ? "" : "s"}`);
+  }
+  return parts.join(" · ");
 }
 
 function tieVisibilityReleaseAlternative(item, stage, owner, plugin, tie) {

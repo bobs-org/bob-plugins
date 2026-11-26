@@ -167,7 +167,9 @@ Links and Linked from release copy includes a muted `⌃B` / `⌃⇧B reverses`
 segment only when that opposite dependency change is valid. Releasing the last
 open `^prj` prerequisite reports the number of residents unblocked. Adding a
 dependency preserves a labelled relation and appends its label to the notice,
-for example `⛓ Now waits on “X” · kept the "follow-up of" relation`.
+for example `⛓ Now waits on “X” · kept the "follow-up of" relation`. When the
+project or its residents have links under today's open Pomodoros, the release
+strip also warns how many Pomodoro links it removes.
 
 When a hand-edited LINKS or Depends-On line creates an overlap, the existing
 mirror shows one notice after the cursor leaves the line:

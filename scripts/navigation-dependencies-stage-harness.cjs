@@ -218,6 +218,10 @@ function stubPlugin(notes) {
 }
 
 function stubStageModal(plugin, editor, filePath, cursorLine) {
+  const activeView = { editor, file: { path: filePath, extension: "md" } };
+  plugin.getActiveMarkdownView = () => activeView;
+  plugin.app.workspace.getLeavesOfType = (type) =>
+    type === "markdown" ? [{ view: activeView }] : [];
   const content = String(editor.getValue() || "");
   const lines = content.split(/\r?\n/);
   const cursor = { line: cursorLine, ch: 0 };

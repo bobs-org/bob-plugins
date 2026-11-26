@@ -11,6 +11,19 @@ const {
   assertLineBoundedTransaction,
 } = require("./navigation-hotkeys-harness.cjs");
 
+function bindActiveMarkdownEditor(plugin, editor, path) {
+  const view = {
+    editor,
+    file: { path, extension: "md" },
+    getViewType: () => "markdown",
+  };
+  plugin.getActiveMarkdownView = () => view;
+  const workspace = plugin.app.workspace;
+  workspace.activeLeaf = { view };
+  workspace.getActiveViewOfType = () => view;
+  workspace.getLeavesOfType = (type) => type === "markdown" ? [{ view }] : [];
+}
+
 test("counted dependencies converge mixed sources and maintain one link per parent", () => {
   const input = [
     "- [ ] #task One [dependsOn:: Tasks__target] ^one",
@@ -589,6 +602,7 @@ test("Ctrl+D on the Depends on row leaves unrelated child links as content", asy
       adapter: { read: async () => JSON.stringify(compatibleTasksSettings()) },
     },
   };
+  bindActiveMarkdownEditor(plugin, editor, activeFile.path);
   notices.length = 0;
   const result = await plugin.deleteBulletPropertyValue(
     editor,
@@ -619,6 +633,7 @@ test("Ctrl+D clears a field-only dependency without a line", async () => {
       adapter: { read: async () => JSON.stringify(compatibleTasksSettings()) },
     },
   };
+  bindActiveMarkdownEditor(plugin, editor, activeFile.path);
   const result = await plugin.deleteBulletPropertyValue(
     editor,
     { line: 0, ch: 2 },
@@ -699,6 +714,7 @@ test("hand-edit mirror projects an edited line into the field", async () => {
   plugin.app = {
     workspace: { getActiveFile: () => ({ path: "Here.md" }) },
   };
+  bindActiveMarkdownEditor(plugin, editor, "Here.md");
   const result = await plugin.mirrorDependencyHandEdit(
     editor,
     "Here.md",
@@ -724,6 +740,7 @@ test("hand-edit mirror canonicalises a hand-written line variant", async () => {
   plugin.app = {
     workspace: { getActiveFile: () => ({ path: "Here.md" }) },
   };
+  bindActiveMarkdownEditor(plugin, editor, "Here.md");
   const result = await plugin.mirrorDependencyHandEdit(
     editor,
     "Here.md",
@@ -753,6 +770,7 @@ test("hand-edit mirror drops a linkless line and the field", async () => {
   plugin.app = {
     workspace: { getActiveFile: () => ({ path: "Here.md" }) },
   };
+  bindActiveMarkdownEditor(plugin, editor, "Here.md");
   const result = await plugin.mirrorDependencyHandEdit(
     editor,
     "Here.md",
@@ -790,6 +808,7 @@ test("hand-edit mirror clears the field after the line is deleted", async () => 
   plugin.app = {
     workspace: { getActiveFile: () => ({ path: "Here.md" }) },
   };
+  bindActiveMarkdownEditor(plugin, editor, "Here.md");
   const result = await plugin.mirrorDependencyHandEdit(
     editor,
     "Here.md",
@@ -866,6 +885,7 @@ test("hand-edit mirror blocks when an open prerequisite is added by hand", async
   plugin.app = {
     workspace: { getActiveFile: () => ({ path: "Here.md" }) },
   };
+  bindActiveMarkdownEditor(plugin, editor, "Here.md");
   // Even with a freshness stamper available, the mirror never stamps.
   plugin.getFreshnessStampLine = () => (line) => `${line} [fresh:: today]`;
   const result = await plugin.mirrorDependencyHandEdit(
@@ -895,6 +915,7 @@ test("hand-edit mirror never transfers commitment to the target", async () => {
   plugin.app = {
     workspace: { getActiveFile: () => ({ path: "Here.md" }) },
   };
+  bindActiveMarkdownEditor(plugin, editor, "Here.md");
   const result = await plugin.mirrorDependencyHandEdit(
     editor,
     "Here.md",
@@ -929,6 +950,7 @@ test("hand-edit mirror recovers when the last open prerequisite is removed by ha
       adapter: { read: async () => JSON.stringify(compatibleTasksSettings()) },
     },
   };
+  bindActiveMarkdownEditor(plugin, editor, "Here.md");
   plugin.getFreshnessStampLine = () => (line) => `${line} [fresh:: today]`;
   const result = await plugin.mirrorDependencyHandEdit(
     editor,
@@ -963,6 +985,7 @@ test("hand-edit mirror leaves a half-typed link alone", async () => {
   plugin.app = {
     workspace: { getActiveFile: () => ({ path: "Here.md" }) },
   };
+  bindActiveMarkdownEditor(plugin, editor, "Here.md");
   const result = await plugin.mirrorDependencyHandEdit(
     editor,
     "Here.md",
@@ -1010,6 +1033,7 @@ test("hand-edit mirror clears the owning task when its last-child line is delete
       adapter: { read: async () => JSON.stringify(compatibleTasksSettings()) },
     },
   };
+  bindActiveMarkdownEditor(plugin, editor, "Here.md");
   const result = await plugin.mirrorDependencyHandEdit(
     editor,
     "Here.md",

@@ -222,6 +222,10 @@ test("mirror fire re-arms while the cursor stays on the edited line", async () =
   plugin.app = {
     workspace: { getActiveFile: () => ({ path: "Here.md" }) },
   };
+  plugin.getActiveMarkdownView = () => ({
+    editor,
+    file: { path: "Here.md" },
+  });
   const snapshot = {
     editor,
     parentPath: "Here.md",

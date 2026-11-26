@@ -188,7 +188,18 @@ function stubPlugin(notes, options = {}) {
   return { plugin, store };
 }
 
+function bindActiveMarkdownEditor(plugin, editor, filePath) {
+  const activeView = { editor, file: { path: filePath, extension: "md" } };
+  plugin.getActiveMarkdownView = () => activeView;
+  plugin.app.workspace.getLeavesOfType = (type) =>
+    type === "markdown" ? [{ view: activeView }] : [];
+}
+
 function stubModal(plugin, editor, filePath, cursorLine) {
+  const activeView = { editor, file: { path: filePath, extension: "md" } };
+  plugin.getActiveMarkdownView = () => activeView;
+  plugin.app.workspace.getLeavesOfType = (type) =>
+    type === "markdown" ? [{ view: activeView }] : [];
   const content = String(editor.getValue() || "");
   const lines = content.split(/\r?\n/);
   const cursor = { line: cursorLine, ch: 0 };
@@ -219,6 +230,7 @@ test("cross-note add awaits preparation before the one commit", async () => {
     "Other.md": targetNote,
   });
   const editor = new TransactionEditor(parentNote, { line: 0, ch: 0 });
+  bindActiveMarkdownEditor(plugin, editor, "Tasks.md");
   const events = [];
   const originalPrepare = plugin.prepareDependencyTargetNote.bind(plugin);
   plugin.prepareDependencyTargetNote = async (filePath, preparation) => {
@@ -309,6 +321,7 @@ test("links to unloaded notes tolerate add, remove, and deleted targets", async 
   // removal commits through the editor.
   const { plugin } = stubPlugin({ "Tasks.md": parentNote });
   const editor = new TransactionEditor(parentNote, { line: 0, ch: 0 });
+  bindActiveMarkdownEditor(plugin, editor, "Tasks.md");
   const outcome = await plugin.applyDependencyEdit({
     editor,
     parentPath: "Tasks.md",
@@ -344,6 +357,7 @@ test("Pomodoro-linked dependents recover through the plugin vault read", async (
     [dailyPath]: dailyNote,
   });
   const editor = new TransactionEditor(parentNote, { line: 0, ch: 0 });
+  bindActiveMarkdownEditor(plugin, editor, "Tasks.md");
   const outcome = await plugin.applyDependencyEdit({
     editor,
     parentPath: "Tasks.md",
@@ -358,6 +372,7 @@ test("Pomodoro-linked dependents recover through the plugin vault read", async (
 
   const { plugin: lonelyPlugin } = stubPlugin({ "Tasks.md": parentNote });
   const lonelyEditor = new TransactionEditor(parentNote, { line: 0, ch: 0 });
+  bindActiveMarkdownEditor(lonelyPlugin, lonelyEditor, "Tasks.md");
   const lonely = await lonelyPlugin.applyDependencyEdit({
     editor: lonelyEditor,
     parentPath: "Tasks.md",
@@ -703,6 +718,7 @@ test("pendingTargetLine commits the same-note target id with the link", () => {
     ].join("\n");
     const { plugin } = stubPlugin({ "Tasks.md": content });
     const editor = new TransactionEditor(content, { line: 0, ch: 0 });
+    bindActiveMarkdownEditor(plugin, editor, "Tasks.md");
     const targetIndex = content.split("\n").indexOf(targetBefore);
     const depValue = helpers.dependencyTargetId(
       targetAfter,
@@ -842,6 +858,7 @@ test("adds without recovery read zero extra vault notes", async () => {
     return originalCachedRead(file);
   };
   const editor = new TransactionEditor(notes["Tasks.md"], { line: 0, ch: 0 });
+  bindActiveMarkdownEditor(plugin, editor, "Tasks.md");
   const outcome = await plugin.applyDependencyEdit({
     editor,
     parentPath: "Tasks.md",
@@ -883,6 +900,7 @@ test("hand-edit clear recovers Pomodoro-linked dependents to Next", async () => 
     [dailyPath]: dailyNote,
   });
   const editor = new TransactionEditor(newNote, { line: 0, ch: 0 });
+  bindActiveMarkdownEditor(plugin, editor, "Tasks.md");
   const plan = helpers.planDependencyHandEditMirror(
     oldNote,
     newNote,
@@ -919,6 +937,7 @@ test("hand-edit clear on a non-Blocked parent reads zero extra notes", async () 
     return originalCachedRead(file);
   };
   const editor = new TransactionEditor(newNote, { line: 0, ch: 0 });
+  bindActiveMarkdownEditor(plugin, editor, "Tasks.md");
   const plan = helpers.planDependencyHandEditMirror(
     oldNote,
     newNote,
@@ -946,6 +965,7 @@ test("writer keeps the full route for duplicate basenames", async () => {
   // No vault or resolver stubs: the plugin's own linkpath resolution and
   // vault file list run against the async vault stub below.
   const editor = new TransactionEditor(parentNote, { line: 0, ch: 0 });
+  bindActiveMarkdownEditor(plugin, editor, "Tasks.md");
   const outcome = await plugin.applyDependencyEdit({
     editor,
     parentPath: "Tasks.md",
@@ -984,6 +1004,7 @@ test("adds on Blocked parents and non-Blocked mirror touches read nothing", asyn
   });
   const readCount = countReads(plugin);
   const editor = new TransactionEditor(blockedNote, { line: 0, ch: 0 });
+  bindActiveMarkdownEditor(plugin, editor, "Tasks.md");
   const added = await plugin.applyDependencyEdit({
     editor,
     parentPath: "Tasks.md",
@@ -1002,6 +1023,7 @@ test("adds on Blocked parents and non-Blocked mirror touches read nothing", asyn
   });
   const mirrorReads = countReads(mirrorPlugin);
   const mirrorEditor = new TransactionEditor(plainNote, { line: 0, ch: 0 });
+  bindActiveMarkdownEditor(mirrorPlugin, mirrorEditor, "Tasks.md");
   const touched = await mirrorPlugin.applyDependencyEdit({
     editor: mirrorEditor,
     parentPath: "Tasks.md",

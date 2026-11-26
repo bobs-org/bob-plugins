@@ -447,6 +447,12 @@ test("pending flush consumes results without duplicating the scheduler jump", ()
     api: {
       taskSettle: {
         version: 1,
+        settleNote() {
+          return { contents: "settled note\n", changed: false, lineMap: {}, warnings: [] };
+        },
+        applyToEditor() {
+          return { applied: false, changed: false, reason: "noop" };
+        },
         flushPending() {
           // Mirrors task-status-cycler's onSettled observer.
           plugin.recordJump(target, cursor);
@@ -472,7 +478,9 @@ test("dependency editor writes settle their complete postimage in one annotated 
   );
   assert.equal(result.ok, true);
   assert.match(editor.getValue(), /### Blocked/);
-  assert.match(editor.getValue(), /### Ready/);
+  assert.match(editor.getValue(), /- \[ \] #task Ship the report/);
+  assert.match(editor.getValue(), /- \[\?\] #task Wait for the prerequisite \[dependsOn:: blocker\]/);
+  assert.doesNotMatch(editor.getValue(), /### Ready/);
   assert.equal(editor.transactions.length, 1);
   assert.equal(editor.transactions[0].annotation, helpers.BLOCKS_MACHINE_WRITE_ANNOTATION);
 });
@@ -497,7 +505,9 @@ test("closed relation writes settle before their preimage-checked vault write", 
   );
   assert.equal(result.ok, true);
   assert.match(stored.get(path), /### Blocked/);
-  assert.match(stored.get(path), /### Ready/);
+  assert.match(stored.get(path), /- \[ \] #task Ship the report/);
+  assert.match(stored.get(path), /- \[\?\] #task Wait for the prerequisite \[dependsOn:: blocker\]/);
+  assert.doesNotMatch(stored.get(path), /### Ready/);
   assert.match(stored.get(path), /LINKS|dependsOn/);
 });
 

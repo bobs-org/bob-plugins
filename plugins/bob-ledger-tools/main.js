@@ -95374,6 +95374,7 @@ class BobLedgerToolsBankSetupMixin {
     // remains visible below the Area card instead of inside the hidden title.
     const anchor = arbitration.owner ? -1 : (this.notebookHeaderLiveAnchor?.(text) ?? -1);
     const frontmatterEnd = this.notebookHeaderFrontmatterEnd?.(text) ?? -1;
+    const plugin = this;
     const widget = new class extends WidgetType {
       constructor() {
         super();

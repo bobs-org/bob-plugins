@@ -25,6 +25,10 @@
   "083-blocks-dependency-plan.js",
   "084-blocks-stage-plan.js",
   "090-local-task-ids.js",
+  "091-snooze-rows-twin.js",
+  "092-snooze-when-twin.js",
+  "093-snooze-state-twin.js",
+  "094-snooze-cleanup-twin.js",
   "100-yank-and-paths.js",
   "101-copy-card-model.js",
   "101a-copy-card-keys.js",
@@ -317,5 +321,6 @@
   "732-relation-event-target-exports.js",
   "733-mail-close-exports.js",
   "734-nav-task-settle-exports.js",
-  "735-parent-picker-choose.js"
+  "735-parent-picker-choose.js",
+  "736-snooze-model-exports.js"
 ]

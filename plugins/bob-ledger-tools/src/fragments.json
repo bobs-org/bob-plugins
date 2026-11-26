@@ -8,6 +8,10 @@
   "040-editor-and-daily.js",
   "050-plan-budget.js",
   "060-today.js",
+  "061-snooze-rows-twin.js",
+  "062-snooze-when-twin.js",
+  "063-snooze-state-twin.js",
+  "064-snooze-cleanup-twin.js",
   "070-ready-and-review.js",
   "071-lane-walk-model.js",
   "075-work-badge-tone.js",
@@ -448,5 +452,6 @@
   "376-exports-intention-card-editor.js",
   "377-exports-intention-card-navigation.js",
   "378-exports-nav-groups.js",
-  "379-exports-property-editor.js"
+  "379-exports-property-editor.js",
+  "380-snooze-model-exports.js"
 ]

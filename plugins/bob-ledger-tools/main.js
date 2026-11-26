@@ -4984,6 +4984,1026 @@ function laneBudgetFromTasks(tasks, today, caps, lane) {
   return { count, cap, over: count > cap };
 }
 
+// ---- src/061-snooze-rows-twin.js ----
+// Shared daily-note Snoozed row parser. Keep this fragment byte-identical in
+// bob-navigation-hotkeys, block-id-prompt, and task-status-cycler.
+
+function snoozeLineRecords(source) {
+  const text = String(source == null ? "" : source);
+  const records = [];
+  let cursor = 0;
+  while (cursor < text.length) {
+    let end = text.indexOf("\n", cursor);
+    let cr = text.indexOf("\r", cursor);
+    if (end < 0 || (cr >= 0 && cr < end)) end = cr;
+    if (end < 0) {
+      records.push({ text: text.slice(cursor), start: cursor, end: text.length, nextStart: text.length, eol: "" });
+      break;
+    }
+    let eol = text[end];
+    let nextStart = end + 1;
+    if (eol === "\r" && text[nextStart] === "\n") {
+      eol = "\r\n";
+      nextStart += 1;
+    }
+    records.push({ text: text.slice(cursor, end), start: cursor, end, nextStart, eol });
+    cursor = nextStart;
+  }
+  return records;
+}
+
+function snoozeFrontmatterEnd(lines) {
+  if (!lines.length || lines[0].text.trimEnd() !== "---") return null;
+  for (let index = 1; index < lines.length; index += 1) {
+    if (lines[index].text.trimEnd() === "---") return index;
+  }
+  return null;
+}
+
+function snoozeFenceMarker(line) {
+  let spaces = 0;
+  while (line[spaces] === " ") spaces += 1;
+  if (spaces > 3) return null;
+  const code = line.charCodeAt(spaces);
+  if (code !== 96 && code !== 126) return null;
+  let length = 0;
+  while (line.charCodeAt(spaces + length) === code) length += 1;
+  return length >= 3 ? { code, length, offset: spaces } : null;
+}
+
+function snoozeClosesFence(line, open) {
+  const marker = snoozeFenceMarker(line);
+  if (!marker || marker.code !== open.code || marker.length < open.length) return false;
+  return line.slice(marker.offset + marker.length).trim() === "";
+}
+
+function snoozeHeading(line) {
+  if (!line.startsWith("##")) return false;
+  const rest = line.slice(2);
+  if (!/^[ \t]/.test(rest)) return false;
+  const title = rest.trimStart();
+  if (!title.startsWith("Snoozed")) return false;
+  const tail = title.slice("Snoozed".length);
+  return tail === "" || /^\s/u.test(tail);
+}
+
+function snoozeLevelTwoHeading(line) {
+  return line.startsWith("##") && /^[ \t]/.test(line.slice(2));
+}
+
+function snoozeHeaderIndexes(lines) {
+  const frontmatterEnd = snoozeFrontmatterEnd(lines);
+  let fence = null;
+  const found = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    if (frontmatterEnd !== null && index <= frontmatterEnd) continue;
+    const line = lines[index].text;
+    if (fence) {
+      if (snoozeClosesFence(line, fence)) fence = null;
+      continue;
+    }
+    const marker = snoozeFenceMarker(line);
+    if (marker) {
+      fence = marker;
+      continue;
+    }
+    if (snoozeHeading(line)) found.push(index);
+  }
+  return found;
+}
+
+function snoozeFencedLines(lines, start, end) {
+  const fenced = new Set();
+  let fence = null;
+  for (let index = start; index < end; index += 1) {
+    const line = lines[index].text;
+    if (fence) {
+      fenced.add(index);
+      if (snoozeClosesFence(line, fence)) fence = null;
+      continue;
+    }
+    const marker = snoozeFenceMarker(line);
+    if (marker) {
+      fenced.add(index);
+      fence = marker;
+    }
+  }
+  return fenced;
+}
+
+function snoozeChildrenEnd(lines, rowIndex, sectionEnd, fenced) {
+  let end = rowIndex + 1;
+  while (end < sectionEnd) {
+    if (fenced.has(end)) break;
+    const line = lines[end].text;
+    if (line.trim() === "") {
+      let probe = end + 1;
+      let belongs = false;
+      while (probe < sectionEnd) {
+        const next = lines[probe].text;
+        if (next.trim() === "") {
+          probe += 1;
+          continue;
+        }
+        belongs = next.startsWith(" ") || next.startsWith("\t");
+        break;
+      }
+      if (belongs) {
+        end += 1;
+        continue;
+      }
+      break;
+    }
+    if (line.startsWith(" ") || line.startsWith("\t")) {
+      end += 1;
+      continue;
+    }
+    break;
+  }
+  return end;
+}
+
+function snoozeInlineCodeSpans(line) {
+  const spans = [];
+  let index = 0;
+  while (index < line.length) {
+    if (line.charCodeAt(index) !== 96) {
+      index += 1;
+      continue;
+    }
+    const start = index;
+    while (line.charCodeAt(index) === 96) index += 1;
+    const width = index - start;
+    let search = index;
+    let matched = false;
+    while (search < line.length) {
+      if (line.charCodeAt(search) !== 96) {
+        search += 1;
+        continue;
+      }
+      const close = search;
+      while (line.charCodeAt(search) === 96) search += 1;
+      if (search - close === width) {
+        spans.push({ start, end: search });
+        index = search;
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) break;
+  }
+  return spans;
+}
+
+function snoozeRawWikilinks(line) {
+  const codeSpans = snoozeInlineCodeSpans(line);
+  const spans = [];
+  let base = 0;
+  while (base < line.length) {
+    const openAt = line.indexOf("[[", base);
+    if (openAt < 0) break;
+    const closeAt = line.indexOf("]]", openAt + 2);
+    if (closeAt < 0) break;
+    const end = closeAt + 2;
+    if (!codeSpans.some((span) => openAt < span.end && end > span.start)) {
+      spans.push({ open: openAt, end });
+    }
+    base = end;
+  }
+  return spans;
+}
+
+function snoozeBlockLinkSpans(line) {
+  const spans = [];
+  for (const raw of snoozeRawWikilinks(line)) {
+    const inside = line.slice(raw.open + 2, raw.end - 2);
+    const pipe = inside.indexOf("|");
+    const linkTarget = pipe < 0 ? inside : inside.slice(0, pipe);
+    const fragment = linkTarget.indexOf("#^");
+    if (fragment < 0) continue;
+    const target = linkTarget.slice(0, fragment).trim();
+    const blockId = linkTarget.slice(fragment + 2).trim();
+    if (!blockId || !/^[A-Za-z0-9-]+$/.test(blockId)) continue;
+    const embedded = raw.open > 0 && line[raw.open - 1] === "!";
+    spans.push({
+      target,
+      blockId,
+      open: raw.open,
+      end: raw.end,
+      tokenStart: raw.open - (embedded ? 1 : 0),
+      embedded,
+      aliased: pipe >= 0,
+    });
+  }
+  return spans;
+}
+
+function snoozeWallMinutes(value) {
+  const text = String(value || "").trim();
+  if (text.includes(":")) {
+    const parts = text.split(":");
+    if (parts.length !== 2 || !parts[0].trim() || !parts[1].trim()) return null;
+    const hour = Number(parts[0].trim());
+    const minute = Number(parts[1].trim());
+    if (!Number.isInteger(hour) || !Number.isInteger(minute) || hour > 23 || minute > 59 || parts[1].trim().length !== 2) return null;
+    return hour * 60 + minute;
+  }
+  if (!/^\d{4}$/.test(text)) return null;
+  const hour = Number(text.slice(0, 2));
+  const minute = Number(text.slice(2));
+  return hour <= 23 && minute <= 59 ? hour * 60 + minute : null;
+}
+
+function snoozeBoldTime(rest) {
+  if (!rest.startsWith("**")) return null;
+  const close = rest.indexOf("**", 2);
+  if (close < 0) return null;
+  return { text: rest.slice(2, close), consumed: close + 2 };
+}
+
+function snoozeRowBase(lines, source, index, sectionEnd, fenced, reason) {
+  const childrenEnd = snoozeChildrenEnd(lines, index, sectionEnd, fenced);
+  const record = lines[index];
+  const last = lines[Math.max(index, childrenEnd - 1)];
+  const subtreeEnd = last ? last.nextStart : record.nextStart;
+  return {
+    lineIndex: index,
+    line: index + 1,
+    kind: "malformed",
+    minutes: null,
+    hhmm: null,
+    target: null,
+    blockId: null,
+    embedded: false,
+    aliased: false,
+    childrenEnd,
+    children: Math.max(0, childrenEnd - index - 1),
+    malformedReason: reason || "malformed",
+    wokeMinutes: null,
+    wokeHhmm: null,
+    lineStart: record.start,
+    lineEnd: record.end,
+    subtreeStart: record.start,
+    subtreeEnd,
+    subtree: source.slice(record.start, subtreeEnd),
+    childrenText: source.slice(record.nextStart, subtreeEnd),
+  };
+}
+
+function snoozeParseHistory(rest, base) {
+  if (!rest.startsWith("~~")) return null;
+  const inner = rest.slice(2);
+  const bold = snoozeBoldTime(inner);
+  if (!bold) return null;
+  const afterBold = inner.slice(bold.consumed).trimStart();
+  const spans = snoozeBlockLinkSpans(afterBold);
+  if (spans.length !== 1) return null;
+  const span = spans[0];
+  if (afterBold.slice(0, span.tokenStart).trim() !== "") return null;
+  let tail = afterBold.slice(span.end).trimStart();
+  if (!tail.startsWith("~~")) return null;
+  tail = tail.slice(2).trimStart();
+  if (!tail.startsWith("·")) return null;
+  tail = tail.slice(1).trimStart();
+  if (!tail.startsWith("woke")) return null;
+  const woke = tail.slice(4).trim();
+  const match = /^(\d{2}):(\d{2})$/.exec(woke);
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (hour > 23 || minute > 59) return null;
+  const minutes = snoozeWallMinutes(bold.text);
+  if (minutes === null) return null;
+  return {
+    ...base,
+    kind: "history",
+    minutes,
+    hhmm: String(Math.floor(minutes / 60)).padStart(2, "0") + String(minutes % 60).padStart(2, "0"),
+    target: span.target,
+    blockId: span.blockId,
+    embedded: span.embedded,
+    aliased: span.aliased,
+    malformedReason: null,
+    wokeMinutes: hour * 60 + minute,
+    wokeHhmm: match[1] + ":" + match[2],
+  };
+}
+
+function snoozeParseActive(rest, base) {
+  const bold = snoozeBoldTime(rest);
+  if (!bold) return null;
+  const after = rest.slice(bold.consumed).trimStart();
+  const spans = snoozeBlockLinkSpans(after);
+  if (spans.length !== 1) return null;
+  const span = spans[0];
+  if (after.slice(0, span.tokenStart).trim() !== "" || after.slice(span.end).trim() !== "") return null;
+  const minutes = snoozeWallMinutes(bold.text);
+  if (minutes === null) return null;
+  return {
+    ...base,
+    kind: "active",
+    minutes,
+    hhmm: String(Math.floor(minutes / 60)).padStart(2, "0") + String(minutes % 60).padStart(2, "0"),
+    target: span.target,
+    blockId: span.blockId,
+    embedded: span.embedded,
+    aliased: span.aliased,
+    malformedReason: null,
+  };
+}
+
+function snoozeParseRow(lines, source, index, sectionEnd, fenced) {
+  const line = lines[index].text;
+  const trimmed = line.trimEnd();
+  if (line.startsWith(" ") || line.startsWith("\t")) {
+    const candidate = line.trimStart();
+    if (/^-[ \t](?:\*\*|~~)/.test(candidate)) {
+      return snoozeRowBase(lines, source, index, sectionEnd, fenced, "indented");
+    }
+    return null;
+  }
+  if (!/^-[ \t](?:\*\*|~~)/.test(trimmed)) return null;
+  const base = snoozeRowBase(lines, source, index, sectionEnd, fenced, "malformed");
+  const afterDash = line.slice(1).replace(/^[ \t]/, "");
+  return snoozeParseHistory(afterDash, base) || snoozeParseActive(afterDash, base) || base;
+}
+
+function snoozeParseSection(source) {
+  const text = String(source == null ? "" : source);
+  const lines = snoozeLineRecords(text);
+  const headers = snoozeHeaderIndexes(lines);
+  if (!headers.length) return null;
+  const headerLine = headers[0];
+  let sectionEnd = lines.length;
+  let fence = null;
+  for (let index = headerLine + 1; index < lines.length; index += 1) {
+    const line = lines[index].text;
+    if (fence) {
+      if (snoozeClosesFence(line, fence)) fence = null;
+      continue;
+    }
+    const marker = snoozeFenceMarker(line);
+    if (marker) {
+      fence = marker;
+      continue;
+    }
+    if (snoozeLevelTwoHeading(line)) {
+      sectionEnd = index;
+      break;
+    }
+  }
+  const contentStart = headerLine + 1;
+  const fenced = snoozeFencedLines(lines, contentStart, sectionEnd);
+  const rows = [];
+  let index = contentStart;
+  while (index < sectionEnd) {
+    if (fenced.has(index)) {
+      index += 1;
+      continue;
+    }
+    const row = snoozeParseRow(lines, text, index, sectionEnd, fenced);
+    if (!row) {
+      index += 1;
+      continue;
+    }
+    rows.push(row);
+    index = Math.max(row.childrenEnd, index + 1);
+  }
+  const duplicateHeaders = headers.filter((value) => value !== headerLine);
+  return {
+    headerLine,
+    headerNumber: headerLine + 1,
+    headerStart: lines[headerLine].start,
+    contentStart,
+    contentEnd: sectionEnd,
+    sectionEndOffset: sectionEnd < lines.length ? lines[sectionEnd].start : text.length,
+    rows,
+    duplicateHeaders,
+    duplicateNumbers: duplicateHeaders.map((value) => value + 1),
+    lines,
+    source: text,
+  };
+}
+// ---- src/062-snooze-when-twin.js ----
+// Shared injected-zone snooze clock model. Keep this fragment byte-identical
+// in bob-navigation-hotkeys, block-id-prompt, and task-status-cycler.
+
+function snoozeFormatHhmm(minutes) {
+  const value = Number(minutes);
+  return String(Math.floor(value / 60)).padStart(2, "0") + String(value % 60).padStart(2, "0");
+}
+
+function snoozeParseNowMinutes(value) {
+  if (Number.isInteger(value) && value >= 0 && value < 1440) return value;
+  const match = /^(\d{1,2}):(\d{2})$/.exec(String(value == null ? "" : value).trim());
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  return hour <= 23 && minute <= 59 ? hour * 60 + minute : null;
+}
+
+function snoozeParseDate(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ""));
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const check = new Date(Date.UTC(year, month - 1, day));
+  if (check.getUTCFullYear() !== year || check.getUTCMonth() + 1 !== month || check.getUTCDate() !== day) return null;
+  return { year, month, day, text: String(value) };
+}
+
+function snoozeIntlParts(epochMs, zone) {
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: zone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  });
+  const parts = {};
+  for (const part of formatter.formatToParts(new Date(epochMs))) {
+    if (part.type !== "literal") parts[part.type] = Number(part.value);
+  }
+  return parts;
+}
+
+function snoozeLocalEpoch(parts) {
+  return Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second || 0);
+}
+
+function snoozeResolveTarget(dateText, minutes, zone) {
+  const date = snoozeParseDate(dateText);
+  const value = Number(minutes);
+  if (!date || !Number.isInteger(value) || value < 0 || value >= 1440) return null;
+  const hour = Math.floor(value / 60);
+  const minute = value % 60;
+  const localEpoch = Date.UTC(date.year, date.month - 1, date.day, hour, minute, 0);
+  const offsets = new Set();
+  try {
+    for (let delta = -48; delta <= 48; delta += 6) {
+      const instant = localEpoch + delta * 60 * 60 * 1000;
+      const local = snoozeIntlParts(instant, zone);
+      offsets.add(snoozeLocalEpoch(local) - instant);
+    }
+  } catch (_) {
+    return null;
+  }
+  const candidates = [];
+  for (const offset of offsets) {
+    const instant = localEpoch - offset;
+    try {
+      const local = snoozeIntlParts(instant, zone);
+      if (
+        local.year === date.year &&
+        local.month === date.month &&
+        local.day === date.day &&
+        local.hour === hour &&
+        local.minute === minute &&
+        local.second === 0
+      ) {
+        candidates.push({ instant, offset: snoozeLocalEpoch(local) - instant });
+      }
+    } catch (_) {
+      return null;
+    }
+  }
+  if (!candidates.length) return null;
+  candidates.sort((left, right) => left.instant - right.instant);
+  const picked = candidates[0];
+  const offsetMinutes = Math.trunc(picked.offset / 60000);
+  const sign = offsetMinutes < 0 ? "-" : "+";
+  const absoluteOffset = Math.abs(offsetMinutes);
+  const offsetText = sign + String(Math.floor(absoluteOffset / 60)).padStart(2, "0") + ":" + String(absoluteOffset % 60).padStart(2, "0");
+  return {
+    minutes: value,
+    hhmm: snoozeFormatHhmm(value),
+    rfc3339: date.text + "T" + snoozeFormatHhmm(value).slice(0, 2) + ":" + snoozeFormatHhmm(value).slice(2) + ":00" + offsetText,
+  };
+}
+
+function snoozeParseRelativeMinutes(raw) {
+  const text = String(raw || "").trim().toLowerCase();
+  if (!text) return { ok: false, refusal: "invalid" };
+  let cursor = 0;
+  let total = 0;
+  let saw = false;
+  while (cursor < text.length) {
+    while (/\s/.test(text[cursor] || "")) cursor += 1;
+    if (cursor >= text.length) break;
+    const match = /^(\d+)([hm])/.exec(text.slice(cursor));
+    if (!match) return { ok: false, refusal: "invalid" };
+    const amount = Number(match[1]);
+    if (!Number.isSafeInteger(amount)) return { ok: false, refusal: "invalid" };
+    total += amount * (match[2] === "h" ? 60 : 1);
+    if (!Number.isSafeInteger(total) || total > 65535) return { ok: false, refusal: "invalid" };
+    cursor += match[0].length;
+    saw = true;
+  }
+  if (!saw || total === 0) return { ok: false, refusal: "invalid" };
+  return { ok: true, minutes: Math.ceil(total / 5) * 5 };
+}
+
+function snoozeFutureToday(minutes, clock) {
+  if (minutes <= clock.nowMinutes) return { ok: false, refusal: "past" };
+  const resolved = snoozeResolveTarget(clock.date, minutes, clock.zone);
+  return resolved ? { ok: true, value: resolved } : { ok: false, refusal: "dst_gap" };
+}
+
+function snoozeSplitMeridiem(lowered) {
+  for (const suffix of ["am", "pm"]) {
+    if (lowered.endsWith(suffix)) return { core: lowered.slice(0, -suffix.length).trimEnd(), meridiem: suffix };
+  }
+  if (lowered.endsWith("a") || lowered.endsWith("p")) {
+    return { core: lowered.slice(0, -1).trimEnd(), meridiem: lowered.slice(-1) };
+  }
+  return { core: lowered, meridiem: null };
+}
+
+function snoozeMeridiemHour(hour, pm) {
+  if (hour === 12) return pm ? 12 : 0;
+  return pm ? hour + 12 : hour;
+}
+
+function snoozeResolveMeridiem(core, meridiem, clock) {
+  const pm = meridiem[0] === "p";
+  if (core.includes(":")) {
+    const pieces = core.split(":");
+    if (pieces.length !== 2 || !pieces[0].trim() || pieces[1].trim().length !== 2) return { ok: false, refusal: "invalid" };
+    const hour = Number(pieces[0].trim());
+    const minute = Number(pieces[1].trim());
+    if (!Number.isInteger(hour) || hour < 1 || hour > 12 || !Number.isInteger(minute) || minute > 59) return { ok: false, refusal: "invalid" };
+    return snoozeFutureToday(snoozeMeridiemHour(hour, pm) * 60 + minute, clock);
+  }
+  if (!/^\d+$/.test(core)) return { ok: false, refusal: "invalid" };
+  const hour = Number(core);
+  if (!Number.isInteger(hour) || hour < 1 || hour > 12) return { ok: false, refusal: "invalid" };
+  return snoozeFutureToday(snoozeMeridiemHour(hour, pm) * 60, clock);
+}
+
+function snoozeResolveAbsolute(raw, clock) {
+  const lowered = String(raw || "").trim().toLowerCase();
+  const split = snoozeSplitMeridiem(lowered);
+  if (split.meridiem) return snoozeResolveMeridiem(split.core, split.meridiem, clock);
+  const core = split.core;
+  if (core.includes(":")) {
+    const pieces = core.split(":");
+    if (pieces.length !== 2 || !pieces[0].trim() || pieces[1].trim().length !== 2) return { ok: false, refusal: "invalid" };
+    const hour = Number(pieces[0].trim());
+    const minute = Number(pieces[1].trim());
+    if (!Number.isInteger(hour) || hour > 23 || !Number.isInteger(minute) || minute > 59) return { ok: false, refusal: "invalid" };
+    return snoozeFutureToday(hour * 60 + minute, clock);
+  }
+  if (!/^\d+$/.test(core)) return { ok: false, refusal: "invalid" };
+  if (core.length === 1 || core.length === 2) {
+    const hour = Number(core);
+    if (hour > 23) return { ok: false, refusal: "invalid" };
+    return snoozeFutureToday(hour * 60, clock);
+  }
+  if (core.length === 3) {
+    const hour = Number(core.slice(0, 1));
+    const minute = Number(core.slice(1));
+    if (hour > 12 || minute > 59) return { ok: false, refusal: "invalid" };
+    const first = hour * 60 + minute;
+    if (first > clock.nowMinutes) {
+      const resolved = snoozeResolveTarget(clock.date, first, clock.zone);
+      return resolved ? { ok: true, value: resolved } : { ok: false, refusal: "dst_gap" };
+    }
+    const second = first + 12 * 60;
+    if (second < 1440 && second > clock.nowMinutes) {
+      const resolved = snoozeResolveTarget(clock.date, second, clock.zone);
+      return resolved ? { ok: true, value: resolved } : { ok: false, refusal: "dst_gap" };
+    }
+    return { ok: false, refusal: "past" };
+  }
+  if (core.length === 4) {
+    const hour = Number(core.slice(0, 2));
+    const minute = Number(core.slice(2));
+    if (hour > 23 || minute > 59) return { ok: false, refusal: "invalid" };
+    return snoozeFutureToday(hour * 60 + minute, clock);
+  }
+  return { ok: false, refusal: "invalid" };
+}
+
+function snoozeParseWhen(input, clockInput) {
+  const clock = clockInput && typeof clockInput === "object" ? clockInput : {};
+  const date = String(clock.date || "");
+  const nowMinutes = snoozeParseNowMinutes(clock.nowMinutes !== undefined ? clock.nowMinutes : clock.now);
+  if (!snoozeParseDate(date) || nowMinutes === null || typeof clock.zone !== "string" || !clock.zone) {
+    return { ok: false, refusal: "invalid" };
+  }
+  const value = String(input == null ? "" : input).trim();
+  if (!value) return { ok: false, refusal: "invalid" };
+  const parsedClock = { date, nowMinutes, zone: clock.zone };
+  if (value.startsWith("+")) {
+    const relative = snoozeParseRelativeMinutes(value.slice(1));
+    if (!relative.ok) return relative;
+    const target = nowMinutes + relative.minutes;
+    if (target >= 1440) return { ok: false, refusal: "next_day" };
+    const resolved = snoozeResolveTarget(date, target, clock.zone);
+    return resolved ? { ok: true, value: resolved } : { ok: false, refusal: "dst_gap" };
+  }
+  return snoozeResolveAbsolute(value, parsedClock);
+}
+// ---- src/063-snooze-state-twin.js ----
+// Shared pure snooze row classification. Keep this fragment byte-identical
+// in bob-navigation-hotkeys, block-id-prompt, and task-status-cycler.
+
+function snoozeIdentityKey(route, blockId) {
+  if (typeof route !== "string" || !route || typeof blockId !== "string" || !blockId) return null;
+  return route + "#^" + blockId;
+}
+
+function snoozeBaseRowState(row, noteIsToday, nowMinutes) {
+  if (row.history) return "woken";
+  if (!noteIsToday) return "previous_day";
+  if (row.malformed || !Number.isInteger(row.minutes)) return "malformed";
+  if (row.resolution === "missing") return "missing";
+  if (row.resolution === "ambiguous") return "ambiguous";
+  if (row.resolution !== "found") return "missing";
+  if (!row.is_task) return "not_task";
+  if (row.is_event) return "event_task";
+  if (row.status === "x" || row.status === "X") return "done";
+  if (row.status === "-") return "cancelled";
+  if (row.live_link) return "already_linked";
+  if (row.status === "?") return "blocked";
+  if (row.status === " ") return "ready";
+  if (row.status === "*" || row.status === "/") return row.minutes <= nowMinutes ? "due" : "asleep";
+  return "not_task";
+}
+
+function snoozeClassifyRows(input) {
+  const source = input && typeof input === "object" ? input : {};
+  const today = String(source.today || "");
+  const noteDate = String(source.note_date || "");
+  const nowMinutes = snoozeParseNowMinutes(source.now_minutes !== undefined ? source.now_minutes : source.now);
+  const rows = Array.isArray(source.rows) ? source.rows : [];
+  const base = rows.map((row) => snoozeBaseRowState(row || {}, noteDate === today, nowMinutes === null ? -1 : nowMinutes));
+  const best = new Map();
+  for (let position = 0; position < rows.length; position += 1) {
+    if (!["asleep", "due", "blocked"].includes(base[position])) continue;
+    const row = rows[position] || {};
+    const key = row.resolution === "found" ? snoozeIdentityKey(row.route, row.block) : null;
+    if (!key) continue;
+    const minutes = Number.isInteger(row.minutes) ? row.minutes : Number.MAX_SAFE_INTEGER;
+    const previous = best.get(key);
+    if (!previous || minutes < previous.minutes || (minutes === previous.minutes && position < previous.position)) {
+      best.set(key, { minutes, position });
+    }
+  }
+  const winners = new Set(Array.from(best.values(), (entry) => entry.position));
+  const classified = rows.map((row, position) => {
+    const sourceRow = row || {};
+    let state = base[position];
+    const key = sourceRow.resolution === "found" ? snoozeIdentityKey(sourceRow.route, sourceRow.block) : null;
+    if (key && ["asleep", "due", "blocked"].includes(state) && !winners.has(position)) state = "duplicate";
+    return {
+      line: Number(sourceRow.line) || 0,
+      minutes: Number.isInteger(sourceRow.minutes) ? sourceRow.minutes : null,
+      hhmm: Number.isInteger(sourceRow.minutes) ? snoozeFormatHhmm(sourceRow.minutes) : null,
+      route: key ? sourceRow.route : null,
+      block: key ? sourceRow.block : null,
+      identity: key,
+      state,
+      eventLint: !sourceRow.history && sourceRow.resolution === "found" && sourceRow.is_task === true && sourceRow.is_event === true,
+    };
+  });
+  let next = null;
+  for (let position = 0; position < classified.length; position += 1) {
+    const row = classified[position];
+    if (row.state !== "asleep" && row.state !== "due") continue;
+    if (row.minutes === null) continue;
+    if (!next || row.minutes < next.minutes || (row.minutes === next.minutes && position < next.position)) {
+      next = { minutes: row.minutes, position };
+    }
+  }
+  const nextWakeAt = next ? snoozeResolveTarget(today, next.minutes, String(source.zone || "")) : null;
+  const planned = Array.from(new Set(classified
+    .filter((row) => row.identity && ["asleep", "due", "blocked"].includes(row.state))
+    .map((row) => row.identity))).sort();
+  const blocked = Array.from(new Set(classified
+    .filter((row) => row.identity && row.state === "blocked")
+    .map((row) => row.identity))).sort();
+  return {
+    rows: classified,
+    planned,
+    blocked,
+    nextWakeAt: nextWakeAt ? nextWakeAt.rfc3339 : null,
+    eventLints: classified.filter((row) => row.eventLint).map((row) => row.line),
+  };
+}
+
+function snoozeLiveTargets(classified) {
+  const value = classified && typeof classified === "object" ? classified : {};
+  return {
+    planned: Array.isArray(value.planned) ? value.planned.slice() : [],
+    blocked: Array.isArray(value.blocked) ? value.blocked.slice() : [],
+    nextWakeAt: value.nextWakeAt || null,
+  };
+}
+// ---- src/064-snooze-cleanup-twin.js ----
+// Shared pure Snoozed-row cleanup planners. Keep this fragment byte-identical
+// in bob-navigation-hotkeys, block-id-prompt, and task-status-cycler.
+
+function snoozeLinkMapKey(target, blockId) {
+  return String(target == null ? "" : target) + "\u0000" + String(blockId == null ? "" : blockId);
+}
+
+function snoozeNormalizeIdentity(value) {
+  if (typeof value === "string") return value;
+  if (!value || typeof value !== "object") return null;
+  const route = value.route || value.path;
+  const block = value.blockId || value.block || value.id;
+  return snoozeIdentityKey(route, block);
+}
+
+function snoozeResolveRowIdentity(row, options) {
+  const config = options && typeof options === "object" ? options : {};
+  if (!row || row.kind !== "active" || !row.blockId) return null;
+  if (typeof config.resolveIdentity === "function") {
+    try {
+      return snoozeNormalizeIdentity(config.resolveIdentity(row));
+    } catch (_) {
+      return null;
+    }
+  }
+  const map = config.identityByLink;
+  const key = snoozeLinkMapKey(row.target, row.blockId);
+  if (map instanceof Map) return snoozeNormalizeIdentity(map.get(key));
+  if (map && typeof map === "object") return snoozeNormalizeIdentity(map[key]);
+  return null;
+}
+
+function snoozeLineRemovalEdit(section, row) {
+  const record = section.lines[row.lineIndex];
+  const last = section.lines[Math.max(row.lineIndex, row.childrenEnd - 1)] || record;
+  return {
+    start: record.start,
+    end: last.nextStart,
+    replacement: "",
+    lineStart: row.lineIndex,
+    lineEnd: row.childrenEnd,
+    kind: "row",
+  };
+}
+
+function snoozeApplyEdits(source, edits) {
+  let output = String(source == null ? "" : source);
+  const ordered = edits.slice().sort((left, right) => right.start - left.start);
+  for (const edit of ordered) output = output.slice(0, edit.start) + edit.replacement + output.slice(edit.end);
+  return output;
+}
+
+function snoozeEmptySectionEdit(source, prunedText) {
+  const section = snoozeParseSection(prunedText);
+  if (!section || section.rows.length) return null;
+  const hasProse = section.lines
+    .slice(section.contentStart, section.contentEnd)
+    .some((line) => line.text.trim() !== "");
+  if (hasProse) return null;
+  const originalSection = snoozeParseSection(source);
+  if (!originalSection) return null;
+  let start = originalSection.headerStart;
+  const end = originalSection.sectionEndOffset;
+  const atEof = originalSection.contentEnd === originalSection.lines.length;
+  if (atEof) {
+    const originalLines = snoozeLineRecords(source);
+    let headerIndex = originalLines.findIndex((line) => line.start === originalSection.headerStart);
+    while (headerIndex > 0 && originalLines[headerIndex - 1].text.trim() === "") {
+      headerIndex -= 1;
+      start = originalLines[headerIndex].start;
+    }
+  }
+  return { start, end, replacement: "", lineStart: originalSection.headerLine, lineEnd: originalSection.contentEnd, kind: "empty-section" };
+}
+
+function snoozeFinalizeRemoval(source, removals) {
+  const original = String(source == null ? "" : source);
+  const rowEdits = removals.map((item) => item.edit);
+  const intermediate = snoozeApplyEdits(original, rowEdits);
+  const sectionEdit = snoozeEmptySectionEdit(original, intermediate);
+  const edits = sectionEdit ? [sectionEdit] : rowEdits.slice().sort((left, right) => left.start - right.start);
+  const postimage = sectionEdit
+    ? original.slice(0, sectionEdit.start) + sectionEdit.replacement + original.slice(sectionEdit.end)
+    : intermediate;
+  return { postimage, edits, sectionRemoved: Boolean(sectionEdit) };
+}
+
+function snoozeRemovalDetails(removals) {
+  const identities = Array.from(new Set(removals.map((item) => item.identity).filter(Boolean))).sort();
+  return {
+    removedIdentities: identities,
+    detachedSubtrees: removals.map((item) => ({
+      identity: item.identity,
+      line: item.row.line,
+      source: item.row.subtree,
+      children: item.row.childrenText,
+      row: item.row,
+    })),
+  };
+}
+
+function snoozePlanRemoveRows(source, selectedIdentities, options) {
+  const text = String(source == null ? "" : source);
+  const section = snoozeParseSection(text);
+  const wanted = new Set((Array.isArray(selectedIdentities) ? selectedIdentities : [selectedIdentities])
+    .map(snoozeNormalizeIdentity)
+    .filter(Boolean));
+  if (!section || !wanted.size) {
+    return { postimage: text, text, edits: [], removedIdentities: [], detachedSubtrees: [], sectionRemoved: false };
+  }
+  const removals = [];
+  for (const row of section.rows) {
+    if (row.kind !== "active") continue;
+    const identity = snoozeResolveRowIdentity(row, options);
+    if (!identity || !wanted.has(identity)) continue;
+    removals.push({ identity, row, edit: snoozeLineRemovalEdit(section, row) });
+  }
+  const final = snoozeFinalizeRemoval(text, removals);
+  return { ...final, text: final.postimage, ...snoozeRemovalDetails(removals) };
+}
+
+function snoozeTaskFactsByLink(tasks) {
+  const byLink = new Map();
+  const byIdentity = new Map();
+  for (const task of Array.isArray(tasks) ? tasks : []) {
+    if (!task || typeof task !== "object") continue;
+    const route = typeof task.route === "string" && task.route ? task.route : task.path;
+    const block = task.block;
+    const identity = snoozeIdentityKey(route, block);
+    const linkTarget = typeof task.link === "string" ? snoozeBlockLinkSpans(task.link)[0] : null;
+    const target = typeof task.target === "string"
+      ? task.target
+      : (linkTarget ? linkTarget.target : (typeof route === "string" ? route.split("/").pop().replace(/\.md$/i, "") : ""));
+    if (!identity || typeof target !== "string") continue;
+    const key = snoozeLinkMapKey(target, block);
+    if (task.resolution === "ambiguous") {
+      byLink.set(key, null);
+      continue;
+    }
+    if (task.resolution === "missing" || task.resolution === "unresolved") continue;
+    const existing = byLink.get(key);
+    if (existing && existing.identity !== identity) {
+      byLink.set(key, null);
+      continue;
+    }
+    if (existing === null && byLink.has(key)) continue;
+    byLink.set(key, { identity, task });
+    byIdentity.set(identity, task);
+  }
+  return { byLink, byIdentity };
+}
+
+function snoozePomodorosRange(source) {
+  const lines = snoozeLineRecords(source);
+  const frontmatterEnd = snoozeFrontmatterEnd(lines);
+  let fence = null;
+  let header = null;
+  let end = lines.length;
+  for (let index = 0; index < lines.length; index += 1) {
+    if (frontmatterEnd !== null && index <= frontmatterEnd) continue;
+    const line = lines[index].text;
+    if (fence) {
+      if (snoozeClosesFence(line, fence)) fence = null;
+      continue;
+    }
+    const marker = snoozeFenceMarker(line);
+    if (marker) {
+      fence = marker;
+      continue;
+    }
+    if (header === null) {
+      if (/^##[ \t]+Pomodoros(?:$|\s)/.test(line)) header = index;
+    } else if (snoozeLevelTwoHeading(line)) {
+      end = index;
+      break;
+    }
+  }
+  return header === null ? null : { lines, start: header + 1, end };
+}
+
+function snoozeMarkdownListItem(line) {
+  const indent = (line.match(/^[ \t]*/) || [""])[0].length;
+  const match = /^[-*+][ \t]+(.*)$/.exec(line.slice(indent));
+  return match ? { indent, body: match[1] } : null;
+}
+
+function snoozeIsStruckLink(text, span) {
+  const delimiters = [];
+  let cursor = 0;
+  while (true) {
+    const at = text.indexOf("~~", cursor);
+    if (at < 0) break;
+    delimiters.push(at);
+    cursor = at + 2;
+  }
+  for (let index = 0; index + 1 < delimiters.length; index += 2) {
+    if (span.tokenStart >= delimiters[index] + 2 && span.end <= delimiters[index + 1]) return true;
+  }
+  return false;
+}
+
+function snoozeDayLiveIdentities(source, byLink) {
+  const range = snoozePomodorosRange(source);
+  const identities = new Set();
+  if (!range) return identities;
+  let entry = null;
+  for (let index = range.start; index < range.end; index += 1) {
+    const line = range.lines[index].text;
+    const item = snoozeMarkdownListItem(line);
+    if (item && item.indent === 0) {
+      const status = /^\[([ *\/?xX-])\](?:[ \t]|$)/.exec(item.body);
+      entry = status && [" ", "*", "/", "?"].includes(status[1])
+        ? { indent: 0, childIndent: null }
+        : null;
+      continue;
+    }
+    if (!entry || !item || item.indent <= entry.indent) continue;
+    if (entry.childIndent === null) entry.childIndent = item.indent;
+    if (item.indent !== entry.childIndent) continue;
+    let body = item.body;
+    if (body.startsWith("🍅")) body = body.slice("🍅".length).trimStart();
+    const spans = snoozeBlockLinkSpans(body);
+    if (spans.length !== 1) continue;
+    const span = spans[0];
+    if (span.tokenStart !== 0 || body.slice(span.end).trim() !== "" || snoozeIsStruckLink(body, span)) continue;
+    const match = byLink.get(snoozeLinkMapKey(span.target, span.blockId));
+    if (match && match.identity) identities.add(match.identity);
+  }
+  return identities;
+}
+
+function snoozePlanStatePrune(source, tasks, clockInput, options) {
+  const text = String(source == null ? "" : source);
+  const section = snoozeParseSection(text);
+  if (!section) return { postimage: text, text, edits: [], removedIdentities: [], detachedSubtrees: [], sectionRemoved: false, states: [] };
+  const config = Object.assign({}, clockInput || {}, options || {});
+  const today = String(config.today || config.date || "");
+  const now = snoozeParseNowMinutes(config.nowMinutes !== undefined ? config.nowMinutes : config.now);
+  const { byLink, byIdentity } = snoozeTaskFactsByLink(tasks);
+  const liveIdentities = snoozeDayLiveIdentities(text, byLink);
+  const rows = section.rows.map((row) => {
+    const match = row.kind === "active" ? byLink.get(snoozeLinkMapKey(row.target, row.blockId)) : null;
+    const fact = match ? match.task : null;
+    return {
+      line: row.line,
+      minutes: row.minutes,
+      history: row.kind === "history",
+      malformed: row.kind === "malformed",
+      resolution: fact ? "found" : (byLink.has(snoozeLinkMapKey(row.target, row.blockId)) ? "ambiguous" : "missing"),
+      route: match && fact ? (fact.route || fact.path) : null,
+      block: row.blockId,
+      status: fact && typeof fact.status === "string" ? fact.status.slice(0, 1) : null,
+      is_task: fact ? fact.is_task !== false : false,
+      is_event: fact ? fact.is_event === true : false,
+      live_link: fact ? fact.live_link === true || fact.liveLink === true || liveIdentities.has(match.identity) : false,
+    };
+  });
+  const classified = snoozeClassifyRows({
+    today,
+    note_date: String(config.noteDate || config.note_date || today),
+    now_minutes: now,
+    zone: String(config.zone || ""),
+    rows,
+  });
+  const removableStates = new Set(["done", "cancelled", "already_linked"]);
+  const wanted = new Set(classified.rows
+    .filter((row) => row.identity && removableStates.has(row.state))
+    .map((row) => row.identity));
+  const identityByLink = new Map();
+  for (const [key, value] of byLink.entries()) identityByLink.set(key, value ? value.identity : null);
+  const removals = [];
+  for (const row of section.rows) {
+    if (row.kind !== "active") continue;
+    const match = byLink.get(snoozeLinkMapKey(row.target, row.blockId));
+    const identity = match ? match.identity : null;
+    if (!identity || !wanted.has(identity)) continue;
+    removals.push({ identity, row, edit: snoozeLineRemovalEdit(section, row) });
+  }
+  const final = snoozeFinalizeRemoval(text, removals);
+  return {
+    ...final,
+    text: final.postimage,
+    ...snoozeRemovalDetails(removals),
+    states: classified.rows.map((row) => ({ line: row.line, state: row.state })),
+    identityByLink,
+    byIdentity,
+  };
+}
+
+const snoozeModel = Object.freeze({
+  parseSection: snoozeParseSection,
+  parseWhen: snoozeParseWhen,
+  resolveTarget: snoozeResolveTarget,
+  classifyRows: snoozeClassifyRows,
+  liveTargets: snoozeLiveTargets,
+  identityKey: snoozeIdentityKey,
+  planStatePrune: snoozePlanStatePrune,
+  planRemoveRows: snoozePlanRemoveRows,
+});
 // ---- src/070-ready-and-review.js ----
 // --- READY backlog ----------------------------------------------------------
 // The shared READY backlog (`docs/plan.md`, "READY backlog"): the global
@@ -197386,3 +198406,5 @@ try {
     });
   }
 } catch (_) {}
+// ---- src/380-snooze-model-exports.js ----
+Object.assign(module.exports.helpers, { snoozeModel });

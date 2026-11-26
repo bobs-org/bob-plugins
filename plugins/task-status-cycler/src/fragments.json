@@ -36,6 +36,10 @@
   "089j-successor-offer-close-identity.js",
   "089k-successor-offer-close-drift.js",
   "090-source-and-formatting.js",
+  "091-snooze-rows-twin.js",
+  "092-snooze-when-twin.js",
+  "093-snooze-state-twin.js",
+  "094-snooze-cleanup-twin.js",
   "100-editor-and-modal.js",
   "110-plugin-lifecycle.js",
   "120-plugin-dependency-ids.js",
@@ -91,5 +95,6 @@
   "210-exports.js",
   "211-task-reqs-exports.js",
   "212-mail-close-exports.js",
-  "213-task-settle-exports.js"
+  "213-task-settle-exports.js",
+  "214-snooze-model-exports.js"
 ]

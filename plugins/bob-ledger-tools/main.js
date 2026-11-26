@@ -105783,6 +105783,28 @@ function homeCardBuildEl(doc, model, options = {}) {
     return null;
   }
 }
+// ---- src/249ca-plugin-home-card-property-editor-routing.js ----
+// Keep the Bank Area's editor surface while preserving the Rust props wire kind.
+function homeCardIsDesktopPlatform(platform) {
+  try {
+    const host = platform === undefined ? Platform : platform;
+    return Boolean(host && host.isDesktopApp === true);
+  } catch (_) {
+    return false;
+  }
+}
+
+function homeCardPropertyEditorNoteKind(path, frontmatter) {
+  try {
+    const eligible = homeCardEligible(path, frontmatter);
+    if (!eligible) return "";
+    if (eligible.kind === "area" && typeof bankSetupIsHubPath === "function"
+      && bankSetupIsHubPath(path) === true) return "bank";
+    return eligible.kind;
+  } catch (_) {
+    return "";
+  }
+}
 // ---- src/249d-plugin-home-card-host.js ----
 // Home-card host (bob-cli-pl.4.1 mount-foot, bob-cli-pl.9.1.1 ownership).
 // One shared adapter mounts the pure Area/Project presentation in desktop
@@ -105821,15 +105843,6 @@ function homeCardLinkPane(event) {
     }
   } catch (_) {}
   return pane || false;
-}
-
-function homeCardIsDesktopPlatform(platform) {
-  try {
-    const host = platform === undefined ? Platform : platform;
-    return Boolean(host && host.isDesktopApp === true);
-  } catch (_) {
-    return false;
-  }
 }
 
 function homeCardScopeDenied(scope, root) {
@@ -106154,7 +106167,10 @@ class BobLedgerToolsHomeCardMixin {
     if (!target) return { ok: false, reason: "missing-path" };
     try {
       if (typeof this.openPropertyEditor !== "function") return { ok: false, reason: "editor-unavailable" };
-      const kind = homeCardEligible(target, this.homeCardFrontmatter(target))?.kind, setting = typeof propertyEditorSettingIdForKey === "function" ? propertyEditorSettingIdForKey(key || "") || "" : "", noteKind = kind === "area" || kind === "project" ? { noteKind: kind } : {};
+      const frontmatter = this.homeCardFrontmatter(target);
+      const kind = homeCardPropertyEditorNoteKind(target, frontmatter);
+      const setting = typeof propertyEditorSettingIdForKey === "function" ? propertyEditorSettingIdForKey(key || "") || "" : "";
+      const noteKind = kind === "area" || kind === "project" || kind === "bank" ? { noteKind: kind } : {};
       if (!key) return this.openPropertyEditor({ filePath: target, ...noteKind, focusSettings: true, mode: "browse" });
       if (setting) return this.openPropertyEditor({ filePath: target, ...noteKind, setting, mode: "browse" });
       return this.openPropertyEditor({ filePath: target, ...noteKind, key, mode: "browse" });
@@ -181168,6 +181184,24 @@ function propertyEditorEntryLeafFor(plugin, path, preferred = null) {
   }
 }
 
+// Bare + opens the first Area Settings row only on the eligible Area home
+// surface of bank.md. Other notes keep the ordinary Property Editor route.
+function propertyEditorEntryBarePlusOptions(plugin, path) {
+  const target = propertyEditorEntryNormalizePath(path);
+  if (!target) return {};
+  const options = { filePath: target };
+  try {
+    const frontmatter = typeof plugin?.propertyCacheFrontmatter === "function"
+      ? plugin.propertyCacheFrontmatter(target)
+      : null;
+    if (typeof homeCardPropertyEditorNoteKind === "function"
+      && homeCardPropertyEditorNoteKind(target, frontmatter) === "bank") {
+      return { ...options, noteKind: "bank", focusSettings: true };
+    }
+  } catch (_) {}
+  return options;
+}
+
 function propertyEditorEntryReadSource(plugin, path) {
   const key = propertyEditorEntryNormalizePath(path);
   if (!key) return Promise.resolve(null);
@@ -181215,9 +181249,10 @@ class BobLedgerToolsPropertyEditorEntrypointsMixin {
           reason: "property-editor",
           canAct: (context = {}) => propertyEditorEntryIsMarkdownPath(context && context.path),
           run: (context = {}) => {
-            void this.openPropertyEditor(
-              context && context.path ? { filePath: context.path } : {},
-            );
+            const options = context && context.path
+              ? propertyEditorEntryBarePlusOptions(this, context.path)
+              : {};
+            void this.openPropertyEditor(options);
           },
         });
       }

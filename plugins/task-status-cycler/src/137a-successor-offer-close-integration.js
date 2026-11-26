@@ -320,6 +320,7 @@ class TaskStatusCyclerSuccessorOfferCloseIntegrationMixin {
           dependencySnapshotAvailable: options.dependencySnapshotAvailable === true,
           markUnblockedLine: options.markUnblockedLine,
           hasLiveLink: successorOfferCloseLiveLinkCheck(options.dailyAfter || [], options.dailyPath),
+          isSnoozedToday: (task) => projectRecoveryTaskIsSnoozedToday(this, task),
         },
       });
       if (model && numberedReqGroups.length) {
@@ -697,6 +698,7 @@ class TaskStatusCyclerSuccessorOfferCloseIntegrationMixin {
       dependencySnapshotAvailable: options.dependencySnapshotAvailable === true,
       markUnblockedLine: options.markUnblockedLine,
       hasLiveLink: successorOfferCloseLiveLinkCheck(dailyLines, options.dailyPath),
+      isSnoozedToday: (task) => projectRecoveryTaskIsSnoozedToday(this, task),
     };
     try {
       return await this.applyOfferClosesNow({

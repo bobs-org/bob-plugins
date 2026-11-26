@@ -14,19 +14,24 @@ function snoozeWakeDecodeReport(stdout, stderr) {
   if (typeof report.date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(report.date)) return bad();
   if (typeof report.now !== "string" || !Number.isFinite(Date.parse(report.now))) return bad();
   if (!["woke", "nothing_due", "deferred", "skipped"].includes(report.status)) return bad();
-  if (!Array.isArray(report.woken) || !Array.isArray(report.dropped) || !Array.isArray(report.ignored) || !Array.isArray(report.pending)) return bad();
-  if (!(report.next_wake_at === null || (typeof report.next_wake_at === "string" && Number.isFinite(Date.parse(report.next_wake_at))))) return bad();
-  if (!report.plan || typeof report.plan !== "object" || Array.isArray(report.plan) || !Number.isInteger(report.plan.count) || report.plan.count < 0 || !Number.isInteger(report.plan.cap) || report.plan.cap < 0 || typeof report.plan.over !== "boolean") return bad();
   if (typeof report.daily_file !== "string" || !report.daily_file) return bad();
   if (!["none", "desktop", "mac_capture"].includes(report.notified)) return bad();
   if (!(report.wake_id === null || (typeof report.wake_id === "string" && report.wake_id.length > 0))) return bad();
-  for (const row of report.woken) {
-    if (!row || typeof row !== "object" || Array.isArray(row) || typeof row.title !== "string" || typeof row.route !== "string" || typeof row.block_id !== "string" || typeof row.target !== "string" || !/^\d{4}$/.test(row.target) || typeof row.woke_at !== "string" || !/^\d{2}:\d{2}$/.test(row.woke_at) || !row.destination || typeof row.destination !== "object" || Array.isArray(row.destination) || !Number.isInteger(row.destination.line) || typeof row.destination.name !== "string" || typeof row.destination.created !== "boolean" || typeof row.over_cap !== "boolean") return bad();
+  const present = (key) => Object.prototype.hasOwnProperty.call(report, key);
+  const requiredUnlessDeferred = (key) => report.status !== "deferred" || present(key);
+  if (requiredUnlessDeferred("woken") && !Array.isArray(report.woken)) return bad();
+  if (requiredUnlessDeferred("dropped") && !Array.isArray(report.dropped)) return bad();
+  if (requiredUnlessDeferred("ignored") && !Array.isArray(report.ignored)) return bad();
+  if (requiredUnlessDeferred("pending") && !Array.isArray(report.pending)) return bad();
+  if (requiredUnlessDeferred("next_wake_at") && !(report.next_wake_at === null || (typeof report.next_wake_at === "string" && Number.isFinite(Date.parse(report.next_wake_at))))) return bad();
+  if (requiredUnlessDeferred("plan") && (!report.plan || typeof report.plan !== "object" || Array.isArray(report.plan) || !Number.isInteger(report.plan.count) || report.plan.count < 0 || !Number.isInteger(report.plan.cap) || report.plan.cap < 0 || typeof report.plan.over !== "boolean")) return bad();
+  for (const row of report.woken || []) {
+    if (!row || typeof row !== "object" || Array.isArray(row) || typeof row.title !== "string" || typeof row.route !== "string" || typeof row.block_id !== "string" || typeof row.target !== "string" || !/^\d{4}$/.test(row.target) || typeof row.woke_at !== "string" || !/^\d{2}:\d{2}$/.test(row.woke_at) || !row.destination || typeof row.destination !== "object" || Array.isArray(row.destination) || !Number.isInteger(row.destination.line) || !(row.destination.name === null || typeof row.destination.name === "string") || typeof row.destination.created !== "boolean" || typeof row.over_cap !== "boolean") return bad();
   }
-  for (const row of [...report.dropped, ...report.ignored]) {
+  for (const row of [...(report.dropped || []), ...(report.ignored || [])]) {
     if (!row || typeof row !== "object" || Array.isArray(row) || !(row.route === null || typeof row.route === "string") || !(row.block_id === null || typeof row.block_id === "string") || !(row.target === null || (typeof row.target === "string" && /^\d{4}$/.test(row.target))) || typeof row.reason !== "string") return bad();
   }
-  for (const row of report.pending) {
+  for (const row of report.pending || []) {
     if (!row || typeof row !== "object" || Array.isArray(row) || typeof row.route !== "string" || typeof row.block_id !== "string" || !(row.target === null || (typeof row.target === "string" && /^\d{4}$/.test(row.target))) || !["asleep", "blocked"].includes(row.state)) return bad();
   }
   return { ok: true, report };
@@ -47,7 +52,10 @@ function snoozeWakeNoticeText(report) {
   if (!report || !Array.isArray(report.woken) || report.woken.length === 0) return "";
   if (report.woken.length > 1) return `⏰ ${report.woken.length} snoozed tasks are ready`;
   const row = report.woken[0];
-  return `⏰ Ready now: ${row.title} · woke ${row.woke_at} · ${row.destination.name}`;
+  const destination = typeof row.destination.name === "string" && row.destination.name
+    ? ` · ${row.destination.name}`
+    : "";
+  return `⏰ Ready now: ${row.title} · woke ${row.woke_at}${destination}`;
 }
 
 class BobLedgerToolsSnoozeWakerMixin {

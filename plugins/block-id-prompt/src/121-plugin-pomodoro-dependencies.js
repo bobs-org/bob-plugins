@@ -191,6 +191,110 @@ class BlockIdPromptPomodoroDependencyMixin {
         : false;
     }
 
+    const prerequisiteEditsByPath = new Map([...plan.updatesByPath.entries()].map(
+      ([path, update]) => [path, update.edits.length],
+    ));
+    if (options.snoozedCleanup) {
+      const cleanup = options.snoozedCleanup;
+      const dailyFile = typeof this.resolveTodayDailyFile === "function"
+        ? this.resolveTodayDailyFile()
+        : null;
+      const dailyContent = dailyFile
+        ? await this.readFileSnapshot(dailyFile, source)
+        : null;
+      const cleanupTargetPath = cleanup.targetPath || targetPath;
+      const targetId = cleanup.blockId;
+      const identity = targetId
+        ? snoozeModel.identityKey(cleanupTargetPath, targetId)
+        : null;
+      const rowPlan = dailyContent !== null && identity
+        ? snoozeModel.planRemoveRows(dailyContent, [identity], {
+            resolveIdentity: (row) => {
+              if (!row || row.blockId !== targetId) return null;
+              const rowFile = this.resolveUniqueSnoozedTarget(row.target, dailyFile.path);
+              return rowFile && rowFile.path === cleanupTargetPath
+                ? snoozeModel.identityKey(rowFile.path, row.blockId)
+                : null;
+            },
+          })
+        : null;
+      const detached = rowPlan && rowPlan.detachedSubtrees || [];
+      if (
+        !dailyFile || dailyContent === null || detached.length !== 1 ||
+        (cleanup.row && detached[0].row.subtree !== cleanup.row.subtree)
+      ) {
+        new Notice(`Task link stopped: Snoozed row changed in ${dailyFile ? dailyFile.path : "today's daily note"}`);
+        return true;
+      }
+
+      const additions = new Map();
+      const addEdits = (path, file, preimage, edits) => {
+        let update = plan.updatesByPath.get(path);
+        if (!update) {
+          update = { preimage, text: preimage, edits: [] };
+          plan.updatesByPath.set(path, update);
+        }
+        if (update.preimage !== preimage) return false;
+        const combined = [...update.edits, ...edits];
+        if (!validateNonOverlappingEdits(combined)) return false;
+        update.edits = combined;
+        update.text = applyTextEdits(update.preimage, update.edits);
+        if (file) fileByPath.set(path, file);
+        return true;
+      };
+
+      if (!addEdits(dailyFile.path, dailyFile, dailyContent, rowPlan.edits)) {
+        new Notice(`Task link stopped: overlapping Snoozed cleanup in ${dailyFile.path}`);
+        return true;
+      }
+
+      const children = detached[0].children || "";
+      if (children.trim()) {
+        const targetDocument = documents.find((document) => document.path === cleanupTargetPath);
+        const targetContent = targetDocument && targetDocument.text;
+        const targetLine = Number.isInteger(cleanup.targetLine) ? cleanup.targetLine : plan.target.line;
+        if (typeof targetContent !== "string") {
+          new Notice(`Task link stopped: task note could not be read in ${cleanupTargetPath}`);
+          return true;
+        }
+        const lines = targetContent.split("\n");
+        const targetLineText = lines[targetLine];
+        if (typeof targetLineText !== "string") {
+          new Notice(`Task link stopped: selected task changed in ${cleanupTargetPath}`);
+          return true;
+        }
+        let lineStart = 0;
+        for (let index = 0; index < targetLine; index += 1) {
+          lineStart += lines[index].length + 1;
+        }
+        const lineWithoutCr = targetLineText.endsWith("\r")
+          ? targetLineText.slice(0, -1)
+          : targetLineText;
+        const parentIndent = (lineWithoutCr.match(/^[ \t]*/) || [""])[0];
+        const childLines = children.replace(/\r\n/g, "\n").replace(/\n+$/, "").split("\n");
+        const childIndent = Math.min(...childLines
+          .filter((line) => line.trim())
+          .map((line) => (line.match(/^[ \t]*/) || [""])[0].length));
+        const eol = targetContent.includes("\r\n") ? "\r\n" : "\n";
+        const childBlock = childLines.map((line) => line.trim()
+          ? `${parentIndent}  ${line.slice(Math.min(childIndent, (line.match(/^[ \t]*/) || [""])[0].length))}`
+          : "").join(eol);
+        const childEdit = {
+          start: lineStart + lineWithoutCr.length,
+          end: lineStart + lineWithoutCr.length,
+          replacement: `${eol}${childBlock}`,
+        };
+        const targetFileForCleanup = fileByPath.get(cleanupTargetPath) ||
+          (this.app.vault && typeof this.app.vault.getAbstractFileByPath === "function"
+            ? this.app.vault.getAbstractFileByPath(cleanupTargetPath)
+            : null);
+        if (!addEdits(cleanupTargetPath, targetFileForCleanup, targetContent, [childEdit])) {
+          new Notice(`Task link stopped: overlapping task note updates in ${cleanupTargetPath}`);
+          return true;
+        }
+      }
+    }
+
     let applied = 0;
     let failed = false;
     const writtenDocuments = new Map();
@@ -224,7 +328,7 @@ class BlockIdPromptPomodoroDependencyMixin {
           { noticePrefix: "Task consumption stopped" },
         )
       ) {
-        applied += update.edits.length;
+        applied += prerequisiteEditsByPath.get(path) || 0;
         writtenDocuments.set(path, update.text);
         if (options.taskBearingOnly === true && typeof this.refreshTaskWikilinkNote === "function") {
           this.refreshTaskWikilinkNote(path, update.text);

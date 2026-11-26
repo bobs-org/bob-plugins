@@ -1282,6 +1282,13 @@ test("convertProjectNoteToTask removes today's live #^prj Pomodoro link when the
     "",
     "- [ ] Current (0900-0930)",
     "  - [[Health_gym_habit#^prj]]",
+    "",
+    "## Snoozed",
+    "",
+    "- **1530** [[Health_gym_habit#^prj]]",
+    "",
+    "## Later",
+    "keep outside the cleaned sections",
   ].join("\n");
   const harness = createProjectReversalHarness({
     projectContent: workedExampleProjectNote(),
@@ -1289,6 +1296,10 @@ test("convertProjectNoteToTask removes today's live #^prj Pomodoro link when the
     extraFiles: [{ path: dailyPath, content: dailyContent }],
     backlinks: {
       [dailyPath]: [
+        {
+          original: "[[Health_gym_habit#^prj]]",
+          link: "Health_gym_habit#^prj",
+        },
         {
           original: "[[Health_gym_habit#^prj]]",
           link: "Health_gym_habit#^prj",
@@ -1307,6 +1318,8 @@ test("convertProjectNoteToTask removes today's live #^prj Pomodoro link when the
   assert.match(parent, /^- \[\?\] #task Build a gym habit .*#prj_is_blocked.* \^gym-habit$/m);
   assert.doesNotMatch(harness.contents[dailyPath], /Health_gym_habit#\^prj/);
   assert.doesNotMatch(harness.contents[dailyPath], /Health#\^gym-habit/);
+  assert.match(harness.contents[dailyPath], /^## Later\nkeep outside the cleaned sections$/m);
+  assert.doesNotMatch(harness.contents[dailyPath], /## Snoozed|- \*\*1530\*\*/);
   assert.deepEqual(harness.trashCalls, ["Health_gym_habit.md"]);
 });
 

@@ -155,7 +155,7 @@ test("project resident notice reads the inline ^prj date and ignores frontmatter
     "scheduled: 2027-01-01",
     "---",
     "- [?] #task #prj Launch the project [scheduled:: 2026-08-20] ^prj",
-    "- [?] #task Prepare the launch #prj_is_blocked ^notes",
+    "- [?] #task Prepare the launch [fresh:: 2026-08-01] #prj_is_blocked ^notes",
   ].join("\n");
   const project = helpers.projectDependencyInfo(source, "projects/launch.md");
   assert.equal(project.scheduled, "2026-08-20");
@@ -630,7 +630,7 @@ test("Alt+] on a date-blocked ^prj recovers open residents in step", async () =>
     "status: wip",
     "---",
     "- [?] #task #prj Launch the project [scheduled:: 2026-08-20] ^prj",
-    "- [?] #task Prepare the launch #prj_is_blocked ^notes",
+    "- [?] #task Prepare the launch [fresh:: 2026-08-01] #prj_is_blocked ^notes",
     "- [?] #task Own blocker [dependsOn:: open__root] #prj_is_blocked ^own",
     "- [x] #task Done #prj_is_blocked ✅ 2026-10-01 ^done",
   ].join("\n");
@@ -638,6 +638,8 @@ test("Alt+] on a date-blocked ^prj recovers open residents in step", async () =>
     "projects/launch.md": source,
     "roots.md": "- [ ] #task Open root [id:: open__root] ^root",
   });
+  harness.app.plugins.plugins["bob-ledger-tools"].api.isSnoozedToday =
+    (task) => task && task.blockId === "notes";
   const editor = createTextEditor(source, { line: 4, ch: 4 });
   const plugin = new TaskStatusCyclerPlugin();
   plugin.getScheduleLogDateString = () => "2026-08-17";
@@ -655,7 +657,8 @@ test("Alt+] on a date-blocked ^prj recovers open residents in step", async () =>
 
   const text = editor.getValue();
   assert.match(text, /^- \[ \] #task #prj Launch the project \^prj$/m);
-  assert.match(text, /^- \[ \] #task Prepare the launch \[unblocked:: 2026-08-17\] \^notes$/m);
+  assert.match(text, /^- \[ \] #task Prepare the launch \[fresh:: 2026-08-01\] \^notes$/m);
+  assert.doesNotMatch(text.split("\n").find((line) => line.includes("^notes")), /\[unblocked::/);
   assert.match(
     text,
     /^- \[\?\] #task Own blocker \[dependsOn:: open__root\] \^own$/m,
@@ -674,7 +677,7 @@ test("Alt+] on a ^prj keeps residents tagged while an open Depends-On target rem
     "status: wip",
     "---",
     "- [?] #task #prj Launch [scheduled:: 2026-08-20] [dependsOn:: jobs__review] ^prj",
-    "- [?] #task Resident #prj_is_blocked ^resident",
+    "- [?] #task Resident [fresh:: 2026-08-01] #prj_is_blocked ^resident",
   ].join("\n");
   const harness = createInMemoryObsidianApp({
     "projects/launch.md": source,
@@ -697,7 +700,7 @@ test("Alt+] on a ^prj keeps residents tagged while an open Depends-On target rem
 
   const text = editor.getValue();
   assert.match(text, /^- \[ \] #task #prj Launch \[dependsOn:: jobs__review\] \^prj$/m);
-  assert.match(text, /^- \[\?\] #task Resident #prj_is_blocked \^resident$/m);
+  assert.match(text, /^- \[\?\] #task Resident \[fresh:: 2026-08-01\] #prj_is_blocked \^resident$/m);
 });
 
 test("planProjectResidentRecoveryEdits recovers when a cross-note id is not open", () => {
@@ -732,12 +735,15 @@ test("Alt+] on a ^prj recovers residents when the remaining Depends-On target is
     "status: wip",
     "---",
     "- [?] #task #prj Launch [scheduled:: 2026-08-20] [dependsOn:: jobs__review] ^prj",
-    "- [?] #task Resident #prj_is_blocked ^resident",
+    "- [?] #task Resident [fresh:: 2026-08-01] #prj_is_blocked ^resident",
   ].join("\n");
   const harness = createInMemoryObsidianApp({
     "projects/launch.md": source,
     "jobs.md": "- [x] #task Review [id:: jobs__review] ^review",
   });
+  harness.app.plugins.plugins["bob-ledger-tools"].api.isToday =
+    (task) => task && task.blockId === "resident";
+  harness.app.plugins.plugins["bob-ledger-tools"].api.isSnoozedToday = () => false;
   const editor = createTextEditor(source, { line: 4, ch: 4 });
   const plugin = new TaskStatusCyclerPlugin();
   plugin.getScheduleLogDateString = () => "2026-08-17";
@@ -755,10 +761,8 @@ test("Alt+] on a ^prj recovers residents when the remaining Depends-On target is
 
   const text = editor.getValue();
   assert.match(text, /^- \[ \] #task #prj Launch \[dependsOn:: jobs__review\] \^prj$/m);
-  assert.match(
-    text,
-    /^- \[ \] #task Resident \[unblocked:: 2026-08-17\] \^resident$/m,
-  );
+  assert.match(text, /^- \[ \] #task Resident \[fresh:: 2026-08-01\] \^resident$/m);
+  assert.doesNotMatch(text.split("\n").find((line) => line.includes("^resident")), /\[unblocked::/);
 });
 
 test("Alt+] recovers a resident whose own closed cross-note prerequisite was the last reason", async () => {
@@ -768,7 +772,7 @@ test("Alt+] recovers a resident whose own closed cross-note prerequisite was the
     "status: wip",
     "---",
     "- [?] #task #prj Launch [scheduled:: 2026-08-20] ^prj",
-    "- [?] #task Resident [dependsOn:: jobs__review] #prj_is_blocked ^resident",
+    "- [?] #task Resident [fresh:: 2026-08-01] [dependsOn:: jobs__review] #prj_is_blocked ^resident",
   ].join("\n");
   const harness = createInMemoryObsidianApp({
     "projects/launch.md": source,
@@ -793,7 +797,7 @@ test("Alt+] recovers a resident whose own closed cross-note prerequisite was the
   assert.match(text, /^- \[ \] #task #prj Launch \^prj$/m);
   assert.match(
     text,
-    /^- \[ \] #task Resident \[unblocked:: 2026-08-17\] \[dependsOn:: jobs__review\] \^resident$/m,
+    /^- \[ \] #task Resident \[fresh:: 2026-08-01\] \[unblocked:: 2026-08-17\] \[dependsOn:: jobs__review\] \^resident$/m,
   );
 });
 
@@ -804,7 +808,7 @@ test("Alt+[ on a [?] ^prj to Cancelled recovers tagged residents", async () => {
     "status: wip",
     "---",
     "- [?] #task #prj Launch [scheduled:: 2026-08-20] ^prj",
-    "- [?] #task Resident #prj_is_blocked ^resident",
+    "- [?] #task Resident [fresh:: 2026-08-01] #prj_is_blocked ^resident",
   ].join("\n");
   const harness = createInMemoryObsidianApp({ "projects/launch.md": source });
   const editor = createTextEditor(source, { line: 4, ch: 4 });
@@ -826,7 +830,7 @@ test("Alt+[ on a [?] ^prj to Cancelled recovers tagged residents", async () => {
   assert.match(text, /^- \[-\] #task #prj Launch \^prj$/m);
   assert.match(
     text,
-    /^- \[ \] #task Resident \[unblocked:: 2026-08-17\] \^resident$/m,
+    /^- \[ \] #task Resident \[fresh:: 2026-08-01\] \[unblocked:: 2026-08-17\] \^resident$/m,
   );
 });
 
@@ -837,12 +841,14 @@ test("cycling a transcluded ^prj recovers residents in the source note", async (
     "status: wip",
     "---",
     "- [?] #task #prj Launch [scheduled:: 2026-08-20] ^prj",
-    "- [?] #task Resident #prj_is_blocked ^resident",
+    "- [?] #task Resident [fresh:: 2026-08-01] #prj_is_blocked ^resident",
   ].join("\n");
   const harness = createInMemoryObsidianApp({
     "Daily.md": "- ![[launch#^prj]]",
     "projects/launch.md": project,
   });
+  harness.app.plugins.plugins["bob-ledger-tools"].api.isSnoozedToday =
+    (task) => task && task.blockId === "resident";
   const plugin = new TaskStatusCyclerPlugin();
   plugin.app = harness.app;
   plugin.getScheduleLogDateString = () => "2026-08-17";
@@ -855,9 +861,7 @@ test("cycling a transcluded ^prj recovers residents in the source note", async (
   assert.equal(wrote, true);
   const text = harness.getSource("projects/launch.md");
   assert.match(text, /^- \[ \] #task #prj Launch \^prj$/m);
-  assert.match(
-    text,
-    /^- \[ \] #task Resident \[unblocked:: 2026-08-17\] \^resident$/m,
-  );
+  assert.match(text, /^- \[ \] #task Resident \[fresh:: 2026-08-01\] \^resident$/m);
+  assert.doesNotMatch(text.split("\n").find((line) => line.includes("^resident")), /\[unblocked::/);
 });
 

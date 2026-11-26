@@ -281,6 +281,11 @@ test("retirement preserves task-tree markers and unmarks Pomodoro embeds", () =>
     "  - 🍅 ![[A#^done|Open session]]",
     "- [x] Done",
     "  - ![[A#^done|Done session]]",
+    "## Snoozed",
+    "- **1530** [[A#^done|Snoozed task]]",
+    "  - keep the authored row note",
+    "## Notes",
+    "keep outside the ledger",
   ].join("\n");
   const result = helpers.retireClosedTaskReferencesInText(
     source,
@@ -291,6 +296,7 @@ test("retirement preserves task-tree markers and unmarks Pomodoro embeds", () =>
   assert.match(result.text, /- 🍅 ~~\[\[A#\^done\|Task tree\]\]~~/);
   assert.match(result.text, /- \[ \] Open\n  - ~~\[\[A#\^done\|Open session\]\]~~/);
   assert.match(result.text, /- \[x\] Done\n  - ~~\[\[A#\^done\|Done session\]\]~~/);
+  assert.match(result.text, /## Snoozed\n- \*\*1530\*\* \[\[A#\^done\|Snoozed task\]\]\n  - keep the authored row note\n## Notes\nkeep outside the ledger/);
 });
 
 test("done Pomodoro retirement removes only the matching embedded marker", () => {

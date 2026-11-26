@@ -276,6 +276,9 @@ function createInMemoryObsidianApp(initialSources) {
   const sources = new Map();
   const markUnblockedLine = (lineText, options = {}) => {
     const today = options.today || "2026-10-12";
+    if (options.isToday === true || options.isSnoozedToday === true) {
+      return String(lineText || "");
+    }
     let line = String(lineText || "").replace(
       /\s+\[unblocked::\s*\d{4}-\d{2}-\d{2}\]/g,
       "",

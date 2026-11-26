@@ -695,6 +695,40 @@ test("failed prune reports the chip and never claims a count", async () => {
   assert.doesNotMatch(outcome.notice, /removed \d+ Pomodoro/);
 });
 
+test("relation cancellation composes Pomodoro and Snoozed cleanup before the next section", async () => {
+  const daily = [
+    "## Pomodoros",
+    "",
+    "- [ ] Current (0900-0930)",
+    "  - [[#^source]]",
+    "",
+    "## Snoozed",
+    "",
+    "- **1530** [[#^source]]",
+    "  - keep this note",
+    "",
+    "## Later",
+    "keep outside the cleaned sections",
+    "",
+    "- [ ] #task Source ^source",
+    "- [ ] #task Target ^target",
+  ].join("\n");
+  const harness = makePlugin({ [DAILY]: daily });
+  const outcome = await harness.plugin.applyRelationEdit({
+    sources: [{ path: DAILY, line: 13, blockId: "source" }],
+    add: [{ path: DAILY, blockId: "target", label: "duplicate of" }],
+    cancelLabels: CANCEL_LABELS,
+    cancelDate: "2026-10-22",
+    today: TODAY,
+    linkedFromLinesEnabled: false,
+  });
+
+  assert.equal(outcome.ok, true);
+  assert.match(harness.store.get(DAILY), /^- \[-\] #task Source/m);
+  assert.match(harness.store.get(DAILY), /^## Later\nkeep outside the cleaned sections$/m);
+  assert.doesNotMatch(harness.store.get(DAILY), /## Snoozed|- \*\*1530\*\*|\[\[#\^source\]\]/);
+});
+
 test("cycler recovers ordinary dependents, keeps extra-prereq blocked, and reopens project residents", async () => {
   const {
     TaskStatusCyclerPlugin,

@@ -85,20 +85,110 @@ function snoozedCacheKey(task) {
   return `${path}#${blockId}`;
 }
 
-// Best-effort Event Task flag for cache facts. `bob snooze add` refuses
-// Event targets, so a resolved snoozed row should never point at one;
-// hand-authored rows that do are detected here by their MEET marker and
-// classified `event_task` (ignored) instead of entering planned-today.
-function snoozedIsEventTask(task) {
+function snoozedTaskLineNumber(task) {
+  if (!task || typeof task !== "object") return null;
+  const candidates = [
+    [task.lineNumber, 0],
+    [task.taskLocation && task.taskLocation.lineNumber, 0],
+    [task.line, 1],
+    [task.taskLocation && task.taskLocation.line, 1],
+  ];
+  for (const [value, base] of candidates) {
+    if (!Number.isInteger(value)) continue;
+    const line = base === 1 ? value - 1 : value;
+    if (line >= 0) return line;
+  }
+  return null;
+}
+
+function snoozedTaskLocationPath(task) {
+  const path = planTaskPath(task) ||
+    (task && task.taskLocation && typeof task.taskLocation.path === "string"
+      ? task.taskLocation.path
+      : "");
+  return typeof path === "string" ? path.replace(/\\/g, "/") : "";
+}
+
+function snoozedCanonicalDailyPath(path) {
+  const match = /^(\d{4})\/(\d{4})(\d{4})\.md$/i.exec(String(path || ""));
+  return Boolean(match && match[1] === match[2]);
+}
+
+function snoozedEventSectionRangeFromHeadings(headings) {
+  if (!Array.isArray(headings)) return null;
+  const parsed = headings.map((item) => {
+    const line = item && item.position && item.position.start
+      ? item.position.start.line
+      : null;
+    return {
+      level: item && Number.isInteger(item.level) ? item.level : null,
+      line,
+      heading: item && typeof item.heading === "string" ? item.heading.trim() : "",
+    };
+  }).filter((item) => Number.isInteger(item.line) && item.line >= 0);
+  const index = parsed.findIndex((item) =>
+    item.level === 2 && item.heading.toLowerCase() === "events"
+  );
+  if (index < 0) return null;
+  const start = parsed[index].line + 1;
+  const next = parsed.slice(index + 1).find((item) => item.level === 2);
+  return { start, end: next ? next.line : Number.POSITIVE_INFINITY };
+}
+
+// Rust's event_task_at classifies structurally: canonical daily-note path,
+// inside the real ## Events section, and a parseable timed Event Task row.
+// Use the current daily text when available; otherwise use Tasks' location
+// and Obsidian's heading cache. Unknown location data remains non-Event.
+function snoozedIsEventTask(task, context = {}) {
   try {
-    const line =
-      (task &&
-        typeof task.originalMarkdown === "string" &&
-        task.originalMarkdown) ||
-      (task && typeof task.description === "string" && task.description) ||
-      "";
-    return /(^|\s)MEET(\s|$)/.test(line);
-  } catch (error) {
+    const path = snoozedTaskLocationPath(task);
+    const lineNumber = snoozedTaskLineNumber(task);
+    if (!snoozedCanonicalDailyPath(path) || lineNumber === null) return false;
+
+    let sourceLine = task && typeof task.originalMarkdown === "string"
+      ? task.originalMarkdown
+      : "";
+    let inEvents = false;
+    if (path === context.dailyPath && typeof context.content === "string") {
+      const lines = context.content.split(/\r?\n/);
+      const rows = typeof eventRunEventRows === "function"
+        ? eventRunEventRows(lines)
+        : [];
+      const eventRow = rows.find((row) => row && row.lineIndex === lineNumber);
+      if (!eventRow) return false;
+      sourceLine = lines[lineNumber] || sourceLine;
+      inEvents = true;
+    } else {
+      let headings = null;
+      const metadataCache = context.metadataCache;
+      const vault = context.vault;
+      try {
+        const file = vault && typeof vault.getAbstractFileByPath === "function"
+          ? vault.getAbstractFileByPath(path)
+          : { path };
+        const fileCache = metadataCache && typeof metadataCache.getFileCache === "function"
+          ? metadataCache.getFileCache(file)
+          : null;
+        headings = fileCache && Array.isArray(fileCache.headings)
+          ? fileCache.headings
+          : null;
+      } catch (_error) {
+        headings = null;
+      }
+      const section = snoozedEventSectionRangeFromHeadings(headings);
+      inEvents = Boolean(section && lineNumber >= section.start && lineNumber < section.end);
+    }
+    if (!inEvents || typeof sourceLine !== "string") return false;
+    const match = typeof EVENT_TASK_LINE_RE !== "undefined"
+      ? EVENT_TASK_LINE_RE.exec(sourceLine)
+      : null;
+    return Boolean(
+      match &&
+      typeof eventRunParseHhmm === "function" &&
+      eventRunParseHhmm(match[2]) !== null &&
+      eventRunParseHhmm(match[3]) !== null,
+    );
+  } catch (_error) {
     return false;
   }
 }
@@ -201,7 +291,12 @@ function snoozedBuildClassifyInput(options = {}) {
           ? fact.status.type
           : null;
       isTask = statusType !== "NON_TASK";
-      isEvent = snoozedIsEventTask(fact);
+      isEvent = snoozedIsEventTask(fact, {
+        content,
+        dailyPath,
+        metadataCache: options.metadataCache,
+        vault: options.vault,
+      });
       if (route && row.blockId && typeof snoozeIdentityKey === "function") {
         const identity = snoozeIdentityKey(route, row.blockId);
         const caretless =
@@ -447,6 +542,8 @@ class BobLedgerToolsSnoozedTodayMixin {
       todayKeySet,
       clock,
       zone,
+      metadataCache: this.app && this.app.metadataCache,
+      vault: this.app && this.app.vault,
     });
     let classified = null;
     try {

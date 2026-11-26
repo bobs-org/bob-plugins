@@ -224,6 +224,9 @@ function createSuccessorOfferCloseContext(options = {}) {
       ? new Set(options.newTaskKeys)
       : new Set(Array.isArray(options.newTaskKeys) ? options.newTaskKeys.map(String) : []),
     hasLiveLink: typeof options.hasLiveLink === "function" ? options.hasLiveLink : null,
+    isSnoozedToday: typeof options.isSnoozedToday === "function"
+      ? options.isSnoozedToday
+      : () => false,
     liveKeys: options.liveKeys instanceof Set ? new Set(options.liveKeys) : new Set(),
   };
   return Object.freeze(context);

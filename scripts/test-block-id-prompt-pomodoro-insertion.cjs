@@ -141,6 +141,14 @@ test("planPomodoroLinkInsertion inserts under the selected entry using an existi
     "- [ ] Current (10:00-10:25) something",
     "  - [[Other#^abc]]",
     "- [ ] Next ()",
+    "",
+    "## Snoozed",
+    "",
+    "- **1530** [[Tasks#^foobar]]",
+    "  - keep the authored row notes",
+    "",
+    "## Later",
+    "keep outside the inserted section",
   ].join("\n");
   const plan = helpers.planPomodoroLinkInsertion(daily, {
     blockId: "foobar",
@@ -162,6 +170,14 @@ test("planPomodoroLinkInsertion inserts under the selected entry using an existi
       "  - [[Other#^abc]]",
       "  - [[Tasks#^foobar]]",
       "- [ ] Next ()",
+      "",
+      "## Snoozed",
+      "",
+      "- **1530** [[Tasks#^foobar]]",
+      "  - keep the authored row notes",
+      "",
+      "## Later",
+      "keep outside the inserted section",
     ].join("\n"),
   );
 });

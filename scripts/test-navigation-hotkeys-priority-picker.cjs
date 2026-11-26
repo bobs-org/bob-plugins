@@ -172,15 +172,18 @@ test("scheduled picker pins a priority roll only for configured current prioriti
 test("Ctrl+R replaces only the pinned priority roll and keeps it selected", async () => {
   // Opening the card and the stage draw the first roll (0); Ctrl+R draws 1.
   let rerolling = false;
+  const baseDate = new Date(new Date().getFullYear() + 1, 7, 3);
+  const year = String(baseDate.getFullYear());
+  const rolledDate = `${year}-08-10`;
   const harness = createBulletPropertyPickerHarness({
     config: createPriorityPickerConfig(),
     content: "- [ ] #task One [priority:: high] ^one",
-    baseDate: new Date(2026, 7, 3),
+    baseDate,
     random: () => (rerolling ? 1 : 0),
   });
   const picker = await openBulletPropertyValueStage(harness, "scheduled");
   const unchangedItems = picker.items.slice(1);
-  assert.equal(picker.items[0].value, "2026-08-05");
+  assert.equal(picker.items[0].value, `${year}-08-05`);
   let prevented = false;
   let stopped = false;
 
@@ -198,7 +201,7 @@ test("Ctrl+R replaces only the pinned priority roll and keeps it selected", asyn
     },
   });
 
-  assert.equal(picker.items[0].value, "2026-08-10");
+  assert.equal(picker.items[0].value, rolledDate);
   assert.equal(picker.items[0].rolledDays, 7);
   assert.deepEqual(picker.items.slice(1), unchangedItems);
   assert.equal(picker.selectedIndex, 0);
@@ -213,9 +216,9 @@ test("Ctrl+R replaces only the pinned priority roll and keeps it selected", asyn
   assert.equal(
     harness.editor.content,
     [
-      `- [${status}] #task One [priority:: high] [scheduled:: 2026-08-10] ^one`,
+      `- [${status}] #task One [priority:: high] [scheduled:: ${rolledDate}] ^one`,
       "\t- 🗓️ **SCHEDULE LOG**",
-      "\t\t- *2026-08-10* — 🎲 P1 roll · in **7** (2–7) days",
+      `\t\t- *${rolledDate}* — 🎲 P1 roll · in **7** (2–7) days`,
     ].join("\n"),
   );
 });

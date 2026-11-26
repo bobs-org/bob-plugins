@@ -60,7 +60,18 @@ function planAllOpenPomodoroLinkCleanup(content, options = {}) {
         },
       })
     : { edits: [], detachedSubtrees: [], removedIdentities: [] };
-  const edits = mergeCoveringEdits([...(cleanup.edits || []), ...(snoozed.edits || [])])
+  const snoozedEdits = (snoozed.edits || []).map((edit) => ({ ...edit }));
+  const snoozeSection = snoozeModel.parseSection(snapshot);
+  if (snoozeSection) {
+    for (const edit of snoozedEdits) {
+      if (edit.kind !== "empty-section" || edit.start >= snoozeSection.headerStart) continue;
+      const precedingCleanup = (cleanup.edits || []).some((other) =>
+        other.end > edit.start && other.start < snoozeSection.headerStart,
+      );
+      if (precedingCleanup) edit.start = snoozeSection.headerStart;
+    }
+  }
+  const edits = mergeCoveringEdits([...(cleanup.edits || []), ...snoozedEdits])
     .sort((left, right) => left.start - right.start || left.end - right.end);
   if (!validateNonOverlappingEdits(edits)) {
     return {

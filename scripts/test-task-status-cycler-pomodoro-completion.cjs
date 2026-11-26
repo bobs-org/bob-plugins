@@ -615,6 +615,14 @@ test("Pomodoro completion groups worked-on links before deferred marked links be
     "\t- [[Tasks#^ordinary-two|Ordinary two]]",
     "- [ ] Later",
     "\t- [[Tasks#^later|Keep later]]",
+    "",
+    "## Snoozed",
+    "",
+    "- **1530** [[Tasks#^later]]",
+    "  - keep the authored row notes",
+    "",
+    "## After Snoozed",
+    "keep outside the Pomodoros section",
   ];
   const section = helpers.findPomodorosSectionInLines(lines);
   const plan = helpers.buildPomodoroCompletionPlan(lines, section, 1);
@@ -659,6 +667,14 @@ test("Pomodoro completion groups worked-on links before deferred marked links be
       "\t- [[#^move-two]]",
       "- [ ] Later",
       "\t- [[Tasks#^later|Keep later]]",
+      "",
+      "## Snoozed",
+      "",
+      "- **1530** [[Tasks#^later]]",
+      "  - keep the authored row notes",
+      "",
+      "## After Snoozed",
+      "keep outside the Pomodoros section",
     ].join("\n"),
   );
   assert.deepEqual(editor.getCursor(), { line: 5, ch: 7 });

@@ -1,4 +1,30 @@
 class BlockIdPromptSnoozedLinkNowMixin {
+  async consumePomodoroTaskLinkBlock(source, id) {
+    if (!source || typeof this.consumeBlockedTaskPomodoroLink !== "function") return false;
+    const snapshot = source.taskSnapshot && typeof source.taskSnapshot === "object"
+      ? source.taskSnapshot
+      : null;
+    const targetPath = snapshot && snapshot.path ? snapshot.path : source.sourcePath;
+    const targetLine = snapshot && Number.isInteger(snapshot.line) ? snapshot.line : source.line;
+    const targetContent = snapshot && typeof snapshot.content === "string"
+      ? (snapshot.path === source.sourcePath ? source.editor.getValue() : snapshot.content)
+      : source.editor.getValue();
+    const taskFile = this.resolveTaskFile(targetPath);
+    if (!taskFile) return false;
+    const targetLineText = targetContent.split("\n")[targetLine] || "";
+    const handled = await this.consumeBlockedTaskPomodoroLink(source, taskFile, {
+      targetPath,
+      targetLine,
+      targetLineText,
+      targetContent,
+      snoozedCleanup: source.snoozedRow || source.snoozedPresence
+        ? { blockId: id, targetPath, targetLine, row: source.snoozedRow || null }
+        : null,
+    });
+    source.blockConsumptionChecked = true;
+    return handled;
+  }
+
   // Live ledger links keep the historical true/false toggle contract;
   // active Snoozed rows are reported separately so they link now.
   async pomodoroTaskLinkPresence(source, blockId) {
@@ -125,6 +151,9 @@ class BlockIdPromptSnoozedLinkNowMixin {
       return false;
     }
     source.inboxRouteGate = routeGate;
+    if (await this.consumePomodoroTaskLinkBlock(source, target.id)) {
+      return false;
+    }
     const pomodoroTarget = await this.choosePomodoroLinkTarget(source);
     if (!pomodoroTarget) return false;
     source.pomodoroTarget = pomodoroTarget;

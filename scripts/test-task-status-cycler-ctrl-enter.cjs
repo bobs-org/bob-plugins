@@ -1408,3 +1408,62 @@ test("Ctrl+Enter with a transcluded task line still uses the Tasks-plugin comman
     }
   }
 });
+
+test("Ctrl+Enter on an active Snoozed row completes its target and keeps struck history", async () => {
+  const dailyPath = helpers.todayDailyPath({ plugins: { plugins: {} } });
+  const daily = [
+    "## Snoozed",
+    "- **1530** [[Tasks#^ship]]",
+    "  - keep this note",
+    "- ~~**1400** [[Tasks#^ship]]~~ · woke 14:02",
+    "",
+    "## Pomodoros",
+    "- [ ] Current (10:00-10:25)",
+  ].join("\n");
+  const harness = createInMemoryObsidianApp({
+    [dailyPath]: daily,
+    "Tasks.md": "- [ ] #task Ship it ^ship",
+  });
+  const editor = createTextEditor(daily, { line: 1, ch: 18 });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.getCompletionDateString = () => "2026-11-26";
+  attachActiveMarkdownView(plugin, harness, editor, dailyPath);
+  const action = registerTaskToggleVimAction(plugin);
+
+  action({});
+  await flushAsyncActions();
+  await plugin.referenceMutationQueue;
+
+  assert.match(harness.getSource("Tasks.md"), /^- \[x\] #task Ship it .*\^ship$/);
+  assert.doesNotMatch(editor.getValue(), /- \*\*1530\*\* \[\[Tasks#\^ship\]\]/);
+  assert.doesNotMatch(editor.getValue(), /keep this note/);
+  assert.match(editor.getValue(), /~~\*\*1400\*\* \[\[Tasks#\^ship\]\]~~ · woke 14:02/);
+  assert.match(editor.getValue(), /- \[ \] Current \(10:00-10:25\)/);
+});
+
+test("Ctrl+Enter on a task definition removes its active Snoozed row", async () => {
+  const dailyPath = helpers.todayDailyPath({ plugins: { plugins: {} } });
+  const daily = [
+    "## Snoozed",
+    "- **1530** [[Tasks#^ship]]",
+    "  - keep this note",
+    "- ~~**1400** [[Tasks#^ship]]~~ · woke 14:02",
+  ].join("\n");
+  const task = "- [ ] #task Ship it ^ship";
+  const harness = createInMemoryObsidianApp({ [dailyPath]: daily, "Tasks.md": task });
+  const editor = createTextEditor(task, { line: 0, ch: 5 });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.getCompletionDateString = () => "2026-11-26";
+  attachActiveMarkdownView(plugin, harness, editor, "Tasks.md");
+  installTasksCloseCommand(plugin, editor);
+  const action = registerTaskToggleVimAction(plugin);
+
+  action({});
+  await flushAsyncActions();
+  await plugin.referenceMutationQueue;
+
+  assert.match(editor.getValue(), /^- \[x\] #task Ship it .*\^ship$/);
+  assert.doesNotMatch(harness.getSource(dailyPath), /- \*\*1530\*\* \[\[Tasks#\^ship\]\]/);
+  assert.doesNotMatch(harness.getSource(dailyPath), /keep this note/);
+  assert.match(harness.getSource(dailyPath), /~~\*\*1400\*\* \[\[Tasks#\^ship\]\]~~ · woke 14:02/);
+});

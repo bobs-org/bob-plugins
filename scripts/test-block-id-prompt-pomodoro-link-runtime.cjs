@@ -864,7 +864,8 @@ function routeCommitCalls(routeCalls) {
 
 function createSnoozedLinkNowHarness(options = {}) {
   resetNotices();
-  const dailyContent = options.dailyContent || [
+  let taskContent = options.taskContent || "- [ ] #task Ship it ^ship";
+  let dailyContent = options.dailyContent || [
     "## Pomodoros",
     "- [ ] Current (10:00-10:25)",
     "",
@@ -872,38 +873,52 @@ function createSnoozedLinkNowHarness(options = {}) {
     "- **1530** [[Tasks#^ship]]",
     "  - keep this note",
   ].join("\n");
-  let taskContent = options.taskContent || "- [ ] #task Ship it ^ship";
-  const dailyFile = createTFile("Daily.md");
-  const taskFile = createTFile("Tasks.md");
-  const editor = createEditor(dailyContent);
-  const rowLine = dailyContent.split("\n").findIndex((line) => line.includes("[[Tasks#^ship]]"));
-  editor.setCursor({ line: rowLine, ch: 5 });
-  const view = createMarkdownView(dailyFile);
+  const taskPath = options.taskPath || "Tasks.md";
+  const sameNote = options.sameNote === true;
+  const dailyPath = sameNote ? taskPath : "Daily.md";
+  const dailyFile = createTFile(dailyPath);
+  const taskFile = createTFile(taskPath);
+  if (sameNote) taskContent = dailyContent;
+  const activeOnTask = options.activeOnTask === true;
+  const activeFile = activeOnTask ? taskFile : dailyFile;
+  const editor = createEditor(activeOnTask ? taskContent : dailyContent);
+  const selectionLine = editor.getValue().split("\n").findIndex((line) => activeOnTask
+    ? line.startsWith("- [") && line.includes("^ship")
+    : line.includes("[[") && line.includes("^ship"));
+  editor.setCursor({ line: Math.max(0, selectionLine), ch: activeOnTask ? 5 : 5 });
+  const view = createMarkdownView(activeFile);
   const writes = [];
   const pickerRequests = [];
+  const otherTaskFile = options.ambiguousBasename ? createTFile("Other/Tasks.md") : null;
   const plugin = new Plugin();
   plugin.app = {
     workspace: {
       getActiveViewOfType: () => view,
-      getActiveFile: () => dailyFile,
+      getActiveFile: () => activeFile,
     },
     vault: {
-      getAbstractFileByPath: (path) => ({ "Daily.md": dailyFile, "Tasks.md": taskFile }[path] || null),
-      getMarkdownFiles: () => [dailyFile, taskFile],
-      read: async (file) => file.path === "Tasks.md" ? taskContent : dailyContent,
-      modify: async (file, content) => writes.push({ path: file.path, content }),
+      getAbstractFileByPath: (path) => ({ [dailyPath]: dailyFile, [taskPath]: taskFile, ...(otherTaskFile ? { [otherTaskFile.path]: otherTaskFile } : {}) }[path] || null),
+      getMarkdownFiles: () => [dailyFile, taskFile, ...(otherTaskFile ? [otherTaskFile] : [])],
+      read: async (file) => file.path === taskPath ? taskContent : dailyContent,
+      modify: async (file, content) => {
+        writes.push({ path: file.path, content });
+        if (file.path === taskPath) taskContent = content;
+        if (file.path === dailyPath) dailyContent = content;
+      },
     },
     metadataCache: {
       fileToLinktext: (file) => file.path.replace(/\.md$/i, ""),
     },
   };
   plugin.resolveTodayDailyFile = () => dailyFile;
-  plugin.resolveTaskFile = (path) => path === "Tasks.md" ? taskFile : null;
+  plugin.resolveTaskFile = (path) => path === taskPath || path === dailyPath ? taskFile : null;
   plugin.resolveReferenceDestination = (reference) =>
-    reference && reference.targetText === "Tasks" ? taskFile : null;
+    reference && (reference.targetText === "Tasks" || (sameNote && reference.targetText === "")) ? taskFile : null;
   plugin.promptPomodoroLinkTarget = async (request) => {
     pickerRequests.push(request);
-    return helpers.defaultPomodoroLinkChoice(request.model);
+    return Object.hasOwn(options, "pomodoroChoice")
+      ? options.pomodoroChoice
+      : helpers.defaultPomodoroLinkChoice(request.model);
   };
   plugin.suppressEditorScans = () => {};
   plugin.now = () => localDate(2026, 8, 15);
@@ -917,7 +932,7 @@ function createSnoozedLinkNowHarness(options = {}) {
       return options.routeOutcome || { kind: "stay" };
     },
   });
-  return { plugin, editor, view, dailyFile, taskFile, writes, pickerRequests, routeCalls };
+  return { plugin, editor, view, dailyFile, taskFile, writes, pickerRequests, routeCalls, getTaskContent: () => taskContent, getDailyContent: () => dailyContent };
 }
 
 test("Ctrl+Shift+Enter on an active Snoozed row links it now and moves its note under the current Pomodoro", async () => {
@@ -935,6 +950,161 @@ test("Ctrl+Shift+Enter on an active Snoozed row links it now and moves its note 
   assert.doesNotMatch(h.editor.getValue(), /\*\*1530\*\* \[\[Tasks#\^ship\]\]/);
   assert.equal(routePromptCalls(h.routeCalls).length, 1);
   assert.equal(lastNotice(), "Linked under Current · Next");
+});
+
+test("Ctrl+Shift+Enter on a task definition with only a Snoozed row links instead of unlinking", async () => {
+  const h = createSnoozedLinkNowHarness({ activeOnTask: true });
+
+  await h.plugin.openPomodoroTaskLink(h.editor, h.view);
+
+  assert.match(h.editor.getValue(), /^- \[\*\] #task Ship it \^ship$/m);
+  const daily = h.writes.find((write) => write.path === "Daily.md");
+  assert.ok(daily);
+  assert.match(daily.content, /\t- \[\[Tasks#\^ship\]\]\n\t  - keep this note/);
+  assert.doesNotMatch(daily.content, /\*\*1530\*\*/);
+  assert.equal(h.pickerRequests.length, 1);
+  assert.equal(lastNotice(), "Linked under Current · Next");
+});
+
+test("same-note Snoozed definition link-now settles the composed edit once", async () => {
+  const daily = [
+    "- [ ] #task Ship it ^ship",
+    "## Pomodoros",
+    "- [ ] Current (10:00-10:25)",
+    "",
+    "## Snoozed",
+    "- **1530** [[#^ship]]",
+    "  - same-note note",
+  ].join("\n");
+  const h = createSnoozedLinkNowHarness({
+    sameNote: true,
+    activeOnTask: true,
+    dailyContent: daily,
+  });
+  let settles = 0;
+  h.plugin.app.plugins.plugins["bob-ledger-tools"] = {
+    api: {
+      taskSettle: {
+        version: 1,
+        applyToEditor(editor, _path, options) {
+          settles += 1;
+          const last = editor.getValue().split("\n").length - 1;
+          editor.replaceRange(
+            options.contents,
+            { line: 0, ch: 0 },
+            { line: last, ch: editor.getLine(last).length },
+          );
+          return { applied: true };
+        },
+      },
+    },
+  };
+
+  await h.plugin.openPomodoroTaskLink(h.editor, h.view);
+
+  assert.equal(settles, 1, "the task update, ledger link, and Snoozed cleanup share one settle transaction");
+  assert.match(h.editor.getValue(), /^- \[\*\] #task Ship it \^ship$/m);
+  assert.match(h.editor.getValue(), /\t- \[\[#\^ship\]\]\n\t  - same-note note/);
+  assert.doesNotMatch(h.editor.getValue(), /\*\*1530\*\*/);
+});
+
+test("unlink removes both a live Pomodoro link and active Snoozed row without lowering the lane", async () => {
+  const h = createSnoozedLinkNowHarness({
+    activeOnTask: true,
+    dailyContent: [
+      "## Pomodoros",
+      "- [ ] Current (10:00-10:25)",
+      "  - [[Tasks#^ship]]",
+      "",
+      "## Snoozed",
+      "- **1530** [[Tasks#^ship]]",
+      "  - keep this note",
+    ].join("\n"),
+  });
+  const taskBefore = h.editor.getValue();
+
+  await h.plugin.openPomodoroTaskLink(h.editor, h.view);
+
+  const daily = h.writes.find((write) => write.path === "Daily.md");
+  assert.ok(daily);
+  assert.doesNotMatch(daily.content, /\[\[Tasks#\^ship\]\]/);
+  assert.doesNotMatch(daily.content, /\*\*1530\*\*/);
+  assert.equal(h.editor.getValue(), taskBefore, "unlink leaves the task lane unchanged");
+  assert.equal(h.pickerRequests.length, 0);
+});
+
+test("Snoozed link-now cancellation at either picker preserves task and daily bytes", async () => {
+  const routeCancel = createSnoozedLinkNowHarness({ routeOutcome: { kind: "cancel" } });
+  const routeDailyBefore = routeCancel.editor.getValue();
+  const routeTaskBefore = routeCancel.getTaskContent();
+  await routeCancel.plugin.openPomodoroTaskLink(routeCancel.editor, routeCancel.view);
+  assert.equal(routeCancel.editor.getValue(), routeDailyBefore);
+  assert.equal(routeCancel.getTaskContent(), routeTaskBefore);
+  assert.deepEqual(routeCancel.writes, []);
+  assert.equal(routeCancel.pickerRequests.length, 0);
+
+  const pomodoroCancel = createSnoozedLinkNowHarness({ pomodoroChoice: null });
+  const pomodoroDailyBefore = pomodoroCancel.editor.getValue();
+  const pomodoroTaskBefore = pomodoroCancel.getTaskContent();
+  await pomodoroCancel.plugin.openPomodoroTaskLink(pomodoroCancel.editor, pomodoroCancel.view);
+  assert.equal(pomodoroCancel.editor.getValue(), pomodoroDailyBefore);
+  assert.equal(pomodoroCancel.getTaskContent(), pomodoroTaskBefore);
+  assert.deepEqual(pomodoroCancel.writes, []);
+  assert.equal(pomodoroCancel.pickerRequests.length, 1);
+});
+
+test("ambiguous Snoozed basename refuses with a Notice and no writes", async () => {
+  const h = createSnoozedLinkNowHarness({ ambiguousBasename: true });
+  const dailyBefore = h.editor.getValue();
+  const taskBefore = h.getTaskContent();
+
+  await h.plugin.openPomodoroTaskLink(h.editor, h.view);
+
+  assert.equal(h.editor.getValue(), dailyBefore);
+  assert.equal(h.getTaskContent(), taskBefore);
+  assert.deepEqual(h.writes, []);
+  assert.equal(h.pickerRequests.length, 0);
+  assert.match(lastNotice(), /Snoozed target is missing or ambiguous/);
+});
+
+test("Blocked Snoozed target consumes prerequisites and removes its row without a link", async () => {
+  const h = createSnoozedLinkNowHarness({
+    taskContent: "- [?] #task Ship it [dependsOn:: jobs__review] ^ship",
+    dailyContent: [
+      "## Pomodoros",
+      "- [ ] Current (10:00-10:25)",
+      "",
+      "## Snoozed",
+      "- **1530** [[Tasks#^ship]]",
+      "  - keep this note",
+    ].join("\n"),
+  });
+  const rootFile = createTFile("jobs.md");
+  h.plugin.readTaskDependencyDocuments = async () => ({
+    documents: [
+      { path: "Daily.md", text: h.getDailyContent() },
+      { path: "Tasks.md", text: h.getTaskContent() },
+      { path: "jobs.md", text: "- [ ] #task Review [id:: jobs__review] ^review" },
+    ],
+    fileByPath: new Map([["Daily.md", h.dailyFile], ["Tasks.md", h.taskFile], ["jobs.md", rootFile]]),
+    failures: [],
+  });
+  h.plugin.applyTargetTaskPlan = async (file, _source, plan) => {
+    h.writes.push({ path: file.path, content: plan.content });
+    return true;
+  };
+
+  await h.plugin.openPomodoroTaskLink(h.editor, h.view);
+
+  const daily = h.writes.find((write) => write.path === "Daily.md");
+  assert.ok(daily, "the blocked row is cleaned in the same consumption write");
+  assert.doesNotMatch(daily.content, /\*\*1530\*\*/);
+  assert.doesNotMatch(daily.content, /\[\[Tasks#\^ship\]\]/);
+  const taskNote = h.writes.find((write) => write.path === "Tasks.md");
+  assert.ok(taskNote, "the Snoozed child note remains attached to the blocked task");
+  assert.match(taskNote.content, /\^ship\n  - keep this note/);
+  assert.equal(h.pickerRequests.length, 0, "blocked consumption does not open the Pomodoro picker");
+  assert.match(lastNotice(), /raised 1 prerequisite to Next/);
 });
 
 test("Snoozed link-now refuses stale rows and stale target snapshots after the route prompt", async () => {

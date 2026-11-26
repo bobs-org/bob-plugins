@@ -385,6 +385,7 @@ function planOfferCloseRecovery(options = {}) {
       dailyPath: typeof context.dailyPath === "string" ? context.dailyPath : "",
       today,
       markUnblockedLine: typeof context.markUnblockedLine === "function" ? context.markUnblockedLine : null,
+      isSnoozedToday: typeof context.isSnoozedToday === "function" ? context.isSnoozedToday : () => false,
       selection: [],
       linkUnblocked: false,
       cancelled: false,

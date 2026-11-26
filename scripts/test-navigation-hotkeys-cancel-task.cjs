@@ -519,9 +519,18 @@ test("same-file cancel folds today's Pomodoro prune into one transaction", async
     "",
     "- [ ] Current (0900-0930)",
     "  - [[#^ship]]",
+    "",
+    "## Snoozed",
+    "",
+    "- **1530** [[#^ship]]",
+    "  - keep this note",
+    "",
+    "## Later",
+    "keep outside the cleaned sections",
+    "",
     "- [ ] #task Ship it ^ship",
   ].join("\n");
-  const editor = new TransactionEditor(content, { line: 4, ch: 0 });
+  const editor = new TransactionEditor(content, { line: 13, ch: 0 });
   const dailyFile = { path: dailyPath, basename: `${year}${month}${day}`, extension: "md" };
   const plugin = new NavigationHotkeysPlugin();
   plugin.app = {
@@ -546,16 +555,14 @@ test("same-file cancel folds today's Pomodoro prune into one transaction", async
   picker.inputEl = { value: "done" };
   picker.visibleItems = picker.getFilteredItems();
   await picker.openItemAtIndex(0);
-  assert.deepEqual(editor.content.split("\n"), [
-    "## Pomodoros",
-    "",
-    `- [-] #task Ship it [cancelled:: ${dateText}] ^ship`,
-    "\t- ❌ **CANCEL LOG**",
-    `\t\t- *${dateText}* — done`,
-  ]);
+  assert.match(editor.content, /^## Later\nkeep outside the cleaned sections$/m);
+  assert.doesNotMatch(editor.content, /## Snoozed|- \*\*1530\*\*|\[\[#\^ship\]\]/);
+  assert.match(editor.content, new RegExp(`^- \\[-\\] #task Ship it \\[cancelled:: ${dateText}\\] \\^ship`, "m"));
+  assert.match(editor.content, /\t- ❌ \*\*CANCEL LOG\*\*/);
+  assert.match(editor.content, new RegExp(`\\t\\t- \\*${dateText}\\* — done`));
   assert.equal(editor.transactions.length, 1);
   assert.equal(editor.undoGroups, 1);
-  assert.equal(editor.cursor.line, 2);
+  assert.match(editor.getLine(editor.cursor.line), /^- \[-\] #task Ship it/);
   assert.match(notices.at(-1), /removed 1 Pomodoro link/);
   plugin.activeBulletPropertyPicker = null;
 });

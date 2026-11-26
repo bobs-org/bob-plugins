@@ -422,6 +422,7 @@ class TaskStatusCyclerReferencesMixin {
             task,
             isDailyNote: isDailyNotePath(path),
             isToday: (task) => projectRecoveryTaskIsToday(this, task),
+            isSnoozedToday: (task) => projectRecoveryTaskIsSnoozedToday(this, task),
           });
           if (typeof rewritten !== "string") {
             recordFailure(path, `line ${edit.line + 1} could not be marked unblocked`);
@@ -457,6 +458,7 @@ class TaskStatusCyclerReferencesMixin {
             today: recoveryToday,
             isDailyNote: isDailyNotePath(path),
             isToday: (task) => projectRecoveryTaskIsToday(this, task),
+            isSnoozedToday: (task) => projectRecoveryTaskIsSnoozedToday(this, task),
           });
           return result.text;
         };

@@ -7471,6 +7471,9 @@ function planSuccessors(options = {}) {
       notePaths,
       closingEntry,
       hasLiveLink,
+      isSnoozedToday: typeof options.isSnoozedToday === "function"
+        ? options.isSnoozedToday
+        : () => false,
       projectOffers: extra.projectOffers || [],
       foldedByProject: folded,
       projectHeaders: extra.projectHeaders || new Map(),
@@ -11111,6 +11114,19 @@ function projectRecoveryTaskIsToday(plugin, task) {
   }
 }
 
+function projectRecoveryTaskIsSnoozedToday(plugin, task) {
+  try {
+    const plugins = plugin && plugin.app && plugin.app.plugins;
+    const ledger = plugins && plugins.plugins && plugins.plugins["bob-ledger-tools"];
+    const isSnoozedToday = ledger && ledger.api && ledger.api.isSnoozedToday;
+    return typeof isSnoozedToday === "function"
+      ? isSnoozedToday(task) === true
+      : false;
+  } catch (_error) {
+    return false;
+  }
+}
+
 function rewriteRecoveredTaskLine(lineText, statusSymbol, options = {}) {
   const source = String(lineText || "");
   const current = getTaskStatusForLine(source);
@@ -11126,6 +11142,9 @@ function rewriteRecoveredTaskLine(lineText, statusSymbol, options = {}) {
       isToday: typeof options.isToday === "function"
         ? Boolean(options.isToday(options.task || current))
         : Boolean(options.isToday),
+      isSnoozedToday: typeof options.isSnoozedToday === "function"
+        ? Boolean(options.isSnoozedToday(options.task || current))
+        : Boolean(options.isSnoozedToday),
     });
     if (typeof marked !== "string") {
       return null;
@@ -11348,6 +11367,7 @@ async function applyProjectResidentRecovery(plugin, sourceText, path, context) {
     markUnblockedLine,
     openIds,
     isToday: (task) => projectRecoveryTaskIsToday(plugin, task),
+    isSnoozedToday: (task) => projectRecoveryTaskIsSnoozedToday(plugin, task),
   });
   if (edits.length === 0) {
     return;
@@ -12723,6 +12743,7 @@ function projectPullInRewriteLine(before, rank, options = {}) {
       today: options.today,
       isDailyNote: options.isDailyNote,
       isToday: options.isToday,
+      isSnoozedToday: options.isSnoozedToday,
     });
     return rewritten == null ? stripped : rewritten;
   }
@@ -12815,6 +12836,9 @@ function applySuccessorVerdicts(context) {
   const basenameCounts = context.basenameCounts;
   const noteTexts = context.noteTexts || {};
   const hasLiveLink = context.hasLiveLink;
+  const isSnoozedToday = typeof context.isSnoozedToday === "function"
+    ? context.isSnoozedToday
+    : () => false;
   const foldedByProject = context.foldedByProject instanceof Map ? context.foldedByProject : new Map();
   const projectHeaders = context.projectHeaders instanceof Map ? context.projectHeaders : new Map();
 
@@ -12944,6 +12968,7 @@ function applySuccessorVerdicts(context) {
           today,
           isDailyNote: isDailyNotePath(task.path),
           isToday: typeof hasLiveLink === "function" ? hasLiveLink(task) : false,
+          isSnoozedToday: () => isSnoozedToday(task) === true,
         });
       } else {
         after = rewriteRecoveredTaskLine(before, rank, {
@@ -12951,6 +12976,7 @@ function applySuccessorVerdicts(context) {
           today,
           isDailyNote: isDailyNotePath(task.path),
           isToday: typeof hasLiveLink === "function" ? hasLiveLink(task) : false,
+          isSnoozedToday: () => isSnoozedToday(task) === true,
         });
       }
     }
@@ -13165,6 +13191,7 @@ function applySuccessorVerdicts(context) {
             today,
             isDailyNote: isDailyNotePath(task.path),
             isToday: typeof hasLiveLink === "function" ? hasLiveLink(task) : false,
+            isSnoozedToday: () => isSnoozedToday(task) === true,
           });
         } else {
           after = rewriteRecoveredTaskLine(before, rank, {
@@ -13172,6 +13199,7 @@ function applySuccessorVerdicts(context) {
             today,
             isDailyNote: isDailyNotePath(task.path),
             isToday: typeof hasLiveLink === "function" ? hasLiveLink(task) : false,
+            isSnoozedToday: () => isSnoozedToday(task) === true,
           });
         }
       }
@@ -13332,6 +13360,7 @@ function applySuccessorVerdicts(context) {
           today,
           isDailyNote: isDailyNotePath(task.path),
           isToday: true,
+          isSnoozedToday: () => isSnoozedToday(task) === true,
         });
         if (raised == null) {
           raised = before;
@@ -15647,6 +15676,9 @@ function createSuccessorOfferCloseContext(options = {}) {
       ? new Set(options.newTaskKeys)
       : new Set(Array.isArray(options.newTaskKeys) ? options.newTaskKeys.map(String) : []),
     hasLiveLink: typeof options.hasLiveLink === "function" ? options.hasLiveLink : null,
+    isSnoozedToday: typeof options.isSnoozedToday === "function"
+      ? options.isSnoozedToday
+      : () => false,
     liveKeys: options.liveKeys instanceof Set ? new Set(options.liveKeys) : new Set(),
   };
   return Object.freeze(context);
@@ -16430,6 +16462,7 @@ function planOfferCloseRecovery(options = {}) {
       dailyPath: typeof context.dailyPath === "string" ? context.dailyPath : "",
       today,
       markUnblockedLine: typeof context.markUnblockedLine === "function" ? context.markUnblockedLine : null,
+      isSnoozedToday: typeof context.isSnoozedToday === "function" ? context.isSnoozedToday : () => false,
       selection: [],
       linkUnblocked: false,
       cancelled: false,
@@ -20671,6 +20704,7 @@ class TaskStatusCyclerReferencesMixin {
             task,
             isDailyNote: isDailyNotePath(path),
             isToday: (task) => projectRecoveryTaskIsToday(this, task),
+            isSnoozedToday: (task) => projectRecoveryTaskIsSnoozedToday(this, task),
           });
           if (typeof rewritten !== "string") {
             recordFailure(path, `line ${edit.line + 1} could not be marked unblocked`);
@@ -20706,6 +20740,7 @@ class TaskStatusCyclerReferencesMixin {
             today: recoveryToday,
             isDailyNote: isDailyNotePath(path),
             isToday: (task) => projectRecoveryTaskIsToday(this, task),
+            isSnoozedToday: (task) => projectRecoveryTaskIsSnoozedToday(this, task),
           });
           return result.text;
         };
@@ -23952,6 +23987,7 @@ class TaskStatusCyclerSuccessorOfferCloseIntegrationMixin {
           dependencySnapshotAvailable: options.dependencySnapshotAvailable === true,
           markUnblockedLine: options.markUnblockedLine,
           hasLiveLink: successorOfferCloseLiveLinkCheck(options.dailyAfter || [], options.dailyPath),
+          isSnoozedToday: (task) => projectRecoveryTaskIsSnoozedToday(this, task),
         },
       });
       if (model && numberedReqGroups.length) {
@@ -24329,6 +24365,7 @@ class TaskStatusCyclerSuccessorOfferCloseIntegrationMixin {
       dependencySnapshotAvailable: options.dependencySnapshotAvailable === true,
       markUnblockedLine: options.markUnblockedLine,
       hasLiveLink: successorOfferCloseLiveLinkCheck(dailyLines, options.dailyPath),
+      isSnoozedToday: (task) => projectRecoveryTaskIsSnoozedToday(this, task),
     };
     try {
       return await this.applyOfferClosesNow({
@@ -24547,6 +24584,7 @@ class TaskStatusCyclerSuccessorOfferCloseApiMixin {
         markUnblockedLine,
         newTaskKeys: new Set(),
         hasLiveLink: null,
+        isSnoozedToday: (task) => projectRecoveryTaskIsSnoozedToday(this, task),
         liveKeys: new Set(),
       }, capabilities);
     } catch (_error) {
@@ -24741,6 +24779,7 @@ class TaskStatusCyclerSuccessorOfferCloseApiMixin {
           hasLiveLink: dailyPath
             ? successorOfferCloseLiveLinkCheck(dailyLines, dailyPath)
             : null,
+          isSnoozedToday: (task) => projectRecoveryTaskIsSnoozedToday(this, task),
         },
         cache,
         capabilities,

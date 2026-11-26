@@ -110,6 +110,9 @@ class BlockIdPromptPomodoroLinksMixin {
           }
           return;
         }
+        if (linked === "snoozed") {
+          source.snoozedPresence = true;
+        }
       }
 
       // The route picker is the one constant first step of the link gesture:
@@ -130,6 +133,9 @@ class BlockIdPromptPomodoroLinksMixin {
         return;
       }
       source.inboxRouteGate = inboxRouteGate;
+      if (task.existingId && await this.consumePomodoroTaskLinkBlock(source, task.existingId)) {
+        return;
+      }
       const pomodoroTarget = await this.choosePomodoroLinkTarget(source);
       if (!pomodoroTarget) {
         return;
@@ -582,15 +588,19 @@ class BlockIdPromptPomodoroLinksMixin {
     let taskFile = this.app && this.app.vault
       ? this.resolveTaskFile(taskSnapshot && taskSnapshot.path ? taskSnapshot.path : source.sourcePath)
       : null;
-    if (taskFile) {
+    if (taskFile && source.blockConsumptionChecked !== true) {
       if (await this.consumeBlockedTaskPomodoroLink(source, taskFile, {
         targetPath: taskFile.path,
         targetLine: taskLine,
         targetLineText: currentLine,
         targetContent: taskContent,
+        snoozedCleanup: source.snoozedRow || source.snoozedPresence
+          ? { blockId: id, targetPath: taskFile.path, targetLine: taskLine, row: source.snoozedRow || null }
+          : null,
       })) {
         return false;
       }
+      source.blockConsumptionChecked = true;
     }
 
     const dailyFile = this.resolveTodayDailyFile();

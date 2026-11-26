@@ -183,6 +183,7 @@ class TaskStatusCyclerSuccessorOfferCloseApiMixin {
         markUnblockedLine,
         newTaskKeys: new Set(),
         hasLiveLink: null,
+        isSnoozedToday: (task) => projectRecoveryTaskIsSnoozedToday(this, task),
         liveKeys: new Set(),
       }, capabilities);
     } catch (_error) {
@@ -377,6 +378,7 @@ class TaskStatusCyclerSuccessorOfferCloseApiMixin {
           hasLiveLink: dailyPath
             ? successorOfferCloseLiveLinkCheck(dailyLines, dailyPath)
             : null,
+          isSnoozedToday: (task) => projectRecoveryTaskIsSnoozedToday(this, task),
         },
         cache,
         capabilities,

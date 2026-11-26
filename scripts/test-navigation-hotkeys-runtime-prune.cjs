@@ -96,6 +96,13 @@ test("runtime: a future scheduled write prunes the task's live link from today's
     "",
     "- [ ] Current (0900-0930)",
     "  - [[Tasks#^ship]]",
+    "",
+    "## Snoozed",
+    "",
+    "- **1530** [[Tasks#^ship]]",
+    "",
+    "## Later",
+    "keep outside the cleaned sections",
   ].join("\n");
   const contents = new Map([
     [sourceFile.path, line],
@@ -127,10 +134,9 @@ test("runtime: a future scheduled write prunes the task's live link from today's
     true,
   );
   assert.match(editor.content, /\[\?\]/);
-  assert.equal(
-    contents.get(dailyFile.path),
-    "## Pomodoros",
-  );
+  assert.match(contents.get(dailyFile.path), /^## Pomodoros/m);
+  assert.match(contents.get(dailyFile.path), /^## Later\nkeep outside the cleaned sections$/m);
+  assert.doesNotMatch(contents.get(dailyFile.path), /## Snoozed|- \*\*1530\*\*|\[\[Tasks#\^ship\]\]/);
   assert.match(notices.at(-1), /removed 1 Pomodoro link/);
 });
 

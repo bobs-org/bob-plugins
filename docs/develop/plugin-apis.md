@@ -62,6 +62,8 @@ current daily-note cache, `plannedKeys()` returns canonical identity keys,
 `null`, and `ready(now?)` reports cache readiness. These methods never write
 notes. On desktop, Ledger Tools asks `bob snooze wake -q -f json` once per
 eligible minute; Bob alone performs the wake mutation.
+A successful wake into an unnamed Pomodoro still shows the single-task Ready
+now Notice, with the destination-name segment omitted.
 
 | Namespace | Version | Purpose |
 | --- | ---: | --- |

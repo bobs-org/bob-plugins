@@ -649,6 +649,9 @@ function planSuccessors(options = {}) {
       notePaths,
       closingEntry,
       hasLiveLink,
+      isSnoozedToday: typeof options.isSnoozedToday === "function"
+        ? options.isSnoozedToday
+        : () => false,
       projectOffers: extra.projectOffers || [],
       foldedByProject: folded,
       projectHeaders: extra.projectHeaders || new Map(),

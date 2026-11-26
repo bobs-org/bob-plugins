@@ -283,13 +283,23 @@ test("task move planning migrates identities and links across every affected not
     "![[Source#^one|Embedded alias]]",
     "[Second](Source.md#^two)",
   ].join("\n");
+  const dailyPath = "2026/20261008.md";
+  const daily = [
+    "## Snoozed",
+    "",
+    "- **1530** [[Source#^one]]",
+    "  - keep the authored row notes",
+    "",
+    "## Later",
+    "keep outside the row",
+  ].join("\n");
   const discovery = helpers.discoverMovableObsidianTaskTargets(source, 0, 1);
   const plan = helpers.planTaskMoveAcrossFiles({
     sourcePath: "Source.md",
     destinationPath: "Projects/Dest.md",
     sourceContent: source,
     destinationContent: destination,
-    otherContents: new Map([["Refs.md", refs]]),
+    otherContents: new Map([["Refs.md", refs], [dailyPath, daily]]),
     targets: discovery.targets,
   });
   assert.equal(plan.valid, true, plan.error);
@@ -320,6 +330,16 @@ test("task move planning migrates identities and links across every affected not
   assert.match(nextRefs, /dependsOn:: Projects__Dest__one/);
   assert.match(nextRefs, /!\[\[Projects\/Dest#\^one\|Embedded alias\]\]/);
   assert.match(nextRefs, /\(Projects\/Dest\.md#\^two\)/);
+
+  assert.equal(plan.changes.get(dailyPath).after, [
+    "## Snoozed",
+    "",
+    "- **1530** [[Projects/Dest#^one]]",
+    "  - keep the authored row notes",
+    "",
+    "## Later",
+    "keep outside the row",
+  ].join("\n"));
 
   assert.equal(
     nextDestination.split("\n")[plan.destinationLine],
@@ -1302,6 +1322,81 @@ test("runtime task move groups open-editor source and destination changes", asyn
   assert.match(destinationEditor.content, /#task Move \[id:: Dest__move\] \^move/);
   assert.deepEqual(sourceEditor.cursor, { line: 0, ch: 3 });
   assert.match(notices.at(-1), /Moved 1 task to Dest/);
+});
+
+test("runtime move into a blocked project removes its live and Snoozed rows, preserving the next section", async () => {
+  notices.length = 0;
+  const today = new Date();
+  const year = String(today.getFullYear()).padStart(4, "0");
+  const month = String(today.getMonth() + 1).padStart(2, "0");
+  const day = String(today.getDate()).padStart(2, "0");
+  const dailyPath = `${year}/${year}${month}${day}.md`;
+  const sourceFile = { path: "Source.md", basename: "Source", extension: "md" };
+  const destinationFile = { path: "Projects/Blocked.md", basename: "Blocked", extension: "md" };
+  const dailyFile = { path: dailyPath, basename: `${year}${month}${day}`, extension: "md" };
+  const sourceContent = "- [ ] #task Move this ^move";
+  const destinationContent = [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    "---",
+    "- [?] #task #prj Waiting [scheduled::2099-12-31] ^prj",
+    "## Tasks",
+  ].join("\n");
+  const dailyContent = [
+    "## Pomodoros",
+    "",
+    "- [ ] Current (0900-0930)",
+    "  - [[Source#^move]]",
+    "",
+    "## Snoozed",
+    "",
+    "- **1530** [[Source#^move]]",
+    "  - keep this note",
+    "",
+    "## Later",
+    "keep outside the cleaned sections",
+  ].join("\n");
+  const sourceEditor = new TransactionEditor(sourceContent, { line: 0, ch: 4 });
+  const contents = new Map([
+    [sourceFile.path, sourceContent],
+    [destinationFile.path, destinationContent],
+    [dailyPath, dailyContent],
+  ]);
+  const files = [sourceFile, destinationFile, dailyFile];
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    metadataCache: { getFileCache: () => null },
+    vault: {
+      getMarkdownFiles: () => files,
+      getAbstractFileByPath: (path) => files.find((file) => file.path === path) || null,
+      cachedRead: async (file) => contents.get(file.path),
+      process: async (file, transform) => {
+        contents.set(file.path, transform(contents.get(file.path)));
+      },
+    },
+    workspace: { getLeavesOfType: () => [{ view: { file: sourceFile, editor: sourceEditor } }] },
+  };
+  plugin.getActiveMarkdownView = () => ({ file: sourceFile, editor: sourceEditor });
+  plugin.getOpenMarkdownEditorForPath = (path) => path === sourceFile.path ? sourceEditor : null;
+  plugin.focusTaskMoveDestination = async () => true;
+  const discovery = helpers.discoverMovableObsidianTaskTargets(sourceContent, 0, 0);
+  const session = {
+    sourceFile,
+    sourcePath: sourceFile.path,
+    editor: sourceEditor,
+    sourceContent,
+    cursor: { line: 0, ch: 4 },
+    scroll: null,
+    discovery,
+  };
+
+  assert.equal(await plugin.commitTaskMoveSession(session, { file: destinationFile }), true);
+
+  assert.doesNotMatch(sourceEditor.content, /#task Move this/);
+  assert.match(contents.get(destinationFile.path), /#task Move this.*#prj_is_blocked/);
+  assert.match(contents.get(dailyPath), /^## Later\nkeep outside the cleaned sections$/m);
+  assert.doesNotMatch(contents.get(dailyPath), /## Snoozed|- \*\*1530\*\*|\[\[.*#\^move\]\]/);
 });
 
 test("Ctrl+Shift+M runtime move preserves bracket and parenthesis theme fields", async () => {

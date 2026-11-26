@@ -132,6 +132,7 @@ function makePlannedApp({ files, targets, triggers, tasks }) {
     },
     metadataCache: {
       on: () => ({}),
+      getFileCache: () => null,
       getFirstLinkpathDest: (target) =>
         targets && Object.hasOwn(targets, target)
           ? { path: targets[target] }
@@ -684,6 +685,59 @@ test("api shape exposes additive snoozed namespace", () => {
   });
 });
 
+test("snoozed cache uses structural Event Task detection", () => {
+  const dailyPath = "2026/20261117.md";
+  const snoozedContent = "## Snoozed\n- **1530** [[Projects/Plan#^work]]\n";
+  const projectTask = {
+    ...plannedTask({ taskPath: "Projects/Plan.md", blockId: "work", description: "MEET launch planning" }),
+    originalMarkdown: "- [ ] #task MEET launch planning ^work",
+  };
+  const projectInput = helpers.snoozedBuildClassifyInput({
+    content: snoozedContent,
+    dailyPath,
+    tasks: [projectTask],
+    resolve: () => ({ path: "Projects/Plan.md" }),
+    todayKeySet: new Set(),
+    clock: CLOCK,
+    zone: "UTC",
+    metadataCache: { getFileCache: () => null },
+    vault: { getAbstractFileByPath: (filePath) => ({ path: filePath }) },
+  });
+  assert.equal(projectInput.rows[0].is_event, false, "a MEET word in a project note is ordinary task text");
+  const projectClassified = helpers.snoozeModel.classifyRows(projectInput.classifierInput);
+  assert.notEqual(projectClassified.rows[0].state, "event_task");
+  assert.deepEqual(projectClassified.planned, ["Projects/Plan.md#^work"]);
+
+  const eventLine = "- [ ] **1300-1330** Plan the launch ^event";
+  const eventContent = [
+    "## Events",
+    eventLine,
+    "",
+    "## Snoozed",
+    "- **1530** [[#^event]]",
+  ].join("\n");
+  const eventTask = {
+    ...plannedTask({ taskPath: dailyPath, blockId: "event", description: "Plan the launch" }),
+    lineNumber: 1,
+    originalMarkdown: eventLine,
+  };
+  const eventInput = helpers.snoozedBuildClassifyInput({
+    content: eventContent,
+    dailyPath,
+    tasks: [eventTask],
+    resolve: () => ({ path: dailyPath }),
+    todayKeySet: new Set(),
+    clock: CLOCK,
+    zone: "UTC",
+    metadataCache: { getFileCache: () => null },
+    vault: { getAbstractFileByPath: (filePath) => ({ path: filePath }) },
+  });
+  assert.equal(eventInput.rows[0].is_event, true, "a valid Events-section row needs no MEET marker");
+  const eventClassified = helpers.snoozeModel.classifyRows(eventInput.classifierInput);
+  assert.equal(eventClassified.rows[0].state, "event_task");
+  assert.deepEqual(eventClassified.planned, []);
+});
+
 function wakeReport(now, { woken = [], notified = "none", status = woken.length ? "woke" : "nothing_due" } = {}) {
   return {
     schema_version: 1,
@@ -748,6 +802,71 @@ test("snooze wake report decoder validates the whole public envelope", () => {
     assert.equal(helpers.snoozeWakeDecodeReport(JSON.stringify(bad), "").ok, false);
   }
   assert.equal(helpers.snoozeWakeDecodeReport("not json", "").code, "bad-json");
+});
+
+test("snooze wake accepts unnamed destinations and the CLI's slim deferred envelope", async () => {
+  const now = new Date(2026, 10, 17, 15, 31);
+  const untypedRow = {
+    route: "jobs.md",
+    block_id: "job",
+    title: "Review the launch plan",
+    target: "1100",
+    woke_at: "12:00",
+    destination: { created: false, line: 4, name: null },
+    over_cap: false,
+  };
+  const woke = wakeReport(now, { woken: [untypedRow] });
+  assert.deepEqual(
+    helpers.snoozeWakeDecodeReport(JSON.stringify(woke), ""),
+    { ok: true, report: woke },
+  );
+  assert.equal(
+    helpers.snoozeWakeNoticeText(woke),
+    "⏰ Ready now: Review the launch plan · woke 12:00",
+  );
+
+  const deferred = {
+    schema_version: 1,
+    date: "2026-11-17",
+    now: now.toISOString(),
+    status: "deferred",
+    daily_file: "2026/20261117.md",
+    notified: "none",
+    wake_id: "18eba710ff76f2a0",
+  };
+  assert.deepEqual(
+    helpers.snoozeWakeDecodeReport(JSON.stringify(deferred), ""),
+    { ok: true, report: deferred },
+  );
+  for (const invalid of [
+    { ...deferred, pending: null },
+    { ...deferred, plan: { count: "1", cap: 10, over: false } },
+  ]) {
+    assert.equal(helpers.snoozeWakeDecodeReport(JSON.stringify(invalid), "").ok, false);
+  }
+
+  const plugin = wakerAt(now, deferred);
+  let attempts = 0;
+  let refreshes = 0;
+  const notices = [];
+  plugin.snoozeWakeSpawn = async () => {
+    attempts += 1;
+    const report = attempts === 1
+      ? deferred
+      : { ...deferred, date: "2026-11-17", now: new Date(now.getTime() + 60_000).toISOString() };
+    return { ok: true, report };
+  };
+  plugin.refreshSnoozedCacheFromDaily = async () => { refreshes += 1; };
+  plugin.snoozeWakeNotice = (report) => notices.push(report);
+  assert.equal(await plugin.snoozeWakeTick(now), true);
+  assert.equal(plugin.snoozeWakeDisabled, false);
+  assert.equal(refreshes, 0, "deferred does not refresh the cache");
+  assert.deepEqual(notices, [], "deferred does not show a Notice");
+  const nextMinute = new Date(now.getTime() + 60_000);
+  plugin.snoozedCache.nowMinutes = helpers.snoozedNowMinutesFromClock(nextMinute);
+  plugin.snoozeWakeNow = () => nextMinute;
+  assert.equal(await plugin.snoozeWakeTick(nextMinute), true, "deferred retries next minute");
+  assert.equal(attempts, 2);
 });
 
 test("minute waker is desktop-only, single-flight, and notices only its own unnotified wake", async () => {

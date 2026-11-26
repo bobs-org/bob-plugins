@@ -739,6 +739,7 @@ function projectPullInRewriteLine(before, rank, options = {}) {
       today: options.today,
       isDailyNote: options.isDailyNote,
       isToday: options.isToday,
+      isSnoozedToday: options.isSnoozedToday,
     });
     return rewritten == null ? stripped : rewritten;
   }

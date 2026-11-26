@@ -5,6 +5,8 @@ const {
   NavigationHotkeysPlugin,
   helpers,
   TransactionEditor,
+  createBulletPropertyPickerHarness,
+  createPriorityPickerConfig,
 } = require("./navigation-hotkeys-harness.cjs");
 
 function todayDailyPath() {
@@ -82,6 +84,14 @@ function makeVaultApp(notes, openEditors) {
     },
     plugins: { plugins: {} },
   };
+}
+
+async function waitUntil(predicate, message) {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.fail(message || "quick-roll action did not settle");
 }
 
 test("snoozed cleanup: removes the row when the Pomodoros section is missing", () => {
@@ -337,6 +347,50 @@ test("Alt+N on a Snoozed row releases the separate-note task and prunes both lin
   assert.ok(!after.includes("[[Tasks#^abc]]"));
   assert.ok(after.includes("## Pomodoros"));
   assert.ok(!after.includes("## Snoozed"));
+});
+
+test("Alt+P roll removes a Snoozed row in the same write and preserves later sections", async () => {
+  notices.length = 0;
+  const dailyPath = todayDailyPath();
+  const taskFile = { path: "Tasks.md", basename: "Tasks", extension: "md" };
+  const baseDate = new Date();
+  const taskLine = `- [ ] #task Roll later [priority:: high] [scheduled:: ${helpers.formatBulletPropertyDate(baseDate)}] ^abc`;
+  const dailyContent = [
+    "## Snoozed",
+    "",
+    "- **1530** [[Tasks#^abc]]",
+    "  - keep these authored notes with the row",
+    "",
+    "## Later",
+    "keep outside the cleaned section",
+  ].join("\n");
+  const notes = { [taskFile.path]: taskLine, [dailyPath]: dailyContent };
+  const dailyEditor = new TransactionEditor(dailyContent);
+  const app = makeVaultApp(notes, new Map([[dailyPath, dailyEditor]]));
+  const harness = createBulletPropertyPickerHarness({
+    app,
+    content: taskLine,
+    file: taskFile,
+    baseDate,
+    random: () => 0,
+    config: createPriorityPickerConfig(),
+  });
+
+  harness.plugin.rollByRecommendation(harness.editor, {
+    config: harness.config,
+    baseDate,
+    random: () => 0,
+    now: baseDate,
+  });
+  await waitUntil(
+    () => !harness.plugin.activeBulletPropertyPicker,
+    "Alt+P roll did not finish",
+  );
+
+  assert.match(harness.editor.getValue(), /\[scheduled:: \d{4}-\d{2}-\d{2}\]/);
+  const after = String(dailyEditor.getValue());
+  assert.doesNotMatch(after, /## Snoozed|\*\*1530\*\*|keep these authored notes/);
+  assert.match(after, /^## Later\nkeep outside the cleaned section$/m);
 });
 
 test("Alt+N on a Snoozed row folds the release when the task lives in the daily note", async () => {

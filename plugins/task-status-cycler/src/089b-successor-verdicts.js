@@ -81,6 +81,9 @@ function applySuccessorVerdicts(context) {
   const basenameCounts = context.basenameCounts;
   const noteTexts = context.noteTexts || {};
   const hasLiveLink = context.hasLiveLink;
+  const isSnoozedToday = typeof context.isSnoozedToday === "function"
+    ? context.isSnoozedToday
+    : () => false;
   const foldedByProject = context.foldedByProject instanceof Map ? context.foldedByProject : new Map();
   const projectHeaders = context.projectHeaders instanceof Map ? context.projectHeaders : new Map();
 
@@ -210,6 +213,7 @@ function applySuccessorVerdicts(context) {
           today,
           isDailyNote: isDailyNotePath(task.path),
           isToday: typeof hasLiveLink === "function" ? hasLiveLink(task) : false,
+          isSnoozedToday: () => isSnoozedToday(task) === true,
         });
       } else {
         after = rewriteRecoveredTaskLine(before, rank, {
@@ -217,6 +221,7 @@ function applySuccessorVerdicts(context) {
           today,
           isDailyNote: isDailyNotePath(task.path),
           isToday: typeof hasLiveLink === "function" ? hasLiveLink(task) : false,
+          isSnoozedToday: () => isSnoozedToday(task) === true,
         });
       }
     }
@@ -431,6 +436,7 @@ function applySuccessorVerdicts(context) {
             today,
             isDailyNote: isDailyNotePath(task.path),
             isToday: typeof hasLiveLink === "function" ? hasLiveLink(task) : false,
+            isSnoozedToday: () => isSnoozedToday(task) === true,
           });
         } else {
           after = rewriteRecoveredTaskLine(before, rank, {
@@ -438,6 +444,7 @@ function applySuccessorVerdicts(context) {
             today,
             isDailyNote: isDailyNotePath(task.path),
             isToday: typeof hasLiveLink === "function" ? hasLiveLink(task) : false,
+            isSnoozedToday: () => isSnoozedToday(task) === true,
           });
         }
       }
@@ -598,6 +605,7 @@ function applySuccessorVerdicts(context) {
           today,
           isDailyNote: isDailyNotePath(task.path),
           isToday: true,
+          isSnoozedToday: () => isSnoozedToday(task) === true,
         });
         if (raised == null) {
           raised = before;

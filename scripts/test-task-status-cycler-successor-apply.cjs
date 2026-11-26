@@ -5,8 +5,9 @@ const navHarness = require("./navigation-hotkeys-harness.cjs");
 
 const TODAY = "2026-11-05";
 
-function markUnblockedLine(line, { today }) {
+function markUnblockedLine(line, { today, isToday, isSnoozedToday }) {
   const source = String(line || "");
+  if (isToday === true || isSnoozedToday === true) return source;
   const fresh = source.match(/\[fresh::\s*(\d{4}-\d{2}-\d{2})\]/);
   if (!fresh) return source;
   const scheduled = source.match(/\[scheduled::\s*(\d{4}-\d{2}-\d{2})\]/);
@@ -518,6 +519,48 @@ test("Undo checks every file before restoring any of them", async () => {
   assert.match(harness.getSource("Root.md"), /^- \[x\]/, "the earlier file was not partially undone");
   assert.match(harness.getSource("Deps.md"), /\[unblocked:: 2026-11-05\]/);
   assert.match(harness.getSource("Deps.md"), /later edit/);
+});
+
+test("successor offer-close recovery skips [unblocked::] for a snoozed dependent", async () => {
+  const root = "- [ ] #task Root [id:: root] ^root\n";
+  const dependent = "- [?] #task Waiting [fresh:: 2026-11-01] [dependsOn:: root] [id:: waiting] ^waiting\n";
+  const { harness, plugin } = setupPlugin({ "Root.md": root, "Deps.md": dependent });
+  const snoozedCalls = [];
+  harness.app.plugins.plugins["bob-ledger-tools"].api.isSnoozedToday = (task) => {
+    snoozedCalls.push(task);
+    return task && task.path === "Deps.md" && task.blockId === "waiting";
+  };
+  const markScopes = [];
+  const markWithScopes = (line, options = {}) => {
+    markScopes.push(options);
+    return markUnblockedLine(line, options);
+  };
+  const { offersByKey } = offersFor(root, "Root.md");
+  const expectedLines = expectedFor(root, offersByKey);
+  const noteTexts = new Map([["Root.md", root], ["Deps.md", dependent]]);
+  const context = {
+    today: TODAY,
+    dailyBefore: [],
+    dailyAfter: [],
+    dailyPath: "",
+    dependencySnapshotAvailable: true,
+    markUnblockedLine: markWithScopes,
+    isSnoozedToday: (task) => harness.app.plugins.plugins["bob-ledger-tools"].api.isSnoozedToday(task),
+    noteTexts,
+  };
+  const result = await runQueued(plugin, () => plugin.applyOfferClosesNow({
+    closes: [{ key: "Root.md#^root", outcome: "done" }],
+    offers: [...offersByKey.values()],
+    offersByKey,
+    expectedLines,
+    noteTexts,
+    context,
+  }));
+  assert.equal(result.offer_closes.length, 1);
+  assert.ok(snoozedCalls.some((task) => task.path === "Deps.md" && task.blockId === "waiting"), JSON.stringify(snoozedCalls));
+  assert.ok(markScopes.some((scope) => scope.isSnoozedToday === true), JSON.stringify(markScopes));
+  assert.match(harness.getSource("Deps.md"), /^- \[ \] #task Waiting \[fresh:: 2026-11-01\]/m);
+  assert.doesNotMatch(harness.getSource("Deps.md"), /\[unblocked::/);
 });
 
 test("a failed dependent write reaches the rich notice with only successful writes in Undo", async () => {

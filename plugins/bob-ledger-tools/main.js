@@ -63907,6 +63907,113 @@ class BobLedgerToolsFreshnessStatusMixin {
   // paths. Decoration builds reuse it and never touch the filesystem.
 
 }
+// ---- src/240v-plugin-ref-card-vocabulary.js ----
+// Shared ref vocabulary (bob-cli-qp ref-kit): one vocabulary feeds both the
+// Ref Card and the Reading Board. It holds the word, the board emoji, and
+// the card's Lucide icon per `ref_type`. The board's seven words and emoji
+// stay byte-identical; the other kinds gain their words. Every icon exists
+// in Obsidian's bundled Lucide set; any missing icon falls back to
+// `bookmark`. Pure: no DOM, no spawns, never throws.
+const REF_CARD_KIND_VOCABULARY = Object.freeze({
+  papers: Object.freeze({ word: "Paper", emoji: "📄", icon: "graduation-cap" }),
+  blogs: Object.freeze({ word: "Blog", emoji: "📰", icon: "newspaper" }),
+  chat: Object.freeze({ word: "Chat", emoji: "💬", icon: "bot" }),
+  ai: Object.freeze({ word: "AI", emoji: "🤖", icon: "sparkles" }),
+  docs: Object.freeze({ word: "Docs", emoji: "📚", icon: "book-open-text" }),
+  books: Object.freeze({ word: "Book", emoji: "📕", icon: "book" }),
+  slides: Object.freeze({ word: "Slides", emoji: "🖼️", icon: "presentation" }),
+  code: Object.freeze({ word: "Code", emoji: "🧩", icon: "code-xml" }),
+  notes: Object.freeze({ word: "Note", emoji: "🗒️", icon: "file-pen" }),
+  forums: Object.freeze({ word: "Forum", emoji: "🗣️", icon: "messages-square" }),
+  podcasts: Object.freeze({ word: "Podcast", emoji: "🎙️", icon: "podcast" }),
+  meetings: Object.freeze({ word: "Meeting", emoji: "🤝", icon: "users" }),
+  zorg: Object.freeze({ word: "Zorg", emoji: "🗄️", icon: "archive" }),
+});
+
+const REF_CARD_KIND_FALLBACK = Object.freeze({ word: "Ref", emoji: "🔖", icon: "bookmark" });
+
+function refCardKindKey(value) {
+  try {
+    const text = String(value === null || value === undefined ? "" : value).trim().toLowerCase();
+    return text || "";
+  } catch (_) {
+    return "";
+  }
+}
+
+function refCardKindEntry(refType) {
+  try {
+    const key = refCardKindKey(refType);
+    if (key && Object.prototype.hasOwnProperty.call(REF_CARD_KIND_VOCABULARY, key)) {
+      return REF_CARD_KIND_VOCABULARY[key];
+    }
+    if (!key || key === "other" || key === "none") return REF_CARD_KIND_FALLBACK;
+    return Object.freeze({
+      word: key.split(/[_\s-]+/).filter(Boolean).map((word) => word[0].toUpperCase() + word.slice(1)).join(" ") || "Ref",
+      emoji: REF_CARD_KIND_FALLBACK.emoji,
+      icon: REF_CARD_KIND_FALLBACK.icon,
+    });
+  } catch (_) {
+    return REF_CARD_KIND_FALLBACK;
+  }
+}
+
+function refCardKindWord(refType) {
+  try {
+    return refCardKindEntry(refType).word || "Ref";
+  } catch (_) {
+    return "Ref";
+  }
+}
+
+function refCardKindEmoji(refType) {
+  try {
+    return refCardKindEntry(refType).emoji || REF_CARD_KIND_FALLBACK.emoji;
+  } catch (_) {
+    return REF_CARD_KIND_FALLBACK.emoji;
+  }
+}
+
+function refCardKindIcon(refType) {
+  try {
+    return refCardKindEntry(refType).icon || REF_CARD_KIND_FALLBACK.icon;
+  } catch (_) {
+    return REF_CARD_KIND_FALLBACK.icon;
+  }
+}
+
+// Board-shaped entry for one `ref_type`: { icon, label } with the board's
+// emoji and word. Unknown kinds humanize the dir name with the bookmark.
+function refCardBoardKindEntry(refType) {
+  try {
+    const entry = refCardKindEntry(refType);
+    return Object.freeze({ icon: entry.emoji, label: entry.word });
+  } catch (_) {
+    return Object.freeze({ icon: REF_CARD_KIND_FALLBACK.emoji, label: REF_CARD_KIND_FALLBACK.word });
+  }
+}
+
+// Lane words shared by the card and the board (the Reading Board's words).
+const REF_CARD_LANE_WORDS = Object.freeze({
+  reading: "Reading",
+  next: "Next",
+  ready: "Ready",
+  snoozed: "Snoozed",
+  read: "Read",
+  dropped: "Dropped",
+  legacy: "Legacy",
+});
+
+function refCardLaneWord(lane) {
+  try {
+    const key = refCardKindKey(lane);
+    if (key && Object.prototype.hasOwnProperty.call(REF_CARD_LANE_WORDS, key)) return REF_CARD_LANE_WORDS[key];
+    if (!key) return "";
+    return key.split(/[_\s-]+/).filter(Boolean).map((word) => word[0].toUpperCase() + word.slice(1)).join(" ");
+  } catch (_) {
+    return "";
+  }
+}
 // ---- src/241-plugin-reading-board-data.js ----
 // --- Reading Board data path (bob-cli-99.2) -------------------------------
 // Bob owns the reading queue and all blocking rules. This fragment only
@@ -65567,6 +65674,54 @@ class BobLedgerToolsNotebookDataMixin {
     this.notebookReportError = null;
     this.notebookSyncBusy = false;
     this.notebookSyncError = null;
+  }
+}
+// ---- src/241a-plugin-ref-library-report-service.js ----
+// Shared ref-library report service (bob-cli-qp ref-service): one lazily
+// subscribed, stale-while-revalidate `bob ref list -A -R all -f json`
+// snapshot indexed by path and shared by every mounted card. Narrow,
+// debounced revalidation triggers; never spawns from paint. Later phases
+// fill the lifecycle; this stub names the argv, decode, and accessors.
+const REF_LIBRARY_REPORT_ARGV = Object.freeze(["ref", "list", "-A", "-R", "all", "-f", "json"]);
+const REF_LIBRARY_REPORT_SCHEMA_VERSION = 1;
+const REF_LIBRARY_REPORT_REVALIDATE_DEBOUNCE_MS = 1500;
+
+function refLibraryReportArgs() {
+  return REF_LIBRARY_REPORT_ARGV.slice();
+}
+
+function refLibraryReportRow(snapshot, path) {
+  try {
+    if (!snapshot || typeof snapshot !== "object") return null;
+    const rows = snapshot.rows;
+    const key = refNoteCardPath(path);
+    if (rows instanceof Map) return rows.get(key) ?? null;
+    if (rows && typeof rows === "object" && !Array.isArray(rows)) {
+      return Object.prototype.hasOwnProperty.call(rows, key) ? rows[key] : null;
+    }
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function refLibraryReportDecode(payload) {
+  try {
+    const data = payload && typeof payload === "object" ? payload : {};
+    if (data.schema_version !== REF_LIBRARY_REPORT_SCHEMA_VERSION) return null;
+    const rows = new Map();
+    return Object.freeze({ rows, coverage: data.coverage ?? null, generatedAt: null });
+  } catch (_) {
+    return null;
+  }
+}
+
+function apiRefLibrarySubscribe(subscriber) {
+  try {
+    if (typeof subscriber !== "function") return () => {};
+    return () => {};
+  } catch (_) {
+    return () => {};
   }
 }
 // ---- src/241l-plugin-album-data.js ----
@@ -87268,7 +87423,7 @@ function propertyCardTitleSlotStats(scope) {
 const PROPERTY_CARD_KIND_ATTR = "data-card-kind";
 const PROPERTY_CARD_KINDS = Object.freeze([
   "album", "record", "day", "week", "quarter", "year", "bank", "area", "project",
-  "notebook", "prose",
+  "notebook", "prose", "ref",
 ]);
 
 const PROPERTY_CARD_SPECIES = Object.freeze({
@@ -87283,6 +87438,7 @@ const PROPERTY_CARD_SPECIES = Object.freeze({
   project: Object.freeze({ kind: "project", word: "Project", tile: "pennant", icon: "target", band: "", temporal: false, foldDefault: true }),
   notebook: Object.freeze({ kind: "notebook", word: "Notebook", tile: "spine", icon: "notebook-tabs", band: "", temporal: false, foldDefault: true }),
   prose: Object.freeze({ kind: "prose", word: "Prose", tile: "folio", icon: "pilcrow", band: "", temporal: false, foldDefault: false }),
+  ref: Object.freeze({ kind: "ref", word: "Ref", tile: "ribbon", icon: "bookmark", band: "", temporal: false, foldDefault: true }),
 });
 
 // Frozen descriptor { kind, word, tile, icon, band, temporal, foldDefault? }
@@ -87405,7 +87561,9 @@ function propertyCardKitLink(doc, className, target, unresolved) {
 // shows a band (weekday or WEEK/QTR/YEAR) over a large value. A folio tile
 // (prose) shows a value — the title initial — else the species icon, so the
 // prose initial reads as a species in grayscale. A spine tile (notebook)
-// needs no extra node: CSS paints its bound edge.
+// needs no extra node: CSS paints its bound edge. A ribbon tile (ref) shows
+// the kind's Lucide icon (or a per-card override) inside a notched bookmark
+// so it stays distinct from every other tile in grayscale and forced-colors.
 function propertyCardBuildGlyphTile(doc, spec = {}) {
   try {
     if (!propertyCardKitDocOk(doc)) return null;
@@ -87487,7 +87645,9 @@ function propertyCardKitKickerPart(doc, part, onLink) {
 // { element, tile, kicker, heading, pill, subtitle, actions } or null.
 // spec: { kind, title, kicker = [{ text, target?, unresolved? }],
 //         pill?: { text, tone: "solid" | "outline" }, subtitle?,
-//         tile = {}, onLink?(target, event) }.
+//         tile = {}, icon?, onLink?(target, event) }.
+// A top-level icon overrides the species icon (the ref card uses it for its
+// per-kind vocabulary icon); tile.icon wins when both are present.
 // The heading is a div[role=heading][aria-level=1]; the actions slot is
 // always present (empty) so adapters can append buttons without reflow.
 function propertyCardBuildTitleBlock(doc, spec = {}) {
@@ -87501,7 +87661,8 @@ function propertyCardBuildTitleBlock(doc, spec = {}) {
     element.setAttribute(PROPERTY_CARD_KIND_ATTR, species.kind);
 
     const tileSpec = spec.tile && typeof spec.tile === "object" ? spec.tile : {};
-    const tile = propertyCardBuildGlyphTile(doc, { ...tileSpec, kind: species.kind });
+    const tileIcon = propertyCardKitText(tileSpec.icon).trim() || propertyCardKitText(spec.icon).trim();
+    const tile = propertyCardBuildGlyphTile(doc, { ...tileSpec, kind: species.kind, icon: tileIcon });
     if (tile) element.appendChild(tile);
 
     const main = propertyCardKitEl(doc, "div", "bob-property-card-title-main");
@@ -89413,10 +89574,10 @@ function propertyCardFormatCreatedStamp(input = {}) {
     ? Object.prototype.hasOwnProperty.call(options, "value") && options.value !== undefined
     : options.present === true;
   if (!present) {
-    // Areas omit the missing stamp; temporal cards already do. Notebook and
-    // prose cards do too (most notebooks carry no created stamp). Projects
+    // Areas omit the missing stamp; temporal cards already do. Notebook,
+    // prose, and ref cards do too (most carry no created stamp). Projects
     // and other non-temporal cards keep "no created date".
-    const silent = temporal || kind === "area" || kind === "notebook" || kind === "prose";
+    const silent = temporal || kind === "area" || kind === "notebook" || kind === "prose" || kind === "ref";
     return { text: silent ? "" : "no created date", tooltip: "", state: "missing", dateOnly: false };
   }
 
@@ -91243,7 +91404,7 @@ function propertyCardFrontmatterCapabilityReady(plugin) {
 // Species-specific contract requirement (bob-cli-pl.9.1.1 / .9.1.2):
 // area/project cards and the bank hub need confirmed `props_contract_v1`
 // evidence for the current bob path. Bank, album, record, temporal,
-// notebook, and prose cards use the generic `props_v1` capability alone.
+// notebook, prose, and ref cards use the generic `props_v1` capability alone.
 function propertyCardFrontmatterContractReady(plugin, kind, path) {
   try {
     if (kind !== "area" && kind !== "project") return true;
@@ -91260,7 +91421,8 @@ function propertyCardFrontmatterMountPath(mount, kind) {
       : kind === "bank" ? "data-bank-setup-source"
         : kind === "area" || kind === "project" ? "data-home-source"
           : kind === "notebook" ? "data-notebook-source"
-            : kind === "prose" ? "data-prose-source" : "data-intention-source";
+            : kind === "prose" ? "data-prose-source"
+              : kind === "ref" ? "data-ref-source" : "data-intention-source";
   try { return String(mount?.getAttribute?.(attr) || "").replace(/\\/g, "/"); } catch (_) { return ""; }
 }
 
@@ -91271,7 +91433,7 @@ function propertyCardFrontmatterRecordEligible(plugin, options = {}) {
     const path = String(options.path || "").replace(/\\/g, "/");
     const kind = options.kind;
     const mount = options.mount;
-    if (!scope || !path || !["album", "record", "day", "week", "quarter", "year", "bank", "area", "project", "notebook", "prose"].includes(kind)) return false;
+    if (!scope || !path || !["album", "record", "day", "week", "quarter", "year", "bank", "area", "project", "notebook", "prose", "ref"].includes(kind)) return false;
     if (options.active && options.active() !== true) return false;
     if (typeof propertyCardDesktop === "function" && propertyCardDesktop() !== true) return false;
     if (propertyCardFrontmatterScopeDenied(scope)) return false;
@@ -91476,7 +91638,7 @@ function propertyCardFrontmatterCoordinatorReconcile(plugin) {
 function propertyCardFrontmatterCoordinatorCapabilityChanged(plugin, status) {
   const released = propertyCardFrontmatterCoordinatorReconcile(plugin);
   if (status === "confirmed" && propertyCardFrontmatterCapabilityReady(plugin)) {
-    for (const method of ["scheduleAlbumHeaderRefresh", "scheduleRecordSheetRefresh", "scheduleIntentionCardRefresh", "scheduleBankSetupRefresh", "scheduleHomeCardRefresh", "scheduleProseNoteCardRefresh"]) {
+    for (const method of ["scheduleAlbumHeaderRefresh", "scheduleRecordSheetRefresh", "scheduleIntentionCardRefresh", "scheduleBankSetupRefresh", "scheduleHomeCardRefresh", "scheduleProseNoteCardRefresh", "scheduleRefNoteCardRefresh"]) {
       try { plugin?.[method]?.(); } catch (_) {}
     }
     try { plugin?.intentionCardHost?.().scheduleRefresh?.(); } catch (_) {}
@@ -92417,11 +92579,11 @@ function propertyCardBuildFoldRow(doc, spec = {}) {
   return { element: button, bodyId };
 }
 // ---- src/240t-plugin-property-card-note-species.js ----
-// Property-card kit (bob-cli-qm kit): notebook and prose species predicates,
-// the precedence function, and the preview gate. Pure: no DOM, no spawns,
-// never throws. Later fragments reuse the normalizer instead of retyping
-// wikilink forms, and the two species phases reuse the precedence function
-// and the gate for their hosts.
+// Property-card kit (bob-cli-qm kit + bob-cli-qp ref-kit): notebook, prose,
+// and ref species predicates, the precedence function, and the preview gate.
+// Pure: no DOM, no spawns, never throws. Later fragments reuse the
+// normalizer instead of retyping wikilink forms, and the species phases
+// reuse the precedence function and the gate for their hosts.
 
 // Type-name normalization. Mirrors albumTypeNames (241l): a scalar, list,
 // quoted scalar, [[wikilink]] (alias and anchor stripped), comma flow list,
@@ -92479,6 +92641,45 @@ function noteCardIsProseKind(frontmatter) {
     const names = noteCardTypeNames(noteCardFrontmatterType(frontmatter));
     if (!names.length) return false;
     return names.every((name) => name === "prose" || name === "article");
+  } catch (_) {
+    return false;
+  }
+}
+
+// Ref species (bob-cli-qp ref-kit): claims a note only when its type is
+// exactly [[ref]] (scalar or a single-item list). Any mixed type mounts no
+// ref card. Path coverage is a separate predicate below.
+function noteCardIsRefKind(frontmatter) {
+  try {
+    const names = noteCardTypeNames(noteCardFrontmatterType(frontmatter));
+    return names.length === 1 && names[0] === "ref";
+  } catch (_) {
+    return false;
+  }
+}
+
+// Ref library coverage (bob-cli-qp ref-kit): the note lives under bob's
+// library coverage (`ref/`), excluding hidden directories, `*.assets/`,
+// `_generated/`, `_templates/`, `_conflicts/`, `ref_history/`, and conflict
+// copies. The root `*_ref.md` hub notes live outside `ref/` and never claim.
+function noteCardIsRefLibraryPath(path) {
+  try {
+    const text = String(noteCardPathText(path) || "").replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/$/, "");
+    if (!text) return false;
+    if (!/^ref\//.test(text)) return false;
+    const segments = text.split("/");
+    for (const segment of segments) {
+      if (!segment) return false;
+      if (segment.startsWith(".")) return false;
+      if (segment === "_generated" || segment === "_templates" || segment === "_conflicts") return false;
+      if (segment === "ref_history") return false;
+      if (/\.assets$/i.test(segment)) return false;
+    }
+    const base = segments[segments.length - 1] || "";
+    if (/\(conflict/i.test(base)) return false;
+    if (/conflicted copy/i.test(base)) return false;
+    if (/\.sync-conflict\./i.test(base)) return false;
+    return true;
   } catch (_) {
     return false;
   }
@@ -92560,10 +92761,11 @@ function noteCardTemporalKind(path, today) {
 }
 
 // One kit function resolves a note's top species in bob's props order:
-// bank path; album; record; area/project; temporal; notebook; prose; none.
-// The bank hub path wins before exclusions (it is itself a type note); every
-// other claim needs a non-excluded path. Existing species keep their own
-// predicates — this function only composes them, and never throws.
+// bank path; album; record; area/project; temporal; notebook; prose; ref;
+// none. The bank hub path wins before exclusions (it is itself a type note);
+// every other claim needs a non-excluded path. Ref additionally needs its
+// library coverage path. Existing species keep their own predicates — this
+// function only composes them, and never throws.
 function propertyCardNoteSpecies(input = {}) {
   try {
     const path = noteCardPathText(input && input.path);
@@ -92582,6 +92784,7 @@ function propertyCardNoteSpecies(input = {}) {
     if (temporal) return temporal;
     if (noteCardIsNotebookKind(frontmatter)) return "notebook";
     if (noteCardIsProseKind(frontmatter)) return "prose";
+    if (noteCardIsRefKind(frontmatter) && noteCardIsRefLibraryPath(path)) return "ref";
     return null;
   } catch (_) {
     return null;
@@ -92655,6 +92858,73 @@ function propertyCardKindLive(plugin, kind) {
       : null;
     if (!kinds) return false;
     return kinds.includes(kind);
+  } catch (_) {
+    return false;
+  }
+}
+// ---- src/240u-plugin-ref-card-preview.js ----
+// Ref preview gate (bob-cli-qp ref-kit): a ref-owned switch keeps Ref Cards
+// off in the live vault until `ref-go-live`. It is `refCardPreview: true` in
+// bob-ledger-tools plugin data, read once at load. It gates the mount, the
+// `==` registration, and every ref UI. It never reads or writes qm's
+// `cardPreviewKinds`, and ref code never calls `propertyCardKindLive`, which
+// qm.7 deletes. A closed gate gives exactly today's rendering: native
+// Properties and the plain H1. Pure: no DOM, no spawns, never throws.
+const REF_CARD_PREVIEW_KEY = "refCardPreview";
+
+function refCardPreviewFromData(data) {
+  try {
+    if (!data || typeof data !== "object" || Array.isArray(data)) return false;
+    return data[REF_CARD_PREVIEW_KEY] === true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function refCardPreviewRemember(plugin, data) {
+  const live = refCardPreviewFromData(data);
+  try {
+    if (plugin && typeof plugin === "object") plugin.refCardPreview = live;
+  } catch (_) {}
+  return live;
+}
+
+async function refCardPreviewLoad(plugin) {
+  if (!plugin || typeof plugin !== "object") return false;
+  if (plugin.refCardPreviewLoaded === true) {
+    return plugin.refCardPreview === true;
+  }
+  if (plugin.refCardPreviewLoadPromise) return plugin.refCardPreviewLoadPromise;
+  const load = (async () => {
+    let stored = null;
+    try {
+      if (plugin.ledgerToolsPluginDataLoaded === true
+        && plugin.ledgerToolsPluginData && typeof plugin.ledgerToolsPluginData === "object") {
+        stored = plugin.ledgerToolsPluginData;
+      } else if (typeof plugin.loadLedgerToolsPluginData === "function") {
+        stored = await plugin.loadLedgerToolsPluginData();
+      } else if (typeof plugin.loadData === "function") {
+        stored = await plugin.loadData();
+      }
+    } catch (_) {
+      stored = null;
+    }
+    const live = refCardPreviewRemember(plugin, stored);
+    plugin.refCardPreviewLoaded = true;
+    return live;
+  })();
+  plugin.refCardPreviewLoadPromise = load;
+  try {
+    return await load;
+  } finally {
+    if (plugin.refCardPreviewLoadPromise === load) plugin.refCardPreviewLoadPromise = null;
+  }
+}
+
+function refCardPreviewLive(plugin) {
+  try {
+    if (!plugin || typeof plugin !== "object") return false;
+    return plugin.refCardPreview === true;
   } catch (_) {
     return false;
   }
@@ -111722,6 +111992,134 @@ class BobLedgerToolsProseNoteCardFootMixin {
 // line, and the expanded outline and findings list with safe jumps. Kit
 // seeds: the outline region marker.
 const PROSE_NOTE_CARD_OUTLINE_SLOT = "prose-outline";
+// ---- src/249q-plugin-ref-note-card-model.js ----
+// Ref Card model (bob-cli-qp ref-card): local identity only. The tile,
+// kicker, title, dek, byline, access chips, and foot paint synchronously
+// from local frontmatter; reading-state facts patch in later through the
+// shared ref-library snapshot. No spawn or write. Later phases fill the
+// regions this stub names.
+const REF_NOTE_CARD_KIND = "ref";
+const REF_NOTE_CARD_MANAGED_KEYS = Object.freeze({
+  id: true,
+  ref_type: true,
+  status: true,
+  parent: true,
+  source_markdown: true,
+  source_pdf: true,
+  source_pdf_sha256: true,
+  pipeline_version: true,
+});
+
+function refNoteCardPath(value) {
+  try {
+    const raw = value && typeof value.path === "string" ? value.path : value;
+    return typeof raw === "string" ? raw.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/$/, "") : "";
+  } catch (_) {
+    return "";
+  }
+}
+
+function refNoteCardStem(path) {
+  try {
+    const normalized = refNoteCardPath(path);
+    const base = normalized.split("/").pop() || "";
+    return base.replace(/\.md$/i, "");
+  } catch (_) {
+    return "";
+  }
+}
+
+function refNoteCardOneLine(value) {
+  if (value === null || value === undefined) return "";
+  try {
+    const line = String(value).split(/\r?\n/, 1)[0].trim();
+    return typeof propertyCardCleanInlineText === "function" ? propertyCardCleanInlineText(line) : line;
+  } catch (_) {
+    return "";
+  }
+}
+
+function refNoteCardTitleParts(frontmatter, path) {
+  try {
+    const fm = frontmatter && typeof frontmatter === "object" && !Array.isArray(frontmatter) ? frontmatter : {};
+    const explicit = refNoteCardOneLine(fm.title);
+    if (explicit) return Object.freeze({ text: explicit, source: "title", fromStem: false });
+    return Object.freeze({ text: refNoteCardStem(path), source: "stem", fromStem: true });
+  } catch (_) {
+    return Object.freeze({ text: "", source: "stem", fromStem: true });
+  }
+}
+// ---- src/249r-plugin-ref-note-card-dom.js ----
+// Ref Card DOM (bob-cli-qp ref-card): builds the kit title block for a
+// reference note — ribbon tile, REF kicker, title, dek, and byline — with
+// empty slots for the lane chip, vN, and identifiers that ref-readouts
+// patches in. Text only; no spawns or writes. Later phases fill the rows.
+const REF_NOTE_CARD_SURFACE_CLASS = "bob-ref-card";
+
+function refNoteCardBuildEl(doc, model) {
+  try {
+    if (!doc || !model) return null;
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
+// ---- src/249s-plugin-ref-note-card-host.js ----
+// Ref Card host (bob-cli-qp ref-card): mounts behind the ref-owned preview
+// gate and the precedence function, never `propertyCardKindLive`. Owns the
+// title with matching-H1 adoption; wires the foot, `_` compact, and `==`
+// through `registerPropertyCard`. The managed reading-task embed stays in
+// the body untouched. Later phases fill the mount.
+const REF_NOTE_CARD_HOST_KIND = "ref";
+const REF_NOTE_CARD_MOUNT_ATTR = "data-ref-source";
+
+function refNoteCardMountedInSurface(node, path) {
+  try {
+    if (!node || typeof node.getAttribute !== "function") return false;
+    const wanted = refNoteCardPath(path);
+    return node.getAttribute(REF_NOTE_CARD_MOUNT_ATTR) === wanted;
+  } catch (_) {
+    return false;
+  }
+}
+// ---- src/249t-plugin-ref-note-card-foot.js ----
+// Ref Card foot (bob-cli-qp ref-card): created/captured stamp, lint slot,
+// and the Properties drawer with the Managed group. Later phases paint it.
+const REF_NOTE_CARD_FOOT_KIND = "ref";
+
+function refNoteCardFootModel(frontmatter) {
+  try {
+    const fm = frontmatter && typeof frontmatter === "object" && !Array.isArray(frontmatter) ? frontmatter : {};
+    return Object.freeze({ created: fm.created ?? null, captured: fm.captured ?? null });
+  } catch (_) {
+    return Object.freeze({ created: null, captured: null });
+  }
+}
+// ---- src/249u-plugin-ref-note-card-readouts.js ----
+// Ref Card readouts (bob-cli-qp ref-readouts): subscribes to the shared
+// ref-library snapshot and patches the lane chip, vN, identifiers, and foot
+// into existing rows with no layout shift. Later phases fill the patch.
+const REF_NOTE_CARD_READOUT_SLOT = "ref-readouts";
+
+function refNoteCardReadoutSlots() {
+  return Object.freeze(["lane", "counts", "identifiers", "foot"]);
+}
+// ---- src/249v-plugin-ref-note-card-editor-routing.js ----
+// Ref Card editor routing (bob-cli-qp ref-editor): `==` opens the shared
+// Property Editor on bob's REFERENCE contract when the note carries
+// `props_ref_contract_v1`, else qm.1 focus-or-add on `title`. Later phases
+// fill the routing.
+const REF_NOTE_CARD_EDITOR_KIND = "ref";
+
+function refNoteCardEditorRoute(capabilities) {
+  try {
+    const list = Array.isArray(capabilities) ? capabilities : [];
+    if (list.includes("props_ref_contract_v1")) return "settings";
+    return "title-fallback";
+  } catch (_) {
+    return "title-fallback";
+  }
+}
 // ---- src/241b-plugin-notebook-catalog-model.js ----
 // Pure notebook catalog presentation: chips, source regions, hue, and
 // link matching. Bob remains the authority for rows and their order;
@@ -132427,15 +132825,34 @@ class BobLedgerToolsNotebookHeaderLiveMixin {
 // helpers arrange and label those facts; they never inspect or write vault
 // files and never reimplement bob's blocking rules.
 
-const READING_BOARD_KIND_MAP = Object.freeze({
-  ai: Object.freeze({ icon: "🤖", label: "AI" }),
-  papers: Object.freeze({ icon: "📄", label: "Paper" }),
-  blogs: Object.freeze({ icon: "📰", label: "Blog" }),
-  docs: Object.freeze({ icon: "📚", label: "Docs" }),
-  chat: Object.freeze({ icon: "💬", label: "Chat" }),
-  podcasts: Object.freeze({ icon: "🎙️", label: "Podcast" }),
-  meetings: Object.freeze({ icon: "🤝", label: "Meeting" }),
-});
+// The seven board kinds derive from the shared ref vocabulary (bob-cli-qp
+// ref-kit) so the card and the board can never disagree. Output stays
+// byte-identical for these kinds; other kinds fall through to the shared
+// fallback in `readingBoardKind`.
+const READING_BOARD_KIND_MAP = (() => {
+  try {
+    if (typeof refCardBoardKindEntry === "function") {
+      return Object.freeze({
+        ai: refCardBoardKindEntry("ai"),
+        papers: refCardBoardKindEntry("papers"),
+        blogs: refCardBoardKindEntry("blogs"),
+        docs: refCardBoardKindEntry("docs"),
+        chat: refCardBoardKindEntry("chat"),
+        podcasts: refCardBoardKindEntry("podcasts"),
+        meetings: refCardBoardKindEntry("meetings"),
+      });
+    }
+  } catch (_) {}
+  return Object.freeze({
+    ai: Object.freeze({ icon: "🤖", label: "AI" }),
+    papers: Object.freeze({ icon: "📄", label: "Paper" }),
+    blogs: Object.freeze({ icon: "📰", label: "Blog" }),
+    docs: Object.freeze({ icon: "📚", label: "Docs" }),
+    chat: Object.freeze({ icon: "💬", label: "Chat" }),
+    podcasts: Object.freeze({ icon: "🎙️", label: "Podcast" }),
+    meetings: Object.freeze({ icon: "🤝", label: "Meeting" }),
+  });
+})();
 
 function readingBoardStripComment(value) {
   const text = String(value || "");
@@ -132670,6 +133087,16 @@ function readingBoardKind(type) {
   if (!key) {
     return { type: null, icon: "🔖", label: "Ref", text: "🔖 Ref" };
   }
+  // Other kinds gain their vocabulary words (bob-cli-qp ref-kit); the seven
+  // board kinds above stay byte-identical. Unknown dirs still humanize.
+  try {
+    if (typeof refCardBoardKindEntry === "function") {
+      const entry = refCardBoardKindEntry(key);
+      if (entry && entry.label && entry.label !== "Ref") {
+        return { type: key, icon: entry.icon, label: entry.label, text: `${entry.icon} ${entry.label}` };
+      }
+    }
+  } catch (_) {}
   const label = key
     .split(/[_\s-]+/)
     .filter(Boolean)
@@ -201739,10 +202166,13 @@ try {
       propertyCardFrontmatterReleaseScope,
       propertyCardFrontmatterReleaseAll,
       propertyCardHostRegisterFrontmatterOwnership,
-      // Note species (bob-cli-qm kit): predicates, precedence, preview gate.
+      // Note species (bob-cli-qm kit + bob-cli-qp ref-kit): predicates,
+      // precedence, preview gate.
       noteCardTypeNames,
       noteCardIsNotebookKind,
       noteCardIsProseKind,
+      noteCardIsRefKind,
+      noteCardIsRefLibraryPath,
       noteCardPathExcluded,
       propertyCardNoteSpecies,
       PROPERTY_CARD_PREVIEW_KINDS,
@@ -202004,6 +202434,50 @@ try {
       PROSE_NOTE_CARD_MOUNT_ATTR,
       PROSE_NOTE_CARD_FOOT_KIND,
       PROSE_NOTE_CARD_OUTLINE_SLOT,
+    });
+  }
+} catch (_) {}
+// ---- src/374i-exports-ref-cards.js ----
+// Test-facing exports for the Ref Card kit scaffolding (bob-cli-qp ref-kit).
+try {
+  if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
+    module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
+      REF_CARD_PREVIEW_KEY,
+      refCardPreviewFromData,
+      refCardPreviewRemember,
+      refCardPreviewLoad,
+      refCardPreviewLive,
+      REF_CARD_KIND_VOCABULARY,
+      REF_CARD_KIND_FALLBACK,
+      refCardKindEntry,
+      refCardKindWord,
+      refCardKindEmoji,
+      refCardKindIcon,
+      refCardBoardKindEntry,
+      REF_CARD_LANE_WORDS,
+      refCardLaneWord,
+      REF_NOTE_CARD_KIND,
+      REF_NOTE_CARD_MANAGED_KEYS,
+      refNoteCardPath,
+      refNoteCardStem,
+      refNoteCardTitleParts,
+      REF_NOTE_CARD_SURFACE_CLASS,
+      refNoteCardBuildEl,
+      REF_NOTE_CARD_HOST_KIND,
+      REF_NOTE_CARD_MOUNT_ATTR,
+      refNoteCardMountedInSurface,
+      REF_NOTE_CARD_FOOT_KIND,
+      refNoteCardFootModel,
+      REF_NOTE_CARD_READOUT_SLOT,
+      refNoteCardReadoutSlots,
+      REF_NOTE_CARD_EDITOR_KIND,
+      refNoteCardEditorRoute,
+      REF_LIBRARY_REPORT_ARGV,
+      REF_LIBRARY_REPORT_SCHEMA_VERSION,
+      refLibraryReportArgs,
+      refLibraryReportRow,
+      refLibraryReportDecode,
+      apiRefLibrarySubscribe,
     });
   }
 } catch (_) {}

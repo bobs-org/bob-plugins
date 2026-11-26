@@ -1,0 +1,67 @@
+{
+  "coverage": {
+    "ref_dir": "ref"
+  },
+  "generated_at": "2026-11-26T00:00:00Z",
+  "ok": true,
+  "rows": [
+    {
+      "path": "ref/agentic-coding-ci.md",
+      "ref_type": "blogs",
+      "status": "read",
+      "reading_state": "read",
+      "author": "Sachin Malhotra",
+      "published": "2026-09-14",
+      "source_pdf": "lib/agentic-coding-ci.pdf",
+      "audio": "lib/agentic-coding-ci.mp3",
+      "annotation_count": 5,
+      "comment_count": 2,
+      "status_sync": "ok",
+      "task": {
+        "path": "done/sase_pypi_releases_done.md",
+        "block_id": "ref-agentic-coding-ci",
+        "link": "[[done/sase_pypi_releases_done#^ref-agentic-coding-ci]]",
+        "mark": "x"
+      }
+    },
+    {
+      "path": "ref/shrinking-sase.md",
+      "ref_type": "chat",
+      "status": "next",
+      "reading_state": "ready",
+      "status_sync": "ok",
+      "task": {
+        "path": "memory.md",
+        "block_id": "ref-shrinking-sase",
+        "link": "[[memory#^ref-shrinking-sase]]",
+        "mark": " "
+      }
+    },
+    {
+      "path": "ref/memory-router.md",
+      "ref_type": "chat",
+      "status": "open",
+      "reading_state": "ready",
+      "blocked": true,
+      "status_sync": "ok"
+    },
+    {
+      "path": "ref/attention-is-all-you-need.md",
+      "ref_type": "papers",
+      "status": "next",
+      "reading_state": "ready",
+      "identity": {
+        "arxiv": "1706.03762"
+      },
+      "status_sync": "ok"
+    },
+    {
+      "path": "ref/outlive.md",
+      "ref_type": "books",
+      "status": "legacy",
+      "reading_state": "started",
+      "status_sync": "ok"
+    }
+  ],
+  "schema_version": 1
+}

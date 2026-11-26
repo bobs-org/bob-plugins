@@ -1,0 +1,43 @@
+// Test-facing exports for the Ref Card kit scaffolding (bob-cli-qp ref-kit).
+try {
+  if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
+    module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
+      REF_CARD_PREVIEW_KEY,
+      refCardPreviewFromData,
+      refCardPreviewRemember,
+      refCardPreviewLoad,
+      refCardPreviewLive,
+      REF_CARD_KIND_VOCABULARY,
+      REF_CARD_KIND_FALLBACK,
+      refCardKindEntry,
+      refCardKindWord,
+      refCardKindEmoji,
+      refCardKindIcon,
+      refCardBoardKindEntry,
+      REF_CARD_LANE_WORDS,
+      refCardLaneWord,
+      REF_NOTE_CARD_KIND,
+      REF_NOTE_CARD_MANAGED_KEYS,
+      refNoteCardPath,
+      refNoteCardStem,
+      refNoteCardTitleParts,
+      REF_NOTE_CARD_SURFACE_CLASS,
+      refNoteCardBuildEl,
+      REF_NOTE_CARD_HOST_KIND,
+      REF_NOTE_CARD_MOUNT_ATTR,
+      refNoteCardMountedInSurface,
+      REF_NOTE_CARD_FOOT_KIND,
+      refNoteCardFootModel,
+      REF_NOTE_CARD_READOUT_SLOT,
+      refNoteCardReadoutSlots,
+      REF_NOTE_CARD_EDITOR_KIND,
+      refNoteCardEditorRoute,
+      REF_LIBRARY_REPORT_ARGV,
+      REF_LIBRARY_REPORT_SCHEMA_VERSION,
+      refLibraryReportArgs,
+      refLibraryReportRow,
+      refLibraryReportDecode,
+      apiRefLibrarySubscribe,
+    });
+  }
+} catch (_) {}

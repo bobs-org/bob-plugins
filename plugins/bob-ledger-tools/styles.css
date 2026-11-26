@@ -12945,7 +12945,9 @@ button.bob-property-card-foot-lint-chip {
 /* Note cards (bob-cli-qm kit): spine and folio tile forms. The spine reads
    as a bound edge in grayscale; the folio reads as a page whose initial —
    not an icon — names the prose note. Both hold in light, dark,
-   forced-colors, and grayscale against the existing tiles. */
+   forced-colors, and grayscale against the existing tiles.
+   Ref (bob-cli-qp ref-kit) adds the ribbon: a bookmark with a notched lower
+   edge. The notch — not hue — names the species in grayscale. */
 .bob-property-card-tile[data-tile-form="spine"] { overflow: hidden; }
 .bob-property-card-tile[data-tile-form="spine"]::before {
   content: "";
@@ -12978,6 +12980,16 @@ button.bob-property-card-foot-lint-chip {
   font-variant-numeric: normal;
   font-weight: 750;
 }
+.bob-property-card-tile[data-tile-form="ribbon"] {
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 50% calc(100% - 0.45em), 0 100%);
+}
+.bob-property-card-tile[data-tile-form="ribbon"] .bob-property-card-tile-glyph {
+  transform: translateY(-0.12em);
+}
+
+/* Ref Card (bob-cli-qp ref-card): start. Identity, kicker, and local rows. */
+.bob-property-card[data-card-kind="ref"] { --bob-property-card-tint: 3%; }
+/* Ref Card (bob-cli-qp ref-card): end. */
 
 /* Notebook Card (bob-cli-qm notebook-card): start. Title identity and local fields. */
 .bob-property-card[data-card-kind="notebook"] { --bob-property-card-tint: 3%; }

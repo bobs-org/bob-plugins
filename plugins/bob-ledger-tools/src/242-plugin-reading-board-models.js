@@ -3,15 +3,34 @@
 // helpers arrange and label those facts; they never inspect or write vault
 // files and never reimplement bob's blocking rules.
 
-const READING_BOARD_KIND_MAP = Object.freeze({
-  ai: Object.freeze({ icon: "🤖", label: "AI" }),
-  papers: Object.freeze({ icon: "📄", label: "Paper" }),
-  blogs: Object.freeze({ icon: "📰", label: "Blog" }),
-  docs: Object.freeze({ icon: "📚", label: "Docs" }),
-  chat: Object.freeze({ icon: "💬", label: "Chat" }),
-  podcasts: Object.freeze({ icon: "🎙️", label: "Podcast" }),
-  meetings: Object.freeze({ icon: "🤝", label: "Meeting" }),
-});
+// The seven board kinds derive from the shared ref vocabulary (bob-cli-qp
+// ref-kit) so the card and the board can never disagree. Output stays
+// byte-identical for these kinds; other kinds fall through to the shared
+// fallback in `readingBoardKind`.
+const READING_BOARD_KIND_MAP = (() => {
+  try {
+    if (typeof refCardBoardKindEntry === "function") {
+      return Object.freeze({
+        ai: refCardBoardKindEntry("ai"),
+        papers: refCardBoardKindEntry("papers"),
+        blogs: refCardBoardKindEntry("blogs"),
+        docs: refCardBoardKindEntry("docs"),
+        chat: refCardBoardKindEntry("chat"),
+        podcasts: refCardBoardKindEntry("podcasts"),
+        meetings: refCardBoardKindEntry("meetings"),
+      });
+    }
+  } catch (_) {}
+  return Object.freeze({
+    ai: Object.freeze({ icon: "🤖", label: "AI" }),
+    papers: Object.freeze({ icon: "📄", label: "Paper" }),
+    blogs: Object.freeze({ icon: "📰", label: "Blog" }),
+    docs: Object.freeze({ icon: "📚", label: "Docs" }),
+    chat: Object.freeze({ icon: "💬", label: "Chat" }),
+    podcasts: Object.freeze({ icon: "🎙️", label: "Podcast" }),
+    meetings: Object.freeze({ icon: "🤝", label: "Meeting" }),
+  });
+})();
 
 function readingBoardStripComment(value) {
   const text = String(value || "");
@@ -246,6 +265,16 @@ function readingBoardKind(type) {
   if (!key) {
     return { type: null, icon: "🔖", label: "Ref", text: "🔖 Ref" };
   }
+  // Other kinds gain their vocabulary words (bob-cli-qp ref-kit); the seven
+  // board kinds above stay byte-identical. Unknown dirs still humanize.
+  try {
+    if (typeof refCardBoardKindEntry === "function") {
+      const entry = refCardBoardKindEntry(key);
+      if (entry && entry.label && entry.label !== "Ref") {
+        return { type: key, icon: entry.icon, label: entry.label, text: `${entry.icon} ${entry.label}` };
+      }
+    }
+  } catch (_) {}
   const label = key
     .split(/[_\s-]+/)
     .filter(Boolean)

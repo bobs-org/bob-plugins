@@ -114,9 +114,9 @@ function makeDoc() {
 
 const classes = (node) => node.className.split(/\s+/).filter(Boolean);
 
-test("registry covers eleven frozen species with presentation and fold defaults", () => {
+test("registry covers twelve frozen species with presentation and fold defaults", () => {
   assert.equal(H.PROPERTY_CARD_KIND_ATTR, "data-card-kind");
-  assert.deepEqual([...H.PROPERTY_CARD_KINDS], ["album", "record", "day", "week", "quarter", "year", "bank", "area", "project", "notebook", "prose"]);
+  assert.deepEqual([...H.PROPERTY_CARD_KINDS], ["album", "record", "day", "week", "quarter", "year", "bank", "area", "project", "notebook", "prose", "ref"]);
   const expected = {
     album: { kind: "album", word: "Album", tile: "stack", icon: "library", band: "", temporal: false, foldDefault: true },
     record: { kind: "record", word: "Record", tile: "sheet", icon: "file-text", band: "", temporal: false, foldDefault: true },
@@ -129,6 +129,7 @@ test("registry covers eleven frozen species with presentation and fold defaults"
     project: { kind: "project", word: "Project", tile: "pennant", icon: "target", band: "", temporal: false, foldDefault: true },
     notebook: { kind: "notebook", word: "Notebook", tile: "spine", icon: "notebook-tabs", band: "", temporal: false, foldDefault: true },
     prose: { kind: "prose", word: "Prose", tile: "folio", icon: "pilcrow", band: "", temporal: false, foldDefault: false },
+    ref: { kind: "ref", word: "Ref", tile: "ribbon", icon: "bookmark", band: "", temporal: false, foldDefault: true },
   };
   for (const kind of H.PROPERTY_CARD_KINDS) {
     const species = H.propertyCardSpecies(kind);
@@ -445,7 +446,7 @@ test("identity badge: tile plus species word, never a heading, fails closed", ()
   const doc = makeDoc();
   assert.equal(H.PROPERTY_CARD_IDENTITY_CLASS, "bob-property-card-identity");
   assert.equal(H.PROPERTY_CARD_IDENTITY_WORD_CLASS, "bob-property-card-identity-word");
-  const forms = { album: "stack", record: "sheet", day: "leaf", week: "leaf", quarter: "leaf", year: "leaf", bank: "plain", area: "field", project: "pennant", notebook: "spine", prose: "folio" };
+  const forms = { album: "stack", record: "sheet", day: "leaf", week: "leaf", quarter: "leaf", year: "leaf", bank: "plain", area: "field", project: "pennant", notebook: "spine", prose: "folio", ref: "ribbon" };
   for (const kind of H.PROPERTY_CARD_KINDS) {
     const badge = H.propertyCardBuildIdentityBadge(doc, { kind, emoji: "🍽️", band: "FRI", value: "20" });
     assert.ok(badge, kind);

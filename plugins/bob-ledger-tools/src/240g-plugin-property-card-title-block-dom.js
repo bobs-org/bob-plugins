@@ -77,7 +77,9 @@ function propertyCardKitLink(doc, className, target, unresolved) {
 // shows a band (weekday or WEEK/QTR/YEAR) over a large value. A folio tile
 // (prose) shows a value — the title initial — else the species icon, so the
 // prose initial reads as a species in grayscale. A spine tile (notebook)
-// needs no extra node: CSS paints its bound edge.
+// needs no extra node: CSS paints its bound edge. A ribbon tile (ref) shows
+// the kind's Lucide icon (or a per-card override) inside a notched bookmark
+// so it stays distinct from every other tile in grayscale and forced-colors.
 function propertyCardBuildGlyphTile(doc, spec = {}) {
   try {
     if (!propertyCardKitDocOk(doc)) return null;
@@ -159,7 +161,9 @@ function propertyCardKitKickerPart(doc, part, onLink) {
 // { element, tile, kicker, heading, pill, subtitle, actions } or null.
 // spec: { kind, title, kicker = [{ text, target?, unresolved? }],
 //         pill?: { text, tone: "solid" | "outline" }, subtitle?,
-//         tile = {}, onLink?(target, event) }.
+//         tile = {}, icon?, onLink?(target, event) }.
+// A top-level icon overrides the species icon (the ref card uses it for its
+// per-kind vocabulary icon); tile.icon wins when both are present.
 // The heading is a div[role=heading][aria-level=1]; the actions slot is
 // always present (empty) so adapters can append buttons without reflow.
 function propertyCardBuildTitleBlock(doc, spec = {}) {
@@ -173,7 +177,8 @@ function propertyCardBuildTitleBlock(doc, spec = {}) {
     element.setAttribute(PROPERTY_CARD_KIND_ATTR, species.kind);
 
     const tileSpec = spec.tile && typeof spec.tile === "object" ? spec.tile : {};
-    const tile = propertyCardBuildGlyphTile(doc, { ...tileSpec, kind: species.kind });
+    const tileIcon = propertyCardKitText(tileSpec.icon).trim() || propertyCardKitText(spec.icon).trim();
+    const tile = propertyCardBuildGlyphTile(doc, { ...tileSpec, kind: species.kind, icon: tileIcon });
     if (tile) element.appendChild(tile);
 
     const main = propertyCardKitEl(doc, "div", "bob-property-card-title-main");

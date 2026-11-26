@@ -109,10 +109,13 @@ try {
       propertyCardFrontmatterReleaseScope,
       propertyCardFrontmatterReleaseAll,
       propertyCardHostRegisterFrontmatterOwnership,
-      // Note species (bob-cli-qm kit): predicates, precedence, preview gate.
+      // Note species (bob-cli-qm kit + bob-cli-qp ref-kit): predicates,
+      // precedence, preview gate.
       noteCardTypeNames,
       noteCardIsNotebookKind,
       noteCardIsProseKind,
+      noteCardIsRefKind,
+      noteCardIsRefLibraryPath,
       noteCardPathExcluded,
       propertyCardNoteSpecies,
       PROPERTY_CARD_PREVIEW_KINDS,

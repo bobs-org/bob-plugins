@@ -1,8 +1,8 @@
-// Property-card kit (bob-cli-qm kit): notebook and prose species predicates,
-// the precedence function, and the preview gate. Pure: no DOM, no spawns,
-// never throws. Later fragments reuse the normalizer instead of retyping
-// wikilink forms, and the two species phases reuse the precedence function
-// and the gate for their hosts.
+// Property-card kit (bob-cli-qm kit + bob-cli-qp ref-kit): notebook, prose,
+// and ref species predicates, the precedence function, and the preview gate.
+// Pure: no DOM, no spawns, never throws. Later fragments reuse the
+// normalizer instead of retyping wikilink forms, and the species phases
+// reuse the precedence function and the gate for their hosts.
 
 // Type-name normalization. Mirrors albumTypeNames (241l): a scalar, list,
 // quoted scalar, [[wikilink]] (alias and anchor stripped), comma flow list,
@@ -60,6 +60,45 @@ function noteCardIsProseKind(frontmatter) {
     const names = noteCardTypeNames(noteCardFrontmatterType(frontmatter));
     if (!names.length) return false;
     return names.every((name) => name === "prose" || name === "article");
+  } catch (_) {
+    return false;
+  }
+}
+
+// Ref species (bob-cli-qp ref-kit): claims a note only when its type is
+// exactly [[ref]] (scalar or a single-item list). Any mixed type mounts no
+// ref card. Path coverage is a separate predicate below.
+function noteCardIsRefKind(frontmatter) {
+  try {
+    const names = noteCardTypeNames(noteCardFrontmatterType(frontmatter));
+    return names.length === 1 && names[0] === "ref";
+  } catch (_) {
+    return false;
+  }
+}
+
+// Ref library coverage (bob-cli-qp ref-kit): the note lives under bob's
+// library coverage (`ref/`), excluding hidden directories, `*.assets/`,
+// `_generated/`, `_templates/`, `_conflicts/`, `ref_history/`, and conflict
+// copies. The root `*_ref.md` hub notes live outside `ref/` and never claim.
+function noteCardIsRefLibraryPath(path) {
+  try {
+    const text = String(noteCardPathText(path) || "").replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/$/, "");
+    if (!text) return false;
+    if (!/^ref\//.test(text)) return false;
+    const segments = text.split("/");
+    for (const segment of segments) {
+      if (!segment) return false;
+      if (segment.startsWith(".")) return false;
+      if (segment === "_generated" || segment === "_templates" || segment === "_conflicts") return false;
+      if (segment === "ref_history") return false;
+      if (/\.assets$/i.test(segment)) return false;
+    }
+    const base = segments[segments.length - 1] || "";
+    if (/\(conflict/i.test(base)) return false;
+    if (/conflicted copy/i.test(base)) return false;
+    if (/\.sync-conflict\./i.test(base)) return false;
+    return true;
   } catch (_) {
     return false;
   }
@@ -141,10 +180,11 @@ function noteCardTemporalKind(path, today) {
 }
 
 // One kit function resolves a note's top species in bob's props order:
-// bank path; album; record; area/project; temporal; notebook; prose; none.
-// The bank hub path wins before exclusions (it is itself a type note); every
-// other claim needs a non-excluded path. Existing species keep their own
-// predicates — this function only composes them, and never throws.
+// bank path; album; record; area/project; temporal; notebook; prose; ref;
+// none. The bank hub path wins before exclusions (it is itself a type note);
+// every other claim needs a non-excluded path. Ref additionally needs its
+// library coverage path. Existing species keep their own predicates — this
+// function only composes them, and never throws.
 function propertyCardNoteSpecies(input = {}) {
   try {
     const path = noteCardPathText(input && input.path);
@@ -163,6 +203,7 @@ function propertyCardNoteSpecies(input = {}) {
     if (temporal) return temporal;
     if (noteCardIsNotebookKind(frontmatter)) return "notebook";
     if (noteCardIsProseKind(frontmatter)) return "prose";
+    if (noteCardIsRefKind(frontmatter) && noteCardIsRefLibraryPath(path)) return "ref";
     return null;
   } catch (_) {
     return null;

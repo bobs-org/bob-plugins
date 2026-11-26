@@ -1316,6 +1316,7 @@ test("DW20 same-note add absorbs the plain link in one transaction", async () =>
   ].join("\n");
   const { plugin } = stubPlugin({ "Tasks.md": parentNote });
   const editor = new TransactionEditor(parentNote, { line: 0, ch: 0 });
+  bindActiveMarkdownEditor(plugin, editor, "Tasks.md");
   const outcome = await plugin.applyDependencyEdit({
     editor,
     parentPath: "Tasks.md",
@@ -1346,6 +1347,7 @@ test("DW21 cross-note add drops the other plain link as a follow-up", async () =
     "Other.md": targetNote,
   });
   const editor = new TransactionEditor(parentNote, { line: 0, ch: 0 });
+  bindActiveMarkdownEditor(plugin, editor, "Tasks.md");
   const outcome = await plugin.applyDependencyEdit({
     editor,
     parentPath: "Tasks.md",
@@ -1375,6 +1377,7 @@ test("DW22 malformed other-note LINKS is left for reconcile with a suffix", asyn
     "Other.md": targetNote,
   });
   const editor = new TransactionEditor(parentNote, { line: 0, ch: 0 });
+  bindActiveMarkdownEditor(plugin, editor, "Tasks.md");
   const outcome = await plugin.applyDependencyEdit({
     editor,
     parentPath: "Tasks.md",

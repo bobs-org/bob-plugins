@@ -263,15 +263,22 @@ test("other stages still use their own planners", () => {
   };
   const picker = makeRenderPicker(vaultStage, "widget", {});
   const rendered = picker.getFilteredItems();
-  const expected = helpers.planDependencyStageView({
-    current: vaultStage.current,
-    candidates: vaultStage.candidates,
-    query: "widget",
-    dependent: vaultStage.dependent,
-    edges: vaultStage.edges,
-    linkedKeys: vaultStage.linkedKeys,
-    sourceValueSets: vaultStage.sourceValueSets,
-  });
+  // The Depends-on stage renders its own planner's rows, decorated with the
+  // pair-tie pills like every relationship stage.
+  const expected = helpers.planTieVisibilityItems(
+    helpers.planDependencyStageView({
+      current: vaultStage.current,
+      candidates: vaultStage.candidates,
+      query: "widget",
+      dependent: vaultStage.dependent,
+      edges: vaultStage.edges,
+      linkedKeys: vaultStage.linkedKeys,
+      sourceValueSets: vaultStage.sourceValueSets,
+    }),
+    vaultStage,
+    "depends",
+    "widget",
+  );
   assert.deepEqual(rendered, expected);
   assert.ok(rendered.some((row) => row && row.stageSection === "blocked"));
 

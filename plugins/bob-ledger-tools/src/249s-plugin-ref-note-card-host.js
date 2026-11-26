@@ -184,6 +184,9 @@ class BobLedgerToolsRefNoteCardMixin {
     return typeof unregister === "function" ? unregister : () => {};
   }
 
+  // `==` on a ref note: the Reference editor in settings mode when bob
+  // reports `props_ref_contract_v1`, else qm.1 focus-or-add on `title`.
+  // The route itself lives in 249v; this registration only owns the kind.
   refNoteCardRegisterTitleKey() {
     if (this.refNoteCardTitleKeyRegistered === true) return true;
     if (typeof this.registerPropertyCard !== "function") return false;
@@ -191,7 +194,7 @@ class BobLedgerToolsRefNoteCardMixin {
       kind: REF_NOTE_CARD_HOST_KIND,
       match: ({ path, frontmatter } = {}) => this.refNoteCardEligible(path, frontmatter),
       open: ({ path } = {}) => {
-        if (typeof this.openPropertyEditor === "function") void this.openPropertyEditor({ filePath: path, key: "title" });
+        if (typeof refNoteCardEditorOpen === "function") void refNoteCardEditorOpen(this, path);
       },
     });
     return this.refNoteCardTitleKeyRegistered;

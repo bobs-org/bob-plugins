@@ -115326,6 +115326,9 @@ class BobLedgerToolsRefNoteCardMixin {
     return typeof unregister === "function" ? unregister : () => {};
   }
 
+  // `==` on a ref note: the Reference editor in settings mode when bob
+  // reports `props_ref_contract_v1`, else qm.1 focus-or-add on `title`.
+  // The route itself lives in 249v; this registration only owns the kind.
   refNoteCardRegisterTitleKey() {
     if (this.refNoteCardTitleKeyRegistered === true) return true;
     if (typeof this.registerPropertyCard !== "function") return false;
@@ -115333,7 +115336,7 @@ class BobLedgerToolsRefNoteCardMixin {
       kind: REF_NOTE_CARD_HOST_KIND,
       match: ({ path, frontmatter } = {}) => this.refNoteCardEligible(path, frontmatter),
       open: ({ path } = {}) => {
-        if (typeof this.openPropertyEditor === "function") void this.openPropertyEditor({ filePath: path, key: "title" });
+        if (typeof refNoteCardEditorOpen === "function") void refNoteCardEditorOpen(this, path);
       },
     });
     return this.refNoteCardTitleKeyRegistered;
@@ -116811,8 +116814,8 @@ class BobLedgerToolsRefNoteCardReadoutsMixin {
 // ---- src/249v-plugin-ref-note-card-editor-routing.js ----
 // Ref Card editor routing (bob-cli-qp ref-editor): `==` opens the shared
 // Property Editor on bob's REFERENCE contract when the note carries
-// `props_ref_contract_v1`, else qm.1 focus-or-add on `title`. Later phases
-// fill the routing.
+// `props_ref_contract_v1`, else qm.1 focus-or-add on `title`. Owned rows
+// route reading state, residence, and file name to their owners.
 const REF_NOTE_CARD_EDITOR_KIND = "ref";
 
 function refNoteCardEditorRoute(capabilities) {
@@ -116823,6 +116826,194 @@ function refNoteCardEditorRoute(capabilities) {
   } catch (_) {
     return "title-fallback";
   }
+}
+
+// The `==` capability gate reads only the per-bob-path cache: confirmed
+// opens the settings mode, while unknown, absent, and unconfirmed all fall
+// back to title focus-or-add. Painting never probes; the lifecycle catalog
+// and show probes in 298v settle the slot.
+function refNoteCardEditorCapabilityConfirmed(plugin) {
+  try {
+    if (plugin && typeof plugin.propertyCapabilityRefContractConfirmed === "function") {
+      return plugin.propertyCapabilityRefContractConfirmed() === true;
+    }
+  } catch (_) {}
+  return false;
+}
+
+// The single `==` open path for ref notes (wired from the 249s kind
+// registration): settings mode on the REFERENCE contract when the
+// capability is present, qm.1 focus-or-add on `title` when it is absent or
+// pending. Never throws; the open itself is async and unobserved.
+function refNoteCardEditorOpen(plugin, path) {
+  const target = typeof refNoteCardPath === "function" ? refNoteCardPath(path) : "";
+  if (!target) return false;
+  let open = null;
+  try {
+    open = plugin && typeof plugin.openPropertyEditor === "function" ? plugin.openPropertyEditor : null;
+  } catch (_) {
+    open = null;
+  }
+  if (!open) return false;
+  try {
+    if (refNoteCardEditorCapabilityConfirmed(plugin)) {
+      // noteKind is the contract's wire name ("reference"), not the card
+      // registry kind, so the badge and header are right before the report
+      // arrives to confirm it.
+      void open.call(plugin, { filePath: target, noteKind: "reference", focusSettings: true });
+    } else {
+      void open.call(plugin, { filePath: target, key: "title" });
+    }
+  } catch (_) {
+    return false;
+  }
+  return true;
+}
+
+// Parse a managed-embed target (`![[path#fragment|alias]]`) into an
+// openLinkText link. Anything else reads as no target.
+function refNoteCardEmbedTarget(target) {
+  try {
+    const match = /^\s*!\[\[([^\]|#]+)(#[^\]|]*)?(?:\|[^\]]*)?\]\]\s*$/.exec(String(target || ""));
+    if (!match || !match[1] || !match[1].trim()) return "";
+    return `${match[1].trim()}${match[2] || ""}`;
+  } catch (_) {
+    return "";
+  }
+}
+
+// Dispatch an owned-elsewhere row to its owner. Reading and residence open
+// the reading task; the file name routes to `bob ref rename`. Never throws.
+async function refNoteCardEditorFollowRoute(modal, entry) {
+  try {
+    const row = entry && entry.row;
+    const route = row && row.settingRoute;
+    if (route === "reading_task") return await refNoteCardEditorOpenReadingTask(modal, entry);
+    if (route === "ref_rename") return await refNoteCardEditorOpenRename(modal, entry);
+    return { ok: false, message: "That row is owned elsewhere." };
+  } catch (error) {
+    return { ok: false, message: String((error && error.message) || error || "That row could not be opened.") };
+  }
+}
+
+// Enter on Reading or Lives under opens the reading task (the note's managed
+// embed target). With no target the note is a legacy reference: say so and
+// stay in the editor.
+async function refNoteCardEditorOpenReadingTask(modal, entry) {
+  const row = entry && entry.row;
+  const link = refNoteCardEmbedTarget(row && row.settingTarget);
+  let workspace = null;
+  try {
+    const plugin = modal && modal.propertyPlugin;
+    const app = (plugin && plugin.app) || (modal && modal.app);
+    workspace = app && app.workspace;
+  } catch (_) {
+    workspace = null;
+  }
+  if (!link) {
+    try {
+      if (typeof Notice !== "undefined") new Notice("This is a legacy reference without a reading task.");
+    } catch (_) {}
+    return { ok: false, message: "This is a legacy reference without a reading task." };
+  }
+  if (!workspace || typeof workspace.openLinkText !== "function") {
+    return { ok: false, message: "The reading task could not be opened." };
+  }
+  try {
+    await workspace.openLinkText(link, (modal && modal.filePath) || "", false);
+  } catch (_) {
+    return { ok: false, message: "The reading task could not be opened." };
+  }
+  try {
+    if (modal && typeof modal.close === "function") modal.close();
+  } catch (_) {}
+  return { ok: true };
+}
+
+// The exact rename command the File name row copies or opens.
+function refNoteCardRenameCommand(stem) {
+  const name = String(stem || "").trim();
+  return `bob ref rename ${name} <NEW>`;
+}
+
+// The Command Mode plugin api namespace when it is loaded, else null.
+function refNoteCardCommandModeApi(app) {
+  try {
+    const plugins = app && app.plugins && app.plugins.plugins;
+    const mode = plugins && plugins["bob-command-mode"];
+    const api = mode && mode.api && mode.api.commandMode;
+    return api && typeof api === "object" ? api : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+// Copy helper for the rename command. Uses the async clipboard only;
+// returns false when it is unavailable so the caller can say so.
+async function refNoteCardCopyText(text) {
+  const value = String(text || "");
+  if (!value) return false;
+  try {
+    if (typeof navigator !== "undefined" && navigator.clipboard
+      && typeof navigator.clipboard.writeText === "function") {
+      await navigator.clipboard.writeText(value);
+      return true;
+    }
+  } catch (_) {}
+  return false;
+}
+
+// Enter on File name opens Command Mode when it is loaded so the user can
+// paste the rename, and always copies `bob ref rename <stem> <NEW>`.
+// (api.commandMode exposes no prefill opener, so the command travels on the
+// clipboard either way.) The editor stays open behind the sheet.
+async function refNoteCardEditorOpenRename(modal, entry) {
+  void entry;
+  let app = null;
+  try {
+    const plugin = modal && modal.propertyPlugin;
+    app = (plugin && plugin.app) || (modal && modal.app);
+  } catch (_) {
+    app = null;
+  }
+  let stem = "";
+  try {
+    stem = typeof refNoteCardStem === "function"
+      ? refNoteCardStem((modal && modal.filePath) || "")
+      : String((modal && modal.filePath) || "").split("/").pop().replace(/\.md$/i, "");
+  } catch (_) {
+    stem = "";
+  }
+  const text = refNoteCardRenameCommand(stem);
+  const commandMode = refNoteCardCommandModeApi(app);
+  let opened = false;
+  if (commandMode) {
+    try {
+      if (app && app.commands && typeof app.commands.executeCommandById === "function") {
+        await app.commands.executeCommandById("bob-command-mode:open");
+        opened = true;
+      }
+    } catch (_) {
+      opened = false;
+    }
+  }
+  let copied = false;
+  try {
+    copied = await refNoteCardCopyText(text);
+  } catch (_) {
+    copied = false;
+  }
+  if (!copied) {
+    return { ok: false, message: `The rename command could not be copied: ${text}` };
+  }
+  try {
+    if (typeof Notice !== "undefined") {
+      new Notice(opened
+        ? "Rename command copied — paste it into Command Mode to rename this reference."
+        : "Command Mode is unavailable — the rename command was copied; paste it to rename.");
+    }
+  } catch (_) {}
+  return { ok: true, opened, copied };
 }
 // ---- src/241b-plugin-notebook-catalog-model.js ----
 // Pure notebook catalog presentation: chips, source regions, hue, and
@@ -190320,10 +190511,11 @@ class PropertyEditorModal extends PropertyEditorModalBase {
         } catch (_) {}
         return;
       }
-      // Area and project notes own no card editor: browse `=` focuses the
-      // settings group in place instead of closing and reopening. The
-      // request survives a pending report and applies on arrival.
-      if (this.noteKind === "area" || this.noteKind === "project") {
+      // Area, project, and reference notes own no card editor: browse `=`
+      // focuses the settings group in place instead of closing and
+      // reopening. The request survives a pending report and applies on
+      // arrival.
+      if (this.noteKind === "area" || this.noteKind === "project" || this.noteKind === "reference") {
         this.focusSettings = true;
         this.propertyEditorSettingFocusDone = false;
         let focused = false;
@@ -198145,6 +198337,10 @@ const PROPERTY_CAPABILITY_MAX_PROBE_ATTEMPTS = 3;
 // Typed settings contract required for area/project whole-frontmatter
 // ownership (bob-cli-pl.9.1.1). The catalog advertises it in `features`.
 const PROPERTY_CAPABILITY_CONTRACT = "props_contract_v1";
+// Typed settings contract required for the reference editor (bob-cli-qp
+// ref-editor). The catalog advertises it in `features` beside the generic
+// contract; per-note show reports carry it only on reference notes.
+const PROPERTY_CAPABILITY_REF_CONTRACT = "props_ref_contract_v1";
 
 // Normalize one resolved bob path to its session cache key. Never throws.
 function propertyCapabilityBobKey(resolved) {
@@ -198238,6 +198434,24 @@ function propertyCapabilityClassifyCatalogOutcome(outcome) {
   }
 }
 
+// Classify one catalog probe outcome for the reference contract, settled
+// independently beside the generic contract from the same outcome: each
+// feature confirms or absents only its own slot.
+function propertyCapabilityClassifyRefCatalogOutcome(outcome) {
+  try {
+    if (!outcome || typeof outcome !== "object") return { status: "unconfirmed", reason: "no-outcome" };
+    if (outcome.ok === true && outcome.report && typeof outcome.report === "object") {
+      const features = Array.isArray(outcome.report.features) ? outcome.report.features : [];
+      return features.includes(PROPERTY_CAPABILITY_REF_CONTRACT)
+        ? { status: "confirmed" }
+        : { status: "absent", reason: "missing-contract" };
+    }
+    return { status: "unconfirmed", reason: typeof outcome.code === "string" && outcome.code ? outcome.code : "probe-failed" };
+  } catch (_) {
+    return { status: "unconfirmed", reason: "classify-failed" };
+  }
+}
+
 // Positive contract evidence from an already obtained show report: only a
 // typed-note report carries the contract. Ordinary notes omit it, so this
 // reads as true only, never as absence.
@@ -198246,6 +198460,19 @@ function propertyCapabilityReportHasContract(report) {
     return Boolean(report && typeof report === "object"
       && Array.isArray(report.capabilities)
       && report.capabilities.includes(PROPERTY_CAPABILITY_CONTRACT));
+  } catch (_) {
+    return false;
+  }
+}
+
+// Positive reference-contract evidence: only a reference note's show report
+// carries `props_ref_contract_v1`. Any observation confirms binary support;
+// ordinary notes omit it, so this reads as true only, never as absence.
+function propertyCapabilityReportHasRefContract(report) {
+  try {
+    return Boolean(report && typeof report === "object"
+      && Array.isArray(report.capabilities)
+      && report.capabilities.includes(PROPERTY_CAPABILITY_REF_CONTRACT));
   } catch (_) {
     return false;
   }
@@ -198398,13 +198625,17 @@ class BobLedgerToolsPropertyCapabilityRoutingMixin {
       if (!(this.propertyCapabilityByBobPath instanceof Map)) this.propertyCapabilityByBobPath = new Map();
       let entry = this.propertyCapabilityByBobPath.get(lookup);
       if (!entry || typeof entry !== "object") {
-        entry = { status: "unknown", contract: "unknown", attempts: 0, contractAttempts: 0, reason: "" };
+        entry = { status: "unknown", contract: "unknown", refContract: "unknown", attempts: 0, contractAttempts: 0, refContractAttempts: 0, reason: "" };
         this.propertyCapabilityByBobPath.set(lookup, entry);
       }
       if (entry.contract !== "confirmed" && entry.contract !== "absent" && entry.contract !== "unconfirmed") {
         entry.contract = "unknown";
       }
+      if (entry.refContract !== "confirmed" && entry.refContract !== "absent" && entry.refContract !== "unconfirmed") {
+        entry.refContract = "unknown";
+      }
       if (!Number.isInteger(entry.contractAttempts)) entry.contractAttempts = 0;
+      if (!Number.isInteger(entry.refContractAttempts)) entry.refContractAttempts = 0;
       return { entry, key: lookup };
     } catch (_) {
       return { entry: null, key: "" };
@@ -198417,17 +198648,19 @@ class BobLedgerToolsPropertyCapabilityRoutingMixin {
       const entry = this.propertyCapabilityByBobPath instanceof Map
         ? this.propertyCapabilityByBobPath.get(lookup)
         : null;
-      if (!entry) return { status: "unknown", contract: "unknown", attempts: 0, contractAttempts: 0, reason: "", key: lookup };
+      if (!entry) return { status: "unknown", contract: "unknown", refContract: "unknown", attempts: 0, contractAttempts: 0, refContractAttempts: 0, reason: "", key: lookup };
       return {
         status: entry.status || "unknown",
         contract: entry.contract || "unknown",
+        refContract: entry.refContract || "unknown",
         attempts: entry.attempts || 0,
         contractAttempts: entry.contractAttempts || 0,
+        refContractAttempts: entry.refContractAttempts || 0,
         reason: entry.reason || "",
         key: lookup,
       };
     } catch (_) {
-      return { status: "unknown", contract: "unknown", attempts: 0, contractAttempts: 0, reason: "", key: "" };
+      return { status: "unknown", contract: "unknown", refContract: "unknown", attempts: 0, contractAttempts: 0, refContractAttempts: 0, reason: "", key: "" };
     }
   }
 
@@ -198444,6 +198677,18 @@ class BobLedgerToolsPropertyCapabilityRoutingMixin {
   propertyCapabilityContractConfirmed(key) {
     try {
       return this.propertyCapabilityState(key).contract === "confirmed";
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // Reference-contract evidence for the Reference editor (bob-cli-qp
+  // ref-editor): true only after a catalog or typed-note observation of
+  // `props_ref_contract_v1`. Unknown, absent, and unconfirmed all read as
+  // not ready, so `==` falls back to title focus-or-add.
+  propertyCapabilityRefContractConfirmed(key) {
+    try {
+      return this.propertyCapabilityState(key).refContract === "confirmed";
     } catch (_) {
       return false;
     }
@@ -198490,7 +198735,7 @@ class BobLedgerToolsPropertyCapabilityRoutingMixin {
         ? this.propertyCapabilityEntry()
         : { entry: null, key: this.propertyCapabilityCurrentBobKey() };
       const key = ensured.key;
-      const entry = ensured.entry || { status: "unknown", contract: "unknown", attempts: 0, contractAttempts: 0, reason: "" };
+      const entry = ensured.entry || { status: "unknown", contract: "unknown", refContract: "unknown", attempts: 0, contractAttempts: 0, refContractAttempts: 0, reason: "" };
       if (!ensured.entry && this.propertyCapabilityByBobPath instanceof Map) {
         this.propertyCapabilityByBobPath.set(key, entry);
       }
@@ -198500,11 +198745,17 @@ class BobLedgerToolsPropertyCapabilityRoutingMixin {
         : null;
       // needs-bob is binary-level evidence (an old binary without props),
       // so it records contract absence too. Any other report shape leaves
-      // contract evidence alone.
+      // contract evidence alone. The reference contract is confirmed only by
+      // its own capability: an area/project report never establishes it.
       if (outcome && outcome.ok === false && outcome.code === "needs-bob") {
         entry.contract = "absent";
+        entry.refContract = "absent";
       } else if (report && report.ok === true && propertyCapabilityReportHasContract(report)) {
         entry.contract = "confirmed";
+      }
+      if (report && report.ok === true && typeof propertyCapabilityReportHasRefContract === "function"
+        && propertyCapabilityReportHasRefContract(report)) {
+        entry.refContract = "confirmed";
       }
       if (classified.status === "confirmed") {
         entry.status = "confirmed";
@@ -198615,7 +198866,7 @@ class BobLedgerToolsPropertyCapabilityRoutingMixin {
           const ensured = typeof this.propertyCapabilityEntry === "function"
             ? this.propertyCapabilityEntry(key)
             : { entry: null };
-          const entry = ensured.entry || { status: "unknown", contract: "unknown", attempts: 0, contractAttempts: 0, reason: "" };
+          const entry = ensured.entry || { status: "unknown", contract: "unknown", refContract: "unknown", attempts: 0, contractAttempts: 0, refContractAttempts: 0, reason: "" };
           if (!ensured.entry && this.propertyCapabilityByBobPath instanceof Map) {
             this.propertyCapabilityByBobPath.set(key, entry);
           }
@@ -198653,14 +198904,18 @@ class BobLedgerToolsPropertyCapabilityRoutingMixin {
         ? this.propertyCapabilityEntry()
         : { entry: null, key: this.propertyCapabilityCurrentBobKey() };
       const key = ensured.key;
-      const entry = ensured.entry || { status: "unknown", contract: "unknown", attempts: 0, contractAttempts: 0, reason: "" };
+      const entry = ensured.entry || { status: "unknown", contract: "unknown", refContract: "unknown", attempts: 0, contractAttempts: 0, refContractAttempts: 0, reason: "" };
       if (!ensured.entry && this.propertyCapabilityByBobPath instanceof Map) {
         this.propertyCapabilityByBobPath.set(key, entry);
       }
-      if (entry.contract === "confirmed") return "confirmed";
+      // Both contracts settle from one probe, so a confirmed generic slot
+      // alone never parks the schedule: the reference slot still needs its
+      // own observation before `==` may open the settings mode.
+      if (entry.contract === "confirmed" && entry.refContract === "confirmed") return "confirmed";
       // Absence re-probes like the generic probe: an upgraded binary is
       // detected on a later lifecycle event.
-      if (entry.contract === "unconfirmed" && entry.contractAttempts >= PROPERTY_CAPABILITY_MAX_PROBE_ATTEMPTS) {
+      if (entry.contract === "unconfirmed" && entry.contractAttempts >= PROPERTY_CAPABILITY_MAX_PROBE_ATTEMPTS
+        && entry.refContract === "unconfirmed" && entry.refContractAttempts >= PROPERTY_CAPABILITY_MAX_PROBE_ATTEMPTS) {
         return "exhausted";
       }
       const flight = this.propertyCapabilityContractFlight;
@@ -198710,9 +198965,21 @@ class BobLedgerToolsPropertyCapabilityRoutingMixin {
       const ensured = typeof this.propertyCapabilityEntry === "function"
         ? this.propertyCapabilityEntry(key)
         : { entry: null };
-      const entry = ensured.entry || { status: "unknown", contract: "unknown", attempts: 0, contractAttempts: 0, reason: "" };
+      const entry = ensured.entry || { status: "unknown", contract: "unknown", refContract: "unknown", attempts: 0, contractAttempts: 0, refContractAttempts: 0, reason: "" };
       if (!ensured.entry && this.propertyCapabilityByBobPath instanceof Map) {
         this.propertyCapabilityByBobPath.set(key, entry);
+      }
+      const refClassified = typeof propertyCapabilityClassifyRefCatalogOutcome === "function"
+        ? propertyCapabilityClassifyRefCatalogOutcome(outcome)
+        : { status: "unconfirmed", reason: "no-ref-classifier" };
+      if (refClassified.status === "confirmed") {
+        entry.refContract = "confirmed";
+      } else if (refClassified.status === "absent") {
+        entry.refContract = "absent";
+        entry.refContractAttempts = (entry.refContractAttempts || 0) + 1;
+      } else {
+        entry.refContract = "unconfirmed";
+        entry.refContractAttempts = (entry.refContractAttempts || 0) + 1;
       }
       if (classified.status === "confirmed") {
         entry.contract = "confirmed";
@@ -199001,12 +199268,16 @@ class BobLedgerToolsPropertyCapabilityRoutingMixin {
 const PROPERTY_EDITOR_SETTING_ORDER = Object.freeze({
   area: ["summary", "parent", "color", "task_type", "clock", "ready_cap", "task_refresh", "project_name_aliases"],
   project: ["parent", "color", "task_type", "clock", "root", "ready_cap", "task_refresh", "project_name_aliases"],
+  reference: ["title", "summary", "author", "published", "source", "aliases", "reading", "parent", "file_name"],
 });
 const PROPERTY_EDITOR_SETTING_KEYS = Object.freeze({
   summary: ["summary"], parent: ["parent"], color: ["color"],
   task_type: ["task_type", "theme"], clock: ["offclock", "offclock_types"],
   root: ["root"], ready_cap: ["ready_cap"], task_refresh: ["task_refresh"],
   project_name_aliases: ["project_name_aliases"],
+  title: ["title"], author: ["author"], published: ["published"],
+  source: ["source_url", "url"], aliases: ["aliases"], reading: ["status"],
+  file_name: [],
 });
 const PROPERTY_EDITOR_RETIRED_COUNTS = new Set(["task_count", "open_task_count"]);
 
@@ -199053,6 +199324,11 @@ function propertyEditorSettingsSettingShape(setting, kind) {
         && (choice.used_by === undefined || Array.isArray(choice.used_by)
           && choice.used_by.every((name) => typeof name === "string")))) return false;
   }
+  if (setting.reason !== undefined && typeof setting.reason !== "string") return false;
+  if (setting.route !== undefined && typeof setting.route !== "string") return false;
+  if (setting.target !== undefined && typeof setting.target !== "string") return false;
+  if (typeof setting.route === "string" && setting.route
+    && (typeof setting.reason !== "string" || !setting.reason)) return false;
   if (setting.issues !== undefined && (!Array.isArray(setting.issues) || !setting.issues.every(propertyEditorSettingsIssueShape))) return false;
   return kind !== "project" || setting.id !== "root" || setting.keys[0] === "root";
 }
@@ -199100,14 +199376,22 @@ function propertyEditorSettingsPropertiesMatch(report) {
   return true;
 }
 
+function propertyEditorSettingsContractCapabilityFor(noteKind) {
+  if (noteKind === "reference") return "props_ref_contract_v1";
+  if (noteKind === "area" || noteKind === "project") return "props_contract_v1";
+  return "";
+}
+
 function propertyEditorSettingsSupported(report) {
-  return Boolean(report && typeof report === "object"
-    && report.ok === true
-    && report.frontmatter && ["ok", "absent"].includes(report.frontmatter.state)
-    && typeof propertyHasCapability === "function" && propertyHasCapability(report)
-    && Array.isArray(report.capabilities) && report.capabilities.includes("props_contract_v1")
-    && propertyEditorSettingsContractShape(report.contract, report.note_kind)
-    && propertyEditorSettingsPropertiesMatch(report));
+  if (!report || typeof report !== "object"
+    || report.ok !== true
+    || !report.frontmatter || !["ok", "absent"].includes(report.frontmatter.state)
+    || typeof propertyHasCapability !== "function" || !propertyHasCapability(report)
+    || !Array.isArray(report.capabilities)) return false;
+  const capability = propertyEditorSettingsContractCapabilityFor(report.note_kind);
+  if (!capability || !report.capabilities.includes(capability)) return false;
+  return propertyEditorSettingsContractShape(report.contract, report.note_kind)
+    && propertyEditorSettingsPropertiesMatch(report);
 }
 
 function propertyEditorSettingsFallbackHint(report) {
@@ -199144,6 +199428,8 @@ function propertyEditorSettingsEntry(setting, report) {
   const warning = propertyEditorSettingsWarningText(report, setting);
   const details = [keys, propertyEditorSettingsValueText(value), effective, setting.declared ? "set" : ""]
     .filter(Boolean).join(" · ");
+  const route = typeof setting.route === "string" ? setting.route : "";
+  const target = typeof setting.target === "string" ? setting.target : "";
   const row = {
     key: setting.label, line: null, end_line: null, value: details, kind: "text",
     role: "setting", owner: "bob", editor: null, reason: setting.help,
@@ -199152,7 +199438,10 @@ function propertyEditorSettingsEntry(setting, report) {
     effectiveValue: propertyCloneJson(setting.effective.value), effectiveLabel: effective,
     settingChoices: Array.isArray(setting.choices) ? propertyCloneJson(setting.choices) : [],
     help: setting.help, settingDisabled: setting.disabled,
-    disabledReason: setting.disabled ? `${setting.label} is disabled for this note.` : "",
+    disabledReason: setting.disabled
+      ? (typeof setting.reason === "string" && setting.reason ? setting.reason : `${setting.label} is disabled for this note.`)
+      : "",
+    settingRoute: route, settingTarget: target,
     issues: setting.issues || [],
     warning, isGhost: setting.declared !== true, propertyEntryType: "setting",
   };
@@ -199264,9 +199553,22 @@ function propertyEditorSettingsAllEntries(modal) {
   const base = propertyEditorSettingsSourceEntries(modal);
   if (!propertyEditorSettingsSupported(report)) return base;
   const covered = propertyEditorSettingsCoveredKeys(report);
-  const settings = report.contract.settings.map((setting) => propertyEditorSettingsEntry(setting, report));
+  const isReference = report.note_kind === "reference";
+  const settings = [];
+  const owned = [];
+  for (const setting of report.contract.settings) {
+    const entry = propertyEditorSettingsEntry(setting, report);
+    if (isReference && setting.disabled === true) {
+      entry.entryType = "reference-route";
+      entry.group = "owned";
+      entry.row = { ...entry.row, propertyEntryType: "reference-route" };
+      owned.push(entry);
+      continue;
+    }
+    settings.push(entry);
+  }
   const project = report.note_kind === "project" ? propertyEditorProjectEntries(report.contract) : [];
-  const groups = { settings, "project-task": project, properties: [], card: [], identity: [], managed: [] };
+  const groups = { settings, owned, "project-task": project, properties: [], card: [], identity: [], managed: [] };
   for (const sourceEntry of base) {
     let entry = sourceEntry;
     if (covered.has(entry.row.key)) continue;
@@ -199283,7 +199585,7 @@ function propertyEditorSettingsAllEntries(modal) {
     else if (propertyEditorRoleOf(row) === "card") groups.card.push({ ...entry, group: "card" });
     else groups.properties.push(entry);
   }
-  return [...settings, ...project, ...groups.properties, ...groups.card, ...groups.identity, ...groups.managed];
+  return [...settings, ...owned, ...project, ...groups.properties, ...groups.card, ...groups.identity, ...groups.managed];
 }
 
 function propertyEditorSettingsGroups(modal, query = "", includeCollapsed = false) {
@@ -199303,8 +199605,11 @@ function propertyEditorSettingsGroups(modal, query = "", includeCollapsed = fals
     }).filter((group) => group.rows.length > 0);
   }
   const entries = propertyEditorSettingsAllEntries(modal);
+  const settingsTitle = report.note_kind === "project" ? "PROJECT SETTINGS"
+    : report.note_kind === "reference" ? "REFERENCE SETTINGS" : "AREA SETTINGS";
   const byGroup = new Map([
-    ["settings", { title: report.note_kind === "project" ? "PROJECT SETTINGS" : "AREA SETTINGS", rows: [] }],
+    ["settings", { title: settingsTitle, rows: [] }],
+    ["owned", { title: "OWNED ELSEWHERE", rows: [] }],
     ["project-task", { title: "ON THE ^PRJ LINE", rows: [] }],
     ["properties", { title: "PROPERTIES", rows: [] }],
     ["card", { title: "On the kind's card", rows: [] }],
@@ -199346,6 +199651,10 @@ function propertyEditorSettingsActionForRow(row) {
   if (kind === "project-task" || kind === "project-status") {
     if (!row.projectTaskLine) return { action: "locked", reason: "No current ^prj task is available.", key: row.key };
     return { action: "project-task", key: row.key, line: row.projectTaskLine, field: row.projectTaskField || "status" };
+  }
+  if (kind === "reference-route") {
+    if (!row.settingRoute) return { action: "locked", reason: row.disabledReason || `“${row.key}” is owned elsewhere.`, key: row.key };
+    return { action: "reference-route", key: row.key, route: row.settingRoute };
   }
   if (row && row.key === "done_tasks") {
     return row.archiveTarget
@@ -199395,6 +199704,12 @@ async function propertyEditorSettingsDelete(modal) {
       if (entry.row.settingId === "parent") {
         return propertyEditorSettingsDeleteRefusal(modal, "Lives under is required; Bob will not clear this setting.");
       }
+      if (modal && modal.report && modal.report.note_kind === "reference"
+        && (entry.row.settingId === "title" || entry.row.settingId === "source")) {
+        return propertyEditorSettingsDeleteRefusal(modal, entry.row.settingId === "title"
+          ? "Title is set-only; clear it through YAML only when recovery requires it."
+          : "Source is set-only; replace it instead of clearing it.");
+      }
       if (!cleared.has(entry.row.settingId)) {
         cleared.add(entry.row.settingId);
         ops.push({ op: "setting.clear", setting: entry.row.settingId });
@@ -199403,6 +199718,9 @@ async function propertyEditorSettingsDelete(modal) {
     }
     if (entry.entryType === "project-task" || entry.entryType === "project-status") {
       return propertyEditorSettingsDeleteRefusal(modal, `“${entry.row.key}” is a navigation row and cannot be deleted.`);
+    }
+    if (entry.entryType === "reference-route") {
+      return propertyEditorSettingsDeleteRefusal(modal, `“${entry.row.key}” is owned elsewhere and cannot be deleted here.`);
     }
     const decision = propertyEditorActionForRow(entry.row);
     if (!propertyEditorCanMutate(entry.row)) {
@@ -199530,14 +199848,14 @@ propertyEditorActionForRow = function propertyEditorActionForSettingsRow(row) {
 
 const propertyEditorSettingsBaseCanMutate = propertyEditorCanMutate;
 propertyEditorCanMutate = function propertyEditorCanMutateSettingsRow(row) {
-  if (row && ["setting", "project-task", "project-status"].includes(row.propertyEntryType)) return false;
+  if (row && ["setting", "project-task", "project-status", "reference-route"].includes(row.propertyEntryType)) return false;
   return propertyEditorSettingsBaseCanMutate(row);
 };
 
 const propertyEditorSettingsBaseBadgeKind = propertyEditorBadgeKind;
 propertyEditorBadgeKind = function propertyEditorBadgeKindWithHomeSpecies(noteKind) {
   return propertyEditorSettingsBaseBadgeKind(noteKind)
-    || (["area", "project"].includes(String(noteKind || "").toLowerCase()) ? String(noteKind).toLowerCase() : null);
+    || (["area", "project", "reference"].includes(String(noteKind || "").toLowerCase()) ? String(noteKind).toLowerCase() : null);
 };
 
 const propertyEditorSettingsBasePaintOptions = PropertyEditorModal.prototype.propertyEditorPaintOptions;
@@ -199715,6 +200033,22 @@ Object.assign(PropertyEditorModal.prototype, {
         return this.paintPropertyEditor();
       }
       return resolved;
+    }
+    if (type === "reference-route") {
+      if (typeof refNoteCardEditorFollowRoute === "function") {
+        const followed = await refNoteCardEditorFollowRoute(this, entry);
+        if (!followed || followed.ok !== true) {
+          this.announce = (followed && followed.message) || "That row cannot be opened here.";
+          this.status = { kind: "ready", text: this.announce };
+          this.refusal = null;
+          this.paintPropertyEditor();
+        }
+        return followed;
+      }
+      this.announce = entry?.row?.disabledReason || "That row is owned elsewhere.";
+      this.status = { kind: "ready", text: this.announce };
+      this.refusal = null;
+      return this.paintPropertyEditor();
     }
     return propertyEditorSettingsBaseActivate.call(this, entry);
   },
@@ -200017,7 +200351,7 @@ function propertyEditorSettingStageBuild(entry, stage, draft) {
       ? propertyEditorSettingReadyCapValue("off")
       : propertyEditorSettingReadyCapValue(draft && Object.prototype.hasOwnProperty.call(draft, "value") ? draft.value : current);
   } else if (settingId === "task_refresh") parsed = propertyEditorSettingReviewValue(draft && draft.value);
-  else if (settingId === "project_name_aliases") {
+  else if (settingId === "project_name_aliases" || settingId === "aliases") {
     const items = Array.isArray(draft && draft.items) ? draft.items.slice() : propertyEditorSettingAliasItems(current);
     const extra = String((draft && draft.itemDraft) || "").trim();
     if (extra) items.push(extra);
@@ -200053,7 +200387,7 @@ function propertyEditorSettingRootOps(entry) {
 }
 
 function propertyEditorNeedsContractRefresh(report) {
-  return Boolean(report && ["area", "project"].includes(report.note_kind)
+  return Boolean(report && ["area", "project", "reference"].includes(report.note_kind)
     && Array.isArray(report.capabilities) && report.capabilities.includes("props_v1"));
 }
 
@@ -200112,6 +200446,11 @@ propertyEditorRegisterSettingStageHandler("parent", { kind: "generic-text", wire
 propertyEditorRegisterSettingStageHandler("color", { kind: "generic-text", wireKind: "text" });
 propertyEditorRegisterSettingStageHandler("task_type", { kind: "generic-text", wireKind: "text" });
 propertyEditorRegisterSettingStageHandler("clock", { kind: "generic-clock", wireKind: "text" });
+propertyEditorRegisterSettingStageHandler("title", { kind: "generic-text", wireKind: "text" });
+propertyEditorRegisterSettingStageHandler("author", { kind: "generic-text", wireKind: "text" });
+propertyEditorRegisterSettingStageHandler("published", { kind: "generic-text", wireKind: "text" });
+propertyEditorRegisterSettingStageHandler("source", { kind: "generic-text", wireKind: "text" });
+propertyEditorRegisterSettingStageHandler("aliases", { kind: "list", wireKind: "list" });
 // ---- src/298y-plugin-property-editor-setting-stages.js ----
 // Simple setting stages and one-gesture clear/toggle through the shared
 // property session. propertyEditorResolveSettingStage is the replacement
@@ -200152,7 +200491,7 @@ function propertyEditorSettingOpenDraft(modal, entry, handler) {
     stage.items = propertyEditorSettingAliasItems(seeded);
     stage.value = "";
     stage.suggestionCatalog = typeof propertyEditorSuggestValues === "function"
-      ? propertyEditorSuggestValues(modal.app, "project_name_aliases", modal.filePath)
+      ? propertyEditorSuggestValues(modal.app, entry.row.settingId || "project_name_aliases", modal.filePath)
       : [];
   } else if (handler.kind === "ready-cap") {
     const parsed = propertyEditorSettingReadyCapValue(seeded);
@@ -200495,6 +200834,18 @@ Object.assign(PropertyEditorModal.prototype, {
     }
     if (settingId === "parent") {
       this.refusal = { code: "locked", message: "Lives under is required; Bob will not clear this setting." };
+      this.status = { kind: "refusal", text: this.refusal.message };
+      this.paintPropertyEditor();
+      return false;
+    }
+    if (this.report && this.report.note_kind === "reference"
+      && (settingId === "title" || settingId === "source")) {
+      this.refusal = {
+        code: "locked",
+        message: settingId === "title"
+          ? "Title is set-only; clear it through YAML only when recovery requires it."
+          : "Source is set-only; replace it instead of clearing it.",
+      };
       this.status = { kind: "refusal", text: this.refusal.message };
       this.paintPropertyEditor();
       return false;
@@ -208986,6 +209337,15 @@ try {
       BobLedgerToolsRefNoteCardReadoutsMixin,
       REF_NOTE_CARD_EDITOR_KIND,
       refNoteCardEditorRoute,
+      refNoteCardEditorCapabilityConfirmed,
+      refNoteCardEditorOpen,
+      refNoteCardEmbedTarget,
+      refNoteCardEditorFollowRoute,
+      refNoteCardEditorOpenReadingTask,
+      refNoteCardRenameCommand,
+      refNoteCardCommandModeApi,
+      refNoteCardCopyText,
+      refNoteCardEditorOpenRename,
       REF_LIBRARY_REPORT_ARGV,
       refLibraryReportRow,
     });
@@ -209275,13 +209635,16 @@ try {
       PROPERTY_CAPABILITY_COMMAND_NAME,
       PROPERTY_CAPABILITY_MAX_PROBE_ATTEMPTS,
       PROPERTY_CAPABILITY_CONTRACT,
+      PROPERTY_CAPABILITY_REF_CONTRACT,
       propertyCapabilityBobKey,
       propertyCapabilityClassifyProbe,
       propertyCapabilityProbeArgs,
       propertyCapabilityCatalogArgs,
       propertyDecodeCatalogReport,
       propertyCapabilityClassifyCatalogOutcome,
+      propertyCapabilityClassifyRefCatalogOutcome,
       propertyCapabilityReportHasContract,
+      propertyCapabilityReportHasRefContract,
       propertyCapabilityEligibleNotePath,
       propertyCapabilityCommandTarget,
       propertyNotePath,
@@ -209348,6 +209711,7 @@ try {
       propertyEditorSelectionFilterDelete,
       PROPERTY_EDITOR_SETTING_ORDER,
       PROPERTY_EDITOR_SETTING_KEYS,
+      propertyEditorSettingsContractCapabilityFor,
       propertyEditorSettingsContractShape,
       propertyEditorSettingsSupported,
       propertyEditorSettingsPropertiesMatch,

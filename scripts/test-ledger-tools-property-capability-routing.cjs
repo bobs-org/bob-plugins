@@ -826,7 +826,7 @@ test("a failed summary opener releases the scope before native fallback", async 
 
 // --- Typed settings contract evidence (props_contract_v1, bob-cli-pl.9.1.1) ---
 
-function catalogReport(features = ["props_v1", "props_contract_v1"]) {
+function catalogReport(features = ["props_v1", "props_contract_v1", "props_ref_contract_v1"]) {
   return {
     schema_version: 1, ok: true, protocol: 1, bob_version: "0.0.0-test",
     features, sections: [], roots: [], aliases: [], entries: [], excluded: [],
@@ -848,13 +848,17 @@ function typedShowReport() {
   return showReport({ note_kind: "area", capabilities: ["props_v1", "props_contract_v1"] });
 }
 
+function typedRefShowReport() {
+  return showReport({ path: "ref/paper.md", note_kind: "reference", capabilities: ["props_v1", "props_ref_contract_v1"] });
+}
+
 test("contract helpers: catalog argv, decode, classify, and report evidence", () => {
   assert.deepEqual(H.propertyCapabilityCatalogArgs(), ["__catalog", "--protocol", "1"]);
   assert.equal(H.PROPERTY_CAPABILITY_CONTRACT, "props_contract_v1");
 
   const decoded = H.propertyDecodeCatalogReport(JSON.stringify(catalogReport()), "", 0);
   assert.equal(decoded.ok, true);
-  assert.deepEqual(decoded.report.features, ["props_v1", "props_contract_v1"]);
+  assert.deepEqual(decoded.report.features, ["props_v1", "props_contract_v1", "props_ref_contract_v1"]);
 
   assert.equal(H.propertyDecodeCatalogReport("not json", "", 0).ok, false);
   assert.equal(H.propertyDecodeCatalogReport(JSON.stringify({ ok: true, protocol: 1 }), "", 0).ok, false);
@@ -870,6 +874,19 @@ test("contract helpers: catalog argv, decode, classify, and report evidence", ()
   assert.equal(H.propertyCapabilityReportHasContract(showReport()), false, "ordinary notes omit the contract");
   assert.equal(H.propertyCapabilityReportHasContract(null), false);
   assert.equal(H.propertyCapabilityReportHasContract({ capabilities: [] }), false);
+
+  assert.equal(H.PROPERTY_CAPABILITY_REF_CONTRACT, "props_ref_contract_v1");
+  assert.deepEqual(H.propertyCapabilityClassifyRefCatalogOutcome(decoded), { status: "confirmed" });
+  assert.deepEqual(
+    H.propertyCapabilityClassifyRefCatalogOutcome({ ok: true, report: catalogReport(["props_v1", "props_contract_v1"]) }),
+    { status: "absent", reason: "missing-contract" },
+    "a pre-reference binary absents only the reference slot",
+  );
+  assert.equal(H.propertyCapabilityClassifyRefCatalogOutcome({ ok: false, code: "spawn-failed" }).status, "unconfirmed");
+  assert.equal(H.propertyCapabilityReportHasRefContract(typedRefShowReport()), true);
+  assert.equal(H.propertyCapabilityReportHasRefContract(typedShowReport()), false, "area reports never establish the reference contract");
+  assert.equal(H.propertyCapabilityReportHasRefContract(showReport()), false, "ordinary notes omit the reference contract");
+  assert.equal(H.propertyCapabilityReportHasRefContract(null), false);
 });
 
 test("contract probe confirms, deduplicates in flight, and never needs a note", async () => {
@@ -885,6 +902,8 @@ test("contract probe confirms, deduplicates in flight, and never needs a note", 
     assert.deepEqual(stub.calls[0].args, ["__catalog", "--protocol", "1"]);
     await flushMicrotasks();
     assert.equal(plugin.propertyCapabilityState().contract, "confirmed");
+    assert.equal(plugin.propertyCapabilityState().refContract, "confirmed", "one catalog settles both slots");
+    assert.equal(plugin.propertyCapabilityRefContractConfirmed(), true);
     assert.equal(plugin.propertyCapabilityState().status, "unknown", "the catalog never decides props_v1");
     assert.equal(plugin.__refreshes(), 1, "confirmation schedules card refreshes");
     assert.equal(plugin.schedulePropertyCapabilityContractProbe("file-open", { execFile: stub.execFile }), "confirmed");
@@ -903,11 +922,33 @@ test("contract absence records old binaries and a later catalog detects upgrades
     assert.equal(plugin.schedulePropertyCapabilityContractProbe("setup", { execFile: oldStub.execFile }), "probing");
     await flushMicrotasks();
     assert.equal(plugin.propertyCapabilityState().contract, "absent");
+    assert.equal(plugin.propertyCapabilityState().refContract, "absent");
+    assert.equal(plugin.propertyCapabilityRefContractConfirmed(), false);
     // Absence re-probes: an upgraded binary is detected on a later event.
     const newStub = routedStub(catalogJson(), showJson(showReport()));
     assert.equal(plugin.schedulePropertyCapabilityContractProbe("file-open", { execFile: newStub.execFile }), "probing");
     await flushMicrotasks();
     assert.equal(plugin.propertyCapabilityState().contract, "confirmed");
+  } finally {
+    plugin.teardownPropertyCapabilityRouting();
+    plugin.teardownPropertyUpdate();
+  }
+});
+
+test("a pre-reference binary confirms the generic slot while the reference slot keeps probing", async () => {
+  const app = makeApp({ files: ["note.md"], activePath: "note.md" });
+  const plugin = makePlugin(app);
+  try {
+    const stub = routedStub(catalogJson(["props_v1", "props_contract_v1"]), showJson(showReport()));
+    assert.equal(plugin.schedulePropertyCapabilityContractProbe("setup", { execFile: stub.execFile }), "probing");
+    await flushMicrotasks();
+    assert.equal(plugin.propertyCapabilityState().contract, "confirmed");
+    assert.equal(plugin.propertyCapabilityState().refContract, "absent");
+    assert.equal(plugin.propertyCapabilityRefContractConfirmed(), false);
+    // A confirmed generic slot alone never parks the schedule: the
+    // reference slot still needs its own observation.
+    assert.equal(plugin.schedulePropertyCapabilityContractProbe("file-open", { execFile: stub.execFile }), "probing");
+    assert.equal(stub.calls.length, 2);
   } finally {
     plugin.teardownPropertyCapabilityRouting();
     plugin.teardownPropertyUpdate();
@@ -960,13 +1001,22 @@ test("typed-note shows confirm the contract; ordinary notes never downgrade it",
     assert.equal(plugin.propertyCapabilityNoteShowOutcome({ ok: true, report: typedShowReport() }), "confirmed");
     assert.equal(plugin.propertyCapabilityState().contract, "confirmed");
     assert.equal(plugin.propertyCapabilityState().status, "confirmed");
+    assert.equal(plugin.propertyCapabilityState().refContract, "unknown", "area reports never establish the reference contract");
+    assert.equal(plugin.propertyCapabilityRefContractConfirmed(), false);
+    // A reference note's report confirms the reference slot without
+    // touching the generic one.
+    assert.equal(plugin.propertyCapabilityNoteShowOutcome({ ok: true, report: typedRefShowReport() }), "confirmed");
+    assert.equal(plugin.propertyCapabilityState().refContract, "confirmed");
+    assert.equal(plugin.propertyCapabilityRefContractConfirmed(), true);
     // An ordinary note's report omits the contract: it preserves the
     // confirmed contract instead of establishing absence.
     assert.equal(plugin.propertyCapabilityNoteShowOutcome({ ok: true, report: showReport() }), "confirmed");
     assert.equal(plugin.propertyCapabilityState().contract, "confirmed");
+    assert.equal(plugin.propertyCapabilityState().refContract, "confirmed", "ordinary notes never revoke it");
     // needs-bob is binary-level evidence, so it records contract absence.
     assert.equal(plugin.propertyCapabilityNoteShowOutcome({ ok: false, code: "needs-bob" }), "absent");
     assert.equal(plugin.propertyCapabilityState().contract, "absent");
+    assert.equal(plugin.propertyCapabilityState().refContract, "absent");
   } finally {
     plugin.teardownPropertyCapabilityRouting();
     plugin.teardownPropertyUpdate();

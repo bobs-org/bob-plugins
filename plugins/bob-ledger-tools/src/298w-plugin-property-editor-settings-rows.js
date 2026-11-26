@@ -4,12 +4,16 @@
 const PROPERTY_EDITOR_SETTING_ORDER = Object.freeze({
   area: ["summary", "parent", "color", "task_type", "clock", "ready_cap", "task_refresh", "project_name_aliases"],
   project: ["parent", "color", "task_type", "clock", "root", "ready_cap", "task_refresh", "project_name_aliases"],
+  reference: ["title", "summary", "author", "published", "source", "aliases", "reading", "parent", "file_name"],
 });
 const PROPERTY_EDITOR_SETTING_KEYS = Object.freeze({
   summary: ["summary"], parent: ["parent"], color: ["color"],
   task_type: ["task_type", "theme"], clock: ["offclock", "offclock_types"],
   root: ["root"], ready_cap: ["ready_cap"], task_refresh: ["task_refresh"],
   project_name_aliases: ["project_name_aliases"],
+  title: ["title"], author: ["author"], published: ["published"],
+  source: ["source_url", "url"], aliases: ["aliases"], reading: ["status"],
+  file_name: [],
 });
 const PROPERTY_EDITOR_RETIRED_COUNTS = new Set(["task_count", "open_task_count"]);
 
@@ -56,6 +60,11 @@ function propertyEditorSettingsSettingShape(setting, kind) {
         && (choice.used_by === undefined || Array.isArray(choice.used_by)
           && choice.used_by.every((name) => typeof name === "string")))) return false;
   }
+  if (setting.reason !== undefined && typeof setting.reason !== "string") return false;
+  if (setting.route !== undefined && typeof setting.route !== "string") return false;
+  if (setting.target !== undefined && typeof setting.target !== "string") return false;
+  if (typeof setting.route === "string" && setting.route
+    && (typeof setting.reason !== "string" || !setting.reason)) return false;
   if (setting.issues !== undefined && (!Array.isArray(setting.issues) || !setting.issues.every(propertyEditorSettingsIssueShape))) return false;
   return kind !== "project" || setting.id !== "root" || setting.keys[0] === "root";
 }
@@ -103,14 +112,22 @@ function propertyEditorSettingsPropertiesMatch(report) {
   return true;
 }
 
+function propertyEditorSettingsContractCapabilityFor(noteKind) {
+  if (noteKind === "reference") return "props_ref_contract_v1";
+  if (noteKind === "area" || noteKind === "project") return "props_contract_v1";
+  return "";
+}
+
 function propertyEditorSettingsSupported(report) {
-  return Boolean(report && typeof report === "object"
-    && report.ok === true
-    && report.frontmatter && ["ok", "absent"].includes(report.frontmatter.state)
-    && typeof propertyHasCapability === "function" && propertyHasCapability(report)
-    && Array.isArray(report.capabilities) && report.capabilities.includes("props_contract_v1")
-    && propertyEditorSettingsContractShape(report.contract, report.note_kind)
-    && propertyEditorSettingsPropertiesMatch(report));
+  if (!report || typeof report !== "object"
+    || report.ok !== true
+    || !report.frontmatter || !["ok", "absent"].includes(report.frontmatter.state)
+    || typeof propertyHasCapability !== "function" || !propertyHasCapability(report)
+    || !Array.isArray(report.capabilities)) return false;
+  const capability = propertyEditorSettingsContractCapabilityFor(report.note_kind);
+  if (!capability || !report.capabilities.includes(capability)) return false;
+  return propertyEditorSettingsContractShape(report.contract, report.note_kind)
+    && propertyEditorSettingsPropertiesMatch(report);
 }
 
 function propertyEditorSettingsFallbackHint(report) {
@@ -147,6 +164,8 @@ function propertyEditorSettingsEntry(setting, report) {
   const warning = propertyEditorSettingsWarningText(report, setting);
   const details = [keys, propertyEditorSettingsValueText(value), effective, setting.declared ? "set" : ""]
     .filter(Boolean).join(" · ");
+  const route = typeof setting.route === "string" ? setting.route : "";
+  const target = typeof setting.target === "string" ? setting.target : "";
   const row = {
     key: setting.label, line: null, end_line: null, value: details, kind: "text",
     role: "setting", owner: "bob", editor: null, reason: setting.help,
@@ -155,7 +174,10 @@ function propertyEditorSettingsEntry(setting, report) {
     effectiveValue: propertyCloneJson(setting.effective.value), effectiveLabel: effective,
     settingChoices: Array.isArray(setting.choices) ? propertyCloneJson(setting.choices) : [],
     help: setting.help, settingDisabled: setting.disabled,
-    disabledReason: setting.disabled ? `${setting.label} is disabled for this note.` : "",
+    disabledReason: setting.disabled
+      ? (typeof setting.reason === "string" && setting.reason ? setting.reason : `${setting.label} is disabled for this note.`)
+      : "",
+    settingRoute: route, settingTarget: target,
     issues: setting.issues || [],
     warning, isGhost: setting.declared !== true, propertyEntryType: "setting",
   };
@@ -267,9 +289,22 @@ function propertyEditorSettingsAllEntries(modal) {
   const base = propertyEditorSettingsSourceEntries(modal);
   if (!propertyEditorSettingsSupported(report)) return base;
   const covered = propertyEditorSettingsCoveredKeys(report);
-  const settings = report.contract.settings.map((setting) => propertyEditorSettingsEntry(setting, report));
+  const isReference = report.note_kind === "reference";
+  const settings = [];
+  const owned = [];
+  for (const setting of report.contract.settings) {
+    const entry = propertyEditorSettingsEntry(setting, report);
+    if (isReference && setting.disabled === true) {
+      entry.entryType = "reference-route";
+      entry.group = "owned";
+      entry.row = { ...entry.row, propertyEntryType: "reference-route" };
+      owned.push(entry);
+      continue;
+    }
+    settings.push(entry);
+  }
   const project = report.note_kind === "project" ? propertyEditorProjectEntries(report.contract) : [];
-  const groups = { settings, "project-task": project, properties: [], card: [], identity: [], managed: [] };
+  const groups = { settings, owned, "project-task": project, properties: [], card: [], identity: [], managed: [] };
   for (const sourceEntry of base) {
     let entry = sourceEntry;
     if (covered.has(entry.row.key)) continue;
@@ -286,7 +321,7 @@ function propertyEditorSettingsAllEntries(modal) {
     else if (propertyEditorRoleOf(row) === "card") groups.card.push({ ...entry, group: "card" });
     else groups.properties.push(entry);
   }
-  return [...settings, ...project, ...groups.properties, ...groups.card, ...groups.identity, ...groups.managed];
+  return [...settings, ...owned, ...project, ...groups.properties, ...groups.card, ...groups.identity, ...groups.managed];
 }
 
 function propertyEditorSettingsGroups(modal, query = "", includeCollapsed = false) {
@@ -306,8 +341,11 @@ function propertyEditorSettingsGroups(modal, query = "", includeCollapsed = fals
     }).filter((group) => group.rows.length > 0);
   }
   const entries = propertyEditorSettingsAllEntries(modal);
+  const settingsTitle = report.note_kind === "project" ? "PROJECT SETTINGS"
+    : report.note_kind === "reference" ? "REFERENCE SETTINGS" : "AREA SETTINGS";
   const byGroup = new Map([
-    ["settings", { title: report.note_kind === "project" ? "PROJECT SETTINGS" : "AREA SETTINGS", rows: [] }],
+    ["settings", { title: settingsTitle, rows: [] }],
+    ["owned", { title: "OWNED ELSEWHERE", rows: [] }],
     ["project-task", { title: "ON THE ^PRJ LINE", rows: [] }],
     ["properties", { title: "PROPERTIES", rows: [] }],
     ["card", { title: "On the kind's card", rows: [] }],
@@ -349,6 +387,10 @@ function propertyEditorSettingsActionForRow(row) {
   if (kind === "project-task" || kind === "project-status") {
     if (!row.projectTaskLine) return { action: "locked", reason: "No current ^prj task is available.", key: row.key };
     return { action: "project-task", key: row.key, line: row.projectTaskLine, field: row.projectTaskField || "status" };
+  }
+  if (kind === "reference-route") {
+    if (!row.settingRoute) return { action: "locked", reason: row.disabledReason || `“${row.key}” is owned elsewhere.`, key: row.key };
+    return { action: "reference-route", key: row.key, route: row.settingRoute };
   }
   if (row && row.key === "done_tasks") {
     return row.archiveTarget
@@ -398,6 +440,12 @@ async function propertyEditorSettingsDelete(modal) {
       if (entry.row.settingId === "parent") {
         return propertyEditorSettingsDeleteRefusal(modal, "Lives under is required; Bob will not clear this setting.");
       }
+      if (modal && modal.report && modal.report.note_kind === "reference"
+        && (entry.row.settingId === "title" || entry.row.settingId === "source")) {
+        return propertyEditorSettingsDeleteRefusal(modal, entry.row.settingId === "title"
+          ? "Title is set-only; clear it through YAML only when recovery requires it."
+          : "Source is set-only; replace it instead of clearing it.");
+      }
       if (!cleared.has(entry.row.settingId)) {
         cleared.add(entry.row.settingId);
         ops.push({ op: "setting.clear", setting: entry.row.settingId });
@@ -406,6 +454,9 @@ async function propertyEditorSettingsDelete(modal) {
     }
     if (entry.entryType === "project-task" || entry.entryType === "project-status") {
       return propertyEditorSettingsDeleteRefusal(modal, `“${entry.row.key}” is a navigation row and cannot be deleted.`);
+    }
+    if (entry.entryType === "reference-route") {
+      return propertyEditorSettingsDeleteRefusal(modal, `“${entry.row.key}” is owned elsewhere and cannot be deleted here.`);
     }
     const decision = propertyEditorActionForRow(entry.row);
     if (!propertyEditorCanMutate(entry.row)) {
@@ -533,14 +584,14 @@ propertyEditorActionForRow = function propertyEditorActionForSettingsRow(row) {
 
 const propertyEditorSettingsBaseCanMutate = propertyEditorCanMutate;
 propertyEditorCanMutate = function propertyEditorCanMutateSettingsRow(row) {
-  if (row && ["setting", "project-task", "project-status"].includes(row.propertyEntryType)) return false;
+  if (row && ["setting", "project-task", "project-status", "reference-route"].includes(row.propertyEntryType)) return false;
   return propertyEditorSettingsBaseCanMutate(row);
 };
 
 const propertyEditorSettingsBaseBadgeKind = propertyEditorBadgeKind;
 propertyEditorBadgeKind = function propertyEditorBadgeKindWithHomeSpecies(noteKind) {
   return propertyEditorSettingsBaseBadgeKind(noteKind)
-    || (["area", "project"].includes(String(noteKind || "").toLowerCase()) ? String(noteKind).toLowerCase() : null);
+    || (["area", "project", "reference"].includes(String(noteKind || "").toLowerCase()) ? String(noteKind).toLowerCase() : null);
 };
 
 const propertyEditorSettingsBasePaintOptions = PropertyEditorModal.prototype.propertyEditorPaintOptions;
@@ -718,6 +769,22 @@ Object.assign(PropertyEditorModal.prototype, {
         return this.paintPropertyEditor();
       }
       return resolved;
+    }
+    if (type === "reference-route") {
+      if (typeof refNoteCardEditorFollowRoute === "function") {
+        const followed = await refNoteCardEditorFollowRoute(this, entry);
+        if (!followed || followed.ok !== true) {
+          this.announce = (followed && followed.message) || "That row cannot be opened here.";
+          this.status = { kind: "ready", text: this.announce };
+          this.refusal = null;
+          this.paintPropertyEditor();
+        }
+        return followed;
+      }
+      this.announce = entry?.row?.disabledReason || "That row is owned elsewhere.";
+      this.status = { kind: "ready", text: this.announce };
+      this.refusal = null;
+      return this.paintPropertyEditor();
     }
     return propertyEditorSettingsBaseActivate.call(this, entry);
   },

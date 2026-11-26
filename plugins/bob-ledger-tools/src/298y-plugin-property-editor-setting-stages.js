@@ -37,7 +37,7 @@ function propertyEditorSettingOpenDraft(modal, entry, handler) {
     stage.items = propertyEditorSettingAliasItems(seeded);
     stage.value = "";
     stage.suggestionCatalog = typeof propertyEditorSuggestValues === "function"
-      ? propertyEditorSuggestValues(modal.app, "project_name_aliases", modal.filePath)
+      ? propertyEditorSuggestValues(modal.app, entry.row.settingId || "project_name_aliases", modal.filePath)
       : [];
   } else if (handler.kind === "ready-cap") {
     const parsed = propertyEditorSettingReadyCapValue(seeded);
@@ -380,6 +380,18 @@ Object.assign(PropertyEditorModal.prototype, {
     }
     if (settingId === "parent") {
       this.refusal = { code: "locked", message: "Lives under is required; Bob will not clear this setting." };
+      this.status = { kind: "refusal", text: this.refusal.message };
+      this.paintPropertyEditor();
+      return false;
+    }
+    if (this.report && this.report.note_kind === "reference"
+      && (settingId === "title" || settingId === "source")) {
+      this.refusal = {
+        code: "locked",
+        message: settingId === "title"
+          ? "Title is set-only; clear it through YAML only when recovery requires it."
+          : "Source is set-only; replace it instead of clearing it.",
+      };
       this.status = { kind: "refusal", text: this.refusal.message };
       this.paintPropertyEditor();
       return false;

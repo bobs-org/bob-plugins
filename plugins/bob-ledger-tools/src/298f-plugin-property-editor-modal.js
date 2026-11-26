@@ -465,10 +465,11 @@ class PropertyEditorModal extends PropertyEditorModalBase {
         } catch (_) {}
         return;
       }
-      // Area and project notes own no card editor: browse `=` focuses the
-      // settings group in place instead of closing and reopening. The
-      // request survives a pending report and applies on arrival.
-      if (this.noteKind === "area" || this.noteKind === "project") {
+      // Area, project, and reference notes own no card editor: browse `=`
+      // focuses the settings group in place instead of closing and
+      // reopening. The request survives a pending report and applies on
+      // arrival.
+      if (this.noteKind === "area" || this.noteKind === "project" || this.noteKind === "reference") {
         this.focusSettings = true;
         this.propertyEditorSettingFocusDone = false;
         let focused = false;

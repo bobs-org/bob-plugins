@@ -37,6 +37,10 @@ const PROPERTY_CAPABILITY_MAX_PROBE_ATTEMPTS = 3;
 // Typed settings contract required for area/project whole-frontmatter
 // ownership (bob-cli-pl.9.1.1). The catalog advertises it in `features`.
 const PROPERTY_CAPABILITY_CONTRACT = "props_contract_v1";
+// Typed settings contract required for the reference editor (bob-cli-qp
+// ref-editor). The catalog advertises it in `features` beside the generic
+// contract; per-note show reports carry it only on reference notes.
+const PROPERTY_CAPABILITY_REF_CONTRACT = "props_ref_contract_v1";
 
 // Normalize one resolved bob path to its session cache key. Never throws.
 function propertyCapabilityBobKey(resolved) {
@@ -130,6 +134,24 @@ function propertyCapabilityClassifyCatalogOutcome(outcome) {
   }
 }
 
+// Classify one catalog probe outcome for the reference contract, settled
+// independently beside the generic contract from the same outcome: each
+// feature confirms or absents only its own slot.
+function propertyCapabilityClassifyRefCatalogOutcome(outcome) {
+  try {
+    if (!outcome || typeof outcome !== "object") return { status: "unconfirmed", reason: "no-outcome" };
+    if (outcome.ok === true && outcome.report && typeof outcome.report === "object") {
+      const features = Array.isArray(outcome.report.features) ? outcome.report.features : [];
+      return features.includes(PROPERTY_CAPABILITY_REF_CONTRACT)
+        ? { status: "confirmed" }
+        : { status: "absent", reason: "missing-contract" };
+    }
+    return { status: "unconfirmed", reason: typeof outcome.code === "string" && outcome.code ? outcome.code : "probe-failed" };
+  } catch (_) {
+    return { status: "unconfirmed", reason: "classify-failed" };
+  }
+}
+
 // Positive contract evidence from an already obtained show report: only a
 // typed-note report carries the contract. Ordinary notes omit it, so this
 // reads as true only, never as absence.
@@ -138,6 +160,19 @@ function propertyCapabilityReportHasContract(report) {
     return Boolean(report && typeof report === "object"
       && Array.isArray(report.capabilities)
       && report.capabilities.includes(PROPERTY_CAPABILITY_CONTRACT));
+  } catch (_) {
+    return false;
+  }
+}
+
+// Positive reference-contract evidence: only a reference note's show report
+// carries `props_ref_contract_v1`. Any observation confirms binary support;
+// ordinary notes omit it, so this reads as true only, never as absence.
+function propertyCapabilityReportHasRefContract(report) {
+  try {
+    return Boolean(report && typeof report === "object"
+      && Array.isArray(report.capabilities)
+      && report.capabilities.includes(PROPERTY_CAPABILITY_REF_CONTRACT));
   } catch (_) {
     return false;
   }
@@ -290,13 +325,17 @@ class BobLedgerToolsPropertyCapabilityRoutingMixin {
       if (!(this.propertyCapabilityByBobPath instanceof Map)) this.propertyCapabilityByBobPath = new Map();
       let entry = this.propertyCapabilityByBobPath.get(lookup);
       if (!entry || typeof entry !== "object") {
-        entry = { status: "unknown", contract: "unknown", attempts: 0, contractAttempts: 0, reason: "" };
+        entry = { status: "unknown", contract: "unknown", refContract: "unknown", attempts: 0, contractAttempts: 0, refContractAttempts: 0, reason: "" };
         this.propertyCapabilityByBobPath.set(lookup, entry);
       }
       if (entry.contract !== "confirmed" && entry.contract !== "absent" && entry.contract !== "unconfirmed") {
         entry.contract = "unknown";
       }
+      if (entry.refContract !== "confirmed" && entry.refContract !== "absent" && entry.refContract !== "unconfirmed") {
+        entry.refContract = "unknown";
+      }
       if (!Number.isInteger(entry.contractAttempts)) entry.contractAttempts = 0;
+      if (!Number.isInteger(entry.refContractAttempts)) entry.refContractAttempts = 0;
       return { entry, key: lookup };
     } catch (_) {
       return { entry: null, key: "" };
@@ -309,17 +348,19 @@ class BobLedgerToolsPropertyCapabilityRoutingMixin {
       const entry = this.propertyCapabilityByBobPath instanceof Map
         ? this.propertyCapabilityByBobPath.get(lookup)
         : null;
-      if (!entry) return { status: "unknown", contract: "unknown", attempts: 0, contractAttempts: 0, reason: "", key: lookup };
+      if (!entry) return { status: "unknown", contract: "unknown", refContract: "unknown", attempts: 0, contractAttempts: 0, refContractAttempts: 0, reason: "", key: lookup };
       return {
         status: entry.status || "unknown",
         contract: entry.contract || "unknown",
+        refContract: entry.refContract || "unknown",
         attempts: entry.attempts || 0,
         contractAttempts: entry.contractAttempts || 0,
+        refContractAttempts: entry.refContractAttempts || 0,
         reason: entry.reason || "",
         key: lookup,
       };
     } catch (_) {
-      return { status: "unknown", contract: "unknown", attempts: 0, contractAttempts: 0, reason: "", key: "" };
+      return { status: "unknown", contract: "unknown", refContract: "unknown", attempts: 0, contractAttempts: 0, refContractAttempts: 0, reason: "", key: "" };
     }
   }
 
@@ -336,6 +377,18 @@ class BobLedgerToolsPropertyCapabilityRoutingMixin {
   propertyCapabilityContractConfirmed(key) {
     try {
       return this.propertyCapabilityState(key).contract === "confirmed";
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // Reference-contract evidence for the Reference editor (bob-cli-qp
+  // ref-editor): true only after a catalog or typed-note observation of
+  // `props_ref_contract_v1`. Unknown, absent, and unconfirmed all read as
+  // not ready, so `==` falls back to title focus-or-add.
+  propertyCapabilityRefContractConfirmed(key) {
+    try {
+      return this.propertyCapabilityState(key).refContract === "confirmed";
     } catch (_) {
       return false;
     }
@@ -382,7 +435,7 @@ class BobLedgerToolsPropertyCapabilityRoutingMixin {
         ? this.propertyCapabilityEntry()
         : { entry: null, key: this.propertyCapabilityCurrentBobKey() };
       const key = ensured.key;
-      const entry = ensured.entry || { status: "unknown", contract: "unknown", attempts: 0, contractAttempts: 0, reason: "" };
+      const entry = ensured.entry || { status: "unknown", contract: "unknown", refContract: "unknown", attempts: 0, contractAttempts: 0, refContractAttempts: 0, reason: "" };
       if (!ensured.entry && this.propertyCapabilityByBobPath instanceof Map) {
         this.propertyCapabilityByBobPath.set(key, entry);
       }
@@ -392,11 +445,17 @@ class BobLedgerToolsPropertyCapabilityRoutingMixin {
         : null;
       // needs-bob is binary-level evidence (an old binary without props),
       // so it records contract absence too. Any other report shape leaves
-      // contract evidence alone.
+      // contract evidence alone. The reference contract is confirmed only by
+      // its own capability: an area/project report never establishes it.
       if (outcome && outcome.ok === false && outcome.code === "needs-bob") {
         entry.contract = "absent";
+        entry.refContract = "absent";
       } else if (report && report.ok === true && propertyCapabilityReportHasContract(report)) {
         entry.contract = "confirmed";
+      }
+      if (report && report.ok === true && typeof propertyCapabilityReportHasRefContract === "function"
+        && propertyCapabilityReportHasRefContract(report)) {
+        entry.refContract = "confirmed";
       }
       if (classified.status === "confirmed") {
         entry.status = "confirmed";
@@ -507,7 +566,7 @@ class BobLedgerToolsPropertyCapabilityRoutingMixin {
           const ensured = typeof this.propertyCapabilityEntry === "function"
             ? this.propertyCapabilityEntry(key)
             : { entry: null };
-          const entry = ensured.entry || { status: "unknown", contract: "unknown", attempts: 0, contractAttempts: 0, reason: "" };
+          const entry = ensured.entry || { status: "unknown", contract: "unknown", refContract: "unknown", attempts: 0, contractAttempts: 0, refContractAttempts: 0, reason: "" };
           if (!ensured.entry && this.propertyCapabilityByBobPath instanceof Map) {
             this.propertyCapabilityByBobPath.set(key, entry);
           }
@@ -545,14 +604,18 @@ class BobLedgerToolsPropertyCapabilityRoutingMixin {
         ? this.propertyCapabilityEntry()
         : { entry: null, key: this.propertyCapabilityCurrentBobKey() };
       const key = ensured.key;
-      const entry = ensured.entry || { status: "unknown", contract: "unknown", attempts: 0, contractAttempts: 0, reason: "" };
+      const entry = ensured.entry || { status: "unknown", contract: "unknown", refContract: "unknown", attempts: 0, contractAttempts: 0, refContractAttempts: 0, reason: "" };
       if (!ensured.entry && this.propertyCapabilityByBobPath instanceof Map) {
         this.propertyCapabilityByBobPath.set(key, entry);
       }
-      if (entry.contract === "confirmed") return "confirmed";
+      // Both contracts settle from one probe, so a confirmed generic slot
+      // alone never parks the schedule: the reference slot still needs its
+      // own observation before `==` may open the settings mode.
+      if (entry.contract === "confirmed" && entry.refContract === "confirmed") return "confirmed";
       // Absence re-probes like the generic probe: an upgraded binary is
       // detected on a later lifecycle event.
-      if (entry.contract === "unconfirmed" && entry.contractAttempts >= PROPERTY_CAPABILITY_MAX_PROBE_ATTEMPTS) {
+      if (entry.contract === "unconfirmed" && entry.contractAttempts >= PROPERTY_CAPABILITY_MAX_PROBE_ATTEMPTS
+        && entry.refContract === "unconfirmed" && entry.refContractAttempts >= PROPERTY_CAPABILITY_MAX_PROBE_ATTEMPTS) {
         return "exhausted";
       }
       const flight = this.propertyCapabilityContractFlight;
@@ -602,9 +665,21 @@ class BobLedgerToolsPropertyCapabilityRoutingMixin {
       const ensured = typeof this.propertyCapabilityEntry === "function"
         ? this.propertyCapabilityEntry(key)
         : { entry: null };
-      const entry = ensured.entry || { status: "unknown", contract: "unknown", attempts: 0, contractAttempts: 0, reason: "" };
+      const entry = ensured.entry || { status: "unknown", contract: "unknown", refContract: "unknown", attempts: 0, contractAttempts: 0, refContractAttempts: 0, reason: "" };
       if (!ensured.entry && this.propertyCapabilityByBobPath instanceof Map) {
         this.propertyCapabilityByBobPath.set(key, entry);
+      }
+      const refClassified = typeof propertyCapabilityClassifyRefCatalogOutcome === "function"
+        ? propertyCapabilityClassifyRefCatalogOutcome(outcome)
+        : { status: "unconfirmed", reason: "no-ref-classifier" };
+      if (refClassified.status === "confirmed") {
+        entry.refContract = "confirmed";
+      } else if (refClassified.status === "absent") {
+        entry.refContract = "absent";
+        entry.refContractAttempts = (entry.refContractAttempts || 0) + 1;
+      } else {
+        entry.refContract = "unconfirmed";
+        entry.refContractAttempts = (entry.refContractAttempts || 0) + 1;
       }
       if (classified.status === "confirmed") {
         entry.contract = "confirmed";

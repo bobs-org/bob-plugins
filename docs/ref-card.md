@@ -49,10 +49,24 @@ it never invents reading progress or annotation counts.
 
 ## Keys and takeover
 
-In Live Preview Vim normal mode, `==` focuses or adds `title:`. `+` opens the ordinary
-Property Editor, `-` opens the Properties drawer, and `_` compacts the card to its
-kicker and title. The Reference editor will replace the title fallback when Bob reports
-the `props_ref_contract_v1` capability.
+In Live Preview Vim normal mode, `==` opens the Reference editor: the shared Property
+Editor on Bob's `REFERENCE` settings contract when Bob reports the
+`props_ref_contract_v1` capability, else focus-or-add on `title:`. `+` opens the
+ordinary Property Editor, `-` opens the Properties drawer, and `_` compacts the card
+to its kicker and title.
+
+The Reference editor holds six editable rows — Title, Summary, Authors, Published,
+Source, and Aliases — each with Bob's validation and a previewed, undoable
+`bob props` write. Title also retitles a matching first-body H1 in the same atomic
+write, syncs marker-held fields to the PDF marker at the next writing scan, and names
+the reading task's unchanged link text with a jump to it. Three owned-elsewhere rows
+stay read-only with Bob's reason: Reading and Lives under open the reading task (a
+legacy note without one says so instead), and File name opens Command Mode while
+copying `bob ref rename <stem> <NEW>`. Adding, removing, reordering, or retyping
+fields — and any edit to `id`, `status`, `parent`, `ref_type`, pointers, hashes, or
+`pipeline_version` — is refused, as are PDF writes, scans, task creation, and bundle
+moves. `y` stays the YAML escape; Esc, `q`, and Ctrl+`[` back out of stages and close
+the editor.
 
 The card paints only when the Ref Card preview gate is enabled and the note passes the
 Ref species and library-path checks. It replaces the ordinary title only when a matching

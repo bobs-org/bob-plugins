@@ -176,7 +176,7 @@ function propertyEditorSettingStageBuild(entry, stage, draft) {
       ? propertyEditorSettingReadyCapValue("off")
       : propertyEditorSettingReadyCapValue(draft && Object.prototype.hasOwnProperty.call(draft, "value") ? draft.value : current);
   } else if (settingId === "task_refresh") parsed = propertyEditorSettingReviewValue(draft && draft.value);
-  else if (settingId === "project_name_aliases") {
+  else if (settingId === "project_name_aliases" || settingId === "aliases") {
     const items = Array.isArray(draft && draft.items) ? draft.items.slice() : propertyEditorSettingAliasItems(current);
     const extra = String((draft && draft.itemDraft) || "").trim();
     if (extra) items.push(extra);
@@ -212,7 +212,7 @@ function propertyEditorSettingRootOps(entry) {
 }
 
 function propertyEditorNeedsContractRefresh(report) {
-  return Boolean(report && ["area", "project"].includes(report.note_kind)
+  return Boolean(report && ["area", "project", "reference"].includes(report.note_kind)
     && Array.isArray(report.capabilities) && report.capabilities.includes("props_v1"));
 }
 
@@ -271,3 +271,8 @@ propertyEditorRegisterSettingStageHandler("parent", { kind: "generic-text", wire
 propertyEditorRegisterSettingStageHandler("color", { kind: "generic-text", wireKind: "text" });
 propertyEditorRegisterSettingStageHandler("task_type", { kind: "generic-text", wireKind: "text" });
 propertyEditorRegisterSettingStageHandler("clock", { kind: "generic-clock", wireKind: "text" });
+propertyEditorRegisterSettingStageHandler("title", { kind: "generic-text", wireKind: "text" });
+propertyEditorRegisterSettingStageHandler("author", { kind: "generic-text", wireKind: "text" });
+propertyEditorRegisterSettingStageHandler("published", { kind: "generic-text", wireKind: "text" });
+propertyEditorRegisterSettingStageHandler("source", { kind: "generic-text", wireKind: "text" });
+propertyEditorRegisterSettingStageHandler("aliases", { kind: "list", wireKind: "list" });

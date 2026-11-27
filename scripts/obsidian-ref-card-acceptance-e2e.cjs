@@ -14,6 +14,7 @@ const path = require("node:path");
 const takeover = require("./obsidian-frontmatter-takeover-e2e-lib.cjs");
 const homeCards = require("./obsidian-home-cards-e2e-lib.cjs");
 const shared = require("./obsidian-record-card-e2e.cjs");
+const flows = require("./obsidian-ref-card-acceptance-e2e-flows.cjs");
 
 const REPO_ROOT = path.resolve(__dirname, "..");
 const FIXTURE_ROOT = path.join(__dirname, "fixtures", "ref-cards");
@@ -68,7 +69,7 @@ function fixtureEntries() {
     for (const item of fs.readdirSync(directory, { withFileTypes: true })) {
       const full = path.join(directory, item.name);
       if (item.isDirectory()) walk(full);
-      else if (item.isFile() && item.name.endsWith(".md")) {
+      else if (item.isFile() && item.name.endsWith(".md") && item.name !== "README.md") {
         const relative = path.relative(FIXTURE_ROOT, full).split(path.sep).join("/");
         const target = relative === "sase_ref.md" || relative.startsWith("ref_history/")
           ? relative
@@ -139,7 +140,7 @@ function supportingTaskNotes() {
     "sase_pypi_releases.md": ["---", 'type: "[[project]]"', "---", "", "# SASE PyPI releases", ""].join("\n"),
     "done/sase_pypi_releases_done.md": [
       "---", 'parent: "[[sase_pypi_releases]]"', "---", "", "# SASE PyPI releases · done", "",
-      "- [x] #task #ref [[ref/ref-finished-blog|Agentic coding is straining CI]] #hide ^ref-agentic-coding-ci [completion:: 2026-10-23]", "",
+      "- [x] #task #ref [[ref/ref-finished-blog|Agentic coding is straining CI]] #hide [completion:: 2026-10-23] ^ref-agentic-coding-ci", "",
     ].join("\n"),
   };
 }
@@ -162,13 +163,17 @@ function screenshotMatrix() {
     }
   }
   rows.push(
-    { name: "species-forced-colors", label: "forced-colors", notePath: SAMPLE_CARDS[0][1], mode: "live", theme: "light", width: 1400 },
-    { name: "species-grayscale", label: "grayscale", notePath: SAMPLE_CARDS[0][1], mode: "live", theme: "light", width: 1400 },
+    { name: "species-forced-colors", label: "forced-colors", effect: "forced-colors", notePath: SAMPLE_CARDS[0][1], mode: "live", theme: "light", width: 1400 },
+    { name: "species-grayscale", label: "grayscale", effect: "grayscale", notePath: SAMPLE_CARDS[0][1], mode: "live", theme: "light", width: 1400 },
     { name: "native-source-recovery", label: "recovery", notePath: SAMPLE_CARDS[0][1], mode: "source", theme: "light", width: 1400 },
   );
   for (const [label, notePath] of FAMILY_SAMPLES) {
     for (const theme of ["light", "dark"]) {
       rows.push({ name: `${label}-${theme}-wide`, label, notePath, mode: "live", theme, width: 1400 });
+    }
+    // Species distinction: every family tile under the same two effects.
+    for (const effect of ["forced-colors", "grayscale"]) {
+      rows.push({ name: `${label}-${effect}`, label, effect, notePath, mode: "live", theme: "light", width: 1400 });
     }
   }
   return rows;
@@ -197,9 +202,19 @@ function selfTest() {
   assert.equal(screenshotMatrix().filter((row) => row.name.endsWith("-narrow")).length, 20);
   assert.equal(screenshotMatrix().filter((row) => !["forced-colors", "grayscale", "recovery"].includes(row.label)
     && !row.label.startsWith("family-")).length, 40);
-  assert.equal(screenshotMatrix().length, 51);
+  assert.equal(screenshotMatrix().length, 59);
+  assert.equal(screenshotMatrix().filter((row) => row.effect === "forced-colors").length, 5);
+  assert.equal(screenshotMatrix().filter((row) => row.effect === "grayscale").length, 5);
   assert.equal(typeof takeover.nativeFailures, "function");
   assert.equal(typeof shared.CdpClient, "function");
+  assert.equal(typeof flows.runFlows, "function");
+  const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), "bob-ref-card-shim-"));
+  try {
+    const shim = writeBobShim(shimDir, path.join(shimDir, "log.jsonl"), "/bin/true", shimDir);
+    const parsed = require("node:child_process").spawnSync(process.execPath, ["--check", shim], { encoding: "utf8" });
+    assert.equal(parsed.status, 0, "generated bob shim must parse: " + parsed.stderr);
+  } finally { fs.rmSync(shimDir, { recursive: true, force: true }); }
+  assert.equal(Object.keys(flows.REFERENCE_SETTING_VALUES).length, 6);
   assert.throws(() => parseArgs(["--bogus"]), /Unknown argument/);
   assert.throws(() => parseArgs(["--out"]), /requires/);
   assert.doesNotThrow(() => parseArgs(["--self-test", "--out", "/tmp/ref-card-evidence"]));
@@ -225,7 +240,10 @@ function writePlugin(vaultDir) {
   fs.writeFileSync(path.join(pluginDir, "data.json"), JSON.stringify({ albumChips: true, refCardPreview: true }, null, 2));
 }
 
-function writeBobShim(shimDir, logPath, realBob) {
+// The shim logs every invocation, forwards `-i -` stdin envelopes, and
+// honors acceptance-only flag files: `ref-list-fail` fails `bob ref list`,
+// `ref-list-delay-ms` delays it, and `props-delay-ms` delays `bob props`.
+function writeBobShim(shimDir, logPath, realBob, flagDir) {
   fs.mkdirSync(shimDir, { recursive: true });
   const shim = path.join(shimDir, "bob");
   fs.writeFileSync(shim, `#!/usr/bin/env node
@@ -236,7 +254,24 @@ const real = ${JSON.stringify(realBob)};
 const log = ${JSON.stringify(logPath)};
 const append = (row) => { try { fs.appendFileSync(log, JSON.stringify(row) + "\\n"); } catch (_) {} };
 append({ at: new Date().toISOString(), args });
-const result = spawnSync(real, args, { encoding: "utf8", env: process.env, timeout: 90000, maxBuffer: 32 * 1024 * 1024 });
+const flags = ${JSON.stringify(flagDir)};
+const refList = args[0] === "ref" && args[1] === "list";
+const inputAt = args.findIndex((arg, index) => (arg === "-i" || arg === "--input") && args[index + 1] === "-");
+const input = inputAt >= 0 ? fs.readFileSync(0, "utf8") : undefined;
+if (args[0] === "props" && fs.existsSync(flags + "/props-delay-ms")) {
+  const ms = Number(fs.readFileSync(flags + "/props-delay-ms", "utf8")) || 0;
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+if (refList && fs.existsSync(flags + "/ref-list-delay-ms")) {
+  const ms = Number(fs.readFileSync(flags + "/ref-list-delay-ms", "utf8")) || 0;
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+if (refList && fs.existsSync(flags + "/ref-list-fail")) {
+  append({ at: new Date().toISOString(), args, exitCode: 1, forced: "ref-list-fail" });
+  process.stderr.write("acceptance: forced bob ref list failure\\n");
+  process.exit(1);
+}
+const result = spawnSync(real, args, { encoding: "utf8", env: process.env, input, timeout: 90000, maxBuffer: 32 * 1024 * 1024 });
 append({ at: new Date().toISOString(), args, exitCode: result.status });
 if (result.stdout) process.stdout.write(result.stdout);
 if (result.stderr) process.stderr.write(result.stderr);
@@ -268,9 +303,14 @@ function probeExpression(leafId, notePath) {
     };
     const heading = card?.querySelector(".bob-property-card-title, h1, h2") || null;
     const embeds = Array.from(scope.querySelectorAll(".markdown-embed, .internal-embed")).filter((node) => !card?.contains(node));
-    const headingNodes = Array.from(scope.querySelectorAll("h1, .cm-header-1"));
+    // Body H1s only: Reading renders <h1>; Live Preview renders a header
+    // line. An adopted H1 is either hidden or not rendered at all.
+    const headingNodes = Array.from(scope.querySelectorAll("h1, .HyperMD-header-1"))
+      .filter((node) => inBody(node) && !card?.contains(node));
+    const headingText = (node) => String(node.textContent || "").replace(/^\s*#+\s*/, "").trim();
     const expectedTitle = heading?.textContent?.trim() || "";
-    const matchingH1 = headingNodes.find((node) => node.textContent?.trim() === expectedTitle) || null;
+    const familyCards = Array.from(scope.querySelectorAll(".bob-property-card")).filter((node) =>
+      inBody(node) && !node.matches(".bob-ref-card"));
     return {
       path, mode, scopePresent: true, cardCount: cards.length,
       cardPresent: Boolean(card), cardInEmbed: Boolean(card?.closest(".markdown-embed, .internal-embed")),
@@ -280,9 +320,19 @@ function probeExpression(leafId, notePath) {
       versionText: card?.querySelector("[data-ref-version]")?.textContent?.trim() || "",
       identifiersText: card?.querySelector("[data-ref-identifiers]")?.textContent?.trim() || "",
       annotationsText: card?.querySelector(".bob-ref-card-annotations")?.textContent?.trim() || "",
-      titleHidden: matchingH1 ? !visible(matchingH1) : null,
+      titleHidden: expectedTitle ? !headingNodes.some((node) => headingText(node) === expectedTitle && visible(node)) : null,
       h1Count: headingNodes.length,
-      h1Rows: headingNodes.map((node) => ({ text: node.textContent?.trim() || "", visible: visible(node) })),
+      h1Rows: headingNodes.map((node) => ({ text: headingText(node), visible: visible(node) })),
+      collapsed: Boolean(card?.classList.contains("is-collapsed")),
+      cardHeight: card ? Math.round(card.getBoundingClientRect().height) : 0,
+      regionHeights: card ? Object.fromEntries([
+        ["titleBlock", ".bob-property-card-title-block"], ["details", ".bob-ref-card-details"],
+        ["access", ".bob-ref-card-access-row"], ["foot", ".bob-property-card-foot"], ["lint", ".bob-ref-card-lint-slot"],
+      ].map(([name, selector]) => [name, Math.round(card.querySelector(selector)?.getBoundingClientRect().height || 0)])) : null,
+      dekText: card?.querySelector(".bob-ref-card-dek")?.textContent?.trim() || "",
+      bylineText: card?.querySelector("[data-ref-byline]")?.textContent?.trim() || "",
+      kickerText: card?.querySelector(".bob-property-card-kicker")?.textContent?.trim() || "",
+      familyCards: familyCards.map((node) => String(node.className || "")),
       nativePresent: Boolean(native), nativeVisible: visible(native),
       nativeInert: native?.inert === true, nativeAriaHidden: native?.getAttribute("aria-hidden") || null,
       embedCount: embeds.length, visibleEmbedCount: embeds.filter(visible).length,
@@ -321,6 +371,48 @@ function installWriteAuditExpression(paths) {
 }
 
 function sha256(bytes) { return crypto.createHash("sha256").update(bytes).digest("hex"); }
+
+// The lane word the card must show for one `bob ref list` row, in the
+// Reading Board's vocabulary; null means no row, so no lane chip at all.
+function expectedLane(row) {
+  if (!row || typeof row !== "object") return null;
+  const status = String(row.status || "");
+  if (row.status_sync && !["ok", "pending"].includes(row.status_sync)) return /Status conflict/;
+  if (row.blocked === true && ["wip", "next", "ready"].includes(status)) return /Snoozed/;
+  return ({ wip: /Reading/, next: /Next/, ready: /Ready/, read: /Read/, abandoned: /Dropped/, legacy: /Legacy/ })[status] || null;
+}
+
+// Annotation chip copy for one report row: nonzero counts only.
+function expectedAnnotations(row) {
+  const notes = Number.isSafeInteger(row?.annotation_count) && row.annotation_count > 0 ? row.annotation_count : 0;
+  if (!notes) return "";
+  const comments = Number.isSafeInteger(row?.comment_count) && row.comment_count > 0 ? row.comment_count : 0;
+  const base = `${notes} ${notes === 1 ? "annotation" : "annotations"}`;
+  return comments ? `${base} · ${comments} with notes` : base;
+}
+
+// Read-only bob calls against the scratch vault: the shared ref-library
+// report the cards consume and one REFERENCE contract read.
+function bobGroundTruth(bobPath, vaultDir, env) {
+  const runJson = (args) => {
+    const result = require("node:child_process").spawnSync(bobPath, args, {
+      cwd: vaultDir, env, encoding: "utf8", timeout: 90_000, maxBuffer: 32 * 1024 * 1024,
+    });
+    let json = null;
+    try { json = JSON.parse(result.stdout || ""); } catch (_) {}
+    return { args, exitCode: result.status, json, stderr: String(result.stderr || "").slice(0, 2000) };
+  };
+  const list = runJson(["ref", "list", "-A", "-R", "all", "-f", "json"]);
+  const refs = Array.isArray(list.json?.refs) ? list.json.refs : Array.isArray(list.json?.data?.refs) ? list.json.data.refs : [];
+  const rows = Object.fromEntries(refs.filter((row) => row && row.path).map((row) => [row.path, row]));
+  const show = runJson(["props", "show", "ref/ref-finished-blog.md", "-f", "json"]);
+  return {
+    refList: { ok: list.exitCode === 0 && refs.length > 0, exitCode: list.exitCode, stderr: list.stderr,
+      count: refs.length, rows, coverage: list.json?.coverage ?? null },
+    propsShow: { ok: show.exitCode === 0, exitCode: show.exitCode, stderr: show.stderr,
+      capabilities: show.json?.capabilities ?? null, contract: show.json?.contract ?? null },
+  };
+}
 
 async function run(args) {
   const outDir = path.resolve(args.out || path.join(os.tmpdir(), "bob-ref-card-acceptance-" + crypto.randomBytes(4).toString("hex")));
@@ -375,14 +467,32 @@ async function run(args) {
       fs.writeFileSync(file, bytes);
     }
     writePlugin(vaultDir);
-    const shim = writeBobShim(shimDir, bobLog, bob.path);
+    const flagDir = path.join(profileDir, "flags");
+    fs.mkdirSync(flagDir, { recursive: true });
+    const shim = writeBobShim(shimDir, bobLog, bob.path, flagDir);
     shared.initScratchGit(vaultDir);
     const vaultReal = fs.realpathSync(vaultDir);
     shared.seedProfile(profileDir, vaultReal);
     const protectedFiles = [...Object.keys(notes), ...Object.keys(binaries)].sort();
     const expectedHashes = Object.fromEntries(protectedFiles.map((name) => [name, sha256(fs.readFileSync(path.join(vaultReal, name)))]));
     report.scratch = { root: scratch, vault: vaultReal, profile: profileDir };
-    report.fixtures = { eligible, nonclaims: NONCLAIMS.slice(), hashesBefore: expectedHashes };
+    report.fixtures = { eligible, nonclaims: NONCLAIMS.slice(), hashesBefore: expectedHashes, checkpoints: [] };
+    // Passive checkpoints localize any protected-byte change to a phase.
+    const checkpoint = (label) => {
+      const changedNow = protectedFiles.filter((name) => sha256(fs.readFileSync(path.join(vaultReal, name))) !== expectedHashes[name]);
+      report.fixtures.checkpoints.push({ label, at: new Date().toISOString(), changed: changedNow });
+      return changedNow;
+    };
+    const appEnv = {
+      ...process.env, HOME: profileDir, BOB_DIR: vaultReal, BOB_NOW: "2026-11-20 12:00:00",
+      BOB_CONFIG_FILE: path.join(profileDir, "missing-test-config.yml"), TMPDIR: process.env.TMPDIR || "/tmp", NO_COLOR: "1",
+    };
+    // Ground truth: the exact report and contract the card consumes, read
+    // from the current-checkout bob against this scratch vault (read-only).
+    const groundTruth = bobGroundTruth(bob.path, vaultReal, appEnv);
+    report.groundTruth = groundTruth;
+    const truthRows = groundTruth.refList?.rows || {};
+    checkpoint("after-bob-ground-truth");
 
     const port = await shared.freePort();
     const processInfo = { pid: null, executable, debugPort: port, stderr: "" };
@@ -392,11 +502,7 @@ async function run(args) {
       "--remote-allow-origins=http://127.0.0.1/*", vaultReal,
     ], {
       cwd: os.tmpdir(), stdio: ["ignore", "ignore", "pipe"],
-      env: {
-        ...process.env, HOME: profileDir, BOB_DIR: vaultReal, BOB_NOW: "2026-11-20 12:00:00",
-        BOB_CONFIG_FILE: path.join(profileDir, "missing-test-config.yml"),
-        PATH: shimDir + path.delimiter + (process.env.PATH || ""), TMPDIR: "/tmp", NO_COLOR: "1",
-      },
+      env: { ...appEnv, PATH: shimDir + path.delimiter + (process.env.PATH || "") },
     });
     processInfo.pid = child.pid || null;
     child.stderr.on("data", (chunk) => {
@@ -425,6 +531,7 @@ async function run(args) {
     report.obsidian = appVersion;
     const pluginEnabled = await client.evaluate(`app.plugins.enabledPlugins?.has?.(${JSON.stringify(PLUGIN_ID)}) === true`);
     check("plugin-loaded", pluginEnabled, { appVersion, plugin: report.plugin });
+    checkpoint("after-startup");
     await shared.setViewport(client, 1400, 1000);
     await shared.setTheme(client, "light");
 
@@ -447,6 +554,28 @@ async function run(args) {
       await shared.openNote(client, notePath, mode);
       return waitForCard(notePath, mode);
     };
+    // Fold state is per-note session state; every screenshot sets it
+    // explicitly so one row's compact shot never leaks into the next.
+    const setFold = async (notePath, collapsed) => {
+      await client.evaluate(`app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}]?.refNoteCardSetCollapsed?.(${JSON.stringify(notePath)}, ${collapsed === true})`);
+      const until = Date.now() + 5_000;
+      let last = null;
+      while (Date.now() < until) {
+        last = await probe(notePath);
+        if (last.cardCount === 1 && last.collapsed === (collapsed === true)) return last;
+        await shared.sleep(120);
+      }
+      throw new Error(`${notePath} fold did not settle to ${collapsed}: ${JSON.stringify(last)}`);
+    };
+    const scrollTop = () => client.evaluate(`(async () => {
+      const view = app.workspace.activeLeaf?.view;
+      try { view?.editor?.setCursor?.({ line: 0, ch: 0 }); } catch (_) {}
+      try { view?.editor?.scrollTo?.(0, 0); } catch (_) {}
+      try { view?.previewMode?.applyScroll?.(0); } catch (_) {}
+      try { view?.currentMode?.applyScroll?.(0); } catch (_) {}
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      return true;
+    })()`);
 
     const capability = await client.evaluate(`(() => {
       const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
@@ -481,6 +610,7 @@ async function run(args) {
       }
     }
     report.takeover = takeoverRows;
+    checkpoint("after-takeover-matrix");
     check("takeover-live-and-reading", takeoverRows.length === eligible.length * 2 && takeoverRows.every((row) => row.failures.length === 0), takeoverRows);
 
     const nonclaimRows = [];
@@ -490,7 +620,12 @@ async function run(args) {
         await shared.sleep(450);
         const row = await probe(notePath);
         const nativeShouldRemain = notePath !== "ref/ref-bad-yaml.md";
-        const ok = row.cardCount === 0 && row.cardInEmbed === false && (!nativeShouldRemain || row.nativeVisible);
+        // Another family card (for example the Project Card on a mixed
+        // [ref, project] note) may own the note; what matters is that no
+        // Ref Card mounts and the note is never left ownerless.
+        const otherOwner = row.familyCards.length === 1;
+        const ok = row.cardCount === 0 && row.cardInEmbed === false
+          && (!nativeShouldRemain || row.nativeVisible || otherOwner);
         nonclaimRows.push({ path: notePath, ok, probe: row });
       } catch (error) { nonclaimRows.push({ path: notePath, ok: false, error: String(error.message || error) }); }
     }
@@ -511,20 +646,20 @@ async function run(args) {
       JSON.stringify(blogProbe) + JSON.stringify(takeoverRows.map((row) => row.probe || {})),
     );
     check("readout-content-gating", noGhosts, { blog: blogProbe, zeroPattern: "0 annotations/comments/highlights" });
-    const reportFixture = JSON.parse(fs.readFileSync(path.join(FIXTURE_ROOT, "ref-list.json"), "utf8"));
-    const expectedLane = (row) => row.status === "read" ? /Read/i
-      : row.status === "legacy" ? /Legacy/i
-        : row.blocked === true ? /Snoozed/i
-          : row.status === "next" ? /Next/i
-            : row.status === "wip" ? /Reading/i : /Ready/i;
     const laneRows = [];
-    for (const row of reportFixture.refs || []) {
-      const actual = await viewMode(row.path, "live");
-      laneRows.push({ path: row.path, status: row.status, expected: String(expectedLane(row)),
-        actual: actual.laneText, matches: expectedLane(row).test(actual.laneText || "") });
+    for (const notePath of eligible) {
+      const row = truthRows[notePath] || null;
+      const expected = expectedLane(row);
+      const actual = await viewMode(notePath, "live");
+      laneRows.push({ path: notePath, status: row?.status || null, blocked: row?.blocked ?? null,
+        expected: String(expected), actual: actual.laneText,
+        matches: expected ? expected.test(actual.laneText || "") : actual.laneText === "" });
     }
     report.data = { laneRows };
-    check("fixture-reading-lanes", laneRows.length === (reportFixture.refs || []).length && laneRows.every((row) => row.matches), laneRows);
+    check("fixture-reading-lanes-match-bob", groundTruth.refList?.ok === true
+      && laneRows.length === eligible.length && laneRows.every((row) => row.matches)
+      && new Set(laneRows.map((row) => row.status).filter(Boolean)).size >= 5
+      && laneRows.some((row) => row.status === "legacy" && /Legacy/.test(row.actual)), laneRows);
     const missingPdf = await viewMode("ref/ref-missing-pdf.md", "live");
     check("missing-pdf-diagnostic", /pdf/i.test(missingPdf.lintText) || missingPdf.access.every((item) => !item.pdf), missingPdf);
 
@@ -534,17 +669,26 @@ async function run(args) {
     const paper = await viewMode("ref/ref-arxiv-paper.md", "live");
     const blogReadout = await viewMode(blog, "live");
     const expectedPdf = (item, filename) => item.pdf && item.target.includes(filename);
-    const accessAndReadoutOk = /5 annotations/i.test(blogReadout.annotationsText)
-      && /2 with notes/i.test(blogReadout.annotationsText)
+    const annotationRows = [];
+    for (const notePath of eligible) {
+      const truth = expectedAnnotations(truthRows[notePath]);
+      const actual = notePath === blog ? blogReadout : notePath === paper.path ? paper : await viewMode(notePath, "live");
+      annotationRows.push({ path: notePath, expected: truth, actual: actual.annotationsText,
+        matches: truth ? actual.annotationsText.includes(truth) : actual.annotationsText === "" });
+    }
+    const paperTruth = truthRows["ref/ref-arxiv-paper.md"] || {};
+    const accessAndReadoutOk = annotationRows.every((row) => row.matches)
+      && annotationRows.some((row) => row.expected)
       && blogReadout.access.some((item) => expectedPdf(item, "agentic-coding-ci.pdf"))
       && blogReadout.access.some((item) => item.audio)
-      && /arxiv:1706\.03762/i.test(paper.identifiersText)
-      && /v2/i.test(paper.versionText)
-      && /12 annotations/i.test(paper.annotationsText)
-      && /4 with notes/i.test(paper.annotationsText)
+      && (!paperTruth.identity?.arxiv || paper.identifiersText.includes("arXiv:" + paperTruth.identity.arxiv))
+      && (!(paperTruth.reading >= 2) || paper.versionText === "v" + paperTruth.reading)
       && paper.access.some((item) => expectedPdf(item, "attention-is-all-you-need.pdf"));
-    check("annotation-identity-lineage-and-access-readouts", accessAndReadoutOk, { blog: blogReadout, paper });
+    report.data.annotationRows = annotationRows;
+    check("annotation-identity-lineage-and-access-readouts", accessAndReadoutOk,
+      { annotationRows, blog: blogReadout, paper, paperTruth: { identity: paperTruth.identity, reading: paperTruth.reading } });
 
+    checkpoint("after-data-readouts");
     // Exercise the actual Vim `==` route in the Obsidian editor. A first `=`
     // must leave Vim's operator pending; the second opens the Reference
     // settings editor through the card-kind registry without touching YAML.
@@ -560,14 +704,20 @@ async function run(args) {
       await client.call("Input.dispatchKeyEvent", { type: "keyDown", ...event });
       await client.call("Input.dispatchKeyEvent", { type: "keyUp", ...event });
     };
+    const docBefore = await client.evaluate("app.workspace.activeLeaf?.view?.editor?.getValue?.() ?? null");
     await key("Escape", "Escape", 27);
     await key("=", "Equal", 187);
     const firstEquals = await client.evaluate(`(() => {
-      const cm = app.workspace.activeLeaf?.view?.editor?.cm?.cm6;
-      return { operator: cm?.state?.vim?.inputState?.operator || null,
-        editorFocused: Boolean(cm?.contentDOM && cm.contentDOM.contains(document.activeElement)),
-        editorOpen: Boolean(document.querySelector(".bob-property-editor-header")) };
+      const editor = app.workspace.activeLeaf?.view?.editor;
+      const view = editor?.cm;
+      const vim = view?.cm?.state?.vim || null;
+      return { operator: vim?.inputState?.operator || null, insertMode: vim?.insertMode === true,
+        editorFocused: Boolean(view?.contentDOM && view.contentDOM.contains(document.activeElement)),
+        editorOpen: Boolean(document.querySelector(".bob-property-editor-header")),
+        doc: editor?.getValue?.() ?? null };
     })()`);
+    firstEquals.docUnchanged = firstEquals.doc === docBefore;
+    delete firstEquals.doc;
     await key("=", "Equal", 187);
     await shared.waitFor(client, `(() => {
       const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
@@ -586,7 +736,7 @@ async function run(args) {
       };
     })()`);
     const keysOk = focused === true && firstEquals.editorFocused === true
-      && firstEquals.operator === "indentAuto" && firstEquals.editorOpen === false
+      && firstEquals.insertMode === false && firstEquals.docUnchanged === true && firstEquals.editorOpen === false
       && editorOpen.filePath === blog && editorOpen.noteKind === "reference"
       && editorOpen.focusSettings === true && /reference/i.test(editorOpen.heading)
       && editorOpen.modalOwnsFocus;
@@ -604,22 +754,29 @@ async function run(args) {
     await shared.sleep(2200);
     const invocationsBefore = fs.existsSync(bobLog)
       ? fs.readFileSync(bobLog, "utf8").split(/\r?\n/).filter(Boolean).length : 0;
-    await client.evaluate(`(() => {
+    const clickInCard = (selector) => client.evaluate(`(() => {
       const card = document.querySelector('.bob-ref-card[data-ref-source="${blog}"]');
-      card?.querySelector(".bob-ref-card-fold")?.click();
-      card?.querySelector(".bob-ref-card-fold")?.click();
-      card?.querySelector(".bob-property-card-foot-disclosure")?.click();
-      card?.querySelector(".bob-property-card-foot-disclosure")?.click();
-      return Boolean(card);
+      const node = card?.querySelector(${JSON.stringify(selector)});
+      node?.click();
+      return Boolean(node);
     })()`);
+    const gestures = [];
+    for (const selector of [".bob-ref-card-fold", ".bob-ref-card-fold", ".bob-property-card-foot-disclosure", ".bob-property-card-foot-disclosure"]) {
+      gestures.push({ selector, clicked: await clickInCard(selector) });
+      await shared.sleep(450);
+      gestures[gestures.length - 1].collapsed = (await probe(blog)).collapsed;
+    }
     await shared.setViewport(client, 420, 900);
     await shared.setViewport(client, 1400, 1000);
     await shared.sleep(2200);
     const writeRows = await client.evaluate("window.__bobRefAcceptanceWriteAudit?.rows || []");
     const invocationsAfter = fs.existsSync(bobLog)
       ? fs.readFileSync(bobLog, "utf8").split(/\r?\n/).filter(Boolean).length : 0;
-    report.passivity = { writeRows, invocationsBefore, invocationsAfter };
-    check("passive-fold-drawer-resize", writeRows.length === 0 && invocationsAfter === invocationsBefore, report.passivity);
+    checkpoint("after-passivity-gestures");
+    report.passivity = { writeRows, invocationsBefore, invocationsAfter, gestures };
+    check("passive-fold-drawer-resize", writeRows.length === 0 && invocationsAfter === invocationsBefore
+      && gestures.length === 4 && gestures.every((row) => row.clicked)
+      && gestures[0].collapsed === true && gestures[1].collapsed === false, report.passivity);
 
     // Capture the complete approved sample matrix with card probes before and
     // after every shot. Digests and byte sizes are recorded for visual review.
@@ -627,22 +784,24 @@ async function run(args) {
       try {
         await shared.setTheme(client, shot.theme);
         await shared.setViewport(client, shot.width, shot.width < 600 ? 900 : 1000);
-        if (shot.label === "forced-colors") {
+        if (shot.effect === "forced-colors") {
           await client.call("Emulation.setEmulatedMedia", { features: [{ name: "forced-colors", value: "active" }] });
-        } else if (shot.label === "grayscale") {
+          await client.evaluate("document.documentElement.style.filter = ''");
+        } else if (shot.effect === "grayscale") {
+          await client.call("Emulation.setEmulatedMedia", { features: [] });
           await client.evaluate("document.documentElement.style.filter = 'grayscale(1)'");
         } else {
           await client.call("Emulation.setEmulatedMedia", { features: [] });
           await client.evaluate("document.documentElement.style.filter = ''");
         }
-        if (shot.label.startsWith("family-")) {
-          await shared.openNote(client, shot.notePath, shot.mode);
-        } else if (shot.label === "compact") {
-          await shared.openNote(client, shot.notePath, shot.mode);
-          await client.evaluate(`document.querySelector('.bob-ref-card[data-ref-source="${shot.notePath}"] .bob-ref-card-fold')?.click()`);
-        } else {
-          await shared.openNote(client, shot.notePath, shot.mode);
+        await shared.openNote(client, shot.notePath, shot.mode);
+        if (!shot.label.startsWith("family-") && shot.label !== "recovery") {
+          await waitForCard(shot.notePath, shot.mode);
+          await setFold(shot.notePath, shot.label === "compact");
         }
+        await scrollTop();
+        await client.call("Input.dispatchMouseEvent", { type: "mouseMoved", x: 2, y: shot.width < 600 ? 898 : 998 });
+        await client.evaluate("(() => { document.querySelectorAll('.hover-popover').forEach((node) => node.remove()); return true; })()");
         await shared.sleep(400);
         const family = shot.label.startsWith("family-");
         const before = family ? await client.evaluate(`(() => {
@@ -652,12 +811,15 @@ async function run(args) {
             refCardCount: document.querySelectorAll(".bob-ref-card").length,
             title: ours[0]?.querySelector(".bob-property-card-title")?.textContent?.trim() || "" };
         })()`) : await probe(shot.notePath);
+        const media = await client.evaluate("({ forcedColors: matchMedia('(forced-colors: active)').matches, filter: document.documentElement.style.filter || '' })");
         const captured = await shared.capture(client, outDir, shot.name, shot.width, shot.theme, shot.mode);
+        captured.media = media;
         const after = family ? before : await probe(shot.notePath);
         const recovery = shot.label === "recovery";
         const ok = family ? before.cardCount === 1 && before.refCardCount === 0 && Boolean(before.title)
           : recovery ? before.mode === "source" && before.cardCount === 0
-            : before.cardCount === 1 && before.footPresent && !before.nativeVisible;
+            : before.cardCount === 1 && !before.nativeVisible && before.collapsed === (shot.label === "compact")
+              && (shot.label === "compact" || before.footPresent);
         report.screenshots.push({ ...captured, tags: [shot.label, shot.mode, shot.theme, shot.width],
           captureFailures: ok ? [] : ["card ownership probe failed before screenshot"],
           probes: { before, after }, visualVerdict: "pending inspection" });
@@ -676,8 +838,25 @@ async function run(args) {
     const changed = protectedFiles.filter((name) => hashesAfter[name] !== expectedHashes[name]);
     report.fixtures.hashesAfter = hashesAfter;
     report.fixtures.changed = changed;
+    report.fixtures.changedDetail = changed.map((name) => ({ name,
+      before: String(notes[name] ?? "(binary)").slice(0, 3000),
+      after: notes[name] === undefined ? "(binary)" : fs.readFileSync(path.join(vaultReal, name), "utf8").slice(0, 3000) }));
     check("protected-fixture-and-pdf-bytes-unchanged", changed.length === 0, changed);
+
+    // Interactive flows run only after the passive hash check: they write
+    // deliberately (editor saves with undo, renames, scan rewrites).
+    await shared.setViewport(client, 1400, 1000);
+    await shared.setTheme(client, "light");
+    await client.call("Emulation.setEmulatedMedia", { features: [] });
+    await client.evaluate("document.documentElement.style.filter = ''");
+    for (const [, notePath] of SAMPLE_CARDS) { await viewMode(notePath, "live"); await setFold(notePath, false); }
+    await flows.runFlows({ client, shared, check, report, probe, viewMode, waitForCard, setFold, scrollTop,
+      notes, vaultReal, flagDir, truthRows, leafId });
     check("no-console-exceptions", report.consoleExceptions.length === 0, report.consoleExceptions);
+    // Obsidian's own pdf.js viewer logs about the one-page synthetic PDF;
+    // every other console error (a plugin's or CodeMirror's) fails the run.
+    const unexpectedErrors = report.consoleErrors.filter((text) => !/lib\/pdfjs\//.test(text));
+    check("no-unexpected-console-errors", unexpectedErrors.length === 0, unexpectedErrors);
     check("cli-invocations-recorded", fs.existsSync(bobLog), { path: bobLog, count: invocationsAfter });
 
     report.visualReview = report.screenshots.every((row) => row.visualVerdict === "approved") ? "approved" : "pending";
@@ -739,5 +918,5 @@ async function main(argv) {
 if (require.main === module) void main(process.argv.slice(2));
 module.exports = {
   HELP, NONCLAIMS, SAMPLE_CARDS, eligibleFixturePaths, fixtureBinaryEntries, fixtureEntries,
-  matchingHeadingExpected, parseArgs, probeExpression, screenshotMatrix, selfTest, run,
+  matchingHeadingExpected, parseArgs, probeExpression, screenshotMatrix, selfTest, run, writeBobShim,
 };

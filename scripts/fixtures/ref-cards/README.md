@@ -16,8 +16,9 @@ from the live vault.
 - `ref-earlier-replaced.md` — replaced capture installed under
   `ref_history/attention-flyby.md` and linked from the current paper.
 - `ref-v1-tracker.md` — v1 tracker.
-- `ref-legacy-book.md` — legacy zorg book (provenance keys, `legacy_status`).
-- `ref-legacy-ai.md` — legacy url-only `ai` ref.
+- `ref-legacy-book.md` — legacy zorg book (`status: "legacy"` as in the live
+  vault, provenance keys, `legacy_status: started`).
+- `ref-legacy-ai.md` — legacy url-only `ai` ref (`legacy_status: read`).
 - `ref-title-mismatch.md` — H1 differs from `title:` (stays visible).
 - `ref-no-title.md` — no `title:` (stem fallback).
 - `ref-missing-pdf.md` — declared-but-missing PDF.

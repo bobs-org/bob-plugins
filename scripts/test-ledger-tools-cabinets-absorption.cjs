@@ -32,15 +32,23 @@ class RangeSetBuilder {
     return this.spans;
   }
 }
+// A RangeSet-shaped stub: CodeMirror's cursor motion calls `.between()` on
+// every atomicRanges result, so the stub carries it alongside list access.
+class RangeSetStub {
+  constructor(ranges) { this.ranges = ranges; }
+  get length() { return this.ranges.length; }
+  between(from, to, f) { for (const r of this.ranges) if (r.to >= from && r.from <= to) f(r.from, r.to, r.value); }
+}
 const Decoration = {
-  none: [],
+  none: new RangeSetStub([]),
+  mark: (spec) => ({ spec, range: (from, to) => ({ from, to, value: spec }) }),
   widget: (options) => options,
   replace: (options) => ({
     replace: true,
     options,
     range: (from, to) => ({ from, to, replaced: true }),
   }),
-  set: (ranges) => ranges,
+  set: (ranges) => new RangeSetStub(ranges),
 };
 const EditorView = {
   decorations: { from: (field, get) => ({ field, get }) },
@@ -113,6 +121,7 @@ const {
   propertyCardCabinetAbsorbFieldReduce,
   propertyCardCabinetAbsorbFieldDecorations,
   propertyCardCabinetAbsorbAtomicRanges,
+  propertyCardCabinetAbsorbAtomicRangeSet,
   propertyCardCabinetAbsorbShouldReveal,
   propertyCardCabinetAbsorbEditorExtension,
   propertyCardCabinetAbsorbInEditor,
@@ -470,6 +479,28 @@ test("editor: rungs default to atomic and select bare replace", () => {
   assert.equal(absorb("replace").claim.rung, "replace");
   assert.equal(propertyCardCabinetAbsorbAtomicRanges(absorb(undefined)).length, 1, "rung b maps the cursor around the span");
   assert.deepEqual(propertyCardCabinetAbsorbAtomicRanges(absorb("replace")), [], "rung a leaves bare replace decorations");
+});
+
+test("editor: atomicRanges hands CodeMirror a RangeSet, never a plain array", () => {
+  const field = propertyCardCabinetAbsorbEditorExtension();
+  assert.ok(field, "the StateField builds with stubs");
+  const provided = field.spec.provide(field);
+  const atomic = provided.find((extension) => typeof extension === "function");
+  assert.ok(atomic, "the field provides an atomicRanges function");
+  const viewWith = (value) => ({ state: { field: () => value } });
+  for (const value of [undefined, null, { claim: null, ranges: [] }]) {
+    const set = atomic(viewWith(value));
+    assert.equal(typeof set.between, "function", "an unclaimed editor still yields a RangeSet");
+    assert.equal(set, Decoration.none);
+  }
+  const hidden = atomic(viewWith({ claim: { rung: "atomic" }, ranges: [{ from: 10, to: 40 }], revealed: false }));
+  assert.equal(typeof hidden.between, "function");
+  const seen = [];
+  hidden.between(0, 100, (from, to) => seen.push([from, to]));
+  assert.deepEqual(seen, [[10, 40]]);
+  const throwing = atomic({ state: { field: () => { throw new Error("no field"); } } });
+  assert.equal(throwing, Decoration.none, "a failing read falls back to the empty RangeSet");
+  assert.equal(propertyCardCabinetAbsorbAtomicRangeSet([{ from: 5, to: 5 }, null, { from: "a", to: 3 }]), Decoration.none);
 });
 
 test("editor: extension and in-editor claim handle", () => {

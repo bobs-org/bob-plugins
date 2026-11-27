@@ -1,6 +1,7 @@
 ---
 type: "[[ref]]"
 title: "Outlive"
+status: "legacy"
 ref_type: zorg
 legacy_status: started
 source_note: "zorg/outlive"

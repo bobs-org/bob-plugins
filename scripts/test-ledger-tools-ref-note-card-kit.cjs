@@ -226,7 +226,7 @@ test("titles adopt only a matching opening H1 and citation values keep written p
   assert.equal(blog.title.text, "Agentic coding is straining CI");
   assert.equal(blog.title.source, "title");
   assert.equal(blog.title.range.title, blog.title.text);
-  assert.equal(blog.title.range.headingLine, 15);
+  assert.equal(blog.title.range.headingLine, 16);
   assert.deepEqual(blog.byline.map(({ kind, text }) => [kind, text]), [
     ["author", "Sachin Malhotra"],
     ["source", "claude.com"],
@@ -337,4 +337,53 @@ test("PDF opens through the macOS Highlights API when present and otherwise thro
   assert.equal(host.refNoteCardOpenPdf("ref/paper.md", "lib/paper.pdf"), true);
   assert.deepEqual(fallback, [["lib/paper.pdf", "ref/paper.md", true]]);
   assert.equal(host.refNoteCardOpenPdf("ref/paper.md", "../escape.pdf"), false);
+});
+
+test("Ref Card gg, k, and Up stop at the first visible body line while the card owns the frontmatter", () => {
+  const host = new H.BobLedgerToolsRefNoteCardMixin();
+  host.app = { vault: { getConfig: (key) => key === "vimMode" } };
+  host.refNoteCardLivePath = () => "ref/ref-finished-blog.md";
+  let owned = true;
+  host.refNoteCardNavigationOwned = () => owned;
+  host.homeCardVisibleBodyLine = () => ({ from: 120 });
+  const deferred = [];
+  host.refNoteCardNavigationDefer = (callback) => { deferred.push(callback); };
+  const settle = () => { while (deferred.length) deferred.shift()(); };
+  const view = {
+    dom: {},
+    state: { selection: { main: { head: 120 } } },
+    dispatch(spec) { this.state.selection.main.head = spec.selection.anchor; },
+  };
+  const key = (name) => {
+    const event = { key: name, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }, stopPropagation() {} };
+    return { event, handled: host.refNoteCardHandleVisibleBodyNavigation(event, view) };
+  };
+
+  assert.equal(key("Escape").handled, false);
+  view.state.selection.main.head = 300;
+  assert.equal(key("g").handled, false);
+  const gg = key("g");
+  assert.equal(gg.handled, true, "the second g schedules the body-start landing");
+  assert.equal(gg.event.defaultPrevented, false, "Vim still runs its own gg");
+  view.state.selection.main.head = 8; // Vim's gg put the cursor in the hidden frontmatter
+  settle();
+  assert.equal(view.state.selection.main.head, 120, "gg lands on the visible body, not the hidden frontmatter");
+  assert.equal(key("k").handled, true, "k at the body start is guarded");
+  view.state.selection.main.head = 60; // the motion landed on the hidden title separator
+  settle();
+  assert.equal(view.state.selection.main.head, 120);
+  assert.equal(key("ArrowUp").handled, true);
+  settle();
+  assert.equal(view.state.selection.main.head, 120, "a motion that stays in the body is left alone");
+  view.state.selection.main.head = 200;
+  assert.equal(key("k").handled, false, "k below the body start is ordinary Vim");
+
+  key("i");
+  assert.equal(key("g").handled, false, "insert-mode g is typed, never swallowed");
+  assert.equal(key("g").handled, false);
+
+  owned = false;
+  key("Escape");
+  view.state.selection.main.head = 120;
+  assert.equal(key("ArrowUp").handled, false, "without frontmatter ownership the editor moves normally");
 });

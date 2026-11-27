@@ -287,12 +287,12 @@ test("lane chips cover every report state", () => {
   assert.equal(refNoteCardLaneModel(rowWith({ status: "read", finished: null }), { today }).text, "✓ Read");
   assert.equal(refNoteCardLaneModel(rowWith({ status: "read", finished: "2023-02-29" }), { today }).text, "✓ Read");
   assert.equal(refNoteCardLaneModel(rowWith({ status: "abandoned" }), { today }).text, "Dropped");
-  assert.equal(refNoteCardLaneModel(rowWith({ status: "legacy", reading_state: "started" }), { today }).text, "🗄 Legacy · started");
-  assert.equal(refNoteCardLaneModel(rowWith({ status: "legacy", reading_state: "queued" }), { today }).text, "🗄 Legacy · queued");
-  assert.equal(refNoteCardLaneModel(rowWith({ status: "legacy", reading_state: "finished" }), { today }).text, "🗄 Legacy · finished");
-  assert.equal(refNoteCardLaneModel(rowWith({ status: "legacy", reading_state: "dropped" }), { today }).text, "🗄 Legacy · dropped");
-  assert.equal(refNoteCardLaneModel(rowWith({ status: "legacy", reading_state: "unknown" }), { today }).text, "🗄 Legacy");
-  assert.equal(refNoteCardLaneModel(rowWith({ status: "legacy", reading_state: null }), { today }).text, "🗄 Legacy");
+  assert.equal(refNoteCardLaneModel(rowWith({ status: "legacy", reading_state: "started" }), { today }).text, "🗄️ Legacy · started");
+  assert.equal(refNoteCardLaneModel(rowWith({ status: "legacy", reading_state: "queued" }), { today }).text, "🗄️ Legacy · queued");
+  assert.equal(refNoteCardLaneModel(rowWith({ status: "legacy", reading_state: "finished" }), { today }).text, "🗄️ Legacy · finished");
+  assert.equal(refNoteCardLaneModel(rowWith({ status: "legacy", reading_state: "dropped" }), { today }).text, "🗄️ Legacy · dropped");
+  assert.equal(refNoteCardLaneModel(rowWith({ status: "legacy", reading_state: "unknown" }), { today }).text, "🗄️ Legacy");
+  assert.equal(refNoteCardLaneModel(rowWith({ status: "legacy", reading_state: null }), { today }).text, "🗄️ Legacy");
   assert.equal(refNoteCardLaneModel(rowWith({ status: null }), { today }), null);
   assert.equal(refNoteCardLaneModel(rowWith({ status: "unknown" }), { today }), null);
   assert.equal(refNoteCardLaneModel(null, { today }), null);
@@ -518,6 +518,19 @@ test("annotations show nonzero counts with the scan date and jump to Highlights"
   plugin.app.metadataCache.getFileCache = () => ({ headings: [{ heading: "Highlights", level: 2, position: { start: { line: 42 } } }] });
   chip.fire("click");
   assert.deepEqual(cursors, [{ line: 42, ch: 0 }]);
+
+  // Live Preview passes CodeMirror's EditorView, which has no Obsidian
+  // `editor`; the jump moves the CM selection to the Highlights line.
+  const dispatched = [];
+  const cmView = {
+    state: { doc: { lines: 80, line: (n) => ({ from: n * 100, number: n }) } },
+    dispatch: (spec) => dispatched.push(spec),
+    focus: () => dispatched.push("focus"),
+  };
+  assert.equal(plugin.refNoteCardJumpHighlights("ref/ref-arxiv-paper.md", { view: cmView, editor: undefined, scope: makeDoc().createElement("div") }), true);
+  assert.deepEqual(dispatched, [{ selection: { anchor: 4300 }, scrollIntoView: true }, "focus"]);
+  const shortView = { ...cmView, state: { doc: { lines: 10, line: cmView.state.doc.line } } };
+  assert.equal(plugin.refNoteCardJumpHighlights("ref/ref-arxiv-paper.md", { view: shortView }), false);
 
   const reading = makeDoc().createElement("div");
   const head = makeDoc().createElement("h2");

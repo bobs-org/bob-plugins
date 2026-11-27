@@ -216,6 +216,7 @@ class BobLedgerToolsRefNoteCardMixin {
     try { this.refNoteCardFoldUnregister = this.refNoteCardRegisterFold(); } catch (_) { this.refNoteCardFoldUnregister = null; }
     try { this.refNoteCardFootBind?.(); } catch (_) {}
     this.refNoteCardRegisterTitleKey();
+    try { this.refNoteCardRegisterVisibleBodyNavigation?.(); } catch (_) {}
     if (!this.refNoteCardPreviewLoadStarted) {
       this.refNoteCardPreviewLoadStarted = true;
       const epoch = this.refNoteCardEpoch;

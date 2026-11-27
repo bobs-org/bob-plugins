@@ -13429,7 +13429,9 @@ button.bob-property-card-foot-lint-chip {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 0.1em;
+  /* The " · " separators are flex items whose spaces collapse; the column
+     gap restores the word spacing around each one. */
+  gap: 0.1em 0.3em;
   min-inline-size: 0;
   margin-block-start: 0.35em;
   color: var(--text-muted);
@@ -13470,14 +13472,17 @@ button.bob-property-card-foot-lint-chip {
 }
 .bob-ref-card-access:hover,
 .bob-ref-card-access:focus-visible { color: var(--text-normal); border-color: var(--text-muted); }
-.bob-ref-card-readouts[data-state="reserved"] {
+/* The readout row the note laid out keeps the same full-width line once the
+   report fills it, so annotation counts arriving never move the card. */
+.bob-ref-card-readouts[data-state="reserved"],
+.bob-ref-card-readouts[data-state="ready"] {
   display: block;
   flex: 1 0 100%;
   min-block-size: 1.35em;
-  visibility: hidden;
 }
+.bob-ref-card-readouts[data-state="reserved"] { visibility: hidden; }
 .bob-ref-card-readouts[data-state="none"] { display: none; }
-.bob-ref-card-readouts[data-state="ready"] { min-block-size: 0; visibility: visible; }
+.bob-ref-card-readouts[data-state="ready"] { visibility: visible; }
 .bob-ref-card-lane,
 .bob-ref-card-version { font-variant-numeric: tabular-nums; }
 .bob-ref-card-fold:focus-visible,
@@ -13509,8 +13514,41 @@ button.bob-property-card-foot-lint-chip {
    identifier, annotation, and lint patches. Slots keep their shape while
    waiting so arrival never adds a line or shifts layout. */
 .bob-ref-card-lane[data-state="ready"] { color: var(--text-muted); }
+/* A long lane (a snoozed prerequisite) ellipsizes inside the card instead of
+   running past its edge; the full reason stays in the tooltip and label. */
+.bob-ref-card-lane[data-state="ready"] {
+  display: inline-flex;
+  align-items: baseline;
+  min-inline-size: 0;
+  max-inline-size: 100%;
+}
+.bob-ref-card-lane-chip,
+.bob-ref-card-lane-text {
+  /* Block, not Obsidian's centered inline-flex button box, so overflow
+     ellipsizes at the end instead of clipping both sides. */
+  display: block;
+  min-inline-size: 0;
+  overflow: hidden;
+  text-align: start;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bob-ref-card-lane .bob-ref-card-today,
+.bob-ref-card-lane > :not(.bob-ref-card-lane-chip):not(.bob-ref-card-lane-text) { flex-shrink: 0; }
 .bob-ref-card-lane[data-lane="reading"],
 .bob-ref-card-lane[data-lane="next"] { color: var(--text-accent, var(--interactive-accent)); }
+/* Report readouts are text-like buttons: drop Obsidian's fixed button
+   height and shadow so a filled slot keeps the line it reserved. */
+.bob-ref-card-lane-chip,
+.bob-ref-card-version-chip,
+.bob-ref-card-identifier,
+.bob-ref-card-annotations-chip {
+  height: auto;
+  min-height: 0;
+  box-shadow: none;
+  line-height: inherit;
+  vertical-align: baseline;
+}
 .bob-ref-card-lane-chip,
 .bob-ref-card-version-chip {
   padding: 0;

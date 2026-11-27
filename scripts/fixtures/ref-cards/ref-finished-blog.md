@@ -1,5 +1,6 @@
 ---
 type: "[[ref]]"
+parent: "[[sase_pypi_releases]]"
 title: "Agentic coding is straining CI"
 summary: "How scaled test impact analysis tames CI at Anthropic."
 author: "Sachin Malhotra"
@@ -28,7 +29,7 @@ highlights_synced_at: "2026-10-23T12:00:00"
 
 > [!quote] The team measures both speed and missed failures.
 >
-> > [!note] A good reminder to keep quality metrics in the loop.
+> > [!note] Comment A good reminder to keep quality metrics in the loop.
 ^h-222222222222
 
 > [!quote] CI changes have to fit into daily development work.

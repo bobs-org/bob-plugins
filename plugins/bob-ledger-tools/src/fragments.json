@@ -264,6 +264,7 @@
   "249t-plugin-ref-note-card-foot.js",
   "249u-plugin-ref-note-card-readouts.js",
   "249v-plugin-ref-note-card-editor-routing.js",
+  "249w-plugin-ref-note-card-vim-navigation.js",
   "241b-plugin-notebook-catalog-model.js",
   "241c-plugin-notebook-catalog-dom.js",
   "241d-plugin-notebook-catalog.js",

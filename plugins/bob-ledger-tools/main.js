@@ -65962,6 +65962,21 @@ function propertyCardCabinetAbsorbAtomicRanges(value) {
   }
 }
 
+// CodeMirror's atomicRanges facet must yield a RangeSet: cursor motion calls
+// `.between()` on every provider's result, so a plain array throws on every
+// Vim or arrow motion in every Live Preview editor.
+function propertyCardCabinetAbsorbAtomicRangeSet(ranges) {
+  try {
+    const list = (Array.isArray(ranges) ? ranges : []).filter((range) => range
+      && Number.isInteger(range.from) && Number.isInteger(range.to) && range.to > range.from);
+    if (!list.length) return Decoration.none;
+    const atom = Decoration.mark({});
+    return Decoration.set(list.map((range) => atom.range(range.from, range.to)), true);
+  } catch (_) {
+    return Decoration.none;
+  }
+}
+
 // True when a document position falls strictly inside a hidden span: the
 // navigation hook calls the claim's reveal() instead of moving the cursor.
 function propertyCardCabinetAbsorbShouldReveal(value, pos) {
@@ -65991,9 +66006,11 @@ function propertyCardCabinetAbsorbEditorExtension() {
         if (EditorView.atomicRanges && typeof EditorView.atomicRanges.of === "function") {
           extensions.push(EditorView.atomicRanges.of((view) => {
             try {
-              return propertyCardCabinetAbsorbAtomicRanges(view.state.field(defined, false));
+              return propertyCardCabinetAbsorbAtomicRangeSet(
+                propertyCardCabinetAbsorbAtomicRanges(view.state.field(defined, false)),
+              );
             } catch (_) {
-              return [];
+              return propertyCardCabinetAbsorbAtomicRangeSet([]);
             }
           }));
         }
@@ -118795,6 +118812,7 @@ class BobLedgerToolsRefNoteCardMixin {
     try { this.refNoteCardFoldUnregister = this.refNoteCardRegisterFold(); } catch (_) { this.refNoteCardFoldUnregister = null; }
     try { this.refNoteCardFootBind?.(); } catch (_) {}
     this.refNoteCardRegisterTitleKey();
+    try { this.refNoteCardRegisterVisibleBodyNavigation?.(); } catch (_) {}
     if (!this.refNoteCardPreviewLoadStarted) {
       this.refNoteCardPreviewLoadStarted = true;
       const epoch = this.refNoteCardEpoch;
@@ -119672,7 +119690,7 @@ function refNoteCardLaneModel(row, options = {}) {
       const known = state === "started" || state === "queued" || state === "finished" || state === "dropped";
       return Object.freeze({
         id: "legacy",
-        text: known ? `🗄 Legacy · ${state}` : "🗄 Legacy",
+        text: known ? `🗄️ Legacy · ${state}` : "🗄️ Legacy",
         tooltip: "",
         link,
         priority: null,
@@ -120164,34 +120182,51 @@ class BobLedgerToolsRefNoteCardReadoutsMixin {
   }
 
   // Jump to the local `## Highlights` scan the counts describe. The scan
-  // section holds the annotations; the report only counts them.
+  // section holds the annotations; the report only counts them. Live
+  // Preview hands over CodeMirror's EditorView (no Obsidian `editor`), so a
+  // view with `dispatch` moves the selection itself; Reading scrolls the h2.
+  refNoteCardHighlightsLine(key) {
+    try {
+      const file = this.app && this.app.vault && typeof this.app.vault.getAbstractFileByPath === "function"
+        ? this.app.vault.getAbstractFileByPath(key) : null;
+      const cache = this.app && this.app.metadataCache
+        && typeof this.app.metadataCache.getFileCache === "function" && file
+        ? this.app.metadataCache.getFileCache(file) : null;
+      const headings = cache && Array.isArray(cache.headings) ? cache.headings : [];
+      for (const heading of headings) {
+        if (!heading || heading.level !== 2) continue;
+        if (String(heading.heading || "").trim().toLowerCase() !== "highlights") continue;
+        const start = heading.position && heading.position.start ? heading.position.start.line : null;
+        if (Number.isInteger(start)) return start;
+      }
+    } catch (_) {}
+    return null;
+  }
+
   refNoteCardJumpHighlights(path, context = {}) {
     try {
       const key = refNoteCardPath(path);
       if (!key) return false;
       const editor = context.editor || (context.view && context.view.editor) || null;
       if (editor && typeof editor.setCursor === "function") {
-        let line = null;
-        try {
-          const file = this.app && this.app.vault && typeof this.app.vault.getAbstractFileByPath === "function"
-            ? this.app.vault.getAbstractFileByPath(key) : null;
-          const cache = this.app && this.app.metadataCache
-            && typeof this.app.metadataCache.getFileCache === "function" && file
-            ? this.app.metadataCache.getFileCache(file) : null;
-          const headings = cache && Array.isArray(cache.headings) ? cache.headings : [];
-          for (const heading of headings) {
-            if (!heading || heading.level !== 2) continue;
-            if (String(heading.heading || "").trim().toLowerCase() !== "highlights") continue;
-            const start = heading.position && heading.position.start ? heading.position.start.line : null;
-            if (Number.isInteger(start)) { line = start; break; }
-          }
-        } catch (_) {}
+        const line = this.refNoteCardHighlightsLine(key);
         if (line === null || line === undefined) return false;
         editor.setCursor({ line, ch: 0 });
         if (typeof editor.scrollIntoView === "function") {
           try { editor.scrollIntoView({ from: { line, ch: 0 }, to: { line, ch: 0 } }, true); }
           catch (_) { try { editor.scrollIntoView({ line, ch: 0 }); } catch (__) {} }
         }
+        return true;
+      }
+      const cm = context.view && typeof context.view.dispatch === "function"
+        && context.view.state && context.view.state.doc && typeof context.view.state.doc.line === "function"
+        ? context.view : null;
+      if (cm) {
+        const line = this.refNoteCardHighlightsLine(key);
+        if (line === null || line === undefined || line + 1 > cm.state.doc.lines) return false;
+        const at = cm.state.doc.line(line + 1).from;
+        cm.dispatch({ selection: { anchor: at }, scrollIntoView: true });
+        try { cm.focus?.(); } catch (_) {}
         return true;
       }
       const scope = context.scope || null;
@@ -120452,6 +120487,128 @@ async function refNoteCardEditorOpenRename(modal, entry) {
   } catch (_) {}
   return { ok: true, opened, copied };
 }
+// ---- src/249w-plugin-ref-note-card-vim-navigation.js ----
+// Ref Card Vim navigation (bob-cli-qp ref-acceptance repair). Like the home
+// card (249db), keep `gg`, `k`, and Up out of the hidden frontmatter, its
+// separator, and an adopted title while a Ref Card owns those editor regions.
+// The first visible body line comes from the shared homeCardVisibleBodyLine.
+// Obsidian's Vim sees keydown before any plugin editor handler, so the guard
+// listens in the capture phase, lets Vim finish its own motion (its pending
+// key state stays consistent), and moves the cursor to the body start on the
+// next frame when the motion landed above it.
+const refNoteCardVimNavigationState = new WeakMap();
+
+Object.assign(BobLedgerToolsRefNoteCardMixin.prototype, {
+  // True only while this view's Ref Card owns the hidden frontmatter.
+  refNoteCardNavigationOwned(view, path) {
+    try {
+      const scope = view?.dom;
+      return Boolean(path && scope?.classList?.contains?.("bob-property-card-owns-frontmatter")
+        && refNoteCardMountedInSurface(scope, path));
+    } catch (_) {
+      return false;
+    }
+  },
+
+  refNoteCardNavigationDeferred(callback) {
+    try {
+      if (typeof this.refNoteCardNavigationDefer === "function") return this.refNoteCardNavigationDefer(callback);
+      if (typeof requestAnimationFrame === "function") return requestAnimationFrame(callback);
+    } catch (_) {}
+    return setTimeout(callback, 0);
+  },
+
+  // After the editor's own motion: land on the body start when the cursor
+  // ended above it (`always` for gg, whose target is the top of the note).
+  refNoteCardClampToBody(view, bodyFrom, always) {
+    this.refNoteCardNavigationDeferred(() => {
+      try {
+        const head = view?.state?.selection?.main?.head;
+        if (!Number.isInteger(head) || (!always && head >= bodyFrom)) return;
+        if (head === bodyFrom) return;
+        view.dispatch({ selection: { anchor: bodyFrom }, scrollIntoView: true });
+      } catch (_) {}
+    });
+  },
+
+  refNoteCardHandleVisibleBodyNavigation(event, view) {
+    try {
+      if (!event || event.isComposing || event.keyCode === 229) return false;
+      const path = this.refNoteCardLivePath(view);
+      if (!path || !this.refNoteCardNavigationOwned(view, path)) {
+        if (view) refNoteCardVimNavigationState.delete(view);
+        return false;
+      }
+      try {
+        const title = propertyCardTitleStateField(view.state, propertyCardTitleFieldType);
+        if (title?.revealed === true) return false;
+      } catch (_) {}
+      const bodyLine = typeof this.homeCardVisibleBodyLine === "function"
+        ? this.homeCardVisibleBodyLine(view, path) : null;
+      if (!bodyLine || !Number.isInteger(bodyLine.from)) return false;
+
+      let vimEnabled = false;
+      try { vimEnabled = this.app?.vault?.getConfig?.("vimMode") === true; } catch (_) {}
+      const nav = refNoteCardVimNavigationState.get(view) || { normal: vimEnabled, lastG: 0 };
+      if (event.key === "Escape" && vimEnabled) {
+        nav.normal = true;
+        nav.lastG = 0;
+        refNoteCardVimNavigationState.set(view, nav);
+        return false;
+      }
+      if (vimEnabled && ["i", "I", "a", "A", "o", "O", "s", "S", "c", "C", "R"].includes(event.key)) {
+        nav.normal = false;
+        nav.lastG = 0;
+        refNoteCardVimNavigationState.set(view, nav);
+        return false;
+      }
+      if (vimEnabled && nav.normal && event.key === "g" && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        const now = Date.now();
+        const secondG = nav.lastG && now - nav.lastG <= 1500;
+        nav.lastG = secondG ? 0 : now;
+        refNoteCardVimNavigationState.set(view, nav);
+        if (!secondG) return false;
+        this.refNoteCardClampToBody(view, bodyLine.from, true);
+        return true;
+      }
+      nav.lastG = 0;
+      refNoteCardVimNavigationState.set(view, nav);
+      const movesUp = event.key === "ArrowUp" || (vimEnabled && nav.normal && event.key === "k");
+      // Any upward motion from the body-start line lands in hidden content.
+      const bodyEnd = Number.isInteger(bodyLine.to) ? bodyLine.to : bodyLine.from;
+      if (!movesUp || view.state.selection?.main?.head > bodyEnd) return false;
+      this.refNoteCardClampToBody(view, bodyLine.from, false);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  },
+
+  refNoteCardVisibleBodyKeydown(event) {
+    try {
+      const root = event?.target?.closest?.(".cm-editor");
+      const view = root && typeof EditorView?.findFromDOM === "function" ? EditorView.findFromDOM(root) : null;
+      return view ? this.refNoteCardHandleVisibleBodyNavigation(event, view) : false;
+    } catch (_) {
+      return false;
+    }
+  },
+
+  refNoteCardRegisterVisibleBodyNavigation() {
+    try {
+      if (this.refNoteCardVisibleBodyNavigationRegistered === true) return true;
+      const doc = typeof activeDocument !== "undefined" && activeDocument ? activeDocument
+        : typeof document !== "undefined" ? document : null;
+      if (!doc || typeof EditorView?.findFromDOM !== "function" || typeof this.registerDomEvent !== "function") return false;
+      const plugin = this;
+      this.registerDomEvent(doc, "keydown", (event) => { plugin.refNoteCardVisibleBodyKeydown(event); }, { capture: true });
+      this.refNoteCardVisibleBodyNavigationRegistered = true;
+      return true;
+    } catch (_) {
+      return false;
+    }
+  },
+});
 // ---- src/241b-plugin-notebook-catalog-model.js ----
 // Pure notebook catalog presentation: chips, source regions, hue, and
 // link matching. Bob remains the authority for rows and their order;
@@ -216729,6 +216886,7 @@ try {
       propertyCardCabinetAbsorbFieldReduce,
       propertyCardCabinetAbsorbFieldDecorations,
       propertyCardCabinetAbsorbAtomicRanges,
+      propertyCardCabinetAbsorbAtomicRangeSet,
       propertyCardCabinetAbsorbShouldReveal,
       propertyCardCabinetAbsorbEditorExtension,
       propertyCardCabinetAbsorbInEditor,

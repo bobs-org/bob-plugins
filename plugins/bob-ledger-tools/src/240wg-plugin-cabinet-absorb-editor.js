@@ -201,6 +201,21 @@ function propertyCardCabinetAbsorbAtomicRanges(value) {
   }
 }
 
+// CodeMirror's atomicRanges facet must yield a RangeSet: cursor motion calls
+// `.between()` on every provider's result, so a plain array throws on every
+// Vim or arrow motion in every Live Preview editor.
+function propertyCardCabinetAbsorbAtomicRangeSet(ranges) {
+  try {
+    const list = (Array.isArray(ranges) ? ranges : []).filter((range) => range
+      && Number.isInteger(range.from) && Number.isInteger(range.to) && range.to > range.from);
+    if (!list.length) return Decoration.none;
+    const atom = Decoration.mark({});
+    return Decoration.set(list.map((range) => atom.range(range.from, range.to)), true);
+  } catch (_) {
+    return Decoration.none;
+  }
+}
+
 // True when a document position falls strictly inside a hidden span: the
 // navigation hook calls the claim's reveal() instead of moving the cursor.
 function propertyCardCabinetAbsorbShouldReveal(value, pos) {
@@ -230,9 +245,11 @@ function propertyCardCabinetAbsorbEditorExtension() {
         if (EditorView.atomicRanges && typeof EditorView.atomicRanges.of === "function") {
           extensions.push(EditorView.atomicRanges.of((view) => {
             try {
-              return propertyCardCabinetAbsorbAtomicRanges(view.state.field(defined, false));
+              return propertyCardCabinetAbsorbAtomicRangeSet(
+                propertyCardCabinetAbsorbAtomicRanges(view.state.field(defined, false)),
+              );
             } catch (_) {
-              return [];
+              return propertyCardCabinetAbsorbAtomicRangeSet([]);
             }
           }));
         }

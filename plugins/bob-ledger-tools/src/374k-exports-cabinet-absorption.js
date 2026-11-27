@@ -28,6 +28,7 @@ try {
       propertyCardCabinetAbsorbFieldReduce,
       propertyCardCabinetAbsorbFieldDecorations,
       propertyCardCabinetAbsorbAtomicRanges,
+      propertyCardCabinetAbsorbAtomicRangeSet,
       propertyCardCabinetAbsorbShouldReveal,
       propertyCardCabinetAbsorbEditorExtension,
       propertyCardCabinetAbsorbInEditor,

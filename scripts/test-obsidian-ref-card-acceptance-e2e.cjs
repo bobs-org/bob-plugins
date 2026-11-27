@@ -85,3 +85,53 @@ test("runner arguments reject missing values and unknown options", () => {
   assert.throws(() => runner.parseArgs(["--out"]), /requires/);
   assert.throws(() => runner.parseArgs(["--unknown"]), /Unknown argument/);
 });
+
+test("species-distinction shots cover every family tile under forced colors and grayscale", () => {
+  const rows = runner.screenshotMatrix();
+  for (const label of ["forced-colors", "grayscale"]) {
+    assert.ok(rows.some((row) => row.name === `species-${label}` && row.effect === label));
+    for (const family of ["family-album", "family-area", "family-notebook", "family-prose"]) {
+      assert.ok(rows.some((row) => row.name === `${family}-${label}` && row.effect === label), `${family}-${label}`);
+    }
+  }
+  // Only effect rows carry an effect, so ordinary shots always reset media.
+  assert.ok(rows.filter((row) => row.effect).every((row) => ["forced-colors", "grayscale"].includes(row.effect)));
+});
+
+test("interactive flows record every required concern after the passive hash check", () => {
+  const flows = fs.readFileSync(path.join(__dirname, "obsidian-ref-card-acceptance-e2e-flows.cjs"), "utf8");
+  for (const name of [
+    "native-embed-no-card", "native-hover-no-card", "native-canvas-no-card", "native-print-no-card",
+    "native-mobile-emulation", "native-failed-mount", "native-closed-gate-is-todays-rendering",
+    "native-unload-and-disabled-ledger-tools", "native-source-cache-mismatch-releases",
+    "native-rename-while-open", "native-scan-rewrite-while-open",
+    "capability-props-v1-pending-absent-failed-keep-native", "capability-no-ref-contract-title-fallback",
+    "capability-failing-report-identity-only", "capability-late-snapshot-keeps-layout", "capability-stale-snapshot-kept",
+    "data-today-pill-from-ledger-cache", "data-annotation-jump", "data-identifier-copy", "data-pdf-and-listen-open-on-linux",
+    "keys-plus-opens-property-editor", "keys-minus-opens-drawer", "keys-underscore-compacts-card",
+    "keys-vim-gg-k-up-stay-in-visible-body", "keys-tab-never-enters-hidden-properties",
+    "editor-reference-rows", "editor-title-preview-names-marker-and-link-text", "editor-owned-row-routes",
+    "editor-refusals-protected-keys", "editor-esc-q-ctrl-bracket-ladder",
+  ]) assert.ok(flows.includes(`"${name}"`), name);
+  const runnerSource = fs.readFileSync(path.join(__dirname, "obsidian-ref-card-acceptance-e2e.cjs"), "utf8");
+  assert.ok(runnerSource.indexOf('check("protected-fixture-and-pdf-bytes-unchanged"') < runnerSource.indexOf("flows.runFlows("));
+});
+
+test("the bob shim forwards stdin envelopes and honors acceptance flags", () => {
+  const dir = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "ref-shim-test-"));
+  try {
+    const real = path.join(dir, "real-bob");
+    fs.writeFileSync(real, "#!/usr/bin/env node\nprocess.stdout.write(JSON.stringify({ args: process.argv.slice(2), input: require('node:fs').readFileSync(0, 'utf8') }));\n");
+    fs.chmodSync(real, 0o755);
+    const shim = runner.writeBobShim(dir, path.join(dir, "log.jsonl"), real, dir);
+    const piped = spawnSync(shim, ["props", "update", "note.md", "-i", "-"], { input: '{"ops":[]}', encoding: "utf8" });
+    assert.equal(piped.status, 0, piped.stderr);
+    assert.equal(JSON.parse(piped.stdout).input, '{"ops":[]}');
+    fs.writeFileSync(path.join(dir, "ref-list-fail"), "1");
+    const failed = spawnSync(shim, ["ref", "list", "-A"], { encoding: "utf8" });
+    assert.equal(failed.status, 1);
+    assert.match(failed.stderr, /forced bob ref list failure/);
+    const log = fs.readFileSync(path.join(dir, "log.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    assert.ok(log.some((row) => row.forced === "ref-list-fail"));
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

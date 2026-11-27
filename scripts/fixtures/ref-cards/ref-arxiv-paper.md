@@ -25,7 +25,7 @@ earlier:
 
 > [!quote] The architecture is based solely on attention mechanisms.
 >
-> > [!note] This is the central design claim.
+> > [!note] Comment This is the central design claim.
 ^h-aaaaaaaaaaaa
 
 > [!quote] The encoder and decoder are stacks of self-attention layers.
@@ -33,7 +33,7 @@ earlier:
 
 > [!quote] Attention can connect distant positions in constant steps.
 >
-> > [!note] This explains why parallel training is practical.
+> > [!note] Comment This explains why parallel training is practical.
 ^h-cccccccccccc
 
 > [!quote] Multi-head attention attends to information from different subspaces.
@@ -44,7 +44,7 @@ earlier:
 
 > [!quote] The model uses residual connections and layer normalization.
 >
-> > [!note] Keep the normalization detail with the architecture summary.
+> > [!note] Comment Keep the normalization detail with the architecture summary.
 ^h-ffffffffffff
 
 ### Page 2
@@ -60,7 +60,7 @@ earlier:
 
 > [!quote] The base model uses six layers in both encoder and decoder.
 >
-> > [!note] Preserve this as the familiar configuration.
+> > [!note] Comment Preserve this as the familiar configuration.
 ^h-111111111115
 
 > [!quote] Beam search is used for decoding.

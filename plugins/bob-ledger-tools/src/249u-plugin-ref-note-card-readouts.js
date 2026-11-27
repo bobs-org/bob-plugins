@@ -246,7 +246,7 @@ function refNoteCardLaneModel(row, options = {}) {
       const known = state === "started" || state === "queued" || state === "finished" || state === "dropped";
       return Object.freeze({
         id: "legacy",
-        text: known ? `🗄 Legacy · ${state}` : "🗄 Legacy",
+        text: known ? `🗄️ Legacy · ${state}` : "🗄️ Legacy",
         tooltip: "",
         link,
         priority: null,
@@ -738,34 +738,51 @@ class BobLedgerToolsRefNoteCardReadoutsMixin {
   }
 
   // Jump to the local `## Highlights` scan the counts describe. The scan
-  // section holds the annotations; the report only counts them.
+  // section holds the annotations; the report only counts them. Live
+  // Preview hands over CodeMirror's EditorView (no Obsidian `editor`), so a
+  // view with `dispatch` moves the selection itself; Reading scrolls the h2.
+  refNoteCardHighlightsLine(key) {
+    try {
+      const file = this.app && this.app.vault && typeof this.app.vault.getAbstractFileByPath === "function"
+        ? this.app.vault.getAbstractFileByPath(key) : null;
+      const cache = this.app && this.app.metadataCache
+        && typeof this.app.metadataCache.getFileCache === "function" && file
+        ? this.app.metadataCache.getFileCache(file) : null;
+      const headings = cache && Array.isArray(cache.headings) ? cache.headings : [];
+      for (const heading of headings) {
+        if (!heading || heading.level !== 2) continue;
+        if (String(heading.heading || "").trim().toLowerCase() !== "highlights") continue;
+        const start = heading.position && heading.position.start ? heading.position.start.line : null;
+        if (Number.isInteger(start)) return start;
+      }
+    } catch (_) {}
+    return null;
+  }
+
   refNoteCardJumpHighlights(path, context = {}) {
     try {
       const key = refNoteCardPath(path);
       if (!key) return false;
       const editor = context.editor || (context.view && context.view.editor) || null;
       if (editor && typeof editor.setCursor === "function") {
-        let line = null;
-        try {
-          const file = this.app && this.app.vault && typeof this.app.vault.getAbstractFileByPath === "function"
-            ? this.app.vault.getAbstractFileByPath(key) : null;
-          const cache = this.app && this.app.metadataCache
-            && typeof this.app.metadataCache.getFileCache === "function" && file
-            ? this.app.metadataCache.getFileCache(file) : null;
-          const headings = cache && Array.isArray(cache.headings) ? cache.headings : [];
-          for (const heading of headings) {
-            if (!heading || heading.level !== 2) continue;
-            if (String(heading.heading || "").trim().toLowerCase() !== "highlights") continue;
-            const start = heading.position && heading.position.start ? heading.position.start.line : null;
-            if (Number.isInteger(start)) { line = start; break; }
-          }
-        } catch (_) {}
+        const line = this.refNoteCardHighlightsLine(key);
         if (line === null || line === undefined) return false;
         editor.setCursor({ line, ch: 0 });
         if (typeof editor.scrollIntoView === "function") {
           try { editor.scrollIntoView({ from: { line, ch: 0 }, to: { line, ch: 0 } }, true); }
           catch (_) { try { editor.scrollIntoView({ line, ch: 0 }); } catch (__) {} }
         }
+        return true;
+      }
+      const cm = context.view && typeof context.view.dispatch === "function"
+        && context.view.state && context.view.state.doc && typeof context.view.state.doc.line === "function"
+        ? context.view : null;
+      if (cm) {
+        const line = this.refNoteCardHighlightsLine(key);
+        if (line === null || line === undefined || line + 1 > cm.state.doc.lines) return false;
+        const at = cm.state.doc.line(line + 1).from;
+        cm.dispatch({ selection: { anchor: at }, scrollIntoView: true });
+        try { cm.focus?.(); } catch (_) {}
         return true;
       }
       const scope = context.scope || null;

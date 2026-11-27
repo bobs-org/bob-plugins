@@ -416,27 +416,28 @@ changes card height, and leaves the drawn block cursor within 2 px of the text.
 
 ## Bank and home-card takeover evidence
 
-The production-adapter runner, `scripts/obsidian-frontmatter-takeover-e2e.cjs`, covers
-Area, inbox, active/terminal Project, and canonical Bank in Live Preview and Reading;
-title/foot uniqueness; `-`, `_`, `==`, and `+`; `^prj` cursor integrity; and native
-Properties recovery across capability, source/cache, context, mount, path, and unload
-failures. Bank stays outside Area ownership even with an accidental `area` type. `+`
-stays generic under the old hybrid contract. Bank requires `props_v1`; home Settings
-require `props_contract_v1`.
+The production-adapter runner, `scripts/obsidian-frontmatter-takeover-e2e.cjs`, opens
+synthetic notes in an isolated vault. Area, sub-area, inbox (INBOX pill), active
+Project, terminal Project, and Bank each show one card, one title, and one Properties
+foot, with native Properties hidden, in Live Preview and Reading. Untyped `area.md` and
+`project.md`, and Area notes under `_templates/`, `done/`, and `_conflicts/`, stay
+native. A `props_v1`-only bob keeps Area and Project native (fail open) while Bank stays
+owned. Bank never takes Area ownership.
 
-The 2026-11-26 report has 62/63 checks (30/31 Live Preview, 9/9 Reading, 23/23 shared);
-**GO (reading only; live preview keeps per-row hiding)** because one record-foot live
-autosave check failed. Bank checks passed. Forty-six screenshots include Bank Live
-Preview/Reading × light/dark × wide/narrow, plus record/album Live Preview wide. The
-Area/Project runner recorded 53/60; seven failures also reproduce on pristine master.
-It stopped before screenshots, so that run has no Area/Project visual verdict.
+On Area and Project in Live Preview, `-` toggles the drawer and `_` folds the details.
+`==` opens species Settings, bare `+` opens the generic editor, and Esc, `q`, and
+Ctrl+`[` close it. Vim `k`/`gg` and Up land on visible body text. The active `^prj` line
+keeps its byte hash through selection and adjacent typing. CDP IME composition does not
+compose on that line, so IME is not covered. Shared checks cover capability,
+source/cache, context, mount, path, and unload recovery.
 
-Evidence attached to `bob-cli-qi.4`: takeover report `file:explicit:290bf602385934c8b83ee465`,
-runner log `file:explicit:9bc0eacb4d944023db5b3888`, and 46-shot archive
-`file:explicit:cdd6ba05e0b402a23c048298`. The home-cards report, log, and empty-shot
-archive are `file:explicit:dce3a74989f86e48da93715d`,
-`file:explicit:2a125acea859ceb79722a65c`, and
-`file:explicit:c4c6acced7cb004fabf26e32`.
+The 2026-11-27 runs at bob-plugins `0ffb4511` with bob `dc96ef4c` are GO 76/76 twice:
+38/38 Live Preview, 14/14 Reading, and 24/24 shared. Each run has 78 screenshots and no
+console exceptions. All 32 Area, inbox, and Project PNGs pass review and are identical
+across runs. Evidence: `file:explicit:dc34d1462acc604726734526`. The three earlier
+GO 63/63 runs, before the Area and Project fixtures, are report
+`file:explicit:660cabc9cf32530dcf480887` and bundle
+`file:explicit:d254ed707483200bbaaca14f`.
 
 ## Card foot walkthrough
 

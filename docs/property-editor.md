@@ -18,7 +18,7 @@ range selection, and filtering follow the visible grouped rows.
   pending `=`), Source mode, insert and visual modes, and non-Markdown notes
   keep Vim's `+` motion.
 - Run **Edit note properties** from the Command Palette or Command Mode.
-- Press Enter on a focused row in a card's `-` Properties drawer.
+- Press Enter on a focused row in a card's `-` Properties cabinet.
 - On a card that owns the in-document Properties block, run Obsidian's
   **Add file property** command (normally Mod+`;`, or your custom binding)
   to open this editor directly in Add mode.
@@ -235,7 +235,7 @@ write. Save applies only the matching successful preview. Open panes are saved
 before apply. A stale refusal keeps the draft and rereads the report before a
 retry. A lost or timed-out write is treated as unknown; the editor does not
 blindly repeat it. Successful writes show `Saved · u undo` and update the
-editor, cards, and drawer through a short-lived confirmed overlay.
+editor, cards, and Properties cabinet through a short-lived confirmed overlay.
 
 The add-name stage suggests property names from the vault with their known
 type and usage count. Tab or Enter accepts the highlighted suggestion and its
@@ -356,8 +356,8 @@ in-document native Properties block in desktop Live Preview and Reading.
 This requires a mounted card and foot, a valid closed frontmatter mapping
 that matches the metadata cache, confirmed `props_v1` for the current bob
 executable, and working native-command routing. Identity-only temporal cards
-qualify. The foot's `-` drawer and this editor expose every top-level key;
-`=` still opens the species editor. The drawer's Enter, Add property, and
+qualify. The foot's `-` Properties cabinet and this editor expose every top-level key;
+`=` still opens the species editor. The Properties cabinet's Enter, Add property, and
 Edit all actions also open this editor.
 
 Obsidian's **Add file property** command routes to Add mode only while the
@@ -382,12 +382,12 @@ available. Losing whole ownership returns to the card's existing per-row
 hiding; losing the card or entering a denied context restores native
 rendering entirely. Navigation and plugin disable/unload release ownership.
 Hidden controls cannot receive focus, and the native DOM node stays in place
-as the card's title-slot anchor. Painting and drawer toggles never launch
+as the card's title-slot anchor. Painting and cabinet toggles never launch
 bob or write the note; capability discovery happens separately on lifecycle
 events. See the [ownership architecture](https://bobs-org.github.io/develop/plugins/architecture/#frontmatter-ownership).
 
-The card key family is `-` for the Properties drawer, `_` for the card's own
-fold, `=` for its species editor, and `+` for the generic Property Editor. A fast second `=` within 350 ms of an opening `=`
+The card key family is `-` for the Properties cabinet, `_` for the cabinet
+routing in [Cabinets](cabinets.md), `=` for its species editor, and `+` for the generic Property Editor. A fast second `=` within 350 ms of an opening `=`
 is swallowed, so the old `==` habit opens the editor once and never fires the
 editor's own `=`.
 The former `=-` and `=+` chords fall through to Vim; Reading uses the disclosure

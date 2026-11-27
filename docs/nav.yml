@@ -44,6 +44,8 @@
   path: prose-card.md
 - title: Ref Card
   path: ref-card.md
+- title: Property Card Cabinets
+  path: cabinets.md
 - title: Property Editor
   path: property-editor.md
 - title: BLOCKS dependency mirrors

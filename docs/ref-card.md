@@ -24,8 +24,8 @@ The byline shows each available fact independently: `author:`, the host from
 an `agent report` label when `agent:` is present. Unsafe or non-HTTP source URLs are
 omitted. Missing facts do not leave placeholder labels or zeros.
 
-The foot shows `created:` or, when that is absent, `captured:`. The Properties drawer
-keeps every YAML key in source order. Reference identity and sync-owned values, such as
+The foot shows `created:` or, when that is absent, `captured:`. The Properties
+cabinet keeps every YAML key in source order. Reference identity and sync-owned values, such as
 `id`, `ref_type`, `source_pdf`, `source_pdf_sha256`, `highlights_*`, `pipeline_version`,
 `source_markdown`, and legacy provenance, are grouped under **Managed**. Citation
 fields remain ordinary note-local properties.
@@ -48,7 +48,7 @@ it never invents reading progress or annotation counts.
 In Live Preview Vim normal mode, `=` opens the Reference editor: the shared Property
 Editor on Bob's `REFERENCE` settings contract when Bob reports the
 `props_ref_contract_v1` capability, else focus-or-add on `title:`. `+` opens the
-ordinary Property Editor, `-` opens the Properties drawer, and `_` compacts the card
+ordinary Property Editor, `-` opens the Properties cabinet, and `_` compacts the card
 to its kicker and title.
 
 The Reference editor holds six editable rows — Title, Summary, Authors, Published,

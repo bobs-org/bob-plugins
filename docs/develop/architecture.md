@@ -227,8 +227,8 @@ The Area and Project hosts own one title and one shared Properties foot when
 They keep the Project's `^prj` line as its editable control. `bank.md` is
 excluded from those hosts by path because it is the taskless Bank hub, never
 an Area; its one Bank Card uses the `props_v1` gate. The card keys stay `-`
-(Properties drawer), `_` (own fold), `=` (species editor), and `+` (generic
-Property Editor). See [Area and Project Cards](https://bobs-org.github.io/reference/plugins/area-and-project-cards/).
+(Properties cabinet), `_` (cabinet routing), `=` (species editor), and `+` (generic
+Property Editor). See [Area and Project Cards](https://bobs-org.github.io/reference/plugins/area-and-project-cards/) and [Cabinets](https://bobs-org.github.io/reference/plugins/cabinets/).
 
 `propertyCardOwnTitle(scope, { path, recognizer, view })` hides the view's
 inline title and the recognized source title range. In Live Preview, one
@@ -270,7 +270,7 @@ hides the exact native paths `propertyCardNativeContainer` uses. The
 container stays in the DOM as the title-slot anchor, with `inert` plus
 `aria-hidden` and a `focusin` guard that returns focus to the editor.
 CSS stays local to owned document scopes; it never hides the File Properties
-sidebar. The foot/drawer retains the complete inventory, including loose,
+sidebar. The foot's Properties cabinet retains the complete inventory, including loose,
 identity, legacy, and managed keys.
 
 The coordinator releases before painting invalid state, on card loss or

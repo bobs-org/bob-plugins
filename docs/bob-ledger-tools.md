@@ -8,6 +8,7 @@ Renders task, Pomodoro, freshness, and planning information from Bob notes.
 Cards: [Album cards](albums.md), [Record Card](record-card.md),
 [Day and Period Cards](intention-card.md), [Area and Project Cards](area-and-project-cards.md),
 [Notebook Card](notebook-card.md), [Prose Card](prose-card.md), [Ref Card](ref-card.md),
+[Cabinets](cabinets.md),
 [Bank](https://bobs-org.github.io/bank/); [Property Editor](property-editor.md).
 
 <!-- BEGIN GENERATED: facts -->
@@ -81,10 +82,11 @@ Cards: [Album cards](albums.md), [Record Card](record-card.md),
 | Toggle unblocked hand-off glyph | `toggle-unblocked-glyph` | — |
 <!-- END GENERATED: commands -->
 
-## Property-card keys
+## Property-card cabinets
 
-Vim `_` folds Schema, record, area, and project details. Otherwise **Toggle
-card details**. `-` toggles Properties, `=` edits the species, and `+` opens
+Child catalogs render as [cabinets](cabinets.md) above the Properties
+cabinet. `_` toggles the only extra, or arms the numbered pick with two or
+more; `-` toggles Properties, `=` edits the species, and `+` opens the
 Property Editor.
 
 ## Bank cards and the bank badge
@@ -116,8 +118,8 @@ charge (older output said `charged <row date>`); a focus ring appears, and
 plugin-off still shows 🔁.
 
 The **bank card** owns `bank.md`'s top (`[🏦] BANK · Cash` kicker, `Bank` title,
-`summary` subtitle) and hides `# 🏦 Bank`. Healthy Setup folds; attention opens
-it. `_` / **Toggle card details** toggles it. Expanded foot shows `parent`,
+`summary` subtitle) and hides `# 🏦 Bank`. Healthy Setup stays closed;
+attention opens it. `_` toggles the Setup [cabinet](cabinets.md). Expanded foot shows `parent`,
 `summary`, `bank`, and `created`; fences, categories, and modals have none.
 **⊞ Setup**, **Edit bank setup**, Vim `=`, and Command Mode open the editor;
 `↗ YAML` handles invalid, missing, unsupported, or mobile states. It uses the
@@ -631,35 +633,17 @@ instead of a palette color.
 
 See [`taskSettle` v1](https://bobs-org.github.io/develop/plugins/task-settle/) for the settle, apply, and pending API. Closed notes that a consumer writes through `vault.modify` or `vault.process` call `settleNote` and store the returned contents in that same write. Block ID Prompt's `Ctrl+Shift+Enter` target updates do this. Ledger Tools itself has no target-task status writers: Pomodoro close lives in Task Status Cycler.
 
-## Notebooks
+## Catalog cabinets
 
-On eligible notebook notes, Notebook Cards replace linked headers; otherwise
-the header stays. Catalogs inherit the host hue. **add summary**
-opens the notebook on `summary`; **↻ sync** repairs missing, stale, or damaged
-catalogs. Catalog chrome appears only on report-listed hosts or pre-report
-notes with a callout. **Retry** follows a failed refresh or missing report; lag
-stays silent. Live data requires desktop Obsidian.
-
-## Projects catalog card
-
-`[!projects]` shows Bob's project report in a live, display-only card. Each
-host gets one card, standalone only without a stored callout. State markers
-and task, Today, empty, and blocked-reason chips come from `bob projects list
--f json`. **Closed** starts folded with a two-row peek; Space or Enter toggles
-it. A project's `▸ N` button reveals direct children; folds stay pane-local.
-
-Use **↻ sync** to refresh a missing or stale catalog, **Retry** after a report
-failure, and **＋ project** to copy the `@<host>^` capture starter. Sync writes
-through Bob; the starter only goes to the clipboard. A failed refresh keeps
-the last good rows visible. At narrow widths, chips wrap below the criterion
-and the count shortens, keeping its accessible label. Embeds and hover
-previews never show standalone cards; embedded stored callouts still paint.
-
-## Areas
-
-Hosting, embed, and hover rules match the projects catalog card. Row links
-open the area. Unexpected workspace scroll resets to zero and logs a
-diagnostic.
+Area and Project cards host Areas, Projects, Notebooks, and Albums
+[cabinets](cabinets.md) above the Properties cabinet. Each paints Bob's live
+report — state markers, task and Today chips, empty and blocked-reason rows —
+with **↻ sync** repairing a missing or damaged catalog and **＋ project**
+copying the `@<host>^` capture starter. Sync writes through Bob; the starter
+only goes to the clipboard. A failed refresh keeps the last good rows
+visible. Row links open the note. Unexpected workspace scroll resets to zero
+and logs a diagnostic. The stored callouts stay in the note and show in
+Source mode and every fail-open context.
 
 ## Gmail open hint
 

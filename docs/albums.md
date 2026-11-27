@@ -66,7 +66,7 @@ a 12-dot charge timeline, and any finding as a sentence. Canonical
 `type: [[record]]` notes also show a [record card](record-card.md) at the top
 of the body, before any authored first-level heading; the subscription strip
 docks on that card. When eligible, the card replaces native Properties;
-its drawer and the Property Editor inventory every key. When whole ownership
+its Properties cabinet and the Property Editor inventory every key. When whole ownership
 is unavailable, existing per-row hiding remains; Source mode keeps native
 YAML. **Edit record** opens the Record Card editor for
 value edits through bob. A `bob-bank` fence
@@ -93,23 +93,22 @@ Typed Area and Project notes use a related local title card. See
 [Area and Project Cards](area-and-project-cards.md) for their hierarchy, lifecycle,
 authored properties, and mount rules.
 
-When bob's report arrives, `＋ <noun>` and **⊞ Schema** join the kicker row
-and the schema summary line, such as
-`▾ Schema · 5 fields · grouped by Location · dated notes · 104 restaurants`,
-starts expanded with the chip rows shown. In Live Preview Vim normal mode, `_`
-folds or opens this section; **Toggle card details** also works in Reading and
-outside Vim. The native `record` row hides only then in the per-row fallback.
+When bob's report arrives, `＋ <noun>` and the **Schema** and **Records**
+[cabinets](cabinets.md) join the card. Records starts open over a closed
+Schema; a stored `[!records]` index stays in the note and shows in Source
+mode and every fail-open context. In Live Preview Vim normal mode, `_`
+toggles the only extra cabinet, or arms the numbered pick when both show;
+**Toggle card details** also works in Reading and outside Vim.
 When the
-album sets a valid `walk_by`, the line ends with `· walks by Section` (the field's label), whose
+album sets a valid `walk_by`, the Records summary ends with `· walks by
+Section` (the field's label), whose
 tooltip reads `Record walk: grouped by Section, then title`; it is
-display-only, and records show the matching group row on their walk rail. The `▾` toggle collapses the
-chip rows to that one line (`▸`); they are one per field in declaration order: human labels, kind and flag
+display-only, and records show the matching group row on their walk rail. The Schema body holds one row per field in declaration order: human labels, kind and flag
 suffixes, required as a quiet `*`, choice chips with usage counts, grouping
 annotations, and muted `legacy` chips. The toggle state lives in view state
-keyed by the album for the session, never in frontmatter, so a new Obsidian
-session (or a plugin reload) starts expanded again. An invalid schema
-starts expanded with the first diagnostic on the summary and the lint list;
-an empty schema starts expanded and teaches how to add fields so
+keyed by the album for the session, never in frontmatter. An invalid schema
+opens itself with the first diagnostic on the summary and the lint list;
+an empty schema opens itself and teaches how to add fields so
 `Name @stem/` can collect facts. The two states never impersonate each other.
 
 `parent` lives in the kicker and `type` is implicit identity. `emoji` is the
@@ -117,7 +116,7 @@ tile, `summary` the subtitle, and `record` the schema with the nested schema
 opener. `created` lives in the foot (`created today, 7:55 AM`, `created
 yesterday`, or `created Aug 8, 2025`); a missing `created` shows a faint `no
 created date`, and an invalid one shows an amber stamp with the raw value kept
-in the drawer. The drawer inventories every top-level key in file order —
+in the Properties cabinet. The cabinet inventories every top-level key in file order —
 loose keys (legacy chips keep their **legacy** label), then **On this card**
 with those marks, then a folded **Managed** group — with duplicate keys as two
 linted rows.
@@ -125,8 +124,8 @@ linted rows.
 The foot follows the schema and any rail or mobile hint, including
 identity-only cards that paint before the report arrives. The disclosure,
 `-` in Live Preview Vim normal mode, and **Toggle card properties** (palette
-or Command Mode) toggle the same drawer; open state is a per-note session
-toggle shared by every pane on the note. `y` on a focused drawer row jumps to
+or Command Mode) toggle the same cabinet; open state is a per-note session
+toggle shared by every pane on the note. `y` on a focused cabinet row jumps to
 that key's exact YAML line. Painting, toggling, and collapsing never spawn bob
 and never write the note.
 
@@ -138,7 +137,7 @@ title-slot anchor. Uncertain capability, invalid or stale source/cache,
 or failed routing restores the block with the existing per-row hiding;
 failed mounts and denied contexts restore native rendering entirely.
 `-` shows every property, `+` opens the Property Editor, and `=` keeps
-the album schema editor. **Add file property** routes to Add mode on an
+the album schema editor. See [Cabinets](cabinets.md) for the full key table. **Add file property** routes to Add mode on an
 owned note; the File Properties sidebar remains native. See
 [native access and recovery](property-editor.md#native-properties-and-recovery).
 

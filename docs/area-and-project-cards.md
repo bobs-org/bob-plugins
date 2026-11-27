@@ -58,7 +58,7 @@ when the live Markdown source confirms both the key and a valid value:
 - `task_refresh` as the review interval;
 - `project_name_aliases` as capture aliases.
 
-An invalid or unsupported shape stays in the native Properties drawer and does not
+An invalid or unsupported shape stays native and does not
 become a chip. An `offclock_types` list that is present, even when empty or invalid,
 wins over `offclock` on the same note and does not fall back to the boolean. Type
 names are strings; numeric types and object `task_refresh` values are not chips.
@@ -70,12 +70,22 @@ missing snapshot is never shown as zero. Areas can show an inbox pill when the i
 route API says the note is the inbox, and Projects can show a root pill, but cards do
 not infer inbox status from the filename or display inherited policy values.
 
-One shared Properties foot remains below the card. `-` toggles that drawer, `_` folds
-the card's own details, `=` opens the Area or Project settings editor, and `+` opens
-the generic Property Editor. A policy chip opens its own setting. Collapse is per-note
-for the session.
+One shared Properties cabinet remains below the card as its foot. `-` toggles that
+cabinet, `_` toggles or picks the child catalog cabinets above it (the details
+fold only when none exist), `=` opens the Area or Project settings editor, and
+`+` opens the generic Property Editor. A policy chip opens its own setting.
+Collapse is per-note for the session.
 Collapsing an Area hides its summary and property chips/readout; a Project keeps
 its lifecycle line visible.
+
+## Child catalog cabinets
+
+Child catalogs render as [cabinets](cabinets.md) above the Properties
+cabinet: Areas, Projects, Notebooks, and Albums, each starting closed with an
+honest summary. `_` with one extra toggles it at once; with two or more it
+arms the numbered pick. The stored callouts stay in the note and show in
+Source mode and every fail-open context. See
+[Cabinets](cabinets.md) for order, defaults, the pick, and absorption.
 
 ## Report-backed live parts
 
@@ -96,7 +106,7 @@ report-backed parts below; the card keeps painting everything local.
 - **Foot lint:** the foot chip counts the row's `contract_issues` alongside the
   local lint, and its tooltip names each issue. When a first affected setting
   is known, clicking the chip opens the Property Editor on that setting; the
-  chip never opens the drawer by itself.
+  chip never opens the Properties cabinet by itself.
 
 ## Data and display rules
 

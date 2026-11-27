@@ -22,14 +22,15 @@ report no longer matches stays inert until the report catches up. Child
 notebooks open like crumbs. Hard errors show a visible pill that jumps to
 the first error line; warnings join the foot lint chip. The kit foot
 carries `created` (silent when missing), the quiet `@stem` capture route
-(click copies), and the Properties drawer, where zorg importer keys fold
+(click copies), and the Properties cabinet, where zorg importer keys fold
 under Managed.
 
 ## Keys
 
 In Live Preview Vim normal mode, `=` focuses `summary` (Add mode
 prefilled when missing), `+` opens the Property Editor, `-` toggles the
-drawer, and `_` folds the card's details. The card paints from local data
+Properties cabinet, and `_` toggles or picks the cabinets above it, falling
+back to the card's own details fold when none exist. The card paints from local data
 and the shared report; painting never spawns bob and never writes the
 vault. Source mode, embeds, hover, canvas, print, mobile, uncertain
 evidence, failed mounts, and unload keep or restore native Properties and

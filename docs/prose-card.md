@@ -20,7 +20,7 @@ bob in one undoable edit; the chip is inert only when Bob Prose is absent,
 disabled, or older. It reads local `section_numbers`: an absent key or
 `true` is numbered, `false` is unnumbered, and other values show a warning.
 The foot carries the
-authored `created` stamp and the Properties drawer.
+authored `created` stamp and the Properties cabinet.
 
 The measure row comes from Bob Prose's read-only `api.prose` v1 snapshot.
 The card uses Bob's word total, rounds it to the nearest 10 below 1,000 and
@@ -33,7 +33,7 @@ counts are approximate because they include heading text.
 If Bob Prose is absent, disabled, or exposes an older API, the card stays
 identity-only and hides the measure row. With API v1 loaded, the row reserves
 its height while a snapshot is pending. A refusal shows Bob's message instead
-of empty measures. The foot lint chip counts Bob's findings. The card is folded
+of empty measures. The foot lint chip counts Bob's findings. The Outline [cabinet](cabinets.md) is closed
 by default; `_` or a `to write` chip expands a bounded outline, followed by
 findings. Outline rows show Bob's number only when numbering is on, the
 de-numbered title, and `≈ words` or `to write`. A jump checks Bob's saved line
@@ -45,8 +45,8 @@ The card never computes counts, numbers, or stubs, starts Bob, or writes the vau
 ## Keys
 
 In Live Preview Vim normal mode, `=` focuses `title` (Add mode prefilled
-when missing), `+` opens the Property Editor, `-` toggles the drawer, and
-`_` folds the outline. The card owns only the inline title: every body
+when missing), `+` opens the Property Editor, `-` toggles the Properties
+cabinet, and `_` toggles the Outline cabinet. The card owns only the inline title: every body
 heading is a numbered section and stays visible. Painting never spawns bob
 and never writes the vault. Source mode, embeds, hover, canvas, print,
 mobile, uncertain evidence, failed mounts, and unload keep or restore

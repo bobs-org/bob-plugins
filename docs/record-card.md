@@ -11,7 +11,7 @@ Properties block while keeping its DOM node as the title-slot anchor. The
 report arrives, the record noun; the sheet tile shows the album emoji else a
 page icon. The title paints from local metadata before any report; fields
 and ghosts join inside the same node, and the shared foot below the walk
-rail carries the created stamp plus a `-` drawer with every frontmatter
+rail carries the created stamp plus a `-` Properties cabinet with every frontmatter
 key. Source mode, embeds, hover popovers, canvas, and mobile keep native
 rendering. The **Record Card editor** is the keyboard-first editor for those
 values.
@@ -20,10 +20,10 @@ For note-level loose properties, use the [Property Editor](property-editor.md).
 Its role marks hand record fields back to this editor and keep identity or
 derived values locked with a YAML escape.
 
-Open or close the drawer with its **Properties** disclosure, `-` in Live
+Open or close the Properties cabinet with its **Properties** disclosure, `-` in Live
 Preview Vim normal mode when the editor content has focus, the **Toggle card properties** palette
 command, or the same Vault row in Command Mode. The command acts on the active
-view and only when this card's foot is mounted there. Drawer state is shared by
+view and only when this card's foot is mounted there. Cabinet state is shared by
 panes of the same note for the plugin session; reading properties never writes
 the note. `=` remains the Record Card editor gesture.
 
@@ -34,7 +34,7 @@ Live Preview cursor on that line reveals the raw Markdown while the card and
 its rail stay in the slot. Whole-frontmatter ownership requires a mounted
 card and foot, valid source matching the metadata cache, confirmed `props_v1`
 for the current bob executable, and working property-editor routing. The
-drawer and `+` Property Editor inventory every key, including identity,
+Properties cabinet and `+` Property Editor inventory every key, including identity,
 legacy, and unrelated values. **Add file property** opens the Property Editor
 in Add mode on an owned note; the File Properties sidebar stays native.
 See [native access and recovery](property-editor.md#native-properties-and-recovery).
@@ -43,7 +43,7 @@ If whole ownership becomes unavailable, native Properties returns with the
 existing per-row fallback: only album-schema rows hide when the schema is
 healthy and the cached report carries `record_values_v1`. Identity, legacy,
 and unrelated rows remain native in that fallback. A failed mount or denied
-context restores native rendering entirely. Opening the drawer, toggling
+context restores native rendering entirely. Opening the Properties cabinet, toggling
 the foot, or collapsing a record never requests a new report and never
 writes the note.
 
@@ -143,7 +143,7 @@ the one home for the frontmatter `title`; H1 agreement or mismatch does not
 create another title entry. `created` lives in the foot (`added today,
 7:55 AM`, `added yesterday`, or `added Aug 8, 2025`); a missing `created`
 shows a faint `no created date`, and an invalid one shows an amber stamp
-with the raw value kept in the drawer. The drawer inventories every
+with the raw value kept in the cabinet. The Properties cabinet inventories every
 top-level key in file order — loose keys, then **On this card** with
 `parent`→kicker, `type`→tile, `title`→title, and schema field marks, then a
 folded **Managed** group — with duplicate keys as two linted rows. Legacy
@@ -154,14 +154,14 @@ with the species editor opener, never a YAML dump.
 The foot follows the walk rail, outside the collapsible body, so the stamp
 stays visible on identity-only, broken-schema, and collapsed cards. The
 disclosure, `-` in Live Preview Vim normal mode, and **Toggle card
-properties** (palette or Command Mode) toggle the same drawer; open state is a
+properties** (palette or Command Mode) toggle the same cabinet; open state is a
 per-note session toggle shared by every pane on the note. `y` on a focused
-drawer row jumps to that key's exact YAML line. Painting, toggling, and
+cabinet row jumps to that key's exact YAML line. Painting, toggling, and
 collapsing never spawn bob and never write the note.
 
 The card starts expanded. Collapse is a per-path session toggle: title plus
 choice chips (group field first) and `· N fields`. `_` folds it (`Toggle
-record details (_)`). Drawer and collapse stay out of frontmatter and settings.
+record details (_)`). Cabinet and collapse state stay out of frontmatter and settings.
 
 On a `subscriptions/*.md` record the existing subscription money line,
 charge timeline, and finding sentence dock as a trailing band of this
@@ -338,10 +338,10 @@ Done.
 | **Edit record** palette command | Open the editor; non-records say `Open a record note to edit its fields.` |
 | Command Mode Vault row | Run **Edit record** through Obsidian's command route. |
 | Collapse control / `_` | Session-collapse or expand this record card. |
-| Properties disclosure (`Toggle properties (-)`) | Session-show or hide every frontmatter key in the drawer. |
-| `-` in Vim normal mode in Live Preview | Toggle the drawer; counts, registers, operator-pending keys, Source mode, insert and visual modes, views without a mounted foot, and focus outside the editor content keep Vim's `-` motion. |
-| **Toggle card properties** (palette or Command Mode) | Toggle the drawer. |
-| `y` on a focused row, ghost, or drawer row | Open this record in Source on that YAML key. |
+| Properties disclosure (`Toggle properties (-)`) | Session-show or hide every frontmatter key in the Properties cabinet. |
+| `-` in Vim normal mode in Live Preview | Toggle the Properties cabinet; counts, registers, operator-pending keys, Source mode, insert and visual modes, views without a mounted foot, and focus outside the editor content keep Vim's `-` motion. |
+| **Toggle card properties** (palette or Command Mode) | Toggle the Properties cabinet. |
+| `y` on a focused row, ghost, or cabinet row | Open this record in Source on that YAML key. |
 | Open album YAML (broken schema) | Open the parent album in Source on the diagnostic line. |
 | Breadcrumb / wikilink / URL | Ordinary Obsidian navigation and hover previews. |
 

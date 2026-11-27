@@ -97337,14 +97337,6 @@ function propertyCardNoteSpecies(input = {}) {
     return null;
   }
 }
-
-function propertyCardKindLive(plugin, kind) {
-  try {
-    return typeof kind === "string" && PROPERTY_CARD_KINDS.includes(kind);
-  } catch (_) {
-    return false;
-  }
-}
 // ---- src/240w-plugin-cabinet-gate.js ----
 // Cabinet-owned preview switch. The absent setting keeps every existing card
 // byte-identical until the cabinets go-live phase explicitly opens the gate.
@@ -115738,7 +115730,7 @@ class BobLedgerToolsNotebookCardMixin {
 
   notebookCardEligible(path, frontmatter) {
     const key = notebookCardPath(path);
-    if (!key || noteCardPathExcluded(key) || propertyCardKindLive(this, NOTEBOOK_CARD_HOST_KIND) !== true) return false;
+    if (!key || noteCardPathExcluded(key)) return false;
     try {
       return propertyCardNoteSpecies({ path: key, frontmatter: frontmatter || this.notebookCardFrontmatterFor(key) }) === NOTEBOOK_CARD_HOST_KIND;
     } catch (_) { return false; }
@@ -117302,8 +117294,7 @@ class BobLedgerToolsProseNoteCardMixin {
     try {
       this.proseNoteCardPropertyRegistered = this.registerPropertyCard?.({
         kind: PROSE_NOTE_CARD_HOST_KIND,
-        match: ({ path, frontmatter } = {}) => propertyCardKindLive(this, PROSE_NOTE_CARD_KIND)
-          && propertyCardNoteSpecies({ path, frontmatter }) === PROSE_NOTE_CARD_KIND,
+        match: ({ path, frontmatter } = {}) => propertyCardNoteSpecies({ path, frontmatter }) === PROSE_NOTE_CARD_KIND,
         open: ({ path } = {}) => {
           if (typeof this.openPropertyEditor === "function") {
             void this.openPropertyEditor({ filePath: path, key: "title" });
@@ -117352,7 +117343,7 @@ class BobLedgerToolsProseNoteCardMixin {
 
   proseNoteCardModelFor(path, sourceText) {
     const key = proseNoteCardPath(path);
-    if (!key || !propertyCardKindLive(this, PROSE_NOTE_CARD_KIND)) return null;
+    if (!key) return null;
     const fromSource = proseNoteCardFrontmatterFromText(sourceText);
     const frontmatter = fromSource || this.proseNoteCardFrontmatter(key);
     return proseNoteCardModel({
@@ -117583,7 +117574,6 @@ class BobLedgerToolsProseNoteCardMixin {
       isCurrent: () => {
         const text = sourceFor();
         return Boolean(plugin.proseNoteCardActive === true
-          && propertyCardKindLive(plugin, PROSE_NOTE_CARD_KIND)
           && plugin.proseNoteCardModelFor(path, text));
       },
       active: () => plugin.proseNoteCardActive === true,
@@ -117627,7 +117617,6 @@ class BobLedgerToolsProseNoteCardMixin {
     const root = this.proseNoteCardReadingRoot(el);
     const scope = this.proseNoteCardReadingScope(root);
     if (!root || !scope || !path || !this.proseNoteCardDesktop()
-      || !propertyCardKindLive(this, PROSE_NOTE_CARD_KIND)
       || proseNoteCardScopeDenied(scope, root)) {
       this.proseNoteCardRemoveReading(root, scope, path);
       return null;
@@ -117736,8 +117725,7 @@ class BobLedgerToolsProseNoteCardMixin {
   }
 
   proseNoteCardLivePath(view) {
-    if (this.proseNoteCardActive !== true || !this.proseNoteCardDesktop()
-      || !propertyCardKindLive(this, PROSE_NOTE_CARD_KIND)) return null;
+    if (this.proseNoteCardActive !== true || !this.proseNoteCardDesktop()) return null;
     try { if (view?.dom?.closest?.(".markdown-embed, .internal-embed, .hover-popover, .canvas-node, .print")) return null; }
     catch (_) { return null; }
     try { return this.notebookCatalogLivePath?.(view) || null; } catch (_) { return null; }
@@ -216736,7 +216724,6 @@ try {
       noteCardIsRefLibraryPath,
       noteCardPathExcluded,
       propertyCardNoteSpecies,
-      propertyCardKindLive,
       // Focus-or-add (bob-cli-qm kit T2).
       propertyEditorFocusOrAddConsume,
     });

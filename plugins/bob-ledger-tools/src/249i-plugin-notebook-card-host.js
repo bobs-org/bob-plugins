@@ -104,7 +104,7 @@ class BobLedgerToolsNotebookCardMixin {
 
   notebookCardEligible(path, frontmatter) {
     const key = notebookCardPath(path);
-    if (!key || noteCardPathExcluded(key) || propertyCardKindLive(this, NOTEBOOK_CARD_HOST_KIND) !== true) return false;
+    if (!key || noteCardPathExcluded(key)) return false;
     try {
       return propertyCardNoteSpecies({ path: key, frontmatter: frontmatter || this.notebookCardFrontmatterFor(key) }) === NOTEBOOK_CARD_HOST_KIND;
     } catch (_) { return false; }

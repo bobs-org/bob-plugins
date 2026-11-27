@@ -151,7 +151,7 @@ function writeBobShim(shimDir) {
 const fs = require("node:fs");
 const { spawnSync } = require("node:child_process");
 const args = process.argv.slice(2);
-const hasStdin = args.some((arg, i) => (arg === '-i' || arg === '--input') && args[i+1] === '-');
+const hasStdin = args.includes('--stdin') || args.includes('-s') || args.some((arg, i) => (arg === '-i' || arg === '--input') && args[i+1] === '-');
 const input = hasStdin ? fs.readFileSync(0, 'utf8') : undefined;
 const entry = { event: 'start', pid: process.pid, at: new Date().toISOString(), args, input };
 try { fs.appendFileSync(process.env.BOB_RECORD_CARD_E2E_LOG, JSON.stringify(entry) + "\\n"); } catch (_) {}

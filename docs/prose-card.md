@@ -14,10 +14,12 @@ of a dek is normal: no ghost, no nag.
 
 When the file stem supplies the title, its tooltip says `Title from the file
 name — press == to set one`. The title uses Bob Prose's heading face only
-while that plugin's look class is active. The `§` chip reads local
-`section_numbers`: an absent key or `true` is numbered, `false` is
-unnumbered, and other values show a warning. It runs the Bob Prose toggle
-command when registered; otherwise it stays inert. The foot carries the
+while that plugin's look class is active. The `§` chip runs Bob Prose's
+**Toggle section numbers** command, which flips `section_numbers` through
+bob in one undoable edit; the chip is inert only when Bob Prose is absent,
+disabled, or older. It reads local `section_numbers`: an absent key or
+`true` is numbered, `false` is unnumbered, and other values show a warning.
+The foot carries the
 authored `created` stamp and the Properties drawer.
 
 The measure row comes from Bob Prose's read-only `api.prose` v1 snapshot.
@@ -38,9 +40,7 @@ de-numbered title, and `≈ words` or `to write`. A jump checks Bob's saved line
 against the current buffer heading, then pairs by order with metadata-cache
 headings if the line no longer matches. Findings jump to their reported lines.
 
-A `§` chip reads local `section_numbers` and invokes the Bob Prose toggle
-command when that command is registered. The card never computes counts,
-numbers, or stubs, starts Bob, or writes the vault.
+The card never computes counts, numbers, or stubs, starts Bob, or writes the vault.
 
 ## Keys
 

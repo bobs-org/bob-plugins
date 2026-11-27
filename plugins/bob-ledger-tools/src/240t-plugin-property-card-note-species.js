@@ -209,11 +209,3 @@ function propertyCardNoteSpecies(input = {}) {
     return null;
   }
 }
-
-function propertyCardKindLive(plugin, kind) {
-  try {
-    return typeof kind === "string" && PROPERTY_CARD_KINDS.includes(kind);
-  } catch (_) {
-    return false;
-  }
-}

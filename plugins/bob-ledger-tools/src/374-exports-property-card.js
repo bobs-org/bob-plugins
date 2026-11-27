@@ -118,7 +118,6 @@ try {
       noteCardIsRefLibraryPath,
       noteCardPathExcluded,
       propertyCardNoteSpecies,
-      propertyCardKindLive,
       // Focus-or-add (bob-cli-qm kit T2).
       propertyEditorFocusOrAddConsume,
     });

@@ -48,6 +48,7 @@ const PROSE_FIXTURES = [
   "prose-mixed-type.md",
   "prose-no-headings.md",
   "prose-unnumbered.md",
+  "prose-with-body-finding.md",
   "prose-with-prj.md",
   "prose-with-title.md",
 ];
@@ -323,6 +324,26 @@ function selfTest() {
   let threw = false;
   try { parseArgs(["--bogus"]); } catch { threw = true; }
   if (!threw) throw new Error("parseArgs must reject unknown flags");
+  const source = fs.readFileSync(__filename, "utf8");
+  for (const id of ["prose-ready-with-title", "prose-ready-legacy-spelling", "prose-refused-message",
+    "prose-outline-expands", "prose-outline-stub-leaf", "prose-outline-jump", "prose-finding-jump",
+    "prose-numbering-chip-live-toggle", "forced-colors-emulation", "prose-identity-without-articles"]) {
+    if (!source.includes(`"${id}"`)) throw new Error("self-test missing check id: " + id);
+  }
+  for (const stale of ["prose-identity-no-snapshot", "prose-legacy-refusal-line", "prose-prj-identity-no-crash"]) {
+    if (source.includes(`record("${stale}"`)) throw new Error("stale check id still present: " + stale);
+  }
+  if (source.includes(["qj", "3"].join("."))) throw new Error("stale follow-up comment still present");
+  if (source.includes("forced" + "Colors")) throw new Error("invalid CDP parameter still present");
+  if (!source.includes('features: [{ name: "forced-colors", value: "active" }]')) {
+    throw new Error("forced-colors call shape missing features form");
+  }
+  if (!source.includes('matchMedia("(forced-colors: active)")')) {
+    throw new Error("forced-colors matchMedia check missing");
+  }
+  if (!source.includes("process.env.BOB_OBSIDIAN_TMPDIR")) {
+    throw new Error("BOB_OBSIDIAN_TMPDIR env selection missing");
+  }
   process.stdout.write("offline self-test complete\n");
 }
 
@@ -393,7 +414,7 @@ async function run(args) {
         BOB_RECORD_CARD_E2E_LOG: path.join(profileDir, "bob-invocations.jsonl"),
         BOB_RECORD_CARD_E2E_REAL: bob.path,
         PATH: path.join(profileDir, "shim") + path.delimiter + (process.env.PATH || ""),
-        TMPDIR: "/tmp", NO_COLOR: "1", DISPLAY: process.env.DISPLAY || ":99",
+        TMPDIR: process.env.BOB_OBSIDIAN_TMPDIR || "/tmp", NO_COLOR: "1", DISPLAY: process.env.DISPLAY || ":99",
       },
     });
     const target = await shared.selectTarget(port, vaultReal, () => child && child.exitCode == null);
@@ -581,15 +602,31 @@ async function driveMatrix(client, report, record, outDir, vaultReal, profileDir
     await shared.setViewport(client, 1400, 1000);
   }
 
-  // Capability: prose without Bob Prose stays an identity-only quiet card.
+  // Capability: prose without Bob Prose stays an identity-only quiet card,
+  // and the numbering chip is inert text (SPAN) there.
   {
     let ok = false, detail = "";
     try {
       await client.evaluate(`(async () => { await app.plugins.disablePlugin(${JSON.stringify(ARTICLES_ID)}); return true; })()`, 20000);
       await sleep(800);
       const s = (await openProbe("prose-with-title.md", "reading")).snapshot || {};
-      ok = s.prose === 1 && !/min read|words|sections/.test(s.measure || "");
-      detail = JSON.stringify({ prose: s.prose, measure: s.measure, title: s.title });
+      const inertMissing = [];
+      if (s.prose !== 1) inertMissing.push(`prose:${s.prose}`);
+      if (/min read|words|sections/.test(s.measure || "")) inertMissing.push("measure-not-identity:" + JSON.stringify(s.measure));
+      if (s.toggleCommand) inertMissing.push("toggleCommand-should-be-false");
+      if (s.numberingTag !== "SPAN") inertMissing.push("inert-chip-not-span:" + s.numberingTag);
+      if (!/unavailable/i.test(s.numberingTitle || "")) inertMissing.push("inert-title:" + JSON.stringify(s.numberingTitle));
+      const before = s.numbering || "";
+      await client.evaluate(`(() => {
+        const scope = app.workspace.activeLeaf?.view?.editor?.cm?.dom || document;
+        scope.querySelector(".bob-prose-note-card .bob-prose-note-card-numbering")?.click();
+        return true;
+      })()`, 10000);
+      await sleep(1200);
+      const after = (await probe()).numbering || "";
+      if (after !== before) inertMissing.push(`inert-chip-changed:${before}->${after}`);
+      ok = inertMissing.length === 0;
+      detail = JSON.stringify({ missing: inertMissing, prose: s.prose, measure: s.measure, title: s.title, numbering: s.numbering, tag: s.numberingTag, toggleCommand: s.toggleCommand });
     } catch (error) { detail = "articles-disable error: " + String(error?.message || error); }
     try {
       await client.evaluate(`(async () => { await app.plugins.enablePlugin(${JSON.stringify(ARTICLES_ID)}); return true; })()`, 20000);
@@ -636,31 +673,40 @@ async function driveMatrix(client, report, record, outDir, vaultReal, profileDir
     record("notebook-route-token", routeOk, JSON.stringify({ route: s.routeToken }));
   }
   {
-    // Bob Prose still tracks only [[article]] notes (qj.3 detection never
-    // reached master), so [[prose]] notes stay identity-only: a correct quiet
-    // card with no zeroed measures. Ready-snapshot paths are unit-covered and
-    // wait on the qj.3 follow-up.
+    // Bob Prose is live: both [[prose]] and legacy [[article]] spellings reach
+    // a ready snapshot. The measure row paints bob's numbers and never zeros.
     const withTitle = await openProbe("prose-with-title.md", "live");
-    await sleep(4000);
-    const withTitleSnap = await probe();
-    const identityMissing = [];
-    if ((withTitleSnap.prose ?? 0) !== 1) identityMissing.push(`prose:${withTitleSnap.prose}`);
-    if (!String(withTitleSnap.title || "").trim()) identityMissing.push("title-missing");
-    if (!/numbered|§/.test(withTitleSnap.numbering || "")) identityMissing.push("numbering:" + JSON.stringify(withTitleSnap.numbering));
-    if (/0 words|0 sections|0 to write|0 min/.test(withTitleSnap.cardText || "")) identityMissing.push("zeroed-measure");
-    record("prose-identity-no-snapshot", identityMissing.length === 0,
-      JSON.stringify({ missing: identityMissing, measure: withTitleSnap.measure, opened: withTitle.opened }));
-    // Legacy [[article]] notes reach Bob Prose and bob refuses them with its
-    // own adopt message: the refusal line paints bob's message, never zeros.
+    let withTitleSnap = null;
+    try {
+      withTitleSnap = await waitSnapshot("with-title-ready", (s) => s && s.prose === 1 && /words/.test(s.measure || ""), 30000);
+    } catch { withTitleSnap = await probe(); }
+    const readyMissing = [];
+    if ((withTitleSnap.prose ?? 0) !== 1) readyMissing.push(`prose:${withTitleSnap.prose}`);
+    if (!String(withTitleSnap.title || "").trim()) readyMissing.push("title-missing");
+    if (!/numbered|§/.test(withTitleSnap.numbering || "")) readyMissing.push("numbering:" + JSON.stringify(withTitleSnap.numbering));
+    if (!/≈/.test(withTitleSnap.measure || "")) readyMissing.push("words-missing:" + JSON.stringify(withTitleSnap.measure));
+    if (!/words/.test(withTitleSnap.measure || "")) readyMissing.push("words-label-missing");
+    if (!/min read/.test(withTitleSnap.measure || "")) readyMissing.push("read-time-missing");
+    if (!/2 sections/.test(withTitleSnap.measure || "")) readyMissing.push("sections-missing:" + JSON.stringify(withTitleSnap.measure));
+    if (/\b0 words\b|\b0 sections\b|\b0 to write\b|\b0 min\b/.test([withTitleSnap.measure, withTitleSnap.cardText].join(" "))) readyMissing.push("zeroed-measure");
+    record("prose-ready-with-title", readyMissing.length === 0,
+      JSON.stringify({ missing: readyMissing, measure: withTitleSnap.measure, opened: withTitle.opened }));
+    // Legacy [[article]] spelling reaches the same ready snapshot.
     const legacy = await openProbe("prose-article-legacy.md", "reading");
     void legacy;
     let legacySnap = null;
     try {
-      legacySnap = await waitSnapshot("legacy-refusal", (s) => s && s.prose === 1 && String(s.measure || "").length > 0, 30000);
+      legacySnap = await waitSnapshot("legacy-ready", (s) => s && s.prose === 1 && /words/.test(s.measure || "") && /sections/.test(s.measure || ""), 30000);
     } catch { legacySnap = await probe(); }
-    record("prose-legacy-refusal-line",
-      /not a prose note|adopt/i.test(legacySnap?.measure || "") && !/0 words|0 sections/.test(legacySnap?.measure || ""),
-      JSON.stringify({ measure: legacySnap?.measure }));
+    const legacyMissing = [];
+    if ((legacySnap.prose ?? 0) !== 1) legacyMissing.push(`prose:${legacySnap.prose}`);
+    if (!/≈/.test(legacySnap?.measure || "")) legacyMissing.push("words-missing");
+    if (!/min read/.test(legacySnap?.measure || "")) legacyMissing.push("read-time-missing");
+    if (!/12 sections/.test(legacySnap?.measure || "")) legacyMissing.push("sections-missing:" + JSON.stringify(legacySnap?.measure));
+    if (!/to write/.test(legacySnap?.measure || "")) legacyMissing.push("to-write-missing:" + JSON.stringify(legacySnap?.measure));
+    if (/\b0 words\b|\b0 sections\b|\b0 to write\b/.test([legacySnap?.measure, legacySnap?.cardText].join(" "))) legacyMissing.push("zeroed-measure");
+    record("prose-ready-legacy-spelling", legacyMissing.length === 0,
+      JSON.stringify({ missing: legacyMissing, measure: legacySnap?.measure }));
     const unnumbered = await openProbe("prose-unnumbered.md", "live");
     const invalid = await openProbe("prose-invalid-numbering.md", "live");
     record("prose-numbering-states",
@@ -669,15 +715,113 @@ async function driveMatrix(client, report, record, outDir, vaultReal, profileDir
     const emoji = await openProbe("prose-emoji-title.md", "live");
     record("prose-emoji-title-mounts", emoji.snapshot?.prose === 1,
       JSON.stringify({ kicker: emoji.snapshot?.kicker, title: emoji.snapshot?.title, cardText: (emoji.snapshot?.cardText || "").slice(0, 160) }));
-    // A [[prose]] note bob refuses (^prj) stays identity-only until qj.3
-    // detection lands: no snapshot, no zeroed measures, no crash.
+    // A [[prose]] note bob refuses (^prj) shows bob's own refusal message as
+    // the one muted measure line, never zeros.
     const refused = await openProbe("prose-with-prj.md", "reading");
-    await sleep(3000);
-    const refusedSnap = await probe();
+    let refusedSnap = null;
+    try {
+      refusedSnap = await waitSnapshot("refused-ready", (s) => s && s.prose === 1 && String(s.measure || "").length > 0, 30000);
+    } catch { refusedSnap = await probe(); }
     void refused;
-    record("prose-prj-identity-no-crash",
-      (refusedSnap.prose ?? 0) === 1 && !/0 words|0 sections|0 to write/.test([refusedSnap.measure, refusedSnap.cardText].join(" ")),
-      JSON.stringify({ measure: refusedSnap.measure, findings: refusedSnap.findings, prose: refusedSnap.prose }));
+    const refusedMissing = [];
+    if ((refusedSnap.prose ?? 0) !== 1) refusedMissing.push(`prose:${refusedSnap.prose}`);
+    if (!/move them to the parent note|#task on line 12/i.test(refusedSnap.measure || "")) refusedMissing.push("refusal-message-missing:" + JSON.stringify(refusedSnap.measure));
+    if (/\b0 words\b|\b0 sections\b|\b0 to write\b/.test([refusedSnap.measure, refusedSnap.cardText].join(" "))) refusedMissing.push("zeroed-measure");
+    record("prose-refused-message",
+      refusedMissing.length === 0,
+      JSON.stringify({ missing: refusedMissing, measure: refusedSnap.measure, findings: refusedSnap.findings, prose: refusedSnap.prose }));
+  }
+  {
+    // Outline and findings: expanding reveals rows; to-write badges follow
+    // stub_chip = leaf (stub sections with no deeper section; umbrella
+    // headings are not counted). Clicking a row jumps the cursor.
+    const clickOutlineFold = () => client.evaluate(`(() => {
+      const scope = app.workspace.activeLeaf?.view?.editor?.cm?.dom || document;
+      scope.querySelector(".bob-prose-note-card button.bob-property-card-fold")?.click();
+      return true;
+    })()`, 10000);
+    const ensureOutlineExpanded = async () => {
+      for (let i = 0; i < 3; i += 1) {
+        const s = await probe();
+        if (s.outlineHidden === false && (s.outline ?? 0) > 0) return s;
+        await clickOutlineFold();
+        await sleep(800);
+      }
+      return probe();
+    };
+    await openProbe("prose-with-title.md", "live");
+    await ensureOutlineExpanded();
+    let expandedSnap = null;
+    try {
+      expandedSnap = await waitSnapshot("prose-outline-ready", (s) => s && s.prose === 1 && (s.outline ?? 0) >= 2 && s.outlineHidden === false, 20000);
+    } catch { expandedSnap = await probe(); }
+    const outlineMissing = [];
+    if (expandedSnap.outlineHidden !== false) outlineMissing.push("outline-hidden:" + JSON.stringify(expandedSnap.outlineHidden));
+    if ((expandedSnap.outline ?? 0) < 2) outlineMissing.push(`outline-rows:${expandedSnap.outline}`);
+    if (!/The itch|The shape/.test(expandedSnap.outlineText || "")) outlineMissing.push("outline-text:" + JSON.stringify((expandedSnap.outlineText || "").slice(0, 200)));
+    record("prose-outline-expands", outlineMissing.length === 0,
+      JSON.stringify({ missing: outlineMissing, outline: expandedSnap.outline, hidden: expandedSnap.outlineHidden, text: (expandedSnap.outlineText || "").slice(0, 300) }));
+    // Leaf rule on the legacy note: umbrella 1. is not to-write; leaf stubs are.
+    await openProbe("prose-article-legacy.md", "live");
+    await ensureOutlineExpanded();
+    let legacyOutline = null;
+    try {
+      legacyOutline = await waitSnapshot("legacy-outline-ready", (s) => s && s.prose === 1 && (s.outline ?? 0) >= 12 && s.outlineHidden === false, 20000);
+    } catch { legacyOutline = await probe(); }
+    const leafDetail = await client.evaluate(`(() => {
+      const scope = app.workspace.activeLeaf?.view?.editor?.cm?.dom || document;
+      const rows = Array.from(scope.querySelectorAll(".bob-prose-note-card .bob-prose-note-card-outline-row"));
+      return rows.map((row) => ({
+        title: row.querySelector(".bob-prose-note-card-outline-title")?.textContent?.slice(0, 60) || "",
+        measure: row.querySelector(".bob-prose-note-card-outline-measure")?.textContent?.slice(0, 20) || "",
+      }));
+    })()`, 10000).catch((error) => ({ error: String(error?.message || error) }));
+    const leafRows = Array.isArray(leafDetail) ? leafDetail : [];
+    const leafMissing = [];
+    if ((legacyOutline.outline ?? 0) < 12) leafMissing.push(`outline-rows:${legacyOutline.outline}`);
+    const umbrella = leafRows.find((row) => /What is SASE/.test(row.title || ""));
+    if (umbrella && /to write/.test(umbrella.measure || "")) leafMissing.push("umbrella-counted-as-to-write");
+    const leafWrites = leafRows.filter((row) => /to write/.test(row.measure || ""));
+    if (leafWrites.length === 0) leafMissing.push("no-to-write-badges");
+    if (!/What is an "agent turn"|What is a bead/.test(legacyOutline.outlineText || "") && leafRows.length === 0) leafMissing.push("outline-text-missing");
+    record("prose-outline-stub-leaf", leafMissing.length === 0,
+      JSON.stringify({ missing: leafMissing, outline: legacyOutline.outline, rows: leafRows.slice(0, 14) }));
+    // Outline jump: clicking a row moves Live Preview cursor to the heading.
+    await openProbe("prose-with-title.md", "live");
+    await ensureOutlineExpanded();
+    const jumpOk = await client.evaluate(`(async () => {
+      const view = app.workspace.activeLeaf?.view;
+      const scope = view?.editor?.cm?.dom || document;
+      const rows = Array.from(scope.querySelectorAll(".bob-prose-note-card .bob-prose-note-card-outline-row"));
+      if (!rows[1]) return { ok: false, reason: "no second row", count: rows.length };
+      const before = view?.editor?.getCursor?.() || null;
+      rows[1].click();
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      const after = view?.editor?.getCursor?.() || null;
+      return { ok: true, before, after };
+    })()`, 15000).catch((error) => ({ ok: false, reason: String(error?.message || error) }));
+    const jumpMissing = [];
+    if (!jumpOk?.ok) jumpMissing.push("eval-failed:" + JSON.stringify(jumpOk));
+    else if (!jumpOk.after || jumpOk.after.line === jumpOk.before?.line) jumpMissing.push("cursor-did-not-move:" + JSON.stringify(jumpOk));
+    record("prose-outline-jump", jumpMissing.length === 0, JSON.stringify({ missing: jumpMissing, jump: jumpOk }));
+    // Finding jump: the body-finding fixture reports broken-heading-link on line 10.
+    await openProbe("prose-with-body-finding.md", "live");
+    await ensureOutlineExpanded();
+    const findingJump = await client.evaluate(`(async () => {
+      const view = app.workspace.activeLeaf?.view;
+      const scope = view?.editor?.cm?.dom || document;
+      const row = scope.querySelector(".bob-prose-note-card .bob-prose-note-card-finding");
+      if (!row) return { ok: false, reason: "no finding row" };
+      row.click();
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      const after = view?.editor?.getCursor?.() || null;
+      return { ok: true, after, label: row.getAttribute?.("aria-label") || row.textContent?.slice(0, 120) || "" };
+    })()`, 15000).catch((error) => ({ ok: false, reason: String(error?.message || error) }));
+    const findingMissing = [];
+    if (!findingJump?.ok) findingMissing.push("eval-failed:" + JSON.stringify(findingJump));
+    else if ((findingJump.after?.line ?? -1) !== 9) findingMissing.push("cursor-not-line-10:" + JSON.stringify(findingJump.after));
+    else if (!/broken-heading-link|no-such-section/i.test(findingJump.label || "")) findingMissing.push("label-missing:" + JSON.stringify(findingJump.label));
+    record("prose-finding-jump", findingMissing.length === 0, JSON.stringify({ missing: findingMissing, jump: findingJump }));
   }
 
   // Focus and routing: fold, drawer, ==, +, -, _, Vim motion, Tab, Esc ladder.
@@ -769,58 +913,73 @@ async function driveMatrix(client, report, record, outDir, vaultReal, profileDir
     await keys("Escape");
   }
   {
-    // Prose is folded by default: expanding reveals the outline shell. The
-    // numbering chip is inert text until qj.3's toggle-section-numbers command
-    // registers (toggleCommand false): clicking it must be a no-op.
+    // Numbering chip, live path: with Bob Prose enabled the chip is a BUTTON.
+    // One click flips numbered/unumbered and repaints; one editor undo()
+    // restores the note text byte-for-byte (passive hash unaffected).
     await openProbe("prose-with-title.md", "live");
-    let expanded = null;
     try {
-      expanded = await waitSnapshot("prose-expands", (s) => s && s.prose === 1, 15000);
-    } catch { expanded = await probe(); }
-    const outlineClick = () => client.evaluate(`(() => {
-      const scope = app.workspace.activeLeaf?.view?.editor?.cm?.dom || document;
-      scope.querySelector(".bob-prose-note-card button.bob-property-card-fold")?.click();
-      return true;
-    })()`, 10000);
-    await outlineClick();
-    await sleep(800);
-    const expandedSnap = await probe();
-    record("prose-fold-reveals-outline", expandedSnap.outlineHidden === false && expandedSnap.prose === 1,
-      JSON.stringify({ hidden: expandedSnap.outlineHidden, rows: expandedSnap.outline, collapsed: expandedSnap.cardCollapsed, before: expanded?.outlineHidden }));
+      await waitSnapshot("chip-live-ready", (s) => s && s.prose === 1 && s.toggleCommand === true, 20000);
+    } catch {}
     const chipProbe = await probe();
     const chipMissing = [];
     if (!/§/.test(chipProbe.numbering || "")) chipMissing.push("chip-missing");
-    if (chipProbe.toggleCommand) {
-      if (chipProbe.numberingTag !== "BUTTON") chipMissing.push("live-chip-not-button:" + chipProbe.numberingTag);
-      const before = chipProbe.numbering || "";
-      const chipClick = () => client.evaluate(`(() => {
-        const scope = app.workspace.activeLeaf?.view?.editor?.cm?.dom || document;
-        scope.querySelector(".bob-prose-note-card .bob-prose-note-card-numbering")?.click();
+    if (!chipProbe.toggleCommand) chipMissing.push("toggleCommand-should-be-true");
+    if (chipProbe.numberingTag !== "BUTTON") chipMissing.push("live-chip-not-button:" + chipProbe.numberingTag);
+    const beforeNumbering = chipProbe.numbering || "";
+    const beforeText = await client.evaluate(`(async () => {
+      const view = app.workspace.activeLeaf?.view;
+      try { return view?.editor?.getValue?.() || ""; }
+      catch (_) { return ""; }
+    })()`, 10000).catch(() => "");
+    const chipClick = () => client.evaluate(`(() => {
+      const scope = app.workspace.activeLeaf?.view?.editor?.cm?.dom || document;
+      scope.querySelector(".bob-prose-note-card .bob-prose-note-card-numbering")?.click();
+      return true;
+    })()`, 10000);
+    await chipClick();
+    let afterSnap = null;
+    try {
+      afterSnap = await waitSnapshot("chip-flipped", (s) => s && s.prose === 1 && (s.numbering || "") !== beforeNumbering, 20000);
+    } catch { afterSnap = await probe(); }
+    const afterNumbering = afterSnap.numbering || "";
+    if (afterNumbering === beforeNumbering) chipMissing.push(`toggle-no-repaint:${beforeNumbering}->${afterNumbering}`);
+    const flippedOk = /numbered/.test(beforeNumbering) && /numbered/.test(afterNumbering)
+      && beforeNumbering !== afterNumbering;
+    if (!flippedOk) chipMissing.push(`toggle-did-not-flip:${beforeNumbering}->${afterNumbering}`);
+    const midText = await client.evaluate(`(async () => {
+      const view = app.workspace.activeLeaf?.view;
+      try { return view?.editor?.getValue?.() || ""; }
+      catch (_) { return ""; }
+    })()`, 10000).catch(() => "");
+    if (midText === beforeText) chipMissing.push("note-text-unchanged-after-toggle");
+    await client.evaluate(`(() => {
+      try { app.workspace.activeLeaf?.view?.editor?.undo?.(); return true; }
+      catch (_) { return false; }
+    })()`, 10000);
+    await sleep(1200);
+    const restoredText = await client.evaluate(`(async () => {
+      const view = app.workspace.activeLeaf?.view;
+      try { return view?.editor?.getValue?.() || ""; }
+      catch (_) { return ""; }
+    })()`, 10000).catch(() => "");
+    if (restoredText !== beforeText) chipMissing.push("toggle-not-undoable");
+    // Restore the vault file so the deliberate toggle write leaves the passive
+    // hash clean; the typing probe re-baselines afterwards in any case.
+    try {
+      await client.evaluate(`(async (expected) => {
+        const view = app.workspace.activeLeaf?.view;
+        const file = view?.file;
+        if (!file || !view?.editor) return false;
+        const current = view.editor.getValue?.() || "";
+        if (current !== expected) return false;
+        try { await view.save?.(); } catch (_) {}
         return true;
-      })()`, 10000);
-      await chipClick();
-      await sleep(1500);
-      const after = (await probe()).numbering || "";
-      if (after === before) chipMissing.push("toggle-no-repaint");
-      await chipClick();
-      await sleep(1500);
-      const restored = (await probe()).numbering || "";
-      if (restored !== before) chipMissing.push("toggle-not-undoable");
-    } else {
-      if (chipProbe.numberingTag !== "SPAN") chipMissing.push("inert-chip-not-span:" + chipProbe.numberingTag);
-      if (!/unavailable/i.test(chipProbe.numberingTitle || "")) chipMissing.push("inert-title:" + JSON.stringify(chipProbe.numberingTitle));
-      const before = chipProbe.numbering || "";
-      await client.evaluate(`(() => {
-        const scope = app.workspace.activeLeaf?.view?.editor?.cm?.dom || document;
-        scope.querySelector(".bob-prose-note-card .bob-prose-note-card-numbering")?.click();
-        return true;
-      })()`, 10000);
-      await sleep(1200);
-      const after = (await probe()).numbering || "";
-      if (after !== before) chipMissing.push(`inert-chip-changed:${before}->${after}`);
-    }
-    record("prose-numbering-chip-inert-without-command", chipMissing.length === 0,
-      JSON.stringify({ missing: chipMissing, numbering: chipProbe.numbering, tag: chipProbe.numberingTag, toggleCommand: chipProbe.toggleCommand }));
+      })(${JSON.stringify(beforeText)})`, 15000);
+    } catch (_) {}
+    const restoredSnap = await probe();
+    if (!/§/.test(restoredSnap.numbering || "")) chipMissing.push("chip-missing-after-undo");
+    record("prose-numbering-chip-live-toggle", chipMissing.length === 0,
+      JSON.stringify({ missing: chipMissing, before: beforeNumbering, after: afterNumbering, toggleCommand: chipProbe.toggleCommand, tag: chipProbe.numberingTag, undone: restoredText === beforeText, passiveNote: "toggle write undone then saved; passive hash unaffected" }));
   }
 
   // Typing under a mounted card never unmounts it or flashes native Properties.
@@ -989,21 +1148,44 @@ async function driveMatrix(client, report, record, outDir, vaultReal, profileDir
   await sleep(800);
   await shot("native-malformed-light-wide", 1280, "light");
   let forcedOk = true;
+  const forcedMismatches = [];
+  const checkForcedColors = async () => {
+    try {
+      return await client.evaluate(`matchMedia("(forced-colors: active)").matches`, 10000);
+    } catch (_) {
+      return false;
+    }
+  };
   try {
-    await client.call("Emulation.setEmulatedMedia", { forcedColors: "active" });
+    await client.call("Emulation.setEmulatedMedia", { media: "screen", features: [{ name: "forced-colors", value: "active" }] });
     await sleep(500);
     await openProbe("notebook-about-abby.md", "live");
     await sleep(800);
+    if (!(await checkForcedColors())) {
+      forcedOk = false;
+      forcedMismatches.push("notebook: matchMedia did not match");
+    }
     await shot("notebook-forced-colors", 1280, "forced-colors");
     await openProbe("prose-with-title.md", "live");
     await sleep(800);
+    if (!(await checkForcedColors())) {
+      forcedOk = false;
+      forcedMismatches.push("prose: matchMedia did not match");
+    }
     await shot("prose-forced-colors", 1280, "forced-colors");
-    await client.call("Emulation.setEmulatedMedia", { forcedColors: "none" });
+    await client.call("Emulation.setEmulatedMedia", { media: "screen", features: [] });
   } catch (error) {
     forcedOk = false;
-    record("forced-colors-emulation", false, String(error?.message || error));
+    forcedMismatches.push(String(error?.message || error));
+    try {
+      await client.call("Emulation.setEmulatedMedia", { media: "screen", features: [] });
+    } catch (_) {}
+    record("forced-colors-emulation", false, JSON.stringify({ mismatches: forcedMismatches }).slice(0, 2000));
   }
-  if (forcedOk) record("forced-colors-emulation", true, "forced-colors shots captured");
+  if (forcedOk) record("forced-colors-emulation", true, "forced-colors emulation matched for notebook and prose shots");
+  else if (!report.checks.some((row) => row.name === "forced-colors-emulation" && row.status === "fail")) {
+    record("forced-colors-emulation", false, JSON.stringify({ mismatches: forcedMismatches }).slice(0, 2000));
+  }
 }
 
 function pluginProvenance() {

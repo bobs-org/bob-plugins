@@ -107,7 +107,11 @@ function bobProjectNote() {
 }
 
 function hostNote() {
-  return ["---", 'type: "[[project]]"', 'parent: "[[area]]"', "status: wip", "color: orange", "---", "", "# Project host", "", "- [ ] #task #prj Host outcome #hide ^prj", "", "## Projects", "", "Project host for nested children.", ""].join("\n");
+  return ["---", 'type: "[[project]]"', 'parent: "[[area]]"', "status: wip", "color: orange", "---", "", "# Project host", "", "- [ ] #task #prj Host outcome #hide ^prj", "", "## Projects", "", "Project host for nested children.", "", "Host embed paragraph. ^host-para", ""].join("\n");
+}
+
+function embedsNote() {
+  return ["# Embeds", "", "![[project-host#^host-para]]", "", "![[area#^area-task]]", "", "![[project-host#Projects]]", ""].join("\n");
 }
 
 function fixtureNotes() {
@@ -130,6 +134,7 @@ function fixtureNotes() {
     "empty-host.md": hostNote().replace("Project host", "Empty host").replace("Host outcome", "Empty outcome"),
     "one/duplicate.md": projectNote("area", { stem: "duplicate", title: "Duplicate stem A" }),
     "two/duplicate.md": projectNote("area", { stem: "duplicate", title: "Duplicate stem B" }),
+    "embeds.md": embedsNote(),
   };
   for (let i = 1; i <= 54; i += 1) {
     const stem = `project-${String(i).padStart(2, "0")}`;
@@ -173,6 +178,9 @@ function selfTest() {
   if (!notes["area.md"].includes("> [!notebooks]") || !notes["area.md"].includes("## Tasks") || !notes["dev.md"].includes('parent: "[[area]]"') || !notes["bob.md"].includes('parent: "[[dev]]"')) throw new Error("Areas click/scroll fixture is incomplete");
   if (!notes["all-closed-a.md"] || !notes["all-closed-c.md"] || !notes["empty-host.md"]) throw new Error("closed/empty host fixture is incomplete");
   if (!notes["one/duplicate.md"] || !notes["two/duplicate.md"]) throw new Error("duplicate-stem fixtures are missing");
+  if (!notes["embeds.md"] || !notes["embeds.md"].includes("![[project-host#^host-para]]") || !notes["embeds.md"].includes("![[area#^area-task]]") || !notes["embeds.md"].includes("![[project-host#Projects]]")) throw new Error("embeds fixture is incomplete");
+  if (!notes["project-host.md"].includes("^host-para") || !notes["project-host.md"].includes("## Projects")) throw new Error("project-host embed paragraph is missing");
+  if (!notes["area.md"].includes("^area-task")) throw new Error("area task embed target is missing");
   const parsed = parseArgs(["-s", "-o", "/tmp/shots", "-r", "/tmp/report.json"]);
   if (!parsed.selfTest || parsed.out !== "/tmp/shots" || parsed.report !== "/tmp/report.json") throw new Error("argument parser self-test failed");
   if (process.platform === "linux" && electronTempDir() !== "/tmp") throw new Error("Linux Electron temp path must stay short enough for Chromium singleton sockets");
@@ -187,6 +195,11 @@ function selfTest() {
   for (const selector of ['.callout[data-callout="areas"]', ".bob-areas-anchor", ".horizontal-main-container", ".workspace"]) {
     if (!areasProbe.includes(selector)) throw new Error(`Areas acceptance probe misses ${selector}`);
   }
+  const embedsProbe = embedsProbeSource();
+  for (const selector of [".markdown-embed", ".bob-projects-anchor", ".bob-projects-header", ".bob-areas-anchor", '[data-callout]']) {
+    if (!embedsProbe.includes(selector)) throw new Error(`embeds acceptance probe misses ${selector}`);
+  }
+  if (!source.includes("embeds-live-no-standalone-in-embeds") || !source.includes("embeds-reading-no-standalone-in-embeds") || !source.includes("embeds-live-control-callout") || !source.includes("embeds-reading-control-callout")) throw new Error("acceptance must test embeds in both modes with a control callout");
   process.stdout.write("offline self-test complete (fixtures and CDP probes; no Obsidian or bob launched)\n");
 }
 
@@ -457,6 +470,28 @@ function areasProbeSource() {
     const horizontal=document.querySelector(".horizontal-main-container");
     const daily=Array.from(app.workspace.getLeavesOfType("markdown")||[]).find((leaf)=>leaf.view?.file?.path==="20261113.md");
     return {activeFile:app.workspace.getActiveFile?.()?.path||null, areasCards:areaCards.map((el)=>({text:(el.textContent||"").replace(/\\s+/g," ").trim(),painted:el.getAttribute("data-bob-areas-card"),path:el.closest(".workspace-leaf")?.getAttribute("data-type")||null})), areaAnchors:anchors.length, forbiddenAnchors:forbidden.length, notebookCards:document.querySelectorAll('.callout[data-callout="notebooks"]').length, taskDescriptions:document.querySelectorAll(".plugin-tasks-list-item .bob-areas-anchor, .tasks-list-text .bob-areas-anchor, .block-language-tasks .bob-areas-anchor").length, pinnedDaily:daily?Boolean(daily.pinned||daily.getViewState?.()?.pinned):false, workspaceScroll:{top:workspace?.scrollTop||0,left:workspace?.scrollLeft||0}, horizontalScroll:{top:horizontal?.scrollTop||0,left:horizontal?.scrollLeft||0}, fileOpens:window.__areasE2EFileOpens||[]};
+  } catch(e) { return {error:String(e&&e.message||e)}; } })()`;
+}
+
+function embedsProbeSource() {
+  return `(() => { try {
+    const embeds = Array.from(document.querySelectorAll(".markdown-embed"));
+    const rows = embeds.map((el) => {
+      const outside = (sel) => Array.from(el.querySelectorAll(sel)).filter((node) => !node.closest("[data-callout]"));
+      return {
+        anchors: outside(".bob-projects-anchor").length,
+        headers: outside(".bob-projects-header").length,
+        closed: outside(".bob-projects-closed").length,
+        areasAnchors: outside(".bob-areas-anchor").length,
+        text: (el.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 200),
+        hasProjectsCallout: Boolean(el.querySelector('.callout[data-callout="projects"] .bob-projects-header')),
+      };
+    });
+    const body = String(document.body?.innerText || "");
+    return {activeFile: app.workspace.getActiveFile?.()?.path || null, embedCount: embeds.length, rows,
+      hostParaVisible: body.includes("Host embed paragraph."),
+      areaTaskVisible: body.includes("Keep the area workspace visible"),
+      controlCallout: rows.some((row) => row.hasProjectsCallout)};
   } catch(e) { return {error:String(e&&e.message||e)}; } })()`;
 }
 
@@ -804,6 +839,24 @@ async function run(args) {
     await sleep(500);
     probe = await client.evaluate(projectsProbeSource());
     record("empty-host-has-no-empty-card", !probe.cards?.some((card) => card.header) && !probe.standalone?.some((row) => /Projects/.test(row.text)), probe);
+
+    await openNote(client, "embeds.md", "live");
+    let embedsProbe = await waitFor(client, embedsProbeSource(), (value) => value && value.activeFile === "embeds.md" && value.embedCount >= 3, "embeds live");
+    report.probes.embedsLive = embedsProbe;
+    record("embeds-live-no-standalone-in-embeds", embedsProbe.rows.length >= 3 && embedsProbe.rows.every((row) => row.anchors === 0 && row.headers === 0 && row.closed === 0 && row.areasAnchors === 0), embedsProbe.rows);
+    record("embeds-live-text-visible", embedsProbe.hostParaVisible && embedsProbe.areaTaskVisible, { hostParaVisible: embedsProbe.hostParaVisible, areaTaskVisible: embedsProbe.areaTaskVisible });
+    record("embeds-live-control-callout", embedsProbe.controlCallout, embedsProbe.rows);
+    const embedsLiveShot = await capture(client, path.join(outDir, "projects-embeds-live-desktop-light.png"), 1280);
+    report.screenshots.push({ ...embedsLiveShot, theme: "light", view: "Live Preview embeds" });
+
+    await openNote(client, "embeds.md", "reading");
+    embedsProbe = await waitFor(client, embedsProbeSource(), (value) => value && value.activeFile === "embeds.md" && value.embedCount >= 3, "embeds reading");
+    report.probes.embedsReading = embedsProbe;
+    record("embeds-reading-no-standalone-in-embeds", embedsProbe.rows.length >= 3 && embedsProbe.rows.every((row) => row.anchors === 0 && row.headers === 0 && row.closed === 0 && row.areasAnchors === 0), embedsProbe.rows);
+    record("embeds-reading-text-visible", embedsProbe.hostParaVisible && embedsProbe.areaTaskVisible, { hostParaVisible: embedsProbe.hostParaVisible, areaTaskVisible: embedsProbe.areaTaskVisible });
+    record("embeds-reading-control-callout", embedsProbe.controlCallout, embedsProbe.rows);
+    const embedsReadingShot = await capture(client, path.join(outDir, "projects-embeds-reading-desktop-light.png"), 1280);
+    report.screenshots.push({ ...embedsReadingShot, theme: "light", view: "Reading embeds" });
 
     // A damaged list transport keeps the last-good card visible and offers
     // Retry; removing the isolated failure lets the button recover it.

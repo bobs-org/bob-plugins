@@ -177,9 +177,12 @@ class BobLedgerToolsAreasCatalogMixin {
     if (el.closest?.(".cm-editor") || el.querySelector?.(".cm-editor") || callouts.some((callout) => callout.closest?.(".cm-editor"))) return;
     const section = ctx.getSectionInfo?.(el);
     const anchorLine = section?.text ? areasCardAnchorLine(section.text) : null;
-    const allowAnchor = Boolean(section && anchorLine !== null
+    let allowAnchor = Boolean(section && anchorLine !== null
       && section.lineStart <= anchorLine && section.lineEnd >= anchorLine
       && !areasCardHasCallout(section.text));
+    if (allowAnchor && notebookCatalogFragmentRender(el, ctx, section?.text || "", this.app?.metadataCache)) {
+      allowAnchor = false;
+    }
     const folds = this.areasCatalogFoldMap(el);
     this.areasPaintReading(el, ctx.sourcePath, folds, allowAnchor);
     let widget = Array.from(this.areasCatalogReading || []).find((item) => item.el === el);

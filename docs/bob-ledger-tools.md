@@ -547,8 +547,7 @@ screen.
 ## Calendar Events
 
 For auto-sync, event painting, and clock behavior, see
-[Calendar Events](calendar-events.md). This heading stays as a stable link
-target.
+[Calendar Events](calendar-events.md).
 
 ## Period Notes
 
@@ -601,31 +600,33 @@ See [`taskSettle` v1](https://bobs-org.github.io/develop/plugins/task-settle/) f
 ## Notebooks
 
 On eligible notebook notes, Notebook Cards replace linked headers; otherwise
-the header remains a fallback. Catalogs inherit the host hue. **add summary**
+the header stays. Catalogs inherit the host hue. **add summary**
 opens the notebook on `summary`; **↻ sync** repairs missing, stale, or damaged
 catalogs. Catalog chrome appears only on report-listed hosts or pre-report
 notes with a callout. **Retry** follows a failed refresh or missing report; lag
-alone stays silent. Live data requires desktop Obsidian.
+stays silent. Live data requires desktop Obsidian.
 
 ## Projects catalog card
 
 `[!projects]` shows Bob's project report in a live, display-only card. Each
-host gets one card; a standalone card appears only when the note has no stored
-callout. State markers and task, Today, empty, and blocked-reason chips come
-from `bob projects list -f json`; Bob owns membership, lifecycle, and catalog
-text. **Closed** starts folded with a two-row peek; Space or Enter toggles it.
-A project's `▸ N` button reveals direct children. Folds stay pane-local.
+host gets one card, standalone only without a stored callout. State markers
+and task, Today, empty, and blocked-reason chips come from `bob projects list
+-f json`. **Closed** starts folded with a two-row peek; Space or Enter toggles
+it. A project's `▸ N` button reveals direct children; folds stay pane-local.
 
 Use **↻ sync** to refresh a missing or stale catalog, **Retry** after a report
 failure, and **＋ project** to copy the `@<host>^` capture starter. Sync writes
 through Bob; the starter only goes to the clipboard. A failed refresh keeps
 the last good rows visible. At narrow widths, chips wrap below the criterion
-and the count shortens while keeping its full accessible label.
+and the count shortens, keeping its accessible label. Embeds and hover
+previews never show standalone cards; embedded stored callouts still paint.
 
 ## Areas
 
 One card per host; standalone only without a stored callout. Row links open
-the area. Unexpected workspace scroll resets to zero and logs a diagnostic.
+the area. Embeds and hover previews never show standalone cards; embedded
+stored callouts still paint. Unexpected workspace scroll resets to zero and
+logs a diagnostic.
 
 ## Gmail open hint
 

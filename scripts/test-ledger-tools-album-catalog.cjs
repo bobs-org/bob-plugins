@@ -816,3 +816,30 @@ test('Live Preview extension paints after updates and cleans file switches, dest
   assert.equal(timers.size, 0);
   assert.equal(view.state.doc.toString(), text);
 });
+
+test('fragment renders never paint standalone album chrome', () => {
+  const fragment = 'Embedded paragraph. ^para';
+  const section = () => ({ text: fragment, lineStart: 0, lineEnd: 0 });
+  for (const cls of ['markdown-embed', 'hover-popover']) {
+    const f = fixture({ state: { report: report([], { state: 'missing' }) } });
+    const inner = el(f.doc, 'div', {}, [el(f.doc, 'p', {}, ['Owner'])]);
+    inner.isConnected = false;
+    const container = el(f.doc, 'div', {}, []);
+    const wrapper = el(f.doc, 'div', { class: cls }, [container]);
+    void wrapper;
+    f.plugin.renderAlbumCatalogInReading(inner, { sourcePath: 'body.md',
+      containerEl: container, getSectionInfo: section, addChild() {} });
+    assert.equal(inner.querySelector('.bob-album-anchor'), null, `${cls} fragment paints no album anchor`);
+    assert.equal(inner.querySelector('.bob-album-status'), null, `${cls} fragment paints no album status`);
+  }
+  {
+    const f = fixture({ state: { report: report([], { state: 'missing' }) } });
+    f.app.metadataCache.getCache = (p) => p === 'body.md' ? { frontmatterPosition: { start: { line: 0 } } } : null;
+    const inner = el(f.doc, 'div', {}, [el(f.doc, 'p', {}, ['Owner'])]);
+    inner.isConnected = false;
+    f.plugin.renderAlbumCatalogInReading(inner, { sourcePath: 'body.md',
+      getSectionInfo: section, addChild() {} });
+    assert.equal(inner.querySelector('.bob-album-anchor'), null, 'frontmatter-mismatch fragment paints no album anchor');
+    assert.equal(inner.querySelector('.bob-album-status'), null, 'frontmatter-mismatch fragment paints no album status');
+  }
+});

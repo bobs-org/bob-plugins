@@ -1108,6 +1108,109 @@ test("fold actions on a moved postprocessor repaint through their CodeMirror own
   assert.deepEqual(painted, [view]);
 });
 
+test("fragment renders never paint standalone projects chrome", () => {
+  const fragment = "Embedded paragraph. ^para";
+  const section = () => ({ text: fragment, lineStart: 0, lineEnd: 0 });
+  const detached = (doc, tasksLike) => {
+    if (tasksLike) {
+      const p = el(doc, "p", {}, ["Embedded paragraph."]);
+      const li = el(doc, "li", {}, [p]);
+      const root = el(doc, "div", {}, [el(doc, "ul", {}, [li])]);
+      root.isConnected = false;
+      return root;
+    }
+    const root = el(doc, "div", {}, [el(doc, "p", {}, ["Embedded paragraph."])]);
+    root.isConnected = false;
+    return root;
+  };
+  for (const tasksLike of [false, true]) {
+    for (const cls of ["markdown-embed", "hover-popover"]) {
+      const f = fixture();
+      const root = detached(f.doc, tasksLike);
+      const container = el(f.doc, "div", {}, []);
+      const wrapper = el(f.doc, "div", { class: cls }, [container]);
+      void wrapper;
+      f.plugin.renderProjectsCatalogInReading(root, { sourcePath: "body.md",
+        containerEl: container, getSectionInfo: section, addChild() {} });
+      assert.equal(root.querySelector(".bob-projects-anchor"), null, `${cls} fragment paints no anchor`);
+      assert.equal(root.querySelector(".bob-projects-header"), null, `${cls} fragment paints no header`);
+      assert.equal(root.querySelector(".bob-projects-closed"), null, `${cls} fragment paints no closed group`);
+    }
+    {
+      const f = fixture();
+      f.app.metadataCache.getCache = (path) => path === "body.md" ? { frontmatterPosition: { start: { line: 0 }, end: { line: 2 } } } : null;
+      const root = detached(f.doc, tasksLike);
+      root.isConnected = false;
+      f.plugin.renderProjectsCatalogInReading(root, { sourcePath: "body.md",
+        getSectionInfo: section, addChild() {} });
+      assert.equal(root.querySelector(".bob-projects-anchor"), null, "frontmatter-mismatch fragment paints no anchor");
+      assert.equal(root.querySelector(".bob-projects-header"), null, "frontmatter-mismatch fragment paints no header");
+      assert.equal(root.querySelector(".bob-projects-closed"), null, "frontmatter-mismatch fragment paints no closed group");
+    }
+  }
+});
+
+test("full-note sections still anchor projects chrome", () => {
+  const f = fixture();
+  const text = '---\ntype: "[[project]]"\n---\n# Body\n\nIntro.';
+  const root = el(f.doc, "div", {}, [el(f.doc, "h1", {}, ["Body"])]);
+  const container = el(f.doc, "div", {}, []);
+  f.app.metadataCache.getCache = () => ({ frontmatterPosition: { start: { line: 0 }, end: { line: 2 } } });
+  f.plugin.renderProjectsCatalogInReading(root, { sourcePath: "body.md",
+    containerEl: container, getSectionInfo: () => ({ text, lineStart: 0, lineEnd: 5 }), addChild() {} });
+  assert.ok(root.querySelector(".bob-projects-header"), "full-note render keeps standalone header");
+});
+
+test("a fragment re-render cleans earlier standalone projects chrome on refresh", () => {
+  const f = fixture();
+  const root = el(f.doc, "div", {}, [el(f.doc, "h1", {}, ["Body"])]);
+  const fullText = '---\ntype: "[[project]]"\n---\n# Body\n\nIntro.';
+  f.app.metadataCache.getCache = (path) => path === "body.md" ? { frontmatterPosition: { start: { line: 0 }, end: { line: 2 } } } : null;
+  f.plugin.renderProjectsCatalogInReading(root, { sourcePath: "body.md",
+    getSectionInfo: () => ({ text: fullText, lineStart: 0, lineEnd: 5 }), addChild() {} });
+  assert.ok(root.querySelector(".bob-projects-header"), "full-note render paints header first");
+  const container = el(f.doc, "div", {}, []);
+  el(f.doc, "div", { class: "markdown-embed" }, [container]);
+  f.plugin.renderProjectsCatalogInReading(root, { sourcePath: "body.md",
+    containerEl: container, getSectionInfo: () => ({ text: "Embedded paragraph. ^para", lineStart: 0, lineEnd: 0 }), addChild() {} });
+  assert.equal(root.querySelector(".bob-projects-header"), null, "fragment re-render removes header");
+  assert.equal(root.querySelector(".bob-projects-anchor"), null, "fragment re-render removes anchor");
+  let refresh;
+  f.plugin.projectsSetTimeout = (callback) => { refresh = callback; return 7; };
+  f.plugin.projectsClearTimeout = () => {};
+  f.plugin.projectsCatalogRefreshTimer = null;
+  f.plugin.scheduleProjectsCatalogRefresh();
+  refresh();
+  assert.equal(root.querySelector(".bob-projects-header"), null, "refresh keeps fragment clean");
+  assert.equal(root.querySelector(".bob-projects-closed"), null, "refresh keeps closed group clean");
+});
+
+test("notebookCatalogFragmentRender never throws and gates on cache frontmatter", () => {
+  const { notebookCatalogFragmentRender } = LedgerToolsPlugin.helpers;
+  assert.equal(notebookCatalogFragmentRender(null, null, "", null), false);
+  assert.equal(notebookCatalogFragmentRender(null, {}, "", null), false);
+  const f = fixture();
+  const root = el(f.doc, "div", {}, [el(f.doc, "p", {}, ["x"])]);
+  assert.equal(notebookCatalogFragmentRender(root, { sourcePath: "body.md" }, "", null), false);
+  assert.equal(notebookCatalogFragmentRender(root, { sourcePath: "body.md" }, "para", null), false);
+  assert.equal(notebookCatalogFragmentRender(root, { sourcePath: "body.md" }, "para",
+    { getCache() { throw new Error("boom"); } }), false);
+  assert.equal(notebookCatalogFragmentRender(root, { sourcePath: "body.md" }, "Embedded paragraph. ^para",
+    { getCache: () => null }), false);
+  assert.equal(notebookCatalogFragmentRender(root, { sourcePath: "body.md" }, "Embedded paragraph. ^para",
+    { getCache: () => ({}) }), false);
+  assert.equal(notebookCatalogFragmentRender(root, { sourcePath: "body.md" }, "Embedded paragraph. ^para",
+    { getCache: () => ({ frontmatter: { type: "x" } }) }), true);
+  assert.equal(notebookCatalogFragmentRender(root, { sourcePath: "body.md" },
+    '\uFEFF---\ntype: "[[project]]"\n---\n# Body',
+    { getCache: () => ({ frontmatterPosition: { start: { line: 0 } } }) }), false);
+  assert.equal(notebookCatalogFragmentRender(root, { sourcePath: "body.md" }, "Embedded paragraph. ^para",
+    { getCache: () => ({ frontmatterPosition: { start: { line: 0 } } }) }), true);
+  const container = el(f.doc, "div", {}, []);
+  el(f.doc, "div", { class: "markdown-embed" }, [container]);
+  assert.equal(notebookCatalogFragmentRender(root, { sourcePath: "body.md", containerEl: container }, "anything", null), true);
+});
+
 test("CSS uses pane container wrapping, scoped projects hue, and keyboard outlines", () => {
   const css = fs.readFileSync(path.join(__dirname, "../plugins/bob-ledger-tools/styles.css"), "utf8");
   assert.match(css, /@container bob-projects \(max-width: 440px\)/);

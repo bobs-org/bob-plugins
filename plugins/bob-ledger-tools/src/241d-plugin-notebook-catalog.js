@@ -187,7 +187,7 @@ class BobLedgerToolsNotebookCatalogMixin {
       : null;
   }
 
-  paintNotebookCatalogReading(el, sourcePath) {
+  paintNotebookCatalogReading(el, sourcePath, isFragment = false) {
     const state = this.notebookCatalogState();
     const options = this.notebookCatalogPaintOptions(sourcePath, state);
     const reading = typeof propertyCardReadingViewFor === "function" ? propertyCardReadingViewFor(this.app, el) : null;
@@ -215,10 +215,11 @@ class BobLedgerToolsNotebookCatalogMixin {
       syncModel = null;
       statusModel = null;
     }
+    const fragment = isFragment === true;
     const needsAnchor = Boolean(
       options.chipsEnabled !== false
       && (retryModel || (syncModel && (syncModel.state === "missing" || syncModel.busy)) || statusModel),
-    );
+    ) && !fragment;
     let actionHost = this.notebookCatalogActionHost(el, heading, title, needsAnchor && allowChrome, doc);
     if (!allowChrome) {
       // Keep H1 and rendered-anchor fallbacks host-only: never create an
@@ -281,7 +282,15 @@ class BobLedgerToolsNotebookCatalogMixin {
       if (!sourcePath) {
         return;
       }
-      this.paintNotebookCatalogReading(el, sourcePath);
+      let sectionText = "";
+      try {
+        const section = ctx && typeof ctx.getSectionInfo === "function" ? ctx.getSectionInfo(el) : null;
+        sectionText = section && typeof section.text === "string" ? section.text : "";
+      } catch (error) {
+        sectionText = "";
+      }
+      const isFragment = notebookCatalogFragmentRender(el, ctx, sectionText, this.app && this.app.metadataCache);
+      this.paintNotebookCatalogReading(el, sourcePath, isFragment);
       if (!(this.notebookCatalogReadingWidgets instanceof Set)) {
         this.notebookCatalogReadingWidgets = new Set();
       }
@@ -289,10 +298,11 @@ class BobLedgerToolsNotebookCatalogMixin {
         if (existing.el === el) {
           existing.ctx = ctx;
           existing.path = sourcePath;
+          existing.isFragment = isFragment;
           return;
         }
       }
-      const widget = { el, ctx, path: sourcePath };
+      const widget = { el, ctx, path: sourcePath, isFragment };
       this.notebookCatalogReadingWidgets.add(widget);
       if (ctx && typeof ctx.addChild === "function") {
         let child = null;
@@ -335,7 +345,7 @@ class BobLedgerToolsNotebookCatalogMixin {
     let refreshed = false;
     for (const widget of Array.from(this.notebookCatalogReadingWidgets)) {
       try {
-        this.paintNotebookCatalogReading(widget.el, widget.path);
+        this.paintNotebookCatalogReading(widget.el, widget.path, widget.isFragment === true);
         refreshed = true;
       } catch (error) {
         // One stale view never breaks the others.

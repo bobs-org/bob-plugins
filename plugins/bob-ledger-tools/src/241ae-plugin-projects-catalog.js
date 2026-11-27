@@ -190,9 +190,12 @@ class BobLedgerToolsProjectsCatalogMixin {
     if (el.closest?.(".cm-editor") || el.querySelector?.(".cm-editor") || callouts.some((callout) => callout.closest?.(".cm-editor"))) return;
     const section = ctx.getSectionInfo?.(el);
     const anchorLine = section?.text ? projectsCardAnchorLine(section.text) : null;
-    const allowAnchor = Boolean(section && anchorLine !== null
+    let allowAnchor = Boolean(section && anchorLine !== null
       && section.lineStart <= anchorLine && section.lineEnd >= anchorLine
       && projectsCardSourceRegions(section.text).length === 0);
+    if (allowAnchor && notebookCatalogFragmentRender(el, ctx, section?.text || "", this.app?.metadataCache)) {
+      allowAnchor = false;
+    }
     const folds = this.projectsCatalogFoldMap(el);
     this.paintProjectsCatalogReading(el, ctx.sourcePath, folds, allowAnchor);
     const existing = Array.from(this.projectsCatalogReading || []).find((widget) => widget.el === el);

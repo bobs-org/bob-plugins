@@ -38,6 +38,9 @@ try {
       projectsPaintCallout,
       projectsPaintStandalone,
       projectsCleanCatalogDom,
+      notebookCatalogAnchorExcluded,
+      notebookCatalogFragmentRender,
+      notebookFrontmatterEnd,
     });
   }
 } catch (error) {

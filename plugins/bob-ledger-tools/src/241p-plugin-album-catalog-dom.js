@@ -18,6 +18,40 @@ function notebookCatalogAnchorExcluded(node) {
   catch (_error) { return false; }
 }
 
+// Fragment renders (block embeds and hover previews) never own a standalone
+// catalog anchor. Obsidian post-processes the embedded fragment on a detached
+// section node, so `el.closest()` cannot see the live embed container: check
+// `ctx.containerEl` too, and treat a section without the host's frontmatter
+// as a fragment when the metadata cache says the host has frontmatter.
+function notebookCatalogFragmentRender(el, ctx, sectionText, metadataCache) {
+  try {
+    if (notebookCatalogAnchorExcluded(el)) return true;
+  } catch (_error) { /* exclusion is best-effort */ }
+  try {
+    const container = ctx && ctx.containerEl ? ctx.containerEl : null;
+    if (container && notebookCatalogAnchorExcluded(container)) return true;
+  } catch (_error) { /* container check is best-effort */ }
+  try {
+    const sourcePath = ctx && typeof ctx.sourcePath === "string" ? ctx.sourcePath : "";
+    if (!sourcePath || !sectionText) return false;
+    if (!metadataCache || typeof metadataCache.getCache !== "function") return false;
+    let cache = null;
+    try { cache = metadataCache.getCache(sourcePath); }
+    catch (_error) { return false; }
+    if (!cache) return false;
+    const hasFrontmatter = Boolean(cache.frontmatterPosition || cache.frontmatter);
+    if (!hasFrontmatter) return false;
+    const lines = String(sectionText).split("\n");
+    if (typeof notebookFrontmatterEnd === "function") {
+      return notebookFrontmatterEnd(lines) === 0;
+    }
+    const first = lines.length > 0 ? String(lines[0]).replace(/^\uFEFF/, "") : "";
+    return first !== "---";
+  } catch (_error) {
+    return false;
+  }
+}
+
 function albumFindCallouts(root) {
   const selector = '[data-callout="albums"]';
   const nodes = Array.from(root?.querySelectorAll?.(selector) || []);

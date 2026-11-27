@@ -72616,9 +72616,12 @@ class BobLedgerToolsProjectsCatalogMixin {
     if (el.closest?.(".cm-editor") || el.querySelector?.(".cm-editor") || callouts.some((callout) => callout.closest?.(".cm-editor"))) return;
     const section = ctx.getSectionInfo?.(el);
     const anchorLine = section?.text ? projectsCardAnchorLine(section.text) : null;
-    const allowAnchor = Boolean(section && anchorLine !== null
+    let allowAnchor = Boolean(section && anchorLine !== null
       && section.lineStart <= anchorLine && section.lineEnd >= anchorLine
       && projectsCardSourceRegions(section.text).length === 0);
+    if (allowAnchor && notebookCatalogFragmentRender(el, ctx, section?.text || "", this.app?.metadataCache)) {
+      allowAnchor = false;
+    }
     const folds = this.projectsCatalogFoldMap(el);
     this.paintProjectsCatalogReading(el, ctx.sourcePath, folds, allowAnchor);
     const existing = Array.from(this.projectsCatalogReading || []).find((widget) => widget.el === el);
@@ -74181,9 +74184,12 @@ class BobLedgerToolsAreasCatalogMixin {
     if (el.closest?.(".cm-editor") || el.querySelector?.(".cm-editor") || callouts.some((callout) => callout.closest?.(".cm-editor"))) return;
     const section = ctx.getSectionInfo?.(el);
     const anchorLine = section?.text ? areasCardAnchorLine(section.text) : null;
-    const allowAnchor = Boolean(section && anchorLine !== null
+    let allowAnchor = Boolean(section && anchorLine !== null
       && section.lineStart <= anchorLine && section.lineEnd >= anchorLine
       && !areasCardHasCallout(section.text));
+    if (allowAnchor && notebookCatalogFragmentRender(el, ctx, section?.text || "", this.app?.metadataCache)) {
+      allowAnchor = false;
+    }
     const folds = this.areasCatalogFoldMap(el);
     this.areasPaintReading(el, ctx.sourcePath, folds, allowAnchor);
     let widget = Array.from(this.areasCatalogReading || []).find((item) => item.el === el);
@@ -121958,7 +121964,7 @@ class BobLedgerToolsNotebookCatalogMixin {
       : null;
   }
 
-  paintNotebookCatalogReading(el, sourcePath) {
+  paintNotebookCatalogReading(el, sourcePath, isFragment = false) {
     const state = this.notebookCatalogState();
     const options = this.notebookCatalogPaintOptions(sourcePath, state);
     const reading = typeof propertyCardReadingViewFor === "function" ? propertyCardReadingViewFor(this.app, el) : null;
@@ -121986,10 +121992,11 @@ class BobLedgerToolsNotebookCatalogMixin {
       syncModel = null;
       statusModel = null;
     }
+    const fragment = isFragment === true;
     const needsAnchor = Boolean(
       options.chipsEnabled !== false
       && (retryModel || (syncModel && (syncModel.state === "missing" || syncModel.busy)) || statusModel),
-    );
+    ) && !fragment;
     let actionHost = this.notebookCatalogActionHost(el, heading, title, needsAnchor && allowChrome, doc);
     if (!allowChrome) {
       // Keep H1 and rendered-anchor fallbacks host-only: never create an
@@ -122052,7 +122059,15 @@ class BobLedgerToolsNotebookCatalogMixin {
       if (!sourcePath) {
         return;
       }
-      this.paintNotebookCatalogReading(el, sourcePath);
+      let sectionText = "";
+      try {
+        const section = ctx && typeof ctx.getSectionInfo === "function" ? ctx.getSectionInfo(el) : null;
+        sectionText = section && typeof section.text === "string" ? section.text : "";
+      } catch (error) {
+        sectionText = "";
+      }
+      const isFragment = notebookCatalogFragmentRender(el, ctx, sectionText, this.app && this.app.metadataCache);
+      this.paintNotebookCatalogReading(el, sourcePath, isFragment);
       if (!(this.notebookCatalogReadingWidgets instanceof Set)) {
         this.notebookCatalogReadingWidgets = new Set();
       }
@@ -122060,10 +122075,11 @@ class BobLedgerToolsNotebookCatalogMixin {
         if (existing.el === el) {
           existing.ctx = ctx;
           existing.path = sourcePath;
+          existing.isFragment = isFragment;
           return;
         }
       }
-      const widget = { el, ctx, path: sourcePath };
+      const widget = { el, ctx, path: sourcePath, isFragment };
       this.notebookCatalogReadingWidgets.add(widget);
       if (ctx && typeof ctx.addChild === "function") {
         let child = null;
@@ -122106,7 +122122,7 @@ class BobLedgerToolsNotebookCatalogMixin {
     let refreshed = false;
     for (const widget of Array.from(this.notebookCatalogReadingWidgets)) {
       try {
-        this.paintNotebookCatalogReading(widget.el, widget.path);
+        this.paintNotebookCatalogReading(widget.el, widget.path, widget.isFragment === true);
         refreshed = true;
       } catch (error) {
         // One stale view never breaks the others.
@@ -122817,6 +122833,40 @@ function notebookCatalogAnchorExcluded(node) {
   catch (_error) { return false; }
 }
 
+// Fragment renders (block embeds and hover previews) never own a standalone
+// catalog anchor. Obsidian post-processes the embedded fragment on a detached
+// section node, so `el.closest()` cannot see the live embed container: check
+// `ctx.containerEl` too, and treat a section without the host's frontmatter
+// as a fragment when the metadata cache says the host has frontmatter.
+function notebookCatalogFragmentRender(el, ctx, sectionText, metadataCache) {
+  try {
+    if (notebookCatalogAnchorExcluded(el)) return true;
+  } catch (_error) { /* exclusion is best-effort */ }
+  try {
+    const container = ctx && ctx.containerEl ? ctx.containerEl : null;
+    if (container && notebookCatalogAnchorExcluded(container)) return true;
+  } catch (_error) { /* container check is best-effort */ }
+  try {
+    const sourcePath = ctx && typeof ctx.sourcePath === "string" ? ctx.sourcePath : "";
+    if (!sourcePath || !sectionText) return false;
+    if (!metadataCache || typeof metadataCache.getCache !== "function") return false;
+    let cache = null;
+    try { cache = metadataCache.getCache(sourcePath); }
+    catch (_error) { return false; }
+    if (!cache) return false;
+    const hasFrontmatter = Boolean(cache.frontmatterPosition || cache.frontmatter);
+    if (!hasFrontmatter) return false;
+    const lines = String(sectionText).split("\n");
+    if (typeof notebookFrontmatterEnd === "function") {
+      return notebookFrontmatterEnd(lines) === 0;
+    }
+    const first = lines.length > 0 ? String(lines[0]).replace(/^\uFEFF/, "") : "";
+    return first !== "---";
+  } catch (_error) {
+    return false;
+  }
+}
+
 function albumFindCallouts(root) {
   const selector = '[data-callout="albums"]';
   const nodes = Array.from(root?.querySelectorAll?.(selector) || []);
@@ -123098,9 +123148,12 @@ class BobLedgerToolsAlbumCatalogMixin {
     if (el.closest?.(".cm-editor")) return;
     const section = ctx.getSectionInfo?.(el);
     const anchorLine = section?.text ? albumCatalogAnchorLine(section.text) : null;
-    const allowAnchor = Boolean(section && anchorLine !== null
+    let allowAnchor = Boolean(section && anchorLine !== null
       && section.lineStart <= anchorLine && section.lineEnd >= anchorLine
       && albumSourceRegions(section.text).length === 0);
+    if (allowAnchor && notebookCatalogFragmentRender(el, ctx, section?.text || "", this.app?.metadataCache)) {
+      allowAnchor = false;
+    }
     this.paintAlbumCatalogReading(el, ctx.sourcePath, allowAnchor);
     const existing = Array.from(this.albumCatalogReading || []).find((widget) => widget.el === el);
     if (existing) {
@@ -215716,6 +215769,9 @@ try {
       projectsPaintCallout,
       projectsPaintStandalone,
       projectsCleanCatalogDom,
+      notebookCatalogAnchorExcluded,
+      notebookCatalogFragmentRender,
+      notebookFrontmatterEnd,
     });
   }
 } catch (error) {

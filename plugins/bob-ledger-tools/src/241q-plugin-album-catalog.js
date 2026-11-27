@@ -89,9 +89,12 @@ class BobLedgerToolsAlbumCatalogMixin {
     if (el.closest?.(".cm-editor")) return;
     const section = ctx.getSectionInfo?.(el);
     const anchorLine = section?.text ? albumCatalogAnchorLine(section.text) : null;
-    const allowAnchor = Boolean(section && anchorLine !== null
+    let allowAnchor = Boolean(section && anchorLine !== null
       && section.lineStart <= anchorLine && section.lineEnd >= anchorLine
       && albumSourceRegions(section.text).length === 0);
+    if (allowAnchor && notebookCatalogFragmentRender(el, ctx, section?.text || "", this.app?.metadataCache)) {
+      allowAnchor = false;
+    }
     this.paintAlbumCatalogReading(el, ctx.sourcePath, allowAnchor);
     const existing = Array.from(this.albumCatalogReading || []).find((widget) => widget.el === el);
     if (existing) {

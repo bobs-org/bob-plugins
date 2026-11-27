@@ -572,3 +572,43 @@ test("two panes keep independent folds across a repaint", () => {
   assert.equal(rowByStem(first, "cash").getAttribute("data-folded"), "true");
   plugin.teardownAreasCatalog();
 });
+
+test("fragment renders never paint standalone areas chrome", () => {
+  const fragment = "Embedded paragraph. ^area-task";
+  const section = () => ({ text: fragment, lineStart: 0, lineEnd: 0 });
+  const makePlugin = (withCache) => {
+    const doc = new FakeDocument();
+    const current = state();
+    const plugin = new LedgerToolsPlugin({}, {});
+    plugin.areasCatalogActive = false;
+    plugin.areasCatalogState = () => current;
+    plugin.areasReportState = () => current;
+    plugin.apiAreasSubscribe = () => () => {};
+    plugin.areasSetTimeout = () => 1;
+    plugin.areasClearTimeout = () => {};
+    plugin.notebookCatalogLivePath = (view) => view.path;
+    plugin.registerMarkdownPostProcessor = (handler) => { plugin.postProcessor = handler; };
+    plugin.registerEditorExtension = () => {};
+    plugin.app = plugin.app || {};
+    plugin.app.metadataCache = withCache || {};
+    plugin.setupAreasCatalog();
+    return { doc, plugin };
+  };
+  for (const cls of ["markdown-embed", "hover-popover"]) {
+    const { doc, plugin } = makePlugin({});
+    const root = doc.createElement("div");
+    const container = doc.createElement("div");
+    const wrapper = new FakeNode("div", doc, { class: cls });
+    wrapper.appendChild(container);
+    plugin.postProcessor(root, { sourcePath: "cash.md", containerEl: container, getSectionInfo: section });
+    assert.equal(root.querySelector(".bob-areas-anchor"), null, `${cls} fragment paints no areas anchor`);
+    plugin.teardownAreasCatalog();
+  }
+  {
+    const { doc, plugin } = makePlugin({ getCache: (p) => p === "cash.md" ? { frontmatterPosition: { start: { line: 0 } } } : null });
+    const root = doc.createElement("div");
+    plugin.postProcessor(root, { sourcePath: "cash.md", getSectionInfo: section });
+    assert.equal(root.querySelector(".bob-areas-anchor"), null, "frontmatter-mismatch fragment paints no areas anchor");
+    plugin.teardownAreasCatalog();
+  }
+});

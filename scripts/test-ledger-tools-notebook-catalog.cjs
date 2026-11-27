@@ -1392,3 +1392,35 @@ test("desktop-unavailable live data is explicit and read-only styling still pain
   void notebookPaintRetryAction;
   void notebookStatusModel;
 });
+
+test("fragment renders never create a notebook fallback anchor", () => {
+  const missing = () => makePlugin({
+    catalogs: [{ host: "dev", path: "dev.md", root: "dev", state: "missing", notebooks: 0, issues: [] }],
+  });
+  const fragment = "Embedded paragraph. ^para";
+  const section = () => ({ text: fragment, lineStart: 0, lineEnd: 0 });
+  for (const cls of ["markdown-embed", "hover-popover"]) {
+    const { plugin } = missing();
+    const doc = makeDoc();
+    const para = el(doc, "p", { text: "No headings." });
+    const root = el(doc, "div", {}, [para]);
+    root.isConnected = false;
+    const container = el(doc, "div", {}, []);
+    const wrapper = el(doc, "div", { class: cls }, [container]);
+    void wrapper;
+    plugin.renderNotebookCatalogInReading(root, { sourcePath: "dev.md",
+      containerEl: container, getSectionInfo: section, addChild() {} });
+    assert.equal(root.querySelector(".bob-notebook-anchor"), null, `${cls} fragment creates no notebook anchor`);
+  }
+  {
+    const { plugin } = missing();
+    plugin.app.metadataCache.getCache = (p) => p === "dev.md" ? { frontmatterPosition: { start: { line: 0 } } } : null;
+    const doc = makeDoc();
+    const para = el(doc, "p", { text: "No headings." });
+    const root = el(doc, "div", {}, [para]);
+    root.isConnected = false;
+    plugin.renderNotebookCatalogInReading(root, { sourcePath: "dev.md",
+      getSectionInfo: section, addChild() {} });
+    assert.equal(root.querySelector(".bob-notebook-anchor"), null, "frontmatter-mismatch fragment creates no notebook anchor");
+  }
+});

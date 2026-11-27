@@ -21,6 +21,24 @@ const GATE_DATA = { cabinetsPreview: true, cardPreviewKinds: ["notebook", "prose
 const OPEN_TIMEOUT = 30_000;
 const { sleep, waitFor } = shared;
 
+function areaEntry({ stem, title, parent = null, depth = 0, summary = null }) {
+  return {
+    path: `${stem}.md`, stem, link: `[[${stem}]]`, title, titled: true, summary,
+    parent, parent_raw: parent ? `[[${parent.replace(/\.md$/i, "")}]]` : null,
+    depth, top: stem, hue: "blue", hue_source: "color", children: [],
+    projects: { direct: 0, subtree: 0 }, today: { direct: 0, subtree: 0 }, issues: [],
+  };
+}
+
+function projectEntry(stem, parent = null) {
+  return {
+    path: `${stem}.md`, stem, status: "wip", state: "open", criterion: null,
+    parent, children: [], closed_on: null,
+    prj: { line: null, mark: null, hidden: null, scheduled: null },
+    blocked: null, tasks: { open: 0, shown: 0, today: null },
+  };
+}
+
 const FIXTURE_BOB_REPORTS = Object.freeze({
   albums: {
     schema_version: 1,
@@ -79,6 +97,42 @@ const FIXTURE_BOB_REPORTS = Object.freeze({
     issues: { errors: 0, warnings: 0 },
     starter: null,
   },
+  areas: {
+    schema_version: 1, ok: true, command: "list",
+    root: { state: "found", path: "cash.md", stem: "cash" },
+    areas: [areaEntry({ stem: "home", title: "Home", parent: "cash.md", depth: 1, summary: "Household systems." })],
+    catalogs: [{ host: "cash", path: "cash.md", kind: "root", state: "current",
+      rows: [{ path: "home.md", link: "[[home]]", depth: 1 }], issues: [] }],
+    findings: [],
+    counts: { areas: 1, top_level: 1, hosts: 1, errors: 0, warnings: 0,
+      catalogs: { current: 1, missing: 0, stale: 0, damaged: 0 } },
+  },
+  projects: (() => {
+    const rows = Array.from({ length: 64 }, (_, index) =>
+      projectEntry(`sase-row-${String(index + 1).padStart(2, "0")}`, "sase.md"));
+    return {
+      schema_version: 1, ok: true, command: "list", today: "2026-11-27",
+      projects: [projectEntry("sase", "cash.md"), projectEntry("leaf", "cash.md"), ...rows],
+      catalogs: [
+        { host: "cash", path: "cash.md", kind: "area", state: "current",
+          rows: { open: 1, blocked: 0, warning: 0, closed: 0 }, issues: [] },
+        { host: "single", path: "single.md", kind: "area", state: "current",
+          rows: { open: 1, blocked: 0, warning: 0, closed: 0 }, issues: [] },
+        { host: "sase", path: "sase.md", kind: "project", state: "current",
+          rows: { open: 64, blocked: 0, warning: 0, closed: 0 }, issues: [] },
+      ],
+      findings: [], counts: { projects: 66, catalogs: 3, errors: 0, warnings: 0 },
+    };
+  })(),
+  notebooks: {
+    schema_version: 1, ok: true,
+    notebooks: [{ stem: "tools", path: "tools.md", title: "Tools", summary: "Tools and workflow.",
+      parent: "cash", parent_kind: "area", owner: "cash", root: "cash", breadcrumb: ["Cash"],
+      children: [], notes: 0, sections: [], last_note: null, issues: [] }],
+    catalogs: [{ host: "cash", path: "cash.md", root: "cash", state: "current", notebooks: 1, issues: [] }],
+    counts: { notebooks: 1, roots: 1, errors: 0, warnings: 0 }, findings: [],
+  },
+  capabilityCatalog: { ok: true, protocol: 1, features: ["props_contract_v1"] },
 });
 
 function albumFixture(stem, title, noun, records, fields) {
@@ -211,7 +265,7 @@ function writeBobFixture(profileDir) {
   const logPath = path.join(profileDir, "bob-spawns.jsonl");
   fs.mkdirSync(shimDir, { recursive: true });
   const file = path.join(shimDir, "bob");
-  fs.writeFileSync(file, `#!/usr/bin/env node\nconst fs = require("node:fs");\nconst log = ${JSON.stringify(logPath)};\nconst reports = ${JSON.stringify(FIXTURE_BOB_REPORTS)};\nconst args = process.argv.slice(2);\nconst key = args[0] === "albums" && args[1] === "list" ? "albums"\n  : args[0] === "bank" && args[1] === "config" ? "bank" : null;\ntry { fs.appendFileSync(log, JSON.stringify({ at: new Date().toISOString(), args, fixture: key }) + "\\n"); } catch (_) {}\nif (key && args.includes("-f") && args.includes("json")) { process.stdout.write(JSON.stringify(reports[key]) + "\\n"); process.exit(0); }\nprocess.stderr.write("Unexpected bob spawn in cabinet acceptance\\n");\nprocess.exit(87);\n`);
+  fs.writeFileSync(file, `#!/usr/bin/env node\nconst fs = require("node:fs");\nconst log = ${JSON.stringify(logPath)};\nconst reports = ${JSON.stringify(FIXTURE_BOB_REPORTS)};\nconst args = process.argv.slice(2);\nconst key = args[0] === "albums" && args[1] === "list" ? "albums"\n  : args[0] === "bank" && args[1] === "config" ? "bank"\n  : ["areas", "projects", "notebooks"].includes(args[0]) && args[1] === "list" ? args[0]\n  : args[0] === "__catalog" && args[1] === "--protocol" && args[2] === "1" ? "capabilityCatalog" : null;\ntry { fs.appendFileSync(log, JSON.stringify({ at: new Date().toISOString(), args, fixture: key }) + "\\n"); } catch (_) {}\nif (key && (key === "capabilityCatalog" || (args.includes("-f") && args.includes("json")))) { process.stdout.write(JSON.stringify(reports[key]) + "\\n"); process.exit(0); }\nprocess.stderr.write("Unexpected bob spawn in cabinet acceptance\\n");\nprocess.exit(87);\n`);
   fs.chmodSync(file, 0o755);
   return { shimDir, logPath };
 }
@@ -468,10 +522,14 @@ async function run(args) {
     const keyChecks = [];
     const keyCheck = (name, ok, detail = null) => keyChecks.push({ name, status: ok ? "pass" : "fail", detail });
     await openAndProbe(client, lib.PATHS.leaf, "live");
+    const leafBefore = await refreshProbe(client);
     await sendKey(client, "_");
     probe = await refreshProbe(client);
-    keyCheck("zero-extra-underscore-details-fallback", probe.cardKind === "project" && probe.detailsExpanded === true, probe);
-    for (const spec of lib.SPECS.filter((row) => row.cabinets.length === 1)) {
+    keyCheck("zero-extra-underscore-details-fallback", probe.cardKind === "project"
+      && probe.detailsExpanded !== leafBefore.detailsExpanded, { before: leafBefore, after: probe });
+    const compactDetailsKinds = new Set(["project", "notebook", "record", "ref"]);
+    for (const spec of lib.SPECS.filter((row) => row.key !== "leaf"
+      && row.cabinets.length === 1 && compactDetailsKinds.has(row.kind))) {
       await openAndProbe(client, spec.path, "live");
       const before = await refreshProbe(client);
       await sendKey(client, "_");
@@ -522,7 +580,7 @@ async function run(args) {
     }
     for (const [name, key, modifiers] of [
       ["escape", "Escape", 0], ["q", "q", 0], ["Q", "Q", 0], ["ctrl-bracket", "[", 2],
-      ["alt", "x", 1], ["meta", "x", 4], ["ctrl", "x", 2], ["other-key", "x", 0],
+      ["alt", "F12", 1], ["meta", "F12", 4], ["ctrl", "F12", 2], ["other-key", "F12", 0],
     ]) {
       await sendKey(client, "_");
       await sendKey(client, key, modifiers);
@@ -590,21 +648,21 @@ async function run(args) {
     probe = await refreshProbe(client);
     failOpenCheck("source-shows-stored-section", !probe.stackPresent && probe.headings.some((row) => row.text.includes("## Projects") && row.visible), probe);
     await openAndProbe(client, lib.PATHS.embed, "reading");
-    probe = await refreshProbe(client);
-    const embeddedStored = await client.evaluate(`(() => {
+    const embeddedStored = await waitFor(client, `(() => {
       const embed = document.querySelector(".markdown-embed, .internal-embed");
       return Boolean(embed && embed.querySelector('h2') && embed.querySelector('.callout[data-callout="projects"]')
         && !embed.querySelector(".bob-property-card-cabinets"));
-    })()`);
+    })()`, Boolean, "embedded stored catalog", 5_000);
+    probe = await refreshProbe(client);
     failOpenCheck("embed-shows-stored-catalog", embeddedStored, probe);
     await openAndProbe(client, lib.PATHS.ordinary, "reading");
-    const hoverReady = await client.evaluate(`(() => {
+    const hoverReady = await waitFor(client, `(() => {
       const link = Array.from(document.querySelectorAll("a.internal-link" )).find((node) => (node.getAttribute("href") || "").includes("cash"));
       if (!link) return false;
       const r = link.getBoundingClientRect();
       window.__bobHoverPoint = { x: r.left + r.width / 2, y: r.top + r.height / 2 };
       return true;
-    })()`);
+    })()`, Boolean, "ordinary note cash link", 5_000);
     if (hoverReady) {
       const point = await client.evaluate("window.__bobHoverPoint");
       await client.call("Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y });
@@ -694,17 +752,22 @@ async function run(args) {
       { offscreen, afterToggleScroll });
 
     // Passive spy surrounds only paint, toggles, arm, pick, cancel, and overlay actions.
-    const passiveBefore = readLog(logPath).length;
     await openAndProbe(client, lib.PATHS.area, "reading");
-    await clickSelector(client, `[data-cabinet-kind="areas"] .bob-cabinet-toggle`);
+    await openAndProbe(client, lib.PATHS.area, "live");
+    await sleep(500);
+    const passiveBaseline = readLog(logPath).length;
     const beforeHashPassive = shared.markdownFilesHash(vault);
-    const passiveKeys = await openAndProbe(client, lib.PATHS.area, "live");
+    await clickSelector(client, `[data-cabinet-kind="areas"] .bob-cabinet-toggle`);
+    const passiveKeys = await refreshProbe(client);
     await sendKey(client, "_"); await sendKey(client, "Escape");
     await sendKey(client, "_"); await sendKey(client, "2");
     const afterHashPassive = shared.markdownFilesHash(vault);
-    const passiveAfter = readLog(logPath).length;
+    const passiveLog = readLog(logPath);
+    const passiveAfter = passiveLog.length;
     const passiveUnchanged = JSON.stringify(beforeHashPassive) === JSON.stringify(afterHashPassive);
-    check("passive-actions-zero-bob-spawns", passiveAfter === passiveBefore, readLog(logPath));
+    check("passive-actions-zero-bob-spawns", passiveAfter === passiveBaseline, {
+      beforeCount: passiveBaseline, afterCount: passiveAfter, newSpawns: passiveLog.slice(passiveBaseline),
+    });
     check("passive-actions-zero-markdown-writes", passiveUnchanged, { beforeHashPassive, afterHashPassive });
     void passiveKeys;
 

@@ -78,7 +78,7 @@ test("browser probe is valid and runner covers acceptance-critical interactions"
   assert.doesNotMatch(source, /TMPDIR:\s*["']\/tmp["']/);
 });
 
-test("report fixtures provide the read-only album and bank data the visual matrix needs", () => {
+test("report fixtures provide valid read-only catalog data for the visual matrix", () => {
   const albums = runner.FIXTURE_BOB_REPORTS.albums;
   assert.equal(albums.ok, true);
   assert.deepEqual(albums.albums.map((entry) => entry.path), ["eat.md", "empty.md", "subscriptions.md"]);
@@ -89,6 +89,17 @@ test("report fixtures provide the read-only album and bank data the visual matri
   const decodedBank = LedgerToolsPlugin.helpers.bankDecodeConfig(JSON.stringify(runner.FIXTURE_BOB_REPORTS.bank), "");
   assert.equal(decodedAlbums.ok, true);
   assert.equal(decodedBank.ok, true);
+  const areas = LedgerToolsPlugin.helpers.areasDecodeListReport(JSON.stringify(runner.FIXTURE_BOB_REPORTS.areas));
+  const projects = LedgerToolsPlugin.helpers.projectsDecodeListReport(JSON.stringify(runner.FIXTURE_BOB_REPORTS.projects));
+  const notebooks = LedgerToolsPlugin.helpers.notebookDecodeListReport(JSON.stringify(runner.FIXTURE_BOB_REPORTS.notebooks));
+  assert.equal(areas.ok, true);
+  assert.equal(areas.report.catalogsByHostPath.has("cash.md"), true);
+  assert.equal(projects.ok, true);
+  assert.equal(projects.report.catalogsByHostPath.has("cash.md"), true);
+  assert.equal(projects.report.projects.length, 66);
+  assert.equal(notebooks.ok, true);
+  assert.equal(notebooks.report.catalogsByHostPath.has("cash.md"), true);
+  assert.deepEqual(runner.FIXTURE_BOB_REPORTS.capabilityCatalog.features, ["props_contract_v1"]);
 });
 
 test("Obsidian child inherits disk-backed temporary storage", () => {

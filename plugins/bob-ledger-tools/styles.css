@@ -14004,6 +14004,7 @@ button.bob-prose-note-card-finding:focus-visible { color: var(--text-normal); }
    switches to short labels, and the species word never disappears. */
 @container bob-property-card (max-width: 375px) {
   .bob-property-card-title-block { column-gap: 0.6em; }
+  .bob-bank-setup .bob-property-card-title-block { grid-template-columns: minmax(0, 1fr); }
   .bob-property-card-tile { --bob-property-card-tile-size: 1.8em; --bob-property-card-tile-fold: 0.45em; }
   .bob-property-card-tile-glyph { font-size: 0.9em; }
   .bob-property-card-tile[data-tile-form="leaf"] .bob-property-card-tile-band { font-size: 0.42em; }

@@ -1,0 +1,5 @@
+2026-11-27 05:18:55 Loaded main app package /snap/obsidian/73/app/resources/obsidian.asar
+2026-11-27 05:18:55 Checking for update using Github
+2026-11-27 05:18:55 Success.
+2026-11-27 05:18:55 Latest version is 1.15.1
+2026-11-27 05:18:55 App is up to date.

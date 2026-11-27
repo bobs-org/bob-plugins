@@ -1,0 +1,10 @@
+{
+  "pid": 3079561,
+  "executable": "/snap/obsidian/current/app/obsidian",
+  "profile": "/var/tmp/bob-cabinets-e2e-KhR6KS/profile",
+  "startupLog": "obsidian-log.txt",
+  "profileState": "profile-obsidian.json",
+  "reportVerdict": "NO-GO",
+  "reportError": null,
+  "diagnosticNote": "Obsidian remained available throughout the acceptance run. Its profile log shows normal package load and a successful update check; the runner reported no startup error or process exit status. The acceptance failed 23 assertions after the vault opened."
+}

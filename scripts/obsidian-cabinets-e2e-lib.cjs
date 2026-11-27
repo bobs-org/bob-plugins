@@ -81,9 +81,9 @@ function callout(kind, rows) {
   return lines.join("\n") + "\n";
 }
 
-function areaNote({ title, catalogs = "", body = "" }) {
+function areaNote({ title, catalogs = "", body = "", parent = "cash" }) {
   return [
-    "---", 'type: "[[area]]"', 'parent: "[[cash]]"', "color: blue", "---", "",
+    "---", 'type: "[[area]]"', ...(parent ? [`parent: "[[${parent}]]"`] : []), "color: blue", "---", "",
     `# ${title}`, "", catalogs, body, "",
   ].join("\n");
 }
@@ -112,7 +112,7 @@ function fixtureNotes() {
     category: "{required: true, suggest: true}",
   };
   const notes = {
-    [PATHS.area]: areaNote({ title: "Cash", catalogs: areaCatalogs, body: "Cash area body sentinel." }),
+    [PATHS.area]: areaNote({ title: "Cash", catalogs: areaCatalogs, body: "Cash area body sentinel.", parent: null }),
     [PATHS.project]: projectNote("SASE", { catalogs: projectCatalog, body: "Project body sentinel." }),
     [PATHS.leaf]: projectNote("Leaf Project", { body: "A project with no catalog cabinet." }),
     [PATHS.singleArea]: areaNote({ title: "Single Catalog", catalogs: "## Projects\n\n" + callout("projects", ["**[[sase|SASE]]** — one direct item."]) }),
@@ -131,7 +131,7 @@ function fixtureNotes() {
     [PATHS.untyped]: '---\naliases: ["Plain area"]\n---\n\n# Plain area\n\nThis root note remains untyped.\n',
     [PATHS.malformed]: '---\ntype: "[[area]]"\n---\n\n# Malformed\n\n## Projects\n\n> [!projects]\n> - **[[lost|Stored malformed row]]**\n> - not-a-managed-row\n\n',
     [PATHS.duplicate]: '---\ntype: "[[area]]"\n---\n\n# Duplicate\n\n## Projects\n\n' + callout("projects", ["[[one]]"]) + "\n## Projects\n\n" + callout("projects", ["[[two]]"]),
-    [PATHS.ordinary]: '---\ntype: "[[note]]"\n---\n\n# Ordinary\n\n![[cash]]\n',
+    [PATHS.ordinary]: '---\ntype: "[[note]]"\n---\n\n# Ordinary\n\n![[cash]]\n\n[[cash]]\n',
     [PATHS.embed]: '---\ntype: "[[note]]"\n---\n\n# Embed host\n\n![[cash]]\n\n[[cash]]\n',
   };
   notes[PATHS.record] = records.recordNote({

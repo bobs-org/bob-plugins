@@ -1,6 +1,9 @@
 module.exports = BobArticlesPlugin;
 module.exports.helpers = {
   ARTICLE_PLAN_SCHEMA_VERSION,
+  ARTICLE_PROSE_CONVERSION_SCHEMA_VERSION,
+  ARTICLE_PROSE_CONVERSION_PREVIEW_TIMEOUT_MS,
+  ARTICLE_PROSE_CONVERSION_WRITE_TIMEOUT_MS,
   ARTICLE_BOB_TIMEOUT_MS,
   ARTICLE_BOB_CANDIDATES,
   ARTICLE_STALE_HINT_MS,
@@ -14,6 +17,10 @@ module.exports.helpers = {
   articlePlanArgs,
   ARTICLE_PROSE_TYPE_NAMES,
   articleDecodePlan,
+  articleDecodeProseConversion,
+  articleProseConversionArgs,
+  articleProseConversionRefusalText,
+  articleProseConversionSummary,
   articleSplitText,
   articleNormalizeEdits,
   articleApplyEditsToText,

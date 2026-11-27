@@ -1,9 +1,9 @@
 {
   "id": "bob-articles",
   "name": "Bob Prose",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "minAppVersion": "1.8.7",
-  "description": "Format Bob prose notes with bob on save, when leaving, or on command, toggle their section numbers, and preview prose-note adoption.",
+  "description": "Format Bob prose notes, preview section extraction and inline, toggle section numbers, and adopt notes as prose.",
   "author": "Bryan M Bugyi",
   "isDesktopOnly": false
 }

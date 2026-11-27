@@ -21,13 +21,13 @@ See [plugin deployment](https://bobs-org.github.io/develop/plugins/deployment/) 
 | --- | ---: | ---: | --- |
 | [Block ID Prompt](block-id-prompt.md) | 1.46.0 | 1.8.7 | No |
 | [Bob Chips](bob-chips.md) | 0.16.0 | 1.8.7 | No |
-| [Bob Command Mode](bob-command-mode.md) | 0.6.0 | 1.8.7 | Yes |
+| [Bob Command Mode](bob-command-mode.md) | 0.7.0 | 1.8.7 | Yes |
 | [Bob Emoji](bob-emoji.md) | 0.2.0 | 1.8.7 | No |
 | [Bob Ledger Tools](bob-ledger-tools.md) | 1.172.9 | 1.8.7 | No |
 | [Bob Mail](bob-mail.md) | 0.3.0 | 1.8.7 | Yes |
 | [Bob Navigation Hotkeys](bob-navigation-hotkeys.md) | 2.107.14 | 1.8.7 | No |
 | [Bob Project Tasks](bob-project-tasks.md) | 1.2.0 | 1.8.7 | No |
-| [Bob Prose](bob-articles.md) | 0.4.0 | 1.8.7 | No |
+| [Bob Prose](bob-articles.md) | 0.5.0 | 1.8.7 | No |
 | [Bob Vim Surround](bob-vim-surround.md) | 1.5.2 | 1.8.7 | No |
 | [Bob Vim Yank Flash](bob-vim-yank-flash.md) | 0.1.1 | 1.8.7 | No |
 | [Task Status Cycler](task-status-cycler.md) | 1.64.2 | 1.8.7 | No |

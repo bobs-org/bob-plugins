@@ -1,6 +1,6 @@
 ---
 title: "Bob Prose"
-description: "Format prose notes and toggle their section numbers with Bob Prose."
+description: "Format prose notes, extract and inline sections, and toggle section numbers with Bob Prose."
 ---
 
 Bob Prose keeps Bob prose notes formatted in Obsidian. A prose note is a note
@@ -9,8 +9,8 @@ typed with the legacy `[[article]]` spelling count too. Bob Prose formats each
 note's layout and section numbers with `bob prose`, gives it a reading look,
 and previews adoption before converting a note.
 
-The plugin id stays `bob-articles`, and so do its command ids, settings keys,
-and the `.bob-article` CSS class, so hotkeys and settings carry over.
+The plugin id stays `bob-articles`, as do its existing command ids, settings
+keys, and `.bob-article` CSS class. The section gesture is **Ctrl+Shift+E**.
 
 <!-- BEGIN GENERATED: facts -->
 ## Plugin facts
@@ -19,10 +19,10 @@ and the `.bob-article` CSS class, so hotkeys and settings carry over.
 | --- | --- |
 | Name | Bob Prose |
 | ID | `bob-articles` |
-| Version | 0.4.0 |
+| Version | 0.5.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
-| Description | Format Bob prose notes with bob on save, when leaving, or on command, toggle their section numbers, and preview prose-note adoption. |
+| Description | Format Bob prose notes, preview section extraction and inline, toggle section numbers, and adopt notes as prose. |
 <!-- END GENERATED: facts -->
 
 <!-- BEGIN GENERATED: commands -->
@@ -31,7 +31,10 @@ and the `.bob-article` CSS class, so hotkeys and settings carry over.
 | Command | Command ID | Default hotkey |
 | --- | --- | --- |
 | Convert note to prose note… | `convert-to-article` | — |
+| Extract or inline prose section | `toggle-prose-section` | Ctrl+Shift+E |
+| Extract section to prose note | `extract-prose-section` | — |
 | Format prose note | `format-article` | — |
+| Inline prose note into parent | `inline-prose-note` | — |
 | Toggle section numbers | `toggle-section-numbers` | — |
 <!-- END GENERATED: commands -->
 
@@ -50,6 +53,20 @@ on save, when leaving the note, or on command:
   nothing.
 - **Convert note to prose note…** previews adopting the active note as a prose
   note and converts it after you confirm.
+- **Extract section to prose note** previews moving the heading section under
+  the cursor from an area, project, or prose note into a new prose note.
+- **Inline prose note into parent** previews folding the active prose note back
+  into its parent section.
+- **Extract or inline prose section** runs the extraction preview at the cursor.
+  If bob reports that the cursor is on a prose link stub, it previews inlining
+  that note instead. The preview shows bob's summary, counts, findings, and each
+  changed file's diff; the host diff starts open. Extraction includes an editable
+  note name and refreshes the preview as it changes. Press **Enter** to confirm;
+  **Esc**, **q**, or **Ctrl+[** closes the preview. Bob remains responsible for
+  deciding eligibility and for writing the conversion.
+- The commands need the Obsidian desktop app. If the installed `bob` predates
+  `prose extract` and `prose inline`, Bob Prose shows **Update bob to extract
+  prose sections** once per session.
 - The save and leave triggers run the same formatter automatically when their
   settings are on.
 
@@ -66,8 +83,9 @@ settings live under **Settings → Bob Prose**:
 | Show stale-number hints | `staleNumberHints` | On | After a typing pause, underline section numbers that will change on save. |
 | bob path | `bobPath` | Auto (blank) | Find `bob` in its usual install locations or on `PATH`; set an explicit path to override. |
 
-No registered command has a default hotkey; run them from the command palette
-or bind them in Obsidian's hotkey settings.
+The **Extract or inline prose section** command defaults to **Ctrl+Shift+E**;
+the other commands have no default hotkey. Run commands from the palette or
+change the binding in Obsidian's hotkey settings.
 
 ## Read-only Prose snapshot API
 

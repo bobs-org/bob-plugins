@@ -7,6 +7,7 @@ class BobArticlesPlugin extends Plugin {
     this.articleFormatHistory = new Map();
     this.articleRefusalNotices = new Set();
     this.articleBobErrorNoticed = false;
+    this.articleBobProseUpdateNoticed = false;
     this.articleLeaveTimers = new Set();
     this.articleSaveCommand = null;
     this.articleOutlines = new Map();
@@ -51,6 +52,40 @@ class BobArticlesPlugin extends Plugin {
         if (!view || articleHasArticleType(this.articleFrontmatter(view.file))) return false;
         if (checking) return true;
         void this.articleAdoptActive(view);
+        return true;
+      },
+    });
+    this.addCommand({
+      id: "extract-prose-section",
+      name: "Extract section to prose note",
+      checkCallback: (checking) => {
+        const view = this.articleActiveMarkdownView();
+        if (!view || !this.articleCanExtractProseSection(view)) return false;
+        if (checking) return true;
+        void this.articleExtractProseSection(view);
+        return true;
+      },
+    });
+    this.addCommand({
+      id: "inline-prose-note",
+      name: "Inline prose note into parent",
+      checkCallback: (checking) => {
+        const view = this.articleActiveMarkdownView();
+        if (!view || !articleHasArticleType(this.articleFrontmatter(view.file))) return false;
+        if (checking) return true;
+        void this.articleInlineProseNote(view);
+        return true;
+      },
+    });
+    this.addCommand({
+      id: "toggle-prose-section",
+      name: "Extract or inline prose section",
+      hotkeys: [{ modifiers: ["Ctrl", "Shift"], key: "E" }],
+      checkCallback: (checking) => {
+        const view = this.articleActiveMarkdownView();
+        if (!view || !this.articleCanExtractProseSection(view)) return false;
+        if (checking) return true;
+        void this.articleToggleProseSection(view);
         return true;
       },
     });
@@ -438,6 +473,234 @@ class BobArticlesPlugin extends Plugin {
     return articleSpawnBob(resolved.path, args, text, vaultPath);
   }
 
+  articleCanExtractProseSection(view) {
+    if (!view || !view.file) return false;
+    const frontmatter = this.articleFrontmatter(view.file);
+    if (articleHasArticleType(frontmatter)) return true;
+    const type = frontmatter && frontmatter.type;
+    const values = Array.isArray(type) ? type : [type];
+    return values.some((value) => ["area", "project"].includes(articleNormalizeType(value)));
+  }
+
+  async articleSaveBeforeProseConversion(view) {
+    if (!view || typeof view.save !== "function") {
+      this.articleShowNotice("Save the active note before extracting or inlining prose sections.");
+      return false;
+    }
+    try {
+      await view.save();
+      return true;
+    } catch (error) {
+      this.articleShowNotice("Could not save the active note before running the prose conversion.");
+      return false;
+    }
+  }
+
+  async articleExtractProseSection(view) {
+    if (!this.articleCanExtractProseSection(view) || !(await this.articleSaveBeforeProseConversion(view))) return false;
+    const cursor = view.editor && typeof view.editor.getCursor === "function" ? view.editor.getCursor() : null;
+    const line = cursor && Number.isInteger(cursor.line) ? cursor.line + 1 : 1;
+    const result = await this.articleRunProseConversion("extract", view.file.path, { line });
+    return this.articlePresentProseConversion(view, {
+      command: "extract", notePath: view.file.path, line,
+      stem: result.ok && result.plan.target ? result.plan.target.stem : "",
+    }, result);
+  }
+
+  async articleInlineProseNote(view) {
+    if (!view || !view.file || !articleHasArticleType(this.articleFrontmatter(view.file)) ||
+        !(await this.articleSaveBeforeProseConversion(view))) return false;
+    const result = await this.articleRunProseConversion("inline", view.file.path);
+    return this.articlePresentProseConversion(view, {
+      command: "inline", notePath: view.file.path,
+    }, result);
+  }
+
+  async articleToggleProseSection(view) {
+    if (!this.articleCanExtractProseSection(view) || !(await this.articleSaveBeforeProseConversion(view))) return false;
+    const cursor = view.editor && typeof view.editor.getCursor === "function" ? view.editor.getCursor() : null;
+    const line = cursor && Number.isInteger(cursor.line) ? cursor.line + 1 : 1;
+    const extract = await this.articleRunProseConversion("extract", view.file.path, { line });
+    if (!extract.ok) {
+      this.articleReportProseConversionFailure(extract);
+      return false;
+    }
+    if (extract.plan.status === "preview") {
+      return this.articlePresentProseConversion(view, {
+        command: "extract", notePath: view.file.path, line,
+        stem: extract.plan.target ? extract.plan.target.stem : "",
+      }, extract);
+    }
+    const next = extract.plan.next;
+    if (extract.plan.status === "refused" && next && next.command === "inline" && typeof next.note === "string") {
+      const inline = await this.articleRunProseConversion("inline", next.note);
+      return this.articlePresentProseConversion(view, {
+        command: "inline", notePath: next.note,
+      }, inline);
+    }
+    return this.articlePresentProseConversion(view, {
+      command: "extract", notePath: view.file.path, line,
+    }, extract);
+  }
+
+  articlePresentProseConversion(view, context, result) {
+    if (!result || !result.ok) {
+      this.articleReportProseConversionFailure(result || { code: "unknown", message: "bob could not preview the prose conversion." });
+      return false;
+    }
+    const plan = result.plan;
+    if (plan.status === "preview") {
+      context.plan = plan;
+      this.articleShowProseConversion(view, context);
+      return true;
+    }
+    if (plan.status === "refused") {
+      this.articleShowNotice(articleProseConversionRefusalText(plan) || "bob refused this prose conversion.");
+      return false;
+    }
+    this.articleShowNotice(plan.notice || "The prose conversion completed.");
+    return true;
+  }
+
+  articleShowProseConversion(view, context) {
+    new BobProseConversionModal(this.app, this, view, context).open();
+  }
+
+  async articleRunProseConversion(command, notePath, options = {}) {
+    const isDesktop = typeof this.articleIsDesktopApp === "function"
+      ? this.articleIsDesktopApp()
+      : articleIsDesktopApp();
+    if (!isDesktop) {
+      return { ok: false, code: "desktop-only", message: "Prose section conversion needs the Obsidian desktop app." };
+    }
+    const args = articleProseConversionArgs(command, notePath, options);
+    const resolved = articleResolveBobPath(this.settings && this.settings.bobPath);
+    const adapter = this.app && this.app.vault && this.app.vault.adapter;
+    let vaultPath = "";
+    try {
+      vaultPath = adapter && typeof adapter.getBasePath === "function"
+        ? adapter.getBasePath()
+        : (adapter && adapter.basePath) || "";
+    } catch (error) {
+      vaultPath = (adapter && adapter.basePath) || "";
+    }
+    const writing = options.write === true;
+    const result = await articleSpawnBob(resolved.path, args, "", vaultPath, {
+      decoder: articleDecodeProseConversion,
+      timeout: writing ? ARTICLE_PROSE_CONVERSION_WRITE_TIMEOUT_MS : ARTICLE_PROSE_CONVERSION_PREVIEW_TIMEOUT_MS,
+    });
+    if (result.ok && result.plan.command !== command) {
+      return { ok: false, code: "bad-shape", message: "bob returned a response for a different prose conversion." };
+    }
+    return result;
+  }
+
+  articleReportProseConversionFailure(result) {
+    const detail = String(result && result.detail || "");
+    if (/unrecognized subcommand/i.test(detail)) {
+      if (this.articleBobProseUpdateNoticed) return;
+      this.articleBobProseUpdateNoticed = true;
+      this.articleShowNotice("Update bob to extract prose sections");
+      return;
+    }
+    this.articleShowNotice(result && (result.message || result.detail) || "bob could not read the prose conversion response.");
+  }
+
+  async articleCheckProseEditors(plan) {
+    const touched = new Set((plan && plan.changes || []).map((change) => change && change.path).filter(Boolean));
+    if (touched.size === 0) return true;
+    const workspace = this.app && this.app.workspace;
+    const vault = this.app && this.app.vault;
+    if (!workspace || typeof workspace.getLeavesOfType !== "function") return true;
+    const leaves = workspace.getLeavesOfType("markdown") || [];
+    for (const leaf of leaves) {
+      const view = leaf && leaf.view;
+      const path = view && view.file && view.file.path;
+      if (!path || !touched.has(path) || !view.editor || typeof view.editor.getValue !== "function") continue;
+      if (!vault || typeof vault.read !== "function") {
+        this.articleShowNotice("Could not check whether affected open notes are saved before the prose conversion.");
+        return false;
+      }
+      try {
+        const saved = await vault.read(view.file);
+        const normalizeEol = (text) => String(text).replace(/\r\n?/g, "\n");
+        if (normalizeEol(saved) !== normalizeEol(view.editor.getValue())) {
+          this.articleShowNotice(`Save or close affected open notes before ${plan.command === "inline" ? "inlining" : "extracting"} prose sections.`);
+          return false;
+        }
+      } catch (error) {
+        this.articleShowNotice("Could not check whether affected open notes are saved before the prose conversion.");
+        return false;
+      }
+    }
+    return true;
+  }
+
+  async articleOpenProseFocus(focus) {
+    if (!focus || typeof focus.path !== "string") return false;
+    const workspace = this.app && this.app.workspace;
+    const vault = this.app && this.app.vault;
+    const file = vault && typeof vault.getAbstractFileByPath === "function"
+      ? vault.getAbstractFileByPath(focus.path)
+      : null;
+    try {
+      if (file && workspace && typeof workspace.getLeaf === "function") {
+        const leaf = workspace.getLeaf(false);
+        if (leaf && typeof leaf.openFile === "function") await leaf.openFile(file);
+      } else if (workspace && typeof workspace.openLinkText === "function") {
+        await workspace.openLinkText(focus.path, "", false);
+      }
+    } catch (error) {
+      this.articleShowNotice(`Could not open ${focus.path} after the prose conversion.`);
+      return false;
+    }
+    const view = this.articleActiveMarkdownView();
+    if (view && view.file && view.file.path === focus.path && view.editor && typeof view.editor.setCursor === "function") {
+      view.editor.setCursor({ line: Math.max(0, Number(focus.line || 1) - 1), ch: 0 });
+    }
+    return true;
+  }
+
+  async articleConfirmProseConversion(context, modal) {
+    const plan = context && context.plan;
+    if (!plan || plan.status !== "preview" || typeof plan.fingerprint !== "string") return false;
+    if (!(await this.articleCheckProseEditors(plan))) return false;
+    if (context.command === "inline" && plan.focus) await this.articleOpenProseFocus(plan.focus);
+    const result = await this.articleRunProseConversion(context.command, context.notePath, {
+      line: context.line,
+      name: context.command === "extract" ? context.stem : undefined,
+      write: true,
+      expect: plan.fingerprint,
+    });
+    if (!result.ok) {
+      this.articleReportProseConversionFailure(result);
+      return false;
+    }
+    if (result.plan.status === "refused" && result.plan.refusal && result.plan.refusal.code === "plan-changed") {
+      this.articleShowNotice("The vault changed since the preview. Review the refreshed preview before confirming.");
+      const refreshed = await this.articleRunProseConversion(context.command, context.notePath, {
+        line: context.line,
+        name: context.command === "extract" ? context.stem : undefined,
+      });
+      if (refreshed.ok && refreshed.plan.status === "preview" && modal && typeof modal.updatePlan === "function") {
+        context.plan = refreshed.plan;
+        modal.updatePlan(refreshed.plan, "The vault changed since this preview. Review the updated changes before confirming.");
+      } else if (refreshed.ok && refreshed.plan.status === "refused") {
+        this.articleShowNotice(articleProseConversionRefusalText(refreshed.plan) || "bob refused the refreshed preview.");
+      } else if (!refreshed.ok) {
+        this.articleReportProseConversionFailure(refreshed);
+      }
+      return false;
+    }
+    if (result.plan.status !== "written") {
+      this.articleShowNotice(articleProseConversionRefusalText(result.plan) || result.plan.notice || "bob did not write the prose conversion.");
+      return false;
+    }
+    if (result.plan.focus) await this.articleOpenProseFocus(result.plan.focus);
+    if (result.plan.notice) this.articleShowNotice(result.plan.notice);
+    return true;
+  }
+
   articleReportRefusal(path, plan, options = {}) {
     const reason = plan.reason || {};
     const always = options.always === true;
@@ -466,6 +729,9 @@ class BobArticlesPlugin extends Plugin {
 }
 
 function articleSpawnBob(binary, args, input, vaultPath, options = {}) {
+  const timeoutMs = Number.isFinite(options.timeout) && options.timeout > 0
+    ? options.timeout
+    : ARTICLE_BOB_TIMEOUT_MS;
   return new Promise((resolve) => {
     let childProcess = options.childProcess;
     if (!childProcess) {
@@ -499,15 +765,15 @@ function articleSpawnBob(binary, args, input, vaultPath, options = {}) {
     }
     timer = setTimeout(() => {
       try { child.kill(); } catch (error) { /* The timeout still wins. */ }
-      finish({ ok: false, code: "timeout", message: "bob prose timed out after 1.5 s." });
-    }, options.timeout || ARTICLE_BOB_TIMEOUT_MS);
+      finish({ ok: false, code: "timeout", message: `bob timed out after ${Math.round(timeoutMs / 1000)} s.` });
+    }, timeoutMs);
     child.stdout.on("data", (chunk) => {
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8");
       stdoutChunks.push(buffer);
       stdoutLength += buffer.length;
       if (stdoutLength > ARTICLE_BOB_MAX_OUTPUT) {
         try { child.kill(); } catch (error) { /* The size error still wins. */ }
-        finish({ ok: false, code: "output-too-large", message: "bob returned an oversized article plan." });
+        finish({ ok: false, code: "output-too-large", message: "bob returned oversized JSON output." });
       }
     });
     child.stderr.on("data", (chunk) => { stderr += String(chunk); });
@@ -517,7 +783,8 @@ function articleSpawnBob(binary, args, input, vaultPath, options = {}) {
     child.on("close", () => {
       if (settled) return;
       const stdout = Buffer.concat(stdoutChunks).toString("utf8");
-      const decoded = articleDecodePlan(stdout);
+      const decoder = typeof options.decoder === "function" ? options.decoder : articleDecodePlan;
+      const decoded = decoder(stdout);
       if (decoded.ok) finish(decoded);
       else finish({ ...decoded, detail: stderr.split("\n")[0] || "" });
     });

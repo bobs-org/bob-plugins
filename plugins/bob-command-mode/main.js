@@ -6520,10 +6520,9 @@ const CM_SHEET_ICON_FALLBACK = {
 
 // Surface rows owned by the plugin. Each runs an existing Obsidian command and
 // is feature-detected through app.commands.commands[id]; a missing command
-// makes the row unavailable. There is no "Preview prose-note adoption" row:
-// the plan names a bob-articles adopt-preview command id, but no such command
-// exists in Bob Prose's source (only format-article, toggle-section-numbers,
-// and convert-to-article), so there is nothing to detect.
+// makes the row unavailable. The Bob Prose rows cover formatting, section
+// numbering, extraction, and inline gestures.
+// Marker searched by the prose-sections epic: bob-prose-sections-v1
 const CM_SHEET_SURFACE_ROWS = [
   { plugin: "bob-ledger-tools", id: "open-today-daily-note", title: "Today's daily note", section: "daily" },
   { plugin: "bob-navigation-hotkeys", id: "open-pomodoro-themes-manager", title: "Task types manager", section: "daily" },
@@ -6541,6 +6540,8 @@ const CM_SHEET_SURFACE_ROWS = [
   { plugin: "bob-ledger-tools", id: "reflect-on-yesterday", title: "Reflect on yesterday", section: "vault" },
   { plugin: "bob-articles", id: "format-article", title: "Format this prose note", section: "vault" },
   { plugin: "bob-articles", id: "toggle-section-numbers", title: "Toggle section numbers", section: "vault" },
+  { plugin: "bob-articles", id: "extract-prose-section", title: "Extract section to prose note", section: "vault" },
+  { plugin: "bob-articles", id: "inline-prose-note", title: "Inline prose note into parent", section: "vault" },
 ];
 
 function cmSheetLower(value) {

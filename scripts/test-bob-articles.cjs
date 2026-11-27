@@ -185,6 +185,222 @@ test("plan argv calls the canonical bob prose path", () => {
     ["prose", "format", "--stdin", "a.md", "-f", "json"]);
 });
 
+function proseConversion(overrides = {}) {
+  return {
+    schema_version: 1,
+    contract: "prose-conversion",
+    command: "extract",
+    status: "preview",
+    fingerprint: "sha256:before",
+    note: "host.md",
+    section: { line: 4, end_line: 6, level: 2, title: "Intro" },
+    target: { path: "host_intro.md", stem: "host_intro" },
+    changes: [{ path: "host.md", action: "update", diff: "--- host.md\n" }],
+    links: [],
+    counts: { notes: 2, links: 0, layout: 1, replaced: 0 },
+    findings: [],
+    refusal: null,
+    focus: { path: "host_intro.md", line: 11 },
+    notice: "Extracted Intro into host_intro",
+    commit: null,
+    sync: { pre: "skipped", post: "skipped" },
+    warnings: [],
+    ...overrides,
+  };
+}
+
+test("ProseConversion decoder validates its independent contract and response shape", () => {
+  assert.equal(helpers.articleDecodeProseConversion(JSON.stringify(proseConversion())).ok, true);
+  assert.equal(helpers.articleDecodeProseConversion(JSON.stringify(proseConversion({ schema_version: 2 }))).code, "schema-mismatch");
+  assert.equal(helpers.articleDecodeProseConversion(JSON.stringify(proseConversion({ contract: "article-plan" }))).code, "contract-mismatch");
+  assert.equal(helpers.articleDecodeProseConversion(JSON.stringify(proseConversion({ status: "unknown" }))).code, "bad-shape");
+  assert.equal(helpers.articleDecodeProseConversion("not json").code, "bad-json");
+});
+
+test("prose conversion argv sends selectors, editable names, and expected fingerprints", () => {
+  assert.deepEqual(helpers.articleProseConversionArgs("extract", "host.md", { line: 7 }),
+    ["prose", "extract", "host.md", "-l", "7", "-f", "json"]);
+  assert.deepEqual(helpers.articleProseConversionArgs("extract", "host.md", {
+    line: 7, name: "new-name", write: true, expect: "sha256:before",
+  }), ["prose", "extract", "host.md", "-l", "7", "-w", "-e", "sha256:before", "-n", "new-name", "-f", "json"]);
+  assert.deepEqual(helpers.articleProseConversionArgs("inline", "child.md", {
+    write: true, expect: "sha256:before",
+  }), ["prose", "inline", "child.md", "-w", "-e", "sha256:before", "-f", "json"]);
+});
+
+function proseGestureFixture(frontmatter, results) {
+  const notices = [];
+  const shown = [];
+  const calls = [];
+  let saves = 0;
+  const file = { path: "host.md" };
+  const view = {
+    file,
+    editor: { getCursor: () => ({ line: 3, ch: 0 }) },
+    save: async () => { saves += 1; },
+  };
+  const app = { metadataCache: { getFileCache: () => ({ frontmatter }) }, workspace: {}, vault: {} };
+  const plugin = new BobArticlesPlugin(app, {});
+  plugin.articleShowNotice = (message) => notices.push(message);
+  plugin.articleShowProseConversion = (_view, context) => shown.push(context);
+  plugin.articleRunProseConversion = async (command, path, options) => {
+    calls.push({ command, path, options });
+    return results.shift();
+  };
+  return { plugin, view, notices, shown, calls, saves: () => saves };
+}
+
+test("prose extract gesture previews on supported host note types after saving", async () => {
+  for (const frontmatter of [{ type: "[[area]]" }, { type: ["[[project]]"] }, { type: "[[prose]]" }]) {
+    const fixture = proseGestureFixture(frontmatter, [{ ok: true, plan: proseConversion() }]);
+    assert.equal(await fixture.plugin.articleToggleProseSection(fixture.view), true);
+    assert.equal(fixture.saves(), 1);
+    assert.deepEqual(fixture.calls, [{ command: "extract", path: "host.md", options: { line: 4 } }]);
+    assert.equal(fixture.shown[0].command, "extract");
+    assert.equal(fixture.shown[0].stem, "host_intro");
+  }
+  const unsupported = proseGestureFixture({ type: "[[ref]]" }, []);
+  assert.equal(await unsupported.plugin.articleToggleProseSection(unsupported.view), false);
+  assert.equal(unsupported.calls.length, 0);
+});
+
+test("toggle gesture follows bob's next note to the inline preview", async () => {
+  const refusal = proseConversion({
+    status: "refused",
+    fingerprint: null,
+    refusal: { code: "stub-section", message: "This is a prose link stub." },
+    next: { command: "inline", note: "host_intro.md" },
+  });
+  const inline = proseConversion({
+    command: "inline", note: "host_intro.md", target: { path: "host.md", stem: "host" },
+    focus: { path: "host.md", line: 4 },
+  });
+  const fixture = proseGestureFixture({ type: "[[project]]" }, [
+    { ok: true, plan: refusal }, { ok: true, plan: inline },
+  ]);
+  assert.equal(await fixture.plugin.articleToggleProseSection(fixture.view), true);
+  assert.deepEqual(fixture.calls.map((call) => [call.command, call.path]), [
+    ["extract", "host.md"], ["inline", "host_intro.md"],
+  ]);
+  assert.equal(fixture.shown[0].command, "inline");
+  assert.equal(fixture.shown[0].notePath, "host_intro.md");
+});
+
+test("toggle gesture shows bob's refusal and hint when there is no next command", async () => {
+  const refusal = proseConversion({
+    status: "refused", fingerprint: null,
+    refusal: { code: "intro-prose", message: "Text above the first heading blocks extraction.", hint: "Start at a heading." },
+  });
+  const fixture = proseGestureFixture({ type: "[[area]]" }, [{ ok: true, plan: refusal }]);
+  assert.equal(await fixture.plugin.articleToggleProseSection(fixture.view), false);
+  assert.deepEqual(fixture.notices, ["Text above the first heading blocks extraction.\nStart at a heading."]);
+  assert.equal(fixture.calls.length, 1);
+});
+
+test("conversion spawn is blocked on mobile and an old bob notice appears once", async () => {
+  const notices = [];
+  const plugin = new BobArticlesPlugin({}, {});
+  plugin.articleIsDesktopApp = () => false;
+  plugin.articleShowNotice = (message) => notices.push(message);
+  const blocked = await plugin.articleRunProseConversion("extract", "host.md", { line: 3 });
+  assert.equal(blocked.code, "desktop-only");
+  plugin.articleReportProseConversionFailure({ code: "bad-json", detail: "error: unrecognized subcommand 'extract'" });
+  plugin.articleReportProseConversionFailure({ code: "bad-json", detail: "error: unrecognized subcommand 'inline'" });
+  assert.deepEqual(notices, ["Update bob to extract prose sections"]);
+});
+
+test("dirty open notes block conversion with the affected-note save message", async () => {
+  const notices = [];
+  const dirtyView = { file: { path: "host.md" }, editor: { getValue: () => "unsaved" } };
+  const plugin = new BobArticlesPlugin({
+    workspace: { getLeavesOfType: () => [{ view: dirtyView }] },
+    vault: { read: async () => "saved" },
+  }, {});
+  plugin.articleShowNotice = (message) => notices.push(message);
+  const result = await plugin.articleCheckProseEditors({ command: "extract", changes: [{ path: "host.md" }] });
+  assert.equal(result, false);
+  assert.match(notices[0], /Save or close affected open notes before extracting/);
+});
+
+test("plan-changed refreshes the preview instead of applying it", async () => {
+  const notices = [];
+  const preview = proseConversion();
+  const refreshed = proseConversion({ fingerprint: "sha256:after", notice: "Updated preview" });
+  const calls = [];
+  const plugin = new BobArticlesPlugin({ workspace: { getLeavesOfType: () => [] } }, {});
+  plugin.articleShowNotice = (message) => notices.push(message);
+  plugin.articleRunProseConversion = async (_command, _path, options) => {
+    calls.push(options);
+    return options.write
+      ? { ok: true, plan: proseConversion({ status: "refused", fingerprint: null, refusal: { code: "plan-changed", message: "Plan changed." } }) }
+      : { ok: true, plan: refreshed };
+  };
+  let updated;
+  const context = { command: "extract", notePath: "host.md", line: 4, stem: "host_intro", plan: preview };
+  assert.equal(await plugin.articleConfirmProseConversion(context, { updatePlan: (plan, message) => { updated = { plan, message }; } }), false);
+  assert.equal(updated.plan.fingerprint, "sha256:after");
+  assert.match(updated.message, /vault changed since this preview/i);
+  assert.deepEqual(calls, [
+    { line: 4, name: "host_intro", write: true, expect: "sha256:before" },
+    { line: 4, name: "host_intro" },
+  ]);
+  assert.match(notices[0], /vault changed since the preview/i);
+});
+
+test("successful extract opens bob's focus and applies the 1-based line", async () => {
+  const events = [];
+  const focused = { file: { path: "host_intro.md" }, editor: { setCursor: (pos) => events.push(["cursor", pos]) } };
+  const plugin = new BobArticlesPlugin({
+    workspace: {
+      getLeavesOfType: () => [],
+      getLeaf: () => ({ openFile: async (file) => { events.push(["open", file.path]); } }),
+    },
+    vault: { getAbstractFileByPath: (path) => ({ path }) },
+  }, {});
+  plugin.articleActiveMarkdownView = () => focused;
+  plugin.articleRunProseConversion = async (_command, _path, options) => {
+    events.push(["write", options]);
+    return { ok: true, plan: proseConversion({ status: "written", commit: { sha: "abc" } }) };
+  };
+  const context = { command: "extract", notePath: "host.md", line: 4, stem: "host_intro", plan: proseConversion() };
+  assert.equal(await plugin.articleConfirmProseConversion(context, null), true);
+  assert.deepEqual(events.map((entry) => entry[0]), ["write", "open", "cursor"]);
+  assert.deepEqual(events[2][1], { line: 10, ch: 0 });
+});
+
+test("inline moves to the parent before writing away the source note", async () => {
+  const events = [];
+  const sourceView = { file: { path: "host_intro.md" }, editor: { getValue: () => "saved source" } };
+  const parentView = { file: { path: "host.md" }, editor: { setCursor: (pos) => events.push(["cursor", pos]) } };
+  const plugin = new BobArticlesPlugin({
+    workspace: {
+      getLeavesOfType: () => [{ view: sourceView }],
+      getLeaf: () => ({ openFile: async (file) => { events.push(["open", file.path]); } }),
+    },
+    vault: {
+      read: async () => "saved source",
+      getAbstractFileByPath: (path) => ({ path }),
+    },
+  }, {});
+  plugin.articleActiveMarkdownView = () => parentView;
+  plugin.articleRunProseConversion = async (_command, _path, options) => {
+    events.push(["write", options]);
+    return { ok: true, plan: proseConversion({
+      command: "inline", note: "host_intro.md", status: "written",
+      target: { path: "host.md", stem: "host" }, focus: { path: "host.md", line: 4 },
+    }) };
+  };
+  const inlinePlan = proseConversion({
+    command: "inline", note: "host_intro.md", target: { path: "host.md", stem: "host" },
+    changes: [{ path: "host.md", action: "update" }, { path: "host_intro.md", action: "trash" }],
+    focus: { path: "host.md", line: 4 },
+  });
+  const context = { command: "inline", notePath: "host_intro.md", plan: inlinePlan };
+  assert.equal(await plugin.articleConfirmProseConversion(context, null), true);
+  assert.deepEqual(events.map((entry) => entry[0]), ["open", "cursor", "write", "open", "cursor"]);
+  assert.equal(events[0][1], "host.md");
+});
+
 test("toggle state turns numbering on only from an explicit false", () => {
   assert.equal(helpers.articleSectionNumbersToggleState({ section_numbers: false }), "on");
   assert.equal(helpers.articleSectionNumbersToggleState({ section_numbers: "false" }), "on");

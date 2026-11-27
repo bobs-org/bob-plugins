@@ -329,10 +329,18 @@ test("a prose note gets the outline context row and the Bob Prose surface rows",
   const surfaces = helpers.cmSheetSurfaceRows(() => true);
   const format = surfaces.find((row) => row.surfaceId === "bob-articles:format-article");
   const toggle = surfaces.find((row) => row.surfaceId === "bob-articles:toggle-section-numbers");
+  const extract = surfaces.find((row) => row.surfaceId === "bob-articles:extract-prose-section");
+  const inline = surfaces.find((row) => row.surfaceId === "bob-articles:inline-prose-note");
   assert.equal(format.title, "Format this prose note");
   assert.equal(toggle.title, "Toggle section numbers");
   assert.equal(toggle.section, "vault");
   assert.equal(toggle.unavailable, null);
+  assert.equal(extract.title, "Extract section to prose note");
+  assert.equal(extract.section, "vault");
+  assert.equal(extract.unavailable, null);
+  assert.equal(inline.title, "Inline prose note into parent");
+  assert.equal(inline.section, "vault");
+  assert.equal(inline.unavailable, null);
 });
 
 test("note kinds follow frontmatter type with the article rule", () => {

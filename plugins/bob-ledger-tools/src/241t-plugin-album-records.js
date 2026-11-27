@@ -18,6 +18,9 @@ class BobLedgerToolsAlbumRecordsMixin {
     const extension = this.createAlbumRecordsExtension();
     if (extension) this.registerEditorExtension?.(extension);
     this.albumRecordsUnsubscribe = this.apiAlbumSubscribe(() => this.scheduleAlbumRecordsRefresh());
+    try {
+      if (typeof cabinetRecordsRegisterProvider === "function") cabinetRecordsRegisterProvider(this);
+    } catch (_) {}
   }
 
   teardownAlbumRecords() {
@@ -27,6 +30,9 @@ class BobLedgerToolsAlbumRecordsMixin {
     this.albumClearTimeout(this.albumRecordsRefreshTimer);
     this.albumRecordsRefreshTimer = null;
     this.albumRecordsPendingExpand = null;
+    try {
+      if (typeof cabinetRecordsTeardownPlugin === "function") cabinetRecordsTeardownPlugin(this);
+    } catch (_) {}
     for (const widget of this.albumRecordsReading || []) albumCleanRecordsDom(widget.el);
     for (const view of this.albumRecordsEditors || []) albumCleanRecordsDom(view.dom);
     this.albumRecordsReading?.clear();
@@ -98,7 +104,9 @@ class BobLedgerToolsAlbumRecordsMixin {
     this.albumRecordsApplyPending(sourcePath, folds, el);
     const options = this.albumRecordsOptions(sourcePath, folds, this.albumRecordsHandlers(sourcePath, folds, { el }));
     for (const callout of albumFindRecordCallouts(el)) {
-      if (!callout.closest?.(".cm-editor")) albumPaintRecordsCallout(callout, options);
+      if (callout.closest?.(".cm-editor")) continue;
+      if (typeof albumRecordsCabinetStandDown === "function" && albumRecordsCabinetStandDown(callout, null, sourcePath)) continue;
+      albumPaintRecordsCallout(callout, options);
     }
   }
 
@@ -138,7 +146,9 @@ class BobLedgerToolsAlbumRecordsMixin {
     this.albumRecordsApplyPending(path, folds, view.dom);
     const options = this.albumRecordsOptions(path, folds, this.albumRecordsHandlers(path, folds, { view }));
     for (const callout of albumFindRecordCallouts(view.dom)) {
-      if (!callout.closest?.(".markdown-embed")) albumPaintRecordsCallout(callout, options);
+      if (callout.closest?.(".markdown-embed")) continue;
+      if (typeof albumRecordsCabinetStandDown === "function" && albumRecordsCabinetStandDown(callout, view, path)) continue;
+      albumPaintRecordsCallout(callout, options);
     }
   }
 

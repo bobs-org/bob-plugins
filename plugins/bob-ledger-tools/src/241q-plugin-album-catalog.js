@@ -230,8 +230,21 @@ class BobLedgerToolsAlbumCatalogMixin {
       if (view?.file?.path === path) {
         // records-cards implements this optional hook to expand only this
         // pane's target group before the native line jump scrolls into view.
-        await this.albumRevealRecordGroup?.(view, { path, ...target });
-        view.setEphemeralState?.({ line: target.line });
+        // Under the open cabinets gate the Records cabinet takes the jump
+        // instead: it opens, expands the group, and scrolls to it.
+        let cabinetHandled = false;
+        try {
+          if (typeof propertyCardCabinetsGateLive === "function" && propertyCardCabinetsGateLive() === true
+            && typeof cabinetRecordsRevealGroup === "function") {
+            cabinetHandled = await cabinetRecordsRevealGroup(this, view, path, target) === true;
+          }
+        } catch (_) {
+          cabinetHandled = false;
+        }
+        if (!cabinetHandled) {
+          await this.albumRevealRecordGroup?.(view, { path, ...target });
+          view.setEphemeralState?.({ line: target.line });
+        }
         if (jump) await navigation?.enqueueVimJumpContextTransition?.(jump,
           { path, line: target.line, ch: 0 }, { expectedPath: path });
       }

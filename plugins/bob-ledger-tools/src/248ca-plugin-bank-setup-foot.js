@@ -137,11 +137,21 @@ class BobLedgerToolsBankSetupFootMixin {
     return propertyCardFootAdapterTrack(container, path, header, this.bankSetupFootTracked);
   }
 
-  bankSetupAppendFoot(header, path, doc, footSpec) {
+  bankSetupAppendFoot(header, path, doc, footSpec, options = {}) {
     const filePath = bankSetupHubPath(path) || BANK_SETUP_HUB_PATH;
     const spec = footSpec || this.bankSetupFootSpec(filePath);
+    const keyLive = options?.keyLive === true || propertyCardFoldKeyLive(this, options?.surface) === true;
     return propertyCardFootAdapterAppend(
-      header, filePath, doc, spec, this.bankSetupFootHandlers(filePath), this.bankSetupFootPendingScroll,
+      header, filePath, doc, keyLive ? { ...spec, keyLive: true } : spec,
+      this.bankSetupFootHandlers(filePath), this.bankSetupFootPendingScroll,
+      {
+        plugin: this,
+        view: options?.view || null,
+        component: options?.component || this,
+        source: options?.sourceText,
+        frontmatter: options?.frontmatter || propertyCardFootAdapterFrontmatter(this, filePath),
+        repaint: () => this.scheduleBankSetupRefresh?.(),
+      },
     );
   }
 

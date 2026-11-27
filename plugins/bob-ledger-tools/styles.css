@@ -6912,7 +6912,7 @@ body:not(.bob-root-marks) .bob-root-mark-native {
 
 .bob-reading-board-today {
   align-self: flex-start;
-  padding: 0 0.5em;
+  padding: 0 0.5em 0 1.4em;
   border: 1px solid color-mix(in srgb, var(--bob-rb-today) 28%, transparent);
   border-radius: 999px;
   background-color: color-mix(in srgb, var(--bob-rb-today) 14%, transparent);
@@ -14988,4 +14988,203 @@ button.bob-prose-note-card-finding:focus-visible { color: var(--text-normal); }
   .bob-property-row[aria-selected="true"] { border: 2px solid Highlight; }
   .bob-property-editor button.bob-property-row:focus-visible,
   .bob-property-row:focus-visible { outline: 2px solid Highlight; }
+}
+
+/* Cabinets (bob-cli-qq chrome): a shared, quiet disclosure stack for
+   catalogs, configuration folds, and Properties. Colors inherit the card's
+   accent and the active Obsidian theme palette. */
+.bob-property-card .bob-property-card-cabinets {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  margin-block-start: 0.45em;
+  border-block-start: 1px solid var(--background-modifier-border);
+}
+.bob-property-card .bob-property-card-cabinets > .bob-cabinet-panel {
+  box-sizing: border-box;
+  min-width: 0;
+  border-block-end: 1px solid color-mix(in srgb, var(--background-modifier-border) 60%, transparent);
+}
+.bob-property-card .bob-property-card-cabinets > .bob-cabinet-panel:last-child { border-block-end: 0; }
+.bob-property-card .bob-cabinet-head {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+  min-width: 0;
+  min-height: 1.85em;
+  padding: 0.2em 0.35em;
+  border-radius: var(--radius-s);
+  color: var(--text-muted);
+  font: var(--font-ui-small, 13px)/1.4 var(--font-interface);
+  font-variant-numeric: tabular-nums;
+}
+.bob-property-card .bob-property-card-cabinets .bob-cabinet-head .bob-cabinet-toggle {
+  box-sizing: border-box;
+  display: flex !important;
+  align-items: center;
+  flex: 1 1 auto;
+  gap: 0.38em;
+  width: auto;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 1.85em;
+  margin: 0 !important;
+  padding: 0.2em 0.15em !important;
+  border: 0 !important;
+  border-radius: var(--radius-s);
+  background: transparent !important;
+  box-shadow: none !important;
+  color: var(--text-muted);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.bob-property-card .bob-property-card-cabinets .bob-cabinet-head .bob-cabinet-toggle:hover,
+.bob-property-card .bob-cabinet-action:hover {
+  background: color-mix(in srgb, var(--bob-property-card-accent, var(--text-muted)) 6%, transparent) !important;
+  color: var(--text-normal);
+}
+.bob-property-card .bob-property-card-cabinets .bob-cabinet-head .bob-cabinet-toggle:focus-visible,
+.bob-property-card .bob-cabinet-action:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+}
+.bob-property-card .bob-cabinet-chevron {
+  flex: none;
+  transition: transform 160ms ease;
+}
+.bob-property-card .bob-cabinet-toggle[aria-expanded="true"] .bob-cabinet-chevron { transform: rotate(90deg); }
+.bob-property-card .bob-cabinet-noun { flex: none; color: var(--text-normal); font-weight: 600; }
+.bob-property-card .bob-cabinet-summary {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bob-property-card .bob-cabinet-trail {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 0.4em;
+  min-width: 1.6em;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.bob-property-card .bob-cabinet-meta { color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.bob-property-card .bob-cabinet-attention {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  gap: 0.2em;
+  color: var(--text-warning);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.bob-property-card .bob-cabinet-attention.is-error { color: var(--text-error, var(--text-warning)); }
+.bob-property-card .bob-cabinet-action {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.6em;
+  padding: 0.05em 0.35em;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  cursor: pointer;
+}
+.bob-property-card .bob-cabinet-keycap {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  min-width: 1.6em;
+  min-height: 1.45em;
+  padding: 0 0.25em;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: var(--background-modifier-border);
+  color: var(--text-muted);
+  font: inherit;
+  opacity: 0;
+  pointer-events: none;
+  user-select: none;
+  transition: opacity 120ms ease, background-color 120ms ease, border-color 120ms ease;
+}
+.bob-property-card .bob-cabinet-head:has(.bob-cabinet-toggle[data-key-live="true"]):hover .bob-cabinet-keycap,
+.bob-property-card .bob-cabinet-toggle[data-key-live="true"]:focus-visible ~ .bob-cabinet-trail .bob-cabinet-keycap { opacity: 0.7; }
+.bob-property-card .bob-property-card-cabinets[data-cabinet-pick="armed"] .bob-cabinet-keycap[data-cabinet-picked="true"] {
+  border-color: color-mix(in srgb, var(--bob-property-card-accent, var(--text-normal)) 55%, transparent);
+  background: color-mix(in srgb, var(--bob-property-card-accent, var(--text-normal)) 18%, transparent);
+  color: var(--text-normal);
+  font-weight: 600;
+  opacity: 1;
+}
+.bob-property-card .bob-property-card-cabinets[data-cabinet-pick="armed"] .bob-cabinet-keycap[data-cabinet-rest-key="-"] {
+  border-color: var(--text-muted);
+  background: transparent;
+  color: var(--text-normal);
+  opacity: 1;
+}
+.bob-property-card .bob-cabinet-drawer {
+  display: grid;
+  grid-template-rows: 0fr;
+  min-width: 0;
+  transition: grid-template-rows 160ms ease;
+}
+.bob-property-card .bob-cabinet-drawer[data-open="true"] { grid-template-rows: 1fr; }
+.bob-property-card .bob-cabinet-drawer-inner {
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0 0.5em;
+}
+.bob-property-card .bob-cabinet-drawer[data-open="true"] > .bob-cabinet-drawer-inner { padding-block: 0.25em 0.5em; }
+.bob-property-card .bob-cabinet-content {
+  margin: 0;
+  border: 0 !important;
+  border-inline-start: 0 !important;
+  padding: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+.bob-property-card .bob-cabinet-content > .callout-title { display: none !important; }
+.bob-property-card .bob-cabinet-drawer-inner .callout {
+  margin: 0;
+  border: 0 !important;
+  border-inline-start: 0 !important;
+  padding: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+.bob-property-card .bob-cabinet-drawer-inner .callout > .callout-title { display: none !important; }
+.bob-property-card .bob-cabinet-render-error { margin: 0; color: var(--text-warning); font-size: var(--font-ui-smaller); }
+@container (max-width: 30em) {
+  .bob-property-card .bob-cabinet-summary { text-overflow: ellipsis; }
+}
+@container (max-width: 24em) {
+  .bob-property-card .bob-cabinet-meta { display: none; }
+  .bob-property-card .bob-cabinet-attention-word { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bob-property-card .bob-cabinet-chevron,
+  .bob-property-card .bob-cabinet-drawer,
+  .bob-property-card .bob-cabinet-keycap { transition: none; }
+}
+@media (forced-colors: active) {
+  .bob-property-card .bob-cabinet-toggle,
+  .bob-property-card .bob-cabinet-noun,
+  .bob-property-card .bob-cabinet-summary,
+  .bob-property-card .bob-cabinet-meta,
+  .bob-property-card .bob-cabinet-attention,
+  .bob-property-card .bob-cabinet-keycap { color: CanvasText; }
+  .bob-property-card .bob-cabinet-keycap { border-color: ButtonText; }
+  .bob-property-card .bob-cabinet-toggle:focus-visible,
+  .bob-property-card .bob-cabinet-action:focus-visible { outline-color: Highlight; }
 }

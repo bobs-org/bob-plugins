@@ -217,6 +217,14 @@ class BobLedgerToolsHomeCardFootMixin {
       card, key, doc,
       spec && options?.keyLive === true ? { ...spec, keyLive: true } : spec,
       this.homeCardFootHandlers(key), this.homeCardFootPendingScroll,
+      {
+        plugin: this,
+        view: options?.view || null,
+        component: options?.component || this,
+        source: options?.sourceText,
+        frontmatter: options?.frontmatter || propertyCardFootAdapterFrontmatter(this, key),
+        repaint: () => this.scheduleHomeCardRefresh?.(),
+      },
     );
   }
 }

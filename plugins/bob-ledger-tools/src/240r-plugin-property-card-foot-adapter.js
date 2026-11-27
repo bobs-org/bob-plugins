@@ -307,7 +307,7 @@ function propertyCardFootAdapterTrack(container, path, card, tracked) {
   return null;
 }
 
-function propertyCardFootAdapterAppend(card, path, doc, spec, handlers, pendingScroll) {
+function propertyCardFootAdapterAppend(card, path, doc, spec, handlers, pendingScroll, context = {}) {
   try {
     const key = propertyCardFootAdapterPath(path);
     if (!card || !key || typeof propertyCardFootBuildEl !== "function") return null;
@@ -336,6 +336,17 @@ function propertyCardFootAdapterAppend(card, path, doc, spec, handlers, pendingS
       try { doc.adoptNode?.(built.element); } catch (_) {}
     }
     card.appendChild(built.element);
+    if (propertyCardCabinetsGateLive?.() === true
+      && typeof propertyCardCabinetsAssemble === "function") {
+      const ctx = context && typeof context === "object" ? context : {};
+      const stack = propertyCardCabinetsAssemble(card, key, built.element, {
+        ...ctx,
+        spec: spec && typeof spec === "object" ? spec : {},
+        handlers: handlers && typeof handlers === "object" ? handlers : {},
+        plugin: ctx.plugin || null,
+      });
+      if (stack) built.stack = stack;
+    }
     if (open && pendingScroll instanceof Set && pendingScroll.has(key)) {
       pendingScroll.delete(key);
       try {

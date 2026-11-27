@@ -131,6 +131,14 @@ class BobLedgerToolsProseNoteCardFootMixin {
       spec && options.keyLive === true ? { ...spec, keyLive: true } : spec,
       this.proseNoteCardFootHandlers(key),
       this.proseNoteCardFootPendingScroll,
+      {
+        plugin: this,
+        view: options?.view || null,
+        component: options?.component || this,
+        source: options?.sourceText,
+        frontmatter: options?.frontmatter || propertyCardFootAdapterFrontmatter(this, key),
+        repaint: () => this.scheduleProseNoteCardRefresh?.(),
+      },
     );
     if (!built?.element) return built;
     const findings = Array.isArray(options.snapshot?.findings) ? options.snapshot.findings : [];

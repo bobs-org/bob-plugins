@@ -66554,6 +66554,589 @@ async function propertyCardCabinetRenderCatalog(options = {}) {
     return { reused: false, failed: true };
   }
 }
+// ---- src/240wk-plugin-cabinet-chrome.js ----
+// Shared, accessible cabinet header chrome. Fold-row owners still own their
+// state and bodies; this fragment only gives their controls the common shape.
+function propertyCardCabinetCreateEl(doc, tag, className) {
+  if (!doc || typeof doc.createElement !== "function") return null;
+  const node = doc.createElement(tag);
+  if (className) node.setAttribute("class", className);
+  return node;
+}
+
+function propertyCardCabinetSetText(node, value) {
+  if (node) node.textContent = value === null || value === undefined ? "" : String(value);
+}
+
+function propertyCardCabinetAddAttention(doc, trail, attention) {
+  if (!attention || (!attention.icon && !attention.word && !attention.count)) return null;
+  const chip = propertyCardCabinetCreateEl(doc, "span", `bob-cabinet-attention${attention.tone ? ` is-${attention.tone}` : ""}`);
+  if (!chip) return null;
+  const appendPart = (className, text) => {
+    if (!text) return;
+    const part = propertyCardCabinetCreateEl(doc, "span", className);
+    propertyCardCabinetSetText(part, text);
+    if (part) chip.appendChild(part);
+  };
+  appendPart("bob-cabinet-attention-icon", attention.icon || "");
+  appendPart("bob-cabinet-attention-word", attention.word || "");
+  appendPart("bob-cabinet-attention-count", Number.isInteger(attention.count) && attention.count > 0 ? `+${attention.count}` : "");
+  if (attention.title) chip.setAttribute("title", String(attention.title));
+  if (attention.ariaLabel) chip.setAttribute("aria-label", String(attention.ariaLabel));
+  trail?.appendChild?.(chip);
+  return chip;
+}
+
+function propertyCardCabinetAppendActions(doc, trail, actions) {
+  const list = Array.isArray(actions) ? actions : actions ? [actions] : [];
+  for (const action of list) {
+    if (!action) continue;
+    if (action.nodeType === 1 || typeof action.addEventListener === "function") {
+      trail?.appendChild?.(action);
+      continue;
+    }
+    if (typeof action !== "object" || !action.label || typeof action.onClick !== "function") continue;
+    const button = propertyCardCabinetCreateEl(doc, "button", "bob-cabinet-action");
+    if (!button) continue;
+    button.setAttribute("type", "button");
+    if (action.title) button.setAttribute("title", String(action.title));
+    if (action.ariaLabel) button.setAttribute("aria-label", String(action.ariaLabel));
+    propertyCardCabinetSetText(button, action.label);
+    button.addEventListener("click", (event) => {
+      try { event?.preventDefault?.(); } catch (_) {}
+      try { event?.stopPropagation?.(); } catch (_) {}
+      try { action.onClick(event); } catch (_) {}
+    });
+    trail?.appendChild?.(button);
+  }
+}
+
+function propertyCardCabinetFocusHeadOnClose(head, drawer) {
+  if (!head || !drawer) return false;
+  try {
+    const active = drawer.ownerDocument?.activeElement;
+    if (!active || !(active === drawer || drawer.contains?.(active))) return false;
+    const toggle = head.matches?.("button") ? head : head.querySelector?.(".bob-cabinet-toggle");
+    toggle?.focus?.();
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function propertyCardCabinetBuildHead(doc, spec = {}) {
+  const kind = typeof spec.kind === "string" ? spec.kind : "";
+  const foldKind = typeof spec.foldKind === "string" && spec.foldKind ? spec.foldKind : kind;
+  const path = propertyCardCabinetPath(spec.path);
+  const bodyId = String(spec.bodyId || propertyCardFoldNextId());
+  if (!kind || !path) return null;
+  const wrapper = propertyCardCabinetCreateEl(doc, "div", ["bob-cabinet-head", spec.headClass || ""].filter(Boolean).join(" "));
+  const button = propertyCardCabinetCreateEl(doc, "button", ["bob-property-card-fold", "bob-cabinet-toggle", spec.className || ""].filter(Boolean).join(" "));
+  const trail = propertyCardCabinetCreateEl(doc, "div", "bob-cabinet-trail");
+  if (!wrapper || !button || !trail) return null;
+  const open = spec.open === true;
+  if (typeof propertyCardDecorateFoldControl === "function") {
+    propertyCardDecorateFoldControl(button, {
+      kind: foldKind, path, open, bodyId, role: "cabinet", tooltip: spec.tooltip,
+      keyLive: false,
+    });
+  } else {
+    button.setAttribute("type", "button");
+    button.setAttribute("data-card-fold", foldKind);
+    button.setAttribute("data-card-fold-role", "cabinet");
+    button.setAttribute("data-card-fold-source", path);
+    button.setAttribute("aria-expanded", open ? "true" : "false");
+    button.setAttribute("aria-controls", bodyId);
+  }
+  button.setAttribute("aria-expanded", open ? "true" : "false");
+  button.setAttribute("aria-controls", bodyId);
+  if (spec.keyLive === true) button.setAttribute("data-key-live", "true");
+  else button.removeAttribute?.("data-key-live");
+  if (spec.ariaLabel) button.setAttribute("aria-label", String(spec.ariaLabel));
+  if (spec.keyLive === true) button.setAttribute("aria-keyshortcuts", String(spec.restKey || "_"));
+  else button.removeAttribute?.("aria-keyshortcuts");
+  if (spec.tabIndex !== undefined) button.setAttribute("tabindex", String(spec.tabIndex));
+
+  const chevron = propertyCardCabinetCreateEl(doc, "span", "bob-property-card-fold-chevron bob-cabinet-chevron");
+  propertyCardCabinetSetText(chevron, "▸");
+  chevron?.setAttribute?.("aria-hidden", "true");
+  const noun = propertyCardCabinetCreateEl(doc, "span", "bob-property-card-fold-noun bob-cabinet-noun");
+  propertyCardCabinetSetText(noun, spec.noun || PROPERTY_CARD_CABINET_KINDS[kind]?.noun || "Details");
+  const summaryText = spec.summary === null || spec.summary === undefined ? "" : String(spec.summary).trim();
+  const summary = summaryText ? propertyCardCabinetCreateEl(doc, "span", "bob-property-card-fold-summary bob-cabinet-summary") : null;
+  if (summary) propertyCardCabinetSetText(summary, summaryText);
+  button.appendChild(chevron);
+  button.appendChild(doc.createTextNode(" "));
+  button.appendChild(noun);
+  if (summary) {
+    button.appendChild(doc.createTextNode(" · "));
+    button.appendChild(summary);
+  }
+  wrapper.appendChild(button);
+
+  if (spec.meta) {
+    const meta = propertyCardCabinetCreateEl(doc, "span", ["bob-cabinet-meta", spec.metaClass || ""].filter(Boolean).join(" "));
+    propertyCardCabinetSetText(meta, spec.meta);
+    if (spec.metaTitle) meta.setAttribute("title", String(spec.metaTitle));
+    trail.appendChild(meta);
+  }
+  propertyCardCabinetAddAttention(doc, trail, spec.attention);
+  propertyCardCabinetAppendActions(doc, trail, spec.actions);
+  for (const extra of (Array.isArray(spec.extras) ? spec.extras : spec.extras ? [spec.extras] : [])) {
+    if (extra) trail.appendChild(extra);
+  }
+  const keycap = propertyCardCabinetCreateEl(doc, "kbd", "bob-property-card-fold-keycap bob-cabinet-keycap");
+  const restKey = String(spec.restKey || "");
+  propertyCardCabinetSetText(keycap, spec.keyLive === true ? restKey : "");
+  keycap?.setAttribute?.("aria-hidden", "true");
+  keycap?.setAttribute?.("data-cabinet-keycap", "true");
+  keycap?.setAttribute?.("data-cabinet-rest-key", restKey);
+  if (spec.keyLive === true) keycap?.setAttribute?.("data-key-live", "true");
+  if (keycap) trail.appendChild(keycap);
+  wrapper.appendChild(trail);
+  wrapper.setAttribute("data-cabinet-head-kind", kind);
+  if (spec.onToggle) {
+    button.addEventListener("click", (event) => {
+      try { event?.preventDefault?.(); } catch (_) {}
+      const drawer = doc.getElementById?.(bodyId) || null;
+      if (open) propertyCardCabinetFocusHeadOnClose(button, drawer);
+      try { spec.onToggle(!open, event); } catch (_) {}
+    });
+  }
+  return { element: wrapper, button, trail, keycap, bodyId };
+}
+
+// Called by the armed-pick UI. `numbering` is either the bottom-up array from
+// propertyCardCabinetNumbering or null to clear every temporary badge.
+function propertyCardCabinetPaintPick(stack, numbering) {
+  if (!stack) return false;
+  const armed = Array.isArray(numbering) && numbering.length > 0;
+  try {
+    if (armed) stack.setAttribute("data-cabinet-pick", "armed");
+    else stack.removeAttribute?.("data-cabinet-pick");
+    const numbers = new Map((armed ? numbering : []).map((row) => [row?.kind, row?.number]));
+    const panels = Array.from(stack.querySelectorAll?.("[data-cabinet-kind]") || []);
+    for (const panel of panels) {
+      const kind = panel.getAttribute?.("data-cabinet-kind") || "";
+      const keycap = panel.querySelector?.("[data-cabinet-keycap]");
+      if (!keycap) continue;
+      if (!armed) {
+        propertyCardCabinetSetText(keycap, keycap.getAttribute?.("data-cabinet-rest-key") || "");
+        keycap.removeAttribute?.("data-cabinet-picked");
+        continue;
+      }
+      const value = kind === "properties" ? "-" : (numbers.has(kind) ? String(numbers.get(kind)) : "");
+      propertyCardCabinetSetText(keycap, value);
+      if (value) keycap.setAttribute("data-cabinet-picked", "true");
+      else keycap.removeAttribute?.("data-cabinet-picked");
+    }
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function propertyCardCabinetPaintRestKeys(stack, numbering, keyLive) {
+  if (!stack) return false;
+  try {
+    const numbers = new Map((Array.isArray(numbering) ? numbering : []).map((row) => [row?.kind, row?.number]));
+    console.log("DEBUG REST", numbering, [...numbers], keyLive);
+    for (const panel of Array.from(stack.querySelectorAll?.("[data-cabinet-kind]") || [])) {
+      const kind = panel.getAttribute?.("data-cabinet-kind") || "";
+      const keycap = panel.querySelector?.("[data-cabinet-keycap]");
+      if (!keycap || kind === "properties") continue;
+      const rest = numbers.size > 1 && numbers.has(kind) ? `_${numbers.get(kind)}` : "_";
+      keycap.setAttribute("data-cabinet-rest-key", rest);
+      if (keyLive === true && keycap.getAttribute?.("data-key-live") === "true") {
+        propertyCardCabinetSetText(keycap, rest);
+      }
+    }
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function propertyCardFootBuildCabinetEl(doc, spec = {}) {
+  try {
+    if (!propertyCardKitDocOk(doc)) return null;
+    const options = spec && typeof spec === "object" ? spec : {};
+    const handlers = options.handlers || {};
+    const inventory = options.inventory && typeof options.inventory === "object" ? options.inventory : null;
+    const stamp = options.stamp && typeof options.stamp === "object" ? options.stamp : null;
+    const path = propertyCardFootText(options.path).trim();
+    const disclosureId = propertyCardFootText(options.disclosureId).trim()
+      || `bob-property-foot-${path || "note"}`;
+    const drawerId = `${disclosureId}-drawer`;
+    const count = inventory && Number.isInteger(inventory.count) ? inventory.count : 0;
+    const open = options.open === true;
+    const foot = propertyCardCabinetCreateEl(doc, "div", `${PROPERTY_CARD_FOOT_CLASS} bob-cabinet-panel`);
+    if (!foot) return null;
+    foot.setAttribute("data-property-foot", "true");
+    foot.setAttribute("data-cabinet-kind", "properties");
+    foot.setAttribute("data-cabinet-source", path);
+    if (path) foot.setAttribute("data-foot-source", path);
+    const lint = propertyCardFootLint({
+      inventory, stamp,
+      contractIssues: Array.isArray(options.contractIssues) ? options.contractIssues : [],
+      firstSetting: typeof options.firstSetting === "string" ? options.firstSetting : "",
+    });
+    const actions = [];
+    if (lint.count > 0) {
+      const opener = lint.firstSetting && typeof handlers.onOpenSetting === "function"
+        ? handlers.onOpenSetting : null;
+      const chip = propertyCardCabinetCreateEl(doc, opener ? "button" : "span", "bob-property-card-foot-lint-chip bob-cabinet-attention");
+      propertyCardCabinetSetText(chip, `⚠ ${lint.count}`);
+      chip?.setAttribute?.("title", lint.tooltip);
+      chip?.setAttribute?.("aria-label", lint.tooltip || "Properties need attention");
+      if (opener) {
+        chip.setAttribute("type", "button");
+        chip.addEventListener("click", (event) => {
+          try { event?.preventDefault?.(); } catch (_) {}
+          try { event?.stopPropagation?.(); } catch (_) {}
+          try { opener(lint.firstSetting); } catch (_) {}
+        });
+      } else {
+        chip?.setAttribute?.("role", "status");
+      }
+      if (chip) actions.push(chip);
+    }
+    const head = propertyCardCabinetBuildHead(doc, {
+      kind: "properties", foldKind: "properties", path, bodyId: drawerId,
+      noun: "Properties", summary: String(count), open, keyLive: options.keyLive === true,
+      restKey: "-", className: PROPERTY_CARD_FOOT_CLASS + "-disclosure",
+      tooltip: "Toggle properties (-)",
+      ariaLabel: `Toggle properties, ${count} ${count === 1 ? "property" : "properties"}`,
+      meta: stamp?.text || "",
+      metaClass: stamp?.state === "invalid" ? "bob-property-card-foot-stamp is-invalid" : "bob-property-card-foot-stamp",
+      metaTitle: stamp?.tooltip || "", actions,
+      onToggle: (next) => {
+        let decided = next;
+        if (typeof handlers.onToggle === "function") {
+          try {
+            const result = handlers.onToggle(path, next);
+            if (typeof result === "boolean") decided = result;
+          } catch (_) {}
+        }
+        if (decided) propertyCardFootReveal(foot);
+        propertyCardCabinetSetDrawerOpen(foot, decided);
+      },
+    });
+    if (!head) return null;
+    head.button.setAttribute("data-foot-focus", "foot");
+    const drawer = propertyCardCabinetCreateEl(doc, "div", `${PROPERTY_CARD_FOOT_DRAWER_CLASS} bob-cabinet-drawer`);
+    const inner = propertyCardCabinetCreateEl(doc, "div", "bob-property-card-foot-drawer-body bob-cabinet-drawer-inner");
+    drawer.setAttribute("id", drawerId);
+    drawer.setAttribute("data-open", open ? "true" : "false");
+    if (!open) inner.setAttribute("inert", "");
+    if (open) propertyCardFootRenderDrawer(doc, inner, { ...options, handlers });
+    drawer.appendChild(inner);
+    foot.appendChild(head.element);
+    foot.appendChild(drawer);
+    return { element: foot, disclosure: head.button, drawer };
+  } catch (_) {
+    return null;
+  }
+}
+
+function propertyCardCabinetSetDrawerOpen(panel, open) {
+  if (!panel) return false;
+  const value = open === true;
+  try {
+    const control = panel.matches?.(".bob-cabinet-toggle") ? panel : panel.querySelector?.(".bob-cabinet-toggle");
+    const drawer = panel.querySelector?.(".bob-cabinet-drawer");
+    const inner = drawer?.querySelector?.(".bob-cabinet-drawer-inner");
+    control?.setAttribute?.("aria-expanded", value ? "true" : "false");
+    drawer?.setAttribute?.("data-open", value ? "true" : "false");
+    if (value) inner?.removeAttribute?.("inert");
+    else inner?.setAttribute?.("inert", "");
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+// ---- src/240wl-plugin-cabinet-stack.js ----
+// One ordered stack per property card. Config folds keep their existing state
+// owners; this layer gathers their heads and bodies beside Properties and
+// mounts provider bodies only when their cabinet first opens.
+const propertyCardCabinetBodyCaches = new WeakMap();
+
+function propertyCardCabinetFindCardRoot(parent) {
+  try {
+    if (parent?.matches?.("[data-card-kind]")) return parent;
+    return parent?.closest?.("[data-card-kind]") || parent;
+  } catch (_) {
+    return parent || null;
+  }
+}
+
+function propertyCardCabinetFindId(root, id) {
+  if (!root || !id) return null;
+  try {
+    if (root.getAttribute?.("id") === id) return root;
+    return Array.from(root.querySelectorAll?.("[id]") || [])
+      .find((node) => node.getAttribute?.("id") === id) || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function propertyCardCabinetWrapExisting(kind, path, button, head, body, doc) {
+  const panel = propertyCardCabinetCreateEl(doc, "section", `bob-cabinet-panel bob-cabinet-panel-${kind}`);
+  if (!panel) return null;
+  panel.setAttribute("data-cabinet-kind", kind);
+  panel.setAttribute("data-cabinet-source", path);
+  const problems = button?.getAttribute?.("data-cabinet-problems")
+    || head?.getAttribute?.("data-cabinet-problems") || "";
+  if (problems) panel.setAttribute("data-cabinet-problems", problems);
+  const drawer = propertyCardCabinetCreateEl(doc, "div", "bob-cabinet-drawer");
+  const inner = propertyCardCabinetCreateEl(doc, "div", "bob-cabinet-drawer-inner");
+  const bodyId = button?.getAttribute?.("aria-controls") || propertyCardFoldNextId();
+  drawer?.setAttribute?.("id", bodyId);
+  drawer?.setAttribute?.("data-open", button?.getAttribute?.("aria-expanded") === "true" ? "true" : "false");
+  if (body) {
+    body.removeAttribute?.("id");
+    body.removeAttribute?.("hidden");
+    body.classList?.add?.("bob-cabinet-content");
+    inner.appendChild(body);
+  }
+  if (button?.getAttribute?.("aria-expanded") !== "true") inner?.setAttribute?.("inert", "");
+  if (drawer && inner) drawer.appendChild(inner);
+  if (head) panel.appendChild(head);
+  else panel.appendChild(button);
+  if (drawer) panel.appendChild(drawer);
+  button?.setAttribute?.("aria-controls", bodyId);
+  return panel;
+}
+
+function propertyCardCabinetContextSource(context, path) {
+  if (typeof context?.source === "string") return context.source;
+  if (typeof context?.spec?.sourceText === "string") return context.spec.sourceText;
+  try {
+    const doc = context?.view?.state?.doc;
+    if (doc && typeof doc.toString === "function") return doc.toString();
+  } catch (_) {}
+  try {
+    const file = context?.plugin?.app?.vault?.getAbstractFileByPath?.(path);
+    const cached = context?.plugin?.homeCardSourceCache?.get?.(path)
+      ?? context?.plugin?.albumHeaderSourceCache?.get?.(path);
+    if (typeof cached === "string") return cached;
+    if (file && typeof context?.plugin?.app?.metadataCache?.getFileCache === "function") {
+      const cache = context.plugin.app.metadataCache.getFileCache(file);
+      if (typeof cache?.frontmatter?.source === "string") return cache.frontmatter.source;
+    }
+  } catch (_) {}
+  return "";
+}
+
+function propertyCardCabinetProviderCache(view) {
+  if (!view || (typeof view !== "object" && typeof view !== "function")) return null;
+  let cache = propertyCardCabinetBodyCaches.get(view);
+  if (!cache) {
+    cache = new Map();
+    propertyCardCabinetBodyCaches.set(view, cache);
+  }
+  return cache;
+}
+
+function propertyCardCabinetProviderBody(panel, provider, context, kind, path, paintKey, open) {
+  const doc = panel?.ownerDocument;
+  const drawer = panel?.querySelector?.(".bob-cabinet-drawer");
+  const inner = drawer?.querySelector?.(".bob-cabinet-drawer-inner");
+  if (!drawer || !inner) return null;
+  drawer.setAttribute("data-open", open ? "true" : "false");
+  const key = `${path}\u0000${kind}`;
+  const cache = propertyCardCabinetProviderCache(context?.view);
+  let body = inner.querySelector?.(".bob-cabinet-provider-content") || null;
+  let state = cache?.get(key) || body?.__bobCabinetBodyState || null;
+  if (state && state.paintKey === paintKey) {
+    body = state.container;
+    if (body && body.parentNode !== inner) {
+      try { inner.appendChild(body); } catch (_) {}
+    }
+  } else {
+    try { body?.remove?.(); } catch (_) {}
+    body = propertyCardCabinetCreateEl(doc, "div", "bob-cabinet-provider-content");
+    if (body) inner.appendChild(body);
+    state = { paintKey, container: body, built: false, pending: false, error: false };
+    if (body) body.__bobCabinetBodyState = state;
+    if (cache) cache.set(key, state);
+  }
+  if (!body) return null;
+  if (!open || state.built || state.pending) return state;
+  state.pending = true;
+  const fail = (error) => {
+    state.pending = false;
+    state.error = true;
+    state.built = true;
+    try { provider.onBuildError?.({ path, kind, view: context?.view || null, error }); } catch (_) {}
+    while (body.firstChild) body.removeChild(body.firstChild);
+    const message = propertyCardCabinetCreateEl(doc, "p", "bob-cabinet-render-error");
+    propertyCardCabinetSetText(message, "Couldn't render — showing the note's section");
+    if (message) body.appendChild(message);
+  };
+  try {
+    const result = provider.buildBody({
+      doc,
+      path,
+      view: context?.view || null,
+      component: context?.component || context?.plugin || null,
+      container: body,
+    });
+    Promise.resolve(result).then(() => {
+      state.pending = false;
+      state.built = true;
+    }, fail);
+  } catch (_) {
+    fail();
+  }
+  return state;
+}
+
+function propertyCardCabinetBuildProviderPanel(doc, path, species, kind, providerContext, context) {
+  const applied = propertyCardCabinetProviderApplies(kind, providerContext);
+  if (!applied || applied === false) return null;
+  const provider = propertyCardCabinetProviderFor(kind);
+  if (!provider) return null;
+  const summary = applied.summary === null || applied.summary === undefined ? "" : String(applied.summary);
+  const problems = typeof applied.problems === "string" ? applied.problems : "";
+  const open = propertyCardCabinetIsOpen(path, kind, { problems });
+  const bodyId = propertyCardFoldNextId();
+  const panel = propertyCardCabinetCreateEl(doc, "section", `bob-cabinet-panel bob-cabinet-panel-${kind}`);
+  if (!panel) return null;
+  panel.setAttribute("data-cabinet-kind", kind);
+  panel.setAttribute("data-cabinet-source", path);
+  if (problems) panel.setAttribute("data-cabinet-problems", problems);
+  let paintKey = "";
+  try { paintKey = String(provider.paintKey(path) || ""); } catch (_) {}
+  const head = propertyCardCabinetBuildHead(doc, {
+    kind, path, bodyId, noun: PROPERTY_CARD_CABINET_KINDS[kind]?.noun,
+    summary, meta: applied.meta, metaTitle: applied.metaTitle,
+    attention: applied.attention, actions: applied.actions,
+    open, keyLive: context?.keyLive === true || context?.spec?.keyLive === true, restKey: "_",
+    tooltip: `Toggle ${PROPERTY_CARD_CABINET_KINDS[kind]?.noun || kind} cabinet (_)`,
+    onToggle: (next) => {
+      const previous = propertyCardCabinetIsOpen(path, kind, { problems });
+      if (previous === next) return;
+      propertyCardCabinetSetOpen(path, kind, next, { problems });
+      const bodyState = propertyCardCabinetProviderBody(panel, provider, context, kind, path, paintKey, next);
+      try {
+        if (next && !bodyState?.wasOpen) provider.onOpen?.({ path, view: context?.view || null });
+        else if (!next && bodyState?.wasOpen) provider.onClose?.({ path, view: context?.view || null });
+      } catch (_) {}
+      if (bodyState) bodyState.wasOpen = next;
+      propertyCardCabinetSetDrawerOpen(panel, next);
+      if (typeof context?.repaint === "function") {
+        try { context.repaint({ path, kind }); } catch (_) {}
+      }
+    },
+  });
+  const drawer = propertyCardCabinetCreateEl(doc, "div", "bob-cabinet-drawer");
+  const inner = propertyCardCabinetCreateEl(doc, "div", "bob-cabinet-drawer-inner");
+  drawer?.setAttribute?.("id", bodyId);
+  drawer?.setAttribute?.("data-open", open ? "true" : "false");
+  if (!open) inner?.setAttribute?.("inert", "");
+  if (inner) drawer.appendChild(inner);
+  if (head?.element) panel.appendChild(head.element);
+  if (drawer) panel.appendChild(drawer);
+  if (open) {
+    const bodyState = propertyCardCabinetProviderBody(panel, provider, context, kind, path, paintKey, true);
+    if (bodyState && !bodyState.wasOpen) {
+      try { provider.onOpen?.({ path, view: context?.view || null }); } catch (_) {}
+      bodyState.wasOpen = true;
+    }
+  } else {
+    const bodyState = propertyCardCabinetProviderBody(panel, provider, context, kind, path, paintKey, false);
+    if (bodyState?.wasOpen) {
+      try { provider.onClose?.({ path, view: context?.view || null }); } catch (_) {}
+      bodyState.wasOpen = false;
+    }
+  }
+  return panel;
+}
+
+function propertyCardCabinetsAssemble(parent, pathValue, footEl, context = {}) {
+  try {
+    if (propertyCardCabinetsGateLive?.() !== true || !parent || !footEl) return null;
+    const path = propertyCardCabinetPath(pathValue);
+    if (!path) return null;
+    const card = propertyCardCabinetFindCardRoot(parent);
+    const doc = card?.ownerDocument || parent.ownerDocument;
+    if (!card || !doc) return null;
+    const stack = propertyCardCabinetCreateEl(doc, "div", PROPERTY_CARD_CABINET_STACK_CLASS);
+    if (!stack) return null;
+    stack.setAttribute("role", "group");
+    stack.setAttribute("aria-label", "Cabinets");
+    stack.setAttribute("data-cabinet-source", path);
+
+    const panels = [];
+    const claimed = new Set();
+    const controls = Array.from(card.querySelectorAll?.("[data-card-fold-role='cabinet'][data-card-fold]") || []);
+    for (const button of controls) {
+      const foldKind = button.getAttribute?.("data-card-fold") || "";
+      const kind = propertyCardCabinetKindForFold(foldKind);
+      if (!kind || claimed.has(kind) || propertyCardCabinetPath(button.getAttribute?.("data-card-fold-source") || "") !== path) continue;
+      const existingStack = button.closest?.(`.${PROPERTY_CARD_CABINET_STACK_CLASS}`);
+      if (existingStack) continue;
+      claimed.add(kind);
+      const head = button.closest?.(".bob-cabinet-head") || button;
+      const bodyId = button.getAttribute?.("aria-controls") || "";
+      const body = propertyCardCabinetFindId(card, bodyId);
+      const panel = propertyCardCabinetWrapExisting(kind, path, button, head, body, doc);
+      if (panel) panels.push({ kind, panel });
+    }
+
+    const species = card.getAttribute?.("data-card-kind") || "";
+    const source = propertyCardCabinetContextSource({ ...context, spec: context.spec }, path);
+    const frontmatter = context?.frontmatter || context?.spec?.frontmatter || {};
+    const providerContext = { path, species, source, frontmatter };
+    for (const kind of propertyCardCabinetOrder(Object.keys(PROPERTY_CARD_CABINET_KINDS))) {
+      if (PROPERTY_CARD_CABINET_KINDS[kind].role !== "content" || claimed.has(kind)) continue;
+      const panel = propertyCardCabinetBuildProviderPanel(doc, path, species, kind, providerContext, context);
+      if (panel) {
+        claimed.add(kind);
+        panels.push({ kind, panel });
+      }
+    }
+
+    let properties = footEl;
+    if (properties.getAttribute?.("data-cabinet-kind") !== "properties") {
+      properties.setAttribute?.("data-cabinet-kind", "properties");
+      properties.setAttribute?.("data-cabinet-source", path);
+    }
+    panels.push({ kind: "properties", panel: properties });
+    const orderedKinds = propertyCardCabinetOrder(panels.map((row) => row.kind));
+    const ordered = orderedKinds.map((kind) => panels.find((row) => row.kind === kind)).filter(Boolean);
+    for (const row of ordered) stack.appendChild(row.panel);
+
+    const extras = orderedKinds.filter((kind) => kind !== "properties");
+    const numbering = propertyCardCabinetNumbering(extras);
+    propertyCardCabinetPaintRestKeys(
+      stack,
+      numbering,
+      context?.keyLive === true || context?.spec?.keyLive === true,
+    );
+    if (extras.length) {
+      for (const button of Array.from(card.querySelectorAll?.(".bob-property-card-fold-compact") || [])) {
+        button.querySelector?.(".bob-property-card-fold-keycap")?.remove?.();
+        const title = button.getAttribute?.("title") || "";
+        if (title) button.setAttribute("title", title.replace(/\s*\(_\)\s*$/, ""));
+        button.removeAttribute?.("aria-keyshortcuts");
+      }
+    }
+    card.appendChild(stack);
+
+    const view = context?.view || null;
+    if (view && context?.plugin && typeof propertyCardCabinetRegisterMount === "function") {
+      const repaint = typeof context.repaint === "function" ? context.repaint : null;
+      const release = propertyCardCabinetRegisterMount(context.plugin, view, path, stack, repaint);
+      try { context.component?.register?.(release); } catch (_) {}
+    }
+    return stack;
+  } catch (_) {
+    return null;
+  }
+}
 // ---- src/241-plugin-reading-board-data.js ----
 // --- Reading Board data path (bob-cli-99.2) -------------------------------
 // Bob owns the reading queue and all blocking rules. This fragment only
@@ -93486,6 +94069,10 @@ function propertyCardFootBuildEl(doc, spec = {}) {
   try {
     if (!propertyCardKitDocOk(doc)) return null;
     const options = spec && typeof spec === "object" ? spec : {};
+    if (propertyCardCabinetsGateLive?.() === true
+      && typeof propertyCardFootBuildCabinetEl === "function") {
+      return propertyCardFootBuildCabinetEl(doc, options);
+    }
     const handlers = options.handlers || {};
     const inventory = options.inventory && typeof options.inventory === "object" ? options.inventory : null;
     const stamp = options.stamp && typeof options.stamp === "object" ? options.stamp : null;
@@ -95248,7 +95835,7 @@ function propertyCardFootAdapterTrack(container, path, card, tracked) {
   return null;
 }
 
-function propertyCardFootAdapterAppend(card, path, doc, spec, handlers, pendingScroll) {
+function propertyCardFootAdapterAppend(card, path, doc, spec, handlers, pendingScroll, context = {}) {
   try {
     const key = propertyCardFootAdapterPath(path);
     if (!card || !key || typeof propertyCardFootBuildEl !== "function") return null;
@@ -95277,6 +95864,17 @@ function propertyCardFootAdapterAppend(card, path, doc, spec, handlers, pendingS
       try { doc.adoptNode?.(built.element); } catch (_) {}
     }
     card.appendChild(built.element);
+    if (propertyCardCabinetsGateLive?.() === true
+      && typeof propertyCardCabinetsAssemble === "function") {
+      const ctx = context && typeof context === "object" ? context : {};
+      const stack = propertyCardCabinetsAssemble(card, key, built.element, {
+        ...ctx,
+        spec: spec && typeof spec === "object" ? spec : {},
+        handlers: handlers && typeof handlers === "object" ? handlers : {},
+        plugin: ctx.plugin || null,
+      });
+      if (stack) built.stack = stack;
+    }
     if (open && pendingScroll instanceof Set && pendingScroll.has(key)) {
       pendingScroll.delete(key);
       try {
@@ -95572,6 +96170,33 @@ function propertyCardFoldAppendNode(button, doc, node, separator) {
 function propertyCardBuildFoldRow(doc, spec = {}) {
   const path = propertyCardFoldPath(spec.path);
   const bodyId = spec.bodyId || propertyCardFoldNextId();
+  if (propertyCardCabinetsGateLive?.() === true
+    && typeof propertyCardCabinetBuildHead === "function") {
+    const kind = propertyCardCabinetKindForFold(spec.kind);
+    if (kind) {
+      const head = propertyCardCabinetBuildHead(doc, {
+        kind,
+        foldKind: spec.kind,
+        path,
+        bodyId,
+        noun: spec.noun,
+        summary: spec.summary,
+        open: spec.open === true,
+        attention: spec.attention,
+        extras: Array.isArray(spec.extras) ? spec.extras : spec.extras ? [spec.extras] : [],
+        keyLive: spec.keyLive === true,
+        restKey: "_",
+        className: spec.className,
+        tooltip: spec.tooltip,
+        onToggle: (next) => {
+          const drawer = doc.getElementById?.(bodyId) || null;
+          if (spec.open === true) propertyCardCabinetFocusHeadOnClose(head?.button, drawer);
+          spec.onToggle?.(next);
+        },
+      });
+      if (head?.element) return { element: head.element, bodyId, control: head.button };
+    }
+  }
   const button = propertyCardFoldElement(doc, "button", ["bob-property-card-fold", spec.className || ""].filter(Boolean).join(" "));
   if (!button || !path) return { element: null, bodyId };
   const open = spec.open === true;
@@ -96195,7 +96820,11 @@ function propertyCardCabinetRequestRepaint(view, path, kind) {
   if (!view || !normalized) return false;
   let requested = false;
   for (const mount of propertyCardCabinetMounts) {
-    if (mount.view !== view || mount.path !== normalized || mount.stack?.isConnected === false) continue;
+    if (mount.stack?.isConnected === false) {
+      propertyCardCabinetMounts.delete(mount);
+      continue;
+    }
+    if (mount.view !== view || mount.path !== normalized) continue;
     try {
       if (mount.repaint) {
         if (mount.repaint({ path: normalized, kind }) === false) continue;
@@ -96502,6 +97131,7 @@ function propertyCardCabinetToggle(view, kind) {
         .find((candidate) => PROPERTY_CARD_CABINET_FOLD_KINDS[candidate] === kind);
       const registration = foldKind ? propertyCardFoldKinds.get(foldKind) : null;
       if (typeof registration?.toggle !== "function") return false;
+      if (extra.open) propertyCardCabinetFocusHeadOnClose?.(extra.element, extra.element?.closest?.("[data-cabinet-kind]")?.querySelector?.(".bob-cabinet-drawer"));
       try {
         const result = registration.toggle(collected.path, view);
         return result !== false;
@@ -96515,6 +97145,9 @@ function propertyCardCabinetToggle(view, kind) {
     const problems = typeof rawProblems === "string" ? rawProblems : "";
     const previous = propertyCardCabinetIsOpen(collected.path, kind, { problems });
     const next = !previous;
+    if (previous && next === false) {
+      propertyCardCabinetFocusHeadOnClose?.(extra.element, extra.element?.closest?.("[data-cabinet-kind]")?.querySelector?.(".bob-cabinet-drawer"));
+    }
     propertyCardCabinetSetOpen(collected.path, kind, next, { problems });
     if (propertyCardCabinetRequestRepaint(view, collected.path, kind)) return true;
     propertyCardCabinetSetOpen(collected.path, kind, previous, { problems });
@@ -100399,7 +101032,7 @@ class BobLedgerToolsBankSetupMixin {
           header.setAttribute?.("data-root-hue", hue);
         }
       } catch (error) {}
-      this.bankSetupAppendFoot?.(header, options.sourcePath, doc, extra?.footSpec);
+      this.bankSetupAppendFoot?.(header, options.sourcePath, doc, extra?.footSpec, options);
       return header;
     } catch (error) {
       return null;
@@ -100669,6 +101302,9 @@ class BobLedgerToolsBankSetupMixin {
       ...this.bankSetupOptions(livePath, card.model, "live-preview"),
       footSpec: extra?.footSpec,
       identity: card.identity,
+      view,
+      component: this,
+      sourceText: view?.state?.doc?.toString?.() || "",
     };
     const signature = JSON.stringify([typeof this.bankSetupFootSignature === "function"
       ? this.bankSetupFootSignature(card.model, extra, options)
@@ -101109,11 +101745,21 @@ class BobLedgerToolsBankSetupFootMixin {
     return propertyCardFootAdapterTrack(container, path, header, this.bankSetupFootTracked);
   }
 
-  bankSetupAppendFoot(header, path, doc, footSpec) {
+  bankSetupAppendFoot(header, path, doc, footSpec, options = {}) {
     const filePath = bankSetupHubPath(path) || BANK_SETUP_HUB_PATH;
     const spec = footSpec || this.bankSetupFootSpec(filePath);
+    const keyLive = options?.keyLive === true || propertyCardFoldKeyLive(this, options?.surface) === true;
     return propertyCardFootAdapterAppend(
-      header, filePath, doc, spec, this.bankSetupFootHandlers(filePath), this.bankSetupFootPendingScroll,
+      header, filePath, doc, keyLive ? { ...spec, keyLive: true } : spec,
+      this.bankSetupFootHandlers(filePath), this.bankSetupFootPendingScroll,
+      {
+        plugin: this,
+        view: options?.view || null,
+        component: options?.component || this,
+        source: options?.sourceText,
+        frontmatter: options?.frontmatter || propertyCardFootAdapterFrontmatter(this, filePath),
+        repaint: () => this.scheduleBankSetupRefresh?.(),
+      },
     );
   }
 
@@ -111851,7 +112497,13 @@ class BobLedgerToolsHomeCardMixin {
       }
       const doc = view.dom?.ownerDocument || (typeof document !== "undefined" ? document : null);
       const extra = typeof this.homeCardFootExtra === "function" ? this.homeCardFootExtra(path, model) : null;
-      const options = { ...this.homeCardOptions(path, model, "live-preview"), footSpec: extra?.footSpec };
+      const options = {
+        ...this.homeCardOptions(path, model, "live-preview"),
+        footSpec: extra?.footSpec,
+        view,
+        component: this,
+        sourceText: text,
+      };
       const signature = this.homeCardSignature(model, {
         ...extra,
         collapsed: options.collapsed,
@@ -112555,6 +113207,14 @@ class BobLedgerToolsHomeCardFootMixin {
       card, key, doc,
       spec && options?.keyLive === true ? { ...spec, keyLive: true } : spec,
       this.homeCardFootHandlers(key), this.homeCardFootPendingScroll,
+      {
+        plugin: this,
+        view: options?.view || null,
+        component: options?.component || this,
+        source: options?.sourceText,
+        frontmatter: options?.frontmatter || propertyCardFootAdapterFrontmatter(this, key),
+        repaint: () => this.scheduleHomeCardRefresh?.(),
+      },
     );
   }
 }
@@ -115553,7 +116213,13 @@ class BobLedgerToolsProseNoteCardMixin {
     if (!Decoration || !WidgetType || !RangeSetBuilder) return Decoration?.none || null;
     const doc = view.dom?.ownerDocument || (typeof document !== "undefined" ? document : null);
     const extra = this.proseNoteCardFootExtra(path, model);
-    const options = { ...this.proseNoteCardOpenOptions(path, model, "live-preview"), sourcePath: path };
+    const options = {
+      ...this.proseNoteCardOpenOptions(path, model, "live-preview"),
+      sourcePath: path,
+      view,
+      component: this,
+      sourceText: text,
+    };
     const signature = this.proseNoteCardSignature(model, extra, options);
     const adopted = propertyCardAdoptedEntry(view.dom);
     let card = adopted && adopted.path === path && adopted.kind === PROSE_NOTE_CARD_HOST_KIND
@@ -115821,6 +116487,14 @@ class BobLedgerToolsProseNoteCardFootMixin {
       spec && options.keyLive === true ? { ...spec, keyLive: true } : spec,
       this.proseNoteCardFootHandlers(key),
       this.proseNoteCardFootPendingScroll,
+      {
+        plugin: this,
+        view: options?.view || null,
+        component: options?.component || this,
+        source: options?.sourceText,
+        frontmatter: options?.frontmatter || propertyCardFootAdapterFrontmatter(this, key),
+        repaint: () => this.scheduleProseNoteCardRefresh?.(),
+      },
     );
     if (!built?.element) return built;
     const findings = Array.isArray(options.snapshot?.findings) ? options.snapshot.findings : [];
@@ -122432,7 +123106,9 @@ class BobLedgerToolsAlbumHeaderMixin {
     return propertyCardFoldResolve({
       choice,
       problems,
-      foldDefault: propertyCardSpecies("album")?.foldDefault,
+      foldDefault: propertyCardCabinetsGateLive?.() === true
+        ? propertyCardCabinetDefaultOpen("schema", { problems })
+        : propertyCardSpecies("album")?.foldDefault,
     });
   }
 
@@ -122797,7 +123473,8 @@ class BobLedgerToolsAlbumHeaderMixin {
     if (!focusKey || !node) return;
     const next = Array.from(node.querySelectorAll?.("[data-album-header-focus]") || [])
       .find((item) => item.getAttribute?.("data-album-header-focus") === focusKey);
-    next?.focus?.({ preventScroll: true });
+    const target = next?.matches?.("button") ? next : next?.querySelector?.("button") || next;
+    target?.focus?.({ preventScroll: true });
   }
 
   // Body placement (fallback): today's spot right after the first non-code
@@ -122992,7 +123669,13 @@ class BobLedgerToolsAlbumHeaderMixin {
       }
       const doc = notebookDomDoc(view.dom) || (typeof document !== "undefined" ? document : null);
       const extra = typeof this.albumHeaderFootExtra === "function" ? this.albumHeaderFootExtra(path, card) : null;
-      const options = { ...this.albumHeaderOptions(path, state, card.body, "live-preview"), footSpec: extra?.footSpec };
+      const options = {
+        ...this.albumHeaderOptions(path, state, card.body, "live-preview"),
+        footSpec: extra?.footSpec,
+        view,
+        component: this,
+        sourceText: text,
+      };
       const signature = JSON.stringify([albumHeaderCardSignature(card, options), extra?.footDigest || "", extra?.footOpen === true]);
       const adopted = propertyCardAdoptedEntry(view.dom);
       let header = adopted && adopted.path === path && adopted.mode === "slot" ? adopted.node : null;
@@ -123243,6 +123926,14 @@ class BobLedgerToolsAlbumHeaderFootMixin {
       header, path, doc,
       spec && options?.keyLive === true ? { ...spec, keyLive: true } : spec,
       this.albumHeaderFootHandlers(path), this.albumHeaderFootPendingScroll,
+      {
+        plugin: this,
+        view: options?.view || null,
+        component: options?.component || this,
+        source: options?.sourceText,
+        frontmatter: options?.frontmatter || propertyCardFootAdapterFrontmatter(this, path),
+        repaint: () => this.scheduleAlbumHeaderRefresh?.(),
+      },
     );
   }
 }
@@ -213589,6 +214280,16 @@ try {
       propertyCardCabinetProviderApplies,
       propertyCardCabinetProvidersReleasePlugin,
       propertyCardCabinetProvidersResetForTests,
+      propertyCardCabinetBuildHead,
+      propertyCardCabinetPaintPick,
+      propertyCardFootBuildCabinetEl,
+      propertyCardCabinetSetDrawerOpen,
+      propertyCardCabinetFocusHeadOnClose,
+      propertyCardCabinetWrapExisting,
+      propertyCardCabinetBuildProviderPanel,
+      propertyCardCabinetProviderBody,
+      propertyCardCabinetContextSource,
+      propertyCardCabinetsAssemble,
       PROPERTY_CARD_CABINET_STACK_CLASS,
       PROPERTY_CARD_CABINET_KIND_ATTR,
       propertyCardCabinetStackForView,

@@ -126,6 +126,14 @@ class BobLedgerToolsAlbumHeaderFootMixin {
       header, path, doc,
       spec && options?.keyLive === true ? { ...spec, keyLive: true } : spec,
       this.albumHeaderFootHandlers(path), this.albumHeaderFootPendingScroll,
+      {
+        plugin: this,
+        view: options?.view || null,
+        component: options?.component || this,
+        source: options?.sourceText,
+        frontmatter: options?.frontmatter || propertyCardFootAdapterFrontmatter(this, path),
+        repaint: () => this.scheduleAlbumHeaderRefresh?.(),
+      },
     );
   }
 }

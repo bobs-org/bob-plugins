@@ -132,6 +132,8 @@
   "240wh-plugin-cabinet-absorb-reading.js",
   "240wi-plugin-cabinet-claims.js",
   "240wj-plugin-cabinet-catalog-body.js",
+  "240wk-plugin-cabinet-chrome.js",
+  "240wl-plugin-cabinet-stack.js",
   "241-plugin-reading-board-data.js",
   "241a-plugin-notebook-data.js",
   "241a-plugin-ref-library-report-service.js",

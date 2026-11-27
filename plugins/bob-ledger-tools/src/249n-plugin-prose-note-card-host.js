@@ -597,7 +597,13 @@ class BobLedgerToolsProseNoteCardMixin {
     if (!Decoration || !WidgetType || !RangeSetBuilder) return Decoration?.none || null;
     const doc = view.dom?.ownerDocument || (typeof document !== "undefined" ? document : null);
     const extra = this.proseNoteCardFootExtra(path, model);
-    const options = { ...this.proseNoteCardOpenOptions(path, model, "live-preview"), sourcePath: path };
+    const options = {
+      ...this.proseNoteCardOpenOptions(path, model, "live-preview"),
+      sourcePath: path,
+      view,
+      component: this,
+      sourceText: text,
+    };
     const signature = this.proseNoteCardSignature(model, extra, options);
     const adopted = propertyCardAdoptedEntry(view.dom);
     let card = adopted && adopted.path === path && adopted.kind === PROSE_NOTE_CARD_HOST_KIND

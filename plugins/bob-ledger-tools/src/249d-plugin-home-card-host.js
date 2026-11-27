@@ -826,7 +826,13 @@ class BobLedgerToolsHomeCardMixin {
       }
       const doc = view.dom?.ownerDocument || (typeof document !== "undefined" ? document : null);
       const extra = typeof this.homeCardFootExtra === "function" ? this.homeCardFootExtra(path, model) : null;
-      const options = { ...this.homeCardOptions(path, model, "live-preview"), footSpec: extra?.footSpec };
+      const options = {
+        ...this.homeCardOptions(path, model, "live-preview"),
+        footSpec: extra?.footSpec,
+        view,
+        component: this,
+        sourceText: text,
+      };
       const signature = this.homeCardSignature(model, {
         ...extra,
         collapsed: options.collapsed,

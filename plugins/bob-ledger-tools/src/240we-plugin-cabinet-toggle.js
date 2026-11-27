@@ -17,6 +17,7 @@ function propertyCardCabinetToggle(view, kind) {
         .find((candidate) => PROPERTY_CARD_CABINET_FOLD_KINDS[candidate] === kind);
       const registration = foldKind ? propertyCardFoldKinds.get(foldKind) : null;
       if (typeof registration?.toggle !== "function") return false;
+      if (extra.open) propertyCardCabinetFocusHeadOnClose?.(extra.element, extra.element?.closest?.("[data-cabinet-kind]")?.querySelector?.(".bob-cabinet-drawer"));
       try {
         const result = registration.toggle(collected.path, view);
         return result !== false;
@@ -30,6 +31,9 @@ function propertyCardCabinetToggle(view, kind) {
     const problems = typeof rawProblems === "string" ? rawProblems : "";
     const previous = propertyCardCabinetIsOpen(collected.path, kind, { problems });
     const next = !previous;
+    if (previous && next === false) {
+      propertyCardCabinetFocusHeadOnClose?.(extra.element, extra.element?.closest?.("[data-cabinet-kind]")?.querySelector?.(".bob-cabinet-drawer"));
+    }
     propertyCardCabinetSetOpen(collected.path, kind, next, { problems });
     if (propertyCardCabinetRequestRepaint(view, collected.path, kind)) return true;
     propertyCardCabinetSetOpen(collected.path, kind, previous, { problems });

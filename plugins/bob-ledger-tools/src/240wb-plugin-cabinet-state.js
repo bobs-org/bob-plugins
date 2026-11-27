@@ -132,7 +132,11 @@ function propertyCardCabinetRequestRepaint(view, path, kind) {
   if (!view || !normalized) return false;
   let requested = false;
   for (const mount of propertyCardCabinetMounts) {
-    if (mount.view !== view || mount.path !== normalized || mount.stack?.isConnected === false) continue;
+    if (mount.stack?.isConnected === false) {
+      propertyCardCabinetMounts.delete(mount);
+      continue;
+    }
+    if (mount.view !== view || mount.path !== normalized) continue;
     try {
       if (mount.repaint) {
         if (mount.repaint({ path: normalized, kind }) === false) continue;

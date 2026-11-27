@@ -503,7 +503,7 @@ class BobLedgerToolsBankSetupMixin {
           header.setAttribute?.("data-root-hue", hue);
         }
       } catch (error) {}
-      this.bankSetupAppendFoot?.(header, options.sourcePath, doc, extra?.footSpec);
+      this.bankSetupAppendFoot?.(header, options.sourcePath, doc, extra?.footSpec, options);
       return header;
     } catch (error) {
       return null;
@@ -773,6 +773,9 @@ class BobLedgerToolsBankSetupMixin {
       ...this.bankSetupOptions(livePath, card.model, "live-preview"),
       footSpec: extra?.footSpec,
       identity: card.identity,
+      view,
+      component: this,
+      sourceText: view?.state?.doc?.toString?.() || "",
     };
     const signature = JSON.stringify([typeof this.bankSetupFootSignature === "function"
       ? this.bankSetupFootSignature(card.model, extra, options)

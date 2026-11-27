@@ -246,6 +246,33 @@ function propertyCardFoldAppendNode(button, doc, node, separator) {
 function propertyCardBuildFoldRow(doc, spec = {}) {
   const path = propertyCardFoldPath(spec.path);
   const bodyId = spec.bodyId || propertyCardFoldNextId();
+  if (propertyCardCabinetsGateLive?.() === true
+    && typeof propertyCardCabinetBuildHead === "function") {
+    const kind = propertyCardCabinetKindForFold(spec.kind);
+    if (kind) {
+      const head = propertyCardCabinetBuildHead(doc, {
+        kind,
+        foldKind: spec.kind,
+        path,
+        bodyId,
+        noun: spec.noun,
+        summary: spec.summary,
+        open: spec.open === true,
+        attention: spec.attention,
+        extras: Array.isArray(spec.extras) ? spec.extras : spec.extras ? [spec.extras] : [],
+        keyLive: spec.keyLive === true,
+        restKey: "_",
+        className: spec.className,
+        tooltip: spec.tooltip,
+        onToggle: (next) => {
+          const drawer = doc.getElementById?.(bodyId) || null;
+          if (spec.open === true) propertyCardCabinetFocusHeadOnClose(head?.button, drawer);
+          spec.onToggle?.(next);
+        },
+      });
+      if (head?.element) return { element: head.element, bodyId, control: head.button };
+    }
+  }
   const button = propertyCardFoldElement(doc, "button", ["bob-property-card-fold", spec.className || ""].filter(Boolean).join(" "));
   if (!button || !path) return { element: null, bodyId };
   const open = spec.open === true;

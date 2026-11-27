@@ -99,6 +99,7 @@ class PreviewElement {
     child.parentNode = null;
     return child;
   }
+  remove() { this.parentNode?.removeChild?.(this); this.isConnected = false; }
   setAttribute(name, value) { this.attributes.set(String(name), String(value)); }
   getAttribute(name) { return this.attributes.has(String(name)) ? this.attributes.get(String(name)) : null; }
   removeAttribute(name) { this.attributes.delete(String(name)); }
@@ -108,11 +109,18 @@ class PreviewElement {
     this.listeners.set(type, listeners);
   }
   contains(node) { return node === this || this.children.some((child) => child.contains?.(node)); }
+  closest(selector) { let node = this; while (node) { if (node.matches?.(selector)) return node; node = node.parentNode; } return null; }
+  getBoundingClientRect() { return { width: 120, height: 24 }; }
   matches(selector) {
     const tag = /^([a-z][a-z0-9-]*)/i.exec(selector)?.[1];
     if (tag && this.tagName !== tag.toUpperCase()) return false;
     for (const name of selector.match(/\.[\w-]+/g) || []) {
       if (!this.classList.contains(name.slice(1))) return false;
+    }
+    for (const match of selector.matchAll(/\[([\w-]+)(?:=['"]([^'"]*)['"])?\]/g)) {
+      const [, name, expected] = match;
+      const actual = this.getAttribute(name);
+      if (actual === null || (expected !== undefined && actual !== expected)) return false;
     }
     return true;
   }
@@ -316,6 +324,98 @@ function buildCard(kind, H, Plugin, doc, expanded, app, variant = "") {
   }
   const card = H.bankSetupBuildEl(bankModel(H, expanded), {}, doc);
   card?.setAttribute?.("data-root-hue", "blue");
+  return card;
+}
+
+function buildCabinetPreview(kind, H, doc, armed) {
+  H.propertyCardCabinetStateResetForTests();
+  H.propertyCardCabinetProvidersResetForTests();
+  H.propertyCardCabinetsSetGateForTests(true);
+  const path = `${kind}/preview.md`;
+  const card = doc.createElement("section");
+  card.className = "bob-property-card";
+  card.setAttribute("data-card-kind", kind);
+  card.setAttribute("data-root-hue", "blue");
+  const title = doc.createElement("h2");
+  title.className = "bob-property-card-title";
+  title.textContent = ({ area: "Technology", album: "Restaurants", bank: "Bank", prose: "A Prose Note", record: "Cranford Ramen" })[kind] || kind;
+  card.appendChild(title);
+  const subtitle = doc.createElement("p");
+  subtitle.className = "bob-property-card-preview-subtitle";
+  subtitle.textContent = "Cabinets are independent disclosures at the bottom of this card.";
+  card.appendChild(subtitle);
+
+  const configFold = ({ album: "album", bank: "bank", prose: "prose" })[kind];
+  if (configFold) {
+    const noun = ({ album: "Schema", bank: "Setup", prose: "Outline" })[kind];
+    const fold = H.propertyCardBuildFoldRow(doc, {
+      kind: configFold, path, noun,
+      summary: kind === "album" ? "7 fields · grouped by Status" : kind === "bank" ? "3 findings" : "4 headings · 2 issues",
+      open: false, keyLive: true,
+      attention: kind === "album" ? { icon: "⚠", word: "Review", count: 1, tone: "warning" } : null,
+      onToggle: () => {},
+    });
+    card.appendChild(fold.element);
+    const body = doc.createElement("div");
+    body.className = "bob-preview-fold-body";
+    body.setAttribute("id", fold.bodyId);
+    body.setAttribute("hidden", "");
+    body.textContent = kind === "album" ? "title · status · location · category" : kind === "bank" ? "Everyday · coffee · groceries · kids" : "Heading 1 · Heading 2 · Heading 3";
+    card.appendChild(body);
+  }
+
+  const plugin = {};
+  const contentKinds = kind === "area" ? ["areas", "notebooks", "projects", "albums"]
+    : kind === "album" ? ["records"] : [];
+  for (const contentKind of contentKinds) {
+    H.propertyCardRegisterCabinetProvider(plugin, contentKind, {
+      applies: () => ({
+        summary: ({ areas: "4 direct · 2 nested", projects: "4 open · 1 blocked · 12 closed", notebooks: "3", albums: "8 · 24 records", records: "24 restaurants · by Status" })[contentKind],
+        attention: contentKind === "projects" ? { icon: "●", word: "Attention", count: 2 } : null,
+      }),
+      paintKey: () => `preview-${contentKind}`,
+      buildBody({ doc: ownerDoc, container }) {
+        const list = ownerDoc.createElement("div");
+        list.className = "bob-preview-catalog-rows";
+        for (const text of ({
+          areas: ["[[Health]]", "[[Home]]", "[[Technology]]", "[[Writing]]"],
+          projects: ["Review proposal · Next", "Ship release · Ready", "Renew passport · Blocked"],
+          notebooks: ["Spanish", "Recipes", "Ideas"],
+          albums: ["Restaurants · 24 records", "Books · 9 records"],
+          records: ["💚 Liked · Cranford Ramen", "🔖 To try · Ani Ramen", "💚 Liked · Pho House"],
+        })[contentKind] || []) {
+          const row = ownerDoc.createElement("div");
+          row.textContent = text;
+          list.appendChild(row);
+        }
+        container.appendChild(list);
+      },
+    });
+  }
+  if (kind === "area") H.propertyCardCabinetSetOpen(path, "projects", true);
+
+  const foot = H.propertyCardFootBuildEl(doc, {
+    path,
+    disclosureId: `preview-${kind}-properties`,
+    open: false,
+    keyLive: true,
+    inventory: { count: 16, rows: [], groups: [], issues: [] },
+    stamp: { state: "valid", text: "Created 2026-11-18", tooltip: "Created on November 18, 2026" },
+    handlers: { onToggle: (_path, next) => next },
+  });
+  card.appendChild(foot.element);
+  const stack = H.propertyCardCabinetsAssemble(card, path, foot.element, {
+    plugin, component: plugin,
+    source: `---\ntype: ${kind}\n---\n`,
+    frontmatter: { type: kind },
+  });
+  if (armed && stack) {
+    const extras = kind === "area" ? contentKinds
+      : kind === "album" ? ["records", "schema"]
+        : configFold ? [({ bank: "setup", prose: "outline" })[kind]] : [];
+    H.propertyCardCabinetPaintPick(stack, H.propertyCardCabinetNumbering(extras));
+  }
+  H.propertyCardCabinetsSetGateForTests(false);
   return card;
 }
 
@@ -533,6 +633,7 @@ async function main() {
     await sleep(250);
 
     const cases = [];
+    const cabinetCases = [];
     const errors = [];
     for (const kind of ["album", "record", "bank"]) {
       for (const theme of ["light", "dark"]) {
@@ -568,12 +669,36 @@ async function main() {
       }
     }
 
+    // Current-only cabinet fixtures review the new shared chrome separately
+    // from the legacy pixel-identity comparison above.
+    const cabinetFixtures = [
+      { kind: "area", armed: false },
+      { kind: "area", armed: true },
+      { kind: "album", armed: false },
+      { kind: "bank", armed: false },
+      { kind: "prose", armed: false },
+      { kind: "record", armed: false },
+    ];
+    for (const fixture of cabinetFixtures) {
+      for (const theme of ["light", "dark"]) {
+        for (const width of [1280, 375]) {
+          const label = fixture.armed ? "armed" : "rest";
+          const caseName = `cabinet-${fixture.kind}-${label}-${theme}-${width}`;
+          const card = buildCabinetPreview(fixture.kind, H, previewDocument(), fixture.armed);
+          assert.ok(card, `${caseName}: cabinet builder returned a card`);
+          const currentPath = path.join(outDir, `${caseName}.png`);
+          const current = await renderOne(client, currentCss, serialize(card), theme, width, 960, currentPath, caseName);
+          cabinetCases.push({ case: caseName, kind: fixture.kind, theme, width, armed: fixture.armed, current });
+        }
+      }
+    }
+
     const report = {
       baselineCommit,
       currentSourceSha: execFileSync("git", ["rev-parse", "HEAD"], { cwd: ROOT, encoding: "utf8" }).trim(),
       baselineCssSha256: sha256(Buffer.from(baselineCss)),
       currentCssSha256: sha256(Buffer.from(currentCss)),
-      screenshotCount: cases.length * 2,
+      screenshotCount: cases.length * 2 + cabinetCases.length,
       pixelIdenticalCount: cases.filter((item) => item.pixelIdentical).length,
       gatedCount: cases.filter((item) => !item.adopted).length,
       gatedPixelIdenticalCount: cases.filter((item) => !item.adopted && item.pixelIdentical).length,
@@ -581,6 +706,8 @@ async function main() {
       structuralPassCount: cases.filter((item) => item.adopted && item.structural?.ok).length,
       adoptedCount: cases.filter((item) => item.adopted).length,
       cases,
+      cabinetPreviewCount: cabinetCases.length,
+      cabinetCases,
       errors,
       outcome: errors.length === 0 ? "pass" : "fail",
     };

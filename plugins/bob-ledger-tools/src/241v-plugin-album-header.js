@@ -130,7 +130,9 @@ class BobLedgerToolsAlbumHeaderMixin {
     return propertyCardFoldResolve({
       choice,
       problems,
-      foldDefault: propertyCardSpecies("album")?.foldDefault,
+      foldDefault: propertyCardCabinetsGateLive?.() === true
+        ? propertyCardCabinetDefaultOpen("schema", { problems })
+        : propertyCardSpecies("album")?.foldDefault,
     });
   }
 
@@ -495,7 +497,8 @@ class BobLedgerToolsAlbumHeaderMixin {
     if (!focusKey || !node) return;
     const next = Array.from(node.querySelectorAll?.("[data-album-header-focus]") || [])
       .find((item) => item.getAttribute?.("data-album-header-focus") === focusKey);
-    next?.focus?.({ preventScroll: true });
+    const target = next?.matches?.("button") ? next : next?.querySelector?.("button") || next;
+    target?.focus?.({ preventScroll: true });
   }
 
   // Body placement (fallback): today's spot right after the first non-code
@@ -690,7 +693,13 @@ class BobLedgerToolsAlbumHeaderMixin {
       }
       const doc = notebookDomDoc(view.dom) || (typeof document !== "undefined" ? document : null);
       const extra = typeof this.albumHeaderFootExtra === "function" ? this.albumHeaderFootExtra(path, card) : null;
-      const options = { ...this.albumHeaderOptions(path, state, card.body, "live-preview"), footSpec: extra?.footSpec };
+      const options = {
+        ...this.albumHeaderOptions(path, state, card.body, "live-preview"),
+        footSpec: extra?.footSpec,
+        view,
+        component: this,
+        sourceText: text,
+      };
       const signature = JSON.stringify([albumHeaderCardSignature(card, options), extra?.footDigest || "", extra?.footOpen === true]);
       const adopted = propertyCardAdoptedEntry(view.dom);
       let header = adopted && adopted.path === path && adopted.mode === "slot" ? adopted.node : null;

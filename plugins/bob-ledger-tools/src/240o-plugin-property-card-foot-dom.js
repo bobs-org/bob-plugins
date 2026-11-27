@@ -542,6 +542,10 @@ function propertyCardFootBuildEl(doc, spec = {}) {
   try {
     if (!propertyCardKitDocOk(doc)) return null;
     const options = spec && typeof spec === "object" ? spec : {};
+    if (propertyCardCabinetsGateLive?.() === true
+      && typeof propertyCardFootBuildCabinetEl === "function") {
+      return propertyCardFootBuildCabinetEl(doc, options);
+    }
     const handlers = options.handlers || {};
     const inventory = options.inventory && typeof options.inventory === "object" ? options.inventory : null;
     const stamp = options.stamp && typeof options.stamp === "object" ? options.stamp : null;

@@ -70,6 +70,7 @@
   "143-today-marks.js",
   "143a-snooze-definition-model.js",
   "143b-snooze-row-paint-model.js",
+  "143c-snoozed-plan-meter.js",
   "144-relation-line-grammar.js",
   "145-relation-index-model.js",
   "145a-relation-inverse-phrase.js",
@@ -380,6 +381,7 @@
   "290-plugin-today-and-location.js",
   "290a-snoozed-today-cache.js",
   "290b-snooze-waker.js",
+  "290c-snoozed-plan-chip.js",
   "291-plugin-gcal-events.js",
   "291a-plugin-gcal-readiness.js",
   "291g-plugin-gmail-sync.js",
@@ -508,5 +510,6 @@
   "382-snooze-waker-exports.js",
   "383-snooze-definition-exports.js",
   "384-snooze-woken-pills-exports.js",
-  "385-snooze-row-paint-exports.js"
+  "385-snooze-row-paint-exports.js",
+  "386-snooze-plan-meter-exports.js"
 ]

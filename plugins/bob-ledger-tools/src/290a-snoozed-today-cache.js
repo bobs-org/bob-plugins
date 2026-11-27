@@ -622,12 +622,12 @@ class BobLedgerToolsSnoozedTodayMixin {
       previousMinutes !== built.clockSnapshot.nowMinutes;
     if (changed || detailsChanged || dateOrPathChanged || minutesChanged) {
       try {
+        this.schedulePlanBlockRerender();
         const workspace = this.app && this.app.workspace;
         if (plannedChanged || becameReady) {
           if (workspace && typeof workspace.trigger === "function") {
             workspace.trigger(TODAY_RELOAD_EVENT);
           }
-          this.schedulePlanBlockRerender();
           this.scheduleFreshnessStatusBar();
           this.scheduleFreshnessMarksRefresh();
           if (typeof this.scheduleLiveWidgetRefresh === "function") {

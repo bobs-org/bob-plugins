@@ -758,6 +758,9 @@ function planBlockModel({
   app,
   isToday,
   isSnoozed,
+  snoozedQueue,
+  snoozedAvailable,
+  snoozedTodayCount,
   isReviewBucket,
   review,
   nextDashboard,
@@ -898,6 +901,13 @@ function planBlockModel({
   }
   const offClockCount = budget && budget.links && budget.links.offClock > 0 ? budget.links.offClock : 0;
   const planTitleText = [themeCounts.join(" · ") || null, offClockCount > 0 ? `${offClockCount} off-clock uncapped` : null].filter(Boolean).join(" · ");
+  const snoozedMeter = snoozePlanMeterModel({
+    available: snoozedAvailable,
+    queue: snoozedQueue,
+    today_count: snoozedTodayCount,
+    links_count: budget.links ? budget.links.count : 0,
+    cap: budget.links ? budget.links.cap : effective.maxPlan,
+  });
   return {
     targetPath,
     hasContent: typeof content === "string",
@@ -906,6 +916,7 @@ function planBlockModel({
       ? `TODAY ${budget.links.count}/${budget.links.cap}`
       : "TODAY –",
     todayTone,
+    snoozedMeter,
     planTitle: budget.hasSection
       ? planTitleText || "no themes"
       : "no Pomodoros section",

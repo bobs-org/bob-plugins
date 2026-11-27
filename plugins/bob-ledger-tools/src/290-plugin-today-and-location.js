@@ -534,7 +534,7 @@ class BobLedgerToolsTodayLocationMixin {
           planGate = null;
           planReview = null;
         }
-        const isOffClockLink = typeof this.planBudgetOffClockPredicate === "function" && typeof content === "string" ? this.planBudgetOffClockPredicate(sourcePath, content) : undefined;
+        const snoozedPlan = this.snoozedPlanDataForRender(tasks, content, targetPath, paintDay);
         const model = planBlockModel({
           content,
           tasks,
@@ -551,7 +551,7 @@ class BobLedgerToolsTodayLocationMixin {
           themeConfigured: (key) => this.pomodoroThemeIsConfigured(key),
           themeSimilarTo: (name) => this.pomodoroThemeSimilarTo(name),
           taskLineForBlock: (path, blockId) => this.pomodoroHomeChipTaskLineForBlock(path, blockId),
-          isOffClockLink,
+          ...snoozedPlan,
         });
         const container = el.createDiv({ cls: "bob-plan" });
         try {
@@ -578,6 +578,7 @@ class BobLedgerToolsTodayLocationMixin {
           title: model.planTitle,
         });
         planChip.setAttribute("aria-label", `TODAY: ${model.planTitle}`);
+        this.paintSnoozedPlanChip(container, model.snoozedMeter, model.targetPath);
         const paintSource =
           typeof sourcePath === "string" ? sourcePath : "";
         try {
@@ -996,5 +997,4 @@ class BobLedgerToolsTodayLocationMixin {
     this.dailyLocationRestoreToken =
       Math.floor(numericOrDefault(this.dailyLocationRestoreToken, 0)) + 1;
   }
-
 }

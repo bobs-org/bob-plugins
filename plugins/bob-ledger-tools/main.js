@@ -36140,6 +36140,150 @@ function buildSnoozeHeadingChipElement(doc, summary) {
     return null;
   }
 }
+// ---- src/143c-snoozed-plan-meter.js ----
+// Independent snoozed meter and wake forecast for the daily bob-plan
+// block. It consumes the already-classified queue and never changes the
+// ledger budget or Today membership.
+
+function snoozePlanMeterTargetMinutes(row) {
+  try {
+    if (row && Number.isInteger(row.minutes) && row.minutes >= 0 && row.minutes < 1440) {
+      return row.minutes;
+    }
+    const target = row && typeof row.target === "string"
+      ? row.target.replace(":", "")
+      : "";
+    return snoozeRowPaintTargetMinutes(target);
+  } catch (error) {
+    return null;
+  }
+}
+
+function snoozePlanMeterColonTime(minutes) {
+  if (!Number.isInteger(minutes) || minutes < 0 || minutes >= 1440) {
+    return null;
+  }
+  return String(Math.floor(minutes / 60)).padStart(2, "0") + ":" +
+    String(minutes % 60).padStart(2, "0");
+}
+
+// Input matches the canonical SM-P vectors. In production the caller
+// supplies `available` only after both the Tasks and daily snooze caches
+// are current, and annotates rows with the shared effective-clock result.
+function snoozePlanMeterModel(input = {}) {
+  try {
+    const value = input && typeof input === "object" ? input : {};
+    const linksCount = Number.isInteger(value.links_count) && value.links_count >= 0
+      ? value.links_count
+      : 0;
+    const cap = Number.isInteger(value.cap) && value.cap > 0
+      ? value.cap
+      : null;
+    const queue = Array.isArray(value.queue) ? value.queue : null;
+    const available =
+      value.available !== false &&
+      value.cache_ready !== false &&
+      value.daily_missing !== true &&
+      queue !== null;
+    const emptyForecast = Object.freeze({
+      cap,
+      count: linksCount,
+      over: cap !== null && linksCount > cap,
+    });
+    const empty = {
+      chip: false,
+      forecast: emptyForecast,
+      lint: null,
+      text: null,
+      tone: null,
+      tooltip: null,
+    };
+    if (!available) {
+      return Object.freeze(empty);
+    }
+
+    const seen = new Set();
+    let asleep = 0;
+    let due = 0;
+    let blocked = 0;
+    let eligibleWakeCount = 0;
+    let nextMinutes = null;
+    for (const row of queue) {
+      if (!row || typeof row !== "object") continue;
+      const state = typeof row.state === "string" ? row.state : "";
+      if (state !== "asleep" && state !== "due" && state !== "blocked") {
+        continue;
+      }
+      const identity =
+        typeof row.id === "string" && row.id
+          ? row.id
+          : typeof row.key === "string" && row.key
+            ? row.key
+            : typeof row.identity === "string" && row.identity
+              ? row.identity
+              : null;
+      // An unresolved identity cannot safely contribute to the unique
+      // queue count or the forecast.
+      if (!identity || seen.has(identity)) continue;
+      seen.add(identity);
+      if (state === "asleep") asleep += 1;
+      else if (state === "due") due += 1;
+      else blocked += 1;
+
+      if (state === "blocked") continue;
+      const minutes = snoozePlanMeterTargetMinutes(row);
+      if (minutes !== null && (nextMinutes === null || minutes < nextMinutes)) {
+        nextMinutes = minutes;
+      }
+      if (row.on_clock === true) eligibleWakeCount += 1;
+    }
+
+    const count = asleep + due + blocked;
+    if (!count) {
+      return Object.freeze(empty);
+    }
+    const forecastCount = linksCount + eligibleWakeCount;
+    const forecast = Object.freeze({
+      cap,
+      count: forecastCount,
+      over: cap !== null && forecastCount > cap,
+    });
+    const next = snoozePlanMeterColonTime(nextMinutes);
+    const text = "⏰ " + count + (next ? " · " + next : "");
+    const parts = [count + " snoozed"];
+    if (due) parts.push(due + " due");
+    if (blocked) parts.push(blocked + " blocked");
+    if (next) parts.push("next wakes " + next);
+    parts.push("not counted in TODAY");
+    const todayCount = Number.isInteger(value.today_count) && value.today_count >= 0
+      ? value.today_count
+      : null;
+    if (todayCount !== null) {
+      parts.push(todayCount + "/" + (todayCount + eligibleWakeCount) + " when all wake");
+    }
+    return Object.freeze({
+      chip: true,
+      count,
+      due,
+      blocked,
+      eligibleWakeCount,
+      forecast,
+      lint: forecast.over ? "snooze_wake_would_exceed_cap" : null,
+      text,
+      tone: due > 0 ? "amber" : "indigo",
+      tooltip: parts.join(" · "),
+    });
+  } catch (error) {
+    return Object.freeze({
+      chip: false,
+      forecast: Object.freeze({ cap: null, count: 0, over: false }),
+      lint: null,
+      text: null,
+      tone: null,
+      tooltip: null,
+    });
+  }
+}
 // ---- src/144-relation-line-grammar.js ----
 // Task relation rows are inert metadata, never Pomodoro Task Links or plan
 // budget items. Recognize empty and malformed shapes too, so their wikilinks
@@ -170352,6 +170496,63 @@ class BobLedgerToolsSnoozeMarksJumpMixin {
       this.snoozeJumpInFlight = false;
     }
   }
+
+  // Plan-chip navigation uses the same exact daily-note line jump as
+  // definition and woken-link marks. Resolve the structural H2 again in
+  // the open editor so stale cached positions never land on another row.
+  async jumpToSnoozedSection(dailyPath) {
+    if (this.snoozeJumpInFlight) return false;
+    this.snoozeJumpInFlight = true;
+    try {
+      let clock = null;
+      try {
+        clock = this.snoozeMarksNow();
+      } catch (error) {
+        clock = new Date();
+      }
+      if (!(clock instanceof Date)) clock = new Date();
+      const todayPath =
+        typeof this.currentTodayDailyPath === "function"
+          ? this.currentTodayDailyPath(clock)
+          : null;
+      const cache = this.snoozedCache;
+      if (
+        typeof dailyPath !== "string" ||
+        !dailyPath ||
+        !todayPath ||
+        !sameVaultPath(dailyPath, todayPath) ||
+        !cache ||
+        !sameVaultPath(cache.dailyPath || "", dailyPath) ||
+        typeof this.isSnoozedCacheReady !== "function" ||
+        !this.isSnoozedCacheReady(clock)
+      ) {
+        return false;
+      }
+      return await this.jumpToDailyNoteLine(dailyPath, 0, 0, {
+        vanished: "Today's Snoozed section is no longer in the note",
+        findLine: (content) => {
+          try {
+            const section = snoozeModel.parseSection(content);
+            if (
+              !section ||
+              !Number.isInteger(section.headerLine) ||
+              (Array.isArray(section.duplicateHeaders) &&
+                section.duplicateHeaders.length > 0)
+            ) {
+              return null;
+            }
+            return section.headerLine;
+          } catch (error) {
+            return null;
+          }
+        },
+      });
+    } catch (error) {
+      return false;
+    } finally {
+      this.snoozeJumpInFlight = false;
+    }
+  }
 }
 // ---- src/278a-plugin-snooze-row-paint.js ----
 // Snoozed row paint in Live Preview (snoozed-row-paint phase).
@@ -177411,7 +177612,7 @@ class BobLedgerToolsTodayLocationMixin {
           planGate = null;
           planReview = null;
         }
-        const isOffClockLink = typeof this.planBudgetOffClockPredicate === "function" && typeof content === "string" ? this.planBudgetOffClockPredicate(sourcePath, content) : undefined;
+        const snoozedPlan = this.snoozedPlanDataForRender(tasks, content, targetPath, paintDay);
         const model = planBlockModel({
           content,
           tasks,
@@ -177428,7 +177629,7 @@ class BobLedgerToolsTodayLocationMixin {
           themeConfigured: (key) => this.pomodoroThemeIsConfigured(key),
           themeSimilarTo: (name) => this.pomodoroThemeSimilarTo(name),
           taskLineForBlock: (path, blockId) => this.pomodoroHomeChipTaskLineForBlock(path, blockId),
-          isOffClockLink,
+          ...snoozedPlan,
         });
         const container = el.createDiv({ cls: "bob-plan" });
         try {
@@ -177455,6 +177656,7 @@ class BobLedgerToolsTodayLocationMixin {
           title: model.planTitle,
         });
         planChip.setAttribute("aria-label", `TODAY: ${model.planTitle}`);
+        this.paintSnoozedPlanChip(container, model.snoozedMeter, model.targetPath);
         const paintSource =
           typeof sourcePath === "string" ? sourcePath : "";
         try {
@@ -177873,7 +178075,6 @@ class BobLedgerToolsTodayLocationMixin {
     this.dailyLocationRestoreToken =
       Math.floor(numericOrDefault(this.dailyLocationRestoreToken, 0)) + 1;
   }
-
 }
 // ---- src/290a-snoozed-today-cache.js ----
 // --- Snoozed Today cache (planned-today) -----------------------------------
@@ -178500,12 +178701,12 @@ class BobLedgerToolsSnoozedTodayMixin {
       previousMinutes !== built.clockSnapshot.nowMinutes;
     if (changed || detailsChanged || dateOrPathChanged || minutesChanged) {
       try {
+        this.schedulePlanBlockRerender();
         const workspace = this.app && this.app.workspace;
         if (plannedChanged || becameReady) {
           if (workspace && typeof workspace.trigger === "function") {
             workspace.trigger(TODAY_RELOAD_EVENT);
           }
-          this.schedulePlanBlockRerender();
           this.scheduleFreshnessStatusBar();
           this.scheduleFreshnessMarksRefresh();
           if (typeof this.scheduleLiveWidgetRefresh === "function") {
@@ -178972,6 +179173,95 @@ class BobLedgerToolsSnoozeWakerMixin {
   }
 }
 
+// ---- src/290c-snoozed-plan-chip.js ----
+class BobLedgerToolsSnoozedPlanChipMixin {
+  snoozedPlanDataForRender(tasks, content, dailyPath, now) {
+    const neutral = {
+      isOffClockLink: undefined,
+      snoozedAvailable: false,
+      snoozedQueue: null,
+      snoozedTodayCount: null,
+    };
+    try {
+      const isOffClockLink =
+        typeof this.planBudgetOffClockPredicate === "function" &&
+        typeof content === "string"
+          ? this.planBudgetOffClockPredicate(dailyPath, content)
+          : undefined;
+      const cache = this.snoozedCache;
+      const cacheReady =
+        Array.isArray(tasks) &&
+        typeof content === "string" &&
+        typeof this.isSnoozedCacheReady === "function" &&
+        this.isSnoozedCacheReady(now) &&
+        cache &&
+        sameVaultPath(cache.dailyPath || "", dailyPath);
+      const todayReady =
+        typeof this.isTodayCacheReady === "function" &&
+        this.isTodayCacheReady(now);
+      if (!cacheReady || !todayReady) return neutral;
+      const todayKeys =
+        this.todayCache && Array.isArray(this.todayCache.keys)
+          ? this.todayCache.keys
+          : [];
+      const rows = cache && Array.isArray(cache.rows) ? cache.rows : [];
+      const queue = rows.map((row) => ({
+        id: row && (row.key || row.identity),
+        state: row && row.state,
+        target: row && row.hhmm,
+        minutes: row && row.minutes,
+        on_clock:
+          !!row &&
+          row.state !== "blocked" &&
+          typeof isOffClockLink === "function" &&
+          !isOffClockLink(row.route, row.blockId),
+      }));
+      return {
+        isOffClockLink,
+        snoozedAvailable: true,
+        snoozedQueue: queue,
+        snoozedTodayCount: todayKeys.length,
+      };
+    } catch (error) {
+      return neutral;
+    }
+  }
+
+  paintSnoozedPlanChip(container, meter, dailyPath) {
+    try {
+      if (!container || !meter || meter.chip !== true) return null;
+      const due = meter.tone === "amber";
+      const cls =
+        "bob-plan-chip bob-plan-snoozed" +
+        (due ? " bob-plan-snoozed-due" : "");
+      const chip = container.createEl("a", {
+        cls,
+        text: typeof meter.text === "string" ? meter.text : "⏰",
+      });
+      chip.setAttribute("href", "#");
+      chip.setAttribute("title", meter.tooltip || "Snoozed tasks");
+      chip.setAttribute("aria-label", meter.tooltip || "Snoozed tasks");
+      chip.addEventListener("click", (event) => {
+        try {
+          if (event && typeof event.preventDefault === "function") {
+            event.preventDefault();
+          }
+          if (event && typeof event.stopPropagation === "function") {
+            event.stopPropagation();
+          }
+          if (typeof this.jumpToSnoozedSection === "function") {
+            void this.jumpToSnoozedSection(dailyPath);
+          }
+        } catch (error) {
+          // The meter stays readable if a workspace is closing.
+        }
+      });
+      return chip;
+    } catch (error) {
+      return null;
+    }
+  }
+}
 // ---- src/291-plugin-gcal-events.js ----
 // Google Calendar Event Tasks: create-triggered sync plus read-time painting.
 // Bob owns the write; this plugin only starts `bob gcal sync` after Templater
@@ -208569,6 +208859,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsCommandModeRefreshMixin,
   BobLedgerToolsKeepInboxMixin,
   BobLedgerToolsTodayLocationMixin,
+  BobLedgerToolsSnoozedPlanChipMixin,
   BobLedgerToolsSnoozedTodayMixin,
   BobLedgerToolsTodayMarksMixin,
   BobLedgerToolsTodayMarksReadingMixin,
@@ -210391,6 +210682,9 @@ function planBlockModel({
   app,
   isToday,
   isSnoozed,
+  snoozedQueue,
+  snoozedAvailable,
+  snoozedTodayCount,
   isReviewBucket,
   review,
   nextDashboard,
@@ -210531,6 +210825,13 @@ function planBlockModel({
   }
   const offClockCount = budget && budget.links && budget.links.offClock > 0 ? budget.links.offClock : 0;
   const planTitleText = [themeCounts.join(" · ") || null, offClockCount > 0 ? `${offClockCount} off-clock uncapped` : null].filter(Boolean).join(" · ");
+  const snoozedMeter = snoozePlanMeterModel({
+    available: snoozedAvailable,
+    queue: snoozedQueue,
+    today_count: snoozedTodayCount,
+    links_count: budget.links ? budget.links.count : 0,
+    cap: budget.links ? budget.links.cap : effective.maxPlan,
+  });
   return {
     targetPath,
     hasContent: typeof content === "string",
@@ -210539,6 +210840,7 @@ function planBlockModel({
       ? `TODAY ${budget.links.count}/${budget.links.cap}`
       : "TODAY –",
     todayTone,
+    snoozedMeter,
     planTitle: budget.hasSection
       ? planTitleText || "no themes"
       : "no Pomodoros section",
@@ -213964,3 +214266,10 @@ Object.assign(module.exports.helpers, {
   buildSnoozeHeadingChipElement,
   snoozeRowPaintPresentation,
 });
+// ---- src/386-snooze-plan-meter-exports.js ----
+Object.assign(module.exports.helpers, {
+  snoozePlanMeterTargetMinutes,
+  snoozePlanMeterColonTime,
+  snoozePlanMeterModel,
+});
+module.exports = BobLedgerToolsPlugin;

@@ -425,4 +425,61 @@ class BobLedgerToolsSnoozeMarksJumpMixin {
       this.snoozeJumpInFlight = false;
     }
   }
+
+  // Plan-chip navigation uses the same exact daily-note line jump as
+  // definition and woken-link marks. Resolve the structural H2 again in
+  // the open editor so stale cached positions never land on another row.
+  async jumpToSnoozedSection(dailyPath) {
+    if (this.snoozeJumpInFlight) return false;
+    this.snoozeJumpInFlight = true;
+    try {
+      let clock = null;
+      try {
+        clock = this.snoozeMarksNow();
+      } catch (error) {
+        clock = new Date();
+      }
+      if (!(clock instanceof Date)) clock = new Date();
+      const todayPath =
+        typeof this.currentTodayDailyPath === "function"
+          ? this.currentTodayDailyPath(clock)
+          : null;
+      const cache = this.snoozedCache;
+      if (
+        typeof dailyPath !== "string" ||
+        !dailyPath ||
+        !todayPath ||
+        !sameVaultPath(dailyPath, todayPath) ||
+        !cache ||
+        !sameVaultPath(cache.dailyPath || "", dailyPath) ||
+        typeof this.isSnoozedCacheReady !== "function" ||
+        !this.isSnoozedCacheReady(clock)
+      ) {
+        return false;
+      }
+      return await this.jumpToDailyNoteLine(dailyPath, 0, 0, {
+        vanished: "Today's Snoozed section is no longer in the note",
+        findLine: (content) => {
+          try {
+            const section = snoozeModel.parseSection(content);
+            if (
+              !section ||
+              !Number.isInteger(section.headerLine) ||
+              (Array.isArray(section.duplicateHeaders) &&
+                section.duplicateHeaders.length > 0)
+            ) {
+              return null;
+            }
+            return section.headerLine;
+          } catch (error) {
+            return null;
+          }
+        },
+      });
+    } catch (error) {
+      return false;
+    } finally {
+      this.snoozeJumpInFlight = false;
+    }
+  }
 }

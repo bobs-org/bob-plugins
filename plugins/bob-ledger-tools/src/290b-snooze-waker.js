@@ -72,10 +72,18 @@ class BobLedgerToolsSnoozeWakerMixin {
   }
 
   snoozeWakeSpawn(args = ["snooze", "wake", "-q", "-f", "json"]) {
+    const vaultPath = typeof this.statsVaultBasePath === "function" ? this.statsVaultBasePath() : null;
+    if (!vaultPath) {
+      return Promise.resolve({
+        ok: false,
+        code: "no-vault",
+        message: "bob snooze wake needs the open vault's path.",
+      });
+    }
     return bobSpawnJson(args, snoozeWakeDecodeReport, {
       commandLabel: "bob snooze wake",
       resolveBobPath: () => typeof this.apiStatsBobPath === "function" ? this.apiStatsBobPath() : { path: "bob", source: "path" },
-      getVaultPath: () => typeof this.statsVaultBasePath === "function" ? this.statsVaultBasePath() : null,
+      vaultPath,
       timeout: SNOOZE_WAKE_TIMEOUT_MS,
       maxBuffer: 4 * 1024 * 1024,
       firstLine: statsFirstLine,

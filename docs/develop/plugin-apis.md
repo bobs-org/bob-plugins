@@ -79,7 +79,8 @@ current daily-note cache, `plannedKeys()` returns canonical identity keys,
 `nextWakeAt()` returns the earliest live Asleep/Due RFC 3339 instant or
 `null`, and `ready(now?)` reports cache readiness. These methods never write
 notes. On desktop, Ledger Tools asks `bob snooze wake -q -f json` once per
-eligible minute; Bob alone performs the wake mutation.
+eligible minute when the open vault's path is known; without that path it
+does not spawn. Bob alone performs the wake mutation.
 A successful wake into an unnamed Pomodoro still shows the single-task Ready
 now Notice, with the destination-name segment omitted.
 

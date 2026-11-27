@@ -1,6 +1,7 @@
 // Tests for the nav-stage vault-wide Depends on stage (bob-cli-3n.7).
 // `docs/task-dependencies.md` §6 and §11.4 (DK ranking vectors) in bob-cli
 // are authoritative; the DK vectors are copied from that section.
+require("./hermetic-bob-env.cjs");
 const Module = require("node:module");
 
 const notices = [];

@@ -1,6 +1,7 @@
 // nav-gestures review auto-advance: Alt+N and Task Card commits advance
 // from a landing; Ctrl+Shift+M never advances and parks the walk
 // (docs/freshness.md §6).
+require("./hermetic-bob-env.cjs");
 const assert = require("node:assert/strict");
 const Module = require("node:module");
 

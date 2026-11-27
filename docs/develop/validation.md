@@ -28,6 +28,15 @@ parallel allocation-heavy siblings. It also runs focused tests for plugin
 behavior, source builds, API boundaries, and navigation and picker
 workflows.
 
+Unit and perf processes load `scripts/hermetic-bob-env.cjs` first
+(`node --test --require`, and every plugin-booting `scripts/*harness*.cjs`).
+On load it overwrites `BOB_DIR` with a sentinel path that never exists
+(`/definitely/missing/bob-plugins-test-vault`), points `XDG_STATE_HOME` and
+`BOB_VAULT_SYNC_LOCK_FILE` at a writable directory under `os.tmpdir()`, and
+sets `BOB_VAULT_SYNC_NOTIFY=0`. A test that needs a vault sets `BOB_DIR`,
+`-b`, or the adapter `basePath` to its fixture after that. Electron e2e
+launchers (`scripts/obsidian-*-e2e.cjs`) keep their own explicit env.
+
 `npm run validate` exits non-zero if any plugin's bundle, inventory, or
 manifest validation fails, so it is safe to use in CI or a pre-commit
 hook. It checks bundle and inventory drift, then runs

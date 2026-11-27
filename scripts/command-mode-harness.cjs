@@ -1,6 +1,7 @@
 // Fake Obsidian runtime for bob-command-mode tests. Reuses modal-harness DOM
 // stubs and adds the Plugin/app surface the run engine needs: loadData,
 // saveData, addCommand, settings tabs, workspace leaves/events, and the vault.
+require("./hermetic-bob-env.cjs");
 const assert = require("node:assert/strict");
 const Module = require("node:module");
 const os = require("node:os");

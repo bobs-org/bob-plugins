@@ -3,6 +3,7 @@
 // definition; the P-vectors below encode the "Placement conformance
 // examples" (§9) and the S-vectors the "State conformance examples"
 // (§10) verbatim, with D = `2026-10-08` and today `2026-10-08`.
+require("./hermetic-bob-env.cjs");
 const assert = require("node:assert/strict");
 const Module = require("node:module");
 

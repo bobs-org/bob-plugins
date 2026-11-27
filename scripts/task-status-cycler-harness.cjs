@@ -1,3 +1,4 @@
+require("./hermetic-bob-env.cjs");
 const assert = require("node:assert/strict");
 const Module = require("node:module");
 const test = require("node:test");

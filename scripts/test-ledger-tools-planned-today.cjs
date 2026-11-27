@@ -7,6 +7,7 @@
 // unstamped task, and today's Snoozed row targets 15:30.
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 const {
@@ -792,6 +793,11 @@ test("snooze wake report decoder validates the whole public envelope", () => {
     ok: true,
     report: wakeReport(now, { woken: [row] }),
   });
+  const skipped = { ...wakeReport(now, { status: "skipped" }), skip_reason: "zone_unconfigured" };
+  assert.deepEqual(helpers.snoozeWakeDecodeReport(JSON.stringify(skipped), ""), {
+    ok: true,
+    report: skipped,
+  });
   for (const corrupt of [
     { schema_version: 2 },
     { status: "woke", woken: [null] },
@@ -953,4 +959,54 @@ test("minute waker waits for a live due row and cannot overlap a slow spawn", as
   assert.equal(calls, 1, "an in-flight spawn is not overlapped");
   release({ ok: true, report: wakeReport(now) });
   await first;
+});
+
+test("minute waker never launches bob without the open vault's path", async () => {
+  const childProcess = require("child_process");
+  const originalExecFile = childProcess.execFile;
+  const calls = [];
+  childProcess.execFile = (...args) => {
+    calls.push(args);
+    throw new Error("execFile must not run without a vault path");
+  };
+  try {
+    const now = new Date(2026, 10, 17, 15, 31);
+    const plugin = wakerAt(now, wakeReport(now));
+    delete plugin.snoozeWakeSpawn;
+    plugin.app = { vault: {} };
+    assert.equal(await plugin.snoozeWakeTick(now), false);
+    assert.equal(plugin.snoozeWakeDisabled, false, "no-vault stays transient");
+    const spawned = await plugin.snoozeWakeSpawn();
+    assert.equal(spawned.ok, false);
+    assert.equal(spawned.code, "no-vault");
+    assert.equal(calls.length, 0);
+  } finally {
+    childProcess.execFile = originalExecFile;
+  }
+});
+
+test("minute waker launches bob with BOB_DIR set to the vault base path", async () => {
+  const childProcess = require("child_process");
+  const originalExecFile = childProcess.execFile;
+  const calls = [];
+  const now = new Date(2026, 10, 17, 15, 31);
+  const canned = JSON.stringify(wakeReport(now, { status: "nothing_due" }));
+  childProcess.execFile = (_file, args, options, callback) => {
+    calls.push({ args, env: options.env });
+    queueMicrotask(() => callback(null, canned, ""));
+    return { stdin: { write() {}, end() {}, on() {} } };
+  };
+  const basePath = fs.mkdtempSync(path.join(os.tmpdir(), "bob-plugins-waker-vault-"));
+  try {
+    const plugin = wakerAt(now, wakeReport(now));
+    delete plugin.snoozeWakeSpawn;
+    plugin.app = { vault: { adapter: { basePath } } };
+    assert.equal(await plugin.snoozeWakeTick(now), true);
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0].args, ["snooze", "wake", "-q", "-f", "json"]);
+    assert.equal(calls[0].env.BOB_DIR, basePath);
+  } finally {
+    childProcess.execFile = originalExecFile;
+    fs.rmSync(basePath, { recursive: true, force: true });
+  }
 });

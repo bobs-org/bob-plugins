@@ -22579,10 +22579,10 @@ function buildSectionMapModel(lines, options = {}) {
     chips,
   );
   const current = currentIndex >= 0 ? headings[currentIndex] : null;
-  const next = nextTargetLine === null
+  const next = headings.length <= 1 || nextTargetLine === null
     ? null
     : headings.find((heading) => heading.line === nextTargetLine) || null;
-  const previous = previousTargetLine === null
+  const previous = headings.length <= 1 || previousTargetLine === null
     ? null
     : headings.find((heading) => heading.line === previousTargetLine) || null;
   const model = {

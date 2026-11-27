@@ -18,11 +18,16 @@ function cmSheetSetIcon(el, name, fallback) {
 }
 
 // Same rule as bob-articles' articleHasArticleType (020-article-core.js):
-// the frontmatter type names "article", alone or in a list.
+// the frontmatter type names "prose" or its legacy spelling "article",
+// alone or in a list.
+// Marker searched by the prose-vault phase: bob-prose-type-v1
 function cmSheetArticleType(type) {
   const values = Array.isArray(type) ? type : [type];
-  return values.some((value) => String(value || "").trim()
-    .replace(/^\[\[/, "").replace(/\]\]$/, "").trim().toLowerCase() === "article");
+  return values.some((value) => {
+    const name = String(value || "").trim()
+      .replace(/^\[\[/, "").replace(/\]\]$/, "").trim().toLowerCase();
+    return name === "prose" || name === "article";
+  });
 }
 
 function cmSheetCaptureContext(app) {

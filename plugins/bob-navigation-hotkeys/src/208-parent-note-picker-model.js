@@ -19,7 +19,9 @@ const PARENT_WORD_SEPARATORS = " _-./";
 // classification: area, project, notebook, ref, album, then `[[record]]` and
 // any other typed note except the reserved non-record types, which are
 // record notes.
+// Marker searched by the prose-vault phase: bob-prose-type-v1
 const PARENT_RULE_NON_RECORD_TYPES = new Set([
+  "prose",
   "article",
   "mail",
   "day",

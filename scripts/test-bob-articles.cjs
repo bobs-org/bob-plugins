@@ -138,6 +138,16 @@ test("article detection accepts scalar and list frontmatter values", () => {
   assert.equal(helpers.articleHasArticleType({ type: "[[project]]" }), false);
 });
 
+test("prose detection accepts the canonical and legacy spellings, scalar, list, or mixed", () => {
+  assert.equal(helpers.articleHasArticleType({ type: "[[prose]]" }), true);
+  assert.equal(helpers.articleHasArticleType({ type: " [[Prose]] " }), true);
+  assert.equal(helpers.articleHasArticleType({ type: ["[[prose]]"] }), true);
+  assert.equal(helpers.articleHasArticleType({ type: ["[[prose]]", "[[article]]"] }), true);
+  assert.equal(helpers.articleHasArticleType({ type: "prosey" }), false);
+  assert.equal(helpers.articleHasArticleType({}), false);
+  assert.deepEqual([...helpers.ARTICLE_PROSE_TYPE_NAMES], ["prose", "article"]);
+});
+
 test("bob resolution prefers its setting, then known install paths, then PATH", () => {
   assert.deepEqual(helpers.articleResolveBobPath("~/bin/bob", { home: "/home/b" }), {
     path: "/home/b/bin/bob",
@@ -160,7 +170,121 @@ test("plan decoder accepts v1 and rejects a foreign schema version", () => {
   assert.equal(helpers.articleDecodePlan(JSON.stringify({ schema_version: 1, notes: [] })).code, "bad-shape");
 });
 
-test("bob stdin spawn passes the article contract and vault environment", async () => {
+test("plan argv calls the canonical bob prose path", () => {
+  assert.deepEqual(helpers.articlePlanArgs("format", "a.md"), ["prose", "format", "--stdin", "a.md", "-f", "json"]);
+  assert.deepEqual(helpers.articlePlanArgs("adopt", "a.md"), ["prose", "adopt", "--stdin", "a.md", "-f", "json"]);
+  assert.deepEqual(
+    helpers.articlePlanArgs("format", "a.md", { sectionNumbers: "off" }),
+    ["prose", "format", "--stdin", "a.md", "--section-numbers", "off", "-f", "json"],
+  );
+  assert.deepEqual(
+    helpers.articlePlanArgs("format", "a.md", { sectionNumbers: "on" }),
+    ["prose", "format", "--stdin", "a.md", "--section-numbers", "on", "-f", "json"],
+  );
+  assert.deepEqual(helpers.articlePlanArgs("format", "a.md", { sectionNumbers: "maybe" }),
+    ["prose", "format", "--stdin", "a.md", "-f", "json"]);
+});
+
+test("toggle state turns numbering on only from an explicit false", () => {
+  assert.equal(helpers.articleSectionNumbersToggleState({ section_numbers: false }), "on");
+  assert.equal(helpers.articleSectionNumbersToggleState({ section_numbers: "false" }), "on");
+  assert.equal(helpers.articleSectionNumbersToggleState({ section_numbers: true }), "off");
+  assert.equal(helpers.articleSectionNumbersToggleState({ section_numbers: "sometimes" }), "off");
+  assert.equal(helpers.articleSectionNumbersToggleState({ type: "[[prose]]" }), "off");
+  assert.equal(helpers.articleSectionNumbersToggleState(null), "off");
+});
+
+function toggleFixture(frontmatter, runPlan) {
+  let value = "---\ntype: \"[[prose]]\"\n---\n## 1. Draft\n";
+  const dispatched = [];
+  const notices = [];
+  const calls = [];
+  let saves = 0;
+  const file = { path: "blog.md" };
+  const editor = {
+    getValue: () => value,
+    cm: {
+      dispatch(spec) {
+        dispatched.push(spec);
+        value = helpers.articleApplyChangesToText(value, spec.changes);
+      },
+    },
+  };
+  const app = {
+    metadataCache: { getFileCache: () => ({ frontmatter }) },
+    vault: {},
+    workspace: {},
+  };
+  const plugin = new BobArticlesPlugin(app, {});
+  plugin.settings = { formatOnSave: true };
+  plugin.articleUndoBlocked = new Set();
+  plugin.articleFormatHistory = new Map();
+  plugin.articleRunPlan = async (...args) => {
+    calls.push(args);
+    return runPlan(args);
+  };
+  plugin.articleApplyInbound = async () => {};
+  plugin.articleShowNotice = (message) => notices.push(message);
+  const view = { file, editor, save: async () => { saves += 1; } };
+  return { plugin, view, calls, dispatched, notices, saves: () => saves, value: () => value };
+}
+
+test("Toggle section numbers turns numbering off and applies bob's plan as one transaction", async () => {
+  const fixture = toggleFixture({ type: "[[prose]]" }, () => ({
+    ok: true,
+    plan: articlePlan({
+      notice: "Prose note formatted · section numbers off",
+      edits: [
+        { line: 2, delete: 1, insert: ["type: \"[[prose]]\"", "section_numbers: false"] },
+        { line: 4, delete: 1, insert: ["## Draft"] },
+      ],
+    }).notes[0],
+  }));
+  assert.equal(await fixture.plugin.articleToggleSectionNumbers(fixture.view), true);
+  assert.deepEqual(fixture.calls.map((call) => [call[0], call[1], call[3]]), [
+    ["format", "blog.md", { sectionNumbers: "off" }],
+  ]);
+  assert.equal(fixture.dispatched.length, 1);
+  assert.equal(fixture.value(), "---\ntype: \"[[prose]]\"\nsection_numbers: false\n---\n## Draft\n");
+  assert.deepEqual(fixture.notices, ["Prose note formatted · section numbers off"]);
+  assert.equal(fixture.saves(), 1);
+});
+
+test("Toggle section numbers turns numbering on from section_numbers false, even after an undo", async () => {
+  const fixture = toggleFixture({ type: ["[[article]]"], section_numbers: false }, () => ({
+    ok: true,
+    plan: articlePlan({ status: "unchanged", edits: [] }).notes[0],
+  }));
+  fixture.plugin.articleUndoBlocked.add("blog.md");
+  await fixture.plugin.articleToggleSectionNumbers(fixture.view);
+  assert.deepEqual(fixture.calls.map((call) => call[3]), [{ sectionNumbers: "on" }]);
+  assert.equal(fixture.dispatched.length, 0);
+});
+
+test("Toggle section numbers shows bob's error and changes nothing when bob rejects the flag", async () => {
+  const fixture = toggleFixture({ type: "[[prose]]" }, () => ({
+    ok: false,
+    code: "bad-json",
+    message: "bob returned invalid JSON.",
+    detail: "error: unexpected argument '--section-numbers' found",
+  }));
+  const before = fixture.value();
+  await fixture.plugin.articleToggleSectionNumbers(fixture.view);
+  assert.equal(fixture.dispatched.length, 0);
+  assert.equal(fixture.value(), before);
+  assert.deepEqual(fixture.notices, ["error: unexpected argument '--section-numbers' found"]);
+  assert.notEqual(fixture.plugin.articleBobErrorNoticed, true);
+});
+
+test("Toggle section numbers is offered only on prose notes", async () => {
+  const fixture = toggleFixture({ type: "[[project]]" }, () => {
+    throw new Error("bob must not run");
+  });
+  assert.equal(await fixture.plugin.articleToggleSectionNumbers(fixture.view), false);
+  assert.equal(fixture.calls.length, 0);
+});
+
+test("bob stdin spawn passes the prose contract and vault environment", async () => {
   const child = new EventEmitter();
   child.stdin = { end: (value) => { child.input = value; } };
   child.stdout = new EventEmitter();
@@ -168,7 +292,7 @@ test("bob stdin spawn passes the article contract and vault environment", async 
   const seen = {};
   const promise = helpers.articleSpawnBob(
     "/home/b/.local/bin/bob",
-    ["articles", "format", "--stdin", "folder/article.md", "-f", "json"],
+    helpers.articlePlanArgs("format", "folder/article.md"),
     "article buffer",
     "/vault",
     {
@@ -191,7 +315,7 @@ test("bob stdin spawn passes the article contract and vault environment", async 
   assert.equal(result.ok, true);
   assert.equal(child.input, "article buffer");
   assert.equal(seen.binary, "/home/b/.local/bin/bob");
-  assert.deepEqual(seen.args, ["articles", "format", "--stdin", "folder/article.md", "-f", "json"]);
+  assert.deepEqual(seen.args, ["prose", "format", "--stdin", "folder/article.md", "-f", "json"]);
   assert.equal(seen.options.env.BOB_DIR, "/vault");
   assert.equal(seen.options.env.NO_COLOR, "1");
   assert.deepEqual(seen.options.stdio, ["pipe", "pipe", "pipe"]);

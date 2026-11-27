@@ -109,11 +109,34 @@ function articleNormalizeType(value) {
   return value.trim().replace(/^\[\[/, "").replace(/\]\]$/, "").trim().toLowerCase();
 }
 
+// Marker searched by the prose-vault phase: bob-prose-type-v1
+// A prose note's type is `[[prose]]`; `[[article]]` is its permanent legacy
+// spelling. Both name the same type, alone or in a list.
+const ARTICLE_PROSE_TYPE_NAMES = Object.freeze(["prose", "article"]);
+
 function articleHasArticleType(frontmatter) {
   if (!frontmatter || typeof frontmatter !== "object") return false;
   const type = frontmatter.type;
   const values = Array.isArray(type) ? type : [type];
-  return values.some((value) => articleNormalizeType(value) === "article");
+  return values.some((value) => ARTICLE_PROSE_TYPE_NAMES.includes(articleNormalizeType(value)));
+}
+
+// Toggle section numbers turns numbering on only when the note says
+// `section_numbers: false`; any other value (absent, true, or malformed)
+// means numbering is on today, so the toggle turns it off.
+function articleSectionNumbersToggleState(frontmatter) {
+  const value = frontmatter && typeof frontmatter === "object" ? frontmatter.section_numbers : undefined;
+  const off = value === false || (typeof value === "string" && value.trim().toLowerCase() === "false");
+  return off ? "on" : "off";
+}
+
+function articlePlanArgs(action, path, options = {}) {
+  const args = ["prose", action, "--stdin", path];
+  if (options.sectionNumbers === "on" || options.sectionNumbers === "off") {
+    args.push("--section-numbers", options.sectionNumbers);
+  }
+  args.push("-f", "json");
+  return args;
 }
 
 function articleDecodePlan(stdout) {
@@ -285,13 +308,13 @@ function articleApplyChangesToText(text, changes) {
 }
 
 function articleNoticeText(plan) {
-  const head = typeof plan.notice === "string" ? plan.notice : "Article formatted";
+  const head = typeof plan.notice === "string" ? plan.notice : "Prose note formatted";
   const warnings = plan.findings.filter((finding) => {
     const severity = String(finding && finding.severity || "").toLowerCase();
     return severity === "warning" || severity === "warn";
   });
   if (warnings.length === 0) return head;
-  const shown = warnings.slice(0, 2).map((finding) => finding.message || finding.code || "Article finding");
+  const shown = warnings.slice(0, 2).map((finding) => finding.message || finding.code || "Prose note finding");
   if (warnings.length > shown.length) shown.push(`+${warnings.length - shown.length} more`);
   return `${head}\n${shown.join(" · ")}`;
 }
@@ -605,7 +628,7 @@ class BobArticlesPlugin extends Plugin {
     this.addSettingTab(new BobArticlesSettingTab(this.app, this));
     this.addCommand({
       id: "format-article",
-      name: "Format article",
+      name: "Format prose note",
       checkCallback: (checking) => {
         const view = this.articleActiveMarkdownView();
         if (!view || !articleHasArticleType(this.articleFrontmatter(view.file))) return false;
@@ -615,8 +638,19 @@ class BobArticlesPlugin extends Plugin {
       },
     });
     this.addCommand({
+      id: "toggle-section-numbers",
+      name: "Toggle section numbers",
+      checkCallback: (checking) => {
+        const view = this.articleActiveMarkdownView();
+        if (!view || !articleHasArticleType(this.articleFrontmatter(view.file))) return false;
+        if (checking) return true;
+        void this.articleToggleSectionNumbers(view);
+        return true;
+      },
+    });
+    this.addCommand({
       id: "convert-to-article",
-      name: "Convert note to article…",
+      name: "Convert note to prose note…",
       checkCallback: (checking) => {
         const view = this.articleActiveMarkdownView();
         if (!view || articleHasArticleType(this.articleFrontmatter(view.file))) return false;
@@ -740,7 +774,7 @@ class BobArticlesPlugin extends Plugin {
       try {
         if (view && this.settings.formatOnSave) await this.articleFormatView(view);
       } catch (error) {
-        console.warn("Bob Articles could not format before save", error);
+        console.warn("Bob Prose could not format before save", error);
       }
       return original.apply(command, args);
     };
@@ -775,28 +809,44 @@ class BobArticlesPlugin extends Plugin {
   }
 
   async articleFormatActive(view, options = {}) {
-    await this.articleFormatView(view);
+    await this.articleFormatView(view, options);
     if (options.save && view && typeof view.save === "function") {
-      try { await view.save(); } catch (error) { console.warn("Bob Articles could not save the formatted note", error); }
+      try { await view.save(); } catch (error) { console.warn("Bob Prose could not save the formatted note", error); }
     }
   }
 
-  async articleFormatView(view) {
+  // Toggle section numbers: read the note's current `section_numbers` from
+  // the metadata cache and ask bob to flip it and format in one plan, applied
+  // as one undoable transaction exactly like Format prose note.
+  async articleToggleSectionNumbers(view) {
+    if (!view || !view.file || !view.editor) return false;
+    const frontmatter = this.articleFrontmatter(view.file);
+    if (!articleHasArticleType(frontmatter)) return false;
+    const sectionNumbers = articleSectionNumbersToggleState(frontmatter);
+    await this.articleFormatActive(view, { save: true, sectionNumbers });
+    return true;
+  }
+
+  async articleFormatView(view, options = {}) {
     if (!view || !view.file || !view.editor) return false;
     if (!articleHasArticleType(this.articleFrontmatter(view.file))) return false;
     const path = view.file.path;
-    if (this.articleUndoBlocked.has(path)) return false;
+    const explicit = options.sectionNumbers === "on" || options.sectionNumbers === "off";
+    if (!explicit && this.articleUndoBlocked.has(path)) return false;
     const requestGeneration = this.articleBeginProseRequest(path);
     const sent = view.editor.getValue();
-    const result = await this.articleRunPlan("format", path, sent);
+    const result = explicit
+      ? await this.articleRunPlan("format", path, sent, { sectionNumbers: options.sectionNumbers })
+      : await this.articleRunPlan("format", path, sent);
     if (!result.ok) {
-      this.articleReportRunFailure(result);
+      if (explicit) this.articleShowNotice(result.detail || result.message || "bob could not toggle section numbers.");
+      else this.articleReportRunFailure(result);
       return false;
     }
     const plan = result.plan;
     if (plan.status === "skipped" || plan.status === "error") {
       this.articleRememberPlan(path, plan, { requestGeneration });
-      this.articleReportRefusal(path, plan);
+      this.articleReportRefusal(path, plan, { always: explicit });
       return false;
     }
     if (view.editor.getValue() !== sent) return false;
@@ -809,7 +859,7 @@ class BobArticlesPlugin extends Plugin {
         throw new Error("article edits do not reproduce bob's plan");
       }
     } catch (error) {
-      console.warn("Bob Articles received edits it could not apply", error);
+      console.warn("Bob Prose received edits it could not apply", error);
       return false;
     }
     if (formatted !== sent && !this.articleDispatchChanges(view, sent, formatted, changes)) return false;
@@ -823,7 +873,7 @@ class BobArticlesPlugin extends Plugin {
   articleDispatchChanges(view, before, formatted, changes) {
     const cm = view && view.editor && view.editor.cm;
     if (!cm || typeof cm.dispatch !== "function") {
-      console.warn("Bob Articles needs the CodeMirror editor to apply a format safely.");
+      console.warn("Bob Prose needs the CodeMirror editor to apply a format safely.");
       return false;
     }
     try {
@@ -834,7 +884,7 @@ class BobArticlesPlugin extends Plugin {
       cm.dispatch(spec);
       return view.editor.getValue() === formatted;
     } catch (error) {
-      console.warn("Bob Articles could not apply the format transaction", error);
+      console.warn("Bob Prose could not apply the format transaction", error);
       return false;
     }
   }
@@ -881,7 +931,7 @@ class BobArticlesPlugin extends Plugin {
     await this.articleApplyInbound(plan);
     if (plan.status === "changed") this.articleShowNotice(articleNoticeText(plan));
     if (typeof view.save === "function") {
-      try { await view.save(); } catch (error) { console.warn("Bob Articles could not save the adopted note", error); }
+      try { await view.save(); } catch (error) { console.warn("Bob Prose could not save the adopted note", error); }
     }
     return true;
   }
@@ -915,7 +965,7 @@ class BobArticlesPlugin extends Plugin {
           return changed ? lines.join("\n") : current;
         });
       } catch (error) {
-        console.warn(`Bob Articles could not update inbound links in ${path}`, error);
+        console.warn(`Bob Prose could not update inbound links in ${path}`, error);
       }
     }
   }
@@ -978,8 +1028,8 @@ class BobArticlesPlugin extends Plugin {
     }
   }
 
-  async articleRunPlan(action, path, text) {
-    const args = ["articles", action, "--stdin", path, "-f", "json"];
+  async articleRunPlan(action, path, text, options = {}) {
+    const args = articlePlanArgs(action, path, options);
     const resolved = articleResolveBobPath(this.settings && this.settings.bobPath);
     const adapter = this.app && this.app.vault && this.app.vault.adapter;
     let vaultPath = "";
@@ -999,7 +1049,7 @@ class BobArticlesPlugin extends Plugin {
     if (!always && reason.code === "not-article") return;
     if (!always && this.articleRefusalNotices.has(path)) return;
     if (!always) this.articleRefusalNotices.add(path);
-    this.articleShowNotice(reason.message || plan.notice || "bob skipped this article.");
+    this.articleShowNotice(reason.message || plan.notice || "bob skipped this prose note.");
   }
 
   articleReportRunFailure(result) {
@@ -1007,16 +1057,16 @@ class BobArticlesPlugin extends Plugin {
       if (this.articleBobErrorNoticed) return;
       this.articleBobErrorNoticed = true;
       const message = result.code === "bad-json"
-        ? "This version of bob does not support articles. Update bob to use Bob Articles."
+        ? "This version of bob does not support prose notes. Update bob to use Bob Prose."
         : result.message || (result.code === "timeout" ? "bob timed out." : "bob was not found.");
       this.articleShowNotice(message);
       return;
     }
-    console.warn("Bob Articles could not read the bob plan", result.message || result.code);
+    console.warn("Bob Prose could not read the bob plan", result.message || result.code);
   }
 
   articleShowNotice(message) {
-    try { new Notice(String(message || ""), 3500); } catch (error) { console.warn("Bob Articles notice failed", error); }
+    try { new Notice(String(message || ""), 3500); } catch (error) { console.warn("Bob Prose notice failed", error); }
   }
 }
 
@@ -1054,7 +1104,7 @@ function articleSpawnBob(binary, args, input, vaultPath, options = {}) {
     }
     timer = setTimeout(() => {
       try { child.kill(); } catch (error) { /* The timeout still wins. */ }
-      finish({ ok: false, code: "timeout", message: "bob articles timed out after 1.5 s." });
+      finish({ ok: false, code: "timeout", message: "bob prose timed out after 1.5 s." });
     }, options.timeout || ARTICLE_BOB_TIMEOUT_MS);
     child.stdout.on("data", (chunk) => {
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8");
@@ -1569,8 +1619,8 @@ class BobArticleAdoptModal extends Modal {
   onOpen() {
     const content = this.contentEl;
     content.empty();
-    content.createEl("h2", { text: "Convert note to article?" });
-    content.createEl("p", { text: this.plan.notice || "Adopted as an article" });
+    content.createEl("h2", { text: "Convert note to prose note?" });
+    content.createEl("p", { text: this.plan.notice || "Adopted as a prose note" });
 
     const diff = content.createEl("div", { cls: "bob-articles-adopt-diff" });
     for (const item of articleEditPreviewLines(this.sent, this.plan.edits)) {
@@ -1622,10 +1672,10 @@ class BobArticlesSettingTab extends PluginSettingTab {
   display() {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl("h2", { text: "Bob Articles" });
+    containerEl.createEl("h2", { text: "Bob Prose" });
     new Setting(containerEl)
       .setName("Format on save")
-      .setDesc("Ask bob to format an article before saving it.")
+      .setDesc("Ask bob to format a prose note before saving it.")
       .addToggle((toggle) => toggle
         .setValue(this.plugin.settings.formatOnSave)
         .onChange(async (value) => {
@@ -1634,7 +1684,7 @@ class BobArticlesSettingTab extends PluginSettingTab {
         }));
     new Setting(containerEl)
       .setName("Format when leaving the note")
-      .setDesc("Format the saved article after it stops being active.")
+      .setDesc("Format the saved prose note after it stops being active.")
       .addToggle((toggle) => toggle
         .setValue(this.plugin.settings.formatOnLeave)
         .onChange(async (value) => {
@@ -1642,7 +1692,7 @@ class BobArticlesSettingTab extends PluginSettingTab {
           await this.plugin.saveData(this.plugin.settings);
         }));
     new Setting(containerEl)
-      .setName("Article typeface")
+      .setName("Prose typeface")
       .setDesc("Serif body text with the theme's heading face, or keep the theme typeface.")
       .addDropdown((dropdown) => dropdown
         .addOption("serif", "Serif")
@@ -1688,6 +1738,9 @@ module.exports.helpers = {
   articleResolveBobPath,
   articleNormalizeType,
   articleHasArticleType,
+  articleSectionNumbersToggleState,
+  articlePlanArgs,
+  ARTICLE_PROSE_TYPE_NAMES,
   articleDecodePlan,
   articleSplitText,
   articleNormalizeEdits,

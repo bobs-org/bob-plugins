@@ -1,21 +1,28 @@
 ---
-title: "Bob Articles"
-description: "Format and adopt article notes with Bob Articles."
+title: "Bob Prose"
+description: "Format prose notes and toggle their section numbers with Bob Prose."
 ---
 
-Bob Articles formats reading notes and presents article metadata in Obsidian.
+Bob Prose keeps Bob prose notes formatted in Obsidian. A prose note is a note
+whose body is free-form authored Markdown typed `type: "[[prose]]"`; notes
+typed with the legacy `[[article]]` spelling count too. Bob Prose formats each
+note's layout and section numbers with `bob prose`, gives it a reading look,
+and previews adoption before converting a note.
+
+The plugin id stays `bob-articles`, and so do its command ids, settings keys,
+and the `.bob-article` CSS class, so hotkeys and settings carry over.
 
 <!-- BEGIN GENERATED: facts -->
 ## Plugin facts
 
 | Fact | Value |
 | --- | --- |
-| Name | Bob Articles |
+| Name | Bob Prose |
 | ID | `bob-articles` |
-| Version | 0.3.0 |
+| Version | 0.4.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
-| Description | Format Bob article notes with bob on save, when leaving, or on command, and preview article adoption. |
+| Description | Format Bob prose notes with bob on save, when leaving, or on command, toggle their section numbers, and preview prose-note adoption. |
 <!-- END GENERATED: facts -->
 
 <!-- BEGIN GENERATED: commands -->
@@ -23,38 +30,44 @@ Bob Articles formats reading notes and presents article metadata in Obsidian.
 
 | Command | Command ID | Default hotkey |
 | --- | --- | --- |
-| Convert note to article… | `convert-to-article` | — |
-| Format article | `format-article` | — |
+| Convert note to prose note… | `convert-to-article` | — |
+| Format prose note | `format-article` | — |
+| Toggle section numbers | `toggle-section-numbers` | — |
 <!-- END GENERATED: commands -->
 
-## Formatting articles
+## Formatting prose notes
 
-Bob Articles keeps article notes formatted with `bob`. Formatting runs on
-save, when leaving the note, or on command:
+Bob Prose keeps prose notes formatted with `bob prose format`. Formatting runs
+on save, when leaving the note, or on command:
 
-- **Format article** formats the active article note immediately.
-- **Convert note to article…** converts the active note into an article note.
+- **Format prose note** formats the active prose note immediately.
+- **Toggle section numbers** turns the active prose note's heading numbers off
+  or on. It reads `section_numbers` from the note's frontmatter: `false` turns
+  numbering on, and anything else turns it off. bob writes the new
+  `section_numbers` value and renumbers or strips the headings in one plan,
+  which the plugin applies as one undoable edit. If the installed bob does not
+  support `--section-numbers`, the command shows bob's error and changes
+  nothing.
+- **Convert note to prose note…** previews adopting the active note as a prose
+  note and converts it after you confirm.
 - The save and leave triggers run the same formatter automatically when their
   settings are on.
 
-Before applying changes, the plugin previews article adoption so the outcome is
-visible before the note is rewritten.
-
 ## Settings
 
-Bob Articles is the only plugin in this repo with a settings tab. All five
-settings live under **Settings → Bob Articles**:
+Bob Prose is the only plugin in this repo with a settings tab. All five
+settings live under **Settings → Bob Prose**:
 
 | Setting | Key | Default | Effect |
 | --- | --- | --- | --- |
-| Format on save | `formatOnSave` | On | Ask `bob` to format an article before saving it. |
-| Format when leaving the note | `formatOnLeave` | On | Format the saved article after it stops being active. |
-| Article typeface | `articleTypeface` | Serif | Serif body text with the theme's heading face, or keep the theme typeface. |
+| Format on save | `formatOnSave` | On | Ask `bob` to format a prose note before saving it. |
+| Format when leaving the note | `formatOnLeave` | On | Format the saved prose note after it stops being active. |
+| Prose typeface | `articleTypeface` | Serif | Serif body text with the theme's heading face, or keep the theme typeface. |
 | Show stale-number hints | `staleNumberHints` | On | After a typing pause, underline section numbers that will change on save. |
 | bob path | `bobPath` | Auto (blank) | Find `bob` in its usual install locations or on `PATH`; set an explicit path to override. |
 
-Neither registered command has a default hotkey; run them from the command
-palette or bind them in Obsidian's hotkey settings.
+No registered command has a default hotkey; run them from the command palette
+or bind them in Obsidian's hotkey settings.
 
 ## Read-only Prose snapshot API
 
@@ -74,7 +87,7 @@ API without spawning Bob or writing the note.
 
 ## Related
 
-- [Articles](https://bobs-org.github.io/articles/) — the article format this
-  plugin maintains.
-- [Reference notes](https://bobs-org.github.io/ref/) — the reading workflow
-  articles belong to.
+- [Prose notes](https://bobs-org.github.io/prose/) — the prose-note format
+  this plugin maintains.
+- [Prose Card](prose-card.md) — the property card that reads this plugin's
+  snapshot API.

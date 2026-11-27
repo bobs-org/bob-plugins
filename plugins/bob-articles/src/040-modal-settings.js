@@ -23,8 +23,8 @@ class BobArticleAdoptModal extends Modal {
   onOpen() {
     const content = this.contentEl;
     content.empty();
-    content.createEl("h2", { text: "Convert note to article?" });
-    content.createEl("p", { text: this.plan.notice || "Adopted as an article" });
+    content.createEl("h2", { text: "Convert note to prose note?" });
+    content.createEl("p", { text: this.plan.notice || "Adopted as a prose note" });
 
     const diff = content.createEl("div", { cls: "bob-articles-adopt-diff" });
     for (const item of articleEditPreviewLines(this.sent, this.plan.edits)) {
@@ -76,10 +76,10 @@ class BobArticlesSettingTab extends PluginSettingTab {
   display() {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl("h2", { text: "Bob Articles" });
+    containerEl.createEl("h2", { text: "Bob Prose" });
     new Setting(containerEl)
       .setName("Format on save")
-      .setDesc("Ask bob to format an article before saving it.")
+      .setDesc("Ask bob to format a prose note before saving it.")
       .addToggle((toggle) => toggle
         .setValue(this.plugin.settings.formatOnSave)
         .onChange(async (value) => {
@@ -88,7 +88,7 @@ class BobArticlesSettingTab extends PluginSettingTab {
         }));
     new Setting(containerEl)
       .setName("Format when leaving the note")
-      .setDesc("Format the saved article after it stops being active.")
+      .setDesc("Format the saved prose note after it stops being active.")
       .addToggle((toggle) => toggle
         .setValue(this.plugin.settings.formatOnLeave)
         .onChange(async (value) => {
@@ -96,7 +96,7 @@ class BobArticlesSettingTab extends PluginSettingTab {
           await this.plugin.saveData(this.plugin.settings);
         }));
     new Setting(containerEl)
-      .setName("Article typeface")
+      .setName("Prose typeface")
       .setDesc("Serif body text with the theme's heading face, or keep the theme typeface.")
       .addDropdown((dropdown) => dropdown
         .addOption("serif", "Serif")

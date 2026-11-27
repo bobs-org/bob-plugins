@@ -66,11 +66,34 @@ function articleNormalizeType(value) {
   return value.trim().replace(/^\[\[/, "").replace(/\]\]$/, "").trim().toLowerCase();
 }
 
+// Marker searched by the prose-vault phase: bob-prose-type-v1
+// A prose note's type is `[[prose]]`; `[[article]]` is its permanent legacy
+// spelling. Both name the same type, alone or in a list.
+const ARTICLE_PROSE_TYPE_NAMES = Object.freeze(["prose", "article"]);
+
 function articleHasArticleType(frontmatter) {
   if (!frontmatter || typeof frontmatter !== "object") return false;
   const type = frontmatter.type;
   const values = Array.isArray(type) ? type : [type];
-  return values.some((value) => articleNormalizeType(value) === "article");
+  return values.some((value) => ARTICLE_PROSE_TYPE_NAMES.includes(articleNormalizeType(value)));
+}
+
+// Toggle section numbers turns numbering on only when the note says
+// `section_numbers: false`; any other value (absent, true, or malformed)
+// means numbering is on today, so the toggle turns it off.
+function articleSectionNumbersToggleState(frontmatter) {
+  const value = frontmatter && typeof frontmatter === "object" ? frontmatter.section_numbers : undefined;
+  const off = value === false || (typeof value === "string" && value.trim().toLowerCase() === "false");
+  return off ? "on" : "off";
+}
+
+function articlePlanArgs(action, path, options = {}) {
+  const args = ["prose", action, "--stdin", path];
+  if (options.sectionNumbers === "on" || options.sectionNumbers === "off") {
+    args.push("--section-numbers", options.sectionNumbers);
+  }
+  args.push("-f", "json");
+  return args;
 }
 
 function articleDecodePlan(stdout) {
@@ -242,13 +265,13 @@ function articleApplyChangesToText(text, changes) {
 }
 
 function articleNoticeText(plan) {
-  const head = typeof plan.notice === "string" ? plan.notice : "Article formatted";
+  const head = typeof plan.notice === "string" ? plan.notice : "Prose note formatted";
   const warnings = plan.findings.filter((finding) => {
     const severity = String(finding && finding.severity || "").toLowerCase();
     return severity === "warning" || severity === "warn";
   });
   if (warnings.length === 0) return head;
-  const shown = warnings.slice(0, 2).map((finding) => finding.message || finding.code || "Article finding");
+  const shown = warnings.slice(0, 2).map((finding) => finding.message || finding.code || "Prose note finding");
   if (warnings.length > shown.length) shown.push(`+${warnings.length - shown.length} more`);
   return `${head}\n${shown.join(" · ")}`;
 }

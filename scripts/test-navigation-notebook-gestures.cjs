@@ -207,8 +207,13 @@ test("parentRuleKindOf mirrors bob's note classification", () => {
   assert.equal(kind({ type: "[[eat|Eat]]" }), "record");
   assert.equal(kind({ type: ["[[record]]"] }), "record");
   assert.equal(kind({ type: "record" }), "record");
-  for (const reserved of ["article", "mail", "day", "done", "type"]) {
+  for (const reserved of ["prose", "article", "mail", "day", "done", "type"]) {
     assert.equal(kind({ type: `[[${reserved}]]` }), "other", reserved);
+  }
+  // A prose note behaves exactly like its legacy [[article]] spelling, in
+  // scalar, list, and mixed-spelling forms: never a record.
+  for (const type of ["[[prose]]", ["[[prose]]"], "prose", ["[[prose]]", "[[article]]"]]) {
+    assert.equal(kind({ type }), kind({ type: "[[article]]" }), JSON.stringify(type));
   }
   assert.equal(kind({}), "other");
   assert.equal(kind(null), "other");

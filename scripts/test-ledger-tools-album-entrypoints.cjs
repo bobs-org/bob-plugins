@@ -65,6 +65,11 @@ test("entry kind covers scalar, list, wikilink, and legacy noun types", () => {
   for (const type of ["[[area]]", "[[project]]", "[[notebook]]", "[[ref]]"]) {
     assert.equal(helpers.albumSchemaEntryKindOf({ type }), "other", type);
   }
+  // A prose note reads like its legacy [[article]] spelling: never a record.
+  assert.equal(helpers.albumSchemaEntryKindOf({ type: "[[article]]" }), "other");
+  for (const type of ["[[prose]]", ["[[prose]]"], ["[[prose]]", "[[article]]"]]) {
+    assert.equal(helpers.albumSchemaEntryKindOf({ type }), "other", JSON.stringify(type));
+  }
   assert.equal(helpers.albumSchemaEntryKindOf({}), "other");
   assert.equal(helpers.albumSchemaEntryKindOf(null), "other");
 });

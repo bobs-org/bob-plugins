@@ -316,11 +316,32 @@ test("meeting context row uses the ref-meet catalog entry and stays hidden on ol
   assert.equal(helpers.cmSheetContextRows(catalog, context).length, 0);
 });
 
+test("a prose note gets the outline context row and the Bob Prose surface rows", () => {
+  const catalog = sheetCatalog();
+  for (const type of ["[[prose]]", ["[[prose]]", "[[article]]"], "[[article]]"]) {
+    const noteKind = helpers.cmSheetNoteKind(type, false);
+    const rows = helpers.cmSheetContextRows(catalog, { notePath: "blog.md", noteKind });
+    const outline = rows.find((row) => row.entryId === "articles-outline");
+    assert.ok(outline, JSON.stringify(type));
+    assert.equal(outline.tagline, "Outline this prose note");
+    assert.deepEqual(outline.userArgs, ["blog.md"]);
+  }
+  const surfaces = helpers.cmSheetSurfaceRows(() => true);
+  const format = surfaces.find((row) => row.surfaceId === "bob-articles:format-article");
+  const toggle = surfaces.find((row) => row.surfaceId === "bob-articles:toggle-section-numbers");
+  assert.equal(format.title, "Format this prose note");
+  assert.equal(toggle.title, "Toggle section numbers");
+  assert.equal(toggle.section, "vault");
+  assert.equal(toggle.unavailable, null);
+});
+
 test("note kinds follow frontmatter type with the article rule", () => {
   assert.equal(helpers.cmSheetNoteKind("[[ref]]", false), "ref");
   assert.equal(helpers.cmSheetNoteKind(["done", "[[Project]]"], false), "project");
   assert.equal(helpers.cmSheetNoteKind(null, true), "article");
   assert.equal(helpers.cmSheetNoteKind("[[Article]]", false), "article");
+  assert.equal(helpers.cmSheetNoteKind("[[prose]]", false), "article");
+  assert.equal(helpers.cmSheetNoteKind(["[[prose]]", "[[article]]"], false), "article");
   assert.equal(helpers.cmSheetNoteKind("misc", false), "note");
   assert.equal(helpers.cmSheetNoteKind(undefined, false), "note");
 });

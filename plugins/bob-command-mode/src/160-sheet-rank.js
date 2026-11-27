@@ -48,10 +48,10 @@ const CM_SHEET_ICON_FALLBACK = {
 
 // Surface rows owned by the plugin. Each runs an existing Obsidian command and
 // is feature-detected through app.commands.commands[id]; a missing command
-// makes the row unavailable. There is no "Preview article adoption" row: the
-// plan names a bob-articles adopt-preview command id, but no such command
-// exists in bob-articles' source (only format-article and convert-to-article),
-// so there is nothing to detect.
+// makes the row unavailable. There is no "Preview prose-note adoption" row:
+// the plan names a bob-articles adopt-preview command id, but no such command
+// exists in Bob Prose's source (only format-article, toggle-section-numbers,
+// and convert-to-article), so there is nothing to detect.
 const CM_SHEET_SURFACE_ROWS = [
   { plugin: "bob-ledger-tools", id: "open-today-daily-note", title: "Today's daily note", section: "daily" },
   { plugin: "bob-navigation-hotkeys", id: "open-pomodoro-themes-manager", title: "Task types manager", section: "daily" },
@@ -67,7 +67,8 @@ const CM_SHEET_SURFACE_ROWS = [
   { plugin: "bob-ledger-tools", id: "edit-note-properties", title: "Edit note properties", section: "vault" },
   { plugin: "bob-ledger-tools", id: "edit-intentions", title: "Edit intentions", section: "vault" },
   { plugin: "bob-ledger-tools", id: "reflect-on-yesterday", title: "Reflect on yesterday", section: "vault" },
-  { plugin: "bob-articles", id: "format-article", title: "Format this article", section: "vault" },
+  { plugin: "bob-articles", id: "format-article", title: "Format this prose note", section: "vault" },
+  { plugin: "bob-articles", id: "toggle-section-numbers", title: "Toggle section numbers", section: "vault" },
 ];
 
 function cmSheetLower(value) {
@@ -512,8 +513,9 @@ function cmSheetIsGmailUrl(value) {
   }
 }
 
-// Normalize a note's frontmatter `type` plus the article check into the
-// context kind the sheet builds "For this note" rows from.
+// Normalize a note's frontmatter `type` plus the prose-note check into the
+// context kind the sheet builds "For this note" rows from. Prose notes keep
+// the legacy kind name "article", like the article-note slot.
 function cmSheetNoteKind(frontmatterType, isArticle) {
   const values = Array.isArray(frontmatterType) ? frontmatterType : [frontmatterType];
   const normalized = values
@@ -522,7 +524,7 @@ function cmSheetNoteKind(frontmatterType, isArticle) {
   if (normalized.includes("ref")) return "ref";
   if (normalized.includes("area")) return "area";
   if (normalized.includes("project")) return "project";
-  if (isArticle || normalized.includes("article")) return "article";
+  if (isArticle || normalized.includes("prose") || normalized.includes("article")) return "article";
   return "note";
 }
 
@@ -656,7 +658,7 @@ function cmSheetContextRows(catalog, context) {
     } else if (kind === "area" || kind === "project") {
       fill("ready", [note], "Ready lane for this note");
     } else if (kind === "article") {
-      fill("articles-outline", [note], "Outline this article");
+      fill("articles-outline", [note], "Outline this prose note");
     }
     fill("ref-create", [note], "Snapshot note to Highlights");
   }

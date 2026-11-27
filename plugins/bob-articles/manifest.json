@@ -1,9 +1,9 @@
 {
   "id": "bob-articles",
-  "name": "Bob Articles",
-  "version": "0.3.0",
+  "name": "Bob Prose",
+  "version": "0.4.0",
   "minAppVersion": "1.8.7",
-  "description": "Format Bob article notes with bob on save, when leaving, or on command, and preview article adoption.",
+  "description": "Format Bob prose notes with bob on save, when leaving, or on command, toggle their section numbers, and preview prose-note adoption.",
   "author": "Bryan M Bugyi",
   "isDesktopOnly": false
 }

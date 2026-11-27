@@ -12,7 +12,7 @@ Bob Command Mode runs bob commands from Obsidian with safe-write guards and run 
 | --- | --- |
 | Name | Bob Command Mode |
 | ID | `bob-command-mode` |
-| Version | 0.5.0 |
+| Version | 0.6.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | Yes |
 | Description | Run catalog-validated bob commands from Obsidian chips and Command Mode with safe-write guards and run history. |
@@ -143,11 +143,11 @@ pill and skips the toast.
 `Bob: Command mode` opens a bottom sheet with a fuzzy finder over every catalog
 entry, ranked by path, alias, title, and keywords with frecency tie-breaks. An
 empty query shows RECENT runs, FOR THIS NOTE rows filled from the active note
-(ref, area, project, and article notes each get their own rows), FROM CLIPBOARD
+(ref, area, project, and prose notes each get their own rows), FROM CLIPBOARD
 rows for an http(s) URL, and one section per catalog section plus surface rows
 that run existing Obsidian commands (daily note, task types manager, stats, tasks,
 relation labels, reading board, card-properties drawer, album schema editing,
-record editing, article formatting). RECENT rows show the
+record editing, prose-note formatting and section numbers). RECENT rows show the
 command without the bob path; Enter reruns it under the command's preview or
 confirm guard, Ctrl+Enter reruns it now, and a recorded preview reruns as a
 preview. Unavailable rows stay visible and dimmed with their reason. `Enter`

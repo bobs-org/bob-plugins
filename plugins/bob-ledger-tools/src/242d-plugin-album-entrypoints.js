@@ -6,11 +6,13 @@
 // non-album parents teach instead of guessing. Header and palette share
 // `openAlbumSchemaEntry`; no extra subprocess service. Opening an invalid
 // album still shows lint and the YAML path.
+// Marker searched by the prose-vault phase: bob-prose-type-v1
 const ALBUM_SCHEMA_ENTRY_NON_RECORD_TYPES = new Set([
   "area",
   "project",
   "notebook",
   "ref",
+  "prose",
   "article",
   "mail",
   "day",

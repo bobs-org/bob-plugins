@@ -497,7 +497,7 @@ class PropertyEditorModal extends PropertyEditorModalBase {
         try {
           await this.onCardHandoff?.({
             key: selected && selected.row ? selected.row.key : "",
-            editor: "==",
+            editor: "=",
             owner: species,
             row: selected ? selected.row : null,
           });

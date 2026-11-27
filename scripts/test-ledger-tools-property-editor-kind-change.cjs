@@ -264,7 +264,7 @@ test("maps use the YAML stage; opaque and protected rows are refused", () => {
   assert.equal(opaque.ok, false);
   assert.equal(opaque.code, "opaque");
 
-  const locked = H.propertyEditorConvertPreview(row({ role: "card", owner: "record", editor: "==" }), "list");
+  const locked = H.propertyEditorConvertPreview(row({ role: "card", owner: "record", editor: "=" }), "list");
   assert.equal(locked.ok, false);
   assert.equal(locked.code, "locked");
 });

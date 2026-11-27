@@ -127,8 +127,8 @@ content, and a nav line the card does not recognize (such as
 ### Set intentions
 
 On current and future subjects with no intentions, one quiet dashed row
-reads `＋ Set intentions` with a `==` keycap hint. A click or Enter opens the
-card editor on the intention stage, and `==` opens it with Add selected. Past
+reads `＋ Set intentions` with a `=` keycap hint. A click or Enter opens the
+card editor on the intention stage, and `=` opens it with Add selected. Past
 subjects never show it, and it owns no Properties rows.
 
 ### Bands and owned rows
@@ -185,7 +185,7 @@ with the server's field fingerprint in every envelope. Empty strings use
 
 ## Card editor
 
-`==` on any canonical subject opens the card editor, including empty or
+`=` on any canonical subject opens the card editor, including empty or
 malformed notes. Its header shows the card's leaf tile and species word. A
 malformed field opens a refusal with YAML recovery; it never paints a display
 card. Browse controls keep focus: the modal never
@@ -282,6 +282,6 @@ non-Vim Ctrl+Shift+P fallback after task, Task Link, relation, dependency,
 and direct-stage routes.
 
 Two Vim compositions end with the caret in yesterday's reflection textarea
-and never insert a literal `r` or write the wrong note: `[n==r` (previous
-note, `==`, `r`) and `==[r` (`==`, `[` to yesterday inside the modal, `r`).
+and never insert a literal `r` or write the wrong note: `[n=r` (previous
+note, `=`, `r`) and `=[r` (`=`, `[` to yesterday inside the modal, `r`).
 Fast stage selection during data loading stays pinned to its target.

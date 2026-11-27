@@ -64,7 +64,7 @@ async function runWorkflows(ctx) {
     if (current && current.path === notePath && !current.stage) return ready();
     if (current) await closeAll();
     await liveReady(notePath);
-    await doubleEquals(notePath);
+    await pressEquals(notePath);
     return ready((value) => value.path === notePath, "card editor on " + notePath);
   };
   const modal = () => client.evaluate(MODAL);
@@ -86,9 +86,9 @@ async function runWorkflows(ctx) {
     await key("Escape"); await sleep(80);
   };
   const liveReady = async (notePath) => { await open(notePath, "live"); await waitCard(notePath).catch(() => null); };
-  const doubleEquals = async (notePath, needle = "Body sentinel") => {
+  const pressEquals = async (notePath, needle = "Body sentinel") => {
     await normal(notePath, needle);
-    await keys(["=", "="]);
+    await keys(["="]);
   };
   const typeText = async (text) => { await client.call("Input.insertText", { text }); await sleep(60); };
   const selectAll = async () => key("a", 2);
@@ -129,10 +129,10 @@ async function runWorkflows(ctx) {
   };
 
   // ---- Entry and initial selection ----
-  await step("editor-empty-double-equals", async () => {
+  await step("editor-empty-equals", async () => {
     await open(plan.paths.empty, "live");
     const before = vault();
-    await doubleEquals(plan.paths.empty);
+    await pressEquals(plan.paths.empty);
     const state = await ready();
     assert.equal(state.path, plan.paths.empty);
     // The empty day is closed: it lands on Reflection, with Add available.
@@ -144,12 +144,12 @@ async function runWorkflows(ctx) {
     assert.deepEqual(state.fields.intentions, []);
     await shot("intention-editor-empty-add", "Card editor");
     await closeAll();
-    sameVault(before, "empty ==");
+    sameVault(before, "empty =");
     return state;
   });
   await step("editor-open-initial-selection", async () => {
     await liveReady(plan.paths.today);
-    await doubleEquals(plan.paths.today);
+    await pressEquals(plan.paths.today);
     const state = await ready();
     assert.equal(state.path, plan.paths.today);
     assert.equal(state.state, "open");
@@ -165,7 +165,7 @@ async function runWorkflows(ctx) {
   });
   await step("editor-closed-initial-selection", async () => {
     await liveReady(plan.paths.yesterday);
-    await doubleEquals(plan.paths.yesterday);
+    await pressEquals(plan.paths.yesterday);
     const state = await ready();
     assert.equal(state.state, "closed");
     assert.equal(state.selected, "reflection");
@@ -179,7 +179,7 @@ async function runWorkflows(ctx) {
   });
   await step("close-escape-browse", async () => {
     await liveReady(plan.paths.today);
-    await doubleEquals(plan.paths.today);
+    await pressEquals(plan.paths.today);
     await ready();
     await key("Escape"); await closed();
     return { closedBy: "Escape" };
@@ -230,7 +230,7 @@ async function runWorkflows(ctx) {
     assert.equal(state.focus.end, state.focus.value.length, "caret is a selection");
     assert.ok(!/r$/.test(state.focus.value), "a literal r reached the textarea");
   };
-  await step("yesterday-prev-note-double-equals-r", async () => {
+  await step("yesterday-prev-note-equals-r", async () => {
     await liveReady(plan.paths.today);
     const before = vault();
     await normal(plan.paths.today, "Body sentinel");
@@ -238,25 +238,25 @@ async function runWorkflows(ctx) {
     await waitFor(client, "app.workspace.activeLeaf?.view?.file?.path", (value) => value === plan.paths.yesterday, "[n opened yesterday", 15_000);
     await waitFor(client, "app.workspace.activeLeaf?.view?.editor?.hasFocus?.() === true", Boolean, "yesterday editor focus", 10_000).catch(() => null);
     await key("Escape"); await sleep(60);
-    await keys(["=", "=", "r"]);
-    const state = await ready((value) => value.stage === "reflection" && value.focus?.input === "reflection", "[n==r reflection stage");
+    await keys(["=", "r"]);
+    const state = await ready((value) => value.stage === "reflection" && value.focus?.input === "reflection", "[n=r reflection stage");
     caretInYesterday(state);
     await shot("intention-editor-prev-note-reflection", "Card editor");
     await key("Escape"); await key("Escape"); await closed();
-    sameVault(before, "[n==r");
+    sameVault(before, "[n=r");
     return state;
   });
-  await step("yesterday-double-equals-bracket-r", async () => {
+  await step("yesterday-equals-bracket-r", async () => {
     await liveReady(plan.paths.today);
     const before = vault();
     await normal(plan.paths.today, "Body sentinel");
-    await keys(["=", "=", "[", "r"]);
-    const state = await ready((value) => value.stage === "reflection" && value.focus?.input === "reflection", "==[r reflection stage");
+    await keys(["=", "[", "r"]);
+    const state = await ready((value) => value.stage === "reflection" && value.focus?.input === "reflection", "=[r reflection stage");
     caretInYesterday(state);
     assert.equal(state.activePath, plan.paths.today, "the underlying active note changed");
     await shot("intention-editor-bracket-reflection", "Card editor");
     await key("Escape"); await key("Escape"); await closed();
-    sameVault(before, "==[r");
+    sameVault(before, "=[r");
     return state;
   });
 
@@ -351,7 +351,7 @@ async function runWorkflows(ctx) {
   await step("edit-reflection-multiline-save-close", async () => {
     await liveReady(plan.paths.yesterday);
     return writeStep("edit-reflection-multiline-save-close", plan.paths.yesterday, plan.yesterday, async () => {
-      await doubleEquals(plan.paths.yesterday);
+      await pressEquals(plan.paths.yesterday);
       await ready();
       await key("r");
       await ready((value) => value.stage === "reflection" && value.focus?.input === "reflection", "reflection stage");
@@ -481,7 +481,7 @@ async function runWorkflows(ctx) {
     await open(plan.paths.boundaryDay, "live");
     await waitCard(plan.paths.boundaryDay).catch(() => null);
     const before = vault();
-    await doubleEquals(plan.paths.boundaryDay);
+    await pressEquals(plan.paths.boundaryDay);
     await ready((value) => value.path === plan.paths.boundaryDay);
     const trail = [];
     const step = async (name, expectPath, extra = () => {}) => {
@@ -618,7 +618,7 @@ async function runWorkflows(ctx) {
   await step("yaml-done-returns", async () => {
     await liveReady(plan.paths.today);
     const before = vault();
-    await doubleEquals(plan.paths.today);
+    await pressEquals(plan.paths.today);
     await ready();
     await key("2"); await ready((value) => value.selected === "intention:1");
     await key("y");
@@ -641,7 +641,7 @@ async function runWorkflows(ctx) {
       if ((await app.vault.read(file)) !== ${JSON.stringify(original)}) await app.vault.modify(file, ${JSON.stringify(original)});
     })()`);
     try {
-      await doubleEquals(plan.paths.today);
+      await pressEquals(plan.paths.today);
       await ready();
       await key("y");
       await yamlJump();
@@ -680,7 +680,7 @@ async function runWorkflows(ctx) {
       app.workspace.setActiveLeaf(first, { focus: true });
     })()`);
     await sleep(600);
-    await doubleEquals(plan.paths.today);
+    await pressEquals(plan.paths.today);
     await ready();
     await key("1"); await key("Enter");
     await ready((value) => value.stage === "intention" && value.focus?.input === "intention");
@@ -760,7 +760,7 @@ async function runWorkflows(ctx) {
     try {
       await liveReady(plan.paths.today);
       const before = vault();
-      await doubleEquals(plan.paths.today);
+      await pressEquals(plan.paths.today);
       const state = await waitFor(client, MODAL, (value) => value && value.status === "needs-update", "old-bob refusal", 30_000);
       assert.match(state.text, /Update bob to edit intentions/);
       assert.equal(state.writable, false);
@@ -783,7 +783,7 @@ async function runWorkflows(ctx) {
   });
 
   await landing.runLandingWorkflows(ctx, {
-    evidence, step, ensureModal, modal, ready, closed, closeAll, normal, liveReady, doubleEquals,
+    evidence, step, ensureModal, modal, ready, closed, closeAll, normal, liveReady, pressEquals,
     typeText, selectAll, disk, sameVault, onlyChanged, writeStep,
   });
 }

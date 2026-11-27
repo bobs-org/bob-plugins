@@ -27,7 +27,7 @@ under Managed.
 
 ## Keys
 
-In Live Preview Vim normal mode, `==` focuses `summary` (Add mode
+In Live Preview Vim normal mode, `=` focuses `summary` (Add mode
 prefilled when missing), `+` opens the Property Editor, `-` toggles the
 drawer, and `_` folds the card's details. The card paints from local data
 and the shared report; painting never spawns bob and never writes the

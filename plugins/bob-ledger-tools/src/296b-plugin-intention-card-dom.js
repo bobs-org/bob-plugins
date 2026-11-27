@@ -216,7 +216,7 @@ function intentionCardDomGhost(model, plugin, doc) {
   intentionCardDomText(label, "＋ Set intentions");
   const keys = intentionCardDomEl(doc, "kbd", "bob-intention-card-ghost-keys");
   keys.setAttribute("aria-hidden", "true");
-  intentionCardDomText(keys, "==");
+  intentionCardDomText(keys, "=");
   ghost.appendChild(label);
   ghost.appendChild(keys);
   // CodeMirror must never take the click (or the caret) from the button.

@@ -628,7 +628,7 @@ PropertyEditorModal.prototype.propertyEditorReconcile = function propertyEditorR
     && propertyEditorSettingsFindEntry(this, selectedBefore).source !== true);
   propertyEditorSettingsBaseReconcile.call(this, report);
   if (selectedWasSynthetic && propertyEditorSettingsFindEntry(this, selectedBefore)) this.selectedId = selectedBefore;
-  // A setting-focus request from open (==, Settings, a policy chip, or a
+  // A setting-focus request from open (=, Settings, a policy chip, or a
   // mapped key) applies once on the first report, then never yanks again.
   try {
     if (typeof propertyEditorSettingsConsumeFocus === "function") propertyEditorSettingsConsumeFocus(this);

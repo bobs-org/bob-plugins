@@ -7,7 +7,7 @@
 // purpose: malformed drafts, sibling/document injection, and opaque content
 // are Bob's dry-run verdicts, shown verbatim with the draft retained.
 // `y` / Ctrl+E still mean the Source-mode excursion; this stage never
-// steals them. Card maps keep routing to `==`.
+// steals them. Card maps keep routing to `=`.
 function propertyEditorYamlStageKindForRow(row) {
   if (!row || typeof propertyEditorRoleOf !== "function") return null;
   if (propertyEditorRoleOf(row) !== "loose" || row.pending === true) return null;

@@ -385,7 +385,7 @@ class BobLedgerToolsPropertyCapabilityRoutingMixin {
   // Reference-contract evidence for the Reference editor (bob-cli-qp
   // ref-editor): true only after a catalog or typed-note observation of
   // `props_ref_contract_v1`. Unknown, absent, and unconfirmed all read as
-  // not ready, so `==` falls back to title focus-or-add.
+  // not ready, so `=` falls back to title focus-or-add.
   propertyCapabilityRefContractConfirmed(key) {
     try {
       return this.propertyCapabilityState(key).refContract === "confirmed";
@@ -610,7 +610,7 @@ class BobLedgerToolsPropertyCapabilityRoutingMixin {
       }
       // Both contracts settle from one probe, so a confirmed generic slot
       // alone never parks the schedule: the reference slot still needs its
-      // own observation before `==` may open the settings mode.
+      // own observation before `=` may open the settings mode.
       if (entry.contract === "confirmed" && entry.refContract === "confirmed") return "confirmed";
       // Absence re-probes like the generic probe: an upgraded binary is
       // detected on a later lifecycle event.

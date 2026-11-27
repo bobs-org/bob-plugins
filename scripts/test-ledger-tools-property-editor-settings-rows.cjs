@@ -182,7 +182,7 @@ test("bank ignores the old hybrid settings contract and keeps its card handoff r
   const show = report("bank", { properties: [
     row("summary", 3, { value: "A calm area" }), row("theme", 4, { value: "Drafting" }),
     row("offclock", 5, { value: false, kind: "checkbox" }), row("offclock_types", 6, { value: ["writing"], kind: "list" }),
-    row("bank", 7, { value: "Checking", role: "card", owner: "bank", editor: "==" }),
+    row("bank", 7, { value: "Checking", role: "card", owner: "bank", editor: "=" }),
     row("created", 8),
   ] });
   const modal = modalFor(show);

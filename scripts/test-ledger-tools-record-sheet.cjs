@@ -1495,7 +1495,7 @@ test("sheet affordances open the card: Edit, rows, chips, ghosts, missing", () =
   const sheet = plugin.paintRecordSheetReading(root, "eat/bare.md");
   const edit = sheet.querySelector(".bob-record-sheet-edit");
   assert.equal(edit && edit.textContent, "⊞ Edit");
-  assert.equal(edit.getAttribute("title"), "Edit fields (==, Ctrl+Shift+P)");
+  assert.equal(edit.getAttribute("title"), "Edit fields (=, Ctrl+Shift+P)");
   edit.click();
   assert.deepEqual(calls, [{ filePath: "eat/bare.md" }]);
   const rows = sheet.querySelectorAll(".bob-record-sheet-row");

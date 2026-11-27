@@ -161,7 +161,7 @@ function refNoteCardBuildEl(doc, model, options = {}) {
     if (titleRow) refNoteCardVersionSlot(doc, titleRow);
     if (block.subtitle) block.subtitle.classList?.add?.("bob-ref-card-dek");
     if (model.title.fromStem === true) {
-      block.heading.setAttribute("title", "Title from the file name · press == to add a title");
+      block.heading.setAttribute("title", "Title from the file name · press = to add a title");
     }
     const bodyId = typeof propertyCardFoldNextId === "function"
       ? propertyCardFoldNextId() : `bob-ref-card-body-${String(model.path).replace(/[^a-z0-9_-]/gi, "-")}`;

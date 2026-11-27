@@ -177,8 +177,8 @@ xvfb-run -a node scripts/obsidian-intention-card-e2e.cjs \
 It seeds day, week, and quarter notes relative to the run's local date (plus
 fixed ISO year-boundary notes), records the test clock, bob provenance, plugin
 hashes, every writer call with stdin, and screenshots. The run proves Reading
-and Live Preview placement and seven-key ownership, fail-open cases, `==`,
-`[n==r`, `==[r`, guarded edits with Undo, navigation, entry points, the YAML
+and Live Preview placement and seven-key ownership, fail-open cases, `=`,
+`[n=r`, `=[r`, guarded edits with Undo, navigation, entry points, the YAML
 excursion, a two-pane stale draft, body-edit survival, and an emulated old bob.
 Its landing checks hold metadataCache back to prove the applied-write overlay
 (first add, Reading, settlement, last remove), retry a stale remove by its
@@ -425,7 +425,7 @@ native. A `props_v1`-only bob keeps Area and Project native (fail open) while Ba
 owned. Bank never takes Area ownership.
 
 On Area and Project in Live Preview, `-` toggles the drawer and `_` folds the details.
-`==` opens species Settings, bare `+` opens the generic editor, and Esc, `q`, and
+`=` opens species Settings, bare `+` opens the generic editor, and Esc, `q`, and
 Ctrl+`[` close it. Vim `k`/`gg` and Up land on visible body text. The active `^prj` line
 keeps its byte hash through selection and adjacent typing. CDP IME composition does not
 compose on that line, so IME is not covered. Shared checks cover capability,
@@ -445,7 +445,7 @@ GO 63/63 runs, before the Area and Project fixtures, are report
 drawer in an isolated Obsidian vault with a real bob. It covers album, record,
 day, week, quarter, year, and bank setup feet in Reading and Live Preview,
 including identity-only notes and collapsed record/bank states. It proves the
-disclosure and `-` toggle the same drawer, normal `==` still opens the
+disclosure and `-` toggle the same drawer, normal `=` still opens the
 appropriate editor, palette/Command Mode work without a Vim prefix, cursor and
 selection stay unchanged on `-`, typing `a-b` in Vim's `/` search prompt leaves
 the drawer unchanged, opening an off-screen foot scrolls it into
@@ -520,7 +520,7 @@ contrast.
 Area/project settings have a separate scenario module,
 `scripts/obsidian-property-editor-e2e-settings.cjs`, called by the same real
 Obsidian runner. It uses contract-shaped area, project, and top-level project
-fixtures. It checks Settings and chip focus, `+`/`==` routing, ready-cap ghost
+fixtures. It checks Settings and chip focus, `+`/`=` routing, ready-cap ghost
 → override → clear with exact undo/redo bytes, Summary and Review stages,
 Stats root set/clear and top-level refusal,
 project-task navigation without scheduling writes, managed/loose-row parity,

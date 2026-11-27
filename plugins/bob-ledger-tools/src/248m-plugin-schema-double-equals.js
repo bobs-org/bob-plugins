@@ -1,10 +1,12 @@
-// Capture-phase == on album notes and bank.md opens the schema/setup card;
-// == on a canonical record note opens its Record Card. A vimrc nnoremap ==
-// never fires: CodeMirror Vim treats = as a complete operator, so the
-// second = reindents instead of matching a mapping. Bare `-`, `_`, and `+`
-// in Live Preview Vim normal mode toggle Properties, fold the mounted card
-// section, and open the Property Editor. They use a content-target gate and
-// do not wait for a pending `=`.
+// Capture-phase bare `=` on card notes opens the species editor: the album
+// schema card, Bank Setup, the Record Card, and every registered extension
+// kind (area/project settings, day/period editor, notebook/prose focus, the
+// Reference editor). The gate claims `=` before Vim on card notes, so no
+// operator stays pending, no `<Esc>` is injected, and a vimrc `=` map never
+// fires there. Bare `-`, `_`, and `+` in Live Preview Vim normal mode toggle
+// Properties, fold the mounted card section, and open the Property Editor
+// through the same content-target gate. A one-shot habit guard swallows a
+// fast second `=` (the old `==` habit) within 350 ms of an opening `=`.
 
 function schemaDoubleEqualsKeyBufferEmpty(value) {
   if (Array.isArray(value)) return value.length === 0;
@@ -85,48 +87,9 @@ function propertyCardBuiltinMatch(kind, { path, frontmatter } = {}) {
   return false;
 }
 
-function propertyCardSecondKeyCommonGate(input) {
-  const snap = (input && input.vim) || { readable: false };
-  if (!input || typeof input.key !== "string") return { act: false, reason: "not-second-key" };
-  if (input.ctrlKey || input.altKey || input.metaKey) {
-    return { act: false, reason: "modified" };
-  }
-  if (input.repeat) return { act: false, reason: "repeat" };
-  if (input.isComposing) return { act: false, reason: "composing" };
-  if (input.defaultPrevented) return { act: false, reason: "default-prevented" };
-  if (!input.inEditor) return { act: false, reason: "outside-editor" };
-  if (!input.livePreview) return { act: false, reason: "not-live-preview" };
-  if (!snap.readable) return { act: false, reason: "no-vim" };
-  if (snap.insertMode || snap.visualMode || snap.replaceMode) {
-    return { act: false, reason: "not-normal" };
-  }
-  if (snap.operator !== "indentAuto" || !snap.keyBufferEmpty) {
-    return { act: false, reason: "no-pending-equals" };
-  }
-  if (snap.countPending) return { act: false, reason: "counted" };
-  if (snap.registerPending) return { act: false, reason: "register" };
-  return { act: true, reason: "clean-pending-equals" };
-}
-
-function propertyCardSecondKeyGate(input) {
-  const common = propertyCardSecondKeyCommonGate(input);
-  if (!common.act) return common;
-  const arm = input && input.arm;
-  if (!arm || typeof arm.run !== "function" || typeof arm.canAct !== "function") {
-    return { act: false, reason: "unregistered-arm" };
-  }
-  if (!input.canHandleKey) return { act: false, reason: "no-handle-key" };
-  try {
-    if (arm.canAct(input.context) !== true) return { act: false, reason: "arm-not-actionable" };
-  } catch (_) {
-    return { act: false, reason: "arm-not-actionable" };
-  }
-  return { act: true, reason: arm.reason || "second-key-arm" };
-}
-
 function propertyCardBareKeyGate(input) {
   const snap = (input && input.vim) || { readable: false };
-  if (!input || (input.key !== "-" && input.key !== "+" && input.key !== "_")) {
+  if (!input || (input.key !== "-" && input.key !== "+" && input.key !== "_" && input.key !== "=")) {
     return { act: false, reason: "not-bare-key" };
   }
   if (input.ctrlKey || input.altKey || input.metaKey) {
@@ -155,22 +118,6 @@ function propertyCardBareKeyGate(input) {
     return { act: false, reason: "arm-not-actionable" };
   }
   return { act: true, reason: arm.reason || "bare-key-arm" };
-}
-
-// Compatibility helper retained for existing == callers and tests. Runtime
-// key dispatch uses the arm table below, with this arm's same species gate.
-function schemaDoubleEqualsGate(input) {
-  if (!input || input.key !== "=") return { act: false, reason: "not-equals" };
-  const common = propertyCardSecondKeyCommonGate(input);
-  if (!common.act) return common;
-  const allowed = Array.isArray(input.allowedKinds) && input.allowedKinds.length > 0
-    ? input.allowedKinds
-    : propertyCardGateKinds();
-  if (!allowed.includes(input.target)) {
-    return { act: false, reason: "not-schema-note" };
-  }
-  if (!input.canHandleKey) return { act: false, reason: "no-handle-key" };
-  return { act: true, reason: "schema-key" };
 }
 
 function schemaDoubleEqualsTargetKind(input = {}, registryOrPlugin) {
@@ -434,11 +381,29 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
     return null;
   }
 
+  // Injectable clock for the habit guard: tests set
+  // `plugin.propertyCardEqualsClock = () => ms`. Production falls back to the
+  // keydown's event.timeStamp, then Date.now().
+  propertyCardEqualsNow(event) {
+    try {
+      if (typeof this.propertyCardEqualsClock === "function") {
+        const now = this.propertyCardEqualsClock();
+        if (typeof now === "number" && Number.isFinite(now)) return now;
+      }
+    } catch (_) {}
+    try {
+      const stamp = event && event.timeStamp;
+      if (typeof stamp === "number" && Number.isFinite(stamp)) return stamp;
+    } catch (_) {}
+    return Date.now();
+  }
+
   setupSchemaDoubleEquals() {
     if (this.schemaDoubleEqualsActive) return;
     this.schemaDoubleEqualsActive = true;
     this.ensurePropertyCardBuiltins();
     this.handledSchemaDoubleEqualsEvents = new WeakSet();
+    this.propertyCardEqualsGuardUntil = 0;
     if (this.propertyCardToggleCommandRegistered !== true) {
       try {
         this.addCommand({
@@ -510,6 +475,7 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
     this.schemaDoubleEqualsActive = false;
     this.propertyCardRegistryEntries = [];
     this.propertyCardSecondKeyArms?.clear?.();
+    this.propertyCardEqualsGuardUntil = 0;
     this.handledSchemaDoubleEqualsEvents = null;
     try {
       if (typeof propertyCardCabinetPickReleasePlugin === "function") {
@@ -531,6 +497,35 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
       return;
     }
     const key = event && event.key;
+    // Habit guard: a fast second `=` after a bare `=` opened a card editor is
+    // swallowed once so the old `==` habit opens the editor exactly once and
+    // never fires the editor's own `=`. Any other keydown disarms the guard
+    // without being consumed, so compositions like `=[r` still work. The guard
+    // applies whatever the target, including the just-opened modal.
+    try {
+      const guardUntil = this.propertyCardEqualsGuardUntil;
+      if (typeof guardUntil === "number" && guardUntil > 0) {
+        const now = this.propertyCardEqualsNow(event);
+        const unmodifiedEquals = key === "="
+          && !(event && (event.ctrlKey || event.altKey || event.metaKey))
+          && !(event && (event.isComposing || event.defaultPrevented));
+        if (now <= guardUntil && unmodifiedEquals) {
+          if (this.handledSchemaDoubleEqualsEvents) {
+            this.handledSchemaDoubleEqualsEvents.add(event);
+          }
+          try { event.preventDefault(); } catch (_) {}
+          try { event.stopPropagation(); } catch (_) {}
+          try {
+            if (typeof event.stopImmediatePropagation === "function") {
+              event.stopImmediatePropagation();
+            }
+          } catch (_) {}
+          this.propertyCardEqualsGuardUntil = 0;
+          return;
+        }
+        this.propertyCardEqualsGuardUntil = 0;
+      }
+    } catch (_) {}
     if (key !== "=" && key !== "-" && key !== "+" && key !== "_") return;
     try {
       if (typeof propertyCardCabinetsGateLive === "function"
@@ -624,38 +619,21 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
     };
     const livePreview = schemaDoubleEqualsLivePreview(view, cm);
     const vim = schemaDoubleEqualsVimSnapshot(cm);
-    const gate = key === "="
-      ? propertyCardSecondKeyGate({
-        key,
-        ctrlKey: Boolean(event && event.ctrlKey),
-        altKey: Boolean(event && event.altKey),
-        metaKey: Boolean(event && event.metaKey),
-        shiftKey: Boolean(event && event.shiftKey),
-        repeat: Boolean(event && event.repeat),
-        isComposing: Boolean(event && event.isComposing),
-        defaultPrevented: Boolean(event && event.defaultPrevented),
-        inEditor: schemaDoubleEqualsEventInEditor(event, view),
-        livePreview,
-        vim,
-        canHandleKey: schemaDoubleEqualsCanHandleKey(),
-        arm: wrappedArm,
-        context,
-      })
-      : propertyCardBareKeyGate({
-        key,
-        ctrlKey: Boolean(event && event.ctrlKey),
-        altKey: Boolean(event && event.altKey),
-        metaKey: Boolean(event && event.metaKey),
-        shiftKey: Boolean(event && event.shiftKey),
-        repeat: Boolean(event && event.repeat),
-        isComposing: Boolean(event && event.isComposing),
-        defaultPrevented: Boolean(event && event.defaultPrevented),
-        inContent: schemaDoubleEqualsEventInContent(event, view, cm),
-        livePreview,
-        vim,
-        arm: wrappedArm,
-        context,
-      });
+    const gate = propertyCardBareKeyGate({
+      key,
+      ctrlKey: Boolean(event && event.ctrlKey),
+      altKey: Boolean(event && event.altKey),
+      metaKey: Boolean(event && event.metaKey),
+      shiftKey: Boolean(event && event.shiftKey),
+      repeat: Boolean(event && event.repeat),
+      isComposing: Boolean(event && event.isComposing),
+      defaultPrevented: Boolean(event && event.defaultPrevented),
+      inContent: schemaDoubleEqualsEventInContent(event, view, cm),
+      livePreview,
+      vim,
+      arm: wrappedArm,
+      context,
+    });
     if (!gate.act) return;
     if (this.handledSchemaDoubleEqualsEvents) {
       this.handledSchemaDoubleEqualsEvents.add(event);
@@ -669,7 +647,7 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
     } catch (_) {}
     if (key === "=") {
       try {
-        window.CodeMirrorAdapter.Vim.handleKey(cm, "<Esc>", "mapping");
+        this.propertyCardEqualsGuardUntil = this.propertyCardEqualsNow(event) + 350;
       } catch (_) {}
     }
     try {

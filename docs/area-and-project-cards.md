@@ -71,7 +71,7 @@ route API says the note is the inbox, and Projects can show a root pill, but car
 not infer inbox status from the filename or display inherited policy values.
 
 One shared Properties foot remains below the card. `-` toggles that drawer, `_` folds
-the card's own details, `==` opens the Area or Project settings editor, and `+` opens
+the card's own details, `=` opens the Area or Project settings editor, and `+` opens
 the generic Property Editor. A policy chip opens its own setting. Collapse is per-note
 for the session.
 Collapsing an Area hides its summary and property chips/readout; a Project keeps

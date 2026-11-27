@@ -69,7 +69,7 @@ function proseNoteCardBuildEl(doc, model, options = {}) {
     });
     if (!block) return null;
     if (model.title.fromStem === true) {
-      block.heading.setAttribute("title", "Title from the file name — press == to set one");
+      block.heading.setAttribute("title", "Title from the file name — press = to set one");
     }
     if (block.subtitle) block.subtitle.classList?.add?.("bob-prose-note-card-dek");
     block.actions.appendChild(proseNoteCardNumberingNode(doc, model, options));

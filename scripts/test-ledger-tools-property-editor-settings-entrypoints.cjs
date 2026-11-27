@@ -186,7 +186,7 @@ test("day notes keep the temporal extension while area and project coexist", () 
   }
 });
 
-test("== and Settings open the editor on the first settings row", () => {
+test("= and Settings open the editor on the first settings row", () => {
   const opened = [];
   const bankOpened = [];
   const harness = registryHarness();
@@ -202,7 +202,7 @@ test("== and Settings open the editor on the first settings row", () => {
     assert.deepEqual(opened, [
       { filePath: "Areas/home.md", focusSettings: true },
       { filePath: "Projects/roadmap.md", focusSettings: true },
-    ], "bank keeps its own == opener and never reaches the property editor");
+    ], "bank keeps its own = opener and never reaches the property editor");
     assert.deepEqual(bankOpened, [{ sourcePath: "bank.md" }]);
   } finally {
     harness.teardownPropertyEditorSettingsEntrypoints();
@@ -343,7 +343,7 @@ test("browse = inside an area or project editor focuses settings without reopeni
   await bank.propertyEditorPerform("equals", {});
   assert.equal(handoffs.length, 1);
   assert.equal(handoffs[0].owner, "bank");
-  assert.equal(handoffs[0].editor, "==");
+  assert.equal(handoffs[0].editor, "=");
 
   const ordinary = modalFor(report("note", { note_kind: "note", contract: undefined, capabilities: ["props_v1"] }));
   await ordinary.propertyEditorPerform("equals", {});

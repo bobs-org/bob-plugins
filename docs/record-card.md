@@ -25,7 +25,7 @@ Preview Vim normal mode when the editor content has focus, the **Toggle card pro
 command, or the same Vault row in Command Mode. The command acts on the active
 view and only when this card's foot is mounted there. Drawer state is shared by
 panes of the same note for the plugin session; reading properties never writes
-the note. `==` remains the Record Card editor gesture.
+the note. `=` remains the Record Card editor gesture.
 
 Title ownership is independent of row hiding and whole-frontmatter ownership.
 Whenever the card owns the title, the inline title and a matching first-body
@@ -330,10 +330,10 @@ Done.
 
 | Gesture | Outcome |
 | --- | --- |
-| `⊞ Edit` in the card header | Open the Record Card editor (desktop plus capability; titled `Edit fields (==, Ctrl+Shift+P)`). |
+| `⊞ Edit` in the card header | Open the Record Card editor (desktop plus capability; titled `Edit fields (=, Ctrl+Shift+P)`). |
 | A card row | Open the editor on that field. |
 | A value chip, ghost chip, or missing pill | Open that field's stage directly. |
-| `==` in Vim normal mode in Live Preview on a record | Open the Record Card editor; `N==`, register prefixes, Source mode, insert and visual modes, and non-record notes keep Vim's reindent. |
+| `=` in Vim normal mode in Live Preview on a record | Open the Record Card editor; counted `N=`, register prefixes, Source mode, insert and visual modes, and non-record notes keep Vim's `=`. |
 | `Ctrl+Shift+P` on a record where the Task Card has no target | Open the Record Card editor; tasks, links, and dependency rows keep priority. |
 | **Edit record** palette command | Open the editor; non-records say `Open a record note to edit its fields.` |
 | Command Mode Vault row | Run **Edit record** through Obsidian's command route. |

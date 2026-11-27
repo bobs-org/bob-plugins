@@ -224,7 +224,7 @@ test("the title page is safe text with a reserved measure row, folded outline, a
   const stemModel = H.proseNoteCardModel({ path: "notes/Stem.md", frontmatter: { type: "[[prose]]" } });
   const stemCard = H.proseNoteCardBuildEl(doc, stemModel);
   const stemHeading = tree(stemCard).find((node) => node.classList?.contains("bob-property-card-title"));
-  assert.equal(stemHeading.getAttribute("title"), "Title from the file name — press == to set one");
+  assert.equal(stemHeading.getAttribute("title"), "Title from the file name — press = to set one");
 });
 
 test("numbering accepts only literal booleans and defaults an absent property to numbered", () => {

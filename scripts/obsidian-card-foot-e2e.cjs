@@ -748,7 +748,7 @@ async function run(args) {
       appendCapturedCheck(report, "search-prompt-minus-leaves-drawer",
         drawerAfterSearch?.foot?.ariaExpanded === drawerBeforeSearch?.foot?.ariaExpanded,
         { before: drawerBeforeSearch && drawerBeforeSearch.foot, after: drawerAfterSearch && drawerAfterSearch.foot });
-      // Normal == still opens the appropriate editor (Record Card modal here);
+      // A bare = still opens the appropriate editor (Record Card modal here);
       // Escape dismisses it and the foot stays mounted.
       await focusLivePreviewEditor();
       await vimKey(client, "=");

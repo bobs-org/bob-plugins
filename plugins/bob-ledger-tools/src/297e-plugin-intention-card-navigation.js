@@ -1,6 +1,6 @@
 // Intention card navigation: in-place parent/sibling travel, missing-note
 // states, yesterday entry points, the intentions YAML excursion, and the
-// [n==r / ==[r compositions. Browse navigation never discards an active
+// [n=r / =[r compositions. Browse navigation never discards an active
 // stage: stage keys stay text, and only explicit cancel/save leaves it. All
 // requests, Undo, pending drafts, and async completions stay pinned to the
 // modal's current target; superseded replies after close or target change are
@@ -175,7 +175,7 @@ class BobLedgerToolsIntentionCardNavigationMixin {
     });
   }
 
-  // [n==r composition helper: previous-note navigation already moved the
+  // [n=r composition helper: previous-note navigation already moved the
   // active note; the registry opens its card; direct reflection opening
   // selects the reflection row (closed notes land there anyway).
   async intentionCardOpenPreviousReflection(options = {}) {

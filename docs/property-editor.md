@@ -45,21 +45,21 @@ caller key such as `theme`, `offclock`, or `offclock_types` maps onto its
 logical setting in browse mode. On a degraded report the request selects the
 corresponding real property when present, otherwise a safe first row.
 
-On a Notebook Card, `==` focuses `summary`; on a Prose Card, it focuses `title`.
+On a Notebook Card, `=` focuses `summary`; on a Prose Card, it focuses `title`.
 If the key is missing, focus-or-add opens Add mode with that key prefilled, so
 the editor can create the field without losing the intended focus.
 
-On a [Ref Card](ref-card.md), `==` opens the Reference editor: this editor on
+On a [Ref Card](ref-card.md), `=` opens the Reference editor: this editor on
 Bob's `REFERENCE` settings contract when Bob reports `props_ref_contract_v1`. An
 older Bob without that capability gets focus-or-add on `title` instead.
 
-On area and project notes, `==` and the card Settings control open the editor
+On area and project notes, `=` and the card Settings control open the editor
 on the first settings row; a policy chip opens it on its own setting. Those
 typed rows require a current `props_contract_v1` report. `+` opens the generic
 Property Editor on any Markdown note. `bank.md` is the path-canonical, untyped
 hub and uses one Bank Card on `props_v1`; it has no typed settings group, even
 when an older Bob reports the former hybrid contract. Its `bank` property row
-hands off to Bank Setup with `==`.
+hands off to Bank Setup with `=`.
 
 ## Ownership and rows
 
@@ -72,7 +72,7 @@ fingerprint decide what each row can do.
 | Reference settings | Title, Summary, Authors, Published, Source, and Aliases; Reading, Lives under, and File name stay read-only with Bob's reason | Edit the value, or open its owner: the reading task or Command Mode with `bob ref rename` |
 | On the `^prj` line | Project goal, starts, and depends-on navigation rows | Open the current project task's Task Card |
 | Loose | Values with no other Bob owner, including `created` | Edit the value here |
-| On the `<Kind>` card | Fields owned by a record, album, bank, day/period, notebook (`summary`), or prose (`title`) card | Hand off to that card's `==` editor |
+| On the `<Kind>` card | Fields owned by a record, album, bank, day/period, notebook (`summary`), or prose (`title`) card | Hand off to that card's `=` editor |
 | Identity | Note identity such as `type`, or a project `status` | Locked, except project `status`, which navigates to `^prj`; `y` opens YAML |
 | Bob-managed | Derived and generated values | Locked with Bob's writer/reason; `y` opens YAML |
 
@@ -181,7 +181,7 @@ These keys act while browsing the rows, not while typing in a value field.
 | Ctrl+R / Ctrl+Shift+Z | Redo the latest undone edit |
 | `y` / Ctrl+E | Open the property's YAML line in Source mode |
 | Mod+C / Mod+V | Copy marked properties or the focused property; paste a YAML mapping |
-| `=` | Open the note's owning `==` card editor when one is available; on an area or project note, focus the settings group in place |
+| `=` | Open the note's owning `=` card editor when one is available; on an area or project note, focus the settings group in place |
 | Esc / `q` / Ctrl+[ | Back out one layer, then close |
 
 `q` follows Esc's layer and types only in a text control. Ctrl+[ is Esc's alias
@@ -264,7 +264,7 @@ latch, and Esc cancels the stage without closing the modal or applying the
 draft. Multiline editing keeps caret, composition, and native text undo. Stale
 reports keep the draft and require a new preview, and one save is one undoable
 batch. `y` / Ctrl+E still mean the Source-mode excursion, and card maps still
-route to `==`.
+route to `=`.
 
 ## Source fragments (read-only)
 
@@ -357,7 +357,7 @@ This requires a mounted card and foot, a valid closed frontmatter mapping
 that matches the metadata cache, confirmed `props_v1` for the current bob
 executable, and working native-command routing. Identity-only temporal cards
 qualify. The foot's `-` drawer and this editor expose every top-level key;
-`==` still opens the species editor. The drawer's Enter, Add property, and
+`=` still opens the species editor. The drawer's Enter, Add property, and
 Edit all actions also open this editor.
 
 Obsidian's **Add file property** command routes to Add mode only while the
@@ -387,7 +387,9 @@ bob or write the note; capability discovery happens separately on lifecycle
 events. See the [ownership architecture](https://bobs-org.github.io/develop/plugins/architecture/#frontmatter-ownership).
 
 The card key family is `-` for the Properties drawer, `_` for the card's own
-fold, `==` for its species editor, and `+` for the generic Property Editor.
+fold, `=` for its species editor, and `+` for the generic Property Editor. A fast second `=` within 350 ms of an opening `=`
+is swallowed, so the old `==` habit opens the editor once and never fires the
+editor's own `=`.
 The former `=-` and `=+` chords fall through to Vim; Reading uses the disclosure
 and commands.
 
@@ -398,7 +400,7 @@ covered by the disposable-vault real-Obsidian acceptance run
 (`scripts/obsidian-property-editor-e2e.cjs`).
 
 The same run loads `scripts/obsidian-property-editor-e2e-settings.cjs` for the
-area/project contract matrix: `+`, `==`, Settings, and policy-chip focus;
+area/project contract matrix: `+`, `=`, Settings, and policy-chip focus;
 ghost override, clear, undo, and redo; Stats root and project-task navigation;
 managed and loose-row parity; capability fallback; and light/dark, wide/narrow
 captures of populated settings and all four simple stages.

@@ -1,5 +1,5 @@
 // Intention card editor entry points: the `intentions` registry kind, the
-// `==` open path for every canonical subject (including empty or malformed
+// `=` open path for every canonical subject (including empty or malformed
 // ones), and the per-path optimistic overlay store. A malformed field opens
 // the modal with a refusal and YAML recovery; it never paints a display card.
 const INTENTION_CARD_EDITOR_OVERLAY_TTL_MS = 8000;

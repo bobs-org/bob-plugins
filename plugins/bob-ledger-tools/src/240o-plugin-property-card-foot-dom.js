@@ -328,7 +328,7 @@ function propertyCardFootRenderValueCell(cell, doc, row, handlers) {
         const size = row.value && typeof row.value === "object" && !Array.isArray(row.value)
           ? Object.keys(row.value).length
           : null;
-        const label = Number.isInteger(size) ? `${key} · ${size} ${size === 1 ? "field" : "fields"}  ==` : `${key}  ==`;
+        const label = Number.isInteger(size) ? `${key} · ${size} ${size === 1 ? "field" : "fields"}  =` : `${key}  =`;
         propertyCardKitAppendText(doc, opener, label);
         opener.setAttribute("aria-label", `Open ${key} editor`);
         opener.addEventListener?.("click", (event) => {

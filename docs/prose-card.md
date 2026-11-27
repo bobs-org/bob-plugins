@@ -13,7 +13,7 @@ file stem; the optional one-line `summary:` dek shows in italics. Absence
 of a dek is normal: no ghost, no nag.
 
 When the file stem supplies the title, its tooltip says `Title from the file
-name — press == to set one`. The title uses Bob Prose's heading face only
+name — press = to set one`. The title uses Bob Prose's heading face only
 while that plugin's look class is active. The `§` chip runs Bob Prose's
 **Toggle section numbers** command, which flips `section_numbers` through
 bob in one undoable edit; the chip is inert only when Bob Prose is absent,
@@ -44,7 +44,7 @@ The card never computes counts, numbers, or stubs, starts Bob, or writes the vau
 
 ## Keys
 
-In Live Preview Vim normal mode, `==` focuses `title` (Add mode prefilled
+In Live Preview Vim normal mode, `=` focuses `title` (Add mode prefilled
 when missing), `+` opens the Property Editor, `-` toggles the drawer, and
 `_` folds the outline. The card owns only the inline title: every body
 heading is a numbered section and stays visible. Painting never spawns bob

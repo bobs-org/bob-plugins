@@ -394,8 +394,7 @@ async function runFlows(ctx) {
     await focusEditorBody();
     await sendKey(client, "Escape");
     await sendKey(client, "=");
-    await sendKey(client, "=");
-    return waitEditor((value) => value.open && value.readSettled, "editor after ==");
+    return waitEditor((value) => value.open && value.readSettled, "editor after =");
   };
   await attempt("capability-no-ref-contract-title-fallback", async () => {
     let opened = null;

@@ -682,10 +682,10 @@ Keyboard layers:
   targets, then Gmail context through bob-mail `api.mailOpen` v1, then
   Obsidian's link opener. Missing chip or mail APIs fall through.
 - **Editor and Vim handlers** act below the palette layer. `\s` pins the
-  current tab (Ledger Tools owns `\p` for Pomodoro increments). `==` opens
+  current tab (Ledger Tools owns `\p` for Pomodoro increments). `=` opens
   card editors; `-` toggles the drawer; `+` opens the
-  [Property Editor](property-editor.md). The vault vimrc leaves `-` and `+`
-  unmapped. `nnoremap ==` yields to Vim's `=`.
+  [Property Editor](property-editor.md). A vimrc `=` map never fires on card
+  notes: the gate claims `=` first.
   Exactly `Ctrl+S` with no Shift, Alt, or Meta inside a Pomodoro block of the first
   `## Pomodoros` section splits (stopping propagation only when it acts),
   with an `editor:save-file` callback fallback; everywhere else the key

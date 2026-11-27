@@ -49,11 +49,20 @@ const actingVim = Object.freeze({
   insertMode: false,
   visualMode: false,
   replaceMode: false,
-  operator: "indentAuto",
+  operator: null,
   keyBufferEmpty: true,
   countPending: false,
   registerPending: false,
 });
+
+function actingArm(overrides = {}) {
+  return {
+    reason: "schema-key",
+    canAct: () => true,
+    run() {},
+    ...overrides,
+  };
+}
 
 function actingInput(overrides = {}) {
   return {
@@ -65,38 +74,44 @@ function actingInput(overrides = {}) {
     repeat: false,
     isComposing: false,
     defaultPrevented: false,
-    inEditor: true,
+    inContent: true,
     livePreview: true,
     vim: actingVim,
-    target: "album",
-    canHandleKey: true,
+    arm: actingArm(),
+    context: {},
     ...overrides,
   };
 }
 
-test("gate acts for album and bank notes", () => {
-  assert.deepEqual(helpers.schemaDoubleEqualsGate(actingInput()), {
+test("bare = acts with a registry-backed arm", () => {
+  assert.deepEqual(helpers.propertyCardBareKeyGate(actingInput()), {
     act: true, reason: "schema-key",
   });
-  assert.deepEqual(helpers.schemaDoubleEqualsGate(actingInput({ target: "bank" })), {
+  assert.deepEqual(helpers.propertyCardBareKeyGate(actingInput({ shiftKey: true })), {
     act: true, reason: "schema-key",
   });
 });
 
-test("canonical record notes act through the Record Card", () => {
+test("bare = falls through without an actionable arm", () => {
+  assert.equal(helpers.propertyCardBareKeyGate(actingInput({ arm: null })).reason, "unregistered-arm");
+  assert.equal(helpers.propertyCardBareKeyGate(actingInput({
+    arm: actingArm({ canAct: () => false }),
+  })).reason, "arm-not-actionable");
+  assert.equal(helpers.propertyCardBareKeyGate(actingInput({
+    arm: actingArm({ canAct: () => { throw new Error("boom"); } }),
+  })).reason, "arm-not-actionable");
+});
+
+test("canonical record notes resolve through the Record Card", () => {
   assert.equal(helpers.schemaDoubleEqualsTargetKind({
     path: "eat/nagi.md", frontmatter: { type: "[[record]]" },
   }), "record");
-  assert.deepEqual(helpers.schemaDoubleEqualsGate(actingInput({ target: "record" })), {
-    act: true, reason: "schema-key",
-  });
 });
 
 test("bank month notes keep their Vim reindent", () => {
   assert.equal(helpers.schemaDoubleEqualsTargetKind({
     path: "bank/2026-11.md", frontmatter: { type: "[[bank_month]]" },
   }), null);
-  assert.equal(helpers.schemaDoubleEqualsGate(actingInput({ target: null })).reason, "not-schema-note");
 });
 
 test("mixed record types fall through", () => {
@@ -108,7 +123,7 @@ test("mixed record types fall through", () => {
   }), null);
 });
 
-test("area, project, and daily notes fall through", () => {
+test("area, project, and daily notes miss the builtin registry", () => {
   assert.equal(helpers.schemaDoubleEqualsTargetKind({
     path: "life.md", frontmatter: { type: "[[area]]" },
   }), null);
@@ -118,7 +133,9 @@ test("area, project, and daily notes fall through", () => {
   assert.equal(helpers.schemaDoubleEqualsTargetKind({
     path: "2026-11-17.md", frontmatter: { type: "[[day]]" },
   }), null);
-  assert.equal(helpers.schemaDoubleEqualsGate(actingInput({ target: null })).reason, "not-schema-note");
+  assert.equal(helpers.propertyCardBareKeyGate(actingInput({
+    arm: actingArm({ canAct: () => false }),
+  })).reason, "arm-not-actionable");
 });
 
 test("target kind selects bank hub then album type", () => {
@@ -133,49 +150,53 @@ test("target kind selects bank hub then album type", () => {
   }), "album");
 });
 
-test("counted, register, other operators, and no pending operator fall through", () => {
-  assert.equal(helpers.schemaDoubleEqualsGate(actingInput({
+test("counted, register, and operator-pending = fall through", () => {
+  assert.equal(helpers.propertyCardBareKeyGate(actingInput({
     vim: { ...actingVim, countPending: true },
   })).reason, "counted");
-  assert.equal(helpers.schemaDoubleEqualsGate(actingInput({
+  assert.equal(helpers.propertyCardBareKeyGate(actingInput({
     vim: { ...actingVim, registerPending: true },
   })).reason, "register");
-  assert.equal(helpers.schemaDoubleEqualsGate(actingInput({
-    vim: { ...actingVim, operator: "delete" },
-  })).reason, "no-pending-equals");
-  assert.equal(helpers.schemaDoubleEqualsGate(actingInput({
-    vim: { ...actingVim, operator: null },
-  })).reason, "no-pending-equals");
+  for (const operator of ["indentAuto", "delete", "find"]) {
+    assert.equal(helpers.propertyCardBareKeyGate(actingInput({
+      vim: { ...actingVim, operator },
+    })).reason, "operator-pending", operator);
+  }
+  assert.equal(helpers.propertyCardBareKeyGate(actingInput({
+    vim: { ...actingVim, keyBufferEmpty: false },
+  })).reason, "key-buffer");
 });
 
-test("insert, visual, source, and outside-editor fall through", () => {
-  assert.equal(helpers.schemaDoubleEqualsGate(actingInput({
+test("insert, visual, replace, source, and outside-content fall through", () => {
+  assert.equal(helpers.propertyCardBareKeyGate(actingInput({
     vim: { ...actingVim, insertMode: true },
   })).reason, "not-normal");
-  assert.equal(helpers.schemaDoubleEqualsGate(actingInput({
+  assert.equal(helpers.propertyCardBareKeyGate(actingInput({
     vim: { ...actingVim, visualMode: true },
   })).reason, "not-normal");
-  assert.equal(helpers.schemaDoubleEqualsGate(actingInput({ livePreview: false })).reason, "not-live-preview");
-  assert.equal(helpers.schemaDoubleEqualsGate(actingInput({ inEditor: false })).reason, "outside-editor");
+  assert.equal(helpers.propertyCardBareKeyGate(actingInput({
+    vim: { ...actingVim, replaceMode: true },
+  })).reason, "not-normal");
+  assert.equal(helpers.propertyCardBareKeyGate(actingInput({ livePreview: false })).reason, "not-live-preview");
+  assert.equal(helpers.propertyCardBareKeyGate(actingInput({ inContent: false })).reason, "not-content");
 });
 
-test("Ctrl, Alt, Meta, repeat, composing, and defaultPrevented fall through", () => {
-  assert.equal(helpers.schemaDoubleEqualsGate(actingInput({ ctrlKey: true })).reason, "modified");
-  assert.equal(helpers.schemaDoubleEqualsGate(actingInput({ altKey: true })).reason, "modified");
-  assert.equal(helpers.schemaDoubleEqualsGate(actingInput({ metaKey: true })).reason, "modified");
-  assert.equal(helpers.schemaDoubleEqualsGate(actingInput({ repeat: true })).reason, "repeat");
-  assert.equal(helpers.schemaDoubleEqualsGate(actingInput({ isComposing: true })).reason, "composing");
-  assert.equal(helpers.schemaDoubleEqualsGate(actingInput({ defaultPrevented: true })).reason, "default-prevented");
+test("modified, repeat, composing, and defaultPrevented fall through", () => {
+  assert.equal(helpers.propertyCardBareKeyGate(actingInput({ ctrlKey: true })).reason, "modified");
+  assert.equal(helpers.propertyCardBareKeyGate(actingInput({ altKey: true })).reason, "modified");
+  assert.equal(helpers.propertyCardBareKeyGate(actingInput({ metaKey: true })).reason, "modified");
+  assert.equal(helpers.propertyCardBareKeyGate(actingInput({ repeat: true })).reason, "repeat");
+  assert.equal(helpers.propertyCardBareKeyGate(actingInput({ isComposing: true })).reason, "composing");
+  assert.equal(helpers.propertyCardBareKeyGate(actingInput({ defaultPrevented: true })).reason, "default-prevented");
 });
 
-test("missing handleKey and non-equals fall through", () => {
-  assert.equal(helpers.schemaDoubleEqualsGate(actingInput({ canHandleKey: false })).reason, "no-handle-key");
-  assert.equal(helpers.schemaDoubleEqualsGate(actingInput({ key: "a" })).reason, "not-equals");
-  assert.equal(helpers.schemaDoubleEqualsGate(actingInput({ vim: { ...actingVim, readable: false } })).reason, "no-vim");
+test("other bare keys and unreadable Vim fall through", () => {
+  assert.equal(helpers.propertyCardBareKeyGate(actingInput({ key: "a" })).reason, "not-bare-key");
+  assert.equal(helpers.propertyCardBareKeyGate(actingInput({ vim: { ...actingVim, readable: false } })).reason, "no-vim");
 });
 
-test("Shift with key = still acts", () => {
-  assert.deepEqual(helpers.schemaDoubleEqualsGate(actingInput({ shiftKey: true })), {
+test("bare = acts through the shared gate with shifted input", () => {
+  assert.deepEqual(helpers.propertyCardBareKeyGate(actingInput({ shiftKey: true })), {
     act: true, reason: "schema-key",
   });
 });
@@ -210,7 +231,7 @@ function bareGateInput(overrides = {}) {
   };
 }
 
-test("bare-key arms act on -, _, and shifted or unshifted +", () => {
+test("bare-key arms act on -, _, =, and shifted or unshifted +", () => {
   assert.deepEqual(helpers.propertyCardBareKeyGate(bareGateInput()), {
     act: true, reason: "test-arm",
   });
@@ -221,6 +242,12 @@ test("bare-key arms act on -, _, and shifted or unshifted +", () => {
     act: true, reason: "test-arm",
   });
   assert.deepEqual(helpers.propertyCardBareKeyGate(bareGateInput({ key: "_", shiftKey: true })), {
+    act: true, reason: "test-arm",
+  });
+  assert.deepEqual(helpers.propertyCardBareKeyGate(bareGateInput({ key: "=" })), {
+    act: true, reason: "test-arm",
+  });
+  assert.deepEqual(helpers.propertyCardBareKeyGate(bareGateInput({ key: "=", shiftKey: true })), {
     act: true, reason: "test-arm",
   });
 });
@@ -244,7 +271,6 @@ test("bare-key gate names each fall-through", () => {
     [{ vim: { ...actingBareVim, keyBufferEmpty: false } }, "key-buffer"],
     [{ vim: { ...actingBareVim, countPending: true } }, "counted"],
     [{ vim: { ...actingBareVim, registerPending: true } }, "register"],
-    [{ key: "=" }, "not-bare-key"],
   ]) {
     assert.equal(helpers.propertyCardBareKeyGate(bareGateInput(overrides)).reason, reason);
   }
@@ -284,7 +310,7 @@ test("content-target helper accepts the editor contentDOM and refuses inputs and
   assert.equal(helpers.schemaDoubleEqualsEventInContent({ target: inlineTitle }, view), false, "inline title");
 });
 
-test("vim snapshot reads a lone pending = and count or register state", () => {
+test("vim snapshot reads bare normal-mode = and count or register state", () => {
   const pending = helpers.schemaDoubleEqualsVimSnapshot({
     state: {
       vim: {
@@ -292,7 +318,7 @@ test("vim snapshot reads a lone pending = and count or register state", () => {
         visualMode: false,
         replaceMode: false,
         inputState: {
-          operator: "indentAuto",
+          operator: null,
           keyBuffer: [],
           prefixRepeat: [],
           motionRepeat: [],
@@ -358,9 +384,8 @@ function makeListenerHost() {
   };
 }
 
-function makeKeyEvent(overrides = {}) {
+function makeKeyEvent(view, overrides = {}) {
   const counts = { preventDefault: 0, stopPropagation: 0, immediate: 0 };
-  const editorEl = { className: "cm-editor" };
   return {
     key: "=",
     ctrlKey: false,
@@ -370,9 +395,9 @@ function makeKeyEvent(overrides = {}) {
     repeat: false,
     isComposing: false,
     defaultPrevented: false,
-    target: {
-      closest(sel) { return sel === ".cm-editor" ? editorEl : null; },
-      editorEl,
+    target: view && view.contentDOM ? view.contentDOM : {
+      tagName: "DIV",
+      closest() { return null; },
     },
     preventDefault() { counts.preventDefault += 1; },
     stopPropagation() { counts.stopPropagation += 1; },
@@ -391,7 +416,7 @@ function makeView(path, options = {}) {
     visualMode: false,
     replaceMode: false,
     inputState: {
-      operator: "indentAuto",
+      operator: null,
       keyBuffer: [],
       prefixRepeat: [],
       motionRepeat: [],
@@ -450,11 +475,26 @@ function bareVimState(overrides = {}) {
 }
 
 function bareKeyEvent(view, overrides = {}) {
-  return makeKeyEvent({
+  return makeKeyEvent(view, {
     key: "-",
-    target: view.contentDOM,
     ...overrides,
   });
+}
+
+function pendingVimState(overrides = {}) {
+  return {
+    insertMode: false,
+    visualMode: false,
+    replaceMode: false,
+    inputState: {
+      operator: "indentAuto",
+      keyBuffer: [],
+      prefixRepeat: [],
+      motionRepeat: [],
+      registerName: null,
+    },
+    ...overrides,
+  };
 }
 
 function makeHarness(path, options = {}) {
@@ -507,7 +547,7 @@ function withGlobals(win, doc, fn) {
   }
 }
 
-test("album note consumes ==, injects Esc, and opens the schema card", () => {
+test("single = opens the schema card with no Esc", () => {
   const content = "# Eat\n";
   const harness = makeHarness("eat.md", {
     frontmatter: { type: "[[album]]" },
@@ -515,10 +555,10 @@ test("album note consumes ==, injects Esc, and opens the schema card", () => {
   });
   withGlobals(harness.win, harness.doc, () => {
     harness.plugin.setupSchemaDoubleEquals();
-    const event = makeKeyEvent();
+    const event = makeKeyEvent(harness.view);
     harness.win.dispatch(event);
     assert.deepEqual(event.counts, { preventDefault: 1, stopPropagation: 1, immediate: 1 });
-    assert.deepEqual(harness.handleKeyCalls, [[harness.view.cm, "<Esc>", "mapping"]]);
+    assert.equal(harness.handleKeyCalls.length, 0, "single = injects no Esc");
     assert.deepEqual(harness.albumCalls, [{ filePath: "eat.md" }]);
     assert.equal(harness.bankCalls.length, 0);
     assert.equal(harness.view.cm.getValue(), content);
@@ -529,18 +569,18 @@ test("bank.md opens the bank setup card", () => {
   const harness = makeHarness("bank.md", { frontmatter: { type: "[[area]]" } });
   withGlobals(harness.win, harness.doc, () => {
     harness.plugin.setupSchemaDoubleEquals();
-    harness.win.dispatch(makeKeyEvent());
+    harness.win.dispatch(makeKeyEvent(harness.view));
     assert.deepEqual(harness.bankCalls, [{ sourcePath: "bank.md" }]);
     assert.equal(harness.albumCalls.length, 0);
-    assert.equal(harness.handleKeyCalls.length, 1);
+    assert.equal(harness.handleKeyCalls.length, 0, "single = injects no Esc");
   });
 });
 
-test("ordinary notes keep native ==", () => {
+test("ordinary notes keep native =", () => {
   const harness = makeHarness("inbox.md", { frontmatter: {} });
   withGlobals(harness.win, harness.doc, () => {
     harness.plugin.setupSchemaDoubleEquals();
-    const event = makeKeyEvent();
+    const event = makeKeyEvent(harness.view);
     harness.win.dispatch(event);
     assert.deepEqual(event.counts, { preventDefault: 0, stopPropagation: 0, immediate: 0 });
     assert.equal(harness.handleKeyCalls.length, 0);
@@ -550,7 +590,7 @@ test("ordinary notes keep native ==", () => {
   });
 });
 
-test("record note consumes ==, injects Esc, and opens the Record Card", () => {
+test("single = opens the Record Card with no Esc", () => {
   const content = "# Nagi\n";
   const harness = makeHarness("eat/nagi.md", {
     frontmatter: { type: "[[record]]" },
@@ -558,10 +598,10 @@ test("record note consumes ==, injects Esc, and opens the Record Card", () => {
   });
   withGlobals(harness.win, harness.doc, () => {
     harness.plugin.setupSchemaDoubleEquals();
-    const event = makeKeyEvent();
+    const event = makeKeyEvent(harness.view);
     harness.win.dispatch(event);
     assert.deepEqual(event.counts, { preventDefault: 1, stopPropagation: 1, immediate: 1 });
-    assert.deepEqual(harness.handleKeyCalls, [[harness.view.cm, "<Esc>", "mapping"]]);
+    assert.equal(harness.handleKeyCalls.length, 0, "single = injects no Esc");
     assert.deepEqual(harness.recordCalls, [{ filePath: "eat/nagi.md" }]);
     assert.equal(harness.albumCalls.length, 0);
     assert.equal(harness.bankCalls.length, 0);
@@ -569,7 +609,72 @@ test("record note consumes ==, injects Esc, and opens the Record Card", () => {
   });
 });
 
-test("counted and register == on records keep native reindent", () => {
+test("habit guard swallows a fast second = and opens once", () => {
+  const harness = makeHarness("eat.md", { frontmatter: { type: "[[album]]" } });
+  let now = 1000;
+  withGlobals(harness.win, harness.doc, () => {
+    harness.plugin.setupSchemaDoubleEquals();
+    harness.plugin.propertyCardEqualsClock = () => now;
+    const first = makeKeyEvent(harness.view);
+    harness.win.dispatch(first);
+    assert.deepEqual(first.counts, { preventDefault: 1, stopPropagation: 1, immediate: 1 });
+    assert.equal(harness.handleKeyCalls.length, 0, "single = injects no Esc");
+    assert.deepEqual(harness.albumCalls, [{ filePath: "eat.md" }]);
+    now = 1200;
+    const second = makeKeyEvent(harness.view);
+    harness.win.dispatch(second);
+    assert.deepEqual(second.counts, { preventDefault: 1, stopPropagation: 1, immediate: 1 });
+    assert.equal(harness.albumCalls.length, 1, "fast second = is swallowed");
+    now = 1300;
+    const repeated = makeKeyEvent(harness.view, { repeat: true });
+    harness.win.dispatch(repeated);
+    assert.equal(harness.albumCalls.length, 1, "repeated fast second = is swallowed");
+    assert.equal(harness.handleKeyCalls.length, 0);
+    harness.plugin.teardownSchemaDoubleEquals();
+    assert.equal(harness.plugin.propertyCardEqualsGuardUntil, 0, "teardown clears the guard");
+  });
+});
+
+test("habit guard releases after 350 ms and other keys disarm", () => {
+  const harness = makeHarness("eat.md", { frontmatter: { type: "[[album]]" } });
+  let now = 5000;
+  withGlobals(harness.win, harness.doc, () => {
+    harness.plugin.setupSchemaDoubleEquals();
+    harness.plugin.propertyCardEqualsClock = () => now;
+    harness.win.dispatch(makeKeyEvent(harness.view));
+    assert.equal(harness.albumCalls.length, 1);
+    now = 5000 + 351;
+    const late = makeKeyEvent(harness.view);
+    harness.win.dispatch(late);
+    assert.equal(late.counts.preventDefault, 1);
+    assert.equal(harness.albumCalls.length, 2, "second = after 350 ms opens again");
+    now = 6000;
+    harness.win.dispatch(makeKeyEvent(harness.view));
+    assert.equal(harness.albumCalls.length, 3);
+    now = 6100;
+    const other = makeKeyEvent(harness.view, { key: "[" });
+    harness.win.dispatch(other);
+    assert.deepEqual(other.counts, { preventDefault: 0, stopPropagation: 0, immediate: 0 }, "= then [ disarms");
+    assert.equal(harness.albumCalls.length, 3);
+    now = 6150;
+    harness.win.dispatch(makeKeyEvent(harness.view));
+    assert.equal(harness.albumCalls.length, 4, "disarmed = opens normally");
+    now = 7000;
+    harness.win.dispatch(makeKeyEvent(harness.view));
+    assert.equal(harness.albumCalls.length, 5);
+    now = 7100;
+    const modified = makeKeyEvent(harness.view, { ctrlKey: true });
+    harness.win.dispatch(modified);
+    assert.deepEqual(modified.counts, { preventDefault: 0, stopPropagation: 0, immediate: 0 }, "modified = disarms");
+    assert.equal(harness.albumCalls.length, 5);
+    now = 7150;
+    harness.win.dispatch(makeKeyEvent(harness.view));
+    assert.equal(harness.albumCalls.length, 6, "disarmed = opens normally");
+    harness.plugin.teardownSchemaDoubleEquals();
+  });
+});
+
+test("counted and register = on records keep native reindent", () => {
   for (const vimState of [
     {
       insertMode: false, visualMode: false, replaceMode: false,
@@ -590,7 +695,7 @@ test("counted and register == on records keep native reindent", () => {
     });
     withGlobals(harness.win, harness.doc, () => {
       harness.plugin.setupSchemaDoubleEquals();
-      harness.win.dispatch(makeKeyEvent());
+      harness.win.dispatch(makeKeyEvent(harness.view));
       assert.equal(harness.recordCalls.length, 0);
       assert.equal(harness.handleKeyCalls.length, 0);
     });
@@ -601,11 +706,11 @@ test("window plus document dispatch of the same event acts once", () => {
   const harness = makeHarness("eat.md", { frontmatter: { type: "[[album]]" } });
   withGlobals(harness.win, harness.doc, () => {
     harness.plugin.setupSchemaDoubleEquals();
-    const event = makeKeyEvent();
+    const event = makeKeyEvent(harness.view);
     harness.win.dispatch(event);
     harness.doc.dispatch(event);
     assert.equal(harness.albumCalls.length, 1);
-    assert.equal(harness.handleKeyCalls.length, 1);
+    assert.equal(harness.handleKeyCalls.length, 0, "single = injects no Esc");
     assert.equal(event.counts.preventDefault, 1);
   });
 });
@@ -681,9 +786,12 @@ test("unregistered + falls through; a registered shifted and unshifted + arm run
   });
 });
 
-test("pending = followed by - or + falls through with no Esc and no arm", () => {
+test("operator-pending - or + falls through with no Esc and no arm", () => {
   helpers.propertyCardFootResetAll();
-  const harness = makeHarness("eat/nagi.md", { frontmatter: { type: "[[record]]" } });
+  const harness = makeHarness("eat/nagi.md", {
+    frontmatter: { type: "[[record]]" },
+    vimState: pendingVimState(),
+  });
   const foot = { className: "bob-property-card-foot", isConnected: true };
   harness.view.mountedNodes.push(foot);
   helpers.propertyCardFootRegisterMount(foot, "eat/nagi.md");
@@ -859,8 +967,8 @@ test("a throwing entry function does not escape the listener", () => {
   harness.plugin.openAlbumSchemaEntry = () => { throw new Error("boom"); };
   withGlobals(harness.win, harness.doc, () => {
     harness.plugin.setupSchemaDoubleEquals();
-    assert.doesNotThrow(() => harness.win.dispatch(makeKeyEvent()));
-    assert.equal(harness.handleKeyCalls.length, 1);
+    assert.doesNotThrow(() => harness.win.dispatch(makeKeyEvent(harness.view)));
+    assert.equal(harness.handleKeyCalls.length, 0, "single = injects no Esc");
   });
 });
 
@@ -890,7 +998,7 @@ test("unload cleanups remove both capture listeners", () => {
     assert.equal(harness.win.listeners[0].capture, true);
     assert.equal(harness.doc.listeners[0].capture, true);
     harness.plugin.teardownSchemaDoubleEquals();
-    harness.win.dispatch(makeKeyEvent());
+    harness.win.dispatch(makeKeyEvent(harness.view));
     assert.equal(harness.albumCalls.length, 0);
     for (const cleanup of harness.plugin._cleanups) cleanup();
     assert.equal(harness.win.listeners.length, 0);
@@ -916,30 +1024,35 @@ test("registry resolves bank before album before record", () => {
   });
 });
 
-test("synthetic fourth kind opens without changing the gate or dispatcher", () => {
+test("synthetic fourth kind opens through the bare-key gate", () => {
   const fourthCalls = [];
   const harness = makeHarness("fourth.md", { frontmatter: { type: "[[note]]" } });
+  let now = 1000;
   withGlobals(harness.win, harness.doc, () => {
     harness.plugin.setupSchemaDoubleEquals();
+    harness.plugin.propertyCardEqualsClock = () => now;
     assert.equal(harness.plugin.registerPropertyCard({
       kind: "fourth",
       match: ({ path }) => path === "fourth.md",
       open: () => { fourthCalls.push("fourth"); },
     }), true);
-    assert.deepEqual(helpers.schemaDoubleEqualsGate(actingInput({
-      target: "fourth",
-      allowedKinds: harness.plugin.propertyCardKinds(),
-    })), {
-      act: true, reason: "schema-key",
-    });
-    const event = makeKeyEvent();
+    assert.equal(
+      helpers.schemaDoubleEqualsTargetKind(
+        { path: "fourth.md", frontmatter: { type: "[[note]]" } },
+        harness.plugin,
+      ),
+      "fourth",
+    );
+    const event = makeKeyEvent(harness.view);
     harness.win.dispatch(event);
     assert.deepEqual(event.counts, { preventDefault: 1, stopPropagation: 1, immediate: 1 });
+    assert.equal(harness.handleKeyCalls.length, 0, "single = injects no Esc");
     assert.deepEqual(fourthCalls, ["fourth"]);
     assert.equal(harness.albumCalls.length, 0);
     assert.equal(harness.bankCalls.length, 0);
     assert.equal(harness.recordCalls.length, 0);
-    const both = makeKeyEvent();
+    now = 2000;
+    const both = makeKeyEvent(harness.view);
     harness.win.dispatch(both);
     harness.doc.dispatch(both);
     assert.deepEqual(fourthCalls, ["fourth", "fourth"]);
@@ -970,7 +1083,7 @@ test("duplicate kinds reject and unregister plus reload restore builtins", () =>
     assert.equal(harness.plugin.unregisterPropertyCard("fourth"), true);
     assert.equal(harness.plugin.unregisterPropertyCard("fourth"), false);
     assert.equal(harness.plugin.resolvePropertyCard({ path: "fourth.md", frontmatter: {} }), null);
-    assert.deepEqual(helpers.schemaDoubleEqualsGate(actingInput({ target: "fourth" })).reason, "not-schema-note");
+    assert.equal(helpers.schemaDoubleEqualsTargetKind({ path: "fourth.md", frontmatter: {} }), null);
     harness.plugin.teardownSchemaDoubleEquals();
     assert.deepEqual(harness.plugin.propertyCardRegistry(), []);
     harness.plugin.setupSchemaDoubleEquals();
@@ -1000,7 +1113,7 @@ test("throwing matchers fail open without consuming Vim keys", () => {
     }), true);
     const resolved = harness.plugin.resolvePropertyCard({ path: "fourth.md", frontmatter: {} });
     assert.equal(resolved && resolved.kind, "fourth");
-    const event = makeKeyEvent();
+    const event = makeKeyEvent(harness.view);
     harness.win.dispatch(event);
     assert.deepEqual(fourthCalls, ["fourth"]);
     assert.deepEqual(event.counts, { preventDefault: 1, stopPropagation: 1, immediate: 1 });
@@ -1015,7 +1128,7 @@ test("throwing matchers fail open without consuming Vim keys", () => {
         match: () => { throw new Error("boom"); },
         open: () => {},
       });
-      const missEvent = makeKeyEvent();
+      const missEvent = makeKeyEvent(miss.view);
       miss.win.dispatch(missEvent);
       assert.deepEqual(missEvent.counts, { preventDefault: 0, stopPropagation: 0, immediate: 0 });
       miss.plugin.teardownSchemaDoubleEquals();
@@ -1034,7 +1147,7 @@ test("LAND: unregister bank remains effective during runtime dispatch", () => {
       helpers.schemaDoubleEqualsTargetKind({ path: "bank.md", frontmatter: {} }, harness.plugin),
       null,
     );
-    harness.win.dispatch(makeKeyEvent());
+    harness.win.dispatch(makeKeyEvent(harness.view));
     assert.equal(harness.bankCalls.length, 0);
     harness.plugin.teardownSchemaDoubleEquals();
   });
@@ -1086,11 +1199,7 @@ test("facade resolves builtins and extensions through the instance registry", ()
     );
     const resolved = harness.plugin.resolvePropertyCard({ path: "fourth.md", frontmatter: {} });
     assert.equal(resolved && resolved.kind, "fourth");
-    assert.deepEqual(helpers.schemaDoubleEqualsGate(actingInput({
-      target: "fourth",
-      allowedKinds: harness.plugin.propertyCardKinds(),
-    })), { act: true, reason: "schema-key" });
-    const event = makeKeyEvent();
+    const event = makeKeyEvent(harness.view);
     harness.win.dispatch(event);
     assert.equal(event.counts.preventDefault, 1);
     harness.plugin.unregisterPropertyCard("fourth");
@@ -1119,21 +1228,21 @@ test("two instances isolate the same extension kind", () => {
       second.plugin.resolvePropertyCard({ path: "fourth.md", frontmatter: {} }),
       null,
     );
-    assert.deepEqual(helpers.schemaDoubleEqualsGate(actingInput({
-      target: "fourth",
-      allowedKinds: second.plugin.propertyCardKinds(),
-    })).reason, "not-schema-note");
-    const event = makeKeyEvent();
+    assert.equal(
+      helpers.schemaDoubleEqualsTargetKind({ path: "fourth.md", frontmatter: {} }, second.plugin),
+      null,
+    );
+    const event = makeKeyEvent(second.view);
     second.win.dispatch(event);
     assert.deepEqual(event.counts, { preventDefault: 0, stopPropagation: 0, immediate: 0 });
     assert.equal(second.recordCalls.length, 0);
   });
   withGlobals(first.win, first.doc, () => {
-    assert.deepEqual(helpers.schemaDoubleEqualsGate(actingInput({
-      target: "fourth",
-      allowedKinds: first.plugin.propertyCardKinds(),
-    })), { act: true, reason: "schema-key" });
-    const event = makeKeyEvent();
+    assert.equal(
+      helpers.schemaDoubleEqualsTargetKind({ path: "fourth.md", frontmatter: {} }, first.plugin),
+      "fourth",
+    );
+    const event = makeKeyEvent(first.view);
     first.win.dispatch(event);
     assert.deepEqual(event.counts, { preventDefault: 1, stopPropagation: 1, immediate: 1 });
     first.plugin.teardownSchemaDoubleEquals();
@@ -1145,8 +1254,10 @@ test("two instances isolate the same extension kind", () => {
 
 test("unregister teardown and setup restore builtins without reviving extensions", () => {
   const harness = makeHarness("eat.md", { frontmatter: { type: "[[album]]" } });
+  let now = 1000;
   withGlobals(harness.win, harness.doc, () => {
     harness.plugin.setupSchemaDoubleEquals();
+    harness.plugin.propertyCardEqualsClock = () => now;
     assert.equal(harness.plugin.registerPropertyCard({
       kind: "fourth",
       match: ({ path }) => path === "fourth.md",
@@ -1159,10 +1270,11 @@ test("unregister teardown and setup restore builtins without reviving extensions
     harness.plugin.setupSchemaDoubleEquals();
     assert.deepEqual(harness.plugin.propertyCardKinds().slice(0, 3), ["bank", "album", "record"]);
     assert.equal(harness.plugin.resolvePropertyCard({ path: "fourth.md", frontmatter: {} }), null);
-    const event = makeKeyEvent();
+    const event = makeKeyEvent(harness.view);
     harness.win.dispatch(event);
     assert.deepEqual(harness.albumCalls, [{ filePath: "eat.md" }]);
-    const both = makeKeyEvent();
+    now = 2000;
+    const both = makeKeyEvent(harness.view);
     harness.win.dispatch(both);
     harness.doc.dispatch(both);
     assert.equal(harness.albumCalls.length, 2);

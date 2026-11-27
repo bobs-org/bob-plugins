@@ -279,12 +279,12 @@ test("entry paths accept Markdown and resolve explicit over active", () => {
 });
 
 test("species hand-off maps owners and refuses unknown editors", () => {
-  assert.equal(H.propertyEditorHandoffSpecies({ owner: "record", editor: "==" }), "record");
-  assert.equal(H.propertyEditorHandoffSpecies({ owner: "intentions", editor: "==" }), "intentions");
-  assert.equal(H.propertyEditorHandoffSpecies({ owner: "album", editor: "==" }), "album");
-  assert.equal(H.propertyEditorHandoffSpecies({ owner: "bank", editor: "==" }), "bank");
+  assert.equal(H.propertyEditorHandoffSpecies({ owner: "record", editor: "=" }), "record");
+  assert.equal(H.propertyEditorHandoffSpecies({ owner: "intentions", editor: "=" }), "intentions");
+  assert.equal(H.propertyEditorHandoffSpecies({ owner: "album", editor: "=" }), "album");
+  assert.equal(H.propertyEditorHandoffSpecies({ owner: "bank", editor: "=" }), "bank");
   assert.equal(H.propertyEditorHandoffSpecies({ owner: "props", editor: null }), null);
-  assert.equal(H.propertyEditorHandoffSpecies({ owner: "", editor: "==" }), null);
+  assert.equal(H.propertyEditorHandoffSpecies({ owner: "", editor: "=" }), null);
   assert.equal(H.propertyEditorHandoffSpecies({}), null);
 });
 
@@ -559,10 +559,10 @@ test("species hand-offs close the modal and pass the field", async () => {
   inst.openBankSetupCard = async (options) => { calls.push(["bank", options]); return { ok: true }; };
   const modal = fakeHandoffModal();
   inst.propertyEditorModal = modal;
-  await inst.propertyEditorHandoff({ modal, key: "field", owner: "record", editor: "==" });
-  await inst.propertyEditorHandoff({ modal: fakeHandoffModal(), key: "summary", owner: "intentions", editor: "==" });
-  await inst.propertyEditorHandoff({ modal: fakeHandoffModal(), key: "record", owner: "album", editor: "==" });
-  await inst.propertyEditorHandoff({ modal: fakeHandoffModal(), key: "bank", owner: "bank", editor: "==" });
+  await inst.propertyEditorHandoff({ modal, key: "field", owner: "record", editor: "=" });
+  await inst.propertyEditorHandoff({ modal: fakeHandoffModal(), key: "summary", owner: "intentions", editor: "=" });
+  await inst.propertyEditorHandoff({ modal: fakeHandoffModal(), key: "record", owner: "album", editor: "=" });
+  await inst.propertyEditorHandoff({ modal: fakeHandoffModal(), key: "bank", owner: "bank", editor: "=" });
   assert.deepEqual(calls, [
     ["record", { filePath: "notes/groceries.md", field: "field" }],
     ["intentions", { filePath: "notes/groceries.md", field: "summary" }],
@@ -589,7 +589,7 @@ test("browse equals hands card rows to the species editor and keeps drafts", asy
   const modal = new H.PropertyEditorModal({}, {
     plugin,
     filePath: "notes/groceries.md",
-    report: showReport([wireRow({ key: "field", role: "card", owner: "record", editor: "==", line: 2 })]),
+    report: showReport([wireRow({ key: "field", role: "card", owner: "record", editor: "=", line: 2 })]),
   });
   modal.onCardHandoff = (info) => { handed.push(info); };
   await modal.propertyEditorPerform("equals");

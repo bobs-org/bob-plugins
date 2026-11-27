@@ -689,9 +689,9 @@ async function run(args) {
       { annotationRows, blog: blogReadout, paper, paperTruth: { identity: paperTruth.identity, reading: paperTruth.reading } });
 
     checkpoint("after-data-readouts");
-    // Exercise the actual Vim `==` route in the Obsidian editor. A first `=`
-    // must leave Vim's operator pending; the second opens the Reference
-    // settings editor through the card-kind registry without touching YAML.
+    // Exercise the actual Vim `=` route in the Obsidian editor. A single `=`
+    // opens the Reference settings editor through the card-kind registry
+    // without touching YAML and injects no Esc.
     await shared.openNote(client, blog, "live");
     const focused = await client.evaluate(`(() => {
       const leaf = app.workspace.activeLeaf;

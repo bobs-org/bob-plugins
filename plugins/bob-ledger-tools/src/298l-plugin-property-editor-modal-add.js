@@ -341,7 +341,7 @@ Object.assign(PropertyEditorModal.prototype, {
     if (!this.report) return;
     this.addModeStarted = true;
     this.propertyEditorStartAdd("end");
-    // An explicitly requested key prefills the Add name so == on a missing
+    // An explicitly requested key prefills the Add name so = on a missing
     // key lands with the name typed. Browse mode commits further to the
     // value stage through propertyEditorFocusOrAddConsume instead.
     try {

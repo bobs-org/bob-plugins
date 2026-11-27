@@ -77,7 +77,7 @@ function showReport(overrides = {}) {
 test("group rows keep source order and duplicate keys stay separate", () => {
   const rows = [
     wireRow({ key: "b", line: 3, role: "loose" }),
-    wireRow({ key: "a", line: 4, role: "card", owner: "record", editor: "==" }),
+    wireRow({ key: "a", line: 4, role: "card", owner: "record", editor: "=" }),
     wireRow({ key: "b", line: 5, role: "loose" }),
     wireRow({ key: "type", line: 6, role: "identity", reason: "locked" }),
     wireRow({ key: "done_tasks", line: 7, role: "derived", owner: "ledger", reason: "derived" }),
@@ -103,9 +103,9 @@ test("empty values stay distinct in row text", () => {
 test("roles gate every action and unresolved never becomes loose", () => {
   assert.deepEqual(H.propertyEditorActionForRow(wireRow({ role: "loose", kind: "text", key: "t" })), { action: "edit", key: "t" });
   assert.deepEqual(H.propertyEditorActionForRow(wireRow({ role: "loose", kind: "checkbox", key: "done", value: false })), { action: "toggle", key: "done" });
-  const hand = H.propertyEditorActionForRow(wireRow({ role: "card", key: "field", owner: "record", editor: "==" }));
+  const hand = H.propertyEditorActionForRow(wireRow({ role: "card", key: "field", owner: "record", editor: "=" }));
   assert.equal(hand.action, "handoff");
-  assert.equal(hand.editor, "==");
+  assert.equal(hand.editor, "=");
   const locked = H.propertyEditorActionForRow(wireRow({ role: "identity", key: "type", reason: "why" }));
   assert.equal(locked.action, "locked");
   assert.equal(locked.yamlEscape, true);
@@ -344,7 +344,7 @@ test("discrete ops build exact envelopes and history round-trips", () => {
   assert.equal(H.propertyEditorUnsetOp({}), null);
   assert.deepEqual(H.propertyEditorStatusSaved(), { kind: "saved", text: "✓ Saved · u undo" });
   assert.equal(H.propertyEditorStatusChecking().text, H.PROPERTY_EDITOR_CHECKING_TEXT);
-  const refusal = H.propertyEditorStatusRefusal({ code: "prop_owned", message: "owned", hint: "==" });
+  const refusal = H.propertyEditorStatusRefusal({ code: "prop_owned", message: "owned", hint: "=" });
   assert.equal(refusal.kind, "refusal");
   assert.equal(refusal.message, "owned");
 });

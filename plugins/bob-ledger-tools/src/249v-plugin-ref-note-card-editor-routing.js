@@ -1,4 +1,4 @@
-// Ref Card editor routing (bob-cli-qp ref-editor): `==` opens the shared
+// Ref Card editor routing (bob-cli-qp ref-editor): `=` opens the shared
 // Property Editor on bob's REFERENCE contract when the note carries
 // `props_ref_contract_v1`, else qm.1 focus-or-add on `title`. Owned rows
 // route reading state, residence, and file name to their owners.
@@ -14,7 +14,7 @@ function refNoteCardEditorRoute(capabilities) {
   }
 }
 
-// The `==` capability gate reads only the per-bob-path cache: confirmed
+// The `=` capability gate reads only the per-bob-path cache: confirmed
 // opens the settings mode, while unknown, absent, and unconfirmed all fall
 // back to title focus-or-add. Painting never probes; the lifecycle catalog
 // and show probes in 298v settle the slot.
@@ -27,7 +27,7 @@ function refNoteCardEditorCapabilityConfirmed(plugin) {
   return false;
 }
 
-// The single `==` open path for ref notes (wired from the 249s kind
+// The single `=` open path for ref notes (wired from the 249s kind
 // registration): settings mode on the REFERENCE contract when the
 // capability is present, qm.1 focus-or-add on `title` when it is absent or
 // pending. Never throws; the open itself is async and unobserved.

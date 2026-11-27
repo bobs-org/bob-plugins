@@ -69,15 +69,17 @@ closing.
 
 ## Property-card extension API
 
-Bob Ledger Tools keeps the property-card `==` dispatcher open to registered
+Bob Ledger Tools keeps the property-card `=` dispatcher open to registered
 card editors. Each plugin instance owns its registry. `registerPropertyCard`
 accepts `{ kind, match({ path, frontmatter }), open({ path, frontmatter }) }`;
 it returns `false` for an invalid or duplicate kind. `unregisterPropertyCard`
 removes a kind, and plugin unload clears the registry. The built-ins are kept
 in bank → album → record order, with extension kinds after them. Matching
 continues until a matcher returns exactly `true`; a thrown matcher is skipped,
-so an extension failure leaves the key with Vim. The `==` gate still enforces
-the existing normal-mode, Live Preview, and pending-equals checks. The
+so an extension failure leaves the key with Vim. The `=` gate still enforces
+the existing bare normal-mode, Live Preview, and content-target checks, and a
+fast second `=` within 350 ms of an opening `=` is swallowed so the old `==`
+habit opens the editor once. The
 compatibility helper `schemaDoubleEqualsTargetKind` resolves through this
 same registry.
 
@@ -167,7 +169,7 @@ teardown intact. `openPropertyEditor` accepts `setting` (a setting id, with
 request in `requestedSetting`/`focusSettings` and consumes it once in
 reconcile (`propertyEditorSettingsConsumeFocus`), selecting the settings row
 even for ghosts and the corresponding real property on degraded reports.
-`==`, card Settings, and policy chips all route through that request, and
+`=`, card Settings, and policy chips all route through that request, and
 browse `=` inside an area/project editor focuses the settings group instead
 of reopening. Project task rows hand off through
 `propertyEditorProjectTaskHandoff(modal, line, taskLine)`: it navigates to
@@ -214,7 +216,7 @@ heading, and outside a card it falls back to neutral ink.
 album, record, Area or Project, day/week/quarter/year, notebook, prose, ref,
 then none. Notebook, Prose, and Ref use `props_v1` alone and do not require
 `props_contract_v1`. The Prose Card owns only its inline title; body headings
-remain visible. Ref, the last species in precedence, registers `==` as an
+remain visible. Ref, the last species in precedence, registers `=` as an
 extension: the Reference editor under `props_ref_contract_v1`, else
 focus-or-add on `title`. It hides a matching first H1 like the other
 title-owning cards. Notebook and Prose shipped behind the `cardPreviewKinds`
@@ -225,7 +227,7 @@ The Area and Project hosts own one title and one shared Properties foot when
 They keep the Project's `^prj` line as its editable control. `bank.md` is
 excluded from those hosts by path because it is the taskless Bank hub, never
 an Area; its one Bank Card uses the `props_v1` gate. The card keys stay `-`
-(Properties drawer), `_` (own fold), `==` (species editor), and `+` (generic
+(Properties drawer), `_` (own fold), `=` (species editor), and `+` (generic
 Property Editor). See [Area and Project Cards](https://bobs-org.github.io/reference/plugins/area-and-project-cards/).
 
 `propertyCardOwnTitle(scope, { path, recognizer, view })` hides the view's

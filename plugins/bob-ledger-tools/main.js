@@ -95205,7 +95205,7 @@ function propertyCardFootRenderValueCell(cell, doc, row, handlers) {
         const size = row.value && typeof row.value === "object" && !Array.isArray(row.value)
           ? Object.keys(row.value).length
           : null;
-        const label = Number.isInteger(size) ? `${key} · ${size} ${size === 1 ? "field" : "fields"}  ==` : `${key}  ==`;
+        const label = Number.isInteger(size) ? `${key} · ${size} ${size === 1 ? "field" : "fields"}  =` : `${key}  =`;
         propertyCardKitAppendText(doc, opener, label);
         opener.setAttribute("aria-label", `Open ${key} editor`);
         opener.addEventListener?.("click", (event) => {
@@ -109964,13 +109964,15 @@ class BobLedgerToolsBankSetupCardMixin {
   }
 }
 // ---- src/248m-plugin-schema-double-equals.js ----
-// Capture-phase == on album notes and bank.md opens the schema/setup card;
-// == on a canonical record note opens its Record Card. A vimrc nnoremap ==
-// never fires: CodeMirror Vim treats = as a complete operator, so the
-// second = reindents instead of matching a mapping. Bare `-`, `_`, and `+`
-// in Live Preview Vim normal mode toggle Properties, fold the mounted card
-// section, and open the Property Editor. They use a content-target gate and
-// do not wait for a pending `=`.
+// Capture-phase bare `=` on card notes opens the species editor: the album
+// schema card, Bank Setup, the Record Card, and every registered extension
+// kind (area/project settings, day/period editor, notebook/prose focus, the
+// Reference editor). The gate claims `=` before Vim on card notes, so no
+// operator stays pending, no `<Esc>` is injected, and a vimrc `=` map never
+// fires there. Bare `-`, `_`, and `+` in Live Preview Vim normal mode toggle
+// Properties, fold the mounted card section, and open the Property Editor
+// through the same content-target gate. A one-shot habit guard swallows a
+// fast second `=` (the old `==` habit) within 350 ms of an opening `=`.
 
 function schemaDoubleEqualsKeyBufferEmpty(value) {
   if (Array.isArray(value)) return value.length === 0;
@@ -110051,48 +110053,9 @@ function propertyCardBuiltinMatch(kind, { path, frontmatter } = {}) {
   return false;
 }
 
-function propertyCardSecondKeyCommonGate(input) {
-  const snap = (input && input.vim) || { readable: false };
-  if (!input || typeof input.key !== "string") return { act: false, reason: "not-second-key" };
-  if (input.ctrlKey || input.altKey || input.metaKey) {
-    return { act: false, reason: "modified" };
-  }
-  if (input.repeat) return { act: false, reason: "repeat" };
-  if (input.isComposing) return { act: false, reason: "composing" };
-  if (input.defaultPrevented) return { act: false, reason: "default-prevented" };
-  if (!input.inEditor) return { act: false, reason: "outside-editor" };
-  if (!input.livePreview) return { act: false, reason: "not-live-preview" };
-  if (!snap.readable) return { act: false, reason: "no-vim" };
-  if (snap.insertMode || snap.visualMode || snap.replaceMode) {
-    return { act: false, reason: "not-normal" };
-  }
-  if (snap.operator !== "indentAuto" || !snap.keyBufferEmpty) {
-    return { act: false, reason: "no-pending-equals" };
-  }
-  if (snap.countPending) return { act: false, reason: "counted" };
-  if (snap.registerPending) return { act: false, reason: "register" };
-  return { act: true, reason: "clean-pending-equals" };
-}
-
-function propertyCardSecondKeyGate(input) {
-  const common = propertyCardSecondKeyCommonGate(input);
-  if (!common.act) return common;
-  const arm = input && input.arm;
-  if (!arm || typeof arm.run !== "function" || typeof arm.canAct !== "function") {
-    return { act: false, reason: "unregistered-arm" };
-  }
-  if (!input.canHandleKey) return { act: false, reason: "no-handle-key" };
-  try {
-    if (arm.canAct(input.context) !== true) return { act: false, reason: "arm-not-actionable" };
-  } catch (_) {
-    return { act: false, reason: "arm-not-actionable" };
-  }
-  return { act: true, reason: arm.reason || "second-key-arm" };
-}
-
 function propertyCardBareKeyGate(input) {
   const snap = (input && input.vim) || { readable: false };
-  if (!input || (input.key !== "-" && input.key !== "+" && input.key !== "_")) {
+  if (!input || (input.key !== "-" && input.key !== "+" && input.key !== "_" && input.key !== "=")) {
     return { act: false, reason: "not-bare-key" };
   }
   if (input.ctrlKey || input.altKey || input.metaKey) {
@@ -110121,22 +110084,6 @@ function propertyCardBareKeyGate(input) {
     return { act: false, reason: "arm-not-actionable" };
   }
   return { act: true, reason: arm.reason || "bare-key-arm" };
-}
-
-// Compatibility helper retained for existing == callers and tests. Runtime
-// key dispatch uses the arm table below, with this arm's same species gate.
-function schemaDoubleEqualsGate(input) {
-  if (!input || input.key !== "=") return { act: false, reason: "not-equals" };
-  const common = propertyCardSecondKeyCommonGate(input);
-  if (!common.act) return common;
-  const allowed = Array.isArray(input.allowedKinds) && input.allowedKinds.length > 0
-    ? input.allowedKinds
-    : propertyCardGateKinds();
-  if (!allowed.includes(input.target)) {
-    return { act: false, reason: "not-schema-note" };
-  }
-  if (!input.canHandleKey) return { act: false, reason: "no-handle-key" };
-  return { act: true, reason: "schema-key" };
 }
 
 function schemaDoubleEqualsTargetKind(input = {}, registryOrPlugin) {
@@ -110400,11 +110347,29 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
     return null;
   }
 
+  // Injectable clock for the habit guard: tests set
+  // `plugin.propertyCardEqualsClock = () => ms`. Production falls back to the
+  // keydown's event.timeStamp, then Date.now().
+  propertyCardEqualsNow(event) {
+    try {
+      if (typeof this.propertyCardEqualsClock === "function") {
+        const now = this.propertyCardEqualsClock();
+        if (typeof now === "number" && Number.isFinite(now)) return now;
+      }
+    } catch (_) {}
+    try {
+      const stamp = event && event.timeStamp;
+      if (typeof stamp === "number" && Number.isFinite(stamp)) return stamp;
+    } catch (_) {}
+    return Date.now();
+  }
+
   setupSchemaDoubleEquals() {
     if (this.schemaDoubleEqualsActive) return;
     this.schemaDoubleEqualsActive = true;
     this.ensurePropertyCardBuiltins();
     this.handledSchemaDoubleEqualsEvents = new WeakSet();
+    this.propertyCardEqualsGuardUntil = 0;
     if (this.propertyCardToggleCommandRegistered !== true) {
       try {
         this.addCommand({
@@ -110476,6 +110441,7 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
     this.schemaDoubleEqualsActive = false;
     this.propertyCardRegistryEntries = [];
     this.propertyCardSecondKeyArms?.clear?.();
+    this.propertyCardEqualsGuardUntil = 0;
     this.handledSchemaDoubleEqualsEvents = null;
     try {
       if (typeof propertyCardCabinetPickReleasePlugin === "function") {
@@ -110497,6 +110463,35 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
       return;
     }
     const key = event && event.key;
+    // Habit guard: a fast second `=` after a bare `=` opened a card editor is
+    // swallowed once so the old `==` habit opens the editor exactly once and
+    // never fires the editor's own `=`. Any other keydown disarms the guard
+    // without being consumed, so compositions like `=[r` still work. The guard
+    // applies whatever the target, including the just-opened modal.
+    try {
+      const guardUntil = this.propertyCardEqualsGuardUntil;
+      if (typeof guardUntil === "number" && guardUntil > 0) {
+        const now = this.propertyCardEqualsNow(event);
+        const unmodifiedEquals = key === "="
+          && !(event && (event.ctrlKey || event.altKey || event.metaKey))
+          && !(event && (event.isComposing || event.defaultPrevented));
+        if (now <= guardUntil && unmodifiedEquals) {
+          if (this.handledSchemaDoubleEqualsEvents) {
+            this.handledSchemaDoubleEqualsEvents.add(event);
+          }
+          try { event.preventDefault(); } catch (_) {}
+          try { event.stopPropagation(); } catch (_) {}
+          try {
+            if (typeof event.stopImmediatePropagation === "function") {
+              event.stopImmediatePropagation();
+            }
+          } catch (_) {}
+          this.propertyCardEqualsGuardUntil = 0;
+          return;
+        }
+        this.propertyCardEqualsGuardUntil = 0;
+      }
+    } catch (_) {}
     if (key !== "=" && key !== "-" && key !== "+" && key !== "_") return;
     try {
       if (typeof propertyCardCabinetsGateLive === "function"
@@ -110590,38 +110585,21 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
     };
     const livePreview = schemaDoubleEqualsLivePreview(view, cm);
     const vim = schemaDoubleEqualsVimSnapshot(cm);
-    const gate = key === "="
-      ? propertyCardSecondKeyGate({
-        key,
-        ctrlKey: Boolean(event && event.ctrlKey),
-        altKey: Boolean(event && event.altKey),
-        metaKey: Boolean(event && event.metaKey),
-        shiftKey: Boolean(event && event.shiftKey),
-        repeat: Boolean(event && event.repeat),
-        isComposing: Boolean(event && event.isComposing),
-        defaultPrevented: Boolean(event && event.defaultPrevented),
-        inEditor: schemaDoubleEqualsEventInEditor(event, view),
-        livePreview,
-        vim,
-        canHandleKey: schemaDoubleEqualsCanHandleKey(),
-        arm: wrappedArm,
-        context,
-      })
-      : propertyCardBareKeyGate({
-        key,
-        ctrlKey: Boolean(event && event.ctrlKey),
-        altKey: Boolean(event && event.altKey),
-        metaKey: Boolean(event && event.metaKey),
-        shiftKey: Boolean(event && event.shiftKey),
-        repeat: Boolean(event && event.repeat),
-        isComposing: Boolean(event && event.isComposing),
-        defaultPrevented: Boolean(event && event.defaultPrevented),
-        inContent: schemaDoubleEqualsEventInContent(event, view, cm),
-        livePreview,
-        vim,
-        arm: wrappedArm,
-        context,
-      });
+    const gate = propertyCardBareKeyGate({
+      key,
+      ctrlKey: Boolean(event && event.ctrlKey),
+      altKey: Boolean(event && event.altKey),
+      metaKey: Boolean(event && event.metaKey),
+      shiftKey: Boolean(event && event.shiftKey),
+      repeat: Boolean(event && event.repeat),
+      isComposing: Boolean(event && event.isComposing),
+      defaultPrevented: Boolean(event && event.defaultPrevented),
+      inContent: schemaDoubleEqualsEventInContent(event, view, cm),
+      livePreview,
+      vim,
+      arm: wrappedArm,
+      context,
+    });
     if (!gate.act) return;
     if (this.handledSchemaDoubleEqualsEvents) {
       this.handledSchemaDoubleEqualsEvents.add(event);
@@ -110635,7 +110613,7 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
     } catch (_) {}
     if (key === "=") {
       try {
-        window.CodeMirrorAdapter.Vim.handleKey(cm, "<Esc>", "mapping");
+        this.propertyCardEqualsGuardUntil = this.propertyCardEqualsNow(event) + 350;
       } catch (_) {}
     }
     try {
@@ -118284,7 +118262,7 @@ function proseNoteCardBuildEl(doc, model, options = {}) {
     });
     if (!block) return null;
     if (model.title.fromStem === true) {
-      block.heading.setAttribute("title", "Title from the file name — press == to set one");
+      block.heading.setAttribute("title", "Title from the file name — press = to set one");
     }
     if (block.subtitle) block.subtitle.classList?.add?.("bob-prose-note-card-dek");
     block.actions.appendChild(proseNoteCardNumberingNode(doc, model, options));
@@ -119896,7 +119874,7 @@ function refNoteCardBuildEl(doc, model, options = {}) {
     if (titleRow) refNoteCardVersionSlot(doc, titleRow);
     if (block.subtitle) block.subtitle.classList?.add?.("bob-ref-card-dek");
     if (model.title.fromStem === true) {
-      block.heading.setAttribute("title", "Title from the file name · press == to add a title");
+      block.heading.setAttribute("title", "Title from the file name · press = to add a title");
     }
     const bodyId = typeof propertyCardFoldNextId === "function"
       ? propertyCardFoldNextId() : `bob-ref-card-body-${String(model.path).replace(/[^a-z0-9_-]/gi, "-")}`;
@@ -120104,7 +120082,7 @@ class BobLedgerToolsRefNoteCardMixin {
     return typeof unregister === "function" ? unregister : () => {};
   }
 
-  // `==` on a ref note: the Reference editor in settings mode when bob
+  // `=` on a ref note: the Reference editor in settings mode when bob
   // reports `props_ref_contract_v1`, else qm.1 focus-or-add on `title`.
   // The route itself lives in 249v; this registration only owns the kind.
   refNoteCardRegisterTitleKey() {
@@ -121597,7 +121575,7 @@ class BobLedgerToolsRefNoteCardReadoutsMixin {
   }
 }
 // ---- src/249v-plugin-ref-note-card-editor-routing.js ----
-// Ref Card editor routing (bob-cli-qp ref-editor): `==` opens the shared
+// Ref Card editor routing (bob-cli-qp ref-editor): `=` opens the shared
 // Property Editor on bob's REFERENCE contract when the note carries
 // `props_ref_contract_v1`, else qm.1 focus-or-add on `title`. Owned rows
 // route reading state, residence, and file name to their owners.
@@ -121613,7 +121591,7 @@ function refNoteCardEditorRoute(capabilities) {
   }
 }
 
-// The `==` capability gate reads only the per-bob-path cache: confirmed
+// The `=` capability gate reads only the per-bob-path cache: confirmed
 // opens the settings mode, while unknown, absent, and unconfirmed all fall
 // back to title focus-or-add. Painting never probes; the lifecycle catalog
 // and show probes in 298v settle the slot.
@@ -121626,7 +121604,7 @@ function refNoteCardEditorCapabilityConfirmed(plugin) {
   return false;
 }
 
-// The single `==` open path for ref notes (wired from the 249s kind
+// The single `=` open path for ref notes (wired from the 249s kind
 // registration): settings mode on the REFERENCE contract when the
 // capability is present, qm.1 focus-or-add on `title` when it is absent or
 // pending. Never throws; the open itself is async and unobserved.
@@ -135305,7 +135283,7 @@ function recordSheetRenderToolbar(slot, model, options, doc) {
       edit.setAttribute("type", "button");
       edit.setAttribute("data-record-sheet-focus", "edit");
       edit.setAttribute("aria-haspopup", "dialog");
-      edit.setAttribute("title", "Edit fields (==, Ctrl+Shift+P)");
+      edit.setAttribute("title", "Edit fields (=, Ctrl+Shift+P)");
       edit.setAttribute("aria-label", "Edit record fields");
       recordSheetText(edit, "⊞ Edit");
       edit.addEventListener?.("click", (event) => {
@@ -191067,7 +191045,7 @@ function intentionCardDomGhost(model, plugin, doc) {
   intentionCardDomText(label, "＋ Set intentions");
   const keys = intentionCardDomEl(doc, "kbd", "bob-intention-card-ghost-keys");
   keys.setAttribute("aria-hidden", "true");
-  intentionCardDomText(keys, "==");
+  intentionCardDomText(keys, "=");
   ghost.appendChild(label);
   ghost.appendChild(keys);
   // CodeMirror must never take the click (or the caret) from the button.
@@ -196274,7 +196252,7 @@ function intentionCardEditorProseBackOut(modal, event) {
 }
 // ---- src/297d-plugin-intention-card-entrypoints.js ----
 // Intention card editor entry points: the `intentions` registry kind, the
-// `==` open path for every canonical subject (including empty or malformed
+// `=` open path for every canonical subject (including empty or malformed
 // ones), and the per-path optimistic overlay store. A malformed field opens
 // the modal with a refusal and YAML recovery; it never paints a display card.
 const INTENTION_CARD_EDITOR_OVERLAY_TTL_MS = 8000;
@@ -196634,7 +196612,7 @@ function intentionCardOverlayModel(model, overlay, frontmatter) {
 // ---- src/297e-plugin-intention-card-navigation.js ----
 // Intention card navigation: in-place parent/sibling travel, missing-note
 // states, yesterday entry points, the intentions YAML excursion, and the
-// [n==r / ==[r compositions. Browse navigation never discards an active
+// [n=r / =[r compositions. Browse navigation never discards an active
 // stage: stage keys stay text, and only explicit cancel/save leaves it. All
 // requests, Undo, pending drafts, and async completions stay pinned to the
 // modal's current target; superseded replies after close or target change are
@@ -196809,7 +196787,7 @@ class BobLedgerToolsIntentionCardNavigationMixin {
     });
   }
 
-  // [n==r composition helper: previous-note navigation already moved the
+  // [n=r composition helper: previous-note navigation already moved the
   // active note; the registry opens its card; direct reflection opening
   // selects the reflection row (closed notes land there anyway).
   async intentionCardOpenPreviousReflection(options = {}) {
@@ -198753,7 +198731,7 @@ function propertyEditorActionForRow(row) {
   if (role === "card") {
     return {
       action: "handoff",
-      editor: row && typeof row.editor === "string" && row.editor ? row.editor : "==",
+      editor: row && typeof row.editor === "string" && row.editor ? row.editor : "=",
       owner: row && typeof row.owner === "string" ? row.owner : "",
       key: row ? row.key : "",
     };
@@ -199404,7 +199382,7 @@ class PropertyEditorModal extends PropertyEditorModalBase {
         try {
           await this.onCardHandoff?.({
             key: selected && selected.row ? selected.row.key : "",
-            editor: "==",
+            editor: "=",
             owner: species,
             row: selected ? selected.row : null,
           });
@@ -201782,7 +201760,7 @@ Object.assign(PropertyEditorModal.prototype, {
     if (!this.report) return;
     this.addModeStarted = true;
     this.propertyEditorStartAdd("end");
-    // An explicitly requested key prefills the Add name so == on a missing
+    // An explicitly requested key prefills the Add name so = on a missing
     // key lands with the name typed. Browse mode commits further to the
     // value stage through propertyEditorFocusOrAddConsume instead.
     try {
@@ -202088,7 +202066,7 @@ function propertyEditorEntryResolvePath(plugin, options = {}) {
 }
 
 // Card rows hand off to the owning species editor. The owner names the
-// species; the wire editor is always "==" on card rows today.
+// species; the wire editor is always "=" on card rows today.
 function propertyEditorHandoffSpecies(input = {}) {
   const owner = String(input.owner || "").trim().toLowerCase();
   if (owner === "record") return "record";
@@ -205065,7 +205043,7 @@ async function propertyEditorReadSourceSnapshot(options = {}) {
 // purpose: malformed drafts, sibling/document injection, and opaque content
 // are Bob's dry-run verdicts, shown verbatim with the draft retained.
 // `y` / Ctrl+E still mean the Source-mode excursion; this stage never
-// steals them. Card maps keep routing to `==`.
+// steals them. Card maps keep routing to `=`.
 function propertyEditorYamlStageKindForRow(row) {
   if (!row || typeof propertyEditorRoleOf !== "function") return null;
   if (propertyEditorRoleOf(row) !== "loose" || row.pending === true) return null;
@@ -207546,7 +207524,7 @@ class BobLedgerToolsPropertyCapabilityRoutingMixin {
   // Reference-contract evidence for the Reference editor (bob-cli-qp
   // ref-editor): true only after a catalog or typed-note observation of
   // `props_ref_contract_v1`. Unknown, absent, and unconfirmed all read as
-  // not ready, so `==` falls back to title focus-or-add.
+  // not ready, so `=` falls back to title focus-or-add.
   propertyCapabilityRefContractConfirmed(key) {
     try {
       return this.propertyCapabilityState(key).refContract === "confirmed";
@@ -207771,7 +207749,7 @@ class BobLedgerToolsPropertyCapabilityRoutingMixin {
       }
       // Both contracts settle from one probe, so a confirmed generic slot
       // alone never parks the schedule: the reference slot still needs its
-      // own observation before `==` may open the settings mode.
+      // own observation before `=` may open the settings mode.
       if (entry.contract === "confirmed" && entry.refContract === "confirmed") return "confirmed";
       // Absence re-probes like the generic probe: an upgraded binary is
       // detected on a later lifecycle event.
@@ -208753,7 +208731,7 @@ PropertyEditorModal.prototype.propertyEditorReconcile = function propertyEditorR
     && propertyEditorSettingsFindEntry(this, selectedBefore).source !== true);
   propertyEditorSettingsBaseReconcile.call(this, report);
   if (selectedWasSynthetic && propertyEditorSettingsFindEntry(this, selectedBefore)) this.selectedId = selectedBefore;
-  // A setting-focus request from open (==, Settings, a policy chip, or a
+  // A setting-focus request from open (=, Settings, a policy chip, or a
   // mapped key) applies once on the first report, then never yanks again.
   try {
     if (typeof propertyEditorSettingsConsumeFocus === "function") propertyEditorSettingsConsumeFocus(this);
@@ -210502,7 +210480,7 @@ PropertyEditorModal.prototype.propertyEditorOnKeyDown = function propertyEditorO
 };
 // ---- src/298z-plugin-property-editor-settings-entrypoints.js ----
 // Settings entry points: area/project registry kinds, setting-focus
-// requests, and project-task handoffs. `==` on an area/project note and the
+// requests, and project-task handoffs. `=` on an area/project note and the
 // card Settings control open the Property Editor on the settings group; a
 // policy chip selects its own setting. Project Goal/Starts/Depends-on rows
 // navigate to the current ^prj task through the navigation-hotkeys Task
@@ -210562,7 +210540,7 @@ function propertyEditorSettingsFocusEntry(modal, settingId) {
   }
 }
 
-// Select the first visible settings row. `==` and the card Settings control
+// Select the first visible settings row. `=` and the card Settings control
 // land here; a policy chip selects its own setting instead.
 function propertyEditorSettingsFocusFirst(modal) {
   if (!modal || modal.closed) return false;
@@ -217558,14 +217536,12 @@ try {
   }
 } catch (_) {}
 // ---- src/369-exports-schema-double-equals.js ----
-// Test-facing exports for the pure == schema-keymap helpers.
+// Test-facing exports for the pure bare-key schema-keymap helpers.
 try {
   if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
     module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
       schemaDoubleEqualsVimSnapshot,
-      propertyCardSecondKeyGate,
       propertyCardBareKeyGate,
-      schemaDoubleEqualsGate,
       schemaDoubleEqualsTargetKind,
       schemaDoubleEqualsEventInContent,
     });

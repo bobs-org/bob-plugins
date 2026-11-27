@@ -1,4 +1,4 @@
-// Ref Card editor (bob-cli-qp ref-editor): == routing on
+// Ref Card editor (bob-cli-qp ref-editor): = routing on
 // props_ref_contract_v1, REFERENCE settings rows, owned-elsewhere routes,
 // set-only refusals, and the Esc/q/Ctrl+[ ladder.
 const assert = require("node:assert/strict");
@@ -159,7 +159,7 @@ function modalFor(show, options = {}, plugin = null) {
   return modal;
 }
 
-test("the == route follows the reference capability", () => {
+test("the = route follows the reference capability", () => {
   assert.equal(H.refNoteCardEditorRoute(["props_v1", "props_ref_contract_v1"]), "settings");
   assert.equal(H.refNoteCardEditorRoute(["props_v1", "props_contract_v1"]), "title-fallback");
   assert.equal(H.refNoteCardEditorRoute(["props_v1"]), "title-fallback");
@@ -168,7 +168,7 @@ test("the == route follows the reference capability", () => {
   assert.equal(H.refNoteCardEditorRoute(undefined), "title-fallback");
 });
 
-test("== opens settings mode when the capability is confirmed, else title focus-or-add", () => {
+test("= opens settings mode when the capability is confirmed, else title focus-or-add", () => {
   const opened = [];
   const confirmed = {
     openPropertyEditor(options) { opened.push(options); return { ok: true }; },
@@ -251,7 +251,7 @@ test("reference rows split into REFERENCE SETTINGS and OWNED ELSEWHERE", () => {
   assert.equal(H.propertyEditorBadgeKind("reference"), "reference");
 });
 
-test("== and = land on the first settings row once the contract arrives", () => {
+test("= lands on the first settings row once the contract arrives", () => {
   const show = refReport();
   const modal = modalFor(show, { focusSettings: true });
   modal.propertyEditorReconcile(show);

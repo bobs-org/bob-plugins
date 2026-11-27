@@ -40,7 +40,7 @@ function propertyEditorEntryResolvePath(plugin, options = {}) {
 }
 
 // Card rows hand off to the owning species editor. The owner names the
-// species; the wire editor is always "==" on card rows today.
+// species; the wire editor is always "=" on card rows today.
 function propertyEditorHandoffSpecies(input = {}) {
   const owner = String(input.owner || "").trim().toLowerCase();
   if (owner === "record") return "record";

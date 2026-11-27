@@ -184,7 +184,7 @@ class BobLedgerToolsRefNoteCardMixin {
     return typeof unregister === "function" ? unregister : () => {};
   }
 
-  // `==` on a ref note: the Reference editor in settings mode when bob
+  // `=` on a ref note: the Reference editor in settings mode when bob
   // reports `props_ref_contract_v1`, else qm.1 focus-or-add on `title`.
   // The route itself lives in 249v; this registration only owns the kind.
   refNoteCardRegisterTitleKey() {

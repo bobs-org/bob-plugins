@@ -638,7 +638,7 @@ test("no-op, failed, and stale applies do not consume history", async () => {
 
     deps.setApplyImpl(async () => ({
       ok: true,
-      report: updateErrorReport({ code: "prop_owned", message: "owned", hint: "==" }),
+      report: updateErrorReport({ code: "prop_owned", message: "owned", hint: "=" }),
     }));
     const failed = await session.applyOps(draftOps());
     assert.equal(failed.ok, false);

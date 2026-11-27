@@ -45,7 +45,7 @@ it never invents reading progress or annotation counts.
 
 ## Keys and takeover
 
-In Live Preview Vim normal mode, `==` opens the Reference editor: the shared Property
+In Live Preview Vim normal mode, `=` opens the Reference editor: the shared Property
 Editor on Bob's `REFERENCE` settings contract when Bob reports the
 `props_ref_contract_v1` capability, else focus-or-add on `title:`. `+` opens the
 ordinary Property Editor, `-` opens the Properties drawer, and `_` compacts the card

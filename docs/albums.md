@@ -9,7 +9,7 @@ root area, like the notebook catalog. Project group rows remain headings; only
 resolved album links receive chips. Source mode keeps editable Markdown.
 
 Use the [Property Editor](property-editor.md) for loose note properties. Album
-schema fields and record fields route to their owning `==` editors; the
+schema fields and record fields route to their owning `=` editors; the
 `record` map opens the album schema editor rather than being flattened into
 YAML rows.
 
@@ -137,7 +137,7 @@ block in desktop Live Preview and Reading. The native node stays as the
 title-slot anchor. Uncertain capability, invalid or stale source/cache,
 or failed routing restores the block with the existing per-row hiding;
 failed mounts and denied contexts restore native rendering entirely.
-`-` shows every property, `+` opens the Property Editor, and `==` keeps
+`-` shows every property, `+` opens the Property Editor, and `=` keeps
 the album schema editor. **Add file property** routes to Add mode on an
 owned note; the File Properties sidebar remains native. See
 [native access and recovery](property-editor.md#native-properties-and-recovery).
@@ -271,11 +271,11 @@ Typing inside inputs never triggers
 navigation letters, and composition keystrokes never apply. Consequence and
 refusal paint in a live region with accessible names on every control.
 
-Open the album card editor from the album card's **⊞ Schema**, `==` in Vim normal mode in Live
+Open the album card editor from the album card's **⊞ Schema**, `=` in Vim normal mode in Live
 Preview on the album note, the **Edit album schema** palette command, Command
 Mode's Vault row, or `Ctrl+Shift+P` on an album note where the Task Card has
-no target, including its title or a blank row. A counted `N==`, Source mode,
-and other notes keep Vim's reindent. On a canonical record note, `==` opens
+no target, including its title or a blank row. A counted `N=`, Source mode,
+and other notes keep Vim's reindent. On a canonical record note, `=` opens
 its Record Card editor instead, and `=` inside the editor climbs to the parent
 album card editor. The chord fallback resolves direct album
 notes only. The palette command resolves

@@ -1,5 +1,5 @@
 // Settings entry points: area/project registry kinds, setting-focus
-// requests, and project-task handoffs. `==` on an area/project note and the
+// requests, and project-task handoffs. `=` on an area/project note and the
 // card Settings control open the Property Editor on the settings group; a
 // policy chip selects its own setting. Project Goal/Starts/Depends-on rows
 // navigate to the current ^prj task through the navigation-hotkeys Task
@@ -59,7 +59,7 @@ function propertyEditorSettingsFocusEntry(modal, settingId) {
   }
 }
 
-// Select the first visible settings row. `==` and the card Settings control
+// Select the first visible settings row. `=` and the card Settings control
 // land here; a policy chip selects its own setting instead.
 function propertyEditorSettingsFocusFirst(modal) {
   if (!modal || modal.closed) return false;

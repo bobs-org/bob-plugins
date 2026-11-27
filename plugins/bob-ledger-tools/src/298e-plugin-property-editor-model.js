@@ -113,7 +113,7 @@ function propertyEditorActionForRow(row) {
   if (role === "card") {
     return {
       action: "handoff",
-      editor: row && typeof row.editor === "string" && row.editor ? row.editor : "==",
+      editor: row && typeof row.editor === "string" && row.editor ? row.editor : "=",
       owner: row && typeof row.owner === "string" ? row.owner : "",
       key: row ? row.key : "",
     };

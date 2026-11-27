@@ -99,7 +99,7 @@ const LANDING_MODAL = `(() => {
 
 async function runLandingWorkflows(ctx, h) {
   const { client, plan, key, keys, open, waitCard, waitNoCard, shot, vault, writerApplies, sleep, waitFor } = ctx;
-  const { evidence, step, modal, ready, closed, closeAll, liveReady, doubleEquals, typeText, selectAll, disk, onlyChanged, writeStep } = h;
+  const { evidence, step, modal, ready, closed, closeAll, liveReady, pressEquals, typeText, selectAll, disk, onlyChanged, writeStep } = h;
   const landing = evidence.landing = {};
   const extra = () => client.evaluate(LANDING_MODAL);
   const metadataIntentions = (notePath) => client.evaluate(`JSON.stringify(app.metadataCache.getFileCache(app.vault.getAbstractFileByPath(${JSON.stringify(notePath)}))?.frontmatter?.intentions ?? null)`);
@@ -117,7 +117,7 @@ async function runLandingWorkflows(ctx, h) {
     const held = await client.evaluate(holdMetadata(landingPath));
     assert.ok(held.ok, JSON.stringify(held));
     const before = vault();
-    await doubleEquals(landingPath);
+    await pressEquals(landingPath);
     await ready((value) => value.path === landingPath, "card editor on the landing day");
     await key("i");
     await ready((value) => value.stage === "intention" && value.stageField === "add" && value.focus?.input === "intention", "first add stage");
@@ -171,7 +171,7 @@ async function runLandingWorkflows(ctx, h) {
     const held = await client.evaluate(holdMetadata(landingPath));
     assert.ok(held.ok, JSON.stringify(held));
     try {
-      await doubleEquals(landingPath);
+      await pressEquals(landingPath);
       await ready((value) => value.path === landingPath);
       await key("1");
       await ready((value) => value.selected === "intention:0");
@@ -224,7 +224,7 @@ async function runLandingWorkflows(ctx, h) {
   };
   await step("landing-cancel-leaves-no-retry", async () => {
     await openSourcePane();
-    await doubleEquals(plan.paths.today);
+    await pressEquals(plan.paths.today);
     let state = await ready((value) => value.path === plan.paths.today);
     landing.todayBefore = state.fields.intentions;
     await key("2");
@@ -281,7 +281,7 @@ async function runLandingWorkflows(ctx, h) {
   // ---- Busy window: a slowed Undo against competing keys and clicks ----
   await step("landing-undo-busy-guard", async () => {
     await liveReady(plan.paths.today);
-    await doubleEquals(plan.paths.today);
+    await pressEquals(plan.paths.today);
     await ready((value) => value.path === plan.paths.today);
     const since = ctx.invocations().length;
     fs.writeFileSync(ctx.delayFlag, "2500");
@@ -324,7 +324,7 @@ async function runLandingWorkflows(ctx, h) {
   // ---- Undo restores agent provenance inside the open modal ----
   await step("landing-undo-restores-modal-provenance", async () => {
     await ctx.open(plan.paths.stamped, "live");
-    await doubleEquals(plan.paths.stamped);
+    await pressEquals(plan.paths.stamped);
     await ready((value) => value.path === plan.paths.stamped && value.fields?.summaryState === "agent", "agent summary");
     await key("s"); await key("Enter");
     await ready((value) => value.stage === "summary");
@@ -394,7 +394,7 @@ async function runLandingWorkflows(ctx, h) {
   // ---- Alt+J: shared arrange animation on stable rows ----
   await step("landing-reorder-arrange-animation", async () => {
     await liveReady(plan.paths.today);
-    await doubleEquals(plan.paths.today);
+    await pressEquals(plan.paths.today);
     const state = await ready((value) => value.path === plan.paths.today && value.fields?.intentions?.length >= 2);
     const list = state.fields.intentions;
     await key("1");

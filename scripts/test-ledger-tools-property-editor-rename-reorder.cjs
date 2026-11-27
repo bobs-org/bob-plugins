@@ -243,7 +243,7 @@ function sourceRows() {
   return [
     row({ key: "created", line: 2, role: "identity", reason: "Identity keys cannot be changed here." }),
     row({ key: "alpha", line: 3 }),
-    row({ key: "card-key", line: 4, role: "card", owner: "record", editor: "==" }),
+    row({ key: "card-key", line: 4, role: "card", owner: "record", editor: "=" }),
     row({ key: "beta", line: 5 }),
   ];
 }

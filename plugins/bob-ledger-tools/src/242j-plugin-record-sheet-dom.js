@@ -203,7 +203,7 @@ function recordSheetRenderToolbar(slot, model, options, doc) {
       edit.setAttribute("type", "button");
       edit.setAttribute("data-record-sheet-focus", "edit");
       edit.setAttribute("aria-haspopup", "dialog");
-      edit.setAttribute("title", "Edit fields (==, Ctrl+Shift+P)");
+      edit.setAttribute("title", "Edit fields (=, Ctrl+Shift+P)");
       edit.setAttribute("aria-label", "Edit record fields");
       recordSheetText(edit, "⊞ Edit");
       edit.addEventListener?.("click", (event) => {

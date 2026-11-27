@@ -358,7 +358,7 @@ async function run(args) {
     const pluginDir = path.join(REPO_ROOT, "plugins", PLUGIN_ID);
     report.plugin = {
       version: JSON.parse(fs.readFileSync(path.join(pluginDir, "manifest.json"), "utf8")).version,
-      sourceSha: String(require("node:child_process").spawnSync("git", ["-C", REPO_ROOT, "rev-parse", "HEAD"], { encoding: "utf8" }).stdout || "").trim(),
+      sourceSha: process.env.BOB_PLUGINS_SOURCE_SHA || String(require("node:child_process").spawnSync("git", ["-C", REPO_ROOT, "rev-parse", "HEAD"], { encoding: "utf8" }).stdout || "").trim(),
       files: Object.fromEntries(sourceFiles.map((name) => [name, sha256(fs.readFileSync(path.join(pluginDir, name)))])),
     };
     scratch = fs.mkdtempSync(path.join(os.tmpdir(), "bob-ref-card-acceptance-"));
@@ -385,6 +385,8 @@ async function run(args) {
     report.fixtures = { eligible, nonclaims: NONCLAIMS.slice(), hashesBefore: expectedHashes };
 
     const port = await shared.freePort();
+    const processInfo = { pid: null, executable, debugPort: port, stderr: "" };
+    report.obsidianProcess = processInfo;
     child = spawn(executable, [
       "--no-sandbox", "--user-data-dir=" + profileDir, "--remote-debugging-port=" + port,
       "--remote-allow-origins=http://127.0.0.1/*", vaultReal,
@@ -396,8 +398,18 @@ async function run(args) {
         PATH: shimDir + path.delimiter + (process.env.PATH || ""), TMPDIR: "/tmp", NO_COLOR: "1",
       },
     });
-    child.stderr.on("data", () => {});
-    client = (await shared.selectTarget(port, vaultReal, () => child && child.exitCode == null)).client;
+    processInfo.pid = child.pid || null;
+    child.stderr.on("data", (chunk) => {
+      processInfo.stderr = (processInfo.stderr + String(chunk)).slice(-12_000);
+    });
+    child.on("error", (error) => { processInfo.error = String(error.message || error); });
+    child.on("exit", (code, signal) => { processInfo.exit = { code, signal }; });
+    try {
+      client = (await shared.selectTarget(port, vaultReal, () => child && child.exitCode == null && !processInfo.error)).client;
+    } catch (error) {
+      const detail = JSON.stringify({ pid: processInfo.pid, debugPort: port, error: processInfo.error || null, exit: processInfo.exit || null, stderr: processInfo.stderr });
+      throw new Error(`${error.message || error}; Obsidian launch details: ${detail}`);
+    }
     client.on("Runtime.exceptionThrown", (params) => {
       const details = params.exceptionDetails || {};
       report.consoleExceptions.push({ text: details.text || "", description: details.exception?.description || "", url: details.url || "" });

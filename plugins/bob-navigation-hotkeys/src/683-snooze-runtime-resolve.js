@@ -56,7 +56,7 @@ function snoozeRuntimeEligibility(task) {
 // Mirror of the planner's identity mapping: resolver function, Map, array,
 // or plain object. Returns the canonical {route, block} or null on any
 // ambiguity or miss. Never guesses from a basename.
-function snoozeRuntimeMapIdentity(target, blockId, identities, fallbackTask, dailyPath) {
+function snoozeRuntimeMapIdentity(target, blockId, identities, fallbackTask, dailyPath, sourcePath) {
   const queryTarget = String(target == null ? "" : target);
   const queryBlock = String(blockId == null ? "" : blockId);
   const coerce = (value) => {
@@ -95,6 +95,13 @@ function snoozeRuntimeMapIdentity(target, blockId, identities, fallbackTask, dai
   const directPath = !hasIdentities && queryTarget.includes("/") && queryBlock
     ? { route: snoozeRuntimeNormalizePath(queryTarget), block: queryBlock }
     : null;
+  // An empty Obsidian link target is explicitly local to the source note.
+  // Resolve that path directly instead of requiring a planner alias map; the
+  // block identity remains exact and later reads still validate the task.
+  const localPath = queryTarget === "" && queryBlock
+    ? snoozeRuntimeNormalizePath(sourcePath || dailyPath)
+    : "";
+  if (localPath) return { route: localPath, block: queryBlock };
   const key = queryTarget + "\u0000" + queryBlock;
   const collect = (found) => {
     if (found && (found.ambiguous === true || found.resolution === "ambiguous")) return "ambiguous";
@@ -284,7 +291,7 @@ function resolveSnoozeCursorTarget(snapshot) {
     if (section) {
       const row = section.rows.find((candidate) => candidate.kind === "active" && candidate.lineIndex === cursorLine) || null;
       if (row) {
-        const resolved = snoozeRuntimeMapIdentity(row.target, row.blockId, input.identities, null, dailyPath);
+        const resolved = snoozeRuntimeMapIdentity(row.target, row.blockId, input.identities, null, dailyPath, sourcePath);
         if (!resolved) return snoozeRuntimeRefusal("ambiguous_target");
         const rowTask = (Array.isArray(input.tasks) ? input.tasks : []).find((task) => {
           if (!task || typeof task !== "object") return false;
@@ -355,7 +362,7 @@ function resolveSnoozeCursorTarget(snapshot) {
         }
       })();
       const wokenMatch = /⏰\s*woke\s+(\d{2}:\d{2})/.exec(line);
-      const resolved = snoozeRuntimeMapIdentity(span.target, span.blockId, input.identities, null, dailyPath);
+      const resolved = snoozeRuntimeMapIdentity(span.target, span.blockId, input.identities, null, dailyPath, sourcePath);
       if (!resolved) return snoozeRuntimeRefusal("ambiguous_target");
       const linkTask = (Array.isArray(input.tasks) ? input.tasks : []).find((task) => {
         if (!task || typeof task !== "object") return false;

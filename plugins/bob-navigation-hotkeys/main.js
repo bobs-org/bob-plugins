@@ -143311,7 +143311,7 @@ function snoozeRuntimeEligibility(task) {
 // Mirror of the planner's identity mapping: resolver function, Map, array,
 // or plain object. Returns the canonical {route, block} or null on any
 // ambiguity or miss. Never guesses from a basename.
-function snoozeRuntimeMapIdentity(target, blockId, identities, fallbackTask, dailyPath) {
+function snoozeRuntimeMapIdentity(target, blockId, identities, fallbackTask, dailyPath, sourcePath) {
   const queryTarget = String(target == null ? "" : target);
   const queryBlock = String(blockId == null ? "" : blockId);
   const coerce = (value) => {
@@ -143350,6 +143350,13 @@ function snoozeRuntimeMapIdentity(target, blockId, identities, fallbackTask, dai
   const directPath = !hasIdentities && queryTarget.includes("/") && queryBlock
     ? { route: snoozeRuntimeNormalizePath(queryTarget), block: queryBlock }
     : null;
+  // An empty Obsidian link target is explicitly local to the source note.
+  // Resolve that path directly instead of requiring a planner alias map; the
+  // block identity remains exact and later reads still validate the task.
+  const localPath = queryTarget === "" && queryBlock
+    ? snoozeRuntimeNormalizePath(sourcePath || dailyPath)
+    : "";
+  if (localPath) return { route: localPath, block: queryBlock };
   const key = queryTarget + "\u0000" + queryBlock;
   const collect = (found) => {
     if (found && (found.ambiguous === true || found.resolution === "ambiguous")) return "ambiguous";
@@ -143539,7 +143546,7 @@ function resolveSnoozeCursorTarget(snapshot) {
     if (section) {
       const row = section.rows.find((candidate) => candidate.kind === "active" && candidate.lineIndex === cursorLine) || null;
       if (row) {
-        const resolved = snoozeRuntimeMapIdentity(row.target, row.blockId, input.identities, null, dailyPath);
+        const resolved = snoozeRuntimeMapIdentity(row.target, row.blockId, input.identities, null, dailyPath, sourcePath);
         if (!resolved) return snoozeRuntimeRefusal("ambiguous_target");
         const rowTask = (Array.isArray(input.tasks) ? input.tasks : []).find((task) => {
           if (!task || typeof task !== "object") return false;
@@ -143610,7 +143617,7 @@ function resolveSnoozeCursorTarget(snapshot) {
         }
       })();
       const wokenMatch = /⏰\s*woke\s+(\d{2}:\d{2})/.exec(line);
-      const resolved = snoozeRuntimeMapIdentity(span.target, span.blockId, input.identities, null, dailyPath);
+      const resolved = snoozeRuntimeMapIdentity(span.target, span.blockId, input.identities, null, dailyPath, sourcePath);
       if (!resolved) return snoozeRuntimeRefusal("ambiguous_target");
       const linkTask = (Array.isArray(input.tasks) ? input.tasks : []).find((task) => {
         if (!task || typeof task !== "object") return false;
@@ -144400,20 +144407,112 @@ class BobNavigationHotkeysSnoozeRuntimeMixin {
       return snoozeRuntimeRefusal("unavailable");
     }
     const dailyPath = snoozeRuntimeNormalizePath(extra.dailyPath || (typeof this.currentSnoozeDailyPath === "function" ? this.currentSnoozeDailyPath() : ""));
-    return resolveSnoozeCursorTarget({
+    const identityResolver = extra.identities || (({ target, blockId }) => {
+      try {
+        const destination = String(target == null ? "" : target).trim();
+        const file = destination
+          ? (typeof this.resolveLinkTargetFile === "function"
+            ? this.resolveLinkTargetFile(destination, sourcePath)
+            : this.app?.metadataCache?.getFirstLinkpathDest?.(destination.replace(/\.md$/i, ""), sourcePath))
+          : this.app?.vault?.getAbstractFileByPath?.(sourcePath);
+        return file && file.path ? { route: file.path, block: String(blockId || "") } : null;
+      } catch (_) {
+        return null;
+      }
+    });
+    let resolved = resolveSnoozeCursorTarget({
       sourcePath,
       sourceContents,
       cursorLine,
       dailyPath,
       explicitTargets: Array.isArray(extra.explicitTargets) ? extra.explicitTargets : null,
       tasks: Array.isArray(extra.tasks) ? extra.tasks : [],
-      identities: extra.identities || [],
+      identities: identityResolver,
     });
+    if (resolved && resolved.ok !== true && resolved.refusal === "missing_task") {
+      const line = String(sourceContents).split(/\r\n|\r|\n/)[cursorLine] || "";
+      const taskLine = /^\s*[-*+]\s+\[([ xX*?/-])\]\s+.*\^([A-Za-z0-9-]+)\s*$/.exec(line);
+      if (taskLine) {
+        const task = await this.readSnoozeTaskForIdentity({ route: sourcePath, block: taskLine[2] }, dailyPath);
+        if (!task || task.ambiguous) return snoozeRuntimeRefusal(task && task.ambiguous ? "ambiguous_target" : "missing_task");
+        resolved = snoozeRuntimeAdoptTask("definition", task, { sourcePath });
+      }
+    }
+    if (!resolved || resolved.ok !== true || resolved.task || !resolved.identity) return resolved;
+    const linkedTask = await this.readSnoozeTaskForIdentity(resolved.identity, dailyPath);
+    if (!linkedTask || linkedTask.ambiguous) {
+      return snoozeRuntimeRefusal(linkedTask && linkedTask.ambiguous ? "ambiguous_target" : "missing_task");
+    }
+    const taskRefusal = snoozeRuntimeEligibility(linkedTask);
+    if (taskRefusal && resolved.kind !== "history-link" && !(resolved.kind === "snoozed-row" && taskRefusal === "blocked")) {
+      return snoozeRuntimeRefusal(taskRefusal);
+    }
+    return Object.freeze({ ...resolved, task: linkedTask });
+  }
+
+  async readSnoozeTaskForIdentity(identity, dailyPath) {
+    const route = snoozeRuntimeNormalizePath(identity && identity.route);
+    const block = String(identity && identity.block || "");
+    if (!route || !/^[A-Za-z0-9-]+$/.test(block)) return null;
+    let contents = null;
+    try {
+      const file = this.app && this.app.vault && this.app.vault.getAbstractFileByPath(route);
+      if (!file) return null;
+      contents = await this.readSnoozeRuntimeNote(route, file);
+      if (contents == null && this.app.vault.cachedRead) contents = await this.app.vault.cachedRead(file);
+    } catch (_) {
+      contents = null;
+    }
+    if (typeof contents !== "string") return null;
+    const lines = contents.split(/\r\n|\r|\n/);
+    const suffix = new RegExp("\\^" + block + "\\s*$");
+    const candidates = [];
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index];
+      if (!suffix.test(line)) continue;
+      const item = /^\s*[-*+]\s+\[([ xX*?/-])\]\s+/.exec(line);
+      if (!item) continue;
+      const status = item[1];
+      const task = {
+        path: route,
+        route,
+        block,
+        blockId: block,
+        target: snoozeRuntimeNormalizePath(route) === snoozeRuntimeNormalizePath(dailyPath) ? "" : route.replace(/\.md$/i, ""),
+        line: index + 1,
+        status,
+        is_task: true,
+        is_event: status === "/" && /^\s*[-*+]\s+\[\/\]\s+#task\s+\*\*(?:\d{4}-\d{4}|all day)\*\*/i.test(line),
+        blocked: status === "?",
+      };
+      const type = /\[type::\s*([^\]]+?)\s*\]/i.exec(line);
+      if (type) {
+        task.type_name = type[1].trim();
+        task.type_key = type[1].trim().toLowerCase();
+      }
+      task.displayText = line
+        .replace(/^\s*[-*+]\s+\[[ xX*?/-]\]\s*/, "")
+        .replace(/\[[^\]]+::[^\]]*\]/g, "")
+        .replace(/\^[A-Za-z0-9-]+\s*$/, "")
+        .replace(/(^|\s)#task(?=\s|$)/gi, " ")
+        .replace(/[ \t]{2,}/g, " ")
+        .trim();
+      candidates.push(task);
+    }
+    if (candidates.length !== 1) return candidates.length > 1 ? { ambiguous: true } : null;
+    return Object.freeze(candidates[0]);
   }
 
   currentSnoozeDailyPath() {
     try {
       if (typeof this.currentDailyPath === "function") return this.currentDailyPath();
+    } catch (_) {}
+    try {
+      const ledger = this.getSnoozeLedgerPlugin();
+      if (ledger && typeof ledger.currentTodayDailyPath === "function") {
+        const path = ledger.currentTodayDailyPath(new Date());
+        if (typeof path === "string" && path) return path;
+      }
     } catch (_) {}
     try {
       const dateText = typeof this.getFreshnessDateText === "function" ? this.getFreshnessDateText() : null;
@@ -144423,6 +144522,63 @@ class BobNavigationHotkeysSnoozeRuntimeMixin {
       }
     } catch (_) {}
     return "";
+  }
+
+  async getSnoozeCardFacts(resolution) {
+    const provider = this.getSnoozeFactsProvider();
+    if (!provider) return null;
+    const now = new Date();
+    const dailyPath = this.currentSnoozeDailyPath();
+    let dailyContents = null;
+    try {
+      const file = dailyPath && this.app && this.app.vault && this.app.vault.getAbstractFileByPath(dailyPath);
+      if (file) dailyContents = await this.readSnoozeRuntimeNote(dailyPath, file);
+      if (dailyContents == null && file && this.app.vault.cachedRead) dailyContents = await this.app.vault.cachedRead(file);
+    } catch (_) {
+      dailyContents = null;
+    }
+    let task = null;
+    if (resolution && resolution.task && typeof resolution.task === "object") {
+      const source = resolution.task;
+      task = {
+        typeKey: source.type_key || source.typeKey || null,
+        typeName: source.type_name || source.typeName || null,
+        offClock: source.off_clock === true || source.offClock === true,
+        status: typeof source.status === "string" ? source.status : null,
+        blockedReason: typeof source.blockedReason === "string" ? source.blockedReason : null,
+      };
+    }
+    const identity = resolution && resolution.identity;
+    let activeRow = null;
+    if (identity && resolution.kind === "snoozed-row" && typeof provider.activeRow === "function") {
+      try { activeRow = provider.activeRow(identity.route + "#^" + identity.block); } catch (_) {}
+    }
+    let zone = null;
+    let dateText = null;
+    let nowMinutes = null;
+    let events = null;
+    let counts = null;
+    try { zone = typeof provider.zoneName === "function" ? provider.zoneName() : null; } catch (_) {}
+    try { dateText = typeof provider.dateText === "function" ? provider.dateText(now) : null; } catch (_) {}
+    try { nowMinutes = typeof provider.nowMinutes === "function" ? provider.nowMinutes(now) : null; } catch (_) {}
+    if (typeof dailyContents === "string") {
+      try { events = typeof provider.todayEvents === "function" ? provider.todayEvents(dailyContents) : null; } catch (_) {}
+      try { counts = typeof provider.planCounts === "function" ? provider.planCounts(dailyContents) : null; } catch (_) {}
+    }
+    return buildSnoozeCardFacts({
+      zone,
+      dateText,
+      nowMinutes,
+      events,
+      activeRow,
+      task,
+      sourcePomodoro: resolution && resolution.sourcePomodoro,
+      onClock: counts,
+      wantCounts: true,
+      wantTask: Boolean(resolution && resolution.task),
+      wantRow: Boolean(resolution && resolution.kind === "snoozed-row"),
+      ledgerEntries: [],
+    });
   }
 
   // Guarded two-path commit of planner postimages. `plans` are
@@ -153626,7 +153782,20 @@ class SnoozeCardModal extends Modal {
     const inInput = event.target === this.inputEl;
     const intent = resolveSnoozeCardKey(
       { kind: "snooze-card", inputActive: false },
-      { ...event, inTextInput: false, target: inInput ? { tagName: "INPUT" } : event.target, inputActive: false },
+      {
+        key: event.key,
+        code: event.code,
+        keyCode: event.keyCode,
+        repeat: event.repeat,
+        isComposing: event.isComposing,
+        ctrlKey: event.ctrlKey === true,
+        metaKey: event.metaKey === true,
+        shiftKey: event.shiftKey === true,
+        altKey: event.altKey === true,
+        inTextInput: false,
+        target: inInput ? { tagName: "INPUT" } : event.target,
+        inputActive: false,
+      },
     );
     if (!intent) {
       if (event.key === "Enter" && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
@@ -153699,6 +153868,7 @@ class SnoozeCardModal extends Modal {
       const outcome = await this.plugin.runSnoozeCommit(this.resolution, {
         action: "add",
         when: valid.value.hhmm,
+        clock: this.snoozeCardClock(),
         advanceReview: this.reviewAnchor ? { anchor: this.reviewAnchor } : undefined,
       });
       if (!outcome || outcome.ok !== true) {
@@ -153725,6 +153895,7 @@ class SnoozeCardModal extends Modal {
       try {
         const outcome = await this.plugin.runSnoozeCommit(this.resolution, {
           action: "drop",
+          clock: this.snoozeCardClock(),
           advanceReview: this.reviewAnchor ? { anchor: this.reviewAnchor } : undefined,
         });
         if (!outcome || outcome.ok !== true) {
@@ -153893,18 +154064,72 @@ function describeSnoozeAltZConflict(conflicts) {
   return "Alt+Z is already bound to " + first.commandId + "; the Snooze command stays available without the hotkey";
 }
 
+function snoozeCardCommandHasAltZ(app, commandId) {
+  try {
+    const manager = app && app.hotkeyManager;
+    if (!manager) return false;
+    if (typeof manager.getHotkeys === "function") {
+      const effective = manager.getHotkeys(commandId);
+      if (Array.isArray(effective)) return effective.some(isSnoozeAltZBinding);
+    }
+    const has = (source) => source instanceof Map ? source.has(commandId) : Boolean(source && Object.prototype.hasOwnProperty.call(source, commandId));
+    const get = (source) => source instanceof Map ? source.get(commandId) : source && source[commandId];
+    if (has(manager.customKeys)) {
+      const custom = get(manager.customKeys);
+      const list = Array.isArray(custom) ? custom : (custom ? [custom] : []);
+      return list.some(isSnoozeAltZBinding);
+    }
+    const defaults = get(manager.defaultKeys);
+    const list = Array.isArray(defaults) ? defaults : (defaults ? [defaults] : []);
+    return list.some(isSnoozeAltZBinding);
+  } catch (_) {
+    return false;
+  }
+}
+
+function registerSnoozeAltZFallback(plugin, commandId, conflicts) {
+  if (!plugin || !Array.isArray(conflicts) || conflicts.length > 0) return false;
+  if (!snoozeCardCommandHasAltZ(plugin.app, commandId)) return false;
+  const doc = plugin.app && plugin.app.workspace && plugin.app.workspace.containerEl
+    ? plugin.app.workspace.containerEl.ownerDocument
+    : (typeof document !== "undefined" ? document : null);
+  if (!doc || typeof plugin.registerDomEvent !== "function") return false;
+  const handler = (event) => {
+    try {
+      if (!plugin.isSnoozeAltZKeyEvent(event)) return;
+      const target = event && event.target;
+      const editorSurface = target && typeof target.closest === "function" && target.closest(".cm-editor");
+      if (!editorSurface) return;
+      const view = typeof plugin.getActiveMarkdownView === "function" ? plugin.getActiveMarkdownView() : null;
+      const editor = view && view.editor;
+      if (!editor || typeof editor.getValue !== "function") return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      plugin.snoozeAltZFallbackDispatches = (Number(plugin.snoozeAltZFallbackDispatches) || 0) + 1;
+      void openSnoozeCardCommon(plugin, editor, view, null);
+    } catch (_) {}
+  };
+  try {
+    plugin.registerDomEvent(doc, "keydown", handler, true);
+    plugin.snoozeAltZFallbackRegistered = true;
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 // Wrap the Task Card dispatcher so the `snooze` row opens the same card
 // Alt+Z opens. Schedule stays the default selected row; generic
 // modal/global keys never double-dispatch because the intent is handled
 // here and the card consumes its own keys.
-const dispatchTaskCardIntentBeforeSnooze = typeof BulletPropertyPickerTaskCardMixin !== "undefined"
-  && BulletPropertyPickerTaskCardMixin.prototype
-  && BulletPropertyPickerTaskCardMixin.prototype.dispatchTaskCardIntent
-  ? BulletPropertyPickerTaskCardMixin.prototype.dispatchTaskCardIntent
+const dispatchTaskCardIntentBeforeSnooze = typeof BulletPropertyPickerModal !== "undefined"
+  && BulletPropertyPickerModal.prototype
+  && BulletPropertyPickerModal.prototype.dispatchTaskCardIntent
+  ? BulletPropertyPickerModal.prototype.dispatchTaskCardIntent
   : null;
 
-if (typeof BulletPropertyPickerTaskCardMixin !== "undefined" && dispatchTaskCardIntentBeforeSnooze) {
-  BulletPropertyPickerTaskCardMixin.prototype.dispatchTaskCardIntent = async function dispatchTaskCardIntentWithSnooze(intent) {
+if (typeof BulletPropertyPickerModal !== "undefined" && dispatchTaskCardIntentBeforeSnooze) {
+  BulletPropertyPickerModal.prototype.dispatchTaskCardIntent = async function dispatchTaskCardIntentWithSnooze(intent) {
     try {
       if (intent && (intent.rowId === "snooze" || intent.action === "snooze")) {
         if (intent.type === "unavailable") {
@@ -153918,11 +154143,12 @@ if (typeof BulletPropertyPickerTaskCardMixin !== "undefined" && dispatchTaskCard
           void closed;
         } catch (_) {}
         try {
-          if (typeof this.openSnoozeCardFromTaskCard === "function") {
-            return await this.openSnoozeCardFromTaskCard();
+          const plugin = this.plugin || this;
+          if (plugin && typeof plugin.openSnoozeCardFromTaskCard === "function") {
+            return await plugin.openSnoozeCardFromTaskCard(this);
           }
-          if (typeof this.openSnoozeCardAtCursor === "function") {
-            return await this.openSnoozeCardAtCursor();
+          if (plugin && typeof plugin.openSnoozeCardAtCursor === "function") {
+            return await plugin.openSnoozeCardAtCursor();
           }
           new Notice("Snooze is unavailable here");
           return false;
@@ -153970,16 +154196,19 @@ function openSnoozeCardCommon(plugin, editor, view, taskCardTargets) {
       cursorLine,
       explicitTargets: Array.isArray(taskCardTargets) ? taskCardTargets : null,
     }))
-    .then((resolution) => {
+    .then(async (resolution) => {
       if (!resolution || resolution.ok !== true) {
         new Notice((resolution && resolution.message) || "Snooze is unavailable here");
         return false;
       }
+      const facts = typeof plugin.getSnoozeCardFacts === "function"
+        ? await plugin.getSnoozeCardFacts(resolution)
+        : null;
       const taskTitle = snoozeCardTaskTitleForResolution(resolution);
       const reviewAnchor = plugin.reviewAnchor || null;
       const modal = new SnoozeCardModal(app, plugin, {
         resolution,
-        facts: null,
+        facts,
         clock: null,
         taskTitle,
         reviewAnchor,
@@ -154002,16 +154231,16 @@ if (typeof BobNavigationHotkeysSnoozeRuntimeMixin !== "undefined") {
   BobNavigationHotkeysSnoozeRuntimeMixin.prototype.openSnoozeCardAtCursor = function openSnoozeCardAtCursor(editor, view) {
     return openSnoozeCardCommon(this, editor || null, view || null, null);
   };
-  BobNavigationHotkeysSnoozeRuntimeMixin.prototype.openSnoozeCardFromTaskCard = function openSnoozeCardFromTaskCard() {
+  BobNavigationHotkeysSnoozeRuntimeMixin.prototype.openSnoozeCardFromTaskCard = function openSnoozeCardFromTaskCard(taskCard) {
     let targets = null;
     try {
-      const model = this.taskCardModel;
+      const model = (taskCard && taskCard.taskCardModel) || this.taskCardModel;
       if (model && model.session && Array.isArray(model.session.targetsForSnooze)) {
         targets = model.session.targetsForSnooze;
-      } else if (this.taskSession && Array.isArray(this.taskSession.targets)) {
-        targets = this.taskSession.targets.map((entry) => (entry && entry.target) || entry).filter(Boolean);
-      } else if (this.linkSession && Array.isArray(this.linkSession.resolved)) {
-        targets = this.linkSession.resolved.slice(0, 5);
+      } else if ((taskCard && taskCard.taskSession || this.taskSession) && Array.isArray((taskCard && taskCard.taskSession || this.taskSession).targets)) {
+        targets = (taskCard && taskCard.taskSession || this.taskSession).targets.map((entry) => (entry && entry.target) || entry).filter(Boolean);
+      } else if ((taskCard && taskCard.linkSession || this.linkSession) && Array.isArray((taskCard && taskCard.linkSession || this.linkSession).resolved)) {
+        targets = (taskCard && taskCard.linkSession || this.linkSession).resolved.slice(0, 5);
       }
     } catch (_) {
       targets = null;
@@ -154030,6 +154259,13 @@ if (typeof BobNavigationHotkeysSnoozeRuntimeMixin !== "undefined") {
     if (event.code === "KeyZ") return true;
     return String(event.key || "").toLowerCase() === "z";
   };
+  // The plugin mixins are installed before this late card fragment loads, so
+  // copy the late-added entry points onto the real plugin prototype here.
+  if (typeof BobNavigationHotkeysPlugin !== "undefined" && BobNavigationHotkeysPlugin.prototype) {
+    for (const name of ["openSnoozeCardAtCursor", "openSnoozeCardFromTaskCard", "isSnoozeAltZKeyEvent"]) {
+      BobNavigationHotkeysPlugin.prototype[name] = BobNavigationHotkeysSnoozeRuntimeMixin.prototype[name];
+    }
+  }
 }
 
 // Collision-safe Alt+Z command registration. Inspects hotkeys.json, the
@@ -154080,6 +154316,7 @@ function registerSnoozeTaskCommand(plugin) {
       plugin.snoozeAltZConflict = conflicts;
     } catch (_) {}
   }
+  registerSnoozeAltZFallback(plugin, selfId, conflicts);
   return true;
 }
 

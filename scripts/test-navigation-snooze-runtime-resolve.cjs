@@ -88,6 +88,21 @@ test("live link resolves with its source pomodoro", () => {
   assert.equal(result.sourcePomodoro, "WRITE");
 });
 
+test("empty-target link resolves to the source note without an alias map", () => {
+  const daily = "## Pomodoros\n\n- [ ] () — WRITE\n\t- [[#^same-note]]\n";
+  const result = resolveSnoozeCursorTarget(baseSnapshot({
+    sourcePath: DAILY,
+    sourceContents: daily,
+    cursorLine: 3,
+    dailyPath: DAILY,
+    tasks: [],
+    identities: [],
+  }));
+  assert.equal(result.ok, true);
+  assert.equal(result.kind, "live-link");
+  assert.deepEqual(result.identity, { route: DAILY, block: "same-note" });
+});
+
 test("woken link keeps its wake time", () => {
   const daily = "## Pomodoros\n\n- [ ] () — WRITE\n\t- [[projects/job#^email-dan]] ⏰ woke 15:30\n";
   const result = resolveSnoozeCursorTarget(baseSnapshot({

@@ -114,18 +114,72 @@ function describeSnoozeAltZConflict(conflicts) {
   return "Alt+Z is already bound to " + first.commandId + "; the Snooze command stays available without the hotkey";
 }
 
+function snoozeCardCommandHasAltZ(app, commandId) {
+  try {
+    const manager = app && app.hotkeyManager;
+    if (!manager) return false;
+    if (typeof manager.getHotkeys === "function") {
+      const effective = manager.getHotkeys(commandId);
+      if (Array.isArray(effective)) return effective.some(isSnoozeAltZBinding);
+    }
+    const has = (source) => source instanceof Map ? source.has(commandId) : Boolean(source && Object.prototype.hasOwnProperty.call(source, commandId));
+    const get = (source) => source instanceof Map ? source.get(commandId) : source && source[commandId];
+    if (has(manager.customKeys)) {
+      const custom = get(manager.customKeys);
+      const list = Array.isArray(custom) ? custom : (custom ? [custom] : []);
+      return list.some(isSnoozeAltZBinding);
+    }
+    const defaults = get(manager.defaultKeys);
+    const list = Array.isArray(defaults) ? defaults : (defaults ? [defaults] : []);
+    return list.some(isSnoozeAltZBinding);
+  } catch (_) {
+    return false;
+  }
+}
+
+function registerSnoozeAltZFallback(plugin, commandId, conflicts) {
+  if (!plugin || !Array.isArray(conflicts) || conflicts.length > 0) return false;
+  if (!snoozeCardCommandHasAltZ(plugin.app, commandId)) return false;
+  const doc = plugin.app && plugin.app.workspace && plugin.app.workspace.containerEl
+    ? plugin.app.workspace.containerEl.ownerDocument
+    : (typeof document !== "undefined" ? document : null);
+  if (!doc || typeof plugin.registerDomEvent !== "function") return false;
+  const handler = (event) => {
+    try {
+      if (!plugin.isSnoozeAltZKeyEvent(event)) return;
+      const target = event && event.target;
+      const editorSurface = target && typeof target.closest === "function" && target.closest(".cm-editor");
+      if (!editorSurface) return;
+      const view = typeof plugin.getActiveMarkdownView === "function" ? plugin.getActiveMarkdownView() : null;
+      const editor = view && view.editor;
+      if (!editor || typeof editor.getValue !== "function") return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      plugin.snoozeAltZFallbackDispatches = (Number(plugin.snoozeAltZFallbackDispatches) || 0) + 1;
+      void openSnoozeCardCommon(plugin, editor, view, null);
+    } catch (_) {}
+  };
+  try {
+    plugin.registerDomEvent(doc, "keydown", handler, true);
+    plugin.snoozeAltZFallbackRegistered = true;
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 // Wrap the Task Card dispatcher so the `snooze` row opens the same card
 // Alt+Z opens. Schedule stays the default selected row; generic
 // modal/global keys never double-dispatch because the intent is handled
 // here and the card consumes its own keys.
-const dispatchTaskCardIntentBeforeSnooze = typeof BulletPropertyPickerTaskCardMixin !== "undefined"
-  && BulletPropertyPickerTaskCardMixin.prototype
-  && BulletPropertyPickerTaskCardMixin.prototype.dispatchTaskCardIntent
-  ? BulletPropertyPickerTaskCardMixin.prototype.dispatchTaskCardIntent
+const dispatchTaskCardIntentBeforeSnooze = typeof BulletPropertyPickerModal !== "undefined"
+  && BulletPropertyPickerModal.prototype
+  && BulletPropertyPickerModal.prototype.dispatchTaskCardIntent
+  ? BulletPropertyPickerModal.prototype.dispatchTaskCardIntent
   : null;
 
-if (typeof BulletPropertyPickerTaskCardMixin !== "undefined" && dispatchTaskCardIntentBeforeSnooze) {
-  BulletPropertyPickerTaskCardMixin.prototype.dispatchTaskCardIntent = async function dispatchTaskCardIntentWithSnooze(intent) {
+if (typeof BulletPropertyPickerModal !== "undefined" && dispatchTaskCardIntentBeforeSnooze) {
+  BulletPropertyPickerModal.prototype.dispatchTaskCardIntent = async function dispatchTaskCardIntentWithSnooze(intent) {
     try {
       if (intent && (intent.rowId === "snooze" || intent.action === "snooze")) {
         if (intent.type === "unavailable") {
@@ -139,11 +193,12 @@ if (typeof BulletPropertyPickerTaskCardMixin !== "undefined" && dispatchTaskCard
           void closed;
         } catch (_) {}
         try {
-          if (typeof this.openSnoozeCardFromTaskCard === "function") {
-            return await this.openSnoozeCardFromTaskCard();
+          const plugin = this.plugin || this;
+          if (plugin && typeof plugin.openSnoozeCardFromTaskCard === "function") {
+            return await plugin.openSnoozeCardFromTaskCard(this);
           }
-          if (typeof this.openSnoozeCardAtCursor === "function") {
-            return await this.openSnoozeCardAtCursor();
+          if (plugin && typeof plugin.openSnoozeCardAtCursor === "function") {
+            return await plugin.openSnoozeCardAtCursor();
           }
           new Notice("Snooze is unavailable here");
           return false;
@@ -191,16 +246,19 @@ function openSnoozeCardCommon(plugin, editor, view, taskCardTargets) {
       cursorLine,
       explicitTargets: Array.isArray(taskCardTargets) ? taskCardTargets : null,
     }))
-    .then((resolution) => {
+    .then(async (resolution) => {
       if (!resolution || resolution.ok !== true) {
         new Notice((resolution && resolution.message) || "Snooze is unavailable here");
         return false;
       }
+      const facts = typeof plugin.getSnoozeCardFacts === "function"
+        ? await plugin.getSnoozeCardFacts(resolution)
+        : null;
       const taskTitle = snoozeCardTaskTitleForResolution(resolution);
       const reviewAnchor = plugin.reviewAnchor || null;
       const modal = new SnoozeCardModal(app, plugin, {
         resolution,
-        facts: null,
+        facts,
         clock: null,
         taskTitle,
         reviewAnchor,
@@ -223,16 +281,16 @@ if (typeof BobNavigationHotkeysSnoozeRuntimeMixin !== "undefined") {
   BobNavigationHotkeysSnoozeRuntimeMixin.prototype.openSnoozeCardAtCursor = function openSnoozeCardAtCursor(editor, view) {
     return openSnoozeCardCommon(this, editor || null, view || null, null);
   };
-  BobNavigationHotkeysSnoozeRuntimeMixin.prototype.openSnoozeCardFromTaskCard = function openSnoozeCardFromTaskCard() {
+  BobNavigationHotkeysSnoozeRuntimeMixin.prototype.openSnoozeCardFromTaskCard = function openSnoozeCardFromTaskCard(taskCard) {
     let targets = null;
     try {
-      const model = this.taskCardModel;
+      const model = (taskCard && taskCard.taskCardModel) || this.taskCardModel;
       if (model && model.session && Array.isArray(model.session.targetsForSnooze)) {
         targets = model.session.targetsForSnooze;
-      } else if (this.taskSession && Array.isArray(this.taskSession.targets)) {
-        targets = this.taskSession.targets.map((entry) => (entry && entry.target) || entry).filter(Boolean);
-      } else if (this.linkSession && Array.isArray(this.linkSession.resolved)) {
-        targets = this.linkSession.resolved.slice(0, 5);
+      } else if ((taskCard && taskCard.taskSession || this.taskSession) && Array.isArray((taskCard && taskCard.taskSession || this.taskSession).targets)) {
+        targets = (taskCard && taskCard.taskSession || this.taskSession).targets.map((entry) => (entry && entry.target) || entry).filter(Boolean);
+      } else if ((taskCard && taskCard.linkSession || this.linkSession) && Array.isArray((taskCard && taskCard.linkSession || this.linkSession).resolved)) {
+        targets = (taskCard && taskCard.linkSession || this.linkSession).resolved.slice(0, 5);
       }
     } catch (_) {
       targets = null;
@@ -251,6 +309,13 @@ if (typeof BobNavigationHotkeysSnoozeRuntimeMixin !== "undefined") {
     if (event.code === "KeyZ") return true;
     return String(event.key || "").toLowerCase() === "z";
   };
+  // The plugin mixins are installed before this late card fragment loads, so
+  // copy the late-added entry points onto the real plugin prototype here.
+  if (typeof BobNavigationHotkeysPlugin !== "undefined" && BobNavigationHotkeysPlugin.prototype) {
+    for (const name of ["openSnoozeCardAtCursor", "openSnoozeCardFromTaskCard", "isSnoozeAltZKeyEvent"]) {
+      BobNavigationHotkeysPlugin.prototype[name] = BobNavigationHotkeysSnoozeRuntimeMixin.prototype[name];
+    }
+  }
 }
 
 // Collision-safe Alt+Z command registration. Inspects hotkeys.json, the
@@ -301,6 +366,7 @@ function registerSnoozeTaskCommand(plugin) {
       plugin.snoozeAltZConflict = conflicts;
     } catch (_) {}
   }
+  registerSnoozeAltZFallback(plugin, selfId, conflicts);
   return true;
 }
 

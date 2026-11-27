@@ -366,7 +366,20 @@ class SnoozeCardModal extends Modal {
     const inInput = event.target === this.inputEl;
     const intent = resolveSnoozeCardKey(
       { kind: "snooze-card", inputActive: false },
-      { ...event, inTextInput: false, target: inInput ? { tagName: "INPUT" } : event.target, inputActive: false },
+      {
+        key: event.key,
+        code: event.code,
+        keyCode: event.keyCode,
+        repeat: event.repeat,
+        isComposing: event.isComposing,
+        ctrlKey: event.ctrlKey === true,
+        metaKey: event.metaKey === true,
+        shiftKey: event.shiftKey === true,
+        altKey: event.altKey === true,
+        inTextInput: false,
+        target: inInput ? { tagName: "INPUT" } : event.target,
+        inputActive: false,
+      },
     );
     if (!intent) {
       if (event.key === "Enter" && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
@@ -439,6 +452,7 @@ class SnoozeCardModal extends Modal {
       const outcome = await this.plugin.runSnoozeCommit(this.resolution, {
         action: "add",
         when: valid.value.hhmm,
+        clock: this.snoozeCardClock(),
         advanceReview: this.reviewAnchor ? { anchor: this.reviewAnchor } : undefined,
       });
       if (!outcome || outcome.ok !== true) {
@@ -465,6 +479,7 @@ class SnoozeCardModal extends Modal {
       try {
         const outcome = await this.plugin.runSnoozeCommit(this.resolution, {
           action: "drop",
+          clock: this.snoozeCardClock(),
           advanceReview: this.reviewAnchor ? { anchor: this.reviewAnchor } : undefined,
         });
         if (!outcome || outcome.ok !== true) {

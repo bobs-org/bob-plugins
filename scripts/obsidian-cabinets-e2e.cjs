@@ -341,6 +341,8 @@ async function run(args) {
     checks: [], screenshots: [], consoleExceptions: [], bobSpawns: [],
   };
   let child = null;
+  let childStdout = "";
+  let childStderr = "";
   let client = null;
   let successful = false;
   const check = (name, ok, detail = null) => {
@@ -355,9 +357,32 @@ async function run(args) {
     ], {
       cwd: os.tmpdir(),
       env: obsidianChildEnvironment(profile, shimDir),
-      stdio: ["ignore", "ignore", "pipe"],
+      stdio: ["ignore", "pipe", "pipe"],
     });
-    const target = await shared.selectTarget(port, fs.realpathSync(vault), () => child && child.exitCode == null);
+    child.stdout.on("data", (chunk) => {
+      if (childStdout.length < 12_000) childStdout += String(chunk).slice(0, 12_000 - childStdout.length);
+    });
+    child.stderr.on("data", (chunk) => {
+      if (childStderr.length < 12_000) childStderr += String(chunk).slice(0, 12_000 - childStderr.length);
+    });
+    child.on("error", (error) => {
+      if (childStderr.length < 12_000) childStderr += String(error.stack || error).slice(0, 12_000 - childStderr.length);
+    });
+    report.obsidianProcess = { pid: child.pid, executable, profile };
+    let target;
+    try {
+      target = await shared.selectTarget(port, fs.realpathSync(vault), () => child && child.exitCode == null);
+    } catch (error) {
+      const profileLog = path.join(profile, "obsidian.log");
+      report.obsidianProcess.exitCode = child.exitCode;
+      report.obsidianProcess.signalCode = child.signalCode;
+      report.obsidianProcess.stdout = childStdout || null;
+      report.obsidianProcess.stderr = childStderr || null;
+      report.obsidianProcess.startupLog = fs.existsSync(profileLog)
+        ? fs.readFileSync(profileLog, "utf8").slice(-12_000)
+        : null;
+      throw new Error(`${error.message}; Obsidian startup diagnostics: ${JSON.stringify(report.obsidianProcess)}`);
+    }
     client = target.client;
     await client.call("Runtime.enable");
     await client.call("Page.enable");

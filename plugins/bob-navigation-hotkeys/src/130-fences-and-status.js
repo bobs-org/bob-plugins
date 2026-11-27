@@ -419,6 +419,10 @@ function isScheduledRecoveryMarkdownPath(path) {
   if (isDoneArchivePath(normalized)) {
     return false;
   }
+  // Match Rust's ALWAYS_EXCLUDED_NOTE_DIRECTORY_NAMES: vault-sync conflict copies are not live notes.
+  if (isConflictsNotePath(normalized)) {
+    return false;
+  }
   const directories = normalized.split("/").slice(0, -1);
   return !directories.some(
     (directory) =>
@@ -689,7 +693,8 @@ function buildScheduledRecoveryIndex(
   const blocks = new Map();
   const dependencyIds = new Map();
   const fileModels = new Map();
-  let rankSafe = !noteIndex.duplicatePath;
+  const unresolvedBlockIds = new Set();
+  const scannedBlockIds = new Set();
 
   for (const file of markdownFiles) {
     const { lines } = splitMarkdownContent(file.content);
@@ -710,6 +715,7 @@ function buildScheduledRecoveryIndex(
       tasks.push(task);
       tasksByTarget.set(recoveryIdentity(file.path, String(line)), task);
       if (task.blockId) {
+        scannedBlockIds.add(task.blockId);
         const identity = recoveryIdentity(file.path, task.blockId);
         if (!blocks.has(identity)) {
           blocks.set(identity, []);
@@ -760,7 +766,7 @@ function buildScheduledRecoveryIndex(
             ? recoveryIdentity(targetPath, reference.blockId)
             : null;
           if (!target || !blocks.has(target)) {
-            rankSafe = false;
+            unresolvedBlockIds.add(reference.blockId);
             continue;
           }
           if (!edges.has(source)) {
@@ -780,6 +786,9 @@ function buildScheduledRecoveryIndex(
     }
     const daily = fileModels.get(dailyPath);
     for (const reference of recentPomodoroReferences(daily.file.content)) {
+      if (isArchivedRecoveryTarget(reference.target)) {
+        continue;
+      }
       const targetPath = resolveScheduledRecoveryNote(
         noteIndex,
         dailyPath,
@@ -789,7 +798,7 @@ function buildScheduledRecoveryIndex(
         ? recoveryIdentity(targetPath, reference.blockId)
         : null;
       if (!target || !blocks.has(target)) {
-        rankSafe = false;
+        unresolvedBlockIds.add(reference.blockId);
         continue;
       }
       roots.add(target);
@@ -804,6 +813,11 @@ function buildScheduledRecoveryIndex(
     scheduledOverrideByPath: options.scheduledOverrideByPath,
   });
   const ranks = computeScheduledRecoveryRanks(roots, edges, blocks);
+  // Unknown IDs cannot reach scanned tasks; this stays stricter than Rust,
+  // which ignores every unresolved reference.
+  const rankSafe =
+    !noteIndex.duplicatePath &&
+    ![...unresolvedBlockIds].some((blockId) => scannedBlockIds.has(blockId));
 
   return Object.freeze({
     safe: Boolean(registry && registry.safe),

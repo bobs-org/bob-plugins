@@ -600,6 +600,11 @@ class BobNavigationHotkeysPropertyDependencyMixin {
         }
         return Object.freeze({ ok: true, reason: "unchanged", notice: plan.notice });
       }
+      const promotedTaskNotePaths = navPromotedDependencyTaskNotePaths(
+        plan,
+        parentPath,
+        mirrorTouch,
+      );
       // §13.19: plan the subtree pass before the commit, off the predicted
       // content, and fold its newly-Blocked targets into the deferred daily
       // cleanup below. Descendants are written after the commit through the
@@ -932,6 +937,13 @@ class BobNavigationHotkeysPropertyDependencyMixin {
             pomodoroPrep.cleanup,
           )
         : { removed: 0, failed: false };
+      if (!mirrorTouch && promotedTaskNotePaths.length > 0) {
+        await navSettlePromotedTaskNotes(
+          this,
+          promotedTaskNotePaths,
+          args.today || new Date(),
+        );
+      }
       const pomodoroNotice = dependencyPomodoroNotice(
         plan,
         pomodoroDone.removed,

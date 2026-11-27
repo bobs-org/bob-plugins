@@ -21862,6 +21862,10 @@ function isScheduledRecoveryMarkdownPath(path) {
   if (isDoneArchivePath(normalized)) {
     return false;
   }
+  // Match Rust's ALWAYS_EXCLUDED_NOTE_DIRECTORY_NAMES: vault-sync conflict copies are not live notes.
+  if (isConflictsNotePath(normalized)) {
+    return false;
+  }
   const directories = normalized.split("/").slice(0, -1);
   return !directories.some(
     (directory) =>
@@ -22132,7 +22136,8 @@ function buildScheduledRecoveryIndex(
   const blocks = new Map();
   const dependencyIds = new Map();
   const fileModels = new Map();
-  let rankSafe = !noteIndex.duplicatePath;
+  const unresolvedBlockIds = new Set();
+  const scannedBlockIds = new Set();
 
   for (const file of markdownFiles) {
     const { lines } = splitMarkdownContent(file.content);
@@ -22153,6 +22158,7 @@ function buildScheduledRecoveryIndex(
       tasks.push(task);
       tasksByTarget.set(recoveryIdentity(file.path, String(line)), task);
       if (task.blockId) {
+        scannedBlockIds.add(task.blockId);
         const identity = recoveryIdentity(file.path, task.blockId);
         if (!blocks.has(identity)) {
           blocks.set(identity, []);
@@ -22203,7 +22209,7 @@ function buildScheduledRecoveryIndex(
             ? recoveryIdentity(targetPath, reference.blockId)
             : null;
           if (!target || !blocks.has(target)) {
-            rankSafe = false;
+            unresolvedBlockIds.add(reference.blockId);
             continue;
           }
           if (!edges.has(source)) {
@@ -22223,6 +22229,9 @@ function buildScheduledRecoveryIndex(
     }
     const daily = fileModels.get(dailyPath);
     for (const reference of recentPomodoroReferences(daily.file.content)) {
+      if (isArchivedRecoveryTarget(reference.target)) {
+        continue;
+      }
       const targetPath = resolveScheduledRecoveryNote(
         noteIndex,
         dailyPath,
@@ -22232,7 +22241,7 @@ function buildScheduledRecoveryIndex(
         ? recoveryIdentity(targetPath, reference.blockId)
         : null;
       if (!target || !blocks.has(target)) {
-        rankSafe = false;
+        unresolvedBlockIds.add(reference.blockId);
         continue;
       }
       roots.add(target);
@@ -22247,6 +22256,11 @@ function buildScheduledRecoveryIndex(
     scheduledOverrideByPath: options.scheduledOverrideByPath,
   });
   const ranks = computeScheduledRecoveryRanks(roots, edges, blocks);
+  // Unknown IDs cannot reach scanned tasks; this stays stricter than Rust,
+  // which ignores every unresolved reference.
+  const rankSafe =
+    !noteIndex.duplicatePath &&
+    ![...unresolvedBlockIds].some((blockId) => scannedBlockIds.has(blockId));
 
   return Object.freeze({
     safe: Boolean(registry && registry.safe),
@@ -115905,6 +115919,11 @@ class BobNavigationHotkeysPropertyDependencyMixin {
         }
         return Object.freeze({ ok: true, reason: "unchanged", notice: plan.notice });
       }
+      const promotedTaskNotePaths = navPromotedDependencyTaskNotePaths(
+        plan,
+        parentPath,
+        mirrorTouch,
+      );
       // §13.19: plan the subtree pass before the commit, off the predicted
       // content, and fold its newly-Blocked targets into the deferred daily
       // cleanup below. Descendants are written after the commit through the
@@ -116237,6 +116256,13 @@ class BobNavigationHotkeysPropertyDependencyMixin {
             pomodoroPrep.cleanup,
           )
         : { removed: 0, failed: false };
+      if (!mirrorTouch && promotedTaskNotePaths.length > 0) {
+        await navSettlePromotedTaskNotes(
+          this,
+          promotedTaskNotePaths,
+          args.today || new Date(),
+        );
+      }
       const pomodoroNotice = dependencyPomodoroNotice(
         plan,
         pomodoroDone.removed,
@@ -116285,6 +116311,117 @@ class BobNavigationHotkeysPropertyDependencyMixin {
     }
   }
 
+}
+// ---- src/581-promoted-note-settle.js ----
+// Settle a note after a dependency gesture promoted one of its tasks. The
+// preparation and mirror writers must land first because they guard the
+// exact, unsettled preimage.
+function navPromotedNoteOpenEditor(plugin, path) {
+  const workspace = plugin && plugin.app && plugin.app.workspace;
+  if (!workspace || typeof workspace.getLeavesOfType !== "function") return null;
+  for (const leaf of workspace.getLeavesOfType("markdown") || []) {
+    const view = leaf && leaf.view;
+    if (
+      view &&
+      view.file &&
+      normalizeVaultRelativePath(view.file.path) === path &&
+      view.editor &&
+      typeof view.editor.getValue === "function"
+    ) {
+      return view.editor;
+    }
+  }
+  return null;
+}
+
+function navPromotedDependencyTaskNotePaths(plan, parentPath, mirrorTouch) {
+  if (mirrorTouch) return [];
+  return [...new Set(
+    (plan && Array.isArray(plan.preparations) ? plan.preparations : [])
+      .filter(
+        (preparation) =>
+          normalizeVaultRelativePath(preparation.path || "") !== parentPath &&
+          getObsidianTaskCheckboxStatus(preparation.from) !==
+            getObsidianTaskCheckboxStatus(preparation.text),
+      )
+      .map((preparation) => normalizeVaultRelativePath(preparation.path || ""))
+      .filter(Boolean),
+  )];
+}
+
+async function navSettlePromotedTaskNotes(plugin, paths, today) {
+  const uniquePaths = new Set(
+    (Array.isArray(paths) ? paths : [])
+      .map((path) => normalizeVaultRelativePath(path || ""))
+      .filter(Boolean),
+  );
+  for (const path of uniquePaths) {
+    try {
+      const editor = navPromotedNoteOpenEditor(plugin, path);
+      const vault = plugin && plugin.app && plugin.app.vault;
+      let file = null;
+      let live = null;
+      if (editor) {
+        live = String(editor.getValue() || "");
+      } else {
+        file =
+          vault && typeof vault.getAbstractFileByPath === "function"
+            ? vault.getAbstractFileByPath(path)
+            : null;
+        if (!file || !vault) continue;
+        if (typeof vault.cachedRead === "function") {
+          live = String((await vault.cachedRead(file)) || "");
+        } else if (typeof vault.read === "function") {
+          live = String((await vault.read(file)) || "");
+        } else {
+          continue;
+        }
+      }
+      const prepared = navPrepareSettledFilePostimage(plugin, path, live, { today });
+      if (!prepared || typeof prepared.contents !== "string" || prepared.contents === live) {
+        continue;
+      }
+      if (editor) {
+        navApplySettledEditorPostimage(
+          plugin,
+          editor,
+          path,
+          live,
+          live,
+          { annotation: BLOCKS_MACHINE_WRITE_ANNOTATION, today },
+        );
+      } else {
+        await navApplySettledVaultPostimage(
+          plugin,
+          vault,
+          file,
+          path,
+          live,
+          live,
+          { today },
+        );
+      }
+    } catch (_error) {
+      // Best-effort recovery; the dependency write stands and reconcile heals a miss.
+    }
+  }
+}
+
+function navTaskCheckboxStatusChanged(before, after) {
+  const beforeTasks = String(before || "")
+    .split(/\r?\n/)
+    .filter((line) => isObsidianTaskLine(line));
+  const afterTasks = String(after || "")
+    .split(/\r?\n/)
+    .filter((line) => isObsidianTaskLine(line));
+  return (
+    beforeTasks.length === afterTasks.length &&
+    beforeTasks.some(
+      (line, index) =>
+        getObsidianTaskCheckboxStatus(line) !==
+        getObsidianTaskCheckboxStatus(afterTasks[index]),
+    )
+  );
 }
 // ---- src/590-plugin-dependency-stage.js ----
 function collectProjectDescendantPathsFromApp(app, rootPath, enabled) {
@@ -118259,6 +118396,16 @@ class BobNavigationHotkeysBlocksEditMixin {
         } catch (_error) {
           subtree = null;
         }
+      }
+      const promotedSourceNotePaths = sourceWrites
+        .filter(
+          (write) =>
+            !write.foldedDependents &&
+            navTaskCheckboxStatusChanged(write.original, write.nextContent),
+        )
+        .map((write) => write.path);
+      if (promotedSourceNotePaths.length > 0) {
+        await navSettlePromotedTaskNotes(this, promotedSourceNotePaths, today);
       }
       const failedKeys = new Set(
         failed.map((ref) => `${ref.path}\x00${ref.line}`),

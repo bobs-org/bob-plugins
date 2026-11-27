@@ -224,6 +224,117 @@ test("scheduled recovery ranks Blocked tasks from both ledgers and transclusion 
   assert.equal(statuses.at(-1), "?");
 });
 
+test("scheduled recovery ignores vault-sync conflict copies", () => {
+  const settings = helpers.parseTasksStatusRegistry(
+    compatibleTasksSettings(),
+  );
+  const files = [
+    {
+      path: "Tasks.md",
+      content: [
+        "- [?] #task Wait for the prerequisite [dependsOn:: shared] ^wait",
+        "- [x] #task Finished [id:: shared] ^finished",
+      ].join("\n"),
+    },
+    {
+      path: "_conflicts/Tasks.md",
+      content: [
+        "- [ ] #task Open conflict twin [id:: shared] ^twin",
+        "- [?] #task Dangling conflict copy ^conflict",
+        "  - ⛓️ **DEPENDS ON:** [[Missing#^unknown]]",
+      ].join("\n"),
+    },
+  ];
+  const index = helpers.buildScheduledRecoveryIndex(
+    files,
+    settings,
+    new Date(2026, 6, 16),
+  );
+
+  assert.equal(index.rankSafe, true);
+  assert.equal(
+    helpers.getScheduledRecoveryMetadata(index, "Tasks.md", 0).state,
+    "ready",
+  );
+});
+
+test("scoped rank poisoning follows only unresolved IDs carried by scanned tasks", () => {
+  const settings = helpers.parseTasksStatusRegistry(
+    compatibleTasksSettings(),
+  );
+  const decide = (files, path = "Tasks.md") => {
+    const index = helpers.buildScheduledRecoveryIndex(
+      files,
+      settings,
+      new Date(2026, 6, 16),
+    );
+    const owner = files.find((file) => file.path === path);
+    const line = owner.content.split("\n").findIndex((row) => row.includes("^owner"));
+    return helpers.getScheduledRecoveryMetadata(index, path, line);
+  };
+
+  assert.equal(
+    decide([
+      {
+        path: "Tasks.md",
+        content: [
+          "- [?] #task Dangling unknown dependency [dependsOn:: nowhere] ^owner",
+          "  - ⛓️ **DEPENDS ON:** [[Missing#^nowhere]]",
+        ].join("\n"),
+      },
+    ]).state,
+    "ready",
+  );
+
+  assert.equal(
+    decide([
+      {
+        path: "Tasks.md",
+        content: [
+          "- [?] #task Dangling mis-resolved dependency [dependsOn:: nowhere] ^owner",
+          "  - ⛓️ **DEPENDS ON:** [[Missing#^elsewhere]]",
+        ].join("\n"),
+      },
+      {
+        path: "Other.md",
+        content: "- [ ] #task Same block id elsewhere ^elsewhere",
+      },
+    ]).state,
+    "deferred",
+  );
+});
+
+test("scheduled recovery ignores unresolved Pomodoro references into done", () => {
+  const settings = helpers.parseTasksStatusRegistry(
+    compatibleTasksSettings(),
+  );
+  const files = [
+    {
+      path: "2026/20260716.md",
+      content: [
+        "## Pomodoros",
+        "- [ ] Current (0900-0930)",
+        "  - [[done/Archive#^finished]]",
+      ].join("\n"),
+    },
+    {
+      path: "Tasks.md",
+      content: "- [?] #task Ready after archived work ^owner",
+    },
+  ];
+  const index = helpers.buildScheduledRecoveryIndex(
+    files,
+    settings,
+    new Date(2026, 6, 16),
+  );
+
+  assert.equal(index.rankSafe, true);
+  assert.equal(
+    helpers.getScheduledRecoveryMetadata(index, "Tasks.md", 0).state,
+    "ready",
+  );
+});
+
 test("scheduled recovery defers incompatible status settings and ambiguous identities", () => {
   const incompatible = helpers.parseTasksStatusRegistry({
     statusSettings: { coreStatuses: [], customStatuses: [] },

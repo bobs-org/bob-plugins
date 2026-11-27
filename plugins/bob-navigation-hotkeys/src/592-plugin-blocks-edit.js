@@ -823,6 +823,16 @@ class BobNavigationHotkeysBlocksEditMixin {
           subtree = null;
         }
       }
+      const promotedSourceNotePaths = sourceWrites
+        .filter(
+          (write) =>
+            !write.foldedDependents &&
+            navTaskCheckboxStatusChanged(write.original, write.nextContent),
+        )
+        .map((write) => write.path);
+      if (promotedSourceNotePaths.length > 0) {
+        await navSettlePromotedTaskNotes(this, promotedSourceNotePaths, today);
+      }
       const failedKeys = new Set(
         failed.map((ref) => `${ref.path}\x00${ref.line}`),
       );

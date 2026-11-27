@@ -218,6 +218,7 @@
   "560-plugin-counted-priority-and-roll.js",
   "570-plugin-link-roll-and-schedule.js",
   "580-plugin-properties-and-dependency-edit.js",
+  "581-promoted-note-settle.js",
   "590-plugin-dependency-stage.js",
   "591-blocks-follow-ups.js",
   "592-plugin-blocks-edit.js",

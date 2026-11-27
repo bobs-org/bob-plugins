@@ -6372,6 +6372,10 @@ body.bob-tab-numbers-lit .workspace-tabs.mod-active .workspace-tab-header.is-act
   transition: opacity 180ms ease-out;
 }
 
+.bob-section-map-host.is-leaving.is-dismissing .bob-section-map {
+  transition-duration: 90ms;
+}
+
 .bob-section-map-host.is-reduced .bob-section-map,
 .bob-section-map-host.is-reduced .bob-section-map-pill {
   animation: none !important;

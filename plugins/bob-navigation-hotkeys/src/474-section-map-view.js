@@ -691,10 +691,23 @@ function createSectionMapHost(doc, options = {}) {
     if (state.rowNodes) state.rowNodes.clear();
   }
 
+  function setLeaving(kind) {
+    if (!state.parts) return;
+    if (kind === "fade" || kind === "dismiss") {
+      sectionMapAddClass(state.parts.host, "is-leaving");
+      if (kind === "dismiss") sectionMapAddClass(state.parts.host, "is-dismissing");
+      else sectionMapRemoveClass(state.parts.host, "is-dismissing");
+      return;
+    }
+    sectionMapRemoveClass(state.parts.host, "is-leaving");
+    sectionMapRemoveClass(state.parts.host, "is-dismissing");
+  }
+
   return {
     render: wrap(render),
     hide: wrap(hide),
     setLiveText: wrap(setLiveText),
+    setLeaving: wrap(setLeaving),
     isVisible: wrap(isVisible),
     destroy: destroyHost,
   };

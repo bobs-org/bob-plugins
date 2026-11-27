@@ -497,7 +497,7 @@ class BobNavigationHotkeysOpenNotesUriMixin {
     return false;
   }
 
-  flashBobOpenNotesLandingLine(editor, line) {
+  flashEditorLandingLine(editor, line) {
     const editorView = getEditorViewFromEditor(editor);
     if (
       !editorView ||
@@ -542,9 +542,15 @@ class BobNavigationHotkeysOpenNotesUriMixin {
 
     let reducedMotion = false;
     try {
+      const win =
+        (editorView.dom && editorView.dom.ownerDocument && editorView.dom.ownerDocument.defaultView) ||
+        (editorView.scrollDOM && editorView.scrollDOM.ownerDocument &&
+          editorView.scrollDOM.ownerDocument.defaultView) ||
+        (typeof window !== "undefined" ? window : null);
       reducedMotion = Boolean(
-        window.matchMedia &&
-          window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+        win &&
+          win.matchMedia &&
+          win.matchMedia("(prefers-reduced-motion: reduce)").matches,
       );
     } catch (error) {
       reducedMotion = false;
@@ -561,6 +567,10 @@ class BobNavigationHotkeysOpenNotesUriMixin {
     }, this.bobOpenNotesLandingFlashDurationMs(reducedMotion));
     this.bobOpenNotesFlashTimers.set(editorView, timer);
     return true;
+  }
+
+  flashBobOpenNotesLandingLine(editor, line) {
+    return this.flashEditorLandingLine(editor, line);
   }
 
   bobOpenNotesLandingFlashDurationMs(reducedMotion) {

@@ -175,35 +175,6 @@ class BobNavigationHotkeysJumpKeyMixin {
     return true;
   }
 
-  jumpToSectionHeader(editor, direction) {
-    const cursor = getEditorCursor(editor);
-    if (!cursor || !editor || typeof editor.getValue !== "function") {
-      new Notice("No active markdown editor");
-      return false;
-    }
-
-    const targetLine = getSectionHeaderJumpLine(
-      String(editor.getValue()).split(/\r?\n/),
-      cursor.line,
-      direction,
-    );
-
-    if (targetLine === null) {
-      new Notice(
-        direction < 0 ? "No previous section header" : "No next section header",
-      );
-      return false;
-    }
-
-    if (!setEditorCursor(editor, { line: targetLine, ch: 0 })) {
-      new Notice("No active markdown editor");
-      return false;
-    }
-
-    scrollEditorLineToTop(editor, targetLine);
-    return true;
-  }
-
   // Reorder an open Pomodoro entry under the cursor in place of a jump. Future
   // placeholders can reorder among one another, and the current timed entry can
   // swap with future placeholders while keeping the time range in the current

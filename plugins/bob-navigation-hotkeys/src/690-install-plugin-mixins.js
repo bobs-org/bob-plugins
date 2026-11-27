@@ -67,6 +67,8 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysDependencyMirrorMixin,
   BobNavigationHotkeysDependencyMirrorGuardMixin,
   BobNavigationHotkeysJumpKeyMixin,
+  BobNavigationHotkeysSectionMapControllerMixin,
+  BobNavigationHotkeysSectionJumpMixin,
   BobNavigationHotkeysCountedTaskMoveMixin,
   BobNavigationHotkeysPomodoroSplitMixin,
   BobNavigationHotkeysTaskSplitMixin,

@@ -426,13 +426,19 @@ class BobNavigationHotkeysPlugin extends Plugin {
     this.addCommand({
       id: "jump-to-next-section-header",
       name: "Jump to next section header",
-      editorCallback: (editor) => this.jumpToSectionHeader(editor, 1),
+      editorCallback: (editor, ctx) => this.jumpToSectionHeader(editor, 1, ctx),
     });
 
     this.addCommand({
       id: "jump-to-prev-section-header",
       name: "Jump to previous section header",
-      editorCallback: (editor) => this.jumpToSectionHeader(editor, -1),
+      editorCallback: (editor, ctx) => this.jumpToSectionHeader(editor, -1, ctx),
+    });
+
+    this.addCommand({
+      id: "show-section-map",
+      name: "Show section map",
+      editorCallback: (editor, ctx) => this.showSectionMap(editor, ctx),
     });
 
     this.addCommand({
@@ -622,6 +628,9 @@ class BobNavigationHotkeysPlugin extends Plugin {
           if (typeof this.scheduleHighlightsHintsFromUpdate === "function") {
             this.scheduleHighlightsHintsFromUpdate(update);
           }
+          if (typeof this.handleSectionMapEditorUpdate === "function") {
+            this.handleSectionMapEditorUpdate(update);
+          }
         }),
       );
     }
@@ -703,6 +712,9 @@ class BobNavigationHotkeysPlugin extends Plugin {
     this.registerCountedLaneToggleInputListeners();
     this.registerClearSearchHighlightInputListeners();
     this.registerWindowPrefixInputListeners();
+    if (typeof this.registerSectionMapController === "function") {
+      this.registerSectionMapController();
+    }
     this.registerWindowPrefixCommands();
     if (typeof this.startWindowTabNumbers === "function") {
       this.startWindowTabNumbers();
@@ -841,6 +853,13 @@ class BobNavigationHotkeysPlugin extends Plugin {
       if (typeof this.teardownWindowPrefix === "function") this.teardownWindowPrefix();
     } catch (_error) {
       // Best-effort during unload; a leaked scope would be worse than a throw.
+    }
+    try {
+      if (typeof this.teardownSectionMapController === "function") {
+        this.teardownSectionMapController();
+      }
+    } catch (_error) {
+      // Best-effort during unload; leaked timers would be worse than a throw.
     }
   }
 }

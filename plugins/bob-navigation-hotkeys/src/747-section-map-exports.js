@@ -22,4 +22,11 @@ Object.assign(module.exports.helpers, {
   computeSectionMapPlacement,
   renderSectionMapCard,
   createSectionMapHost,
+  SECTION_MAP_LINGER_MS,
+  SECTION_MAP_HOLD_CAP_MS,
+  SECTION_MAP_FADE_MS,
+  SECTION_MAP_DISMISS_MS,
+  SECTION_MAP_ARIA_SETTLE_MS,
+  createSectionMapLifecycle,
+  EditorView,
 });

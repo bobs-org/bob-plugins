@@ -1021,6 +1021,10 @@ async function runE2e(parsed) {
     await client.call("Page.enable", {}, lib.RPC_TIMEOUT_MS);
     await client.call("Runtime.enable", {}, lib.RPC_TIMEOUT_MS);
     await client.call("Input.enable", {}, lib.RPC_TIMEOUT_MS).catch(() => ({}));
+    // Electron's --window-size is ignored by some Ozone headless launches;
+    // establish the ordinary test viewport explicitly so screenshots, row
+    // geometry, and CDP click coordinates use the intended full-size surface.
+    await client.call("Emulation.setDeviceMetricsOverride", { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
 
     const layoutDeadline = Date.now() + lib.LAYOUT_READY_TIMEOUT_MS;
     while (Date.now() < layoutDeadline) {
@@ -1091,7 +1095,7 @@ async function runE2e(parsed) {
       record("lp-due-clock", Boolean(due) && due.tone === "due" && due.time === colonClock(clocks.dueHhmm) && due.label === `${colonClock(clocks.dueHhmm)} · due` && /due — waking\s*\nCtrl-click/.test(String(due.aria)), JSON.stringify((due) ?? null).slice(0, 400));
     }
     const blocked = markByKey(defs, "job.md#sz-blocked");
-    record("lp-blocked-clock", Boolean(blocked) && blocked.tone === "blocked" && blocked.label === colonClock(clocks.blockedHhmm) && /waits on prerequisites\s*\nCtrl-click/.test(String(blocked.aria)), JSON.stringify((blocked) ?? null).slice(0, 400));
+    record("lp-blocked-clock", Boolean(blocked) && blocked.tone === "blocked" && blocked.label === colonClock(clocks.dueHhmm) && /waits on prerequisites\s*\nCtrl-click/.test(String(blocked.aria)), JSON.stringify((blocked) ?? null).slice(0, 400));
     const visibleDefs = defs.filter((mark) => mark.visible !== false);
     const singleLineWidths = visibleDefs.length >= 3 && visibleDefs.every((mark) =>
       Number.isFinite(mark.height) && Number.isFinite(mark.rowLineHeight) &&
@@ -1469,7 +1473,8 @@ async function runE2e(parsed) {
     const shotNarrow = path.join(outDir, "e2e-snooze-marks-narrow.png");
     await capturePage(client, shotNarrow);
     report.screenshots.push(shotNarrow);
-    await client.call("Emulation.clearDeviceMetricsOverride", {}).catch(() => ({}));
+    // Restore the explicit full-size baseline after the narrow viewport case.
+    await client.call("Emulation.setDeviceMetricsOverride", { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
     await sleep(200);
 
     // ---- reduced motion + forced colors keep a visible glyph and text ----

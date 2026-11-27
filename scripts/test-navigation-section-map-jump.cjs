@@ -329,8 +329,11 @@ test("peek does not move the cursor and notices when the note has no headers", (
   assert.equal(plugin.showSectionMap(editor, view), true);
   assert.equal(editor.cursor.line, 1);
   assert.equal(plugin.sectionMapLifecycle.getState(), "pinned");
-  const hosts = byAttr(view.contentEl, "data-bob-section-map", "host");
+  // The host mounts at the document top level (position:fixed must match
+  // viewport-relative placement rects), never inside the pane.
+  const hosts = byAttr(doc.body, "data-bob-section-map", "host");
   assert.equal(hosts.length, 1);
+  assert.equal(byAttr(view.contentEl, "data-bob-section-map", "host").length, 0);
 
   notices.length = 0;
   const empty = makeEditor("plain", 0);
@@ -408,6 +411,7 @@ test("mobile skips the map and still jumps", () => {
     assert.equal(editor.cursor.line, 2);
     assert.equal(plugin.sectionMapLifecycle, undefined);
     assert.equal(byAttr(view.contentEl, "data-bob-section-map", "host").length, 0);
+    assert.equal(byAttr(doc.body, "data-bob-section-map", "host").length, 0);
   } finally {
     if (previous === undefined) delete globalThis.Platform;
     else globalThis.Platform = previous;

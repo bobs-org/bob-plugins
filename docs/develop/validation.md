@@ -384,6 +384,22 @@ placement in a fake DOM (mode boundaries, keyed reconciliation, slide versus
 crossfade, chips, ring, gaps, compact content, entrance replay, hostile
 labels, malformed models) and runs in `npm test`; it is not acceptance.
 
+Real-Obsidian acceptance lives in `scripts/obsidian-section-map-e2e.cjs`: it
+drives real Ctrl+J / Ctrl+K keys over CDP in an owned scratch vault, both the
+insert / non-Vim `hotkeys.json` route and the Vim normal-mode route (the
+vault's exmap+nnoremap pair emulated with the CodeMirror Vim API, recorded in
+the report), then checks the linger lifecycle and every dismissal reason, the
+wrap pill, chip-target parity, 42-heading windowing with exact gap counts, the
+compact strip in a narrow split, margin mode with readable line length, the
+pinned peek, unchanged note hashes, and a clean console, with light and dark
+screenshots. `scripts/test-obsidian-section-map-e2e.cjs` runs its offline
+self-test in `npm test`:
+
+```bash
+xvfb-run -a node scripts/obsidian-section-map-e2e.cjs \
+  -e /snap/bin/obsidian -r /tmp/section-map/report.json -o /tmp/section-map/shots
+```
+
 ## Prose-field walkthrough
 
 `scripts/obsidian-prose-field-e2e.cjs` drives `[[` completion through the real

@@ -126236,6 +126236,19 @@ const SECTION_MAP_MODIFIER_KEYS = new Set([
   "CapsLock",
 ]);
 
+// Same clock as KeyboardEvent.timeStamp, so the capture keydown handler can
+// tell the dispatch that just ran a section command from a later press.
+function sectionMapNow() {
+  try {
+    if (typeof performance !== "undefined" && typeof performance.now === "function") {
+      return performance.now();
+    }
+  } catch (_error) {
+    // Fall through to the wall clock.
+  }
+  return Date.now();
+}
+
 function sectionMapIsMobile() {
   try {
     return Boolean(typeof Platform !== "undefined" && Platform && Platform.isMobile);
@@ -126379,6 +126392,7 @@ class BobNavigationHotkeysSectionMapControllerMixin {
     this.sectionMapWindowCleanups = [];
     this.sectionMapCtrlDown = false;
     this.sectionMapKeyGeneration = 0;
+    this.sectionMapLastCommandStamp = 0;
     const plugin = this;
     this.sectionMapLifecycle = createSectionMapLifecycle({
       onChange(snapshot) {
@@ -126479,6 +126493,7 @@ class BobNavigationHotkeysSectionMapControllerMixin {
   }
 
   showSectionMapAfterJump(editor, ctx, details = {}) {
+    this.sectionMapLastCommandStamp = sectionMapNow();
     if (sectionMapIsMobile()) return false;
     const view = this.resolveSectionMapView(editor, ctx);
     if (!view) return false;
@@ -126500,6 +126515,7 @@ class BobNavigationHotkeysSectionMapControllerMixin {
   }
 
   showSectionMapPeek(editor, ctx, details = {}) {
+    this.sectionMapLastCommandStamp = sectionMapNow();
     if (sectionMapIsMobile()) return false;
     const view = this.resolveSectionMapView(editor, ctx);
     if (!view) return false;
@@ -126650,8 +126666,16 @@ class BobNavigationHotkeysSectionMapControllerMixin {
     const doc =
       mount.ownerDocument ||
       (typeof document !== "undefined" ? document : null);
+    // Mount at the document top level, not inside the pane: placement rects
+    // are viewport-relative, and position:fixed only matches them when no
+    // ancestor creates a containing block for fixed descendants. Obsidian's
+    // .workspace does (CSS containment), which shifted an in-pane host right
+    // by the ribbon width and clipped the card. Using the view's own
+    // ownerDocument keeps pop-out windows working.
+    const topMount =
+      doc && doc.body && typeof doc.body.appendChild === "function" ? doc.body : mount;
     this.sectionMapMount = mount;
-    this.sectionMapHostApi = createSectionMapHost(doc, { mount });
+    this.sectionMapHostApi = createSectionMapHost(doc, { mount: topMount });
     this.sectionMapPlacement = null;
     this.observeSectionMapResize(view, editor);
     return this.sectionMapHostApi;
@@ -126786,6 +126810,19 @@ class BobNavigationHotkeysSectionMapControllerMixin {
     const lifecycle = this.sectionMapLifecycle;
     if (!lifecycle || !lifecycle.isVisible()) return;
     if (SECTION_MAP_MODIFIER_KEYS.has(key)) return;
+    const eventStamp = typeof event.timeStamp === "number" ? event.timeStamp : null;
+    const commandStamp = this.sectionMapLastCommandStamp || 0;
+    if (eventStamp != null && commandStamp > 0 && commandStamp >= eventStamp - 1) {
+      // This dispatch just ran a section command: Obsidian's window-capture
+      // hotkey listener runs before ours, so the map the command showed is
+      // already visible and no later jump can bump the generation. Never
+      // dismiss on it. Reconcile Holding when Ctrl is still down: the tracker
+      // above only learns the truth after the command already chose Lingering.
+      if (event.ctrlKey === true && this.sectionMapSource === "jump" && lifecycle.getState() === "lingering") {
+        lifecycle.showJump({ ctrlDown: true });
+      }
+      return;
+    }
     const generation = lifecycle.getGeneration();
     const finish = () => {
       if (!this.sectionMapLifecycle || this.sectionMapLifecycle.getGeneration() !== generation) {

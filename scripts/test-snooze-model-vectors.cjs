@@ -6,6 +6,7 @@ const { helpers: blockIdPrompt } = require("./block-id-prompt-harness.cjs");
 const { helpers: taskStatusCycler } = require("./task-status-cycler-harness.cjs");
 const {
   ALL_GROUPS,
+  CONSUMER_GROUPS,
   IMPLEMENTED_GROUPS,
   RESERVED_GROUPS,
   assertCleanupVector,
@@ -50,6 +51,11 @@ test("mutation vectors reserved for later phases have explicit coverage", () => 
     wake: { cases: 10, modes: ["wake"] },
   });
   assert.deepEqual(IMPLEMENTED_GROUPS, ["rows", "when", "live", "cleanup"]);
+  assert.deepEqual(CONSUMER_GROUPS["bob-navigation-hotkeys"], ["rows", "when", "live", "snooze", "cleanup"]);
+  assert.deepEqual(CONSUMER_GROUPS["block-id-prompt"], ["rows", "when", "live", "cleanup"]);
+  assert.deepEqual(CONSUMER_GROUPS["task-status-cycler"], ["rows", "when", "live", "cleanup"]);
+  assert.deepEqual(CONSUMER_GROUPS["bob-ledger-tools"], ["rows", "when", "live", "cleanup"]);
+  assert.deepEqual(CONSUMER_GROUPS["bob-cli"], ["rows", "when", "live", "snooze", "wake", "cleanup"]);
 });
 
 for (const [plugin, helpers] of PLUGINS) {
@@ -75,6 +81,61 @@ for (const [plugin, helpers] of PLUGINS) {
     for (const testCase of fixture.groups.cleanup) assertCleanupVector(model, testCase, assert);
   });
 }
+
+test("navigation runs all canonical snooze add and drop mutation vectors", () => {
+  const fixture = readSnoozeVectors("bob-navigation-hotkeys");
+  const planner = navigation.snoozeMutationPlanner;
+  assert.ok(planner && typeof planner.plan === "function", "navigation exports the pure mutation planner");
+  const planningApi = blockIdPrompt.createSnoozePlanningApi({});
+  const stampLine = (line, dateText) => {
+    if (!line || !line.includes("#task") || /\[fresh::\s*\d{4}-\d{2}-\d{2}\]/.test(line)) return line;
+    const block = /([ \t]+\^[A-Za-z0-9-]+[ \t]*)$/.exec(line);
+    return block
+      ? line.slice(0, block.index) + ` [fresh:: ${dateText}]` + block[1]
+      : line + ` [fresh:: ${dateText}]`;
+  };
+  for (const testCase of fixture.groups.snooze) {
+    const input = testCase.input;
+    const task = input.task;
+    const samePath = task.target === "";
+    const dailyPath = samePath ? task.path : "2026/20261125.md";
+    const nowInstant = new Date(`${input.date}T${input.now}:00Z`);
+    const result = planner.plan({
+      action: testCase.mode,
+      day: input.day,
+      when: input.when,
+      dailyPath,
+      task,
+      clock: { date: input.date, now: input.now, zone: input.zone, nowInstant, freshDateText: input.date },
+      nowInstant,
+      freshDateText: input.date,
+      stampLine,
+      identities: task.identities || [],
+      planTargetTaskUpdate: (content, line, options) => planningApi.planTargetTaskUpdate(content, line, {
+        ...options,
+        now: nowInstant,
+        freshDateText: input.date,
+        stampLine,
+      }),
+    });
+    if (testCase.expected.refusal) {
+      assert.equal(result.ok, false, `${testCase.id} refuses`);
+      assert.equal(result.refusal, testCase.expected.refusal, `${testCase.id} refusal`);
+      continue;
+    }
+    assert.equal(result.ok, true, `${testCase.id} plans`);
+    const daily = result.plans.find((plan) => plan.path === dailyPath);
+    assert.ok(daily, `${testCase.id} includes today's note`);
+    assert.equal(daily.postimage, testCase.expected.day, `${testCase.id} daily postimage`);
+    if (typeof testCase.expected.task === "string") {
+      const taskPlan = result.plans.find((plan) => plan.path === task.path) || daily;
+      assert.equal(taskPlan.postimage, testCase.expected.task, `${testCase.id} task postimage`);
+    }
+    if (typeof testCase.expected.task_unchanged === "boolean") {
+      assert.equal(result.task_unchanged, testCase.expected.task_unchanged, `${testCase.id} task_unchanged`);
+    }
+  }
+});
 
 test("explicit row removal carries notes and preserves history, malformed rows, and line endings", () => {
   const source = "## Pomodoros\r\n\r\n## Snoozed\r\n\r\n- **1530** [[same#^move]]\r\n  - keep this note\r\n- **1900** [[same#^keep]]\r\n- ~~**1400** [[same#^move]]~~ · woke 14:02\r\n- **1500** [[same#^bad]] extra\r\n";

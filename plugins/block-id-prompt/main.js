@@ -15645,6 +15645,7 @@ class BlockIdPromptPlugin extends Plugin {
     this.api = Object.freeze({
       pomodoroLinkPicker: createPomodoroLinkPickerApi(this),
       taskLinks: createTaskLinksApi(this),
+      snoozePlanning: createSnoozePlanningApi(this),
     });
 
     this.addCommand({
@@ -16144,6 +16145,7 @@ class BlockIdPromptPlugin extends Plugin {
       this.api = Object.freeze({
         pomodoroLinkPicker: createPomodoroLinkPickerApi(null),
         taskLinks: createTaskLinksApi(null),
+        snoozePlanning: createSnoozePlanningApi(null),
       });
     } catch (_error) {
       // Best effort: Obsidian is tearing down.
@@ -20494,13 +20496,18 @@ function taskWikilinkNamingPlanForContent(plugin, content, task, newId, options 
   const plan = planTargetTaskUpdate(content, relocated.line, {
     newBlockId: newId,
     activationEligible: options.activationEligible === true,
-    now: plugin && typeof plugin.now === "function" ? plugin.now() : new Date(),
-    stampLine: plugin && typeof plugin.getFreshnessStampLine === "function"
-      ? plugin.getFreshnessStampLine()
-      : undefined,
-    freshDateText: plugin && typeof plugin.getFreshnessDateText === "function"
-      ? plugin.getFreshnessDateText()
-      : undefined,
+    forceNext: options.forceNext === true,
+    now: options.now || (plugin && typeof plugin.now === "function" ? plugin.now() : new Date()),
+    stampLine: typeof options.stampLine === "function"
+      ? options.stampLine
+      : (plugin && typeof plugin.getFreshnessStampLine === "function"
+        ? plugin.getFreshnessStampLine()
+        : undefined),
+    freshDateText: typeof options.freshDateText === "string"
+      ? options.freshDateText
+      : (plugin && typeof plugin.getFreshnessDateText === "function"
+        ? plugin.getFreshnessDateText()
+        : undefined),
   });
   return plan
     ? { ok: true, code: null, task: nextTask, plan }
@@ -24275,3 +24282,44 @@ Object.assign(module.exports.helpers, {
 });
 // ---- src/173-snooze-model-exports.js ----
 Object.assign(module.exports.helpers, { snoozeModel });
+// ---- src/174-snooze-planning-api.js ----
+// Planning-only adapter for navigation snoozes. The caller supplies Bob's
+// date and ledger-tools' versioned freshness stamper; no editor or vault write
+// is performed here.
+function createSnoozePlanningApi(plugin) {
+  return Object.freeze({
+    version: 1,
+    planTargetTaskUpdate(preimageContent, taskLine, options = {}) {
+      if (!plugin || !options || typeof options !== "object") return null;
+      const now = options.now;
+      const freshDateText = options.freshDateText;
+      const stampLine = options.stampLine;
+      if (
+        !(now instanceof Date) && typeof now !== "string" && typeof now !== "number"
+      ) return null;
+      if (!Number.isFinite(new Date(now).getTime())) return null;
+      if (typeof freshDateText !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(freshDateText)) return null;
+      if (typeof stampLine !== "function") return null;
+      const planning = {
+        forceNext: true,
+        now: new Date(now),
+        freshDateText,
+        stampLine,
+      };
+      const newBlockId = String(options.newBlockId || "");
+      if (newBlockId) {
+        const lines = String(preimageContent == null ? "" : preimageContent).split("\n");
+        const rawLine = lines[taskLine];
+        if (typeof rawLine !== "string") return null;
+        const named = taskWikilinkNamingPlanForContent(plugin, String(preimageContent || ""), {
+          line: taskLine,
+          rawLine,
+        }, newBlockId, { ...planning, activationEligible: false });
+        return named.ok ? named.plan : null;
+      }
+      return planTargetTaskUpdate(preimageContent, taskLine, planning);
+    },
+  });
+}
+// ---- src/175-snooze-planning-api-exports.js ----
+Object.assign(module.exports.helpers, { createSnoozePlanningApi });

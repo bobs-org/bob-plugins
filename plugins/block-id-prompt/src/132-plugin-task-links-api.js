@@ -129,13 +129,18 @@ function taskWikilinkNamingPlanForContent(plugin, content, task, newId, options 
   const plan = planTargetTaskUpdate(content, relocated.line, {
     newBlockId: newId,
     activationEligible: options.activationEligible === true,
-    now: plugin && typeof plugin.now === "function" ? plugin.now() : new Date(),
-    stampLine: plugin && typeof plugin.getFreshnessStampLine === "function"
-      ? plugin.getFreshnessStampLine()
-      : undefined,
-    freshDateText: plugin && typeof plugin.getFreshnessDateText === "function"
-      ? plugin.getFreshnessDateText()
-      : undefined,
+    forceNext: options.forceNext === true,
+    now: options.now || (plugin && typeof plugin.now === "function" ? plugin.now() : new Date()),
+    stampLine: typeof options.stampLine === "function"
+      ? options.stampLine
+      : (plugin && typeof plugin.getFreshnessStampLine === "function"
+        ? plugin.getFreshnessStampLine()
+        : undefined),
+    freshDateText: typeof options.freshDateText === "string"
+      ? options.freshDateText
+      : (plugin && typeof plugin.getFreshnessDateText === "function"
+        ? plugin.getFreshnessDateText()
+        : undefined),
   });
   return plan
     ? { ok: true, code: null, task: nextTask, plan }

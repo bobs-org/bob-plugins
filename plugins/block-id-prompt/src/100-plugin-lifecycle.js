@@ -12,6 +12,7 @@ class BlockIdPromptPlugin extends Plugin {
     this.api = Object.freeze({
       pomodoroLinkPicker: createPomodoroLinkPickerApi(this),
       taskLinks: createTaskLinksApi(this),
+      snoozePlanning: createSnoozePlanningApi(this),
     });
 
     this.addCommand({
@@ -511,6 +512,7 @@ class BlockIdPromptPlugin extends Plugin {
       this.api = Object.freeze({
         pomodoroLinkPicker: createPomodoroLinkPickerApi(null),
         taskLinks: createTaskLinksApi(null),
+        snoozePlanning: createSnoozePlanningApi(null),
       });
     } catch (_error) {
       // Best effort: Obsidian is tearing down.

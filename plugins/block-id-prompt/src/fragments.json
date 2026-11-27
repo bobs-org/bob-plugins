@@ -56,5 +56,7 @@
   "170-exports.js",
   "171-task-reqs-exports.js",
   "172-req-line-guard-exports.js",
-  "173-snooze-model-exports.js"
+  "173-snooze-model-exports.js",
+  "174-snooze-planning-api.js",
+  "175-snooze-planning-api-exports.js"
 ]

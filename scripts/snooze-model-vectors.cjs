@@ -6,6 +6,16 @@ const CANONICAL_DIR = path.join(__dirname, "..", "..", "..", "..", "..", "tests"
 const FIXTURE_DIR = path.join(__dirname, "..", "plugins", "bob-ledger-tools", "scripts", "fixtures", "snooze");
 const ALL_GROUPS = Object.freeze(["rows", "when", "live", "snooze", "wake", "cleanup"]);
 const IMPLEMENTED_GROUPS = Object.freeze(["rows", "when", "live", "cleanup"]);
+// Mutation coverage is tracked per plugin consumer. The navigation planner
+// owns add/retime/drop; wake stays Rust-owned, and the other JS plugins expose
+// only their existing read/cleanup models.
+const CONSUMER_GROUPS = Object.freeze({
+  "bob-ledger-tools": Object.freeze(["rows", "when", "live", "cleanup"]),
+  "bob-navigation-hotkeys": Object.freeze(["rows", "when", "live", "snooze", "cleanup"]),
+  "block-id-prompt": Object.freeze(["rows", "when", "live", "cleanup"]),
+  "task-status-cycler": Object.freeze(["rows", "when", "live", "cleanup"]),
+  "bob-cli": Object.freeze(["rows", "when", "live", "snooze", "wake", "cleanup"]),
+});
 const RESERVED_GROUPS = Object.freeze(["snooze", "wake"]);
 const MODES = Object.freeze({
   rows: ["parse"],
@@ -127,6 +137,7 @@ module.exports = {
   FIXTURE_DIR,
   ALL_GROUPS,
   IMPLEMENTED_GROUPS,
+  CONSUMER_GROUPS,
   RESERVED_GROUPS,
   MODES,
   RUNNERS,

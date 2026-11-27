@@ -92,7 +92,12 @@ function sectionMapWindowBounds(total, currentIndex, direction, rowCount) {
     return { start: 0, end: Math.min(total, rowCount) };
   }
 
-  const rowsBefore = direction < 0 ? 5 : direction > 0 ? 2 : 3;
+  // Directional context is "rows before current", never the current row
+  // itself. Clamp it to the remaining budget so a short pane still paints
+  // the section that holds the cursor.
+  const preferredBefore = direction < 0 ? 5 : direction > 0 ? 2 : 3;
+  const remaining = Math.max(0, rowCount - 1);
+  const rowsBefore = Math.min(preferredBefore, remaining);
   const maxStart = Math.max(0, total - rowCount);
   const start = Math.max(0, Math.min(maxStart, currentIndex - rowsBefore));
   return { start, end: Math.min(total, start + rowCount) };

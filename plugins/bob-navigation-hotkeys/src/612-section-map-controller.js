@@ -11,17 +11,89 @@ const SECTION_MAP_MODIFIER_KEYS = new Set([
   "CapsLock",
 ]);
 
-// Same clock as KeyboardEvent.timeStamp, so the capture keydown handler can
-// tell the dispatch that just ran a section command from a later press.
-function sectionMapNow() {
+function sectionMapPerformanceNow(win) {
   try {
-    if (typeof performance !== "undefined" && typeof performance.now === "function") {
-      return performance.now();
-    }
+    const clock = win && win.performance && typeof win.performance.now === "function"
+      ? win.performance
+      : (typeof performance !== "undefined" ? performance : null);
+    if (clock && typeof clock.now === "function") return clock.now();
   } catch (_error) {
     // Fall through to the wall clock.
   }
   return Date.now();
+}
+
+// Plugin-realm clock. KeyboardEvent.timeStamp is normalized to this origin
+// through sectionMapEventStamp so pop-out windows with their own time origin
+// cannot look like the jump dispatch.
+function sectionMapNow() {
+  return sectionMapPerformanceNow(typeof window !== "undefined" ? window : null);
+}
+
+function sectionMapEventWindow(event) {
+  if (!event) return typeof window !== "undefined" ? window : null;
+  if (event.view) return event.view;
+  const target = event.target || event.srcElement;
+  const doc = target && (target.ownerDocument || target.document);
+  if (doc && doc.defaultView) return doc.defaultView;
+  return typeof window !== "undefined" ? window : null;
+}
+
+function sectionMapEventStamp(event) {
+  if (!event || typeof event.timeStamp !== "number") return null;
+  const eventWin = sectionMapEventWindow(event);
+  const pluginNow = sectionMapNow();
+  const eventNow = sectionMapPerformanceNow(eventWin);
+  return event.timeStamp + (pluginNow - eventNow);
+}
+
+function sectionMapHostWindow(plugin) {
+  try {
+    const view = plugin && plugin.sectionMapView;
+    const el = view && (view.contentEl || view.containerEl);
+    const doc = el && el.ownerDocument;
+    if (doc && doc.defaultView) return doc.defaultView;
+  } catch (_error) {
+    // Fall through to the plugin window.
+  }
+  return typeof window !== "undefined" ? window : null;
+}
+
+function sectionMapQueueMicrotask(plugin, fn) {
+  const win = sectionMapHostWindow(plugin);
+  if (win && typeof win.queueMicrotask === "function") {
+    win.queueMicrotask(fn);
+    return;
+  }
+  if (typeof queueMicrotask === "function") {
+    queueMicrotask(fn);
+    return;
+  }
+  setTimeout(fn, 0);
+}
+
+function sectionMapRequestFrame(plugin, fn) {
+  const win = sectionMapHostWindow(plugin);
+  if (win && typeof win.requestAnimationFrame === "function") {
+    return { id: win.requestAnimationFrame(fn), win };
+  }
+  if (typeof requestAnimationFrame === "function") {
+    return { id: requestAnimationFrame(fn), win: typeof window !== "undefined" ? window : null };
+  }
+  fn();
+  return { id: null, win: null };
+}
+
+function sectionMapCancelFrame(handle) {
+  if (!handle || handle.id == null) return;
+  const cancel = (handle.win && handle.win.cancelAnimationFrame)
+    || (typeof cancelAnimationFrame === "function" ? cancelAnimationFrame : null);
+  if (!cancel) return;
+  try {
+    cancel(handle.id);
+  } catch (_error) {
+    // Frame already flushed.
+  }
 }
 
 function sectionMapIsMobile() {
@@ -245,18 +317,22 @@ class BobNavigationHotkeysSectionMapControllerMixin {
     const sourceLines = Array.isArray(lines)
       ? lines
       : String(editor && typeof editor.getValue === "function" ? editor.getValue() : "").split(/\r?\n/);
-    const editorView = getEditorViewFromEditor(editor);
-    const doc = editorView && editorView.state && editorView.state.doc;
-    if (doc && this.sectionMapHeadingCache) {
-      const cached = this.sectionMapHeadingCache.get(doc);
-      if (cached) return cached;
-      const entries = getSectionHeadingEntries(sourceLines);
-      try {
-        this.sectionMapHeadingCache.set(doc, entries);
-      } catch (_error) {
-        // WeakMap keys must be objects; generic editors just rescan.
+    try {
+      const editorView = getEditorViewFromEditor(editor);
+      const doc = editorView && editorView.state && editorView.state.doc;
+      if (doc && this.sectionMapHeadingCache) {
+        const cached = this.sectionMapHeadingCache.get(doc);
+        if (cached) return cached;
+        const entries = getSectionHeadingEntries(sourceLines);
+        try {
+          this.sectionMapHeadingCache.set(doc, entries);
+        } catch (_error) {
+          // WeakMap keys must be objects; generic editors just rescan.
+        }
+        return entries;
       }
-      return entries;
+    } catch (_error) {
+      // The cache is optional; navigation uses the canonical scanner.
     }
     return getSectionHeadingEntries(sourceLines);
   }
@@ -269,6 +345,7 @@ class BobNavigationHotkeysSectionMapControllerMixin {
 
   showSectionMapAfterJump(editor, ctx, details = {}) {
     this.sectionMapLastCommandStamp = sectionMapNow();
+    this.sectionMapLastCommandEvent = this.sectionMapActiveKeyEvent || null;
     if (sectionMapIsMobile()) return false;
     const view = this.resolveSectionMapView(editor, ctx);
     if (!view) return false;
@@ -291,6 +368,7 @@ class BobNavigationHotkeysSectionMapControllerMixin {
 
   showSectionMapPeek(editor, ctx, details = {}) {
     this.sectionMapLastCommandStamp = sectionMapNow();
+    this.sectionMapLastCommandEvent = this.sectionMapActiveKeyEvent || null;
     if (sectionMapIsMobile()) return false;
     const view = this.resolveSectionMapView(editor, ctx);
     if (!view) return false;
@@ -351,23 +429,17 @@ class BobNavigationHotkeysSectionMapControllerMixin {
       }
     };
     this.sectionMapPaintScheduled = true;
-    if (typeof requestAnimationFrame === "function") {
-      this.sectionMapPaintFrame = requestAnimationFrame(run);
-      return;
-    }
-    run();
+    const handle = sectionMapRequestFrame(this, run);
+    this.sectionMapPaintFrame = handle.id;
+    this.sectionMapPaintWindow = handle.win;
+    if (handle.id == null) return;
   }
 
   clearSectionMapPaint() {
     this.sectionMapPaintScheduled = false;
-    if (this.sectionMapPaintFrame != null && typeof cancelAnimationFrame === "function") {
-      try {
-        cancelAnimationFrame(this.sectionMapPaintFrame);
-      } catch (_error) {
-        // Frame already flushed.
-      }
-    }
+    sectionMapCancelFrame({ id: this.sectionMapPaintFrame, win: this.sectionMapPaintWindow });
     this.sectionMapPaintFrame = null;
+    this.sectionMapPaintWindow = null;
   }
 
   paintSectionMapNow() {
@@ -388,15 +460,28 @@ class BobNavigationHotkeysSectionMapControllerMixin {
     if (!this.sectionMapPlacement) {
       this.sectionMapPlacement = this.computeLiveSectionMapPlacement(view, editor);
     }
-    const placement = this.sectionMapPlacement;
-    const model = buildSectionMapModel(lines, {
-      headings: entries,
-      cursorLine: this.sectionMapAnchorLine,
-      fromLine: this.sectionMapFromLine,
-      direction: this.sectionMapDirection,
-      wrapped: this.sectionMapWrapped,
-      maxRows: placement && placement.maxRows,
-    });
+    const placementInput = this.sectionMapLivePlacementInput || null;
+    const fitted = typeof buildFittedSectionMap === "function" && placementInput
+      ? buildFittedSectionMap(lines, {
+        headings: entries,
+        cursorLine: this.sectionMapAnchorLine,
+        fromLine: this.sectionMapFromLine,
+        direction: this.sectionMapDirection,
+        wrapped: this.sectionMapWrapped,
+      }, placementInput)
+      : null;
+    const placement = fitted ? fitted.placement : this.sectionMapPlacement;
+    this.sectionMapPlacement = placement;
+    const model = fitted
+      ? fitted.model
+      : buildSectionMapModel(lines, {
+        headings: entries,
+        cursorLine: this.sectionMapAnchorLine,
+        fromLine: this.sectionMapFromLine,
+        direction: this.sectionMapDirection,
+        wrapped: this.sectionMapWrapped,
+        maxRows: placement && placement.maxRows,
+      });
     hostApi.render(model, placement, {
       reducedMotion: sectionMapHostPrefersReducedMotion(view),
     });
@@ -483,12 +568,14 @@ class BobNavigationHotkeysSectionMapControllerMixin {
         ? hostEl.querySelector(".cm-content")
         : null);
     const doc = hostEl && hostEl.ownerDocument;
-    return computeSectionMapPlacement({
+    const input = {
       host: sectionMapRectOf(hostEl),
       scroller: sectionMapRectOf(scrollerEl) || sectionMapRectOf(hostEl),
       textColumn: sectionMapRectOf(textEl),
       notices: sectionMapNoticeRects(doc),
-    });
+    };
+    this.sectionMapLivePlacementInput = input;
+    return computeSectionMapPlacement(input);
   }
 
   observeSectionMapResize(view, editor) {
@@ -585,28 +672,44 @@ class BobNavigationHotkeysSectionMapControllerMixin {
     const lifecycle = this.sectionMapLifecycle;
     if (!lifecycle || !lifecycle.isVisible()) return;
     if (SECTION_MAP_MODIFIER_KEYS.has(key)) return;
-    const eventStamp = typeof event.timeStamp === "number" ? event.timeStamp : null;
+    this.sectionMapActiveKeyEvent = event;
+    const eventStamp = sectionMapEventStamp(event);
     const commandStamp = this.sectionMapLastCommandStamp || 0;
-    if (eventStamp != null && commandStamp > 0 && commandStamp >= eventStamp - 1) {
+    const sameEvent = event === this.sectionMapLastCommandEvent;
+    const eventWin = sectionMapEventWindow(event);
+    const commandWin = this.sectionMapLastCommandEvent
+      ? sectionMapEventWindow(this.sectionMapLastCommandEvent)
+      : sectionMapHostWindow(this);
+    // A later key from another window (pop-out vs plugin) cannot be the
+    // jump dispatch, even when its raw timeStamp collides after origin
+    // normalization against a frozen clock.
+    const sameWindow = !eventWin || !commandWin || eventWin === commandWin;
+    const sameDispatch = sameEvent || (
+      sameWindow &&
+      eventStamp != null && commandStamp > 0 && commandStamp >= eventStamp - 1
+    );
+    if (sameDispatch) {
       // This dispatch just ran a section command: Obsidian's window-capture
       // hotkey listener runs before ours, so the map the command showed is
       // already visible and no later jump can bump the generation. Never
       // dismiss on it. Reconcile Holding when Ctrl is still down: the tracker
       // above only learns the truth after the command already chose Lingering.
+      this.sectionMapLastCommandEvent = event;
       if (event.ctrlKey === true && this.sectionMapSource === "jump" && lifecycle.getState() === "lingering") {
         lifecycle.showJump({ ctrlDown: true });
       }
       return;
     }
     const generation = lifecycle.getGeneration();
+    const eventRef = event;
     const finish = () => {
+      if (this.sectionMapLastCommandEvent === eventRef) return;
       if (!this.sectionMapLifecycle || this.sectionMapLifecycle.getGeneration() !== generation) {
         return;
       }
       this.sectionMapLifecycle.dismiss();
     };
-    if (typeof queueMicrotask === "function") queueMicrotask(finish);
-    else setTimeout(finish, 0);
+    sectionMapQueueMicrotask(this, finish);
   }
 
   handleSectionMapCaptureKeyup(event) {

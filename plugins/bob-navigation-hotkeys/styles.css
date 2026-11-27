@@ -6203,6 +6203,14 @@ body.bob-tab-numbers-lit .workspace-tabs.mod-active .workspace-tab-header.is-act
   color: var(--text-muted);
 }
 
+.bob-section-map-row.is-current {
+  height: auto;
+  min-height: 24px;
+  align-items: flex-start;
+  padding-top: 3px;
+  padding-bottom: 3px;
+}
+
 .bob-section-map-row.is-current,
 .bob-section-map-row.is-from,
 .bob-section-map-row.is-chip-target {
@@ -6377,15 +6385,25 @@ body.bob-tab-numbers-lit .workspace-tabs.mod-active .workspace-tab-header.is-act
 }
 
 .bob-section-map-host.is-reduced .bob-section-map,
-.bob-section-map-host.is-reduced .bob-section-map-pill {
+.bob-section-map-host.is-reduced .bob-section-map-pill,
+.bob-section-map-host.is-reduced .bob-section-map-wrap {
   animation: none !important;
   transition: none !important;
 }
 
+.bob-section-map-host.is-reduced .bob-section-map-wrap {
+  transform: none !important;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .bob-section-map,
-  .bob-section-map-pill {
+  .bob-section-map-pill,
+  .bob-section-map-wrap {
     animation: none !important;
     transition: none !important;
+  }
+
+  .bob-section-map-wrap {
+    transform: none !important;
   }
 }

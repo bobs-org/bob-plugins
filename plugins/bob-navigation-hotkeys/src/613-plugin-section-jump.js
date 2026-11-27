@@ -33,10 +33,14 @@ class BobNavigationHotkeysSectionJumpMixin {
     }
 
     const lines = String(editor.getValue()).split(/\r?\n/);
-    const entries =
-      typeof this.getSectionMapHeadingEntries === "function"
+    let entries;
+    try {
+      entries = typeof this.getSectionMapHeadingEntries === "function"
         ? this.getSectionMapHeadingEntries(editor, lines)
         : getSectionHeadingEntries(lines);
+    } catch (_error) {
+      entries = getSectionHeadingEntries(lines);
+    }
     const targetLine = getSectionHeaderJumpLineFromEntries(
       entries,
       cursor.line,
@@ -59,7 +63,11 @@ class BobNavigationHotkeysSectionJumpMixin {
 
     const skipMap = sectionMapIsMobile();
     if (!skipMap && typeof this.armSectionMapSelection === "function") {
-      this.armSectionMapSelection(editor, targetLine);
+      try {
+        this.armSectionMapSelection(editor, targetLine);
+      } catch (_error) {
+        // Map arming is optional; the jump still moves the cursor.
+      }
     }
 
     if (!setEditorCursorWithoutScroll(editor, { line: targetLine, ch: 0 })) {
@@ -108,10 +116,14 @@ class BobNavigationHotkeysSectionJumpMixin {
     }
 
     const lines = String(editor.getValue()).split(/\r?\n/);
-    const entries =
-      typeof this.getSectionMapHeadingEntries === "function"
+    let entries;
+    try {
+      entries = typeof this.getSectionMapHeadingEntries === "function"
         ? this.getSectionMapHeadingEntries(editor, lines)
         : getSectionHeadingEntries(lines);
+    } catch (_error) {
+      entries = getSectionHeadingEntries(lines);
+    }
 
     if (!entries.length) {
       new Notice("No section headers");
@@ -121,7 +133,11 @@ class BobNavigationHotkeysSectionJumpMixin {
     if (sectionMapIsMobile()) return true;
 
     if (typeof this.armSectionMapSelection === "function") {
-      this.armSectionMapSelection(editor, cursor.line);
+      try {
+        this.armSectionMapSelection(editor, cursor.line);
+      } catch (_error) {
+        // Peek arming is optional and never moves the cursor.
+      }
     }
 
     try {

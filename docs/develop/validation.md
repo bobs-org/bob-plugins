@@ -362,18 +362,21 @@ xvfb-run -a node --experimental-websocket scripts/obsidian-copy-chips-e2e.cjs \
 `scripts/preview-section-map.cjs` renders the production Section Map painter
 (`createSectionMapHost` from `src/474-section-map-view.js`) plus
 `plugins/bob-navigation-hotkeys/styles.css` in headless Chromium. Models come
-from the built bundle's `buildSectionMapModel`, and placement comes from the
+from the built bundle's `buildFittedSectionMap`, and placement comes from the
 production `computeSectionMapPlacement` over the fixture pane's measured
-rects, so the PNGs show what the shipped code paints. The page captures nine
-scenes in light and dark: margin mode with the from-ring and both chips, a
-windowed 42-heading note in overlay mode, a wrap on a 3-heading daily note,
-the compact strip, the only-section state, odd and untitled labels, a
-two-press mid-slide (re-measured after the 140 ms pill slide settles), a
-Notice nudging the overlay card, and reduced motion. It fails when the card
-does not paint, escapes the pane, clips a row, misses the current row with
-the pill, shows the wrong mode, renders the only-section counter wrong, lets
-the compact strip exceed one line, or when body ink falls under 4.5:1 on the
-surface in either theme. Set `CHROMIUM_PATH` when no Chrome is on `PATH`:
+rects, so the PNGs show what the shipped code paints. Each scene sets its own
+pane height. The page captures twelve scenes in light and dark: margin mode
+with the from-ring and both chips, a windowed 42-heading note in overlay
+mode, a wrap on a 3-heading daily note, the compact strip, the only-section
+state, odd and untitled labels, a two-press mid-slide (re-measured after the
+140 ms pill slide settles), a Notice nudging the overlay card, reduced
+motion, a 220 px short pane that keeps the current row, a long current label
+that wraps, and a reduced-motion wrap whose badge reports
+`animation-name: none`. It fails when the card does not paint, escapes the
+pane, clips a row, misses the current row with the pill, shows the wrong
+mode, renders the only-section counter wrong, lets the compact strip exceed
+one line, or when body ink falls under 4.5:1 on the surface in either theme.
+Set `CHROMIUM_PATH` when no Chrome is on `PATH`:
 
 ```bash
 node scripts/preview-section-map.cjs --out /tmp/section-map-preview
@@ -385,15 +388,19 @@ crossfade, chips, ring, gaps, compact content, entrance replay, hostile
 labels, malformed models) and runs in `npm test`; it is not acceptance.
 
 Real-Obsidian acceptance lives in `scripts/obsidian-section-map-e2e.cjs`: it
-drives real Ctrl+J / Ctrl+K keys over CDP in an owned scratch vault, both the
-insert / non-Vim `hotkeys.json` route and the Vim normal-mode route (the
-vault's exmap+nnoremap pair emulated with the CodeMirror Vim API, recorded in
-the report), then checks the linger lifecycle and every dismissal reason, the
-wrap pill, chip-target parity, 42-heading windowing with exact gap counts, the
-compact strip in a narrow split, margin mode with readable line length, the
-pinned peek, unchanged note hashes, and a clean console, with light and dark
-screenshots. `scripts/test-obsidian-section-map-e2e.cjs` runs its offline
-self-test in `npm test`:
+drives real Ctrl+J / Ctrl+K keys over CDP in an owned scratch vault, proving
+the insert / non-Vim `hotkeys.json` route and the Vim normal-mode route
+independently (Vim maps off for the hotkey case; `hotkeyManager.setHotkeys`
+clears the JSON bindings for the Vim case; the vault's exmap+nnoremap pair
+emulated with the CodeMirror Vim API, recorded in the report). It then checks
+the linger lifecycle and every dismissal reason — `j`/`k` enter normal mode
+before the map is shown, `q` still records a Vim macro, and a pop-out Escape
+dismisses — plus the wrap pill, chip-target parity, 42-heading windowing with
+exact gap counts, a short horizontal split, a long current label, reduced-motion
+wrap, the compact strip in a narrow split, margin mode with readable line
+length, the pinned peek, unchanged note hashes, and a clean console, with
+light and dark screenshots. `scripts/test-obsidian-section-map-e2e.cjs` runs
+its offline self-test in `npm test`:
 
 ```bash
 xvfb-run -a node scripts/obsidian-section-map-e2e.cjs \

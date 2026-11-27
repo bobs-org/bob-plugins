@@ -78,7 +78,7 @@ function loadProductionHelpers() {
   let helpers;
   try {
     helpers = require("../plugins/bob-navigation-hotkeys/main.js").helpers;
-    for (const name of ["buildSectionMapModel", "computeSectionMapPlacement", "createSectionMapHost"]) {
+    for (const name of ["buildSectionMapModel", "computeSectionMapPlacement", "createSectionMapHost", "buildFittedSectionMap"]) {
       if (typeof helpers[name] !== "function") {
         throw new Error(`Section Map helper ${name} missing from the built bundle; run npm run build first.`);
       }
@@ -99,6 +99,7 @@ function buildCases() {
       id: "margin-ring-chips",
       title: "1 · Margin mode with ring and chips",
       width: 1000,
+      height: 600,
       column: { left: 100, width: 500 },
       lines: ["# Bob Mac Capture", "body", "## Goals", "## Design", "### Capture grammar", "body", "### Live preview", "body", "### Completion", "body", "## Open questions"],
       cursorLine: 6,
@@ -110,6 +111,7 @@ function buildCases() {
       id: "windowed-overlay",
       title: "2 · Windowed overlay on a 42-heading note",
       width: 700,
+      height: 600,
       column: null,
       lines: headingLines(42),
       cursorLine: 20,
@@ -121,6 +123,7 @@ function buildCases() {
       id: "wrap-daily",
       title: "3 · Wrap on a 3-heading daily note",
       width: 900,
+      height: 600,
       column: { left: 80, width: 560 },
       lines: ["# 2026-11-27", "body", "## Morning", "body", "## Evening"],
       cursorLine: 0,
@@ -132,6 +135,7 @@ function buildCases() {
       id: "compact-strip",
       title: "4 · Compact strip in a narrow pane",
       width: 400,
+      height: 600,
       column: null,
       lines: ["# Alpha", "body", "## Beta", "details", "# Gamma"],
       cursorLine: 3,
@@ -143,6 +147,7 @@ function buildCases() {
       id: "only-section",
       title: "5 · Only-section state",
       width: 1000,
+      height: 600,
       column: { left: 100, width: 500 },
       lines: ["body", "# Only"],
       cursorLine: 1,
@@ -154,6 +159,7 @@ function buildCases() {
       id: "odd-untitled",
       title: "6 · Odd and untitled labels",
       width: 1000,
+      height: 600,
       column: { left: 100, width: 500 },
       lines: ["# [[target|Alias]] and **bold** `code`", "# %%comment%%", "#", "# Fish & Chips #tag 😀", "# <b>not a tag here</b>"],
       cursorLine: 3,
@@ -165,6 +171,7 @@ function buildCases() {
       id: "mid-slide",
       title: "7 · Mid-slide between two presses",
       width: 1000,
+      height: 600,
       column: { left: 100, width: 500 },
       lines: ["# Bob Mac Capture", "body", "## Goals", "## Design", "### Capture grammar", "body", "### Live preview", "body", "### Completion", "body", "## Open questions"],
       cursorLine: 6,
@@ -178,6 +185,7 @@ function buildCases() {
       id: "notice-nudge",
       title: "9 · Notice nudges the overlay card",
       width: 700,
+      height: 600,
       column: null,
       lines: headingLines(20),
       cursorLine: 10,
@@ -190,12 +198,56 @@ function buildCases() {
       id: "reduced-motion",
       title: "8 · Reduced motion keeps the card",
       width: 1000,
+      height: 600,
       column: { left: 100, width: 500 },
       lines: ["# Bob Mac Capture", "body", "## Goals", "## Design", "### Capture grammar", "body", "### Live preview", "body", "### Completion", "body", "## Open questions"],
       cursorLine: 6,
       fromLine: 4,
       direction: 1,
       wrapped: false,
+      reducedMotion: true,
+    },
+    {
+      id: "short-pane",
+      title: "10 · Short 220 px pane keeps the current row",
+      width: 800,
+      height: 220,
+      column: null,
+      lines: headingLines(42),
+      cursorLine: 20,
+      fromLine: 24,
+      direction: -1,
+      wrapped: false,
+    },
+    {
+      id: "long-label",
+      title: "11 · Long current label wraps inside the card",
+      width: 800,
+      height: 220,
+      column: null,
+      lines: [
+        `# ${"Long current heading label that should wrap onto two lines in the Section Map ".repeat(2).trim()}`,
+        "body",
+        "# Second",
+        "body",
+        "# Third",
+      ],
+      cursorLine: 0,
+      fromLine: 0,
+      direction: 1,
+      wrapped: false,
+    },
+    {
+      id: "wrap-reduced",
+      title: "12 · Reduced-motion wrap keeps a still badge",
+      width: 900,
+      height: 600,
+      column: { left: 80, width: 560 },
+      lines: ["# 2026-11-27", "body", "## Morning", "body", "## Evening"],
+      cursorLine: 0,
+      fromLine: 4,
+      direction: 1,
+      wrapped: true,
       reducedMotion: true,
     },
   ];
@@ -289,6 +341,7 @@ window.sectionMapPreview = {
     const scroller = document.getElementById("scroller");
     const column = document.getElementById("column");
     pane.style.width = item.width + "px";
+    pane.style.height = (item.height || 600) + "px";
     scroller.style.left = "0px";
     scroller.style.right = "0px";
     if (item.column) {
@@ -305,18 +358,21 @@ window.sectionMapPreview = {
     const scrollerRect = rectOf(scroller);
     const columnRect = item.column ? rectOf(column) : null;
     const noticeRects = item.notice ? [rectOf(document.getElementById("notice"))] : [];
-    this.placement = computeSectionMapPlacement({
+    this.placementInput = {
       host: hostRect, scroller: scrollerRect, textColumn: columnRect, notices: noticeRects,
-    });
-    return { placement: this.placement };
+    };
+    this.placement = computeSectionMapPlacement(this.placementInput);
+    return { placement: this.placement, input: this.placementInput };
   },
-  render(model, thenModel, reducedMotion) {
+  render(model, thenModel, reducedMotion, placement) {
     const pane = document.getElementById("pane");
     const host = createSectionMapHost(document, { mount: pane });
     this.host = host;
-    host.render(model, this.placement, { reducedMotion: Boolean(reducedMotion) });
+    const used = placement || this.placement;
+    this.placement = used;
+    host.render(model, used, { reducedMotion: Boolean(reducedMotion) });
     host.setLiveText(model.ariaSentence);
-    if (thenModel) host.render(thenModel, this.placement, { reducedMotion: false });
+    if (thenModel) host.render(thenModel, used, { reducedMotion: Boolean(reducedMotion) });
     return this.measure();
   },
   remeasure() {
@@ -336,6 +392,8 @@ window.sectionMapPreview = {
       if (row.scrollWidth > row.clientWidth + 1) overflows.push(row.textContent.slice(0, 40));
     }
     const strip = document.querySelector(".bob-section-map-compact:not(.is-hidden)");
+    const wrap = document.querySelector(".bob-section-map-wrap");
+    const wrapStyle = wrap && wrap.ownerDocument.defaultView.getComputedStyle(wrap);
     return {
       cardVisible: Boolean(cardRect && cardRect.width > 0 && cardRect.height > 0),
       cardWithinPane: Boolean(cardRect &&
@@ -344,6 +402,8 @@ window.sectionMapPreview = {
       cardWidth: cardRect ? cardRect.width : 0,
       pillAligned: !pillRect || !rowRect ? "n/a" : Math.abs(pillRect.top - rowRect.top) <= 2,
       pillHeightMatchesRow: !pillRect || !rowRect ? "n/a" : Math.abs(pillRect.height - rowRect.height) <= 2,
+      currentVisible: Boolean(rowRect && rowRect.height > 0 && rowRect.bottom <= paneRect.bottom + 1 && rowRect.top >= paneRect.top - 1),
+      wrapAnimation: wrapStyle ? wrapStyle.animationName : null,
       counter: (document.querySelector(".bob-section-map-counter") || { textContent: "" }).textContent,
       rows: document.querySelectorAll(".bob-section-map-row").length,
       overflows,
@@ -503,18 +563,19 @@ async function main() {
             await client.call("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "no-preference" }] });
           }
           const layout = await client.evaluate(`window.sectionMapPreview.layout(${safeJson(item.id)})`);
-          const model = helpers.buildSectionMapModel(item.lines, {
+          const fitted = helpers.buildFittedSectionMap(item.lines, {
             cursorLine: item.cursorLine, fromLine: item.fromLine,
             direction: item.direction, wrapped: Boolean(item.wrapped),
-            maxRows: layout.placement.maxRows,
-          });
-          const thenModel = item.thenCursorLine == null ? null : helpers.buildSectionMapModel(item.lines, {
+          }, layout.input);
+          const thenFitted = item.thenCursorLine == null ? null : helpers.buildFittedSectionMap(item.lines, {
             cursorLine: item.thenCursorLine, fromLine: item.thenFromLine,
             direction: item.direction, wrapped: false,
-            maxRows: layout.placement.maxRows,
-          });
+          }, layout.input);
+          const model = fitted.model;
+          const thenModel = thenFitted ? thenFitted.model : null;
+          const placement = thenFitted ? thenFitted.placement : fitted.placement;
           let measured = await client.evaluate(
-            `window.sectionMapPreview.render(${safeJson(model)}, ${safeJson(thenModel)}, ${safeJson(Boolean(item.reducedMotion))})`,
+            `window.sectionMapPreview.render(${safeJson(model)}, ${safeJson(thenModel)}, ${safeJson(Boolean(item.reducedMotion))}, ${safeJson(placement)})`,
           );
           if (item.thenCursorLine != null) {
             // Let the 140 ms pill slide settle, then verify it landed.
@@ -534,11 +595,17 @@ async function main() {
           if (item.id === "compact-strip" && measured.stripHeight > 40) {
             failures.push(`${theme}/${item.id}: compact strip is ${measured.stripHeight}px tall`);
           }
-          if (item.id !== "compact-strip" && measured.mode === "compact") {
+          if (!["compact-strip", "short-pane", "long-label"].includes(item.id) && measured.mode === "compact") {
             failures.push(`${theme}/${item.id}: unexpected compact mode`);
           }
           if (item.id === "only-section" && !/1 \/ 1/.test(measured.counter.replace(/\s+/g, " "))) {
             failures.push(`${theme}/${item.id}: counter is ${JSON.stringify(measured.counter)}`);
+          }
+          if (measured.mode !== "compact" && measured.currentVisible === false) {
+            failures.push(`${theme}/${item.id}: current row is not visible inside the pane`);
+          }
+          if (item.id === "wrap-reduced" && measured.wrapAnimation && measured.wrapAnimation !== "none") {
+            failures.push(`${theme}/${item.id}: wrap badge animation is ${JSON.stringify(measured.wrapAnimation)}`);
           }
           const output = path.join(args.out, `section-map-${item.id}-${theme}.png`);
           await capture(client, output);

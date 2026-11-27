@@ -9,6 +9,8 @@ const {
   buildSectionMapModel,
   computeSectionMapPlacement,
   createSectionMapHost,
+  estimateSectionMapCardHeight,
+  buildFittedSectionMap,
 } = helpers;
 const STYLES = fs.readFileSync(
   path.join(__dirname, "../plugins/bob-navigation-hotkeys/styles.css"),
@@ -102,10 +104,15 @@ test("styles: section map tokens cover surface, rows, pill, chips, motion, and r
     "@keyframes bob-section-map-cross",
     "font-variant-numeric: tabular-nums",
     "prefers-reduced-motion",
+    ".bob-section-map-host.is-reduced .bob-section-map-wrap",
     "inset 3px 0 0 var(--interactive-accent)",
   ]) {
     assert.ok(STYLES.includes(token), token);
   }
+  assert.ok(STYLES.includes(".bob-section-map-host.is-reduced .bob-section-map-wrap"));
+  const reducedMediaAt = STYLES.lastIndexOf("@media (prefers-reduced-motion: reduce)");
+  assert.ok(reducedMediaAt >= 0);
+  assert.ok(STYLES.slice(reducedMediaAt).includes(".bob-section-map-wrap"));
 });
 
 test("placement picks margin, overlay, and compact at the documented boundaries", () => {
@@ -394,3 +401,100 @@ test("reduced motion marks the host and a second agent stays passive and idempot
   assert.ok(byAttr(doc.body, "data-bob-section-map", "card")[0].classes.includes("is-entering"));
   host.destroy();
 });
+
+test("a jump from section 0 to 20 crossfades because neither endpoint stays painted", () => {
+  const doc = makeDoc();
+  const host = createSectionMapHost(doc);
+  const lines = Array.from({ length: 42 }, (_unused, index) => `# Heading ${index}`);
+  const placement = computeSectionMapPlacement(wideHost());
+  const first = host.render(
+    buildSectionMapModel(lines, { cursorLine: 0, direction: 1, maxRows: placement.maxRows }),
+    placement,
+  );
+  assert.equal(first.lastTransition, "enter");
+  const second = host.render(
+    buildSectionMapModel(lines, {
+      cursorLine: 20,
+      fromLine: 0,
+      direction: 1,
+      maxRows: placement.maxRows,
+    }),
+    placement,
+  );
+  assert.equal(second.lastTransition, "crossfade");
+  const card = byAttr(doc.body, "data-bob-section-map", "card")[0];
+  assert.ok(card.classes.includes("is-crossfade"));
+  assert.ok(!card.classes.includes("is-slide"));
+  assert.ok(!card.classes.includes("is-entering"));
+  host.destroy();
+});
+
+test("fitted placement keeps the current landmark inside the pane at short heights", () => {
+  const lines = Array.from({ length: 42 }, (_unused, index) => `# Heading ${index}`);
+  const longLabel = `# ${"Long current heading label that must wrap ".repeat(3).trim()}`;
+  const longLines = [longLabel, ...lines.slice(1)];
+
+  for (const height of [168, 180, 200, 220, 280]) {
+    for (const width of [800, 360]) {
+      const hostRect = rect(0, 0, width, height);
+      const input = { host: hostRect, scroller: hostRect, textColumn: null, notices: [] };
+      const fitted = buildFittedSectionMap(lines, { cursorLine: 20, direction: -1 }, input);
+      assert.ok(fitted.model.rows.some((row) => row.type === "heading" && row.current === true), `h=${height} w=${width}`);
+      const cardBottom = fitted.placement.top + (
+        fitted.placement.mode === "compact"
+          ? 24 + 18
+          : estimateSectionMapCardHeight(fitted.model)
+      );
+      assert.ok(cardBottom <= hostRect.bottom + 1, `card ${cardBottom} vs host ${hostRect.bottom} at h=${height}`);
+      assert.ok(fitted.placement.top >= hostRect.top - 1, `top ${fitted.placement.top} at h=${height}`);
+      const chips = fitted.model.chips;
+      for (const chip of chips) {
+        assert.ok(
+          fitted.model.rows.some((row) => row.line === chip.targetLine && row.chipTarget),
+          `chip ${chip.direction} missing at h=${height}`,
+        );
+      }
+    }
+  }
+
+  const short = rect(0, 16, 800, 220);
+  short.bottom = 236;
+  const audit = buildFittedSectionMap(lines, { cursorLine: 20, direction: -1 }, {
+    host: short,
+    scroller: short,
+    textColumn: null,
+    notices: [],
+  });
+  assert.ok(audit.model.rows.some((row) => row.current === true));
+  assert.ok(audit.placement.top + estimateSectionMapCardHeight(audit.model) <= short.bottom + 1 || audit.placement.mode === "compact");
+
+  const noticeHost = rect(0, 0, 800, 220);
+  const nudged = buildFittedSectionMap(lines, { cursorLine: 20, direction: 1 }, {
+    host: noticeHost,
+    scroller: noticeHost,
+    textColumn: null,
+    notices: [rect(500, 0, 400, 60)],
+  });
+  assert.ok(nudged.model.rows.some((row) => row.current === true));
+  assert.ok(nudged.placement.top >= 0);
+  const nudgeBottom = nudged.placement.top + (
+    nudged.placement.mode === "compact" ? 42 : estimateSectionMapCardHeight(nudged.model)
+  );
+  assert.ok(nudgeBottom <= noticeHost.bottom + 1);
+
+  const longHost = rect(0, 0, 800, 220);
+  const longFitted = buildFittedSectionMap(longLines, { cursorLine: 0, direction: 1 }, {
+    host: longHost,
+    scroller: longHost,
+    textColumn: null,
+    notices: [],
+  });
+  const current = longFitted.model.rows.find((row) => row.current === true);
+  assert.ok(current);
+  assert.ok(current.label.length > 28);
+  const longHeight = estimateSectionMapCardHeight(longFitted.model);
+  if (longFitted.placement.mode !== "compact") {
+    assert.ok(longFitted.placement.top + longHeight <= longHost.bottom + 1);
+  }
+});
+

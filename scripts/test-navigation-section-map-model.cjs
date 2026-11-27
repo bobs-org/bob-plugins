@@ -199,3 +199,48 @@ test("Section Map chips stay in parity with the heading jump picker over generat
     }
   }
 });
+
+test("every window budget paints the current section, including short upward landings", () => {
+  const lines = Array.from({ length: 42 }, (_unused, index) => `# Heading ${index}`);
+  const nested = ["# Root", "## A", "### B", "#### C"];
+  for (let index = 0; index < 18; index += 1) nested.push(`#### Sibling ${index}`);
+
+  for (const direction of [-1, 0, 1]) {
+    for (let maxRows = 1; maxRows <= 12; maxRows += 1) {
+      for (const cursorLine of [0, 1, 15, 20, 39, 41, 80, -1]) {
+        const model = helpers.buildSectionMapModel(lines, { cursorLine, direction, maxRows });
+        const headings = helpers.getSectionHeadingEntries(lines);
+        const containing = headings.reduce(
+          (found, heading, index) => (heading.line <= cursorLine ? index : found),
+          -1,
+        );
+        if (containing >= 0 && model.visible) {
+          const current = model.rows.find((row) => row.type === "heading" && row.current === true);
+          assert.ok(current, `dir=${direction} maxRows=${maxRows} cursor=${cursorLine}`);
+          assert.equal(current.line, headings[containing].line);
+        }
+      }
+    }
+  }
+
+  const audit = helpers.buildSectionMapModel(lines, {
+    cursorLine: 20,
+    direction: -1,
+    maxRows: 5,
+  });
+  assert.ok(audit.rows.some((row) => row.type === "heading" && row.current === true));
+  assert.ok(audit.window.visibleLines.includes(20));
+  assert.equal(audit.window.end - audit.window.start, 5);
+  assert.ok(audit.window.start <= 20 && 20 < audit.window.end);
+
+  const wrapDown = helpers.buildSectionMapModel(lines, { cursorLine: 41, direction: 1, maxRows: 3 });
+  assert.ok(wrapDown.rows.some((row) => row.line === 0 && row.chipTarget));
+  assert.ok(wrapDown.rows.some((row) => row.type === "heading" && row.current === true));
+
+  const wrapUp = helpers.buildSectionMapModel(lines, { cursorLine: 0, direction: -1, maxRows: 3 });
+  assert.ok(wrapUp.rows.some((row) => row.line === 41 && row.chipTarget));
+
+  const deep = helpers.buildSectionMapModel(nested, { cursorLine: 20, direction: -1, maxRows: 4 });
+  assert.ok(deep.rows.some((row) => row.type === "heading" && row.current === true));
+  assert.ok(deep.rows.some((row) => row.line === 0));
+});

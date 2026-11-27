@@ -11,6 +11,8 @@ const SECTION_MAP_CARD_INSET = 12;
 const SECTION_MAP_COMPACT_MAX_WIDTH = 480;
 const SECTION_MAP_COMPACT_MAX_HEIGHT = 168;
 const SECTION_MAP_COMPACT_STRIP_HEIGHT = 24;
+const SECTION_MAP_CURRENT_WRAP_EXTRA = 12;
+const SECTION_MAP_LONG_LABEL_CHARS = 28;
 // Card chrome around the compact strip: 8 px padding on each side plus the
 // 1 px border, from the .bob-section-map rule in styles.css.
 const SECTION_MAP_CARD_CHROME = 18;
@@ -190,15 +192,7 @@ function computeSectionMapPlacement(input) {
     ? source.notices.map(sectionMapRect).filter(Boolean)
     : [];
   if (host.width < SECTION_MAP_COMPACT_MAX_WIDTH || host.height < SECTION_MAP_COMPACT_MAX_HEIGHT) {
-    return {
-      mode: "compact",
-      left: Math.round(host.left + SECTION_MAP_CARD_INSET),
-      top: Math.round(
-        host.bottom - SECTION_MAP_CARD_INSET - SECTION_MAP_COMPACT_STRIP_HEIGHT - SECTION_MAP_CARD_CHROME,
-      ),
-      width: Math.round(Math.max(0, host.width - 2 * SECTION_MAP_CARD_INSET)),
-      maxRows: SECTION_MAP_FULL_ROWS,
-    };
+    return sectionMapCompactPlacement(host);
   }
   const anchorTop = scroller.top + SECTION_MAP_CARD_TOP_OFFSET;
   const available = Math.max(0, host.bottom - SECTION_MAP_CARD_INSET - anchorTop);
@@ -248,12 +242,90 @@ function computeSectionMapPlacement(input) {
       break;
     }
   }
+  const availableAfter = Math.max(0, host.bottom - SECTION_MAP_CARD_INSET - placement.top);
+  const maxRowsAfter = Math.max(
+    1,
+    Math.min(
+      SECTION_MAP_FULL_ROWS,
+      Math.floor((availableAfter - SECTION_MAP_HEADER_RESERVE) / SECTION_MAP_ROW_HEIGHT),
+    ),
+  );
+  if (availableAfter < SECTION_MAP_HEADER_RESERVE + SECTION_MAP_ROW_HEIGHT) {
+    return sectionMapCompactPlacement(host);
+  }
   return {
     mode: placement.mode,
     left: Math.round(placement.left),
     top: Math.round(placement.top),
     width: Math.round(placement.width),
-    maxRows: placement.maxRows,
+    maxRows: maxRowsAfter,
+  };
+}
+
+function sectionMapCompactPlacement(host) {
+  const safe = host || { left: 0, top: 0, width: SECTION_MAP_CARD_MIN_WIDTH, height: 0, bottom: 0 };
+  const height = SECTION_MAP_COMPACT_STRIP_HEIGHT + SECTION_MAP_CARD_CHROME;
+  const top = Math.max(
+    sectionMapNum(safe.top, 0),
+    sectionMapNum(safe.bottom, height) - SECTION_MAP_CARD_INSET - height,
+  );
+  return {
+    mode: "compact",
+    left: Math.round(sectionMapNum(safe.left, 0) + SECTION_MAP_CARD_INSET),
+    top: Math.round(top),
+    width: Math.round(Math.max(0, sectionMapNum(safe.width, SECTION_MAP_CARD_MIN_WIDTH) - 2 * SECTION_MAP_CARD_INSET)),
+    maxRows: SECTION_MAP_FULL_ROWS,
+  };
+}
+
+function estimateSectionMapCardHeight(model) {
+  const rows = model && Array.isArray(model.rows) ? model.rows : [];
+  let body = 0;
+  for (const row of rows) {
+    if (!row || (row.type !== "heading" && row.type !== "gap")) continue;
+    body += SECTION_MAP_ROW_HEIGHT;
+    if (row.type === "heading" && row.current === true) {
+      const label = sectionMapText(row.label);
+      if (label.length > SECTION_MAP_LONG_LABEL_CHARS) body += SECTION_MAP_CURRENT_WRAP_EXTRA;
+    }
+  }
+  return SECTION_MAP_HEADER_RESERVE + body;
+}
+
+function fitSectionMapPlacement(placement, model, hostInput) {
+  const host = sectionMapRect(hostInput);
+  const base = placement && typeof placement === "object" ? placement : null;
+  if (!host || !base || base.mode === "compact") {
+    return base || sectionMapCompactPlacement(host);
+  }
+  const height = estimateSectionMapCardHeight(model);
+  const limit = host.bottom - SECTION_MAP_CARD_INSET;
+  if (base.top + height <= limit) return base;
+  return null;
+}
+
+function buildFittedSectionMap(lines, options, placementInput) {
+  const source = options && typeof options === "object" ? options : {};
+  const input = placementInput && typeof placementInput === "object" ? placementInput : {};
+  let placement = computeSectionMapPlacement(input);
+  const host = sectionMapRect(input.host);
+  if (!host || placement.mode === "compact") {
+    return {
+      placement,
+      model: buildSectionMapModel(lines, { ...source, maxRows: placement.maxRows }),
+    };
+  }
+  for (let maxRows = placement.maxRows; maxRows >= 1; maxRows -= 1) {
+    const candidate = { ...placement, maxRows };
+    const model = buildSectionMapModel(lines, { ...source, maxRows });
+    if (fitSectionMapPlacement(candidate, model, host)) {
+      return { placement: candidate, model };
+    }
+  }
+  const compact = sectionMapCompactPlacement(host);
+  return {
+    placement: compact,
+    model: buildSectionMapModel(lines, { ...source, maxRows: compact.maxRows }),
   };
 }
 
@@ -544,12 +616,22 @@ function renderSectionMapCard(state, model, placement, options = {}) {
       parts.pill.style.height = `${height}px`;
       if (parts.pill.setAttribute) parts.pill.setAttribute("data-bob-section-map-line", currentKey);
       const wrapped = safe.wrapped === true;
-      const oldPainted = state.painted.includes(state.currentKey);
+      const oldKey = state.currentKey;
+      const oldPainted = Array.isArray(state.painted) ? state.painted : [];
+      const newPainted = compact ? [] : nextKeys;
+      const bothVisible = Boolean(
+        oldKey &&
+        currentKey &&
+        oldPainted.includes(oldKey) &&
+        oldPainted.includes(currentKey) &&
+        newPainted.includes(oldKey) &&
+        newPainted.includes(currentKey),
+      );
       if (!wasVisible) {
         state.lastTransition = "enter";
         sectionMapRemoveClass(parts.card, "is-slide");
         sectionMapRemoveClass(parts.card, "is-crossfade");
-      } else if (wrapped || state.currentKey == null || !oldPainted) {
+      } else if (wrapped || !bothVisible) {
         state.lastTransition = "crossfade";
         sectionMapRemoveClass(parts.card, "is-slide");
         sectionMapAddClass(parts.card, "is-crossfade");

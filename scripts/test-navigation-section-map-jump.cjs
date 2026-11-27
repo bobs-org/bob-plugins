@@ -307,6 +307,151 @@ test("a throwing painter leaves the cursor, return value, and notices unchanged"
   assert.deepEqual(notices, []);
 });
 
+test("throwing map arm, cache, or flash still moves the cursor like a normal jump", () => {
+  const doc = makeDoc();
+  const content = "# First\nbody\n# Second";
+
+  notices.length = 0;
+  const armed = makeEditor(content, 0);
+  const { view: armedView } = makeView(armed, doc);
+  const armedPlugin = makePlugin(armedView);
+  const order = [];
+  const originalArm = armedPlugin.armSectionMapSelection.bind(armedPlugin);
+  armedPlugin.armSectionMapSelection = (...args) => {
+    order.push("arm");
+    originalArm(...args);
+  };
+  const originalSet = armed.setCursor.bind(armed);
+  armed.setCursor = (...args) => {
+    order.push("cursor");
+    originalSet(...args);
+  };
+  assert.equal(armedPlugin.jumpToSectionHeader(armed, 1, armedView), true);
+  assert.equal(order[0], "arm");
+  assert.ok(order.includes("cursor"));
+  assert.ok(order.indexOf("arm") < order.indexOf("cursor"));
+  assert.equal(armed.cursor.line, 2);
+  assert.deepEqual(notices, []);
+
+  notices.length = 0;
+  const throwingArm = makeEditor(content, 0);
+  const { view: throwingArmView } = makeView(throwingArm, doc);
+  const throwingArmPlugin = makePlugin(throwingArmView);
+  throwingArmPlugin.armSectionMapSelection = () => {
+    throw new Error("arm boom");
+  };
+  assert.equal(throwingArmPlugin.jumpToSectionHeader(throwingArm, 1, throwingArmView), true);
+  assert.equal(throwingArm.cursor.line, 2);
+  assert.deepEqual(notices, []);
+
+  notices.length = 0;
+  const cache = makeEditor(content, 0);
+  const { view: cacheView } = makeView(cache, doc);
+  const cachePlugin = makePlugin(cacheView);
+  cachePlugin.getSectionMapHeadingEntries = () => {
+    throw new Error("cache boom");
+  };
+  assert.equal(cachePlugin.jumpToSectionHeader(cache, 1, cacheView), true);
+  assert.equal(cache.cursor.line, 2);
+  assert.deepEqual(notices, []);
+
+  notices.length = 0;
+  const flash = makeEditor(content, 0);
+  const { view: flashView } = makeView(flash, doc);
+  const flashPlugin = makePlugin(flashView);
+  flashPlugin.flashEditorLandingLine = () => {
+    throw new Error("flash boom");
+  };
+  assert.equal(flashPlugin.jumpToSectionHeader(flash, 1, flashView), true);
+  assert.equal(flash.cursor.line, 2);
+  assert.deepEqual(notices, []);
+
+  notices.length = 0;
+  const peek = makeEditor(content, 1);
+  const { view: peekView } = makeView(peek, doc);
+  const peekPlugin = makePlugin(peekView);
+  peekPlugin.armSectionMapSelection = () => {
+    throw new Error("peek arm boom");
+  };
+  peekPlugin.showSectionMapPeek = () => {
+    throw new Error("peek painter boom");
+  };
+  assert.equal(peekPlugin.showSectionMap(peek, peekView), true);
+  assert.equal(peek.cursor.line, 1);
+  assert.deepEqual(notices, []);
+});
+
+test("activity dismissal uses event identity and window clocks, not raw timeStamps", async () => {
+  const previousWindow = globalThis.window;
+  const pluginNow = { value: 100000 };
+  const pluginWin = {
+    performance: { now: () => pluginNow.value },
+    queueMicrotask: (fn) => queueMicrotask(fn),
+    addEventListener() {},
+    removeEventListener() {},
+    requestAnimationFrame: (fn) => {
+      fn();
+      return 1;
+    },
+    cancelAnimationFrame() {},
+  };
+  globalThis.window = pluginWin;
+  try {
+    const doc = makeDoc();
+    doc.defaultView = pluginWin;
+    const editor = makeEditor("# First\nbody\n# Second", 0);
+    const { view } = makeView(editor, doc);
+    view.contentEl.ownerDocument = doc;
+    const plugin = makePlugin(view);
+
+    const jumpEvent = { key: "j", ctrlKey: true, timeStamp: 100000, view: pluginWin };
+    plugin.sectionMapActiveKeyEvent = jumpEvent;
+    plugin.jumpToSectionHeader(editor, 1, view);
+    plugin.handleSectionMapCaptureKeydown(jumpEvent);
+    await afterDispatch();
+    assert.notEqual(plugin.sectionMapLifecycle.getState(), "hidden");
+    assert.notEqual(plugin.sectionMapLifecycle.snapshot().fadeKind, "dismiss");
+
+    const generation = plugin.sectionMapLifecycle.getGeneration();
+    const youngWin = {
+      performance: { now: () => 100 },
+      queueMicrotask: (fn) => queueMicrotask(fn),
+    };
+    plugin.handleSectionMapCaptureKeydown({
+      key: "Escape",
+      ctrlKey: false,
+      timeStamp: 100,
+      view: youngWin,
+    });
+    await afterDispatch();
+    assert.equal(plugin.sectionMapLifecycle.getState(), "fading");
+    assert.equal(plugin.sectionMapLifecycle.snapshot().fadeKind, "dismiss");
+    assert.equal(plugin.sectionMapLifecycle.getGeneration(), generation);
+
+    plugin.sectionMapLastCommandStamp = 100000;
+    plugin.sectionMapLastCommandEvent = jumpEvent;
+    plugin.sectionMapActiveKeyEvent = jumpEvent;
+    plugin.sectionMapLifecycle.showPeek();
+    assert.equal(plugin.sectionMapLifecycle.getState(), "pinned");
+    plugin.handleSectionMapCaptureKeydown({
+      key: "Escape",
+      ctrlKey: false,
+      timeStamp: 100,
+      view: youngWin,
+    });
+    await afterDispatch();
+    assert.equal(plugin.sectionMapLifecycle.getState(), "fading");
+    assert.equal(plugin.sectionMapLifecycle.snapshot().fadeKind, "dismiss");
+
+    plugin.teardownSectionMapController();
+    assert.equal(plugin.sectionMapLifecycle, null);
+    assert.equal(plugin.sectionMapControllerReady, false);
+  } finally {
+    if (previousWindow === undefined) delete globalThis.window;
+    else globalThis.window = previousWindow;
+  }
+});
+
 test("zero-heading notes keep today's notices", () => {
   notices.length = 0;
   const doc = makeDoc();

@@ -22408,7 +22408,12 @@ function sectionMapWindowBounds(total, currentIndex, direction, rowCount) {
     return { start: 0, end: Math.min(total, rowCount) };
   }
 
-  const rowsBefore = direction < 0 ? 5 : direction > 0 ? 2 : 3;
+  // Directional context is "rows before current", never the current row
+  // itself. Clamp it to the remaining budget so a short pane still paints
+  // the section that holds the cursor.
+  const preferredBefore = direction < 0 ? 5 : direction > 0 ? 2 : 3;
+  const remaining = Math.max(0, rowCount - 1);
+  const rowsBefore = Math.min(preferredBefore, remaining);
   const maxStart = Math.max(0, total - rowCount);
   const start = Math.max(0, Math.min(maxStart, currentIndex - rowsBefore));
   return { start, end: Math.min(total, start + rowCount) };
@@ -97168,6 +97173,8 @@ const SECTION_MAP_CARD_INSET = 12;
 const SECTION_MAP_COMPACT_MAX_WIDTH = 480;
 const SECTION_MAP_COMPACT_MAX_HEIGHT = 168;
 const SECTION_MAP_COMPACT_STRIP_HEIGHT = 24;
+const SECTION_MAP_CURRENT_WRAP_EXTRA = 12;
+const SECTION_MAP_LONG_LABEL_CHARS = 28;
 // Card chrome around the compact strip: 8 px padding on each side plus the
 // 1 px border, from the .bob-section-map rule in styles.css.
 const SECTION_MAP_CARD_CHROME = 18;
@@ -97347,15 +97354,7 @@ function computeSectionMapPlacement(input) {
     ? source.notices.map(sectionMapRect).filter(Boolean)
     : [];
   if (host.width < SECTION_MAP_COMPACT_MAX_WIDTH || host.height < SECTION_MAP_COMPACT_MAX_HEIGHT) {
-    return {
-      mode: "compact",
-      left: Math.round(host.left + SECTION_MAP_CARD_INSET),
-      top: Math.round(
-        host.bottom - SECTION_MAP_CARD_INSET - SECTION_MAP_COMPACT_STRIP_HEIGHT - SECTION_MAP_CARD_CHROME,
-      ),
-      width: Math.round(Math.max(0, host.width - 2 * SECTION_MAP_CARD_INSET)),
-      maxRows: SECTION_MAP_FULL_ROWS,
-    };
+    return sectionMapCompactPlacement(host);
   }
   const anchorTop = scroller.top + SECTION_MAP_CARD_TOP_OFFSET;
   const available = Math.max(0, host.bottom - SECTION_MAP_CARD_INSET - anchorTop);
@@ -97405,12 +97404,90 @@ function computeSectionMapPlacement(input) {
       break;
     }
   }
+  const availableAfter = Math.max(0, host.bottom - SECTION_MAP_CARD_INSET - placement.top);
+  const maxRowsAfter = Math.max(
+    1,
+    Math.min(
+      SECTION_MAP_FULL_ROWS,
+      Math.floor((availableAfter - SECTION_MAP_HEADER_RESERVE) / SECTION_MAP_ROW_HEIGHT),
+    ),
+  );
+  if (availableAfter < SECTION_MAP_HEADER_RESERVE + SECTION_MAP_ROW_HEIGHT) {
+    return sectionMapCompactPlacement(host);
+  }
   return {
     mode: placement.mode,
     left: Math.round(placement.left),
     top: Math.round(placement.top),
     width: Math.round(placement.width),
-    maxRows: placement.maxRows,
+    maxRows: maxRowsAfter,
+  };
+}
+
+function sectionMapCompactPlacement(host) {
+  const safe = host || { left: 0, top: 0, width: SECTION_MAP_CARD_MIN_WIDTH, height: 0, bottom: 0 };
+  const height = SECTION_MAP_COMPACT_STRIP_HEIGHT + SECTION_MAP_CARD_CHROME;
+  const top = Math.max(
+    sectionMapNum(safe.top, 0),
+    sectionMapNum(safe.bottom, height) - SECTION_MAP_CARD_INSET - height,
+  );
+  return {
+    mode: "compact",
+    left: Math.round(sectionMapNum(safe.left, 0) + SECTION_MAP_CARD_INSET),
+    top: Math.round(top),
+    width: Math.round(Math.max(0, sectionMapNum(safe.width, SECTION_MAP_CARD_MIN_WIDTH) - 2 * SECTION_MAP_CARD_INSET)),
+    maxRows: SECTION_MAP_FULL_ROWS,
+  };
+}
+
+function estimateSectionMapCardHeight(model) {
+  const rows = model && Array.isArray(model.rows) ? model.rows : [];
+  let body = 0;
+  for (const row of rows) {
+    if (!row || (row.type !== "heading" && row.type !== "gap")) continue;
+    body += SECTION_MAP_ROW_HEIGHT;
+    if (row.type === "heading" && row.current === true) {
+      const label = sectionMapText(row.label);
+      if (label.length > SECTION_MAP_LONG_LABEL_CHARS) body += SECTION_MAP_CURRENT_WRAP_EXTRA;
+    }
+  }
+  return SECTION_MAP_HEADER_RESERVE + body;
+}
+
+function fitSectionMapPlacement(placement, model, hostInput) {
+  const host = sectionMapRect(hostInput);
+  const base = placement && typeof placement === "object" ? placement : null;
+  if (!host || !base || base.mode === "compact") {
+    return base || sectionMapCompactPlacement(host);
+  }
+  const height = estimateSectionMapCardHeight(model);
+  const limit = host.bottom - SECTION_MAP_CARD_INSET;
+  if (base.top + height <= limit) return base;
+  return null;
+}
+
+function buildFittedSectionMap(lines, options, placementInput) {
+  const source = options && typeof options === "object" ? options : {};
+  const input = placementInput && typeof placementInput === "object" ? placementInput : {};
+  let placement = computeSectionMapPlacement(input);
+  const host = sectionMapRect(input.host);
+  if (!host || placement.mode === "compact") {
+    return {
+      placement,
+      model: buildSectionMapModel(lines, { ...source, maxRows: placement.maxRows }),
+    };
+  }
+  for (let maxRows = placement.maxRows; maxRows >= 1; maxRows -= 1) {
+    const candidate = { ...placement, maxRows };
+    const model = buildSectionMapModel(lines, { ...source, maxRows });
+    if (fitSectionMapPlacement(candidate, model, host)) {
+      return { placement: candidate, model };
+    }
+  }
+  const compact = sectionMapCompactPlacement(host);
+  return {
+    placement: compact,
+    model: buildSectionMapModel(lines, { ...source, maxRows: compact.maxRows }),
   };
 }
 
@@ -97701,12 +97778,22 @@ function renderSectionMapCard(state, model, placement, options = {}) {
       parts.pill.style.height = `${height}px`;
       if (parts.pill.setAttribute) parts.pill.setAttribute("data-bob-section-map-line", currentKey);
       const wrapped = safe.wrapped === true;
-      const oldPainted = state.painted.includes(state.currentKey);
+      const oldKey = state.currentKey;
+      const oldPainted = Array.isArray(state.painted) ? state.painted : [];
+      const newPainted = compact ? [] : nextKeys;
+      const bothVisible = Boolean(
+        oldKey &&
+        currentKey &&
+        oldPainted.includes(oldKey) &&
+        oldPainted.includes(currentKey) &&
+        newPainted.includes(oldKey) &&
+        newPainted.includes(currentKey),
+      );
       if (!wasVisible) {
         state.lastTransition = "enter";
         sectionMapRemoveClass(parts.card, "is-slide");
         sectionMapRemoveClass(parts.card, "is-crossfade");
-      } else if (wrapped || state.currentKey == null || !oldPainted) {
+      } else if (wrapped || !bothVisible) {
         state.lastTransition = "crossfade";
         sectionMapRemoveClass(parts.card, "is-slide");
         sectionMapAddClass(parts.card, "is-crossfade");
@@ -126236,17 +126323,89 @@ const SECTION_MAP_MODIFIER_KEYS = new Set([
   "CapsLock",
 ]);
 
-// Same clock as KeyboardEvent.timeStamp, so the capture keydown handler can
-// tell the dispatch that just ran a section command from a later press.
-function sectionMapNow() {
+function sectionMapPerformanceNow(win) {
   try {
-    if (typeof performance !== "undefined" && typeof performance.now === "function") {
-      return performance.now();
-    }
+    const clock = win && win.performance && typeof win.performance.now === "function"
+      ? win.performance
+      : (typeof performance !== "undefined" ? performance : null);
+    if (clock && typeof clock.now === "function") return clock.now();
   } catch (_error) {
     // Fall through to the wall clock.
   }
   return Date.now();
+}
+
+// Plugin-realm clock. KeyboardEvent.timeStamp is normalized to this origin
+// through sectionMapEventStamp so pop-out windows with their own time origin
+// cannot look like the jump dispatch.
+function sectionMapNow() {
+  return sectionMapPerformanceNow(typeof window !== "undefined" ? window : null);
+}
+
+function sectionMapEventWindow(event) {
+  if (!event) return typeof window !== "undefined" ? window : null;
+  if (event.view) return event.view;
+  const target = event.target || event.srcElement;
+  const doc = target && (target.ownerDocument || target.document);
+  if (doc && doc.defaultView) return doc.defaultView;
+  return typeof window !== "undefined" ? window : null;
+}
+
+function sectionMapEventStamp(event) {
+  if (!event || typeof event.timeStamp !== "number") return null;
+  const eventWin = sectionMapEventWindow(event);
+  const pluginNow = sectionMapNow();
+  const eventNow = sectionMapPerformanceNow(eventWin);
+  return event.timeStamp + (pluginNow - eventNow);
+}
+
+function sectionMapHostWindow(plugin) {
+  try {
+    const view = plugin && plugin.sectionMapView;
+    const el = view && (view.contentEl || view.containerEl);
+    const doc = el && el.ownerDocument;
+    if (doc && doc.defaultView) return doc.defaultView;
+  } catch (_error) {
+    // Fall through to the plugin window.
+  }
+  return typeof window !== "undefined" ? window : null;
+}
+
+function sectionMapQueueMicrotask(plugin, fn) {
+  const win = sectionMapHostWindow(plugin);
+  if (win && typeof win.queueMicrotask === "function") {
+    win.queueMicrotask(fn);
+    return;
+  }
+  if (typeof queueMicrotask === "function") {
+    queueMicrotask(fn);
+    return;
+  }
+  setTimeout(fn, 0);
+}
+
+function sectionMapRequestFrame(plugin, fn) {
+  const win = sectionMapHostWindow(plugin);
+  if (win && typeof win.requestAnimationFrame === "function") {
+    return { id: win.requestAnimationFrame(fn), win };
+  }
+  if (typeof requestAnimationFrame === "function") {
+    return { id: requestAnimationFrame(fn), win: typeof window !== "undefined" ? window : null };
+  }
+  fn();
+  return { id: null, win: null };
+}
+
+function sectionMapCancelFrame(handle) {
+  if (!handle || handle.id == null) return;
+  const cancel = (handle.win && handle.win.cancelAnimationFrame)
+    || (typeof cancelAnimationFrame === "function" ? cancelAnimationFrame : null);
+  if (!cancel) return;
+  try {
+    cancel(handle.id);
+  } catch (_error) {
+    // Frame already flushed.
+  }
 }
 
 function sectionMapIsMobile() {
@@ -126470,18 +126629,22 @@ class BobNavigationHotkeysSectionMapControllerMixin {
     const sourceLines = Array.isArray(lines)
       ? lines
       : String(editor && typeof editor.getValue === "function" ? editor.getValue() : "").split(/\r?\n/);
-    const editorView = getEditorViewFromEditor(editor);
-    const doc = editorView && editorView.state && editorView.state.doc;
-    if (doc && this.sectionMapHeadingCache) {
-      const cached = this.sectionMapHeadingCache.get(doc);
-      if (cached) return cached;
-      const entries = getSectionHeadingEntries(sourceLines);
-      try {
-        this.sectionMapHeadingCache.set(doc, entries);
-      } catch (_error) {
-        // WeakMap keys must be objects; generic editors just rescan.
+    try {
+      const editorView = getEditorViewFromEditor(editor);
+      const doc = editorView && editorView.state && editorView.state.doc;
+      if (doc && this.sectionMapHeadingCache) {
+        const cached = this.sectionMapHeadingCache.get(doc);
+        if (cached) return cached;
+        const entries = getSectionHeadingEntries(sourceLines);
+        try {
+          this.sectionMapHeadingCache.set(doc, entries);
+        } catch (_error) {
+          // WeakMap keys must be objects; generic editors just rescan.
+        }
+        return entries;
       }
-      return entries;
+    } catch (_error) {
+      // The cache is optional; navigation uses the canonical scanner.
     }
     return getSectionHeadingEntries(sourceLines);
   }
@@ -126494,6 +126657,7 @@ class BobNavigationHotkeysSectionMapControllerMixin {
 
   showSectionMapAfterJump(editor, ctx, details = {}) {
     this.sectionMapLastCommandStamp = sectionMapNow();
+    this.sectionMapLastCommandEvent = this.sectionMapActiveKeyEvent || null;
     if (sectionMapIsMobile()) return false;
     const view = this.resolveSectionMapView(editor, ctx);
     if (!view) return false;
@@ -126516,6 +126680,7 @@ class BobNavigationHotkeysSectionMapControllerMixin {
 
   showSectionMapPeek(editor, ctx, details = {}) {
     this.sectionMapLastCommandStamp = sectionMapNow();
+    this.sectionMapLastCommandEvent = this.sectionMapActiveKeyEvent || null;
     if (sectionMapIsMobile()) return false;
     const view = this.resolveSectionMapView(editor, ctx);
     if (!view) return false;
@@ -126576,23 +126741,17 @@ class BobNavigationHotkeysSectionMapControllerMixin {
       }
     };
     this.sectionMapPaintScheduled = true;
-    if (typeof requestAnimationFrame === "function") {
-      this.sectionMapPaintFrame = requestAnimationFrame(run);
-      return;
-    }
-    run();
+    const handle = sectionMapRequestFrame(this, run);
+    this.sectionMapPaintFrame = handle.id;
+    this.sectionMapPaintWindow = handle.win;
+    if (handle.id == null) return;
   }
 
   clearSectionMapPaint() {
     this.sectionMapPaintScheduled = false;
-    if (this.sectionMapPaintFrame != null && typeof cancelAnimationFrame === "function") {
-      try {
-        cancelAnimationFrame(this.sectionMapPaintFrame);
-      } catch (_error) {
-        // Frame already flushed.
-      }
-    }
+    sectionMapCancelFrame({ id: this.sectionMapPaintFrame, win: this.sectionMapPaintWindow });
     this.sectionMapPaintFrame = null;
+    this.sectionMapPaintWindow = null;
   }
 
   paintSectionMapNow() {
@@ -126613,15 +126772,28 @@ class BobNavigationHotkeysSectionMapControllerMixin {
     if (!this.sectionMapPlacement) {
       this.sectionMapPlacement = this.computeLiveSectionMapPlacement(view, editor);
     }
-    const placement = this.sectionMapPlacement;
-    const model = buildSectionMapModel(lines, {
-      headings: entries,
-      cursorLine: this.sectionMapAnchorLine,
-      fromLine: this.sectionMapFromLine,
-      direction: this.sectionMapDirection,
-      wrapped: this.sectionMapWrapped,
-      maxRows: placement && placement.maxRows,
-    });
+    const placementInput = this.sectionMapLivePlacementInput || null;
+    const fitted = typeof buildFittedSectionMap === "function" && placementInput
+      ? buildFittedSectionMap(lines, {
+        headings: entries,
+        cursorLine: this.sectionMapAnchorLine,
+        fromLine: this.sectionMapFromLine,
+        direction: this.sectionMapDirection,
+        wrapped: this.sectionMapWrapped,
+      }, placementInput)
+      : null;
+    const placement = fitted ? fitted.placement : this.sectionMapPlacement;
+    this.sectionMapPlacement = placement;
+    const model = fitted
+      ? fitted.model
+      : buildSectionMapModel(lines, {
+        headings: entries,
+        cursorLine: this.sectionMapAnchorLine,
+        fromLine: this.sectionMapFromLine,
+        direction: this.sectionMapDirection,
+        wrapped: this.sectionMapWrapped,
+        maxRows: placement && placement.maxRows,
+      });
     hostApi.render(model, placement, {
       reducedMotion: sectionMapHostPrefersReducedMotion(view),
     });
@@ -126708,12 +126880,14 @@ class BobNavigationHotkeysSectionMapControllerMixin {
         ? hostEl.querySelector(".cm-content")
         : null);
     const doc = hostEl && hostEl.ownerDocument;
-    return computeSectionMapPlacement({
+    const input = {
       host: sectionMapRectOf(hostEl),
       scroller: sectionMapRectOf(scrollerEl) || sectionMapRectOf(hostEl),
       textColumn: sectionMapRectOf(textEl),
       notices: sectionMapNoticeRects(doc),
-    });
+    };
+    this.sectionMapLivePlacementInput = input;
+    return computeSectionMapPlacement(input);
   }
 
   observeSectionMapResize(view, editor) {
@@ -126810,28 +126984,44 @@ class BobNavigationHotkeysSectionMapControllerMixin {
     const lifecycle = this.sectionMapLifecycle;
     if (!lifecycle || !lifecycle.isVisible()) return;
     if (SECTION_MAP_MODIFIER_KEYS.has(key)) return;
-    const eventStamp = typeof event.timeStamp === "number" ? event.timeStamp : null;
+    this.sectionMapActiveKeyEvent = event;
+    const eventStamp = sectionMapEventStamp(event);
     const commandStamp = this.sectionMapLastCommandStamp || 0;
-    if (eventStamp != null && commandStamp > 0 && commandStamp >= eventStamp - 1) {
+    const sameEvent = event === this.sectionMapLastCommandEvent;
+    const eventWin = sectionMapEventWindow(event);
+    const commandWin = this.sectionMapLastCommandEvent
+      ? sectionMapEventWindow(this.sectionMapLastCommandEvent)
+      : sectionMapHostWindow(this);
+    // A later key from another window (pop-out vs plugin) cannot be the
+    // jump dispatch, even when its raw timeStamp collides after origin
+    // normalization against a frozen clock.
+    const sameWindow = !eventWin || !commandWin || eventWin === commandWin;
+    const sameDispatch = sameEvent || (
+      sameWindow &&
+      eventStamp != null && commandStamp > 0 && commandStamp >= eventStamp - 1
+    );
+    if (sameDispatch) {
       // This dispatch just ran a section command: Obsidian's window-capture
       // hotkey listener runs before ours, so the map the command showed is
       // already visible and no later jump can bump the generation. Never
       // dismiss on it. Reconcile Holding when Ctrl is still down: the tracker
       // above only learns the truth after the command already chose Lingering.
+      this.sectionMapLastCommandEvent = event;
       if (event.ctrlKey === true && this.sectionMapSource === "jump" && lifecycle.getState() === "lingering") {
         lifecycle.showJump({ ctrlDown: true });
       }
       return;
     }
     const generation = lifecycle.getGeneration();
+    const eventRef = event;
     const finish = () => {
+      if (this.sectionMapLastCommandEvent === eventRef) return;
       if (!this.sectionMapLifecycle || this.sectionMapLifecycle.getGeneration() !== generation) {
         return;
       }
       this.sectionMapLifecycle.dismiss();
     };
-    if (typeof queueMicrotask === "function") queueMicrotask(finish);
-    else setTimeout(finish, 0);
+    sectionMapQueueMicrotask(this, finish);
   }
 
   handleSectionMapCaptureKeyup(event) {
@@ -126949,10 +127139,14 @@ class BobNavigationHotkeysSectionJumpMixin {
     }
 
     const lines = String(editor.getValue()).split(/\r?\n/);
-    const entries =
-      typeof this.getSectionMapHeadingEntries === "function"
+    let entries;
+    try {
+      entries = typeof this.getSectionMapHeadingEntries === "function"
         ? this.getSectionMapHeadingEntries(editor, lines)
         : getSectionHeadingEntries(lines);
+    } catch (_error) {
+      entries = getSectionHeadingEntries(lines);
+    }
     const targetLine = getSectionHeaderJumpLineFromEntries(
       entries,
       cursor.line,
@@ -126975,7 +127169,11 @@ class BobNavigationHotkeysSectionJumpMixin {
 
     const skipMap = sectionMapIsMobile();
     if (!skipMap && typeof this.armSectionMapSelection === "function") {
-      this.armSectionMapSelection(editor, targetLine);
+      try {
+        this.armSectionMapSelection(editor, targetLine);
+      } catch (_error) {
+        // Map arming is optional; the jump still moves the cursor.
+      }
     }
 
     if (!setEditorCursorWithoutScroll(editor, { line: targetLine, ch: 0 })) {
@@ -127024,10 +127222,14 @@ class BobNavigationHotkeysSectionJumpMixin {
     }
 
     const lines = String(editor.getValue()).split(/\r?\n/);
-    const entries =
-      typeof this.getSectionMapHeadingEntries === "function"
+    let entries;
+    try {
+      entries = typeof this.getSectionMapHeadingEntries === "function"
         ? this.getSectionMapHeadingEntries(editor, lines)
         : getSectionHeadingEntries(lines);
+    } catch (_error) {
+      entries = getSectionHeadingEntries(lines);
+    }
 
     if (!entries.length) {
       new Notice("No section headers");
@@ -127037,7 +127239,11 @@ class BobNavigationHotkeysSectionJumpMixin {
     if (sectionMapIsMobile()) return true;
 
     if (typeof this.armSectionMapSelection === "function") {
-      this.armSectionMapSelection(editor, cursor.line);
+      try {
+        this.armSectionMapSelection(editor, cursor.line);
+      } catch (_error) {
+        // Peek arming is optional and never moves the cursor.
+      }
     }
 
     try {
@@ -157009,6 +157215,9 @@ Object.assign(module.exports.helpers, {
   SECTION_MAP_INDENT,
   SECTION_MAP_MAX_DEPTH,
   computeSectionMapPlacement,
+  estimateSectionMapCardHeight,
+  fitSectionMapPlacement,
+  buildFittedSectionMap,
   renderSectionMapCard,
   createSectionMapHost,
   SECTION_MAP_LINGER_MS,

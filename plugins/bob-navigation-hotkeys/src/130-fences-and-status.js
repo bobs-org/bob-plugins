@@ -10,14 +10,15 @@ function isClosingFence(line, openingFence) {
   );
 }
 
-function getSectionHeaderLines(lines) {
+function getSectionHeadingEntries(lines) {
   const sourceLines = Array.isArray(lines)
     ? lines
     : String(lines || "").split(/\r?\n/);
-  const headerLines = [];
+  const headings = [];
   let lineIndex = 0;
   let inFrontmatter = false;
   let inFence = null;
+  const outline = [];
 
   if (startsWithFrontmatter(sourceLines)) {
     inFrontmatter = true;
@@ -48,20 +49,43 @@ function getSectionHeaderLines(lines) {
     }
 
     if (SECTION_HEADER_RE.test(line)) {
-      headerLines.push(lineIndex);
+      const match = /^ {0,3}(#{1,6})(?:[ \t]+(.*)|[ \t]*)$/.exec(line);
+      if (!match) {
+        continue;
+      }
+
+      const level = match[1].length;
+      while (outline.length > 0 && outline[outline.length - 1].level >= level) {
+        outline.pop();
+      }
+      const rawText = match[2] || "";
+      headings.push({
+        line: lineIndex,
+        level,
+        depth: outline.length,
+        rawText,
+        label: cleanSectionHeadingLabel(rawText),
+      });
+      outline.push({ level, line: lineIndex });
     }
   }
 
-  return headerLines;
+  return headings;
 }
 
-function getSectionHeaderJumpLine(lines, cursorLine, direction) {
+function getSectionHeaderLines(lines) {
+  return getSectionHeadingEntries(lines).map((heading) => heading.line);
+}
+
+function getSectionHeaderJumpLineFromEntries(headings, cursorLine, direction) {
   const currentLine = Math.floor(numericOrDefault(cursorLine, Number.NaN));
   if (!Number.isFinite(currentLine)) {
     return null;
   }
 
-  const headerLines = getSectionHeaderLines(lines);
+  const headerLines = (Array.isArray(headings) ? headings : []).map((heading) =>
+    typeof heading === "number" ? heading : heading && heading.line,
+  );
   if (direction < 0) {
     for (let index = headerLines.length - 1; index >= 0; index -= 1) {
       if (headerLines[index] < currentLine) {
@@ -78,6 +102,14 @@ function getSectionHeaderJumpLine(lines, cursorLine, direction) {
   }
 
   return headerLines.length > 0 ? headerLines[0] : null;
+}
+
+function getSectionHeaderJumpLine(lines, cursorLine, direction) {
+  return getSectionHeaderJumpLineFromEntries(
+    getSectionHeadingEntries(lines),
+    cursorLine,
+    direction,
+  );
 }
 
 // True for a genuine Markdown checkbox list item that carries the Tasks

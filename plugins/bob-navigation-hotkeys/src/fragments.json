@@ -42,6 +42,7 @@
   "120-project-notes.js",
   "122-project-promotion-successors.js",
   "130-fences-and-status.js",
+  "131-section-map-model.js",
   "140-scheduled-recovery.js",
   "150-pomodoro-capture.js",
   "151-pomodoro-type-split.js",
@@ -335,5 +336,6 @@
   "743-snooze-card-model.js",
   "744-snooze-card-modal.js",
   "745-snooze-card-commands.js",
-  "746-snooze-card-exports.js"
+  "746-snooze-card-exports.js",
+  "747-section-map-exports.js"
 ]

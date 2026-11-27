@@ -730,25 +730,6 @@ async function run(args) {
       const row = { check: activeRun.currentCheck?.name || null,
         text: details.text || "", description: details.exception?.description || "", url: details.url || "", lineNumber: details.lineNumber || null };
       report.consoleExceptions.push(row);
-      void client.evaluate(`(() => {
-        const setting = app.setting || {};
-        const tabs = Array.isArray(setting.pluginTabs) ? setting.pluginTabs : [];
-        const plugins = app.plugins || {};
-        const ids = (value) => Array.from(value || [], (id) => String(id));
-        return {
-          check: ${JSON.stringify(activeRun.currentCheck?.name || null)},
-          enabledPlugins: ids(plugins.enabledPlugins),
-          loadedPlugins: Object.keys(plugins.plugins || {}),
-          pluginTabs: tabs.map((tab) => ({
-            name: tab?.name ?? null, ctor: tab?.constructor?.name ?? null,
-            pluginId: tab?.plugin?.manifest?.id ?? tab?.plugin?.manifest?.name ?? null,
-            pluginName: tab?.plugin?.manifest?.name ?? null,
-            pluginMissing: !tab?.plugin,
-          })),
-          settingKeys: Object.keys(setting),
-          activeElement: document.activeElement?.className?.toString?.() || document.activeElement?.tagName || null,
-        };
-      })()`).then((snapshot) => { row.runtimeState = snapshot; }).catch(() => {});
     });
     client.on("Runtime.consoleAPICalled", (params) => {
       if (params.type === "error") report.consoleErrors.push((params.args || []).map((arg) => arg.value ?? arg.description ?? "").join(" ").slice(0, 1500));
@@ -1820,6 +1801,28 @@ async function run(args) {
     const disposableRecordNote = (title, sentinel) => notes[P.record]
       .replace('title: "Corner Bistro"', 'title: ' + JSON.stringify(title))
       .replace("Record body sentinel", sentinel);
+    const disableLedgerTools = async () => ctx.page.ev(`(async () => {
+      const manager = app.plugins;
+      const enabled = manager.enabledPlugins;
+      if (enabled && typeof enabled.delete === "function") enabled.delete(${JSON.stringify(PLUGIN_ID)});
+      else if (Array.isArray(enabled)) manager.enabledPlugins = enabled.filter((id) => id !== ${JSON.stringify(PLUGIN_ID)});
+      await manager.disablePlugin(${JSON.stringify(PLUGIN_ID)});
+      return {
+        enabled: Array.from(manager.enabledPlugins || []).includes(${JSON.stringify(PLUGIN_ID)}),
+        loaded: Boolean(manager.plugins?.[${JSON.stringify(PLUGIN_ID)}]),
+      };
+    })()`);
+    const enableLedgerTools = async () => ctx.page.ev(`(async () => {
+      const manager = app.plugins;
+      const enabled = manager.enabledPlugins;
+      if (enabled && typeof enabled.add === "function") enabled.add(${JSON.stringify(PLUGIN_ID)});
+      else if (Array.isArray(enabled) && !enabled.includes(${JSON.stringify(PLUGIN_ID)})) manager.enabledPlugins = enabled.concat([${JSON.stringify(PLUGIN_ID)}]);
+      await manager.enablePlugin(${JSON.stringify(PLUGIN_ID)});
+      return {
+        enabled: Array.from(manager.enabledPlugins || []).includes(${JSON.stringify(PLUGIN_ID)}),
+        loaded: Boolean(manager.plugins?.[${JSON.stringify(PLUGIN_ID)}]),
+      };
+    })()`);
     const waitAlbumSyncIdle = async () => {
       await ctx.page.ev(`(async () => {
         const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
@@ -1864,6 +1867,13 @@ async function run(args) {
       })()`);
       if (!created) throw new Error("could not create disposable probe note " + notePath);
       await ctx.page.open(ctx.main, notePath, "live");
+      if (record) {
+        const albumSync = await waitAlbumSyncIdle();
+        if (albumSync.busy || albumSync.flight || albumSync.debounce) {
+          throw new Error("record fixture album sync did not settle before card sampling: " + JSON.stringify(albumSync));
+        }
+        await ctx.page.settle(300);
+      }
       await ctx.page.waitOwned(ctx.main, "live", notePath + " setup");
       const started = await ctx.page.ev(
         "window.__bobFrontmatterTakeover.startAutosaveSampler(" + JSON.stringify(ctx.main) + ")",
@@ -2013,7 +2023,7 @@ async function run(args) {
     await attempt("disable-unload-restores", async () => {
       await ctx.page.open(ctx.main, P.bank, "live");
       await ctx.page.waitOwned(ctx.main, "live", "disable setup");
-      await ctx.page.ev("app.plugins.disablePlugin(" + JSON.stringify(PLUGIN_ID) + ")");
+      const disabled = await disableLedgerTools();
       await waitFor(client, "!app.plugins.plugins[" + JSON.stringify(PLUGIN_ID) + "]", Boolean, "ledger-tools disabled");
       await ctx.page.settle(300);
       const off = await ctx.page.ev(`(() => {
@@ -2031,11 +2041,13 @@ async function run(args) {
       if (off.cards !== 0) failures.push("card leftover");
       if (off.inert) failures.push("inert leftover");
       if (off.ariaHidden === "true") failures.push("aria-hidden leftover");
-      await ctx.page.ev("app.plugins.enablePlugin(" + JSON.stringify(PLUGIN_ID) + ")");
+      if (disabled.enabled || disabled.loaded) failures.push("plugin manager retained enabled or loaded state after disable");
+      const enabled = await enableLedgerTools();
       await waitFor(client, "Boolean(app.plugins.plugins[" + JSON.stringify(PLUGIN_ID) + "])", Boolean, "ledger-tools enabled", 30_000);
       await ctx.page.install();
       await ctx.page.open(ctx.main, P.bank, "live");
       const on = await ctx.page.waitOwned(ctx.main, "live", "re-enable");
+      if (!enabled.enabled || !enabled.loaded) failures.push("plugin manager did not restore enabled and loaded state");
       return { ok: failures.length === 0, off, on, failures };
     });
 
@@ -2167,15 +2179,16 @@ async function run(args) {
         plugin.propertyCapabilityGeneration = (plugin.propertyCapabilityGeneration || 0) + 1;
         return plugin.schedulePropertyCapabilityProbe("late");
       })()`);
-      await ctx.page.ev("app.plugins.disablePlugin(" + JSON.stringify(PLUGIN_ID) + ")");
+      const disabled = await disableLedgerTools();
       await waitFor(client, "!app.plugins.plugins[" + JSON.stringify(PLUGIN_ID) + "]", Boolean, "late disable");
+      if (disabled.enabled || disabled.loaded) throw new Error("plugin manager retained enabled or loaded state after late disable");
       writeControl(controlPath, "pass");
       await sleep(800);
       const leftovers = await ctx.page.ev(`(() => ({
         owns: document.querySelectorAll(".bob-property-card-owns-frontmatter").length,
         inert: Array.from(document.querySelectorAll(".metadata-container")).some((node) => node.inert === true || node.getAttribute("aria-hidden") === "true"),
       }))()`);
-      await ctx.page.ev("app.plugins.enablePlugin(" + JSON.stringify(PLUGIN_ID) + ")");
+      await enableLedgerTools();
       await waitFor(client, "Boolean(app.plugins.plugins[" + JSON.stringify(PLUGIN_ID) + "])", Boolean, "late enable", 30_000);
       await ctx.page.install();
       await restoreBob();

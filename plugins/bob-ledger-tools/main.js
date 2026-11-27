@@ -112265,7 +112265,11 @@ Object.assign(BobLedgerToolsHomeCardMixin.prototype, {
     try {
       if (!event || event.isComposing || event.keyCode === 229) return false;
       const path = this.homeCardLivePath(view);
-      const scope = view?.dom;
+      // Ownership is attached to Obsidian's markdown-source-view wrapper;
+      // CodeMirror's EditorView is nested inside it and does not carry the
+      // ownership classes itself.
+      const editorRoot = view?.dom;
+      const scope = editorRoot?.closest?.(".markdown-source-view") || editorRoot;
       if (!path || !scope?.classList?.contains?.("bob-property-card-owns-frontmatter")
         || !scope.classList.contains("bob-property-card-owns-title")
         || !scope.querySelector?.(".bob-home-card")) {

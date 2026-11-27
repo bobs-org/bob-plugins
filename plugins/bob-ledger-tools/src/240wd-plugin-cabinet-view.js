@@ -190,3 +190,99 @@ function propertyCardCabinetsInView(view) {
     .map((row) => ({ kind: row.kind, number: numbering.get(row.kind), open: row.open, element: row.element }));
   return result;
 }
+
+// Deferred inline paint for gate-owned Reading catalogs (bob-cli-qq perf):
+// skip the synchronous inline painter when the gate is open on an eligible
+// Reading surface, then repaint the native callout only if no cabinet
+// absorption covers it. Returns true when the caller must skip its sync
+// paint (the fallback paints later, or never when a cabinet owns the
+// catalog). Embeds, hover, canvas, print, Source/Live editors, and a closed
+// gate never defer, so fail-open still shows today's painted catalog.
+// Never throws.
+const PROPERTY_CARD_CABINET_INLINE_FALLBACK_MS = 150;
+const PROPERTY_CARD_CABINET_INLINE_FALLBACK_RETRIES = 3;
+let propertyCardCabinetInlineFallbackMs = PROPERTY_CARD_CABINET_INLINE_FALLBACK_MS;
+let propertyCardCabinetInlineFallbackRetries = PROPERTY_CARD_CABINET_INLINE_FALLBACK_RETRIES;
+
+function propertyCardCabinetInlineFallbackSetDelayForTests(ms) {
+  const previous = propertyCardCabinetInlineFallbackMs;
+  const next = Number(ms);
+  if (Number.isFinite(next) && next >= 0) propertyCardCabinetInlineFallbackMs = next;
+  return previous;
+}
+
+function propertyCardCabinetInlineFallbackResetForTests() {
+  propertyCardCabinetInlineFallbackMs = PROPERTY_CARD_CABINET_INLINE_FALLBACK_MS;
+  propertyCardCabinetInlineFallbackRetries = PROPERTY_CARD_CABINET_INLINE_FALLBACK_RETRIES;
+  return true;
+}
+
+function propertyCardCabinetInlineEligible(el) {
+  try {
+    if (!el || typeof el.closest !== "function") return false;
+    if (el.closest(".cm-editor, .markdown-embed, .internal-embed, .canvas-node, .canvas-node-content, .print")) return false;
+    return Boolean(el.closest(".markdown-preview-view, .markdown-preview-sizer"));
+  } catch (_) {
+    return false;
+  }
+}
+
+function propertyCardCabinetInlineAbsorbed(el, kind) {
+  try {
+    if (!el || !kind || typeof el.querySelector !== "function") return false;
+    const selector = `.${PROPERTY_CARD_CABINET_ABSORBED_CLASS}[data-callout="${kind}"]`;
+    if (typeof el.matches === "function" && el.matches(selector)) return true;
+    return Boolean(el.querySelector(selector));
+  } catch (_) {
+    return false;
+  }
+}
+
+function propertyCardCabinetDeferInlinePaint(el, ctx, kind, paint) {
+  try {
+    if (typeof propertyCardCabinetsGateLive !== "function" || propertyCardCabinetsGateLive() !== true) return false;
+    if (!el || !ctx || !kind || typeof paint !== "function") return false;
+    const path = String(ctx.sourcePath || "");
+    if (!path) return false;
+    if (!propertyCardCabinetInlineEligible(el)) return false;
+    let attempts = 0;
+    let timer = null;
+    let done = false;
+    const clear = () => {
+      done = true;
+      if (timer != null) {
+        try { clearTimeout(timer); } catch (_) {}
+        timer = null;
+      }
+    };
+    const fire = () => {
+      if (done) return;
+      try {
+        if (!el.isConnected) { clear(); return; }
+        if (propertyCardCabinetInlineAbsorbed(el, kind)) { clear(); return; }
+        attempts += 1;
+        if (propertyCardCabinetMountedInRoot(el, path, kind) && attempts <= propertyCardCabinetInlineFallbackRetries) {
+          timer = setTimeout(fire, propertyCardCabinetInlineFallbackMs);
+          return;
+        }
+      } catch (_) {}
+      clear();
+      try { paint(); } catch (_) {}
+    };
+    timer = setTimeout(fire, propertyCardCabinetInlineFallbackMs);
+    try {
+      if (ctx.addChild && typeof MarkdownRenderChild === "function") {
+        const child = new MarkdownRenderChild(el);
+        const previous = child.onunload;
+        child.onunload = () => {
+          clear();
+          try { if (typeof previous === "function") previous(); } catch (_) {}
+        };
+        ctx.addChild(child);
+      }
+    } catch (_) {}
+    return true;
+  } catch (_) {
+    return false;
+  }
+}

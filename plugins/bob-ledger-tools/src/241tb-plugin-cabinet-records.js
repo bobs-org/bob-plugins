@@ -516,6 +516,11 @@ function cabinetRecordsBuildBody(plugin, options = {}) {
           paintKey: cabinetRecordsPaintKeyFor(plugin, path),
           component: component || undefined,
           releaseClaim,
+          repaintNative: () => {
+            try {
+              if (typeof plugin.scheduleAlbumRecordsRefresh === "function") plugin.scheduleAlbumRecordsRefresh();
+            } catch (_) {}
+          },
         });
       } catch (_) {
         return null;
@@ -765,6 +770,11 @@ function cabinetRecordsRegisterProvider(plugin) {
       },
       onBuildError: ({ path, view } = {}) => {
         try { cabinetRecordsReleaseBody(view || null, path); } catch (_) {}
+      },
+      repaintNative: () => {
+        try {
+          if (typeof plugin.scheduleAlbumRecordsRefresh === "function") plugin.scheduleAlbumRecordsRefresh();
+        } catch (_) {}
       },
     };
     const unregister = propertyCardRegisterCabinetProvider(plugin, CABINET_RECORDS_KIND, provider);

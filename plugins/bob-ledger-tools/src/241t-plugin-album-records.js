@@ -114,18 +114,37 @@ class BobLedgerToolsAlbumRecordsMixin {
     if (!this.albumRecordsActive || !ctx?.sourcePath || notebookInsideCode(el)) return;
     if (el.closest?.(".cm-editor")) return;
     const folds = this.albumRecordsFoldMap(el);
-    this.paintAlbumRecordsReading(el, ctx.sourcePath, folds);
+    const sectionText = ctx.getSectionInfo?.(el)?.text;
+    const paintNow = () => this.paintAlbumRecordsReading(el, ctx.sourcePath, folds);
     const existing = Array.from(this.albumRecordsReading || []).find((widget) => widget.el === el);
     if (existing) {
       if (existing.path !== ctx.sourcePath) {
         albumCleanRecordsDom(el);
-        this.paintAlbumRecordsReading(el, ctx.sourcePath, folds);
+        existing.path = ctx.sourcePath;
+        existing.sectionText = sectionText;
+        paintNow();
+      } else if (existing.sectionText !== sectionText) {
+        // Same note, new section (full note <-> embed fragment): repaint so
+        // stale chrome cannot survive the switch.
+        existing.sectionText = sectionText;
+        paintNow();
       }
-      existing.path = ctx.sourcePath;
       return;
     }
-    const widget = { el, path: ctx.sourcePath, folds };
+    const widget = { el, path: ctx.sourcePath, folds, sectionText };
     this.albumRecordsReading.add(widget);
+    // Gate-open perf: skip the synchronous inline paint when the Records
+    // cabinet will own this catalog. The fallback repaints the native callout
+    // only when no cabinet absorption covers it, so fail-open keeps its paint.
+    if (typeof propertyCardCabinetDeferInlinePaint === "function"
+      && propertyCardCabinetDeferInlinePaint(el, ctx, "records", () => {
+        const current = Array.from(this.albumRecordsReading || []).find((item) => item.el === el);
+        if (current && current.path === ctx.sourcePath) paintNow();
+      })) {
+      // Deferred: the widget stays tracked for refresh, unload, and fallback.
+    } else {
+      paintNow();
+    }
     if (ctx.addChild && typeof MarkdownRenderChild === "function") {
       const child = new MarkdownRenderChild(el);
       child.onunload = () => {

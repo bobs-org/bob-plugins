@@ -320,6 +320,20 @@ function propertyCardCabinetHostRemoveInlineStatus(callout, kind) {
   } catch (_) {}
 }
 
+// Release-time repaint for the deferred inline paint (bob-cli-qq perf): a
+// failed cabinet body releases its absorption claim, leaving the stored
+// callout visible. Its inline paint was skipped, so repaint it through the
+// kind's existing refresh loop (passive: never writes or spawns).
+function propertyCardCabinetHostRepaintNative(plugin, kind) {
+  try {
+    if (!plugin || !kind) return;
+    if (kind === "areas" && typeof plugin.scheduleAreasCatalogRefresh === "function") plugin.scheduleAreasCatalogRefresh();
+    else if (kind === "projects" && typeof plugin.scheduleProjectsCatalogRefresh === "function") plugin.scheduleProjectsCatalogRefresh();
+    else if (kind === "notebooks" && typeof plugin.scheduleNotebookCatalogRefresh === "function") plugin.scheduleNotebookCatalogRefresh();
+    else if (kind === "albums" && typeof plugin.scheduleAlbumCatalogRefresh === "function") plugin.scheduleAlbumCatalogRefresh();
+  } catch (_) {}
+}
+
 function propertyCardCabinetHostPainter(kind) {
   return kind === "areas" ? areasPaintCallout
     : kind === "projects" ? projectsPaintCallout
@@ -373,6 +387,7 @@ async function propertyCardCabinetHostBuildBody(plugin, kind, context = {}) {
     paintKey: propertyCardCabinetHostPaintKey(plugin, kind, path),
     regionSource: applied.region.lines.join("\n"),
     releaseClaim: context.releaseClaim,
+    repaintNative: () => propertyCardCabinetHostRepaintNative(plugin, kind),
     paint: async (callout) => {
       if (!callout || callout.getAttribute?.("data-callout") !== kind || typeof painter !== "function") {
         throw new Error(`The ${kind} cabinet body did not render its stored callout.`);
@@ -511,6 +526,7 @@ function propertyCardCabinetHostInstall(plugin) {
       paintKey: (path) => propertyCardCabinetHostPaintKey(plugin, kind, path),
       buildBody: (context) => propertyCardCabinetHostBuildBody(plugin, kind, context),
       onMounted: (context) => propertyCardCabinetHostMountClaim(kind, plugin, context),
+      repaintNative: () => propertyCardCabinetHostRepaintNative(plugin, kind),
     };
     registrations.push(propertyCardRegisterCabinetProvider(plugin, kind, provider));
   }

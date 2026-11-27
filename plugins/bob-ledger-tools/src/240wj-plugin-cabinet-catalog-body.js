@@ -97,9 +97,12 @@ function propertyCardCabinetBindBodyLinks(container, path, plugin) {
 // Render one stored callout region into `container` and run the kind's
 // painter over the rendered callout. Options: { plugin, doc, container,
 // path, regionSource, component, paint, paintKey, cache=true,
-// releaseClaim }. `paint(calloutEl)` is the kind's existing painter
-// (areas/projects/notebooks/albums/records); it gets the same options the
-// inline Live Preview path passes. Resolves to { reused, failed }.
+// releaseClaim, repaintNative }. `paint(calloutEl)` is the kind's existing
+// painter (areas/projects/notebooks/albums/records); it gets the same
+// options the inline Live Preview path passes. `repaintNative` repaints the
+// stored callout when the deferred inline paint was skipped and this body
+// fails, so fail-open still shows today's painted catalog. Resolves to
+// { reused, failed }.
 async function propertyCardCabinetRenderCatalog(options = {}) {
   const { plugin, doc, container, path, paint, paintKey } = options;
   const useCache = options.cache !== false;
@@ -159,6 +162,9 @@ async function propertyCardCabinetRenderCatalog(options = {}) {
         try {
           if (typeof options.releaseClaim === "function") options.releaseClaim();
         } catch (_) {}
+        try {
+          if (typeof options.repaintNative === "function") options.repaintNative();
+        } catch (_) {}
         while (container.firstChild) container.removeChild(container.firstChild);
         const line = propertyCardCabinetRenderFailureLine(doc, "Couldn't render — showing the note's section");
         if (line) container.appendChild(line);
@@ -171,6 +177,9 @@ async function propertyCardCabinetRenderCatalog(options = {}) {
   } catch (error) {
     try {
       if (typeof options.releaseClaim === "function") options.releaseClaim();
+    } catch (_) {}
+    try {
+      if (typeof options.repaintNative === "function") options.repaintNative();
     } catch (_) {}
     try {
       if (container) {

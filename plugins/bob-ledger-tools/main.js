@@ -66732,9 +66732,12 @@ function propertyCardCabinetBindBodyLinks(container, path, plugin) {
 // Render one stored callout region into `container` and run the kind's
 // painter over the rendered callout. Options: { plugin, doc, container,
 // path, regionSource, component, paint, paintKey, cache=true,
-// releaseClaim }. `paint(calloutEl)` is the kind's existing painter
-// (areas/projects/notebooks/albums/records); it gets the same options the
-// inline Live Preview path passes. Resolves to { reused, failed }.
+// releaseClaim, repaintNative }. `paint(calloutEl)` is the kind's existing
+// painter (areas/projects/notebooks/albums/records); it gets the same
+// options the inline Live Preview path passes. `repaintNative` repaints the
+// stored callout when the deferred inline paint was skipped and this body
+// fails, so fail-open still shows today's painted catalog. Resolves to
+// { reused, failed }.
 async function propertyCardCabinetRenderCatalog(options = {}) {
   const { plugin, doc, container, path, paint, paintKey } = options;
   const useCache = options.cache !== false;
@@ -66794,6 +66797,9 @@ async function propertyCardCabinetRenderCatalog(options = {}) {
         try {
           if (typeof options.releaseClaim === "function") options.releaseClaim();
         } catch (_) {}
+        try {
+          if (typeof options.repaintNative === "function") options.repaintNative();
+        } catch (_) {}
         while (container.firstChild) container.removeChild(container.firstChild);
         const line = propertyCardCabinetRenderFailureLine(doc, "Couldn't render — showing the note's section");
         if (line) container.appendChild(line);
@@ -66806,6 +66812,9 @@ async function propertyCardCabinetRenderCatalog(options = {}) {
   } catch (error) {
     try {
       if (typeof options.releaseClaim === "function") options.releaseClaim();
+    } catch (_) {}
+    try {
+      if (typeof options.repaintNative === "function") options.repaintNative();
     } catch (_) {}
     try {
       if (container) {
@@ -67257,6 +67266,10 @@ function propertyCardCabinetProviderBody(panel, provider, context, kind, path, p
       if (typeof release === "function") release();
     } catch (_) {}
     try { provider.onBuildError?.({ path, kind, view: context?.view || null, error }); } catch (_) {}
+    // A failed body releases its absorption claim above, leaving the stored
+    // callout visible. Its inline paint may have been deferred, so repaint
+    // the native callout and keep fail-open on today's painted catalog.
+    try { provider.repaintNative?.({ path, kind, view: context?.view || null }); } catch (_) {}
     while (body.firstChild) body.removeChild(body.firstChild);
     const message = propertyCardCabinetCreateEl(doc, "p", "bob-cabinet-render-error");
     propertyCardCabinetSetText(message, "Couldn't render — showing the note's section");
@@ -72871,19 +72884,37 @@ class BobLedgerToolsProjectsCatalogMixin {
       allowAnchor = false;
     }
     const folds = this.projectsCatalogFoldMap(el);
-    this.paintProjectsCatalogReading(el, ctx.sourcePath, folds, allowAnchor);
+    const paintNow = () => this.paintProjectsCatalogReading(el, ctx.sourcePath, folds, allowAnchor);
     const existing = Array.from(this.projectsCatalogReading || []).find((widget) => widget.el === el);
     if (existing) {
+      existing.allowAnchor = allowAnchor;
       if (existing.path !== ctx.sourcePath) {
         projectsCleanCatalogDom(el);
-        this.paintProjectsCatalogReading(el, ctx.sourcePath, folds, allowAnchor);
+        existing.path = ctx.sourcePath;
+        existing.sectionText = section?.text;
+        paintNow();
+      } else if (existing.sectionText !== section?.text) {
+        // Same note, new section (full note <-> embed fragment): repaint so
+        // stale standalone chrome cannot survive the switch.
+        existing.sectionText = section?.text;
+        paintNow();
       }
-      existing.path = ctx.sourcePath;
-      existing.allowAnchor = allowAnchor;
       return;
     }
-    const widget = { el, path: ctx.sourcePath, folds, allowAnchor };
+    const widget = { el, path: ctx.sourcePath, folds, allowAnchor, sectionText: section?.text };
     this.projectsCatalogReading.add(widget);
+    // Gate-open perf: skip the synchronous inline paint when a cabinet will
+    // own this catalog. The fallback repaints the native callout only when no
+    // cabinet absorption covers it, so fail-open still shows today's paint.
+    if (typeof propertyCardCabinetDeferInlinePaint === "function"
+      && propertyCardCabinetDeferInlinePaint(el, ctx, "projects", () => {
+        const current = Array.from(this.projectsCatalogReading || []).find((item) => item.el === el);
+        if (current && current.path === ctx.sourcePath) paintNow();
+      })) {
+      // Deferred: the widget stays tracked for refresh, unload, and fallback.
+    } else {
+      paintNow();
+    }
     if (ctx.addChild && typeof MarkdownRenderChild === "function") {
       const child = new MarkdownRenderChild(el);
       child.onunload = () => {
@@ -75411,6 +75442,20 @@ function propertyCardCabinetHostRemoveInlineStatus(callout, kind) {
   } catch (_) {}
 }
 
+// Release-time repaint for the deferred inline paint (bob-cli-qq perf): a
+// failed cabinet body releases its absorption claim, leaving the stored
+// callout visible. Its inline paint was skipped, so repaint it through the
+// kind's existing refresh loop (passive: never writes or spawns).
+function propertyCardCabinetHostRepaintNative(plugin, kind) {
+  try {
+    if (!plugin || !kind) return;
+    if (kind === "areas" && typeof plugin.scheduleAreasCatalogRefresh === "function") plugin.scheduleAreasCatalogRefresh();
+    else if (kind === "projects" && typeof plugin.scheduleProjectsCatalogRefresh === "function") plugin.scheduleProjectsCatalogRefresh();
+    else if (kind === "notebooks" && typeof plugin.scheduleNotebookCatalogRefresh === "function") plugin.scheduleNotebookCatalogRefresh();
+    else if (kind === "albums" && typeof plugin.scheduleAlbumCatalogRefresh === "function") plugin.scheduleAlbumCatalogRefresh();
+  } catch (_) {}
+}
+
 function propertyCardCabinetHostPainter(kind) {
   return kind === "areas" ? areasPaintCallout
     : kind === "projects" ? projectsPaintCallout
@@ -75464,6 +75509,7 @@ async function propertyCardCabinetHostBuildBody(plugin, kind, context = {}) {
     paintKey: propertyCardCabinetHostPaintKey(plugin, kind, path),
     regionSource: applied.region.lines.join("\n"),
     releaseClaim: context.releaseClaim,
+    repaintNative: () => propertyCardCabinetHostRepaintNative(plugin, kind),
     paint: async (callout) => {
       if (!callout || callout.getAttribute?.("data-callout") !== kind || typeof painter !== "function") {
         throw new Error(`The ${kind} cabinet body did not render its stored callout.`);
@@ -75602,6 +75648,7 @@ function propertyCardCabinetHostInstall(plugin) {
       paintKey: (path) => propertyCardCabinetHostPaintKey(plugin, kind, path),
       buildBody: (context) => propertyCardCabinetHostBuildBody(plugin, kind, context),
       onMounted: (context) => propertyCardCabinetHostMountClaim(kind, plugin, context),
+      repaintNative: () => propertyCardCabinetHostRepaintNative(plugin, kind),
     };
     registrations.push(propertyCardRegisterCabinetProvider(plugin, kind, provider));
   }
@@ -98381,6 +98428,102 @@ function propertyCardCabinetsInView(view) {
     .filter((row) => numbering.has(row.kind))
     .map((row) => ({ kind: row.kind, number: numbering.get(row.kind), open: row.open, element: row.element }));
   return result;
+}
+
+// Deferred inline paint for gate-owned Reading catalogs (bob-cli-qq perf):
+// skip the synchronous inline painter when the gate is open on an eligible
+// Reading surface, then repaint the native callout only if no cabinet
+// absorption covers it. Returns true when the caller must skip its sync
+// paint (the fallback paints later, or never when a cabinet owns the
+// catalog). Embeds, hover, canvas, print, Source/Live editors, and a closed
+// gate never defer, so fail-open still shows today's painted catalog.
+// Never throws.
+const PROPERTY_CARD_CABINET_INLINE_FALLBACK_MS = 150;
+const PROPERTY_CARD_CABINET_INLINE_FALLBACK_RETRIES = 3;
+let propertyCardCabinetInlineFallbackMs = PROPERTY_CARD_CABINET_INLINE_FALLBACK_MS;
+let propertyCardCabinetInlineFallbackRetries = PROPERTY_CARD_CABINET_INLINE_FALLBACK_RETRIES;
+
+function propertyCardCabinetInlineFallbackSetDelayForTests(ms) {
+  const previous = propertyCardCabinetInlineFallbackMs;
+  const next = Number(ms);
+  if (Number.isFinite(next) && next >= 0) propertyCardCabinetInlineFallbackMs = next;
+  return previous;
+}
+
+function propertyCardCabinetInlineFallbackResetForTests() {
+  propertyCardCabinetInlineFallbackMs = PROPERTY_CARD_CABINET_INLINE_FALLBACK_MS;
+  propertyCardCabinetInlineFallbackRetries = PROPERTY_CARD_CABINET_INLINE_FALLBACK_RETRIES;
+  return true;
+}
+
+function propertyCardCabinetInlineEligible(el) {
+  try {
+    if (!el || typeof el.closest !== "function") return false;
+    if (el.closest(".cm-editor, .markdown-embed, .internal-embed, .canvas-node, .canvas-node-content, .print")) return false;
+    return Boolean(el.closest(".markdown-preview-view, .markdown-preview-sizer"));
+  } catch (_) {
+    return false;
+  }
+}
+
+function propertyCardCabinetInlineAbsorbed(el, kind) {
+  try {
+    if (!el || !kind || typeof el.querySelector !== "function") return false;
+    const selector = `.${PROPERTY_CARD_CABINET_ABSORBED_CLASS}[data-callout="${kind}"]`;
+    if (typeof el.matches === "function" && el.matches(selector)) return true;
+    return Boolean(el.querySelector(selector));
+  } catch (_) {
+    return false;
+  }
+}
+
+function propertyCardCabinetDeferInlinePaint(el, ctx, kind, paint) {
+  try {
+    if (typeof propertyCardCabinetsGateLive !== "function" || propertyCardCabinetsGateLive() !== true) return false;
+    if (!el || !ctx || !kind || typeof paint !== "function") return false;
+    const path = String(ctx.sourcePath || "");
+    if (!path) return false;
+    if (!propertyCardCabinetInlineEligible(el)) return false;
+    let attempts = 0;
+    let timer = null;
+    let done = false;
+    const clear = () => {
+      done = true;
+      if (timer != null) {
+        try { clearTimeout(timer); } catch (_) {}
+        timer = null;
+      }
+    };
+    const fire = () => {
+      if (done) return;
+      try {
+        if (!el.isConnected) { clear(); return; }
+        if (propertyCardCabinetInlineAbsorbed(el, kind)) { clear(); return; }
+        attempts += 1;
+        if (propertyCardCabinetMountedInRoot(el, path, kind) && attempts <= propertyCardCabinetInlineFallbackRetries) {
+          timer = setTimeout(fire, propertyCardCabinetInlineFallbackMs);
+          return;
+        }
+      } catch (_) {}
+      clear();
+      try { paint(); } catch (_) {}
+    };
+    timer = setTimeout(fire, propertyCardCabinetInlineFallbackMs);
+    try {
+      if (ctx.addChild && typeof MarkdownRenderChild === "function") {
+        const child = new MarkdownRenderChild(el);
+        const previous = child.onunload;
+        child.onunload = () => {
+          clear();
+          try { if (typeof previous === "function") previous(); } catch (_) {}
+        };
+        ctx.addChild(child);
+      }
+    } catch (_) {}
+    return true;
+  } catch (_) {
+    return false;
+  }
 }
 // ---- src/240we-plugin-cabinet-toggle.js ----
 // One semantic router for Properties, delegated folds, and content cabinets.
@@ -124905,18 +125048,37 @@ class BobLedgerToolsAlbumRecordsMixin {
     if (!this.albumRecordsActive || !ctx?.sourcePath || notebookInsideCode(el)) return;
     if (el.closest?.(".cm-editor")) return;
     const folds = this.albumRecordsFoldMap(el);
-    this.paintAlbumRecordsReading(el, ctx.sourcePath, folds);
+    const sectionText = ctx.getSectionInfo?.(el)?.text;
+    const paintNow = () => this.paintAlbumRecordsReading(el, ctx.sourcePath, folds);
     const existing = Array.from(this.albumRecordsReading || []).find((widget) => widget.el === el);
     if (existing) {
       if (existing.path !== ctx.sourcePath) {
         albumCleanRecordsDom(el);
-        this.paintAlbumRecordsReading(el, ctx.sourcePath, folds);
+        existing.path = ctx.sourcePath;
+        existing.sectionText = sectionText;
+        paintNow();
+      } else if (existing.sectionText !== sectionText) {
+        // Same note, new section (full note <-> embed fragment): repaint so
+        // stale chrome cannot survive the switch.
+        existing.sectionText = sectionText;
+        paintNow();
       }
-      existing.path = ctx.sourcePath;
       return;
     }
-    const widget = { el, path: ctx.sourcePath, folds };
+    const widget = { el, path: ctx.sourcePath, folds, sectionText };
     this.albumRecordsReading.add(widget);
+    // Gate-open perf: skip the synchronous inline paint when the Records
+    // cabinet will own this catalog. The fallback repaints the native callout
+    // only when no cabinet absorption covers it, so fail-open keeps its paint.
+    if (typeof propertyCardCabinetDeferInlinePaint === "function"
+      && propertyCardCabinetDeferInlinePaint(el, ctx, "records", () => {
+        const current = Array.from(this.albumRecordsReading || []).find((item) => item.el === el);
+        if (current && current.path === ctx.sourcePath) paintNow();
+      })) {
+      // Deferred: the widget stays tracked for refresh, unload, and fallback.
+    } else {
+      paintNow();
+    }
     if (ctx.addChild && typeof MarkdownRenderChild === "function") {
       const child = new MarkdownRenderChild(el);
       child.onunload = () => {
@@ -125538,6 +125700,11 @@ function cabinetRecordsBuildBody(plugin, options = {}) {
           paintKey: cabinetRecordsPaintKeyFor(plugin, path),
           component: component || undefined,
           releaseClaim,
+          repaintNative: () => {
+            try {
+              if (typeof plugin.scheduleAlbumRecordsRefresh === "function") plugin.scheduleAlbumRecordsRefresh();
+            } catch (_) {}
+          },
         });
       } catch (_) {
         return null;
@@ -125787,6 +125954,11 @@ function cabinetRecordsRegisterProvider(plugin) {
       },
       onBuildError: ({ path, view } = {}) => {
         try { cabinetRecordsReleaseBody(view || null, path); } catch (_) {}
+      },
+      repaintNative: () => {
+        try {
+          if (typeof plugin.scheduleAlbumRecordsRefresh === "function") plugin.scheduleAlbumRecordsRefresh();
+        } catch (_) {}
       },
     };
     const unregister = propertyCardRegisterCabinetProvider(plugin, CABINET_RECORDS_KIND, provider);
@@ -218171,6 +218343,8 @@ try {
       propertyCardCabinetWrapExisting,
       propertyCardCabinetBuildProviderPanel,
       propertyCardCabinetProviderBody,
+      propertyCardCabinetRenderCatalog,
+      propertyCardCabinetHostRepaintNative,
       propertyCardCabinetContextSource,
       propertyCardCabinetsAssemble,
       PROPERTY_CARD_CABINET_STACK_CLASS,
@@ -218178,6 +218352,11 @@ try {
       propertyCardCabinetStackForView,
       propertyCardCabinetMounted,
       propertyCardCabinetMountedInRoot,
+      propertyCardCabinetDeferInlinePaint,
+      propertyCardCabinetInlineEligible,
+      propertyCardCabinetInlineAbsorbed,
+      propertyCardCabinetInlineFallbackSetDelayForTests,
+      propertyCardCabinetInlineFallbackResetForTests,
       propertyCardCabinetCollectRows,
       propertyCardCabinetsInView,
       propertyCardCabinetToggle,

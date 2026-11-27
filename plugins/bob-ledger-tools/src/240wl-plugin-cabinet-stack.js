@@ -134,6 +134,10 @@ function propertyCardCabinetProviderBody(panel, provider, context, kind, path, p
       if (typeof release === "function") release();
     } catch (_) {}
     try { provider.onBuildError?.({ path, kind, view: context?.view || null, error }); } catch (_) {}
+    // A failed body releases its absorption claim above, leaving the stored
+    // callout visible. Its inline paint may have been deferred, so repaint
+    // the native callout and keep fail-open on today's painted catalog.
+    try { provider.repaintNative?.({ path, kind, view: context?.view || null }); } catch (_) {}
     while (body.firstChild) body.removeChild(body.firstChild);
     const message = propertyCardCabinetCreateEl(doc, "p", "bob-cabinet-render-error");
     propertyCardCabinetSetText(message, "Couldn't render — showing the note's section");

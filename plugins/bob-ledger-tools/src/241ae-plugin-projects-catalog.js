@@ -197,19 +197,37 @@ class BobLedgerToolsProjectsCatalogMixin {
       allowAnchor = false;
     }
     const folds = this.projectsCatalogFoldMap(el);
-    this.paintProjectsCatalogReading(el, ctx.sourcePath, folds, allowAnchor);
+    const paintNow = () => this.paintProjectsCatalogReading(el, ctx.sourcePath, folds, allowAnchor);
     const existing = Array.from(this.projectsCatalogReading || []).find((widget) => widget.el === el);
     if (existing) {
+      existing.allowAnchor = allowAnchor;
       if (existing.path !== ctx.sourcePath) {
         projectsCleanCatalogDom(el);
-        this.paintProjectsCatalogReading(el, ctx.sourcePath, folds, allowAnchor);
+        existing.path = ctx.sourcePath;
+        existing.sectionText = section?.text;
+        paintNow();
+      } else if (existing.sectionText !== section?.text) {
+        // Same note, new section (full note <-> embed fragment): repaint so
+        // stale standalone chrome cannot survive the switch.
+        existing.sectionText = section?.text;
+        paintNow();
       }
-      existing.path = ctx.sourcePath;
-      existing.allowAnchor = allowAnchor;
       return;
     }
-    const widget = { el, path: ctx.sourcePath, folds, allowAnchor };
+    const widget = { el, path: ctx.sourcePath, folds, allowAnchor, sectionText: section?.text };
     this.projectsCatalogReading.add(widget);
+    // Gate-open perf: skip the synchronous inline paint when a cabinet will
+    // own this catalog. The fallback repaints the native callout only when no
+    // cabinet absorption covers it, so fail-open still shows today's paint.
+    if (typeof propertyCardCabinetDeferInlinePaint === "function"
+      && propertyCardCabinetDeferInlinePaint(el, ctx, "projects", () => {
+        const current = Array.from(this.projectsCatalogReading || []).find((item) => item.el === el);
+        if (current && current.path === ctx.sourcePath) paintNow();
+      })) {
+      // Deferred: the widget stays tracked for refresh, unload, and fallback.
+    } else {
+      paintNow();
+    }
     if (ctx.addChild && typeof MarkdownRenderChild === "function") {
       const child = new MarkdownRenderChild(el);
       child.onunload = () => {

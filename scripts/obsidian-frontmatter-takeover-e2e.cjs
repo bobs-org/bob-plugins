@@ -717,12 +717,26 @@ async function run(args) {
       env: {
         ...process.env, HOME: profileDir, BOB_DIR: vaultReal, BOB_NOW: FIXTURE_TODAY + " 12:00:00",
         BOB_CONFIG_FILE: path.join(profileDir, "missing-test-config.yml"),
-        PATH: shimDir + path.delimiter + (process.env.PATH || ""), TMPDIR: "/tmp", NO_COLOR: "1",
+        PATH: shimDir + path.delimiter + (process.env.PATH || ""), TMPDIR: process.env.TMPDIR || os.tmpdir(), NO_COLOR: "1",
       },
     });
     activeRun.child = child;
-    child.stderr.on("data", () => {});
-    report.obsidianProcess = { pid: child.pid, executable, debugPort: port };
+    const obsidianProcess = {
+      pid: child.pid, executable, debugPort: port, exitCode: null, signal: null, stderr: "",
+    };
+    report.obsidianProcess = obsidianProcess;
+    child.on("exit", (code, signal) => {
+      obsidianProcess.exitCode = code;
+      obsidianProcess.signal = signal;
+    });
+    child.on("error", (error) => {
+      obsidianProcess.spawnError = String(error && error.stack || error);
+    });
+    child.stderr.on("data", (chunk) => {
+      const text = chunk.toString();
+      obsidianProcess.stderr = (obsidianProcess.stderr + text).slice(-12_000);
+      process.stderr.write("[frontmatter-takeover] Obsidian stderr: " + text);
+    });
     const target = await shared.selectTarget(port, vaultReal, () => child && child.exitCode == null);
     client = target.client;
     activeRun.client = client;

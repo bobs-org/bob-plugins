@@ -237,7 +237,7 @@ function writePlugin(vaultDir) {
     vimMode: true, alwaysUpdateLinks: false,
   }, null, 2));
   fs.writeFileSync(path.join(obsidian, "appearance.json"), JSON.stringify({ cssTheme: "", theme: "moonstone" }, null, 2));
-  fs.writeFileSync(path.join(pluginDir, "data.json"), JSON.stringify({ albumChips: true, refCardPreview: true }, null, 2));
+  fs.writeFileSync(path.join(pluginDir, "data.json"), JSON.stringify({ albumChips: true }, null, 2));
 }
 
 // The shim logs every invocation, forwards `-i -` stdin envelopes, and

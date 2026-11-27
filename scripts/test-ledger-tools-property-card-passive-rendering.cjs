@@ -53,6 +53,7 @@ const sourceFiles = {
   project: ["249d-plugin-home-card-host.js", "paintHomeCardReading"],
   notebook: ["249i-plugin-notebook-card-host.js", "paintNotebookCardReading"],
   prose: ["249n-plugin-prose-note-card-host.js", "paintProseNoteCardReading"],
+  ref: ["249s-plugin-ref-note-card-host.js", "paintRefNoteCardReading"],
 };
 
 function methodBody(source, name) {
@@ -146,6 +147,11 @@ function makePlugin(sideEffects, timerQueue, subscriptions) {
   });
   plugin.scheduleNotebookCardRefresh = () => plugin.notebookCardPropertyHost().refreshReading();
   plugin.scheduleProseNoteCardRefresh = () => plugin.proseNoteCardHost().refreshReading();
+  plugin.refNoteCardReadingRoot = () => null;
+  plugin.refNoteCardPropertyHost = () => ({
+    refreshReading: () => plugin.paintRefNoteCardReading(null, "ref/agentic-coding-ci.md"),
+  });
+  plugin.scheduleRefNoteCardRefresh = () => plugin.refNoteCardPropertyHost().refreshReading();
 
   const root = {
     classList: { contains: () => false, add() {}, remove() {} },
@@ -204,6 +210,7 @@ test("all card painters are passive and repeated fold refreshes stay read-only",
     { kind: "project", path: "sase_blog.md", reading: "homeCardReading", host: "homePropertyCardHost", paint: "paintHomeCardReading", setup: "home" },
     { kind: "notebook", path: "notebooks.md", host: "notebookCardPropertyHost", paint: "paintNotebookCardReading" },
     { kind: "prose", path: "sase_blog_contents.md", host: "proseNoteCardHost", paint: "paintProseNoteCardReading" },
+    { kind: "ref", path: "ref/agentic-coding-ci.md", host: "refNoteCardPropertyHost", paint: "paintRefNoteCardReading" },
   ];
   for (const item of cases) {
     if (item.reading) plugin[item.reading].add({ el: root, path: item.path, surface: root, scope: root });
@@ -229,6 +236,7 @@ test("all card painters are passive and repeated fold refreshes stay read-only",
     project: (path) => { plugin.homeCardSetCollapsed(path, !plugin.homeCardIsCollapsed(path)); return true; },
     notebook: (path) => { plugin.notebookCardSetCollapsed(path, !plugin.notebookCardIsCollapsed(path)); return true; },
     prose: (path) => plugin.proseNoteCardSetExpanded(path, !plugin.proseNoteCardIsExpanded(path)),
+    ref: (path) => { plugin.refNoteCardSetCollapsed(path, !plugin.refNoteCardIsCollapsed(path)); return true; },
   };
   const unregister = [];
   for (const kind of Object.keys(toggles)) unregister.push(H.propertyCardRegisterFoldKind(plugin, kind, { toggle: toggles[kind] }));
@@ -242,7 +250,7 @@ test("all card painters are passive and repeated fold refreshes stay read-only",
     }
   }
 
-  for (const item of cases.filter((candidate) => candidate.kind === "notebook" || candidate.kind === "prose")) {
+  for (const item of cases.filter((candidate) => candidate.kind === "notebook" || candidate.kind === "prose" || candidate.kind === "ref")) {
     for (let i = 0; i < 12; i += 1) {
       H.propertyCardFootToggle(item.path);
       plugin[item.host]().refreshReading();
@@ -262,6 +270,7 @@ test("all card painters are passive and repeated fold refreshes stay read-only",
   assert.ok(paints.paintHomeCardReading >= 24, "Area and Project folds both repaint through the shared home host");
   assert.ok(paints.paintNotebookCardReading >= 24, "Notebook fold and drawer toggles refresh the passive painter");
   assert.ok(paints.paintProseNoteCardReading >= 24, "Prose fold and drawer toggles refresh the passive painter");
+  assert.ok(paints.paintRefNoteCardReading >= 24, "Ref fold and drawer toggles refresh the passive painter");
   assert.deepEqual(sideEffects, { writes: 0, spawns: 0 });
   for (const dispose of unregister) dispose();
   plugin.teardownBankSetup();

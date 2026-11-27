@@ -1,5 +1,5 @@
-// Ref Card host (bob-cli-qp ref-card). It mounts only under the ref-owned
-// preview gate and the shared species-precedence result. Local identity paints
+// Ref Card host (bob-cli-qp ref-card). It mounts under the shared
+// species-precedence result. Local identity paints
 // in Reading and Live Preview; this adapter never asks the report service.
 const REF_NOTE_CARD_HOST_KIND = "ref";
 const REF_NOTE_CARD_MOUNT_ATTR = "data-ref-source";
@@ -119,7 +119,7 @@ class BobLedgerToolsRefNoteCardMixin {
 
   refNoteCardEligible(path, frontmatter) {
     const key = refNoteCardPath(path);
-    if (!key || this.refNoteCardActive !== true || refCardPreviewLive(this) !== true) return false;
+    if (!key || this.refNoteCardActive !== true) return false;
     try {
       return propertyCardNoteSpecies({
         path: key,
@@ -129,7 +129,7 @@ class BobLedgerToolsRefNoteCardMixin {
   }
 
   refNoteCardLivePath(view) {
-    if (this.refNoteCardActive !== true || !this.refNoteCardDesktop() || refCardPreviewLive(this) !== true) return null;
+    if (this.refNoteCardActive !== true || !this.refNoteCardDesktop()) return null;
     try {
       if (refNoteCardScopeDenied(view?.dom, view?.dom)) return null;
       const path = refNoteCardPath(this.notebookCatalogLivePath?.(view) || "");
@@ -217,15 +217,6 @@ class BobLedgerToolsRefNoteCardMixin {
     try { this.refNoteCardFootBind?.(); } catch (_) {}
     this.refNoteCardRegisterTitleKey();
     try { this.refNoteCardRegisterVisibleBodyNavigation?.(); } catch (_) {}
-    if (!this.refNoteCardPreviewLoadStarted) {
-      this.refNoteCardPreviewLoadStarted = true;
-      const epoch = this.refNoteCardEpoch;
-      try {
-        Promise.resolve(refCardPreviewLoad(this)).then(() => {
-          if (this.refNoteCardActive === true && this.refNoteCardEpoch === epoch) this.scheduleRefNoteCardRefresh();
-        });
-      } catch (_) {}
-    }
     try {
       const cache = this.app?.metadataCache;
       if (cache && typeof cache.on === "function" && typeof this.registerEvent === "function" && !this.refNoteCardResolvedBound) {
@@ -257,7 +248,6 @@ class BobLedgerToolsRefNoteCardMixin {
     this.refNoteCardSourceFlights?.clear?.();
     this.refNoteCardResolvedBound = false;
     this.refNoteCardVaultCreateBound = false;
-    this.refNoteCardPreviewLoadStarted = false;
   }
 
   refNoteCardCleanEditor(view) {
@@ -287,7 +277,6 @@ class BobLedgerToolsRefNoteCardMixin {
       getSource: sourceFor,
       currentPath,
       isCurrent: () => Boolean(plugin.refNoteCardActive === true
-        && refCardPreviewLive(plugin) === true
         && plugin.refNoteCardModelFor(path, sourceFor())),
       active: () => plugin.refNoteCardActive === true,
     });

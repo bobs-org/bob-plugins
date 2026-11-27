@@ -2,11 +2,6 @@
 try {
   if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
     module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
-      REF_CARD_PREVIEW_KEY,
-      refCardPreviewFromData,
-      refCardPreviewRemember,
-      refCardPreviewLoad,
-      refCardPreviewLive,
       REF_CARD_KIND_VOCABULARY,
       REF_CARD_KIND_FALLBACK,
       refCardKindEntry,

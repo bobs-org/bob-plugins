@@ -58,7 +58,6 @@ test("acceptance runner reuses shared harness and records required live evidence
   const source = fs.readFileSync(path.join(__dirname, "obsidian-ref-card-acceptance-e2e.cjs"), "utf8");
   assert.match(source, /obsidian-frontmatter-takeover-e2e-lib\.cjs/);
   assert.match(source, /obsidian-record-card-e2e\.cjs/);
-  assert.match(source, /refCardPreview: true/);
   assert.match(source, /source-mode-restores-native-properties/);
   assert.match(source, /single-owner-nonclaims/);
   assert.match(source, /passive-fold-drawer-resize/);
@@ -102,7 +101,7 @@ test("interactive flows record every required concern after the passive hash che
   const flows = fs.readFileSync(path.join(__dirname, "obsidian-ref-card-acceptance-e2e-flows.cjs"), "utf8");
   for (const name of [
     "native-embed-no-card", "native-hover-no-card", "native-canvas-no-card", "native-print-no-card",
-    "native-mobile-emulation", "native-failed-mount", "native-closed-gate-is-todays-rendering",
+    "native-mobile-emulation", "native-failed-mount",
     "native-unload-and-disabled-ledger-tools", "native-source-cache-mismatch-releases",
     "native-rename-while-open", "native-scan-rewrite-while-open",
     "capability-props-v1-pending-absent-failed-keep-native", "capability-no-ref-contract-title-fallback",

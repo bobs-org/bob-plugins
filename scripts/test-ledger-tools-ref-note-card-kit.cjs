@@ -298,13 +298,12 @@ test("the shell has accessible access, readout, fold, and narrow-state slots", (
   assert.equal(noAccess.querySelectorAll("[data-ref-access-row]").length, 0);
 });
 
-test("the Ref host gate controls eligibility and title key routes to title", () => {
+test("the Ref host eligibility follows the active host and title key routes to title", () => {
   const host = new H.BobLedgerToolsRefNoteCardMixin();
   const note = fixtureNote("ref-finished-blog.md");
-  host.refNoteCardActive = true;
-  host.refCardPreview = false;
+  host.refNoteCardActive = false;
   assert.equal(host.refNoteCardEligible(note.path, note.frontmatter), false);
-  host.refCardPreview = true;
+  host.refNoteCardActive = true;
   assert.equal(host.refNoteCardEligible(note.path, note.frontmatter), true);
   assert.equal(host.refNoteCardEligible("Notes/paper.md", note.frontmatter), false);
 

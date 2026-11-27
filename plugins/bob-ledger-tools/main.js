@@ -97100,73 +97100,6 @@ function propertyCardKindLive(plugin, kind) {
     return false;
   }
 }
-// ---- src/240u-plugin-ref-card-preview.js ----
-// Ref preview gate (bob-cli-qp ref-kit): a ref-owned switch keeps Ref Cards
-// off in the live vault until `ref-go-live`. It is `refCardPreview: true` in
-// bob-ledger-tools plugin data, read once at load. It gates the mount, the
-// `==` registration, and every ref UI. It never reads or writes qm's
-// `cardPreviewKinds`, and ref code never calls `propertyCardKindLive`, which
-// qm.7 deletes. A closed gate gives exactly today's rendering: native
-// Properties and the plain H1. Pure: no DOM, no spawns, never throws.
-const REF_CARD_PREVIEW_KEY = "refCardPreview";
-
-function refCardPreviewFromData(data) {
-  try {
-    if (!data || typeof data !== "object" || Array.isArray(data)) return false;
-    return data[REF_CARD_PREVIEW_KEY] === true;
-  } catch (_) {
-    return false;
-  }
-}
-
-function refCardPreviewRemember(plugin, data) {
-  const live = refCardPreviewFromData(data);
-  try {
-    if (plugin && typeof plugin === "object") plugin.refCardPreview = live;
-  } catch (_) {}
-  return live;
-}
-
-async function refCardPreviewLoad(plugin) {
-  if (!plugin || typeof plugin !== "object") return false;
-  if (plugin.refCardPreviewLoaded === true) {
-    return plugin.refCardPreview === true;
-  }
-  if (plugin.refCardPreviewLoadPromise) return plugin.refCardPreviewLoadPromise;
-  const load = (async () => {
-    let stored = null;
-    try {
-      if (plugin.ledgerToolsPluginDataLoaded === true
-        && plugin.ledgerToolsPluginData && typeof plugin.ledgerToolsPluginData === "object") {
-        stored = plugin.ledgerToolsPluginData;
-      } else if (typeof plugin.loadLedgerToolsPluginData === "function") {
-        stored = await plugin.loadLedgerToolsPluginData();
-      } else if (typeof plugin.loadData === "function") {
-        stored = await plugin.loadData();
-      }
-    } catch (_) {
-      stored = null;
-    }
-    const live = refCardPreviewRemember(plugin, stored);
-    plugin.refCardPreviewLoaded = true;
-    return live;
-  })();
-  plugin.refCardPreviewLoadPromise = load;
-  try {
-    return await load;
-  } finally {
-    if (plugin.refCardPreviewLoadPromise === load) plugin.refCardPreviewLoadPromise = null;
-  }
-}
-
-function refCardPreviewLive(plugin) {
-  try {
-    if (!plugin || typeof plugin !== "object") return false;
-    return plugin.refCardPreview === true;
-  } catch (_) {
-    return false;
-  }
-}
 // ---- src/240w-plugin-cabinet-gate.js ----
 // Cabinet-owned preview switch. The absent setting keeps every existing card
 // byte-identical until the cabinets go-live phase explicitly opens the gate.
@@ -118594,8 +118527,8 @@ function refNoteCardBuildEl(doc, model, options = {}) {
   }
 }
 // ---- src/249s-plugin-ref-note-card-host.js ----
-// Ref Card host (bob-cli-qp ref-card). It mounts only under the ref-owned
-// preview gate and the shared species-precedence result. Local identity paints
+// Ref Card host (bob-cli-qp ref-card). It mounts under the shared
+// species-precedence result. Local identity paints
 // in Reading and Live Preview; this adapter never asks the report service.
 const REF_NOTE_CARD_HOST_KIND = "ref";
 const REF_NOTE_CARD_MOUNT_ATTR = "data-ref-source";
@@ -118715,7 +118648,7 @@ class BobLedgerToolsRefNoteCardMixin {
 
   refNoteCardEligible(path, frontmatter) {
     const key = refNoteCardPath(path);
-    if (!key || this.refNoteCardActive !== true || refCardPreviewLive(this) !== true) return false;
+    if (!key || this.refNoteCardActive !== true) return false;
     try {
       return propertyCardNoteSpecies({
         path: key,
@@ -118725,7 +118658,7 @@ class BobLedgerToolsRefNoteCardMixin {
   }
 
   refNoteCardLivePath(view) {
-    if (this.refNoteCardActive !== true || !this.refNoteCardDesktop() || refCardPreviewLive(this) !== true) return null;
+    if (this.refNoteCardActive !== true || !this.refNoteCardDesktop()) return null;
     try {
       if (refNoteCardScopeDenied(view?.dom, view?.dom)) return null;
       const path = refNoteCardPath(this.notebookCatalogLivePath?.(view) || "");
@@ -118813,15 +118746,6 @@ class BobLedgerToolsRefNoteCardMixin {
     try { this.refNoteCardFootBind?.(); } catch (_) {}
     this.refNoteCardRegisterTitleKey();
     try { this.refNoteCardRegisterVisibleBodyNavigation?.(); } catch (_) {}
-    if (!this.refNoteCardPreviewLoadStarted) {
-      this.refNoteCardPreviewLoadStarted = true;
-      const epoch = this.refNoteCardEpoch;
-      try {
-        Promise.resolve(refCardPreviewLoad(this)).then(() => {
-          if (this.refNoteCardActive === true && this.refNoteCardEpoch === epoch) this.scheduleRefNoteCardRefresh();
-        });
-      } catch (_) {}
-    }
     try {
       const cache = this.app?.metadataCache;
       if (cache && typeof cache.on === "function" && typeof this.registerEvent === "function" && !this.refNoteCardResolvedBound) {
@@ -118853,7 +118777,6 @@ class BobLedgerToolsRefNoteCardMixin {
     this.refNoteCardSourceFlights?.clear?.();
     this.refNoteCardResolvedBound = false;
     this.refNoteCardVaultCreateBound = false;
-    this.refNoteCardPreviewLoadStarted = false;
   }
 
   refNoteCardCleanEditor(view) {
@@ -118883,7 +118806,6 @@ class BobLedgerToolsRefNoteCardMixin {
       getSource: sourceFor,
       currentPath,
       isCurrent: () => Boolean(plugin.refNoteCardActive === true
-        && refCardPreviewLive(plugin) === true
         && plugin.refNoteCardModelFor(path, sourceFor())),
       active: () => plugin.refNoteCardActive === true,
     });
@@ -216770,11 +216692,6 @@ try {
 try {
   if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
     module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
-      REF_CARD_PREVIEW_KEY,
-      refCardPreviewFromData,
-      refCardPreviewRemember,
-      refCardPreviewLoad,
-      refCardPreviewLive,
       REF_CARD_KIND_VOCABULARY,
       REF_CARD_KIND_FALLBACK,
       refCardKindEntry,

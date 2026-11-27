@@ -276,21 +276,6 @@ async function runFlows(ctx) {
       { cardCount: row.cardCount, nativeVisible: row.nativeVisible, h1Rows: row.h1Rows }])), restored: restored.cardCount };
   });
 
-  await attempt("native-closed-gate-is-todays-rendering", async () => {
-    const rows = {};
-    try {
-      await ev(`(() => { ${PLUGIN}.refCardPreview = false; ${HELPERS}.propertyCardFrontmatterCoordinatorReconcile(${PLUGIN}); ${PLUGIN}.scheduleRefNoteCardRefresh(); return true; })()`);
-      for (const mode of ["live", "reading"]) rows[mode] = await nativeState(BLOG, mode);
-    } finally {
-      await ev(`(() => { ${PLUGIN}.refCardPreview = true; ${PLUGIN}.scheduleRefNoteCardRefresh(); return true; })()`);
-    }
-    const restored = await viewMode(BLOG, "live");
-    const ok = Object.values(rows).every((row) => row.cardCount === 0 && row.nativeVisible
-      && row.familyCards.length === 0 && row.h1Rows.some((h) => h.text === "Agentic coding is straining CI" && h.visible))
-      && restored.cardCount === 1;
-    return { ok, rows };
-  });
-
   await attempt("native-unload-and-disabled-ledger-tools", async () => {
     let disabled = null;
     try {
@@ -299,7 +284,7 @@ async function runFlows(ctx) {
       disabled = await nativeState(BLOG, "live");
     } finally {
       await ev(`(async () => { await app.plugins.enablePlugin(${JSON.stringify(PLUGIN_ID)}); return true; })()`, 30_000);
-      await shared.waitFor(client, `Boolean(${PLUGIN}) && ${PLUGIN}.refCardPreview === true`, Boolean, "ledger-tools re-enable", 30_000);
+      await shared.waitFor(client, `Boolean(${PLUGIN}) && ${PLUGIN}.refNoteCardActive === true`, Boolean, "ledger-tools re-enable", 30_000);
       await shared.waitFor(client, `(() => { const s = ${PLUGIN}.propertyCapabilityState(); return s.status === "confirmed" && s.refContract === "confirmed"; })()`,
         Boolean, "capability re-confirmed after re-enable", 45_000);
     }

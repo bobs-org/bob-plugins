@@ -3,14 +3,10 @@ title: "Ref Card"
 description: "Reference for the ref title card: identity, provenance, reading state, and keys."
 ---
 
-> [!warning] Preview — not yet enabled
-> Ref Cards are under acceptance review. The live-vault preview gate stays off until
-> that review is complete. Native Properties remain visible until the `props_v1`
-> evidence allows the card to own them. The note's ordinary title remains when a
-> matching opening H1 cannot be adopted.
-
-Bob Ledger Tools can paint a **Ref Card** at the top of a library reference in desktop
-Live Preview and Reading view. A note qualifies when it has exactly the `ref` type and
+Bob Ledger Tools paints a **Ref Card** at the top of a library reference in desktop
+Live Preview and Reading view. Native Properties remain visible until the `props_v1`
+evidence allows the card to own them. The note's ordinary title remains when a
+matching opening H1 cannot be adopted. A note qualifies when it has exactly the `ref` type and
 lives under `ref/`; root `*_ref` hubs, mixed types, `ref_history/`, asset folders,
 templates, and conflicts stay untouched. The `ref` species follows the shared card
 precedence rules, so another card that owns the note keeps control.
@@ -44,7 +40,7 @@ a shell command from frontmatter.
 Reading state comes from one shared `bob ref list` snapshot. It patches the lane,
 Today marker, annotation counts, reread version, identifiers, and diagnostics into the
 card's existing slots. A missing or stale report leaves the local identity card intact.
-The preview build reserves the readout area only when the note declares PDF or audio;
+The card reserves the readout area only when the note declares PDF or audio;
 it never invents reading progress or annotation counts.
 
 ## Keys and takeover
@@ -68,7 +64,7 @@ fields — and any edit to `id`, `status`, `parent`, `ref_type`, pointers, hashe
 moves. `y` stays the YAML escape; Esc, `q`, and Ctrl+`[` back out of stages and close
 the editor.
 
-The card paints only when the Ref Card preview gate is enabled and the note passes the
+The card paints when the note passes the
 Ref species and library-path checks. It replaces the ordinary title only when a matching
 opening H1 can be adopted. Native Properties are hidden separately, and only while the
 generic `props_v1` source and ownership checks pass; uncertain metadata or ownership

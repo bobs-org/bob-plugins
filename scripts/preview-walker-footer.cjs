@@ -167,6 +167,11 @@ function contrastFailures(fixture) {
 
 function validateMatrix(entry) {
   const failures = [];
+  if (entry.cabinetOverlay420?.width < 400 || entry.cabinetOverlay420?.cancelHidden !== true
+    || entry.cabinetOverlay420?.labelVisible !== true || entry.cabinetOverlay420?.keysVisible !== true
+    || entry.cabinetOverlay420?.nounEllipsisReady !== true) {
+    failures.push(`420px cabinet overlay does not preserve its label/keys, shed esc, and ellipsize nouns: ${JSON.stringify(entry.cabinetOverlay420)}`);
+  }
   const tiers = ["pre", "new", "projects", "pending", "next", "recurring", "tickler", "rotten", "post"];
   const colors = tiers.map((tier) => entry.allTierColors[tier]);
   if (colors.some((color) => !color)) failures.push("the all-tier fixture is missing an ink");

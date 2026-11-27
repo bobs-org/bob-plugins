@@ -367,10 +367,41 @@ a.bob-plan-ready:hover {
 }
 
 .bob-walker-footer-overlay {
-  display: block;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 0.35em;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  container-type: inline-size;
+}
+
+.bob-walker-footer-overlay-label,
+.bob-walker-footer-overlay-key,
+.bob-walker-footer-overlay-state,
+.bob-walker-footer-overlay-cancel {
+  flex: none;
+}
+
+.bob-walker-footer-overlay-chip {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 1 auto;
+  gap: 0.2em;
+  min-width: 0;
+}
+
+.bob-walker-footer-overlay-noun {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  min-width: 0;
+}
+
+@container (max-width: 420px) {
+  .bob-walker-footer-overlay-cancel { display: none; }
 }
 
 .bob-walker-footer-fallback {
@@ -15285,6 +15316,8 @@ button.bob-prose-note-card-finding:focus-visible { color: var(--text-normal); }
   box-shadow: none !important;
 }
 .bob-property-card .bob-cabinet-content > .callout-title { display: none !important; }
+.bob-property-card .bob-property-card-cabinets .bob-areas-header,
+.bob-property-card .bob-property-card-cabinets .bob-projects-header { display: none !important; }
 .bob-property-card .bob-cabinet-drawer-inner .callout {
   margin: 0;
   border: 0 !important;

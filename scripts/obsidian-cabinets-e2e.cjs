@@ -649,7 +649,7 @@ async function run(args) {
       files: sourceFiles(),
     },
     scratch: { root: scratch, vault: fs.realpathSync(vault), profile, fixturePaths: Object.keys(notes).sort() },
-    checks: [], screenshots: [], consoleExceptions: [], bobSpawns: [],
+    checks: [], screenshots: [], consoleExceptions: [], consoleErrors: [], bobSpawns: [],
   };
   let child = null;
   let childStdout = "";
@@ -698,6 +698,15 @@ async function run(args) {
     await client.call("Runtime.enable");
     await client.call("Page.enable");
     client.on("Runtime.exceptionThrown", (row) => report.consoleExceptions.push(row.exceptionDetails?.text || "runtime exception"));
+    client.on("Runtime.consoleAPICalled", (row) => {
+      if (row.type !== "error") return;
+      const text = (row.args || []).map((arg) => arg.value ?? arg.description ?? "").filter(Boolean).join(" ");
+      report.consoleErrors.push({
+        text: text || "console.error",
+        url: row.stackTrace?.callFrames?.[0]?.url || null,
+        lineNumber: row.stackTrace?.callFrames?.[0]?.lineNumber ?? null,
+      });
+    });
     await shared.trustCommunityPlugins(client);
     await sleep(1_000);
     const pluginLoaded = await client.evaluate(`Boolean(app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}])`);
@@ -745,6 +754,20 @@ async function run(args) {
       }
     }
     report.renderMatrix = renderRows;
+    const areaTitleProbe = await openAndProbe(client, lib.PATHS.area, "live");
+    for (const kind of ["areas", "projects"]) {
+      if (areaTitleProbe.panels.find((row) => row.kind === kind)?.expanded === false) await clickCabinetToggle(client, kind);
+    }
+    const areasTitleRows = await client.evaluate(`(() => {
+      const stack = document.querySelector('.bob-property-card-cabinets');
+      const rows = ["areas", "projects"].map((kind) => {
+        const panel = stack?.querySelector('[data-cabinet-kind="' + kind + '"]');
+        const duplicate = panel?.querySelector(kind === "areas" ? ".bob-areas-header" : ".bob-projects-header");
+        return { kind, cabinetHeader: Boolean(panel?.querySelector(".bob-cabinet-head")), duplicatePresent: Boolean(duplicate), duplicateVisible: Boolean(duplicate && getComputedStyle(duplicate).display !== "none") };
+      });
+      return rows;
+    })()`);
+    check("areas-cabinet-single-title-row", areasTitleRows.length === 2 && areasTitleRows.every((row) => row.cabinetHeader && !row.duplicateVisible), areasTitleRows);
     const untyped = await openAndProbe(client, lib.PATHS.untyped, "reading");
     check("untyped-area-fails-open", !untyped.cardPresent && !untyped.stackPresent, untyped);
 
@@ -1313,16 +1336,19 @@ async function run(args) {
     await openAndProbe(client, lib.PATHS.area, "live");
     const motionResults = {};
     for (const [key, suffix] of [["j", null], ["k", null], ["g", "g"], ["G", null], ["ArrowDown", null], ["ArrowUp", null]]) {
+      const errorsBefore = report.consoleErrors.length;
       await sendKey(client, key);
       if (suffix) await sendKey(client, suffix);
-      motionResults[key] = await client.evaluate(`(() => {
+      const cursorVisible = await client.evaluate(`(() => {
         const c = document.querySelector(".cm-vimCursorLayer .cm-fat-cursor.cm-cursor-primary, .cm-cursor-primary");
         if (!c) return false;
         const r = c.getBoundingClientRect(); const s = getComputedStyle(c);
         return r.width > 0 && r.height > 0 && s.display !== "none" && s.visibility !== "hidden";
       })()`);
+      motionResults[key] = { cursorVisible, consoleErrors: report.consoleErrors.length - errorsBefore };
     }
-    check("vim-motions-and-arrows-no-invisible-cursor", Object.values(motionResults).every(Boolean), motionResults);
+    check("vim-motions-and-arrows-no-invisible-cursor", Object.values(motionResults).every((row) => row.cursorVisible), motionResults);
+    check("cursor-motions-no-console-errors", Object.values(motionResults).every((row) => row.consoleErrors === 0), motionResults);
     const offscreen = await client.evaluate(`(() => {
       const card = document.querySelector('[data-card-kind="area"]');
       if (!card) return null;
@@ -1481,6 +1507,7 @@ async function run(args) {
       captureFailures: report.screenshots.filter((row) => row.captureFailures.length).map((row) => ({ name: row.name, failures: row.captureFailures })),
     });
     check("no-runtime-exceptions", report.consoleExceptions.length === 0, report.consoleExceptions);
+    check("no-console-errors", report.consoleErrors.length === 0, report.consoleErrors);
     report.bobSpawns = readLog(logPath);
     const markdownAfter = shared.markdownFilesHash(vault);
     check("scratch-markdown-unchanged", JSON.stringify(protectedHashes) === JSON.stringify(markdownAfter), { before: protectedHashes, after: markdownAfter });

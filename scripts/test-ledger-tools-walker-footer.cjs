@@ -134,10 +134,25 @@ const {
   bankWalkerFooterListCacheKey,
   bankCacheKey,
   bankBuildArgs,
+  walkerFooterCabinetOverlayParts,
 } = helpers;
 
 const DAY = new Date(2026, 9, 28);
 const DAY_TEXT = "2026-10-28";
+
+test("cabinet footer overlay separates its label, keycaps, nouns, and cancel hint", () => {
+  const parts = walkerFooterCabinetOverlayParts("▤ Cabinets   1 Areas ▸ · 2 Albums ▾   - Properties   esc");
+  assert.deepEqual(parts, {
+    label: "▤ Cabinets",
+    cabinets: [
+      { key: "1", noun: "Areas", state: "▸" },
+      { key: "2", noun: "Albums", state: "▾" },
+    ],
+    properties: { key: "-", noun: "Properties" },
+    cancel: "esc",
+  });
+  assert.equal(walkerFooterCabinetOverlayParts("ordinary footer text"), null);
+});
 
 function entry(lane, path, lineNumber, overrides = {}) {
   return {

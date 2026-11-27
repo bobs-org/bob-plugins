@@ -69,19 +69,30 @@ test("browser probe is valid and runner covers acceptance-critical interactions"
     "live-preview-absorption-survives-cabinet-repaint", "cabinet-heads-left-aligned-single-line",
     "perf-106-record-album-within-budget", "perf-64-line-projects-host-within-budget",
     "forced-mount-error-reveals-native-section", "plugin-disable-restores-stored-section",
-    "vim-motions-and-arrows-no-invisible-cursor", "passive-actions-zero-bob-spawns",
+    "vim-motions-and-arrows-no-invisible-cursor", "cursor-motions-no-console-errors",
+    "no-console-errors", "areas-cabinet-single-title-row", "passive-actions-zero-bob-spawns",
     "passive-actions-zero-markdown-writes", "screenshot-matrix-captured",
   ]) assert.ok(source.includes(check), `runner includes ${check}`);
   assert.match(source, /cabinetsPreview: true/);
   assert.match(source, /cardPreviewKinds: \["notebook", "prose"\]/);
   assert.match(source, /refCardPreview: true/);
   assert.match(source, /Unexpected bob spawn in cabinet acceptance/);
+  assert.match(source, /Runtime\.consoleAPICalled/);
+  assert.match(source, /row\.type !== "error"/);
   assert.match(source, /markdownFilesHash/);
   // Obsidian's renderer target may not expose Page.printToPDF; the print
   // check must then say it relied on computed print styles, never claim a PDF.
   assert.match(source, /evidenceMode: pdfAvailable \? "generated-pdf-text" : "computed-print-styles"/);
   assert.match(source, /collapseSidebars\(client\)/);
   assert.doesNotMatch(source, /TMPDIR:\s*["']\/tmp["']/);
+});
+
+test("420px cabinet overlay sheds esc and keeps fixed labels and keycaps", () => {
+  const css = fs.readFileSync(path.join(__dirname, "../plugins/bob-ledger-tools/styles.css"), "utf8");
+  assert.match(css, /@container\s*\(max-width:\s*420px\)\s*\{\s*\.bob-walker-footer-overlay-cancel\s*\{\s*display:\s*none;/);
+  assert.match(css, /\.bob-walker-footer-overlay-label,[\s\S]*?\.bob-walker-footer-overlay-cancel\s*\{\s*flex:\s*none;/);
+  assert.match(css, /\.bob-walker-footer-overlay-noun\s*\{[\s\S]*?text-overflow:\s*ellipsis;/);
+  assert.match(css, /\.bob-property-card \.bob-property-card-cabinets \.bob-areas-header,[\s\S]*?\.bob-property-card \.bob-property-card-cabinets \.bob-projects-header\s*\{\s*display:\s*none !important;/);
 });
 
 test("report fixtures provide valid read-only catalog data for the visual matrix", () => {

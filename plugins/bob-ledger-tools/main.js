@@ -11964,6 +11964,52 @@ function walkerFooterOverlayEnsureNode(host, className, doc) {
   }
 }
 
+function walkerFooterCabinetOverlayParts(text) {
+  const match = String(text || "").match(/^▤ Cabinets\s{3}(.+)\s{3}- Properties\s{3}esc$/);
+  if (!match) return null;
+  const cabinets = match[1].split(" · ").map((chip) => {
+    const row = chip.match(/^(\d+)\s+(.+?)\s+([▸▾])$/);
+    return row ? { key: row[1], noun: row[2], state: row[3] } : null;
+  });
+  if (cabinets.some((row) => !row)) return null;
+  return { label: "▤ Cabinets", cabinets, properties: { key: "-", noun: "Properties" }, cancel: "esc" };
+}
+
+function walkerFooterOverlayPaintText(overlay, text) {
+  const parts = walkerFooterCabinetOverlayParts(text);
+  if (!parts || !overlay?.ownerDocument?.createElement) {
+    if (overlay) overlay.textContent = text;
+    return false;
+  }
+  const doc = overlay.ownerDocument;
+  const append = (className, value, parent = overlay) => {
+    const node = doc.createElement("span");
+    node.className = className;
+    node.textContent = value;
+    parent.appendChild(node);
+    return node;
+  };
+  try {
+    overlay.textContent = "";
+    append("bob-walker-footer-overlay-label", parts.label);
+    for (const cabinet of parts.cabinets) {
+      const chip = append("bob-walker-footer-overlay-chip", "");
+      append("bob-walker-footer-overlay-key", cabinet.key, chip);
+      append("bob-walker-footer-overlay-noun", cabinet.noun, chip);
+      append("bob-walker-footer-overlay-state", cabinet.state, chip);
+    }
+    const properties = append("bob-walker-footer-overlay-chip bob-walker-footer-overlay-properties", "");
+    append("bob-walker-footer-overlay-key", parts.properties.key, properties);
+    append("bob-walker-footer-overlay-noun", parts.properties.noun, properties);
+    append("bob-walker-footer-overlay-cancel", parts.cancel);
+    overlay.setAttribute?.("aria-label", text);
+    return true;
+  } catch (_error) {
+    overlay.textContent = text;
+    return false;
+  }
+}
+
 function walkerFooterOverlayStatusBarVisible(el) {
   try {
     if (!el || el.isConnected === false) return false;
@@ -12018,7 +12064,7 @@ function walkerFooterOverlayRender(plugin) {
         "bob-walker-footer-overlay",
         el.ownerDocument,
       );
-      if (overlay) overlay.textContent = top.text;
+      if (overlay) walkerFooterOverlayPaintText(overlay, top.text);
     } catch (_error) {}
     return;
   }
@@ -12031,7 +12077,8 @@ function walkerFooterOverlayRender(plugin) {
     doc,
   );
   if (fallback) {
-    fallback.textContent = top.text;
+    fallback.classList?.add("bob-walker-footer-overlay");
+    walkerFooterOverlayPaintText(fallback, top.text);
     plugin.walkerFooterOverlayFallback = fallback;
   }
 }
@@ -216367,6 +216414,8 @@ try {
       walkerFooterReviewView,
       walkerFooterPushReviewAttention,
       walkerFooterReviewAttentionLabel,
+      walkerFooterCabinetOverlayParts,
+      walkerFooterOverlayPaintText,
       walkerFooterWalkMode,
     });
   }

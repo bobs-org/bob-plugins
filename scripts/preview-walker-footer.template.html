@@ -646,7 +646,35 @@
           settledSelectorRect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
         });
       }
-      return { width, theme, fixtures: measurement, allTierColors, integrated: modes };
+      const cabinetSection = document.createElement("section");
+      cabinetSection.className = "preview-case";
+      const cabinetTitle = document.createElement("h2");
+      cabinetTitle.className = "preview-title";
+      cabinetTitle.textContent = "Cabinet pick overlay at 420 px";
+      cabinetSection.appendChild(cabinetTitle);
+      const cabinetHost = document.createElement("div");
+      cabinetHost.className = "preview-status-bar";
+      cabinetHost.style.width = "420px";
+      const cabinetOverlay = document.createElement("div");
+      cabinetOverlay.className = "bob-walker-footer-overlay";
+      cabinetHost.appendChild(cabinetOverlay);
+      cabinetSection.appendChild(cabinetHost);
+      root.appendChild(cabinetSection);
+      ledger.walkerFooterOverlayPaintText(
+        cabinetOverlay,
+        "▤ Cabinets   1 Areas ▸ · 2 Projects ▸ · 3 Notebooks ▸ · 4 Albums ▸   - Properties   esc",
+      );
+      await nextFrame();
+      const cancel = cabinetOverlay.querySelector(".bob-walker-footer-overlay-cancel");
+      const noun = cabinetOverlay.querySelector(".bob-walker-footer-overlay-noun");
+      const cabinetOverlay420 = {
+        width: Math.round(cabinetOverlay.getBoundingClientRect().width),
+        cancelHidden: Boolean(cancel && getComputedStyle(cancel).display === "none"),
+        labelVisible: cabinetOverlay.querySelector(".bob-walker-footer-overlay-label")?.textContent === "▤ Cabinets",
+        keysVisible: cabinetOverlay.querySelectorAll(".bob-walker-footer-overlay-key").length === 5,
+        nounEllipsisReady: Boolean(noun && getComputedStyle(noun).textOverflow === "ellipsis"),
+      };
+      return { width, theme, fixtures: measurement, allTierColors, integrated: modes, cabinetOverlay420 };
     }
 
     window.walkerFooterPreview = { render, fixtureIds: panelFixtures.map((item) => item.id) };

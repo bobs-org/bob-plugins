@@ -89,13 +89,67 @@ Property Editor.
 
 ## Bank cards and the bank badge
 
-`bob-bank` fence views are queue, month, and subscriptions; frontmatter matches the filename, only existing headings navigate, empty months teach, and a missing subscriptions album points to `bob albums create`. Unknown views stay quiet. Queue rows are oldest-first and day buttons use drawn IDs. Subscriptions are read-only; totals estimate commitments, not spend. Record headers/indexes show charge timelines, findings, categories, amounts, next dates, and yearly monthly equivalents. **Bank: open today** jumps to the next row; **Bank: acknowledge this day** acks it. ID-less rows tick once verified; bulk ack reports leftovers, never `ack -D`. Month-note Enter continues rows, clearing stubs; `[cat:: ` inserts ordered keys. Bank badges follow `bob-plan` Day strips, `bob-day-stats`, and `bob-stats-strip` fences (not `bob-period-parts`), hide without counted money or waiting rows, show neutral/green/amber tones, and open their rows. Quarter, year, and all-time use `bank report -p`; `stats.bank_badge` (default on) gates badges (`stats.bank_chip` is legacy). `toggle-bank-marks` and `stats.bank_marks` (default on) gate decorations; `$` never renders as math. Row notes appear as muted italic `— note` captions on every row surface.
+`bob-bank` fences render queue, month, or subscriptions. Frontmatter matches
+the filename; only existing headings navigate, empty months teach, a missing
+subscriptions album points to `bob albums create`, and unknown views stay quiet.
+Queue rows are oldest-first with drawn-ID day buttons. Subscriptions are
+read-only; totals estimate commitments, not spend. Record headers/indexes show
+charge timelines, findings, categories, amounts, next dates, and yearly monthly
+equivalents. **Bank: open today** jumps to the next row; **Bank: acknowledge
+this day** acks it. ID-less rows tick once verified; bulk ack reports leftovers
+and never uses `ack -D`. Month-note Enter continues rows and clears stubs;
+`[cat:: ` inserts ordered keys.
 
-🔁 chips on bank rows (Live Preview, Reading, queue) show the subscription, price drift, usage, still-charging, or after-cancel state. Click Manage or modifier-click the record; ghost 🔁 inserts `[[subscriptions/<stem>|🔁]]` in one transaction, and `⟳ subscription?` opens the Category picker. Tooltips use the latest charge (older output says `charged <row date>`). A focus ring appears; plugin-off still shows 🔁.
+Badges follow `bob-plan` Day strips, `bob-day-stats`, and `bob-stats-strip`
+(not `bob-period-parts`); they hide without counted money or waiting rows, use
+neutral/green/amber tones, and open their rows. Quarter/year/all-time use
+`bank report -p`. `stats.bank_badge` (default on; `stats.bank_chip` is legacy)
+gates badges; `toggle-bank-marks` and `stats.bank_marks` (default on) gate
+decorations. `$` never renders as math; every row surface shows notes as muted
+italic `— note` captions.
 
-The **bank card** owns the note top on `bank.md` (`[🏦] BANK · Cash` kicker, `Bank` title, `summary` subtitle), hiding `# 🏦 Bank`. Setup folds when healthy and opens for attention; `_` or **Toggle card details** toggles it. The foot shows `parent`, `summary`, `bank` when expanded, and `created`; fences, categories, and modals have no foot. **⊞ Setup** / **Edit bank setup** / Vim `=` / Command Mode open the editor; `↗ YAML` handles invalid, missing, unsupported, or mobile states. Uses parent hue. On `bank.md`, source/cache parity and confirmed routing hide Properties; uncertainty restores native Properties and the per-row `bank` fallback. Categories: Enter edits; `+` adds; Ctrl+J/K jump; Alt+J/K rearrange (Shift+Alt to edge); ⌥M hints; Ctrl+H hides; Ctrl+D removes; hotkeys match lowercase only. Accounts: Enter relabels; `+` adds; Ctrl+D removes unused; stale-after edits. Rules: Enter edits; `+` adds; Alt+J/K reorders (loud); Ctrl+D removes. Quiet ⏎ saves; loud ⏎ confirms `G→H`. Lock-busy ⏎ retries ≤10m; `Esc`/`q`/`Ctrl+[` backs out, then closes with editor focus. Ctrl+Z steps back; close-during-save writes. ↗ YAML / Ctrl+E uses the excursion; Done needs a valid report. Painting is read-only; mobile too.
+🔁 chips on bank rows in Live Preview, Reading, and queue show subscription,
+price drift, usage, still-charging, or after-cancel state. Click Manage or
+modifier-click the record; ghost 🔁 inserts `[[subscriptions/<stem>|🔁]]` in
+one transaction, and `⟳ subscription?` opens Category. Tooltips use the latest
+charge (older output said `charged <row date>`); a focus ring appears, and
+plugin-off still shows 🔁.
 
-On a waiting bank row, Task Status Cycler routes Ctrl+Enter to `api.bank` v2 `claimRowClose` in the Category card. Enter accepts; hotkeys pick another; `-` files without one (Delete too in set mode); Space notes; `+` opens Emoji Slot; Escape backs out. Note completion uses live bank-row notes: this payee's notes appear first, even when empty; others appear after two characters. Tab completes the ⇥ row; → takes ghost text at the end; Ctrl+N/P or ↓/↑ selects a suggestion; Enter saves the exact field. `/` opens subscription search across titles and needles; arrows or Ctrl+N/P move, Enter links, Escape returns. The resolver ranks record, needle, amount proximity, and live status; the context strip shows status, amount, and price difference. Picking a record adds 🔁 and fills `[cat::]` on uncategorized rows in one undo. **+ New subscription…** pre-fills from the row and candidate, creates via `bob records new subscription`, then links. Editor keys stay in the card; held keys file once. Filing ticks and categorizes in one undo, advances, and records `recordJump` for Ctrl+O. **Bank: set category** corrects rows. Hidden categories remain on rows, not the card or suggestions. Older APIs retain `[ ]`↔`[x]`.
+The **bank card** owns `bank.md`'s top (`[🏦] BANK · Cash` kicker, `Bank` title,
+`summary` subtitle) and hides `# 🏦 Bank`. Healthy Setup folds; attention opens
+it. `_` / **Toggle card details** toggles it. Expanded foot shows `parent`,
+`summary`, `bank`, and `created`; fences, categories, and modals have none.
+**⊞ Setup**, **Edit bank setup**, Vim `=`, and Command Mode open the editor;
+`↗ YAML` handles invalid, missing, unsupported, or mobile states. It uses the
+parent hue. On `bank.md`, source/cache parity and confirmed routing hide
+Properties; uncertainty restores native Properties and the per-row `bank`
+fallback.
+
+Categories: Enter edits, `+` adds, Ctrl+J/K jumps, Alt+J/K reorders (Shift+Alt
+to edge), ⌥M hints, Ctrl+H hides, Ctrl+D removes; hotkeys are lowercase-only.
+Accounts: Enter relabels, `+` adds, Ctrl+D removes unused, edits are stale-checked.
+Rules: Enter edits, `+` adds, Alt+J/K reorders loudly, Ctrl+D removes. Quiet
+Enter saves; loud Enter confirms `G→H`; lock-busy Enter retries for ≤10m.
+`Esc`/`q`/`Ctrl+[` backs out, then closes with editor focus. Ctrl+Z steps back;
+closing during save writes. `↗ YAML` / Ctrl+E uses the excursion; Done needs a
+valid report. Painting is read-only, including mobile.
+
+On a waiting bank row, Task Status Cycler routes Ctrl+Enter to
+`api.bank` v2 `claimRowClose` in Category. Enter accepts; hotkeys choose
+another; `-` files without one (Delete too in set mode); Space notes; `+`
+opens Emoji Slot; Escape backs out. Completion uses live row notes: this
+payee's notes appear first even when empty; others appear after two characters.
+Tab completes the ⇥ row; → takes end ghost text; Ctrl+N/P or ↓/↑ selects; Enter
+saves exactly. `/` searches subscriptions by title/needle; arrows or Ctrl+N/P
+move, Enter links, Escape returns. Resolution ranks record, needle, amount
+proximity, and live status; the context strip shows status, amount, and price
+difference. Picking adds 🔁 and fills `[cat::]` on uncategorized rows in one
+undo. **+ New subscription…** pre-fills from row/candidate, creates via
+`bob records new subscription`, then links. Card-held keys stay in the card;
+repeats file once. Filing ticks and categorizes in one undo, advances, and
+records `recordJump` for Ctrl+O. **Bank: set category** corrects rows. Hidden
+categories stay on rows, not the card or suggestions. Older APIs retain
+`[ ]`↔`[x]`.
 
 ## Bank Period Charts
 
@@ -146,106 +200,85 @@ In `<X>`, `+` starts later like `-` starts earlier (bare sign: one unit); `se+0`
 
 #### Which clock a session is on
 
-A timed Pomodoro row carries exactly one clock key. `[t:: Nm]` is on the clock;
-`[off:: Nm]` marks an *Off-Clock Pomodoro*: a session Bob records but keeps off
-the work clock (lunch, the gym, school pickup). A bare timed span, written by
-older tools, reads as off-clock too and is counted by its span. Pinned by
-bob-cli's shared `pomodoro_clock` and `meet_event_run` vectors, `se<X>` stamps
-the key by the same counted-links rule `bob capture` uses:
+A timed row has one key: `[t:: Nm]` is worked, `[off:: Nm]` off-clock; legacy
+bare spans read as off-clock and count by span. `se<X>` stamps the key using
+bob-cli's shared `pomodoro_clock` / `meet_event_run` rules. A session is
+**off-clock** only with Task Links that all resolve off-clock. Resolution order
+is `#on`, then standalone case-insensitive `#off` (`#offclock`, `#off-clock`,
+`#untracked` aliases), then nearest area/project root-walk policy. A nonempty
+`offclock_types` list overrides same-note `offclock:` and matches effective
+type; an invalid list stays worked. Without a list, `offclock: true|false`
+inherits. Effective type order is task field, reading rule, nearest note
+default, then `plan.default_type`; no matching type means worked. Writers never
+add inherited `#off`; `se<X>` falls back to tags without metadata. Other
+plugins can call `api.pomodoroClock` v1 `taskEffectiveOffClock(path, line)` →
+`{ offClock, source, notePath }`.
 
-- A session is **off the clock** iff it has a Task Link and every link resolves
-  off-clock. First match wins: `#on`; `#off` or alias (`#offclock`, `#off-clock`,
-  `#untracked`); then nearest area/project root-walk policy. A non-empty
-  `offclock_types` list wins over same-note `offclock:` and matches effective
-  type; invalid lists stay worked. Without a list, `offclock: true|false` keeps
-  inheritance. Effective type is task field, reading rule, nearest note default,
-  then `plan.default_type`; cataloging is optional. No matching type means
-  on-clock. Clock tags are standalone, case-insensitive tokens; writers never add
-  inherited `#off`. `se<X>` falls back to tags when metadata is unavailable.
-  Other plugins read the decision through `api.pomodoroClock` v1
-  (`taskEffectiveOffClock(path, line)` → `{ offClock, source, notePath }`).
-- An unlinked session, an unresolved link, or a single on-clock link keeps the
-  **whole session worked**; a mixed session is never split.
-- Counted links are the direct-child Task Link bullets (plain, struck,
-  🍅-marked, or embedded). Deferred `[[…]]#` bodies, notes, and Depends-On
-  lines do not count. Same-note links read the open note (Event Tasks first);
-  other-note links read the linked task's line through the same source-text
-  cache the home chips use, so a link whose note has not been read yet counts as
-  unresolved and the session stays worked.
-- A MEET with a non-empty event run uses the **run's** clock (future lineup
-  events are queue, not participation); a MEET with no run, and every other
-  session, uses its lineup. Only the key changes.
+An unlinked/unresolved session or any on-clock link keeps the whole session
+worked; mixed sessions never split. Count only direct-child Task Link bullets
+(plain, struck, 🍅-marked, or embedded), not deferred `[[…]]#` bodies, notes, or
+Depends-On lines. Same-note links read the open note (Event Tasks first);
+other-note links read the linked task line from the home-chip source cache, so
+an unread note is unresolved. A MEET with a nonempty event run uses the run's
+clock (future lineup events are queue, not participation); MEET without a run
+and every other session use their lineup. If an off-clock link remains worked,
+a `pomodoro_clock_mixed` Notice explains it.
 
-When the lineup holds an off-clock link but the session stays worked, a
-Notice mirrors bob's `pomodoro_clock_mixed` warning. Swapping sessions,
-`~K` drops, and link starts are capture-only.
+Starting, extending, or shifting a non-MEET session warns if its span newly
+overlaps an open Event Task outside its lineup; e.g. `⚠ BOB 1150-1215 runs 15m
+into Standup (1200-1230) · se2 ends at 1200`. A wholly buffered overlap names
+the wing, otherwise the event's buffer label; a fit draft ends at the buffered
+start. Starting mid-meeting stays quiet. Warnings cover `se<X>` + Tab,
+`N\p`, `N\o`, and `N\O`, never `N\P` or closes, and never block writes.
+`N\p` / `N\P` keep the key and update minutes (`[t::]` stays `[t::]`,
+`[off::]` stays `[off::]`, bare spans become `[off::]`, both keys resolve to
+`[t::]`); `N\o` / `N\O` shift time and preserve keys byte-for-byte.
+`Ctrl+Enter` restamps a closed row from retained links (see Task Status Cycler).
+Timed close classifies Event Task links by meeting span, so lunch still closes
+when its MEET session ends even if the `+15` buffer continues.
 
-Starting, extending, or shifting a non-MEET session raises a Notice when its
-span newly overlaps the occupied span of an open Event Task outside its lineup
-(`pomodoro_runs_past_event`): `⚠ BOB 1150-1215 runs 15m into Standup (1200-1230)
-· se2 ends at 1200`. With a buffer the overlap names the wing when wholly
-inside one, otherwise the event's buffer label; the fit draft ends at the
-buffered start. A session starting mid-meeting stays quiet. It covers `se<X>` +
-Tab, `N\p`, `N\o`, and `N\O`; `N\P` and closes never warn, and the write is
-never blocked. `N\p` and `N\P` keep the row's key and update recorded minutes
-(`[t::]` stays `[t::]`, `[off::]` stays `[off::]`, bare spans stamp `[off::]`,
-both keys resolve to `[t::]`); `N\o` and `N\O` move the span and keep every key
-byte-for-byte. `Ctrl+Enter` re-stamps the closed row from the links it keeps
-(see Task Status Cycler). Timed close classifies Event Task links by the meeting
-span, so a MEET closed when lunch ends still completes lunch though its `+15`
-buffer runs on.
+The live `bob-plan` block shows on-clock `TODAY 7/10` links (off-clock links
+uncapped; tooltip lists counts by type and omitted off-clock count),
+`PENDING n/10`, `NEXT n/15`, and `READY n/100` badges opening their sections,
+a starred `★ GOALS · DECKS · BOB` type line, a hue-ringed root-parent line, and
+muted lint lines. Root links open their notes; faint counts are open Today
+tasks per root; `unfiled` is dashed and inert. The root line is omitted without
+Tasks or Today and is never a budget. READY is the live backlog excluding
+Today, never changes PLAN status, and adds `ready_cap_exceeded` over cap.
+PENDING/NEXT show live dashboard section counts excluding Today (`–` while
+Tasks or today's cache is unready), turn red only for strict section excess,
+and report `next_cap_exceeded` / `pending_cap_exceeded` only when red; whole-
+lane pressure stays in the tooltip. Older daily notes follow today's lanes but
+keep their own TODAY-link budget.
 
-The plugin renders a live `bob-plan` block: a `TODAY 7/10` chip for the
-on-clock Task Link budget (off-clock links uncapped; tooltip lists each type
-with its link count, plus ` · N off-clock uncapped` when left out), `PENDING
-n/10`, `NEXT n/15`, and `READY n/100` chips opening the matching dashboard
-sections, the `★ GOALS · DECKS · BOB` type line with highlight starred, a
-hue-ringed roots line of today's root parents (`○ bob 5 ○ sase 2`) after the
-type line, and one muted line per lint. Each real root is a quiet
-link opening its note; the faint count is open Today tasks under that root, and
-`unfiled` is a dashed non-interactive bucket. The roots line is a view, never a
-budget: omitted when Tasks is unavailable or Today is empty. READY is the
-shared live current backlog (Today excluded) and never changes PLAN status;
-READY over cap adds a `ready_cap_exceeded` lint line. PENDING and NEXT show live
-dashboard section counts (Today excluded; `–` when Tasks or current-day Today
-cache is unready) and turn red only for strict section excess, while whole-lane
-pressure stays in the tooltip. `next_cap_exceeded` / `pending_cap_exceeded`
-lines appear only when the matching badge is red and quote its section count.
-Older daily notes follow today's live lanes while keeping their own TODAY link
-budget.
+Today means open tasks with a dedicated Task Link under today's open Pomodoros.
+A synchronous cache rebuilds on layout ready, daily-note change, create,
+delete, rename, and local midnight; changed Today keys reload open Tasks queries
+through `reload-open-search-results`. Caps come from shared `plan:` settings
+(`max_next`, `max_pending`, `max_ready`, `max_ready_per_note`; legacy
+`max_now` remains accepted), with built-in defaults for missing/invalid values.
+The block rerenders on daily-note/Tasks-cache changes; missing note, Pomodoros,
+or Tasks shows `–`, never an error.
 
-Today is read from the ledger at render time — open tasks with a dedicated
-Task Link under today's open Pomodoros — and kept in a synchronous cache
-rebuilding on layout ready, daily-note change, create, delete, rename, and
-local-midnight rollover. When the cached Today key set changes, open Tasks
-queries reload through the Tasks plugin's `reload-open-search-results` event.
-Caps come from the `plan:` block in the shared bob config file (`max_next`,
-`max_pending`, `max_ready`, `max_ready_per_note`; legacy `max_now` loads
-without error), with built-in defaults when the file, block, or a value is
-missing or invalid. The block re-renders live when the daily note or Tasks
-cache changes and shows `–` placeholders, never an error, with no daily note,
-Pomodoros section, or Tasks plugin.
-
-One walker footer follows `s/w/n/b` via nav `api.walkMode` v1.
-Review attention is on iff `]s` has a row, including ROTTEN and POST; its hue
-is the first due group (PRE/POST cyan, ROTTEN orange). Its label shows walk and
-commitment counts, or `commitments done`. The gated `s` panel lists remaining
-groups (TICK splits ROTTEN), details, `]] next`, and meter; it jumps like `]s`
-and clears as `Review clear`. TICK rows show a tinted `Alt+P` chip (red on
-cancel). The `w` lane footer shows `api.laneWalk` v2
-counts (`Lanes N`, position, `Lanes clear` / `REVIEW n` / `No
-Pending…` states, red `n/cap` over tokens (over lanes stay visible);
-`Lanes` acts like `]]`, counts never filter. Red `w` attention is pushed via nav
-`api.walkMode` v5 for any over-limit lane. Ledger pushes [`s`/`w`/`b`
-attention](https://bobs-org.github.io/walks/), mirrored by Mac Capture.
-The `n` compass (`walkMode.links()` v7) paints outer skip-mark group arms
-(dashed `+`, dotted ghost), context, `]}`/`]n` hints; sheds end-first. The `b` bank panel shows the `api.bankWalk` v1 snapshot scope word first (`WAITING` amber while any row waits, `ALL` calm otherwise), day
-arms from the planner (`[B` / `]B`), money only for the cursor row, and an account meter that never claims untold health: `✓ balanced`
-only from a cached `bob bank list` result where every
-account is balanced, otherwise the worst account's status in bob's own words.
-Hidden when unset, indexing, loading, or mobile. Review uses `setAttention` v3:
-off-`s` dots, selected-`s` ink in v6; bank uses per-family v4: off-`b` amber
-dots, selected-`b` ink in v6.
+The walker footer follows `s/w/n/b` through nav `api.walkMode` v1. Review `s`
+attention means `]s` has rows (including ROTTEN/POST); its hue is the first due
+group (PRE/POST cyan, ROTTEN orange). Its label gives walk/commitment counts
+or `commitments done`; the gated panel lists remaining groups (TICK splits
+ROTTEN), details, `]] next`, and meter, and clears as `Review clear`. TICK rows
+show tinted `Alt+P` (red on cancel). Lane `w` uses `api.laneWalk` v2 counts,
+position, `Lanes clear` / `REVIEW n` / `No Pending…`, and red `n/cap` over
+tokens while keeping over-limit lanes visible. `Lanes` acts like `]]`; counts
+never filter. Nav `api.walkMode` v5 receives red attention for any over-limit
+lane. Ledger sends [`s`/`w`/`b` attention](https://bobs-org.github.io/walks/),
+also mirrored by Mac Capture. The `n` compass (`walkMode.links()` v7) paints
+outer skip-mark group arms (dashed `+`, dotted ghost), context, and `]}`/`]n`
+hints; it sheds end-first. The `b` panel shows `api.bankWalk` v1 snapshot scope
+(`WAITING` amber while any row waits, otherwise calm `ALL`), planner day arms
+(`[B` / `]B`), money only for the cursor row, and an account meter: `✓ balanced`
+only when cached `bob bank list` says every account is balanced, otherwise the
+worst account's own status. It hides when unset, indexing, loading, or mobile.
+Review uses `setAttention` v3, off-`s` dots and selected-`s` ink in v6; bank
+uses per-family v4, off-`b` amber dots, and selected-`b` ink in v6.
 
 ## Marks and rendered blocks
 

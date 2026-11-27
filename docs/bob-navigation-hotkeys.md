@@ -129,18 +129,20 @@ including `type` and `status`. A notice warns if cached `type` lacks `[[project]
 
 ## Task Card
 
-`Ctrl+Shift+P` opens the Task Card with priority previews. `Ctrl+Shift+B` opens
-Depends on, `Ctrl+Shift+Alt+B` opens Blocks, and `Ctrl+Shift+L` /
-`Ctrl+Shift+Alt+L` open Links / Linked from. On a Task Link, a stage targets
-the linked task; on dependency, relation, or requirement lines it targets the
-owner. On album or record notes without a task target, the matching Schema or
-Record Card opens. See [Task Card](task-card.md). In the four stages, `⌃B` / `⌃⇧B` / `⌃L` / `⌃⇧L` set the pair's tie.
+`Ctrl+Shift+P` opens the priority-previewing Task Card; `Ctrl+Shift+B`,
+`Ctrl+Shift+Alt+B`, `Ctrl+Shift+L`, and `Ctrl+Shift+Alt+L` open Depends on,
+Blocks, Links, and Linked from. A Task Link targets its linked task; dependency,
+relation, and requirement lines target their owner. Untargeted album and record
+notes open Schema and Record Cards. The four stages use `⌃B` / `⌃⇧B` / `⌃L` /
+`⌃⇧L` to set the pair's tie. See [Task Card](task-card.md).
 
 ## Mail Close Card
 
-On Gmail Task close, `y` confirms; otherwise it stays open. One card covers batches. Dismissal keeps the picker. See the [contract](https://bobs-org.github.io/mail-close-card/).
-
-The card swallows its opening chord until keyup, ignores repeats, and keeps on any key but `y`. The footer names the verb and omits the open hint without a URL.
+Closing a Gmail Task opens one card for the batch: only `y` confirms; other
+keys keep it open, and dismissal returns to the picker. It swallows the opening
+chord until keyup, ignores repeats, and names the verb in its footer (omitting
+the open hint without a URL). See the
+[contract](https://bobs-org.github.io/mail-close-card/).
 
 ## Navigation and counts
 
@@ -156,83 +158,63 @@ tabs round-trip. Bank filings add `api.recordJump`.
 
 ## Parent note
 
-`Ctrl+-` opens the current note's parent (`open-parent-note`), `Ctrl+=` opens a
-child (`open-child-note`), and `Ctrl+Shift+-` changes the parent
-(`change-parent-note`).
+`Ctrl+-` opens the parent, `Ctrl+=` a child, and `Ctrl+Shift+-` changes the
+parent. The prefilled Change parent panel selects the current parent; typing
+replaces it, while Backspace clears it and suggests the current parent,
+grandparent (`up a level`), recent notes, then most-used parents. Search ranks
+exact, prefix, word-start, substring, path, then fuzzy matches; ties use current
+parent, areas/open projects, child count, and recency. Rows show child-picker
+badges plus `current` / `up a level` / `recent`, a faint child count, and Album
+or Record icons. Its **MOVES TO** / **STAYS UNDER** breadcrumb previews ancestry.
+Albums may parent under areas or projects of any status; records under albums.
 
-The Change parent panel is pre-filled with the current parent's name, fully
-selected. Typing replaces it; Backspace clears it and shows suggestions: the
-current parent, the grandparent (`up a level`), recent notes, then the most-used
-parents. As you type, existing notes rank by exact, prefix, word-start,
-substring, path, then fuzzy match, with the current parent, areas and open
-projects, child count, and recency as tie-breaks. Rows reuse the child-picker
-badges and add `current` / `up a level` / `recent` chips plus a faint child
-count. Albums show an `album` icon and **Album** badge, records a `file-text`
-icon and **Record** badge. A live **MOVES TO** (or **STAYS UNDER**) breadcrumb
-previews the new ancestry. An album hangs under an area or a project of any
-status; a record hangs under an album.
+Enter or click changes only `parent:` to a canonical quoted wikilink. It
+preserves trailing comments and line endings, inserts a missing key first in
+YAML, or creates three-line frontmatter. Cycles, stale edits, unclosed
+frontmatter, duplicate keys, unquotable names, and [notebook parent
+rules](notebook-gestures.md) refuse with an explanation; Enter rechecks the
+live vault. It never creates a note, and one editor undo reverts the write.
 
-Enter or click writes only the `parent:` frontmatter line. The value is always a
-canonical double-quoted wikilink (`"[[name]]"` at the vault root,
-`"[[folder/name|name]]"` otherwise). Trailing comments and the file's line
-endings stay put. A missing key is inserted first in the YAML block; a note with
-no frontmatter gets a three-line block. The panel refuses cycles, stale edits,
-unclosed frontmatter, duplicate `parent:` keys, unquotable names, and
-[notebook parent rules](notebook-gestures.md); typing a ruled-out name explains
-why, and Enter re-checks the live vault before writing, so a stale pick is
-refused with the same wording. It never creates a note. One undo reverts the write in an open editor.
-
-The same ranking model is also available choose-only through
-`api.parentPicker` v1 ([Cross-plugin API reference](https://bobs-org.github.io/develop/plugins/plugin-apis/)): `list(sourcePath,
-query?, limit?)` for the Property Editor's Lives under stage and
-`choose(sourcePath, { candidatePath? })`, which validates a headless pick or
-opens the panel without writing. The editor commits through bob's
-`setting.set parent`, never through this API.
-
-Root-parent grouping is computed from the new tree at read time. Inherited
-project blocking (`#prj_is_blocked`) is repaired by the next
-`bob task reconcile`.
+`api.parentPicker` v1 exposes the same ranking without writing:
+`list(sourcePath, query?, limit?)` serves the Property Editor's Lives under
+stage; `choose(sourcePath, { candidatePath? })` validates a headless pick or
+opens the panel. The editor commits through Bob's `setting.set parent` instead.
+Root-parent grouping uses the new tree at read time; the next
+`bob task reconcile` repairs inherited `#prj_is_blocked`.
+See the [Cross-plugin API reference](https://bobs-org.github.io/develop/plugins/plugin-apis/).
 
 ## Deleting the current file
 
-`Ctrl+Shift+D` immediately deletes notes created in the last 24 hours,
-including future journal notes. It asks before trashing established or
-unstamped notes, current or past journals, Bob-managed files, templates, notes
-named as a parent, non-Markdown files, and files deleted within five seconds
-of the previous one. Old blank notes without backlinks or children do not ask.
-The confirmation explains why: `y` / `Y` trashes the captured file; other keys
-keep it. While open, another delete call does nothing. Obsidian's Deleted files
-setting controls trash behavior.
+`Ctrl+Shift+D` immediately deletes notes created within 24 hours (including
+future journals). It confirms established or unstamped notes, current/past
+journals, Bob-managed files, templates, parent notes, non-Markdown files, and a
+second delete within five seconds; old blank notes without backlinks or
+children remain immediate. The prompt explains why; `y` / `Y` trashes the
+captured file, other keys keep it, and another delete while open does nothing.
+Obsidian's Deleted files setting controls trash behavior.
 
 ## Pomodoro gestures
 
-The same move keymap on a Pomodoro sub-bullet moves that bullet plus the next N
-siblings with their descendants, into another open Pomodoro in the same
-note — or into a new `- [ ] () — NAME` Pomodoro created directly below the
-current one from a typed, uppercased, em-dash-stripped picker name. Typing `=`
-creates a fresh destination with the source Pomodoro's normalized name when the
-source is named; typing `=NAME` peels every matching `NAME` component from a
-merged source into a new placeholder containing the selected bullet subtrees.
-Duplicate destination bullets merge away, and moving out a source's last
-owned content deletes that Pomodoro entry instead of leaving it behind. Nested
-`#task` lines under Pomodoro entries route to the Pomodoro move.
+On a Pomodoro sub-bullet, the move keymap takes that bullet and the next N
+siblings with descendants into another open same-note Pomodoro, or creates a
+new `- [ ] () — NAME` below the current entry from an uppercased,
+em-dash-stripped picker name. `=` creates a destination named from the source's
+normalized name; `=NAME` extracts every matching component of a merged source
+into a placeholder with the selected subtrees. Duplicate destination bullets
+merge; moving the last owned content deletes the source. Nested `#task` lines
+route to this move.
 
-On a Pomodoro entry line itself the keymap opens a picker: Enter on another
-open Pomodoro keeps the whole-entry move/delete behavior, typing a new
-name renames the entry in place, and `Ctrl+X` on a highlighted open
-current/future Pomodoro merges entries in one undoable edit (a current timed
-entry survives and absorbs the selected future one; names combine
-survivor-first with first-spelling kept; calendar-owned MEET entries cannot
-merge; counts are ignored).
+On an entry line, Enter moves/deletes the whole entry, typing renames it, and
+`Ctrl+X` merges a highlighted open current/future entry in one undo: a timed
+current entry survives, names combine survivor-first (keeping first spelling),
+MEET entries cannot merge, and counts are ignored.
 
-Both pickers keep today's open Pomodoros first and offer recent task types for
-new destinations or renames when the Ledger Tools type catalog is available.
-Recent rows keep catalog spelling; `+` components show their type swatches,
-and typed near-duplicates show a `like NAME` hint. `Ctrl+D` hides a Recent
-suggestion and leaves a reversible hidden row; on a Today row it has no effect.
-A type that today's ledger uses only on a done or cancelled Pomodoro still
-shows as a Recent row; only types of the open Today rows (and, for rename,
-the entry being renamed) are left out.
+Both pickers list today's open Pomodoros first and offer recent catalog types
+for destination names/renames. Catalog spelling and `+`-component swatches are
+kept; near-duplicates show `like NAME`. `Ctrl+D` hides a Recent suggestion in
+a reversible row, but does nothing on Today rows. Types used today only on done
+or cancelled Pomodoros remain Recent; open Today types (and the renamed entry's
+type) are excluded.
 
 When `Ctrl+Shift+M` moves bullets, Enter keeps each moved task's current type
 and merges any missing types into the destination's Pomodoro name. Alt+Enter
@@ -278,92 +260,83 @@ write, and requires explicit confirmation before merging labels.
 
 ## Task splitting
 
-`Ctrl+Shift+T` splits the cursor bullet into its own task; counted and
-visual forms split the touched bullets together. On a task line it opens a
-picker over that task's splittable notes and requirements, drawer-scoped
-from a title: nothing starts marked, `Tab` marks and advances, `Enter`
-splits the marked or highlighted row, `Esc` cancels. Section
-bullets become tasks in the note's `## Tasks` intake. Daily-note splits and
-carries write to the `[root::]` note or the default inbox. Same-note writes
-are one `Ctrl+Z` transaction; cross-note writes persist destination-first
-under guard, and **Undo split** restores the text only while every affected
-note matches, otherwise listing the changed paths. The cursor lands on the
-first new task and `Ctrl+O` returns to the source, or names the path
-otherwise. The gesture never advances the `]s` review walk. Each new task
-links back with a 🪢 **LINKED FROM:** line in the managed-link zone, so a
-fresh split is already tidy-clean.
+`Ctrl+Shift+T` splits the cursor bullet into a task; counted/visual forms split
+all touched bullets. On a task line it opens a title-scoped picker of
+splittable notes and requirements. Nothing starts marked; `Tab` marks and
+advances, `Enter` splits the marked/highlighted row, and `Esc` cancels. Section
+bullets enter `## Tasks`; daily-note splits/carries go to `[root::]` or the
+default inbox. Same-note writes are one `Ctrl+Z`; cross-note writes persist
+destination-first under guard. **Undo split** restores only if every affected
+note still matches, else lists changed paths. The cursor lands on the first
+new task; `Ctrl+O` returns to source or names its path. It never advances `]s`.
+Each new task links back with a managed-zone 🪢 **LINKED FROM:** line.
 
-On a requirement row the chord carries instead: the branch travels with
-depth kept, notes attached, loose notes filed under a created `NOTES`
-drawer, the row keeping a `[>]` stub as the new task links back, reusing a
-trailing anchor. A cursor on a requirement note carries the innermost one;
-counted carries take siblings. Dropped, carried, excluded, and overlapping
-selections refuse with a teaching notice.
+On a requirement row the chord carries its branch, preserving depth and notes;
+loose notes go in a new `NOTES` drawer, the row keeps a `[>]` stub, and the new
+task links back using any trailing anchor. On a requirement note it carries the
+innermost requirement; counts take siblings. Dropped, carried, excluded, or
+overlapping selections refuse with a teaching notice.
 
 ## Task properties, dependencies, and moves
 
 `Ctrl+Shift+P` edits scheduled, dependency, and priority properties. Priority
-levels roll scheduled dates, report the ISO date/span and distance from
-today, and offer date-picker re-roll suggestions. Choosing `scheduled` opens a
-combined Reason/Work summary review; its optional reason becomes a nested
-Schedule Log entry. A blank reason on a task with a log records `🤷 no reason
-given`; without a log, it leaves the task untouched. Priority choices and
-pinned rolls write immediately with deterministic reasons. A strictly future
-`scheduled` date removes live links from today's open Pomodoros.
-`N<Ctrl+Shift+P>` edits the current and next N real tasks; on a dedicated Task
-Link bullet, it edits that linked task in its own note. Counted sessions never
-open the album Schema Card.
+levels roll scheduled dates, show the ISO date/span and distance from today,
+and offer date-picker rerolls. Choosing `scheduled` opens combined Reason/Work
+review; its optional reason becomes a nested Schedule Log entry. A blank reason
+logs `🤷 no reason given` when a task has a log, otherwise leaves it untouched.
+Priority choices and pinned rolls write immediately with deterministic reasons;
+a strictly future date removes live links from today's open Pomodoros.
+`N<Ctrl+Shift+P>` edits the current and next N real tasks (or a Task Link's
+linked task in its own note); counted sessions never open album Schema Card.
 
-Dependency writes use one managed ⛓️ **DEPENDS ON:** first-child line per
-task and one undoable edit. Adding an open prerequisite blocks the dependent,
-raises the target to its lane, and removes the dependent's live Pomodoro links.
-An emptied open entry is deleted; entries with prose children and untouched
-placeholders remain. Removing the last open prerequisite recovers the dependent
-unless a future `scheduled` date remains. `Ctrl+D` on the row deletes the line
-and `[dependsOn::]`, leaves other children untouched, and recovers immediately.
-Hand edits mirror after the cursor leaves the edited line in the same note; a note switch drops the pending pass (reconcile heals) and malformed lines stay unchanged.
-BLOCKED rows show `🔒 waits on N`, `🔒 scheduled YYYY-MM-DD`, or `🔒 blocked`.
-The Depends on value stage searches all open tasks from a task line, the
-Depends-On line, a chip, a Task Link, or the `Edit task dependencies` palette
-command. Blockquoted tasks refuse edits. Answering a landed review row advances
-once to the next remaining item.
+Dependency writes use one undoable managed ⛓️ **DEPENDS ON:** first-child line
+per task. Adding an open prerequisite blocks the dependent, raises the target to
+its lane, and removes the dependent's live Pomodoro links. Empty open entries
+are deleted; prose-child entries and untouched placeholders remain. Removing
+the last open prerequisite recovers the dependent unless future-scheduled.
+`Ctrl+D` on the row deletes the line and `[dependsOn::]`, preserves other
+children, and recovers immediately. Same-note hand edits mirror on cursor leave;
+switching notes drops the pending pass for reconcile to heal, and malformed
+lines stay unchanged. BLOCKED rows show `🔒 waits on N`,
+`🔒 scheduled YYYY-MM-DD`, or `🔒 blocked`. The Depends on stage searches all
+open tasks from task/dependency lines, chips, Task Links, or the `Edit task
+dependencies` command; blockquotes refuse. A landed review answer advances once.
 
-Bare `Ctrl+Shift+M` moves the current task and focuses it in the destination;
-`N<Ctrl+Shift+M>` also moves the next N movable tasks. Moves never advance the
-review walk: the next `]s` / `[s` resumes at the moved row's walk neighbour.
-`Ctrl+O` returns to the post-removal source seam; `Ctrl+I` returns to the first
-moved task without undoing the move. Move and inbox-route destinations include
-only areas and open projects (never albums, records, or `bob vault-sync`
-conflict copies under `_conflicts/`). Open child note also hides `_generated/`
-notes.
+`Ctrl+Shift+M` moves/focuses the current task; `N<Ctrl+Shift+M>` also takes the
+next N movable tasks. Moves do not advance review; `]s` / `[s` resumes at the
+moved row's walk neighbour. `Ctrl+O` returns to the post-removal source seam;
+`Ctrl+I` returns to the first moved task without undoing. Move and inbox-route
+destinations include areas and open projects only (not albums, records, or
+`bob vault-sync` `_conflicts/`); Open child note hides `_generated/` notes.
 
-**Create project note from task** converts an open task in an area or project.
+**Create project note from task** converts an open task in an area/project;
 `Ctrl+Shift+Alt+N` is a custom vault binding. On `^prj` it reverses the
-conversion. Both directions preserve task dates, dependencies, and children;
-promotion offers successors and consumes live Today links. Only selected
-successors are linked and stamped. History and prose links retarget to `^prj`.
-See [Projects](https://bobs-org.github.io/projects/) for conversion details.
+conversion. Both directions preserve dates, dependencies, and children;
+promotion offers successors and consumes live Today links, linking/stamping
+only selected successors. History and prose links retarget to `^prj`. See
+[Projects](https://bobs-org.github.io/projects/).
 
-Bold drawers become matching headings; reversal restores `- **Title**`.
-Plain uppercase children remain ordinary notes or tasks. Managed logs keep
-their order. Lossy moves retain the source with a partial-result notice;
-failed backlink rewrites retain the project note. Generated project listings
-are never copied.
-
-Project schedules propagate to residents; `#prj_is_blocked` follows `^prj`.
-Task Card dependency and schedule changes cascade to sub-projects with
-preimage guards and report Blocked, Ready, and failed counts.
-`dependencies.blocks_lines` controls generated BLOCKS mirrors (default on).
+Bold drawers become matching headings and reverse to `- **Title**`; plain
+uppercase children stay ordinary notes/tasks, managed logs keep order, and
+lossy moves retain the source with a partial-result notice. Failed backlink
+rewrites retain the project note; generated project listings are never copied.
+Project schedules propagate to residents, `#prj_is_blocked` follows `^prj`,
+and Task Card dependency/schedule changes cascade to sub-projects with
+preimage guards and Blocked/Ready/failed counts. `dependencies.blocks_lines`
+(default on) controls generated BLOCKS mirrors.
 
 `Alt+N` commits Ready to Next or releases Next/In Progress to Ready on the
-current task and next N (or the linked task and N siblings), unlinking released
-tasks from today and reporting NEXT/PENDING counts and cap advice. Inbox tasks
-ask for a destination first; a Pending release keeps its Work Log prompt first.
-The picker offers `commit to Next` / `release to Ready` (`N tasks · then …`
-for counted runs). `↵` applies and moves, `⇧↵` applies in place, `Esc` cancels
-without writing.
+current plus N tasks (or linked task plus N siblings), unlinks released tasks
+from Today, and reports NEXT/PENDING counts and cap advice. Inbox tasks ask for
+a destination first; Pending release keeps its Work Log prompt first. The
+picker offers `commit to Next` / `release to Ready` (`N tasks · then …` when
+counted); `↵` applies and moves, `⇧↵` applies in place, and `Esc` cancels.
 
-Log Recall (`USED BEFORE`, see the [contract](https://bobs-org.github.io/log-recall/)) covers Work prompts (schedule-review via `Tab`, schedule-work-log, lane-release, cancel), Rotten keeps (single, decay-card Stay, batch), and the successor inline cancel field; `Ctrl+N` / `Ctrl+P` fill a history row and `Esc` restores the typed draft first.
+Log Recall (`USED BEFORE`, see the
+[contract](https://bobs-org.github.io/log-recall/)) covers Work prompts
+(schedule-review via `Tab`, schedule-work-log, lane-release, cancel), Rotten
+keeps (single, decay-card Stay, batch), and the successor inline cancel field.
+`Ctrl+N` / `Ctrl+P` fill a history row; `Esc` first restores the typed draft.
 
 ## Wikilink completion in prompts
 

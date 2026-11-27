@@ -1,14 +1,7 @@
-// Test-facing exports for the gated property-card cabinets kit.
+// Test-facing exports for the property-card cabinets kit.
 try {
   if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
     module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
-      PROPERTY_CARD_CABINETS_PREVIEW_KEY,
-      propertyCardCabinetsFromData,
-      propertyCardCabinetsRemember,
-      propertyCardCabinetsLoad,
-      propertyCardCabinetsGateLive,
-      propertyCardCabinetsUnload,
-      propertyCardCabinetsSetGateForTests,
       PROPERTY_CARD_CABINET_KINDS,
       PROPERTY_CARD_CABINET_FOLD_KINDS,
       propertyCardCabinetKindForFold,

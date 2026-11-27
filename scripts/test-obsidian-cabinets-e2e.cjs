@@ -47,13 +47,14 @@ test("fixtures cover every property-card species and high-content catalogs", () 
 
 test("screenshot inventory covers the full theme, width, mode, and state matrix", () => {
   const needs = lib.screenshotNeeds();
-  assert.equal(needs.length, 58);
+  assert.equal(needs.length, 67);
   assert.equal(new Set(needs).size, needs.length);
   for (const name of [
     "area-live-light-narrow", "area-reading-dark-wide", "area-live-dark-narrow-armed",
     "area-reading-light-wide-armed", "album-live-dark-wide", "bank-reading-light-narrow",
     "prose-live-dark-narrow", "record-reading-dark-wide", "footer-live-light-wide-armed",
     "area-live-light-wide-reduced-motion", "area-live-light-wide-forced-colors",
+    "ref-live-light-wide", "ref-reading-dark-narrow", "area-source-light-wide",
   ]) assert.ok(needs.includes(name), name);
 });
 
@@ -61,13 +62,14 @@ test("browser probe is valid and runner covers acceptance-critical interactions"
   assert.doesNotThrow(() => new Function("return " + runner.PROBE_SOURCE));
   const source = fs.readFileSync(path.join(__dirname, "obsidian-cabinets-e2e.cjs"), "utf8");
   for (const check of [
-    "gate-closed-inline-baseline", "area-content-parity-gate-closed", "palette-arms-pick",
+    "area-content-parity-stored-regions", "palette-arms-pick",
     "fast-underscore-one-no-overlay-flash", "hidden-status-bar-uses-fallback-strip",
     "reading-hides-managed-headings-and-callouts", "embed-shows-stored-catalog",
     "hover-shows-stored-catalog", "print-media-reveals-stored-catalog",
     "closed-group-catalog-absorbed-with-kept-heading", "live-preview-hides-managed-headings-and-callouts",
     "live-preview-absorption-survives-cabinet-repaint", "cabinet-heads-left-aligned-single-line",
-    "perf-106-record-album-within-budget", "perf-64-line-projects-host-within-budget",
+    "cabinet-paint-106-record-album-completes", "cabinet-paint-64-line-projects-host-completes",
+    "area-reading-ready-after-plugin-reload", "area-reading-absorbed-after-plugin-reload", "source-shows-stored-section",
     "forced-mount-error-reveals-native-section", "plugin-disable-restores-stored-section",
     "vim-motions-and-arrows-no-invisible-cursor", "cursor-motions-no-console-errors",
     "no-console-errors", "areas-cabinet-single-title-row", "passive-actions-zero-bob-spawns",
@@ -77,9 +79,13 @@ test("browser probe is valid and runner covers acceptance-critical interactions"
     "pick-overlay-whole-in-window", "armed footer overlay is not whole inside the window",
   ]) assert.ok(source.includes(check), `runner includes ${check}`);
   assert.match(source, /runReadingReloadLoop/);
-  assert.match(source, /cabinetsPreview: true/);
-  assert.match(source, /cardPreviewKinds: \["notebook", "prose"\]/);
-  assert.match(source, /refCardPreview: true/);
+  // Gate-free: the runner seeds no preview keys and never closes a gate.
+  for (const retired of ["cabinetsPreview", "cardPreviewKinds", "refCardPreview", "gate-closed-inline-baseline",
+    "perf-106-record-album-within-budget", "area-content-parity-gate-closed"]) {
+    assert.ok(!source.includes(retired), `runner no longer carries ${retired}`);
+  }
+  assert.match(source, /mode: "gate-free"/);
+  assert.match(source, /lib\.storedCatalogRows\(areaSource, kind\)/);
   assert.match(source, /Unexpected bob spawn in cabinet acceptance/);
   assert.match(source, /Runtime\.consoleAPICalled/);
   assert.match(source, /row\.type !== "error"/);

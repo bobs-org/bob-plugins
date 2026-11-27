@@ -723,6 +723,7 @@ test("record collapse Map accepts booleans and registers the record fold", () =>
     disabled: false,
     getAttribute(name) {
       return name === "data-card-fold" ? "record"
+        : name === "data-card-fold-role" ? "details"
         : name === "data-card-fold-source" ? "eat/smashburger.md"
         : name === "aria-expanded" ? "true"
         : null;

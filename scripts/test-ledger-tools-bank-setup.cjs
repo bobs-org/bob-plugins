@@ -676,7 +676,8 @@ test("valid header paints collapsed and expanded states with jumps and accessibl
   const collapsedToggle = collapsed.el.querySelector(".bob-bank-setup-toggle");
   assert.equal(collapsedToggle.getAttribute("aria-expanded"), "false");
   assert.equal(collapsedToggle.getAttribute("data-card-fold"), "bank");
-  assert.equal(collapsedToggle.getAttribute("aria-keyshortcuts"), "_");
+  assert.equal(collapsedToggle.getAttribute("data-card-fold-role"), "cabinet");
+  assert.equal(collapsedToggle.getAttribute("aria-keyshortcuts"), null, "no Vim shortcut while keys are not live");
   assert.equal(collapsedToggle.getAttribute("title"), "Toggle bank setup (_)");
   assert.equal(collapsedToggle.getAttribute("data-bank-setup-focus"), "toggle");
   const bodyId = collapsedToggle.getAttribute("aria-controls");
@@ -686,7 +687,8 @@ test("valid header paints collapsed and expanded states with jumps and accessibl
   assert.equal(collapsed.calls.yaml, 0);
   const expanded = paintModel(decodedReport(), { expanded: true });
   assert.equal(expanded.el.querySelector(".bob-bank-setup-toggle").getAttribute("aria-expanded"), "true");
-  assert.match(expanded.el.querySelector(".bob-bank-setup-toggle").textContent, /▾ Setup · WF Checking/);
+  assert.match(expanded.el.querySelector(".bob-bank-setup-toggle").textContent, /▸ Setup · WF Checking/,
+    "the cabinet chevron rotates in CSS; its glyph stays");
   assert.ok(expanded.el.querySelector(".bob-bank-category-tile"));
   assert.ok(expanded.el.querySelector(".bob-bank-setup-tiles"));
   // Header tiles never match the card's click selector.
@@ -748,7 +750,8 @@ function assertBankIdentity(el, label) {
   const fold = el.querySelector(".bob-bank-setup-toggle");
   if (fold) {
     assert.equal(fold.getAttribute("data-card-fold"), "bank", `${label}: fold kind`);
-    assert.equal(fold.getAttribute("aria-keyshortcuts"), "_", `${label}: key hint`);
+    assert.equal(fold.getAttribute("data-card-fold-role"), "cabinet", `${label}: Setup is a cabinet`);
+    assert.equal(fold.getAttribute("aria-keyshortcuts"), null, `${label}: no key hint while keys are not live`);
     assert.equal(fold.getAttribute("title"), "Toggle bank setup (_)", `${label}: tooltip`);
     assert.equal(fold.getAttribute("data-bank-setup-focus"), "toggle", `${label}: focus key`);
     assert.match(fold.textContent, /^[▾▸] Setup · /, `${label}: fold grammar`);
@@ -790,7 +793,7 @@ test("invalid header stays toggleable with a live-region banner and a last-good 
   const { el } = paintModel(report, { lastGoodLabel: "2:14 PM" });
   const toggle = el.querySelector(".bob-bank-setup-toggle");
   assert.equal(toggle.getAttribute("aria-expanded"), "true");
-  assert.match(toggle.textContent, /✗ 1 problem/);
+  assert.match(toggle.closest(".bob-cabinet-head").querySelector(".bob-cabinet-attention").textContent, /✗\s?1 problem/);
   const banner = el.querySelector(".bob-bank-setup-banner");
   assert.equal(banner.getAttribute("role"), "alert");
   assert.match(banner.textContent, /1 problem in bank:/);
@@ -800,7 +803,8 @@ test("invalid header stays toggleable with a live-region banner and a last-good 
   const collapsed = paintModel(report, { expanded: false, lastGoodLabel: "2:14 PM" });
   assert.equal(collapsed.el.querySelector(".bob-bank-setup-toggle").getAttribute("aria-expanded"), "false");
   assert.ok(collapsed.el.querySelector(".bob-bank-setup-banner") === null);
-  assert.ok(collapsed.el.querySelector(".bob-bank-setup-toggle").textContent.includes("1 problem"));
+  assert.ok(collapsed.el.querySelector(".bob-bank-setup-toggle").closest(".bob-cabinet-head").textContent.includes("1 problem"),
+    "the closed Setup header keeps its attention chip");
 });
 
 test("missing, unsupported, mobile, and failed states paint their lines", () => {
@@ -970,10 +974,12 @@ test("setup header rests collapsed when healthy and toggles per hub in view stat
   assert.equal(toggle.getAttribute("data-card-fold"), "bank");
   const body = preview.querySelector(".bob-bank-setup-body");
   assert.ok(body);
-  assert.equal(body.getAttribute("hidden"), "");
   assert.equal(body.querySelector(".bob-bank-category-tile"), null);
+  // The Setup cabinet wraps the body shell in its drawer, which owns the id.
   const bodyId = toggle.getAttribute("aria-controls");
-  assert.equal(preview.querySelector(`[id="${bodyId}"]`), body);
+  const drawer = preview.querySelector(`[id="${bodyId}"]`);
+  assert.equal(drawer.getAttribute("data-open"), "false");
+  assert.equal(body.closest(".bob-cabinet-drawer"), drawer);
   plugin.bankSetupToggleExpanded("bank.md");
   plugin.paintBankSetupReading(el, "bank.md");
   const expanded = preview.querySelector(".bob-bank-setup-toggle");
@@ -984,7 +990,7 @@ test("setup header rests collapsed when healthy and toggles per hub in view stat
   plugin.paintBankSetupReading(el, "bank.md");
   const collapsed = preview.querySelector(".bob-bank-setup-toggle");
   assert.equal(collapsed.getAttribute("aria-expanded"), "false");
-  assert.equal(preview.querySelector(".bob-bank-setup-body").getAttribute("hidden"), "");
+  assert.equal(preview.querySelector(".bob-bank-setup-body").closest(".bob-cabinet-drawer").getAttribute("data-open"), "false");
   plugin.teardownBankSetup();
 });
 

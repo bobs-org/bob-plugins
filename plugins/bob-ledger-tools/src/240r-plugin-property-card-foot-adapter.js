@@ -336,8 +336,7 @@ function propertyCardFootAdapterAppend(card, path, doc, spec, handlers, pendingS
       try { doc.adoptNode?.(built.element); } catch (_) {}
     }
     card.appendChild(built.element);
-    if (propertyCardCabinetsGateLive?.() === true
-      && typeof propertyCardCabinetsAssemble === "function") {
+    if (typeof propertyCardCabinetsAssemble === "function") {
       const ctx = context && typeof context === "object" ? context : {};
       const stack = propertyCardCabinetsAssemble(card, key, built.element, {
         ...ctx,

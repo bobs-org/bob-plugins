@@ -130,9 +130,7 @@ class BobLedgerToolsAlbumHeaderMixin {
     return propertyCardFoldResolve({
       choice,
       problems,
-      foldDefault: propertyCardCabinetsGateLive?.() === true
-        ? propertyCardCabinetDefaultOpen("schema", { problems })
-        : propertyCardSpecies("album")?.foldDefault,
+      foldDefault: propertyCardCabinetDefaultOpen("schema", { problems }),
     });
   }
 

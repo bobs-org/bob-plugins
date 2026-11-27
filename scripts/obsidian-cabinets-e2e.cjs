@@ -18,7 +18,6 @@ const repoRoot = path.resolve(__dirname, "..");
 const ELECTRON_FALLBACK = "/snap/obsidian/current/app/obsidian";
 const PLUGIN_ID = "bob-ledger-tools";
 const PLUGIN_IDS = [PLUGIN_ID, "bob-navigation-hotkeys"];
-const GATE_DATA = { cabinetsPreview: true, cardPreviewKinds: ["notebook", "prose"], refCardPreview: true };
 const OPEN_TIMEOUT = 30_000;
 const { sleep, waitFor } = shared;
 
@@ -310,7 +309,8 @@ function installVault(vault, profileDir) {
   for (const [notePath, content] of Object.entries(notes)) writeNote(vault, notePath, content);
   const obsidian = path.join(vault, ".obsidian");
   fs.mkdirSync(obsidian, { recursive: true });
-  for (const id of PLUGIN_IDS) copyPlugin(vault, id, id === PLUGIN_ID ? GATE_DATA : null);
+  // Gate-free: cabinets are always on, so no plugin data is seeded.
+  for (const id of PLUGIN_IDS) copyPlugin(vault, id);
   fs.writeFileSync(path.join(obsidian, "community-plugins.json"), JSON.stringify(PLUGIN_IDS, null, 2) + "\n");
   fs.writeFileSync(path.join(obsidian, "core-plugins.json"), JSON.stringify([
     "file-explorer", "global-search", "switcher", "page-preview", "command-palette", "properties", "canvas",
@@ -463,11 +463,10 @@ function emptyOpenCabinets(probe) {
     && String(row.text || "").trim() === "").map((row) => row.kind);
 }
 
-// Perf (records-cabinet budget): open a large catalog host in Reading from a
-// neutral note and time until its rows are painted, recording long tasks.
-// Gate open counts rows in the cabinet body; gate closed counts the inline
-// callout the painter decorates. Returns { elapsed, rows, maxLongTask }.
-async function measureCatalogPaint(client, notePath, kind, expectRows, gateOpen) {
+// Perf: open a large catalog host in Reading from a neutral note and time
+// until its cabinet body has painted every row, recording long tasks.
+// Returns { elapsed, rows, maxLongTask }.
+async function measureCatalogPaint(client, notePath, kind, expectRows) {
   return client.evaluate(`(async () => {
     const state = { mode: "preview", source: false };
     const leaf = app.workspace.getLeaf(false);
@@ -485,13 +484,8 @@ async function measureCatalogPaint(client, notePath, kind, expectRows, gateOpen)
     const rows = () => {
       const root = leaf.view?.previewMode?.containerEl || leaf.view?.containerEl;
       if (!root) return 0;
-      if (${gateOpen ? "true" : "false"}) {
-        const body = root.querySelector(${JSON.stringify(`.bob-property-card-cabinets [data-cabinet-kind="${kind}"] .bob-cabinet-provider-content`)});
-        return body ? body.querySelectorAll("li").length : 0;
-      }
-      const callout = Array.from(root.querySelectorAll(${JSON.stringify(`.callout[data-callout="${kind}"]`)}))
-        .find((node) => !node.closest(".bob-property-card-cabinets") && node.getBoundingClientRect().height > 0);
-      return callout ? callout.querySelectorAll("li").length : 0;
+      const body = root.querySelector(${JSON.stringify(`.bob-property-card-cabinets [data-cabinet-kind="${kind}"] .bob-cabinet-provider-content`)});
+      return body ? body.querySelectorAll("li").length : 0;
     };
     const started = performance.now();
     await leaf.openFile(file, { state });
@@ -506,9 +500,9 @@ async function measureCatalogPaint(client, notePath, kind, expectRows, gateOpen)
   })()`, 45_000);
 }
 
-async function measureCatalogRounds(client, notePath, kind, expectRows, gateOpen, rounds = 3) {
+async function measureCatalogRounds(client, notePath, kind, expectRows, rounds = 3) {
   const samples = [];
-  for (let index = 0; index < rounds; index += 1) samples.push(await measureCatalogPaint(client, notePath, kind, expectRows, gateOpen));
+  for (let index = 0; index < rounds; index += 1) samples.push(await measureCatalogPaint(client, notePath, kind, expectRows));
   const times = samples.map((row) => row.elapsed).filter((value) => typeof value === "number").sort((a, b) => a - b);
   return {
     samples,
@@ -516,14 +510,6 @@ async function measureCatalogRounds(client, notePath, kind, expectRows, gateOpen
     median: times.length ? times[Math.floor(times.length / 2)] : null,
     maxLongTask: Math.max(0, ...samples.map((row) => row.maxLongTask || 0)),
   };
-}
-
-// The records-cabinet budget: cabinet paint at most 2x the inline paint, and
-// no long task over 100 ms that the inline paint does not already have.
-function perfWithinBudget(cabinet, inline) {
-  if (!cabinet?.complete || !inline?.complete || !inline.median) return false;
-  return cabinet.median <= 2 * inline.median
-    && (cabinet.maxLongTask <= 100 || cabinet.maxLongTask <= inline.maxLongTask);
 }
 
 // Evidence for an intermittent Reading miss: what the shared property-card
@@ -696,7 +682,7 @@ async function run(args) {
   const report = {
     startedAt: new Date().toISOString(),
     verdict: "NO-GO",
-    gates: GATE_DATA,
+    mode: "gate-free",
     source: {
       head: require("node:child_process").spawnSync("git", ["-C", repoRoot, "rev-parse", "HEAD"], { encoding: "utf8" }).stdout.trim()
         || process.env.BOB_CABINETS_SOURCE_HEAD || null,
@@ -848,43 +834,25 @@ async function run(args) {
     const projectPanel = probe.panels.find((row) => row.kind === "projects");
     check("project-64-line-summary-and-attention", Boolean(projectPanel && (projectPanel.summary || projectPanel.attention)), projectPanel);
 
-    // Perf, gate open: the 106-record album (Records open by default) and the
-    // 64-row Projects host with its Projects cabinet open.
+    // Perf: the 106-record album (Records open by default) and the 64-row
+    // Projects host with its Projects cabinet open. The cabinet-vs-inline 2x
+    // budget needed the closed gate, so it retired at switch-on; acceptance's
+    // retained GO evidence (bob-cli-qq.8) holds it. Each cabinet body must
+    // still paint every row, and the medians stay in the report.
     await openAndSettleExpectedCard(client, lib.SPECS.find((row) => row.path === lib.PATHS.project), "reading", "perf project warm-up");
     probe = await refreshProbe(client);
     if (probe.panels.find((row) => row.kind === "projects")?.expanded === false) await clickCabinetToggle(client, "projects");
     const perfCabinet = {
-      album: await measureCatalogRounds(client, lib.PATHS.album, "records", 106, true),
-      project: await measureCatalogRounds(client, lib.PATHS.project, "projects", 64, true),
+      album: await measureCatalogRounds(client, lib.PATHS.album, "records", 106),
+      project: await measureCatalogRounds(client, lib.PATHS.project, "projects", 64),
     };
+    report.perf = { cabinet: perfCabinet,
+      budget: "inline comparison retired at switch-on (needed the closed gate); see bob-cli-qq.8 GO evidence" };
+    check("cabinet-paint-106-record-album-completes", perfCabinet.album.complete, perfCabinet.album);
+    check("cabinet-paint-64-line-projects-host-completes", perfCabinet.project.complete, perfCabinet.project);
 
-    // Gate-closed native rendering gives a real same-vault baseline for byte and row parity.
-    const pluginData = path.join(vault, ".obsidian", "plugins", PLUGIN_ID, "data.json");
-    const gateClosed = { cabinetsPreview: false, cardPreviewKinds: [], refCardPreview: false };
+    // A plugin reload brings the area Reading card back (the reading-miss fix).
     await client.evaluate(`app.plugins.disablePlugin(${JSON.stringify(PLUGIN_ID)})`);
-    fs.writeFileSync(pluginData, JSON.stringify(gateClosed, null, 2) + "\n");
-    await client.evaluate(`app.plugins.enablePlugin(${JSON.stringify(PLUGIN_ID)})`);
-    await sleep(1_000);
-    probe = await openAndProbe(client, lib.PATHS.area, "reading");
-    probe = await settleProbe(client, (value) => value?.path === lib.PATHS.area
-      && value?.mode === "reading"
-      && ["areas", "projects", "notebooks", "albums"].every((kind) => {
-        const row = value.callouts?.find((candidate) => candidate.kind === kind);
-        return row?.visible === true && !/refreshing|loading/i.test(row.text || "");
-      }), "gate-closed native catalog body finished refreshing", 12_000);
-    const inlineBaseline = Object.fromEntries(probe.callouts.map((row) => [row.kind, { text: row.text, rows: row.rows, visible: row.visible }]));
-    check("gate-closed-inline-baseline", !probe.stackPresent && ["areas", "projects", "notebooks", "albums"].every((kind) => inlineBaseline[kind]?.visible), inlineBaseline);
-    const perfInline = {
-      album: await measureCatalogRounds(client, lib.PATHS.album, "records", 106, false),
-      project: await measureCatalogRounds(client, lib.PATHS.project, "projects", 64, false),
-    };
-    report.perf = { cabinet: perfCabinet, inline: perfInline, budget: "cabinet median <= 2x inline median; no added long task over 100 ms" };
-    check("perf-106-record-album-within-budget", perfWithinBudget(perfCabinet.album, perfInline.album),
-      { cabinet: perfCabinet.album, inline: perfInline.album });
-    check("perf-64-line-projects-host-within-budget", perfWithinBudget(perfCabinet.project, perfInline.project),
-      { cabinet: perfCabinet.project, inline: perfInline.project });
-    await client.evaluate(`app.plugins.disablePlugin(${JSON.stringify(PLUGIN_ID)})`);
-    fs.writeFileSync(pluginData, JSON.stringify(GATE_DATA, null, 2) + "\n");
     await client.evaluate(`app.plugins.enablePlugin(${JSON.stringify(PLUGIN_ID)})`);
     await sleep(900);
     const areaSpec = lib.SPECS.find((row) => row.path === lib.PATHS.area);
@@ -893,23 +861,35 @@ async function run(args) {
       && JSON.stringify(probe.cabinetKinds || []) === JSON.stringify(areaSpec.cabinets);
     check("area-reading-ready-after-plugin-reload", parityReady,
       parityReady ? probe : { ...probe, readingDiagnostics: await readingHostDiagnostics(client, lib.PATHS.area) });
+    // The remounted card keeps the stored catalogs absorbed in Reading with no
+    // click or reopen: a superseded mount must not strip its successor's tags.
+    const absorbedInReading = (value) => {
+      const managed = (value?.callouts || []).filter((row) => ["areas", "projects", "notebooks", "albums"].includes(row.kind));
+      return value?.path === lib.PATHS.area && value?.mode === "reading"
+        && managed.length >= 4 && managed.every((row) => row.absorbed && !row.visible);
+    };
+    const reloadAbsorption = await settleProbe(client, absorbedInReading, "area Reading absorption after plugin reload", 5_000);
+    check("area-reading-absorbed-after-plugin-reload", absorbedInReading(reloadAbsorption),
+      { callouts: (reloadAbsorption?.callouts || []).map(({ kind, visible, absorbed }) => ({ kind, visible, absorbed })) });
+
+    // Content parity: every cabinet body shows exactly the rows of the stored
+    // region in the note's own bytes (read from disk, parsed independently of
+    // the plugin), with each row's label and description.
+    const areaSource = fs.readFileSync(path.join(vault, lib.PATHS.area), "utf8");
     const contentParity = [];
     for (const kind of ["areas", "projects", "notebooks", "albums"]) {
+      const stored = lib.storedCatalogRows(areaSource, kind);
+      const parityRow = (extra) => ({ kind, storedRows: stored.length, stored, cabinetRows: null,
+        cabinetText: null, drawerExpanded: false, missing: stored, ...extra });
       const panel = probe.panels.find((row) => row.kind === kind);
       if (!panel) {
-        contentParity.push({ kind, baselineRows: inlineBaseline[kind]?.rows,
-          baselineVisible: inlineBaseline[kind]?.visible, cabinetText: null,
-          drawerExpanded: false, textContainsBaseline: false,
-          runnerIssue: "cabinet panel absent from settled Reading view" });
+        contentParity.push(parityRow({ runnerIssue: "cabinet panel absent from settled Reading view" }));
         continue;
       }
       if (!panel.expanded) {
         const clicked = await clickCabinetToggle(client, kind);
         if (!clicked.found) {
-          contentParity.push({ kind, baselineRows: inlineBaseline[kind]?.rows,
-            baselineVisible: inlineBaseline[kind]?.visible, cabinetText: null,
-            drawerExpanded: false, textContainsBaseline: false,
-            runnerIssue: "Could not find a mounted cabinet toggle in the active Markdown view" });
+          contentParity.push(parityRow({ runnerIssue: "Could not find a mounted cabinet toggle in the active Markdown view" }));
           continue;
         }
       }
@@ -925,10 +905,7 @@ async function run(args) {
         }
       }
       if (opened.panels.find((row) => row.kind === kind)?.expanded !== true) {
-        contentParity.push({ kind, baselineRows: inlineBaseline[kind]?.rows,
-          baselineVisible: inlineBaseline[kind]?.visible, cabinetText: null,
-          drawerExpanded: false, textContainsBaseline: false,
-          runnerIssue: "Cabinet toggle did not settle open before parity sampling" });
+        contentParity.push(parityRow({ runnerIssue: "Cabinet toggle did not settle open before parity sampling" }));
         continue;
       }
       const mounted = await settleProbe(client, (value) => {
@@ -937,25 +914,18 @@ async function run(args) {
           && (candidate?.linkCount > 0 || candidate?.text || Boolean(candidate?.error));
       }, `rendered ${kind} cabinet body`, 8_000);
       const bodyPanel = mounted.panels.find((row) => row.kind === kind);
-      const baseline = inlineBaseline[kind];
-      const comparableText = (text) => String(text || "")
-        .replace(new RegExp(kind, "ig"), "")
-        .replace(/Refreshing\s+[^…]+…?/gi, "")
-        .replace(/[＋+]\s*project\b/gi, "")
-        .replace(/\s+/g, " ").trim();
-      const baselineText = comparableText(baseline?.text);
-      const cabinetText = comparableText(bodyPanel?.text);
-      contentParity.push({ kind, baselineRows: baseline?.rows, cabinetRows: bodyPanel?.linkCount,
-        baselineVisible: baseline?.visible, cabinetText: cabinetText || null,
-        baselineText,
+      const cabinetText = String(bodyPanel?.text || "").replace(/\s+/g, " ").trim();
+      contentParity.push(parityRow({
+        cabinetRows: bodyPanel?.linkCount ?? null,
+        cabinetText: cabinetText || null,
         bodyClass: bodyPanel?.bodyClass || "",
         drawerExpanded: bodyPanel?.expanded === true,
-        textContainsBaseline: Boolean(baselineText && cabinetText
-          && cabinetText.includes(baselineText.slice(0, 16))) });
+        missing: stored.filter((row) => !cabinetText.includes(row.label) || (row.text && !cabinetText.includes(row.text))),
+      }));
     }
-    check("area-content-parity-gate-closed", contentParity.length === 4
-      && contentParity.every((row) => row.baselineVisible && row.drawerExpanded
-        && row.baselineRows === row.cabinetRows && row.textContainsBaseline), contentParity);
+    check("area-content-parity-stored-regions", contentParity.length === 4
+      && contentParity.every((row) => row.storedRows > 0 && row.drawerExpanded
+        && row.storedRows === row.cabinetRows && row.missing.length === 0), contentParity);
     report.contentParity = contentParity;
 
     // Full key ownership matrix: zero, one, and multiple extras; digits, aliases, cancel, modifiers, and lifecycle.
@@ -1603,6 +1573,23 @@ async function run(args) {
       shot.visualVerdict = "pending visual review";
       report.screenshots.push(shot);
       await client.call("Emulation.setEmulatedMedia", { media: "screen", features: [] });
+    }
+    // Source mode fails open: the stored catalogs show as the note's bytes,
+    // with no card or cabinet stack.
+    await shared.setViewport(client, 1400);
+    await shared.setTheme(client, "light");
+    await openAndProbe(client, lib.PATHS.area, "source");
+    probe = await refreshProbe(client);
+    {
+      const shot = await shared.capture(client, outDir, "area-source-light-wide", 1400, "light", "source");
+      shot.captureFailures = [];
+      if (probe.mode !== "source") shot.captureFailures.push(`expected Source mode, got ${probe.mode}`);
+      if (probe.stackPresent) shot.captureFailures.push("Source mode mounted a cabinet stack");
+      if (!probe.headings.some((row) => row.text.includes("## Projects") && row.visible)) {
+        shot.captureFailures.push("stored ## Projects section is not visible in Source mode");
+      }
+      shot.visualVerdict = "pending visual review";
+      report.screenshots.push(shot);
     }
     const needs = lib.screenshotNeeds();
     const names = new Set(report.screenshots.map((row) => row.name));

@@ -2,7 +2,7 @@
 // It acts only on a cabinet mounted in the supplied view and never throws.
 function propertyCardCabinetToggle(view, kind) {
   try {
-    if (propertyCardCabinetsGateLive?.() !== true || typeof kind !== "string") return false;
+    if (typeof kind !== "string") return false;
     const collected = propertyCardCabinetsInView(view);
     if (!collected?.path) return false;
     if (kind === "properties") {

@@ -245,14 +245,13 @@ class BobLedgerToolsAlbumCatalogMixin {
       await workspace.openLinkText(path, sourcePath || "", newLeaf, { eState: { line: target.line } });
       const view = workspace.activeLeaf?.view;
       if (view?.file?.path === path) {
-        // records-cards implements this optional hook to expand only this
-        // pane's target group before the native line jump scrolls into view.
-        // Under the open cabinets gate the Records cabinet takes the jump
-        // instead: it opens, expands the group, and scrolls to it.
+        // The Records cabinet takes the jump: it opens, expands the group, and
+        // scrolls to it. When the cabinet declines (no group identity), the
+        // records-cards hook expands only this pane's target group before the
+        // native line jump scrolls into view.
         let cabinetHandled = false;
         try {
-          if (typeof propertyCardCabinetsGateLive === "function" && propertyCardCabinetsGateLive() === true
-            && typeof cabinetRecordsRevealGroup === "function") {
+          if (typeof cabinetRecordsRevealGroup === "function") {
             cabinetHandled = await cabinetRecordsRevealGroup(this, view, path, target) === true;
           }
         } catch (_) {

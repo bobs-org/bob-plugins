@@ -173,9 +173,16 @@ function albumPlugin(options = {}) {
   return { app, caches, doc, files, plugin, writes };
 }
 
-function lastClass(parent) {
-  const kids = parent.children.filter((child) => child.nodeType === 1);
-  return (kids.at(-1)?.getAttribute("class") || "").split(/\s+/)[0];
+// The card ends in its cabinet stack, and the stack ends in the Properties
+// cabinet (the foot), so the foot is always the card's last front.
+function footLast(card) {
+  const kids = card.children.filter((child) => child.nodeType === 1);
+  const stack = kids.at(-1);
+  if ((stack?.getAttribute("class") || "").split(/\s+/)[0] !== "bob-property-card-cabinets") return false;
+  const fronts = stack.children.filter((child) => child.nodeType === 1);
+  const foot = fronts.at(-1);
+  return (foot?.getAttribute("class") || "").split(/\s+/)[0] === "bob-property-card-foot"
+    && foot.getAttribute("data-cabinet-kind") === "properties";
 }
 
 function readingProperties(doc, keys) {
@@ -209,7 +216,7 @@ test("album identity-only cards still carry the foot with a faint missing stamp"
   assert.equal(card.body, null);
   const header = plugin.albumHeaderBuildEl(card, plugin.albumHeaderOptions("eat.md", plugin.albumReportState(), null), doc);
   assert.ok(header.querySelector(FOOT), "identity-only album keeps the foot");
-  assert.equal(lastClass(header), "bob-property-card-foot");
+  assert.equal(footLast(header), true);
   assert.match(header.querySelector(".bob-property-card-foot-stamp").textContent, /no created date/);
   assert.equal(plugin._spawns, 0);
   helpers.propertyCardFootResetAll();
@@ -229,7 +236,7 @@ test("album report cards mark record→schema, keep the foot last, and hide only
   plugin.paintAlbumHeaderReading(preview, "eat.md");
   const header = preview.querySelector(".bob-album-header");
   assert.ok(header.querySelector(FOOT));
-  assert.equal(lastClass(header), "bob-property-card-foot");
+  assert.equal(footLast(header), true);
   const spec = plugin.albumHeaderFootSpec("eat.md", plugin.albumHeaderCardModelFor("eat.md"));
   assert.equal(spec.inventory.rows.find((row) => row.key === "type")?.mark, "tile");
   assert.equal(spec.inventory.rows.find((row) => row.key === "parent")?.mark, "kicker");
@@ -339,7 +346,7 @@ test("day/week/quarter/year identity-only cards still carry a quiet foot", () =>
     assert.equal(model.hasContent, false, `${kind} identity-only`);
     const card = helpers.intentionCardBuildDom(model, plugin, doc);
     assert.ok(card.querySelector(FOOT), `${kind} identity-only keeps the foot`);
-    assert.equal(lastClass(card), "bob-property-card-foot");
+    assert.equal(footLast(card), true);
     assert.equal(card.querySelector(".bob-property-card-foot-stamp"), null, `${kind} missing created stays quiet`);
   }
   const full = helpers.intentionCardModelFor("2026/20261120.md", {
@@ -399,7 +406,7 @@ test("bank setup appends the foot after BuildEl, including collapsed, and hides 
   assert.ok(collapsedBody, "collapsed setup keeps an empty hidden body shell for aria-controls");
   assert.equal(collapsedBody.getAttribute("hidden"), "");
   assert.equal(collapsedBody.children.length, 0);
-  assert.equal(lastClass(header), "bob-property-card-foot");
+  assert.equal(footLast(header), true);
   assert.match(header.querySelector(".bob-property-card-foot-stamp").textContent, /no created date|created/);
   const helper = helpers.bankSetupBuildEl(model, {}, doc);
   assert.equal(helper.querySelector(FOOT), null, "the BuildEl helper stays foot-free");

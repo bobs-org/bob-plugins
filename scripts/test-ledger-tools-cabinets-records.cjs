@@ -169,10 +169,9 @@ function fakePlugin(reportAlbum) {
   return plugin;
 }
 
-function resetGate(live) {
+function resetCabinets() {
   H.propertyCardCabinetProvidersResetForTests();
   H.propertyCardCabinetStateResetForTests();
-  H.propertyCardCabinetsSetGateForTests(live);
 }
 
 function registerRecords(plugin) {
@@ -214,28 +213,31 @@ function makeCallout(doc, rows) {
   return callout;
 }
 
-test("closed gate applies nothing and registers nothing observable", () => {
-  resetGate(false);
+test("records applies only while its provider is registered", () => {
+  resetCabinets();
+  const context = { path: "eat.md", species: "album", source: ALBUM_SOURCE };
+  assert.equal(H.propertyCardCabinetProviderApplies("records", context), null);
   const plugin = fakePlugin();
   registerRecords(plugin);
-  assert.equal(H.propertyCardCabinetProviderApplies("records", { path: "eat.md", species: "album", source: ALBUM_SOURCE }), null);
-  assert.equal(H.propertyCardCabinetsGateLive(), false);
-  resetGate(false);
+  assert.ok(H.propertyCardCabinetProviderApplies("records", context));
+  H.propertyCardCabinetProvidersReleasePlugin(plugin);
+  assert.equal(H.propertyCardCabinetProviderApplies("records", context), null);
+  resetCabinets();
 });
 
 test("applies on album cards reads the stored tally plus grouping", () => {
-  resetGate(true);
+  resetCabinets();
   const plugin = fakePlugin();
   registerRecords(plugin);
   const applied = H.propertyCardCabinetProviderApplies("records", { path: "eat.md", species: "album", source: ALBUM_SOURCE, frontmatter: {} });
   assert.ok(applied);
   assert.equal(applied.summary, "3 restaurants · 🍕 2 italian · by Status");
   assert.equal(applied.attention, undefined);
-  resetGate(false);
+  resetCabinets();
 });
 
 test("applies covers the empty album, rejects other species, missing regions, and damage", () => {
-  resetGate(true);
+  resetCabinets();
   const plugin = fakePlugin();
   registerRecords(plugin);
   const empty = H.propertyCardCabinetProviderApplies("records", { path: "new.md", species: "album", source: EMPTY_SOURCE, frontmatter: {} });
@@ -250,11 +252,11 @@ test("applies covers the empty album, rejects other species, missing regions, an
     frontmatter: {},
   });
   assert.equal(duplicate, null);
-  resetGate(false);
+  resetCabinets();
 });
 
 test("stale reports get an explicit Sync action and zero writes otherwise", () => {
-  resetGate(true);
+  resetCabinets();
   const plugin = fakePlugin();
   plugin.albumReportStale = true;
   let writes = 0;
@@ -267,11 +269,11 @@ test("stale reports get an explicit Sync action and zero writes otherwise", () =
   assert.equal(writes, 0);
   applied.actions[0].onClick();
   assert.equal(writes, 1);
-  resetGate(false);
+  resetCabinets();
 });
 
 test("paint keys track the stored fingerprint and report revision", () => {
-  resetGate(true);
+  resetCabinets();
   const plugin = fakePlugin();
   registerRecords(plugin);
   const context = { path: "eat.md", species: "album", source: ALBUM_SOURCE, frontmatter: {} };
@@ -283,11 +285,11 @@ test("paint keys track the stored fingerprint and report revision", () => {
   const changed = context.source.replace("3 restaurants", "4 restaurants");
   assert.ok(H.propertyCardCabinetProviderApplies("records", { ...context, source: changed }));
   assert.notEqual(H.propertyCardCabinetProviderFor("records").paintKey("eat.md"), first);
-  resetGate(false);
+  resetCabinets();
 });
 
 test("cabinet paint matches the inline painter: folds, groups, ages, teaching line", () => {
-  resetGate(true);
+  resetCabinets();
   const plugin = fakePlugin();
   const folds = plugin.albumRecordsFoldMap({});
   const callout = makeCallout(new Document(), [
@@ -315,11 +317,11 @@ test("cabinet paint matches the inline painter: folds, groups, ages, teaching li
   assert.equal(H.cabinetRecordsPaintCallout(plugin, teaching, "new.md", new Map(), teaching), false);
   assert.match(teaching.textContent, /Add one with/);
   assert.equal(teaching.querySelectorAll(".bob-records-fold").length, 0);
-  resetGate(false);
+  resetCabinets();
 });
 
 test("subscriptions decoration runs in the cabinet body without writes", () => {
-  resetGate(true);
+  resetCabinets();
   const subAlbum = {
     path: "subscriptions.md",
     stem: "subscriptions",
@@ -344,11 +346,11 @@ test("subscriptions decoration runs in the cabinet body without writes", () => {
     callout.querySelectorAll("[data-bob-records-group]").map((node) => node.getAttribute("data-bob-records-group")),
     ["video"],
   );
-  resetGate(false);
+  resetCabinets();
 });
 
 test("stand-down skips cabinet bodies and absorbed callouts only", () => {
-  resetGate(true);
+  resetCabinets();
   const doc = new Document();
   const cabinet = doc.createElement("div");
   cabinet.setAttribute("class", "bob-property-card-cabinets");
@@ -364,11 +366,11 @@ test("stand-down skips cabinet bodies and absorbed callouts only", () => {
   plain.setAttribute("data-callout", "records");
   assert.equal(H.albumRecordsCabinetStandDown(plain, null, "eat.md"), false);
   assert.equal(H.albumRecordsCabinetStandDown(null, null, "eat.md"), false);
-  resetGate(false);
+  resetCabinets();
 });
 
 test("assembled album cards mount Records open beside closed Schema with bottom-up numbers", async () => {
-  resetGate(true);
+  resetCabinets();
   const plugin = fakePlugin();
   registerRecords(plugin);
   const path = "eat.md";
@@ -418,11 +420,11 @@ test("assembled album cards mount Records open beside closed Schema with bottom-
     H.propertyCardCabinetNumbering(["records", "schema"]),
     [{ kind: "records", number: 2 }, { kind: "schema", number: 1 }],
   );
-  resetGate(false);
+  resetCabinets();
 });
 
-test("group jump opens Records, expands the group, and scrolls under the gate", async () => {
-  resetGate(true);
+test("group jump opens Records, expands the group, and scrolls", async () => {
+  resetCabinets();
   const plugin = fakePlugin();
   registerRecords(plugin);
   const doc = new Document();
@@ -451,15 +453,15 @@ test("group jump opens Records, expands the group, and scrolls under the gate", 
   assert.equal(plugin.albumRecordsPendingExpand.identity, "italian");
   assert.equal(group.scrolled, true);
   assert.ok(plugin.refreshed >= 1);
-  resetGate(false);
+  resetCabinets();
 });
 
-test("group jump stays on today's line jump with the gate closed or no target", async () => {
-  resetGate(false);
+test("group jump stays on today's line jump with no target, path, or view", async () => {
+  resetCabinets();
   const plugin = fakePlugin();
   registerRecords(plugin);
-  assert.equal(await H.cabinetRecordsRevealGroup(plugin, {}, "eat.md", { value: "italian" }), false);
-  resetGate(true);
   assert.equal(await H.cabinetRecordsRevealGroup(plugin, {}, "eat.md", {}), false);
-  resetGate(false);
+  assert.equal(await H.cabinetRecordsRevealGroup(plugin, {}, "", { value: "italian" }), false);
+  assert.equal(await H.cabinetRecordsRevealGroup(plugin, null, "eat.md", { value: "italian" }), false);
+  resetCabinets();
 });

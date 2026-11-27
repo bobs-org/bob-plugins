@@ -203,7 +203,6 @@ function cabinetRecordsSummaryFor(source, album, plugin) {
 // applies. Synchronous over confirmed source and cached reports only.
 function cabinetRecordsAppliesFor(plugin, context = {}) {
   try {
-    if (typeof propertyCardCabinetsGateLive === "function" && propertyCardCabinetsGateLive() !== true) return null;
     const path = typeof context.path === "string" ? context.path : "";
     if (!path) return null;
     if (String(context.species || "") !== "album") return null;
@@ -685,14 +684,13 @@ function cabinetRecordsReveal(plugin, view, path) {
   }
 }
 
-// Group-jump retarget (called from `apiAlbumOpenGroup` under the open gate):
+// Group-jump retarget (called from `apiAlbumOpenGroup`):
 // open the Records cabinet, expand the group through the existing pending
 // path, and scroll the group into view. Returns true when the cabinet took
 // the jump; the caller keeps today's line jump otherwise. Never throws.
 async function cabinetRecordsRevealGroup(plugin, view, path, target = {}) {
   try {
     if (!plugin || !view || typeof path !== "string" || !path) return false;
-    if (typeof propertyCardCabinetsGateLive === "function" && propertyCardCabinetsGateLive() !== true) return false;
     const identity = target.value || target.label;
     if (!identity) return false;
     try {

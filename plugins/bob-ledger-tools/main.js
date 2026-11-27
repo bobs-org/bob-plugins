@@ -41130,9 +41130,6 @@ function freshnessMemoReviewChanged(
 // ---- src/170-plugin-lifecycle.js ----
 class BobLedgerToolsPlugin extends Plugin {
   onload() {
-    // Start the cabinet-owned plugin-data read before any property-card host
-    // registers. The module gate stays closed until the data resolves.
-    this.propertyCardCabinetsReady = propertyCardCabinetsLoad(this);
     this.taskSettleInstallPendingLifecycle();
     this.initializeRelationIndex();
     this.vimMappingsRegistered = false;
@@ -41888,7 +41885,6 @@ class BobLedgerToolsPlugin extends Plugin {
   }
 
   onunload() {
-    propertyCardCabinetsUnload(this);
     propertyCardCabinetProvidersReleasePlugin(this);
     propertyCardCabinetStateReleasePlugin(this);
     this.taskSettleDisposePendingLifecycle();
@@ -67090,7 +67086,6 @@ function propertyCardCabinetPaintRestKeys(stack, numbering, keyLive) {
   if (!stack) return false;
   try {
     const numbers = new Map((Array.isArray(numbering) ? numbering : []).map((row) => [row?.kind, row?.number]));
-    console.log("DEBUG REST", numbering, [...numbers], keyLive);
     for (const panel of Array.from(stack.querySelectorAll?.("[data-cabinet-kind]") || [])) {
       const kind = panel.getAttribute?.("data-cabinet-kind") || "";
       const keycap = panel.querySelector?.("[data-cabinet-keycap]");
@@ -67509,7 +67504,7 @@ function propertyCardCabinetBuildProviderPanel(doc, path, species, kind, provide
 
 function propertyCardCabinetsAssemble(parent, pathValue, footEl, context = {}) {
   try {
-    if (propertyCardCabinetsGateLive?.() !== true || !parent || !footEl) return null;
+    if (!parent || !footEl) return null;
     const path = propertyCardCabinetPath(pathValue);
     if (!path) return null;
     const card = propertyCardCabinetFindCardRoot(parent);
@@ -73041,7 +73036,7 @@ class BobLedgerToolsProjectsCatalogMixin {
     }
     const widget = { el, path: ctx.sourcePath, folds, allowAnchor, sectionText: section?.text };
     this.projectsCatalogReading.add(widget);
-    // Gate-open perf: skip the synchronous inline paint when a cabinet will
+    // Cabinet perf: skip the synchronous inline paint when a cabinet will
     // own this catalog. The fallback repaints the native callout only when no
     // cabinet absorption covers it, so fail-open still shows today's paint.
     if (typeof propertyCardCabinetDeferInlinePaint === "function"
@@ -75748,6 +75743,7 @@ function propertyCardCabinetHostMountClaim(kind, plugin, context = {}) {
     if (!plan || plan.damage || plan.fingerprint !== applied.plan.fingerprint) return null;
     let releaseAbsorption = null;
     let tagged = [];
+    let reading = false;
     if (view?.state?.doc && typeof view.dispatch === "function") {
       releaseAbsorption = propertyCardCabinetAbsorbInEditor(view, {
         path, kind, fingerprint: plan.fingerprint,
@@ -75757,6 +75753,7 @@ function propertyCardCabinetHostMountClaim(kind, plugin, context = {}) {
       const scope = readingScope || view?.containerEl || view?.contentEl || view?.dom || null;
       tagged = propertyCardCabinetAbsorbPaintReading(scope, plan, true);
       if (!tagged.length) return null;
+      reading = true;
       releaseAbsorption = () => propertyCardCabinetAbsorbUntagReading(tagged);
     }
     let generation = releaseAbsorption.generation;
@@ -75771,8 +75768,23 @@ function propertyCardCabinetHostMountClaim(kind, plugin, context = {}) {
     });
     return () => {
       try { releaseClaim(); } catch (_) {}
-      try { releaseAbsorption(); } catch (_) {}
-      try { if (tagged.length) propertyCardCabinetAbsorbUntagReading(tagged); } catch (_) {}
+      // A replacement mount for the same view, note, and kind tags the same
+      // rendered Reading nodes before the mount registry releases this
+      // superseded one (240wl, 240wb). Its tags belong to the live claim, so a
+      // superseded Reading release leaves them in place.
+      let superseded = false;
+      if (reading) {
+        try {
+          const live = propertyCardCatalogClaimEntry(view, path, kind);
+          superseded = Boolean(live && !live.released);
+        } catch (_) {
+          superseded = false;
+        }
+      }
+      if (!superseded) {
+        try { releaseAbsorption(); } catch (_) {}
+        try { if (tagged.length) propertyCardCabinetAbsorbUntagReading(tagged); } catch (_) {}
+      }
       tagged = [];
     };
   } catch (_) {
@@ -95622,108 +95634,14 @@ function propertyCardFootRenderDrawer(doc, drawerBody, spec) {
   }
 }
 
-// The foot row plus its drawer shell. The drawer body is built only when
-// open; closed drawers keep an empty shell for aria-controls.
+// The foot is the card's Properties cabinet: one cabinet header over a drawer
+// shell. The drawer body is built only when open; closed drawers keep an empty
+// shell for aria-controls.
 function propertyCardFootBuildEl(doc, spec = {}) {
   try {
     if (!propertyCardKitDocOk(doc)) return null;
     const options = spec && typeof spec === "object" ? spec : {};
-    if (propertyCardCabinetsGateLive?.() === true
-      && typeof propertyCardFootBuildCabinetEl === "function") {
-      return propertyCardFootBuildCabinetEl(doc, options);
-    }
-    const handlers = options.handlers || {};
-    const inventory = options.inventory && typeof options.inventory === "object" ? options.inventory : null;
-    const stamp = options.stamp && typeof options.stamp === "object" ? options.stamp : null;
-    const disclosureId = propertyCardFootText(options.disclosureId).trim()
-      || `bob-property-foot-${propertyCardFootText(options.path).trim() || "note"}`;
-    const drawerId = `${disclosureId}-drawer`;
-    const count = inventory && Number.isInteger(inventory.count) ? inventory.count : 0;
-    const open = options.open === true;
-
-    const foot = propertyCardKitEl(doc, "div", PROPERTY_CARD_FOOT_CLASS);
-    foot.setAttribute("data-property-foot", "true");
-    if (options.path) foot.setAttribute("data-foot-source", propertyCardFootText(options.path));
-
-    const disclosure = doc.createElement("button");
-    disclosure.setAttribute("type", "button");
-    disclosure.setAttribute("class", "bob-property-card-foot-disclosure");
-    disclosure.setAttribute("aria-expanded", open ? "true" : "false");
-    disclosure.setAttribute("aria-controls", drawerId);
-    disclosure.setAttribute("title", "Toggle properties (-)");
-    disclosure.setAttribute("aria-label", `Toggle properties, ${count} ${count === 1 ? "property" : "properties"}`);
-    disclosure.setAttribute("data-foot-focus", "foot");
-    if (options.keyLive === true) disclosure.setAttribute("aria-keyshortcuts", "-");
-    const chevron = propertyCardKitSpan(doc, "bob-property-card-foot-chevron", "▸");
-    chevron.setAttribute("aria-hidden", "true");
-    disclosure.appendChild(chevron);
-    propertyCardKitAppendText(doc, disclosure, ` Properties · ${count}`);
-    if (typeof propertyCardFoldAddKeycap === "function") {
-      propertyCardFoldAddKeycap(disclosure, doc, options.keyLive === true, "-");
-    }
-    disclosure.addEventListener?.("click", (event) => {
-      try { event.preventDefault?.(); } catch (_) {}
-      let next = !open;
-      if (typeof handlers.onToggle === "function") {
-        try {
-          const decided = handlers.onToggle(options.path, next);
-          if (typeof decided === "boolean") next = decided;
-        } catch (_) {}
-      }
-      if (next) propertyCardFootReveal(foot);
-    });
-    foot.appendChild(disclosure);
-
-    const lint = propertyCardFootLint({
-      inventory,
-      stamp,
-      contractIssues: Array.isArray(options.contractIssues) ? options.contractIssues : [],
-      firstSetting: typeof options.firstSetting === "string" ? options.firstSetting : "",
-    });
-    if (lint.count > 0) {
-      // Feature-detected =+ jump: only when the caller carries a first
-      // setting and an opener. Otherwise the chip stays inert text and
-      // never opens the drawer by itself.
-      const opener = lint.firstSetting && typeof handlers?.onOpenSetting === "function"
-        ? handlers.onOpenSetting
-        : null;
-      const chip = opener
-        ? propertyCardKitEl(doc, "button", "bob-property-card-foot-lint-chip")
-        : propertyCardKitSpan(doc, "bob-property-card-foot-lint-chip", `⚠ ${lint.count}`);
-      if (opener) {
-        chip.setAttribute("type", "button");
-        propertyCardKitAppendText(doc, chip, `⚠ ${lint.count}`);
-        chip.setAttribute("aria-label", `${lint.tooltip} — open Settings`);
-        chip.addEventListener?.("click", (event) => {
-          try { event?.preventDefault?.(); } catch (_) {}
-          try { opener(lint.firstSetting); } catch (_) {}
-        });
-      } else {
-        chip.setAttribute("role", "status");
-      }
-      chip.setAttribute("title", lint.tooltip);
-      if (!chip.getAttribute("aria-label")) chip.setAttribute("aria-label", lint.tooltip);
-      foot.appendChild(chip);
-    }
-
-    if (stamp && stamp.text) {
-      const stampNode = propertyCardKitSpan(doc, stamp.state === "invalid"
-        ? "bob-property-card-foot-stamp is-invalid"
-        : "bob-property-card-foot-stamp", stamp.text);
-      if (stamp.tooltip) stampNode.setAttribute("title", stamp.tooltip);
-      foot.appendChild(stampNode);
-    }
-
-    const drawer = propertyCardKitEl(doc, "div", PROPERTY_CARD_FOOT_DRAWER_CLASS);
-    drawer.setAttribute("id", drawerId);
-    drawer.setAttribute("data-open", open ? "true" : "false");
-    if (open) {
-      const body = propertyCardKitEl(doc, "div", "bob-property-card-foot-drawer-body");
-      propertyCardFootRenderDrawer(doc, body, { ...options, handlers });
-      drawer.appendChild(body);
-    }
-    foot.appendChild(drawer);
-    return { element: foot, disclosure, drawer };
+    return propertyCardFootBuildCabinetEl(doc, options);
   } catch (_) {
     return null;
   }
@@ -97423,8 +97341,7 @@ function propertyCardFootAdapterAppend(card, path, doc, spec, handlers, pendingS
       try { doc.adoptNode?.(built.element); } catch (_) {}
     }
     card.appendChild(built.element);
-    if (propertyCardCabinetsGateLive?.() === true
-      && typeof propertyCardCabinetsAssemble === "function") {
+    if (typeof propertyCardCabinetsAssemble === "function") {
       const ctx = context && typeof context === "object" ? context : {};
       const stack = propertyCardCabinetsAssemble(card, key, built.element, {
         ...ctx,
@@ -97591,11 +97508,10 @@ function propertyCardFoldTarget(view) {
       const source = propertyCardFoldPath(node.getAttribute?.("data-card-fold-source") || "");
       const expanded = node.getAttribute?.("aria-expanded");
       if (!kind || !propertyCardFoldKinds.has(kind) || source !== path) continue;
-      // With cabinets live, `_` owns only the compact, card-details control.
-      // Cabinet disclosures are routed by semantic kind through the cabinet
-      // router, never by whichever header happens to appear first in the DOM.
-      if (propertyCardCabinetsGateLive?.() === true
-        && node.getAttribute?.("data-card-fold-role") !== "details") continue;
+      // `_` owns only the compact, card-details control. Cabinet disclosures
+      // are routed by semantic kind through the cabinet router, never by
+      // whichever header happens to appear first in the DOM.
+      if (node.getAttribute?.("data-card-fold-role") !== "details") continue;
       if (expanded !== "true" && expanded !== "false") continue;
       if (node.disabled === true || node.getAttribute?.("aria-disabled") === "true") continue;
       if (!propertyCardFoldVisible(node)) continue;
@@ -97701,11 +97617,7 @@ function propertyCardDecorateFoldControl(button, spec = {}) {
     button.setAttribute("type", "button");
     button.setAttribute("data-card-fold", kind);
     button.setAttribute("data-card-fold-source", path);
-    if (propertyCardCabinetsGateLive?.() === true) {
-      button.setAttribute("data-card-fold-role", spec.role || (spec.compact === true ? "details" : "cabinet"));
-    } else {
-      button.removeAttribute?.("data-card-fold-role");
-    }
+    button.setAttribute("data-card-fold-role", spec.role || (spec.compact === true ? "details" : "cabinet"));
     button.setAttribute("aria-expanded", spec.open === true ? "true" : "false");
     button.setAttribute("aria-controls", spec.bodyId || propertyCardFoldNextId());
     button.setAttribute("aria-keyshortcuts", "_");
@@ -97729,8 +97641,7 @@ function propertyCardFoldAppendNode(button, doc, node, separator) {
 function propertyCardBuildFoldRow(doc, spec = {}) {
   const path = propertyCardFoldPath(spec.path);
   const bodyId = spec.bodyId || propertyCardFoldNextId();
-  if (propertyCardCabinetsGateLive?.() === true
-    && typeof propertyCardCabinetBuildHead === "function") {
+  if (typeof propertyCardCabinetBuildHead === "function") {
     const kind = propertyCardCabinetKindForFold(spec.kind);
     if (kind) {
       const head = propertyCardCabinetBuildHead(doc, {
@@ -98132,101 +98043,6 @@ function propertyCardFloorRelease(card) {
   } catch (_) {
     return null;
   }
-}
-// ---- src/240w-plugin-cabinet-gate.js ----
-// Cabinet-owned preview switch. The absent setting keeps every existing card
-// byte-identical until the cabinets go-live phase explicitly opens the gate.
-// The gate reads only bob-ledger-tools plugin data and never inspects DOM.
-const PROPERTY_CARD_CABINETS_PREVIEW_KEY = "cabinetsPreview";
-let propertyCardCabinetsLive = false;
-let propertyCardCabinetsOwner = null;
-
-function propertyCardCabinetsFromData(data) {
-  try {
-    if (!data || typeof data !== "object" || Array.isArray(data)) return false;
-    return data[PROPERTY_CARD_CABINETS_PREVIEW_KEY] === true;
-  } catch (_) {
-    return false;
-  }
-}
-
-function propertyCardCabinetsRemember(plugin, data) {
-  const live = propertyCardCabinetsFromData(data);
-  propertyCardCabinetsLive = live;
-  propertyCardCabinetsOwner = plugin && typeof plugin === "object" ? plugin : null;
-  try {
-    if (plugin && typeof plugin === "object") {
-      plugin.propertyCardCabinetsLive = live;
-      plugin.propertyCardCabinetsLoaded = true;
-    }
-  } catch (_) {}
-  return live;
-}
-
-async function propertyCardCabinetsLoad(plugin) {
-  if (!plugin || typeof plugin !== "object") return false;
-  try {
-    if (plugin.propertyCardCabinetsLoaded === true) {
-      propertyCardCabinetsLive = plugin.propertyCardCabinetsLive === true;
-      return propertyCardCabinetsLive;
-    }
-    if (plugin.propertyCardCabinetsLoadPromise) return await plugin.propertyCardCabinetsLoadPromise;
-  } catch (_) {
-    return false;
-  }
-  // A newly loaded instance must never inherit the previous instance's gate
-  // while its own plugin data is still resolving.
-  propertyCardCabinetsLive = false;
-  propertyCardCabinetsOwner = plugin;
-  try { plugin.propertyCardCabinetsLive = false; } catch (_) {}
-  const load = (async () => {
-    let stored = null;
-    try {
-      if (plugin.ledgerToolsPluginDataLoaded === true
-        && plugin.ledgerToolsPluginData && typeof plugin.ledgerToolsPluginData === "object") {
-        stored = plugin.ledgerToolsPluginData;
-      } else if (typeof plugin.loadLedgerToolsPluginData === "function") {
-        stored = await plugin.loadLedgerToolsPluginData();
-      } else if (typeof plugin.loadData === "function") {
-        stored = await plugin.loadData();
-      }
-    } catch (_) {
-      stored = null;
-    }
-    return propertyCardCabinetsRemember(plugin, stored);
-  })();
-  try { plugin.propertyCardCabinetsLoadPromise = load; } catch (_) {}
-  try {
-    return await load;
-  } catch (_) {
-    return propertyCardCabinetsRemember(plugin, null);
-  } finally {
-    try {
-      if (plugin.propertyCardCabinetsLoadPromise === load) plugin.propertyCardCabinetsLoadPromise = null;
-    } catch (_) {}
-  }
-}
-
-function propertyCardCabinetsGateLive() {
-  return propertyCardCabinetsLive === true;
-}
-
-function propertyCardCabinetsUnload(plugin) {
-  if (!plugin || propertyCardCabinetsOwner !== plugin) return false;
-  propertyCardCabinetsLive = false;
-  propertyCardCabinetsOwner = null;
-  try {
-    plugin.propertyCardCabinetsLive = false;
-    plugin.propertyCardCabinetsLoaded = false;
-    plugin.propertyCardCabinetsLoadPromise = null;
-  } catch (_) {}
-  return true;
-}
-
-// Tests reset the module flag without mutating stored plugin data.
-function propertyCardCabinetsSetGateForTests(live) {
-  propertyCardCabinetsLive = live === true;
-  return propertyCardCabinetsLive;
 }
 // ---- src/240wa-plugin-cabinet-model.js ----
 // Frozen cabinet vocabulary and the canonical top-to-bottom stack order.
@@ -98732,7 +98548,7 @@ function propertyCardCabinetCollectRows(stack, path) {
 function propertyCardCabinetsInView(view) {
   const path = propertyCardCabinetViewPath(view);
   const result = { path, extras: [], properties: null, details: null };
-  if (!path || propertyCardCabinetsGateLive?.() !== true) return result;
+  if (!path) return result;
   let details = null;
   try { details = typeof propertyCardFoldTarget === "function" ? propertyCardFoldTarget(view) : null; } catch (_) {}
   result.details = details;
@@ -98754,13 +98570,13 @@ function propertyCardCabinetsInView(view) {
   return result;
 }
 
-// Deferred inline paint for gate-owned Reading catalogs (bob-cli-qq perf):
-// skip the synchronous inline painter when the gate is open on an eligible
-// Reading surface, then repaint the native callout only if no cabinet
-// absorption covers it. Returns true when the caller must skip its sync
-// paint (the fallback paints later, or never when a cabinet owns the
-// catalog). Embeds, hover, canvas, print, Source/Live editors, and a closed
-// gate never defer, so fail-open still shows today's painted catalog.
+// Deferred inline paint for cabinet-owned Reading catalogs (bob-cli-qq perf):
+// skip the synchronous inline painter on an eligible Reading surface, then
+// repaint the native callout only if no cabinet absorption covers it.
+// Returns true when the caller must skip its sync paint (the fallback paints
+// later, or never when a cabinet owns the catalog). Embeds, hover, canvas,
+// print, and Source/Live editors never defer, so fail-open still shows
+// today's painted catalog.
 // Never throws.
 const PROPERTY_CARD_CABINET_INLINE_FALLBACK_MS = 150;
 const PROPERTY_CARD_CABINET_INLINE_FALLBACK_RETRIES = 3;
@@ -98838,7 +98654,6 @@ function propertyCardCabinetInlineAbsorbed(el, kind) {
 
 function propertyCardCabinetDeferInlinePaint(el, ctx, kind, paint) {
   try {
-    if (typeof propertyCardCabinetsGateLive !== "function" || propertyCardCabinetsGateLive() !== true) return false;
     if (!el || !ctx || !kind || typeof paint !== "function") return false;
     const path = String(ctx.sourcePath || "");
     if (!path) return false;
@@ -98896,7 +98711,7 @@ function propertyCardCabinetDeferInlinePaint(el, ctx, kind, paint) {
 // It acts only on a cabinet mounted in the supplied view and never throws.
 function propertyCardCabinetToggle(view, kind) {
   try {
-    if (propertyCardCabinetsGateLive?.() !== true || typeof kind !== "string") return false;
+    if (typeof kind !== "string") return false;
     const collected = propertyCardCabinetsInView(view);
     if (!collected?.path) return false;
     if (kind === "properties") {
@@ -99518,11 +99333,6 @@ function propertyCardCabinetPickOnCaptureKey(event) {
 
 function propertyCardCabinetCanUnderscore(view) {
   try {
-    if (typeof propertyCardCabinetsGateLive === "function" && propertyCardCabinetsGateLive() !== true) {
-      return typeof propertyCardCanToggleDetails === "function" && propertyCardCanToggleDetails(view);
-    }
-  } catch (_) {}
-  try {
     const collected = propertyCardCabinetsInView(view);
     if (!collected || !collected.path) return false;
     const extras = collected.extras || [];
@@ -99540,11 +99350,6 @@ function propertyCardCabinetCanUnderscore(view) {
 // the `toggle-card-details` command runs this same dispatch, so arming works
 // in Reading and digits work in any mode while armed.
 function propertyCardCabinetUnderscore(view, pluginHint) {
-  try {
-    if (typeof propertyCardCabinetsGateLive === "function" && propertyCardCabinetsGateLive() !== true) {
-      return typeof propertyCardToggleDetails === "function" ? propertyCardToggleDetails(view) === true : false;
-    }
-  } catch (_) {}
   let collected = null;
   try { collected = propertyCardCabinetsInView(view); } catch (_) { collected = null; }
   if (!collected || !collected.path) return false;
@@ -103142,7 +102947,9 @@ function bankSetupBuildEl(model, optionsOrHandlers, doc) {
     }
   } else {
     try {
-      fold.element.setAttribute("data-bank-setup-focus", "toggle");
+      // The focus key rides on the disclosure button (the cabinet head's
+      // control), the element that actually holds focus across repaints.
+      (fold.control || fold.element).setAttribute("data-bank-setup-focus", "toggle");
     } catch (_) {}
     root.appendChild(fold.element);
     if (fold.bodyId) {
@@ -110745,9 +110552,7 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
             if (this.schemaDoubleEqualsActive === false) return false;
             const view = schemaDoubleEqualsActiveView(this);
             try {
-              if (typeof propertyCardCabinetsGateLive === "function"
-                && propertyCardCabinetsGateLive() === true
-                && typeof propertyCardCabinetPickActive === "function"
+              if (typeof propertyCardCabinetPickActive === "function"
                 && propertyCardCabinetPickActive() === true
                 && typeof propertyCardCabinetPickDisarmPick === "function") {
                 propertyCardCabinetPickDisarmPick({ silent: true });
@@ -110770,9 +110575,7 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
             if (this.schemaDoubleEqualsActive === false) return false;
             const view = schemaDoubleEqualsActiveView(this);
             try {
-              if (typeof propertyCardCabinetsGateLive === "function"
-                && propertyCardCabinetsGateLive() === true
-                && typeof propertyCardCabinetUnderscore === "function") {
+              if (typeof propertyCardCabinetUnderscore === "function") {
                 if (propertyCardCabinetUnderscore(view, this) === true) return true;
               }
             } catch (_) {}
@@ -110860,9 +110663,7 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
     } catch (_) {}
     if (key !== "=" && key !== "-" && key !== "+" && key !== "_") return;
     try {
-      if (typeof propertyCardCabinetsGateLive === "function"
-        && propertyCardCabinetsGateLive() === true
-        && typeof propertyCardCabinetPickActive === "function"
+      if (typeof propertyCardCabinetPickActive === "function"
         && propertyCardCabinetPickActive() === true) {
         if (key === "_" || key === "-") return;
         if ((key === "=" || key === "+") && typeof propertyCardCabinetPickDisarmPick === "function") {
@@ -110922,9 +110723,7 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
         reason: "details-toggle",
         canAct: () => {
           try {
-            if (typeof propertyCardCabinetsGateLive === "function"
-              && propertyCardCabinetsGateLive() === true
-              && typeof propertyCardCabinetCanUnderscore === "function") {
+            if (typeof propertyCardCabinetCanUnderscore === "function") {
               return propertyCardCabinetCanUnderscore(view) === true;
             }
           } catch (_) {}
@@ -110933,9 +110732,7 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
         },
         run: () => {
           try {
-            if (typeof propertyCardCabinetsGateLive === "function"
-              && propertyCardCabinetsGateLive() === true
-              && typeof propertyCardCabinetUnderscore === "function") {
+            if (typeof propertyCardCabinetUnderscore === "function") {
               if (propertyCardCabinetUnderscore(view, this) === true) return;
             }
           } catch (_) {}
@@ -125000,14 +124797,13 @@ class BobLedgerToolsAlbumCatalogMixin {
       await workspace.openLinkText(path, sourcePath || "", newLeaf, { eState: { line: target.line } });
       const view = workspace.activeLeaf?.view;
       if (view?.file?.path === path) {
-        // records-cards implements this optional hook to expand only this
-        // pane's target group before the native line jump scrolls into view.
-        // Under the open cabinets gate the Records cabinet takes the jump
-        // instead: it opens, expands the group, and scrolls to it.
+        // The Records cabinet takes the jump: it opens, expands the group, and
+        // scrolls to it. When the cabinet declines (no group identity), the
+        // records-cards hook expands only this pane's target group before the
+        // native line jump scrolls into view.
         let cabinetHandled = false;
         try {
-          if (typeof propertyCardCabinetsGateLive === "function" && propertyCardCabinetsGateLive() === true
-            && typeof cabinetRecordsRevealGroup === "function") {
+          if (typeof cabinetRecordsRevealGroup === "function") {
             cabinetHandled = await cabinetRecordsRevealGroup(this, view, path, target) === true;
           }
         } catch (_) {
@@ -125411,7 +125207,7 @@ class BobLedgerToolsAlbumRecordsMixin {
     }
     const widget = { el, path: ctx.sourcePath, folds, sectionText };
     this.albumRecordsReading.add(widget);
-    // Gate-open perf: skip the synchronous inline paint when the Records
+    // Cabinet perf: skip the synchronous inline paint when the Records
     // cabinet will own this catalog. The fallback repaints the native callout
     // only when no cabinet absorption covers it, so fail-open keeps its paint.
     if (typeof propertyCardCabinetDeferInlinePaint === "function"
@@ -125731,7 +125527,6 @@ function cabinetRecordsSummaryFor(source, album, plugin) {
 // applies. Synchronous over confirmed source and cached reports only.
 function cabinetRecordsAppliesFor(plugin, context = {}) {
   try {
-    if (typeof propertyCardCabinetsGateLive === "function" && propertyCardCabinetsGateLive() !== true) return null;
     const path = typeof context.path === "string" ? context.path : "";
     if (!path) return null;
     if (String(context.species || "") !== "album") return null;
@@ -126213,14 +126008,13 @@ function cabinetRecordsReveal(plugin, view, path) {
   }
 }
 
-// Group-jump retarget (called from `apiAlbumOpenGroup` under the open gate):
+// Group-jump retarget (called from `apiAlbumOpenGroup`):
 // open the Records cabinet, expand the group through the existing pending
 // path, and scroll the group into view. Returns true when the cabinet took
 // the jump; the caller keeps today's line jump otherwise. Never throws.
 async function cabinetRecordsRevealGroup(plugin, view, path, target = {}) {
   try {
     if (!plugin || !view || typeof path !== "string" || !path) return false;
-    if (typeof propertyCardCabinetsGateLive === "function" && propertyCardCabinetsGateLive() !== true) return false;
     const identity = target.value || target.label;
     if (!identity) return false;
     try {
@@ -127107,7 +126901,8 @@ function albumSchemaPaintSummary(doc, model, options) {
   });
   const summary = fold?.element;
   if (!summary) return null;
-  summary.setAttribute("data-album-header-focus", "summary");
+  // The focus key rides on the disclosure button so a repaint restores focus.
+  (fold.control || summary).setAttribute("data-album-header-focus", "summary");
   summary.setAttribute("data-schema-fold", expanded ? "open" : "folded");
   return { element: summary, bodyId: fold.bodyId };
 }
@@ -127257,9 +127052,7 @@ class BobLedgerToolsAlbumHeaderMixin {
     return propertyCardFoldResolve({
       choice,
       problems,
-      foldDefault: propertyCardCabinetsGateLive?.() === true
-        ? propertyCardCabinetDefaultOpen("schema", { problems })
-        : propertyCardSpecies("album")?.foldDefault,
+      foldDefault: propertyCardCabinetDefaultOpen("schema", { problems }),
     });
   }
 
@@ -137256,8 +137049,7 @@ class BobLedgerToolsRecordSheetFootMixin {
         try { doc.adoptNode?.(built.element); } catch (_) {}
       }
       sheet.appendChild(built.element);
-      if (propertyCardCabinetsGateLive?.() === true
-        && typeof propertyCardCabinetsAssemble === "function") {
+      if (typeof propertyCardCabinetsAssemble === "function") {
         const stack = propertyCardCabinetsAssemble(sheet, path, built.element, {
           plugin: this,
           component: this,
@@ -220796,17 +220588,10 @@ try {
   }
 } catch (_) {}
 // ---- src/374k-exports-cabinets.js ----
-// Test-facing exports for the gated property-card cabinets kit.
+// Test-facing exports for the property-card cabinets kit.
 try {
   if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
     module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
-      PROPERTY_CARD_CABINETS_PREVIEW_KEY,
-      propertyCardCabinetsFromData,
-      propertyCardCabinetsRemember,
-      propertyCardCabinetsLoad,
-      propertyCardCabinetsGateLive,
-      propertyCardCabinetsUnload,
-      propertyCardCabinetsSetGateForTests,
       PROPERTY_CARD_CABINET_KINDS,
       PROPERTY_CARD_CABINET_FOLD_KINDS,
       propertyCardCabinetKindForFold,

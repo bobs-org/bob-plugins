@@ -659,7 +659,7 @@ test('source scanner and group jump ignore YAML/fenced/nested examples and handl
   assert.equal(missing.line, 7);
 });
 
-test('lead activation keeps modifier navigation, records jump history, and calls the pane fold hook before scrolling', async () => {
+test('lead activation keeps modifier navigation, records jump history, and opens the Records cabinet before scrolling', async () => {
   const f = fixture();
   const order = [];
   f.app.plugins = { plugins: { 'bob-navigation-hotkeys': {
@@ -670,8 +670,11 @@ test('lead activation keeps modifier navigation, records jump history, and calls
   const result = await f.plugin.apiAlbumOpenGroup('eat.md', 'to_try', 'body.md', { metaKey: true });
   assert.equal(result.found, true);
   assert.deepEqual(f.opened[0], ['eat.md', 'body.md', 'tab', { eState: { line: 9 } }]);
-  assert.equal(f.app.workspace.activeLeaf.view.ephemeral.line, 9);
-  assert.equal(order[0][0], 'reveal'); assert.equal(order[1][0], 'jump');
+  // The Records cabinet takes the jump: the pane fold hook expands the group,
+  // the cabinet opens, and its own scroll replaces the native line jump.
+  assert.equal(helpers.propertyCardCabinetIsOpen('eat.md', 'records'), true);
+  assert.equal(f.app.workspace.activeLeaf.view.ephemeral, undefined);
+  assert.equal(order[0][0], 'reveal'); assert.equal(order[0][1].path, 'eat.md'); assert.equal(order[1][0], 'jump');
   await f.plugin.apiAlbumOpenGroup('eat.md', 'gone', 'body.md');
   assert.match(TestNotice.messages.at(-1), /Opened Records/);
   assert.equal(f.writes.length, 0);

@@ -1,6 +1,6 @@
 "use strict";
 
-// Unit tests for the gate-open Reading paint budget (bob-cli-qq perf):
+// Unit tests for the Reading cabinet paint budget (bob-cli-qq perf):
 // a hidden Live Preview editor defers opted-in cabinet bodies until it
 // shows, detached Reading sections defer their inline paint through the
 // render container, a Reading body clones the note's unpainted stored
@@ -184,7 +184,6 @@ function readingView(callout) {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 test("a detached Reading section defers through its render container", () => {
-  H.propertyCardCabinetsSetGateForTests(true);
   H.propertyCardCabinetInlineFallbackSetDelayForTests(10000);
   try {
     const { preview } = readingView(el("div"));
@@ -211,12 +210,10 @@ test("a detached Reading section defers through its render container", () => {
     assert.equal(H.propertyCardCabinetInlineEligible(loose, ctx(preview)), false);
   } finally {
     H.propertyCardCabinetInlineFallbackResetForTests();
-    H.propertyCardCabinetsSetGateForTests(false);
   }
 });
 
 test("only a note whose card can own the catalog defers its inline paint", () => {
-  H.propertyCardCabinetsSetGateForTests(true);
   H.propertyCardCabinetInlineFallbackSetDelayForTests(10000);
   try {
     const { preview } = readingView(el("div"));
@@ -234,12 +231,10 @@ test("only a note whose card can own the catalog defers its inline paint", () =>
     assert.equal(paints, 0);
   } finally {
     H.propertyCardCabinetInlineFallbackResetForTests();
-    H.propertyCardCabinetsSetGateForTests(false);
   }
 });
 
 test("a deferred section inserted late still paints when no cabinet claims it", async () => {
-  H.propertyCardCabinetsSetGateForTests(true);
   H.propertyCardCabinetInlineFallbackSetDelayForTests(5);
   try {
     const { preview, sizer } = readingView(el("div"));
@@ -256,7 +251,6 @@ test("a deferred section inserted late still paints when no cabinet claims it", 
     assert.equal(paints, 1);
   } finally {
     H.propertyCardCabinetInlineFallbackResetForTests();
-    H.propertyCardCabinetsSetGateForTests(false);
   }
 });
 

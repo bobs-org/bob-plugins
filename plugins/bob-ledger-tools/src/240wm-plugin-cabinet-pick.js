@@ -582,11 +582,6 @@ function propertyCardCabinetPickOnCaptureKey(event) {
 
 function propertyCardCabinetCanUnderscore(view) {
   try {
-    if (typeof propertyCardCabinetsGateLive === "function" && propertyCardCabinetsGateLive() !== true) {
-      return typeof propertyCardCanToggleDetails === "function" && propertyCardCanToggleDetails(view);
-    }
-  } catch (_) {}
-  try {
     const collected = propertyCardCabinetsInView(view);
     if (!collected || !collected.path) return false;
     const extras = collected.extras || [];
@@ -604,11 +599,6 @@ function propertyCardCabinetCanUnderscore(view) {
 // the `toggle-card-details` command runs this same dispatch, so arming works
 // in Reading and digits work in any mode while armed.
 function propertyCardCabinetUnderscore(view, pluginHint) {
-  try {
-    if (typeof propertyCardCabinetsGateLive === "function" && propertyCardCabinetsGateLive() !== true) {
-      return typeof propertyCardToggleDetails === "function" ? propertyCardToggleDetails(view) === true : false;
-    }
-  } catch (_) {}
   let collected = null;
   try { collected = propertyCardCabinetsInView(view); } catch (_) { collected = null; }
   if (!collected || !collected.path) return false;

@@ -737,15 +737,20 @@ xvfb-run -a node scripts/obsidian-cabinets-e2e.cjs \
 ```
 
 The runner creates a scratch Git vault and owned Obsidian profile with synthetic
-area, project, album, bank, prose, notebook, record, ref, and period notes. It
-opens the cabinets, notebook/prose, and ref preview keys in that vault, never
-opens the live vault, and puts a refusing `bob` shim first on `PATH`. The report
-records every Live Preview and Reading species, keyboard and fail-open checks,
-gate-closed catalog parity, markdown hashes, unexpected Bob spawns, and each
-captured screenshot's hash and dimensions.
+area, project, album, bank, prose, notebook, record, ref, and period notes.
+Cabinets are always on, so the runner is gate-free: it seeds no plugin data,
+never opens the live vault, and puts a refusing `bob` shim first on `PATH`. The
+report records every Live Preview and Reading species, keyboard and fail-open
+checks (Source mode, embeds, hover, print, a forced mount error, and plugin
+disable), content parity of each cabinet body against the stored callout rows
+in the note's bytes, cabinet paint timings, markdown hashes, unexpected Bob
+spawns, and each captured screenshot's hash and dimensions. The
+cabinet-vs-inline perf budget needed the closed preview gate, so it retired at
+go-live; the acceptance GO evidence on `bob-cli-qq.8` holds it.
 
 Inspect every PNG in the screenshot directory, including the light/dark,
-narrow/wide, Live Preview/Reading, reduced-motion, and forced-colors captures.
+narrow/wide, Live Preview/Reading, reduced-motion, forced-colors, and
+Source-mode captures.
 Record a visual verdict for each image before calling the bead GO. Retain the
 report and all screenshots with `/sase_artifact`. A runner error, failed check,
 missing screenshot, or unreviewed capture is NO-GO; fix it in scope or record

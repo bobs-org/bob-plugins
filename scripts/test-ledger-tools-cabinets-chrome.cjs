@@ -126,23 +126,28 @@ function makeCard(doc, path, withSchema = true) {
   return { card, foot };
 }
 
-test("closed gate preserves existing fold and Properties markup", () => {
+test("delegated folds and Properties always build cabinet markup", () => {
   H.propertyCardCabinetStateResetForTests();
   H.propertyCardCabinetProvidersResetForTests();
-  H.propertyCardCabinetsSetGateForTests(false);
   const doc = new Document();
   const fold = H.propertyCardBuildFoldRow(doc, { kind: "album", path: "Areas/work.md", noun: "Schema", open: true });
   const foot = H.propertyCardFootBuildEl(doc, { path: "Areas/work.md", inventory: { count: 2 }, open: false });
-  assert.equal(fold.element.getAttribute("data-card-fold-role"), null);
-  assert.equal(fold.element.classList.contains("bob-cabinet-head"), false);
-  assert.equal(foot.element.classList.contains("bob-cabinet-panel"), false);
-  assert.equal(foot.element.querySelector(".bob-cabinet-keycap"), null);
+  assert.equal(fold.element.classList.contains("bob-cabinet-head"), true);
+  assert.equal(fold.control.getAttribute("data-card-fold"), "album");
+  assert.equal(H.propertyCardCabinetKindForFold("album"), "schema");
+  assert.equal(fold.control.getAttribute("data-card-fold-role"), "cabinet");
+  assert.equal(foot.element.classList.contains("bob-cabinet-panel"), true);
+  assert.equal(foot.element.getAttribute("data-cabinet-kind"), "properties");
+  assert.ok(foot.element.querySelector(".bob-cabinet-keycap"));
+  assert.equal(foot.disclosure.getAttribute("aria-controls"), foot.drawer.getAttribute("id"));
+  // A fold kind with no cabinet kind keeps the shared fold row.
+  const plain = H.propertyCardBuildFoldRow(doc, { kind: "unmapped-kind", path: "Areas/work.md", noun: "Details" });
+  assert.equal(plain.element.classList.contains("bob-cabinet-head"), false);
 });
 
-test("open gate assembles one ordered stack with accessible lazy, reusable provider bodies", async () => {
+test("the foot assembles one ordered stack with accessible lazy, reusable provider bodies", async () => {
   H.propertyCardCabinetStateResetForTests();
   H.propertyCardCabinetProvidersResetForTests();
-  H.propertyCardCabinetsSetGateForTests(true);
   const path = "Areas/work.md";
   const view = { file: { path }, dom: null };
   let writes = 0;
@@ -236,12 +241,10 @@ test("open gate assembles one ordered stack with accessible lazy, reusable provi
   assert.equal(writes, 0);
   unregister();
   H.propertyCardCabinetStateResetForTests();
-  H.propertyCardCabinetsSetGateForTests(false);
 });
 
 test("Properties collapse returns focus to the disclosure when focus is in its drawer", () => {
   H.propertyCardCabinetStateResetForTests();
-  H.propertyCardCabinetsSetGateForTests(true);
   const doc = new Document();
   const foot = H.propertyCardFootBuildEl(doc, {
     path: "Areas/work.md", disclosureId: "focus-foot", open: true,
@@ -254,12 +257,10 @@ test("Properties collapse returns focus to the disclosure when focus is in its d
   doc.activeElement = focused;
   assert.equal(H.propertyCardCabinetFocusHeadOnClose(foot.disclosure, foot.drawer), true);
   assert.equal(doc.activeElement, foot.disclosure);
-  H.propertyCardCabinetsSetGateForTests(false);
 });
 
 test("record sheet assembles its Properties foot into the shared cabinet stack", () => {
   H.propertyCardCabinetStateResetForTests();
-  H.propertyCardCabinetsSetGateForTests(true);
   const doc = new Document();
   const sheet = doc.createElement("section");
   sheet.className = "bob-record-sheet bob-property-card";
@@ -280,17 +281,12 @@ test("record sheet assembles its Properties foot into the shared cabinet stack",
   const panels = built.stack.querySelectorAll("[data-cabinet-kind]");
   assert.deepEqual(panels.map((panel) => panel.getAttribute("data-cabinet-kind")), ["properties"]);
   assert.equal(built.stack.getAttribute("data-cabinet-source"), "eat/place-001.md");
-  H.propertyCardCabinetsSetGateForTests(false);
   H.propertyCardCabinetStateResetForTests();
 });
 
-test("album Schema is closed when healthy under the gate and still resurfaces on problems", () => {
+test("album Schema is closed when healthy and still resurfaces on problems", () => {
   const plugin = Object.create(LedgerToolsPlugin.prototype);
   plugin.albumHeaderExpanded = new Map();
-  H.propertyCardCabinetsSetGateForTests(false);
-  assert.equal(plugin.albumHeaderIsExpanded("eat.md", { schemaInvalid: false, issues: [] }), true);
-  H.propertyCardCabinetsSetGateForTests(true);
   assert.equal(plugin.albumHeaderIsExpanded("eat.md", { schemaInvalid: false, issues: [] }), false);
   assert.equal(plugin.albumHeaderIsExpanded("eat.md", { schemaInvalid: true, issues: [{ severity: "error", message: "bad schema" }] }), true);
-  H.propertyCardCabinetsSetGateForTests(false);
 });

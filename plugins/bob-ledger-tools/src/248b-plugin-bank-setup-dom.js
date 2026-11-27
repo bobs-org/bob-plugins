@@ -612,7 +612,9 @@ function bankSetupBuildEl(model, optionsOrHandlers, doc) {
     }
   } else {
     try {
-      fold.element.setAttribute("data-bank-setup-focus", "toggle");
+      // The focus key rides on the disclosure button (the cabinet head's
+      // control), the element that actually holds focus across repaints.
+      (fold.control || fold.element).setAttribute("data-bank-setup-focus", "toggle");
     } catch (_) {}
     root.appendChild(fold.element);
     if (fold.bodyId) {

@@ -133,7 +133,7 @@ class BobLedgerToolsAlbumRecordsMixin {
     }
     const widget = { el, path: ctx.sourcePath, folds, sectionText };
     this.albumRecordsReading.add(widget);
-    // Gate-open perf: skip the synchronous inline paint when the Records
+    // Cabinet perf: skip the synchronous inline paint when the Records
     // cabinet will own this catalog. The fallback repaints the native callout
     // only when no cabinet absorption covers it, so fail-open keeps its paint.
     if (typeof propertyCardCabinetDeferInlinePaint === "function"

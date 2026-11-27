@@ -830,9 +830,11 @@ test("palette command toggles the current Reading view without Vim input", () =>
   helpers.propertyCardFootResetAll();
 });
 
+// The compact card-details control a zero-extra card exposes to `_`.
 function foldControl(path, open = false, kind = "album") {
   const attrs = new Map([
     ["data-card-fold", kind],
+    ["data-card-fold-role", "details"],
     ["data-card-fold-source", path],
     ["aria-expanded", open ? "true" : "false"],
   ]);

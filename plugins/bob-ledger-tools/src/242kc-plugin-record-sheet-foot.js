@@ -216,8 +216,7 @@ class BobLedgerToolsRecordSheetFootMixin {
         try { doc.adoptNode?.(built.element); } catch (_) {}
       }
       sheet.appendChild(built.element);
-      if (propertyCardCabinetsGateLive?.() === true
-        && typeof propertyCardCabinetsAssemble === "function") {
+      if (typeof propertyCardCabinetsAssemble === "function") {
         const stack = propertyCardCabinetsAssemble(sheet, path, built.element, {
           plugin: this,
           component: this,

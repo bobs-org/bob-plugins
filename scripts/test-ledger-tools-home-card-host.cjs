@@ -242,6 +242,7 @@ test("home setup registers area and project folds on one toggle", () => {
   const unregister = H.homeCardRegisterFolds(plugin);
   const attrs = new Map([
     ["data-card-fold", "area"],
+    ["data-card-fold-role", "details"],
     ["data-card-fold-source", "love.md"],
     ["aria-expanded", "true"],
   ]);

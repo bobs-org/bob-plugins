@@ -118,6 +118,12 @@ function node(doc, tag, cls = "", text = "") {
   return item;
 }
 
+// The Schema cabinet head: its disclosure control carries the summary
+// class, and the trailing slot holds attention, extras, and the keycap.
+function schemaHead(root) {
+  return root.querySelector(".bob-album-schema-summary")?.closest(".bob-cabinet-head") || null;
+}
+
 const album = (overrides = {}) => ({
   path: "eat.md", stem: "eat", title: "Restaurants", noun: "restaurant",
   parent: "body", parent_kind: "area", owner: "body", root: "body",
@@ -263,7 +269,7 @@ test("broken schema remains visible and disables the capture route with its diag
   assert.equal(button.disabled, true);
   assert.match(root.querySelector(".bob-album-schema-summary").textContent, /record\.fields is invalid/);
   assert.equal(root.querySelector(".bob-album-schema-summary").getAttribute("aria-expanded"), "true");
-  assert.equal(root.querySelector(".bob-album-schema-summary").querySelector(".bob-property-card-fold-attention").textContent, "✗ 1 problem");
+  assert.equal(schemaHead(root).querySelector(".bob-cabinet-attention").textContent, "✗1 problem");
   assert.equal(root.querySelector(".bob-album-schema-empty"), null);
   assert.equal(root.querySelector(".bob-album-schema-issue").textContent, "record.fields is invalid");
 });
@@ -301,6 +307,8 @@ test("rendering is idempotent, keeps schema labels as text, scopes Properties, a
   root.appendChild(property);
   root.appendChild(h1);
 
+  // A healthy Schema cabinet starts closed; open it to paint the field rows.
+  plugin.albumHeaderSetExpanded("eat.md", true);
   plugin.paintAlbumHeaderReading(root, "eat.md");
   plugin.paintAlbumHeaderReading(root, "eat.md");
   assert.equal(root.querySelectorAll(".bob-album-header").length, 1);
@@ -517,7 +525,7 @@ test("H1-less albums paint at the start and embeds keep their own property scope
   assert.equal(parent.children.filter((child) => child.classList.contains("bob-album-header")).length, 0);
 });
 
-test("healthy schema summary starts expanded and collapses per album in view state", () => {
+test("healthy schema cabinet starts closed and opens per album in view state", () => {
   const { doc, plugin, flushReading } = fixture(album({
     label: "Restaurant",
     plural: "restaurants",
@@ -535,33 +543,34 @@ test("healthy schema summary starts expanded and collapses per album in view sta
   plugin.renderAlbumHeaderInReading(root, { sourcePath: "eat.md", addChild() {} });
   flushReading();
   const summary = root.querySelector(".bob-album-schema-summary");
-  assert.equal(summary.getAttribute("aria-expanded"), "true");
+  assert.equal(summary.getAttribute("aria-expanded"), "false");
+  assert.equal(summary.getAttribute("data-card-fold-role"), "cabinet");
   assert.equal(summary.textContent,
-    "▾ Schema · 2 fields · grouped by Status, sub-grouped by Location · dated notes · 104 restaurants");
-  assert.equal(summary.getAttribute("data-schema-fold"), "open");
+    "▸ Schema · 2 fields · grouped by Status, sub-grouped by Location · dated notes · 104 restaurants");
+  assert.equal(schemaHead(root).getAttribute("data-schema-fold"), "folded");
   const bodyId = summary.getAttribute("aria-controls");
-  assert.equal(root.querySelectorAll(`[id="${bodyId}"]`).length, 1, "the fold controls an existing body shell");
-  assert.equal(summary.getAttribute("aria-keyshortcuts"), "_");
+  assert.equal(root.querySelectorAll(`[id="${bodyId}"]`).length, 1, "the cabinet controls an existing body shell");
+  assert.equal(summary.getAttribute("aria-keyshortcuts"), null, "Reading has no Vim shortcut");
   assert.equal(summary.getAttribute("title"), "Toggle album schema (_)");
-  assert.equal(summary.querySelector(".bob-property-card-fold-keycap"), null, "Reading has no Vim keycap");
+  assert.equal(schemaHead(root).querySelector(".bob-cabinet-keycap").textContent, "", "Reading has no Vim keycap");
+  assert.equal(root.querySelector(".bob-album-schema-card").getAttribute("hidden"), "");
+  assert.equal(root.querySelectorAll(".bob-album-schema-field").length, 0, "the closed body is an empty shell");
+  summary.fire("click");
+  const opened = root.querySelector(".bob-album-schema-summary");
+  assert.equal(plugin.albumHeaderIsExpanded("eat.md"), true);
+  assert.equal(opened.getAttribute("aria-expanded"), "true");
+  assert.match(opened.textContent, /^▸ Schema · 2 fields · /, "the chevron rotates in CSS; its glyph stays");
+  assert.equal(schemaHead(root).getAttribute("data-schema-fold"), "open");
   assert.equal(root.querySelector(".bob-album-schema-card").getAttribute("hidden"), null);
   assert.equal(root.querySelectorAll(".bob-album-schema-field").length, 2);
-  summary.fire("click");
-  const folded = root.querySelector(".bob-album-schema-summary");
-  assert.equal(plugin.albumHeaderIsExpanded("eat.md"), false);
-  assert.equal(folded.getAttribute("aria-expanded"), "false");
-  assert.match(folded.textContent, /^▸ Schema · 2 fields · /);
-  assert.equal(folded.getAttribute("data-schema-fold"), "folded");
-  assert.equal(root.querySelector(".bob-album-schema-card").getAttribute("hidden"), "");
-  assert.equal(root.querySelectorAll(".bob-album-schema-field").length, 0, "the collapsed body is an empty shell");
   const other = node(doc, "div", "markdown-preview-view");
   plugin.paintAlbumHeaderReading(other, "eat.md");
-  assert.equal(other.querySelector(".bob-album-schema-summary").getAttribute("aria-expanded"), "false",
+  assert.equal(other.querySelector(".bob-album-schema-summary").getAttribute("aria-expanded"), "true",
     "the per-session toggle is per album, not per pane");
   assert.notEqual(other.querySelector(".bob-album-schema-summary").getAttribute("aria-controls"), bodyId,
     "two panes never reuse the body id");
-  assert.equal(helpers.propertyCardSpecies("album").foldDefault, true);
-  assert.equal(helpers.propertyCardFoldResolve({ foldDefault: true }), true);
+  assert.equal(helpers.propertyCardCabinetDefaultOpen("schema", { problems: "" }), false);
+  assert.equal(helpers.propertyCardCabinetDefaultOpen("schema", { problems: "schema-invalid" }), true);
   assert.equal(helpers.propertyCardFoldResolve({ problems: "schema-invalid", foldDefault: false }), true);
   const model = { fields: [{}], records: 1, noun: "restaurant", singular: "restaurant", groupingClause: "", datedNotes: false };
   assert.equal(helpers.albumHeaderFoldText(model), "Schema · 1 field · 1 restaurant");
@@ -569,7 +578,7 @@ test("healthy schema summary starts expanded and collapses per album in view sta
     "Restaurant · 1 field · dated notes · grouped by Status", "the editor's summary text is unchanged");
 });
 
-test("a collapsed schema starts expanded again after the plugin reloads", () => {
+test("an opened schema cabinet starts closed again after the plugin reloads", () => {
   const { doc, plugin, flushReading } = fixture(album({ records: 3, index_by: "status", fields: [
     { key: "status", label: "Status", kind: "choices", required: true, list: false,
       choices: [{ value: "a", label: "First" }] },
@@ -578,16 +587,16 @@ test("a collapsed schema starts expanded again after the plugin reloads", () => 
   plugin.renderAlbumHeaderInReading(root, { sourcePath: "eat.md", addChild() {} });
   flushReading();
   root.querySelector(".bob-album-schema-summary").fire("click");
-  assert.equal(plugin.albumHeaderIsExpanded("eat.md"), false);
+  assert.equal(plugin.albumHeaderIsExpanded("eat.md"), true);
   plugin.teardownAlbumHeader();
-  assert.equal(plugin.albumHeaderIsExpanded("eat.md"), true, "unloading the plugin clears the session map");
+  assert.equal(plugin.albumHeaderIsExpanded("eat.md"), false, "unloading the plugin clears the session map");
   plugin.setupAlbumHeader();
   const fresh = node(doc, "div", "markdown-preview-view");
   plugin.paintAlbumHeaderReading(fresh, "eat.md");
   const summary = fresh.querySelector(".bob-album-schema-summary");
-  assert.equal(summary.getAttribute("aria-expanded"), "true");
-  assert.match(summary.textContent, /^▾ Schema · /);
-  assert.equal(fresh.querySelector(".bob-album-schema-card").getAttribute("hidden"), null);
+  assert.equal(summary.getAttribute("aria-expanded"), "false");
+  assert.match(summary.textContent, /^▸ Schema · /);
+  assert.equal(fresh.querySelector(".bob-album-schema-card").getAttribute("hidden"), "");
 });
 
 test("a walk_by album's schema line ends with a display-only walks-by pill", () => {
@@ -602,14 +611,15 @@ test("a walk_by album's schema line ends with a display-only walks-by pill", () 
   plugin.renderAlbumHeaderInReading(root, { sourcePath: "eat.md", addChild() {} });
   flushReading();
   const summary = root.querySelector(".bob-album-schema-summary");
-  assert.equal(summary.textContent, "▾ Schema · 2 fields · grouped by Status · 12 restaurants · walks by Section");
-  const pill = summary.querySelector(".bob-album-schema-walks-by");
+  assert.equal(summary.textContent, "▸ Schema · 2 fields · grouped by Status · 12 restaurants");
+  assert.equal(summary.querySelector(".bob-album-schema-walks-by"), null, "the pill sits in the trailing slot");
+  const pill = schemaHead(root).querySelector(".bob-album-schema-walks-by");
   assert.equal(pill.textContent, "walks by Section");
   assert.equal(pill.getAttribute("title"), "Record walk: grouped by Section, then title");
-  assert.equal(pill.listeners.size, 0, "the pill is display-only; the summary keeps its own toggle");
+  assert.equal(pill.listeners.size, 0, "the pill is display-only; the disclosure keeps its own toggle");
   summary.fire("click");
-  assert.equal(plugin.albumHeaderIsExpanded("eat.md"), false);
-  assert.match(root.querySelector(".bob-album-schema-summary").textContent, /^▸ Schema · .* · walks by Section$/);
+  assert.equal(plugin.albumHeaderIsExpanded("eat.md"), true);
+  assert.match(schemaHead(root).textContent, /^▸ Schema · .*walks by Section/);
 
   const model = helpers.albumHeaderModel(state.report, "eat.md", { sourceText: "---\ntype: \"[[album]]\"\n---\n" });
   assert.equal(model.walkBy, "section");
@@ -674,8 +684,12 @@ test("chip rows cover kinds, flags, grouping, legacy, and empty teaching copy", 
   const emptyRoot = node(doc, "div", "markdown-preview-view");
   const empty = fixture(album({ fields: [] }));
   empty.plugin.paintAlbumHeaderReading(emptyRoot, "eat.md");
-  assert.match(emptyRoot.querySelector(".bob-album-schema-summary").textContent, /No fields yet — add one so Name @eat\/ can collect facts/);
-  assert.match(emptyRoot.querySelector(".bob-album-schema-empty").textContent, /No fields yet/);
+  assert.match(emptyRoot.querySelector(".bob-album-schema-summary").textContent, /No fields yet — add one so Name @eat\/ can collect facts/,
+    "the closed Schema header still teaches");
+  const openedRoot = node(doc, "div", "markdown-preview-view");
+  empty.plugin.albumHeaderSetExpanded("eat.md", true);
+  empty.plugin.paintAlbumHeaderReading(openedRoot, "eat.md");
+  assert.match(openedRoot.querySelector(".bob-album-schema-empty").textContent, /No fields yet/);
 });
 
 test("read-only Schema Card paints counts, lint, and a navigation/y/esc footer", () => {
@@ -834,6 +848,10 @@ test("theme accent, schema button, and keyboard labels stay on the header", () =
   const header = root.querySelector(".bob-album-header");
   assert.equal(header.tagName, "SECTION");
   assert.equal(root.querySelector(".bob-album-header-schema").textContent, "⊞ Schema");
+  assert.equal(root.querySelector(".bob-album-schema-summary").getAttribute("aria-expanded"), "false",
+    "a healthy Schema cabinet rests closed");
+  plugin.albumHeaderSetExpanded("eat.md", true);
+  plugin.paintAlbumHeaderReading(root, "eat.md");
   assert.equal(root.querySelector(".bob-album-schema-summary").getAttribute("aria-expanded"), "true");
   const field = root.querySelector(".bob-album-schema-field");
   assert.equal(field.getAttribute("tabindex"), "0");
@@ -992,7 +1010,7 @@ test("the title block paints from local data before the report, and the body joi
   assert.equal(card.getAttribute("data-album-body"), "report");
   assert.equal(card.classList.contains("bob-property-card-title-slot"), true);
   assert.equal(card.querySelectorAll(".bob-album-header-copy").length, 1);
-  assert.match(card.querySelector(".bob-album-schema-summary").textContent, /^▾ Schema · 1 field · 3 restaurants$/);
+  assert.match(card.querySelector(".bob-album-schema-summary").textContent, /^▸ Schema · 1 field · 3 restaurants$/);
   assert.equal(card.querySelector(".bob-property-card-title").getAttribute("aria-level"), "1");
   assert.equal(pane.row.classList.contains(OWNED_ROW), true, "the record row hides once the body paints");
   assert.equal(pane.sizer.querySelectorAll(".bob-album-header").length, 1, "nothing in the body");

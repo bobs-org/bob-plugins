@@ -1,8 +1,5 @@
 class BobLedgerToolsPlugin extends Plugin {
   onload() {
-    // Start the cabinet-owned plugin-data read before any property-card host
-    // registers. The module gate stays closed until the data resolves.
-    this.propertyCardCabinetsReady = propertyCardCabinetsLoad(this);
     this.taskSettleInstallPendingLifecycle();
     this.initializeRelationIndex();
     this.vimMappingsRegistered = false;
@@ -758,7 +755,6 @@ class BobLedgerToolsPlugin extends Plugin {
   }
 
   onunload() {
-    propertyCardCabinetsUnload(this);
     propertyCardCabinetProvidersReleasePlugin(this);
     propertyCardCabinetStateReleasePlugin(this);
     this.taskSettleDisposePendingLifecycle();

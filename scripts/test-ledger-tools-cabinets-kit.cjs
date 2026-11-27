@@ -96,21 +96,34 @@ function cabinetView(rows, details = null) {
   return { view: { dom: root, file: { path: "Areas/work.md" } }, root, stack };
 }
 
-test("cabinet gate reads only its own plugin-data key once", async () => {
-  assert.equal(H.PROPERTY_CARD_CABINETS_PREVIEW_KEY, "cabinetsPreview");
-  assert.equal(H.propertyCardCabinetsFromData({ cabinetsPreview: true }), true);
-  assert.equal(H.propertyCardCabinetsFromData({ cardPreviewKinds: ["notebook"], refCardPreview: true }), false);
-  assert.equal(H.propertyCardCabinetsFromData(null), false);
-  H.propertyCardCabinetsSetGateForTests(false);
-  let reads = 0;
-  const plugin = { loadLedgerToolsPluginData: async () => { reads += 1; return { cabinetsPreview: true }; } };
-  assert.equal(await H.propertyCardCabinetsLoad(plugin), true);
-  assert.equal(await H.propertyCardCabinetsLoad(plugin), true);
-  assert.equal(reads, 1);
-  assert.equal(H.propertyCardCabinetsGateLive(), true);
-  H.propertyCardCabinetsSetGateForTests(false);
-  assert.equal(await H.propertyCardCabinetsLoad({ loadData: async () => { throw new Error("denied"); } }), false);
-  assert.equal(H.propertyCardCabinetsGateLive(), false);
+test("stale plugin-data gate keys neither disable cabinets nor throw", async () => {
+  // The cabinetsPreview gate and its siblings are gone; a vault data.json that
+  // still carries them is read like any other settings and simply ignored.
+  assert.equal(H.PROPERTY_CARD_CABINETS_PREVIEW_KEY, undefined);
+  assert.equal(H.propertyCardCabinetsGateLive, undefined);
+  assert.equal(H.propertyCardCabinetsLoad, undefined);
+  const stale = { cabinetsPreview: false, cardPreviewKinds: ["notebook"], refCardPreview: false };
+  for (const stored of [stale, { cabinetsPreview: "false" }, null, ["cabinetsPreview"]]) {
+    const plugin = Object.create(LedgerToolsPlugin.prototype);
+    let writes = 0;
+    plugin.loadData = async () => stored;
+    plugin.saveData = async () => { writes += 1; };
+    const loaded = await plugin.loadLedgerToolsPluginData();
+    assert.equal(typeof loaded, "object");
+    assert.equal(writes, 0, "reading stale keys never rewrites plugin data");
+    const button = new FakeElement();
+    assert.equal(H.propertyCardDecorateFoldControl(button, { kind: "area", path: "Areas/work.md", compact: true }), true);
+    assert.equal(button.getAttribute("data-card-fold-role"), "details");
+    assert.equal(H.propertyCardDecorateFoldControl(button, { kind: "album", path: "Areas/work.md" }), true);
+    assert.equal(button.getAttribute("data-card-fold-role"), "cabinet");
+    const { view } = cabinetView([cabinetRow("areas"), cabinetRow("albums")]);
+    assert.deepEqual(H.propertyCardCabinetsInView(view).extras.map(({ kind }) => kind), ["areas", "albums"]);
+  }
+  const throwing = Object.create(LedgerToolsPlugin.prototype);
+  throwing.loadData = async () => { throw new Error("denied"); };
+  assert.deepEqual(await throwing.loadLedgerToolsPluginData(), {});
+  const { view } = cabinetView([cabinetRow("areas")]);
+  assert.deepEqual(H.propertyCardCabinetsInView(view).extras.map(({ kind }) => kind), ["areas"]);
 });
 
 test("frozen kinds use canonical order and bottom-up contiguous numbering", () => {
@@ -190,21 +203,15 @@ test("provider unregistration is generation-bound and applies stays synchronous"
   assert.equal(H.propertyCardCabinetProviderFor("areas"), null);
 });
 
-test("fold controls acquire roles only while the cabinets gate is open", () => {
+test("fold controls always carry their details or cabinet role", () => {
   const button = new FakeElement();
-  H.propertyCardCabinetsSetGateForTests(false);
-  assert.equal(H.propertyCardDecorateFoldControl(button, { kind: "area", path: "Areas/work.md", compact: true }), true);
-  assert.equal(button.getAttribute("data-card-fold-role"), null);
-  H.propertyCardCabinetsSetGateForTests(true);
   assert.equal(H.propertyCardDecorateFoldControl(button, { kind: "area", path: "Areas/work.md", compact: true }), true);
   assert.equal(button.getAttribute("data-card-fold-role"), "details");
   assert.equal(H.propertyCardDecorateFoldControl(button, { kind: "album", path: "Areas/work.md" }), true);
   assert.equal(button.getAttribute("data-card-fold-role"), "cabinet");
-  H.propertyCardCabinetsSetGateForTests(false);
 });
 
 test("view collector rejects stale, disabled, and noncanonical cabinet stacks", () => {
-  H.propertyCardCabinetsSetGateForTests(true);
   const areas = cabinetRow("areas");
   const albums = cabinetRow("albums");
   const good = cabinetView([areas, albums]);
@@ -217,13 +224,11 @@ test("view collector rejects stale, disabled, and noncanonical cabinet stacks", 
   disabled.button.disabled = true;
   assert.deepEqual(H.propertyCardCabinetsInView(cabinetView([disabled]).view).extras, []);
   assert.deepEqual(H.propertyCardCabinetsInView(cabinetView([albums, areas]).view).extras, []);
-  H.propertyCardCabinetsSetGateForTests(false);
 });
 
 test("toggle router uses the provider state and the matching view mount", () => {
   H.propertyCardCabinetStateResetForTests();
   H.propertyCardCabinetProvidersResetForTests();
-  H.propertyCardCabinetsSetGateForTests(true);
   const row = cabinetRow("areas");
   const { view, stack } = cabinetView([row]);
   const plugin = {};
@@ -255,11 +260,9 @@ test("toggle router uses the provider state and the matching view mount", () => 
   unmount();
   H.propertyCardCabinetProvidersReleasePlugin(plugin);
   H.propertyCardCabinetStateResetForTests();
-  H.propertyCardCabinetsSetGateForTests(false);
 });
 
-test("role-aware fold target skips cabinet rows when the gate is open", () => {
-  H.propertyCardCabinetsSetGateForTests(true);
+test("role-aware fold target skips cabinet rows", () => {
   let toggled = 0;
   const unregisterDetails = H.propertyCardRegisterFoldKind({}, "area", { toggle: () => { toggled += 1; } });
   const details = new FakeElement({
@@ -273,5 +276,4 @@ test("role-aware fold target skips cabinet rows when the gate is open", () => {
   assert.equal(H.propertyCardToggleDetails(view), true);
   assert.equal(toggled, 1);
   unregisterDetails();
-  H.propertyCardCabinetsSetGateForTests(false);
 });

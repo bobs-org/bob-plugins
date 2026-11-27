@@ -152,7 +152,8 @@ function albumSchemaPaintSummary(doc, model, options) {
   });
   const summary = fold?.element;
   if (!summary) return null;
-  summary.setAttribute("data-album-header-focus", "summary");
+  // The focus key rides on the disclosure button so a repaint restores focus.
+  (fold.control || summary).setAttribute("data-album-header-focus", "summary");
   summary.setAttribute("data-schema-fold", expanded ? "open" : "folded");
   return { element: summary, bodyId: fold.bodyId };
 }

@@ -104,11 +104,13 @@ function root(doc) {
   return node;
 }
 
-function foldButton(doc, path, open = false) {
+// The compact card-details control is the only fold `_` targets directly;
+// cabinet rows route by semantic kind through the cabinet router.
+function foldButton(doc, path, open = false, compact = true) {
   const button = doc.createElement("button");
   helpers.propertyCardDecorateFoldControl(button, {
     kind: "album", path, open, bodyId: helpers.propertyCardFoldNextId(),
-    tooltip: "Toggle album schema (_) ", keyLive: false,
+    tooltip: "Toggle album schema (_) ", keyLive: false, compact,
   });
   return button;
 }
@@ -148,8 +150,16 @@ test("fold target is connected, visible, path-matched, registered, and view-loca
   const ownButton = foldButton(doc, "eat.md");
   ownRoot.appendChild(ownButton);
   const view = { file: { path: "eat.md" }, dom: ownRoot };
+  assert.equal(ownButton.getAttribute("data-card-fold-role"), "details");
   assert.equal(helpers.propertyCardFoldTarget(view).element, ownButton);
   assert.equal(helpers.propertyCardCanToggleDetails(view), true);
+
+  const cabinetRoot = root(doc);
+  const cabinetButton = foldButton(doc, "eat.md", false, false);
+  cabinetRoot.appendChild(cabinetButton);
+  assert.equal(cabinetButton.getAttribute("data-card-fold-role"), "cabinet");
+  assert.equal(helpers.propertyCardCanToggleDetails({ file: { path: "eat.md" }, dom: cabinetRoot }), false,
+    "a cabinet row is never the details target");
 
   const paneRoot = root(doc);
   const paneButton = foldButton(doc, "eat.md");
@@ -202,19 +212,24 @@ test("fold row has a live body id, unique mount ids, attention, and a conditiona
   body.setAttribute("hidden", "");
   host.appendChild(first.element);
   host.appendChild(body);
-  assert.equal(first.element.getAttribute("aria-controls"), first.bodyId);
+  // A delegated fold row is a cabinet head: the disclosure control carries
+  // the fold identity, and the trailing slot holds attention and the keycap.
+  assert.match(first.element.getAttribute("class"), /\bbob-cabinet-head\b/);
+  assert.equal(first.control.getAttribute("aria-controls"), first.bodyId);
   assert.equal(host.querySelectorAll(`[id="${first.bodyId}"]`).length, 1);
-  assert.equal(first.element.getAttribute("aria-keyshortcuts"), "_");
-  assert.equal(first.element.getAttribute("title"), "Toggle album schema (_) ");
-  assert.equal(first.element.querySelector(".bob-property-card-fold-keycap").textContent, "_");
-  assert.equal(first.element.querySelector(".bob-property-card-fold-attention").textContent, "⚠ 1 warning");
+  assert.equal(first.control.getAttribute("aria-keyshortcuts"), "_");
+  assert.equal(first.control.getAttribute("title"), "Toggle album schema (_) ");
+  assert.equal(first.element.querySelector(".bob-cabinet-keycap").textContent, "_");
+  assert.equal(first.element.querySelector(".bob-cabinet-attention").textContent, "⚠1 warning");
   assert.doesNotMatch(first.element.textContent, /\$900/);
 
   const second = helpers.propertyCardBuildFoldRow(doc, {
     kind: "album", path: "eat.md", noun: "Schema", summary: "2 fields", open: true, keyLive: false,
   });
   assert.notEqual(second.bodyId, first.bodyId);
-  assert.equal(second.element.querySelector(".bob-property-card-fold-keycap"), null);
+  assert.equal(second.control.getAttribute("aria-keyshortcuts"), null);
+  assert.equal(second.element.querySelector(".bob-cabinet-keycap").textContent, "",
+    "the keycap slot stays in the row but is empty when keys are not live");
 });
 
 test("the details command queues a pending reveal that the next open row consumes", async () => {
@@ -234,7 +249,7 @@ test("the details command queues a pending reveal that the next open row consume
   });
   host.appendChild(open.element);
   await Promise.resolve();
-  assert.deepEqual(open.element.scrolls, [{ block: "nearest" }]);
+  assert.deepEqual(open.control.scrolls, [{ block: "nearest" }]);
   assert.equal(helpers.propertyCardFoldConsumePendingReveal("eat.md", true), false);
   unregister();
 });

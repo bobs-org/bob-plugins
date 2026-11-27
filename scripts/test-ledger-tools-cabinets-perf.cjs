@@ -1,9 +1,9 @@
 "use strict";
 
-// Unit tests for the gate-open Reading inline-paint deferral (bob-cli-qq
-// perf phase): skip the synchronous inline painter when the cabinets gate
-// is open, repaint the native callout only when no cabinet absorption
-// covers it, and keep every fail-open path on today's painted catalog.
+// Unit tests for the Reading inline-paint deferral (bob-cli-qq perf phase):
+// skip the synchronous inline painter when a cabinet will own the catalog,
+// repaint the native callout only when no cabinet absorption covers it, and
+// keep every fail-open path on today's painted catalog.
 
 const assert = require("node:assert/strict");
 const Module = require("node:module");
@@ -150,25 +150,24 @@ function readingCtx(path, children = addedChildren, extra = {}) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-test("gate closed never defers the inline paint", async () => {
-  H.propertyCardCabinetsSetGateForTests(false);
+test("an untyped host never defers the inline paint", async () => {
   H.propertyCardCabinetInlineFallbackSetDelayForTests(5);
   try {
+    // The root area.md and other untyped hosts keep native catalogs, so their
+    // inline painter always runs synchronously.
     const { section } = readingSection("projects");
     let paints = 0;
     const deferred = H.propertyCardCabinetDeferInlinePaint(
-      section, readingCtx("Areas/work.md"), "projects", () => { paints += 1; });
+      section, readingCtx("area.md", addedChildren, { frontmatter: {} }), "projects", () => { paints += 1; });
     assert.equal(deferred, false);
     await sleep(30);
     assert.equal(paints, 0);
   } finally {
     H.propertyCardCabinetInlineFallbackResetForTests();
-    H.propertyCardCabinetsSetGateForTests(false);
   }
 });
 
-test("gate open defers the eligible Reading paint instead of painting synchronously", async () => {
-  H.propertyCardCabinetsSetGateForTests(true);
+test("an eligible Reading paint defers instead of painting synchronously", async () => {
   H.propertyCardCabinetInlineFallbackSetDelayForTests(10000);
   try {
     const { section } = readingSection("projects");
@@ -179,12 +178,10 @@ test("gate open defers the eligible Reading paint instead of painting synchronou
     assert.equal(paints, 0);
   } finally {
     H.propertyCardCabinetInlineFallbackResetForTests();
-    H.propertyCardCabinetsSetGateForTests(false);
   }
 });
 
 test("fallback paints the native callout when no cabinet covers it", async () => {
-  H.propertyCardCabinetsSetGateForTests(true);
   H.propertyCardCabinetInlineFallbackSetDelayForTests(5);
   try {
     const { section } = readingSection("projects");
@@ -196,12 +193,10 @@ test("fallback paints the native callout when no cabinet covers it", async () =>
     assert.equal(paints, 1);
   } finally {
     H.propertyCardCabinetInlineFallbackResetForTests();
-    H.propertyCardCabinetsSetGateForTests(false);
   }
 });
 
 test("fallback never paints an absorbed callout the cabinet owns", async () => {
-  H.propertyCardCabinetsSetGateForTests(true);
   H.propertyCardCabinetInlineFallbackSetDelayForTests(5);
   try {
     const { section, callout } = readingSection("projects");
@@ -214,12 +209,10 @@ test("fallback never paints an absorbed callout the cabinet owns", async () => {
     assert.equal(paints, 0);
   } finally {
     H.propertyCardCabinetInlineFallbackResetForTests();
-    H.propertyCardCabinetsSetGateForTests(false);
   }
 });
 
 test("fallback waits while the stack is mounted, then paints when absorption never lands", async () => {
-  H.propertyCardCabinetsSetGateForTests(true);
   H.propertyCardCabinetInlineFallbackSetDelayForTests(5);
   try {
     const { section } = readingSection("projects");
@@ -237,12 +230,10 @@ test("fallback waits while the stack is mounted, then paints when absorption nev
     assert.equal(paints, 1);
   } finally {
     H.propertyCardCabinetInlineFallbackResetForTests();
-    H.propertyCardCabinetsSetGateForTests(false);
   }
 });
 
 test("fail-open contexts never defer: embeds, canvas, editors, and bare sections", () => {
-  H.propertyCardCabinetsSetGateForTests(true);
   H.propertyCardCabinetInlineFallbackSetDelayForTests(5);
   try {
     const noop = () => {};
@@ -266,12 +257,10 @@ test("fail-open contexts never defer: embeds, canvas, editors, and bare sections
       readingSection("projects").section, { sourcePath: "" }, "projects", noop), false);
   } finally {
     H.propertyCardCabinetInlineFallbackResetForTests();
-    H.propertyCardCabinetsSetGateForTests(false);
   }
 });
 
 test("unload cancels the pending fallback paint", async () => {
-  H.propertyCardCabinetsSetGateForTests(true);
   H.propertyCardCabinetInlineFallbackSetDelayForTests(5);
   const localChildren = [];
   try {
@@ -287,7 +276,6 @@ test("unload cancels the pending fallback paint", async () => {
     assert.equal(paints, 0);
   } finally {
     H.propertyCardCabinetInlineFallbackResetForTests();
-    H.propertyCardCabinetsSetGateForTests(false);
   }
 });
 
@@ -326,7 +314,6 @@ test("release-time repaint is passive: no vault or workspace access", () => {
 });
 
 test("same-path projects re-render keeps the deferred paint deferred", async () => {
-  H.propertyCardCabinetsSetGateForTests(true);
   H.propertyCardCabinetInlineFallbackSetDelayForTests(10000);
   try {
     const { section } = readingSection("projects");
@@ -345,12 +332,10 @@ test("same-path projects re-render keeps the deferred paint deferred", async () 
     assert.equal(paints, 0);
   } finally {
     H.propertyCardCabinetInlineFallbackResetForTests();
-    H.propertyCardCabinetsSetGateForTests(false);
   }
 });
 
 test("same-path records re-render keeps the deferred paint deferred", async () => {
-  H.propertyCardCabinetsSetGateForTests(true);
   H.propertyCardCabinetInlineFallbackSetDelayForTests(10000);
   try {
     const { section } = readingSection("records");
@@ -371,6 +356,5 @@ test("same-path records re-render keeps the deferred paint deferred", async () =
     assert.equal(paints, 1);
   } finally {
     H.propertyCardCabinetInlineFallbackResetForTests();
-    H.propertyCardCabinetsSetGateForTests(false);
   }
 });

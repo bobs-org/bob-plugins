@@ -488,6 +488,7 @@ function propertyCardCabinetHostMountClaim(kind, plugin, context = {}) {
     if (!plan || plan.damage || plan.fingerprint !== applied.plan.fingerprint) return null;
     let releaseAbsorption = null;
     let tagged = [];
+    let reading = false;
     if (view?.state?.doc && typeof view.dispatch === "function") {
       releaseAbsorption = propertyCardCabinetAbsorbInEditor(view, {
         path, kind, fingerprint: plan.fingerprint,
@@ -497,6 +498,7 @@ function propertyCardCabinetHostMountClaim(kind, plugin, context = {}) {
       const scope = readingScope || view?.containerEl || view?.contentEl || view?.dom || null;
       tagged = propertyCardCabinetAbsorbPaintReading(scope, plan, true);
       if (!tagged.length) return null;
+      reading = true;
       releaseAbsorption = () => propertyCardCabinetAbsorbUntagReading(tagged);
     }
     let generation = releaseAbsorption.generation;
@@ -511,8 +513,23 @@ function propertyCardCabinetHostMountClaim(kind, plugin, context = {}) {
     });
     return () => {
       try { releaseClaim(); } catch (_) {}
-      try { releaseAbsorption(); } catch (_) {}
-      try { if (tagged.length) propertyCardCabinetAbsorbUntagReading(tagged); } catch (_) {}
+      // A replacement mount for the same view, note, and kind tags the same
+      // rendered Reading nodes before the mount registry releases this
+      // superseded one (240wl, 240wb). Its tags belong to the live claim, so a
+      // superseded Reading release leaves them in place.
+      let superseded = false;
+      if (reading) {
+        try {
+          const live = propertyCardCatalogClaimEntry(view, path, kind);
+          superseded = Boolean(live && !live.released);
+        } catch (_) {
+          superseded = false;
+        }
+      }
+      if (!superseded) {
+        try { releaseAbsorption(); } catch (_) {}
+        try { if (tagged.length) propertyCardCabinetAbsorbUntagReading(tagged); } catch (_) {}
+      }
       tagged = [];
     };
   } catch (_) {

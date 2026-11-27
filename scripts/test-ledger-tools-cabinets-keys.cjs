@@ -155,7 +155,6 @@ test("pick footer and announce text order chips bottom-up with properties and es
 });
 
 test("underscore routes zero extras to details, one to direct toggle, two to arm", () => {
-  H.propertyCardCabinetsSetGateForTests(true);
   H.propertyCardCabinetStateResetForTests();
   H.propertyCardCabinetProvidersResetForTests();
   H.propertyCardCabinetPickResetForTests();
@@ -199,11 +198,9 @@ test("underscore routes zero extras to details, one to direct toggle, two to arm
   H.propertyCardCabinetProvidersReleasePlugin(plugin2);
   H.propertyCardCabinetStateResetForTests();
   H.propertyCardCabinetPickResetForTests();
-  H.propertyCardCabinetsSetGateForTests(false);
 });
 
 test("armed pick: digit toggles and disarms, out-of-range nudges, underscore picks 1, dash picks properties", () => {
-  H.propertyCardCabinetsSetGateForTests(true);
   H.propertyCardCabinetStateResetForTests();
   H.propertyCardCabinetProvidersResetForTests();
   H.propertyCardCabinetPickResetForTests();
@@ -253,11 +250,9 @@ test("armed pick: digit toggles and disarms, out-of-range nudges, underscore pic
   H.propertyCardCabinetProvidersReleasePlugin(plugin);
   H.propertyCardCabinetStateResetForTests();
   H.propertyCardCabinetPickResetForTests();
-  H.propertyCardCabinetsSetGateForTests(false);
 });
 
 test("armed pick cancels on escape, q, ctrl-bracket and passes other keys through", () => {
-  H.propertyCardCabinetsSetGateForTests(true);
   H.propertyCardCabinetStateResetForTests();
   H.propertyCardCabinetProvidersResetForTests();
   H.propertyCardCabinetPickResetForTests();
@@ -302,11 +297,9 @@ test("armed pick cancels on escape, q, ctrl-bracket and passes other keys throug
   H.propertyCardCabinetProvidersReleasePlugin(plugin);
   H.propertyCardCabinetStateResetForTests();
   H.propertyCardCabinetPickResetForTests();
-  H.propertyCardCabinetsSetGateForTests(false);
 });
 
 test("vanished kind cancels with notice and mid-pick repaint keeps snapshot numbering", () => {
-  H.propertyCardCabinetsSetGateForTests(true);
   H.propertyCardCabinetStateResetForTests();
   H.propertyCardCabinetProvidersResetForTests();
   H.propertyCardCabinetPickResetForTests();
@@ -332,11 +325,9 @@ test("vanished kind cancels with notice and mid-pick repaint keeps snapshot numb
   H.propertyCardCabinetProvidersReleasePlugin(plugin);
   H.propertyCardCabinetStateResetForTests();
   H.propertyCardCabinetPickResetForTests();
-  H.propertyCardCabinetsSetGateForTests(false);
 });
 
 test("pick disarms on release and leaves no overlay or scope behind", () => {
-  H.propertyCardCabinetsSetGateForTests(true);
   H.propertyCardCabinetStateResetForTests();
   H.propertyCardCabinetProvidersResetForTests();
   H.propertyCardCabinetPickResetForTests();
@@ -356,5 +347,4 @@ test("pick disarms on release and leaves no overlay or scope behind", () => {
   H.propertyCardCabinetProvidersReleasePlugin(plugin);
   H.propertyCardCabinetStateResetForTests();
   H.propertyCardCabinetPickResetForTests();
-  H.propertyCardCabinetsSetGateForTests(false);
 });

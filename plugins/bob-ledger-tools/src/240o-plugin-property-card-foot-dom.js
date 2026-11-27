@@ -536,108 +536,14 @@ function propertyCardFootRenderDrawer(doc, drawerBody, spec) {
   }
 }
 
-// The foot row plus its drawer shell. The drawer body is built only when
-// open; closed drawers keep an empty shell for aria-controls.
+// The foot is the card's Properties cabinet: one cabinet header over a drawer
+// shell. The drawer body is built only when open; closed drawers keep an empty
+// shell for aria-controls.
 function propertyCardFootBuildEl(doc, spec = {}) {
   try {
     if (!propertyCardKitDocOk(doc)) return null;
     const options = spec && typeof spec === "object" ? spec : {};
-    if (propertyCardCabinetsGateLive?.() === true
-      && typeof propertyCardFootBuildCabinetEl === "function") {
-      return propertyCardFootBuildCabinetEl(doc, options);
-    }
-    const handlers = options.handlers || {};
-    const inventory = options.inventory && typeof options.inventory === "object" ? options.inventory : null;
-    const stamp = options.stamp && typeof options.stamp === "object" ? options.stamp : null;
-    const disclosureId = propertyCardFootText(options.disclosureId).trim()
-      || `bob-property-foot-${propertyCardFootText(options.path).trim() || "note"}`;
-    const drawerId = `${disclosureId}-drawer`;
-    const count = inventory && Number.isInteger(inventory.count) ? inventory.count : 0;
-    const open = options.open === true;
-
-    const foot = propertyCardKitEl(doc, "div", PROPERTY_CARD_FOOT_CLASS);
-    foot.setAttribute("data-property-foot", "true");
-    if (options.path) foot.setAttribute("data-foot-source", propertyCardFootText(options.path));
-
-    const disclosure = doc.createElement("button");
-    disclosure.setAttribute("type", "button");
-    disclosure.setAttribute("class", "bob-property-card-foot-disclosure");
-    disclosure.setAttribute("aria-expanded", open ? "true" : "false");
-    disclosure.setAttribute("aria-controls", drawerId);
-    disclosure.setAttribute("title", "Toggle properties (-)");
-    disclosure.setAttribute("aria-label", `Toggle properties, ${count} ${count === 1 ? "property" : "properties"}`);
-    disclosure.setAttribute("data-foot-focus", "foot");
-    if (options.keyLive === true) disclosure.setAttribute("aria-keyshortcuts", "-");
-    const chevron = propertyCardKitSpan(doc, "bob-property-card-foot-chevron", "▸");
-    chevron.setAttribute("aria-hidden", "true");
-    disclosure.appendChild(chevron);
-    propertyCardKitAppendText(doc, disclosure, ` Properties · ${count}`);
-    if (typeof propertyCardFoldAddKeycap === "function") {
-      propertyCardFoldAddKeycap(disclosure, doc, options.keyLive === true, "-");
-    }
-    disclosure.addEventListener?.("click", (event) => {
-      try { event.preventDefault?.(); } catch (_) {}
-      let next = !open;
-      if (typeof handlers.onToggle === "function") {
-        try {
-          const decided = handlers.onToggle(options.path, next);
-          if (typeof decided === "boolean") next = decided;
-        } catch (_) {}
-      }
-      if (next) propertyCardFootReveal(foot);
-    });
-    foot.appendChild(disclosure);
-
-    const lint = propertyCardFootLint({
-      inventory,
-      stamp,
-      contractIssues: Array.isArray(options.contractIssues) ? options.contractIssues : [],
-      firstSetting: typeof options.firstSetting === "string" ? options.firstSetting : "",
-    });
-    if (lint.count > 0) {
-      // Feature-detected =+ jump: only when the caller carries a first
-      // setting and an opener. Otherwise the chip stays inert text and
-      // never opens the drawer by itself.
-      const opener = lint.firstSetting && typeof handlers?.onOpenSetting === "function"
-        ? handlers.onOpenSetting
-        : null;
-      const chip = opener
-        ? propertyCardKitEl(doc, "button", "bob-property-card-foot-lint-chip")
-        : propertyCardKitSpan(doc, "bob-property-card-foot-lint-chip", `⚠ ${lint.count}`);
-      if (opener) {
-        chip.setAttribute("type", "button");
-        propertyCardKitAppendText(doc, chip, `⚠ ${lint.count}`);
-        chip.setAttribute("aria-label", `${lint.tooltip} — open Settings`);
-        chip.addEventListener?.("click", (event) => {
-          try { event?.preventDefault?.(); } catch (_) {}
-          try { opener(lint.firstSetting); } catch (_) {}
-        });
-      } else {
-        chip.setAttribute("role", "status");
-      }
-      chip.setAttribute("title", lint.tooltip);
-      if (!chip.getAttribute("aria-label")) chip.setAttribute("aria-label", lint.tooltip);
-      foot.appendChild(chip);
-    }
-
-    if (stamp && stamp.text) {
-      const stampNode = propertyCardKitSpan(doc, stamp.state === "invalid"
-        ? "bob-property-card-foot-stamp is-invalid"
-        : "bob-property-card-foot-stamp", stamp.text);
-      if (stamp.tooltip) stampNode.setAttribute("title", stamp.tooltip);
-      foot.appendChild(stampNode);
-    }
-
-    const drawer = propertyCardKitEl(doc, "div", PROPERTY_CARD_FOOT_DRAWER_CLASS);
-    drawer.setAttribute("id", drawerId);
-    drawer.setAttribute("data-open", open ? "true" : "false");
-    if (open) {
-      const body = propertyCardKitEl(doc, "div", "bob-property-card-foot-drawer-body");
-      propertyCardFootRenderDrawer(doc, body, { ...options, handlers });
-      drawer.appendChild(body);
-    }
-    foot.appendChild(drawer);
-    return { element: foot, disclosure, drawer };
+    return propertyCardFootBuildCabinetEl(doc, options);
   } catch (_) {
     return null;
   }

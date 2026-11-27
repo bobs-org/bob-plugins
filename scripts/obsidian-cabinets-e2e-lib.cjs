@@ -71,6 +71,7 @@ const SCREENSHOT_HOSTS = Object.freeze([
   { key: "bank", path: PATHS.bank, mode: "live", state: "rest" },
   { key: "prose", path: PATHS.prose, mode: "live", state: "rest" },
   { key: "record", path: PATHS.record, mode: "live", state: "rest" },
+  { key: "ref", path: PATHS.ref, mode: "live", state: "rest" },
   { key: "footer", path: PATHS.area, mode: "live", state: "armed" },
 ]);
 
@@ -184,6 +185,7 @@ function screenshotNeeds() {
   }
   result.push("area-live-light-wide-reduced-motion");
   result.push("area-live-light-wide-forced-colors");
+  result.push("area-source-light-wide");
   return result;
 }
 
@@ -218,6 +220,24 @@ function countCatalogRows(markdown, kind) {
   return (section.split(/^##\s+/m)[0].match(re) || []).length;
 }
 
+// The stored rows of one bob-owned catalog callout (`> [!kind]` plus its
+// contiguous `>` lines), parsed from the note's bytes independently of the
+// plugin: each linked row's display label and its description after " — ".
+function storedCatalogRows(markdown, kind) {
+  const lines = String(markdown || "").split(/\r?\n/);
+  const head = lines.findIndex((line) => new RegExp(`^>\\s*\\[!${kind}\\][+-]?`, "i").test(line.trim()));
+  if (head < 0) return [];
+  const rows = [];
+  for (let index = head + 1; index < lines.length && /^>/.test(lines[index]); index += 1) {
+    const item = /^>\s*[-+*]\s+(.*)$/.exec(lines[index]);
+    const link = item && /\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/.exec(item[1]);
+    if (!link) continue;
+    const description = /\s—\s(.+)$/.exec(item[1]);
+    rows.push({ label: (link[2] || link[1]).trim(), text: description ? description[1].trim() : "" });
+  }
+  return rows;
+}
+
 function selfTest() {
   const notes = fixtureNotes();
   for (const spec of SPECS) assert.ok(notes[spec.path], `fixture for ${spec.key}`);
@@ -225,11 +245,14 @@ function selfTest() {
   assert.equal(countCatalogRows(notes[PATHS.area], "Projects"), 1);
   assert.equal(countCatalogRows(notes[PATHS.project], "Projects"), 64);
   assert.equal(countCatalogRows(notes[PATHS.album], "Records"), 106);
+  assert.deepEqual(storedCatalogRows(notes[PATHS.area], "areas"), [{ label: "Home", text: "Household systems." }]);
+  for (const kind of ["projects", "notebooks", "albums"]) assert.equal(storedCatalogRows(notes[PATHS.area], kind).length, 1, kind);
+  assert.equal(storedCatalogRows(notes[PATHS.project], "projects").length, 64);
   assert.doesNotMatch(notes[PATHS.untyped], /^type:/m);
   assert.match(notes[PATHS.duplicate], /## Projects[\s\S]*## Projects/);
   assert.ok(notes["cabinet-context.canvas"]);
   assert.equal(SPECS.length, 16);
-  assert.equal(screenshotNeeds().length, 58);
+  assert.equal(screenshotNeeds().length, 67);
   assert.equal(new Set(screenshotNeeds()).size, screenshotNeeds().length);
   assert.deepEqual(parseArgs(["-e", "/x/obsidian", "-o", "/tmp/shots", "-r", "/tmp/report.json", "-s"]), {
     executable: "/x/obsidian", out: "/tmp/shots", report: "/tmp/report.json", reloadLoop: 0, selfTest: true, help: false,
@@ -245,5 +268,5 @@ function selfTest() {
 
 module.exports = {
   HELP_TEXT, PATHS, SPECS, SCREENSHOT_HOSTS, fixtureNotes, screenshotNeeds, parseArgs,
-  countCatalogRows, selfTest,
+  countCatalogRows, storedCatalogRows, selfTest,
 };

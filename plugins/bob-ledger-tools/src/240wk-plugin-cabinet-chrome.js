@@ -185,7 +185,6 @@ function propertyCardCabinetPaintRestKeys(stack, numbering, keyLive) {
   if (!stack) return false;
   try {
     const numbers = new Map((Array.isArray(numbering) ? numbering : []).map((row) => [row?.kind, row?.number]));
-    console.log("DEBUG REST", numbering, [...numbers], keyLive);
     for (const panel of Array.from(stack.querySelectorAll?.("[data-cabinet-kind]") || [])) {
       const kind = panel.getAttribute?.("data-cabinet-kind") || "";
       const keycap = panel.querySelector?.("[data-cabinet-keycap]");

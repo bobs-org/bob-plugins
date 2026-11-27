@@ -301,7 +301,7 @@ function propertyCardCabinetBuildProviderPanel(doc, path, species, kind, provide
 
 function propertyCardCabinetsAssemble(parent, pathValue, footEl, context = {}) {
   try {
-    if (propertyCardCabinetsGateLive?.() !== true || !parent || !footEl) return null;
+    if (!parent || !footEl) return null;
     const path = propertyCardCabinetPath(pathValue);
     if (!path) return null;
     const card = propertyCardCabinetFindCardRoot(parent);

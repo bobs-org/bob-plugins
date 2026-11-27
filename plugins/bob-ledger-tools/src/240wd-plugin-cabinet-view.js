@@ -169,7 +169,7 @@ function propertyCardCabinetCollectRows(stack, path) {
 function propertyCardCabinetsInView(view) {
   const path = propertyCardCabinetViewPath(view);
   const result = { path, extras: [], properties: null, details: null };
-  if (!path || propertyCardCabinetsGateLive?.() !== true) return result;
+  if (!path) return result;
   let details = null;
   try { details = typeof propertyCardFoldTarget === "function" ? propertyCardFoldTarget(view) : null; } catch (_) {}
   result.details = details;
@@ -191,13 +191,13 @@ function propertyCardCabinetsInView(view) {
   return result;
 }
 
-// Deferred inline paint for gate-owned Reading catalogs (bob-cli-qq perf):
-// skip the synchronous inline painter when the gate is open on an eligible
-// Reading surface, then repaint the native callout only if no cabinet
-// absorption covers it. Returns true when the caller must skip its sync
-// paint (the fallback paints later, or never when a cabinet owns the
-// catalog). Embeds, hover, canvas, print, Source/Live editors, and a closed
-// gate never defer, so fail-open still shows today's painted catalog.
+// Deferred inline paint for cabinet-owned Reading catalogs (bob-cli-qq perf):
+// skip the synchronous inline painter on an eligible Reading surface, then
+// repaint the native callout only if no cabinet absorption covers it.
+// Returns true when the caller must skip its sync paint (the fallback paints
+// later, or never when a cabinet owns the catalog). Embeds, hover, canvas,
+// print, and Source/Live editors never defer, so fail-open still shows
+// today's painted catalog.
 // Never throws.
 const PROPERTY_CARD_CABINET_INLINE_FALLBACK_MS = 150;
 const PROPERTY_CARD_CABINET_INLINE_FALLBACK_RETRIES = 3;
@@ -275,7 +275,6 @@ function propertyCardCabinetInlineAbsorbed(el, kind) {
 
 function propertyCardCabinetDeferInlinePaint(el, ctx, kind, paint) {
   try {
-    if (typeof propertyCardCabinetsGateLive !== "function" || propertyCardCabinetsGateLive() !== true) return false;
     if (!el || !ctx || !kind || typeof paint !== "function") return false;
     const path = String(ctx.sourcePath || "");
     if (!path) return false;

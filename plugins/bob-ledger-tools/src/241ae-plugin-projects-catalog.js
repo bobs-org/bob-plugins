@@ -216,7 +216,7 @@ class BobLedgerToolsProjectsCatalogMixin {
     }
     const widget = { el, path: ctx.sourcePath, folds, allowAnchor, sectionText: section?.text };
     this.projectsCatalogReading.add(widget);
-    // Gate-open perf: skip the synchronous inline paint when a cabinet will
+    // Cabinet perf: skip the synchronous inline paint when a cabinet will
     // own this catalog. The fallback repaints the native callout only when no
     // cabinet absorption covers it, so fail-open still shows today's paint.
     if (typeof propertyCardCabinetDeferInlinePaint === "function"

@@ -330,7 +330,6 @@ function buildCard(kind, H, Plugin, doc, expanded, app, variant = "") {
 function buildCabinetPreview(kind, H, doc, armed) {
   H.propertyCardCabinetStateResetForTests();
   H.propertyCardCabinetProvidersResetForTests();
-  H.propertyCardCabinetsSetGateForTests(true);
   const path = `${kind}/preview.md`;
   const card = doc.createElement("section");
   card.className = "bob-property-card";
@@ -415,7 +414,6 @@ function buildCabinetPreview(kind, H, doc, armed) {
         : configFold ? [({ bank: "setup", prose: "outline" })[kind]] : [];
     H.propertyCardCabinetPaintPick(stack, H.propertyCardCabinetNumbering(extras));
   }
-  H.propertyCardCabinetsSetGateForTests(false);
   return card;
 }
 

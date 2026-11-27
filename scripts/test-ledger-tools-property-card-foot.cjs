@@ -373,7 +373,7 @@ test("foot disclosure gains a - keycap when keyLive", () => {
   const { built } = buildFoot(doc, { open: false, keyLive: true });
   const disclosure = built.disclosure;
   assert.equal(disclosure.getAttribute("aria-keyshortcuts"), "-");
-  assert.equal(disclosure.querySelector(".bob-property-card-fold-keycap").textContent, "-");
+  assert.equal(built.element.querySelector(".bob-cabinet-keycap").textContent, "-");
   helpers.propertyCardFootResetAll();
 });
 

@@ -531,7 +531,9 @@ test("the card DOM: identity, one heading, child order, unresolved links, and th
   assert.equal(card.getAttribute("data-intention-state"), "current");
   assert.equal(card.querySelectorAll('[aria-level="1"]').length, 1);
   assert.equal(card.querySelector('[aria-level="1"]').textContent, "Fri, Nov 20, 2026");
-  assert.deepEqual(order(card), ["bob-property-card-title-block", "bob-intention-card-ghost", "bob-property-card-rail", "bob-property-card-foot"]);
+  assert.deepEqual(order(card), ["bob-property-card-title-block", "bob-intention-card-ghost", "bob-property-card-rail", "bob-property-card-cabinets"]);
+  const fronts = card.querySelector(".bob-property-card-cabinets").children.filter((child) => child.nodeType === 1);
+  assert.equal(fronts.at(-1).getAttribute("data-cabinet-kind"), "properties", "the Properties cabinet ends the card");
   const pill = card.querySelector(".bob-property-card-pill");
   assert.equal(pill.textContent, "TODAY");
   assert.equal(card.querySelector('.bob-property-card-tile-band').textContent, "FRI");
@@ -561,7 +563,7 @@ test("the card DOM: identity, one heading, child order, unresolved links, and th
   const full = H.intentionCardBuildDom(model(w, DAY).model, w.plugin, doc);
   assert.deepEqual(order(full), [
     "bob-property-card-title-block", "bob-intention-card-intentions", "bob-intention-card-band", "bob-property-card-rail",
-    "bob-property-card-foot",
+    "bob-property-card-cabinets",
   ]);
 
   const week = H.intentionCardBuildDom(model(w, WEEK).model, w.plugin, doc);

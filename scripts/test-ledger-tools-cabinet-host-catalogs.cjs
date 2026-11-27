@@ -122,3 +122,89 @@ test("provider installation registers each host catalog and digest follows repor
   H.propertyCardCabinetProvidersReleasePlugin(plugin);
   H.propertyCardCabinetProvidersResetForTests();
 });
+
+// A minimal Reading DOM: preview > sizer > sections, enough for the source-
+// aware absorption scan in 240wh.
+class ReadingNode {
+  constructor(tagName, className = "", text = "", attrs = {}) {
+    this.nodeType = 1;
+    this.tagName = tagName.toUpperCase();
+    this.children = [];
+    this.parentNode = null;
+    this.text = text;
+    this.attrs = new Map(Object.entries(attrs));
+    const names = new Set(String(className).split(/\s+/).filter(Boolean));
+    this.classList = {
+      add: (name) => names.add(name),
+      remove: (name) => names.delete(name),
+      contains: (name) => names.has(name),
+    };
+  }
+  get textContent() { return this.text + this.children.map((child) => child.textContent).join(""); }
+  append(...nodes) { for (const node of nodes) { node.parentNode = this; this.children.push(node); } return this; }
+  getAttribute(name) { return this.attrs.has(name) ? this.attrs.get(name) : null; }
+  matches(selector) {
+    return String(selector).split(",").some((part) => {
+      const value = part.trim();
+      const cls = /^\.([\w-]+)$/.exec(value);
+      return Boolean(cls && this.classList.contains(cls[1]));
+    });
+  }
+  closest(selector) { let node = this; while (node) { if (node.matches(selector)) return node; node = node.parentNode; } return null; }
+  querySelectorAll(selector) {
+    const found = [];
+    const visit = (node) => {
+      for (const child of node.children) {
+        if (selector === "[data-callout]" ? child.getAttribute("data-callout") !== null
+          : selector === "h2" ? child.tagName === "H2" : child.matches(selector)) found.push(child);
+        visit(child);
+      }
+    };
+    visit(this);
+    return found;
+  }
+  querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
+  compareDocumentPosition() { return 4; }
+}
+
+test("a superseded Reading mount leaves its replacement's absorption tags in place", () => {
+  const path = "Areas/cash.md";
+  const source = [
+    "---", 'type: "[[area]]"', "---", "", "# Cash", "",
+    "## Notebooks", "", "> [!notebooks]", "> - **[[tools|Tools]]** — Notes about tools.", "",
+    "## Notes", "", "Body.", "",
+  ].join("\n");
+  const plan = H.propertyCardCatalogRegionForHide(source, "notebooks");
+  assert.ok(plan && !plan.damage);
+  const heading = new ReadingNode("h2", "", "Notebooks");
+  const callout = new ReadingNode("div", "callout", "", { "data-callout": "notebooks" });
+  const preview = new ReadingNode("div", "markdown-preview-view").append(
+    new ReadingNode("div", "markdown-preview-sizer").append(
+      new ReadingNode("div").append(heading),
+      new ReadingNode("div").append(callout),
+    ),
+  );
+  const view = { containerEl: preview, file: { path } };
+  const plugin = { homeCardSourceCache: new Map([[path, source]]) };
+  const mount = () => H.propertyCardCabinetHostMountClaim("notebooks", plugin, {
+    path, view, panel: {}, applied: { plan }, source, readingScope: preview,
+  });
+  const absorbed = () => [heading, callout].map((node) => node.classList.contains("bob-cabinet-absorbed"));
+
+  // The host re-renders the card: the replacement mounts and tags the same
+  // rendered nodes before the registry releases the superseded mount.
+  const first = mount();
+  assert.equal(typeof first, "function");
+  const second = mount();
+  assert.equal(typeof second, "function");
+  first();
+  assert.deepEqual(absorbed(), [true, true], "the live replacement keeps the stored section hidden");
+  second();
+  assert.deepEqual(absorbed(), [false, false], "releasing the last mount fails open");
+
+  // A lone mount still untags on release.
+  const lone = mount();
+  assert.deepEqual(absorbed(), [true, true]);
+  lone();
+  assert.deepEqual(absorbed(), [false, false]);
+});

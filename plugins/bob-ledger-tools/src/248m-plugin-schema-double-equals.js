@@ -413,9 +413,7 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
             if (this.schemaDoubleEqualsActive === false) return false;
             const view = schemaDoubleEqualsActiveView(this);
             try {
-              if (typeof propertyCardCabinetsGateLive === "function"
-                && propertyCardCabinetsGateLive() === true
-                && typeof propertyCardCabinetPickActive === "function"
+              if (typeof propertyCardCabinetPickActive === "function"
                 && propertyCardCabinetPickActive() === true
                 && typeof propertyCardCabinetPickDisarmPick === "function") {
                 propertyCardCabinetPickDisarmPick({ silent: true });
@@ -438,9 +436,7 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
             if (this.schemaDoubleEqualsActive === false) return false;
             const view = schemaDoubleEqualsActiveView(this);
             try {
-              if (typeof propertyCardCabinetsGateLive === "function"
-                && propertyCardCabinetsGateLive() === true
-                && typeof propertyCardCabinetUnderscore === "function") {
+              if (typeof propertyCardCabinetUnderscore === "function") {
                 if (propertyCardCabinetUnderscore(view, this) === true) return true;
               }
             } catch (_) {}
@@ -528,9 +524,7 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
     } catch (_) {}
     if (key !== "=" && key !== "-" && key !== "+" && key !== "_") return;
     try {
-      if (typeof propertyCardCabinetsGateLive === "function"
-        && propertyCardCabinetsGateLive() === true
-        && typeof propertyCardCabinetPickActive === "function"
+      if (typeof propertyCardCabinetPickActive === "function"
         && propertyCardCabinetPickActive() === true) {
         if (key === "_" || key === "-") return;
         if ((key === "=" || key === "+") && typeof propertyCardCabinetPickDisarmPick === "function") {
@@ -590,9 +584,7 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
         reason: "details-toggle",
         canAct: () => {
           try {
-            if (typeof propertyCardCabinetsGateLive === "function"
-              && propertyCardCabinetsGateLive() === true
-              && typeof propertyCardCabinetCanUnderscore === "function") {
+            if (typeof propertyCardCabinetCanUnderscore === "function") {
               return propertyCardCabinetCanUnderscore(view) === true;
             }
           } catch (_) {}
@@ -601,9 +593,7 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
         },
         run: () => {
           try {
-            if (typeof propertyCardCabinetsGateLive === "function"
-              && propertyCardCabinetsGateLive() === true
-              && typeof propertyCardCabinetUnderscore === "function") {
+            if (typeof propertyCardCabinetUnderscore === "function") {
               if (propertyCardCabinetUnderscore(view, this) === true) return;
             }
           } catch (_) {}

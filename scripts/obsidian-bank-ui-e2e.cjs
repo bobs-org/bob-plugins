@@ -354,8 +354,36 @@ async function openNote(client, file, mode) {
 }
 
 async function capturePage(client, output) {
+  await client.evaluate("new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
   const screenshot = await client.call("Page.captureScreenshot", { format: "png", fromSurface: true });
   fs.writeFileSync(output, Buffer.from(screenshot.data, "base64"));
+}
+
+async function captureCategoryModal(client, output) {
+  const placed = await client.evaluate(`(() => {
+    const plugin = window.app?.plugins?.plugins?.["bob-ledger-tools"];
+    const modal = plugin?.bankCategoryModal;
+    const source = modal?.contentEl;
+    if (!source || typeof source.cloneNode !== "function") return { ok: false, reason: "no Category card" };
+    document.getElementById("bob-e2e-bank-card-shot")?.remove();
+    const holder = document.createElement("div");
+    holder.id = "bob-e2e-bank-card-shot";
+    holder.style.cssText = "position:fixed;inset:0;z-index:2147483647;background:color-mix(in srgb, black 45%, transparent);display:flex;align-items:center;justify-content:center;opacity:1;visibility:visible;";
+    const clone = source.cloneNode(true);
+    clone.style.cssText = [clone.getAttribute("style") || "", "opacity:1", "visibility:visible", "display:block", "max-height:90vh", "overflow:auto", "background:var(--background-primary)"].join(";");
+    holder.appendChild(clone);
+    document.body.appendChild(holder);
+    const rect = clone.getBoundingClientRect();
+    return { ok: rect.width > 8 && rect.height > 8 };
+  })()`);
+  if (!placed?.ok) throw new Error(`could not place Category card screenshot: ${placed?.reason || "empty bounds"}`);
+  await client.evaluate("new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
+  try {
+    const screenshot = await client.call("Page.captureScreenshot", { format: "png", fromSurface: true });
+    fs.writeFileSync(output, Buffer.from(screenshot.data, "base64"));
+  } finally {
+    await client.evaluate(`document.getElementById("bob-e2e-bank-card-shot")?.remove()`);
+  }
 }
 
 function bankKeyDispatchEvents(options) {
@@ -1198,8 +1226,6 @@ async function runE2e(parsed) {
         "- [ ] $3.00 Bookstore",
         "- [ ] $4.00 Hardware",
         "- [x] $5.00 Already filed",
-        "## Thu Jul 2",
-        "- [ ] $27.01 Amazon Reta* Ue4v4",
         "",
       ].join("\\n");
       const existing = window.app.vault.getAbstractFileByPath(path);
@@ -1318,7 +1344,8 @@ async function runE2e(parsed) {
       const noteStayed = Boolean(noteModal && noteModal.closed !== true && !noteModal.summary &&
         !noteModal.noteStage && noteModal.context && noteModal.context.cardRow &&
         noteModal.context.cardRow.payee === "Hardware" && noteModal.didInteract !== true);
-      const noteCaption = Boolean(document.querySelector(".bob-bank-category-note"));
+      const noteCaption = Boolean(noteModal && noteModal.contentEl &&
+        noteModal.contentEl.querySelector(".bob-bank-category-note"));
       dbg.push(Object.assign(snap("afterNote"), { noteKeyed, noteStageOpen, afterNote, noteCaption }));
       // Within CM6's 500 ms grouping window, Enter accepts and advances.
       const hardwareLine = lineOf("Hardware");
@@ -1382,7 +1409,27 @@ async function runE2e(parsed) {
       /— for the team$/.test(String(walk.afterUndo || ""))), jsonDetail(walk));
 
     const noteSuggest = await client.evaluate(`(() => (async () => {
-      const path = "bank/2026-07.md";
+      const path = "bank/2025-12.md";
+      const body = [
+        "---",
+        'parent: "[[bank]]"',
+        'type: "[[bank_month]]"',
+        "month: 2025-12",
+        "---",
+        "",
+        "# Bank December 2025",
+        "",
+        "## Mon Dec 1",
+        "- [ ] $27.01 Amazon Reta* Ue4v4",
+        "",
+      ].join("\\n");
+      const existing = window.app.vault.getAbstractFileByPath(path);
+      if (existing) await window.app.vault.modify(existing, body);
+      else await window.app.vault.create(path, body);
+      const abstract = window.app.vault.getAbstractFileByPath(path);
+      const leaf = window.app.workspace.getLeaf(false);
+      await leaf.openFile(abstract);
+      await new Promise((resolve) => setTimeout(resolve, 600));
       const ledger = window.app.plugins.plugins["bob-ledger-tools"];
       const view = window.app.workspace.activeLeaf && window.app.workspace.activeLeaf.view;
       const editor = view && view.editor;
@@ -1404,6 +1451,8 @@ async function runE2e(parsed) {
       modal.setReport({ categories: cats, days: [] });
       await modal.onKeyDown({ key: " ", preventDefault() {}, stopPropagation() {} });
       const field = modal.contentEl.querySelector("input[data-bank-note-input]");
+      const card = modal.contentEl.querySelector(".bob-bank-category-card");
+      const cardRect = card && card.getBoundingClientRect();
       const options = Array.from(modal.contentEl.querySelectorAll('[role="option"]'))
         .map((option) => option.textContent);
       return {
@@ -1413,14 +1462,18 @@ async function runE2e(parsed) {
         ghost: modal.contentEl.querySelector(".bob-bank-category-note-ghost-tail")?.textContent || "",
         options,
         payee: modal.context?.cardRow?.payee || null,
+        visible: Boolean(card && card.isConnected && cardRect && cardRect.width > 0 && cardRect.height > 0 &&
+          window.getComputedStyle(card).display !== "none" && window.getComputedStyle(card).visibility !== "hidden"),
+        cardRect: cardRect ? { x: cardRect.x, y: cardRect.y, width: cardRect.width, height: cardRect.height } : null,
       };
     })())()`, 30000).catch((error) => ({ error: String(error) }));
     record("walk-note-suggest", Boolean(noteSuggest && noteSuggest.opened &&
       noteSuggest.value === "" && noteSuggest.ghost === "Ask Kelly?" &&
       noteSuggest.options?.some((text) => text.includes("Ask Kelly?")) &&
+      noteSuggest.visible &&
       /Amazon Reta/.test(String(noteSuggest.payee || ""))), jsonDetail(noteSuggest));
     const noteSuggestShot = path.join(outDir, "walk-note-suggest.png");
-    await capturePage(client, noteSuggestShot);
+    await captureCategoryModal(client, noteSuggestShot);
     report.screenshots.push(noteSuggestShot);
     const noteSuggestSaved = await client.evaluate(`(() => (async () => {
       const ledger = window.app.plugins.plugins["bob-ledger-tools"];
@@ -1518,12 +1571,12 @@ async function runE2e(parsed) {
       learnOpen.tilesSpan,
     ), jsonDetail(learnOpen));
     const walkCardShot = path.join(outDir, "walk-card.png");
-    await capturePage(client, walkCardShot);
+    await captureCategoryModal(client, walkCardShot);
     report.screenshots.push(walkCardShot);
     await client.evaluate(`(() => { document.body.classList.remove("theme-light"); document.body.classList.add("theme-dark"); return true; })()`);
     await sleep(200);
     const walkCardDark = path.join(outDir, "walk-card-dark.png");
-    await capturePage(client, walkCardDark);
+    await captureCategoryModal(client, walkCardDark);
     report.screenshots.push(walkCardDark);
     await client.evaluate(`(() => { document.body.classList.remove("theme-dark"); document.body.classList.add("theme-light"); return true; })()`);
     const focusState = await client.evaluate(`(() => {

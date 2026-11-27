@@ -159,13 +159,6 @@ class BobLedgerToolsBlockMarksRuntimeMixin {
       // Editor refresh is best-effort.
     }
     try {
-      if (typeof this.refreshPriorityMarkEditors === "function") {
-        this.refreshPriorityMarkEditors();
-      }
-    } catch (error) {
-      // Digit-row bar folds rebuild with the block-marks gate.
-    }
-    try {
       // The rendered-view phase supplies this hook; the Live Preview phase
       // remains independently runnable before that adapter is installed.
       if (typeof this.sweepBlockMarksReading === "function") {

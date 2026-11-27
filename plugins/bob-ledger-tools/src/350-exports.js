@@ -462,7 +462,6 @@ module.exports.helpers = {
   blockMarkClassify,
   blockMarkTooltip,
   blockMarkModel,
-  blockMarkIsDigitKey,
   blockMarkProjectTagSource,
   blockMarkAwaitingTagSource,
   blockMarkTagSource,

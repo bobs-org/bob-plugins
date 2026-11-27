@@ -1,9 +1,7 @@
 // --- Blocked-reason marks: redundancy-fold widgets ------------------------
 // Empty Live Preview widgets for the tag pill the box already says: the
 // `#prj_is_blocked` pill on `prj` rows and the `#awaiting_reply` pill on
-// `awaiting` rows. Digit-row priority bars reuse `PriorityMarkWidget`
-// with `data-folded="true"`. Every helper is synchronous and never
-// throws.
+// `awaiting` rows. Every helper is synchronous and never throws.
 
 function buildBlockMarkPrjFoldElement(doc, options) {
   try {

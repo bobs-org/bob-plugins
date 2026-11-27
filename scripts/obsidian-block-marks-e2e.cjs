@@ -1558,13 +1558,39 @@ async function runE2e(parsed) {
     record("lp-nested-independent", lpParent.visible.length > 0 && lpChild.visible.length > 0 && lpParent.visible[0].key === "dep" && lpChild.visible[0].key === "date",
       `parent=${lpParent.visible[0] && lpParent.visible[0].key} child=${lpChild.visible[0] && lpChild.visible[0].key}`);
     const lpFolds = await collectFolds(client);
-    record("lp-BM1-bars-folded", Boolean(lpFolds && lpFolds.bm1 && lpFolds.bm1.folded === true && lpFolds.bm1.markWidth <= 4), JSON.stringify(lpFolds && lpFolds.bm1).slice(0, 180));
+    record("lp-BM1-bars-shown", Boolean(lpFolds && lpFolds.bm1 && lpFolds.bm1.folded === false && lpFolds.bm1.markWidth > 4), JSON.stringify(lpFolds && lpFolds.bm1).slice(0, 180));
     record("lp-BM8-bars-shown", Boolean(lpFolds && lpFolds.bm8 && lpFolds.bm8.folded === false && lpFolds.bm8.markWidth > 4), JSON.stringify(lpFolds && lpFolds.bm8).slice(0, 180));
     record("lp-BM9-bars-shown", Boolean(lpFolds && lpFolds.bm9 && lpFolds.bm9.folded === false && lpFolds.bm9.markWidth > 4), JSON.stringify(lpFolds && lpFolds.bm9).slice(0, 180));
     record("lp-BM7-pill-folded", Boolean(lpFolds && lpFolds.bm7 && lpFolds.bm7.prjFolded === true), JSON.stringify(lpFolds && lpFolds.bm7).slice(0, 180));
     record("lp-BM19-pill-kept", Boolean(lpFolds && lpFolds.bm19 && lpFolds.bm19.prjFolded === false && lpFolds.bm19.tagWidth > 4), JSON.stringify(lpFolds && lpFolds.bm19).slice(0, 180));
     record("lp-BMAw-pill-folded", Boolean(lpFolds && lpFolds.bmaw && lpFolds.bmaw.prjFolded === true), JSON.stringify(lpFolds && lpFolds.bmaw).slice(0, 180));
     record("lp-BMAw-bars-shown", Boolean(lpFolds && lpFolds.bmaw && lpFolds.bmaw.folded === false && lpFolds.bmaw.markWidth > 4), JSON.stringify(lpFolds && lpFolds.bmaw).slice(0, 180));
+    // Screenshot regression: cursor at the start of the BM1 line reveals
+    // the raw `- [?]` markup, so the digit disappears while the bars stay.
+    await client.evaluate(`(() => {
+      try {
+        const target = ${JSON.stringify(fixture.marks)};
+        const leaves = (window.app.workspace.getLeavesOfType
+          ? window.app.workspace.getLeavesOfType("markdown") : []);
+        const leaf = leaves.find((l) => l && l.view && l.view.file && l.view.file.path === target) || leaves[0];
+        const editor = leaf && leaf.view && leaf.view.editor;
+        if (!editor || typeof editor.lineCount !== "function") return { ok: false, error: "no editor" };
+        const total = editor.lineCount();
+        let at = -1;
+        for (let i = 0; i < total; i += 1) {
+          let text = "";
+          try { text = editor.getLine(i); } catch (e) { text = ""; }
+          if (text && text.includes("BM1 p2 vector")) { at = i; break; }
+        }
+        if (at < 0) return { ok: false, error: "BM1 line missing" };
+        editor.setCursor({ line: at, ch: 0 });
+        if (typeof editor.focus === "function") editor.focus();
+        return { ok: true, line: at };
+      } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
+    })()`).catch(() => ({ ok: false }));
+    await sleep(700);
+    const lpFoldsCursor = await collectFolds(client);
+    record("lp-BM1-cursor-bars-shown", Boolean(lpFoldsCursor && lpFoldsCursor.bm1 && lpFoldsCursor.bm1.markWidth > 4), JSON.stringify(lpFoldsCursor && lpFoldsCursor.bm1).slice(0, 180));
     // (Fence tree-name recording moved to the refresh-edit rebuild below.)
 
     const shotLiveLight = path.join(outDir, "e2e-block-marks-live-light.png");
@@ -1598,7 +1624,7 @@ async function runE2e(parsed) {
     record("reading-nested-independent", rdParent.visible.length > 0 && rdChild.visible.length > 0 && rdParent.visible[0].key === "dep" && rdChild.visible[0].key === "date",
       `parent=${rdParent.visible[0] && rdParent.visible[0].key} child=${rdChild.visible[0] && rdChild.visible[0].key}`);
     const readingFolds = await collectFolds(client);
-    record("reading-BM1-bars-folded", Boolean(readingFolds && readingFolds.bm1 && readingFolds.bm1.folded === true), JSON.stringify(readingFolds && readingFolds.bm1).slice(0, 180));
+    record("reading-BM1-bars-shown", Boolean(readingFolds && readingFolds.bm1 && readingFolds.bm1.folded === false), JSON.stringify(readingFolds && readingFolds.bm1).slice(0, 180));
     record("reading-BM7-pill-folded", Boolean(readingFolds && readingFolds.bm7 && readingFolds.bm7.prjFolded === true), JSON.stringify(readingFolds && readingFolds.bm7).slice(0, 180));
     record("reading-BMAw-pill-folded", Boolean(readingFolds && readingFolds.bmaw && readingFolds.bmaw.prjFolded === true), JSON.stringify(readingFolds && readingFolds.bmaw).slice(0, 180));
     const readingAw = markForMarker(reading.marks, "BMAw");
@@ -2287,7 +2313,7 @@ async function runE2e(parsed) {
           wantKey: "p2",
           wantGlyph: "2",
           wantMask: false,
-          hidePriority: true,
+          hidePriority: false,
         });
         record(
           "bm24-tasks-css-digit",

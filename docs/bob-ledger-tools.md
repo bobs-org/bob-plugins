@@ -17,7 +17,7 @@ Cards: [Album cards](albums.md), [Record Card](record-card.md),
 | --- | --- |
 | Name | Bob Ledger Tools |
 | ID | `bob-ledger-tools` |
-| Version | 1.172.9 |
+| Version | 1.172.10 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
 | Description | Render Bob’s task and Pomodoro information in Obsidian: planning and freshness marks, dependencies, relations, calendar events, task types, and ledger navigation. Report-driven cards cover bank subscriptions, Stats, Reading Board, albums, projects, and areas. Snippets, session toggles, and versioned APIs connect these views to Bob and other Bob plugins. |
@@ -309,16 +309,16 @@ Marks are display-only; session toggles restore source rendering:
   replaced raw fields. Tooltip attributes restore only while matching the last
   applied values, then the ownership record is released. Live Preview also
   attaches them through a CodeMirror `requestMeasure` write-pass after rebuild.
-  While on, digit checkboxes (`p1`–`p4`) fold that row's priority bars to zero
-  width, and `prj` / `awaiting` checkboxes fold their exact
-  `#prj_is_blocked` / `#awaiting_reply` pill; cursor and click still reveal the
+  While on, `prj` / `awaiting` checkboxes fold their exact
+  `#prj_is_blocked` / `#awaiting_reply` pill; priority bars always show,
+  including on digit (`p1`–`p4`) rows. Cursor and click still reveal the
   raw field, and either session toggle restores it.
 - The priority mark renders each canonical `[priority:: …]` field as one
   signal-bar glyph (4/3/2/1 filled bars for P1–P4, a solid `!` square for
   off-ladder `highest`) in Live Preview and rendered views. The glyph follows
   the stored Tasks value, never the ladder position; an unknown ladder omits
-  P-labels instead of guessing. Digit block-mark rows fold those bars
-  while blocked-reason marks are on.
+  P-labels instead of guessing. The bars always show, including on digit
+  block-mark rows.
 - The date mark renders each canonical `created`/`scheduled`/`completion`/
   `cancelled` field as one monochrome glyph plus a calendar label (`today`,
   `tomorrow`, `Fri`, `Oct 22`) in Live Preview and rendered views, including

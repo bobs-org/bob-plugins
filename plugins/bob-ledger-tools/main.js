@@ -16095,9 +16095,10 @@ function priorityMarkModel(value, ladder) {
 // round-trip. Produces
 // `span.bob-priority-mark[data-priority][data-fold-space]`
 // containing `span.bob-priority-mark-glyph` (the glyph itself is
-// drawn by the single CSS-mask definition). `decorative` means
-// `aria-hidden="true"` with no label (for surfaces that already
-// show a P-label). `inheritColor` sets
+// drawn by the single CSS-mask definition). Priority marks always
+// render at full width, including on Blocked digit rows.
+// `decorative` means `aria-hidden="true"` with no label (for
+// surfaces that already show a P-label). `inheritColor` sets
 // `data-inherit-color="true"`, so the ink becomes `currentColor`.
 // `doc` provides `createElement` and `createTextNode` so tests can
 // pass a fake document. Never throws: bad input yields null.
@@ -16118,14 +16119,12 @@ function buildPriorityMarkElement(doc, model, options) {
     const settings =
       options && typeof options === "object" ? options : {};
     const foldSpace = Boolean(settings.foldSpace);
-    const folded = Boolean(settings.folded);
     const decorative = Boolean(settings.decorative);
     const inheritColor = Boolean(settings.inheritColor);
     const span = doc.createElement("span");
     span.setAttribute("class", "bob-priority-mark");
     span.setAttribute("data-priority", String(model.value));
     span.setAttribute("data-fold-space", foldSpace ? "true" : "false");
-    span.setAttribute("data-folded", folded ? "true" : "false");
     if (inheritColor) {
       span.setAttribute("data-inherit-color", "true");
     }
@@ -16149,31 +16148,27 @@ function buildPriorityMarkElement(doc, model, options) {
 // Live Preview widget for one priority mark. `eq` compares a model
 // key, so unchanged marks never flicker. `toDOM` builds the
 // listener-free element and adds the reveal-on-click listener only.
-// Defined only when `WidgetType` exists; otherwise null and the
-// extension is not registered.
+// Priority marks always render unfolded. Defined only when
+// `WidgetType` exists; otherwise null and the extension is not
+// registered.
 let PriorityMarkWidget = null;
 if (WidgetType && typeof WidgetType === "function") {
   PriorityMarkWidget = class extends WidgetType {
-    constructor(model, foldSpace, folded) {
+    constructor(model, foldSpace) {
       super();
       this.model = model;
       this.foldSpace = Boolean(foldSpace);
-      this.folded = Boolean(folded);
       let key = "";
       try {
         key =
           String((model && model.key) || JSON.stringify(model)) +
           "|" +
-          (this.foldSpace ? "1" : "0") +
-          "|" +
-          (this.folded ? "1" : "0");
+          (this.foldSpace ? "1" : "0");
       } catch (error) {
         key =
           String((model && model.value) || "") +
           "|" +
-          (this.foldSpace ? "1" : "0") +
-          "|" +
-          (this.folded ? "1" : "0");
+          (this.foldSpace ? "1" : "0");
       }
       this.key = key;
     }
@@ -16190,7 +16185,7 @@ if (WidgetType && typeof WidgetType === "function") {
       const dom = buildPriorityMarkElement(
         typeof document !== "undefined" ? document : null,
         this.model,
-        { foldSpace: this.foldSpace, folded: this.folded },
+        { foldSpace: this.foldSpace },
       );
       // In tests `document` is undefined and the caller passes a fake
       // doc via `buildPriorityMarkElement` directly; never throw here.
@@ -29681,16 +29676,6 @@ function blockMarkModel(lineText, ctx) {
   }
 }
 
-// Digit block-mark keys: the checkbox already names the ladder level, so
-// the priority bars on that row fold. Never throws.
-function blockMarkIsDigitKey(key) {
-  try {
-    return key === "p1" || key === "p2" || key === "p3" || key === "p4";
-  } catch (error) {
-    return false;
-  }
-}
-
 const BLOCK_MARK_PRJ_TAG = "#prj_is_blocked";
 
 // The tag token a mark key folds because the box already says it:
@@ -31158,13 +31143,6 @@ class BobLedgerToolsBlockMarksRuntimeMixin {
       this.refreshBlockMarkEditors();
     } catch (error) {
       // Editor refresh is best-effort.
-    }
-    try {
-      if (typeof this.refreshPriorityMarkEditors === "function") {
-        this.refreshPriorityMarkEditors();
-      }
-    } catch (error) {
-      // Digit-row bar folds rebuild with the block-marks gate.
     }
     try {
       // The rendered-view phase supplies this hook; the Live Preview phase
@@ -32999,9 +32977,7 @@ class BobLedgerToolsBlockMarksReadingMixin {
 // --- Blocked-reason marks: redundancy-fold widgets ------------------------
 // Empty Live Preview widgets for the tag pill the box already says: the
 // `#prj_is_blocked` pill on `prj` rows and the `#awaiting_reply` pill on
-// `awaiting` rows. Digit-row priority bars reuse `PriorityMarkWidget`
-// with `data-folded="true"`. Every helper is synchronous and never
-// throws.
+// `awaiting` rows. Every helper is synchronous and never throws.
 
 function buildBlockMarkPrjFoldElement(doc, options) {
   try {
@@ -150512,18 +150488,6 @@ class BobLedgerToolsPriorityMarksMixin {
                     if (!inCode) {
                       const model = priorityMarkModel(source.value, ladder);
                       if (model) {
-                        let folded = false;
-                        try {
-                          folded =
-                            typeof this.priorityMarkFoldedForLine ===
-                              "function" &&
-                            this.priorityMarkFoldedForLine(
-                              filePath,
-                              line.text,
-                            );
-                        } catch (error) {
-                          folded = false;
-                        }
                         const from =
                           line.from +
                           source.fieldStart -
@@ -150535,7 +150499,6 @@ class BobLedgerToolsPriorityMarksMixin {
                             widget: new PriorityMarkWidget(
                               model,
                               source.foldSpace,
-                              folded,
                             ),
                           }),
                         );
@@ -150869,21 +150832,8 @@ class BobLedgerToolsPriorityMarksMixin {
           }
           const beforeText = value.slice(0, source.fieldStart);
           const afterText = value.slice(source.fieldEnd);
-          let folded = false;
-          try {
-            folded =
-              typeof this.priorityMarkFoldedForRow === "function" &&
-              this.priorityMarkFoldedForRow(
-                ctx && ctx.sourcePath,
-                value,
-                li,
-              );
-          } catch (error) {
-            folded = false;
-          }
           const markEl = buildPriorityMarkElement(docNode, model, {
             foldSpace: false,
-            folded,
           });
           if (!markEl) {
             continue;
@@ -155491,13 +155441,11 @@ class BobLedgerToolsBlockMarksMixin {
 }
 // ---- src/272d-plugin-block-mark-folds.js ----
 // --- Blocked-reason marks: fold what the box already says -----------------
-// Digit rows fold their priority bars in `265-plugin-priority-marks.js`
-// via `priorityMarkFoldedForLine`. This mixin folds the exact
-// `#prj_is_blocked` token on `prj` rows and the exact `#awaiting_reply`
-// token on `awaiting` rows in Live Preview and reading view
-// (`blockMarkFoldTagForKey`), and keeps every fold gated on
-// `blockMarksEnabled`. A row whose box shows another key keeps both
-// pills.
+// This mixin folds the exact `#prj_is_blocked` token on `prj` rows and
+// the exact `#awaiting_reply` token on `awaiting` rows in Live Preview
+// and reading view (`blockMarkFoldTagForKey`), and keeps every fold
+// gated on `blockMarksEnabled`. Priority bars always show, including
+// on digit rows. A row whose box shows another key keeps both pills.
 const BLOCK_MARK_FOLDS_READING_PROCESSOR_ORDER = 45;
 
 class BobLedgerToolsBlockMarkFoldsMixin {
@@ -155523,38 +155471,6 @@ class BobLedgerToolsBlockMarkFoldsMixin {
       }
     } catch (error) {
       // Fold setup never throws.
-    }
-  }
-
-  priorityMarkFoldedForLine(path, lineText) {
-    try {
-      if (this.blockMarksEnabled === false) return false;
-      if (typeof this.blockMarkModelForLine !== "function") return false;
-      const model = this.blockMarkModelForLine(path || "", lineText);
-      return typeof blockMarkIsDigitKey === "function"
-        ? blockMarkIsDigitKey(model && model.key)
-        : false;
-    } catch (error) {
-      return false;
-    }
-  }
-
-  priorityMarkFoldedForRow(path, lineText, li) {
-    try {
-      if (this.blockMarksEnabled === false) return false;
-      if (li && typeof this.blockMarkReadingInTasksQuery === "function") {
-        if (this.blockMarkReadingInTasksQuery(li)) return false;
-      }
-      if (li && typeof li.getAttribute === "function") {
-        const key = li.getAttribute("data-bob-block");
-        if (typeof blockMarkIsDigitKey === "function" && blockMarkIsDigitKey(key)) {
-          return true;
-        }
-        if (key) return false;
-      }
-      return this.priorityMarkFoldedForLine(path, lineText);
-    } catch (error) {
-      return false;
     }
   }
 
@@ -216300,7 +216216,6 @@ module.exports.helpers = {
   blockMarkClassify,
   blockMarkTooltip,
   blockMarkModel,
-  blockMarkIsDigitKey,
   blockMarkProjectTagSource,
   blockMarkAwaitingTagSource,
   blockMarkTagSource,

@@ -326,9 +326,10 @@ function priorityMarkModel(value, ladder) {
 // round-trip. Produces
 // `span.bob-priority-mark[data-priority][data-fold-space]`
 // containing `span.bob-priority-mark-glyph` (the glyph itself is
-// drawn by the single CSS-mask definition). `decorative` means
-// `aria-hidden="true"` with no label (for surfaces that already
-// show a P-label). `inheritColor` sets
+// drawn by the single CSS-mask definition). Priority marks always
+// render at full width, including on Blocked digit rows.
+// `decorative` means `aria-hidden="true"` with no label (for
+// surfaces that already show a P-label). `inheritColor` sets
 // `data-inherit-color="true"`, so the ink becomes `currentColor`.
 // `doc` provides `createElement` and `createTextNode` so tests can
 // pass a fake document. Never throws: bad input yields null.
@@ -349,14 +350,12 @@ function buildPriorityMarkElement(doc, model, options) {
     const settings =
       options && typeof options === "object" ? options : {};
     const foldSpace = Boolean(settings.foldSpace);
-    const folded = Boolean(settings.folded);
     const decorative = Boolean(settings.decorative);
     const inheritColor = Boolean(settings.inheritColor);
     const span = doc.createElement("span");
     span.setAttribute("class", "bob-priority-mark");
     span.setAttribute("data-priority", String(model.value));
     span.setAttribute("data-fold-space", foldSpace ? "true" : "false");
-    span.setAttribute("data-folded", folded ? "true" : "false");
     if (inheritColor) {
       span.setAttribute("data-inherit-color", "true");
     }
@@ -380,31 +379,27 @@ function buildPriorityMarkElement(doc, model, options) {
 // Live Preview widget for one priority mark. `eq` compares a model
 // key, so unchanged marks never flicker. `toDOM` builds the
 // listener-free element and adds the reveal-on-click listener only.
-// Defined only when `WidgetType` exists; otherwise null and the
-// extension is not registered.
+// Priority marks always render unfolded. Defined only when
+// `WidgetType` exists; otherwise null and the extension is not
+// registered.
 let PriorityMarkWidget = null;
 if (WidgetType && typeof WidgetType === "function") {
   PriorityMarkWidget = class extends WidgetType {
-    constructor(model, foldSpace, folded) {
+    constructor(model, foldSpace) {
       super();
       this.model = model;
       this.foldSpace = Boolean(foldSpace);
-      this.folded = Boolean(folded);
       let key = "";
       try {
         key =
           String((model && model.key) || JSON.stringify(model)) +
           "|" +
-          (this.foldSpace ? "1" : "0") +
-          "|" +
-          (this.folded ? "1" : "0");
+          (this.foldSpace ? "1" : "0");
       } catch (error) {
         key =
           String((model && model.value) || "") +
           "|" +
-          (this.foldSpace ? "1" : "0") +
-          "|" +
-          (this.folded ? "1" : "0");
+          (this.foldSpace ? "1" : "0");
       }
       this.key = key;
     }
@@ -421,7 +416,7 @@ if (WidgetType && typeof WidgetType === "function") {
       const dom = buildPriorityMarkElement(
         typeof document !== "undefined" ? document : null,
         this.model,
-        { foldSpace: this.foldSpace, folded: this.folded },
+        { foldSpace: this.foldSpace },
       );
       // In tests `document` is undefined and the caller passes a fake
       // doc via `buildPriorityMarkElement` directly; never throw here.

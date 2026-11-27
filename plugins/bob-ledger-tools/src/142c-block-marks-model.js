@@ -568,16 +568,6 @@ function blockMarkModel(lineText, ctx) {
   }
 }
 
-// Digit block-mark keys: the checkbox already names the ladder level, so
-// the priority bars on that row fold. Never throws.
-function blockMarkIsDigitKey(key) {
-  try {
-    return key === "p1" || key === "p2" || key === "p3" || key === "p4";
-  } catch (error) {
-    return false;
-  }
-}
-
 const BLOCK_MARK_PRJ_TAG = "#prj_is_blocked";
 
 // The tag token a mark key folds because the box already says it:

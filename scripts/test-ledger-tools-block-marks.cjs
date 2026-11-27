@@ -65,7 +65,6 @@ const {
   blockMarkClassify,
   blockMarkTooltip,
   blockMarkModel,
-  blockMarkIsDigitKey,
   blockMarkProjectTagSource,
   blockMarkAwaitingTagSource,
   blockMarkFoldTagForKey,
@@ -323,21 +322,15 @@ test("model keys are stable for equal results and change with a changed mark", (
   assert.notEqual(first.modelKey, changed.modelKey);
 });
 
-test("fold helpers: digit keys, BM1/BM8/BM9 bars, BM7/BM19 pills", () => {
-  assert.equal(blockMarkIsDigitKey("p1"), true);
-  assert.equal(blockMarkIsDigitKey("p4"), true);
-  assert.equal(blockMarkIsDigitKey("dep"), false);
-  assert.equal(blockMarkIsDigitKey("prj"), false);
-  assert.equal(blockMarkIsDigitKey(null), false);
-
+test("fold helpers: BM1/BM8/BM9 bars shown, BM7/BM19 pills", () => {
   const bm1 = modelFor(BM_VECTORS[0].line);
   const bm8 = modelFor(BM_VECTORS[7].line);
   const bm9 = modelFor(BM_VECTORS[8].line);
   const bm7 = modelFor(BM_VECTORS[6].line);
   const bm19 = modelFor(BM_VECTORS[18].line);
-  assert.equal(blockMarkIsDigitKey(bm1.key), true, "BM1 bars fold");
-  assert.equal(blockMarkIsDigitKey(bm8.key), false, "BM8 bars shown");
-  assert.equal(blockMarkIsDigitKey(bm9.key), false, "BM9 bars shown");
+  assert.equal(bm1.key, "p2", "BM1 digit row keeps its bars");
+  assert.equal(bm8.key, "dep", "BM8 bars shown");
+  assert.equal(bm9.key, "prj", "BM9 bars shown");
 
   const bm7Source = blockMarkProjectTagSource(BM_VECTORS[6].line);
   assert.ok(bm7Source);
@@ -362,8 +355,8 @@ test("fold helpers: digit keys, BM1/BM8/BM9 bars, BM7/BM19 pills", () => {
     "utf8",
   );
   assert.ok(
-    css.includes('li.task-list-item[data-bob-block="p2"] .task-priority'),
-    "source-note Tasks-classified digit rows clip .task-priority",
+    !css.includes('li.task-list-item[data-bob-block="p2"] .task-priority'),
+    "digit rows keep their bars: no source-note .task-priority clip",
   );
 });
 
@@ -444,6 +437,10 @@ test("BM24 Tasks CSS cascade: digit from future scheduled + medium, no project t
   assert.ok(css.includes(":has(.task-recurring)"));
   assert.ok(css.includes("clip-path: inset(50%)"));
   assert.ok(
+    !css.includes('[data-task-priority="lowest"]\n):not('),
+    "Tasks-results digit rows keep their bars: no .task-priority clip",
+  );
+  assert.ok(
     css.includes(
       "body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data-task=\"?\"] > .task-list-item-checkbox",
     ),
@@ -522,7 +519,6 @@ test("AW1–AW6 awaiting-reply model vectors pass verbatim", () => {
     assert.ok(!model.tooltip.includes("::"), vector.id + ": tooltip has no inline-field syntax");
     assert.ok(Object.isFrozen(model) && Object.isFrozen(model.reasons), vector.id + ": frozen");
     assert.equal(blockMarkFoldTagForKey(model.key), vector.fold, vector.id + ": fold");
-    assert.equal(blockMarkIsDigitKey(model.key), false, vector.id + ": bars stay shown");
   }
 });
 
@@ -744,10 +740,8 @@ test("AW7 Tasks CSS cascade: the plane beats the digit, prj beats the plane", ()
   const prjAt = tasksSection.indexOf(':has(.tag[data-tag-name="#prj_is_blocked"]) > .task-list-item-checkbox:checked::after');
   assert.ok(digitAt !== -1 && digitAt < planeAt && planeAt < prjAt, "ranked after the digits, before prj");
   assert.ok(
-    tasksSection.includes(
-      ':not(:has(.tag[data-tag-name="#awaiting_reply"])):not(:has(.tag[href="#awaiting_reply"])) .task-priority',
-    ),
-    "plane rows keep their bars",
+    !tasksSection.includes('])) .task-priority'),
+    "no .task-priority clip: every row keeps its bars, including digit and plane rows",
   );
   assert.ok(
     tasksSection.includes(notPrj + ' .tag[data-tag-name="#awaiting_reply"]'),

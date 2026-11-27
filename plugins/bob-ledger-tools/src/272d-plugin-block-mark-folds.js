@@ -1,11 +1,9 @@
 // --- Blocked-reason marks: fold what the box already says -----------------
-// Digit rows fold their priority bars in `265-plugin-priority-marks.js`
-// via `priorityMarkFoldedForLine`. This mixin folds the exact
-// `#prj_is_blocked` token on `prj` rows and the exact `#awaiting_reply`
-// token on `awaiting` rows in Live Preview and reading view
-// (`blockMarkFoldTagForKey`), and keeps every fold gated on
-// `blockMarksEnabled`. A row whose box shows another key keeps both
-// pills.
+// This mixin folds the exact `#prj_is_blocked` token on `prj` rows and
+// the exact `#awaiting_reply` token on `awaiting` rows in Live Preview
+// and reading view (`blockMarkFoldTagForKey`), and keeps every fold
+// gated on `blockMarksEnabled`. Priority bars always show, including
+// on digit rows. A row whose box shows another key keeps both pills.
 const BLOCK_MARK_FOLDS_READING_PROCESSOR_ORDER = 45;
 
 class BobLedgerToolsBlockMarkFoldsMixin {
@@ -31,38 +29,6 @@ class BobLedgerToolsBlockMarkFoldsMixin {
       }
     } catch (error) {
       // Fold setup never throws.
-    }
-  }
-
-  priorityMarkFoldedForLine(path, lineText) {
-    try {
-      if (this.blockMarksEnabled === false) return false;
-      if (typeof this.blockMarkModelForLine !== "function") return false;
-      const model = this.blockMarkModelForLine(path || "", lineText);
-      return typeof blockMarkIsDigitKey === "function"
-        ? blockMarkIsDigitKey(model && model.key)
-        : false;
-    } catch (error) {
-      return false;
-    }
-  }
-
-  priorityMarkFoldedForRow(path, lineText, li) {
-    try {
-      if (this.blockMarksEnabled === false) return false;
-      if (li && typeof this.blockMarkReadingInTasksQuery === "function") {
-        if (this.blockMarkReadingInTasksQuery(li)) return false;
-      }
-      if (li && typeof li.getAttribute === "function") {
-        const key = li.getAttribute("data-bob-block");
-        if (typeof blockMarkIsDigitKey === "function" && blockMarkIsDigitKey(key)) {
-          return true;
-        }
-        if (key) return false;
-      }
-      return this.priorityMarkFoldedForLine(path, lineText);
-    } catch (error) {
-      return false;
     }
   }
 

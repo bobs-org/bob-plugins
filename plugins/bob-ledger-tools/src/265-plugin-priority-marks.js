@@ -455,18 +455,6 @@ class BobLedgerToolsPriorityMarksMixin {
                     if (!inCode) {
                       const model = priorityMarkModel(source.value, ladder);
                       if (model) {
-                        let folded = false;
-                        try {
-                          folded =
-                            typeof this.priorityMarkFoldedForLine ===
-                              "function" &&
-                            this.priorityMarkFoldedForLine(
-                              filePath,
-                              line.text,
-                            );
-                        } catch (error) {
-                          folded = false;
-                        }
                         const from =
                           line.from +
                           source.fieldStart -
@@ -478,7 +466,6 @@ class BobLedgerToolsPriorityMarksMixin {
                             widget: new PriorityMarkWidget(
                               model,
                               source.foldSpace,
-                              folded,
                             ),
                           }),
                         );
@@ -812,21 +799,8 @@ class BobLedgerToolsPriorityMarksMixin {
           }
           const beforeText = value.slice(0, source.fieldStart);
           const afterText = value.slice(source.fieldEnd);
-          let folded = false;
-          try {
-            folded =
-              typeof this.priorityMarkFoldedForRow === "function" &&
-              this.priorityMarkFoldedForRow(
-                ctx && ctx.sourcePath,
-                value,
-                li,
-              );
-          } catch (error) {
-            folded = false;
-          }
           const markEl = buildPriorityMarkElement(docNode, model, {
             foldSpace: false,
-            folded,
           });
           if (!markEl) {
             continue;

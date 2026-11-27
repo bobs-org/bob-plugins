@@ -87,7 +87,19 @@ function bankNoteOutcomeText(action) {
     // Edit starts from the raw note bytes so Bryan sees exactly the row.
     const raw = existing && typeof row.noteRaw === "string" && row.noteRaw ? row.noteRaw : (existing || "");
     this.noteHint = null;
-    this.noteStage = { direct, draft: raw, existing, editable: true, refusal: null, saving: false };
+    this.noteStage = {
+      direct,
+      draft: raw,
+      query: raw,
+      selectedKey: null,
+      suggestions: Object.freeze([]),
+      suggestionQuery: null,
+      suggestionLibrary: null,
+      existing,
+      editable: true,
+      refusal: null,
+      saving: false,
+    };
     this.noteStageHost = null;
     this.noteStageInput = null;
     try { this.paint(); } catch (_) {}
@@ -149,6 +161,8 @@ function bankNoteOutcomeText(action) {
       await this.saveNoteStage();
       return;
     }
+    if (typeof this.routeNoteSuggestKey === "function" &&
+        this.routeNoteSuggestKey(event, key, inInput) === true) return;
     if (inInput && this.shouldPassNoteStageKey(event)) return;
     bankCategoryUiConsume(event);
     if (inInput || stage.saving || event.ctrlKey || event.metaKey || event.altKey) return;
@@ -162,6 +176,9 @@ function bankNoteOutcomeText(action) {
     const stage = this.noteStage;
     if (!stage) return false;
     stage.draft = String(value === null || value === undefined ? "" : value);
+    stage.query = stage.draft;
+    stage.selectedKey = null;
+    stage.suggestionQuery = null;
     stage.refusal = null;
     const input = this.noteStageInput;
     if (input && input.value !== stage.draft) {
@@ -176,6 +193,9 @@ function bankNoteOutcomeText(action) {
     const stage = this.noteStage;
     if (!stage || stage.saving) return;
     stage.draft = String(value === null || value === undefined ? "" : value);
+    stage.query = stage.draft;
+    stage.selectedKey = null;
+    stage.suggestionQuery = null;
     stage.refusal = null;
     this.refreshNoteStage();
   };
@@ -273,14 +293,22 @@ function bankNoteOutcomeText(action) {
     if (!host || !stage) return null;
     const line = bankCategoryUiAppend(host, "div", "bob-bank-category-note-line");
     bankCategoryUiAppend(line, "span", "bob-bank-category-note-dash", "—", { "aria-hidden": "true" });
+    const field = bankCategoryUiAppend(line, "div", "bob-bank-category-note-field");
+    const ghost = bankCategoryUiAppend(field, "span", "bob-bank-category-note-ghost", null, {
+      "aria-hidden": "true",
+    });
     const payee = this.cardRow().payee;
     // bob-text: literal bank row note; bank fields never complete [[ and bankNoteNormalize folds links to text
-    const input = bankCategoryUiAppend(line, "input", "bob-bank-category-note-input", null, {
+    const input = bankCategoryUiAppend(field, "input", "bob-bank-category-note-input", null, {
       type: "text",
       "data-bank-note-input": "true",
       placeholder: BANK_NOTE_STAGE_PLACEHOLDER,
       "aria-label": `Note for ${typeof payee === "string" && payee ? payee : "this row"}`,
       "aria-describedby": "bob-bank-category-note-status",
+      role: "combobox",
+      "aria-autocomplete": "list",
+      "aria-expanded": "false",
+      "aria-controls": "bob-bank-category-note-options",
       autocomplete: "off",
       enterkeyhint: "done",
     });
@@ -289,12 +317,23 @@ function bankNoteOutcomeText(action) {
       input.addEventListener?.("input", (event) => {
         this.onNoteInput(event && event.target ? event.target.value : input.value);
       });
+      input.addEventListener?.("keyup", () => this.refreshNoteSuggestions?.());
+      input.addEventListener?.("click", () => this.refreshNoteSuggestions?.());
+      input.addEventListener?.("select", () => this.refreshNoteSuggestions?.());
     }
+    const list = bankCategoryUiAppend(host, "div", "bob-bank-category-note-options", null, {
+      id: "bob-bank-category-note-options",
+      role: "listbox",
+      "aria-label": "Past notes",
+    });
     const status = bankCategoryUiAppend(host, "div", "bob-bank-category-note-status", null, {
       id: "bob-bank-category-note-status",
     });
     this.noteStageHost = host;
+    this.noteStageField = field;
+    this.noteStageGhost = ghost;
     this.noteStageInput = input;
+    this.noteStageList = list;
     this.noteStageStatus = status;
     return host;
   };
@@ -327,11 +366,15 @@ function bankNoteOutcomeText(action) {
         }
       }
     }
+    try { this.refreshNoteSuggestions?.(); } catch (_) {}
     if (this.noteStageKeys) this.noteStageKeys.textContent = this.noteStageKeysText(preview);
   };
 
   proto.noteStageKeysText = function noteStageKeysText(preview = this.noteStagePreview()) {
-    const keys = preview.keys || "↵ save · esc back";
+    const base = preview.keys || "↵ save · esc back";
+    const keys = this.noteStage && Array.isArray(this.noteStage.suggestions) && this.noteStage.suggestions.length
+      ? `⇥ complete · ⌃N/⌃P choose · ${base}`
+      : base;
     return this.noteStage && this.noteStage.direct ? keys.replace(/esc back$/, "esc close") : keys;
   };
 

@@ -99531,6 +99531,272 @@ function bankNoteStagePreview(input = {}) {
   }[action];
   return { action, text, changes: normalized.changes, refusal, consequence: copy[0], keys: copy[1] };
 }
+// ---- src/246b-plugin-bank-note-suggest-model.js ----
+// Pure model for recalling reusable row notes from bank-month contents.
+// The bank walk index owns the content snapshot; this file only ranks views.
+
+const BANK_NOTE_SUGGEST_LIMIT = 4;
+const BANK_NOTE_SUGGEST_HALF_LIFE_DAYS = 30;
+const BANK_NOTE_SUGGEST_GLOBAL_MIN = 2;
+
+function bankNoteFold(value) {
+  return String(value === null || value === undefined ? "" : value)
+    .normalize("NFKD")
+    .replace(/\p{M}/gu, "")
+    .replace(/[’‘]/g, "'")
+    .replace(/[“”]/g, '"')
+    .toLowerCase()
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+function bankNoteMerchantLabel(payee) {
+  return String(payee === null || payee === undefined ? "" : payee)
+    .replace(/\*\s*([a-z0-9]{1,12})(?![a-z0-9])/gi, (match, code) =>
+      /\d/.test(code) ? "" : match)
+    .replace(/#\d+/g, "")
+    .replace(/\d{4,}/g, "#")
+    .replace(/\*/g, "")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+function bankNoteMerchantKey(payee) {
+  return bankNoteFold(bankNoteMerchantLabel(payee));
+}
+
+function bankNoteUseOrder(left, right) {
+  const ld = String(left && left.date || "");
+  const rd = String(right && right.date || "");
+  if (ld !== rd) return ld > rd ? -1 : 1;
+  const lp = String(left && left.path || "");
+  const rp = String(right && right.path || "");
+  if (lp !== rp) return lp > rp ? -1 : 1;
+  return (Number(right && right.line) || 0) - (Number(left && left.line) || 0);
+}
+
+function bankNoteLibraryFromContents(fileContents, cache) {
+  const files = Array.isArray(fileContents) ? fileContents : [];
+  const memo = cache instanceof Map ? cache : new Map();
+  const allEntries = [];
+  for (const file of files) {
+    const path = typeof bankNormalizePath === "function"
+      ? bankNormalizePath(file && file.path)
+      : String(file && file.path || "");
+    const content = typeof file?.content === "string" ? file.content : "";
+    if (!path) continue;
+    let cached = memo.get(path);
+    if (!cached || cached.content !== content) {
+      let parsed = null;
+      try { parsed = bankTokenizeSource(path, content); } catch (_) {}
+      const entries = [];
+      for (const token of parsed && Array.isArray(parsed.rows) ? parsed.rows : []) {
+        const note = typeof token.note === "string" ? token.note : "";
+        if (!note || token.noteEditable !== true) continue;
+        const normalized = bankNoteNormalize(note);
+        if (!normalized.ok || normalized.text !== note || normalized.changes.length) continue;
+        const key = bankNoteFold(note);
+        if (!key) continue;
+        entries.push(Object.freeze({
+          key,
+          text: note,
+          path: String(token.path || path),
+          line: Number.isInteger(token.line) ? token.line : 0,
+          date: typeof token.date === "string" ? token.date : "",
+          payee: typeof token.payee === "string" ? token.payee : "",
+          merchantKey: bankNoteMerchantKey(token.payee),
+          merchantLabel: bankNoteMerchantLabel(token.payee),
+        }));
+      }
+      cached = Object.freeze({ content, entries: Object.freeze(entries) });
+      memo.set(path, cached);
+    }
+    allEntries.push(...cached.entries);
+  }
+  return Object.freeze({ available: true, entries: Object.freeze(allEntries) });
+}
+
+function bankNoteDateNumber(value) {
+  const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return null;
+  return Math.floor(date.getTime() / 86400000);
+}
+
+function bankNoteReferenceDate(row) {
+  const date = bankNoteDateNumber(row && row.date);
+  if (date !== null) return date;
+  try { return bankNoteDateNumber(bankLocalDate()); } catch (_) { return null; }
+}
+
+function bankNoteSuggestQuery(value) {
+  const raw = String(value === null || value === undefined ? "" : value);
+  const trailing = /\s$/u.test(raw);
+  const folded = bankNoteFold(raw);
+  return folded ? `${folded}${trailing ? " " : ""}` : (trailing ? " " : "");
+}
+
+function bankNoteQueryMatch(key, query) {
+  if (!query || key === query) return null;
+  if (key.startsWith(query)) return 0;
+  let at = key.indexOf(query);
+  while (at >= 0) {
+    const before = at > 0 ? Array.from(key.slice(0, at)).pop() : "";
+    if (!before || !/[\p{L}\p{N}]/u.test(before)) return 1;
+    at = key.indexOf(query, at + 1);
+  }
+  return null;
+}
+
+function bankNoteLatest(uses) {
+  return uses.slice().sort(bankNoteUseOrder)[0] || null;
+}
+
+function bankNoteScore(uses, referenceDay) {
+  if (referenceDay === null) return uses.length;
+  return uses.reduce((score, use) => {
+    const useDay = bankNoteDateNumber(use.date);
+    if (useDay === null) return score;
+    const age = Math.max(0, referenceDay - useDay);
+    return score + Math.pow(0.5, age / BANK_NOTE_SUGGEST_HALF_LIFE_DAYS);
+  }, 0);
+}
+
+function bankNoteMatchHighlight(text, query, matchClass) {
+  const value = String(text || "");
+  if (!query || !value) return null;
+  const starts = [];
+  if (matchClass === 0) starts.push(0);
+  else {
+    for (let at = 0; at < value.length; at += 1) {
+      if (at === 0 || !/[\p{L}\p{N}]/u.test(Array.from(value.slice(0, at)).pop() || "")) starts.push(at);
+    }
+  }
+  for (const start of starts) {
+    for (let end = start + 1; end <= value.length; end += 1) {
+      const part = value.slice(start, end);
+      const folded = bankNoteFold(part) + (/\s$/u.test(part) && bankNoteFold(part) ? " " : "");
+      if (folded === query) return Object.freeze({ start, end });
+    }
+  }
+  return null;
+}
+
+function bankNoteSuggest({ library, query, row, limit } = {}) {
+  const entries = library && Array.isArray(library.entries) ? library.entries : [];
+  if (!library || library.available !== true) return Object.freeze([]);
+  const rowPath = typeof bankNormalizePath === "function"
+    ? bankNormalizePath(row && row.path)
+    : String(row && row.path || "");
+  const rowLine = Number.isInteger(row && row.line) ? row.line : null;
+  const merchantKey = bankNoteMerchantKey(row && row.payee);
+  const referenceDay = bankNoteReferenceDate(row);
+  const foldedQuery = bankNoteSuggestQuery(query);
+  const empty = foldedQuery.length === 0;
+  const groups = new Map();
+  for (const entry of entries) {
+    if (!entry || typeof entry.key !== "string" || typeof entry.text !== "string") continue;
+    if (rowLine !== null && entry.path === rowPath && entry.line === rowLine) continue;
+    let group = groups.get(entry.key);
+    if (!group) {
+      group = [];
+      groups.set(entry.key, group);
+    }
+    group.push(entry);
+  }
+
+  const candidates = [];
+  for (const [key, uses] of groups) {
+    if (!uses.length) continue;
+    const affineUses = merchantKey ? uses.filter((use) => use.merchantKey === merchantKey) : [];
+    const affine = affineUses.length > 0;
+    const matchClass = empty ? 0 : bankNoteQueryMatch(key, foldedQuery);
+    if (empty ? !affine : matchClass === null) continue;
+    if (!empty && !affine && Array.from(foldedQuery.trim()).length < BANK_NOTE_SUGGEST_GLOBAL_MIN) continue;
+    const displayUse = bankNoteLatest(uses);
+    const metaUses = affine ? affineUses : uses;
+    const recentMetaUse = bankNoteLatest(metaUses);
+    const count = metaUses.length;
+    const day = String(recentMetaUse && recentMetaUse.date || "");
+    const refYear = row && typeof row.date === "string" && row.date.match(/^(\d{4})-/)
+      ? row.date.slice(0, 4)
+      : (() => { try { return String(bankLocalDate()).slice(0, 4); } catch (_) { return ""; } })();
+    const dateLabel = typeof bankWalkShortDayLabel === "function"
+      ? bankWalkShortDayLabel(day)
+      : day;
+    const date = dateLabel && day.slice(0, 4) !== refYear ? `${dateLabel} ${day.slice(0, 4)}` : dateLabel;
+    const countLabel = count >= 2 ? `${count}×` : "";
+    const merchantLabel = affine ? "" : String(displayUse && displayUse.merchantLabel || "");
+    const metaParts = [merchantLabel, countLabel, date].filter(Boolean);
+    const affinityScore = bankNoteScore(affineUses, referenceDay);
+    const globalScore = bankNoteScore(uses, referenceDay);
+    const latest = bankNoteLatest(uses);
+    candidates.push({
+      key,
+      text: displayUse.text,
+      matchClass,
+      affine,
+      meta: metaParts.join(" · "),
+      metaMerchant: merchantLabel,
+      metaSuffix: [countLabel, date].filter(Boolean).join(" · "),
+      highlight: empty ? null : bankNoteMatchHighlight(displayUse.text, foldedQuery, matchClass),
+      affinityScore,
+      score: affine ? affinityScore : globalScore,
+      lastUse: latest,
+      lastAffineUse: bankNoteLatest(affineUses),
+    });
+  }
+  candidates.sort((left, right) => {
+    if (empty) {
+      if (left.affinityScore !== right.affinityScore) return right.affinityScore - left.affinityScore;
+      const dateOrder = bankNoteUseOrder(left.lastAffineUse, right.lastAffineUse);
+      return dateOrder || (left.key < right.key ? -1 : left.key > right.key ? 1 : 0);
+    }
+    if (left.matchClass !== right.matchClass) return left.matchClass - right.matchClass;
+    if (left.affine !== right.affine) return left.affine ? -1 : 1;
+    if (left.score !== right.score) return right.score - left.score;
+    const dateOrder = bankNoteUseOrder(left.lastUse, right.lastUse);
+    return dateOrder || (left.key < right.key ? -1 : left.key > right.key ? 1 : 0);
+  });
+  const max = Number.isInteger(limit) && limit >= 0 ? limit : BANK_NOTE_SUGGEST_LIMIT;
+  return Object.freeze(candidates.slice(0, max).map((candidate) => Object.freeze({
+    key: candidate.key,
+    text: candidate.text,
+    matchClass: candidate.matchClass,
+    affine: candidate.affine,
+    meta: candidate.meta,
+    metaMerchant: candidate.metaMerchant,
+    metaSuffix: candidate.metaSuffix,
+    highlight: candidate.highlight,
+  })));
+}
+
+function bankNoteSuggestGhost({ rows, value, selectedKey, selectionStart, selectionEnd, scrollWidth, clientWidth } = {}) {
+  if (selectedKey !== null && selectedKey !== undefined) return null;
+  const top = Array.isArray(rows) ? rows[0] : null;
+  const field = String(value === null || value === undefined ? "" : value);
+  if (!top || top.matchClass !== 0 || typeof top.text !== "string") return null;
+  if (top.text.slice(0, field.length).toLowerCase() !== field.toLowerCase()) return null;
+  if (typeof selectionStart === "number" && selectionStart !== field.length) return null;
+  if (typeof selectionEnd === "number" && selectionEnd !== field.length) return null;
+  if (typeof scrollWidth === "number" && typeof clientWidth === "number" && scrollWidth > clientWidth) return null;
+  return Object.freeze({ key: top.key, text: top.text.slice(field.length) });
+}
+
+function bankNoteSuggestStep(rows, selectedKey, direction) {
+  const list = Array.isArray(rows) ? rows : [];
+  if (!list.length) return null;
+  const step = Number(direction) < 0 ? -1 : 1;
+  const index = list.findIndex((row) => row && row.key === selectedKey);
+  if (index < 0) return list[step > 0 ? 0 : list.length - 1].key;
+  const next = index + step;
+  if (next < 0 || next >= list.length) return null;
+  return list[next].key;
+}
 // ---- src/247-plugin-bank-category-card-ui.js ----
 // Keyboard-first Category card. The card renders Bob's categories and
 // suggestions, while the action mixin owns the one editor transaction.
@@ -109899,7 +110165,19 @@ function bankNoteOutcomeText(action) {
     // Edit starts from the raw note bytes so Bryan sees exactly the row.
     const raw = existing && typeof row.noteRaw === "string" && row.noteRaw ? row.noteRaw : (existing || "");
     this.noteHint = null;
-    this.noteStage = { direct, draft: raw, existing, editable: true, refusal: null, saving: false };
+    this.noteStage = {
+      direct,
+      draft: raw,
+      query: raw,
+      selectedKey: null,
+      suggestions: Object.freeze([]),
+      suggestionQuery: null,
+      suggestionLibrary: null,
+      existing,
+      editable: true,
+      refusal: null,
+      saving: false,
+    };
     this.noteStageHost = null;
     this.noteStageInput = null;
     try { this.paint(); } catch (_) {}
@@ -109961,6 +110239,8 @@ function bankNoteOutcomeText(action) {
       await this.saveNoteStage();
       return;
     }
+    if (typeof this.routeNoteSuggestKey === "function" &&
+        this.routeNoteSuggestKey(event, key, inInput) === true) return;
     if (inInput && this.shouldPassNoteStageKey(event)) return;
     bankCategoryUiConsume(event);
     if (inInput || stage.saving || event.ctrlKey || event.metaKey || event.altKey) return;
@@ -109974,6 +110254,9 @@ function bankNoteOutcomeText(action) {
     const stage = this.noteStage;
     if (!stage) return false;
     stage.draft = String(value === null || value === undefined ? "" : value);
+    stage.query = stage.draft;
+    stage.selectedKey = null;
+    stage.suggestionQuery = null;
     stage.refusal = null;
     const input = this.noteStageInput;
     if (input && input.value !== stage.draft) {
@@ -109988,6 +110271,9 @@ function bankNoteOutcomeText(action) {
     const stage = this.noteStage;
     if (!stage || stage.saving) return;
     stage.draft = String(value === null || value === undefined ? "" : value);
+    stage.query = stage.draft;
+    stage.selectedKey = null;
+    stage.suggestionQuery = null;
     stage.refusal = null;
     this.refreshNoteStage();
   };
@@ -110085,14 +110371,22 @@ function bankNoteOutcomeText(action) {
     if (!host || !stage) return null;
     const line = bankCategoryUiAppend(host, "div", "bob-bank-category-note-line");
     bankCategoryUiAppend(line, "span", "bob-bank-category-note-dash", "—", { "aria-hidden": "true" });
+    const field = bankCategoryUiAppend(line, "div", "bob-bank-category-note-field");
+    const ghost = bankCategoryUiAppend(field, "span", "bob-bank-category-note-ghost", null, {
+      "aria-hidden": "true",
+    });
     const payee = this.cardRow().payee;
     // bob-text: literal bank row note; bank fields never complete [[ and bankNoteNormalize folds links to text
-    const input = bankCategoryUiAppend(line, "input", "bob-bank-category-note-input", null, {
+    const input = bankCategoryUiAppend(field, "input", "bob-bank-category-note-input", null, {
       type: "text",
       "data-bank-note-input": "true",
       placeholder: BANK_NOTE_STAGE_PLACEHOLDER,
       "aria-label": `Note for ${typeof payee === "string" && payee ? payee : "this row"}`,
       "aria-describedby": "bob-bank-category-note-status",
+      role: "combobox",
+      "aria-autocomplete": "list",
+      "aria-expanded": "false",
+      "aria-controls": "bob-bank-category-note-options",
       autocomplete: "off",
       enterkeyhint: "done",
     });
@@ -110101,12 +110395,23 @@ function bankNoteOutcomeText(action) {
       input.addEventListener?.("input", (event) => {
         this.onNoteInput(event && event.target ? event.target.value : input.value);
       });
+      input.addEventListener?.("keyup", () => this.refreshNoteSuggestions?.());
+      input.addEventListener?.("click", () => this.refreshNoteSuggestions?.());
+      input.addEventListener?.("select", () => this.refreshNoteSuggestions?.());
     }
+    const list = bankCategoryUiAppend(host, "div", "bob-bank-category-note-options", null, {
+      id: "bob-bank-category-note-options",
+      role: "listbox",
+      "aria-label": "Past notes",
+    });
     const status = bankCategoryUiAppend(host, "div", "bob-bank-category-note-status", null, {
       id: "bob-bank-category-note-status",
     });
     this.noteStageHost = host;
+    this.noteStageField = field;
+    this.noteStageGhost = ghost;
     this.noteStageInput = input;
+    this.noteStageList = list;
     this.noteStageStatus = status;
     return host;
   };
@@ -110139,11 +110444,15 @@ function bankNoteOutcomeText(action) {
         }
       }
     }
+    try { this.refreshNoteSuggestions?.(); } catch (_) {}
     if (this.noteStageKeys) this.noteStageKeys.textContent = this.noteStageKeysText(preview);
   };
 
   proto.noteStageKeysText = function noteStageKeysText(preview = this.noteStagePreview()) {
-    const keys = preview.keys || "↵ save · esc back";
+    const base = preview.keys || "↵ save · esc back";
+    const keys = this.noteStage && Array.isArray(this.noteStage.suggestions) && this.noteStage.suggestions.length
+      ? `⇥ complete · ⌃N/⌃P choose · ${base}`
+      : base;
     return this.noteStage && this.noteStage.direct ? keys.replace(/esc back$/, "esc close") : keys;
   };
 
@@ -110333,6 +110642,224 @@ if (typeof BobLedgerToolsBankCategoryMixin === "function") {
     };
   };
 }
+// ---- src/248o-plugin-bank-note-suggest-stage.js ----
+// In-card past-note completion. This layer owns suggestion paint and keys;
+// the 248n stage keeps the row-write lifecycle and the input node stable.
+
+function bankNoteSuggestOptionId(key) {
+  const encoded = Array.from(String(key || ""))
+    .map((char) => char.codePointAt(0).toString(16))
+    .join("-");
+  return `bob-bank-category-note-option-${encoded || "empty"}`;
+}
+
+function bankNoteSuggestAppendHighlighted(parent, text, highlight) {
+  const value = String(text || "");
+  if (!highlight || !Number.isInteger(highlight.start) || !Number.isInteger(highlight.end) ||
+      highlight.start < 0 || highlight.end <= highlight.start || highlight.end > value.length) {
+    bankCategoryUiAppend(parent, "span", "bob-bank-category-note-option-text", value);
+    return;
+  }
+  const span = bankCategoryUiAppend(parent, "span", "bob-bank-category-note-option-text");
+  if (!span) return;
+  if (highlight.start) bankCategoryUiAppend(span, "span", "bob-bank-category-note-option-text-before", value.slice(0, highlight.start));
+  bankCategoryUiAppend(span, "span", "bob-bank-category-note-match", value.slice(highlight.start, highlight.end));
+  if (highlight.end < value.length) bankCategoryUiAppend(span, "span", "bob-bank-category-note-option-text-after", value.slice(highlight.end));
+}
+
+(function installBankNoteSuggestStage() {
+  if (typeof BankCategoryCardModal !== "function") return;
+  const proto = BankCategoryCardModal.prototype;
+
+  proto.noteSuggestLibrary = function noteSuggestLibrary() {
+    try {
+      return typeof this.pluginRef?.bankNoteLibrary === "function"
+        ? this.pluginRef.bankNoteLibrary()
+        : Object.freeze({ available: false, entries: Object.freeze([]) });
+    } catch (_) {
+      return Object.freeze({ available: false, entries: Object.freeze([]) });
+    }
+  };
+
+  proto.noteSuggestGhost = function noteSuggestGhost() {
+    const stage = this.noteStage;
+    const input = this.noteStageInput;
+    if (!stage || !input) return null;
+    return bankNoteSuggestGhost({
+      rows: stage.suggestions,
+      value: typeof input.value === "string" ? input.value : stage.draft,
+      selectedKey: stage.selectedKey,
+      selectionStart: typeof input.selectionStart === "number" ? input.selectionStart : undefined,
+      selectionEnd: typeof input.selectionEnd === "number" ? input.selectionEnd : undefined,
+      scrollWidth: typeof input.scrollWidth === "number" ? input.scrollWidth : undefined,
+      clientWidth: typeof input.clientWidth === "number" ? input.clientWidth : undefined,
+    });
+  };
+
+  proto.refreshNoteSuggestions = function refreshNoteSuggestions() {
+    const stage = this.noteStage;
+    if (!stage) return;
+    const library = this.noteSuggestLibrary();
+    const query = String(stage.query === null || stage.query === undefined ? "" : stage.query);
+    if (stage.suggestionQuery !== query || stage.suggestionLibrary !== library) {
+      const previousKey = stage.selectedKey;
+      stage.suggestions = bankNoteSuggest({ library, query, row: this.cardRow() });
+      stage.suggestionQuery = query;
+      stage.suggestionLibrary = library;
+      if (previousKey && !stage.suggestions.some((row) => row.key === previousKey)) {
+        stage.selectedKey = null;
+        stage.draft = query;
+        if (this.noteStageInput && this.noteStageInput.value !== query) this.noteStageInput.value = query;
+      }
+    }
+    const input = this.noteStageInput;
+    const ghostNode = this.noteStageGhost;
+    const list = this.noteStageList;
+    const rows = Array.isArray(stage.suggestions) ? stage.suggestions : [];
+    const selected = rows.find((row) => row.key === stage.selectedKey) || null;
+    if (input) {
+      try { input.setAttribute("aria-expanded", rows.length ? "true" : "false"); } catch (_) {}
+      if (selected) {
+        try { input.setAttribute("aria-activedescendant", bankNoteSuggestOptionId(selected.key)); } catch (_) {}
+      } else {
+        try { input.removeAttribute?.("aria-activedescendant"); } catch (_) {}
+      }
+    }
+    if (list) {
+      try { list.replaceChildren?.(); } catch (_) { list.textContent = ""; }
+      for (const suggestion of rows) {
+        const id = bankNoteSuggestOptionId(suggestion.key);
+        const isSelected = suggestion.key === stage.selectedKey;
+        const isTabTarget = !selected && rows[0] === suggestion;
+        const option = bankCategoryUiAppend(list, "div",
+          `bob-bank-category-note-option${isSelected ? " is-selected" : ""}`,
+          null,
+          {
+            id,
+            role: "option",
+            "aria-selected": isSelected ? "true" : "false",
+            title: suggestion.text,
+            "data-bank-note-key": suggestion.key,
+          });
+        if (!option) continue;
+        const marker = bankCategoryUiAppend(option, "span", "bob-bank-category-note-option-marker",
+          isSelected ? "↵" : (isTabTarget ? "⇥" : ""), { "aria-hidden": "true" });
+        void marker;
+        bankNoteSuggestAppendHighlighted(option, suggestion.text, suggestion.highlight);
+        const meta = bankCategoryUiAppend(option, "span", "bob-bank-category-note-option-meta", null, {
+          "aria-label": suggestion.meta || "",
+        });
+        if (meta && suggestion.metaMerchant) {
+          bankCategoryUiAppend(meta, "span", "bob-bank-category-note-option-merchant", suggestion.metaMerchant, {
+            title: suggestion.metaMerchant,
+          });
+        }
+        if (meta && suggestion.metaSuffix) {
+          bankCategoryUiAppend(meta, "span", "bob-bank-category-note-option-meta-suffix", suggestion.metaSuffix);
+        } else if (meta && !suggestion.metaMerchant) {
+          meta.textContent = suggestion.meta;
+        }
+        option.addEventListener?.("mousedown", (event) => {
+          try { event?.preventDefault?.(); } catch (_) {}
+        });
+        option.addEventListener?.("click", (event) => {
+          bankCategoryUiConsume(event);
+          this.completeNoteSuggestion(suggestion.key);
+        });
+      }
+    }
+    const ghost = this.noteSuggestGhost();
+    stage.ghostText = ghost ? ghost.text : "";
+    if (ghostNode) {
+      try { ghostNode.replaceChildren?.(); } catch (_) { ghostNode.textContent = ""; }
+      if (ghost) {
+        const inputValue = String(input && input.value || "");
+        bankCategoryUiAppend(ghostNode, "span", "bob-bank-category-note-ghost-typed", inputValue);
+        bankCategoryUiAppend(ghostNode, "span", "bob-bank-category-note-ghost-tail", ghost.text);
+      }
+    }
+    if (this.noteStageField) {
+      this.noteStageField.className = `bob-bank-category-note-field${ghost ? " is-ghosting" : ""}`;
+    }
+    if (input) {
+      try { input.setAttribute?.("placeholder", ghost ? "" : BANK_NOTE_STAGE_PLACEHOLDER); } catch (_) {}
+    }
+  };
+
+  proto.setNoteSuggestionSelection = function setNoteSuggestionSelection(key) {
+    const stage = this.noteStage;
+    if (!stage || stage.saving) return false;
+    const selected = key === null ? null : (stage.suggestions || []).find((row) => row.key === key) || null;
+    stage.selectedKey = selected ? selected.key : null;
+    stage.draft = selected ? selected.text : String(stage.query || "");
+    if (this.noteStageInput && this.noteStageInput.value !== stage.draft) {
+      this.noteStageInput.value = stage.draft;
+    }
+    try {
+      const end = stage.draft.length;
+      this.noteStageInput?.setSelectionRange?.(end, end);
+    } catch (_) {}
+    this.refreshNoteStage();
+    this.focusNoteInput();
+    return true;
+  };
+
+  proto.completeNoteSuggestion = function completeNoteSuggestion(key) {
+    const stage = this.noteStage;
+    if (!stage || stage.saving) return false;
+    const suggestion = (stage.suggestions || []).find((row) => row.key === key);
+    if (!suggestion) return false;
+    stage.query = suggestion.text;
+    stage.draft = suggestion.text;
+    stage.selectedKey = null;
+    stage.suggestionQuery = null;
+    if (this.noteStageInput) {
+      this.noteStageInput.value = suggestion.text;
+      try { this.noteStageInput.setSelectionRange?.(suggestion.text.length, suggestion.text.length); } catch (_) {}
+    }
+    this.announce(`Completed: ${suggestion.text}`);
+    this.refreshNoteStage();
+    this.focusNoteInput();
+    return true;
+  };
+
+  proto.routeNoteSuggestKey = function routeNoteSuggestKey(event, key, inInput) {
+    const stage = this.noteStage;
+    if (!stage || !event || stage.saving || event.isComposing || event.keyCode === 229) return false;
+    const rows = Array.isArray(stage.suggestions) ? stage.suggestions : [];
+    if (key === "Tab") {
+      bankCategoryUiConsume(event);
+      if (event.shiftKey) return true;
+      const target = rows.find((row) => row.key === stage.selectedKey) || rows[0];
+      if (target) this.completeNoteSuggestion(target.key);
+      return true;
+    }
+    if (key === "ArrowRight" && inInput) {
+      const ghost = this.noteSuggestGhost();
+      if (!ghost) return false;
+      bankCategoryUiConsume(event);
+      this.completeNoteSuggestion(ghost.key);
+      return true;
+    }
+    const direction = key === "ArrowDown" || key === "Ctrl+N" ? 1
+      : (key === "ArrowUp" || key === "Ctrl+P" ? -1 : 0);
+    if (!direction) return false;
+    bankCategoryUiConsume(event);
+    const selectedKey = bankNoteSuggestStep(rows, stage.selectedKey, direction);
+    this.setNoteSuggestionSelection(selectedKey);
+    return true;
+  };
+
+  const shouldPass = proto.shouldPassNoteStageKey;
+  proto.shouldPassNoteStageKey = function shouldPassNoteStageKey(event) {
+    if (!event || !this.noteStage || !bankNoteStageInInput(event)) return shouldPass.call(this, event);
+    const key = typeof event.key === "string" ? event.key : "";
+    if (key === "Tab" || key === "ArrowUp" || key === "ArrowDown" ||
+        (event.ctrlKey && (key === "n" || key === "N" || key === "p" || key === "P"))) return false;
+    if (key === "ArrowRight" && this.noteSuggestGhost()) return false;
+    return shouldPass.call(this, event);
+  };
+})();
 // ---- src/249-plugin-bank-walk-model.js ----
 // Pure bank-walk model (api.bankWalk v1): membership, snapshot building,
 // locate, step/day planners, identity resolution. No Obsidian, no spawns.
@@ -111211,6 +111738,9 @@ class BobLedgerToolsBankWalkMixin {
     this.bankWalkOverlaySignature = null;
     this.bankWalkMemoKey = null;
     this.bankWalkMemoSnapshot = null;
+    this.bankNoteLibraryMemoKey = null;
+    this.bankNoteLibraryMemo = null;
+    this.bankNoteLibraryFileCache = new Map();
     // onload subscribes the footer listener (via setupFreshnessStatusBar)
     // before setupBankWalk runs; preserve those listeners instead of dropping
     // them, or the footer never repaints when the index becomes ready.
@@ -111276,6 +111806,9 @@ class BobLedgerToolsBankWalkMixin {
     this.bankWalkOverlaySignature = null;
     this.bankWalkMemoKey = null;
     this.bankWalkMemoSnapshot = null;
+    this.bankNoteLibraryMemoKey = null;
+    this.bankNoteLibraryMemo = null;
+    if (this.bankNoteLibraryFileCache instanceof Map) this.bankNoteLibraryFileCache.clear();
     if (this.bankWalkListeners instanceof Set) {
       this.bankWalkListeners.clear();
     }
@@ -111351,6 +111884,9 @@ class BobLedgerToolsBankWalkMixin {
       }
       if (this.bankWalkScanCache instanceof Map) {
         this.bankWalkScanCache.delete(norm);
+      }
+      if (this.bankNoteLibraryFileCache instanceof Map) {
+        this.bankNoteLibraryFileCache.delete(norm);
       }
       if (this.bankWalkPendingReads instanceof Set) {
         this.bankWalkPendingReads.delete(norm);
@@ -111697,21 +112233,12 @@ class BobLedgerToolsBankWalkMixin {
     return this.bankWalkOverlays;
   }
 
-  bankWalkSnapshot() {
+  bankWalkMergedContents() {
     try {
-      if (this.bankWalkActive === false) {
-        return Object.freeze({ available: false, reason: "unloaded" });
-      }
-      if (!this.bankWalkReady) {
-        return Object.freeze({ available: false, reason: "indexing" });
-      }
       const overlays = this.bankWalkCollectOverlays();
       const disk = this.bankWalkDisk instanceof Map ? this.bankWalkDisk : new Map();
       const overlayParts = Array.from(overlays.entries()).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
       const sig = `${this.bankWalkGeneration || 0}\u0000${overlayParts.map(([p, rec]) => `${p}\u0000${rec && rec.seq ? rec.seq : 0}`).join("\u0001")}`;
-      if (this.bankWalkMemoKey === sig && this.bankWalkMemoSnapshot) {
-        return this.bankWalkMemoSnapshot;
-      }
       const merged = [];
       const seen = new Set();
       for (const [path, content] of disk.entries()) {
@@ -111720,14 +112247,55 @@ class BobLedgerToolsBankWalkMixin {
         const text = overlay && typeof overlay.content === "string"
           ? overlay.content
           : (typeof content === "string" ? content : "");
-        merged.push({ path: norm, content: text });
+        merged.push(Object.freeze({ path: norm, content: text }));
         seen.add(norm);
       }
       for (const [path, record] of overlays.entries()) {
         if (!seen.has(path)) {
-          merged.push({ path, content: record && typeof record.content === "string" ? record.content : "" });
+          merged.push(Object.freeze({ path, content: record && typeof record.content === "string" ? record.content : "" }));
           seen.add(path);
         }
+      }
+      const overlaySigOnly = overlayParts.map(([p, rec]) => `${p}\u0000${rec && rec.seq ? rec.seq : 0}`).join("\u0001");
+      return Object.freeze({ sig, merged: Object.freeze(merged), overlaySigOnly });
+    } catch (_) {
+      return null;
+    }
+  }
+
+  bankNoteLibrary() {
+    try {
+      const unavailable = (reason) => Object.freeze({ available: false, reason, entries: Object.freeze([]) });
+      if (this.bankWalkActive === false) return unavailable("unloaded");
+      if (!this.bankWalkReady) return unavailable("indexing");
+      const contents = this.bankWalkMergedContents();
+      if (!contents) return unavailable("indexing");
+      if (this.bankNoteLibraryMemoKey === contents.sig && this.bankNoteLibraryMemo) {
+        return this.bankNoteLibraryMemo;
+      }
+      if (!(this.bankNoteLibraryFileCache instanceof Map)) this.bankNoteLibraryFileCache = new Map();
+      const library = bankNoteLibraryFromContents(contents.merged, this.bankNoteLibraryFileCache);
+      this.bankNoteLibraryMemoKey = contents.sig;
+      this.bankNoteLibraryMemo = library;
+      return library;
+    } catch (_) {
+      return Object.freeze({ available: false, reason: "indexing", entries: Object.freeze([]) });
+    }
+  }
+
+  bankWalkSnapshot() {
+    try {
+      if (this.bankWalkActive === false) {
+        return Object.freeze({ available: false, reason: "unloaded" });
+      }
+      if (!this.bankWalkReady) {
+        return Object.freeze({ available: false, reason: "indexing" });
+      }
+      const contents = this.bankWalkMergedContents();
+      if (!contents) return Object.freeze({ available: false, reason: "indexing" });
+      const { sig, merged, overlaySigOnly } = contents;
+      if (this.bankWalkMemoKey === sig && this.bankWalkMemoSnapshot) {
+        return this.bankWalkMemoSnapshot;
       }
       if (!(this.bankWalkScanCache instanceof Map)) {
         this.bankWalkScanCache = new Map();
@@ -111739,7 +112307,6 @@ class BobLedgerToolsBankWalkMixin {
         return Object.freeze({ available: false, reason: "indexing" });
       }
       const prevSig = this.bankWalkOverlaySignature;
-      const overlaySigOnly = overlayParts.map(([p, rec]) => `${p}\u0000${rec && rec.seq ? rec.seq : 0}`).join("\u0001");
       if (prevSig !== null && prevSig !== overlaySigOnly) {
         try {
           setTimeout(() => this.bankWalkFireChange({ generation: this.bankWalkGeneration || 0, reason: "overlay" }), 0);
@@ -215869,6 +216436,16 @@ try {
       bankNoteNormalize,
       bankNoteWritePlan,
       bankNoteStagePreview,
+      BANK_NOTE_SUGGEST_LIMIT,
+      BANK_NOTE_SUGGEST_HALF_LIFE_DAYS,
+      BANK_NOTE_SUGGEST_GLOBAL_MIN,
+      bankNoteFold,
+      bankNoteMerchantKey,
+      bankNoteMerchantLabel,
+      bankNoteLibraryFromContents,
+      bankNoteSuggest,
+      bankNoteSuggestGhost,
+      bankNoteSuggestStep,
       bankCategoryWaitingRows,
       bankCategoryNextWaiting,
       bankCategoryMatchJsonRow,

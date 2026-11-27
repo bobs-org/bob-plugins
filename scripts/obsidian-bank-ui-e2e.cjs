@@ -489,7 +489,7 @@ function runSelfTest() {
     const log = bank.readArgvLog(shimDir);
     if (!log.length || log[0].argv[1] !== "list") throw new Error("shim did not log argv");
     const source = fs.readFileSync(__filename, "utf8");
-    for (const token of ["toggle-bank-marks", "bank-open-today", "cycle-task-status-forward", "window-open", "xvfb-run", "never $0.00", ".math", "bob-bank-category-modal", "bob-bank-category-card", "walk-ctrl-enter-c", "walk-note", "walk-card.png", "walk-real-key-swallowed", "Input.dispatchKeyEvent", "walk-learn-coffee", "walk-learn-accept"]) {
+    for (const token of ["toggle-bank-marks", "bank-open-today", "cycle-task-status-forward", "window-open", "xvfb-run", "never $0.00", ".math", "bob-bank-category-modal", "bob-bank-category-card", "walk-ctrl-enter-c", "walk-note", "walk-note-suggest", "walk-note-suggest.png", "walk-card.png", "walk-real-key-swallowed", "Input.dispatchKeyEvent", "walk-learn-coffee", "walk-learn-accept"]) {
       if (!source.includes(token) && token !== "never $0.00") {
         if (token === "never $0.00") continue;
         throw new Error(`e2e source missing ${token}`);
@@ -1191,12 +1191,15 @@ async function runE2e(parsed) {
         "# Bank July 2026",
         "",
         "## Wed Jul 1",
+        "- [x] $13.00 Amazon Reta* Pd4tc — Ask Kelly?",
         "",
         "- [ ] $1.00 Corner Cafe",
         "- [ ] $2.00 Market",
         "- [ ] $3.00 Bookstore",
         "- [ ] $4.00 Hardware",
         "- [x] $5.00 Already filed",
+        "## Thu Jul 2",
+        "- [ ] $27.01 Amazon Reta* Ue4v4",
         "",
       ].join("\\n");
       const existing = window.app.vault.getAbstractFileByPath(path);
@@ -1205,7 +1208,7 @@ async function runE2e(parsed) {
       const abstract = window.app.vault.getAbstractFileByPath(path);
       const leaf = window.app.workspace.getLeaf(false);
       await leaf.openFile(abstract);
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      await new Promise((resolve) => setTimeout(resolve, 600));
       const view = window.app.workspace.activeLeaf && window.app.workspace.activeLeaf.view;
       const editor = view && view.editor;
       const ledger = window.app.plugins.plugins["bob-ledger-tools"];
@@ -1377,6 +1380,63 @@ async function runE2e(parsed) {
     record("walk-undo", Boolean(walk && walk.afterUndo && walk.afterUndo !== walk.hardwareFiled &&
       /\[ \]/.test(String(walk.afterUndo || "")) && !/\[cat::/.test(String(walk.afterUndo || "")) &&
       /— for the team$/.test(String(walk.afterUndo || ""))), jsonDetail(walk));
+
+    const noteSuggest = await client.evaluate(`(() => (async () => {
+      const path = "bank/2026-07.md";
+      const ledger = window.app.plugins.plugins["bob-ledger-tools"];
+      const view = window.app.workspace.activeLeaf && window.app.workspace.activeLeaf.view;
+      const editor = view && view.editor;
+      const cats = [
+        { key: "groceries", label: "Groceries", emoji: "🛒", hotkey: "g", group: "Everyday", hidden: false },
+        { key: "coffee", label: "Coffee", emoji: "☕", hotkey: "c", group: "Everyday", hidden: false },
+      ];
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      if (!ledger || !editor || !ledger.api?.bank?.claimRowClose) return { error: "bank card API unavailable" };
+      const prior = ledger.bankCategoryModal;
+      if (prior && prior.closed !== true) prior.close();
+      const line = editor.getValue().split("\\n").findIndex((text) => text.includes("Amazon Reta* Ue4v4"));
+      if (line < 0) return { error: "waiting Amazon row missing" };
+      editor.setCursor({ line, ch: 8 });
+      await ledger.api.bank.claimRowClose(editor, view);
+      await sleep(350);
+      const modal = ledger.bankCategoryModal;
+      if (!modal) return { error: "Category card did not open" };
+      modal.setReport({ categories: cats, days: [] });
+      await modal.onKeyDown({ key: " ", preventDefault() {}, stopPropagation() {} });
+      const field = modal.contentEl.querySelector("input[data-bank-note-input]");
+      const options = Array.from(modal.contentEl.querySelectorAll('[role="option"]'))
+        .map((option) => option.textContent);
+      return {
+        opened: Boolean(modal.noteStage),
+        value: field ? field.value : null,
+        placeholder: field ? field.getAttribute("placeholder") : null,
+        ghost: modal.contentEl.querySelector(".bob-bank-category-note-ghost-tail")?.textContent || "",
+        options,
+        payee: modal.context?.cardRow?.payee || null,
+      };
+    })())()`, 30000).catch((error) => ({ error: String(error) }));
+    record("walk-note-suggest", Boolean(noteSuggest && noteSuggest.opened &&
+      noteSuggest.value === "" && noteSuggest.ghost === "Ask Kelly?" &&
+      noteSuggest.options?.some((text) => text.includes("Ask Kelly?")) &&
+      /Amazon Reta/.test(String(noteSuggest.payee || ""))), jsonDetail(noteSuggest));
+    const noteSuggestShot = path.join(outDir, "walk-note-suggest.png");
+    await capturePage(client, noteSuggestShot);
+    report.screenshots.push(noteSuggestShot);
+    const noteSuggestSaved = await client.evaluate(`(() => (async () => {
+      const ledger = window.app.plugins.plugins["bob-ledger-tools"];
+      const view = window.app.workspace.activeLeaf && window.app.workspace.activeLeaf.view;
+      const editor = view && view.editor;
+      const modal = ledger && ledger.bankCategoryModal;
+      if (!modal || !modal.noteStage || !editor) return { error: "note stage was not open" };
+      await modal.onKeyDown({ key: "Tab", preventDefault() {}, stopPropagation() {} });
+      const value = modal.noteStageInput && modal.noteStageInput.value;
+      await modal.onKeyDown({ key: "Enter", preventDefault() {}, stopPropagation() {} });
+      const line = editor.getValue().split("\\n").find((text) => text.includes("Amazon Reta* Ue4v4"));
+      return { value, line };
+    })())()`, 30000).catch((error) => ({ error: String(error) }));
+    record("walk-note-suggest-save", Boolean(noteSuggestSaved &&
+      noteSuggestSaved.value === "Ask Kelly?" &&
+      /Amazon Reta\* Ue4v4 — Ask Kelly\?$/.test(String(noteSuggestSaved.line || ""))), jsonDetail(noteSuggestSaved));
 
     const learnOpen = await client.evaluate(`(() => (async () => {
       const path = "bank/2026-12.md";

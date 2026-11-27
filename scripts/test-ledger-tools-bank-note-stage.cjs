@@ -12,6 +12,25 @@ const CATEGORIES = [
   { key: "groceries", label: "Groceries", emoji: "🛒", hotkey: "g", group: "Everyday", hidden: false },
   { key: "dining", label: "Dining", emoji: "🍽", hotkey: "d", group: "Everyday", hidden: false },
 ];
+const NOTE_LIBRARY = h.bankNoteLibraryFromContents([{
+  path: "bank/2026-10.md",
+  content: [
+    "---",
+    'parent: "[[bank]]"',
+    'type: "[[bank_month]]"',
+    "month: 2026-10",
+    "---",
+    "",
+    "# October 2026",
+    "",
+    "## Mon Oct 12",
+    "- [x] $1.00 Amazon Reta* Pd4tc — Ask Kelly?",
+    "- [x] $2.00 Amazon Reta* Re4tc — Ask Kelly?",
+    "- [x] $3.00 Amazon Reta* Ae4tc — For Abby",
+    "- [x] $4.00 Corner Cafe — Ask before noon",
+    "",
+  ].join("\n"),
+}]);
 
 class FakeNode {
   constructor(tag, doc) {
@@ -42,6 +61,7 @@ class FakeNode {
   set id(value) { this.setAttribute("id", value); }
   get id() { return this.getAttribute("id") || ""; }
   setAttribute(name, value) { this.attrs.set(name, String(value)); }
+  removeAttribute(name) { this.attrs.delete(name); }
   getAttribute(name) { return this.attrs.has(name) ? this.attrs.get(name) : null; }
   hasAttribute(name) { return this.attrs.has(name); }
   appendChild(child) {
@@ -166,6 +186,9 @@ function cardOn(line, options = {}) {
     plugins: { plugins: { "bob-navigation-hotkeys": { api: { recordJump(from, to) { jumps.push({ from, to }); return true; } } } } },
   };
   const plugin = new LedgerToolsPlugin(app);
+  plugin.bankNoteLibrary = () => options.library === undefined
+    ? NOTE_LIBRARY
+    : options.library;
   plugin.apiBankRefresh = async () => ({ report: { categories: CATEGORIES, days: [] }, error: null });
   if (options.isolate) plugin.bankNoteIsolateHistory = () => options.isolate;
   const context = plugin.bankCategoryContextAt(editor, { file: { path: PATH } }, line);
@@ -218,7 +241,7 @@ test("Space opens the stage without typing, flipping didInteract, or touching th
   const field = input(card);
   assert.ok(field);
   assert.equal(field.value, "");
-  assert.equal(field.getAttribute("placeholder"), "What was this for?");
+  assert.equal(field.getAttribute("placeholder"), "", "a matching note is shown as a ghost");
   assert.equal(field.getAttribute("aria-label"), "Note for Amazon Reta* 125dt");
   assert.equal(card.doc.activeElement, field, "the input takes focus");
   // A held Space never types into the fresh stage.
@@ -231,8 +254,116 @@ test("Space opens the stage without typing, flipping didInteract, or touching th
     assert.ok(section.classTokens().includes("is-staged"));
     assert.ok(section.hasAttribute("inert"));
   }
-  assert.equal(card.content.querySelector(".bob-bank-category-keys").textContent, "↵ back · esc back");
+  assert.equal(card.content.querySelector(".bob-bank-category-keys").textContent,
+    "⇥ complete · ⌃N/⌃P choose · ↵ back · esc back");
   assert.equal(card.content.querySelector(".bob-bank-category-note-consequence").textContent, "No change");
+});
+
+test("past-note options, ghost, Tab completion, ARIA, and Enter save the visible field", async () => {
+  const card = cardOn(2);
+  await card.modal.onKeyDown(keyEvent(" "));
+  const field = input(card);
+  const identity = field;
+  const list = card.content.querySelector('[role="listbox"]');
+  assert.ok(list);
+  assert.equal(list.getAttribute("aria-label"), "Past notes");
+  assert.equal(field.getAttribute("role"), "combobox");
+  assert.equal(field.getAttribute("aria-autocomplete"), "list");
+  assert.equal(field.getAttribute("aria-expanded"), "true");
+  assert.equal(field.getAttribute("aria-controls"), "bob-bank-category-note-options");
+  assert.equal(card.content.querySelectorAll('[role="option"]').length, 2);
+  assert.equal(field.getAttribute("aria-activedescendant"), null);
+  assert.equal(field.getAttribute("placeholder"), "");
+  assert.equal(card.content.querySelector(".bob-bank-category-note-ghost-tail").textContent, "Ask Kelly?");
+  assert.equal(card.content.querySelector(".bob-bank-category-keys").textContent,
+    "⇥ complete · ⌃N/⌃P choose · ↵ back · esc back");
+  assert.equal(card.modal.shouldPassNoteStageKey(keyEvent("Tab", { target: field })), false);
+
+  const tab = keyEvent("Tab", { target: field });
+  await card.modal.onKeyDown(tab);
+  assert.equal(tab.defaultPrevented, true);
+  assert.equal(input(card), identity, "completion keeps the input node");
+  assert.equal(field.value, "Ask Kelly?");
+  assert.equal(card.modal.noteStage.query, "Ask Kelly?");
+  assert.equal(card.modal.noteStage.selectedKey, null);
+  assert.equal(card.modal.liveText, "Completed: Ask Kelly?");
+  const save = keyEvent("Enter", { target: field });
+  await card.modal.onKeyDown(save);
+  assert.equal(card.editor.getLine(1), "- [ ] $23.21 Amazon Reta* 125dt — Ask Kelly? ^bank-aaa111");
+  assert.equal(card.modal.noteStage, null);
+});
+
+test("Ctrl+N/P and arrows select by key, return to the query, and typing clears selection", async () => {
+  const card = cardOn(2);
+  await card.modal.onKeyDown(keyEvent(" "));
+  const identity = input(card);
+  await card.modal.onKeyDown(keyEvent("n", { ctrlKey: true, target: identity }));
+  assert.equal(identity.value, "Ask Kelly?");
+  assert.equal(card.modal.noteStage.query, "");
+  assert.ok(card.modal.noteStage.selectedKey);
+  assert.equal(identity.getAttribute("aria-activedescendant"),
+    card.content.querySelector('[role="option"]').id);
+  await card.modal.onKeyDown(keyEvent("ArrowDown", { target: identity }));
+  assert.equal(identity.value, "For Abby");
+  assert.equal(card.modal.noteStage.selectedKey, "for abby");
+  await card.modal.setNoteDraft("For ");
+  await card.modal.onKeyDown(keyEvent("ArrowDown", { target: identity }));
+  assert.equal(identity.value, "For Abby");
+  await card.modal.onKeyDown(keyEvent("ArrowUp", { target: identity }));
+  assert.equal(identity.value, "For ", "moving above the first row restores the typed query");
+  assert.equal(card.modal.noteStage.selectedKey, null);
+  await card.modal.onKeyDown(keyEvent("ArrowDown", { target: identity }));
+  await card.modal.onKeyDown(keyEvent("p", { ctrlKey: true, target: identity }));
+  assert.equal(identity.value, "For ", "Ctrl+P returns to the typed query");
+  assert.equal(input(card), identity, "navigation keeps the input node");
+  await card.modal.onKeyDown(keyEvent("ArrowDown", { target: identity }));
+  await type(card, "!");
+  assert.equal(identity.value, "For Abby!");
+  assert.equal(card.modal.noteStage.query, "For Abby!");
+  assert.equal(card.modal.noteStage.selectedKey, null);
+});
+
+test("right accepts the ghost only at the end and stays native in the middle", async () => {
+  const card = cardOn(2);
+  await card.modal.onKeyDown(keyEvent(" "));
+  const field = input(card);
+  const right = keyEvent("ArrowRight", { target: field });
+  await card.modal.onKeyDown(right);
+  assert.equal(right.defaultPrevented, true);
+  assert.equal(field.value, "Ask Kelly?");
+  assert.equal(card.modal.noteStage.query, "Ask Kelly?");
+  assert.equal(card.editor.replacements.length, 0, "ghost acceptance never saves");
+
+  const middle = cardOn(2);
+  await middle.modal.onKeyDown(keyEvent(" "));
+  const middleField = input(middle);
+  middle.modal.setNoteDraft("Ask");
+  middleField.setSelectionRange(1, 1);
+  const native = keyEvent("ArrowRight", { target: middleField });
+  await middle.modal.onKeyDown(native);
+  assert.equal(native.defaultPrevented, false);
+  assert.equal(middle.modal.noteStage.query, "Ask");
+});
+
+test("click completes a row without saving and an empty library preserves today's copy", async () => {
+  const card = cardOn(2);
+  await card.modal.onKeyDown(keyEvent(" "));
+  const identity = input(card);
+  const option = card.content.querySelectorAll('[role="option"]')[1];
+  let prevented = false;
+  option.listeners.get("mousedown")[0]({ preventDefault() { prevented = true; } });
+  assert.equal(prevented, true, "mousedown keeps the input focused");
+  option.listeners.get("click")[0]({ preventDefault() {}, stopPropagation() {} });
+  assert.equal(input(card), identity);
+  assert.equal(identity.value, "For Abby");
+  assert.equal(card.editor.replacements.length, 0);
+  assert.equal(card.modal.liveText, "Completed: For Abby");
+
+  const empty = cardOn(2, { library: Object.freeze({ available: true, entries: Object.freeze([]) }) });
+  await empty.modal.onKeyDown(keyEvent(" "));
+  assert.equal(empty.content.querySelectorAll('[role="option"]').length, 0);
+  assert.equal(input(empty).getAttribute("placeholder"), "What was this for?");
+  assert.equal(empty.content.querySelector(".bob-bank-category-keys").textContent, "↵ back · esc back");
 });
 
 test("category hotkeys type while staged; q, -, +, and letters never file", async () => {
@@ -369,7 +500,8 @@ test("edit prefills the raw note, replace keeps --, and an empty save removes it
   const consequence = card.content.querySelector(".bob-bank-category-note-consequence");
   assert.equal(consequence.textContent, "Removes the note");
   assert.ok(consequence.classTokens().includes("is-remove"));
-  assert.equal(card.content.querySelector(".bob-bank-category-keys").textContent, "↵ remove note · esc back");
+  assert.equal(card.content.querySelector(".bob-bank-category-keys").textContent,
+    "⇥ complete · ⌃N/⌃P choose · ↵ remove note · esc back");
   await card.modal.onKeyDown(keyEvent("Enter"));
   assert.equal(card.editor.getLine(2), "- [ ] $5.00 Corner Cafe");
   assert.equal(card.modal.liveText, "Note removed");
@@ -553,11 +685,21 @@ test("direct mode opens the stage with no tiles, saves, and closes with a Notice
   assert.equal(card.content.querySelector(".bob-bank-category-title").textContent, "Note");
   assert.equal(card.content.querySelector(".bob-bank-category-tile"), null);
   assert.equal(card.content.querySelector(".bob-bank-category-progress"), null);
-  assert.equal(card.content.querySelector(".bob-bank-category-keys").textContent, "↵ back · esc close");
+  assert.equal(card.content.querySelector(".bob-bank-category-keys").textContent,
+    "⇥ complete · ⌃N/⌃P choose · ↵ back · esc close");
   await type(card, "warranty");
   await card.modal.onKeyDown(keyEvent("Enter"));
   assert.equal(card.editor.getLine(1), "- [ ] $23.21 Amazon Reta* 125dt — warranty ^bank-aaa111");
   assert.equal(card.modal.closed, true);
+  assert.deepEqual(TestNotice.messages, ["Bank: note saved"]);
+
+  TestNotice.messages.length = 0;
+  const completed = cardOn(2, { mode: "set" });
+  completed.modal.openNoteStage({ direct: true });
+  await completed.modal.onKeyDown(keyEvent("Tab", { target: input(completed) }));
+  await completed.modal.onKeyDown(keyEvent("Enter", { target: input(completed) }));
+  assert.equal(completed.editor.getLine(1), "- [ ] $23.21 Amazon Reta* 125dt — Ask Kelly? ^bank-aaa111");
+  assert.equal(completed.modal.closed, true);
   assert.deepEqual(TestNotice.messages, ["Bank: note saved"]);
 
   const escaped = cardOn(2, { mode: "set" });

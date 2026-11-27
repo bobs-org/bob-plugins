@@ -269,6 +269,41 @@ test("overlay snapshot signature uses per-path seq, not full overlay text", () =
   assert.equal(state.plugin.bankWalkOverlaySignature.includes(`${oct}\n`), false);
 });
 
+test("bank note library reads open editor overlays before the disk write", () => {
+  const disk = readMonth("2026-10.md");
+  const overlay = disk.replace("Halloween candy", "Halloween candy — Unsaved for Kelly");
+  const state = makeIndex({
+    files: { "bank/2026-10.md": disk },
+    folders: { bank: { path: "bank", children: [{ path: "bank/2026-10.md" }] } },
+    leaves: [{
+      view: {
+        file: { path: "bank/2026-10.md" },
+        editor: { getValue: () => overlay },
+      },
+    }],
+  });
+  state.plugin.bankWalkReady = true;
+  state.plugin.bankWalkDisk.set("bank/2026-10.md", disk);
+  const before = state.plugin.bankWalkSnapshot();
+  const library = state.plugin.bankNoteLibrary();
+  assert.equal(library.available, true);
+  assert.ok(library.entries.some((entry) => entry.text === "Unsaved for Kelly"));
+  assert.equal(state.plugin.bankWalkSnapshot(), before, "the walk snapshot memo remains stable");
+});
+
+test("bank note library is empty and unavailable while indexing or unloaded", () => {
+  const state = makeIndex({ files: {}, folders: {} });
+  const indexing = state.plugin.bankNoteLibrary();
+  assert.equal(indexing.available, false);
+  assert.equal(indexing.reason, "indexing");
+  assert.deepEqual(indexing.entries, []);
+  state.plugin.bankWalkActive = false;
+  const unloaded = state.plugin.bankNoteLibrary();
+  assert.equal(unloaded.available, false);
+  assert.equal(unloaded.reason, "unloaded");
+  assert.deepEqual(unloaded.entries, []);
+});
+
 test("listeners registered before setupBankWalk survive it in onload order", async () => {
   const oct = readMonth("2026-10.md");
   const { LedgerToolsPlugin } = require("./ledger-tools-harness.cjs");

@@ -17,6 +17,9 @@ class BobLedgerToolsBankWalkMixin {
     this.bankWalkOverlaySignature = null;
     this.bankWalkMemoKey = null;
     this.bankWalkMemoSnapshot = null;
+    this.bankNoteLibraryMemoKey = null;
+    this.bankNoteLibraryMemo = null;
+    this.bankNoteLibraryFileCache = new Map();
     // onload subscribes the footer listener (via setupFreshnessStatusBar)
     // before setupBankWalk runs; preserve those listeners instead of dropping
     // them, or the footer never repaints when the index becomes ready.
@@ -82,6 +85,9 @@ class BobLedgerToolsBankWalkMixin {
     this.bankWalkOverlaySignature = null;
     this.bankWalkMemoKey = null;
     this.bankWalkMemoSnapshot = null;
+    this.bankNoteLibraryMemoKey = null;
+    this.bankNoteLibraryMemo = null;
+    if (this.bankNoteLibraryFileCache instanceof Map) this.bankNoteLibraryFileCache.clear();
     if (this.bankWalkListeners instanceof Set) {
       this.bankWalkListeners.clear();
     }
@@ -157,6 +163,9 @@ class BobLedgerToolsBankWalkMixin {
       }
       if (this.bankWalkScanCache instanceof Map) {
         this.bankWalkScanCache.delete(norm);
+      }
+      if (this.bankNoteLibraryFileCache instanceof Map) {
+        this.bankNoteLibraryFileCache.delete(norm);
       }
       if (this.bankWalkPendingReads instanceof Set) {
         this.bankWalkPendingReads.delete(norm);
@@ -503,21 +512,12 @@ class BobLedgerToolsBankWalkMixin {
     return this.bankWalkOverlays;
   }
 
-  bankWalkSnapshot() {
+  bankWalkMergedContents() {
     try {
-      if (this.bankWalkActive === false) {
-        return Object.freeze({ available: false, reason: "unloaded" });
-      }
-      if (!this.bankWalkReady) {
-        return Object.freeze({ available: false, reason: "indexing" });
-      }
       const overlays = this.bankWalkCollectOverlays();
       const disk = this.bankWalkDisk instanceof Map ? this.bankWalkDisk : new Map();
       const overlayParts = Array.from(overlays.entries()).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
       const sig = `${this.bankWalkGeneration || 0}\u0000${overlayParts.map(([p, rec]) => `${p}\u0000${rec && rec.seq ? rec.seq : 0}`).join("\u0001")}`;
-      if (this.bankWalkMemoKey === sig && this.bankWalkMemoSnapshot) {
-        return this.bankWalkMemoSnapshot;
-      }
       const merged = [];
       const seen = new Set();
       for (const [path, content] of disk.entries()) {
@@ -526,14 +526,55 @@ class BobLedgerToolsBankWalkMixin {
         const text = overlay && typeof overlay.content === "string"
           ? overlay.content
           : (typeof content === "string" ? content : "");
-        merged.push({ path: norm, content: text });
+        merged.push(Object.freeze({ path: norm, content: text }));
         seen.add(norm);
       }
       for (const [path, record] of overlays.entries()) {
         if (!seen.has(path)) {
-          merged.push({ path, content: record && typeof record.content === "string" ? record.content : "" });
+          merged.push(Object.freeze({ path, content: record && typeof record.content === "string" ? record.content : "" }));
           seen.add(path);
         }
+      }
+      const overlaySigOnly = overlayParts.map(([p, rec]) => `${p}\u0000${rec && rec.seq ? rec.seq : 0}`).join("\u0001");
+      return Object.freeze({ sig, merged: Object.freeze(merged), overlaySigOnly });
+    } catch (_) {
+      return null;
+    }
+  }
+
+  bankNoteLibrary() {
+    try {
+      const unavailable = (reason) => Object.freeze({ available: false, reason, entries: Object.freeze([]) });
+      if (this.bankWalkActive === false) return unavailable("unloaded");
+      if (!this.bankWalkReady) return unavailable("indexing");
+      const contents = this.bankWalkMergedContents();
+      if (!contents) return unavailable("indexing");
+      if (this.bankNoteLibraryMemoKey === contents.sig && this.bankNoteLibraryMemo) {
+        return this.bankNoteLibraryMemo;
+      }
+      if (!(this.bankNoteLibraryFileCache instanceof Map)) this.bankNoteLibraryFileCache = new Map();
+      const library = bankNoteLibraryFromContents(contents.merged, this.bankNoteLibraryFileCache);
+      this.bankNoteLibraryMemoKey = contents.sig;
+      this.bankNoteLibraryMemo = library;
+      return library;
+    } catch (_) {
+      return Object.freeze({ available: false, reason: "indexing", entries: Object.freeze([]) });
+    }
+  }
+
+  bankWalkSnapshot() {
+    try {
+      if (this.bankWalkActive === false) {
+        return Object.freeze({ available: false, reason: "unloaded" });
+      }
+      if (!this.bankWalkReady) {
+        return Object.freeze({ available: false, reason: "indexing" });
+      }
+      const contents = this.bankWalkMergedContents();
+      if (!contents) return Object.freeze({ available: false, reason: "indexing" });
+      const { sig, merged, overlaySigOnly } = contents;
+      if (this.bankWalkMemoKey === sig && this.bankWalkMemoSnapshot) {
+        return this.bankWalkMemoSnapshot;
       }
       if (!(this.bankWalkScanCache instanceof Map)) {
         this.bankWalkScanCache = new Map();
@@ -545,7 +586,6 @@ class BobLedgerToolsBankWalkMixin {
         return Object.freeze({ available: false, reason: "indexing" });
       }
       const prevSig = this.bankWalkOverlaySignature;
-      const overlaySigOnly = overlayParts.map(([p, rec]) => `${p}\u0000${rec && rec.seq ? rec.seq : 0}`).join("\u0001");
       if (prevSig !== null && prevSig !== overlaySigOnly) {
         try {
           setTimeout(() => this.bankWalkFireChange({ generation: this.bankWalkGeneration || 0, reason: "overlay" }), 0);

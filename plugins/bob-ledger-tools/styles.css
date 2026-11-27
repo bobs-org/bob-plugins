@@ -10888,11 +10888,29 @@ input.bob-emoji-slot-fallback {
 }
 .bob-bank-category-note-stage { margin: 0; }
 .bob-bank-category-note-line { font-size: 0.92em; }
+.bob-bank-category-note-dash { box-sizing: border-box; width: 1em; text-align: left; }
+.bob-bank-category-note-field { position: relative; flex: 1 1 auto; min-width: 0; }
 .bob-bank-category-note-input,
 .bob-bank-category-note-input:hover,
-.bob-bank-category-note-input:focus { flex: 1 1 auto; min-width: 0; height: auto; margin: 0; padding: 0 0 0.12em; border: 0; border-bottom: 1px solid var(--background-modifier-border); border-radius: 0; background: transparent; box-shadow: none; color: var(--text-normal); font: inherit; font-style: italic; outline: none; }
+.bob-bank-category-note-input:focus { position: relative; z-index: 1; box-sizing: border-box; width: 100%; min-width: 0; height: auto; margin: 0; padding: 0 0 0.12em; border: 0; border-bottom: 1px solid var(--background-modifier-border); border-radius: 0; background: transparent; box-shadow: none; color: var(--text-normal); font: inherit; font-style: italic; outline: none; }
 .bob-bank-category-note-input:focus { border-bottom-color: var(--interactive-accent); }
 .bob-bank-category-note-input::placeholder { color: var(--text-faint); }
+.bob-bank-category-note-field.is-ghosting .bob-bank-category-note-input { color: transparent; caret-color: var(--text-normal); }
+.bob-bank-category-note-ghost { position: absolute; z-index: 0; inset: 0 0 0.12em; overflow: hidden; padding: 0; color: var(--text-faint); font: inherit; font-style: italic; letter-spacing: inherit; white-space: pre; pointer-events: none; }
+.bob-bank-category-note-ghost-typed { color: transparent; }
+.bob-bank-category-note-ghost-tail { color: var(--text-faint); }
+.bob-bank-category-note-options { display: grid; gap: 0.05rem; margin: 0 0 0.2rem; }
+.bob-bank-category-note-options:empty { display: none; }
+.bob-bank-category-note-option { display: grid; grid-template-columns: calc(1em + 0.3em) minmax(0, 1fr) minmax(0, auto); gap: 0; align-items: baseline; width: 100%; box-sizing: border-box; padding: 0.1rem 0.3rem; border-radius: 0.3rem; color: var(--text-muted); font-size: 0.92em; font-style: italic; text-align: start; cursor: pointer; }
+.bob-bank-category-note-option:hover { background: var(--background-modifier-hover); }
+.bob-bank-category-note-option.is-selected { background: color-mix(in srgb, var(--bob-bank-accent) 12%, transparent); color: var(--text-normal); }
+.bob-bank-category-note-option-marker { width: 1em; margin-inline-end: 0.3em; color: var(--text-faint); font-size: 0.68em; font-style: normal; text-align: center; white-space: nowrap; }
+.bob-bank-category-note-option.is-selected .bob-bank-category-note-option-marker { outline: 1px solid var(--bob-bank-accent); outline-offset: 1px; border-radius: 0.15rem; color: var(--bob-bank-accent); }
+.bob-bank-category-note-option-text { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bob-bank-category-note-match { color: var(--text-normal); font-weight: 600; }
+.bob-bank-category-note-option-meta { display: inline-flex; min-width: 0; max-width: 42%; align-items: baseline; justify-self: end; gap: 0.3em; overflow: hidden; color: var(--text-faint); font-size: 0.78em; font-style: normal; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.bob-bank-category-note-option-merchant { display: inline-block; max-width: 10em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bob-bank-category-note-option-meta-suffix { flex: 0 0 auto; }
 .bob-bank-category-note-status { margin: 0 0 0.25rem; padding-inline-start: 1.1em; }
 .bob-bank-category-note-consequence,
 .bob-bank-category-note-refusal { margin: 0.1rem 0; color: var(--text-muted); font-size: 0.78em; }
@@ -10901,6 +10919,10 @@ input.bob-emoji-slot-fallback {
 .bob-bank-category-note-changes { display: flex; flex-wrap: wrap; gap: 0.25rem; margin: 0.15rem 0 0; }
 .bob-bank-category-note-change { border: 1px solid var(--background-modifier-border); border-radius: 999px; padding: 0.02em 0.5em; color: var(--text-muted); font-size: 0.72em; }
 .bob-bank-category-note-hint { color: var(--text-warning, var(--text-muted)); }
+@media (forced-colors: active) {
+  .bob-bank-category-note-option.is-selected { outline: 1px solid Highlight; }
+  .bob-bank-category-note-ghost-tail { color: GrayText; }
+}
 .bob-bank-category-section.is-staged,
 .bob-bank-category-new-row.is-staged,
 .bob-bank-category-footer.is-staged { opacity: 0.38; pointer-events: none; animation: bob-bank-note-stage-dim 120ms ease-out; }

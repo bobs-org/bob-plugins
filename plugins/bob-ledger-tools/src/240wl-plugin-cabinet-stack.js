@@ -81,6 +81,15 @@ function propertyCardCabinetProviderCache(view) {
   return cache;
 }
 
+function propertyCardCabinetBodyChildCount(body) {
+  try {
+    if (typeof body?.childElementCount === "number") return body.childElementCount;
+    if (body?.children && typeof body.children.length === "number") return body.children.length;
+    if (body?.childNodes && typeof body.childNodes.length === "number") return body.childNodes.length;
+  } catch (_) {}
+  return -1;
+}
+
 function propertyCardCabinetProviderBody(panel, provider, context, kind, path, paintKey, open) {
   const doc = panel?.ownerDocument;
   const drawer = panel?.querySelector?.(".bob-cabinet-drawer");
@@ -95,6 +104,12 @@ function propertyCardCabinetProviderBody(panel, provider, context, kind, path, p
     body = state.container;
     if (body && body.parentNode !== inner) {
       try { inner.appendChild(body); } catch (_) {}
+    }
+    // The catalog body cache (240wj) re-attaches a detached painted body to
+    // whichever mount of the same catalog renders next, so a built body can
+    // come back empty. Rebuild it rather than show a blank open cabinet.
+    if (state.built && !state.pending && !state.error && propertyCardCabinetBodyChildCount(body) === 0) {
+      state.built = false;
     }
   } else {
     try { body?.remove?.(); } catch (_) {}
@@ -111,6 +126,13 @@ function propertyCardCabinetProviderBody(panel, provider, context, kind, path, p
     state.pending = false;
     state.error = true;
     state.built = true;
+    // A failed body cannot stand in for the stored catalog. Release the
+    // mount's absorption claim before showing the fallback message.
+    try {
+      const release = panel.__bobCabinetClaimRelease;
+      panel.__bobCabinetClaimRelease = null;
+      if (typeof release === "function") release();
+    } catch (_) {}
     try { provider.onBuildError?.({ path, kind, view: context?.view || null, error }); } catch (_) {}
     while (body.firstChild) body.removeChild(body.firstChild);
     const message = propertyCardCabinetCreateEl(doc, "p", "bob-cabinet-render-error");

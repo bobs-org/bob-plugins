@@ -87,6 +87,22 @@ function propertyCardCabinetAbsorbReadingTargets(scope, plan) {
       }
       if (found.callout && (plan.headingLine == null || found.heading)) break;
     }
+    // Obsidian can split the final H2 and its callout across adjacent rendered
+    // sections. The source plan already proves that this heading labels only
+    // the catalog, so use the nearest matching rendered heading before the
+    // claimed callout when the section-local scan could not pair them.
+    if (plan.headingLine != null && found.callout && !found.heading) {
+      const headings = Array.from(sizer.querySelectorAll?.("h2") || []).filter((node) => {
+        if (propertyCardCabinetReadingDenied(node)) return false;
+        if (node.closest?.(".bob-property-card, .markdown-embed, .internal-embed, .canvas-node")) return false;
+        const text = String(node.textContent ?? "").trim();
+        return text === spec.heading || text.replace(/#+\s*$/, "").trim() === spec.heading;
+      });
+      for (const heading of headings) {
+        const following = heading.compareDocumentPosition?.(found.callout) || 0;
+        if (following & 4) found.heading = heading;
+      }
+    }
     return found;
   } catch (_) {
     return found;

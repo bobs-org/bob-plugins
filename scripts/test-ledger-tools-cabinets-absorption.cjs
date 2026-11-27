@@ -223,6 +223,32 @@ function fieldState({ text, path, live = true, selection = null }) {
   };
 }
 
+// A fake Live Preview editor whose dispatch runs the real absorb reducer, so
+// claim leases and the field stay comparable. `show(path)` switches files.
+function fakeAbsorbEditor(text, path) {
+  const field = propertyCardCabinetAbsorbEditorExtension();
+  const deps = { effect: effectType, livePreviewField: editorLivePreviewField, infoField: editorInfoField };
+  let shown = path;
+  let value;
+  const view = {
+    dispatched: [],
+    get state() {
+      const base = fieldState({ text, path: shown });
+      return { ...base, field: (f, notFound) => (f === field ? value : base.field(f, notFound)) };
+    },
+    dispatch(tr) {
+      view.dispatched.push(tr.effects.value);
+      value = propertyCardCabinetAbsorbFieldReduce(value, { effects: [tr.effects], docChanged: false, state: view.state }, deps);
+    },
+    show(next) {
+      shown = next;
+      value = propertyCardCabinetAbsorbFieldReduce(value, { effects: [], docChanged: true, state: view.state }, deps);
+    },
+    field: () => value,
+  };
+  return view;
+}
+
 const AREAS_NOTE = [
   "---",
   "type: area",
@@ -323,6 +349,21 @@ test("recognizer: duplicates and malformed openers are damage", () => {
   assert.equal(propertyCardCatalogRegionForHide(cardLike, "albums").damage, null, "[!albums-card] stays authored");
 });
 
+test("recognizer: only managed rows are absorbed; authored rows keep the section visible", () => {
+  const closed = ["## Projects", "", "> [!projects]", ">", "> - **[[alpha]]**", "> - **Closed**", ">   - ✅ **[[beta]]** — shipped", ""].join("\n");
+  const closedPlan = propertyCardCatalogRegionForHide(closed, "projects");
+  assert.equal(closedPlan.damage, null, "bob's Projects closed-group label is a managed row");
+  assert.equal(closedPlan.startLine, 3);
+  assert.equal(closedPlan.headingLine, 1);
+  const authored = ["## Projects", "", "> [!projects]", "> - **[[alpha]]**", "> - not-a-managed-row", ""].join("\n");
+  assert.match(propertyCardCatalogRegionForHide(authored, "projects").damage.message, /ambiguous projects catalog row/);
+  const closedElsewhere = ["## Areas", "", "> [!areas]", "> - **[[alpha]]**", "> - **Closed**", ""].join("\n");
+  assert.match(propertyCardCatalogRegionForHide(closedElsewhere, "areas").damage.message, /ambiguous areas catalog row/,
+    "the closed label is managed only where bob writes it");
+  const titled = ["## Areas", "", "> [!areas]- Areas", ">", "> - **[[alpha]]**", ""].join("\n");
+  assert.equal(propertyCardCatalogRegionForHide(titled, "areas").damage, null, "the callout head is framing, not a row");
+});
+
 test("recognizer: legacy notebook markers", () => {
   const legacy = ["## Notebooks", "", "<!-- bob:notebooks:begin v1 -->", "> [!notebooks]", "> - [[A]]", "<!-- bob:notebooks:end -->", ""].join("\n");
   const plan = propertyCardCatalogRegionForHide(legacy, "notebooks");
@@ -359,7 +400,7 @@ test("claims: lifecycle, generations, fingerprints, and release", () => {
   const view = {};
   const plan = propertyCardCatalogRegionForHide(AREAS_NOTE, "areas");
   let revealed = 0;
-  const release = propertyCardCatalogClaim({ view, path: "Cash.md", kind: "areas", fingerprint: plan.fingerprint, generation: 7, reveal: () => { revealed += 1; } });
+  const release = propertyCardCatalogClaim({ view, path: "Cash.md", kind: "areas", fingerprint: plan.fingerprint, generation: 7, reveal: () => { revealed += 1; return true; } });
   assert.equal(propertyCardCatalogClaimed(view, "Cash.md", "areas", plan.fingerprint, 7), true);
   assert.equal(propertyCardCatalogClaimed(view, "Cash.md", "areas", plan.fingerprint, 8), false, "a stale generation reads unclaimed");
   assert.equal(propertyCardCatalogClaimed(view, "Cash.md", "areas", "fnv1a:deadbeef", 7), false, "a changed vault reads unclaimed");
@@ -371,6 +412,15 @@ test("claims: lifecycle, generations, fingerprints, and release", () => {
   assert.equal(propertyCardCatalogClaimed(view, "Cash.md", "areas", plan.fingerprint, 7), false);
   assert.equal(propertyCardCatalogAbsorbed(view, "Cash.md", "areas"), false);
   assert.equal(propertyCardCatalogRevealClaim(view, "Cash.md", "areas"), false);
+
+  // A reveal that could not open its cabinet (a detached panel) reports
+  // failure, so navigation falls through to the next candidate view.
+  const stale = propertyCardCatalogClaim({ view, path: "Cash.md", kind: "areas", fingerprint: plan.fingerprint, generation: 8, reveal: () => false });
+  assert.equal(propertyCardCatalogRevealClaim(view, "Cash.md", "areas"), false);
+  stale();
+  const thrower = propertyCardCatalogClaim({ view, path: "Cash.md", kind: "areas", fingerprint: plan.fingerprint, generation: 9, reveal: () => { throw new Error("gone"); } });
+  assert.equal(propertyCardCatalogRevealClaim(view, "Cash.md", "areas"), false);
+  thrower();
 });
 
 test("claims: scope and global release, and the painter stand-down", () => {
@@ -505,21 +555,127 @@ test("editor: atomicRanges hands CodeMirror a RangeSet, never a plain array", ()
 
 test("editor: extension and in-editor claim handle", () => {
   assert.ok(propertyCardCabinetAbsorbEditorExtension(), "the StateField builds with stubs");
-  let dispatched = [];
-  const view = { dispatch: (tr) => { dispatched.push(tr); }, state: fieldState({ text: AREAS_NOTE, path: "Cash.md" }) };
+  const view = fakeAbsorbEditor(AREAS_NOTE, "Cash.md");
+  const dispatched = view.dispatched;
   const plan = propertyCardCatalogRegionForHide(AREAS_NOTE, "areas");
   const absorbOptions = { path: "Cash.md", kind: "areas", fingerprint: plan.fingerprint, defer: (fn) => { fn(); } };
   const handle = propertyCardCabinetAbsorbInEditor(view, absorbOptions);
   assert.ok(handle, "a Live Preview editor carries the claim");
   assert.equal(typeof handle.generation, "number");
   assert.equal(dispatched.length, 1);
+  assert.deepEqual(view.field().claims.map((claim) => claim.kind), ["areas"]);
   const same = propertyCardCabinetAbsorbInEditor(view, absorbOptions);
   assert.equal(dispatched.length, 1, "re-claiming the same region dispatches nothing");
-  assert.equal(same, handle);
+  assert.notEqual(same, handle, "each mount holds its own lease");
+  assert.equal(same.generation, handle.generation, "both leases share one editor claim");
+  // A repaint mounts the new stack before the old one releases: the old
+  // mount's release must not lift the claim the new mount still holds.
   handle();
+  handle();
+  assert.equal(dispatched.length, 1, "releasing one lease keeps the claim");
+  same();
+  assert.equal(dispatched.length, 2, "the last lease releases the claim");
+  assert.deepEqual(dispatched[1], { release: handle.generation });
+  assert.deepEqual(view.field().claims, []);
+  const fresh = propertyCardCabinetAbsorbInEditor(view, absorbOptions);
+  assert.notEqual(fresh.generation, handle.generation, "a released claim is never revived");
+  // The editor shows another file, so the field drops the claim while the
+  // stack that holds the lease stays registered. Returning re-asserts it.
+  view.show("Other.md");
+  assert.deepEqual(view.field().claims, []);
+  view.show("Cash.md");
+  const back = propertyCardCabinetAbsorbInEditor(view, absorbOptions);
+  assert.equal(back.generation, fresh.generation);
+  assert.deepEqual(dispatched.at(-1).absorb && dispatched.at(-1).absorb.generation, fresh.generation, "a dropped claim is re-dispatched");
+  assert.deepEqual(view.field().claims.map((claim) => claim.generation), [fresh.generation]);
+  const count = dispatched.length;
+  const held = propertyCardCabinetAbsorbInEditor(view, absorbOptions);
+  assert.equal(dispatched.length, count, "a claim the field still holds is not re-dispatched");
+  fresh();
+  back();
+  held();
+  assert.deepEqual(view.field().claims, []);
   assert.equal(propertyCardCatalogReleaseScope(view), 0, "editor claims ride the field, not the claim registry");
   assert.equal(propertyCardCabinetAbsorbInEditor(null), null);
   assert.equal(propertyCardCabinetAbsorbInEditor(view, { path: "Cash.md", kind: "nope" }), null);
+});
+
+test("editor: a host's catalogs absorb together, one claim per kind", () => {
+  const note = [
+    "---", "type: area", "---", "", "# Cash", "",
+    "## Areas", "", "> [!areas]", "> - [[Food]]", "",
+    "## Projects", "", "> [!projects]", "> - **[[Alpha]]**", "> - **Closed**", ">   - ✅ **[[Beta]]**", "",
+    "## Notes", "", "Body.", "",
+  ].join("\n");
+  const deps = { effect: effectType, livePreviewField: editorLivePreviewField, infoField: editorInfoField };
+  const areas = propertyCardCatalogRegionForHide(note, "areas");
+  const projects = propertyCardCatalogRegionForHide(note, "projects");
+  assert.equal(projects.damage, null);
+  const both = propertyCardCabinetAbsorbFieldReduce(
+    undefined,
+    { effects: [
+      absorbEffect({ absorb: { path: "Cash.md", kind: "areas", fingerprint: areas.fingerprint, generation: 1 } }),
+      absorbEffect({ absorb: { path: "Cash.md", kind: "projects", fingerprint: projects.fingerprint, generation: 2 } }),
+    ], docChanged: true, state: fieldState({ text: note, path: "Cash.md" }) },
+    deps,
+  );
+  assert.deepEqual(both.claims.map((claim) => claim.kind), ["areas", "projects"], "a second kind never displaces the first");
+  assert.equal(both.claim.kind, "projects");
+  assert.deepEqual(both.ranges.map((range) => range.kind), ["areas", "projects"]);
+  assert.equal(propertyCardCabinetAbsorbFieldDecorations(both).length, 2);
+  assert.equal(propertyCardCabinetAbsorbAtomicRanges(both).length, 2);
+  assert.match(note.slice(both.ranges[1].from, both.ranges[1].to), /\*\*Closed\*\*/);
+
+  const [areaRange] = both.ranges;
+  const inside = propertyCardCabinetAbsorbFieldReduce(
+    both,
+    { effects: [], docChanged: false, state: fieldState({ text: note, path: "Cash.md", selection: { anchor: areaRange.from + 2, head: areaRange.from + 3 } }) },
+    deps,
+  );
+  assert.equal(inside.revealed, true);
+  assert.deepEqual(inside.ranges.map((range) => range.revealed), [true, false]);
+  const hiddenWhileRevealed = propertyCardCabinetAbsorbFieldDecorations(inside);
+  assert.equal(hiddenWhileRevealed.length, 1, "revealing Areas keeps Projects hidden");
+  assert.equal(hiddenWhileRevealed.ranges[0].from, both.ranges[1].from);
+
+  const reclaimed = propertyCardCabinetAbsorbFieldReduce(
+    both,
+    { effects: [absorbEffect({ absorb: { path: "Cash.md", kind: "areas", fingerprint: areas.fingerprint, generation: 3 } })], docChanged: false, state: fieldState({ text: note, path: "Cash.md" }) },
+    deps,
+  );
+  assert.deepEqual(reclaimed.claims.map((claim) => [claim.kind, claim.generation]), [["projects", 2], ["areas", 3]], "a kind's new claim replaces only its own");
+  const released = propertyCardCabinetAbsorbFieldReduce(
+    reclaimed,
+    { effects: [absorbEffect({ release: 2 })], docChanged: false, state: fieldState({ text: note, path: "Cash.md" }) },
+    deps,
+  );
+  assert.deepEqual(released.claims.map((claim) => claim.kind), ["areas"]);
+  assert.deepEqual(released.ranges.map((range) => range.kind), ["areas"]);
+  const stale = propertyCardCabinetAbsorbFieldReduce(
+    released,
+    { effects: [absorbEffect({ release: 1 })], docChanged: false, state: fieldState({ text: note, path: "Cash.md" }) },
+    deps,
+  );
+  assert.equal(stale, released, "a superseded generation's release changes nothing");
+
+  const view = fakeAbsorbEditor(note, "Cash.md");
+  const dispatched = view.dispatched;
+  const now = (fn) => { fn(); };
+  const areaHandle = propertyCardCabinetAbsorbInEditor(view, { path: "Cash.md", kind: "areas", fingerprint: areas.fingerprint, defer: now });
+  const projectHandle = propertyCardCabinetAbsorbInEditor(view, { path: "Cash.md", kind: "projects", fingerprint: projects.fingerprint, defer: now });
+  assert.ok(areaHandle && projectHandle && areaHandle !== projectHandle);
+  assert.deepEqual(dispatched.map((payload) => Object.keys(payload)[0]), ["absorb", "absorb"], "claiming Projects never releases Areas");
+  assert.deepEqual(view.field().claims.map((claim) => claim.kind), ["areas", "projects"]);
+  const areaAgain = propertyCardCabinetAbsorbInEditor(view, { path: "Cash.md", kind: "areas", fingerprint: areas.fingerprint, defer: now });
+  assert.equal(areaAgain.generation, areaHandle.generation);
+  areaHandle();
+  areaHandle();
+  assert.equal(dispatched.length, 2, "a repainted Areas cabinet still holds its claim");
+  areaAgain();
+  assert.deepEqual(dispatched.slice(2), [{ release: areaHandle.generation }]);
+  projectHandle();
+  assert.deepEqual(dispatched.slice(3), [{ release: projectHandle.generation }]);
+  assert.deepEqual(view.field().claims, []);
 });
 
 function readingScope() {
@@ -595,6 +751,21 @@ test("renderer: paints, binds links, re-uses, and fails open", async () => {
   assert.equal(prevented, true);
   assert.deepEqual(opened, { target: "Target", path: "Cash.md" });
 
+  // A body still inside another mount's container belongs to that mount:
+  // a second mount renders fresh instead of leaving the first one blank.
+  const other = doc.createElement("div");
+  const parallel = await propertyCardCabinetRenderCatalog({
+    plugin, doc, container: other, path: "Cash.md", regionSource,
+    paint: async () => { painted += 1; },
+    paintKey: "areas:v1",
+  });
+  assert.deepEqual(parallel, { reused: false, failed: false });
+  assert.equal(painted, 2, "a body owned by another mount is never moved");
+  assert.ok(container.querySelector("a.internal-link"), "the first mount keeps its body");
+  assert.ok(other.querySelector("a.internal-link"));
+
+  // Once its mount clears it, the cached body is orphaned and re-attaches.
+  while (other.firstChild) other.removeChild(other.firstChild);
   const detached = doc.createElement("div");
   const second = await propertyCardCabinetRenderCatalog({
     plugin, doc, container: detached, path: "Cash.md", regionSource,
@@ -602,7 +773,7 @@ test("renderer: paints, binds links, re-uses, and fails open", async () => {
     paintKey: "areas:v1",
   });
   assert.deepEqual(second, { reused: true, failed: false });
-  assert.equal(painted, 1, "a cached body re-attaches without repainting");
+  assert.equal(painted, 2, "an orphaned cached body re-attaches without repainting");
 
   let released = 0;
   const failing = doc.createElement("div");

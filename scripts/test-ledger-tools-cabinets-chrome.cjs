@@ -220,6 +220,19 @@ test("open gate assembles one ordered stack with accessible lazy, reusable provi
   assert.equal(third.stack.querySelector(".bob-cabinet-provider-content"), originalBody, "same paint key reuses the body node");
   assert.equal(builds, 1);
   assert.equal(originalBody.parentNode, third.stack.querySelector(".bob-cabinet-drawer-inner"));
+
+  // Another mount of the same catalog took the cached painted nodes (240wj
+  // re-attaches a detached body wherever it renders next). The reused body
+  // came back empty, so the next mount rebuilds instead of showing a blank.
+  while (originalBody.firstChild) originalBody.removeChild(originalBody.firstChild);
+  const fourth = assemble(doc);
+  const rebuilt = fourth.stack.querySelector(".bob-cabinet-provider-content");
+  assert.equal(builds, 2, "an emptied built body rebuilds");
+  assert.match(rebuilt.textContent, /Area catalog content/);
+  await Promise.resolve();
+  const fifth = assemble(doc);
+  assert.equal(builds, 2, "a populated body is still reused");
+  assert.equal(fifth.stack.querySelector(".bob-cabinet-provider-content"), rebuilt);
   assert.equal(writes, 0);
   unregister();
   H.propertyCardCabinetStateResetForTests();

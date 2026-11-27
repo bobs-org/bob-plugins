@@ -65469,6 +65469,41 @@ function propertyCardCabinetRegionSpec(kind) {
   return PROPERTY_CARD_CABINET_REGION_SPECS.find((spec) => spec.kind === kind) || null;
 }
 
+// Structural rows bob's catalog writers emit without a link: the Projects
+// closed-group label (bob-cli `CLOSED_GROUP_LABEL`, rendered `> - **Closed**`).
+const PROPERTY_CARD_CABINET_MANAGED_LABEL_ROWS = Object.freeze({
+  projects: Object.freeze(["- **Closed**"]),
+});
+
+// A catalog callout can contain arbitrary authored text even when its head is
+// well formed. Absorb only rows that still look like managed rows (a link row
+// or a writer-emitted label row); any other nonblank row makes ownership
+// uncertain, so keep the source visible. The callout head and legacy
+// notebook markers are region framing, not rows.
+function propertyCardCatalogRegionRowsManaged(region, spec) {
+  try {
+    const lines = Array.isArray(region?.lines) ? region.lines : [];
+    const labels = PROPERTY_CARD_CABINET_MANAGED_LABEL_ROWS[spec?.kind] || [];
+    let headSeen = false;
+    for (const line of lines) {
+      const raw = String(line);
+      const trimmed = raw.trim();
+      if (spec?.legacy && (trimmed === spec.legacy.begin || trimmed === spec.legacy.end)) continue;
+      if (!headSeen && propertyCardCabinetIsCalloutHead(raw, spec?.callout)) {
+        headSeen = true;
+        continue;
+      }
+      const content = raw.replace(/^\s{0,3}>\s?/, "").trim();
+      if (!content) continue;
+      if (labels.includes(content)) continue;
+      if (!content.includes("[[") || !content.includes("]]")) return false;
+    }
+    return headSeen;
+  } catch (_) {
+    return false;
+  }
+}
+
 function propertyCardCabinetSplitLines(text) {
   const source = String(text == null ? "" : text);
   if (source === "") return { lines: [], eol: "\n" };
@@ -65729,6 +65764,16 @@ function propertyCardCatalogRegionForHide(text, kind) {
     if (scan.damage) return { kind, startLine: null, endLine: null, headingLine: null, fingerprint: null, damage: scan.damage };
     if (scan.regions.length === 0) return null;
     const region = scan.regions[0];
+    if (kind !== "records" && !propertyCardCatalogRegionRowsManaged(region, spec)) {
+      return {
+        kind,
+        startLine: null,
+        endLine: null,
+        headingLine: null,
+        fingerprint: null,
+        damage: propertyCardCabinetDamage(region.startLine, `ambiguous ${spec.callout} catalog row; keep the stored section visible`),
+      };
+    }
     const bodyFirst = propertyCardCabinetFrontmatterEnd(lines);
 
     let headingLine = null;
@@ -65793,7 +65838,7 @@ function propertyCardCabinetAbsorbEnsureEffect() {
 }
 
 function propertyCardCabinetAbsorbFieldCreate() {
-  return { claim: null, ranges: [], revealed: false };
+  return { claim: null, claims: [], ranges: [], revealed: false };
 }
 
 function propertyCardCabinetAbsorbStateField(state, field) {
@@ -65857,7 +65902,11 @@ function propertyCardCabinetSelectionStrictlyInside(selection, range) {
   }
 }
 
-// Pure reducer behind the StateField. tr needs effects, docChanged, state
+// Pure reducer behind the StateField. A host card mounts one cabinet per
+// catalog kind in the same editor, so the field keeps one claim per kind
+// (`claims`); `claim` is the most recent one. Each hidden range carries its
+// kind and rung, and the strict-inside reveal applies per range, so revealing
+// one catalog never unhides the others. tr needs effects, docChanged, state
 // ({ doc, selection, field }), and startState. deps may inject { effect,
 // livePreviewField, infoField, text } for tests.
 function propertyCardCabinetAbsorbFieldReduce(value, tr, deps = {}) {
@@ -65870,34 +65919,35 @@ function propertyCardCabinetAbsorbFieldReduce(value, tr, deps = {}) {
     const infoField = Object.prototype.hasOwnProperty.call(deps, "infoField")
       ? deps.infoField
       : (typeof editorInfoField !== "undefined" ? editorInfoField : undefined);
-    let claim = current.claim || null;
+    const before = Array.isArray(current.claims) ? current.claims : (current.claim ? [current.claim] : []);
+    let claims = before;
     for (const effect of tr?.effects || []) {
       if (!effectType || typeof effect?.is !== "function" || !effect.is(effectType)) continue;
       const payload = effect.value || {};
       if (payload.absorb && typeof payload.absorb.path === "string" && typeof payload.absorb.kind === "string") {
-        claim = {
+        const next = {
           path: payload.absorb.path,
           kind: payload.absorb.kind,
           fingerprint: payload.absorb.fingerprint == null ? null : String(payload.absorb.fingerprint),
           generation: payload.absorb.generation == null ? null : payload.absorb.generation,
           rung: payload.absorb.rung === "replace" ? "replace" : "atomic",
         };
-      } else if (payload.release !== undefined && claim && claim.generation === payload.release) {
-        claim = null;
+        claims = claims.filter((claim) => claim.kind !== next.kind).concat([next]);
+      } else if (payload.release !== undefined) {
+        claims = claims.filter((claim) => claim.generation !== payload.release);
       }
     }
     const state = tr?.state;
-    if (claim) {
-      if (propertyCardCabinetAbsorbStateField(state, liveField) === false) claim = null;
-    }
-    if (claim) {
+    if (claims.length && propertyCardCabinetAbsorbStateField(state, liveField) === false) claims = [];
+    if (claims.length) {
       const info = propertyCardCabinetAbsorbStateField(state, infoField);
-      if (info && (info.file?.path ?? null) !== claim.path) claim = null;
+      if (info) claims = claims.filter((claim) => (info.file?.path ?? null) === claim.path);
     }
+    let claimsChanged = claims.length !== before.length || claims.some((claim, index) => claim !== before[index]);
     let ranges = current.ranges || [];
-    if (!claim) {
+    if (!claims.length) {
       ranges = [];
-    } else if (claim !== current.claim || tr?.docChanged) {
+    } else if (claimsChanged || tr?.docChanged) {
       const doc = state?.doc;
       const text = deps.text !== undefined
         ? deps.text
@@ -65906,20 +65956,49 @@ function propertyCardCabinetAbsorbFieldReduce(value, tr, deps = {}) {
           : (typeof doc?.sliceString === "function" && typeof doc?.length === "number"
             ? doc.sliceString(0, doc.length)
             : (typeof state?.doc === "string" ? state.doc : "")));
-      const plan = propertyCardCatalogRegionForHide(text, claim.kind);
-      if (!plan || plan.damage || (claim.fingerprint != null && plan.fingerprint !== claim.fingerprint)) {
-        claim = null;
-        ranges = [];
-      } else {
-        ranges = propertyCardCabinetAbsorbRangesForPlan(text, plan);
+      const kept = [];
+      const built = [];
+      for (const claim of claims) {
+        const plan = propertyCardCatalogRegionForHide(text, claim.kind);
+        if (!plan || plan.damage || (claim.fingerprint != null && plan.fingerprint !== claim.fingerprint)) continue;
+        kept.push(claim);
+        for (const range of propertyCardCabinetAbsorbRangesForPlan(text, plan)) {
+          built.push({ from: range.from, to: range.to, kind: claim.kind, rung: claim.rung });
+        }
       }
+      if (kept.length !== claims.length) {
+        claims = kept;
+        claimsChanged = claims.length !== before.length || claims.some((claim, index) => claim !== before[index]);
+      }
+      ranges = built.sort((a, b) => a.from - b.from);
     }
+    if (!claimsChanged) claims = before;
     const selection = state?.selection;
-    const revealed = ranges.length > 0 && ranges.some((range) => propertyCardCabinetSelectionStrictlyInside(selection, range));
-    if (claim === current.claim && ranges === current.ranges && revealed === current.revealed) return current;
-    return { claim, ranges, revealed };
+    const flags = ranges.map((range) => propertyCardCabinetSelectionStrictlyInside(selection, range));
+    if (flags.some((flag, index) => ranges[index].revealed !== flag)) {
+      ranges = ranges.map((range, index) => ({ ...range, revealed: flags[index] }));
+    }
+    const revealed = flags.some(Boolean);
+    if (!claimsChanged && ranges === current.ranges && revealed === current.revealed) return current;
+    return { claim: claims.length ? claims[claims.length - 1] : null, claims, ranges, revealed };
   } catch (_) {
     return propertyCardCabinetAbsorbFieldCreate();
+  }
+}
+
+// The ranges a field value actually hides: every claimed range except one
+// the selection sits strictly inside. A value without per-range flags (an
+// older shape) treats `revealed` as covering all of its ranges.
+function propertyCardCabinetAbsorbHiddenRanges(value) {
+  try {
+    if (!value || !Array.isArray(value.ranges) || value.ranges.length === 0) return [];
+    const claimed = Boolean(value.claim) || (Array.isArray(value.claims) && value.claims.length > 0);
+    if (!claimed) return [];
+    const perRange = value.ranges.some((range) => typeof range?.revealed === "boolean");
+    if (!perRange && value.revealed) return [];
+    return value.ranges.filter((range) => range && !(perRange && range.revealed));
+  } catch (_) {
+    return [];
   }
 }
 
@@ -65931,14 +66010,15 @@ function propertyCardCabinetAbsorbFieldDecorations(value) {
     none = null;
   }
   try {
-    if (!value?.claim || !value.ranges || value.ranges.length === 0 || value.revealed) return none;
+    const hidden = propertyCardCabinetAbsorbHiddenRanges(value);
+    if (hidden.length === 0) return none;
     if (typeof Decoration === "undefined" || !Decoration || typeof Decoration.replace !== "function") return none;
-    const built = value.ranges.map((range) => {
+    const built = hidden.map((range) => {
       const replace = Decoration.replace({ block: true });
       if (replace && typeof replace.range === "function") return replace.range(range.from, range.to);
       return { from: range.from, to: range.to, value: replace };
     });
-    if (typeof Decoration.set === "function") return Decoration.set(built);
+    if (typeof Decoration.set === "function") return Decoration.set(built, true);
     if (typeof RangeSetBuilder !== "undefined" && RangeSetBuilder) {
       const builder = new RangeSetBuilder();
       for (const span of built) {
@@ -65959,9 +66039,9 @@ function propertyCardCabinetAbsorbFieldDecorations(value) {
 // replace behavior against the atomic one.
 function propertyCardCabinetAbsorbAtomicRanges(value) {
   try {
-    if (!value?.claim || !value.ranges || value.ranges.length === 0 || value.revealed) return [];
-    if ((value.claim.rung || "atomic") === "replace") return [];
-    return value.ranges.map((range) => ({ from: range.from, to: range.to }));
+    return propertyCardCabinetAbsorbHiddenRanges(value)
+      .filter((range) => (range.rung || value.claim?.rung || "atomic") !== "replace")
+      .map((range) => ({ from: range.from, to: range.to }));
   } catch (_) {
     return [];
   }
@@ -66043,12 +66123,15 @@ function propertyCardCabinetAbsorbEditorDispatch(view, payload) {
   } catch (_) {}
 }
 
-// Claim a region in one Live Preview editor. The claim only hides while a
-// mounted cabinet vouches for it: pass the cabinet's release alongside so a
-// failed body build unhides in the same frame. `options.rung` selects the
+// Claim a region in one Live Preview editor, one claim per (view, kind): a
+// host card's Areas, Projects, Notebooks, and Albums cabinets all stand in
+// at once. The claim only hides while a mounted cabinet vouches for it: pass
+// the cabinet's release alongside so a failed body build unhides in the same
+// frame. `options.rung` selects the
 // hide ladder rung ("atomic" by default, "replace" for the bare rung a).
-// Returns an idempotent release function (with .generation), or null when
-// the editor cannot carry it.
+// Returns an idempotent release function (with .generation) per call; the
+// editor claim lifts when every caller has released. Null when the editor
+// cannot carry it.
 function propertyCardCabinetAbsorbInEditor(view, options = {}) {
   try {
     if (!view || typeof view.dispatch !== "function") return null;
@@ -66064,41 +66147,89 @@ function propertyCardCabinetAbsorbInEditor(view, options = {}) {
     if (typeof propertyCardCabinetAbsorbEditorExtension !== "function") return null;
     if (!propertyCardCabinetAbsorbEditorExtension()) return null;
     const defer = typeof options.defer === "function" ? options.defer : propertyCardCabinetAbsorbDefer;
-    const current = propertyCardCabinetAbsorbOwners.get(view);
-    if (current && !current.released && current.path === path && current.kind === kind) return current.handle;
+    let owners = propertyCardCabinetAbsorbOwners.get(view);
+    if (!owners) {
+      owners = new Map();
+      propertyCardCabinetAbsorbOwners.set(view, owners);
+    }
+    const current = owners.get(kind);
+    if (current && !current.released && current.path === path) {
+      // The field is the source of truth: it drops claims when the editor
+      // shows another file or the document drifts, while a still-registered
+      // stack can keep the owner entry alive. Re-assert the claim then.
+      if (options?.fingerprint != null) current.fingerprint = String(options.fingerprint);
+      if (!current.pending && !propertyCardCabinetAbsorbFieldHolds(view, kind, current.generation, current.fingerprint)) {
+        propertyCardCabinetAbsorbSchedule(current, owners);
+      }
+      return propertyCardCabinetAbsorbLease(current);
+    }
     propertyCardCabinetAbsorbGeneration += 1;
     const entry = {
       view, path, kind, defer,
       fingerprint: options?.fingerprint == null ? null : String(options.fingerprint),
       rung: options?.rung === "replace" ? "replace" : "atomic",
-      generation: propertyCardCabinetAbsorbGeneration, pending: false, released: false, handle: null,
+      generation: propertyCardCabinetAbsorbGeneration, pending: false, released: false, refs: 0, release: null,
     };
     if (current && !current.released) {
       current.released = true;
       current.defer(() => propertyCardCabinetAbsorbEditorDispatch(current.view, { release: current.generation }));
     }
-    const handle = () => {
+    entry.release = () => {
       if (entry.released) return;
       entry.released = true;
-      if (propertyCardCabinetAbsorbOwners.get(view) !== entry) return;
-      propertyCardCabinetAbsorbOwners.delete(view);
+      if (owners.get(kind) !== entry) return;
+      owners.delete(kind);
       entry.defer(() => propertyCardCabinetAbsorbEditorDispatch(entry.view, { release: entry.generation }));
     };
-    handle.generation = entry.generation;
-    entry.handle = handle;
-    propertyCardCabinetAbsorbOwners.set(view, entry);
-    entry.pending = true;
-    entry.defer(() => {
-      entry.pending = false;
-      if (entry.released || propertyCardCabinetAbsorbOwners.get(view) !== entry) return;
-      propertyCardCabinetAbsorbEditorDispatch(view, {
-        absorb: { path: entry.path, kind: entry.kind, fingerprint: entry.fingerprint, generation: entry.generation, rung: entry.rung },
-      });
-    });
-    return handle;
+    owners.set(kind, entry);
+    propertyCardCabinetAbsorbSchedule(entry, owners);
+    return propertyCardCabinetAbsorbLease(entry);
   } catch (_) {
     return null;
   }
+}
+
+// Dispatch an entry's absorb effect on the next microtask, unless the entry
+// was released or replaced first.
+function propertyCardCabinetAbsorbSchedule(entry, owners) {
+  entry.pending = true;
+  entry.defer(() => {
+    entry.pending = false;
+    if (entry.released || owners.get(entry.kind) !== entry) return;
+    propertyCardCabinetAbsorbEditorDispatch(entry.view, {
+      absorb: { path: entry.path, kind: entry.kind, fingerprint: entry.fingerprint, generation: entry.generation, rung: entry.rung },
+    });
+  });
+}
+
+// True when the editor's absorb field currently holds this exact claim.
+function propertyCardCabinetAbsorbFieldHolds(view, kind, generation, fingerprint) {
+  try {
+    const field = propertyCardCabinetAbsorbFieldType;
+    if (!field || typeof view?.state?.field !== "function") return false;
+    const value = view.state.field(field, false);
+    const claims = Array.isArray(value?.claims) ? value.claims : [];
+    return claims.some((claim) => claim.kind === kind && claim.generation === generation
+      && (fingerprint == null || claim.fingerprint === fingerprint));
+  } catch (_) {
+    return false;
+  }
+}
+
+// One idempotent release per mount. A card repaint mounts the new stack (and
+// re-claims) before the old stack releases its providers, so the shared
+// editor claim stays up until its last lease is released.
+function propertyCardCabinetAbsorbLease(entry) {
+  entry.refs = (entry.refs || 0) + 1;
+  let done = false;
+  const lease = () => {
+    if (done) return;
+    done = true;
+    entry.refs -= 1;
+    if (entry.refs <= 0) entry.release?.();
+  };
+  lease.generation = entry.generation;
+  return lease;
 }
 // ---- src/240wh-plugin-cabinet-absorb-reading.js ----
 // Cabinet Reading absorption (bob-cli-qq absorption): source-aware section
@@ -66189,6 +66320,22 @@ function propertyCardCabinetAbsorbReadingTargets(scope, plan) {
         if (found.callout && (plan.headingLine == null || found.heading)) break;
       }
       if (found.callout && (plan.headingLine == null || found.heading)) break;
+    }
+    // Obsidian can split the final H2 and its callout across adjacent rendered
+    // sections. The source plan already proves that this heading labels only
+    // the catalog, so use the nearest matching rendered heading before the
+    // claimed callout when the section-local scan could not pair them.
+    if (plan.headingLine != null && found.callout && !found.heading) {
+      const headings = Array.from(sizer.querySelectorAll?.("h2") || []).filter((node) => {
+        if (propertyCardCabinetReadingDenied(node)) return false;
+        if (node.closest?.(".bob-property-card, .markdown-embed, .internal-embed, .canvas-node")) return false;
+        const text = String(node.textContent ?? "").trim();
+        return text === spec.heading || text.replace(/#+\s*$/, "").trim() === spec.heading;
+      });
+      for (const heading of headings) {
+        const following = heading.compareDocumentPosition?.(found.callout) || 0;
+        if (following & 4) found.heading = heading;
+      }
     }
     return found;
   } catch (_) {
@@ -66364,13 +66511,12 @@ function propertyCardCabinetStandDown(el, view, path, kind) {
 }
 
 // Run the claim's reveal (open the cabinet, scroll its head into view) for
-// heading navigation into a hidden range. Returns true when revealed.
+// heading navigation into a hidden range. Returns whether it opened the cabinet.
 function propertyCardCatalogRevealClaim(view, path, kind) {
   try {
     const claim = propertyCardCatalogClaimEntry(view, path, kind);
     if (!claim || claim.released || typeof claim.reveal !== "function") return false;
-    claim.reveal();
-    return true;
+    return claim.reveal() === true;
   } catch (_) {
     return false;
   }
@@ -66525,10 +66671,12 @@ async function propertyCardCabinetRenderCatalog(options = {}) {
       const cached = propertyCardCabinetBodyCacheGet(path, paintKey);
       if (cached) {
         try {
-          if (!cached.isConnected) {
-            // Re-attach the same nodes: interior fold state survives and
-            // nothing repaints. A refreshed report changes paintKey, so a
-            // cached body is never stale.
+          // Re-attach only an orphaned body (its mount cleared it): interior
+          // fold state survives and nothing repaints. A body still inside
+          // another mount's container belongs to that mount, even while its
+          // view is detached; moving it would leave that cabinet blank. A
+          // refreshed report changes paintKey, so a cached body is never stale.
+          if (!cached.isConnected && !cached.parentNode) {
             container.appendChild(cached);
             propertyCardCabinetBindBodyLinks(container, path, plugin);
             return { reused: true, failed: false };
@@ -66737,9 +66885,10 @@ function propertyCardCabinetBuildHead(doc, spec = {}) {
   if (spec.onToggle) {
     button.addEventListener("click", (event) => {
       try { event?.preventDefault?.(); } catch (_) {}
+      const wasOpen = button.getAttribute?.("aria-expanded") === "true";
       const drawer = doc.getElementById?.(bodyId) || null;
-      if (open) propertyCardCabinetFocusHeadOnClose(button, drawer);
-      try { spec.onToggle(!open, event); } catch (_) {}
+      if (wasOpen) propertyCardCabinetFocusHeadOnClose(button, drawer);
+      try { spec.onToggle(!wasOpen, event); } catch (_) {}
     });
   }
   return { element: wrapper, button, trail, keycap, bodyId };
@@ -66978,6 +67127,15 @@ function propertyCardCabinetProviderCache(view) {
   return cache;
 }
 
+function propertyCardCabinetBodyChildCount(body) {
+  try {
+    if (typeof body?.childElementCount === "number") return body.childElementCount;
+    if (body?.children && typeof body.children.length === "number") return body.children.length;
+    if (body?.childNodes && typeof body.childNodes.length === "number") return body.childNodes.length;
+  } catch (_) {}
+  return -1;
+}
+
 function propertyCardCabinetProviderBody(panel, provider, context, kind, path, paintKey, open) {
   const doc = panel?.ownerDocument;
   const drawer = panel?.querySelector?.(".bob-cabinet-drawer");
@@ -66992,6 +67150,12 @@ function propertyCardCabinetProviderBody(panel, provider, context, kind, path, p
     body = state.container;
     if (body && body.parentNode !== inner) {
       try { inner.appendChild(body); } catch (_) {}
+    }
+    // The catalog body cache (240wj) re-attaches a detached painted body to
+    // whichever mount of the same catalog renders next, so a built body can
+    // come back empty. Rebuild it rather than show a blank open cabinet.
+    if (state.built && !state.pending && !state.error && propertyCardCabinetBodyChildCount(body) === 0) {
+      state.built = false;
     }
   } else {
     try { body?.remove?.(); } catch (_) {}
@@ -67008,6 +67172,13 @@ function propertyCardCabinetProviderBody(panel, provider, context, kind, path, p
     state.pending = false;
     state.error = true;
     state.built = true;
+    // A failed body cannot stand in for the stored catalog. Release the
+    // mount's absorption claim before showing the fallback message.
+    try {
+      const release = panel.__bobCabinetClaimRelease;
+      panel.__bobCabinetClaimRelease = null;
+      if (typeof release === "function") release();
+    } catch (_) {}
     try { provider.onBuildError?.({ path, kind, view: context?.view || null, error }); } catch (_) {}
     while (body.firstChild) body.removeChild(body.firstChild);
     const message = propertyCardCabinetCreateEl(doc, "p", "bob-cabinet-render-error");
@@ -75235,9 +75406,11 @@ async function propertyCardCabinetHostBuildBody(plugin, kind, context = {}) {
 
 function propertyCardCabinetHostReveal(panel, path, kind) {
   try {
+    if (!panel || panel.isConnected === false) return false;
     const control = panel?.querySelector?.(".bob-cabinet-toggle");
     if (!control) return false;
     if (control.getAttribute?.("aria-expanded") !== "true") control.click?.();
+    if (control.getAttribute?.("aria-expanded") !== "true") return false;
     const head = panel.querySelector?.(".bob-cabinet-head") || control;
     head.scrollIntoView?.({ block: "nearest" });
     void path;
@@ -75291,7 +75464,8 @@ function propertyCardCabinetHostMountClaim(kind, plugin, context = {}) {
 
 function propertyCardCabinetHostRevealNavigation(plugin, event) {
   try {
-    const target = event?.target?.closest?.("a.internal-link, a[data-href], .outline .tree-item-self, .outline .tree-item-inner");
+    const origin = event?.target?.nodeType === 1 ? event.target : event?.target?.parentElement;
+    const target = origin?.closest?.("a.internal-link, a[data-href], .outline .tree-item-self, .outline .tree-item-inner");
     if (!target) return false;
     const MarkdownViewCtor = require("obsidian").MarkdownView;
     const active = plugin?.app?.workspace?.getActiveViewOfType?.(MarkdownViewCtor);
@@ -75312,7 +75486,19 @@ function propertyCardCabinetHostRevealNavigation(plugin, event) {
         if (destination?.path && destination.path !== activePath) return false;
       }
     }
-    const candidates = [active?.editor?.cm, active?.previewMode?.renderer].filter(Boolean);
+    // Prefer the active reading host's live panel. A reading-mode claim can
+    // outlive a panel replacement, so its reveal closure may point at an
+    // obsolete element even while it still reports a successful claim.
+    const root = active?.previewMode?.containerEl || active?.containerEl;
+    const panel = root?.querySelector?.(`.${PROPERTY_CARD_CABINET_STACK_CLASS} [data-cabinet-kind="${kind}"][data-cabinet-source="${activePath}"]`)
+      || root?.querySelector?.(`[data-cabinet-kind="${kind}"][data-cabinet-source="${activePath}"]`);
+    const storedRegion = root?.querySelector?.(`.bob-cabinet-absorbed[data-callout="${kind}"]`);
+    if (panel && storedRegion && propertyCardCabinetHostReveal(panel, activePath, kind)) {
+      event.preventDefault?.();
+      event.stopPropagation?.();
+      return true;
+    }
+    const candidates = [active, active?.editor?.cm, active?.previewMode?.renderer].filter(Boolean);
     for (const view of candidates) {
       if (!propertyCardCatalogRevealClaim(view, activePath, kind)) continue;
       event.preventDefault?.();
@@ -90704,6 +90890,35 @@ function createPropertyCardHost(options) {
     try { clear(id); } catch (_) {}
   }
 
+  // Obsidian can invoke a Markdown postprocessor before its preview surface
+  // has been attached. Keep the widget and retry a few times so that a late
+  // attachment still receives its card without polling indefinitely.
+  function clearReadingSurfaceRetry(widget) {
+    if (!widget) return;
+    unschedule(widget.surfaceRetryTimer);
+    widget.surfaceRetryTimer = null;
+  }
+
+  function scheduleReadingSurfaceRetry(widget) {
+    if (!widget || widget.surfaceRetryTimer != null || !isActive()) return;
+    const attempt = Number(widget.surfaceRetryCount || 0) + 1;
+    if (attempt > 8) return;
+    widget.surfaceRetryTimer = schedule(() => {
+      widget.surfaceRetryTimer = null;
+      if (!isActive() || !reading().has(widget)) return;
+      const root = readingRoot(widget.el);
+      if (!root) {
+        widget.surfaceRetryCount = attempt;
+        scheduleReadingSurfaceRetry(widget);
+        return;
+      }
+      widget.surfaceRetryCount = 0;
+      widget.surface = root;
+      widget.scope = readingScope(root);
+      controller.refreshReading();
+    }, Math.min(40 * attempt, 320));
+  }
+
   function pathOf(value) {
     try {
       if (typeof options.pathOf === "function") return options.pathOf(value);
@@ -90805,6 +91020,7 @@ function createPropertyCardHost(options) {
       timers().clear();
       pending().clear();
       for (const widget of Array.from(reading())) {
+        clearReadingSurfaceRetry(widget);
         try { options.removeReading?.(widget.surface, widget.scope, widget.path); } catch (_) {}
       }
       for (const view of Array.from(editors())) {
@@ -90859,15 +91075,22 @@ function createPropertyCardHost(options) {
       let widget = Array.from(items).find((item) =>
         item.el === el || (root && item.surface === root));
       if (!widget) {
-        widget = { el, path: ctx.sourcePath, surface: root, scope: readingScope(root) };
+        widget = { el, path: ctx.sourcePath, surface: root, scope: readingScope(root), surfaceRetryCount: 0 };
         items.add(widget);
       } else if (widget.path !== ctx.sourcePath) {
+        clearReadingSurfaceRetry(widget);
         try { options.removeReading?.(widget.surface, widget.scope, widget.path); } catch (_) {}
       }
       widget.el = el;
       widget.path = ctx.sourcePath;
       widget.surface = root;
       widget.scope = readingScope(root);
+      if (root) {
+        clearReadingSurfaceRetry(widget);
+        widget.surfaceRetryCount = 0;
+      } else {
+        scheduleReadingSurfaceRetry(widget);
+      }
       const binding = {};
       widget.binding = binding;
       try { options.onBind?.(widget, el, ctx, root); } catch (_) {}
@@ -90875,6 +91098,7 @@ function createPropertyCardHost(options) {
       child.onunload = () => {
         if (!isActive()) return;
         if (widget.binding !== binding) return;
+        clearReadingSurfaceRetry(widget);
         items.delete(widget);
         const anotherOwner = Array.from(items).some((item) =>
           item.surface === widget.surface && item.path === widget.path);
@@ -90896,6 +91120,14 @@ function createPropertyCardHost(options) {
           if (widget.surface && widget.surface !== root) {
             options.removeReading?.(widget.surface, widget.scope, widget.path);
           }
+          if (!root) {
+            widget.surface = null;
+            widget.scope = null;
+            scheduleReadingSurfaceRetry(widget);
+            continue;
+          }
+          clearReadingSurfaceRetry(widget);
+          widget.surfaceRetryCount = 0;
           widget.surface = root;
           widget.scope = readingScope(root);
           try { options.onResolveSurface?.(widget, root); } catch (_) {}
@@ -97762,18 +97994,15 @@ function propertyCardCabinetToggle(view, kind) {
       }
     }
     if (spec.role !== "content" || !propertyCardCabinetProviderFor(kind)) return false;
-    const rawProblems = extra.element?.getAttribute?.("data-cabinet-problems")
-      || extra.element?.parentElement?.getAttribute?.("data-cabinet-problems") || "";
-    const problems = typeof rawProblems === "string" ? rawProblems : "";
-    const previous = propertyCardCabinetIsOpen(collected.path, kind, { problems });
-    const next = !previous;
-    if (previous && next === false) {
-      propertyCardCabinetFocusHeadOnClose?.(extra.element, extra.element?.closest?.("[data-cabinet-kind]")?.querySelector?.(".bob-cabinet-drawer"));
-    }
-    propertyCardCabinetSetOpen(collected.path, kind, next, { problems });
-    if (propertyCardCabinetRequestRepaint(view, collected.path, kind)) return true;
-    propertyCardCabinetSetOpen(collected.path, kind, previous, { problems });
-    return false;
+    // Content providers own the full toggle lifecycle on their disclosure
+    // button: state, lazy body mount, provider callbacks, and drawer motion.
+    // Route keyboard picks through that same control so they cannot update
+    // session state without actually repainting the mounted view.
+    const control = extra.element;
+    if (!control || typeof control.click !== "function") return false;
+    const previous = control.getAttribute?.("aria-expanded") === "true";
+    try { control.click(); } catch (_) { return false; }
+    return control.getAttribute?.("aria-expanded") === String(!previous);
   } catch (_) {
     return false;
   }

@@ -116,13 +116,12 @@ function propertyCardCabinetStandDown(el, view, path, kind) {
 }
 
 // Run the claim's reveal (open the cabinet, scroll its head into view) for
-// heading navigation into a hidden range. Returns true when revealed.
+// heading navigation into a hidden range. Returns whether it opened the cabinet.
 function propertyCardCatalogRevealClaim(view, path, kind) {
   try {
     const claim = propertyCardCatalogClaimEntry(view, path, kind);
     if (!claim || claim.released || typeof claim.reveal !== "function") return false;
-    claim.reveal();
-    return true;
+    return claim.reveal() === true;
   } catch (_) {
     return false;
   }

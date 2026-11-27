@@ -113,10 +113,12 @@ async function propertyCardCabinetRenderCatalog(options = {}) {
       const cached = propertyCardCabinetBodyCacheGet(path, paintKey);
       if (cached) {
         try {
-          if (!cached.isConnected) {
-            // Re-attach the same nodes: interior fold state survives and
-            // nothing repaints. A refreshed report changes paintKey, so a
-            // cached body is never stale.
+          // Re-attach only an orphaned body (its mount cleared it): interior
+          // fold state survives and nothing repaints. A body still inside
+          // another mount's container belongs to that mount, even while its
+          // view is detached; moving it would leave that cabinet blank. A
+          // refreshed report changes paintKey, so a cached body is never stale.
+          if (!cached.isConnected && !cached.parentNode) {
             container.appendChild(cached);
             propertyCardCabinetBindBodyLinks(container, path, plugin);
             return { reused: true, failed: false };

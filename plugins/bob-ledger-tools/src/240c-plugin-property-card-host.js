@@ -150,6 +150,35 @@ function createPropertyCardHost(options) {
     try { clear(id); } catch (_) {}
   }
 
+  // Obsidian can invoke a Markdown postprocessor before its preview surface
+  // has been attached. Keep the widget and retry a few times so that a late
+  // attachment still receives its card without polling indefinitely.
+  function clearReadingSurfaceRetry(widget) {
+    if (!widget) return;
+    unschedule(widget.surfaceRetryTimer);
+    widget.surfaceRetryTimer = null;
+  }
+
+  function scheduleReadingSurfaceRetry(widget) {
+    if (!widget || widget.surfaceRetryTimer != null || !isActive()) return;
+    const attempt = Number(widget.surfaceRetryCount || 0) + 1;
+    if (attempt > 8) return;
+    widget.surfaceRetryTimer = schedule(() => {
+      widget.surfaceRetryTimer = null;
+      if (!isActive() || !reading().has(widget)) return;
+      const root = readingRoot(widget.el);
+      if (!root) {
+        widget.surfaceRetryCount = attempt;
+        scheduleReadingSurfaceRetry(widget);
+        return;
+      }
+      widget.surfaceRetryCount = 0;
+      widget.surface = root;
+      widget.scope = readingScope(root);
+      controller.refreshReading();
+    }, Math.min(40 * attempt, 320));
+  }
+
   function pathOf(value) {
     try {
       if (typeof options.pathOf === "function") return options.pathOf(value);
@@ -251,6 +280,7 @@ function createPropertyCardHost(options) {
       timers().clear();
       pending().clear();
       for (const widget of Array.from(reading())) {
+        clearReadingSurfaceRetry(widget);
         try { options.removeReading?.(widget.surface, widget.scope, widget.path); } catch (_) {}
       }
       for (const view of Array.from(editors())) {
@@ -305,15 +335,22 @@ function createPropertyCardHost(options) {
       let widget = Array.from(items).find((item) =>
         item.el === el || (root && item.surface === root));
       if (!widget) {
-        widget = { el, path: ctx.sourcePath, surface: root, scope: readingScope(root) };
+        widget = { el, path: ctx.sourcePath, surface: root, scope: readingScope(root), surfaceRetryCount: 0 };
         items.add(widget);
       } else if (widget.path !== ctx.sourcePath) {
+        clearReadingSurfaceRetry(widget);
         try { options.removeReading?.(widget.surface, widget.scope, widget.path); } catch (_) {}
       }
       widget.el = el;
       widget.path = ctx.sourcePath;
       widget.surface = root;
       widget.scope = readingScope(root);
+      if (root) {
+        clearReadingSurfaceRetry(widget);
+        widget.surfaceRetryCount = 0;
+      } else {
+        scheduleReadingSurfaceRetry(widget);
+      }
       const binding = {};
       widget.binding = binding;
       try { options.onBind?.(widget, el, ctx, root); } catch (_) {}
@@ -321,6 +358,7 @@ function createPropertyCardHost(options) {
       child.onunload = () => {
         if (!isActive()) return;
         if (widget.binding !== binding) return;
+        clearReadingSurfaceRetry(widget);
         items.delete(widget);
         const anotherOwner = Array.from(items).some((item) =>
           item.surface === widget.surface && item.path === widget.path);
@@ -342,6 +380,14 @@ function createPropertyCardHost(options) {
           if (widget.surface && widget.surface !== root) {
             options.removeReading?.(widget.surface, widget.scope, widget.path);
           }
+          if (!root) {
+            widget.surface = null;
+            widget.scope = null;
+            scheduleReadingSurfaceRetry(widget);
+            continue;
+          }
+          clearReadingSurfaceRetry(widget);
+          widget.surfaceRetryCount = 0;
           widget.surface = root;
           widget.scope = readingScope(root);
           try { options.onResolveSurface?.(widget, root); } catch (_) {}

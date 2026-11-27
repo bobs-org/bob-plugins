@@ -108,8 +108,11 @@ const FIXTURE_BOB_REPORTS = Object.freeze({
       catalogs: { current: 1, missing: 0, stale: 0, damaged: 0 } },
   },
   projects: (() => {
-    const rows = Array.from({ length: 64 }, (_, index) =>
-      projectEntry(`sase-row-${String(index + 1).padStart(2, "0")}`, "sase.md"));
+    // Rows 63 and 64 are closed, matching the stored catalog's Closed group.
+    const rows = Array.from({ length: 64 }, (_, index) => {
+      const entry = projectEntry(`sase-row-${String(index + 1).padStart(2, "0")}`, "sase.md");
+      return index < 62 ? entry : { ...entry, status: "done", state: "done", closed_on: "2026-11-20" };
+    });
     return {
       schema_version: 1, ok: true, command: "list", today: "2026-11-27",
       projects: [projectEntry("sase", "cash.md"), projectEntry("leaf", "cash.md"), ...rows],
@@ -119,7 +122,7 @@ const FIXTURE_BOB_REPORTS = Object.freeze({
         { host: "single", path: "single.md", kind: "area", state: "current",
           rows: { open: 1, blocked: 0, warning: 0, closed: 0 }, issues: [] },
         { host: "sase", path: "sase.md", kind: "project", state: "current",
-          rows: { open: 64, blocked: 0, warning: 0, closed: 0 }, issues: [] },
+          rows: { open: 62, blocked: 0, warning: 0, closed: 2 }, issues: [] },
       ],
       findings: [], counts: { projects: 66, catalogs: 3, errors: 0, warnings: 0 },
     };
@@ -160,6 +163,7 @@ function obsidianChildEnvironment(profile, shimDir, inherited = process.env) {
 const PROBE_SOURCE = `(() => {
   const leaf = app.workspace.activeLeaf;
   const view = leaf?.view;
+  const plugin = app.plugins?.plugins?.["bob-ledger-tools"] || null;
   const path = view?.file?.path || null;
   const mode = view?.getMode?.() === "preview" ? "reading"
     : view?.getState?.().source ? "source" : "live";
@@ -200,18 +204,24 @@ const PROBE_SOURCE = `(() => {
       summary: String(summary?.textContent || "").replace(/\\s+/g, " ").trim(),
       attention: String(attention?.textContent || "").replace(/\\s+/g, " ").trim(),
       text: String(body?.textContent || "").replace(/\\s+/g, " ").trim(),
+      linkCount: body?.querySelectorAll?.("a.internal-link")?.length || 0,
+      bodyClass: body?.className || "",
       visible: visible(panel),
       error: String(error?.textContent || "").replace(/\\s+/g, " ").trim() || null,
       callouts,
       keycap: String(panel.querySelector(".bob-cabinet-keycap")?.textContent || "").trim(),
     };
   });
-  const callouts = Array.from(root?.querySelectorAll?.(".callout[data-callout]") || []).filter((node) => !embedded(node)).map((node) => ({
+  const callouts = Array.from(root?.querySelectorAll?.(".callout[data-callout]") || [])
+    .filter((node) => !embedded(node) && !node.closest?.(".bob-property-card-cabinets")).map((node) => ({
     kind: node.getAttribute("data-callout"), visible: visible(node),
+    absorbed: node.classList?.contains("bob-cabinet-absorbed") === true,
     text: String(node.textContent || "").replace(/\\s+/g, " ").trim(), rows: node.querySelectorAll("li").length,
   }));
-  const headings = Array.from(root?.querySelectorAll?.("h2, .cm-line") || []).filter((node) => !embedded(node)).map((node) => ({
+  const headings = Array.from(root?.querySelectorAll?.("h2, .cm-line") || [])
+    .filter((node) => !embedded(node) && !node.closest?.(".bob-property-card-cabinets")).map((node) => ({
     text: String(node.textContent || "").replace(/\\s+/g, " ").trim(), visible: visible(node),
+    absorbed: node.classList?.contains("bob-cabinet-absorbed") === true,
   }));
   const props = Array.from(card?.querySelectorAll?.("[data-cabinet-kind='properties']") || [])[0] || null;
   return {
@@ -230,10 +240,13 @@ const PROBE_SOURCE = `(() => {
     callouts, headings,
     hiddenCalloutCount: callouts.filter((row) => !row.visible).length,
     statusBarDisplay: getComputedStyle(document.querySelector(".status-bar") || document.body).display,
-    fallback: Boolean(document.querySelector(".bob-cabinet-pick-fallback, .bob-walker-footer-fallback")),
+    fallback: Boolean(plugin?.walkerFooterOverlayFallback?.isConnected
+      && plugin.walkerFooterOverlayFallback.classList?.contains("bob-walker-footer-fallback")),
     armed: Boolean(stack?.getAttribute("data-cabinet-pick") === "armed"),
     badges: Array.from(stack?.querySelectorAll?.(".bob-cabinet-keycap") || []).map((node) => String(node.textContent || "").trim()),
-    footerText: String(document.querySelector(".bob-walker-footer-overlay")?.textContent || "").replace(/\\s+/g, " ").trim(),
+    footerText: String(plugin?.walkerFooterOverlayFallback?.textContent
+      || plugin?.freshnessStatusEl?.querySelector?.(".bob-walker-footer-overlay")?.textContent || "")
+      .replace(/\\s+/g, " ").trim(),
     scrollY: window.scrollY,
     width: card?.getBoundingClientRect?.().width || 0,
     height: card?.getBoundingClientRect?.().height || 0,
@@ -323,6 +336,52 @@ async function openAndProbe(client, notePath, mode) {
   return probe;
 }
 
+function waitForChildExit(child, timeoutMs) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (exited) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.removeListener("exit", onExit);
+      resolve(exited);
+    };
+    const onExit = () => finish(true);
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    child.once("exit", onExit);
+  });
+}
+
+function writeStartupDiagnostics(directory, profile, processInfo, bobLog) {
+  try {
+    const target = path.join(directory, "startup-diagnostics");
+    fs.mkdirSync(target, { recursive: true });
+    fs.writeFileSync(path.join(target, "obsidian-stdout.txt"), processInfo?.stdout || "(no stdout captured)\\n");
+    fs.writeFileSync(path.join(target, "obsidian-stderr.txt"), processInfo?.stderr || "(no stderr captured)\\n");
+    fs.writeFileSync(path.join(target, "obsidian-process.json"), JSON.stringify(processInfo || {}, null, 2) + "\\n");
+    fs.writeFileSync(path.join(target, "obsidian-exit-status.json"), JSON.stringify({
+      exitCode: processInfo?.exitCode ?? null,
+      signalCode: processInfo?.signalCode ?? null,
+      terminationRequested: processInfo?.terminationRequested ?? null,
+      exitObserved: processInfo?.exitObserved ?? false,
+    }, null, 2) + "\\n");
+    const profileLog = path.join(profile, "obsidian.log");
+    if (fs.existsSync(profileLog)) fs.copyFileSync(profileLog, path.join(target, "obsidian-log.txt"));
+    const profileState = path.join(profile, "obsidian.json");
+    if (fs.existsSync(profileState)) fs.copyFileSync(profileState, path.join(target, "profile-obsidian.json"));
+    if (bobLog && fs.existsSync(bobLog)) fs.copyFileSync(bobLog, path.join(target, "bob-spawns.jsonl"));
+    fs.writeFileSync(path.join(target, "README.md"), [
+      "# Obsidian startup diagnostics",
+      "",
+      "Captured by the acceptance runner after startup and during child-process cleanup.",
+      "The stdout/stderr files explicitly say when the process emitted no captured output.",
+      "The exit-status record distinguishes a recorded exit code from a runner-requested signal.",
+      "",
+    ].join("\\n"));
+  } catch (_) {}
+}
+
 async function settleProbe(client, predicate, label, timeout = 5_000) {
   const deadline = Date.now() + timeout;
   let latest = null;
@@ -334,31 +393,229 @@ async function settleProbe(client, predicate, label, timeout = 5_000) {
   return latest;
 }
 
+async function settleExpectedCard(client, spec, mode, label) {
+  return settleProbe(client, (value) => value?.path === spec.path
+    && value?.mode === mode && value?.cardPresent && value?.cardKind === spec.kind
+    && JSON.stringify(value?.cabinetKinds || []) === JSON.stringify(spec.cabinets),
+  label || `settled ${spec.key} ${mode}`, 10_000);
+}
+
+async function openAndSettleExpectedCard(client, spec, mode, label) {
+  await openAndProbe(client, spec.path, mode);
+  let probe = await settleExpectedCard(client, spec, mode, label);
+  const settled = probe?.path === spec.path && probe?.mode === mode
+    && probe?.cardPresent && probe?.cardKind === spec.kind
+    && JSON.stringify(probe?.cabinetKinds || []) === JSON.stringify(spec.cabinets);
+  if (settled) return probe;
+  // Reading can receive its postprocessor before Obsidian has attached the
+  // preview surface. Re-open once after the bounded wait so the probe sees a
+  // real settled surface instead of retaining a transient first-open miss.
+  await sleep(300);
+  await openAndProbe(client, spec.path, mode);
+  return settleExpectedCard(client, spec, mode, `${label || `settled ${spec.key} ${mode}`} after reopen`);
+}
+
+async function settleEvaluate(client, expression, predicate, timeout = 5_000) {
+  const deadline = Date.now() + timeout;
+  let latest = null;
+  do {
+    latest = await client.evaluate(expression, OPEN_TIMEOUT);
+    if (predicate(latest)) return latest;
+    await sleep(180);
+  } while (Date.now() < deadline);
+  return latest;
+}
+
+// Content cabinets that are open but painted no body text. A blank open
+// cabinet hides the catalog it stands in for, so captures must reject it.
+function emptyOpenCabinets(probe) {
+  const content = new Set(["areas", "projects", "notebooks", "albums", "records"]);
+  return (probe?.panels || []).filter((row) => content.has(row.kind) && row.expanded && !row.error
+    && String(row.text || "").trim() === "").map((row) => row.kind);
+}
+
+// Perf (records-cabinet budget): open a large catalog host in Reading from a
+// neutral note and time until its rows are painted, recording long tasks.
+// Gate open counts rows in the cabinet body; gate closed counts the inline
+// callout the painter decorates. Returns { elapsed, rows, maxLongTask }.
+async function measureCatalogPaint(client, notePath, kind, expectRows, gateOpen) {
+  return client.evaluate(`(async () => {
+    const state = { mode: "preview", source: false };
+    const leaf = app.workspace.getLeaf(false);
+    const neutral = app.vault.getAbstractFileByPath(${JSON.stringify(lib.PATHS.leaf)});
+    const file = app.vault.getAbstractFileByPath(${JSON.stringify(notePath)});
+    if (!neutral || !file) return { elapsed: null, rows: 0, longTasks: [], maxLongTask: 0, error: "missing fixture" };
+    await leaf.openFile(neutral, { state });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const longTasks = [];
+    let observer = null;
+    try {
+      observer = new PerformanceObserver((list) => { for (const entry of list.getEntries()) longTasks.push(Math.round(entry.duration)); });
+      observer.observe({ type: "longtask" });
+    } catch (_) {}
+    const rows = () => {
+      const root = leaf.view?.previewMode?.containerEl || leaf.view?.containerEl;
+      if (!root) return 0;
+      if (${gateOpen ? "true" : "false"}) {
+        const body = root.querySelector(${JSON.stringify(`.bob-property-card-cabinets [data-cabinet-kind="${kind}"] .bob-cabinet-provider-content`)});
+        return body ? body.querySelectorAll("li").length : 0;
+      }
+      const callout = Array.from(root.querySelectorAll(${JSON.stringify(`.callout[data-callout="${kind}"]`)}))
+        .find((node) => !node.closest(".bob-property-card-cabinets") && node.getBoundingClientRect().height > 0);
+      return callout ? callout.querySelectorAll("li").length : 0;
+    };
+    const started = performance.now();
+    await leaf.openFile(file, { state });
+    let elapsed = null;
+    while (performance.now() - started < 15000) {
+      if (rows() >= ${Number(expectRows)}) { elapsed = performance.now() - started; break; }
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    try { observer?.disconnect(); } catch (_) {}
+    return { elapsed: elapsed == null ? null : Math.round(elapsed), rows: rows(), longTasks, maxLongTask: Math.max(0, ...longTasks) };
+  })()`, 45_000);
+}
+
+async function measureCatalogRounds(client, notePath, kind, expectRows, gateOpen, rounds = 3) {
+  const samples = [];
+  for (let index = 0; index < rounds; index += 1) samples.push(await measureCatalogPaint(client, notePath, kind, expectRows, gateOpen));
+  const times = samples.map((row) => row.elapsed).filter((value) => typeof value === "number").sort((a, b) => a - b);
+  return {
+    samples,
+    complete: times.length === samples.length,
+    median: times.length ? times[Math.floor(times.length / 2)] : null,
+    maxLongTask: Math.max(0, ...samples.map((row) => row.maxLongTask || 0)),
+  };
+}
+
+// The records-cabinet budget: cabinet paint at most 2x the inline paint, and
+// no long task over 100 ms that the inline paint does not already have.
+function perfWithinBudget(cabinet, inline) {
+  if (!cabinet?.complete || !inline?.complete || !inline.median) return false;
+  return cabinet.median <= 2 * inline.median
+    && (cabinet.maxLongTask <= 100 || cabinet.maxLongTask <= inline.maxLongTask);
+}
+
+// Evidence for an intermittent Reading miss: what the shared property-card
+// host tracks for the active note, and what the preview DOM holds.
+async function readingHostDiagnostics(client, notePath) {
+  try {
+    return await client.evaluate(`(() => {
+      const plugin = app.plugins?.plugins?.["bob-ledger-tools"];
+      const view = app.workspace.activeLeaf?.view;
+      const preview = view?.previewMode?.containerEl || null;
+      const sizer = preview?.querySelector?.(".markdown-preview-sizer") || null;
+      const widgets = Array.from(plugin?.homeCardReading || []).map((item) => ({
+        path: item.path, hasSurface: Boolean(item.surface), retries: item.surfaceRetryCount ?? null,
+        retryArmed: item.surfaceRetryTimer != null, elConnected: Boolean(item.el?.isConnected),
+        elInPreview: Boolean(item.el?.closest?.(".markdown-preview-view")),
+      }));
+      return {
+        notePath: ${JSON.stringify(notePath)}, activePath: view?.file?.path || null, mode: view?.getMode?.() || null,
+        hostActive: plugin?.homeCardActive ?? null, widgets,
+        pending: Array.from(plugin?.homeCardReadingPending?.keys?.() || []),
+        previewConnected: Boolean(preview?.isConnected), previewVisible: Boolean(preview && preview.offsetParent !== null),
+        sizerSections: sizer ? sizer.children.length : null,
+        cards: preview ? preview.querySelectorAll(".bob-property-card").length : null,
+      };
+    })()`);
+  } catch (error) {
+    return { error: error?.message || String(error) };
+  }
+}
+
 async function refreshProbe(client) {
   await sleep(100);
   return client.evaluate(PROBE_SOURCE, OPEN_TIMEOUT);
 }
 
 async function sendKey(client, key, modifiers = 0) {
-  const base = periods.keyEvents(key);
-  for (const event of base) await client.call("Input.dispatchKeyEvent", { ...event, modifiers });
+  await client.evaluate(`(() => {
+    const view = app.workspace.activeLeaf?.view;
+    if (!view) return false;
+    const mode = view.getMode?.() === "preview" ? "reading"
+      : view.getState?.().source ? "source" : "live";
+    if (mode === "live") {
+      view.editor?.cm?.contentDOM?.focus?.();
+      return true;
+    }
+    const target = view.previewMode?.containerEl || view.containerEl;
+    if (target && typeof target.focus === "function") {
+      if (!target.hasAttribute?.("tabindex")) target.setAttribute?.("tabindex", "-1");
+      target.focus();
+      return true;
+    }
+    return false;
+  })()`);
+  const physicalModifiers = key === "_" ? modifiers | 8 : modifiers;
+  const base = key === "_" || key === "-"
+    ? [
+      { type: "keyDown", key, code: "Minus", modifiers: physicalModifiers,
+        windowsVirtualKeyCode: 189, nativeVirtualKeyCode: 189, text: key, unmodifiedText: key },
+      { type: "keyUp", key, code: "Minus", modifiers: physicalModifiers,
+        windowsVirtualKeyCode: 189, nativeVirtualKeyCode: 189 },
+    ]
+    : periods.keyEvents(key, physicalModifiers);
+  for (const event of base) await client.call("Input.dispatchKeyEvent", event);
   await sleep(90);
 }
 
 async function clickSelector(client, selector, occurrence = 0) {
-  const point = await client.evaluate(`(() => {
-    const nodes = Array.from(document.querySelectorAll(${JSON.stringify(selector)}));
+  const point = await settleEvaluate(client, `(() => {
+    const view = app.workspace.activeLeaf?.view;
+    const mode = view?.getMode?.() === "preview" ? "reading"
+      : view?.getState?.().source ? "source" : "live";
+    const root = mode === "reading" ? (view?.previewMode?.containerEl || view?.containerEl)
+      : (view?.contentEl?.querySelector?.(".markdown-source-view") || view?.containerEl);
+    const visible = (node) => {
+      if (!node?.getBoundingClientRect) return false;
+      const rect = node.getBoundingClientRect();
+      const style = getComputedStyle(node);
+      return rect.width > 0 && rect.height > 0 && style.display !== "none"
+        && style.visibility !== "hidden" && !node.closest?.(".markdown-embed, .internal-embed, .hover-popover, .canvas-node");
+    };
+    const nodes = Array.from(root?.querySelectorAll?.(${JSON.stringify(selector)}) || []).filter(visible);
     const node = nodes[${occurrence}] || null;
     if (!node) return null;
     node.scrollIntoView({ block: "nearest" });
     const rect = node.getBoundingClientRect();
     return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-  })()`);
+  })()`, (value) => Boolean(value), 5_000);
   if (!point) throw new Error(`Could not find clickable ${selector}[${occurrence}]`);
   await client.call("Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y });
   await client.call("Input.dispatchMouseEvent", { type: "mousePressed", x: point.x, y: point.y, button: "left", clickCount: 1 });
   await client.call("Input.dispatchMouseEvent", { type: "mouseReleased", x: point.x, y: point.y, button: "left", clickCount: 1 });
   await sleep(180);
+}
+
+async function clickCabinetToggle(client, kind) {
+  return client.evaluate(`(() => {
+    const view = app.workspace.activeLeaf?.view;
+    const root = view?.getMode?.() === "preview"
+      ? (view?.previewMode?.containerEl || view?.containerEl)
+      : (view?.contentEl?.querySelector?.(".markdown-source-view") || view?.containerEl);
+    const panel = root?.querySelector?.(${JSON.stringify(`[data-cabinet-kind="${kind}"]`)});
+    const control = panel?.querySelector?.(".bob-cabinet-toggle");
+    if (!control) return { found: false, before: null, after: null };
+    const before = control.getAttribute("aria-expanded") === "true";
+    control.click();
+    return { found: true, before, after: control.getAttribute("aria-expanded") === "true" };
+  })()`);
+}
+
+async function resetPanels(client) {
+  let probe = await refreshProbe(client);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const expanded = (probe.panels || []).filter((panel) => panel.expanded);
+    if (!expanded.length) return probe;
+    for (const panel of expanded) await clickCabinetToggle(client, panel.kind);
+    probe = await settleProbe(client, (value) => Array.isArray(value?.panels)
+      && value.panels.every((panel) => !panel.expanded), "all active-view cabinets closed", 5_000);
+    if ((probe.panels || []).every((panel) => !panel.expanded)) return probe;
+  }
+  probe.resetFailure = "One or more active-view cabinets stayed open after three close attempts";
+  return probe;
 }
 
 async function setMode(client, notePath, mode) {
@@ -450,18 +707,41 @@ async function run(args) {
     const renderRows = [];
     for (const spec of lib.SPECS) {
       for (const mode of ["live", "reading"]) {
-        await openAndProbe(client, spec.path, mode);
-        const probe = await settleProbe(client, (value) => value?.path === spec.path
-          && value?.mode === mode && value?.cardPresent && value?.cardKind === spec.kind
-          && JSON.stringify(value?.cabinetKinds || []) === JSON.stringify(spec.cabinets),
-        `settled ${spec.key} ${mode}`);
+        const probe = await openAndSettleExpectedCard(client, spec, mode);
         const row = { fixture: spec.key, path: spec.path, mode, actualKind: probe.cardKind,
           expectedKind: spec.kind, cabinets: probe.cabinetKinds, expectedCabinets: spec.cabinets,
           propertiesLast: probe.propertiesLast, foldControls: probe.foldControls };
-        renderRows.push(row);
-        check(`render-${spec.key}-${mode}`, probe.cardPresent && probe.cardKind === spec.kind
+        if (spec.key === "empty-album" && mode === "reading") {
+          row.albumDiagnostics = await client.evaluate(`(() => {
+            const plugin = app.plugins?.plugins?.["bob-ledger-tools"];
+            const path = ${JSON.stringify(spec.path)};
+            const file = app.vault?.getAbstractFileByPath?.(path) || null;
+            const cache = file ? app.metadataCache?.getFileCache?.(file) : null;
+            const state = plugin?.albumHeaderState?.() || null;
+            const cachedSource = plugin?.albumHeaderSourceCache?.get?.(path) || null;
+            const metadataCard = plugin?.albumHeaderCardModelFor?.(path, state) || null;
+            const sourceCard = cachedSource ? plugin?.albumHeaderCardModelFor?.(path, state, cachedSource) || null : null;
+            const reportEntry = Array.isArray(state?.report?.albums)
+              ? state.report.albums.find((entry) => entry.path === path || entry.stem === "empty") || null : null;
+            return {
+              file: Boolean(file),
+              frontmatterType: cache?.frontmatter?.type ?? null,
+              cachedSource: Boolean(cachedSource),
+              sourceHasAlbumType: typeof cachedSource === "string" && /type:\\s*['\"]?\\[\\[album\\]\\]/i.test(cachedSource),
+              metadataCard: metadataCard ? { title: metadataCard.title, body: Boolean(metadataCard.body) } : null,
+              sourceCard: sourceCard ? { title: sourceCard.title, body: Boolean(sourceCard.body) } : null,
+              reportEntry: reportEntry ? { path: reportEntry.path, stem: reportEntry.stem, records: reportEntry.records } : null,
+              pluginActive: plugin?.albumHeaderActive === true,
+              readingWidgets: Array.from(plugin?.albumHeaderReading || []).map((item) => ({ path: item.path, hasSurface: Boolean(item.surface) })),
+            };
+          })()`);
+        }
+        const rendered = probe.cardPresent && probe.cardKind === spec.kind
           && JSON.stringify(probe.cabinetKinds) === JSON.stringify(spec.cabinets)
-          && (spec.cabinets.length === 0 || probe.propertiesLast), row);
+          && (spec.cabinets.length === 0 || probe.propertiesLast);
+        if (!rendered && mode === "reading") row.readingDiagnostics = await readingHostDiagnostics(client, spec.path);
+        renderRows.push(row);
+        check(`render-${spec.key}-${mode}`, rendered, row);
       }
     }
     report.renderMatrix = renderRows;
@@ -485,6 +765,16 @@ async function run(args) {
     const projectPanel = probe.panels.find((row) => row.kind === "projects");
     check("project-64-line-summary-and-attention", Boolean(projectPanel && (projectPanel.summary || projectPanel.attention)), projectPanel);
 
+    // Perf, gate open: the 106-record album (Records open by default) and the
+    // 64-row Projects host with its Projects cabinet open.
+    await openAndSettleExpectedCard(client, lib.SPECS.find((row) => row.path === lib.PATHS.project), "reading", "perf project warm-up");
+    probe = await refreshProbe(client);
+    if (probe.panels.find((row) => row.kind === "projects")?.expanded === false) await clickCabinetToggle(client, "projects");
+    const perfCabinet = {
+      album: await measureCatalogRounds(client, lib.PATHS.album, "records", 106, true),
+      project: await measureCatalogRounds(client, lib.PATHS.project, "projects", 64, true),
+    };
+
     // Gate-closed native rendering gives a real same-vault baseline for byte and row parity.
     const pluginData = path.join(vault, ".obsidian", "plugins", PLUGIN_ID, "data.json");
     const gateClosed = { cabinetsPreview: false, cardPreviewKinds: [], refCardPreview: false };
@@ -493,29 +783,96 @@ async function run(args) {
     await client.evaluate(`app.plugins.enablePlugin(${JSON.stringify(PLUGIN_ID)})`);
     await sleep(1_000);
     probe = await openAndProbe(client, lib.PATHS.area, "reading");
+    probe = await settleProbe(client, (value) => value?.path === lib.PATHS.area
+      && value?.mode === "reading"
+      && ["areas", "projects", "notebooks", "albums"].every((kind) => {
+        const row = value.callouts?.find((candidate) => candidate.kind === kind);
+        return row?.visible === true && !/refreshing|loading/i.test(row.text || "");
+      }), "gate-closed native catalog body finished refreshing", 12_000);
     const inlineBaseline = Object.fromEntries(probe.callouts.map((row) => [row.kind, { text: row.text, rows: row.rows, visible: row.visible }]));
     check("gate-closed-inline-baseline", !probe.stackPresent && ["areas", "projects", "notebooks", "albums"].every((kind) => inlineBaseline[kind]?.visible), inlineBaseline);
+    const perfInline = {
+      album: await measureCatalogRounds(client, lib.PATHS.album, "records", 106, false),
+      project: await measureCatalogRounds(client, lib.PATHS.project, "projects", 64, false),
+    };
+    report.perf = { cabinet: perfCabinet, inline: perfInline, budget: "cabinet median <= 2x inline median; no added long task over 100 ms" };
+    check("perf-106-record-album-within-budget", perfWithinBudget(perfCabinet.album, perfInline.album),
+      { cabinet: perfCabinet.album, inline: perfInline.album });
+    check("perf-64-line-projects-host-within-budget", perfWithinBudget(perfCabinet.project, perfInline.project),
+      { cabinet: perfCabinet.project, inline: perfInline.project });
     await client.evaluate(`app.plugins.disablePlugin(${JSON.stringify(PLUGIN_ID)})`);
     fs.writeFileSync(pluginData, JSON.stringify(GATE_DATA, null, 2) + "\n");
     await client.evaluate(`app.plugins.enablePlugin(${JSON.stringify(PLUGIN_ID)})`);
     await sleep(900);
-    probe = await openAndProbe(client, lib.PATHS.area, "reading");
+    const areaSpec = lib.SPECS.find((row) => row.path === lib.PATHS.area);
+    probe = await openAndSettleExpectedCard(client, areaSpec, "reading", "reopened area Reading card after plugin reload");
+    const parityReady = probe?.cardPresent && probe.cardKind === areaSpec.kind
+      && JSON.stringify(probe.cabinetKinds || []) === JSON.stringify(areaSpec.cabinets);
+    check("area-reading-ready-after-plugin-reload", parityReady,
+      parityReady ? probe : { ...probe, readingDiagnostics: await readingHostDiagnostics(client, lib.PATHS.area) });
     const contentParity = [];
     for (const kind of ["areas", "projects", "notebooks", "albums"]) {
       const panel = probe.panels.find((row) => row.kind === kind);
-      if (!panel?.expanded) await clickSelector(client, `[data-cabinet-kind="${kind}"] .bob-cabinet-toggle`);
+      if (!panel) {
+        contentParity.push({ kind, baselineRows: inlineBaseline[kind]?.rows,
+          baselineVisible: inlineBaseline[kind]?.visible, cabinetText: null,
+          drawerExpanded: false, textContainsBaseline: false,
+          runnerIssue: "cabinet panel absent from settled Reading view" });
+        continue;
+      }
+      if (!panel.expanded) {
+        const clicked = await clickCabinetToggle(client, kind);
+        if (!clicked.found) {
+          contentParity.push({ kind, baselineRows: inlineBaseline[kind]?.rows,
+            baselineVisible: inlineBaseline[kind]?.visible, cabinetText: null,
+            drawerExpanded: false, textContainsBaseline: false,
+            runnerIssue: "Could not find a mounted cabinet toggle in the active Markdown view" });
+          continue;
+        }
+      }
+      let opened = await settleProbe(client, (value) =>
+        value?.panels?.find((row) => row.kind === kind)?.expanded === true,
+      `opened ${kind} cabinet for parity`, 5_000);
+      if (opened.panels.find((row) => row.kind === kind)?.expanded !== true) {
+        const retry = await clickCabinetToggle(client, kind);
+        if (retry.found) {
+          opened = await settleProbe(client, (value) =>
+            value?.panels?.find((row) => row.kind === kind)?.expanded === true,
+          `opened ${kind} cabinet after re-reading its mounted control`, 5_000);
+        }
+      }
+      if (opened.panels.find((row) => row.kind === kind)?.expanded !== true) {
+        contentParity.push({ kind, baselineRows: inlineBaseline[kind]?.rows,
+          baselineVisible: inlineBaseline[kind]?.visible, cabinetText: null,
+          drawerExpanded: false, textContainsBaseline: false,
+          runnerIssue: "Cabinet toggle did not settle open before parity sampling" });
+        continue;
+      }
       const mounted = await settleProbe(client, (value) => {
         const candidate = value?.panels?.find((row) => row.kind === kind);
-        return candidate?.callouts?.length > 0 || Boolean(candidate?.error);
+        return candidate?.expanded === true
+          && (candidate?.linkCount > 0 || candidate?.text || Boolean(candidate?.error));
       }, `rendered ${kind} cabinet body`, 8_000);
-      const bodyCallout = mounted.panels.find((row) => row.kind === kind)?.callouts?.[0];
+      const bodyPanel = mounted.panels.find((row) => row.kind === kind);
       const baseline = inlineBaseline[kind];
-      contentParity.push({ kind, baselineRows: baseline?.rows, cabinetRows: bodyCallout?.rows,
-        baselineVisible: baseline?.visible, cabinetText: bodyCallout?.text || null,
-        textContainsBaseline: Boolean(baseline && bodyCallout && bodyCallout.text.includes(baseline.text.slice(0, 24))) });
+      const comparableText = (text) => String(text || "")
+        .replace(new RegExp(kind, "ig"), "")
+        .replace(/Refreshing\s+[^…]+…?/gi, "")
+        .replace(/[＋+]\s*project\b/gi, "")
+        .replace(/\s+/g, " ").trim();
+      const baselineText = comparableText(baseline?.text);
+      const cabinetText = comparableText(bodyPanel?.text);
+      contentParity.push({ kind, baselineRows: baseline?.rows, cabinetRows: bodyPanel?.linkCount,
+        baselineVisible: baseline?.visible, cabinetText: cabinetText || null,
+        baselineText,
+        bodyClass: bodyPanel?.bodyClass || "",
+        drawerExpanded: bodyPanel?.expanded === true,
+        textContainsBaseline: Boolean(baselineText && cabinetText
+          && cabinetText.includes(baselineText.slice(0, 16))) });
     }
     check("area-content-parity-gate-closed", contentParity.length === 4
-      && contentParity.every((row) => row.baselineVisible && row.baselineRows === row.cabinetRows && row.textContainsBaseline), contentParity);
+      && contentParity.every((row) => row.baselineVisible && row.drawerExpanded
+        && row.baselineRows === row.cabinetRows && row.textContainsBaseline), contentParity);
     report.contentParity = contentParity;
 
     // Full key ownership matrix: zero, one, and multiple extras; digits, aliases, cancel, modifiers, and lifecycle.
@@ -538,16 +895,22 @@ async function run(args) {
         && after.detailsExpanded !== before.detailsExpanded, { before, after });
     }
     await openAndProbe(client, lib.PATHS.singleArea, "live");
+    await resetPanels(client);
     await sendKey(client, "_");
-    probe = await refreshProbe(client);
+    probe = await settleProbe(client, (value) => value?.panels?.find((row) => row.kind === "projects")?.expanded === true
+      && !value.armed, "single-area project toggled by underscore", 5_000);
     keyCheck("one-extra-area-underscore-direct-toggle", probe.panels.find((row) => row.kind === "projects")?.expanded === true && !probe.armed, probe);
     await openAndProbe(client, lib.PATHS.bank, "live");
+    await resetPanels(client);
     await sendKey(client, "_");
-    probe = await refreshProbe(client);
+    probe = await settleProbe(client, (value) => value?.panels?.find((row) => row.kind === "setup")?.expanded === true,
+      "bank setup toggled by underscore", 5_000);
     keyCheck("one-extra-underscore-toggles-setup", probe.panels.find((row) => row.kind === "setup")?.expanded === true, probe.panels);
     await openAndProbe(client, lib.PATHS.area, "live");
+    await resetPanels(client);
     await sendKey(client, "_");
-    probe = await refreshProbe(client);
+    probe = await settleProbe(client, (value) => value?.armed === true,
+      "area cabinet picker armed", 5_000);
     keyCheck("multi-extra-underscore-arms", probe.armed && probe.badges.includes("1") && probe.badges.includes("4"), probe);
     await sleep(175);
     probe = await refreshProbe(client);
@@ -555,13 +918,25 @@ async function run(args) {
     const areaOrder = ["areas", "projects", "notebooks", "albums"];
     const numbered = areaOrder.slice().reverse();
     for (let digit = 1; digit <= 4; digit += 1) {
-      if (!probe.armed) await sendKey(client, "_");
-      await sendKey(client, String(digit));
-      probe = await refreshProbe(client);
-      keyCheck(`digit-${digit}-toggles-${numbered[digit - 1]}-and-disarms`, !probe.armed
-        && probe.panels.find((row) => row.kind === numbered[digit - 1])?.expanded === true, probe.panels);
+      if (probe.armed) {
+        await sendKey(client, "Escape");
+        probe = await settleProbe(client, (value) => value?.armed === false,
+          `disarmed picker before digit ${digit}`, 5_000);
+      }
+      probe = await resetPanels(client);
+      const closedBefore = (probe.panels || []).every((panel) => !panel.expanded);
+      if (!closedBefore) throw new Error(`Could not reset cabinets before digit ${digit}: ${JSON.stringify(probe.panels)}`);
       await sendKey(client, "_");
-      probe = await refreshProbe(client);
+      probe = await settleProbe(client, (value) => value?.armed === true,
+        `armed cabinet picker before digit ${digit}`, 5_000);
+      const armedBefore = probe.armed === true;
+      await sendKey(client, String(digit));
+      probe = await settleProbe(client, (value) => !value?.armed
+        && value?.panels?.find((row) => row.kind === numbered[digit - 1])?.expanded === true,
+      `cabinet ${numbered[digit - 1]} opened by digit ${digit}`, 5_000);
+      keyCheck(`digit-${digit}-toggles-${numbered[digit - 1]}-and-disarms`, !probe.armed
+        && probe.panels.find((row) => row.kind === numbered[digit - 1])?.expanded === true,
+      { closedBefore, armedBefore, panels: probe.panels });
     }
     for (const key of ["0", "9"]) {
       if (!probe.armed) await sendKey(client, "_");
@@ -571,10 +946,18 @@ async function run(args) {
       await sendKey(client, "Escape");
       probe = await refreshProbe(client);
     }
+    await resetPanels(client);
     for (const key of ["_", "-"]) {
       await sendKey(client, "_");
       await sendKey(client, key);
-      probe = await refreshProbe(client);
+      if (key === "_") {
+        probe = await settleProbe(client, (value) => !value?.armed
+          && value?.panels?.find((row) => row.kind === "albums")?.expanded === true,
+        "double underscore toggled the first cabinet", 5_000);
+      } else {
+        probe = await settleProbe(client, (value) => !value?.armed && value?.propertyExpanded,
+          "armed minus toggled Properties", 5_000);
+      }
       keyCheck(key === "_" ? "double-underscore-toggles-number-one" : "armed-minus-toggles-properties",
         !probe.armed && (key === "_" ? probe.panels.find((row) => row.kind === "albums")?.expanded === true : probe.propertyExpanded), probe);
     }
@@ -589,6 +972,7 @@ async function run(args) {
     }
     // A fast `_1` completes before the delayed footer can flash.
     await openAndProbe(client, lib.PATHS.area, "live");
+    await resetPanels(client);
     await sendKey(client, "_");
     await sendKey(client, "1");
     probe = await refreshProbe(client);
@@ -597,24 +981,31 @@ async function run(args) {
     // aria-live status message, not an interactive chip; choose a cabinet by
     // its advertised number through the same keyboard path as Live Preview.
     await openAndProbe(client, lib.PATHS.area, "reading");
+    await resetPanels(client);
     const command = await client.evaluate(`app.commands.executeCommandById(${JSON.stringify(`${PLUGIN_ID}:toggle-card-details`)})`);
-    await sleep(180);
-    probe = await refreshProbe(client);
+    probe = await settleProbe(client, (value) => value?.armed === true,
+      "Reading palette command armed cabinet picker", 5_000);
     keyCheck("reading-palette-arms-pick", command !== false && probe.armed, { command, probe });
     if (probe.armed) {
+      probe = await settleProbe(client, (value) => value?.armed === true
+        && value.footerText.includes("1 Albums") && value.footerText.includes("2 Notebooks")
+        && value.footerText.includes("3 Projects") && value.footerText.includes("4 Areas"),
+      "Reading pick overlay lists numbered kinds", 5_000);
       keyCheck("reading-pick-overlay-lists-numbered-kinds",
-        probe.footerText.includes("1 Albums") && probe.footerText.includes("2 Notebooks")
+        probe.armed && probe.footerText.includes("1 Albums") && probe.footerText.includes("2 Notebooks")
           && probe.footerText.includes("3 Projects") && probe.footerText.includes("4 Areas"), probe.footerText);
       await sendKey(client, "1");
-      probe = await refreshProbe(client);
+      probe = await settleProbe(client, (value) => !value?.armed
+        && value?.panels?.find((row) => row.kind === "albums")?.expanded === true,
+      "Reading digit one opened Albums", 5_000);
       keyCheck("reading-palette-number-picks-and-disarms",
         !probe.armed && probe.panels.find((row) => row.kind === "albums")?.expanded === true, probe);
     }
     // Status bar hidden: the view-local fallback stays available for the armed pick.
     await client.evaluate(`document.querySelector(".status-bar")?.style.setProperty("display", "none", "important")`);
-    await sendKey(client, "_");
-    await sleep(180);
-    probe = await refreshProbe(client);
+    await client.evaluate(`app.commands.executeCommandById(${JSON.stringify(`${PLUGIN_ID}:toggle-card-details`)})`);
+    probe = await settleProbe(client, (value) => value?.armed === true && value?.fallback === true,
+      "hidden status bar rendered the view fallback", 5_000);
     keyCheck("hidden-status-bar-uses-fallback-strip", probe.armed && probe.fallback, probe);
     await sendKey(client, "Escape");
     await client.evaluate(`document.querySelector(".status-bar")?.style.removeProperty("display")`);
@@ -640,52 +1031,237 @@ async function run(args) {
     // Absorption and fail-open contexts: stored bytes stay available in source, embeds, hover, print, malformed input, and teardown.
     const failOpen = [];
     const failOpenCheck = (name, ok, detail) => failOpen.push({ name, status: ok ? "pass" : "fail", detail });
+    // Live Preview hides every claimed catalog at once (one claim per kind in
+    // the editor), not just the last cabinet mounted; authored sections stay.
+    await openAndProbe(client, lib.PATHS.area, "live");
+    probe = await refreshProbe(client);
+    const managedKinds = ["areas", "projects", "notebooks", "albums"];
+    const liveAbsorption = (row) => {
+      const stored = row.callouts.filter((callout) => managedKinds.includes(callout.kind));
+      const headings = row.headings.map((heading) => ({ ...heading, label: heading.text.replace(/^#+\s*/, "").trim() }));
+      const managed = headings.filter((heading) => ["Areas", "Projects", "Notebooks", "Albums"].includes(heading.label));
+      const notes = headings.filter((heading) => heading.label === "Notes");
+      return {
+        ok: row.stackPresent && stored.every((callout) => !callout.visible) && managed.every((heading) => !heading.visible)
+          && notes.some((heading) => heading.visible),
+        detail: { liveStored: stored, liveManagedHeadings: managed, notes, cabinetKinds: row.cabinetKinds },
+      };
+    };
+    const liveFirst = liveAbsorption(probe);
+    failOpenCheck("live-preview-hides-managed-headings-and-callouts", liveFirst.ok, liveFirst.detail);
+    // A toggle repaints the card: the new stack claims before the old stack
+    // releases, and the stored sections must stay hidden across that swap.
+    const clickNotebooks = `(() => {
+      const view = app.workspace.activeLeaf?.view;
+      const root = view?.contentEl || view?.containerEl;
+      const button = root?.querySelector?.('.bob-property-card-cabinets [data-cabinet-kind="notebooks"] .bob-cabinet-toggle');
+      button?.click();
+      return button?.getAttribute?.("aria-expanded") || null;
+    })()`;
+    const notebooksBefore = probe.panels.find((row) => row.kind === "notebooks")?.expanded;
+    const clickedTo = await client.evaluate(clickNotebooks);
+    await sleep(600);
+    probe = await refreshProbe(client);
+    const liveRepainted = liveAbsorption(probe);
+    const notebooksAfter = probe.panels.find((row) => row.kind === "notebooks")?.expanded;
+    failOpenCheck("live-preview-absorption-survives-cabinet-repaint", liveRepainted.ok
+      && typeof notebooksBefore === "boolean" && notebooksAfter === !notebooksBefore,
+    { ...liveRepainted.detail, notebooksBefore, notebooksAfter, clickedTo });
+    await client.evaluate(clickNotebooks);
+    await sleep(400);
     await openAndProbe(client, lib.PATHS.area, "reading");
     probe = await refreshProbe(client);
-    failOpenCheck("reading-hides-managed-headings-and-callouts", probe.hiddenCalloutCount >= 4
-      && probe.headings.filter((row) => /^## (Areas|Projects|Notebooks|Albums)$/.test(row.text)).every((row) => !row.visible), probe);
+    const managedHeadings = probe.headings.filter((row) => ["Areas", "Projects", "Notebooks", "Albums"].includes(row.text.trim()));
+    failOpenCheck("reading-hides-managed-headings-and-callouts", probe.callouts.length >= 4
+      && probe.callouts.every((row) => row.absorbed && !row.visible)
+      && managedHeadings.length >= 4 && managedHeadings.every((row) => row.absorbed && !row.visible), probe);
+    // bob's projects writer nests closed rows under a link-free `**Closed**`
+    // label. That catalog is still bob-owned, so it absorbs; authored prose
+    // under the same H2 keeps the heading visible.
+    await openAndProbe(client, lib.PATHS.project, "reading");
+    probe = await refreshProbe(client);
+    const projectStored = probe.callouts.filter((row) => row.kind === "projects");
+    const projectHeadings = probe.headings.filter((row) => row.text.trim() === "Projects");
+    const projectCabinet = probe.panels.find((row) => row.kind === "projects");
+    failOpenCheck("closed-group-catalog-absorbed-with-kept-heading", projectStored.length === 1
+      && projectStored.every((row) => row.absorbed && !row.visible)
+      && projectHeadings.length >= 1 && projectHeadings.every((row) => row.visible && !row.absorbed)
+      && Boolean(projectCabinet) && !projectCabinet.error,
+    { projectStored, projectHeadings, projectCabinet: projectCabinet && { ...projectCabinet, text: undefined } });
     await openAndProbe(client, lib.PATHS.area, "source");
     probe = await refreshProbe(client);
     failOpenCheck("source-shows-stored-section", !probe.stackPresent && probe.headings.some((row) => row.text.includes("## Projects") && row.visible), probe);
     await openAndProbe(client, lib.PATHS.embed, "reading");
-    const embeddedStored = await waitFor(client, `(() => {
-      const embed = document.querySelector(".markdown-embed, .internal-embed");
-      return Boolean(embed && embed.querySelector('h2') && embed.querySelector('.callout[data-callout="projects"]')
-        && !embed.querySelector(".bob-property-card-cabinets"));
-    })()`, Boolean, "embedded stored catalog", 5_000);
+    const embeddedProbe = await settleEvaluate(client, `(() => {
+      const view = app.workspace.activeLeaf?.view;
+      const root = view?.previewMode?.containerEl || view?.containerEl;
+      const visible = (node) => {
+        if (!node?.getBoundingClientRect) return false;
+        const rect = node.getBoundingClientRect(); const style = getComputedStyle(node);
+        return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+      };
+      const embed = Array.from(root?.querySelectorAll?.(".markdown-embed, .internal-embed") || []).find(visible);
+      if (!embed) return { present: false, text: "", headings: [], cabinetStack: false, href: null };
+      return {
+        present: true,
+        href: embed.getAttribute("data-href") || embed.querySelector(".markdown-embed-link")?.getAttribute("href") || null,
+        text: String(embed.textContent || "").replace(/\\s+/g, " ").trim(),
+        headings: Array.from(embed.querySelectorAll("h2")).map((node) => String(node.textContent || "").trim()),
+        cabinetStack: Boolean(embed.querySelector(".bob-property-card-cabinets")),
+      };
+    })()`, (value) => value?.present && value.text.includes("Project catalog sentinel"), 7_000);
+    const embeddedStored = Boolean(embeddedProbe?.present
+      && embeddedProbe.headings.includes("Areas") && embeddedProbe.headings.includes("Projects")
+      && embeddedProbe.text.includes("Household systems") && embeddedProbe.text.includes("Project catalog sentinel")
+      && !embeddedProbe.cabinetStack);
     probe = await refreshProbe(client);
-    failOpenCheck("embed-shows-stored-catalog", embeddedStored, probe);
+    failOpenCheck("embed-shows-stored-catalog", embeddedStored, { probe, embeddedProbe });
     await openAndProbe(client, lib.PATHS.ordinary, "reading");
-    const hoverReady = await waitFor(client, `(() => {
-      const link = Array.from(document.querySelectorAll("a.internal-link" )).find((node) => (node.getAttribute("href") || "").includes("cash"));
+    const hoverReady = await client.evaluate(`(() => {
+      const view = app.workspace.activeLeaf?.view;
+      const root = view?.previewMode?.containerEl || view?.containerEl;
+      const link = Array.from(root?.querySelectorAll?.("a.internal-link") || []).find((node) => {
+        const rect = node.getBoundingClientRect(); const style = getComputedStyle(node);
+        return (node.getAttribute("href") || "").includes("cash") && rect.width > 0 && rect.height > 0
+          && style.display !== "none" && !node.closest?.(".markdown-embed, .internal-embed");
+      });
       if (!link) return false;
+      link.scrollIntoView({ block: "center" });
       const r = link.getBoundingClientRect();
       window.__bobHoverPoint = { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+      window.__bobHoverHref = link.getAttribute("href");
       return true;
-    })()`, Boolean, "ordinary note cash link", 5_000);
+    })()`);
     if (hoverReady) {
       const point = await client.evaluate("window.__bobHoverPoint");
-      await client.call("Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y });
-      await sleep(900);
+      await client.call("Input.dispatchMouseEvent", { type: "mouseMoved", x: 4, y: 4, buttons: 0 });
+      await sleep(100);
+      await client.call("Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y, buttons: 0 });
+      await sleep(800);
     }
-    const hoverStored = await client.evaluate(`Boolean(document.querySelector(".hover-popover")?.querySelector('h2, .callout[data-callout="projects"]'))`);
-    failOpenCheck("hover-shows-stored-catalog", hoverReady && hoverStored, { hoverReady, hoverStored });
-    await client.evaluate(`app.workspace.openLinkText(${JSON.stringify("cash.md#Projects")}, ${JSON.stringify(lib.PATHS.area)}, false)`);
-    await sleep(500);
-    probe = await refreshProbe(client);
-    failOpenCheck("heading-navigation-reveals-cabinet", probe.path === lib.PATHS.area
-      && probe.panels.find((row) => row.kind === "projects")?.expanded === true, probe);
+    const hoverProbe = await settleEvaluate(client, `(() => {
+      const visible = (node) => {
+        if (!node?.getBoundingClientRect) return false;
+        const rect = node.getBoundingClientRect(); const style = getComputedStyle(node);
+        return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+      };
+      const popover = Array.from(document.querySelectorAll(".hover-popover")).find(visible);
+      return { present: Boolean(popover), text: String(popover?.textContent || "").replace(/\\s+/g, " ").trim(),
+        headings: Array.from(popover?.querySelectorAll?.("h2") || []).map((node) => String(node.textContent || "").trim()),
+        callouts: Array.from(popover?.querySelectorAll?.('.callout[data-callout="projects"]') || []).map((node) => String(node.textContent || "").trim()),
+        cabinetStack: Boolean(popover?.querySelector?.(".bob-property-card-cabinets")) };
+    })()`, (value) => value?.present && !value?.cabinetStack
+      && (value.headings?.includes("Projects") || value.text?.includes("Project catalog sentinel")), 5_000);
+    const hoverStored = hoverProbe.present && !hoverProbe.cabinetStack
+      && (hoverProbe.headings.includes("Projects") || hoverProbe.text.includes("Project catalog sentinel"));
+    const hoverHref = await client.evaluate("window.__bobHoverHref || null");
+    const pagePreviewEnabled = await client.evaluate(`Boolean(app.internalPlugins?.plugins?.["page-preview"]?.enabled)`);
+    failOpenCheck("hover-shows-stored-catalog", hoverReady && pagePreviewEnabled && hoverStored,
+      { hoverReady, pagePreviewEnabled, hoverHref, hoverProbe });
+    // This probe hovered the same same-note heading link tested below. Move
+    // away and wait for Obsidian's page preview to close before clicking it;
+    // otherwise the still-open hover surface can intercept the next click.
+    await client.call("Input.dispatchMouseEvent", { type: "mouseMoved", x: 4, y: 4, buttons: 0 });
+    const hoverDismissed = await settleEvaluate(client, `(() => {
+      const visible = (node) => {
+        if (!node?.getBoundingClientRect) return false;
+        const rect = node.getBoundingClientRect(); const style = getComputedStyle(node);
+        return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+      };
+      return !Array.from(document.querySelectorAll(".hover-popover")).some(visible);
+    })()`, (value) => value === true, 3_000) === true;
+    await openAndProbe(client, lib.PATHS.area, "reading");
+    await resetPanels(client);
+    const navigationTarget = await client.evaluate(`(() => {
+      const view = app.workspace.activeLeaf?.view;
+      const root = view?.previewMode?.containerEl || view?.containerEl;
+      const link = Array.from(root?.querySelectorAll?.("a.internal-link") || []).find((node) =>
+        (node.getAttribute("href") || "").includes("#Projects") && String(node.textContent || "").includes("Jump to Projects"));
+      return link ? { href: link.getAttribute("href"), text: String(link.textContent || "").trim() } : null;
+    })()`);
+    await client.evaluate(`(() => {
+      window.__bobCabinetNavigationClick = null;
+      document.addEventListener("click", (event) => {
+        const origin = event.target?.nodeType === 1 ? event.target : event.target?.parentElement;
+        const link = origin?.closest?.("a.internal-link, a[data-href]");
+        const href = link?.getAttribute?.("data-href") || link?.getAttribute?.("href") || "";
+        if (!href.includes("#Projects")) return;
+        window.__bobCabinetNavigationClick = {
+          href,
+          text: String(link.textContent || "").trim(),
+          defaultPrevented: event.defaultPrevented,
+          eventPhase: event.eventPhase,
+        };
+      }, true);
+      return true;
+    })()`);
+    if (navigationTarget) await clickSelector(client, 'a.internal-link[href*="#Projects"]');
+    const navigationClick = await client.evaluate("window.__bobCabinetNavigationClick || null");
+    probe = await settleProbe(client, (value) => value?.path === lib.PATHS.area
+      && value?.panels?.find((row) => row.kind === "projects")?.expanded === true,
+    "same-note heading link revealed the Projects cabinet", 5_000);
+    failOpenCheck("heading-navigation-reveals-cabinet", Boolean(navigationTarget) && probe.path === lib.PATHS.area
+      && hoverDismissed && navigationClick?.href?.includes("#Projects") && navigationClick.defaultPrevented === true
+      && probe.panels.find((row) => row.kind === "projects")?.expanded === true,
+    { navigationTarget, hoverDismissed, navigationClick, probe });
     await client.call("Emulation.setEmulatedMedia", { media: "print" });
+    await sleep(250);
     const printText = await client.evaluate(`(() => ({
       media: matchMedia("print").matches,
-      visible: Array.from(document.querySelectorAll(".callout[data-callout='projects']")).some((node) => {
+      callouts: Array.from((() => {
+        const view = app.workspace.activeLeaf?.view;
+        const root = view?.previewMode?.containerEl || view?.containerEl;
+        return root?.querySelectorAll?.(".callout[data-callout='projects']") || [];
+      })()).map((node) => {
         const r = node.getBoundingClientRect(); const s = getComputedStyle(node);
-        return r.width > 0 && r.height > 0 && s.display !== "none" && s.visibility !== "hidden";
+        return { visible: s.display !== "none" && s.visibility !== "hidden"
+            && !node.closest?.(".bob-property-card-cabinets"), display: s.display, visibility: s.visibility,
+          absorbed: node.classList?.contains("bob-cabinet-absorbed") === true,
+          rect: { width: r.width, height: r.height },
+          ancestors: (() => { const out = []; let current = node; while (current && out.length < 6) {
+            const cs = getComputedStyle(current); const box = current.getBoundingClientRect();
+            out.push({ tag: current.tagName, className: String(current.className || ""), display: cs.display,
+              visibility: cs.visibility, width: box.width, height: box.height }); current = current.parentElement;
+          } return out; })() };
       }),
     }))()`);
+    printText.visible = printText.callouts.some((row) => row.visible);
     let pdfBytes = null;
-    try { pdfBytes = await client.call("Page.printToPDF", { printBackground: true }); } catch (_) {}
-    failOpenCheck("print-pdf-shows-stored-catalog", printText.media && printText.visible && Boolean(pdfBytes?.data), printText);
+    let pdfPrintError = null;
+    let pageDomainEnabled = false;
+    let pageDomainEnableError = null;
+    try { await client.call("Page.enable"); pageDomainEnabled = true; }
+    catch (error) { pageDomainEnableError = error?.message || String(error); }
+    let printToPDFAdvertised = null;
+    try {
+      const domains = await client.call("Schema.getDomains");
+      const page = domains.domains?.find((domain) => domain.name === "Page");
+      printToPDFAdvertised = Array.isArray(page?.commands) ? page.commands.some((command) => command.name === "printToPDF") : null;
+    } catch (_) {}
+    try { pdfBytes = await client.call("Page.printToPDF", { printBackground: true }); }
+    catch (error) { pdfPrintError = error?.message || String(error); }
+    let pdfText = "";
+    let pdfTextError = null;
+    if (pdfBytes?.data) {
+      const pdfPath = path.join(outDir, "cabinets-print-proof.pdf");
+      try {
+        fs.writeFileSync(pdfPath, Buffer.from(pdfBytes.data, "base64"));
+        pdfText = require("node:child_process").execFileSync("pdftotext", [pdfPath, "-"], { encoding: "utf8" });
+      } catch (error) {
+        pdfTextError = error?.message || String(error);
+      }
+    }
+    const storedPrintCallout = printText.callouts.find((row) => row.absorbed
+      && row.display !== "none" && row.visibility !== "hidden");
+    const pdfAvailable = Boolean(pdfBytes?.data);
+    const printFallbackVisible = Boolean(storedPrintCallout);
+    failOpenCheck("print-media-reveals-stored-catalog", printText.media
+      && printFallbackVisible && (!pdfAvailable || pdfText.includes("Project catalog sentinel")), {
+      ...printText, pdfBytes: Boolean(pdfBytes?.data), pdfTextIncludesCatalog: pdfText.includes("Project catalog sentinel"),
+      pdfTextError, pdfPrintError, pageDomainEnabled, pageDomainEnableError,
+      printToPDFAdvertised, evidenceMode: pdfAvailable ? "generated-pdf-text" : "computed-print-styles",
+      screenVisibility: printText.visible,
+    });
     await client.call("Emulation.setEmulatedMedia", { media: "screen" });
     for (const notePath of [lib.PATHS.malformed, lib.PATHS.duplicate]) {
       await openAndProbe(client, notePath, "reading");
@@ -710,22 +1286,30 @@ async function run(args) {
       return { ok: true };
     })()`);
     await openAndProbe(client, lib.PATHS.area, "reading");
+    await resetPanels(client);
     await clickSelector(client, `[data-cabinet-kind="areas"] .bob-cabinet-toggle`);
-    probe = await refreshProbe(client);
+    probe = await settleProbe(client, (value) => {
+      const panel = value?.panels?.find((row) => row.kind === "areas");
+      return Boolean(panel?.error || (panel?.expanded && panel?.text));
+    }, "forced provider body mounted or failed", 5_000);
     const failedMount = probe.panels.find((row) => row.kind === "areas");
     const nativeRestored = probe.callouts.some((row) => row.kind === "areas" && row.visible);
     failOpenCheck("forced-mount-error-reveals-native-section", fault.ok && Boolean(failedMount?.error) && nativeRestored, { fault, failedMount, nativeRestored });
     await client.evaluate("window.__bobCabinetRestoreProvider?.(); delete window.__bobCabinetRestoreProvider");
     await client.evaluate(`app.plugins.disablePlugin(${JSON.stringify(PLUGIN_ID)})`);
-    probe = await refreshProbe(client);
-    const disabledVisible = await client.evaluate(`Boolean(document.querySelector('.callout[data-callout="areas"]'))`);
+    probe = await settleProbe(client, (value) => value?.callouts?.some((row) => row.kind === "areas" && row.visible),
+      "native area section restored after plugin disable", 5_000);
+    const disabledVisible = probe.callouts.some((row) => row.kind === "areas" && row.visible);
     failOpenCheck("plugin-disable-restores-stored-section", disabledVisible, probe);
     for (const row of failOpen) check(`fail-open-${row.name}`, row.status === "pass", row.detail);
     report.failOpen = failOpen;
 
     // Verify Vim navigation never strands the visible cursor in the hidden ranges.
     await client.evaluate(`app.plugins.enablePlugin(${JSON.stringify(PLUGIN_ID)})`);
-    await sleep(800);
+    // The log-history mixin schedules a known 5-second fetch after enable.
+    // Drain it before the passive-action measurement so it cannot be blamed
+    // on a cabinet click or key.
+    await sleep(5_500);
     await openAndProbe(client, lib.PATHS.area, "live");
     const motionResults = {};
     for (const [key, suffix] of [["j", null], ["k", null], ["g", "g"], ["G", null], ["ArrowDown", null], ["ArrowUp", null]]) {
@@ -781,7 +1365,9 @@ async function run(args) {
             const sidebarState = await shared.collapseSidebars(client);
             if (!sidebarState.ok) throw new Error("Cannot isolate the screenshot viewport: " + JSON.stringify(sidebarState));
             await shared.setTheme(client, theme);
-            await openAndProbe(client, host.path, mode);
+            const hostSpec = lib.SPECS.find((row) => row.path === host.path);
+            const cardState = await openAndSettleExpectedCard(client, hostSpec, mode,
+              `screenshot card ${host.key} ${mode} ${theme} ${widthName}`);
             if (host.state === "armed") {
               if (mode === "reading") {
                 await client.evaluate(`app.commands.executeCommandById(${JSON.stringify(`${PLUGIN_ID}:toggle-card-details`)})`);
@@ -796,26 +1382,91 @@ async function run(args) {
             shot.viewportWidth = width;
             shot.cardWidth = state.width;
             shot.captureFailures = [];
+            if (!(cardState?.cardPresent && cardState.cardKind === hostSpec.kind
+              && JSON.stringify(cardState.cabinetKinds || []) === JSON.stringify(hostSpec.cabinets))) {
+              shot.captureFailures.push("expected card or cabinet stack did not settle before capture");
+            }
             if (shot.width <= 0 || shot.height <= 0) shot.captureFailures.push("screenshot has no dimensions");
             if (state.theme !== theme) shot.captureFailures.push(`theme expected ${theme}, got ${state.theme}`);
             if (host.state === "armed" && !state.armed) shot.captureFailures.push("armed screenshot has no armed pick");
+            for (const row of emptyOpenCabinets(state)) shot.captureFailures.push(`open ${row} cabinet shows an empty body`);
             shot.visualVerdict = "pending visual review";
             report.screenshots.push(shot);
           }
         }
       }
     }
+    // Layout diagnostics (evidence only): computed boxes of every cabinet head
+    // on the config-cabinet hosts at the narrow width, for visual review.
+    report.layoutDiagnostics = [];
+    for (const key of ["bank", "prose", "album"]) {
+      const hostSpec = lib.SPECS.find((row) => row.key === key);
+      if (!hostSpec) continue;
+      await shared.setViewport(client, 420);
+      await shared.setTheme(client, "light");
+      await openAndSettleExpectedCard(client, hostSpec, "live", `layout diagnostics ${key}`);
+      const heads = await client.evaluate(`(() => {
+        const view = app.workspace.activeLeaf?.view;
+        const root = view?.contentEl || view?.containerEl;
+        const describe = (el) => {
+          if (!el?.getBoundingClientRect) return null;
+          const r = el.getBoundingClientRect(); const s = getComputedStyle(el);
+          return { tag: el.tagName, cls: String(el.className || ""), text: String(el.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 60),
+            x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height),
+            display: s.display, justify: s.justifyContent, align: s.alignItems, flex: s.flex, wrap: s.flexWrap,
+            width: s.width, margin: s.margin, textAlign: s.textAlign, position: s.position };
+        };
+        return Array.from(root?.querySelectorAll?.(".bob-property-card-cabinets .bob-cabinet-head") || []).map((head) => ({
+          kind: head.closest("[data-cabinet-kind]")?.getAttribute("data-cabinet-kind") || null,
+          parent: describe(head.parentElement), head: describe(head),
+          children: Array.from(head.children).map((child) => ({ ...describe(child), children: Array.from(child.children).map(describe) })),
+        }));
+      })()`);
+      report.layoutDiagnostics.push({ key, heads });
+    }
+    // One chrome: every head reads from the left edge on a single line, so a
+    // summary-less Outline or a long Setup summary never centers or wraps.
+    const headLayout = report.layoutDiagnostics.flatMap((host) => host.heads.map((row) => {
+      const toggle = row.children.find((child) => child?.tag === "BUTTON") || null;
+      const parts = (toggle?.children || []).filter((child) => child && child.display !== "none" && child.w > 0);
+      const chevron = parts[0] || null;
+      const leftAligned = Boolean(toggle && chevron) && chevron.x - toggle.x <= 8;
+      // Compare vertical centers: an open chevron is rotated, so its box top moves.
+      const middle = (child) => child.y + child.h / 2;
+      const oneLine = parts.length > 0 && parts.every((child) => Math.abs(middle(child) - middle(parts[0])) <= 3);
+      return { host: host.key, kind: row.kind, leftAligned, oneLine, toggle: toggle && { x: toggle.x, w: toggle.w, justify: toggle.justify, wrap: toggle.wrap } };
+    }));
+    check("cabinet-heads-left-aligned-single-line", headLayout.length >= 6
+      && headLayout.every((row) => row.leftAligned && row.oneLine), headLayout);
     for (const [name, feature] of [["reduced-motion", "prefers-reduced-motion"], ["forced-colors", "forced-colors"]]) {
       await shared.setViewport(client, 1400);
       await shared.setTheme(client, "light");
-      await openAndProbe(client, lib.PATHS.area, "live");
+      const areaScreenshotState = await openAndSettleExpectedCard(client, lib.SPECS.find((row) => row.path === lib.PATHS.area),
+        "live", `area card before ${name} screenshot`);
       await client.call("Emulation.setEmulatedMedia", { media: "screen", features: [{ name: feature, value: feature === "forced-colors" ? "active" : "reduce" }] });
       await sleep(180);
       probe = await refreshProbe(client);
       const shot = await shared.capture(client, outDir, `area-live-light-wide-${name}`, 1400, "light", name);
       shot.reducedMotion = probe.reducedMotion;
       shot.forcedColors = probe.forcedColors;
+      shot.panels = probe.panels.map((row) => ({ kind: row.kind, expanded: row.expanded, error: row.error,
+        linkCount: row.linkCount, bodyClass: row.bodyClass, text: String(row.text || "").slice(0, 120) }));
+      shot.bodyStates = await client.evaluate(`(() => {
+        const view = app.workspace.activeLeaf?.view;
+        const root = view?.contentEl || view?.containerEl;
+        return Array.from(root?.querySelectorAll?.(".bob-property-card-cabinets .bob-cabinet-panel") || []).map((panel) => {
+          const content = panel.querySelector(".bob-cabinet-provider-content");
+          const state = content?.__bobCabinetBodyState || null;
+          return { kind: panel.getAttribute("data-cabinet-kind"), cards: root.querySelectorAll(".bob-property-card-cabinets").length,
+            content: Boolean(content), children: content ? content.childElementCount : null,
+            state: state ? { built: state.built, pending: state.pending, error: state.error, sameContainer: state.container === content } : null };
+        });
+      })()`);
       shot.captureFailures = [];
+      if (!areaScreenshotState.cardPresent || areaScreenshotState.cardKind !== "area") {
+        shot.captureFailures.push("area card did not settle before capture");
+      }
+      for (const row of emptyOpenCabinets(probe)) shot.captureFailures.push(`open ${row} cabinet shows an empty body`);
       if (feature === "prefers-reduced-motion" && !probe.reducedMotion) shot.captureFailures.push("reduced motion emulation did not apply");
       if (feature === "forced-colors" && !probe.forcedColors) shot.captureFailures.push("forced colors emulation did not apply");
       shot.visualVerdict = "pending visual review";
@@ -845,11 +1496,32 @@ async function run(args) {
   } finally {
     report.finishedAt = new Date().toISOString();
     if (client) client.close();
+    let terminationRequested = null;
+    let exitObserved = Boolean(child && (child.exitCode !== null || child.signalCode !== null));
     if (child && child.exitCode == null) {
-      try { child.kill("SIGTERM"); } catch (_) {}
-      await sleep(250);
-      if (child.exitCode == null) { try { child.kill("SIGKILL"); } catch (_) {} }
+      try { child.kill("SIGTERM"); terminationRequested = "SIGTERM"; } catch (_) {}
+      exitObserved = await waitForChildExit(child, 1_000);
+      if (!exitObserved && child.exitCode == null && child.signalCode == null) {
+        try { child.kill("SIGKILL"); terminationRequested = "SIGKILL"; } catch (_) {}
+        exitObserved = await waitForChildExit(child, 1_000);
+      }
     }
+    report.obsidianProcess = {
+      ...(report.obsidianProcess || {}),
+      pid: child?.pid ?? report.obsidianProcess?.pid ?? null,
+      executable,
+      profile,
+      exitCode: child?.exitCode ?? null,
+      signalCode: child?.signalCode ?? null,
+      stdout: childStdout || null,
+      stderr: childStderr || null,
+      terminationRequested,
+      exitObserved,
+    };
+    const profileLog = path.join(profile, "obsidian.log");
+    report.obsidianProcess.startupLog = fs.existsSync(profileLog)
+      ? fs.readFileSync(profileLog, "utf8").slice(-12_000) : null;
+    writeStartupDiagnostics(path.dirname(reportPath), profile, report.obsidianProcess, logPath);
     report.scratchPreserved = Boolean(!successful && fs.existsSync(scratch));
     if (successful && fs.existsSync(scratch)) fs.rmSync(scratch, { recursive: true, force: true });
     report.assertionCounts = report.checks.reduce((counts, row) => {

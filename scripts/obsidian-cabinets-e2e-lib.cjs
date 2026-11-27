@@ -73,6 +73,9 @@ const SCREENSHOT_HOSTS = Object.freeze([
   { key: "footer", path: PATHS.area, mode: "live", state: "armed" },
 ]);
 
+// The sase-like project host lists 64 sub-projects; the last two are closed.
+const PROJECT_OPEN_ROWS = 62;
+
 function quote(value) { return JSON.stringify(String(value)); }
 
 function callout(kind, rows) {
@@ -104,7 +107,11 @@ function fixtureNotes() {
   ].join("\n");
   const projectRows = Array.from({ length: 64 }, (_, i) =>
     `**[[sase-row-${String(i + 1).padStart(2, "0")}|Project row ${String(i + 1).padStart(2, "0")}]]** — synthetic project row ${i + 1}.`);
-  const projectCatalog = ["## Projects", "", callout("projects", projectRows), "", "Authored prose stays visible below this kept heading.", ""]
+  // End the 64-row catalog the way bob's projects writer does: closed rows
+  // nest under its link-free `**Closed**` group label, which must still absorb.
+  const projectCallout = callout("projects", projectRows.slice(0, PROJECT_OPEN_ROWS))
+    + ["> - **Closed**", ...projectRows.slice(PROJECT_OPEN_ROWS).map((row) => `>   - ✅ ${row}`)].join("\n") + "\n";
+  const projectCatalog = ["## Projects", "", projectCallout, "", "Authored prose stays visible below this kept heading.", ""]
     .join("\n");
   const recordFields = {
     status: "{required: true, values: {to_try: To try, liked: Liked}}",
@@ -112,7 +119,8 @@ function fixtureNotes() {
     category: "{required: true, suggest: true}",
   };
   const notes = {
-    [PATHS.area]: areaNote({ title: "Cash", catalogs: areaCatalogs, body: "Cash area body sentinel.", parent: null }),
+    [PATHS.area]: areaNote({ title: "Cash", catalogs: areaCatalogs,
+      body: "## Notes\n\nCash area body sentinel.\n\n[[cash#Projects|Jump to Projects]]", parent: null }),
     [PATHS.project]: projectNote("SASE", { catalogs: projectCatalog, body: "Project body sentinel." }),
     [PATHS.leaf]: projectNote("Leaf Project", { body: "A project with no catalog cabinet." }),
     [PATHS.singleArea]: areaNote({ title: "Single Catalog", catalogs: "## Projects\n\n" + callout("projects", ["**[[sase|SASE]]** — one direct item."]) }),

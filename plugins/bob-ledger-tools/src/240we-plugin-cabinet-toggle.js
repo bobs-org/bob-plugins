@@ -26,18 +26,15 @@ function propertyCardCabinetToggle(view, kind) {
       }
     }
     if (spec.role !== "content" || !propertyCardCabinetProviderFor(kind)) return false;
-    const rawProblems = extra.element?.getAttribute?.("data-cabinet-problems")
-      || extra.element?.parentElement?.getAttribute?.("data-cabinet-problems") || "";
-    const problems = typeof rawProblems === "string" ? rawProblems : "";
-    const previous = propertyCardCabinetIsOpen(collected.path, kind, { problems });
-    const next = !previous;
-    if (previous && next === false) {
-      propertyCardCabinetFocusHeadOnClose?.(extra.element, extra.element?.closest?.("[data-cabinet-kind]")?.querySelector?.(".bob-cabinet-drawer"));
-    }
-    propertyCardCabinetSetOpen(collected.path, kind, next, { problems });
-    if (propertyCardCabinetRequestRepaint(view, collected.path, kind)) return true;
-    propertyCardCabinetSetOpen(collected.path, kind, previous, { problems });
-    return false;
+    // Content providers own the full toggle lifecycle on their disclosure
+    // button: state, lazy body mount, provider callbacks, and drawer motion.
+    // Route keyboard picks through that same control so they cannot update
+    // session state without actually repainting the mounted view.
+    const control = extra.element;
+    if (!control || typeof control.click !== "function") return false;
+    const previous = control.getAttribute?.("aria-expanded") === "true";
+    try { control.click(); } catch (_) { return false; }
+    return control.getAttribute?.("aria-expanded") === String(!previous);
   } catch (_) {
     return false;
   }

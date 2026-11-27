@@ -20,6 +20,41 @@ function propertyCardCabinetRegionSpec(kind) {
   return PROPERTY_CARD_CABINET_REGION_SPECS.find((spec) => spec.kind === kind) || null;
 }
 
+// Structural rows bob's catalog writers emit without a link: the Projects
+// closed-group label (bob-cli `CLOSED_GROUP_LABEL`, rendered `> - **Closed**`).
+const PROPERTY_CARD_CABINET_MANAGED_LABEL_ROWS = Object.freeze({
+  projects: Object.freeze(["- **Closed**"]),
+});
+
+// A catalog callout can contain arbitrary authored text even when its head is
+// well formed. Absorb only rows that still look like managed rows (a link row
+// or a writer-emitted label row); any other nonblank row makes ownership
+// uncertain, so keep the source visible. The callout head and legacy
+// notebook markers are region framing, not rows.
+function propertyCardCatalogRegionRowsManaged(region, spec) {
+  try {
+    const lines = Array.isArray(region?.lines) ? region.lines : [];
+    const labels = PROPERTY_CARD_CABINET_MANAGED_LABEL_ROWS[spec?.kind] || [];
+    let headSeen = false;
+    for (const line of lines) {
+      const raw = String(line);
+      const trimmed = raw.trim();
+      if (spec?.legacy && (trimmed === spec.legacy.begin || trimmed === spec.legacy.end)) continue;
+      if (!headSeen && propertyCardCabinetIsCalloutHead(raw, spec?.callout)) {
+        headSeen = true;
+        continue;
+      }
+      const content = raw.replace(/^\s{0,3}>\s?/, "").trim();
+      if (!content) continue;
+      if (labels.includes(content)) continue;
+      if (!content.includes("[[") || !content.includes("]]")) return false;
+    }
+    return headSeen;
+  } catch (_) {
+    return false;
+  }
+}
+
 function propertyCardCabinetSplitLines(text) {
   const source = String(text == null ? "" : text);
   if (source === "") return { lines: [], eol: "\n" };
@@ -280,6 +315,16 @@ function propertyCardCatalogRegionForHide(text, kind) {
     if (scan.damage) return { kind, startLine: null, endLine: null, headingLine: null, fingerprint: null, damage: scan.damage };
     if (scan.regions.length === 0) return null;
     const region = scan.regions[0];
+    if (kind !== "records" && !propertyCardCatalogRegionRowsManaged(region, spec)) {
+      return {
+        kind,
+        startLine: null,
+        endLine: null,
+        headingLine: null,
+        fingerprint: null,
+        damage: propertyCardCabinetDamage(region.startLine, `ambiguous ${spec.callout} catalog row; keep the stored section visible`),
+      };
+    }
     const bodyFirst = propertyCardCabinetFrontmatterEnd(lines);
 
     let headingLine = null;

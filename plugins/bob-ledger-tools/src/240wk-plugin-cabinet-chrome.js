@@ -142,9 +142,10 @@ function propertyCardCabinetBuildHead(doc, spec = {}) {
   if (spec.onToggle) {
     button.addEventListener("click", (event) => {
       try { event?.preventDefault?.(); } catch (_) {}
+      const wasOpen = button.getAttribute?.("aria-expanded") === "true";
       const drawer = doc.getElementById?.(bodyId) || null;
-      if (open) propertyCardCabinetFocusHeadOnClose(button, drawer);
-      try { spec.onToggle(!open, event); } catch (_) {}
+      if (wasOpen) propertyCardCabinetFocusHeadOnClose(button, drawer);
+      try { spec.onToggle(!wasOpen, event); } catch (_) {}
     });
   }
   return { element: wrapper, button, trail, keycap, bodyId };

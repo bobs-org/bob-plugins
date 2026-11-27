@@ -392,9 +392,11 @@ async function propertyCardCabinetHostBuildBody(plugin, kind, context = {}) {
 
 function propertyCardCabinetHostReveal(panel, path, kind) {
   try {
+    if (!panel || panel.isConnected === false) return false;
     const control = panel?.querySelector?.(".bob-cabinet-toggle");
     if (!control) return false;
     if (control.getAttribute?.("aria-expanded") !== "true") control.click?.();
+    if (control.getAttribute?.("aria-expanded") !== "true") return false;
     const head = panel.querySelector?.(".bob-cabinet-head") || control;
     head.scrollIntoView?.({ block: "nearest" });
     void path;
@@ -448,7 +450,8 @@ function propertyCardCabinetHostMountClaim(kind, plugin, context = {}) {
 
 function propertyCardCabinetHostRevealNavigation(plugin, event) {
   try {
-    const target = event?.target?.closest?.("a.internal-link, a[data-href], .outline .tree-item-self, .outline .tree-item-inner");
+    const origin = event?.target?.nodeType === 1 ? event.target : event?.target?.parentElement;
+    const target = origin?.closest?.("a.internal-link, a[data-href], .outline .tree-item-self, .outline .tree-item-inner");
     if (!target) return false;
     const MarkdownViewCtor = require("obsidian").MarkdownView;
     const active = plugin?.app?.workspace?.getActiveViewOfType?.(MarkdownViewCtor);
@@ -469,7 +472,19 @@ function propertyCardCabinetHostRevealNavigation(plugin, event) {
         if (destination?.path && destination.path !== activePath) return false;
       }
     }
-    const candidates = [active?.editor?.cm, active?.previewMode?.renderer].filter(Boolean);
+    // Prefer the active reading host's live panel. A reading-mode claim can
+    // outlive a panel replacement, so its reveal closure may point at an
+    // obsolete element even while it still reports a successful claim.
+    const root = active?.previewMode?.containerEl || active?.containerEl;
+    const panel = root?.querySelector?.(`.${PROPERTY_CARD_CABINET_STACK_CLASS} [data-cabinet-kind="${kind}"][data-cabinet-source="${activePath}"]`)
+      || root?.querySelector?.(`[data-cabinet-kind="${kind}"][data-cabinet-source="${activePath}"]`);
+    const storedRegion = root?.querySelector?.(`.bob-cabinet-absorbed[data-callout="${kind}"]`);
+    if (panel && storedRegion && propertyCardCabinetHostReveal(panel, activePath, kind)) {
+      event.preventDefault?.();
+      event.stopPropagation?.();
+      return true;
+    }
+    const candidates = [active, active?.editor?.cm, active?.previewMode?.renderer].filter(Boolean);
     for (const view of candidates) {
       if (!propertyCardCatalogRevealClaim(view, activePath, kind)) continue;
       event.preventDefault?.();

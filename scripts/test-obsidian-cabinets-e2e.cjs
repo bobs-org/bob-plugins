@@ -64,7 +64,10 @@ test("browser probe is valid and runner covers acceptance-critical interactions"
     "gate-closed-inline-baseline", "area-content-parity-gate-closed", "palette-arms-pick",
     "fast-underscore-one-no-overlay-flash", "hidden-status-bar-uses-fallback-strip",
     "reading-hides-managed-headings-and-callouts", "embed-shows-stored-catalog",
-    "hover-shows-stored-catalog", "print-pdf-shows-stored-catalog",
+    "hover-shows-stored-catalog", "print-media-reveals-stored-catalog",
+    "closed-group-catalog-absorbed-with-kept-heading", "live-preview-hides-managed-headings-and-callouts",
+    "live-preview-absorption-survives-cabinet-repaint", "cabinet-heads-left-aligned-single-line",
+    "perf-106-record-album-within-budget", "perf-64-line-projects-host-within-budget",
     "forced-mount-error-reveals-native-section", "plugin-disable-restores-stored-section",
     "vim-motions-and-arrows-no-invisible-cursor", "passive-actions-zero-bob-spawns",
     "passive-actions-zero-markdown-writes", "screenshot-matrix-captured",
@@ -74,6 +77,9 @@ test("browser probe is valid and runner covers acceptance-critical interactions"
   assert.match(source, /refCardPreview: true/);
   assert.match(source, /Unexpected bob spawn in cabinet acceptance/);
   assert.match(source, /markdownFilesHash/);
+  // Obsidian's renderer target may not expose Page.printToPDF; the print
+  // check must then say it relied on computed print styles, never claim a PDF.
+  assert.match(source, /evidenceMode: pdfAvailable \? "generated-pdf-text" : "computed-print-styles"/);
   assert.match(source, /collapseSidebars\(client\)/);
   assert.doesNotMatch(source, /TMPDIR:\s*["']\/tmp["']/);
 });

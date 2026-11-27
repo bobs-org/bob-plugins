@@ -88,6 +88,15 @@ function panelRow(kind, source = "Areas/work.md", open = false, number = null) {
   });
   const keycap = new FakeElement({ "data-cabinet-keycap": "true", "data-cabinet-rest-key": "_" });
   button.appendChild(keycap);
+  // Mirror the cabinet chrome's disclosure: a click owns the session-state
+  // write and flips aria-expanded, which is what keyboard picks route through.
+  button.clicks = 0;
+  button.click = () => {
+    button.clicks += 1;
+    const next = button.getAttribute("aria-expanded") !== "true";
+    H.propertyCardCabinetSetOpen(source, kind, next);
+    button.setAttribute("aria-expanded", String(next));
+  };
   const panel = new FakeElement({ "data-cabinet-kind": kind }, [button]);
   if (number !== null) panel.appendChild(new FakeElement({}));
   return { panel, button, keycap };
@@ -224,6 +233,11 @@ test("armed pick: digit toggles and disarms, out-of-range nudges, underscore pic
   assert.equal(one.prevented, true);
   assert.equal(H.propertyCardCabinetPickActive(), false);
   assert.equal(plugin.pops.length, 1);
+  // Numbers count up from the bottom extra, so 1 is Albums.
+  assert.equal(rows[1].button.clicks, 1);
+  assert.equal(rows[0].button.clicks, 0);
+  assert.equal(H.propertyCardCabinetIsOpen("Areas/work.md", "albums"), true);
+  assert.equal(H.propertyCardCabinetIsOpen("Areas/work.md", "areas"), false);
 
   assert.equal(H.propertyCardCabinetUnderscore(view, plugin), true);
   const dash = keyEvent("-");

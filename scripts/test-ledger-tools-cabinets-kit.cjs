@@ -230,10 +230,28 @@ test("toggle router uses the provider state and the matching view mount", () => 
   let paints = 0;
   H.propertyCardRegisterCabinetProvider(plugin, "areas", { applies: () => ({ summary: "1" }), buildBody() {}, paintKey: () => "areas" });
   const unmount = H.propertyCardCabinetRegisterMount(plugin, view, "Areas/work.md", stack, () => { paints += 1; });
+  // Content picks route through the mounted disclosure control, which owns
+  // the state write, body mount, drawer motion, and repaint (as in 240wl).
+  let clicks = 0;
+  row.button.click = () => {
+    clicks += 1;
+    const next = row.button.getAttribute("aria-expanded") !== "true";
+    H.propertyCardCabinetSetOpen("Areas/work.md", "areas", next);
+    row.button.setAttribute("aria-expanded", String(next));
+    H.propertyCardCabinetRequestRepaint(view, "Areas/work.md", "areas");
+  };
   assert.equal(H.propertyCardCabinetToggle(view, "areas"), true);
+  assert.equal(clicks, 1);
   assert.equal(H.propertyCardCabinetIsOpen("Areas/work.md", "areas"), true);
   assert.equal(paints, 1);
   assert.equal(H.propertyCardCabinetToggle(view, "missing"), false);
+  // A control that does not actually flip its disclosure reports failure, so
+  // a pick never claims success without a repainted cabinet.
+  row.button.click = () => { clicks += 1; };
+  assert.equal(H.propertyCardCabinetToggle(view, "areas"), false);
+  assert.equal(clicks, 2);
+  row.button.click = () => { throw new Error("detached"); };
+  assert.equal(H.propertyCardCabinetToggle(view, "areas"), false);
   unmount();
   H.propertyCardCabinetProvidersReleasePlugin(plugin);
   H.propertyCardCabinetStateResetForTests();

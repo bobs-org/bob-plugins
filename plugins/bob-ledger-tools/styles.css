@@ -15082,6 +15082,18 @@ button.bob-prose-note-card-finding:focus-visible { color: var(--text-normal); }
   .bob-property-row:focus-visible { outline: 2px solid Highlight; }
 }
 
+/* Reading absorption (bob-cli-qq): a claimed cabinet stands in for its
+   stored section on screen. Keep the class scoped to rendered Markdown so
+   embeds and other host surfaces remain native. Printing releases the visual
+   hide so the authored section remains available in a PDF. */
+.markdown-preview-view .bob-cabinet-absorbed { display: none !important; }
+@media print {
+  .markdown-preview-view .bob-cabinet-absorbed {
+    display: block !important;
+    visibility: visible !important;
+  }
+}
+
 /* Cabinets (bob-cli-qq chrome): a shared, quiet disclosure stack for
    catalogs, configuration folds, and Properties. Colors inherit the card's
    accent and the active Obsidian theme palette. */
@@ -15114,6 +15126,10 @@ button.bob-prose-note-card-finding:focus-visible { color: var(--text-normal); }
 .bob-property-card .bob-property-card-cabinets .bob-cabinet-head .bob-cabinet-toggle {
   box-sizing: border-box;
   display: flex !important;
+  /* Obsidian centers button content and the legacy fold row wraps it; a
+     cabinet head reads left to right on one line and truncates its summary. */
+  flex-wrap: nowrap;
+  justify-content: flex-start;
   align-items: center;
   flex: 1 1 auto;
   gap: 0.38em;

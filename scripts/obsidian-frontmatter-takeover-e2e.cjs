@@ -727,8 +727,28 @@ async function run(args) {
     activeRun.client = client;
     client.on("Runtime.exceptionThrown", (params) => {
       const details = params.exceptionDetails || {};
-      report.consoleExceptions.push({ check: activeRun.currentCheck?.name || null,
-        text: details.text || "", description: details.exception?.description || "", url: details.url || "", lineNumber: details.lineNumber || null });
+      const row = { check: activeRun.currentCheck?.name || null,
+        text: details.text || "", description: details.exception?.description || "", url: details.url || "", lineNumber: details.lineNumber || null };
+      report.consoleExceptions.push(row);
+      void client.evaluate(`(() => {
+        const setting = app.setting || {};
+        const tabs = Array.isArray(setting.pluginTabs) ? setting.pluginTabs : [];
+        const plugins = app.plugins || {};
+        const ids = (value) => Array.from(value || [], (id) => String(id));
+        return {
+          check: ${JSON.stringify(activeRun.currentCheck?.name || null)},
+          enabledPlugins: ids(plugins.enabledPlugins),
+          loadedPlugins: Object.keys(plugins.plugins || {}),
+          pluginTabs: tabs.map((tab) => ({
+            name: tab?.name ?? null, ctor: tab?.constructor?.name ?? null,
+            pluginId: tab?.plugin?.manifest?.id ?? tab?.plugin?.manifest?.name ?? null,
+            pluginName: tab?.plugin?.manifest?.name ?? null,
+            pluginMissing: !tab?.plugin,
+          })),
+          settingKeys: Object.keys(setting),
+          activeElement: document.activeElement?.className?.toString?.() || document.activeElement?.tagName || null,
+        };
+      })()`).then((snapshot) => { row.runtimeState = snapshot; }).catch(() => {});
     });
     client.on("Runtime.consoleAPICalled", (params) => {
       if (params.type === "error") report.consoleErrors.push((params.args || []).map((arg) => arg.value ?? arg.description ?? "").join(" ").slice(0, 1500));
@@ -1052,9 +1072,7 @@ async function run(args) {
         const visibleBodyIndex = sourceLines.findIndex((line) => row.kind === "area"
           ? line === "Visible Area body text."
           : line.includes("#task #prj Launch the rollout ^prj"));
-        const cursorStartIndex = row.kind === "area"
-          ? sourceLines.findIndex((line) => line === "# Hidden Area Heading")
-          : visibleBodyIndex;
+        const cursorStartIndex = visibleBodyIndex;
         const cursorPlaced = await ctx.page.ev("window.__bobFrontmatterTakeover.setCursor(" + JSON.stringify(ctx.main) + ", " + cursorStartIndex + ", 0)");
         await ctx.page.keys("Escape");
         await ctx.page.keys("g");
@@ -1068,8 +1086,8 @@ async function run(args) {
           return { lineNumber: line.number - 1, lineText: line.text };
         })()`);
         const vimProbe = await ctx.page.probe(ctx.main);
-        if (!cursorPlaced?.ok || visibleBodyIndex < 0 || cursorAfter?.lineNumber < visibleBodyIndex
-          || cursorAfter?.lineText === "---" || String(cursorAfter?.lineText || "").startsWith("#")) {
+        if (!cursorPlaced?.ok || visibleBodyIndex < 0 || cursorAfter?.lineNumber !== visibleBodyIndex
+          || cursorAfter?.lineText !== sourceLines[visibleBodyIndex]) {
           failures.push(row.title + ": k/gg/Up landed in hidden YAML/title content instead of visible body text");
         }
         if (vimProbe.activeInside) failures.push(row.title + ": Vim navigation focused hidden native Properties");

@@ -38,6 +38,7 @@ try {
       HOME_CARD_HOST_KIND,
       HOME_CARD_READING_PRIORITY,
       HOME_CARD_SURFACE_CLASS,
+      homeCardFirstVisibleBodyLineIndex,
       homeCardLinkPane,
       homeCardIsDesktopPlatform,
       homeCardScopeDenied,

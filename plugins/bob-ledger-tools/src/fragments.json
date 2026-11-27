@@ -240,6 +240,7 @@
   "249ca-plugin-home-card-property-editor-routing.js",
   "249d-plugin-home-card-host.js",
   "249da-plugin-home-card-ownership.js",
+  "249db-plugin-home-card-vim-navigation.js",
   "249e-plugin-home-card-foot.js",
   "249f-plugin-home-card-live.js",
   "249g-plugin-notebook-card-model.js",

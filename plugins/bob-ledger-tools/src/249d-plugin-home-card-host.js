@@ -100,6 +100,7 @@ class BobLedgerToolsHomeCardMixin {
   }
 
   setupHomeCard() {
+    this.homeCardRegisterVisibleBodyNavigation();
     this.homePropertyCardHost().setup();
   }
 

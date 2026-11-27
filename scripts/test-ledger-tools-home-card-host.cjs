@@ -415,6 +415,45 @@ function makeHostPlugin(extra = {}) {
   return plugin;
 }
 
+test("visible body navigation skips frontmatter, its separator, and an owned title", () => {
+  const cmDoc = (lines) => ({
+    lines: lines.length,
+    line(number) { return { number, text: lines[number - 1] || "" }; },
+  });
+  const area = cmDoc(["---", "type: [[area]]", "parent: [[area]]", "aliases: [Work]", "summary: test", "date: 2026-11-20", "created: 2026-11-11", "---", "", "# Hidden Area Heading", "", "Visible Area body text."]);
+  const project = cmDoc(["---", "type: [[project]]", "parent: [[work]]", "summary: test", "created: 2026-11-11", "---", "", "- [ ] #task #prj Launch ^prj"]);
+  assert.equal(H.homeCardFirstVisibleBodyLineIndex(area, 7, 9), 11);
+  assert.equal(H.homeCardFirstVisibleBodyLineIndex(project, 5, -1), 7);
+  assert.equal(H.homeCardFirstVisibleBodyLineIndex(cmDoc(["---", "type: [[area]]", "---"]), 2, -1), -1);
+});
+
+test("home-card gg and Up stop at visible body text without swallowing insert-mode g", () => {
+  const plugin = makeHostPlugin({ app: { vault: { getConfig: () => true } } });
+  plugin.homeCardLivePath = () => "work.md";
+  plugin.homeCardVisibleBodyLine = () => ({ from: 40 });
+  const scope = { classList: { contains: () => true }, querySelector: () => ({}) };
+  const view = {
+    dom: scope,
+    state: { selection: { main: { head: 40 } } },
+    dispatch(spec) { this.state.selection.main.head = spec.selection.anchor; },
+  };
+  const key = (name) => {
+    const event = { key: name, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }, stopPropagation() {} };
+    return { event, handled: plugin.homeCardHandleVisibleBodyNavigation(event, view) };
+  };
+
+  assert.equal(key("Escape").handled, false);
+  assert.equal(key("g").handled, false);
+  assert.equal(key("g").handled, true);
+  assert.equal(view.state.selection.main.head, 40);
+  assert.equal(key("ArrowUp").handled, true);
+  assert.equal(view.state.selection.main.head, 40);
+
+  key("i");
+  assert.equal(key("g").handled, false);
+  assert.equal(key("g").handled, false);
+});
+
 test("inbox route API is the only inbox authority", () => {
   const plugin = makeHostPlugin({
     app: {

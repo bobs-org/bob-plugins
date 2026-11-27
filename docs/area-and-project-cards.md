@@ -119,6 +119,7 @@ and Reading view alike. The decoration touches only that line, never moves the
 cursor, and is removed on unmount or in Source mode.
 
 For album and Record cards, see [Album Cards](albums.md) and
-[Record Card](record-card.md). For notebook and prose title cards, see
-[Notebook Card](notebook-card.md) and [Prose Card](prose-card.md). For editing
-YAML properties, see the [Property Editor](property-editor.md).
+[Record Card](record-card.md). For notebook, prose, and reference title cards,
+see [Notebook Card](notebook-card.md), [Prose Card](prose-card.md), and
+[Ref Card](ref-card.md). For editing YAML properties, see the
+[Property Editor](property-editor.md).

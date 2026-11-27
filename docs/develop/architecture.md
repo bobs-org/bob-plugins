@@ -212,9 +212,14 @@ owned its title in bank-title and no longer uses the badge.) It is never a
 heading, and outside a card it falls back to neutral ink.
 `propertyCardNoteSpecies` resolves note ownership in Bob's order: bank path,
 album, record, Area or Project, day/week/quarter/year, notebook, prose, ref,
-then none. Notebook and Prose use `props_v1` alone and do not require
+then none. Notebook, Prose, and Ref use `props_v1` alone and do not require
 `props_contract_v1`. The Prose Card owns only its inline title; body headings
-remain visible. Ref Cards keep their ref-owned preview gate.
+remain visible. Ref, the last species in precedence, registers `==` as an
+extension: the Reference editor under `props_ref_contract_v1`, else
+focus-or-add on `title`. It hides a matching first H1 like the other
+title-owning cards. Notebook and Prose shipped behind the `cardPreviewKinds`
+preview gate and Ref behind its own `refCardPreview` gate; both gates and
+their keys were deleted at go-live, so stale keys in plugin data are ignored.
 The Area and Project hosts own one title and one shared Properties foot when
 `props_v1`, `props_contract_v1`, source/cache evidence, and editor routing are confirmed.
 They keep the Project's `^prj` line as its editable control. `bank.md` is

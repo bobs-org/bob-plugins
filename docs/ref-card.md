@@ -71,3 +71,9 @@ generic `props_v1` source and ownership checks pass; uncertain metadata or owner
 keeps native Properties visible. The managed reading-task embed remains visible below
 the card as its editable control. Painting, folding, and resizing never spawn Bob or
 write the note or PDF.
+
+The [Reading Board](https://bobs-org.github.io/ref/#reading-board-in-obsidian) uses
+the same lane and kind words for the reading queue. For loose properties, use the
+[Property Editor](property-editor.md); for sibling title cards, see
+[Notebook Card](notebook-card.md), [Prose Card](prose-card.md), and
+[Area and Project Cards](area-and-project-cards.md).

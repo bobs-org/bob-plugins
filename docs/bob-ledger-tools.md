@@ -7,6 +7,7 @@ Renders task, Pomodoro, freshness, and planning information from Bob notes.
 
 Cards: [Album cards](albums.md), [Record Card](record-card.md),
 [Day and Period Cards](intention-card.md), [Area and Project Cards](area-and-project-cards.md),
+[Notebook Card](notebook-card.md), [Prose Card](prose-card.md), [Ref Card](ref-card.md),
 [Bank](https://bobs-org.github.io/bank/); [Property Editor](property-editor.md).
 
 <!-- BEGIN GENERATED: facts -->
@@ -623,10 +624,9 @@ previews never show standalone cards; embedded stored callouts still paint.
 
 ## Areas
 
-One card per host; standalone only without a stored callout. Row links open
-the area. Embeds and hover previews never show standalone cards; embedded
-stored callouts still paint. Unexpected workspace scroll resets to zero and
-logs a diagnostic.
+Hosting, embed, and hover rules match the projects catalog card. Row links
+open the area. Unexpected workspace scroll resets to zero and logs a
+diagnostic.
 
 ## Gmail open hint
 

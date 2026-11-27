@@ -357,6 +357,33 @@ xvfb-run -a node --experimental-websocket scripts/obsidian-copy-chips-e2e.cjs \
   --out /tmp/copy-chips-e2e
 ```
 
+## Section Map preview
+
+`scripts/preview-section-map.cjs` renders the production Section Map painter
+(`createSectionMapHost` from `src/474-section-map-view.js`) plus
+`plugins/bob-navigation-hotkeys/styles.css` in headless Chromium. Models come
+from the built bundle's `buildSectionMapModel`, and placement comes from the
+production `computeSectionMapPlacement` over the fixture pane's measured
+rects, so the PNGs show what the shipped code paints. The page captures nine
+scenes in light and dark: margin mode with the from-ring and both chips, a
+windowed 42-heading note in overlay mode, a wrap on a 3-heading daily note,
+the compact strip, the only-section state, odd and untitled labels, a
+two-press mid-slide (re-measured after the 140 ms pill slide settles), a
+Notice nudging the overlay card, and reduced motion. It fails when the card
+does not paint, escapes the pane, clips a row, misses the current row with
+the pill, shows the wrong mode, renders the only-section counter wrong, lets
+the compact strip exceed one line, or when body ink falls under 4.5:1 on the
+surface in either theme. Set `CHROMIUM_PATH` when no Chrome is on `PATH`:
+
+```bash
+node scripts/preview-section-map.cjs --out /tmp/section-map-preview
+```
+
+`scripts/test-navigation-section-map-view.cjs` covers the same painter and
+placement in a fake DOM (mode boundaries, keyed reconciliation, slide versus
+crossfade, chips, ring, gaps, compact content, entrance replay, hostile
+labels, malformed models) and runs in `npm test`; it is not acceptance.
+
 ## Prose-field walkthrough
 
 `scripts/obsidian-prose-field-e2e.cjs` drives `[[` completion through the real

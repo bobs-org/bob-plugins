@@ -177,6 +177,7 @@
   "469-ctrl-modifiers.js",
   "470-keydown-and-freshness.js",
   "473-window-hint-view.js",
+  "474-section-map-view.js",
   "475-leaf-switch-guard.js",
   "480-review-jump-and-nav-api.js",
   "480a-task-scope-api.js",

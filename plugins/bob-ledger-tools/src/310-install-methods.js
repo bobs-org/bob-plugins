@@ -178,6 +178,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsGmailSyncMixin,
   BobLedgerToolsPeriodNotesMixin,
   BobLedgerToolsNavGroupsMixin,
+  BobLedgerToolsNavGroupsTreeMixin,
   BobLedgerToolsIntentionCardMixin,
   BobLedgerToolsIntentionCardGroupRailMixin,
   BobLedgerToolsIntentionCardTitleSlotMixin,

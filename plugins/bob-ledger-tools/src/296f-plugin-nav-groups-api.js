@@ -9,6 +9,9 @@ class BobLedgerToolsNavGroupsMixin {
   setupNavGroups() {
     if (this.navGroupsSetupDone === true) return;
     this.navGroupsSetupDone = true;
+    try {
+      if (typeof this.setupNavGroupsTree === "function") this.setupNavGroupsTree();
+    } catch (_) {}
     this.navGroupsAdoptedYearsCache = null;
     const watch = () => {
       const vault = this.app && this.app.vault;
@@ -36,6 +39,9 @@ class BobLedgerToolsNavGroupsMixin {
   }
 
   teardownNavGroups() {
+    try {
+      if (typeof this.teardownNavGroupsTree === "function") this.teardownNavGroupsTree();
+    } catch (_) {}
     this.navGroupsAdoptedYearsCache = null;
     this.navGroupsSetupDone = false;
   }
@@ -132,6 +138,13 @@ class BobLedgerToolsNavGroupsMixin {
       if (invalid) return invalid;
       const record = navGroupsRecordResolve(this, request);
       if (record) return record;
+      let tree = null;
+      try {
+        if (typeof this.navGroupsTreeResolve === "function") tree = this.navGroupsTreeResolve(request);
+      } catch (_) {
+        tree = null;
+      }
+      if (tree) return tree;
       const today = this.navGroupsTodayText();
       if (!today) return Object.freeze({ ok: false, reason: "unavailable" });
       return navGroupsCalendarResolve(request.path, {

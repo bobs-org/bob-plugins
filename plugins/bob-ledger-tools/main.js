@@ -193595,7 +193595,9 @@ function navGroupsOk(fields) {
     ok: true,
     route: fields.route == null ? null : fields.route,
     kind: fields.kind == null ? null : fields.kind,
+    lane: fields.lane == null ? null : fields.lane,
     step: fields.step || null,
+    stepNone: fields.stepNone || null,
     group: fields.group || null,
     prevGroup: fields.prevGroup || null,
     nextGroup: fields.nextGroup || null,
@@ -193936,6 +193938,9 @@ class BobLedgerToolsNavGroupsMixin {
   setupNavGroups() {
     if (this.navGroupsSetupDone === true) return;
     this.navGroupsSetupDone = true;
+    try {
+      if (typeof this.setupNavGroupsTree === "function") this.setupNavGroupsTree();
+    } catch (_) {}
     this.navGroupsAdoptedYearsCache = null;
     const watch = () => {
       const vault = this.app && this.app.vault;
@@ -193963,6 +193968,9 @@ class BobLedgerToolsNavGroupsMixin {
   }
 
   teardownNavGroups() {
+    try {
+      if (typeof this.teardownNavGroupsTree === "function") this.teardownNavGroupsTree();
+    } catch (_) {}
     this.navGroupsAdoptedYearsCache = null;
     this.navGroupsSetupDone = false;
   }
@@ -194059,6 +194067,13 @@ class BobLedgerToolsNavGroupsMixin {
       if (invalid) return invalid;
       const record = navGroupsRecordResolve(this, request);
       if (record) return record;
+      let tree = null;
+      try {
+        if (typeof this.navGroupsTreeResolve === "function") tree = this.navGroupsTreeResolve(request);
+      } catch (_) {
+        tree = null;
+      }
+      if (tree) return tree;
       const today = this.navGroupsTodayText();
       if (!today) return Object.freeze({ ok: false, reason: "unavailable" });
       return navGroupsCalendarResolve(request.path, {
@@ -194176,6 +194191,1376 @@ function navGroupsRecordResolve(plugin, request) {
     prevGroup: navGroupsRecordStop(model.prevGroup, plugin),
     nextGroup: navGroupsRecordStop(model.nextGroup, plugin),
   });
+}
+// ---- src/296h-plugin-nav-groups-tree-model.js ----
+// Derived tree-note sibling rings and the outline-ordered parent tour for
+// api.navGroups v1 (bob-cli-ra engine). Pure: no DOM, no app access, never
+// throws, never writes, never spawns. Callers pass file lists, per-file
+// caches, and a link resolver; every function returns frozen values or null.
+//
+// A note joins the walk when propertyCardNoteSpecies says area, project,
+// notebook, or prose. A ring holds one type, one resolved parent path, and
+// (for projects) one lane. Groups are the occupied parents in outline
+// order: a pre-order traversal keyed by (kindRank, foldedLabel, path).
+
+const NAV_GROUPS_TREE_KINDS = Object.freeze(["area", "project", "notebook", "prose"]);
+const NAV_GROUPS_TREE_MAX_HOPS = 16;
+const NAV_GROUPS_TREE_SENTINEL_AREA = "area.md";
+const NAV_GROUPS_TREE_SENTINEL_PROJECT = "project.md";
+const NAV_GROUPS_TREE_SINGULAR = Object.freeze({
+  area: "area",
+  project: "project",
+  notebook: "notebook",
+  prose: "prose note",
+});
+const NAV_GROUPS_TREE_PLURAL = Object.freeze({
+  area: "areas",
+  project: "projects",
+  notebook: "notebooks",
+  prose: "prose notes",
+});
+const NAV_GROUPS_TREE_INDEXING = Object.freeze({
+  reason: "indexing",
+  message: "Link walk is indexing",
+});
+
+function navGroupsTreeIsKind(kind) {
+  return kind === "area" || kind === "project" || kind === "notebook" || kind === "prose";
+}
+
+function navGroupsTreeKindRank(kind) {
+  if (kind === "area") return 0;
+  if (kind === "project") return 1;
+  if (kind === "notebook") return 2;
+  if (kind === "prose") return 3;
+  return 4;
+}
+
+function navGroupsTreeFolded(text) {
+  try {
+    return String(text == null ? "" : text).toLowerCase();
+  } catch (_) {
+    return "";
+  }
+}
+
+function navGroupsTreeStem(path) {
+  try {
+    const text = String(path == null ? "" : path).replace(/\\/g, "/");
+    const base = text.split("/").pop() || "";
+    return base.replace(/\.md$/i, "");
+  } catch (_) {
+    return "";
+  }
+}
+
+function navGroupsTreeHumanizeStem(stem) {
+  try {
+    if (typeof notebookCardHumanizeStem === "function") return notebookCardHumanizeStem(stem);
+  } catch (_) {}
+  try {
+    return String(stem == null ? "" : stem).replace(/[^A-Za-z0-9]+/g, " ").trim();
+  } catch (_) {
+    return "";
+  }
+}
+
+// Titles that provably survive propertyCardCleanInlineText unchanged:
+// no wikilinks, no escapes, single internal spaces, no edge whitespace.
+const NAV_GROUPS_TREE_PLAIN_TITLE_RE = /^[^\s[\\]+(?: [^\s[\\]+)*$/;
+
+function navGroupsTreePlainTitle(text) {
+  try {
+    if (typeof text !== "string" || !text) return "";
+    if (NAV_GROUPS_TREE_PLAIN_TITLE_RE.test(text)) return text;
+  } catch (_) {}
+  return "";
+}
+
+function navGroupsTreeFirstAlias(frontmatter) {
+  try {
+    const aliases = frontmatter && frontmatter.aliases;
+    const list = Array.isArray(aliases) ? aliases : [aliases];
+    let seen = false;
+    let allPlain = true;
+    let first = "";
+    for (const value of list) {
+      if (typeof value !== "string" || !value) continue;
+      if (!seen) {
+        seen = true;
+        first = value;
+      }
+      if (!NAV_GROUPS_TREE_PLAIN_TITLE_RE.test(value)) {
+        allPlain = false;
+        break;
+      }
+    }
+    if (seen && allPlain) return first;
+    if (typeof propertyCardFirstAlias === "function") {
+      const alias = propertyCardFirstAlias(frontmatter && frontmatter.aliases);
+      if (alias) return String(alias).trim();
+    }
+  } catch (_) {}
+  try {
+    const aliases = frontmatter && frontmatter.aliases;
+    if (typeof aliases === "string" && aliases.trim()) return aliases.trim();
+    if (Array.isArray(aliases)) {
+      for (const entry of aliases) {
+        if (typeof entry === "string" && entry.trim()) return entry.trim();
+      }
+    }
+  } catch (_) {}
+  return "";
+}
+
+function navGroupsTreeSpecies(path, frontmatter, today) {
+  try {
+    if (typeof propertyCardNoteSpecies !== "function") return null;
+    const kind = propertyCardNoteSpecies({ path, frontmatter: frontmatter || {}, today });
+    return navGroupsTreeIsKind(kind) ? kind : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+// Fast membership with verdicts identical to navGroupsTreeSpecies,
+// ordered to match propertyCardNoteSpecies (bank; exclusions; album;
+// record; home; temporal; notebook; prose). The path-independent type
+// work is memoized by the caller per distinct frontmatter type value; the
+// temporal check runs only for notebook/prose-typed notes whose path could
+// match a period pattern (every temporal match carries a 4-digit year).
+
+function navGroupsTreeExcludedFast(path) {
+  try {
+    return navGroupsTreeExcludedFastNormalized(navGroupsNormalizePath(path));
+  } catch (_) {
+    return true;
+  }
+}
+
+function navGroupsTreeExcludedFastNormalized(normalized) {
+  try {
+    const raw = String(normalized == null ? "" : normalized);
+    if (!raw) return true;
+    if (raw === "area.md" || raw === "project.md" || raw === "dash.md") return true;
+    const head = raw.slice(0, 7).toLowerCase();
+    if (head === "bank.md") return true;
+    const segments = raw.split("/");
+    for (const segment of segments) {
+      if (!segment || segment === "." || segment === "..") continue;
+      if (segment === "done") return true;
+      break;
+    }
+    for (let index = 0; index < segments.length - 1; index += 1) {
+      const segment = segments[index];
+      if (
+        segment === "_templates" || segment === "_conflicts"
+        || segment === ".git" || segment === ".obsidian" || segment === "_generated"
+      ) return true;
+    }
+  } catch (_) {
+    return true;
+  }
+  return false;
+}
+
+// One pass over the raw vault path: canonical form (identical to
+// navGroupsNormalizePath), the stem, and the exclusion verdict. The index
+// build runs this once per file instead of three separate walks.
+function navGroupsTreeScanPath(path) {
+  try {
+    let text = String(path == null ? "" : path);
+    if (text.indexOf("\\") !== -1) text = text.split("\\").join("/");
+    let start = 0;
+    while (text.startsWith("./", start)) start += 2;
+    while (text[start] === "/") start += 1;
+    if (start > 0) text = text.slice(start);
+    if (text.endsWith("/")) text = text.slice(0, -1);
+    if (!text) return { normalized: "", stem: "", excluded: true };
+    if (text.slice(-3).toLowerCase() !== ".md") text = text + ".md";
+    const normalized = text;
+    if (normalized === "area.md" || normalized === "project.md" || normalized === "dash.md") {
+      return { normalized, stem: normalized.slice(0, -3), excluded: true };
+    }
+    if (normalized.length === 7 && normalized.toLowerCase() === "bank.md") {
+      return { normalized, stem: normalized.slice(0, -3), excluded: true };
+    }
+    const segments = normalized.split("/");
+    for (const segment of segments) {
+      if (!segment || segment === "." || segment === "..") continue;
+      if (segment === "done") {
+        return { normalized, stem: segments[segments.length - 1].slice(0, -3), excluded: true };
+      }
+      break;
+    }
+    for (let index = 0; index < segments.length - 1; index += 1) {
+      const segment = segments[index];
+      if (
+        segment === "_templates" || segment === "_conflicts"
+        || segment === ".git" || segment === ".obsidian" || segment === "_generated"
+      ) {
+        return { normalized, stem: segments[segments.length - 1].slice(0, -3), excluded: true };
+      }
+    }
+    return { normalized, stem: segments[segments.length - 1].slice(0, -3), excluded: false };
+  } catch (_) {
+    return { normalized: "", stem: "", excluded: true };
+  }
+}
+
+function navGroupsTreeKindOfType(frontmatter) {
+  try {
+    const fm = frontmatter && typeof frontmatter === "object" && !Array.isArray(frontmatter)
+      ? frontmatter
+      : {};
+    if (typeof albumSchemaEntryKindOf === "function" && albumSchemaEntryKindOf(fm) === "album") {
+      return "other";
+    }
+    if (
+      typeof recordSheetIsCanonicalRecordType === "function"
+      && recordSheetIsCanonicalRecordType(fm) === true
+    ) {
+      return "other";
+    }
+    if (typeof pomodoroHomeType === "function") {
+      const home = pomodoroHomeType(fm);
+      if (home === "area" || home === "project") return home;
+    }
+    if (typeof noteCardIsNotebookKind === "function" && noteCardIsNotebookKind(fm) === true) {
+      return "notebook";
+    }
+    if (typeof noteCardIsProseKind === "function" && noteCardIsProseKind(fm) === true) {
+      return "prose";
+    }
+  } catch (_) {}
+  return "other";
+}
+
+function navGroupsTreeTypeKey(type) {
+  try {
+    if (type === undefined) return "u";
+    if (typeof type === "string") return "s:" + type;
+    return typeof type + ":" + JSON.stringify(type);
+  } catch (_) {
+    return null;
+  }
+}
+
+function navGroupsTreeMemoizedKindOfType(memo, frontmatter) {
+  try {
+    const fm = frontmatter && typeof frontmatter === "object" && !Array.isArray(frontmatter)
+      ? frontmatter
+      : {};
+    if (memo && typeof memo.get === "function" && typeof memo.set === "function") {
+      const key = navGroupsTreeTypeKey(fm.type);
+      if (key !== null) {
+        let kind = memo.get(key);
+        if (kind === undefined) {
+          kind = navGroupsTreeKindOfType(fm);
+          memo.set(key, kind);
+        }
+        return kind;
+      }
+    }
+  } catch (_) {}
+  return navGroupsTreeKindOfType(frontmatter);
+}
+
+function navGroupsTreeCouldBeTemporal(path) {
+  try {
+    return /\d{4}/.test(String(path == null ? "" : path));
+  } catch (_) {
+    return true;
+  }
+}
+
+function navGroupsTreeSpeciesFast(path, frontmatter, today, kindOfType) {
+  try {
+    return navGroupsTreeSpeciesFastNormalized(navGroupsNormalizePath(path), frontmatter, today, kindOfType);
+  } catch (_) {
+    return null;
+  }
+}
+
+function navGroupsTreeKindOfScan(scan, frontmatter, today, kindOfType) {
+  try {
+    if (!scan || !scan.normalized || scan.excluded) return null;
+    const fm = frontmatter && typeof frontmatter === "object" && !Array.isArray(frontmatter)
+      ? frontmatter
+      : {};
+    const classify = typeof kindOfType === "function"
+      ? kindOfType(fm)
+      : navGroupsTreeKindOfType(fm);
+    if (
+      classify !== "area" && classify !== "project"
+      && classify !== "notebook" && classify !== "prose"
+    ) return null;
+    if (
+      (classify === "notebook" || classify === "prose")
+      && navGroupsTreeCouldBeTemporal(scan.normalized)
+    ) {
+      try {
+        if (
+          typeof intentionCardSubjectForPath === "function"
+          && intentionCardSubjectForPath(scan.normalized, today)
+        ) return null;
+      } catch (_) {}
+    }
+    return classify;
+  } catch (_) {
+    return null;
+  }
+}
+
+function navGroupsTreeSpeciesFastNormalized(normalized, frontmatter, today, kindOfType) {
+  try {
+    if (!normalized) return null;
+    const scan = navGroupsTreeScanPath(normalized);
+    if (!scan.normalized || scan.excluded) return null;
+    return navGroupsTreeKindOfScan(scan, frontmatter, today, kindOfType);
+  } catch (_) {
+    return null;
+  }
+}
+
+// Display label per the Order table: stem for areas and projects, the
+// first H1 (then alias, then humanized stem) for notebooks, and the prose
+// title parts (title, then alias, then stem) for prose.
+function navGroupsTreeLabelFor(kind, path, frontmatter, fileCache, stem) {
+  try {
+    const fm = frontmatter && typeof frontmatter === "object" && !Array.isArray(frontmatter)
+      ? frontmatter
+      : {};
+    const noteStem = typeof stem === "string" ? stem : navGroupsTreeStem(path);
+    if (kind === "notebook") {
+      const headings = fileCache && Array.isArray(fileCache.headings) ? fileCache.headings : [];
+      for (const entry of headings) {
+        if (entry && entry.level === 1 && typeof entry.heading === "string" && entry.heading.trim()) {
+          return entry.heading.trim();
+        }
+      }
+      const alias = navGroupsTreeFirstAlias(fm);
+      if (alias) return alias;
+      return navGroupsTreeHumanizeStem(noteStem) || noteStem;
+    }
+    if (kind === "prose") {
+      const plain = navGroupsTreePlainTitle(fm.title);
+      if (plain) return plain;
+      if (typeof proseNoteCardTitleParts === "function") {
+        const parts = proseNoteCardTitleParts(fm, path);
+        if (parts && typeof parts.text === "string" && parts.text.trim()) return parts.text.trim();
+      } else {
+        if (typeof fm.title === "string" && fm.title.trim()) return fm.title.trim();
+        const alias = navGroupsTreeFirstAlias(fm);
+        if (alias) return alias;
+      }
+      return noteStem;
+    }
+    return noteStem;
+  } catch (_) {
+    return navGroupsTreeStem(path);
+  }
+}
+
+// Project lanes come from the metadata cache: the cache.blocks.prj line
+// names a source line, and the listItems entry on that line carries the
+// checkbox char. x, X, or - is closed; anything else (including a missing
+// or unreadable ^prj) is open.
+function navGroupsTreeLaneFromCache(fileCache) {
+  try {
+    const cache = fileCache && typeof fileCache === "object" ? fileCache : null;
+    const blocks = cache && cache.blocks && typeof cache.blocks === "object" ? cache.blocks : null;
+    if (!blocks || !Object.prototype.hasOwnProperty.call(blocks, "prj")) return "open";
+    const block = blocks.prj;
+    const start = block && block.position && block.position.start;
+    if (!start || !Number.isInteger(start.line)) return "open";
+    const items = Array.isArray(cache.listItems) ? cache.listItems : [];
+    for (const item of items) {
+      if (!item || typeof item !== "object") continue;
+      const itemStart = item.position && item.position.start;
+      if (!itemStart || itemStart.line !== start.line) continue;
+      const task = typeof item.task === "string" ? item.task : "";
+      return task === "x" || task === "X" || task === "-" ? "closed" : "open";
+    }
+    return "open";
+  } catch (_) {
+    return "open";
+  }
+}
+
+function navGroupsTreeNormalizeTargetFast(raw) {
+  try {
+    if (typeof raw !== "string") return null;
+    const text = raw.trim();
+    const match = /^\[\[([^\]]+)\]\]$/.exec(text);
+    if (!match) return null;
+    const inner = String(match[1] || "").split("|")[0].trim();
+    const hash = inner.indexOf("#");
+    let target = (hash === -1 ? inner : inner.slice(0, hash)).trim();
+    if (/\.md$/i.test(target)) target = target.slice(0, -3);
+    return target.trim() || "";
+  } catch (_) {
+    return null;
+  }
+}
+
+function navGroupsTreeNormalizeTarget(raw) {
+  try {
+    const fast = navGroupsTreeNormalizeTargetFast(raw);
+    if (typeof fast === "string" && fast) return fast;
+    if (typeof raw === "string" && raw.trim()) return "";
+    if (typeof homeCardParentTarget === "function") {
+      const target = homeCardParentTarget(raw);
+      if (typeof target === "string" && target.trim()) return target.trim();
+    }
+  } catch (_) {}
+  try {
+    if (typeof raw !== "string") return "";
+    const match = /\[\[([^\]]+)\]\]/.exec(raw.trim());
+    if (!match) return "";
+    const inner = String(match[1] || "").split("|")[0] || "";
+    const hash = inner.indexOf("#");
+    let target = (hash === -1 ? inner : inner.slice(0, hash)).trim();
+    if (/\.md$/i.test(target)) target = target.slice(0, -3);
+    return target.trim();
+  } catch (_) {
+    return "";
+  }
+}
+
+// Classify the raw frontmatter parent before resolution: missing (absent,
+// blank, or a non-link scalar), list (any YAML sequence but Obsidian's
+// nested `[["x"]]` parse of an unquoted scalar wikilink), or a target.
+function navGroupsTreeClassifyParentRaw(raw) {
+  try {
+    if (raw === undefined || raw === null) return { status: "missing" };
+    if (typeof raw === "string") {
+      if (!raw.trim()) return { status: "missing" };
+      const target = navGroupsTreeNormalizeTarget(raw);
+      if (!target) return { status: "missing" };
+      return { status: "target", target };
+    }
+    if (Array.isArray(raw)) {
+      if (raw.length === 0) return { status: "missing" };
+      if (
+        raw.length === 1 && Array.isArray(raw[0]) && raw[0].length === 1
+        && typeof raw[0][0] === "string"
+      ) {
+        const target = navGroupsTreeNormalizeTarget(raw);
+        if (!target) return { status: "missing" };
+        return { status: "target", target };
+      }
+      return { status: "list" };
+    }
+    return { status: "missing" };
+  } catch (_) {
+    return { status: "missing" };
+  }
+}
+
+// Classify results repeat per vault (few distinct parent values across
+// thousands of notes). The caller threads one map through a whole build;
+// single-file callers omit it.
+function navGroupsTreeClassifyParentMemo(raw, memo) {
+  try {
+    if (typeof raw === "string" && memo && typeof memo.get === "function" && typeof memo.set === "function") {
+      let hit = memo.get(raw);
+      if (hit === undefined) {
+        hit = navGroupsTreeClassifyParentRaw(raw);
+        memo.set(raw, hit);
+      }
+      return hit;
+    }
+  } catch (_) {}
+  return navGroupsTreeClassifyParentRaw(raw);
+}
+
+function navGroupsTreeIsSentinelPath(path) {
+  try {
+    const normalized = navGroupsNormalizePath(path);
+    return normalized === NAV_GROUPS_TREE_SENTINEL_AREA || normalized === NAV_GROUPS_TREE_SENTINEL_PROJECT;
+  } catch (_) {
+    return false;
+  }
+}
+
+// One unresolved node per scanned file. Resolution, cycle detection, and
+// ring/tour building run in later passes over the table. Pass a memoized
+// kindOfType over many files; a single file can omit it.
+function navGroupsTreeNodeFor(path, fileCache, today, kindOfType) {
+  try {
+    const scan = navGroupsTreeScanPath(path);
+    if (!scan.normalized) return null;
+    const normalized = scan.normalized;
+    const cache = fileCache && typeof fileCache === "object" ? fileCache : {};
+    const frontmatter = cache.frontmatter && typeof cache.frontmatter === "object" && !Array.isArray(cache.frontmatter)
+      ? cache.frontmatter
+      : {};
+    const kind = navGroupsTreeKindOfScan(scan, frontmatter, today, kindOfType);
+    const lane = kind === "project" ? navGroupsTreeLaneFromCache(cache) : null;
+    const label = kind
+      ? navGroupsTreeLabelFor(kind, normalized, frontmatter, cache, scan.stem)
+      : scan.stem;
+    let parentRaw = null;
+    try {
+      parentRaw = Object.prototype.hasOwnProperty.call(frontmatter, "parent")
+        ? frontmatter.parent
+        : undefined;
+    } catch (_) {
+      parentRaw = undefined;
+    }
+    return {
+      path: normalized,
+      kind,
+      lane,
+      label,
+      folded: navGroupsTreeFolded(label),
+      stem: scan.stem,
+      parentRaw,
+      parentStatus: "missing",
+      parentTarget: "",
+      parentPath: "",
+      parentReason: "no-parent",
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
+function navGroupsTreeProblemReason(status) {
+  if (status === "missing") return "no-parent";
+  if (status === "list") return "list-parent";
+  if (status === "unresolved") return "unresolved-parent";
+  if (status === "self" || status === "cycle") return status === "self" ? "self-parent" : "cycle";
+  return null;
+}
+
+// Resolve every node's parent link against the vault. Identity is the
+// resolved vault path; the root area.md and project.md type notes are
+// sentinel group parents, never members and never navigable targets.
+function navGroupsTreeResolveParents(nodes, resolveLink, classifyMemo) {
+  try {
+    const resolve = typeof resolveLink === "function" ? resolveLink : null;
+    for (const node of nodes.values()) {
+      try {
+        const classified = navGroupsTreeClassifyParentMemo(node.parentRaw, classifyMemo);
+        if (classified.status === "missing") {
+          node.parentStatus = "missing";
+          node.parentTarget = "";
+          node.parentPath = "";
+          node.parentReason = "no-parent";
+          continue;
+        }
+        if (classified.status === "list") {
+          node.parentStatus = "list";
+          node.parentTarget = "";
+          node.parentPath = "";
+          node.parentReason = "list-parent";
+          continue;
+        }
+        const target = classified.target;
+        let resolved = "";
+        try {
+          resolved = resolve ? String(resolve(target, node.path) || "") : "";
+        } catch (_) {
+          resolved = "";
+        }
+        const normalized = resolved ? navGroupsNormalizePath(resolved) : "";
+        if (!normalized) {
+          node.parentStatus = "unresolved";
+          node.parentTarget = target;
+          node.parentPath = "";
+          node.parentReason = "unresolved-parent";
+          continue;
+        }
+        if (normalized.toLowerCase() === node.path.toLowerCase()) {
+          node.parentStatus = "self";
+          node.parentTarget = target;
+          node.parentPath = normalized;
+          node.parentReason = "self-parent";
+          continue;
+        }
+        if (normalized === "area.md" || normalized === "project.md") {
+          node.parentStatus = "sentinel";
+          node.parentTarget = target;
+          node.parentPath = normalized;
+          node.parentReason = null;
+          continue;
+        }
+        node.parentStatus = "ok";
+        node.parentTarget = target;
+        node.parentPath = normalized;
+        node.parentReason = null;
+      } catch (_) {
+        node.parentStatus = "missing";
+        node.parentTarget = "";
+        node.parentPath = "";
+        node.parentReason = "no-parent";
+      }
+    }
+    // A parent chain that returns to the note itself within 16 hops is a
+    // cycle. A cycle farther up the chain never suppresses the note's ring.
+    // Walks read live table entries but verdicts apply afterwards, so
+    // sibling verdicts never depend on table order: y and z flag each other
+    // in the same pass.
+    const cyclic = [];
+    for (const node of nodes.values()) {
+      try {
+        if (!node.kind) continue;
+        if (node.parentStatus !== "ok" || !node.parentPath) continue;
+        const own = node.path.toLowerCase();
+        const seen = new Set([own]);
+        let current = node.parentPath;
+        for (let hop = 0; hop < NAV_GROUPS_TREE_MAX_HOPS; hop += 1) {
+          if (!current) break;
+          const key = String(current).toLowerCase();
+          if (key === own) {
+            cyclic.push(node);
+            break;
+          }
+          if (seen.has(key)) break;
+          seen.add(key);
+          const next = nodes.get(current);
+          if (!next || next.parentStatus !== "ok" || !next.parentPath) break;
+          current = next.parentPath;
+        }
+      } catch (_) {}
+    }
+    for (const node of cyclic) {
+      try {
+        node.parentStatus = "cycle";
+        node.parentReason = "cycle";
+      } catch (_) {}
+    }
+  } catch (_) {}
+}
+
+function navGroupsTreeLookup(nodes, path) {
+  try {
+    if (!nodes || typeof nodes.get !== "function") return null;
+    const exact = nodes.get(path);
+    if (exact) return exact;
+    const lower = String(path || "").toLowerCase();
+    for (const node of nodes.values()) {
+      if (node && String(node.path || "").toLowerCase() === lower) return node;
+    }
+  } catch (_) {}
+  return null;
+}
+
+function navGroupsTreeRingKey(kind, lane, parentPath) {
+  return kind + "|" + (kind === "project" ? lane || "open" : "") + "|" + parentPath;
+}
+
+function navGroupsTreeUniverseKey(kind, lane) {
+  return kind + "|" + (kind === "project" ? lane || "open" : "");
+}
+
+function navGroupsTreeCompareMembers(left, right) {
+  try {
+    const aFolded = left && typeof left.folded === "string" ? left.folded : "";
+    const bFolded = right && typeof right.folded === "string" ? right.folded : "";
+    if (aFolded < bFolded) return -1;
+    if (aFolded > bFolded) return 1;
+    const aPath = left && typeof left.path === "string" ? left.path : "";
+    const bPath = right && typeof right.path === "string" ? right.path : "";
+    if (aPath < bPath) return -1;
+    if (aPath > bPath) return 1;
+  } catch (_) {}
+  return 0;
+}
+
+// Ring building: members sharing type, resolved parent, and lane, in
+// catalog order (folded label, then path).
+function navGroupsTreeBuildRings(nodes) {
+  const rings = new Map();
+  try {
+    for (const node of nodes.values()) {
+      try {
+        if (!node || !node.kind) continue;
+        if (node.parentStatus !== "ok" && node.parentStatus !== "sentinel") continue;
+        const key = navGroupsTreeRingKey(node.kind, node.lane, node.parentPath);
+        if (!rings.has(key)) rings.set(key, []);
+        rings.get(key).push(node);
+      } catch (_) {}
+    }
+    for (const ring of rings.values()) ring.sort(navGroupsTreeCompareMembers);
+  } catch (_) {}
+  return rings;
+}
+
+// Outline key for one occupied parent: the (kindRank, foldedLabel, path)
+// list from its topmost reachable ancestor down to itself. Sentinels key
+// empty and stop the walk, as do unresolved or list parents, repeats, and
+// 16 hops.
+function navGroupsTreeOutlineKeyFor(parentPath, nodes) {
+  try {
+    if (navGroupsTreeIsSentinelPath(parentPath)) return [];
+    const parts = [];
+    const seen = new Set();
+    let current = parentPath;
+    for (let hop = 0; hop < NAV_GROUPS_TREE_MAX_HOPS && current; hop += 1) {
+      if (navGroupsTreeIsSentinelPath(current)) break;
+      const key = String(current).toLowerCase();
+      if (seen.has(key)) break;
+      seen.add(key);
+      const node = navGroupsTreeLookup(nodes, current);
+      const kind = node && node.kind ? node.kind : "other";
+      const folded = node && typeof node.folded === "string"
+        ? node.folded
+        : navGroupsTreeFolded(navGroupsTreeStem(current));
+      parts.push([navGroupsTreeKindRank(kind), folded, current]);
+      if (!node) break;
+      if (node.parentStatus === "sentinel") break;
+      if (node.parentStatus !== "ok" || !node.parentPath) break;
+      current = node.parentPath;
+    }
+    parts.reverse();
+    return parts;
+  } catch (_) {
+    return [];
+  }
+}
+
+function navGroupsTreeCompareKeys(left, right) {
+  try {
+    const a = Array.isArray(left) ? left : [];
+    const b = Array.isArray(right) ? right : [];
+    const length = Math.min(a.length, b.length);
+    for (let index = 0; index < length; index += 1) {
+      const x = a[index] || [];
+      const y = b[index] || [];
+      if (x[0] !== y[0]) return (x[0] || 0) - (y[0] || 0);
+      if (x[1] < y[1]) return -1;
+      if (x[1] > y[1]) return 1;
+      if (x[2] < y[2]) return -1;
+      if (x[2] > y[2]) return 1;
+    }
+    return a.length - b.length;
+  } catch (_) {
+    return 0;
+  }
+}
+
+// Tour building: the occupied parents per kind (and lane) in outline
+// order, each carrying its ring. Repeated ]N cycles this fixed ring.
+function navGroupsTreeBuildTours(nodes, rings) {
+  const tours = new Map();
+  try {
+    const byUniverse = new Map();
+    for (const [ringKey, ring] of rings) {
+      try {
+        if (!Array.isArray(ring) || ring.length === 0) continue;
+        const head = ring[0];
+        const universe = navGroupsTreeUniverseKey(head.kind, head.lane);
+        if (!byUniverse.has(universe)) byUniverse.set(universe, new Map());
+        byUniverse.get(universe).set(head.parentPath, ring);
+      } catch (_) {}
+    }
+    for (const [universe, families] of byUniverse) {
+      try {
+        const entries = [];
+        for (const [parentPath, ring] of families) {
+          entries.push({
+            parentPath,
+            key: navGroupsTreeOutlineKeyFor(parentPath, nodes),
+            ring,
+          });
+        }
+        entries.sort((left, right) => navGroupsTreeCompareKeys(left.key, right.key));
+        tours.set(universe, entries);
+      } catch (_) {}
+    }
+  } catch (_) {}
+  return tours;
+}
+
+// ---- src/296ha-plugin-nav-groups-tree-answer.js ----
+// Tree-note link-walk answers for api.navGroups v1 (bob-cli-ra engine):
+// stop and group shaping plus the reason/message table. Pure: no DOM,
+// no app access, never throws, never writes, never spawns. Continues
+// 296h-plugin-nav-groups-tree-model.js (same shared scope).
+
+function navGroupsTreeLabelOf(nodes, path) {
+  try {
+    const node = navGroupsTreeLookup(nodes, path);
+    if (node && typeof node.label === "string" && node.label) return node.label;
+  } catch (_) {}
+  return navGroupsTreeStem(path);
+}
+
+function navGroupsTreeParentLabel(nodes, node) {
+  try {
+    if (!node || node.parentStatus === "sentinel") return "Top level";
+    if (node.parentStatus === "ok" && node.parentPath) return navGroupsTreeLabelOf(nodes, node.parentPath);
+  } catch (_) {}
+  return "Top level";
+}
+
+function navGroupsTreeStop({ path, groupLabel, landingLabel, wraps }) {
+  return Object.freeze({
+    path,
+    target: navGroupsTarget(path),
+    groupLabel,
+    landingLabel,
+    shortLabel: landingLabel,
+    state: "exists",
+    ghostReason: null,
+    wraps: wraps === true,
+    source: "tree",
+  });
+}
+
+function navGroupsTreeNoParentMessage(stem) {
+  return stem + " has no parent — Ctrl+Shift+- sets one";
+}
+
+function navGroupsTreeListParentMessage(stem) {
+  return stem + "'s parent lists several notes — keep one";
+}
+
+function navGroupsTreeUnresolvedParentMessage(stem, target) {
+  return stem + "'s parent " + target + " is not in the vault";
+}
+
+function navGroupsTreeLoopMessage(stem) {
+  return stem + "'s parent chain loops back to " + stem;
+}
+
+function navGroupsTreeLaneWord(kind, lane) {
+  if (kind === "project") return (lane === "closed" ? "closed" : "open") + " ";
+  return "";
+}
+
+function navGroupsTreeOnlyChildMessage({ stem, parentLabel, kind, lane, nextParentLabel }) {
+  const singular = NAV_GROUPS_TREE_SINGULAR[kind] || kind;
+  let message = stem + " is " + parentLabel + "'s only " + navGroupsTreeLaneWord(kind, lane) + singular;
+  if (nextParentLabel) message += " — ]N visits " + nextParentLabel + "'s";
+  return message;
+}
+
+function navGroupsTreeSingleGroupMessage({ parentLabel, kind, lane }) {
+  const singular = NAV_GROUPS_TREE_SINGULAR[kind] || kind;
+  return parentLabel + " holds every " + navGroupsTreeLaneWord(kind, lane) + singular + " — ]n walks them";
+}
+
+function navGroupsTreeProblemMessage(node, parentLabel) {
+  try {
+    const stem = node && typeof node.stem === "string" ? node.stem : "";
+    const status = node && typeof node.parentStatus === "string" ? node.parentStatus : "missing";
+    if (status === "list") return navGroupsTreeListParentMessage(stem);
+    if (status === "unresolved") {
+      return navGroupsTreeUnresolvedParentMessage(stem, (node && node.parentTarget) || "");
+    }
+    if (status === "self" || status === "cycle") return navGroupsTreeLoopMessage(stem);
+    return navGroupsTreeNoParentMessage(stem);
+  } catch (_) {
+    return "Link walk is unavailable";
+  }
+}
+
+// Shape the full api.navGroups v1 tree answer for one member note, or
+// null when the path is not a walk member. Members with a malformed
+// parent get explicit stepNone + none reasons and no ring or tour.
+function navGroupsTreeAnswerFor(tables, path) {
+  try {
+    const nodes = tables && tables.nodes ? tables.nodes : null;
+    const rings = tables && tables.rings ? tables.rings : null;
+    const tours = tables && tables.tours ? tables.tours : null;
+    if (!nodes) return null;
+    const normalized = navGroupsNormalizePath(path);
+    const node = navGroupsTreeLookup(nodes, normalized);
+    if (!node || !navGroupsTreeIsKind(node.kind)) return null;
+    const kind = node.kind;
+    const lane = kind === "project" ? node.lane || "open" : null;
+    const problem = node.parentReason ? node.parentReason : null;
+    const parentLabel = navGroupsTreeParentLabel(nodes, node);
+    if (problem) {
+      const message = navGroupsTreeProblemMessage(node, parentLabel);
+      const tagged = Object.freeze({ reason: problem, message });
+      return navGroupsOk({
+        route: "tree",
+        kind,
+        lane,
+        step: navGroupsStep(null, null, null),
+        stepNone: tagged,
+        group: null,
+        prevGroup: null,
+        nextGroup: null,
+        none: tagged,
+      });
+    }
+    const sentinel = node.parentStatus === "sentinel";
+    const parentPath = node.parentPath ? node.parentPath : "";
+    const ring = (rings && rings.get(navGroupsTreeRingKey(kind, lane, parentPath))) || [node];
+    const position = Math.max(1, ring.findIndex((member) => member && member.path === node.path) + 1);
+    const size = ring.length;
+    const universe = navGroupsTreeUniverseKey(kind, lane);
+    const tour = (tours && tours.get(universe)) || [];
+    const tourIndex = Math.max(0, tour.findIndex((entry) => entry && entry.parentPath === parentPath));
+    const count = tour.length;
+    const singleGroup = count <= 1;
+
+    let prev = null;
+    let next = null;
+    if (size > 1) {
+      const prevMember = ring[(position - 2 + size) % size];
+      const nextMember = ring[position % size];
+      prev = navGroupsTreeStop({
+        path: prevMember.path,
+        groupLabel: parentLabel,
+        landingLabel: prevMember.label,
+        wraps: position === 1,
+      });
+      next = navGroupsTreeStop({
+        path: nextMember.path,
+        groupLabel: parentLabel,
+        landingLabel: nextMember.label,
+        wraps: position === size,
+      });
+    }
+    let parentStop = null;
+    if (!sentinel && parentPath) {
+      const parentNode = navGroupsTreeLookup(nodes, parentPath);
+      let grandLabel = navGroupsTreeLabelOf(nodes, parentPath);
+      try {
+        if (parentNode) {
+          if (parentNode.parentStatus === "sentinel") grandLabel = "Top level";
+          else if (parentNode.parentStatus === "ok" && parentNode.parentPath) {
+            grandLabel = navGroupsTreeLabelOf(nodes, parentNode.parentPath);
+          } else grandLabel = parentNode.label || grandLabel;
+        }
+      } catch (_) {}
+      parentStop = navGroupsTreeStop({
+        path: parentPath,
+        groupLabel: grandLabel,
+        landingLabel: navGroupsTreeLabelOf(nodes, parentPath),
+        wraps: false,
+      });
+    }
+    const stepNone = size > 1 ? null : Object.freeze({
+      reason: "only-child",
+      message: navGroupsTreeOnlyChildMessage({
+        stem: node.stem,
+        parentLabel,
+        kind,
+        lane,
+        nextParentLabel: singleGroup
+          ? ""
+          : navGroupsTreeParentLabelFromPath(nodes, tour[(tourIndex + 1) % count].parentPath),
+      }),
+    });
+    let prevGroup = null;
+    let nextGroup = null;
+    if (!singleGroup) {
+      const prevEntry = tour[(tourIndex - 1 + count) % count];
+      const nextEntry = tour[(tourIndex + 1) % count];
+      const prevFirst = prevEntry.ring[0];
+      const nextFirst = nextEntry.ring[0];
+      const prevLabel = navGroupsTreeParentLabelFromPath(nodes, prevEntry.parentPath);
+      const nextLabel = navGroupsTreeParentLabelFromPath(nodes, nextEntry.parentPath);
+      prevGroup = navGroupsTreeStop({
+        path: prevFirst.path,
+        groupLabel: prevLabel,
+        landingLabel: prevFirst.label,
+        wraps: tourIndex === 0,
+      });
+      nextGroup = navGroupsTreeStop({
+        path: nextFirst.path,
+        groupLabel: nextLabel,
+        landingLabel: nextFirst.label,
+        wraps: tourIndex === count - 1,
+      });
+    }
+    const members = Object.freeze(ring.map((member) => Object.freeze({
+      label: member.label,
+      path: member.path,
+      state: member.path === node.path ? "current" : "exists",
+    })));
+    const group = Object.freeze({
+      noun: "parent",
+      memberNoun: kind,
+      label: parentLabel,
+      shortLabel: parentLabel,
+      parentPath,
+      position,
+      size,
+      index: tourIndex + 1,
+      count: Math.max(count, 1),
+      members,
+      atStart: position === 1,
+      atEnd: size > 0 && position === size,
+      enteringNext: null,
+      enteringPrev: null,
+    });
+    return navGroupsOk({
+      route: "tree",
+      kind,
+      lane,
+      step: navGroupsStep(prev, next, parentStop),
+      stepNone,
+      group,
+      prevGroup,
+      nextGroup,
+      none: singleGroup
+        ? Object.freeze({
+          reason: "single-group",
+          message: navGroupsTreeSingleGroupMessage({ parentLabel, kind, lane }),
+        })
+        : null,
+    });
+  } catch (_) {
+    return null;
+  }
+}
+
+function navGroupsTreeParentLabelFromPath(nodes, parentPath) {
+  try {
+    if (navGroupsTreeIsSentinelPath(parentPath)) return "Top level";
+    return navGroupsTreeLabelOf(nodes, parentPath);
+  } catch (_) {
+    return "Top level";
+  }
+}
+// ---- src/296i-plugin-nav-groups-tree-index.js ----
+// Lazy, generation-stamped tree-note index for api.navGroups v1
+// (bob-cli-ra engine). Installed beside BobLedgerToolsNavGroupsMixin: one
+// in-memory table (`path -> { kind, lane, parent, label }`), a ring map, and
+// a tour map per kind (and lane, for projects). Vault create/delete/rename
+// bumps the generation; a metadata changed event recomputes that file and
+// bumps only when kind, lane, parent, or label changed. Warm-up runs off
+// the paint path at layout ready plus idle time. Synchronous, never throws,
+// never writes, never spawns bob.
+
+class BobLedgerToolsNavGroupsTreeMixin {
+  setupNavGroupsTree() {
+    if (this.navGroupsTreeSetupDone === true) return;
+    this.navGroupsTreeSetupDone = true;
+    if (typeof this.navGroupsTreeGeneration !== "number") this.navGroupsTreeGeneration = 0;
+    this.navGroupsTreeTables = null;
+    this.navGroupsTreeListeners = new Set();
+    this.navGroupsTreeWarmScheduled = false;
+    const bump = () => {
+      try {
+        if (typeof this.navGroupsTreeBumpGeneration === "function") this.navGroupsTreeBumpGeneration();
+      } catch (_) {}
+    };
+    const watch = () => {
+      const vault = this.app && this.app.vault;
+      if (!vault || typeof vault.on !== "function" || typeof this.registerEvent !== "function") return;
+      for (const event of ["create", "delete", "rename"]) {
+        try {
+          this.registerEvent(vault.on(event, () => bump()));
+        } catch (_) {}
+      }
+      const metadataCache = this.app && this.app.metadataCache;
+      if (metadataCache && typeof metadataCache.on === "function") {
+        try {
+          this.registerEvent(metadataCache.on("changed", (file, _data, cache) => {
+            try {
+              if (typeof this.navGroupsTreeHandleChanged === "function") {
+                this.navGroupsTreeHandleChanged(file, cache);
+              }
+            } catch (_) {}
+          }));
+        } catch (_) {}
+      }
+    };
+    const workspace = this.app && this.app.workspace;
+    if (workspace && typeof workspace.onLayoutReady === "function") {
+      try {
+        workspace.onLayoutReady(() => {
+          watch();
+          try {
+            if (typeof this.navGroupsTreeScheduleWarm === "function") this.navGroupsTreeScheduleWarm();
+          } catch (_) {}
+        });
+      } catch (_) {
+        watch();
+      }
+    } else {
+      watch();
+    }
+  }
+
+  teardownNavGroupsTree() {
+    this.navGroupsTreeTables = null;
+    this.navGroupsTreeWarmScheduled = false;
+    this.navGroupsTreeSetupDone = false;
+    try {
+      if (this.navGroupsTreeListeners && typeof this.navGroupsTreeListeners.clear === "function") {
+        this.navGroupsTreeListeners.clear();
+      }
+    } catch (_) {}
+  }
+
+  navGroupsTreeBumpGeneration() {
+    try {
+      if (typeof this.navGroupsTreeGeneration !== "number") this.navGroupsTreeGeneration = 0;
+      this.navGroupsTreeGeneration += 1;
+      const listeners = this.navGroupsTreeListeners;
+      if (listeners && typeof listeners.forEach === "function") {
+        listeners.forEach((listener) => {
+          try {
+            if (typeof listener === "function") listener(this.navGroupsTreeGeneration);
+          } catch (_) {}
+        });
+      }
+      return this.navGroupsTreeGeneration;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  navGroupsTreeOnChange(listener) {
+    try {
+      if (typeof listener !== "function") return () => {};
+      if (!this.navGroupsTreeListeners || typeof this.navGroupsTreeListeners.add !== "function") {
+        this.navGroupsTreeListeners = new Set();
+      }
+      this.navGroupsTreeListeners.add(listener);
+      return () => {
+        try {
+          this.navGroupsTreeListeners.delete(listener);
+        } catch (_) {}
+      };
+    } catch (_) {
+      return () => {};
+    }
+  }
+
+  navGroupsTreeFileCache(file) {
+    try {
+      if (!file) return null;
+      const metadataCache = this.app && this.app.metadataCache;
+      if (metadataCache && typeof metadataCache.getFileCache === "function") {
+        const live = metadataCache.getFileCache(file);
+        if (live != null) return live;
+      }
+      if (typeof propertyCardSettledFileCache === "function") {
+        return propertyCardSettledFileCache(this.app, file);
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  navGroupsTreeResolveLink(target, fromPath) {
+    try {
+      const metadataCache = this.app && this.app.metadataCache;
+      if (metadataCache && typeof metadataCache.getFirstLinkpathDest === "function") {
+        const file = metadataCache.getFirstLinkpathDest(target, fromPath);
+        if (file && typeof file.path === "string") return file.path;
+      }
+    } catch (_) {}
+    return "";
+  }
+
+  navGroupsTreeTodayText() {
+    try {
+      if (typeof this.navGroupsTodayText === "function") return this.navGroupsTodayText() || "";
+    } catch (_) {}
+    return "";
+  }
+
+  navGroupsTreeBuildTables() {
+    const empty = { nodes: new Map(), rings: new Map(), tours: new Map() };
+    try {
+      let files = [];
+      try {
+        if (typeof this.navGroupsMarkdownFiles === "function") files = this.navGroupsMarkdownFiles() || [];
+      } catch (_) {
+        files = [];
+      }
+      const today = this.navGroupsTreeTodayText();
+      const kindMemo = new Map();
+      const kindOfType = (fm) => navGroupsTreeMemoizedKindOfType(kindMemo, fm);
+      const classifyMemo = new Map();
+      const nodes = new Map();
+      for (const file of files) {
+        try {
+          const raw = file && typeof file.path === "string" ? file.path : "";
+          if (!raw) continue;
+          const node = navGroupsTreeNodeFor(raw, this.navGroupsTreeFileCache(file), today, kindOfType);
+          if (node && node.path && !nodes.has(node.path)) nodes.set(node.path, node);
+        } catch (_) {}
+      }
+      const resolveLink = (target, fromPath) => this.navGroupsTreeResolveLink(target, fromPath);
+      navGroupsTreeResolveParents(nodes, resolveLink, classifyMemo);
+      const rings = navGroupsTreeBuildRings(nodes);
+      return { nodes, rings, tours: navGroupsTreeBuildTours(nodes, rings) };
+    } catch (_) {
+      return empty;
+    }
+  }
+
+  navGroupsTreeEnsureBuilt() {
+    try {
+      if (typeof this.navGroupsTreeGeneration !== "number") this.navGroupsTreeGeneration = 0;
+      const current = this.navGroupsTreeTables;
+      if (current && current.builtGeneration === this.navGroupsTreeGeneration) return current;
+      const built = this.navGroupsTreeBuildTables();
+      this.navGroupsTreeTables = {
+        nodes: built.nodes,
+        rings: built.rings,
+        tours: built.tours,
+        builtGeneration: this.navGroupsTreeGeneration,
+      };
+      return this.navGroupsTreeTables;
+    } catch (_) {
+      return { nodes: new Map(), rings: new Map(), tours: new Map(), builtGeneration: 0 };
+    }
+  }
+
+  navGroupsTreeTablesFresh() {
+    try {
+      const tables = this.navGroupsTreeTables;
+      return Boolean(tables) && tables.builtGeneration === this.navGroupsTreeGeneration;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // Single-file paint-path answer when the index is cold or stale: kind
+  // and lane come from this note's own cache, nothing is built, and a
+  // non-member falls through to calendar (null).
+  navGroupsTreeIndexingAnswer(request) {
+    try {
+      const path = navGroupsNormalizePath(request && request.path);
+      if (!path) return null;
+      let file = null;
+      try {
+        const vault = this.app && this.app.vault;
+        if (vault && typeof vault.getAbstractFileByPath === "function") {
+          file = vault.getAbstractFileByPath(path);
+        }
+      } catch (_) {
+        file = null;
+      }
+      if (!file) return null;
+      const cache = this.navGroupsTreeFileCache(file);
+      const frontmatter = cache && cache.frontmatter && typeof cache.frontmatter === "object"
+        ? cache.frontmatter
+        : {};
+      const kind = navGroupsTreeSpeciesFast(path, frontmatter, this.navGroupsTreeTodayText());
+      if (!navGroupsTreeIsKind(kind)) return null;
+      return navGroupsOk({
+        route: "tree",
+        kind,
+        lane: kind === "project" ? navGroupsTreeLaneFromCache(cache) : null,
+        step: null,
+        stepNone: null,
+        group: null,
+        prevGroup: null,
+        nextGroup: null,
+        none: NAV_GROUPS_TREE_INDEXING,
+      });
+    } catch (_) {
+      return null;
+    }
+  }
+
+  navGroupsTreeResolve(request) {
+    try {
+      if (!request || typeof request.path !== "string" || !request.path.trim()) return null;
+      if (typeof this.navGroupsTreeGeneration !== "number") this.navGroupsTreeGeneration = 0;
+      if (this.navGroupsTreeTablesFresh()) {
+        return navGroupsTreeAnswerFor(this.navGroupsTreeTables, request.path);
+      }
+      if (request.lazy === true) {
+        try {
+          if (typeof this.navGroupsTreeScheduleWarm === "function") this.navGroupsTreeScheduleWarm();
+        } catch (_) {}
+        return this.navGroupsTreeIndexingAnswer(request);
+      }
+      const tables = this.navGroupsTreeEnsureBuilt();
+      return navGroupsTreeAnswerFor(tables, request.path);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  navGroupsTreeScheduleWarm() {
+    try {
+      if (this.navGroupsTreeWarmScheduled === true) return;
+      this.navGroupsTreeWarmScheduled = true;
+      const run = () => {
+        this.navGroupsTreeWarmScheduled = false;
+        try {
+          if (!this.navGroupsTreeTablesFresh()) this.navGroupsTreeEnsureBuilt();
+        } catch (_) {}
+      };
+      if (typeof requestIdleCallback === "function") {
+        try {
+          requestIdleCallback(run, { timeout: 2000 });
+          return;
+        } catch (_) {}
+      }
+      if (typeof requestAnimationFrame === "function") {
+        try {
+          requestAnimationFrame(run);
+          return;
+        } catch (_) {}
+      }
+      try {
+        const timer = setTimeout(run, 1500);
+        if (timer && typeof timer.unref === "function") timer.unref();
+      } catch (_) {
+        this.navGroupsTreeWarmScheduled = false;
+      }
+    } catch (_) {}
+  }
+
+  navGroupsTreeNodeSignature(node) {
+    try {
+      if (!node) return "";
+      return [node.kind || "", node.lane || "", node.parentStatus || "", node.parentPath || "", node.label || ""].join("|");
+    } catch (_) {
+      return "";
+    }
+  }
+
+  // Metadata changed: recompute this file's entry. Bump (and rebuild the
+  // derived maps) only when kind, lane, parent, or label changed; an
+  // irrelevant change leaves the generation alone.
+  navGroupsTreeHandleChanged(file, cache) {
+    try {
+      const path = file && typeof file.path === "string" ? file.path : "";
+      if (!path) return;
+      const normalized = navGroupsNormalizePath(path);
+      if (!normalized) return;
+      let tables = this.navGroupsTreeTables;
+      if (!tables) {
+        this.navGroupsTreeBumpGeneration();
+        return;
+      }
+      const today = this.navGroupsTreeTodayText();
+      let fileCache = null;
+      try {
+        fileCache = cache != null ? cache : this.navGroupsTreeFileCache(file);
+      } catch (_) {
+        fileCache = null;
+      }
+      const next = navGroupsTreeNodeFor(normalized, fileCache, today);
+      if (!next) return;
+      const previous = tables.nodes.get(next.path);
+      const previousSignature = previous ? this.navGroupsTreeNodeSignature(previous) : null;
+      tables.nodes.set(next.path, next);
+      navGroupsTreeResolveParents(
+        tables.nodes,
+        (target, fromPath) => this.navGroupsTreeResolveLink(target, fromPath),
+        null,
+      );
+      const settled = tables.nodes.get(next.path);
+      if (!settled) return;
+      if (previousSignature !== null
+        && this.navGroupsTreeNodeSignature(settled) === previousSignature) return;
+      if (previousSignature === null && !navGroupsTreeIsKind(settled.kind)) return;
+      tables.rings = navGroupsTreeBuildRings(tables.nodes);
+      tables.tours = navGroupsTreeBuildTours(tables.nodes, tables.rings);
+      this.navGroupsTreeBumpGeneration();
+      tables.builtGeneration = this.navGroupsTreeGeneration;
+    } catch (_) {}
+  }
 }
 // ---- src/297a-plugin-intention-update-service.js ----
 // Intention (periods) update service. `bob periods update <SUBJECT>` is the
@@ -213738,6 +215123,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsGmailSyncMixin,
   BobLedgerToolsPeriodNotesMixin,
   BobLedgerToolsNavGroupsMixin,
+  BobLedgerToolsNavGroupsTreeMixin,
   BobLedgerToolsIntentionCardMixin,
   BobLedgerToolsIntentionCardGroupRailMixin,
   BobLedgerToolsIntentionCardTitleSlotMixin,
@@ -218839,6 +220225,70 @@ try {
       navGroupsPathIsPreAdoptionWith,
       navGroupsPreAdoptionMessageForPath,
       BobLedgerToolsNavGroupsMixin,
+    });
+  }
+} catch (_) {}
+// ---- src/378a-exports-nav-groups-tree.js ----
+// Test-facing exports for the tree-note nav-groups route.
+try {
+  if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
+    module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
+      NAV_GROUPS_TREE_KINDS,
+      NAV_GROUPS_TREE_MAX_HOPS,
+      navGroupsTreeExcludedFast,
+      navGroupsTreeKindOfType,
+      navGroupsTreeTypeKey,
+      navGroupsTreeMemoizedKindOfType,
+      navGroupsTreeCouldBeTemporal,
+      navGroupsTreeSpeciesFast,
+      navGroupsTreeSpecies,
+      NAV_GROUPS_TREE_SENTINEL_AREA,
+      NAV_GROUPS_TREE_SENTINEL_PROJECT,
+      NAV_GROUPS_TREE_SINGULAR,
+      NAV_GROUPS_TREE_PLURAL,
+      NAV_GROUPS_TREE_INDEXING,
+      navGroupsTreeIsKind,
+      navGroupsTreeKindRank,
+      navGroupsTreeFolded,
+      navGroupsTreeStem,
+      navGroupsTreeHumanizeStem,
+      navGroupsTreeFirstAlias,
+      navGroupsTreeSpecies,
+      navGroupsTreeLabelFor,
+      navGroupsTreeLaneFromCache,
+      navGroupsTreeNormalizeTarget,
+      navGroupsTreeNormalizeTargetFast,
+      navGroupsTreeClassifyParentRaw,
+      navGroupsTreeClassifyParentMemo,
+      navGroupsTreeExcludedFastNormalized,
+      navGroupsTreeScanPath,
+      navGroupsTreeKindOfScan,
+      navGroupsTreeSpeciesFastNormalized,
+      navGroupsTreeIsSentinelPath,
+      navGroupsTreeNodeFor,
+      navGroupsTreeResolveParents,
+      navGroupsTreeLookup,
+      navGroupsTreeRingKey,
+      navGroupsTreeUniverseKey,
+      navGroupsTreeCompareMembers,
+      navGroupsTreeBuildRings,
+      navGroupsTreeOutlineKeyFor,
+      navGroupsTreeCompareKeys,
+      navGroupsTreeBuildTours,
+      navGroupsTreeLabelOf,
+      navGroupsTreeParentLabel,
+      navGroupsTreeStop,
+      navGroupsTreeNoParentMessage,
+      navGroupsTreeListParentMessage,
+      navGroupsTreeUnresolvedParentMessage,
+      navGroupsTreeLoopMessage,
+      navGroupsTreeLaneWord,
+      navGroupsTreeOnlyChildMessage,
+      navGroupsTreeSingleGroupMessage,
+      navGroupsTreeProblemMessage,
+      navGroupsTreeParentLabelFromPath,
+      navGroupsTreeAnswerFor,
+      BobLedgerToolsNavGroupsTreeMixin,
     });
   }
 } catch (_) {}

@@ -581,6 +581,13 @@ async function selfTest() {
       if (beforeStaleUndo[name] !== afterStaleUndo[name]) fail(`stale Undo changed vault bytes: ${name}`);
     }
     if (commitCount() !== commitsBeforeStaleUndo) fail("stale Undo must not create another commit");
+    // The Undo race leaves the external writer's eat.md edit uncommitted.
+    // Settle it through vault-sync so later commit-count stanzas start from a
+    // clean, synced tree instead of absorbing that edit as a pre-sync commit.
+    const settledRace = runBob(bobBin, vaultDir, ["vault-sync"]);
+    if (settledRace.status !== 0) fail(`vault-sync after the Undo race failed: ${String(settledRace.stderr || "").slice(0, 300)}`);
+    const raceStatus = spawnSync("git", ["status", "--porcelain"], { cwd: vaultDir, encoding: "utf8", timeout: 20_000 });
+    if (String(raceStatus.stdout || "").trim()) fail(`vault must be clean after settling the Undo race: ${String(raceStatus.stdout).slice(0, 200)}`);
 
     const flock = spawnSync("which", ["flock"], { encoding: "utf8", timeout: 5_000 });
     if (flock.status !== 0) {

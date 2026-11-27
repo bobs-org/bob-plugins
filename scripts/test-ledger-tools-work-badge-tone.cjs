@@ -518,7 +518,7 @@ function workChips(container) {
   walk(container);
   return out;
 }
-test("dashboard integration uses Work tones, TODAY override, and keeps Work order", async () => {
+test("dashboard integration uses Work tones, the TODAY link meter, and keeps Work order", async () => {
   const dashPath = process.env.BOB_DASHBOARD_FILE;
   if (!dashPath) { console.log("SKIP dashboard integration: BOB_DASHBOARD_FILE is not set"); return; }
   const savedXdg = process.env.XDG_CONFIG_HOME;
@@ -527,7 +527,7 @@ test("dashboard integration uses Work tones, TODAY override, and keeps Work orde
   const plugin = new LedgerToolsPlugin(app, {});
   try {
     plugin.onload();
-    plugin.planBudgetForCallers = () => Promise.resolve({ hasSection: true, links: { count: 0, cap: 10, over: false }, status: "ok", themeNames: [], entries: [], warnings: [] });
+    plugin.planBudgetForCallers = () => Promise.resolve({ hasSection: true, links: { count: 11, cap: 10, over: true }, status: "over", themeNames: [], entries: [], warnings: [] });
     plugin.dashboardLaneBudget = (lane) => (lane === "next" ? { section: 10, lane: 17, count: 10, laneCount: 17, today: 7, cap: 15, over: false } : { section: 4, lane: 4, count: 4, laneCount: 4, today: 0, cap: 10, over: false });
     plugin.readyBudget = () => ({ count: 15, cap: 100, over: false });
     const ledgerApi = plugin.api;
@@ -546,7 +546,7 @@ test("dashboard integration uses Work tones, TODAY override, and keeps Work orde
     assert.match(clsOf("NEXT"), /bob-work-tone-yellow/);
     assert.match(clsOf("PENDING"), /bob-work-tone-green/);
     assert.match(clsOf("READY"), /bob-work-tone-blue/);
-    plugin.planBudgetForCallers = () => Promise.resolve(ledgerBudget(3, 3, 10, 10));
+    plugin.planBudgetForCallers = () => Promise.resolve(ledgerBudget(10, 10));
     plugin.dashboardLaneBudget = (lane) => (lane === "next"
       ? { section: 12, lane: 12, count: 12, laneCount: 12, today: 0, cap: 15, over: false }
       : { section: 10, lane: 10, count: 10, laneCount: 10, today: 0, cap: 10, over: false });

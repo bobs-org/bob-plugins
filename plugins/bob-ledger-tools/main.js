@@ -114307,11 +114307,20 @@ Object.assign(BobLedgerToolsHomeCardMixin.prototype, {
   homeCardRegisterVisibleBodyNavigation() {
     try {
       if (this.homeCardVisibleBodyNavigationRegistered === true) return true;
-      if (typeof EditorView?.domEventHandlers !== "function" || typeof this.registerEditorExtension !== "function") return false;
+      if (typeof ViewPlugin?.fromClass !== "function" || typeof this.registerEditorExtension !== "function") return false;
       const plugin = this;
-      this.registerEditorExtension(Prec.highest(EditorView.domEventHandlers({
-        keydown: (event, view) => plugin.homeCardHandleVisibleBodyNavigation(event, view),
-      })));
+      const extension = ViewPlugin.fromClass(class {
+        constructor(view) {
+          this.view = view;
+          this.keydown = (event) => plugin.homeCardHandleVisibleBodyNavigation(event, view);
+          view?.dom?.addEventListener?.("keydown", this.keydown, true);
+        }
+        destroy() {
+          try { this.view?.dom?.removeEventListener?.("keydown", this.keydown, true); } catch (_) {}
+          try { homeCardVimNavigationState.delete(this.view); } catch (_) {}
+        }
+      });
+      this.registerEditorExtension(typeof Prec?.highest === "function" ? Prec.highest(extension) : extension);
       this.homeCardVisibleBodyNavigationRegistered = true;
       return true;
     } catch (_) {

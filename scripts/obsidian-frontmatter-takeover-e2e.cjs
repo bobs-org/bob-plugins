@@ -454,7 +454,7 @@ async function run(args) {
   const check = (name, ok, detail = {}, mandatory = true) => {
     report.checks.push({
       name, surface: lib.surfaceOf(name), status: ok ? "pass" : "fail", mandatory,
-      detail: typeof detail === "string" ? detail : JSON.stringify(detail).slice(0, 24_000),
+      detail: typeof detail === "string" ? detail : JSON.stringify(detail).slice(0, 100_000),
     });
     return ok;
   };
@@ -1847,9 +1847,6 @@ async function run(args) {
       .replace("Record body sentinel", sentinel);
     const disableLedgerTools = async () => ctx.page.ev(`(async () => {
       const manager = app.plugins;
-      const enabled = manager.enabledPlugins;
-      if (enabled && typeof enabled.delete === "function") enabled.delete(${JSON.stringify(PLUGIN_ID)});
-      else if (Array.isArray(enabled)) manager.enabledPlugins = enabled.filter((id) => id !== ${JSON.stringify(PLUGIN_ID)});
       await manager.disablePlugin(${JSON.stringify(PLUGIN_ID)});
       return {
         enabled: Array.from(manager.enabledPlugins || []).includes(${JSON.stringify(PLUGIN_ID)}),
@@ -1860,9 +1857,6 @@ async function run(args) {
     })()`);
     const enableLedgerTools = async () => ctx.page.ev(`(async () => {
       const manager = app.plugins;
-      const enabled = manager.enabledPlugins;
-      if (enabled && typeof enabled.add === "function") enabled.add(${JSON.stringify(PLUGIN_ID)});
-      else if (Array.isArray(enabled) && !enabled.includes(${JSON.stringify(PLUGIN_ID)})) manager.enabledPlugins = enabled.concat([${JSON.stringify(PLUGIN_ID)}]);
       await manager.enablePlugin(${JSON.stringify(PLUGIN_ID)});
       return {
         enabled: Array.from(manager.enabledPlugins || []).includes(${JSON.stringify(PLUGIN_ID)}),

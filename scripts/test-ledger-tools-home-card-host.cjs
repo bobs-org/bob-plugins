@@ -459,6 +459,25 @@ test("home-card gg and Up stop at visible body text without swallowing insert-mo
   assert.equal(key("g").handled, false);
 });
 
+test("visible-body navigation binds a capture listener to each editor and releases it", () => {
+  const plugin = makeHostPlugin();
+  let extension = null;
+  plugin.registerEditorExtension = (value) => { extension = value; };
+
+  assert.equal(plugin.homeCardRegisterVisibleBodyNavigation(), true);
+  assert.ok(extension?.cls, "navigation is installed as an editor view plugin");
+
+  const calls = [];
+  const view = { dom: {
+    addEventListener(...args) { calls.push(["add", ...args.slice(0, 1), args[2]]); },
+    removeEventListener(...args) { calls.push(["remove", ...args.slice(0, 1), args[2]]); },
+  } };
+  const mounted = new extension.cls(view);
+  assert.deepEqual(calls, [["add", "keydown", true]]);
+  mounted.destroy();
+  assert.deepEqual(calls, [["add", "keydown", true], ["remove", "keydown", true]]);
+});
+
 test("inbox route API is the only inbox authority", () => {
   const plugin = makeHostPlugin({
     app: {

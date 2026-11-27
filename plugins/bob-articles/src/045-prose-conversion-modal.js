@@ -43,7 +43,7 @@ class BobProseConversionModal extends Modal {
     if (extracting) {
       const stem = content.createEl("label", { cls: "bob-prose-conversion-stem" });
       stem.createEl("span", { text: "New prose note name" });
-      // bob-text: prose conversion note stem
+      // bob-text: literal conversion note stem
       this.stemInput = stem.createEl("input", { type: "text", value: this.context.stem || "" });
       this.stemInput.addEventListener("input", () => {
         this.context.stem = this.stemInput.value;

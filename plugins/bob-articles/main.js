@@ -1297,7 +1297,8 @@ class BobArticlesPlugin extends Plugin {
       }
       try {
         const saved = await vault.read(view.file);
-        if (saved !== view.editor.getValue()) {
+        const normalizeEol = (text) => String(text).replace(/\r\n?/g, "\n");
+        if (normalizeEol(saved) !== normalizeEol(view.editor.getValue())) {
           this.articleShowNotice(`Save or close affected open notes before ${plan.command === "inline" ? "inlining" : "extracting"} prose sections.`);
           return false;
         }
@@ -1402,6 +1403,9 @@ class BobArticlesPlugin extends Plugin {
 }
 
 function articleSpawnBob(binary, args, input, vaultPath, options = {}) {
+  const timeoutMs = Number.isFinite(options.timeout) && options.timeout > 0
+    ? options.timeout
+    : ARTICLE_BOB_TIMEOUT_MS;
   return new Promise((resolve) => {
     let childProcess = options.childProcess;
     if (!childProcess) {
@@ -1435,15 +1439,15 @@ function articleSpawnBob(binary, args, input, vaultPath, options = {}) {
     }
     timer = setTimeout(() => {
       try { child.kill(); } catch (error) { /* The timeout still wins. */ }
-      finish({ ok: false, code: "timeout", message: "bob prose timed out after 1.5 s." });
-    }, options.timeout || ARTICLE_BOB_TIMEOUT_MS);
+      finish({ ok: false, code: "timeout", message: `bob timed out after ${Math.round(timeoutMs / 1000)} s.` });
+    }, timeoutMs);
     child.stdout.on("data", (chunk) => {
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8");
       stdoutChunks.push(buffer);
       stdoutLength += buffer.length;
       if (stdoutLength > ARTICLE_BOB_MAX_OUTPUT) {
         try { child.kill(); } catch (error) { /* The size error still wins. */ }
-        finish({ ok: false, code: "output-too-large", message: "bob returned an oversized article plan." });
+        finish({ ok: false, code: "output-too-large", message: "bob returned oversized JSON output." });
       }
     });
     child.stderr.on("data", (chunk) => { stderr += String(chunk); });
@@ -2103,7 +2107,7 @@ class BobProseConversionModal extends Modal {
     if (extracting) {
       const stem = content.createEl("label", { cls: "bob-prose-conversion-stem" });
       stem.createEl("span", { text: "New prose note name" });
-      // bob-text: prose conversion note stem
+      // bob-text: literal conversion note stem
       this.stemInput = stem.createEl("input", { type: "text", value: this.context.stem || "" });
       this.stemInput.addEventListener("input", () => {
         this.context.stem = this.stemInput.value;

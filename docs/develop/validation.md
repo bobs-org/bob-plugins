@@ -663,6 +663,34 @@ records exact binary/bundle hashes and the separate, reproduced baseline
 aggregate-suite exceptions (`bob-cli-n0` and `bob-cli-km`). Those exceptions
 do not represent failures in the real-app takeover matrix.
 
+## Real-Obsidian Cabinets acceptance
+
+`scripts/test-obsidian-cabinets-e2e.cjs` validates the synthetic fixture set,
+probe syntax, and screenshot inventory without launching Obsidian. That offline
+check is not real acceptance. Run the full walkthrough on athena against the
+current source build:
+
+```bash
+xvfb-run -a node scripts/obsidian-cabinets-e2e.cjs \
+  -e /snap/obsidian/current/app/obsidian \
+  -r /tmp/cabinets-e2e.json -o /tmp/cabinets-e2e-shots
+```
+
+The runner creates a scratch Git vault and owned Obsidian profile with synthetic
+area, project, album, bank, prose, notebook, record, ref, and period notes. It
+opens the cabinets, notebook/prose, and ref preview keys in that vault, never
+opens the live vault, and puts a refusing `bob` shim first on `PATH`. The report
+records every Live Preview and Reading species, keyboard and fail-open checks,
+gate-closed catalog parity, markdown hashes, unexpected Bob spawns, and each
+captured screenshot's hash and dimensions.
+
+Inspect every PNG in the screenshot directory, including the light/dark,
+narrow/wide, Live Preview/Reading, reduced-motion, and forced-colors captures.
+Record a visual verdict for each image before calling the bead GO. Retain the
+report and all screenshots with `/sase_artifact`. A runner error, failed check,
+missing screenshot, or unreviewed capture is NO-GO; fix it in scope or record
+the follow-up on the phase bead.
+
 ## Focused suites
 
 Navigation Hotkeys, Task Status Cycler, and Block ID Prompt tests are

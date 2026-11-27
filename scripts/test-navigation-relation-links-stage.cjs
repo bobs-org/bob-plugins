@@ -863,6 +863,7 @@ test("links-to row follows blocks with N, first label, cut target, and +K", () =
   const ids = model.rows.map((row) => row.id);
   assert.deepEqual(ids, [
     "schedule",
+    "snooze",
     "depends-on",
     "blocks",
     "links-to",

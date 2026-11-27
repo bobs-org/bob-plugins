@@ -2554,10 +2554,31 @@ test("q closes from a focused More row and from the Close button", () => {
   }
   const { modal } = openPropertyPicker();
   const row = byClass(modal.contentEl, "bob-task-card-more-row")[0];
-  pressStageKey(modal, row, "z");
+  // `z` is the Snooze row shortcut, so it is not an inert key here.
+  pressStageKey(modal, row, "p");
   pressStageKey(modal, row, "/");
   assert.equal(modal.isOpen, true);
   assert.equal(modal.stage, "task-card");
+});
+
+test("z closes the Task Card and hands it to the Snooze Card entry; repeats are ignored", async () => {
+  const { modal, plugin, editor } = openPropertyPicker();
+  const calls = [];
+  plugin.openSnoozeCardFromTaskCard = async (taskCard) => {
+    calls.push(taskCard);
+    return true;
+  };
+  dispatchCardKey(modal, "z", { repeat: true });
+  await nextTurn();
+  assert.equal(calls.length, 0);
+  assert.equal(modal.isOpen, true);
+  assert.equal(modal.stage, "task-card");
+  dispatchCardKey(modal, "z");
+  await nextTurn();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0], modal);
+  assert.equal(modal.isOpen, false);
+  assert.equal(editor.writes(), 0);
 });
 
 test("Ctrl+[ closes from focused card controls, the Back button, and the modal frame", () => {

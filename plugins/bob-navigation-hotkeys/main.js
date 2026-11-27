@@ -153544,6 +153544,7 @@ class SnoozeCardModal extends Modal {
       headerText.createDiv({ cls: "bob-decay-card-subtitle", text: headerTextValue });
     }
     const inputWrap = contentEl.createDiv({ cls: "bob-snooze-card-input-wrap" });
+    // bob-text: literal snooze time (HHMM or +offset), not prose
     this.inputEl = inputWrap.createEl("input", {
       cls: "bob-snooze-card-input",
       attr: {

@@ -13,9 +13,55 @@ function renderedLinkMatchesNavLabel(renderedText, label) {
   return false;
 }
 
+function renderedInlineCodeRanges(text) {
+  const value = String(text || "");
+  const ranges = [];
+  let index = 0;
+
+  while (index < value.length) {
+    if (value[index] !== "`") {
+      index += 1;
+      continue;
+    }
+
+    let slashStart = index;
+    while (value[slashStart - 1] === "\\") slashStart -= 1;
+    const escaped = (index - slashStart) % 2 === 1;
+    let runEnd = index + 1;
+    while (value[runEnd] === "`") runEnd += 1;
+    const runLength = runEnd - index;
+    if (escaped) {
+      index = runEnd;
+      continue;
+    }
+
+    let closeStart = runEnd;
+    let closeEnd = -1;
+    while (closeStart < value.length) {
+      closeStart = value.indexOf("`", closeStart);
+      if (closeStart < 0) break;
+      closeEnd = closeStart + 1;
+      while (value[closeEnd] === "`") closeEnd += 1;
+      if (closeEnd - closeStart === runLength) break;
+      closeStart = closeEnd;
+      closeEnd = -1;
+    }
+
+    if (closeEnd >= 0) {
+      ranges.push({ start: index, end: closeEnd });
+      index = closeEnd;
+    } else {
+      index = runEnd;
+    }
+  }
+
+  return ranges;
+}
+
 class BobNavigationHotkeysLinkParseMixin {
 
-  findFirstRenderedLinkInLine(line, label) {
+  findFirstRenderedLinkInLine(line, label, codeRanges = null, rangeOffset = 0) {
+    const ranges = codeRanges || renderedInlineCodeRanges(line);
     let index = 0;
 
     while (index < line.length) {
@@ -25,6 +71,13 @@ class BobNavigationHotkeysLinkParseMixin {
 
       if (nextIndex === -1) {
         return null;
+      }
+
+      const codeRange = ranges.find((range) =>
+        rangeOffset + nextIndex >= range.start && rangeOffset + nextIndex < range.end);
+      if (codeRange) {
+        index = Math.max(nextIndex + 1, codeRange.end - rangeOffset);
+        continue;
       }
 
       const link =

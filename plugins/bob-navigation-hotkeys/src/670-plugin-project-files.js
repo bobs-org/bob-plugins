@@ -158,7 +158,7 @@ class BobNavigationHotkeysProjectFileMixin {
     const snapshot = resolveNavLinks(this, { path: context.file.path, content: context.content });
     const stop = snapshot[label];
     if (!stop) {
-      new Notice(`No ${label} link found`);
+      new Notice(snapshot.stepNone?.message || `No ${label} link found`);
       return false;
     }
     return this.openNavLinkStop(stop, context.file.path, label, options);
@@ -791,20 +791,37 @@ class BobNavigationHotkeysProjectFileMixin {
     const label = expectedLabel.trim();
     const lines = String(content).split(/\r?\n/);
     let lineIndex = 0;
-    let inFrontmatter = false;
+    let frontmatter = this.startsWithFrontmatter(lines);
     let inFence = null;
+    let segment = [];
 
-    if (this.startsWithFrontmatter(lines)) {
-      inFrontmatter = true;
+    const findInSegment = () => {
+      if (!segment.length) return null;
+      const ranges = renderedInlineCodeRanges(segment.map((row) => row.line).join("\n"));
+      let offset = 0;
+      for (const row of segment) {
+        const link = this.findFirstRenderedLinkInLine(row.line, label, ranges, offset);
+        if (link) return link;
+        offset += row.line.length + 1;
+      }
+      return null;
+    };
+    const flushSegment = () => {
+      const link = findInSegment();
+      segment = [];
+      return link;
+    };
+
+    if (frontmatter) {
       lineIndex = 1;
     }
 
     for (; lineIndex < lines.length; lineIndex += 1) {
       const line = lines[lineIndex];
 
-      if (inFrontmatter) {
+      if (frontmatter) {
         if (FRONTMATTER_DELIMITER_RE.test(line)) {
-          inFrontmatter = false;
+          frontmatter = false;
         }
         continue;
       }
@@ -818,17 +835,21 @@ class BobNavigationHotkeysProjectFileMixin {
 
       const openingFence = this.getFenceOpening(line);
       if (openingFence) {
+        const found = flushSegment();
+        if (found) return found;
         inFence = openingFence;
         continue;
       }
 
-      const link = this.findFirstRenderedLinkInLine(line, label);
-      if (link) {
-        return link;
+      if (!line.trim()) {
+        const found = flushSegment();
+        if (found) return found;
+      } else {
+        segment.push({ line });
       }
     }
 
-    return null;
+    return flushSegment();
   }
 
   startsWithFrontmatter(lines) {

@@ -95,6 +95,95 @@ function provider(next, prev = null) {
   return { version: 1, resolve: () => ({ ok: true, group: { noun: "week" }, nextGroup: next, prevGroup: prev, step: { next, prev }, none: null }) };
 }
 
+function routedProvider(route, answer = {}) {
+  return {
+    version: 1,
+    resolve: () => ({
+      ok: true,
+      route,
+      kind: null,
+      lane: null,
+      group: null,
+      step: { prev: null, next: null, parent: null },
+      stepNone: null,
+      prevGroup: null,
+      nextGroup: null,
+      none: null,
+      ...answer,
+    }),
+  };
+}
+
+test("inline code never supplies a step link on tree, calendar, record, or legacy routes", () => {
+  const routes = [
+    ["tree", routedProvider("tree")],
+    ["calendar", routedProvider("calendar")],
+    ["record", routedProvider("record")],
+    ["legacy", null],
+  ];
+  const contents = [
+    "``[[ignored|next]]` [[also_ignored|next]]``\n[[after|next]]",
+    "``\n[[ignored|next]]\n`still inline`\n``\n[[after|next]]",
+  ];
+  for (const [name, api] of routes) {
+    for (const content of contents) {
+      const { snapshot } = harness(content, api);
+      assert.equal(snapshot().next.target, "after", `${name}: ${content}`);
+    }
+  }
+});
+
+test("tree steps count authored links only on nav lines, while calendar and record routes keep body matching", () => {
+  const treeStop = stop("other", "exists");
+  const tree = routedProvider("tree", {
+    step: { prev: null, next: treeStop, parent: null },
+  });
+  const bodyAndNav = "Read [[before|next]] for context\n[[after|next]]";
+  assert.equal(harness(bodyAndNav, tree).snapshot().next.target, "after");
+  assert.equal(harness("Read [[before|next]] for context", tree).snapshot().next.target, "other");
+
+  for (const route of ["calendar", "record"]) {
+    const api = routedProvider(route, {
+      step: { prev: null, next: treeStop, parent: null },
+    });
+    const bodyLine = route === "record" ? "8/12 · [[after|next]]" : "Read [[after|next]] for context";
+    assert.equal(harness(bodyLine, api).snapshot().next.target, "after", route);
+  }
+});
+
+test("tree route metadata and singleton notices pass through the navigation API", async () => {
+  const parent = stop("before", "exists");
+  const stepNone = { reason: "only-child", message: "bar is foo's only project — ]N visits goo's" };
+  const groupNone = { reason: "single-group", message: "foo holds every project — ]n walks them" };
+  const api = routedProvider("tree", {
+    kind: "project",
+    lane: "open",
+    step: { prev: null, next: null, parent },
+    stepNone,
+    none: groupNone,
+  });
+  const { nav, snapshot } = harness("ordinary prose", api);
+  const result = snapshot();
+  assert.equal(result.route, "tree");
+  assert.equal(result.kind, "project");
+  assert.equal(result.lane, "open");
+  assert.equal(result.parent, parent);
+  assert.equal(result.stepNone, stepNone);
+  notices.length = 0;
+  assert.equal(await nav.openLabeledBodyLink("next"), false);
+  assert.equal(await nav.openGroupLink("next"), false);
+  assert.deepEqual(notices, [stepNone.message, groupNone.message]);
+});
+
+test("an authored tree nav line overrides its derived stop", () => {
+  const tree = routedProvider("tree", {
+    step: { prev: null, next: stop("before", "exists"), parent: null },
+  });
+  const result = harness("[[after|next]]", tree).snapshot();
+  assert.equal(result.next.target, "after");
+  assert.equal(result.next.source, "authored");
+});
+
 test("authored stops win per role; absent steps and groups use the provider", () => {
   const { snapshot } = harness("[[before|« B]] · [[before|next]]", provider(stop("after", "exists"), stop("missing", "creatable")));
   const result = snapshot();
@@ -170,6 +259,19 @@ test("n uppercase repeats call one guarded group jump and counts do not multiply
   assert.deepEqual(planBracketRepeat("n", 1, { uppercase: true }), { method: "openGroupLink", args: ["next", { viaRepeat: true }] });
   assert.equal(await nav.repeatBracketWalk(1, { uppercase: true }), true);
   assert.equal(opened.length, 1);
+});
+
+test("uppercase n repeat opens the tree provider's derived parent stop", async () => {
+  const tree = routedProvider("tree", {
+    kind: "project",
+    lane: "open",
+    nextGroup: { ...stop("after", "exists"), source: "tree", groupLabel: "goo", shortLabel: "goo", landingLabel: "alpha" },
+  });
+  const { nav, opened } = harness("no authored group links", tree);
+  nav.rememberBracketRepeatType("n");
+  assert.equal(await nav.repeatBracketWalk(1, { uppercase: true }), true);
+  assert.equal(opened.length, 1);
+  assert.equal(opened[0][0], "after");
 });
 
 test("successful group opens record one jump to the resolved destination", async () => {

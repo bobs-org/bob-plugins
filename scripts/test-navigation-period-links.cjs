@@ -179,6 +179,11 @@ test("walkMode.links matches the first destination [n and ]n would open", async 
       expected: [null, "2026/2026-W46"],
     },
     {
+      name: "inline-code decoy and first rendered period link",
+      content: "`[[2026/2026-W47|W47 ›]]` · [[2026/2026-W46|W46 ›]]",
+      expected: [null, "2026/2026-W46"],
+    },
+    {
       name: "unsaved editor contents",
       content: "[[2026/20261102|prev]] · [[2026/2026-W47|W47 ›]]",
       expected: ["2026/20261102", "2026/2026-W47"],

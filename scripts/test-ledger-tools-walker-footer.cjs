@@ -586,6 +586,7 @@ test("links panel shows resolved destinations, dashed create targets, and safe c
       target: "2026/2026-W47",
       path: "2026/2026-W47.md",
       exists: false,
+      state: "creatable",
     },
   });
   assert.equal(missing.linkState, "next-only");
@@ -613,6 +614,7 @@ test("links panel painter exposes safe direction buttons and dashed creation sta
       target: "2026/2026-W47",
       path: "2026/2026-W47.md",
       exists: false,
+      state: "creatable",
     },
   });
   const parts = freshnessFooterPaint(host, view);
@@ -737,7 +739,7 @@ test("links panel group arms, context, and hints match the footer table", () => 
   const daily = linksWalkerFooterView({
     ok: true,
     prev: { text: "prev", target: "2026/20261120", path: "2026/20261120.md", exists: true },
-    next: { text: "next", target: "2026/20261122", path: "2026/20261122.md", exists: false },
+    next: { text: "next", target: "2026/20261122", path: "2026/20261122.md", exists: false, state: "creatable" },
     prevGroup: groupStop(),
     nextGroup: groupStop({
       text: "W48 »",
@@ -934,6 +936,75 @@ test("links panel context drops 1/1 and the boundary hint shows only when no arm
   assert.equal(wraps.boundaryHintText, "]n wraps to 🤖 Agent CLIs");
   const two = linksWalkerFooterView({ ...screenshot, group: { ...screenshot.group, position: 2, size: 2, atStart: false } });
   assert.equal(two.contextText, "📜 Prompt language (macros) 2/2");
+});
+
+test("tree links footer names parent groups, carries project lanes, wraps, and singleton notices", () => {
+  const stepNone = { reason: "only-child", message: "bar is foo's only open project — ]N visits goo's" };
+  const groupNone = { reason: "single-group", message: "foo holds every open project — ]n walks them" };
+  const view = linksWalkerFooterView({
+    ok: true,
+    route: "tree",
+    kind: "project",
+    lane: "open",
+    prev: null,
+    next: null,
+    prevGroup: groupStop({
+      shortLabel: "pig", groupLabel: "pig", landingLabel: "foo",
+      target: "pig", path: "pig.md", exists: true, state: "exists", wraps: true,
+    }),
+    nextGroup: groupStop({
+      shortLabel: "goo", groupLabel: "goo", landingLabel: "alpha",
+      target: "goo", path: "goo.md", exists: false, state: "exists", createEligible: true,
+      wraps: true,
+    }),
+    group: {
+      noun: "parent", label: "bob", shortLabel: "bob",
+      position: 2, size: 3, atStart: false, atEnd: false,
+    },
+    stepNone,
+    groupNone,
+  });
+  assert.equal(view.contextText, "bob 2/3 open");
+  assert.equal(view.linkGroupPrev.text, "pig ↺");
+  assert.equal(view.linkGroupNext.text, "goo ↺");
+  assert.equal(view.linkGroupNext.createEligible, false, "a derived exists stop never gets a create mark");
+  assert.equal(view.linkGroupNext.text.includes("+"), false);
+  assert.equal(view.hintText, "]} goo");
+  assert.match(view.tooltip, /bar is foo's only open project/);
+  assert.match(view.tooltip, /foo holds every open project/);
+
+  const singleton = linksWalkerFooterView({
+    ok: true,
+    route: "tree",
+    kind: "project",
+    lane: "closed",
+    prev: null,
+    next: null,
+    prevGroup: groupStop({ shortLabel: "pig", groupLabel: "pig", landingLabel: "zoo", wraps: true }),
+    nextGroup: groupStop({ shortLabel: "goo", groupLabel: "goo", landingLabel: "alpha" }),
+    group: { noun: "parent", label: "foo", position: 1, size: 1 },
+    stepNone: { reason: "only-child", message: "zoo is pig's only closed project — ]N visits goo's" },
+  });
+  assert.equal(singleton.contextText, "foo", "one-member rings show the parent label only");
+  assert.equal(singleton.hintText, "]} goo");
+  assert.match(singleton.tooltip, /only closed project/);
+
+  const noArms = linksWalkerFooterView({
+    ok: true,
+    route: "tree",
+    kind: "area",
+    lane: null,
+    prev: null,
+    next: null,
+    prevGroup: null,
+    nextGroup: null,
+    group: { noun: "parent", label: "Top level", position: 1, size: 1 },
+    stepNone: { reason: "only-child", message: "ada is Top level's only area" },
+    groupNone: { reason: "single-group", message: "Top level holds every area — ]n walks them" },
+  });
+  assert.equal(noArms.contextText, "Top level");
+  assert.match(noArms.tooltip, /ada is Top level's only area/);
+  assert.match(noArms.tooltip, /Top level holds every area/);
 });
 
 test("links panel paints the kit skip mark beside group arm labels", () => {

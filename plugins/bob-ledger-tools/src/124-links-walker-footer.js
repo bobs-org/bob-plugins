@@ -163,7 +163,7 @@ function linksWalkerFooterArm(link, direction) {
   const name = linksWalkerFooterLabel(link, direction);
   const exists = link.exists === true;
   const albumRecord = link.albumRecord === true;
-  const createEligible = link.exists === false && Boolean(link.path) && !albumRecord;
+  const createEligible = link.state === "creatable" && Boolean(link.path) && !albumRecord;
   const arrow = direction === "prev" ? "‹" : "›";
   const text = direction === "prev"
     ? `${arrow} ${name}${createEligible ? "+" : ""}`
@@ -206,15 +206,13 @@ function linksWalkerFooterGroupArm(link, direction) {
   }
   const name = linksWalkerFooterGroupName(link);
   const exists = link.exists === true || link.state === "exists";
-  const createEligible = !exists && (
-    link.state === "creatable" || link.createEligible === true
-  );
+  const createEligible = !exists && link.state === "creatable";
   const ghost = !exists && !createEligible;
   const wraps = link.wraps === true;
   const plus = createEligible ? "+" : "";
   // The footer paints the kit's skip mark beside the label (before a prev
   // label; after a next one, then ↺), so the text carries no « / ».
-  const wrapText = wraps && direction === "next" ? " ↺" : "";
+  const wrapText = wraps ? " ↺" : "";
   const compactLabel = `${name}${plus}`;
   const groupLabel = linksWalkerFooterStripNavGlyphs(link && link.groupLabel);
   const label = groupLabel && groupLabel !== name ? `${groupLabel}${plus}` : compactLabel;
@@ -271,7 +269,7 @@ function linksWalkerFooterHintNoun(group, groupNone) {
 }
 
 // `W47 6/7`; a one-member group is just its label (no `1/1`).
-function linksWalkerFooterContextText(group) {
+function linksWalkerFooterContextText(group, route = null, kind = null, lane = null) {
   if (!group || !Number.isInteger(group.position) || !Number.isInteger(group.size) || group.size <= 0) {
     return "";
   }
@@ -279,7 +277,10 @@ function linksWalkerFooterContextText(group) {
   if (!label) {
     return "";
   }
-  return group.size === 1 ? label : `${label} ${group.position}/${group.size}`;
+  const context = group.size === 1 ? label : `${label} ${group.position}/${group.size}`;
+  return route === "tree" && kind === "project" && group.size > 1 && (lane === "open" || lane === "closed")
+    ? `${context} ${lane}`
+    : context;
 }
 
 // True when a painted group arm already names the group a boundary hint
@@ -342,16 +343,23 @@ function linksWalkerFooterView(preview, options = {}) {
       ? preview.groupNone
       : null;
     if (!prev && !next && !groupPrev && !groupNext && walkDue.dueText === "Links") {
-      const emptyTooltip = groupNone && groupNone.message
-        ? `⇄ Links · ${groupNone.message}`
+      const emptyContext = linksWalkerFooterContextText(group, preview.route, preview.kind, preview.lane);
+      const emptyNotices = [preview.stepNone?.message, groupNone?.message].filter(Boolean);
+      const emptyMessage = [...new Set(emptyNotices)].join(" · ");
+      const emptySummary = [emptyContext, emptyMessage].filter(Boolean).join(" · ");
+      const emptyTooltip = emptySummary
+        ? `⇄ Links · ${emptySummary}`
         : "⇄ Links · no ‹ / › links in this note";
       return {
         ...linksWalkerFooterStatusView(
           "empty",
           "no ‹ / › links in this note",
           emptyTooltip,
-          "Links · no previous or next links in this note",
+          emptySummary
+            ? `Links · ${emptySummary}`
+            : "Links · no previous or next links in this note",
         ),
+        contextText: emptyContext,
       };
     }
 
@@ -384,11 +392,13 @@ function linksWalkerFooterView(preview, options = {}) {
         ? `${statusText} · Two ${glyph} links on nav lines — keep one`
         : `Two ${glyph} links on nav lines — keep one`;
     }
-    const contextText = linksWalkerFooterContextText(group);
+    const contextText = linksWalkerFooterContextText(group, preview.route, preview.kind, preview.lane);
     const hintNoun = (hasGroups || group)
       ? linksWalkerFooterHintNoun(group, groupNone)
       : null;
-    let hintText = hintNoun ? `]} next ${hintNoun}` : "";
+    let hintText = group?.noun === "parent"
+      ? (groupNext ? `]} ${linksWalkerFooterGroupName(groupNext)}` : "")
+      : hintNoun ? `]} next ${hintNoun}` : "";
     let boundaryHint = "";
     // When the next group arm already names the group `]n` enters, the
     // boundary hint leaves the bar for the tooltip; the footer fit brings
@@ -409,7 +419,10 @@ function linksWalkerFooterView(preview, options = {}) {
     }
     const arms = [groupPrev, prev, next, groupNext].filter(Boolean);
     const summary = arms.map((arm) => arm.text).join(" · ");
-    const noneMessage = groupNone && groupNone.message ? groupNone.message : "";
+    const noneMessage = [...new Set([
+      preview.stepNone?.message,
+      groupNone?.message,
+    ].filter(Boolean))].join(" · ");
     const extraTips = [statusText, boundaryHintText, startHint, noneMessage].filter(Boolean);
     const armsTooltip = arms
       .map((arm) => `${arm.text}\n${arm.tooltip}`)
@@ -418,7 +431,7 @@ function linksWalkerFooterView(preview, options = {}) {
     const tooltip = walkDue.tooltip
       ? `⇄ Links · ${walkDue.tooltip}${armsTooltip ? `\n${armsTooltip}` : ""}`
       : `⇄ Links · ${[summary, hintText, statusText, noneMessage].filter(Boolean).join(" · ")}${armsTooltip ? `\n${armsTooltip}` : ""}`;
-    const summaryText = [walkDue.ariaLabel, contextText, summary, hintText, statusText]
+    const summaryText = [walkDue.ariaLabel, contextText, summary, hintText, statusText, noneMessage]
       .filter(Boolean)
       .join(" · ");
     return {

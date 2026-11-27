@@ -99509,11 +99509,41 @@ function navGroupRole(text) {
   return null;
 }
 
-function authoredNavGroups(plugin, content) {
-  const roles = { prev: [], next: [] };
+function authoredNavLineLinks(plugin, content) {
+  const links = [];
   const lines = String(content).split(/\r?\n/);
   let frontmatter = startsWithFrontmatter(lines);
   let fence = null;
+  let segment = [];
+
+  const flushSegment = () => {
+    if (!segment.length) return;
+    const codeRanges = renderedInlineCodeRanges(segment.map((row) => row.line).join("\n"));
+    let offset = 0;
+    for (const row of segment) {
+      const inCode = codeRanges.some((range) =>
+        range.start < offset + row.line.length && range.end > offset);
+      if (!inCode) {
+        const lineLinks = [];
+        let index = 0;
+        while (index < row.line.length) {
+          const separators = row.line.slice(index).match(/^[\s·•|/,–—-]+/);
+          if (separators) index += separators[0].length;
+          if (index === row.line.length) break;
+          const link = row.line.startsWith("[[", index)
+            ? plugin.parseWikiLinkAt?.(row.line, index)
+            : row.line[index] === "[" ? plugin.parseMarkdownLinkAt?.(row.line, index) : null;
+          if (!link || link.endIndex <= index) break;
+          lineLinks.push(link);
+          index = link.endIndex;
+        }
+        if (index === row.line.length && lineLinks.length) links.push(...lineLinks);
+      }
+      offset += row.line.length + 1;
+    }
+    segment = [];
+  };
+
   for (let i = frontmatter ? 1 : 0; i < lines.length; i += 1) {
     const line = lines[i];
     if (frontmatter) {
@@ -99521,30 +99551,32 @@ function authoredNavGroups(plugin, content) {
       continue;
     }
     if (fence) {
-      if (isClosingFence(line, fence)) fence = null;
+      if (isClosingFence(line, fence)) {
+        fence = null;
+        flushSegment();
+      }
       continue;
     }
     fence = getFenceOpening(line);
-    if (fence) continue;
-    // Consume the entire line: prose, embeds, and inline code fail closed.
-    const links = [];
-    let index = 0;
-    while (index < line.length) {
-      const separators = line.slice(index).match(/^[\s·•|/,–—-]+/);
-      if (separators) index += separators[0].length;
-      if (index === line.length) break;
-      const link = line.startsWith("[[", index)
-        ? plugin.parseWikiLinkAt?.(line, index)
-        : line[index] === "[" ? plugin.parseMarkdownLinkAt?.(line, index) : null;
-      if (!link || link.endIndex <= index) break;
-      links.push(link);
-      index = link.endIndex;
+    if (fence) {
+      flushSegment();
+      continue;
     }
-    if (index !== line.length || !links.length) continue;
-    for (const link of links) {
-      const role = navGroupRole(link.renderedText);
-      if (role) roles[role].push(link);
+    if (!line.trim()) {
+      flushSegment();
+      continue;
     }
+    segment.push({ line });
+  }
+  flushSegment();
+  return links;
+}
+
+function authoredNavGroups(plugin, content) {
+  const roles = { prev: [], next: [] };
+  for (const link of authoredNavLineLinks(plugin, content)) {
+    const role = navGroupRole(link.renderedText);
+    if (role) roles[role].push(link);
   }
   return roles;
 }
@@ -99588,8 +99620,11 @@ function resolveNavLinks(plugin, { path, content }) {
   const derived = (stop) => stop ? navLinkStop(plugin, path, {
     target: stop.target, renderedText: stop.landingLabel || stop.shortLabel || stop.target,
   }, stop) : null;
+  const treeStepLinks = provider?.route === "tree" ? authoredNavLineLinks(plugin, content) : null;
   const step = (role) => {
-    const link = plugin.findFirstRenderedLink(content, role);
+    const link = treeStepLinks
+      ? treeStepLinks.find((candidate) => renderedLinkMatchesNavLabel(candidate.renderedText, role)) || null
+      : plugin.findFirstRenderedLink(content, role);
     return link ? navLinkStop(plugin, path, link) : derived(provider?.step?.[role]);
   };
   const authored = authoredNavGroups(plugin, content);
@@ -99614,6 +99649,11 @@ function resolveNavLinks(plugin, { path, content }) {
   return Object.freeze({
     ok: true, prev: step("prev"), next: step("next"), prevGroup, nextGroup,
     group: provider?.group || null, groupNone,
+    route: provider?.route || null,
+    kind: provider?.kind || null,
+    lane: provider?.lane ?? null,
+    parent: provider?.step?.parent || null,
+    stepNone: provider?.stepNone || null,
     groupConflict: conflicts[0] || null,
     groupConflicts: Object.freeze(conflicts),
   });
@@ -136648,7 +136688,7 @@ class BobNavigationHotkeysProjectFileMixin {
     const snapshot = resolveNavLinks(this, { path: context.file.path, content: context.content });
     const stop = snapshot[label];
     if (!stop) {
-      new Notice(`No ${label} link found`);
+      new Notice(snapshot.stepNone?.message || `No ${label} link found`);
       return false;
     }
     return this.openNavLinkStop(stop, context.file.path, label, options);
@@ -137281,20 +137321,37 @@ class BobNavigationHotkeysProjectFileMixin {
     const label = expectedLabel.trim();
     const lines = String(content).split(/\r?\n/);
     let lineIndex = 0;
-    let inFrontmatter = false;
+    let frontmatter = this.startsWithFrontmatter(lines);
     let inFence = null;
+    let segment = [];
 
-    if (this.startsWithFrontmatter(lines)) {
-      inFrontmatter = true;
+    const findInSegment = () => {
+      if (!segment.length) return null;
+      const ranges = renderedInlineCodeRanges(segment.map((row) => row.line).join("\n"));
+      let offset = 0;
+      for (const row of segment) {
+        const link = this.findFirstRenderedLinkInLine(row.line, label, ranges, offset);
+        if (link) return link;
+        offset += row.line.length + 1;
+      }
+      return null;
+    };
+    const flushSegment = () => {
+      const link = findInSegment();
+      segment = [];
+      return link;
+    };
+
+    if (frontmatter) {
       lineIndex = 1;
     }
 
     for (; lineIndex < lines.length; lineIndex += 1) {
       const line = lines[lineIndex];
 
-      if (inFrontmatter) {
+      if (frontmatter) {
         if (FRONTMATTER_DELIMITER_RE.test(line)) {
-          inFrontmatter = false;
+          frontmatter = false;
         }
         continue;
       }
@@ -137308,17 +137365,21 @@ class BobNavigationHotkeysProjectFileMixin {
 
       const openingFence = this.getFenceOpening(line);
       if (openingFence) {
+        const found = flushSegment();
+        if (found) return found;
         inFence = openingFence;
         continue;
       }
 
-      const link = this.findFirstRenderedLinkInLine(line, label);
-      if (link) {
-        return link;
+      if (!line.trim()) {
+        const found = flushSegment();
+        if (found) return found;
+      } else {
+        segment.push({ line });
       }
     }
 
-    return null;
+    return flushSegment();
   }
 
   startsWithFrontmatter(lines) {
@@ -143705,9 +143766,55 @@ function renderedLinkMatchesNavLabel(renderedText, label) {
   return false;
 }
 
+function renderedInlineCodeRanges(text) {
+  const value = String(text || "");
+  const ranges = [];
+  let index = 0;
+
+  while (index < value.length) {
+    if (value[index] !== "`") {
+      index += 1;
+      continue;
+    }
+
+    let slashStart = index;
+    while (value[slashStart - 1] === "\\") slashStart -= 1;
+    const escaped = (index - slashStart) % 2 === 1;
+    let runEnd = index + 1;
+    while (value[runEnd] === "`") runEnd += 1;
+    const runLength = runEnd - index;
+    if (escaped) {
+      index = runEnd;
+      continue;
+    }
+
+    let closeStart = runEnd;
+    let closeEnd = -1;
+    while (closeStart < value.length) {
+      closeStart = value.indexOf("`", closeStart);
+      if (closeStart < 0) break;
+      closeEnd = closeStart + 1;
+      while (value[closeEnd] === "`") closeEnd += 1;
+      if (closeEnd - closeStart === runLength) break;
+      closeStart = closeEnd;
+      closeEnd = -1;
+    }
+
+    if (closeEnd >= 0) {
+      ranges.push({ start: index, end: closeEnd });
+      index = closeEnd;
+    } else {
+      index = runEnd;
+    }
+  }
+
+  return ranges;
+}
+
 class BobNavigationHotkeysLinkParseMixin {
 
-  findFirstRenderedLinkInLine(line, label) {
+  findFirstRenderedLinkInLine(line, label, codeRanges = null, rangeOffset = 0) {
+    const ranges = codeRanges || renderedInlineCodeRanges(line);
     let index = 0;
 
     while (index < line.length) {
@@ -143717,6 +143824,13 @@ class BobNavigationHotkeysLinkParseMixin {
 
       if (nextIndex === -1) {
         return null;
+      }
+
+      const codeRange = ranges.find((range) =>
+        rangeOffset + nextIndex >= range.start && rangeOffset + nextIndex < range.end);
+      if (codeRange) {
+        index = Math.max(nextIndex + 1, codeRange.end - rangeOffset);
+        continue;
       }
 
       const link =

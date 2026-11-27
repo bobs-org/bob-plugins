@@ -94,6 +94,49 @@ function propertyCardCabinetBindBodyLinks(container, path, plugin) {
   } catch (_) {}
 }
 
+// Reading fast path (bob-cli-qq perf): Obsidian already rendered this exact
+// stored region into the note, so a Reading body clones that callout rather
+// than running MarkdownRenderer a second time on the open path. Only a
+// connected callout of the expected kind that no painter has touched and
+// that holds no embeds qualifies; anything else returns null and the caller
+// renders as before.
+function propertyCardCabinetCloneNativeCallout(native, kind) {
+  try {
+    if (!native || native.isConnected !== true || typeof native.cloneNode !== "function") return null;
+    const callout = native.getAttribute?.("data-callout") ? native : native.querySelector?.("[data-callout]");
+    if (!callout || !kind) return null;
+    if (String(callout.getAttribute("data-callout") || "").toLowerCase() !== String(kind).toLowerCase()) return null;
+    for (const attr of Array.from(callout.attributes || [])) {
+      const name = String(attr?.name || "");
+      if (name === "data-root-hue" || /^data-bob-.*-card$/.test(name)) return null;
+    }
+    if (callout.querySelector?.(".internal-embed, .markdown-embed, img, iframe, video, audio, canvas, .bob-cabinet-body-source")) return null;
+    const copy = callout.cloneNode(true);
+    copy.classList?.remove?.(PROPERTY_CARD_CABINET_ABSORBED_CLASS);
+    copy.classList?.remove?.("node-insert-event");
+    if (copy.getAttribute?.("id")) copy.removeAttribute("id");
+    for (const node of Array.from(copy.querySelectorAll?.("[id]") || [])) node.removeAttribute("id");
+    // Reading-only list chrome (bullets, fold indicators, source lines) is
+    // not in a MarkdownRenderer render; drop it so the body paints the same.
+    for (const node of Array.from(copy.querySelectorAll?.(".list-bullet, .list-collapse-indicator, .collapse-indicator") || [])) node.remove?.();
+    for (const node of Array.from(copy.querySelectorAll?.("[data-line]") || [])) node.removeAttribute("data-line");
+    for (const node of Array.from(copy.querySelectorAll?.(".has-list-bullet") || [])) node.classList?.remove?.("has-list-bullet");
+    return copy;
+  } catch (_) {
+    return null;
+  }
+}
+
+// The stored callout this Reading scope rendered for `plan`, or null.
+function propertyCardCabinetReadingNativeCallout(scope, plan) {
+  try {
+    if (!scope || !plan) return null;
+    return propertyCardCabinetAbsorbReadingTargets(scope, plan).callout || null;
+  } catch (_) {
+    return null;
+  }
+}
+
 // Render one stored callout region into `container` and run the kind's
 // painter over the rendered callout. Options: { plugin, doc, container,
 // path, regionSource, component, paint, paintKey, cache=true,
@@ -101,8 +144,9 @@ function propertyCardCabinetBindBodyLinks(container, path, plugin) {
 // painter (areas/projects/notebooks/albums/records); it gets the same
 // options the inline Live Preview path passes. `repaintNative` repaints the
 // stored callout when the deferred inline paint was skipped and this body
-// fails, so fail-open still shows today's painted catalog. Resolves to
-// { reused, failed }.
+// fails, so fail-open still shows today's painted catalog. In Reading,
+// `nativeCallout` (with `calloutKind`) names the note's rendered stored
+// callout to clone instead of rendering. Resolves to { reused, failed }.
 async function propertyCardCabinetRenderCatalog(options = {}) {
   const { plugin, doc, container, path, paint, paintKey } = options;
   const useCache = options.cache !== false;
@@ -148,7 +192,12 @@ async function propertyCardCabinetRenderCatalog(options = {}) {
     const holder = doc.createElement("div");
     holder.setAttribute("class", "bob-cabinet-body-source");
     container.appendChild(holder);
-    if (Renderer && typeof Renderer.render === "function") {
+    const cloned = options.nativeCallout
+      ? propertyCardCabinetCloneNativeCallout(options.nativeCallout, options.calloutKind)
+      : null;
+    if (cloned) {
+      holder.appendChild(cloned);
+    } else if (Renderer && typeof Renderer.render === "function") {
       await Renderer.render(plugin?.app, regionSource, holder, String(path || ""), Component || undefined);
     } else {
       holder.appendChild(doc.createTextNode(regionSource));

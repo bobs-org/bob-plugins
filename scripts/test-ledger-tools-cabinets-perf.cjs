@@ -137,10 +137,14 @@ function readingSection(kind = "projects") {
   return { preview, section, callout };
 }
 
-function readingCtx(path, children = addedChildren) {
+// Reading contexts carry the note's frontmatter like Obsidian's: deferral
+// applies only to a note whose card can own the catalog.
+function readingCtx(path, children = addedChildren, extra = {}) {
   return {
     sourcePath: path,
+    frontmatter: { type: String(path).startsWith("Albums/") ? "[[album]]" : "[[area]]" },
     addChild: (child) => { children.push(child); },
+    ...extra,
   };
 }
 

@@ -217,11 +217,46 @@ function propertyCardCabinetInlineFallbackResetForTests() {
   return true;
 }
 
-function propertyCardCabinetInlineEligible(el) {
+const PROPERTY_CARD_CABINET_INLINE_DENIED = ".cm-editor, .markdown-embed, .internal-embed, .canvas-node, .canvas-node-content, .print";
+
+// Obsidian post-processes a Reading section before inserting it, so a
+// detached section answers through its render container (`ctx.containerEl`)
+// instead. A container inside a card or a cabinet body is our own render,
+// and a hover popover is a fragment: neither ever defers.
+function propertyCardCabinetInlineEligible(el, ctx) {
   try {
     if (!el || typeof el.closest !== "function") return false;
-    if (el.closest(".cm-editor, .markdown-embed, .internal-embed, .canvas-node, .canvas-node-content, .print")) return false;
-    return Boolean(el.closest(".markdown-preview-view, .markdown-preview-sizer"));
+    if (el.closest(PROPERTY_CARD_CABINET_INLINE_DENIED)) return false;
+    if (el.closest(".markdown-preview-view, .markdown-preview-sizer")) return true;
+    if (el.isConnected === true) return false;
+    const container = ctx?.containerEl;
+    if (!container || typeof container.closest !== "function") return false;
+    if (container.closest(`${PROPERTY_CARD_CABINET_INLINE_DENIED}, .hover-popover, .bob-property-card, .bob-cabinet-body-source`)) return false;
+    return Boolean(container.closest(".markdown-preview-view, .markdown-preview-sizer"));
+  } catch (_) {
+    return false;
+  }
+}
+
+// Only a note whose card can own the catalog defers: host catalogs live on
+// area and project cards, Records on album cards. Unknown frontmatter paints
+// at once as before.
+const PROPERTY_CARD_CABINET_INLINE_HOST_TYPES = Object.freeze({
+  projects: Object.freeze(["area", "project"]),
+  records: Object.freeze(["album"]),
+});
+
+function propertyCardCabinetInlineHostTyped(ctx, kind) {
+  try {
+    const allowed = PROPERTY_CARD_CABINET_INLINE_HOST_TYPES[kind];
+    if (!allowed) return false;
+    const raw = ctx?.frontmatter?.type;
+    const values = Array.isArray(raw) ? raw : [raw];
+    return values.some((value) => {
+      if (typeof value !== "string") return false;
+      const name = value.replace(/^\s*\[\[|\]\]\s*$/g, "").split("|")[0].split("/").pop().trim().toLowerCase();
+      return allowed.includes(name);
+    });
   } catch (_) {
     return false;
   }
@@ -244,7 +279,8 @@ function propertyCardCabinetDeferInlinePaint(el, ctx, kind, paint) {
     if (!el || !ctx || !kind || typeof paint !== "function") return false;
     const path = String(ctx.sourcePath || "");
     if (!path) return false;
-    if (!propertyCardCabinetInlineEligible(el)) return false;
+    if (!propertyCardCabinetInlineEligible(el, ctx)) return false;
+    if (!propertyCardCabinetInlineHostTyped(ctx, kind)) return false;
     let attempts = 0;
     let timer = null;
     let done = false;
@@ -258,9 +294,15 @@ function propertyCardCabinetDeferInlinePaint(el, ctx, kind, paint) {
     const fire = () => {
       if (done) return;
       try {
-        if (!el.isConnected) { clear(); return; }
         if (propertyCardCabinetInlineAbsorbed(el, kind)) { clear(); return; }
         attempts += 1;
+        // A section Obsidian has not inserted yet gets the same bounded
+        // retries; one it dropped is never shown, so it needs no paint.
+        if (!el.isConnected) {
+          if (attempts <= propertyCardCabinetInlineFallbackRetries) timer = setTimeout(fire, propertyCardCabinetInlineFallbackMs);
+          else clear();
+          return;
+        }
         if (propertyCardCabinetMountedInRoot(el, path, kind) && attempts <= propertyCardCabinetInlineFallbackRetries) {
           timer = setTimeout(fire, propertyCardCabinetInlineFallbackMs);
           return;

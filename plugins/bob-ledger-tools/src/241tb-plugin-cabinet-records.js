@@ -345,6 +345,17 @@ function cabinetRecordsReadingScope(container) {
   return null;
 }
 
+// The host's own Reading view, never an embed or popover around it.
+function cabinetRecordsHostReadingScope(scope) {
+  try {
+    if (!scope || typeof scope.matches !== "function" || !scope.matches(".markdown-preview-view")) return null;
+    if (scope.closest?.(".markdown-embed, .internal-embed, .hover-popover, .canvas-node")) return null;
+    return scope;
+  } catch (_) {
+    return null;
+  }
+}
+
 // Claim one mounted cabinet body: fingerprinted ownership plus the Live
 // Preview editor absorb and the Reading tags. The stored section hides only
 // while this working body stands in for it. Returns a release function.
@@ -371,7 +382,9 @@ function cabinetRecordsClaimBody(plugin, parts = {}) {
       path,
       fingerprint,
       plan,
-      scope: cabinetRecordsReadingScope(container),
+      // A Reading body builds before its card is inserted, so a detached
+      // container answers through the Reading scope the host passed in.
+      scope: cabinetRecordsReadingScope(container) || cabinetRecordsHostReadingScope(parts.readingScope),
       tagged: [],
       editorHandle: null,
       releaseClaim: null,
@@ -442,6 +455,7 @@ function cabinetRecordsBuildBody(plugin, options = {}) {
   const path = typeof options.path === "string" ? options.path : "";
   const view = options.view || null;
   const component = options.component || plugin || null;
+  const readingScope = options.readingScope || null;
   try {
     if (!plugin || !doc || !container || !path) return;
     let source = "";
@@ -486,6 +500,7 @@ function cabinetRecordsBuildBody(plugin, options = {}) {
     const releaseClaim = cabinetRecordsClaimBody(plugin, {
       view: view && typeof view.dispatch === "function" ? view : null,
       container,
+      readingScope: view && typeof view.dispatch === "function" ? null : readingScope,
       path,
       fingerprint,
       plan,
@@ -503,41 +518,56 @@ function cabinetRecordsBuildBody(plugin, options = {}) {
     const paint = (calloutEl) => {
       cabinetRecordsPaintCallout(plugin, calloutEl, path, folds, container);
     };
-    const run = (() => {
-      try {
-        if (typeof propertyCardCabinetRenderCatalog !== "function") return null;
-        return propertyCardCabinetRenderCatalog({
-          plugin,
-          doc,
-          container,
-          path,
-          regionSource,
-          paint,
-          paintKey: cabinetRecordsPaintKeyFor(plugin, path),
-          component: component || undefined,
-          releaseClaim,
-          repaintNative: () => {
-            try {
-              if (typeof plugin.scheduleAlbumRecordsRefresh === "function") plugin.scheduleAlbumRecordsRefresh();
-            } catch (_) {}
+    const renderNow = () => {
+      const run = (() => {
+        try {
+          if (typeof propertyCardCabinetRenderCatalog !== "function") return null;
+          return propertyCardCabinetRenderCatalog({
+            plugin,
+            doc,
+            container,
+            path,
+            regionSource,
+            nativeCallout: readingScope && !(view && typeof view.dispatch === "function")
+              && typeof propertyCardCabinetReadingNativeCallout === "function"
+              ? propertyCardCabinetReadingNativeCallout(readingScope, plan) : null,
+            calloutKind: CABINET_RECORDS_KIND,
+            paint,
+            paintKey: cabinetRecordsPaintKeyFor(plugin, path),
+            component: component || undefined,
+            releaseClaim,
+            repaintNative: () => {
+              try {
+                if (typeof plugin.scheduleAlbumRecordsRefresh === "function") plugin.scheduleAlbumRecordsRefresh();
+              } catch (_) {}
+            },
+          });
+        } catch (_) {
+          return null;
+        }
+      })();
+      if (run && typeof run.then === "function") {
+        run.then(
+          (outcome) => {
+            if (outcome && outcome.failed) {
+              try { releaseClaim(); } catch (_) {}
+            }
           },
-        });
-      } catch (_) {
-        return null;
-      }
-    })();
-    if (run && typeof run.then === "function") {
-      run.then(
-        (outcome) => {
-          if (outcome && outcome.failed) {
+          () => {
             try { releaseClaim(); } catch (_) {}
-          }
-        },
-        () => {
-          try { releaseClaim(); } catch (_) {}
-        },
-      );
-    }
+          },
+        );
+      }
+    };
+    // A Live Preview editor hidden behind its leaf's Reading view keeps the
+    // claim but renders the body only once the editor shows (bob-cli-qq perf).
+    try { container.__bobRecordsShownObserver?.disconnect?.(); } catch (_) {}
+    if (view && typeof view.dispatch === "function"
+      && typeof propertyCardCabinetEditorHidden === "function" && propertyCardCabinetEditorHidden(view)
+      && typeof propertyCardCabinetWhenShown === "function"
+      && propertyCardCabinetWhenShown(container.closest?.(".bob-cabinet-panel") || container, renderNow,
+        (observer) => { container.__bobRecordsShownObserver = observer; })) return;
+    renderNow();
   } catch (_) {}
 }
 
@@ -740,15 +770,21 @@ function cabinetRecordsRegisterProvider(plugin) {
     const provider = {
       applies: (context) => cabinetRecordsAppliesFor(plugin, context || {}),
       paintKey: (path) => cabinetRecordsPaintKeyFor(plugin, path),
-      buildBody: ({ doc, path, view, component, container }) => {
-        cabinetRecordsBuildBody(plugin, { doc, path, view, component, container });
+      buildBody: ({ doc, path, view, component, container, readingScope }) => {
+        cabinetRecordsBuildBody(plugin, { doc, path, view, component, container, readingScope });
       },
       onOpen: ({ path, view } = {}) => {
         try {
           const record = cabinetRecordsLastApplies.get(path);
           if (!record || !record.plan || !record.fingerprint) return;
+          // A Reading body claims and tags while it builds; claiming again
+          // here would release those tags with no container to re-tag from.
+          const editor = view && typeof view.dispatch === "function" ? view : null;
+          const live = cabinetRecordsBodiesFor(path, false)?.get(cabinetRecordsBodyKey(editor));
+          if (!editor && live && !live.released && live.fingerprint === String(record.fingerprint)
+            && live.scope && live.scope.isConnected === true) return;
           cabinetRecordsClaimBody(plugin, {
-            view: view && typeof view.dispatch === "function" ? view : null,
+            view: editor,
             container: (() => {
               try {
                 if (view && view.dom && typeof view.dom.querySelector === "function") {

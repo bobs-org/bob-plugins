@@ -90,6 +90,59 @@ function propertyCardCabinetBodyChildCount(body) {
   return -1;
 }
 
+// A Reading leaf keeps its Live Preview editor loaded but hidden (Obsidian
+// sets an inline display:none on `.markdown-source-view`). A provider body
+// built there renders the catalog on the open path for a surface nobody can
+// see, so a provider that opts in (`deferWhileHidden`) waits until it shows.
+function propertyCardCabinetEditorHidden(view) {
+  try {
+    if (!view || typeof view.dispatch !== "function") return false;
+    const source = view.dom?.closest?.(".markdown-source-view");
+    return Boolean(source && source.style && source.style.display === "none");
+  } catch (_) {
+    return false;
+  }
+}
+
+// Run `run` once `node` first intersects the viewport, i.e. once a hidden
+// editor shows. Returns false (caller runs now) without IntersectionObserver.
+function propertyCardCabinetWhenShown(node, run, onObserver) {
+  try {
+    const Observer = typeof IntersectionObserver === "function" ? IntersectionObserver : null;
+    if (!Observer || !node || typeof run !== "function") return false;
+    const observer = new Observer((entries) => {
+      try {
+        if (!entries.some((entry) => entry && entry.isIntersecting)) return;
+        observer.disconnect();
+        if (node.isConnected === false) return;
+        run();
+      } catch (_) {}
+    });
+    if (typeof onObserver === "function") onObserver(observer);
+    observer.observe(node);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+// Build the body the first time its panel shows, unless something built it
+// (or started building it) meanwhile.
+function propertyCardCabinetDeferHiddenBody(panel, state, build) {
+  try {
+    if (!panel || !state) return false;
+    try { state.hiddenObserver?.disconnect?.(); } catch (_) {}
+    state.hiddenObserver = null;
+    return propertyCardCabinetWhenShown(panel, () => {
+      state.hiddenObserver = null;
+      if (state.built || state.pending) return;
+      build();
+    }, (observer) => { state.hiddenObserver = observer; });
+  } catch (_) {
+    return false;
+  }
+}
+
 function propertyCardCabinetProviderBody(panel, provider, context, kind, path, paintKey, open) {
   const doc = panel?.ownerDocument;
   const drawer = panel?.querySelector?.(".bob-cabinet-drawer");
@@ -121,6 +174,15 @@ function propertyCardCabinetProviderBody(panel, provider, context, kind, path, p
   }
   if (!body) return null;
   if (!open || state.built || state.pending) return state;
+  if (provider.deferWhileHidden === true && propertyCardCabinetEditorHidden(context?.view)
+    && propertyCardCabinetDeferHiddenBody(panel, state, () => {
+      const drawerOpen = panel.querySelector?.(".bob-cabinet-drawer")?.getAttribute?.("data-open") === "true";
+      propertyCardCabinetProviderBody(panel, provider, context, kind, path, paintKey, drawerOpen);
+    })) {
+    return state;
+  }
+  try { state.hiddenObserver?.disconnect?.(); } catch (_) {}
+  state.hiddenObserver = null;
   state.pending = true;
   const fail = (error) => {
     state.pending = false;

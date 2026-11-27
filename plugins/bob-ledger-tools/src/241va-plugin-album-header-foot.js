@@ -129,6 +129,7 @@ class BobLedgerToolsAlbumHeaderFootMixin {
       {
         plugin: this,
         view: options?.view || null,
+        readingScope: options?.readingScope || null,
         component: options?.component || this,
         source: options?.sourceText,
         frontmatter: options?.frontmatter || propertyCardFootAdapterFrontmatter(this, path),

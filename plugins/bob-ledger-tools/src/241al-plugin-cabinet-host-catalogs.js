@@ -247,9 +247,63 @@ function propertyCardCabinetHostPaintOptions(plugin, kind, path, view, givenStat
   return options;
 }
 
+// Digest memo (bob-cli-qq perf): one card paint asks for this digest once per
+// provider paintKey and again for the foot signature, and each pass applies
+// all four kinds and stringifies every full report. Reuse it while the source
+// and every kind's report-state fields are unchanged; data services replace
+// report and error objects on refresh, so identity is enough.
+const PROPERTY_CARD_CABINET_HOST_DIGEST_MEMO_LIMIT = 40;
+
+function propertyCardCabinetHostStateSignature(state) {
+  if (!state || typeof state !== "object") return [null];
+  return [
+    state.report || null, state.stale === true, state.unavailable === true, state.refreshing === true,
+    state.syncBusy === true, state.error || null, state.syncError || null, state.today ?? null,
+    state.generation ?? null, state.reportGeneration ?? null,
+  ];
+}
+
+function propertyCardCabinetHostSignaturesEqual(left, right) {
+  if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    const a = left[index];
+    const b = right[index];
+    if (Array.isArray(a) || Array.isArray(b)) {
+      if (!propertyCardCabinetHostSignaturesEqual(a, b)) return false;
+    } else if (a !== b) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function propertyCardCabinetHostDigest(plugin, path, source) {
   try {
     const currentSource = typeof source === "string" ? source : propertyCardCabinetHostSource(plugin, path, null);
+    const signature = PROPERTY_CARD_HOST_CATALOG_KINDS
+      .map((kind) => propertyCardCabinetHostStateSignature(propertyCardCabinetHostReportState(plugin, kind)));
+    let memo = plugin?.cabinetHostDigestMemo;
+    if (plugin && !(memo instanceof Map)) {
+      memo = new Map();
+      try { plugin.cabinetHostDigestMemo = memo; } catch (_) { memo = null; }
+    }
+    const key = String(path || "");
+    const hit = memo instanceof Map ? memo.get(key) : null;
+    if (hit && hit.source === currentSource && propertyCardCabinetHostSignaturesEqual(hit.signature, signature)) return hit.digest;
+    const digest = propertyCardCabinetHostDigestCompute(plugin, path, currentSource);
+    if (memo instanceof Map && digest) {
+      memo.delete(key);
+      memo.set(key, { source: currentSource, signature, digest });
+      while (memo.size > PROPERTY_CARD_CABINET_HOST_DIGEST_MEMO_LIMIT) memo.delete(memo.keys().next().value);
+    }
+    return digest;
+  } catch (_) {
+    return "";
+  }
+}
+
+function propertyCardCabinetHostDigestCompute(plugin, path, currentSource) {
+  try {
     let species = "area";
     try { species = plugin?.homeCardCardModelFor?.(path, currentSource)?.kind || species; } catch (_) {}
     const digests = [];
@@ -386,6 +440,9 @@ async function propertyCardCabinetHostBuildBody(plugin, kind, context = {}) {
     component: context.component,
     paintKey: propertyCardCabinetHostPaintKey(plugin, kind, path),
     regionSource: applied.region.lines.join("\n"),
+    nativeCallout: context.readingScope && typeof context.view?.dispatch !== "function"
+      ? propertyCardCabinetReadingNativeCallout(context.readingScope, applied.plan) : null,
+    calloutKind: kind,
     releaseClaim: context.releaseClaim,
     repaintNative: () => propertyCardCabinetHostRepaintNative(plugin, kind),
     paint: async (callout) => {
@@ -525,6 +582,9 @@ function propertyCardCabinetHostInstall(plugin) {
       applies: (context) => propertyCardCabinetHostApply(plugin, kind, context),
       paintKey: (path) => propertyCardCabinetHostPaintKey(plugin, kind, path),
       buildBody: (context) => propertyCardCabinetHostBuildBody(plugin, kind, context),
+      // The claim lives in onMounted, so a hidden Live Preview body can wait
+      // for its editor to show without leaving the stored section unclaimed.
+      deferWhileHidden: true,
       onMounted: (context) => propertyCardCabinetHostMountClaim(kind, plugin, context),
       repaintNative: () => propertyCardCabinetHostRepaintNative(plugin, kind),
     };

@@ -66729,6 +66729,49 @@ function propertyCardCabinetBindBodyLinks(container, path, plugin) {
   } catch (_) {}
 }
 
+// Reading fast path (bob-cli-qq perf): Obsidian already rendered this exact
+// stored region into the note, so a Reading body clones that callout rather
+// than running MarkdownRenderer a second time on the open path. Only a
+// connected callout of the expected kind that no painter has touched and
+// that holds no embeds qualifies; anything else returns null and the caller
+// renders as before.
+function propertyCardCabinetCloneNativeCallout(native, kind) {
+  try {
+    if (!native || native.isConnected !== true || typeof native.cloneNode !== "function") return null;
+    const callout = native.getAttribute?.("data-callout") ? native : native.querySelector?.("[data-callout]");
+    if (!callout || !kind) return null;
+    if (String(callout.getAttribute("data-callout") || "").toLowerCase() !== String(kind).toLowerCase()) return null;
+    for (const attr of Array.from(callout.attributes || [])) {
+      const name = String(attr?.name || "");
+      if (name === "data-root-hue" || /^data-bob-.*-card$/.test(name)) return null;
+    }
+    if (callout.querySelector?.(".internal-embed, .markdown-embed, img, iframe, video, audio, canvas, .bob-cabinet-body-source")) return null;
+    const copy = callout.cloneNode(true);
+    copy.classList?.remove?.(PROPERTY_CARD_CABINET_ABSORBED_CLASS);
+    copy.classList?.remove?.("node-insert-event");
+    if (copy.getAttribute?.("id")) copy.removeAttribute("id");
+    for (const node of Array.from(copy.querySelectorAll?.("[id]") || [])) node.removeAttribute("id");
+    // Reading-only list chrome (bullets, fold indicators, source lines) is
+    // not in a MarkdownRenderer render; drop it so the body paints the same.
+    for (const node of Array.from(copy.querySelectorAll?.(".list-bullet, .list-collapse-indicator, .collapse-indicator") || [])) node.remove?.();
+    for (const node of Array.from(copy.querySelectorAll?.("[data-line]") || [])) node.removeAttribute("data-line");
+    for (const node of Array.from(copy.querySelectorAll?.(".has-list-bullet") || [])) node.classList?.remove?.("has-list-bullet");
+    return copy;
+  } catch (_) {
+    return null;
+  }
+}
+
+// The stored callout this Reading scope rendered for `plan`, or null.
+function propertyCardCabinetReadingNativeCallout(scope, plan) {
+  try {
+    if (!scope || !plan) return null;
+    return propertyCardCabinetAbsorbReadingTargets(scope, plan).callout || null;
+  } catch (_) {
+    return null;
+  }
+}
+
 // Render one stored callout region into `container` and run the kind's
 // painter over the rendered callout. Options: { plugin, doc, container,
 // path, regionSource, component, paint, paintKey, cache=true,
@@ -66736,8 +66779,9 @@ function propertyCardCabinetBindBodyLinks(container, path, plugin) {
 // painter (areas/projects/notebooks/albums/records); it gets the same
 // options the inline Live Preview path passes. `repaintNative` repaints the
 // stored callout when the deferred inline paint was skipped and this body
-// fails, so fail-open still shows today's painted catalog. Resolves to
-// { reused, failed }.
+// fails, so fail-open still shows today's painted catalog. In Reading,
+// `nativeCallout` (with `calloutKind`) names the note's rendered stored
+// callout to clone instead of rendering. Resolves to { reused, failed }.
 async function propertyCardCabinetRenderCatalog(options = {}) {
   const { plugin, doc, container, path, paint, paintKey } = options;
   const useCache = options.cache !== false;
@@ -66783,7 +66827,12 @@ async function propertyCardCabinetRenderCatalog(options = {}) {
     const holder = doc.createElement("div");
     holder.setAttribute("class", "bob-cabinet-body-source");
     container.appendChild(holder);
-    if (Renderer && typeof Renderer.render === "function") {
+    const cloned = options.nativeCallout
+      ? propertyCardCabinetCloneNativeCallout(options.nativeCallout, options.calloutKind)
+      : null;
+    if (cloned) {
+      holder.appendChild(cloned);
+    } else if (Renderer && typeof Renderer.render === "function") {
       await Renderer.render(plugin?.app, regionSource, holder, String(path || ""), Component || undefined);
     } else {
       holder.appendChild(doc.createTextNode(regionSource));
@@ -67222,6 +67271,59 @@ function propertyCardCabinetBodyChildCount(body) {
   return -1;
 }
 
+// A Reading leaf keeps its Live Preview editor loaded but hidden (Obsidian
+// sets an inline display:none on `.markdown-source-view`). A provider body
+// built there renders the catalog on the open path for a surface nobody can
+// see, so a provider that opts in (`deferWhileHidden`) waits until it shows.
+function propertyCardCabinetEditorHidden(view) {
+  try {
+    if (!view || typeof view.dispatch !== "function") return false;
+    const source = view.dom?.closest?.(".markdown-source-view");
+    return Boolean(source && source.style && source.style.display === "none");
+  } catch (_) {
+    return false;
+  }
+}
+
+// Run `run` once `node` first intersects the viewport, i.e. once a hidden
+// editor shows. Returns false (caller runs now) without IntersectionObserver.
+function propertyCardCabinetWhenShown(node, run, onObserver) {
+  try {
+    const Observer = typeof IntersectionObserver === "function" ? IntersectionObserver : null;
+    if (!Observer || !node || typeof run !== "function") return false;
+    const observer = new Observer((entries) => {
+      try {
+        if (!entries.some((entry) => entry && entry.isIntersecting)) return;
+        observer.disconnect();
+        if (node.isConnected === false) return;
+        run();
+      } catch (_) {}
+    });
+    if (typeof onObserver === "function") onObserver(observer);
+    observer.observe(node);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+// Build the body the first time its panel shows, unless something built it
+// (or started building it) meanwhile.
+function propertyCardCabinetDeferHiddenBody(panel, state, build) {
+  try {
+    if (!panel || !state) return false;
+    try { state.hiddenObserver?.disconnect?.(); } catch (_) {}
+    state.hiddenObserver = null;
+    return propertyCardCabinetWhenShown(panel, () => {
+      state.hiddenObserver = null;
+      if (state.built || state.pending) return;
+      build();
+    }, (observer) => { state.hiddenObserver = observer; });
+  } catch (_) {
+    return false;
+  }
+}
+
 function propertyCardCabinetProviderBody(panel, provider, context, kind, path, paintKey, open) {
   const doc = panel?.ownerDocument;
   const drawer = panel?.querySelector?.(".bob-cabinet-drawer");
@@ -67253,6 +67355,15 @@ function propertyCardCabinetProviderBody(panel, provider, context, kind, path, p
   }
   if (!body) return null;
   if (!open || state.built || state.pending) return state;
+  if (provider.deferWhileHidden === true && propertyCardCabinetEditorHidden(context?.view)
+    && propertyCardCabinetDeferHiddenBody(panel, state, () => {
+      const drawerOpen = panel.querySelector?.(".bob-cabinet-drawer")?.getAttribute?.("data-open") === "true";
+      propertyCardCabinetProviderBody(panel, provider, context, kind, path, paintKey, drawerOpen);
+    })) {
+    return state;
+  }
+  try { state.hiddenObserver?.disconnect?.(); } catch (_) {}
+  state.hiddenObserver = null;
   state.pending = true;
   const fail = (error) => {
     state.pending = false;
@@ -75369,9 +75480,63 @@ function propertyCardCabinetHostPaintOptions(plugin, kind, path, view, givenStat
   return options;
 }
 
+// Digest memo (bob-cli-qq perf): one card paint asks for this digest once per
+// provider paintKey and again for the foot signature, and each pass applies
+// all four kinds and stringifies every full report. Reuse it while the source
+// and every kind's report-state fields are unchanged; data services replace
+// report and error objects on refresh, so identity is enough.
+const PROPERTY_CARD_CABINET_HOST_DIGEST_MEMO_LIMIT = 40;
+
+function propertyCardCabinetHostStateSignature(state) {
+  if (!state || typeof state !== "object") return [null];
+  return [
+    state.report || null, state.stale === true, state.unavailable === true, state.refreshing === true,
+    state.syncBusy === true, state.error || null, state.syncError || null, state.today ?? null,
+    state.generation ?? null, state.reportGeneration ?? null,
+  ];
+}
+
+function propertyCardCabinetHostSignaturesEqual(left, right) {
+  if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    const a = left[index];
+    const b = right[index];
+    if (Array.isArray(a) || Array.isArray(b)) {
+      if (!propertyCardCabinetHostSignaturesEqual(a, b)) return false;
+    } else if (a !== b) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function propertyCardCabinetHostDigest(plugin, path, source) {
   try {
     const currentSource = typeof source === "string" ? source : propertyCardCabinetHostSource(plugin, path, null);
+    const signature = PROPERTY_CARD_HOST_CATALOG_KINDS
+      .map((kind) => propertyCardCabinetHostStateSignature(propertyCardCabinetHostReportState(plugin, kind)));
+    let memo = plugin?.cabinetHostDigestMemo;
+    if (plugin && !(memo instanceof Map)) {
+      memo = new Map();
+      try { plugin.cabinetHostDigestMemo = memo; } catch (_) { memo = null; }
+    }
+    const key = String(path || "");
+    const hit = memo instanceof Map ? memo.get(key) : null;
+    if (hit && hit.source === currentSource && propertyCardCabinetHostSignaturesEqual(hit.signature, signature)) return hit.digest;
+    const digest = propertyCardCabinetHostDigestCompute(plugin, path, currentSource);
+    if (memo instanceof Map && digest) {
+      memo.delete(key);
+      memo.set(key, { source: currentSource, signature, digest });
+      while (memo.size > PROPERTY_CARD_CABINET_HOST_DIGEST_MEMO_LIMIT) memo.delete(memo.keys().next().value);
+    }
+    return digest;
+  } catch (_) {
+    return "";
+  }
+}
+
+function propertyCardCabinetHostDigestCompute(plugin, path, currentSource) {
+  try {
     let species = "area";
     try { species = plugin?.homeCardCardModelFor?.(path, currentSource)?.kind || species; } catch (_) {}
     const digests = [];
@@ -75508,6 +75673,9 @@ async function propertyCardCabinetHostBuildBody(plugin, kind, context = {}) {
     component: context.component,
     paintKey: propertyCardCabinetHostPaintKey(plugin, kind, path),
     regionSource: applied.region.lines.join("\n"),
+    nativeCallout: context.readingScope && typeof context.view?.dispatch !== "function"
+      ? propertyCardCabinetReadingNativeCallout(context.readingScope, applied.plan) : null,
+    calloutKind: kind,
     releaseClaim: context.releaseClaim,
     repaintNative: () => propertyCardCabinetHostRepaintNative(plugin, kind),
     paint: async (callout) => {
@@ -75647,6 +75815,9 @@ function propertyCardCabinetHostInstall(plugin) {
       applies: (context) => propertyCardCabinetHostApply(plugin, kind, context),
       paintKey: (path) => propertyCardCabinetHostPaintKey(plugin, kind, path),
       buildBody: (context) => propertyCardCabinetHostBuildBody(plugin, kind, context),
+      // The claim lives in onMounted, so a hidden Live Preview body can wait
+      // for its editor to show without leaving the stored section unclaimed.
+      deferWhileHidden: true,
       onMounted: (context) => propertyCardCabinetHostMountClaim(kind, plugin, context),
       repaintNative: () => propertyCardCabinetHostRepaintNative(plugin, kind),
     };
@@ -98456,11 +98627,46 @@ function propertyCardCabinetInlineFallbackResetForTests() {
   return true;
 }
 
-function propertyCardCabinetInlineEligible(el) {
+const PROPERTY_CARD_CABINET_INLINE_DENIED = ".cm-editor, .markdown-embed, .internal-embed, .canvas-node, .canvas-node-content, .print";
+
+// Obsidian post-processes a Reading section before inserting it, so a
+// detached section answers through its render container (`ctx.containerEl`)
+// instead. A container inside a card or a cabinet body is our own render,
+// and a hover popover is a fragment: neither ever defers.
+function propertyCardCabinetInlineEligible(el, ctx) {
   try {
     if (!el || typeof el.closest !== "function") return false;
-    if (el.closest(".cm-editor, .markdown-embed, .internal-embed, .canvas-node, .canvas-node-content, .print")) return false;
-    return Boolean(el.closest(".markdown-preview-view, .markdown-preview-sizer"));
+    if (el.closest(PROPERTY_CARD_CABINET_INLINE_DENIED)) return false;
+    if (el.closest(".markdown-preview-view, .markdown-preview-sizer")) return true;
+    if (el.isConnected === true) return false;
+    const container = ctx?.containerEl;
+    if (!container || typeof container.closest !== "function") return false;
+    if (container.closest(`${PROPERTY_CARD_CABINET_INLINE_DENIED}, .hover-popover, .bob-property-card, .bob-cabinet-body-source`)) return false;
+    return Boolean(container.closest(".markdown-preview-view, .markdown-preview-sizer"));
+  } catch (_) {
+    return false;
+  }
+}
+
+// Only a note whose card can own the catalog defers: host catalogs live on
+// area and project cards, Records on album cards. Unknown frontmatter paints
+// at once as before.
+const PROPERTY_CARD_CABINET_INLINE_HOST_TYPES = Object.freeze({
+  projects: Object.freeze(["area", "project"]),
+  records: Object.freeze(["album"]),
+});
+
+function propertyCardCabinetInlineHostTyped(ctx, kind) {
+  try {
+    const allowed = PROPERTY_CARD_CABINET_INLINE_HOST_TYPES[kind];
+    if (!allowed) return false;
+    const raw = ctx?.frontmatter?.type;
+    const values = Array.isArray(raw) ? raw : [raw];
+    return values.some((value) => {
+      if (typeof value !== "string") return false;
+      const name = value.replace(/^\s*\[\[|\]\]\s*$/g, "").split("|")[0].split("/").pop().trim().toLowerCase();
+      return allowed.includes(name);
+    });
   } catch (_) {
     return false;
   }
@@ -98483,7 +98689,8 @@ function propertyCardCabinetDeferInlinePaint(el, ctx, kind, paint) {
     if (!el || !ctx || !kind || typeof paint !== "function") return false;
     const path = String(ctx.sourcePath || "");
     if (!path) return false;
-    if (!propertyCardCabinetInlineEligible(el)) return false;
+    if (!propertyCardCabinetInlineEligible(el, ctx)) return false;
+    if (!propertyCardCabinetInlineHostTyped(ctx, kind)) return false;
     let attempts = 0;
     let timer = null;
     let done = false;
@@ -98497,9 +98704,15 @@ function propertyCardCabinetDeferInlinePaint(el, ctx, kind, paint) {
     const fire = () => {
       if (done) return;
       try {
-        if (!el.isConnected) { clear(); return; }
         if (propertyCardCabinetInlineAbsorbed(el, kind)) { clear(); return; }
         attempts += 1;
+        // A section Obsidian has not inserted yet gets the same bounded
+        // retries; one it dropped is never shown, so it needs no paint.
+        if (!el.isConnected) {
+          if (attempts <= propertyCardCabinetInlineFallbackRetries) timer = setTimeout(fire, propertyCardCabinetInlineFallbackMs);
+          else clear();
+          return;
+        }
         if (propertyCardCabinetMountedInRoot(el, path, kind) && attempts <= propertyCardCabinetInlineFallbackRetries) {
           timer = setTimeout(fire, propertyCardCabinetInlineFallbackMs);
           return;
@@ -125507,6 +125720,17 @@ function cabinetRecordsReadingScope(container) {
   return null;
 }
 
+// The host's own Reading view, never an embed or popover around it.
+function cabinetRecordsHostReadingScope(scope) {
+  try {
+    if (!scope || typeof scope.matches !== "function" || !scope.matches(".markdown-preview-view")) return null;
+    if (scope.closest?.(".markdown-embed, .internal-embed, .hover-popover, .canvas-node")) return null;
+    return scope;
+  } catch (_) {
+    return null;
+  }
+}
+
 // Claim one mounted cabinet body: fingerprinted ownership plus the Live
 // Preview editor absorb and the Reading tags. The stored section hides only
 // while this working body stands in for it. Returns a release function.
@@ -125533,7 +125757,9 @@ function cabinetRecordsClaimBody(plugin, parts = {}) {
       path,
       fingerprint,
       plan,
-      scope: cabinetRecordsReadingScope(container),
+      // A Reading body builds before its card is inserted, so a detached
+      // container answers through the Reading scope the host passed in.
+      scope: cabinetRecordsReadingScope(container) || cabinetRecordsHostReadingScope(parts.readingScope),
       tagged: [],
       editorHandle: null,
       releaseClaim: null,
@@ -125604,6 +125830,7 @@ function cabinetRecordsBuildBody(plugin, options = {}) {
   const path = typeof options.path === "string" ? options.path : "";
   const view = options.view || null;
   const component = options.component || plugin || null;
+  const readingScope = options.readingScope || null;
   try {
     if (!plugin || !doc || !container || !path) return;
     let source = "";
@@ -125648,6 +125875,7 @@ function cabinetRecordsBuildBody(plugin, options = {}) {
     const releaseClaim = cabinetRecordsClaimBody(plugin, {
       view: view && typeof view.dispatch === "function" ? view : null,
       container,
+      readingScope: view && typeof view.dispatch === "function" ? null : readingScope,
       path,
       fingerprint,
       plan,
@@ -125665,41 +125893,56 @@ function cabinetRecordsBuildBody(plugin, options = {}) {
     const paint = (calloutEl) => {
       cabinetRecordsPaintCallout(plugin, calloutEl, path, folds, container);
     };
-    const run = (() => {
-      try {
-        if (typeof propertyCardCabinetRenderCatalog !== "function") return null;
-        return propertyCardCabinetRenderCatalog({
-          plugin,
-          doc,
-          container,
-          path,
-          regionSource,
-          paint,
-          paintKey: cabinetRecordsPaintKeyFor(plugin, path),
-          component: component || undefined,
-          releaseClaim,
-          repaintNative: () => {
-            try {
-              if (typeof plugin.scheduleAlbumRecordsRefresh === "function") plugin.scheduleAlbumRecordsRefresh();
-            } catch (_) {}
+    const renderNow = () => {
+      const run = (() => {
+        try {
+          if (typeof propertyCardCabinetRenderCatalog !== "function") return null;
+          return propertyCardCabinetRenderCatalog({
+            plugin,
+            doc,
+            container,
+            path,
+            regionSource,
+            nativeCallout: readingScope && !(view && typeof view.dispatch === "function")
+              && typeof propertyCardCabinetReadingNativeCallout === "function"
+              ? propertyCardCabinetReadingNativeCallout(readingScope, plan) : null,
+            calloutKind: CABINET_RECORDS_KIND,
+            paint,
+            paintKey: cabinetRecordsPaintKeyFor(plugin, path),
+            component: component || undefined,
+            releaseClaim,
+            repaintNative: () => {
+              try {
+                if (typeof plugin.scheduleAlbumRecordsRefresh === "function") plugin.scheduleAlbumRecordsRefresh();
+              } catch (_) {}
+            },
+          });
+        } catch (_) {
+          return null;
+        }
+      })();
+      if (run && typeof run.then === "function") {
+        run.then(
+          (outcome) => {
+            if (outcome && outcome.failed) {
+              try { releaseClaim(); } catch (_) {}
+            }
           },
-        });
-      } catch (_) {
-        return null;
-      }
-    })();
-    if (run && typeof run.then === "function") {
-      run.then(
-        (outcome) => {
-          if (outcome && outcome.failed) {
+          () => {
             try { releaseClaim(); } catch (_) {}
-          }
-        },
-        () => {
-          try { releaseClaim(); } catch (_) {}
-        },
-      );
-    }
+          },
+        );
+      }
+    };
+    // A Live Preview editor hidden behind its leaf's Reading view keeps the
+    // claim but renders the body only once the editor shows (bob-cli-qq perf).
+    try { container.__bobRecordsShownObserver?.disconnect?.(); } catch (_) {}
+    if (view && typeof view.dispatch === "function"
+      && typeof propertyCardCabinetEditorHidden === "function" && propertyCardCabinetEditorHidden(view)
+      && typeof propertyCardCabinetWhenShown === "function"
+      && propertyCardCabinetWhenShown(container.closest?.(".bob-cabinet-panel") || container, renderNow,
+        (observer) => { container.__bobRecordsShownObserver = observer; })) return;
+    renderNow();
   } catch (_) {}
 }
 
@@ -125902,15 +126145,21 @@ function cabinetRecordsRegisterProvider(plugin) {
     const provider = {
       applies: (context) => cabinetRecordsAppliesFor(plugin, context || {}),
       paintKey: (path) => cabinetRecordsPaintKeyFor(plugin, path),
-      buildBody: ({ doc, path, view, component, container }) => {
-        cabinetRecordsBuildBody(plugin, { doc, path, view, component, container });
+      buildBody: ({ doc, path, view, component, container, readingScope }) => {
+        cabinetRecordsBuildBody(plugin, { doc, path, view, component, container, readingScope });
       },
       onOpen: ({ path, view } = {}) => {
         try {
           const record = cabinetRecordsLastApplies.get(path);
           if (!record || !record.plan || !record.fingerprint) return;
+          // A Reading body claims and tags while it builds; claiming again
+          // here would release those tags with no container to re-tag from.
+          const editor = view && typeof view.dispatch === "function" ? view : null;
+          const live = cabinetRecordsBodiesFor(path, false)?.get(cabinetRecordsBodyKey(editor));
+          if (!editor && live && !live.released && live.fingerprint === String(record.fingerprint)
+            && live.scope && live.scope.isConnected === true) return;
           cabinetRecordsClaimBody(plugin, {
-            view: view && typeof view.dispatch === "function" ? view : null,
+            view: editor,
             container: (() => {
               try {
                 if (view && view.dom && typeof view.dom.querySelector === "function") {
@@ -127255,7 +127504,8 @@ class BobLedgerToolsAlbumHeaderMixin {
     let header = slotNode || bodyNodes[0] || null;
     const focusKey = this.albumHeaderFocusKey(header, doc);
     const extra = typeof this.albumHeaderFootExtra === "function" ? this.albumHeaderFootExtra(sourcePath, card) : null;
-    const options = { ...this.albumHeaderOptions(sourcePath, state, card.body, "reading"), footSpec: extra?.footSpec };
+    const options = { ...this.albumHeaderOptions(sourcePath, state, card.body, "reading"), footSpec: extra?.footSpec,
+      readingScope: reading ? scope : null };
     const signature = JSON.stringify([albumHeaderCardSignature(card, options), extra?.footDigest || "", extra?.footOpen === true]);
     if (!header || albumHeaderNodeSignatures.get(header) !== signature) {
       let fresh = null;
@@ -127664,6 +127914,7 @@ class BobLedgerToolsAlbumHeaderFootMixin {
       {
         plugin: this,
         view: options?.view || null,
+        readingScope: options?.readingScope || null,
         component: options?.component || this,
         source: options?.sourceText,
         frontmatter: options?.frontmatter || propertyCardFootAdapterFrontmatter(this, path),
@@ -218338,6 +218589,12 @@ try {
       propertyCardCabinetMountedInRoot,
       propertyCardCabinetDeferInlinePaint,
       propertyCardCabinetInlineEligible,
+      propertyCardCabinetInlineHostTyped,
+      propertyCardCabinetCloneNativeCallout,
+      propertyCardCabinetReadingNativeCallout,
+      propertyCardCabinetEditorHidden,
+      propertyCardCabinetDeferHiddenBody,
+      propertyCardCabinetWhenShown,
       propertyCardCabinetInlineAbsorbed,
       propertyCardCabinetInlineFallbackSetDelayForTests,
       propertyCardCabinetInlineFallbackResetForTests,

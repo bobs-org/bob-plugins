@@ -544,7 +544,8 @@ class BobLedgerToolsAlbumHeaderMixin {
     let header = slotNode || bodyNodes[0] || null;
     const focusKey = this.albumHeaderFocusKey(header, doc);
     const extra = typeof this.albumHeaderFootExtra === "function" ? this.albumHeaderFootExtra(sourcePath, card) : null;
-    const options = { ...this.albumHeaderOptions(sourcePath, state, card.body, "reading"), footSpec: extra?.footSpec };
+    const options = { ...this.albumHeaderOptions(sourcePath, state, card.body, "reading"), footSpec: extra?.footSpec,
+      readingScope: reading ? scope : null };
     const signature = JSON.stringify([albumHeaderCardSignature(card, options), extra?.footDigest || "", extra?.footOpen === true]);
     if (!header || albumHeaderNodeSignatures.get(header) !== signature) {
       let fresh = null;

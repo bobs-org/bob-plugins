@@ -99,6 +99,11 @@ class BobLedgerToolsSnoozeMarksReadingMixin {
       if (!this.snoozeMarksEnabled) {
         return null;
       }
+      // The clock shares the Today slot: either toggle off hides it
+      // (SM-D15), while the tomato keeps its own Today toggle behavior.
+      if (this.todayMarksEnabled === false) {
+        return null;
+      }
       const moment =
         clock instanceof Date
           ? clock

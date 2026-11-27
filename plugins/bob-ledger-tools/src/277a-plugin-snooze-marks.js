@@ -356,6 +356,11 @@ class BobLedgerToolsSnoozeMarksMixin {
       if (!this.snoozeMarksEnabled) {
         return Decoration.none;
       }
+      // The clock shares the Today slot: either toggle off hides it
+      // (SM-D15), while the tomato keeps its own Today toggle behavior.
+      if (this.todayMarksEnabled === false) {
+        return Decoration.none;
+      }
       if (!view || !view.state) {
         return Decoration.none;
       }

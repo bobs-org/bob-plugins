@@ -373,6 +373,7 @@
   "277c-plugin-snooze-marks-jump.js",
   "278a-plugin-snooze-row-paint.js",
   "278b-plugin-snooze-row-paint-reading.js",
+  "278c-plugin-snooze-row-paint-history.js",
   "278-plugin-relation-model.js",
   "280-plugin-dependency-render.js",
   "281-plugin-blocks-render.js",

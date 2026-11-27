@@ -169297,6 +169297,15 @@ class BobLedgerToolsTodayMarksMixin {
     } catch (error) {
       // Reading sweep is best-effort.
     }
+    try {
+      // Snooze clocks share the Today slot: either toggle hides them,
+      // so every Today refresh re-resolves snooze paint too.
+      if (typeof this.scheduleSnoozeMarksRefresh === "function") {
+        this.scheduleSnoozeMarksRefresh();
+      }
+    } catch (error) {
+      // Snooze refresh is best-effort.
+    }
   }
 
   toggleTodayMarks() {
@@ -171182,6 +171191,11 @@ class BobLedgerToolsSnoozeMarksMixin {
       if (!this.snoozeMarksEnabled) {
         return Decoration.none;
       }
+      // The clock shares the Today slot: either toggle off hides it
+      // (SM-D15), while the tomato keeps its own Today toggle behavior.
+      if (this.todayMarksEnabled === false) {
+        return Decoration.none;
+      }
       if (!view || !view.state) {
         return Decoration.none;
       }
@@ -171646,6 +171660,11 @@ class BobLedgerToolsSnoozeMarksReadingMixin {
   snoozeMarkDesiredForRow(li, key, nowMinutes, clock) {
     try {
       if (!this.snoozeMarksEnabled) {
+        return null;
+      }
+      // The clock shares the Today slot: either toggle off hides it
+      // (SM-D15), while the tomato keeps its own Today toggle behavior.
+      if (this.todayMarksEnabled === false) {
         return null;
       }
       const moment =
@@ -172859,6 +172878,19 @@ class BobLedgerToolsSnoozeRowPaintMixin {
     }
   }
 
+  // Classified rows carry compact `HHMM`; the presentation contract
+  // wants `HH:MM`. Shared with the Reading twin below.
+  snoozeRowPaintColonClock(value) {
+    try {
+      if (typeof snoozeRowPaintColonTime === "function") {
+        return snoozeRowPaintColonTime(value);
+      }
+    } catch (error) {
+      // Fall through to the raw value.
+    }
+    return typeof value === "string" ? value : null;
+  }
+
   createSnoozeRowPaintExtension() {
     try {
       if (
@@ -173277,6 +173309,59 @@ class BobLedgerToolsSnoozeRowPaintMixin {
         }
         return false;
       };
+      // Heading summary chip after the `## Snoozed` header line.
+      // RangeSetBuilder requires ascending positions, so the heading
+      // (earliest line) is added before any row decoration.
+      try {
+        const summary = this.snoozeRowPaintHeadingSummary(
+          model.classified,
+        );
+        if (summary) {
+          const headerNumber = Number.isInteger(
+            model.parsed.headerNumber,
+          )
+            ? model.parsed.headerNumber
+            : null;
+          if (headerNumber && headerNumber >= 1) {
+            let headerLine = null;
+            try {
+              headerLine = doc.line(headerNumber);
+            } catch (error) {
+              headerLine = null;
+            }
+            if (headerLine && inRange(headerLine.from)) {
+              const chip = buildSnoozeHeadingChipElement(
+                typeof document !== "undefined" ? document : null,
+                summary,
+              );
+              if (chip && typeof WidgetType === "function") {
+                const key = "heading|" + summary;
+                const widget = new (class extends WidgetType {
+                  constructor() {
+                    super();
+                    this.key = key;
+                  }
+                  eq(other) {
+                    return Boolean(
+                      other && other.key === this.key,
+                    );
+                  }
+                  toDOM() {
+                    return chip;
+                  }
+                })();
+                builder.add(
+                  headerLine.to,
+                  headerLine.to,
+                  Decoration.widget({ widget, side: 1 }),
+                );
+              }
+            }
+          }
+        }
+      } catch (error) {
+        // Heading summary is best-effort.
+      }
       // Historical notes: quiet time pills, no countdown, no
       // heading summary. Map parser rows directly.
       if (model.historical) {
@@ -173315,7 +173400,7 @@ class BobLedgerToolsSnoozeRowPaintMixin {
                   )
                 : snoozeRowPaintPresentation(
                     "previous_day",
-                    row.hhmm,
+                    this.snoozeRowPaintColonClock(row.hhmm),
                     null,
                   );
             if (
@@ -173401,6 +173486,29 @@ class BobLedgerToolsSnoozeRowPaintMixin {
           continue;
         }
       }
+      // Classified rows carry compact `HHMM` and no wake time; the
+      // parsed section rows own both. Resolve them per line so chips
+      // keep their time pill and history keeps its woke label.
+      const colonTime = (value) => this.snoozeRowPaintColonClock(value);
+      const wokeByLine = new Map();
+      try {
+        const parsedRows =
+          model.parsed && Array.isArray(model.parsed.rows)
+            ? model.parsed.rows
+            : [];
+        for (const parsedRow of parsedRows) {
+          if (
+            parsedRow &&
+            parsedRow.kind === "history" &&
+            Number.isInteger(parsedRow.line) &&
+            typeof parsedRow.wokeHhmm === "string"
+          ) {
+            wokeByLine.set(parsedRow.line, parsedRow.wokeHhmm);
+          }
+        }
+      } catch (error) {
+        // History labels are best-effort.
+      }
       const nowMinutes =
         clock.getHours() * 60 + clock.getMinutes();
       for (const [lineNumber, row] of byLine.entries()) {
@@ -173417,10 +173525,18 @@ class BobLedgerToolsSnoozeRowPaintMixin {
           if (!inRange(line.from)) {
             continue;
           }
+          let wokeAt = null;
+          try {
+            wokeAt = wokeByLine.has(lineNumber)
+              ? wokeByLine.get(lineNumber)
+              : row.wokeAt;
+          } catch (error) {
+            wokeAt = row.wokeAt;
+          }
           const presentation = snoozeRowPaintPresentation(
             row.state,
-            row.hhmm,
-            row.wokeAt,
+            colonTime(row.hhmm),
+            wokeAt,
           );
           if (!presentation || presentation.paint === "none") {
             continue;
@@ -173493,54 +173609,14 @@ class BobLedgerToolsSnoozeRowPaintMixin {
           continue;
         }
       }
-      // Heading summary chip after the `## Snoozed` header line.
+      // Struck history rows are provenance, never classifier
+      // membership: paint them from the parsed section rows (278c).
       try {
-        const summary = this.snoozeRowPaintHeadingSummary(
-          model.classified,
-        );
-        if (summary) {
-          const headerNumber = Number.isInteger(
-            model.parsed.headerNumber,
-          )
-            ? model.parsed.headerNumber
-            : null;
-          if (headerNumber && headerNumber >= 1) {
-            let headerLine = null;
-            try {
-              headerLine = doc.line(headerNumber);
-            } catch (error) {
-              headerLine = null;
-            }
-            if (headerLine && inRange(headerLine.from)) {
-              const chip = buildSnoozeHeadingChipElement(
-                typeof document !== "undefined" ? document : null,
-                summary,
-              );
-              if (chip && typeof WidgetType === "function") {
-                const key = "heading|" + summary;
-                const widget = new (class extends WidgetType {
-                  constructor() {
-                    super();
-                    this.key = key;
-                  }
-                  eq(other) {
-                    return Boolean(other && other.key === this.key);
-                  }
-                  toDOM() {
-                    return chip;
-                  }
-                })();
-                builder.add(
-                  headerLine.to,
-                  headerLine.to,
-                  Decoration.widget({ widget, side: 1 }),
-                );
-              }
-            }
-          }
+        if (typeof snoozeRowPaintHistoryLive === "function") {
+          snoozeRowPaintHistoryLive(builder, doc, model, byLine, inRange);
         }
       } catch (error) {
-        // Heading summary is best-effort.
+        // History paint is best-effort.
       }
       return builder.finish();
     } catch (error) {
@@ -173912,6 +173988,8 @@ class BobLedgerToolsSnoozeRowPaintReadingMixin {
     }
   }
 
+  // Compact `HHMM` into presentation `HH:MM`; defined on the Live
+  // Preview twin (278a) and shared here through the plugin scope.
   snoozeRowPaintApplyRowClass(li, paint) {
     try {
       if (!li) {
@@ -173977,17 +174055,34 @@ class BobLedgerToolsSnoozeRowPaintReadingMixin {
       if (!root || !sourcePath) {
         return false;
       }
+      // The postprocessor may hand us a single block wrapper instead of
+      // the whole preview; scope stale cleanup and row discovery to the
+      // enclosing preview view.
+      let scope = root;
+      try {
+        const view =
+          root && typeof root.closest === "function"
+            ? root.closest(
+                ".markdown-preview-view, .markdown-reading-view",
+              )
+            : null;
+        if (view) {
+          scope = view;
+        }
+      } catch (error) {
+        // Fall back to the postprocessor container.
+      }
       const staleChips =
-        typeof root.querySelectorAll === "function"
+        typeof scope.querySelectorAll === "function"
           ? Array.from(
-              root.querySelectorAll(
+              scope.querySelectorAll(
                 ".bob-snooze-row-chip, .bob-snooze-heading-chip",
               ),
             )
           : [];
       const staleRows =
-        typeof root.querySelectorAll === "function"
-          ? Array.from(root.querySelectorAll("li.bob-snooze-row"))
+        typeof scope.querySelectorAll === "function"
+          ? Array.from(scope.querySelectorAll("li.bob-snooze-row"))
           : [];
       if (
         !this.snoozeMarksEnabled ||
@@ -174059,8 +174154,8 @@ class BobLedgerToolsSnoozeRowPaintReadingMixin {
       let headings = [];
       try {
         headings =
-          typeof root.querySelectorAll === "function"
-            ? Array.from(root.querySelectorAll("h2"))
+          typeof scope.querySelectorAll === "function"
+            ? Array.from(scope.querySelectorAll("h2"))
             : [];
       } catch (error) {
         headings = [];
@@ -174111,31 +174206,70 @@ class BobLedgerToolsSnoozeRowPaintReadingMixin {
       // Collect top-level list items under the heading until the next
       // H2: those positions mirror `parsed.rows` order, so the nth
       // item maps to the nth parsed row without title heuristics.
+      // Reading views wrap blocks in container divs, so walk the scope
+      // in document order from the heading; nested lists inside a row
+      // stay with their row and never become items themselves.
       const items = [];
       try {
-        let sibling = heading.nextElementSibling;
-        let guard = 0;
-        while (sibling && guard++ < 200) {
-          const tag = this.snoozeRowPaintReadingTag(sibling);
-          if (tag === "H2" || tag === "H1") {
-            break;
+        const takeList = (list) => {
+          const children = list.children || list.childNodes || [];
+          for (const child of Array.from(children)) {
+            try {
+              if (
+                this.snoozeRowPaintReadingTag(child) === "LI"
+              ) {
+                items.push(child);
+              }
+            } catch (error) {
+              continue;
+            }
           }
-          if (tag === "UL" || tag === "OL") {
-            const children = sibling.children || sibling.childNodes || [];
-            for (const child of Array.from(children)) {
-              try {
-                if (
-                  this.snoozeRowPaintReadingTag(child) === "LI"
-                ) {
-                  items.push(child);
-                }
-              } catch (error) {
+        };
+        let started = false;
+        let guard = 0;
+        const walkOrder = (node, depth) => {
+          if (!node || depth > 12 || guard++ > 2000) {
+            return true;
+          }
+          const children = node.children || node.childNodes || [];
+          for (const child of Array.from(children)) {
+            if (!started) {
+              if (child === heading) {
+                started = true;
                 continue;
+              }
+              if (
+                child.contains &&
+                typeof child.contains === "function" &&
+                child.contains(heading)
+              ) {
+                if (walkOrder(child, depth + 1) === false) {
+                  return false;
+                }
+                continue;
+              }
+              continue;
+            }
+            const tag = this.snoozeRowPaintReadingTag(child);
+            if (tag === "H1" || tag === "H2") {
+              return false;
+            }
+            if (tag === "UL" || tag === "OL") {
+              takeList(child);
+              continue;
+            }
+            if (tag === "LI") {
+              continue;
+            }
+            if (child.children && child.children.length) {
+              if (walkOrder(child, depth + 1) === false) {
+                return false;
               }
             }
           }
-          sibling = sibling.nextElementSibling;
-        }
+          return true;
+        };
+        walkOrder(scope, 0);
       } catch (error) {
         // Item scan is best-effort.
       }
@@ -174196,7 +174330,7 @@ class BobLedgerToolsSnoozeRowPaintReadingMixin {
                   )
                 : snoozeRowPaintPresentation(
                     "previous_day",
-                    row.hhmm,
+                    this.snoozeRowPaintColonClock(row.hhmm),
                     null,
                   );
             this.snoozeRowPaintApplyRowClass(li, presentation.paint);
@@ -174259,18 +174393,32 @@ class BobLedgerToolsSnoozeRowPaintReadingMixin {
             continue;
           }
           const entry = stateByLine.get(row.line) || null;
-          const state =
+          let state =
             entry && typeof entry.state === "string"
               ? entry.state
               : null;
+          let hhmm = entry && entry.hhmm;
+          // Classified rows omit history (provenance, never membership);
+          // the parsed row that shares the line owns the wake label.
+          let wokeAt = entry ? entry.wokeAt : null;
+          if (
+            !state &&
+            row &&
+            row.kind === "history" &&
+            typeof row.wokeHhmm === "string"
+          ) {
+            state = "woken";
+            hhmm = null;
+            wokeAt = row.wokeHhmm;
+          }
           if (!state) {
             this.snoozeRowPaintApplyRowClass(li, "none");
             continue;
           }
           const presentation = snoozeRowPaintPresentation(
             state,
-            entry.hhmm,
-            entry.wokeAt,
+            this.snoozeRowPaintColonClock(hhmm),
+            wokeAt,
           );
           if (!presentation || presentation.paint === "none") {
             this.snoozeRowPaintApplyRowClass(li, "none");
@@ -174327,6 +174475,121 @@ class BobLedgerToolsSnoozeRowPaintReadingMixin {
     } catch (error) {
       return false;
     }
+  }
+}
+// ---- src/278c-plugin-snooze-row-paint-history.js ----
+// Snooze history row paint for Live Preview (visual-proof phase).
+// Struck history rows are provenance, never classifier membership, so the
+// live row loop has no classified entry for them. This shared-scope helper
+// paints them from the parsed section rows so the wake label survives.
+// Contract: bob-cli `docs/snooze-marks.md`. Split from
+// `278a-plugin-snooze-row-paint.js` to keep each hand-edited fragment at or
+// below 1,000 lines; fragments share one script scope.
+function snoozeRowPaintHistoryLive(builder, doc, model, byLine, inRange) {
+  try {
+    if (!builder || !doc || !model) {
+      return;
+    }
+    const lines = typeof byLine !== "undefined" ? byLine : new Map();
+    const inView = typeof inRange === "function" ? inRange : () => true;
+    const parsedRows =
+      model.parsed && Array.isArray(model.parsed.rows)
+        ? model.parsed.rows
+        : [];
+    for (const parsedRow of parsedRows) {
+      try {
+        if (
+          !parsedRow ||
+          parsedRow.embedded ||
+          parsedRow.kind !== "history" ||
+          !Number.isInteger(parsedRow.line) ||
+          parsedRow.line < 1
+        ) {
+          continue;
+        }
+        if (lines instanceof Map && lines.has(parsedRow.line)) {
+          continue;
+        }
+        let line = null;
+        try {
+          line = doc.line(parsedRow.line);
+        } catch (error) {
+          line = null;
+        }
+        if (!line) {
+          continue;
+        }
+        if (!inView(line.from)) {
+          continue;
+        }
+        const presentation = snoozeRowPaintPresentation(
+          "woken",
+          null,
+          typeof parsedRow.wokeHhmm === "string"
+            ? parsedRow.wokeHhmm
+            : null,
+        );
+        if (!presentation || presentation.paint === "none") {
+          continue;
+        }
+        try {
+          builder.add(
+            line.from,
+            line.from,
+            Decoration.line({
+              class:
+                "bob-snooze-row bob-snooze-row--" +
+                presentation.paint,
+            }),
+          );
+        } catch (error) {
+          // Line paint is best-effort.
+        }
+        if (presentation.timePill || presentation.statusText) {
+          try {
+            const chip = buildSnoozeRowChipElement(
+              typeof document !== "undefined" ? document : null,
+              {
+                paint: presentation.paint,
+                timePill: presentation.timePill,
+                statusText: presentation.statusText,
+              },
+            );
+            if (chip && typeof WidgetType === "function") {
+              const widgetKey = [
+                presentation.paint,
+                presentation.timePill,
+                presentation.statusText,
+                parsedRow.line,
+              ].join("|");
+              const widget = new (class extends WidgetType {
+                constructor() {
+                  super();
+                  this.key = widgetKey;
+                }
+                eq(other) {
+                  return Boolean(other && other.key === this.key);
+                }
+                toDOM() {
+                  return chip;
+                }
+              })();
+              builder.add(
+                line.to,
+                line.to,
+                Decoration.widget({ widget, side: 1 }),
+              );
+            }
+          } catch (error) {
+            // Chip paint is best-effort.
+          }
+        }
+      } catch (error) {
+        continue;
+      }
+    }
+  } catch (error) {
+    // History paint is best-effort.
   }
 }
 // ---- src/278-plugin-relation-model.js ----

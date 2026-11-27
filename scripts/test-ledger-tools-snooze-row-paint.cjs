@@ -362,3 +362,23 @@ test("duplicate headers and non-daily paths stay neutral at runtime", () => {
     null,
   );
 });
+
+test("runtime handoff: compact HHMM and parsed wake labels still build chips", () => {
+  const plugin = Object.create(LedgerToolsPlugin.prototype);
+  // Classified rows carry compact `HHMM` (never `HH:MM`); the parsed
+  // section rows own colon wake times. This is the exact runtime shape.
+  assert.equal(plugin.snoozeRowPaintColonClock("1900"), "19:00");
+  assert.equal(plugin.snoozeRowPaintColonClock("19:00"), null);
+  assert.equal(plugin.snoozeRowPaintColonClock(null), null);
+  const doc = fakeElementDoc();
+  const asleep = snoozeRowPaintPresentation("asleep", plugin.snoozeRowPaintColonClock("1900"), null);
+  assert.equal(asleep.timePill, "19:00");
+  const asleepChip = buildSnoozeRowChipElement(doc, asleep);
+  assert.ok(asleepChip);
+  assert.equal(asleepChip.getAttribute("data-bob-snooze-row-paint"), "asleep");
+  assert.equal(asleepChip.getAttribute("data-bob-snooze-row-time"), "19:00");
+  const history = snoozeRowPaintPresentation("woken", null, "19:20");
+  const historyChip = buildSnoozeRowChipElement(doc, history);
+  assert.ok(historyChip);
+  assert.equal(historyChip.getAttribute("data-bob-snooze-row-status"), "woke 19:20");
+});

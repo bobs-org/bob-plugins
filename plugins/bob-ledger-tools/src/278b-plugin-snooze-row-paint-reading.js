@@ -314,6 +314,8 @@ class BobLedgerToolsSnoozeRowPaintReadingMixin {
     }
   }
 
+  // Compact `HHMM` into presentation `HH:MM`; defined on the Live
+  // Preview twin (278a) and shared here through the plugin scope.
   snoozeRowPaintApplyRowClass(li, paint) {
     try {
       if (!li) {
@@ -379,17 +381,34 @@ class BobLedgerToolsSnoozeRowPaintReadingMixin {
       if (!root || !sourcePath) {
         return false;
       }
+      // The postprocessor may hand us a single block wrapper instead of
+      // the whole preview; scope stale cleanup and row discovery to the
+      // enclosing preview view.
+      let scope = root;
+      try {
+        const view =
+          root && typeof root.closest === "function"
+            ? root.closest(
+                ".markdown-preview-view, .markdown-reading-view",
+              )
+            : null;
+        if (view) {
+          scope = view;
+        }
+      } catch (error) {
+        // Fall back to the postprocessor container.
+      }
       const staleChips =
-        typeof root.querySelectorAll === "function"
+        typeof scope.querySelectorAll === "function"
           ? Array.from(
-              root.querySelectorAll(
+              scope.querySelectorAll(
                 ".bob-snooze-row-chip, .bob-snooze-heading-chip",
               ),
             )
           : [];
       const staleRows =
-        typeof root.querySelectorAll === "function"
-          ? Array.from(root.querySelectorAll("li.bob-snooze-row"))
+        typeof scope.querySelectorAll === "function"
+          ? Array.from(scope.querySelectorAll("li.bob-snooze-row"))
           : [];
       if (
         !this.snoozeMarksEnabled ||
@@ -461,8 +480,8 @@ class BobLedgerToolsSnoozeRowPaintReadingMixin {
       let headings = [];
       try {
         headings =
-          typeof root.querySelectorAll === "function"
-            ? Array.from(root.querySelectorAll("h2"))
+          typeof scope.querySelectorAll === "function"
+            ? Array.from(scope.querySelectorAll("h2"))
             : [];
       } catch (error) {
         headings = [];
@@ -513,31 +532,70 @@ class BobLedgerToolsSnoozeRowPaintReadingMixin {
       // Collect top-level list items under the heading until the next
       // H2: those positions mirror `parsed.rows` order, so the nth
       // item maps to the nth parsed row without title heuristics.
+      // Reading views wrap blocks in container divs, so walk the scope
+      // in document order from the heading; nested lists inside a row
+      // stay with their row and never become items themselves.
       const items = [];
       try {
-        let sibling = heading.nextElementSibling;
-        let guard = 0;
-        while (sibling && guard++ < 200) {
-          const tag = this.snoozeRowPaintReadingTag(sibling);
-          if (tag === "H2" || tag === "H1") {
-            break;
+        const takeList = (list) => {
+          const children = list.children || list.childNodes || [];
+          for (const child of Array.from(children)) {
+            try {
+              if (
+                this.snoozeRowPaintReadingTag(child) === "LI"
+              ) {
+                items.push(child);
+              }
+            } catch (error) {
+              continue;
+            }
           }
-          if (tag === "UL" || tag === "OL") {
-            const children = sibling.children || sibling.childNodes || [];
-            for (const child of Array.from(children)) {
-              try {
-                if (
-                  this.snoozeRowPaintReadingTag(child) === "LI"
-                ) {
-                  items.push(child);
-                }
-              } catch (error) {
+        };
+        let started = false;
+        let guard = 0;
+        const walkOrder = (node, depth) => {
+          if (!node || depth > 12 || guard++ > 2000) {
+            return true;
+          }
+          const children = node.children || node.childNodes || [];
+          for (const child of Array.from(children)) {
+            if (!started) {
+              if (child === heading) {
+                started = true;
                 continue;
+              }
+              if (
+                child.contains &&
+                typeof child.contains === "function" &&
+                child.contains(heading)
+              ) {
+                if (walkOrder(child, depth + 1) === false) {
+                  return false;
+                }
+                continue;
+              }
+              continue;
+            }
+            const tag = this.snoozeRowPaintReadingTag(child);
+            if (tag === "H1" || tag === "H2") {
+              return false;
+            }
+            if (tag === "UL" || tag === "OL") {
+              takeList(child);
+              continue;
+            }
+            if (tag === "LI") {
+              continue;
+            }
+            if (child.children && child.children.length) {
+              if (walkOrder(child, depth + 1) === false) {
+                return false;
               }
             }
           }
-          sibling = sibling.nextElementSibling;
-        }
+          return true;
+        };
+        walkOrder(scope, 0);
       } catch (error) {
         // Item scan is best-effort.
       }
@@ -598,7 +656,7 @@ class BobLedgerToolsSnoozeRowPaintReadingMixin {
                   )
                 : snoozeRowPaintPresentation(
                     "previous_day",
-                    row.hhmm,
+                    this.snoozeRowPaintColonClock(row.hhmm),
                     null,
                   );
             this.snoozeRowPaintApplyRowClass(li, presentation.paint);
@@ -661,18 +719,32 @@ class BobLedgerToolsSnoozeRowPaintReadingMixin {
             continue;
           }
           const entry = stateByLine.get(row.line) || null;
-          const state =
+          let state =
             entry && typeof entry.state === "string"
               ? entry.state
               : null;
+          let hhmm = entry && entry.hhmm;
+          // Classified rows omit history (provenance, never membership);
+          // the parsed row that shares the line owns the wake label.
+          let wokeAt = entry ? entry.wokeAt : null;
+          if (
+            !state &&
+            row &&
+            row.kind === "history" &&
+            typeof row.wokeHhmm === "string"
+          ) {
+            state = "woken";
+            hhmm = null;
+            wokeAt = row.wokeHhmm;
+          }
           if (!state) {
             this.snoozeRowPaintApplyRowClass(li, "none");
             continue;
           }
           const presentation = snoozeRowPaintPresentation(
             state,
-            entry.hhmm,
-            entry.wokeAt,
+            this.snoozeRowPaintColonClock(hhmm),
+            wokeAt,
           );
           if (!presentation || presentation.paint === "none") {
             this.snoozeRowPaintApplyRowClass(li, "none");

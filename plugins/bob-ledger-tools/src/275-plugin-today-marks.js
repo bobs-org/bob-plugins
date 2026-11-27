@@ -602,6 +602,15 @@ class BobLedgerToolsTodayMarksMixin {
     } catch (error) {
       // Reading sweep is best-effort.
     }
+    try {
+      // Snooze clocks share the Today slot: either toggle hides them,
+      // so every Today refresh re-resolves snooze paint too.
+      if (typeof this.scheduleSnoozeMarksRefresh === "function") {
+        this.scheduleSnoozeMarksRefresh();
+      }
+    } catch (error) {
+      // Snooze refresh is best-effort.
+    }
   }
 
   toggleTodayMarks() {

@@ -182,6 +182,19 @@ class BobLedgerToolsSnoozeRowPaintMixin {
     }
   }
 
+  // Classified rows carry compact `HHMM`; the presentation contract
+  // wants `HH:MM`. Shared with the Reading twin below.
+  snoozeRowPaintColonClock(value) {
+    try {
+      if (typeof snoozeRowPaintColonTime === "function") {
+        return snoozeRowPaintColonTime(value);
+      }
+    } catch (error) {
+      // Fall through to the raw value.
+    }
+    return typeof value === "string" ? value : null;
+  }
+
   createSnoozeRowPaintExtension() {
     try {
       if (
@@ -600,6 +613,59 @@ class BobLedgerToolsSnoozeRowPaintMixin {
         }
         return false;
       };
+      // Heading summary chip after the `## Snoozed` header line.
+      // RangeSetBuilder requires ascending positions, so the heading
+      // (earliest line) is added before any row decoration.
+      try {
+        const summary = this.snoozeRowPaintHeadingSummary(
+          model.classified,
+        );
+        if (summary) {
+          const headerNumber = Number.isInteger(
+            model.parsed.headerNumber,
+          )
+            ? model.parsed.headerNumber
+            : null;
+          if (headerNumber && headerNumber >= 1) {
+            let headerLine = null;
+            try {
+              headerLine = doc.line(headerNumber);
+            } catch (error) {
+              headerLine = null;
+            }
+            if (headerLine && inRange(headerLine.from)) {
+              const chip = buildSnoozeHeadingChipElement(
+                typeof document !== "undefined" ? document : null,
+                summary,
+              );
+              if (chip && typeof WidgetType === "function") {
+                const key = "heading|" + summary;
+                const widget = new (class extends WidgetType {
+                  constructor() {
+                    super();
+                    this.key = key;
+                  }
+                  eq(other) {
+                    return Boolean(
+                      other && other.key === this.key,
+                    );
+                  }
+                  toDOM() {
+                    return chip;
+                  }
+                })();
+                builder.add(
+                  headerLine.to,
+                  headerLine.to,
+                  Decoration.widget({ widget, side: 1 }),
+                );
+              }
+            }
+          }
+        }
+      } catch (error) {
+        // Heading summary is best-effort.
+      }
       // Historical notes: quiet time pills, no countdown, no
       // heading summary. Map parser rows directly.
       if (model.historical) {
@@ -638,7 +704,7 @@ class BobLedgerToolsSnoozeRowPaintMixin {
                   )
                 : snoozeRowPaintPresentation(
                     "previous_day",
-                    row.hhmm,
+                    this.snoozeRowPaintColonClock(row.hhmm),
                     null,
                   );
             if (
@@ -724,6 +790,29 @@ class BobLedgerToolsSnoozeRowPaintMixin {
           continue;
         }
       }
+      // Classified rows carry compact `HHMM` and no wake time; the
+      // parsed section rows own both. Resolve them per line so chips
+      // keep their time pill and history keeps its woke label.
+      const colonTime = (value) => this.snoozeRowPaintColonClock(value);
+      const wokeByLine = new Map();
+      try {
+        const parsedRows =
+          model.parsed && Array.isArray(model.parsed.rows)
+            ? model.parsed.rows
+            : [];
+        for (const parsedRow of parsedRows) {
+          if (
+            parsedRow &&
+            parsedRow.kind === "history" &&
+            Number.isInteger(parsedRow.line) &&
+            typeof parsedRow.wokeHhmm === "string"
+          ) {
+            wokeByLine.set(parsedRow.line, parsedRow.wokeHhmm);
+          }
+        }
+      } catch (error) {
+        // History labels are best-effort.
+      }
       const nowMinutes =
         clock.getHours() * 60 + clock.getMinutes();
       for (const [lineNumber, row] of byLine.entries()) {
@@ -740,10 +829,18 @@ class BobLedgerToolsSnoozeRowPaintMixin {
           if (!inRange(line.from)) {
             continue;
           }
+          let wokeAt = null;
+          try {
+            wokeAt = wokeByLine.has(lineNumber)
+              ? wokeByLine.get(lineNumber)
+              : row.wokeAt;
+          } catch (error) {
+            wokeAt = row.wokeAt;
+          }
           const presentation = snoozeRowPaintPresentation(
             row.state,
-            row.hhmm,
-            row.wokeAt,
+            colonTime(row.hhmm),
+            wokeAt,
           );
           if (!presentation || presentation.paint === "none") {
             continue;
@@ -816,54 +913,14 @@ class BobLedgerToolsSnoozeRowPaintMixin {
           continue;
         }
       }
-      // Heading summary chip after the `## Snoozed` header line.
+      // Struck history rows are provenance, never classifier
+      // membership: paint them from the parsed section rows (278c).
       try {
-        const summary = this.snoozeRowPaintHeadingSummary(
-          model.classified,
-        );
-        if (summary) {
-          const headerNumber = Number.isInteger(
-            model.parsed.headerNumber,
-          )
-            ? model.parsed.headerNumber
-            : null;
-          if (headerNumber && headerNumber >= 1) {
-            let headerLine = null;
-            try {
-              headerLine = doc.line(headerNumber);
-            } catch (error) {
-              headerLine = null;
-            }
-            if (headerLine && inRange(headerLine.from)) {
-              const chip = buildSnoozeHeadingChipElement(
-                typeof document !== "undefined" ? document : null,
-                summary,
-              );
-              if (chip && typeof WidgetType === "function") {
-                const key = "heading|" + summary;
-                const widget = new (class extends WidgetType {
-                  constructor() {
-                    super();
-                    this.key = key;
-                  }
-                  eq(other) {
-                    return Boolean(other && other.key === this.key);
-                  }
-                  toDOM() {
-                    return chip;
-                  }
-                })();
-                builder.add(
-                  headerLine.to,
-                  headerLine.to,
-                  Decoration.widget({ widget, side: 1 }),
-                );
-              }
-            }
-          }
+        if (typeof snoozeRowPaintHistoryLive === "function") {
+          snoozeRowPaintHistoryLive(builder, doc, model, byLine, inRange);
         }
       } catch (error) {
-        // Heading summary is best-effort.
+        // History paint is best-effort.
       }
       return builder.finish();
     } catch (error) {

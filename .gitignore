@@ -5,3 +5,4 @@ node_modules/
 .tmp-fm-e2e/
 .tmp-dl-e2e/
 .tmp-bank-e2e/
+.tmp-sn-e2e/

@@ -573,6 +573,15 @@ test("Live Preview: guards stay neutral (daily, toggle, cache, code, duplicate)"
   );
 });
 
+test("Live Preview: the Today toggle shares the slot (SM-D15)", () => {
+  const plugin = makeSnoozeMarkPlugin();
+  assert.equal(snoozeRanges(plugin, TASK_LINE).ranges.length, 1);
+  plugin.todayMarksEnabled = false;
+  assert.equal(snoozeRanges(plugin, TASK_LINE).ranges.length, 0);
+  plugin.todayMarksEnabled = true;
+  assert.equal(snoozeRanges(plugin, TASK_LINE).ranges.length, 1);
+});
+
 test("Live Preview: closed tasks and missing ids earn no clock", () => {
   const plugin = makeSnoozeMarkPlugin();
   assert.equal(

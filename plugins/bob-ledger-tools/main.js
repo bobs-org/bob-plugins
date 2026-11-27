@@ -4371,6 +4371,17 @@ function computePlanBudget(content, caps, dailyPath, options = {}) {
 
   const links = planMeter(seenLinks.size, effective.maxLinks);
   links.offClock = seenOffClock.size;
+  // Internal Snooze Card forecasting can ask whether a particular canonical
+  // Task Link identity is already represented in this exact postimage. Keep
+  // the public plan result unchanged unless the caller explicitly requests it.
+  if (options && options.includeLinkIdentities === true) {
+    links.identities = [...seenLinks].map((key) => {
+      const separator = key.indexOf("\u0000");
+      return separator < 0
+        ? { target: key, blockId: "" }
+        : { target: key.slice(0, separator), blockId: key.slice(separator + 1) };
+    });
+  }
   const status = links.over ? "over" : "ok";
   if (links.over) {
     warnings.push({
@@ -218457,16 +218468,35 @@ function createSnoozeFactsApi(plugin) {
       const lines = dailyContents.replace(/\r\n/g, "\n").split("\n");
       const scanned = gcalEventsScanMarkdown(lines, {});
       if (!scanned || !Array.isArray(scanned.rows)) return [];
-      return scanned.rows.map((row) => {
+      return scanned.rows.map((row, order) => {
         const text = Number.isInteger(row && row.line) ? String(lines[row.line] || "") : "";
-        const title = text.replace(/^\s*[-*+]\s+(?:\[[ xX*?/-]\]\s+#task\s+)?\*\*(?:\d{4}-\d{4}|all day)\*\*\s*/i, "").trim() || "Event";
+        const prefix = /^\s*[-*+]\s+(?:\[([ xX*?/-])\]\s+#task\s+)?\*\*(\d{4}-\d{4}|all day)\*\*\s*/i.exec(text);
+        const eventTask = row && row.kind === "task";
+        const status = prefix && prefix[1] ? prefix[1] : " ";
+        const open = !eventTask || !"xX-".includes(status);
+        const startMin = Number.isInteger(row && row.startMinutes) ? row.startMinutes : null;
+        const endMin = Number.isInteger(row && row.endMinutes) ? row.endMinutes : null;
+        // This mirrors Rust add_event_ends: only remaining same-day ends can
+        // suggest a wake. Closed/cancelled Event Tasks and overnight spans
+        // do not represent a same-day wake target.
+        if (startMin === null || endMin === null || endMin < startMin || (eventTask && !open)) return null;
+        let title = "";
+        try {
+          title = prefix && typeof eventRunCleanTitle === "function"
+            ? eventRunCleanTitle(text.slice(prefix[0].length))
+            : "";
+        } catch (_) {
+          title = "";
+        }
         return {
-          title,
-          kind: row && row.kind === "task" ? "task" : "context",
-          startMin: Number.isInteger(row && row.startMinutes) ? row.startMinutes : null,
-          endMin: Number.isInteger(row && row.endMinutes) ? row.endMinutes : null,
+          title: title || "event",
+          kind: eventTask ? "task" : "context",
+          open,
+          startMin,
+          endMin,
+          order,
         };
-      });
+      }).filter(Boolean);
     }, null),
     activeRow: (identityKey) => safe(() => {
       if (typeof identityKey !== "string" || !identityKey) return null;
@@ -218484,15 +218514,39 @@ function createSnoozeFactsApi(plugin) {
         target: typeof found.target === "string" ? found.target : null,
         blockId: typeof found.blockId === "string" ? found.blockId : null,
         route: typeof found.route === "string" ? found.route : null,
+        blockedReason: typeof found.blockedReason === "string" ? found.blockedReason : null,
       };
     }, null),
-    planCounts: (dailyContents) => safe(() => {
+    planCounts: (dailyContents, dailyPath) => safe(() => {
       if (typeof dailyContents !== "string") return null;
       if (typeof computePlanBudget !== "function" || typeof loadPlanCaps !== "function") return null;
-      const budget = computePlanBudget(dailyContents, loadPlanCaps().caps, null, {});
+      const path = typeof dailyPath === "string" && dailyPath.trim() !== "" ? dailyPath : null;
+      let isOffClockLink;
+      try {
+        if (path && plugin && typeof plugin.planBudgetOffClockPredicate === "function") {
+          isOffClockLink = plugin.planBudgetOffClockPredicate(path, dailyContents);
+        }
+      } catch (_) {
+        isOffClockLink = undefined;
+      }
+      const budget = computePlanBudget(dailyContents, loadPlanCaps().caps, path, {
+        isOffClockLink,
+        includeLinkIdentities: true,
+      });
       const links = budget && budget.links;
       if (!links || !Number.isInteger(links.count) || !Number.isInteger(links.cap)) return null;
-      return { count: links.count, cap: links.cap, over: links.count > links.cap };
+      return {
+        count: links.count,
+        cap: links.cap,
+        over: links.count > links.cap,
+        identities: Array.isArray(links.identities) ? links.identities : [],
+      };
+    }, null),
+    taskIsOffClock: (dailyContents, dailyPath, target, blockId) => safe(() => {
+      if (typeof dailyContents !== "string" || typeof dailyPath !== "string" || !dailyPath) return null;
+      if (!plugin || typeof plugin.planBudgetOffClockPredicate !== "function") return null;
+      const isOffClockLink = plugin.planBudgetOffClockPredicate(dailyPath, dailyContents);
+      return isOffClockLink(String(target || ""), String(blockId || "")) === true;
     }, null),
   });
 }

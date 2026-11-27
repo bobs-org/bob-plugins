@@ -136,6 +136,31 @@ test("stale preimages refuse before any write", async () => {
   assert.equal(files.get(DAILY), "changed under us\n");
 });
 
+test("default closed-note writer resolves the file and uses vault.process", async () => {
+  const plugin = new NavigationHotkeysPlugin();
+  const after = `${DAY_BASE}\n## Snoozed\n\n- **1330** [[projects/job#^email-dan]]\n`;
+  const file = { path: DAILY };
+  const files = new Map([[DAILY, DAY_BASE]]);
+  const calls = [];
+  plugin.app = {
+    vault: {
+      getAbstractFileByPath: (path) => path === DAILY ? file : null,
+      async process(target, transform) {
+        calls.push(target);
+        files.set(target.path, transform(files.get(target.path)));
+      },
+    },
+  };
+  plugin.getOpenMarkdownEditorForPath = () => null;
+  const outcome = await plugin.commitSnoozePlans(
+    [{ path: DAILY, preimage: DAY_BASE, postimage: after }],
+    { read: async (path) => files.get(path) ?? null, isOpen: () => false },
+  );
+  assert.equal(outcome.ok, true);
+  assert.deepEqual(calls, [file]);
+  assert.equal(files.get(DAILY), after);
+});
+
 test("confirmation across midnight refuses", async () => {
   const plugin = new NavigationHotkeysPlugin();
   const files = new Map([[DAILY, DAY_BASE], [TASK_PATH, TASK_LINE]]);

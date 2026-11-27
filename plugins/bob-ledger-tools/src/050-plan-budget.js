@@ -854,6 +854,17 @@ function computePlanBudget(content, caps, dailyPath, options = {}) {
 
   const links = planMeter(seenLinks.size, effective.maxLinks);
   links.offClock = seenOffClock.size;
+  // Internal Snooze Card forecasting can ask whether a particular canonical
+  // Task Link identity is already represented in this exact postimage. Keep
+  // the public plan result unchanged unless the caller explicitly requests it.
+  if (options && options.includeLinkIdentities === true) {
+    links.identities = [...seenLinks].map((key) => {
+      const separator = key.indexOf("\u0000");
+      return separator < 0
+        ? { target: key, blockId: "" }
+        : { target: key.slice(0, separator), blockId: key.slice(separator + 1) };
+    });
+  }
   const status = links.over ? "over" : "ok";
   if (links.over) {
     warnings.push({

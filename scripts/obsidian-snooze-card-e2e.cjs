@@ -22,8 +22,11 @@ const runtimeTemp = path.join(process.env.XDG_RUNTIME_DIR || os.tmpdir(), "bob-s
 const required = [
   "plugins-loaded", "snooze-runtime-api-installed", "alt-z-opens-and-preselects-event", "keyboard-navigation-and-invalid-input",
   "same-note-transaction-undo", "task-card-z-opens-same-card", "blocked-event-done-refusals",
-  "retime-and-unsnooze", "wake-now-runs-current-bob", "ordinary-and-snoozed-screenshots",
-  "hotkey-conflict-preserves-config",
+  "footer-counts-use-fixture-postimage", "ready-footer-counts-use-fixture-postimage", "ready-promotes-and-stamps", "next-and-inprogress-stay-byte-identical",
+  "snoozed-header-state-renders",
+  "unnamed-task-naming-cancel-is-no-write", "retime-and-unsnooze", "wake-now-runs-current-bob",
+  "history-is-preserved-on-resnooze-and-closed-history-snooze", "closed-daily-note-uses-vault-process",
+  "ordinary-and-snoozed-screenshots", "over-cap-and-forced-colors-screenshots", "hotkey-conflict-preserves-config",
 ];
 
 function parseArgs(argv) {
@@ -86,6 +89,11 @@ function fixture(now = new Date()) {
     "- [*] #task Retime task [type:: WRITE] ^retime",
     "- [?] #task Blocked task [type:: WRITE] ^blocked",
     "- [ ] #task Ready task [type:: WRITE] ^ready",
+    "- [*] #task Next stable task [type:: WRITE] ^next-stable",
+    "- [/] #task In progress stable task [type:: WRITE] ^progress-stable",
+    "- [ ] #task Unnamed eligible task [type:: WRITE]",
+    "- [*] #task History task [type:: WRITE] ^history",
+    "- [*] #task Closed daily task [type:: WRITE] ^closed-daily",
     "- [x] #task Done task [type:: WRITE] ^done",
     "- [-] #task Cancelled task [type:: WRITE] ^cancelled",
     "- [/] #task **" + hhmm(eventStart) + "-" + hhmm(eventEnd) + "** Event task [root:: bob] [type:: MEET] ^event-task",
@@ -100,7 +108,9 @@ function fixture(now = new Date()) {
     "  - [[#^same-note]]",
     "    - preserve this authored note",
     "- [/] (**" + hhmm(Math.max(0, clock.minutes - 10)) + "-" + hhmm(eventEnd) + "** [t:: 25m]) — MEET",
-    "  - [[#^event-suggestion]]", "",
+    "  - [[#^event-suggestion]]",
+    "- [x] () — WRITE",
+    "  - [[jobs#^history]]", "",
     "## Snoozed", "",
     `- **${hhmm(wakeAt)}** [[jobs#^wake-now]]`,
     `- **${hhmm(retimeAt)}** [[jobs#^retime]]`,
@@ -110,7 +120,7 @@ function fixture(now = new Date()) {
   ].join("\n");
   return {
     zone, date: clock.date, year: clock.year, stamp: clock.stamp, daily,
-    nowMinutes: clock.minutes, eventStart, eventEnd, wakeAt, retimeAt, blockedAt,
+    nowMinutes: clock.minutes, eventStart, eventEnd, wakeAt, retimeAt, blockedAt, planCap: 1, initialOnClockLinks: 2,
     tasks, dailyText,
   };
 }
@@ -164,7 +174,7 @@ function installPlugins(vault, conflict, bobPath, configPath) {
   const hotkeysPath = path.join(obsidian, "hotkeys.json");
   fs.writeFileSync(hotkeysPath, JSON.stringify(hotkeys, null, 2) + "\n");
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  fs.writeFileSync(configPath, `timezone: ${JSON.stringify(Intl.DateTimeFormat().resolvedOptions().timeZone || "America/New_York")}\nproperties:\n  - name: scheduled\n    values: date\nsnooze:\n  notify: off\nplan:\n  max_links: 13\nstats:\n  bob_path: ${JSON.stringify(bobPath)}\n`);
+  fs.writeFileSync(configPath, `timezone: ${JSON.stringify(Intl.DateTimeFormat().resolvedOptions().timeZone || "America/New_York")}\nproperties:\n  - name: scheduled\n    values: date\nsnooze:\n  notify: off\nplan:\n  max_links: 1\nstats:\n  bob_path: ${JSON.stringify(bobPath)}\n`);
   return { enabled, hotkeysPath, hotkeysBytes: fs.readFileSync(hotkeysPath) };
 }
 
@@ -318,12 +328,12 @@ async function fileText(client, notePath) {
   })()`);
 }
 
-async function openCardFromLink(ctx, needle) {
+async function openCardFromLink(ctx, needle, notePath = ctx.fixture.daily) {
   if (ctx.client.cardClient) ctx.client.cardClient = null;
   await ctx.client.evaluate(`document.querySelectorAll(".notice").forEach((node) => node.remove())`);
   if (ctx.modalClient) await ctx.modalClient.evaluate(`document.querySelectorAll(".notice").forEach((node) => node.remove())`);
-  await shared.openNote(ctx.client, ctx.fixture.daily, "live");
-  const cursor = await setCursor(ctx.client, ctx.fixture.daily, needle);
+  await shared.openNote(ctx.client, notePath, "live");
+  const cursor = await setCursor(ctx.client, notePath, needle);
   await ctx.client.evaluate(`(() => {
     window.__snoozeE2EKeys = [];
     const plugin = app.plugins.plugins["bob-navigation-hotkeys"];
@@ -333,6 +343,19 @@ async function openCardFromLink(ctx, needle) {
         try { const result = await run.apply(this, args); window.__snoozeE2ECommit = { result }; return result; }
         catch (error) { window.__snoozeE2ECommit = { error: String(error?.stack || error) }; throw error; }
       };
+      if (typeof plugin.writeLinkPickerNoteChange === "function") {
+        const write = plugin.writeLinkPickerNoteChange;
+        plugin.writeLinkPickerNoteChange = async function (...args) {
+          try {
+            const result = await write.apply(this, args);
+            (window.__snoozeWriteTrace ||= []).push({ path: args[0], ok: true });
+            return result;
+          } catch (error) {
+            (window.__snoozeWriteTrace ||= []).push({ path: args[0], error: String(error?.stack || error) });
+            throw error;
+          }
+        };
+      }
       plugin.__snoozeE2ECommitWrapped = true;
     }
     document.addEventListener("keydown", (event) => window.__snoozeE2EKeys.push({ key: event.key, code: event.code, alt: event.altKey, ctrl: event.ctrlKey, target: event.target?.tagName }), true);
@@ -420,6 +443,7 @@ async function launch(ctx, executable, conflict) {
   ctx.client.on("Runtime.exceptionThrown", (params) => ctx.report.exceptions.push({ text: params.exceptionDetails?.text || "", url: params.exceptionDetails?.url || "" }));
   await shared.trustCommunityPlugins(ctx.client);
   await shared.waitFor(ctx.client, `(${JSON.stringify(pluginIds)}).every((id) => Boolean(app.plugins.plugins[id]))`, Boolean, "Bob plugins loaded", 45_000);
+  await shared.waitFor(ctx.client, `Boolean(app.commands.findCommand("bob-navigation-hotkeys:snooze-task"))`, Boolean, "Snooze task command registered after layout readiness", 15_000);
   await shared.setViewport(ctx.client, 1440, 1000);
   ctx.report.sessions.push({ conflict, vault: ctx.vaultDir, pid: ctx.child.pid, cdpPort: port });
 }
@@ -441,6 +465,18 @@ async function runNormal(ctx) {
     if (!ok) throw new Error(name + " failed: " + JSON.stringify(detail));
   };
   check("plugins-loaded", await client.evaluate(`(${JSON.stringify(pluginIds)}).every((id) => Boolean(app.plugins.plugins[id]))`), { ids: pluginIds });
+  await client.evaluate(`(() => {
+    const vault = app.vault;
+    if (vault && typeof vault.process === "function" && !vault.__snoozeProcessWrapped) {
+      const original = vault.process;
+      vault.process = function (file, callback) {
+        window.__snoozeVaultProcessPaths = window.__snoozeVaultProcessPaths || [];
+        window.__snoozeVaultProcessPaths.push(file?.path || null);
+        return original.apply(this, arguments);
+      };
+      vault.__snoozeProcessWrapped = true;
+    }
+  })()`);
   const runtimeApi = await client.evaluate(`(() => {
     const plugin = app.plugins.plugins["bob-navigation-hotkeys"];
     return { cursor: typeof plugin?.openSnoozeCardAtCursor, taskCard: typeof plugin?.openSnoozeCardFromTaskCard, resolver: typeof plugin?.resolveSnoozeAtCursor };
@@ -453,6 +489,9 @@ async function runNormal(ctx) {
   await openCardFromLink(ctx, "[[#^same-note]]");
   let card = await cardProbe(client);
   check("alt-z-opens-and-preselects-event", card.open && card.focused && card.rows[0]?.text.includes("after Yogi interview"), card);
+  const expectedLiveFooter = `TODAY ${f.initialOnClockLinks - 1}/${f.planCap} now, ${f.initialOnClockLinks}/${f.planCap} after`;
+  check("footer-counts-use-fixture-postimage", card.rows[0]?.text.includes(`${colon(f.eventEnd)} · after Yogi interview`)
+    && card.footer.includes(expectedLiveFooter), { eventLabel: card.rows[0]?.text, expectedLiveFooter, footer: card.footer });
   await takeShot(ctx, "ordinary-light", "light");
   await takeShot(ctx, "ordinary-dark", "dark");
   await press(client, "Enter");
@@ -525,6 +564,71 @@ async function runNormal(ctx) {
   await sleep(180);
   client.cardClient = null;
 
+  // The fixture has two on-clock links and a cap of one. Waking this Ready
+  // task adds one more dedicated Task Link, so the over-cap result is explicit.
+  await openCardFromLink(ctx, "^ready", "jobs.md");
+  card = await cardProbe(client);
+  const expectedReadyFooter = `TODAY ${f.initialOnClockLinks}/${f.planCap} now, ${f.initialOnClockLinks + 1}/${f.planCap} after`;
+  check("ready-footer-counts-use-fixture-postimage", card.footer.includes(expectedReadyFooter), { expectedReadyFooter, footer: card.footer });
+  await takeShot(ctx, "over-cap-footer-light", "light");
+  await client.call("Emulation.setEmulatedMedia", { features: [{ name: "forced-colors", value: "active" }] });
+  await takeShot(ctx, "forced-colors-snooze-card", "light");
+  await client.call("Emulation.setEmulatedMedia", { features: [] });
+  await press(client, "a", 2);
+  await insertText(client, "+30m");
+  await sleep(150);
+  const readyInput = await cardProbe(client);
+  check("ready-time-entry-is-preserved", readyInput.open && readyInput.input === "+30m", readyInput);
+  await press(client, "Enter");
+  await sleep(500);
+  const readyCommit = await client.evaluate("window.__snoozeE2ECommit || null");
+  check("ready-commit-succeeded", Boolean(readyCommit && readyCommit.result && readyCommit.result.ok === true), { readyCommit, writes: await client.evaluate("window.__snoozeWriteTrace || []"), card: await cardProbe(client) });
+  await shared.waitFor(client, `app.vault.read(app.vault.getAbstractFileByPath("jobs.md"))`, (text) => /\[\*\] #task Ready task/.test(text) && text.includes("fresh::"), "Ready task promoted and freshness stamped", 12_000);
+  const afterReady = await fileText(client, "jobs.md");
+  check("ready-promotes-and-stamps", /\[\*\] #task Ready task/.test(afterReady) && new RegExp(`\\[fresh::\\s*${f.date}\\s*\\]`).test(afterReady), { line: afterReady.split("\n").find((line) => line.includes("^ready")) });
+
+  let stableTasks = true;
+  const stableResults = [];
+  for (const [needle, label] of [["^next-stable", "Next"], ["^progress-stable", "In Progress"]]) {
+    const before = await fileText(client, "jobs.md");
+    await openCardFromLink(ctx, needle, "jobs.md");
+    const opened = await cardProbe(client);
+    await press(client, "Escape");
+    await sleep(180);
+    client.cardClient = null;
+    const after = await fileText(client, "jobs.md");
+    const same = before === after;
+    stableResults.push({ label, opened: opened.open, same });
+    stableTasks = stableTasks && opened.open && same;
+  }
+  check("next-and-inprogress-stay-byte-identical", stableTasks, stableResults);
+
+  // A task definition without a block ID opens the existing Block ID naming
+  // modal. Escape cancels the proposal without editing either note.
+  const namingTaskBefore = await fileText(client, "jobs.md");
+  const namingDayBefore = await fileText(client, f.daily);
+  await shared.openNote(client, "jobs.md", "live");
+  await setCursor(client, "jobs.md", "Unnamed eligible task");
+  await press(client, "Z", 1);
+  let namingTarget = null;
+  for (let attempt = 0; attempt < 20 && !namingTarget; attempt += 1) {
+    const mainHas = await client.evaluate(`document.body.innerText.includes("Block ID")`);
+    if (mainHas) { namingTarget = client; break; }
+    const modal = await attachModalTarget(ctx);
+    if (modal && await modal.evaluate(`document.body.innerText.includes("Block ID")`)) namingTarget = modal;
+    if (!namingTarget) await sleep(150);
+  }
+  check("unnamed-task-naming-prompt-opens", Boolean(namingTarget), { found: Boolean(namingTarget) });
+  await press(namingTarget, "Escape");
+  await sleep(250);
+  const namingTaskAfter = await fileText(client, "jobs.md");
+  const namingDayAfter = await fileText(client, f.daily);
+  check("unnamed-task-naming-cancel-is-no-write", namingTaskAfter === namingTaskBefore && namingDayAfter === namingDayBefore, {
+    taskUnchanged: namingTaskAfter === namingTaskBefore,
+    dailyUnchanged: namingDayAfter === namingDayBefore,
+  });
+  client.cardClient = null;
+
   // Refusals are checked against real fixture definitions and must not write.
   const refusalBefore = await fileText(client, f.daily);
   const refusalResults = [];
@@ -549,6 +653,7 @@ async function runNormal(ctx) {
   await openCardFromLink(ctx, `**${hhmm(f.retimeAt)}** [[jobs#^retime]]`);
   card = await cardProbe(client);
   check("snoozed-mode-and-actions", /Snoozed until|asleep|Blocked/.test(card.subtitle) && card.actions.some((row) => row.text.includes("Unsnooze")), card);
+  check("snoozed-header-state-renders", new RegExp(`^Snoozed until ${colon(f.retimeAt)} · in \\d+h(?: \\d+m)?$`).test(card.subtitle), { subtitle: card.subtitle });
   await takeShot(ctx, "snoozed-light", "light");
   await takeShot(ctx, "snoozed-dark", "dark");
   await press(client, "a", 2);
@@ -565,6 +670,9 @@ async function runNormal(ctx) {
   await openCardFromLink(ctx, `**${hhmm(f.blockedAt)}** [[jobs#^blocked]]`);
   card = await cardProbe(client);
   await takeShot(ctx, "blocked-snoozed-light", "light");
+  const blockedWake = card.actions.find((row) => row.text.includes("Wake now"));
+  check("blocked-header-and-wake-reason", card.subtitle === `Snoozed until ${colon(f.blockedAt)} · blocked — waits on prerequisites`
+    && blockedWake?.disabled === true && blockedWake.text.includes("waits on prerequisites"), { subtitle: card.subtitle, wake: blockedWake });
   const unsnooze = card.actions.find((row) => row.text.includes("Unsnooze"));
   check("blocked-row-can-unsnooze", Boolean(unsnooze) && unsnooze.disabled !== true, card);
   await click(client, ".bob-snooze-card-actions > *", "Unsnooze");
@@ -583,9 +691,53 @@ async function runNormal(ctx) {
   const invocation = fs.existsSync(ctx.bobLog) ? fs.readFileSync(ctx.bobLog, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse) : [];
   check("wake-now-runs-current-bob", invocation.some((args) => args[0] === "snooze" && args[1] === "wake" && args.some((value) => /jobs(?:\.md)?#\^wake-now/.test(value)) && args.includes("-q") && args.includes("json"))
     && /- ~~\*\*/.test(wokeText) && wokeText.includes("[[jobs#^wake-now]]"), { invocation, wokeRow: wokeText.split("\n").find((line) => line.includes("wake-now")) });
+  const wakeHistory = wokeText.split("\n").find((line) => line.includes("[[jobs#^wake-now]]") && line.includes("~~")) || "";
+  const wokenLinkLine = wokeText.split("\n").find((line) => line.includes("[[jobs#^wake-now]]") && !line.includes("~~")) || "";
+  if (wakeHistory && wokenLinkLine) {
+    await openCardFromLink(ctx, wokenLinkLine.trim());
+    await press(client, "a", 2);
+    await insertText(client, "+30m");
+    await press(client, "Enter");
+    await shared.waitFor(client, `app.workspace.activeLeaf?.view?.editor?.getValue?.()`, (text) => typeof text === "string" && text.includes("[[jobs#^wake-now]]") && text.includes("## Snoozed"), "woken task re-snoozed", 12_000);
+  }
+  let currentDaily = await editorText(client, f.daily);
+  let dailyLines = currentDaily.split("\n");
+  const historyLinkIndex = dailyLines.findIndex((line) => line.includes("[[jobs#^history]]"));
+  const closedHistoryBlock = historyLinkIndex > 0 ? dailyLines.slice(historyLinkIndex - 1, historyLinkIndex + 1).join("\n") : "";
+  if (closedHistoryBlock) {
+    await openCardFromLink(ctx, "[[jobs#^history]]");
+    await press(client, "a", 2);
+    await insertText(client, "+30m");
+    await press(client, "Enter");
+    await shared.waitFor(client, `app.workspace.activeLeaf?.view?.editor?.getValue?.()`, (text) => typeof text === "string" && text.includes("[[jobs#^history]]") && text.includes("## Snoozed"), "closed history link snoozed", 12_000);
+  }
+  currentDaily = await editorText(client, f.daily);
+  const afterWakeHistory = currentDaily.split("\n").find((line) => line.includes("[[jobs#^wake-now]]") && line.includes("~~")) || "";
+  check("history-is-preserved-on-resnooze-and-closed-history-snooze",
+    Boolean(wakeHistory && wokenLinkLine && closedHistoryBlock) && afterWakeHistory === wakeHistory && currentDaily.includes(closedHistoryBlock),
+    { wakeHistoryBefore: wakeHistory, wakeHistoryAfter: afterWakeHistory, closedHistoryBlock, foundWokenLink: Boolean(wokenLinkLine) });
+
+  await client.evaluate(`(() => {
+    app.workspace.iterateAllLeaves((leaf) => {
+      if (leaf?.view?.file?.path === ${JSON.stringify(f.daily)} && typeof leaf.detach === "function") leaf.detach();
+    });
+  })()`);
+  const dailyClosed = await client.evaluate(`!app.workspace.getLeavesOfType("markdown").some((leaf) => leaf.view?.file?.path === ${JSON.stringify(f.daily)})`);
+  if (dailyClosed) {
+    await openCardFromLink(ctx, "^closed-daily", "jobs.md");
+    await press(client, "a", 2);
+    await insertText(client, "+30m");
+    await press(client, "Enter");
+    await shared.waitFor(client, `app.vault.cachedRead(app.vault.getAbstractFileByPath(${JSON.stringify(f.daily)}))`, (text) => typeof text === "string" && text.includes("[[jobs#^closed-daily]]"), "closed daily note snoozed through vault.process", 12_000);
+  }
+  const processPaths = await client.evaluate("window.__snoozeVaultProcessPaths || []");
+  const afterClosedDaily = await fileText(client, f.daily);
+  check("closed-daily-note-uses-vault-process", dailyClosed && processPaths.includes(f.daily) && afterClosedDaily.includes("[[jobs#^closed-daily]]"), { dailyClosed, processPaths, row: afterClosedDaily.split("\n").find((line) => line.includes("^closed-daily")) });
+
   check("ordinary-and-snoozed-screenshots", report.screenshots.some((s) => s.name === "ordinary-light") && report.screenshots.some((s) => s.name === "ordinary-dark")
     && report.screenshots.some((s) => s.name === "snoozed-light") && report.screenshots.some((s) => s.name === "snoozed-dark")
     && report.screenshots.some((s) => s.name === "invalid-time-light") && report.screenshots.some((s) => s.name === "blocked-snoozed-light"), { screenshots: report.screenshots.map((s) => s.name) });
+  check("over-cap-and-forced-colors-screenshots", report.screenshots.some((s) => s.name === "over-cap-footer-light") && report.screenshots.some((s) => s.name === "forced-colors-snooze-card"), { screenshots: report.screenshots.map((s) => s.name) });
 }
 
 async function runConflict(ctx, executable) {
@@ -593,10 +745,12 @@ async function runConflict(ctx, executable) {
   const before = fs.readFileSync(ctx.hotkeysPath);
   const info = await client.evaluate(`(() => {
     const plugin = app.plugins.plugins["bob-navigation-hotkeys"];
-    return { command: Boolean(app.commands.findCommand("bob-navigation-hotkeys:snooze-task")), conflicts: plugin?.snoozeAltZConflict || [] };
+    const command = app.commands.findCommand("bob-navigation-hotkeys:snooze-task");
+    return { command: Boolean(command), hotkeys: command?.hotkeys || [], conflicts: plugin?.snoozeAltZConflict || [] };
   })()`);
   assert.equal(info.command, true, "Snooze command stays registered under a conflict");
   assert.ok(info.conflicts.some((item) => item.commandId === "command-palette:open"), JSON.stringify(info));
+  assert.equal(info.hotkeys.some((hotkey) => hotkey && String(hotkey.key).toLowerCase() === "z" && (hotkey.modifiers || []).some((modifier) => String(modifier).toLowerCase() === "alt")), false, "a conflict leaves no Alt+Z default on snooze-task");
   await shared.openNote(client, f.daily, "live");
   await setCursor(client, f.daily, "[[#^same-note]]");
   await press(client, "z", 1);
@@ -609,7 +763,7 @@ async function runConflict(ctx, executable) {
   await press(client, "Escape");
   const after = fs.readFileSync(ctx.hotkeysPath);
   assert.deepEqual(after, before, "the existing hotkey config bytes remain unchanged");
-  report.assertions.push({ name: "hotkey-conflict-preserves-config", status: "pass", detail: { conflicts: info.conflicts, configSha256: sha256(after) } });
+  report.assertions.push({ name: "hotkey-conflict-preserves-config", status: "pass", detail: { conflicts: info.conflicts, hotkeys: info.hotkeys, configSha256: sha256(after) } });
   await stop(ctx);
   void executable;
 }
@@ -635,7 +789,7 @@ async function run(args) {
     if (/unable to find Obsidian/i.test(String(help.stdout || "") + String(help.stderr || ""))) throw new Error("--executable is the Obsidian CLI shim, not Electron");
     fs.mkdirSync(outDir, { recursive: true });
     const f = fixture();
-    out.fixture = { date: f.date, timezone: f.zone, daily: f.daily, now: colon(f.nowMinutes), eventEnd: colon(f.eventEnd) };
+    out.fixture = { date: f.date, timezone: f.zone, daily: f.daily, now: colon(f.nowMinutes), eventEnd: colon(f.eventEnd), planCap: f.planCap, initialOnClockLinks: f.initialOnClockLinks };
     const bobLog = path.join(scratch, "bob-argv.jsonl");
     const bobWrapper = path.join(scratch, "bob-wrapper.cjs");
     fs.writeFileSync(bobWrapper, `#!/usr/bin/env node\nconst fs=require('node:fs'); const {spawnSync}=require('node:child_process'); const args=process.argv.slice(2); fs.appendFileSync(${JSON.stringify(bobLog)},JSON.stringify(args)+"\\n"); const r=spawnSync(${JSON.stringify(bob.path)},args,{encoding:'utf8',env:process.env,timeout:90000,maxBuffer:32*1024*1024}); if(r.stdout)process.stdout.write(r.stdout); if(r.stderr)process.stderr.write(r.stderr); process.exit(r.status==null?1:r.status);\n`);
@@ -700,7 +854,7 @@ function selfTest() {
   assert.match(f.dailyText, /\*\*\d{4}-\d{4}\*\* Yogi interview/);
   assert.match(f.dailyText, /preserve this authored note/);
   assert.match(f.tasks, /\^event-task/);
-  assert.deepEqual(required.length, 11);
+  assert.deepEqual(required.length, 20);
   console.log("offline self-test complete (fixtures and required evidence only; no Obsidian or bob launched)");
 }
 

@@ -148,6 +148,29 @@ test("duplicate live links retain the second link's authored notes", () => {
   assert.match(result.plans[0].postimage, /- \*\*1530\*\* \[\[Projects\/job#\^email-dan\]\]\n\t- First note\./);
 });
 
+test("re-snoozing a woken task preserves its struck wake-history receipt", () => {
+  const wakeHistory = "- ~~**1300** [[Projects/job#^email-dan]]~~ · woke 12:55";
+  const input = baseInput({
+    day: [
+      "## Pomodoros",
+      "",
+      "- [ ] () — WRITE",
+      "  - [[Projects/job#^email-dan]] ⏰ woke 12:55",
+      "",
+      "## Snoozed",
+      "",
+      wakeHistory,
+      "",
+    ].join("\n"),
+    task: { status: "*", line: 1 },
+    when: "1530",
+  });
+  const result = planner.plan(input);
+  assert.equal(result.ok, true);
+  assert.ok(result.plans[0].postimage.includes(wakeHistory));
+  assert.match(result.plans[0].postimage, /- \*\*1530\*\* \[\[Projects\/job#\^email-dan\]\]/);
+});
+
 test("effective blocking is refused before the BIP target planner is called", () => {
   let calls = 0;
   const input = baseInput({

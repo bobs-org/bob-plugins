@@ -62,8 +62,14 @@ function rankSnoozeSuggestions(input) {
     ranked.push(Object.freeze({ minutes, ...suggestion }));
   };
   const events = Array.isArray(options.events) ? options.events.slice() : [];
-  events.sort((left, right) => Number(left && left.endMin) - Number(right && right.endMin));
-  for (const event of events) {
+  const orderedEvents = events.map((event, index) => ({ event, index })).sort((left, right) => {
+    const byEnd = Number(left.event && left.event.endMin) - Number(right.event && right.event.endMin);
+    if (byEnd !== 0) return byEnd;
+    const leftOrder = Number.isInteger(left.event && left.event.order) ? left.event.order : left.index;
+    const rightOrder = Number.isInteger(right.event && right.event.order) ? right.event.order : right.index;
+    return leftOrder - rightOrder;
+  });
+  for (const { event } of orderedEvents) {
     if (!event || typeof event !== "object") continue;
     const endMin = Number.isInteger(event.endMin) ? event.endMin : null;
     if (endMin === null) continue;
@@ -163,20 +169,44 @@ function buildSnoozeCardFooter(input) {
   return parts.join(" · ");
 }
 
+// Forecast TODAY from the pure planner's daily postimage. `identities` must
+// be the budget's canonical, on-clock identities; callers omit the `after`
+// segment when either that set or effective clock classification is unknown.
+function snoozeCardForecastCounts(input) {
+  const options = input && typeof input === "object" ? input : {};
+  if (!Number.isInteger(options.nowCount) || !Number.isInteger(options.cap)) return null;
+  const result = { nowCount: options.nowCount, nowCap: options.cap, overCap: false };
+  if (!Array.isArray(options.identities) || typeof options.onClock !== "boolean") return result;
+  const identity = options.identity && typeof options.identity === "object" ? options.identity : {};
+  const blockId = String(identity.block || identity.blockId || "");
+  const normalize = (value) => String(value || "").replace(/\\/g, "/").replace(/\.md$/i, "").replace(/^\/+/, "");
+  const expectedTargets = new Set([identity.route, identity.path, ...(Array.isArray(identity.targets) ? identity.targets : [])].map(normalize).filter(Boolean));
+  const counted = blockId !== "" && options.identities.some((link) =>
+    link && String(link.blockId || link.block || "") === blockId && expectedTargets.has(normalize(link.target || link.path)),
+  );
+  const afterCount = options.nowCount + (options.onClock && !counted ? 1 : 0);
+  result.afterCount = afterCount;
+  result.afterCap = options.cap;
+  result.overCap = afterCount > options.cap;
+  return result;
+}
+
 // Snoozed-mode header: `Snoozed until 15:30 · in 2h`
 // (or the truthful due/blocked state when supplied).
 function buildSnoozeCardSnoozedHeader(input) {
   const options = input && typeof input === "object" ? input : {};
-  if (typeof options.blockedReason === "string" && options.blockedReason.trim() !== "") {
-    return "Blocked · " + options.blockedReason.trim();
-  }
-  if (typeof options.state === "string" && options.state.trim() !== "" && options.state.trim().toLowerCase() !== "active") {
-    const detail = typeof options.detail === "string" && options.detail.trim() !== "" ? " · " + options.detail.trim() : "";
-    return options.state.trim() + detail;
-  }
   const display = typeof options.display === "string" && options.display.trim() !== "" ? options.display.trim() : null;
   if (!display) return "Snoozed";
   const inText = typeof options.inText === "string" && options.inText.trim() !== "" ? " · " + options.inText.trim() : "";
+  const state = typeof options.state === "string" ? options.state.trim().toLowerCase() : "";
+  if (state === "due") return "Snoozed until " + display + " · due — waking";
+  if (state === "blocked") {
+    const reason = typeof options.blockedReason === "string" && options.blockedReason.trim() !== ""
+      ? options.blockedReason.trim()
+      : "waits on prerequisites";
+    return "Snoozed until " + display + " · blocked — " + reason;
+  }
+  if (state === "asleep") return "Snoozed until " + display + inText;
   return "Snoozed until " + display + inText;
 }
 
@@ -292,6 +322,7 @@ Object.assign(module.exports.helpers, {
   rankSnoozeSuggestions,
   snoozeCardInText,
   buildSnoozeCardFooter,
+  snoozeCardForecastCounts,
   buildSnoozeCardSnoozedHeader,
   snoozeCardInputMessage,
   snoozeCardRefusalMessage,

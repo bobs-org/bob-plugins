@@ -320,7 +320,9 @@ function snoozeMutationUpsertRow(source, task, identity, hhmm, notes, input, dai
   }
   const identityKey = snoozeMutationIdentityKey(identity);
   const matching = section.rows.filter((row) => {
-    if (row.kind !== "active" && row.kind !== "history") return false;
+    // Re-snoozing a woken task replaces its live row while keeping struck
+    // wake history as an immutable receipt.
+    if (row.kind !== "active") return false;
     const resolved = snoozeMutationMapIdentity(row.target, row.blockId, input, task, identity, dailyPath);
     return resolved && snoozeMutationIdentityKey(resolved) === identityKey;
   });

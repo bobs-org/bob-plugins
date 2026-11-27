@@ -6,11 +6,15 @@ const {
   rankSnoozeSuggestions,
   snoozeCardInText,
   buildSnoozeCardFooter,
+  snoozeCardForecastCounts,
   buildSnoozeCardSnoozedHeader,
   snoozeCardInputMessage,
   snoozeCardRefusalMessage,
   resolveSnoozeCardKey,
   snoozeCardIsAltZEvent,
+  snoozeCardVimrcMapsAltZ,
+  snoozeCardVimrcConflict,
+  registerSnoozeTaskCommand,
   planTaskCard,
   resolveTaskCardKey,
   TASK_CARD_ROW_ORDER,
@@ -94,9 +98,68 @@ test("footer states the actual consequence and omits missing data", () => {
   assert.ok(over.includes("TODAY 14/13 now"));
 });
 
+test("footer forecast counts the planned postimage and one future on-clock wake", () => {
+  const forecast = (nowCount, cap, identities, onClock, block = "target") =>
+    snoozeCardForecastCounts({ nowCount, cap, identities, onClock, identity: { route: "jobs.md", block } });
+  assert.deepEqual(forecast(0, 13, [], true), { nowCount: 0, nowCap: 13, afterCount: 1, afterCap: 13, overCap: false }); // live-linked task leaves now
+  assert.deepEqual(forecast(1, 13, [{ target: "jobs", blockId: "other" }], true), { nowCount: 1, nowCap: 13, afterCount: 2, afterCap: 13, overCap: false }); // unlinked Ready task
+  assert.deepEqual(forecast(0, 13, [], true), { nowCount: 0, nowCap: 13, afterCount: 1, afterCap: 13, overCap: false }); // duplicate live links are removed by planner
+  assert.deepEqual(forecast(1, 13, [{ target: "jobs", blockId: "other" }], true), { nowCount: 1, nowCap: 13, afterCount: 2, afterCap: 13, overCap: false }); // already-snoozed retime
+  assert.deepEqual(forecast(1, 13, [{ target: "jobs", blockId: "other" }], false), { nowCount: 1, nowCap: 13, afterCount: 1, afterCap: 13, overCap: false }); // off-clock task
+  assert.deepEqual(forecast(13, 13, [], true), { nowCount: 13, nowCap: 13, afterCount: 14, afterCap: 13, overCap: true }); // over cap remains informative
+  assert.deepEqual(forecast(1, 13, [{ target: "jobs.md", blockId: "target" }], true), { nowCount: 1, nowCap: 13, afterCount: 1, afterCap: 13, overCap: false }); // already counted identity is not added twice
+});
+
 test("snoozed header reads the truthful blocked and timed states", () => {
   assert.equal(buildSnoozeCardSnoozedHeader({ display: "15:30", inText: "in 2h" }), "Snoozed until 15:30 · in 2h");
-  assert.ok(buildSnoozeCardSnoozedHeader({ blockedReason: "waiting on [[job#^x]]" }).startsWith("Blocked ·"));
+  assert.equal(buildSnoozeCardSnoozedHeader({ display: "15:30", inText: "in 2h 15m", state: "asleep" }), "Snoozed until 15:30 · in 2h 15m");
+  assert.equal(buildSnoozeCardSnoozedHeader({ display: "15:30", state: "due" }), "Snoozed until 15:30 · due — waking");
+  assert.equal(buildSnoozeCardSnoozedHeader({ display: "15:30", state: "blocked", blockedReason: "waiting on interview notes" }), "Snoozed until 15:30 · blocked — waiting on interview notes");
+  assert.equal(buildSnoozeCardSnoozedHeader({ display: "15:30", state: "blocked" }), "Snoozed until 15:30 · blocked — waits on prerequisites");
+});
+
+test("Alt+Z conflict scan reads every vim map mode and the configured vimrc", async () => {
+  assert.equal(snoozeCardVimrcMapsAltZ('" nmap <A-z> ignored\nmap <A-z> :echo hi'), true);
+  assert.equal(snoozeCardVimrcMapsAltZ("imap <M-z> :echo hi\nnnoremap Alt+Z :echo hi"), true);
+  assert.equal(snoozeCardVimrcMapsAltZ("nnoremap <C-z> :echo hi"), false);
+  const calls = [];
+  const app = { vault: { configDir: ".obsidian", adapter: { read: async (path) => {
+    calls.push(path);
+    if (path.endsWith("data.json")) return JSON.stringify({ vimrcFileName: "settings/vimrc" });
+    return "vnoremap <A-z> :echo hi";
+  } } } };
+  assert.deepEqual(await snoozeCardVimrcConflict(app), { kind: "vimrc", commandId: "obsidian-vimrc-support", path: "settings/vimrc" });
+  assert.deepEqual(calls, [".obsidian/plugins/obsidian-vimrc-support/data.json", "settings/vimrc"]);
+});
+
+test("Alt+Z registers a default only when hotkeys, plugin defaults, and vimrc are clear", async () => {
+  const makePlugin = (app) => {
+    const registered = [];
+    return { app, registered, addCommand(command) { registered.push(command); } };
+  };
+  const clearApp = () => ({
+    hotkeyManager: { customKeys: new Map(), defaultKeys: new Map(), getHotkeys: () => [] },
+    commands: { commands: {} },
+    vault: { configDir: ".obsidian", adapter: { read: async () => { throw new Error("no vimrc"); } } },
+  });
+  const clean = makePlugin(clearApp());
+  assert.equal(await registerSnoozeTaskCommand(clean), true);
+  assert.deepEqual(clean.registered[0].hotkeys, [{ modifiers: ["Alt"], key: "Z" }]);
+
+  const sources = [
+    (app) => app.hotkeyManager.customKeys.set("command-palette:open", [{ modifiers: ["Alt"], key: "Z" }]),
+    (app) => { app.commands.commands["other-plugin:open"] = { hotkeys: [{ modifiers: ["Alt"], key: "Z" }] }; },
+    (app) => { app.vault.adapter.read = async (path) => path.endsWith("data.json") ? JSON.stringify({ vimrcFileName: "vimrc" }) : "nmap <M-z> :echo hi"; },
+  ];
+  for (const configure of sources) {
+    const app = clearApp();
+    configure(app);
+    const conflicted = makePlugin(app);
+    assert.equal(await registerSnoozeTaskCommand(conflicted), true);
+    assert.deepEqual(conflicted.registered[0].hotkeys, [], JSON.stringify(conflicted.snoozeAltZConflict));
+    assert.ok(conflicted.snoozeAltZConflict.length > 0);
+    assert.equal(conflicted.addCommand.name, "addCommand", "temporary metadata adapter is restored");
+  }
 });
 
 test("refusal copy teaches event and blocked states", () => {

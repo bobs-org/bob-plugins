@@ -471,6 +471,7 @@ function buildSnoozeCardFacts(input) {
   } else if (options.wantCounts === true) {
     unavailable.push("plan-budget");
   }
+  const previewCounts = typeof options.previewCounts === "function" ? options.previewCounts : null;
   const destination = projectSnoozeWakeDestination({
     entries: options.ledgerEntries,
     typeKey: task ? task.typeKey : null,
@@ -481,6 +482,7 @@ function buildSnoozeCardFacts(input) {
     dateText, nowText, nowMinutes, zone, events, activeRow, task,
     sourcePomodoro,
     counts,
+    previewCounts,
     destination,
     unavailable: Object.freeze(unavailable),
   });

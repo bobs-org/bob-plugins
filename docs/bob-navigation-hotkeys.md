@@ -117,7 +117,7 @@ Navigate and edit Bob notes with keyboard commands.
 
 ## Snooze task (Alt+Z)
 
-`Alt+Z` opens the Snooze Card for one task, link, or Snoozed row; `z` on the Task Card opens the same card. Single-task only; events, Blocked, closed, ambiguous, and multi-target uses refuse. Past/next-day input teaches same-day only. **Wake now** runs `bob snooze wake`. `Esc`/`q`/`Ctrl+[` close; cancel writes nothing. Daily-note snooze undoes with one `Ctrl+Z`; cross-note edits undo per editor. On conflict the existing binding wins and a notice names it.
+`Alt+Z` opens Snooze Card for one task, link, or Snoozed row; Task Card `z` opens it. Events, blocked, closed, ambiguous, or multiple-task uses refuse. Times stay same-day. **Wake now** runs `bob snooze wake`. `Esc`, `q`, `Ctrl+[` close without writing. Daily snooze undoes; cross-note edits undo per editor. Configured hotkeys, plugin defaults, and vimrc are checked; conflicts retain command and Task Card row, omit this default, preserve bindings, and notify.
 
 `Ctrl+0` reuses `dash.md` tabs across windows, preferring pinned tabs with scroll position preserved; otherwise it uses the current tab or opens one.
 

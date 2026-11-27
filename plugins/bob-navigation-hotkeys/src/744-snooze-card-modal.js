@@ -176,8 +176,7 @@ class SnoozeCardModal extends Modal {
       this.refreshTimer = schedule(() => {
         if (this.settled) return;
         const authored = this.inputEl ? this.inputEl.value : this.inputValue;
-        this.refreshSuggestions({ preserveInput: true, authored });
-        this.refreshFooter();
+        void this.refreshCardFacts(authored);
       }, 30000);
     } catch (_) {
       this.refreshTimer = null;
@@ -192,6 +191,24 @@ class SnoozeCardModal extends Modal {
       else clearInterval(this.refreshTimer);
     } catch (_) {}
     this.refreshTimer = null;
+  }
+
+  async refreshCardFacts(authored) {
+    if (this.settled) return;
+    try {
+      if (this.plugin && typeof this.plugin.getSnoozeCardFacts === "function") {
+        const fresh = await this.plugin.getSnoozeCardFacts(this.resolution);
+        if (fresh && typeof fresh === "object") {
+          this.facts = fresh;
+          if (Number.isInteger(fresh.nowMinutes) && typeof fresh.dateText === "string" && typeof fresh.zone === "string") {
+            this.clock = { date: fresh.dateText, nowMinutes: fresh.nowMinutes, zone: fresh.zone, nowText: fresh.nowText };
+          }
+        }
+      }
+    } catch (_) {}
+    if (!this.settled) {
+      this.refreshSuggestions({ preserveInput: true, authored: typeof authored === "string" ? authored : this.inputValue });
+    }
   }
 
   refreshSuggestions(options) {
@@ -266,9 +283,13 @@ class SnoozeCardModal extends Modal {
   renderSnoozedActions() {
     if (!this.actionRowsEl) return;
     this.actionRowsEl.empty();
-    const blocked = this.resolution && this.resolution.task && (this.resolution.task.blocked === true || this.resolution.task.status === "?");
+    const task = this.resolution && this.resolution.task;
+    const facts = this.snoozeCardFacts();
+    const activeRow = facts && facts.activeRow;
+    const blocked = Boolean(task && (task.blocked === true || task.status === "?")) || Boolean(activeRow && activeRow.state === "blocked");
+    const blockedReason = (task && task.blockedReason) || (activeRow && activeRow.blockedReason) || "waits on prerequisites";
     const rows = [
-      { id: "wake-now", label: "Wake now", detail: blocked ? "Unavailable while Blocked" : "Run bob snooze wake now", available: !blocked, key: "w" },
+      { id: "wake-now", label: "Wake now", detail: blocked ? blockedReason : "Run bob snooze wake now", available: !blocked, key: "w" },
       { id: "unsnooze", label: "Unsnooze", detail: "Remove the row without changing the lane", available: true, key: "u" },
     ];
     for (const row of rows) {
@@ -346,17 +367,20 @@ class SnoozeCardModal extends Modal {
       const inText = clock ? snoozeCardInText(valid.value.minutes, clock.nowMinutes) : null;
       const departure = this.resolution && this.resolution.sourcePomodoro ? this.resolution.sourcePomodoro : null;
       const destination = (facts && facts.destination && facts.destination.name) || (taskFacts && (taskFacts.typeName || taskFacts.typeKey)) || null;
-      const counts = facts && facts.counts ? facts.counts : null;
+      let preview = null;
+      try {
+        if (facts && typeof facts.previewCounts === "function") preview = facts.previewCounts(valid.value.hhmm);
+      } catch (_) {}
       footerText = buildSnoozeCardFooter({
         departure,
         destination,
         display: valid.value.hhmm.slice(0, 2) + ":" + valid.value.hhmm.slice(2),
         inText,
-        nowCount: counts ? counts.count : null,
-        nowCap: counts ? counts.cap : null,
-        afterCount: null,
-        afterCap: null,
-        overCap: counts ? counts.over === true : false,
+        nowCount: preview ? preview.nowCount : null,
+        nowCap: preview ? preview.nowCap : null,
+        afterCount: preview ? preview.afterCount : null,
+        afterCap: preview ? preview.afterCap : null,
+        overCap: preview ? preview.overCap === true : false,
       }) || footerText;
     } catch (_) {}
     this.footerEl.setText(footerText);

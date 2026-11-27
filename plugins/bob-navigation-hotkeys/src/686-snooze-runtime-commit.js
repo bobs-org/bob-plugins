@@ -262,6 +262,21 @@ class BobNavigationHotkeysSnoozeRuntimeMixin {
         blockedReason: typeof source.blockedReason === "string" ? source.blockedReason : null,
       };
     }
+    const taskPath = snoozeRuntimeNormalizePath(task && (resolution.task.path || resolution.task.route) || "");
+    let taskContents = null;
+    try {
+      if (taskPath && taskPath === dailyPath) {
+        taskContents = dailyContents;
+      } else if (taskPath && this.app && this.app.vault) {
+        const taskFile = this.app.vault.getAbstractFileByPath(taskPath);
+        if (taskFile) {
+          taskContents = await this.readSnoozeRuntimeNote(taskPath, taskFile);
+          if (taskContents == null && this.app.vault.cachedRead) taskContents = await this.app.vault.cachedRead(taskFile);
+        }
+      }
+    } catch (_) {
+      taskContents = null;
+    }
     const identity = resolution && resolution.identity;
     let activeRow = null;
     if (identity && resolution.kind === "snoozed-row" && typeof provider.activeRow === "function") {
@@ -277,8 +292,74 @@ class BobNavigationHotkeysSnoozeRuntimeMixin {
     try { nowMinutes = typeof provider.nowMinutes === "function" ? provider.nowMinutes(now) : null; } catch (_) {}
     if (typeof dailyContents === "string") {
       try { events = typeof provider.todayEvents === "function" ? provider.todayEvents(dailyContents) : null; } catch (_) {}
-      try { counts = typeof provider.planCounts === "function" ? provider.planCounts(dailyContents) : null; } catch (_) {}
+      try { counts = typeof provider.planCounts === "function" ? provider.planCounts(dailyContents, dailyPath) : null; } catch (_) {}
     }
+    const previewCounts = typeof dailyContents === "string" && typeof taskContents === "string" && task && identity
+      ? (when) => {
+        try {
+          const planning = this.getSnoozePlanningAdapter();
+          const stampLine = typeof this.getFreshnessStampLine === "function" ? this.getFreshnessStampLine() : undefined;
+          const freshDateText = typeof this.getFreshnessDateText === "function" ? this.getFreshnessDateText() : dateText;
+          const taskSource = resolution.task;
+          const taskForPlan = {
+            path: taskPath,
+            route: taskSource.route || taskPath,
+            block: taskSource.block || taskSource.blockId || identity.block,
+            blockId: taskSource.block || taskSource.blockId || identity.block,
+            target: taskSource.target == null ? "" : taskSource.target,
+            status: taskSource.status,
+            is_task: taskSource.is_task,
+            is_event: taskSource.is_event,
+            blocked: taskSource.blocked,
+            contents: taskContents,
+            line: taskSource.line,
+            link: taskSource.link,
+            displayText: taskSource.displayText,
+          };
+          const clock = {
+            date: dateText || undefined,
+            now: Number.isInteger(nowMinutes) ? String(Math.floor(nowMinutes / 60)).padStart(2, "0") + ":" + String(nowMinutes % 60).padStart(2, "0") : undefined,
+            zone: zone || undefined,
+            nowInstant: now,
+            freshDateText: typeof freshDateText === "string" ? freshDateText : dateText,
+          };
+          const planned = snoozeMutationPlanner.plan({
+            action: "add",
+            when,
+            day: dailyContents,
+            dailyPath,
+            task: taskForPlan,
+            identities: [],
+            clock,
+            nowInstant: now,
+            freshDateText: typeof freshDateText === "string" ? freshDateText : dateText,
+            stampLine,
+            planTargetTaskUpdate: planning ? planning.planTargetTaskUpdate.bind(planning) : undefined,
+          });
+          if (!planned || planned.ok !== true) return null;
+          const dailyPlan = (planned.plans || []).find((plan) => plan && plan.path === dailyPath);
+          if (!dailyPlan || typeof dailyPlan.postimage !== "string") return null;
+          const postCounts = typeof provider.planCounts === "function" ? provider.planCounts(dailyPlan.postimage, dailyPath) : null;
+          if (!postCounts || !Number.isInteger(postCounts.count) || !Number.isInteger(postCounts.cap)) return null;
+          const offClock = typeof provider.taskIsOffClock === "function"
+            ? provider.taskIsOffClock(dailyContents, dailyPath, taskSource.target || "", identity.block)
+            : null;
+          return snoozeCardForecastCounts({
+            nowCount: postCounts.count,
+            cap: postCounts.cap,
+            identities: postCounts.identities,
+            identity: {
+              route: identity.route,
+              block: identity.block,
+              targets: [taskSource.target, taskPath],
+            },
+            onClock: typeof offClock === "boolean" ? !offClock : null,
+          });
+        } catch (_) {
+          return null;
+        }
+      }
+      : null;
     return buildSnoozeCardFacts({
       zone,
       dateText,
@@ -288,6 +369,7 @@ class BobNavigationHotkeysSnoozeRuntimeMixin {
       task,
       sourcePomodoro: resolution && resolution.sourcePomodoro,
       onClock: counts,
+      previewCounts,
       wantCounts: true,
       wantTask: Boolean(resolution && resolution.task),
       wantRow: Boolean(resolution && resolution.kind === "snoozed-row"),
@@ -300,14 +382,26 @@ class BobNavigationHotkeysSnoozeRuntimeMixin {
   // reader/writer. Pure enough to test with fake io.
   async commitSnoozePlans(plans, io) {
     const list = Array.isArray(plans) ? plans : [];
+    const fileFor = (path) => {
+      try {
+        if (io && typeof io.fileFor === "function") return io.fileFor(path) || null;
+      } catch (_) {}
+      try {
+        return this.app && this.app.vault && typeof this.app.vault.getAbstractFileByPath === "function"
+          ? this.app.vault.getAbstractFileByPath(path) || null
+          : null;
+      } catch (_) {
+        return null;
+      }
+    };
     const reader = (io && typeof io.read === "function")
       ? io.read
-      : async (path) => await this.readSnoozeRuntimeNote(path, io && io.fileFor ? io.fileFor(path) : null);
+      : async (path) => await this.readSnoozeRuntimeNote(path, fileFor(path));
     const writeOpen = (io && typeof io.writeOpen === "function")
       ? io.writeOpen
       : async (path, before, after) => {
         if (typeof this.writeLinkPickerNoteChange === "function") {
-          return await this.writeLinkPickerNoteChange(path, io && io.fileFor ? io.fileFor(path) : null, before, after);
+          return await this.writeLinkPickerNoteChange(path, fileFor(path), before, after);
         }
         throw new Error("Vault content updates are unavailable");
       };
@@ -315,7 +409,7 @@ class BobNavigationHotkeysSnoozeRuntimeMixin {
       ? io.writeClosed
       : async (path, before, after) => {
         if (typeof this.writeLinkPickerNoteChange === "function") {
-          return await this.writeLinkPickerNoteChange(path, io && io.fileFor ? io.fileFor(path) : null, before, after);
+          return await this.writeLinkPickerNoteChange(path, fileFor(path), before, after);
         }
         throw new Error("Vault content updates are unavailable");
       };

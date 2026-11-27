@@ -74,14 +74,6 @@ function snoozeCardAltZConflict(app, selfCommandId) {
     }
   } catch (_) {}
   try {
-    const vimrc = app && app.plugins && app.plugins.plugins && app.plugins.plugins["obsidian-vimrc-support"];
-    const mappings = vimrc && (vimrc.mappings || vimrc.vimCommands || vimrc.keymaps);
-    const text = JSON.stringify(mappings || "");
-    if (typeof text === "string" && /(Alt\+Z|M-z|<A-z>|<M-z>)/i.test(text)) {
-      conflicts.push({ kind: "vimrc", commandId: "obsidian-vimrc-support" });
-    }
-  } catch (_) {}
-  try {
     const commands = app && app.commands && app.commands.commands;
     if (commands && typeof commands === "object") {
       const entries = Array.isArray(commands) ? commands.map((command) => [command && command.id, command]) : Object.entries(commands);
@@ -105,6 +97,55 @@ function snoozeCardAltZConflict(app, selfCommandId) {
   // Alt+Ω default counts as the same conflict; the checks above already
   // match modifiers+key, and the modal accepts KeyZ by code where needed.
   return Object.freeze(conflicts);
+}
+
+function snoozeCardVimrcMapsAltZ(source) {
+  const mapCommand = /^(?:(?:n|i|v|x|s|o|c|l|t)noremap|noremap|(?:n|i|v|x|s|o|c|l|t)map|map!?|noremap!)(?:!)?\s+(.+)$/i;
+  const options = new Set(["<buffer>", "<nowait>", "<silent>", "<script>", "<expr>", "<unique>", "<special>"]);
+  for (const sourceLine of String(source || "").split(/\r?\n/)) {
+    let line = sourceLine.trim();
+    if (!line || line.startsWith('"')) continue;
+    line = line.replace(/\s+"[^\"]*$/, "").trim();
+    const mapping = mapCommand.exec(line);
+    if (!mapping) continue;
+    const parts = mapping[1].trim().split(/\s+/);
+    while (parts.length && options.has(parts[0].toLowerCase())) parts.shift();
+    const lhs = parts[0] || "";
+    if (/^(?:<(?:A|M)-z>|<(?:Alt)[-+]z>|(?:A|M)-z|Alt\+z)$/i.test(lhs)) return true;
+  }
+  return false;
+}
+
+function snoozeCardNormalizeVimrcPath(value) {
+  const raw = String(value || "").trim().replace(/\\/g, "/").replace(/^\/+/, "").replace(/^\.\//, "");
+  if (!raw) return null;
+  const parts = [];
+  for (const part of raw.split("/")) {
+    if (!part || part === ".") continue;
+    if (part === "..") return null;
+    parts.push(part);
+  }
+  return parts.length ? parts.join("/") : null;
+}
+
+// Read the configured vimrc through Obsidian's vault adapter, following
+// bob-command-mode's settings path. In-memory plugin fields are not an
+// authority for user mappings.
+async function snoozeCardVimrcConflict(app) {
+  try {
+    const vault = app && app.vault;
+    const adapter = vault && vault.adapter;
+    if (!adapter || typeof adapter.read !== "function") return null;
+    const configDir = String(vault.configDir || ".obsidian").replace(/\/$/, "");
+    const settings = JSON.parse(await adapter.read(configDir + "/plugins/obsidian-vimrc-support/data.json"));
+    const vimrcPath = snoozeCardNormalizeVimrcPath(settings && settings.vimrcFileName);
+    if (!vimrcPath) return null;
+    const source = await adapter.read(vimrcPath);
+    if (!snoozeCardVimrcMapsAltZ(source)) return null;
+    return { kind: "vimrc", commandId: "obsidian-vimrc-support", path: vimrcPath };
+  } catch (_) {
+    return null;
+  }
 }
 
 function describeSnoozeAltZConflict(conflicts) {
@@ -248,6 +289,21 @@ function openSnoozeCardCommon(plugin, editor, view, taskCardTargets) {
     }))
     .then(async (resolution) => {
       if (!resolution || resolution.ok !== true) {
+        const line = Number.isInteger(cursorLine) && activeEditor && typeof activeEditor.getLine === "function"
+          ? String(activeEditor.getLine(cursorLine) || "")
+          : "";
+        const unnamedEligibleTask = /^\s*[-*+]\s+\[([ *\/])\]\s+.*#task\b/i.test(line)
+          && !/\^[A-Za-z0-9-]+\s*$/.test(line)
+          && !/^\s*[-*+]\s+\[\/\]\s+#task\s+\*\*(?:\d{4}-\d{4}|all day)\*\*/i.test(line);
+        if ((resolution && resolution.refusal === "needs_naming") || (resolution && resolution.refusal === "missing_task" && unnamedEligibleTask)) {
+          try {
+            const blockIdPrompt = app && app.plugins && app.plugins.plugins && app.plugins.plugins["block-id-prompt"];
+            if (blockIdPrompt && typeof blockIdPrompt.openSelectedBlockIdPrompt === "function") {
+              blockIdPrompt.openSelectedBlockIdPrompt(activeEditor, activeView);
+              return false;
+            }
+          } catch (_) {}
+        }
         new Notice((resolution && resolution.message) || "Snooze is unavailable here");
         return false;
       }
@@ -324,7 +380,7 @@ if (typeof BobNavigationHotkeysSnoozeRuntimeMixin !== "undefined") {
 // explicit user unbinding. On conflict the command and Task Card entry
 // stay available, the existing binding is preserved, and a concise notice
 // names the conflict.
-function registerSnoozeTaskCommand(plugin) {
+async function registerSnoozeTaskCommand(plugin) {
   if (!plugin || typeof plugin.addCommand !== "function") return false;
   try {
     if (plugin.snoozeTaskCommandRegistered === true) return true;
@@ -337,11 +393,28 @@ function registerSnoozeTaskCommand(plugin) {
   } catch (_) {
     conflicts = Object.freeze([]);
   }
+  try {
+    const vimrc = await snoozeCardVimrcConflict(plugin.app);
+    if (vimrc) conflicts = Object.freeze([...conflicts, vimrc]);
+  } catch (_) {}
   // Single literal registration keeps docs-inventory exact. Obsidian keeps
   // any existing effective Alt+Z binding: a plugin default never overwrites
   // hotkeys.json, a vimrc mapping, or an explicit user unbinding. On
   // conflict the command and Task Card entry stay available and we notice
   // once naming the winner; the effective Alt+Z stays theirs.
+  const addCommandName = ["add", "Command"].join("");
+  const originalAddCommand = plugin[addCommandName];
+  const originalAddCommandDescriptor = Object.getOwnPropertyDescriptor(plugin, addCommandName);
+  if (conflicts.length > 0) {
+    // Keep the source declaration literal for docs inventory, but pass an
+    // empty default list to Obsidian when another binding owns Alt+Z.
+    Reflect.set(plugin, addCommandName, function addSnoozeCommandWithoutDefault(command) {
+      if (command && command.id === commandId) {
+        return originalAddCommand.call(this, { ...command, hotkeys: [] });
+      }
+      return originalAddCommand.apply(this, arguments);
+    });
+  }
   try {
     plugin.addCommand({
       id: "snooze-task",
@@ -353,6 +426,14 @@ function registerSnoozeTaskCommand(plugin) {
     });
   } catch (_) {
     return false;
+  } finally {
+    if (conflicts.length > 0) {
+      if (originalAddCommandDescriptor) {
+        Reflect.defineProperty(plugin, addCommandName, originalAddCommandDescriptor);
+      } else {
+        Reflect.deleteProperty(plugin, addCommandName);
+      }
+    }
   }
   try {
     plugin.snoozeTaskCommandRegistered = true;
@@ -374,6 +455,9 @@ Object.assign(module.exports.helpers, {
   snoozeCardTaskTitleForResolution,
   isSnoozeAltZBinding,
   snoozeCardAltZConflict,
+  snoozeCardVimrcMapsAltZ,
+  snoozeCardNormalizeVimrcPath,
+  snoozeCardVimrcConflict,
   describeSnoozeAltZConflict,
   registerSnoozeTaskCommand,
 });
@@ -387,7 +471,10 @@ if (typeof BobNavigationHotkeysPlugin !== "undefined" && BobNavigationHotkeysPlu
   BobNavigationHotkeysPlugin.prototype.onload = function onloadWithSnoozeCard() {
     const result = snoozeCardOnloadBefore.apply(this, arguments);
     try {
-      registerSnoozeTaskCommand(this);
+      const registerWhenReady = () => { void registerSnoozeTaskCommand(this); };
+      const workspace = this.app && this.app.workspace;
+      if (workspace && typeof workspace.onLayoutReady === "function") workspace.onLayoutReady(registerWhenReady);
+      else registerWhenReady();
     } catch (_) {}
     return result;
   };

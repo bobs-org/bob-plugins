@@ -217,7 +217,9 @@ ledger facts provider; without a compatible provider it refuses with a
 meaningful reason. Successful snooze, retime, and unsnooze compose into the
 runtime's guarded transactions: the daily note's whole snooze undoes with
 one `Ctrl+Z`; cross-note task and daily edits undo per editor. Cancellation
-writes nothing and never advances the review walk.
+writes nothing and never advances the review walk. The `z` row remains
+available when Alt+Z conflicts with a configured hotkey, plugin default, or
+vimrc mapping.
 
 ## Undo and direct stages
 

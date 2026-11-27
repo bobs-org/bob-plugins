@@ -21,6 +21,88 @@ const GATE_DATA = { cabinetsPreview: true, cardPreviewKinds: ["notebook", "prose
 const OPEN_TIMEOUT = 30_000;
 const { sleep, waitFor } = shared;
 
+const FIXTURE_BOB_REPORTS = Object.freeze({
+  albums: {
+    schema_version: 1,
+    ok: true,
+    albums: [
+      albumFixture("eat", "Eat", "restaurant", 106, [
+        { key: "status", label: "Status", kind: "enum", required: true, list: false, choices: [
+          { value: "to_try", label: "To try" }, { value: "liked", label: "Liked" },
+        ] },
+        { key: "location", label: "Location", kind: "text", required: true, list: false, choices: [] },
+        { key: "category", label: "Category", kind: "text", required: true, list: false, choices: [] },
+      ]),
+      albumFixture("empty", "Empty", "spot", 0, [
+        { key: "status", label: "Status", kind: "enum", required: false, list: false, choices: [
+          { value: "to_try", label: "To try" },
+        ] },
+      ]),
+      albumFixture("subscriptions", "Subscriptions", "subscription", 2, [
+        { key: "status", label: "Status", kind: "enum", required: true, list: false, choices: [
+          { value: "active", label: "Active" }, { value: "cancelled", label: "Cancelled" },
+        ] },
+        { key: "amount", label: "Amount", kind: "number", required: true, list: false, choices: [] },
+        { key: "cadence", label: "Cadence", kind: "enum", required: true, list: false, choices: [
+          { value: "monthly", label: "Monthly" }, { value: "yearly", label: "Yearly" },
+        ] },
+      ]),
+    ],
+    catalogs: [],
+    counts: { albums: 3, records: 108, roots: 3 },
+  },
+  bank: {
+    schema_version: 1,
+    ok: true,
+    state: "valid",
+    teaching_empty: false,
+    partial: false,
+    today: "2026-11-27",
+    path: "bank.md",
+    line: 6,
+    fingerprint: "sha256:cabinets-fixture",
+    accounts: [{
+      alias: "checking", label: "Checking", kind: "checking", default: true,
+      start: "2026-11-01", line: 8, source_line: 8, rows: 0, journal_events: 0,
+      status: "balanced", hint: "Ledger balance matches.", last_import: null,
+      balance_cents: 0, balance_asof: "2026-11-01", delta_cents: 0,
+    }],
+    categories: [{
+      key: "food", emoji: "🍲", label: "Food", builtin: false, declared: true,
+      hotkey: "f", hotkey_source: "explicit", group: "Everyday", hidden: false,
+      line: 12, source_line: 12, rows: 0, rule_refs: 0,
+    }],
+    free_hotkeys: ["b"],
+    rules: [],
+    stale_after: { days: 10, explicit: false, line: null },
+    findings: [],
+    issues: { errors: 0, warnings: 0 },
+    starter: null,
+  },
+});
+
+function albumFixture(stem, title, noun, records, fields) {
+  return {
+    stem, path: `${stem}.md`, title, emoji: null, summary: null, noun,
+    label: null, plural: null, singular: null, dated_notes: false, legacy: [],
+    schema_fingerprint: `sha256:${stem}-schema`, parent: "cash", parent_kind: "area",
+    owner: "cash", root: "cash", breadcrumb: ["Cash"], fields,
+    group_field: null, index_by: null, index_facets: [], records, groups: [],
+    needs_status: 0, last_record: null, index: { state: "current" }, issues: [],
+  };
+}
+
+function obsidianChildEnvironment(profile, shimDir, inherited = process.env) {
+  const env = inherited && typeof inherited === "object" ? inherited : {};
+  return {
+    ...env,
+    HOME: profile,
+    XDG_CONFIG_HOME: path.join(profile, ".config"),
+    PATH: shimDir + path.delimiter + (env.PATH || ""),
+    TMPDIR: env.TMPDIR || os.tmpdir(),
+  };
+}
+
 const PROBE_SOURCE = `(() => {
   const leaf = app.workspace.activeLeaf;
   const view = leaf?.view;
@@ -124,12 +206,12 @@ function copyPlugin(vault, id, data = null) {
   if (data) fs.writeFileSync(path.join(target, "data.json"), JSON.stringify(data, null, 2) + "\n");
 }
 
-function writeBobRefusal(profileDir) {
+function writeBobFixture(profileDir) {
   const shimDir = path.join(profileDir, "shim");
   const logPath = path.join(profileDir, "bob-spawns.jsonl");
   fs.mkdirSync(shimDir, { recursive: true });
   const file = path.join(shimDir, "bob");
-  fs.writeFileSync(file, `#!/usr/bin/env node\nconst fs = require("node:fs");\nconst log = ${JSON.stringify(logPath)};\ntry { fs.appendFileSync(log, JSON.stringify({ at: new Date().toISOString(), args: process.argv.slice(2) }) + "\\n"); } catch (_) {}\nprocess.stderr.write("Unexpected bob spawn in cabinet acceptance\\n");\nprocess.exit(87);\n`);
+  fs.writeFileSync(file, `#!/usr/bin/env node\nconst fs = require("node:fs");\nconst log = ${JSON.stringify(logPath)};\nconst reports = ${JSON.stringify(FIXTURE_BOB_REPORTS)};\nconst args = process.argv.slice(2);\nconst key = args[0] === "albums" && args[1] === "list" ? "albums"\n  : args[0] === "bank" && args[1] === "config" ? "bank" : null;\ntry { fs.appendFileSync(log, JSON.stringify({ at: new Date().toISOString(), args, fixture: key }) + "\\n"); } catch (_) {}\nif (key && args.includes("-f") && args.includes("json")) { process.stdout.write(JSON.stringify(reports[key]) + "\\n"); process.exit(0); }\nprocess.stderr.write("Unexpected bob spawn in cabinet acceptance\\n");\nprocess.exit(87);\n`);
   fs.chmodSync(file, 0o755);
   return { shimDir, logPath };
 }
@@ -242,7 +324,7 @@ async function run(args) {
   fs.mkdirSync(vault, { recursive: true });
   fs.mkdirSync(profile, { recursive: true });
   const notes = installVault(vault, profile);
-  const { shimDir, logPath } = writeBobRefusal(profile);
+  const { shimDir, logPath } = writeBobFixture(profile);
   const protectedHashes = shared.markdownFilesHash(vault);
   const report = {
     startedAt: new Date().toISOString(),
@@ -272,8 +354,7 @@ async function run(args) {
       "--remote-allow-origins=http://127.0.0.1/*", fs.realpathSync(vault),
     ], {
       cwd: os.tmpdir(),
-      env: { ...process.env, HOME: profile, XDG_CONFIG_HOME: path.join(profile, ".config"),
-        PATH: shimDir + path.delimiter + (process.env.PATH || ""), TMPDIR: "/tmp" },
+      env: obsidianChildEnvironment(profile, shimDir),
       stdio: ["ignore", "ignore", "pipe"],
     });
     const target = await shared.selectTarget(port, fs.realpathSync(vault), () => child && child.exitCode == null);
@@ -609,6 +690,8 @@ async function run(args) {
           for (const mode of ["live", "reading"]) {
             const width = widthName === "narrow" ? 420 : 1400;
             await shared.setViewport(client, width);
+            const sidebarState = await shared.collapseSidebars(client);
+            if (!sidebarState.ok) throw new Error("Cannot isolate the screenshot viewport: " + JSON.stringify(sidebarState));
             await shared.setTheme(client, theme);
             await openAndProbe(client, host.path, mode);
             if (host.state === "armed") {
@@ -713,4 +796,7 @@ async function main(argv) {
 }
 
 if (require.main === module) void main(process.argv.slice(2));
-module.exports = { PROBE_SOURCE, installVault, parseArgs: lib.parseArgs, run };
+module.exports = {
+  FIXTURE_BOB_REPORTS, PROBE_SOURCE, installVault, obsidianChildEnvironment,
+  parseArgs: lib.parseArgs, run,
+};

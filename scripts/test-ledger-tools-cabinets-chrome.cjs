@@ -244,6 +244,33 @@ test("Properties collapse returns focus to the disclosure when focus is in its d
   H.propertyCardCabinetsSetGateForTests(false);
 });
 
+test("record sheet assembles its Properties foot into the shared cabinet stack", () => {
+  H.propertyCardCabinetStateResetForTests();
+  H.propertyCardCabinetsSetGateForTests(true);
+  const doc = new Document();
+  const sheet = doc.createElement("section");
+  sheet.className = "bob-record-sheet bob-property-card";
+  sheet.setAttribute("data-card-kind", "record");
+  sheet.setAttribute("data-record-source", "eat/place-001.md");
+  doc.roots = [sheet];
+  const plugin = Object.create(LedgerToolsPlugin.prototype);
+  plugin.recordSheetFrontmatter = () => ({ type: "record", status: "to_try" });
+  plugin.scheduleRecordSheetRefresh = () => true;
+  const built = plugin.recordSheetAppendFoot(sheet, {
+    identity: { path: "eat/place-001.md" },
+    path: "eat/place-001.md",
+  }, { sourcePath: "eat/place-001.md", keyLive: true }, doc, {
+    inventory: { count: 2, rows: [], groups: [], issues: [] },
+    stamp: { state: "valid", text: "Created today", tooltip: "Created stamp" },
+  });
+  assert.ok(built?.stack);
+  const panels = built.stack.querySelectorAll("[data-cabinet-kind]");
+  assert.deepEqual(panels.map((panel) => panel.getAttribute("data-cabinet-kind")), ["properties"]);
+  assert.equal(built.stack.getAttribute("data-cabinet-source"), "eat/place-001.md");
+  H.propertyCardCabinetsSetGateForTests(false);
+  H.propertyCardCabinetStateResetForTests();
+});
+
 test("album Schema is closed when healthy under the gate and still resurfaces on problems", () => {
   const plugin = Object.create(LedgerToolsPlugin.prototype);
   plugin.albumHeaderExpanded = new Map();

@@ -135314,6 +135314,17 @@ class BobLedgerToolsRecordSheetFootMixin {
         try { doc.adoptNode?.(built.element); } catch (_) {}
       }
       sheet.appendChild(built.element);
+      if (propertyCardCabinetsGateLive?.() === true
+        && typeof propertyCardCabinetsAssemble === "function") {
+        const stack = propertyCardCabinetsAssemble(sheet, path, built.element, {
+          plugin: this,
+          component: this,
+          keyLive: options?.keyLive === true,
+          frontmatter: this.recordSheetFrontmatter?.(path) || {},
+          repaint: () => this.scheduleRecordSheetRefresh?.(),
+        });
+        if (stack) built.stack = stack;
+      }
       if (open && this.recordSheetFootPendingScroll instanceof Set && this.recordSheetFootPendingScroll.has(path)) {
         this.recordSheetFootPendingScroll.delete(path);
         try {

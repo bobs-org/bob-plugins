@@ -3,11 +3,24 @@
 
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const Module = require("node:module");
+const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const test = require("node:test");
 const lib = require("./obsidian-cabinets-e2e-lib.cjs");
 const runner = require("./obsidian-cabinets-e2e.cjs");
+const originalLoad = Module._load;
+Module._load = function loadWithStubs(request, parent, isMain) {
+  if (request === "obsidian") return {
+    MarkdownRenderChild: class {}, Notice: class {}, Plugin: class {},
+    Platform: { isDesktopApp: true }, normalizePath: (value) => value,
+  };
+  if (request === "@codemirror/state" || request === "@codemirror/view") return {};
+  return originalLoad.call(this, request, parent, isMain);
+};
+const LedgerToolsPlugin = require("../plugins/bob-ledger-tools/main.js");
+Module._load = originalLoad;
 
 test("Cabinets runner self-test is offline", () => {
   const result = spawnSync(process.execPath, [path.join(__dirname, "obsidian-cabinets-e2e.cjs"), "--self-test"], {
@@ -61,4 +74,26 @@ test("browser probe is valid and runner covers acceptance-critical interactions"
   assert.match(source, /refCardPreview: true/);
   assert.match(source, /Unexpected bob spawn in cabinet acceptance/);
   assert.match(source, /markdownFilesHash/);
+  assert.match(source, /collapseSidebars\(client\)/);
+  assert.doesNotMatch(source, /TMPDIR:\s*["']\/tmp["']/);
+});
+
+test("report fixtures provide the read-only album and bank data the visual matrix needs", () => {
+  const albums = runner.FIXTURE_BOB_REPORTS.albums;
+  assert.equal(albums.ok, true);
+  assert.deepEqual(albums.albums.map((entry) => entry.path), ["eat.md", "empty.md", "subscriptions.md"]);
+  assert.ok(albums.albums.every((entry) => Array.isArray(entry.fields) && entry.index.state === "current"));
+  assert.equal(runner.FIXTURE_BOB_REPORTS.bank.state, "valid");
+  assert.equal(runner.FIXTURE_BOB_REPORTS.bank.accounts[0].alias, "checking");
+  const decodedAlbums = LedgerToolsPlugin.helpers.albumDecodeListReport(JSON.stringify(albums));
+  const decodedBank = LedgerToolsPlugin.helpers.bankDecodeConfig(JSON.stringify(runner.FIXTURE_BOB_REPORTS.bank), "");
+  assert.equal(decodedAlbums.ok, true);
+  assert.equal(decodedBank.ok, true);
+});
+
+test("Obsidian child inherits disk-backed temporary storage", () => {
+  const env = runner.obsidianChildEnvironment("/profile", "/shim", { TMPDIR: "/var/tmp", PATH: "/usr/bin" });
+  assert.equal(env.TMPDIR, "/var/tmp");
+  assert.ok(env.PATH.startsWith("/shim" + path.delimiter));
+  assert.equal(runner.obsidianChildEnvironment("/profile", "/shim", {}).TMPDIR, os.tmpdir());
 });

@@ -2,7 +2,9 @@
 // performance tests and the developer diagnostic runner. Keep this
 // module limited: the npm-test budgets still live in
 // test-block-id-prompt-task-wikilink-index-performance.cjs, which
-// npm test runs only from the serial test:perf stage.
+// npm test runs only from the serial test:perf stage. The cold-chunk
+// gate warms code paths then times fresh indexes; this helper always
+// reports a raw build so the diagnostic can see first-chunk noise.
 
 const { helpers } = require("./block-id-prompt-harness.cjs");
 

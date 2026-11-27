@@ -7,6 +7,12 @@
 // the parallel `test:unit` pass. process.cpuUsage includes V8 helper
 // threads, so overlapping allocation-heavy siblings inflate the
 // snapshot budget even when main-thread CPU stays well under 50 ms.
+// The cold-chunk gate uses the same pattern as cpu-work-perf-support.cjs:
+// an untimed warmup settles JIT, then the best of several fresh-index
+// builds measures chunk cost. That still catches a real overshoot because
+// a broken yield exceeds 16 ms on every attempt; it only sheds helper-
+// thread and cold-start noise that used to fail a quiet 2-3 ms wall chunk
+// at 16.1-18.3 ms CPU (bob-cli-f8).
 //
 // A synthetic vault of 6,500 notes bearing 5,000 tasks proves:
 // - the cold build completes in at most 1.5 s, in chunks of at most 16 ms;
@@ -27,6 +33,7 @@ const {
   CHUNK_BUDGET_MS,
   SNAPSHOT_BUDGET_MS,
   KEYSTROKE_BUDGET_MS,
+  cpuClockSource,
   cpuTimeMs,
   delay,
   bestOf,
@@ -35,23 +42,52 @@ const {
   settleRankPath,
 } = require("./task-wikilink-index-perf-support.cjs");
 
-test("cold build of 6,500 notes / 5,000 tasks fits 1.5 s in chunks of at most 16 ms", async () => {
+const COLD_CHUNK_WARMUPS = 1;
+const COLD_CHUNK_SAMPLES = 7;
+
+test("cold build of 6,500 notes / 5,000 tasks fits 1.5 s in chunks of at most 16 ms", async (t) => {
+  // Untimed warmup settles JIT and inline caches for ingest/parse/yield.
+  // Each timed build still constructs a fresh empty index: the store under
+  // test stays cold; only the code is warm. Node v22.14 has no
+  // process.threadCpuUsage, so cpuTimeMs falls back to process.cpuUsage and
+  // charges V8 helper threads. A 2-3 ms wall chunk then reports 16.1-18.3 ms
+  // CPU under the serial test:perf stage. Best-of-seven sheds that noise the
+  // way cpu-work-perf-support.cjs does. A real chunker overshoot (yield bound
+  // ignored, or one note's ingest over 16 ms) exceeds the budget on every
+  // attempt, so the 16 ms ceiling still catches a regression.
+  for (let warmup = 0; warmup < COLD_CHUNK_WARMUPS; warmup += 1) {
+    await coldBuildTimed(6500, { yieldAfterMs: 1 });
+  }
   const built = await coldBuildTimed(6500, { yieldAfterMs: 1 });
   assert.equal(built.result.total, 6500);
   assert.equal(built.result.scanned, 6500);
   assert.ok(built.chunks.length > 1, `expected chunked yields, saw ${built.chunks.length}`);
-  // Three builds feed both the total and chunk budgets.
   const samples = [built];
-  for (let attempt = 1; attempt < 3; attempt += 1) {
+  for (let attempt = 1; attempt < COLD_CHUNK_SAMPLES; attempt += 1) {
     await delay(10);
     samples.push(await coldBuildTimed(6500, { yieldAfterMs: 1 }));
   }
-  const worst = Math.min(...samples.map((sample) => worstChunkMs(sample.chunkCpuMs)));
+  const chunkSamples = samples.map((sample) => worstChunkMs(sample.chunkCpuMs));
+  const worst = Math.min(...chunkSamples);
+  t.diagnostic(
+    `cold chunk ${worst.toFixed(2)} ms CPU (best of ${chunkSamples.length}: ${chunkSamples
+      .map((sample) => sample.toFixed(2))
+      .join(", ")} ms; budget ${CHUNK_BUDGET_MS} ms; clock ${cpuClockSource()})`,
+  );
   assert.ok(
     worst <= CHUNK_BUDGET_MS,
-    `worst chunk ${worst.toFixed(1)} ms exceeds ${CHUNK_BUDGET_MS} ms`,
+    `worst chunk ${worst.toFixed(1)} ms exceeds ${CHUNK_BUDGET_MS} ms` +
+      ` (best of ${chunkSamples.length}: ${chunkSamples
+        .map((sample) => sample.toFixed(2))
+        .join(", ")} ms; budget ${CHUNK_BUDGET_MS} ms; clock ${cpuClockSource()})`,
   );
-  const ms = Math.min(...samples.map((sample) => sample.cpuMs));
+  const cpuSamples = samples.map((sample) => sample.cpuMs);
+  const ms = Math.min(...cpuSamples);
+  t.diagnostic(
+    `cold build ${ms.toFixed(1)} ms CPU (best of ${cpuSamples.length}: ${cpuSamples
+      .map((sample) => sample.toFixed(1))
+      .join(", ")} ms; budget ${COLD_BUILD_BUDGET_MS} ms)`,
+  );
   assert.ok(ms <= COLD_BUILD_BUDGET_MS, `cold build ${ms.toFixed(1)} ms exceeds budget`);
   const taskRows = built.index.snapshot({}).rows;
   assert.ok(taskRows.length >= 5000, `expected 5,000+ rows, saw ${taskRows.length}`);

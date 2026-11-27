@@ -298,3 +298,36 @@ test("project collapse is a compact fold with a live keycap", () => {
   assert.equal(collapse.classList.contains("bob-property-card-fold-compact"), true);
   assert.equal(collapse.querySelector(".bob-property-card-fold-keycap").textContent, "_");
 });
+
+test("the mounted tree rail is the card's floor on area and project cards", () => {
+  const doc = makeDoc();
+  const plugin = Object.create(LedgerToolsPlugin.prototype);
+  plugin.app = { workspace: {}, commands: {} };
+  plugin.dependencyNavApi = () => null;
+  plugin.treeWalkRailMounted = new Map();
+  plugin.treeWalkRailSubscribed = false;
+  const provider = Object.freeze({
+    ok: true, route: "tree", kind: "area", lane: null,
+    step: Object.freeze({
+      prev: Object.freeze({ path: "a.md", target: "a", groupLabel: "root", landingLabel: "a", shortLabel: "a", state: "exists", ghostReason: null, wraps: false, source: "tree" }),
+      next: Object.freeze({ path: "c.md", target: "c", groupLabel: "root", landingLabel: "c", shortLabel: "c", state: "exists", ghostReason: null, wraps: false, source: "tree" }),
+      parent: null,
+    }),
+    stepNone: null,
+    group: Object.freeze({ noun: "parent", memberNoun: "area", label: "root", shortLabel: "root", parentPath: null, position: 2, size: 3, index: 1, count: 2, members: [], atStart: false, atEnd: false, enteringNext: null, enteringPrev: null }),
+    prevGroup: Object.freeze({ path: "p.md", target: "p", groupLabel: "pig", landingLabel: "p", shortLabel: "p", state: "exists", ghostReason: null, wraps: false, source: "tree" }),
+    nextGroup: Object.freeze({ path: "n.md", target: "n", groupLabel: "goo", landingLabel: "n", shortLabel: "n", state: "exists", ghostReason: null, wraps: false, source: "tree" }),
+    none: null,
+  });
+  plugin.treeWalkRailModelFor = () => H.treeWalkRailModel({
+    answer: Object.freeze({ ok: true, prev: provider.step.prev, next: provider.step.next, prevGroup: provider.prevGroup, nextGroup: provider.nextGroup, group: provider.group, groupConflicts: [] }),
+    provider,
+  });
+  for (const model of [areaModel(), projectModel()]) {
+    const card = H.homeCardBuildEl(doc, model);
+    plugin.treeWalkRailMountOnCard(card, model.path, () => "");
+    const rail = card.querySelector(".bob-property-card-rail");
+    assert.equal(card.children.at(-1), rail, `${model.kind} rail is last`);
+    assert.equal(rail.getAttribute("data-card-floor"), "link-walk");
+  }
+});

@@ -608,17 +608,12 @@ class BobLedgerToolsHomeCardMixin {
 
   homeCardBuildMounted(model, options, doc, footSpec) {
     let card = null;
-    try {
-      card = homeCardBuildEl(doc, model, options);
-    } catch (_) {
-      card = null;
-    }
+    try { card = homeCardBuildEl(doc, model, options); } catch (_) { card = null; }
     if (!card) return null;
+    try { card.setAttribute?.("data-home-source", model.path); } catch (_) {}
+    try { this.homeCardAppendFoot?.(card, model.path, model, doc, footSpec, options); } catch (_) {}
     try {
-      card.setAttribute?.("data-home-source", model.path);
-    } catch (_) {}
-    try {
-      this.homeCardAppendFoot?.(card, model.path, model, doc, footSpec, options);
+      this.treeWalkRailMountOnCard?.(card, model.path, () => this.homeCardSourceCache?.get?.(model.path) || options?.sourceText || "");
     } catch (_) {}
     return card;
   }
@@ -732,6 +727,7 @@ class BobLedgerToolsHomeCardMixin {
     this.homeCardPaintGoal(root, model);
     this.homeCardRestoreFocus(header, focusKey);
     try { this.homeCardTrackFoot?.(scope || root, sourcePath, header); } catch (_) {}
+    try { this.treeWalkRailBind?.(header, sourcePath); } catch (_) {}
     try { this.homeCardEnsureSource?.(sourcePath); } catch (_) {}
     return header;
   }
@@ -781,6 +777,7 @@ class BobLedgerToolsHomeCardMixin {
       homeCardNodeSignatures.set(target, signature);
       propertyCardSyncTitleHeading(target, entry.owned);
       this.homeCardRestoreFocus(target, focusKey);
+      try { this.treeWalkRailBind?.(target, entry.path); } catch (_) {}
     });
   }
 
@@ -830,6 +827,7 @@ class BobLedgerToolsHomeCardMixin {
         try { this.homeCardReleaseFrontmatter?.(view?.dom, path); } catch (_) {}
         try { this.homeCardReleaseKeys?.(view?.dom, path); } catch (_) {}
         try { this.homeCardTrackFoot?.(view?.dom, path, null); } catch (_) {}
+        try { this.treeWalkRailBind?.(null, path); } catch (_) {}
         return Decoration.none;
       }
       const doc = view.dom?.ownerDocument || (typeof document !== "undefined" ? document : null);
@@ -860,6 +858,7 @@ class BobLedgerToolsHomeCardMixin {
           try { this.homeCardReleaseFrontmatter?.(view?.dom, path); } catch (_) {}
           try { this.homeCardReleaseKeys?.(view?.dom, path); } catch (_) {}
           try { this.homeCardTrackFoot?.(view?.dom, path, null); } catch (_) {}
+          try { this.treeWalkRailBind?.(null, path); } catch (_) {}
           return Decoration.none;
         }
         if (header) this.homeCardPatchLive(view, adopted, fresh, signature);
@@ -885,6 +884,7 @@ class BobLedgerToolsHomeCardMixin {
         },
       });
       try { this.homeCardTrackFoot?.(view?.dom, path, header); } catch (_) {}
+      try { this.treeWalkRailBind?.(header, path); } catch (_) {}
       if (adoption.mode === "slot") {
         try {
           this.homeCardOwnMountedFrontmatter?.(

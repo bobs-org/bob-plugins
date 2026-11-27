@@ -1,5 +1,5 @@
 // Shared property-card foot row and properties drawer (bob-cli-pf drawer-record).
-// Pure DOM kit: the foot follows the nav rail, outside the collapsible body.
+// Pure DOM kit: the rail is the card's floor, outside the collapsible body.
 // The drawer builds its body only when opened. Painting never spawns bob and
 // never writes the vault; view navigation stays distinct from vault mutation.
 //

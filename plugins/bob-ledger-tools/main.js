@@ -67571,7 +67571,8 @@ function propertyCardCabinetsAssemble(parent, pathValue, footEl, context = {}) {
         button.removeAttribute?.("aria-keyshortcuts");
       }
     }
-    card.appendChild(stack);
+    if (typeof propertyCardFloorAppend === "function") propertyCardFloorAppend(card, stack);
+    else card.appendChild(stack);
 
     const providerReleases = [];
     for (const row of panels) {
@@ -95097,7 +95098,7 @@ function propertyCardInventory(input = {}) {
 }
 // ---- src/240o-plugin-property-card-foot-dom.js ----
 // Shared property-card foot row and properties drawer (bob-cli-pf drawer-record).
-// Pure DOM kit: the foot follows the nav rail, outside the collapsible body.
+// Pure DOM kit: the rail is the card's floor, outside the collapsible body.
 // The drawer builds its body only when opened. Painting never spawns bob and
 // never writes the vault; view navigation stays distinct from vault mutation.
 //
@@ -97340,7 +97341,8 @@ function propertyCardFootAdapterAppend(card, path, doc, spec, handlers, pendingS
     if (doc && built.element.ownerDocument !== doc) {
       try { doc.adoptNode?.(built.element); } catch (_) {}
     }
-    card.appendChild(built.element);
+    if (typeof propertyCardFloorAppend === "function") propertyCardFloorAppend(card, built.element);
+    else card.appendChild(built.element);
     if (typeof propertyCardCabinetsAssemble === "function") {
       const ctx = context && typeof context === "object" ? context : {};
       const stack = propertyCardCabinetsAssemble(card, key, built.element, {
@@ -115079,17 +115081,12 @@ class BobLedgerToolsHomeCardMixin {
 
   homeCardBuildMounted(model, options, doc, footSpec) {
     let card = null;
-    try {
-      card = homeCardBuildEl(doc, model, options);
-    } catch (_) {
-      card = null;
-    }
+    try { card = homeCardBuildEl(doc, model, options); } catch (_) { card = null; }
     if (!card) return null;
+    try { card.setAttribute?.("data-home-source", model.path); } catch (_) {}
+    try { this.homeCardAppendFoot?.(card, model.path, model, doc, footSpec, options); } catch (_) {}
     try {
-      card.setAttribute?.("data-home-source", model.path);
-    } catch (_) {}
-    try {
-      this.homeCardAppendFoot?.(card, model.path, model, doc, footSpec, options);
+      this.treeWalkRailMountOnCard?.(card, model.path, () => this.homeCardSourceCache?.get?.(model.path) || options?.sourceText || "");
     } catch (_) {}
     return card;
   }
@@ -115203,6 +115200,7 @@ class BobLedgerToolsHomeCardMixin {
     this.homeCardPaintGoal(root, model);
     this.homeCardRestoreFocus(header, focusKey);
     try { this.homeCardTrackFoot?.(scope || root, sourcePath, header); } catch (_) {}
+    try { this.treeWalkRailBind?.(header, sourcePath); } catch (_) {}
     try { this.homeCardEnsureSource?.(sourcePath); } catch (_) {}
     return header;
   }
@@ -115252,6 +115250,7 @@ class BobLedgerToolsHomeCardMixin {
       homeCardNodeSignatures.set(target, signature);
       propertyCardSyncTitleHeading(target, entry.owned);
       this.homeCardRestoreFocus(target, focusKey);
+      try { this.treeWalkRailBind?.(target, entry.path); } catch (_) {}
     });
   }
 
@@ -115301,6 +115300,7 @@ class BobLedgerToolsHomeCardMixin {
         try { this.homeCardReleaseFrontmatter?.(view?.dom, path); } catch (_) {}
         try { this.homeCardReleaseKeys?.(view?.dom, path); } catch (_) {}
         try { this.homeCardTrackFoot?.(view?.dom, path, null); } catch (_) {}
+        try { this.treeWalkRailBind?.(null, path); } catch (_) {}
         return Decoration.none;
       }
       const doc = view.dom?.ownerDocument || (typeof document !== "undefined" ? document : null);
@@ -115331,6 +115331,7 @@ class BobLedgerToolsHomeCardMixin {
           try { this.homeCardReleaseFrontmatter?.(view?.dom, path); } catch (_) {}
           try { this.homeCardReleaseKeys?.(view?.dom, path); } catch (_) {}
           try { this.homeCardTrackFoot?.(view?.dom, path, null); } catch (_) {}
+          try { this.treeWalkRailBind?.(null, path); } catch (_) {}
           return Decoration.none;
         }
         if (header) this.homeCardPatchLive(view, adopted, fresh, signature);
@@ -115356,6 +115357,7 @@ class BobLedgerToolsHomeCardMixin {
         },
       });
       try { this.homeCardTrackFoot?.(view?.dom, path, header); } catch (_) {}
+      try { this.treeWalkRailBind?.(header, path); } catch (_) {}
       if (adoption.mode === "slot") {
         try {
           this.homeCardOwnMountedFrontmatter?.(
@@ -115621,6 +115623,7 @@ class BobLedgerToolsHomeCardOwnershipMixin {
     if (!root) return;
     try { this.homeCardClearGoal?.(root); } catch (_) {}
     try { this.homeCardTrackFoot?.(scope, sourcePath, null); } catch (_) {}
+    try { this.treeWalkRailBind?.(null, sourcePath); } catch (_) {}
     this.homeCardReleaseAdoption(scope, sourcePath);
     try { this.homeCardReleaseFrontmatter?.(scope, sourcePath); } catch (_) {}
     for (const node of Array.from(root.querySelectorAll?.(`.${HOME_CARD_CLASS}`) || [])) {
@@ -115664,6 +115667,7 @@ class BobLedgerToolsHomeCardOwnershipMixin {
 
   homeCardCleanEditor(view) {
     try { this.homeCardTrackFoot?.(view?.dom, this.homeCardLivePath(view), null); } catch (_) {}
+    try { this.treeWalkRailBind?.(null, this.homeCardLivePath(view)); } catch (_) {}
     try { this.homeCardReleaseAdoption(view?.dom); } catch (_) {}
     try { this.homeCardReleaseFrontmatter?.(view?.dom, this.homeCardLivePath(view)); } catch (_) {}
     try {
@@ -117192,6 +117196,9 @@ class BobLedgerToolsNotebookCardMixin {
     try { card.setAttribute("data-notebook-source", model.path); } catch (_) {}
     // The foot is appended once by notebookCardBuildEl through
     // options.appendFoot; a second append here doubled every foot.
+    try {
+      this.treeWalkRailMountOnCard?.(card, model.path, () => this.notebookCardSourceCache?.get?.(model.path) || options?.sourceText || "");
+    } catch (_) {}
     return card;
   }
 
@@ -117361,6 +117368,7 @@ class BobLedgerToolsNotebookCardMixin {
     }
     scope?.classList?.add?.(NOTEBOOK_CARD_HOST_SURFACE_CLASS);
     this.notebookCardTrackFoot?.(scope || root, path, card);
+    try { this.treeWalkRailBind?.(card, path); } catch (_) {}
     try {
       this.notebookCardPaintReadouts?.(card, path, doc, {
         scope, view: reading?.view || null, collapsed: options.collapsed,
@@ -117376,6 +117384,7 @@ class BobLedgerToolsNotebookCardMixin {
     if (!root) return;
     const hadCard = notebookCardMountedInSurface(root, path);
     try { this.notebookCardTrackFoot?.(scope, path, null); } catch (_) {}
+    try { this.treeWalkRailBind?.(null, path); } catch (_) {}
     try { propertyCardAdoptRelease?.(scope, path || undefined, NOTEBOOK_CARD_HOST_KIND, { preserveFallback: true }); } catch (_) {}
     try { propertyCardFrontmatterReleaseMounted?.(scope, { plugin: this, kind: NOTEBOOK_CARD_HOST_KIND, path }); } catch (_) {}
     for (const node of Array.from(root.querySelectorAll?.(`.${NOTEBOOK_CARD_SURFACE_CLASS}`) || [])) {
@@ -117406,6 +117415,7 @@ class BobLedgerToolsNotebookCardMixin {
     const scope = view?.dom || null;
     const path = notebookCardPath(this.notebookCardLivePath(view) || "");
     try { this.notebookCardTrackFoot?.(scope, path, null); } catch (_) {}
+    try { this.treeWalkRailBind?.(null, path); } catch (_) {}
     try { propertyCardAdoptRelease?.(scope, path || undefined, NOTEBOOK_CARD_HOST_KIND, { preserveFallback: true }); } catch (_) {}
     try { propertyCardFrontmatterReleaseMounted?.(scope, { plugin: this, kind: NOTEBOOK_CARD_HOST_KIND, path }); } catch (_) {}
     try { this.notebookCardPropertyHost().cleanEditor(view, { unmark: (root) => root?.classList?.remove?.(NOTEBOOK_CARD_HOST_SURFACE_CLASS) }); } catch (_) {}
@@ -117478,6 +117488,7 @@ class BobLedgerToolsNotebookCardMixin {
         },
       });
       this.notebookCardTrackFoot?.(view.dom, path, card);
+      try { this.treeWalkRailBind?.(card, path); } catch (_) {}
       try {
         this.notebookCardPaintReadouts?.(card, path, doc, {
           scope: view.dom, view, editor: view.editor, collapsed: options.collapsed,
@@ -117527,6 +117538,7 @@ class BobLedgerToolsNotebookCardMixin {
     try {
       const patched = propertyCardAdoptPatch(adopted.node, fresh);
       notebookCardNodeSignatures.set(patched, signature);
+      try { this.treeWalkRailBind?.(patched, adopted.path); } catch (_) {}
       if (adopted.pending === true) return true;
       const effect = this.notebookCardPropertyHost().ensureRefreshEffect();
       if (effect && typeof view.dispatch === "function") view.dispatch({ effects: effect.of({ refresh: true }) });
@@ -118826,6 +118838,9 @@ class BobLedgerToolsProseNoteCardMixin {
       });
     } catch (_) {}
     try { this.proseNoteCardAppendFoot(card, model.path, model, doc, footSpec, options); } catch (_) {}
+    try {
+      this.treeWalkRailMountOnCard?.(card, model.path, () => this.proseNoteCardSourceCache?.get?.(model.path) || options?.sourceText || "");
+    } catch (_) {}
     return card;
   }
 
@@ -118965,6 +118980,7 @@ class BobLedgerToolsProseNoteCardMixin {
     scope.classList?.add?.(PROSE_NOTE_CARD_SURFACE_MARK);
     this.proseNoteCardSurfaceScopes?.add?.(scope);
     this.proseNoteCardTrackFoot(scope, path, card);
+    try { this.treeWalkRailBind?.(card, path); } catch (_) {}
     void this.proseNoteCardEnsureSource(path);
     return card;
   }
@@ -118973,6 +118989,7 @@ class BobLedgerToolsProseNoteCardMixin {
     const path = proseNoteCardPath(sourcePath);
     if (!root && !scope) return;
     try { this.proseNoteCardTrackFoot(scope, path, null); } catch (_) {}
+    try { this.treeWalkRailBind?.(null, path); } catch (_) {}
     try { propertyCardAdoptRelease(scope, path || undefined, PROSE_NOTE_CARD_HOST_KIND, { preserveFallback: true }); } catch (_) {}
     try { this.proseNoteCardReleaseFrontmatter(scope, path); } catch (_) {}
     for (const node of this.proseNoteCardReadingCards(root, path)) {
@@ -119053,6 +119070,7 @@ class BobLedgerToolsProseNoteCardMixin {
       try { propertyCardAdoptRelease(view.dom, path, PROSE_NOTE_CARD_HOST_KIND, { preserveFallback: true }); } catch (_) {}
       try { this.proseNoteCardReleaseFrontmatter(view.dom, path); } catch (_) {}
       try { this.proseNoteCardTrackFoot(view.dom, path, null); } catch (_) {}
+      try { this.treeWalkRailBind?.(null, path); } catch (_) {}
       return Decoration?.none || null;
     }
     if (!Decoration || !WidgetType || !RangeSetBuilder) return Decoration?.none || null;
@@ -119095,6 +119113,7 @@ class BobLedgerToolsProseNoteCardMixin {
       },
     });
     try { this.proseNoteCardTrackFoot(view.dom, path, card); } catch (_) {}
+    try { this.treeWalkRailBind?.(card, path); } catch (_) {}
     if (adoption.mode === "slot") {
       try {
         this.proseNoteCardOwnMounted(view.dom, view, path, card, text, () => this.proseNoteCardLiveCurrentPath(view));
@@ -119137,6 +119156,7 @@ class BobLedgerToolsProseNoteCardMixin {
       proseNoteCardNodeSignatures.set(target, signature);
       propertyCardSyncTitleHeading(target, current.owned === true);
       try { this.proseNoteCardTrackFoot(view.dom, current.path, target); } catch (_) {}
+      try { this.treeWalkRailBind?.(target, current.path); } catch (_) {}
     });
   }
 
@@ -119153,6 +119173,7 @@ class BobLedgerToolsProseNoteCardMixin {
   proseNoteCardCleanEditor(view) {
     const path = this.proseNoteCardLivePath(view) || this.proseNoteCardSourcePath(view) || "";
     try { this.proseNoteCardTrackFoot(view?.dom, path, null); } catch (_) {}
+    try { this.treeWalkRailBind?.(null, path); } catch (_) {}
     try { propertyCardAdoptRelease(view?.dom, path || undefined, PROSE_NOTE_CARD_HOST_KIND, { preserveFallback: true }); } catch (_) {}
     try { this.proseNoteCardReleaseFrontmatter(view?.dom, path); } catch (_) {}
     try {
@@ -133666,7 +133687,8 @@ class BobLedgerToolsRecordWalkRailMixin {
       if (!rail) return null;
       if (sheet) {
         sheet.classList.add("has-record-walk");
-        sheet.appendChild(rail);
+        if (typeof propertyCardFloorDock === "function") propertyCardFloorDock(sheet, rail);
+        else sheet.appendChild(rail);
       } else paragraph.parentNode.insertBefore(rail, paragraph);
     }
     const kitOwned = extra.owned === true && paragraph.classList?.contains?.("bob-property-card-title-source");
@@ -136387,17 +136409,19 @@ class BobLedgerToolsRecordSheetMixin {
     const sheet = recordSheetBuildEl(model, options, doc);
     const body = model && model.identity ? model.body : model;
     if (sheet && body) recordSheetAppendSubscriptionBand(sheet, body, options);
+    // The rail is the card's floor, outside the collapsible body, in every
+    // return: Reading and Live Preview, identity-only, broken-schema, and
+    // collapsed. recordSheetAppendFoot is a no-op without the kit. Dock the
+    // rail after the foot so it stays the last child even without insertBefore.
+    if (sheet) this.recordSheetAppendFoot(sheet, model, options, doc, extra && extra.footSpec);
     if (sheet && extra.includeRail && extra.walk && typeof recordWalkRailBuildEl === "function") {
       const rail = recordWalkRailBuildEl(extra.walk, options, doc);
       if (rail) {
         sheet.classList.add("has-record-walk");
-        sheet.appendChild(rail);
+        if (typeof propertyCardFloorDock === "function") propertyCardFloorDock(sheet, rail);
+        else sheet.appendChild(rail);
       }
     }
-    // The foot follows the nav rail, outside the collapsible body, in every
-    // return: Reading and Live Preview, identity-only, broken-schema, and
-    // collapsed. recordSheetAppendFoot is a no-op without the kit.
-    if (sheet) this.recordSheetAppendFoot(sheet, model, options, doc, extra && extra.footSpec);
     return sheet;
   }
 
@@ -136832,7 +136856,7 @@ class BobLedgerToolsRecordSheetTitleMixin {
 }
 // ---- src/242kc-plugin-record-sheet-foot.js ----
 // Record sheet shared-foot adapter (bob-cli-pf drawer-record): per-note
-// foot spec, mount tracking, and the kit append below the walk rail.
+// foot spec, mount tracking, and the kit append above the card floor.
 // Methods merge onto the plugin through 310-install-methods.js; this file
 // owns every name starting with recordSheetFoot.
 class BobLedgerToolsRecordSheetFootMixin {
@@ -137017,7 +137041,7 @@ class BobLedgerToolsRecordSheetFootMixin {
     return null;
   }
 
-  // Append the shared foot below the walk rail in every return: Reading and
+  // Append the shared foot above the card floor in every return: Reading and
   // Live Preview, identity-only, broken-schema, and collapsed. Consumes one
   // pending API-toggle scroll per expand; disclosure clicks scroll
   // synchronously in the foot DOM before the repaint.
@@ -137048,7 +137072,8 @@ class BobLedgerToolsRecordSheetFootMixin {
       if (doc && built.element.ownerDocument !== doc) {
         try { doc.adoptNode?.(built.element); } catch (_) {}
       }
-      sheet.appendChild(built.element);
+      if (typeof propertyCardFloorAppend === "function") propertyCardFloorAppend(sheet, built.element);
+      else sheet.appendChild(built.element);
       if (typeof propertyCardCabinetsAssemble === "function") {
         const stack = propertyCardCabinetsAssemble(sheet, path, built.element, {
           plugin: this,
@@ -191264,7 +191289,8 @@ function intentionCardDomRail(model, plugin, doc) {
 }
 
 // The day or period card: kit title block, then the content bands (each
-// behind its existing gate), the set-intentions ghost, and the docked rail.
+// behind its existing gate), the set-intentions ghost, the cabinet stack,
+// and the rail docked as the card's floor.
 function intentionCardBuildDom(model, plugin, doc) {
   if (!model || !doc) return null;
   const card = intentionCardDomEl(doc, "section", "bob-property-card bob-intention-card");
@@ -191353,10 +191379,17 @@ function intentionCardBuildDom(model, plugin, doc) {
     ? intentionCardDomGhost(model, plugin, doc) : null;
   if (ghost) card.appendChild(ghost);
 
-  const rail = intentionCardDomRail(model, plugin, doc);
-  if (rail) card.appendChild(rail);
   if (plugin && typeof plugin.intentionCardAppendFoot === "function") {
     try { plugin.intentionCardAppendFoot(card, model, doc); } catch (_) {}
+  }
+  const rail = intentionCardDomRail(model, plugin, doc);
+  if (rail) {
+    try {
+      if (typeof propertyCardFloorDock === "function") propertyCardFloorDock(card, rail);
+      else card.appendChild(rail);
+    } catch (_) {
+      try { card.appendChild(rail); } catch (__) {}
+    }
   }
   return card;
 }
@@ -193900,6 +193933,9 @@ class BobLedgerToolsNavGroupsMixin {
 
   teardownNavGroups() {
     try {
+      if (typeof this.treeWalkRailTeardown === "function") this.treeWalkRailTeardown();
+    } catch (_) {}
+    try {
       if (typeof this.teardownNavGroupsTree === "function") this.teardownNavGroupsTree();
     } catch (_) {}
     this.navGroupsAdoptedYearsCache = null;
@@ -195799,10 +195835,10 @@ function treeWalkRailModel(input = {}) {
 }
 // ---- src/296k-plugin-tree-walk-rail.js ----
 // Tree walk rail adapter (bob-cli-ra rail): activation, re-validation,
-// and the live-refresh mixin for the pure tree rail model (296j). No card
-// mounts it yet; cards stay byte-identical. Synchronous providers never
-// throw, never write, never spawn bob; activation re-resolves before
-// running nav commands so jump history agrees with the keys.
+// live-refresh, and the card-mount helper. Cards dock the built rail as
+// the floor. Synchronous providers never throw, never write, never spawn
+// bob; activation re-resolves before running nav commands so jump history
+// agrees with the keys.
 
 function treeWalkRailFilePath(value) {
   try {
@@ -196257,6 +196293,91 @@ class BobLedgerToolsTreeWalkRailMixin {
     } catch (_) {
       return 0;
     }
+  }
+
+  treeWalkRailSourceFor(path, fallback) {
+    try {
+      const key = treeWalkRailFilePath(path);
+      for (const cache of [this.homeCardSourceCache, this.notebookCardSourceCache, this.proseNoteCardSourceCache]) {
+        const value = cache?.get?.(key);
+        if (typeof value === "string") return value;
+      }
+    } catch (_) {}
+    return typeof fallback === "string" ? fallback : "";
+  }
+
+  // Point the live-refresh registry at the card that actually sits in the
+  // pane (the adopted node, not a throwaway build). card=null untracks.
+  treeWalkRailBind(card, path, getSource) {
+    try {
+      const key = treeWalkRailFilePath(path);
+      if (!key) return;
+      if (!card) {
+        this.treeWalkRailUntrack(key);
+        return;
+      }
+      const reader = typeof getSource === "function"
+        ? getSource
+        : () => this.treeWalkRailSourceFor(key, getSource);
+      this.treeWalkRailTrack(card, key, reader);
+    } catch (_) {}
+  }
+
+  // Dock a tree rail as the card's floor. A missing model, a cold index, or
+  // a build failure leaves the card exactly as it was. Never throws.
+  treeWalkRailMountOnCard(card, path, getSource) {
+    try {
+      if (!card || typeof card !== "object") return null;
+      const key = treeWalkRailFilePath(path);
+      if (!key) return null;
+      const reader = typeof getSource === "function"
+        ? getSource
+        : () => this.treeWalkRailSourceFor(key, getSource);
+      let source = "";
+      try { source = reader(); } catch (_) { source = ""; }
+      const model = this.treeWalkRailModelFor(key, typeof source === "string" ? source : "");
+      if (!model) return null;
+      const doc = card.ownerDocument || (typeof document !== "undefined" ? document : null);
+      if (!doc) return null;
+      const plugin = this;
+      const built = this.treeWalkRailBuild(doc, model, {
+        onNavigate: (direction, item, event) => plugin.treeWalkRailActivate(direction, item, key, event),
+        onActivate: (direction, arm, event) => plugin.treeWalkRailGroupActivate(direction, arm, key, event),
+      });
+      if (!built?.element) return null;
+      let docked = null;
+      try {
+        docked = typeof propertyCardFloorDock === "function"
+          ? propertyCardFloorDock(card, built.element)
+          : (card.appendChild(built.element), built.element);
+      } catch (_) {
+        docked = null;
+      }
+      if (!docked) {
+        try {
+          if (built.element.parentNode === card && typeof propertyCardFloorRelease === "function") {
+            propertyCardFloorRelease(card);
+          } else if (built.element.parentNode === card) {
+            built.element.remove?.();
+          }
+        } catch (_) {}
+        return null;
+      }
+      this.treeWalkRailTrack(card, key, reader);
+      return built.element;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  treeWalkRailTeardown() {
+    try {
+      for (const key of Array.from(this.treeWalkRailMountedMap().keys())) {
+        try { this.treeWalkRailUntrack(key); } catch (_) {}
+      }
+    } catch (_) {}
+    this.treeWalkRailMounted = new Map();
+    this.treeWalkRailSubscribed = false;
   }
 }
 // ---- src/297a-plugin-intention-update-service.js ----

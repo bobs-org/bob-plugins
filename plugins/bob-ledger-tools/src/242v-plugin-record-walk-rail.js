@@ -127,7 +127,8 @@ class BobLedgerToolsRecordWalkRailMixin {
       if (!rail) return null;
       if (sheet) {
         sheet.classList.add("has-record-walk");
-        sheet.appendChild(rail);
+        if (typeof propertyCardFloorDock === "function") propertyCardFloorDock(sheet, rail);
+        else sheet.appendChild(rail);
       } else paragraph.parentNode.insertBefore(rail, paragraph);
     }
     const kitOwned = extra.owned === true && paragraph.classList?.contains?.("bob-property-card-title-source");

@@ -668,17 +668,19 @@ class BobLedgerToolsRecordSheetMixin {
     const sheet = recordSheetBuildEl(model, options, doc);
     const body = model && model.identity ? model.body : model;
     if (sheet && body) recordSheetAppendSubscriptionBand(sheet, body, options);
+    // The rail is the card's floor, outside the collapsible body, in every
+    // return: Reading and Live Preview, identity-only, broken-schema, and
+    // collapsed. recordSheetAppendFoot is a no-op without the kit. Dock the
+    // rail after the foot so it stays the last child even without insertBefore.
+    if (sheet) this.recordSheetAppendFoot(sheet, model, options, doc, extra && extra.footSpec);
     if (sheet && extra.includeRail && extra.walk && typeof recordWalkRailBuildEl === "function") {
       const rail = recordWalkRailBuildEl(extra.walk, options, doc);
       if (rail) {
         sheet.classList.add("has-record-walk");
-        sheet.appendChild(rail);
+        if (typeof propertyCardFloorDock === "function") propertyCardFloorDock(sheet, rail);
+        else sheet.appendChild(rail);
       }
     }
-    // The foot follows the nav rail, outside the collapsible body, in every
-    // return: Reading and Live Preview, identity-only, broken-schema, and
-    // collapsed. recordSheetAppendFoot is a no-op without the kit.
-    if (sheet) this.recordSheetAppendFoot(sheet, model, options, doc, extra && extra.footSpec);
     return sheet;
   }
 

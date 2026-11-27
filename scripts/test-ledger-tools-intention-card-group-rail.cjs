@@ -241,7 +241,12 @@ function prepare(w, path, body) {
 function card(w, path, body) {
   const model = prepare(w, path, body);
   const element = H.intentionCardBuildDom(model, w.plugin, w.doc);
-  return { model, element, rail: element.querySelector(".bob-property-card-rail") };
+  const rail = element.querySelector(".bob-property-card-rail");
+  if (rail) {
+    assert.equal(element.children.at(-1), rail, "the rail is the card's floor");
+    assert.equal(rail.getAttribute("data-card-floor"), "link-walk");
+  }
+  return { model, element, rail };
 }
 
 function arm(element, direction) {

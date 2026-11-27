@@ -290,6 +290,9 @@ class BobLedgerToolsNotebookCardMixin {
     try { card.setAttribute("data-notebook-source", model.path); } catch (_) {}
     // The foot is appended once by notebookCardBuildEl through
     // options.appendFoot; a second append here doubled every foot.
+    try {
+      this.treeWalkRailMountOnCard?.(card, model.path, () => this.notebookCardSourceCache?.get?.(model.path) || options?.sourceText || "");
+    } catch (_) {}
     return card;
   }
 
@@ -459,6 +462,7 @@ class BobLedgerToolsNotebookCardMixin {
     }
     scope?.classList?.add?.(NOTEBOOK_CARD_HOST_SURFACE_CLASS);
     this.notebookCardTrackFoot?.(scope || root, path, card);
+    try { this.treeWalkRailBind?.(card, path); } catch (_) {}
     try {
       this.notebookCardPaintReadouts?.(card, path, doc, {
         scope, view: reading?.view || null, collapsed: options.collapsed,
@@ -474,6 +478,7 @@ class BobLedgerToolsNotebookCardMixin {
     if (!root) return;
     const hadCard = notebookCardMountedInSurface(root, path);
     try { this.notebookCardTrackFoot?.(scope, path, null); } catch (_) {}
+    try { this.treeWalkRailBind?.(null, path); } catch (_) {}
     try { propertyCardAdoptRelease?.(scope, path || undefined, NOTEBOOK_CARD_HOST_KIND, { preserveFallback: true }); } catch (_) {}
     try { propertyCardFrontmatterReleaseMounted?.(scope, { plugin: this, kind: NOTEBOOK_CARD_HOST_KIND, path }); } catch (_) {}
     for (const node of Array.from(root.querySelectorAll?.(`.${NOTEBOOK_CARD_SURFACE_CLASS}`) || [])) {
@@ -504,6 +509,7 @@ class BobLedgerToolsNotebookCardMixin {
     const scope = view?.dom || null;
     const path = notebookCardPath(this.notebookCardLivePath(view) || "");
     try { this.notebookCardTrackFoot?.(scope, path, null); } catch (_) {}
+    try { this.treeWalkRailBind?.(null, path); } catch (_) {}
     try { propertyCardAdoptRelease?.(scope, path || undefined, NOTEBOOK_CARD_HOST_KIND, { preserveFallback: true }); } catch (_) {}
     try { propertyCardFrontmatterReleaseMounted?.(scope, { plugin: this, kind: NOTEBOOK_CARD_HOST_KIND, path }); } catch (_) {}
     try { this.notebookCardPropertyHost().cleanEditor(view, { unmark: (root) => root?.classList?.remove?.(NOTEBOOK_CARD_HOST_SURFACE_CLASS) }); } catch (_) {}
@@ -576,6 +582,7 @@ class BobLedgerToolsNotebookCardMixin {
         },
       });
       this.notebookCardTrackFoot?.(view.dom, path, card);
+      try { this.treeWalkRailBind?.(card, path); } catch (_) {}
       try {
         this.notebookCardPaintReadouts?.(card, path, doc, {
           scope: view.dom, view, editor: view.editor, collapsed: options.collapsed,
@@ -625,6 +632,7 @@ class BobLedgerToolsNotebookCardMixin {
     try {
       const patched = propertyCardAdoptPatch(adopted.node, fresh);
       notebookCardNodeSignatures.set(patched, signature);
+      try { this.treeWalkRailBind?.(patched, adopted.path); } catch (_) {}
       if (adopted.pending === true) return true;
       const effect = this.notebookCardPropertyHost().ensureRefreshEffect();
       if (effect && typeof view.dispatch === "function") view.dispatch({ effects: effect.of({ refresh: true }) });

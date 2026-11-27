@@ -1,8 +1,8 @@
 // Tree walk rail adapter (bob-cli-ra rail): activation, re-validation,
-// and the live-refresh mixin for the pure tree rail model (296j). No card
-// mounts it yet; cards stay byte-identical. Synchronous providers never
-// throw, never write, never spawn bob; activation re-resolves before
-// running nav commands so jump history agrees with the keys.
+// live-refresh, and the card-mount helper. Cards dock the built rail as
+// the floor. Synchronous providers never throw, never write, never spawn
+// bob; activation re-resolves before running nav commands so jump history
+// agrees with the keys.
 
 function treeWalkRailFilePath(value) {
   try {
@@ -457,5 +457,90 @@ class BobLedgerToolsTreeWalkRailMixin {
     } catch (_) {
       return 0;
     }
+  }
+
+  treeWalkRailSourceFor(path, fallback) {
+    try {
+      const key = treeWalkRailFilePath(path);
+      for (const cache of [this.homeCardSourceCache, this.notebookCardSourceCache, this.proseNoteCardSourceCache]) {
+        const value = cache?.get?.(key);
+        if (typeof value === "string") return value;
+      }
+    } catch (_) {}
+    return typeof fallback === "string" ? fallback : "";
+  }
+
+  // Point the live-refresh registry at the card that actually sits in the
+  // pane (the adopted node, not a throwaway build). card=null untracks.
+  treeWalkRailBind(card, path, getSource) {
+    try {
+      const key = treeWalkRailFilePath(path);
+      if (!key) return;
+      if (!card) {
+        this.treeWalkRailUntrack(key);
+        return;
+      }
+      const reader = typeof getSource === "function"
+        ? getSource
+        : () => this.treeWalkRailSourceFor(key, getSource);
+      this.treeWalkRailTrack(card, key, reader);
+    } catch (_) {}
+  }
+
+  // Dock a tree rail as the card's floor. A missing model, a cold index, or
+  // a build failure leaves the card exactly as it was. Never throws.
+  treeWalkRailMountOnCard(card, path, getSource) {
+    try {
+      if (!card || typeof card !== "object") return null;
+      const key = treeWalkRailFilePath(path);
+      if (!key) return null;
+      const reader = typeof getSource === "function"
+        ? getSource
+        : () => this.treeWalkRailSourceFor(key, getSource);
+      let source = "";
+      try { source = reader(); } catch (_) { source = ""; }
+      const model = this.treeWalkRailModelFor(key, typeof source === "string" ? source : "");
+      if (!model) return null;
+      const doc = card.ownerDocument || (typeof document !== "undefined" ? document : null);
+      if (!doc) return null;
+      const plugin = this;
+      const built = this.treeWalkRailBuild(doc, model, {
+        onNavigate: (direction, item, event) => plugin.treeWalkRailActivate(direction, item, key, event),
+        onActivate: (direction, arm, event) => plugin.treeWalkRailGroupActivate(direction, arm, key, event),
+      });
+      if (!built?.element) return null;
+      let docked = null;
+      try {
+        docked = typeof propertyCardFloorDock === "function"
+          ? propertyCardFloorDock(card, built.element)
+          : (card.appendChild(built.element), built.element);
+      } catch (_) {
+        docked = null;
+      }
+      if (!docked) {
+        try {
+          if (built.element.parentNode === card && typeof propertyCardFloorRelease === "function") {
+            propertyCardFloorRelease(card);
+          } else if (built.element.parentNode === card) {
+            built.element.remove?.();
+          }
+        } catch (_) {}
+        return null;
+      }
+      this.treeWalkRailTrack(card, key, reader);
+      return built.element;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  treeWalkRailTeardown() {
+    try {
+      for (const key of Array.from(this.treeWalkRailMountedMap().keys())) {
+        try { this.treeWalkRailUntrack(key); } catch (_) {}
+      }
+    } catch (_) {}
+    this.treeWalkRailMounted = new Map();
+    this.treeWalkRailSubscribed = false;
   }
 }

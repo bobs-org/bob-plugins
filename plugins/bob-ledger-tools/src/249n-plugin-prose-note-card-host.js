@@ -361,6 +361,9 @@ class BobLedgerToolsProseNoteCardMixin {
       });
     } catch (_) {}
     try { this.proseNoteCardAppendFoot(card, model.path, model, doc, footSpec, options); } catch (_) {}
+    try {
+      this.treeWalkRailMountOnCard?.(card, model.path, () => this.proseNoteCardSourceCache?.get?.(model.path) || options?.sourceText || "");
+    } catch (_) {}
     return card;
   }
 
@@ -500,6 +503,7 @@ class BobLedgerToolsProseNoteCardMixin {
     scope.classList?.add?.(PROSE_NOTE_CARD_SURFACE_MARK);
     this.proseNoteCardSurfaceScopes?.add?.(scope);
     this.proseNoteCardTrackFoot(scope, path, card);
+    try { this.treeWalkRailBind?.(card, path); } catch (_) {}
     void this.proseNoteCardEnsureSource(path);
     return card;
   }
@@ -508,6 +512,7 @@ class BobLedgerToolsProseNoteCardMixin {
     const path = proseNoteCardPath(sourcePath);
     if (!root && !scope) return;
     try { this.proseNoteCardTrackFoot(scope, path, null); } catch (_) {}
+    try { this.treeWalkRailBind?.(null, path); } catch (_) {}
     try { propertyCardAdoptRelease(scope, path || undefined, PROSE_NOTE_CARD_HOST_KIND, { preserveFallback: true }); } catch (_) {}
     try { this.proseNoteCardReleaseFrontmatter(scope, path); } catch (_) {}
     for (const node of this.proseNoteCardReadingCards(root, path)) {
@@ -588,6 +593,7 @@ class BobLedgerToolsProseNoteCardMixin {
       try { propertyCardAdoptRelease(view.dom, path, PROSE_NOTE_CARD_HOST_KIND, { preserveFallback: true }); } catch (_) {}
       try { this.proseNoteCardReleaseFrontmatter(view.dom, path); } catch (_) {}
       try { this.proseNoteCardTrackFoot(view.dom, path, null); } catch (_) {}
+      try { this.treeWalkRailBind?.(null, path); } catch (_) {}
       return Decoration?.none || null;
     }
     if (!Decoration || !WidgetType || !RangeSetBuilder) return Decoration?.none || null;
@@ -630,6 +636,7 @@ class BobLedgerToolsProseNoteCardMixin {
       },
     });
     try { this.proseNoteCardTrackFoot(view.dom, path, card); } catch (_) {}
+    try { this.treeWalkRailBind?.(card, path); } catch (_) {}
     if (adoption.mode === "slot") {
       try {
         this.proseNoteCardOwnMounted(view.dom, view, path, card, text, () => this.proseNoteCardLiveCurrentPath(view));
@@ -672,6 +679,7 @@ class BobLedgerToolsProseNoteCardMixin {
       proseNoteCardNodeSignatures.set(target, signature);
       propertyCardSyncTitleHeading(target, current.owned === true);
       try { this.proseNoteCardTrackFoot(view.dom, current.path, target); } catch (_) {}
+      try { this.treeWalkRailBind?.(target, current.path); } catch (_) {}
     });
   }
 
@@ -688,6 +696,7 @@ class BobLedgerToolsProseNoteCardMixin {
   proseNoteCardCleanEditor(view) {
     const path = this.proseNoteCardLivePath(view) || this.proseNoteCardSourcePath(view) || "";
     try { this.proseNoteCardTrackFoot(view?.dom, path, null); } catch (_) {}
+    try { this.treeWalkRailBind?.(null, path); } catch (_) {}
     try { propertyCardAdoptRelease(view?.dom, path || undefined, PROSE_NOTE_CARD_HOST_KIND, { preserveFallback: true }); } catch (_) {}
     try { this.proseNoteCardReleaseFrontmatter(view?.dom, path); } catch (_) {}
     try {

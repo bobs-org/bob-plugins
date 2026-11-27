@@ -277,7 +277,8 @@ function intentionCardDomRail(model, plugin, doc) {
 }
 
 // The day or period card: kit title block, then the content bands (each
-// behind its existing gate), the set-intentions ghost, and the docked rail.
+// behind its existing gate), the set-intentions ghost, the cabinet stack,
+// and the rail docked as the card's floor.
 function intentionCardBuildDom(model, plugin, doc) {
   if (!model || !doc) return null;
   const card = intentionCardDomEl(doc, "section", "bob-property-card bob-intention-card");
@@ -366,10 +367,17 @@ function intentionCardBuildDom(model, plugin, doc) {
     ? intentionCardDomGhost(model, plugin, doc) : null;
   if (ghost) card.appendChild(ghost);
 
-  const rail = intentionCardDomRail(model, plugin, doc);
-  if (rail) card.appendChild(rail);
   if (plugin && typeof plugin.intentionCardAppendFoot === "function") {
     try { plugin.intentionCardAppendFoot(card, model, doc); } catch (_) {}
+  }
+  const rail = intentionCardDomRail(model, plugin, doc);
+  if (rail) {
+    try {
+      if (typeof propertyCardFloorDock === "function") propertyCardFloorDock(card, rail);
+      else card.appendChild(rail);
+    } catch (_) {
+      try { card.appendChild(rail); } catch (__) {}
+    }
   }
   return card;
 }

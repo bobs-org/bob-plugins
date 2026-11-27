@@ -173,11 +173,13 @@ function albumPlugin(options = {}) {
   return { app, caches, doc, files, plugin, writes };
 }
 
-// The card ends in its cabinet stack, and the stack ends in the Properties
-// cabinet (the foot), so the foot is always the card's last front.
+// The cabinet stack is last unless a floor rail exists, in which case the
+// stack sits immediately above that floor. The stack still ends in Properties.
 function footLast(card) {
   const kids = card.children.filter((child) => child.nodeType === 1);
-  const stack = kids.at(-1);
+  const last = kids.at(-1);
+  const floor = last?.getAttribute?.("data-card-floor") === "link-walk";
+  const stack = floor ? kids.at(-2) : last;
   if ((stack?.getAttribute("class") || "").split(/\s+/)[0] !== "bob-property-card-cabinets") return false;
   const fronts = stack.children.filter((child) => child.nodeType === 1);
   const foot = fronts.at(-1);

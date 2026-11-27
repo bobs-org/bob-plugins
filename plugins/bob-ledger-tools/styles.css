@@ -12321,8 +12321,8 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
     outline-color: Highlight;
   }
 }
-/* Shared property-card foot row and properties drawer (240o/240p). The foot
-   follows the nav rail, outside the collapsible body, on every card that
+/* Shared property-card foot row and properties drawer (240o/240p). The rail
+   is the card's floor, outside the collapsible body, on every card that
    adopts it. All rules stay under .bob-property-card roots. */
 .bob-property-card .bob-property-card-foot {
   container-type: inline-size;

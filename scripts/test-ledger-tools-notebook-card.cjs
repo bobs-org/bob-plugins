@@ -203,6 +203,51 @@ test("notebook DOM builds accessible spine identity, fold, summary ghost, route,
   assert.deepEqual(opened, [true]);
 });
 
+test("the mounted tree rail is the notebook card's floor", () => {
+  const doc = makeDoc();
+  const model = H.notebookCardModel({
+    path: "Notes/Developer_tools.md",
+    frontmatter: { type: "[[notebook]]", summary: "A short summary" },
+    sourceText: headingSource,
+    headerModel: { crumbs: [{ kind: "root", path: "Areas/Dev.md", title: "Development" }] },
+    hue: "green",
+  });
+  const card = H.notebookCardBuildEl(doc, model, {
+    appendFoot: (parent, _current, ownerDoc) => {
+      const foot = ownerDoc.createElement("div");
+      foot.setAttribute("class", "bob-property-card-foot");
+      parent.appendChild(foot);
+    },
+  });
+  const plugin = Object.create(LedgerToolsPlugin.prototype);
+  plugin.app = { workspace: {}, commands: {} };
+  plugin.dependencyNavApi = () => null;
+  plugin.treeWalkRailMounted = new Map();
+  plugin.treeWalkRailSubscribed = false;
+  const provider = Object.freeze({
+    ok: true, route: "tree", kind: "notebook", lane: null,
+    step: Object.freeze({
+      prev: Object.freeze({ path: "a.md", target: "a", groupLabel: "root", landingLabel: "a", shortLabel: "a", state: "exists", ghostReason: null, wraps: false, source: "tree" }),
+      next: Object.freeze({ path: "c.md", target: "c", groupLabel: "root", landingLabel: "c", shortLabel: "c", state: "exists", ghostReason: null, wraps: false, source: "tree" }),
+      parent: null,
+    }),
+    stepNone: null,
+    group: Object.freeze({ noun: "parent", memberNoun: "notebook", label: "root", shortLabel: "root", parentPath: null, position: 2, size: 3, index: 1, count: 2, members: [], atStart: false, atEnd: false, enteringNext: null, enteringPrev: null }),
+    prevGroup: Object.freeze({ path: "p.md", target: "p", groupLabel: "pig", landingLabel: "p", shortLabel: "p", state: "exists", ghostReason: null, wraps: false, source: "tree" }),
+    nextGroup: Object.freeze({ path: "n.md", target: "n", groupLabel: "goo", landingLabel: "n", shortLabel: "n", state: "exists", ghostReason: null, wraps: false, source: "tree" }),
+    none: null,
+  });
+  plugin.treeWalkRailModelFor = () => H.treeWalkRailModel({
+    answer: Object.freeze({ ok: true, prev: provider.step.prev, next: provider.step.next, prevGroup: provider.prevGroup, nextGroup: provider.nextGroup, group: provider.group, groupConflicts: [] }),
+    provider,
+  });
+  plugin.treeWalkRailMountOnCard(card, model.path, () => "");
+  const rail = card.querySelector(".bob-property-card-rail");
+  assert.equal(card.children.at(-1), rail, "the rail is the card's floor");
+  assert.equal(rail.getAttribute("data-card-floor"), "link-walk");
+  assert.ok(card.querySelector(".bob-property-card-foot"), "the foot stays above the floor");
+});
+
 test("the header fallback recognizes a mounted Reading card and a Live Preview widget", () => {
   const root = makeDoc().createElement("div");
   const readingCard = root.ownerDocument.createElement("section");

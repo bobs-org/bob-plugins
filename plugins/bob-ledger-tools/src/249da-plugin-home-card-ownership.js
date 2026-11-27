@@ -149,6 +149,7 @@ class BobLedgerToolsHomeCardOwnershipMixin {
     if (!root) return;
     try { this.homeCardClearGoal?.(root); } catch (_) {}
     try { this.homeCardTrackFoot?.(scope, sourcePath, null); } catch (_) {}
+    try { this.treeWalkRailBind?.(null, sourcePath); } catch (_) {}
     this.homeCardReleaseAdoption(scope, sourcePath);
     try { this.homeCardReleaseFrontmatter?.(scope, sourcePath); } catch (_) {}
     for (const node of Array.from(root.querySelectorAll?.(`.${HOME_CARD_CLASS}`) || [])) {
@@ -192,6 +193,7 @@ class BobLedgerToolsHomeCardOwnershipMixin {
 
   homeCardCleanEditor(view) {
     try { this.homeCardTrackFoot?.(view?.dom, this.homeCardLivePath(view), null); } catch (_) {}
+    try { this.treeWalkRailBind?.(null, this.homeCardLivePath(view)); } catch (_) {}
     try { this.homeCardReleaseAdoption(view?.dom); } catch (_) {}
     try { this.homeCardReleaseFrontmatter?.(view?.dom, this.homeCardLivePath(view)); } catch (_) {}
     try {

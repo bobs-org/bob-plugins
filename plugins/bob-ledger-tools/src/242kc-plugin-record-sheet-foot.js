@@ -1,5 +1,5 @@
 // Record sheet shared-foot adapter (bob-cli-pf drawer-record): per-note
-// foot spec, mount tracking, and the kit append below the walk rail.
+// foot spec, mount tracking, and the kit append above the card floor.
 // Methods merge onto the plugin through 310-install-methods.js; this file
 // owns every name starting with recordSheetFoot.
 class BobLedgerToolsRecordSheetFootMixin {
@@ -184,7 +184,7 @@ class BobLedgerToolsRecordSheetFootMixin {
     return null;
   }
 
-  // Append the shared foot below the walk rail in every return: Reading and
+  // Append the shared foot above the card floor in every return: Reading and
   // Live Preview, identity-only, broken-schema, and collapsed. Consumes one
   // pending API-toggle scroll per expand; disclosure clicks scroll
   // synchronously in the foot DOM before the repaint.
@@ -215,7 +215,8 @@ class BobLedgerToolsRecordSheetFootMixin {
       if (doc && built.element.ownerDocument !== doc) {
         try { doc.adoptNode?.(built.element); } catch (_) {}
       }
-      sheet.appendChild(built.element);
+      if (typeof propertyCardFloorAppend === "function") propertyCardFloorAppend(sheet, built.element);
+      else sheet.appendChild(built.element);
       if (typeof propertyCardCabinetsAssemble === "function") {
         const stack = propertyCardCabinetsAssemble(sheet, path, built.element, {
           plugin: this,

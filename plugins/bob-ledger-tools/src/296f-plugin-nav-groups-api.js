@@ -40,6 +40,9 @@ class BobLedgerToolsNavGroupsMixin {
 
   teardownNavGroups() {
     try {
+      if (typeof this.treeWalkRailTeardown === "function") this.treeWalkRailTeardown();
+    } catch (_) {}
+    try {
       if (typeof this.teardownNavGroupsTree === "function") this.teardownNavGroupsTree();
     } catch (_) {}
     this.navGroupsAdoptedYearsCache = null;

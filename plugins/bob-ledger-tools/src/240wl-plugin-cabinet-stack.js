@@ -368,7 +368,8 @@ function propertyCardCabinetsAssemble(parent, pathValue, footEl, context = {}) {
         button.removeAttribute?.("aria-keyshortcuts");
       }
     }
-    card.appendChild(stack);
+    if (typeof propertyCardFloorAppend === "function") propertyCardFloorAppend(card, stack);
+    else card.appendChild(stack);
 
     const providerReleases = [];
     for (const row of panels) {

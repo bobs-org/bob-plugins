@@ -227,6 +227,41 @@ test("the title page is safe text with a reserved measure row, folded outline, a
   assert.equal(stemHeading.getAttribute("title"), "Title from the file name — press = to set one");
 });
 
+test("the mounted tree rail is the prose card's floor", () => {
+  const doc = miniDocument();
+  const model = H.proseNoteCardModel({
+    path: "notes/Launch.md",
+    frontmatter: { type: "[[prose]]", title: "Launch" },
+  });
+  const card = H.proseNoteCardBuildEl(doc, model);
+  const plugin = Object.create(LedgerToolsPlugin.prototype);
+  plugin.app = { workspace: {}, commands: {} };
+  plugin.dependencyNavApi = () => null;
+  plugin.treeWalkRailMounted = new Map();
+  plugin.treeWalkRailSubscribed = false;
+  const provider = Object.freeze({
+    ok: true, route: "tree", kind: "prose", lane: null,
+    step: Object.freeze({
+      prev: Object.freeze({ path: "a.md", target: "a", groupLabel: "root", landingLabel: "a", shortLabel: "a", state: "exists", ghostReason: null, wraps: false, source: "tree" }),
+      next: Object.freeze({ path: "c.md", target: "c", groupLabel: "root", landingLabel: "c", shortLabel: "c", state: "exists", ghostReason: null, wraps: false, source: "tree" }),
+      parent: null,
+    }),
+    stepNone: null,
+    group: Object.freeze({ noun: "parent", memberNoun: "prose", label: "root", shortLabel: "root", parentPath: null, position: 2, size: 3, index: 1, count: 2, members: [], atStart: false, atEnd: false, enteringNext: null, enteringPrev: null }),
+    prevGroup: Object.freeze({ path: "p.md", target: "p", groupLabel: "pig", landingLabel: "p", shortLabel: "p", state: "exists", ghostReason: null, wraps: false, source: "tree" }),
+    nextGroup: Object.freeze({ path: "n.md", target: "n", groupLabel: "goo", landingLabel: "n", shortLabel: "n", state: "exists", ghostReason: null, wraps: false, source: "tree" }),
+    none: null,
+  });
+  plugin.treeWalkRailModelFor = () => H.treeWalkRailModel({
+    answer: Object.freeze({ ok: true, prev: provider.step.prev, next: provider.step.next, prevGroup: provider.prevGroup, nextGroup: provider.nextGroup, group: provider.group, groupConflicts: [] }),
+    provider,
+  });
+  plugin.treeWalkRailMountOnCard(card, model.path, () => "");
+  const rail = card.children.at(-1);
+  assert.equal(rail.getAttribute("data-card-floor"), "link-walk");
+  assert.ok((rail.getAttribute("class") || "").includes("bob-property-card-rail"));
+});
+
 test("numbering accepts only literal booleans and defaults an absent property to numbered", () => {
   assert.equal(H.proseNoteCardNumbering({}).state, "numbered");
   assert.equal(H.proseNoteCardNumbering({ section_numbers: true }).state, "numbered");

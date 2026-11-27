@@ -501,3 +501,82 @@ test("cabinet paint, toggle, pick, cancel, and the footer overlay never write or
   H.propertyCardCabinetStateResetForTests();
   H.propertyCardFootResetAll();
 });
+
+test("tree rails stay last through cabinet paint, toggle, and a lazy body without writes", () => {
+  H.propertyCardCabinetStateResetForTests();
+  H.propertyCardCabinetProvidersResetForTests();
+  const sideEffects = { writes: 0, spawns: 0 };
+  const { plugin } = makePlugin(sideEffects, [], []);
+  const doc = new PassiveDocument();
+  const path = "Areas/cash.md";
+  const source = "---\ntype: \"[[area]]\"\n---\n";
+  const builds = { areas: 0 };
+  H.propertyCardRegisterCabinetProvider(plugin, "areas", {
+    applies: () => ({ summary: "3 · 1 nested" }),
+    paintKey: () => "areas-v1",
+    buildBody({ doc: bodyDoc, container }) {
+      builds.areas += 1;
+      const row = bodyDoc.createElement("li");
+      row.textContent = "areas row";
+      container.appendChild(row);
+    },
+  });
+  const provider = Object.freeze({
+    ok: true, route: "tree", kind: "area", lane: null,
+    step: Object.freeze({
+      prev: Object.freeze({ path: "a.md", target: "a", groupLabel: "root", landingLabel: "a", shortLabel: "a", state: "exists", ghostReason: null, wraps: false, source: "tree" }),
+      next: Object.freeze({ path: "c.md", target: "c", groupLabel: "root", landingLabel: "c", shortLabel: "c", state: "exists", ghostReason: null, wraps: false, source: "tree" }),
+      parent: null,
+    }),
+    stepNone: null,
+    group: Object.freeze({ noun: "parent", memberNoun: "area", label: "root", shortLabel: "root", parentPath: null, position: 2, size: 3, index: 1, count: 2, members: [], atStart: false, atEnd: false, enteringNext: null, enteringPrev: null }),
+    prevGroup: Object.freeze({ path: "p.md", target: "p", groupLabel: "pig", landingLabel: "p", shortLabel: "p", state: "exists", ghostReason: null, wraps: false, source: "tree" }),
+    nextGroup: Object.freeze({ path: "n.md", target: "n", groupLabel: "goo", landingLabel: "n", shortLabel: "n", state: "exists", ghostReason: null, wraps: false, source: "tree" }),
+    none: null,
+  });
+  plugin.treeWalkRailMounted = new Map();
+  plugin.treeWalkRailSubscribed = false;
+  plugin.dependencyNavApi = () => null;
+  plugin.treeWalkRailModelFor = () => H.treeWalkRailModel({
+    answer: Object.freeze({ ok: true, prev: provider.step.prev, next: provider.step.next, prevGroup: provider.prevGroup, nextGroup: provider.nextGroup, group: provider.group, groupConflicts: [] }),
+    provider,
+  });
+  const floor = (card) => {
+    const rail = card.children.at(-1);
+    assert.equal(rail?.getAttribute("data-card-floor"), "link-walk", "the tree rail is the card's floor");
+    return rail;
+  };
+  const paint = () => {
+    const card = doc.createElement("section");
+    card.className = "bob-property-card";
+    card.setAttribute("data-card-kind", "area");
+    doc.roots = [card];
+    plugin.treeWalkRailMountOnCard(card, path, () => source);
+    const foot = H.propertyCardFootBuildEl(doc, {
+      path, disclosureId: "tree-floor-foot", open: false, keyLive: true,
+      inventory: { count: 4, rows: [], groups: [], issues: [] },
+      handlers: { onToggle: (_path, next) => next },
+    });
+    H.propertyCardFloorAppend(card, foot.element);
+    const stack = H.propertyCardCabinetsAssemble(card, path, foot.element, {
+      plugin, view: { file: { path }, dom: card }, component: plugin, keyLive: true, source,
+      frontmatter: { type: "[[area]]" }, repaint: () => true,
+    });
+    floor(card);
+    return { card, stack };
+  };
+  let { card, stack } = paint();
+  assert.ok(stack);
+  stack.querySelector("[data-cabinet-kind='areas'] .bob-cabinet-toggle").click();
+  ({ card, stack } = paint());
+  assert.ok(builds.areas >= 1, "the lazy areas body mounts");
+  floor(card);
+  stack.querySelector("[data-cabinet-kind='areas'] .bob-cabinet-toggle").click();
+  ({ card } = paint());
+  floor(card);
+  assert.deepEqual(sideEffects, { writes: 0, spawns: 0 });
+  H.propertyCardCabinetProvidersReleasePlugin(plugin);
+  H.propertyCardCabinetStateResetForTests();
+  H.propertyCardFootResetAll();
+  plugin.treeWalkRailTeardown?.();
+});

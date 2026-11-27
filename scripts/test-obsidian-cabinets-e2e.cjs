@@ -72,7 +72,9 @@ test("browser probe is valid and runner covers acceptance-critical interactions"
     "vim-motions-and-arrows-no-invisible-cursor", "cursor-motions-no-console-errors",
     "no-console-errors", "areas-cabinet-single-title-row", "passive-actions-zero-bob-spawns",
     "passive-actions-zero-markdown-writes", "screenshot-matrix-captured",
+    "reading-reload-loop-zero-misses",
   ]) assert.ok(source.includes(check), `runner includes ${check}`);
+  assert.match(source, /runReadingReloadLoop/);
   assert.match(source, /cabinetsPreview: true/);
   assert.match(source, /cardPreviewKinds: \["notebook", "prose"\]/);
   assert.match(source, /refCardPreview: true/);

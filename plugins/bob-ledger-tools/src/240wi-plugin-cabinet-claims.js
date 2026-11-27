@@ -146,6 +146,25 @@ function propertyCardCatalogReleaseScope(view) {
   }
 }
 
+// Live claims for one note path across every tracked view. Used by the
+// shared host to re-tag Reading absorption after a targeted preview
+// re-render. Released claims are omitted. Never throws.
+function propertyCardCatalogClaimsForPath(path) {
+  const found = [];
+  try {
+    if (typeof path !== "string" || !path) return found;
+    for (const view of [...PROPERTY_CARD_CABINET_CLAIM_VIEWS]) {
+      const store = propertyCardCatalogClaimStore(view, false);
+      if (!store) continue;
+      for (const claim of store.values()) {
+        if (!claim || claim.released) continue;
+        if (claim.path === path) found.push(claim);
+      }
+    }
+  } catch (_) {}
+  return found;
+}
+
 // Release every claim everywhere (plugin unload). Returns the count.
 function propertyCardCatalogReleaseAll() {
   try {

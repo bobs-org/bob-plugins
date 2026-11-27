@@ -622,6 +622,32 @@ async function setMode(client, notePath, mode) {
   return openAndProbe(client, notePath, mode);
 }
 
+async function runReadingReloadLoop(client, check, report, rounds) {
+  const count = Math.max(1, Number(rounds) || 20);
+  const areaSpec = lib.SPECS.find((row) => row.path === lib.PATHS.area);
+  let probe = await openAndSettleExpectedCard(client, areaSpec, "reading", "area Reading card before reload loop");
+  const misses = [];
+  for (let i = 1; i <= count; i += 1) {
+    await client.evaluate(`app.plugins.disablePlugin(${JSON.stringify(PLUGIN_ID)})`);
+    await sleep(200);
+    await client.evaluate(`app.plugins.enablePlugin(${JSON.stringify(PLUGIN_ID)})`);
+    await sleep(900);
+    probe = await settleExpectedCard(client, areaSpec, "reading", `area Reading card after reload ${i}`);
+    const ready = probe?.cardPresent && probe.cardKind === areaSpec.kind
+      && JSON.stringify(probe.cabinetKinds || []) === JSON.stringify(areaSpec.cabinets);
+    if (ready) continue;
+    misses.push({
+      round: i,
+      probe,
+      readingDiagnostics: await readingHostDiagnostics(client, lib.PATHS.area),
+    });
+  }
+  report.reloadLoop = { rounds: count, misses: misses.length, details: misses };
+  check("reading-reload-loop-zero-misses", misses.length === 0,
+    misses.length === 0 ? { rounds: count, misses: 0 } : report.reloadLoop);
+  return misses.length === 0;
+}
+
 async function run(args) {
   const executable = args.executable || process.env.OBSIDIAN_BIN || ELECTRON_FALLBACK;
   if (!process.env.DISPLAY) throw new Error("No DISPLAY; run real acceptance with xvfb-run");
@@ -711,6 +737,10 @@ async function run(args) {
     await sleep(1_000);
     const pluginLoaded = await client.evaluate(`Boolean(app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}])`);
     check("plugins-loaded", pluginLoaded, { enabled: PLUGIN_IDS });
+
+    if (args.reloadLoop) {
+      await runReadingReloadLoop(client, check, report, args.reloadLoop);
+    } else {
 
     // Render every hosted note in both real surfaces, checking species, stack order, and defaults.
     const renderRows = [];
@@ -1506,14 +1536,20 @@ async function run(args) {
       expected: needs.length, actual: report.screenshots.length, missingShots,
       captureFailures: report.screenshots.filter((row) => row.captureFailures.length).map((row) => ({ name: row.name, failures: row.captureFailures })),
     });
+    }
     check("no-runtime-exceptions", report.consoleExceptions.length === 0, report.consoleExceptions);
     check("no-console-errors", report.consoleErrors.length === 0, report.consoleErrors);
     report.bobSpawns = readLog(logPath);
     const markdownAfter = shared.markdownFilesHash(vault);
     check("scratch-markdown-unchanged", JSON.stringify(protectedHashes) === JSON.stringify(markdownAfter), { before: protectedHashes, after: markdownAfter });
-    report.visualReview = { status: "pending", instruction: "Inspect every PNG, then mark each screenshot visualVerdict pass in the retained report." };
-    report.verdict = report.checks.every((row) => row.status === "pass") ? "GO-PENDING-VISUAL-REVIEW" : "NO-GO";
-    successful = report.verdict === "GO-PENDING-VISUAL-REVIEW";
+    if (args.reloadLoop) {
+      report.verdict = report.checks.every((row) => row.status === "pass") ? "GO-RELOAD-LOOP" : "NO-GO";
+      successful = report.verdict === "GO-RELOAD-LOOP";
+    } else {
+      report.visualReview = { status: "pending", instruction: "Inspect every PNG, then mark each screenshot visualVerdict pass in the retained report." };
+      report.verdict = report.checks.every((row) => row.status === "pass") ? "GO-PENDING-VISUAL-REVIEW" : "NO-GO";
+      successful = report.verdict === "GO-PENDING-VISUAL-REVIEW";
+    }
   } catch (error) {
     report.error = error?.stack || String(error);
     check("runner-error", false, String(error?.message || error));

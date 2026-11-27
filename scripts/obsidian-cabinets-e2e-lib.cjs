@@ -16,6 +16,7 @@ const HELP_TEXT = [
   "  -e, --executable PATH   Obsidian executable (default: /snap/obsidian/current/app/obsidian)",
   "  -o, --out DIRECTORY    Save PNG screenshots here",
   "  -r, --report PATH      Write the structured JSON report here",
+  "  -L, --reload-loop [N]  Reload bob-ledger-tools N times (default 20) on the area Reading fixture and count card misses",
   "  -s, --self-test        Run offline checks only",
   "  -h, --help             Print this help",
 ].join("\n");
@@ -187,7 +188,7 @@ function screenshotNeeds() {
 }
 
 function parseArgs(argv) {
-  const args = { executable: null, out: null, report: null, selfTest: false, help: false };
+  const args = { executable: null, out: null, report: null, reloadLoop: 0, selfTest: false, help: false };
   const input = Array.isArray(argv) ? argv.slice() : [];
   for (let i = 0; i < input.length; i += 1) {
     const flag = input[i];
@@ -199,6 +200,11 @@ function parseArgs(argv) {
     if (flag === "-e" || flag === "--executable") args.executable = take("PATH");
     else if (flag === "-o" || flag === "--out") args.out = take("DIRECTORY");
     else if (flag === "-r" || flag === "--report") args.report = take("PATH");
+    else if (flag === "-L" || flag === "--reload-loop") {
+      const next = input[i + 1];
+      if (next && !next.startsWith("-") && /^\d+$/.test(next)) args.reloadLoop = Number(take("COUNT"));
+      else args.reloadLoop = 20;
+    }
     else if (flag === "-s" || flag === "--self-test") args.selfTest = true;
     else if (flag === "-h" || flag === "--help") args.help = true;
     else throw new Error(`Unknown argument: ${flag}`);
@@ -226,10 +232,12 @@ function selfTest() {
   assert.equal(screenshotNeeds().length, 58);
   assert.equal(new Set(screenshotNeeds()).size, screenshotNeeds().length);
   assert.deepEqual(parseArgs(["-e", "/x/obsidian", "-o", "/tmp/shots", "-r", "/tmp/report.json", "-s"]), {
-    executable: "/x/obsidian", out: "/tmp/shots", report: "/tmp/report.json", selfTest: true, help: false,
+    executable: "/x/obsidian", out: "/tmp/shots", report: "/tmp/report.json", reloadLoop: 0, selfTest: true, help: false,
   });
   assert.throws(() => parseArgs(["--report"]), /requires/);
   assert.throws(() => parseArgs(["--unknown"]), /Unknown/);
+  assert.deepEqual(parseArgs(["--reload-loop"]).reloadLoop, 20);
+  assert.deepEqual(parseArgs(["-L", "25"]).reloadLoop, 25);
   assert.deepEqual(SPECS.find((x) => x.key === "area").cabinets, ["areas", "projects", "notebooks", "albums", "properties"]);
   assert.deepEqual(SPECS.find((x) => x.key === "album").cabinets, ["records", "schema", "properties"]);
   return true;

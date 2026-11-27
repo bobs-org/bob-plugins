@@ -4,6 +4,7 @@ try {
     module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
       PROPERTY_CARD_OWNED_PROPERTY_CLASS,
       PROPERTY_CARD_HOST_REFRESH_MS,
+      PROPERTY_CARD_HOST_SURFACE_RETRY_LIMIT,
       propertyCardScopeIsEmbed,
       propertyCardNativeContainer,
       propertyCardOwnKeys,

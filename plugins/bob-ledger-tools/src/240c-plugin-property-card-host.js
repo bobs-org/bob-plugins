@@ -41,6 +41,242 @@
 //     every owned title through propertyCardTitleReleaseAll()),
 //   onSetup(), onDisposeStart(), onDisposeEnd(), onRefresh().
 const PROPERTY_CARD_HOST_REFRESH_MS = 100;
+const PROPERTY_CARD_HOST_SURFACE_RETRY_LIMIT = 8;
+const PROPERTY_CARD_HOSTS = new WeakMap();
+
+function propertyCardHostsOf(plugin) {
+  if (!plugin) return null;
+  let hosts = PROPERTY_CARD_HOSTS.get(plugin);
+  if (!hosts) {
+    hosts = new Set();
+    PROPERTY_CARD_HOSTS.set(plugin, hosts);
+  }
+  return hosts;
+}
+
+function propertyCardHostElDetached(el) {
+  try {
+    if (!el) return true;
+    if (el.isConnected === false) return true;
+    return false;
+  } catch (_) {
+    return true;
+  }
+}
+
+function propertyCardHostLeafPath(leaf) {
+  try {
+    return String(leaf?.view?.file?.path || "");
+  } catch (_) {
+    return "";
+  }
+}
+
+function propertyCardHostLeafIsPreview(leaf) {
+  const view = leaf?.view;
+  if (!view) return false;
+  try {
+    if (typeof view.getMode === "function" && view.getMode() === "preview") return true;
+  } catch (_) {}
+  try {
+    if (view.currentMode && view.previewMode && view.currentMode === view.previewMode) return true;
+  } catch (_) {}
+  return false;
+}
+
+function propertyCardHostPreviewLeaves(plugin, path) {
+  const found = [];
+  const seen = new Set();
+  const add = (leaf) => {
+    try {
+      if (!leaf || seen.has(leaf)) return;
+      if (!propertyCardHostLeafIsPreview(leaf)) return;
+      if (path && propertyCardHostLeafPath(leaf) !== path) return;
+      seen.add(leaf);
+      found.push(leaf);
+    } catch (_) {}
+  };
+  try {
+    for (const leaf of plugin?.app?.workspace?.getLeavesOfType?.("markdown") || []) add(leaf);
+  } catch (_) {}
+  try { add(plugin?.app?.workspace?.activeLeaf); } catch (_) {}
+  try { plugin?.app?.workspace?.iterateAllLeaves?.((leaf) => add(leaf)); } catch (_) {}
+  return found;
+}
+
+function propertyCardHostElInLeaf(el, leaf) {
+  try {
+    if (!el || !leaf) return false;
+    const container = leaf?.view?.previewMode?.containerEl;
+    if (!container) return false;
+    if (container === el || container.contains?.(el) || el.contains?.(container)) return true;
+    const pane = el.closest?.(".markdown-preview-view");
+    return Boolean(pane && (container === pane || container.contains?.(pane)));
+  } catch (_) {
+    return false;
+  }
+}
+
+// Rebound widgets pin `el` to the long-lived preview-view. That node stays
+// connected when the leaf opens another note, so a leftover eat.md widget
+// would keep the new note's sizer and skip (or wipe) the new card.
+function propertyCardHostPaneMovedOn(plugin, widget) {
+  try {
+    if (!widget || propertyCardHostElDetached(widget.el)) return false;
+    if (propertyCardHostPreviewLeaves(plugin, widget.path).some((leaf) => propertyCardHostElInLeaf(widget.el, leaf))) {
+      return false;
+    }
+    for (const leaf of propertyCardHostPreviewLeaves(plugin, "")) {
+      if (!propertyCardHostElInLeaf(widget.el, leaf)) continue;
+      const leafPath = propertyCardHostLeafPath(leaf);
+      return Boolean(leafPath && widget.path && leafPath !== widget.path);
+    }
+  } catch (_) {}
+  return false;
+}
+
+function propertyCardHostLiveReadingSurface(plugin, path, readingRootFn) {
+  const resolve = (el) => {
+    if (!el || propertyCardHostElDetached(el)) return null;
+    try {
+      const root = typeof readingRootFn === "function"
+        ? readingRootFn(el)
+        : propertyCardReadingRoot(el);
+      if (root && !propertyCardHostElDetached(root)) return { el, root };
+    } catch (_) {}
+    return null;
+  };
+  try {
+    for (const leaf of propertyCardHostPreviewLeaves(plugin, path)) {
+      const container = leaf?.view?.previewMode?.containerEl;
+      const candidates = [];
+      if (container) candidates.push(container);
+      try {
+        for (const node of container?.querySelectorAll?.(".markdown-preview-view, .markdown-preview-sizer") || []) {
+          candidates.push(node);
+        }
+      } catch (_) {}
+      for (const candidate of candidates) {
+        const found = resolve(candidate);
+        if (!found) continue;
+        let el = found.el;
+        try { el = found.el.closest?.(".markdown-preview-view") || found.el; } catch (_) {}
+        return { leaf, el, root: found.root };
+      }
+    }
+  } catch (_) {}
+  return null;
+}
+
+function propertyCardHostPreviewHasCard(container) {
+  try {
+    if (!container) return false;
+    if (container.querySelector?.(".bob-property-card")) return true;
+    const walk = (node) => {
+      try {
+        if (node?.classList?.contains?.("bob-property-card")) return true;
+        if (node?.getAttribute?.("data-card-kind")) return true;
+      } catch (_) {}
+      return (node?.children || []).some(walk);
+    };
+    return walk(container);
+  } catch (_) {
+    return false;
+  }
+}
+
+function propertyCardHostWidgetIsLive(widget, readingRootFn) {
+  try {
+    if (!widget?.surface || propertyCardHostElDetached(widget.el)) return false;
+    if (propertyCardHostElDetached(widget.surface)) return false;
+    if (typeof readingRootFn === "function") return Boolean(readingRootFn(widget.el));
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function propertyCardHostHasCardedPath(plugin, path, exceptHost) {
+  try {
+    for (const leaf of propertyCardHostPreviewLeaves(plugin, path)) {
+      if (propertyCardHostPreviewHasCard(leaf?.view?.previewMode?.containerEl)) return true;
+    }
+  } catch (_) {}
+  try {
+    const hosts = propertyCardHostsOf(plugin);
+    if (!hosts) return false;
+    for (const host of hosts) {
+      if (host === exceptHost) continue;
+      try {
+        for (const widget of host.reading?.() || []) {
+          if (widget.path !== path) continue;
+          if (propertyCardHostWidgetIsLive(widget, host.readingRoot)) return true;
+        }
+      } catch (_) {}
+    }
+  } catch (_) {}
+  return false;
+}
+
+function propertyCardHostNoteEligible(plugin, path) {
+  try {
+    if (!plugin || !path) return false;
+    const file = plugin.app?.vault?.getAbstractFileByPath?.(path);
+    const cache = file ? plugin.app?.metadataCache?.getFileCache?.(file) : null;
+    const kind = typeof propertyCardNoteSpecies === "function"
+      ? propertyCardNoteSpecies({ path, frontmatter: cache?.frontmatter || {} })
+      : null;
+    if (!kind) return false;
+    if (typeof propertyCardSpecies === "function") return Boolean(propertyCardSpecies(kind));
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function propertyCardHostCachedSource(plugin, path) {
+  const maps = [
+    plugin?.homeCardSourceCache,
+    plugin?.albumHeaderSourceCache,
+    plugin?.recordSheetSourceCache,
+    plugin?.notebookCardSourceCache,
+    plugin?.proseNoteCardSourceCache,
+    plugin?.refNoteCardSourceCache,
+    plugin?.bankSetupSourceCache,
+  ];
+  for (const map of maps) {
+    try {
+      const text = map?.get?.(path);
+      if (typeof text === "string" && text) return text;
+    } catch (_) {}
+  }
+  return "";
+}
+
+function propertyCardHostRescanReadingAbsorption(plugin, path, scope) {
+  try {
+    if (!scope || typeof propertyCardCabinetAbsorbRescanReading !== "function") return [];
+    const listed = typeof propertyCardCatalogClaimsForPath === "function"
+      ? propertyCardCatalogClaimsForPath(path)
+      : [];
+    if (!listed.length) return [];
+    const text = propertyCardHostCachedSource(plugin, path);
+    if (!text || typeof propertyCardCatalogRegionForHide !== "function") return [];
+    const claims = [];
+    for (const claim of listed) {
+      try {
+        const plan = propertyCardCatalogRegionForHide(text, claim.kind);
+        if (plan && !plan.damage) claims.push({ plan });
+      } catch (_) {}
+    }
+    if (!claims.length) return [];
+    const previous = [];
+    try { previous.push(...(scope.querySelectorAll?.(".bob-cabinet-absorbed") || [])); } catch (_) {}
+    return propertyCardCabinetAbsorbRescanReading(scope, claims, previous);
+  } catch (_) {
+    return [];
+  }
+}
 
 function propertyCardReadingRoot(el) {
   try {
@@ -101,6 +337,7 @@ function createPropertyCardHost(options) {
   let registered = false;
   let extrasLive = false;
   let refreshEffect = null;
+  const rerenderedPaths = new Set();
 
   function isActive() {
     return plugin[fields.active] === true;
@@ -152,21 +389,116 @@ function createPropertyCardHost(options) {
 
   // Obsidian can invoke a Markdown postprocessor before its preview surface
   // has been attached. Keep the widget and retry a few times so that a late
-  // attachment still receives its card without polling indefinitely.
+  // attachment still receives its card without polling indefinitely. When
+  // the postprocessed el is detached, or those retries are exhausted, resolve
+  // the live markdown preview leaf for the same path instead of giving up.
   function clearReadingSurfaceRetry(widget) {
     if (!widget) return;
     unschedule(widget.surfaceRetryTimer);
     widget.surfaceRetryTimer = null;
   }
 
+  function dropStaleDetachedWidgets(path, keep) {
+    const items = reading();
+    for (const widget of Array.from(items)) {
+      if (widget === keep || widget.path !== path) continue;
+      if (!propertyCardHostElDetached(widget.el)) continue;
+      clearReadingSurfaceRetry(widget);
+      widget.binding = {};
+      items.delete(widget);
+      try { options.onUnbind?.(widget); } catch (_) {}
+    }
+  }
+
+  function rebindWidgetToLive(widget, live) {
+    if (!widget || !live) return;
+    widget.binding = {};
+    widget.el = live.el;
+    widget.surface = live.root;
+    widget.scope = readingScope(live.root);
+    widget.surfaceRetryCount = 0;
+    widget.rerenderRequested = false;
+    clearReadingSurfaceRetry(widget);
+    try { rerenderedPaths.delete(widget.path); } catch (_) {}
+    dropStaleDetachedWidgets(widget.path, widget);
+  }
+
+  function resolveReadingSurface(widget) {
+    if (!widget) return null;
+    const ownRoot = readingRoot(widget.el);
+    const ownDead = propertyCardHostElDetached(widget.el)
+      || (ownRoot ? propertyCardHostElDetached(ownRoot) : true);
+    const live = propertyCardHostLiveReadingSurface(plugin, widget.path, readingRoot);
+    if (live) {
+      const liveDifferent = !ownRoot || live.root !== ownRoot;
+      if (!ownRoot || (ownDead && liveDifferent)) {
+        rebindWidgetToLive(widget, live);
+        return live.root;
+      }
+    }
+    // Keep a parented preview ancestor even when FakeNode `isConnected`
+    // walks to `.root` and reports false. Rebind already took over when a
+    // different live workspace leaf exists. A connected pane that now
+    // shows another path is not ours.
+    if (ownRoot && !propertyCardHostPaneMovedOn(plugin, widget)) return ownRoot;
+    return null;
+  }
+
+  function requestTargetedRerender(widget) {
+    if (!widget || !isActive()) return false;
+    const path = widget.path;
+    if (!path || widget.rerenderRequested || rerenderedPaths.has(path)) return false;
+    if (propertyCardHostHasCardedPath(plugin, path, controller)) return false;
+    if (!propertyCardHostNoteEligible(plugin, path)) return false;
+    const leaves = propertyCardHostPreviewLeaves(plugin, path);
+    if (!leaves.length) return false;
+    widget.rerenderRequested = true;
+    rerenderedPaths.add(path);
+    for (const leaf of leaves) {
+      try {
+        const preview = leaf.view?.previewMode;
+        if (preview && typeof preview.rerender === "function") preview.rerender(true);
+      } catch (_) {}
+    }
+    schedule(() => {
+      if (!isActive()) return;
+      for (const leaf of leaves) {
+        try {
+          const scope = leaf.view?.previewMode?.containerEl;
+          propertyCardHostRescanReadingAbsorption(plugin, path, scope);
+        } catch (_) {}
+      }
+      controller.refreshReading();
+    }, 0);
+    return true;
+  }
+
   function scheduleReadingSurfaceRetry(widget) {
     if (!widget || widget.surfaceRetryTimer != null || !isActive()) return;
     const attempt = Number(widget.surfaceRetryCount || 0) + 1;
-    if (attempt > 8) return;
+    if (attempt > PROPERTY_CARD_HOST_SURFACE_RETRY_LIMIT) {
+      const root = resolveReadingSurface(widget);
+      if (root) {
+        widget.surfaceRetryCount = 0;
+        widget.surface = root;
+        widget.scope = readingScope(root);
+        controller.refreshReading();
+        return;
+      }
+      const rerendered = requestTargetedRerender(widget);
+      if (rerendered || attempt > PROPERTY_CARD_HOST_SURFACE_RETRY_LIMIT + 16) return;
+      widget.surfaceRetryCount = attempt;
+      widget.surfaceRetryTimer = schedule(() => {
+        widget.surfaceRetryTimer = null;
+        if (!isActive() || !reading().has(widget)) return;
+        scheduleReadingSurfaceRetry(widget);
+      }, 320);
+      return;
+    }
     widget.surfaceRetryTimer = schedule(() => {
       widget.surfaceRetryTimer = null;
       if (!isActive() || !reading().has(widget)) return;
-      const root = readingRoot(widget.el);
+      const root = resolveReadingSurface(widget);
       if (!root) {
         widget.surfaceRetryCount = attempt;
         scheduleReadingSurfaceRetry(widget);
@@ -220,6 +552,7 @@ function createPropertyCardHost(options) {
 
     setup() {
       setActive(true);
+      try { propertyCardHostsOf(plugin)?.add(controller); } catch (_) {}
       reading();
       pending();
       timers();
@@ -273,6 +606,8 @@ function createPropertyCardHost(options) {
 
     dispose() {
       setActive(false);
+      try { propertyCardHostsOf(plugin)?.delete(controller); } catch (_) {}
+      rerenderedPaths.clear();
       try { options.onDisposeStart?.(); } catch (_) {}
       unschedule(plugin[fields.refreshTimer]);
       plugin[fields.refreshTimer] = null;
@@ -374,15 +709,22 @@ function createPropertyCardHost(options) {
     refreshReading() {
       if (!isActive()) return;
       const items = reading();
-      for (const widget of items) {
+      for (const widget of Array.from(items)) {
         try {
-          const root = readingRoot(widget.el);
+          const root = resolveReadingSurface(widget);
           if (widget.surface && widget.surface !== root) {
             options.removeReading?.(widget.surface, widget.scope, widget.path);
           }
           if (!root) {
             widget.surface = null;
             widget.scope = null;
+            if (propertyCardHostPaneMovedOn(plugin, widget)) {
+              clearReadingSurfaceRetry(widget);
+              widget.binding = {};
+              items.delete(widget);
+              try { options.onUnbind?.(widget); } catch (_) {}
+              continue;
+            }
             scheduleReadingSurfaceRetry(widget);
             continue;
           }
@@ -408,6 +750,12 @@ function createPropertyCardHost(options) {
           try { options.removeReading?.(widget.surface, widget.scope, widget.path); } catch (_) {}
           try { controller.releaseKeys?.(widget.scope, widget.path); } catch (_) {}
         }
+      }
+      for (const widget of Array.from(items)) {
+        if (widget.surface) continue;
+        const detached = propertyCardHostElDetached(widget.el);
+        const exhausted = Number(widget.surfaceRetryCount || 0) >= PROPERTY_CARD_HOST_SURFACE_RETRY_LIMIT;
+        if (detached || exhausted) requestTargetedRerender(widget);
       }
       try { options.afterRefreshReading?.(); } catch (_) {}
     },

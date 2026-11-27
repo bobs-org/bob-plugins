@@ -22,6 +22,7 @@ try {
       propertyCardCatalogRevealClaim,
       propertyCardCatalogReleaseScope,
       propertyCardCatalogReleaseAll,
+      propertyCardCatalogClaimsForPath,
       propertyCardCabinetAbsorbLineStarts,
       propertyCardCabinetAbsorbRangesForPlan,
       propertyCardCabinetSelectionStrictlyInside,

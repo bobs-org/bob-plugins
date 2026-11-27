@@ -42,11 +42,13 @@ Module._load = originalLoad;
 class FakeNode {
   constructor(tag, doc) {
     this.tagName = tag ? tag.toUpperCase() : "#TEXT";
-    this.nodeType = 1;
+    this.nodeType = tag ? 1 : 3;
     this.ownerDocument = doc;
     this.parentNode = null;
     this.children = [];
     this.attrs = new Map();
+    this._text = "";
+    this.isConnected = true;
     const self = this;
     this.classList = {
       add(name) { const xs = new Set((self.getAttribute("class") || "").split(/\s+/).filter(Boolean)); xs.add(name); self.setAttribute("class", [...xs].join(" ")); },
@@ -54,6 +56,11 @@ class FakeNode {
       contains(name) { return (self.getAttribute("class") || "").split(/\s+/).includes(name); },
     };
   }
+  get textContent() {
+    if (this.nodeType === 3) return this._text;
+    return this.children.map((child) => child.textContent).join("");
+  }
+  set textContent(value) { this._text = String(value ?? ""); }
   setAttribute(name, value) { this.attrs.set(name, String(value)); }
   getAttribute(name) { return this.attrs.has(name) ? this.attrs.get(name) : null; }
   appendChild(node) { node.parentNode?.removeChild?.(node); node.parentNode = this; this.children.push(node); return node; }
@@ -80,8 +87,32 @@ class FakeNode {
 function makeDoc() {
   return {
     createElement(tag) { return new FakeNode(tag, this); },
-    createTextNode() { return new FakeNode("", this); },
+    createTextNode(text) {
+      const node = new FakeNode("", this);
+      node._text = String(text ?? "");
+      return node;
+    },
   };
+}
+
+function previewLeaf(path, container, { rerenders } = {}) {
+  return {
+    view: {
+      getMode: () => "preview",
+      file: { path },
+      previewMode: {
+        containerEl: container,
+        rerender: (full) => { if (rerenders) rerenders.push(full); },
+      },
+    },
+  };
+}
+
+function seedNote(plugin, path, frontmatter) {
+  plugin.app.vault.getAbstractFileByPath = (value) => (value ? { path: value } : null);
+  plugin.app.metadataCache.getFileCache = (file) => (
+    file?.path === path ? { frontmatter: frontmatter || null } : { frontmatter: null }
+  );
 }
 
 function preview(doc, cls = "markdown-preview-view") {
@@ -148,6 +179,7 @@ function makeHost(plugin, extra = {}) {
 test("host helpers are exported beside ownership", () => {
   assert.equal(typeof helpers.createPropertyCardHost, "function");
   assert.equal(helpers.PROPERTY_CARD_HOST_REFRESH_MS, 100);
+  assert.equal(helpers.PROPERTY_CARD_HOST_SURFACE_RETRY_LIMIT, 8);
   assert.equal(typeof helpers.propertyCardReadingRoot, "function");
   assert.equal(typeof helpers.propertyCardReadingScope, "function");
   assert.equal(typeof helpers.propertyCardNodeBelongs, "function");
@@ -619,4 +651,231 @@ test("album, record, and bank adapters keep failure cleanup wired", () => {
     if (setup === "setupRecordSheet") plugin.teardownRecordSheet();
     if (setup === "setupBankSetup") plugin.teardownBankSetup();
   }
+});
+
+test("a detached el plus a live preview leaf mounts the card", () => {
+  const plugin = fakePlugin();
+  const host = makeHost(plugin, { allowEmbedDisplay: true });
+  host.setup();
+  const doc = makeDoc();
+  const live = preview(doc);
+  live.isConnected = true;
+  plugin.app.workspace.getLeavesOfType = () => [previewLeaf("eat.md", live)];
+  const chunk = doc.createElement("div");
+  chunk.isConnected = false;
+  host.renderInReading(chunk, { sourcePath: "eat.md", addChild() {} });
+  plugin.flush();
+  assert.equal(host.painted.some((row) => row.el === live), true);
+  assert.equal(live.getAttribute("data-painted"), "eat.md");
+  assert.equal(plugin.probeReading.size, 1);
+  const widget = [...plugin.probeReading][0];
+  assert.equal(widget.el, live);
+  assert.equal(widget.el.isConnected, true);
+  host.dispose();
+});
+
+test("a wrapper preview container still yields a live Reading surface", () => {
+  const plugin = fakePlugin();
+  const host = makeHost(plugin, { allowEmbedDisplay: true });
+  host.setup();
+  const doc = makeDoc();
+  const wrapper = doc.createElement("div");
+  wrapper.setAttribute("class", "view-content");
+  wrapper.isConnected = true;
+  const live = preview(doc);
+  live.isConnected = true;
+  wrapper.appendChild(live);
+  plugin.app.workspace.getLeavesOfType = () => [];
+  plugin.app.workspace.activeLeaf = previewLeaf("eat.md", wrapper);
+  const chunk = doc.createElement("div");
+  chunk.isConnected = false;
+  host.renderInReading(chunk, { sourcePath: "eat.md", addChild() {} });
+  plugin.flush();
+  assert.equal(host.painted.some((row) => row.el === live), true, "rebind prefers the preview-view over the wrapper");
+  assert.equal(plugin.probeReading.size, 1);
+  const widget = [...plugin.probeReading][0];
+  assert.equal(widget.el, live);
+  assert.equal(Boolean(widget.surface), true);
+  host.dispose();
+});
+
+test("a rebound pane that navigates to another path does not block the new card", () => {
+  const plugin = fakePlugin();
+  const host = makeHost(plugin, { allowEmbedDisplay: true });
+  host.setup();
+  const doc = makeDoc();
+  const live = preview(doc);
+  live.isConnected = true;
+  const sizer = doc.createElement("div");
+  sizer.setAttribute("class", "markdown-preview-sizer");
+  sizer.isConnected = true;
+  live.appendChild(sizer);
+  const leaf = previewLeaf("eat.md", live);
+  plugin.app.workspace.getLeavesOfType = () => [leaf];
+  const chunk = doc.createElement("div");
+  chunk.isConnected = false;
+  host.renderInReading(chunk, { sourcePath: "eat.md", addChild() {} });
+  plugin.flush();
+  assert.equal(host.painted.some((row) => row.path === "eat.md"), true);
+  leaf.view.file.path = "empty.md";
+  const nextSizer = doc.createElement("div");
+  nextSizer.setAttribute("class", "markdown-preview-sizer");
+  nextSizer.isConnected = true;
+  sizer.isConnected = false;
+  live.removeChild(sizer);
+  live.appendChild(nextSizer);
+  host.refreshReading();
+  assert.equal([...plugin.probeReading].some((widget) => widget.path === "eat.md"), false,
+    "stale eat.md widget dropped after the pane moved on");
+  host.painted.length = 0;
+  const emptyChunk = doc.createElement("div");
+  emptyChunk.isConnected = true;
+  nextSizer.appendChild(emptyChunk);
+  host.renderInReading(emptyChunk, { sourcePath: "empty.md", addChild() {} });
+  plugin.flush();
+  assert.equal(host.painted.some((row) => row.path === "empty.md"), true);
+  host.dispose();
+});
+
+test("exhausted retries recover through the workspace", () => {
+  const plugin = fakePlugin();
+  const host = makeHost(plugin, { allowEmbedDisplay: true });
+  host.setup();
+  const doc = makeDoc();
+  plugin.app.workspace.getLeavesOfType = () => [];
+  const chunk = doc.createElement("div");
+  chunk.isConnected = false;
+  host.renderInReading(chunk, { sourcePath: "eat.md", addChild() {} });
+  for (let i = 0; i < 12; i += 1) plugin.flush();
+  assert.equal(host.painted.length, 0);
+  assert.equal(plugin.probeReading.size, 1);
+  const live = preview(doc);
+  live.isConnected = true;
+  plugin.app.workspace.getLeavesOfType = () => [previewLeaf("eat.md", live)];
+  host.refreshReading();
+  assert.equal(host.painted.some((row) => row.el === live), true);
+  assert.equal(plugin.probeReading.size, 1);
+  host.dispose();
+});
+
+test("a card-less note never re-renders", () => {
+  const plugin = fakePlugin();
+  seedNote(plugin, "ordinary.md", {});
+  const host = makeHost(plugin);
+  host.setup();
+  const doc = makeDoc();
+  const dummy = doc.createElement("div");
+  dummy.isConnected = true;
+  const rerenders = [];
+  plugin.app.workspace.getLeavesOfType = () => [previewLeaf("ordinary.md", dummy, { rerenders })];
+  const chunk = doc.createElement("div");
+  chunk.isConnected = false;
+  host.renderInReading(chunk, { sourcePath: "ordinary.md", addChild() {} });
+  for (let i = 0; i < 12; i += 1) plugin.flush();
+  host.refreshReading();
+  assert.equal(rerenders.length, 0);
+  assert.equal(host.painted.length, 0);
+  host.dispose();
+});
+
+test("a second host's card blocks the re-render", () => {
+  const plugin = fakePlugin();
+  seedNote(plugin, "cash.md", { type: "area" });
+  const hostA = makeHost(plugin, { allowEmbedDisplay: true });
+  const hostB = makeHost(plugin, {
+    allowEmbedDisplay: true,
+    fields: {
+      active: "probeBActive",
+      reading: "probeBReading",
+      readingPending: "probeBPending",
+      readingTimers: "probeBTimers",
+      editors: "probeBEditors",
+      editorScopes: "probeBScopes",
+      refreshTimer: "probeBRefreshTimer",
+      keySlots: "probeBKeySlots",
+    },
+  });
+  hostA.setup();
+  hostB.setup();
+  const doc = makeDoc();
+  const liveA = preview(doc);
+  liveA.isConnected = true;
+  hostA.renderInReading(liveA, { sourcePath: "cash.md", addChild() {} });
+  plugin.flush();
+  assert.equal(hostA.painted.length, 1);
+  const dummy = doc.createElement("div");
+  dummy.isConnected = true;
+  const rerenders = [];
+  plugin.app.workspace.getLeavesOfType = () => [previewLeaf("cash.md", dummy, { rerenders })];
+  const chunk = doc.createElement("div");
+  chunk.isConnected = false;
+  hostB.renderInReading(chunk, { sourcePath: "cash.md", addChild() {} });
+  for (let i = 0; i < 12; i += 1) plugin.flush();
+  hostB.refreshReading();
+  assert.equal(rerenders.length, 0, "host A already carded cash.md");
+  hostA.dispose();
+  hostB.dispose();
+});
+
+test("absorption tags survive a targeted re-render", () => {
+  const plugin = fakePlugin();
+  seedNote(plugin, "cash.md", { type: "area" });
+  const areasNote = [
+    "---",
+    "type: area",
+    "---",
+    "",
+    "# Cash",
+    "",
+    "## Areas",
+    "",
+    "> [!areas]",
+    "> - [[Food]]",
+    "",
+  ].join("\n");
+  plugin.homeCardSourceCache = new Map([["cash.md", areasNote]]);
+  const host = makeHost(plugin);
+  host.setup();
+  const doc = makeDoc();
+  const dummy = doc.createElement("div");
+  dummy.isConnected = true;
+  const sizer = doc.createElement("div");
+  sizer.setAttribute("class", "markdown-preview-sizer");
+  sizer.isConnected = false;
+  const section = doc.createElement("div");
+  const heading = doc.createElement("h2");
+  heading.appendChild(doc.createTextNode("Areas"));
+  const callout = doc.createElement("div");
+  callout.setAttribute("class", "callout");
+  callout.setAttribute("data-callout", "areas");
+  section.appendChild(heading);
+  section.appendChild(callout);
+  sizer.appendChild(section);
+  dummy.appendChild(sizer);
+  const plan = helpers.propertyCardCatalogRegionForHide(areasNote, "areas");
+  assert.ok(plan && !plan.damage, "areas hide plan");
+  helpers.propertyCardCatalogClaim({
+    view: dummy, path: "cash.md", kind: "areas", fingerprint: plan.fingerprint, generation: 1,
+  });
+  const tagged = helpers.propertyCardCabinetAbsorbPaintReading(dummy, plan, true);
+  assert.ok(tagged.length >= 1);
+  assert.ok(callout.classList.contains("bob-cabinet-absorbed"));
+  const rerenders = [];
+  plugin.app.workspace.getLeavesOfType = () => [previewLeaf("cash.md", dummy, {
+    rerenders: {
+      push(full) {
+        rerenders.push(full);
+        callout.classList.remove("bob-cabinet-absorbed");
+        heading.classList.remove("bob-cabinet-absorbed");
+      },
+    },
+  })];
+  const chunk = doc.createElement("div");
+  chunk.isConnected = false;
+  host.renderInReading(chunk, { sourcePath: "cash.md", addChild() {} });
+  plugin.flush();
+  for (let i = 0; i < 12; i += 1) plugin.flush();
+  assert.ok(rerenders.length >= 1, "eligible cash.md re-renders when no surface is found");
+  assert.ok(callout.classList.contains("bob-cabinet-absorbed"), "re-scan restores the absorbed class");
+  host.dispose();
 });

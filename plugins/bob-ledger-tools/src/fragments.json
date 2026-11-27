@@ -211,6 +211,7 @@
   "240wc-plugin-cabinet-providers.js",
   "240wd-plugin-cabinet-view.js",
   "240we-plugin-cabinet-toggle.js",
+  "240wm-plugin-cabinet-pick.js",
   "245-plugin-bank-category-card-model.js",
   "246-plugin-bank-category-card-write.js",
   "246a-plugin-bank-note-write.js",

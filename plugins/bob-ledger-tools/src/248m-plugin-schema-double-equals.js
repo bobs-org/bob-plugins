@@ -447,6 +447,15 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
           callback: () => {
             if (this.schemaDoubleEqualsActive === false) return false;
             const view = schemaDoubleEqualsActiveView(this);
+            try {
+              if (typeof propertyCardCabinetsGateLive === "function"
+                && propertyCardCabinetsGateLive() === true
+                && typeof propertyCardCabinetPickActive === "function"
+                && propertyCardCabinetPickActive() === true
+                && typeof propertyCardCabinetPickDisarmPick === "function") {
+                propertyCardCabinetPickDisarmPick({ silent: true });
+              }
+            } catch (_) {}
             return typeof propertyCardToggleProperties === "function"
               ? propertyCardToggleProperties(view)
               : false;
@@ -463,6 +472,13 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
           callback: () => {
             if (this.schemaDoubleEqualsActive === false) return false;
             const view = schemaDoubleEqualsActiveView(this);
+            try {
+              if (typeof propertyCardCabinetsGateLive === "function"
+                && propertyCardCabinetsGateLive() === true
+                && typeof propertyCardCabinetUnderscore === "function") {
+                if (propertyCardCabinetUnderscore(view, this) === true) return true;
+              }
+            } catch (_) {}
             return typeof propertyCardToggleDetails === "function"
               ? propertyCardToggleDetails(view)
               : false;
@@ -495,6 +511,15 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
     this.propertyCardRegistryEntries = [];
     this.propertyCardSecondKeyArms?.clear?.();
     this.handledSchemaDoubleEqualsEvents = null;
+    try {
+      if (typeof propertyCardCabinetPickReleasePlugin === "function") {
+        propertyCardCabinetPickReleasePlugin(this);
+      } else if (typeof propertyCardCabinetPickDisarmPick === "function"
+        && typeof propertyCardCabinetPickActive === "function"
+        && propertyCardCabinetPickActive() === true) {
+        propertyCardCabinetPickDisarmPick({ silent: true });
+      }
+    } catch (_) {}
   }
 
   handleSchemaDoubleEqualsKeydown(event) {
@@ -507,6 +532,17 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
     }
     const key = event && event.key;
     if (key !== "=" && key !== "-" && key !== "+" && key !== "_") return;
+    try {
+      if (typeof propertyCardCabinetsGateLive === "function"
+        && propertyCardCabinetsGateLive() === true
+        && typeof propertyCardCabinetPickActive === "function"
+        && propertyCardCabinetPickActive() === true) {
+        if (key === "_" || key === "-") return;
+        if ((key === "=" || key === "+") && typeof propertyCardCabinetPickDisarmPick === "function") {
+          try { propertyCardCabinetPickDisarmPick({ silent: true }); } catch (_) {}
+        }
+      }
+    } catch (_) {}
     const view = schemaDoubleEqualsActiveView(this);
     const cm = schemaDoubleEqualsResolveCm(view);
     let frontmatter = {};
@@ -557,9 +593,27 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
       arm = {
         key,
         reason: "details-toggle",
-        canAct: () => typeof propertyCardCanToggleDetails === "function"
-          && propertyCardCanToggleDetails(view),
-        run: () => { if (typeof propertyCardToggleDetails === "function") propertyCardToggleDetails(view); },
+        canAct: () => {
+          try {
+            if (typeof propertyCardCabinetsGateLive === "function"
+              && propertyCardCabinetsGateLive() === true
+              && typeof propertyCardCabinetCanUnderscore === "function") {
+              return propertyCardCabinetCanUnderscore(view) === true;
+            }
+          } catch (_) {}
+          return typeof propertyCardCanToggleDetails === "function"
+            && propertyCardCanToggleDetails(view);
+        },
+        run: () => {
+          try {
+            if (typeof propertyCardCabinetsGateLive === "function"
+              && propertyCardCabinetsGateLive() === true
+              && typeof propertyCardCabinetUnderscore === "function") {
+              if (propertyCardCabinetUnderscore(view, this) === true) return;
+            }
+          } catch (_) {}
+          if (typeof propertyCardToggleDetails === "function") propertyCardToggleDetails(view);
+        },
       };
     } else {
       arm = this.propertyCardSecondKeyArmRegistry().get("+") || null;

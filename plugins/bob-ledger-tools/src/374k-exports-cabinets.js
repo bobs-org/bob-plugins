@@ -48,6 +48,18 @@ try {
       propertyCardCabinetCollectRows,
       propertyCardCabinetsInView,
       propertyCardCabinetToggle,
+      propertyCardCabinetPickActive,
+      propertyCardCabinetPickSnapshotForTests,
+      propertyCardCabinetPickResetForTests,
+      propertyCardCabinetPickSetDelayForTests,
+      propertyCardCabinetPickFooterText,
+      propertyCardCabinetPickAnnounceText,
+      propertyCardCabinetCanUnderscore,
+      propertyCardCabinetUnderscore,
+      propertyCardCabinetPickArm,
+      propertyCardCabinetPickDisarmPick,
+      propertyCardCabinetPickOnCaptureKey,
+      propertyCardCabinetPickReleasePlugin,
     });
   }
 } catch (_) {}

@@ -1,0 +1,715 @@
+{
+  "tool": "obsidian-startup-smoke",
+  "pass": true,
+  "failures": [],
+  "thresholds": {
+    "layoutReadyMs": 30000,
+    "peakHeapBytes": 1610612736,
+    "peakHeapHuman": "1.5 GiB"
+  },
+  "observation": {
+    "executable": "/snap/bin/obsidian",
+    "appVersion": ".obsidian",
+    "sourceSha": "d21323dc88e1632d76ae14eceb537b6ac7a8bf5a",
+    "layoutReadyMs": 330,
+    "layoutReadyTimeoutMs": 30000,
+    "hookInstalled": true,
+    "hookEarly": true,
+    "plugins": [
+      {
+        "id": "block-id-prompt",
+        "loaded": true,
+        "version": "1.46.0"
+      },
+      {
+        "id": "bob-articles",
+        "loaded": true,
+        "version": "0.3.0"
+      },
+      {
+        "id": "bob-chips",
+        "loaded": true,
+        "version": "0.16.0"
+      },
+      {
+        "id": "bob-command-mode",
+        "loaded": true,
+        "version": "0.5.0"
+      },
+      {
+        "id": "bob-emoji",
+        "loaded": true,
+        "version": "0.2.0"
+      },
+      {
+        "id": "bob-ledger-tools",
+        "loaded": true,
+        "version": "1.170.1"
+      },
+      {
+        "id": "bob-mail",
+        "loaded": true,
+        "version": "0.3.0"
+      },
+      {
+        "id": "bob-navigation-hotkeys",
+        "loaded": true,
+        "version": "2.107.12"
+      },
+      {
+        "id": "bob-project-tasks",
+        "loaded": true,
+        "version": "1.2.0"
+      },
+      {
+        "id": "bob-vim-surround",
+        "loaded": true,
+        "version": "1.5.2"
+      },
+      {
+        "id": "bob-vim-yank-flash",
+        "loaded": true,
+        "version": "0.1.1"
+      },
+      {
+        "id": "task-status-cycler",
+        "loaded": true,
+        "version": "1.64.2"
+      }
+    ],
+    "expectedPlugins": [
+      {
+        "id": "block-id-prompt",
+        "version": "1.46.0"
+      },
+      {
+        "id": "bob-articles",
+        "version": "0.3.0"
+      },
+      {
+        "id": "bob-chips",
+        "version": "0.16.0"
+      },
+      {
+        "id": "bob-command-mode",
+        "version": "0.5.0"
+      },
+      {
+        "id": "bob-emoji",
+        "version": "0.2.0"
+      },
+      {
+        "id": "bob-ledger-tools",
+        "version": "1.170.1"
+      },
+      {
+        "id": "bob-mail",
+        "version": "0.3.0"
+      },
+      {
+        "id": "bob-navigation-hotkeys",
+        "version": "2.107.12"
+      },
+      {
+        "id": "bob-project-tasks",
+        "version": "1.2.0"
+      },
+      {
+        "id": "bob-vim-surround",
+        "version": "1.5.2"
+      },
+      {
+        "id": "bob-vim-yank-flash",
+        "version": "0.1.1"
+      },
+      {
+        "id": "task-status-cycler",
+        "version": "1.64.2"
+      }
+    ],
+    "heapPeakBytes": 49887545,
+    "heapLimitBytes": 1610612736,
+    "heapSamples": [
+      49826509,
+      49826509,
+      49882761,
+      49887545
+    ],
+    "relation": {
+      "ready": true,
+      "nonMdKeys": 0,
+      "fixtureRelationIndexed": true,
+      "readsBeforeLayoutReady": 0,
+      "nonMdReads": 0,
+      "createReplayCount": 210
+    },
+    "editors": [
+      {
+        "file": "2026/20261027.md",
+        "mode": "live",
+        "opened": true,
+        "correctPath": true,
+        "correctMode": true,
+        "actualMode": "source",
+        "editorConnected": true,
+        "textMatches": true,
+        "readingView": false,
+        "staleEditor": false
+      },
+      {
+        "file": "2026/20261027.md",
+        "mode": "source",
+        "opened": true,
+        "correctPath": true,
+        "correctMode": true,
+        "actualMode": "source",
+        "editorConnected": true,
+        "textMatches": true,
+        "readingView": false,
+        "staleEditor": false
+      },
+      {
+        "file": "tasks/note-a.md",
+        "mode": "live",
+        "opened": true,
+        "correctPath": true,
+        "correctMode": true,
+        "actualMode": "source",
+        "editorConnected": true,
+        "textMatches": true,
+        "readingView": false,
+        "staleEditor": false
+      },
+      {
+        "file": "tasks/note-a.md",
+        "mode": "source",
+        "opened": true,
+        "correctPath": true,
+        "correctMode": true,
+        "actualMode": "source",
+        "editorConnected": true,
+        "textMatches": true,
+        "readingView": false,
+        "staleEditor": false
+      }
+    ],
+    "runtime": {
+      "exceptions": [],
+      "rejections": [],
+      "pluginLoadErrors": [],
+      "consoleErrors": []
+    },
+    "crashes": {
+      "artifacts": [],
+      "events": [],
+      "processExits": []
+    },
+    "vaultPath": "/home/bryan/.local/state/sase/workspaces/bobs-org/bob-cli/bob-cli_15/sase/repos/linked/bob-plugins/.acceptance/tmp/bob-obsidian-smoke-5pIaUM/vault",
+    "fixturePath": "/home/bryan/.local/state/sase/workspaces/bobs-org/bob-cli/bob-cli_15/sase/repos/linked/bob-plugins/.acceptance/tmp/bob-obsidian-smoke-5pIaUM/vault",
+    "crashObservationMethod": "owned-profile scan for crash dumps plus CDP disconnect/process-exit evidence",
+    "deploy": {
+      "expected": [
+        {
+          "id": "block-id-prompt",
+          "version": "1.46.0"
+        },
+        {
+          "id": "bob-articles",
+          "version": "0.3.0"
+        },
+        {
+          "id": "bob-chips",
+          "version": "0.16.0"
+        },
+        {
+          "id": "bob-command-mode",
+          "version": "0.5.0"
+        },
+        {
+          "id": "bob-emoji",
+          "version": "0.2.0"
+        },
+        {
+          "id": "bob-ledger-tools",
+          "version": "1.170.1"
+        },
+        {
+          "id": "bob-mail",
+          "version": "0.3.0"
+        },
+        {
+          "id": "bob-navigation-hotkeys",
+          "version": "2.107.12"
+        },
+        {
+          "id": "bob-project-tasks",
+          "version": "1.2.0"
+        },
+        {
+          "id": "bob-vim-surround",
+          "version": "1.5.2"
+        },
+        {
+          "id": "bob-vim-yank-flash",
+          "version": "0.1.1"
+        },
+        {
+          "id": "task-status-cycler",
+          "version": "1.64.2"
+        }
+      ],
+      "report": {
+        "ok": true,
+        "repo": "/home/bryan/.local/state/sase/workspaces/bobs-org/bob-cli/bob-cli_15/sase/repos/linked/bob-plugins",
+        "repo_source": "flag",
+        "bob_dir": "/home/bryan/bob",
+        "count": 12,
+        "synced": 12,
+        "drift": 0,
+        "not_installed": 0,
+        "plugins": [
+          {
+            "id": "block-id-prompt",
+            "version": "1.46.0",
+            "description": "Prompt for custom block IDs and complete wiki block links to open tasks, with a plan-budget suffix. Ctrl+Shift+Enter on a requirement line or carried stub refuses without linking or unlinking. Typing (( opens the Task Wikilink Picker to insert a [[note#^id]] link to any vault task. Ctrl+Shift+Enter refuses Depends-On ⛓️ **DEPENDS ON:** dependency lines. On inbox notes, a Ctrl+Shift+Enter link asks where the task goes first, and Link to today then suggests the destination's type; an unlink asks right before writing, then moves it with the toggle applied (nav inboxRoute v1). Unlinking an In Progress task with no live link left today offers configured starts-after successors through task-status-cycler api v4. Ctrl+Shift+Enter asks which of today's Pomodoros to link into (↵ = suggested, else current/next, type to filter or name a new one). Project Schedule comes from the ^prj task; a future-scheduled ^prj link is refused only when its date is the sole remaining reason, dependency reasons are reported first, and a direct link raises a Ready ^prj to Next. A tagged #prj_is_blocked ^prj is refused as blocked by its parent project without raising prerequisites. Ctrl+Shift+Enter refuses LINKS with the relation notice and LINKED FROM with the generated-line notice; Pomodoro cleanup skips both. Link to today also offers recent task types with component swatches and near-duplicate hints; Ctrl+D hides or restores Recent suggestions only. The block ID prompt also suggests an ID for a plain note bullet (a notebook note), ignoring its [created::] stamp.",
+            "sync": "synced",
+            "vault": "enabled",
+            "configured": true,
+            "deployment": {
+              "status": "clean",
+              "source_root": "/home/bryan/.local/state/sase/workspaces/bobs-org/bob-cli/bob-cli_12/sase/repos/linked/bob-plugins",
+              "source_head": "b7f17a51a58cdb44608df3fe48b689fba1005f87",
+              "host": "athena",
+              "deployed_at": "2026-11-27T00:10:36Z"
+            }
+          },
+          {
+            "id": "bob-articles",
+            "version": "0.3.0",
+            "description": "Format Bob article notes with bob on save, when leaving, or on command, and preview article adoption.",
+            "sync": "synced",
+            "vault": "enabled",
+            "configured": true,
+            "deployment": {
+              "status": "clean",
+              "source_root": "/home/bryan/.local/state/sase/workspaces/bobs-org/bob-cli/bob-cli_12/sase/repos/linked/bob-plugins",
+              "source_head": "b7f17a51a58cdb44608df3fe48b689fba1005f87",
+              "host": "athena",
+              "deployed_at": "2026-11-27T00:10:36Z"
+            }
+          },
+          {
+            "id": "bob-chips",
+            "version": "0.16.0",
+            "description": "Click-to-copy chips from `copy:` spans and `bob-copy` fences, plus click-to-run `run:` bob command chips and `bob-run` sequence cards; ⌘↵ runs the command chip at the cursor, with an armed chip and a keycap hint from the live binding.",
+            "sync": "synced",
+            "vault": "enabled",
+            "configured": true,
+            "deployment": {
+              "status": "clean",
+              "source_root": "/home/bryan/.local/state/sase/workspaces/bobs-org/bob-cli/bob-cli_12/sase/repos/linked/bob-plugins",
+              "source_head": "b7f17a51a58cdb44608df3fe48b689fba1005f87",
+              "host": "athena",
+              "deployed_at": "2026-11-27T00:10:36Z"
+            }
+          },
+          {
+            "id": "bob-command-mode",
+            "version": "0.5.0",
+            "description": "Run catalog-validated bob commands from Obsidian chips and Command Mode with safe-write guards and run history.",
+            "sync": "synced",
+            "vault": "enabled",
+            "configured": true,
+            "deployment": {
+              "status": "clean",
+              "source_root": "/home/bryan/.local/state/sase/workspaces/bobs-org/bob-cli/bob-cli_12/sase/repos/linked/bob-plugins",
+              "source_head": "b7f17a51a58cdb44608df3fe48b689fba1005f87",
+              "host": "athena",
+              "deployed_at": "2026-11-27T00:10:36Z"
+            }
+          },
+          {
+            "id": "bob-emoji",
+            "version": "0.2.0",
+            "description": "Complete GitHub-style emoji shortcodes from a colon typed after a space.",
+            "sync": "synced",
+            "vault": "enabled",
+            "configured": true,
+            "deployment": {
+              "status": "clean",
+              "source_root": "/home/bryan/.local/state/sase/workspaces/bobs-org/bob-cli/bob-cli_12/sase/repos/linked/bob-plugins",
+              "source_head": "b7f17a51a58cdb44608df3fe48b689fba1005f87",
+              "host": "athena",
+              "deployed_at": "2026-11-27T00:10:36Z"
+            },
+            "vault_ignore": {
+              "status": "tracked",
+              "warning": "plugin bob-emoji vault folder .obsidian/plugins/bob-emoji has 4 tracked files (.obsidian/plugins/bob-emoji/data.json, .obsidian/plugins/bob-emoji/main.js, .obsidian/plugins/bob-emoji/manifest.json) in vault Git. Remove them from the index and add `.obsidian/plugins/bob-emoji/` to the vault .gitignore so deploys stay out of version control. bob never runs `git rm --cached`: untracking on one host deletes the files on the others at their next pull."
+            }
+          },
+          {
+            "id": "bob-ledger-tools",
+            "version": "1.170.1",
+            "description": "Render Bob’s task and Pomodoro information in Obsidian: planning and freshness marks, dependencies, relations, calendar events, task types, and ledger navigation. Report-driven cards cover bank subscriptions, Stats, Reading Board, albums, projects, and areas. Snippets, session toggles, and versioned APIs connect these views to Bob and other Bob plugins.",
+            "sync": "synced",
+            "vault": "enabled",
+            "configured": true,
+            "deployment": {
+              "status": "uncommitted",
+              "source_root": "/home/bryan/.local/state/sase/workspaces/bobs-org/bob-cli/bob-cli_15/sase/repos/linked/bob-plugins",
+              "source_head": "d21323dc88e1632d76ae14eceb537b6ac7a8bf5a",
+              "host": "athena",
+              "deployed_at": "2026-11-27T00:59:31Z"
+            }
+          },
+          {
+            "id": "bob-mail",
+            "version": "0.3.0",
+            "description": "Link, open, refresh, and send saved Gmail threads from Obsidian.",
+            "sync": "synced",
+            "vault": "enabled",
+            "configured": true,
+            "deployment": {
+              "status": "clean",
+              "source_root": "/home/bryan/.local/state/sase/workspaces/bobs-org/bob-cli/bob-cli_12/sase/repos/linked/bob-plugins",
+              "source_head": "b7f17a51a58cdb44608df3fe48b689fba1005f87",
+              "host": "athena",
+              "deployed_at": "2026-11-27T00:10:36Z"
+            }
+          },
+          {
+            "id": "bob-navigation-hotkeys",
+            "version": "2.107.12",
+            "description": "Requirement lines refuse lane gestures; Ctrl+Shift+P opens the owner's Task Card. `[S` / `]S` jump to the first task of the previous / next occupied review group, cycling. Ctrl+Shift+P always opens the Task Card, a focused first screen with exact P-level previews. Ctrl+Shift+B is Ctrl+Shift+P then `b`: it opens the Task Card's Depends on stage for the task, a Task Link's linked task, or a counted `N<Ctrl+Shift+B>` batch; Esc, q, or Ctrl+[ close it without writing, and its More section opens a property's value stage. Ctrl+Shift+Alt+B is Ctrl+Shift+P then `⇧B`: it opens the Blocks stage for a task or Task Link, supports counted `N<Ctrl+Shift+Alt+B>`, and works from Depends-On and BLOCKS lines, where Ctrl+Shift+P on a BLOCKS line also opens the owner’s stage directly. On an inbox task every non-closing Task Card answer, the Ctrl+Shift+Enter toggle, and Alt+N ask where the task goes before writing and move there. Open and manage related notes, tabs, and task properties, including priority levels that roll scheduled dates. Ctrl+Enter on the card takes the recommended roll, decay, or cancel from the previewed ladder, including counted and Task Link batches. Scheduling a date opens one combined Reason and Work summary review; a Pending or Next task can record an optional Work Log summary as a stamped `*YYYY-MM-DD HH:MM*` entry under a WORK LOG child. A Cancel action closes tasks as Cancelled with an optional reason kept in a first-child Cancel Log. Alt+F and Ctrl+Alt+F ask due WIP and Next tasks why they stay on their rung, and ask due Ready keeps why they stay; every counted keep on every rung writes one rung-qualified Rotten Log entry in one undo (blank logs no reason given), while early and Today-linked lane keeps stamp quietly with no prompt and no entry. Freshness gestures never ask for or write a Work Log summary. Counted N<Alt+F> and Task Link sessions show one Keep reason prompt; one Enter submits it. Each counted keep gets its own rung-qualified entry; Ready at-limit targets still skip unstamped and unlogged. The decay card shows the logged keeps in its header; Enter steps one rung (WIP → Next → Ready → priority, with the bottom level rolling in place), while Alt+F opens Stay and records its reason in Rotten Log. Step and Drop also log their rung event in the same undo as the task change; Ready alone offers Less often and explicit levels. On a landed RECURRING row both write nothing, show the recurring-tier notice, and stay. Ctrl+Enter on the PRE/POST row the review walk just landed on completes it and advances within the group when another live row remains; from the last PRE row onto the next group's first due row (nav api v3). Stage-ending completions append `· STAGE ✓`. `]s` / `[s` away from the current review task first return to it. The Task Card level strip and priority notices render the shared signal-bar priority mark through the bob-ledger-tools api.priorityMarks v1 namespace, falling back to the Lucide signal icons without it. The Task Card header's BLOCKED lane chip renders the shared blocked-reason miniature with its After / Until / Via reason list through the bob-ledger-tools api.blockMarks v1 namespace, and the P1-P4 strip shows a hollow teaching digit beside each level's bars, both falling back to today's look without it. Alt+[ / Alt+] on a Pomodoro Task Link toggles the linked task between Next and In Progress — asking once for an optional Work Log summary when moving back to Next — through the nav api.taskLinkLane v1 namespace. A planned-task close with offers opens an unmarked grouped picker; only marked links apply. `Tab` toggles and advances; empty-filter `Space` toggles in place; filtered `Space` types. V2 adds leaf-project keep-moving groups: why captions, `not dependents` tag, lane names, blocked/scheduled/hidden fold, last in mixed lists. V3 adds titled 🪢 relation groups with why captions, `your links · not dependents` tag, fold, lane names, and link-2 icon for all-relation pickers. nav api.notice v3 shows the pulled-in summary. Review-row closes add `successorNotice` to the walk toast. bob-ledger-tools api.stats journals each counted ]s answer and outcome. Depends-On writes now mirror open dependents into generated 🧱 BLOCKS lines, in the same-note transaction or a checked cross-note follow-up, including counted, marked, Ctrl+D, hand-edit (and undo), conversion, and Ctrl+Shift+M paths. Adding an open prerequisite from Ctrl+Shift+P consumes the newly Blocked task's live links from today's open Pomodoros by resolved task identity; link-only bullets with child notes become the task's clean display text and keep those notes. It removes only entries this gesture emptied, leaves childless placeholders alone, and preserves closed timed rows. Cmd+Enter first runs the bob-chips command chip the cursor targets (an ambiguous or refused chip shows its reason and stops there); otherwise, on a reading task, Task Link, or managed embed it opens its source_pdf in Highlights without vault writes, while other targets retain Obsidian’s new-tab behavior. Turns on Templater's device-local \"Trigger on file creation\" when it is unset, so Cmd+N and other new notes get the vault's folder template (_templates/new_note.md). Only the BLOCKS chips in bob-ledger-tools use nav `api.blocks` v1, for ＋ and hover ×. The nav api gains an additive `openReferencePdf(path)` member (Promise of `{ok, reason?}`; the api `version` is unchanged) so the bob-ledger-tools Reading Board can hand a reference PDF to Highlights without vault writes. `Z` (mapped in the vault vimrc) or the \"Zoom image on cursor line\" command opens the image or video on the cursor line — a wiki reference, Markdown reference, or path-only image/video bullet imported through bob — in a full-window viewer with keyboard and mouse zoom and pan; `y` copies its recorded original path (or the vault path / URL), and `r` restores only the picked link to a present recorded original path in one undoable edit. Native image clicks are unchanged. Task relations use 🪢 LINKS and generated LINKED FROM rows; nav api.relations v1 opens either stage and removes live links. The Task Card offers Links to (l) and Linked from (⇧L), with Ctrl+Shift+L and Ctrl+Shift+Alt+L commands; on a Task Link they open the linked task's stage in its own note, and on a Depends-On line they open the owner's. CURRENT shows existing links or sources, Enter applies or removes, Ctrl+Enter edits a relation label, `~` in the filter flips direction, and Ctrl+D clears all outgoing Links to relations while refusing generated Linked from rows. Counted Ctrl+Shift+L applies one target to every selected source; reverse counted links are refused. Alt+P applies the Task Card recommendation in one key, sets P1 on a task with no priority, stays hidden for immediate rolls and decays, and waits on the visible card before cancellation. `]s` landings end their toast with the `Alt+P` roll preview from nav `api.quickRoll` v1. Pomodoro move and rename pickers offer recent task types with component swatches and near-duplicate hints; rename previews count linked task type changes; Ctrl+D hides or restores Recent suggestions only. `]w` / `[w` (mapped in the vault vimrc) walk Pending, Next, and Ready tasks off today's plan — the dash PENDING/NEXT/READY sections — with a lane-colored toast and walk rail; `]W` / `[W` jump to the first task of the next / previous lane, cycling. [n` / `]n` (mapped in the vault vimrc) open the note's previous / next labeled link; `]]` / `[[` repeat the last bracket walk — `]s` review, `]w` lanes, or `]n` links — forward / backward, remembered per device. `]}` / `[{` repeat that family's uppercase jump — `]S` / `[S` review groups or `]W` / `[W` lanes, `]N` / `[N` link groups, or `]B` / `[B` bank days. Ctrl+Shift+- changes the current note's parent: a panel pre-filled with the current parent ranks existing notes, previews the new ancestry, refuses cycles, and rewrites only the `parent:` frontmatter line as a quoted wikilink in one undo. The status bar always shows the bracket-repeat mode as `[[ s w n b ]]` with the active walk lit; click a letter to switch. Ctrl+S splits the selected open merged Pomodoro by type: two types split the right one at once, three or more open a picker with an All row and Tab-marked type rows, and the Bob: Split Pomodoro by type palette command does the same with no default hotkey. Ctrl+Shift+T splits the bullet under the cursor into its own task (counted `N<Ctrl+Shift+T>` takes that bullet plus the next N siblings, and a visual selection splits every touched head line), leaving a live link stub and landing the cursor on the first new task in one undo. A merge label in Ctrl+Shift+L, counted Ctrl+Shift+L, and Ctrl+Shift+Alt+L previews and commits through `bob task merge` via the Bob Ledger Tools api.taskMerge namespace, with the consequence strip, an offer pick, an Undo merge notice, and a mobile refusal. `api.quickRoll` previews carry additive `parts`. Delete current file asks for y before trashing an established, journal, bob-managed, or parent note, or any file right after another delete; fresh notes still delete at once. Disk reloads of an open note stay out of that editor's undo history, so Ctrl+R survives background writes and u undoes your own edit. `]b` / `[b` walk bank rows (waiting rows first) and `]B` / `[B` jump bank days, with `]]` / `[[` and `]}` / `[{` repeats, a `[[ s w n b ]]` selector,  and per-family `s/w/b` attention (a dot off-family, its hue as letter ink on the selected family) through nav `api.walkMode` v7. `Ctrl+W` arms window keys (`h`/`l` focus, `w` cycles, `H`/`L` move tab, `v` split, `1`–`9` jump to a numbered tab); see Window keys (Ctrl+W). A navigation-owned close of a Gmail Task opens the Mail Close Card; only y confirms, and any other key keeps the task open. The api.mailCloseGuard v1 namespace classifies targets and carries a confirmed-identities token into downstream close writers.",
+            "sync": "synced",
+            "vault": "enabled",
+            "configured": true,
+            "deployment": {
+              "status": "clean",
+              "source_root": "/home/bryan/.local/state/sase/workspaces/bobs-org/bob-cli/bob-cli_12/sase/repos/linked/bob-plugins",
+              "source_head": "b7f17a51a58cdb44608df3fe48b689fba1005f87",
+              "host": "athena",
+              "deployed_at": "2026-11-27T00:10:36Z"
+            }
+          },
+          {
+            "id": "bob-project-tasks",
+            "version": "1.2.0",
+            "description": "Snapshot notes to Highlights.",
+            "sync": "synced",
+            "vault": "enabled",
+            "configured": true,
+            "deployment": {
+              "status": "clean",
+              "source_root": "/home/bryan/.local/state/sase/workspaces/bobs-org/bob-cli/bob-cli_12/sase/repos/linked/bob-plugins",
+              "source_head": "b7f17a51a58cdb44608df3fe48b689fba1005f87",
+              "host": "athena",
+              "deployed_at": "2026-11-27T00:10:36Z"
+            }
+          },
+          {
+            "id": "bob-vim-surround",
+            "version": "1.5.2",
+            "description": "Add vim-surround ys motions, cs changes, ds deletes, and dot-repeat to Obsidian Vim mode.",
+            "sync": "synced",
+            "vault": "enabled",
+            "configured": true,
+            "deployment": {
+              "status": "clean",
+              "source_root": "/home/bryan/.local/state/sase/workspaces/bobs-org/bob-cli/bob-cli_12/sase/repos/linked/bob-plugins",
+              "source_head": "b7f17a51a58cdb44608df3fe48b689fba1005f87",
+              "host": "athena",
+              "deployed_at": "2026-11-27T00:10:36Z"
+            }
+          },
+          {
+            "id": "bob-vim-yank-flash",
+            "version": "0.1.1",
+            "description": "Briefly highlight the exact text a Vim yank copies in Obsidian's Vim mode.",
+            "sync": "synced",
+            "vault": "enabled",
+            "configured": true,
+            "deployment": {
+              "status": "clean",
+              "source_root": "/home/bryan/.local/state/sase/workspaces/bobs-org/bob-cli/bob-cli_12/sase/repos/linked/bob-plugins",
+              "source_head": "b7f17a51a58cdb44608df3fe48b689fba1005f87",
+              "host": "athena",
+              "deployed_at": "2026-11-27T00:10:36Z"
+            }
+          },
+          {
+            "id": "task-status-cycler",
+            "version": "1.64.2",
+            "description": "Complete Pomodoros while carrying worked-on/deferred links, narrowing the closed name to worked types and shedding uncarried types from the created Pomodoro, and copying each Task Link sub-bullet's sub-sub-bullets into the linked task's Work Log, toggle empty Pomodoro placeholders/sub-bullets with Ctrl+Alt+] including named placeholders, toggle Obsidian tasks with Ctrl+Shift+] (a Vim count N<Ctrl+Shift+]> toggles the cursor item and the next N sibling items together, prompting at most once and sending the whole group to one section) — always prompting for promotion destinations when exact Tasks exists (Enter defaults to Tasks conversion, including in place when already there; typing creates a new section; non-Tasks stays plain; empty non-Tasks source sections are removed) and for demotions from Tasks — cycle Blocked tasks out with option+[/option+], recover affected Blocked dependents, propagate Ctrl+Enter to embedded task transclusions, and preserve embedded-task behavior. Ctrl+Enter on a Task Link closes the linked task and strikes the link, embedded or plain, including under a closed Pomodoro, where the 🍅 is dropped on close and restored on reopen. A versioned `api.recoverBlockedDependents` lets other plugins recover Blocked dependents without retiring references; dependents with a strictly future `scheduled` date stay Blocked, and Ctrl+Enter on a Task Link to a Cancelled task shows a notice instead of completing the owning Pomodoro. Depends-On lines (managed ⛓️ **DEPENDS ON:** child bullets) are never struck, restored, reformatted, or tree-closed: Ctrl+Enter closes or reopens the linked prerequisite only, and Alt+[ / Alt+] cycle the link under the cursor. Ctrl+Enter on the PRE/POST row the bob-navigation-hotkeys review walk just landed on hands off to nav api v2, which completes the row and advances within its group when another live row remains. Alt+[ / Alt+] on a Pomodoro Task Link instead toggles the linked task between Next and In Progress through the nav api.taskLinkLane v1 namespace, never reformatting the bullet. Closing a planned task recovers what it unblocked and offers successor choices through nav `api.successors` v3 (hand-offs, project residents, project-finished pull-ins, keep-moving rows for leaf sub-projects when `plan.keep_moving` is enabled, and configured `relations.successor_labels` standing offers on managed Done and on Unlink of a Pending task with no live Task Link left today through `api.offerParkedSuccessors` (api v4)) — dependency and project offers gated on `[id::]`, relation offers from accepted LINKS even without ids — through open editors or preimage-checked vault writes, honouring `plan.link_unblocked` — and reports the result through nav `api.notice` v3 for relation and keep-moving rows (plain relation copy when notice is older than v3), the existing Unblocked card for other rows, the walk toast on review landings, or a plain notice without a compatible nav API. Reopening the predecessor the same day through Ctrl+Enter takes back untouched successor links and restores their statuses from an in-memory receipt; Alt+]/Alt+[ moves into Done join the same pass, while moves into Cancelled recover only. Project Schedule comes from the ^prj task; tagged #prj_is_blocked residents stay Blocked until project recovery, which strips the tag from every open resident including those that remain Blocked for their own reasons, never edits closed lines, and records [unblocked::] through ledger-tools v12 when available (otherwise it recovers with a console warning, including on the successor apply path). Alt+] / Alt+[ on a [?] ^prj that leaves the project with no remaining reason — a future date or an open Depends-On target resolved against the vault; a missing id never blocks — recover those open residents in the same gesture, including when Alt+[ cancels ^prj so the note is no longer project(T), and when the cycled ^prj is transcluded from another note. A tagged #prj_is_blocked ^prj inherits its parent project’s Blocked reason and cannot be cycled; closing its last open sub-project pulls in the parent ^prj. LINKS and LINKED FROM rows are not Pomodoro Task Links; Ctrl+Enter and Alt+] / Alt+[ act on their target root-only without formatting the row. Ctrl+Enter on a timed Pomodoro stamps the closed row `[off:: Nm]` when every Task Link it keeps is `#offclock` (aliases `#off-clock`, `#untracked`) and `[t:: Nm]` otherwise, with a notice when a session stays on the clock while linking an off-clock task; timed MEET closes place the carried continuation after the last open Pomodoro and leave the cursor on the next open entry. Requirement lines refuse gestures with the contract copy; Alt+[ drops with a reason and Alt+] restores. Ctrl+] toggles a note and a requirement under a task, with the first requirement scooping loose notes into NOTES, and typing `- [` then space expands to `- [ ] ` with overtype absorption, atomic Backspace, Vim insert support, and one Undo back to the plain space. Closing a Gmail Task through Ctrl+Enter, Alt+[ / Alt+], a counted range, a Task Link, a transclusion, a Pomodoro cascade, an offer-close, or a checkbox click opens the Mail Close Card first. Only `y` confirms; any other key keeps the task open. Without Bob Navigation Hotkeys the close is refused.",
+            "sync": "synced",
+            "vault": "enabled",
+            "configured": true,
+            "deployment": {
+              "status": "clean",
+              "source_root": "/home/bryan/.local/state/sase/workspaces/bobs-org/bob-cli/bob-cli_12/sase/repos/linked/bob-plugins",
+              "source_head": "b7f17a51a58cdb44608df3fe48b689fba1005f87",
+              "host": "athena",
+              "deployed_at": "2026-11-27T00:10:36Z"
+            }
+          }
+        ]
+      }
+    },
+    "counters": {
+      "initialLaunchMs": 8697,
+      "instrumentedStartOffsetMs": 976,
+      "cdpEvents": [
+        "Runtime.executionContextCreated",
+        "Runtime.consoleAPICalled",
+        "Page.frameStartedNavigating",
+        "Page.frameStartedLoading",
+        "Runtime.executionContextsCleared",
+        "Page.frameNavigated",
+        "Page.domContentEventFired",
+        "Page.loadEventFired",
+        "Page.frameStoppedLoading"
+      ],
+      "heapSamples": [
+        49826509,
+        49826509,
+        49882761,
+        49887545
+      ],
+      "relationProbe": {
+        "hasLedgerTools": true,
+        "live": [
+          {
+            "id": "block-id-prompt",
+            "loaded": true,
+            "version": "1.46.0"
+          },
+          {
+            "id": "bob-articles",
+            "loaded": true,
+            "version": "0.3.0"
+          },
+          {
+            "id": "bob-chips",
+            "loaded": true,
+            "version": "0.16.0"
+          },
+          {
+            "id": "bob-command-mode",
+            "loaded": true,
+            "version": "0.5.0"
+          },
+          {
+            "id": "bob-emoji",
+            "loaded": true,
+            "version": "0.2.0"
+          },
+          {
+            "id": "bob-ledger-tools",
+            "loaded": true,
+            "version": "1.170.1"
+          },
+          {
+            "id": "bob-mail",
+            "loaded": true,
+            "version": "0.3.0"
+          },
+          {
+            "id": "bob-navigation-hotkeys",
+            "loaded": true,
+            "version": "2.107.12"
+          },
+          {
+            "id": "bob-project-tasks",
+            "loaded": true,
+            "version": "1.2.0"
+          },
+          {
+            "id": "bob-vim-surround",
+            "loaded": true,
+            "version": "1.5.2"
+          },
+          {
+            "id": "bob-vim-yank-flash",
+            "loaded": true,
+            "version": "0.1.1"
+          },
+          {
+            "id": "task-status-cycler",
+            "loaded": true,
+            "version": "1.64.2"
+          }
+        ],
+        "loadedIds": [
+          "block-id-prompt",
+          "bob-articles",
+          "bob-chips",
+          "bob-command-mode",
+          "bob-emoji",
+          "bob-ledger-tools",
+          "bob-mail",
+          "bob-navigation-hotkeys",
+          "bob-project-tasks",
+          "bob-vim-surround",
+          "bob-vim-yank-flash",
+          "task-status-cycler"
+        ],
+        "loadedCount": 12,
+        "ready": true,
+        "keys": 2,
+        "nonMd": 0,
+        "hasDaily": false,
+        "hasNoteA": true,
+        "hasRelation": true,
+        "manifestVersion": "1.170.1"
+      },
+      "pluginDiagnostics": {
+        "loadedIds": [
+          "block-id-prompt",
+          "bob-articles",
+          "bob-chips",
+          "bob-command-mode",
+          "bob-emoji",
+          "bob-ledger-tools",
+          "bob-mail",
+          "bob-navigation-hotkeys",
+          "bob-project-tasks",
+          "bob-vim-surround",
+          "bob-vim-yank-flash",
+          "task-status-cycler"
+        ],
+        "loadedCount": 12,
+        "probeError": null
+      },
+      "communityGate": {
+        "wasEnabled": false,
+        "setEnableCalled": true,
+        "nowEnabled": true
+      }
+    }
+  },
+  "managedFileHashes": {
+    "block-id-prompt": {
+      "version": "1.46.0",
+      "manifest.json": "abe254d4a01f865b",
+      "main.js": "c8ebc55e70193a1e",
+      "styles.css": "b3c53115b9b70638"
+    },
+    "bob-articles": {
+      "version": "0.3.0",
+      "manifest.json": "b951b3a07dfd3b37",
+      "main.js": "13401fc979670760",
+      "styles.css": "93176b1c3c780ea2"
+    },
+    "bob-chips": {
+      "version": "0.16.0",
+      "manifest.json": "0a50370aac5ee98e",
+      "main.js": "5e2a8664f6129a92",
+      "styles.css": "b1b3a1bb5a85b896"
+    },
+    "bob-command-mode": {
+      "version": "0.5.0",
+      "manifest.json": "027845c1ea3b7655",
+      "main.js": "1eb763a45cd8cbc0",
+      "styles.css": "8f13ae6e83597990"
+    },
+    "bob-emoji": {
+      "version": "0.2.0",
+      "manifest.json": "b8e2eac3f7101a7f",
+      "main.js": "daed561adb6eb31e",
+      "styles.css": "0c6f92b834b1ffc0"
+    },
+    "bob-ledger-tools": {
+      "version": "1.170.1",
+      "manifest.json": "7bb50dd8a22309b7",
+      "main.js": "c01acb82e1449232",
+      "styles.css": "54f3f1d44fa8576a"
+    },
+    "bob-mail": {
+      "version": "0.3.0",
+      "manifest.json": "b43a4074412dfb73",
+      "main.js": "ebd0bb7be8eab756",
+      "styles.css": "70729a096a99b312"
+    },
+    "bob-navigation-hotkeys": {
+      "version": "2.107.12",
+      "manifest.json": "69ac69bfb273aca8",
+      "main.js": "45b9f1cb20e4e5fc",
+      "styles.css": "29177df65c1aacc7"
+    },
+    "bob-project-tasks": {
+      "version": "1.2.0",
+      "manifest.json": "73eaab32bfae5465",
+      "main.js": "d288a4569ecf63aa",
+      "styles.css": null
+    },
+    "bob-vim-surround": {
+      "version": "1.5.2",
+      "manifest.json": "4c62612c40f4e9c1",
+      "main.js": "3f5585028fb2b95f",
+      "styles.css": null
+    },
+    "bob-vim-yank-flash": {
+      "version": "0.1.1",
+      "manifest.json": "7f9d045ba7bd8666",
+      "main.js": "212f9fae284434b2",
+      "styles.css": "589ba4c1f6685462"
+    },
+    "task-status-cycler": {
+      "version": "1.64.2",
+      "manifest.json": "7d4c62f62d5c36f8",
+      "main.js": "e55ec8726d81e605",
+      "styles.css": "214c213ebd1fb132"
+    }
+  },
+  "expectedPlugins": [
+    {
+      "id": "block-id-prompt",
+      "version": "1.46.0"
+    },
+    {
+      "id": "bob-articles",
+      "version": "0.3.0"
+    },
+    {
+      "id": "bob-chips",
+      "version": "0.16.0"
+    },
+    {
+      "id": "bob-command-mode",
+      "version": "0.5.0"
+    },
+    {
+      "id": "bob-emoji",
+      "version": "0.2.0"
+    },
+    {
+      "id": "bob-ledger-tools",
+      "version": "1.170.1"
+    },
+    {
+      "id": "bob-mail",
+      "version": "0.3.0"
+    },
+    {
+      "id": "bob-navigation-hotkeys",
+      "version": "2.107.12"
+    },
+    {
+      "id": "bob-project-tasks",
+      "version": "1.2.0"
+    },
+    {
+      "id": "bob-vim-surround",
+      "version": "1.5.2"
+    },
+    {
+      "id": "bob-vim-yank-flash",
+      "version": "0.1.1"
+    },
+    {
+      "id": "task-status-cycler",
+      "version": "1.64.2"
+    }
+  ],
+  "note": "The fixture verifies the managed Bob plugin build, not the user's full third-party plugin/settings combination."
+}

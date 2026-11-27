@@ -404,6 +404,7 @@ async function run(args) {
     prerequisites: [], measurements: {}, bobInvocations: { count: 0 }, pluginSource: pluginProvenance(),
     addFilePropertyCommand: null, profile: args.profile || "full", skippedChecks: [],
   };
+  const runtimeExceptionStateReads = [];
   const outDir = path.resolve(args.out || path.join(os.tmpdir(), "bob-frontmatter-takeover-e2e-shots-" + crypto.randomBytes(4).toString("hex")));
   const reportPath = path.resolve(args.report || path.join(outDir, "frontmatter-takeover-report.json"));
   Object.assign(report, { reportPath, screenshotDirectory: outDir });
@@ -729,7 +730,16 @@ async function run(args) {
       const details = params.exceptionDetails || {};
       const row = { check: activeRun.currentCheck?.name || null,
         text: details.text || "", description: details.exception?.description || "", url: details.url || "", lineNumber: details.lineNumber || null };
-      report.consoleExceptions.push(row);
+      runtimeExceptionStateReads.push(client.evaluate(`(() => {
+        const manager = app.plugins || {};
+        const manifests = manager.manifests || {};
+        return {
+          enabled: Array.from(manager.enabledPlugins || []),
+          manifestEntries: Object.keys(manifests).map((id) => ({ id, name: manifests[id]?.name || null })),
+          pluginIds: Object.keys(manager.plugins || {}),
+        };
+      })()`).then((state) => { row.pluginState = state; }).catch(() => {})
+        .finally(() => report.consoleExceptions.push(row)));
     });
     client.on("Runtime.consoleAPICalled", (params) => {
       if (params.type === "error") report.consoleErrors.push((params.args || []).map((arg) => arg.value ?? arg.description ?? "").join(" ").slice(0, 1500));
@@ -738,7 +748,7 @@ async function run(args) {
     const trustAction = await shared.trustCommunityPlugins(client);
     report.pluginStartup = { trustAction };
     await waitFor(client, "Boolean(app.plugins.plugins['bob-ledger-tools']) && app.workspace.layoutReady", Boolean, "bob-ledger-tools startup", 45_000);
-    report.app = await client.evaluate("({ version: (/obsidian\\/([\\d.]+)/i.exec(navigator.userAgent) || [])[1] || '', enabled: Array.from(app.plugins.enabledPlugins || []), manifest: app.plugins.manifests['bob-ledger-tools']?.version || null, helpers: Boolean(app.plugins.plugins['bob-ledger-tools']?.constructor?.helpers?.propertyCardFrontmatterOwnMounted) })");
+    report.app = await client.evaluate("({ version: (/obsidian\\/([\\d.]+)/i.exec(navigator.userAgent) || [])[1] || '', enabled: Array.from(app.plugins.enabledPlugins || []), manifest: app.plugins.manifests['bob-ledger-tools']?.version || null, invalidManifests: Object.keys(app.plugins.manifests || {}).filter((id) => !app.plugins.manifests[id]?.name), helpers: Boolean(app.plugins.plugins['bob-ledger-tools']?.constructor?.helpers?.propertyCardFrontmatterOwnMounted) })");
     check("plugin-loaded", report.app.enabled.includes(PLUGIN_ID) && report.app.helpers && report.app.manifest === report.pluginSource.version, report.app);
     await shared.collapseSidebars(client);
     await shared.setViewport(client, 1400, 1000);
@@ -1008,6 +1018,38 @@ async function run(args) {
     });
     await attempt("home-card-gestures-live", async () => {
       const failures = [];
+      const navInstrumentation = await ctx.page.ev(`(() => {
+        const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
+        if (!plugin) return { installed: false, reason: "plugin unavailable" };
+        window.__bobFrontmatterTakeoverHomeCardNavTrace = [];
+        const original = plugin.homeCardHandleVisibleBodyNavigation;
+        if (typeof original !== "function") return { installed: false, reason: "handler unavailable" };
+        plugin.homeCardHandleVisibleBodyNavigation = function(event, view) {
+          const path = this.homeCardLivePath(view);
+          const body = this.homeCardVisibleBodyLine(view, path);
+          const trace = {
+            key: event?.key || "",
+            path: path || null,
+            registered: this.homeCardVisibleBodyNavigationRegistered === true,
+            rootClass: String(view?.dom?.className || ""),
+            cardPresent: Boolean(view?.dom?.querySelector?.(".bob-home-card")),
+            bodyFrom: Number.isInteger(body?.from) ? body.from : null,
+            bodyLineNumber: Number.isInteger(body?.from) && view?.state?.doc?.lineAt
+              ? view.state.doc.lineAt(body.from).number - 1 : null,
+            bodyLineText: Number.isInteger(body?.from) && view?.state?.doc?.lineAt
+              ? view.state.doc.lineAt(body.from).text : null,
+            selectionBefore: Number.isInteger(view?.state?.selection?.main?.head)
+              ? view.state.selection.main.head : null,
+          };
+          const handled = original.call(this, event, view);
+          trace.handled = handled === true;
+          trace.selectionAfter = Number.isInteger(view?.state?.selection?.main?.head)
+            ? view.state.selection.main.head : null;
+          window.__bobFrontmatterTakeoverHomeCardNavTrace.push(trace);
+          return handled;
+        };
+        return { installed: true, registered: plugin.homeCardVisibleBodyNavigationRegistered === true };
+      })()`);
       const cases = [
         { path: P.area, kind: "area", title: "Area" },
         { path: P.project, kind: "project", title: "Project" },
@@ -1028,6 +1070,7 @@ async function run(args) {
       };
       const rows = [];
       for (const row of cases) {
+        await ctx.page.ev("window.__bobFrontmatterTakeoverHomeCardNavTrace = []");
         await ctx.page.open(ctx.main, row.path, "live");
         let probe = await ctx.page.waitOwned(ctx.main, "live", row.title + " gesture setup");
         failures.push(...lib.homeCardFailures(probe, { kind: row.kind }));
@@ -1067,6 +1110,7 @@ async function run(args) {
           return { lineNumber: line.number - 1, lineText: line.text };
         })()`);
         const vimProbe = await ctx.page.probe(ctx.main);
+        const navTrace = await ctx.page.ev("window.__bobFrontmatterTakeoverHomeCardNavTrace || []");
         if (!cursorPlaced?.ok || visibleBodyIndex < 0 || cursorAfter?.lineNumber !== visibleBodyIndex
           || cursorAfter?.lineText !== sourceLines[visibleBodyIndex]) {
           failures.push(row.title + ": k/gg/Up landed in hidden YAML/title content instead of visible body text");
@@ -1108,7 +1152,7 @@ async function run(args) {
           closeResults.push({ key: close.name, focused, closed, opened: opened.modal });
         }
         rows.push({ path: row.path, owned: probe, drawerOpen, folded, expanded,
-          vim: { cursorPlaced, cursorAfter, visibleBodyIndex }, settings, closeResults, generic });
+          vim: { cursorPlaced, cursorAfter, visibleBodyIndex, navInstrumentation, navTrace }, settings, closeResults, generic });
       }
       return { ok: failures.length === 0, rows, failures };
     });
@@ -1810,6 +1854,8 @@ async function run(args) {
       return {
         enabled: Array.from(manager.enabledPlugins || []).includes(${JSON.stringify(PLUGIN_ID)}),
         loaded: Boolean(manager.plugins?.[${JSON.stringify(PLUGIN_ID)}]),
+        manifestKeys: Object.keys(manager.manifests || {}),
+        invalidManifests: Object.keys(manager.manifests || {}).filter((id) => !manager.manifests[id]?.name),
       };
     })()`);
     const enableLedgerTools = async () => ctx.page.ev(`(async () => {
@@ -1821,10 +1867,12 @@ async function run(args) {
       return {
         enabled: Array.from(manager.enabledPlugins || []).includes(${JSON.stringify(PLUGIN_ID)}),
         loaded: Boolean(manager.plugins?.[${JSON.stringify(PLUGIN_ID)}]),
+        manifestKeys: Object.keys(manager.manifests || {}),
+        invalidManifests: Object.keys(manager.manifests || {}).filter((id) => !manager.manifests[id]?.name),
       };
     })()`);
     const waitAlbumSyncIdle = async () => {
-      await ctx.page.ev(`(async () => {
+      return await ctx.page.ev(`(async () => {
         const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
         const deadline = Date.now() + 10000;
         while (Date.now() < deadline) {
@@ -2539,6 +2587,7 @@ async function run(args) {
       return { ok: missingShots.length === 0 && invalidShots.length === 0 && report.screenshots.length >= needed.length,
         missingShots, invalidShots, count: report.screenshots.length };
     });
+    await Promise.all(runtimeExceptionStateReads);
     await finalCheck("no-console-exceptions", async () => ({
       ok: report.consoleExceptions.length === 0, failures: report.consoleExceptions,
     }));

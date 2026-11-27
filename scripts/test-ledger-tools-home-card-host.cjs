@@ -431,12 +431,10 @@ test("home-card gg and Up stop at visible body text without swallowing insert-mo
   const plugin = makeHostPlugin({ app: { vault: { getConfig: () => true } } });
   plugin.homeCardLivePath = () => "work.md";
   plugin.homeCardVisibleBodyLine = () => ({ from: 40 });
-  const scope = {
+  const scope = { classList: { contains: () => false }, querySelector: () => ({}) };
+  const editorRoot = {
     classList: { contains: (name) => ["bob-property-card-owns-frontmatter", "bob-property-card-owns-title"].includes(name) },
     querySelector: () => ({}),
-  };
-  const editorRoot = {
-    classList: { contains: () => false },
     closest: (selector) => selector === ".markdown-source-view" ? scope : null,
   };
   const view = {

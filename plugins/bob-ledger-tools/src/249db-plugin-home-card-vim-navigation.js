@@ -49,11 +49,10 @@ Object.assign(BobLedgerToolsHomeCardMixin.prototype, {
     try {
       if (!event || event.isComposing || event.keyCode === 229) return false;
       const path = this.homeCardLivePath(view);
-      // Ownership is attached to Obsidian's markdown-source-view wrapper;
-      // CodeMirror's EditorView is nested inside it and does not carry the
-      // ownership classes itself.
+      // The ownership StateFields put their classes on CodeMirror's editor
+      // element (`view.dom`), which also contains the mounted home-card widget.
       const editorRoot = view?.dom;
-      const scope = editorRoot?.closest?.(".markdown-source-view") || editorRoot;
+      const scope = editorRoot;
       if (!path || !scope?.classList?.contains?.("bob-property-card-owns-frontmatter")
         || !scope.classList.contains("bob-property-card-owns-title")
         || !scope.querySelector?.(".bob-home-card")) {
@@ -109,9 +108,9 @@ Object.assign(BobLedgerToolsHomeCardMixin.prototype, {
       if (this.homeCardVisibleBodyNavigationRegistered === true) return true;
       if (typeof EditorView?.domEventHandlers !== "function" || typeof this.registerEditorExtension !== "function") return false;
       const plugin = this;
-      this.registerEditorExtension(EditorView.domEventHandlers({
+      this.registerEditorExtension(Prec.highest(EditorView.domEventHandlers({
         keydown: (event, view) => plugin.homeCardHandleVisibleBodyNavigation(event, view),
-      }));
+      })));
       this.homeCardVisibleBodyNavigationRegistered = true;
       return true;
     } catch (_) {

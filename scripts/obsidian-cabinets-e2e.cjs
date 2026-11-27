@@ -40,6 +40,12 @@ const PROBE_SOURCE = `(() => {
   const cards = Array.from(root?.querySelectorAll?.("[data-card-kind]") || []).filter((node) => !embedded(node));
   const card = cards[0] || null;
   const details = card?.querySelector?.("[data-card-fold-role='details'][data-card-fold]") || null;
+  const foldControls = Array.from(card?.querySelectorAll?.("[data-card-fold]") || []).map((button) => ({
+    kind: button.getAttribute("data-card-fold"),
+    role: button.getAttribute("data-card-fold-role"),
+    source: button.getAttribute("data-card-fold-source"),
+    text: String(button.textContent || "").replace(/\\s+/g, " ").trim(),
+  }));
   const stack = card?.querySelector?.(".bob-property-card-cabinets") || root?.querySelector?.(".bob-property-card-cabinets");
   const panels = Array.from(stack?.querySelectorAll?.("[data-cabinet-kind]") || []).map((panel) => {
     const button = panel.querySelector(".bob-cabinet-toggle, [data-card-fold]");
@@ -78,6 +84,7 @@ const PROBE_SOURCE = `(() => {
     cardPresent: Boolean(card),
     cardCount: cards.length,
     cardText: String(card?.textContent || "").replace(/\\s+/g, " ").trim(),
+    foldControls,
     stackPresent: Boolean(stack),
     cabinetKinds: panels.map((row) => row.kind),
     panels,
@@ -180,6 +187,17 @@ async function openAndProbe(client, notePath, mode) {
   return probe;
 }
 
+async function settleProbe(client, predicate, label, timeout = 5_000) {
+  const deadline = Date.now() + timeout;
+  let latest = null;
+  do {
+    latest = await client.evaluate(PROBE_SOURCE, OPEN_TIMEOUT);
+    if (predicate(latest)) return latest;
+    await sleep(180);
+  } while (Date.now() < deadline);
+  return latest;
+}
+
 async function refreshProbe(client) {
   await sleep(100);
   return client.evaluate(PROBE_SOURCE, OPEN_TIMEOUT);
@@ -272,10 +290,14 @@ async function run(args) {
     const renderRows = [];
     for (const spec of lib.SPECS) {
       for (const mode of ["live", "reading"]) {
-        const probe = await openAndProbe(client, spec.path, mode);
+        await openAndProbe(client, spec.path, mode);
+        const probe = await settleProbe(client, (value) => value?.path === spec.path
+          && value?.mode === mode && value?.cardPresent && value?.cardKind === spec.kind
+          && JSON.stringify(value?.cabinetKinds || []) === JSON.stringify(spec.cabinets),
+        `settled ${spec.key} ${mode}`);
         const row = { fixture: spec.key, path: spec.path, mode, actualKind: probe.cardKind,
           expectedKind: spec.kind, cabinets: probe.cabinetKinds, expectedCabinets: spec.cabinets,
-          propertiesLast: probe.propertiesLast };
+          propertiesLast: probe.propertiesLast, foldControls: probe.foldControls };
         renderRows.push(row);
         check(`render-${spec.key}-${mode}`, probe.cardPresent && probe.cardKind === spec.kind
           && JSON.stringify(probe.cabinetKinds) === JSON.stringify(spec.cabinets)
@@ -322,7 +344,10 @@ async function run(args) {
     for (const kind of ["areas", "projects", "notebooks", "albums"]) {
       const panel = probe.panels.find((row) => row.kind === kind);
       if (!panel?.expanded) await clickSelector(client, `[data-cabinet-kind="${kind}"] .bob-cabinet-toggle`);
-      const mounted = await refreshProbe(client);
+      const mounted = await settleProbe(client, (value) => {
+        const candidate = value?.panels?.find((row) => row.kind === kind);
+        return candidate?.callouts?.length > 0 || Boolean(candidate?.error);
+      }, `rendered ${kind} cabinet body`, 8_000);
       const bodyCallout = mounted.panels.find((row) => row.kind === kind)?.callouts?.[0];
       const baseline = inlineBaseline[kind];
       contentParity.push({ kind, baselineRows: baseline?.rows, cabinetRows: bodyCallout?.rows,
@@ -404,16 +429,22 @@ async function run(args) {
     await sendKey(client, "1");
     probe = await refreshProbe(client);
     keyCheck("fast-underscore-one-no-overlay-flash", !probe.armed && !probe.footerText, probe);
-    // Palette command arms in Reading; the real footer chip is then clicked through CDP.
+    // Palette command arms in Reading. The walker-footer overlay is an
+    // aria-live status message, not an interactive chip; choose a cabinet by
+    // its advertised number through the same keyboard path as Live Preview.
     await openAndProbe(client, lib.PATHS.area, "reading");
     const command = await client.evaluate(`app.commands.executeCommandById(${JSON.stringify(`${PLUGIN_ID}:toggle-card-details`)})`);
     await sleep(180);
     probe = await refreshProbe(client);
     keyCheck("reading-palette-arms-pick", command !== false && probe.armed, { command, probe });
     if (probe.armed) {
-      await clickSelector(client, ".bob-walker-footer-overlay [data-cabinet-pick-kind], .bob-walker-footer-overlay button");
+      keyCheck("reading-pick-overlay-lists-numbered-kinds",
+        probe.footerText.includes("1 Albums") && probe.footerText.includes("2 Notebooks")
+          && probe.footerText.includes("3 Projects") && probe.footerText.includes("4 Areas"), probe.footerText);
+      await sendKey(client, "1");
       probe = await refreshProbe(client);
-      keyCheck("footer-chip-click-picks-and-disarms", !probe.armed, probe);
+      keyCheck("reading-palette-number-picks-and-disarms",
+        !probe.armed && probe.panels.find((row) => row.kind === "albums")?.expanded === true, probe);
     }
     // Status bar hidden: the view-local fallback stays available for the armed pick.
     await client.evaluate(`document.querySelector(".status-bar")?.style.setProperty("display", "none", "important")`);

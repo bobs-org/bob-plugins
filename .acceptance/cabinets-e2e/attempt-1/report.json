@@ -1,0 +1,1631 @@
+{
+  "startedAt": "2026-11-27T03:15:26.515Z",
+  "verdict": "NO-GO",
+  "gates": {
+    "cabinetsPreview": true,
+    "cardPreviewKinds": [
+      "notebook",
+      "prose"
+    ],
+    "refCardPreview": true
+  },
+  "source": {
+    "head": "a4bd99f27b1980539e7ebedf87e39c4897670f26",
+    "dirtyPaths": [
+      "docs/develop/validation.md",
+      "package.json",
+      "scripts/obsidian-cabinets-e2e-lib.cjs",
+      "scripts/obsidian-cabinets-e2e.cjs",
+      "scripts/test-obsidian-cabinets-e2e.cjs"
+    ],
+    "files": {
+      "plugins/bob-ledger-tools/manifest.json": "0e390cdb7fe74bac0be35b2643015c3cd3aa4bd63f2baf27ecf0b24ab679b07a",
+      "plugins/bob-ledger-tools/main.js": "67bc6938047a1ec4b29895eb5f45f09c45425822ff8ba355c4a84fe2eb891131",
+      "plugins/bob-ledger-tools/styles.css": "9d8f31a4b243e8644dde890af0837f91be08d01acc054cc17d4e8bfc24c42b39",
+      "plugins/bob-navigation-hotkeys/manifest.json": "69ac69bfb273aca82cac69a881f4d077e962de8ae099259ac06314e0f6ad84e7",
+      "plugins/bob-navigation-hotkeys/main.js": "45b9f1cb20e4e5fc5eb10f0ea237688763d58b94fce0e794976a041ccea830a7",
+      "plugins/bob-navigation-hotkeys/styles.css": "29177df65c1aacc7a0ab20ce51f21d7c4821d918a3c07bdb1fd6e6b688faaa33",
+      "scripts/obsidian-cabinets-e2e.cjs": "d5ffff0fa29aa8e2f8ca04e0568689672a4eb21042e67d47c322febca5b79080",
+      "scripts/obsidian-cabinets-e2e-lib.cjs": "8540535c188c79e0558be5c70f3da3be70eeab4f72f81f630b76f6357e4552e0",
+      "scripts/obsidian-home-cards-e2e-lib.cjs": "d55510ada40131d7b09f34e90bf07653cc9c7da08b4741d13e406b307bede1de",
+      "scripts/obsidian-record-card-e2e.cjs": "822a571a5e5a25c6c673af3d41369c8fd6a442260c32dc6a85d359ec93f6813f",
+      "scripts/obsidian-record-card-e2e-lib.cjs": "d3982f47524564a84972bc68fa4d0a639a199f6a18e13c67c921185c9e3a3a73",
+      "scripts/obsidian-record-card-workflows.cjs": "0c7cc84f04ebbb3d5176c74352f30fb9b09b04ca95f87c2da60227557168ee55",
+      "scripts/obsidian-record-card-workflow-lib.cjs": "1b4ab8df67a9015dad73f9efd214fac656978e99be94ba631d901787b74ff45a",
+      "scripts/obsidian-intention-card-e2e-lib.cjs": "ee121e69140d17e4de5f0ace92ce0a7e5392e448bb71d4584cba6fe4c1bea39a"
+    }
+  },
+  "scratch": {
+    "root": "/tmp/bob-cabinets-e2e-SPJyNZ",
+    "vault": "/tmp/bob-cabinets-e2e-SPJyNZ/vault",
+    "profile": "/tmp/bob-cabinets-e2e-SPJyNZ/profile",
+    "fixturePaths": [
+      "2026.md",
+      "2026/2026-Q4.md",
+      "2026/2026-W47.md",
+      "2026/20261120.md",
+      "area.md",
+      "bank.md",
+      "cabinet-context.canvas",
+      "cash.md",
+      "duplicate.md",
+      "eat.md",
+      "eat/place-001.md",
+      "eat/place-002.md",
+      "eat/place-003.md",
+      "eat/place-004.md",
+      "eat/place-005.md",
+      "eat/place-006.md",
+      "eat/place-007.md",
+      "eat/place-008.md",
+      "eat/place-009.md",
+      "eat/place-010.md",
+      "eat/place-011.md",
+      "eat/place-012.md",
+      "eat/place-013.md",
+      "eat/place-014.md",
+      "eat/place-015.md",
+      "eat/place-016.md",
+      "eat/place-017.md",
+      "eat/place-018.md",
+      "eat/place-019.md",
+      "eat/place-020.md",
+      "eat/place-021.md",
+      "eat/place-022.md",
+      "eat/place-023.md",
+      "eat/place-024.md",
+      "eat/place-025.md",
+      "eat/place-026.md",
+      "eat/place-027.md",
+      "eat/place-028.md",
+      "eat/place-029.md",
+      "eat/place-030.md",
+      "eat/place-031.md",
+      "eat/place-032.md",
+      "eat/place-033.md",
+      "eat/place-034.md",
+      "eat/place-035.md",
+      "eat/place-036.md",
+      "eat/place-037.md",
+      "eat/place-038.md",
+      "eat/place-039.md",
+      "eat/place-040.md",
+      "eat/place-041.md",
+      "eat/place-042.md",
+      "eat/place-043.md",
+      "eat/place-044.md",
+      "eat/place-045.md",
+      "eat/place-046.md",
+      "eat/place-047.md",
+      "eat/place-048.md",
+      "eat/place-049.md",
+      "eat/place-050.md",
+      "eat/place-051.md",
+      "eat/place-052.md",
+      "eat/place-053.md",
+      "eat/place-054.md",
+      "eat/place-055.md",
+      "eat/place-056.md",
+      "eat/place-057.md",
+      "eat/place-058.md",
+      "eat/place-059.md",
+      "eat/place-060.md",
+      "eat/place-061.md",
+      "eat/place-062.md",
+      "eat/place-063.md",
+      "eat/place-064.md",
+      "eat/place-065.md",
+      "eat/place-066.md",
+      "eat/place-067.md",
+      "eat/place-068.md",
+      "eat/place-069.md",
+      "eat/place-070.md",
+      "eat/place-071.md",
+      "eat/place-072.md",
+      "eat/place-073.md",
+      "eat/place-074.md",
+      "eat/place-075.md",
+      "eat/place-076.md",
+      "eat/place-077.md",
+      "eat/place-078.md",
+      "eat/place-079.md",
+      "eat/place-080.md",
+      "eat/place-081.md",
+      "eat/place-082.md",
+      "eat/place-083.md",
+      "eat/place-084.md",
+      "eat/place-085.md",
+      "eat/place-086.md",
+      "eat/place-087.md",
+      "eat/place-088.md",
+      "eat/place-089.md",
+      "eat/place-090.md",
+      "eat/place-091.md",
+      "eat/place-092.md",
+      "eat/place-093.md",
+      "eat/place-094.md",
+      "eat/place-095.md",
+      "eat/place-096.md",
+      "eat/place-097.md",
+      "eat/place-098.md",
+      "eat/place-099.md",
+      "eat/place-100.md",
+      "eat/place-101.md",
+      "eat/place-102.md",
+      "eat/place-103.md",
+      "eat/place-104.md",
+      "eat/place-105.md",
+      "eat/place-106.md",
+      "embed-host.md",
+      "empty.md",
+      "essay.md",
+      "home.md",
+      "leaf.md",
+      "malformed.md",
+      "ordinary.md",
+      "ref/attention.md",
+      "sase.md",
+      "single.md",
+      "subscriptions.md",
+      "subscriptions/music.md",
+      "subscriptions/streamco.md",
+      "tools.md"
+    ]
+  },
+  "checks": [
+    {
+      "name": "plugins-loaded",
+      "status": "pass",
+      "mandatory": true,
+      "detail": {
+        "enabled": [
+          "bob-ledger-tools",
+          "bob-navigation-hotkeys"
+        ]
+      }
+    },
+    {
+      "name": "render-area-live",
+      "status": "pass",
+      "mandatory": true,
+      "detail": {
+        "fixture": "area",
+        "path": "cash.md",
+        "mode": "live",
+        "actualKind": "area",
+        "expectedKind": "area",
+        "cabinets": [
+          "areas",
+          "projects",
+          "notebooks",
+          "albums",
+          "properties"
+        ],
+        "expectedCabinets": [
+          "areas",
+          "projects",
+          "notebooks",
+          "albums",
+          "properties"
+        ],
+        "propertiesLast": true
+      }
+    },
+    {
+      "name": "render-area-reading",
+      "status": "pass",
+      "mandatory": true,
+      "detail": {
+        "fixture": "area",
+        "path": "cash.md",
+        "mode": "reading",
+        "actualKind": "area",
+        "expectedKind": "area",
+        "cabinets": [
+          "areas",
+          "projects",
+          "notebooks",
+          "albums",
+          "properties"
+        ],
+        "expectedCabinets": [
+          "areas",
+          "projects",
+          "notebooks",
+          "albums",
+          "properties"
+        ],
+        "propertiesLast": true
+      }
+    },
+    {
+      "name": "render-project-live",
+      "status": "pass",
+      "mandatory": true,
+      "detail": {
+        "fixture": "project",
+        "path": "sase.md",
+        "mode": "live",
+        "actualKind": "project",
+        "expectedKind": "project",
+        "cabinets": [
+          "projects",
+          "properties"
+        ],
+        "expectedCabinets": [
+          "projects",
+          "properties"
+        ],
+        "propertiesLast": true
+      }
+    },
+    {
+      "name": "render-project-reading",
+      "status": "pass",
+      "mandatory": true,
+      "detail": {
+        "fixture": "project",
+        "path": "sase.md",
+        "mode": "reading",
+        "actualKind": "project",
+        "expectedKind": "project",
+        "cabinets": [
+          "projects",
+          "properties"
+        ],
+        "expectedCabinets": [
+          "projects",
+          "properties"
+        ],
+        "propertiesLast": true
+      }
+    },
+    {
+      "name": "render-leaf-live",
+      "status": "pass",
+      "mandatory": true,
+      "detail": {
+        "fixture": "leaf",
+        "path": "leaf.md",
+        "mode": "live",
+        "actualKind": "project",
+        "expectedKind": "project",
+        "cabinets": [
+          "properties"
+        ],
+        "expectedCabinets": [
+          "properties"
+        ],
+        "propertiesLast": true
+      }
+    },
+    {
+      "name": "render-leaf-reading",
+      "status": "pass",
+      "mandatory": true,
+      "detail": {
+        "fixture": "leaf",
+        "path": "leaf.md",
+        "mode": "reading",
+        "actualKind": "project",
+        "expectedKind": "project",
+        "cabinets": [
+          "properties"
+        ],
+        "expectedCabinets": [
+          "properties"
+        ],
+        "propertiesLast": true
+      }
+    },
+    {
+      "name": "render-single-area-live",
+      "status": "pass",
+      "mandatory": true,
+      "detail": {
+        "fixture": "single-area",
+        "path": "single.md",
+        "mode": "live",
+        "actualKind": "area",
+        "expectedKind": "area",
+        "cabinets": [
+          "projects",
+          "properties"
+        ],
+        "expectedCabinets": [
+          "projects",
+          "properties"
+        ],
+        "propertiesLast": true
+      }
+    },
+    {
+      "name": "render-single-area-reading",
+      "status": "pass",
+      "mandatory": true,
+      "detail": {
+        "fixture": "single-area",
+        "path": "single.md",
+        "mode": "reading",
+        "actualKind": "area",
+        "expectedKind": "area",
+        "cabinets": [
+          "projects",
+          "properties"
+        ],
+        "expectedCabinets": [
+          "projects",
+          "properties"
+        ],
+        "propertiesLast": true
+      }
+    },
+    {
+      "name": "render-album-live",
+      "status": "fail",
+      "mandatory": true,
+      "detail": {
+        "fixture": "album",
+        "path": "eat.md",
+        "mode": "live",
+        "actualKind": "album",
+        "expectedKind": "album",
+        "cabinets": [
+          "records",
+          "properties"
+        ],
+        "expectedCabinets": [
+          "records",
+          "schema",
+          "properties"
+        ],
+        "propertiesLast": true
+      }
+    },
+    {
+      "name": "render-album-reading",
+      "status": "fail",
+      "mandatory": true,
+      "detail": {
+        "fixture": "album",
+        "path": "eat.md",
+        "mode": "reading",
+        "actualKind": "album",
+        "expectedKind": "album",
+        "cabinets": [
+          "records",
+          "properties"
+        ],
+        "expectedCabinets": [
+          "records",
+          "schema",
+          "properties"
+        ],
+        "propertiesLast": true
+      }
+    },
+    {
+      "name": "render-empty-album-live",
+      "status": "fail",
+      "mandatory": true,
+      "detail": {
+        "fixture": "empty-album",
+        "path": "empty.md",
+        "mode": "live",
+        "actualKind": "album",
+        "expectedKind": "album",
+        "cabinets": [
+          "properties"
+        ],
+        "expectedCabinets": [
+          "schema",
+          "properties"
+        ],
+        "propertiesLast": true
+      }
+    },
+    {
+      "name": "render-empty-album-reading",
+      "status": "fail",
+      "mandatory": true,
+      "detail": {
+        "fixture": "empty-album",
+        "path": "empty.md",
+        "mode": "reading",
+        "actualKind": null,
+        "expectedKind": "album",
+        "cabinets": [],
+        "expectedCabinets": [
+          "schema",
+          "properties"
+        ],
+        "propertiesLast": false
+      }
+    },
+    {
+      "name": "render-subscriptions-live",
+      "status": "fail",
+      "mandatory": true,
+      "detail": {
+        "fixture": "subscriptions",
+        "path": "subscriptions.md",
+        "mode": "live",
+        "actualKind": "album",
+        "expectedKind": "album",
+        "cabinets": [
+          "records",
+          "properties"
+        ],
+        "expectedCabinets": [
+          "records",
+          "schema",
+          "properties"
+        ],
+        "propertiesLast": true
+      }
+    },
+    {
+      "name": "render-subscriptions-reading",
+      "status": "fail",
+      "mandatory": true,
+      "detail": {
+        "fixture": "subscriptions",
+        "path": "subscriptions.md",
+        "mode": "reading",
+        "actualKind": "album",
+        "expectedKind": "album",
+        "cabinets": [
+          "records",
+          "properties"
+        ],
+        "expectedCabinets": [
+          "records",
+          "schema",
+          "properties"
+        ],
+        "propertiesLast": true
+      }
+    },
+    {
+      "name": "render-bank-live",
+      "status": "fail",
+      "mandatory": true,
+      "detail": {
+        "fixture": "bank",
+        "path": "bank.md",
+        "mode": "live",
+        "actualKind": "bank",
+        "expectedKind": "bank",
+        "cabinets": [
+          "properties"
+        ],
+        "expectedCabinets": [
+          "setup",
+          "properties"
+        ],
+        "propertiesLast": true
+      }
+    },
+    {
+      "name": "render-bank-reading",
+      "status": "fail",
+      "mandatory": true,
+      "detail": {
+        "fixture": "bank",
+        "path": "bank.md",
+        "mode": "reading",
+        "actualKind": "bank",
+        "expectedKind": "bank",
+        "cabinets": [
+          "properties"
+        ],
+        "expectedCabinets": [
+          "setup",
+          "properties"
+        ],
+        "propertiesLast": true
+      }
+    },
+    {
+      "name": "render-prose-live",
+      "status": "pass",
+      "mandatory": true,
+      "detail": {
+        "fixture": "prose",
+        "path": "essay.md",
+        "mode": "live",
+        "actualKind": "prose",
+        "expectedKind": "prose",
+        "cabinets": [
+          "outline",
+          "properties"
+        ],
+        "expectedCabinets": [
+          "outline",
+          "properties"
+        ],
+        "propertiesLast": true
+      }
+    },
+    {
+      "name": "render-prose-reading",
+      "status": "pass",
+      "mandatory": true,
+      "detail": {
+        "fixture": "prose",
+        "path": "essay.md",
+        "mode": "reading",
+        "actualKind": "prose",
+        "expectedKind": "prose",
+        "cabinets": [
+          "outline",
+          "properties"
+        ],
+        "expectedCabinets": [
+          "outline",
+          "properties"
+        ],
+        "propertiesLast": true
+      }
+    },
+    {
+      "name": "render-notebook-live",
+      "status": "pass",
+      "mandatory": true,
+      "detail": {
+        "fixture": "notebook",
+        "path": "tools.md",
+        "mode": "live",
+        "actualKind": "notebook",
+        "expectedKind": "notebook",
+        "cabinets": [
+          "properties"
+        ],
+        "expectedCabinets": [
+          "properties"
+        ],
+        "propertiesLast": true
+      }
+    },
+    {
+      "name": "render-notebook-reading",
+      "status": "pass",
+      "mandatory": true,
+      "detail": {
+        "fixture": "notebook",
+        "path": "tools.md",
+        "mode": "reading",
+        "actualKind": "notebook",
+        "expectedKind": "notebook",
+        "cabinets": [
+          "properties"
+        ],
+        "expectedCabinets": [
+          "properties"
+        ],
+        "propertiesLast": true
+      }
+    },
+    {
+      "name": "render-record-live",
+      "status": "fail",
+      "mandatory": true,
+      "detail": {
+        "fixture": "record",
+        "path": "eat/place-001.md",
+        "mode": "live",
+        "actualKind": "record",
+        "expectedKind": "record",
+        "cabinets": [],
+        "expectedCabinets": [
+          "properties"
+        ],
+        "propertiesLast": false
+      }
+    },
+    {
+      "name": "render-record-reading",
+      "status": "fail",
+      "mandatory": true,
+      "detail": {
+        "fixture": "record",
+        "path": "eat/place-001.md",
+        "mode": "reading",
+        "actualKind": "record",
+        "expectedKind": "record",
+        "cabinets": [],
+        "expectedCabinets": [
+          "properties"
+        ],
+        "propertiesLast": false
+      }
+    },
+    {
+      "name": "render-ref-live",
+      "status": "pass",
+      "mandatory": true,
+      "detail": {
+        "fixture": "ref",
+        "path": "ref/attention.md",
+        "mode": "live",
+        "actualKind": "ref",
+        "expectedKind": "ref",
+        "cabinets": [
+          "properties"
+        ],
+        "expectedCabinets": [
+          "properties"
+        ],
+        "propertiesLast": true
+      }
+    },
+    {
+      "name": "render-ref-reading",
+      "status": "pass",
+      "mandatory": true,
+      "detail": {
+        "fixture": "ref",
+        "path": "ref/attention.md",
+        "mode": "reading",
+        "actualKind": "ref",
+        "expectedKind": "ref",
+        "cabinets": [
+          "properties"
+        ],
+        "expectedCabinets": [
+          "properties"
+        ],
+        "propertiesLast": true
+      }
+    },
+    {
+      "name": "render-day-live",
+      "status": "pass",
+      "mandatory": true,
+      "detail": {
+        "fixture": "day",
+        "path": "2026/20261120.md",
+        "mode": "live",
+        "actualKind": "day",
+        "expectedKind": "day",
+        "cabinets": [
+          "properties"
+        ],
+        "expectedCabinets": [
+          "properties"
+        ],
+        "propertiesLast": true
+      }
+    },
+    {
+      "name": "render-day-reading",
+      "status": "pass",
+      "mandatory": true,
+      "detail": {
+        "fixture": "day",
+        "path": "2026/20261120.md",
+        "mode": "reading",
+        "actualKind": "day",
+        "expectedKind": "day",
+        "cabinets": [
+          "properties"
+        ],
+        "expectedCabinets": [
+          "properties"
+        ],
+        "propertiesLast": true
+      }
+    },
+    {
+      "name": "render-week-live",
+      "status": "pass",
+      "mandatory": true,
+      "detail": {
+        "fixture": "week",
+        "path": "2026/2026-W47.md",
+        "mode": "live",
+        "actualKind": "week",
+        "expectedKind": "week",
+        "cabinets": [
+          "properties"
+        ],
+        "expectedCabinets": [
+          "properties"
+        ],
+        "propertiesLast": true
+      }
+    },
+    {
+      "name": "render-week-reading",
+      "status": "pass",
+      "mandatory": true,
+      "detail": {
+        "fixture": "week",
+        "path": "2026/2026-W47.md",
+        "mode": "reading",
+        "actualKind": "week",
+        "expectedKind": "week",
+        "cabinets": [
+          "properties"
+        ],
+        "expectedCabinets": [
+          "properties"
+        ],
+        "propertiesLast": true
+      }
+    },
+    {
+      "name": "render-quarter-live",
+      "status": "pass",
+      "mandatory": true,
+      "detail": {
+        "fixture": "quarter",
+        "path": "2026/2026-Q4.md",
+        "mode": "live",
+        "actualKind": "quarter",
+        "expectedKind": "quarter",
+        "cabinets": [
+          "properties"
+        ],
+        "expectedCabinets": [
+          "properties"
+        ],
+        "propertiesLast": true
+      }
+    },
+    {
+      "name": "render-quarter-reading",
+      "status": "pass",
+      "mandatory": true,
+      "detail": {
+        "fixture": "quarter",
+        "path": "2026/2026-Q4.md",
+        "mode": "reading",
+        "actualKind": "quarter",
+        "expectedKind": "quarter",
+        "cabinets": [
+          "properties"
+        ],
+        "expectedCabinets": [
+          "properties"
+        ],
+        "propertiesLast": true
+      }
+    },
+    {
+      "name": "render-year-live",
+      "status": "pass",
+      "mandatory": true,
+      "detail": {
+        "fixture": "year",
+        "path": "2026.md",
+        "mode": "live",
+        "actualKind": "year",
+        "expectedKind": "year",
+        "cabinets": [
+          "properties"
+        ],
+        "expectedCabinets": [
+          "properties"
+        ],
+        "propertiesLast": true
+      }
+    },
+    {
+      "name": "render-year-reading",
+      "status": "pass",
+      "mandatory": true,
+      "detail": {
+        "fixture": "year",
+        "path": "2026.md",
+        "mode": "reading",
+        "actualKind": "year",
+        "expectedKind": "year",
+        "cabinets": [
+          "properties"
+        ],
+        "expectedCabinets": [
+          "properties"
+        ],
+        "propertiesLast": true
+      }
+    },
+    {
+      "name": "untyped-area-fails-open",
+      "status": "pass",
+      "mandatory": true,
+      "detail": {
+        "path": "area.md",
+        "mode": "reading",
+        "cardKind": null,
+        "cardPresent": false,
+        "cardCount": 0,
+        "cardText": "",
+        "stackPresent": false,
+        "cabinetKinds": [],
+        "panels": [],
+        "propertiesLast": false,
+        "propertyExpanded": false,
+        "detailsExpanded": false,
+        "callouts": [],
+        "headings": [],
+        "hiddenCalloutCount": 0,
+        "statusBarDisplay": "flex",
+        "fallback": false,
+        "armed": false,
+        "badges": [],
+        "footerText": "",
+        "scrollY": 0,
+        "width": 0,
+        "height": 0,
+        "reducedMotion": false,
+        "forcedColors": false,
+        "theme": "light"
+      }
+    },
+    {
+      "name": "album-records-open-schema-closed",
+      "status": "fail",
+      "mandatory": true,
+      "detail": {
+        "records": {
+          "kind": "records",
+          "expanded": true,
+          "buttonText": "\u25b8 Records \u00b7 Records",
+          "summary": "Records",
+          "attention": "",
+          "text": "Records Place 001 Place 002 Place 003 Place 004 Place 005 Place 006 Place 007 Place 008 Place 009 Place 010 Place 011 Place 012 Place 013 Place 014 Place 015 Place 016 Place 017 Place 018 Place 019 Place 020 Place 021 Place 022 Place 023 Place 024 Place 025 Place 026 Place 027 Place 028 Place 029 Place 030 Place 031 Place 032 Place 033 Place 034 Place 035 Place 036 Place 037 Place 038 Place 039 Place 040 Place 041 Place 042 Place 043 Place 044 Place 045 Place 046 Place 047 Place 048 Place 049 Place 050 Place 051 Place 052 Place 053 Place 054 Place 055 Place 056 Place 057 Place 058 Place 059 Place 060 Place 061 Place 062 Place 063 Place 064 Place 065 Place 066 Place 067 Place 068 Place 069 Place 070 Place 071 Place 072 Place 073 Place 074 Place 075 Place 076 Place 077 Place 078 Place 079 Place 080 Place 081 Place 082 Place 083 Place 084 Place 085 Place 086 Place 087 Place 088 Place 089 Place 090 Place 091 Place 092 Place 093 Place 094 Place 095 Place 096 Place 097 Place 098 Place 099 Place 100 Place 101 Place 102 Place 103 Place 104 Place 105 Place 106",
+          "visible": true,
+          "error": null,
+          "callouts": [
+            {
+              "kind": "records",
+              "text": "Records Place 001 Place 002 Place 003 Place 004 Place 005 Place 006 Place 007 Place 008 Place 009 Place 010 Place 011 Place 012 Place 013 Place 014 Place 015 Place 016 Place 017 Place 018 Place 019 Place 020 Place 021 Place 022 Place 023 Place 024 Place 025 Place 026 Place 027 Place 028 Place 029 Place 030 Place 031 Place 032 Place 033 Place 034 Place 035 Place 036 Place 037 Place 038 Place 039 Place 040 Place 041 Place 042 Place 043 Place 044 Place 045 Place 046 Place 047 Place 048 Place 049 Place 050 Place 051 Place 052 Place 053 Place 054 Place 055 Place 056 Place 057 Place 058 Place 059 Place 060 Place 061 Place 062 Place 063 Place 064 Place 065 Place 066 Place 067 Place 068 Place 069 Place 070 Place 071 Place 072 Place 073 Place 074 Place 075 Place 076 Place 077 Place 078 Place 079 Place 080 Place 081 Place 082 Place 083 Place 084 Place 085 Place 086 Place 087 Place 088 Place 089 Place 090 Place 091 Place 092 Place 093 Place 094 Place 095 Place 096 Place 097 Place 098 Place 099 Place 100 Place 101 Place 102 Place 103 Place 104 Place 105 Place 106",
+              "rows": 106
+            }
+          ],
+          "keycap": "_"
+        }
+      }
+    },
+    {
+      "name": "bank-setup-default-closed",
+      "status": "fail",
+      "mandatory": true,
+      "detail": [
+        {
+          "kind": "properties",
+          "expanded": false,
+          "buttonText": "\u25b8 Properties \u00b7 3",
+          "summary": "3",
+          "attention": "",
+          "text": "",
+          "visible": true,
+          "error": null,
+          "callouts": [],
+          "keycap": "-"
+        }
+      ]
+    },
+    {
+      "name": "outline-default-closed",
+      "status": "pass",
+      "mandatory": true,
+      "detail": [
+        {
+          "kind": "outline",
+          "expanded": false,
+          "buttonText": "\u25b8 Outline",
+          "summary": "",
+          "attention": "",
+          "text": "",
+          "visible": true,
+          "error": null,
+          "callouts": [],
+          "keycap": "_"
+        },
+        {
+          "kind": "properties",
+          "expanded": false,
+          "buttonText": "\u25b8 Properties \u00b7 3",
+          "summary": "3",
+          "attention": "",
+          "text": "",
+          "visible": true,
+          "error": null,
+          "callouts": [],
+          "keycap": "-"
+        }
+      ]
+    },
+    {
+      "name": "area-summaries-visible",
+      "status": "pass",
+      "mandatory": true,
+      "detail": [
+        {
+          "kind": "areas",
+          "expanded": false,
+          "buttonText": "\u25b8 Areas \u00b7 1 area",
+          "summary": "1 area",
+          "attention": "\u26a0unavailable",
+          "text": "",
+          "visible": true,
+          "error": null,
+          "callouts": [],
+          "keycap": "_4"
+        },
+        {
+          "kind": "projects",
+          "expanded": false,
+          "buttonText": "\u25b8 Projects \u00b7 1 project",
+          "summary": "1 project",
+          "attention": "\u26a0unavailable",
+          "text": "",
+          "visible": true,
+          "error": null,
+          "callouts": [],
+          "keycap": "_3"
+        },
+        {
+          "kind": "notebooks",
+          "expanded": false,
+          "buttonText": "\u25b8 Notebooks \u00b7 1 notebook",
+          "summary": "1 notebook",
+          "attention": "\u26a0unavailable",
+          "text": "",
+          "visible": true,
+          "error": null,
+          "callouts": [],
+          "keycap": "_2"
+        },
+        {
+          "kind": "albums",
+          "expanded": false,
+          "buttonText": "\u25b8 Albums \u00b7 1 album",
+          "summary": "1 album",
+          "attention": "\u26a0unavailable",
+          "text": "",
+          "visible": true,
+          "error": null,
+          "callouts": [],
+          "keycap": "_1"
+        }
+      ]
+    },
+    {
+      "name": "project-64-line-summary-and-attention",
+      "status": "pass",
+      "mandatory": true,
+      "detail": {
+        "kind": "projects",
+        "expanded": false,
+        "buttonText": "\u25b8 Projects \u00b7 64 projects",
+        "summary": "64 projects",
+        "attention": "\u26a0unavailable",
+        "text": "",
+        "visible": true,
+        "error": null,
+        "callouts": [],
+        "keycap": "_"
+      }
+    },
+    {
+      "name": "gate-closed-inline-baseline",
+      "status": "pass",
+      "mandatory": true,
+      "detail": {
+        "areas": {
+          "text": "Areas Home \u2014 Household systems.",
+          "rows": 1,
+          "visible": true
+        },
+        "projects": {
+          "text": "ProjectsProjects0 open \u00b7 0 blocked \u00b7 0 closed0\u00b70\u00b70Update bob-cli and Bob Ledger Tools together, then retry.Retry SASE \u2014 Project catalog sentinel.",
+          "rows": 1,
+          "visible": true
+        },
+        "notebooks": {
+          "text": "Notebooks Tools \u2014 Notes about tools.",
+          "rows": 1,
+          "visible": true
+        },
+        "albums": {
+          "text": "AlbumsUpdate bob-cli and Bob Ledger Tools together, then retry.Retry Eat \u2014 Places to try.",
+          "rows": 1,
+          "visible": true
+        }
+      }
+    },
+    {
+      "name": "area-content-parity-gate-closed",
+      "status": "fail",
+      "mandatory": true,
+      "detail": [
+        {
+          "kind": "areas",
+          "baselineRows": 1,
+          "baselineVisible": true,
+          "cabinetText": null,
+          "textContainsBaseline": false
+        },
+        {
+          "kind": "projects",
+          "baselineRows": 1,
+          "baselineVisible": true,
+          "cabinetText": null,
+          "textContainsBaseline": false
+        },
+        {
+          "kind": "notebooks",
+          "baselineRows": 1,
+          "baselineVisible": true,
+          "cabinetText": null,
+          "textContainsBaseline": false
+        },
+        {
+          "kind": "albums",
+          "baselineRows": 1,
+          "baselineVisible": true,
+          "cabinetText": null,
+          "textContainsBaseline": false
+        }
+      ]
+    },
+    {
+      "name": "runner-error",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Could not find clickable .bob-walker-footer-overlay [data-cabinet-pick-kind], .bob-walker-footer-overlay button[0]"
+    }
+  ],
+  "screenshots": [
+    {
+      "name": "cabinets-runner-failure",
+      "path": "/tmp/bob-cabinets-qq8-20261127/shots/cabinets-runner-failure.png",
+      "bytes": 75748,
+      "sha256": "929f1582dc0a0ca84b82abf0097060ba1dc1e219150e3a1b4bdc1c5a0e59dcab",
+      "width": 1024,
+      "height": 800,
+      "requestedWidth": 1400,
+      "theme": "light",
+      "mode": "failure",
+      "visualVerdict": "reviewed-diagnostic",
+      "localPath": "shots/cabinets-runner-failure.png",
+      "visualReviewNote": "Legible diagnostic image of the initial runner failure; retained for provenance."
+    }
+  ],
+  "consoleExceptions": [],
+  "bobSpawns": [],
+  "renderMatrix": [
+    {
+      "fixture": "area",
+      "path": "cash.md",
+      "mode": "live",
+      "actualKind": "area",
+      "expectedKind": "area",
+      "cabinets": [
+        "areas",
+        "projects",
+        "notebooks",
+        "albums",
+        "properties"
+      ],
+      "expectedCabinets": [
+        "areas",
+        "projects",
+        "notebooks",
+        "albums",
+        "properties"
+      ],
+      "propertiesLast": true
+    },
+    {
+      "fixture": "area",
+      "path": "cash.md",
+      "mode": "reading",
+      "actualKind": "area",
+      "expectedKind": "area",
+      "cabinets": [
+        "areas",
+        "projects",
+        "notebooks",
+        "albums",
+        "properties"
+      ],
+      "expectedCabinets": [
+        "areas",
+        "projects",
+        "notebooks",
+        "albums",
+        "properties"
+      ],
+      "propertiesLast": true
+    },
+    {
+      "fixture": "project",
+      "path": "sase.md",
+      "mode": "live",
+      "actualKind": "project",
+      "expectedKind": "project",
+      "cabinets": [
+        "projects",
+        "properties"
+      ],
+      "expectedCabinets": [
+        "projects",
+        "properties"
+      ],
+      "propertiesLast": true
+    },
+    {
+      "fixture": "project",
+      "path": "sase.md",
+      "mode": "reading",
+      "actualKind": "project",
+      "expectedKind": "project",
+      "cabinets": [
+        "projects",
+        "properties"
+      ],
+      "expectedCabinets": [
+        "projects",
+        "properties"
+      ],
+      "propertiesLast": true
+    },
+    {
+      "fixture": "leaf",
+      "path": "leaf.md",
+      "mode": "live",
+      "actualKind": "project",
+      "expectedKind": "project",
+      "cabinets": [
+        "properties"
+      ],
+      "expectedCabinets": [
+        "properties"
+      ],
+      "propertiesLast": true
+    },
+    {
+      "fixture": "leaf",
+      "path": "leaf.md",
+      "mode": "reading",
+      "actualKind": "project",
+      "expectedKind": "project",
+      "cabinets": [
+        "properties"
+      ],
+      "expectedCabinets": [
+        "properties"
+      ],
+      "propertiesLast": true
+    },
+    {
+      "fixture": "single-area",
+      "path": "single.md",
+      "mode": "live",
+      "actualKind": "area",
+      "expectedKind": "area",
+      "cabinets": [
+        "projects",
+        "properties"
+      ],
+      "expectedCabinets": [
+        "projects",
+        "properties"
+      ],
+      "propertiesLast": true
+    },
+    {
+      "fixture": "single-area",
+      "path": "single.md",
+      "mode": "reading",
+      "actualKind": "area",
+      "expectedKind": "area",
+      "cabinets": [
+        "projects",
+        "properties"
+      ],
+      "expectedCabinets": [
+        "projects",
+        "properties"
+      ],
+      "propertiesLast": true
+    },
+    {
+      "fixture": "album",
+      "path": "eat.md",
+      "mode": "live",
+      "actualKind": "album",
+      "expectedKind": "album",
+      "cabinets": [
+        "records",
+        "properties"
+      ],
+      "expectedCabinets": [
+        "records",
+        "schema",
+        "properties"
+      ],
+      "propertiesLast": true
+    },
+    {
+      "fixture": "album",
+      "path": "eat.md",
+      "mode": "reading",
+      "actualKind": "album",
+      "expectedKind": "album",
+      "cabinets": [
+        "records",
+        "properties"
+      ],
+      "expectedCabinets": [
+        "records",
+        "schema",
+        "properties"
+      ],
+      "propertiesLast": true
+    },
+    {
+      "fixture": "empty-album",
+      "path": "empty.md",
+      "mode": "live",
+      "actualKind": "album",
+      "expectedKind": "album",
+      "cabinets": [
+        "properties"
+      ],
+      "expectedCabinets": [
+        "schema",
+        "properties"
+      ],
+      "propertiesLast": true
+    },
+    {
+      "fixture": "empty-album",
+      "path": "empty.md",
+      "mode": "reading",
+      "actualKind": null,
+      "expectedKind": "album",
+      "cabinets": [],
+      "expectedCabinets": [
+        "schema",
+        "properties"
+      ],
+      "propertiesLast": false
+    },
+    {
+      "fixture": "subscriptions",
+      "path": "subscriptions.md",
+      "mode": "live",
+      "actualKind": "album",
+      "expectedKind": "album",
+      "cabinets": [
+        "records",
+        "properties"
+      ],
+      "expectedCabinets": [
+        "records",
+        "schema",
+        "properties"
+      ],
+      "propertiesLast": true
+    },
+    {
+      "fixture": "subscriptions",
+      "path": "subscriptions.md",
+      "mode": "reading",
+      "actualKind": "album",
+      "expectedKind": "album",
+      "cabinets": [
+        "records",
+        "properties"
+      ],
+      "expectedCabinets": [
+        "records",
+        "schema",
+        "properties"
+      ],
+      "propertiesLast": true
+    },
+    {
+      "fixture": "bank",
+      "path": "bank.md",
+      "mode": "live",
+      "actualKind": "bank",
+      "expectedKind": "bank",
+      "cabinets": [
+        "properties"
+      ],
+      "expectedCabinets": [
+        "setup",
+        "properties"
+      ],
+      "propertiesLast": true
+    },
+    {
+      "fixture": "bank",
+      "path": "bank.md",
+      "mode": "reading",
+      "actualKind": "bank",
+      "expectedKind": "bank",
+      "cabinets": [
+        "properties"
+      ],
+      "expectedCabinets": [
+        "setup",
+        "properties"
+      ],
+      "propertiesLast": true
+    },
+    {
+      "fixture": "prose",
+      "path": "essay.md",
+      "mode": "live",
+      "actualKind": "prose",
+      "expectedKind": "prose",
+      "cabinets": [
+        "outline",
+        "properties"
+      ],
+      "expectedCabinets": [
+        "outline",
+        "properties"
+      ],
+      "propertiesLast": true
+    },
+    {
+      "fixture": "prose",
+      "path": "essay.md",
+      "mode": "reading",
+      "actualKind": "prose",
+      "expectedKind": "prose",
+      "cabinets": [
+        "outline",
+        "properties"
+      ],
+      "expectedCabinets": [
+        "outline",
+        "properties"
+      ],
+      "propertiesLast": true
+    },
+    {
+      "fixture": "notebook",
+      "path": "tools.md",
+      "mode": "live",
+      "actualKind": "notebook",
+      "expectedKind": "notebook",
+      "cabinets": [
+        "properties"
+      ],
+      "expectedCabinets": [
+        "properties"
+      ],
+      "propertiesLast": true
+    },
+    {
+      "fixture": "notebook",
+      "path": "tools.md",
+      "mode": "reading",
+      "actualKind": "notebook",
+      "expectedKind": "notebook",
+      "cabinets": [
+        "properties"
+      ],
+      "expectedCabinets": [
+        "properties"
+      ],
+      "propertiesLast": true
+    },
+    {
+      "fixture": "record",
+      "path": "eat/place-001.md",
+      "mode": "live",
+      "actualKind": "record",
+      "expectedKind": "record",
+      "cabinets": [],
+      "expectedCabinets": [
+        "properties"
+      ],
+      "propertiesLast": false
+    },
+    {
+      "fixture": "record",
+      "path": "eat/place-001.md",
+      "mode": "reading",
+      "actualKind": "record",
+      "expectedKind": "record",
+      "cabinets": [],
+      "expectedCabinets": [
+        "properties"
+      ],
+      "propertiesLast": false
+    },
+    {
+      "fixture": "ref",
+      "path": "ref/attention.md",
+      "mode": "live",
+      "actualKind": "ref",
+      "expectedKind": "ref",
+      "cabinets": [
+        "properties"
+      ],
+      "expectedCabinets": [
+        "properties"
+      ],
+      "propertiesLast": true
+    },
+    {
+      "fixture": "ref",
+      "path": "ref/attention.md",
+      "mode": "reading",
+      "actualKind": "ref",
+      "expectedKind": "ref",
+      "cabinets": [
+        "properties"
+      ],
+      "expectedCabinets": [
+        "properties"
+      ],
+      "propertiesLast": true
+    },
+    {
+      "fixture": "day",
+      "path": "2026/20261120.md",
+      "mode": "live",
+      "actualKind": "day",
+      "expectedKind": "day",
+      "cabinets": [
+        "properties"
+      ],
+      "expectedCabinets": [
+        "properties"
+      ],
+      "propertiesLast": true
+    },
+    {
+      "fixture": "day",
+      "path": "2026/20261120.md",
+      "mode": "reading",
+      "actualKind": "day",
+      "expectedKind": "day",
+      "cabinets": [
+        "properties"
+      ],
+      "expectedCabinets": [
+        "properties"
+      ],
+      "propertiesLast": true
+    },
+    {
+      "fixture": "week",
+      "path": "2026/2026-W47.md",
+      "mode": "live",
+      "actualKind": "week",
+      "expectedKind": "week",
+      "cabinets": [
+        "properties"
+      ],
+      "expectedCabinets": [
+        "properties"
+      ],
+      "propertiesLast": true
+    },
+    {
+      "fixture": "week",
+      "path": "2026/2026-W47.md",
+      "mode": "reading",
+      "actualKind": "week",
+      "expectedKind": "week",
+      "cabinets": [
+        "properties"
+      ],
+      "expectedCabinets": [
+        "properties"
+      ],
+      "propertiesLast": true
+    },
+    {
+      "fixture": "quarter",
+      "path": "2026/2026-Q4.md",
+      "mode": "live",
+      "actualKind": "quarter",
+      "expectedKind": "quarter",
+      "cabinets": [
+        "properties"
+      ],
+      "expectedCabinets": [
+        "properties"
+      ],
+      "propertiesLast": true
+    },
+    {
+      "fixture": "quarter",
+      "path": "2026/2026-Q4.md",
+      "mode": "reading",
+      "actualKind": "quarter",
+      "expectedKind": "quarter",
+      "cabinets": [
+        "properties"
+      ],
+      "expectedCabinets": [
+        "properties"
+      ],
+      "propertiesLast": true
+    },
+    {
+      "fixture": "year",
+      "path": "2026.md",
+      "mode": "live",
+      "actualKind": "year",
+      "expectedKind": "year",
+      "cabinets": [
+        "properties"
+      ],
+      "expectedCabinets": [
+        "properties"
+      ],
+      "propertiesLast": true
+    },
+    {
+      "fixture": "year",
+      "path": "2026.md",
+      "mode": "reading",
+      "actualKind": "year",
+      "expectedKind": "year",
+      "cabinets": [
+        "properties"
+      ],
+      "expectedCabinets": [
+        "properties"
+      ],
+      "propertiesLast": true
+    }
+  ],
+  "contentParity": [
+    {
+      "kind": "areas",
+      "baselineRows": 1,
+      "baselineVisible": true,
+      "cabinetText": null,
+      "textContainsBaseline": false
+    },
+    {
+      "kind": "projects",
+      "baselineRows": 1,
+      "baselineVisible": true,
+      "cabinetText": null,
+      "textContainsBaseline": false
+    },
+    {
+      "kind": "notebooks",
+      "baselineRows": 1,
+      "baselineVisible": true,
+      "cabinetText": null,
+      "textContainsBaseline": false
+    },
+    {
+      "kind": "albums",
+      "baselineRows": 1,
+      "baselineVisible": true,
+      "cabinetText": null,
+      "textContainsBaseline": false
+    }
+  ],
+  "error": "Error: Could not find clickable .bob-walker-footer-overlay [data-cabinet-pick-kind], .bob-walker-footer-overlay button[0]\n    at clickSelector (/tmp/bob-cabinets-qq8-20261127/scripts/obsidian-cabinets-e2e.cjs:203:21)\n    at async run (/tmp/bob-cabinets-qq8-20261127/scripts/obsidian-cabinets-e2e.cjs:414:7)\n    at async main (/tmp/bob-cabinets-qq8-20261127/scripts/obsidian-cabinets-e2e.cjs:680:9)",
+  "finishedAt": "2026-11-27T03:16:23.452Z",
+  "scratchPreserved": true,
+  "assertionCounts": {
+    "pass": 28,
+    "fail": 14
+  },
+  "visualReview": {
+    "status": "complete",
+    "reviewedAt": "2026-11-27T03:43:36Z",
+    "method": "Inspected the diagnostic PNG in the labeled contact sheet.",
+    "note": "The screenshot clearly records the initial runner failure state; this does not change the NO-GO acceptance verdict."
+  }
+}

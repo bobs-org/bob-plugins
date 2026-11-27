@@ -22,6 +22,9 @@ const PLUGIN_ID = "bob-ledger-tools";
 const FIXTURE_TODAY = "2026-11-20";
 const OVERALL_TIMEOUT_MS = 1_500_000;
 const COMMAND_ID = "markdown:add-metadata-property";
+// Keep Electron's singleton socket in a short temp path. The wrapper may use a
+// disk-backed TMPDIR for the fixture scratch tree, so do not inherit it here.
+const electronTmpDir = process.env.BOB_OBSIDIAN_TMPDIR || "/tmp";
 const MODE_STATE = {
   live: { mode: "source", source: false },
   source: { mode: "source", source: true },
@@ -717,12 +720,12 @@ async function run(args) {
       env: {
         ...process.env, HOME: profileDir, BOB_DIR: vaultReal, BOB_NOW: FIXTURE_TODAY + " 12:00:00",
         BOB_CONFIG_FILE: path.join(profileDir, "missing-test-config.yml"),
-        PATH: shimDir + path.delimiter + (process.env.PATH || ""), TMPDIR: process.env.TMPDIR || os.tmpdir(), NO_COLOR: "1",
+        PATH: shimDir + path.delimiter + (process.env.PATH || ""), TMPDIR: electronTmpDir, NO_COLOR: "1",
       },
     });
     activeRun.child = child;
     const obsidianProcess = {
-      pid: child.pid, executable, debugPort: port, exitCode: null, signal: null, stderr: "",
+      pid: child.pid, executable, debugPort: port, tmpDir: electronTmpDir, exitCode: null, signal: null, stderr: "",
     };
     report.obsidianProcess = obsidianProcess;
     child.on("exit", (code, signal) => {

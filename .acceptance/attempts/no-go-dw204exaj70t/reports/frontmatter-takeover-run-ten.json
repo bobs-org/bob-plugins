@@ -1,0 +1,921 @@
+{
+  "startedAt": "2026-11-27T05:12:34.676Z",
+  "checks": [
+    {
+      "name": "bytes-unchanged",
+      "surface": "both",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "{\"ok\":false,\"reason\":\"fixture vault or runner page was not initialized\"}"
+    },
+    {
+      "name": "no-paint-spawn",
+      "surface": "both",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "{\"ok\":false,\"reason\":\"runner process or page was not initialized\"}"
+    },
+    {
+      "name": "screenshots-captured",
+      "surface": "both",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "{\"ok\":false,\"missingShots\":[\"day-live-light-narrow\",\"day-live-light-wide\",\"day-live-dark-narrow\",\"day-live-dark-wide\",\"day-reading-light-narrow\",\"day-reading-light-wide\",\"day-reading-dark-narrow\",\"day-reading-dark-wide\",\"week-live-light-narrow\",\"week-live-light-wide\",\"week-live-dark-narrow\",\"week-live-dark-wide\",\"week-reading-light-narrow\",\"week-reading-light-wide\",\"week-reading-dark-narrow\",\"week-reading-dark-wide\",\"record-live-light-narrow\",\"record-live-light-wide\",\"record-live-dark-narrow\",\"record-live-dark-wide\",\"record-reading-light-narrow\",\"record-reading-light-wide\",\"record-reading-dark-narrow\",\"record-reading-dark-wide\",\"album-live-light-narrow\",\"album-live-light-wide\",\"album-live-dark-narrow\",\"album-live-dark-wide\",\"album-reading-light-narrow\",\"album-reading-light-wide\",\"album-reading-dark-narrow\",\"album-reading-dark-wide\",\"bank-live-light-narrow\",\"bank-live-light-wide\",\"bank-live-dark-narrow\",\"bank-live-dark-wide\",\"bank-reading-light-narrow\",\"bank-reading-light-wide\",\"bank-reading-dark-narrow\",\"bank-reading-dark-wide\",\"area-live-light-narrow\",\"area-live-light-wide\",\"area-live-dark-narrow\",\"area-live-dark-wide\",\"area-reading-light-narrow\",\"area-reading-light-wide\",\"area-reading-dark-narrow\",\"area-reading-dark-wide\",\"inbox-live-light-narrow\",\"inbox-live-light-wide\",\"inbox-live-dark-narrow\",\"inbox-live-dark-wide\",\"inbox-reading-light-narrow\",\"inbox-reading-light-wide\",\"inbox-reading-dark-narrow\",\"inbox-reading-dark-wide\",\"project-live-light-narrow\",\"project-live-light-wide\",\"project-live-dark-narrow\",\"project-live-dark-wide\",\"project-reading-light-narrow\",\"project-reading-light-wide\",\"project-reading-dark-narrow\",\"project-reading-dark-wide\",\"project-terminal-live-light-narrow\",\"project-terminal-live-light-wide\",\"project-terminal-live-dark-narrow\",\"project-terminal-live-dark-wide\",\"project-terminal-reading-light-narrow\",\"project-terminal-reading-light-wide\",\"project-terminal-reading-dark-narrow\",\"project-terminal-reading-dark-wide\",\"ordinary-add-light-narrow\",\"ordinary-add-light-wide\",\"ordinary-add-dark-narrow\",\"ordinary-add-dark-wide\"],\"invalidShots\":[],\"count\":0}"
+    },
+    {
+      "name": "no-console-exceptions",
+      "surface": "both",
+      "status": "pass",
+      "mandatory": true,
+      "detail": "{\"ok\":true,\"failures\":[]}"
+    },
+    {
+      "name": "plugin-loaded",
+      "surface": "both",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "own-day-live",
+      "surface": "live",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "own-day-reading",
+      "surface": "reading",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "own-week-live",
+      "surface": "live",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "own-week-reading",
+      "surface": "reading",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "own-record-live",
+      "surface": "live",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "own-record-reading",
+      "surface": "reading",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "own-album-live",
+      "surface": "live",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "own-album-reading",
+      "surface": "reading",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "bank-cache-parity",
+      "surface": "both",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "own-bank-live",
+      "surface": "live",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "own-bank-reading",
+      "surface": "reading",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "bank-props-v1-only-owned",
+      "surface": "both",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "own-area-live",
+      "surface": "live",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "own-area-reading",
+      "surface": "reading",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "own-subarea-live",
+      "surface": "live",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "own-subarea-reading",
+      "surface": "reading",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "own-inbox-live",
+      "surface": "live",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "own-inbox-reading",
+      "surface": "reading",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "own-project-live",
+      "surface": "live",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "own-project-reading",
+      "surface": "reading",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "own-project-terminal-live",
+      "surface": "live",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "own-project-terminal-reading",
+      "surface": "reading",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "excluded-home-cards-native",
+      "surface": "both",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "home-card-gestures-live",
+      "surface": "live",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "project-prj-line-integrity-live",
+      "surface": "live",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "bank-pane-path-lifecycle",
+      "surface": "live",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "bank-generic-editor-gestures",
+      "surface": "live",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "own-quarter-live",
+      "surface": "live",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "own-year-live",
+      "surface": "live",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "own-identity-day-live",
+      "surface": "live",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "own-identity-day-reading",
+      "surface": "reading",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "foreign-refresh-keeps-ownership",
+      "surface": "both",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "source-toggle-releases",
+      "surface": "live",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "deny-embed",
+      "surface": "both",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "deny-hover",
+      "surface": "both",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "deny-canvas",
+      "surface": "both",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "deny-print",
+      "surface": "both",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "deny-mobile",
+      "surface": "both",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "deny-malformed",
+      "surface": "both",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "deny-unclosed",
+      "surface": "both",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "stale-cache-releases",
+      "surface": "live",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "bank-cache-skew-releases",
+      "surface": "live",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "live-autosave-keeps-ownership",
+      "surface": "live",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "live-slow-reparse-keeps-card",
+      "surface": "live",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "same-pane-file-change",
+      "surface": "live",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "injected-mount-failure",
+      "surface": "live",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "replaced-container-reapplies",
+      "surface": "live",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "disable-unload-restores",
+      "surface": "both",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "pending-capability-native",
+      "surface": "both",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "absent-old-bob-native",
+      "surface": "both",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "failed-probe-native",
+      "surface": "both",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "path-switch-native",
+      "surface": "both",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "late-after-unload-native",
+      "surface": "both",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "mod-semicolon-add-owned",
+      "surface": "live",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "palette-add-owned",
+      "surface": "live",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "custom-shortcut-add-owned",
+      "surface": "live",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "bank-add-file-property",
+      "surface": "live",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "bank-sidebar-native",
+      "surface": "both",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "ordinary-native",
+      "surface": "both",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "field-focused-helper",
+      "surface": "live",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "failed-opener-fallback",
+      "surface": "live",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "vim-k-gg-up-live",
+      "surface": "live",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "bank-vim-k-gg-live",
+      "surface": "live",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "bank-focusin-guard",
+      "surface": "live",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "tab-live",
+      "surface": "live",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "tab-reading",
+      "surface": "reading",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "title-slot-anchor-live",
+      "surface": "live",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "title-slot-anchor-reading",
+      "surface": "reading",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "variables-live",
+      "surface": "live",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "variables-reading",
+      "surface": "reading",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    },
+    {
+      "name": "drawer-exposes-every-key",
+      "surface": "live",
+      "status": "fail",
+      "mandatory": true,
+      "detail": "Required check was not executed"
+    }
+  ],
+  "screenshots": [],
+  "consoleExceptions": [],
+  "consoleErrors": [],
+  "prerequisites": [
+    {
+      "name": "explicit-current-bob-binary",
+      "status": "pass",
+      "detail": {
+        "path": "/home/bryan/.local/state/sase/workspaces/bobs-org/bob-cli/bob-cli_15/.acceptance/frontmatter-takeover-20261127/worktree-two/target/debug/bob",
+        "sha256": "59013ea785763b49e4ca8c84f0b958f6f3b1f34aee5cdf1b9bcc8cd539497134",
+        "version": "bob 0.6.0",
+        "checkout": "/home/bryan/.local/state/sase/workspaces/bobs-org/bob-cli/bob-cli_15/.acceptance/frontmatter-takeover-20261127/worktree-two",
+        "sourceSha": "33fe3425b51207b39215bb2a8553224b3302bea7",
+        "sourcePatch": null
+      }
+    },
+    {
+      "name": "Obsidian-Electron-and-Xvfb-host",
+      "status": "pass",
+      "detail": {
+        "executable": "/snap/obsidian/current/app/obsidian",
+        "display": ":129"
+      }
+    },
+    {
+      "name": "runner",
+      "status": "fail",
+      "detail": "Obsidian exited before opening the scratch vault"
+    }
+  ],
+  "measurements": {},
+  "bobInvocations": {
+    "count": 0
+  },
+  "pluginSource": {
+    "head": "29ae834012435a34d1bf88ef8fc52c3bc002dc1e",
+    "dirtyPaths": [
+      "?? .acceptance/attempts/no-go-38423a9a4mwt/",
+      "?? .acceptance/attempts/no-go-7q3ve4/",
+      "?? .acceptance/attempts/no-go-hr657dcdzejs/",
+      "?? .acceptance/reports/frontmatter-takeover-run-nine.json",
+      "?? .acceptance/reports/frontmatter-takeover-run-ten.json"
+    ],
+    "version": "1.172.1",
+    "files": {
+      "manifest.json": "b986330256d2fa7b5bf234d160cdef85cac48bcea9ec0b8487d626376c049e2f",
+      "main.js": "beb703c38d3c59520a0887570494e35517cc7407b9a4eaa2147913390f4c48fc",
+      "styles.css": "2a33645762e21b5b04d83870510f5259066f745e24098edc2ead8f2bb1aeef65"
+    }
+  },
+  "addFilePropertyCommand": null,
+  "profile": "full",
+  "skippedChecks": [],
+  "reportPath": "/home/bryan/.local/state/sase/workspaces/bobs-org/bob-cli/bob-cli_15/.acceptance/frontmatter-takeover-20261127/evidence/reports/frontmatter-takeover-run-ten.json",
+  "screenshotDirectory": "/home/bryan/.local/state/sase/workspaces/bobs-org/bob-cli/bob-cli_15/.acceptance/frontmatter-takeover-20261127/evidence/shots/frontmatter-takeover-run-ten",
+  "bob": {
+    "path": "/home/bryan/.local/state/sase/workspaces/bobs-org/bob-cli/bob-cli_15/.acceptance/frontmatter-takeover-20261127/worktree-two/target/debug/bob",
+    "sha256": "59013ea785763b49e4ca8c84f0b958f6f3b1f34aee5cdf1b9bcc8cd539497134",
+    "version": "bob 0.6.0",
+    "checkout": "/home/bryan/.local/state/sase/workspaces/bobs-org/bob-cli/bob-cli_15/.acceptance/frontmatter-takeover-20261127/worktree-two",
+    "sourceSha": "33fe3425b51207b39215bb2a8553224b3302bea7",
+    "sourcePatch": null
+  },
+  "executable": "/snap/obsidian/current/app/obsidian",
+  "fixtures": {
+    "names": [
+      "2026.md",
+      "2026/2026-Q4.md",
+      "2026/2026-W47.md",
+      "2026/20261120.md",
+      "2026/20261121.md",
+      "2026/20261122.md",
+      "_conflicts/work.md",
+      "_templates/work.md",
+      "area.md",
+      "bank.md",
+      "body.md",
+      "cash.md",
+      "done/work.md",
+      "dup.md",
+      "eat.md",
+      "eat/corner-bistro.md",
+      "embedder.md",
+      "hover.md",
+      "inbox.md",
+      "index.md",
+      "invalid.md",
+      "ordinary.md",
+      "project.md",
+      "snacks.md",
+      "type.md",
+      "unclosed.md",
+      "work.md",
+      "work/launch.md",
+      "work/retired.md",
+      "work/tools.md"
+    ],
+    "expected": {
+      "2026.md": "c4f792483c2e61f4fd88ca85dfdde8ebfb99a27d0946c5bf50bdea4328102e89",
+      "2026/2026-Q4.md": "4c2420dd9665b64aed998352a250f89d593a2bf7f12867b1e3861e434ebcc10d",
+      "2026/2026-W47.md": "169940b42c235cf643bdf8507bd6979d082a89010a1615782c8722e30c5fde92",
+      "2026/20261120.md": "beea9fe5149981cd48b211311163124a07b933af6f669ac6bc9888d246be7edf",
+      "2026/20261121.md": "52af3a47a9c4ea00ff0bb0706a15961e326342aa0d20732579e3ebb925d60293",
+      "2026/20261122.md": "5340956d72af4a70e4183960462790700ec61f9f7cfd51cabf6e4aaaf8135f3d",
+      "_conflicts/work.md": "860d184c8754cb2867c80ff641378d2425a3f53862b4d62d9609eb65661e1a5f",
+      "_templates/work.md": "de96b99a7b648bcf706f5e4413aa3e0457714268fddfae9e760a46c0a11fba27",
+      "area.md": "e640474159eb67b4bfec8f5829cc062279a05a41a695634d5226bd2aa656611a",
+      "bank.md": "c6fa8cbf32a0439afe61979ecd803d7fa7a1ce917b41a28f2fc6dfcec2af5ce6",
+      "body.md": "a5341bc74a98873e056712703de9aee6636edb4359bad518a1edf59a3808d12c",
+      "cash.md": "54317733d44843ba3d09e6a00acc30ed9b43fb762cbedd8f04cc04cf5f8eec53",
+      "done/work.md": "291afc2da5396821a1787a55ab7120192bf9d4b32796c44cc177c175787ec5ac",
+      "dup.md": "1dc41160882883c9534c85c7914bb51630fa2dffc59a80dce012524f1e66fd79",
+      "eat.md": "78f6691c675fb35fd24954bce4400fc4217d0bd9a56bf66df5016bbfa0c15b66",
+      "eat/corner-bistro.md": "e9b813b373ebf5bb50beb7f90fc9aeb463b591709f3b8f0631c18fb2ff4aa6f7",
+      "embedder.md": "12d8368d4a80d79f3330bc55986ad841d2960709979e266001ca71b44a3cc005",
+      "hover.md": "7b638113af0747184192acc36eee04e869259c9c7d5434c4158c16d9ff31f6b0",
+      "inbox.md": "fee63e4311d734171de519b911fb681d5852f9c9be5202f101fc82fcd78e5c2a",
+      "index.md": "6dd07f0d0bcb337fae19c6c1be559dc6efb32fb1385d3ef22798385e00f89812",
+      "invalid.md": "0947c067a22504d25c3c6f0f6d80dc433e02b85ef809430819ad107af00e2cca",
+      "ordinary.md": "0cbe99c06494d0d3426e3ad851d6d4d30d510e4d61e228a8b72cc7d31ad4dc21",
+      "project.md": "402e79b5fdeb9a56efde234326031dc359915950d9f3abebf723136718ce68fd",
+      "snacks.md": "f4586eefc00ff529d7753b97403b537a3c95ce4437001343a4f55c1676cba14f",
+      "type.md": "dab0d27c565deeedb1da40f97e0bdaed0ffa62850defbe2f016dd068d1bd6cf3",
+      "unclosed.md": "2def10bf5a45bb5c9a8cfb4a8aa9021e74be9e57f75b600d788700b237c7711a",
+      "work.md": "cb88ee4de3937afb3b9d59325b18641f706baaa7da82f45ab7bb588bc02e8093",
+      "work/launch.md": "b03c504a513b346f6b690736611026bc4a153e5692f48eabf1b76525e67b5283",
+      "work/retired.md": "c5e071a94f4bc8dfa92fcd7b8d594b797585adcb08c32218d6414dd204454cf2",
+      "work/tools.md": "f1e91a1b94c17e3dff0de680c6b09e2189d510ca8146a02b1ac8beb0b420083a"
+    },
+    "seeded": {
+      "2026.md": "c4f792483c2e61f4fd88ca85dfdde8ebfb99a27d0946c5bf50bdea4328102e89",
+      "2026/2026-Q4.md": "4c2420dd9665b64aed998352a250f89d593a2bf7f12867b1e3861e434ebcc10d",
+      "2026/2026-W47.md": "169940b42c235cf643bdf8507bd6979d082a89010a1615782c8722e30c5fde92",
+      "2026/20261120.md": "beea9fe5149981cd48b211311163124a07b933af6f669ac6bc9888d246be7edf",
+      "2026/20261121.md": "52af3a47a9c4ea00ff0bb0706a15961e326342aa0d20732579e3ebb925d60293",
+      "2026/20261122.md": "5340956d72af4a70e4183960462790700ec61f9f7cfd51cabf6e4aaaf8135f3d",
+      "_conflicts/work.md": "860d184c8754cb2867c80ff641378d2425a3f53862b4d62d9609eb65661e1a5f",
+      "_templates/work.md": "de96b99a7b648bcf706f5e4413aa3e0457714268fddfae9e760a46c0a11fba27",
+      "area.md": "e640474159eb67b4bfec8f5829cc062279a05a41a695634d5226bd2aa656611a",
+      "bank.md": "c6fa8cbf32a0439afe61979ecd803d7fa7a1ce917b41a28f2fc6dfcec2af5ce6",
+      "body.md": "a5341bc74a98873e056712703de9aee6636edb4359bad518a1edf59a3808d12c",
+      "cash.md": "54317733d44843ba3d09e6a00acc30ed9b43fb762cbedd8f04cc04cf5f8eec53",
+      "done/work.md": "291afc2da5396821a1787a55ab7120192bf9d4b32796c44cc177c175787ec5ac",
+      "dup.md": "1dc41160882883c9534c85c7914bb51630fa2dffc59a80dce012524f1e66fd79",
+      "eat.md": "78f6691c675fb35fd24954bce4400fc4217d0bd9a56bf66df5016bbfa0c15b66",
+      "eat/corner-bistro.md": "e9b813b373ebf5bb50beb7f90fc9aeb463b591709f3b8f0631c18fb2ff4aa6f7",
+      "embedder.md": "12d8368d4a80d79f3330bc55986ad841d2960709979e266001ca71b44a3cc005",
+      "hover.md": "7b638113af0747184192acc36eee04e869259c9c7d5434c4158c16d9ff31f6b0",
+      "inbox.md": "fee63e4311d734171de519b911fb681d5852f9c9be5202f101fc82fcd78e5c2a",
+      "index.md": "6dd07f0d0bcb337fae19c6c1be559dc6efb32fb1385d3ef22798385e00f89812",
+      "invalid.md": "0947c067a22504d25c3c6f0f6d80dc433e02b85ef809430819ad107af00e2cca",
+      "ordinary.md": "0cbe99c06494d0d3426e3ad851d6d4d30d510e4d61e228a8b72cc7d31ad4dc21",
+      "project.md": "402e79b5fdeb9a56efde234326031dc359915950d9f3abebf723136718ce68fd",
+      "snacks.md": "f4586eefc00ff529d7753b97403b537a3c95ce4437001343a4f55c1676cba14f",
+      "type.md": "dab0d27c565deeedb1da40f97e0bdaed0ffa62850defbe2f016dd068d1bd6cf3",
+      "unclosed.md": "2def10bf5a45bb5c9a8cfb4a8aa9021e74be9e57f75b600d788700b237c7711a",
+      "work.md": "cb88ee4de3937afb3b9d59325b18641f706baaa7da82f45ab7bb588bc02e8093",
+      "work/launch.md": "b03c504a513b346f6b690736611026bc4a153e5692f48eabf1b76525e67b5283",
+      "work/retired.md": "c5e071a94f4bc8dfa92fcd7b8d594b797585adcb08c32218d6414dd204454cf2",
+      "work/tools.md": "f1e91a1b94c17e3dff0de680c6b09e2189d510ca8146a02b1ac8beb0b420083a"
+    }
+  },
+  "scratch": {
+    "root": "/var/tmp/bob-frontmatter-takeover-e2e-RdNCWm",
+    "vault": "/var/tmp/bob-frontmatter-takeover-e2e-RdNCWm/vault",
+    "profile": "/var/tmp/bob-frontmatter-takeover-e2e-RdNCWm/profile"
+  },
+  "fixtureWatch": {
+    "path": "2026/20261120.md",
+    "expected": "beea9fe5149981cd48b211311163124a07b933af6f669ac6bc9888d246be7edf",
+    "transitions": [],
+    "final": "beea9fe5149981cd48b211311163124a07b933af6f669ac6bc9888d246be7edf"
+  },
+  "bankFixtureWatch": {
+    "path": "bank.md",
+    "expected": "c6fa8cbf32a0439afe61979ecd803d7fa7a1ce917b41a28f2fc6dfcec2af5ce6",
+    "transitions": [],
+    "final": "c6fa8cbf32a0439afe61979ecd803d7fa7a1ce917b41a28f2fc6dfcec2af5ce6"
+  },
+  "obsidianProcess": {
+    "pid": 3039817,
+    "executable": "/snap/obsidian/current/app/obsidian",
+    "debugPort": 43245,
+    "exitCode": 1,
+    "signal": null,
+    "stderr": ""
+  },
+  "error": "Error: Obsidian exited before opening the scratch vault\n    at Object.selectTarget (/home/bryan/.local/state/sase/workspaces/bobs-org/bob-cli/bob-cli_15/sase/repos/linked/bob-plugins/scripts/obsidian-record-card-e2e.cjs:368:34)\n    at async run (/home/bryan/.local/state/sase/workspaces/bobs-org/bob-cli/bob-cli_15/sase/repos/linked/bob-plugins/scripts/obsidian-frontmatter-takeover-e2e.cjs:740:20)\n    at async main (/home/bryan/.local/state/sase/workspaces/bobs-org/bob-cli/bob-cli_15/sase/repos/linked/bob-plugins/scripts/obsidian-frontmatter-takeover-e2e.cjs:2693:9)",
+  "verdict": {
+    "verdict": "NO-GO",
+    "fallback": [],
+    "missing": [],
+    "surfaces": {
+      "live": {
+        "pass": 0,
+        "total": 38,
+        "failed": [
+          "own-day-live",
+          "own-week-live",
+          "own-record-live",
+          "own-album-live",
+          "own-bank-live",
+          "own-area-live",
+          "own-subarea-live",
+          "own-inbox-live",
+          "own-project-live",
+          "own-project-terminal-live",
+          "home-card-gestures-live",
+          "project-prj-line-integrity-live",
+          "bank-pane-path-lifecycle",
+          "bank-generic-editor-gestures",
+          "own-quarter-live",
+          "own-year-live",
+          "own-identity-day-live",
+          "source-toggle-releases",
+          "stale-cache-releases",
+          "bank-cache-skew-releases",
+          "live-autosave-keeps-ownership",
+          "live-slow-reparse-keeps-card",
+          "same-pane-file-change",
+          "injected-mount-failure",
+          "replaced-container-reapplies",
+          "mod-semicolon-add-owned",
+          "palette-add-owned",
+          "custom-shortcut-add-owned",
+          "bank-add-file-property",
+          "field-focused-helper",
+          "failed-opener-fallback",
+          "vim-k-gg-up-live",
+          "bank-vim-k-gg-live",
+          "bank-focusin-guard",
+          "tab-live",
+          "title-slot-anchor-live",
+          "variables-live",
+          "drawer-exposes-every-key"
+        ]
+      },
+      "reading": {
+        "pass": 0,
+        "total": 14,
+        "failed": [
+          "own-day-reading",
+          "own-week-reading",
+          "own-record-reading",
+          "own-album-reading",
+          "own-bank-reading",
+          "own-area-reading",
+          "own-subarea-reading",
+          "own-inbox-reading",
+          "own-project-reading",
+          "own-project-terminal-reading",
+          "own-identity-day-reading",
+          "tab-reading",
+          "title-slot-anchor-reading",
+          "variables-reading"
+        ]
+      },
+      "both": {
+        "pass": 1,
+        "total": 24,
+        "failed": [
+          "plugin-loaded",
+          "bank-cache-parity",
+          "bank-props-v1-only-owned",
+          "excluded-home-cards-native",
+          "foreign-refresh-keeps-ownership",
+          "deny-embed",
+          "deny-hover",
+          "deny-canvas",
+          "deny-print",
+          "deny-mobile",
+          "deny-malformed",
+          "deny-unclosed",
+          "disable-unload-restores",
+          "pending-capability-native",
+          "absent-old-bob-native",
+          "failed-probe-native",
+          "path-switch-native",
+          "late-after-unload-native",
+          "bank-sidebar-native",
+          "ordinary-native",
+          "bytes-unchanged",
+          "no-paint-spawn",
+          "screenshots-captured"
+        ]
+      }
+    },
+    "partial": false
+  },
+  "pass": false,
+  "summary": {
+    "obsidian": null,
+    "plugin": "1.172.1",
+    "commit": "29ae834012435a34d1bf88ef8fc52c3bc002dc1e",
+    "bob": {
+      "path": "/home/bryan/.local/state/sase/workspaces/bobs-org/bob-cli/bob-cli_15/.acceptance/frontmatter-takeover-20261127/worktree-two/target/debug/bob",
+      "sha256": "59013ea785763b49e4ca8c84f0b958f6f3b1f34aee5cdf1b9bcc8cd539497134",
+      "version": "bob 0.6.0",
+      "sourceSha": "33fe3425b51207b39215bb2a8553224b3302bea7"
+    },
+    "verdict": "NO-GO",
+    "fallback": [],
+    "addFilePropertyCommand": null,
+    "failed": [
+      "own-day-live",
+      "own-week-live",
+      "own-record-live",
+      "own-album-live",
+      "own-bank-live",
+      "own-area-live",
+      "own-subarea-live",
+      "own-inbox-live",
+      "own-project-live",
+      "own-project-terminal-live",
+      "home-card-gestures-live",
+      "project-prj-line-integrity-live",
+      "bank-pane-path-lifecycle",
+      "bank-generic-editor-gestures",
+      "own-quarter-live",
+      "own-year-live",
+      "own-identity-day-live",
+      "source-toggle-releases",
+      "stale-cache-releases",
+      "bank-cache-skew-releases",
+      "live-autosave-keeps-ownership",
+      "live-slow-reparse-keeps-card",
+      "same-pane-file-change",
+      "injected-mount-failure",
+      "replaced-container-reapplies",
+      "mod-semicolon-add-owned",
+      "palette-add-owned",
+      "custom-shortcut-add-owned",
+      "bank-add-file-property",
+      "field-focused-helper",
+      "failed-opener-fallback",
+      "vim-k-gg-up-live",
+      "bank-vim-k-gg-live",
+      "bank-focusin-guard",
+      "tab-live",
+      "title-slot-anchor-live",
+      "variables-live",
+      "drawer-exposes-every-key",
+      "own-day-reading",
+      "own-week-reading",
+      "own-record-reading",
+      "own-album-reading",
+      "own-bank-reading",
+      "own-area-reading",
+      "own-subarea-reading",
+      "own-inbox-reading",
+      "own-project-reading",
+      "own-project-terminal-reading",
+      "own-identity-day-reading",
+      "tab-reading",
+      "title-slot-anchor-reading",
+      "variables-reading",
+      "plugin-loaded",
+      "bank-cache-parity",
+      "bank-props-v1-only-owned",
+      "excluded-home-cards-native",
+      "foreign-refresh-keeps-ownership",
+      "deny-embed",
+      "deny-hover",
+      "deny-canvas",
+      "deny-print",
+      "deny-mobile",
+      "deny-malformed",
+      "deny-unclosed",
+      "disable-unload-restores",
+      "pending-capability-native",
+      "absent-old-bob-native",
+      "failed-probe-native",
+      "path-switch-native",
+      "late-after-unload-native",
+      "bank-sidebar-native",
+      "ordinary-native",
+      "bytes-unchanged",
+      "no-paint-spawn",
+      "screenshots-captured"
+    ],
+    "screenshots": 0,
+    "consoleExceptions": 0,
+    "skippedChecks": 0
+  }
+}

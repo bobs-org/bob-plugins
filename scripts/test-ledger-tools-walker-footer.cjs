@@ -135,6 +135,8 @@ const {
   bankCacheKey,
   bankBuildArgs,
   walkerFooterCabinetOverlayParts,
+  walkerFooterOverlayPaintText,
+  walkerFooterOverlayFit,
 } = helpers;
 
 const DAY = new Date(2026, 9, 28);
@@ -152,6 +154,64 @@ test("cabinet footer overlay separates its label, keycaps, nouns, and cancel hin
     cancel: "esc",
   });
   assert.equal(walkerFooterCabinetOverlayParts("ordinary footer text"), null);
+});
+
+test("cabinet footer overlay text reads with spaces between its painted parts", () => {
+  class FakeNode {
+    constructor(doc, text = "") {
+      this.ownerDocument = doc;
+      this.childNodes = [];
+      this.ownText = text;
+      this.className = "";
+      this.attrs = {};
+    }
+    appendChild(node) { this.childNodes.push(node); return node; }
+    setAttribute(name, value) { this.attrs[name] = String(value); }
+    get textContent() { return this.ownText + this.childNodes.map((node) => node.textContent).join(""); }
+    set textContent(value) { this.ownText = String(value); this.childNodes = []; }
+  }
+  const doc = {
+    createElement: () => new FakeNode(doc),
+    createTextNode: (text) => new FakeNode(doc, text),
+  };
+  const overlay = new FakeNode(doc);
+  const text = "▤ Cabinets   1 Albums ▸ · 2 Notebooks ▸   - Properties   esc";
+  assert.equal(walkerFooterOverlayPaintText(overlay, text), true);
+  assert.equal(overlay.textContent, "▤ Cabinets 1 Albums ▸ 2 Notebooks ▸ - Properties esc");
+  assert.equal(overlay.attrs["aria-label"], text);
+  const plain = new FakeNode(doc);
+  assert.equal(walkerFooterOverlayPaintText(plain, "ordinary footer text"), false);
+  assert.equal(plain.textContent, "ordinary footer text");
+});
+
+test("cabinet footer overlay fits the window's room and sheds esc before nouns truncate", () => {
+  const fitted = (layout) => {
+    const classes = new Set(["bob-walker-footer-overlay"]);
+    const nouns = layout.nouns.map(([scrollWidth, clientWidth]) => ({ scrollWidth, clientWidth }));
+    const overlay = {
+      classList: { add: (name) => classes.add(name), remove: (name) => classes.delete(name), contains: (name) => classes.has(name) },
+      style: {},
+      ownerDocument: { defaultView: { innerWidth: layout.viewport } },
+      getBoundingClientRect: () => ({ width: layout.overlayWidth }),
+      scrollWidth: layout.scrollWidth,
+      clientWidth: layout.clientWidth,
+      querySelectorAll: () => nouns,
+    };
+    const bar = { getBoundingClientRect: () => ({ width: layout.barWidth }) };
+    const host = layout.statusBar ? { closest: () => bar, parentElement: bar } : null;
+    const cramped = walkerFooterOverlayFit(overlay, host);
+    return { cramped, shed: classes.has("bob-walker-footer-overlay-shed"), maxWidth: overlay.style.maxWidth };
+  };
+  // 420 px window: the bar's siblings take 204 px, so the overlay is capped
+  // at the rest and, with nouns now truncating, sheds esc.
+  assert.deepEqual(fitted({ statusBar: true, viewport: 420, barWidth: 618, overlayWidth: 414,
+    scrollWidth: 208, clientWidth: 208, nouns: [[43, 12], [62, 14]] }), { cramped: true, shed: true, maxWidth: "208px" });
+  // A wide window leaves every part whole: capped, but nothing sheds.
+  assert.deepEqual(fitted({ statusBar: true, viewport: 1400, barWidth: 628, overlayWidth: 423,
+    scrollWidth: 423, clientWidth: 423, nouns: [[43, 43], [62, 62]] }), { cramped: false, shed: false, maxWidth: "1187px" });
+  // A fallback strip keeps its own width and sheds when its parts overflow it.
+  assert.deepEqual(fitted({ statusBar: false, viewport: 420, barWidth: 0, overlayWidth: 400,
+    scrollWidth: 430, clientWidth: 400, nouns: [[43, 43]] }), { cramped: true, shed: true, maxWidth: "" });
 });
 
 function entry(lane, path, lineNumber, overrides = {}) {

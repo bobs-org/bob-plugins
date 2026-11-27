@@ -21,6 +21,7 @@ try {
       walkerFooterReviewAttentionLabel,
       walkerFooterCabinetOverlayParts,
       walkerFooterOverlayPaintText,
+      walkerFooterOverlayFit,
       walkerFooterWalkMode,
     });
   }

@@ -471,6 +471,35 @@ test("a Records body built before its card is inserted tags the host Reading vie
   releaseEmbedded();
 });
 
+test("a Live Preview Records claim survives a later Reading claim's sweep while its editor stands", () => {
+  const path = "Albums/sweep.md";
+  const plan = { kind: "records", startLine: 4, headingLine: null };
+  // The leaf's Live Preview editor claims first (hidden behind Reading).
+  const editor = hiddenEditor();
+  const releaseEditor = H.cabinetRecordsClaimBody({}, {
+    view: editor, container: el("div"), path, fingerprint: "fp-sweep", plan,
+  });
+  assert.equal(H.propertyCardCatalogClaimed(editor, path, "records", "fp-sweep"), true);
+  // The Reading body claims next; its disconnected-entry sweep must keep the
+  // editor's claim, which has no Reading scope by design.
+  const native = nativeCallout("records");
+  const releaseReading = H.cabinetRecordsClaimBody({}, {
+    view: null, container: el("div"), readingScope: readingView(native).preview, path, fingerprint: "fp-sweep", plan,
+  });
+  assert.equal(H.propertyCardCatalogClaimed(editor, path, "records", "fp-sweep"), true);
+  assert.equal(native.classList.contains("bob-cabinet-absorbed"), true);
+  // Once the editor's DOM is gone, the next sweep releases its claim.
+  editor.source.connectedRoot = false;
+  const releaseAgain = H.cabinetRecordsClaimBody({}, {
+    view: null, container: el("div"), readingScope: readingView(nativeCallout("records")).preview,
+    path: "Albums/other-sweep.md", fingerprint: "fp-other", plan,
+  });
+  assert.equal(H.propertyCardCatalogClaimed(editor, path, "records", "fp-sweep"), false);
+  releaseEditor();
+  releaseReading();
+  releaseAgain();
+});
+
 test("a hidden editor's Records body claims at once but renders only once shown", () => {
   const observers = [];
   const previous = global.IntersectionObserver;

@@ -665,6 +665,8 @@
         "▤ Cabinets   1 Areas ▸ · 2 Projects ▸ · 3 Notebooks ▸ · 4 Albums ▸   - Properties   esc",
       );
       await nextFrame();
+      ledger.walkerFooterOverlayFit(cabinetOverlay);
+      await nextFrame();
       const cancel = cabinetOverlay.querySelector(".bob-walker-footer-overlay-cancel");
       const noun = cabinetOverlay.querySelector(".bob-walker-footer-overlay-noun");
       const cabinetOverlay420 = {

@@ -136,7 +136,12 @@ const FIXTURE_BOB_REPORTS = Object.freeze({
     catalogs: [{ host: "cash", path: "cash.md", root: "cash", state: "current", notebooks: 1, issues: [] }],
     counts: { notebooks: 1, roots: 1, errors: 0, warnings: 0 }, findings: [],
   },
-  capabilityCatalog: { ok: true, protocol: 1, features: ["props_contract_v1"] },
+  // The features the shipped bob binary advertises. Without
+  // props_ref_contract_v1 the contract probe never parks and spawns
+  // `bob __catalog` on every leaf change, which the live vault never does.
+  capabilityCatalog: { ok: true, protocol: 1, features: [
+    "clicolor-force", "progress-env", "props_contract_v1", "props_ref_contract_v1", "props_v1", "run-receipt",
+  ] },
 });
 
 function albumFixture(stem, title, noun, records, fields) {
@@ -248,6 +253,22 @@ const PROBE_SOURCE = `(() => {
     footerText: String(plugin?.walkerFooterOverlayFallback?.textContent
       || plugin?.freshnessStatusEl?.querySelector?.(".bob-walker-footer-overlay")?.textContent || "")
       .replace(/\\s+/g, " ").trim(),
+    footerOverlay: (() => {
+      const node = plugin?.walkerFooterOverlayFallback?.isConnected ? plugin.walkerFooterOverlayFallback
+        : plugin?.freshnessStatusEl?.querySelector?.(".bob-walker-footer-overlay");
+      if (!node) return null;
+      const box = (part) => {
+        const rect = part.getBoundingClientRect();
+        return { text: String(part.textContent || ""), left: Math.round(rect.left), right: Math.round(rect.right), width: Math.round(rect.width) };
+      };
+      const cancel = node.querySelector(".bob-walker-footer-overlay-cancel");
+      return {
+        width: Math.round(node.getBoundingClientRect().width), viewport: window.innerWidth,
+        whole: [node.querySelector(".bob-walker-footer-overlay-label"), ...node.querySelectorAll(".bob-walker-footer-overlay-key")]
+          .filter(Boolean).map(box),
+        cancelShown: Boolean(cancel && getComputedStyle(cancel).display !== "none"),
+      };
+    })(),
     scrollY: window.scrollY,
     width: card?.getBoundingClientRect?.().width || 0,
     height: card?.getBoundingClientRect?.().height || 0,
@@ -429,6 +450,13 @@ async function settleEvaluate(client, expression, predicate, timeout = 5_000) {
 
 // Content cabinets that are open but painted no body text. A blank open
 // cabinet hides the catalog it stands in for, so captures must reject it.
+// The armed pick overlay is painted and whole inside the window: its label
+// and every keycap have width and sit between the window's edges.
+function footerOverlayWhole(overlay) {
+  return Boolean(overlay && overlay.width > 0 && overlay.whole.length >= 2
+    && overlay.whole.every((part) => part.width > 0 && part.left >= 0 && part.right <= overlay.viewport));
+}
+
 function emptyOpenCabinets(probe) {
   const content = new Set(["areas", "projects", "notebooks", "albums", "records"]);
   return (probe?.panels || []).filter((row) => content.has(row.kind) && row.expanded && !row.error
@@ -970,6 +998,7 @@ async function run(args) {
     await sleep(175);
     probe = await refreshProbe(client);
     keyCheck("pick-overlay-after-150ms", probe.armed && Boolean(probe.footerText), probe.footerText);
+    keyCheck("pick-overlay-whole-in-window", probe.armed && footerOverlayWhole(probe.footerOverlay), probe.footerOverlay);
     const areaOrder = ["areas", "projects", "notebooks", "albums"];
     const numbered = areaOrder.slice().reverse();
     for (let digit = 1; digit <= 4; digit += 1) {
@@ -1143,6 +1172,47 @@ async function run(args) {
       && projectHeadings.length >= 1 && projectHeadings.every((row) => row.visible && !row.absorbed)
       && Boolean(projectCabinet) && !projectCabinet.error,
     { projectStored, projectHeadings, projectCabinet: projectCabinet && { ...projectCabinet, text: undefined } });
+    // The open Records cabinet stands in for the album's stored Records
+    // section in Reading, and in the leaf's Live Preview editor reached from
+    // Reading (that editor claimed while hidden behind the Reading view).
+    const albumRecordsAbsorbed = (row, mode) => {
+      const stored = row.callouts.filter((callout) => callout.kind === "records");
+      const headings = row.headings.filter((heading) => heading.text.replace(/^#+\s*/, "").trim() === "Records");
+      const cabinet = row.panels.find((panel) => panel.kind === "records");
+      return {
+        ok: Boolean(cabinet) && cabinet.expanded && !cabinet.error && stored.every((callout) => !callout.visible)
+          && (mode === "live" || stored.length === 1 && stored.every((callout) => callout.absorbed))
+          && headings.every((heading) => !heading.visible),
+        detail: { mode, stored, headings, cabinet: cabinet && { ...cabinet, text: undefined, callouts: undefined } },
+      };
+    };
+    // Both surfaces virtualize below the tall open cabinet, so scroll the
+    // stored section into the rendered range before judging it.
+    const scrollAlbum = (where) => client.evaluate(`(() => {
+      const view = app.workspace.activeLeaf?.view;
+      const scroller = view?.getMode?.() === "preview"
+        ? (view.previewMode?.containerEl?.querySelector?.(".markdown-preview-view") || view.previewMode?.containerEl)
+        : view?.editor?.cm?.scrollDOM;
+      if (!scroller) return false;
+      scroller.scrollTop = ${JSON.stringify(where)} === "end" ? scroller.scrollHeight : 0;
+      return true;
+    })()`);
+    const judgeAlbum = async (mode) => {
+      await openAndProbe(client, lib.PATHS.album, mode);
+      let row = null;
+      for (let round = 0; round < 4; round += 1) {
+        await scrollAlbum("end");
+        await sleep(400);
+        row = await refreshProbe(client);
+        if (albumRecordsAbsorbed(row, mode).ok) break;
+      }
+      await scrollAlbum("top");
+      return albumRecordsAbsorbed(row, mode);
+    };
+    const albumReading = await judgeAlbum("reading");
+    failOpenCheck("reading-hides-album-records-section", albumReading.ok, albumReading.detail);
+    const albumLive = await judgeAlbum("live");
+    failOpenCheck("live-preview-hides-album-records-section-after-reading", albumLive.ok, albumLive.detail);
     await openAndProbe(client, lib.PATHS.area, "source");
     probe = await refreshProbe(client);
     failOpenCheck("source-shows-stored-section", !probe.stackPresent && probe.headings.some((row) => row.text.includes("## Projects") && row.visible), probe);
@@ -1447,6 +1517,9 @@ async function run(args) {
             if (shot.width <= 0 || shot.height <= 0) shot.captureFailures.push("screenshot has no dimensions");
             if (state.theme !== theme) shot.captureFailures.push(`theme expected ${theme}, got ${state.theme}`);
             if (host.state === "armed" && !state.armed) shot.captureFailures.push("armed screenshot has no armed pick");
+            if (host.state === "armed" && !footerOverlayWhole(state.footerOverlay)) {
+              shot.captureFailures.push(`armed footer overlay is not whole inside the window: ${JSON.stringify(state.footerOverlay)}`);
+            }
             for (const row of emptyOpenCabinets(state)) shot.captureFailures.push(`open ${row} cabinet shows an empty body`);
             shot.visualVerdict = "pending visual review";
             report.screenshots.push(shot);

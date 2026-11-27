@@ -375,7 +375,6 @@ a.bob-plan-ready:hover {
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
-  container-type: inline-size;
 }
 
 .bob-walker-footer-overlay-label,
@@ -385,12 +384,13 @@ a.bob-plan-ready:hover {
   flex: none;
 }
 
+/* The chip floor keeps the keycap and state glyph whole; only the noun shrinks. */
 .bob-walker-footer-overlay-chip {
   display: inline-flex;
   align-items: center;
   flex: 0 1 auto;
   gap: 0.2em;
-  min-width: 0;
+  min-width: 2em;
 }
 
 .bob-walker-footer-overlay-noun {
@@ -400,9 +400,8 @@ a.bob-plan-ready:hover {
   text-overflow: ellipsis;
 }
 
-@container (max-width: 420px) {
-  .bob-walker-footer-overlay-cancel { display: none; }
-}
+/* walkerFooterOverlayFit sheds the esc hint before any noun truncates. */
+.bob-walker-footer-overlay-shed .bob-walker-footer-overlay-cancel { display: none; }
 
 .bob-walker-footer-fallback {
   position: relative;

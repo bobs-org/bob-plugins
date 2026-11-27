@@ -72,7 +72,9 @@ test("browser probe is valid and runner covers acceptance-critical interactions"
     "vim-motions-and-arrows-no-invisible-cursor", "cursor-motions-no-console-errors",
     "no-console-errors", "areas-cabinet-single-title-row", "passive-actions-zero-bob-spawns",
     "passive-actions-zero-markdown-writes", "screenshot-matrix-captured",
-    "reading-reload-loop-zero-misses",
+    "reading-reload-loop-zero-misses", "reading-hides-album-records-section",
+    "live-preview-hides-album-records-section-after-reading",
+    "pick-overlay-whole-in-window", "armed footer overlay is not whole inside the window",
   ]) assert.ok(source.includes(check), `runner includes ${check}`);
   assert.match(source, /runReadingReloadLoop/);
   assert.match(source, /cabinetsPreview: true/);
@@ -91,7 +93,13 @@ test("browser probe is valid and runner covers acceptance-critical interactions"
 
 test("420px cabinet overlay sheds esc and keeps fixed labels and keycaps", () => {
   const css = fs.readFileSync(path.join(__dirname, "../plugins/bob-ledger-tools/styles.css"), "utf8");
-  assert.match(css, /@container\s*\(max-width:\s*420px\)\s*\{\s*\.bob-walker-footer-overlay-cancel\s*\{\s*display:\s*none;/);
+  // Size containment zeroes the overlay's width inside Obsidian's
+  // content-sized status bar, so the fit step sheds esc instead.
+  const overlayRule = /\.bob-walker-footer-overlay\s*\{([^}]*)\}/.exec(css);
+  assert.ok(overlayRule, "overlay rule");
+  assert.doesNotMatch(overlayRule[1], /container-type|contain:/);
+  assert.match(css, /\.bob-walker-footer-overlay-shed \.bob-walker-footer-overlay-cancel\s*\{\s*display:\s*none;/);
+  assert.match(css, /\.bob-walker-footer-overlay-chip\s*\{[\s\S]*?min-width:\s*2em;/);
   assert.match(css, /\.bob-walker-footer-overlay-label,[\s\S]*?\.bob-walker-footer-overlay-cancel\s*\{\s*flex:\s*none;/);
   assert.match(css, /\.bob-walker-footer-overlay-noun\s*\{[\s\S]*?text-overflow:\s*ellipsis;/);
   assert.match(css, /\.bob-property-card \.bob-property-card-cabinets \.bob-areas-header,[\s\S]*?\.bob-property-card \.bob-property-card-cabinets \.bob-projects-header\s*\{\s*display:\s*none !important;/);
@@ -118,7 +126,11 @@ test("report fixtures provide valid read-only catalog data for the visual matrix
   assert.equal(projects.report.projects.length, 66);
   assert.equal(notebooks.ok, true);
   assert.equal(notebooks.report.catalogsByHostPath.has("cash.md"), true);
-  assert.deepEqual(runner.FIXTURE_BOB_REPORTS.capabilityCatalog.features, ["props_contract_v1"]);
+  // Both property contracts, as the shipped bob advertises them, so the
+  // contract probe parks instead of spawning on every leaf change.
+  for (const feature of ["props_contract_v1", "props_ref_contract_v1"]) {
+    assert.ok(runner.FIXTURE_BOB_REPORTS.capabilityCatalog.features.includes(feature), feature);
+  }
 });
 
 test("Obsidian child inherits disk-backed temporary storage", () => {

@@ -34,6 +34,19 @@ function cabinetRecordsBodiesFor(path, create) {
   return scoped || null;
 }
 
+// A Live Preview body has no Reading scope: it stands while its editor's DOM
+// is connected, including an editor hidden behind its leaf's Reading view.
+function cabinetRecordsEditorEntryLive(entry) {
+  try {
+    const view = entry && entry.view;
+    if (!view || typeof view.dispatch !== "function") return false;
+    const dom = view.dom || null;
+    return Boolean(dom) && dom.isConnected !== false;
+  } catch (_) {
+    return false;
+  }
+}
+
 function cabinetRecordsSweepDisconnected() {
   try {
     for (const [path, scoped] of Array.from(cabinetRecordsBodies.entries())) {
@@ -41,6 +54,7 @@ function cabinetRecordsSweepDisconnected() {
         const scope = entry && entry.scope;
         if (scope && typeof scope.isConnected === "boolean" && scope.isConnected) continue;
         if (scope && scope.isConnected !== false) continue;
+        if (!scope && cabinetRecordsEditorEntryLive(entry)) continue;
         try { cabinetRecordsReleaseEntry(entry); } catch (_) {}
         scoped.delete(key);
       }

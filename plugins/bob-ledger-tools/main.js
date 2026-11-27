@@ -11983,6 +11983,11 @@ function walkerFooterOverlayPaintText(overlay, text) {
   }
   const doc = overlay.ownerDocument;
   const append = (className, value, parent = overlay) => {
+    // A whitespace-only text node between flex items never renders, but it
+    // keeps the overlay's text readable ("1 Albums") when copied or probed.
+    if (parent.childNodes?.length && typeof doc.createTextNode === "function") {
+      parent.appendChild(doc.createTextNode(" "));
+    }
     const node = doc.createElement("span");
     node.className = className;
     node.textContent = value;
@@ -12006,6 +12011,39 @@ function walkerFooterOverlayPaintText(overlay, text) {
     return true;
   } catch (_error) {
     overlay.textContent = text;
+    return false;
+  }
+}
+
+const WALKER_FOOTER_OVERLAY_SHED_CLASS = "bob-walker-footer-overlay-shed";
+const WALKER_FOOTER_OVERLAY_EDGE_PX = 8;
+
+// Fit a painted overlay to its room. Obsidian's status bar is fixed,
+// right-anchored, and as wide as its content, so the overlay's width is
+// capped at what the window leaves beside its status-bar siblings; uncapped,
+// the bar runs off the window's left edge. A fallback strip already has its
+// own width. When any noun would truncate, the esc hint sheds first; the
+// nouns then ellipsize inside chips that keep their keycaps whole.
+function walkerFooterOverlayFit(overlay, statusHost = null) {
+  try {
+    if (!overlay?.classList || typeof overlay.getBoundingClientRect !== "function") return false;
+    overlay.classList.remove(WALKER_FOOTER_OVERLAY_SHED_CLASS);
+    if (overlay.style) overlay.style.maxWidth = "";
+    if (statusHost) {
+      const bar = statusHost.closest?.(".status-bar") || statusHost.parentElement;
+      const win = overlay.ownerDocument?.defaultView;
+      const viewport = Number(win?.innerWidth) || 0;
+      if (!bar || typeof bar.getBoundingClientRect !== "function" || viewport <= 0) return false;
+      const others = bar.getBoundingClientRect().width - overlay.getBoundingClientRect().width;
+      const room = Math.max(0, Math.floor(viewport - others - WALKER_FOOTER_OVERLAY_EDGE_PX));
+      if (overlay.style) overlay.style.maxWidth = `${room}px`;
+    }
+    const nouns = Array.from(overlay.querySelectorAll?.(".bob-walker-footer-overlay-noun") || []);
+    const cramped = overlay.scrollWidth > overlay.clientWidth + 0.5
+      || nouns.some((noun) => noun.scrollWidth > noun.clientWidth + 0.5);
+    if (cramped) overlay.classList.add(WALKER_FOOTER_OVERLAY_SHED_CLASS);
+    return cramped;
+  } catch (_error) {
     return false;
   }
 }
@@ -12064,7 +12102,7 @@ function walkerFooterOverlayRender(plugin) {
         "bob-walker-footer-overlay",
         el.ownerDocument,
       );
-      if (overlay) walkerFooterOverlayPaintText(overlay, top.text);
+      if (overlay && walkerFooterOverlayPaintText(overlay, top.text)) walkerFooterOverlayFit(overlay, el);
     } catch (_error) {}
     return;
   }
@@ -12078,7 +12116,7 @@ function walkerFooterOverlayRender(plugin) {
   );
   if (fallback) {
     fallback.classList?.add("bob-walker-footer-overlay");
-    walkerFooterOverlayPaintText(fallback, top.text);
+    if (walkerFooterOverlayPaintText(fallback, top.text)) walkerFooterOverlayFit(fallback);
     plugin.walkerFooterOverlayFallback = fallback;
   }
 }
@@ -125385,6 +125423,19 @@ function cabinetRecordsBodiesFor(path, create) {
   return scoped || null;
 }
 
+// A Live Preview body has no Reading scope: it stands while its editor's DOM
+// is connected, including an editor hidden behind its leaf's Reading view.
+function cabinetRecordsEditorEntryLive(entry) {
+  try {
+    const view = entry && entry.view;
+    if (!view || typeof view.dispatch !== "function") return false;
+    const dom = view.dom || null;
+    return Boolean(dom) && dom.isConnected !== false;
+  } catch (_) {
+    return false;
+  }
+}
+
 function cabinetRecordsSweepDisconnected() {
   try {
     for (const [path, scoped] of Array.from(cabinetRecordsBodies.entries())) {
@@ -125392,6 +125443,7 @@ function cabinetRecordsSweepDisconnected() {
         const scope = entry && entry.scope;
         if (scope && typeof scope.isConnected === "boolean" && scope.isConnected) continue;
         if (scope && scope.isConnected !== false) continue;
+        if (!scope && cabinetRecordsEditorEntryLive(entry)) continue;
         try { cabinetRecordsReleaseEntry(entry); } catch (_) {}
         scoped.delete(key);
       }
@@ -217107,6 +217159,7 @@ try {
       walkerFooterReviewAttentionLabel,
       walkerFooterCabinetOverlayParts,
       walkerFooterOverlayPaintText,
+      walkerFooterOverlayFit,
       walkerFooterWalkMode,
     });
   }

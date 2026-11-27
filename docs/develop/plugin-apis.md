@@ -40,10 +40,10 @@ optional intent is dropped. The namespace version stays 1.
 
 ## Bob Prose
 
-Bob Articles keeps the plugin id `bob-articles` and exposes
+Bob Prose keeps the plugin id `bob-articles` and exposes
 `app.plugins.getPlugin("bob-articles")?.api?.prose`, namespace version 1.
 Check `version === 1` before using it. `snapshot(path)` is a read-only lookup:
-it never starts Bob and returns `null` until Bob Articles has remembered a
+it never starts Bob and returns `null` until Bob Prose has remembered a
 plan for that vault-relative path. A frozen snapshot contains `path`,
 monotonic `generation`, `status` (`ready` or `refused`), Bob's `outline` and
 `findings`, `refusal` (`{ code, message }` or `null`), and `numbering`.

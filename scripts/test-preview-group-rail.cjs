@@ -17,7 +17,8 @@ test("preview-group-rail fixtures build with the expected rails", () => {
     "day-midweek", "today-creatable-monday", "week-midquarter", "week-w47-into-2027", "week-w01-ghost",
     "quarter-q4-ghost", "year-no-row", "legacy-daily-derived", "record-first-wraps-prev", "record-middle",
     "record-last-wraps-next", "record-screenshot-single-member", "record-ghost-head", "record-large-group-bar",
-    "record-single-group", "album-walks-by",
+    "record-single-group", "tree-full", "tree-ticks-only", "tree-arms-only", "tree-bar-above-21", "tree-narrow",
+    "album-walks-by",
   ]);
   for (const fixture of built) assert.deepEqual(fixture.problems, [], fixture.name);
   const html = Object.fromEntries(built.map((f) => [f.name, f.html]));
@@ -63,5 +64,5 @@ test("preview-group-rail checks flag arm boxes, landings, missing marks, centre 
 test("preview-group-rail --self-test", () => {
   const result = spawnSync(process.execPath, [path.join(__dirname, "preview-group-rail.cjs"), "--self-test"], { encoding: "utf8", timeout: 60_000 });
   assert.equal(result.status, 0, (result.stdout || "") + "\n" + (result.stderr || ""));
-  assert.match(String(result.stdout || ""), /16 fixtures built, 0 with problems/);
+  assert.match(String(result.stdout || ""), /21 fixtures built, 0 with problems/);
 });

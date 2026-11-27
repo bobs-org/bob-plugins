@@ -383,6 +383,182 @@ const RECORD_FIXTURES = [
     expect: { groupRow: false, thumbTrack: true } },
 ];
 
+// ---- Tree world (bob-cli-ra rail) ------------------------------------------------
+// Pure link-walk rails with no card mounts yet: the preview builds the kit
+// rail from the real tree index (derived stops only) and docks it as the
+// card floor, so screenshots prove the disclosure table, wraps, lanes, and
+// the bar above 21 members.
+
+function treeFixtureCache(spec = {}) {
+  return {
+    frontmatter: spec.frontmatter || {},
+    headings: Array.isArray(spec.headings) ? spec.headings : [],
+    blocks: spec.blocks || {},
+    listItems: Array.isArray(spec.listItems) ? spec.listItems : [],
+  };
+}
+
+function treeProjectNote(parent, task = " ") {
+  return treeFixtureCache({
+    frontmatter: { type: "[[project]]", ...(parent === undefined ? {} : { parent }) },
+    blocks: { prj: { position: { start: { line: 0 } } } },
+    listItems: [{ position: { start: { line: 0 } }, task }],
+  });
+}
+
+function treeAreaNote(parent) {
+  return treeFixtureCache({ frontmatter: { type: "[[area]]", ...(parent === undefined ? {} : { parent }) } });
+}
+
+function treeWorldEntries(kind) {
+  if (kind === "ticks-only") {
+    return {
+      "area.md": treeFixtureCache({}),
+      "project.md": treeFixtureCache({}),
+      "pig.md": treeAreaNote("[[area]]"),
+      "foo.md": treeProjectNote("[[pig]]"),
+      "goo.md": treeProjectNote("[[pig]]"),
+      "zoo.md": treeProjectNote("[[pig]]"),
+    };
+  }
+  if (kind === "arms-only") {
+    return {
+      "area.md": treeFixtureCache({}),
+      "project.md": treeFixtureCache({}),
+      "pig.md": treeAreaNote("[[area]]"),
+      "foo.md": treeProjectNote("[[pig]]"),
+      "goo.md": treeProjectNote("[[pig]]"),
+      "zoo.md": treeProjectNote("[[pig]]"),
+      "bar.md": treeProjectNote("[[foo]]"),
+      "baz.md": treeProjectNote("[[foo]]"),
+      "alpha.md": treeProjectNote("[[goo]]"),
+      "beta.md": treeProjectNote("[[goo]]"),
+      "solo.md": treeProjectNote("[[zoo]]"),
+    };
+  }
+  if (kind === "bar") {
+    const entries = {
+      "area.md": treeFixtureCache({}),
+      "project.md": treeFixtureCache({}),
+      "big-area.md": treeAreaNote("[[area]]"),
+      "big.md": treeProjectNote("[[big-area]]"),
+    };
+    for (let i = 1; i <= 22; i += 1) {
+      const stem = `big-${String(i).padStart(2, "0")}`;
+      entries[`${stem}.md`] = treeProjectNote("[[big]]");
+    }
+    return entries;
+  }
+  if (kind === "narrow") {
+    return {
+      "area.md": treeFixtureCache({}),
+      "project.md": treeFixtureCache({}),
+      "a-very-long-area-name-that-would-clip-without-narrowing.md": treeAreaNote("[[area]]"),
+      "another-very-long-area-name-that-would-also-clip-without-narrowing.md": treeAreaNote("[[area]]"),
+      "first-project-with-an-exceptionally-long-stem-for-narrow.md": treeProjectNote("[[a-very-long-area-name-that-would-clip-without-narrowing]]"),
+      "second-project-with-an-exceptionally-long-stem-for-narrow.md": treeProjectNote("[[a-very-long-area-name-that-would-clip-without-narrowing]]"),
+      "third-project-with-an-exceptionally-long-stem-for-narrow.md": treeProjectNote("[[another-very-long-area-name-that-would-also-clip-without-narrowing]]"),
+      "fourth-project-with-an-exceptionally-long-stem-for-narrow.md": treeProjectNote("[[another-very-long-area-name-that-would-also-clip-without-narrowing]]"),
+    };
+  }
+  return {
+    "area.md": treeFixtureCache({}),
+    "project.md": treeFixtureCache({}),
+    "pig.md": treeAreaNote("[[area]]"),
+    "foo.md": treeProjectNote("[[pig]]"),
+    "goo.md": treeProjectNote("[[pig]]"),
+    "zoo.md": treeProjectNote("[[pig]]"),
+    "bar.md": treeProjectNote("[[foo]]"),
+    "baz.md": treeProjectNote("[[foo]]"),
+    "alpha.md": treeProjectNote("[[goo]]"),
+    "beta.md": treeProjectNote("[[goo]]"),
+  };
+}
+
+function treeWorld(kind = "full") {
+  const { LedgerToolsPlugin } = harness();
+  const entries = treeWorldEntries(kind);
+  const files = new Map();
+  const caches = new Map();
+  for (const [path, spec] of Object.entries(entries)) {
+    files.set(path, { path, extension: "md" });
+    caches.set(path, spec);
+  }
+  const app = {
+    vault: {
+      getAbstractFileByPath: (p) => files.get(p) || null,
+      getMarkdownFiles: () => [...files.values()],
+      async read(file) { return ""; },
+      async cachedRead(file) { return ""; },
+      on: () => ({}),
+    },
+    metadataCache: {
+      getFileCache: (file) => caches.get(file?.path) || null,
+      getFirstLinkpathDest: (target, fromPath) => {
+        const clean = String(target || "").replace(/\.md$/i, "");
+        const dir = String(fromPath || "").split("/").slice(0, -1).join("/");
+        const candidates = [];
+        if (dir) candidates.push(`${dir}/${clean}.md`);
+        candidates.push(`${clean}.md`);
+        for (const candidate of candidates) {
+          if (files.has(candidate)) return { path: candidate };
+        }
+        const base = `${clean.split("/").pop()}.md`;
+        const hits = [...files.keys()].filter((p) => p === base || p.endsWith(`/${base}`)).sort();
+        return hits.length ? { path: hits[0] } : null;
+      },
+      on: () => ({}),
+    },
+    workspace: { onLayoutReady(fn) { try { fn(); } catch (_) {} }, on: () => ({}) },
+    commands: { commands: {}, executeCommandById: () => false },
+    plugins: { plugins: {} },
+  };
+  const plugin = new LedgerToolsPlugin(app);
+  plugin.navGroupsTodayOverride = TODAY;
+  plugin.setupNavGroups();
+  return { app, files, caches, plugin };
+}
+
+function buildTreeCard(kind, targetPath, doc) {
+  const { helpers: H } = harness();
+  const world = treeWorld(kind);
+  const provider = world.plugin.navGroupsResolve({ path: targetPath });
+  assert.ok(provider && provider.ok === true && provider.route === "tree", `${targetPath}: tree provider resolved`);
+  const model = H.treeWalkRailModel({
+    answer: {
+      ok: true, prev: provider.step?.prev || null, next: provider.step?.next || null,
+      prevGroup: provider.prevGroup, nextGroup: provider.nextGroup, group: provider.group, groupConflicts: [],
+    },
+    provider,
+  });
+  assert.ok(model, `${targetPath}: tree rail model built`);
+  const built = world.plugin.treeWalkRailBuild(doc, model, {});
+  assert.ok(built && built.element, `${targetPath}: tree rail built`);
+  const card = doc.createElement("div");
+  card.setAttribute("class", "bob-property-card");
+  card.setAttribute("data-card-kind", "project");
+  card.setAttribute("data-root-hue", "210");
+  const title = doc.createElement("div");
+  title.setAttribute("class", "bob-property-card-title-block");
+  title.appendChild(doc.createTextNode(targetPath));
+  card.appendChild(title);
+  H.propertyCardFloorDock(card, built.element);
+  return { card, model };
+}
+
+const TREE_FIXTURES = [
+  { name: "tree-full", kind: "full", record: "bar.md",
+    expect: { groupRow: true, prev: "exists", next: "exists", track: "ticks" } },
+  { name: "tree-ticks-only", kind: "ticks-only", record: "foo.md",
+    expect: { groupRow: true, track: "ticks" } },
+  { name: "tree-arms-only", kind: "arms-only", record: "solo.md",
+    expect: { groupRow: true, track: "none" } },
+  { name: "tree-bar-above-21", kind: "bar", record: "big-12.md",
+    expect: { groupRow: true, prev: "exists", next: "exists", nextWraps: true, track: "bar" } },
+  { name: "tree-narrow", kind: "narrow", record: "second-project-with-an-exceptionally-long-stem-for-narrow.md",
+    expect: { groupRow: true, prev: "exists", next: "exists", prevWraps: true, track: "ticks" } },
+];
+
 // ---- Album card ------------------------------------------------------------------
 
 function buildAlbumCard(doc) {
@@ -481,6 +657,9 @@ function buildFixtures(only = []) {
   }
   for (const fixture of RECORD_FIXTURES) {
     fixtures.push({ ...fixture, family: "record", build: (doc) => buildRecordCard(recordWorld(fixture.world), fixture.record, doc) });
+  }
+  for (const fixture of TREE_FIXTURES) {
+    fixtures.push({ ...fixture, family: "tree", build: (doc) => buildTreeCard(fixture.kind, fixture.record, doc) });
   }
   fixtures.push({ name: "album-walks-by", family: "album", expect: {}, build: (doc) => buildAlbumCard(doc) });
   const selected = only.length ? fixtures.filter((f) => only.includes(f.name)) : fixtures;

@@ -14350,6 +14350,51 @@ button.bob-prose-note-card-finding:focus-visible { color: var(--text-normal); }
 .bob-freshness-link-group-next .bob-property-card-group-glyph { margin-inline-start: 0.25em; }
 .bob-freshness-link-ghost .bob-property-card-group-glyph { color: inherit; }
 /* Property-card group row (bob-cli-oj group-rail): end. */
+/* Link walk rail (bob-cli-ra rail): start.
+   The tree-note link-walk rail is compass chrome, not a cabinet: it docks
+   as the card's floor ([data-card-floor="link-walk"]), last under the
+   cabinet stack, with exactly one hairline above it and never two. It
+   inherits the card's root hue (--bob-walk-ink) and reuses the kit's
+   spacing, type scale, and state inks; no new palette values. Step items
+   keep the kit's ≥ 24px targets, focus rings, and wrap glyph; the group row
+   reuses the kit row. Narrow panes compact to the kit's narrow labels, and
+   arms never clip. The rail never pulses, animates, or reflows on a
+   metadata refresh. */
+.bob-property-card > [data-card-floor="link-walk"] {
+  margin-block-start: 0.5em;
+  padding-block-start: 0.5em;
+  border-block-start: 1px solid var(--bob-property-card-faint-ink);
+}
+.bob-link-walk-rail {
+  --bob-walk-ink: var(--bob-property-card-group-accent, var(--text-muted));
+  color: var(--bob-property-card-muted-ink);
+}
+.bob-link-walk-rail .bob-property-card-rail-item {
+  color: var(--bob-property-card-muted-ink);
+}
+.bob-link-walk-rail .bob-property-card-rail-item:hover { color: var(--text-normal); }
+.bob-link-walk-rail .bob-property-card-rail-wrap {
+  flex: none;
+  margin-inline-start: 0.3em;
+  color: var(--bob-property-card-faint-ink);
+}
+@container bob-property-card (max-width: 28rem) {
+  .bob-link-walk-rail .bob-property-card-rail-wrap { display: none; }
+}
+@media (forced-colors: active) {
+  .bob-property-card > [data-card-floor="link-walk"] { border-block-start-color: CanvasText; }
+  .bob-link-walk-rail .bob-property-card-rail-item[data-state="ghost"],
+  .bob-link-walk-rail .bob-property-card-rail-item[data-state="ghost"] * { color: GrayText; }
+  .bob-link-walk-rail .bob-property-card-rail-wrap { color: inherit; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bob-link-walk-rail,
+  .bob-link-walk-rail * {
+    transition: none !important;
+    animation: none !important;
+  }
+}
+/* Link walk rail (bob-cli-ra rail): end. */
 /* Record walk group row (bob-cli-oj record-rail): start.
    A grouped record walk puts the kit group row under its step row in place
    of the whole-walk thumb track; the accent follows the rail's

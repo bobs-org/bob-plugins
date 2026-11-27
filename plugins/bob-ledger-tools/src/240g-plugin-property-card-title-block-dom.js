@@ -235,7 +235,11 @@ function propertyCardKitRailItemOk(item) {
 
 // Items and chips take a missing-target state (240l): `state` of exists,
 // creatable, or ghost, else the legacy `unresolved: true` as creatable.
-// The rail never decides activation; onNavigate sees the stated item.
+// Step items also accept `wraps` (a quiet aria-hidden ↺ when the stop
+// wraps), `tooltip` (the title, via the shared state marks), and `source`
+// (a data-source cue such as "authored"). Absent fields add nothing, so
+// legacy specs render byte-identical DOM. The rail never decides
+// activation; onNavigate sees the stated item.
 function propertyCardKitRailItem(doc, direction, item, onNavigate) {
   const target = propertyCardKitText(item.target).trim();
   const state = propertyCardTargetState(item);
@@ -244,6 +248,8 @@ function propertyCardKitRailItem(doc, direction, item, onNavigate) {
   link.setAttribute("data-rail", direction);
   const ariaLabel = propertyCardKitText(item.ariaLabel).trim();
   if (ariaLabel) link.setAttribute("aria-label", ariaLabel);
+  const source = propertyCardKitText(item.source).trim();
+  if (source) link.setAttribute("data-source", source);
   const wide = propertyCardKitText(item.label).trim();
   const narrow = propertyCardKitText(item.shortLabel).trim() || wide;
   const glyph = (text) => {
@@ -257,6 +263,11 @@ function propertyCardKitRailItem(doc, direction, item, onNavigate) {
   link.appendChild(propertyCardKitSpan(doc, "bob-property-card-rail-label-narrow", narrow));
   for (const mark of propertyCardKitStateMarks(doc, link, item, state, false)) link.appendChild(mark);
   if (direction === "next") link.appendChild(glyph(" ›"));
+  if (item.wraps === true) {
+    const wrap = propertyCardKitSpan(doc, "bob-property-card-rail-wrap", "↺");
+    wrap.setAttribute("aria-hidden", "true");
+    link.appendChild(wrap);
+  }
   propertyCardKitBindTarget(link, state, (event) => {
     if (typeof onNavigate === "function") onNavigate(direction, stated, event);
   });

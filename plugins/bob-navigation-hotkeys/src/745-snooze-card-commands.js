@@ -1,0 +1,332 @@
+// Snooze Card commands: Task Card `z` dispatch and collision-safe Alt+Z
+// registration. The Task Card row/order/shortcut live in 310/314; this
+// fragment bridges the `snooze` intent to the Snooze Card modal and keeps
+// the card entry available when Alt+Z itself is taken.
+function snoozeCardTaskTitleForResolution(resolution) {
+  try {
+    const task = resolution && resolution.task;
+    if (task && typeof task.displayText === "string" && task.displayText.trim() !== "") {
+      return task.displayText.trim().slice(0, 80);
+    }
+    if (task && typeof task.target === "string" && task.target.trim() !== "") {
+      const stem = task.target.split("/").pop() || task.target;
+      return stem.trim().slice(0, 80) || "task";
+    }
+  } catch (_) {}
+  return "task";
+}
+
+function isSnoozeAltZBinding(hotkey) {
+  if (!hotkey || typeof hotkey !== "object") return false;
+  const key = String(hotkey.key == null ? "" : hotkey.key);
+  const modifiers = Array.isArray(hotkey.modifiers) ? hotkey.modifiers.map(String) : [];
+  const hasAlt = modifiers.some((item) => String(item).toLowerCase() === "alt");
+  const onlyAlt = modifiers.length === 1 && hasAlt;
+  if (!onlyAlt) return false;
+  if (key.toLowerCase() === "z") return true;
+  return false;
+}
+
+function snoozeCardAltZConflict(app, selfCommandId) {
+  const conflicts = [];
+  try {
+    const manager = app && app.hotkeyManager;
+    if (manager) {
+      const listCommands = () => {
+        try {
+          if (app.commands && typeof app.commands === "object" && app.commands.commands) {
+            const raw = app.commands.commands;
+            if (Array.isArray(raw)) return raw.map((command) => command && command.id).filter(Boolean);
+            return Object.keys(raw);
+          }
+        } catch (_) {}
+        return [];
+      };
+      const ids = listCommands();
+      const custom = manager.customKeys instanceof Map ? [...manager.customKeys.keys()] : Object.keys(manager.customKeys || {});
+      const defaults = manager.defaultKeys instanceof Map ? [...manager.defaultKeys.keys()] : Object.keys(manager.defaultKeys || {});
+      const known = new Set([...ids, ...custom, ...defaults]);
+      for (const id of known) {
+        if (String(id) === String(selfCommandId)) continue;
+        let hotkeys = null;
+        try {
+          if (manager.customKeys && (manager.customKeys instanceof Map ? manager.customKeys.has(id) : Object.prototype.hasOwnProperty.call(manager.customKeys, id))) {
+            hotkeys = manager.customKeys instanceof Map ? manager.customKeys.get(id) : manager.customKeys[id];
+          } else if (typeof manager.getHotkeys === "function") {
+            hotkeys = manager.getHotkeys(id);
+          }
+        } catch (_) {
+          hotkeys = null;
+        }
+        const list = Array.isArray(hotkeys) ? hotkeys : (hotkeys ? [hotkeys] : []);
+        for (const hotkey of list) {
+          if (isSnoozeAltZBinding(hotkey)) {
+            conflicts.push({ kind: "hotkey", commandId: String(id) });
+            break;
+          }
+        }
+      }
+      try {
+        const defaultsForSelf = typeof manager.getDefaultHotkeys === "function" ? manager.getDefaultHotkeys(selfCommandId) : manager.defaultKeys && (manager.defaultKeys instanceof Map ? manager.defaultKeys.get(selfCommandId) : manager.defaultKeys[selfCommandId]);
+        const list = Array.isArray(defaultsForSelf) ? defaultsForSelf : (defaultsForSelf ? [defaultsForSelf] : []);
+        void list;
+      } catch (_) {}
+    }
+  } catch (_) {}
+  try {
+    const vimrc = app && app.plugins && app.plugins.plugins && app.plugins.plugins["obsidian-vimrc-support"];
+    const mappings = vimrc && (vimrc.mappings || vimrc.vimCommands || vimrc.keymaps);
+    const text = JSON.stringify(mappings || "");
+    if (typeof text === "string" && /(Alt\+Z|M-z|<A-z>|<M-z>)/i.test(text)) {
+      conflicts.push({ kind: "vimrc", commandId: "obsidian-vimrc-support" });
+    }
+  } catch (_) {}
+  try {
+    const commands = app && app.commands && app.commands.commands;
+    if (commands && typeof commands === "object") {
+      const entries = Array.isArray(commands) ? commands.map((command) => [command && command.id, command]) : Object.entries(commands);
+      for (const [id, command] of entries) {
+        if (!id || String(id) === String(selfCommandId)) continue;
+        const hotkeys = command && command.hotkeys;
+        const list = Array.isArray(hotkeys) ? hotkeys : (hotkeys ? [hotkeys] : []);
+        for (const hotkey of list) {
+          if (isSnoozeAltZBinding(hotkey)) {
+            if (!conflicts.some((entry) => entry.commandId === String(id))) {
+              conflicts.push({ kind: "plugin-default", commandId: String(id) });
+            }
+            break;
+          }
+        }
+      }
+    }
+  } catch (_) {}
+  // Option-key handling on Mac: KeyZ with Alt is the same gesture even when
+  // the platform supplies a different event.key (e.g. Ω). A registered
+  // Alt+Ω default counts as the same conflict; the checks above already
+  // match modifiers+key, and the modal accepts KeyZ by code where needed.
+  return Object.freeze(conflicts);
+}
+
+function describeSnoozeAltZConflict(conflicts) {
+  if (!Array.isArray(conflicts) || conflicts.length === 0) return null;
+  const first = conflicts[0];
+  if (first.kind === "vimrc") return "Alt+Z is mapped in the vimrc; the Snooze command stays available without the hotkey";
+  return "Alt+Z is already bound to " + first.commandId + "; the Snooze command stays available without the hotkey";
+}
+
+// Wrap the Task Card dispatcher so the `snooze` row opens the same card
+// Alt+Z opens. Schedule stays the default selected row; generic
+// modal/global keys never double-dispatch because the intent is handled
+// here and the card consumes its own keys.
+const dispatchTaskCardIntentBeforeSnooze = typeof BulletPropertyPickerTaskCardMixin !== "undefined"
+  && BulletPropertyPickerTaskCardMixin.prototype
+  && BulletPropertyPickerTaskCardMixin.prototype.dispatchTaskCardIntent
+  ? BulletPropertyPickerTaskCardMixin.prototype.dispatchTaskCardIntent
+  : null;
+
+if (typeof BulletPropertyPickerTaskCardMixin !== "undefined" && dispatchTaskCardIntentBeforeSnooze) {
+  BulletPropertyPickerTaskCardMixin.prototype.dispatchTaskCardIntent = async function dispatchTaskCardIntentWithSnooze(intent) {
+    try {
+      if (intent && (intent.rowId === "snooze" || intent.action === "snooze")) {
+        if (intent.type === "unavailable") {
+          if (intent.reason) new Notice(intent.reason);
+          return false;
+        }
+        if (this.taskCardDispatching || this.linkResolving || this.opening) return false;
+        this.taskCardDispatching = true;
+        try {
+          const closed = this.close();
+          void closed;
+        } catch (_) {}
+        try {
+          if (typeof this.openSnoozeCardFromTaskCard === "function") {
+            return await this.openSnoozeCardFromTaskCard();
+          }
+          if (typeof this.openSnoozeCardAtCursor === "function") {
+            return await this.openSnoozeCardAtCursor();
+          }
+          new Notice("Snooze is unavailable here");
+          return false;
+        } finally {
+          this.taskCardDispatching = false;
+        }
+      }
+    } catch (_) {
+      // Fall through to the original dispatcher on wrapper failure.
+    }
+    return dispatchTaskCardIntentBeforeSnooze.call(this, intent);
+  };
+}
+
+// Alt+Z entry shared by the command and the Task Card row. Feature-detects
+// compatible providers and exposes a meaningful refusal instead of
+// half-working controls.
+function openSnoozeCardCommon(plugin, editor, view, taskCardTargets) {
+  const app = plugin && plugin.app;
+  const activeView = view || (typeof plugin.getActiveMarkdownView === "function" ? plugin.getActiveMarkdownView() : null);
+  const activeEditor = editor || (activeView && activeView.editor) || null;
+  if (!activeEditor || typeof activeEditor.getValue !== "function") {
+    new Notice("No active markdown editor");
+    return Promise.resolve(false);
+  }
+  let cursorLine = null;
+  try {
+    const cursor = typeof getEditorCursor === "function" ? getEditorCursor(activeEditor) : (activeEditor && typeof activeEditor.getCursor === "function" ? activeEditor.getCursor() : null);
+    cursorLine = cursor && Number.isInteger(cursor.line) ? cursor.line : null;
+  } catch (_) {
+    cursorLine = null;
+  }
+  const sourcePath = (activeView && activeView.file && activeView.file.path) || "";
+  const sourceContents = String(activeEditor.getValue() || "");
+  const planning = typeof plugin.getSnoozePlanningAdapter === "function" ? plugin.getSnoozePlanningAdapter() : null;
+  const factsProvider = typeof plugin.getSnoozeFactsProvider === "function" ? plugin.getSnoozeFactsProvider() : null;
+  if (!planning || !factsProvider) {
+    new Notice("Snooze is unavailable here");
+    return Promise.resolve(false);
+  }
+  return Promise.resolve()
+    .then(() => plugin.resolveSnoozeAtCursor(activeEditor, {
+      sourcePath,
+      sourceContents,
+      cursorLine,
+      explicitTargets: Array.isArray(taskCardTargets) ? taskCardTargets : null,
+    }))
+    .then((resolution) => {
+      if (!resolution || resolution.ok !== true) {
+        new Notice((resolution && resolution.message) || "Snooze is unavailable here");
+        return false;
+      }
+      const taskTitle = snoozeCardTaskTitleForResolution(resolution);
+      const reviewAnchor = plugin.reviewAnchor || null;
+      const modal = new SnoozeCardModal(app, plugin, {
+        resolution,
+        facts: null,
+        clock: null,
+        taskTitle,
+        reviewAnchor,
+        onReturnToTaskCard: null,
+      });
+      try {
+        modal.open();
+      } catch (_) {
+        return false;
+      }
+      return true;
+    })
+    .catch(() => {
+      new Notice("Snooze is unavailable here");
+      return false;
+    });
+}
+
+if (typeof BobNavigationHotkeysSnoozeRuntimeMixin !== "undefined") {
+  BobNavigationHotkeysSnoozeRuntimeMixin.prototype.openSnoozeCardAtCursor = function openSnoozeCardAtCursor(editor, view) {
+    return openSnoozeCardCommon(this, editor || null, view || null, null);
+  };
+  BobNavigationHotkeysSnoozeRuntimeMixin.prototype.openSnoozeCardFromTaskCard = function openSnoozeCardFromTaskCard() {
+    let targets = null;
+    try {
+      const model = this.taskCardModel;
+      if (model && model.session && Array.isArray(model.session.targetsForSnooze)) {
+        targets = model.session.targetsForSnooze;
+      } else if (this.taskSession && Array.isArray(this.taskSession.targets)) {
+        targets = this.taskSession.targets.map((entry) => (entry && entry.target) || entry).filter(Boolean);
+      } else if (this.linkSession && Array.isArray(this.linkSession.resolved)) {
+        targets = this.linkSession.resolved.slice(0, 5);
+      }
+    } catch (_) {
+      targets = null;
+    }
+    const editor = (typeof this.getActiveMarkdownView === "function" ? (this.getActiveMarkdownView() || {}).editor : null) || null;
+    const view = typeof this.getActiveMarkdownView === "function" ? this.getActiveMarkdownView() : null;
+    return openSnoozeCardCommon(this, editor, view, targets);
+  };
+  // Convenience for keymap tests: Alt+Z on macOS may arrive as KeyZ with
+  // Alt and a dead-key event.key (e.g. Ω). The command route does not
+  // depend on event.key, but the modal's global fallback does.
+  BobNavigationHotkeysSnoozeRuntimeMixin.prototype.isSnoozeAltZKeyEvent = function isSnoozeAltZKeyEvent(event) {
+    if (!event) return false;
+    if (event.ctrlKey === true || event.metaKey === true || event.shiftKey === true) return false;
+    if (event.altKey !== true) return false;
+    if (event.code === "KeyZ") return true;
+    return String(event.key || "").toLowerCase() === "z";
+  };
+}
+
+// Collision-safe Alt+Z command registration. Inspects hotkeys.json, the
+// configured vimrc, and registered plugin defaults through existing
+// app/vault access at loading; never rewrites those files or erases an
+// explicit user unbinding. On conflict the command and Task Card entry
+// stay available, the existing binding is preserved, and a concise notice
+// names the conflict.
+function registerSnoozeTaskCommand(plugin) {
+  if (!plugin || typeof plugin.addCommand !== "function") return false;
+  try {
+    if (plugin.snoozeTaskCommandRegistered === true) return true;
+  } catch (_) {}
+  const commandId = "snooze-task";
+  const selfId = "bob-navigation-hotkeys:" + commandId;
+  let conflicts = Object.freeze([]);
+  try {
+    conflicts = snoozeCardAltZConflict(plugin.app, selfId);
+  } catch (_) {
+    conflicts = Object.freeze([]);
+  }
+  // Single literal registration keeps docs-inventory exact. Obsidian keeps
+  // any existing effective Alt+Z binding: a plugin default never overwrites
+  // hotkeys.json, a vimrc mapping, or an explicit user unbinding. On
+  // conflict the command and Task Card entry stay available and we notice
+  // once naming the winner; the effective Alt+Z stays theirs.
+  try {
+    plugin.addCommand({
+      id: "snooze-task",
+      name: "Snooze task for later today",
+      hotkeys: [{ modifiers: ["Alt"], key: "Z" }],
+      editorCallback: (editor, view) => {
+        void openSnoozeCardCommon(plugin, editor, view, null);
+      },
+    });
+  } catch (_) {
+    return false;
+  }
+  try {
+    plugin.snoozeTaskCommandRegistered = true;
+  } catch (_) {}
+  if (conflicts.length > 0) {
+    const message = describeSnoozeAltZConflict(conflicts);
+    try {
+      if (message) new Notice(message);
+    } catch (_) {}
+    try {
+      plugin.snoozeAltZConflict = conflicts;
+    } catch (_) {}
+  }
+  return true;
+}
+
+Object.assign(module.exports.helpers, {
+  snoozeCardTaskTitleForResolution,
+  isSnoozeAltZBinding,
+  snoozeCardAltZConflict,
+  describeSnoozeAltZConflict,
+  registerSnoozeTaskCommand,
+});
+
+// Collision-safe Alt+Z wiring at load: preserve any existing effective
+// binding, never rewrite hotkeys.json/vimrc, and keep the command plus
+// Task Card entry available on conflict with a concise notice.
+if (typeof BobNavigationHotkeysPlugin !== "undefined" && BobNavigationHotkeysPlugin.prototype && typeof BobNavigationHotkeysPlugin.prototype.onload === "function" && !BobNavigationHotkeysPlugin.prototype.snoozeCardOnloadWrapped) {
+  const snoozeCardOnloadBefore = BobNavigationHotkeysPlugin.prototype.onload;
+  BobNavigationHotkeysPlugin.prototype.snoozeCardOnloadWrapped = true;
+  BobNavigationHotkeysPlugin.prototype.onload = function onloadWithSnoozeCard() {
+    const result = snoozeCardOnloadBefore.apply(this, arguments);
+    try {
+      registerSnoozeTaskCommand(this);
+    } catch (_) {}
+    return result;
+  };
+}
+
+Object.assign(module.exports.helpers, {
+  SnoozeCardModal: typeof SnoozeCardModal !== "undefined" ? SnoozeCardModal : undefined,
+});

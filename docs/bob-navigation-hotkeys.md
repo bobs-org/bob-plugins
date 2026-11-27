@@ -92,6 +92,7 @@ Navigate and edit Bob notes with keyboard commands.
 | Repeat last bracket walk forward, uppercase (]S, ]W, ]N, or ]B) | `repeat-next-uppercase-bracket-walk` | — |
 | Run command chip, or open in Highlights (reading task, highlight page, Gmail thread, or link in new tab) | `open-reference-pdf-in-highlights` | — |
 | Show window keys | `window-keys` | — |
+| Snooze task for later today | `snooze-task` | Alt+Z |
 | Split Pomodoro by type | `split-pomodoro-by-type` | — |
 | Split bullets into tasks | `split-bullets-into-tasks` | Ctrl+Shift+T |
 | Task card (set properties) | `set-bullet-property` | — |
@@ -114,10 +115,11 @@ Navigate and edit Bob notes with keyboard commands.
 | Yank task block ID | `yank-block-id` | — |
 <!-- END GENERATED: commands -->
 
-`Ctrl+0` reuses `dash.md` tabs across windows, including unloaded tabs. It
-prefers pinned main-area tabs, other main-area tabs, pinned sidebar tabs, then
-other sidebar tabs, preserving scroll position. With none open, it uses the
-current tab or opens one.
+## Snooze task (Alt+Z)
+
+`Alt+Z` opens the Snooze Card for one task, link, or Snoozed row; `z` on the Task Card opens the same card. Single-task only; events, Blocked, closed, ambiguous, and multi-target uses refuse. Past/next-day input teaches same-day only. **Wake now** runs `bob snooze wake`. `Esc`/`q`/`Ctrl+[` close; cancel writes nothing. Daily-note snooze undoes with one `Ctrl+Z`; cross-note edits undo per editor. On conflict the existing binding wins and a notice names it.
+
+`Ctrl+0` reuses `dash.md` tabs across windows, preferring pinned tabs with scroll position preserved; otherwise it uses the current tab or opens one.
 
 ## Project creation
 

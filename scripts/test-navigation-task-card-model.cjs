@@ -169,7 +169,7 @@ test("card model builds stable rows, scope metadata, and an existing recommendat
   assert.equal(model.selectedRowId, "schedule");
   assert.deepEqual(
     model.rows.map((row) => row.id),
-    ["schedule", "depends-on", "blocks", "links-to", "linked-from", "review-every", "cancel", "lane", "theme"],
+    ["schedule", "snooze", "depends-on", "blocks", "links-to", "linked-from", "review-every", "cancel", "lane", "theme"],
   );
   assert.ok(model.rows.find((row) => row.id === "schedule").enabled);
   assert.ok(model.rows.find((row) => row.id === "depends-on").enabled);
@@ -636,7 +636,8 @@ test("priority, recommendation, navigation, action, deletion, and search keys re
   assert.equal(key(model, "n", { altKey: true }).action, "toggle-lane");
   assert.equal(key(model, "d", { ctrlKey: true }).propertyName, "scheduled");
   assert.equal(key(model, "/"), null);
-  assert.equal(key(model, "z"), null);
+  assert.equal(key(model, "z").rowId, "snooze");
+  assert.equal(key(model, "z").type, "open-action");
   assert.equal(key(model, "Escape").type, "close-card");
   assert.equal(key(model, "Backspace").type, "back");
   assert.equal(key(model, "q", { ctrlKey: true }), null);

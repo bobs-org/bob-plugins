@@ -543,6 +543,7 @@ test("card renderer paints header, banner, strip, stable rows, more, and footer 
   const rows = orderedTaskCardRows(model).map((row) => row.id);
   assert.deepEqual(rows, [
     "schedule",
+    "snooze",
     "depends-on",
     "blocks",
     "links-to",
@@ -1306,7 +1307,7 @@ test("after open the actions list, not the Close button, has focus", () => {
   assert.equal(modal.stage, "task-card");
   assert.equal(modal.taskCardListEl.focused, true);
 
-  for (const key of ["p", "/", "z", "5", "6", "9"]) {
+  for (const key of ["p", "/", "5", "6", "9"]) {
     const result = dispatchCardKey(modal, key);
     assert.equal(modal.stage, "task-card", `${key} must not leave the card`);
     assertNoClassicList(modal);
@@ -2183,6 +2184,8 @@ test("selected-property deletion uses the existing writer; other card rows stay 
   assert.equal(modal.isOpen, false);
 
   const next = openPropertyPicker({ content });
+  dispatchCardKey(next.modal, "ArrowDown");
+  assert.equal(next.modal.taskCardSelectedRowId, "snooze");
   dispatchCardKey(next.modal, "ArrowDown");
   assert.equal(next.modal.taskCardSelectedRowId, "depends-on");
   dispatchCardKey(next.modal, "d", { ctrlKey: true });

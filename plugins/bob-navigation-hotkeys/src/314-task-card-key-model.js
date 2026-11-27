@@ -62,7 +62,7 @@ function resolveTaskCardKey(model, event) {
   const movement = (direction) =>
     Object.freeze({ type: "move-selection", direction, fromRowId: model.selectedRowId });
   const actionKey =
-    (!modified && /^[0-9bflxt]$/i.test(key)) ||
+    (!modified && /^[0-9bflxtz]$/i.test(key)) ||
     (shift && !ctrl && !meta && !alt && (event.code === "KeyB" || event.code === "KeyL" || key === "B" || key === "L")) ||
     (ctrl && !meta && !shift && !alt && ["Enter", "r", "d"].includes(key)) ||
     (meta && !ctrl && !shift && !alt && key === "Enter") ||
@@ -222,6 +222,9 @@ function resolveTaskCardKey(model, event) {
   if (!modified && lower === "x") {
     return taskCardIntentForRow(rowById("cancel"));
   }
+  if (!modified && lower === "z") {
+    return taskCardIntentForRow(rowById("snooze"));
+  }
   if (!modified && key === "Enter") {
     return taskCardIntentForRow(selected);
   }
@@ -236,6 +239,7 @@ function resolveTaskCardKey(model, event) {
 
 const TASK_CARD_ROW_ORDER = Object.freeze([
   "schedule",
+  "snooze",
   "depends-on",
   "blocks",
   "links-to",
@@ -248,6 +252,7 @@ const TASK_CARD_ROW_ORDER = Object.freeze([
 
 const TASK_CARD_ROW_SHORTCUTS = Object.freeze({
   schedule: "Enter",
+  snooze: "z",
   theme: "t",
   "depends-on": "b",
   blocks: "⇧B",

@@ -330,5 +330,9 @@
   "737-snoozed-cleanup-exports.js",
   "738-snooze-mutation-planner.js",
   "739-snooze-mutation-exports.js",
-  "742-snooze-runtime-exports.js"
+  "742-snooze-runtime-exports.js",
+  "743-snooze-card-model.js",
+  "744-snooze-card-modal.js",
+  "745-snooze-card-commands.js",
+  "746-snooze-card-exports.js"
 ]

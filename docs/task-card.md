@@ -61,6 +61,7 @@ consequence copy.
 | `⌃B` / `⌃⇧B` / `⌃L` / `⌃⇧L` | In any of the four relationship stages, set the highlighted pair's tie: wait on it, make it wait, plain link out, or plain link in. Chords are desired-state commands through `applyTieChange`; a second press never flips the state back. Ctrl only, never Meta; repeat and IME events are ignored. |
 | `f` | Open Review every (Refresh). |
 | `t` | Open Type; `Enter` on the Type row opens the same stage. The stage offers Use default first with its inherited reason (`Use default · BUILD from dev`, `Use default · CHORE default type`), then Today, Recent, and a validated typed new name. Any type is choosable, including PLAN and other exempt types. Type rows use Bob's reported hue in a tinted pill with a swatch; uncolored types (exempt or unconfigured), such as PLAN, are grey. The inherited type's row is marked Default. A consequence line under the selected row states the live-link outcome before Enter (`link moves FIX → BUILD`, `running FIX becomes BUILD`, `FIX placeholder becomes BUILD`, `new BUILD Pomodoro below FIX`, `no live link · ledger unchanged`, or `already under BUILD`). |
+| `z` | Open the Snooze Card for one task; a counted or multi-target card refuses with single-task copy. Schedule stays the default selected row. |
 | `x` | Open the cancel-reason stage; the key alone never cancels. |
 | `Alt+N` | Commit to Next or release to Ready. |
 | `Ctrl+D` | Delete the selected property; Schedule is selected by default. On Type, clear to Use default through the same relocate path (field clearing only, never Recent hide; type need not be in the configured property list). On Links to, clear all outgoing relations (a cleared source that still mentions the target keeps a `(💬 mentions)` entry); Linked from is generated and refuses clearing. In the relation-label stage, hide or unhide the selected label; row zero toggles one-off instead. |
@@ -206,6 +207,17 @@ close its source. Unlinking or relabelling a cancel edge away does not reopen
 the source (`⊘ Stays Cancelled · reopen with Alt+]`); the same for a complete
 edge says `stays Done · reopen with Alt+[`. See
 [Task relations](task-relations.md) for the complete contract.
+
+## Snooze
+
+`z` opens the same Snooze Card as `Alt+Z` for the card's single task. A
+counted batch or Task Link batch offers a clear single-task refusal instead
+of half-working controls. The card needs the navigation runtime and the
+ledger facts provider; without a compatible provider it refuses with a
+meaningful reason. Successful snooze, retime, and unsnooze compose into the
+runtime's guarded transactions: the daily note's whole snooze undoes with
+one `Ctrl+Z`; cross-note task and daily edits undo per editor. Cancellation
+writes nothing and never advances the review walk.
 
 ## Undo and direct stages
 

@@ -473,6 +473,10 @@ function planTaskCard(context = {}) {
   const cancelAvailable = Boolean(
     cancelDescription && !cancelDescription.recurring && session.valid,
   );
+  const snoozeAvailable = Boolean(session.valid && session.targetCount === 1);
+  const snoozeUnavailableReason = session.valid
+    ? (session.targetCount === 1 ? null : "Snooze handles one task; pick a single row")
+    : taskCardAvailabilityReason(session, "snooze");
   const rows = Object.freeze([
     row({
       id: "schedule",
@@ -493,6 +497,17 @@ function planTaskCard(context = {}) {
       valueState: scheduleProjection ? scheduleProjection.valueState : "absent",
       deletable: Boolean(scheduleProperty),
       targetCount: session.targetCount,
+    }),
+    row({
+      id: "snooze",
+      kind: "action",
+      action: "snooze",
+      label: "Snooze",
+      enabled: snoozeAvailable,
+      unavailableReason: snoozeAvailable ? null : snoozeUnavailableReason,
+      detail: snoozeAvailable ? "Snooze for later today" : snoozeUnavailableReason,
+      targetCount: session.targetCount,
+      deletable: false,
     }),
     row({
       id: "depends-on",

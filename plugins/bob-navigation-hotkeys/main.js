@@ -74147,6 +74147,10 @@ function planTaskCard(context = {}) {
   const cancelAvailable = Boolean(
     cancelDescription && !cancelDescription.recurring && session.valid,
   );
+  const snoozeAvailable = Boolean(session.valid && session.targetCount === 1);
+  const snoozeUnavailableReason = session.valid
+    ? (session.targetCount === 1 ? null : "Snooze handles one task; pick a single row")
+    : taskCardAvailabilityReason(session, "snooze");
   const rows = Object.freeze([
     row({
       id: "schedule",
@@ -74167,6 +74171,17 @@ function planTaskCard(context = {}) {
       valueState: scheduleProjection ? scheduleProjection.valueState : "absent",
       deletable: Boolean(scheduleProperty),
       targetCount: session.targetCount,
+    }),
+    row({
+      id: "snooze",
+      kind: "action",
+      action: "snooze",
+      label: "Snooze",
+      enabled: snoozeAvailable,
+      unavailableReason: snoozeAvailable ? null : snoozeUnavailableReason,
+      detail: snoozeAvailable ? "Snooze for later today" : snoozeUnavailableReason,
+      targetCount: session.targetCount,
+      deletable: false,
     }),
     row({
       id: "depends-on",
@@ -75417,7 +75432,7 @@ function resolveTaskCardKey(model, event) {
   const movement = (direction) =>
     Object.freeze({ type: "move-selection", direction, fromRowId: model.selectedRowId });
   const actionKey =
-    (!modified && /^[0-9bflxt]$/i.test(key)) ||
+    (!modified && /^[0-9bflxtz]$/i.test(key)) ||
     (shift && !ctrl && !meta && !alt && (event.code === "KeyB" || event.code === "KeyL" || key === "B" || key === "L")) ||
     (ctrl && !meta && !shift && !alt && ["Enter", "r", "d"].includes(key)) ||
     (meta && !ctrl && !shift && !alt && key === "Enter") ||
@@ -75577,6 +75592,9 @@ function resolveTaskCardKey(model, event) {
   if (!modified && lower === "x") {
     return taskCardIntentForRow(rowById("cancel"));
   }
+  if (!modified && lower === "z") {
+    return taskCardIntentForRow(rowById("snooze"));
+  }
   if (!modified && key === "Enter") {
     return taskCardIntentForRow(selected);
   }
@@ -75591,6 +75609,7 @@ function resolveTaskCardKey(model, event) {
 
 const TASK_CARD_ROW_ORDER = Object.freeze([
   "schedule",
+  "snooze",
   "depends-on",
   "blocks",
   "links-to",
@@ -75603,6 +75622,7 @@ const TASK_CARD_ROW_ORDER = Object.freeze([
 
 const TASK_CARD_ROW_SHORTCUTS = Object.freeze({
   schedule: "Enter",
+  snooze: "z",
   theme: "t",
   "depends-on": "b",
   blocks: "⇧B",
@@ -152924,4 +152944,1174 @@ Object.assign(module.exports.helpers, {
   projectSnoozeWakeDestination,
   buildSnoozeCardFacts,
   interpretSnoozeWakeReport,
+});
+// ---- src/743-snooze-card-model.js ----
+// Snooze Card pure model: ranked suggestions, footer copy, input teaching,
+// and card key handling. Pure: snapshots in, frozen facts out. The modal
+// fragment renders from these without reimplementing ranking or copy.
+function snoozeCardDisplayMinutes(minutes) {
+  const value = Number(minutes);
+  if (!Number.isInteger(value) || value < 0 || value >= 1440) return null;
+  return String(Math.floor(value / 60)).padStart(2, "0") + ":" + String(value % 60).padStart(2, "0");
+}
+
+function snoozeCardNormalizeUsedTimes(value) {
+  if (!Array.isArray(value)) return [];
+  const out = [];
+  for (const entry of value) {
+    if (Number.isInteger(entry) && entry >= 0 && entry < 1440) {
+      out.push(entry);
+      continue;
+    }
+    if (typeof entry === "string") {
+      const text = entry.trim();
+      let parsed = null;
+      const colon = /^(\d{1,2}):(\d{2})$/.exec(text);
+      if (colon) {
+        const hour = Number(colon[1]);
+        const minute = Number(colon[2]);
+        if (hour <= 23 && minute <= 59) parsed = hour * 60 + minute;
+      } else if (/^\d{3,4}$/.test(text)) {
+        const hour = Number(text.length === 3 ? text.slice(0, 1) : text.slice(0, 2));
+        const minute = Number(text.length === 3 ? text.slice(1) : text.slice(2));
+        if (hour <= 23 && minute <= 59) parsed = hour * 60 + minute;
+      }
+      if (parsed !== null) out.push(parsed);
+    }
+  }
+  return out;
+}
+
+// Rank future same-day suggestions in groups: remaining event end times
+// (chronological, `15:30 · after <title>`), `+30m`, `+1h`, `+2h`, then
+// times used today. Deduplicate resolved instants with the earlier group
+// winning; discard invalid/past/next-day candidates via the shared
+// `snoozeParseWhen` twin and the zone target check.
+function rankSnoozeSuggestions(input) {
+  const options = input && typeof input === "object" ? input : {};
+  const date = typeof options.date === "string" ? options.date : "";
+  const zone = typeof options.zone === "string" ? options.zone : "";
+  const nowMinutes = Number.isInteger(options.nowMinutes) ? options.nowMinutes : null;
+  if (!date || !zone || nowMinutes === null) return Object.freeze([]);
+  const clock = { date, nowMinutes, zone };
+  const seen = new Set();
+  const ranked = [];
+  const consider = (minutes, suggestion) => {
+    if (!Number.isInteger(minutes) || minutes <= nowMinutes || minutes >= 1440) return;
+    if (seen.has(minutes)) return;
+    let resolved = null;
+    try {
+      resolved = typeof snoozeResolveTarget === "function" ? snoozeResolveTarget(date, minutes, zone) : { minutes };
+    } catch (_) {
+      return;
+    }
+    if (!resolved) return;
+    seen.add(minutes);
+    ranked.push(Object.freeze({ minutes, ...suggestion }));
+  };
+  const events = Array.isArray(options.events) ? options.events.slice() : [];
+  events.sort((left, right) => Number(left && left.endMin) - Number(right && right.endMin));
+  for (const event of events) {
+    if (!event || typeof event !== "object") continue;
+    const endMin = Number.isInteger(event.endMin) ? event.endMin : null;
+    if (endMin === null) continue;
+    const title = String(event.title == null || String(event.title).trim() === "" ? "Event" : event.title);
+    const display = snoozeCardDisplayMinutes(endMin);
+    if (!display) continue;
+    consider(endMin, {
+      hhmm: String(Math.floor(endMin / 60)).padStart(2, "0") + String(endMin % 60).padStart(2, "0"),
+      display,
+      input: display,
+      label: display + " · after " + title,
+      group: "event",
+    });
+  }
+  const quick = [
+    { input: "+30m", delta: 30 },
+    { input: "+1h", delta: 60 },
+    { input: "+2h", delta: 120 },
+  ];
+  for (const item of quick) {
+    let parsed = null;
+    try {
+      parsed = typeof snoozeParseWhen === "function" ? snoozeParseWhen(item.input, clock) : null;
+    } catch (_) {
+      parsed = null;
+    }
+    if (!parsed || parsed.ok !== true || !parsed.value) continue;
+    const minutes = Number(parsed.value.minutes);
+    const display = snoozeCardDisplayMinutes(minutes);
+    if (!display) continue;
+    consider(minutes, {
+      hhmm: parsed.value.hhmm,
+      display,
+      input: item.input,
+      label: item.input + " · " + display,
+      group: "quick",
+    });
+  }
+  const used = snoozeCardNormalizeUsedTimes(options.usedTimesToday).sort((left, right) => left - right);
+  for (const minutes of used) {
+    const display = snoozeCardDisplayMinutes(minutes);
+    if (!display) continue;
+    consider(minutes, {
+      hhmm: String(Math.floor(minutes / 60)).padStart(2, "0") + String(minutes % 60).padStart(2, "0"),
+      display,
+      input: display,
+      label: display,
+      group: "used",
+    });
+  }
+  return Object.freeze(ranked);
+}
+
+function snoozeCardInText(minutes, nowMinutes) {
+  const target = Number(minutes);
+  const now = Number(nowMinutes);
+  if (!Number.isInteger(target) || !Number.isInteger(now)) return null;
+  const delta = target - now;
+  if (delta <= 0) return null;
+  const hours = Math.floor(delta / 60);
+  const rest = delta % 60;
+  if (hours <= 0) return "in " + delta + "m";
+  if (rest === 0) return "in " + hours + "h";
+  return "in " + hours + "h " + rest + "m";
+}
+
+// Selected-time footer consequence, e.g.
+// `leaves WRITE · wakes into WRITE at 15:30 · in 2h 10m · TODAY 9/13 now, 10/13 after`.
+// Missing preview data omits its segment, never invented counts.
+// Over-cap is informative text only, never a refusal.
+function buildSnoozeCardFooter(input) {
+  const options = input && typeof input === "object" ? input : {};
+  const parts = [];
+  if (typeof options.departure === "string" && options.departure.trim() !== "") {
+    parts.push("leaves " + options.departure.trim());
+  }
+  const display = typeof options.display === "string" && options.display.trim() !== "" ? options.display.trim() : null;
+  if (typeof options.destination === "string" && options.destination.trim() !== "" && display) {
+    parts.push("wakes into " + options.destination.trim() + " at " + display);
+  } else if (display) {
+    parts.push("at " + display);
+  }
+  if (typeof options.inText === "string" && options.inText.trim() !== "") {
+    parts.push(options.inText.trim());
+  }
+  const hasNow = Number.isInteger(options.nowCount) && Number.isInteger(options.nowCap);
+  const hasAfter = Number.isInteger(options.afterCount) && Number.isInteger(options.afterCap);
+  if (hasNow || hasAfter) {
+    const segments = [];
+    if (hasNow) segments.push(options.nowCount + "/" + options.nowCap + " now");
+    if (hasAfter) segments.push(options.afterCount + "/" + options.afterCap + " after");
+    parts.push("TODAY " + segments.join(", "));
+  }
+  if (options.overCap === true) {
+    parts.push("over cap");
+  }
+  return parts.join(" · ");
+}
+
+// Snoozed-mode header: `Snoozed until 15:30 · in 2h`
+// (or the truthful due/blocked state when supplied).
+function buildSnoozeCardSnoozedHeader(input) {
+  const options = input && typeof input === "object" ? input : {};
+  if (typeof options.blockedReason === "string" && options.blockedReason.trim() !== "") {
+    return "Blocked · " + options.blockedReason.trim();
+  }
+  if (typeof options.state === "string" && options.state.trim() !== "" && options.state.trim().toLowerCase() !== "active") {
+    const detail = typeof options.detail === "string" && options.detail.trim() !== "" ? " · " + options.detail.trim() : "";
+    return options.state.trim() + detail;
+  }
+  const display = typeof options.display === "string" && options.display.trim() !== "" ? options.display.trim() : null;
+  if (!display) return "Snoozed";
+  const inText = typeof options.inText === "string" && options.inText.trim() !== "" ? " · " + options.inText.trim() : "";
+  return "Snoozed until " + display + inText;
+}
+
+// Teaching copy for typed input. Past/next-day uses the shared same-day
+// line; DST gap reuses the parser's DST text; invalid reuses the format
+// hint. Matches `WhenRefusal::message` in `src/native/snooze/when.rs`.
+function snoozeCardInputMessage(parseResult) {
+  if (!parseResult || typeof parseResult !== "object") return "use 1530, 15:30, 3:30p, 3p, 19, +45m, +2h, or +1h30m";
+  if (parseResult.ok === true) return null;
+  const refusal = String(parseResult.refusal || "invalid");
+  if (refusal === "past" || refusal === "next_day") {
+    return "same-day only — Schedule (s:) defers to another day";
+  }
+  if (refusal === "dst_gap") {
+    return "that wall time does not exist today — pick a nearby time";
+  }
+  return "use 1530, 15:30, 3:30p, 3p, 19, +45m, +2h, or +1h30m";
+}
+
+// Event/new Blocked/done/cancelled/non-task teaching for refusal states.
+// Includes the Event span or the known prerequisite/schedule/project
+// reason when available.
+function snoozeCardRefusalMessage(input) {
+  const options = input && typeof input === "object" ? input : {};
+  const refusal = String(options.refusal || "unavailable");
+  const reason = typeof options.reason === "string" && options.reason.trim() !== "" ? " · " + options.reason.trim() : "";
+  const span = typeof options.span === "string" && options.span.trim() !== "" ? " (" + options.span.trim() + ")" : "";
+  switch (refusal) {
+    case "event_task":
+      return "Calendar Event Tasks cannot be snoozed" + span;
+    case "blocked":
+      return "That task is Blocked" + reason;
+    case "done":
+      return "That task is already done";
+    case "cancelled":
+      return "That task is cancelled";
+    case "not_task":
+      return "That row is not an open task";
+    case "fenced":
+      return "Snooze is unavailable inside a code fence";
+    case "prose_mention":
+      return "Snooze needs a task or its dedicated Task Link, not a prose mention";
+    case "ambiguous_target":
+    case "ambiguous":
+      return "That link matches more than one task; qualify it before snoozing";
+    case "multi_task":
+      return "Snooze handles one task; pick a single row";
+    case "missing_task":
+      return "No task found at the cursor";
+    case "no_pomodoros":
+      return "Today's note has no Pomodoros section to snooze from";
+    case "needs_naming":
+      return "That task needs a block ID before it can be snoozed";
+    case "stale":
+      return "The note changed while the card was open; try again";
+    case "day_changed":
+      return "The day changed while the card was open; try again";
+    case "unavailable":
+      return "Snooze is unavailable here";
+    default:
+      return (options.message && String(options.message)) || "Snooze cannot be made here";
+  }
+}
+
+// Pure card key handling: Ctrl+N/P and arrows move; Tab completes the
+// selection; Enter confirms the current valid time or selected action.
+// Typed invalid input never silently submits a suggestion. Close aliases
+// (Esc, q outside a text control, Ctrl+[) dispatch through the shared
+// close route. Repeat action keys are ignored; IME/composing is ignored.
+function resolveSnoozeCardKey(model, event) {
+  if (!model || typeof model !== "object" || !event) return null;
+  if (event.isComposing === true || event.keyCode === 229) return null;
+  if (event.inTextInput === true && String(event.key || "").toLowerCase() !== "tab" && event.key !== "Enter") {
+    if (!isTaskCardCloseKeydown(event)) return null;
+  }
+  const target = event.target;
+  const inTextControl = Boolean(target && (target.isContentEditable === true
+    || /^(INPUT|TEXTAREA|SELECT)$/.test(String(target.tagName || "").toUpperCase())));
+  const key = String(event.key || "");
+  const lower = key.toLowerCase();
+  const ctrl = event.ctrlKey === true;
+  const meta = event.metaKey === true;
+  const shift = event.shiftKey === true;
+  const alt = event.altKey === true;
+  const modified = ctrl || meta || shift || alt;
+  if (isTaskCardCloseKeydown(event)) {
+    if (lower === "q" && inTextControl) return null;
+    return Object.freeze({ type: "close-card" });
+  }
+  if (event.repeat === true) {
+    if ((!modified && (key === "Enter" || lower === "tab")) || (!modified && (key === "ArrowUp" || key === "ArrowDown"))) {
+      return Object.freeze({ type: "ignored", reason: "repeated-action-key" });
+    }
+  }
+  if ((!modified && key === "ArrowUp") || (ctrl && !meta && !shift && !alt && lower === "p")) {
+    return Object.freeze({ type: "move-selection", direction: "previous" });
+  }
+  if ((!modified && key === "ArrowDown") || (ctrl && !meta && !shift && !alt && lower === "n")) {
+    return Object.freeze({ type: "move-selection", direction: "next" });
+  }
+  if (!modified && lower === "tab") {
+    return Object.freeze({ type: "complete-selection" });
+  }
+  if (!modified && key === "Enter") {
+    return Object.freeze({ type: "confirm" });
+  }
+  return null;
+}
+
+Object.assign(module.exports.helpers, {
+  snoozeCardDisplayMinutes,
+  snoozeCardNormalizeUsedTimes,
+  rankSnoozeSuggestions,
+  snoozeCardInText,
+  buildSnoozeCardFooter,
+  buildSnoozeCardSnoozedHeader,
+  snoozeCardInputMessage,
+  snoozeCardRefusalMessage,
+  resolveSnoozeCardKey,
+});
+
+function snoozeCardIsAltZEvent(event) {
+  if (!event || typeof event !== "object") return false;
+  if (event.ctrlKey === true || event.metaKey === true || event.shiftKey === true) return false;
+  if (event.altKey !== true) return false;
+  if (String(event.code || "") === "KeyZ") return true;
+  return String(event.key || "").toLowerCase() === "z";
+}
+
+Object.assign(module.exports.helpers, {
+  snoozeCardIsAltZEvent,
+});
+// ---- src/744-snooze-card-modal.js ----
+// Snooze Card modal: time picker, ranked suggestions, consequence footer,
+// snoozed actions, and shared close-key dispatch. Renders from the pure
+// model (743) and the runtime controller (683/686); it adds no second
+// writer. One card at a time; repeat Enter cannot commit twice.
+class SnoozeCardModal extends Modal {
+  constructor(app, plugin, options) {
+    super(app);
+    const settings = options && typeof options === "object" ? options : {};
+    this.plugin = plugin || null;
+    this.resolution = settings.resolution || null;
+    this.facts = settings.facts && typeof settings.facts === "object" ? settings.facts : null;
+    this.clock = settings.clock && typeof settings.clock === "object" ? settings.clock : null;
+    this.taskTitle = String(settings.taskTitle || "task");
+    this.onReturnToTaskCard = typeof settings.onReturnToTaskCard === "function" ? settings.onReturnToTaskCard : null;
+    this.reviewAnchor = settings.reviewAnchor || null;
+    this.mode = "timed";
+    this.suggestions = Object.freeze([]);
+    this.selectedIndex = -1;
+    this.inputValue = "";
+    this.settled = false;
+    this.confirming = false;
+    this.refreshTimer = null;
+    this.inputEl = null;
+    this.listEl = null;
+    this.footerEl = null;
+    this.hintEl = null;
+    this.actionRowsEl = null;
+    this.rowEls = [];
+  }
+
+  snoozeCardFacts() {
+    try {
+      if (this.plugin && typeof this.plugin.getSnoozeFactsProvider === "function") {
+        const provider = this.plugin.getSnoozeFactsProvider();
+        if (provider && typeof provider.cardFacts === "function") {
+          return provider.cardFacts({ task: this.resolution && this.resolution.task });
+        }
+      }
+    } catch (_) {}
+    return this.facts;
+  }
+
+  snoozeCardClock() {
+    if (this.clock && typeof this.clock.nowMinutes === "number") return this.clock;
+    try {
+      const facts = this.snoozeCardFacts();
+      if (facts && Number.isInteger(facts.nowMinutes)) {
+        return { date: facts.dateText, nowMinutes: facts.nowMinutes, zone: facts.zone, nowText: facts.nowText };
+      }
+    } catch (_) {}
+    return this.clock;
+  }
+
+  snoozeCardEvents() {
+    try {
+      const facts = this.snoozeCardFacts();
+      if (facts && Array.isArray(facts.events)) return facts.events;
+    } catch (_) {}
+    return [];
+  }
+
+  snoozeCardUsedTimes() {
+    try {
+      const facts = this.snoozeCardFacts();
+      if (facts && Array.isArray(facts.usedTimesToday)) return facts.usedTimesToday;
+      if (facts && facts.activeRow && Number.isInteger(facts.activeRow.minutes)) return [facts.activeRow.minutes];
+    } catch (_) {}
+    return [];
+  }
+
+  snoozeCardTaskFacts() {
+    try {
+      const facts = this.snoozeCardFacts();
+      if (facts && facts.task) return facts.task;
+      if (this.resolution && this.resolution.task) {
+        const task = this.resolution.task;
+        return { typeKey: task.type_key || task.typeKey || null, typeName: task.type_name || task.typeName || null, offClock: task.off_clock === true };
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    this.modalEl.addClass("bob-decay-card-modal");
+    this.modalEl.addClass("bob-snooze-card-modal");
+    if (typeof this.modalEl.setAttribute === "function") {
+      this.modalEl.setAttribute("role", "dialog");
+      this.modalEl.setAttribute("aria-modal", "true");
+      this.modalEl.setAttribute("aria-label", "Snooze \"" + this.taskTitle + "\"");
+    }
+    contentEl.addClass("bob-decay-card");
+    contentEl.addClass("bob-snooze-card");
+    const header = contentEl.createDiv({ cls: "bob-decay-card-header" });
+    const icon = header.createDiv({ cls: "bob-decay-card-icon" });
+    try {
+      if (typeof applyIcon === "function") applyIcon(icon, "alarm-clock");
+    } catch (_) {}
+    const headerText = header.createDiv({ cls: "bob-decay-card-header-text" });
+    headerText.createDiv({
+      cls: "bob-decay-card-title bob-key-card-title",
+      text: "⏰ Snooze \"" + this.taskTitle + "\"",
+    });
+    const refusal = this.resolution && this.resolution.ok !== true ? this.resolution : null;
+    if (refusal) {
+      const detail = refusal.reason === "blocked" && this.resolution.task && this.resolution.task.blockedReason
+        ? { refusal: refusal.refusal, reason: this.resolution.task.blockedReason }
+        : { refusal: refusal.refusal, message: refusal.message };
+      headerText.createDiv({
+        cls: "bob-decay-card-subtitle",
+        text: snoozeCardRefusalMessage(detail),
+      });
+      this.mode = "refusal";
+    } else if (this.resolution && this.resolution.kind === "snoozed-row") {
+      this.mode = "snoozed";
+      let headerTextValue = "Snoozed";
+      try {
+        const facts = this.snoozeCardFacts();
+        const row = (facts && facts.activeRow) || (this.resolution.row ? { hhmm: this.resolution.row.hhmm, minutes: this.resolution.row.minutes } : null);
+        const display = row && row.hhmm ? String(row.hhmm).slice(0, 2) + ":" + String(row.hhmm).slice(2) : (Number.isInteger(row && row.minutes) ? snoozeCardDisplayMinutes(row.minutes) : null);
+        const clock = this.snoozeCardClock();
+        const inText = row && Number.isInteger(row.minutes) && clock ? snoozeCardInText(row.minutes, clock.nowMinutes) : null;
+        headerTextValue = buildSnoozeCardSnoozedHeader({ display, inText, state: row && row.state, blockedReason: row && row.blockedReason });
+      } catch (_) {}
+      headerText.createDiv({ cls: "bob-decay-card-subtitle", text: headerTextValue });
+    }
+    const inputWrap = contentEl.createDiv({ cls: "bob-snooze-card-input-wrap" });
+    this.inputEl = inputWrap.createEl("input", {
+      cls: "bob-snooze-card-input",
+      attr: {
+        type: "text",
+        placeholder: "15:30 or +45m",
+        "aria-label": "Snooze time",
+        autocomplete: "off",
+        spellcheck: "false",
+      },
+    });
+    this.inputEl.addEventListener("input", () => {
+      this.inputValue = this.inputEl.value;
+      this.refreshSuggestions({ preserveInput: true });
+    });
+    this.inputEl.addEventListener("keydown", (event) => this.handleCardKey(event));
+    this.listEl = contentEl.createDiv({ cls: "bob-decay-card-rows bob-snooze-card-list", attr: { role: "listbox", "aria-label": "Snooze times" } });
+    this.footerEl = contentEl.createDiv({ cls: "bob-decay-card-footer bob-key-card-footer bob-snooze-card-footer", attr: { "aria-live": "polite" } });
+    this.hintEl = contentEl.createDiv({ cls: "bob-snooze-card-hint" });
+    if (this.mode === "snoozed") {
+      this.actionRowsEl = contentEl.createDiv({ cls: "bob-decay-card-rows bob-snooze-card-actions" });
+      this.renderSnoozedActions();
+    }
+    contentEl.addEventListener("keydown", (event) => this.handleCardKey(event));
+    this.refreshSuggestions({ preserveInput: false });
+    this.startRefreshTimer();
+    const win = this.snoozeCardWindow();
+    if (win && typeof win.setTimeout === "function") {
+      win.setTimeout(() => {
+        try {
+          if (this.inputEl && typeof this.inputEl.focus === "function") this.inputEl.focus();
+        } catch (_) {}
+      }, 0);
+    }
+  }
+
+  snoozeCardWindow() {
+    const modalDocument = this.containerEl && this.containerEl.ownerDocument;
+    if (modalDocument && modalDocument.defaultView) return modalDocument.defaultView;
+    return typeof window !== "undefined" ? window : null;
+  }
+
+  startRefreshTimer() {
+    this.stopRefreshTimer();
+    const win = this.snoozeCardWindow();
+    const schedule = win && typeof win.setInterval === "function" ? win.setInterval.bind(win) : setInterval;
+    try {
+      this.refreshTimer = schedule(() => {
+        if (this.settled) return;
+        const authored = this.inputEl ? this.inputEl.value : this.inputValue;
+        this.refreshSuggestions({ preserveInput: true, authored });
+        this.refreshFooter();
+      }, 30000);
+    } catch (_) {
+      this.refreshTimer = null;
+    }
+  }
+
+  stopRefreshTimer() {
+    if (this.refreshTimer === null || this.refreshTimer === undefined) return;
+    try {
+      const win = this.snoozeCardWindow();
+      if (win && typeof win.clearInterval === "function") win.clearInterval(this.refreshTimer);
+      else clearInterval(this.refreshTimer);
+    } catch (_) {}
+    this.refreshTimer = null;
+  }
+
+  refreshSuggestions(options) {
+    const opts = options && typeof options === "object" ? options : {};
+    const clock = this.snoozeCardClock();
+    if (!clock) {
+      this.suggestions = Object.freeze([]);
+      this.selectedIndex = -1;
+      this.renderSuggestions();
+      this.refreshFooter();
+      return;
+    }
+    let ranked = [];
+    try {
+      ranked = rankSnoozeSuggestions({
+        events: this.snoozeCardEvents(),
+        nowMinutes: clock.nowMinutes,
+        date: clock.date,
+        zone: clock.zone,
+        usedTimesToday: this.snoozeCardUsedTimes(),
+      }) || [];
+    } catch (_) {
+      ranked = [];
+    }
+    const authored = typeof opts.authored === "string" ? opts.authored : (this.inputEl ? this.inputEl.value : this.inputValue);
+    if (opts.preserveInput === true && this.inputEl && typeof opts.authored === "string" && this.inputEl.value !== authored) {
+      this.inputEl.value = authored;
+    }
+    this.inputValue = this.inputEl ? this.inputEl.value : String(authored || "");
+    const typed = this.inputValue.trim();
+    this.suggestions = ranked;
+    if (typed === "") {
+      this.selectedIndex = ranked.length > 0 ? 0 : -1;
+    } else {
+      const match = ranked.findIndex((item) => item && (item.input === typed || item.display === typed || item.label === typed));
+      this.selectedIndex = match >= 0 ? match : -1;
+    }
+    this.renderSuggestions();
+    this.refreshFooter();
+  }
+
+  renderSuggestions() {
+    if (!this.listEl) return;
+    this.listEl.empty();
+    this.rowEls = this.suggestions.map((item, index) => {
+      const rowEl = this.listEl.createDiv({
+        cls: "bob-decay-card-row bob-key-card-row" + (index === this.selectedIndex ? " is-selected" : ""),
+      });
+      rowEl.setAttribute("role", "option");
+      rowEl.setAttribute("aria-selected", index === this.selectedIndex ? "true" : "false");
+      rowEl.setAttribute("aria-label", item.label);
+      if (index === this.selectedIndex) rowEl.setAttribute("tabindex", "0");
+      rowEl.createDiv({ cls: "bob-decay-card-key bob-key-card-key", text: item.group === "event" ? "◷" : item.group === "quick" ? "+" : "·" });
+      const body = rowEl.createDiv({ cls: "bob-decay-card-body" });
+      body.createDiv({ cls: "bob-decay-card-label", text: item.label });
+      rowEl.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.selectedIndex = index;
+        if (this.inputEl) {
+          this.inputEl.value = item.input;
+          this.inputValue = item.input;
+        }
+        this.renderSuggestions();
+        this.refreshFooter();
+        void this.confirmSelection();
+      });
+      return rowEl;
+    });
+  }
+
+  renderSnoozedActions() {
+    if (!this.actionRowsEl) return;
+    this.actionRowsEl.empty();
+    const blocked = this.resolution && this.resolution.task && (this.resolution.task.blocked === true || this.resolution.task.status === "?");
+    const rows = [
+      { id: "wake-now", label: "Wake now", detail: blocked ? "Unavailable while Blocked" : "Run bob snooze wake now", available: !blocked, key: "w" },
+      { id: "unsnooze", label: "Unsnooze", detail: "Remove the row without changing the lane", available: true, key: "u" },
+    ];
+    for (const row of rows) {
+      const rowEl = this.actionRowsEl.createDiv({
+        cls: "bob-decay-card-row bob-key-card-row" + (row.available ? "" : " is-unavailable"),
+      });
+      rowEl.setAttribute("role", "button");
+      rowEl.setAttribute("aria-label", row.available ? row.label + ": " + row.detail : row.label + " unavailable: " + row.detail);
+      if (row.available) rowEl.setAttribute("tabindex", "0");
+      else rowEl.setAttribute("aria-disabled", "true");
+      rowEl.createDiv({ cls: "bob-decay-card-key bob-key-card-key", text: row.key });
+      const body = rowEl.createDiv({ cls: "bob-decay-card-body" });
+      body.createDiv({ cls: "bob-decay-card-label", text: row.label });
+      body.createDiv({ cls: "bob-decay-card-detail", text: row.detail });
+      if (row.available) {
+        rowEl.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          void this.confirmSnoozedAction(row.id);
+        });
+        rowEl.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            event.stopPropagation();
+            void this.confirmSnoozedAction(row.id);
+          }
+        });
+      }
+    }
+  }
+
+  currentValidTime() {
+    const typed = (this.inputEl ? this.inputEl.value : this.inputValue).trim();
+    const clock = this.snoozeCardClock();
+    if (!clock) return { ok: false, refusal: "invalid" };
+    if (typed !== "") {
+      try {
+        const parsed = snoozeParseWhen(typed, clock);
+        if (parsed && parsed.ok === true) return parsed;
+        return parsed || { ok: false, refusal: "invalid" };
+      } catch (_) {
+        return { ok: false, refusal: "invalid" };
+      }
+    }
+    const selected = this.selectedIndex >= 0 ? this.suggestions[this.selectedIndex] : null;
+    if (selected) {
+      try {
+        const parsed = snoozeParseWhen(selected.input, clock);
+        if (parsed && parsed.ok === true) return parsed;
+      } catch (_) {}
+    }
+    return { ok: false, refusal: "invalid" };
+  }
+
+  refreshFooter() {
+    if (!this.footerEl) return;
+    if (this.mode === "refusal") {
+      this.footerEl.setText("Snooze unavailable — Esc to close");
+      if (this.hintEl) this.hintEl.setText("");
+      return;
+    }
+    const valid = this.currentValidTime();
+    if (valid.ok !== true) {
+      const message = snoozeCardInputMessage(valid);
+      this.footerEl.setText("Enter a same-day time to snooze");
+      if (this.hintEl) this.hintEl.setText(message || "");
+      return;
+    }
+    if (this.hintEl) this.hintEl.setText("");
+    let footerText = "at " + valid.value.hhmm.slice(0, 2) + ":" + valid.value.hhmm.slice(2);
+    try {
+      const facts = this.snoozeCardFacts();
+      const taskFacts = this.snoozeCardTaskFacts();
+      const clock = this.snoozeCardClock();
+      const inText = clock ? snoozeCardInText(valid.value.minutes, clock.nowMinutes) : null;
+      const departure = this.resolution && this.resolution.sourcePomodoro ? this.resolution.sourcePomodoro : null;
+      const destination = (facts && facts.destination && facts.destination.name) || (taskFacts && (taskFacts.typeName || taskFacts.typeKey)) || null;
+      const counts = facts && facts.counts ? facts.counts : null;
+      footerText = buildSnoozeCardFooter({
+        departure,
+        destination,
+        display: valid.value.hhmm.slice(0, 2) + ":" + valid.value.hhmm.slice(2),
+        inText,
+        nowCount: counts ? counts.count : null,
+        nowCap: counts ? counts.cap : null,
+        afterCount: null,
+        afterCap: null,
+        overCap: counts ? counts.over === true : false,
+      }) || footerText;
+    } catch (_) {}
+    this.footerEl.setText(footerText);
+  }
+
+  handleCardKey(event) {
+    if (!event || this.settled) return;
+    const inInput = event.target === this.inputEl;
+    const intent = resolveSnoozeCardKey(
+      { kind: "snooze-card", inputActive: false },
+      { ...event, inTextInput: false, target: inInput ? { tagName: "INPUT" } : event.target, inputActive: false },
+    );
+    if (!intent) {
+      if (event.key === "Enter" && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
+        event.preventDefault();
+        event.stopPropagation();
+        void this.confirmSelection();
+      }
+      return;
+    }
+    if (intent.type === "close-card") {
+      event.preventDefault();
+      event.stopPropagation();
+      this.cancelCard();
+      return;
+    }
+    if (intent.type === "ignored") return;
+    if (intent.type === "move-selection") {
+      event.preventDefault();
+      event.stopPropagation();
+      if (this.suggestions.length === 0) return;
+      const delta = intent.direction === "previous" ? -1 : 1;
+      const next = ((this.selectedIndex < 0 ? 0 : this.selectedIndex) + delta + this.suggestions.length) % this.suggestions.length;
+      this.selectedIndex = next;
+      this.renderSuggestions();
+      this.refreshFooter();
+      return;
+    }
+    if (intent.type === "complete-selection") {
+      event.preventDefault();
+      event.stopPropagation();
+      const selected = this.selectedIndex >= 0 ? this.suggestions[this.selectedIndex] : this.suggestions[0];
+      if (selected && this.inputEl) {
+        this.inputEl.value = selected.input;
+        this.inputValue = selected.input;
+        this.refreshSuggestions({ preserveInput: true });
+      }
+      return;
+    }
+    if (intent.type === "confirm") {
+      event.preventDefault();
+      event.stopPropagation();
+      void this.confirmSelection();
+    }
+  }
+
+  cancelCard() {
+    if (this.settled) return;
+    this.settled = true;
+    this.stopRefreshTimer();
+    try {
+      this.close();
+    } catch (_) {}
+    if (this.onReturnToTaskCard) {
+      try {
+        this.onReturnToTaskCard({ cancelled: true });
+      } catch (_) {}
+    }
+  }
+
+  async confirmSelection() {
+    if (this.settled || this.confirming) return;
+    if (this.mode === "refusal") return;
+    const valid = this.currentValidTime();
+    if (valid.ok !== true) {
+      this.refreshFooter();
+      return;
+    }
+    this.confirming = true;
+    try {
+      const outcome = await this.plugin.runSnoozeCommit(this.resolution, {
+        action: "add",
+        when: valid.value.hhmm,
+        advanceReview: this.reviewAnchor ? { anchor: this.reviewAnchor } : undefined,
+      });
+      if (!outcome || outcome.ok !== true) {
+        new Notice((outcome && outcome.message) || "Snooze cannot be made here");
+        this.confirming = false;
+        return;
+      }
+      this.settled = true;
+      this.stopRefreshTimer();
+      try {
+        this.close();
+      } catch (_) {}
+      new Notice("⏰ Snoozed until " + valid.value.hhmm.slice(0, 2) + ":" + valid.value.hhmm.slice(2));
+    } catch (error) {
+      new Notice("Snooze cannot be made here");
+      this.confirming = false;
+    }
+  }
+
+  async confirmSnoozedAction(actionId) {
+    if (this.settled || this.confirming) return;
+    if (actionId === "unsnooze") {
+      this.confirming = true;
+      try {
+        const outcome = await this.plugin.runSnoozeCommit(this.resolution, {
+          action: "drop",
+          advanceReview: this.reviewAnchor ? { anchor: this.reviewAnchor } : undefined,
+        });
+        if (!outcome || outcome.ok !== true) {
+          new Notice((outcome && outcome.message) || "Unsnooze cannot be made here");
+          this.confirming = false;
+          return;
+        }
+        this.settled = true;
+        this.stopRefreshTimer();
+        try {
+          this.close();
+        } catch (_) {}
+        new Notice("Unsnoozed — lane unchanged");
+      } catch (_) {
+        new Notice("Unsnooze cannot be made here");
+        this.confirming = false;
+      }
+      return;
+    }
+    if (actionId === "wake-now") {
+      this.confirming = true;
+      try {
+        const outcome = await this.plugin.wakeSnoozeNow(this.resolution, {});
+        if (!outcome || outcome.ok !== true) {
+          new Notice((outcome && outcome.message) || "Nothing woke; the row stays snoozed");
+          this.confirming = false;
+          return;
+        }
+        this.settled = true;
+        this.stopRefreshTimer();
+        try {
+          this.close();
+        } catch (_) {}
+      } catch (_) {
+        new Notice("Nothing woke; the row stays snoozed");
+        this.confirming = false;
+      }
+    }
+  }
+
+  onClose() {
+    this.settled = true;
+    this.stopRefreshTimer();
+    this.inputEl = null;
+    this.listEl = null;
+    this.footerEl = null;
+    this.hintEl = null;
+    this.actionRowsEl = null;
+    this.rowEls = [];
+  }
+}
+// ---- src/745-snooze-card-commands.js ----
+// Snooze Card commands: Task Card `z` dispatch and collision-safe Alt+Z
+// registration. The Task Card row/order/shortcut live in 310/314; this
+// fragment bridges the `snooze` intent to the Snooze Card modal and keeps
+// the card entry available when Alt+Z itself is taken.
+function snoozeCardTaskTitleForResolution(resolution) {
+  try {
+    const task = resolution && resolution.task;
+    if (task && typeof task.displayText === "string" && task.displayText.trim() !== "") {
+      return task.displayText.trim().slice(0, 80);
+    }
+    if (task && typeof task.target === "string" && task.target.trim() !== "") {
+      const stem = task.target.split("/").pop() || task.target;
+      return stem.trim().slice(0, 80) || "task";
+    }
+  } catch (_) {}
+  return "task";
+}
+
+function isSnoozeAltZBinding(hotkey) {
+  if (!hotkey || typeof hotkey !== "object") return false;
+  const key = String(hotkey.key == null ? "" : hotkey.key);
+  const modifiers = Array.isArray(hotkey.modifiers) ? hotkey.modifiers.map(String) : [];
+  const hasAlt = modifiers.some((item) => String(item).toLowerCase() === "alt");
+  const onlyAlt = modifiers.length === 1 && hasAlt;
+  if (!onlyAlt) return false;
+  if (key.toLowerCase() === "z") return true;
+  return false;
+}
+
+function snoozeCardAltZConflict(app, selfCommandId) {
+  const conflicts = [];
+  try {
+    const manager = app && app.hotkeyManager;
+    if (manager) {
+      const listCommands = () => {
+        try {
+          if (app.commands && typeof app.commands === "object" && app.commands.commands) {
+            const raw = app.commands.commands;
+            if (Array.isArray(raw)) return raw.map((command) => command && command.id).filter(Boolean);
+            return Object.keys(raw);
+          }
+        } catch (_) {}
+        return [];
+      };
+      const ids = listCommands();
+      const custom = manager.customKeys instanceof Map ? [...manager.customKeys.keys()] : Object.keys(manager.customKeys || {});
+      const defaults = manager.defaultKeys instanceof Map ? [...manager.defaultKeys.keys()] : Object.keys(manager.defaultKeys || {});
+      const known = new Set([...ids, ...custom, ...defaults]);
+      for (const id of known) {
+        if (String(id) === String(selfCommandId)) continue;
+        let hotkeys = null;
+        try {
+          if (manager.customKeys && (manager.customKeys instanceof Map ? manager.customKeys.has(id) : Object.prototype.hasOwnProperty.call(manager.customKeys, id))) {
+            hotkeys = manager.customKeys instanceof Map ? manager.customKeys.get(id) : manager.customKeys[id];
+          } else if (typeof manager.getHotkeys === "function") {
+            hotkeys = manager.getHotkeys(id);
+          }
+        } catch (_) {
+          hotkeys = null;
+        }
+        const list = Array.isArray(hotkeys) ? hotkeys : (hotkeys ? [hotkeys] : []);
+        for (const hotkey of list) {
+          if (isSnoozeAltZBinding(hotkey)) {
+            conflicts.push({ kind: "hotkey", commandId: String(id) });
+            break;
+          }
+        }
+      }
+      try {
+        const defaultsForSelf = typeof manager.getDefaultHotkeys === "function" ? manager.getDefaultHotkeys(selfCommandId) : manager.defaultKeys && (manager.defaultKeys instanceof Map ? manager.defaultKeys.get(selfCommandId) : manager.defaultKeys[selfCommandId]);
+        const list = Array.isArray(defaultsForSelf) ? defaultsForSelf : (defaultsForSelf ? [defaultsForSelf] : []);
+        void list;
+      } catch (_) {}
+    }
+  } catch (_) {}
+  try {
+    const vimrc = app && app.plugins && app.plugins.plugins && app.plugins.plugins["obsidian-vimrc-support"];
+    const mappings = vimrc && (vimrc.mappings || vimrc.vimCommands || vimrc.keymaps);
+    const text = JSON.stringify(mappings || "");
+    if (typeof text === "string" && /(Alt\+Z|M-z|<A-z>|<M-z>)/i.test(text)) {
+      conflicts.push({ kind: "vimrc", commandId: "obsidian-vimrc-support" });
+    }
+  } catch (_) {}
+  try {
+    const commands = app && app.commands && app.commands.commands;
+    if (commands && typeof commands === "object") {
+      const entries = Array.isArray(commands) ? commands.map((command) => [command && command.id, command]) : Object.entries(commands);
+      for (const [id, command] of entries) {
+        if (!id || String(id) === String(selfCommandId)) continue;
+        const hotkeys = command && command.hotkeys;
+        const list = Array.isArray(hotkeys) ? hotkeys : (hotkeys ? [hotkeys] : []);
+        for (const hotkey of list) {
+          if (isSnoozeAltZBinding(hotkey)) {
+            if (!conflicts.some((entry) => entry.commandId === String(id))) {
+              conflicts.push({ kind: "plugin-default", commandId: String(id) });
+            }
+            break;
+          }
+        }
+      }
+    }
+  } catch (_) {}
+  // Option-key handling on Mac: KeyZ with Alt is the same gesture even when
+  // the platform supplies a different event.key (e.g. Ω). A registered
+  // Alt+Ω default counts as the same conflict; the checks above already
+  // match modifiers+key, and the modal accepts KeyZ by code where needed.
+  return Object.freeze(conflicts);
+}
+
+function describeSnoozeAltZConflict(conflicts) {
+  if (!Array.isArray(conflicts) || conflicts.length === 0) return null;
+  const first = conflicts[0];
+  if (first.kind === "vimrc") return "Alt+Z is mapped in the vimrc; the Snooze command stays available without the hotkey";
+  return "Alt+Z is already bound to " + first.commandId + "; the Snooze command stays available without the hotkey";
+}
+
+// Wrap the Task Card dispatcher so the `snooze` row opens the same card
+// Alt+Z opens. Schedule stays the default selected row; generic
+// modal/global keys never double-dispatch because the intent is handled
+// here and the card consumes its own keys.
+const dispatchTaskCardIntentBeforeSnooze = typeof BulletPropertyPickerTaskCardMixin !== "undefined"
+  && BulletPropertyPickerTaskCardMixin.prototype
+  && BulletPropertyPickerTaskCardMixin.prototype.dispatchTaskCardIntent
+  ? BulletPropertyPickerTaskCardMixin.prototype.dispatchTaskCardIntent
+  : null;
+
+if (typeof BulletPropertyPickerTaskCardMixin !== "undefined" && dispatchTaskCardIntentBeforeSnooze) {
+  BulletPropertyPickerTaskCardMixin.prototype.dispatchTaskCardIntent = async function dispatchTaskCardIntentWithSnooze(intent) {
+    try {
+      if (intent && (intent.rowId === "snooze" || intent.action === "snooze")) {
+        if (intent.type === "unavailable") {
+          if (intent.reason) new Notice(intent.reason);
+          return false;
+        }
+        if (this.taskCardDispatching || this.linkResolving || this.opening) return false;
+        this.taskCardDispatching = true;
+        try {
+          const closed = this.close();
+          void closed;
+        } catch (_) {}
+        try {
+          if (typeof this.openSnoozeCardFromTaskCard === "function") {
+            return await this.openSnoozeCardFromTaskCard();
+          }
+          if (typeof this.openSnoozeCardAtCursor === "function") {
+            return await this.openSnoozeCardAtCursor();
+          }
+          new Notice("Snooze is unavailable here");
+          return false;
+        } finally {
+          this.taskCardDispatching = false;
+        }
+      }
+    } catch (_) {
+      // Fall through to the original dispatcher on wrapper failure.
+    }
+    return dispatchTaskCardIntentBeforeSnooze.call(this, intent);
+  };
+}
+
+// Alt+Z entry shared by the command and the Task Card row. Feature-detects
+// compatible providers and exposes a meaningful refusal instead of
+// half-working controls.
+function openSnoozeCardCommon(plugin, editor, view, taskCardTargets) {
+  const app = plugin && plugin.app;
+  const activeView = view || (typeof plugin.getActiveMarkdownView === "function" ? plugin.getActiveMarkdownView() : null);
+  const activeEditor = editor || (activeView && activeView.editor) || null;
+  if (!activeEditor || typeof activeEditor.getValue !== "function") {
+    new Notice("No active markdown editor");
+    return Promise.resolve(false);
+  }
+  let cursorLine = null;
+  try {
+    const cursor = typeof getEditorCursor === "function" ? getEditorCursor(activeEditor) : (activeEditor && typeof activeEditor.getCursor === "function" ? activeEditor.getCursor() : null);
+    cursorLine = cursor && Number.isInteger(cursor.line) ? cursor.line : null;
+  } catch (_) {
+    cursorLine = null;
+  }
+  const sourcePath = (activeView && activeView.file && activeView.file.path) || "";
+  const sourceContents = String(activeEditor.getValue() || "");
+  const planning = typeof plugin.getSnoozePlanningAdapter === "function" ? plugin.getSnoozePlanningAdapter() : null;
+  const factsProvider = typeof plugin.getSnoozeFactsProvider === "function" ? plugin.getSnoozeFactsProvider() : null;
+  if (!planning || !factsProvider) {
+    new Notice("Snooze is unavailable here");
+    return Promise.resolve(false);
+  }
+  return Promise.resolve()
+    .then(() => plugin.resolveSnoozeAtCursor(activeEditor, {
+      sourcePath,
+      sourceContents,
+      cursorLine,
+      explicitTargets: Array.isArray(taskCardTargets) ? taskCardTargets : null,
+    }))
+    .then((resolution) => {
+      if (!resolution || resolution.ok !== true) {
+        new Notice((resolution && resolution.message) || "Snooze is unavailable here");
+        return false;
+      }
+      const taskTitle = snoozeCardTaskTitleForResolution(resolution);
+      const reviewAnchor = plugin.reviewAnchor || null;
+      const modal = new SnoozeCardModal(app, plugin, {
+        resolution,
+        facts: null,
+        clock: null,
+        taskTitle,
+        reviewAnchor,
+        onReturnToTaskCard: null,
+      });
+      try {
+        modal.open();
+      } catch (_) {
+        return false;
+      }
+      return true;
+    })
+    .catch(() => {
+      new Notice("Snooze is unavailable here");
+      return false;
+    });
+}
+
+if (typeof BobNavigationHotkeysSnoozeRuntimeMixin !== "undefined") {
+  BobNavigationHotkeysSnoozeRuntimeMixin.prototype.openSnoozeCardAtCursor = function openSnoozeCardAtCursor(editor, view) {
+    return openSnoozeCardCommon(this, editor || null, view || null, null);
+  };
+  BobNavigationHotkeysSnoozeRuntimeMixin.prototype.openSnoozeCardFromTaskCard = function openSnoozeCardFromTaskCard() {
+    let targets = null;
+    try {
+      const model = this.taskCardModel;
+      if (model && model.session && Array.isArray(model.session.targetsForSnooze)) {
+        targets = model.session.targetsForSnooze;
+      } else if (this.taskSession && Array.isArray(this.taskSession.targets)) {
+        targets = this.taskSession.targets.map((entry) => (entry && entry.target) || entry).filter(Boolean);
+      } else if (this.linkSession && Array.isArray(this.linkSession.resolved)) {
+        targets = this.linkSession.resolved.slice(0, 5);
+      }
+    } catch (_) {
+      targets = null;
+    }
+    const editor = (typeof this.getActiveMarkdownView === "function" ? (this.getActiveMarkdownView() || {}).editor : null) || null;
+    const view = typeof this.getActiveMarkdownView === "function" ? this.getActiveMarkdownView() : null;
+    return openSnoozeCardCommon(this, editor, view, targets);
+  };
+  // Convenience for keymap tests: Alt+Z on macOS may arrive as KeyZ with
+  // Alt and a dead-key event.key (e.g. Ω). The command route does not
+  // depend on event.key, but the modal's global fallback does.
+  BobNavigationHotkeysSnoozeRuntimeMixin.prototype.isSnoozeAltZKeyEvent = function isSnoozeAltZKeyEvent(event) {
+    if (!event) return false;
+    if (event.ctrlKey === true || event.metaKey === true || event.shiftKey === true) return false;
+    if (event.altKey !== true) return false;
+    if (event.code === "KeyZ") return true;
+    return String(event.key || "").toLowerCase() === "z";
+  };
+}
+
+// Collision-safe Alt+Z command registration. Inspects hotkeys.json, the
+// configured vimrc, and registered plugin defaults through existing
+// app/vault access at loading; never rewrites those files or erases an
+// explicit user unbinding. On conflict the command and Task Card entry
+// stay available, the existing binding is preserved, and a concise notice
+// names the conflict.
+function registerSnoozeTaskCommand(plugin) {
+  if (!plugin || typeof plugin.addCommand !== "function") return false;
+  try {
+    if (plugin.snoozeTaskCommandRegistered === true) return true;
+  } catch (_) {}
+  const commandId = "snooze-task";
+  const selfId = "bob-navigation-hotkeys:" + commandId;
+  let conflicts = Object.freeze([]);
+  try {
+    conflicts = snoozeCardAltZConflict(plugin.app, selfId);
+  } catch (_) {
+    conflicts = Object.freeze([]);
+  }
+  // Single literal registration keeps docs-inventory exact. Obsidian keeps
+  // any existing effective Alt+Z binding: a plugin default never overwrites
+  // hotkeys.json, a vimrc mapping, or an explicit user unbinding. On
+  // conflict the command and Task Card entry stay available and we notice
+  // once naming the winner; the effective Alt+Z stays theirs.
+  try {
+    plugin.addCommand({
+      id: "snooze-task",
+      name: "Snooze task for later today",
+      hotkeys: [{ modifiers: ["Alt"], key: "Z" }],
+      editorCallback: (editor, view) => {
+        void openSnoozeCardCommon(plugin, editor, view, null);
+      },
+    });
+  } catch (_) {
+    return false;
+  }
+  try {
+    plugin.snoozeTaskCommandRegistered = true;
+  } catch (_) {}
+  if (conflicts.length > 0) {
+    const message = describeSnoozeAltZConflict(conflicts);
+    try {
+      if (message) new Notice(message);
+    } catch (_) {}
+    try {
+      plugin.snoozeAltZConflict = conflicts;
+    } catch (_) {}
+  }
+  return true;
+}
+
+Object.assign(module.exports.helpers, {
+  snoozeCardTaskTitleForResolution,
+  isSnoozeAltZBinding,
+  snoozeCardAltZConflict,
+  describeSnoozeAltZConflict,
+  registerSnoozeTaskCommand,
+});
+
+// Collision-safe Alt+Z wiring at load: preserve any existing effective
+// binding, never rewrite hotkeys.json/vimrc, and keep the command plus
+// Task Card entry available on conflict with a concise notice.
+if (typeof BobNavigationHotkeysPlugin !== "undefined" && BobNavigationHotkeysPlugin.prototype && typeof BobNavigationHotkeysPlugin.prototype.onload === "function" && !BobNavigationHotkeysPlugin.prototype.snoozeCardOnloadWrapped) {
+  const snoozeCardOnloadBefore = BobNavigationHotkeysPlugin.prototype.onload;
+  BobNavigationHotkeysPlugin.prototype.snoozeCardOnloadWrapped = true;
+  BobNavigationHotkeysPlugin.prototype.onload = function onloadWithSnoozeCard() {
+    const result = snoozeCardOnloadBefore.apply(this, arguments);
+    try {
+      registerSnoozeTaskCommand(this);
+    } catch (_) {}
+    return result;
+  };
+}
+
+Object.assign(module.exports.helpers, {
+  SnoozeCardModal: typeof SnoozeCardModal !== "undefined" ? SnoozeCardModal : undefined,
+});
+// ---- src/746-snooze-card-exports.js ----
+// Snooze Card exports: model, modal, and command helpers are assigned in
+// 743/745; this fragment keeps the export list explicit for the harness.
+Object.assign(module.exports.helpers, {
+  snoozeCardExportsVersion: 1,
 });

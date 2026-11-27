@@ -14,6 +14,7 @@ const path = require("node:path");
 const lib = require("./obsidian-record-card-e2e-lib.cjs");
 const workflows = require("./obsidian-record-card-workflows.cjs");
 const workflowProof = require("./obsidian-record-card-workflow-lib.cjs");
+const scratchLifecycle = require("./e2e-scratch.cjs");
 const repoRoot = path.resolve(__dirname, "..");
 const OVERALL_TIMEOUT_MS = 600_000;
 const ELECTRON_FALLBACK = "/snap/obsidian/current/app/obsidian";
@@ -966,6 +967,8 @@ function appendCapturedCheck(report, name, ok, detail, mandatory = true) {
 }
 
 async function run(args) {
+  const scratchRun = scratchLifecycle.createScratch({ prefix: "bob-record-card-e2e-" });
+  const scratch = scratchRun.dir;
   const report = {
     pass: false,
     scope: args.scope,
@@ -986,11 +989,10 @@ async function run(args) {
     probes: {},
     noteSafety: {},
   };
-  const outDir = path.resolve(args.out || path.join(os.tmpdir(), "bob-record-card-e2e-shots-" + crypto.randomBytes(4).toString("hex")));
+  const outDir = path.resolve(args.out || path.join(scratch, "screenshots"));
   const reportPath = path.resolve(args.report || path.join(outDir, "record-card-report.json"));
   report.reportPath = reportPath;
   report.screenshotDirectory = outDir;
-  let scratch = "";
   let vaultDir = "";
   let child = null;
   let client = null;
@@ -1022,7 +1024,6 @@ async function run(args) {
       throw error;
     }
 
-    scratch = fs.mkdtempSync(path.join(os.tmpdir(), "bob-record-card-e2e-"));
     vaultDir = path.join(scratch, "vault");
     const profileDir = path.join(scratch, "profile");
     const shimDir = path.join(profileDir, "shim");
@@ -1603,14 +1604,14 @@ async function run(args) {
       }
     }
     report.finishedAt = new Date().toISOString();
-    report.scratchPreserved = Boolean(scratch && !successful && fs.existsSync(scratch));
-    if (successful && scratch) fs.rmSync(scratch, { recursive: true, force: true });
+    report.scratchPreserved = Boolean(scratchLifecycle.keepEverythingFromEnv() || !successful);
     report.assertionCounts = report.assertions.reduce((counts, item) => {
       counts[item.status] = (counts[item.status] || 0) + 1;
       return counts;
     }, {});
     fs.mkdirSync(path.dirname(reportPath), { recursive: true });
     fs.writeFileSync(reportPath, JSON.stringify(report, null, 2) + "\n");
+    scratchLifecycle.finishScratch(scratchRun, { success: successful });
   }
   process.stdout.write((report.pass ? "PASS" : "FAIL") + " Record Card sheet e2e (" + JSON.stringify(report.assertionCounts) + ")\n");
   process.stdout.write("Report: " + reportPath + "\nScreenshots: " + outDir + "\n");

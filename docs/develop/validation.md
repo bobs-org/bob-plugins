@@ -15,6 +15,29 @@ npm test
 npm run validate
 ```
 
+## Real Obsidian runner scratch
+
+Home Cards, Cabinets, Card Foot, Property Editor, Intention Card, Record Card,
+Title Block, and Snooze Card use a shared scratch lifecycle. By default, the
+live vault, profile, report, and screenshots stay in the run directory under
+Node's `os.tmpdir()` (usually `/tmp`). A failed run prints its retained path and
+keeps only the newest helper-managed failure run per runner. A successful run
+removes its scratch directory. The Snooze Card runner uses the repo's
+`.tmp-sn-e2e/snooze-card` as its short, runner-owned root instead.
+
+Only directories with that runner's prefix, created by the shared helper, and
+owned by the current user are eligible for pruning. Older scratch directories
+that predate the helper are left alone. Default reports and screenshots follow
+the run directory; explicit `--out` and `--report` paths remain at the paths
+chosen by the caller.
+
+Set `BOB_E2E_KEEP_SCRATCH=1` to retain successful runs too and disable pruning
+for deliberate debugging. For cargo targets and ad hoc harnesses, set `TMPDIR`
+to a disk-backed directory to keep large builds and harness data off the `/tmp`
+tmpfs. Keep Snap Obsidian's temporary socket path short when running the real
+acceptance flows; this change does not move their live vaults off the existing
+temporary root.
+
 `npm test` first checks bundle freshness and generated documentation,
 then runs the explicit Node test list in `package.json` (`test:unit`),
 then runs CPU-budget files serially (`test:perf`). Both stages always

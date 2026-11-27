@@ -14,6 +14,7 @@ const lib = require("./obsidian-intention-card-e2e-lib.cjs");
 const shared = require("./obsidian-record-card-e2e.cjs");
 const workflows = require("./obsidian-intention-card-workflows.cjs");
 const workflowsLanding = require("./obsidian-intention-card-landing-workflows.cjs");
+const scratchLifecycle = require("./e2e-scratch.cjs");
 
 const repoRoot = path.resolve(__dirname, "..");
 const ELECTRON_FALLBACK = "/snap/obsidian/current/app/obsidian";
@@ -302,15 +303,16 @@ function displayProbeSource(notePath) {
 }
 
 async function run(args) {
+  const scratchRun = scratchLifecycle.createScratch({ prefix: "bob-intention-card-e2e-" });
+  const scratch = scratchRun.dir;
   const report = {
     pass: false, startedAt: new Date().toISOString(), assertions: [], screenshots: [], consoleExceptions: [],
     bobRuns: [], bobInvocations: [], prerequisites: [], probes: {}, noteSafety: {}, workflows: {},
     pluginSource: pluginProvenance(),
   };
-  const outDir = path.resolve(args.out || path.join(os.tmpdir(), "bob-intention-card-e2e-shots-" + crypto.randomBytes(4).toString("hex")));
+  const outDir = path.resolve(args.out || path.join(scratch, "screenshots"));
   const reportPath = path.resolve(args.report || path.join(outDir, "intention-card-report.json"));
   Object.assign(report, { reportPath, screenshotDirectory: outDir });
-  let scratch = "";
   let child = null;
   let client = null;
   let successful = false;
@@ -355,7 +357,6 @@ async function run(args) {
     const today = lib.localToday();
     const { plan, notes } = lib.fixturePlan(today);
     report.testClock = { today, bobNow: today + " 12:00:00", timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, runnerStartedAt: new Date().toString() };
-    scratch = fs.mkdtempSync(path.join(os.tmpdir(), "bob-intention-card-e2e-"));
     const vaultDir = path.join(scratch, "vault");
     const profileDir = path.join(scratch, "profile");
     const shimDir = path.join(profileDir, "shim");
@@ -465,12 +466,12 @@ async function run(args) {
       report.bobInvocations = readInvocations(path.join(scratch, "profile", "bob-invocations.jsonl"));
     }
     report.finishedAt = new Date().toISOString();
-    report.scratchPreserved = Boolean(scratch && !successful && fs.existsSync(scratch));
-    if (successful && scratch) fs.rmSync(scratch, { recursive: true, force: true });
+    report.scratchPreserved = Boolean(scratchLifecycle.keepEverythingFromEnv() || !successful);
     report.assertionCounts = report.assertions.reduce((counts, item) => { counts[item.status] = (counts[item.status] || 0) + 1; return counts; }, {});
     report.failedChecks = report.assertions.filter((row) => row.status === "fail").map((row) => row.name);
     fs.mkdirSync(path.dirname(reportPath), { recursive: true });
     fs.writeFileSync(reportPath, JSON.stringify(report, null, 2) + "\n");
+    scratchLifecycle.finishScratch(scratchRun, { success: successful });
   }
   process.stdout.write((report.pass ? "PASS" : "FAIL") + " intention card e2e (" + JSON.stringify(report.assertionCounts) + ")\n");
   process.stdout.write("Report: " + reportPath + "\nScreenshots: " + outDir + "\n");

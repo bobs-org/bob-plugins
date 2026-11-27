@@ -13,6 +13,7 @@ const lib = require("./obsidian-cabinets-e2e-lib.cjs");
 const home = require("./obsidian-home-cards-e2e-lib.cjs");
 const periods = require("./obsidian-intention-card-e2e-lib.cjs");
 const shared = require("./obsidian-record-card-e2e.cjs");
+const scratchLifecycle = require("./e2e-scratch.cjs");
 const repoRoot = path.resolve(__dirname, "..");
 const ELECTRON_FALLBACK = "/snap/obsidian/current/app/obsidian";
 const PLUGIN_ID = "bob-ledger-tools";
@@ -652,10 +653,11 @@ async function run(args) {
   const executable = args.executable || process.env.OBSIDIAN_BIN || ELECTRON_FALLBACK;
   if (!process.env.DISPLAY) throw new Error("No DISPLAY; run real acceptance with xvfb-run");
   fs.accessSync(executable, fs.constants.X_OK);
-  const outDir = path.resolve(args.out || path.join(os.tmpdir(), `bob-cabinets-shots-${crypto.randomBytes(4).toString("hex")}`));
+  const scratchRun = scratchLifecycle.createScratch({ prefix: "bob-cabinets-e2e-" });
+  const scratch = scratchRun.dir;
+  const outDir = path.resolve(args.out || path.join(scratch, "screenshots"));
   const reportPath = path.resolve(args.report || path.join(outDir, "cabinets-e2e.json"));
   fs.mkdirSync(outDir, { recursive: true });
-  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "bob-cabinets-e2e-"));
   const vault = path.join(scratch, "vault");
   const profile = path.join(scratch, "profile");
   fs.mkdirSync(vault, { recursive: true });
@@ -1585,14 +1587,14 @@ async function run(args) {
     report.obsidianProcess.startupLog = fs.existsSync(profileLog)
       ? fs.readFileSync(profileLog, "utf8").slice(-12_000) : null;
     writeStartupDiagnostics(path.dirname(reportPath), profile, report.obsidianProcess, logPath);
-    report.scratchPreserved = Boolean(!successful && fs.existsSync(scratch));
-    if (successful && fs.existsSync(scratch)) fs.rmSync(scratch, { recursive: true, force: true });
     report.assertionCounts = report.checks.reduce((counts, row) => {
       counts[row.status] = (counts[row.status] || 0) + 1;
       return counts;
     }, {});
+    report.scratchPreserved = Boolean(scratchLifecycle.keepEverythingFromEnv() || !successful);
     fs.mkdirSync(path.dirname(reportPath), { recursive: true });
     fs.writeFileSync(reportPath, JSON.stringify(report, null, 2) + "\n");
+    scratchLifecycle.finishScratch(scratchRun, { success: successful });
   }
   process.stdout.write(`${report.verdict} Cabinets acceptance (${JSON.stringify(report.assertionCounts)}, ${report.screenshots.length} screenshots)\n`);
   process.stdout.write(`Report: ${reportPath}\nScreenshots: ${outDir}\n`);

@@ -11,6 +11,7 @@ const os = require("node:os");
 const path = require("node:path");
 
 const lib = require("./obsidian-card-foot-e2e-lib.cjs");
+const scratchLifecycle = require("./e2e-scratch.cjs");
 const repoRoot = path.resolve(__dirname, "..");
 const OVERALL_TIMEOUT_MS = 600_000;
 const ELECTRON_FALLBACK = "/snap/obsidian/current/app/obsidian";
@@ -505,11 +506,12 @@ async function run(args) {
     },
     assertions: [], screenshots: [], consoleExceptions: [], bobRuns: [], bobInvocations: [], prerequisites: [], probes: {}, noteSafety: {},
   };
-  const outDir = path.resolve(args.out || path.join(os.tmpdir(), "bob-card-foot-e2e-shots-" + crypto.randomBytes(4).toString("hex")));
+  const scratchRun = scratchLifecycle.createScratch({ prefix: "bob-card-foot-e2e-" });
+  const scratch = scratchRun.dir;
+  const outDir = path.resolve(args.out || path.join(scratch, "screenshots"));
   const reportPath = path.resolve(args.report || path.join(outDir, "card-foot-report.json"));
   report.reportPath = reportPath;
   report.screenshotDirectory = outDir;
-  let scratch = "";
   let vaultDir = "";
   let profileDir = "";
   let child = null;
@@ -537,7 +539,6 @@ async function run(args) {
       report.prerequisites.push({ name: "Obsidian-Electron-and-Xvfb-host", status: "fail", detail: error.message });
       throw error;
     }
-    scratch = fs.mkdtempSync(path.join(os.tmpdir(), "bob-card-foot-e2e-"));
     vaultDir = path.join(scratch, "vault");
     profileDir = path.join(scratch, "profile");
     const shimDir = path.join(profileDir, "shim");
@@ -967,7 +968,6 @@ async function run(args) {
       }
     } catch (_) {}
     report.finishedAt = new Date().toISOString();
-    try { fs.writeFileSync(reportPath, JSON.stringify(report, null, 2)); } catch (_) {}
     try {
       const leftovers = ["ledger-tools-plugin-loaded"];
       for (const name of leftovers) {
@@ -980,10 +980,10 @@ async function run(args) {
       await sleep(400);
       if (child.exitCode == null) { try { child.kill("SIGKILL"); } catch (_) {} }
     }
-    if (successful && scratch) fs.rmSync(scratch, { recursive: true, force: true });
-    report.scratchPreserved = Boolean(scratch && !successful);
-    try { fs.writeFileSync(reportPath, JSON.stringify(report, null, 2)); } catch (_) {}
     report.assertionCounts = report.assertions.reduce((counts, item) => { counts[item.status] = (counts[item.status] || 0) + 1; return counts; }, {});
+    report.scratchPreserved = Boolean(scratchLifecycle.keepEverythingFromEnv() || !successful);
+    try { fs.writeFileSync(reportPath, JSON.stringify(report, null, 2)); } catch (_) {}
+    scratchLifecycle.finishScratch(scratchRun, { success: successful });
   }
   return report;
 }

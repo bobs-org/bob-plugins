@@ -15,6 +15,7 @@ const diagnostics = require("./obsidian-property-editor-e2e-diagnostics.cjs");
 const surfaces = require("./obsidian-property-editor-e2e-surfaces.cjs");
 const parity = require("./obsidian-property-editor-e2e-parity.cjs");
 const settings = require("./obsidian-property-editor-e2e-settings.cjs");
+const scratchLifecycle = require("./e2e-scratch.cjs");
 
 const repoRoot = path.resolve(__dirname, "..");
 const ELECTRON_FALLBACK = "/snap/obsidian/current/app/obsidian";
@@ -382,12 +383,13 @@ async function run(args) {
     prerequisites: [],
     acceptanceChecks: lib.ACCEPTANCE_CHECKS.slice(),
   };
-  let scratch = "";
+  const scratchRun = scratchLifecycle.createScratch({ prefix: "bob-property-editor-" });
+  const scratch = scratchRun.dir;
   let child = null;
   let client = null;
   let ctx = null;
   let successful = false;
-  const outDir = path.resolve(args.out || path.join(os.tmpdir(), "bob-property-editor-e2e-" + Math.random().toString(16).slice(2)));
+  const outDir = path.resolve(args.out || path.join(scratch, "screenshots"));
   const reportPath = path.resolve(args.report || path.join(outDir, "property-editor-report.json"));
   report.reportPath = reportPath;
   report.screenshotDirectory = outDir;
@@ -407,7 +409,6 @@ async function run(args) {
     }
     report.prerequisites.push({ name: "Obsidian-Electron", status: "pass", detail: executable });
 
-    scratch = fs.mkdtempSync(path.join(os.tmpdir(), "bob-property-editor-"));
     const vaultDir = path.join(scratch, "vault");
     const profileDir = path.join(scratch, "profile");
     const shimDir = path.join(profileDir, "shim");
@@ -968,14 +969,14 @@ async function run(args) {
       }
     } catch (logError) { report.bobInvocationLogError = String(logError?.message || logError); }
     report.finishedAt = new Date().toISOString();
-    report.scratchPreserved = Boolean(scratch && !successful && fs.existsSync(scratch));
-    if (successful && scratch) fs.rmSync(scratch, { recursive: true, force: true });
+    report.scratchPreserved = Boolean(scratchLifecycle.keepEverythingFromEnv() || !successful);
     report.assertionCounts = report.assertions.reduce((counts, item) => {
       counts[item.status] = (counts[item.status] || 0) + 1;
       return counts;
     }, {});
     fs.mkdirSync(path.dirname(reportPath), { recursive: true });
     fs.writeFileSync(reportPath, JSON.stringify(report, null, 2) + "\n");
+    scratchLifecycle.finishScratch(scratchRun, { success: successful });
   }
   process.stdout.write((report.pass ? "PASS" : "FAIL") + " Property Editor e2e (" + JSON.stringify(report.assertionCounts) + ")\n");
   process.stdout.write("Report: " + reportPath + "\nScreenshots: " + outDir + "\n");

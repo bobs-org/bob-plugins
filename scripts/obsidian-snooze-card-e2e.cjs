@@ -12,13 +12,13 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const shared = require("./obsidian-record-card-e2e.cjs");
+const scratchLifecycle = require("./e2e-scratch.cjs");
 const sleep = shared.sleep;
 
 const repoRoot = path.resolve(__dirname, "..");
 const pluginIds = ["block-id-prompt", "bob-ledger-tools", "bob-navigation-hotkeys", "bob-command-mode"];
 const electronFallback = "/snap/obsidian/current/app/obsidian";
 const ownedRoot = path.join(repoRoot, ".tmp-sn-e2e", "snooze-card");
-const runtimeTemp = path.join(process.env.XDG_RUNTIME_DIR || os.tmpdir(), "bob-sn-e2e-" + process.pid);
 const required = [
   "plugins-loaded", "snooze-runtime-api-installed", "alt-z-opens-and-preselects-event", "keyboard-navigation-and-invalid-input",
   "same-note-transaction-undo", "task-card-z-opens-same-card", "task-card-z-from-live-link-moves-subtree", "task-card-z-from-live-link-undo", "blocked-event-done-refusals",
@@ -821,12 +821,13 @@ async function runConflict(ctx, executable) {
 
 async function run(args) {
   const executable = args.executable || process.env.OBSIDIAN_BIN || electronFallback;
-  const outDir = path.resolve(args.out || path.join(ownedRoot, "evidence-" + new Date().toISOString().replace(/[:.]/g, "-")));
-  const reportPath = path.resolve(args.report || path.join(outDir, "snooze-card-e2e.json"));
   const bob = shared.findBobProvenance();
   fs.mkdirSync(ownedRoot, { recursive: true });
-  const scratch = fs.mkdtempSync(path.join(ownedRoot, "run-"));
-  fs.mkdirSync(runtimeTemp, { recursive: true });
+  const scratchRun = scratchLifecycle.createScratch({ root: ownedRoot, prefix: "run-" });
+  const scratch = scratchRun.dir;
+  const runtimeTemp = path.join(scratch, "runtime");
+  const outDir = path.resolve(args.out || path.join(scratch, "evidence"));
+  const reportPath = path.resolve(args.report || path.join(outDir, "snooze-card-e2e.json"));
   const out = { pass: false, startedAt: new Date().toISOString(), executable, bob, outDir, reportPath, assertions: [], screenshots: [], exceptions: [], sessions: [], fixture: null };
   let current = null;
   const check = (name, ok, detail = {}) => {
@@ -834,6 +835,7 @@ async function run(args) {
     if (!ok) throw new Error(name + " failed: " + JSON.stringify(detail));
   };
   try {
+    fs.mkdirSync(runtimeTemp, { recursive: true });
     fs.accessSync(executable, fs.constants.X_OK);
     if (!process.env.DISPLAY && !process.env.XVFB_RUN_TMPDIR) throw new Error("No X display; launch with xvfb-run -a");
     const help = spawnSync(executable, ["--help"], { encoding: "utf8", timeout: 15_000, env: { ...process.env, TMPDIR: ownedRoot } });
@@ -880,13 +882,12 @@ async function run(args) {
     }
   } finally {
     if (current) await stop(current);
-    fs.rmSync(runtimeTemp, { recursive: true, force: true });
     out.finishedAt = new Date().toISOString();
-    out.scratchPreserved = !out.pass;
-    if (out.pass) fs.rmSync(scratch, { recursive: true, force: true });
+    out.scratchPreserved = Boolean(scratchLifecycle.keepEverythingFromEnv() || !out.pass);
     out.counts = out.assertions.reduce((result, row) => { result[row.status] = (result[row.status] || 0) + 1; return result; }, {});
     fs.mkdirSync(path.dirname(reportPath), { recursive: true });
     fs.writeFileSync(reportPath, JSON.stringify(out, null, 2) + "\n");
+    scratchLifecycle.finishScratch(scratchRun, { success: out.pass });
   }
   process.stdout.write((out.pass ? "PASS" : "FAIL") + " Snooze Card Obsidian acceptance " + JSON.stringify(out.counts) + "\n");
   process.stdout.write("Report: " + reportPath + "\nScreenshots: " + outDir + "\n");

@@ -12,6 +12,7 @@ const { spawn } = require("node:child_process");
 const lib = require("./obsidian-home-cards-e2e-lib.cjs");
 const shared = require("./obsidian-record-card-e2e.cjs");
 const taskReqs = require("./obsidian-task-reqs-e2e.cjs");
+const scratchLifecycle = require("./e2e-scratch.cjs");
 const repoRoot = path.resolve(__dirname, "..");
 const PLUGIN_ID = "bob-ledger-tools";
 const TASKS_DATA = {
@@ -416,10 +417,11 @@ async function run(args) {
   fs.accessSync(executable, fs.constants.X_OK);
   const tasksSource = tasksPluginSource();
   if (!tasksSource) throw new Error("The real Obsidian Tasks plugin is required for the ^prj close-gesture check; set OBSIDIAN_TASKS_PLUGIN_DIR to its installed plugin directory.");
-  const outDir = args.out || path.join(os.tmpdir(), `bob-home-cards-shots-${process.pid}`);
-  const reportPath = args.report || path.join(os.tmpdir(), `bob-home-cards-report-${process.pid}.json`);
+  const scratchRun = scratchLifecycle.createScratch({ prefix: "bob-home-cards-" });
+  const scratch = scratchRun.dir;
+  const outDir = args.out || path.join(scratch, "screenshots");
+  const reportPath = args.report || path.join(scratch, "report.json");
   fs.mkdirSync(outDir, { recursive: true });
-  let scratch = null;
   let client = null;
   let child = null;
   const report = {
@@ -432,7 +434,6 @@ async function run(args) {
   };
   const check = (name, ok, detail = null) => report.checks.push({ name, status: ok ? "pass" : "fail", detail });
   try {
-    scratch = fs.mkdtempSync(path.join(os.tmpdir(), "bob-home-cards-"));
     const vaultDir = path.join(scratch, "vault");
     const profileDir = path.join(scratch, "profile");
     const shimDir = path.join(profileDir, "shim");
@@ -1058,13 +1059,11 @@ async function run(args) {
       await shared.sleep(300);
       if (child.exitCode == null) { try { child.kill("SIGKILL"); } catch (_) {} }
     }
-    if (scratch && fs.existsSync(scratch)) {
-      if (report.pass) fs.rmSync(scratch, { recursive: true, force: true });
-      else report.scratchPreserved = true;
-    }
     report.finishedAt = new Date().toISOString();
+    report.scratchPreserved = Boolean(scratchLifecycle.keepEverythingFromEnv() || !report.pass);
     fs.mkdirSync(path.dirname(reportPath), { recursive: true });
     fs.writeFileSync(reportPath, JSON.stringify(report, null, 2) + "\n");
+    scratchLifecycle.finishScratch(scratchRun, { success: report.pass });
   }
   const failed = report.checks.filter((row) => row.status === "pass" ? false : true);
   process.stdout.write(`${report.pass ? "PASS" : "FAIL"} home-card Obsidian acceptance (${report.checks.length} checks, ${report.screenshots.length} screenshots)\n`);

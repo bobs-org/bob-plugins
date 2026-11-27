@@ -13,6 +13,7 @@ const path = require("node:path");
 
 const lib = require("./obsidian-title-block-e2e-lib.cjs");
 const shared = require("./obsidian-record-card-e2e.cjs");
+const scratchLifecycle = require("./e2e-scratch.cjs");
 
 const repoRoot = path.resolve(__dirname, "..");
 const PLUGIN_ID = "bob-ledger-tools";
@@ -1081,6 +1082,8 @@ async function leafTeardown(ctx, families, leaves) {
 }
 
 async function run(args) {
+  const scratchRun = scratchLifecycle.createScratch({ prefix: "bob-tbe-" });
+  const scratch = scratchRun.dir;
   const report = {
     pass: false, phase: lib.PHASE, startedAt: new Date().toISOString(), assertions: [], screenshots: [],
     consoleExceptions: [], consoleErrors: [], prerequisites: [], probes: {},
@@ -1090,10 +1093,9 @@ async function run(args) {
       "unavailable-mount", "insertion-and-repaint-failure", "embed-hover-canvas", "print-media"],
     mobileEligibility: { status: "pure-test", test: "scripts/test-ledger-tools-property-card-title-slot.cjs", physicalRun: false },
   };
-  const outDir = path.resolve(args.out || path.join(os.tmpdir(), "bob-title-block-e2e-shots-" + crypto.randomBytes(4).toString("hex")));
+  const outDir = path.resolve(args.out || path.join(scratch, "screenshots"));
   const reportPath = path.resolve(args.report || path.join(outDir, "title-block-report.json"));
   Object.assign(report, { reportPath, screenshotDirectory: outDir });
-  let scratch = "";
   let child = null;
   let client = null;
   const check = (name, ok, detail = {}, mandatory = true) => {
@@ -1127,7 +1129,6 @@ async function run(args) {
     const today = lib.localToday();
     const { plan, notes } = lib.fixturePlan(today);
     report.testClock = { today, bobNow: today + " 12:00:00", timezone: Intl.DateTimeFormat().resolvedOptions().timeZone };
-    scratch = fs.mkdtempSync(path.join("/tmp", "bob-tbe-"));
     const vaultDir = path.join(scratch, "vault");
     const profileDir = path.join(scratch, "profile");
     const shimDir = path.join(profileDir, "shim");
@@ -1232,12 +1233,12 @@ async function run(args) {
       if (child.exitCode == null) { try { child.kill("SIGKILL"); } catch (_) {} }
     }
     report.finishedAt = new Date().toISOString();
-    report.scratchPreserved = Boolean(scratch && !report.pass && fs.existsSync(scratch));
-    if (report.pass && scratch) fs.rmSync(scratch, { recursive: true, force: true });
+    report.scratchPreserved = Boolean(scratchLifecycle.keepEverythingFromEnv() || !report.pass);
     report.assertionCounts = report.assertions.reduce((counts, item) => { counts[item.status] = (counts[item.status] || 0) + 1; return counts; }, {});
     report.failedChecks = report.assertions.filter((row) => row.status === "fail").map((row) => row.name);
     fs.mkdirSync(path.dirname(reportPath), { recursive: true });
     fs.writeFileSync(reportPath, JSON.stringify(report, null, 2) + "\n");
+    scratchLifecycle.finishScratch(scratchRun, { success: report.pass });
   }
   process.stdout.write((report.pass ? "PASS" : "FAIL") + " title-block walkthrough (" + JSON.stringify(report.assertionCounts) + ")\n");
   process.stdout.write("Phase: " + lib.PHASE + "\nReport: " + reportPath + "\nScreenshots: " + outDir + "\n");

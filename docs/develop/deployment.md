@@ -32,10 +32,10 @@ If a vault plugin file has uncommitted changes in the vault's Git repository,
 sync leaves it alone and warns; review local changes before deciding whether
 to overwrite them. Sync also refuses to overwrite another checkout's
 uncommitted or non-ancestor deploy. Same-checkout dirty iteration is allowed
-while the stamp still matches the vault. Any clean checkout whose HEAD reaches
-a commit holding the deployed bundle byte for byte syncs without `--force`,
-and the sync names that proving commit; a later descendant can then update
-normally.
+while the stamp still matches the vault. Any checkout whose HEAD reaches
+a commit holding a dirty deployed bundle byte for byte syncs without `--force`,
+and a clean checkout does the same for a clean non-ancestor deploy; the sync
+names that proving commit, and a later descendant can then update normally.
 
 ### When sync refuses an overwrite
 

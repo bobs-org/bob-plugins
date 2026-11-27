@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { helpers } = require("./navigation-hotkeys-harness.cjs");
+const { helpers, NavigationHotkeysPlugin, notices } = require("./navigation-hotkeys-harness.cjs");
 
 const {
   rankSnoozeSuggestions,
@@ -15,6 +15,7 @@ const {
   snoozeCardVimrcMapsAltZ,
   snoozeCardVimrcConflict,
   registerSnoozeTaskCommand,
+  snoozeTaskCardSource,
   planTaskCard,
   resolveTaskCardKey,
   TASK_CARD_ROW_ORDER,
@@ -22,6 +23,84 @@ const {
 } = helpers;
 
 const CLOCK = { date: "2026-11-27", nowMinutes: 13 * 60, zone: "UTC" };
+
+function taskCardSnoozeHarness(options = {}) {
+  const sourcePath = options.sourcePath || "daily/2026-11-27.md";
+  let content = String(options.content || "");
+  let activeView = null;
+  const editor = {
+    writes: 0,
+    getValue: () => content,
+    getLine: (line) => content.split(/\r\n|\r|\n/)[line] ?? null,
+    getCursor: () => ({ line: 0, ch: 0 }),
+    setValue() { this.writes += 1; },
+    replaceRange() { this.writes += 1; },
+  };
+  const view = { editor, file: { path: sourcePath } };
+  activeView = view;
+  const plugin = new NavigationHotkeysPlugin();
+  const resolutions = [];
+  plugin.app = {};
+  plugin.getActiveMarkdownView = () => activeView;
+  plugin.currentSnoozeDailyPath = () => "daily/2026-11-27.md";
+  plugin.resolveLinkTargetFile = (target) => ({ path: options.resolvedRoute || (String(target).startsWith("jobs") ? "jobs.md" : sourcePath) });
+  plugin.readSnoozeTaskForIdentity = async (identity) => {
+    const facts = options.tasks && options.tasks[identity.block] || {};
+    return {
+      path: identity.route,
+      route: identity.route,
+      block: identity.block,
+      blockId: identity.block,
+      target: "jobs",
+      displayText: facts.displayText || "Task Card task",
+      status: "*",
+      is_task: true,
+      is_event: false,
+      blocked: false,
+      ...facts,
+    };
+  };
+  plugin.getSnoozePlanningAdapter = () => ({});
+  plugin.getSnoozeFactsProvider = () => ({});
+  plugin.getSnoozeCardFacts = async (resolution) => {
+    resolutions.push(resolution);
+    return { ...CLOCK, events: [], usedTimesToday: [] };
+  };
+  return {
+    plugin,
+    editor,
+    view,
+    resolutions,
+    setActiveView(next) { activeView = next; },
+    setContent(next) { content = next; },
+  };
+}
+
+function linkCard(editor, sourcePath, line, rawLine, options = {}) {
+  return {
+    editor,
+    filePath: sourcePath,
+    cursor: { line, ch: 0 },
+    lineText: rawLine,
+    linkSession: {
+      valid: options.valid !== false,
+      error: options.valid === false ? "Resolving Task Link targets…" : null,
+      targets: options.targets || [{ line, rawLine }],
+      resolved: options.resolved || [{ path: "jobs.md", blockId: "task-card-link" }],
+    },
+  };
+}
+
+async function withSnoozeModalStub(run) {
+  const previous = global.window.setInterval;
+  global.window.setInterval = () => 1;
+  try {
+    return await run();
+  } finally {
+    if (previous === undefined) delete global.window.setInterval;
+    else global.window.setInterval = previous;
+  }
+}
 
 test("ranked suggestions group event, quick, and used times with dedupe", () => {
   const ranked = rankSnoozeSuggestions({
@@ -222,6 +301,156 @@ test("Task Card exposes snooze after Schedule with the z shortcut", () => {
   assert.equal(resolved.type, "open-action");
   const repeated = resolveTaskCardKey(minimal, { key: "z", repeat: true });
   assert.equal(repeated.type, "ignored");
+});
+
+test("Task Card source projection preserves the single source line", () => {
+  const editor = { getValue: () => "" };
+  const link = linkCard(editor, "daily/2026-11-27.md", 4, "  - [[jobs#^task-card-link]]");
+  assert.deepEqual(snoozeTaskCardSource(link), {
+    ok: true,
+    editor,
+    sourcePath: "daily/2026-11-27.md",
+    cursorLine: 4,
+    expectedLine: "  - [[jobs#^task-card-link]]",
+    expectedIdentity: { route: "jobs.md", block: "task-card-link" },
+  });
+  assert.equal(snoozeTaskCardSource(linkCard(editor, "daily/2026-11-27.md", 4, "line", { valid: false })).refusal, "unavailable");
+  assert.equal(snoozeTaskCardSource(linkCard(editor, "daily/2026-11-27.md", 4, "line", {
+    targets: [{ line: 4, rawLine: "line" }, { line: 5, rawLine: "line 2" }],
+  })).refusal, "multi_task");
+  assert.equal(snoozeTaskCardSource({
+    editor,
+    filePath: "jobs.md",
+    cursor: { line: 0 },
+    lineText: "- [*] #task Task ^task-card-link",
+    taskSession: { explicit: true, targets: [{ line: 0, rawLine: "- [*] #task Task ^task-card-link" }] },
+  }).cursorLine, 0);
+});
+
+test("Task Card z resolves live, woken, and struck history links through the cursor resolver", async () => {
+  await withSnoozeModalStub(async () => {
+    for (const entry of [
+      {
+        kind: "live-link",
+        sourcePath: "daily/2026-11-27.md",
+        content: "## Pomodoros\n\n- [ ] () — BUILD\n  - [[jobs#^task-card-link]]\n",
+        line: 3,
+        rawLine: "  - [[jobs#^task-card-link]]",
+        sourcePomodoro: "BUILD",
+      },
+      {
+        kind: "woken-link",
+        sourcePath: "daily/2026-11-27.md",
+        content: "## Pomodoros\n\n- [ ] () — BUILD\n  - [[jobs#^task-card-link]] ⏰ woke 15:30\n",
+        line: 3,
+        rawLine: "  - [[jobs#^task-card-link]] ⏰ woke 15:30",
+      },
+      {
+        kind: "history-link",
+        sourcePath: "archive.md",
+        content: "## Log\n\n- ~~[[jobs#^task-card-link]]~~\n",
+        line: 2,
+        rawLine: "- ~~[[jobs#^task-card-link]]~~",
+      },
+    ]) {
+      const h = taskCardSnoozeHarness({ sourcePath: entry.sourcePath, content: entry.content });
+      const card = linkCard(h.editor, entry.sourcePath, entry.line, entry.rawLine);
+      const opened = await h.plugin.openSnoozeCardFromTaskCard(card);
+      assert.equal(opened, true, entry.kind);
+      const resolution = h.resolutions[0];
+      assert.equal(resolution.kind, entry.kind);
+      assert.deepEqual(resolution.identity, { route: "jobs.md", block: "task-card-link" });
+      if (entry.sourcePomodoro) assert.equal(resolution.sourcePomodoro, entry.sourcePomodoro);
+      assert.equal(h.editor.writes, 0);
+    }
+  });
+});
+
+test("Task Card z keeps counted and plain definition cards on the definition path", async () => {
+  await withSnoozeModalStub(async () => {
+    const line = "- [*] #task Task Card task ^task-card-link";
+    const counted = taskCardSnoozeHarness({ sourcePath: "jobs.md", content: line + "\n" });
+    const countedCard = {
+      editor: counted.editor,
+      filePath: "jobs.md",
+      cursor: { line: 0, ch: 0 },
+      lineText: line,
+      taskSession: { explicit: true, targets: [{ line: 0, rawLine: line }] },
+    };
+    assert.equal(await counted.plugin.openSnoozeCardFromTaskCard(countedCard), true);
+    assert.equal(counted.resolutions[0].kind, "definition");
+    assert.deepEqual(counted.resolutions[0].identity, { route: "jobs.md", block: "task-card-link" });
+
+    const plain = taskCardSnoozeHarness({ sourcePath: "jobs.md", content: line + "\n" });
+    const plainCard = { editor: plain.editor, filePath: "jobs.md", cursor: { line: 0, ch: 0 }, lineText: line };
+    assert.equal(await plain.plugin.openSnoozeCardFromTaskCard(plainCard), true);
+    assert.equal(plain.resolutions[0].kind, "definition");
+    assert.deepEqual(plain.resolutions[0].identity, { route: "jobs.md", block: "task-card-link" });
+  });
+});
+
+test("Task Card z refuses multi-target sessions with single-task copy", async () => {
+  const sourcePath = "daily/2026-11-27.md";
+  const rawLine = "  - [[jobs#^task-card-link]]";
+  const content = "## Pomodoros\n\n- [ ] () — BUILD\n" + rawLine + "\n";
+  for (const cardOptions of [
+    { linkSession: { valid: true, targets: [{ line: 3, rawLine }, { line: 4, rawLine }], resolved: [{ path: "jobs.md", blockId: "task-card-link" }] } },
+    { taskSession: { explicit: true, targets: [{ line: 3, rawLine }, { line: 4, rawLine }] } },
+  ]) {
+    const h = taskCardSnoozeHarness({ sourcePath, content });
+    const card = { editor: h.editor, filePath: sourcePath, cursor: { line: 3, ch: 0 }, lineText: rawLine, ...cardOptions };
+    notices.splice(0);
+    assert.equal(await h.plugin.openSnoozeCardFromTaskCard(card), false);
+    assert.match(notices.at(-1), /one task; pick a single row/);
+    assert.equal(h.resolutions.length, 0);
+    assert.equal(h.editor.writes, 0);
+  }
+});
+
+test("Task Card z refuses stale source, active view, and resolved identity without writes", async () => {
+  const sourcePath = "daily/2026-11-27.md";
+  const rawLine = "  - [[jobs#^task-card-link]]";
+  const content = "## Pomodoros\n\n- [ ] () — BUILD\n" + rawLine + "\n";
+  const changed = taskCardSnoozeHarness({ sourcePath, content: content.replace(rawLine, "  - [[jobs#^changed]]") });
+  notices.splice(0);
+  assert.equal(await changed.plugin.openSnoozeCardFromTaskCard(linkCard(changed.editor, sourcePath, 3, rawLine)), false);
+  assert.equal(notices.at(-1), "The note changed while the card was open; try again");
+  assert.equal(changed.resolutions.length, 0);
+  assert.equal(changed.editor.writes, 0);
+
+  const differentView = taskCardSnoozeHarness({ sourcePath, content });
+  differentView.setActiveView({ editor: differentView.editor, file: { path: "other.md" } });
+  notices.splice(0);
+  assert.equal(await differentView.plugin.openSnoozeCardFromTaskCard(linkCard(differentView.editor, sourcePath, 3, rawLine)), false);
+  assert.equal(notices.at(-1), "The note changed while the card was open; try again");
+  assert.equal(differentView.resolutions.length, 0);
+  assert.equal(differentView.editor.writes, 0);
+
+  const differentIdentity = taskCardSnoozeHarness({ sourcePath, content, resolvedRoute: "other.md" });
+  notices.splice(0);
+  assert.equal(await differentIdentity.plugin.openSnoozeCardFromTaskCard(linkCard(differentIdentity.editor, sourcePath, 3, rawLine)), false);
+  assert.equal(notices.at(-1), "The note changed while the card was open; try again");
+  assert.equal(differentIdentity.resolutions.length, 0);
+  assert.equal(differentIdentity.editor.writes, 0);
+});
+
+test("Task Card z retains Event, Blocked, and done teaching refusals", async () => {
+  const sourcePath = "daily/2026-11-27.md";
+  const rawLine = "  - [[jobs#^target]]";
+  const content = "## Pomodoros\n\n- [ ] () — BUILD\n" + rawLine + "\n";
+  for (const [patch, copy] of [
+    [{ is_event: true, status: "/" }, "Calendar Event Tasks cannot be snoozed"],
+    [{ blocked: true, status: "?" }, "That task is Blocked"],
+    [{ status: "x" }, "That task is already done"],
+  ]) {
+    const h = taskCardSnoozeHarness({ sourcePath, content, tasks: { target: patch } });
+    notices.splice(0);
+    assert.equal(await h.plugin.openSnoozeCardFromTaskCard(linkCard(h.editor, sourcePath, 3, rawLine, {
+      resolved: [{ path: "jobs.md", blockId: "target" }],
+    })), false);
+    assert.match(notices.at(-1), new RegExp(copy));
+    assert.equal(h.editor.writes, 0);
+  }
 });
 
 test("Alt+Z binding matches KeyZ on Mac option-key layouts", () => {

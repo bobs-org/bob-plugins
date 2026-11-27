@@ -43,12 +43,14 @@ function snoozeRuntimeNormalizePath(value) {
 }
 
 function snoozeRuntimeEligibility(task) {
-  if (!task || task.is_task === false) return "not_task";
+  if (!task) return "missing_task";
+  if (task.is_task === false) return "not_task";
   if (task.is_event === true) return "event_task";
   const status = String(task.status == null ? "" : task.status).slice(0, 1);
   if (task.blocked === true || status === "?") return "blocked";
   if (status === "x" || status === "X") return "done";
   if (status === "-") return "cancelled";
+  if (status === "") return "missing_task";
   if (![" ", "*", "/"].includes(status)) return "not_task";
   return null;
 }

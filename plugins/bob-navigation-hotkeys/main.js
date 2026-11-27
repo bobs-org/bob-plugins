@@ -143300,12 +143300,14 @@ function snoozeRuntimeNormalizePath(value) {
 }
 
 function snoozeRuntimeEligibility(task) {
-  if (!task || task.is_task === false) return "not_task";
+  if (!task) return "missing_task";
+  if (task.is_task === false) return "not_task";
   if (task.is_event === true) return "event_task";
   const status = String(task.status == null ? "" : task.status).slice(0, 1);
   if (task.blocked === true || status === "?") return "blocked";
   if (status === "x" || status === "X") return "done";
   if (status === "-") return "cancelled";
+  if (status === "") return "missing_task";
   if (![" ", "*", "/"].includes(status)) return "not_task";
   return null;
 }
@@ -153196,6 +153198,7 @@ Object.assign(module.exports.helpers, { snoozeMutationPlanner });
 // ---- src/742-snooze-runtime-exports.js ----
 Object.assign(module.exports.helpers, {
   SNOOZE_RUNTIME_VERSION,
+  snoozeRuntimeEligibility,
   resolveSnoozeCursorTarget,
   projectSnoozeWakeDestination,
   buildSnoozeCardFacts,
@@ -154363,7 +154366,69 @@ if (typeof BulletPropertyPickerModal !== "undefined" && dispatchTaskCardIntentBe
 // Alt+Z entry shared by the command and the Task Card row. Feature-detects
 // compatible providers and exposes a meaningful refusal instead of
 // half-working controls.
-function openSnoozeCardCommon(plugin, editor, view, taskCardTargets) {
+function snoozeTaskCardSource(taskCard) {
+  const unavailable = () => snoozeRuntimeRefusal("unavailable");
+  if (!taskCard || typeof taskCard !== "object") return unavailable();
+  const editor = taskCard.editor || null;
+  const sourcePath = String(taskCard.filePath || "");
+  if (!editor || typeof editor.getValue !== "function" || !sourcePath) return unavailable();
+
+  const linkSession = taskCard.linkSession;
+  if (linkSession) {
+    const targets = Array.isArray(linkSession.targets) ? linkSession.targets : [];
+    if (targets.length > 1) return snoozeRuntimeRefusal("multi_task");
+    const resolved = Array.isArray(linkSession.resolved) ? linkSession.resolved : [];
+    if (linkSession.valid !== true || targets.length !== 1 || resolved.length !== 1) return unavailable();
+    const target = targets[0];
+    const resolvedTarget = resolved[0];
+    const identity = resolvedTarget && typeof resolvedTarget === "object"
+      ? {
+        route: snoozeRuntimeNormalizePath(resolvedTarget.path),
+        block: String(resolvedTarget.blockId || ""),
+      }
+      : null;
+    if (!target || !Number.isInteger(target.line) || typeof target.rawLine !== "string"
+      || !identity || !identity.route || !identity.block) return unavailable();
+    return Object.freeze({
+      ok: true,
+      editor,
+      sourcePath,
+      cursorLine: target.line,
+      expectedLine: target.rawLine,
+      expectedIdentity: Object.freeze(identity),
+    });
+  }
+
+  const taskSession = taskCard.taskSession;
+  if (taskSession && taskSession.explicit === true) {
+    const targets = Array.isArray(taskSession.targets) ? taskSession.targets : [];
+    if (targets.length > 1) return snoozeRuntimeRefusal("multi_task");
+    if (targets.length !== 1) return unavailable();
+    const target = (targets[0] && targets[0].target) || targets[0];
+    if (!target || !Number.isInteger(target.line) || typeof target.rawLine !== "string") return unavailable();
+    return Object.freeze({
+      ok: true,
+      editor,
+      sourcePath,
+      cursorLine: target.line,
+      expectedLine: target.rawLine,
+      expectedIdentity: null,
+    });
+  }
+
+  const cursorLine = taskCard.cursor && taskCard.cursor.line;
+  if (!Number.isInteger(cursorLine) || typeof taskCard.lineText !== "string") return unavailable();
+  return Object.freeze({
+    ok: true,
+    editor,
+    sourcePath,
+    cursorLine,
+    expectedLine: taskCard.lineText,
+    expectedIdentity: null,
+  });
+}
+
+function openSnoozeCardCommon(plugin, editor, view, cursorOverride) {
   const app = plugin && plugin.app;
   const activeView = view || (typeof plugin.getActiveMarkdownView === "function" ? plugin.getActiveMarkdownView() : null);
   const activeEditor = editor || (activeView && activeView.editor) || null;
@@ -154371,14 +154436,37 @@ function openSnoozeCardCommon(plugin, editor, view, taskCardTargets) {
     new Notice("No active markdown editor");
     return Promise.resolve(false);
   }
+  const override = cursorOverride && typeof cursorOverride === "object" ? cursorOverride : null;
   let cursorLine = null;
-  try {
-    const cursor = typeof getEditorCursor === "function" ? getEditorCursor(activeEditor) : (activeEditor && typeof activeEditor.getCursor === "function" ? activeEditor.getCursor() : null);
-    cursorLine = cursor && Number.isInteger(cursor.line) ? cursor.line : null;
-  } catch (_) {
-    cursorLine = null;
+  let sourcePath = "";
+  if (override) {
+    cursorLine = Number.isInteger(override.cursorLine) ? override.cursorLine : null;
+    sourcePath = String(override.sourcePath || "");
+    let currentView = null;
+    try {
+      currentView = typeof plugin.getActiveMarkdownView === "function" ? plugin.getActiveMarkdownView() : null;
+    } catch (_) {}
+    const currentPath = String(currentView && currentView.file && currentView.file.path || "");
+    const sourceContents = String(activeEditor.getValue() || "");
+    const currentLine = Number.isInteger(cursorLine)
+      ? (typeof activeEditor.getLine === "function"
+        ? activeEditor.getLine(cursorLine)
+        : sourceContents.split(/\r\n|\r|\n/)[cursorLine])
+      : null;
+    if (!currentView || currentView.editor !== activeEditor || currentPath !== sourcePath
+      || typeof override.expectedLine !== "string" || currentLine !== override.expectedLine) {
+      new Notice(SNOOZE_RUNTIME_REFUSAL_MESSAGES.stale);
+      return Promise.resolve(false);
+    }
+  } else {
+    try {
+      const cursor = typeof getEditorCursor === "function" ? getEditorCursor(activeEditor) : (activeEditor && typeof activeEditor.getCursor === "function" ? activeEditor.getCursor() : null);
+      cursorLine = cursor && Number.isInteger(cursor.line) ? cursor.line : null;
+    } catch (_) {
+      cursorLine = null;
+    }
+    sourcePath = (activeView && activeView.file && activeView.file.path) || "";
   }
-  const sourcePath = (activeView && activeView.file && activeView.file.path) || "";
   const sourceContents = String(activeEditor.getValue() || "");
   const planning = typeof plugin.getSnoozePlanningAdapter === "function" ? plugin.getSnoozePlanningAdapter() : null;
   const factsProvider = typeof plugin.getSnoozeFactsProvider === "function" ? plugin.getSnoozeFactsProvider() : null;
@@ -154391,9 +154479,19 @@ function openSnoozeCardCommon(plugin, editor, view, taskCardTargets) {
       sourcePath,
       sourceContents,
       cursorLine,
-      explicitTargets: Array.isArray(taskCardTargets) ? taskCardTargets : null,
+      explicitTargets: null,
     }))
     .then(async (resolution) => {
+      if (override && override.expectedIdentity && resolution && resolution.ok === true) {
+        const identity = resolution.identity;
+        const matches = identity
+          && snoozeRuntimeNormalizePath(identity.route) === snoozeRuntimeNormalizePath(override.expectedIdentity.route)
+          && String(identity.block || "") === String(override.expectedIdentity.block || "");
+        if (!matches) {
+          new Notice(SNOOZE_RUNTIME_REFUSAL_MESSAGES.stale);
+          return false;
+        }
+      }
       if (!resolution || resolution.ok !== true) {
         const line = Number.isInteger(cursorLine) && activeEditor && typeof activeEditor.getLine === "function"
           ? String(activeEditor.getLine(cursorLine) || "")
@@ -154444,22 +154542,12 @@ if (typeof BobNavigationHotkeysSnoozeRuntimeMixin !== "undefined") {
     return openSnoozeCardCommon(this, editor || null, view || null, null);
   };
   BobNavigationHotkeysSnoozeRuntimeMixin.prototype.openSnoozeCardFromTaskCard = function openSnoozeCardFromTaskCard(taskCard) {
-    let targets = null;
-    try {
-      const model = (taskCard && taskCard.taskCardModel) || this.taskCardModel;
-      if (model && model.session && Array.isArray(model.session.targetsForSnooze)) {
-        targets = model.session.targetsForSnooze;
-      } else if ((taskCard && taskCard.taskSession || this.taskSession) && Array.isArray((taskCard && taskCard.taskSession || this.taskSession).targets)) {
-        targets = (taskCard && taskCard.taskSession || this.taskSession).targets.map((entry) => (entry && entry.target) || entry).filter(Boolean);
-      } else if ((taskCard && taskCard.linkSession || this.linkSession) && Array.isArray((taskCard && taskCard.linkSession || this.linkSession).resolved)) {
-        targets = (taskCard && taskCard.linkSession || this.linkSession).resolved.slice(0, 5);
-      }
-    } catch (_) {
-      targets = null;
+    const source = snoozeTaskCardSource(taskCard);
+    if (!source || source.ok !== true) {
+      new Notice((source && source.message) || SNOOZE_RUNTIME_REFUSAL_MESSAGES.unavailable);
+      return Promise.resolve(false);
     }
-    const editor = (typeof this.getActiveMarkdownView === "function" ? (this.getActiveMarkdownView() || {}).editor : null) || null;
-    const view = typeof this.getActiveMarkdownView === "function" ? this.getActiveMarkdownView() : null;
-    return openSnoozeCardCommon(this, editor, view, targets);
+    return openSnoozeCardCommon(this, source.editor, null, source);
   };
   // Convenience for keymap tests: Alt+Z on macOS may arrive as KeyZ with
   // Alt and a dead-key event.key (e.g. Ω). The command route does not
@@ -154559,6 +154647,8 @@ async function registerSnoozeTaskCommand(plugin) {
 
 Object.assign(module.exports.helpers, {
   snoozeCardTaskTitleForResolution,
+  snoozeTaskCardSource,
+  openSnoozeCardCommon,
   isSnoozeAltZBinding,
   snoozeCardAltZConflict,
   snoozeCardVimrcMapsAltZ,

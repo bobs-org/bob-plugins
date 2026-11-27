@@ -21,7 +21,7 @@ const ownedRoot = path.join(repoRoot, ".tmp-sn-e2e", "snooze-card");
 const runtimeTemp = path.join(process.env.XDG_RUNTIME_DIR || os.tmpdir(), "bob-sn-e2e-" + process.pid);
 const required = [
   "plugins-loaded", "snooze-runtime-api-installed", "alt-z-opens-and-preselects-event", "keyboard-navigation-and-invalid-input",
-  "same-note-transaction-undo", "task-card-z-opens-same-card", "blocked-event-done-refusals",
+  "same-note-transaction-undo", "task-card-z-opens-same-card", "task-card-z-from-live-link-moves-subtree", "task-card-z-from-live-link-undo", "blocked-event-done-refusals",
   "footer-counts-use-fixture-postimage", "ready-footer-counts-use-fixture-postimage", "ready-promotes-and-stamps", "next-and-inprogress-stay-byte-identical",
   "snoozed-header-state-renders",
   "unnamed-task-naming-cancel-is-no-write", "retime-and-unsnooze", "wake-now-runs-current-bob",
@@ -91,6 +91,7 @@ function fixture(now = new Date()) {
     "- [ ] #task Ready task [type:: WRITE] ^ready",
     "- [*] #task Next stable task [type:: WRITE] ^next-stable",
     "- [/] #task In progress stable task [type:: WRITE] ^progress-stable",
+    "- [*] #task Task Card live-link task [type:: WRITE] ^task-card-link",
     "- [ ] #task Unnamed eligible task [type:: WRITE]",
     "- [*] #task History task [type:: WRITE] ^history",
     "- [*] #task Closed daily task [type:: WRITE] ^closed-daily",
@@ -107,6 +108,8 @@ function fixture(now = new Date()) {
     "- [ ] () — WRITE",
     "  - [[#^same-note]]",
     "    - preserve this authored note",
+    "  - [[jobs#^task-card-link]]",
+    "    - preserve Task Card link note",
     "- [/] (**" + hhmm(Math.max(0, clock.minutes - 10)) + "-" + hhmm(eventEnd) + "** [t:: 25m]) — MEET",
     "  - [[#^event-suggestion]]",
     "- [x] () — WRITE",
@@ -120,7 +123,7 @@ function fixture(now = new Date()) {
   ].join("\n");
   return {
     zone, date: clock.date, year: clock.year, stamp: clock.stamp, daily,
-    nowMinutes: clock.minutes, eventStart, eventEnd, wakeAt, retimeAt, blockedAt, planCap: 1, initialOnClockLinks: 2,
+    nowMinutes: clock.minutes, eventStart, eventEnd, wakeAt, retimeAt, blockedAt, planCap: 1, initialOnClockLinks: 3,
     tasks, dailyText,
   };
 }
@@ -564,7 +567,55 @@ async function runNormal(ctx) {
   await sleep(180);
   client.cardClient = null;
 
-  // The fixture has two on-clock links and a cap of one. Waking this Ready
+  // Task Card `z` uses its original source line for a live Task Link, keeping
+  // the same Pomodoro context and moving that link's authored subtree once.
+  await shared.openNote(client, f.daily, "live");
+  const taskCardLinkBaseline = await editorText(client, f.daily);
+  await setCursor(client, f.daily, "[[jobs#^task-card-link]]");
+  await press(client, "P", 10); // Ctrl+Shift+P
+  await sleep(500);
+  await attachModalTarget(ctx, ".bob-task-card-modal");
+  let taskCardLinkOpenedByShortcut = true;
+  try {
+    await shared.waitFor(ctx.modalClient, "document.querySelector('.bob-task-card-modal') ? 'open' : ''", Boolean, "Task Card on Task Link", 1_500);
+  } catch (error) {
+    taskCardLinkOpenedByShortcut = false;
+    const command = await client.evaluate(`app.commands.executeCommandById("bob-navigation-hotkeys:set-bullet-property")`);
+    if (command === false) throw new Error("Ctrl+Shift+P did not open the Task Link's Task Card, and the registered command could not be invoked: " + error.message);
+    await sleep(500);
+    await attachModalTarget(ctx, ".bob-task-card-modal");
+    await shared.waitFor(ctx.modalClient, "document.querySelector('.bob-task-card-modal') ? 'open' : ''", Boolean, "Task Link Task Card command fallback", 12_000);
+  }
+  await press(client, "z");
+  await sleep(300);
+  await attachModalTarget(ctx, ".bob-snooze-card-modal");
+  card = await shared.waitFor(ctx.modalClient, "document.querySelector('.bob-snooze-card-modal') ? 'open' : ''", Boolean, "Snooze Card from Task Link Task Card z", 12_000).then(() => cardProbe(client));
+  const linkCardFactsMatch = /Task Card live-link task/.test(card.title) && card.footer.includes("leaves WRITE");
+  const taskCardTaskBaseline = await fileText(client, "jobs.md");
+  await press(client, "Enter");
+  await sleep(700);
+  const taskCardLinkSnoozed = await editorText(client, f.daily);
+  const taskCardTaskAfter = await fileText(client, "jobs.md");
+  const taskCardLinkPomodoros = taskCardLinkSnoozed.split("## Pomodoros")[1]?.split("## Snoozed")[0] || "";
+  const taskCardLinkSnoozedRows = taskCardLinkSnoozed.split(/\r?\n/).filter((line) => line.includes("[[jobs#^task-card-link]]") && /^- \*\*\d{4}\*\*/.test(line));
+  check("task-card-z-from-live-link-moves-subtree", linkCardFactsMatch
+    && taskCardLinkSnoozedRows.length === 1
+    && taskCardLinkSnoozed.includes("preserve Task Card link note")
+    && taskCardTaskAfter === taskCardTaskBaseline
+    && !taskCardLinkPomodoros.includes("[[jobs#^task-card-link]]")
+    && taskCardLinkPomodoros.includes("[[#^same-note]]")
+    && taskCardLinkPomodoros.includes("preserve this authored note"), {
+    ...card,
+    taskCardLinkOpenedByShortcut,
+    snoozedRows: taskCardLinkSnoozedRows,
+    sourcePomodoros: taskCardLinkPomodoros,
+  });
+  await press(client, "z", 2); // Ctrl+Z restores the Task Link and its nested note in one editor undo.
+  await shared.waitFor(client, "app.workspace.activeLeaf?.view?.editor?.getValue?.()", (value) => value === taskCardLinkBaseline, "Task Card Task Link undo restores preimage", 12_000);
+  check("task-card-z-from-live-link-undo", await editorText(client, f.daily) === taskCardLinkBaseline, { oneUndoRestoredExactPreimage: true });
+  client.cardClient = null;
+
+  // The fixture has three on-clock links and a cap of one. Waking this Ready
   // task adds one more dedicated Task Link, so the over-cap result is explicit.
   await openCardFromLink(ctx, "^ready", "jobs.md");
   card = await cardProbe(client);
@@ -853,8 +904,11 @@ function selfTest() {
   assert.match(f.dailyText, /## Snoozed/);
   assert.match(f.dailyText, /\*\*\d{4}-\d{4}\*\* Yogi interview/);
   assert.match(f.dailyText, /preserve this authored note/);
+  assert.match(f.dailyText, /\[\[jobs#\^task-card-link\]\]/);
+  assert.match(f.dailyText, /preserve Task Card link note/);
   assert.match(f.tasks, /\^event-task/);
-  assert.deepEqual(required.length, 20);
+  assert.match(f.tasks, /\[\*\] #task Task Card live-link task \[type:: WRITE\] \^task-card-link/);
+  assert.deepEqual(required.length, 22);
   console.log("offline self-test complete (fixtures and required evidence only; no Obsidian or bob launched)");
 }
 

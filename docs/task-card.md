@@ -219,7 +219,10 @@ runtime's guarded transactions: the daily note's whole snooze undoes with
 one `Ctrl+Z`; cross-note task and daily edits undo per editor. Cancellation
 writes nothing and never advances the review walk. The `z` row remains
 available when Alt+Z conflicts with a configured hotkey, plugin default, or
-vimrc mapping.
+vimrc mapping. On a single dedicated Task Link (live, woken, or struck
+history), `z` resolves the link exactly as `Alt+Z` does; a live link and its
+notes move into today's Snoozed row, and the footer names the Pomodoro entry
+it leaves.
 
 ## Undo and direct stages
 

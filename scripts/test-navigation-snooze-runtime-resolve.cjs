@@ -3,6 +3,7 @@ const test = require("node:test");
 const { helpers } = require("./navigation-hotkeys-harness.cjs");
 
 const {
+  snoozeRuntimeEligibility,
   resolveSnoozeCursorTarget,
   projectSnoozeWakeDestination,
   buildSnoozeCardFacts,
@@ -71,6 +72,32 @@ test("task card sessions need exactly one task", () => {
   const single = resolveSnoozeCursorTarget(baseSnapshot({ explicitTargets: [{ ...TASK }] }));
   assert.equal(single.ok, true);
   assert.equal(single.kind, "definition");
+});
+
+test("eligibility distinguishes missing task facts from an ineligible task", () => {
+  for (const [task, refusal] of [
+    [null, "missing_task"],
+    [{ path: "jobs.md", blockId: "task" }, "missing_task"],
+    [{ is_task: true, status: "" }, "missing_task"],
+    [{ is_task: false }, "not_task"],
+    [{ is_task: true, status: "*" }, null],
+    [{ is_task: true, status: " " }, null],
+    [{ is_task: true, status: "/" }, null],
+    [{ is_task: true, status: "?" }, "blocked"],
+    [{ is_task: true, status: "x" }, "done"],
+    [{ is_task: true, status: "-" }, "cancelled"],
+    [{ is_task: true, is_event: true, status: "/" }, "event_task"],
+  ]) {
+    assert.equal(snoozeRuntimeEligibility(task), refusal, JSON.stringify(task));
+  }
+});
+
+test("link-session-shaped explicit target reports missing task facts", () => {
+  const result = resolveSnoozeCursorTarget(baseSnapshot({
+    explicitTargets: [{ path: "jobs.md", file: {}, content: "", line: 3, rawLine: "  - [[jobs#^task]]", blockId: "task", displayText: "Task" }],
+  }));
+  assert.equal(result.ok, false);
+  assert.equal(result.refusal, "missing_task");
 });
 
 test("live link resolves with its source pomodoro", () => {

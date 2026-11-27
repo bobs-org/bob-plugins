@@ -114189,6 +114189,30 @@ function homeCardFirstVisibleBodyLineIndex(doc, frontmatterEndLine, titleEndLine
   }
 }
 
+// A swallowed key never reaches Vim, so anything Vim buffered before it (the
+// first `g` of `gg`, a count, or an operator such as the `d` of `dgg`) would
+// otherwise read the next keystroke as its continuation. Cancel that pending
+// command whenever navigation consumes a key; never cancel an empty state.
+function homeCardCancelPendingVimInput(view, vimApi) {
+  try {
+    const cm = view?.cm;
+    const inputState = cm?.state?.vim?.inputState;
+    if (!inputState) return false;
+    const pending = (value) => Array.isArray(value) ? value.length > 0 : Boolean(value);
+    if (!pending(inputState.keyBuffer) && !pending(inputState.prefixRepeat)
+      && !pending(inputState.motionRepeat) && inputState.operator == null
+      && !inputState.registerName) {
+      return false;
+    }
+    const api = vimApi || (typeof window === "undefined" ? null : window.CodeMirrorAdapter?.Vim);
+    if (typeof api?.handleKey !== "function") return false;
+    api.handleKey(cm, "<Esc>", "mapping");
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 Object.assign(BobLedgerToolsHomeCardMixin.prototype, {
   homeCardVisibleBodyLine(view, path) {
     try {
@@ -114258,6 +114282,7 @@ Object.assign(BobLedgerToolsHomeCardMixin.prototype, {
         if (!secondG) return false;
         event.preventDefault?.();
         event.stopPropagation?.();
+        homeCardCancelPendingVimInput(view);
         view.dispatch({ selection: { anchor: bodyLine.from }, scrollIntoView: true });
         return true;
       }
@@ -114267,6 +114292,7 @@ Object.assign(BobLedgerToolsHomeCardMixin.prototype, {
       if (!movesUp || view.state.selection?.main?.head > bodyLine.from) return false;
       event.preventDefault?.();
       event.stopPropagation?.();
+      if (vimEnabled) homeCardCancelPendingVimInput(view);
       view.dispatch({ selection: { anchor: bodyLine.from }, scrollIntoView: true });
       return true;
     } catch (_) {
@@ -216644,6 +216670,7 @@ try {
       HOME_CARD_READING_PRIORITY,
       HOME_CARD_SURFACE_CLASS,
       homeCardFirstVisibleBodyLineIndex,
+      homeCardCancelPendingVimInput,
       homeCardLinkPane,
       homeCardIsDesktopPlatform,
       homeCardScopeDenied,

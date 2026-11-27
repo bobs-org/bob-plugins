@@ -39,6 +39,7 @@ try {
       HOME_CARD_READING_PRIORITY,
       HOME_CARD_SURFACE_CLASS,
       homeCardFirstVisibleBodyLineIndex,
+      homeCardCancelPendingVimInput,
       homeCardLinkPane,
       homeCardIsDesktopPlatform,
       homeCardScopeDenied,

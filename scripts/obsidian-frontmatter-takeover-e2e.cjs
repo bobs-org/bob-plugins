@@ -833,7 +833,14 @@ async function run(args) {
       const plugins = app.plugins.plugins;
       const original = plugins[key];
       window.__bobFrontmatterTakeoverInboxRoute = { key, original, hadOriginal: Object.prototype.hasOwnProperty.call(plugins, key) };
-      plugins[key] = { api: { inboxRoute: { isInboxNote: (path) => path === ${JSON.stringify(P.inbox)} } } };
+      // Obsidian's plugin settings rebuild on every enable/disable reads the
+      // manifest of each loaded plugin it has no manifest file for, so the
+      // stub must look like a loaded plugin, not a bare API object.
+      plugins[key] = {
+        manifest: { id: key, name: "Bob Navigation Hotkeys (takeover stub)", version: "0.0.0",
+          description: "Inbox route stub for the frontmatter takeover runner." },
+        api: { inboxRoute: { isInboxNote: (path) => path === ${JSON.stringify(P.inbox)} } },
+      };
       return true;
     })()`);
     await ownCase("own-area-live", P.area, "live", { kind: "area" });
@@ -1862,9 +1869,11 @@ async function run(args) {
     const disposableRecordNote = (title, sentinel) => notes[P.record]
       .replace('title: "Corner Bistro"', 'title: ' + JSON.stringify(title))
       .replace("Record body sentinel", sentinel);
+    // Drive the Settings toggle path: only the *AndSave variants update the
+    // enabled set, so the enabled/loaded assertions below can be meaningful.
     const disableLedgerTools = async () => ctx.page.ev(`(async () => {
       const manager = app.plugins;
-      await manager.disablePlugin(${JSON.stringify(PLUGIN_ID)});
+      await manager.disablePluginAndSave(${JSON.stringify(PLUGIN_ID)});
       return {
         enabled: Array.from(manager.enabledPlugins || []).includes(${JSON.stringify(PLUGIN_ID)}),
         loaded: Boolean(manager.plugins?.[${JSON.stringify(PLUGIN_ID)}]),
@@ -1874,7 +1883,7 @@ async function run(args) {
     })()`);
     const enableLedgerTools = async () => ctx.page.ev(`(async () => {
       const manager = app.plugins;
-      await manager.enablePlugin(${JSON.stringify(PLUGIN_ID)});
+      await manager.enablePluginAndSave(${JSON.stringify(PLUGIN_ID)});
       return {
         enabled: Array.from(manager.enabledPlugins || []).includes(${JSON.stringify(PLUGIN_ID)}),
         loaded: Boolean(manager.plugins?.[${JSON.stringify(PLUGIN_ID)}]),

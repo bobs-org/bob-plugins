@@ -459,6 +459,72 @@ test("home-card gg and Up stop at visible body text without swallowing insert-mo
   assert.equal(key("g").handled, false);
 });
 
+test("home-card cancels pending Vim input only when it swallows a navigation key", () => {
+  const vimState = () => ({ keyBuffer: [], prefixRepeat: [], motionRepeat: [], operator: null, registerName: null });
+  const calls = [];
+  const api = { handleKey(cm, key, origin) {
+    calls.push([key, origin]);
+    cm.state.vim.inputState = vimState();
+  } };
+  const view = { cm: { state: { vim: { inputState: vimState() } } } };
+  assert.equal(H.homeCardCancelPendingVimInput(view, api), false, "an empty Vim state is never cancelled");
+  assert.deepEqual(calls, []);
+  view.cm.state.vim.inputState.keyBuffer = ["g"];
+  assert.equal(H.homeCardCancelPendingVimInput(view, api), true);
+  assert.deepEqual(calls, [["<Esc>", "mapping"]]);
+  assert.deepEqual(view.cm.state.vim.inputState.keyBuffer, []);
+  view.cm.state.vim.inputState.operator = "delete";
+  assert.equal(H.homeCardCancelPendingVimInput(view, api), true, "a pending operator is cancelled");
+  view.cm.state.vim.inputState.prefixRepeat = ["3"];
+  assert.equal(H.homeCardCancelPendingVimInput(view, api), true, "a pending count is cancelled");
+  assert.equal(H.homeCardCancelPendingVimInput({}, api), false, "no Vim adapter is a no-op");
+  assert.equal(H.homeCardCancelPendingVimInput(view, null), false);
+
+  const plugin = makeHostPlugin({ app: { vault: { getConfig: () => true } } });
+  plugin.homeCardLivePath = () => "work.md";
+  plugin.homeCardVisibleBodyLine = () => ({ from: 40 });
+  const editorRoot = {
+    classList: { contains: (name) => ["bob-property-card-owns-frontmatter", "bob-property-card-owns-title"].includes(name) },
+    querySelector: () => ({}),
+  };
+  const editor = {
+    dom: editorRoot,
+    cm: { state: { vim: { inputState: vimState() } } },
+    state: { selection: { main: { head: 40 } } },
+    dispatch(spec) { this.state.selection.main.head = spec.selection.anchor; },
+  };
+  // Vim sees an unswallowed key; model its buffer the way CodeMirror Vim does.
+  const key = (name) => {
+    const event = { key: name, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }, stopPropagation() {} };
+    const handled = plugin.homeCardHandleVisibleBodyNavigation(event, editor);
+    if (!handled && name === "g") editor.cm.state.vim.inputState.keyBuffer.push("g");
+    return handled;
+  };
+  const hadWindow = Object.prototype.hasOwnProperty.call(globalThis, "window");
+  const previousWindow = globalThis.window;
+  globalThis.window = { CodeMirrorAdapter: { Vim: api } };
+  try {
+    calls.length = 0;
+    assert.equal(key("Escape"), false);
+    assert.equal(key("g"), false);
+    assert.deepEqual(editor.cm.state.vim.inputState.keyBuffer, ["g"]);
+    assert.equal(key("g"), true);
+    assert.deepEqual(calls, [["<Esc>", "mapping"]], "gg cancels the first g Vim buffered");
+    assert.deepEqual(editor.cm.state.vim.inputState.keyBuffer, [], "the next key is not read as g<key>");
+    assert.equal(editor.state.selection.main.head, 40);
+
+    calls.length = 0;
+    assert.equal(key("k"), true, "k at the body start stays in visible text");
+    assert.deepEqual(calls, [], "an empty Vim state is left alone");
+    editor.cm.state.vim.inputState.operator = "delete";
+    assert.equal(key("k"), true);
+    assert.deepEqual(calls, [["<Esc>", "mapping"]], "dk at the body start cannot reach hidden lines later");
+  } finally {
+    if (hadWindow) globalThis.window = previousWindow;
+    else delete globalThis.window;
+  }
+});
+
 test("visible-body navigation binds a capture listener to each editor and releases it", () => {
   const plugin = makeHostPlugin();
   let extension = null;

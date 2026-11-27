@@ -110,6 +110,7 @@ function albumPaintStatus(host, model, handlers) {
 }
 
 function albumPaintCallout(callout, options) {
+  if (!options?.cabinetBody && propertyCardCabinetStandDown?.(callout, options?.view, options?.sourcePath, "albums")) return false;
   albumSetAttr(callout, "data-bob-album-card", "true");
   albumSetAttr(callout, "data-root-hue", options.hue);
   albumSetAttr(callout, "data-stale", options.state.stale ? "true" : null);

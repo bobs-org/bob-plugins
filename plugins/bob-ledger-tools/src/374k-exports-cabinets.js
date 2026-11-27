@@ -45,6 +45,8 @@ try {
       PROPERTY_CARD_CABINET_STACK_CLASS,
       PROPERTY_CARD_CABINET_KIND_ATTR,
       propertyCardCabinetStackForView,
+      propertyCardCabinetMounted,
+      propertyCardCabinetMountedInRoot,
       propertyCardCabinetCollectRows,
       propertyCardCabinetsInView,
       propertyCardCabinetToggle,

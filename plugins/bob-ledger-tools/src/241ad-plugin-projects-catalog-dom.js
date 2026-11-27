@@ -281,6 +281,7 @@ function projectsOrderChrome(host) {
 }
 
 function projectsPaintCallout(callout, context) {
+  if (!context?.cabinetBody && propertyCardCabinetStandDown?.(callout, context?.view, context?.sourcePath, "projects")) return false;
   albumSetAttr(callout, "data-bob-projects-card", "true");
   albumSetAttr(callout, "data-root-hue", context.hue);
   albumSetAttr(callout, "data-stale", context.state.stale ? "true" : null);

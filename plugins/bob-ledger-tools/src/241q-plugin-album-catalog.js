@@ -46,8 +46,17 @@ class BobLedgerToolsAlbumCatalogMixin {
 
   paintAlbumCatalogReading(el, sourcePath, allowAnchor = true) {
     const options = this.albumCatalogOptions(sourcePath);
+    const reading = typeof propertyCardReadingViewFor === "function" ? propertyCardReadingViewFor(this.app, el) : null;
+    options.view = reading?.view || null;
     const callouts = albumFindCallouts(el);
     for (const callout of callouts) albumPaintCallout(callout, options);
+    if (propertyCardCabinetMountedInRoot?.(el, sourcePath, "albums")) {
+      for (const status of Array.from(el.querySelectorAll?.(`.${ALBUM_STATUS}`) || [])) {
+        if (!status.closest?.('[data-callout="albums"]')) status.remove?.();
+      }
+      notebookRemovePainted(el, "bob-album-anchor");
+      return;
+    }
     const catalog = albumHostCatalog(options.state, sourcePath);
     const heading = Array.from(el.querySelectorAll?.("h2") || []).find((head) =>
       !notebookInsideCode(head) && /^Albums\s*$/i.test(head.childNodes?.[0]?.textContent || head.textContent));
@@ -114,15 +123,20 @@ class BobLedgerToolsAlbumCatalogMixin {
     const path = this.albumCatalogLivePath(view);
     if (!path) { albumCleanCatalogDom(view.dom); return; }
     const options = this.albumCatalogOptions(path);
+    options.view = view;
     for (const callout of albumFindCallouts(view.dom)) {
       // Embedded notes have their own source identity, never the outer editor's.
       if (!callout.closest?.(".markdown-embed")) albumPaintCallout(callout, options);
+    }
+    if (propertyCardCabinetMounted?.(view, path, "albums")) {
+      for (const node of Array.from(view.dom?.querySelectorAll?.(".bob-album-anchor") || [])) node.remove?.();
     }
   }
 
   buildAlbumCatalogDecorations(view) {
     const path = this.albumCatalogLivePath(view);
     if (!path || !Decoration || !WidgetType || !RangeSetBuilder) return Decoration?.none;
+    if (propertyCardCabinetMounted?.(view, path, "albums")) return Decoration.none;
     const text = view.state.doc.toString();
     const regions = albumSourceRegions(text);
     const state = this.albumReportState();

@@ -41775,6 +41775,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.setupNotebookData(); this.setupAlbumData(); this.setupProjectsData(); this.setupAreasData(); this.setupBankData(); this.setupBankActions(); this.setupBankWalk();
     this.setupBankCards(); this.setupBankBadge(); this.setupBankMarks(); this.setupBankSetup(); this.setupBankSetupCard(); this.setupSchemaDoubleEquals?.();
     this.setupNotebookCatalog(); this.setupAlbumCatalog(); this.setupProjectsCatalog(); this.setupAreasCatalog(); this.setupAlbumRecords(); this.setupNotebookHeader(); this.setupAlbumHeader(); this.setupHomeCard(); this.setupProseNoteCard?.(); this.setupRecordSheet?.(); this.setupIntentionCard?.(); this.setupIntentionUpdate?.(); this.setupIntentionCardEditor?.(); this.setupIntentionCardNavigation?.(); this.setupRecordUpdate?.(); this.setupPropertyUpdate?.(); this.setupRecordCard?.(); this.setupPropertyEditorEntrypoints?.(); this.setupPropertyEditorSettingsEntrypoints?.(); this.setupPropertyCapabilityRouting?.(); this.setupSubscriptionSurfaces(); this.setupAlbumSchemaEntrypoints?.(); this.setupAlbumYamlExcursion?.();
+    this.setupCabinetHostCatalogs?.();
     this.setupNotebookCard?.();
     this.setupRefNoteCard?.();
     this.setupReadingBoardBlock();
@@ -66602,6 +66603,7 @@ function propertyCardCabinetAppendActions(doc, trail, actions) {
     if (action.title) button.setAttribute("title", String(action.title));
     if (action.ariaLabel) button.setAttribute("aria-label", String(action.ariaLabel));
     propertyCardCabinetSetText(button, action.label);
+    button.disabled = action.disabled === true;
     button.addEventListener("click", (event) => {
       try { event?.preventDefault?.(); } catch (_) {}
       try { event?.stopPropagation?.(); } catch (_) {}
@@ -66982,6 +66984,12 @@ function propertyCardCabinetProviderBody(panel, provider, context, kind, path, p
       view: context?.view || null,
       component: context?.component || context?.plugin || null,
       container: body,
+      species: panel?.__bobCabinetProviderMount?.species || "",
+      source: panel?.__bobCabinetProviderMount?.source || "",
+      frontmatter: panel?.__bobCabinetProviderMount?.frontmatter || {},
+      readingScope: context?.readingScope || null,
+      releaseClaim: typeof panel?.__bobCabinetClaimRelease === "function"
+        ? panel.__bobCabinetClaimRelease : () => false,
     });
     Promise.resolve(result).then(() => {
       state.pending = false;
@@ -67006,6 +67014,14 @@ function propertyCardCabinetBuildProviderPanel(doc, path, species, kind, provide
   if (!panel) return null;
   panel.setAttribute("data-cabinet-kind", kind);
   panel.setAttribute("data-cabinet-source", path);
+  panel.__bobCabinetProviderMount = {
+    provider,
+    applied,
+    species,
+    source: providerContext?.source || "",
+    frontmatter: providerContext?.frontmatter || {},
+    readingScope: providerContext?.readingScope || null,
+  };
   if (problems) panel.setAttribute("data-cabinet-problems", problems);
   let paintKey = "";
   try { paintKey = String(provider.paintKey(path) || ""); } catch (_) {}
@@ -67089,7 +67105,7 @@ function propertyCardCabinetsAssemble(parent, pathValue, footEl, context = {}) {
     const species = card.getAttribute?.("data-card-kind") || "";
     const source = propertyCardCabinetContextSource({ ...context, spec: context.spec }, path);
     const frontmatter = context?.frontmatter || context?.spec?.frontmatter || {};
-    const providerContext = { path, species, source, frontmatter };
+    const providerContext = { path, species, source, frontmatter, readingScope: context?.readingScope || null };
     for (const kind of propertyCardCabinetOrder(Object.keys(PROPERTY_CARD_CABINET_KINDS))) {
       if (PROPERTY_CARD_CABINET_KINDS[kind].role !== "content" || claimed.has(kind)) continue;
       const panel = propertyCardCabinetBuildProviderPanel(doc, path, species, kind, providerContext, context);
@@ -67126,11 +67142,43 @@ function propertyCardCabinetsAssemble(parent, pathValue, footEl, context = {}) {
     }
     card.appendChild(stack);
 
+    const providerReleases = [];
+    for (const row of panels) {
+      const mount = row.panel?.__bobCabinetProviderMount;
+      if (!mount || typeof mount.provider?.onMounted !== "function") continue;
+      try {
+        const release = mount.provider.onMounted({
+          path,
+          kind: row.kind,
+          panel: row.panel,
+          view: context?.view || null,
+          component: context?.component || context?.plugin || null,
+          applied: mount.applied,
+          source: mount.source,
+          species: mount.species,
+          frontmatter: mount.frontmatter,
+          readingScope: mount.readingScope,
+        });
+        if (typeof release === "function") {
+          row.panel.__bobCabinetClaimRelease = release;
+          providerReleases.push(release);
+        }
+      } catch (_) {}
+    }
+    stack.__bobCabinetReleaseProviders = () => {
+      for (const release of providerReleases.splice(0)) {
+        try { release(); } catch (_) {}
+      }
+    };
+
     const view = context?.view || null;
     if (view && context?.plugin && typeof propertyCardCabinetRegisterMount === "function") {
       const repaint = typeof context.repaint === "function" ? context.repaint : null;
       const release = propertyCardCabinetRegisterMount(context.plugin, view, path, stack, repaint);
-      try { context.component?.register?.(release); } catch (_) {}
+      try { context.component?.register?.(() => {
+        try { stack.__bobCabinetReleaseProviders?.(); } catch (_) {}
+        release();
+      }); } catch (_) {}
     }
     return stack;
   } catch (_) {
@@ -72225,6 +72273,7 @@ function projectsOrderChrome(host) {
 }
 
 function projectsPaintCallout(callout, context) {
+  if (!context?.cabinetBody && propertyCardCabinetStandDown?.(callout, context?.view, context?.sourcePath, "projects")) return false;
   albumSetAttr(callout, "data-bob-projects-card", "true");
   albumSetAttr(callout, "data-root-hue", context.hue);
   albumSetAttr(callout, "data-stale", context.state.stale ? "true" : null);
@@ -72476,8 +72525,18 @@ class BobLedgerToolsProjectsCatalogMixin {
 
   paintProjectsCatalogReading(el, sourcePath, folds, allowAnchor = true) {
     const options = this.projectsCatalogOptions(sourcePath, folds);
+    const reading = typeof propertyCardReadingViewFor === "function" ? propertyCardReadingViewFor(this.app, el) : null;
+    options.view = reading?.view || null;
     const callouts = projectsFindCallouts(el);
     for (const callout of callouts) projectsPaintCallout(callout, options);
+    if (propertyCardCabinetMountedInRoot?.(el, sourcePath, "projects")) {
+      for (const cls of [PROJECTS_STATUS_CLASS, PROJECTS_ANCHOR_CLASS, PROJECTS_HEADER_CLASS, PROJECTS_CLOSED_CLASS]) {
+        for (const node of Array.from(el.querySelectorAll?.(`.${cls}`) || [])) {
+          if (!node.closest?.('[data-callout="projects"]')) node.remove?.();
+        }
+      }
+      return;
+    }
     // Hosts without a stored callout get an actionable anchor at their
     // Projects heading, H1, or safe body position. With no children and a
     // current catalog, no empty card remains.
@@ -72558,15 +72617,20 @@ class BobLedgerToolsProjectsCatalogMixin {
       return;
     }
     const options = this.projectsCatalogOptions(path, this.projectsCatalogFoldMap(view));
+    options.view = view;
     for (const callout of projectsFindCallouts(view.dom)) {
       // Embedded notes have their own source identity, never the outer editor's.
       if (!callout.closest?.(".markdown-embed")) projectsPaintCallout(callout, options);
+    }
+    if (propertyCardCabinetMounted?.(view, path, "projects")) {
+      for (const node of Array.from(view.dom?.querySelectorAll?.(`.${PROJECTS_ANCHOR_CLASS}`) || [])) node.remove?.();
     }
   }
 
   buildProjectsCatalogDecorations(view) {
     const path = this.projectsCatalogLivePath(view);
     if (!path || !Decoration || !WidgetType || !RangeSetBuilder) return Decoration?.none;
+    if (propertyCardCabinetMounted?.(view, path, "projects")) return Decoration.none;
     const text = view.state.doc.toString();
     const regions = projectsCardSourceRegions(text);
     const state = this.projectsReportState();
@@ -73800,6 +73864,7 @@ function areasCleanRow(li) {
 }
 
 function areasPaintCallout(callout, options) {
+  if (!options?.cabinetBody && propertyCardCabinetStandDown?.(callout, options?.view, options?.sourcePath, "areas")) return false;
   const catalog = areasCardHost(options.state, options.sourcePath);
   if (!catalog) {
     areasCleanCallout(callout);
@@ -74053,8 +74118,14 @@ class BobLedgerToolsAreasCatalogMixin {
 
   areasPaintReading(el, sourcePath, folds = null, allowAnchor = true) {
     const options = this.areasCatalogOptions(sourcePath, folds);
+    const reading = typeof propertyCardReadingViewFor === "function" ? propertyCardReadingViewFor(this.app, el) : null;
+    options.view = reading?.view || null;
     const callouts = areasFindCallouts(el);
     for (const callout of callouts) areasPaintCallout(callout, options);
+    if (propertyCardCabinetMountedInRoot?.(el, sourcePath, "areas")) {
+      this.areasCatalogCleanAnchor(el);
+      return;
+    }
     const catalog = options.catalog;
     const heading = Array.from(el.querySelectorAll?.("h2") || []).find((head) =>
       !notebookInsideCode(head) && /^Areas\s*$/i.test(head.childNodes?.[0]?.textContent || head.textContent || ""));
@@ -74111,11 +74182,13 @@ class BobLedgerToolsAreasCatalogMixin {
       return;
     }
     const options = this.areasCatalogOptions(path, this.areasCatalogFoldMap(view));
+    options.view = view;
     for (const callout of areasFindCallouts(view.dom)) {
       if (!callout.closest?.(".markdown-embed")) areasPaintCallout(callout, options);
     }
     for (const host of view.dom?.querySelectorAll?.(".bob-areas-standalone, .bob-areas-anchor") || []) {
       if (host.closest?.('[data-callout="areas"]') || host.closest?.(".markdown-embed")) continue;
+      if (propertyCardCabinetMounted?.(view, path, "areas")) { host.remove?.(); continue; }
       areasPaintStandalone(host, options);
     }
   }
@@ -74123,6 +74196,7 @@ class BobLedgerToolsAreasCatalogMixin {
   buildAreasCatalogDecorations(view) {
     const path = this.areasCatalogLivePath(view);
     if (!path || !Decoration || !WidgetType || !RangeSetBuilder) return Decoration?.none;
+    if (propertyCardCabinetMounted?.(view, path, "areas")) return Decoration.none;
     const text = view.state.doc.toString();
     if (areasCardHasCallout(text)) return Decoration.none;
     const folds = this.areasCatalogFoldMap(view);
@@ -74721,6 +74795,533 @@ class BobLedgerToolsRefLibraryReportMixin {
     this.refLibraryReportReceivedAt = null;
     this.refLibraryReportStale = false;
     this.refLibraryReportError = null;
+  }
+}
+// ---- src/241al-plugin-cabinet-host-catalogs.js ----
+// Area/project host catalogs rendered as lazy property-card cabinets. The
+// providers reuse each catalog's report model, painter, and explicit Sync
+// gesture; they never write note bytes during paint.
+const PROPERTY_CARD_HOST_CATALOG_KINDS = Object.freeze(["areas", "projects", "notebooks", "albums"]);
+const PROPERTY_CARD_HOST_CATALOG_HEADINGS = Object.freeze({
+  areas: "Areas",
+  projects: "Projects",
+  notebooks: "Notebooks",
+  albums: "Albums",
+});
+
+function propertyCardCabinetHostReportState(plugin, kind) {
+  try {
+    if (kind === "areas") return plugin?.areasCatalogState?.() || { report: null };
+    if (kind === "projects") return plugin?.projectsReportState?.() || { report: null };
+    if (kind === "notebooks") return plugin?.notebookCatalogState?.() || { report: null };
+    if (kind === "albums") return plugin?.albumReportState?.() || { report: null };
+  } catch (_) {}
+  return { report: null };
+}
+
+function propertyCardCabinetHostCatalog(state, kind, path) {
+  try {
+    if (kind === "areas") return areasCardHost(state, path);
+    if (kind === "projects") return projectsCardHost(state, path);
+    if (kind === "notebooks") return notebookHostCatalog(state, path);
+    if (kind === "albums") return albumHostCatalog(state, path);
+  } catch (_) {}
+  return null;
+}
+
+function propertyCardCabinetHostSourceCounts(region) {
+  const result = { direct: 0, nested: 0 };
+  try {
+    const lines = Array.isArray(region?.lines) ? region.lines.slice(1) : [];
+    for (const raw of lines) {
+      const line = String(raw).replace(/^ {0,3}>\s?/, "");
+      const match = /^(\s*)[-+*]\s+.*\[\[[^\]]+\]\]/.exec(line);
+      if (!match) continue;
+      if (match[1].length === 0) result.direct += 1;
+      else result.nested += 1;
+    }
+  } catch (_) {}
+  return result;
+}
+
+function propertyCardCabinetHostReportRows(plugin, kind, state, path) {
+  try {
+    if (kind === "areas") return areasCardRows(state, path);
+    if (kind === "projects") return projectsCardRowEntries(state, path);
+    if (kind === "notebooks") {
+      return [];
+    }
+    if (kind === "albums") {
+      return [];
+    }
+  } catch (_) {}
+  void plugin;
+  return [];
+}
+
+function propertyCardCabinetHostReportTally(kind, state, path, rows) {
+  try {
+    if (kind === "areas") {
+      const catalog = propertyCardCabinetHostCatalog(state, kind, path);
+      const direct = rows.filter((row) => Number(row?.depth || 0) === 0).length;
+      const nested = rows.length - direct;
+      if (rows.length) return { direct, nested, meta: nested ? `${direct} direct · ${nested} nested` : "" };
+      const stored = Number.isInteger(catalog?.rows?.length) ? catalog.rows.length : null;
+      return stored === null ? null : { direct: stored, nested: 0, meta: "" };
+    }
+    if (kind === "projects") {
+      const tally = projectsCardTally(projectsCardPartition(rows));
+      return { direct: rows.length, nested: 0, meta: rows.length ? tally.full : "" };
+    }
+    if (kind === "notebooks") {
+      const catalog = propertyCardCabinetHostCatalog(state, kind, path);
+      return Number.isInteger(catalog?.notebooks)
+        ? { direct: catalog.notebooks, nested: 0, meta: "" } : null;
+    }
+    if (kind === "albums") {
+      const catalog = propertyCardCabinetHostCatalog(state, kind, path);
+      return Number.isInteger(catalog?.albums)
+        ? { direct: catalog.albums, nested: 0, meta: "" } : null;
+    }
+  } catch (_) {}
+  return null;
+}
+
+function propertyCardCabinetHostStatus(plugin, kind, state, path) {
+  try {
+    if (kind === "areas") return areasCardStatus(state, path);
+    if (kind === "projects") return projectsCardStatus(state, path);
+    if (kind === "notebooks") return notebookStatusModel(state);
+    if (kind === "albums") return albumCatalogStatus(state, path);
+  } catch (_) {}
+  void plugin;
+  return null;
+}
+
+function propertyCardCabinetHostAction(action, handlers) {
+  if (!action || !handlers) return null;
+  const kind = typeof action.kind === "string" ? action.kind : "";
+  const onClick = kind && typeof handlers[kind] === "function" ? handlers[kind] : null;
+  if (!onClick || !action.label) return null;
+  return {
+    label: action.label,
+    title: action.hint || action.label,
+    ariaLabel: action.hint || action.label,
+    disabled: action.disabled === true,
+    onClick,
+  };
+}
+
+function propertyCardCabinetHostStatusParts(plugin, kind, state, path, catalog, regionScan, reportCount, handlers) {
+  const status = propertyCardCabinetHostStatus(plugin, kind, state, path) || {};
+  const actions = [];
+  const seen = new Set();
+  const append = (action) => {
+    const built = propertyCardCabinetHostAction(action, handlers);
+    const key = action?.kind || built?.label;
+    if (!built || seen.has(key)) return;
+    seen.add(key);
+    actions.push(built);
+  };
+  append(status.action);
+  append(status.retry);
+  if (status.copy && typeof handlers?.copy === "function") {
+    append({ kind: "copy", label: status.copy.label, hint: status.copy.hint });
+  }
+
+  const catalogState = String(catalog?.state || "");
+  const missing = !regionScan?.regions?.length
+    && (reportCount > 0 || catalogState === "missing");
+  const damaged = Boolean(regionScan?.damage || catalogState === "damaged");
+  const stale = !damaged && !missing && (catalogState === "stale" || state?.stale === true);
+  const needsSync = damaged || missing || catalogState === "missing" || catalogState === "stale";
+  if (needsSync && typeof handlers?.sync === "function") {
+    const reason = damaged ? "This catalog is damaged. Review the note, then sync it."
+      : missing ? "This catalog is missing. Sync to write it."
+        : `This catalog is ${catalogState || "stale"}. Sync to refresh it.`;
+    const busy = state?.syncBusy === true;
+    append({ kind: "sync", label: busy ? "Syncing…" : "↻ Sync", hint: reason, disabled: busy });
+  }
+  let attention = null;
+  if (damaged || missing || stale) {
+    const word = damaged ? "damaged" : missing ? "missing" : "stale";
+    attention = {
+      icon: "⚠",
+      word,
+      tone: damaged ? "error" : "warning",
+      title: regionScan?.damage?.message || status.message || reasonForCabinetAttention(word),
+      ariaLabel: `${word} catalog`,
+    };
+  } else if (state?.errorModel && !state?.report) {
+    attention = { icon: "⚠", word: "unavailable", tone: "warning", title: state.errorModel.hint || "Catalog data is unavailable." };
+  }
+  const problems = [
+    damaged ? "damaged" : missing ? "missing" : stale ? "stale" : "",
+    catalogState && catalogState !== "current" ? catalogState : "",
+    state?.stale ? "report-stale" : "",
+  ]
+    .filter(Boolean).join(":");
+  return { attention, actions, problems, status };
+}
+
+function reasonForCabinetAttention(word) {
+  return `${word} catalog; use Sync to refresh the generated section.`;
+}
+
+function propertyCardCabinetHostApply(plugin, kind, context = {}) {
+  try {
+    const path = String(context.path || "");
+    const species = String(context.species || "");
+    const source = typeof context.source === "string" ? context.source : null;
+    if (!path || (species !== "area" && species !== "project") || source === null || source.trim() === "") return null;
+    const scans = propertyCardCatalogRegions(source);
+    const scan = scans?.[kind] || { regions: [], damage: null };
+    const region = !scan.damage && Array.isArray(scan.regions) ? scan.regions[0] || null : null;
+    const hidePlan = propertyCardCatalogRegionForHide(source, kind);
+    const state = propertyCardCabinetHostReportState(plugin, kind);
+    const catalog = propertyCardCabinetHostCatalog(state, kind, path);
+    const rows = propertyCardCabinetHostReportRows(plugin, kind, state, path);
+    const tally = propertyCardCabinetHostReportTally(kind, state, path, rows);
+    const stored = propertyCardCabinetHostSourceCounts(region);
+    const reportCount = tally ? tally.direct + tally.nested : 0;
+    const storedCount = stored.direct + stored.nested;
+    const hasUsefulRegion = Boolean(region && storedCount > 0);
+    const hasReportChildren = reportCount > 0;
+    const catalogState = String(catalog?.state || "");
+    const damaged = Boolean(scan.damage || catalogState === "damaged");
+    const needsRefresh = ["missing", "stale"].includes(catalogState);
+    if (!hasUsefulRegion && !hasReportChildren && !damaged && !needsRefresh) return null;
+
+    const counts = storedCount > 0 ? stored : (tally || { direct: reportCount, nested: 0 });
+    const noun = kind === "areas" ? "area" : kind === "projects" ? "project" : kind === "notebooks" ? "notebook" : "album";
+    const total = counts.direct + counts.nested;
+    const phrase = `${total} ${total === 1 ? noun : `${noun}s`}`;
+    const summary = counts.nested > 0 ? `${phrase} · ${counts.nested} nested` : phrase;
+    const paintOptions = propertyCardCabinetHostPaintOptions(plugin, kind, path, null, state);
+    const statusParts = propertyCardCabinetHostStatusParts(
+      plugin, kind, state, path, catalog, scan, reportCount, paintOptions.handlers,
+    );
+    const meta = kind === "projects" && tally?.meta ? tally.meta : "";
+    return {
+      summary,
+      meta,
+      metaTitle: meta,
+      attention: statusParts.attention,
+      actions: statusParts.actions,
+      problems: statusParts.problems,
+      region,
+      plan: hidePlan && !hidePlan.damage ? hidePlan : null,
+      damage: scan.damage || hidePlan?.damage || null,
+      state,
+      catalog,
+      rows,
+      tally,
+      reportCount,
+      sourceCount: storedCount,
+      status: statusParts.status,
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
+function propertyCardCabinetHostPaintOptions(plugin, kind, path, view, givenState) {
+  const state = givenState || propertyCardCabinetHostReportState(plugin, kind);
+  const editor = view && (typeof view === "object" || typeof view === "function") ? view : null;
+  let options = {};
+  try {
+    if (kind === "areas") {
+      const folds = editor ? plugin.areasCatalogFoldMap(editor) : new Map();
+      options = plugin.areasCatalogOptions(path, folds, state) || {};
+    } else if (kind === "projects") {
+      const folds = editor ? plugin.projectsCatalogFoldMap(editor) : new Map();
+      options = plugin.projectsCatalogOptions(path, folds) || {};
+    } else if (kind === "notebooks") {
+      options = plugin.notebookCatalogPaintOptions(path, state) || {};
+    } else if (kind === "albums") {
+      options = plugin.albumCatalogOptions(path) || {};
+    }
+  } catch (_) {}
+  options.view = view || null;
+  options.cabinetBody = true;
+  return options;
+}
+
+function propertyCardCabinetHostDigest(plugin, path, source) {
+  try {
+    const currentSource = typeof source === "string" ? source : propertyCardCabinetHostSource(plugin, path, null);
+    let species = "area";
+    try { species = plugin?.homeCardCardModelFor?.(path, currentSource)?.kind || species; } catch (_) {}
+    const digests = [];
+    for (const kind of PROPERTY_CARD_HOST_CATALOG_KINDS) {
+      const applied = propertyCardCabinetHostApply(plugin, kind, { path, species, source: currentSource });
+      const state = propertyCardCabinetHostReportState(plugin, kind);
+      const reportText = JSON.stringify(propertyCardCabinetHostStableValue({
+        report: state?.report || null,
+        stale: state?.stale === true,
+        unavailable: state?.unavailable === true,
+        refreshing: state?.refreshing === true,
+        syncBusy: state?.syncBusy === true,
+        errorModel: state?.errorModel || null,
+        syncErrorModel: state?.syncErrorModel || null,
+      }));
+      digests.push([kind, propertyCardCabinetFingerprint(reportText || ""), applied?.summary || "", applied?.meta || "", applied?.problems || ""]);
+    }
+    return JSON.stringify([propertyCardCabinetFingerprint(currentSource || ""), digests]);
+  } catch (_) {
+    return "";
+  }
+}
+
+function propertyCardCabinetHostStableValue(value, ancestors = new Set()) {
+  if (value === null || value === undefined || typeof value !== "object") return value;
+  if (ancestors.has(value)) return "[cycle]";
+  const next = new Set(ancestors);
+  next.add(value);
+  if (value instanceof Map) {
+    return Array.from(value.entries())
+      .map(([key, item]) => [propertyCardCabinetHostStableValue(key, next), propertyCardCabinetHostStableValue(item, next)])
+      .sort((left, right) => JSON.stringify(left[0]).localeCompare(JSON.stringify(right[0])));
+  }
+  if (value instanceof Set) {
+    return Array.from(value.values())
+      .map((item) => propertyCardCabinetHostStableValue(item, next))
+      .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+  }
+  if (Array.isArray(value)) return value.map((item) => propertyCardCabinetHostStableValue(item, next));
+  const out = {};
+  for (const key of Object.keys(value).sort()) {
+    out[key] = propertyCardCabinetHostStableValue(value[key], next);
+  }
+  return out;
+}
+
+function propertyCardCabinetHostSource(plugin, path, fallback) {
+  try {
+    if (typeof fallback === "string") return fallback;
+    const live = plugin?.homeCardSourceCache?.get?.(path);
+    if (typeof live === "string") return live;
+    const album = plugin?.albumHeaderSourceCache?.get?.(path);
+    if (typeof album === "string") return album;
+  } catch (_) {}
+  return "";
+}
+
+function propertyCardCabinetHostPaintKey(plugin, kind, path) {
+  void kind;
+  return propertyCardCabinetHostDigest(plugin, path, propertyCardCabinetHostSource(plugin, path, null));
+}
+
+function propertyCardCabinetHostRemoveInlineStatus(callout, kind) {
+  try {
+    const selector = kind === "areas" ? ".bob-areas-status" : kind === "projects" ? ".bob-projects-status" : "";
+    if (!selector) return;
+    for (const node of Array.from(callout?.querySelectorAll?.(selector) || [])) node.remove?.();
+  } catch (_) {}
+}
+
+function propertyCardCabinetHostPainter(kind) {
+  return kind === "areas" ? areasPaintCallout
+    : kind === "projects" ? projectsPaintCallout
+      : kind === "notebooks" ? notebookPaintCallout
+        : kind === "albums" ? albumPaintCallout : null;
+}
+
+function propertyCardCabinetHostPaintMissing(plugin, kind, context, applied) {
+  const { doc, path, container, view } = context;
+  const options = propertyCardCabinetHostPaintOptions(plugin, kind, path, view, applied.state);
+  const host = doc.createElement("div");
+  host.setAttribute("class", "bob-cabinet-content bob-cabinet-provider-status");
+  container.appendChild(host);
+  if (kind === "areas") return areasPaintStandalone(host, options);
+  if (kind === "projects") return projectsPaintStandalone(host, options);
+  if (kind === "notebooks") {
+    const state = applied.state || {};
+    const status = notebookStatusModel(state) || {
+      kind: applied.damage ? "damaged" : "missing",
+      hint: applied.damage?.message || `The ${PROPERTY_CARD_HOST_CATALOG_HEADINGS[kind]} catalog is missing. Sync to write it.`,
+    };
+    return notebookPaintStatus(host, status, options.handlers, doc);
+  }
+  const model = albumCatalogStatus(applied.state || {}, path) || { message: "" };
+  if (!model.action && applied.attention && typeof options.handlers?.sync === "function") {
+    model.action = { kind: "sync", label: "↻ Sync", hint: applied.attention.title || "Sync this catalog.", disabled: false };
+  }
+  return albumPaintStatus(host, model, options.handlers);
+}
+
+async function propertyCardCabinetHostBuildBody(plugin, kind, context = {}) {
+  const path = String(context.path || "");
+  const source = propertyCardCabinetHostSource(plugin, path, context.source);
+  const applied = propertyCardCabinetHostApply(plugin, kind, {
+    path, species: context.species, source, frontmatter: context.frontmatter,
+  });
+  if (!applied || !context.doc || !context.container) return { failed: true };
+  if (!applied.region) {
+    propertyCardCabinetHostPaintMissing(plugin, kind, context, applied);
+    return { failed: false };
+  }
+  const painter = propertyCardCabinetHostPainter(kind);
+  const options = propertyCardCabinetHostPaintOptions(plugin, kind, path, context.view, applied.state);
+  options.doc = context.doc;
+  const result = await propertyCardCabinetRenderCatalog({
+    plugin,
+    doc: context.doc,
+    container: context.container,
+    path,
+    component: context.component,
+    paintKey: propertyCardCabinetHostPaintKey(plugin, kind, path),
+    regionSource: applied.region.lines.join("\n"),
+    releaseClaim: context.releaseClaim,
+    paint: async (callout) => {
+      if (!callout || callout.getAttribute?.("data-callout") !== kind || typeof painter !== "function") {
+        throw new Error(`The ${kind} cabinet body did not render its stored callout.`);
+      }
+      options.view = context.view || null;
+      options.cabinetBody = true;
+      await painter(callout, options);
+      propertyCardCabinetHostRemoveInlineStatus(callout, kind);
+    },
+  });
+  if (result?.failed) {
+    try { context.releaseClaim?.(); } catch (_) {}
+    return result;
+  }
+  return result;
+}
+
+function propertyCardCabinetHostReveal(panel, path, kind) {
+  try {
+    const control = panel?.querySelector?.(".bob-cabinet-toggle");
+    if (!control) return false;
+    if (control.getAttribute?.("aria-expanded") !== "true") control.click?.();
+    const head = panel.querySelector?.(".bob-cabinet-head") || control;
+    head.scrollIntoView?.({ block: "nearest" });
+    void path;
+    void kind;
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function propertyCardCabinetHostMountClaim(kind, plugin, context = {}) {
+  try {
+    const { path, view, panel, applied, source, readingScope } = context;
+    if (!view || !panel || !applied?.plan || applied.plan.damage) return null;
+    const liveSource = propertyCardCabinetHostSource(plugin, path, view?.state?.doc?.toString?.() || source);
+    const plan = propertyCardCatalogRegionForHide(liveSource, kind);
+    if (!plan || plan.damage || plan.fingerprint !== applied.plan.fingerprint) return null;
+    let releaseAbsorption = null;
+    let tagged = [];
+    if (view?.state?.doc && typeof view.dispatch === "function") {
+      releaseAbsorption = propertyCardCabinetAbsorbInEditor(view, {
+        path, kind, fingerprint: plan.fingerprint,
+      });
+      if (typeof releaseAbsorption !== "function") return null;
+    } else {
+      const scope = readingScope || view?.containerEl || view?.contentEl || view?.dom || null;
+      tagged = propertyCardCabinetAbsorbPaintReading(scope, plan, true);
+      if (!tagged.length) return null;
+      releaseAbsorption = () => propertyCardCabinetAbsorbUntagReading(tagged);
+    }
+    let generation = releaseAbsorption.generation;
+    if (generation == null) generation = `${Date.now()}:${Math.random()}`;
+    const releaseClaim = propertyCardCatalogClaim({
+      view,
+      path,
+      kind,
+      fingerprint: plan.fingerprint,
+      generation,
+      reveal: () => propertyCardCabinetHostReveal(panel, path, kind),
+    });
+    return () => {
+      try { releaseClaim(); } catch (_) {}
+      try { releaseAbsorption(); } catch (_) {}
+      try { if (tagged.length) propertyCardCabinetAbsorbUntagReading(tagged); } catch (_) {}
+      tagged = [];
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
+function propertyCardCabinetHostRevealNavigation(plugin, event) {
+  try {
+    const target = event?.target?.closest?.("a.internal-link, a[data-href], .outline .tree-item-self, .outline .tree-item-inner");
+    if (!target) return false;
+    const MarkdownViewCtor = require("obsidian").MarkdownView;
+    const active = plugin?.app?.workspace?.getActiveViewOfType?.(MarkdownViewCtor);
+    const activePath = String(active?.file?.path || "");
+    if (!activePath) return false;
+    let heading = "";
+    const href = target.getAttribute?.("data-href") || target.getAttribute?.("href") || "";
+    if (href.includes("#")) heading = href.slice(href.indexOf("#") + 1).split("|")[0];
+    else if (target.closest?.(".outline")) heading = target.textContent || "";
+    try { heading = decodeURIComponent(heading).replace(/^#+/, "").trim(); } catch (_) {}
+    const kind = Object.keys(PROPERTY_CARD_HOST_CATALOG_HEADINGS)
+      .find((candidate) => PROPERTY_CARD_HOST_CATALOG_HEADINGS[candidate].toLowerCase() === heading.toLowerCase());
+    if (!kind) return false;
+    if (href.includes("#")) {
+      const noteTarget = href.slice(0, href.indexOf("#")).trim();
+      if (noteTarget) {
+        const destination = plugin?.app?.metadataCache?.getFirstLinkpathDest?.(noteTarget, activePath);
+        if (destination?.path && destination.path !== activePath) return false;
+      }
+    }
+    const candidates = [active?.editor?.cm, active?.previewMode?.renderer].filter(Boolean);
+    for (const view of candidates) {
+      if (!propertyCardCatalogRevealClaim(view, activePath, kind)) continue;
+      event.preventDefault?.();
+      event.stopPropagation?.();
+      return true;
+    }
+    return false;
+  } catch (_) {
+    return false;
+  }
+}
+
+function propertyCardCabinetHostInstall(plugin) {
+  if (!plugin || plugin.cabinetHostCatalogsSetup === true) return false;
+  plugin.cabinetHostCatalogsSetup = true;
+  try {
+    const extension = propertyCardCabinetAbsorbEditorExtension();
+    if (extension) plugin.registerEditorExtension?.(extension);
+  } catch (_) {}
+  const registrations = [];
+  for (const kind of PROPERTY_CARD_HOST_CATALOG_KINDS) {
+    const provider = {
+      applies: (context) => propertyCardCabinetHostApply(plugin, kind, context),
+      paintKey: (path) => propertyCardCabinetHostPaintKey(plugin, kind, path),
+      buildBody: (context) => propertyCardCabinetHostBuildBody(plugin, kind, context),
+      onMounted: (context) => propertyCardCabinetHostMountClaim(kind, plugin, context),
+    };
+    registrations.push(propertyCardRegisterCabinetProvider(plugin, kind, provider));
+  }
+  plugin.cabinetHostCatalogProviderReleases = registrations;
+  const refreshCards = () => {
+    try { plugin.scheduleHomeCardRefresh?.(); } catch (_) {}
+  };
+  for (const subscribe of [plugin.apiAreasSubscribe, plugin.apiProjectsSubscribe, plugin.apiNotebookSubscribe, plugin.apiAlbumSubscribe]) {
+    if (typeof subscribe !== "function") continue;
+    try {
+      const release = subscribe.call(plugin, refreshCards);
+      if (typeof release === "function") plugin.register?.(release);
+    } catch (_) {}
+  }
+  try {
+    const doc = typeof document !== "undefined" ? document : null;
+    if (doc && typeof plugin.registerDomEvent === "function") {
+      plugin.registerDomEvent(doc, "click", (event) => propertyCardCabinetHostRevealNavigation(plugin, event), true);
+    }
+  } catch (_) {}
+  return true;
+}
+
+class BobLedgerToolsCabinetHostCatalogsMixin {
+  setupCabinetHostCatalogs() {
+    return propertyCardCabinetHostInstall(this);
   }
 }
 // ---- src/241xa-plugin-schema-arrange-model.js ----
@@ -96801,12 +97402,18 @@ function propertyCardCabinetReleasePath(path) {
 function propertyCardCabinetRegisterMount(plugin, view, path, stack, repaint) {
   const normalized = propertyCardCabinetPath(path);
   if (!plugin || !view || !normalized || !stack) return () => false;
+  for (const previous of Array.from(propertyCardCabinetMounts)) {
+    if (previous.view !== view || previous.path !== normalized) continue;
+    try { previous.stack?.__bobCabinetReleaseProviders?.(); } catch (_) {}
+    propertyCardCabinetMounts.delete(previous);
+  }
   const entry = { plugin, view, path: normalized, stack, repaint: typeof repaint === "function" ? repaint : null };
   propertyCardCabinetMounts.add(entry);
   let live = true;
   return () => {
     if (!live) return false;
     live = false;
+    try { entry.stack?.__bobCabinetReleaseProviders?.(); } catch (_) {}
     return propertyCardCabinetMounts.delete(entry);
   };
 }
@@ -97052,6 +97659,43 @@ function propertyCardCabinetStackForView(view, path = propertyCardCabinetViewPat
     if (controls.some((element) => propertyCardCabinetPath(element.getAttribute?.("data-card-fold-source") || stamped) === path)) return stack;
   }
   return null;
+}
+
+function propertyCardCabinetMounted(view, path, kind) {
+  try {
+    const normalized = propertyCardCabinetPath(path);
+    if (!normalized || !kind) return false;
+    const stack = propertyCardCabinetStackForView(view, normalized);
+    if (!stack) return false;
+    return Array.from(stack.querySelectorAll?.(`[${PROPERTY_CARD_CABINET_KIND_ATTR}]`) || []).some((panel) =>
+      panel.getAttribute?.(PROPERTY_CARD_CABINET_KIND_ATTR) === kind
+      && propertyCardCabinetPath(panel.getAttribute?.("data-cabinet-source") || "") === normalized);
+  } catch (_) {
+    return false;
+  }
+}
+
+function propertyCardCabinetMountedInRoot(root, path, kind) {
+  try {
+    const normalized = propertyCardCabinetPath(path);
+    if (!root || !normalized || !kind) return false;
+    const scopes = [root, root.closest?.(".markdown-preview-view"), root.closest?.(".markdown-source-view")]
+      .filter((scope, index, all) => scope && all.indexOf(scope) === index);
+    for (const scope of scopes) {
+      const stacks = [];
+      if (scope.matches?.(`.${PROPERTY_CARD_CABINET_STACK_CLASS}`)) stacks.push(scope);
+      stacks.push(...Array.from(scope.querySelectorAll?.(`.${PROPERTY_CARD_CABINET_STACK_CLASS}`) || []));
+      for (const stack of stacks) {
+        if (propertyCardCabinetPath(stack.getAttribute?.("data-cabinet-source") || "") !== normalized) continue;
+        if (Array.from(stack.querySelectorAll?.(`[${PROPERTY_CARD_CABINET_KIND_ATTR}]`) || []).some((panel) =>
+          panel.getAttribute?.(PROPERTY_CARD_CABINET_KIND_ATTR) === kind
+          && propertyCardCabinetPath(panel.getAttribute?.("data-cabinet-source") || "") === normalized)) return true;
+      }
+    }
+    return false;
+  } catch (_) {
+    return false;
+  }
 }
 
 function propertyCardCabinetCollectRows(stack, path) {
@@ -112947,6 +113591,7 @@ class BobLedgerToolsHomeCardMixin {
       return JSON.stringify([
         model,
         extra?.footDigest || "",
+        extra?.cabinetDigest || "",
         extra?.footOpen === true,
         extra?.collapsed === true,
         extra?.editorAvailable === true,
@@ -113010,7 +113655,14 @@ class BobLedgerToolsHomeCardMixin {
     let header = slotNode || bodyNodes[0] || null;
     const focusKey = this.homeCardFocusKey(header, doc);
     const extra = typeof this.homeCardFootExtra === "function" ? this.homeCardFootExtra(sourcePath, model) : null;
-    const options = { ...this.homeCardOptions(sourcePath, model), footSpec: extra?.footSpec };
+    const options = {
+      ...this.homeCardOptions(sourcePath, model),
+      footSpec: extra?.footSpec,
+      view: reading?.view || null,
+      readingScope: reading ? scope : null,
+      component: this,
+      sourceText: this.homeCardSourceCache?.get?.(sourcePath) || "",
+    };
     const signature = this.homeCardSignature(model, {
       ...extra,
       collapsed: options.collapsed,
@@ -113855,7 +114507,13 @@ class BobLedgerToolsHomeCardFootMixin {
         stamp: null,
       };
     }
-    return propertyCardFootAdapterExtra(path, spec);
+    const extra = propertyCardFootAdapterExtra(path, spec);
+    try {
+      extra.cabinetDigest = propertyCardCabinetHostDigest?.(
+        this, homeCardPath(path), this.homeCardSourceCache?.get?.(homeCardPath(path)),
+      ) || "";
+    } catch (_) { extra.cabinetDigest = ""; }
+    return extra;
   }
 
   homeCardFootHandlers(path) {
@@ -113890,6 +114548,7 @@ class BobLedgerToolsHomeCardFootMixin {
       {
         plugin: this,
         view: options?.view || null,
+        readingScope: options?.readingScope || null,
         component: options?.component || this,
         source: options?.sourceText,
         frontmatter: options?.frontmatter || propertyCardFootAdapterFrontmatter(this, key),
@@ -120651,6 +121310,7 @@ function notebookPaintCallout(callout, options = {}) {
   if (!callout) {
     return false;
   }
+  if (!options.cabinetBody && propertyCardCabinetStandDown?.(callout, options.view, options.sourcePath, "notebooks")) return false;
   const doc = options.doc || notebookDomDoc(callout);
   const hue = options.hue || null;
   try {
@@ -121165,6 +121825,8 @@ class BobLedgerToolsNotebookCatalogMixin {
   paintNotebookCatalogReading(el, sourcePath) {
     const state = this.notebookCatalogState();
     const options = this.notebookCatalogPaintOptions(sourcePath, state);
+    const reading = typeof propertyCardReadingViewFor === "function" ? propertyCardReadingViewFor(this.app, el) : null;
+    options.view = reading?.view || null;
     const doc = notebookDomDoc(el);
     const callouts = notebookFindCallouts(el).filter((node) => !notebookInsideCode(node));
     for (const callout of callouts) {
@@ -121178,7 +121840,8 @@ class BobLedgerToolsNotebookCatalogMixin {
     // Host-scope chrome; when no report has loaded yet, allow notes whose
     // rendered view holds a callout (the source-text region check lives in
     // Live Preview). Callout styling above stays unchanged.
-    const allowChrome = Boolean(catalog) || (!state.report && callouts.length > 0);
+    const mounted = propertyCardCabinetMountedInRoot?.(el, sourcePath, "notebooks") === true;
+    const allowChrome = !mounted && (Boolean(catalog) || (!state.report && callouts.length > 0));
     let retryModel = this.notebookCatalogRetryModel(sourcePath, state);
     let syncModel = this.notebookCatalogSyncModel(sourcePath, state, Boolean(heading));
     let statusModel = this.notebookCatalogStatusModel(sourcePath, state);
@@ -121406,6 +122069,7 @@ class BobLedgerToolsNotebookCatalogMixin {
       const catalog = typeof notebookHostCatalog === "function"
         ? notebookHostCatalog(state, filePath)
         : null;
+      if (propertyCardCabinetMounted?.(view, filePath, "notebooks")) return Decoration.none;
       const hasLocalRegion = regions.length > 0;
       const allowChrome = Boolean(catalog) || (!state.report && hasLocalRegion);
       if (!allowChrome) {
@@ -121547,6 +122211,7 @@ class BobLedgerToolsNotebookCatalogMixin {
         return false;
       }
       const options = this.notebookCatalogPaintOptions(filePath);
+      options.view = view;
       const callouts = notebookFindCallouts(view.dom).filter((node) => !notebookInsideCode(node));
       for (const callout of callouts) {
         notebookPaintCallout(callout, options);
@@ -122108,6 +122773,7 @@ function albumPaintStatus(host, model, handlers) {
 }
 
 function albumPaintCallout(callout, options) {
+  if (!options?.cabinetBody && propertyCardCabinetStandDown?.(callout, options?.view, options?.sourcePath, "albums")) return false;
   albumSetAttr(callout, "data-bob-album-card", "true");
   albumSetAttr(callout, "data-root-hue", options.hue);
   albumSetAttr(callout, "data-stale", options.state.stale ? "true" : null);
@@ -122253,8 +122919,17 @@ class BobLedgerToolsAlbumCatalogMixin {
 
   paintAlbumCatalogReading(el, sourcePath, allowAnchor = true) {
     const options = this.albumCatalogOptions(sourcePath);
+    const reading = typeof propertyCardReadingViewFor === "function" ? propertyCardReadingViewFor(this.app, el) : null;
+    options.view = reading?.view || null;
     const callouts = albumFindCallouts(el);
     for (const callout of callouts) albumPaintCallout(callout, options);
+    if (propertyCardCabinetMountedInRoot?.(el, sourcePath, "albums")) {
+      for (const status of Array.from(el.querySelectorAll?.(`.${ALBUM_STATUS}`) || [])) {
+        if (!status.closest?.('[data-callout="albums"]')) status.remove?.();
+      }
+      notebookRemovePainted(el, "bob-album-anchor");
+      return;
+    }
     const catalog = albumHostCatalog(options.state, sourcePath);
     const heading = Array.from(el.querySelectorAll?.("h2") || []).find((head) =>
       !notebookInsideCode(head) && /^Albums\s*$/i.test(head.childNodes?.[0]?.textContent || head.textContent));
@@ -122321,15 +122996,20 @@ class BobLedgerToolsAlbumCatalogMixin {
     const path = this.albumCatalogLivePath(view);
     if (!path) { albumCleanCatalogDom(view.dom); return; }
     const options = this.albumCatalogOptions(path);
+    options.view = view;
     for (const callout of albumFindCallouts(view.dom)) {
       // Embedded notes have their own source identity, never the outer editor's.
       if (!callout.closest?.(".markdown-embed")) albumPaintCallout(callout, options);
+    }
+    if (propertyCardCabinetMounted?.(view, path, "albums")) {
+      for (const node of Array.from(view.dom?.querySelectorAll?.(".bob-album-anchor") || [])) node.remove?.();
     }
   }
 
   buildAlbumCatalogDecorations(view) {
     const path = this.albumCatalogLivePath(view);
     if (!path || !Decoration || !WidgetType || !RangeSetBuilder) return Decoration?.none;
+    if (propertyCardCabinetMounted?.(view, path, "albums")) return Decoration.none;
     const text = view.state.doc.toString();
     const regions = albumSourceRegions(text);
     const state = this.albumReportState();
@@ -211141,6 +211821,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsAlbumCatalogMixin,
   BobLedgerToolsProjectsCatalogMixin,
   BobLedgerToolsAreasCatalogMixin,
+  BobLedgerToolsCabinetHostCatalogsMixin,
   BobLedgerToolsWorkspaceScrollGuardMixin,
   BobLedgerToolsAlbumRecordsMixin,
   BobLedgerToolsAlbumHeaderMixin,
@@ -216063,6 +216744,8 @@ try {
       PROPERTY_CARD_CABINET_STACK_CLASS,
       PROPERTY_CARD_CABINET_KIND_ATTR,
       propertyCardCabinetStackForView,
+      propertyCardCabinetMounted,
+      propertyCardCabinetMountedInRoot,
       propertyCardCabinetCollectRows,
       propertyCardCabinetsInView,
       propertyCardCabinetToggle,
@@ -216107,6 +216790,29 @@ try {
       cabinetRecordsRegisterProvider,
       cabinetRecordsTeardownPlugin,
       albumRecordsCabinetStandDown,
+    });
+  }
+} catch (_) {}
+// ---- src/374l-exports-cabinet-host-catalogs.js ----
+// Test-facing exports for the owner-catalog cabinet providers.
+try {
+  if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
+    module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
+      PROPERTY_CARD_HOST_CATALOG_KINDS,
+      PROPERTY_CARD_HOST_CATALOG_HEADINGS,
+      propertyCardCabinetHostSourceCounts,
+      propertyCardCabinetHostReportTally,
+      propertyCardCabinetHostApply,
+      propertyCardCabinetHostDigest,
+      propertyCardCabinetHostStableValue,
+      propertyCardCabinetHostStatusParts,
+      propertyCardCabinetHostPaintOptions,
+      propertyCardCabinetHostBuildBody,
+      propertyCardCabinetHostPaintKey,
+      propertyCardCabinetHostMountClaim,
+      propertyCardCabinetHostRevealNavigation,
+      propertyCardCabinetHostInstall,
+      BobLedgerToolsCabinetHostCatalogsMixin,
     });
   }
 } catch (_) {}

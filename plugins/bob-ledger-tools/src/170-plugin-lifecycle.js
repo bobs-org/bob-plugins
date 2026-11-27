@@ -745,6 +745,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.setupNotebookData(); this.setupAlbumData(); this.setupProjectsData(); this.setupAreasData(); this.setupBankData(); this.setupBankActions(); this.setupBankWalk();
     this.setupBankCards(); this.setupBankBadge(); this.setupBankMarks(); this.setupBankSetup(); this.setupBankSetupCard(); this.setupSchemaDoubleEquals?.();
     this.setupNotebookCatalog(); this.setupAlbumCatalog(); this.setupProjectsCatalog(); this.setupAreasCatalog(); this.setupAlbumRecords(); this.setupNotebookHeader(); this.setupAlbumHeader(); this.setupHomeCard(); this.setupProseNoteCard?.(); this.setupRecordSheet?.(); this.setupIntentionCard?.(); this.setupIntentionUpdate?.(); this.setupIntentionCardEditor?.(); this.setupIntentionCardNavigation?.(); this.setupRecordUpdate?.(); this.setupPropertyUpdate?.(); this.setupRecordCard?.(); this.setupPropertyEditorEntrypoints?.(); this.setupPropertyEditorSettingsEntrypoints?.(); this.setupPropertyCapabilityRouting?.(); this.setupSubscriptionSurfaces(); this.setupAlbumSchemaEntrypoints?.(); this.setupAlbumYamlExcursion?.();
+    this.setupCabinetHostCatalogs?.();
     this.setupNotebookCard?.();
     this.setupRefNoteCard?.();
     this.setupReadingBoardBlock();

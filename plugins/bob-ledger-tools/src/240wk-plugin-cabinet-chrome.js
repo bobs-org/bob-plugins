@@ -45,6 +45,7 @@ function propertyCardCabinetAppendActions(doc, trail, actions) {
     if (action.title) button.setAttribute("title", String(action.title));
     if (action.ariaLabel) button.setAttribute("aria-label", String(action.ariaLabel));
     propertyCardCabinetSetText(button, action.label);
+    button.disabled = action.disabled === true;
     button.addEventListener("click", (event) => {
       try { event?.preventDefault?.(); } catch (_) {}
       try { event?.stopPropagation?.(); } catch (_) {}

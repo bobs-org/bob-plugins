@@ -185,7 +185,13 @@ class BobLedgerToolsHomeCardFootMixin {
         stamp: null,
       };
     }
-    return propertyCardFootAdapterExtra(path, spec);
+    const extra = propertyCardFootAdapterExtra(path, spec);
+    try {
+      extra.cabinetDigest = propertyCardCabinetHostDigest?.(
+        this, homeCardPath(path), this.homeCardSourceCache?.get?.(homeCardPath(path)),
+      ) || "";
+    } catch (_) { extra.cabinetDigest = ""; }
+    return extra;
   }
 
   homeCardFootHandlers(path) {
@@ -220,6 +226,7 @@ class BobLedgerToolsHomeCardFootMixin {
       {
         plugin: this,
         view: options?.view || null,
+        readingScope: options?.readingScope || null,
         component: options?.component || this,
         source: options?.sourceText,
         frontmatter: options?.frontmatter || propertyCardFootAdapterFrontmatter(this, key),

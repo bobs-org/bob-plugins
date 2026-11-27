@@ -151,8 +151,14 @@ class BobLedgerToolsAreasCatalogMixin {
 
   areasPaintReading(el, sourcePath, folds = null, allowAnchor = true) {
     const options = this.areasCatalogOptions(sourcePath, folds);
+    const reading = typeof propertyCardReadingViewFor === "function" ? propertyCardReadingViewFor(this.app, el) : null;
+    options.view = reading?.view || null;
     const callouts = areasFindCallouts(el);
     for (const callout of callouts) areasPaintCallout(callout, options);
+    if (propertyCardCabinetMountedInRoot?.(el, sourcePath, "areas")) {
+      this.areasCatalogCleanAnchor(el);
+      return;
+    }
     const catalog = options.catalog;
     const heading = Array.from(el.querySelectorAll?.("h2") || []).find((head) =>
       !notebookInsideCode(head) && /^Areas\s*$/i.test(head.childNodes?.[0]?.textContent || head.textContent || ""));
@@ -209,11 +215,13 @@ class BobLedgerToolsAreasCatalogMixin {
       return;
     }
     const options = this.areasCatalogOptions(path, this.areasCatalogFoldMap(view));
+    options.view = view;
     for (const callout of areasFindCallouts(view.dom)) {
       if (!callout.closest?.(".markdown-embed")) areasPaintCallout(callout, options);
     }
     for (const host of view.dom?.querySelectorAll?.(".bob-areas-standalone, .bob-areas-anchor") || []) {
       if (host.closest?.('[data-callout="areas"]') || host.closest?.(".markdown-embed")) continue;
+      if (propertyCardCabinetMounted?.(view, path, "areas")) { host.remove?.(); continue; }
       areasPaintStandalone(host, options);
     }
   }
@@ -221,6 +229,7 @@ class BobLedgerToolsAreasCatalogMixin {
   buildAreasCatalogDecorations(view) {
     const path = this.areasCatalogLivePath(view);
     if (!path || !Decoration || !WidgetType || !RangeSetBuilder) return Decoration?.none;
+    if (propertyCardCabinetMounted?.(view, path, "areas")) return Decoration.none;
     const text = view.state.doc.toString();
     if (areasCardHasCallout(text)) return Decoration.none;
     const folds = this.areasCatalogFoldMap(view);

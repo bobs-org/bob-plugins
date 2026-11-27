@@ -373,6 +373,7 @@ function notebookPaintCallout(callout, options = {}) {
   if (!callout) {
     return false;
   }
+  if (!options.cabinetBody && propertyCardCabinetStandDown?.(callout, options.view, options.sourcePath, "notebooks")) return false;
   const doc = options.doc || notebookDomDoc(callout);
   const hue = options.hue || null;
   try {

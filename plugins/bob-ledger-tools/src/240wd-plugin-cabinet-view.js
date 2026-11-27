@@ -96,6 +96,43 @@ function propertyCardCabinetStackForView(view, path = propertyCardCabinetViewPat
   return null;
 }
 
+function propertyCardCabinetMounted(view, path, kind) {
+  try {
+    const normalized = propertyCardCabinetPath(path);
+    if (!normalized || !kind) return false;
+    const stack = propertyCardCabinetStackForView(view, normalized);
+    if (!stack) return false;
+    return Array.from(stack.querySelectorAll?.(`[${PROPERTY_CARD_CABINET_KIND_ATTR}]`) || []).some((panel) =>
+      panel.getAttribute?.(PROPERTY_CARD_CABINET_KIND_ATTR) === kind
+      && propertyCardCabinetPath(panel.getAttribute?.("data-cabinet-source") || "") === normalized);
+  } catch (_) {
+    return false;
+  }
+}
+
+function propertyCardCabinetMountedInRoot(root, path, kind) {
+  try {
+    const normalized = propertyCardCabinetPath(path);
+    if (!root || !normalized || !kind) return false;
+    const scopes = [root, root.closest?.(".markdown-preview-view"), root.closest?.(".markdown-source-view")]
+      .filter((scope, index, all) => scope && all.indexOf(scope) === index);
+    for (const scope of scopes) {
+      const stacks = [];
+      if (scope.matches?.(`.${PROPERTY_CARD_CABINET_STACK_CLASS}`)) stacks.push(scope);
+      stacks.push(...Array.from(scope.querySelectorAll?.(`.${PROPERTY_CARD_CABINET_STACK_CLASS}`) || []));
+      for (const stack of stacks) {
+        if (propertyCardCabinetPath(stack.getAttribute?.("data-cabinet-source") || "") !== normalized) continue;
+        if (Array.from(stack.querySelectorAll?.(`[${PROPERTY_CARD_CABINET_KIND_ATTR}]`) || []).some((panel) =>
+          panel.getAttribute?.(PROPERTY_CARD_CABINET_KIND_ATTR) === kind
+          && propertyCardCabinetPath(panel.getAttribute?.("data-cabinet-source") || "") === normalized)) return true;
+      }
+    }
+    return false;
+  } catch (_) {
+    return false;
+  }
+}
+
 function propertyCardCabinetCollectRows(stack, path) {
   const rows = [];
   const panels = Array.from(stack?.querySelectorAll?.(`[${PROPERTY_CARD_CABINET_KIND_ATTR}]`) || []);

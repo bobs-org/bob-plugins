@@ -190,6 +190,8 @@ class BobLedgerToolsNotebookCatalogMixin {
   paintNotebookCatalogReading(el, sourcePath) {
     const state = this.notebookCatalogState();
     const options = this.notebookCatalogPaintOptions(sourcePath, state);
+    const reading = typeof propertyCardReadingViewFor === "function" ? propertyCardReadingViewFor(this.app, el) : null;
+    options.view = reading?.view || null;
     const doc = notebookDomDoc(el);
     const callouts = notebookFindCallouts(el).filter((node) => !notebookInsideCode(node));
     for (const callout of callouts) {
@@ -203,7 +205,8 @@ class BobLedgerToolsNotebookCatalogMixin {
     // Host-scope chrome; when no report has loaded yet, allow notes whose
     // rendered view holds a callout (the source-text region check lives in
     // Live Preview). Callout styling above stays unchanged.
-    const allowChrome = Boolean(catalog) || (!state.report && callouts.length > 0);
+    const mounted = propertyCardCabinetMountedInRoot?.(el, sourcePath, "notebooks") === true;
+    const allowChrome = !mounted && (Boolean(catalog) || (!state.report && callouts.length > 0));
     let retryModel = this.notebookCatalogRetryModel(sourcePath, state);
     let syncModel = this.notebookCatalogSyncModel(sourcePath, state, Boolean(heading));
     let statusModel = this.notebookCatalogStatusModel(sourcePath, state);
@@ -431,6 +434,7 @@ class BobLedgerToolsNotebookCatalogMixin {
       const catalog = typeof notebookHostCatalog === "function"
         ? notebookHostCatalog(state, filePath)
         : null;
+      if (propertyCardCabinetMounted?.(view, filePath, "notebooks")) return Decoration.none;
       const hasLocalRegion = regions.length > 0;
       const allowChrome = Boolean(catalog) || (!state.report && hasLocalRegion);
       if (!allowChrome) {
@@ -572,6 +576,7 @@ class BobLedgerToolsNotebookCatalogMixin {
         return false;
       }
       const options = this.notebookCatalogPaintOptions(filePath);
+      options.view = view;
       const callouts = notebookFindCallouts(view.dom).filter((node) => !notebookInsideCode(node));
       for (const callout of callouts) {
         notebookPaintCallout(callout, options);

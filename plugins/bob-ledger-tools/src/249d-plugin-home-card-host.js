@@ -595,6 +595,7 @@ class BobLedgerToolsHomeCardMixin {
       return JSON.stringify([
         model,
         extra?.footDigest || "",
+        extra?.cabinetDigest || "",
         extra?.footOpen === true,
         extra?.collapsed === true,
         extra?.editorAvailable === true,
@@ -658,7 +659,14 @@ class BobLedgerToolsHomeCardMixin {
     let header = slotNode || bodyNodes[0] || null;
     const focusKey = this.homeCardFocusKey(header, doc);
     const extra = typeof this.homeCardFootExtra === "function" ? this.homeCardFootExtra(sourcePath, model) : null;
-    const options = { ...this.homeCardOptions(sourcePath, model), footSpec: extra?.footSpec };
+    const options = {
+      ...this.homeCardOptions(sourcePath, model),
+      footSpec: extra?.footSpec,
+      view: reading?.view || null,
+      readingScope: reading ? scope : null,
+      component: this,
+      sourceText: this.homeCardSourceCache?.get?.(sourcePath) || "",
+    };
     const signature = this.homeCardSignature(model, {
       ...extra,
       collapsed: options.collapsed,

@@ -136,8 +136,18 @@ class BobLedgerToolsProjectsCatalogMixin {
 
   paintProjectsCatalogReading(el, sourcePath, folds, allowAnchor = true) {
     const options = this.projectsCatalogOptions(sourcePath, folds);
+    const reading = typeof propertyCardReadingViewFor === "function" ? propertyCardReadingViewFor(this.app, el) : null;
+    options.view = reading?.view || null;
     const callouts = projectsFindCallouts(el);
     for (const callout of callouts) projectsPaintCallout(callout, options);
+    if (propertyCardCabinetMountedInRoot?.(el, sourcePath, "projects")) {
+      for (const cls of [PROJECTS_STATUS_CLASS, PROJECTS_ANCHOR_CLASS, PROJECTS_HEADER_CLASS, PROJECTS_CLOSED_CLASS]) {
+        for (const node of Array.from(el.querySelectorAll?.(`.${cls}`) || [])) {
+          if (!node.closest?.('[data-callout="projects"]')) node.remove?.();
+        }
+      }
+      return;
+    }
     // Hosts without a stored callout get an actionable anchor at their
     // Projects heading, H1, or safe body position. With no children and a
     // current catalog, no empty card remains.
@@ -218,15 +228,20 @@ class BobLedgerToolsProjectsCatalogMixin {
       return;
     }
     const options = this.projectsCatalogOptions(path, this.projectsCatalogFoldMap(view));
+    options.view = view;
     for (const callout of projectsFindCallouts(view.dom)) {
       // Embedded notes have their own source identity, never the outer editor's.
       if (!callout.closest?.(".markdown-embed")) projectsPaintCallout(callout, options);
+    }
+    if (propertyCardCabinetMounted?.(view, path, "projects")) {
+      for (const node of Array.from(view.dom?.querySelectorAll?.(`.${PROJECTS_ANCHOR_CLASS}`) || [])) node.remove?.();
     }
   }
 
   buildProjectsCatalogDecorations(view) {
     const path = this.projectsCatalogLivePath(view);
     if (!path || !Decoration || !WidgetType || !RangeSetBuilder) return Decoration?.none;
+    if (propertyCardCabinetMounted?.(view, path, "projects")) return Decoration.none;
     const text = view.state.doc.toString();
     const regions = projectsCardSourceRegions(text);
     const state = this.projectsReportState();

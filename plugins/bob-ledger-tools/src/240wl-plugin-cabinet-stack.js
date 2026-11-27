@@ -124,6 +124,12 @@ function propertyCardCabinetProviderBody(panel, provider, context, kind, path, p
       view: context?.view || null,
       component: context?.component || context?.plugin || null,
       container: body,
+      species: panel?.__bobCabinetProviderMount?.species || "",
+      source: panel?.__bobCabinetProviderMount?.source || "",
+      frontmatter: panel?.__bobCabinetProviderMount?.frontmatter || {},
+      readingScope: context?.readingScope || null,
+      releaseClaim: typeof panel?.__bobCabinetClaimRelease === "function"
+        ? panel.__bobCabinetClaimRelease : () => false,
     });
     Promise.resolve(result).then(() => {
       state.pending = false;
@@ -148,6 +154,14 @@ function propertyCardCabinetBuildProviderPanel(doc, path, species, kind, provide
   if (!panel) return null;
   panel.setAttribute("data-cabinet-kind", kind);
   panel.setAttribute("data-cabinet-source", path);
+  panel.__bobCabinetProviderMount = {
+    provider,
+    applied,
+    species,
+    source: providerContext?.source || "",
+    frontmatter: providerContext?.frontmatter || {},
+    readingScope: providerContext?.readingScope || null,
+  };
   if (problems) panel.setAttribute("data-cabinet-problems", problems);
   let paintKey = "";
   try { paintKey = String(provider.paintKey(path) || ""); } catch (_) {}
@@ -231,7 +245,7 @@ function propertyCardCabinetsAssemble(parent, pathValue, footEl, context = {}) {
     const species = card.getAttribute?.("data-card-kind") || "";
     const source = propertyCardCabinetContextSource({ ...context, spec: context.spec }, path);
     const frontmatter = context?.frontmatter || context?.spec?.frontmatter || {};
-    const providerContext = { path, species, source, frontmatter };
+    const providerContext = { path, species, source, frontmatter, readingScope: context?.readingScope || null };
     for (const kind of propertyCardCabinetOrder(Object.keys(PROPERTY_CARD_CABINET_KINDS))) {
       if (PROPERTY_CARD_CABINET_KINDS[kind].role !== "content" || claimed.has(kind)) continue;
       const panel = propertyCardCabinetBuildProviderPanel(doc, path, species, kind, providerContext, context);
@@ -268,11 +282,43 @@ function propertyCardCabinetsAssemble(parent, pathValue, footEl, context = {}) {
     }
     card.appendChild(stack);
 
+    const providerReleases = [];
+    for (const row of panels) {
+      const mount = row.panel?.__bobCabinetProviderMount;
+      if (!mount || typeof mount.provider?.onMounted !== "function") continue;
+      try {
+        const release = mount.provider.onMounted({
+          path,
+          kind: row.kind,
+          panel: row.panel,
+          view: context?.view || null,
+          component: context?.component || context?.plugin || null,
+          applied: mount.applied,
+          source: mount.source,
+          species: mount.species,
+          frontmatter: mount.frontmatter,
+          readingScope: mount.readingScope,
+        });
+        if (typeof release === "function") {
+          row.panel.__bobCabinetClaimRelease = release;
+          providerReleases.push(release);
+        }
+      } catch (_) {}
+    }
+    stack.__bobCabinetReleaseProviders = () => {
+      for (const release of providerReleases.splice(0)) {
+        try { release(); } catch (_) {}
+      }
+    };
+
     const view = context?.view || null;
     if (view && context?.plugin && typeof propertyCardCabinetRegisterMount === "function") {
       const repaint = typeof context.repaint === "function" ? context.repaint : null;
       const release = propertyCardCabinetRegisterMount(context.plugin, view, path, stack, repaint);
-      try { context.component?.register?.(release); } catch (_) {}
+      try { context.component?.register?.(() => {
+        try { stack.__bobCabinetReleaseProviders?.(); } catch (_) {}
+        release();
+      }); } catch (_) {}
     }
     return stack;
   } catch (_) {

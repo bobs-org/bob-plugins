@@ -113,12 +113,18 @@ function propertyCardCabinetReleasePath(path) {
 function propertyCardCabinetRegisterMount(plugin, view, path, stack, repaint) {
   const normalized = propertyCardCabinetPath(path);
   if (!plugin || !view || !normalized || !stack) return () => false;
+  for (const previous of Array.from(propertyCardCabinetMounts)) {
+    if (previous.view !== view || previous.path !== normalized) continue;
+    try { previous.stack?.__bobCabinetReleaseProviders?.(); } catch (_) {}
+    propertyCardCabinetMounts.delete(previous);
+  }
   const entry = { plugin, view, path: normalized, stack, repaint: typeof repaint === "function" ? repaint : null };
   propertyCardCabinetMounts.add(entry);
   let live = true;
   return () => {
     if (!live) return false;
     live = false;
+    try { entry.stack?.__bobCabinetReleaseProviders?.(); } catch (_) {}
     return propertyCardCabinetMounts.delete(entry);
   };
 }

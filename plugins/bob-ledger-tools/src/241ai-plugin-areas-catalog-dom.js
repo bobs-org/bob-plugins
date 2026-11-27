@@ -292,6 +292,7 @@ function areasCleanRow(li) {
 }
 
 function areasPaintCallout(callout, options) {
+  if (!options?.cabinetBody && propertyCardCabinetStandDown?.(callout, options?.view, options?.sourcePath, "areas")) return false;
   const catalog = areasCardHost(options.state, options.sourcePath);
   if (!catalog) {
     areasCleanCallout(callout);

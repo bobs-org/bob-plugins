@@ -519,5 +519,7 @@
   "383-snooze-definition-exports.js",
   "384-snooze-woken-pills-exports.js",
   "385-snooze-row-paint-exports.js",
-  "386-snooze-plan-meter-exports.js"
+  "386-snooze-plan-meter-exports.js",
+  "387-snooze-facts-api.js",
+  "388-snooze-facts-exports.js"
 ]

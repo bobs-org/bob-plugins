@@ -260,6 +260,11 @@ class BobLedgerToolsPlugin extends Plugin {
         nextWakeAt: () => this.snoozedNextWakeAt(),
         ready: (now) => this.isSnoozedCacheReady(now),
       }),
+      // Read-only Snooze Card facts (snoozeFacts namespace v1): Bob-zone
+      // date/time, today's parsed Events, the active Snoozed row for an
+      // identity, and on-clock plan counts. Additive: top-level api stays
+      // v3. Every member is synchronous and never throws.
+      snoozeFacts: createSnoozeFactsApi(this),
       nextBudget: () => {
         const { caps } = loadPlanCaps();
         return laneBudgetFromTasks(

@@ -272,8 +272,10 @@
   "680-plugin-link-parse.js",
   "681-plugin-quick-roll.js",
   "682-plugin-parent-change.js",
+  "683-snooze-runtime-resolve.js",
   "684-notebook-create-model.js",
   "685-plugin-notebook-create.js",
+  "686-snooze-runtime-commit.js",
   "687-plugin-window-prefix.js",
   "687a-plugin-window-tab-jump.js",
   "688-plugin-window-prefix-commands.js",
@@ -327,5 +329,6 @@
   "736-snooze-model-exports.js",
   "737-snoozed-cleanup-exports.js",
   "738-snooze-mutation-planner.js",
-  "739-snooze-mutation-exports.js"
+  "739-snooze-mutation-exports.js",
+  "742-snooze-runtime-exports.js"
 ]

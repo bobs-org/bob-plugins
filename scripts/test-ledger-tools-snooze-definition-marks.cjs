@@ -210,6 +210,30 @@ test("every canonical SM-D vector runs verbatim through the shared display model
       item.expected,
       item.id + " display model",
     );
+    if (actual.mark === "clock") {
+      const time = actual.text.replace(/^⏰\s*/, "").replace(/ · due$/, "");
+      const element = buildSnoozeMarkElement(fakeElementDoc(), {
+        key: item.id,
+        time,
+        tone: actual.tone,
+        tooltip: actual.tooltip,
+      });
+      assert.ok(element, item.id + " clock host builds from " + JSON.stringify(actual));
+      const state = actual.tone === "amber"
+        ? "due"
+        : actual.tone === "muted"
+          ? "blocked"
+          : "asleep";
+      assert.ok(
+        element.attrs.class.includes("bob-snooze-mark--" + state),
+        item.id + " emits the state class",
+      );
+      assert.equal(
+        element.attrs["data-bob-snooze-label"],
+        time + (state === "due" ? " · due" : ""),
+        item.id + " emits the visible label",
+      );
+    }
   }
 });
 
@@ -314,21 +338,32 @@ test("mark element is an empty copy-safe host with tone, key, and time", () => {
   assert.equal(dom.textContent, "");
   assert.equal(
     dom.attrs.class,
-    "bob-snooze-mark bob-snooze-mark--indigo",
+    "bob-snooze-mark bob-snooze-mark--asleep",
   );
   assert.equal(dom.attrs.role, "img");
   assert.equal(dom.attrs["data-tooltip-position"], "top");
   assert.equal(dom.attrs["data-bob-snooze-key"], "job.md#email-dan");
   assert.equal(dom.attrs["data-bob-snooze-time"], "15:30");
+  assert.equal(dom.attrs["data-bob-snooze-label"], "15:30");
   assert.ok(!("title" in dom.attrs));
   const due = buildSnoozeMarkElement(doc, {
     key: "job.md#email-dan",
     time: "15:30",
-    tone: "due",
+    tone: "amber",
     tooltip: "x",
     pulse: true,
   });
   assert.ok(due.attrs.class.includes("is-pulsing"));
+  assert.ok(due.attrs.class.includes("bob-snooze-mark--due"));
+  assert.equal(due.attrs["data-bob-snooze-label"], "15:30 · due");
+  const blocked = buildSnoozeMarkElement(doc, {
+    key: "job.md#email-dan",
+    time: "15:30",
+    tone: "muted",
+    tooltip: "waits",
+  });
+  assert.ok(blocked.attrs.class.includes("bob-snooze-mark--blocked"));
+  assert.equal(blocked.attrs["data-bob-snooze-label"], "15:30");
   assert.equal(buildSnoozeMarkElement(doc, { key: "", time: "15:30" }), null);
   assert.equal(
     buildSnoozeMarkElement(doc, { key: "k", time: "3:30" }),
@@ -730,12 +765,12 @@ test("Reading: desired rows resolve through the same snapshot rules", () => {
   );
 });
 
-test("Reading: apply inserts a copy-safe mark and removes it when neutral", () => {
+test("Reading and Live Preview emit identical state-aware mark hosts", () => {
   const plugin = makeSnoozeMarkPlugin();
   const li = fakeReadingLi(null);
   const desired = {
     time: "15:30",
-    tone: "indigo",
+    tone: "amber",
     tooltip: "Snoozed until 15:30",
   };
   plugin.snoozeMarkStampRow(li, "job.md#email-dan");
@@ -743,9 +778,22 @@ test("Reading: apply inserts a copy-safe mark and removes it when neutral", () =
   plugin.snoozeMarkApplyToRow(li, "job.md#email-dan", desired);
   assert.equal(li.children.length, 1);
   const mark = li.children[0];
+  const preview = buildSnoozeMarkElement(fakeElementDoc(), {
+    key: "job.md#email-dan",
+    ...desired,
+  });
+  assert.deepEqual(mark.attrs, preview.attrs);
   assert.equal(mark.attrs["data-bob-snooze-key"], "job.md#email-dan");
   assert.equal(mark.attrs["data-bob-snooze-time"], "15:30");
+  assert.equal(mark.attrs["data-bob-snooze-label"], "15:30 · due");
+  assert.ok(mark.attrs.class.includes("bob-snooze-mark--due"));
   assert.equal(mark.textContent, "");
+  plugin.snoozeMarkApplyToRow(li, "job.md#email-dan", {
+    ...desired,
+    tone: "muted",
+  });
+  assert.ok(mark.attrs.class.includes("bob-snooze-mark--blocked"));
+  assert.equal(mark.attrs["data-bob-snooze-label"], "15:30");
   plugin.snoozeMarkApplyToRow(li, "job.md#email-dan", null);
   assert.equal(li.children.length, 0);
 });
@@ -847,7 +895,11 @@ test("styles.css keeps the snooze contract: slot, time, tones, gates", () => {
     "--bob-snooze-mark-glyph",
     ".bob-snooze-mark {",
     ".bob-snooze-mark::after {",
-    "attr(data-bob-snooze-time)",
+    "attr(data-bob-snooze-label)",
+    "mask-image: var(--bob-snooze-mark-glyph)",
+    "min-width: 1.2em",
+    "width: auto",
+    "white-space: nowrap",
     "font-variant-numeric: tabular-nums",
     ".bob-snooze-mark--asleep",
     ".bob-snooze-mark--due",

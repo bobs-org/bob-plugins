@@ -312,12 +312,26 @@ function snoozeMarkModifierPressed(event, isMac) {
 
 // Listener-free mark element, so copying a line never copies the
 // clock: an empty `span.bob-snooze-mark` (plus
-// `bob-snooze-mark--<tone>`) with `role=img`, an accessible label,
-// a top-positioned Obsidian tooltip, `data-bob-snooze-key`, and
-// `data-bob-snooze-time` (the `HH:MM` the time rides in on through
-// `::after`). It has no text and no `title`. `doc` provides
+// state class (`bob-snooze-mark--asleep|due|blocked`) with `role=img`,
+// an accessible label, a top-positioned Obsidian tooltip,
+// `data-bob-snooze-key`, `data-bob-snooze-time` (the bare `HH:MM`),
+// and `data-bob-snooze-label` (the visible state-aware label). It has
+// no text and no `title`. `doc` provides
 // `createElement` so tests can pass a fake document. Never throws:
 // bad input yields null.
+function snoozeMarkClassForTone(tone) {
+  const state = tone === "amber"
+    ? "due"
+    : tone === "muted"
+      ? "blocked"
+      : "asleep";
+  return "bob-snooze-mark--" + state;
+}
+
+function snoozeMarkLabelForTone(time, tone) {
+  return time + (tone === "amber" ? " · due" : "");
+}
+
 function buildSnoozeMarkElement(doc, options) {
   try {
     if (!doc || typeof doc.createElement !== "function") {
@@ -343,8 +357,8 @@ function buildSnoozeMarkElement(doc, options) {
     const span = doc.createElement("span");
     span.setAttribute(
       "class",
-      "bob-snooze-mark bob-snooze-mark--" +
-        tone +
+      "bob-snooze-mark " +
+        snoozeMarkClassForTone(tone) +
         (opts.pulse === true ? " is-pulsing" : ""),
     );
     span.setAttribute("role", "img");
@@ -352,6 +366,7 @@ function buildSnoozeMarkElement(doc, options) {
     span.setAttribute("data-tooltip-position", "top");
     span.setAttribute("data-bob-snooze-key", key);
     span.setAttribute("data-bob-snooze-time", time);
+    span.setAttribute("data-bob-snooze-label", snoozeMarkLabelForTone(time, tone));
     try {
       span.textContent = "";
     } catch (error) {

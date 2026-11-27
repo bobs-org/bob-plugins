@@ -35371,12 +35371,26 @@ function snoozeMarkModifierPressed(event, isMac) {
 
 // Listener-free mark element, so copying a line never copies the
 // clock: an empty `span.bob-snooze-mark` (plus
-// `bob-snooze-mark--<tone>`) with `role=img`, an accessible label,
-// a top-positioned Obsidian tooltip, `data-bob-snooze-key`, and
-// `data-bob-snooze-time` (the `HH:MM` the time rides in on through
-// `::after`). It has no text and no `title`. `doc` provides
+// state class (`bob-snooze-mark--asleep|due|blocked`) with `role=img`,
+// an accessible label, a top-positioned Obsidian tooltip,
+// `data-bob-snooze-key`, `data-bob-snooze-time` (the bare `HH:MM`),
+// and `data-bob-snooze-label` (the visible state-aware label). It has
+// no text and no `title`. `doc` provides
 // `createElement` so tests can pass a fake document. Never throws:
 // bad input yields null.
+function snoozeMarkClassForTone(tone) {
+  const state = tone === "amber"
+    ? "due"
+    : tone === "muted"
+      ? "blocked"
+      : "asleep";
+  return "bob-snooze-mark--" + state;
+}
+
+function snoozeMarkLabelForTone(time, tone) {
+  return time + (tone === "amber" ? " · due" : "");
+}
+
 function buildSnoozeMarkElement(doc, options) {
   try {
     if (!doc || typeof doc.createElement !== "function") {
@@ -35402,8 +35416,8 @@ function buildSnoozeMarkElement(doc, options) {
     const span = doc.createElement("span");
     span.setAttribute(
       "class",
-      "bob-snooze-mark bob-snooze-mark--" +
-        tone +
+      "bob-snooze-mark " +
+        snoozeMarkClassForTone(tone) +
         (opts.pulse === true ? " is-pulsing" : ""),
     );
     span.setAttribute("role", "img");
@@ -35411,6 +35425,7 @@ function buildSnoozeMarkElement(doc, options) {
     span.setAttribute("data-tooltip-position", "top");
     span.setAttribute("data-bob-snooze-key", key);
     span.setAttribute("data-bob-snooze-time", time);
+    span.setAttribute("data-bob-snooze-label", snoozeMarkLabelForTone(time, tone));
     try {
       span.textContent = "";
     } catch (error) {
@@ -172441,6 +172456,10 @@ class BobLedgerToolsSnoozeMarksReadingMixin {
           if (existing.dataset) {
             existing.dataset.bobSnoozeKey = key;
             existing.dataset.bobSnoozeTime = desired.time;
+            existing.dataset.bobSnoozeLabel = snoozeMarkLabelForTone(
+              desired.time,
+              desired.tone,
+            );
           }
         } catch (error) {
           // Dataset update is best-effort.
@@ -172448,13 +172467,17 @@ class BobLedgerToolsSnoozeMarksReadingMixin {
         try {
           existing.setAttribute("data-bob-snooze-key", key);
           existing.setAttribute("data-bob-snooze-time", desired.time);
+          existing.setAttribute(
+            "data-bob-snooze-label",
+            snoozeMarkLabelForTone(desired.time, desired.tone),
+          );
         } catch (error) {
           // Attribute update is best-effort.
         }
         try {
           existing.setAttribute(
             "class",
-            "bob-snooze-mark bob-snooze-mark--" + desired.tone,
+            "bob-snooze-mark " + snoozeMarkClassForTone(desired.tone),
           );
         } catch (error) {
           // Class update is best-effort.
@@ -182306,10 +182329,12 @@ class BobLedgerToolsSnoozedPlanChipMixin {
       const cls =
         "bob-plan-chip bob-plan-snoozed" +
         (due ? " bob-plan-snoozed-due" : "");
-      const chip = container.createEl("a", {
-        cls,
-        text: typeof meter.text === "string" ? meter.text : "⏰",
-      });
+      const chip = container.createEl("a", { cls });
+      const text = typeof meter.text === "string" ? meter.text : "⏰";
+      const rest = text.replace(/^⏰\s*/, "");
+      const glyph = chip.createEl("span", { cls: "bob-snooze-plan-glyph" });
+      glyph.setAttribute("aria-hidden", "true");
+      chip.appendText(rest);
       chip.setAttribute("href", "#");
       chip.setAttribute("title", meter.tooltip || "Snoozed tasks");
       chip.setAttribute("aria-label", meter.tooltip || "Snoozed tasks");

@@ -135,6 +135,24 @@ test("plan chip is an accessible focused link and jumps to Snoozed", () => {
   const attrs = {};
   const listeners = {};
   const chip = {
+    children: [],
+    text: [],
+    createEl(tag, options) {
+      const attrs = {};
+      const child = {
+        tag,
+        options,
+        attrs,
+        setAttribute(name, value) {
+          attrs[name] = value;
+        },
+      };
+      this.children.push(child);
+      return child;
+    },
+    appendText(value) {
+      this.text.push(String(value));
+    },
     setAttribute(name, value) {
       attrs[name] = value;
     },
@@ -166,7 +184,11 @@ test("plan chip is an accessible focused link and jumps to Snoozed", () => {
     }),
     path,
   );
-  assert.equal(chip.options.text, "⏰ 1 · 16:00");
+  assert.equal(chip.options.text, undefined);
+  assert.equal(chip.children.length, 1);
+  assert.equal(chip.children[0].options.cls, "bob-snooze-plan-glyph");
+  assert.equal(chip.children[0].attrs["aria-hidden"], "true");
+  assert.deepEqual(chip.text, ["1 · 16:00"]);
   assert.match(chip.options.cls, /bob-plan-snoozed-due/);
   assert.doesNotMatch(chip.options.cls, /bob-plan-over|bob-work-tone/);
   assert.equal(attrs.href, "#");

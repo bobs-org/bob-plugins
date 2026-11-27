@@ -189,6 +189,10 @@ class BobLedgerToolsSnoozeMarksReadingMixin {
           if (existing.dataset) {
             existing.dataset.bobSnoozeKey = key;
             existing.dataset.bobSnoozeTime = desired.time;
+            existing.dataset.bobSnoozeLabel = snoozeMarkLabelForTone(
+              desired.time,
+              desired.tone,
+            );
           }
         } catch (error) {
           // Dataset update is best-effort.
@@ -196,13 +200,17 @@ class BobLedgerToolsSnoozeMarksReadingMixin {
         try {
           existing.setAttribute("data-bob-snooze-key", key);
           existing.setAttribute("data-bob-snooze-time", desired.time);
+          existing.setAttribute(
+            "data-bob-snooze-label",
+            snoozeMarkLabelForTone(desired.time, desired.tone),
+          );
         } catch (error) {
           // Attribute update is best-effort.
         }
         try {
           existing.setAttribute(
             "class",
-            "bob-snooze-mark bob-snooze-mark--" + desired.tone,
+            "bob-snooze-mark " + snoozeMarkClassForTone(desired.tone),
           );
         } catch (error) {
           // Class update is best-effort.

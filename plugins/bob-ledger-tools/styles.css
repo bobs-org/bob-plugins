@@ -3304,29 +3304,35 @@ body.bob-today-marks-off .bob-today-mark {
    The host is an empty `span.bob-snooze-mark`; CSS `::before` draws
    the Lucide `alarm-clock` glyph from `--bob-snooze-mark-glyph`
    through a mask tinted `currentColor`, and `::after` shows the time
-   from `attr(data-bob-snooze-time)` with tabular numbers, so copying
+   from `attr(data-bob-snooze-label)` with tabular numbers, so copying
    a line never picks up the clock and a theme snippet can swap the
-   glyph with no code change. Asleep is indigo (a blue/purple mix),
-   Due is amber with one gentle transition pulse, Blocked is muted.
+   glyph with no code change. The mask variable holds the SVG; the
+   pseudo-element box is tinted `currentColor`. Asleep is indigo (a
+   blue/purple mix), Due is amber with one gentle transition pulse,
+   Blocked is muted.
    Shape plus words carry every state; color is never the only cue.
-   The box matches the Today mark metrics, so the clock never changes
-   line height. */
+   The box keeps the Today mark's height, margins, and alignment while
+   growing in width to fit the time and due label. */
 
 body {
-  --bob-snooze-mark-glyph: "⏰";
+  --bob-snooze-mark-glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='13' r='8'/%3E%3Cpath d='M12 9v4l2 2'/%3E%3Cpath d='M5 3 2 6'/%3E%3Cpath d='m22 6-3-3'/%3E%3Cpath d='M6.38 18.7 4 21'/%3E%3Cpath d='M17.64 18.67 20 21'/%3E%3C/svg%3E");
 }
 
 .bob-snooze-mark {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 1.2em;
+  justify-content: flex-start;
+  gap: 0.18em;
+  min-width: 1.2em;
+  width: auto;
   height: 1.2em;
   margin-inline: 0.06em 0.3em;
+  padding-inline: 0.16em;
   border-radius: 999px;
   font-size: 0.85em;
   line-height: 1;
   vertical-align: -0.14em;
+  white-space: nowrap;
   user-select: none;
   cursor: default;
   transition: background-color 120ms ease;
@@ -3335,19 +3341,50 @@ body {
 }
 
 .bob-snooze-mark::before {
-  content: var(--bob-snooze-mark-glyph, "⏰");
-  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
-  font-variant-emoji: emoji;
-  line-height: 1;
-  -webkit-mask: none;
-  mask: none;
+  content: "";
+  display: inline-block;
+  flex: 0 0 1em;
+  width: 1em;
+  height: 1em;
+  background-color: currentColor;
+  -webkit-mask-image: var(--bob-snooze-mark-glyph);
+  mask-image: var(--bob-snooze-mark-glyph);
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
 }
 
 .bob-snooze-mark::after {
-  content: attr(data-bob-snooze-time);
+  content: attr(data-bob-snooze-label);
   font-variant-numeric: tabular-nums;
   line-height: 1;
-  margin-inline-start: 0.2em;
+}
+
+.bob-snooze-plan-glyph {
+  display: inline-block;
+  flex: 0 0 1em;
+  width: 1em;
+  height: 1em;
+  vertical-align: -0.1em;
+}
+
+.bob-snooze-plan-glyph::before {
+  content: "";
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  background-color: currentColor;
+  -webkit-mask-image: var(--bob-snooze-mark-glyph);
+  mask-image: var(--bob-snooze-mark-glyph);
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
 }
 
 /* Tones: asleep indigo, due amber, blocked muted. */
@@ -3409,6 +3446,12 @@ body.bob-snooze-marks-off .bob-snooze-mark {
   .bob-snooze-mark {
     outline: 1px solid CanvasText;
   }
+  .bob-snooze-mark::before,
+  .bob-snooze-woke::before,
+  .bob-snooze-plan-glyph::before {
+    forced-color-adjust: none;
+    background-color: CanvasText;
+  }
   .bob-snooze-mark:hover {
     background-color: Canvas;
     outline: 1px solid CanvasText;
@@ -3442,10 +3485,20 @@ body.bob-snooze-marks-off .bob-snooze-mark {
 }
 
 .bob-snooze-woke::before {
-  content: var(--bob-snooze-mark-glyph, "⏰");
-  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
-  font-variant-emoji: emoji;
-  line-height: 1;
+  content: "";
+  display: inline-block;
+  flex: 0 0 1em;
+  width: 1em;
+  height: 1em;
+  background-color: currentColor;
+  -webkit-mask-image: var(--bob-snooze-mark-glyph);
+  mask-image: var(--bob-snooze-mark-glyph);
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
 }
 
 .bob-snooze-woke::after {

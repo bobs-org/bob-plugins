@@ -406,17 +406,35 @@ const SNOOZE_PROBE = `(() => { try {
     const hit = names.find((name) => name.indexOf(prefix) === 0 && name !== prefix);
     return hit ? hit.slice(prefix.length) : "";
   };
-  const defMarks = Array.from(root.querySelectorAll(".bob-snooze-mark")).map((el) => ({
-    key: el.getAttribute("data-bob-snooze-key") || "",
-    time: el.getAttribute("data-bob-snooze-time") || "",
-    tone: toneOf(el, "bob-snooze-mark--"),
-    aria: el.getAttribute("aria-label") || "",
-    text: String(el.textContent || "").replace(/\\s+/g, " ").trim(),
-    title: el.getAttribute("title") || "",
-    visible: visible(el),
-    surface: surfaceOf(el),
-    context: rowContext(el),
-  }));
+  const defMarks = Array.from(root.querySelectorAll(".bob-snooze-mark")).map((el) => {
+    const rect = el.getBoundingClientRect();
+    const style = window.getComputedStyle(el);
+    const row = el.closest(".cm-line, li") || el.parentElement;
+    const rowLineHeight = row ? parseFloat(window.getComputedStyle(row).lineHeight) : NaN;
+    const after = window.getComputedStyle(el, "::after");
+    const before = window.getComputedStyle(el, "::before");
+    return {
+      key: el.getAttribute("data-bob-snooze-key") || "",
+      time: el.getAttribute("data-bob-snooze-time") || "",
+      label: el.getAttribute("data-bob-snooze-label") || "",
+      tone: toneOf(el, "bob-snooze-mark--"),
+      aria: el.getAttribute("aria-label") || "",
+      text: String(el.textContent || "").replace(/\\s+/g, " ").trim(),
+      title: el.getAttribute("title") || "",
+      width: rect.width,
+      height: rect.height,
+      fontSize: parseFloat(style.fontSize),
+      rowLineHeight,
+      afterContent: after.content,
+      color: style.color,
+      beforeMask: before.maskImage || before.webkitMaskImage,
+      beforeBackground: before.backgroundColor,
+      beforeForcedColorAdjust: before.forcedColorAdjust,
+      visible: visible(el),
+      surface: surfaceOf(el),
+      context: rowContext(el),
+    };
+  });
   const todayMarks = Array.from(root.querySelectorAll(".bob-today-mark")).map((el) => ({
     aria: el.getAttribute("aria-label") || "",
     text: String(el.textContent || "").replace(/\\s+/g, " ").trim(),
@@ -430,17 +448,23 @@ const SNOOZE_PROBE = `(() => { try {
     surface: surfaceOf(el),
     context: rowContext(el),
   }));
-  const woken = Array.from(root.querySelectorAll(".bob-snooze-woke")).map((el) => ({
-    pill: toneOf(el, "bob-snooze-woke--"),
-    text: String(el.textContent || "").replace(/\\s+/g, " ").trim(),
-    aria: el.getAttribute("aria-label") || "",
-    title: el.getAttribute("title") || "",
-    time: el.getAttribute("data-bob-snooze-woke-time") || "",
-    line: el.getAttribute("data-bob-snooze-woke-line") || "",
-    visible: visible(el),
-    surface: surfaceOf(el),
-    context: rowContext(el),
-  }));
+  const woken = Array.from(root.querySelectorAll(".bob-snooze-woke")).map((el) => {
+    const before = window.getComputedStyle(el, "::before");
+    return {
+      pill: toneOf(el, "bob-snooze-woke--"),
+      text: String(el.textContent || "").replace(/\\s+/g, " ").trim(),
+      aria: el.getAttribute("aria-label") || "",
+      title: el.getAttribute("title") || "",
+      time: el.getAttribute("data-bob-snooze-woke-time") || "",
+      line: el.getAttribute("data-bob-snooze-woke-line") || "",
+      beforeMask: before.maskImage || before.webkitMaskImage,
+      beforeBackground: before.backgroundColor,
+      beforeForcedColorAdjust: before.forcedColorAdjust,
+      visible: visible(el),
+      surface: surfaceOf(el),
+      context: rowContext(el),
+    };
+  });
   const rowChips = Array.from(root.querySelectorAll(".bob-snooze-row-chip")).map((el) => ({
     text: String(el.textContent || "").replace(/\\s+/g, " ").trim(),
     paint: el.getAttribute("data-bob-snooze-row-paint") || "",
@@ -466,13 +490,20 @@ const SNOOZE_PROBE = `(() => { try {
     surface: surfaceOf(el),
     context: rowContext(el),
   }));
-  const planChips = Array.from(root.querySelectorAll(".bob-plan-snoozed")).map((el) => ({
-    text: String(el.textContent || "").replace(/\\s+/g, " ").trim(),
-    aria: el.getAttribute("aria-label") || "",
-    title: el.getAttribute("title") || "",
-    due: el.classList.contains("bob-plan-snoozed-due"),
-    visible: visible(el),
-  }));
+  const planChips = Array.from(root.querySelectorAll(".bob-plan-snoozed")).map((el) => {
+    const glyph = el.querySelector(".bob-snooze-plan-glyph");
+    const before = glyph ? window.getComputedStyle(glyph, "::before") : null;
+    return {
+      text: String(el.textContent || "").replace(/\\s+/g, " ").trim(),
+      aria: el.getAttribute("aria-label") || "",
+      title: el.getAttribute("title") || "",
+      due: el.classList.contains("bob-plan-snoozed-due"),
+      glyphMask: before ? before.maskImage || before.webkitMaskImage : "none",
+      glyphBackground: before ? before.backgroundColor : "transparent",
+      glyphForcedColorAdjust: before ? before.forcedColorAdjust : "auto",
+      visible: visible(el),
+    };
+  });
   const plugin = window.app && window.app.plugins && window.app.plugins.plugins && window.app.plugins.plugins["bob-ledger-tools"];
   return {
     defMarks, todayMarks, eventTimes, woken, rowChips, readingRows, headingChips, planChips,
@@ -1053,14 +1084,27 @@ async function runE2e(parsed) {
     const asleepKey = "job.md#sz-asleep";
     const asleep = markByKey(defs, asleepKey);
     if (expectTimes("lp-asleep-clock")) {
-      record("lp-asleep-clock", Boolean(asleep) && asleep.tone === "indigo" && asleep.time === colonClock(clocks.asleepHhmm) && String(asleep.aria).startsWith(`Snoozed until ${colonClock(clocks.asleepHhmm)} · in `) && String(asleep.aria).endsWith("Ctrl-click to open the Snoozed row") && !/::/.test(String(asleep.aria)) && (asleep.title || "") === "", JSON.stringify(asleep).slice(0, 300));
+      record("lp-asleep-clock", Boolean(asleep) && asleep.tone === "asleep" && asleep.time === colonClock(clocks.asleepHhmm) && asleep.label === colonClock(clocks.asleepHhmm) && String(asleep.aria).startsWith(`Snoozed until ${colonClock(clocks.asleepHhmm)} · in `) && String(asleep.aria).endsWith("Ctrl-click to open the Snoozed row") && !/::/.test(String(asleep.aria)) && (asleep.title || "") === "", JSON.stringify(asleep).slice(0, 400));
     }
     const due = markByKey(defs, "job.md#sz-due");
     if (expectTimes("lp-due-clock")) {
-      record("lp-due-clock", Boolean(due) && due.tone === "amber" && due.time === colonClock(clocks.dueHhmm) && /due — waking\s*\nCtrl-click/.test(String(due.aria)), JSON.stringify((due) ?? null).slice(0, 300));
+      record("lp-due-clock", Boolean(due) && due.tone === "due" && due.time === colonClock(clocks.dueHhmm) && due.label === `${colonClock(clocks.dueHhmm)} · due` && /due — waking\s*\nCtrl-click/.test(String(due.aria)), JSON.stringify((due) ?? null).slice(0, 400));
     }
     const blocked = markByKey(defs, "job.md#sz-blocked");
-    record("lp-blocked-clock", Boolean(blocked) && blocked.tone === "muted" && /waits on prerequisites\s*\nCtrl-click/.test(String(blocked.aria)), JSON.stringify((blocked) ?? null).slice(0, 300));
+    record("lp-blocked-clock", Boolean(blocked) && blocked.tone === "blocked" && blocked.label === colonClock(clocks.blockedHhmm) && /waits on prerequisites\s*\nCtrl-click/.test(String(blocked.aria)), JSON.stringify((blocked) ?? null).slice(0, 400));
+    const visibleDefs = defs.filter((mark) => mark.visible !== false);
+    const singleLineWidths = visibleDefs.length >= 3 && visibleDefs.every((mark) =>
+      Number.isFinite(mark.height) && Number.isFinite(mark.rowLineHeight) &&
+      mark.height <= mark.rowLineHeight + 1 && mark.width > mark.fontSize * 2.5,
+    );
+    record("lp-clock-single-line-width", singleLineWidths, JSON.stringify(visibleDefs.map((mark) => ({ key: mark.key, width: mark.width, height: mark.height, rowLineHeight: mark.rowLineHeight, fontSize: mark.fontSize }))).slice(0, 600));
+    const stateColors = new Set([asleep && asleep.color, due && due.color, blocked && blocked.color]);
+    record("lp-clock-state-colors", Boolean(asleep && due && blocked) && stateColors.size === 3, JSON.stringify([asleep && asleep.color, due && due.color, blocked && blocked.color]));
+    const dueContent = String(due && due.afterContent || "");
+    const asleepContent = String(asleep && asleep.afterContent || "");
+    const blockedContent = String(blocked && blocked.afterContent || "");
+    record("lp-clock-visible-labels", Boolean(due && /· due/.test(dueContent) && asleep && !/· due/.test(asleepContent) && blocked && !/· due/.test(blockedContent)), JSON.stringify({ dueContent, asleepContent, blockedContent }));
+    record("lp-clock-masked-glyphs", visibleDefs.length >= 3 && visibleDefs.every((mark) => mark.beforeMask && mark.beforeMask !== "none"), JSON.stringify(visibleDefs.map((mark) => mark.beforeMask)).slice(0, 320));
     for (const neutral of ["job.md#sz-ready", "job.md#sz-dup", "job.md#sz-done"]) {
       record(`lp-neutral-${neutral.split("#")[1]}`, !markByKey(defs, neutral), JSON.stringify(markByKey(defs, neutral) || null).slice(0, 160));
     }
@@ -1095,8 +1139,20 @@ async function runE2e(parsed) {
     const rdefs = readingDefMarks(jobReading);
     if (expectTimes("reading-asleep-clock")) {
       const ra = markByKey(rdefs, asleepKey);
-      record("reading-asleep-clock", Boolean(ra) && ra.tone === "indigo" && ra.time === colonClock(clocks.asleepHhmm), JSON.stringify((ra) ?? null).slice(0, 300));
+      record("reading-asleep-clock", Boolean(ra) && ra.tone === "asleep" && ra.time === colonClock(clocks.asleepHhmm) && ra.label === colonClock(clocks.asleepHhmm), JSON.stringify((ra) ?? null).slice(0, 400));
     }
+    const sameReadingHosts = [asleepKey, "job.md#sz-due", "job.md#sz-blocked"].every((key) => {
+      const live = markByKey(defs, key);
+      const reading = markByKey(rdefs, key);
+      return Boolean(live && reading) && ["tone", "time", "label", "aria"].every((field) => live[field] === reading[field]);
+    });
+    record("reading-live-mark-hosts-match", sameReadingHosts, JSON.stringify([asleepKey, "job.md#sz-due", "job.md#sz-blocked"].map((key) => ({ key, live: markByKey(defs, key), reading: markByKey(rdefs, key) }))).slice(0, 800));
+    const readingVisibleDefs = rdefs.filter((mark) => mark.visible !== false);
+    const readingSingleLine = readingVisibleDefs.length >= 3 && readingVisibleDefs.every((mark) =>
+      Number.isFinite(mark.height) && Number.isFinite(mark.rowLineHeight) &&
+      mark.height <= mark.rowLineHeight + 1 && mark.width > mark.fontSize * 2.5,
+    );
+    record("reading-clock-single-line-width", readingSingleLine, JSON.stringify(readingVisibleDefs.map((mark) => ({ key: mark.key, width: mark.width, height: mark.height, rowLineHeight: mark.rowLineHeight, fontSize: mark.fontSize }))).slice(0, 600));
     const stampState = await client.evaluate(`(() => { try {
       const root = document.querySelector(".workspace-leaf.mod-active") || document;
       return {
@@ -1148,6 +1204,7 @@ async function runE2e(parsed) {
     dailyProbe.error = dailyEarly && dailyEarly.error;
     console.log(`CHIPS ${JSON.stringify(((dailyProbe && dailyProbe.rowChips) || []).map((chip) => ({ paint: chip.paint, time: chip.time, status: chip.status, visible: chip.visible, surface: chip.surface, context: String(chip.context || "").slice(0, 60) })))}`);
     const liveWoken = (dailyProbe.woken || []).filter((pill) => pill.surface === "live" && pill.visible !== false);
+    record("lp-woken-masked-glyphs", liveWoken.length >= 1 && liveWoken.every((pill) => pill.beforeMask && pill.beforeMask !== "none"), JSON.stringify(liveWoken.map((pill) => pill.beforeMask)).slice(0, 320));
     // Hosts stay empty by contract (copy-safe); the words live in aria-label.
     if (expectTimes("lp-woken-fresh")) {
       const fresh = wokenByTime(liveWoken, colonClock(clocks.freshWokeHhmm));
@@ -1322,8 +1379,9 @@ async function runE2e(parsed) {
       // Counts and tone follow the live queue, so assert the contract shape
       // (glyph, count, earliest live time, meter disclaimer, no ::) and
       // record the exact runtime values for the land agent.
-      const chipRe = new RegExp(`^⏰ \\d+ · \\d\\d:\\d\\d$`);
+      const chipRe = new RegExp(`^\\d+ · \\d\\d:\\d\\d$`);
       record("lp-plan-chip", Boolean(planChip) && chipRe.test(String(planChip.text)) && /not counted in TODAY/.test(String(planChip.aria)) && /when all wake/.test(String(planChip.aria)) && !/::/.test(String(planChip.aria)) && (planChip.title || "") !== "", JSON.stringify((planChip) ?? null).slice(0, 400));
+      record("lp-plan-chip-masked-glyph", Boolean(planChip && planChip.glyphMask && planChip.glyphMask !== "none"), JSON.stringify(planChip && { mask: planChip.glyphMask, background: planChip.glyphBackground }));
     }
     const shotPlan = path.join(outDir, "e2e-snooze-marks-plan.png");
     await capturePage(client, shotPlan);
@@ -1422,14 +1480,21 @@ async function runE2e(parsed) {
     const a11yJob = await client.evaluate(SNOOZE_PROBE).catch(() => ({ defMarks: [] }));
     const a11yDefs = liveDefMarks(a11yJob);
     record("reduced-motion-keeps-marks", a11yDefs.length >= 2 && a11yDefs.every((mark) => String(mark.aria || "").length > 0), `marks=${a11yDefs.length}`);
+    record("forced-colors-keeps-definition-glyphs", a11yDefs.length >= 2 && a11yDefs.every((mark) => mark.beforeBackground !== "rgba(0, 0, 0, 0)" && mark.beforeForcedColorAdjust === "none"), JSON.stringify(a11yDefs.map((mark) => ({ background: mark.beforeBackground, adjust: mark.beforeForcedColorAdjust }))));
     await openNote(client, fixture.daily, "live").catch(() => ({}));
     await sleep(500);
     const a11yProbe = await client.evaluate(SNOOZE_PROBE).catch(() => ({ woken: [] }));
     const a11yWoken = (a11yProbe.woken || []).filter((pill) => pill.surface === "live" && pill.visible !== false);
     record("forced-colors-keeps-pills", a11yWoken.length >= 1 && a11yWoken.every((pill) => String(pill.aria || "").includes("Woke")), `pills=${a11yWoken.length}`);
+    record("forced-colors-keeps-woken-glyphs", a11yWoken.length >= 1 && a11yWoken.every((pill) => pill.beforeBackground !== "rgba(0, 0, 0, 0)" && pill.beforeForcedColorAdjust === "none"), JSON.stringify(a11yWoken.map((pill) => ({ background: pill.beforeBackground, adjust: pill.beforeForcedColorAdjust }))));
     const shotA11y = path.join(outDir, "e2e-snooze-marks-a11y.png");
     await capturePage(client, shotA11y);
     report.screenshots.push(shotA11y);
+    await openNote(client, fixture.plan, "live").catch(() => ({}));
+    await sleep(500);
+    const a11yPlan = await client.evaluate(SNOOZE_PROBE).catch(() => ({ planChips: [] }));
+    const a11yPlanChip = (a11yPlan.planChips || []).find((chip) => chip.visible !== false);
+    record("forced-colors-keeps-plan-glyph", Boolean(a11yPlanChip && a11yPlanChip.glyphMask && a11yPlanChip.glyphMask !== "none" && a11yPlanChip.glyphBackground !== "rgba(0, 0, 0, 0)" && a11yPlanChip.glyphForcedColorAdjust === "none"), JSON.stringify(a11yPlanChip && { mask: a11yPlanChip.glyphMask, background: a11yPlanChip.glyphBackground, adjust: a11yPlanChip.glyphForcedColorAdjust }));
     await client.call("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "no-preference" }, { name: "forced-colors", value: "none" }] }).catch(() => ({}));
     await sleep(200);
 

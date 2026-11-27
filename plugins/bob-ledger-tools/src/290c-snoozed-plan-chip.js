@@ -58,10 +58,12 @@ class BobLedgerToolsSnoozedPlanChipMixin {
       const cls =
         "bob-plan-chip bob-plan-snoozed" +
         (due ? " bob-plan-snoozed-due" : "");
-      const chip = container.createEl("a", {
-        cls,
-        text: typeof meter.text === "string" ? meter.text : "⏰",
-      });
+      const chip = container.createEl("a", { cls });
+      const text = typeof meter.text === "string" ? meter.text : "⏰";
+      const rest = text.replace(/^⏰\s*/, "");
+      const glyph = chip.createEl("span", { cls: "bob-snooze-plan-glyph" });
+      glyph.setAttribute("aria-hidden", "true");
+      chip.appendText(rest);
       chip.setAttribute("href", "#");
       chip.setAttribute("title", meter.tooltip || "Snoozed tasks");
       chip.setAttribute("aria-label", meter.tooltip || "Snoozed tasks");

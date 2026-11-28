@@ -741,7 +741,7 @@ function runSelfTest() {
   const tmp = asserts.makeScratch(repoRoot, "self");
   try {
     if (!tmp.startsWith(asserts.scratchRoot(repoRoot))) {
-      throw new Error("self-test scratch must stay under the workspace repo");
+      throw new Error("self-test scratch must stay under the configured scratch root");
     }
     const parsed = parseArgs(["--self-test", "--out", tmp, "--report", path.join(tmp, "r.json")]);
     if (!parsed.selfTest) throw new Error("parseArgs did not keep --self-test");
@@ -828,6 +828,20 @@ function runSelfTest() {
     if (asserts.fmtColonClock("1530") !== "15:30") throw new Error("colon clock helper");
     if (asserts.marksForKey([{ key: "a", visible: true }], "a").visible.length !== 1) {
       throw new Error("marksForKey helper");
+    }
+    if (!source.includes("case-8-linux-waker")) {
+      throw new Error("self-test must cover Linux notice case 8");
+    }
+    if (!source.includes('notified: "none"') && !source.includes("notified: \"none\"")) {
+      throw new Error("self-test must cover Notice when notified is none");
+    }
+    const wakerPath = path.join(repoRoot, "plugins/bob-ledger-tools/src/290b-snooze-waker.js");
+    const waker = fs.readFileSync(wakerPath, "utf8");
+    if (!waker.includes('["snooze", "wake", "-q", "-f", "json"]')) {
+      throw new Error("waker must spawn bob snooze wake -q -f json");
+    }
+    if (!waker.includes('report.notified === "none"') || !waker.includes("this.snoozeWakeNotice(report)")) {
+      throw new Error("waker must Notice only when notified is none");
     }
     console.log("offline self-test complete (not an Obsidian pass)");
   } finally {
@@ -1685,6 +1699,91 @@ async function runE2e(parsed) {
       return !chips.some((text) => text === "waits on prerequisites");
     }, "delete-removes-paint", 8000).catch(() => null);
     record("live-delete-removes-paint", Boolean(deletedGone), JSON.stringify(deletedGone ? deletedGone.rowChips.filter((chip) => chip.surface === "live" && chip.visible !== false).map((chip) => chip.text) : null).slice(0, 320));
+
+    // ---- case-8-linux-waker: spawn bob snooze wake; Notice when notified is none ----
+    const case8 = await client.evaluate(`(() => (async () => {
+      const plugin = window.app && window.app.plugins && window.app.plugins.plugins && window.app.plugins.plugins["bob-ledger-tools"];
+      if (!plugin || typeof plugin.snoozeWakeTick !== "function") return { ok: false, error: "no waker" };
+      const notices = [];
+      const spawns = [];
+      const origSpawn = plugin.snoozeWakeSpawn;
+      const origNotice = plugin.snoozeWakeNotice;
+      const origReady = plugin.isSnoozedCacheReady;
+      const origDesktop = plugin.snoozeWakeIsDesktop;
+      plugin.snoozeWakeDisabled = false;
+      plugin.snoozeWakeUnloaded = false;
+      plugin.snoozeWakeInFlight = false;
+      plugin.snoozeWakeLastAttemptMinute = "";
+      plugin.snoozeWakeIsDesktop = () => true;
+      plugin.isSnoozedCacheReady = () => true;
+      const now = new Date();
+      const pad = (n) => String(n).padStart(2, "0");
+      const date = now.getFullYear() + "-" + pad(now.getMonth() + 1) + "-" + pad(now.getDate());
+      plugin.snoozedCache = Object.assign({}, plugin.snoozedCache || {}, {
+        date,
+        nowMinutes: now.getHours() * 60 + now.getMinutes(),
+        nextWakeAt: new Date(now.getTime() - 60 * 1000).toISOString(),
+      });
+      plugin.snoozeWakeSpawn = async (args) => {
+        const argv = Array.isArray(args) ? args.slice() : ["snooze", "wake", "-q", "-f", "json"];
+        spawns.push(argv);
+        return {
+          ok: true,
+          report: {
+            schema_version: 1,
+            date,
+            now: now.toISOString(),
+            status: "woke",
+            daily_file: "daily.md",
+            notified: "none",
+            wake_id: "e2e-case8",
+            woken: [{
+              route: "job.md",
+              block_id: "sz-due",
+              title: "Due e2e (test, no action needed)",
+              target: "0000",
+              woke_at: pad(now.getHours()) + ":" + pad(now.getMinutes()),
+              destination: { created: false, line: 1, name: "WRITE" },
+              over_cap: false,
+            }],
+            dropped: [],
+            ignored: [],
+            pending: [],
+            next_wake_at: null,
+            plan: { count: 0, cap: 10, over: false },
+          },
+        };
+      };
+      plugin.snoozeWakeNotice = (report) => {
+        notices.push({ notified: report && report.notified, title: report && report.woken && report.woken[0] && report.woken[0].title });
+        try { return origNotice.call(plugin, report); } catch (error) { return false; }
+      };
+      let ticked = false;
+      let tickError = null;
+      try {
+        ticked = await plugin.snoozeWakeTick(now);
+      } catch (error) {
+        tickError = String(error && error.message || error);
+      }
+      plugin.snoozeWakeSpawn = origSpawn;
+      plugin.snoozeWakeNotice = origNotice;
+      plugin.isSnoozedCacheReady = origReady;
+      plugin.snoozeWakeIsDesktop = origDesktop;
+      if (tickError) return { ok: false, error: tickError };
+      const spawnOk = spawns.length === 1 && JSON.stringify(spawns[0]) === JSON.stringify(["snooze", "wake", "-q", "-f", "json"]);
+      const noticeOk = notices.length === 1 && notices[0].notified === "none";
+      let noticeDom = false;
+      try {
+        noticeDom = Array.from(document.querySelectorAll(".notice, .notice-container .notice")).some((el) => /Ready now/.test(String(el.textContent || "")));
+      } catch (error) { noticeDom = false; }
+      return { ok: Boolean(ticked && spawnOk && noticeOk), ticked, spawns, notices, noticeDom };
+    })())()`).catch((error) => ({ ok: false, error: String(error) }));
+    record("case-8-linux-waker", Boolean(case8 && case8.ok), JSON.stringify(case8).slice(0, 600));
+    if (case8 && case8.ok) {
+      const noticeShot = path.join(outDir, "case-8-linux-notice.png");
+      await capturePage(client, noticeShot);
+      report.screenshots.push(noticeShot);
+    }
 
     // ---- renderer health: no collected window errors, no duplicate hosts ----
     const finalProbe = await client.evaluate(SNOOZE_PROBE).catch(() => ({ defMarks: [], errors: ["probe failed"] }));

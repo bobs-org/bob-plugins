@@ -7,7 +7,12 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 function scratchRoot(repoRoot) {
-  return path.join(path.resolve(repoRoot), ".tmp-sn-e2e");
+  // Chromium's process-singleton socket lives under the profile and is
+  // capped at ~107 bytes. Keep the scratch root on /tmp so SASE workspace
+  // clones can still launch Obsidian. repoRoot is accepted for call-site
+  // compatibility with the other marks runners.
+  void repoRoot;
+  return "/tmp/bob-sn-marks-e2e";
 }
 
 function makeScratch(repoRoot, prefix) {

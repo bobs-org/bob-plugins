@@ -18,14 +18,17 @@ const sleep = shared.sleep;
 const repoRoot = path.resolve(__dirname, "..");
 const pluginIds = ["block-id-prompt", "bob-ledger-tools", "bob-navigation-hotkeys", "bob-command-mode"];
 const electronFallback = "/snap/obsidian/current/app/obsidian";
-const ownedRoot = path.join(repoRoot, ".tmp-sn-e2e", "snooze-card");
+// Chromium's process-singleton socket lives under TMPDIR and is capped at
+// ~107 bytes. Keep the scratch root on /tmp so SASE workspace clones can
+// still launch Obsidian.
+const ownedRoot = "/tmp/bob-sn-e2e";
 const required = [
   "plugins-loaded", "snooze-runtime-api-installed", "alt-z-opens-and-preselects-event", "keyboard-navigation-and-invalid-input",
   "same-note-transaction-undo", "task-card-z-opens-same-card", "task-card-z-from-live-link-moves-subtree", "task-card-z-from-live-link-undo", "blocked-event-done-refusals",
   "footer-counts-use-fixture-postimage", "ready-footer-counts-use-fixture-postimage", "ready-promotes-and-stamps", "next-and-inprogress-stay-byte-identical",
   "snoozed-header-state-renders",
   "unnamed-task-naming-cancel-is-no-write", "retime-and-unsnooze", "wake-now-runs-current-bob",
-  "history-is-preserved-on-resnooze-and-closed-history-snooze", "closed-daily-note-uses-vault-process",
+  "resnooze-replaces-struck-history-and-closed-ledger-history-stays", "closed-daily-note-uses-vault-process",
   "ordinary-and-snoozed-screenshots", "over-cap-and-forced-colors-screenshots", "hotkey-conflict-preserves-config",
 ];
 
@@ -749,7 +752,7 @@ async function runNormal(ctx) {
     await press(client, "a", 2);
     await insertText(client, "+30m");
     await press(client, "Enter");
-    await shared.waitFor(client, `app.workspace.activeLeaf?.view?.editor?.getValue?.()`, (text) => typeof text === "string" && text.includes("[[jobs#^wake-now]]") && text.includes("## Snoozed"), "woken task re-snoozed", 12_000);
+    await shared.waitFor(client, `app.workspace.activeLeaf?.view?.editor?.getValue?.()`, (text) => typeof text === "string" && /^- \*\*\d{4}\*\* \[\[jobs#\^wake-now\]\]$/m.test(text) && !text.split("\n").some((line) => line.includes("[[jobs#^wake-now]]") && line.includes("~~")), "woken task re-snoozed and struck history replaced", 12_000);
   }
   let currentDaily = await editorText(client, f.daily);
   let dailyLines = currentDaily.split("\n");
@@ -764,9 +767,13 @@ async function runNormal(ctx) {
   }
   currentDaily = await editorText(client, f.daily);
   const afterWakeHistory = currentDaily.split("\n").find((line) => line.includes("[[jobs#^wake-now]]") && line.includes("~~")) || "";
-  check("history-is-preserved-on-resnooze-and-closed-history-snooze",
-    Boolean(wakeHistory && wokenLinkLine && closedHistoryBlock) && afterWakeHistory === wakeHistory && currentDaily.includes(closedHistoryBlock),
-    { wakeHistoryBefore: wakeHistory, wakeHistoryAfter: afterWakeHistory, closedHistoryBlock, foundWokenLink: Boolean(wokenLinkLine) });
+  const resnoozedActive = currentDaily.split("\n").find((line) => /^- \*\*\d{4}\*\* \[\[jobs#\^wake-now\]\]$/.test(line)) || "";
+  const historySnoozed = currentDaily.split("\n").find((line) => /^- \*\*\d{4}\*\* \[\[jobs#\^history\]\]$/.test(line)) || "";
+  check("resnooze-replaces-struck-history-and-closed-ledger-history-stays",
+    Boolean(wakeHistory && wokenLinkLine && closedHistoryBlock && resnoozedActive && historySnoozed)
+      && afterWakeHistory === ""
+      && currentDaily.includes(closedHistoryBlock),
+    { wakeHistoryBefore: wakeHistory, wakeHistoryAfter: afterWakeHistory, resnoozedActive, historySnoozed, closedHistoryBlock, foundWokenLink: Boolean(wokenLinkLine) });
 
   await client.evaluate(`(() => {
     app.workspace.iterateAllLeaves((leaf) => {

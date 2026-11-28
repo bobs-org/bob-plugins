@@ -222,7 +222,9 @@ available when Alt+Z conflicts with a configured hotkey, plugin default, or
 vimrc mapping. On a single dedicated Task Link (live, woken, or struck
 history), `z` resolves the link exactly as `Alt+Z` does; a live link and its
 notes move into today's Snoozed row, and the footer names the Pomodoro entry
-it leaves.
+it leaves. Re-snoozing a woken task replaces its struck Snoozed row with a
+new active row. Snoozing from a closed ledger history link leaves that closed
+Pomodoro's link untouched.
 
 ## Undo and direct stages
 

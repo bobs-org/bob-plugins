@@ -148,8 +148,9 @@ test("duplicate live links retain the second link's authored notes", () => {
   assert.match(result.plans[0].postimage, /- \*\*1530\*\* \[\[Projects\/job#\^email-dan\]\]\n\t- First note\./);
 });
 
-test("re-snoozing a woken task preserves its struck wake-history receipt", () => {
+test("re-snoozing a woken task replaces its struck wake-history receipt", () => {
   const wakeHistory = "- ~~**1300** [[Projects/job#^email-dan]]~~ · woke 12:55";
+  const historyNote = "  - do not carry this history note";
   const input = baseInput({
     day: [
       "## Pomodoros",
@@ -160,6 +161,32 @@ test("re-snoozing a woken task preserves its struck wake-history receipt", () =>
       "## Snoozed",
       "",
       wakeHistory,
+      historyNote,
+      "",
+    ].join("\n"),
+    task: { status: "*", line: 1 },
+    when: "1530",
+  });
+  const result = planner.plan(input);
+  assert.equal(result.ok, true);
+  assert.equal(result.plans[0].postimage.includes(wakeHistory), false);
+  assert.equal(result.plans[0].postimage.includes("do not carry this history note"), false);
+  assert.match(result.plans[0].postimage, /- \*\*1530\*\* \[\[Projects\/job#\^email-dan\]\]/);
+});
+
+test("retiming an active row keeps struck history for the same identity", () => {
+  const wakeHistory = "- ~~**1300** [[Projects/job#^email-dan]]~~ · woke 12:55";
+  const input = baseInput({
+    day: [
+      "## Pomodoros",
+      "",
+      "- [ ] () — WRITE",
+      "",
+      "## Snoozed",
+      "",
+      wakeHistory,
+      "- **1400** [[Projects/job#^email-dan]]",
+      "  - keep this active note",
       "",
     ].join("\n"),
     task: { status: "*", line: 1 },
@@ -168,7 +195,8 @@ test("re-snoozing a woken task preserves its struck wake-history receipt", () =>
   const result = planner.plan(input);
   assert.equal(result.ok, true);
   assert.ok(result.plans[0].postimage.includes(wakeHistory));
-  assert.match(result.plans[0].postimage, /- \*\*1530\*\* \[\[Projects\/job#\^email-dan\]\]/);
+  assert.match(result.plans[0].postimage, /- \*\*1530\*\* \[\[Projects\/job#\^email-dan\]\]\n  - keep this active note/);
+  assert.doesNotMatch(result.plans[0].postimage, /- \*\*1400\*\* \[\[Projects\/job#\^email-dan\]\]/);
 });
 
 test("effective blocking is refused before the BIP target planner is called", () => {

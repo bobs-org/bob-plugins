@@ -155538,22 +155538,30 @@ function snoozeMutationUpsertRow(source, task, identity, hhmm, notes, input, dai
     return { ok: true, postimage: current };
   }
   const identityKey = snoozeMutationIdentityKey(identity);
-  const matching = section.rows.filter((row) => {
-    // Re-snoozing a woken task replaces its live row while keeping struck
-    // wake history as an immutable receipt.
-    if (row.kind !== "active") return false;
+  const rowMatches = (row) => {
     const resolved = snoozeMutationMapIdentity(row.target, row.blockId, input, task, identity, dailyPath);
     return resolved && snoozeMutationIdentityKey(resolved) === identityKey;
-  });
+  };
+  const matchingActive = section.rows.filter((row) => row.kind === "active" && rowMatches(row));
+  const matchingHistory = section.rows.slice().reverse().find((row) => row.kind === "history" && rowMatches(row));
+  // Re-snoozing a woken task replaces the last matching struck history row
+  // and its subtree. Do not carry those children as notes. Active matches
+  // are retimed and existing history stays.
   let carried = Array.isArray(notes) ? notes.slice() : [];
   if (!carried.length) {
-    for (const row of matching) {
-      if (row.kind === "active") carried.push(...section.lines.slice(row.lineIndex + 1, row.childrenEnd).map((line) => line.text));
+    for (const row of matchingActive) {
+      carried.push(...section.lines.slice(row.lineIndex + 1, row.childrenEnd).map((line) => line.text));
     }
   }
   const buffer = snoozeMutationBuffer(current);
-  const removed = matching.slice().sort((left, right) => right.lineIndex - left.lineIndex);
-  for (const row of removed) buffer.remove(row.lineIndex, Math.max(row.lineIndex, row.childrenEnd - 1));
+  if (!matchingActive.length) {
+    if (matchingHistory) {
+      buffer.remove(matchingHistory.lineIndex, Math.max(matchingHistory.lineIndex, matchingHistory.childrenEnd - 1));
+    }
+  } else {
+    const removed = matchingActive.slice().sort((left, right) => right.lineIndex - left.lineIndex);
+    for (const row of removed) buffer.remove(row.lineIndex, Math.max(row.lineIndex, row.childrenEnd - 1));
+  }
   const afterRemoval = buffer.render();
   const updated = snoozeParseSection(afterRemoval);
   if (!updated) return { ok: false, refusal: "no_pomodoros", postimage: current };

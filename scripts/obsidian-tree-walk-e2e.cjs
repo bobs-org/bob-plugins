@@ -616,8 +616,17 @@ async function runE2e(args) {
     await open("prose/authored.md", "live");
     await harness.waitFor(client, surfaceProbe(), (value) => value?.rail?.next, "stale-link source");
     await client.evaluate([
-      "(() => { window.__treeWalkStaleLink = " + SURFACE +
+      "(() => { const ledger = app.plugins.plugins[" + JSON.stringify(LEDGER) + "];",
+      "window.__treeWalkNoticeCalls = []; const originalNotice = ledger.treeWalkRailNotice;",
+      "ledger.treeWalkRailNotice = function(message) { window.__treeWalkNoticeCalls.push(String(message));",
+      "return originalNotice.call(this, message); };",
+      "window.__treeWalkStaleLink = " + SURFACE +
       "?.querySelector('.bob-link-walk-rail .bob-property-card-rail-item[data-rail=\"next\"]') || null;",
+      "if (!window.__treeWalkStaleLink) throw new Error('painted next rail item was not found');",
+      "window.__treeWalkStaleClickSeen = false;",
+      "window.__treeWalkStaleLink.addEventListener('click', () => { window.__treeWalkStaleClickSeen = true; });",
+      "window.__treeWalkStaleLinkSummary = { connected: window.__treeWalkStaleLink.isConnected,",
+      "target: window.__treeWalkStaleLink.getAttribute('data-href'), state: window.__treeWalkStaleLink.getAttribute('data-state') };",
       "window.__treeWalkNotices = [];",
       "const observer = new MutationObserver(() => {",
       "for (const node of document.querySelectorAll('.notice')) { const text = (node.textContent || '').trim();",
@@ -644,10 +653,18 @@ async function runE2e(args) {
     (value) => value && !value.targetExists && value.next && value.next.state !== "exists",
     "deleted stop resolver update");
     await client.evaluate("window.__treeWalkStaleLink?.click()");
-    const notices = await harness.waitFor(client, "window.__treeWalkNotices || []",
-      (items) => items.some((item) => /The stop changed/i.test(item)), "stop changed notice");
+    let staleFeedback = null;
+    try {
+      staleFeedback = await harness.waitFor(client,
+        "({ clickSeen: window.__treeWalkStaleClickSeen, calls: window.__treeWalkNoticeCalls || [], dom: window.__treeWalkNotices || [] })",
+        (value) => value?.clickSeen && value.calls.some((item) => /The stop changed/i.test(item)),
+        "stop changed notice");
+    } catch (_) {
+      staleFeedback = await client.evaluate("({ clickSeen: window.__treeWalkStaleClickSeen, calls: window.__treeWalkNoticeCalls || [], dom: window.__treeWalkNotices || [], staleLink: window.__treeWalkStaleLinkSummary })");
+    }
     check("deleted stop between paint and click shows The stop changed",
-      notices.some((item) => /The stop changed/i.test(item)), { deletedStop, notices });
+      staleFeedback.calls.some((item) => /The stop changed/i.test(item)),
+      { deletedStop, staleFeedback });
     await client.evaluate("window.__treeWalkNoticeObserver?.disconnect()");
 
     const pageErrors = await client.evaluate("window.__treeWalkErrors || []");

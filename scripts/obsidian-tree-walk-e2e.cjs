@@ -542,8 +542,8 @@ async function runE2e(args) {
     await client.evaluate([
       "(() => { window.__treeWalkLongTasks = [];",
       "const observer = new PerformanceObserver((list) => {",
-      "for (const entry of list.getEntries()) window.__treeWalkLongTasks.push(entry.duration);",
-      "}); observer.observe({ type: 'longtask', buffered: true }); window.__treeWalkObserver = observer; })()",
+      "for (const entry of list.getEntries()) window.__treeWalkLongTasks.push({ startTime: entry.startTime, duration: entry.duration });",
+      "}); observer.observe({ type: 'longtask' }); window.__treeWalkObserver = observer; })()",
     ].join("\n"));
     const timedOpen = async (notePath, railExpected) => {
       await client.evaluate([
@@ -562,7 +562,9 @@ async function runE2e(args) {
     const perfPaths = Array.from({ length: 5 }, (_, index) =>
       "projects/walk64_" + String(index).padStart(2, "0") + ".md");
     const withRail = [];
+    const withRailStart = await client.evaluate("performance.now()");
     for (const notePath of perfPaths) withRail.push(await timedOpen(notePath, true));
+    const withRailEnd = await client.evaluate("performance.now()");
     const stub = await client.evaluate([
       "(() => { const ledger = app.plugins.plugins[" + JSON.stringify(LEDGER) + "];",
       "const nav = app.plugins.plugins[" + JSON.stringify(NAV) + "].api.walkMode;",
@@ -572,14 +574,23 @@ async function runE2e(args) {
       "return { hook: 'treeWalkRailAnswer provider-unavailable test hook', installed: true }; })()",
     ].join("\n"));
     const withoutRail = [];
+    const withoutRailStart = await client.evaluate("performance.now()");
     for (const notePath of perfPaths) withoutRail.push(await timedOpen(notePath, false));
+    const withoutRailEnd = await client.evaluate("performance.now()");
     await client.evaluate([
       "(() => { const ledger = app.plugins.plugins[" + JSON.stringify(LEDGER) + "];",
       "const nav = app.plugins.plugins[" + JSON.stringify(NAV) + "].api.walkMode;",
       "ledger.treeWalkRailAnswer = window.__treeWalkOriginalAnswer; nav.links = window.__treeWalkOriginalLinks;",
-      "window.__treeWalkObserver?.disconnect(); })()",
+      "const observer = window.__treeWalkObserver;",
+      "for (const entry of observer?.takeRecords() || []) window.__treeWalkLongTasks.push({ startTime: entry.startTime, duration: entry.duration });",
+      "observer?.disconnect(); })()",
     ].join("\n"));
-    const longTasks = await client.evaluate("window.__treeWalkLongTasks || []");
+    const longTaskRecords = await client.evaluate("window.__treeWalkLongTasks || []");
+    const longTasksIn = (start, end) => longTaskRecords
+      .filter((entry) => entry.startTime < end && entry.startTime + entry.duration > start)
+      .map((entry) => Number(entry.duration.toFixed(2)));
+    const withRailLongTasks = longTasksIn(withRailStart, withRailEnd);
+    const withoutRailLongTasks = longTasksIn(withoutRailStart, withoutRailEnd);
     const median = (values) => {
       const sorted = values.slice().sort((left, right) => left - right);
       return sorted.length % 2 ? sorted[(sorted.length - 1) / 2]
@@ -592,7 +603,8 @@ async function runE2e(args) {
       medianWithRail: Number(median(withRail).toFixed(2)),
       medianProviderStubbed: Number(median(withoutRail).toFixed(2)),
       ratio: Number((median(withRail) / median(withoutRail)).toFixed(4)),
-      longTasksMs: longTasks.map((value) => Number(value.toFixed(2))),
+      longTasksMs: withRailLongTasks,
+      providerStubbedLongTasksMs: withoutRailLongTasks,
       providerUnavailableHook: stub,
     };
     check("64-child Reading paint is within 1.15x",
